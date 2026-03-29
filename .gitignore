@@ -37,7 +37,3 @@ Thumbs.db
 *.mp3
 *.wav
 *.flac
-
-# Large model files (use Git LFS or download separately)
-models/*.onnx
-pc_nsf_hifigan_44.1k_ONNX/*.onnx
