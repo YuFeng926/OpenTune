@@ -1,0 +1,13 @@
+name: "pc_nsf_hifigan_44.1k_hop512_128bin_2025.02"
+model: "pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx"
+sample_rate: 44100
+hop_size: 512
+win_size: 2048
+fft_size: 2048
+num_mel_bins: 128
+mel_fmin: 40
+mel_fmax: 16000
+mel_base: e
+mel_scale: slaney
+pitch_controllable: true
+force_on_cpu: false
