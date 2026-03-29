@@ -1,3 +1,5 @@
+<div align="center">
+
 ## OpenTune – AI 智能修音软件
 <img width="512" alt="1" src="https://github.com/user-attachments/assets/5f018b53-e78c-4eec-a2da-e71b0724bc9b" />
 
@@ -7,6 +9,10 @@
 
 OpenTune 是一款基于神经声码器的开源修音工具。与传统 DSP 算法直接移调不同，它使用 NSF-HiFiGAN 声码器在保留原始共振峰的前提下重新生成人声，即使进行极端音高调整，也能保持自然、扎实的音质。
 
+</div>
+
+<div align="center">
+
 ## ✨ 亮点特性
 
 <img width="512" alt="2" src="https://github.com/user-attachments/assets/55f7136e-fc8b-4576-af0b-2cbeea3c2f6e" />
@@ -14,7 +20,7 @@ OpenTune 是一款基于神经声码器的开源修音工具。与传统 DSP 算
 
 
 
-共振峰不变：改变音高时不影响声音的底色，告别“鸭子叫”或“换人唱”的失真感
+共振峰不变：改变音高时不影响声音的底色，告别"鸭子叫"或"换人唱"的失真感
 
 
 大范围移调：支持夸张的音高修正与转调，音质依然清晰稳定
@@ -44,6 +50,10 @@ AI 重合成：基于深度学习的声码器，而非传统移调
 
 
 开源免费：永久免费，社区驱动，持续迭代
+
+
+
+</div>
 
 
 
