@@ -12,6 +12,8 @@ OpenTune 是一款基于神经声码器的开源修音工具。与传统 DSP 算
 <img width="2571" height="1435" alt="2" src="https://github.com/user-attachments/assets/55f7136e-fc8b-4576-af0b-2cbeea3c2f6e" />
 
 
+
+
 共振峰不变：改变音高时不影响声音的底色，告别“鸭子叫”或“换人唱”的失真感
 
 
@@ -26,11 +28,15 @@ AI 重合成：基于深度学习的声码器，而非传统移调
 <img width="2048" height="2048" alt="3" src="https://github.com/user-attachments/assets/d99c088a-46f6-4177-a761-0af737416b41" />
 
 
+
+
 类Auto-Tune工作流：手绘、音符、锚点工具一应俱全，助你快速进入心流状态
 
 
 
 <img width="2571" height="1435" alt="4" src="https://github.com/user-attachments/assets/c95636d1-2eb8-4cad-8c2c-61b208adb961" />
+
+
 
 
 内置类Auto-Key自动检测调式：上手即修，不修也准，修了更准
