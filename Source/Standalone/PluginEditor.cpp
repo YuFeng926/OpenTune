@@ -424,7 +424,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         autoRenderOverlay_.setVisible(false);
     });
     pianoRoll_.setGlobalUndoManager(&processorRef_.getUndoManager());
-    // 设置当前 clip 上下文
+    int activeTrack = processorRef_.getActiveTrackId();
     int clipIndex = processorRef_.getSelectedClip(activeTrack);
     pianoRoll_.setCurrentClipContext(activeTrack, processorRef_.getClipId(activeTrack, clipIndex));
     const auto* clipBuffer = processorRef_.getClipAudioBuffer(activeTrack, clipIndex);
