@@ -86,6 +86,9 @@ AI 重合成：基于深度学习的声码器，而非传统移调
 - CMake 3.22+
 - C++17 compiler (MSVC 2022 recommended on Windows)
 - Visual Studio 2022 (Windows)
+- Xcode Command Line Tools (macOS)
+- ONNX Runtime C/C++ SDK (macOS, `libonnxruntime.dylib`)
+- Full JUCE source tree with CMake support (`extras/Build/CMake/JUCEModuleSupport.cmake`)
 
 ### Windows (MSVC)
 
@@ -102,6 +105,21 @@ cmake --build . --config Release
 
 # Output: build/OpenTune_artefacts/Release/Standalone/OpenTune.exe
 ```
+
+### macOS (AppleClang)
+
+```bash
+# Example: use external JUCE and Homebrew ONNX Runtime
+cmake -S . -B build-mac \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DOPENTUNE_JUCE_DIR=/path/to/juce \
+  -DONNXRUNTIME_ROOT=/opt/homebrew/opt/onnxruntime
+
+cmake --build build-mac --config Release
+```
+
+If your ONNX Runtime is installed elsewhere, pass the SDK root via `-DONNXRUNTIME_ROOT=...`.
+If bundled `JUCE-master` is incomplete, pass a full JUCE source path via `-DOPENTUNE_JUCE_DIR=...`.
 
 ### Build Output
 

@@ -23,22 +23,62 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ==============================================================================
 # JUCE Configuration
 # ==============================================================================
-set(OPENTUNE_JUCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/JUCE-master")
-add_subdirectory("${OPENTUNE_JUCE_DIR}")
+set(OPENTUNE_JUCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/JUCE-master" CACHE PATH "Path to JUCE source tree")
+if(EXISTS "${OPENTUNE_JUCE_DIR}/extras/Build/CMake/JUCEModuleSupport.cmake")
+    if(OPENTUNE_JUCE_DIR STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/JUCE-master")
+        add_subdirectory("${OPENTUNE_JUCE_DIR}")
+    else()
+        add_subdirectory("${OPENTUNE_JUCE_DIR}" "${CMAKE_BINARY_DIR}/juce")
+    endif()
+else()
+    message(WARNING "Bundled JUCE is incomplete. Falling back to system JUCE package.")
+    find_package(JUCE CONFIG REQUIRED)
+endif()
 
 # ==============================================================================
 # ONNX Runtime Configuration
 # ==============================================================================
-set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime-win-x64-1.17.3" CACHE PATH "ONNX Runtime root directory")
+if(WIN32)
+    set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime-win-x64-1.17.3" CACHE PATH "ONNX Runtime root directory")
+elseif(APPLE)
+    if(EXISTS "/opt/homebrew/opt/onnxruntime")
+        set(_opentune_default_onnx_root "/opt/homebrew/opt/onnxruntime")
+    elseif(EXISTS "/usr/local/opt/onnxruntime")
+        set(_opentune_default_onnx_root "/usr/local/opt/onnxruntime")
+    elseif(EXISTS "/opt/homebrew")
+        set(_opentune_default_onnx_root "/opt/homebrew")
+    else()
+        set(_opentune_default_onnx_root "/usr/local")
+    endif()
+    set(ONNXRUNTIME_ROOT "${_opentune_default_onnx_root}" CACHE PATH "ONNX Runtime root directory")
+endif()
+
 set(ONNXRUNTIME_INCLUDE_DIR "${ONNXRUNTIME_ROOT}/include")
 set(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_ROOT}/lib")
 
-# Verify ONNX Runtime exists
-if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h")
-    message(FATAL_ERROR "ONNX Runtime not found at ${ONNXRUNTIME_ROOT}")
+# Homebrew formula may place headers in include/onnxruntime
+if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h"
+   AND EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime/onnxruntime_cxx_api.h")
+    set(ONNXRUNTIME_INCLUDE_DIR "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime")
 endif()
 
-message(STATUS "ONNX Runtime found: ${ONNXRUNTIME_ROOT}")
+if(WIN32)
+    set(ONNXRUNTIME_LIBRARY "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib")
+elseif(APPLE)
+    set(ONNXRUNTIME_LIBRARY "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.dylib")
+endif()
+
+# Verify ONNX Runtime exists
+if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h")
+    message(FATAL_ERROR "ONNX Runtime headers not found at ${ONNXRUNTIME_INCLUDE_DIR}")
+endif()
+if(NOT EXISTS "${ONNXRUNTIME_LIBRARY}")
+    message(FATAL_ERROR "ONNX Runtime library not found at ${ONNXRUNTIME_LIBRARY}")
+endif()
+
+message(STATUS "ONNX Runtime root: ${ONNXRUNTIME_ROOT}")
+message(STATUS "ONNX Runtime include: ${ONNXRUNTIME_INCLUDE_DIR}")
+message(STATUS "ONNX Runtime library: ${ONNXRUNTIME_LIBRARY}")
 
 # ==============================================================================
 # Application Definition - JUCE juce_add_plugin
@@ -252,7 +292,7 @@ target_link_libraries(OpenTune
 # ==============================================================================
 target_link_libraries(OpenTune
     PRIVATE
-        "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib"
+        "${ONNXRUNTIME_LIBRARY}"
 )
 
 # ==============================================================================
@@ -265,7 +305,6 @@ target_compile_definitions(OpenTune
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_REPORT_APP_USAGE=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
-        JUCE_ASIO=1
         JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
 
     PRIVATE
@@ -279,6 +318,7 @@ target_compile_definitions(OpenTune
 )
 
 if(WIN32)
+    target_compile_definitions(OpenTune PRIVATE JUCE_ASIO=1)
     target_compile_definitions(OpenTune PRIVATE JUCE_USE_WINDOWS_MEDIA_FORMAT=1)
 endif()
 
@@ -304,15 +344,24 @@ endif()
 set(HIFIGAN_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx")
 set(RMVPE_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/models/rmvpe.onnx")
 
-add_custom_command(TARGET OpenTune_Standalone POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ONNXRUNTIME_LIB_DIR}/onnxruntime.dll"
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ONNXRUNTIME_LIB_DIR}/onnxruntime_providers_shared.dll"
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime_providers_shared.dll"
-    COMMENT "Copying ONNX Runtime DLL to Standalone..."
-)
+if(WIN32)
+    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNXRUNTIME_LIB_DIR}/onnxruntime.dll"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNXRUNTIME_LIB_DIR}/onnxruntime_providers_shared.dll"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime_providers_shared.dll"
+        COMMENT "Copying ONNX Runtime DLL to Standalone..."
+    )
+elseif(APPLE)
+    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNXRUNTIME_LIBRARY}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/libonnxruntime.dylib"
+        COMMENT "Copying ONNX Runtime dylib to Standalone..."
+    )
+endif()
 
 add_custom_command(TARGET OpenTune_Standalone POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
