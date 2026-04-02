@@ -1,0 +1,93 @@
+--- DiffSinger Community Vocoder ---
+
+ARCHITECTURE: PC-NSF-HiFiGAN
+RELEASE DATE: 2025-02-27
+
+HYPER PARAMETERS:
+ - 44100 sample rate
+ - 128 mel bins
+ - 512 hop size
+ - 2048 window size
+ - fmin at 40Hz
+ - fmax at 16000Hz
+
+
+NOTICE:
+
+All model weights in the [DiffSinger Community Vocoder Project](https://openvpi.github.io/vocoders/), including
+model weights in this directory, are provided by the [OpenVPI Team](https://github.com/openvpi/), under the
+[Attribution-NonCommercial-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-nc-sa/4.0/) license.
+
+
+ACKNOWLEDGEMENTS:
+
+Training data of this vocoder is provided and permitted by the following organizations, societies and individuals:
+
+孙飒              https://space.bilibili.com/12945221
+赤松_Akamatsu     https://www.zhibin.club
+乐威              https://www.zhibin.club
+伯添              https://space.bilibili.com/24087011
+雲宇光             https://space.bilibili.com/660675050
+橙子言             https://space.bilibili.com/318486464
+人衣大人           https://space.bilibili.com/2270344
+玖蝶              https://space.bilibili.com/676771003
+Yuuko
+白夜零BYL          https://space.bilibili.com/1605040503
+嗷天              https://space.bilibili.com/5675252
+洛泠羽            https://space.bilibili.com/347373318
+灰条纹的灰猫君      https://space.bilibili.com/2083633
+幽寂              https://space.bilibili.com/478860
+恶魔王女           https://space.bilibili.com/2475098
+AlexYHX 芮晴
+绮萱              https://y.qq.com/n/ryqq/singer/003HjD6H4aZn1K
+诗芸              https://y.qq.com/n/ryqq/singer/0005NInj142zm0
+汐蕾              https://y.qq.com/n/ryqq/singer/0023cWMH1Bq1PJ
+1262917464
+炜阳
+叶卡yolka
+幸の夏            https://space.bilibili.com/1017297686
+暮色未量           https://space.bilibili.com/272904686
+晓寞sama          https://space.bilibili.com/3463394
+没头绪的节操君
+串串BunC          https://space.bilibili.com/95817834
+落雨              https://space.bilibili.com/1292427
+长尾巴的翎艾        https://space.bilibili.com/1638666
+声闻计划           https://space.bilibili.com/392812269
+唐家大小姐         http://5sing.kugou.com/palmusic/default.html
+不伊子
+芸青岩            https://space.bilibili.com/35236775
+妖橙              https://space.bilibili.com/161975631
+双桨              https://space.bilibili.com/13245483
+灵滅              https://space.bilibili.com/276988145
+AlexYHX          https://space.bilibili.com/13303439
+祁唱              https://space.bilibili.com/11256670
+早稻叽            https://space.bilibili.com/1950658
+泽木团子           https://space.bilibili.com/5343740
+
+The following public datasets are used:
+
+Opencpop         https://wenet.org.cn/opencpop/
+CCMUSIC          https://ccmusic-database.github.io/index.html
+SingingVoiceDataset  http://isophonics.net/SingingVoiceDataset
+東北イタコ         https://zunko.jp/itadev/login.php
+御丹宮くるみ        https://onikuru.info/db-download/
+PJS              https://sites.google.com/site/shinnosuketakamichi/research-topics/pjs_corpus
+HTS              http://hts.sp.nitech.ac.jp/
+TIGER 2.0        https://tigermeat.xyz
+
+Training machines are provided by:
+
+花儿不哭           https://space.bilibili.com/5760446
+
+
+TERMS OF REDISTRIBUTIONS:
+
+1. Do not sell this vocoder, or charge any fees from redistributing it, as prohibited by
+   the license.
+2. Include a copy of the CC BY-NC-SA 4.0 license, or a link referring to it.
+3. Include a copy of this notice, or any other notices informing that this vocoder is
+   provided by the OpenVPI Team, that this vocoder is licensed under CC BY-NC-SA 4.0, and
+   with a complete acknowledgement list as shown above.
+4. If you fine-tuned or modified the weights, leave a notice about what has been changed.
+5. (Optional) Leave a link to the official release page of the vocoder, and tell users
+   that other versions and future updates of this vocoder can be obtained from the website.
