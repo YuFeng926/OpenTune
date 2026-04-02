@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenTune 用户指南</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.8;
+            color: #333;
+            font-size: 11pt;
+            max-width: 210mm;
+            margin: 0 auto;
+            padding: 20mm;
+            background: #fff;
+        }
+        
+        /* 封面 */
+        .cover {
+            text-align: center;
+            padding: 60px 0;
+            page-break-after: always;
+        }
+        
+        .cover h1 {
+            font-size: 48pt;
+            color: #2563eb;
+            margin-bottom: 20px;
+            font-weight: 700;
+        }
+        
+        .cover .subtitle {
+            font-size: 18pt;
+            color: #64748b;
+            margin-bottom: 40px;
+        }
+        
+        .cover .version {
+            font-size: 14pt;
+            color: #94a3b8;
+            margin-top: 100px;
+        }
+        
+        .cover .tagline {
+            font-size: 16pt;
+            color: #3b82f6;
+            margin-top: 20px;
+            font-weight: 500;
+        }
+        
+        /* 目录页 */
+        .toc {
+            page-break-after: always;
+        }
+        
+        .toc h2 {
+            font-size: 24pt;
+            color: #1e293b;
+            border-bottom: 3px solid #2563eb;
+            padding-bottom: 10px;
+            margin-bottom: 30px;
+        }
+        
+        .toc ul {
+            list-style: none;
+        }
+        
+        .toc li {
+            padding: 8px 0;
+            border-bottom: 1px dotted #e2e8f0;
+        }
+        
+        .toc a {
+            color: #334155;
+            text-decoration: none;
+        }
+        
+        .toc a:hover {
+            color: #2563eb;
+        }
+        
+        .toc .page-num {
+            float: right;
+            color: #94a3b8;
+        }
+        
+        /* 章节标题 */
+        h2 {
+            font-size: 22pt;
+            color: #1e293b;
+            margin-top: 40px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        
+        h3 {
+            font-size: 16pt;
+            color: #334155;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+        
+        h4 {
+            font-size: 13pt;
+            color: #475569;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        
+        p {
+            margin-bottom: 12px;
+            text-align: justify;
+        }
+        
+        /* 列表样式 */
+        ul, ol {
+            margin-left: 20px;
+            margin-bottom: 15px;
+        }
+        
+        li {
+            margin-bottom: 6px;
+        }
+        
+        /* 表格样式 */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 10pt;
+        }
+        
+        th, td {
+            border: 1px solid #e2e8f0;
+            padding: 10px 12px;
+            text-align: left;
+        }
+        
+        th {
+            background: #f1f5f9;
+            color: #1e293b;
+            font-weight: 600;
+        }
+        
+        tr:nth-child(even) {
+            background: #f8fafc;
+        }
+        
+        /* 提示框 */
+        .tip, .warning, .note {
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 6px;
+            border-left: 4px solid;
+        }
+        
+        .tip {
+            background: #eff6ff;
+            border-color: #3b82f6;
+        }
+        
+        .warning {
+            background: #fffbeb;
+            border-color: #f59e0b;
+        }
+        
+        .note {
+            background: #f0fdf4;
+            border-color: #22c55e;
+        }
+        
+        .tip-title, .warning-title, .note-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        
+        .tip-title { color: #1d4ed8; }
+        .warning-title { color: #d97706; }
+        .note-title { color: #16a34a; }
+        
+        /* 代码块 */
+        code {
+            background: #f1f5f9;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: "Consolas", "Monaco", monospace;
+            font-size: 10pt;
+        }
+        
+        /* 流程图 */
+        .workflow {
+            background: #f8fafc;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        
+        .workflow-step {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 15px;
+        }
+        
+        .step-number {
+            background: #2563eb;
+            color: white;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            margin-right: 15px;
+            flex-shrink: 0;
+        }
+        
+        .step-content h4 {
+            margin-top: 0;
+            margin-bottom: 5px;
+        }
+        
+        .step-content p {
+            margin-bottom: 0;
+            color: #64748b;
+        }
+        
+        /* 图例 */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin: 15px 0;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .legend-color {
+            width: 20px;
+            height: 4px;
+            border-radius: 2px;
+        }
+        
+        /* 分页控制 */
+        .page-break {
+            page-break-before: always;
+        }
+        
+        /* 快捷键表格 */
+        .shortcut-table td:first-child {
+            white-space: nowrap;
+            font-family: monospace;
+            background: #f1f5f9;
+        }
+        
+        /* 工具卡片 */
+        .tool-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            background: #fafafa;
+        }
+        
+        .tool-card h4 {
+            margin-top: 0;
+            color: #2563eb;
+        }
+        
+        /* 参数滑块 */
+        .param-item {
+            margin: 15px 0;
+            padding: 10px 0;
+            border-bottom: 1px dashed #e2e8f0;
+        }
+        
+        .param-name {
+            font-weight: 600;
+            color: #1e293b;
+        }
+        
+        .param-range {
+            color: #64748b;
+            font-size: 10pt;
+        }
+        
+        /* 页脚 */
+        footer {
+            margin-top: 50px;
+            padding-top: 20px;
+            border-top: 1px solid #e2e8f0;
+            text-align: center;
+            color: #94a3b8;
+            font-size: 10pt;
+        }
+        
+        @media print {
+            body {
+                padding: 0;
+            }
+            
+            .cover {
+                padding: 100px 0;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- 封面 -->
+<div class="cover">
+    <h1>OpenTune</h1>
+    <div class="subtitle">AI 智能修音软件</div>
+    <div class="tagline">保留共振峰，移调不失真</div>
+    <div class="version">用户指南 v1.1</div>
+    <div class="version" style="margin-top: 10px;">2026 年 4 月</div>
+</div>
+
+<!-- 目录 -->
+<div class="toc">
+    <h2>目录</h2>
+    <ul>
+        <li><a href="#intro">1. 产品简介</a> <span class="page-num">3</span></li>
+        <li><a href="#requirements">2. 系统要求</a> <span class="page-num">3</span></li>
+        <li><a href="#install">3. 安装与启动</a> <span class="page-num">4</span></li>
+        <li><a href="#interface">4. 界面概览</a> <span class="page-num">5</span></li>
+        <li><a href="#quickstart">5. 快速入门</a> <span class="page-num">6</span></li>
+        <li><a href="#features">6. 核心功能</a> <span class="page-num">7</span></li>
+        <li><a href="#tools">7. 编辑工具</a> <span class="page-num">9</span></li>
+        <li><a href="#parameters">8. 参数详解</a> <span class="page-num">10</span></li>
+        <li><a href="#shortcuts">9. 快捷键</a> <span class="page-num">11</span></li>
+        <li><a href="#export">10. 导出音频</a> <span class="page-num">12</span></li>
+        <li><a href="#faq">11. 常见问题</a> <span class="page-num">12</span></li>
+    </ul>
+</div>
+
+<!-- 第1章：产品简介 -->
+<h2 id="intro">1. 产品简介</h2>
+
+<p>OpenTune 是一款基于神经声码器的开源 AI 修音软件。与传统 DSP 算法直接移调不同，它使用 NSF-HiFiGAN 声码器在保留原始共振峰的前提下重新生成人声，即使进行极端音高调整，也能保持自然、扎实的音质。</p>
+
+<h3>核心优势</h3>
+<table>
+    <tr>
+        <th width="25%">特性</th>
+        <th>说明</th>
+    </tr>
+    <tr>
+        <td><strong>共振峰不变</strong></td>
+        <td>改变音高时不影响声音的底色，告别"鸭子叫"或"换人唱"的失真感</td>
+    </tr>
+    <tr>
+        <td><strong>大范围移调</strong></td>
+        <td>支持夸张的音高修正与转调，音质依然清晰稳定</td>
+    </tr>
+    <tr>
+        <td><strong>AI 重合成</strong></td>
+        <td>基于深度学习的声码器技术，而非传统移调算法</td>
+    </tr>
+    <tr>
+        <td><strong>类 Auto-Tune 工作流</strong></td>
+        <td>手绘、音符、锚点工具一应俱全，快速进入心流状态</td>
+    </tr>
+    <tr>
+        <td><strong>自动调式检测</strong></td>
+        <td>内置类 Auto-Key 功能，自动检测调式（大调/小调）</td>
+    </tr>
+    <tr>
+        <td><strong>开源免费</strong></td>
+        <td>永久免费，社区驱动，持续迭代</td>
+    </tr>
+</table>
+
+<div class="tip">
+    <div class="tip-title">💡 技术亮点</div>
+    OpenTune 使用 RMVPE 进行高精度音高提取，配合 PC-NSF-HiFiGAN 神经声码器实现高质量的重合成。音频统一采用 44.1kHz 采样率处理。
+</div>
+
+<!-- 第2章：系统要求 -->
+<h2 id="requirements">2. 系统要求</h2>
+
+<h3>最低配置</h3>
+<table>
+    <tr>
+        <th width="25%">项目</th>
+        <th>要求</th>
+    </tr>
+    <tr>
+        <td>操作系统</td>
+        <td>Windows 10/11 (64位)</td>
+    </tr>
+    <tr>
+        <td>处理器</td>
+        <td>Intel Core i5 或同等性能 AMD 处理器</td>
+    </tr>
+    <tr>
+        <td>内存</td>
+        <td>8 GB RAM</td>
+    </tr>
+    <tr>
+        <td>存储空间</td>
+        <td>500 MB 可用空间（含 AI 模型）</td>
+    </tr>
+    <tr>
+        <td>声卡</td>
+        <td>支持 ASIO 或 WASAPI 的音频设备</td>
+    </tr>
+</table>
+
+<h3>推荐配置</h3>
+<table>
+    <tr>
+        <th width="25%">项目</th>
+        <th>要求</th>
+    </tr>
+    <tr>
+        <td>处理器</td>
+        <td>Intel Core i7 或更高</td>
+    </tr>
+    <tr>
+        <td>内存</td>
+        <td>16 GB RAM 或更高</td>
+    </tr>
+    <tr>
+        <td>显卡</td>
+        <td>支持 CUDA 的 NVIDIA 显卡（可选，可加速 AI 推理）</td>
+    </tr>
+</table>
+
+<div class="note">
+    <div class="note-title">✓ GPU 加速</div>
+    OpenTune 支持 NVIDIA GPU 的 CUDA/DirectML 加速。如果检测到兼容显卡，AI 推理将自动使用 GPU，大幅提升处理速度。无独立显卡时自动回退到 CPU 模式运行。
+</div>
+
+<!-- 第3章：安装与启动 -->
+<h2 id="install">3. 安装与启动</h2>
+
+<h3>3.1 下载软件</h3>
+<p>前往 GitHub Releases 页面下载最新 Windows 独立运行包。</p>
+
+<h3>3.2 解压文件</h3>
+<p>将下载的压缩包解压到任意目录，确保以下文件完整：</p>
+<ul>
+    <li><code>OpenTune.exe</code> - 主程序</li>
+    <li><code>onnxruntime.dll</code> - ONNX Runtime 运行库</li>
+    <li><code>models/</code> - AI 模型文件夹
+        <ul>
+            <li><code>rmvpe.onnx</code> - 音高提取模型</li>
+            <li><code>pc_nsf_hifigan_44.1k_ONNX/</code> - 声码器模型</li>
+        </ul>
+    </li>
+</ul>
+
+<h3>3.3 启动程序</h3>
+<p>双击 <code>OpenTune.exe</code> 即可启动软件。首次启动时，软件会自动初始化 AI 模型，可能需要等待几秒钟。</p>
+
+<div class="note">
+    <div class="note-title">✓ 模型加载</div>
+    确保模型文件与主程序在同一目录下，否则软件无法正常工作。模型文件总大小约 60MB。
+</div>
+
+<!-- 第4章：界面概览 -->
+<div class="page-break"></div>
+<h2 id="interface">4. 界面概览</h2>
+
+<p>OpenTune 采用现代化界面设计，主要分为以下几个区域：</p>
+
+<h3>4.1 界面布局</h3>
+
+<table>
+    <tr>
+        <th width="20%">区域</th>
+        <th>功能</th>
+    </tr>
+    <tr>
+        <td><strong>菜单栏</strong></td>
+        <td>文件导入/导出、编辑操作、视图切换、主题设置</td>
+    </tr>
+    <tr>
+        <td><strong>传输控制栏</strong></td>
+        <td>播放/暂停/停止按钮、BPM 设置、调式选择、Tap Tempo</td>
+    </tr>
+    <tr>
+        <td><strong>轨道面板</strong></td>
+        <td>多轨道管理、音量控制、Solo/Mute 开关、电平显示</td>
+    </tr>
+    <tr>
+        <td><strong>编曲视图</strong></td>
+        <td>音频片段显示、波形预览、时间轴、片段排列</td>
+    </tr>
+    <tr>
+        <td><strong>钢琴卷帘视图</strong></td>
+        <td>音高曲线编辑、音符绘制、F0 曲线显示</td>
+    </tr>
+    <tr>
+        <td><strong>参数面板</strong></td>
+        <td>音高校正参数、工具选择、颤音设置</td>
+    </tr>
+</table>
+
+<h3>4.2 视图切换</h3>
+<p>软件提供两种主要视图：</p>
+<ul>
+    <li><strong>轨道视图 (Track View)</strong>：显示编曲视图，适合管理多个音频片段</li>
+    <li><strong>钢琴卷帘视图 (Piano Roll View)</strong>：显示音高曲线编辑界面，适合精细编辑</li>
+</ul>
+
+<h3>4.3 主题</h3>
+<p>OpenTune 支持三种主题风格：</p>
+<table>
+    <tr>
+        <th>主题名称</th>
+        <th>风格特点</th>
+    </tr>
+    <tr>
+        <td>BlueBreeze</td>
+        <td>浅色系、柔和蓝调、现代简约风格</td>
+    </tr>
+    <tr>
+        <td>DarkBlueGrey</td>
+        <td>深色系、专业录音室风格、立体阴影效果</td>
+    </tr>
+    <tr>
+        <td>Aurora</td>
+        <td>深色背景、霓虹发光效果、科技感十足</td>
+    </tr>
+</table>
+
+<p>通过菜单 <strong>View → Theme</strong> 可切换主题。</p>
+
+<!-- 第5章：快速入门 -->
+<h2 id="quickstart">5. 快速入门</h2>
+
+<p>以下是一个典型的工作流程，帮助你快速上手 OpenTune：</p>
+
+<div class="workflow">
+    <div class="workflow-step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+            <h4>导入音频</h4>
+            <p>将音频文件拖放到软件窗口，或通过菜单 File → Import Audio 导入。支持 WAV、MP3、FLAC 等格式。</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+            <h4>自动音高提取</h4>
+            <p>导入后软件自动运行 RMVPE 提取原始 F0 曲线，在钢琴卷帘视图中显示红色曲线。</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+            <h4>设置调式</h4>
+            <p>软件自动检测调式，或手动在传输控制栏选择主音（C, C#, D...）和调式（Major/Minor）。</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+            <h4>编辑音高曲线</h4>
+            <p>使用自动修正工具或手动绘制音符、锚点，调整音高曲线。蓝色曲线显示修正后的音高。</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">5</div>
+        <div class="step-content">
+            <h4>调整参数</h4>
+            <p>在参数面板调节 Retune Speed、Vibrato 等参数，实时预览效果。</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">6</div>
+        <div class="step-content">
+            <h4>预览与导出</h4>
+            <p>点击播放按钮预览效果，满意后通过 File → Export 导出处理后的音频。</p>
+        </div>
+    </div>
+</div>
+
+<div class="tip">
+    <div class="tip-title">💡 快捷操作</div>
+    导入音频后可以直接使用 AutoTune 工具进行一键修正，适合快速处理。精细调整时再使用其他工具。
+</div>
+
+<!-- 第6章：核心功能 -->
+<div class="page-break"></div>
+<h2 id="features">6. 核心功能</h2>
+
+<h3>6.1 音频导入</h3>
+<p>OpenTune 支持多种音频格式的导入：</p>
+<ul>
+    <li>支持格式：WAV、MP3、FLAC、OGG、AIFF 等</li>
+    <li>导入时自动重采样至 44.1kHz</li>
+    <li>支持拖放导入</li>
+    <li>多轨道支持：最多 12 个独立轨道</li>
+</ul>
+
+<h3>6.2 音高提取</h3>
+<p>软件使用 RMVPE（Robust Multi-Scale Pitch Estimation）进行高精度音高提取：</p>
+<ul>
+    <li><strong>帧率</strong>：100fps（每帧 10ms）</li>
+    <li><strong>频率范围</strong>：默认 50Hz - 1100Hz（可调整）</li>
+    <li><strong>特性</strong>：支持八度错误修正、静音段检测、间隙填充</li>
+</ul>
+
+<h3>6.3 调式检测</h3>
+<p>内置基于 Krumhansl-Schmuckler 算法的自动调式检测：</p>
+<ul>
+    <li>支持 12 种主音：C, C#, D, D#, E, F, F#, G, G#, A, A#, B</li>
+    <li>支持调式：大调（Major）、小调（Minor）、半音阶</li>
+    <li>提供置信度评估</li>
+</ul>
+
+<h3>6.4 音高校正</h3>
+
+<h4>校正模式</h4>
+<table>
+    <tr>
+        <th width="25%">模式</th>
+        <th>说明</th>
+    </tr>
+    <tr>
+        <td><strong>自动修正</strong></td>
+        <td>根据调式自动将音高校正到最接近的目标音符</td>
+    </tr>
+    <tr>
+        <td><strong>音符编辑</strong></td>
+        <td>手动绘制音符块，指定每个音符的基准音高</td>
+    </tr>
+    <tr>
+        <td><strong>手绘曲线</strong></td>
+        <td>直接绘制 F0 曲线，实现完全自定义的音高走向</td>
+    </tr>
+    <tr>
+        <td><strong>锚点工具</strong></td>
+        <td>设置关键锚点，自动生成平滑过渡的音高线</td>
+    </tr>
+</table>
+
+<h4>音高曲线显示</h4>
+<div class="legend">
+    <div class="legend-item">
+        <div class="legend-color" style="background: #ef4444;"></div>
+        <span>原始 F0 曲线（红色）</span>
+    </div>
+    <div class="legend-item">
+        <div class="legend-color" style="background: #3b82f6;"></div>
+        <span>修正后 F0 曲线（蓝色）</span>
+    </div>
+</div>
+
+<h3>6.5 AI 重合成</h3>
+<p>修正后的音高曲线通过神经声码器重合成音频：</p>
+<ul>
+    <li><strong>声码器</strong>：PC-NSF-HiFiGAN（Pitch Controllable NSF HiFiGAN）</li>
+    <li><strong>采样率</strong>：44.1kHz</li>
+    <li><strong>特点</strong>：保留原始共振峰，音质自然</li>
+    <li><strong>缓存机制</strong>：分块渲染并缓存，避免重复计算</li>
+</ul>
+
+<h3>6.6 多轨道管理</h3>
+<p>OpenTune 支持多轨道工作流程：</p>
+<ul>
+    <li>最多 12 个独立轨道</li>
+    <li>每个轨道支持多个音频片段（Clip）</li>
+    <li>轨道操作：Solo、Mute、音量调节</li>
+    <li>片段操作：移动、分割、合并、删除</li>
+    <li>环形 LED 电平表实时显示音量</li>
+</ul>
+
+<h3>6.7 撤销/重做</h3>
+<p>支持完整的撤销/重做历史：</p>
+<ul>
+    <li>最多保存 500 步操作历史</li>
+    <li>支持所有编辑操作（音符绘制、参数调整等）</li>
+    <li>快捷键：Ctrl+Z（撤销）、Ctrl+Y 或 Ctrl+Shift+Z（重做）</li>
+</ul>
+
+<h3>6.8 快捷键系统</h3>
+<p>内置可自定义的快捷键系统：</p>
+<ul>
+    <li>支持常用操作的快捷键绑定</li>
+    <li>可在设置中自定义快捷键</li>
+    <li>支持冲突检测和提示</li>
+    <li>提供快捷键重置功能</li>
+</ul>
+
+<h3>6.9 GPU 加速</h3>
+<p>支持 GPU 加速 AI 推理：</p>
+<ul>
+    <li>自动检测 NVIDIA GPU 并启用 CUDA/DirectML 加速</li>
+    <li>CPU 回退模式确保兼容性</li>
+    <li>显著提升处理速度</li>
+</ul>
+
+<h3>6.10 多主题系统</h3>
+<p>提供多种视觉主题选择：</p>
+<ul>
+    <li>BlueBreeze - 浅色主题，简约现代</li>
+    <li>DarkBlueGrey - 深色主题，专业录音室风格</li>
+    <li>Aurora - 深色霓虹主题，科技感十足</li>
+    <li>通过菜单 View → Theme 切换主题</li>
+</ul>
+
+<!-- 第7章：编辑工具 -->
+<div class="page-break"></div>
+<h2 id="tools">7. 编辑工具</h2>
+
+<p>OpenTune 提供五种专业编辑工具，通过参数面板的工具选择区切换：</p>
+
+<div class="tool-card">
+    <h4>🎹 AutoTune - 自动修正工具</h4>
+    <p>根据当前调式自动将音高校正到最接近的目标音符。适合快速处理、批量修正。</p>
+    <p><strong>使用场景</strong>：当音频基本在调上，只需要微调时使用。</p>
+</div>
+
+<div class="tool-card">
+    <h4>🖱️ Select - 选择工具</h4>
+    <p>选择音符或时间区域。选中后可进行移动、删除、参数调整等操作。</p>
+    <p><strong>操作</strong>：单击选择、拖动框选、Delete 删除选中内容。</p>
+</div>
+
+<div class="tool-card">
+    <h4>✏️ DrawNote - 绘制音符工具</h4>
+    <p>手动绘制音符块。在钢琴卷帘中拖动创建音符，指定音高和时长。</p>
+    <p><strong>特点</strong>：每个音符可独立设置参数（Retune Speed、颤音等）。</p>
+</div>
+
+<div class="tool-card">
+    <h4>📍 LineAnchor - 线锚点工具</h4>
+    <p>在音高曲线上设置关键锚点，软件自动在锚点之间生成平滑过渡。</p>
+    <p><strong>优势</strong>：精确控制关键位置，适合处理滑音、转音。</p>
+</div>
+
+<div class="tool-card">
+    <h4>🖌️ HandDraw - 手绘工具</h4>
+    <p>直接手绘 F0 曲线，完全自定义音高走向。适合精细的音高装饰。</p>
+    <p><strong>技巧</strong>：可绘制颤音、滑音、弯音等细节效果。</p>
+</div>
+
+<h3>工具切换</h3>
+<p>在参数面板点击对应的工具按钮，或使用快捷键（见第 9 章）。</p>
+
+<!-- 第8章：参数详解 -->
+<h2 id="parameters">8. 参数详解</h2>
+
+<h3>8.1 音高校正参数</h3>
+
+<div class="param-item">
+    <div class="param-name">Retune Speed（校正速度）</div>
+    <div class="param-range">范围：0% - 100% | 默认值：15%</div>
+    <p>控制音高校正的速度。值越大，校正越快越精确；值越小，保留更多原始音高波动，效果更自然。</p>
+    <ul>
+        <li><strong>低值（0-30%）</strong>：保留自然颤音，适合追求真实感的处理</li>
+        <li><strong>中值（30-70%）</strong>：平衡精度与自然度</li>
+        <li><strong>高值（70-100%）</strong>：精确校正，产生明显的 Auto-Tune 效果</li>
+    </ul>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Vibrato Depth（颤音深度）</div>
+    <div class="param-range">范围：0 - 1 | 默认值：0</div>
+    <p>为音符添加人工颤音的深度。0 表示不添加，1 表示最大深度。</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Vibrato Rate（颤音速率）</div>
+    <div class="param-range">范围：0 - 15 Hz | 默认值：7.5 Hz</div>
+    <p>控制人工颤音的振动频率。人声自然颤音通常在 5-8 Hz 范围。</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Note Split Threshold（音符分割阈值）</div>
+    <div class="param-range">范围：0 - 100 音分 | 默认值：80 音分</div>
+    <p>控制自动音符分割的灵敏度。值越小，越容易分割成独立音符；值越大，倾向于合并相邻音高。</p>
+</div>
+
+<h3>8.2 轨道参数</h3>
+
+<div class="param-item">
+    <div class="param-name">Volume（音量）</div>
+    <div class="param-range">范围：0 - 4.0 倍 | 默认值：1.0</div>
+    <p>轨道音量控制。支持超过 1.0 的增益。</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Solo / Mute</div>
+    <p>轨道独奏/静音开关。Solo 时其他轨道静音，Mute 时该轨道静音。</p>
+</div>
+
+<h3>8.3 播放参数</h3>
+
+<div class="param-item">
+    <div class="param-name">BPM（每分钟节拍数）</div>
+    <div class="param-range">范围：20 - 300 BPM | 默认值：120</div>
+    <p>项目速度。影响时间轴网格和节拍标记。</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Tap Tempo</div>
+    <p>点击 Tap 按钮多次，软件自动计算平均 BPM。最多记录 5 次点击间隔。</p>
+</div>
+
+<!-- 第9章：快捷键 -->
+<div class="page-break"></div>
+<h2 id="shortcuts">9. 快捷键</h2>
+
+<h3>9.1 播放控制</h3>
+<table class="shortcut-table">
+    <tr>
+        <th>快捷键</th>
+        <th>功能</th>
+    </tr>
+    <tr>
+        <td>Space</td>
+        <td>播放 / 暂停</td>
+    </tr>
+    <tr>
+        <td>Enter</td>
+        <td>停止播放</td>
+    </tr>
+    <tr>
+        <td>A</td>
+        <td>从起始位置播放</td>
+    </tr>
+    <tr>
+        <td>Escape</td>
+        <td>取消当前操作 / 停止</td>
+    </tr>
+</table>
+
+<h3>9.2 编辑操作</h3>
+<table class="shortcut-table">
+    <tr>
+        <th>快捷键</th>
+        <th>功能</th>
+    </tr>
+    <tr>
+        <td>Ctrl + Z</td>
+        <td>撤销</td>
+    </tr>
+    <tr>
+        <td>Ctrl + Y / Ctrl + Shift + Z</td>
+        <td>重做</td>
+    </tr>
+    <tr>
+        <td>Ctrl + X</td>
+        <td>剪切</td>
+    </tr>
+    <tr>
+        <td>Ctrl + C</td>
+        <td>复制</td>
+    </tr>
+    <tr>
+        <td>Ctrl + V</td>
+        <td>粘贴</td>
+    </tr>
+    <tr>
+        <td>Ctrl + A</td>
+        <td>全选</td>
+    </tr>
+    <tr>
+        <td>Delete / Backspace / 1</td>
+        <td>删除选中内容</td>
+    </tr>
+</table>
+
+<h3>9.3 视图操作</h3>
+<table class="shortcut-table">
+    <tr>
+        <th>快捷键</th>
+        <th>功能</th>
+    </tr>
+    <tr>
+        <td>滚轮</td>
+        <td>垂直缩放（钢琴卷帘）/ 水平滚动</td>
+    </tr>
+    <tr>
+        <td>Shift + 滚轮</td>
+        <td>水平滚动</td>
+    </tr>
+    <tr>
+        <td>Ctrl + 滚轮</td>
+        <td>缩放时间轴</td>
+    </tr>
+</table>
+
+<h3>9.4 工具切换</h3>
+<table class="shortcut-table">
+    <tr>
+        <th>快捷键</th>
+        <th>工具</th>
+    </tr>
+    <tr>
+        <td>2</td>
+        <td>DrawNote - 绘制音符</td>
+    </tr>
+    <tr>
+        <td>3</td>
+        <td>Select - 选择工具</td>
+    </tr>
+    <tr>
+        <td>4</td>
+        <td>LineAnchor - 锚点工具</td>
+    </tr>
+    <tr>
+        <td>6</td>
+        <td>AutoTune - 自动修正</td>
+    </tr>
+</table>
+
+<!-- 第10章：导出音频 -->
+<h2 id="export">10. 导出音频</h2>
+
+<p>OpenTune 支持多种导出选项：</p>
+
+<h3>10.1 导出格式</h3>
+<ul>
+    <li><strong>格式</strong>：WAV</li>
+    <li><strong>采样率</strong>：44.1kHz</li>
+    <li><strong>位深度</strong>：32-bit Float</li>
+    <li><strong>声道</strong>：单声道（Clip/Track）/ 立体声（Master Mix）</li>
+</ul>
+
+<h3>10.2 导出范围</h3>
+<table>
+    <tr>
+        <th width="30%">导出选项</th>
+        <th>说明</th>
+    </tr>
+    <tr>
+        <td>Export Selected Clip</td>
+        <td>导出当前选中的音频片段</td>
+    </tr>
+    <tr>
+        <td>Export Track</td>
+        <td>导出指定轨道的所有音频</td>
+    </tr>
+    <tr>
+        <td>Export Bus (Master Mix)</td>
+        <td>导出所有轨道的混音结果</td>
+    </tr>
+</table>
+
+<h3>10.3 导出步骤</h3>
+<ol>
+    <li>在菜单中选择 <strong>File → Export</strong></li>
+    <li>选择导出范围（Clip / Track / Bus）</li>
+    <li>选择保存位置和文件名</li>
+    <li>等待渲染完成</li>
+</ol>
+
+<div class="tip">
+    <div class="tip-title">💡 提示</div>
+    导出时会自动触发最终渲染，确保所有修改都已应用到输出音频中。
+</div>
+
+<!-- 第11章：常见问题 -->
+<div class="page-break"></div>
+<h2 id="faq">11. 常见问题</h2>
+
+<h3>Q1: 导入音频后没有显示音高曲线？</h3>
+<p><strong>A:</strong> 请确保 <code>models/rmvpe.onnx</code> 模型文件存在且完整。首次加载模型可能需要几秒钟。如果问题持续，请检查音频是否包含明显的人声内容。</p>
+
+<h3>Q2: 音频处理速度很慢？</h3>
+<p><strong>A:</strong> 当前版本主要依赖 CPU 进行 AI 推理。建议：</p>
+<ul>
+    <li>关闭其他占用 CPU 的程序</li>
+    <li>使用较短的分段进行处理</li>
+    <li>升级到更高性能的 CPU</li>
+</ul>
+
+<h3>Q3: 修正后的音质有异常？</h3>
+<p><strong>A:</strong> 可能原因：</p>
+<ul>
+    <li>声码器模型损坏 - 重新下载模型文件</li>
+    <li>原始音频质量较差 - 尝试调整 Note Split 阈值</li>
+    <li>参数设置不当 - 降低 Retune Speed 值</li>
+</ul>
+
+<h3>Q4: 如何实现自然的音高修正？</h3>
+<p><strong>A:</strong> 建议：</p>
+<ul>
+    <li>使用较低的 Retune Speed（10-30%）</li>
+    <li>保留原始颤音，不添加人工颤音</li>
+    <li>使用 Line Anchor 工具进行精细调整，而非全自动修正</li>
+</ul>
+
+<h3>Q5: 支持实时处理吗？</h3>
+<p><strong>A:</strong> 当前版本不支持实时处理。需要先导入音频、编辑后导出。后续版本将支持 VST3 插件和 ARA2，实现 DAW 内实时处理。</p>
+
+<h3>Q6: 可以在 DAW 中使用吗？</h3>
+<p><strong>A:</strong> 当前仅支持 Windows Standalone 独立运行。VST3 插件版本即将推出，届时可在宿主软件中直接使用。</p>
+
+<h3>Q7: 如何报告 Bug 或提出功能建议？</h3>
+<p><strong>A:</strong> 请通过 GitHub Issues 页面提交问题或建议，我们会积极跟进改进。</p>
+
+<hr>
+
+<footer>
+    <p>OpenTune - AI 智能修音软件 | 开源免费 | AGPL v3.0 许可证</p>
+    <p>感谢 DiffSinger 开源社区及所有贡献者</p>
+    <p>GitHub: https://github.com/anomalyco/opencode</p>
+</footer>
+
+</body>
+</html>
