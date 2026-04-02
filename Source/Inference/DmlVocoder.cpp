@@ -232,8 +232,9 @@ void DmlVocoder::initializeSession(const std::string& modelPath,
         + " model=" + juce::String(modelPath));
 
 #ifdef _WIN32
-    std::wstring wPath(modelPath.begin(), modelPath.end());
-    session_ = std::make_unique<Ort::Session>(env, wPath.c_str(), sessionOptions);
+    juce::String jucePath(modelPath);
+    auto wPath = jucePath.toWideCharPointer();
+    session_ = std::make_unique<Ort::Session>(env, wPath, sessionOptions);
 #else
     session_ = std::make_unique<Ort::Session>(env, modelPath.c_str(), sessionOptions);
 #endif

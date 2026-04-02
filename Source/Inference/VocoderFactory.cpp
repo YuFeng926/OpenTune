@@ -50,8 +50,9 @@ VocoderCreationResult VocoderFactory::create(
         sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
         
 #ifdef _WIN32
-        std::wstring wPath(modelPath.begin(), modelPath.end());
-        auto session = std::make_unique<Ort::Session>(env, wPath.c_str(), sessionOptions);
+        juce::String jucePath(modelPath);
+        auto wPath = jucePath.toWideCharPointer();
+        auto session = std::make_unique<Ort::Session>(env, wPath, sessionOptions);
 #else
         auto session = std::make_unique<Ort::Session>(env, modelPath.c_str(), sessionOptions);
 #endif
