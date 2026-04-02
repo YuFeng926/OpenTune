@@ -1,0 +1,91 @@
+--- DiffSinger 社区声码器 ---
+
+架构：PC-NSF-HiFiGAN
+发布日期：2025-02-27
+
+超参数：
+ - 44100 sample rate
+ - 128 mel bins
+ - 512 hop size
+ - 2048 window size
+ - fmin at 40Hz
+ - fmax at 16000Hz
+
+
+注意事项：
+
+[DiffSinger 社区声码器企划](https://openvpi.github.io/vocoders/) 中的所有模型权重，
+包括此目录下的模型权重，均由 [OpenVPI Team](https://github.com/openvpi/) 提供，并基于
+[Attribution-NonCommercial-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+进行许可。
+
+
+致谢：
+
+此声码器的训练数据由以下组织、社团和个人提供并许可：
+
+孙飒              https://space.bilibili.com/12945221
+赤松_Akamatsu     https://www.zhibin.club
+乐威              https://www.zhibin.club
+伯添              https://space.bilibili.com/24087011
+雲宇光             https://space.bilibili.com/660675050
+橙子言             https://space.bilibili.com/318486464
+人衣大人           https://space.bilibili.com/2270344
+玖蝶              https://space.bilibili.com/676771003
+Yuuko
+白夜零BYL          https://space.bilibili.com/1605040503
+嗷天              https://space.bilibili.com/5675252
+洛泠羽            https://space.bilibili.com/347373318
+灰条纹的灰猫君      https://space.bilibili.com/2083633
+幽寂              https://space.bilibili.com/478860
+恶魔王女           https://space.bilibili.com/2475098
+芮晴
+绮萱              https://y.qq.com/n/ryqq/singer/003HjD6H4aZn1K
+诗芸              https://y.qq.com/n/ryqq/singer/0005NInj142zm0
+汐蕾              https://y.qq.com/n/ryqq/singer/0023cWMH1Bq1PJ
+1262917464
+炜阳
+叶卡yolka
+幸の夏            https://space.bilibili.com/1017297686
+暮色未量           https://space.bilibili.com/272904686
+晓寞sama          https://space.bilibili.com/3463394
+没头绪的节操君
+串串BunC          https://space.bilibili.com/95817834
+落雨              https://space.bilibili.com/1292427
+长尾巴的翎艾        https://space.bilibili.com/1638666
+声闻计划           https://space.bilibili.com/392812269
+唐家大小姐         http://5sing.kugou.com/palmusic/default.html
+不伊子
+芸青岩            https://space.bilibili.com/35236775
+妖橙              https://space.bilibili.com/161975631
+双桨              https://space.bilibili.com/13245483
+灵滅              https://space.bilibili.com/276988145
+AlexYHX          https://space.bilibili.com/13303439
+祁唱              https://space.bilibili.com/11256670
+早稻叽            https://space.bilibili.com/1950658
+泽木团子           https://space.bilibili.com/5343740
+
+使用了以下公开数据集：
+
+Opencpop         https://wenet.org.cn/opencpop/
+CCMUSIC          https://ccmusic-database.github.io/index.html
+SingingVoiceDataset  http://isophonics.net/SingingVoiceDataset
+東北イタコ         https://zunko.jp/itadev/login.php
+御丹宮くるみ        https://onikuru.info/db-download/
+PJS              https://sites.google.com/site/shinnosuketakamichi/research-topics/pjs_corpus
+HTS              http://hts.sp.nitech.ac.jp/
+TIGER 2.0        https://tigermeat.xyz
+
+训练算力的提供者如下：
+
+花儿不哭           https://space.bilibili.com/5760446
+
+
+二次分发条款：
+
+1. 请勿售卖此声码器或从其二次分发过程中收取任何费用，因为此类行为受到许可证的禁止。
+2. 请在二次分发文件中包含一份 CC BY-NC-SA 4.0 许可证的副本或指向该许可证的链接。
+3. 请在二次分发文件中包含这份声明，或以其他形式声明此声码器由 OpenVPI Team 提供并基于 CC BY-NC-SA 4.0 许可，
+   并附带上述完整的致谢名单。
+4. 如果您微调或修改了权重，请留下一份关于其受到了何种修改的说明。
+5.（可选）留下一份指向此声码器的官方发布页面的链接，并告知使用者可从该网站获取此声码器的其他版本和未来的更新。

@@ -1,0 +1,29 @@
+We regret to publish a verified Registry of Hostile Conduct (shown as below). This registry documents
+individuals/entities who have engaged in long-term destructive activities against the development team.
+We solemnly declare:
+
+1. Strongly recommend all users review this registry before downloading and using this vocoder
+2. No technical or legal restrictions are currently imposed on listed parties, as the vocoder is
+   still licensed under CC BY-NC-SA 4.0
+3. Reserve the right to apply further restrictions in case of persistent malicious acts
+
+REGISTRY OF HOSTILE CONDUCT
+
+1. 旋转_turning_point (QQ: 2673587414; Bilibili UID: 285801087; Discord username: colstone233), for
+   engaging in long-term hostile and personal attacks against developers, repeatedly spreading false
+   information about DiffSinger and the development team, and interfering with the development process
+   of the vocoder and other projects in the community.
+
+
+我们遗憾地公示一份经核实的《不友好行为备案清单》（下附）。该名单记录了长期对开发团队实施破坏性行径的个人/实体。
+我们郑重声明：
+
+1. 强烈建议所有使用者在下载和使用此声码器前阅读本备案清单
+2. 当前未对名单主体施加任何技术或法律层面的使用限制，因为声码器仍基于 CC BY-NC-SA 4.0 许可
+3. 若持续发生恶意行为，保留进一步施加限制的权利
+
+不友好行为备案清单
+
+1. 旋转_turning_point（QQ：2673587414；Bilibili UID：285801087；Discord 用户名：colstone233），
+   原因为长期对开发者进行敌对和人身攻击，反复传播关于 DiffSinger 和开发团队的虚假信息，干扰声码器及其他社区项目的
+   开发进程。
