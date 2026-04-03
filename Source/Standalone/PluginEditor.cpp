@@ -2241,7 +2241,7 @@ void OpenTuneAudioProcessorEditor::performScaleInferenceForClip(int trackId, int
                 ++voicedFrames;
             }
         }
-        (void)voicedFrames;
+        float voicedRatio = f0.empty() ? 0.0f : static_cast<float>(voicedFrames) / static_cast<float>(f0.size());
 
         ScaleInference inference;
         inference.processF0Data(f0, confidences, energy);

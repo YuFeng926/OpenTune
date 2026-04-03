@@ -6,10 +6,6 @@
 #include <algorithm>
 #include <cmath>
 
-#if defined(__APPLE__)
-#include <Accelerate/Accelerate.h>
-#endif
-
 namespace OpenTune {
 
 static float hzToMel(float hz)
@@ -196,52 +192,22 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
 
         fft_->performFrequencyOnlyForwardTransform(fftBuffer_.data());
 
-        // 应用Mel滤波器组
-#if defined(__APPLE__)
-        // Apple Accelerate: 先收集所有 mel bin 点积结果，再用 vvlogf 批量计算 log
-        float melSums[128]; // nMels 最大 128
+        // 应用Mel滤波器组: 点积 → epsilon clamping → 向量化 log
+        float melSums[128];
         const int nMelsActual = std::min(config_.nMels, 128);
         for (int m = 0; m < nMelsActual; ++m)
         {
             melSums[m] = simd.dotProduct(fftBuffer_.data(), melFilterbank_[(size_t) m].data(), nFftBins);
-            // epsilon clamping: 确保无零值/负值进入 log
             melSums[m] = std::max(config_.logEps, melSums[m]);
         }
-        // 向量化 log 变换
+
         float logResults[128];
-        const int logCount = nMelsActual;
-        vvlogf(logResults, melSums, &logCount);
-#if JUCE_DEBUG
-        // Debug 验证：首帧对比 vvlogf vs std::log
-        if (frame == 0) {
-            static bool validated = false;
-            if (!validated) {
-                validated = true;
-                float maxDiff = 0.0f;
-                for (int m = 0; m < nMelsActual; ++m) {
-                    const float scalarLog = std::log(melSums[m]);
-                    const float diff = std::fabs(logResults[m] - scalarLog);
-                    if (diff > maxDiff) maxDiff = diff;
-                }
-                AppLogger::info("[MelSpectrogram] vvlogf validation: maxDiff=" + juce::String(maxDiff, 8)
-                    + " (" + juce::String(nMelsActual) + " bins) "
-                    + (maxDiff < 1e-4f ? "PASS" : "FAIL"));
-            }
-        }
-#endif
+        simd.vectorLog(logResults, melSums, static_cast<size_t>(nMelsActual));
+
         for (int m = 0; m < nMelsActual; ++m)
         {
             output[(size_t) m * (size_t) numFrames + (size_t) frame] = logResults[m];
         }
-#else
-        for (int m = 0; m < config_.nMels; ++m)
-        {
-            float sum = simd.dotProduct(fftBuffer_.data(), melFilterbank_[(size_t) m].data(), nFftBins);
-
-            const float logVal = std::log(std::max(config_.logEps, sum));
-            output[(size_t) m * (size_t) numFrames + (size_t) frame] = logVal;
-        }
-#endif
     }
 
     return Result<void>::success();

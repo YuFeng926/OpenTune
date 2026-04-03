@@ -124,6 +124,58 @@ public:
      */
     void findMinMax(const float* data, size_t count, float& outMin, float& outMax) const;
 
+    // ==============================================================================
+    // 向量化数学函数
+    // ==============================================================================
+
+    /**
+     * 向量化自然对数
+     * @param result 输出数组 (result[i] = log(input[i]))
+     * @param input 输入数组
+     * @param count 元素数量
+     * 
+     * 平台实现:
+     *   macOS: vvlogf (Accelerate framework)
+     *   其他: std::log (标量回退)
+     */
+    void vectorLog(float* result, const float* input, size_t count) const;
+
+    /**
+     * 向量化指数函数
+     * @param result 输出数组 (result[i] = exp(input[i]))
+     * @param input 输入数组
+     * @param count 元素数量
+     * 
+     * 平台实现:
+     *   macOS: vvexpf (Accelerate framework)
+     *   其他: std::exp (标量回退)
+     */
+    void vectorExp(float* result, const float* input, size_t count) const;
+
+    /**
+     * 向量化平方根
+     * @param result 输出数组 (result[i] = sqrt(input[i]))
+     * @param input 输入数组
+     * @param count 元素数量
+     * 
+     * 平台实现:
+     *   macOS: vvsqrtf (Accelerate framework)
+     *   其他: std::sqrt (标量回退)
+     */
+    void vectorSqrt(float* result, const float* input, size_t count) const;
+
+    /**
+     * 复数模长计算 (interleaved format)
+     * @param result 输出数组 (result[i] = sqrt(real[i]^2 + imag[i]^2))
+     * @param complexData 输入复数数组 [R0, I0, R1, I1, ...]
+     * @param complexCount 复数元素数量 (不是 float 数量)
+     * 
+     * 平台实现:
+     *   macOS: vDSP_vdist (Accelerate framework)
+     *   其他: std::sqrt(r*r + i*i) (标量回退)
+     */
+    void complexMagnitude(float* result, const float* complexData, size_t complexCount) const;
+
 private:
     SimdAccelerator() = default;
     ~SimdAccelerator() = default;
@@ -140,6 +192,10 @@ private:
     using AddFunc = void(*)(float*, const float*, const float*, size_t);
     using AbsMaxFunc = float(*)(const float*, size_t);
     using FindMinMaxFunc = void(*)(const float*, size_t, float&, float&);
+    using VectorLogFunc = void(*)(float*, const float*, size_t);
+    using VectorExpFunc = void(*)(float*, const float*, size_t);
+    using VectorSqrtFunc = void(*)(float*, const float*, size_t);
+    using ComplexMagnitudeFunc = void(*)(float*, const float*, size_t);
 
     // 标量实现
     static float sumOfSquares_Scalar(const float* data, size_t count);
@@ -186,6 +242,30 @@ private:
     static float absMax_Accelerate(const float* data, size_t count);
     static void findMinMax_Accelerate(const float* data, size_t count, float& outMin, float& outMax);
 
+    // 向量化数学函数 - 标量实现
+    static void vectorLog_Scalar(float* result, const float* input, size_t count);
+    static void vectorExp_Scalar(float* result, const float* input, size_t count);
+    static void vectorSqrt_Scalar(float* result, const float* input, size_t count);
+    static void complexMagnitude_Scalar(float* result, const float* complexData, size_t complexCount);
+
+    // 向量化数学函数 - AVX实现 (回退到标量)
+    static void vectorLog_AVX(float* result, const float* input, size_t count);
+    static void vectorExp_AVX(float* result, const float* input, size_t count);
+    static void vectorSqrt_AVX(float* result, const float* input, size_t count);
+    static void complexMagnitude_AVX(float* result, const float* complexData, size_t complexCount);
+
+    // 向量化数学函数 - NEON实现 (回退到标量)
+    static void vectorLog_NEON(float* result, const float* input, size_t count);
+    static void vectorExp_NEON(float* result, const float* input, size_t count);
+    static void vectorSqrt_NEON(float* result, const float* input, size_t count);
+    static void complexMagnitude_NEON(float* result, const float* complexData, size_t complexCount);
+
+    // 向量化数学函数 - Accelerate实现 (vvlogf/vvexpf/vvsqrtf/vDSP_vdist)
+    static void vectorLog_Accelerate(float* result, const float* input, size_t count);
+    static void vectorExp_Accelerate(float* result, const float* input, size_t count);
+    static void vectorSqrt_Accelerate(float* result, const float* input, size_t count);
+    static void complexMagnitude_Accelerate(float* result, const float* complexData, size_t complexCount);
+
     // 缓存的检测结果
     bool detected_ = false;
     SimdLevel simdLevel_ = SimdLevel::None;
@@ -198,6 +278,10 @@ private:
     AddFunc addFunc_ = add_Scalar;
     AbsMaxFunc absMaxFunc_ = absMax_Scalar;
     FindMinMaxFunc findMinMaxFunc_ = findMinMax_Scalar;
+    VectorLogFunc vectorLogFunc_ = vectorLog_Scalar;
+    VectorExpFunc vectorExpFunc_ = vectorExp_Scalar;
+    VectorSqrtFunc vectorSqrtFunc_ = vectorSqrt_Scalar;
+    ComplexMagnitudeFunc complexMagnitudeFunc_ = complexMagnitude_Scalar;
 };
 
 } // namespace OpenTune
