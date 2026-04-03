@@ -1,9 +1,55 @@
 #include "RMVPEExtractor.h"
 #include "../DSP/ResamplingManager.h"
+#include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
 #include <cmath>
+#include <sstream>
+#include <iomanip>
+
+#ifdef _WIN32
+#include <Windows.h>
+#include <Psapi.h>
+#pragma comment(lib, "psapi.lib")
+#elif defined(__APPLE__)
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#include <Accelerate/Accelerate.h>
+#endif
 
 namespace OpenTune {
+
+size_t RMVPEExtractor::getAvailableSystemMemoryMB() {
+#ifdef _WIN32
+    MEMORYSTATUSEX memStatus;
+    memStatus.dwLength = sizeof(memStatus);
+    if (GlobalMemoryStatusEx(&memStatus)) {
+        return static_cast<size_t>(memStatus.ullAvailPhys / (1024 * 1024));
+    }
+#elif defined(__APPLE__)
+    uint64_t memSize = 0;
+    size_t len = sizeof(memSize);
+    int mib[2] = { CTL_HW, HW_MEMSIZE };
+    if (sysctl(mib, 2, &memSize, &len, nullptr, 0) == 0 && memSize > 0) {
+        return static_cast<size_t>(memSize / (1024 * 1024));
+    }
+#endif
+    return 2048;
+}
+
+size_t RMVPEExtractor::estimateMemoryRequiredMB(size_t audioSamples16k) const {
+    size_t inputBytes = audioSamples16k * sizeof(float);
+    
+    size_t numFrames = (audioSamples16k + hopSize_ - 1) / hopSize_;
+    size_t outputBytes = numFrames * sizeof(float) * 2;
+    
+    size_t intermediateBytes = static_cast<size_t>(inputBytes * kMemoryOverheadFactor);
+    
+    size_t modelBytes = kModelMemoryMB * 1024 * 1024;
+    
+    size_t totalBytes = inputBytes + outputBytes + intermediateBytes + modelBytes;
+    
+    return totalBytes / (1024 * 1024);
+}
 
 RMVPEExtractor::PreflightResult RMVPEExtractor::preflightCheck(size_t audioLength, int sampleRate) const {
     if (sampleRate <= 0) {
@@ -13,12 +59,133 @@ RMVPEExtractor::PreflightResult RMVPEExtractor::preflightCheck(size_t audioLengt
     if (audioLength == 0) {
         return {false, "[RMVPE] Empty audio buffer in preflight"};
     }
-
+    
+    PreflightResult result;
+    
+    // Calculate duration at native sample rate, then convert to 16kHz samples
+    double durationSec = static_cast<double>(audioLength) / sampleRate;
+    result.audioDurationSec = durationSec;
+    
+    // Resampling ratio for 16kHz target
+    double resampleRatio = 16000.0 / sampleRate;
+    size_t audioSamples16k = static_cast<size_t>(audioLength * resampleRatio);
+    
+    // ============================================================
+    // 1. Duration Gate Check
+    // ============================================================
+    if (durationSec > kMaxAudioDurationSec) {
+        std::ostringstream oss;
+        oss << "[RMVPE] Duration gate exceeded: " << std::fixed << std::setprecision(1) 
+            << durationSec << "s > " << kMaxAudioDurationSec << "s limit. "
+            << "Reduce audio length or use shorter segments.";
+        result.errorMessage = oss.str();
+        result.errorCategory = "DURATION";
+        result.success = false;
+        
+        AppLogger::error(result.errorMessage);
+        AppLogger::error("[RMVPE] Preflight FAIL - Duration: " + juce::String(durationSec, 1) 
+                  + "s, Limit: " + juce::String(kMaxAudioDurationSec) + "s");
+        return result;
+    }
+    
+    // ============================================================
+    // 2. Memory Budget Estimation
+    // ============================================================
+    size_t requiredMB = estimateMemoryRequiredMB(audioSamples16k);
+    result.estimatedMemoryMB = requiredMB;
+    
+    // Get available memory based on execution backend
+    auto& gpuDetector = AccelerationDetector::getInstance();
+    const auto backend = gpuDetector.getSelectedBackend();
+    // DirectML uses dedicated GPU VRAM; CoreML uses unified system memory (macOS UMA)
+    bool useGpuVram = (backend == AccelerationDetector::AccelBackend::DirectML);
+    
+    if (useGpuVram) {
+        // DirectML mode: Use GPU VRAM limit from AccelerationDetector
+        size_t gpuMemLimitBytes = gpuDetector.getRecommendedGpuMemoryLimit();
+        size_t availableMB = gpuMemLimitBytes / (1024 * 1024);
+        result.availableMemoryMB = availableMB;
+        
+        // Check if GPU memory is sufficient
+        if (availableMB < kMinGpuMemoryMB) {
+            std::ostringstream oss;
+            oss << "[RMVPE] GPU memory insufficient: " << availableMB << "MB < " 
+                << kMinGpuMemoryMB << "MB minimum. "
+                << "GPU: " << gpuDetector.getSelectedGpu().name;
+            result.errorMessage = oss.str();
+            result.errorCategory = "MEMORY";
+            result.success = false;
+            
+            AppLogger::error(result.errorMessage);
+            AppLogger::error("[RMVPE] Preflight FAIL - GPU Memory: " + juce::String((int)availableMB) 
+                      + "MB available, " + juce::String((int)requiredMB) + "MB estimated");
+            return result;
+        }
+        
+        // For GPU, we also check against the recommended limit
+        // ONNX Runtime with DirectML may need to allocate temp buffers
+        size_t effectiveLimitMB = (availableMB > kMinReservedMemoryMB)
+            ? (availableMB - kMinReservedMemoryMB)
+            : 0;
+        if (requiredMB > effectiveLimitMB) {
+            std::ostringstream oss;
+            oss << "[RMVPE] Memory budget exceeded: estimated " << requiredMB 
+                << "MB > " << effectiveLimitMB << "MB available on GPU. "
+                << "Audio duration: " << std::fixed << std::setprecision(1) << durationSec << "s. "
+                << "GPU: " << gpuDetector.getSelectedGpu().name;
+            result.errorMessage = oss.str();
+            result.errorCategory = "MEMORY";
+            result.success = false;
+            
+            AppLogger::error(result.errorMessage);
+            AppLogger::error("[RMVPE] Preflight FAIL - Memory Budget: " + juce::String((int)requiredMB) 
+                      + "MB required, " + juce::String((int)effectiveLimitMB) + "MB available (GPU)");
+            return result;
+        }
+    } else {
+        // CPU / CoreML mode: Use system memory
+        // CoreML on macOS uses unified memory architecture (UMA), same pool as CPU
+        size_t systemMemMB = getAvailableSystemMemoryMB();
+        size_t availableMB = (systemMemMB > kMinReservedMemoryMB) 
+            ? (systemMemMB - kMinReservedMemoryMB) : 0;
+        result.availableMemoryMB = availableMB;
+        
+        if (requiredMB > availableMB) {
+            std::ostringstream oss;
+            oss << "[RMVPE] Memory budget exceeded: estimated " << requiredMB 
+                << "MB > " << availableMB << "MB available (" << gpuDetector.getBackendName() << " mode). "
+                << "Audio duration: " << std::fixed << std::setprecision(1) << durationSec << "s. "
+                << "System memory: " << systemMemMB << "MB total available.";
+            result.errorMessage = oss.str();
+            result.errorCategory = "MEMORY";
+            result.success = false;
+            
+            AppLogger::error(result.errorMessage);
+            AppLogger::error("[RMVPE] Preflight FAIL - Memory Budget: " + juce::String((int)requiredMB) 
+                      + "MB required, " + juce::String((int)availableMB) + "MB available (" 
+                      + juce::String(gpuDetector.getBackendName()) + ")");
+            return result;
+        }
+    }
+    
+    // ============================================================
+    // 3. Model Session Check
+    // ============================================================
     if (!session_) {
         return {false, "[RMVPE] ONNX session not initialized"};
     }
-
-    return {true, {}};
+    
+    // ============================================================
+    // Preflight Passed
+    // ============================================================
+    result.success = true;
+    
+    AppLogger::info("[RMVPE] Preflight PASS - Duration: " + juce::String(durationSec, 1) 
+              + "s, Estimated memory: " + juce::String((int)requiredMB) + "MB, "
+              + "Available: " + juce::String((int)result.availableMemoryMB) + "MB ("
+              + juce::String(gpuDetector.getBackendName()) + ")");
+    
+    return result;
 }
 
 RMVPEExtractor::RMVPEExtractor(
@@ -33,6 +200,67 @@ RMVPEExtractor::RMVPEExtractor(
 }
 
 RMVPEExtractor::~RMVPEExtractor() = default;
+
+std::vector<float> RMVPEExtractor::computeSTFTFrame(const float* audioData, size_t totalSamples, int startSample) {
+    const int numFFTBins = fftSize_ / 2 + 1;
+    std::vector<float> magnitude(numFFTBins, 0.0f);
+
+    // Prepare windowed frame
+    std::vector<float> frame(fftSize_ * 2, 0.0f);  // Complex FFT needs double size
+
+    for (int i = 0; i < fftSize_; ++i) {
+        int sampleIdx = startSample + i;
+        if (sampleIdx >= 0 && sampleIdx < static_cast<int>(totalSamples)) {
+            frame[i] = audioData[sampleIdx] * hannWindow_[i];
+        }
+    }
+
+    // Perform FFT
+    forwardFFT_->performRealOnlyForwardTransform(frame.data());
+
+    // Compute magnitude
+#if defined(__APPLE__)
+    // Apple Accelerate: 将 interleaved complex (RIRIRIRI) 分离为 real/imag 数组，
+    // 然后用 vDSP_vdist 计算 sqrt(real^2 + imag^2)
+    {
+        std::vector<float> realPart(static_cast<size_t>(numFFTBins));
+        std::vector<float> imagPart(static_cast<size_t>(numFFTBins));
+        for (int i = 0; i < numFFTBins; ++i) {
+            realPart[static_cast<size_t>(i)] = frame[static_cast<size_t>(i * 2)];
+            imagPart[static_cast<size_t>(i)] = frame[static_cast<size_t>(i * 2 + 1)];
+        }
+        vDSP_vdist(realPart.data(), 1, imagPart.data(), 1,
+                   magnitude.data(), 1, static_cast<vDSP_Length>(numFFTBins));
+#if JUCE_DEBUG
+        // Debug 验证：首次调用时对比 vDSP_vdist vs 标量实现
+        {
+            static bool validated = false;
+            if (!validated) {
+                validated = true;
+                float maxDiff = 0.0f;
+                for (int i = 0; i < numFFTBins; ++i) {
+                    const float scalarMag = std::sqrt(realPart[static_cast<size_t>(i)] * realPart[static_cast<size_t>(i)]
+                        + imagPart[static_cast<size_t>(i)] * imagPart[static_cast<size_t>(i)]);
+                    const float diff = std::fabs(magnitude[static_cast<size_t>(i)] - scalarMag);
+                    if (diff > maxDiff) maxDiff = diff;
+                }
+                AppLogger::info("[RMVPEExtractor] vDSP_vdist validation: maxDiff=" + juce::String(maxDiff, 8)
+                    + " (" + juce::String(numFFTBins) + " bins) "
+                    + (maxDiff < 1e-4f ? "PASS" : "FAIL"));
+            }
+        }
+#endif
+    }
+#else
+    for (int i = 0; i < numFFTBins; ++i) {
+        float real = frame[i * 2];
+        float imag = frame[i * 2 + 1];
+        magnitude[i] = std::sqrt(real * real + imag * imag + 1e-9f);
+    }
+#endif
+
+    return magnitude;
+}
 
 void RMVPEExtractor::fixOctaveErrors(std::vector<float>& f0) {
     if (f0.empty()) return;

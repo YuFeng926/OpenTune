@@ -5,7 +5,7 @@
 #include "DSP/MelSpectrogram.h"
 #include "Utils/ModelPathResolver.h"
 #include "Utils/AppLogger.h"
-#include "Utils/GpuDetector.h"
+#include "Utils/AccelerationDetector.h"
 #include "Utils/TimeCoordinate.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
@@ -485,7 +485,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                      .withOutput("Output", juce::AudioChannelSet::stereo(), true)) {
     AppLogger::initialize();
     AppLogger::log("OpenTuneAudioProcessor: ctor");
-    GpuDetector::getInstance().detect();
+    AccelerationDetector::getInstance().detect();
 
     editVersionParam_ = new juce::AudioParameterInt("editVersion", "EditVersion", 0, 100000, 0);
     addParameter(editVersionParam_);

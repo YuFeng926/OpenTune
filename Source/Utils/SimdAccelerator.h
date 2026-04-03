@@ -28,7 +28,9 @@ public:
         SSE2,       // SSE2 (128-bit)
         AVX,        // AVX (256-bit)
         AVX2,       // AVX2 (256-bit 整数 + 浮点)
-        AVX512      // AVX-512 (512-bit)
+        AVX512,     // AVX-512 (512-bit)
+        NEON,       // ARM NEON (128-bit, Apple Silicon)
+        Accelerate  // Apple Accelerate framework (vDSP/vForce)
     };
 
     /**
@@ -165,6 +167,24 @@ private:
     static void add_AVX512(float* result, const float* a, const float* b, size_t count);
     static float absMax_AVX512(const float* data, size_t count);
     static void findMinMax_AVX512(const float* data, size_t count, float& outMin, float& outMax);
+
+    // ARM NEON实现
+    static float sumOfSquares_NEON(const float* data, size_t count);
+    static float dotProduct_NEON(const float* a, const float* b, size_t count);
+    static void multiplyAdd_NEON(float* result, const float* a, const float* b, float c, size_t count);
+    static void multiply_NEON(float* result, const float* a, const float* b, size_t count);
+    static void add_NEON(float* result, const float* a, const float* b, size_t count);
+    static float absMax_NEON(const float* data, size_t count);
+    static void findMinMax_NEON(const float* data, size_t count, float& outMin, float& outMax);
+
+    // Apple Accelerate 实现 (vDSP/vForce)
+    static float sumOfSquares_Accelerate(const float* data, size_t count);
+    static float dotProduct_Accelerate(const float* a, const float* b, size_t count);
+    static void multiplyAdd_Accelerate(float* result, const float* a, const float* b, float c, size_t count);
+    static void multiply_Accelerate(float* result, const float* a, const float* b, size_t count);
+    static void add_Accelerate(float* result, const float* a, const float* b, size_t count);
+    static float absMax_Accelerate(const float* data, size_t count);
+    static void findMinMax_Accelerate(const float* data, size_t count, float& outMin, float& outMax);
 
     // 缓存的检测结果
     bool detected_ = false;

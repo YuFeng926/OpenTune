@@ -3,7 +3,9 @@
 #include "VocoderInterface.h"
 #include "DmlConfig.h"
 #include <onnxruntime_cxx_api.h>
+#ifdef _WIN32
 #include <dml_provider_factory.h>
+#endif
 #include <memory>
 #include <mutex>
 #include <vector>
