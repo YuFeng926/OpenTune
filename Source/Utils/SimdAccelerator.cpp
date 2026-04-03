@@ -44,6 +44,10 @@ void SimdAccelerator::detect() {
     addFunc_ = add_Accelerate;
     absMaxFunc_ = absMax_Accelerate;
     findMinMaxFunc_ = findMinMax_Accelerate;
+    vectorLogFunc_ = vectorLog_Accelerate;
+    vectorExpFunc_ = vectorExp_Accelerate;
+    vectorSqrtFunc_ = vectorSqrt_Accelerate;
+    complexMagnitudeFunc_ = complexMagnitude_Accelerate;
 #else
     if (cpu.hasNEON()) {
         simdLevel_ = SimdLevel::NEON;
@@ -54,6 +58,10 @@ void SimdAccelerator::detect() {
         addFunc_ = add_NEON;
         absMaxFunc_ = absMax_NEON;
         findMinMaxFunc_ = findMinMax_NEON;
+        vectorLogFunc_ = vectorLog_NEON;
+        vectorExpFunc_ = vectorExp_NEON;
+        vectorSqrtFunc_ = vectorSqrt_NEON;
+        complexMagnitudeFunc_ = complexMagnitude_NEON;
     } else if (cpu.hasAVX512()) {
         simdLevel_ = SimdLevel::AVX512;
         sumOfSquaresFunc_ = sumOfSquares_AVX512;
@@ -63,6 +71,10 @@ void SimdAccelerator::detect() {
         addFunc_ = add_AVX512;
         absMaxFunc_ = absMax_AVX512;
         findMinMaxFunc_ = findMinMax_AVX512;
+        vectorLogFunc_ = vectorLog_AVX;
+        vectorExpFunc_ = vectorExp_AVX;
+        vectorSqrtFunc_ = vectorSqrt_AVX;
+        complexMagnitudeFunc_ = complexMagnitude_AVX;
     } else if (cpu.hasAVX2()) {
         simdLevel_ = SimdLevel::AVX2;
         sumOfSquaresFunc_ = sumOfSquares_AVX;
@@ -72,6 +84,10 @@ void SimdAccelerator::detect() {
         addFunc_ = add_AVX;
         absMaxFunc_ = absMax_AVX;
         findMinMaxFunc_ = findMinMax_AVX;
+        vectorLogFunc_ = vectorLog_AVX;
+        vectorExpFunc_ = vectorExp_AVX;
+        vectorSqrtFunc_ = vectorSqrt_AVX;
+        complexMagnitudeFunc_ = complexMagnitude_AVX;
     } else if (cpu.hasAVX()) {
         simdLevel_ = SimdLevel::AVX;
         sumOfSquaresFunc_ = sumOfSquares_AVX;
@@ -81,6 +97,10 @@ void SimdAccelerator::detect() {
         addFunc_ = add_AVX;
         absMaxFunc_ = absMax_AVX;
         findMinMaxFunc_ = findMinMax_AVX;
+        vectorLogFunc_ = vectorLog_AVX;
+        vectorExpFunc_ = vectorExp_AVX;
+        vectorSqrtFunc_ = vectorSqrt_AVX;
+        complexMagnitudeFunc_ = complexMagnitude_AVX;
     } else if (cpu.hasSSE2()) {
         simdLevel_ = SimdLevel::SSE2;
         // SSE2 使用标量实现（JUCE 内部已优化），fallback 到标量实现
@@ -92,6 +112,7 @@ void SimdAccelerator::detect() {
     detected_ = true;
     AppLogger::info("[SimdAccelerator] SIMD level: " + juce::String(getSimdLevelName()) 
               + " (vector width: " + juce::String(getVectorWidth()) + ")");
+    AppLogger::info("[SimdAccelerator] Vector math functions: vectorLog, vectorExp, vectorSqrt, complexMagnitude");
 
 #if JUCE_DEBUG && defined(__APPLE__)
     // Debug-only 数值验证：对比 Accelerate 和 Scalar 实现的正确性
@@ -245,6 +266,90 @@ void SimdAccelerator::findMinMax(const float* data, size_t count, float& outMin,
 }
 
 // ==============================================================================
+// 向量化数学函数 - 公共接口 (含 Debug 验证)
+// ==============================================================================
+
+void SimdAccelerator::vectorLog(float* result, const float* input, size_t count) const {
+    vectorLogFunc_(result, input, count);
+#if JUCE_DEBUG
+    static bool validated = false;
+    if (!validated && count > 0) {
+        validated = true;
+        std::vector<float> ref(count);
+        vectorLog_Scalar(ref.data(), input, count);
+        float maxDiff = 0.0f;
+        for (size_t i = 0; i < count; ++i) {
+            float diff = std::fabs(result[i] - ref[i]);
+            if (diff > maxDiff) maxDiff = diff;
+        }
+        AppLogger::info("[SimdAccelerator] vectorLog validation: maxDiff=" + juce::String(maxDiff, 8)
+            + " (" + juce::String(static_cast<int>(count)) + " elements) "
+            + (maxDiff < 1e-4f ? "PASS" : "FAIL"));
+    }
+#endif
+}
+
+void SimdAccelerator::vectorExp(float* result, const float* input, size_t count) const {
+    vectorExpFunc_(result, input, count);
+#if JUCE_DEBUG
+    static bool validated = false;
+    if (!validated && count > 0) {
+        validated = true;
+        std::vector<float> ref(count);
+        vectorExp_Scalar(ref.data(), input, count);
+        float maxDiff = 0.0f;
+        for (size_t i = 0; i < count; ++i) {
+            float diff = std::fabs(result[i] - ref[i]);
+            if (diff > maxDiff) maxDiff = diff;
+        }
+        AppLogger::info("[SimdAccelerator] vectorExp validation: maxDiff=" + juce::String(maxDiff, 8)
+            + " (" + juce::String(static_cast<int>(count)) + " elements) "
+            + (maxDiff < 1e-4f ? "PASS" : "FAIL"));
+    }
+#endif
+}
+
+void SimdAccelerator::vectorSqrt(float* result, const float* input, size_t count) const {
+    vectorSqrtFunc_(result, input, count);
+#if JUCE_DEBUG
+    static bool validated = false;
+    if (!validated && count > 0) {
+        validated = true;
+        std::vector<float> ref(count);
+        vectorSqrt_Scalar(ref.data(), input, count);
+        float maxDiff = 0.0f;
+        for (size_t i = 0; i < count; ++i) {
+            float diff = std::fabs(result[i] - ref[i]);
+            if (diff > maxDiff) maxDiff = diff;
+        }
+        AppLogger::info("[SimdAccelerator] vectorSqrt validation: maxDiff=" + juce::String(maxDiff, 8)
+            + " (" + juce::String(static_cast<int>(count)) + " elements) "
+            + (maxDiff < 1e-4f ? "PASS" : "FAIL"));
+    }
+#endif
+}
+
+void SimdAccelerator::complexMagnitude(float* result, const float* complexData, size_t complexCount) const {
+    complexMagnitudeFunc_(result, complexData, complexCount);
+#if JUCE_DEBUG
+    static bool validated = false;
+    if (!validated && complexCount > 0) {
+        validated = true;
+        std::vector<float> ref(complexCount);
+        complexMagnitude_Scalar(ref.data(), complexData, complexCount);
+        float maxDiff = 0.0f;
+        for (size_t i = 0; i < complexCount; ++i) {
+            float diff = std::fabs(result[i] - ref[i]);
+            if (diff > maxDiff) maxDiff = diff;
+        }
+        AppLogger::info("[SimdAccelerator] complexMagnitude validation: maxDiff=" + juce::String(maxDiff, 8)
+            + " (" + juce::String(static_cast<int>(complexCount)) + " bins) "
+            + (maxDiff < 1e-4f ? "PASS" : "FAIL"));
+    }
+#endif
+}
+
+// ==============================================================================
 // 标量实现
 // ==============================================================================
 
@@ -300,6 +405,36 @@ void SimdAccelerator::findMinMax_Scalar(const float* data, size_t count, float& 
     for (size_t i = 1; i < count; ++i) {
         if (data[i] < outMin) outMin = data[i];
         if (data[i] > outMax) outMax = data[i];
+    }
+}
+
+// ==============================================================================
+// 向量化数学函数 - 标量实现
+// ==============================================================================
+
+void SimdAccelerator::vectorLog_Scalar(float* result, const float* input, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        result[i] = std::log(input[i]);
+    }
+}
+
+void SimdAccelerator::vectorExp_Scalar(float* result, const float* input, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        result[i] = std::exp(input[i]);
+    }
+}
+
+void SimdAccelerator::vectorSqrt_Scalar(float* result, const float* input, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        result[i] = std::sqrt(input[i]);
+    }
+}
+
+void SimdAccelerator::complexMagnitude_Scalar(float* result, const float* complexData, size_t complexCount) {
+    for (size_t i = 0; i < complexCount; ++i) {
+        float real = complexData[i * 2];
+        float imag = complexData[i * 2 + 1];
+        result[i] = std::sqrt(real * real + imag * imag);
     }
 }
 
@@ -477,6 +612,10 @@ void SimdAccelerator::multiply_AVX(float* result, const float* a, const float* b
 void SimdAccelerator::add_AVX(float* result, const float* a, const float* b, size_t count) { add_Scalar(result, a, b, count); }
 float SimdAccelerator::absMax_AVX(const float* data, size_t count) { return absMax_Scalar(data, count); }
 void SimdAccelerator::findMinMax_AVX(const float* data, size_t count, float& outMin, float& outMax) { findMinMax_Scalar(data, count, outMin, outMax); }
+void SimdAccelerator::vectorLog_AVX(float* result, const float* input, size_t count) { vectorLog_Scalar(result, input, count); }
+void SimdAccelerator::vectorExp_AVX(float* result, const float* input, size_t count) { vectorExp_Scalar(result, input, count); }
+void SimdAccelerator::vectorSqrt_AVX(float* result, const float* input, size_t count) { vectorSqrt_Scalar(result, input, count); }
+void SimdAccelerator::complexMagnitude_AVX(float* result, const float* complexData, size_t complexCount) { complexMagnitude_Scalar(result, complexData, complexCount); }
 #endif
 
 // ==============================================================================
@@ -771,6 +910,10 @@ void SimdAccelerator::multiply_NEON(float* result, const float* a, const float* 
 void SimdAccelerator::add_NEON(float* result, const float* a, const float* b, size_t count) { add_Scalar(result, a, b, count); }
 float SimdAccelerator::absMax_NEON(const float* data, size_t count) { return absMax_Scalar(data, count); }
 void SimdAccelerator::findMinMax_NEON(const float* data, size_t count, float& outMin, float& outMax) { findMinMax_Scalar(data, count, outMin, outMax); }
+void SimdAccelerator::vectorLog_NEON(float* result, const float* input, size_t count) { vectorLog_Scalar(result, input, count); }
+void SimdAccelerator::vectorExp_NEON(float* result, const float* input, size_t count) { vectorExp_Scalar(result, input, count); }
+void SimdAccelerator::vectorSqrt_NEON(float* result, const float* input, size_t count) { vectorSqrt_Scalar(result, input, count); }
+void SimdAccelerator::complexMagnitude_NEON(float* result, const float* complexData, size_t complexCount) { complexMagnitude_Scalar(result, complexData, complexCount); }
 #endif
 
 // ==============================================================================
@@ -827,6 +970,37 @@ void SimdAccelerator::findMinMax_Accelerate(const float* data, size_t count, flo
     vDSP_minv(data, 1, &outMin, static_cast<vDSP_Length>(count));
     vDSP_maxv(data, 1, &outMax, static_cast<vDSP_Length>(count));
 }
+
+void SimdAccelerator::vectorLog_Accelerate(float* result, const float* input, size_t count) {
+    if (count == 0) return;
+    const int n = static_cast<int>(count);
+    vvlogf(result, input, &n);
+}
+
+void SimdAccelerator::vectorExp_Accelerate(float* result, const float* input, size_t count) {
+    if (count == 0) return;
+    const int n = static_cast<int>(count);
+    vvexpf(result, input, &n);
+}
+
+void SimdAccelerator::vectorSqrt_Accelerate(float* result, const float* input, size_t count) {
+    if (count == 0) return;
+    const int n = static_cast<int>(count);
+    vvsqrtf(result, input, &n);
+}
+
+void SimdAccelerator::complexMagnitude_Accelerate(float* result, const float* complexData, size_t complexCount) {
+    if (complexCount == 0) return;
+    std::vector<float> realPart(complexCount);
+    std::vector<float> imagPart(complexCount);
+    for (size_t i = 0; i < complexCount; ++i) {
+        realPart[i] = complexData[i * 2];
+        imagPart[i] = complexData[i * 2 + 1];
+    }
+    vDSP_vdist(realPart.data(), 1, imagPart.data(), 1,
+               result, 1, static_cast<vDSP_Length>(complexCount));
+}
+
 #else
 // Non-Apple: Accelerate functions fall back to scalar
 float SimdAccelerator::sumOfSquares_Accelerate(const float* data, size_t count) { return sumOfSquares_Scalar(data, count); }
@@ -836,6 +1010,10 @@ void SimdAccelerator::multiply_Accelerate(float* result, const float* a, const f
 void SimdAccelerator::add_Accelerate(float* result, const float* a, const float* b, size_t count) { add_Scalar(result, a, b, count); }
 float SimdAccelerator::absMax_Accelerate(const float* data, size_t count) { return absMax_Scalar(data, count); }
 void SimdAccelerator::findMinMax_Accelerate(const float* data, size_t count, float& outMin, float& outMax) { findMinMax_Scalar(data, count, outMin, outMax); }
+void SimdAccelerator::vectorLog_Accelerate(float* result, const float* input, size_t count) { vectorLog_Scalar(result, input, count); }
+void SimdAccelerator::vectorExp_Accelerate(float* result, const float* input, size_t count) { vectorExp_Scalar(result, input, count); }
+void SimdAccelerator::vectorSqrt_Accelerate(float* result, const float* input, size_t count) { vectorSqrt_Scalar(result, input, count); }
+void SimdAccelerator::complexMagnitude_Accelerate(float* result, const float* complexData, size_t complexCount) { complexMagnitude_Scalar(result, complexData, complexCount); }
 #endif
 
 } // namespace OpenTune

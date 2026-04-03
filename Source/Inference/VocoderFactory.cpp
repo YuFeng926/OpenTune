@@ -58,6 +58,8 @@ VocoderCreationResult VocoderFactory::create(
         // macOS: attempt CoreML acceleration for vocoder via Neural Engine
         try {
             std::unordered_map<std::string, std::string> coremlOptions;
+            coremlOptions["ModelFormat"] = "MLProgram";
+            coremlOptions["MLComputeUnits"] = "CPUAndGPU";
             sessionOptions.AppendExecutionProvider("CoreML", coremlOptions);
             selectedBackend = VocoderBackend::CoreML;
             AppLogger::info("[VocoderFactory] Vocoder session: CoreML EP added (macOS)");
