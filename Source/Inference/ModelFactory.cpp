@@ -2,6 +2,7 @@
 #include "RMVPEExtractor.h"
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/CpuBudgetManager.h"
+#include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
 #include "../Utils/Error.h"
 #include <juce_core/juce_core.h>
@@ -39,7 +40,7 @@ void logOnnxSessionCpuConfig(const CpuBudgetManager::BudgetConfig& budget)
 }
 
 // ==============================================================================
-// F0 Extractor Creation (CPU-only)
+// F0 Extractor Creation
 // ==============================================================================
 
 ModelFactory::F0ExtractorResult ModelFactory::createF0Extractor(
@@ -56,13 +57,15 @@ ModelFactory::F0ExtractorResult ModelFactory::createF0Extractor(
     }
 
     try {
-        auto session = loadF0Session(modelPath, env);
+        bool gpuMode = false;
+        auto session = loadF0Session(modelPath, env, gpuMode);
         if (!session) {
             return F0ExtractorResult::failure(ErrorCode::SessionCreationFailed,
                 "Failed to create ONNX session for: " + modelPath);
         }
 
-        AppLogger::info("[ModelFactory] Loaded F0 model (CPU-only): " + juce::String(modelPath));
+        const juce::String backendStr = gpuMode ? "CoreML" : "CPU";
+        AppLogger::info("[ModelFactory] Loaded F0 model (" + backendStr + "): " + juce::String(modelPath));
 
         switch (type) {
             case F0ModelType::RMVPE:
@@ -126,13 +129,34 @@ std::vector<F0ModelInfo> ModelFactory::getAvailableF0Models(const std::string& m
 }
 
 // ==============================================================================
-// F0 Session Options (CPU-only)
+// F0 Session Options
 // ==============================================================================
 
-Ort::SessionOptions ModelFactory::createF0CpuSessionOptions() {
+Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
     Ort::SessionOptions sessionOptions;
     
-    const auto budget = CpuBudgetManager::buildConfig(false);
+    bool gpuMode = false;
+
+#if defined(__APPLE__)
+    // macOS: attempt CoreML acceleration for F0 extraction via Neural Engine
+    try {
+        std::unordered_map<std::string, std::string> coremlOptions;
+        sessionOptions.AppendExecutionProvider("CoreML", coremlOptions);
+        gpuMode = true;
+        AppLogger::info("[ModelFactory] F0 session: CoreML EP added (macOS)");
+    } catch (const Ort::Exception& e) {
+        AppLogger::warn("[ModelFactory] Failed to add CoreML EP for F0: " + juce::String(e.what()));
+        AppLogger::info("[ModelFactory] F0 session: falling back to CPU");
+    } catch (const std::exception& e) {
+        AppLogger::warn("[ModelFactory] Failed to add CoreML EP for F0: " + juce::String(e.what()));
+        AppLogger::info("[ModelFactory] F0 session: falling back to CPU");
+    } catch (...) {
+        AppLogger::warn("[ModelFactory] Failed to add CoreML EP for F0 (unknown error)");
+        AppLogger::info("[ModelFactory] F0 session: falling back to CPU");
+    }
+#endif
+
+    const auto budget = CpuBudgetManager::buildConfig(gpuMode);
     sessionOptions.SetIntraOpNumThreads(budget.onnxIntra);
     sessionOptions.SetInterOpNumThreads(budget.onnxInter);
     sessionOptions.SetExecutionMode(budget.onnxSequential ? ExecutionMode::ORT_SEQUENTIAL : ExecutionMode::ORT_PARALLEL);
@@ -142,7 +166,10 @@ Ort::SessionOptions ModelFactory::createF0CpuSessionOptions() {
     logOnnxSessionCpuConfig(budget);
     sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     
-    AppLogger::info("[ModelFactory] F0 session: CPU-only mode");
+    if (!gpuMode) {
+        AppLogger::info("[ModelFactory] F0 session: CPU-only mode");
+    }
+    outGpuMode = gpuMode;
     return sessionOptions;
 }
 
@@ -152,10 +179,11 @@ Ort::SessionOptions ModelFactory::createF0CpuSessionOptions() {
 
 std::unique_ptr<Ort::Session> ModelFactory::loadF0Session(
     const std::string& modelPath,
-    Ort::Env& env)
+    Ort::Env& env,
+    bool& outGpuMode)
 {
     try {
-        auto sessionOptions = createF0CpuSessionOptions();
+        auto sessionOptions = createF0SessionOptions(outGpuMode);
 
         if (shouldEnableOrtProfilingInDebug()) {
 #ifdef _WIN32

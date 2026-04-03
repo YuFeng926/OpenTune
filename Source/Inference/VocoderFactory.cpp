@@ -1,8 +1,11 @@
 #include "VocoderFactory.h"
 #include "PCNSFHifiGANVocoder.h"
+#ifdef _WIN32
 #include "DmlVocoder.h"
-#include "../Utils/GpuDetector.h"
+#endif
+#include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
+#include <unordered_map>
 
 namespace OpenTune {
 
@@ -10,9 +13,10 @@ VocoderCreationResult VocoderFactory::create(
     const std::string& modelPath,
     Ort::Env& env)
 {
-    auto& gpu = GpuDetector::getInstance();
+#ifdef _WIN32
+    auto& gpu = AccelerationDetector::getInstance();
 
-    if (gpu.getSelectedBackend() == GpuDetector::GpuBackend::DirectML) {
+    if (gpu.getSelectedBackend() == AccelerationDetector::AccelBackend::DirectML) {
         const auto& gpuInfo = gpu.getSelectedGpu();
         const int deviceId = gpu.getDirectMLDeviceId();
 
@@ -39,8 +43,7 @@ VocoderCreationResult VocoderFactory::create(
             AppLogger::warn("[VocoderFactory] GPU DML initialization failed, switching to CPU vocoder");
         }
     }
-    
-    AppLogger::info("[VocoderFactory] Creating CPU vocoder...");
+#endif
     
     try {
         Ort::SessionOptions sessionOptions;
@@ -48,7 +51,31 @@ VocoderCreationResult VocoderFactory::create(
         sessionOptions.DisableMemPattern();
         sessionOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
         sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        
+
+        VocoderBackend selectedBackend = VocoderBackend::CPU;
+
+#if defined(__APPLE__)
+        // macOS: attempt CoreML acceleration for vocoder via Neural Engine
+        try {
+            std::unordered_map<std::string, std::string> coremlOptions;
+            sessionOptions.AppendExecutionProvider("CoreML", coremlOptions);
+            selectedBackend = VocoderBackend::CoreML;
+            AppLogger::info("[VocoderFactory] Vocoder session: CoreML EP added (macOS)");
+        } catch (const Ort::Exception& e) {
+            AppLogger::warn("[VocoderFactory] Failed to add CoreML EP for vocoder: " + juce::String(e.what()));
+            AppLogger::info("[VocoderFactory] Vocoder session: falling back to CPU");
+        } catch (...) {
+            AppLogger::warn("[VocoderFactory] Failed to add CoreML EP for vocoder (unknown error)");
+            AppLogger::info("[VocoderFactory] Vocoder session: falling back to CPU");
+        }
+#endif
+
+        if (selectedBackend == VocoderBackend::CPU) {
+            AppLogger::info("[VocoderFactory] Creating CPU vocoder...");
+        } else {
+            AppLogger::info("[VocoderFactory] Creating CoreML vocoder...");
+        }
+
 #ifdef _WIN32
         juce::String jucePath(modelPath);
         auto wPath = jucePath.toWideCharPointer();
@@ -59,13 +86,14 @@ VocoderCreationResult VocoderFactory::create(
         
         auto vocoder = std::make_unique<PCNSFHifiGANVocoder>(std::move(session));
         
-        AppLogger::info("[VocoderFactory] CPU vocoder created successfully");
+        const juce::String backendStr = (selectedBackend == VocoderBackend::CoreML) ? "CoreML" : "CPU";
+        AppLogger::info("[VocoderFactory] " + backendStr + " vocoder created successfully");
         
-        return VocoderCreationResult::success(std::move(vocoder), VocoderBackend::CPU);
+        return VocoderCreationResult::success(std::move(vocoder), selectedBackend);
         
     } catch (const std::exception& e) {
         return VocoderCreationResult::failure(VocoderBackend::CPU, 
-            "CPU vocoder creation failed: " + std::string(e.what()));
+            "Vocoder creation failed: " + std::string(e.what()));
     }
 }
 

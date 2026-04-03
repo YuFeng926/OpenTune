@@ -1414,19 +1414,15 @@ void OpenTuneAudioProcessorEditor::importAudioFileToTrack(int trackId, const juc
                     if (numClips > 0) {
                         jassert(clipIndex == numClips - 1);
                     }
-                    std::shared_ptr<const juce::AudioBuffer<float>> clipBuffer =
-                        safeThis->processorRef_.getClipAudioBuffer(trackId, clipIndex);
-                    double processorSampleRate = safeThis->processorRef_.getSampleRate();
 
-                    // 重置 PianoRoll 状态（不执行任何推理）
+
+                    // 统一使用 syncPianoRollFromClipSelection 设置 PianoRoll 状态
+                    // 包括 setActiveTrackId、setCurrentClipContext、setAudioBuffer 等
+                    safeThis->syncPianoRollFromClipSelection(trackId, clipIndex);
+
+                    // 导入刚完成时 F0 数据尚不存在，覆盖 sync 中可能恢复的旧数据
                     safeThis->pianoRoll_.setPitchCurve(nullptr);
                     safeThis->pianoRoll_.setNotes({});
-
-                    if (clipBuffer != nullptr) {
-                        safeThis->pianoRoll_.setAudioBuffer(clipBuffer, static_cast<int>(processorSampleRate));
-                        safeThis->pianoRoll_.setHasUserAudio(true);
-                        safeThis->pianoRoll_.setTrackTimeOffset(safeThis->processorRef_.getClipStartSeconds(trackId, clipIndex));
-                    }
 
                     if (newClipId != 0) {
                         safeThis->arrangementView_.prioritizeWaveformBuildForClip(trackId, newClipId);
