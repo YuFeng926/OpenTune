@@ -2,6 +2,7 @@
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
+#include "../Utils/SimdAccelerator.h"
 #include <cmath>
 #include <sstream>
 #include <iomanip>
@@ -13,7 +14,6 @@
 #elif defined(__APPLE__)
 #include <sys/types.h>
 #include <sys/sysctl.h>
-#include <Accelerate/Accelerate.h>
 #endif
 
 namespace OpenTune {
@@ -218,46 +218,9 @@ std::vector<float> RMVPEExtractor::computeSTFTFrame(const float* audioData, size
     // Perform FFT
     forwardFFT_->performRealOnlyForwardTransform(frame.data());
 
-    // Compute magnitude
-#if defined(__APPLE__)
-    // Apple Accelerate: 将 interleaved complex (RIRIRIRI) 分离为 real/imag 数组，
-    // 然后用 vDSP_vdist 计算 sqrt(real^2 + imag^2)
-    {
-        std::vector<float> realPart(static_cast<size_t>(numFFTBins));
-        std::vector<float> imagPart(static_cast<size_t>(numFFTBins));
-        for (int i = 0; i < numFFTBins; ++i) {
-            realPart[static_cast<size_t>(i)] = frame[static_cast<size_t>(i * 2)];
-            imagPart[static_cast<size_t>(i)] = frame[static_cast<size_t>(i * 2 + 1)];
-        }
-        vDSP_vdist(realPart.data(), 1, imagPart.data(), 1,
-                   magnitude.data(), 1, static_cast<vDSP_Length>(numFFTBins));
-#if JUCE_DEBUG
-        // Debug 验证：首次调用时对比 vDSP_vdist vs 标量实现
-        {
-            static bool validated = false;
-            if (!validated) {
-                validated = true;
-                float maxDiff = 0.0f;
-                for (int i = 0; i < numFFTBins; ++i) {
-                    const float scalarMag = std::sqrt(realPart[static_cast<size_t>(i)] * realPart[static_cast<size_t>(i)]
-                        + imagPart[static_cast<size_t>(i)] * imagPart[static_cast<size_t>(i)]);
-                    const float diff = std::fabs(magnitude[static_cast<size_t>(i)] - scalarMag);
-                    if (diff > maxDiff) maxDiff = diff;
-                }
-                AppLogger::info("[RMVPEExtractor] vDSP_vdist validation: maxDiff=" + juce::String(maxDiff, 8)
-                    + " (" + juce::String(numFFTBins) + " bins) "
-                    + (maxDiff < 1e-4f ? "PASS" : "FAIL"));
-            }
-        }
-#endif
-    }
-#else
-    for (int i = 0; i < numFFTBins; ++i) {
-        float real = frame[i * 2];
-        float imag = frame[i * 2 + 1];
-        magnitude[i] = std::sqrt(real * real + imag * imag + 1e-9f);
-    }
-#endif
+    // Compute magnitude via SimdAccelerator (uses vDSP_vdist on macOS, scalar on others)
+    auto& simd = SimdAccelerator::getInstance();
+    simd.complexMagnitude(magnitude.data(), frame.data(), static_cast<size_t>(numFFTBins));
 
     return magnitude;
 }

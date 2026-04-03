@@ -141,9 +141,11 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
     // macOS: attempt CoreML acceleration for F0 extraction via Neural Engine
     try {
         std::unordered_map<std::string, std::string> coremlOptions;
+        coremlOptions["ModelFormat"] = "MLProgram";
+        coremlOptions["MLComputeUnits"] = "CPUAndGPU";
         sessionOptions.AppendExecutionProvider("CoreML", coremlOptions);
         gpuMode = true;
-        AppLogger::info("[ModelFactory] F0 session: CoreML EP added (macOS)");
+        AppLogger::info("[ModelFactory] F0 session: CoreML EP added (macOS, MLProgram+CPUAndGPU)");
     } catch (const Ort::Exception& e) {
         AppLogger::warn("[ModelFactory] Failed to add CoreML EP for F0: " + juce::String(e.what()));
         AppLogger::info("[ModelFactory] F0 session: falling back to CPU");
