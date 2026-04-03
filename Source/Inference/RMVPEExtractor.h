@@ -19,19 +19,25 @@ class ResamplingManager;
  * - Output: F0 [1, num_frames], UV [1, num_frames]
  * - Hop size: 160 samples at 16kHz (10ms frames)
  *
- * Contract:
- * - Preflight checks only validate basic input/session preconditions
+ * Memory/Latency Protection:
+ * - Preflight resource check before inference (duration gate + memory budget)
+ * - Fail-fast with structured logging (no silent degradation)
+ * - All-or-nothing: returns complete F0 or empty on failure
+ * - Uses AccelerationDetector and system memory for conservative budgeting
  * - Inference is single-pass on the full resampled waveform
- * - Failures are surfaced directly as exceptions
  */
 class RMVPEExtractor : public IF0Extractor {
 public:
     /**
-     * @brief Preflight check result for basic contract validation
+     * @brief Preflight check result with structured diagnostics
      */
     struct PreflightResult {
         bool success = false;
         std::string errorMessage;
+        std::string errorCategory;      // "MEMORY", "DURATION", "MODEL", "SYSTEM"
+        size_t estimatedMemoryMB = 0;
+        size_t availableMemoryMB = 0;
+        double audioDurationSec = 0.0;
     };
 
     RMVPEExtractor(
@@ -95,6 +101,16 @@ private:
     // Post-processing
     void fixOctaveErrors(std::vector<float>& f0);
     void fillF0Gaps(std::vector<float>& f0, int maxGapFrames);
+    std::vector<float> computeSTFTFrame(const float* audioData, size_t totalSamples, int startSample);
+
+    // FFT resources
+    static constexpr int fftOrder_ = 10;
+    static constexpr int fftSize_ = 1024;
+    static constexpr int hopSize_ = 160;
+    static constexpr int sampleRate_ = 16000;
+
+    std::unique_ptr<juce::dsp::FFT> forwardFFT_;
+    std::vector<float> hannWindow_;
 
     // Parameters
     float confidenceThreshold_ = 0.5f; // UV threshold for RMVPE
@@ -103,11 +119,21 @@ private:
     bool enableUvCheck_ = false;
 
     // ============================================================
-    // Post-processing Constants
+    // Memory/Latency Protection Constants
     // ============================================================
     
-    // F0 gap filling: max gap duration in frames (80ms @ 10ms/frame = 8 frames)
+    static constexpr double kMaxAudioDurationSec = 600.0; // 10 minutes
+    static constexpr double kMemoryOverheadFactor = 6.0;
+    static constexpr size_t kMinReservedMemoryMB = 512;
+    static constexpr size_t kMinGpuMemoryMB = 256;
+    static constexpr size_t kModelMemoryMB = 200;
     static constexpr int kMaxGapFramesDefault = 8;
+    
+    // Memory estimation helper
+    size_t estimateMemoryRequiredMB(size_t audioSamples16k) const;
+    
+    // System memory query helper
+    static size_t getAvailableSystemMemoryMB();
 };
 
 } // namespace OpenTune

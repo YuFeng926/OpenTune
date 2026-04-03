@@ -75,9 +75,13 @@ PCNSFHifiGANVocoder::PCNSFHifiGANVocoder(std::unique_ptr<Ort::Session> session)
             auto name = session_->GetInputNameAllocated(i, allocator);
             inputNames_.push_back(name.get());
 
-            const auto typeInfo = session_->GetInputTypeInfo(i).GetTensorTypeAndShapeInfo();
-            inputShapes_.push_back(typeInfo.GetShape());
-            inputElemTypes_.push_back(typeInfo.GetElementType());
+            // Keep TypeInfo alive while accessing its TensorTypeAndShapeInfo.
+            // ConstTensorTypeAndShapeInfo is a non-owning view whose pointer
+            // is invalidated when the owning TypeInfo is destroyed.
+            auto inputTypeInfo = session_->GetInputTypeInfo(i);
+            auto tensorInfo = inputTypeInfo.GetTensorTypeAndShapeInfo();
+            inputShapes_.push_back(tensorInfo.GetShape());
+            inputElemTypes_.push_back(tensorInfo.GetElementType());
         }
 
         const size_t outputCount = session_->GetOutputCount();
@@ -137,7 +141,9 @@ PCNSFHifiGANVocoder::PCNSFHifiGANVocoder(std::unique_ptr<Ort::Session> session)
 
         for (size_t i = 0; i < outputCount; ++i)
         {
-            const auto shape = session_->GetOutputTypeInfo(i).GetTensorTypeAndShapeInfo().GetShape();
+            // Keep TypeInfo alive while accessing shape (non-owning view).
+            auto outputTypeInfo = session_->GetOutputTypeInfo(i);
+            const auto shape = outputTypeInfo.GetTensorTypeAndShapeInfo().GetShape();
             juce::String shapeText;
             for (size_t d = 0; d < shape.size(); ++d) {
                 if (d > 0) shapeText << "x";

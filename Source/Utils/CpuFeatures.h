@@ -28,7 +28,8 @@ public:
         SSE41,     // SSE4.1
         AVX,       // AVX
         AVX2,      // AVX2 + FMA
-        AVX512     // AVX-512（需要特别检测）
+        AVX512,    // AVX-512（需要特别检测）
+        NEON       // ARM NEON (Apple Silicon, 128-bit)
     };
 
     /**
@@ -55,6 +56,7 @@ public:
     bool hasAVX2() const { return hasAVX2_; }
     bool hasFMA() const { return hasFMA_; }
     bool hasAVX512() const { return hasAVX512_; }
+    bool hasNEON() const { return hasNEON_; }
 
     /**
      * 获取CPU信息字符串（用于日志）
@@ -79,6 +81,7 @@ private:
     bool hasAVX2_ = false;
     bool hasFMA_ = false;
     bool hasAVX512_ = false;
+    bool hasNEON_ = false;
 
     int physicalCores_ = 1;     // 物理核心数
     int logicalCores_ = 1;      // 逻辑核心数

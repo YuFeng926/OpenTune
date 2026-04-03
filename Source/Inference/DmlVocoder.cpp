@@ -1,3 +1,5 @@
+#ifdef _WIN32
+
 #include "DmlVocoder.h"
 #include "../Utils/AppLogger.h"
 #include <algorithm>
@@ -517,3 +519,5 @@ size_t DmlVocoder::estimateMemoryUsage(size_t frames) const
 }
 
 } // namespace OpenTune
+
+#endif // _WIN32

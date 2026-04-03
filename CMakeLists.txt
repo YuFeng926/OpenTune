@@ -38,144 +38,154 @@ add_subdirectory("${OPENTUNE_JUCE_DIR}")
 # ==============================================================================
 # ONNX Runtime Configuration
 # ==============================================================================
-# Runtime dependency versions (latest stable)
-set(OPENTUNE_DIRECTML_VERSION "1.15.4" CACHE STRING "Microsoft.AI.DirectML NuGet version")
-set(OPENTUNE_D3D12_AGILITY_VERSION "1.619.1" CACHE STRING "Microsoft.Direct3D.D3D12 NuGet version")
+if(WIN32)
+    # ---- Windows: DirectML + D3D12 Agility SDK (NuGet auto-download) ----
 
-if(OPENTUNE_DIRECTML_VERSION VERSION_LESS "1.13.0")
-    message(FATAL_ERROR "DirectML version must be >= 1.13.0")
-endif()
+    set(OPENTUNE_DIRECTML_VERSION "1.15.4" CACHE STRING "Microsoft.AI.DirectML NuGet version")
+    set(OPENTUNE_D3D12_AGILITY_VERSION "1.619.1" CACHE STRING "Microsoft.Direct3D.D3D12 NuGet version")
 
-if(OPENTUNE_D3D12_AGILITY_VERSION VERSION_LESS "1.614.0")
-    message(FATAL_ERROR "DirectX Agility SDK version must be >= 1.614.0")
-endif()
-
-function(opentune_fetch_nuget_package package_id package_version out_dir)
-    string(TOLOWER "${package_id}" package_id_lower)
-    set(nuget_cache_dir "${CMAKE_CURRENT_BINARY_DIR}/nuget")
-    set(package_dir "${nuget_cache_dir}/${package_id_lower}.${package_version}")
-    set(nupkg_path "${nuget_cache_dir}/${package_id_lower}.${package_version}.nupkg")
-    set(marker_path "${package_dir}/.extracted")
-
-    file(MAKE_DIRECTORY "${nuget_cache_dir}")
-
-    if(NOT EXISTS "${marker_path}")
-        if(NOT EXISTS "${nupkg_path}")
-            set(download_url "https://api.nuget.org/v3-flatcontainer/${package_id_lower}/${package_version}/${package_id_lower}.${package_version}.nupkg")
-            file(DOWNLOAD "${download_url}" "${nupkg_path}" STATUS download_status SHOW_PROGRESS TLS_VERIFY ON)
-            list(GET download_status 0 download_code)
-            if(NOT download_code EQUAL 0)
-                list(GET download_status 1 download_message)
-                message(FATAL_ERROR "Failed to download ${package_id} ${package_version}: ${download_message}")
-            endif()
-        endif()
-
-        file(REMOVE_RECURSE "${package_dir}")
-        file(MAKE_DIRECTORY "${package_dir}")
-        file(ARCHIVE_EXTRACT INPUT "${nupkg_path}" DESTINATION "${package_dir}")
-        file(WRITE "${marker_path}" "ok")
+    if(OPENTUNE_DIRECTML_VERSION VERSION_LESS "1.13.0")
+        message(FATAL_ERROR "DirectML version must be >= 1.13.0")
+    endif()
+    if(OPENTUNE_D3D12_AGILITY_VERSION VERSION_LESS "1.614.0")
+        message(FATAL_ERROR "DirectX Agility SDK version must be >= 1.614.0")
     endif()
 
-    set(${out_dir} "${package_dir}" PARENT_SCOPE)
-endfunction()
+    function(opentune_fetch_nuget_package package_id package_version out_dir)
+        string(TOLOWER "${package_id}" package_id_lower)
+        set(nuget_cache_dir "${CMAKE_CURRENT_BINARY_DIR}/nuget")
+        set(package_dir "${nuget_cache_dir}/${package_id_lower}.${package_version}")
+        set(nupkg_path "${nuget_cache_dir}/${package_id_lower}.${package_version}.nupkg")
+        set(marker_path "${package_dir}/.extracted")
 
-opentune_fetch_nuget_package("Microsoft.AI.DirectML" "${OPENTUNE_DIRECTML_VERSION}" OPENTUNE_DIRECTML_ROOT)
-opentune_fetch_nuget_package("Microsoft.Direct3D.D3D12" "${OPENTUNE_D3D12_AGILITY_VERSION}" OPENTUNE_D3D12_AGILITY_ROOT)
+        file(MAKE_DIRECTORY "${nuget_cache_dir}")
 
-set(DIRECTML_INCLUDE_DIR "${OPENTUNE_DIRECTML_ROOT}/include")
-set(DIRECTML_DLL "${OPENTUNE_DIRECTML_ROOT}/bin/x64-win/DirectML.dll")
-set(DIRECTML_LIB "${OPENTUNE_DIRECTML_ROOT}/bin/x64-win/DirectML.lib")
+        if(NOT EXISTS "${marker_path}")
+            if(NOT EXISTS "${nupkg_path}")
+                set(download_url "https://api.nuget.org/v3-flatcontainer/${package_id_lower}/${package_version}/${package_id_lower}.${package_version}.nupkg")
+                file(DOWNLOAD "${download_url}" "${nupkg_path}" STATUS download_status SHOW_PROGRESS TLS_VERIFY ON)
+                list(GET download_status 0 download_code)
+                if(NOT download_code EQUAL 0)
+                    list(GET download_status 1 download_message)
+                    message(FATAL_ERROR "Failed to download ${package_id} ${package_version}: ${download_message}")
+                endif()
+            endif()
 
-set(D3D12_AGILITY_BIN_DIR "${OPENTUNE_D3D12_AGILITY_ROOT}/build/native/bin/x64")
-set(D3D12_CORE_DLL "${D3D12_AGILITY_BIN_DIR}/D3D12Core.dll")
-set(D3D12_SDK_LAYERS_DLL "${D3D12_AGILITY_BIN_DIR}/D3D12SDKLayers.dll")
+            file(REMOVE_RECURSE "${package_dir}")
+            file(MAKE_DIRECTORY "${package_dir}")
+            file(ARCHIVE_EXTRACT INPUT "${nupkg_path}" DESTINATION "${package_dir}")
+            file(WRITE "${marker_path}" "ok")
+        endif()
 
-string(REPLACE "." ";" OPENTUNE_D3D12_AGILITY_VERSION_PARTS "${OPENTUNE_D3D12_AGILITY_VERSION}")
-list(LENGTH OPENTUNE_D3D12_AGILITY_VERSION_PARTS OPENTUNE_D3D12_AGILITY_PARTS_LEN)
-if(OPENTUNE_D3D12_AGILITY_PARTS_LEN LESS 2)
-    message(FATAL_ERROR "Invalid OPENTUNE_D3D12_AGILITY_VERSION: ${OPENTUNE_D3D12_AGILITY_VERSION}")
+        set(${out_dir} "${package_dir}" PARENT_SCOPE)
+    endfunction()
+
+    opentune_fetch_nuget_package("Microsoft.AI.DirectML" "${OPENTUNE_DIRECTML_VERSION}" OPENTUNE_DIRECTML_ROOT)
+    opentune_fetch_nuget_package("Microsoft.Direct3D.D3D12" "${OPENTUNE_D3D12_AGILITY_VERSION}" OPENTUNE_D3D12_AGILITY_ROOT)
+
+    set(DIRECTML_INCLUDE_DIR "${OPENTUNE_DIRECTML_ROOT}/include")
+    set(DIRECTML_DLL "${OPENTUNE_DIRECTML_ROOT}/bin/x64-win/DirectML.dll")
+    set(DIRECTML_LIB "${OPENTUNE_DIRECTML_ROOT}/bin/x64-win/DirectML.lib")
+
+    set(D3D12_AGILITY_BIN_DIR "${OPENTUNE_D3D12_AGILITY_ROOT}/build/native/bin/x64")
+    set(D3D12_CORE_DLL "${D3D12_AGILITY_BIN_DIR}/D3D12Core.dll")
+    set(D3D12_SDK_LAYERS_DLL "${D3D12_AGILITY_BIN_DIR}/D3D12SDKLayers.dll")
+
+    string(REPLACE "." ";" OPENTUNE_D3D12_AGILITY_VERSION_PARTS "${OPENTUNE_D3D12_AGILITY_VERSION}")
+    list(LENGTH OPENTUNE_D3D12_AGILITY_VERSION_PARTS OPENTUNE_D3D12_AGILITY_PARTS_LEN)
+    if(OPENTUNE_D3D12_AGILITY_PARTS_LEN LESS 2)
+        message(FATAL_ERROR "Invalid OPENTUNE_D3D12_AGILITY_VERSION: ${OPENTUNE_D3D12_AGILITY_VERSION}")
+    endif()
+    list(GET OPENTUNE_D3D12_AGILITY_VERSION_PARTS 1 OPENTUNE_D3D12_SDK_VERSION)
+
+    if(NOT EXISTS "${DIRECTML_INCLUDE_DIR}/DirectML.h")
+        message(FATAL_ERROR "DirectML header missing: ${DIRECTML_INCLUDE_DIR}/DirectML.h")
+    endif()
+    if(NOT EXISTS "${DIRECTML_DLL}")
+        message(FATAL_ERROR "DirectML runtime DLL missing: ${DIRECTML_DLL}")
+    endif()
+    if(NOT EXISTS "${DIRECTML_LIB}")
+        message(FATAL_ERROR "DirectML import library missing: ${DIRECTML_LIB}")
+    endif()
+    if(NOT EXISTS "${D3D12_CORE_DLL}")
+        message(FATAL_ERROR "D3D12Core.dll missing from Agility SDK: ${D3D12_CORE_DLL}")
+    endif()
+    if(NOT EXISTS "${D3D12_SDK_LAYERS_DLL}")
+        message(FATAL_ERROR "D3D12SDKLayers.dll missing from Agility SDK: ${D3D12_SDK_LAYERS_DLL}")
+    endif()
+
+    # CPU ONNX Runtime v1.24.4: headers + libs
+    set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime-win-x64-1.24.4" CACHE PATH "ONNX Runtime CPU root directory")
+
+elseif(APPLE)
+    # ---- macOS: arm64-only, ONNX Runtime v1.24.4 with CoreML ----
+    set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime-osx-arm64-1.24.4"
+        CACHE PATH "ONNX Runtime root directory")
+
+else()
+    message(FATAL_ERROR "Unsupported platform. Only Windows and macOS are supported.")
 endif()
-list(GET OPENTUNE_D3D12_AGILITY_VERSION_PARTS 1 OPENTUNE_D3D12_SDK_VERSION)
-
-if(NOT EXISTS "${DIRECTML_INCLUDE_DIR}/DirectML.h")
-    message(FATAL_ERROR "DirectML header missing: ${DIRECTML_INCLUDE_DIR}/DirectML.h")
-endif()
-
-if(NOT EXISTS "${DIRECTML_DLL}")
-    message(FATAL_ERROR "DirectML runtime DLL missing: ${DIRECTML_DLL}")
-endif()
-
-if(NOT EXISTS "${DIRECTML_LIB}")
-    message(FATAL_ERROR "DirectML import library missing: ${DIRECTML_LIB}")
-endif()
-
-if(NOT EXISTS "${D3D12_CORE_DLL}")
-    message(FATAL_ERROR "D3D12Core.dll missing from Agility SDK: ${D3D12_CORE_DLL}")
-endif()
-
-if(NOT EXISTS "${D3D12_SDK_LAYERS_DLL}")
-    message(FATAL_ERROR "D3D12SDKLayers.dll missing from Agility SDK: ${D3D12_SDK_LAYERS_DLL}")
-endif()
-
-# CPU ONNX Runtime v1.24.4: headers + libs
-set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime-win-x64-1.24.4" CACHE PATH "ONNX Runtime CPU root directory")
 set(ONNXRUNTIME_INCLUDE_DIR "${ONNXRUNTIME_ROOT}/include")
 set(ONNXRUNTIME_LIB_DIR "${ONNXRUNTIME_ROOT}/lib")
-
-# DirectML ONNX Runtime v1.24.4: runtime DLLs + DML provider headers
-set(ONNXRUNTIME_DML_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime-dml-1.24.4" CACHE PATH "ONNX Runtime DirectML package root")
-set(ONNXRUNTIME_DML_INCLUDE_DIR "${ONNXRUNTIME_DML_ROOT}/build/native/include")
-set(ONNXRUNTIME_DML_RUNTIME_DIR "${ONNXRUNTIME_DML_ROOT}/runtimes/win-x64/native")
-
-# Use DML provider header from DirectML package, but avoid pulling its duplicate ONNX headers.
-# Copy dml_provider_factory.h into a generated include dir so it resolves onnxruntime_c_api.h
-# from ONNXRUNTIME_INCLUDE_DIR.
-set(ONNXRUNTIME_DML_PROVIDER_HEADER "${ONNXRUNTIME_DML_INCLUDE_DIR}/dml_provider_factory.h")
-set(ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/onnxruntime_dml_include")
-if(NOT EXISTS "${ONNXRUNTIME_DML_PROVIDER_HEADER}")
-    message(FATAL_ERROR "DirectML provider header missing: ${ONNXRUNTIME_DML_PROVIDER_HEADER}")
-endif()
-file(MAKE_DIRECTORY "${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}")
-configure_file(
-    "${ONNXRUNTIME_DML_PROVIDER_HEADER}"
-    "${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}/dml_provider_factory.h"
-    COPYONLY
-)
-
-# Core DLL: always use the DML build (builtin DML, larger, covers CPU+DML)
-set(ONNXRUNTIME_DLL "${ONNXRUNTIME_DML_RUNTIME_DIR}/onnxruntime.dll")
-
-# Shared providers DLL: prefer CPU build's copy
-set(ONNXRUNTIME_PROVIDERS_SHARED_DLL "")
-if(EXISTS "${ONNXRUNTIME_LIB_DIR}/onnxruntime_providers_shared.dll")
-    set(ONNXRUNTIME_PROVIDERS_SHARED_DLL "${ONNXRUNTIME_LIB_DIR}/onnxruntime_providers_shared.dll")
-elseif(EXISTS "${ONNXRUNTIME_DML_RUNTIME_DIR}/onnxruntime_providers_shared.dll")
-    set(ONNXRUNTIME_PROVIDERS_SHARED_DLL "${ONNXRUNTIME_DML_RUNTIME_DIR}/onnxruntime_providers_shared.dll")
-endif()
-
-# DML provider DLL: none in v1.24.4 (builtin DML in onnxruntime.dll)
-set(ONNXRUNTIME_PROVIDERS_DML_DLL "")
 
 # Verify core header exists
 if(NOT EXISTS "${ONNXRUNTIME_INCLUDE_DIR}/onnxruntime_cxx_api.h")
     message(FATAL_ERROR "ONNX Runtime C++ API header not found at ${ONNXRUNTIME_INCLUDE_DIR}")
 endif()
 
-if(NOT EXISTS "${ONNXRUNTIME_DLL}")
-    message(FATAL_ERROR "ONNX Runtime DirectML DLL missing: ${ONNXRUNTIME_DLL}")
-endif()
+if(WIN32)
+    # DirectML ONNX Runtime v1.24.4: runtime DLLs + DML provider headers
+    set(ONNXRUNTIME_DML_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime-dml-1.24.4" CACHE PATH "ONNX Runtime DirectML package root")
+    set(ONNXRUNTIME_DML_INCLUDE_DIR "${ONNXRUNTIME_DML_ROOT}/build/native/include")
+    set(ONNXRUNTIME_DML_RUNTIME_DIR "${ONNXRUNTIME_DML_ROOT}/runtimes/win-x64/native")
 
-message(STATUS "ONNX Runtime version: 1.24.4")
-message(STATUS "ONNX Runtime API version: 24")
-message(STATUS "ONNX Runtime CPU root: ${ONNXRUNTIME_ROOT}")
-message(STATUS "ONNX Runtime DML root: ${ONNXRUNTIME_DML_ROOT}")
-message(STATUS "ONNX Runtime DLL: ${ONNXRUNTIME_DLL}")
-message(STATUS "ONNX Runtime DML mode: builtin (DML integrated in onnxruntime.dll)")
-message(STATUS "Shared providers DLL: ${ONNXRUNTIME_PROVIDERS_SHARED_DLL}")
-message(STATUS "DirectML version: ${OPENTUNE_DIRECTML_VERSION}")
-message(STATUS "DirectML DLL: ${DIRECTML_DLL}")
-message(STATUS "DirectX Agility version: ${OPENTUNE_D3D12_AGILITY_VERSION}")
-message(STATUS "DirectX Agility SDK version token: ${OPENTUNE_D3D12_SDK_VERSION}")
+    # Use DML provider header from DirectML package, but avoid pulling its duplicate ONNX headers.
+    # Copy dml_provider_factory.h into a generated include dir so it resolves onnxruntime_c_api.h
+    # from ONNXRUNTIME_INCLUDE_DIR.
+    set(ONNXRUNTIME_DML_PROVIDER_HEADER "${ONNXRUNTIME_DML_INCLUDE_DIR}/dml_provider_factory.h")
+    set(ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/onnxruntime_dml_include")
+    if(NOT EXISTS "${ONNXRUNTIME_DML_PROVIDER_HEADER}")
+        message(FATAL_ERROR "DirectML provider header missing: ${ONNXRUNTIME_DML_PROVIDER_HEADER}")
+    endif()
+    file(MAKE_DIRECTORY "${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}")
+    configure_file(
+        "${ONNXRUNTIME_DML_PROVIDER_HEADER}"
+        "${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}/dml_provider_factory.h"
+        COPYONLY
+    )
+
+    # Core DLL: always use the DML build (builtin DML, larger, covers CPU+DML)
+    set(ONNXRUNTIME_DLL "${ONNXRUNTIME_DML_RUNTIME_DIR}/onnxruntime.dll")
+
+    # Shared providers DLL: prefer CPU build's copy
+    set(ONNXRUNTIME_PROVIDERS_SHARED_DLL "")
+    if(EXISTS "${ONNXRUNTIME_LIB_DIR}/onnxruntime_providers_shared.dll")
+        set(ONNXRUNTIME_PROVIDERS_SHARED_DLL "${ONNXRUNTIME_LIB_DIR}/onnxruntime_providers_shared.dll")
+    elseif(EXISTS "${ONNXRUNTIME_DML_RUNTIME_DIR}/onnxruntime_providers_shared.dll")
+        set(ONNXRUNTIME_PROVIDERS_SHARED_DLL "${ONNXRUNTIME_DML_RUNTIME_DIR}/onnxruntime_providers_shared.dll")
+    endif()
+
+    # DML provider DLL: none in v1.24.4 (builtin DML in onnxruntime.dll)
+    set(ONNXRUNTIME_PROVIDERS_DML_DLL "")
+
+    if(NOT EXISTS "${ONNXRUNTIME_DLL}")
+        message(FATAL_ERROR "ONNX Runtime DirectML DLL missing: ${ONNXRUNTIME_DLL}")
+    endif()
+
+    message(STATUS "ONNX Runtime version: 1.24.4")
+    message(STATUS "ONNX Runtime CPU root: ${ONNXRUNTIME_ROOT}")
+    message(STATUS "ONNX Runtime DML root: ${ONNXRUNTIME_DML_ROOT}")
+    message(STATUS "ONNX Runtime DLL: ${ONNXRUNTIME_DLL}")
+    message(STATUS "ONNX Runtime DML mode: builtin (DML integrated in onnxruntime.dll)")
+    message(STATUS "DirectML version: ${OPENTUNE_DIRECTML_VERSION}")
+    message(STATUS "DirectML DLL: ${DIRECTML_DLL}")
+    message(STATUS "DirectX Agility version: ${OPENTUNE_D3D12_AGILITY_VERSION}")
+    message(STATUS "DirectX Agility SDK version token: ${OPENTUNE_D3D12_SDK_VERSION}")
+
+elseif(APPLE)
+    message(STATUS "ONNX Runtime version: 1.24.4 (macOS arm64)")
+    message(STATUS "ONNX Runtime root: ${ONNXRUNTIME_ROOT}")
+endif()
 
 # ==============================================================================
 # Application Definition - JUCE juce_add_plugin
@@ -347,8 +357,8 @@ target_sources(OpenTune
         Source/Utils/CpuFeatures.h
         Source/Utils/CpuBudgetManager.cpp
         Source/Utils/CpuBudgetManager.h
-        Source/Utils/GpuDetector.cpp
-        Source/Utils/GpuDetector.h
+        Source/Utils/AccelerationDetector.cpp
+        Source/Utils/AccelerationDetector.h
         Source/Utils/SimdAccelerator.cpp
         Source/Utils/SimdAccelerator.h
         Source/Utils/SilentGapDetector.cpp
@@ -368,9 +378,15 @@ target_include_directories(OpenTune
         ${CMAKE_CURRENT_SOURCE_DIR}/Source
         ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master
         ${ONNXRUNTIME_INCLUDE_DIR}
-        ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
-        ${DIRECTML_INCLUDE_DIR}
 )
+
+if(WIN32)
+    target_include_directories(OpenTune
+        PRIVATE
+            ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
+            ${DIRECTML_INCLUDE_DIR}
+    )
+endif()
 
 # ==============================================================================
 # JUCE Modules Linking
@@ -395,10 +411,12 @@ target_link_libraries(OpenTune
 # ==============================================================================
 # ONNX Runtime Linking
 # ==============================================================================
-target_link_libraries(OpenTune
-    PRIVATE
-        "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib"
-)
+if(WIN32)
+    target_link_libraries(OpenTune PRIVATE "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib")
+elseif(APPLE)
+    target_link_libraries(OpenTune PRIVATE "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.dylib")
+    target_link_libraries(OpenTune PRIVATE "-framework Accelerate")
+endif()
 
 if(WIN32)
     target_link_libraries(OpenTune
@@ -420,7 +438,6 @@ target_compile_definitions(OpenTune
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_REPORT_APP_USAGE=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
-        JUCE_ASIO=1
         JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
 
     PRIVATE
@@ -435,6 +452,7 @@ target_compile_definitions(OpenTune
 )
 
 if(WIN32)
+    target_compile_definitions(OpenTune PUBLIC JUCE_ASIO=1)
     target_compile_definitions(OpenTune PRIVATE JUCE_USE_WINDOWS_MEDIA_FORMAT=1)
 endif()
 
@@ -443,14 +461,20 @@ endif()
 # ==============================================================================
 if(WIN32)
     target_compile_definitions(OpenTune PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_compile_options(OpenTune PRIVATE /utf-8 /MP /wd4100 /wd4127)
-    
-    # Delay load onnxruntime.dll for Standalone
     if(MSVC)
+        target_compile_options(OpenTune PRIVATE /utf-8 /MP /wd4100 /wd4127)
+        # Delay load onnxruntime.dll for Standalone
         target_link_options(OpenTune_Standalone PRIVATE "/DELAYLOAD:onnxruntime.dll")
         target_link_libraries(OpenTune_Standalone PRIVATE delayimp)
         target_compile_options(OpenTune_Standalone PRIVATE /wd4100)
     endif()
+elseif(APPLE)
+    target_compile_options(OpenTune PRIVATE -Wall -Wno-unused-parameter)
+    # Set rpath so the app bundle can find the embedded dylib
+    set_target_properties(OpenTune_Standalone PROPERTIES
+        BUILD_RPATH "@executable_path/../Frameworks"
+        INSTALL_RPATH "@executable_path/../Frameworks"
+    )
 endif()
 
 # ==============================================================================
@@ -460,65 +484,86 @@ endif()
 set(HIFIGAN_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx")
 set(RMVPE_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/models/rmvpe.onnx")
 
-add_custom_command(TARGET OpenTune_Standalone POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ONNXRUNTIME_DLL}"
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime.dll"
-    COMMENT "Copying ONNX Runtime DLL to Standalone..."
-)
-
-if(ONNXRUNTIME_PROVIDERS_SHARED_DLL)
+# --- ONNX Runtime library copying ---
+if(WIN32)
     add_custom_command(TARGET OpenTune_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNXRUNTIME_PROVIDERS_SHARED_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime_providers_shared.dll"
-        COMMENT "Copying ONNX Runtime shared providers DLL to Standalone..."
+            "${ONNXRUNTIME_DLL}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime.dll"
+        COMMENT "Copying ONNX Runtime DLL to Standalone..."
     )
-endif()
 
-if(ONNXRUNTIME_PROVIDERS_DML_DLL)
+    if(ONNXRUNTIME_PROVIDERS_SHARED_DLL)
+        add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_PROVIDERS_SHARED_DLL}"
+                "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime_providers_shared.dll"
+            COMMENT "Copying ONNX Runtime shared providers DLL to Standalone..."
+        )
+    endif()
+
+    if(ONNXRUNTIME_PROVIDERS_DML_DLL)
+        add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_PROVIDERS_DML_DLL}"
+                "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime_providers_dml.dll"
+            COMMENT "Copying ONNX Runtime DML providers DLL to Standalone..."
+        )
+    endif()
+
     add_custom_command(TARGET OpenTune_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNXRUNTIME_PROVIDERS_DML_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/onnxruntime_providers_dml.dll"
-        COMMENT "Copying ONNX Runtime DML providers DLL to Standalone..."
+            "${DIRECTML_DLL}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/DirectML.dll"
+        COMMENT "Copying DirectML runtime DLL to Standalone..."
+    )
+
+    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/D3D12"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${D3D12_CORE_DLL}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/D3D12/D3D12Core.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${D3D12_SDK_LAYERS_DLL}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/D3D12/D3D12SDKLayers.dll"
+        COMMENT "Copying DirectX Agility runtime to Standalone..."
+    )
+
+    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${HIFIGAN_MODEL}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/hifigan.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${RMVPE_MODEL}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/rmvpe.onnx"
+        COMMENT "Copying AI models to Standalone..."
+    )
+
+elseif(APPLE)
+    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Frameworks"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.1.24.4.dylib"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Frameworks/"
+        COMMENT "Copying ONNX Runtime dylib to app bundle Frameworks..."
+    )
+
+    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${HIFIGAN_MODEL}"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/hifigan.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${RMVPE_MODEL}"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/rmvpe.onnx"
+        COMMENT "Copying AI models to app bundle Resources..."
     )
 endif()
-
-add_custom_command(TARGET OpenTune_Standalone POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${DIRECTML_DLL}"
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/DirectML.dll"
-    COMMENT "Copying DirectML runtime DLL to Standalone..."
-)
-
-add_custom_command(TARGET OpenTune_Standalone POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/D3D12"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${D3D12_CORE_DLL}"
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/D3D12/D3D12Core.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${D3D12_SDK_LAYERS_DLL}"
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/D3D12/D3D12SDKLayers.dll"
-    COMMENT "Copying DirectX Agility runtime to Standalone..."
-)
-
-add_custom_command(TARGET OpenTune_Standalone POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/models"
-    COMMENT "Creating Standalone models directory..."
-)
-
-add_custom_command(TARGET OpenTune_Standalone POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${HIFIGAN_MODEL}"
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/hifigan.onnx"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${RMVPE_MODEL}"
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/rmvpe.onnx"
-    COMMENT "Copying AI models to Standalone..."
-)
 
 add_custom_command(TARGET OpenTune_Standalone POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -544,8 +589,13 @@ if(OPENTUNE_BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/Source
             ${CMAKE_CURRENT_SOURCE_DIR}/Tests
             ${ONNXRUNTIME_INCLUDE_DIR}
-            ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
     )
+    if(WIN32)
+        target_include_directories(OpenTuneTests
+            PRIVATE
+                ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
+        )
+    endif()
 
     target_link_libraries(OpenTuneTests
         PRIVATE

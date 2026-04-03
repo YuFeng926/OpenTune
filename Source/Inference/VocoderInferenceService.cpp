@@ -35,7 +35,9 @@ public:
 
             initialized_.store(true, std::memory_order_release);
             
-            const char* backendName = (currentBackend_ == VocoderBackend::DML) ? "DML" : "CPU";
+            const char* backendName = "CPU";
+            if (currentBackend_ == VocoderBackend::DML) backendName = "DML";
+            else if (currentBackend_ == VocoderBackend::CoreML) backendName = "CoreML";
             AppLogger::info("[VocoderInferenceService] Initialized with vocoder (" 
                 + juce::String(backendName) + ")");
             return true;
