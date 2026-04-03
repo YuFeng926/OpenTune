@@ -1,5 +1,6 @@
 # Build directories
 build/
+build-*/
 cmake-build-*/
 out/
 
@@ -47,7 +48,9 @@ pc_nsf_hifigan_44.1k_ONNX/
 
 # IDE/Tool directories
 .opencode/
+.cache/
 
 # Third-party source code
 JUCE-master/
 openspec/
+specs/
