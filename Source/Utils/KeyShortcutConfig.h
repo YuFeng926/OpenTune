@@ -92,12 +92,24 @@ private:
     {
         juce::String name;
         
+#if JUCE_MAC
+        // macOS convention: symbol modifiers without + separators, order: ⌃⌥⇧⌘
+        if (modifiers.isCtrlDown() && !modifiers.isCommandDown())
+            name << juce::String::fromUTF8("\xe2\x8c\x83"); // ⌃ (Control)
+        if (modifiers.isAltDown())
+            name << juce::String::fromUTF8("\xe2\x8c\xa5"); // ⌥ (Option)
+        if (modifiers.isShiftDown())
+            name << juce::String::fromUTF8("\xe2\x87\xa7"); // ⇧ (Shift)
+        if (modifiers.isCommandDown())
+            name << juce::String::fromUTF8("\xe2\x8c\x98"); // ⌘ (Command)
+#else
         if (modifiers.isCtrlDown() || modifiers.isCommandDown())
             name << "Ctrl+";
         if (modifiers.isShiftDown())
             name << "Shift+";
         if (modifiers.isAltDown())
             name << "Alt+";
+#endif
         
         if (keyCode == juce::KeyPress::spaceKey)
             name << "Space";
@@ -288,9 +300,11 @@ inline bool parseKeyBinding(const juce::String& text, KeyBinding& outBinding)
         auto mod = parts[i].trim().toLowerCase();
         if (mod == "ctrl" || mod == "control")
             modifiers = modifiers.withFlags(juce::ModifierKeys::ctrlModifier);
+        else if (mod == "cmd" || mod == "command")
+            modifiers = modifiers.withFlags(juce::ModifierKeys::commandModifier);
         else if (mod == "shift")
             modifiers = modifiers.withFlags(juce::ModifierKeys::shiftModifier);
-        else if (mod == "alt")
+        else if (mod == "alt" || mod == "opt" || mod == "option")
             modifiers = modifiers.withFlags(juce::ModifierKeys::altModifier);
         else
             return false;
