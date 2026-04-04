@@ -2,6 +2,7 @@
 #include "../PluginProcessor.h"
 #include "UIColors.h"
 #include "../../Utils/LocalizationManager.h"
+#include "../../Utils/KeyShortcutConfig.h"
 
 namespace OpenTune {
 
@@ -76,8 +77,14 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
         }
         case 1:  // Edit
         {
-            menu.addItem(EditUndo, LOC(kUndo) + "  (Ctrl+Z)", true);
-            menu.addItem(EditRedo, LOC(kRedo) + "  (Ctrl+Shift+Z)", true);
+            {
+                auto undoBinding = KeyShortcutConfig::getShortcutBinding(KeyShortcutConfig::ShortcutId::Undo);
+                menu.addItem(EditUndo, LOC(kUndo) + "  " + undoBinding.getDisplayNames(), true);
+            }
+            {
+                auto redoBinding = KeyShortcutConfig::getShortcutBinding(KeyShortcutConfig::ShortcutId::Redo);
+                menu.addItem(EditRedo, LOC(kRedo) + "  " + redoBinding.getDisplayNames(), true);
+            }
             break;
         }
         case 2:  // View
@@ -157,6 +164,7 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             bool newState = !processor_.getShowWaveform();
             processor_.setShowWaveform(newState);
             listeners_.call([newState](Listener& l) { l.showWaveformToggled(newState); });
+            menuItemsChanged();
             break;
         }
         case ShowLanes:
@@ -164,41 +172,53 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             bool newState = !processor_.getShowLanes();
             processor_.setShowLanes(newState);
             listeners_.call([newState](Listener& l) { l.showLanesToggled(newState); });
+            menuItemsChanged();
             break;
         }
         case ThemeBlueBreeze:
             listeners_.call([](Listener& l) { l.themeChanged(ThemeId::BlueBreeze); });
+            menuItemsChanged();
             break;
         case ThemeDarkBlueGrey:
             listeners_.call([](Listener& l) { l.themeChanged(ThemeId::DarkBlueGrey); });
+            menuItemsChanged();
             break;
         case ThemeAurora:
             listeners_.call([](Listener& l) { l.themeChanged(ThemeId::Aurora); });
+            menuItemsChanged();
             break;
             
         case MouseTrailNone:
             listeners_.call([](Listener& l) { l.mouseTrailThemeChanged(MouseTrailConfig::TrailTheme::None); });
+            menuItemsChanged();
             break;
         case MouseTrailClassic:
             listeners_.call([](Listener& l) { l.mouseTrailThemeChanged(MouseTrailConfig::TrailTheme::Classic); });
+            menuItemsChanged();
             break;
         case MouseTrailNeon:
             listeners_.call([](Listener& l) { l.mouseTrailThemeChanged(MouseTrailConfig::TrailTheme::Neon); });
+            menuItemsChanged();
             break;
         case MouseTrailFire:
             listeners_.call([](Listener& l) { l.mouseTrailThemeChanged(MouseTrailConfig::TrailTheme::Fire); });
+            menuItemsChanged();
             break;
         case MouseTrailOcean:
             listeners_.call([](Listener& l) { l.mouseTrailThemeChanged(MouseTrailConfig::TrailTheme::Ocean); });
+            menuItemsChanged();
             break;
         case MouseTrailGalaxy:
             listeners_.call([](Listener& l) { l.mouseTrailThemeChanged(MouseTrailConfig::TrailTheme::Galaxy); });
+            menuItemsChanged();
             break;
         case MouseTrailCherryBlossom:
             listeners_.call([](Listener& l) { l.mouseTrailThemeChanged(MouseTrailConfig::TrailTheme::CherryBlossom); });
+            menuItemsChanged();
             break;
         case MouseTrailMatrix:
             listeners_.call([](Listener& l) { l.mouseTrailThemeChanged(MouseTrailConfig::TrailTheme::Matrix); });
+            menuItemsChanged();
             break;
 
         case EditUndo:

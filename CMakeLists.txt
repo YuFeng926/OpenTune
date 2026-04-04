@@ -223,6 +223,21 @@ juce_add_plugin(OpenTune
     
     # Build Options
     COPY_PLUGIN_AFTER_BUILD FALSE
+
+    # macOS Info.plist merge
+    PLIST_TO_MERGE
+    "<plist version=\"1.0\">
+    <dict>
+        <key>LSMinimumSystemVersion</key>
+        <string>12.0</string>
+        <key>LSApplicationCategoryType</key>
+        <string>public.app-category.music</string>
+        <key>NSHumanReadableCopyright</key>
+        <string>Copyright © 2024-2026 DAYA. All rights reserved.</string>
+        <key>NSMicrophoneUsageDescription</key>
+        <string>OpenTune needs microphone access for real-time audio monitoring.</string>
+    </dict>
+    </plist>"
 )
 
 # ==============================================================================
@@ -565,14 +580,27 @@ elseif(APPLE)
     )
 endif()
 
-add_custom_command(TARGET OpenTune_Standalone POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide.html"
-        "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide.html"
-    COMMENT "Copying UserGuide.html to Standalone..."
-)
+if(APPLE)
+    # macOS: docs go in Contents/Resources/docs/ (bundle standard)
+    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide.html"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide.html"
+        COMMENT "Copying UserGuide.html to app bundle Resources..."
+    )
+else()
+    # Windows: docs go alongside the executable
+    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide.html"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide.html"
+        COMMENT "Copying UserGuide.html to Standalone..."
+    )
+endif()
 
 # ==============================================================================
 # Unit Tests
