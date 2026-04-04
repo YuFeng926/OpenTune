@@ -313,6 +313,12 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Setup Menu Bar
     menuBar_.addListener(this);
 
+#if JUCE_MAC
+    // Populate the macOS system menu bar with File/Edit/View menus.
+    // JUCE automatically adds "About OpenTune" and "Quit OpenTune" to the app menu.
+    juce::MenuBarModel::setMacMainMenu(&menuBar_);
+#endif
+
     // Register language change listener
     LocalizationManager::getInstance().addListener(this);
 
@@ -521,6 +527,11 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+#if JUCE_MAC
+    // Clear the macOS system menu bar before menuBar_ is destroyed.
+    juce::MenuBarModel::setMacMainMenu(nullptr);
+#endif
+
     // Stop timer
     stopTimer();
 
@@ -1776,7 +1787,13 @@ void OpenTuneAudioProcessorEditor::helpRequested()
 {
     auto exeFile = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
     auto exeDir = exeFile.getParentDirectory();
+#if JUCE_MAC
+    // macOS: docs are in Contents/Resources/docs/ (executable is in Contents/MacOS/)
+    auto helpFile = exeDir.getParentDirectory().getChildFile("Resources").getChildFile("docs").getChildFile("UserGuide.html");
+#else
+    // Windows: docs are alongside the executable
     auto helpFile = exeDir.getChildFile("docs").getChildFile("UserGuide.html");
+#endif
     
     if (helpFile.exists())
     {

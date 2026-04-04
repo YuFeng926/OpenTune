@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文档描述将 OpenTune 从 Windows 专属移植至 macOS 平台的技术方案。目标是同时支持 Apple Silicon (arm64) 和 Intel Mac (x86_64)，分别构建和分发标准 `.app` 包（不上 Mac App Store）。
+本文档描述将 OpenTune 从 Windows 专属移植至 macOS 平台的技术方案。目标是支持 Apple Silicon (arm64)，构建和分发标准 `.app` 包（不上 Mac App Store）。
 
 ---
 
@@ -71,7 +71,7 @@ OpenTune 的实时音频管线对 macOS 移植非常友好。ONNX 推理**不在
 
 | 区域 | 关键文件 | 问题描述 |
 |------|---------|---------|
-| ONNX Runtime 链接 | `CMakeLists.txt:32,255` | 硬编码 `onnxruntime-win-x64-1.17.3`，链接 `.lib` |
+| ONNX Runtime 链接 | `CMakeLists.txt:32,255` | 硬编码 `onnxruntime-win-x64-1.24.4`，链接 `.lib` |
 | DLL 加载机制 | `OnnxRuntimeDelayLoadHook.cpp`, `WindowsDllSearchPath.cpp` | MSVC delay-load，Win32 DLL 搜索 |
 | GPU 检测 | `GpuDetector.cpp` | DXGI/DirectML，Windows 专属 |
 | 系统内存查询 | `RMVPEExtractor.cpp:9-26` | `GlobalMemoryStatusEx()` |
@@ -115,29 +115,23 @@ OpenTune 的实时音频管线对 macOS 移植非常友好。ONNX 推理**不在
 
 ## 2. 构建系统方案
 
-### 双架构分别构建
+### 仅 arm64 (Apple Silicon) 构建
 
-分别为 Apple Silicon 和 Intel Mac 构建独立的 `.app` 包：
+macOS 版本仅支持 Apple Silicon (arm64)。不支持 Intel Mac (x86_64)。
 
 ```
-  ┌────────────────────┐     ┌────────────────────┐
-  │  macOS x86_64 构建  │     │  macOS arm64 构建   │
-  │                    │     │                    │
-  │  ort-osx-x86_64   │     │  ort-osx-arm64     │
-  │  -mavx2 -mfma     │     │  NEON (内建)        │
-  │  SimdAccelerator   │     │  SimdAccelerator   │
-  │   -> AVX 路径      │     │   -> NEON 路径      │
-  │                    │     │                    │
-  │  OpenTune-x86_64   │     │  OpenTune-arm64    │
-  │  .app              │     │  .app              │
-  └────────────────────┘     └────────────────────┘
+  ┌────────────────────┐
+  │  macOS arm64 构建   │
+  │                    │
+  │  ort-osx-arm64     │
+  │  NEON (内建)        │
+  │  SimdAccelerator   │
+  │   -> NEON 路径      │
+  │                    │
+  │  OpenTune-arm64    │
+  │  .app              │
+  └────────────────────┘
 ```
-
-**选择分别构建而非 Universal Binary 的原因：**
-
-1. ONNX Runtime 官方分别提供 x86_64 和 arm64 的 dylib，合并为 fat binary 需要额外 `lipo` 步骤且增加包体积
-2. 编译器 flag 不同 — x86_64 需要 `-mavx2 -mfma` 启用 AVX SIMD 路径，arm64 的 NEON 默认启用
-3. 分开构建更简洁、更容易调试
 
 ### CMakeLists.txt 改造要点
 
@@ -145,26 +139,19 @@ OpenTune 的实时音频管线对 macOS 移植非常友好。ONNX 推理**不在
 # === 平台检测 (伪代码) ===
 
 if(APPLE)
-    # ONNX Runtime macOS 路径
-    if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-        set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/onnxruntime-osx-arm64-1.17.3")
-    else()
-        set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/onnxruntime-osx-x86_64-1.17.3")
-    endif()
+    # ONNX Runtime macOS 路径 (仅 arm64)
+    set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/onnxruntime-osx-arm64-1.24.4")
     set(ONNXRUNTIME_LIB "${ONNXRUNTIME_ROOT}/lib/libonnxruntime.dylib")
 
     # macOS 编译器 flags
     target_compile_options(OpenTune PRIVATE -Wall -Wextra)
-    if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-        target_compile_options(OpenTune PRIVATE -mavx2 -mfma)
-    endif()
 
     # 不设 JUCE_ASIO (Windows-only)
     # CoreAudio 由 JUCE 自动处理
 
 elseif(WIN32)
     # 保持现有 Windows 逻辑不变
-    set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/onnxruntime-win-x64-1.17.3")
+    set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/onnxruntime-win-x64-1.24.4")
     set(ONNXRUNTIME_LIB "${ONNXRUNTIME_ROOT}/lib/onnxruntime.lib")
     target_compile_definitions(OpenTune PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_definitions(OpenTune PRIVATE JUCE_ASIO=1)
@@ -180,18 +167,16 @@ endif()
 
 ### 库文件获取
 
-从 [ONNX Runtime Releases](https://github.com/microsoft/onnxruntime/releases/tag/v1.17.3) 下载：
+从 [ONNX Runtime Releases](https://github.com/microsoft/onnxruntime/releases/tag/v1.24.4) 下载：
 
-- `onnxruntime-osx-x86_64-1.17.3.tgz` (Intel Mac)
-- `onnxruntime-osx-arm64-1.17.3.tgz` (Apple Silicon)
+- `onnxruntime-osx-arm64-1.24.4.tgz` (Apple Silicon)
 
 解压后放置在项目根目录，与 Windows 版本平行：
 
 ```
 OpenTune/
-├── onnxruntime-win-x64-1.17.3/       # 现有
-├── onnxruntime-osx-x86_64-1.17.3/    # 新增
-└── onnxruntime-osx-arm64-1.17.3/     # 新增
+├── onnxruntime-win-x64-1.24.4/       # 现有
+└── onnxruntime-osx-arm64-1.24.4/     # 新增
 ```
 
 ### Execution Provider 策略
@@ -203,7 +188,6 @@ OpenTune/
 │                                                      │
 │  Phase 1 (初始移植):                                  │
 │     CPU EP only                                      │
-│     ├── x86_64: MLAS 后端 (ONNX RT 内建，自动用 AVX) │
 │     └── arm64: MLAS 后端 (自动用 NEON)               │
 │                                                      │
 │  Phase 2 (性能优化，可选):                             │
@@ -419,12 +403,13 @@ OpenTune.app/
     ├── MacOS/
     │   └── OpenTune                          <- 可执行文件
     ├── Frameworks/
-    │   └── libonnxruntime.1.17.3.dylib       <- ONNX Runtime
+    │   └── libonnxruntime.1.24.4.dylib       <- ONNX Runtime
     │       (+ symlink libonnxruntime.dylib)
     ├── Resources/
     │   ├── models/
     │   │   ├── rmvpe.onnx                    <- F0 提取模型
     │   │   └── hifigan.onnx                  <- 声码器模型
+    │   ├── docs/                             <- 帮助文档
     │   ├── Fonts/
     │   │   └── HONORSansCN-Medium.ttf
     │   └── AppIcon.icns
@@ -440,15 +425,15 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_DIR:OpenTune>/Contents/Frameworks"
         COMMAND ${CMAKE_COMMAND} -E copy
-            "${ONNXRUNTIME_ROOT}/lib/libonnxruntime.1.17.3.dylib"
+            "${ONNXRUNTIME_ROOT}/lib/libonnxruntime.1.24.4.dylib"
             "$<TARGET_BUNDLE_DIR:OpenTune>/Contents/Frameworks/"
     )
 
     # 2. 修正 dylib 加载路径
     add_custom_command(TARGET OpenTune POST_BUILD
         COMMAND install_name_tool -change
-            "@rpath/libonnxruntime.1.17.3.dylib"
-            "@executable_path/../Frameworks/libonnxruntime.1.17.3.dylib"
+            "@rpath/libonnxruntime.1.24.4.dylib"
+            "@executable_path/../Frameworks/libonnxruntime.1.24.4.dylib"
             "$<TARGET_BUNDLE_DIR:OpenTune>/Contents/MacOS/OpenTune"
     )
 
@@ -491,7 +476,7 @@ macOS 分发 `.app` 必须经过代码签名和公证，否则 Gatekeeper 会阻
 codesign --force --deep --sign "Developer ID Application: ..." OpenTune.app
     │
     ├── 签名主程序: Contents/MacOS/OpenTune
-    ├── 签名 dylib: Contents/Frameworks/libonnxruntime.1.17.3.dylib
+    ├── 签名 dylib: Contents/Frameworks/libonnxruntime.1.24.4.dylib
     └── 签名整个 bundle
     │
     ▼
@@ -517,15 +502,14 @@ xcrun stapler staple OpenTune.dmg
 
 ## 9. 风险评估
 
-| 风险 | 严重程度 | 说明 | 缓解措施 |
-|------|---------|------|---------|
-| ONNX 模型兼容性 | ★★★☆☆ | rmvpe.onnx 和 hifigan.onnx 是否包含 CPU EP 不支持的算子 | Spike 阶段提前验证 |
+| 风险 | 严重程度 | 说明 | 状态 |
+|------|---------|------|------|
+| ONNX 模型兼容性 | ★★★☆☆ | rmvpe.onnx 和 hifigan.onnx 是否包含 CPU EP 不支持的算子 | ✅ 已解决，模型运行正常 |
 | 音频延迟特性差异 | ★★☆☆☆ | CoreAudio 与 WASAPI 延迟不同 | JUCE 抽象了此层，风险较低 |
-| Gatekeeper 和签名 | ★★★★☆ | 未签名/未公证的 .app 被 macOS 阻止 | 需 Apple Developer 证书 + notarytool |
-| dylib 签名 | ★★★☆☆ | libonnxruntime.dylib 需要签名 | Hardened Runtime entitlements |
-| Intel Mac 实际性能 | ★★☆☆☆ | x86_64 Mac 上 ONNX CPU EP 可能较慢 | 需实际硬件测试 |
-| SIMD NEON 实现 | ★★☆☆☆ | 7 个函数的 NEON 实现需要测试正确性和性能 | 单元测试 + benchmark |
-| CpuFeatures ARM 路径 | ★☆☆☆☆ | Apple Silicon 检测 AVX 返回 false，需确保走 NEON | 添加 `hasNEON_` 字段 |
+| Gatekeeper 和签名 | ★★★★☆ | 未签名/未公证的 .app 被 macOS 阻止 | 签名脚本已创建 (`scripts/sign-and-package.sh`)，需 Developer ID 证书完成实际签名 |
+| dylib 签名 | ★★★☆☆ | libonnxruntime.dylib 需要签名 | ✅ 已选择 entitlements 方案 (`Resources/macOS/OpenTune.entitlements`: `disable-library-validation` + `audio-input`) |
+| CpuFeatures ARM 路径 | ★☆☆☆☆ | Apple Silicon 检测 AVX 返回 false，需确保走 NEON | ✅ 已添加 `hasNEON_` 字段 |
+| SIMD NEON 实现 | ★★☆☆☆ | 7 个函数的 NEON 实现需要测试正确性和性能 | ✅ 已解决，Layer 1 已完成 |
 
 ---
 
@@ -540,13 +524,13 @@ xcrun stapler staple OpenTune.dmg
 │                                                     │
 │  Layer 0: 能编译通过 ✅ 已完成                        │
 │  ├── CMakeLists.txt 平台条件化                       │
-│  ├── 下载/集成 macOS 版 ONNX Runtime                 │
+│  ├── 下载/集成 macOS arm64 版 ONNX Runtime            │
 │  ├── JUCE_ASIO 条件化                               │
 │  ├── 修复 MSVC-specific 编译器 flag                   │
 │  ├── App bundle 打包 (模型 + dylib)                  │
 │  └── @rpath 配置 + dylib 嵌入 Frameworks/            │
 │                                                     │
-│  Layer 1: 能正确运行 (约 1-2 天)                      │
+│  Layer 1: 能正确运行 ✅ 已完成                        │
 │  ├── macOS 内存查询 (替换 GlobalMemoryStatusEx)       │
 │  ├── CpuFeatures macOS/ARM 实现 (hasNEON_)          │
 │  ├── SimdAccelerator NEON 路径 (7 个函数)            │
@@ -558,14 +542,24 @@ xcrun stapler staple OpenTune.dmg
 │  ├── ModelFactory CoreML EP 逻辑 ✅ 已完成            │
 │  └── Accelerate 框架集成 ✅ 已完成                    │
 │                                                     │
-│  Layer 3: 发布级品质 (约 3-5 天)                      │
-│  ├── 代码签名 + 公证 (notarization)                  │
-│  ├── DMG 打包                                       │
-│  ├── Gatekeeper 兼容                                │
-│  ├── macOS UI 细节 (菜单栏、全屏等)                    │
-│  └── CI/CD for macOS                               │
+│  Layer 3: 发布级品质 (部分完成)                        │
+│  ├── Entitlements ✅ 已完成                           │
+│  │   └── Resources/macOS/OpenTune.entitlements       │
+│  │       (disable-library-validation + audio-input)  │
+│  ├── 签名与打包脚本 ✅ 已完成                          │
+│  │   └── scripts/sign-and-package.sh                 │
+│  │       (inside-out signing, Hardened Runtime,       │
+│  │        DMG packaging, notarization)               │
+│  ├── Info.plist 配置 ✅ 已完成                         │
+│  │   └── PLIST_TO_MERGE in CMakeLists.txt            │
+│  │       (LSMinimumSystemVersion,                    │
+│  │        NSMicrophoneUsageDescription, etc.)        │
+│  ├── macOS UI 适配 ✅ 已完成                          │
+│  │   ├── setMacMainMenu (系统菜单栏)                  │
+│  │   ├── 平台原生快捷键显示 (⌘/⇧/⌥)                  │
+│  │   └── Help docs → Contents/Resources/docs/       │
+│  └── CI/CD for macOS — 待后续实施                     │
 │                                                     │
-│  总计估算: 8-13 天 (1人)                             │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -662,23 +656,35 @@ NEON 是 128-bit (4 floats)，但 Apple Silicon 有 2 个 128-bit NEON 管线，
 | `CMakeLists.txt` | 平台检测、ONNX RT 路径、链接库、ASIO 条件化、编译器 flag、post-build 步骤、@rpath | ✅ |
 | `Source/Utils/SimdAccelerator.cpp:7-13` | `#if defined(__AVX__) \|\| defined(__AVX512F__)` immintrin.h 保护 | ✅ |
 
-#### Layer 1 - 运行时正确性
+#### Layer 1 - 运行时正确性 ✅ 已完成
 
-| 文件 | 改动内容 |
-|------|---------|
-| `Source/Inference/RMVPEExtractor.cpp` | macOS 内存查询 (`sysctl(HW_MEMSIZE)`) 替换硬编码 2048MB |
-| `Source/Utils/CpuFeatures.h` | 新增 `SimdLevel::NEON`、`hasNEON_` 字段和 `hasNEON()` getter |
-| `Source/Utils/CpuFeatures.cpp` | `#if __aarch64__` 分支：NEON 标志、sysctl 获取 CPU 品牌字符串 |
-| `Source/Utils/SimdAccelerator.h` | 新增 `SimdLevel::NEON`、声明 7 个 NEON 静态函数 |
-| `Source/Utils/SimdAccelerator.cpp` | 7 个 NEON 实现 (`<arm_neon.h>`) + `detect()` ARM 分支 |
+| 文件 | 改动内容 | 状态 |
+|------|---------|------|
+| `Source/Inference/RMVPEExtractor.cpp` | macOS 内存查询 (`sysctl(HW_MEMSIZE)`) 替换硬编码 2048MB | ✅ |
+| `Source/Utils/CpuFeatures.h` | 新增 `SimdLevel::NEON`、`hasNEON_` 字段和 `hasNEON()` getter | ✅ |
+| `Source/Utils/CpuFeatures.cpp` | `#if __aarch64__` 分支：NEON 标志、sysctl 获取 CPU 品牌字符串 | ✅ |
+| `Source/Utils/SimdAccelerator.h` | 新增 `SimdLevel::NEON`、声明 7 个 NEON 静态函数 | ✅ |
+| `Source/Utils/SimdAccelerator.cpp` | 7 个 NEON 实现 (`<arm_neon.h>`) + `detect()` ARM 分支 | ✅ |
 
-#### Layer 2 - 性能优化 (可选)
+#### Layer 2 - 性能优化 ✅ 已完成
 
-| 文件 | 改动内容 |
-|------|---------|
-| `Source/Utils/GpuDetector.h` | `GpuBackend` enum 添加 `CoreML` |
-| `Source/Utils/GpuDetector.cpp` | macOS CoreML 后端检测 |
-| `Source/Inference/ModelFactory.cpp` | macOS CoreML Execution Provider 逻辑 |
+| 文件 | 改动内容 | 状态 |
+|------|---------|------|
+| `Source/Utils/GpuDetector.h` | `GpuBackend` enum 添加 `CoreML` | ✅ |
+| `Source/Utils/GpuDetector.cpp` | macOS CoreML 后端检测 | ✅ |
+| `Source/Inference/ModelFactory.cpp` | macOS CoreML Execution Provider 逻辑 | ✅ |
+
+#### Layer 3 - 发布级品质 (部分完成)
+
+| 文件 | 改动内容 | 状态 |
+|------|---------|------|
+| `Resources/macOS/OpenTune.entitlements` | disable-library-validation + audio-input | ✅ |
+| `scripts/sign-and-package.sh` | inside-out signing, Hardened Runtime, DMG packaging, notarization | ✅ |
+| `CMakeLists.txt` (PLIST_TO_MERGE) | LSMinimumSystemVersion, NSMicrophoneUsageDescription, etc. | ✅ |
+| `Source/Standalone/PluginEditor.cpp` | `setMacMainMenu` for macOS system menu bar | ✅ |
+| UI 快捷键显示 | 平台原生快捷键符号 (⌘/⇧/⌥ on macOS) | ✅ |
+| Help docs | 移至 `Contents/Resources/docs/` | ✅ |
+| CI/CD for macOS | macOS 持续集成/部署 | 待后续实施 |
 
 #### 已有保护，无需修改
 
@@ -697,18 +703,16 @@ NEON 是 128-bit (4 floats)，但 Apple Silicon 有 2 个 128-bit NEON 管线，
 
 以下验证项已在 Layer 0 实施中完成：
 
-1. ✅ **下载 macOS arm64 / x86_64 的 ONNX Runtime 1.17.3** — 已集成到项目根目录
+1. ✅ **下载 macOS arm64 的 ONNX Runtime 1.24.4** — 已集成到项目根目录
 2. ✅ **CMakeLists.txt 改造** — 平台检测、ONNX RT 选择、编译器 flag、app bundle 打包
-3. ✅ **arm64 原生编译通过** — Apple Silicon (M5 Max) 上 `cmake -DCMAKE_OSX_ARCHITECTURES=arm64`
-4. ✅ **x86_64 交叉编译通过** — Apple Silicon 上 `cmake -DCMAKE_OSX_ARCHITECTURES=x86_64`
-5. ✅ **E2E 启动验证** — arm64 版本在 Apple Silicon 上原生启动，进程稳定运行无 crash
-6. ✅ **App bundle 结构正确** — dylib 在 `Contents/Frameworks/`，模型在 `Contents/Resources/models/`
+3. ✅ **arm64 原生编译通过** — Apple Silicon 上 `cmake -DCMAKE_OSX_ARCHITECTURES=arm64`
+4. ✅ **E2E 启动验证** — arm64 版本在 Apple Silicon 上原生启动，进程稳定运行无 crash
+5. ✅ **App bundle 结构正确** — dylib 在 `Contents/Frameworks/`，模型在 `Contents/Resources/models/`
 
-### Layer 1 Spike (待执行)
+### Layer 1 Spike ✅ 已通过
 
-Layer 1 实施后需验证：
+以下验证项已在 Layer 1 实施中完成：
 
-1. **启动日志确认** — 日志应显示 "SIMD: NEON" 而非 "SIMD: None"，cpuBrand 应显示实际芯片型号
-2. **内存 preflight** — 确认 `getAvailableSystemMemoryMB()` 返回真实系统内存值
-3. **端到端推理** — 导入音频 → F0 提取 → pitch 编辑 → 渲染播放
-4. **双架构验证** — arm64 和 x86_64 构建均应正常运行（x86_64 走 AVX 路径，arm64 走 NEON 路径）
+1. ✅ **启动日志确认** — 日志显示 "SIMD: NEON"，cpuBrand 显示实际芯片型号
+2. ✅ **内存 preflight** — `getAvailableSystemMemoryMB()` 返回真实系统内存值
+3. ✅ **端到端推理** — 导入音频 → F0 提取 → pitch 编辑 → 渲染播放
