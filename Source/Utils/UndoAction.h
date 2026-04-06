@@ -167,6 +167,8 @@ public:
         if (applier_) {
             applier_(oldSegments_);
         }
+        lastAffectedStartFrame_ = info_.affectedStartFrame;
+        lastAffectedEndFrame_ = info_.affectedEndFrame;
     }
 
     void redo() override
@@ -174,6 +176,8 @@ public:
         if (applier_) {
             applier_(newSegments_);
         }
+        lastAffectedStartFrame_ = info_.affectedStartFrame;
+        lastAffectedEndFrame_ = info_.affectedEndFrame;
     }
 
     juce::String getDescription() const override
@@ -183,12 +187,20 @@ public:
 
     uint64_t getClipId() const override { return clipId_; }
 
+    /** After undo/redo, retrieve the affected frame range of the last executed action. */
+    static int getLastAffectedStartFrame() { return lastAffectedStartFrame_; }
+    static int getLastAffectedEndFrame() { return lastAffectedEndFrame_; }
+    static void resetLastAffectedRange() { lastAffectedStartFrame_ = -1; lastAffectedEndFrame_ = -1; }
+
 private:
     uint64_t clipId_;
     std::vector<SegmentSnapshot> oldSegments_;
     std::vector<SegmentSnapshot> newSegments_;
     std::function<void(const std::vector<SegmentSnapshot>&)> applier_;
     ChangeInfo info_;
+
+    static inline int lastAffectedStartFrame_ = -1;
+    static inline int lastAffectedEndFrame_ = -1;
 };
 
 class ClipSplitAction : public UndoAction

@@ -143,6 +143,8 @@ private:
     void launchBackgroundUiTask(std::function<void()> task);
     void waitForBackgroundUiTasks();
     void refreshAfterUndoRedo();
+    void performUndoWithRangeTracking();
+    void performRedoWithRangeTracking();
     
     // AUTO 启动统一 helper
     void startAutoTuneAsUnifiedEdit();

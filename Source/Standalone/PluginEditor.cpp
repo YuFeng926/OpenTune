@@ -601,8 +601,7 @@ bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         if (!shouldAcceptUndoRedoShortcut()) {
             return true;
         }
-        processorRef_.performUndo();
-        refreshAfterUndoRedo();
+        performUndoWithRangeTracking();
         return true;
     }
 
@@ -611,8 +610,7 @@ bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         if (!shouldAcceptUndoRedoShortcut()) {
             return true;
         }
-        processorRef_.performRedo();
-        refreshAfterUndoRedo();
+        performRedoWithRangeTracking();
         return true;
     }
 
@@ -805,13 +803,6 @@ void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection()
         parameterPanel_.setRetuneSpeed(selectedRetuneSpeed);
         parameterPanel_.setVibratoDepth(selectedVibratoDepth);
         parameterPanel_.setVibratoRate(selectedVibratoRate);
-        showingSingleNoteParams_ = true;
-        return;
-    }
-
-    float selectedSegmentRetuneSpeed = 0.0f;
-    if (pianoRoll_.getSelectedSegmentRetuneSpeed(selectedSegmentRetuneSpeed)) {
-        parameterPanel_.setRetuneSpeed(selectedSegmentRetuneSpeed);
         showingSingleNoteParams_ = true;
         return;
     }
@@ -1100,9 +1091,6 @@ void OpenTuneAudioProcessorEditor::retuneSpeedChanged(float speed)
 {
     float normalizedSpeed = speed / 100.0f;
     pianoRoll_.setRetuneSpeed(normalizedSpeed);
-    if (pianoRoll_.applyRetuneSpeedToSelectedLineAnchorSegments(normalizedSpeed)) {
-        return;
-    }
     if (pianoRoll_.applyRetuneSpeedToSelection(normalizedSpeed)) {
         return;
     }
@@ -1873,16 +1861,12 @@ void OpenTuneAudioProcessorEditor::mouseTrailThemeChanged(MouseTrailConfig::Trai
 
 void OpenTuneAudioProcessorEditor::undoRequested()
 {
-    // 统一使用全局 UndoManager 执行撤销
-    processorRef_.performUndo();
-    refreshAfterUndoRedo();
+    performUndoWithRangeTracking();
 }
 
 void OpenTuneAudioProcessorEditor::redoRequested()
 {
-    // 统一使用全局 UndoManager 执行重做
-    processorRef_.performRedo();
-    refreshAfterUndoRedo();
+    performRedoWithRangeTracking();
 }
 
 void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
@@ -1907,6 +1891,36 @@ void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
 void OpenTuneAudioProcessorEditor::refreshAfterUndoRedo()
 {
     pianoRoll_.refreshAfterUndoRedo();
+    arrangementView_.repaint();
+    trackPanel_.repaint();
+}
+
+void OpenTuneAudioProcessorEditor::performUndoWithRangeTracking()
+{
+    CorrectedSegmentsChangeAction::resetLastAffectedRange();
+    processorRef_.performUndo();
+    
+    int start = CorrectedSegmentsChangeAction::getLastAffectedStartFrame();
+    int end = CorrectedSegmentsChangeAction::getLastAffectedEndFrame();
+    
+    AppLogger::log("performUndoWithRangeTracking: diffRange=[" + juce::String(start) + "," + juce::String(end) + "]");
+    
+    pianoRoll_.refreshAfterUndoRedoWithRange(start, end);
+    arrangementView_.repaint();
+    trackPanel_.repaint();
+}
+
+void OpenTuneAudioProcessorEditor::performRedoWithRangeTracking()
+{
+    CorrectedSegmentsChangeAction::resetLastAffectedRange();
+    processorRef_.performRedo();
+    
+    int start = CorrectedSegmentsChangeAction::getLastAffectedStartFrame();
+    int end = CorrectedSegmentsChangeAction::getLastAffectedEndFrame();
+    
+    AppLogger::log("performRedoWithRangeTracking: diffRange=[" + juce::String(start) + "," + juce::String(end) + "]");
+    
+    pianoRoll_.refreshAfterUndoRedoWithRange(start, end);
     arrangementView_.repaint();
     trackPanel_.repaint();
 }

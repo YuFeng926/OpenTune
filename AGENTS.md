@@ -356,17 +356,31 @@ logResult = log2(originalF0) + (log2(boundaryF0) - log2(originalF0)) * w
 ```
 Prevents audible pitch discontinuities at segment boundaries.
 
-### HandDraw Correction (`PitchCurve::setManualCorrectionRange`)
+### HandDraw Correction (Note-Bound)
 
-User paints F0 values directly. The painted f0Data array is stored verbatim as a
-`CorrectedSegment` with `Source::HandDraw`. No slope rotation or shifting is applied.
-Transition ramps are still inserted at boundaries.
+HandDraw is a **precision drawing tool within notes**. User paints F0 values directly,
+but the drawn data is **clipped to note boundaries** via `clipDrawDataToNotes()` in
+`PianoRollToolHandler`. Data outside any note region is discarded. Each overlapping
+note gets an independent `CorrectedSegment` with `Source::HandDraw`. No slope rotation
+or shifting is applied. Transition ramps are still inserted at boundaries. After drawing,
+the affected notes are auto-selected.
 
-### LineAnchor Correction
+### LineAnchor Correction (Note-Bound)
 
-User places anchor points; system interpolates F0 between them. At render time
-(`renderF0Range`), if `retuneSpeed >= 0`, the interpolated target is blended with
-original F0 via `mixRetune`. Otherwise the interpolated values are used directly.
+LineAnchor is a **precision drawing tool within notes**. User places anchor points;
+system interpolates F0 between them in log2 space. The interpolated F0 curve is then
+**clipped to note boundaries** using the same `clipDrawDataToNotes()` function as
+HandDraw. Data outside any note region is discarded. At render time (`renderF0Range`),
+if `retuneSpeed >= 0`, the interpolated target is blended with original F0 via
+`mixRetune`. Otherwise the interpolated values are used directly.
+
+### Unified Selection Model
+
+All selection state flows through `Note.selected`. There are no parallel selection
+mechanisms. `InteractionState::SelectionState` only contains transient rubber-band drag
+coordinates (`dragStart/EndTime`, `dragStart/EndMidi`, `isSelectingArea`) and derived
+F0 frame range (`selectedF0StartFrame/EndFrame`). Deselection triggers: Escape key
+(only when notes are selected), click on empty area, tool switch.
 
 ### AutoTune
 

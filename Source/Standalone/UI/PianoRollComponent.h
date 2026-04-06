@@ -127,7 +127,6 @@ public:
     void setRetuneSpeed(float speed) { currentRetuneSpeed_ = speed; }
     float getCurrentRetuneSpeed() const { return currentRetuneSpeed_; }
     bool applyRetuneSpeedToSelection(float speed);
-    bool applyRetuneSpeedToSelectedLineAnchorSegments(float speed);
     void setVibratoDepth(float depth) { currentVibratoDepth_ = depth; }
     float getCurrentVibratoDepth() const { return currentVibratoDepth_; }
     bool applyVibratoDepthToSelection(float depth);
@@ -135,23 +134,14 @@ public:
     float getCurrentVibratoRate() const { return currentVibratoRate_; }
     bool applyVibratoRateToSelection(float rate);
     bool getSingleSelectedNoteParameters(float& retuneSpeedPercent, float& vibratoDepth, float& vibratoRate) const;
-    bool getSelectedSegmentRetuneSpeed(float& retuneSpeedPercent) const;
-    int findLineAnchorSegmentNear(int x, int y) const;
-    void selectLineAnchorSegment(int idx);
-    void toggleLineAnchorSegmentSelection(int idx);
-    void clearLineAnchorSegmentSelection();
     bool applyCorrectionAsyncForEntireClip(float retuneSpeed, float vibratoDepth, float vibratoRate);
     void setNoteSplit(float value);
     
     void setRenderingProgress(float progress, int pendingTasks);
     
     bool isAutoTuneProcessing() const;
-    bool hasSelectionRange() const { return interactionState_.selection.hasSelectionArea && interactionState_.selection.selectionStartTime != interactionState_.selection.selectionEndTime; }
-    std::pair<double, double> getSelectionTimeRange() const
-    {
-        return { std::min(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime),
-                 std::max(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime) };
-    }
+    bool hasSelectionRange() const;
+    std::pair<double, double> getSelectionTimeRange() const;
 
     void setTrackTimeOffset(double offsetSeconds) {
         trackOffsetSeconds_ = juce::jmax(0.0, offsetSeconds);
@@ -179,6 +169,7 @@ public:
     void fitToScreen();
 
     void refreshAfterUndoRedo();
+    void refreshAfterUndoRedoWithRange(int startFrame, int endFrame);
 
     void setNotes(const std::vector<Note>& notes);
     std::vector<Note> getNotes() const { return getCurrentClipNotesCopy(); }
@@ -208,9 +199,7 @@ private:
                                          float vibratoDepth,
                                          float vibratoRate);
 
-    bool hasHandDrawCorrectionInRange(int startFrame, int endFrame) const;
     bool applyRetuneSpeedToSelectedNotes(float speed);
-    bool applyRetuneSpeedToSelectionArea(float speed, int startFrame, int endFrame);
 
     juce::ScrollBar horizontalScrollBar_{ false };
     juce::ScrollBar verticalScrollBar_{ true };

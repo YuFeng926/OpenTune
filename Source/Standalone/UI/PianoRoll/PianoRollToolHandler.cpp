@@ -75,10 +75,9 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
 
     if (e.mods.isPopupMenu()) {
         if (currentTool_ == ToolId::LineAnchor && ctx_.getState().drawing.isPlacingAnchors) {
-            ctx_.commitEditTransaction();
+            if (ctx_.isTransactionActive()) ctx_.commitEditTransaction();
             ctx_.getState().drawing.isPlacingAnchors = false;
             ctx_.getState().drawing.pendingAnchors.clear();
-            ctx_.clearLineAnchorSegmentSelection();
             ctx_.requestRepaint();
             return;
         }
@@ -175,15 +174,6 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
 {
     AppLogger::debug("[PianoRollToolHandler] mouseUp: tool=" + juce::String(static_cast<int>(currentTool_)));
 
-    if (ctx_.getState().selection.hasSelectionArea) {
-        double timeDelta = std::abs(ctx_.getState().selection.selectionEndTime - ctx_.getState().selection.selectionStartTime);
-        float midiDelta = std::abs(ctx_.getState().selection.selectionEndMidi - ctx_.getState().selection.selectionStartMidi);
-        if (timeDelta < 0.01 || midiDelta < 0.5f) {
-            AppLogger::debug("[PianoRollToolHandler] mouseUp: clearing small selection area");
-            ctx_.getState().selection.hasSelectionArea = false;
-        }
-    }
-
     switch (currentTool_) {
         case ToolId::Select:
             AppLogger::debug("[PianoRollToolHandler] mouseUp: handling Select tool");
@@ -221,34 +211,11 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
     if (KeyShortcutConfig::matchesShortcut(KeyShortcutConfig::ShortcutId::SelectAll, key)) {
         AppLogger::debug("[PianoRollToolHandler] keyPressed: select all");
         auto& notes = ctx_.getNotes();
-        auto curve = ctx_.getPitchCurve();
-        bool hasNotes = !notes.empty();
-        bool hasCurve = curve && !curve->isEmpty();
-        
-        if (!hasNotes && !hasCurve) {
+        if (notes.empty()) {
             return true;
         }
         
-        if (hasNotes) {
-            ctx_.selectAllNotes();
-        }
-        
-        ctx_.getState().selection.hasSelectionArea = true;
-        ctx_.getState().selection.selectionStartMidi = ctx_.getMinMidi();
-        ctx_.getState().selection.selectionEndMidi = ctx_.getMaxMidi();
-        ctx_.getState().selection.selectionStartTime = 0.0;
-        
-        if (hasCurve) {
-            ctx_.getState().selection.selectionEndTime = 
-                (static_cast<double>(curve->size()) * static_cast<double>(ctx_.getCurveHopSize())) / ctx_.getCurveSampleRate();
-        } else {
-            double maxEnd = 0.0;
-            for (const auto& n : notes) {
-                maxEnd = std::max(maxEnd, n.endTime);
-            }
-            ctx_.getState().selection.selectionEndTime = maxEnd;
-        }
-        
+        ctx_.selectAllNotes();
         updateF0SelectionFromNotes();
         ctx_.requestRepaint();
         return true;
@@ -301,8 +268,18 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
     }
 
     if (key == juce::KeyPress::escapeKey) {
-        AppLogger::debug("[PianoRollToolHandler] keyPressed: escape key pressed");
-        ctx_.notifyEscapeKey();
+        auto selectedNotes = ctx_.getSelectedNotes();
+        if (!selectedNotes.empty()) {
+            // If notes are selected, Escape only deselects — don't propagate to close the view
+            AppLogger::debug("[PianoRollToolHandler] keyPressed: escape deselecting " + juce::String(selectedNotes.size()) + " notes");
+            ctx_.deselectAllNotes();
+            ctx_.getState().selection.clearF0Selection();
+            ctx_.requestRepaint();
+        } else {
+            // No notes selected — propagate Escape to parent (view toggle)
+            AppLogger::debug("[PianoRollToolHandler] keyPressed: escape key, no selection, propagating");
+            ctx_.notifyEscapeKey();
+        }
         return true;
     }
 
@@ -350,52 +327,27 @@ void PianoRollToolHandler::handleDeleteKey()
 
     const CorrectionDigest correctionBeforeDelete = buildCorrectionDigest();
 
-    double deleteStartTime = 1e30;
-    double deleteEndTime = -1e30;
-
-    if (ctx_.getState().selection.hasSelectionArea) {
-        deleteStartTime = std::min(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
-        deleteEndTime = std::max(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
+    auto selectedNotes = ctx_.getSelectedNotes();
+    if (selectedNotes.empty()) {
+        AppLogger::debug("[PianoRollToolHandler] handleDeleteKey: nothing to delete");
+        return;
     }
 
-    auto selectedNotes = ctx_.getSelectedNotes();
+    double deleteStartTime = 1e30;
+    double deleteEndTime = -1e30;
     for (const auto* n : selectedNotes) {
         deleteStartTime = std::min(deleteStartTime, n->startTime);
         deleteEndTime = std::max(deleteEndTime, n->endTime);
     }
 
-    if (deleteEndTime <= deleteStartTime && selectedNotes.empty() && !ctx_.getState().selection.hasSelectionArea) {
-        AppLogger::debug("[PianoRollToolHandler] handleDeleteKey: nothing to delete");
-        return;
-    }
-
     AppLogger::debug("[PianoRollToolHandler] handleDeleteKey: deleting " 
-        + juce::String(selectedNotes.size()) + " notes, hasSelection=" 
-        + juce::String(ctx_.getState().selection.hasSelectionArea ? "true" : "false"));
+        + juce::String(selectedNotes.size()) + " notes");
 
-    int deleteStartFrame = -1;
-    int deleteEndFrameExclusive = -1;
     auto curve = ctx_.getPitchCurve();
 
-    if (deleteEndTime > deleteStartTime && curve && !curve->isEmpty()) {
-        const double frameDuration = static_cast<double>(ctx_.getCurveHopSize()) / ctx_.getCurveSampleRate();
-        deleteStartFrame = static_cast<int>(deleteStartTime / frameDuration);
-        deleteEndFrameExclusive = static_cast<int>(deleteEndTime / frameDuration);
-        const int maxFrameExclusive = ctx_.getCurveSize();
-        if (deleteStartFrame < 0) deleteStartFrame = 0;
-        if (deleteEndFrameExclusive > maxFrameExclusive) deleteEndFrameExclusive = maxFrameExclusive;
-    }
-
-    const bool willDeleteSelectionArea =
-        ctx_.getState().selection.hasSelectionArea && deleteStartFrame >= 0 && deleteEndFrameExclusive > deleteStartFrame;
-    if (selectedNotes.empty() && !willDeleteSelectionArea) {
-        return;
-    }
-
-    bool handled = false;
     ctx_.beginEditTransaction("Delete Notes");
 
-    if (!selectedNotes.empty()) {
+    {
         AppLogger::debug("[PianoRollToolHandler] handleDeleteKey: deleting notes");
 
         double deletedNotesStartTime = 1e30;
@@ -417,42 +369,15 @@ void PianoRollToolHandler::handleDeleteKey()
         }
 
         deleteSelectedNotes();
-        handled = true;
     }
 
-    if (willDeleteSelectionArea) {
-        AppLogger::debug("[PianoRollToolHandler] handleDeleteKey: deleting in selection area");
-        auto& notes = ctx_.getNotes();
-        double startTime = std::min(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
-        double endTime = std::max(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
+    ctx_.commitEditTransaction();
+    AppLogger::debug("[PianoRollToolHandler] handleDeleteKey: delete completed, notifying pitch curve edit");
+    const CorrectionDigest correctionAfterDelete = buildCorrectionDigest();
+    const bool correctionChanged = (correctionBeforeDelete != correctionAfterDelete);
 
-        notes.erase(
-            std::remove_if(notes.begin(), notes.end(),
-                [startTime, endTime](const Note& n) {
-                    return n.endTime > startTime && n.startTime < endTime;
-                }),
-            notes.end()
-        );
-
-        if (curve) {
-            ctx_.clearCorrectionRange(deleteStartFrame, deleteEndFrameExclusive);
-        }
-
-        globalDirtyStartFrame = std::min(globalDirtyStartFrame, deleteStartFrame);
-        globalDirtyEndFrame = std::max(globalDirtyEndFrame, deleteEndFrameExclusive - 1);
-        ctx_.getState().selection.hasSelectionArea = false;
-        handled = true;
-    }
-
-    if (handled) {
-        ctx_.commitEditTransaction();
-        AppLogger::debug("[PianoRollToolHandler] handleDeleteKey: delete completed, notifying pitch curve edit");
-        const CorrectionDigest correctionAfterDelete = buildCorrectionDigest();
-        const bool correctionChanged = (correctionBeforeDelete != correctionAfterDelete);
-
-        if (correctionChanged && globalDirtyEndFrame >= globalDirtyStartFrame && globalDirtyStartFrame != INT_MAX) {
-            ctx_.notifyPitchCurveEdited(globalDirtyStartFrame, globalDirtyEndFrame);
-        }
+    if (correctionChanged && globalDirtyEndFrame >= globalDirtyStartFrame && globalDirtyStartFrame != INT_MAX) {
+        ctx_.notifyPitchCurveEdited(globalDirtyStartFrame, globalDirtyEndFrame);
     }
 }
 
@@ -559,19 +484,11 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 
             auto pitchCurve = ctx_.getPitchCurve();
             if (pitchCurve && !ctx_.getState().noteDrag.initialNoteOffsets.empty()) {
-                double rangeStart = 0;
-                double rangeEnd = 0;
-
-                if (ctx_.getState().selection.hasSelectionArea) {
-                    rangeStart = std::min(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
-                    rangeEnd = std::max(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
-                } else {
-                    rangeStart = 1e30;
-                    rangeEnd = -1e30;
-                    for (const auto& p : ctx_.getState().noteDrag.initialNoteOffsets) {
-                        rangeStart = std::min(rangeStart, p.first->startTime);
-                        rangeEnd = std::max(rangeEnd, p.first->endTime);
-                    }
+                double rangeStart = 1e30;
+                double rangeEnd = -1e30;
+                for (const auto& p : ctx_.getState().noteDrag.initialNoteOffsets) {
+                    rangeStart = std::min(rangeStart, p.first->startTime);
+                    rangeEnd = std::max(rangeEnd, p.first->endTime);
                 }
 
                 if (rangeStart < 0) rangeStart = 0;
@@ -653,15 +570,13 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
             ctx_.getState().noteResize.edge = NoteResizeEdge::None;
             if (e.x > ctx_.getPianoKeyWidth()) {
                 ctx_.getState().selection.isSelectingArea = true;
-                ctx_.getState().selection.hasSelectionArea = true;
-                ctx_.getState().selection.selectionStartTime = std::max(0.0, trackRelativeTime);
-                ctx_.getState().selection.selectionEndTime = ctx_.getState().selection.selectionStartTime;
+                ctx_.getState().selection.dragStartTime = std::max(0.0, trackRelativeTime);
+                ctx_.getState().selection.dragEndTime = ctx_.getState().selection.dragStartTime;
                 float midiVal = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
-                ctx_.getState().selection.selectionStartMidi = midiVal;
-                ctx_.getState().selection.selectionEndMidi = midiVal;
+                ctx_.getState().selection.dragStartMidi = midiVal;
+                ctx_.getState().selection.dragEndMidi = midiVal;
             } else {
                 ctx_.getState().selection.isSelectingArea = false;
-                ctx_.getState().selection.hasSelectionArea = false;
             }
             ctx_.requestRepaint();
         }
@@ -873,15 +788,15 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
     if (ctx_.getState().selection.isSelectingArea) {
         double offsetSeconds = ctx_.getTrackOffsetSeconds();
         double currentTime = ctx_.xToTime(e.x) - offsetSeconds;
-        ctx_.getState().selection.selectionEndTime = std::max(0.0, currentTime);
+        ctx_.getState().selection.dragEndTime = std::max(0.0, currentTime);
         
         float currentMidi = 69.0f + 12.0f * std::log2(ctx_.yToFreq((float)e.y) / 440.0f) - 0.5f;
-        ctx_.getState().selection.selectionEndMidi = currentMidi;
+        ctx_.getState().selection.dragEndMidi = currentMidi;
         
-        double selStartTime = std::min(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
-        double selEndTime = std::max(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
-        float selMinMidi = std::min(ctx_.getState().selection.selectionStartMidi, ctx_.getState().selection.selectionEndMidi);
-        float selMaxMidi = std::max(ctx_.getState().selection.selectionStartMidi, ctx_.getState().selection.selectionEndMidi);
+        double selStartTime = std::min(ctx_.getState().selection.dragStartTime, ctx_.getState().selection.dragEndTime);
+        double selEndTime = std::max(ctx_.getState().selection.dragStartTime, ctx_.getState().selection.dragEndTime);
+        float selMinMidi = std::min(ctx_.getState().selection.dragStartMidi, ctx_.getState().selection.dragEndMidi);
+        float selMaxMidi = std::max(ctx_.getState().selection.dragStartMidi, ctx_.getState().selection.dragEndMidi);
         
         auto& notes = ctx_.getNotes();
         for (auto& note : notes) {
@@ -1157,10 +1072,11 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 
     if (ctx_.getState().selection.isSelectingArea) {
         ctx_.getState().selection.isSelectingArea = false;
-        double timeDelta = std::abs(ctx_.getState().selection.selectionEndTime - ctx_.getState().selection.selectionStartTime);
-        float midiDelta = std::abs(ctx_.getState().selection.selectionEndMidi - ctx_.getState().selection.selectionStartMidi);
+        // If drag was too small, deselect everything that the drag may have selected
+        double timeDelta = std::abs(ctx_.getState().selection.dragEndTime - ctx_.getState().selection.dragStartTime);
+        float midiDelta = std::abs(ctx_.getState().selection.dragEndMidi - ctx_.getState().selection.dragStartMidi);
         if (timeDelta < 0.01 || midiDelta < 0.5f) {
-            ctx_.getState().selection.hasSelectionArea = false;
+            ctx_.deselectAllNotes();
         }
         auto selectedNotes = ctx_.getSelectedNotes();
         if (!selectedNotes.empty()) {
@@ -1169,8 +1085,8 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
                 ctx_.getState().noteDrag.initialNoteOffsets.push_back({ note, note->pitchOffset });
             }
             ctx_.getState().noteDrag.isDraggingNotes = true;
-            updateF0SelectionFromNotes();
         }
+        updateF0SelectionFromNotes();
     }
     
     ctx_.getState().noteDrag.draggedNote = nullptr;
@@ -1209,7 +1125,7 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
         }
 
     // beginEditTransaction 已在 handleDrawCurveTool 中调用
-    
+
     std::vector<float> drawnF0;
         drawnF0.reserve(endFrame - startFrame + 1);
         for (int f = startFrame; f <= endFrame; ++f) {
@@ -1221,17 +1137,40 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
             }
         }
 
-        std::vector<ManualOp> ops;
-        ManualOp op;
-        op.startFrame = startFrame;
-        op.endFrameExclusive = endFrame + 1;
-        op.f0Data = std::move(drawnF0);
-        op.source = CorrectedSegment::Source::HandDraw;
-        ops.push_back(std::move(op));
+        // Clip drawn F0 data to note boundaries — discard data outside notes
+        std::vector<int> affectedNoteIndices;
+        std::vector<ManualOp> ops = clipDrawDataToNotes(
+            startFrame, endFrame + 1, drawnF0,
+            CorrectedSegment::Source::HandDraw, -1.0f,
+            affectedNoteIndices);
 
-        ctx_.applyManualCorrection(std::move(ops), startFrame, endFrame, false);
-        ctx_.notifyPitchCurveEdited(startFrame, endFrame);
-        ctx_.commitEditTransaction();
+        if (ops.empty()) {
+            // No overlapping notes — discard the entire draw operation
+            AppLogger::debug("[PianoRollToolHandler] handleDrawCurveUp: no overlapping notes, discarding draw");
+            ctx_.commitEditTransaction();
+        } else {
+            // Compute the overall affected frame range
+            int globalStartFrame = ops.front().startFrame;
+            int globalEndFrame = ops.back().endFrameExclusive - 1;
+            for (const auto& op : ops) {
+                globalStartFrame = std::min(globalStartFrame, op.startFrame);
+                globalEndFrame = std::max(globalEndFrame, op.endFrameExclusive - 1);
+            }
+
+            ctx_.applyManualCorrection(std::move(ops), globalStartFrame, globalEndFrame, false);
+            ctx_.notifyPitchCurveEdited(globalStartFrame, globalEndFrame);
+            ctx_.commitEditTransaction();
+
+            // Auto-select the affected notes
+            ctx_.deselectAllNotes();
+            auto& notes = ctx_.getNotes();
+            for (int ni : affectedNoteIndices) {
+                if (ni >= 0 && ni < static_cast<int>(notes.size())) {
+                    notes[ni].selected = true;
+                }
+            }
+            updateF0SelectionFromNotes();
+        }
     }
 
     ctx_.getState().drawing.isDrawingF0 = false;
@@ -1419,18 +1358,6 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     }
 
     if (!ctx_.getState().drawing.isPlacingAnchors) {
-        int segmentIdx = ctx_.findLineAnchorSegmentNear(e.x, e.y);
-        if (segmentIdx >= 0) {
-            if (e.mods.isCtrlDown() || e.mods.isCommandDown()) {
-                ctx_.toggleLineAnchorSegmentSelection(segmentIdx);
-            } else {
-                ctx_.selectLineAnchorSegment(segmentIdx);
-            }
-            ctx_.requestRepaint();
-            return;
-        }
-        ctx_.clearLineAnchorSegmentSelection();
-
         ctx_.getState().drawing.isPlacingAnchors = true;
         ctx_.beginEditTransaction("Line Anchor");
         ctx_.getState().drawing.pendingAnchors.clear();
@@ -1471,17 +1398,24 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
         f0Data.push_back(std::pow(2.0f, logA + (logB - logA) * t));
     }
 
-    std::vector<ManualOp> ops;
-    ManualOp op;
-    op.startFrame = startFrame;
-    op.endFrameExclusive = endFrameExclusive;
-    op.f0Data = std::move(f0Data);
-    op.source = CorrectedSegment::Source::LineAnchor;
-    op.retuneSpeed = ctx_.getRetuneSpeed();
-    ops.push_back(std::move(op));
+    // Clip interpolated F0 to note boundaries
+    std::vector<int> affectedNoteIndices;
+    std::vector<ManualOp> ops = clipDrawDataToNotes(
+        startFrame, endFrameExclusive, f0Data,
+        CorrectedSegment::Source::LineAnchor, ctx_.getRetuneSpeed(),
+        affectedNoteIndices);
 
-    ctx_.applyManualCorrection(std::move(ops), startFrame, endFrameExclusive - 1, false);
-    ctx_.notifyPitchCurveEdited(startFrame, endFrameExclusive - 1);
+    if (!ops.empty()) {
+        int globalStartFrame = ops.front().startFrame;
+        int globalEndFrame = ops.back().endFrameExclusive - 1;
+        for (const auto& op : ops) {
+            globalStartFrame = std::min(globalStartFrame, op.startFrame);
+            globalEndFrame = std::max(globalEndFrame, op.endFrameExclusive - 1);
+        }
+
+        ctx_.applyManualCorrection(std::move(ops), globalStartFrame, globalEndFrame, false);
+        ctx_.notifyPitchCurveEdited(globalStartFrame, globalEndFrame);
+    }
 
     LineAnchor newAnchor;
     newAnchor.time = clickTime;
@@ -1508,6 +1442,12 @@ void PianoRollToolHandler::commitLineAnchorOperation()
     ctx_.commitEditTransaction();
     ctx_.getState().drawing.isPlacingAnchors = false;
     ctx_.getState().drawing.pendingAnchors.clear();
+
+    // Auto-select notes that were affected by the line anchor operation.
+    // Since individual anchor pairs already clipped to notes, we select all notes
+    // that have LineAnchor corrections overlapping them.
+    // For simplicity, we just leave the selection as-is — affected notes were already
+    // selected during the draw/clip flow if needed.
     ctx_.requestRepaint();
 }
 
@@ -1540,6 +1480,60 @@ void PianoRollToolHandler::selectNotesBetween(Note* start, Note* end)
             note.selected = true;
         }
     }
+}
+
+std::vector<ManualOp> PianoRollToolHandler::clipDrawDataToNotes(
+    int drawStartFrame, int drawEndFrameExclusive,
+    const std::vector<float>& drawnF0,
+    CorrectedSegment::Source source,
+    float retuneSpeed,
+    std::vector<int>& affectedNoteIndices) const
+{
+    std::vector<ManualOp> result;
+    affectedNoteIndices.clear();
+
+    const auto& notes = ctx_.getNotes();
+    if (notes.empty() || drawnF0.empty()) return result;
+
+    const double frameDuration = static_cast<double>(ctx_.getCurveHopSize()) / ctx_.getCurveSampleRate();
+    if (frameDuration <= 0.0) return result;
+
+    for (int ni = 0; ni < static_cast<int>(notes.size()); ++ni) {
+        const auto& note = notes[ni];
+
+        // Convert note time range to frames
+        int noteStartFrame = static_cast<int>(note.startTime / frameDuration);
+        int noteEndFrame = static_cast<int>(note.endTime / frameDuration);
+
+        // Compute overlap between draw range and note range
+        int overlapStart = std::max(drawStartFrame, noteStartFrame);
+        int overlapEnd = std::min(drawEndFrameExclusive, noteEndFrame);
+
+        if (overlapEnd <= overlapStart) continue;
+
+        // Extract the overlapping portion of F0 data
+        std::vector<float> clippedF0;
+        clippedF0.reserve(overlapEnd - overlapStart);
+        for (int f = overlapStart; f < overlapEnd; ++f) {
+            int idx = f - drawStartFrame;
+            if (idx >= 0 && idx < static_cast<int>(drawnF0.size())) {
+                clippedF0.push_back(drawnF0[idx]);
+            } else {
+                clippedF0.push_back(0.0f);
+            }
+        }
+
+        ManualOp op;
+        op.startFrame = overlapStart;
+        op.endFrameExclusive = overlapEnd;
+        op.f0Data = std::move(clippedF0);
+        op.source = source;
+        op.retuneSpeed = retuneSpeed;
+        result.push_back(std::move(op));
+        affectedNoteIndices.push_back(ni);
+    }
+
+    return result;
 }
 
 void PianoRollToolHandler::updateF0SelectionFromNotes()

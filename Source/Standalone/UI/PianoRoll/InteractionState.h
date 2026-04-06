@@ -16,13 +16,14 @@ enum class NoteResizeEdge
 
 struct SelectionState
 {
-    bool hasSelectionArea = false;
+    // Temporary rubber-band drag state (only valid while isSelectingArea == true)
     bool isSelectingArea = false;
-    double selectionStartTime = 0.0;
-    double selectionEndTime = 0.0;
-    float selectionStartMidi = 0.0f;
-    float selectionEndMidi = 0.0f;
+    double dragStartTime = 0.0;
+    double dragEndTime = 0.0;
+    float dragStartMidi = 0.0f;
+    float dragEndMidi = 0.0f;
     
+    // F0 frame range derived from selected notes
     int selectedF0StartFrame = -1;
     int selectedF0EndFrame = -1;
     bool hasF0Selection = false;
@@ -93,8 +94,6 @@ public:
     bool drawNoteToolPendingDrag = false;
     juce::Point<int> drawNoteToolMouseDownPos;
     bool handDrawPendingDrag = false;
-    
-    std::vector<int> selectedLineAnchorSegmentIds;
 };
 
 } // namespace OpenTune

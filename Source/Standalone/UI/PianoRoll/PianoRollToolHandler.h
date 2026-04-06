@@ -107,11 +107,6 @@ public:
         std::function<void(std::vector<ManualCorrectionOp>, int, int, bool)> applyManualCorrection;
         std::function<void(int, int, float, float, float)> enqueueNoteBasedCorrection;
         std::function<std::vector<float>()> getOriginalF0;
-
-        std::function<int(int, int)> findLineAnchorSegmentNear;
-        std::function<void(int)> selectLineAnchorSegment;
-        std::function<void(int)> toggleLineAnchorSegmentSelection;
-        std::function<void()> clearLineAnchorSegmentSelection;
     };
 
     explicit PianoRollToolHandler(Context context);
@@ -156,6 +151,16 @@ private:
     Note* findLastSelectedNote();
     void selectNotesBetween(Note* start, Note* end);
     void updateF0SelectionFromNotes();
+
+    /** Clip frame-based F0 data to note boundaries. Returns per-note ManualCorrectionOps.
+     *  F0 data outside any note is discarded. Also populates affectedNoteIndices
+     *  with the indices (into the notes vector) of overlapping notes. */
+    std::vector<ManualCorrectionOp> clipDrawDataToNotes(
+        int drawStartFrame, int drawEndFrameExclusive,
+        const std::vector<float>& drawnF0,
+        CorrectedSegment::Source source,
+        float retuneSpeed,
+        std::vector<int>& affectedNoteIndices) const;
 
     Context ctx_;
     ToolId currentTool_ = ToolId::Select;
