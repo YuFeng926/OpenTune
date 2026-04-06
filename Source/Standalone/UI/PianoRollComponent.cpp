@@ -236,10 +236,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.applyManualCorrection = [this](std::vector<PianoRollToolHandler::ManualCorrectionOp> ops, int s, int e, bool render) {
         enqueueManualCorrectionPatchAsync(ops, s, e, render);
     };
-    toolCtx.findLineAnchorSegmentNear = [this](int x, int y) { return findLineAnchorSegmentNear(x, y); };
-    toolCtx.selectLineAnchorSegment = [this](int idx) { selectLineAnchorSegment(idx); };
-    toolCtx.toggleLineAnchorSegmentSelection = [this](int idx) { toggleLineAnchorSegmentSelection(idx); };
-    toolCtx.clearLineAnchorSegmentSelection = [this]() { clearLineAnchorSegmentSelection(); };
     return toolCtx;
 }
 
@@ -394,7 +390,7 @@ void PianoRollComponent::drawSelectedOriginalF0Curve(juce::Graphics& g, const st
         if (note.selected) { hasNoteSelection = true; break; }
     }
 
-    if (!hasNoteSelection && !interactionState_.selection.hasSelectionArea) return;
+    if (!hasNoteSelection) return;
 
     const double frameDuration = hopSize_ / f0SampleRate_;
     juce::Path selectedPath;
@@ -435,54 +431,6 @@ void PianoRollComponent::drawSelectedOriginalF0Curve(juce::Graphics& g, const st
                 }
             } else {
                 segmentStarted = false;
-            }
-        }
-    }
-
-    if (interactionState_.selection.hasSelectionArea) {
-        double startTime = std::min(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
-        double endTime = std::max(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
-
-        int startFrame = static_cast<int>(startTime / frameDuration);
-        int endFrame = static_cast<int>(endTime / frameDuration);
-        startFrame = std::max(0, startFrame);
-        endFrame = std::min(static_cast<int>(originalF0.size()) - 1, endFrame);
-
-        float minMidi = std::min(interactionState_.selection.selectionStartMidi, interactionState_.selection.selectionEndMidi);
-        float maxMidi = std::max(interactionState_.selection.selectionStartMidi, interactionState_.selection.selectionEndMidi);
-
-        if (endFrame > startFrame) {
-            bool segmentStarted = false;
-            for (int i = startFrame; i <= endFrame; ++i) {
-                float f0 = originalF0[i];
-                if (f0 > 0.0f) {
-                    float f0Midi = freqToMidi(f0);
-                    if (f0Midi >= minMidi && f0Midi <= maxMidi) {
-                        float y = freqToY(f0);
-                        double timePos = i * frameDuration;
-                        float x = static_cast<float>(timeToX(timePos + offsetSeconds));
-
-                        if (!pathStarted) {
-                            selectedPath.startNewSubPath(x, y);
-                            pathStarted = true;
-                            segmentStarted = true;
-                        } else if (!segmentStarted) {
-                            selectedPath.startNewSubPath(x, y);
-                            segmentStarted = true;
-                        } else {
-                            juce::Point<float> last = selectedPath.getCurrentPosition();
-                            if (std::abs(x - last.x) > 50.0f) {
-                                selectedPath.startNewSubPath(x, y);
-                            } else {
-                                selectedPath.lineTo(x, y);
-                            }
-                        }
-                    } else {
-                        segmentStarted = false;
-                    }
-                } else {
-                    segmentStarted = false;
-                }
             }
         }
     }
@@ -568,13 +516,12 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g, double offsetS
 }
 
 void PianoRollComponent::drawSelectionBox(juce::Graphics& g, double offsetSeconds, ThemeId themeId) {
-    if (!interactionState_.selection.hasSelectionArea) return;
     if (!toolHandler_ || !interactionState_.selection.isSelectingArea) return;
 
-    double startTime = std::min(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
-    double endTime = std::max(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
-    float minMidi = std::min(interactionState_.selection.selectionStartMidi, interactionState_.selection.selectionEndMidi);
-    float maxMidi = std::max(interactionState_.selection.selectionStartMidi, interactionState_.selection.selectionEndMidi);
+    double startTime = std::min(interactionState_.selection.dragStartTime, interactionState_.selection.dragEndTime);
+    double endTime = std::max(interactionState_.selection.dragStartTime, interactionState_.selection.dragEndTime);
+    float minMidi = std::min(interactionState_.selection.dragStartMidi, interactionState_.selection.dragEndMidi);
+    float maxMidi = std::max(interactionState_.selection.dragStartMidi, interactionState_.selection.dragEndMidi);
 
     int x1 = timeToX(startTime + offsetSeconds);
     int x2 = timeToX(endTime + offsetSeconds);
@@ -675,6 +622,39 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         renderer_->drawLanes(g, ctx);
 
         renderer_->drawNotes(g, ctx, getCurrentClipNotes(), trackOffsetSeconds_);
+
+        // Highlight notes that overlap the active HandDraw/LineAnchor drawing region
+        if (interactionState_.drawing.isDrawingF0 || interactionState_.drawing.isPlacingAnchors) {
+            double drawStart = -1.0;
+            double drawEnd = -1.0;
+            if (interactionState_.drawing.isDrawingF0
+                && interactionState_.drawing.dirtyStartTime >= 0.0
+                && interactionState_.drawing.dirtyEndTime >= 0.0) {
+                drawStart = std::min(interactionState_.drawing.dirtyStartTime, interactionState_.drawing.dirtyEndTime);
+                drawEnd = std::max(interactionState_.drawing.dirtyStartTime, interactionState_.drawing.dirtyEndTime);
+            } else if (interactionState_.drawing.isPlacingAnchors && !interactionState_.drawing.pendingAnchors.empty()) {
+                drawStart = interactionState_.drawing.pendingAnchors.front().time;
+                drawEnd = interactionState_.drawing.pendingAnchors.back().time;
+                if (drawEnd < drawStart) std::swap(drawStart, drawEnd);
+            }
+            if (drawStart >= 0.0 && drawEnd > drawStart) {
+                for (const auto& note : getCurrentClipNotes()) {
+                    if (note.endTime <= drawStart || note.startTime >= drawEnd) continue;
+                    float adjustedPitch = note.getAdjustedPitch();
+                    if (adjustedPitch <= 0.0f) continue;
+                    float midi = ctx.freqToMidi(adjustedPitch);
+                    float ny = ctx.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
+                    float nh = ctx.pixelsPerSemitone;
+                    int nx1 = ctx.timeToX(note.startTime + trackOffsetSeconds_);
+                    int nx2 = ctx.timeToX(note.endTime + trackOffsetSeconds_);
+                    float nw = static_cast<float>(nx2 - nx1);
+                    g.setColour(juce::Colour(0xFFFFD700).withAlpha(0.25f));
+                    g.fillRect(static_cast<float>(nx1), ny, nw, nh);
+                    g.setColour(juce::Colour(0xFFFFD700).withAlpha(0.6f));
+                    g.drawRect(static_cast<float>(nx1), ny, nw, nh, 1.5f);
+                }
+            }
+        }
 
         if (currentCurve_ != nullptr) {
             if (showOriginalF0_) {
@@ -779,28 +759,6 @@ bool PianoRollComponent::applyRetuneSpeedToSelectedNotes(float speed) {
     return true;
 }
 
-bool PianoRollComponent::applyRetuneSpeedToSelectionArea(float speed, int startFrame, int endFrame) {
-    bool hasVisibleCorrectionInRange = currentCurve_->hasCorrectionInRange(startFrame, endFrame);
-    if (!hasVisibleCorrectionInRange) return false;
-
-    undoSupport_->beginTransaction("Change Retune Speed");
-    auto request = std::make_shared<PianoRollCorrectionWorker::AsyncCorrectionRequest>();
-    request->curve = currentCurve_;
-    request->notes = getCurrentClipNotesCopy();
-    request->startFrame = startFrame;
-    request->endFrameExclusive = endFrame + 1;
-    request->retuneSpeed = speed;
-    request->vibratoDepth = currentVibratoDepth_;
-    request->vibratoRate = currentVibratoRate_;
-    request->audioSampleRate = static_cast<double>(PianoRollComponent::kAudioSampleRate);
-    correctionWorker_->enqueue(request);
-    undoSupport_->commitTransaction();
-    listeners_.call([startFrame, endFrame](Listener& l) { l.pitchCurveEdited(startFrame, endFrame); });
-    requestInteractiveRepaint();
-    repaint();
-    return true;
-}
-
 bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
     if (isAutoTuneProcessing()) {
         return false;
@@ -809,82 +767,29 @@ bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
     speed = juce::jlimit(0.0f, 1.0f, speed);
     if (!currentCurve_) return false;
 
-    int selectionStartFrame = -1;
-    int selectionEndFrame = -1;
-    const double frameDuration = hopSize_ / f0SampleRate_;
-    if (interactionState_.selection.hasSelectionArea) {
-        const double selStart = std::min(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
-        const double selEnd = std::max(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
-        selectionStartFrame = static_cast<int>(selStart / frameDuration);
-        selectionEndFrame = static_cast<int>(selEnd / frameDuration);
-        if (selectionStartFrame < 0) selectionStartFrame = 0;
-        if (selectionEndFrame < selectionStartFrame) selectionEndFrame = selectionStartFrame;
+    return applyRetuneSpeedToSelectedNotes(speed);
+}
 
-        if (hasHandDrawCorrectionInRange(selectionStartFrame, selectionEndFrame + 1)) {
-            return true;
-        }
+bool PianoRollComponent::hasSelectionRange() const {
+    const auto& notes = const_cast<PianoRollComponent*>(this)->getCurrentClipNotes();
+    for (const auto& n : notes) {
+        if (n.selected) return true;
     }
-
-    if (applyRetuneSpeedToSelectedNotes(speed)) return true;
-
-    if (interactionState_.selection.hasSelectionArea) {
-        return applyRetuneSpeedToSelectionArea(speed, selectionStartFrame, selectionEndFrame);
-    }
-
     return false;
 }
 
-bool PianoRollComponent::applyRetuneSpeedToSelectedLineAnchorSegments(float speed) {
-    if (isAutoTuneProcessing()) {
-        return false;
+std::pair<double, double> PianoRollComponent::getSelectionTimeRange() const {
+    double minTime = 1e30;
+    double maxTime = -1e30;
+    const auto& notes = const_cast<PianoRollComponent*>(this)->getCurrentClipNotes();
+    for (const auto& n : notes) {
+        if (n.selected) {
+            minTime = std::min(minTime, n.startTime);
+            maxTime = std::max(maxTime, n.endTime);
+        }
     }
-
-    if (currentCurve_ == nullptr || interactionState_.selectedLineAnchorSegmentIds.empty()) {
-        return false;
-    }
-
-    auto snapshot = currentCurve_->getSnapshot();
-    const auto& allSegments = snapshot->getCorrectedSegments();
-
-    int modifiedCount = 0;
-    int affectedStartFrame = INT_MAX;
-    int affectedEndFrame = -1;
-
-    for (int idx : interactionState_.selectedLineAnchorSegmentIds) {
-        if (idx < 0 || idx >= static_cast<int>(allSegments.size())) continue;
-        const auto& seg = allSegments[idx];
-        if (seg.source != CorrectedSegment::Source::LineAnchor) continue;
-
-        modifiedCount++;
-        affectedStartFrame = std::min(affectedStartFrame, seg.startFrame);
-        affectedEndFrame = std::max(affectedEndFrame, seg.endFrame);
-    }
-
-    if (modifiedCount == 0) {
-        return false;
-    }
-
-    undoSupport_->beginTransaction("Line Anchor Retune Speed");
-
-    for (int idx : interactionState_.selectedLineAnchorSegmentIds) {
-        if (idx < 0 || idx >= static_cast<int>(allSegments.size())) continue;
-        const auto& seg = allSegments[idx];
-        if (seg.source != CorrectedSegment::Source::LineAnchor) continue;
-
-        CorrectedSegment updatedSeg = seg;
-        updatedSeg.retuneSpeed = juce::jlimit(0.0f, 1.0f, speed);
-        currentCurve_->restoreCorrectedSegment(updatedSeg);
-    }
-
-    if (affectedStartFrame <= affectedEndFrame) {
-        listeners_.call([affectedStartFrame, affectedEndFrame](Listener& l) {
-            l.pitchCurveEdited(affectedStartFrame, affectedEndFrame);
-        });
-        requestInteractiveRepaint();
-    }
-
-    undoSupport_->commitTransaction();
-    return true;
+    if (minTime > maxTime) return {0.0, 0.0};
+    return {minTime, maxTime};
 }
 
 bool PianoRollComponent::applyVibratoDepthToSelection(float depth) {
@@ -990,108 +895,6 @@ bool PianoRollComponent::getSingleSelectedNoteParameters(float& retuneSpeedPerce
     return true;
 }
 
-bool PianoRollComponent::getSelectedSegmentRetuneSpeed(float& retuneSpeedPercent) const
-{
-    if (currentCurve_ == nullptr || interactionState_.selectedLineAnchorSegmentIds.empty()) {
-        return false;
-    }
-
-    auto snapshot = currentCurve_->getSnapshot();
-    const auto& allSegments = snapshot->getCorrectedSegments();
-
-    if (interactionState_.selectedLineAnchorSegmentIds.size() != 1) {
-        return false;
-    }
-
-    int idx = interactionState_.selectedLineAnchorSegmentIds[0];
-    if (idx < 0 || idx >= static_cast<int>(allSegments.size())) {
-        return false;
-    }
-
-    const auto& seg = allSegments[idx];
-    if (seg.source != CorrectedSegment::Source::LineAnchor) {
-        return false;
-    }
-
-    if (seg.retuneSpeed < 0.0f) {
-        retuneSpeedPercent = currentRetuneSpeed_ * 100.0f;
-    } else {
-        retuneSpeedPercent = seg.retuneSpeed * 100.0f;
-    }
-
-    retuneSpeedPercent = juce::jlimit(0.0f, 100.0f, retuneSpeedPercent);
-    return true;
-}
-
-int PianoRollComponent::findLineAnchorSegmentNear(int x, int y) const
-{
-    if (currentCurve_ == nullptr) return -1;
-
-    auto snapshot = currentCurve_->getSnapshot();
-    const auto& allSegments = snapshot->getCorrectedSegments();
-
-    const double frameDuration = static_cast<double>(hopSize_) / f0SampleRate_;
-    const float tolerancePixels = 15.0f;
-    const double clickTime = xToTime(x);
-
-    int bestIdx = -1;
-    float bestDist = tolerancePixels;
-
-    for (int i = 0; i < static_cast<int>(allSegments.size()); ++i) {
-        const auto& seg = allSegments[i];
-        if (seg.source != CorrectedSegment::Source::LineAnchor) continue;
-        if (seg.f0Data.empty()) continue;
-
-        const double startTime = static_cast<double>(seg.startFrame) * frameDuration;
-        const double endTime = static_cast<double>(seg.endFrame) * frameDuration;
-
-        const int startX = timeToX(startTime + trackOffsetSeconds_);
-        const int endX = timeToX(endTime + trackOffsetSeconds_);
-
-        if (x < startX - tolerancePixels || x > endX + tolerancePixels) continue;
-
-        const double relT = juce::jlimit(0.0, 1.0, (clickTime - startTime) / (endTime - startTime));
-        const int f0Idx = juce::jlimit(0, static_cast<int>(seg.f0Data.size()) - 1,
-                                       static_cast<int>(relT * (seg.f0Data.size() - 1)));
-
-        const float segFreq = seg.f0Data[f0Idx];
-        if (segFreq <= 0.0f) continue;
-
-        const float segY = freqToY(segFreq);
-        const float dist = std::abs(segY - static_cast<float>(y));
-
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestIdx = i;
-        }
-    }
-
-    return bestIdx;
-}
-
-void PianoRollComponent::selectLineAnchorSegment(int idx)
-{
-    interactionState_.selectedLineAnchorSegmentIds.clear();
-    if (idx >= 0) {
-        interactionState_.selectedLineAnchorSegmentIds.push_back(idx);
-    }
-}
-
-void PianoRollComponent::toggleLineAnchorSegmentSelection(int idx)
-{
-    auto it = std::find(interactionState_.selectedLineAnchorSegmentIds.begin(), interactionState_.selectedLineAnchorSegmentIds.end(), idx);
-    if (it != interactionState_.selectedLineAnchorSegmentIds.end()) {
-        interactionState_.selectedLineAnchorSegmentIds.erase(it);
-    } else {
-        interactionState_.selectedLineAnchorSegmentIds.push_back(idx);
-    }
-}
-
-void PianoRollComponent::clearLineAnchorSegmentSelection()
-{
-    interactionState_.selectedLineAnchorSegmentIds.clear();
-}
-
 void PianoRollComponent::setNoteSplit(float value) {
     // Note Split 控制音高分段阈值（cents）
     segmentationPolicy_.transitionThresholdCents = juce::jlimit(
@@ -1102,25 +905,6 @@ void PianoRollComponent::setNoteSplit(float value) {
     // Note Split 仅更新分段策略参数，不触发 AUTO 重新生成。
     // AUTO 操作由用户主动触发，使用当前策略执行分段。
     requestInteractiveRepaint();
-}
-
-bool PianoRollComponent::hasHandDrawCorrectionInRange(int startFrame, int endFrame) const {
-    if (currentCurve_ == nullptr || startFrame >= endFrame) {
-        return false;
-    }
-
-    auto snapshot = currentCurve_->getSnapshot();
-    const auto& segments = snapshot->getCorrectedSegments();
-    for (const auto& seg : segments) {
-        if (seg.source != CorrectedSegment::Source::HandDraw) {
-            continue;
-        }
-        if (seg.endFrame <= startFrame || seg.startFrame >= endFrame) {
-            continue;
-        }
-        return true;
-    }
-    return false;
 }
 
 void PianoRollComponent::resized() {
@@ -1152,11 +936,12 @@ void PianoRollComponent::setPitchCurve(std::shared_ptr<PitchCurve> curve) {
         renderer_->clearCorrectedF0Cache();
     }
 
-    interactionState_.selection.hasSelectionArea = false;
-    interactionState_.selection.selectionStartTime = 0.0;
-    interactionState_.selection.selectionEndTime = 0.0;
-    interactionState_.selection.selectionStartMidi = 0.0f;
-    interactionState_.selection.selectionEndMidi = 0.0f;
+    // Deselect all notes when pitch curve changes
+    interactionState_.selection.isSelectingArea = false;
+    interactionState_.selection.clearF0Selection();
+    for (auto& n : getCurrentClipNotes()) {
+        n.selected = false;
+    }
 
     if (curve) {
         int curveHopSize = curve->getHopSize();
@@ -1431,6 +1216,13 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
         if (undoSupport_ && undoSupport_->isTransactionActive()) undoSupport_->commitTransaction();
         interactionState_.drawing.isPlacingAnchors = false;
         interactionState_.drawing.pendingAnchors.clear();
+    }
+
+    // Deselect all notes when switching tools
+    if (tool != currentTool_) {
+        auto& notes = getCurrentClipNotes();
+        for (auto& n : notes) n.selected = false;
+        interactionState_.selection.clearF0Selection();
     }
 
     currentTool_ = tool;
@@ -1904,31 +1696,40 @@ bool PianoRollComponent::applyAutoTuneToSelection()
     auto snapshot = currentCurve_->getSnapshot();
     const double frameDuration = hopSize_ / f0SampleRate_;
 
-    if (!interactionState_.selection.hasSelectionArea) {
-        const size_t f0Length = snapshot->size();
-        if (f0Length >= 2) {
-            interactionState_.selection.selectionStartTime = 0.0;
-            interactionState_.selection.selectionStartMidi = minMidi_;
-            interactionState_.selection.selectionEndMidi = maxMidi_;
-            int endFrame = static_cast<int>(f0Length) - 1;
-            interactionState_.selection.selectionEndTime = (endFrame + 1) * frameDuration;
+    // Determine the time range for auto-tune: use selected notes if any, otherwise entire clip
+    double startTime = 0.0;
+    double endTime = 0.0;
+    {
+        bool hasSelected = false;
+        double selMinTime = 1e30;
+        double selMaxTime = -1e30;
+        for (const auto& n : getCurrentClipNotes()) {
+            if (n.selected) {
+                hasSelected = true;
+                selMinTime = std::min(selMinTime, n.startTime);
+                selMaxTime = std::max(selMaxTime, n.endTime);
+            }
+        }
+        if (hasSelected) {
+            startTime = selMinTime;
+            endTime = selMaxTime;
+        } else {
+            const size_t f0Length = snapshot->size();
+            if (f0Length < 2) {
+                correctionInFlight_.store(false, std::memory_order_release);
+                if (onRenderComplete_) onRenderComplete_();
+                return false;
+            }
+            startTime = 0.0;
+            int lastFrame = static_cast<int>(f0Length) - 1;
+            endTime = (lastFrame + 1) * frameDuration;
             if (audioBuffer_ != nullptr) {
                 double maxTime = static_cast<double>(audioBuffer_->getNumSamples()) / PianoRollComponent::kAudioSampleRate;
-                interactionState_.selection.selectionEndTime = std::min(interactionState_.selection.selectionEndTime, maxTime);
+                endTime = std::min(endTime, maxTime);
             }
-            interactionState_.selection.selectionEndTime = std::max(0.0, interactionState_.selection.selectionEndTime);
-            interactionState_.selection.hasSelectionArea = true;
+            endTime = std::max(0.0, endTime);
         }
     }
-
-    if (!interactionState_.selection.hasSelectionArea) {
-        correctionInFlight_.store(false, std::memory_order_release);
-        if (onRenderComplete_) onRenderComplete_();
-        return false;
-    }
-
-    double startTime = std::min(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
-    double endTime = std::max(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime);
     if (endTime <= startTime) {
         correctionInFlight_.store(false, std::memory_order_release);
         if (onRenderComplete_) onRenderComplete_();
@@ -2068,13 +1869,25 @@ void PianoRollComponent::clearClipContext()
 // ============================================================================
 
 void PianoRollComponent::refreshAfterUndoRedo() {
+    refreshAfterUndoRedoWithRange(-1, -1);
+}
+
+void PianoRollComponent::refreshAfterUndoRedoWithRange(int startFrame, int endFrame) {
     updateScrollBars();
     
     if (currentCurve_) {
-        int affectedStartFrame = 0;
-        int affectedEndFrame = static_cast<int>(currentCurve_->size()) - 1;
+        int affectedStartFrame = startFrame;
+        int affectedEndFrame = endFrame;
         
-        // 只触发渲染更新，不重新计算 correctedF0
+        // If no range provided (diff found no changes), skip render
+        if (affectedStartFrame < 0 || affectedEndFrame < 0) {
+            AppLogger::log("refreshAfterUndoRedo: no diff range (no changes detected), skipping render");
+            repaint();
+            return;
+        }
+        
+        AppLogger::log("refreshAfterUndoRedo: using provided range [" + juce::String(affectedStartFrame) + ", " + juce::String(affectedEndFrame) + "]");
+        
         listeners_.call([affectedStartFrame, affectedEndFrame](Listener& l) {
             l.pitchCurveEdited(affectedStartFrame, affectedEndFrame);
         });

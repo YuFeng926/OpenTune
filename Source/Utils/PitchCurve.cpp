@@ -642,12 +642,33 @@ void PitchCurve::applyCorrectionToRange(
         }
     }
 
-    CorrectedSegment newSeg(startFrame, endFrame, correctedF0Buffer, CorrectedSegment::Source::NoteBased);
-    newSeg.retuneSpeed = retuneSpeed;
-    newSeg.vibratoDepth = vibratoDepth;
-    newSeg.vibratoRate = vibratoRate;
-
-    insertSegmentWithUnifiedTransitions(correctedSegments, originalF0, std::move(newSeg), kUnifiedTransitionFrames);
+    // Instead of creating one giant segment for the entire range,
+    // create individual segments per note to minimize undo/redo re-render scope
+    for (size_t idx : relevantNoteIndices) {
+        const auto& note = notes[idx];
+        
+        size_t noteStartFrame = static_cast<size_t>(std::max(0, static_cast<int>(std::floor(note.startTime * framePerSecond))));
+        size_t noteEndFrame = static_cast<size_t>(std::max(0, static_cast<int>(std::ceil(note.endTime * framePerSecond))));
+        
+        // Clamp to the requested range
+        int segStart = std::max(startFrame, static_cast<int>(noteStartFrame));
+        int segEnd = std::min(endFrame, static_cast<int>(noteEndFrame));
+        
+        if (segStart >= segEnd) continue;
+        
+        // Extract corrected F0 for this note's range
+        std::vector<float> noteF0Data(segEnd - segStart);
+        for (int i = segStart; i < segEnd; ++i) {
+            noteF0Data[i - segStart] = correctedF0Buffer[i - startFrame];
+        }
+        
+        CorrectedSegment noteSeg(segStart, segEnd, noteF0Data, CorrectedSegment::Source::NoteBased);
+        noteSeg.retuneSpeed = (note.retuneSpeed >= 0.0f) ? note.retuneSpeed : retuneSpeed;
+        noteSeg.vibratoDepth = (note.vibratoDepth >= 0.0f) ? note.vibratoDepth : vibratoDepth;
+        noteSeg.vibratoRate = (note.vibratoRate >= 0.0f) ? note.vibratoRate : vibratoRate;
+        
+        insertSegmentWithUnifiedTransitions(correctedSegments, originalF0, std::move(noteSeg), kUnifiedTransitionFrames);
+    }
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(

@@ -45,8 +45,6 @@ public:
     static bool notesEquivalent(const std::vector<Note>& a, const std::vector<Note>& b);
 
 private:
-    static bool nearlyEqualFloat(float a, float b, float epsilon = 1e-6f);
-
     void clearTransaction();
 
     Context ctx_;
