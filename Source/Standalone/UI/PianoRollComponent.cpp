@@ -4,7 +4,7 @@
 #include "../Utils/PitchUtils.h"
 #include <algorithm>
 #include <cmath>
-#include "../DSP/ScaleInference.h"
+#include "../DSP/ChromaKeyDetector.h"
 #include "../Utils/NoteGenerator.h"
 #include "../Utils/SimdPerceptualPitchEstimator.h"
 #include "../Utils/ZoomSensitivityConfig.h"
@@ -1575,7 +1575,7 @@ void PianoRollComponent::setHasUserAudio(bool hasAudio) {
 void PianoRollComponent::setScale(int rootNote, int scaleType)
 {
     scaleRootNote_ = juce::jlimit(0, 11, rootNote);
-    scaleType_ = juce::jlimit(1, 3, scaleType);
+    scaleType_ = juce::jlimit(1, 8, scaleType);
     repaint();
 }
 
@@ -1749,15 +1749,22 @@ bool PianoRollComponent::applyAutoTuneToSelection()
     AppLogger::log("AutoTuneTrace: proceeding with AUTO on selected notes");
 
     // Apply ScaleSnap to selected notes' pitches
-    const bool useScaleSnap = (scaleType_ != 3);
+    const bool useScaleSnap = (scaleType_ != 3);  // 3 = Chromatic = no snap
     if (useScaleSnap) {
         ScaleSnapConfig snapCfg;
         snapCfg.root = scaleRootNote_ % 12;
-        Scale snapScale = Scale::Major;
-        if (scaleType_ == 2) {
-            snapScale = Scale::Minor;
+
+        // 将 UI scaleType int 映射到 ScaleMode 枚举
+        switch (scaleType_) {
+            case 1: snapCfg.mode = ScaleMode::Major; break;
+            case 2: snapCfg.mode = ScaleMode::Minor; break;
+            case 4: snapCfg.mode = ScaleMode::HarmonicMinor; break;
+            case 5: snapCfg.mode = ScaleMode::Dorian; break;
+            case 6: snapCfg.mode = ScaleMode::Mixolydian; break;
+            case 7: snapCfg.mode = ScaleMode::PentatonicMajor; break;
+            case 8: snapCfg.mode = ScaleMode::PentatonicMinor; break;
+            default: snapCfg.mode = ScaleMode::Major; break;
         }
-        snapCfg.mode = (snapScale == Scale::Minor) ? ScaleMode::Minor : ScaleMode::Major;
 
         for (auto& n : clipNotes) {
             if (n.selected) {

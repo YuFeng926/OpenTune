@@ -295,8 +295,8 @@ target_sources(OpenTune
         Source/DSP/ResamplingManager.h
         Source/DSP/MelSpectrogram.cpp
         Source/DSP/MelSpectrogram.h
-        Source/DSP/ScaleInference.cpp
-        Source/DSP/ScaleInference.h
+        Source/DSP/ChromaKeyDetector.cpp
+        Source/DSP/ChromaKeyDetector.h
 
         # Third Party
         ThirdParty/r8brain-free-src-master/fft/pffft_double.c

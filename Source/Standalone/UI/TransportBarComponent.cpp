@@ -674,6 +674,11 @@ TransportBarComponent::TransportBarComponent()
     scaleTypeSelector_.addItem("Maj.", 1);
     scaleTypeSelector_.addItem("Min.", 2);
     scaleTypeSelector_.addItem("Chr.", 3);
+    scaleTypeSelector_.addItem("H.Min.", 4);
+    scaleTypeSelector_.addItem("Dor.", 5);
+    scaleTypeSelector_.addItem("Mix.", 6);
+    scaleTypeSelector_.addItem("Pent.", 7);
+    scaleTypeSelector_.addItem("m.Pent.", 8);
     scaleTypeSelector_.setSelectedId(1, juce::dontSendNotification);
     scaleTypeSelector_.onChange = [this] { onScaleChanged(); };
     scaleTypeSelector_.setColour(juce::ComboBox::backgroundColourId, UIColors::backgroundLight);
@@ -915,9 +920,9 @@ double TransportBarComponent::getBpm() const
 void TransportBarComponent::setScale(int rootNote, int scaleType)
 {
     // rootNote: 0-11 (C-B)
-    // scaleType: 1=Major, 2=Minor, 3=Chromatic (Matches ScaleInference + 1)
+    // scaleType: 1=Maj, 2=Min, 3=Chr, 4=H.Min, 5=Dor, 6=Mix, 7=Pent, 8=m.Pent
     scaleRootSelector_.setSelectedId(rootNote + 1, juce::dontSendNotification);
-    scaleTypeSelector_.setSelectedId(scaleType, juce::dontSendNotification);
+    scaleTypeSelector_.setSelectedId(juce::jlimit(1, 8, scaleType), juce::dontSendNotification);
 }
 
 void TransportBarComponent::setPositionSeconds(double seconds)

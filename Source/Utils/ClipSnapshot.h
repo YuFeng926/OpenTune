@@ -4,7 +4,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <memory>
 #include <vector>
-#include "../DSP/ScaleInference.h"
+#include "../DSP/ChromaKeyDetector.h"
 #include "SilentGapDetector.h"
 
 namespace OpenTune {
