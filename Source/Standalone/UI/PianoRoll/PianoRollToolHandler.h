@@ -167,6 +167,7 @@ private:
 
     juce::Point<int> dragStartPos_;
     juce::Point<float> lastDrawPoint_;
+    bool isDraggingTimeline_ = false;
 };
 
 } // namespace OpenTune

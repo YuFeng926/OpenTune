@@ -64,6 +64,7 @@ public:
         virtual void autoTuneRequested() {}
         virtual void trackTimeOffsetChanged(int trackId, double newOffset) { (void)trackId; (void)newOffset; }
         virtual void escapeKeyPressed() {}
+        virtual void playFromPositionRequested(double timeSeconds) { (void)timeSeconds; }
     };
 
     enum class TimeUnit
@@ -197,7 +198,8 @@ private:
                                          int endFrameExclusive,
                                          float retuneSpeed,
                                          float vibratoDepth,
-                                         float vibratoRate);
+                                         float vibratoRate,
+                                         bool isAutoTuneRequest = false);
 
     bool applyRetuneSpeedToSelectedNotes(float speed);
 
@@ -210,6 +212,7 @@ private:
     void mouseMove(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 public:
     bool keyPressed(const juce::KeyPress& key) override;

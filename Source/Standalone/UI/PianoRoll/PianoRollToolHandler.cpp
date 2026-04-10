@@ -95,17 +95,11 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
         if (clickedTime >= 0) {
             ctx_.notifyPlayheadChange(clickedTime);
         }
+        isDraggingTimeline_ = true;
         return;
     }
 
     dragStartPos_ = e.getPosition();
-
-    if (e.x > ctx_.getPianoKeyWidth()) {
-        double clickedTime = ctx_.xToTime(e.x);
-        if (clickedTime >= 0) {
-            ctx_.notifyPlayheadChange(clickedTime);
-        }
-    }
 
     switch (currentTool_) {
         case ToolId::AutoTune:
@@ -138,6 +132,14 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
 {
     AppLogger::debug("[PianoRollToolHandler] mouseDrag: pos=(" + juce::String(e.x) + "," + juce::String(e.y) 
         + "), tool=" + juce::String(static_cast<int>(currentTool_)));
+
+    if (isDraggingTimeline_) {
+        double t = ctx_.xToTime(e.x);
+        if (t >= 0)
+            ctx_.notifyPlayheadChange(t);
+        ctx_.requestRepaint();
+        return;
+    }
 
     switch (currentTool_) {
         case ToolId::Select:
@@ -173,6 +175,8 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
 void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
 {
     AppLogger::debug("[PianoRollToolHandler] mouseUp: tool=" + juce::String(static_cast<int>(currentTool_)));
+
+    isDraggingTimeline_ = false;
 
     switch (currentTool_) {
         case ToolId::Select:
@@ -245,6 +249,7 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
             ctx_.notifyAutoTuneRequested();
             return true;
         }
+
     }
 
     if (KeyShortcutConfig::matchesShortcut(KeyShortcutConfig::ShortcutId::PlayPause, key)) {

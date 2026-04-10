@@ -109,6 +109,7 @@ public:
     void pitchCurveEdited(int startFrame, int endFrame) override;
     void trackTimeOffsetChanged(int trackId, double newOffset) override;
     void escapeKeyPressed() override;
+    void playFromPositionRequested(double timeSeconds) override;
 
     // Keyboard handling
     bool keyPressed(const juce::KeyPress& key) override;
