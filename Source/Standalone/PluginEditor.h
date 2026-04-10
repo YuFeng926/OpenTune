@@ -123,13 +123,14 @@ private:
     // 调式状态辅助
     static int scaleToUiScaleType(Scale scale);
     static Scale uiScaleTypeToScale(int scaleType);
+    static ScaleMode scaleToScaleMode(Scale scale);
     static DetectedKey makeDetectedKeyFromUi(int rootNote, int scaleType, float confidence = 1.0f);
     DetectedKey resolveScaleForClip(int trackId, int clipIndex, juce::String* sourceOut = nullptr) const;
     void applyScaleToUi(int rootNote, int scaleType);
     void applyResolvedScaleForClip(int trackId, int clipIndex);
     void syncPianoRollFromClipSelection(int trackId, int clipIndex);
 
-    void performScaleInferenceForClip(int trackId, int clipIndex);
+    void performKeyDetectionForClip(int trackId, int clipIndex);
     void requestOriginalF0ExtractionForImport(int trackId, int clipIndex);
 
     void timerCallback() override;

@@ -29,7 +29,7 @@
 #include <thread>
 #include "DSP/ResamplingManager.h"
 #include "Utils/PitchCurve.h"
-#include "DSP/ScaleInference.h"
+#include "DSP/ChromaKeyDetector.h"
 #include "Inference/RenderCache.h"
 #include "Inference/F0InferenceService.h"
 #include "Inference/VocoderDomain.h"

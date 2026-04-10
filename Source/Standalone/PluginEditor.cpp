@@ -3,6 +3,7 @@
 #include "UI/FrameScheduler.h"
 #include "UI/OptionsDialogComponent.h"
 #include "Audio/AsyncAudioLoader.h"
+#include "DSP/ChromaKeyDetector.h"
 #include "Utils/PresetManager.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/NoteGenerator.h"
@@ -87,34 +88,6 @@ static RenderStatusUiState buildRenderStatusUiState(bool isTxnActive)
     return state;
 }
 
-static std::vector<float> buildScaleInferenceConfidences(const std::vector<float>& f0)
-{
-    std::vector<float> out(f0.size(), 0.0f);
-    float lastVoiced = 0.0f;
-    bool hasLastVoiced = false;
-
-    for (size_t i = 0; i < f0.size(); ++i)
-    {
-        const float cur = f0[i];
-        if (!(cur >= 50.0f && cur <= 2000.0f) || !std::isfinite(cur)) {
-            continue;
-        }
-
-        float conf = 1.0f;
-        if (hasLastVoiced && lastVoiced > 0.0f) {
-            const float semitoneDelta = std::abs(12.0f * std::log2(cur / lastVoiced));
-            // 跳变越大，置信越低；保留底线避免全部归零。
-            const float stability = std::exp(-semitoneDelta / 5.0f);
-            conf = juce::jlimit(0.15f, 1.0f, 0.15f + 0.85f * stability);
-        }
-
-        out[i] = conf;
-        lastVoiced = cur;
-        hasLastVoiced = true;
-    }
-
-    return out;
-}
 
 } // namespace
 
@@ -182,17 +155,46 @@ static bool runDebugSelfTests() {
 
 int OpenTuneAudioProcessorEditor::scaleToUiScaleType(Scale scale)
 {
-    if (scale == Scale::Minor) return 2;
-    if (scale == Scale::Chromatic) return 3;
-    return 1;
+    switch (scale) {
+        case Scale::Major:          return 1;
+        case Scale::Minor:          return 2;
+        case Scale::Chromatic:      return 3;
+        case Scale::HarmonicMinor:  return 4;
+        case Scale::Dorian:         return 5;
+        case Scale::Mixolydian:     return 6;
+        case Scale::PentatonicMajor:return 7;
+        case Scale::PentatonicMinor:return 8;
+        default:                    return 1;
+    }
 }
 
 Scale OpenTuneAudioProcessorEditor::uiScaleTypeToScale(int scaleType)
 {
     switch (scaleType) {
+        case 1: return Scale::Major;
         case 2: return Scale::Minor;
         case 3: return Scale::Chromatic;
+        case 4: return Scale::HarmonicMinor;
+        case 5: return Scale::Dorian;
+        case 6: return Scale::Mixolydian;
+        case 7: return Scale::PentatonicMajor;
+        case 8: return Scale::PentatonicMinor;
         default: return Scale::Major;
+    }
+}
+
+ScaleMode OpenTuneAudioProcessorEditor::scaleToScaleMode(Scale scale)
+{
+    switch (scale) {
+        case Scale::Major:          return ScaleMode::Major;
+        case Scale::Minor:          return ScaleMode::Minor;
+        case Scale::Chromatic:      return ScaleMode::Chromatic;
+        case Scale::HarmonicMinor:  return ScaleMode::HarmonicMinor;
+        case Scale::Dorian:         return ScaleMode::Dorian;
+        case Scale::Mixolydian:     return ScaleMode::Mixolydian;
+        case Scale::PentatonicMajor:return ScaleMode::PentatonicMajor;
+        case Scale::PentatonicMinor:return ScaleMode::PentatonicMinor;
+        default:                    return ScaleMode::Chromatic;
     }
 }
 
@@ -235,7 +237,7 @@ DetectedKey OpenTuneAudioProcessorEditor::resolveScaleForClip(int trackId, int c
 void OpenTuneAudioProcessorEditor::applyScaleToUi(int rootNote, int scaleType)
 {
     const int clampedRoot = juce::jlimit(0, 11, rootNote);
-    const int clampedType = juce::jlimit(1, 3, scaleType);
+    const int clampedType = juce::jlimit(1, 8, scaleType);
 
     suppressScaleChangedCallback_ = true;
     transportBar_.setScale(clampedRoot, clampedType);
@@ -1976,7 +1978,7 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
     const uint64_t activeClipId = processorRef_.getClipId(activeTrack, activeClip);
 
     const int newRoot = juce::jlimit(0, 11, rootNote);
-    const int newScaleType = juce::jlimit(1, 3, scaleType);
+    const int newScaleType = juce::jlimit(1, 8, scaleType);
 
     const DetectedKey oldResolved = resolveScaleForClip(activeTrack, activeClip, nullptr);
     const int oldRootNote = static_cast<int>(oldResolved.root);
@@ -2230,96 +2232,67 @@ void OpenTuneAudioProcessorEditor::clipDoubleClicked(int trackId, int clipIndex)
 
 }
 
-void OpenTuneAudioProcessorEditor::performScaleInferenceForClip(int trackId, int clipIndex)
+void OpenTuneAudioProcessorEditor::performKeyDetectionForClip(int trackId, int clipIndex)
 {
-    auto curve = processorRef_.getClipPitchCurve(trackId, clipIndex);
     const uint64_t clipId = processorRef_.getClipId(trackId, clipIndex);
-    const uint64_t extractionKey = F0ExtractionService::makeRequestKey(clipId, trackId, clipIndex);
-    if (f0ExtractionService_.isActive(extractionKey)) {
-        DBG("ScaleInferenceTrace: skip=extraction_in_progress trackId=" + juce::String(trackId)
+
+    // 已有检测结果则跳过
+    const auto existingKey = processorRef_.getClipDetectedKey(trackId, clipIndex);
+    if (existingKey.confidence > 0.0f) {
+        return;
+    }
+
+    // 从 clip 获取音频 buffer（Chroma 方案直接分析音频 PCM，不依赖 F0）
+    auto audioBuffer = processorRef_.getClipAudioBuffer(trackId, clipIndex);
+    if (!audioBuffer || audioBuffer->getNumSamples() <= 0) {
+        DBG("ChromaKeyDetection: skip=no_audio trackId=" + juce::String(trackId)
             + " clipIndex=" + juce::String(clipIndex)
             + " clipId=" + juce::String(static_cast<juce::int64>(clipId)));
         return;
     }
 
-    if (curve)
-    {
-        const auto existingKey = processorRef_.getClipDetectedKey(trackId, clipIndex);
-        if (existingKey.confidence > 0.0f) {
-            return;
-        }
+    DBG("Performing Chroma Key Detection for Track " + juce::String(trackId) + " Clip " + juce::String(clipIndex));
 
-        std::vector<float> f0;
-        std::vector<float> energy;
-        auto snapshot = curve->getSnapshot();
-        f0 = snapshot->getOriginalF0();
-        energy = snapshot->getOriginalEnergy();
+    // 使用第一个声道（mono）进行调式检测
+    const float* audioData = audioBuffer->getReadPointer(0);
+    const int numSamples = audioBuffer->getNumSamples();
+    const int sampleRate = 44100;  // 项目标准采样率
 
-        if (f0.empty()) {
-            DBG("ScaleInferenceTrace: skip=empty_f0 trackId=" + juce::String(trackId)
-                + " clipIndex=" + juce::String(clipIndex)
-                + " clipId=" + juce::String(static_cast<juce::int64>(clipId)));
-            return;
-        }
+    ChromaKeyDetector detector;
+    DetectedKey key = detector.detect(audioData, numSamples, sampleRate);
 
-        DBG("Performing Scale Inference for Track " + juce::String(trackId) + " Clip " + juce::String(clipIndex));
+    DBG("ChromaKeyDetection: trackId=" + juce::String(trackId)
+        + " clipIndex=" + juce::String(clipIndex)
+        + " clipId=" + juce::String(static_cast<juce::int64>(clipId))
+        + " samples=" + juce::String(numSamples)
+        + " confidence=" + juce::String(key.confidence, 4));
 
-        const auto confidences = buildScaleInferenceConfidences(f0);
+    // 更新目标 clip 的检测结果
+    processorRef_.setClipDetectedKey(trackId, clipIndex, key);
 
-        int voicedFrames = 0;
-        for (float v : f0) {
-            if (std::isfinite(v) && v >= 50.0f && v <= 2000.0f) {
-                ++voicedFrames;
-            }
-        }
-        float voicedRatio = f0.empty() ? 0.0f : static_cast<float>(voicedFrames) / static_cast<float>(f0.size());
+    const int scaleType = scaleToUiScaleType(key.scale);
 
-        ScaleInference inference;
-        inference.processF0Data(f0, confidences, energy);
+    // 只在目标 clip 仍是当前可见 clip 时更新 UI
+    const int activeTrack = processorRef_.getActiveTrackId();
+    const int activeClip = processorRef_.getSelectedClip(activeTrack);
+    const uint64_t activeClipId = processorRef_.getClipId(activeTrack, activeClip);
+    const uint64_t targetClipId = clipId;
+    const bool sameVisibleClip = (targetClipId != 0)
+        ? (activeTrack == trackId && activeClipId == targetClipId)
+        : (activeTrack == trackId && activeClip == clipIndex);
 
-        DetectedKey key = inference.findBestMatch();
-
-        // 始终采纳 findBestMatch() 返回的最高置信结果，不做质量门控
-        DBG("ScaleInferenceTrace: trackId=" + juce::String(trackId)
-            + " clipIndex=" + juce::String(clipIndex)
-            + " clipId=" + juce::String(static_cast<juce::int64>(clipId))
-            + " frames=" + juce::String(static_cast<int>(f0.size()))
-            + " voicedFrames=" + juce::String(voicedFrames)
-            + " voicedRatio=" + juce::String(voicedRatio, 3)
-            + " confidence=" + juce::String(key.confidence, 4)
-            + " accepted=1");
-
-        // 更新目标 clip 的检测结果
-        processorRef_.setClipDetectedKey(trackId, clipIndex, key);
-
-        const int scaleType = scaleToUiScaleType(key.scale);
-
-        // 只在目标 clip 仍是当前可见 clip 时更新 UI
-        const int activeTrack = processorRef_.getActiveTrackId();
-        const int activeClip = processorRef_.getSelectedClip(activeTrack);
-        const uint64_t activeClipId = processorRef_.getClipId(activeTrack, activeClip);
-        const uint64_t targetClipId = clipId;
-        const bool sameVisibleClip = (targetClipId != 0)
-            ? (activeTrack == trackId && activeClipId == targetClipId)
-            : (activeTrack == trackId && activeClip == clipIndex);
-
-        if (sameVisibleClip) {
-            applyScaleToUi(static_cast<int>(key.root), scaleType);
-        }
-
-        DBG("ScaleSyncTrace: source=inference trackId=" + juce::String(trackId)
-            + " clipIndex=" + juce::String(clipIndex)
-            + " clipId=" + juce::String(static_cast<juce::int64>(targetClipId))
-            + " root=" + juce::String(static_cast<int>(key.root))
-            + " scale=" + juce::String(scaleType)
-            + " sameVisible=" + juce::String(sameVisibleClip ? 1 : 0));
-        
-        DBG("Detected Key: " + DetectedKey::keyToString(key.root) + " " + DetectedKey::scaleToString(key.scale));
+    if (sameVisibleClip) {
+        applyScaleToUi(static_cast<int>(key.root), scaleType);
     }
-    else
-    {
-        DBG("No F0 data available for scale inference.");
-    }
+
+    DBG("ScaleSyncTrace: source=chroma trackId=" + juce::String(trackId)
+        + " clipIndex=" + juce::String(clipIndex)
+        + " clipId=" + juce::String(static_cast<juce::int64>(targetClipId))
+        + " root=" + juce::String(static_cast<int>(key.root))
+        + " scale=" + juce::String(scaleType)
+        + " sameVisible=" + juce::String(sameVisibleClip ? 1 : 0));
+    
+    DBG("Detected Key: " + DetectedKey::keyToString(key.root) + " " + DetectedKey::scaleToString(key.scale));
 }
 
 // Eager-first：仅导入完成时触发一次 OriginalF0 预提取
@@ -2548,7 +2521,7 @@ void OpenTuneAudioProcessorEditor::requestOriginalF0ExtractionForImport(int trac
                 safeThis->pianoRoll_.repaint();
             }
 
-            safeThis->performScaleInferenceForClip(result.trackId, resolvedClipIndex);
+            safeThis->performKeyDetectionForClip(result.trackId, resolvedClipIndex);
 
             // Import-time note generation: generate notes from F0 curve
             {
