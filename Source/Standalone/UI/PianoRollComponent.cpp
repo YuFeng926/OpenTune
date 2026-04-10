@@ -1473,16 +1473,28 @@ void PianoRollComponent::handleHorizontalZoomWheel(const juce::MouseEvent& e, fl
 }
 
 void PianoRollComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) {
-    if (wheel.deltaY == 0.0f && wheel.deltaX == 0.0f) return;
-    
+    float deltaX = wheel.deltaX;
+    float deltaY = wheel.deltaY;
+
+    // macOS swaps scroll axes when Shift is held at the OS level.
+    // Undo this transformation so our modifier-based dispatch works correctly.
+#if JUCE_MAC
+    if (e.mods.isShiftDown() && deltaY == 0.0f && deltaX != 0.0f) {
+        deltaY = deltaX;
+        deltaX = 0.0f;
+    }
+#endif
+
+    if (deltaY == 0.0f && deltaX == 0.0f) return;
+
     if (e.mods.isShiftDown()) {
-        handleVerticalZoomWheel(e, wheel.deltaY);
+        handleVerticalZoomWheel(e, deltaY);
     } else if (e.mods.isCtrlDown()) {
-        handleHorizontalZoomWheel(e, wheel.deltaY);
+        handleHorizontalZoomWheel(e, deltaY);
     } else if (e.mods.isAltDown()) {
-        handleHorizontalScrollWheel(wheel.deltaX, wheel.deltaY);
+        handleHorizontalScrollWheel(deltaX, deltaY);
     } else {
-        handleVerticalScrollWheel(wheel.deltaY);
+        handleVerticalScrollWheel(deltaY);
     }
 }
 
@@ -1532,6 +1544,7 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext() const
     ctx.f0SampleRate = f0SampleRate_;
     ctx.scaleRootNote = scaleRootNote_;
     ctx.scaleType = scaleType_;
+    ctx.noteNameMode = noteNameMode_;
     ctx.showWaveform = showWaveform_;
     ctx.showLanes = showLanes_;
     ctx.showOriginalF0 = showOriginalF0_;
@@ -1576,6 +1589,12 @@ void PianoRollComponent::setScale(int rootNote, int scaleType)
 {
     scaleRootNote_ = juce::jlimit(0, 11, rootNote);
     scaleType_ = juce::jlimit(1, 8, scaleType);
+    repaint();
+}
+
+void PianoRollComponent::setNoteNameMode(int mode)
+{
+    noteNameMode_ = juce::jlimit(0, 2, mode);
     repaint();
 }
 

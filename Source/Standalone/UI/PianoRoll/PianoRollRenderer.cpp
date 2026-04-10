@@ -1,10 +1,49 @@
 #include "PianoRollRenderer.h"
 #include "../UIColors.h"
 #include "../../../Utils/AppLogger.h"
+#include "../../../Utils/NoteGenerator.h"
 #include <algorithm>
 #include <cmath>
+#include <array>
 
 namespace OpenTune {
+
+// ============================================================================
+// Shared scale computation helper
+// ============================================================================
+static std::array<bool, 12> buildInScalePitchClasses(int scaleType, int rootNote) noexcept
+{
+    std::array<bool, 12> result{};
+    static constexpr int kScaleTypeChromatic = 3;
+
+    if (scaleType == kScaleTypeChromatic) {
+        result.fill(true);
+        return result;
+    }
+
+    result.fill(false);
+    const int rootPc = juce::jlimit(0, 11, rootNote);
+
+    // Map UI scaleType (1-8) to ScaleMode enum
+    ScaleMode mode = ScaleMode::Major;
+    switch (scaleType) {
+        case 1: mode = ScaleMode::Major; break;
+        case 2: mode = ScaleMode::Minor; break;
+        case 4: mode = ScaleMode::HarmonicMinor; break;
+        case 5: mode = ScaleMode::Dorian; break;
+        case 6: mode = ScaleMode::Mixolydian; break;
+        case 7: mode = ScaleMode::PentatonicMajor; break;
+        case 8: mode = ScaleMode::PentatonicMinor; break;
+        default: mode = ScaleMode::Major; break;
+    }
+
+    int count = 0;
+    const int* intervals = ScaleSnapConfig::semitones(mode, count);
+    for (int i = 0; i < count; ++i)
+        result[static_cast<std::size_t>((rootPc + intervals[i]) % 12)] = true;
+
+    return result;
+}
 
 void PianoRollRenderer::updateCorrectedF0Cache(std::shared_ptr<const PitchCurveSnapshot> snapshot)
 {
@@ -47,10 +86,13 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
     PerfTimer timer("[PianoRollRenderer] drawLanes");
     const int w = ctx.width;
     const int h = ctx.height;
+    static constexpr int kScaleTypeChromatic = 3;
 
     AppLogger::debug("[PianoRollRenderer] drawLanes: width=" + juce::String(w) + ", height=" + juce::String(h)
         + ", minMidi=" + juce::String(ctx.minMidi) + ", maxMidi=" + juce::String(ctx.maxMidi)
         + ", showLanes=" + juce::String(ctx.showLanes ? "true" : "false"));
+
+    const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);
 
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
@@ -74,6 +116,17 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
                     g.setColour(UIColors::backgroundDark.withAlpha(0.3f));
                 }
                 g.fillRect(static_cast<float>(ctx.pianoKeyWidth), y, static_cast<float>(w - ctx.pianoKeyWidth), laneH);
+            }
+
+            // Scale-aware lane highlighting: tint in-scale lanes with scaleHighlight color
+            if (ctx.scaleType != kScaleTypeChromatic)
+            {
+                const int pitchClass = ((midi % 12) + 12) % 12;
+                if (inScalePitchClass[static_cast<std::size_t>(pitchClass)])
+                {
+                    g.setColour(UIColors::scaleHighlight.withMultipliedAlpha(0.65f));
+                    g.fillRect(static_cast<float>(ctx.pianoKeyWidth), y, static_cast<float>(w - ctx.pianoKeyWidth), laneH);
+                }
             }
         }
 
@@ -357,30 +410,32 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     const float blackKeyWidthRatio = 0.6f;
     const float blackKeyW = w * blackKeyWidthRatio;
     static constexpr int kScaleTypeChromatic = 3;
-    static constexpr float kOutOfScaleDimAmount = 0.12f;
+    static constexpr float kOutOfScaleDimAmount = 0.30f;
 
-    std::array<bool, 12> inScalePitchClass{};
-    inScalePitchClass.fill(true);
+    // Note name lookup tables
+    static const char* kSharpNames[12] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
+    static const char* kFlatNames[12]  = {"C","Db","D","Eb","E","F","Gb","G","Ab","A","Bb","B"};
+    static constexpr bool kUseFlatsByRoot[12] = {false,true,false,true,false,false,true,false,true,false,true,false};
+    static constexpr float kShowAllLabelsMinPPS = 14.0f;
+    static constexpr float kShowCOnlyMinPPS = 8.0f;
 
-    if (ctx.scaleType != kScaleTypeChromatic)
-    {
-        inScalePitchClass.fill(false);
-        const int rootPc = juce::jlimit(0, 11, ctx.scaleRootNote);
-        if (ctx.scaleType == 2) {
-            static constexpr std::array<int, 7> kNaturalMinorIntervals{0, 2, 3, 5, 7, 8, 10};
-            for (const int interval : kNaturalMinorIntervals)
-                inScalePitchClass[(rootPc + interval) % 12] = true;
-        } else {
-            static constexpr std::array<int, 7> kMajorIntervals{0, 2, 4, 5, 7, 9, 11};
-            for (const int interval : kMajorIntervals)
-                inScalePitchClass[(rootPc + interval) % 12] = true;
-        }
-    }
+    // Build scale pitch-class membership using shared helper (supports all 8 scale types)
+    const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);
 
     const auto isMidiInCurrentScale = [&inScalePitchClass](int midiNote) noexcept {
         const int pitchClass = ((midiNote % 12) + 12) % 12;
         return inScalePitchClass[static_cast<std::size_t>(pitchClass)];
     };
+
+    // Compute effective note name display mode (zoom-adaptive downgrade)
+    int effectiveNoteNameMode = ctx.noteNameMode; // 0=ShowAll, 1=COnly, 2=Hide
+    if (effectiveNoteNameMode == 0 && ctx.pixelsPerSemitone < kShowAllLabelsMinPPS)
+        effectiveNoteNameMode = 1; // downgrade to C-only
+    if (effectiveNoteNameMode <= 1 && ctx.pixelsPerSemitone < kShowCOnlyMinPPS)
+        effectiveNoteNameMode = 2; // downgrade to hidden
+
+    // Accidental preference: sharp or flat based on root note
+    const bool useFlats = (ctx.scaleType != kScaleTypeChromatic) ? kUseFlatsByRoot[juce::jlimit(0, 11, ctx.scaleRootNote)] : false;
 
     g.setColour(UIColors::backgroundDark);
     g.fillRect(0, 0, w, height);
@@ -415,13 +470,36 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             g.setGradientFill(grad);
             g.fillRect(keyRect);
 
-            if (noteInOctave == 0)
+            // Scale highlight overlay on in-scale white keys
+            if (inScale && ctx.scaleType != kScaleTypeChromatic)
             {
-                g.setColour(juce::Colour(0xFF7F8C8D).withMultipliedAlpha(inScale ? 1.0f : 0.78f));
-                g.setFont(UIColors::getLabelFont(10.0f).withStyle(juce::Font::bold));
+                g.setColour(UIColors::scaleHighlight);
+                g.fillRect(keyRect);
+            }
+
+            // Note name labels (with outline for consistency)
+            if (effectiveNoteNameMode == 0 || (effectiveNoteNameMode == 1 && noteInOctave == 0))
+            {
+                const float fontSize = juce::jmax(8.0f, juce::jmin(h * 0.7f, 14.0f));
+                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", fontSize)));
                 int octave = (drawMidi / 12) - 1;
-                juce::String noteName = "C" + juce::String(octave);
-                g.drawText(noteName, 0, static_cast<int>(y), w - 4, static_cast<int>(h), juce::Justification::centredRight);
+                const char* name = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
+                juce::String noteName = juce::String(name) + juce::String(octave);
+
+                const int tx = 0;
+                const int ty = static_cast<int>(y);
+                const int tw = w - 4;
+                const int th = static_cast<int>(h);
+
+                // White key: dark outline + light text
+                g.setColour(juce::Colours::black.withAlpha(0.5f));
+                for (int ox = -1; ox <= 1; ++ox)
+                    for (int oy = -1; oy <= 1; ++oy)
+                        if (ox != 0 || oy != 0)
+                            g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
+
+                g.setColour(juce::Colour(0xFFE0E0E0).withMultipliedAlpha(inScale ? 1.0f : 0.78f));
+                g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
             }
         } else {
             const bool inScale = isMidiInCurrentScale(drawMidi);
@@ -430,12 +508,22 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
 
             const juce::Colour extensionA = inScale ? cWhite1 : cWhite1.darker(kOutOfScaleDimAmount);
             const juce::Colour extensionB = inScale ? cWhite2 : cWhite2.darker(kOutOfScaleDimAmount);
-            juce::ColourGradient grad(extensionA, blackKeyW, y, extensionB, static_cast<float>(w), y, false);
-            g.setGradientFill(grad);
+            juce::ColourGradient extGrad(extensionA, blackKeyW, y, extensionB, static_cast<float>(w), y, false);
+            g.setGradientFill(extGrad);
             g.fillRect(extensionRect);
+
+            // Scale highlight overlay on in-scale black key extension area
+            if (inScale && ctx.scaleType != kScaleTypeChromatic)
+            {
+                g.setColour(UIColors::scaleHighlight);
+                g.fillRect(extensionRect);
+            }
 
             g.setColour(UIColors::panelBorder);
             g.drawLine(blackKeyW, y + h * 0.5f, static_cast<float>(w), y + h * 0.5f, 1.0f);
+
+            // Black key labels are drawn in the third pass (after black key body)
+            // so they appear on top of the black key graphic.
         }
     }
 
@@ -498,16 +586,48 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
                 cBottom = cBottom.darker(kOutOfScaleDimAmount);
             }
 
-            juce::ColourGradient grad(cTop, 0.0f, keyRect.getY(),
-                                      cBottom, 0.0f, keyRect.getBottom(), false);
-            g.setGradientFill(grad);
+            juce::ColourGradient bkGrad(cTop, 0.0f, keyRect.getY(),
+                                       cBottom, 0.0f, keyRect.getBottom(), false);
+            g.setGradientFill(bkGrad);
             g.fillRoundedRectangle(keyRect, 2.0f);
+
+            // Scale highlight overlay on in-scale black keys (reduced alpha)
+            if (inScale && ctx.scaleType != kScaleTypeChromatic)
+            {
+                g.setColour(UIColors::scaleHighlight.withMultipliedAlpha(0.5f));
+                g.fillRoundedRectangle(keyRect, 2.0f);
+            }
 
             g.setColour(juce::Colours::white.withAlpha(0.2f));
             g.fillRect(keyRect.getX() + 2.0f, keyRect.getY(), keyRect.getWidth() - 4.0f, keyH * 0.15f);
 
             g.setColour(juce::Colours::black.withAlpha(0.6f));
             g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
+
+            // Note name labels for black keys (drawn on top of the black key body with outline)
+            if (effectiveNoteNameMode == 0)
+            {
+                const float fontSize = juce::jmax(8.0f, juce::jmin(h * 0.7f, 14.0f));
+                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", fontSize)));
+                int octave = (drawMidi / 12) - 1;
+                const char* bkName = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
+                juce::String noteName = juce::String(bkName) + juce::String(octave);
+
+                const int tx = 0;
+                const int ty = static_cast<int>(y);
+                const int tw = w - 4;
+                const int th = static_cast<int>(h);
+
+                // Black key: light outline + dark text
+                g.setColour(juce::Colours::white.withAlpha(0.7f));
+                for (int ox = -1; ox <= 1; ++ox)
+                    for (int oy = -1; oy <= 1; ++oy)
+                        if (ox != 0 || oy != 0)
+                            g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
+
+                g.setColour(juce::Colour(0xFF2A2A2A).withMultipliedAlpha(inScale ? 1.0f : 0.78f));
+                g.drawText(noteName, tx, ty, tw, th, juce::Justification::centredRight);
+            }
         }
     }
 
