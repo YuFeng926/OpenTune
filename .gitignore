@@ -46,6 +46,9 @@ pc_nsf_hifigan_44.1k_ONNX/
 # Planning docs (local only)
 .planning/
 
+# Spec-extract runtime state
+.knowledge-work/
+
 # IDE/Tool directories
 .opencode/
 .cache/
