@@ -92,6 +92,14 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
             menu.addItem(ShowWaveform, LOC(kShowWaveform), true, processor_.getShowWaveform());
             menu.addItem(ShowLanes, LOC(kShowLanes), true, processor_.getShowLanes());
 
+            {
+                juce::PopupMenu noteNamesMenu;
+                noteNamesMenu.addItem(NoteNamesAll, LOC(kShowAllNotes), true, currentNoteNameMode_ == 0);
+                noteNamesMenu.addItem(NoteNamesCOnly, LOC(kShowCOnly), true, currentNoteNameMode_ == 1);
+                noteNamesMenu.addItem(NoteNamesHide, LOC(kHideNoteNames), true, currentNoteNameMode_ == 2);
+                menu.addSubMenu(LOC(kNoteNames), noteNamesMenu);
+            }
+
             juce::PopupMenu themeMenu;
             themeMenu.addItem(ThemeBlueBreeze, LOC(kThemeBlueBreeze), true, Theme::getActiveTheme() == ThemeId::BlueBreeze);
             themeMenu.addItem(ThemeDarkBlueGrey, LOC(kThemeDarkBlueGrey), true, Theme::getActiveTheme() == ThemeId::DarkBlueGrey);
@@ -175,6 +183,21 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             menuItemsChanged();
             break;
         }
+        case NoteNamesAll:
+            currentNoteNameMode_ = 0;
+            listeners_.call([](Listener& l) { l.noteNameModeChanged(0); });
+            menuItemsChanged();
+            break;
+        case NoteNamesCOnly:
+            currentNoteNameMode_ = 1;
+            listeners_.call([](Listener& l) { l.noteNameModeChanged(1); });
+            menuItemsChanged();
+            break;
+        case NoteNamesHide:
+            currentNoteNameMode_ = 2;
+            listeners_.call([](Listener& l) { l.noteNameModeChanged(2); });
+            menuItemsChanged();
+            break;
         case ThemeBlueBreeze:
             listeners_.call([](Listener& l) { l.themeChanged(ThemeId::BlueBreeze); });
             menuItemsChanged();

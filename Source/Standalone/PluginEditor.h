@@ -73,6 +73,7 @@ public:
     void helpRequested() override;
     void showWaveformToggled(bool shouldShow) override;
     void showLanesToggled(bool shouldShow) override;
+    void noteNameModeChanged(int mode) override;
     void themeChanged(ThemeId themeId) override;
     void undoRequested() override;
     void redoRequested() override;

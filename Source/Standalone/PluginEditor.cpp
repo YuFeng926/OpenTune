@@ -1809,6 +1809,11 @@ void OpenTuneAudioProcessorEditor::showLanesToggled(bool shouldShow)
     pianoRoll_.setShowLanes(shouldShow);
 }
 
+void OpenTuneAudioProcessorEditor::noteNameModeChanged(int mode)
+{
+    pianoRoll_.setNoteNameMode(mode);
+}
+
 void OpenTuneAudioProcessorEditor::themeChanged(ThemeId themeId)
 {
     Theme::setActiveTheme(themeId);

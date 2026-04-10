@@ -108,6 +108,10 @@ constexpr const char* kRedo = "Redo";
 
 constexpr const char* kShowWaveform = "Show Waveform";
 constexpr const char* kShowLanes = "Show Lanes";
+constexpr const char* kNoteNames = "Note Names";
+constexpr const char* kShowAllNotes = "Show All Notes";
+constexpr const char* kShowCOnly = "Show C Only";
+constexpr const char* kHideNoteNames = "Hide Note Names";
 constexpr const char* kTheme = "Theme";
 constexpr const char* kThemeBlueBreeze = "Blue Breeze";
 constexpr const char* kThemeDarkBlueGrey = "Dark Blue-Grey";
@@ -213,6 +217,10 @@ inline juce::String get(Language lang, const char* key)
         
         { Keys::kShowWaveform, "Show Waveform", "显示波形", "波形を表示", "Волновая форма", "Ver forma de onda" },
         { Keys::kShowLanes, "Show Lanes", "显示音道", "レーンを表示", "Дорожки", "Ver carriles" },
+        { Keys::kNoteNames, "Note Names", "音名", "ノート名", "Названия нот", "Nombres de notas" },
+        { Keys::kShowAllNotes, "Show All Notes", "显示全部音名", "すべてのノート名を表示", "Все ноты", "Mostrar todas" },
+        { Keys::kShowCOnly, "Show C Only", "仅显示C", "Cのみ表示", "Только C", "Solo C" },
+        { Keys::kHideNoteNames, "Hide Note Names", "不显示音名", "ノート名を非表示", "Скрыть", "Ocultar nombres" },
         { Keys::kTheme, "Theme", "主题", "テーマ", "Тема", "Tema" },
         { Keys::kThemeBlueBreeze, "Blue Breeze", "蓝色清风", "ブルーブリーズ", "Голубой бриз", "Brisa azul" },
         { Keys::kThemeDarkBlueGrey, "Dark Blue-Grey", "深蓝灰", "ダークブルーグレー", "Тёмно-синий серый", "Azul-gris oscuro" },

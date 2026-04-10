@@ -49,6 +49,7 @@ public:
         double f0SampleRate = 16000.0;
         int scaleRootNote = 0;
         int scaleType = 1;
+        int noteNameMode = 1; // 0=ShowAll, 1=COnly, 2=Hide
         bool showWaveform = true;
         bool showLanes = true;
         bool showOriginalF0 = true;
