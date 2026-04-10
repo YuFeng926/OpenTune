@@ -21,7 +21,12 @@ using RootNote = int;
 enum class ScaleMode {
     Chromatic,
     Major,
-    Minor
+    Minor,
+    HarmonicMinor,
+    Dorian,
+    Mixolydian,
+    PentatonicMajor,
+    PentatonicMinor
 };
 
 struct ScaleSnapConfig {

@@ -7,9 +7,14 @@
 
 namespace OpenTune {
 
-static constexpr int kMajorSemitones[]     = {0, 2, 4, 5, 7, 9, 11};
-static constexpr int kMinorSemitones[]     = {0, 2, 3, 5, 7, 8, 10};
-static constexpr int kChromaticSemitones[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+static constexpr int kMajorSemitones[]          = {0, 2, 4, 5, 7, 9, 11};
+static constexpr int kMinorSemitones[]          = {0, 2, 3, 5, 7, 8, 10};
+static constexpr int kChromaticSemitones[]      = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+static constexpr int kHarmonicMinorSemitones[]  = {0, 2, 3, 5, 7, 8, 11};
+static constexpr int kDorianSemitones[]         = {0, 2, 3, 5, 7, 9, 10};
+static constexpr int kMixolydianSemitones[]     = {0, 2, 4, 5, 7, 9, 10};
+static constexpr int kPentatonicMajorSemitones[]= {0, 2, 4, 7, 9};
+static constexpr int kPentatonicMinorSemitones[]= {0, 3, 5, 7, 10};
 
 const int* ScaleSnapConfig::semitones(ScaleMode mode, int& outCount) noexcept
 {
@@ -20,6 +25,21 @@ const int* ScaleSnapConfig::semitones(ScaleMode mode, int& outCount) noexcept
         case ScaleMode::Minor:
             outCount = 7;
             return kMinorSemitones;
+        case ScaleMode::HarmonicMinor:
+            outCount = 7;
+            return kHarmonicMinorSemitones;
+        case ScaleMode::Dorian:
+            outCount = 7;
+            return kDorianSemitones;
+        case ScaleMode::Mixolydian:
+            outCount = 7;
+            return kMixolydianSemitones;
+        case ScaleMode::PentatonicMajor:
+            outCount = 5;
+            return kPentatonicMajorSemitones;
+        case ScaleMode::PentatonicMinor:
+            outCount = 5;
+            return kPentatonicMinorSemitones;
         case ScaleMode::Chromatic:
         default:
             outCount = 12;
