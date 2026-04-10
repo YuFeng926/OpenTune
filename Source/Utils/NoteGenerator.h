@@ -6,13 +6,11 @@
  * 从 F0（基频）曲线生成音符序列，支持：
  * - 自动分段（基于音高变化阈值）
  * - 静默段桥接
- * - 音阶吸附（可选）
- * - 颤音参数提取
+ * - 半音量化（chromatic semitone quantization）
  */
 
 #include <vector>
 #include <cstdint>
-#include <optional>
 
 #include "Note.h"
 
@@ -43,10 +41,6 @@ struct NoteSegmentationPolicy {
 
 struct NoteGeneratorParams {
     NoteSegmentationPolicy policy;
-    float retuneSpeed  = -1.0f;
-    float vibratoDepth = -1.0f;
-    float vibratoRate  = -1.0f;
-    std::optional<ScaleSnapConfig> scaleSnap;
 };
 
 class NoteGenerator {
@@ -81,9 +75,7 @@ private:
         int          count,
         float        hopSizeTime);
 
-    static float quantisePitch(
-        float hz,
-        const std::optional<ScaleSnapConfig>& snap);
+    static float quantisePitch(float hz);
 
     static void commitNote(
         std::vector<Note>&         out,
@@ -93,8 +85,7 @@ private:
         float                      hopSizeTime,
         double                     endTime,
         double                     minNoteDuration,
-        double                     tailExtendDuration,
-        const NoteGeneratorParams& params);
+        double                     tailExtendDuration);
 };
 
 } // namespace OpenTune

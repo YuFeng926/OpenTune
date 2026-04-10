@@ -1061,17 +1061,13 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    double sr = processor_.getSampleRate();
-    if (sr <= 0.0) sr = 44100.0;
-
-    double newPosSeconds = xToTime(e.x);
-    processor_.setPosition(newPosSeconds);
-    playheadOverlay_.setPlayheadSeconds(newPosSeconds);
-    playheadOverlay_.repaint();
-    repaint();
-
     if (e.y <= rulerHeight_)
     {
+        double newPosSeconds = xToTime(e.x);
+        processor_.setPosition(newPosSeconds);
+        playheadOverlay_.setPlayheadSeconds(newPosSeconds);
+        playheadOverlay_.repaint();
+        repaint();
         isDraggingPlayhead_ = true;
         dragStartPos_ = e.getPosition();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
@@ -1393,7 +1389,16 @@ void ArrangementViewComponent::mouseDoubleClick(const juce::MouseEvent& e)
         listeners_.call([&](Listener& l) {
             l.clipDoubleClicked(hit.trackId, hit.clipIndex);
         });
+        return;
     }
+
+    // Double-click on empty area (no clip): play from this position
+    double newPosSeconds = xToTime(e.x);
+    processor_.setPosition(newPosSeconds);
+    processor_.setPlaying(true);
+    playheadOverlay_.setPlayheadSeconds(newPosSeconds);
+    playheadOverlay_.repaint();
+    repaint();
 }
 
 void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)

@@ -80,15 +80,11 @@ float NoteGenerator::representativePitch(
     return voiced[voiced.size() / 2];
 }
 
-float NoteGenerator::quantisePitch(
-    float hz,
-    const std::optional<ScaleSnapConfig>& snap)
+float NoteGenerator::quantisePitch(float hz)
 {
     if (hz <= 0.0f) return 0.0f;
 
     float midi = PitchUtils::freqToMidi(hz);
-    if (snap.has_value()) midi = snap->snapMidi(midi);
-
     return Note::midiToFrequency(static_cast<int>(std::round(midi)));
 }
 
@@ -100,8 +96,7 @@ void NoteGenerator::commitNote(
     float                      hopSizeTime,
     double                     endTime,
     double                     minNoteDuration,
-    double                     tailExtendDuration,
-    const NoteGeneratorParams& params)
+    double                     tailExtendDuration)
 {
     if (pitches.empty()) return;
 
@@ -115,10 +110,7 @@ void NoteGenerator::commitNote(
 
         if (rep > 0.0f) {
             current.originalPitch = rep;
-            current.pitch         = quantisePitch(rep, params.scaleSnap);
-            current.retuneSpeed   = params.retuneSpeed;
-            current.vibratoDepth  = params.vibratoDepth;
-            current.vibratoRate   = params.vibratoRate;
+            current.pitch         = quantisePitch(rep);
             out.push_back(current);
         }
     }
@@ -203,7 +195,7 @@ std::vector<Note> NoteGenerator::generate(
                 {
                     commitNote(out, current, pitches, energyBuf,
                                static_cast<float>(hopSecs), frameToTime(i),
-                               minNoteDuration, tailExtendDuration, params);
+                               minNoteDuration, tailExtendDuration);
 
                     current             = Note{};
                     current.startTime   = frameToTime(i);
@@ -225,7 +217,7 @@ std::vector<Note> NoteGenerator::generate(
                 if (trailingUnvoiced > gapBridgeFrames) {
                     commitNote(out, current, pitches, energyBuf,
                                static_cast<float>(hopSecs), frameToTime(lastVoicedFrame + 1),
-                               minNoteDuration, tailExtendDuration, params);
+                               minNoteDuration, tailExtendDuration);
                     inNote           = false;
                     trailingUnvoiced = 0;
                     lastVoicedFrame  = -1;
@@ -239,7 +231,7 @@ std::vector<Note> NoteGenerator::generate(
     if (inNote && !pitches.empty() && lastVoicedFrame >= 0) {
         commitNote(out, current, pitches, energyBuf,
                    static_cast<float>(hopSecs), frameToTime(lastVoicedFrame + 1),
-                   minNoteDuration, tailExtendDuration, params);
+                   minNoteDuration, tailExtendDuration);
     }
 
     std::sort(out.begin(), out.end(),

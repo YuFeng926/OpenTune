@@ -2550,6 +2550,29 @@ void OpenTuneAudioProcessorEditor::requestOriginalF0ExtractionForImport(int trac
 
             safeThis->performScaleInferenceForClip(result.trackId, resolvedClipIndex);
 
+            // Import-time note generation: generate notes from F0 curve
+            {
+                NoteGeneratorParams genParams;
+                auto generatedNotes = NoteGenerator::generate(
+                    result.f0,
+                    result.energy,
+                    result.hopSize,
+                    static_cast<double>(result.f0SampleRate),
+                    44100.0,
+                    genParams);
+
+                if (!generatedNotes.empty()) {
+                    safeThis->processorRef_.setClipNotes(result.trackId, resolvedClipIndex, generatedNotes);
+                    if (sameClip) {
+                        safeThis->pianoRoll_.setNotes(generatedNotes);
+                        safeThis->pianoRoll_.repaint();
+                    }
+                    AppLogger::log("Import note generation: track=" + juce::String(result.trackId)
+                        + " clip=" + juce::String(resolvedClipIndex)
+                        + " notes=" + juce::String(static_cast<int>(generatedNotes.size())));
+                }
+            }
+
             int voicedFrames = 0;
             for (float v : result.f0) {
                 if (std::isfinite(v) && v > 0.0f) ++voicedFrames;
@@ -2615,6 +2638,12 @@ void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
 void OpenTuneAudioProcessorEditor::stopPlaybackRequested()
 {
     stopRequested();
+}
+
+void OpenTuneAudioProcessorEditor::playFromPositionRequested(double timeSeconds)
+{
+    processorRef_.setPosition(timeSeconds);
+    playRequested();
 }
 
 void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()

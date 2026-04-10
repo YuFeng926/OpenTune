@@ -1,6 +1,7 @@
 #include "PianoRollComponent.h"
 #include "PianoRoll/PianoRollUndoSupport.h"
 #include "../Utils/AppLogger.h"
+#include "../Utils/PitchUtils.h"
 #include <algorithm>
 #include <cmath>
 #include "../DSP/ScaleInference.h"
@@ -303,24 +304,17 @@ void PianoRollComponent::consumeCompletedCorrectionResults()
         return;
     }
 
-    const bool wasAutoTune = completed->kind == PianoRollCorrectionWorker::AsyncCorrectionRequest::Kind::AutoTuneGenerate;
-
-    if (completed->success && wasAutoTune) {
-        setNotes(completed->notes);
-    }
-
     if (undoSupport_ && undoSupport_->isTransactionActive()) {
         undoSupport_->commitTransaction();
     }
 
     if (completed->success) {
-        const int notifyStart = wasAutoTune ? completed->autoStartFrame : completed->startFrame;
-        const int notifyEndExclusive = wasAutoTune ? (completed->autoEndFrame + 1) : completed->endFrameExclusive;
-        const int notifyEnd = std::max(notifyStart, notifyEndExclusive - 1);
+        const int notifyStart = completed->startFrame;
+        const int notifyEnd = std::max(notifyStart, completed->endFrameExclusive - 1);
         listeners_.call([notifyStart, notifyEnd](Listener& l) { l.pitchCurveEdited(notifyStart, notifyEnd); });
     }
 
-    if (wasAutoTune) {
+    if (completed->isAutoTuneRequest) {
         correctionInFlight_.store(false, std::memory_order_release);
         if (onRenderComplete_) {
             onRenderComplete_();
@@ -365,7 +359,8 @@ void PianoRollComponent::enqueueNoteBasedCorrectionAsync(int startFrame,
                                                          int endFrameExclusive,
                                                          float retuneSpeed,
                                                          float vibratoDepth,
-                                                         float vibratoRate)
+                                                         float vibratoRate,
+                                                         bool isAutoTuneRequest)
 {
     if (!currentCurve_) {
         return;
@@ -380,6 +375,7 @@ void PianoRollComponent::enqueueNoteBasedCorrectionAsync(int startFrame,
     request->vibratoDepth = vibratoDepth;
     request->vibratoRate = vibratoRate;
     request->audioSampleRate = static_cast<double>(PianoRollComponent::kAudioSampleRate);
+    request->isAutoTuneRequest = isAutoTuneRequest;
     correctionWorker_->enqueue(request);
 }
 
@@ -1364,6 +1360,52 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent& e) {
     grabKeyboardFocus();
 }
 
+void PianoRollComponent::mouseDoubleClick(const juce::MouseEvent& e) {
+    // Ignore double-clicks in piano key area
+    if (e.x <= pianoKeyWidth_)
+        return;
+
+    // Ignore if panning
+    if (juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey))
+        return;
+
+    constexpr int inset = 12;
+    constexpr int timelineExtendedHitArea = 20;
+    const int timelineBottomExtended = inset + rulerHeight_ + timelineExtendedHitArea;
+
+    if (e.y < timelineBottomExtended) {
+        // Double-click in Timeline area: play from this position
+        double clickedTime = xToTime(e.x);
+        if (clickedTime >= 0) {
+            listeners_.call([clickedTime](Listener& l) { l.playFromPositionRequested(clickedTime); });
+        }
+        return;
+    }
+
+    // Double-click in editing area: check if we hit a Note
+    double clickedTime = xToTime(e.x);
+    double trackRelativeTime = clickedTime - trackOffsetSeconds_;
+    float clickedPitch = yToFreq(static_cast<float>(e.y));
+
+    if (trackRelativeTime >= 0) {
+        auto& notes = getCurrentClipNotes();
+        for (auto& note : notes) {
+            if (trackRelativeTime >= note.startTime && trackRelativeTime < note.endTime) {
+                float adjustedPitch = note.getAdjustedPitch();
+                if (std::abs(adjustedPitch - clickedPitch) <= 100.0f) {
+                    // Double-clicked on a Note: do NOT play (reserved for future use)
+                    return;
+                }
+            }
+        }
+    }
+
+    // Double-click on empty area: play from this position
+    if (clickedTime >= 0) {
+        listeners_.call([clickedTime](Listener& l) { l.playFromPositionRequested(clickedTime); });
+    }
+}
+
 void PianoRollComponent::handleVerticalZoomWheel(const juce::MouseEvent& e, float deltaY) {
     const auto& settings = ZoomSensitivityConfig::getSettings();
     float zoomFactor = 1.0f + (deltaY * settings.verticalZoomFactor);
@@ -1669,84 +1711,85 @@ bool PianoRollComponent::applyAutoTuneToSelection()
     DBG("PianoRollComponent::applyAutoTuneToSelection - called");
     if (!currentCurve_) {
         AppLogger::log("AutoTuneTrace: applyAutoTuneToSelection - currentCurve_ is null");
-        DBG("PianoRollComponent::applyAutoTuneToSelection - currentCurve_ is null");
         return false;
     }
 
     if (currentTrackId_ < 0 || currentClipId_ == 0) {
-        AppLogger::log("AutoTuneTrace: AUTO failed - missing valid clip context trackId="
-            + juce::String(currentTrackId_) + " clipId=" + juce::String(static_cast<juce::int64>(currentClipId_)));
-        DBG("PianoRoll: AUTO failed - missing valid clip context (trackId="
-            + juce::String(currentTrackId_) + ", clipId=" + juce::String(static_cast<juce::int64>(currentClipId_)) + ")");
+        AppLogger::log("AutoTuneTrace: AUTO failed - missing valid clip context");
+        return false;
+    }
+
+    // Check for selected notes -- AutoTune now requires a selection
+    auto& clipNotes = getCurrentClipNotes();
+    bool hasSelected = false;
+    double selMinTime = 1e30;
+    double selMaxTime = -1e30;
+    for (auto& n : clipNotes) {
+        if (n.selected) {
+            hasSelected = true;
+            selMinTime = std::min(selMinTime, n.startTime);
+            selMaxTime = std::max(selMaxTime, n.endTime);
+        }
+    }
+
+    if (!hasSelected) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::InfoIcon,
+            "Auto Tune",
+            juce::CharPointer_UTF8("\xe8\xaf\xb7\xe5\x85\x88\xe9\x80\x89\xe4\xb8\xad\xe9\x9c\x80\xe8\xa6\x81\xe8\x87\xaa\xe5\x8a\xa8\xe8\xb0\x83\xe9\x9f\xb3\xe7\x9a\x84\xe9\x9f\xb3\xe7\xac\xa6\xe3\x80\x82"),  // "请先选中需要自动调音的音符。"
+            "OK");
         return false;
     }
 
     if (correctionInFlight_.exchange(true, std::memory_order_acq_rel)) {
         AppLogger::log("AutoTuneTrace: AUTO processing, ignoring duplicate request");
-        DBG("PianoRoll: AUTO processing, ignoring duplicate request");
         return false;
     }
 
-    AppLogger::log("AutoTuneTrace: proceeding with AUTO trackId=" + juce::String(currentTrackId_)
-        + " clipId=" + juce::String(static_cast<juce::int64>(currentClipId_)));
-    DBG("PianoRollComponent::applyAutoTuneToSelection - proceeding with AUTO");
+    AppLogger::log("AutoTuneTrace: proceeding with AUTO on selected notes");
 
-    repaint();
+    // Apply ScaleSnap to selected notes' pitches
+    const bool useScaleSnap = (scaleType_ != 3);
+    if (useScaleSnap) {
+        ScaleSnapConfig snapCfg;
+        snapCfg.root = scaleRootNote_ % 12;
+        Scale snapScale = Scale::Major;
+        if (scaleType_ == 2) {
+            snapScale = Scale::Minor;
+        }
+        snapCfg.mode = (snapScale == Scale::Minor) ? ScaleMode::Minor : ScaleMode::Major;
 
-    auto snapshot = currentCurve_->getSnapshot();
-    const double frameDuration = hopSize_ / f0SampleRate_;
-
-    // Determine the time range for auto-tune: use selected notes if any, otherwise entire clip
-    double startTime = 0.0;
-    double endTime = 0.0;
-    {
-        bool hasSelected = false;
-        double selMinTime = 1e30;
-        double selMaxTime = -1e30;
-        for (const auto& n : getCurrentClipNotes()) {
+        for (auto& n : clipNotes) {
             if (n.selected) {
-                hasSelected = true;
-                selMinTime = std::min(selMinTime, n.startTime);
-                selMaxTime = std::max(selMaxTime, n.endTime);
+                float midi = PitchUtils::freqToMidi(n.pitch);
+                float snappedMidi = snapCfg.snapMidi(midi);
+                n.pitch = Note::midiToFrequency(static_cast<int>(std::round(snappedMidi)));
             }
         }
-        if (hasSelected) {
-            startTime = selMinTime;
-            endTime = selMaxTime;
-        } else {
-            const size_t f0Length = snapshot->size();
-            if (f0Length < 2) {
-                correctionInFlight_.store(false, std::memory_order_release);
-                if (onRenderComplete_) onRenderComplete_();
-                return false;
-            }
-            startTime = 0.0;
-            int lastFrame = static_cast<int>(f0Length) - 1;
-            endTime = (lastFrame + 1) * frameDuration;
-            if (audioBuffer_ != nullptr) {
-                double maxTime = static_cast<double>(audioBuffer_->getNumSamples()) / PianoRollComponent::kAudioSampleRate;
-                endTime = std::min(endTime, maxTime);
-            }
-            endTime = std::max(0.0, endTime);
-        }
-    }
-    if (endTime <= startTime) {
-        correctionInFlight_.store(false, std::memory_order_release);
-        if (onRenderComplete_) onRenderComplete_();
-        return false;
     }
 
-    int startFrame = static_cast<int>(startTime / frameDuration);
-    int endFrame = static_cast<int>(endTime / frameDuration);
+    // Set retune/vibrato parameters on selected notes
+    for (auto& n : clipNotes) {
+        if (n.selected) {
+            n.retuneSpeed = currentRetuneSpeed_;
+            n.vibratoDepth = currentVibratoDepth_;
+            n.vibratoRate = currentVibratoRate_;
+        }
+    }
+
+    // Compute frame range from selected notes
+    const double frameDuration = hopSize_ / f0SampleRate_;
+    int startFrame = static_cast<int>(selMinTime / frameDuration);
+    int endFrame = static_cast<int>(selMaxTime / frameDuration);
     startFrame = std::max(0, startFrame);
 
+    auto snapshot = currentCurve_->getSnapshot();
     const auto& originalF0 = snapshot->getOriginalF0();
     if (originalF0.empty()) {
         correctionInFlight_.store(false, std::memory_order_release);
         if (onRenderComplete_) onRenderComplete_();
         return false;
     }
-
     endFrame = std::min(static_cast<int>(originalF0.size()) - 1, endFrame);
     if (endFrame <= startFrame) {
         correctionInFlight_.store(false, std::memory_order_release);
@@ -1754,62 +1797,15 @@ bool PianoRollComponent::applyAutoTuneToSelection()
         return false;
     }
 
-    const bool useScaleSnap = (scaleType_ != 3);
-    Scale snapScale = Scale::Major;
-    if (scaleType_ == 2) {
-        snapScale = Scale::Minor;
-    }
-
-    DBG("AutoTuneTrace: trackId=" + juce::String(currentTrackId_)
-        + " clipId=" + juce::String(static_cast<juce::int64>(currentClipId_))
-        + " root=" + juce::String(scaleRootNote_)
-        + " scaleType=" + juce::String(scaleType_)
-        + " useScaleSnap=" + juce::String(useScaleSnap ? 1 : 0));
-
-    NoteGeneratorParams genParams;
-    genParams.policy = segmentationPolicy_;
-    genParams.retuneSpeed = currentRetuneSpeed_;
-    genParams.vibratoDepth = currentVibratoDepth_;
-    genParams.vibratoRate = currentVibratoRate_;
-    if (useScaleSnap) {
-        ScaleSnapConfig snapCfg;
-        snapCfg.root = scaleRootNote_ % 12;
-        snapCfg.mode = (snapScale == Scale::Minor) ? ScaleMode::Minor : ScaleMode::Major;
-        genParams.scaleSnap = snapCfg;
-    }
-
     undoSupport_->beginTransaction("Auto Tune");
 
-    auto request = std::make_shared<PianoRollCorrectionWorker::AsyncCorrectionRequest>();
-    request->kind = PianoRollCorrectionWorker::AsyncCorrectionRequest::Kind::AutoTuneGenerate;
-    request->curve = currentCurve_;
-    request->startFrame = startFrame;
-    request->endFrameExclusive = endFrame + 1;
-    request->retuneSpeed = currentRetuneSpeed_;
-    request->vibratoDepth = currentVibratoDepth_;
-    request->vibratoRate = currentVibratoRate_;
-    request->audioSampleRate = static_cast<double>(PianoRollComponent::kAudioSampleRate);
+    DBG("PianoRollComponent::applyAutoTuneToSelection - enqueuing correction: startFrame="
+        + juce::String(startFrame) + " endFrame=" + juce::String(endFrame));
 
-    request->autoOriginalF0Full = originalF0;
-    request->autoHopSize = hopSize_;
-    request->autoF0SampleRate = f0SampleRate_;
-    request->autoStartFrame = startFrame;
-    request->autoEndFrame = endFrame;
-    request->autoGenParams = genParams;
+    enqueueNoteBasedCorrectionAsync(startFrame, endFrame + 1,
+        currentRetuneSpeed_, currentVibratoDepth_, currentVibratoRate_, true);
 
-    request->clipContextGenerationSnapshot = clipContextGeneration_.load(std::memory_order_acquire);
-    request->trackIdSnapshot = currentTrackId_;
-    request->clipIdSnapshot = currentClipId_;
-
-    DBG("PianoRollComponent::applyAutoTuneToSelection - enqueuing request: startFrame=" + juce::String(startFrame)
-        + " endFrame=" + juce::String(endFrame)
-        + " autoStartFrame=" + juce::String(request->autoStartFrame)
-        + " autoEndFrame=" + juce::String(request->autoEndFrame)
-        + " autoOriginalF0Full.size=" + juce::String(static_cast<int>(request->autoOriginalF0Full.size())));
-
-    correctionWorker_->enqueue(request);
-
-    DBG("PianoRollComponent::applyAutoTuneToSelection - enqueue done, returning true");
+    repaint();
 
     return true;
 }

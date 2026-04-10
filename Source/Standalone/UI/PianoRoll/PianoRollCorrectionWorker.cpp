@@ -27,11 +27,9 @@ void PianoRollCorrectionWorker::enqueue(RequestPtr request)
         return;
     }
 
-    AppLogger::debug("[PianoRollCorrectionWorker] Enqueuing request: kind=" + juce::String(static_cast<int>(request->kind))
-        + ", autoStartFrame=" + juce::String(request->autoStartFrame)
-        + ", autoEndFrame=" + juce::String(request->autoEndFrame)
-        + ", startFrame=" + juce::String(request->startFrame)
-        + ", endFrame=" + juce::String(request->endFrameExclusive));
+    AppLogger::debug("[PianoRollCorrectionWorker] Enqueuing request: startFrame=" + juce::String(request->startFrame)
+        + ", endFrame=" + juce::String(request->endFrameExclusive)
+        + ", isAutoTune=" + juce::String(request->isAutoTuneRequest ? "true" : "false"));
 
     request->version = incrementVersion();
 
@@ -52,11 +50,7 @@ void PianoRollCorrectionWorker::enqueue(RequestPtr request)
             completedRequest_ = oldReq;
         }
 
-        if (oldReq->kind == AsyncCorrectionRequest::Kind::AutoTuneGenerate) {
-            AppLogger::debug("[PianoRollCorrectionWorker] Discarded previous AutoTune request");
-        } else {
-            AppLogger::debug("[PianoRollCorrectionWorker] Discarded previous correction request");
-        }
+        AppLogger::debug("[PianoRollCorrectionWorker] Discarded previous correction request");
     }
 }
 
@@ -95,74 +89,24 @@ void PianoRollCorrectionWorker::getClipContext(int& trackId, uint64_t& clipId) c
 
 void PianoRollCorrectionWorker::executeRequest(AsyncCorrectionRequest& request)
 {
-    AppLogger::debug("[PianoRollCorrectionWorker] Executing request: kind=" + juce::String(static_cast<int>(request.kind)));
+    AppLogger::debug("[PianoRollCorrectionWorker] Executing correction: startFrame=" + juce::String(request.startFrame)
+        + ", endFrame=" + juce::String(request.endFrameExclusive)
+        + ", noteCount=" + juce::String(static_cast<int>(request.notes.size()))
+        + ", retuneSpeed=" + juce::String(request.retuneSpeed)
+        + ", vibratoDepth=" + juce::String(request.vibratoDepth)
+        + ", vibratoRate=" + juce::String(request.vibratoRate));
 
-    switch (request.kind)
-    {
-        case AsyncCorrectionRequest::Kind::ApplyNoteRange:
-        {
-            AppLogger::debug("[PianoRollCorrectionWorker] ApplyNoteRange: startFrame=" + juce::String(request.startFrame)
-                + ", endFrame=" + juce::String(request.endFrameExclusive)
-                + ", noteCount=" + juce::String(static_cast<int>(request.notes.size()))
-                + ", retuneSpeed=" + juce::String(request.retuneSpeed)
-                + ", vibratoDepth=" + juce::String(request.vibratoDepth)
-                + ", vibratoRate=" + juce::String(request.vibratoRate));
-            
-            PerfTimer timer("[PianoRollCorrectionWorker] ApplyNoteRange execution");
-            request.curve->applyCorrectionToRange(
-                request.notes,
-                request.startFrame,
-                request.endFrameExclusive,
-                request.retuneSpeed,
-                request.vibratoDepth,
-                request.vibratoRate,
-                request.audioSampleRate
-            );
-            AppLogger::debug("[PianoRollCorrectionWorker] ApplyNoteRange completed");
-            break;
-        }
-
-        case AsyncCorrectionRequest::Kind::AutoTuneGenerate:
-        {
-            AppLogger::debug("[PianoRollCorrectionWorker] AutoTuneGenerate: autoStartFrame=" + juce::String(request.autoStartFrame)
-                + ", autoEndFrame=" + juce::String(request.autoEndFrame)
-                + ", autoOriginalF0Full.size=" + juce::String(static_cast<int>(request.autoOriginalF0Full.size()))
-                + ", autoHopSize=" + juce::String(request.autoHopSize)
-                + ", autoF0SampleRate=" + juce::String(request.autoF0SampleRate)
-                + ", retuneSpeed=" + juce::String(request.retuneSpeed));
-            
-            PerfTimer timer("[PianoRollCorrectionWorker] AutoTuneGenerate execution");
-
-            request.notes = NoteGenerator::generate(
-                request.autoOriginalF0Full.data(),
-                static_cast<int>(request.autoOriginalF0Full.size()),
-                nullptr,
-                request.autoStartFrame,
-                request.autoEndFrame + 1,
-                request.autoHopSize,
-                request.autoF0SampleRate,
-                request.audioSampleRate,
-                request.autoGenParams);
-
-            AppLogger::debug("[PianoRollCorrectionWorker] NoteGenerator::generate returned: noteCount=" 
-                + juce::String(static_cast<int>(request.notes.size())));
-
-            NoteGenerator::validate(request.notes);
-
-            PerfTimer timer2("[PianoRollCorrectionWorker] applyCorrectionToRange (AutoTune)");
-            request.curve->applyCorrectionToRange(
-                request.notes,
-                request.autoStartFrame,
-                request.autoEndFrame + 1,
-                request.retuneSpeed,
-                request.vibratoDepth,
-                request.vibratoRate,
-                request.audioSampleRate
-            );
-            AppLogger::debug("[PianoRollCorrectionWorker] AutoTuneGenerate completed");
-            break;
-        }
-    }
+    PerfTimer timer("[PianoRollCorrectionWorker] ApplyNoteRange execution");
+    request.curve->applyCorrectionToRange(
+        request.notes,
+        request.startFrame,
+        request.endFrameExclusive,
+        request.retuneSpeed,
+        request.vibratoDepth,
+        request.vibratoRate,
+        request.audioSampleRate
+    );
+    AppLogger::debug("[PianoRollCorrectionWorker] Correction completed");
 }
 
 void PianoRollCorrectionWorker::workerLoop()
@@ -185,8 +129,7 @@ void PianoRollCorrectionWorker::workerLoop()
             continue;  // 无请求，跳过循环
         }
 
-        AppLogger::debug("[PianoRollCorrectionWorker] Worker loop got request: kind=" + juce::String(static_cast<int>(reqSharedPtr->kind))
-            + ", version=" + juce::String(reqSharedPtr->version));
+        AppLogger::debug("[PianoRollCorrectionWorker] Worker loop got request: version=" + juce::String(reqSharedPtr->version));
 
         // 创建共享所有权，确保请求处理结束后结果可由主线程拉取
         auto requestPtr = std::make_shared<AsyncCorrectionRequest>(std::move(*reqSharedPtr));
@@ -203,22 +146,12 @@ void PianoRollCorrectionWorker::workerLoop()
         // === 提前退出检查 ===
 
         // 无效范围检查
-        if (requestPtr->kind == AsyncCorrectionRequest::Kind::AutoTuneGenerate) {
-            if (requestPtr->autoEndFrame <= requestPtr->autoStartFrame) {
-                AppLogger::warn("[PianoRollCorrectionWorker] Request rejected: InvalidRange (autoEndFrame <= autoStartFrame)");
-                requestPtr->errorKind = AsyncCorrectionRequest::ErrorKind::InvalidRange;
-                requestPtr->errorMessage = "Invalid range: autoEndFrame <= autoStartFrame";
-                publishResult(false);
-                continue;
-            }
-        } else {
-            if (requestPtr->endFrameExclusive <= requestPtr->startFrame) {
-                AppLogger::warn("[PianoRollCorrectionWorker] Request rejected: InvalidRange (endFrameExclusive <= startFrame)");
-                requestPtr->errorKind = AsyncCorrectionRequest::ErrorKind::InvalidRange;
-                requestPtr->errorMessage = "Invalid range: endFrameExclusive <= startFrame";
-                publishResult(false);
-                continue;
-            }
+        if (requestPtr->endFrameExclusive <= requestPtr->startFrame) {
+            AppLogger::warn("[PianoRollCorrectionWorker] Request rejected: InvalidRange (endFrameExclusive <= startFrame)");
+            requestPtr->errorKind = AsyncCorrectionRequest::ErrorKind::InvalidRange;
+            requestPtr->errorMessage = "Invalid range: endFrameExclusive <= startFrame";
+            publishResult(false);
+            continue;
         }
 
         // 版本不匹配检查
@@ -229,31 +162,6 @@ void PianoRollCorrectionWorker::workerLoop()
             requestPtr->errorMessage = "Version mismatch: request version outdated";
             publishResult(false);
             continue;
-        }
-
-        // 片段上下文不匹配检查
-        if (requestPtr->kind == AsyncCorrectionRequest::Kind::AutoTuneGenerate
-            && requestPtr->clipContextGenerationSnapshot != 0) {
-            const uint64_t currentGeneration = getClipContextGeneration();
-            int currentTrackId;
-            uint64_t currentClipId;
-            getClipContext(currentTrackId, currentClipId);
-
-            if (requestPtr->clipContextGenerationSnapshot != currentGeneration ||
-                requestPtr->trackIdSnapshot != currentTrackId ||
-                requestPtr->clipIdSnapshot != currentClipId) {
-                AppLogger::warn("[PianoRollCorrectionWorker] Request rejected: ClipContextMismatch "
-                    "(expected: trackId=" + juce::String(requestPtr->trackIdSnapshot) 
-                    + ", clipId=" + juce::String(static_cast<int64_t>(requestPtr->clipIdSnapshot))
-                    + ", gen=" + juce::String(static_cast<int64_t>(requestPtr->clipContextGenerationSnapshot))
-                    + ", actual: trackId=" + juce::String(currentTrackId)
-                    + ", clipId=" + juce::String(static_cast<int64_t>(currentClipId))
-                    + ", gen=" + juce::String(static_cast<int64_t>(currentGeneration)) + ")");
-                requestPtr->errorKind = AsyncCorrectionRequest::ErrorKind::ClipContextMismatch;
-                requestPtr->errorMessage = "Clip context mismatch: user switched clips";
-                publishResult(false);
-                continue;
-            }
         }
 
         // === 异常处理执行 ===
