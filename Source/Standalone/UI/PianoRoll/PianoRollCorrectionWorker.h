@@ -3,7 +3,6 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Utils/PitchCurve.h"
 #include "Utils/Note.h"
-#include "Utils/NoteGenerator.h"
 #include "Utils/UndoAction.h"
 #include <vector>
 #include <memory>
@@ -17,7 +16,7 @@ namespace OpenTune {
 
 /**
  * 钢琴卷帘音高修正异步工作器
- * 在后台线程处理音高修正任务，支持音符范围修正、手动绘制修正和自动音调生成
+ * 在后台线程处理音高修正任务，支持音符范围修正
  */
 class PianoRollCorrectionWorker
 {
@@ -28,13 +27,6 @@ public:
      */
     struct AsyncCorrectionRequest
     {
-        enum class Kind
-        {
-            ApplyNoteRange,
-            AutoTuneGenerate
-        };
-
-        Kind kind = Kind::ApplyNoteRange;
         std::shared_ptr<PitchCurve> curve;
         std::vector<Note> notes;
         int startFrame = 0;
@@ -44,21 +36,12 @@ public:
         float vibratoRate = 5.0f;
         double audioSampleRate = 44100.0;
         uint64_t version = 0;
-        int autoHopSize = 160;
-        double autoF0SampleRate = 16000.0;
-        int autoStartFrame = 0;
-        int autoEndFrame = 0;
-        NoteGeneratorParams autoGenParams;
-        std::vector<float> autoOriginalF0Full;
-        uint64_t clipContextGenerationSnapshot = 0;
-        int trackIdSnapshot = -1;
-        uint64_t clipIdSnapshot = 0;
+        bool isAutoTuneRequest = false;
 
         enum class ErrorKind {
             None,
             InvalidRange,
             VersionMismatch,
-            ClipContextMismatch,
             ExecutionError
         };
 
