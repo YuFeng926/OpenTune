@@ -117,6 +117,7 @@ public:
     void setF0SampleRate(double rate) { f0SampleRate_ = rate; }
     void setHasUserAudio(bool hasAudio);
     void setScale(int rootNote, int scaleType);
+    void setNoteNameMode(int mode);
 
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
     bool hasUserManuallyZoomed() const { return userHasManuallyZoomed_; }
@@ -308,6 +309,7 @@ private:
 
     int scaleRootNote_ = 0;
     int scaleType_ = 1;
+    int noteNameMode_ = 1; // 0=ShowAll, 1=COnly, 2=Hide
 
     static constexpr float minMidi_ = 24.0f;
     static constexpr float maxMidi_ = 108.0f;

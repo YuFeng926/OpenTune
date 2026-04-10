@@ -45,6 +45,7 @@ public:
         virtual void undoRequested() = 0;
         virtual void redoRequested() = 0;
         virtual void mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme) = 0;
+        virtual void noteNameModeChanged(int mode) {}
     };
 
     explicit MenuBarComponent(OpenTuneAudioProcessor& processor);
@@ -66,6 +67,7 @@ private:
     OpenTuneAudioProcessor& processor_;
     juce::MenuBarComponent menuBar_;
     juce::ListenerList<Listener> listeners_;
+    int currentNoteNameMode_ = 1; // 0=ShowAll, 1=COnly, 2=Hide
 
     enum MenuItemIDs
     {
@@ -84,6 +86,10 @@ private:
         ThemeBlueBreeze,
         ThemeDarkBlueGrey,
         ThemeAurora,
+
+        NoteNamesAll = 110,
+        NoteNamesCOnly,
+        NoteNamesHide,
 
         MouseTrailNone = 150,
         MouseTrailClassic,
