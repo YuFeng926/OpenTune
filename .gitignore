@@ -45,6 +45,7 @@ pc_nsf_hifigan_44.1k_ONNX/
 
 # Planning docs (local only)
 .planning/
+docs/
 
 # Spec-extract runtime state
 .knowledge-work/
