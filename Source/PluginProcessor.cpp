@@ -917,10 +917,8 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             }
 
             const int64_t readStartSample = overlapStartSample - clipStartSample;
-            const int64_t readEndSample = readStartSample + samplesToCopy64;
             const double clipDurationSeconds = TimeCoordinate::samplesToSeconds(dryLenSamples, deviceSampleRate);
             const double readStartSeconds = TimeCoordinate::samplesToSeconds(readStartSample, deviceSampleRate);
-            const double readEndSeconds = TimeCoordinate::samplesToSeconds(readEndSample, deviceSampleRate);
             const int offsetInBlock = static_cast<int>(overlapStartSample - blockStartSample);
             const int samplesToCopy = static_cast<int>(samplesToCopy64);
 
@@ -928,40 +926,31 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             const double fadeInSeconds = clip.fadeInDuration;
             const double fadeOutSeconds = clip.fadeOutDuration;
 
-            double visibleStartSec = 0.0;
-            double visibleEndSec = 0.0;
-            bool inVisibleRange = false;
-            std::shared_ptr<const PitchCurveSnapshot> snap;
-            if (!useDrySignalFallback_.load() && clip.renderCache && clip.pitchCurve) {
-                snap = clip.pitchCurve->getSnapshot();
-                if (snap->hasRenderableCorrectedF0() &&
-                    snap->getCorrectedVisibleTimeBounds(visibleStartSec, visibleEndSec)) {
-                    inVisibleRange = (readStartSeconds < visibleEndSec && readEndSeconds > visibleStartSec);
-                }
-            }
-
             std::vector<float> renderedBlock;
             bool hasRenderedAudio = false;
-            
-            if (inVisibleRange && clip.renderCache) {
-                const int targetSampleRateInt = static_cast<int>(deviceSampleRate);
-                const int numSamplesToRead = samplesToCopy;
-                
-                if (numSamplesToRead > 0) {
-                    renderedBlock.resize(static_cast<size_t>(numSamplesToRead));
-                    const double readStartSecondsInClip = readStartSeconds;
-                    
-                    const int readCount = clip.renderCache->readAtTimeForRate(
-                        renderedBlock.data(), numSamplesToRead, readStartSecondsInClip, 
-                        targetSampleRateInt, true);
-                    
-                    if (readCount > 0) {
-                        if (readCount < numSamplesToRead) {
-                            renderedBlock.resize(static_cast<size_t>(readCount));
+
+            if (!useDrySignalFallback_.load() && clip.renderCache && clip.pitchCurve) {
+                auto snap = clip.pitchCurve->getSnapshot();
+                if (snap->hasRenderableCorrectedF0()) {
+                    const int targetSampleRateInt = static_cast<int>(deviceSampleRate);
+                    const int numSamplesToRead = samplesToCopy;
+
+                    if (numSamplesToRead > 0) {
+                        renderedBlock.resize(static_cast<size_t>(numSamplesToRead));
+                        const double readStartSecondsInClip = readStartSeconds;
+
+                        const int readCount = clip.renderCache->readAtTimeForRate(
+                            renderedBlock.data(), numSamplesToRead, readStartSecondsInClip,
+                            targetSampleRateInt, true);
+
+                        if (readCount > 0) {
+                            if (readCount < numSamplesToRead) {
+                                renderedBlock.resize(static_cast<size_t>(readCount));
+                            }
+                            hasRenderedAudio = !renderedBlock.empty();
+                        } else {
+                            renderedBlock.clear();
                         }
-                        hasRenderedAudio = !renderedBlock.empty();
-                    } else {
-                        renderedBlock.clear();
                     }
                 }
             }

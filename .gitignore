@@ -52,6 +52,7 @@ pc_nsf_hifigan_44.1k_ONNX/
 # IDE/Tool directories
 .opencode/
 .cache/
+.claude/
 
 # Third-party source code
 JUCE-master/

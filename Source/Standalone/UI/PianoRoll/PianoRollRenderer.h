@@ -58,6 +58,10 @@ public:
         float renderingProgress = 0.0f;
         bool hasUserAudio = false;
 
+        bool showChunkBoundaries = false;
+        std::vector<double> chunkBoundaries; // clip-relative seconds
+        bool showUnvoicedFrames = false;
+
         bool hasF0Selection = false;
         int f0SelectionStartFrame = -1;
         int f0SelectionEndFrame = -1;
@@ -78,6 +82,9 @@ public:
     void drawWaveform(juce::Graphics& g, const RenderContext& ctx);
     void drawTimeRuler(juce::Graphics& g, const RenderContext& ctx);
     void drawGridLines(juce::Graphics& g, const RenderContext& ctx);
+    void drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx);
+    void drawUnvoicedFrames(juce::Graphics& g, const RenderContext& ctx,
+                            const std::vector<float>& originalF0);
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
     void drawNotes(juce::Graphics& g, const RenderContext& ctx,
                    const std::vector<Note>& notes,
