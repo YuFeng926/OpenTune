@@ -74,6 +74,8 @@ public:
     void showWaveformToggled(bool shouldShow) override;
     void showLanesToggled(bool shouldShow) override;
     void noteNameModeChanged(int mode) override;
+    void showChunkBoundariesToggled(bool show) override;
+    void showUnvoicedFramesToggled(bool show) override;
     void themeChanged(ThemeId themeId) override;
     void undoRequested() override;
     void redoRequested() override;

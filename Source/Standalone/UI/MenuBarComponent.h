@@ -46,6 +46,8 @@ public:
         virtual void redoRequested() = 0;
         virtual void mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme) = 0;
         virtual void noteNameModeChanged(int mode) {}
+        virtual void showChunkBoundariesToggled(bool show) {}
+        virtual void showUnvoicedFramesToggled(bool show) {}
     };
 
     explicit MenuBarComponent(OpenTuneAudioProcessor& processor);
@@ -68,6 +70,8 @@ private:
     juce::MenuBarComponent menuBar_;
     juce::ListenerList<Listener> listeners_;
     int currentNoteNameMode_ = 1; // 0=ShowAll, 1=COnly, 2=Hide
+    bool showChunkBoundaries_ = false;
+    bool showUnvoicedFrames_ = false;
 
     enum MenuItemIDs
     {
@@ -90,6 +94,8 @@ private:
         NoteNamesAll = 110,
         NoteNamesCOnly,
         NoteNamesHide,
+        ShowChunkBoundaries,
+        ShowUnvoicedFrames,
 
         MouseTrailNone = 150,
         MouseTrailClassic,

@@ -610,6 +610,7 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         g.reduceClipRegion(juce::Rectangle<int>(pianoKeyWidth_, 0, getWidth() - pianoKeyWidth_, getHeight()));
 
         renderer_->drawGridLines(g, ctx);
+        renderer_->drawChunkBoundaries(g, ctx);
 
         if (showWaveform_ && hasUserAudio_) {
             renderer_->drawWaveform(g, ctx);
@@ -653,6 +654,15 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         }
 
         if (currentCurve_ != nullptr) {
+            // Draw unvoiced frame regions (before F0 curves so they appear as background)
+            if (showUnvoicedFrames_) {
+                auto uvSnapshot = currentCurve_->getSnapshot();
+                const auto& uvF0 = uvSnapshot->getOriginalF0();
+                if (!uvF0.empty()) {
+                    renderer_->drawUnvoicedFrames(g, ctx, uvF0);
+                }
+            }
+
             if (showOriginalF0_) {
                 auto snapshot = currentCurve_->getSnapshot();
                 const auto& originalF0 = snapshot->getOriginalF0();
@@ -1552,6 +1562,9 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext() const
     ctx.isRendering = isRendering_;
     ctx.renderingProgress = renderingProgress_;
     ctx.hasUserAudio = hasUserAudio_;
+    ctx.showChunkBoundaries = showChunkBoundaries_;
+    ctx.chunkBoundaries = chunkBoundaries_;
+    ctx.showUnvoicedFrames = showUnvoicedFrames_;
     ctx.timeUnit = (timeUnit_ == TimeUnit::Bars)
         ? PianoRollRenderer::RenderContext::TimeUnit::Bars
         : PianoRollRenderer::RenderContext::TimeUnit::Seconds;
@@ -1581,6 +1594,7 @@ void PianoRollComponent::setHasUserAudio(bool hasAudio) {
     hasUserAudio_ = hasAudio;
     if (hasUserAudio_) {
         fitToScreen();
+        updateChunkBoundaries();
     }
     repaint();
 }
@@ -1596,6 +1610,50 @@ void PianoRollComponent::setNoteNameMode(int mode)
 {
     noteNameMode_ = juce::jlimit(0, 2, mode);
     repaint();
+}
+
+void PianoRollComponent::setShowChunkBoundaries(bool show)
+{
+    showChunkBoundaries_ = show;
+    repaint();
+}
+
+void PianoRollComponent::setShowUnvoicedFrames(bool show)
+{
+    showUnvoicedFrames_ = show;
+    repaint();
+}
+
+void PianoRollComponent::updateChunkBoundaries()
+{
+    chunkBoundaries_.clear();
+
+    if (!processor_ || currentTrackId_ < 0 || currentClipId_ == 0)
+        return;
+
+    OpenTuneAudioProcessor::ClipSnapshot snapshot;
+    if (!processor_->getClipSnapshot(currentTrackId_, currentClipId_, snapshot))
+        return;
+
+    const double clipDuration = snapshot.audioBuffer
+        ? static_cast<double>(snapshot.audioBuffer->getNumSamples()) / 44100.0
+        : 0.0;
+    if (clipDuration <= 0.0)
+        return;
+
+    chunkBoundaries_.reserve(snapshot.silentGaps.size() + 2);
+    chunkBoundaries_.push_back(0.0);
+    for (const auto& gap : snapshot.silentGaps) {
+        chunkBoundaries_.push_back(gap.midpoint());
+    }
+    chunkBoundaries_.push_back(clipDuration);
+
+    std::sort(chunkBoundaries_.begin(), chunkBoundaries_.end());
+    auto last = std::unique(chunkBoundaries_.begin(), chunkBoundaries_.end());
+    chunkBoundaries_.erase(last, chunkBoundaries_.end());
+
+    if (showChunkBoundaries_)
+        repaint();
 }
 
 void PianoRollComponent::fitToScreen() {

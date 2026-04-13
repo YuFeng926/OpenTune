@@ -100,6 +100,9 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
                 menu.addSubMenu(LOC(kNoteNames), noteNamesMenu);
             }
 
+            menu.addItem(ShowChunkBoundaries, LOC(kShowChunkBoundaries), true, showChunkBoundaries_);
+            menu.addItem(ShowUnvoicedFrames, LOC(kShowUnvoicedFrames), true, showUnvoicedFrames_);
+
             juce::PopupMenu themeMenu;
             themeMenu.addItem(ThemeBlueBreeze, LOC(kThemeBlueBreeze), true, Theme::getActiveTheme() == ThemeId::BlueBreeze);
             themeMenu.addItem(ThemeDarkBlueGrey, LOC(kThemeDarkBlueGrey), true, Theme::getActiveTheme() == ThemeId::DarkBlueGrey);
@@ -198,6 +201,22 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             listeners_.call([](Listener& l) { l.noteNameModeChanged(2); });
             menuItemsChanged();
             break;
+        case ShowChunkBoundaries:
+        {
+            showChunkBoundaries_ = !showChunkBoundaries_;
+            bool newState = showChunkBoundaries_;
+            listeners_.call([newState](Listener& l) { l.showChunkBoundariesToggled(newState); });
+            menuItemsChanged();
+            break;
+        }
+        case ShowUnvoicedFrames:
+        {
+            showUnvoicedFrames_ = !showUnvoicedFrames_;
+            bool newState = showUnvoicedFrames_;
+            listeners_.call([newState](Listener& l) { l.showUnvoicedFramesToggled(newState); });
+            menuItemsChanged();
+            break;
+        }
         case ThemeBlueBreeze:
             listeners_.call([](Listener& l) { l.themeChanged(ThemeId::BlueBreeze); });
             menuItemsChanged();

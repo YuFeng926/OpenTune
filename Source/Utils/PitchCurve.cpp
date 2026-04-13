@@ -112,7 +112,8 @@ std::optional<CorrectedSegment> buildLeftTransitionSegment(
     for (int i = 0; i < len; ++i) {
         const int f = transStart + i;
         const float orig = std::max(originalF0[static_cast<size_t>(f)], 1.0e-6f);
-        const float w = static_cast<float>(i + 1) / static_cast<float>(len + 1);
+        const float t = (len > 1) ? static_cast<float>(i) / static_cast<float>(len - 1) : 0.5f;
+        const float w = t * t * (3.0f - 2.0f * t); // Hermite smoothstep: 0→1, dw/dt=0 at endpoints
         const float logOrig = std::log2(orig);
         const float logBoundary = std::log2(safeBoundary);
         transitionData.push_back(std::pow(2.0f, logOrig + (logBoundary - logOrig) * w));
@@ -164,7 +165,8 @@ std::optional<CorrectedSegment> buildRightTransitionSegment(
     for (int i = 0; i < len; ++i) {
         const int f = transStart + i;
         const float orig = std::max(originalF0[static_cast<size_t>(f)], 1.0e-6f);
-        const float w = static_cast<float>(len - i) / static_cast<float>(len + 1);
+        const float t = (len > 1) ? static_cast<float>(i) / static_cast<float>(len - 1) : 0.5f;
+        const float w = 1.0f - t * t * (3.0f - 2.0f * t); // Inverse smoothstep: 1→0, dw/dt=0 at endpoints
         const float logOrig = std::log2(orig);
         const float logBoundary = std::log2(safeBoundary);
         transitionData.push_back(std::pow(2.0f, logOrig + (logBoundary - logOrig) * w));
