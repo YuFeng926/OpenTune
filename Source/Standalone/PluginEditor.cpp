@@ -1507,6 +1507,9 @@ void OpenTuneAudioProcessorEditor::processDeferredImportPostProcessQueue()
                 if (clipIndex >= 0) {
                     safeThis->requestOriginalF0ExtractionForImport(request.trackId, clipIndex);
                 }
+
+                // Refresh chunk boundaries now that silentGaps are available
+                safeThis->pianoRoll_.updateChunkBoundaries();
             });
         });
     }
@@ -1812,6 +1815,16 @@ void OpenTuneAudioProcessorEditor::showLanesToggled(bool shouldShow)
 void OpenTuneAudioProcessorEditor::noteNameModeChanged(int mode)
 {
     pianoRoll_.setNoteNameMode(mode);
+}
+
+void OpenTuneAudioProcessorEditor::showChunkBoundariesToggled(bool show)
+{
+    pianoRoll_.setShowChunkBoundaries(show);
+}
+
+void OpenTuneAudioProcessorEditor::showUnvoicedFramesToggled(bool show)
+{
+    pianoRoll_.setShowUnvoicedFrames(show);
 }
 
 void OpenTuneAudioProcessorEditor::themeChanged(ThemeId themeId)

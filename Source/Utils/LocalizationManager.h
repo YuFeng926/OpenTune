@@ -112,6 +112,8 @@ constexpr const char* kNoteNames = "Note Names";
 constexpr const char* kShowAllNotes = "Show All Notes";
 constexpr const char* kShowCOnly = "Show C Only";
 constexpr const char* kHideNoteNames = "Hide Note Names";
+constexpr const char* kShowChunkBoundaries = "Show Chunk Boundaries";
+constexpr const char* kShowUnvoicedFrames = "Show Unvoiced Frames";
 constexpr const char* kTheme = "Theme";
 constexpr const char* kThemeBlueBreeze = "Blue Breeze";
 constexpr const char* kThemeDarkBlueGrey = "Dark Blue-Grey";
@@ -221,6 +223,8 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kShowAllNotes, "Show All Notes", "显示全部音名", "すべてのノート名を表示", "Все ноты", "Mostrar todas" },
         { Keys::kShowCOnly, "Show C Only", "仅显示C", "Cのみ表示", "Только C", "Solo C" },
         { Keys::kHideNoteNames, "Hide Note Names", "不显示音名", "ノート名を非表示", "Скрыть", "Ocultar nombres" },
+        { Keys::kShowChunkBoundaries, "Show Chunk Boundaries", "显示Chunk边界", "チャンク境界を表示", "Границы чанков", "Límites de chunk" },
+        { Keys::kShowUnvoicedFrames, "Show Unvoiced Frames", "显示无声帧", "無声フレームを表示", "Безголосые кадры", "Marcos sin voz" },
         { Keys::kTheme, "Theme", "主题", "テーマ", "Тема", "Tema" },
         { Keys::kThemeBlueBreeze, "Blue Breeze", "蓝色清风", "ブルーブリーズ", "Голубой бриз", "Brisa azul" },
         { Keys::kThemeDarkBlueGrey, "Dark Blue-Grey", "深蓝灰", "ダークブルーグレー", "Тёмно-синий серый", "Azul-gris oscuro" },

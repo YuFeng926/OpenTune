@@ -135,6 +135,97 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
     }
 }
 
+void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx)
+{
+    if (!ctx.showChunkBoundaries || ctx.chunkBoundaries.size() < 2)
+        return;
+
+    const int h = ctx.height;
+    const int pianoW = ctx.pianoKeyWidth;
+    const int w = ctx.width;
+    const float top = static_cast<float>(ctx.rulerHeight);
+    const float bottom = static_cast<float>(h);
+
+    // Draw alternating tinted bands for odd-indexed chunks
+    for (size_t i = 0; i + 1 < ctx.chunkBoundaries.size(); ++i) {
+        if (i % 2 == 0) continue; // only odd chunks get tint
+
+        const int x1 = ctx.timeToX(ctx.chunkBoundaries[i] + ctx.trackOffsetSeconds);
+        const int x2 = ctx.timeToX(ctx.chunkBoundaries[i + 1] + ctx.trackOffsetSeconds);
+
+        const int clampedX1 = std::max(x1, pianoW);
+        const int clampedX2 = std::min(x2, w);
+        if (clampedX2 <= clampedX1) continue;
+
+        g.setColour(juce::Colour(0x08FFFFFF));
+        g.fillRect(static_cast<float>(clampedX1), top,
+                   static_cast<float>(clampedX2 - clampedX1), bottom - top);
+    }
+
+    // Draw dashed boundary lines (skip first=0 and last=clipEnd)
+    g.setColour(UIColors::panelBorder.withAlpha(0.4f));
+    const float dashLengths[] = { 4.0f, 4.0f };
+
+    for (size_t i = 1; i + 1 < ctx.chunkBoundaries.size(); ++i) {
+        const int x = ctx.timeToX(ctx.chunkBoundaries[i] + ctx.trackOffsetSeconds);
+        if (x < pianoW || x > w) continue;
+
+        juce::Path linePath;
+        linePath.startNewSubPath(static_cast<float>(x), top);
+        linePath.lineTo(static_cast<float>(x), bottom);
+
+        juce::Path dashedPath;
+        juce::PathStrokeType strokeType(1.0f);
+        strokeType.createDashedStroke(dashedPath, linePath, dashLengths, 2);
+        g.fillPath(dashedPath);
+    }
+}
+
+void PianoRollRenderer::drawUnvoicedFrames(juce::Graphics& g, const RenderContext& ctx,
+                                            const std::vector<float>& originalF0)
+{
+    if (!ctx.showUnvoicedFrames || originalF0.empty())
+        return;
+
+    const int pianoW = ctx.pianoKeyWidth;
+    const int w = ctx.width;
+    const float top = static_cast<float>(ctx.rulerHeight);
+    const float bottom = static_cast<float>(ctx.height);
+    const juce::Colour unvoicedColour(0x18FF4444); // subtle red tint
+
+    // Scan for contiguous unvoiced regions and draw them as bands
+    const int numFrames = static_cast<int>(originalF0.size());
+    int i = 0;
+    while (i < numFrames) {
+        // Skip voiced frames
+        if (originalF0[static_cast<size_t>(i)] > 0.0f) {
+            ++i;
+            continue;
+        }
+
+        // Found start of unvoiced region
+        const int regionStart = i;
+        while (i < numFrames && originalF0[static_cast<size_t>(i)] <= 0.0f) {
+            ++i;
+        }
+        const int regionEnd = i;
+
+        // Convert frame indices to X coordinates
+        const double startSec = ctx.frameIndexToClipSeconds(regionStart);
+        const double endSec = ctx.frameIndexToClipSeconds(regionEnd);
+        const int x1 = ctx.timeToX(startSec + ctx.trackOffsetSeconds);
+        const int x2 = ctx.timeToX(endSec + ctx.trackOffsetSeconds);
+
+        const int clampedX1 = std::max(x1, pianoW);
+        const int clampedX2 = std::min(x2, w);
+        if (clampedX2 <= clampedX1) continue;
+
+        g.setColour(unvoicedColour);
+        g.fillRect(static_cast<float>(clampedX1), top,
+                   static_cast<float>(clampedX2 - clampedX1), bottom - top);
+    }
+}
+
 void PianoRollRenderer::drawWaveform(juce::Graphics& g, const RenderContext& ctx)
 {
     PerfTimer timer("[PianoRollRenderer] drawWaveform");
