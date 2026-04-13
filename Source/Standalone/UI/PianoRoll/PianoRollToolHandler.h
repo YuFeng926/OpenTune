@@ -152,15 +152,10 @@ private:
     void selectNotesBetween(Note* start, Note* end);
     void updateF0SelectionFromNotes();
 
-    /** Clip frame-based F0 data to note boundaries. Returns per-note ManualCorrectionOps.
-     *  F0 data outside any note is discarded. Also populates affectedNoteIndices
-     *  with the indices (into the notes vector) of overlapping notes. */
-    std::vector<ManualCorrectionOp> clipDrawDataToNotes(
-        int drawStartFrame, int drawEndFrameExclusive,
-        const std::vector<float>& drawnF0,
-        CorrectedSegment::Source source,
-        float retuneSpeed,
-        std::vector<int>& affectedNoteIndices) const;
+    /** Find note indices whose time range overlaps with the given frame range.
+     *  Used by HandDraw and LineAnchor for post-operation note highlighting. */
+    std::vector<int> findOverlappingNoteIndices(
+        int drawStartFrame, int drawEndFrameExclusive) const;
 
     Context ctx_;
     ToolId currentTool_ = ToolId::Select;

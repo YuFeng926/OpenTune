@@ -1142,31 +1142,48 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
             }
         }
 
-        // Clip drawn F0 data to note boundaries — discard data outside notes
-        std::vector<int> affectedNoteIndices;
-        std::vector<ManualOp> ops = clipDrawDataToNotes(
-            startFrame, endFrame + 1, drawnF0,
-            CorrectedSegment::Source::HandDraw, -1.0f,
-            affectedNoteIndices);
+        // Trim drawn range to voiced frame boundaries (originalF0 > 0)
+        int voicedStart = startFrame;
+        int voicedEnd = endFrame;
+        while (voicedStart <= voicedEnd &&
+               (voicedStart >= static_cast<int>(originalF0.size()) || originalF0[voicedStart] <= 0.0f))
+            ++voicedStart;
+        while (voicedEnd >= voicedStart &&
+               (voicedEnd >= static_cast<int>(originalF0.size()) || originalF0[voicedEnd] <= 0.0f))
+            --voicedEnd;
 
-        if (ops.empty()) {
-            // No overlapping notes — discard the entire draw operation
-            AppLogger::debug("[PianoRollToolHandler] handleDrawCurveUp: no overlapping notes, discarding draw");
+        if (voicedStart > voicedEnd) {
+            // No voiced frames in range — discard
+            AppLogger::debug("[PianoRollToolHandler] handleDrawCurveUp: no voiced frames, discarding draw");
             ctx_.commitEditTransaction();
         } else {
-            // Compute the overall affected frame range
-            int globalStartFrame = ops.front().startFrame;
-            int globalEndFrame = ops.back().endFrameExclusive - 1;
-            for (const auto& op : ops) {
-                globalStartFrame = std::min(globalStartFrame, op.startFrame);
-                globalEndFrame = std::max(globalEndFrame, op.endFrameExclusive - 1);
+            // Trim drawnF0 to voiced boundaries
+            if (voicedStart > startFrame || voicedEnd < endFrame) {
+                int trimOffset = voicedStart - startFrame;
+                int trimLen = voicedEnd - voicedStart + 1;
+                std::vector<float> trimmedF0(drawnF0.begin() + trimOffset, drawnF0.begin() + trimOffset + trimLen);
+                drawnF0 = std::move(trimmedF0);
+                startFrame = voicedStart;
+                endFrame = voicedEnd;
             }
 
-            ctx_.applyManualCorrection(std::move(ops), globalStartFrame, globalEndFrame, false);
-            ctx_.notifyPitchCurveEdited(globalStartFrame, globalEndFrame);
+            // Submit as a single correction op (no note clipping)
+            int endFrameExclusive = endFrame + 1;
+            ManualOp op;
+            op.startFrame = startFrame;
+            op.endFrameExclusive = endFrameExclusive;
+            op.f0Data = std::move(drawnF0);
+            op.source = CorrectedSegment::Source::HandDraw;
+            op.retuneSpeed = -1.0f;
+
+            std::vector<ManualOp> ops;
+            ops.push_back(std::move(op));
+            ctx_.applyManualCorrection(std::move(ops), startFrame, endFrame, false);
+            ctx_.notifyPitchCurveEdited(startFrame, endFrame);
             ctx_.commitEditTransaction();
 
-            // Auto-select the affected notes
+            // Auto-select notes overlapping with the drawn range
+            std::vector<int> affectedNoteIndices = findOverlappingNoteIndices(startFrame, endFrameExclusive);
             ctx_.deselectAllNotes();
             auto& notes = ctx_.getNotes();
             for (int ni : affectedNoteIndices) {
@@ -1357,6 +1374,15 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     int roundedMidi = static_cast<int>(std::round(midiNote));
     float snappedFreq = 440.0f * std::pow(2.0f, static_cast<float>(roundedMidi - 69) / 12.0f);
 
+    // Reject anchor placement on unvoiced frames (originalF0 <= 0)
+    {
+        const auto& origF0 = ctx_.getOriginalF0();
+        int clickFrame = static_cast<int>(clickTime / frameDuration);
+        if (!origF0.empty() && clickFrame >= 0 && clickFrame < static_cast<int>(origF0.size())) {
+            if (origF0[clickFrame] <= 0.0f) return;
+        }
+    }
+
     if (e.getNumberOfClicks() >= 2 && ctx_.getState().drawing.isPlacingAnchors) {
         commitLineAnchorOperation();
         return;
@@ -1403,23 +1429,51 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
         f0Data.push_back(std::pow(2.0f, logA + (logB - logA) * t));
     }
 
-    // Clip interpolated F0 to note boundaries
-    std::vector<int> affectedNoteIndices;
-    std::vector<ManualOp> ops = clipDrawDataToNotes(
-        startFrame, endFrameExclusive, f0Data,
-        CorrectedSegment::Source::LineAnchor, ctx_.getRetuneSpeed(),
-        affectedNoteIndices);
+    // Trim interpolated range to voiced frame boundaries (originalF0 > 0)
+    int voicedStart = startFrame;
+    int voicedEnd = endFrameExclusive - 1;
+    while (voicedStart <= voicedEnd &&
+           (voicedStart >= static_cast<int>(originalF0.size()) || originalF0[voicedStart] <= 0.0f))
+        ++voicedStart;
+    while (voicedEnd >= voicedStart &&
+           (voicedEnd >= static_cast<int>(originalF0.size()) || originalF0[voicedEnd] <= 0.0f))
+        --voicedEnd;
 
-    if (!ops.empty()) {
-        int globalStartFrame = ops.front().startFrame;
-        int globalEndFrame = ops.back().endFrameExclusive - 1;
-        for (const auto& op : ops) {
-            globalStartFrame = std::min(globalStartFrame, op.startFrame);
-            globalEndFrame = std::max(globalEndFrame, op.endFrameExclusive - 1);
+    if (voicedStart <= voicedEnd) {
+        // Trim f0Data to voiced boundaries
+        if (voicedStart > startFrame || voicedEnd < endFrameExclusive - 1) {
+            int trimOffset = voicedStart - startFrame;
+            int trimLen = voicedEnd - voicedStart + 1;
+            std::vector<float> trimmedF0(f0Data.begin() + trimOffset, f0Data.begin() + trimOffset + trimLen);
+            f0Data = std::move(trimmedF0);
+            startFrame = voicedStart;
+            endFrameExclusive = voicedEnd + 1;
         }
 
-        ctx_.applyManualCorrection(std::move(ops), globalStartFrame, globalEndFrame, false);
-        ctx_.notifyPitchCurveEdited(globalStartFrame, globalEndFrame);
+        // Submit as a single correction op (no note clipping)
+        ManualOp op;
+        op.startFrame = startFrame;
+        op.endFrameExclusive = endFrameExclusive;
+        op.f0Data = std::move(f0Data);
+        op.source = CorrectedSegment::Source::LineAnchor;
+        op.retuneSpeed = ctx_.getRetuneSpeed();
+
+        int globalEndFrame = endFrameExclusive - 1;
+        std::vector<ManualOp> ops;
+        ops.push_back(std::move(op));
+        ctx_.applyManualCorrection(std::move(ops), startFrame, globalEndFrame, false);
+        ctx_.notifyPitchCurveEdited(startFrame, globalEndFrame);
+
+        // Auto-select notes overlapping with the interpolated range
+        std::vector<int> affectedNoteIndices = findOverlappingNoteIndices(startFrame, endFrameExclusive);
+        ctx_.deselectAllNotes();
+        auto& notes = ctx_.getNotes();
+        for (int ni : affectedNoteIndices) {
+            if (ni >= 0 && ni < static_cast<int>(notes.size())) {
+                notes[ni].selected = true;
+            }
+        }
+        updateF0SelectionFromNotes();
     }
 
     LineAnchor newAnchor;
@@ -1487,18 +1541,13 @@ void PianoRollToolHandler::selectNotesBetween(Note* start, Note* end)
     }
 }
 
-std::vector<ManualOp> PianoRollToolHandler::clipDrawDataToNotes(
-    int drawStartFrame, int drawEndFrameExclusive,
-    const std::vector<float>& drawnF0,
-    CorrectedSegment::Source source,
-    float retuneSpeed,
-    std::vector<int>& affectedNoteIndices) const
+std::vector<int> PianoRollToolHandler::findOverlappingNoteIndices(
+    int drawStartFrame, int drawEndFrameExclusive) const
 {
-    std::vector<ManualOp> result;
-    affectedNoteIndices.clear();
+    std::vector<int> result;
 
     const auto& notes = ctx_.getNotes();
-    if (notes.empty() || drawnF0.empty()) return result;
+    if (notes.empty()) return result;
 
     const double frameDuration = static_cast<double>(ctx_.getCurveHopSize()) / ctx_.getCurveSampleRate();
     if (frameDuration <= 0.0) return result;
@@ -1506,36 +1555,15 @@ std::vector<ManualOp> PianoRollToolHandler::clipDrawDataToNotes(
     for (int ni = 0; ni < static_cast<int>(notes.size()); ++ni) {
         const auto& note = notes[ni];
 
-        // Convert note time range to frames
         int noteStartFrame = static_cast<int>(note.startTime / frameDuration);
         int noteEndFrame = static_cast<int>(note.endTime / frameDuration);
 
-        // Compute overlap between draw range and note range
         int overlapStart = std::max(drawStartFrame, noteStartFrame);
         int overlapEnd = std::min(drawEndFrameExclusive, noteEndFrame);
 
-        if (overlapEnd <= overlapStart) continue;
-
-        // Extract the overlapping portion of F0 data
-        std::vector<float> clippedF0;
-        clippedF0.reserve(overlapEnd - overlapStart);
-        for (int f = overlapStart; f < overlapEnd; ++f) {
-            int idx = f - drawStartFrame;
-            if (idx >= 0 && idx < static_cast<int>(drawnF0.size())) {
-                clippedF0.push_back(drawnF0[idx]);
-            } else {
-                clippedF0.push_back(0.0f);
-            }
+        if (overlapEnd > overlapStart) {
+            result.push_back(ni);
         }
-
-        ManualOp op;
-        op.startFrame = overlapStart;
-        op.endFrameExclusive = overlapEnd;
-        op.f0Data = std::move(clippedF0);
-        op.source = source;
-        op.retuneSpeed = retuneSpeed;
-        result.push_back(std::move(op));
-        affectedNoteIndices.push_back(ni);
     }
 
     return result;
