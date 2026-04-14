@@ -28,6 +28,7 @@
 #include <condition_variable>
 #include <thread>
 #include "DSP/ResamplingManager.h"
+#include "DSP/CrossoverMixer.h"
 #include "Utils/PitchCurve.h"
 #include "DSP/ChromaKeyDetector.h"
 #include "Inference/RenderCache.h"
@@ -225,6 +226,9 @@ private:
             
             // Silent gap detection results (computed on import)
             std::vector<SilentGap> silentGaps;
+
+            // LR4 crossover mixer for frequency-domain dry/rendered blending
+            mutable CrossoverMixer crossoverMixer_;
 
             AudioClip() = default;
             AudioClip(const AudioClip& other);

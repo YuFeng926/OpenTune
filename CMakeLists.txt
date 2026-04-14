@@ -297,6 +297,8 @@ target_sources(OpenTune
         Source/DSP/MelSpectrogram.h
         Source/DSP/ChromaKeyDetector.cpp
         Source/DSP/ChromaKeyDetector.h
+        Source/DSP/CrossoverMixer.cpp
+        Source/DSP/CrossoverMixer.h
 
         # Third Party
         ThirdParty/r8brain-free-src-master/fft/pffft_double.c

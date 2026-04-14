@@ -216,68 +216,78 @@ void renderClipForExport(
     int64_t totalLen)
 {
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
-    
+
     const int64_t clipLen = clip.audioBuffer->getNumSamples();
     if (clipLen <= 0) return;
     if (clipStartInOutput >= totalLen) return;
 
     const float clipGain = clip.gain;
     const float baseGain = trackGain * clipGain;
-    const int64_t fadeInSamples = (clip.fadeInDuration > 0.0) 
+    const int64_t fadeInSamples = (clip.fadeInDuration > 0.0)
         ? TimeCoordinate::secondsToSamples(clip.fadeInDuration, kExportSr) : 0;
-    const int64_t fadeOutSamples = (clip.fadeOutDuration > 0.0) 
+    const int64_t fadeOutSamples = (clip.fadeOutDuration > 0.0)
         ? TimeCoordinate::secondsToSamples(clip.fadeOutDuration, kExportSr) : 0;
 
-    for (int ch = 0; ch < out.getNumChannels(); ++ch) {
-        const float* src = clip.audioBuffer->getReadPointer(std::min(ch, clip.audioBuffer->getNumChannels() - 1));
-        float* dst = out.getWritePointer(ch);
-        for (int64_t i = 0; i < clipLen; ++i) {
-            int64_t dstIndex = clipStartInOutput + i;
-            if (dstIndex < 0 || dstIndex >= totalLen) continue;
-            float fade = computeFadeGain(i, clipLen, fadeInSamples, fadeOutSamples);
-            dst[static_cast<size_t>(dstIndex)] += src[static_cast<size_t>(i)] * baseGain * fade;
+    // Prepare local crossover mixer for export at 44100 Hz
+    CrossoverMixer mixer;
+    mixer.prepare(kExportSr, static_cast<int>(std::min<int64_t>(clipLen, 65536)),
+                  out.getNumChannels());
+
+    // Build sorted list of published chunks for lookup
+    struct ChunkRange {
+        int64_t startSample;
+        int64_t endSample;
+        const std::vector<float>* audio;
+    };
+    std::vector<ChunkRange> chunkRanges;
+
+    if (clip.renderCache) {
+        const auto publishedChunks = clip.renderCache->getPublishedChunks();
+        for (const auto& chunk : publishedChunks) {
+            if (!chunk.audio || chunk.audio->empty()) continue;
+            if (chunk.endSeconds <= 0.0) continue;
+            int64_t cs = TimeCoordinate::secondsToSamples(chunk.startSeconds, kExportSr);
+            int64_t ce = TimeCoordinate::secondsToSamples(chunk.endSeconds, kExportSr);
+            if (ce > 0 && cs < clipLen) {
+                chunkRanges.push_back({cs, ce, chunk.audio});
+            }
         }
     }
 
-    if (!clip.renderCache) return;
+    // Single-pass: for each channel, iterate all samples through crossover mixer
+    for (int ch = 0; ch < out.getNumChannels(); ++ch) {
+        const float* src = clip.audioBuffer->getReadPointer(
+            std::min(ch, clip.audioBuffer->getNumChannels() - 1));
+        float* dst = out.getWritePointer(ch);
 
-    const auto publishedChunks = clip.renderCache->getPublishedChunks();
-    if (publishedChunks.empty()) return;
+        size_t chunkIdx = 0; // current chunk cursor
 
-    const double clipDurationSeconds = TimeCoordinate::samplesToSeconds(clipLen, kExportSr);
+        for (int64_t i = 0; i < clipLen; ++i) {
+            const int64_t dstIndex = clipStartInOutput + i;
+            if (dstIndex < 0 || dstIndex >= totalLen) continue;
 
-    for (const auto& chunk : publishedChunks) {
-        if (chunk.startSeconds >= clipDurationSeconds) continue;
-        if (chunk.endSeconds <= 0.0) continue;
-        if (!chunk.audio || chunk.audio->empty()) continue;
+            float dry = src[static_cast<size_t>(i)];
+            float rendered = dry; // default: no rendered data
 
-        const int64_t chunkStartSample = TimeCoordinate::secondsToSamples(chunk.startSeconds, kExportSr);
-        const int64_t chunkEndSample = TimeCoordinate::secondsToSamples(chunk.endSeconds, kExportSr);
-        
-        const int64_t relStart = std::max<int64_t>(0, chunkStartSample);
-        const int64_t relEnd = std::min<int64_t>(clipLen, chunkEndSample);
-        if (relEnd <= relStart) continue;
-
-        const int num = static_cast<int>(relEnd - relStart);
-        const int64_t audioOffset = relStart - chunkStartSample;
-
-        for (int ch = 0; ch < out.getNumChannels(); ++ch) {
-            float* dst = out.getWritePointer(ch);
-            const float* src = clip.audioBuffer->getReadPointer(std::min(ch, clip.audioBuffer->getNumChannels() - 1));
-            
-            for (int i = 0; i < num; ++i) {
-                const int64_t clipIndex = relStart + i;
-                const int64_t dstIndex = clipStartInOutput + clipIndex;
-                if (dstIndex < 0 || dstIndex >= totalLen) continue;
-
-                const size_t audioIdx = static_cast<size_t>(audioOffset + i);
-                if (audioIdx >= chunk.audio->size()) break;
-
-                float fade = computeFadeGain(clipIndex, clipLen, fadeInSamples, fadeOutSamples);
-                float dryVal = src[static_cast<size_t>(clipIndex)] * baseGain * fade;
-                float renderedVal = (*chunk.audio)[audioIdx] * baseGain * fade;
-                dst[static_cast<size_t>(dstIndex)] = dst[static_cast<size_t>(dstIndex)] - dryVal + renderedVal;
+            // Advance past chunks that end before current position
+            while (chunkIdx < chunkRanges.size() && chunkRanges[chunkIdx].endSample <= i) {
+                ++chunkIdx;
             }
+
+            // Check if current sample falls within a published chunk
+            if (chunkIdx < chunkRanges.size()) {
+                const auto& cr = chunkRanges[chunkIdx];
+                if (i >= cr.startSample && i < cr.endSample) {
+                    const size_t audioIdx = static_cast<size_t>(i - cr.startSample);
+                    if (audioIdx < cr.audio->size()) {
+                        rendered = (*cr.audio)[audioIdx];
+                    }
+                }
+            }
+
+            float fade = computeFadeGain(i, clipLen, fadeInSamples, fadeOutSamples);
+            float mixed = mixer.processSample(ch, dry, rendered);
+            dst[static_cast<size_t>(dstIndex)] += mixed * baseGain * fade;
         }
     }
 }
@@ -711,8 +721,19 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
                 if (clip.renderCache) {
                     clip.renderCache->clearResampledCache();
                 }
-                
+
+                // Re-prepare crossover mixer for new sample rate
+                clip.crossoverMixer_.prepare(sampleRate, samplesPerBlock);
+
                 // silentGaps are in seconds, unchanged
+            }
+        }
+    } else {
+        // First init or no rate change: prepare crossover mixers for all existing clips
+        const juce::ScopedReadLock tracksReadLock(tracksLock_);
+        for (auto& track : tracks_) {
+            for (auto& clip : track.clips) {
+                clip.crossoverMixer_.prepare(sampleRate, samplesPerBlock);
             }
         }
     }
@@ -978,11 +999,9 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                     }
 
                     float dry = (src != nullptr && sampleInClip < dryLenSamples) ? src[sampleInClip] : 0.0f;
-                    float out = dry;
-
-                    if (hasRenderedAudio && s < static_cast<int>(renderedBlock.size())) {
-                        out = renderedBlock[s];
-                    }
+                    float rendered = (hasRenderedAudio && s < static_cast<int>(renderedBlock.size()))
+                        ? renderedBlock[s] : dry;
+                    float out = clip.crossoverMixer_.processSample(ch, dry, rendered);
 
                     dst[s] += out * gain;
                     timeInClip += dt;
@@ -2094,7 +2113,10 @@ bool OpenTuneAudioProcessor::commitPreparedImportClip(PreparedImportClip&& prepa
     // Initialize drySignalBuffer_ to current device rate
     const double deviceSampleRate = currentSampleRate_.load(std::memory_order_relaxed);
     resampleDrySignal(clip, deviceSampleRate);
-    
+
+    // Prepare crossover mixer for playback at device sample rate
+    clip.crossoverMixer_.prepare(deviceSampleRate, currentBlockSize_);
+
     tracks_[prepared.trackId].clips.push_back(std::move(clip));
     return true;
 }
