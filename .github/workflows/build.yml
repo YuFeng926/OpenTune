@@ -24,18 +24,79 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Download JUCE Framework
+        run: |
+          # Download JUCE 8.0.12 source code (ZIP format)
+          $juceUrl = "https://github.com/juce-framework/JUCE/archive/refs/tags/8.0.12.zip"
+          $juceZip = "juce-8.0.12.zip"
+          Invoke-WebRequest -Uri $juceUrl -OutFile $juceZip
+          # Extract and rename
+          Expand-Archive -Path $juceZip -DestinationPath "." -Force
+          Rename-Item -Path "JUCE-8.0.12" -NewName "JUCE-master" -Force
+          Remove-Item $juceZip
+        shell: pwsh
+
+      - name: Download ASIO SDK
+        run: |
+          # Download ASIO SDK from GitHub
+          $asioUrl = "https://github.com/audiosdk/asio/archive/refs/heads/master.zip"
+          $asioZip = "asio-sdk.zip"
+          Invoke-WebRequest -Uri $asioUrl -OutFile $asioZip
+          Expand-Archive -Path $asioZip -DestinationPath "." -Force
+          Remove-Item $asioZip
+          # Find the extracted directory
+          $asioRoot = Get-ChildItem -Directory | Where-Object { $_.Name -like "asio-*" } | Select-Object -First 1
+          if (-not $asioRoot) { throw "ASIO SDK not found" }
+          # Copy ASIO headers to JUCE expected location
+          $asioDest = "JUCE-master\modules\juce_audio_devices\native\asio"
+          New-Item -ItemType Directory -Force -Path $asioDest
+          Copy-Item "$($asioRoot.FullName)\common\*" $asioDest -Recurse -Force
+          Copy-Item "$($asioRoot.FullName)\asio\*" $asioDest -Recurse -Force
+          Copy-Item "$($asioRoot.FullName)\host\*" $asioDest -Recurse -Force
+          Remove-Item $asioRoot.FullName -Recurse -Force
+        shell: pwsh
+
+      - name: Download ONNX Runtime (DirectML)
+        run: |
+          # Download ONNX Runtime DirectML NuGet package (has correct structure)
+          $ortDmlNupkgUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg"
+          $ortDmlNupkg = "onnxruntime-dml.nupkg"
+          Invoke-WebRequest -Uri $ortDmlNupkgUrl -OutFile $ortDmlNupkg
+          # Extract nupkg (it's just a zip file) to onnxruntime-dml-1.24.4
+          New-Item -ItemType Directory -Force -Path "onnxruntime-dml-1.24.4-temp"
+          Expand-Archive -Path $ortDmlNupkg -DestinationPath "onnxruntime-dml-1.24.4-temp" -Force
+          Remove-Item $ortDmlNupkg
+          # Move contents to final directory name
+          if (Test-Path "onnxruntime-dml-1.24.4") { Remove-Item "onnxruntime-dml-1.24.4" -Recurse -Force }
+          Rename-Item "onnxruntime-dml-1.24.4-temp" "onnxruntime-dml-1.24.4"
+          
+          # Download CPU runtime as well
+          $ortUrl = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip"
+          $ortZip = "onnxruntime-cpu.zip"
+          Invoke-WebRequest -Uri $ortUrl -OutFile $ortZip
+          Expand-Archive -Path $ortZip -DestinationPath "." -Force
+          Remove-Item $ortZip
+        shell: pwsh
+
       - name: Build Standalone
         run: |
           mkdir build-standalone
           cd build-standalone
-          cmake .. -G "Visual Studio 17 2022" -A x64
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DOPENTUNE_FORMATS=Standalone
           cmake --build . --config Release
 
-      - name: Build Plugins (CLAP, LV2, VST3)
+      - name: Build VST3 Plugin
         run: |
-          mkdir build-plugins
-          cd build-plugins
-          cmake .. -G "Visual Studio 17 2022" -A x64 -DOPENTUNE_BUILD_PLUGINS=ON
+          mkdir build-vst3
+          cd build-vst3
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DOPENTUNE_FORMATS=VST3
+          cmake --build . --config Release
+
+      - name: Build CLAP Plugin
+        run: |
+          mkdir build-clap
+          cd build-clap
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DOPENTUNE_FORMATS=CLAP
           cmake --build . --config Release
 
       - name: Upload Windows Artifacts
@@ -43,67 +104,7 @@ jobs:
         with:
           name: OpenTune-Windows
           path: |
-            build-standalone/OpenTune_artefacts/Release/Standalone/OpenTune.exe
-            build-standalone/OpenTune_artefacts/Release/Standalone/*.dll
-            build-standalone/OpenTune_artefacts/Release/Standalone/models/
-            build-plugins/OpenTune_artefacts/Release/CLAP/OpenTune.clap
-            build-plugins/OpenTune_artefacts/Release/LV2/OpenTune.lv2/
-            build-plugins/OpenTune_artefacts/Release/VST3/OpenTune.vst3/
-          retention-days: 30
-
-  build-linux:
-    name: Linux (Standalone + Plugins)
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          lfs: 'true'
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            pkg-config \
-            libasound2-dev \
-            libjack-jackd2-dev \
-            libladspa-sdk-dev \
-            libcurl4-openssl-dev \
-            libfreetype6-dev \
-            libx11-dev \
-            libxcomposite-dev \
-            libxcursor-dev \
-            libxext-dev \
-            libxinerama-dev \
-            libxrandr-dev \
-            libxrender-dev
-
-      - name: Build Standalone
-        run: |
-          mkdir build-standalone
-          cd build-standalone
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          cmake --build . -j$(nproc)
-
-      - name: Build Plugins (CLAP, LV2, VST3)
-        run: |
-          mkdir build-plugins
-          cd build-plugins
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DOPENTUNE_BUILD_PLUGINS=ON
-          cmake --build . -j$(nproc)
-
-      - name: Upload Linux Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenTune-Linux
-          path: |
-            build-standalone/OpenTune_artefacts/Release/Standalone/OpenTune
-            build-standalone/OpenTune_artefacts/Release/Standalone/*.so
-            build-standalone/OpenTune_artefacts/Release/Standalone/models/
-            build-plugins/OpenTune_artefacts/Release/CLAP/OpenTune.clap
-            build-plugins/OpenTune_artefacts/Release/LV2/OpenTune.lv2/
-            build-plugins/OpenTune_artefacts/Release/VST3/libOpenTune.vst3/
+            build-standalone/OpenTune_artefacts/Release/Standalone/
+            build-vst3/OpenTune_artefacts/Release/VST3/
+            build-clap/OpenTune_artefacts/Release/CLAP/
           retention-days: 30
