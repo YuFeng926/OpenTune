@@ -1064,6 +1064,8 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             // 淡出完成后，根据模式决定是否回到播放起始位置
             if (returnToStartOnPause_.load()) {
                 positionAtomic_->store(playStartPosition_.load(), std::memory_order_relaxed);
+                // 更新 blockEndSeconds 为起点位置，防止后面的 store 覆盖
+                blockEndSeconds = playStartPosition_.load();
             }
 
             for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
