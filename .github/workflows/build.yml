@@ -1,0 +1,109 @@
+name: Build OpenTune
+
+on:
+  push:
+    branches:
+      - publish
+
+jobs:
+  build-windows:
+    name: Windows (Standalone + Plugins)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: 'true'
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.22'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build Standalone
+        run: |
+          mkdir build-standalone
+          cd build-standalone
+          cmake .. -G "Visual Studio 17 2022" -A x64
+          cmake --build . --config Release
+
+      - name: Build Plugins (CLAP, LV2, VST3)
+        run: |
+          mkdir build-plugins
+          cd build-plugins
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DOPENTUNE_BUILD_PLUGINS=ON
+          cmake --build . --config Release
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenTune-Windows
+          path: |
+            build-standalone/OpenTune_artefacts/Release/Standalone/OpenTune.exe
+            build-standalone/OpenTune_artefacts/Release/Standalone/*.dll
+            build-standalone/OpenTune_artefacts/Release/Standalone/models/
+            build-plugins/OpenTune_artefacts/Release/CLAP/OpenTune.clap
+            build-plugins/OpenTune_artefacts/Release/LV2/OpenTune.lv2/
+            build-plugins/OpenTune_artefacts/Release/VST3/OpenTune.vst3/
+          retention-days: 30
+
+  build-linux:
+    name: Linux (Standalone + Plugins)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: 'true'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libladspa-sdk-dev \
+            libcurl4-openssl-dev \
+            libfreetype6-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev
+
+      - name: Build Standalone
+        run: |
+          mkdir build-standalone
+          cd build-standalone
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build . -j$(nproc)
+
+      - name: Build Plugins (CLAP, LV2, VST3)
+        run: |
+          mkdir build-plugins
+          cd build-plugins
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DOPENTUNE_BUILD_PLUGINS=ON
+          cmake --build . -j$(nproc)
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenTune-Linux
+          path: |
+            build-standalone/OpenTune_artefacts/Release/Standalone/OpenTune
+            build-standalone/OpenTune_artefacts/Release/Standalone/*.so
+            build-standalone/OpenTune_artefacts/Release/Standalone/models/
+            build-plugins/OpenTune_artefacts/Release/CLAP/OpenTune.clap
+            build-plugins/OpenTune_artefacts/Release/LV2/OpenTune.lv2/
+            build-plugins/OpenTune_artefacts/Release/VST3/libOpenTune.vst3/
+          retention-days: 30
