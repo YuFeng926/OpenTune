@@ -281,7 +281,12 @@ void OpenTuneAudioProcessorEditor::setInferenceActive(bool active)
 }
 
 OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& p)
-    : AudioProcessorEditor(&p), processorRef_(p), menuBar_(p), topBar_(menuBar_, transportBar_), arrangementView_(p)
+    : AudioProcessorEditor(&p),
+      processorRef_(p),
+      tooltipWindow_(this),
+      menuBar_(p),
+      topBar_(menuBar_, transportBar_),
+      arrangementView_(p)
 {
     // Initialize track volumes array
     lastTrackVolumes_.fill(1.0f);

@@ -162,6 +162,7 @@ private:
     juce::MouseCursor techCursor_;
 
     // Main GUI Components
+    juce::TooltipWindow tooltipWindow_;
     MenuBarComponent menuBar_;
     TransportBarComponent transportBar_;
     TopBarComponent topBar_;

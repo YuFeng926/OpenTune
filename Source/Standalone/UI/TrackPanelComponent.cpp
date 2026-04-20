@@ -38,11 +38,13 @@ TrackPanelComponent::TrackPanelComponent()
 
         // Mute button
         track.muteButton.setClickingTogglesState(true);
+        track.muteButton.setTooltip("Mute - Silence this track");
         track.muteButton.onClick = [this, i] { onMuteToggled(i); };
         addAndMakeVisible(track.muteButton);
 
         // Solo button
         track.soloButton.setClickingTogglesState(true);
+        track.soloButton.setTooltip("Solo - Isolate this track");
         track.soloButton.onClick = [this, i] { onSoloToggled(i); };
         addAndMakeVisible(track.soloButton);
 
@@ -66,6 +68,7 @@ TrackPanelComponent::TrackPanelComponent()
     }
 
     // 初始化+号按钮
+    addTrackButton_.setTooltipText("Add more tracks");
     addTrackButton_.onClick = [this]() { showMoreTracks(); };
     addAndMakeVisible(addTrackButton_);
 
