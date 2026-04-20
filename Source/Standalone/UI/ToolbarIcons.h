@@ -376,10 +376,45 @@ public:
         // Circular arrows
         path.addArc(4.0f, 4.0f, 16.0f, 16.0f, 0.5f, 2.8f, true); // Top arc
         path.addArc(4.0f, 4.0f, 16.0f, 16.0f, 3.6f, 5.9f, true); // Bottom arc
-        
+
         // Arrow heads
         path.startNewSubPath(16.0f, 4.0f); path.lineTo(20.0f, 7.0f); path.lineTo(16.0f, 10.0f); // Top arrow
         path.startNewSubPath(8.0f, 14.0f); path.lineTo(4.0f, 17.0f); path.lineTo(8.0f, 20.0f); // Bottom arrow
+        return path;
+    }
+
+    static juce::Path getReturnToStartIcon() {
+        juce::Path path;
+        // Arrow pointing left with bar on left side (return to start)
+        path.addRectangle(3.0f, 4.0f, 2.0f, 16.0f);  // Left bar
+        path.startNewSubPath(18.0f, 6.0f);
+        path.lineTo(8.0f, 6.0f);
+        path.lineTo(8.0f, 3.0f);
+        path.lineTo(4.0f, 12.0f);
+        path.lineTo(8.0f, 21.0f);
+        path.lineTo(8.0f, 18.0f);
+        path.lineTo(18.0f, 18.0f);
+        path.closeSubPath();
+        return path;
+    }
+
+    static juce::Path getReturnToStartOffIcon() {
+        juce::Path path;
+        // Same as on version but with X through it (disabled state)
+        path.addRectangle(3.0f, 4.0f, 2.0f, 16.0f);  // Left bar
+        path.startNewSubPath(18.0f, 6.0f);
+        path.lineTo(8.0f, 6.0f);
+        path.lineTo(8.0f, 3.0f);
+        path.lineTo(4.0f, 12.0f);
+        path.lineTo(8.0f, 21.0f);
+        path.lineTo(8.0f, 18.0f);
+        path.lineTo(18.0f, 18.0f);
+        path.closeSubPath();
+        // X mark
+        path.startNewSubPath(2.0f, 2.0f);
+        path.lineTo(22.0f, 22.0f);
+        path.startNewSubPath(22.0f, 2.0f);
+        path.lineTo(2.0f, 22.0f);
         return path;
     }
 

@@ -116,6 +116,7 @@ public:
         virtual void pauseRequested() = 0;
         virtual void stopRequested() = 0;
         virtual void loopToggled(bool enabled) = 0;
+        virtual void returnToStartOnPauseToggled(bool enabled) = 0;
         virtual void bpmChanged(double newBpm) = 0;
         virtual void scaleChanged(int rootNote, int scaleType) = 0;
         virtual void viewToggled(bool workspaceView) = 0;
@@ -150,6 +151,9 @@ public:
     // Alias for compatibility
     void setLooping(bool looping) { setLoopEnabled(looping); }
 
+    void setReturnToStartOnPause(bool enabled);
+    bool isReturnToStartOnPause() const;
+
     void setBpm(double bpm);
     double getBpm() const;
 
@@ -170,6 +174,7 @@ private:
     void onPauseClicked();
     void onStopClicked();
     void onLoopToggled();
+    void onReturnToStartToggled();
     void onBpmChanged();
     void onTapClicked();
     void onScaleChanged();
@@ -188,6 +193,7 @@ private:
     UnifiedToolbarButton pauseButton_;
     UnifiedToolbarButton stopButton_;
     UnifiedToolbarButton loopButton_;
+    UnifiedToolbarButton returnToStartButton_;  // 切换暂停时是否回到起点
     
     // Split View Buttons
     UnifiedToolbarButton trackViewButton_;

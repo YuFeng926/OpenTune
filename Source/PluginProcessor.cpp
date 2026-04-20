@@ -1998,6 +1998,11 @@ void OpenTuneAudioProcessor::setPlaying(bool playing) {
             isFadingOut_.store(true);
             fadeOutSampleCount_.store(0);
             AppLogger::log("Playback: fade-out started");
+
+            // 根据模式决定是否回到播放前记录的位置
+            if (returnToStartOnPause_.load()) {
+                setPosition(playStartPosition_.load());
+            }
         }
     }
 }

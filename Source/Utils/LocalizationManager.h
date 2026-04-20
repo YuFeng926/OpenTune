@@ -173,6 +173,8 @@ constexpr const char* kHandDraw = "Hand draw pitch";
 constexpr const char* kPlay = "Play";
 constexpr const char* kPause = "Pause";
 constexpr const char* kLoop = "Loop";
+constexpr const char* kReturnToStart = "Return";
+constexpr const char* kReturnToStartTooltip = "Toggle return to start on pause";
 constexpr const char* kTapTempo = "Tap Tempo";
 constexpr const char* kTrackView = "Track View";
 constexpr const char* kPianoRollView = "Piano Roll View";
@@ -284,6 +286,8 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kPlay, "Play", "播放", "再生", "Старт", "Reprod." },
         { Keys::kPause, "Pause", "暂停", "一時停止", "Пауза", "Pausar" },
         { Keys::kLoop, "Loop", "循环", "ループ", "Цикл", "Bucle" },
+        { Keys::kReturnToStart, "Return", "回到起点", "先頭に戻る", "Вернуться к началу", "Volver al inicio" },
+        { Keys::kReturnToStartTooltip, "Toggle return to start on pause", "切换暂停时是否回到起点", "一時停止時に先頭に戻る切り替え", "Вернуться к началу при паузе", "Alternar vuelta al inicio en pausa" },
         { Keys::kTapTempo, "Tap Tempo", "敲击节拍", "タップテンポ", "Тап темп", "Tap tempo" },
         { Keys::kTrackView, "Track View", "轨道视图", "トラックビュー", "Вид дорожки", "Vista pista" },
         { Keys::kPianoRollView, "Piano Roll View", "钢琴卷帘视图", "ピアノロールビュー", "Вид пиано-ролла", "Vista piano" },
