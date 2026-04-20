@@ -286,5 +286,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OpenTune-Windows-CLAP
-          path: build-clap/OpenTune_artefacts/Release/CLAP/
+          path: build-clap/OpenTune_artefacts/Release/
           retention-days: 30
