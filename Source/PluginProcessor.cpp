@@ -1060,7 +1060,12 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             isFadingOut_.store(false);
             isPlaying_.store(false);
             AppLogger::log("Playback: fade-out complete, stopped");
-            
+
+            // 淡出完成后，根据模式决定是否回到播放起始位置
+            if (returnToStartOnPause_.load()) {
+                positionAtomic_->store(playStartPosition_.load(), std::memory_order_relaxed);
+            }
+
             for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
                 for (int s = 0; s < numSamples; ++s) {
                     buffer.setSample(ch, s, 0.0f);
@@ -1998,11 +2003,7 @@ void OpenTuneAudioProcessor::setPlaying(bool playing) {
             isFadingOut_.store(true);
             fadeOutSampleCount_.store(0);
             AppLogger::log("Playback: fade-out started");
-
-            // 根据模式决定是否回到播放前记录的位置
-            if (returnToStartOnPause_.load()) {
-                setPosition(playStartPosition_.load());
-            }
+            // 注意：不在这里调用 setPosition()，等淡出完成后再设置位置
         }
     }
 }
