@@ -882,8 +882,8 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     const double deviceSampleRate = currentSampleRate_.load();
     const double blockDurationSeconds = static_cast<double>(numSamples) / deviceSampleRate;
-    const double currentPosSeconds = positionAtomic_->load(std::memory_order_relaxed);
-    const double blockEndSeconds = currentPosSeconds + blockDurationSeconds;
+    double currentPosSeconds = positionAtomic_->load(std::memory_order_relaxed);
+    double blockEndSeconds = currentPosSeconds + blockDurationSeconds;
     const int64_t blockStartSample = TimeCoordinate::secondsToSamples(currentPosSeconds, deviceSampleRate);
     const int64_t blockEndSample = blockStartSample + static_cast<int64_t>(numSamples);
     
