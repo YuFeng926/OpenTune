@@ -5,6 +5,9 @@ on:
     branches:
       - publish
 
+env:
+  LFS_SUCCESS: 'true'
+
 jobs:
   # ==========================================
   # Standalone 构建（独立并行）
@@ -12,11 +15,40 @@ jobs:
   build-standalone:
     name: Windows Standalone
     runs-on: windows-latest
+    outputs:
+      lfs-success: ${{ steps.lfs-check.outputs.lfs-success }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          lfs: 'true'
+          lfs: false        # 先不自动拉 LFS
+
+      - name: Cache Git LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ runner.os }}-${{ hashFiles('**/.gitattributes') }}
+          restore-keys: |
+            lfs-${{ runner.os }}-
+
+      - name: Pull LFS files (优先使用缓存)
+        id: lfs-pull
+        continue-on-error: true
+        run: git lfs pull
+
+      - name: Check LFS status
+        id: lfs-check
+        env:
+          LFS_PULL_OUTCOME: ${{ steps.lfs-pull.outcome || 'failure' }}
+        run: |
+          if ($env:LFS_PULL_OUTCOME -eq 'success') {
+            echo "lfs-success=true" >> $env:GITHUB_OUTPUT
+            echo "✅ LFS files downloaded successfully"
+          } else {
+            echo "lfs-success=false" >> $env:GITHUB_OUTPUT
+            echo "::warning::⚠️ LFS pull failed. 本次构建不打包模型文件"
+          }
+        shell: pwsh
 
       - name: Cache dependencies
         id: cache-deps
@@ -115,7 +147,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          lfs: 'true'
+          lfs: false        # 先不自动拉 LFS
+
+      - name: Cache Git LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ runner.os }}-${{ hashFiles('**/.gitattributes') }}
+          restore-keys: |
+            lfs-${{ runner.os }}-
+
+      - name: Pull LFS files (优先使用缓存)
+        continue-on-error: true
+        run: git lfs pull || Write-Warning "⚠️ LFS pull failed. 本次构建不打包模型文件"
 
       - name: Cache dependencies
         id: cache-deps
@@ -207,7 +251,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          lfs: 'true'
+          lfs: false        # 先不自动拉 LFS
+
+      - name: Cache Git LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ runner.os }}-${{ hashFiles('**/.gitattributes') }}
+          restore-keys: |
+            lfs-${{ runner.os }}-
+
+      - name: Pull LFS files (优先使用缓存)
+        continue-on-error: true
+        run: git lfs pull || Write-Warning "⚠️ LFS pull failed. 本次构建不打包模型文件"
 
       - name: Cache dependencies
         id: cache-deps
@@ -288,3 +344,66 @@ jobs:
           name: OpenTune-Windows-CLAP
           path: build-clap/OpenTune_artefacts/Release/
           retention-days: 30
+
+  # ==========================================
+  # 发布 Release
+  # ==========================================
+  release:
+    name: Create Release
+    needs: [build-standalone, build-vst3, build-clap]
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir release
+          # 打包 Standalone
+          cd artifacts/OpenTune-Windows-Standalone
+          zip -r ../../release/OpenTune-Windows-Standalone.zip .
+          cd ../..
+          # 打包 VST3
+          cd artifacts/OpenTune-Windows-VST3
+          zip -r ../../release/OpenTune-Windows-VST3.zip .
+          cd ../..
+          # 打包 CLAP
+          cd artifacts/OpenTune-Windows-CLAP
+          zip -r ../../release/OpenTune-Windows-CLAP.zip .
+          cd ../..
+          # 单独 exe
+          cp artifacts/OpenTune-standalone-exe/OpenTune.exe release/OpenTune.exe
+
+      - name: Create Release
+        id: create-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: OpenTune Build #${{ github.run_number }}
+          body: |
+            ## 自动构建发布
+
+            **构建时间**: ${{ github.event.head_commit.timestamp }}
+            **提交**: ${{ github.sha }}
+
+            ### 下载
+
+            - **OpenTune.exe** (单独可执行文件，~9MB) - 适合增量更新
+            - **OpenTune-Windows-Standalone.zip** - 完整独立应用（含模型文件、DLL）
+            - **OpenTune-Windows-VST3.zip** - VST3 插件
+            - **OpenTune-Windows-CLAP.zip** - CLAP 插件
+          draft: false
+          prerelease: false
+          files: |
+            release/OpenTune.exe
+            release/OpenTune-Windows-Standalone.zip
+            release/OpenTune-Windows-VST3.zip
+            release/OpenTune-Windows-CLAP.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
