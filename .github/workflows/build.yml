@@ -1,0 +1,409 @@
+name: Build OpenTune
+
+on:
+  push:
+    branches:
+      - publish
+
+env:
+  LFS_SUCCESS: 'true'
+
+jobs:
+  # ==========================================
+  # Standalone 构建（独立并行）
+  # ==========================================
+  build-standalone:
+    name: Windows Standalone
+    runs-on: windows-latest
+    outputs:
+      lfs-success: ${{ steps.lfs-check.outputs.lfs-success }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: false        # 先不自动拉 LFS
+
+      - name: Cache Git LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ runner.os }}-${{ hashFiles('**/.gitattributes') }}
+          restore-keys: |
+            lfs-${{ runner.os }}-
+
+      - name: Pull LFS files (优先使用缓存)
+        id: lfs-pull
+        continue-on-error: true
+        run: git lfs pull
+
+      - name: Check LFS status
+        id: lfs-check
+        env:
+          LFS_PULL_OUTCOME: ${{ steps.lfs-pull.outcome || 'failure' }}
+        run: |
+          if ($env:LFS_PULL_OUTCOME -eq 'success') {
+            echo "lfs-success=true" >> $env:GITHUB_OUTPUT
+            echo "✅ LFS files downloaded successfully"
+          } else {
+            echo "lfs-success=false" >> $env:GITHUB_OUTPUT
+            echo "::warning::⚠️ LFS pull failed. 本次构建不打包模型文件"
+          }
+        shell: pwsh
+
+      - name: Cache dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            JUCE-master
+            onnxruntime-dml-1.24.4
+            onnxruntime-win-x64-1.24.4
+          key: deps-${{ runner.os }}-juce8.0.12-onnx1.24.4-asio
+
+      - name: Download JUCE Framework (if not cached)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          $juceUrl = "https://github.com/juce-framework/JUCE/archive/refs/tags/8.0.12.zip"
+          $juceZip = "juce-8.0.12.zip"
+          Invoke-WebRequest -Uri $juceUrl -OutFile $juceZip
+          Expand-Archive -Path $juceZip -DestinationPath "." -Force
+          Rename-Item -Path "JUCE-8.0.12" -NewName "JUCE-master" -Force
+          Remove-Item $juceZip
+        shell: pwsh
+
+      - name: Download ASIO SDK (if not cached)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          $asioUrl = "https://github.com/audiosdk/asio/archive/refs/heads/master.zip"
+          $asioZip = "asio-sdk.zip"
+          Invoke-WebRequest -Uri $asioUrl -OutFile $asioZip
+          Expand-Archive -Path $asioZip -DestinationPath "." -Force
+          Remove-Item $asioZip
+          $asioRoot = Get-ChildItem -Directory | Where-Object { $_.Name -like "asio-*" } | Select-Object -First 1
+          if (-not $asioRoot) { throw "ASIO SDK not found" }
+          $asioDest = "JUCE-master\modules\juce_audio_devices\native\asio"
+          New-Item -ItemType Directory -Force -Path $asioDest
+          Copy-Item "$($asioRoot.FullName)\common\*" $asioDest -Recurse -Force
+          Copy-Item "$($asioRoot.FullName)\asio\*" $asioDest -Recurse -Force
+          Copy-Item "$($asioRoot.FullName)\host\*" $asioDest -Recurse -Force
+          Remove-Item $asioRoot.FullName -Recurse -Force
+        shell: pwsh
+
+      - name: Download ONNX Runtime (if not cached)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          $ortDmlNupkgUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg"
+          $ortDmlNupkg = "onnxruntime-dml.nupkg"
+          Invoke-WebRequest -Uri $ortDmlNupkgUrl -OutFile $ortDmlNupkg
+          New-Item -ItemType Directory -Force -Path "onnxruntime-dml-1.24.4-temp"
+          Expand-Archive -Path $ortDmlNupkg -DestinationPath "onnxruntime-dml-1.24.4-temp" -Force
+          Remove-Item $ortDmlNupkg
+          if (Test-Path "onnxruntime-dml-1.24.4") { Remove-Item "onnxruntime-dml-1.24.4" -Recurse -Force }
+          Rename-Item "onnxruntime-dml-1.24.4-temp" "onnxruntime-dml-1.24.4"
+
+          $ortUrl = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip"
+          $ortZip = "onnxruntime-cpu.zip"
+          Invoke-WebRequest -Uri $ortUrl -OutFile $ortZip
+          Expand-Archive -Path $ortZip -DestinationPath "." -Force
+          Remove-Item $ortZip
+        shell: pwsh
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.22'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build Standalone
+        run: |
+          mkdir build-standalone
+          cd build-standalone
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DOPENTUNE_FORMATS=Standalone
+          cmake --build . --config Release
+
+      - name: Upload OpenTune.exe only
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenTune-standalone-exe
+          path: build-standalone/OpenTune_artefacts/Release/Standalone/OpenTune.exe
+          retention-days: 30
+
+      - name: Upload Full Standalone Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenTune-Windows-Standalone
+          path: build-standalone/OpenTune_artefacts/Release/Standalone/
+          retention-days: 30
+
+  # ==========================================
+  # VST3 构建（独立并行）
+  # ==========================================
+  build-vst3:
+    name: Windows VST3 Plugin
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: false        # 先不自动拉 LFS
+
+      - name: Cache Git LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ runner.os }}-${{ hashFiles('**/.gitattributes') }}
+          restore-keys: |
+            lfs-${{ runner.os }}-
+
+      - name: Pull LFS files (优先使用缓存)
+        continue-on-error: true
+        run: git lfs pull || Write-Warning "⚠️ LFS pull failed. 本次构建不打包模型文件"
+
+      - name: Cache dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            JUCE-master
+            onnxruntime-dml-1.24.4
+            onnxruntime-win-x64-1.24.4
+          key: deps-${{ runner.os }}-juce8.0.12-onnx1.24.4-asio
+
+      - name: Download JUCE Framework (if not cached)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          $juceUrl = "https://github.com/juce-framework/JUCE/archive/refs/tags/8.0.12.zip"
+          $juceZip = "juce-8.0.12.zip"
+          Invoke-WebRequest -Uri $juceUrl -OutFile $juceZip
+          Expand-Archive -Path $juceZip -DestinationPath "." -Force
+          Rename-Item -Path "JUCE-8.0.12" -NewName "JUCE-master" -Force
+          Remove-Item $juceZip
+        shell: pwsh
+
+      - name: Download ASIO SDK (if not cached)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          $asioUrl = "https://github.com/audiosdk/asio/archive/refs/heads/master.zip"
+          $asioZip = "asio-sdk.zip"
+          Invoke-WebRequest -Uri $asioUrl -OutFile $asioZip
+          Expand-Archive -Path $asioZip -DestinationPath "." -Force
+          Remove-Item $asioZip
+          $asioRoot = Get-ChildItem -Directory | Where-Object { $_.Name -like "asio-*" } | Select-Object -First 1
+          if (-not $asioRoot) { throw "ASIO SDK not found" }
+          $asioDest = "JUCE-master\modules\juce_audio_devices\native\asio"
+          New-Item -ItemType Directory -Force -Path $asioDest
+          Copy-Item "$($asioRoot.FullName)\common\*" $asioDest -Recurse -Force
+          Copy-Item "$($asioRoot.FullName)\asio\*" $asioDest -Recurse -Force
+          Copy-Item "$($asioRoot.FullName)\host\*" $asioDest -Recurse -Force
+          Remove-Item $asioRoot.FullName -Recurse -Force
+        shell: pwsh
+
+      - name: Download ONNX Runtime (if not cached)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          $ortDmlNupkgUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg"
+          $ortDmlNupkg = "onnxruntime-dml.nupkg"
+          Invoke-WebRequest -Uri $ortDmlNupkgUrl -OutFile $ortDmlNupkg
+          New-Item -ItemType Directory -Force -Path "onnxruntime-dml-1.24.4-temp"
+          Expand-Archive -Path $ortDmlNupkg -DestinationPath "onnxruntime-dml-1.24.4-temp" -Force
+          Remove-Item $ortDmlNupkg
+          if (Test-Path "onnxruntime-dml-1.24.4") { Remove-Item "onnxruntime-dml-1.24.4" -Recurse -Force }
+          Rename-Item "onnxruntime-dml-1.24.4-temp" "onnxruntime-dml-1.24.4"
+
+          $ortUrl = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip"
+          $ortZip = "onnxruntime-cpu.zip"
+          Invoke-WebRequest -Uri $ortUrl -OutFile $ortZip
+          Expand-Archive -Path $ortZip -DestinationPath "." -Force
+          Remove-Item $ortZip
+        shell: pwsh
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.22'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build VST3 Plugin
+        run: |
+          mkdir build-vst3
+          cd build-vst3
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DOPENTUNE_FORMATS=VST3
+          cmake --build . --config Release
+
+      - name: Upload VST3 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenTune-Windows-VST3
+          path: build-vst3/OpenTune_artefacts/Release/VST3/
+          retention-days: 30
+
+  # ==========================================
+  # CLAP 构建（独立并行）
+  # ==========================================
+  build-clap:
+    name: Windows CLAP Plugin
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: false        # 先不自动拉 LFS
+
+      - name: Cache Git LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-${{ runner.os }}-${{ hashFiles('**/.gitattributes') }}
+          restore-keys: |
+            lfs-${{ runner.os }}-
+
+      - name: Pull LFS files (优先使用缓存)
+        continue-on-error: true
+        run: git lfs pull || Write-Warning "⚠️ LFS pull failed. 本次构建不打包模型文件"
+
+      - name: Cache dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            JUCE-master
+            onnxruntime-dml-1.24.4
+            onnxruntime-win-x64-1.24.4
+          key: deps-${{ runner.os }}-juce8.0.12-onnx1.24.4-asio
+
+      - name: Download JUCE Framework (if not cached)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          $juceUrl = "https://github.com/juce-framework/JUCE/archive/refs/tags/8.0.12.zip"
+          $juceZip = "juce-8.0.12.zip"
+          Invoke-WebRequest -Uri $juceUrl -OutFile $juceZip
+          Expand-Archive -Path $juceZip -DestinationPath "." -Force
+          Rename-Item -Path "JUCE-8.0.12" -NewName "JUCE-master" -Force
+          Remove-Item $juceZip
+        shell: pwsh
+
+      - name: Download ASIO SDK (if not cached)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          $asioUrl = "https://github.com/audiosdk/asio/archive/refs/heads/master.zip"
+          $asioZip = "asio-sdk.zip"
+          Invoke-WebRequest -Uri $asioUrl -OutFile $asioZip
+          Expand-Archive -Path $asioZip -DestinationPath "." -Force
+          Remove-Item $asioZip
+          $asioRoot = Get-ChildItem -Directory | Where-Object { $_.Name -like "asio-*" } | Select-Object -First 1
+          if (-not $asioRoot) { throw "ASIO SDK not found" }
+          $asioDest = "JUCE-master\modules\juce_audio_devices\native\asio"
+          New-Item -ItemType Directory -Force -Path $asioDest
+          Copy-Item "$($asioRoot.FullName)\common\*" $asioDest -Recurse -Force
+          Copy-Item "$($asioRoot.FullName)\asio\*" $asioDest -Recurse -Force
+          Copy-Item "$($asioRoot.FullName)\host\*" $asioDest -Recurse -Force
+          Remove-Item $asioRoot.FullName -Recurse -Force
+        shell: pwsh
+
+      - name: Download ONNX Runtime (if not cached)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          $ortDmlNupkgUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg"
+          $ortDmlNupkg = "onnxruntime-dml.nupkg"
+          Invoke-WebRequest -Uri $ortDmlNupkgUrl -OutFile $ortDmlNupkg
+          New-Item -ItemType Directory -Force -Path "onnxruntime-dml-1.24.4-temp"
+          Expand-Archive -Path $ortDmlNupkg -DestinationPath "onnxruntime-dml-1.24.4-temp" -Force
+          Remove-Item $ortDmlNupkg
+          if (Test-Path "onnxruntime-dml-1.24.4") { Remove-Item "onnxruntime-dml-1.24.4" -Recurse -Force }
+          Rename-Item "onnxruntime-dml-1.24.4-temp" "onnxruntime-dml-1.24.4"
+
+          $ortUrl = "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip"
+          $ortZip = "onnxruntime-cpu.zip"
+          Invoke-WebRequest -Uri $ortUrl -OutFile $ortZip
+          Expand-Archive -Path $ortZip -DestinationPath "." -Force
+          Remove-Item $ortZip
+        shell: pwsh
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.22'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build CLAP Plugin
+        run: |
+          mkdir build-clap
+          cd build-clap
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DOPENTUNE_FORMATS=CLAP
+          cmake --build . --config Release
+
+      - name: Upload CLAP Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenTune-Windows-CLAP
+          path: build-clap/OpenTune_artefacts/Release/
+          retention-days: 30
+
+  # ==========================================
+  # 发布 Release
+  # ==========================================
+  release:
+    name: Create Release
+    needs: [build-standalone, build-vst3, build-clap]
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir release
+          # 打包 Standalone
+          cd artifacts/OpenTune-Windows-Standalone
+          zip -r ../../release/OpenTune-Windows-Standalone.zip .
+          cd ../..
+          # 打包 VST3
+          cd artifacts/OpenTune-Windows-VST3
+          zip -r ../../release/OpenTune-Windows-VST3.zip .
+          cd ../..
+          # 打包 CLAP
+          cd artifacts/OpenTune-Windows-CLAP
+          zip -r ../../release/OpenTune-Windows-CLAP.zip .
+          cd ../..
+          # 单独 exe
+          cp artifacts/OpenTune-standalone-exe/OpenTune.exe release/OpenTune.exe
+
+      - name: Create Release
+        id: create-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: OpenTune Build #${{ github.run_number }}
+          body: |
+            ## 自动构建发布
+
+            **构建时间**: ${{ github.event.head_commit.timestamp }}
+            **提交**: ${{ github.sha }}
+
+            ### 下载
+
+            - **OpenTune.exe** (单独可执行文件，~9MB) - 适合增量更新
+            - **OpenTune-Windows-Standalone.zip** - 完整独立应用（含模型文件、DLL）
+            - **OpenTune-Windows-VST3.zip** - VST3 插件
+            - **OpenTune-Windows-CLAP.zip** - CLAP 插件
+          draft: false
+          prerelease: false
+          files: |
+            release/OpenTune.exe
+            release/OpenTune-Windows-Standalone.zip
+            release/OpenTune-Windows-VST3.zip
+            release/OpenTune-Windows-CLAP.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

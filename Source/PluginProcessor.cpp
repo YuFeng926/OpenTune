@@ -882,8 +882,8 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     const double deviceSampleRate = currentSampleRate_.load();
     const double blockDurationSeconds = static_cast<double>(numSamples) / deviceSampleRate;
-    const double currentPosSeconds = positionAtomic_->load(std::memory_order_relaxed);
-    const double blockEndSeconds = currentPosSeconds + blockDurationSeconds;
+    double currentPosSeconds = positionAtomic_->load(std::memory_order_relaxed);
+    double blockEndSeconds = currentPosSeconds + blockDurationSeconds;
     const int64_t blockStartSample = TimeCoordinate::secondsToSamples(currentPosSeconds, deviceSampleRate);
     const int64_t blockEndSample = blockStartSample + static_cast<int64_t>(numSamples);
     
@@ -1060,7 +1060,14 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             isFadingOut_.store(false);
             isPlaying_.store(false);
             AppLogger::log("Playback: fade-out complete, stopped");
-            
+
+            // 淡出完成后，根据模式决定是否回到播放起始位置
+            if (returnToStartOnPause_.load()) {
+                positionAtomic_->store(playStartPosition_.load(), std::memory_order_relaxed);
+                // 更新 blockEndSeconds 为起点位置，防止后面的 store 覆盖
+                blockEndSeconds = playStartPosition_.load();
+            }
+
             for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
                 for (int s = 0; s < numSamples; ++s) {
                     buffer.setSample(ch, s, 0.0f);
@@ -1998,6 +2005,7 @@ void OpenTuneAudioProcessor::setPlaying(bool playing) {
             isFadingOut_.store(true);
             fadeOutSampleCount_.store(0);
             AppLogger::log("Playback: fade-out started");
+            // 注意：不在这里调用 setPosition()，等淡出完成后再设置位置
         }
     }
 }

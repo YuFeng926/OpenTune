@@ -264,6 +264,7 @@ private:
     std::atomic<bool> loopEnabled_{false};
     double bpm_{120.0};  // Standalone 模式下的默认 BPM（插件模式下从主机同步）
     std::atomic<double> playStartPosition_{0.0};  // 播放起始位置（按下 Play 时的位置）
+    std::atomic<bool> returnToStartOnPause_{true};  // 暂停时是否回到播放起始位置（true=预览模式，false=连续播放模式）
 
     // Fade-out state for smooth stop/pause
     std::atomic<bool> isFadingOut_{false};
@@ -438,6 +439,9 @@ public:
     
     double getPlayStartPosition() const { return playStartPosition_.load(); }
     void setPlayStartPosition(double seconds) { playStartPosition_.store(seconds); }
+
+    bool getReturnToStartOnPause() const { return returnToStartOnPause_.load(); }
+    void setReturnToStartOnPause(bool enabled) { returnToStartOnPause_.store(enabled); }
     
     std::shared_ptr<std::atomic<double>> getPositionAtomic() { return positionAtomic_; }
 

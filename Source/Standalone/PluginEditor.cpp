@@ -281,7 +281,12 @@ void OpenTuneAudioProcessorEditor::setInferenceActive(bool active)
 }
 
 OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& p)
-    : AudioProcessorEditor(&p), processorRef_(p), menuBar_(p), topBar_(menuBar_, transportBar_), arrangementView_(p)
+    : AudioProcessorEditor(&p),
+      processorRef_(p),
+      tooltipWindow_(this),
+      menuBar_(p),
+      topBar_(menuBar_, transportBar_),
+      arrangementView_(p)
 {
     // Initialize track volumes array
     lastTrackVolumes_.fill(1.0f);
@@ -373,6 +378,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     transportBar_.addListener(this);
     transportBar_.setPlaying(processorRef_.isPlaying());
     transportBar_.setLooping(processorRef_.isLoopEnabled());
+    transportBar_.setReturnToStartOnPause(processorRef_.getReturnToStartOnPause());
     transportBar_.setBpm(processorRef_.getBpm());
 
     // Initialize Scale (clip > recent > default)
@@ -1977,6 +1983,11 @@ void OpenTuneAudioProcessorEditor::stopRequested()
 void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
 {
     processorRef_.setLoopEnabled(enabled);
+}
+
+void OpenTuneAudioProcessorEditor::returnToStartOnPauseToggled(bool enabled)
+{
+    processorRef_.setReturnToStartOnPause(enabled);
 }
 
 void OpenTuneAudioProcessorEditor::bpmChanged(double newBpm)

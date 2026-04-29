@@ -86,6 +86,7 @@ public:
     void pauseRequested() override;
     void stopRequested() override;
     void loopToggled(bool enabled) override;
+    void returnToStartOnPauseToggled(bool enabled) override;
     void bpmChanged(double newBpm) override;
     void scaleChanged(int rootNote, int scaleType) override;
     void viewToggled(bool workspaceView) override;
@@ -162,6 +163,7 @@ private:
     juce::MouseCursor techCursor_;
 
     // Main GUI Components
+    juce::TooltipWindow tooltipWindow_;
     MenuBarComponent menuBar_;
     TransportBarComponent transportBar_;
     TopBarComponent topBar_;

@@ -301,7 +301,9 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
     };
 
 // 添加轨道按钮 - 带触觉反馈的+号按钮
-class AddTrackButton : public juce::Component, private juce::Timer
+class AddTrackButton : public juce::Component,
+                       public juce::TooltipClient,
+                       private juce::Timer
 {
 public:
     AddTrackButton()
@@ -315,6 +317,10 @@ public:
     }
 
     std::function<void()> onClick;
+
+    // TooltipClient 接口实现
+    juce::String getTooltip() override { return tooltip_; }
+    void setTooltipText(const juce::String& tooltip) { tooltip_ = tooltip; }
 
     void setInferenceActive(bool active)
     {
@@ -410,6 +416,7 @@ private:
     bool isMouseDown_ = false;
     float glowAlpha_ = 0.0f;
     std::vector<Ripple> ripples_;
+    juce::String tooltip_;
 
     void timerCallback() override
     {

@@ -35,6 +35,23 @@ endif()
 set(OPENTUNE_JUCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/JUCE-master")
 add_subdirectory("${OPENTUNE_JUCE_DIR}")
 
+# Build formats (default: Standalone)
+# Can be overridden to build plugins: VST3, CLAP, LV2, Standalone
+set(OPENTUNE_FORMATS "Standalone" CACHE STRING "JUCE plugin formats to build")
+
+# Map OPENTUNE_FORMATS to JUCE FORMATS
+if(OPENTUNE_FORMATS STREQUAL "Standalone")
+    set(JUCE_FORMATS Standalone)
+elseif(OPENTUNE_FORMATS STREQUAL "VST3")
+    set(JUCE_FORMATS VST3)
+elseif(OPENTUNE_FORMATS STREQUAL "CLAP")
+    set(JUCE_FORMATS CLAP)
+elseif(OPENTUNE_FORMATS STREQUAL "LV2")
+    set(JUCE_FORMATS LV2)
+else()
+    set(JUCE_FORMATS Standalone)
+endif()
+
 # ==============================================================================
 # ONNX Runtime Configuration
 # ==============================================================================
@@ -205,8 +222,8 @@ juce_add_plugin(OpenTune
     BUNDLE_ID "com.daya.opentune"
     VERSION "${PROJECT_VERSION}"
     
-    # Formats (Standalone only)
-    FORMATS Standalone
+    # Formats (configurable via OPENTUNE_FORMATS)
+    FORMATS ${JUCE_FORMATS}
     
     # Plugin Type
     IS_SYNTH FALSE
@@ -480,18 +497,22 @@ if(WIN32)
     target_compile_definitions(OpenTune PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     if(MSVC)
         target_compile_options(OpenTune PRIVATE /utf-8 /MP /wd4100 /wd4127)
-        # Delay load onnxruntime.dll for Standalone
-        target_link_options(OpenTune_Standalone PRIVATE "/DELAYLOAD:onnxruntime.dll")
-        target_link_libraries(OpenTune_Standalone PRIVATE delayimp)
-        target_compile_options(OpenTune_Standalone PRIVATE /wd4100)
+        # Delay load onnxruntime.dll for Standalone only
+        if("Standalone" IN_LIST JUCE_FORMATS)
+            target_link_options(OpenTune_Standalone PRIVATE "/DELAYLOAD:onnxruntime.dll")
+            target_link_libraries(OpenTune_Standalone PRIVATE delayimp)
+            target_compile_options(OpenTune_Standalone PRIVATE /wd4100)
+        endif()
     endif()
 elseif(APPLE)
     target_compile_options(OpenTune PRIVATE -Wall -Wno-unused-parameter)
     # Set rpath so the app bundle can find the embedded dylib
-    set_target_properties(OpenTune_Standalone PROPERTIES
-        BUILD_RPATH "@executable_path/../Frameworks"
-        INSTALL_RPATH "@executable_path/../Frameworks"
-    )
+    if("Standalone" IN_LIST JUCE_FORMATS)
+        set_target_properties(OpenTune_Standalone PROPERTIES
+            BUILD_RPATH "@executable_path/../Frameworks"
+            INSTALL_RPATH "@executable_path/../Frameworks"
+        )
+    endif()
 endif()
 
 # ==============================================================================
@@ -500,6 +521,9 @@ endif()
 # Define model files
 set(HIFIGAN_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx")
 set(RMVPE_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/models/rmvpe.onnx")
+
+# Only configure standalone resources if building Standalone format
+if("Standalone" IN_LIST JUCE_FORMATS)
 
 # --- ONNX Runtime library copying ---
 if(WIN32)
@@ -696,6 +720,8 @@ if(OPENTUNE_BUILD_TESTS)
 
     message(STATUS "Unit tests enabled - run with: OpenTuneTests")
 endif()
+
+endif() # Standalone IN_LIST JUCE_FORMATS
 
 # ==============================================================================
 # Installation

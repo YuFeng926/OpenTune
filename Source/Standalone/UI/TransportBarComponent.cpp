@@ -568,6 +568,7 @@ TransportBarComponent::TransportBarComponent()
     , pauseButton_(LOC(kPause), ToolbarIcons::getPauseIcon())
     , stopButton_(LOC(kStop), ToolbarIcons::getStopIcon())
     , loopButton_(LOC(kLoop), ToolbarIcons::getLoopIcon())
+    , returnToStartButton_(LOC(kReturnToStart), ToolbarIcons::getReturnToStartIcon(), ToolbarIcons::getReturnToStartOffIcon())
     , trackViewButton_(LOC(kTracks), ToolbarIcons::getTrackViewIcon())
     , pianoViewButton_(LOC(kPianoRollView), ToolbarIcons::getPianoViewIcon())
     , tapButton_("Tap", ToolbarIcons::getTapIcon())
@@ -606,6 +607,13 @@ TransportBarComponent::TransportBarComponent()
     loopButton_.onClick = [this] { onLoopToggled(); };
     loopButton_.setTooltip(LOC(kLoop));
     addAndMakeVisible(loopButton_);
+
+    // Setup Return To Start Button
+    returnToStartButton_.setClickingTogglesState(true);
+    returnToStartButton_.setToggleState(true, juce::dontSendNotification);  // 默认开启（预览模式）
+    returnToStartButton_.onClick = [this] { onReturnToStartToggled(); };
+    returnToStartButton_.setTooltip(LOC(kReturnToStartTooltip));
+    addAndMakeVisible(returnToStartButton_);
 
     // Setup Track View Button
     trackViewButton_.setClickingTogglesState(true);
@@ -829,6 +837,8 @@ void TransportBarComponent::resized()
     stopButton_.setBounds(row.removeFromLeft(buttonWidth));
     row.removeFromLeft(spacing);
     loopButton_.setBounds(row.removeFromLeft(buttonWidth));
+    row.removeFromLeft(spacing);
+    returnToStartButton_.setBounds(row.removeFromLeft(buttonWidth));
     row.removeFromLeft(groupGap);
 
     trackViewButton_.setBounds(row.removeFromLeft(buttonWidth));
@@ -894,6 +904,16 @@ bool TransportBarComponent::isLoopEnabled() const
     return loopButton_.getToggleState();
 }
 
+void TransportBarComponent::setReturnToStartOnPause(bool enabled)
+{
+    returnToStartButton_.setToggleState(enabled, juce::dontSendNotification);
+}
+
+bool TransportBarComponent::isReturnToStartOnPause() const
+{
+    return returnToStartButton_.getToggleState();
+}
+
 void TransportBarComponent::setWorkspaceView(bool workspaceView)
 {
     workspaceView_ = workspaceView;
@@ -957,6 +977,12 @@ void TransportBarComponent::onLoopToggled()
 {
     bool enabled = loopButton_.getToggleState();
     listeners_.call([enabled](Listener& l) { l.loopToggled(enabled); });
+}
+
+void TransportBarComponent::onReturnToStartToggled()
+{
+    bool enabled = returnToStartButton_.getToggleState();
+    listeners_.call([enabled](Listener& l) { l.returnToStartOnPauseToggled(enabled); });
 }
 
 void TransportBarComponent::onTrackViewClicked()

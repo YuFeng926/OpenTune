@@ -26,6 +26,7 @@ void PianoRollComponent::initializeUIComponents() {
 
     scrollModeToggleButton_.setButtonText(scrollMode_ == ScrollMode::Continuous ? "Cont" : "Page");
     scrollModeToggleButton_.setFontHeight(11.0f);
+    scrollModeToggleButton_.setTooltip("Toggle scroll mode: Page or Continuous");
     scrollModeToggleButton_.onClick = [this] {
         if (scrollMode_ == ScrollMode::Page) {
             scrollMode_ = ScrollMode::Continuous;
@@ -40,6 +41,7 @@ void PianoRollComponent::initializeUIComponents() {
 
     timeUnitToggleButton_.setButtonText("Time");
     timeUnitToggleButton_.setFontHeight(11.0f);
+    timeUnitToggleButton_.setTooltip("Toggle time unit: Seconds or Bars/BPM");
     timeUnitToggleButton_.onClick = [this] {
         if (timeUnit_ == TimeUnit::Seconds) {
             timeUnit_ = TimeUnit::Bars;

@@ -25,6 +25,7 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     scrollModeToggleButton_.setLookAndFeel(&smallButtonLookAndFeel_);
     scrollModeToggleButton_.setColour(juce::TextButton::buttonColourId, UIColors::backgroundLight);
     scrollModeToggleButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
+    scrollModeToggleButton_.setTooltip("Toggle scroll mode: Page or Continuous");
     scrollModeToggleButton_.onClick = [this] {
         if (scrollMode_ == ScrollMode::Page) {
             scrollMode_ = ScrollMode::Continuous;
@@ -41,6 +42,7 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
 
     timeUnitToggleButton_.setButtonText("Time");
     timeUnitToggleButton_.setLookAndFeel(&smallButtonLookAndFeel_);
+    timeUnitToggleButton_.setTooltip("Toggle time unit: Seconds or Bars/BPM");
     timeUnitToggleButton_.onClick = [this] {
         if (timeUnit_ == TimeUnit::Seconds) {
             timeUnit_ = TimeUnit::Bars;
