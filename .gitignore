@@ -55,6 +55,12 @@ docs/
 .cache/
 .claude/
 
+# Release packaging artifacts
+*.dmg
+
+# Install/packaging scripts
+scripts/
+
 # Third-party source code
 JUCE-master/
 openspec/
