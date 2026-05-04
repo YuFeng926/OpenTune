@@ -5,7 +5,7 @@
 ## Tech Debt
 
 **[Confirmed] Release metadata still drifts from official shipped milestone naming:**
-- Issue: build metadata still declares `1.0.0` even though official planning says the latest shipped milestone is `v2.3`.
+- Issue: build metadata still declares `1.0.0` even though official planning says the latest shipped milestone is `v1.4`.
 - Files: `CMakeLists.txt:11`, `CMakeLists.txt:316`, `.planning/PROJECT.md:19`, `.planning/ROADMAP.md:33`
 - Impact: host-visible plugin version strings, generated artifacts, and release bookkeeping can describe different versions of the same build.
 

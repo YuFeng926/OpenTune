@@ -39,7 +39,7 @@ started: reported after the previous OriginalF0 fix
 
 - timestamp: 2026-04-15T11:48:42.7322622+08:00
   checked: .planning/PROJECT.md, .planning/REQUIREMENTS.md, .planning/ROADMAP.md, .planning/STATE.md
-  found: current live tree is in v2.1 PianoRoll single-entry/single-VBlank convergence; VST3 editor remains an isolated shell reusing shared `PianoRollComponent` while shared clip truth still lives in processor `tracks_` guarded by `tracksLock_`
+  found: current live tree is in v1.3.1 PianoRoll single-entry/single-VBlank convergence; VST3 editor remains an isolated shell reusing shared `PianoRollComponent` while shared clip truth still lives in processor `tracks_` guarded by `tracksLock_`
   implication: AUTO crash should be explained through shared piano-roll/processor contracts, not through a VST3-only overlay path
 
 - timestamp: 2026-04-15T11:48:42.7322622+08:00

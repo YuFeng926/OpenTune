@@ -1,11 +1,11 @@
-# Requirements: OpenTune Post-v2.2 编辑融合、应用偏好与 Source/Materialization/Placement 真相澄清
+# Requirements: OpenTune Post-v1.3.2 编辑融合、应用偏好与 Source/Materialization/Placement 真相澄清
 
 **Defined:** 2026-04-20
 **Status:** ACTIVE MAINLINE
 **Core Value:** 双格式独立编译，零交叉影响
 **Detailed plan source:** `docs/plans/2026-04-17-single-source-workspace-{design,tasks}.md`, `docs/plans/2026-04-18-app-preferences-refactor.md`, `docs/plans/2026-04-18-app-preferences-refactor-test-verification.md`, `docs/plans/2026-04-19-interaction-scheme-visual-preferences.md`, `docs/plans/2026-04-19-interaction-scheme-visual-preferences-test-verification.md`, `docs/plans/2026-04-19-mac-standalone-bundle-migration.md`, `docs/plans/2026-04-19-mac-standalone-bundle-test-verification.md`, `docs/plans/2026-04-19-undo-affected-range-migration.md`, `docs/plans/2026-04-19-undo-affected-range-test-verification.md`, `docs/plans/2026-04-20-content-placement-two-truth-refactor.md`, `docs/plans/2026-04-20-content-placement-two-truth-refactor-test-verification.md`, `docs/plans/2026-04-21-content-placement-boundary-repair.md`, `docs/plans/2026-04-21-content-placement-boundary-repair-test-verification.md`, `docs/plans/2026-04-21-source-materialization-placement-projection-clarification.md`
 
-本主线承接 `v2.2` 发版后的继续收敛工作。2026-04-20 曾把 active line 写成 `Content/Placement` 两层真相重构；但 2026-04-21 用户明确澄清：同一份 source 在两个 placement 上必须可独立改 note、某个 ARA region 的编辑不得影响 sibling region、split 后左右两段默认拥有独立 editable materialization。由此，official planning 已改正为：`OpenTuneAudioProcessor` 继续作为 `SourceStore + MaterializationStore + StandaloneArrangement + VST3AraSession` 的 runtime shell，`AppPreferences` 与 `AudioEditingScheme` 的 owner 边界保持不变，但 persisted business truth 必须改写为 **`Source + Materialization + Placement`**，`Projection` 只是显式 derived contract。
+本主线承接 `v1.3.2` 发版后的继续收敛工作。2026-04-20 曾把 active line 写成 `Content/Placement` 两层真相重构；但 2026-04-21 用户明确澄清：同一份 source 在两个 placement 上必须可独立改 note、某个 ARA region 的编辑不得影响 sibling region、split 后左右两段默认拥有独立 editable materialization。由此，official planning 已改正为：`OpenTuneAudioProcessor` 继续作为 `SourceStore + MaterializationStore + StandaloneArrangement + VST3AraSession` 的 runtime shell，`AppPreferences` 与 `AudioEditingScheme` 的 owner 边界保持不变，但 persisted business truth 必须改写为 **`Source + Materialization + Placement`**，`Projection` 只是显式 derived contract。
 
 ## Current Mainline Requirements
 
@@ -30,7 +30,7 @@
 - [ ] **MAIN-10**: `.planning/PROJECT.md`、`.planning/ROADMAP.md`、`.planning/STATE.md` 与 live tree 的真实结构、测试现状、调试策略必须保持同步，后续不再允许 official planning 滞后于 `docs/plans/2026-04-18-*`、`docs/plans/2026-04-19-*` 或源码现实
 - [ ] **MAIN-11**: 当前主线的验证口径固定为“`OpenTuneTests` 轻量 smoke suites + 人工旅程 + `AppLogger` / targeted trace”；若后续需要补自动化，只允许新增针对性高信号守护，不恢复旧的 Phase 23-26 guard 家族
 - [ ] **MAIN-16**: undo result-chain 的 Standalone / VST3 L5 手工旅程本轮按用户许可暂缓；official planning 必须显式保留这条未完成验证，而不能把它记成 PASS
-- [ ] **MAIN-15**: 当前主线仍是 `post-v2.2` 的未编号收敛线；待上述范围冻结后，需要再决定下一个正式 milestone / release boundary
+- [ ] **MAIN-15**: 当前主线仍是 `post-v1.3.2` 的未编号收敛线；待上述范围冻结后，需要再决定下一个正式 milestone / release boundary
 - [ ] **MAIN-19**: shared runtime 必须彻底废弃 `clipId` 同时代表 source/materialization/placement 的混合 owner 语义；正式 persisted owners 改为 `sourceId`、`materializationId`、`placementId`，`Projection` 明确保持为 derived value object
 - [ ] **MAIN-20**: 同一份 source 再次出现在新的 Standalone placement 或新的 ARA playback region 上时，默认必须创建新的 editable materialization，而不是复用 existing shared content/workspace clip
 - [ ] **MAIN-21**: split 默认必须 birth left/right 两个新 materialization；不得再用 `placement.contentStartSeconds`、切 buffer 窗口或 shared content projection 来模拟“独立可编辑左右半段”
@@ -61,7 +61,7 @@
 | Source | Responsibility |
 |--------|----------------|
 | `docs/plans/2026-04-17-single-source-workspace-design.md` | 单工作区、shared clip reuse、三段真相 owner 的基础结构约束 |
-| `docs/plans/2026-04-17-single-source-workspace-tasks.md` | post-v2.2 基础结构收敛是如何落地的任务拆解 |
+| `docs/plans/2026-04-17-single-source-workspace-tasks.md` | post-v1.3.2 基础结构收敛是如何落地的任务拆解 |
 | `docs/plans/2026-04-18-app-preferences-refactor.md` | app-level preferences owner、显式 preferences composition、shared rule 输入的结构约束 |
 | `docs/plans/2026-04-18-app-preferences-refactor-test-verification.md` | 当前 app preferences / editing scheme 相关验证口径 |
 | `docs/plans/2026-04-19-interaction-scheme-visual-preferences.md` | 固定 interaction scheme、scheme-managed voiced-only 行为、shared visual preferences 的执行计划 |
@@ -79,7 +79,7 @@
 
 ## Notes
 
-- `v2.2` 仍是最新 shipped milestone；本文件描述的是其后的 active mainline，而不是新的已发版版本号。
+- `v1.3.2` 仍是最新 shipped milestone；本文件描述的是其后的 active mainline，而不是新的已发版版本号。
 - 当前 active mainline 的 live-tree reality 已包含 2026-04-18 app preferences refactor、2026-04-19 landed 的 scheme-managed voiced-only 行为 / shared visual preferences / Standalone-only mac bundle packaging cleanup / undo result-chain 实现，以及 2026-04-20 启动的 `Content/Placement` owner-cleanup 尝试；但 2026-04-21 的用户澄清已经说明：`ContentStore` 这层 live-tree reality 更接近 materialization owner，而不是最终想要共享的 source/content owner。
 - 当前主线仍不把队友仓库的 `tracks_` 单体模型、mutable note ref、curve-bound undo、standalone-only build 假设当成回流目标；只迁移其中与当前 owner 边界兼容、且符合 fixed-scheme + shared-preference 合约的正确部分。
 - 当前 phase 的完整验证仍未结束：旧 `Content/Placement` phase 自己的 L1-L4/L6 已按旧 verification source 重新执行并 PASS，但这不再等价于 owner-model PASS；现在新的 `Source/Materialization/Placement` guards 也已覆盖 source provenance / lineage、structured merge rejection、merge payload preservation 与 ARA source owner seeding，并重新执行通过。剩余未完成项只剩 L5 Standalone/VST3 手工旅程与 macOS bundle inspection。

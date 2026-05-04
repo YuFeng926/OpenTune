@@ -78,7 +78,7 @@ None - no manual verification or external credentials required.
 
 ## Next Phase Readiness
 - Phase 26 的 code、tests、verification source 已全部闭环，可进入最终 state/roadmap/requirements 收尾
-- milestone v2.2 的 brownfield cleanup 证据已经齐备，不再存在待补的 phase-level verification artifact
+- milestone v1.3.2 的 brownfield cleanup 证据已经齐备，不再存在待补的 phase-level verification artifact
 
 ## Self-Check: PASSED
 

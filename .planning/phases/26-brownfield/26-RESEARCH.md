@@ -135,4 +135,4 @@
 
 - Phase 26 不需要 phase split beyond 3 plans；复杂度主要在 brownfield audit，而不是大规模架构再设计。
 - 因为没有 `CONTEXT.md`，planner 应严格以 `PROJECT.md` / `REQUIREMENTS.md` / `ROADMAP.md` / `STATE.md` / live tree 为准，不补充新的产品层决策。
-- 这是 milestone v2.2 的收尾 phase，计划中必须显式把 **“不扩 core、不动 Standalone 行为、只删旧结构并补 guard”** 写成可验证 acceptance criteria，而不是停留在说明文字。
+- 这是 milestone v1.3.2 的收尾 phase，计划中必须显式把 **“不扩 core、不动 Standalone 行为、只删旧结构并补 guard”** 写成可验证 acceptance criteria，而不是停留在说明文字。
