@@ -1,149 +1,217 @@
-<div align="center">
+# OpenTune
 
-## OpenTune – AI 智能修音软件
-<img width="512" alt="1" src="https://github.com/user-attachments/assets/5f018b53-e78c-4eec-a2da-e71b0724bc9b" />
+AI-powered real-time pitch correction application. Supports Standalone and VST3 (with ARA extension) dual-format builds on Windows and macOS.
 
+## Features
 
-保留共振峰，移调不失真
+- **AI Pitch Detection** — RMVPE-based F0 extraction for accurate pitch tracking
+- **AI Vocoder** — PC-NSF HifiGAN neural vocoder with LR4 crossover mixing
+- **Piano Roll Editor** — Visual pitch editing with hand-draw, line, and selection tools
+- **Multi-scale Correction** — Chromatic, Major, Minor, Pentatonic, Dorian, Mixolydian, Harmonic Minor
+- **Dual Format** — Standalone application + VST3 plugin with ARA extension
+- **GPU Acceleration** — DirectML (Windows) / CoreML (macOS) for inference
+- **Multi-language** — English, Chinese, Japanese, Russian, Spanish
 
+## Project Structure
 
-OpenTune 是一款基于神经声码器的开源修音工具。与传统 DSP 算法直接移调不同，它使用 NSF-HiFiGAN 声码器在保留原始共振峰的前提下重新生成人声，即使进行极端音高调整，也能保持自然、扎实的音质。
+```
+OpenTune/
+├── Source/
+│   ├── ARA/                    # ARA document controller & playback renderer
+│   ├── Audio/                  # Audio format registry & async loader
+│   ├── DSP/                    # Resampling, mel spectrogram, crossover mixer
+│   ├── Editor/                 # Editor factory, preferences, shared components
+│   ├── Inference/              # ONNX Runtime inference (F0, vocoder, DML)
+│   ├── Plugin/                 # VST3 plugin editor
+│   ├── Services/               # F0 extraction service
+│   ├── Standalone/             # Standalone editor & UI components
+│   │   └── UI/
+│   │       └── PianoRoll/      # Piano roll renderer, tools, correction worker
+│   └── Utils/                  # Pitch curves, undo, preferences, CPU features
+├── Resources/
+│   ├── Fonts/                  # HONORSansCN-Medium.ttf
+│   ├── PianoSamples-mp3/       # Piano audition samples (MIDI 21–108)
+│   └── macOS/                  # Entitlements for code signing
+├── Tests/                      # Unit tests
+├── docs/                       # Multi-language user guides
+├── scripts/                    # macOS signing & packaging
+└── CMakeLists.txt              # Build configuration
+```
 
-</div>
+## Prerequisites
 
-<div align="center">
+| Requirement | Windows | macOS |
+|-------------|---------|-------|
+| **OS** | Windows 10+ | macOS 12.0+ (Monterey) |
+| **Architecture** | x64 | arm64 (Apple Silicon) |
+| **Compiler** | Visual Studio 2022 (MSVC 17+) | Xcode 14+ / Apple Clang |
+| **CMake** | 3.22+ | 3.22+ |
+| **C++ Standard** | C++17 | C++17 |
 
-## ✨ 亮点特性
+## Dependencies Setup
 
-<img width="512" alt="2" src="https://github.com/user-attachments/assets/55f7136e-fc8b-4576-af0b-2cbeea3c2f6e" />
-
-
-
-
-共振峰不变：改变音高时不影响声音的底色，告别"鸭子叫"或"换人唱"的失真感
-
-
-大范围移调：支持夸张的音高修正与转调，音质依然清晰稳定
-
-
-AI 重合成：基于深度学习的声码器，而非传统移调
-
-
-
-
-<img width="512" alt="3" src="https://github.com/user-attachments/assets/d99c088a-46f6-4177-a761-0af737416b41" />
-
-
-
-
-类Auto-Tune工作流：手绘、音符、锚点工具一应俱全，助你快速进入心流状态
-
-
-
-<img width="512" alt="4" src="https://github.com/user-attachments/assets/c95636d1-2eb8-4cad-8c2c-61b208adb961" />
-
-
-
-
-内置类Auto-Key自动检测调式：上手即修，不修也准，修了更准
-
-
-
-开源免费：永久免费，社区驱动，持续迭代
-
-
-
-</div>
-
-
-
-## 🖥️ 当前状态
-平台：Windows（Standalone 独立运行版本）
-
-即将推出：VST3 插件、ARA2 支持（可直接在 DAW 中运行）
-
-性能提示：目前 CPU/内存有一定占用，建议配备独立显卡以获得更流畅体验
-
-
-## 🧪 测试版说明
-这是早期测试版本，可能存在少量 bug，性能也尚未完全优化。欢迎下载试用，并通过 Issues 或 Discussion 提出宝贵意见、功能需求或使用中遇到的问题。我们会根据反馈积极改进。
-
-
-## 🧠 项目理念
-AI 的存在是为了帮助人，以人为本，带来更好的创作体验。
-
-在 AI 已经深度介入音乐制作的今天，混音和音频编辑却仍常受限于录音质量，耗费大量时间。OpenTune 希望通过开放的技术，让每一位创作者都能更自由地处理人声，把精力放回音乐本身。
-
-
-## 🙏 鸣谢
-特别感谢 DiffSinger 开源社区及所有贡献者。正是他们在神经声码器与歌声合成领域的持续探索，才为传统音乐制作带来了这份礼物。
-
-
-## 📥 下载与使用
-请前往 Releases 页面下载最新 Windows 独立运行包。
-解压后直接运行 .exe 文件，加载音频并设置目标音高即可开始处理。
-
-
-## Build Instructions
-## Build Requirements
-
-- CMake 3.22+
-- C++17 compiler (MSVC 2022 recommended on Windows)
-- Visual Studio 2022 (Windows)
-
-### Windows (MSVC)
+Clone the repository and prepare third-party dependencies:
 
 ```bash
-# Create build directory
-mkdir build
-cd build
-
-# Generate project files
-cmake .. -G "Visual Studio 17 2022" -A x64
-
-# Build
-cmake --build . --config Release
-
-# Output: build/OpenTune_artefacts/Release/Standalone/OpenTune.exe
+git clone -b standalone https://github.com/YuFeng926/OpenTune.git
+cd OpenTune
 ```
 
-### Build Output
+### 1. JUCE Framework
 
-After successful build, the Standalone executable will be located at:
+```bash
+git clone https://github.com/juce-framework/JUCE.git JUCE-master
 ```
-build/OpenTune_artefacts/Release/Standalone/OpenTune.exe
+
+### 2. ARA SDK
+
+```bash
+cd ThirdParty
+git clone --recursive --branch releases/2.2.0 https://github.com/Celemony/ARA_SDK.git ARA_SDK-releases-2.2.0
+cd ..
 ```
 
-Required DLLs and models will be automatically copied to the same directory.
+### 3. r8brain Resampler
 
-## Dependencies (Included)
+```bash
+cd ThirdParty
+git clone https://github.com/avaneev/r8brain-free-src.git r8brain-free-src-master
+cd ..
+```
 
-- **JUCE** - Cross-platform audio framework
-- **ONNX Runtime 1.17.3** - ML inference engine
-- **r8brain-free-src** - High-quality audio resampling library
+### 4. ONNX Runtime (v1.24.4)
 
-## AI Models
+#### Windows
 
-The application requires two ONNX models (included):
-- `models/rmvpe.onnx` - Pitch extraction model
-- `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx` - Vocoder model
+Download and extract to `ThirdParty/`:
 
+| Package | URL | Extract to |
+|---------|-----|------------|
+| ONNX Runtime CPU | [onnxruntime-win-x64-1.24.4.zip](https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip) | `ThirdParty/onnxruntime-win-x64-1.24.4/` |
+| ONNX Runtime DirectML | [Microsoft.ML.OnnxRuntime.DirectML.1.24.4.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.24.4) | `ThirdParty/onnxruntime-dml-1.24.4/` |
 
-## 🤝 参与贡献
-欢迎提交 PR、翻译文档、报告 bug 或提出新功能建议。让我们一起把 OpenTune 打磨得更好。
+> **Note:** Rename `.nupkg` to `.zip` and extract. The DML package provides `runtimes/win-x64/native/onnxruntime.dll` with built-in DirectML support.
 
+#### macOS (Apple Silicon)
 
-## 🙏 致谢
+```bash
+cd ThirdParty
+curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-arm64-1.24.4.tgz | tar xz
+cd ..
+```
 
-- **[OpenVPI 团队 / Diffsinger 社区声码器](https://github.com/openvpi/vocoders)** - 高质量的声码器实现，本项目的核心部分。
-- **[yxlllc / RMVPE](https://github.com/yxlllc/RMVPE)** - 使用了大佬训练的 RMVPE 权重，显著提升了音高提取的准确性与鲁棒性。
-- **[吃土大佬 (CNChTu) / FCPE](https://github.com/CNChTu/FCPE)** - 参考了 FCPE ，可能后续会尝试实装。
-- **[JUCE 框架](https://github.com/juce-framework/JUCE)** - 
-- **[avaneev / r8brain-free-src](https://github.com/avaneev/r8brain-free-src)** - 高效的重采样算法。
-各项目均遵循其自身的开源许可协议。
-感谢以上项目作者与团队的开放共享精神，他们的工作让本项目的实现成为可能。
+### 5. DirectML & DirectX Agility SDK (Windows only)
 
+Download NuGet packages and extract to `ThirdParty/`:
+
+| Package | Version | Extract to |
+|---------|---------|------------|
+| [Microsoft.AI.DirectML](https://www.nuget.org/packages/Microsoft.AI.DirectML/1.15.4) | 1.15.4 | `ThirdParty/microsoft.ai.directml.1.15.4/` |
+| [Microsoft.Direct3D.D3D12](https://www.nuget.org/packages/Microsoft.Direct3D.D3D12/1.619.1) | 1.619.1 | `ThirdParty/microsoft.direct3d.d3d12.1.619.1/` |
+
+### 6. AI Models
+
+Place ONNX model files in the project root:
+
+| Model | Path |
+|-------|------|
+| RMVPE (F0 extractor) | `models/rmvpe.onnx` |
+| PC-NSF HifiGAN (vocoder) | `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx` |
+
+### Final Directory Layout
+
+After setup, your `ThirdParty/` directory should look like:
+
+```
+ThirdParty/
+├── ARA_SDK-releases-2.2.0/
+├── r8brain-free-src-master/
+├── onnxruntime-win-x64-1.24.4/          # Windows only
+├── onnxruntime-dml-1.24.4/              # Windows only
+├── onnxruntime-osx-arm64-1.24.4/        # macOS only
+├── microsoft.ai.directml.1.15.4/        # Windows only
+└── microsoft.direct3d.d3d12.1.619.1/    # Windows only
+```
+
+## Build Instructions
+
+### Windows (Visual Studio + CMake)
+
+```powershell
+# Configure (generates Visual Studio solution)
+cmake -B build -G "Visual Studio 17 2022" -A x64
+
+# Build Release
+cmake --build build --config Release
+
+# Build Debug
+cmake --build build --config Debug
+```
+
+**Build outputs:**
+- Standalone: `build/OpenTune_artefacts/Release/Standalone/OpenTune.exe`
+- VST3: `build/OpenTune_artefacts/Release/VST3/OpenTune.vst3/`
+
+Post-build automatically copies ONNX Runtime DLLs, DirectML DLL, D3D12 Agility SDK, and AI models alongside the executables.
+
+### macOS (Xcode + CMake)
+
+```bash
+# Configure (generates Xcode project)
+cmake -B build -G Xcode
+
+# Build Release
+cmake --build build --config Release
+
+# Or open in Xcode
+open build/OpenTune.xcodeproj
+```
+
+**Build outputs:**
+- Standalone: `build/OpenTune_artefacts/Release/Standalone/OpenTune.app`
+- VST3: `build/OpenTune_artefacts/Release/VST3/OpenTune.vst3/`
+
+Post-build automatically:
+- Copies `libonnxruntime.1.24.4.dylib` to `OpenTune.app/Contents/Frameworks/`
+- Copies AI models to `OpenTune.app/Contents/Resources/models/`
+- Copies user guide translations to `OpenTune.app/Contents/Resources/docs/`
+- Merges `Info.plist` with microphone permission and app category metadata
+
+### Running Tests
+
+```bash
+cmake --build build --config Release --target OpenTuneTests
+ctest --test-dir build -C Release
+```
+
+## macOS Code Signing & Notarization
+
+For distribution, use the included signing script:
+
+```bash
+# Set environment variables
+export APPLE_TEAM_ID="YOUR_TEAM_ID"
+export APPLE_SIGNING_ID="Developer ID Application: Your Name (TEAM_ID)"
+export APPLE_ID="your@apple.id"
+export APPLE_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+
+# Sign and package
+bash scripts/sign-and-package.sh
+```
+
+The entitlements file at `Resources/macOS/OpenTune.entitlements` grants:
+- `com.apple.security.cs.disable-library-validation` — required for loading ONNX Runtime dylib
+- `com.apple.security.device.audio-input` — microphone access
+
+## VST3 Plugin Installation
+
+| Platform | VST3 Install Path |
+|----------|--------------------|
+| Windows | `C:\Program Files\Common Files\VST3\` |
+| macOS | `~/Library/Audio/Plug-Ins/VST3/` |
+
+Copy the `OpenTune.vst3` bundle to the appropriate directory. The VST3 plugin supports ARA extension for DAWs with ARA2 support (e.g., REAPER, Studio One, Cubase).
 
 ## License
-AGPL v3.0
 
+Copyright © 2024-2026 DAYA. All rights reserved.
