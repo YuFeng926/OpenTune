@@ -1,6 +1,6 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-04-20
+**Analysis Date:** 2026-05-05
 
 ## Naming Patterns
 
@@ -50,7 +50,7 @@
 **Patterns present now:**
 - 领域失败继续使用 `OpenTune::Result<T>` / `OpenTune::Error`，定义在 `Source/Utils/Error.h:79` 和 `Source/Utils/Error.h:102`；测试 fake 也沿用同一抽象，见 `Tests/TestSupport.cpp:17`。
 - 许多 API 仍以 `bool` 返回成功与否，并配合 early return，而不是再套一层兼容结构，例如 `commitPreparedImportAsPlacement()` usage in `Source/Standalone/PluginEditor.cpp:1564` and `replaceMaterializationAudioById()` guard in `Source/Plugin/PluginEditor.cpp:1149`。
-- debug 期用 `jassert` / `jassertfalse` 抓程序员错误，例如 `jassertfalse` in `Source/Standalone/PluginEditor.cpp:448`, `jassert` in `Source/ARA/OpenTunePlaybackRenderer.cpp:207`, `jassertfalse` in `Source/Standalone/UI/PianoRoll/PianoRollUndoSupport.cpp:78`。
+- debug 期用 `jassert` / `jassertfalse` 抓程序员错误，例如 `jassertfalse` in `Source/Standalone/PluginEditor.cpp:448`, `jassert` in `Source/ARA/OpenTunePlaybackRenderer.cpp:207`, `jassertfalse` (e.g. in the piano-roll editing layer)。
 - 用户可恢复分支通常直接提示并返回，不走兜底链路，例如 `AlertWindow::showMessageBoxAsync(...)` + `return` in `Source/Plugin/PluginEditor.cpp:939` and `Source/Plugin/PluginEditor.cpp:963`。
 
 ## Logging
@@ -95,4 +95,4 @@
 
 ---
 
-*Convention analysis: 2026-04-20*
+*Convention analysis: 2026-05-05*

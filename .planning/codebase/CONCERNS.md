@@ -1,11 +1,11 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-05-02
+**Analysis Date:** 2026-05-05
 
 ## Tech Debt
 
 **[Confirmed] Release metadata still drifts from official shipped milestone naming:**
-- Issue: build metadata still declares `1.0.0` even though official planning says the latest shipped milestone is `v2.2`.
+- Issue: build metadata still declares `1.0.0` even though official planning says the latest shipped milestone is `v2.3`.
 - Files: `CMakeLists.txt:11`, `CMakeLists.txt:316`, `.planning/PROJECT.md:19`, `.planning/ROADMAP.md:33`
 - Impact: host-visible plugin version strings, generated artifacts, and release bookkeeping can describe different versions of the same build.
 
@@ -90,4 +90,4 @@
 
 ---
 
-*Concerns audit: 2026-04-21 after rechecking the live tree and removing 2026-04-19 concerns that are no longer supported by current source state*
+*Concerns audit: 2026-05-05 after rechecking the live tree and removing 2026-04-19 concerns that are no longer supported by current source state*

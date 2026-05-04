@@ -1,6 +1,6 @@
 # Architecture
 
-**Analysis Date:** 2026-04-30
+**Analysis Date:** 2026-05-05
 
 ## Pattern Overview
 
@@ -131,14 +131,14 @@
 - `AutoRenderOverlayComponent` is reused by both shells.
 - `RenderBadgeComponent` is a lightweight floating status badge (semi-transparent rounded rect + white text) held by both editor shells for render state display.
 - `PlayheadOverlayComponent` is an independent transparent overlay child handling playhead line drawing, extracted from PianoRoll paint.
-- `PianoRollRenderer`, `PianoRollToolHandler`, `PianoRollUndoSupport`, `PianoRollCorrectionWorker`, and `PianoRollVisualInvalidation` separate piano-roll sub-responsibilities under `Source/Standalone/UI/PianoRoll/`.
+- `PianoRollRenderer`, `PianoRollToolHandler`, `PianoRollCorrectionWorker`, and `PianoRollVisualInvalidation` separate piano-roll sub-responsibilities under `Source/Standalone/UI/PianoRoll/`.
 
 **Inference, DSP, And Utility Policy Layer:**
 - Purpose: Supply audio preprocessing, model inference, render publication, app preferences, editing rules, and logging.
 - Location: `Source/Inference/`, `Source/DSP/`, `Source/Services/`, `Source/Utils/`
 - Verified responsibilities:
 - `F0InferenceService`, `VocoderDomain`, `VocoderRenderScheduler`, `RenderCache`, `RMVPEExtractor`, and `PCNSFHifiGANVocoder` live under `Source/Inference/`.
-- `ResamplingManager`, `MelSpectrogram`, and `ScaleInference` live under `Source/DSP/`.
+- `ResamplingManager`, `MelSpectrogram`, `ChromaKeyDetector`, and `CrossoverMixer` live under `Source/DSP/`.
 - `F0ExtractionService` lives under `Source/Services/` and is called by `requestMaterializationRefresh()`.
 - `AppPreferences`, `AudioEditingScheme`, `ParameterPanelSync`, `PitchCurve`, `PresetManager`, `TimeCoordinate`, and `AppLogger` live under `Source/Utils/`.
 
@@ -253,17 +253,17 @@
 
 **Test Entry:**
 - File: `Tests/TestMain.cpp`
-- Role: Declares `core`, `processor`, `ui`, and `architecture` suites in one native test executable.
+- Role: Declares `core`, `processor`, `ui`, `architecture`, `undo`, and `memory` suites in one native test executable.
 
 ## Historical Direction Of `content + placement`
 
-- `OpenTuneAudioProcessor::CommittedPlacement` in `Source/PluginProcessor.h` returns both `contentId` and `placementId`.
-- `StandaloneArrangement::Placement` in `Source/StandaloneArrangement.h` stores its own `placementId` plus referenced `contentId`, placement timeline start, content start, duration, and `mappingRevision`.
+- `OpenTuneAudioProcessor::CommittedPlacement` in `Source/PluginProcessor.h` returns both `materializationId` and `placementId`.
+- `StandaloneArrangement::Placement` in `Source/StandaloneArrangement.h` stores its own `placementId` plus referenced `materializationId`, placement timeline start, content start, duration, and `mappingRevision`.
 - `getStateInformation()` in `Source/PluginProcessor.cpp` serializes `Contents` and `StandaloneArrangement` into separate trees.
-- `VST3AraSession::AppliedContentProjection` in `Source/ARA/VST3AraSession.h` stores `contentId`, applied content/projection revisions, source bounds, playback start, and the applied region identity.
-- `OpenTunePlaybackRenderer` reads ARA playback by mapping published region playback time back into source time, then into `contentId`-backed playback reads.
+- `VST3AraSession::AppliedMaterializationProjection` in `Source/ARA/VST3AraSession.h` stores `materializationId`, applied materialization/projection revisions, source bounds, playback start, and the applied region identity.
+- `OpenTunePlaybackRenderer` reads ARA playback by mapping published region playback time back into source time, then into `materializationId`-backed playback reads.
 
-These bullets still describe the live tree, but after the 2026-04-21 clarification they are no longer sufficient to describe the correct product truth model.
+These bullets now describe the updated target naming after the 2026-04-21 clarification; `contentId` has been fully replaced by `materializationId` in the live tree's public API, and `AppliedContentProjection` is now `AppliedMaterializationProjection`.
 
 ## Cross-Cutting Concerns
 
@@ -286,4 +286,4 @@ These bullets still describe the live tree, but after the 2026-04-21 clarificati
 
 ---
 
-*Architecture analysis: 2026-04-20*
+*Architecture analysis: 2026-05-05*
