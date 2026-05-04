@@ -25,6 +25,7 @@ public:
 
     // 同步按钮状态（避免 ToggleState 与真实可见性不一致）
     void setSidePanelsVisible(bool trackPanelVisible, bool parameterPanelVisible);
+    void setTrackPanelToggleVisible(bool visible);
 
     void refreshLocalizedText();  // 刷新本地化文本
 
@@ -35,6 +36,7 @@ private:
     // 侧边栏开关（统一图标按钮）
     UnifiedToolbarButton trackPanelToggleButton_ { LOC(kTracks), {} }; // Icon set in constructor
     UnifiedToolbarButton parameterPanelToggleButton_ { LOC(kProps), {} };
+    bool trackPanelToggleVisible_{true};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TopBarComponent)
 };

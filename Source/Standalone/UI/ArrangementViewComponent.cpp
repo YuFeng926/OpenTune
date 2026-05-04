@@ -3,16 +3,146 @@
 #include "FrameScheduler.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../../Utils/KeyShortcutConfig.h"
+#include "../../Utils/PlacementActions.h"
+#include "../../Utils/LocalizationManager.h"
 
 namespace OpenTune {
+
+namespace {
+
+constexpr int kArrangementContentStartX = 8;
+
+int getStandaloneSelectedPlacementIndex(OpenTuneAudioProcessor& processor, int trackId)
+{
+    const auto* arrangement = processor.getStandaloneArrangement();
+    return arrangement != nullptr ? arrangement->getSelectedPlacementIndex(trackId) : -1;
+}
+
+int getStandaloneActiveTrack(OpenTuneAudioProcessor& processor)
+{
+    const auto* arrangement = processor.getStandaloneArrangement();
+    return arrangement != nullptr ? arrangement->getActiveTrackId() : 0;
+}
+
+int getStandalonePlacementCount(OpenTuneAudioProcessor& processor, int trackId)
+{
+    const auto* arrangement = processor.getStandaloneArrangement();
+    return arrangement != nullptr ? arrangement->getNumPlacements(trackId) : 0;
+}
+
+bool moveStandalonePlacement(OpenTuneAudioProcessor& processor,
+                             int sourceTrackId,
+                             int targetTrackId,
+                             uint64_t placementId,
+                             double newStartSeconds)
+{
+    return processor.movePlacementToTrack(sourceTrackId, targetTrackId, placementId, newStartSeconds);
+}
+
+bool getStandalonePlacementById(OpenTuneAudioProcessor& processor,
+                                int trackId,
+                                uint64_t placementId,
+                                StandaloneArrangement::Placement& out)
+{
+    const auto* arrangement = processor.getStandaloneArrangement();
+    return arrangement != nullptr
+        && trackId >= 0
+        && trackId < OpenTuneAudioProcessor::MAX_TRACKS
+        && placementId != 0
+        && arrangement->getPlacementById(trackId, placementId, out);
+}
+
+bool getStandalonePlacementByIndex(OpenTuneAudioProcessor& processor,
+                                   int trackId,
+                                   int placementIndex,
+                                   StandaloneArrangement::Placement& out)
+{
+    const auto* arrangement = processor.getStandaloneArrangement();
+    return arrangement != nullptr
+        && trackId >= 0
+        && trackId < OpenTuneAudioProcessor::MAX_TRACKS
+        && placementIndex >= 0
+        && arrangement->getPlacementByIndex(trackId, placementIndex, out);
+}
+
+bool getStandalonePlacementStartSeconds(OpenTuneAudioProcessor& processor,
+                                        int trackId,
+                                        uint64_t placementId,
+                                        double& outStartSeconds)
+{
+    StandaloneArrangement::Placement placement;
+    if (!getStandalonePlacementById(processor, trackId, placementId, placement)) {
+        outStartSeconds = 0.0;
+        return false;
+    }
+
+    outStartSeconds = placement.timelineStartSeconds;
+    return true;
+}
+
+bool getStandalonePlacementGain(OpenTuneAudioProcessor& processor,
+                                int trackId,
+                                uint64_t placementId,
+                                float& outGain)
+{
+    StandaloneArrangement::Placement placement;
+    if (!getStandalonePlacementById(processor, trackId, placementId, placement)) {
+        outGain = 1.0f;
+        return false;
+    }
+
+    outGain = placement.gain;
+    return true;
+}
+
+bool setStandalonePlacementStartSeconds(OpenTuneAudioProcessor& processor,
+                                        int trackId,
+                                        uint64_t placementId,
+                                        double startSeconds)
+{
+    auto* arrangement = processor.getStandaloneArrangement();
+    return arrangement != nullptr
+        && trackId >= 0
+        && trackId < OpenTuneAudioProcessor::MAX_TRACKS
+        && placementId != 0
+        && arrangement->setPlacementTimelineStartSeconds(trackId, placementId, startSeconds);
+}
+
+bool setStandalonePlacementGain(OpenTuneAudioProcessor& processor,
+                                int trackId,
+                                uint64_t placementId,
+                                float gain)
+{
+    auto* arrangement = processor.getStandaloneArrangement();
+    return arrangement != nullptr
+        && trackId >= 0
+        && trackId < OpenTuneAudioProcessor::MAX_TRACKS
+        && placementId != 0
+        && arrangement->setPlacementGain(trackId, placementId, gain);
+}
+
+} // namespace
+
+static double selectBeatInterval(double pixelsPerBeat) {
+    if (pixelsPerBeat < 2.5) return 32.0;
+    if (pixelsPerBeat < 5.0) return 16.0;
+    if (pixelsPerBeat < 10.0) return 8.0;
+    if (pixelsPerBeat < 40.0) return 4.0;
+    return 1.0;
+}
+
+static double selectMarkerInterval(double pixelsPerSecond) {
+    if (pixelsPerSecond < 1.33) return 60.0;
+    if (pixelsPerSecond < 4.0) return 30.0;
+    if (pixelsPerSecond < 8.0) return 10.0;
+    if (pixelsPerSecond < 40.0) return 5.0;
+    return 1.0;
+}
 
 ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& processor)
     : processor_(processor)
 {
     setWantsKeyboardFocus(true);
-    timeConverter_.setContext(processor_.getBpm(), processor_.getTimeSigNumerator(), processor_.getTimeSigDenominator());
-    timeConverter_.setZoom(zoomLevel_);
-    timeConverter_.setScrollOffset(scrollOffset_);
 
     addAndMakeVisible(horizontalScrollBar_);
     addAndMakeVisible(verticalScrollBar_);
@@ -38,6 +168,7 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     scrollModeToggleButton_.setColour(juce::TextButton::buttonColourId, UIColors::backgroundLight);
     scrollModeToggleButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
     addAndMakeVisible(scrollModeToggleButton_);
+    scrollModeToggleButton_.setTooltip(LOC(kTooltipScrollMode));
 
     timeUnitToggleButton_.setButtonText("Time");
     timeUnitToggleButton_.setLookAndFeel(&smallButtonLookAndFeel_);
@@ -54,9 +185,10 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     timeUnitToggleButton_.setColour(juce::TextButton::buttonColourId, UIColors::backgroundLight);
     timeUnitToggleButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
     addAndMakeVisible(timeUnitToggleButton_);
+    timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
 
     addAndMakeVisible(playheadOverlay_);
-    playheadOverlay_.setPianoKeyWidth(8);
+    playheadOverlay_.setPianoKeyWidth(kArrangementContentStartX);
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
         this, [this](double timestampSec) { onScrollVBlankCallback(timestampSec); });
 }
@@ -85,9 +217,8 @@ void ArrangementViewComponent::setZoomLevel(double zoom)
 {
     // 限制缩放范围：0.02~10.0（支持更长音频的完整显示）
     zoomLevel_ = juce::jlimit(0.02, 10.0, zoom);
-    timeConverter_.setZoom(zoomLevel_);
-    // 同步缩放级别到高性能播放头覆盖层
     playheadOverlay_.setZoomLevel(zoomLevel_);
+    syncPlayheadOverlay();
     updateScrollBars();
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
 }
@@ -99,10 +230,9 @@ void ArrangementViewComponent::setScrollOffset(int pixels)
         return;
 
     scrollOffset_ = newOffset;
-    timeConverter_.setScrollOffset(scrollOffset_);
     horizontalScrollBar_.setCurrentRangeStart(scrollOffset_);
-    // 同步滚动偏移到高性能播放头覆盖层
     playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
+    syncPlayheadOverlay();
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
 }
 
@@ -132,17 +262,16 @@ void ArrangementViewComponent::fitToContent()
 
     for (int t = 0; t < OpenTuneAudioProcessor::MAX_TRACKS; ++t)
     {
-        int numClips = processor_.getNumClips(t);
-        for (int i = 0; i < numClips; ++i)
+        const int placementCount = getStandalonePlacementCount(processor_, t);
+        for (int i = 0; i < placementCount; ++i)
         {
-            double start = processor_.getClipStartSeconds(t, i);
-            std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer =
-                processor_.getClipAudioBuffer(t, i);
-            double dur = 0.0;
-            if (audioBuffer) {
-                dur = (double)audioBuffer->getNumSamples() / storedSampleRate;
+            StandaloneArrangement::Placement placement;
+            if (!getStandalonePlacementByIndex(processor_, t, i, placement)) {
+                continue;
             }
-            maxEndTime = juce::jmax(maxEndTime, start + dur);
+
+            juce::ignoreUnused(storedSampleRate);
+            maxEndTime = juce::jmax(maxEndTime, placement.timelineEndSeconds());
         }
     }
 
@@ -150,7 +279,7 @@ void ArrangementViewComponent::fitToContent()
         return;
     }
 
-    int viewWidth = getWidth() - 8;
+    int viewWidth = getWidth() - kArrangementContentStartX;
     int paddingPx = 12;
     int drawableWidth = juce::jmax(1, viewWidth - paddingPx);
     double zoom = (static_cast<double>(drawableWidth) / maxEndTime) / 100.0;
@@ -160,24 +289,13 @@ void ArrangementViewComponent::fitToContent()
     setScrollOffset(0);
 }
 
-void ArrangementViewComponent::updateMeter(int trackId, float rmsDb)
-{
-    juce::ignoreUnused(trackId, rmsDb);
-}
-
-void ArrangementViewComponent::prioritizeWaveformBuildForClip(int trackId, uint64_t clipId)
+bool ArrangementViewComponent::isWaveformCacheCompleteForMaterialization(int trackId, uint64_t materializationId) const
 {
     juce::ignoreUnused(trackId);
-    prioritizedWaveformKey_ = clipId;
-}
-
-bool ArrangementViewComponent::isWaveformCacheCompleteForClip(int trackId, uint64_t clipId) const
-{
-    juce::ignoreUnused(trackId);
-    if (clipId == 0)
+    if (materializationId == 0)
         return false;
 
-    const auto* mipmap = waveformMipmapCache_.get(clipId);
+    const auto* mipmap = waveformMipmapCache_.get(materializationId);
     if (!mipmap)
         return false;
 
@@ -230,17 +348,16 @@ void ArrangementViewComponent::updateScrollBars()
 
     for (int t = 0; t < OpenTuneAudioProcessor::MAX_TRACKS; ++t)
     {
-        int numClips = processor_.getNumClips(t);
-        for (int i = 0; i < numClips; ++i)
+        const int placementCount = getStandalonePlacementCount(processor_, t);
+        for (int i = 0; i < placementCount; ++i)
         {
-            double start = processor_.getClipStartSeconds(t, i);
-            std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer =
-                processor_.getClipAudioBuffer(t, i);
-            double dur = 0.0;
-            if (audioBuffer) {
-                dur = (double)audioBuffer->getNumSamples() / storedSampleRate;
+            StandaloneArrangement::Placement placement;
+            if (!getStandalonePlacementByIndex(processor_, t, i, placement)) {
+                continue;
             }
-            maxEndTime = juce::jmax(maxEndTime, start + dur + 10.0);
+
+            juce::ignoreUnused(storedSampleRate);
+            maxEndTime = juce::jmax(maxEndTime, placement.timelineEndSeconds() + 10.0);
         }
     }
 
@@ -257,14 +374,25 @@ void ArrangementViewComponent::updateScrollBars()
     verticalScrollBar_.setCurrentRange(verticalScrollOffset_, visibleHeight);
 }
 
-int ArrangementViewComponent::timeToX(double seconds) const
+int ArrangementViewComponent::absoluteTimeToContentX(double seconds) const
 {
-    return timeConverter_.timeToPixel(seconds) + 8;
+    return static_cast<int>(std::llround(seconds * 100.0 * zoomLevel_));
 }
 
-double ArrangementViewComponent::xToTime(int x) const
+int ArrangementViewComponent::absoluteTimeToViewportX(double seconds) const
 {
-    return timeConverter_.pixelToTime(x - 8);
+    return absoluteTimeToViewportX(seconds, static_cast<double>(scrollOffset_));
+}
+
+int ArrangementViewComponent::absoluteTimeToViewportX(double seconds, double projectedScrollOffset) const
+{
+    const double contentX = static_cast<double>(absoluteTimeToContentX(seconds));
+    return static_cast<int>(std::llround(contentX - projectedScrollOffset)) + kArrangementContentStartX;
+}
+
+double ArrangementViewComponent::viewportXToAbsoluteTime(int x) const
+{
+    return (static_cast<double>(x - kArrangementContentStartX + scrollOffset_)) / (100.0 * zoomLevel_);
 }
 
 juce::Rectangle<int> ArrangementViewComponent::getTrackLaneBounds(int trackId) const
@@ -276,31 +404,36 @@ juce::Rectangle<int> ArrangementViewComponent::getTrackLaneBounds(int trackId) c
     return bounds.withY(rulerHeight_ + trackId * h - verticalScrollOffset_).withHeight(h);
 }
 
-juce::Rectangle<int> ArrangementViewComponent::getClipBounds(int trackId, int clipIndex) const
+juce::Rectangle<int> ArrangementViewComponent::buildProjectedPlacementBounds(int trackId, int placementIndex) const
 {
-    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer =
-        processor_.getClipAudioBuffer(trackId, clipIndex);
-    if (audioBuffer == nullptr)
+    if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS || placementIndex < 0) {
         return {};
+    }
 
-    double startSeconds = processor_.getClipStartSeconds(trackId, clipIndex);
-    int numSamples = audioBuffer->getNumSamples();
-    if (numSamples <= 0)
+    StandaloneArrangement::Placement placement;
+    if (!getStandalonePlacementByIndex(processor_, trackId, placementIndex, placement)) {
         return {};
+    }
 
-    // [TIME-01] Audio is stored at fixed 44.1kHz - use stored sample rate for duration calculation
-    constexpr double storedSampleRate = 44100.0;
-    double durationSeconds = static_cast<double>(numSamples) / storedSampleRate;
+    if (placement.durationSeconds <= 0.0) {
+        return {};
+    }
+
+    const double endSeconds = placement.timelineEndSeconds();
+
     auto lane = getTrackLaneBounds(trackId).reduced(6, 8);
-
-    int x1 = timeToX(startSeconds);
-    int x2 = timeToX(startSeconds + durationSeconds);
-    int w = juce::jmax(8, x2 - x1);
-
-    return { x1, lane.getY(), w, lane.getHeight() };
+    const int x1 = absoluteTimeToViewportX(placement.timelineStartSeconds);
+    const int x2 = absoluteTimeToViewportX(endSeconds);
+    const int width = juce::jmax(8, x2 - x1);
+    return {x1, lane.getY(), width, lane.getHeight()};
 }
 
-ArrangementViewComponent::HitTestResult ArrangementViewComponent::hitTestClip(juce::Point<int> p) const
+juce::Rectangle<int> ArrangementViewComponent::getPlacementBounds(int trackId, int placementIndex) const
+{
+    return buildProjectedPlacementBounds(trackId, placementIndex);
+}
+
+ArrangementViewComponent::HitTestResult ArrangementViewComponent::hitTestPlacement(juce::Point<int> p) const
 {
     HitTestResult r;
     if (p.y < rulerHeight_)
@@ -314,31 +447,22 @@ ArrangementViewComponent::HitTestResult ArrangementViewComponent::hitTestClip(ju
     int trackId = (h > 0) ? (adjustedY - rulerHeight_) / h : -1;
     if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS) return r;
 
-    int numClips = processor_.getNumClips(trackId);
-    for (int i = 0; i < numClips; ++i)
+    const int placementCount = getStandalonePlacementCount(processor_, trackId);
+    for (int i = 0; i < placementCount; ++i)
     {
-        auto bounds = getClipBounds(trackId, i);
+        auto bounds = getPlacementBounds(trackId, i);
         if (bounds.isEmpty())
             continue;
         if (bounds.contains(p))
         {
             r.trackId = trackId;
-            r.clipIndex = i;
-            r.clipBounds = bounds;
+            r.placementIndex = i;
+            r.placementBounds = bounds;
             r.isTopEdge = (p.y - bounds.getY()) <= 6;
             return r;
         }
     }
     return r;
-}
-
-uint64_t ArrangementViewComponent::getClipCacheKey(int trackId, int clipIndex) const
-{
-    const uint64_t id = processor_.getClipId(trackId, clipIndex);
-    if (id != 0)
-        return id;
-
-    return (static_cast<uint64_t>(static_cast<uint32_t>(trackId)) << 32) | static_cast<uint32_t>(clipIndex);
 }
 
 bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
@@ -351,13 +475,18 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
     
     for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
     {
-        const int numClips = processor_.getNumClips(trackId);
-        for (int clipIndex = 0; clipIndex < numClips; ++clipIndex)
+        const int placementCount = getStandalonePlacementCount(processor_, trackId);
+        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex)
         {
-            const uint64_t key = getClipCacheKey(trackId, clipIndex);
+            StandaloneArrangement::Placement placement;
+            if (!getStandalonePlacementByIndex(processor_, trackId, placementIndex, placement)) {
+                continue;
+            }
+
+            const uint64_t key = placement.materializationId;
             alive.insert(key);
             
-            auto audioBuffer = processor_.getClipAudioBuffer(trackId, clipIndex);
+            auto audioBuffer = processor_.getMaterializationAudioBufferById(placement.materializationId);
             if (audioBuffer)
             {
                 auto& mipmap = waveformMipmapCache_.getOrCreate(key);
@@ -378,19 +507,12 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
     const int timeSigDenom = processor_.getTimeSigDenominator();
     if (lastContextBpm_ != bpm || lastContextTimeSigNum_ != timeSigNum || lastContextTimeSigDenom_ != timeSigDenom)
     {
-        timeConverter_.setContext(bpm, timeSigNum, timeSigDenom);
         lastContextBpm_ = bpm;
         lastContextTimeSigNum_ = timeSigNum;
         lastContextTimeSigDenom_ = timeSigDenom;
     }
-    timeConverter_.setZoom(zoomLevel_);
-    
-    if (processor_.isPlaying() && scrollMode_ == ScrollMode::Continuous)
-        timeConverter_.setScrollOffset(static_cast<double>(smoothScrollCurrent_));
-    else
-        timeConverter_.setScrollOffset(static_cast<double>(scrollOffset_));
 
-    const auto themeId = Theme::getActiveTheme();
+    const auto themeId = UIColors::currentThemeId();
     
     auto bounds = getLocalBounds().toFloat();
     
@@ -406,26 +528,32 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
     for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
     {
-        int numClips = processor_.getNumClips(trackId);
-        for (int clipIndex = 0; clipIndex < numClips; ++clipIndex)
+        const int placementCount = getStandalonePlacementCount(processor_, trackId);
+        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex)
         {
-            auto clipBounds = getClipBounds(trackId, clipIndex);
-            if (clipBounds.isEmpty())
+            StandaloneArrangement::Placement placement;
+            if (!getStandalonePlacementByIndex(processor_, trackId, placementIndex, placement)) {
+                continue;
+            }
+
+            auto placementBounds = getPlacementBounds(trackId, placementIndex);
+            if (placementBounds.isEmpty())
                 continue;
 
-            uint64_t clipId = processor_.getClipId(trackId, clipIndex);
-            bool isSelected = (trackId == selectedTrack_ && clipIndex == selectedClip_) 
-                           || isClipSelected(trackId, clipId);
+            const uint64_t placementId = placement.placementId;
+            const uint64_t materializationId = placement.materializationId;
+            bool isSelected = (trackId == selectedTrack_ && placementIndex == selectedPlacementIndex_)
+                           || isPlacementSelected(trackId, placementId);
 
-            auto clipArea = clipBounds.toFloat();
+            auto placementArea = placementBounds.toFloat();
             if (themeId == ThemeId::DarkBlueGrey && isSelected)
             {
-                juce::ColourGradient sel(juce::Colour { 0xFFF7F3EA }, clipArea.getX(), clipArea.getBottom(),
-                                         juce::Colour { 0xFFBFE0EF }, clipArea.getX(), clipArea.getY(), false);
+                juce::ColourGradient sel(juce::Colour { 0xFFF7F3EA }, placementArea.getX(), placementArea.getBottom(),
+                                         juce::Colour { 0xFFBFE0EF }, placementArea.getX(), placementArea.getY(), false);
                 g.setGradientFill(sel);
-                g.fillRoundedRectangle(clipArea, 6.0f);
+                g.fillRoundedRectangle(placementArea, 6.0f);
                 g.setColour(UIColors::panelBorder.withAlpha(0.55f));
-                g.drawRoundedRectangle(clipArea.reduced(0.5f), 6.0f, 1.0f);
+                g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
             }
             else if (themeId == ThemeId::BlueBreeze)
             {
@@ -435,13 +563,13 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
                 juce::Colour bottomColor = isSelected ? juce::Colour(BlueBreeze::Colors::ClipSelectedBottom) 
                                                       : juce::Colour(BlueBreeze::Colors::ClipGradientBottom);
                 
-                juce::ColourGradient grad(topColor, clipArea.getX(), clipArea.getY(),
-                                          bottomColor, clipArea.getX(), clipArea.getBottom(), false);
+                juce::ColourGradient grad(topColor, placementArea.getX(), placementArea.getY(),
+                                          bottomColor, placementArea.getX(), placementArea.getBottom(), false);
                 g.setGradientFill(grad);
-                g.fillRoundedRectangle(clipArea, 6.0f);
+                g.fillRoundedRectangle(placementArea, 6.0f);
                 
                 g.setColour(juce::Colour(BlueBreeze::Colors::ClipBorder));
-                g.drawRoundedRectangle(clipArea.reduced(0.5f), 6.0f, 1.0f);
+                g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
             }
             else if (themeId == ThemeId::Aurora)
             {
@@ -461,40 +589,38 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
                 {
                     // 选中状态：使用更深的颜色
                     g.setColour(trackColor.withAlpha(0.45f));
-                    g.fillRoundedRectangle(clipArea, 6.0f);
+                    g.fillRoundedRectangle(placementArea, 6.0f);
                     // 选中边框使用霓虹蓝色
                     g.setColour(juce::Colour(Aurora::Colors::Cyan));
-                    g.drawRoundedRectangle(clipArea.reduced(0.5f), 6.0f, 2.0f);
+                    g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 2.0f);
                 }
                 else
                 {
                     // 正常状态：使用与轨道背景相同的颜色，透明度稍高使CLIP更明显
                     g.setColour(trackColor.withAlpha(0.30f));
-                    g.fillRoundedRectangle(clipArea, 6.0f);
+                    g.fillRoundedRectangle(placementArea, 6.0f);
                     g.setColour(trackColor.withAlpha(0.6f));
-                    g.drawRoundedRectangle(clipArea.reduced(0.5f), 6.0f, 1.0f);
+                    g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
                 }
             }
             else
             {
                 juce::Colour fill = isSelected ? UIColors::primaryPurple : UIColors::buttonNormal;
                 g.setColour(fill);
-                g.fillRoundedRectangle(clipArea, 6.0f);
+                g.fillRoundedRectangle(placementArea, 6.0f);
                 g.setColour(UIColors::panelBorder);
-                g.drawRoundedRectangle(clipArea.reduced(0.5f), 6.0f, 1.0f);
+                g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
             }
 
-    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer =
-        processor_.getClipAudioBuffer(trackId, clipIndex);
-    float gain = processor_.getClipGain(trackId, clipIndex);
+            const auto audioBuffer = processor_.getMaterializationAudioBufferById(placement.materializationId);
+            const float gain = placement.gain;
 
-    if (audioBuffer != nullptr)
-    {
-        const uint64_t key = getClipCacheKey(trackId, clipIndex);
-        auto& mipmap = waveformMipmapCache_.getOrCreate(key);
-        mipmap.setAudioSource(audioBuffer);
-        
-        auto waveformBounds = clipBounds.reduced(6, 6);
+            if (audioBuffer != nullptr)
+            {
+                auto& mipmap = waveformMipmapCache_.getOrCreate(materializationId);
+                mipmap.setAudioSource(audioBuffer);
+
+                auto waveformBounds = placementBounds.reduced(6, 6);
 
                 // Aurora主题使用更亮的波形颜色，其他主题使用深灰色
                 if (themeId == ThemeId::Aurora)
@@ -510,66 +636,66 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
                 const double pixelsPerSecond = 100.0 * zoomLevel_;
                 const int levelIndex = mipmap.selectBestLevelIndex(pixelsPerSecond);
                 const auto& level = mipmap.getLevel(levelIndex);
-                
+
                 if (!level.peaks.empty())
                 {
                     const float midY = static_cast<float>(waveformBounds.getCentreY());
                     const float halfH = waveformBounds.getHeight() * 0.45f;
                     const int x0 = waveformBounds.getX();
-                    const int clipWidth = waveformBounds.getWidth();
-                    
-                    const double startSeconds = processor_.getClipStartSeconds(trackId, clipIndex);
+                    const int placementWidth = waveformBounds.getWidth();
+
                     const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[levelIndex];
                     const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
-                    
+
                     const int64_t numPeaks = static_cast<int64_t>(level.peaks.size());
                     const int64_t builtPeaks = level.complete ? numPeaks : level.buildProgress;
-                    
+
                     juce::Path waveformPath;
-                    
-                    for (int x = 0; x < clipWidth; ++x)
+
+                    for (int x = 0; x < placementWidth; ++x)
                     {
-                        const double absTime = xToTime(x0 + x);
-                        const double relativeTime = absTime - startSeconds;
-                        
-                        if (relativeTime < 0.0)
+                        const double absTime = viewportXToAbsoluteTime(x0 + x);
+                        const double placementLocalTime = absTime - placement.timelineStartSeconds;
+                        if (placementLocalTime < 0.0 || placementLocalTime >= placement.durationSeconds)
                             continue;
-                        
-                        const int64_t peakIndex = static_cast<int64_t>(relativeTime / timePerPeak);
-                        
+
+                        const double contentTime = placementLocalTime;
+
+                        const int64_t peakIndex = static_cast<int64_t>(contentTime / timePerPeak);
+
                         if (peakIndex < 0 || peakIndex >= builtPeaks)
                             continue;
-                        
+
                         const auto& peak = level.peaks[static_cast<std::size_t>(peakIndex)];
                         const float magnitude = peak.getMagnitude() * gain;
                         float displayHeight = magnitude * halfH * 2.0f;
-                        
+
                         if (magnitude > 0.0001f)
                             displayHeight = juce::jmax(displayHeight, 2.0f);
 
                         const float y1 = midY - displayHeight * 0.5f;
                         const float y2 = midY + displayHeight * 0.5f;
-                        
+
                         waveformPath.startNewSubPath(static_cast<float>(x0 + x), y1);
                         waveformPath.lineTo(static_cast<float>(x0 + x), y2);
                     }
-                    
+
                     if (!waveformPath.isEmpty())
                         g.strokePath(waveformPath, juce::PathStrokeType(1.0f));
                 }
             }
 
-            // 在CLIP左上角显示文件名（小字体）
-            juce::String clipName = processor_.getClipName(trackId, clipIndex);
-            if (clipName.isNotEmpty())
+            // 在片段左上角显示名称（小字体）
+            juce::String placementName = placement.name;
+            if (placementName.isNotEmpty())
             {
                 // 截断过长的文件名
-                if (clipName.length() > 20)
-                    clipName = clipName.substring(0, 17) + "...";
+                if (placementName.length() > 20)
+                    placementName = placementName.substring(0, 17) + "...";
                 
                 g.setColour(UIColors::textPrimary.withAlpha(0.85f));
                 g.setFont(UIColors::getUIFont(10.0f));  // 小字体
-                g.drawText(clipName, clipBounds.reduced(6, 4), juce::Justification::topLeft);
+                g.drawText(placementName, placementBounds.reduced(6, 4), juce::Justification::topLeft);
             }
 
             // 在右上角显示增益值
@@ -587,7 +713,7 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
             g.setColour(UIColors::textSecondary.withAlpha(0.9f));
             g.setFont(UIColors::getUIFont(11.0f));
-            g.drawText(gainStr, clipBounds.reduced(6, 4), juce::Justification::topRight);
+            g.drawText(gainStr, placementBounds.reduced(6, 4), juce::Justification::topRight);
         }
     }
 
@@ -654,7 +780,7 @@ bool ArrangementViewComponent::runDebugSelfTest()
 
 void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
 {
-    const auto themeId = Theme::getActiveTheme();
+    const auto themeId = UIColors::currentThemeId();
     auto bounds = getLocalBounds();
     auto rulerArea = bounds.removeFromTop(rulerHeight_);
     
@@ -681,15 +807,11 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         
         // Determine interval (in beats) based on density
         // We want at least ~40 pixels between labels
-        double beatInterval = 1.0;
-        if (pixelsPerBeat < 40.0) beatInterval = 4.0;       // Every measure
-        if (pixelsPerBeat < 10.0) beatInterval = 8.0;       // Every 2 measures
-        if (pixelsPerBeat < 5.0) beatInterval = 16.0;       // Every 4 measures
-        if (pixelsPerBeat < 2.5) beatInterval = 32.0;       // Every 8 measures
+        double beatInterval = selectBeatInterval(pixelsPerBeat);
         
         // Convert visible range to beats
-        double startTime = xToTime(0);
-        double endTime = xToTime(getWidth());
+        double startTime = viewportXToAbsoluteTime(0);
+        double endTime = viewportXToAbsoluteTime(getWidth());
         
         int64_t startBeat = static_cast<int64_t>(startTime / secondsPerBeat);
         if (startBeat < 0) startBeat = 0;
@@ -703,7 +825,7 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         for (int64_t beat = startBeat; beat <= endBeat; beat += (int64_t)beatInterval)
         {
             double time = beat * secondsPerBeat;
-            int pixelX = timeToX(time);
+            int pixelX = absoluteTimeToViewportX(time);
             
             // Draw tick
             g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::gridLine.withAlpha(0.10f) : UIColors::gridLine);
@@ -731,33 +853,17 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         double pixelsPerSecond = 100.0 * zoomLevel_;
         // double secondsPerPixel = 1.0 / pixelsPerSecond;
         
-        // Adaptive interval logic based on user request to omit small ticks when zoomed out
-        // User wants: only show 5s, 10s etc when dense.
-        // Let's check pixel spacing for labels.
-        
-        double markerInterval = 1.0;
-        
-        // If 1s takes less than 40px, switch to 5s
-        if (pixelsPerSecond < 40.0) markerInterval = 5.0;
-        
-        // If 5s takes less than 40px (pixelsPerSecond < 8), switch to 10s
-        if (pixelsPerSecond < 8.0) markerInterval = 10.0;
-        
-        // If 10s takes less than 40px (pixelsPerSecond < 4), switch to 30s or 60s
-        if (pixelsPerSecond < 4.0) markerInterval = 30.0;
-        
-        // If 30s takes less than 40px (pixelsPerSecond < 1.33), switch to 60s
-        if (pixelsPerSecond < 1.33) markerInterval = 60.0;
+        double markerInterval = selectMarkerInterval(pixelsPerSecond);
 
-        double startTime = xToTime(0);
+        double startTime = viewportXToAbsoluteTime(0);
         if (startTime < 0.0) startTime = 0.0;
         startTime = std::floor(startTime / markerInterval) * markerInterval;
 
-        double endTime = xToTime(getWidth());
+        double endTime = viewportXToAbsoluteTime(getWidth());
 
         g.setFont(UIColors::getUIFont(13.0f));
         for (double time = startTime; time < endTime; time += markerInterval) {
-            int pixelX = timeToX(time);
+            int pixelX = absoluteTimeToViewportX(time);
             
             g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::gridLine.withAlpha(0.10f) : UIColors::gridLine);
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerHeight_ - 10),
@@ -776,7 +882,7 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
 
 void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
 {
-    const auto themeId = Theme::getActiveTheme();
+    const auto themeId = UIColors::currentThemeId();
     double sr = processor_.getSampleRate();
     if (sr <= 0.0)
         sr = 44100.0;
@@ -791,14 +897,10 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
         double secondsPerBeat = 60.0 / bpm;
         double pixelsPerBeat = pixelsPerSecond * secondsPerBeat;
         
-        double beatInterval = 1.0;
-        if (pixelsPerBeat < 40.0) beatInterval = 4.0;
-        if (pixelsPerBeat < 10.0) beatInterval = 8.0;
-        if (pixelsPerBeat < 5.0) beatInterval = 16.0;
-        if (pixelsPerBeat < 2.5) beatInterval = 32.0;
+        double beatInterval = selectBeatInterval(pixelsPerBeat);
         
-        double startTime = xToTime(0);
-        double endTime = xToTime(getWidth());
+        double startTime = viewportXToAbsoluteTime(0);
+        double endTime = viewportXToAbsoluteTime(getWidth());
         
         int64_t startBeat = static_cast<int64_t>(startTime / secondsPerBeat);
         if (startBeat < 0) startBeat = 0;
@@ -812,7 +914,7 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
         for (int64_t beat = startBeat; beat <= endBeat; beat += (int64_t)beatInterval)
         {
             double time = beat * secondsPerBeat;
-            int pixelX = timeToX(time);
+            int pixelX = absoluteTimeToViewportX(time);
             
             // Only draw lines that are visible and within bounds
             // timeToX already handles scroll offset
@@ -851,23 +953,19 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
         double pixelsPerSecond = 100.0 * zoomLevel_;
         // double secondsPerPixel = 1.0 / pixelsPerSecond;
         
-        double markerInterval = 1.0;
-        if (pixelsPerSecond < 40.0) markerInterval = 5.0;
-        if (pixelsPerSecond < 8.0) markerInterval = 10.0;
-        if (pixelsPerSecond < 4.0) markerInterval = 30.0;
-        if (pixelsPerSecond < 1.33) markerInterval = 60.0;
+        double markerInterval = selectMarkerInterval(pixelsPerSecond);
 
-        double startTime = xToTime(0);
+        double startTime = viewportXToAbsoluteTime(0);
         if (startTime < 0.0) startTime = 0.0;
         startTime = std::floor(startTime / markerInterval) * markerInterval;
 
-        double endTime = xToTime(getWidth());
+        double endTime = viewportXToAbsoluteTime(getWidth());
 
         // Safety limit: prevent infinite loop if markerInterval is somehow 0
         if (markerInterval < 0.001) markerInterval = 1.0;
 
         for (double time = startTime; time < endTime + markerInterval; time += markerInterval) {
-            int pixelX = timeToX(time);
+            int pixelX = absoluteTimeToViewportX(time);
             
             if (pixelX < -2 || pixelX > getWidth() + 2) continue;
 
@@ -921,33 +1019,33 @@ void ArrangementViewComponent::onHeartbeatTick()
 
 }
 
+void ArrangementViewComponent::performPageScroll(double playheadTime)
+{
+    const int playheadVisualX = absoluteTimeToViewportX(playheadTime);
+
+    if (playheadVisualX >= getWidth()) {
+        int visibleW = getWidth() - kArrangementContentStartX;
+        setScrollOffset(scrollOffset_ + visibleW);
+        smoothScrollCurrent_ = static_cast<float>(scrollOffset_);
+    } else if (playheadVisualX < kArrangementContentStartX) {
+        const int absX = absoluteTimeToContentX(playheadTime);
+        int visibleW = getWidth() - kArrangementContentStartX;
+        int pageIndex = absX / visibleW;
+        int newScroll = pageIndex * visibleW;
+        setScrollOffset(newScroll);
+        smoothScrollCurrent_ = static_cast<float>(newScroll);
+    }
+}
+
 void ArrangementViewComponent::updateAutoScroll()
 {
     if (!isPlaying_.load(std::memory_order_relaxed))
         return;
 
-    const double playheadTime = readPlayheadTime();
+    const double playheadTime = readPlayheadSeconds();
 
     if (scrollMode_ == ScrollMode::Page)
-    {
-        double pixelsPerSecond = 100.0 * zoomLevel_;
-        int playheadVisualX = static_cast<int>(playheadTime * pixelsPerSecond) - scrollOffset_ + 8;
-
-        if (playheadVisualX >= getWidth()) {
-            int visibleW = getWidth() - 8;
-            setScrollOffset(scrollOffset_ + visibleW);
-            smoothScrollCurrent_ = static_cast<float>(scrollOffset_);
-        } else if (playheadVisualX < 8) {
-            int absX = static_cast<int>(playheadTime * pixelsPerSecond);
-            
-            int visibleW = getWidth() - 8;
-            int pageIndex = absX / visibleW;
-            int newScroll = pageIndex * visibleW;
-            
-            setScrollOffset(newScroll);
-            smoothScrollCurrent_ = static_cast<float>(newScroll);
-        }
-    }
+        performPageScroll(playheadTime);
 }
 
 void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
@@ -957,15 +1055,13 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
     if (!isShowing() || !isPlaying_.load(std::memory_order_relaxed))
         return;
 
-    const double playheadTime = readPlayheadTime();
-    playheadOverlay_.setPlayheadSeconds(playheadTime);
+    const double playheadTime = readPlayheadSeconds();
 
     if (scrollMode_ == ScrollMode::Continuous)
     {
-        const double pixelsPerSecond = 100.0 * zoomLevel_;
-        const float playheadAbsX = static_cast<float>(playheadTime * pixelsPerSecond);
+        const float playheadContentX = static_cast<float>(absoluteTimeToContentX(playheadTime));
 
-        float targetScroll = playheadAbsX + 8.0f - (getWidth() / 2.0f);
+        float targetScroll = playheadContentX - ((getWidth() - kArrangementContentStartX) / 2.0f);
         if (targetScroll < 0.0f)
             targetScroll = 0.0f;
 
@@ -985,40 +1081,35 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
             setScrollOffset(newScrollInt);
         }
 
-        playheadOverlay_.setScrollOffset(static_cast<double>(smoothScrollCurrent_));
+        syncPlayheadOverlayToAbsoluteTime(playheadTime);
         return;
     }
 
     if (scrollMode_ == ScrollMode::Page)
-    {
-        double pixelsPerSecond = 100.0 * zoomLevel_;
-        int playheadVisualX = static_cast<int>(playheadTime * pixelsPerSecond) - scrollOffset_ + 8;
+        performPageScroll(playheadTime);
 
-        if (playheadVisualX >= getWidth()) {
-            int visibleW = getWidth() - 8;
-            setScrollOffset(scrollOffset_ + visibleW);
-            smoothScrollCurrent_ = static_cast<float>(scrollOffset_);
-        } else if (playheadVisualX < 8) {
-            int absX = static_cast<int>(playheadTime * pixelsPerSecond);
-
-            int visibleW = getWidth() - 8;
-            int pageIndex = absX / visibleW;
-            int newScroll = pageIndex * visibleW;
-
-            setScrollOffset(newScroll);
-            smoothScrollCurrent_ = static_cast<float>(newScroll);
-        }
-    }
+    syncPlayheadOverlayToAbsoluteTime(playheadTime);
 }
 
-double ArrangementViewComponent::readPlayheadTime() const
+double ArrangementViewComponent::readPlayheadSeconds() const
 {
     if (auto source = positionSource_.lock())
-    {
         return source->load(std::memory_order_relaxed);
-    }
 
-    return processor_.getPosition();
+    return 0.0;
+}
+
+void ArrangementViewComponent::syncPlayheadOverlay()
+{
+    syncPlayheadOverlayToAbsoluteTime(readPlayheadSeconds(), !isPlaying_.load(std::memory_order_relaxed));
+}
+
+void ArrangementViewComponent::syncPlayheadOverlayToAbsoluteTime(double absoluteSeconds, bool repaintOverlay)
+{
+    playheadOverlay_.setPlayheadSeconds(absoluteSeconds);
+    if (repaintOverlay) {
+        playheadOverlay_.repaint();
+    }
 }
 
 void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
@@ -1035,7 +1126,7 @@ void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
         return;
     }
 
-    auto hit = hitTestClip(e.getPosition());
+    auto hit = hitTestPlacement(e.getPosition());
     if (hit.trackId >= 0)
     {
         if (hit.isTopEdge)
@@ -1061,42 +1152,43 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    double sr = processor_.getSampleRate();
+    if (sr <= 0.0) sr = 44100.0;
+
+    double newPosSeconds = viewportXToAbsoluteTime(e.x);
+    processor_.setPosition(newPosSeconds);
+    syncPlayheadOverlayToAbsoluteTime(newPosSeconds, true);
+    repaint();
+
     if (e.y <= rulerHeight_)
     {
-        double newPosSeconds = xToTime(e.x);
-        processor_.setPosition(newPosSeconds);
-        playheadOverlay_.setPlayheadSeconds(newPosSeconds);
-        playheadOverlay_.repaint();
-        repaint();
         isDraggingPlayhead_ = true;
         dragStartPos_ = e.getPosition();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
-    auto hit = hitTestClip(e.getPosition());
+    auto hit = hitTestPlacement(e.getPosition());
     if (hit.trackId < 0)
     {
         if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
         {
-            clearClipSelection();
+            clearPlacementSelection();
         }
         repaint();
         return;
     }
 
-    uint64_t hitClipId = processor_.getClipId(hit.trackId, hit.clipIndex);
+    const uint64_t hitPlacementId = processor_.getPlacementId(hit.trackId, hit.placementIndex);
 
     if (e.mods.isCtrlDown() && !e.mods.isShiftDown())
     {
-        toggleClipSelection(hit.trackId, hitClipId, hit.clipIndex);
+        togglePlacementSelection(hit.trackId, hitPlacementId);
         selectedTrack_ = hit.trackId;
-        selectedClip_ = hit.clipIndex;
-        selectedClipId_ = hitClipId;
-        processor_.setActiveTrack(selectedTrack_);
-        processor_.setSelectedClip(selectedTrack_, selectedClip_);
+        selectedPlacementIndex_ = hit.placementIndex;
+        selectedPlacementId_ = hitPlacementId;
         listeners_.call([this](Listener& l) {
-            l.clipSelectionChanged(selectedTrack_, selectedClip_);
+            l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
         });
         repaint();
         return;
@@ -1104,15 +1196,13 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
 
     if (e.mods.isShiftDown() && hasShiftAnchor_)
     {
-        ClipSelectionKey toKey{hit.trackId, hitClipId};
-        selectClipsInRange(shiftAnchor_, toKey);
+        PlacementSelectionKey toKey{hit.trackId, hitPlacementId};
+        selectPlacementsInRange(shiftAnchor_, toKey);
         selectedTrack_ = hit.trackId;
-        selectedClip_ = hit.clipIndex;
-        selectedClipId_ = hitClipId;
-        processor_.setActiveTrack(selectedTrack_);
-        processor_.setSelectedClip(selectedTrack_, selectedClip_);
+        selectedPlacementIndex_ = hit.placementIndex;
+        selectedPlacementId_ = hitPlacementId;
         listeners_.call([this](Listener& l) {
-            l.clipSelectionChanged(selectedTrack_, selectedClip_);
+            l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
         });
         repaint();
         return;
@@ -1120,54 +1210,52 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
 
     if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
     {
-        if (!isClipSelected(hit.trackId, hitClipId))
+        if (!isPlacementSelected(hit.trackId, hitPlacementId))
         {
-            clearClipSelection();
+            clearPlacementSelection();
         }
-        shiftAnchor_ = ClipSelectionKey{hit.trackId, hitClipId};
+        shiftAnchor_ = PlacementSelectionKey{hit.trackId, hitPlacementId};
         hasShiftAnchor_ = true;
     }
 
     selectedTrack_ = hit.trackId;
-    selectedClip_ = hit.clipIndex;
-    selectedClipId_ = hitClipId;
+    selectedPlacementIndex_ = hit.placementIndex;
+    selectedPlacementId_ = hitPlacementId;
 
-    processor_.setActiveTrack(selectedTrack_);
-    processor_.setSelectedClip(selectedTrack_, selectedClip_);
-
-    if (selectedClips_.empty())
+    if (selectedPlacements_.empty())
     {
-        selectedClips_.insert(ClipSelectionKey{selectedTrack_, selectedClipId_});
+        selectedPlacements_.insert(PlacementSelectionKey{selectedTrack_, selectedPlacementId_});
     }
-    else if (!isClipSelected(selectedTrack_, selectedClipId_))
+    else if (!isPlacementSelected(selectedTrack_, selectedPlacementId_))
     {
         if (!e.mods.isCtrlDown())
         {
-            clearClipSelection();
-            selectedClips_.insert(ClipSelectionKey{selectedTrack_, selectedClipId_});
+            clearPlacementSelection();
+            selectedPlacements_.insert(PlacementSelectionKey{selectedTrack_, selectedPlacementId_});
         }
     }
 
     listeners_.call([this](Listener& l) {
-        l.clipSelectionChanged(selectedTrack_, selectedClip_);
+        l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
     });
 
     dragStartPos_ = e.getPosition();
-    dragStartClipSeconds_ = processor_.getClipStartSeconds(selectedTrack_, selectedClip_);
-    dragStartClipGain_ = processor_.getClipGain(selectedTrack_, selectedClip_);
-    dragStartClipId_ = selectedClipId_;
+    getStandalonePlacementStartSeconds(processor_, selectedTrack_, selectedPlacementId_, dragStartPlacementSeconds_);
+    getStandalonePlacementGain(processor_, selectedTrack_, selectedPlacementId_, dragStartPlacementGain_);
+    dragStartPlacementId_ = selectedPlacementId_;
     dragStartTrackId_ = selectedTrack_;
 
     isAdjustingGain_ = hit.isTopEdge;
-    isDraggingClip_ = !isAdjustingGain_;
+    isDraggingPlacement_ = !isAdjustingGain_;
 
     multiDragStartStates_.clear();
-    if (isDraggingClip_ && selectedClips_.size() > 1)
+    if (isDraggingPlacement_ && selectedPlacements_.size() > 1)
     {
-        for (const auto& sel : selectedClips_)
+        for (const auto& sel : selectedPlacements_)
         {
-            double startSec = processor_.getClipStartSecondsById(sel.trackId, sel.clipId);
-            multiDragStartStates_.push_back({sel.trackId, sel.clipId, startSec});
+            double startSec = 0.0;
+            getStandalonePlacementStartSeconds(processor_, sel.trackId, sel.placementId, startSec);
+            multiDragStartStates_.push_back({sel.trackId, sel.placementId, startSec});
         }
     }
     
@@ -1203,10 +1291,9 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
 
     if (isDraggingPlayhead_)
     {
-        double newPosSeconds = xToTime(e.x);
+        double newPosSeconds = viewportXToAbsoluteTime(e.x);
         processor_.setPosition(newPosSeconds);
-        playheadOverlay_.setPlayheadSeconds(newPosSeconds);
-        playheadOverlay_.repaint();
+        syncPlayheadOverlayToAbsoluteTime(newPosSeconds, true);
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
@@ -1214,43 +1301,39 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     if (selectedTrack_ < 0 || selectedTrack_ >= OpenTuneAudioProcessor::MAX_TRACKS)
         return;
 
-    int clipIndex = selectedClip_;
-    if (selectedClipId_ != 0) {
-        clipIndex = processor_.findClipIndexById(selectedTrack_, selectedClipId_);
+    int placementIndex = selectedPlacementIndex_;
+    if (selectedPlacementId_ != 0) {
+        placementIndex = processor_.findPlacementIndexById(selectedTrack_, selectedPlacementId_);
     }
-    if (clipIndex < 0 || clipIndex >= processor_.getNumClips(selectedTrack_))
+    if (placementIndex < 0 || placementIndex >= getStandalonePlacementCount(processor_, selectedTrack_))
         return;
-    selectedClip_ = clipIndex;
+    selectedPlacementIndex_ = placementIndex;
 
     auto delta = e.getPosition() - dragStartPos_;
-    if (isDraggingClip_)
+    if (isDraggingPlacement_)
     {
         setMouseCursor(juce::MouseCursor::DraggingHandCursor);
 
-        double startT = xToTime(dragStartPos_.x);
-        double currentT = xToTime(e.x);
+        double startT = viewportXToAbsoluteTime(dragStartPos_.x);
+        double currentT = viewportXToAbsoluteTime(e.x);
         double deltaSeconds = currentT - startT;
 
-        if (selectedClips_.size() > 1 && !multiDragStartStates_.empty())
+        if (selectedPlacements_.size() > 1 && !multiDragStartStates_.empty())
         {
             for (const auto& state : multiDragStartStates_)
             {
                 double newStart = state.startSeconds + deltaSeconds;
                 if (newStart < 0.0) newStart = 0.0;
-                processor_.setClipStartSecondsById(state.trackId, state.clipId, newStart);
+                setStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, newStart);
             }
         }
         else
         {
-            if (selectedClipId_ != 0) {
-                processor_.setClipStartSecondsById(selectedTrack_, selectedClipId_, dragStartClipSeconds_ + deltaSeconds);
-            } else {
-                processor_.setClipStartSeconds(selectedTrack_, selectedClip_, dragStartClipSeconds_ + deltaSeconds);
-            }
+            setStandalonePlacementStartSeconds(processor_, selectedTrack_, selectedPlacementId_, dragStartPlacementSeconds_ + deltaSeconds);
         }
 
         listeners_.call([this](Listener& l) {
-            l.clipTimingChanged(selectedTrack_, selectedClip_);
+            l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
         });
 
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
@@ -1258,7 +1341,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     else if (isAdjustingGain_)
     {
         double factor = std::pow(10.0, (-static_cast<double>(delta.y)) / 200.0);
-        processor_.setClipGain(selectedTrack_, selectedClip_, static_cast<float>(dragStartClipGain_ * factor));
+        setStandalonePlacementGain(processor_, selectedTrack_, selectedPlacementId_, static_cast<float>(dragStartPlacementGain_ * factor));
 
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
     }
@@ -1266,7 +1349,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
 
 void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
 {
-    if (isDraggingClip_)
+    if (isDraggingPlacement_)
     {
         auto delta = e.getPosition() - dragStartPos_;
         const float dragThreshold = 5.0f;
@@ -1276,12 +1359,12 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
         int mouseTrackId = (adjustedY - rulerHeight_) / processor_.getTrackHeight();
         mouseTrackId = juce::jlimit(0, OpenTuneAudioProcessor::MAX_TRACKS - 1, mouseTrackId);
 
-        if (selectedClips_.size() > 1 && !multiDragStartStates_.empty())
+        if (selectedPlacements_.size() > 1 && !multiDragStartStates_.empty())
         {
             if (isDraggedSignificantly)
             {
-                int firstClipTrackId = multiDragStartStates_.front().trackId;
-                bool isCrossTrack = (mouseTrackId != firstClipTrackId);
+                const int firstPlacementTrackId = multiDragStartStates_.front().trackId;
+                bool isCrossTrack = (mouseTrackId != firstPlacementTrackId);
 
                 if (isCrossTrack)
                 {
@@ -1292,87 +1375,85 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
 
                     for (const auto& state : sortedStates)
                     {
-                        double currentStart = processor_.getClipStartSecondsById(state.trackId, state.clipId);
-                        if (processor_.moveClipToTrack(state.trackId, mouseTrackId, state.clipId, currentStart))
-                        {
-                            processor_.getUndoManager().addAction(std::make_unique<ClipCrossTrackMoveAction>(
-                                processor_, state.trackId, mouseTrackId, state.clipId,
-                                state.startSeconds, currentStart));
-                        }
+                        double currentStart = 0.0;
+                        getStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, currentStart);
+                        moveStandalonePlacement(processor_, state.trackId, mouseTrackId, state.placementId, currentStart);
                     }
 
-                    clearClipSelection();
+                    clearPlacementSelection();
                     selectedTrack_ = mouseTrackId;
-                    selectedClip_ = processor_.getSelectedClip(mouseTrackId);
-                    if (selectedClip_ >= 0 && selectedClip_ < processor_.getNumClips(mouseTrackId)) {
-                        selectedClipId_ = processor_.getClipId(mouseTrackId, selectedClip_);
+                    selectedPlacementIndex_ = getStandaloneSelectedPlacementIndex(processor_, mouseTrackId);
+                    if (selectedPlacementIndex_ >= 0 && selectedPlacementIndex_ < getStandalonePlacementCount(processor_, mouseTrackId)) {
+                        selectedPlacementId_ = processor_.getPlacementId(mouseTrackId, selectedPlacementIndex_);
                     }
-                    processor_.setActiveTrack(selectedTrack_);
-
-                    for (int i = 0; i < processor_.getNumClips(mouseTrackId); ++i)
+                    for (int i = 0; i < getStandalonePlacementCount(processor_, mouseTrackId); ++i)
                     {
-                        uint64_t clipId = processor_.getClipId(mouseTrackId, i);
+                        const uint64_t movedPlacementId = processor_.getPlacementId(mouseTrackId, i);
                         for (const auto& state : multiDragStartStates_)
                         {
-                            if (state.clipId == clipId)
+                            if (state.placementId == movedPlacementId)
                             {
-                                selectedClips_.insert(ClipSelectionKey{mouseTrackId, clipId});
+                                selectedPlacements_.insert(PlacementSelectionKey{mouseTrackId, movedPlacementId});
                                 break;
                             }
                         }
                     }
 
                     listeners_.call([this](Listener& l) {
-                        l.clipSelectionChanged(selectedTrack_, selectedClip_);
+                        l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
                     });
                 }
                 else
                 {
                     for (const auto& state : multiDragStartStates_)
                     {
-                        double currentStart = processor_.getClipStartSecondsById(state.trackId, state.clipId);
-                        if (std::abs(currentStart - state.startSeconds) > 1e-9)
-                        {
-                            processor_.getUndoManager().addAction(std::make_unique<ClipMoveAction>(
-                                processor_, state.trackId, state.clipId, state.startSeconds, currentStart));
-                        }
+                        double currentStart = 0.0;
+                        getStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, currentStart);
                     }
                 }
             }
         }
-        else if (dragStartClipId_ != 0)
+        else if (dragStartPlacementId_ != 0)
         {
-            double currentStart = processor_.getClipStartSecondsById(dragStartTrackId_, dragStartClipId_);
+            double currentStart = 0.0;
+            getStandalonePlacementStartSeconds(processor_, dragStartTrackId_, dragStartPlacementId_, currentStart);
 
             if (isDraggedSignificantly && mouseTrackId != dragStartTrackId_) {
-                if (processor_.moveClipToTrack(dragStartTrackId_, mouseTrackId, dragStartClipId_, currentStart)) {
-                    processor_.getUndoManager().addAction(std::make_unique<ClipCrossTrackMoveAction>(
-                        processor_, dragStartTrackId_, mouseTrackId, dragStartClipId_,
-                        dragStartClipSeconds_, currentStart));
+                if (moveStandalonePlacement(processor_, dragStartTrackId_, mouseTrackId, dragStartPlacementId_, currentStart)) {
                     selectedTrack_ = mouseTrackId;
-                    selectedClip_ = processor_.getSelectedClip(mouseTrackId);
-                    selectedClipId_ = dragStartClipId_;
-                    processor_.setActiveTrack(selectedTrack_);
+                    selectedPlacementIndex_ = getStandaloneSelectedPlacementIndex(processor_, mouseTrackId);
+                    selectedPlacementId_ = dragStartPlacementId_;
                     listeners_.call([this](Listener& l) {
-                        l.clipSelectionChanged(selectedTrack_, selectedClip_);
+                        l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
                     });
                 }
-            } else if (std::abs(currentStart - dragStartClipSeconds_) > 1e-9) {
-                processor_.getUndoManager().addAction(std::make_unique<ClipMoveAction>(
-                    processor_, selectedTrack_, dragStartClipId_, dragStartClipSeconds_, currentStart));
             }
         }
     }
     
-    if (isAdjustingGain_ && dragStartClipId_ != 0) {
-        float currentGain = processor_.getClipGain(selectedTrack_, selectedClip_);
-        if (std::abs(currentGain - dragStartClipGain_) > 0.001f) {
-            processor_.getUndoManager().addAction(std::make_unique<ClipGainChangeAction>(
-                processor_, selectedTrack_, dragStartClipId_, dragStartClipGain_, currentGain));
+    if (isAdjustingGain_ && dragStartPlacementId_ != 0) {
+        float currentGain = 1.0f;
+        getStandalonePlacementGain(processor_, selectedTrack_, dragStartPlacementId_, currentGain);
+        if (currentGain != dragStartPlacementGain_) {
+            processor_.getUndoManager().addAction(
+                std::make_unique<GainChangeAction>(processor_, selectedTrack_, dragStartPlacementId_,
+                                                    dragStartPlacementGain_, currentGain));
         }
     }
-    
-    isDraggingClip_ = false;
+
+    // Record undo for single-placement move
+    if (isDraggingPlacement_ && dragStartPlacementId_ != 0 && selectedPlacements_.size() <= 1) {
+        double finalStart = 0.0;
+        getStandalonePlacementStartSeconds(processor_, selectedTrack_, dragStartPlacementId_, finalStart);
+        if (finalStart != dragStartPlacementSeconds_) {
+            processor_.getUndoManager().addAction(
+                std::make_unique<MovePlacementAction>(processor_, dragStartTrackId_, selectedTrack_,
+                                                      dragStartPlacementId_,
+                                                      dragStartPlacementSeconds_, finalStart));
+        }
+    }
+
+    isDraggingPlacement_ = false;
     isAdjustingGain_ = false;
     isDraggingPlayhead_ = false;
     isPanning_ = false;
@@ -1383,27 +1464,18 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
 
 void ArrangementViewComponent::mouseDoubleClick(const juce::MouseEvent& e)
 {
-    auto hit = hitTestClip(e.getPosition());
-    if (hit.trackId >= 0 && hit.clipIndex >= 0)
+    auto hit = hitTestPlacement(e.getPosition());
+    if (hit.trackId >= 0 && hit.placementIndex >= 0)
     {
         listeners_.call([&](Listener& l) {
-            l.clipDoubleClicked(hit.trackId, hit.clipIndex);
+            l.placementDoubleClicked(hit.trackId, hit.placementIndex);
         });
-        return;
     }
-
-    // Double-click on empty area (no clip): play from this position
-    double newPosSeconds = xToTime(e.x);
-    processor_.setPosition(newPosSeconds);
-    processor_.setPlaying(true);
-    playheadOverlay_.setPlayheadSeconds(newPosSeconds);
-    playheadOverlay_.repaint();
-    repaint();
 }
 
 void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
 {
-    const auto& settings = ZoomSensitivityConfig::getSettings();
+    const auto& settings = zoomSensitivity_;
     
     // Shift + Wheel = Vertical Zoom (Track Height) - 与TrackPanel同步
     if (e.mods.isShiftDown())
@@ -1437,13 +1509,12 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
 
             if (std::abs(newZoom - zoomLevel_) > 0.001)
             {
-                double timeAtMouse = xToTime(e.x);
+                double timeAtMouse = viewportXToAbsoluteTime(e.x);
 
                 setZoomLevel(newZoom);
                 userHasManuallyZoomed_ = true;
 
-                double pps = 100.0 * newZoom;
-                int newOffset = static_cast<int>(timeAtMouse * pps) + 8 - e.x;
+                int newOffset = absoluteTimeToContentX(timeAtMouse) + kArrangementContentStartX - e.x;
                 setScrollOffset(newOffset);
 
                 FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
@@ -1480,39 +1551,15 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
 
 bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 {
-    if (KeyShortcutConfig::matchesShortcut(KeyShortcutConfig::ShortcutId::PlayPause, key))
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::PlayPause, key))
     {
         processor_.setPlaying(!processor_.isPlaying());
         return true;
     }
 
-    if (KeyShortcutConfig::matchesShortcut(KeyShortcutConfig::ShortcutId::Cut, key))
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::SelectAll, key))
     {
-        cutSelectedClips();
-        return true;
-    }
-
-    if (KeyShortcutConfig::matchesShortcut(KeyShortcutConfig::ShortcutId::Copy, key))
-    {
-        copySelectedClips();
-        return true;
-    }
-
-    if (KeyShortcutConfig::matchesShortcut(KeyShortcutConfig::ShortcutId::Paste, key))
-    {
-        pasteClips();
-        return true;
-    }
-
-    if (KeyShortcutConfig::matchesShortcut(KeyShortcutConfig::ShortcutId::SelectAll, key))
-    {
-        selectAllClipsInTrack(selectedTrack_);
-        return true;
-    }
-
-    if (KeyShortcutConfig::matchesShortcut(KeyShortcutConfig::ShortcutId::Delete, key))
-    {
-        deleteSelectedClips();
+        selectAllPlacementsInTrack(selectedTrack_);
         return true;
     }
 
@@ -1521,44 +1568,87 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         if (selectedTrack_ < 0 || selectedTrack_ >= OpenTuneAudioProcessor::MAX_TRACKS)
             return true;
 
-        if (selectedClip_ < 0 || selectedClip_ >= processor_.getNumClips(selectedTrack_))
+        if (selectedPlacementIndex_ < 0 || selectedPlacementIndex_ >= getStandalonePlacementCount(processor_, selectedTrack_))
             return true;
 
-        int originalClipIndex = selectedClip_;
-        uint64_t originalClipId = processor_.getClipId(selectedTrack_, selectedClip_);
-        double originalDuration = 0.0;
-        std::shared_ptr<const juce::AudioBuffer<float>> clipBuffer =
-            processor_.getClipAudioBuffer(selectedTrack_, selectedClip_);
-        if (clipBuffer) {
-            originalDuration = static_cast<double>(clipBuffer->getNumSamples())
-                / OpenTuneAudioProcessor::getStoredAudioSampleRate();
-        }
-        
         double splitSeconds = processor_.getPosition();
-        if (processor_.splitClipAtSeconds(selectedTrack_, selectedClip_, splitSeconds))
+        auto splitOutcome = processor_.splitPlacementAtSeconds(selectedTrack_, selectedPlacementIndex_, splitSeconds);
+        if (splitOutcome.has_value())
         {
-            int newClipIndex = processor_.getSelectedClip(selectedTrack_);
-            uint64_t newClipId = 0;
-            if (newClipIndex >= 0 && newClipIndex < processor_.getNumClips(selectedTrack_)) {
-                newClipId = processor_.getClipId(selectedTrack_, newClipIndex);
-            }
-            
-            ClipSplitAction::SplitResult result;
-            result.newClipId = newClipId;
-            result.splitSeconds = splitSeconds;
-            result.originalClipDuration = originalDuration;
-            
-            processor_.getUndoManager().addAction(std::make_unique<ClipSplitAction>(
-                processor_, selectedTrack_, originalClipId, result, originalClipIndex, newClipIndex));
-            
-            selectedClip_ = newClipIndex;
-            if (selectedClip_ >= 0 && selectedClip_ < processor_.getNumClips(selectedTrack_)) {
-                selectedClipId_ = processor_.getClipId(selectedTrack_, selectedClip_);
+            processor_.getUndoManager().addAction(
+                std::make_unique<SplitPlacementAction>(processor_, *splitOutcome));
+
+            const int newPlacementIndex = getStandaloneSelectedPlacementIndex(processor_, selectedTrack_);
+            selectedPlacementIndex_ = newPlacementIndex;
+            if (selectedPlacementIndex_ >= 0 && selectedPlacementIndex_ < getStandalonePlacementCount(processor_, selectedTrack_)) {
+                selectedPlacementId_ = processor_.getPlacementId(selectedTrack_, selectedPlacementIndex_);
             } else {
-                selectedClipId_ = 0;
+                selectedPlacementId_ = 0;
             }
             listeners_.call([this](Listener& l) {
-                l.clipTimingChanged(selectedTrack_, selectedClip_);
+                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+            });
+            repaint();
+        }
+        return true;
+    }
+
+    if (key.getTextCharacter() == 'm' || key.getTextCharacter() == 'M')
+    {
+        if (selectedTrack_ < 0 || selectedTrack_ >= OpenTuneAudioProcessor::MAX_TRACKS)
+            return true;
+
+        const int placementCount = getStandalonePlacementCount(processor_, selectedTrack_);
+        if (selectedPlacementIndex_ < 0 || selectedPlacementIndex_ + 1 >= placementCount)
+            return true;
+
+        StandaloneArrangement::Placement leadingPlacement;
+        StandaloneArrangement::Placement trailingPlacement;
+        if (!getStandalonePlacementByIndex(processor_, selectedTrack_, selectedPlacementIndex_, leadingPlacement)
+            || !getStandalonePlacementByIndex(processor_, selectedTrack_, selectedPlacementIndex_ + 1, trailingPlacement)) {
+            return true;
+        }
+
+        auto mergeOutcome = processor_.mergePlacements(selectedTrack_, leadingPlacement.placementId, trailingPlacement.placementId, selectedPlacementIndex_);
+        if (mergeOutcome.has_value()) {
+            processor_.getUndoManager().addAction(
+                std::make_unique<MergePlacementAction>(processor_, *mergeOutcome));
+
+            selectedPlacementIndex_ = getStandaloneSelectedPlacementIndex(processor_, selectedTrack_);
+            if (selectedPlacementIndex_ >= 0 && selectedPlacementIndex_ < getStandalonePlacementCount(processor_, selectedTrack_)) {
+                selectedPlacementId_ = processor_.getPlacementId(selectedTrack_, selectedPlacementIndex_);
+            } else {
+                selectedPlacementId_ = 0;
+            }
+            listeners_.call([this](Listener& l) {
+                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+            });
+            repaint();
+        }
+        return true;
+    }
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Delete, key))
+    {
+        if (selectedTrack_ < 0 || selectedTrack_ >= OpenTuneAudioProcessor::MAX_TRACKS)
+            return true;
+
+        if (selectedPlacementIndex_ < 0 || selectedPlacementIndex_ >= getStandalonePlacementCount(processor_, selectedTrack_))
+            return true;
+
+        auto deleteOutcome = processor_.deletePlacement(selectedTrack_, selectedPlacementIndex_);
+        if (deleteOutcome.has_value()) {
+            processor_.getUndoManager().addAction(
+                std::make_unique<DeletePlacementAction>(processor_, *deleteOutcome));
+
+            selectedPlacementIndex_ = getStandaloneSelectedPlacementIndex(processor_, selectedTrack_);
+            if (selectedPlacementIndex_ >= 0 && selectedPlacementIndex_ < getStandalonePlacementCount(processor_, selectedTrack_)) {
+                selectedPlacementId_ = processor_.getPlacementId(selectedTrack_, selectedPlacementIndex_);
+            } else {
+                selectedPlacementId_ = 0;
+            }
+            listeners_.call([this](Listener& l) {
+                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
             repaint();
         }
@@ -1569,53 +1659,58 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 }
 
 // ============================================================================
-// 多选和剪贴板实现
+// 多选实现
 // ============================================================================
 
-bool ArrangementViewComponent::isClipSelected(int trackId, uint64_t clipId) const
+bool ArrangementViewComponent::isPlacementSelected(int trackId, uint64_t placementId) const
 {
-    return selectedClips_.count(ClipSelectionKey{trackId, clipId}) > 0;
+    return selectedPlacements_.count(PlacementSelectionKey{trackId, placementId}) > 0;
 }
 
-void ArrangementViewComponent::toggleClipSelection(int trackId, uint64_t clipId, int clipIndex)
+void ArrangementViewComponent::togglePlacementSelection(int trackId, uint64_t placementId)
 {
-    ClipSelectionKey key{trackId, clipId};
-    auto it = selectedClips_.find(key);
-    if (it != selectedClips_.end())
+    juce::ignoreUnused(trackId);
+    PlacementSelectionKey key{trackId, placementId};
+    auto it = selectedPlacements_.find(key);
+    if (it != selectedPlacements_.end())
     {
-        if (selectedClips_.size() > 1)
+        if (selectedPlacements_.size() > 1)
         {
-            selectedClips_.erase(it);
+            selectedPlacements_.erase(it);
         }
     }
     else
     {
-        selectedClips_.insert(key);
+        selectedPlacements_.insert(key);
     }
 }
 
-void ArrangementViewComponent::clearClipSelection()
+void ArrangementViewComponent::clearPlacementSelection()
 {
-    selectedClips_.clear();
+    selectedPlacements_.clear();
     hasShiftAnchor_ = false;
 }
 
-void ArrangementViewComponent::selectClipsInRange(const ClipSelectionKey& from, const ClipSelectionKey& to)
+void ArrangementViewComponent::selectPlacementsInRange(const PlacementSelectionKey& from,
+                                                       const PlacementSelectionKey& to)
 {
     if (from.trackId == to.trackId)
     {
-        double fromStart = processor_.getClipStartSecondsById(from.trackId, from.clipId);
-        double toStart = processor_.getClipStartSecondsById(to.trackId, to.clipId);
+        double fromStart = 0.0;
+        double toStart = 0.0;
+        getStandalonePlacementStartSeconds(processor_, from.trackId, from.placementId, fromStart);
+        getStandalonePlacementStartSeconds(processor_, to.trackId, to.placementId, toStart);
         double minTime = std::min(fromStart, toStart);
         double maxTime = std::max(fromStart, toStart);
 
-        for (int i = 0; i < processor_.getNumClips(from.trackId); ++i)
+        for (int i = 0; i < getStandalonePlacementCount(processor_, from.trackId); ++i)
         {
-            uint64_t clipId = processor_.getClipId(from.trackId, i);
-            double clipStart = processor_.getClipStartSeconds(from.trackId, i);
-            if (clipStart >= minTime && clipStart <= maxTime)
+            const uint64_t placementId = processor_.getPlacementId(from.trackId, i);
+            double placementStartSeconds = 0.0;
+            getStandalonePlacementStartSeconds(processor_, from.trackId, placementId, placementStartSeconds);
+            if (placementStartSeconds >= minTime && placementStartSeconds <= maxTime)
             {
-                selectedClips_.insert(ClipSelectionKey{from.trackId, clipId});
+                selectedPlacements_.insert(PlacementSelectionKey{from.trackId, placementId});
             }
         }
     }
@@ -1623,293 +1718,51 @@ void ArrangementViewComponent::selectClipsInRange(const ClipSelectionKey& from, 
     {
         int minTrack = std::min(from.trackId, to.trackId);
         int maxTrack = std::max(from.trackId, to.trackId);
-        double fromStart = processor_.getClipStartSecondsById(from.trackId, from.clipId);
-        double toStart = processor_.getClipStartSecondsById(to.trackId, to.clipId);
+        double fromStart = 0.0;
+        double toStart = 0.0;
+        getStandalonePlacementStartSeconds(processor_, from.trackId, from.placementId, fromStart);
+        getStandalonePlacementStartSeconds(processor_, to.trackId, to.placementId, toStart);
         double minTime = std::min(fromStart, toStart);
         double maxTime = std::max(fromStart, toStart);
 
         for (int trackId = minTrack; trackId <= maxTrack; ++trackId)
         {
-            for (int i = 0; i < processor_.getNumClips(trackId); ++i)
+            for (int i = 0; i < getStandalonePlacementCount(processor_, trackId); ++i)
             {
-                uint64_t clipId = processor_.getClipId(trackId, i);
-                double clipStart = processor_.getClipStartSeconds(trackId, i);
-                if (clipStart >= minTime && clipStart <= maxTime)
+                const uint64_t placementId = processor_.getPlacementId(trackId, i);
+                double placementStartSeconds = 0.0;
+                getStandalonePlacementStartSeconds(processor_, trackId, placementId, placementStartSeconds);
+                if (placementStartSeconds >= minTime && placementStartSeconds <= maxTime)
                 {
-                    selectedClips_.insert(ClipSelectionKey{trackId, clipId});
+                    selectedPlacements_.insert(PlacementSelectionKey{trackId, placementId});
                 }
             }
         }
     }
 }
 
-void ArrangementViewComponent::copySelectedClips()
-{
-    if (selectedClips_.empty()) return;
-
-    clipboard_.clear();
-    clipboardReferenceTime_ = std::numeric_limits<double>::max();
-
-    for (const auto& sel : selectedClips_)
-    {
-        OpenTuneAudioProcessor::ClipSnapshot snap;
-        if (processor_.getClipSnapshot(sel.trackId, sel.clipId, snap))
-        {
-            double clipStart = snap.startSeconds;
-            if (clipStart < clipboardReferenceTime_)
-            {
-                clipboardReferenceTime_ = clipStart;
-            }
-            clipboard_.push_back({sel.trackId, std::move(snap), 0.0});
-        }
-    }
-
-    for (auto& item : clipboard_)
-    {
-        item.relativeOffset = item.snapshot.startSeconds - clipboardReferenceTime_;
-    }
-}
-
-void ArrangementViewComponent::cutSelectedClips()
-{
-    if (selectedClips_.empty()) return;
-
-    copySelectedClips();
-
-    std::vector<std::tuple<int, uint64_t, int>> toDelete;
-    for (const auto& sel : selectedClips_)
-    {
-        int clipIndex = processor_.findClipIndexById(sel.trackId, sel.clipId);
-        if (clipIndex >= 0)
-        {
-            toDelete.emplace_back(sel.trackId, sel.clipId, clipIndex);
-        }
-    }
-
-    std::sort(toDelete.begin(), toDelete.end(), [](const auto& a, const auto& b) {
-        if (std::get<0>(a) != std::get<0>(b))
-            return std::get<0>(a) > std::get<0>(b);
-        return std::get<2>(a) > std::get<2>(b);
-    });
-
-    std::unique_ptr<CompoundUndoAction> compoundAction;
-    if (toDelete.size() > 1)
-    {
-        compoundAction = std::make_unique<CompoundUndoAction>("Cut Multiple Clips");
-    }
-
-    for (const auto& [trackId, clipId, clipIndex] : toDelete)
-    {
-        OpenTuneAudioProcessor::ClipSnapshot snap;
-        int deletedIndex = -1;
-        if (processor_.deleteClipById(trackId, clipId, &snap, &deletedIndex))
-        {
-            auto action = std::make_unique<ClipDeleteAction>(
-                processor_, trackId, clipId, deletedIndex, std::move(snap));
-            if (compoundAction)
-            {
-                compoundAction->addAction(std::move(action));
-            }
-            else
-            {
-                processor_.getUndoManager().addAction(std::move(action));
-            }
-        }
-    }
-
-    if (compoundAction && !compoundAction->isEmpty())
-    {
-        processor_.getUndoManager().addAction(std::move(compoundAction));
-    }
-
-    clearClipSelection();
-    selectedClip_ = processor_.getSelectedClip(selectedTrack_);
-    if (selectedClip_ >= 0 && selectedClip_ < processor_.getNumClips(selectedTrack_)) {
-        selectedClipId_ = processor_.getClipId(selectedTrack_, selectedClip_);
-    } else {
-        selectedClipId_ = 0;
-    }
-    repaint();
-}
-
-void ArrangementViewComponent::pasteClips()
-{
-    if (clipboard_.empty()) return;
-
-    double playheadTime = processor_.getPosition();
-    int targetTrack = processor_.getActiveTrackId();
-    if (targetTrack < 0 || targetTrack >= OpenTuneAudioProcessor::MAX_TRACKS) return;
-
-    clearClipSelection();
-
-    std::unique_ptr<CompoundUndoAction> compoundAction;
-    if (clipboard_.size() > 1)
-    {
-        compoundAction = std::make_unique<CompoundUndoAction>("Paste Clips");
-    }
-
-    for (const auto& item : clipboard_)
-    {
-        double newStart = playheadTime + item.relativeOffset;
-        if (newStart < 0.0) newStart = 0.0;
-
-        int insertIndex = 0;
-        int numClips = processor_.getNumClips(targetTrack);
-        for (int i = 0; i < numClips; ++i)
-        {
-            double clipStart = processor_.getClipStartSeconds(targetTrack, i);
-            if (newStart >= clipStart)
-            {
-                insertIndex = i + 1;
-            }
-        }
-
-        ClipSnapshot pasteSnap = item.snapshot;
-        pasteSnap.startSeconds = newStart;
-
-        if (processor_.insertClipSnapshot(targetTrack, insertIndex, pasteSnap, 0))
-        {
-            uint64_t newClipId = processor_.getClipId(targetTrack, insertIndex);
-            selectedClips_.insert(ClipSelectionKey{targetTrack, newClipId});
-            auto action = std::make_unique<ClipCreateAction>(processor_, targetTrack, newClipId);
-            if (compoundAction)
-            {
-                compoundAction->addAction(std::move(action));
-            }
-            else
-            {
-                processor_.getUndoManager().addAction(std::move(action));
-            }
-        }
-    }
-
-    if (compoundAction && !compoundAction->isEmpty())
-    {
-        processor_.getUndoManager().addAction(std::move(compoundAction));
-    }
-
-    if (!selectedClips_.empty())
-    {
-        selectedTrack_ = targetTrack;
-        selectedClip_ = processor_.getSelectedClip(targetTrack);
-        if (selectedClip_ >= 0 && selectedClip_ < processor_.getNumClips(targetTrack)) {
-            selectedClipId_ = processor_.getClipId(targetTrack, selectedClip_);
-        }
-    }
-
-    listeners_.call([this](Listener& l) {
-        l.clipSelectionChanged(selectedTrack_, selectedClip_);
-    });
-    repaint();
-}
-
-void ArrangementViewComponent::deleteSelectedClips()
-{
-    if (selectedClips_.empty())
-    {
-        if (selectedTrack_ >= 0 && selectedTrack_ < OpenTuneAudioProcessor::MAX_TRACKS)
-        {
-            uint64_t clipId = selectedClipId_;
-            if (clipId == 0 && selectedClip_ >= 0 && selectedClip_ < processor_.getNumClips(selectedTrack_)) {
-                clipId = processor_.getClipId(selectedTrack_, selectedClip_);
-            }
-
-            OpenTuneAudioProcessor::ClipSnapshot snap;
-            int deletedIndex = -1;
-            if (clipId != 0 && processor_.deleteClipById(selectedTrack_, clipId, &snap, &deletedIndex))
-            {
-                processor_.getUndoManager().addAction(std::make_unique<ClipDeleteAction>(
-                    processor_, selectedTrack_, clipId, deletedIndex, std::move(snap)));
-                selectedClip_ = processor_.getSelectedClip(selectedTrack_);
-                if (selectedClip_ >= 0 && selectedClip_ < processor_.getNumClips(selectedTrack_)) {
-                    selectedClipId_ = processor_.getClipId(selectedTrack_, selectedClip_);
-                } else {
-                    selectedClipId_ = 0;
-                }
-                repaint();
-            }
-        }
-        return;
-    }
-
-    std::vector<std::tuple<int, uint64_t, int>> toDelete;
-    for (const auto& sel : selectedClips_)
-    {
-        int clipIndex = processor_.findClipIndexById(sel.trackId, sel.clipId);
-        if (clipIndex >= 0)
-        {
-            toDelete.emplace_back(sel.trackId, sel.clipId, clipIndex);
-        }
-    }
-
-    std::sort(toDelete.begin(), toDelete.end(), [](const auto& a, const auto& b) {
-        if (std::get<0>(a) != std::get<0>(b))
-            return std::get<0>(a) > std::get<0>(b);
-        return std::get<2>(a) > std::get<2>(b);
-    });
-
-    std::unique_ptr<CompoundUndoAction> compoundAction;
-    if (toDelete.size() > 1)
-    {
-        compoundAction = std::make_unique<CompoundUndoAction>("Delete Multiple Clips");
-    }
-
-    for (const auto& [trackId, clipId, clipIndex] : toDelete)
-    {
-        OpenTuneAudioProcessor::ClipSnapshot snap;
-        int deletedIndex = -1;
-        if (processor_.deleteClipById(trackId, clipId, &snap, &deletedIndex))
-        {
-            auto action = std::make_unique<ClipDeleteAction>(
-                processor_, trackId, clipId, deletedIndex, std::move(snap));
-            if (compoundAction)
-            {
-                compoundAction->addAction(std::move(action));
-            }
-            else
-            {
-                processor_.getUndoManager().addAction(std::move(action));
-            }
-        }
-    }
-
-    if (compoundAction && !compoundAction->isEmpty())
-    {
-        processor_.getUndoManager().addAction(std::move(compoundAction));
-    }
-
-    clearClipSelection();
-    selectedClip_ = processor_.getSelectedClip(selectedTrack_);
-    if (selectedClip_ >= 0 && selectedClip_ < processor_.getNumClips(selectedTrack_)) {
-        selectedClipId_ = processor_.getClipId(selectedTrack_, selectedClip_);
-    } else {
-        selectedClipId_ = 0;
-    }
-    repaint();
-}
-
-void ArrangementViewComponent::selectAllClipsInTrack(int trackId)
+void ArrangementViewComponent::selectAllPlacementsInTrack(int trackId)
 {
     if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS) return;
 
-    clearClipSelection();
+    clearPlacementSelection();
 
-    int numClips = processor_.getNumClips(trackId);
-    for (int i = 0; i < numClips; ++i)
+    const int placementCount = getStandalonePlacementCount(processor_, trackId);
+    for (int i = 0; i < placementCount; ++i)
     {
-        uint64_t clipId = processor_.getClipId(trackId, i);
-        selectedClips_.insert(ClipSelectionKey{trackId, clipId});
+        const uint64_t placementId = processor_.getPlacementId(trackId, i);
+        selectedPlacements_.insert(PlacementSelectionKey{trackId, placementId});
     }
 
-    if (!selectedClips_.empty())
+    if (!selectedPlacements_.empty())
     {
         selectedTrack_ = trackId;
-        selectedClip_ = numClips > 0 ? 0 : -1;
-        selectedClipId_ = numClips > 0 ? processor_.getClipId(trackId, 0) : 0;
+        selectedPlacementIndex_ = placementCount > 0 ? 0 : -1;
+        selectedPlacementId_ = placementCount > 0 ? processor_.getPlacementId(trackId, 0) : 0;
     }
 
     listeners_.call([this](Listener& l) {
-        l.clipSelectionChanged(selectedTrack_, selectedClip_);
+        l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
     });
     repaint();
 }

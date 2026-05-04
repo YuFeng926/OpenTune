@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <deque>
+#include <vector>
 #include "../Utils/MouseTrailConfig.h"
 #include "UIColors.h"
 #include "ThemeTokens.h"
@@ -37,9 +38,14 @@ public:
         juce::Desktop::getInstance().removeGlobalMouseListener(this);
     }
 
+    void setTrailTheme(MouseTrailConfig::TrailTheme theme)
+    {
+        trailTheme_ = theme;
+    }
+
     void paint(juce::Graphics& g) override
     {
-        if (!MouseTrailConfig::isEnabled())
+        if (!MouseTrailConfig::isEnabled(trailTheme_))
             return;
             
         paintTrail(g);
@@ -51,8 +57,7 @@ public:
         if (trailPoints.size() < 2)
             return;
 
-        auto theme = MouseTrailConfig::getTheme();
-        auto style = MouseTrailConfig::getThemeStyle(theme);
+        auto style = MouseTrailConfig::getThemeStyle(trailTheme_);
         
         int totalPoints = static_cast<int>(trailPoints.size());
         for (int i = 0; i < totalPoints - 1; ++i)
@@ -84,8 +89,7 @@ public:
 
     void paintRipples(juce::Graphics& g)
     {
-        auto theme = MouseTrailConfig::getTheme();
-        auto style = MouseTrailConfig::getThemeStyle(theme);
+        auto style = MouseTrailConfig::getThemeStyle(trailTheme_);
         
         for (const auto& r : ripples)
         {
@@ -110,7 +114,7 @@ public:
 
     void timerCallback() override
     {
-        if (!MouseTrailConfig::isEnabled())
+        if (!MouseTrailConfig::isEnabled(trailTheme_))
         {
             if (!trailPoints.empty() || !ripples.empty())
             {
@@ -123,7 +127,7 @@ public:
 
         bool stateChanged = false;
         
-        auto style = MouseTrailConfig::getThemeStyle(MouseTrailConfig::getTheme());
+        auto style = MouseTrailConfig::getThemeStyle(trailTheme_);
 
         for (auto it = ripples.begin(); it != ripples.end(); )
         {
@@ -183,7 +187,7 @@ public:
 
     void mouseDown(const juce::MouseEvent& e) override
     {
-        if (!MouseTrailConfig::isEnabled())
+        if (!MouseTrailConfig::isEnabled(trailTheme_))
             return;
             
         if (auto* componentUnderMouse = juce::Desktop::getInstance().getMainMouseSource().getComponentUnderMouse())
@@ -221,6 +225,7 @@ private:
     std::deque<TrailPoint> trailPoints;
     std::vector<Ripple> ripples;
     juce::Point<float> lastPos;
+    MouseTrailConfig::TrailTheme trailTheme_ = MouseTrailConfig::TrailTheme::Classic;
 };
 
 } // namespace OpenTune

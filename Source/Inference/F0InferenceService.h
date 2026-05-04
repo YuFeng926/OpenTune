@@ -8,6 +8,8 @@
 #include "IF0Extractor.h"
 #include "../Utils/Error.h"
 
+namespace Ort { struct Env; }
+
 namespace OpenTune {
 
 /**
@@ -19,11 +21,11 @@ namespace OpenTune {
  * - Handle model switching and configuration
  * 
  * Thread-safe: Yes (shared_mutex for model access)
- * Concurrency: Allows parallel extractF0 calls
+ * Lifecycle: Model loaded on demand, released after 30s idle
  */
 class F0InferenceService {
 public:
-    F0InferenceService();
+    F0InferenceService(std::shared_ptr<Ort::Env> env);
     ~F0InferenceService();
 
     /**
@@ -89,6 +91,11 @@ public:
     int getF0SampleRate() const;
 
     bool isInitialized() const;
+
+    /**
+     * 释放闲置超过 30 秒的 F0 模型，由外部定期调用
+     */
+    void releaseIdleModelIfNeeded();
 
 private:
     class Impl;

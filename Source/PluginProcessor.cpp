@@ -1,18 +1,28 @@
-﻿#include "PluginProcessor.h"
+#include "PluginProcessor.h"
+#include "MaterializationStore.h"
+#include "SourceStore.h"
+#include "StandaloneArrangement.h"
 #include "Editor/EditorFactory.h"
-#include "Host/HostIntegration.h"
 #include "DSP/ResamplingManager.h"
 #include "DSP/MelSpectrogram.h"
+#include "Services/F0ExtractionService.h"
+#include "Services/ImportedClipF0Extraction.h"
 #include "Utils/ModelPathResolver.h"
 #include "Utils/AppLogger.h"
+#include <onnxruntime_cxx_api.h>
 #include "Utils/AccelerationDetector.h"
 #include "Utils/TimeCoordinate.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <functional>
+
+#if JucePlugin_Enable_ARA
+#include "ARA/OpenTuneDocumentController.h"
+#endif
 
 namespace OpenTune {
 
@@ -26,16 +36,298 @@ constexpr int kExportNumChannels = 1;
 constexpr int kExportMasterNumChannels = 2;
 constexpr int kExportBitsPerSample = static_cast<int>(sizeof(float) * 8);
 
-inline float computeFadeGain(int64_t sampleInClip, int64_t clipLen, int64_t fadeInSamples, int64_t fadeOutSamples) {
-    float fade = 1.0f;
-    if (fadeInSamples > 1 && sampleInClip < fadeInSamples) {
-        fade *= static_cast<float>(sampleInClip) / static_cast<float>(fadeInSamples - 1);
+std::vector<Note> normalizeStoredNotes(const std::vector<Note>& notes)
+{
+    NoteSequence sequence;
+    sequence.setNotesSorted(notes);
+    return sequence.getNotes();
+}
+
+std::vector<CorrectedSegment> copyCorrectedSegments(const std::shared_ptr<PitchCurve>& curve)
+{
+    std::vector<CorrectedSegment> copiedSegments;
+    if (curve == nullptr) {
+        return copiedSegments;
     }
-    if (fadeOutSamples > 1 && (clipLen - 1 - sampleInClip) < fadeOutSamples) {
-        fade *= static_cast<float>(clipLen - 1 - sampleInClip) / static_cast<float>(fadeOutSamples - 1);
+
+    const auto snapshot = curve->getSnapshot();
+    copiedSegments.reserve(snapshot->getCorrectedSegments().size());
+    for (const auto& segment : snapshot->getCorrectedSegments()) {
+        copiedSegments.push_back(segment);
+    }
+    return copiedSegments;
+}
+
+juce::String diagnosticControlCallToString(OpenTuneAudioProcessor::DiagnosticControlCall controlCall)
+{
+    switch (controlCall) {
+        case OpenTuneAudioProcessor::DiagnosticControlCall::Play: return "play";
+        case OpenTuneAudioProcessor::DiagnosticControlCall::Pause: return "pause";
+        case OpenTuneAudioProcessor::DiagnosticControlCall::Stop: return "stop";
+        case OpenTuneAudioProcessor::DiagnosticControlCall::Seek: return "seek";
+        case OpenTuneAudioProcessor::DiagnosticControlCall::None: break;
+    }
+
+    return "none";
+}
+
+inline float computePlacementFadeGain(int64_t sampleInPlacement,
+                                      int64_t placementLengthSamples,
+                                      int64_t fadeInSamples,
+                                      int64_t fadeOutSamples) {
+    float fade = 1.0f;
+    if (fadeInSamples > 1 && sampleInPlacement < fadeInSamples) {
+        fade *= static_cast<float>(sampleInPlacement) / static_cast<float>(fadeInSamples - 1);
+    }
+    if (fadeOutSamples > 1 && (placementLengthSamples - 1 - sampleInPlacement) < fadeOutSamples) {
+        fade *= static_cast<float>(placementLengthSamples - 1 - sampleInPlacement) / static_cast<float>(fadeOutSamples - 1);
     }
     return fade;
 }
+
+bool hasRemainingPlacementForMaterialization(const StandaloneArrangement& arrangement, uint64_t materializationId)
+{
+    if (materializationId == 0) {
+        return false;
+    }
+
+    for (int trackId = 0; trackId < arrangement.getNumTracks(); ++trackId) {
+        const int placementCount = arrangement.getNumPlacements(trackId);
+        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
+            StandaloneArrangement::Placement placement;
+            if (arrangement.getPlacementByIndex(trackId, placementIndex, placement)
+                && placement.materializationId == materializationId) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+std::shared_ptr<const juce::AudioBuffer<float>> sliceAudioBuffer(const std::shared_ptr<const juce::AudioBuffer<float>>& audioBuffer,
+                                                                 int64_t startSample,
+                                                                 int64_t endSampleExclusive)
+{
+    if (audioBuffer == nullptr || endSampleExclusive <= startSample) {
+        return {};
+    }
+
+    const int64_t clampedStart = juce::jlimit<int64_t>(0, audioBuffer->getNumSamples(), startSample);
+    const int64_t clampedEnd = juce::jlimit<int64_t>(clampedStart, audioBuffer->getNumSamples(), endSampleExclusive);
+    if (clampedEnd <= clampedStart) {
+        return {};
+    }
+
+    auto sliced = std::make_shared<juce::AudioBuffer<float>>(audioBuffer->getNumChannels(), static_cast<int>(clampedEnd - clampedStart));
+    for (int channel = 0; channel < sliced->getNumChannels(); ++channel) {
+        sliced->copyFrom(channel,
+                         0,
+                         *audioBuffer,
+                         channel,
+                         static_cast<int>(clampedStart),
+                         sliced->getNumSamples());
+    }
+    return sliced;
+}
+
+std::vector<SilentGap> sliceSilentGaps(const std::vector<SilentGap>& silentGaps,
+                                       int64_t startSample,
+                                       int64_t endSampleExclusive)
+{
+    std::vector<SilentGap> slicedGaps;
+    for (const auto& gap : silentGaps) {
+        const int64_t overlapStart = std::max<int64_t>(gap.startSample, startSample);
+        const int64_t overlapEnd = std::min<int64_t>(gap.endSampleExclusive, endSampleExclusive);
+        if (overlapEnd <= overlapStart) {
+            continue;
+        }
+
+        SilentGap slicedGap;
+        slicedGap.startSample = overlapStart - startSample;
+        slicedGap.endSampleExclusive = overlapEnd - startSample;
+        slicedGap.minLevel_dB = gap.minLevel_dB;
+        slicedGaps.push_back(slicedGap);
+    }
+    return slicedGaps;
+}
+
+std::vector<Note> sliceNotesToLocalRange(const std::vector<Note>& notes,
+                                         double startSeconds,
+                                         double endSeconds)
+{
+    std::vector<Note> slicedNotes;
+    if (endSeconds <= startSeconds) {
+        return slicedNotes;
+    }
+
+    for (const auto& note : notes) {
+        const double overlapStart = std::max(note.startTime, startSeconds);
+        const double overlapEnd = std::min(note.endTime, endSeconds);
+        if (overlapEnd <= overlapStart) {
+            continue;
+        }
+
+        Note slicedNote = note;
+        slicedNote.startTime = overlapStart - startSeconds;
+        slicedNote.endTime = overlapEnd - startSeconds;
+        slicedNotes.push_back(slicedNote);
+    }
+
+    return normalizeStoredNotes(slicedNotes);
+}
+
+std::shared_ptr<PitchCurve> slicePitchCurveToLocalRange(const std::shared_ptr<PitchCurve>& pitchCurve,
+                                                        double startSeconds,
+                                                        double endSeconds)
+{
+    if (pitchCurve == nullptr || endSeconds <= startSeconds) {
+        return nullptr;
+    }
+
+    const auto snapshot = pitchCurve->getSnapshot();
+    const int hopSize = snapshot->getHopSize();
+    const double sampleRate = snapshot->getSampleRate();
+    if (hopSize <= 0 || sampleRate <= 0.0) {
+        return nullptr;
+    }
+
+    const double frameRate = sampleRate / static_cast<double>(hopSize);
+    if (frameRate <= 0.0) {
+        return nullptr;
+    }
+
+    const int startFrame = juce::jlimit(0,
+                                        static_cast<int>(snapshot->getOriginalF0().size()),
+                                        static_cast<int>(std::floor(startSeconds * frameRate)));
+    const int endFrame = juce::jlimit(startFrame,
+                                      static_cast<int>(snapshot->getOriginalF0().size()),
+                                      static_cast<int>(std::ceil(endSeconds * frameRate)));
+    if (endFrame <= startFrame) {
+        return nullptr;
+    }
+
+    auto slicedCurve = std::make_shared<PitchCurve>();
+    slicedCurve->setHopSize(hopSize);
+    slicedCurve->setSampleRate(sampleRate);
+
+    const auto& originalF0 = snapshot->getOriginalF0();
+    slicedCurve->setOriginalF0(std::vector<float>(originalF0.begin() + startFrame, originalF0.begin() + endFrame));
+
+    const auto& originalEnergy = snapshot->getOriginalEnergy();
+    if (originalEnergy.size() >= static_cast<size_t>(endFrame)) {
+        slicedCurve->setOriginalEnergy(std::vector<float>(originalEnergy.begin() + startFrame, originalEnergy.begin() + endFrame));
+    }
+
+    std::vector<CorrectedSegment> slicedSegments;
+    for (const auto& segment : snapshot->getCorrectedSegments()) {
+        const int overlapStart = std::max(segment.startFrame, startFrame);
+        const int overlapEnd = std::min(segment.endFrame, endFrame);
+        if (overlapEnd <= overlapStart) {
+            continue;
+        }
+
+        CorrectedSegment slicedSegment = segment;
+        const int originalOffsetStart = overlapStart - segment.startFrame;
+        const int originalOffsetEnd = overlapEnd - segment.startFrame;
+        slicedSegment.startFrame = overlapStart - startFrame;
+        slicedSegment.endFrame = overlapEnd - startFrame;
+        slicedSegment.f0Data.assign(segment.f0Data.begin() + originalOffsetStart,
+                                    segment.f0Data.begin() + originalOffsetEnd);
+        slicedSegments.push_back(std::move(slicedSegment));
+    }
+    slicedCurve->replaceCorrectedSegments(slicedSegments);
+    return slicedCurve;
+}
+
+bool detectedKeysMatch(const DetectedKey& lhs, const DetectedKey& rhs)
+{
+    return lhs.root == rhs.root
+        && lhs.scale == rhs.scale
+        && std::abs(lhs.confidence - rhs.confidence) <= 1.0e-6f;
+}
+
+bool nearlyEqualSeconds(double lhs, double rhs)
+{
+    return std::abs(lhs - rhs) <= (1.0 / TimeCoordinate::kRenderSampleRate);
+}
+
+std::vector<SilentGap> mergeSilentGaps(const std::vector<SilentGap>& leadingGaps,
+                                       const std::vector<SilentGap>& trailingGaps,
+                                       int64_t trailingOffsetSamples)
+{
+    std::vector<SilentGap> mergedGaps = leadingGaps;
+    mergedGaps.reserve(leadingGaps.size() + trailingGaps.size());
+    for (const auto& gap : trailingGaps) {
+        SilentGap mergedGap = gap;
+        mergedGap.startSample += trailingOffsetSamples;
+        mergedGap.endSampleExclusive += trailingOffsetSamples;
+        mergedGaps.push_back(mergedGap);
+    }
+    return mergedGaps;
+}
+
+std::shared_ptr<PitchCurve> mergePitchCurves(const std::shared_ptr<PitchCurve>& leadingCurve,
+                                             const std::shared_ptr<PitchCurve>& trailingCurve,
+                                             OriginalF0State leadingState,
+                                             OriginalF0State trailingState)
+{
+    if (leadingState != trailingState) {
+        return nullptr;
+    }
+
+    if (leadingCurve == nullptr || trailingCurve == nullptr) {
+        return (leadingCurve == nullptr && trailingCurve == nullptr) ? std::shared_ptr<PitchCurve>{} : nullptr;
+    }
+
+    const auto leadingSnapshot = leadingCurve->getSnapshot();
+    const auto trailingSnapshot = trailingCurve->getSnapshot();
+    if (leadingSnapshot == nullptr
+        || trailingSnapshot == nullptr
+        || leadingSnapshot->getHopSize() <= 0
+        || leadingSnapshot->getHopSize() != trailingSnapshot->getHopSize()
+        || std::abs(leadingSnapshot->getSampleRate() - trailingSnapshot->getSampleRate()) > 1.0e-6) {
+        return nullptr;
+    }
+
+    std::vector<float> mergedOriginalF0 = leadingSnapshot->getOriginalF0();
+    const auto& trailingOriginalF0 = trailingSnapshot->getOriginalF0();
+    mergedOriginalF0.insert(mergedOriginalF0.end(), trailingOriginalF0.begin(), trailingOriginalF0.end());
+
+    std::vector<float> mergedOriginalEnergy = leadingSnapshot->getOriginalEnergy();
+    if (mergedOriginalEnergy.size() < leadingSnapshot->getOriginalF0().size()) {
+        mergedOriginalEnergy.resize(leadingSnapshot->getOriginalF0().size(), 0.0f);
+    }
+
+    const auto& trailingOriginalEnergy = trailingSnapshot->getOriginalEnergy();
+    if (trailingOriginalEnergy.size() < trailingOriginalF0.size()) {
+        mergedOriginalEnergy.insert(mergedOriginalEnergy.end(),
+                                    trailingOriginalF0.size() - trailingOriginalEnergy.size(),
+                                    0.0f);
+    } else {
+        mergedOriginalEnergy.insert(mergedOriginalEnergy.end(),
+                                    trailingOriginalEnergy.begin(),
+                                    trailingOriginalEnergy.begin() + static_cast<std::ptrdiff_t>(trailingOriginalF0.size()));
+    }
+
+    std::vector<CorrectedSegment> mergedSegments = copyCorrectedSegments(leadingCurve);
+    const int leadingFrameCount = static_cast<int>(leadingSnapshot->getOriginalF0().size());
+    for (auto segment : trailingSnapshot->getCorrectedSegments()) {
+        segment.startFrame += leadingFrameCount;
+        segment.endFrame += leadingFrameCount;
+        mergedSegments.push_back(std::move(segment));
+    }
+
+    auto mergedCurve = std::make_shared<PitchCurve>();
+    mergedCurve->setHopSize(leadingSnapshot->getHopSize());
+    mergedCurve->setSampleRate(leadingSnapshot->getSampleRate());
+    mergedCurve->setOriginalF0(mergedOriginalF0);
+    mergedCurve->setOriginalEnergy(mergedOriginalEnergy);
+    mergedCurve->replaceCorrectedSegments(mergedSegments);
+    return mergedCurve;
+}
+
+} // anonymous namespace
 
 // ==============================================================================
 // F0 Gap Filling for Vocoder (Mel Frame Space)
@@ -52,7 +344,8 @@ void fillF0GapsForVocoder(
     double frameStartTimeSec,
     double frameEndTimeSec,
     double hopDuration,
-    double f0FrameRate)
+    double f0FrameRate,
+    bool allowTrailingExtension)
 {
     if (f0.empty() || !snap) return;
 
@@ -151,7 +444,7 @@ void fillF0GapsForVocoder(
     }
 
     // ---- Step 3: Extend trailing zeros (f0[n-1] == 0) ----
-    if (n > 0 && f0[static_cast<size_t>(n - 1)] <= 0.0f) {
+    if (allowTrailingExtension && n > 0 && f0[static_cast<size_t>(n - 1)] <= 0.0f) {
         // Find last voiced frame in current chunk
         int lastVoicedIdx = n - 1;
         while (lastVoicedIdx >= 0 && f0[static_cast<size_t>(lastVoicedIdx)] <= 0.0f) --lastVoicedIdx;
@@ -204,289 +497,354 @@ void fillF0GapsForVocoder(
     }
 }
 
-// 渲染单个 clip 为有效导出片段：dry 信号叠加 + rendered 信号覆盖 corrected 区域
-// 输出：out[ch][clipStart + i] 混合写入
-// 语义：corrected 区域：rendered 覆盖 dry（不叠加）
-template <typename ClipType>
-void renderClipForExport(
-    const ClipType& clip,
-    float trackGain,
-    int64_t clipStartInOutput,
-    juce::AudioBuffer<float>& out,
-    int64_t totalLen)
+namespace {
+
+void renderPlacementForExport(OpenTuneAudioProcessor& processor,
+                              const StandaloneArrangement::Placement& placement,
+                              float trackGain,
+                              int64_t placementStartInOutput,
+                              juce::AudioBuffer<float>& out,
+                              int64_t totalLen)
 {
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
 
-    const int64_t clipLen = clip.audioBuffer->getNumSamples();
-    if (clipLen <= 0) return;
-    if (clipStartInOutput >= totalLen) return;
-
-    const float clipGain = clip.gain;
-    const float baseGain = trackGain * clipGain;
-    const int64_t fadeInSamples = (clip.fadeInDuration > 0.0)
-        ? TimeCoordinate::secondsToSamples(clip.fadeInDuration, kExportSr) : 0;
-    const int64_t fadeOutSamples = (clip.fadeOutDuration > 0.0)
-        ? TimeCoordinate::secondsToSamples(clip.fadeOutDuration, kExportSr) : 0;
-
-    // Prepare local crossover mixer for export at 44100 Hz
-    CrossoverMixer mixer;
-    mixer.prepare(kExportSr, static_cast<int>(std::min<int64_t>(clipLen, 65536)),
-                  out.getNumChannels());
-
-    // Build sorted list of published chunks for lookup
-    struct ChunkRange {
-        int64_t startSample;
-        int64_t endSample;
-        const std::vector<float>* audio;
-    };
-    std::vector<ChunkRange> chunkRanges;
-
-    if (clip.renderCache) {
-        const auto publishedChunks = clip.renderCache->getPublishedChunks();
-        for (const auto& chunk : publishedChunks) {
-            if (!chunk.audio || chunk.audio->empty()) continue;
-            if (chunk.endSeconds <= 0.0) continue;
-            int64_t cs = TimeCoordinate::secondsToSamples(chunk.startSeconds, kExportSr);
-            int64_t ce = TimeCoordinate::secondsToSamples(chunk.endSeconds, kExportSr);
-            if (ce > 0 && cs < clipLen) {
-                chunkRanges.push_back({cs, ce, chunk.audio});
-            }
-        }
+    if (placement.materializationId == 0 || placement.durationSeconds <= 0.0 || placementStartInOutput >= totalLen) {
+        return;
     }
 
-    // Single-pass: for each channel, iterate all samples through crossover mixer
+    OpenTuneAudioProcessor::PlaybackReadSource source;
+    if (!processor.getPlaybackReadSourceByMaterializationId(placement.materializationId, source) || !source.canRead()) {
+        return;
+    }
+
+    const int64_t requestedPlacementSamples = juce::jmax<int64_t>(1,
+        TimeCoordinate::secondsToSamples(placement.durationSeconds, kExportSr));
+    const int64_t remainingOutputSamples = totalLen - placementStartInOutput;
+    const int samplesToRender = static_cast<int>(juce::jmin<int64_t>(requestedPlacementSamples, remainingOutputSamples));
+    if (samplesToRender <= 0) {
+        return;
+    }
+
+    juce::AudioBuffer<float> placementBuffer(out.getNumChannels(), samplesToRender);
+    placementBuffer.clear();
+
+    // Local crossover mixer for export (isolated from audio thread)
+    CrossoverMixer exportMixer;
+    exportMixer.prepare(kExportSr, samplesToRender, out.getNumChannels());
+
+    OpenTuneAudioProcessor::PlaybackReadRequest readRequest;
+    readRequest.source = source;
+    readRequest.readStartSeconds = 0.0;
+    readRequest.targetSampleRate = kExportSr;
+    readRequest.numSamples = samplesToRender;
+
+    const int renderedSamples = processor.readPlaybackAudio(readRequest, placementBuffer, 0, &exportMixer);
+    if (renderedSamples <= 0) {
+        return;
+    }
+
+    const float baseGain = trackGain * placement.gain;
+    const int64_t fadeInSamples = placement.fadeInDuration > 0.0
+        ? TimeCoordinate::secondsToSamples(placement.fadeInDuration, kExportSr)
+        : 0;
+    const int64_t fadeOutSamples = placement.fadeOutDuration > 0.0
+        ? TimeCoordinate::secondsToSamples(placement.fadeOutDuration, kExportSr)
+        : 0;
+
     for (int ch = 0; ch < out.getNumChannels(); ++ch) {
-        const float* src = clip.audioBuffer->getReadPointer(
-            std::min(ch, clip.audioBuffer->getNumChannels() - 1));
+        const float* src = placementBuffer.getReadPointer(ch);
         float* dst = out.getWritePointer(ch);
-
-        size_t chunkIdx = 0; // current chunk cursor
-
-        for (int64_t i = 0; i < clipLen; ++i) {
-            const int64_t dstIndex = clipStartInOutput + i;
-            if (dstIndex < 0 || dstIndex >= totalLen) continue;
-
-            float dry = src[static_cast<size_t>(i)];
-            float rendered = dry; // default: no rendered data
-
-            // Advance past chunks that end before current position
-            while (chunkIdx < chunkRanges.size() && chunkRanges[chunkIdx].endSample <= i) {
-                ++chunkIdx;
+        for (int sampleIndex = 0; sampleIndex < renderedSamples; ++sampleIndex) {
+            const int64_t dstIndex = placementStartInOutput + sampleIndex;
+            if (dstIndex < 0 || dstIndex >= totalLen) {
+                continue;
             }
 
-            // Check if current sample falls within a published chunk
-            if (chunkIdx < chunkRanges.size()) {
-                const auto& cr = chunkRanges[chunkIdx];
-                if (i >= cr.startSample && i < cr.endSample) {
-                    const size_t audioIdx = static_cast<size_t>(i - cr.startSample);
-                    if (audioIdx < cr.audio->size()) {
-                        rendered = (*cr.audio)[audioIdx];
-                    }
-                }
-            }
-
-            float fade = computeFadeGain(i, clipLen, fadeInSamples, fadeOutSamples);
-            float mixed = mixer.processSample(ch, dry, rendered);
-            dst[static_cast<size_t>(dstIndex)] += mixed * baseGain * fade;
+            const float fade = computePlacementFadeGain(sampleIndex,
+                                                        requestedPlacementSamples,
+                                                        fadeInSamples,
+                                                        fadeOutSamples);
+            dst[static_cast<size_t>(dstIndex)] += src[sampleIndex] * baseGain * fade;
         }
     }
 }
 
 } // anonymous namespace
 
-template <typename ClipT>
-static void computeClipSilentGaps(ClipT& clip)
-{
-    clip.silentGaps.clear();
+constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
+constexpr int kProcessorStateVersion = 4;
+constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
+constexpr int kStandaloneSettingsVersion = 1;
 
-    if (!clip.audioBuffer) return;
-    const int64_t clipLen = static_cast<int64_t>(clip.audioBuffer->getNumSamples());
-    if (clipLen <= 0) {
+#if !JucePlugin_Build_Standalone
+// --- Serialization helpers (full state, VST3 only) ---
+
+static bool readBytesExact(juce::InputStream& input, void* destination, size_t numBytes)
+{
+    return numBytes == 0 || input.read(destination, static_cast<int>(numBytes)) == static_cast<int>(numBytes);
+}
+
+static void writeFloatVector(juce::OutputStream& output, const std::vector<float>& values)
+{
+    output.writeInt(static_cast<int>(values.size()));
+    if (!values.empty()) {
+        output.write(values.data(), values.size() * sizeof(float));
+    }
+}
+
+static bool readFloatVector(juce::InputStream& input, std::vector<float>& out)
+{
+    out.clear();
+    const int valueCount = input.readInt();
+    if (valueCount < 0) {
+        return false;
+    }
+
+    out.resize(static_cast<size_t>(valueCount));
+    return readBytesExact(input, out.data(), out.size() * sizeof(float));
+}
+
+static void appendUniqueMaterializationId(std::vector<uint64_t>& materializationIds, uint64_t materializationId)
+{
+    if (materializationId == 0) {
         return;
     }
 
-    // 使用秒数坐标，与设备采样率无关
-    clip.silentGaps = SilentGapDetector::detectAllGapsAdaptive(*clip.audioBuffer);
+    if (std::find(materializationIds.begin(), materializationIds.end(), materializationId) == materializationIds.end()) {
+        materializationIds.push_back(materializationId);
+    }
 }
 
-static std::vector<double> buildChunkBoundariesFromSilentGaps(int64_t clipNumSamples,
-                                                               const std::vector<SilentGap>& gaps)
+static void writePitchCurve(juce::OutputStream& output,
+                            const std::shared_ptr<PitchCurve>& pitchCurve)
 {
-    std::vector<double> boundaries;
-    if (clipNumSamples <= 0) {
-        return boundaries;
+    output.writeBool(pitchCurve != nullptr);
+    if (pitchCurve == nullptr) {
+        return;
     }
 
-    const double clipDurationSec = TimeCoordinate::samplesToSeconds(clipNumSamples, SilentGapDetector::kInternalSampleRate);
-    boundaries.reserve(gaps.size() + 2);
-    boundaries.push_back(0.0);
-    for (const auto& gap : gaps) {
-        boundaries.push_back((gap.startSeconds + gap.endSeconds) * 0.5);
-    }
-    boundaries.push_back(clipDurationSec);
+    const auto snapshot = pitchCurve->getSnapshot();
+    output.writeInt(snapshot->getHopSize());
+    output.writeDouble(snapshot->getSampleRate());
+    writeFloatVector(output, snapshot->getOriginalF0());
+    writeFloatVector(output, snapshot->getOriginalEnergy());
 
-    std::sort(boundaries.begin(), boundaries.end());
-    auto last = std::unique(boundaries.begin(), boundaries.end());
-    boundaries.erase(last, boundaries.end());
-    return boundaries;
+    const auto& segments = snapshot->getCorrectedSegments();
+    output.writeInt(static_cast<int>(segments.size()));
+    for (const auto& segment : segments) {
+        output.writeInt(segment.startFrame);
+        output.writeInt(segment.endFrame);
+        output.writeInt(static_cast<int>(segment.source));
+        output.writeFloat(segment.retuneSpeed);
+        output.writeFloat(segment.vibratoDepth);
+        output.writeFloat(segment.vibratoRate);
+        writeFloatVector(output, segment.f0Data);
+    }
 }
 
-
-static juce::String encodeFloatVectorBase64(const std::vector<float>& v) {
-    if (v.empty()) {
-        return {};
+static std::shared_ptr<PitchCurve> readPitchCurve(juce::InputStream& input)
+{
+    if (!input.readBool()) {
+        return nullptr;
     }
-    return juce::Base64::toBase64(v.data(), v.size() * sizeof(float));
+
+    const int hopSize = input.readInt();
+    const double sampleRate = input.readDouble();
+    if (hopSize <= 0 || sampleRate <= 0.0) {
+        return nullptr;
+    }
+
+    std::vector<float> originalF0;
+    std::vector<float> originalEnergy;
+    if (!readFloatVector(input, originalF0) || !readFloatVector(input, originalEnergy)) {
+        return nullptr;
+    }
+
+    auto pitchCurve = std::make_shared<PitchCurve>();
+    pitchCurve->setHopSize(hopSize);
+    pitchCurve->setSampleRate(sampleRate);
+    pitchCurve->setOriginalF0(originalF0);
+    pitchCurve->setOriginalEnergy(originalEnergy);
+    pitchCurve->clearAllCorrections();
+
+    const int segmentCount = input.readInt();
+    if (segmentCount < 0) {
+        return nullptr;
+    }
+
+    for (int segmentIndex = 0; segmentIndex < segmentCount; ++segmentIndex) {
+        CorrectedSegment segment;
+        segment.startFrame = input.readInt();
+        segment.endFrame = input.readInt();
+        segment.source = static_cast<CorrectedSegment::Source>(input.readInt());
+        segment.retuneSpeed = input.readFloat();
+        segment.vibratoDepth = input.readFloat();
+        segment.vibratoRate = input.readFloat();
+        if (!readFloatVector(input, segment.f0Data)) {
+            return nullptr;
+        }
+
+        if (segment.startFrame < segment.endFrame && !segment.f0Data.empty()) {
+            pitchCurve->restoreCorrectedSegment(segment);
+        }
+    }
+
+    return pitchCurve;
 }
 
-static bool decodeFloatVectorBase64(const juce::var& value, std::vector<float>& out) {
+static void writeDetectedKey(juce::OutputStream& output, const DetectedKey& detectedKey)
+{
+    output.writeInt(static_cast<int>(detectedKey.root));
+    output.writeInt(static_cast<int>(detectedKey.scale));
+    output.writeFloat(detectedKey.confidence);
+}
+
+static DetectedKey readDetectedKey(juce::InputStream& input)
+{
+    DetectedKey detectedKey;
+    detectedKey.root = static_cast<Key>(input.readInt());
+    detectedKey.scale = static_cast<Scale>(input.readInt());
+    detectedKey.confidence = input.readFloat();
+    return detectedKey;
+}
+
+static void writeNotes(juce::OutputStream& output, const std::vector<Note>& notes)
+{
+    output.writeInt(static_cast<int>(notes.size()));
+    for (const auto& note : notes) {
+        output.writeDouble(note.startTime);
+        output.writeDouble(note.endTime);
+        output.writeFloat(note.pitch);
+        output.writeFloat(note.originalPitch);
+        output.writeFloat(note.pitchOffset);
+        output.writeFloat(note.retuneSpeed);
+        output.writeFloat(note.vibratoDepth);
+        output.writeFloat(note.vibratoRate);
+        output.writeFloat(note.velocity);
+        output.writeBool(note.isVoiced);
+        output.writeBool(note.selected);
+        output.writeBool(note.dirty);
+    }
+}
+
+static bool readNotes(juce::InputStream& input, std::vector<Note>& out)
+{
     out.clear();
-    const juce::String s = value.toString();
-    if (s.isEmpty()) {
-        return true;
-    }
-    juce::MemoryBlock mb;
-    juce::MemoryOutputStream mos(mb, false);
-    if (!juce::Base64::convertFromBase64(mos, s)) { return false; }
-    if (mb.getSize() % sizeof(float) != 0) {
+    const int noteCount = input.readInt();
+    if (noteCount < 0) {
         return false;
     }
-    const size_t n = mb.getSize() / sizeof(float);
-    out.resize(n);
-    std::memcpy(out.data(), mb.getData(), n * sizeof(float));
+
+    out.reserve(static_cast<size_t>(noteCount));
+    for (int noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
+        Note note;
+        note.startTime = input.readDouble();
+        note.endTime = input.readDouble();
+        note.pitch = input.readFloat();
+        note.originalPitch = input.readFloat();
+        note.pitchOffset = input.readFloat();
+        note.retuneSpeed = input.readFloat();
+        note.vibratoDepth = input.readFloat();
+        note.vibratoRate = input.readFloat();
+        note.velocity = input.readFloat();
+        note.isVoiced = input.readBool();
+        note.selected = input.readBool();
+        note.dirty = input.readBool();
+        out.push_back(note);
+    }
+
     return true;
 }
 
-
-static bool hasReadyOriginalF0Curve(const std::shared_ptr<PitchCurve>& curve)
+static void writeAudioBuffer(juce::OutputStream& output,
+                             const std::shared_ptr<const juce::AudioBuffer<float>>& audioBuffer)
 {
-    if (!curve) {
+    output.writeBool(audioBuffer != nullptr);
+    if (audioBuffer == nullptr) {
+        return;
+    }
+
+    const int numChannels = audioBuffer->getNumChannels();
+    const int numSamples = audioBuffer->getNumSamples();
+    output.writeInt(numChannels);
+    output.writeInt(numSamples);
+    for (int channel = 0; channel < numChannels; ++channel) {
+        const auto* channelData = audioBuffer->getReadPointer(channel);
+        output.write(channelData, static_cast<size_t>(numSamples) * sizeof(float));
+    }
+}
+
+static std::shared_ptr<const juce::AudioBuffer<float>> readAudioBuffer(juce::InputStream& input)
+{
+    if (!input.readBool()) {
+        return nullptr;
+    }
+
+    const int numChannels = input.readInt();
+    const int numSamples = input.readInt();
+    if (numChannels <= 0 || numSamples <= 0) {
+        return nullptr;
+    }
+
+    auto buffer = std::make_shared<juce::AudioBuffer<float>>(numChannels, numSamples);
+    buffer->clear();
+    for (int channel = 0; channel < numChannels; ++channel) {
+        if (!readBytesExact(input,
+                            buffer->getWritePointer(channel),
+                            static_cast<size_t>(numSamples) * sizeof(float))) {
+            return nullptr;
+        }
+    }
+
+    return buffer;
+}
+
+static void writeSilentGaps(juce::OutputStream& output,
+                            const std::vector<SilentGap>& silentGaps)
+{
+    output.writeInt(static_cast<int>(silentGaps.size()));
+    for (const auto& gap : silentGaps) {
+        output.writeInt64(gap.startSample);
+        output.writeInt64(gap.endSampleExclusive);
+        output.writeFloat(gap.minLevel_dB);
+    }
+}
+
+static bool readSilentGaps(juce::InputStream& input, std::vector<SilentGap>& out)
+{
+    out.clear();
+    const int gapCount = input.readInt();
+    if (gapCount < 0) {
         return false;
     }
-    return !curve->getSnapshot()->getOriginalF0().empty();
-}
 
-void OpenTuneAudioProcessor::copyClipToSnapshot(const TrackState::AudioClip& clip, OpenTune::ClipSnapshot& out)
-{
-    out.audioBuffer = clip.audioBuffer;
-    out.startSeconds = clip.startSeconds;
-    out.gain = clip.gain;
-    out.fadeInDuration = clip.fadeInDuration;
-    out.fadeOutDuration = clip.fadeOutDuration;
-    out.name = clip.name;
-    out.colour = clip.colour;
-    out.pitchCurve = clip.pitchCurve;
-    out.originalF0State = clip.originalF0State;
-    out.detectedKey = clip.detectedKey;
-    out.renderCache = clip.renderCache;
-    out.silentGaps = clip.silentGaps;
-}
-
-void OpenTuneAudioProcessor::copySnapshotToClip(const OpenTune::ClipSnapshot& snap, TrackState::AudioClip& clip, uint64_t clipId)
-{
-    clip.clipId = clipId;
-    clip.audioBuffer = snap.audioBuffer;
-    clip.startSeconds = snap.startSeconds;
-    clip.gain = snap.gain;
-    clip.fadeInDuration = snap.fadeInDuration;
-    clip.fadeOutDuration = snap.fadeOutDuration;
-    clip.name = snap.name;
-    clip.colour = snap.colour;
-    clip.pitchCurve = snap.pitchCurve;
-    clip.originalF0State = snap.originalF0State;
-    clip.detectedKey = snap.detectedKey;
-    clip.renderCache = snap.renderCache;
-    clip.silentGaps = snap.silentGaps;
-}
-
-OpenTuneAudioProcessor::TrackState::AudioClip::AudioClip(
-    const OpenTuneAudioProcessor::TrackState::AudioClip& other)
-    : clipId(other.clipId)
-    , audioBuffer(other.audioBuffer)
-    , drySignalBuffer_(other.drySignalBuffer_)
-    , startSeconds(other.startSeconds)
-    , gain(other.gain)
-    , fadeInDuration(other.fadeInDuration)
-    , fadeOutDuration(other.fadeOutDuration)
-    , name(other.name)
-    , colour(other.colour)
-    , pitchCurve(other.pitchCurve)
-    , originalF0State(other.originalF0State)
-    , detectedKey(other.detectedKey)
-    , renderCache(other.renderCache)
-    , notes(other.notes)
-    , silentGaps(other.silentGaps)
-{
-}
-
-OpenTuneAudioProcessor::TrackState::AudioClip& OpenTuneAudioProcessor::TrackState::AudioClip::operator=(
-    const OpenTuneAudioProcessor::TrackState::AudioClip& other)
-{
-    if (this == &other) {
-        return *this;
+    out.reserve(static_cast<size_t>(gapCount));
+    for (int gapIndex = 0; gapIndex < gapCount; ++gapIndex) {
+        SilentGap gap;
+        gap.startSample = input.readInt64();
+        gap.endSampleExclusive = input.readInt64();
+        gap.minLevel_dB = input.readFloat();
+        if (gap.isValid()) {
+            out.push_back(gap);
+        }
     }
 
-    clipId = other.clipId;
-    audioBuffer = other.audioBuffer;
-    drySignalBuffer_ = other.drySignalBuffer_;
-    startSeconds = other.startSeconds;
-    gain = other.gain;
-    fadeInDuration = other.fadeInDuration;
-    fadeOutDuration = other.fadeOutDuration;
-    name = other.name;
-    colour = other.colour;
-    pitchCurve = other.pitchCurve;
-    originalF0State = other.originalF0State;
-    detectedKey = other.detectedKey;
-    renderCache = other.renderCache;
-    notes = other.notes;
-    silentGaps = other.silentGaps;
-    return *this;
+    return true;
 }
+#endif // !JucePlugin_Build_Standalone
 
-OpenTuneAudioProcessor::TrackState::AudioClip::AudioClip(
-    OpenTuneAudioProcessor::TrackState::AudioClip&& other) noexcept
-    : clipId(other.clipId)
-    , audioBuffer(std::move(other.audioBuffer))
-    , drySignalBuffer_(std::move(other.drySignalBuffer_))
-    , startSeconds(other.startSeconds)
-    , gain(other.gain)
-    , fadeInDuration(other.fadeInDuration)
-    , fadeOutDuration(other.fadeOutDuration)
-    , name(std::move(other.name))
-    , colour(other.colour)
-    , pitchCurve(std::move(other.pitchCurve))
-    , originalF0State(other.originalF0State)
-    , detectedKey(std::move(other.detectedKey))
-    , renderCache(std::move(other.renderCache))
-    , notes(std::move(other.notes))
-    , silentGaps(std::move(other.silentGaps))
-{
-}
 
-OpenTuneAudioProcessor::TrackState::AudioClip& OpenTuneAudioProcessor::TrackState::AudioClip::operator=(
-    OpenTuneAudioProcessor::TrackState::AudioClip&& other) noexcept
+static std::shared_ptr<PitchCurve> clonePitchCurveWithCorrectedSegments(
+    const std::shared_ptr<PitchCurve>& sourceCurve,
+    const std::vector<CorrectedSegment>& segments)
 {
-    if (this == &other) {
-        return *this;
+    if (sourceCurve == nullptr) {
+        return nullptr;
     }
 
-    clipId = other.clipId;
-    audioBuffer = std::move(other.audioBuffer);
-    drySignalBuffer_ = std::move(other.drySignalBuffer_);
-    startSeconds = other.startSeconds;
-    gain = other.gain;
-    fadeInDuration = other.fadeInDuration;
-    fadeOutDuration = other.fadeOutDuration;
-    name = std::move(other.name);
-    colour = other.colour;
-    pitchCurve = std::move(other.pitchCurve);
-    originalF0State = other.originalF0State;
-    detectedKey = other.detectedKey;
-    renderCache = std::move(other.renderCache);
-    notes = std::move(other.notes);
-    silentGaps = std::move(other.silentGaps);
-    return *this;
+    auto committedCurve = sourceCurve->clone();
+    committedCurve->replaceCorrectedSegments(segments);
+    return committedCurve;
 }
 
 OpenTuneAudioProcessor::OpenTuneAudioProcessor()
@@ -495,37 +853,35 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                      .withOutput("Output", juce::AudioChannelSet::stereo(), true)) {
     AppLogger::initialize();
     AppLogger::log("OpenTuneAudioProcessor: ctor");
-    AccelerationDetector::getInstance().detect();
 
     editVersionParam_ = new juce::AudioParameterInt("editVersion", "EditVersion", 0, 100000, 0);
     addParameter(editVersionParam_);
 
-    // Initialize tracks
-    for (int i = 0; i < MAX_TRACKS; ++i) {
-        tracks_[i].name = "Track " + juce::String(i + 1);
-        tracks_[i].colour = juce::Colour::fromHSV(i * 0.3f, 0.6f, 0.8f, 1.0f);
-    }
+    sourceStore_ = std::make_shared<SourceStore>();
+    materializationStore_ = std::make_shared<MaterializationStore>();
+    standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
 
-    hostIntegration_ = createHostIntegration();
-    if (hostIntegration_) {
-        hostIntegration_->configureInitialState(*this);
-    }
-
-    resamplingManager_ = std::make_unique<ResamplingManager>();
-    f0Service_ = std::make_unique<F0InferenceService>();
-    vocoderDomain_ = std::make_unique<VocoderDomain>();
-    resetPerfProbeCounters();
-
-    chunkRenderWorkerRunning_ = true;
-    chunkRenderWorkerThread_ = std::thread([this]() { chunkRenderWorkerLoop(); });
+    resamplingManager_ = std::make_shared<ResamplingManager>();
 }
 
 OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
+    // Detach ARA back-pointer so DocumentController no longer calls into this processor.
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController()) {
+        if (dc->getProcessor() == this)
+            dc->setProcessor(nullptr);
+    }
+#endif
+
+    // Cancel any pending async reclaim sweep to avoid JUCE jassert in AsyncUpdater destructor
+    cancelPendingUpdate();
+
     isPlaying_.store(false);
+    materializationRefreshAliveFlag_->store(false, std::memory_order_release);
 
     {
         std::lock_guard<std::mutex> lock(schedulerMutex_);
-        chunkRenderWorkerRunning_ = false;
+        chunkRenderWorkerRunning_.store(false, std::memory_order_release);
     }
     schedulerCv_.notify_all();
     if (chunkRenderWorkerThread_.joinable()) {
@@ -542,108 +898,174 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     AppLogger::shutdown();
 }
 
-bool OpenTuneAudioProcessor::ensureF0Ready()
+// ============================================================================
+// 推理引擎初始化与生命周期
+// ============================================================================
+
+void OpenTuneAudioProcessor::ensureChunkRenderWorkerStarted()
 {
-    if (f0Ready_.load()) {
-        return true;
+    bool expected = false;
+    if (!chunkRenderWorkerRunning_.compare_exchange_strong(expected,
+                                                           true,
+                                                           std::memory_order_acq_rel,
+                                                           std::memory_order_acquire)) {
+        return;
     }
 
-    std::lock_guard<std::mutex> lock(f0InitMutex_);
+    chunkRenderWorkerThread_ = std::thread([this]() { chunkRenderWorkerLoop(); });
+}
 
-    if (f0Ready_.load()) {
-        return true;
-    }
+bool OpenTuneAudioProcessor::ensureServiceReady(
+    std::atomic<bool>& readyFlag,
+    std::atomic<bool>& attemptedFlag,
+    std::mutex& initMutex,
+    const char* serviceName,
+    std::function<bool(const std::string&)> initFunc)
+{
+    if (readyFlag.load()) return true;
 
-    if (f0InitAttempted_.load()) {
-        return f0Ready_.load();
-    }
+    std::lock_guard<std::mutex> lock(initMutex);
 
-    f0InitAttempted_.store(true);
+    if (readyFlag.load()) return true;
+
+    if (attemptedFlag.load()) return readyFlag.load();
+
+    attemptedFlag.store(true);
 
     const auto modelsDir = ModelPathResolver::getModelsDirectory();
-    AppLogger::log("F0 models dir: " + juce::String(modelsDir));
+    AppLogger::log(juce::String(serviceName) + " models dir: " + juce::String(modelsDir));
 
     if (!ModelPathResolver::ensureOnnxRuntimeLoaded()) {
         AppLogger::log("ensureOnnxRuntimeLoaded failed");
-        f0Ready_.store(false);
+        readyFlag.store(false);
         return false;
     }
 
+    AccelerationDetector::getInstance().detect();
+
     bool ok = false;
     try {
-        ok = f0Service_->initialize(modelsDir);
+        ok = initFunc(modelsDir);
         if (!ok) {
-            AppLogger::log("F0InferenceService initialize failed");
-            f0Ready_.store(false);
+            AppLogger::log(juce::String(serviceName) + " initialize failed");
+            readyFlag.store(false);
             return false;
         }
-
-        AppLogger::log("F0 inference service initialized successfully");
+        AppLogger::log(juce::String(serviceName) + " inference service initialized successfully");
     } catch (const std::exception& e) {
-        AppLogger::log("F0 initialize exception: " + juce::String(e.what()));
+        AppLogger::log(juce::String(serviceName) + " initialize exception: " + juce::String(e.what()));
         ok = false;
     } catch (...) {
-        AppLogger::log("F0 initialize unknown exception");
+        AppLogger::log(juce::String(serviceName) + " initialize unknown exception");
         ok = false;
     }
 
-    f0Ready_.store(ok);
+    readyFlag.store(ok);
     return ok;
+}
+
+bool OpenTuneAudioProcessor::ensureF0Ready()
+{
+    return ensureServiceReady(f0Ready_, f0InitAttempted_, f0InitMutex_, "F0",
+        [this](const std::string& modelsDir) {
+            if (!f0Service_) {
+                if (!ortEnv_) {
+                    Ort::InitApi();
+                    ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
+                }
+                f0Service_ = std::make_unique<F0InferenceService>(ortEnv_);
+            }
+            return f0Service_->initialize(modelsDir);
+        });
 }
 
 bool OpenTuneAudioProcessor::ensureVocoderReady()
 {
-    if (vocoderReady_.load()) {
-        return true;
+    return ensureServiceReady(vocoderReady_, vocoderInitAttempted_, vocoderInitMutex_, "Vocoder",
+        [this](const std::string& modelsDir) {
+            if (!vocoderDomain_) {
+                if (!ortEnv_) {
+                    Ort::InitApi();
+                    ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
+                }
+                vocoderDomain_ = std::make_unique<VocoderDomain>(ortEnv_);
+            }
+            return vocoderDomain_->initialize(modelsDir);
+        });
+}
+
+void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
+{
+    AppLogger::info("[Processor] Resetting inference backend, forceCpu=" 
+        + juce::String(forceCpu ? "true" : "false"));
+    
+    // 1. 停止 chunk render worker（确保无线程在使用 f0Service_/vocoderDomain_）
+    {
+        std::lock_guard<std::mutex> lock(schedulerMutex_);
+        chunkRenderWorkerRunning_.store(false, std::memory_order_release);
     }
-
-    std::lock_guard<std::mutex> lock(vocoderInitMutex_);
-
-    if (vocoderReady_.load()) {
-        return true;
+    schedulerCv_.notify_all();
+    if (chunkRenderWorkerThread_.joinable()) {
+        chunkRenderWorkerThread_.join();
     }
-
-    if (vocoderInitAttempted_.load()) {
-        return vocoderReady_.load();
+    
+    // 2. worker 已停，安全释放推理服务
+    if (vocoderDomain_) {
+        vocoderDomain_->shutdown();
+        vocoderDomain_.reset();
     }
+    vocoderReady_.store(false);
+    vocoderInitAttempted_.store(false);
+    
+    if (f0Service_) {
+        f0Service_->shutdown();
+        f0Service_.reset();
+    }
+    f0Ready_.store(false);
+    f0InitAttempted_.store(false);
+    
+    // 3. 重置加速检测器并重新检测
+    auto& detector = AccelerationDetector::getInstance();
+    detector.reset();
+    detector.detect(forceCpu);
+    
+    AppLogger::info("[Processor] Inference backend reset to: " 
+        + juce::String(detector.getBackendName()));
+}
 
-    vocoderInitAttempted_.store(true);
-
-    const auto modelsDir = ModelPathResolver::getModelsDirectory();
-    AppLogger::log("Vocoder models dir: " + juce::String(modelsDir));
-
-    if (!ModelPathResolver::ensureOnnxRuntimeLoaded()) {
-        AppLogger::log("ensureOnnxRuntimeLoaded failed");
-        vocoderReady_.store(false);
+bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const MaterializationSnapshot& snap,
+                                                           F0ExtractionService::Result& out,
+                                                           std::string& errorMessage)
+{
+    if (!ensureF0Ready()) {
+        errorMessage = "inference_not_ready";
+        AppLogger::log("RecordTrace: F0 initialization unavailable"
+            " processor=" + juce::String::toHexString(reinterpret_cast<juce::int64>(this))
+            + " f0Ready=" + juce::String(f0Ready_.load() ? 1 : 0));
         return false;
     }
 
-    bool ok = false;
-    try {
-        ok = vocoderDomain_->initialize(modelsDir);
-        if (!ok) {
-            AppLogger::log("VocoderDomain initialize failed");
-            vocoderReady_.store(false);
-            return false;
-        }
-
-        AppLogger::log("Vocoder inference service initialized successfully");
-    } catch (const std::exception& e) {
-        AppLogger::log("Vocoder initialize exception: " + juce::String(e.what()));
-        ok = false;
-    } catch (...) {
-        AppLogger::log("Vocoder initialize unknown exception");
-        ok = false;
+    F0InferenceService* f0Service = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(f0InitMutex_);
+        f0Service = f0Service_.get();
     }
 
-    vocoderReady_.store(ok);
-    return ok;
+    if (f0Service == nullptr) {
+        errorMessage = "f0_service_unavailable";
+        AppLogger::log("RecordTrace: F0 service missing after init"
+            " processor=" + juce::String::toHexString(reinterpret_cast<juce::int64>(this))
+            + " f0Ready=" + juce::String(f0Ready_.load() ? 1 : 0)
+            + " f0InitAttempted=" + juce::String(f0InitAttempted_.load() ? 1 : 0));
+        return false;
+    }
+
+    return extractOriginalF0ForImportedClip(*f0Service, snap, out, errorMessage);
 }
 
-bool OpenTuneAudioProcessor::initializeInferenceIfNeeded()
-{
-    return ensureF0Ready();
-}
+// ============================================================================
+// JUCE AudioProcessor 标准接口
+// ============================================================================
 
 const juce::String OpenTuneAudioProcessor::getName() const {
     return JucePlugin_Name;
@@ -706,39 +1128,20 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     
     if (sampleRateChanged && oldSampleRate > 0.0) {
         AppLogger::log("Sample rate changed: " + juce::String(oldSampleRate, 0) + 
-                       " -> " + juce::String(sampleRate, 0) + 
-                       ", resampling drySignalBuffer, clearing resampled cache");
-        
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        for (auto& track : tracks_) {
-            for (auto& clip : track.clips) {
-                // Pre-resample dry signal to new device rate
-                // audioBuffer stays at 44100Hz (fixed, never resampled on device rate change)
-                resampleDrySignal(clip, sampleRate);
-                
-                // Clear only the resampled cache (not the 44.1kHz audio)
-                // New renders will be resampled to the new sample rate
-                if (clip.renderCache) {
-                    clip.renderCache->clearResampledCache();
-                }
+                        " -> " + juce::String(sampleRate, 0) + 
+                       ", rebuilding playback assets");
 
-                // Re-prepare crossover mixer for new sample rate
-                clip.crossoverMixer_.prepare(sampleRate, samplesPerBlock);
+        jassert(materializationStore_ != nullptr);
 
-                // silentGaps are in seconds, unchanged
-            }
-        }
-    } else {
-        // First init or no rate change: prepare crossover mixers for all existing clips
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        for (auto& track : tracks_) {
-            for (auto& clip : track.clips) {
-                clip.crossoverMixer_.prepare(sampleRate, samplesPerBlock);
-            }
-        }
     }
 
+    // Always prepare crossover mixers for current sample rate (covers first init + rate change)
+    jassert(materializationStore_ != nullptr);
+    materializationStore_->prepareAllCrossoverMixers(sampleRate, samplesPerBlock);
+
     doublePrecisionScratch_.setSize(std::max(1, getTotalNumOutputChannels()), std::max(1, currentBlockSize_), false, true, true);
+    trackMixScratch_.setSize(std::max(1, getTotalNumOutputChannels()), std::max(1, currentBlockSize_), false, true, true);
+    clipReadScratch_.setSize(std::max(1, getTotalNumOutputChannels()), std::max(1, currentBlockSize_), false, true, true);
 
 #if JucePlugin_Enable_ARA
     prepareToPlayForARA(sampleRate,
@@ -746,6 +1149,7 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
                         getMainBusNumOutputChannels(),
                         getProcessingPrecision());
 #endif
+    pianoKeyAudition_.loadSamples();
 }
 
 void OpenTuneAudioProcessor::releaseResources() {
@@ -755,6 +1159,43 @@ void OpenTuneAudioProcessor::releaseResources() {
     releaseResourcesForARA();
 #endif
 }
+
+#if JucePlugin_Enable_ARA
+OpenTuneDocumentController* OpenTuneAudioProcessor::getDocumentController() const
+{
+    auto* controller = AudioProcessorARAExtension::getDocumentController();
+    if (controller == nullptr)
+    {
+        return nullptr;
+    }
+
+    return juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<OpenTuneDocumentController>(controller);
+}
+
+void OpenTuneAudioProcessor::didBindToARA() noexcept
+{
+    juce::AudioProcessorARAExtension::didBindToARA();
+
+    if (auto* dc = getDocumentController())
+    {
+        auto sharedSS = dc->getSharedSourceStore();
+        auto sharedMS = dc->getSharedMaterializationStore();
+        auto sharedRM = dc->getSharedResamplingManager();
+
+        if (sharedSS && sharedMS && sharedRM)
+        {
+            sourceStore_ = sharedSS;
+            materializationStore_ = sharedMS;
+            resamplingManager_ = sharedRM;
+        }
+
+        dc->setProcessor(this);
+        AppLogger::log("ARA: didBindToARA - attached shared stores"
+            " sourceStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(sourceStore_.get()))
+            + " materializationStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(materializationStore_.get())));
+    }
+}
+#endif
 
 bool OpenTuneAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const {
     const auto in = layouts.getMainInputChannelSet();
@@ -774,6 +1215,10 @@ bool OpenTuneAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) 
 bool OpenTuneAudioProcessor::supportsDoublePrecisionProcessing() const {
     return true;
 }
+
+// ============================================================================
+// 音频处理（processBlock）
+// ============================================================================
 
 void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<double>& buffer,
                                           juce::MidiBuffer& midiMessages) {
@@ -813,53 +1258,29 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                                           juce::MidiBuffer& midiMessages) {
     juce::ignoreUnused(midiMessages);
     juce::ScopedNoDenormals noDenormals;
-    const double perfStartMs = juce::Time::getMillisecondCounterHiRes();
-    const auto finalizePerf = [this, perfStartMs]() {
-        const double durationMs = juce::Time::getMillisecondCounterHiRes() - perfStartMs;
-        recordAudioCallbackDurationMs(durationMs);
-    };
-    
-    const int totalNumInputChannels = getTotalNumInputChannels();
+
     const int totalNumOutputChannels = getTotalNumOutputChannels();
     const int numSamples = buffer.getNumSamples();
 
 #if JucePlugin_Enable_ARA
     if (isBoundToARA()) {
-        if (auto* playHead = getPlayHead()) {
-            const auto pos = playHead->getPosition().orFallback(juce::AudioPlayHead::PositionInfo{});
-            if (auto s = pos.getTimeInSeconds()) {
-                positionAtomic_->store(*s, std::memory_order_relaxed);
-            }
-            isPlaying_.store(pos.getIsPlaying());
-            hostIsRecording_.store(pos.getIsRecording());
-            hostIsLooping_.store(pos.getIsLooping());
-            if (auto bpm = pos.getBpm()) {
-                hostBpm_.store(*bpm);
-            }
-            if (auto ts = pos.getTimeSignature()) {
-                hostTimeSigNum_.store(ts->numerator);
-                hostTimeSigDenom_.store(ts->denominator);
-            }
-            if (auto ppq = pos.getPpqPosition()) {
-                hostPpqPosition_.store(*ppq);
-            }
-            if (auto loop = pos.getLoopPoints()) {
-                hostPpqLoopStart_.store(loop->ppqStart);
-                hostPpqLoopEnd_.store(loop->ppqEnd);
+        if (auto* hostPlayHead = getPlayHead()) {
+            const auto pos = hostPlayHead->getPosition().orFallback(juce::AudioPlayHead::PositionInfo{});
+            updateHostTransportSnapshot(pos);
+
+            {
+                const auto hostSnapshot = getHostTransportSnapshot();
+                positionAtomic_->store(hostSnapshot.timeSeconds, std::memory_order_relaxed);
+                isPlaying_.store(hostSnapshot.isPlaying, std::memory_order_relaxed);
             }
         }
     }
 
     if (processBlockForARA(buffer, isRealtime(), getPlayHead())) {
-        finalizePerf();
+        pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
         return;
     }
 #endif
-
-    if (hostIntegration_ && hostIntegration_->processIfApplicable(*this, buffer, totalNumInputChannels, totalNumOutputChannels, numSamples)) {
-        finalizePerf();
-        return;
-    }
 
     // Clear output buffer
     for (int i = 0; i < totalNumOutputChannels; ++i) {
@@ -871,14 +1292,19 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     bool isPlaying = isPlaying_.load();
     
     if (!isPlaying && !isFading) {
-        // Fully stopped - clear output and reset state
-        for (auto& track : tracks_) {
-            track.currentRMS.store(-100.0f);
+        // Fully stopped — still mix piano key audition so preview works without transport
+        pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, currentSampleRate_.load());
+        jassert(standaloneArrangement_ != nullptr);
+        for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
+            standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
         }
-        isBuffering_.store(false);
-        finalizePerf();
         return;
     }
+
+    jassert(trackMixScratch_.getNumChannels() >= totalNumOutputChannels);
+    jassert(trackMixScratch_.getNumSamples() >= numSamples);
+    jassert(clipReadScratch_.getNumChannels() >= totalNumOutputChannels);
+    jassert(clipReadScratch_.getNumSamples() >= numSamples);
 
     const double deviceSampleRate = currentSampleRate_.load();
     const double blockDurationSeconds = static_cast<double>(numSamples) / deviceSampleRate;
@@ -886,137 +1312,123 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const double blockEndSeconds = currentPosSeconds + blockDurationSeconds;
     const int64_t blockStartSample = TimeCoordinate::secondsToSamples(currentPosSeconds, deviceSampleRate);
     const int64_t blockEndSample = blockStartSample + static_cast<int64_t>(numSamples);
-    
-    const juce::ScopedReadLock tracksReadLock(tracksLock_);
-    
+
+    const auto playbackSnapshot = standaloneArrangement_->loadPlaybackSnapshot();
+
     for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
-        auto& track = tracks_[trackId];
+        if (playbackSnapshot == nullptr) {
+            continue;
+        }
+
+        const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
         
         bool shouldPlay = true;
-        if (anyTrackSoloed_) {
+        if (playbackSnapshot->anySoloed) {
             if (!track.isSolo) shouldPlay = false;
         } else {
             if (track.isMuted) shouldPlay = false;
         }
 
         if (!shouldPlay) {
-            track.currentRMS.store(-100.0f);
+            jassert(standaloneArrangement_ != nullptr);
+            standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
             continue;
         }
 
         float trackVolume = track.volume;
         double trackRmsSum = 0.0;
         int trackSampleCount = 0;
-        
-        juce::AudioBuffer<float> trackBuffer(totalNumOutputChannels, numSamples);
-        trackBuffer.clear();
+
+        trackMixScratch_.clear();
 
         bool trackHasOutput = false;
 
-        int clipIndex = 0;
-        for (auto& clip : track.clips) {
-            const int64_t dryLenSamples = clip.drySignalBuffer_.getNumSamples();
-            if (dryLenSamples <= 0) {
-                ++clipIndex;
+        for (const auto& placement : track.placements) {
+            jassert(materializationStore_ != nullptr);
+
+            MaterializationStore::PlaybackReadSource materializationReadSource;
+            if (!materializationStore_->getPlaybackReadSource(placement.materializationId, materializationReadSource)
+                || !materializationReadSource.hasAudio()) {
                 continue;
             }
 
-            const int64_t clipStartSample = TimeCoordinate::secondsToSamples(clip.startSeconds, deviceSampleRate);
-            const int64_t clipEndSample = clipStartSample + dryLenSamples;
-
-            if (clipEndSample <= blockStartSample || clipStartSample >= blockEndSample) {
-                ++clipIndex;
+            const int64_t placementDurationSamples = TimeCoordinate::secondsToSamples(placement.durationSeconds,
+                                                                                      deviceSampleRate);
+            if (placementDurationSamples <= 0) {
                 continue;
             }
 
-            const int64_t overlapStartSample = std::max(blockStartSample, clipStartSample);
-            const int64_t overlapEndSample = std::min(blockEndSample, clipEndSample);
+            const int64_t placementStartSample = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds,
+                                                                                  deviceSampleRate);
+            const int64_t placementEndSample = placementStartSample + placementDurationSamples;
+
+            if (placementEndSample <= blockStartSample || placementStartSample >= blockEndSample) {
+                continue;
+            }
+
+            const int64_t overlapStartSample = std::max(blockStartSample, placementStartSample);
+            const int64_t overlapEndSample = std::min(blockEndSample, placementEndSample);
             const int64_t samplesToCopy64 = overlapEndSample - overlapStartSample;
             if (samplesToCopy64 <= 0) {
-                ++clipIndex;
                 continue;
             }
 
-            const int64_t readStartSample = overlapStartSample - clipStartSample;
-            const double clipDurationSeconds = TimeCoordinate::samplesToSeconds(dryLenSamples, deviceSampleRate);
+            const int64_t readStartSample = overlapStartSample - placementStartSample;
             const double readStartSeconds = TimeCoordinate::samplesToSeconds(readStartSample, deviceSampleRate);
             const int offsetInBlock = static_cast<int>(overlapStartSample - blockStartSample);
             const int samplesToCopy = static_cast<int>(samplesToCopy64);
 
-            float clipGain = clip.gain * trackVolume;
-            const double fadeInSeconds = clip.fadeInDuration;
-            const double fadeOutSeconds = clip.fadeOutDuration;
+            const float placementGain = placement.gain * trackVolume;
+            const double fadeInSeconds = placement.fadeInDuration;
+            const double fadeOutSeconds = placement.fadeOutDuration;
 
-            std::vector<float> renderedBlock;
-            bool hasRenderedAudio = false;
+            // ====================================================================
+            // Unified Playback Read API call
+            // ====================================================================
+            PlaybackReadRequest readRequest;
+            readRequest.source.renderCache = materializationReadSource.renderCache;
+            readRequest.source.audioBuffer = materializationReadSource.audioBuffer;
+            readRequest.readStartSeconds = readStartSeconds;
+            readRequest.targetSampleRate = deviceSampleRate;
+            readRequest.numSamples = samplesToCopy;
 
-            if (!useDrySignalFallback_.load() && clip.renderCache && clip.pitchCurve) {
-                auto snap = clip.pitchCurve->getSnapshot();
-                if (snap->hasRenderableCorrectedF0()) {
-                    const int targetSampleRateInt = static_cast<int>(deviceSampleRate);
-                    const int numSamplesToRead = samplesToCopy;
-
-                    if (numSamplesToRead > 0) {
-                        renderedBlock.resize(static_cast<size_t>(numSamplesToRead));
-                        const double readStartSecondsInClip = readStartSeconds;
-
-                        const int readCount = clip.renderCache->readAtTimeForRate(
-                            renderedBlock.data(), numSamplesToRead, readStartSecondsInClip,
-                            targetSampleRateInt, true);
-
-                        if (readCount > 0) {
-                            if (readCount < numSamplesToRead) {
-                                renderedBlock.resize(static_cast<size_t>(readCount));
-                            }
-                            hasRenderedAudio = !renderedBlock.empty();
-                        } else {
-                            renderedBlock.clear();
-                        }
-                    }
-                }
-            }
+            clipReadScratch_.clear();
+            CrossoverMixer* placementMixer = materializationReadSource.renderCache
+                ? &materializationReadSource.renderCache->getCrossoverMixer()
+                : nullptr;
+            const int availableReadSamples = readPlaybackAudio(readRequest, clipReadScratch_, 0, placementMixer);
 
             for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
-                const int numChannels = clip.drySignalBuffer_.getNumChannels();
-                int sourceCh = (numChannels > 0) ? ch % numChannels : 0;
-                const float* src = (dryLenSamples > 0) 
-                    ? clip.drySignalBuffer_.getReadPointer(sourceCh) 
-                    : nullptr;
-                float* dst = trackBuffer.getWritePointer(ch, offsetInBlock);
+                const float* src = clipReadScratch_.getReadPointer(ch);
+                float* dst = trackMixScratch_.getWritePointer(ch, offsetInBlock);
 
-                const int64_t firstSampleInClip = readStartSample;
-                double timeInClip = readStartSeconds;
+                double timeInPlacement = TimeCoordinate::samplesToSeconds(readStartSample, deviceSampleRate);
                 const double dt = 1.0 / deviceSampleRate;
-                for (int s = 0; s < samplesToCopy; ++s) {
-                    const int64_t sampleInClip = firstSampleInClip + static_cast<int64_t>(s);
-                    float gain = clipGain;
-                    
-                    if (fadeInSeconds > 0.0 && timeInClip < fadeInSeconds) {
-                        gain *= static_cast<float>(timeInClip / fadeInSeconds);
+                for (int s = 0; s < availableReadSamples; ++s) {
+                    float gain = placementGain;
+
+                    if (fadeInSeconds > 0.0 && timeInPlacement < fadeInSeconds) {
+                        gain *= static_cast<float>(timeInPlacement / fadeInSeconds);
                     }
-                    if (fadeOutSeconds > 0.0 && timeInClip >= clipDurationSeconds - fadeOutSeconds) {
-                        gain *= static_cast<float>((clipDurationSeconds - timeInClip) / fadeOutSeconds);
+                    if (fadeOutSeconds > 0.0 && timeInPlacement >= placement.durationSeconds - fadeOutSeconds) {
+                        gain *= static_cast<float>((placement.durationSeconds - timeInPlacement) / fadeOutSeconds);
                     }
 
-                    float dry = (src != nullptr && sampleInClip < dryLenSamples) ? src[sampleInClip] : 0.0f;
-                    float rendered = (hasRenderedAudio && s < static_cast<int>(renderedBlock.size()))
-                        ? renderedBlock[s] : dry;
-                    float out = clip.crossoverMixer_.processSample(ch, dry, rendered);
-
-                    dst[s] += out * gain;
-                    timeInClip += dt;
+                    dst[s] += src[s] * gain;
+                    timeInPlacement += dt;
                 }
             }
 
-            trackHasOutput = true;
-            ++clipIndex;
+            if (availableReadSamples > 0) {
+                trackHasOutput = true;
+            }
         }
 
         if (trackHasOutput) {
             for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
-                const float* src = trackBuffer.getReadPointer(ch);
+                const float* src = trackMixScratch_.getReadPointer(ch);
                 float* dst = buffer.getWritePointer(ch);
-                
+
                 for (int s = 0; s < numSamples; ++s) {
                     dst[s] += src[s];
                     trackRmsSum += src[s] * src[s];
@@ -1028,9 +1440,11 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         if (trackSampleCount > 0) {
             float rms = std::sqrt(static_cast<float>(trackRmsSum / trackSampleCount));
             float db = (rms > 1e-9f) ? 20.0f * std::log10(rms) : -100.0f;
-            track.currentRMS.store(db);
+            jassert(standaloneArrangement_ != nullptr);
+            standaloneArrangement_->setTrackRmsDb(trackId, db);
         } else {
-            track.currentRMS.store(-100.0f);
+            jassert(standaloneArrangement_ != nullptr);
+            standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
         }
     }
 
@@ -1069,106 +1483,216 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
+    pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
+
     positionAtomic_->store(blockEndSeconds, std::memory_order_relaxed);
-    finalizePerf();
 }
 
-void OpenTuneAudioProcessor::recordAudioCallbackDurationMs(double durationMs)
+OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::getHostTransportSnapshot() const
 {
-    if (durationMs < 0.0) {
-        durationMs = 0.0;
-    }
-    const double cappedMs = std::min(20.0, durationMs);
-    int bin = static_cast<int>(std::floor(cappedMs / PerfHistogramStepMs));
-    bin = juce::jlimit(0, PerfHistogramBins - 1, bin);
-    perfAudioDurationHistogram_[(size_t)bin].fetch_add(1, std::memory_order_relaxed);
-    perfAudioCallbackCount_.fetch_add(1, std::memory_order_relaxed);
+    const juce::SpinLock::ScopedLockType lock(hostTransportSnapshotLock_);
+    return hostTransportSnapshot_;
 }
 
-void OpenTuneAudioProcessor::recordCacheCheck(bool cacheHit)
+void OpenTuneAudioProcessor::updateHostTransportSnapshot(const juce::AudioPlayHead::PositionInfo& positionInfo)
 {
-    perfCacheChecks_.fetch_add(1, std::memory_order_relaxed);
-    if (!cacheHit) {
-        perfCacheMisses_.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-double OpenTuneAudioProcessor::computeAudioCallbackPercentileMs(double percentile) const
-{
-    const uint64_t total = perfAudioCallbackCount_.load(std::memory_order_relaxed);
-    if (total == 0) {
-        return 0.0;
-    }
-
-    const double clampedPercentile = juce::jlimit(0.0, 1.0, percentile);
-    const uint64_t targetRank = static_cast<uint64_t>(std::ceil(clampedPercentile * static_cast<double>(total)));
-    uint64_t cumulative = 0;
-
-    for (int i = 0; i < PerfHistogramBins; ++i) {
-        cumulative += static_cast<uint64_t>(perfAudioDurationHistogram_[(size_t)i].load(std::memory_order_relaxed));
-        if (cumulative >= targetRank) {
-            return static_cast<double>(i) * PerfHistogramStepMs;
-        }
-    }
-
-    return static_cast<double>(PerfHistogramBins - 1) * PerfHistogramStepMs;
-}
-
-OpenTuneAudioProcessor::PerfProbeSnapshot OpenTuneAudioProcessor::getPerfProbeSnapshot() const
-{
-    PerfProbeSnapshot snapshot;
-    snapshot.audioCallbackP99Ms = computeAudioCallbackPercentileMs(0.99);
-
-    snapshot.cacheChecks = perfCacheChecks_.load(std::memory_order_relaxed);
-    snapshot.cacheMisses = perfCacheMisses_.load(std::memory_order_relaxed);
-    if (snapshot.cacheChecks > 0) {
-        snapshot.cacheMissRate = static_cast<double>(snapshot.cacheMisses) / static_cast<double>(snapshot.cacheChecks);
-    }
-
+    HostTransportSnapshot previousSnapshot;
     {
-        const juce::ScopedReadLock rl(tracksLock_);
-        int totalPending = 0;
-        for (int t = 0; t < MAX_TRACKS; ++t) {
-            for (const auto& clip : tracks_[t].clips) {
-                if (clip.renderCache) {
-                    totalPending += clip.renderCache->getPendingCount();
-                }
-            }
-        }
-        snapshot.renderQueueDepth = totalPending;
+        const juce::SpinLock::ScopedLockType lock(hostTransportSnapshotLock_);
+        previousSnapshot = hostTransportSnapshot_;
     }
 
-    return snapshot;
+    HostTransportSnapshot snapshot = previousSnapshot;
+
+    snapshot.isPlaying = positionInfo.getIsPlaying();
+    snapshot.isRecording = positionInfo.getIsRecording();
+    snapshot.loopEnabled = positionInfo.getIsLooping();
+
+    if (const auto timeSeconds = positionInfo.getTimeInSeconds()) {
+        snapshot.timeSeconds = *timeSeconds;
+    }
+
+    if (const auto bpm = positionInfo.getBpm()) {
+        snapshot.bpm = *bpm;
+    }
+
+    if (const auto ppq = positionInfo.getPpqPosition()) {
+        snapshot.ppqPosition = *ppq;
+    }
+
+    if (const auto timeSignature = positionInfo.getTimeSignature()) {
+        snapshot.timeSignatureNumerator = timeSignature->numerator;
+        snapshot.timeSignatureDenominator = timeSignature->denominator;
+    }
+
+    if (const auto loopPoints = positionInfo.getLoopPoints()) {
+        snapshot.loopPpqStart = loopPoints->ppqStart;
+        snapshot.loopPpqEnd = loopPoints->ppqEnd;
+    }
+
+    const bool playbackStateChanged = snapshot.isPlaying != previousSnapshot.isPlaying;
+    const bool loopStateChanged = snapshot.loopEnabled != previousSnapshot.loopEnabled;
+    const bool timelineJumped = std::abs(snapshot.timeSeconds - previousSnapshot.timeSeconds) > 0.050;
+    const bool bpmChanged = std::abs(snapshot.bpm - previousSnapshot.bpm) > 0.001;
+
+    if (playbackStateChanged || loopStateChanged || timelineJumped || bpmChanged) {
+        AppLogger::log("HostTransportSnapshot: playing=" + juce::String(snapshot.isPlaying ? "true" : "false")
+            + " time=" + juce::String(snapshot.timeSeconds, 6)
+            + " ppq=" + juce::String(snapshot.ppqPosition, 6)
+            + " bpm=" + juce::String(snapshot.bpm, 3)
+            + " loop=" + juce::String(snapshot.loopEnabled ? "true" : "false")
+            + " loopRange=[" + juce::String(snapshot.loopPpqStart, 6)
+            + "," + juce::String(snapshot.loopPpqEnd, 6) + "]");
+    }
+
+    const juce::SpinLock::ScopedLockType lock(hostTransportSnapshotLock_);
+    hostTransportSnapshot_ = snapshot;
 }
 
-RenderCache::ChunkStats OpenTuneAudioProcessor::getClipChunkStats(int trackId, int clipIndex) const
+RenderCache::ChunkStats OpenTuneAudioProcessor::getMaterializationChunkStatsById(uint64_t materializationId) const
 {
+    if (materializationId == 0) {
+        return {};
+    }
+    jassert(materializationStore_ != nullptr);
+
+    std::shared_ptr<RenderCache> renderCache;
+    if (!materializationStore_->getRenderCache(materializationId, renderCache) || renderCache == nullptr) {
+        return {};
+    }
+
+    return renderCache->getChunkStats();
+}
+
+OpenTuneAudioProcessor::DiagnosticInfo OpenTuneAudioProcessor::getDiagnosticInfo(int trackId, uint64_t placementId) const
+{
+    DiagnosticInfo info;
+    jassert(editVersionParam_ != nullptr);
+    info.editVersion = editVersionParam_->get();
+
+    const auto controlCall = static_cast<DiagnosticControlCall>(lastControlType_.load(std::memory_order_relaxed));
+    info.lastControlCall = diagnosticControlCallToString(controlCall);
+    info.lastControlTimestamp = lastControlTimestamp_.load(std::memory_order_relaxed);
+
+    jassert(standaloneArrangement_ != nullptr);
     if (trackId < 0 || trackId >= MAX_TRACKS) {
-        return {};
+        return info;
     }
 
-    const juce::ScopedReadLock rl(tracksLock_);
-    const auto& clips = tracks_[trackId].clips;
-    if (clipIndex < 0 || clipIndex >= static_cast<int>(clips.size())) {
-        return {};
+    StandaloneArrangement::Placement targetPlacement;
+    bool hasTargetPlacement = false;
+    if (placementId != 0) {
+        hasTargetPlacement = standaloneArrangement_->getPlacementById(trackId, placementId, targetPlacement);
+    } else {
+        const uint64_t selectedPlacementId = standaloneArrangement_->getSelectedPlacementId(trackId);
+        if (selectedPlacementId != 0) {
+            hasTargetPlacement = standaloneArrangement_->getPlacementById(trackId, selectedPlacementId, targetPlacement);
+        }
+        if (!hasTargetPlacement && standaloneArrangement_->getNumPlacements(trackId) > 0) {
+            hasTargetPlacement = standaloneArrangement_->getPlacementByIndex(trackId, 0, targetPlacement);
+        }
     }
 
-    const auto& clip = clips[clipIndex];
-    if (!clip.renderCache) {
-        return {};
+    if (!hasTargetPlacement) {
+        return info;
+    }
+    jassert(materializationStore_ != nullptr);
+
+    info.materializationId = targetPlacement.materializationId;
+    info.placementId = targetPlacement.placementId;
+    std::shared_ptr<RenderCache> renderCache;
+    if (materializationStore_->getRenderCache(targetPlacement.materializationId, renderCache) && renderCache != nullptr) {
+        const auto renderState = renderCache->getStateSnapshot();
+        info.chunkStats = renderState.chunkStats;
+        info.publishedRevision = 0;
+        info.desiredRevision = 0;
     }
 
-    return clip.renderCache->getChunkStats();
+    return info;
 }
 
-void OpenTuneAudioProcessor::resetPerfProbeCounters()
+bool OpenTuneAudioProcessor::getPlaybackReadSourceByMaterializationId(uint64_t materializationId, PlaybackReadSource& out) const
 {
-    perfCacheChecks_.store(0, std::memory_order_relaxed);
-    perfCacheMisses_.store(0, std::memory_order_relaxed);
-    perfAudioCallbackCount_.store(0, std::memory_order_relaxed);
-    for (auto& bin : perfAudioDurationHistogram_) {
-        bin.store(0, std::memory_order_relaxed);
+    out = PlaybackReadSource{};
+
+    if (materializationId == 0) {
+        return false;
     }
+    jassert(materializationStore_ != nullptr);
+
+    MaterializationStore::PlaybackReadSource coreSource;
+    if (!materializationStore_->getPlaybackReadSource(materializationId, coreSource)) {
+        return false;
+    }
+
+    out.renderCache = coreSource.renderCache;
+    out.audioBuffer = coreSource.audioBuffer;
+    return out.canRead();
+}
+
+bool OpenTuneAudioProcessor::freezeRenderBoundaries(const MaterializationSampleRange& materializationRange,
+                                                     int64_t startSample,
+                                                     int64_t endSampleExclusive,
+                                                     int hopSize,
+                                                     FrozenRenderBoundaries& out)
+{
+    out = FrozenRenderBoundaries{};
+
+    if (!materializationRange.isValid() || hopSize <= 0) {
+        return false;
+    }
+
+    auto& trueStartSample = out.trueStartSample;
+    auto& trueEndSample = out.trueEndSample;
+    auto& publishSampleCount = out.publishSampleCount;
+    auto& frameCount = out.frameCount;
+    auto& synthSampleCount = out.synthSampleCount;
+    auto& synthEndSample = out.synthEndSample;
+
+    trueStartSample = juce::jlimit(materializationRange.startSample, materializationRange.endSampleExclusive, startSample);
+    trueEndSample = juce::jlimit(trueStartSample, materializationRange.endSampleExclusive, endSampleExclusive);
+    publishSampleCount = trueEndSample - trueStartSample;
+    if (publishSampleCount <= 0) {
+        out = FrozenRenderBoundaries{};
+        return false;
+    }
+
+    const bool isLastChunk = (trueEndSample == materializationRange.endSampleExclusive);
+    if (!isLastChunk && (publishSampleCount % hopSize) != 0) {
+        out = FrozenRenderBoundaries{};
+        return false;
+    }
+
+    frameCount = juce::jmax(1, static_cast<int>((publishSampleCount + hopSize - 1) / hopSize));
+    synthSampleCount = isLastChunk ? frameCount * hopSize : publishSampleCount;
+    synthEndSample = trueStartSample + synthSampleCount;
+    out.hopSize = hopSize;
+    return true;
+}
+
+bool OpenTuneAudioProcessor::preparePublishedAudioFromSynthesis(const FrozenRenderBoundaries& boundaries,
+                                                                const std::vector<float>& synthesizedAudio,
+                                                                std::vector<float>& publishedAudio)
+{
+    publishedAudio.clear();
+
+    if (boundaries.publishSampleCount <= 0 || boundaries.synthSampleCount <= 0) {
+        return false;
+    }
+
+    if (synthesizedAudio.size() != static_cast<size_t>(boundaries.synthSampleCount)) {
+        return false;
+    }
+
+    publishedAudio.assign(synthesizedAudio.begin(),
+                          synthesizedAudio.begin() + static_cast<size_t>(boundaries.publishSampleCount));
+    return true;
+}
+
+void OpenTuneAudioProcessor::recordControlCall(DiagnosticControlCall controlCall)
+{
+    lastControlType_.store(static_cast<int>(controlCall), std::memory_order_relaxed);
+    lastControlTimestamp_.store(juce::Time::currentTimeMillis(), std::memory_order_relaxed);
 }
 
 juce::AudioProcessorEditor* OpenTuneAudioProcessor::createEditor() {
@@ -1179,631 +1703,951 @@ bool OpenTuneAudioProcessor::hasEditor() const {
     return true;
 }
 
+// ============================================================================
+// 项目状态序列化/反序列化
+// ============================================================================
+
 void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
-    const juce::ScopedReadLock tracksReadLock(tracksLock_);
+#if JucePlugin_Build_Standalone
+    destData.reset();
+    juce::MemoryOutputStream output(destData, false);
+    output.writeInt(static_cast<int>(kStandaloneSettingsMagic));
+    output.writeInt(kStandaloneSettingsVersion);
+    output.writeDouble(getBpm());
+    output.writeDouble(zoomLevel_);
+    output.writeInt(trackHeight_);
+    return;
+#else
 
-    juce::ValueTree state("OpenTuneState");
-    state.setProperty("schemaVersion", 2, nullptr);
-    state.setProperty("bpm", getBpm(), nullptr);
-    state.setProperty("zoomLevel", zoomLevel_, nullptr);
-    state.setProperty("trackHeight", trackHeight_, nullptr);
-
-    juce::ValueTree tracksState("Tracks");
+    std::vector<uint64_t> serializedMaterializationIds;
+    jassert(standaloneArrangement_ != nullptr);
     for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
-        const auto& track = tracks_[trackId];
-        juce::ValueTree trackState("Track");
-        trackState.setProperty("trackId", trackId, nullptr);
-
-        for (const auto& clip : track.clips) {
-            if (!clip.pitchCurve) {
+        const int placementCount = standaloneArrangement_->getNumPlacements(trackId);
+        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
+            StandaloneArrangement::Placement placement;
+            if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
                 continue;
             }
 
-            juce::ValueTree clipState("Clip");
-            clipState.setProperty("clipId", static_cast<juce::int64>(clip.clipId), nullptr);
+            appendUniqueMaterializationId(serializedMaterializationIds, placement.materializationId);
+        }
+    }
 
-            juce::ValueTree curveState("PitchCurve");
-            auto snapshot = clip.pitchCurve->getSnapshot();
-            curveState.setProperty("hopSize", snapshot->getHopSize(), nullptr);
-            curveState.setProperty("f0SampleRate", snapshot->getSampleRate(), nullptr);
-            curveState.setProperty("originalF0", encodeFloatVectorBase64(snapshot->getOriginalF0()), nullptr);
-            curveState.setProperty("originalEnergy", encodeFloatVectorBase64(snapshot->getOriginalEnergy()), nullptr);
-
-            const auto& segments = snapshot->getCorrectedSegments();
-            for (const auto& seg : segments) {
-                juce::ValueTree segState("Segment");
-                segState.setProperty("start", seg.startFrame, nullptr);
-                segState.setProperty("end", seg.endFrame, nullptr);
-                segState.setProperty("source", static_cast<int>(seg.source), nullptr);
-                segState.setProperty("retuneSpeed", seg.retuneSpeed, nullptr);
-                segState.setProperty("vibratoDepth", seg.vibratoDepth, nullptr);
-                segState.setProperty("vibratoRate", seg.vibratoRate, nullptr);
-                segState.setProperty("f0", encodeFloatVectorBase64(seg.f0Data), nullptr);
-                curveState.addChild(segState, -1, nullptr);
+#if JucePlugin_Enable_ARA
+    if (const auto* dc = getDocumentController()) {
+        if (const auto* session = dc->getSession()) {
+            const auto snapshot = session->loadSnapshot();
+            if (snapshot != nullptr) {
+                for (const auto& regionView : snapshot->publishedRegions) {
+                    appendUniqueMaterializationId(serializedMaterializationIds, regionView.appliedProjection.materializationId);
+                }
             }
+        }
+    }
+#endif
 
-            clipState.addChild(curveState, -1, nullptr);
-            trackState.addChild(clipState, -1, nullptr);
+    jassert(materializationStore_ != nullptr);
+    std::vector<MaterializationStore::MaterializationSnapshot> materializationSnapshots;
+    for (uint64_t materializationId : serializedMaterializationIds) {
+        MaterializationStore::MaterializationSnapshot materializationSnapshot;
+        if (!materializationStore_->getSnapshot(materializationId, materializationSnapshot)) {
+            continue;
         }
 
-        tracksState.addChild(trackState, -1, nullptr);
+        materializationSnapshots.push_back(std::move(materializationSnapshot));
     }
-    state.addChild(tracksState, -1, nullptr);
-    
-    std::unique_ptr<juce::XmlElement> xml(state.createXml());
-    copyXmlToBinary(*xml, destData);
+
+    std::vector<SourceStore::SourceSnapshot> sourceSnapshots;
+    jassert(sourceStore_ != nullptr);
+    for (const auto& materializationSnapshot : materializationSnapshots) {
+        SourceStore::SourceSnapshot sourceSnapshot;
+        if (!sourceStore_->getSnapshot(materializationSnapshot.sourceId, sourceSnapshot)) {
+            continue;
+        }
+
+        const auto alreadySerialized = std::find_if(sourceSnapshots.begin(),
+                                                    sourceSnapshots.end(),
+                                                    [&sourceSnapshot](const SourceStore::SourceSnapshot& existing)
+                                                    {
+                                                        return existing.sourceId == sourceSnapshot.sourceId;
+                                                    });
+        if (alreadySerialized == sourceSnapshots.end()) {
+            sourceSnapshots.push_back(std::move(sourceSnapshot));
+        }
+    }
+
+    destData.reset();
+    juce::MemoryOutputStream output(destData, false);
+    output.writeInt(static_cast<int>(kProcessorStateMagic));
+    output.writeInt(kProcessorStateVersion);
+    output.writeDouble(getBpm());
+    output.writeDouble(zoomLevel_);
+    output.writeInt(trackHeight_);
+    output.writeInt(static_cast<int>(sourceSnapshots.size()));
+    for (const auto& sourceSnapshot : sourceSnapshots) {
+        output.writeInt64(static_cast<juce::int64>(sourceSnapshot.sourceId));
+        output.writeString(sourceSnapshot.displayName);
+        output.writeDouble(sourceSnapshot.sampleRate);
+        writeAudioBuffer(output, sourceSnapshot.audioBuffer);
+    }
+
+    output.writeInt(static_cast<int>(materializationSnapshots.size()));
+    for (const auto& contentSnapshot : materializationSnapshots) {
+        output.writeInt64(static_cast<juce::int64>(contentSnapshot.materializationId));
+        output.writeInt64(static_cast<juce::int64>(contentSnapshot.sourceId));
+        output.writeInt64(static_cast<juce::int64>(contentSnapshot.lineageParentMaterializationId));
+        output.writeInt64(static_cast<juce::int64>(contentSnapshot.sourceWindow.sourceId));
+        output.writeDouble(contentSnapshot.sourceWindow.sourceStartSeconds);
+        output.writeDouble(contentSnapshot.sourceWindow.sourceEndSeconds);
+        output.writeInt64(static_cast<juce::int64>(contentSnapshot.renderRevision));
+        output.writeInt(static_cast<int>(contentSnapshot.originalF0State));
+        writeDetectedKey(output, contentSnapshot.detectedKey);
+        writeAudioBuffer(output, contentSnapshot.audioBuffer);
+        writePitchCurve(output, contentSnapshot.pitchCurve);
+        writeNotes(output, contentSnapshot.notes);
+        writeSilentGaps(output, contentSnapshot.silentGaps);
+    }
+
+    output.writeInt(standaloneArrangement_->getActiveTrackId());
+    output.writeInt(MAX_TRACKS);
+    for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
+        const uint64_t selectedPlacementId = standaloneArrangement_->getSelectedPlacementId(trackId);
+        output.writeInt64(static_cast<juce::int64>(selectedPlacementId));
+        output.writeBool(standaloneArrangement_->isTrackMuted(trackId));
+        output.writeBool(standaloneArrangement_->isTrackSolo(trackId));
+        output.writeFloat(standaloneArrangement_->getTrackVolume(trackId));
+
+        const int placementCount = standaloneArrangement_->getNumPlacements(trackId);
+        output.writeInt(placementCount);
+        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
+            StandaloneArrangement::Placement placement;
+            if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
+                output.writeInt64(0);
+                output.writeInt64(0);
+                output.writeInt64(0);
+                output.writeDouble(0.0);
+                output.writeDouble(0.0);
+                output.writeDouble(0.0);
+                output.writeFloat(1.0f);
+                output.writeDouble(0.0);
+                output.writeDouble(0.0);
+                output.writeString({});
+                output.writeInt(0);
+                continue;
+            }
+
+            output.writeInt64(static_cast<juce::int64>(placement.placementId));
+            output.writeInt64(static_cast<juce::int64>(placement.materializationId));
+            output.writeInt64(static_cast<juce::int64>(placement.mappingRevision));
+            output.writeDouble(placement.timelineStartSeconds);
+            output.writeDouble(placement.durationSeconds);
+            output.writeFloat(placement.gain);
+            output.writeDouble(placement.fadeInDuration);
+            output.writeDouble(placement.fadeOutDuration);
+            output.writeString(placement.name);
+            output.writeInt(static_cast<int>(placement.colour.getARGB()));
+        }
+    }
+#endif // JucePlugin_Build_Standalone
 }
+
 
 void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInBytes) {
-    std::unique_ptr<juce::XmlElement> xml(getXmlFromBinary(data, sizeInBytes));
-    if (xml != nullptr && xml->hasTagName("OpenTuneState")) {
-        juce::ValueTree state = juce::ValueTree::fromXml(*xml);
-        setBpm(static_cast<double>(state.getProperty("bpm", 120.0)));
-        zoomLevel_ = state.getProperty("zoomLevel", 1.0);
-        trackHeight_ = state.getProperty("trackHeight", 120);
-
-        const auto tracksState = state.getChildWithName("Tracks");
-        if (tracksState.isValid()) {
-            const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-
-            for (auto trackState : tracksState) {
-                if (!trackState.hasType("Track")) {
-                    continue;
-                }
-
-                const int trackId = static_cast<int>(trackState.getProperty("trackId", -1));
-                if (trackId < 0 || trackId >= MAX_TRACKS) {
-                    continue;
-                }
-
-                auto& clips = tracks_[trackId].clips;
-                for (auto clipState : trackState) {
-                    if (!clipState.hasType("Clip")) {
-                        continue;
-                    }
-
-                    const auto clipId = static_cast<uint64_t>(static_cast<juce::int64>(clipState.getProperty("clipId", 0)));
-                    if (clipId == 0) {
-                        continue;
-                    }
-
-                    auto it = std::find_if(clips.begin(), clips.end(), [clipId](const TrackState::AudioClip& c) {
-                        return c.clipId == clipId;
-                    });
-                    if (it == clips.end()) {
-                        continue;
-                    }
-
-                    auto curveState = clipState.getChildWithName("PitchCurve");
-                    if (!curveState.isValid()) {
-                        continue;
-                    }
-
-                    if (!it->pitchCurve) {
-                        it->pitchCurve = std::make_shared<PitchCurve>();
-                    }
-
-                    std::vector<float> originalF0;
-                    std::vector<float> originalEnergy;
-                    decodeFloatVectorBase64(curveState.getProperty("originalF0"), originalF0);
-                    decodeFloatVectorBase64(curveState.getProperty("originalEnergy"), originalEnergy);
-
-                    it->pitchCurve->setHopSize(static_cast<int>(curveState.getProperty("hopSize", 0)));
-                    it->pitchCurve->setSampleRate(static_cast<double>(curveState.getProperty("f0SampleRate", 0.0)));
-                    it->pitchCurve->setOriginalF0(originalF0);
-                    it->pitchCurve->setOriginalEnergy(originalEnergy);
-                    it->pitchCurve->clearAllCorrections();
-
-                    for (auto segState : curveState) {
-                        if (!segState.hasType("Segment")) {
-                            continue;
-                        }
-
-                        CorrectedSegment seg;
-                        seg.startFrame = static_cast<int>(segState.getProperty("start", 0));
-                        seg.endFrame = static_cast<int>(segState.getProperty("end", 0));
-                        seg.source = static_cast<CorrectedSegment::Source>(static_cast<int>(segState.getProperty("source", 0)));
-                        seg.retuneSpeed = static_cast<float>(static_cast<double>(segState.getProperty("retuneSpeed", 100.0)));
-                        seg.vibratoDepth = static_cast<float>(static_cast<double>(segState.getProperty("vibratoDepth", 0.0)));
-                        seg.vibratoRate = static_cast<float>(static_cast<double>(segState.getProperty("vibratoRate", 7.5)));
-                        decodeFloatVectorBase64(segState.getProperty("f0"), seg.f0Data);
-                        if (seg.startFrame < seg.endFrame && !seg.f0Data.empty()) {
-                            it->pitchCurve->restoreCorrectedSegment(seg);
-                        }
-                    }
-
-                    it->originalF0State = originalF0.empty() ? OriginalF0State::NotRequested : OriginalF0State::Ready;
-                    if (it->renderCache) {
-                        it->renderCache->clear();
-                    }
-                }
-            }
-        }
-    }
-}
-
-void OpenTuneAudioProcessor::bumpEditVersion() {
-    if (editVersionParam_ == nullptr) {
+    if (data == nullptr || sizeInBytes <= 0) {
         return;
     }
-    const int v = editVersionParam_->get();
-    const int next = (v + 1) % 100001;
-    const float norm = static_cast<float>(next) / 100000.0f;
-    editVersionParam_->beginChangeGesture();
-    editVersionParam_->setValueNotifyingHost(norm);
-    editVersionParam_->endChangeGesture();
-}
 
-void OpenTuneAudioProcessor::showAudioSettingsDialog(juce::AudioProcessorEditor& editor)
-{
-    if (hostIntegration_) {
-        hostIntegration_->audioSettingsRequested(editor);
+    juce::MemoryInputStream input(data, static_cast<size_t>(sizeInBytes), false);
+    const int magic = input.readInt();
+    const int version = input.readInt();
+
+    // Standalone settings-only payload
+    if (magic == static_cast<int>(kStandaloneSettingsMagic)) {
+        if (version != kStandaloneSettingsVersion) {
+            AppLogger::warn("StateRestore: unsupported standalone settings version");
+            return;
+        }
+        setBpm(input.readDouble());
+        zoomLevel_ = input.readDouble();
+        trackHeight_ = input.readInt();
         return;
     }
-    juce::ignoreUnused(editor);
-}
 
-void OpenTuneAudioProcessor::setActiveTrack(int trackId) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        activeTrackId_ = trackId;
+    // Full state payload (VST3 / legacy)
+    if (magic != static_cast<int>(kProcessorStateMagic) || version != kProcessorStateVersion) {
+        AppLogger::warn("StateRestore: unsupported processor state payload");
+        return;
     }
-}
 
-void OpenTuneAudioProcessor::setTrackMuted(int trackId, bool muted) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        tracks_[trackId].isMuted = muted;
+#if JucePlugin_Build_Standalone
+    // Standalone receiving a legacy full-state payload: only restore settings
+    setBpm(input.readDouble());
+    zoomLevel_ = input.readDouble();
+    trackHeight_ = input.readInt();
+    return;
+#else
+
+    setBpm(input.readDouble());
+    zoomLevel_ = input.readDouble();
+    trackHeight_ = input.readInt();
+
+
+    jassert(sourceStore_ != nullptr);
+    sourceStore_->clear();
+
+    jassert(materializationStore_ != nullptr);
+    materializationStore_->clear();
+
+    jassert(standaloneArrangement_ != nullptr);
+    standaloneArrangement_->clear();
+
+    const int sourceCount = input.readInt();
+    if (sourceCount < 0) {
+        return;
     }
-}
 
-bool OpenTuneAudioProcessor::isTrackMuted(int trackId) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        return tracks_[trackId].isMuted;
-    }
-    return false;
-}
+    for (int sourceIndex = 0; sourceIndex < sourceCount; ++sourceIndex) {
+        const auto sourceId = static_cast<uint64_t>(input.readInt64());
+        const auto displayName = input.readString();
+        const auto sourceSampleRate = input.readDouble();
+        const auto sourceAudioBuffer = readAudioBuffer(input);
+        if (sourceId == 0 || sourceAudioBuffer == nullptr) {
+            return;
+        }
+        jassert(sourceStore_ != nullptr);
 
-void OpenTuneAudioProcessor::setTrackSolo(int trackId, bool solo) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        tracks_[trackId].isSolo = solo;
-        anyTrackSoloed_ = false;
-        for (const auto& t : tracks_) {
-            if (t.isSolo) {
-                anyTrackSoloed_ = true;
-                break;
-            }
+        SourceStore::CreateSourceRequest request;
+        request.displayName = displayName;
+        request.audioBuffer = sourceAudioBuffer;
+        request.sampleRate = sourceSampleRate;
+        if (sourceStore_->createSource(std::move(request), sourceId) != sourceId) {
+            return;
         }
     }
-}
 
-bool OpenTuneAudioProcessor::isTrackSolo(int trackId) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        return tracks_[trackId].isSolo;
+    const int materializationCount = input.readInt();
+    if (materializationCount < 0) {
+        return;
     }
-    return false;
-}
 
-void OpenTuneAudioProcessor::setTrackVolume(int trackId, float volume) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        tracks_[trackId].volume = volume;
+    for (int materializationIndex = 0; materializationIndex < materializationCount; ++materializationIndex) {
+        const auto materializationId = static_cast<uint64_t>(input.readInt64());
+        const auto sourceId = static_cast<uint64_t>(input.readInt64());
+        const auto lineageParentMaterializationId = static_cast<uint64_t>(input.readInt64());
+        SourceWindow sourceWindow;
+        sourceWindow.sourceId = static_cast<uint64_t>(input.readInt64());
+        sourceWindow.sourceStartSeconds = input.readDouble();
+        sourceWindow.sourceEndSeconds = input.readDouble();
+        const auto renderRevision = static_cast<uint64_t>(input.readInt64());
+        const auto originalF0State = static_cast<OriginalF0State>(input.readInt());
+        const auto detectedKey = readDetectedKey(input);
+        const auto audioBuffer = readAudioBuffer(input);
+        auto pitchCurve = readPitchCurve(input);
+        std::vector<Note> notes;
+        std::vector<SilentGap> silentGaps;
+        if (materializationId == 0
+            || audioBuffer == nullptr
+            || !readNotes(input, notes)
+            || !readSilentGaps(input, silentGaps)
+            || sourceId == 0) {
+            return;
+        }
+        jassert(materializationStore_ != nullptr);
+
+        MaterializationStore::CreateMaterializationRequest request;
+        request.sourceId = sourceId;
+        request.lineageParentMaterializationId = lineageParentMaterializationId;
+        request.sourceWindow = sourceWindow;
+        request.audioBuffer = audioBuffer;
+        request.pitchCurve = std::move(pitchCurve);
+        request.originalF0State = originalF0State;
+        request.detectedKey = detectedKey;
+        request.renderCache = std::make_shared<RenderCache>();
+        request.notes = normalizeStoredNotes(notes);
+        request.silentGaps = std::move(silentGaps);
+        request.renderRevision = renderRevision;
+
+        if (materializationStore_->createMaterialization(std::move(request),
+                                                         materializationId) != materializationId) {
+            return;
+        }
+
+        std::shared_ptr<RenderCache> renderCache;
+        if (materializationStore_->getRenderCache(materializationId, renderCache) && renderCache != nullptr) {
+            renderCache->clear();
+        }
     }
-}
 
-float OpenTuneAudioProcessor::getTrackVolume(int trackId) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        return tracks_[trackId].volume;
+    const int restoredActiveTrackId = input.readInt();
+    const int trackCount = input.readInt();
+    jassert(standaloneArrangement_ != nullptr);
+    if (trackCount != MAX_TRACKS) {
+        return;
     }
-    return 1.0f;
+
+    for (int trackId = 0; trackId < trackCount; ++trackId) {
+        const uint64_t selectedPlacementId = static_cast<uint64_t>(input.readInt64());
+        standaloneArrangement_->setTrackMuted(trackId, input.readBool());
+        standaloneArrangement_->setTrackSolo(trackId, input.readBool());
+        standaloneArrangement_->setTrackVolume(trackId, input.readFloat());
+
+        const int placementCount = input.readInt();
+        if (placementCount < 0) {
+            return;
+        }
+
+        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
+            StandaloneArrangement::Placement placement;
+            placement.placementId = static_cast<uint64_t>(input.readInt64());
+            placement.materializationId = static_cast<uint64_t>(input.readInt64());
+            placement.mappingRevision = static_cast<uint64_t>(input.readInt64());
+            placement.timelineStartSeconds = input.readDouble();
+            placement.durationSeconds = input.readDouble();
+            placement.gain = input.readFloat();
+            placement.fadeInDuration = input.readDouble();
+            placement.fadeOutDuration = input.readDouble();
+            placement.name = input.readString();
+            placement.colour = juce::Colour(static_cast<juce::uint32>(input.readInt()));
+
+            if (placement.materializationId == 0 || !materializationStore_->containsMaterialization(placement.materializationId)) {
+                continue;
+            }
+
+            standaloneArrangement_->insertPlacement(trackId, placement);
+        }
+
+        standaloneArrangement_->selectPlacement(trackId, selectedPlacementId);
+    }
+
+    standaloneArrangement_->setActiveTrack(restoredActiveTrackId);
+#endif // JucePlugin_Build_Standalone
 }
 
-float OpenTuneAudioProcessor::getTrackRMS(int trackId) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS)
-        return tracks_[trackId].currentRMS.load();
-    return -100.0f;
-}
+// ============================================================================
+// Standalone Arrangement 代理接口
+// ============================================================================
 
 void OpenTuneAudioProcessor::setTrackHeight(int height) {
     trackHeight_ = height;
 }
 
-int OpenTuneAudioProcessor::getNumClips(int trackId) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        return static_cast<int>(tracks_[trackId].clips.size());
-    }
-    return 0;
-}
-
-int OpenTuneAudioProcessor::getSelectedClip(int trackId) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        return tracks_[trackId].selectedClipIndex;
-    }
-    return -1;
-}
-
-void OpenTuneAudioProcessor::setSelectedClip(int trackId, int clipIndex) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        tracks_[trackId].selectedClipIndex = clipIndex;
-    }
-}
-
-std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneAudioProcessor::getClipAudioBuffer(int trackId, int clipIndex) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            return clips[clipIndex].audioBuffer;
-        }
-    }
-    return nullptr;
-}
-
-uint64_t OpenTuneAudioProcessor::getClipId(int trackId, int clipIndex) const
+std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneAudioProcessor::getMaterializationAudioBufferById(uint64_t materializationId) const
 {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            return clips[clipIndex].clipId;
-        }
+    if (materializationId == 0) {
+        return nullptr;
     }
-    return 0;
+    jassert(materializationStore_ != nullptr);
+
+    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+    return materializationStore_->getAudioBuffer(materializationId, audioBuffer) ? audioBuffer : nullptr;
 }
 
-int OpenTuneAudioProcessor::findClipIndexById(int trackId, uint64_t clipId) const
+uint64_t OpenTuneAudioProcessor::getPlacementId(int trackId, int placementIndex) const
 {
-    if (clipId == 0) return -1;
-    if (trackId < 0 || trackId >= MAX_TRACKS) return -1;
-    const juce::ScopedReadLock tracksReadLock(tracksLock_);
-    const auto& clips = tracks_[trackId].clips;
-    for (int i = 0; i < (int)clips.size(); ++i) {
-        if (clips[(size_t)i].clipId == clipId) {
-            return i;
-        }
-    }
-    return -1;
+    return standaloneArrangement_->getPlacementId(trackId, placementIndex);
 }
 
-double OpenTuneAudioProcessor::getClipStartSeconds(int trackId, int clipIndex) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            return clips[clipIndex].startSeconds;
-        }
-    }
-    return 0.0;
+int OpenTuneAudioProcessor::findPlacementIndexById(int trackId, uint64_t placementId) const
+{
+    return standaloneArrangement_->findPlacementIndexById(trackId, placementId);
 }
 
-juce::String OpenTuneAudioProcessor::getClipName(int trackId, int clipIndex) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            return clips[clipIndex].name;
-        }
-    }
-    return {};
+bool OpenTuneAudioProcessor::getPlacementByIndex(int trackId,
+                                                 int placementIndex,
+                                                 StandaloneArrangement::Placement& out) const
+{
+    out = StandaloneArrangement::Placement{};
+    jassert(standaloneArrangement_ != nullptr);
+    return standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, out);
 }
 
-float OpenTuneAudioProcessor::getClipGain(int trackId, int clipIndex) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            return clips[clipIndex].gain;
-        }
-    }
-    return 1.0f;
+bool OpenTuneAudioProcessor::getPlacementById(int trackId,
+                                              uint64_t placementId,
+                                              StandaloneArrangement::Placement& out) const
+{
+    out = StandaloneArrangement::Placement{};
+    jassert(standaloneArrangement_ != nullptr);
+    return standaloneArrangement_->getPlacementById(trackId, placementId, out);
 }
 
-void OpenTuneAudioProcessor::setClipStartSeconds(int trackId, int clipIndex, double startSeconds) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            clips[clipIndex].startSeconds = std::max(0.0, startSeconds);
-        }
-    }
-}
-
-void OpenTuneAudioProcessor::setClipGain(int trackId, int clipIndex, float gain) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            clips[clipIndex].gain = std::max(0.0f, gain);
-        }
-    }
-}
-
-bool OpenTuneAudioProcessor::splitClipAtSeconds(int trackId, int clipIndex, double splitSeconds) {
+std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int trackId, int placementIndex, double splitSeconds)
+{
     if (trackId < 0 || trackId >= MAX_TRACKS) {
         AppLogger::log("Split rejected: invalid trackId=" + juce::String(trackId));
-        return false;
+        return std::nullopt;
     }
-    
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-    
-    auto& clips = tracks_[trackId].clips;
-    if (clipIndex < 0 || clipIndex >= static_cast<int>(clips.size())) {
-        AppLogger::log("Split rejected: invalid clipIndex=" + juce::String(clipIndex) + 
-                       " for trackId=" + juce::String(trackId));
-        return false;
-    }
+    jassert(standaloneArrangement_ != nullptr);
 
-    auto& originalClip = clips[clipIndex];
-    double clipStartSeconds = originalClip.startSeconds;
-    double splitPointSeconds = splitSeconds - clipStartSeconds;
-    
-    // Convert to samples in stored audio (44.1kHz)
-    constexpr double kStoredSampleRate = AudioConstants::StoredAudioSampleRate;
-    int64_t splitPointInClip = static_cast<int64_t>(splitPointSeconds * kStoredSampleRate);
-    int64_t totalSamples = originalClip.audioBuffer->getNumSamples();
-
-    // Validate split point (allow some margin, e.g. 100ms)
-    int64_t minLen = static_cast<int64_t>(0.1 * kStoredSampleRate);
-    if (splitPointInClip < minLen || splitPointInClip > totalSamples - minLen) {
-        AppLogger::log("Split rejected: split point out of valid range. splitPoint=" + 
-                       juce::String(static_cast<double>(splitPointInClip / kStoredSampleRate), 3) + "s, clipLen=" + 
-                       juce::String(static_cast<double>(totalSamples / kStoredSampleRate), 3) + "s");
-        return false;
+    StandaloneArrangement::Placement originalPlacement;
+    if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, originalPlacement)) {
+        AppLogger::log("Split rejected: invalid placementIndex=" + juce::String(placementIndex)
+                       + " for trackId=" + juce::String(trackId));
+        return std::nullopt;
     }
 
-    // Create new clip (Right part)
-    TrackState::AudioClip newClip;
-    newClip.clipId = nextClipId_.fetch_add(1);
-    newClip.name = originalClip.name;
-    newClip.colour = originalClip.colour;
-    newClip.gain = originalClip.gain;
-    newClip.startSeconds = splitSeconds;
-    newClip.fadeInDuration = 0.25;
-    newClip.fadeOutDuration = originalClip.fadeOutDuration; // Inherit fade out
-
-    // Copy audio for new clip: 修改 = 生成新对象并替换引用
-    int64_t newLength = totalSamples - splitPointInClip;
-    const int numCh = originalClip.audioBuffer->getNumChannels();
-    auto newRightBuffer = std::make_shared<juce::AudioBuffer<float>>(numCh, static_cast<int>(newLength));
-    for (int ch = 0; ch < numCh; ++ch) {
-        newRightBuffer->copyFrom(ch, 0, *originalClip.audioBuffer, ch, static_cast<int>(splitPointInClip), static_cast<int>(newLength));
-    }
-    newClip.audioBuffer = newRightBuffer;
-
-    // Update original clip (Left part): 生成新 buffer 并替换引用，不原地修改
-    auto newLeftBuffer = std::make_shared<juce::AudioBuffer<float>>(numCh, static_cast<int>(splitPointInClip));
-    for (int ch = 0; ch < numCh; ++ch) {
-        newLeftBuffer->copyFrom(ch, 0, *originalClip.audioBuffer, ch, 0, static_cast<int>(splitPointInClip));
-    }
-    originalClip.audioBuffer = newLeftBuffer;
-    originalClip.fadeOutDuration = 0.25;
-    // originalClip.fadeInDuration remains unchanged
-
-    // 重新计算两个 clip 的静息处和 chunk 边界（统一语义）
-    computeClipSilentGaps(originalClip);
-    computeClipSilentGaps(newClip);
-
-    // Insert new clip
-    clips.insert(clips.begin() + clipIndex + 1, std::move(newClip));
-    
-    // Update selection to the new clip (optional, but good UX)
-    tracks_[trackId].selectedClipIndex = clipIndex + 1;
-    
-    return true;
-}
-
-void OpenTuneAudioProcessor::setClipGainById(int trackId, uint64_t clipId, float gain)
-{
-    if (trackId < 0 || trackId >= MAX_TRACKS || clipId == 0) {
-        return;
+    const double splitOffsetSeconds = splitSeconds - originalPlacement.timelineStartSeconds;
+    constexpr double minDurationSeconds = 0.1;
+    if (splitOffsetSeconds <= minDurationSeconds
+        || splitOffsetSeconds >= originalPlacement.durationSeconds - minDurationSeconds) {
+        AppLogger::log("Split rejected: split point out of valid placement range");
+        return std::nullopt;
     }
 
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-    auto& clips = tracks_[trackId].clips;
-    for (auto& clip : clips) {
-        if (clip.clipId == clipId) {
-            clip.gain = std::max(0.0f, gain);
-            return;
+    MaterializationSnapshot originalSnapshot;
+    if (!getMaterializationSnapshotById(originalPlacement.materializationId, originalSnapshot)
+        || originalSnapshot.audioBuffer == nullptr) {
+        return std::nullopt;
+    }
+
+    const int64_t splitSample = TimeCoordinate::secondsToSamples(splitOffsetSeconds, TimeCoordinate::kRenderSampleRate);
+    const int64_t totalSamples = originalSnapshot.audioBuffer->getNumSamples();
+    if (splitSample <= 0 || splitSample >= totalSamples) {
+        return std::nullopt;
+    }
+
+    MaterializationStore::CreateMaterializationRequest leadingRequest;
+    leadingRequest.sourceId = originalSnapshot.sourceId;
+    leadingRequest.lineageParentMaterializationId = originalPlacement.materializationId;
+    leadingRequest.sourceWindow = SourceWindow{
+        originalSnapshot.sourceWindow.sourceId,
+        originalSnapshot.sourceWindow.sourceStartSeconds,
+        originalSnapshot.sourceWindow.sourceStartSeconds + splitOffsetSeconds
+    };
+    leadingRequest.audioBuffer = sliceAudioBuffer(originalSnapshot.audioBuffer, 0, splitSample);
+    leadingRequest.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot.pitchCurve, 0.0, splitOffsetSeconds);
+    leadingRequest.originalF0State = originalSnapshot.originalF0State;
+    leadingRequest.detectedKey = originalSnapshot.detectedKey;
+    leadingRequest.renderCache = std::make_shared<RenderCache>();
+    leadingRequest.notes = sliceNotesToLocalRange(originalSnapshot.notes, 0.0, splitOffsetSeconds);
+    leadingRequest.silentGaps = sliceSilentGaps(originalSnapshot.silentGaps, 0, splitSample);
+
+    MaterializationStore::CreateMaterializationRequest trailingRequest;
+    trailingRequest.sourceId = originalSnapshot.sourceId;
+    trailingRequest.lineageParentMaterializationId = originalPlacement.materializationId;
+    trailingRequest.sourceWindow = SourceWindow{
+        originalSnapshot.sourceWindow.sourceId,
+        originalSnapshot.sourceWindow.sourceStartSeconds + splitOffsetSeconds,
+        originalSnapshot.sourceWindow.sourceEndSeconds
+    };
+    trailingRequest.audioBuffer = sliceAudioBuffer(originalSnapshot.audioBuffer, splitSample, totalSamples);
+    trailingRequest.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot.pitchCurve,
+                                                            splitOffsetSeconds,
+                                                            originalPlacement.durationSeconds);
+    trailingRequest.originalF0State = originalSnapshot.originalF0State;
+    trailingRequest.detectedKey = originalSnapshot.detectedKey;
+    trailingRequest.renderCache = std::make_shared<RenderCache>();
+    trailingRequest.notes = sliceNotesToLocalRange(originalSnapshot.notes,
+                                                  splitOffsetSeconds,
+                                                  originalPlacement.durationSeconds);
+    trailingRequest.silentGaps = sliceSilentGaps(originalSnapshot.silentGaps, splitSample, totalSamples);
+
+    const uint64_t leadingMaterializationId = materializationStore_->createMaterialization(std::move(leadingRequest));
+    const uint64_t trailingMaterializationId = materializationStore_->createMaterialization(std::move(trailingRequest));
+    if (leadingMaterializationId == 0 || trailingMaterializationId == 0) {
+        // Error rollback: new ids not yet in any owner graph, physical delete is correct
+        if (leadingMaterializationId != 0) {
+            materializationStore_->deleteMaterialization(leadingMaterializationId);
         }
+        if (trailingMaterializationId != 0) {
+            materializationStore_->deleteMaterialization(trailingMaterializationId);
+        }
+        return std::nullopt;
     }
+
+    StandaloneArrangement::Placement leadingPlacement = originalPlacement;
+    leadingPlacement.placementId = 0;
+    leadingPlacement.materializationId = leadingMaterializationId;
+    leadingPlacement.durationSeconds = splitOffsetSeconds;
+    leadingPlacement.fadeOutDuration = 0.0;
+    ++leadingPlacement.mappingRevision;
+
+    StandaloneArrangement::Placement trailingPlacement = originalPlacement;
+    trailingPlacement.placementId = 0;
+    trailingPlacement.materializationId = trailingMaterializationId;
+    trailingPlacement.timelineStartSeconds = splitSeconds;
+    trailingPlacement.durationSeconds = originalPlacement.durationSeconds - splitOffsetSeconds;
+    trailingPlacement.fadeInDuration = 0.0;
+    ++trailingPlacement.mappingRevision;
+
+    if (!standaloneArrangement_->insertPlacement(trackId, placementIndex, leadingPlacement)) {
+        // Error rollback
+        materializationStore_->deleteMaterialization(leadingMaterializationId);
+        materializationStore_->deleteMaterialization(trailingMaterializationId);
+        return std::nullopt;
+    }
+
+    if (!standaloneArrangement_->insertPlacement(trackId, placementIndex + 1, trailingPlacement)) {
+        // Error rollback
+        standaloneArrangement_->deletePlacementById(trackId, leadingPlacement.placementId, nullptr, nullptr);
+        materializationStore_->deleteMaterialization(leadingMaterializationId);
+        materializationStore_->deleteMaterialization(trailingMaterializationId);
+        return std::nullopt;
+    }
+
+    // Retire original placement and materialization (do not physically delete; sweep will reclaim when safe)
+    standaloneArrangement_->retirePlacement(trackId, originalPlacement.placementId);
+    materializationStore_->retireMaterialization(originalPlacement.materializationId);
+
+    standaloneArrangement_->selectPlacement(trackId, trailingPlacement.placementId);
+    scheduleReclaimSweep();
+
+    SplitOutcome outcome;
+    outcome.trackId = trackId;
+    outcome.sourceId = originalSnapshot.sourceId;
+    outcome.originalPlacementId = originalPlacement.placementId;
+    outcome.originalMaterializationId = originalPlacement.materializationId;
+    outcome.leadingPlacementId = leadingPlacement.placementId;
+    outcome.trailingPlacementId = trailingPlacement.placementId;
+    outcome.leadingMaterializationId = leadingMaterializationId;
+    outcome.trailingMaterializationId = trailingMaterializationId;
+    return outcome;
 }
 
-bool OpenTuneAudioProcessor::mergeSplitClips(int trackId, uint64_t originalClipId, uint64_t newClipId, int targetClipIndex)
+std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
+                                                                    uint64_t leadingPlacementId,
+                                                                    uint64_t trailingPlacementId,
+                                                                    int targetPlacementIndex)
 {
     if (trackId < 0 || trackId >= MAX_TRACKS) {
         AppLogger::log("Merge rejected: invalid trackId=" + juce::String(trackId));
-        return false;
+        return std::nullopt;
     }
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-    auto& clips = tracks_[trackId].clips;
-    
-    int originalIndex = -1;
-    int newIndex = -1;
-    
-    // 查找两个 clip 的索引
-    for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
-        if (clips[i].clipId == originalClipId) originalIndex = i;
-        if (clips[i].clipId == newClipId) newIndex = i;
-    }
-    
-    if (originalIndex < 0 || newIndex < 0) {
-        AppLogger::log("Merge rejected: clip not found. originalClipId=" + 
-                       juce::String(static_cast<juce::int64>(originalClipId)) + 
-                       " newClipId=" + juce::String(static_cast<juce::int64>(newClipId)));
-        return false;
-    }
-    
-    auto& originalClip = clips[originalIndex];
-    auto& newClip = clips[newIndex];
-    
-    // 合并音频缓冲区: 修改 = 生成新对象并替换引用
-    int originalSamples = originalClip.audioBuffer->getNumSamples();
-    int newSamples = newClip.audioBuffer->getNumSamples();
-    int channels = std::max(originalClip.audioBuffer->getNumChannels(), newClip.audioBuffer->getNumChannels());
-    
-    auto mergedBuffer = std::make_shared<juce::AudioBuffer<float>>(channels, originalSamples + newSamples);
-    // Copy original clip audio
-    for (int ch = 0; ch < originalClip.audioBuffer->getNumChannels(); ++ch) {
-        mergedBuffer->copyFrom(ch, 0, *originalClip.audioBuffer, ch, 0, originalSamples);
-    }
-    // Append new clip audio
-    for (int ch = 0; ch < newClip.audioBuffer->getNumChannels(); ++ch) {
-        mergedBuffer->copyFrom(ch, originalSamples, *newClip.audioBuffer, ch, 0, newSamples);
-    }
-    originalClip.audioBuffer = mergedBuffer;
+    jassert(standaloneArrangement_ != nullptr);
 
-    // 恢复 fadeout 设置
-    originalClip.fadeOutDuration = newClip.fadeOutDuration;
-    
-    // 重新计算静息处和 chunk 边界（统一语义）
-    computeClipSilentGaps(originalClip);
-    
-    // 删除新 clip
-    clips.erase(clips.begin() + newIndex);
-    
-    // 更新选择
-    if (targetClipIndex >= 0 && targetClipIndex < static_cast<int>(clips.size())) {
-        tracks_[trackId].selectedClipIndex = targetClipIndex;
+    StandaloneArrangement::Placement leadingPlacement;
+    StandaloneArrangement::Placement trailingPlacement;
+    if (!standaloneArrangement_->getPlacementById(trackId, leadingPlacementId, leadingPlacement)
+        || !standaloneArrangement_->getPlacementById(trackId, trailingPlacementId, trailingPlacement)) {
+        AppLogger::log("Merge rejected: placement not found");
+        return std::nullopt;
     }
-    
-    return true;
-}
 
-bool OpenTuneAudioProcessor::deleteClip(int trackId, int clipIndex) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-// UI线程修改 tracks_ 数据时使用写锁
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        
-        auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            clips.erase(clips.begin() + clipIndex);
-            if (tracks_[trackId].selectedClipIndex >= static_cast<int>(clips.size())) {
-                tracks_[trackId].selectedClipIndex = std::max(0, static_cast<int>(clips.size()) - 1);
-            }
-            return true;
+    constexpr double epsilonSeconds = 1.0 / TimeCoordinate::kRenderSampleRate;
+    if (std::abs(leadingPlacement.timelineEndSeconds() - trailingPlacement.timelineStartSeconds) > epsilonSeconds) {
+        AppLogger::log("Merge rejected: placements do not form one continuous placement span");
+        return std::nullopt;
+    }
+
+    if (std::abs(leadingPlacement.gain - trailingPlacement.gain) > 1.0e-6f
+        || leadingPlacement.name != trailingPlacement.name
+        || leadingPlacement.colour != trailingPlacement.colour) {
+        AppLogger::log("Merge rejected: placement metadata diverged");
+        return std::nullopt;
+    }
+
+    MaterializationSnapshot leadingSnapshot;
+    MaterializationSnapshot trailingSnapshot;
+    if (!getMaterializationSnapshotById(leadingPlacement.materializationId, leadingSnapshot)
+        || !getMaterializationSnapshotById(trailingPlacement.materializationId, trailingSnapshot)
+        || leadingSnapshot.audioBuffer == nullptr
+        || trailingSnapshot.audioBuffer == nullptr
+        || leadingSnapshot.sourceId == 0
+        || leadingSnapshot.sourceId != trailingSnapshot.sourceId) {
+        AppLogger::log("Merge rejected: placements do not resolve to the same source lineage");
+        return std::nullopt;
+    }
+
+    if (!nearlyEqualSeconds(leadingSnapshot.sourceWindow.sourceEndSeconds, trailingSnapshot.sourceWindow.sourceStartSeconds)) {
+        AppLogger::log("Merge rejected: materializations do not describe one contiguous source provenance window");
+        return std::nullopt;
+    }
+
+    if (!detectedKeysMatch(leadingSnapshot.detectedKey, trailingSnapshot.detectedKey)) {
+        AppLogger::log("Merge rejected: materialization metadata diverged");
+        return std::nullopt;
+    }
+
+    if (leadingSnapshot.originalF0State == OriginalF0State::Extracting
+        || trailingSnapshot.originalF0State == OriginalF0State::Extracting) {
+        AppLogger::log("Merge rejected: materialization payload is still being refreshed");
+        return std::nullopt;
+    }
+
+    const auto mergedPitchCurve = mergePitchCurves(leadingSnapshot.pitchCurve,
+                                                   trailingSnapshot.pitchCurve,
+                                                   leadingSnapshot.originalF0State,
+                                                   trailingSnapshot.originalF0State);
+    const bool mergedCurveRejected = (leadingSnapshot.pitchCurve != nullptr || trailingSnapshot.pitchCurve != nullptr)
+        && mergedPitchCurve == nullptr;
+    if (mergedCurveRejected) {
+        AppLogger::log("Merge rejected: pitch-curve payload cannot be merged without data loss");
+        return std::nullopt;
+    }
+
+    const int leadingSamples = leadingSnapshot.audioBuffer->getNumSamples();
+    const int trailingSamples = trailingSnapshot.audioBuffer->getNumSamples();
+    const double leadingDurationSeconds = TimeCoordinate::samplesToSeconds(leadingSamples, TimeCoordinate::kRenderSampleRate);
+    auto mergedBuffer = std::make_shared<juce::AudioBuffer<float>>(juce::jmax(leadingSnapshot.audioBuffer->getNumChannels(),
+                                                                              trailingSnapshot.audioBuffer->getNumChannels()),
+                                                                   leadingSamples + trailingSamples);
+    mergedBuffer->clear();
+    for (int channel = 0; channel < mergedBuffer->getNumChannels(); ++channel) {
+        if (channel < leadingSnapshot.audioBuffer->getNumChannels()) {
+            mergedBuffer->copyFrom(channel, 0, *leadingSnapshot.audioBuffer, channel, 0, leadingSamples);
+        }
+        if (channel < trailingSnapshot.audioBuffer->getNumChannels()) {
+            mergedBuffer->copyFrom(channel, leadingSamples, *trailingSnapshot.audioBuffer, channel, 0, trailingSamples);
         }
     }
-    return false;
-}
 
-bool OpenTuneAudioProcessor::getClipSnapshot(int trackId, uint64_t clipId, ClipSnapshot& out) const
-{
-    if (trackId < 0 || trackId >= MAX_TRACKS || clipId == 0) return false;
-    const juce::ScopedReadLock tracksReadLock(tracksLock_);
-    const auto& clips = tracks_[trackId].clips;
-    auto it = std::find_if(clips.begin(), clips.end(), [clipId](const TrackState::AudioClip& c) {
-        return c.clipId == clipId;
-    });
-    if (it == clips.end()) return false;
+    std::vector<Note> mergedNotes = leadingSnapshot.notes;
+    for (auto note : trailingSnapshot.notes) {
+        note.startTime += leadingDurationSeconds;
+        note.endTime += leadingDurationSeconds;
+        mergedNotes.push_back(note);
+    }
+    mergedNotes = normalizeStoredNotes(mergedNotes);
 
-    copyClipToSnapshot(*it, out);
-    return true;
-}
+    MaterializationStore::CreateMaterializationRequest mergedRequest;
+    mergedRequest.sourceId = leadingSnapshot.sourceId;
+    mergedRequest.audioBuffer = mergedBuffer;
+    mergedRequest.pitchCurve = mergedPitchCurve;
+    mergedRequest.originalF0State = leadingSnapshot.originalF0State;
+    mergedRequest.detectedKey = leadingSnapshot.detectedKey;
+    mergedRequest.renderCache = std::make_shared<RenderCache>();
+    mergedRequest.notes = std::move(mergedNotes);
+    mergedRequest.silentGaps = mergeSilentGaps(leadingSnapshot.silentGaps, trailingSnapshot.silentGaps, leadingSamples);
+    mergedRequest.sourceWindow = SourceWindow{
+        leadingSnapshot.sourceWindow.sourceId,
+        leadingSnapshot.sourceWindow.sourceStartSeconds,
+        trailingSnapshot.sourceWindow.sourceEndSeconds
+    };
 
-double OpenTuneAudioProcessor::getClipStartSecondsById(int trackId, uint64_t clipId) const
-{
-    if (trackId < 0 || trackId >= MAX_TRACKS || clipId == 0) return 0.0;
-    const juce::ScopedReadLock tracksReadLock(tracksLock_);
-    const auto& clips = tracks_[trackId].clips;
-    auto it = std::find_if(clips.begin(), clips.end(), [clipId](const TrackState::AudioClip& c) {
-        return c.clipId == clipId;
-    });
-    return (it != clips.end()) ? it->startSeconds : 0.0;
-}
-
-bool OpenTuneAudioProcessor::setClipStartSecondsById(int trackId, uint64_t clipId, double startSeconds)
-{
-    if (trackId < 0 || trackId >= MAX_TRACKS || clipId == 0) return false;
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-    auto& clips = tracks_[trackId].clips;
-    auto it = std::find_if(clips.begin(), clips.end(), [clipId](const TrackState::AudioClip& c) {
-        return c.clipId == clipId;
-    });
-    if (it == clips.end()) return false;
-    it->startSeconds = std::max(0.0, startSeconds);
-    return true;
-}
-
-bool OpenTuneAudioProcessor::deleteClipById(int trackId, uint64_t clipId, ClipSnapshot* deletedOut, int* deletedIndexOut)
-{
-    if (trackId < 0 || trackId >= MAX_TRACKS || clipId == 0) return false;
-
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-    auto& clips = tracks_[trackId].clips;
-    auto it = std::find_if(clips.begin(), clips.end(), [clipId](const TrackState::AudioClip& c) {
-        return c.clipId == clipId;
-    });
-    if (it == clips.end()) return false;
-
-    const int clipIndex = static_cast<int>(std::distance(clips.begin(), it));
-    if (deletedOut != nullptr) {
-        copyClipToSnapshot(*it, *deletedOut);
+    const uint64_t mergedMaterializationId = materializationStore_->createMaterialization(std::move(mergedRequest));
+    if (mergedMaterializationId == 0) {
+        return std::nullopt;
     }
 
-    if (deletedIndexOut != nullptr) {
-        *deletedIndexOut = clipIndex;
+    StandaloneArrangement::Placement mergedPlacement = leadingPlacement;
+    mergedPlacement.placementId = 0;
+    mergedPlacement.materializationId = mergedMaterializationId;
+    mergedPlacement.durationSeconds = leadingPlacement.durationSeconds + trailingPlacement.durationSeconds;
+    mergedPlacement.fadeOutDuration = trailingPlacement.fadeOutDuration;
+    ++mergedPlacement.mappingRevision;
+
+    const int mergedInsertIndex = targetPlacementIndex >= 0 ? targetPlacementIndex : 0;
+    if (!standaloneArrangement_->insertPlacement(trackId, mergedInsertIndex, mergedPlacement)) {
+        materializationStore_->deleteMaterialization(mergedMaterializationId);
+        return std::nullopt;
     }
 
-    clips.erase(clips.begin() + clipIndex);
-    if (tracks_[trackId].selectedClipIndex >= static_cast<int>(clips.size())) {
-        tracks_[trackId].selectedClipIndex = std::max(0, static_cast<int>(clips.size()) - 1);
+    // Retire leading and trailing placements and materializations (sweep will reclaim when safe)
+    standaloneArrangement_->retirePlacement(trackId, trailingPlacementId);
+    standaloneArrangement_->retirePlacement(trackId, leadingPlacementId);
+    materializationStore_->retireMaterialization(leadingPlacement.materializationId);
+    materializationStore_->retireMaterialization(trailingPlacement.materializationId);
+
+    if (targetPlacementIndex >= 0) {
+        standaloneArrangement_->setSelectedPlacementIndex(trackId, targetPlacementIndex);
+    } else {
+        standaloneArrangement_->selectPlacement(trackId, mergedPlacement.placementId);
     }
-    return true;
+
+    scheduleReclaimSweep();
+
+    MergeOutcome outcome;
+    outcome.trackId = trackId;
+    outcome.sourceId = leadingSnapshot.sourceId;
+    outcome.leadingPlacementId = leadingPlacementId;
+    outcome.trailingPlacementId = trailingPlacementId;
+    outcome.leadingMaterializationId = leadingPlacement.materializationId;
+    outcome.trailingMaterializationId = trailingPlacement.materializationId;
+    outcome.mergedPlacementId = mergedPlacement.placementId;
+    outcome.mergedMaterializationId = mergedMaterializationId;
+    return outcome;
 }
 
-bool OpenTuneAudioProcessor::insertClipSnapshot(int trackId, int insertIndex, const ClipSnapshot& snap, uint64_t forcedClipId)
+std::optional<DeleteOutcome> OpenTuneAudioProcessor::deletePlacement(int trackId, int placementIndex)
 {
-    if (trackId < 0 || trackId >= MAX_TRACKS) {
-        AppLogger::log("InsertClip rejected: invalid trackId=" + juce::String(trackId));
+    jassert(standaloneArrangement_ != nullptr);
+    jassert(materializationStore_ != nullptr);
+
+    StandaloneArrangement::Placement placement;
+    if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
+        return std::nullopt;
+    }
+
+    MaterializationSnapshot snapshot;
+    uint64_t sourceId = 0;
+    if (getMaterializationSnapshotById(placement.materializationId, snapshot)) {
+        sourceId = snapshot.sourceId;
+    }
+
+    standaloneArrangement_->retirePlacement(trackId, placement.placementId);
+    materializationStore_->retireMaterialization(placement.materializationId);
+    scheduleReclaimSweep();
+
+    DeleteOutcome outcome;
+    outcome.trackId = trackId;
+    outcome.sourceId = sourceId;
+    outcome.placementId = placement.placementId;
+    outcome.materializationId = placement.materializationId;
+    return outcome;
+}
+
+
+
+// ============================================================================
+// 垃圾回收（Reclaim Sweep）
+// ============================================================================
+
+void OpenTuneAudioProcessor::scheduleReclaimSweep()
+{
+    jassert(juce::MessageManager::getInstanceWithoutCreating() != nullptr);
+    triggerAsyncUpdate();
+}
+
+void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
+{
+    // Cancel any pending async reclaim sweep to avoid double-run on sync sweep.
+    cancelPendingUpdate();
+
+    jassert(materializationStore_ != nullptr);
+    jassert(standaloneArrangement_ != nullptr);
+
+    // Phase 1: physically erase retired placements.
+    {
+        const auto retiredPlacements = standaloneArrangement_->getRetiredPlacements();
+        for (const auto& entry : retiredPlacements) {
+            standaloneArrangement_->deletePlacementById(entry.trackId, entry.placementId, nullptr, nullptr);
+        }
+    }
+
+    // Phase 2: reclaim retired materializations whose reference counters are all zero.
+    // Counters: (a) any-state placement refs in StandaloneArrangement, (b) ARA published-region refs.
+    // A retired materialization with both at zero is unreachable from any owner and is safe to
+    // physically delete. The cascade below switches its source to retired (not hard-delete) so
+    // that Phase 3 can apply the same protection to sources.
+    const auto retiredIds = materializationStore_->getRetiredIds();
+    for (const uint64_t id : retiredIds) {
+        // (a) standalone arrangement reference (active OR retired placement)
+        if (standaloneArrangement_->referencesMaterializationAnyState(id)) {
+            continue;
+        }
+
+#if JucePlugin_Enable_ARA
+        // (b) ARA published-region reference (only meaningful when ARA is compiled in)
+        if (const auto* dc = getDocumentController()) {
+            if (const auto* session = dc->getSession()) {
+                const auto snapshot = session->loadSnapshot();
+                if (snapshot != nullptr) {
+                    bool araRefs = false;
+                    for (const auto& regionView : snapshot->publishedRegions) {
+                        if (regionView.appliedProjection.materializationId == id) {
+                            araRefs = true;
+                            break;
+                        }
+                    }
+                    if (araRefs) continue;
+                }
+            }
+        }
+#endif
+
+        // All references zero — physically reclaim the materialization, then cascade-retire the
+        // source if it has lost its last active materialization.
+        const uint64_t sourceId = materializationStore_->getSourceIdAnyState(id);
+        if (materializationStore_->physicallyDeleteIfReclaimable(id)) {
+            if (sourceId != 0 && sourceStore_ != nullptr
+                && !materializationStore_->hasMaterializationForSource(sourceId)
+                && sourceStore_->containsSource(sourceId)) {
+                sourceStore_->retireSource(sourceId);
+            }
+        }
+    }
+
+    // Phase 3: reclaim retired sources whose reference counter is zero.
+    // Counters: (a) any-state materialization refs in MaterializationStore.
+    if (sourceStore_ != nullptr) {
+        const auto retiredSourceIds = sourceStore_->getRetiredSourceIds();
+        for (const uint64_t sourceId : retiredSourceIds) {
+            if (materializationStore_->hasMaterializationForSourceAnyState(sourceId)) {
+                continue;
+            }
+            sourceStore_->physicallyDeleteIfReclaimable(sourceId);
+        }
+    }
+}
+
+// ============================================================================
+// Materialization 读写代理接口
+// ============================================================================
+
+bool OpenTuneAudioProcessor::getMaterializationSnapshotById(uint64_t materializationId, MaterializationSnapshot& out) const
+{
+    out = MaterializationSnapshot{};
+    if (materializationId == 0) {
         return false;
     }
-    
-    if (!snap.audioBuffer || snap.audioBuffer->getNumSamples() <= 0) {
-        AppLogger::log("InsertClip rejected: empty audio buffer (zero samples) for clipId=" + 
-                       (forcedClipId != 0 ? juce::String(static_cast<juce::int64>(forcedClipId)) : "new"));
+    jassert(materializationStore_ != nullptr);
+
+    MaterializationStore::MaterializationSnapshot coreSnapshot;
+    if (!materializationStore_->getSnapshot(materializationId, coreSnapshot)) {
         return false;
     }
-    if (snap.audioBuffer->getNumChannels() <= 0) {
-        AppLogger::log("InsertClip rejected: invalid channel count=" + juce::String(snap.audioBuffer->getNumChannels()));
+
+    out.materializationId = coreSnapshot.materializationId;
+    out.sourceId = coreSnapshot.sourceId;
+    out.lineageParentMaterializationId = coreSnapshot.lineageParentMaterializationId;
+    out.sourceWindow = coreSnapshot.sourceWindow;
+    out.audioBuffer = coreSnapshot.audioBuffer;
+    out.renderRevision = coreSnapshot.renderRevision;
+    out.pitchCurve = coreSnapshot.pitchCurve;
+    out.originalF0State = coreSnapshot.originalF0State;
+    out.detectedKey = coreSnapshot.detectedKey;
+    out.renderCache = coreSnapshot.renderCache;
+    out.notes = coreSnapshot.notes;
+    out.notesRevision = coreSnapshot.notesRevision;
+    out.silentGaps = coreSnapshot.silentGaps;
+    return out.audioBuffer != nullptr;
+}
+
+double OpenTuneAudioProcessor::getMaterializationAudioDurationById(uint64_t materializationId) const noexcept
+{
+    if (materializationId == 0)
+        return 0.0;
+    jassert(materializationStore_ != nullptr);
+    return materializationStore_->getMaterializationAudioDurationById(materializationId);
+}
+
+bool OpenTuneAudioProcessor::getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const
+{
+    out = SourceStore::SourceSnapshot{};
+    return sourceId != 0
+        && sourceStore_ != nullptr
+        && sourceStore_->getSnapshot(sourceId, out);
+}
+
+bool OpenTuneAudioProcessor::ensureSourceById(uint64_t sourceId,
+                                              const juce::String& displayName,
+                                              std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+                                              double sampleRate)
+{
+    if (sourceId == 0 || audioBuffer == nullptr) {
         return false;
     }
-    
-    // UI线程修改 tracks_ 数据时使用写锁
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-    
-    auto& clips = tracks_[trackId].clips;
-    insertIndex = juce::jlimit(0, (int)clips.size(), insertIndex);
+    jassert(sourceStore_ != nullptr);
 
-    TrackState::AudioClip clip;
-    const uint64_t clipId = (forcedClipId != 0) ? forcedClipId : nextClipId_.fetch_add(1);
-    copySnapshotToClip(snap, clip, clipId);
-
-    // 计算静息处和 chunk 边界（统一语义）
-    computeClipSilentGaps(clip);
-
-    clips.insert(clips.begin() + insertIndex, std::move(clip));
-    if (tracks_[trackId].selectedClipIndex >= insertIndex) {
-        tracks_[trackId].selectedClipIndex += 1;
+    if (audioBuffer->getNumChannels() <= 0 || audioBuffer->getNumSamples() <= 0) {
+        return false;
     }
+
+    if (sourceStore_->containsSource(sourceId)) {
+        return true;
+    }
+
+    SourceStore::CreateSourceRequest request;
+    request.displayName = displayName;
+    request.audioBuffer = std::move(audioBuffer);
+    request.sampleRate = sampleRate > 0.0 ? sampleRate : TimeCoordinate::kRenderSampleRate;
+    return sourceStore_->createSource(std::move(request), sourceId) == sourceId;
+}
+
+bool OpenTuneAudioProcessor::getMaterializationChunkBoundariesById(uint64_t materializationId, std::vector<double>& outSeconds) const
+{
+    outSeconds.clear();
+    if (materializationId == 0) {
+        return false;
+    }
+    jassert(materializationStore_ != nullptr);
+
+    MaterializationStore::MaterializationSnapshot coreSnapshot;
+    if (!materializationStore_->getSnapshot(materializationId, coreSnapshot) || coreSnapshot.audioBuffer == nullptr) {
+        return false;
+    }
+
+    int hopSize = 512;
+    if (vocoderDomain_) {
+        const int currentHopSize = vocoderDomain_->getVocoderHopSize();
+        if (currentHopSize > 0) {
+            hopSize = currentHopSize;
+        }
+    }
+
+    MaterializationSampleRange materializationRange;
+    materializationRange.startSample = 0;
+    materializationRange.endSampleExclusive = static_cast<int64_t>(coreSnapshot.audioBuffer->getNumSamples());
+
+    const auto boundaries = MaterializationStore::buildChunkBoundariesFromSilentGaps(materializationRange.endSampleExclusive, coreSnapshot.silentGaps, hopSize);
+    outSeconds.reserve(boundaries.size());
+    for (const auto sample : boundaries) {
+        outSeconds.push_back(TimeCoordinate::samplesToSeconds(sample - materializationRange.startSample,
+                                                              TimeCoordinate::kRenderSampleRate));
+    }
+
     return true;
 }
 
-bool OpenTuneAudioProcessor::hasTrackAudio(int trackId) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        return !tracks_[trackId].clips.empty();
+bool OpenTuneAudioProcessor::replaceMaterializationAudioById(uint64_t materializationId,
+                                                      std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
+                                                      std::vector<SilentGap> silentGaps)
+{
+    if (materializationId == 0 || audioBuffer == nullptr) {
+        return false;
     }
-    return false;
+    jassert(materializationStore_ != nullptr);
+
+    if (audioBuffer->getNumChannels() <= 0 || audioBuffer->getNumSamples() <= 0) {
+        return false;
+    }
+
+    return materializationStore_->replaceAudio(materializationId,
+                                               std::move(audioBuffer),
+                                               std::move(silentGaps));
 }
 
-// 导出单个Clip的音频
-bool OpenTuneAudioProcessor::exportClipAudio(int trackId, int clipIndex, const juce::File& file) {
+uint64_t OpenTuneAudioProcessor::replaceMaterializationWithNewLineage(uint64_t oldId,
+                                                       MaterializationStore::CreateMaterializationRequest request)
+{
+    if (oldId == 0) {
+        return 0;
+    }
+    jassert(materializationStore_ != nullptr);
+
+    return materializationStore_->replaceMaterializationWithNewLineage(oldId,
+                                                                       std::move(request));
+}
+
+// WAV文件写入辅助函数
+static bool writeAudioBufferToWavFile(const juce::AudioBuffer<float>& buffer,
+                                       const juce::File& file,
+                                       juce::String* errorOut = nullptr)
+{
+    auto outFile = file;
+    if (!outFile.hasFileExtension(".wav")) {
+        outFile = outFile.withFileExtension(".wav");
+    }
+    outFile.deleteFile();
+
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::FileOutputStream> stream(outFile.createOutputStream());
+    if (!stream) {
+        if (errorOut) *errorOut = "无法创建输出文件";
+        return false;
+    }
+
+    std::unique_ptr<juce::OutputStream> outStream(stream.release());
+
+    auto options = juce::AudioFormatWriterOptions{}
+        .withSampleRate(kExportSampleRateHz)
+        .withNumChannels(buffer.getNumChannels())
+        .withBitsPerSample(kExportBitsPerSample);
+
+    auto writer = wav.createWriterFor(outStream, options);
+    if (!writer) {
+        if (errorOut) *errorOut = "无法创建WAV写入器";
+        return false;
+    }
+
+    return writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
+}
+
+// 导出单个 placement 的音频
+// ============================================================================
+// 音频导出
+// ============================================================================
+
+bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementIndex, const juce::File& file) {
     lastExportError_.clear();
     
     if (trackId < 0 || trackId >= MAX_TRACKS) {
@@ -1811,53 +2655,36 @@ bool OpenTuneAudioProcessor::exportClipAudio(int trackId, int clipIndex, const j
         return false;
     }
 
-    const juce::ScopedReadLock tracksReadLock(tracksLock_);
-    
-    auto& track = tracks_[static_cast<size_t>(trackId)];
-    if (clipIndex < 0 || clipIndex >= static_cast<int>(track.clips.size())) {
-        lastExportError_ = "无效的Clip索引: " + juce::String(clipIndex);
+    jassert(standaloneArrangement_ != nullptr);
+
+    StandaloneArrangement::Placement placement;
+    if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
+        lastExportError_ = "无效的片段索引: " + juce::String(placementIndex);
+        return false;
+    }
+
+    if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
+        lastExportError_ = "片段音频不可用";
+        return false;
+    }
+
+    const int64_t placementLen = TimeCoordinate::secondsToSamples(placement.durationSeconds, kExportSampleRateHz);
+    if (placementLen <= 0) {
+        lastExportError_ = "片段音频长度为零";
         return false;
     }
     
-    auto& clip = track.clips[static_cast<size_t>(clipIndex)];
-    const int64_t clipLen = clip.audioBuffer->getNumSamples();
-    if (clipLen <= 0) {
-        lastExportError_ = "Clip音频长度为零";
-        return false;
-    }
-    
-    juce::AudioBuffer<float> out(kExportNumChannels, static_cast<int>(clipLen));
+    juce::AudioBuffer<float> out(kExportNumChannels, static_cast<int>(placementLen));
     out.clear();
     
-    renderClipForExport(clip, track.volume, 0, out, clipLen);
+    renderPlacementForExport(*this,
+                             placement,
+                             standaloneArrangement_->getTrackVolume(trackId),
+                             0,
+                             out,
+                             placementLen);
     
-    auto outFile = file;
-    if (!outFile.hasFileExtension(".wav")) {
-        outFile = outFile.withFileExtension(".wav");
-    }
-    outFile.deleteFile();
-    
-    juce::WavAudioFormat wav;
-    std::unique_ptr<juce::FileOutputStream> stream(outFile.createOutputStream());
-    if (!stream) {
-        lastExportError_ = "无法创建输出文件";
-        return false;
-    }
-    
-    std::unique_ptr<juce::OutputStream> outStream(stream.release());
-    
-    auto options = juce::AudioFormatWriterOptions{}
-        .withSampleRate(kExportSampleRateHz)
-        .withNumChannels(out.getNumChannels())
-        .withBitsPerSample(kExportBitsPerSample);
-    
-    auto writer = wav.createWriterFor(outStream, options);
-    if (!writer) {
-        lastExportError_ = "无法创建WAV写入器";
-        return false;
-    }
-    
-    return writer->writeFromAudioSampleBuffer(out, 0, out.getNumSamples());
+    return writeAudioBufferToWavFile(out, file, &lastExportError_);
 }
 
 bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& file) {
@@ -1868,20 +2695,27 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         return false;
     }
 
-    const juce::ScopedReadLock tracksReadLock(tracksLock_);
-    
-    auto& track = tracks_[static_cast<size_t>(trackId)];
-    if (track.clips.empty()) {
+    jassert(standaloneArrangement_ != nullptr);
+
+    const int placementCount = standaloneArrangement_->getNumPlacements(trackId);
+    if (placementCount <= 0) {
         lastExportError_ = "轨道 " + juce::String(trackId + 1) + " 没有音频片段";
         return false;
     }
 
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
     int64_t totalLen = 0;
-    for (const auto& clip : track.clips) {
-        int64_t clipStart = TimeCoordinate::secondsToSamples(clip.startSeconds, kExportSr);
-        int64_t clipEnd = clipStart + clip.audioBuffer->getNumSamples();
-        totalLen = std::max(totalLen, clipEnd);
+    for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
+        StandaloneArrangement::Placement placement;
+        if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
+            continue;
+        }
+        if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
+            continue;
+        }
+        const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
+        const int64_t placementEnd = placementStart + TimeCoordinate::secondsToSamples(placement.durationSeconds, kExportSr);
+        totalLen = std::max(totalLen, placementEnd);
     }
     if (totalLen <= 0) {
         lastExportError_ = "音频总长度为零或无效";
@@ -1891,45 +2725,41 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
     juce::AudioBuffer<float> out(kExportNumChannels, static_cast<int>(totalLen));
     out.clear();
 
-    for (const auto& clip : track.clips) {
-        const int64_t clipStart = TimeCoordinate::secondsToSamples(clip.startSeconds, kExportSr);
-        renderClipForExport(clip, track.volume, clipStart, out, totalLen);
+    const float trackVolume = standaloneArrangement_->getTrackVolume(trackId);
+    for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
+        StandaloneArrangement::Placement placement;
+        if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
+            continue;
+        }
+        if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
+            continue;
+        }
+        const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
+        renderPlacementForExport(*this, placement, trackVolume, placementStart, out, totalLen);
     }
 
-    auto outFile = file;
-    if (!outFile.hasFileExtension(".wav")) {
-        outFile = outFile.withFileExtension(".wav");
-    }
-    outFile.deleteFile();
-
-    juce::WavAudioFormat wav;
-    std::unique_ptr<juce::FileOutputStream> stream(outFile.createOutputStream());
-    if (!stream) return false;
-
-    std::unique_ptr<juce::OutputStream> outStream(stream.release());
-
-    auto options = juce::AudioFormatWriterOptions{}
-        .withSampleRate(kExportSampleRateHz)
-        .withNumChannels(out.getNumChannels())
-        .withBitsPerSample(kExportBitsPerSample);
-
-    auto writer = wav.createWriterFor(outStream, options);
-    if (!writer) return false;
-
-    return writer->writeFromAudioSampleBuffer(out, 0, out.getNumSamples());
+    return writeAudioBufferToWavFile(out, file, &lastExportError_);
 }
 
 bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
-    const juce::ScopedReadLock tracksReadLock(tracksLock_);
+    jassert(standaloneArrangement_ != nullptr);
+
+    const auto playbackSnapshot = standaloneArrangement_->loadPlaybackSnapshot();
+    if (playbackSnapshot == nullptr) {
+        return false;
+    }
 
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
     int64_t totalLen = 0;
-    for (int trackId = 0; trackId < static_cast<int>(tracks_.size()); ++trackId) {
-        const auto& track = tracks_[static_cast<size_t>(trackId)];
-        for (const auto& clip : track.clips) {
-            int64_t clipStart = TimeCoordinate::secondsToSamples(clip.startSeconds, kExportSr);
-            int64_t clipEnd = clipStart + clip.audioBuffer->getNumSamples();
-            totalLen = std::max(totalLen, clipEnd);
+    for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
+        const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
+        for (const auto& placement : track.placements) {
+            if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
+                continue;
+            }
+            const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
+            const int64_t placementEnd = placementStart + TimeCoordinate::secondsToSamples(placement.durationSeconds, kExportSr);
+            totalLen = std::max(totalLen, placementEnd);
         }
     }
     if (totalLen <= 0) return false;
@@ -1937,61 +2767,38 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
     juce::AudioBuffer<float> mix(kExportMasterNumChannels, static_cast<int>(totalLen));
     mix.clear();
 
-    bool anySolo = false;
-    for (const auto& t : tracks_) {
-        if (t.isSolo) {
-            anySolo = true;
-            break;
-        }
-    }
-
-    for (int trackId = 0; trackId < static_cast<int>(tracks_.size()); ++trackId) {
-        auto& track = tracks_[static_cast<size_t>(trackId)];
+    for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
+        const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
         
-        if (anySolo) {
+        if (playbackSnapshot->anySoloed) {
             if (!track.isSolo) continue;
         } else {
             if (track.isMuted) continue;
         }
 
-        if (track.clips.empty()) continue;
+        if (track.placements.empty()) continue;
 
-        for (const auto& clip : track.clips) {
-            const int64_t clipStart = TimeCoordinate::secondsToSamples(clip.startSeconds, kExportSr);
-            renderClipForExport(clip, track.volume, clipStart, mix, totalLen);
+        for (const auto& placement : track.placements) {
+            if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
+                continue;
+            }
+            const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
+            renderPlacementForExport(*this, placement, track.volume, placementStart, mix, totalLen);
         }
     }
 
-    auto outFile = file;
-    if (!outFile.hasFileExtension(".wav")) {
-        outFile = outFile.withFileExtension(".wav");
-    }
-    outFile.deleteFile();
-
-    juce::WavAudioFormat wav;
-    std::unique_ptr<juce::FileOutputStream> stream(outFile.createOutputStream());
-    if (!stream) return false;
-
-    std::unique_ptr<juce::OutputStream> outStream(stream.release());
-
-    auto options = juce::AudioFormatWriterOptions{}
-        .withSampleRate(kExportSampleRateHz)
-        .withNumChannels(mix.getNumChannels())
-        .withBitsPerSample(kExportBitsPerSample);
-
-    auto writer = wav.createWriterFor(outStream, options);
-    if (!writer) return false;
-
-    return writer->writeFromAudioSampleBuffer(mix, 0, mix.getNumSamples());
+    return writeAudioBufferToWavFile(mix, file);
 }
+
+// ============================================================================
+// 播放控制
+// ============================================================================
 
 void OpenTuneAudioProcessor::setPlaying(bool playing) {
     if (playing) {
         playStartPosition_.store(positionAtomic_->load(std::memory_order_relaxed));
         isFadingOut_.store(false);
         isPlaying_.store(true);
-        useDrySignalFallback_.store(false);
-        isBuffering_.store(false);
         AppLogger::log("Playback: start");
     } else {
         if (isPlaying_.load()) {
@@ -2017,9 +2824,8 @@ double OpenTuneAudioProcessor::getPosition() const {
 void OpenTuneAudioProcessor::setBpm(double bpm) {
     bpm_ = bpm;
 
-#if !JucePlugin_Build_Standalone
-    hostBpm_.store(bpm);
-#endif
+    const juce::SpinLock::ScopedLockType lock(hostTransportSnapshotLock_);
+    hostTransportSnapshot_.bpm = bpm;
 }
 
 void OpenTuneAudioProcessor::setZoomLevel(double zoom) {
@@ -2030,35 +2836,27 @@ void OpenTuneAudioProcessor::setZoomLevel(double zoom) {
 // Two-phase Import Implementation
 // ============================================================================
 
-bool OpenTuneAudioProcessor::prepareImportClip(int trackId,
-                                                juce::AudioBuffer<float>&& inBuffer,
-                                                double inSampleRate,
-                                                const juce::String& clipName,
-                                                PreparedImportClip& out)
+bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
+                                           double inSampleRate,
+                                           const juce::String& displayName,
+                                           OpenTuneAudioProcessor::PreparedImport& out)
 {
-    if (trackId < 0 || trackId >= MAX_TRACKS) {
-        AppLogger::log("Import rejected: invalid trackId=" + juce::String(trackId));
-        return false;
-    }
     if (inBuffer.getNumSamples() <= 0) {
-        AppLogger::log("Import rejected: empty audio buffer (zero samples) for '" + clipName + "'");
+        AppLogger::log("Import rejected: empty audio buffer (zero samples) for '" + displayName + "'");
         return false;
     }
     if (inBuffer.getNumChannels() <= 0) {
-        AppLogger::log("Import rejected: invalid channel count=" + juce::String(inBuffer.getNumChannels()) + " for '" + clipName + "'");
+        AppLogger::log("Import rejected: invalid channel count=" + juce::String(inBuffer.getNumChannels()) + " for '" + displayName + "'");
         return false;
     }
     if (inSampleRate <= 0.0) {
-        AppLogger::log("Import rejected: invalid sample rate=" + juce::String(inSampleRate, 2) + " for '" + clipName + "'");
+        AppLogger::log("Import rejected: invalid sample rate=" + juce::String(inSampleRate, 2) + " for '" + displayName + "'");
         return false;
     }
     
-    PerfTimer perfTimer("prepareImportClip");
-    
-    out.trackId = trackId;
-    out.clipName = clipName;
+    out.displayName = displayName;
 
-    // 重采样到固定 44100Hz（用于存储和渲染）
+    // 导入后的 materialization 在 shared runtime 内统一落到固定 44.1kHz 的 materialization-local 存储采样率。
     const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
     if (std::abs(inSampleRate - targetSampleRate) > 1.0) {
         const int numChannels = inBuffer.getNumChannels();
@@ -2068,7 +2866,7 @@ bool OpenTuneAudioProcessor::prepareImportClip(int trackId,
             1,
             static_cast<int>(TimeCoordinate::secondsToSamples(sourceDurationSeconds, targetSampleRate)));
         
-        out.hostRateBuffer.setSize(numChannels, newLen);
+        out.storedAudioBuffer.setSize(numChannels, newLen);
         
         for (int ch = 0; ch < numChannels; ++ch) {
             auto resampledData = resamplingManager_->upsampleForHost(
@@ -2078,10 +2876,10 @@ bool OpenTuneAudioProcessor::prepareImportClip(int trackId,
                 static_cast<int>(targetSampleRate)
             );
             const int toCopy = juce::jmin(newLen, static_cast<int>(resampledData.size()));
-            out.hostRateBuffer.copyFrom(ch, 0, resampledData.data(), toCopy);
+            out.storedAudioBuffer.copyFrom(ch, 0, resampledData.data(), toCopy);
         }
     } else {
-        out.hostRateBuffer = std::move(inBuffer);
+        out.storedAudioBuffer = std::move(inBuffer);
     }
     
     // 后处理数据延后到波形完全可见后再异步计算
@@ -2090,422 +2888,633 @@ bool OpenTuneAudioProcessor::prepareImportClip(int trackId,
     return true;
 }
 
-bool OpenTuneAudioProcessor::commitPreparedImportClip(PreparedImportClip&& prepared)
+uint64_t OpenTuneAudioProcessor::ensureSourceAndCreateMaterialization(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource)
 {
-    if (prepared.trackId < 0 || prepared.trackId >= MAX_TRACKS) return false;
-    
-    PerfTimer perfTimer("commitPreparedImportClip");
-    
-    // 写锁内只做轻量对象挂载
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-    
-    TrackState::AudioClip clip;
-    clip.clipId = nextClipId_.fetch_add(1);
-    clip.audioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(prepared.hostRateBuffer));  // Fixed 44100Hz
-    clip.startSeconds = 0.0;
-    clip.gain = 1.0f;
-    clip.name = prepared.clipName;
-    clip.colour = juce::Colour::fromHSV(prepared.trackId * 0.3f, 0.6f, 0.8f, 1.0f);
-    clip.originalF0State = OriginalF0State::NotRequested;
-    clip.silentGaps = std::move(prepared.silentGaps);
-    clip.renderCache = std::make_shared<RenderCache>();
-    
-    // Initialize drySignalBuffer_ to current device rate
-    const double deviceSampleRate = currentSampleRate_.load(std::memory_order_relaxed);
-    resampleDrySignal(clip, deviceSampleRate);
+    jassert(sourceStore_ != nullptr && materializationStore_ != nullptr);
 
-    // Prepare crossover mixer for playback at device sample rate
-    clip.crossoverMixer_.prepare(deviceSampleRate, currentBlockSize_);
+    auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(prepared.storedAudioBuffer));
+    createdSource = false;
+    if (sourceId == 0) {
+        SourceStore::CreateSourceRequest sourceRequest;
+        sourceRequest.displayName = prepared.displayName;
+        sourceRequest.audioBuffer = storedAudioBuffer;
+        sourceRequest.sampleRate = TimeCoordinate::kRenderSampleRate;
+        sourceId = sourceStore_->createSource(std::move(sourceRequest));
+        if (sourceId == 0) return 0;
+        createdSource = true;
+    } else if (!sourceStore_->containsSource(sourceId)) {
+        return 0;
+    }
 
-    tracks_[prepared.trackId].clips.push_back(std::move(clip));
-    return true;
+    MaterializationStore::CreateMaterializationRequest request;
+    request.sourceId = sourceId;
+    request.audioBuffer = storedAudioBuffer;
+    request.sourceWindow = prepared.sourceWindow;
+    if (request.sourceWindow.sourceId == 0) {
+        const double durationSeconds = TimeCoordinate::samplesToSeconds(
+            request.audioBuffer->getNumSamples(), TimeCoordinate::kRenderSampleRate);
+        request.sourceWindow = SourceWindow{sourceId, 0.0, durationSeconds};
+    }
+    request.originalF0State = OriginalF0State::NotRequested;
+    request.silentGaps = std::move(prepared.silentGaps);
+    request.renderCache = std::make_shared<RenderCache>();
+
+    const uint64_t materializationId = materializationStore_->createMaterialization(std::move(request));
+    if (materializationId == 0 && createdSource) {
+        sourceStore_->deleteSource(sourceId);
+    }
+    return materializationId;
 }
 
-bool OpenTuneAudioProcessor::prepareDeferredClipPostProcess(int trackId,
-                                                            uint64_t clipId,
-                                                            OpenTuneAudioProcessor::PreparedClipPostProcess& out) const
+OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPreparedImportAsPlacement(
+    PreparedImport&& prepared, const ImportPlacement& placement, uint64_t sourceId)
 {
-    if (trackId < 0 || trackId >= MAX_TRACKS || clipId == 0) {
+    if (!placement.isValid()) return {};
+    jassert(standaloneArrangement_ != nullptr);
+
+    const juce::String displayName = prepared.displayName;
+    bool createdSource = false;
+    const uint64_t materializationId = ensureSourceAndCreateMaterialization(std::move(prepared), sourceId, createdSource);
+    if (materializationId == 0) return {};
+
+    const double materializationDurationSeconds = getMaterializationAudioDurationById(materializationId);
+
+    StandaloneArrangement::Placement importedPlacement;
+    importedPlacement.materializationId = materializationId;
+    importedPlacement.mappingRevision = 0;
+    importedPlacement.timelineStartSeconds = placement.timelineStartSeconds;
+    importedPlacement.durationSeconds = materializationDurationSeconds;
+    importedPlacement.gain = 1.0f;
+    importedPlacement.name = displayName;
+    importedPlacement.colour = juce::Colour::fromHSV(placement.trackId * 0.3f, 0.6f, 0.8f, 1.0f);
+
+    if (!standaloneArrangement_->insertPlacement(placement.trackId, importedPlacement)) {
+        materializationStore_->deleteMaterialization(materializationId);
+        if (createdSource) sourceStore_->deleteSource(sourceId);
+        return {};
+    }
+    standaloneArrangement_->selectPlacement(placement.trackId, importedPlacement.placementId);
+
+    return { sourceId, materializationId, importedPlacement.placementId };
+}
+
+uint64_t OpenTuneAudioProcessor::commitPreparedImportAsMaterialization(PreparedImport&& prepared, uint64_t sourceId)
+{
+    bool createdSource = false;
+    return ensureSourceAndCreateMaterialization(std::move(prepared), sourceId, createdSource);
+}
+
+std::optional<OpenTuneAudioProcessor::AraRegionMaterializationBirthResult>
+OpenTuneAudioProcessor::ensureAraRegionMaterialization(
+    juce::ARAAudioSource* audioSource,
+    uint64_t sourceId,
+    std::shared_ptr<const juce::AudioBuffer<float>> copiedAudio,
+    double copiedAudioSampleRate,
+    const SourceWindow& sourceWindow,
+    double playbackStartSeconds)
+{
+    juce::ignoreUnused(playbackStartSeconds);
+
+    // Shared store: reuse existing materialization for same source+window
+    {
+        const auto existingId = materializationStore_->findMaterializationBySourceWindow(sourceId, sourceWindow);
+        if (existingId != 0) {
+            AraRegionMaterializationBirthResult result;
+            result.sourceId = sourceId;
+            result.materializationId = existingId;
+            result.materializationRevision = 0;
+            result.materializationDurationSeconds = getMaterializationAudioDurationById(existingId);
+            AppLogger::log("ARA auto-birth: reuse existing materializationId="
+                + juce::String(static_cast<juce::int64>(existingId)));
+            return result;
+        }
+    }
+
+    if (audioSource == nullptr || copiedAudio == nullptr || copiedAudio->getNumSamples() <= 0 || sourceId == 0)
+        return std::nullopt;
+
+    const juce::String sourceName = audioSource->getName() != nullptr
+        ? juce::String::fromUTF8(audioSource->getName())
+        : juce::String("ARA Source");
+
+    if (!ensureSourceById(sourceId, sourceName, copiedAudio, copiedAudioSampleRate))
+        return std::nullopt;
+
+    const int64_t sourceStartSample = static_cast<int64_t>(std::round(sourceWindow.sourceStartSeconds * copiedAudioSampleRate));
+    const int64_t sourceEndSample = static_cast<int64_t>(std::round(sourceWindow.sourceEndSeconds * copiedAudioSampleRate));
+    const int64_t windowSamples = std::max<int64_t>(0,
+        std::min<int64_t>(sourceEndSample, copiedAudio->getNumSamples()) - std::max<int64_t>(0, sourceStartSample));
+
+    if (windowSamples <= 0)
+        return std::nullopt;
+
+    juce::AudioBuffer<float> windowBuffer(copiedAudio->getNumChannels(), static_cast<int>(windowSamples));
+    for (int ch = 0; ch < copiedAudio->getNumChannels(); ++ch)
+    {
+        windowBuffer.copyFrom(ch, 0,
+                              copiedAudio->getReadPointer(ch, static_cast<int>(std::max<int64_t>(0, sourceStartSample))),
+                              static_cast<int>(windowSamples));
+    }
+
+    PreparedImport preparedImport;
+    if (!prepareImport(std::move(windowBuffer), copiedAudioSampleRate, sourceName, preparedImport))
+        return std::nullopt;
+
+    preparedImport.sourceWindow = SourceWindow{sourceId,
+                                               sourceWindow.sourceStartSeconds,
+                                               sourceWindow.sourceEndSeconds};
+
+    const uint64_t materializationId = commitPreparedImportAsMaterialization(std::move(preparedImport), sourceId);
+    if (materializationId == 0)
+        return std::nullopt;
+
+    AraRegionMaterializationBirthResult result;
+    result.sourceId = sourceId;
+    result.materializationId = materializationId;
+    result.materializationRevision = 0;
+    result.materializationDurationSeconds = getMaterializationAudioDurationById(materializationId);
+
+    AppLogger::log("ARA auto-birth: sourceId=" + juce::String(static_cast<juce::int64>(sourceId))
+        + " materializationId=" + juce::String(static_cast<juce::int64>(materializationId))
+        + " duration=" + juce::String(result.materializationDurationSeconds, 6));
+
+    return result;
+}
+
+bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioProcessor::MaterializationRefreshRequest& request)
+{
+    if (request.materializationId == 0) {
+        return false;
+    }
+    jassert(materializationStore_ != nullptr);
+
+    if (getMaterializationAudioBufferById(request.materializationId) == nullptr) {
         return false;
     }
 
-    juce::AudioBuffer<float> clipAudio;
-    {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        auto it = std::find_if(clips.begin(), clips.end(), [clipId](const TrackState::AudioClip& c) {
-            return c.clipId == clipId;
+    const bool hasChangedRange = request.preserveCorrectionsOutsideChangedRange
+        && request.changedEndSeconds > request.changedStartSeconds;
+
+    if (hasChangedRange) {
+        auto notes = getMaterializationNotesById(request.materializationId);
+        if (!notes.empty()) {
+            NoteSequence sequence;
+            sequence.setNotesSorted(notes);
+            sequence.eraseRange(request.changedStartSeconds, request.changedEndSeconds);
+            setMaterializationNotesById(request.materializationId, sequence.getNotes());
+        }
+
+        auto pitchCurve = getMaterializationPitchCurveById(request.materializationId);
+        if (pitchCurve != nullptr) {
+            const auto snapshot = pitchCurve->getSnapshot();
+            const double frameRate = snapshot->getSampleRate()
+                / static_cast<double>(juce::jmax(1, snapshot->getHopSize()));
+            if (frameRate > 0.0) {
+                const int startFrame = juce::jmax(0,
+                    static_cast<int>(std::floor(request.changedStartSeconds * frameRate)));
+                const int endFrame = juce::jmax(startFrame,
+                    static_cast<int>(std::ceil(request.changedEndSeconds * frameRate)));
+                auto clearedCurve = pitchCurve->clone();
+                clearedCurve->clearCorrectionRange(startFrame, endFrame);
+                if (!setMaterializationPitchCurveById(request.materializationId, std::move(clearedCurve))) {
+                    return false;
+                }
+            }
+        }
+
+        setMaterializationDetectedKeyById(request.materializationId, DetectedKey{});
+    }
+
+    setMaterializationOriginalF0StateById(request.materializationId, OriginalF0State::Extracting);
+
+    if (materializationRefreshService_.isActive(request.materializationId)) {
+        materializationRefreshService_.cancel(request.materializationId);
+    }
+
+    const auto lifetimeFlag = materializationRefreshAliveFlag_;
+    OpenTuneAudioProcessor* const processor = this;
+    const auto capturedRequest = request;
+
+    const auto submitResult = materializationRefreshService_.submit(
+        request.materializationId,
+        [lifetimeFlag, processor, capturedRequest]() -> F0ExtractionService::Result {
+            F0ExtractionService::Result result;
+            result.materializationId = capturedRequest.materializationId;
+            result.requestKey = capturedRequest.materializationId;
+
+            if (!lifetimeFlag->load(std::memory_order_acquire)) {
+                result.errorMessage = "processor_destroyed";
+                return result;
+            }
+
+            MaterializationSnapshot snapshot;
+            if (!processor->getMaterializationSnapshotById(capturedRequest.materializationId, snapshot)
+                || snapshot.audioBuffer == nullptr) {
+                result.errorMessage = "content_snapshot_failed";
+                return result;
+            }
+
+            result.sourceAudioBuffer = snapshot.audioBuffer;
+
+            result.silentGaps = SilentGapDetector::detectAllGapsAdaptive(*snapshot.audioBuffer);
+            snapshot.silentGaps = result.silentGaps;
+
+            std::string errorMessage;
+            if (!processor->extractImportedClipOriginalF0(snapshot, result, errorMessage)) {
+                result.errorMessage = errorMessage;
+                return result;
+            }
+
+            result.success = true;
+            return result;
+        },
+        [lifetimeFlag, processor, capturedRequest](F0ExtractionService::Result&& result) {
+            if (!lifetimeFlag->load(std::memory_order_acquire)) {
+                return;
+            }
+
+            MaterializationSnapshot currentSnapshot;
+            if (!processor->getMaterializationSnapshotById(result.materializationId, currentSnapshot)
+                || currentSnapshot.audioBuffer == nullptr
+                || result.sourceAudioBuffer == nullptr
+                || currentSnapshot.audioBuffer != result.sourceAudioBuffer) {
+                AppLogger::log("MaterializationRefresh: stale result dropped materializationId="
+                    + juce::String(static_cast<juce::int64>(result.materializationId)));
+                return;
+            }
+
+            processor->materializationStore_->setSilentGaps(result.materializationId, std::move(result.silentGaps));
+
+            if (!result.success) {
+                AppLogger::log("MaterializationRefresh: extraction failed materializationId="
+                    + juce::String(static_cast<juce::int64>(result.materializationId))
+                    + " reason=" + juce::String(result.errorMessage));
+                processor->setMaterializationOriginalF0StateById(result.materializationId, OriginalF0State::Failed);
+                return;
+            }
+
+            auto pitchCurve = std::make_shared<PitchCurve>();
+            pitchCurve->setHopSize(result.hopSize);
+            pitchCurve->setSampleRate(static_cast<double>(result.f0SampleRate));
+            pitchCurve->setOriginalF0(result.f0);
+            if (!result.energy.empty()) {
+                pitchCurve->setOriginalEnergy(result.energy);
+            }
+
+            if (capturedRequest.preserveCorrectionsOutsideChangedRange) {
+                if (auto previousCurve = processor->getMaterializationPitchCurveById(result.materializationId)) {
+                    auto previousSnapshot = previousCurve->getSnapshot();
+                    auto segments = previousSnapshot->getCorrectedSegments();
+                    if (!segments.empty()) {
+                        const double frameRate = static_cast<double>(result.f0SampleRate)
+                            / static_cast<double>(juce::jmax(1, result.hopSize));
+                        const int maxFrame = static_cast<int>(result.f0.size());
+
+                        if (frameRate > 0.0 && capturedRequest.changedEndSeconds > capturedRequest.changedStartSeconds) {
+                            const int changedStartFrame = juce::jmax(0,
+                                static_cast<int>(std::floor(capturedRequest.changedStartSeconds * frameRate)));
+                            const int changedEndFrame = juce::jmax(changedStartFrame,
+                                static_cast<int>(std::ceil(capturedRequest.changedEndSeconds * frameRate)));
+
+                            segments.erase(std::remove_if(segments.begin(),
+                                                          segments.end(),
+                                                          [changedStartFrame, changedEndFrame, maxFrame](const CorrectedSegment& segment) {
+                                                              if (segment.startFrame >= maxFrame) {
+                                                                  return true;
+                                                              }
+                                                              const int clampedEnd = juce::jmin(segment.endFrame, maxFrame);
+                                                              if (clampedEnd <= segment.startFrame) {
+                                                                  return true;
+                                                              }
+                                                              return clampedEnd > changedStartFrame
+                                                                  && segment.startFrame < changedEndFrame;
+                                                          }),
+                                           segments.end());
+                        } else {
+                            segments.erase(std::remove_if(segments.begin(),
+                                                          segments.end(),
+                                                          [maxFrame](const CorrectedSegment& segment) {
+                                                              if (segment.startFrame >= maxFrame) {
+                                                                  return true;
+                                                              }
+                                                              return juce::jmin(segment.endFrame, maxFrame) <= segment.startFrame;
+                                                          }),
+                                           segments.end());
+                        }
+
+                        if (!segments.empty()) {
+                            pitchCurve->replaceCorrectedSegments(segments);
+                        }
+                    }
+                }
+            }
+
+            if (!processor->setMaterializationPitchCurveById(result.materializationId, pitchCurve)) {
+                AppLogger::log("MaterializationRefresh: pitch curve commit failed materializationId="
+                    + juce::String(static_cast<juce::int64>(result.materializationId)));
+                processor->setMaterializationOriginalF0StateById(result.materializationId, OriginalF0State::Failed);
+                return;
+            }
+
+            // F0Alignment diagnostic
+            {
+                const auto& sw = currentSnapshot.sourceWindow;
+                AppLogger::log("F0Alignment: materializationId="
+                    + juce::String(static_cast<juce::int64>(result.materializationId))
+                    + " audioDuration=" + juce::String(result.audioDurationSeconds, 6)
+                    + " firstAudibleTime=" + juce::String(result.firstAudibleTimeSeconds, 6)
+                    + " firstVoicedFrame=" + juce::String(result.firstVoicedFrame)
+                    + " firstVoicedTime=" + juce::String(result.firstVoicedTimeSeconds, 6)
+                    + " f0FrameCount=" + juce::String(static_cast<int>(result.f0.size()))
+                    + " expectedInferenceFrameCount=" + juce::String(result.expectedInferenceFrameCount)
+                    + " sourceWindow=[" + juce::String(static_cast<juce::int64>(sw.sourceId))
+                    + "," + juce::String(sw.sourceStartSeconds, 6)
+                    + "," + juce::String(sw.sourceEndSeconds, 6) + "]");
+            }
+
+            const auto existingKey = processor->getMaterializationDetectedKeyById(result.materializationId);
+            if (existingKey.confidence <= 0.0f) {
+                auto audioBuffer = processor->getMaterializationAudioBufferById(result.materializationId);
+                if (audioBuffer && audioBuffer->getNumSamples() > 0) {
+                    ChromaKeyDetector detector;
+                    const auto key = detector.detect(audioBuffer->getReadPointer(0),
+                                                      audioBuffer->getNumSamples(), 44100);
+                    processor->setMaterializationDetectedKeyById(result.materializationId, key);
+                }
+            }
+
+            processor->setMaterializationOriginalF0StateById(result.materializationId, OriginalF0State::Ready);
         });
-        if (it == clips.end()) {
-            return false;
-        }
-        if (it->audioBuffer->getNumSamples() <= 0 || it->audioBuffer->getNumChannels() <= 0) {
-            return false;
-        }
-        clipAudio.makeCopyOf(*it->audioBuffer);
-    }
 
-    out = OpenTuneAudioProcessor::PreparedClipPostProcess{};
-    out.trackId = trackId;
-    out.clipId = clipId;
-
-    {
-        PerfTimer perfSilent("deferredImportPostProcess_silentGapDetection");
-        out.silentGaps = SilentGapDetector::detectAllGapsAdaptive(clipAudio);
-    }
-
-    return true;
-}
-
-bool OpenTuneAudioProcessor::commitDeferredClipPostProcess(int trackId,
-                                                           uint64_t clipId,
-                                                           OpenTuneAudioProcessor::PreparedClipPostProcess&& prepared)
-{
-    if (trackId < 0 || trackId >= MAX_TRACKS || clipId == 0) {
+    if (submitResult != F0ExtractionService::SubmitResult::Accepted) {
+        AppLogger::log("MaterializationRefresh: submit rejected materializationId="
+            + juce::String(static_cast<juce::int64>(request.materializationId)));
+        setMaterializationOriginalF0StateById(request.materializationId, OriginalF0State::Failed);
         return false;
     }
 
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-    auto& clips = tracks_[trackId].clips;
-    auto it = std::find_if(clips.begin(), clips.end(), [clipId](const TrackState::AudioClip& c) {
-        return c.clipId == clipId;
-    });
-    if (it == clips.end()) {
-        return false;
-    }
-
-    it->silentGaps = std::move(prepared.silentGaps);
     return true;
 }
 
 // ============================================================================
-// Clip Movement
+// Placement Movement
 // ============================================================================
 
-bool OpenTuneAudioProcessor::moveClipToTrack(int sourceTrackId, int targetTrackId, uint64_t clipId, double newStartSeconds)
+bool OpenTuneAudioProcessor::movePlacementToTrack(int sourceTrackId,
+                                                  int targetTrackId,
+                                                  uint64_t placementId,
+                                                  double newTimelineStartSeconds)
 {
-    // 验证参数
-    if (sourceTrackId < 0 || sourceTrackId >= MAX_TRACKS || targetTrackId < 0 || targetTrackId >= MAX_TRACKS)
-        return false;
-    if (sourceTrackId == targetTrackId)
-        return false;
-    
-    // UI线程修改 tracks_ 数据时使用写锁
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-    
-    auto& sourceClips = tracks_[sourceTrackId].clips;
-    auto& targetClips = tracks_[targetTrackId].clips;
-    
-    // 查找要移动的 clip
-    auto it = std::find_if(sourceClips.begin(), sourceClips.end(),
-        [clipId](const TrackState::AudioClip& c) { return c.clipId == clipId; });
-    
-    if (it == sourceClips.end())
-        return false;
-    
-    // 移动 clip 到目标轨道
-    TrackState::AudioClip movedClip = std::move(*it);
-    movedClip.startSeconds = std::max(0.0, newStartSeconds);
-    // 更新颜色为目标轨道的颜色
-    movedClip.colour = juce::Colour::fromHSV(targetTrackId * 0.3f, 0.6f, 0.8f, 1.0f);
-    sourceClips.erase(it);
-    targetClips.push_back(std::move(movedClip));
-    
-    // 更新选中状态
-    tracks_[targetTrackId].selectedClipIndex = static_cast<int>(targetClips.size()) - 1;
-    
-    return true;
+    jassert(standaloneArrangement_ != nullptr);
+    return standaloneArrangement_->movePlacementToTrack(sourceTrackId, targetTrackId, placementId, newTimelineStartSeconds);
 }
 
-std::shared_ptr<PitchCurve> OpenTuneAudioProcessor::getClipPitchCurve(int trackId, int clipIndex) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            return clips[clipIndex].pitchCurve;
-        }
-    }
-    return nullptr;
-}
-
-void OpenTuneAudioProcessor::setClipPitchCurve(int trackId, int clipIndex, std::shared_ptr<PitchCurve> curve) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            clips[clipIndex].pitchCurve = curve;
-            clips[clipIndex].originalF0State = hasReadyOriginalF0Curve(curve)
-                ? OriginalF0State::Ready
-                : OriginalF0State::NotRequested;
-        }
-    }
-}
-
-OriginalF0State OpenTuneAudioProcessor::getClipOriginalF0State(int trackId, int clipIndex) const
+std::shared_ptr<PitchCurve> OpenTuneAudioProcessor::getMaterializationPitchCurveById(uint64_t materializationId) const
 {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            return clips[clipIndex].originalF0State;
-        }
+    if (materializationId == 0) {
+        return nullptr;
     }
-    return OriginalF0State::NotRequested;
+
+    std::shared_ptr<PitchCurve> curve;
+    jassert(materializationStore_ != nullptr);
+    return materializationStore_->getPitchCurve(materializationId, curve) ? curve : nullptr;
 }
 
-void OpenTuneAudioProcessor::setClipOriginalF0State(int trackId, int clipIndex, OriginalF0State state)
+bool OpenTuneAudioProcessor::setMaterializationPitchCurveById(uint64_t materializationId, std::shared_ptr<PitchCurve> curve)
 {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            clips[clipIndex].originalF0State = state;
-        }
-    }
-}
-
-bool OpenTuneAudioProcessor::setClipOriginalF0StateById(int trackId, uint64_t clipId, OriginalF0State state)
-{
-    if (trackId < 0 || trackId >= MAX_TRACKS || clipId == 0) {
+    if (materializationId == 0) {
         return false;
     }
 
-    const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-    auto& clips = tracks_[trackId].clips;
-    auto it = std::find_if(clips.begin(), clips.end(), [clipId](const TrackState::AudioClip& c) {
-        return c.clipId == clipId;
-    });
-    if (it == clips.end()) {
-        return false;
-    }
-    it->originalF0State = state;
-    return true;
+    jassert(materializationStore_ != nullptr);
+    return materializationStore_->setPitchCurve(materializationId, std::move(curve));
 }
 
-DetectedKey OpenTuneAudioProcessor::getClipDetectedKey(int trackId, int clipIndex) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            return clips[clipIndex].detectedKey;
-        }
-    }
-    return DetectedKey{};
-}
-
-void OpenTuneAudioProcessor::setClipDetectedKey(int trackId, int clipIndex, const DetectedKey& key) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            clips[clipIndex].detectedKey = key;
-        }
-    }
-}
-
-std::vector<Note> OpenTuneAudioProcessor::getClipNotes(int trackId, int clipIndex) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            return clips[clipIndex].notes;
-        }
-    }
-    return {};
-}
-
-std::vector<Note>& OpenTuneAudioProcessor::getClipNotesRef(int trackId, int clipIndex) {
-    static std::vector<Note> empty;
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            return clips[clipIndex].notes;
-        }
-    }
-    return empty;
-}
-
-int OpenTuneAudioProcessor::getClipIndexById(int trackId, uint64_t clipId) const {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedReadLock tracksReadLock(tracksLock_);
-        const auto& clips = tracks_[trackId].clips;
-        for (int i = 0; i < static_cast<int>(clips.size()); ++i) {
-            if (clips[i].clipId == clipId) {
-                return i;
-            }
-        }
-    }
-    return -1;
-}
-
-void OpenTuneAudioProcessor::setClipNotes(int trackId, int clipIndex, const std::vector<Note>& notes) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        auto& clips = tracks_[trackId].clips;
-        if (clipIndex >= 0 && clipIndex < static_cast<int>(clips.size())) {
-            clips[clipIndex].notes = notes;
-        }
-    }
-}
-
-bool OpenTuneAudioProcessor::setClipNotesById(int trackId, uint64_t clipId, const std::vector<Note>& notes) {
-    if (trackId >= 0 && trackId < MAX_TRACKS) {
-        const juce::ScopedWriteLock tracksWriteLock(tracksLock_);
-        auto& clips = tracks_[trackId].clips;
-        for (auto& clip : clips) {
-            if (clip.clipId == clipId) {
-                clip.notes = notes;
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-SilentGapDetector::DetectionConfig OpenTuneAudioProcessor::getSilentGapDetectionConfig() const {
-    return SilentGapDetector::getConfig();
-}
-
-void OpenTuneAudioProcessor::setSilentGapDetectionConfig(const SilentGapDetector::DetectionConfig& config) {
-    SilentGapDetector::setConfig(config);
-}
-
-void OpenTuneAudioProcessor::resampleDrySignal(TrackState::AudioClip& clip, double deviceSampleRate)
+OriginalF0State OpenTuneAudioProcessor::getMaterializationOriginalF0StateById(uint64_t materializationId) const
 {
-    // audioBuffer is fixed at 44100Hz (kRenderSampleRate)
-    // drySignalBuffer_ is pre-resampled to device rate for playback
-    constexpr double kStoredAudioSampleRate = TimeCoordinate::kRenderSampleRate; // 44100.0
-    
-    if (clip.audioBuffer->getNumSamples() <= 0) {
-        clip.drySignalBuffer_.setSize(0, 0);
-        return;
-    }
-    
-    // If device rate matches stored rate, just copy
-        if (std::abs(kStoredAudioSampleRate - deviceSampleRate) < 1.0) {
-        clip.drySignalBuffer_.makeCopyOf(*clip.audioBuffer);
-        return;
-    }
-    
-    // Resample from 44100Hz to device rate
-    const int numChannels = clip.audioBuffer->getNumChannels();
-    const int srcSamples = clip.audioBuffer->getNumSamples();
-    const double sourceDurationSeconds = TimeCoordinate::samplesToSeconds(srcSamples, kStoredAudioSampleRate);
-    const int newLen = juce::jmax(
-        1,
-        static_cast<int>(TimeCoordinate::secondsToSamples(sourceDurationSeconds, deviceSampleRate)));
-    
-    clip.drySignalBuffer_.setSize(numChannels, newLen, false, true, true);
-    
-    for (int ch = 0; ch < numChannels; ++ch) {
-        auto resampled = resamplingManager_->upsampleForHost(
-            clip.audioBuffer->getReadPointer(ch),
-            srcSamples,
-            static_cast<int>(kStoredAudioSampleRate),
-            static_cast<int>(deviceSampleRate)
-        );
-        const int toCopy = juce::jmin(newLen, static_cast<int>(resampled.size()));
-        clip.drySignalBuffer_.copyFrom(ch, 0, resampled.data(), toCopy);
-    }
+    jassert(materializationStore_ != nullptr);
+    return materializationId != 0
+        ? materializationStore_->getOriginalF0State(materializationId)
+        : OriginalF0State::NotRequested;
 }
 
-void OpenTuneAudioProcessor::enqueuePartialRender(int trackId,
-                                                  int clipIndex,
-                                                  double relStartSeconds,
-                                                  double relEndSeconds)
+bool OpenTuneAudioProcessor::setMaterializationOriginalF0StateById(uint64_t materializationId, OriginalF0State state)
 {
-    AppLogger::log("RenderTrace: enqueuePartialRender called track=" + juce::String(trackId)
-        + " clip=" + juce::String(clipIndex)
-        + " range=[" + juce::String(relStartSeconds, 3) + "," + juce::String(relEndSeconds, 3) + "]");
+    jassert(materializationStore_ != nullptr);
+    return materializationId != 0 && materializationStore_->setOriginalF0State(materializationId, state);
+}
 
-    if (trackId < 0 || trackId >= MAX_TRACKS || clipIndex < 0) {
-        AppLogger::log("RenderTrace: enqueuePartialRender early-return invalid track/clip");
-        return;
-    }
+DetectedKey OpenTuneAudioProcessor::getMaterializationDetectedKeyById(uint64_t materializationId) const
+{
+    jassert(materializationStore_ != nullptr);
+    return materializationId != 0 ? materializationStore_->getDetectedKey(materializationId) : DetectedKey{};
+}
 
-    if (relEndSeconds <= relStartSeconds) {
-        AppLogger::log("RenderTrace: enqueuePartialRender early-return invalid range");
-        return;
+bool OpenTuneAudioProcessor::setMaterializationDetectedKeyById(uint64_t materializationId, const DetectedKey& key)
+{
+    jassert(materializationStore_ != nullptr);
+    return materializationId != 0 && materializationStore_->setDetectedKey(materializationId, key);
+}
+
+std::shared_ptr<RenderCache> OpenTuneAudioProcessor::getMaterializationRenderCacheById(uint64_t materializationId) const
+{
+    if (materializationId == 0) {
+        return nullptr;
     }
 
     std::shared_ptr<RenderCache> renderCache;
-    std::vector<double> chunkBoundaries;
-    {
-        const juce::ScopedReadLock rl(tracksLock_);
-        const auto& clips = tracks_[(size_t)trackId].clips;
-        if (clipIndex >= static_cast<int>(clips.size())) {
-            return;
-        }
-
-        const auto& clip = clips[(size_t)clipIndex];
-        renderCache = clip.renderCache;
-
-        chunkBoundaries = buildChunkBoundariesFromSilentGaps(
-            clip.audioBuffer->getNumSamples(),
-            clip.silentGaps);
-    }
-
-    if (!renderCache) {
-        return;
-    }
-
-    // 对每个受影响的 Chunk 请求渲染
-    // - 若 Chunk 处于 Idle：状态变为 Pending，加入 pendingChunks_ 集合
-    // - 若 Chunk 处于 Pending/Running：只更新 desiredRevision（版本去重）
-    int requestedCount = 0;
-    if (chunkBoundaries.size() < 2) {
-        renderCache->requestRenderPending(relStartSeconds, relEndSeconds);
-        requestedCount = 1;
-    } else {
-        for (size_t i = 0; i + 1 < chunkBoundaries.size(); ++i) {
-            const double chunkStartSec = chunkBoundaries[i];
-            const double chunkEndSec = chunkBoundaries[i + 1];
-
-            const double overlapStart = std::max(relStartSeconds, chunkStartSec);
-            const double overlapEnd = std::min(relEndSeconds, chunkEndSec);
-
-            if (overlapEnd > overlapStart) {
-                renderCache->requestRenderPending(chunkStartSec, chunkEndSec);
-                ++requestedCount;
-            }
-        }
-    }
-
-    AppLogger::log("RenderTrace: enqueuePartialRender requested=" + juce::String(requestedCount)
-        + " pendingTotal=" + juce::String(renderCache->getPendingCount()));
-
-    // 唤醒 Worker
-    schedulerCv_.notify_one();
+    jassert(materializationStore_ != nullptr);
+    return materializationStore_->getRenderCache(materializationId, renderCache) ? renderCache : nullptr;
 }
 
-bool OpenTuneAudioProcessor::hasPendingRenderJobs() const
+std::vector<Note> OpenTuneAudioProcessor::getMaterializationNotesById(uint64_t materializationId) const
 {
-    const juce::ScopedReadLock rl(tracksLock_);
-    for (int t = 0; t < MAX_TRACKS; ++t) {
-        for (const auto& clip : tracks_[t].clips) {
-            if (clip.renderCache && clip.renderCache->getPendingCount() > 0) {
-                return true;
-            }
+    jassert(materializationStore_ != nullptr);
+    return materializationId != 0 ? materializationStore_->getNotes(materializationId) : std::vector<Note>{};
+}
+
+OpenTuneAudioProcessor::MaterializationNotesSnapshot OpenTuneAudioProcessor::getMaterializationNotesSnapshotById(uint64_t materializationId) const
+{
+    MaterializationNotesSnapshot snapshot;
+    jassert(materializationStore_ != nullptr);
+    if (materializationId == 0) {
+        return snapshot;
+    }
+
+    materializationStore_->getNotesSnapshot(materializationId, snapshot);
+    return snapshot;
+}
+
+bool OpenTuneAudioProcessor::setMaterializationNotesById(uint64_t materializationId, const std::vector<Note>& notes)
+{
+    jassert(materializationStore_ != nullptr);
+    return materializationId != 0 && materializationStore_->setNotes(materializationId, normalizeStoredNotes(notes));
+}
+
+bool OpenTuneAudioProcessor::setMaterializationCorrectedSegmentsById(uint64_t materializationId,
+                                                              const std::vector<CorrectedSegment>& segments)
+{
+    if (materializationId == 0) {
+        return false;
+    }
+
+    std::shared_ptr<PitchCurve> pitchCurve;
+    jassert(materializationStore_ != nullptr);
+    if (!materializationStore_->getPitchCurve(materializationId, pitchCurve) || pitchCurve == nullptr) {
+        return false;
+    }
+
+    auto committedCurve = clonePitchCurveWithCorrectedSegments(pitchCurve, segments);
+    return committedCurve != nullptr && materializationStore_->setPitchCurve(materializationId, std::move(committedCurve));
+}
+
+bool OpenTuneAudioProcessor::commitMaterializationNotesAndSegmentsById(uint64_t materializationId,
+                                                                const std::vector<Note>& notes,
+                                                                const std::vector<CorrectedSegment>& segments)
+{
+    if (materializationId == 0) {
+        return false;
+    }
+
+    const auto normalizedNotes = normalizeStoredNotes(notes);
+    std::shared_ptr<PitchCurve> pitchCurve;
+    jassert(materializationStore_ != nullptr);
+    if (!materializationStore_->getPitchCurve(materializationId, pitchCurve) || pitchCurve == nullptr) {
+        return false;
+    }
+
+    auto committedCurve = clonePitchCurveWithCorrectedSegments(pitchCurve, segments);
+    return committedCurve != nullptr
+        && materializationStore_->commitNotesAndPitchCurve(materializationId,
+                                                           normalizedNotes,
+                                                           std::move(committedCurve));
+}
+
+bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByMaterializationId(uint64_t materializationId,
+                                                                       const std::vector<Note>& generatedNotes,
+                                                                       int startFrame,
+                                                                       int endFrameExclusive,
+                                                                      float retuneSpeed,
+                                                                      float vibratoDepth,
+                                                                      float vibratoRate,
+                                                                      double audioSampleRate)
+{
+    AppLogger::log("AutoTune: commitAutoTuneGenerated entry matId=" + juce::String(static_cast<juce::int64>(materializationId))
+        + " notes=" + juce::String(static_cast<int>(generatedNotes.size()))
+        + " range=[" + juce::String(startFrame) + "," + juce::String(endFrameExclusive) + ")");
+
+    if (materializationId == 0 || endFrameExclusive <= startFrame) {
+        return false;
+    }
+
+    const auto normalizedNotes = normalizeStoredNotes(generatedNotes);
+    if (normalizedNotes.empty()) {
+        AppLogger::log("AutoTune: commitAutoTuneGenerated abort - normalizedNotes empty");
+        return false;
+    }
+
+    std::shared_ptr<PitchCurve> sharedCurve;
+    jassert(materializationStore_ != nullptr);
+    if (!materializationStore_->getPitchCurve(materializationId, sharedCurve) || sharedCurve == nullptr) {
+        AppLogger::log("AutoTune: commitAutoTuneGenerated abort - no pitchCurve in store");
+        return false;
+    }
+
+    AppLogger::log("AutoTune: cloning curve and applying correction");
+    auto derivedCurve = sharedCurve->clone();
+    derivedCurve->applyCorrectionToRange(normalizedNotes,
+                                         startFrame,
+                                         endFrameExclusive,
+                                         retuneSpeed,
+                                         vibratoDepth,
+                                         vibratoRate,
+                                         audioSampleRate);
+    AppLogger::log("AutoTune: applyCorrectionToRange completed");
+
+    // Range-aware merge: retain existing notes outside the selection range
+    const double secondsPerFrame = static_cast<double>(sharedCurve->getHopSize()) / sharedCurve->getSampleRate();
+    const double rangeStartTime = static_cast<double>(startFrame) * secondsPerFrame;
+    const double rangeEndTime = static_cast<double>(endFrameExclusive) * secondsPerFrame;
+
+    auto existingSnapshot = getMaterializationNotesSnapshotById(materializationId);
+
+    std::vector<Note> mergedNotes;
+    mergedNotes.reserve(existingSnapshot.notes.size() + normalizedNotes.size());
+
+    for (const auto& note : existingSnapshot.notes) {
+        if (note.endTime <= rangeStartTime || note.startTime >= rangeEndTime) {
+            mergedNotes.push_back(note);
         }
     }
-    return false;
+
+    for (const auto& note : normalizedNotes) {
+        mergedNotes.push_back(note);
+    }
+
+    std::sort(mergedNotes.begin(), mergedNotes.end(),
+        [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
+
+    if (getMaterializationPitchCurveById(materializationId) != sharedCurve) {
+        AppLogger::log("AutoTune: commitAutoTuneGenerated abort - curve replaced during correction (TOCTOU)");
+        return false;
+    }
+
+    AppLogger::log("AutoTune: committing notes and curve to store");
+    bool result = materializationStore_->commitNotesAndPitchCurve(materializationId,
+                                                                    mergedNotes,
+                                                                    std::move(derivedCurve));
+    AppLogger::log("AutoTune: commitNotesAndPitchCurve result=" + juce::String(result ? "true" : "false"));
+    return result;
 }
+
+bool OpenTuneAudioProcessor::enqueueMaterializationPartialRenderById(uint64_t materializationId,
+                                                        double relStartSeconds,
+                                                        double relEndSeconds)
+{
+    AppLogger::log("AutoTune: enqueueMaterializationPartialRender matId=" + juce::String(static_cast<juce::int64>(materializationId))
+        + " range=[" + juce::String(relStartSeconds, 3) + "s," + juce::String(relEndSeconds, 3) + "s]");
+
+    if (materializationId == 0 || relEndSeconds <= relStartSeconds) {
+        return false;
+    }
+    jassert(materializationStore_ != nullptr);
+
+    int hopSize = 512;
+    if (vocoderDomain_) {
+        const int currentHopSize = vocoderDomain_->getVocoderHopSize();
+        if (currentHopSize > 0) {
+            hopSize = currentHopSize;
+        }
+    }
+
+    const bool requested = materializationStore_->enqueuePartialRender(materializationId, relStartSeconds, relEndSeconds, hopSize);
+    if (!requested) {
+        return false;
+    }
+
+    ensureChunkRenderWorkerStarted();
+    schedulerCv_.notify_one();
+    return true;
+}
+
+
+// ============================================================================
+// 分块渲染工作线程
+// ============================================================================
 
 void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
 {
-    AppLogger::log("RenderTrace: chunkRenderWorkerLoop started");
-
-    constexpr double kHopDuration = 512.0 / RenderCache::kSampleRate;
+    AppLogger::log("RenderWorker: chunkRenderWorkerLoop started");
 
     struct WorkerRenderJob {
-        std::shared_ptr<RenderCache> cache;
-        int trackId{0};
-        uint64_t clipId{0};
-        double startSeconds{0.0};
-        double endSeconds{0.0};
-        uint64_t targetRevision{0};
+        MaterializationStore::PendingRenderJob coreJob;
+        FrozenRenderBoundaries boundaries;
     };
+
+    // 复用 scratch buffer，避免每 chunk 重新堆分配
+    std::vector<float> monoAudio;
+    std::vector<float> sourceF0;
+    std::vector<float> correctedF0;
 
     while (true) {
         // 1. 找 Pending Chunk
@@ -2513,40 +3522,28 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
 
         {
             std::unique_lock<std::mutex> lock(schedulerMutex_);
-            schedulerCv_.wait(lock, [this]() {
+            schedulerCv_.wait_for(lock, std::chrono::seconds(10), [this]() {
                 return !chunkRenderWorkerRunning_.load(std::memory_order_acquire)
-                    || hasPendingRenderJobs();
+                    || (chunkRenderJobsInFlight_.load(std::memory_order_acquire) == 0
+                        && materializationStore_ != nullptr && materializationStore_->hasPendingRenderJobs());
             });
 
+            // 空闲时检查是否需要释放 F0 模型
+            if (f0Service_) {
+                f0Service_->releaseIdleModelIfNeeded();
+            }
+
             if (!chunkRenderWorkerRunning_) {
-                AppLogger::log("RenderTrace: chunkRenderWorkerLoop exiting");
                 return;
             }
 
-            // 遍历所有 Track/Clip，找 Pending Chunk
-            const juce::ScopedReadLock rl(tracksLock_);
-            for (int t = 0; t < MAX_TRACKS; ++t) {
-                for (auto& clip : tracks_[t].clips) {
-                    if (!clip.renderCache) continue;
-
-                    RenderCache::PendingJob pendingJob;
-                    if (clip.renderCache->getNextPendingJob(pendingJob)) {
-                        job = std::make_shared<WorkerRenderJob>();
-                        job->trackId = t;
-                        job->clipId = clip.clipId;
-                        job->startSeconds = pendingJob.startSeconds;
-                        job->endSeconds = pendingJob.endSeconds;
-                        job->targetRevision = pendingJob.targetRevision;
-                        job->cache = clip.renderCache;
-
-                        AppLogger::log("RenderTrace: chunkRenderWorkerLoop pulled track=" + juce::String(t)
-                            + " clipId=" + juce::String(static_cast<juce::int64>(clip.clipId))
-                            + " start=" + juce::String(pendingJob.startSeconds, 3)
-                            + " revision=" + juce::String(static_cast<juce::int64>(pendingJob.targetRevision)));
-                        break;
-                    }
+            // 从 materialization store render queue 拉取下一个 pending chunk
+            if (materializationStore_ != nullptr) {
+                MaterializationStore::PendingRenderJob pendingJob;
+                if (materializationStore_->pullNextPendingRenderJob(pendingJob)) {
+                    job = std::make_shared<WorkerRenderJob>();
+                    job->coreJob = std::move(pendingJob);
                 }
-                if (job) break;
             }
 
         }
@@ -2556,82 +3553,67 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
             continue;
         }
 
-        const double relChunkStartSec = job->startSeconds;
-        const double relChunkEndSec = job->endSeconds;
-        const double lengthSeconds = relChunkEndSec - relChunkStartSec;
+        const double relChunkStartSec = job->coreJob.startSeconds;
+        auto& boundaries = job->boundaries;
 
         // 2. 准备渲染数据（读取 Clip 中的音频和 PitchCurve）
-        std::shared_ptr<PitchCurve> pitchCurve;
-        std::vector<float> monoAudio;
+        const auto& coreJob = job->coreJob;
+        std::shared_ptr<PitchCurve> pitchCurve = coreJob.pitchCurve;
         int numFrames = 0;
-        int64_t targetSamples = 0;
         bool clipFound = false;
+        bool boundariesFrozen = false;
 
-        {
-            const juce::ScopedReadLock rl(tracksLock_);
-            if (job->trackId >= 0 && job->trackId < MAX_TRACKS) {
-                const auto& clips = tracks_[(size_t)job->trackId].clips;
-                for (const auto& clip : clips) {
-                    if (clip.clipId == job->clipId) {
-                        pitchCurve = clip.pitchCurve;
+        if (coreJob.audioBuffer != nullptr) {
+            const int audioNumSamples = coreJob.audioBuffer->getNumSamples();
+            const int audioNumChannels = coreJob.audioBuffer->getNumChannels();
+            int workerHopSize = 512;
+            if (vocoderDomain_) {
+                const int currentHopSize = vocoderDomain_->getVocoderHopSize();
+                if (currentHopSize > 0) {
+                    workerHopSize = currentHopSize;
+                }
+            }
 
-                        if (lengthSeconds <= 0.0) {
-                            break;
+            MaterializationSampleRange materializationRange{0, audioNumSamples};
+            if (freezeRenderBoundaries(materializationRange,
+                                       coreJob.startSample,
+                                       coreJob.endSampleExclusive,
+                                       workerHopSize,
+                                       boundaries)) {
+                boundariesFrozen = true;
+
+                if (audioNumChannels > 0) {
+                    numFrames = boundaries.frameCount;
+                    monoAudio.resize(static_cast<size_t>(boundaries.synthSampleCount), 0.0f);
+                    for (int64_t i = 0; i < boundaries.publishSampleCount; ++i) {
+                        float sum = 0.0f;
+                        for (int ch = 0; ch < audioNumChannels; ++ch) {
+                            const float* channelData = coreJob.audioBuffer->getReadPointer(ch);
+                            sum += channelData[static_cast<int>(boundaries.trueStartSample + i)];
                         }
-
-                        const int audioNumSamples = clip.audioBuffer->getNumSamples();
-                        const int audioNumChannels = clip.audioBuffer->getNumChannels();
-
-                        const int64_t startSample = TimeCoordinate::secondsToSamples(relChunkStartSec, RenderCache::kSampleRate);
-                        const int64_t endSample = TimeCoordinate::secondsToSamples(relChunkEndSec, RenderCache::kSampleRate);
-                        const int64_t clampedStart = std::max<int64_t>(0, startSample);
-                        const int64_t clampedEnd = std::min<int64_t>(audioNumSamples, endSample);
-                        const int64_t audioLen = clampedEnd - clampedStart;
-
-                        if (audioLen > 0 && audioNumChannels > 0) {
-                            numFrames = static_cast<int>((audioLen + 512 - 1) / 512);
-                            if (numFrames < 1) numFrames = 1;
-
-                            monoAudio.resize(static_cast<size_t>(audioLen));
-                            targetSamples = audioLen;
-                            for (int64_t i = 0; i < audioLen; ++i) {
-                                float sum = 0.0f;
-                                for (int ch = 0; ch < audioNumChannels; ++ch) {
-                                    const float* chData = clip.audioBuffer->getReadPointer(ch);
-                                    sum += chData[static_cast<int>(clampedStart + i)];
-                                }
-                                monoAudio[static_cast<size_t>(i)] = sum / static_cast<float>(audioNumChannels);
-                            }
-                            clipFound = true;
-                        }
-                        break;
+                        monoAudio[static_cast<size_t>(i)] = sum / static_cast<float>(audioNumChannels);
                     }
+                    clipFound = true;
                 }
             }
         }
 
-        if (!clipFound || !pitchCurve || monoAudio.empty() || numFrames <= 0 || targetSamples <= 0) {
-            AppLogger::log("RenderTrace: TerminalFailure: missing_audio_data"
-                " clipFound=" + juce::String(clipFound ? 1 : 0)
-                + " pitchCurve=" + juce::String(pitchCurve ? 1 : 0)
-                + " monoAudio.empty=" + juce::String(monoAudio.empty() ? 1 : 0)
-                + " numFrames=" + juce::String(numFrames)
-                + " targetSamples=" + juce::String(static_cast<juce::int64>(targetSamples))
-                + " start=" + juce::String(relChunkStartSec, 3)
-                + " revision=" + juce::String(static_cast<juce::int64>(job->targetRevision)));
-
-            job->cache->completeChunkRender(relChunkStartSec, job->targetRevision,
+        if (!clipFound || !pitchCurve || monoAudio.empty() || numFrames <= 0 || !boundariesFrozen) {
+            coreJob.renderCache->completeChunkRender(relChunkStartSec, coreJob.targetRevision,
                 RenderCache::CompletionResult::TerminalFailure);
             schedulerCv_.notify_one();
             continue;
         }
 
+        const double trueStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
+                                                                         TimeCoordinate::kRenderSampleRate);
+        const double trueEndSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueEndSample,
+                                                                        TimeCoordinate::kRenderSampleRate);
+        const double hopDuration = static_cast<double>(boundaries.hopSize) / RenderCache::kSampleRate;
+
         auto snap = pitchCurve->getSnapshot();
         if (!snap->hasRenderableCorrectedF0()) {
-            AppLogger::log("RenderTrace: Blank: no_renderable_corrected_F0"
-                " start=" + juce::String(relChunkStartSec, 3)
-                + " revision=" + juce::String(static_cast<juce::int64>(job->targetRevision)));
-            job->cache->markChunkAsBlank(relChunkStartSec);
+            coreJob.renderCache->markChunkAsBlank(relChunkStartSec);
             schedulerCv_.notify_one();
             continue;
         }
@@ -2639,12 +3621,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
         const int f0HopSize = snap->getHopSize();
         const double f0SampleRate = snap->getSampleRate();
         if (f0HopSize <= 0 || f0SampleRate <= 0.0) {
-            AppLogger::log("RenderTrace: TerminalFailure: invalid_f0_timebase"
-                " hop=" + juce::String(f0HopSize)
-                + " sampleRate=" + juce::String(f0SampleRate, 3)
-                + " start=" + juce::String(relChunkStartSec, 3)
-                + " revision=" + juce::String(static_cast<juce::int64>(job->targetRevision)));
-            job->cache->completeChunkRender(relChunkStartSec, job->targetRevision,
+            coreJob.renderCache->completeChunkRender(relChunkStartSec, coreJob.targetRevision,
                 RenderCache::CompletionResult::TerminalFailure);
             schedulerCv_.notify_one();
             continue;
@@ -2653,11 +3630,11 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
         const double f0FrameRate = f0SampleRate / static_cast<double>(f0HopSize);
 
         // 3. 构造 F0 数据
-        const int f0StartFrame = static_cast<int>(std::floor(relChunkStartSec * f0FrameRate));
-        const int f0EndFrame = static_cast<int>(std::ceil(relChunkEndSec * f0FrameRate)) + 1;
+        const int f0StartFrame = static_cast<int>(std::floor(trueStartSeconds * f0FrameRate));
+        const int f0EndFrame = static_cast<int>(std::ceil(trueEndSeconds * f0FrameRate)) + 1;
         const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
 
-        std::vector<float> sourceF0(static_cast<size_t>(numF0Frames), 0.0f);
+        sourceF0.assign(static_cast<size_t>(numF0Frames), 0.0f);
         snap->renderF0Range(f0StartFrame, f0EndFrame,
             [&sourceF0, f0StartFrame](int frameIndex, const float* data, int length) {
                 if (!data || length <= 0) return;
@@ -2678,19 +3655,14 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
         }
 
         if (!hasValidF0) {
-            AppLogger::log("RenderTrace: Blank: no_valid_F0"
-                " start=" + juce::String(relChunkStartSec, 3)
-                + " revision=" + juce::String(static_cast<juce::int64>(job->targetRevision)));
-            job->cache->markChunkAsBlank(relChunkStartSec);
+            coreJob.renderCache->markChunkAsBlank(relChunkStartSec);
             schedulerCv_.notify_one();
             continue;
         }
 
         if (!ensureVocoderReady()) {
-            AppLogger::log("RenderTrace: TerminalFailure: vocoder_not_ready"
-                " start=" + juce::String(relChunkStartSec, 3)
-                + " revision=" + juce::String(static_cast<juce::int64>(job->targetRevision)));
-            job->cache->completeChunkRender(relChunkStartSec, job->targetRevision,
+            AppLogger::log("RenderWorker: ensureVocoderReady FAILED");
+            coreJob.renderCache->completeChunkRender(relChunkStartSec, coreJob.targetRevision,
                 RenderCache::CompletionResult::TerminalFailure);
             schedulerCv_.notify_one();
             continue;
@@ -2703,12 +3675,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
 
         auto melResult = computeLogMelSpectrogram(monoAudio.data(), static_cast<int>(monoAudio.size()), numFrames, melConfig);
         if (!melResult.ok() || melResult.value().empty()) {
-            AppLogger::log("RenderTrace: TerminalFailure: mel_computation_failed"
-                " mel.ok=" + juce::String(melResult.ok() ? 1 : 0)
-                + " mel.empty=" + juce::String(!melResult.ok() ? -1 : (melResult.value().empty() ? 1 : 0))
-                + " start=" + juce::String(relChunkStartSec, 3)
-                + " revision=" + juce::String(static_cast<juce::int64>(job->targetRevision)));
-            job->cache->completeChunkRender(relChunkStartSec, job->targetRevision,
+            coreJob.renderCache->completeChunkRender(relChunkStartSec, coreJob.targetRevision,
                 RenderCache::CompletionResult::TerminalFailure);
             schedulerCv_.notify_one();
             continue;
@@ -2718,9 +3685,9 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
         const int actualFrames = static_cast<int>(mel.size() / melConfig.nMels);
 
         // 5. F0-to-Mel 插值
-        std::vector<float> correctedF0(static_cast<size_t>(actualFrames), 0.0f);
+        correctedF0.assign(static_cast<size_t>(actualFrames), 0.0f);
         for (int i = 0; i < actualFrames; ++i) {
-            const double melTimeSec = relChunkStartSec + i * kHopDuration;
+            const double melTimeSec = trueStartSeconds + i * hopDuration;
             const double srcPos = melTimeSec * f0FrameRate - static_cast<double>(f0StartFrame);
             if (srcPos < 0.0) continue;
 
@@ -2741,82 +3708,168 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
             }
         }
 
-        fillF0GapsForVocoder(correctedF0, snap, relChunkStartSec, relChunkEndSec, kHopDuration, f0FrameRate);
+        const bool allowTrailingExtension = !(boundaries.synthSampleCount > boundaries.publishSampleCount);
+        OpenTune::fillF0GapsForVocoder(correctedF0,
+                                       snap,
+                                       trueStartSeconds,
+                                       trueEndSeconds,
+                                       hopDuration,
+                                       f0FrameRate,
+                                       allowTrailingExtension);
 
         // 6. 提交执行
         VocoderDomain::Job vocoderJob;
+        vocoderJob.chunkKey = (coreJob.materializationId << 32) | static_cast<uint64_t>(static_cast<uint32_t>(coreJob.startSample));
         vocoderJob.f0 = std::move(correctedF0);
-        vocoderJob.energy.resize(vocoderJob.f0.size(), 1.0f);
         vocoderJob.mel = std::move(mel);
 
-        auto renderCache = job->cache;
-        auto targetRevision = job->targetRevision;
-        double jobStartSeconds = job->startSeconds;
+        auto renderCache = coreJob.renderCache;
+        auto targetRevision = coreJob.targetRevision;
+        double jobStartSeconds = TimeCoordinate::samplesToSeconds(job->boundaries.trueStartSample,
+                                                                  TimeCoordinate::kRenderSampleRate);
+        const FrozenRenderBoundaries frozenBoundaries = job->boundaries;
 
-        vocoderJob.onComplete = [this, renderCache, targetRevision, jobStartSeconds](bool success, const juce::String& error, const std::vector<float>& audio) {
-            if (success && !audio.empty()) {
-                const double chunkEndSeconds = jobStartSeconds + static_cast<double>(audio.size()) / RenderCache::kSampleRate;
-                std::vector<float> renderedAudio(audio.begin(), audio.end());
-                const bool baseChunkStored = renderCache->addChunk(
-                    jobStartSeconds,
-                    chunkEndSeconds,
-                    std::move(renderedAudio),
-                    targetRevision);
+        chunkRenderJobsInFlight_.fetch_add(1, std::memory_order_acq_rel);
 
-                const int renderSampleRate = static_cast<int>(RenderCache::kSampleRate);
-                const int deviceSampleRate = static_cast<int>(std::lround(currentSampleRate_.load(std::memory_order_relaxed)));
-                if (baseChunkStored && resamplingManager_ && deviceSampleRate > 0 && deviceSampleRate != renderSampleRate) {
-                    auto resampledAudio = resamplingManager_->upsampleForHost(
-                        audio.data(),
-                        audio.size(),
-                        renderSampleRate,
-                        deviceSampleRate);
-                    if (!resampledAudio.empty()) {
-                        const bool resampledStored = renderCache->addResampledChunk(
-                            jobStartSeconds,
-                            chunkEndSeconds,
-                            deviceSampleRate,
-                            std::move(resampledAudio),
-                            targetRevision);
-                        if (!resampledStored) {
-                            AppLogger::log("RenderTrace: addResampledChunk skipped start="
-                                + juce::String(jobStartSeconds, 3)
-                                + " revision=" + juce::String(static_cast<juce::int64>(targetRevision))
-                                + " sampleRate=" + juce::String(deviceSampleRate));
-                        }
-                    }
+        vocoderJob.onComplete = [this, renderCache, targetRevision, jobStartSeconds, frozenBoundaries](bool success, const juce::String& error, const std::vector<float>& audio) {
+            chunkRenderJobsInFlight_.fetch_sub(1, std::memory_order_acq_rel);
+            const auto& boundaries = frozenBoundaries;
+
+            if (success) {
+                std::vector<float> publishedAudio;
+                if (!preparePublishedAudioFromSynthesis(boundaries, audio, publishedAudio)) {
+                    renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
+                    schedulerCv_.notify_one();
+                    return;
                 }
 
+                renderCache->addChunk(
+                    boundaries.trueStartSample,
+                    boundaries.trueEndSample,
+                    std::move(publishedAudio),
+                    targetRevision);
+
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::Succeeded);
-                AppLogger::log("RenderTrace: chunkRenderWorkerLoop complete start="
-                    + juce::String(jobStartSeconds, 3)
-                    + " revision=" + juce::String(static_cast<juce::int64>(targetRevision)));
             } else {
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                AppLogger::log("RenderTrace: chunkRenderWorkerLoop failed start="
-                    + juce::String(jobStartSeconds, 3)
-                    + " error=" + error);
             }
             schedulerCv_.notify_one();
         };
 
         vocoderDomain_->submit(std::move(vocoderJob));
-        AppLogger::log("RenderTrace: chunkRenderWorkerLoop submitted start=" + juce::String(relChunkStartSec, 3));
     }
 }
 
-void OpenTuneAudioProcessor::performUndo() {
-    if (globalUndoManager_.canUndo()) {
-        DBG("Global Undo: " + globalUndoManager_.getUndoDescription());
-        globalUndoManager_.undo();
-    }
-}
+// ============================================================================
+// Unified Playback Read API
+// ============================================================================
 
-void OpenTuneAudioProcessor::performRedo() {
-    if (globalUndoManager_.canRedo()) {
-        DBG("Global Redo: " + globalUndoManager_.getRedoDescription());
-        globalUndoManager_.redo();
+int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request,
+                                              juce::AudioBuffer<float>& destination,
+                                              int destinationStartSample,
+                                              CrossoverMixer* mixer) const
+{
+    if (request.numSamples <= 0
+        || request.targetSampleRate <= 0.0
+        || !request.source.canRead()
+        || request.source.audioBuffer == nullptr) {
+        return 0;
     }
+
+    const int destinationChannels = destination.getNumChannels();
+    const int destinationSamples = destination.getNumSamples();
+    if (destinationChannels <= 0
+        || destinationSamples <= 0
+        || destinationStartSample < 0
+        || destinationStartSample >= destinationSamples) {
+        return 0;
+    }
+
+    const int writableSamples = juce::jmin(request.numSamples, destinationSamples - destinationStartSample);
+    if (writableSamples <= 0) {
+        return 0;
+    }
+
+    const auto& srcBuffer = *request.source.audioBuffer;
+    const int srcChannels = srcBuffer.getNumChannels();
+    const int64_t srcLengthSamples = srcBuffer.getNumSamples();
+    constexpr double srcSampleRate = TimeCoordinate::kRenderSampleRate;
+    if (srcChannels <= 0 || srcLengthSamples <= 0) {
+        return 0;
+    }
+
+    const double ratio = srcSampleRate / request.targetSampleRate;
+    const double readStartInSrcSamples = request.readStartSeconds * srcSampleRate;
+    if (readStartInSrcSamples < 0.0 || readStartInSrcSamples >= static_cast<double>(srcLengthSamples)) {
+        return 0;
+    }
+
+    // Compute available output samples
+    const int maxSrcSample = static_cast<int>(srcLengthSamples) - 1;
+    int availableSamples = writableSamples;
+    {
+        const double lastSrcPos = readStartInSrcSamples + (writableSamples - 1) * ratio;
+        if (lastSrcPos >= static_cast<double>(srcLengthSamples)) {
+            availableSamples = static_cast<int>((static_cast<double>(srcLengthSamples) - readStartInSrcSamples) / ratio);
+            if (availableSamples <= 0) return 0;
+        }
+    }
+
+    // Write dry signal with linear interpolation (single pass, pointer-based)
+    for (int channel = 0; channel < destinationChannels; ++channel) {
+        const int srcCh = channel % srcChannels;
+        const float* srcPtr = srcBuffer.getReadPointer(srcCh);
+        float* dstPtr = destination.getWritePointer(channel, destinationStartSample);
+
+        double srcPos = readStartInSrcSamples;
+        for (int s = 0; s < availableSamples; ++s) {
+            const int idx0 = static_cast<int>(srcPos);
+            const int idx1 = juce::jmin(idx0 + 1, maxSrcSample);
+            const float fraction = static_cast<float>(srcPos - idx0);
+            dstPtr[s] = srcPtr[idx0] + (srcPtr[idx1] - srcPtr[idx0]) * fraction;
+            srcPos += ratio;
+        }
+    }
+
+    // Overlay rendered audio from cache
+    if (request.source.renderCache != nullptr) {
+        const bool hasCrossover = (mixer != nullptr);
+
+        // When crossover is needed, save dry signal before overlay overwrites destination.
+        // thread_local vector reuses its allocation across calls (no realtime alloc after warmup).
+        thread_local std::vector<float> dryScratch;
+        if (hasCrossover) {
+            const int totalScratchSamples = destinationChannels * availableSamples;
+            if (static_cast<int>(dryScratch.size()) < totalScratchSamples)
+                dryScratch.resize(static_cast<size_t>(totalScratchSamples));
+
+            for (int ch = 0; ch < destinationChannels; ++ch) {
+                std::memcpy(dryScratch.data() + ch * availableSamples,
+                            destination.getReadPointer(ch, destinationStartSample),
+                            static_cast<size_t>(availableSamples) * sizeof(float));
+            }
+        }
+
+        request.source.renderCache->overlayPublishedAudioForRate(destination,
+                                                                 destinationStartSample,
+                                                                 availableSamples,
+                                                                 request.readStartSeconds,
+                                                                 static_cast<int>(request.targetSampleRate));
+
+        // Crossover mix: HPF(dry) + LPF(rendered)
+        if (hasCrossover) {
+            for (int ch = 0; ch < destinationChannels; ++ch) {
+                const float* dryPtr = dryScratch.data() + ch * availableSamples;
+                float* outPtr = destination.getWritePointer(ch, destinationStartSample);
+
+                for (int s = 0; s < availableSamples; ++s) {
+                    outPtr[s] = mixer->processSample(ch, dryPtr[s], outPtr[s]);
+                }
+            }
+        }
+    }
+
+    return availableSamples;
 }
 
 } // namespace OpenTune

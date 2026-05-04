@@ -3,14 +3,22 @@
 #include <juce_core/juce_core.h>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX 1
+#endif
 #include <Windows.h>
 #include <dxgi.h>
 #include <dxgi1_6.h>
 #pragma comment(lib, "dxgi.lib")
+#include <dml_provider_factory.h>
 #endif
 
 #include <sstream>
 #include <iomanip>
+#include <onnxruntime_cxx_api.h>
 
 namespace OpenTune {
 
@@ -99,145 +107,46 @@ bool AccelerationDetector::enumerateGpuDevices() {
 
 bool AccelerationDetector::detectDirectML() {
 #ifdef _WIN32
-    // 首先枚举 GPU 设备
     if (!enumerateGpuDevices()) {
         AppLogger::warn("[AccelerationDetector] No DirectX 12 compatible GPU found");
         return false;
     }
-    
-    // 检查 DirectML 版本的 ONNX Runtime
-    juce::File exeDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
-    
-    // DirectML 支持有两种架构：
-    // 1. NuGet 包版本：DML provider 内置在 onnxruntime.dll 中（DLL 较大，约 13MB）
-    // 2. 独立 provider 版本：需要 onnxruntime.dll + onnxruntime_providers_dml.dll
-    
-    juce::File onnxDll = exeDir.getChildFile("onnxruntime.dll");
-    if (!onnxDll.existsAsFile()) {
-        AppLogger::warn("[AccelerationDetector] onnxruntime.dll not found in " + exeDir.getFullPathName());
+
+    // 选择最佳 GPU（独显优先，VRAM 降序）— 仅用于日志/UI 和 adapterIndex
+    std::sort(gpuDevices_.begin(), gpuDevices_.end(), [](const GpuDeviceInfo& a, const GpuDeviceInfo& b) {
+        if (a.isIntegrated != b.isIntegrated) return !a.isIntegrated;
+        return a.dedicatedVideoMemory > b.dedicatedVideoMemory;
+    });
+    selectedGpu_ = gpuDevices_[0];
+    dmlAdapterIndex_ = static_cast<int>(selectedGpu_.adapterIndex);
+
+    // 用 ORT API 判断 DML EP 是否编译进当前 onnxruntime.dll
+    Ort::InitApi();
+    auto& api = Ort::GetApi();
+    const OrtDmlApi* dmlApi = nullptr;
+    OrtStatus* status = api.GetExecutionProviderApi(
+        "DML", ORT_API_VERSION, reinterpret_cast<const void**>(&dmlApi));
+
+    if (status != nullptr) {
+        std::string msg = api.GetErrorMessage(status);
+        api.ReleaseStatus(status);
+        AppLogger::warn("[AccelerationDetector] DML EP not available in this ORT build: " + juce::String(msg));
         return false;
     }
-    
-    // 检查 DLL 大小来判断是否为 DirectML 版本
-    // CPU-only 版本约 10MB，DirectML 版本约 13MB
-    const int64_t dmlDllMinSize = 12 * 1024 * 1024; // 12MB
-    int64_t dllSize = onnxDll.getSize();
-    bool isDmlVersion = dllSize >= dmlDllMinSize;
-    
-    // 也检查独立的 DML Provider DLL（如果存在）
-    juce::File dmlProviderDll = exeDir.getChildFile("onnxruntime_providers_dml.dll");
-    bool hasDmlProviderDll = dmlProviderDll.existsAsFile();
-    
-    if (!isDmlVersion && !hasDmlProviderDll) {
-        AppLogger::warn("[AccelerationDetector] onnxruntime.dll appears to be CPU-only version (size: " 
-                  + juce::String((int)(dllSize / 1024 / 1024)) + " MB)");
-        AppLogger::warn("[AccelerationDetector] DML acceleration will NOT work. Using CPU fallback.");
-        AppLogger::warn("[AccelerationDetector] To enable DML, replace onnxruntime.dll with DirectML version (>= 12MB)");
-        dmlProviderDllAvailable_ = false;
-        dmlProviderDllPath_ = "";
+
+    if (dmlApi == nullptr) {
+        AppLogger::warn("[AccelerationDetector] DML EP API pointer is null");
         return false;
     }
-    
-    dmlProviderDllAvailable_ = true;
-    if (hasDmlProviderDll) {
-        dmlProviderDllPath_ = dmlProviderDll.getFullPathName().toStdString();
-        AppLogger::debug("[AccelerationDetector] Found DML Provider DLL: " + juce::String(dmlProviderDllPath_));
-    } else {
-        dmlProviderDllPath_ = onnxDll.getFullPathName().toStdString();
-        AppLogger::debug("[AccelerationDetector] Using DirectML-builtin onnxruntime.dll (size: " 
-                  + juce::String((int)(dllSize / 1024 / 1024)) + " MB)");
-    }
-    
-    // 检查共享库
-    juce::File sharedDll = exeDir.getChildFile("onnxruntime_providers_shared.dll");
-    if (!sharedDll.existsAsFile()) {
-        AppLogger::debug("[AccelerationDetector] Note: onnxruntime_providers_shared.dll not found (may not be needed for builtin DML)");
-    }
-    
-    // 选择最佳 GPU（优先选择独立显卡，然后选择显存最大的）
-    if (!gpuDevices_.empty()) {
-        std::sort(gpuDevices_.begin(), gpuDevices_.end(), [](const GpuDeviceInfo& a, const GpuDeviceInfo& b) {
-            if (a.isIntegrated != b.isIntegrated) {
-                return !a.isIntegrated;
-            }
-            return a.dedicatedVideoMemory > b.dedicatedVideoMemory;
-        });
-        
-        selectedGpu_ = gpuDevices_[0];
-        directMLDeviceId_ = static_cast<int>(selectedGpu_.adapterIndex);
-        
-        // 计算集成显卡的有效显存（考虑共享系统内存）
-        // 集成显卡主要使用共享内存，dedicatedVideoMemory可能很小或为0
-        size_t effectiveVram = selectedGpu_.dedicatedVideoMemory;
-        if (selectedGpu_.isIntegrated) {
-            if (selectedGpu_.dedicatedVideoMemory < 256 * 1024 * 1024) {
-                // 专用显存<256MB：主要依赖共享内存的1/4
-                effectiveVram = selectedGpu_.sharedSystemMemory / 4;
-            } else {
-                // 专用显存>=256MB：专用显存 + 共享内存/8
-                effectiveVram = selectedGpu_.dedicatedVideoMemory + selectedGpu_.sharedSystemMemory / 8;
-            }
-        }
-        
-        // 有效显存小于 512MB 时回退到 CPU
-        // 原因：显存过小会导致 DML 频繁 fallback 到 CPU，反而比纯 CPU 更慢
-        const size_t minVramForDml = 512 * 1024 * 1024; // 512MB
-        if (effectiveVram < minVramForDml) {
-            float effectiveVramMB = static_cast<float>(effectiveVram) / (1024.0f * 1024.0f);
-            AppLogger::warn("[AccelerationDetector] GPU has insufficient effective VRAM: " 
-                      + juce::String((int)effectiveVramMB) + " MB (minimum 512 MB required)");
-            if (selectedGpu_.isIntegrated) {
-                float sharedMB = static_cast<float>(selectedGpu_.sharedSystemMemory) / (1024.0f * 1024.0f);
-                AppLogger::warn("[AccelerationDetector] (Integrated GPU, shared memory: " 
-                          + juce::String((int)sharedMB) + " MB)");
-            }
-            AppLogger::warn("[AccelerationDetector] Falling back to CPU for better performance");
-            dmlProviderDllAvailable_ = false;
-            return false;
-        }
-        
-        // DmlRuntimeVerifier: verify GPU can actually run DirectML inference
-        AppLogger::info("[AccelerationDetector] Probing GPU for DirectML: " + juce::String(selectedGpu_.name)
-            + " (adapterIndex=" + juce::String(static_cast<int>(selectedGpu_.adapterIndex)) + ")");
 
-        const DmlDiagnosticReport report = DmlRuntimeVerifier::verify(selectedGpu_.adapterIndex, selectedGpu_.name);
-        if (!report.ok) {
-            AppLogger::warn("[AccelerationDetector] DirectML runtime verification failed for adapterIndex="
-                + juce::String(static_cast<int>(selectedGpu_.adapterIndex))
-                + " gpu=" + juce::String(selectedGpu_.name));
-            for (const auto& issue : report.issues) {
-                juce::String line = "[AccelerationDetector] stage=" + juce::String(issue.stage)
-                    + " hr=0x" + juce::String::toHexString(static_cast<juce::int64>(static_cast<uint32_t>(issue.hresult))).paddedLeft('0', 8)
-                    + " detail=" + juce::String(issue.detail)
-                    + " remediation=" + juce::String(issue.remediation);
-                AppLogger::warn(line.toStdString());
-            }
-            dmlProviderDllAvailable_ = false;
-            return false;
-        }
+    float vramGB = static_cast<float>(selectedGpu_.dedicatedVideoMemory) / (1024.0f * 1024.0f * 1024.0f);
+    AppLogger::info("[AccelerationDetector] DML EP available, selected GPU: " + juce::String(selectedGpu_.name)
+        + " (" + juce::String(vramGB, 1) + " GB VRAM, adapterIndex=" 
+        + juce::String(static_cast<int>(selectedGpu_.adapterIndex)) + ")");
 
-        juce::String gpuMsg = "[AccelerationDetector] Selected GPU for DirectML: " + juce::String(selectedGpu_.name);
-        if (selectedGpu_.isIntegrated) {
-            gpuMsg += " [Integrated]";
-        }
-        gpuMsg += " (adapterIndex=" + juce::String(static_cast<int>(selectedGpu_.adapterIndex)) + ")";
-        AppLogger::info(gpuMsg);
-        
-        AppLogger::info("[AccelerationDetector] DirectML runtime verification passed: Windows build="
-            + juce::String(static_cast<int>(report.windowsBuild))
-            + " DirectML=" + juce::String(report.directMLVersion));
-        
-        size_t recommendedLimit = getRecommendedGpuMemoryLimit();
-        float limitGB = static_cast<float>(recommendedLimit) / (1024.0f * 1024.0f * 1024.0f);
-        AppLogger::debug("[AccelerationDetector] Recommended GPU memory limit: " 
-                  + juce::String(limitGB, 2) + " GB (60% of VRAM)");
-    }
-    
     directMLAvailable_ = true;
-    AppLogger::info("[AccelerationDetector] DirectML available and verified");
     return true;
 #else
-    AppLogger::debug("[AccelerationDetector] DirectML only available on Windows");
     return false;
 #endif
 }
@@ -255,10 +164,29 @@ bool AccelerationDetector::detectCoreML() {
 #endif
 }
 
-void AccelerationDetector::detect() {
+void AccelerationDetector::reset() {
+    detected_ = false;
+    selectedBackend_ = AccelBackend::CPU;
+    directMLAvailable_ = false;
+    coreMLAvailable_ = false;
+    dmlAdapterIndex_ = 0;
+    gpuDevices_.clear();
+    selectedGpu_ = GpuDeviceInfo{};
+    AppLogger::info("[AccelerationDetector] Detection state reset");
+}
+
+void AccelerationDetector::detect(bool forceCpu) {
     if (detected_) return;
     
     AppLogger::debug("[AccelerationDetector] Detecting acceleration capabilities...");
+    
+    if (forceCpu) {
+        selectedBackend_ = AccelBackend::CPU;
+        AppLogger::info("[AccelerationDetector] CPU forced by user preference");
+        detected_ = true;
+        AppLogger::info("[AccelerationDetector] Selected backend: " + juce::String(getBackendName()));
+        return;
+    }
     
 #if defined(__APPLE__)
     if (detectCoreML()) {
@@ -343,43 +271,6 @@ std::string AccelerationDetector::getAccelerationReport() const {
     }
     
     return report.str();
-}
-
-size_t AccelerationDetector::getRecommendedGpuMemoryLimit() const {
-    if (selectedBackend_ != AccelBackend::DirectML) {
-        return 0;
-    }
-    
-    size_t vramBytes = selectedGpu_.dedicatedVideoMemory;
-    size_t sharedBytes = selectedGpu_.sharedSystemMemory;
-    
-    size_t effectiveMemory = vramBytes;
-    
-    if (selectedGpu_.isIntegrated) {
-        if (vramBytes < 256 * 1024 * 1024) {
-            effectiveMemory = sharedBytes / 4;
-        } else {
-            effectiveMemory = vramBytes + sharedBytes / 8;
-        }
-    }
-    
-    if (effectiveMemory == 0) {
-        return 512 * 1024 * 1024;
-    }
-    
-    size_t limit60Percent = static_cast<size_t>(effectiveMemory * 0.6);
-    
-    const size_t minLimit = 512 * 1024 * 1024;
-    const size_t maxLimit = 8ULL * 1024 * 1024 * 1024;
-    
-    if (limit60Percent < minLimit) {
-        return minLimit;
-    }
-    if (limit60Percent > maxLimit) {
-        return maxLimit;
-    }
-    
-    return limit60Percent;
 }
 
 } // namespace OpenTune

@@ -1,4 +1,4 @@
-#include "TransportBarComponent.h"
+﻿#include "TransportBarComponent.h"
 #include "UIColors.h"
 #include "ToolbarIcons.h"
 #include "../../Utils/LocalizationManager.h"
@@ -22,7 +22,7 @@ void DigitalTimeDisplay::setTimeString(const juce::String& time)
 
 void DigitalTimeDisplay::paint(juce::Graphics& g)
 {
-    const auto& style = Theme::getActiveStyle();
+    const auto& style = UIColors::currentThemeStyle();
     auto bounds = getLocalBounds().toFloat().reduced(4.0f);
     const float yOffset = juce::jlimit(0.0f, 2.0f, bounds.getHeight() * 0.03f);
     bounds = bounds.translated(0.0f, yOffset);
@@ -32,7 +32,7 @@ void DigitalTimeDisplay::paint(juce::Graphics& g)
     if (!style.timeSegmentStyle)
     {
         g.setColour(UIColors::textPrimary);
-        // 导航栏字体统一：时间码与其他控件保持同一字号体系
+        // 瀵艰埅鏍忓瓧浣撶粺涓€锛氭椂闂寸爜涓庡叾浠栨帶浠朵繚鎸佸悓涓€瀛楀彿浣撶郴
         g.setFont(UIColors::getMonoFont(UIColors::navMonoFontHeight));
         g.drawFittedText(timeString_, getLocalBounds().reduced(6, 0), juce::Justification::centred, 1, 1.0f);
         return;
@@ -61,13 +61,13 @@ void DigitalTimeDisplay::paint(juce::Graphics& g)
 
 void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::Rectangle<float> area)
 {
-    const auto& style = Theme::getActiveStyle();
+    const auto& style = UIColors::currentThemeStyle();
     if (c == ':')
     {
         const float dotSize = area.getWidth() * 0.55f;
         const float cx = area.getCentreX();
         
-        if (Theme::getActiveTheme() == ThemeId::BlueBreeze)
+        if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
         {
              juce::Colour lightBlueText(0xFF9BB2C4);
              g.setColour(lightBlueText);
@@ -86,7 +86,7 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
     {
         const float dotSize = area.getWidth() * 0.75f;
         
-        if (Theme::getActiveTheme() == ThemeId::BlueBreeze)
+        if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
         {
              juce::Colour lightBlueText(0xFF9BB2C4);
              g.setColour(lightBlueText);
@@ -123,9 +123,9 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
 
 void DigitalTimeDisplay::drawSegment(juce::Graphics& g, int segment, juce::Rectangle<float> area, bool active)
 {
-    const auto& style = Theme::getActiveStyle();
+    const auto& style = UIColors::currentThemeStyle();
     
-    if (Theme::getActiveTheme() == ThemeId::BlueBreeze)
+    if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
     {
         // Light Blue/Grey color (e.g. #9BB2C4 or similar)
         juce::Colour lightBlueText(0xFF9BB2C4);
@@ -179,11 +179,11 @@ double BpmValueField::getValue() const
 
 void BpmValueField::paint(juce::Graphics& g)
 {
-    const auto& style = Theme::getActiveStyle();
-    const auto themeId = Theme::getActiveTheme();
+    const auto& style = UIColors::currentThemeStyle();
+    const auto themeId = UIColors::currentThemeId();
     auto bounds = getLocalBounds().toFloat();
 
-    // 更厚实的输入框质感（深蓝灰主题）
+    // 鏇村帤瀹炵殑杈撳叆妗嗚川鎰燂紙娣辫摑鐏颁富棰橈級
     if (themeId == ThemeId::DarkBlueGrey)
     {
         juce::ColourGradient grad(UIColors::backgroundLight.brighter(0.06f), bounds.getX(), bounds.getY(),
@@ -204,13 +204,12 @@ void BpmValueField::paint(juce::Graphics& g)
     g.setColour(focused ? UIColors::accent : UIColors::panelBorder);
     g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, focused ? style.focusRingThickness : style.strokeThin);
 
-    // 统一导航栏文本字号
     auto font = UIColors::getLabelFont(UIColors::navFontHeight);
     g.setFont(font);
 
-    // 小字放进控件内部：BPM 不再占用按钮左右两边
+    // 灏忓瓧鏀捐繘鎺т欢鍐呴儴锛欱PM 涓嶅啀鍗犵敤鎸夐挳宸﹀彸涓よ竟
     auto content = getLocalBounds().reduced(8, 0);
-    auto prefixArea = content.removeFromLeft(40);  // 缩小宽度，减少右侧空隙
+    auto prefixArea = content.removeFromLeft(40);
     auto valueArea = content;
 
     g.setColour(UIColors::textSecondary.withAlpha(0.85f));
@@ -368,12 +367,6 @@ void UnifiedToolbarButton::setIcon(juce::Path iconPath)
     repaint();
 }
 
-void UnifiedToolbarButton::setToggledIcon(juce::Path iconPath)
-{
-    toggledIconPath_ = iconPath;
-    repaint();
-}
-
 void UnifiedToolbarButton::setConnectedEdges(int edges)
 {
     connectedEdges_ = edges;
@@ -382,8 +375,7 @@ void UnifiedToolbarButton::setConnectedEdges(int edges)
 
 void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {
-    // 统一尺寸和圆角
-    auto bounds = getLocalBounds().toFloat().reduced(2.0f); 
+    auto bounds = getLocalBounds().toFloat().reduced(2.0f);
     float radius = 6.0f; 
     
     // Handle connected edges for corners
@@ -403,15 +395,14 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     bool isActive = isToggled || shouldDrawButtonAsDown;
     bool isHover = shouldDrawButtonAsHighlighted;
 
-    const auto themeId = Theme::getActiveTheme();
+    const auto themeId = UIColors::currentThemeId();
 
-    // 辅助函数：创建带选择性圆角的矩形路径
+    // 杈呭姪鍑芥暟锛氬垱寤哄甫閫夋嫨鎬у渾瑙掔殑鐭╁舰璺緞
     auto createRoundedRectPath = [](juce::Rectangle<float> rect, float r, 
                                     bool tl, bool tr, bool bl, bool br) -> juce::Path {
         juce::Path p;
         float x = rect.getX(), y = rect.getY(), w = rect.getWidth(), h = rect.getHeight();
         
-        // 从左上角开始
         if (tl) {
             p.startNewSubPath(x, y + r);
             p.addArc(x, y, r * 2, r * 2, juce::MathConstants<float>::pi, juce::MathConstants<float>::pi * 1.5f);
@@ -419,7 +410,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             p.startNewSubPath(x, y);
         }
         
-        // 上边到右上角
+        // 涓婅竟鍒板彸涓婅
         if (tr) {
             p.lineTo(x + w - r, y);
             p.addArc(x + w - r * 2, y, r * 2, r * 2, juce::MathConstants<float>::pi * 1.5f, 0);
@@ -427,7 +418,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             p.lineTo(x + w, y);
         }
         
-        // 右边到右下角
+        // 鍙宠竟鍒板彸涓嬭
         if (br) {
             p.lineTo(x + w, y + h - r);
             p.addArc(x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, juce::MathConstants<float>::pi * 0.5f);
@@ -435,7 +426,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             p.lineTo(x + w, y + h);
         }
         
-        // 下边到左下角
+        // 涓嬭竟鍒板乏涓嬭
         if (bl) {
             p.lineTo(x + r, y + h);
             p.addArc(x, y + h - r * 2, r * 2, r * 2, juce::MathConstants<float>::pi * 0.5f, juce::MathConstants<float>::pi);
@@ -443,7 +434,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             p.lineTo(x, y + h);
         }
         
-        // 关闭路径
+        // 鍏抽棴璺緞
         if (tl) {
             p.lineTo(x, y + r);
         } else {
@@ -457,15 +448,12 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     // 1. Background
     if (themeId == ThemeId::BlueBreeze)
     {
-        // 独立按钮使用标准圆角矩形，连接按钮使用选择性圆角
         juce::Path p;
         if (connectedEdges_ == None) {
-            // 独立按钮：标准圆角矩形
             p.addRoundedRectangle(bounds, radius);
         } else {
-            // 连接按钮：选择性圆角
-            p = createRoundedRectPath(bounds, radius, 
-                                      roundTopLeft, roundTopRight, 
+            p = createRoundedRectPath(bounds, radius,
+                                      roundTopLeft, roundTopRight,
                                       roundBottomLeft, roundBottomRight);
         }
 
@@ -518,7 +506,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     // 2. Icon
     juce::Path& path = (isToggled && !toggledIconPath_.isEmpty()) ? toggledIconPath_ : iconPath_;
     
-    // 获取按钮名称，用于判断是否是 Play/Pause/Stop
+    // 鑾峰彇鎸夐挳鍚嶇О锛岀敤浜庡垽鏂槸鍚︽槸 Play/Pause/Stop
     juce::String buttonName = getName();
     bool isTransportButton = (buttonName == "Play" || buttonName == "Pause" || buttonName == "Stop");
     
@@ -535,9 +523,9 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
         }
         else
         {
-            // Play/Pause/Stop 按钮使用深色（与 TAP 按钮一致）
+            // Play/Pause/Stop 鎸夐挳浣跨敤娣辫壊锛堜笌 TAP 鎸夐挳涓€鑷达級
             if (isTransportButton)
-                iconColor = juce::Colour(BlueBreeze::Colors::TextDark); // 深色
+                iconColor = juce::Colour(BlueBreeze::Colors::TextDark); // 娣辫壊
             else
                 iconColor = juce::Colour(BlueBreeze::Colors::TextDim); // Normal = Grey
         }
@@ -552,9 +540,16 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
         iconColor = iconColor.withAlpha(0.4f);
     }
 
-    // Draw Icon centered
-    // Icon area: reduced to keep icon proportional
+    // Draw Icon centered with hover scale animation
     auto iconArea = bounds.reduced(bounds.getWidth() * 0.22f, bounds.getHeight() * 0.22f);
+    
+    // Hover: subtle scale-up (1.08x) and brightness boost
+    if (shouldDrawButtonAsHighlighted && !shouldDrawButtonAsDown)
+    {
+        const float hoverScale = 1.08f;
+        iconArea = iconArea.withSizeKeepingCentre(iconArea.getWidth() * hoverScale, iconArea.getHeight() * hoverScale);
+        iconColor = iconColor.brighter(0.15f);
+    }
     
     // Use ToolbarIcons helper
     ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.5f, false);
@@ -568,50 +563,56 @@ TransportBarComponent::TransportBarComponent()
     , pauseButton_(LOC(kPause), ToolbarIcons::getPauseIcon())
     , stopButton_(LOC(kStop), ToolbarIcons::getStopIcon())
     , loopButton_(LOC(kLoop), ToolbarIcons::getLoopIcon())
+    , recordButton_(LOC(kRecord), ToolbarIcons::getRecordIcon())
     , trackViewButton_(LOC(kTracks), ToolbarIcons::getTrackViewIcon())
     , pianoViewButton_(LOC(kPianoRollView), ToolbarIcons::getPianoViewIcon())
     , tapButton_("Tap", ToolbarIcons::getTapIcon())
 {
     // Setup Menu Buttons
-    fileButton_.setTooltip(LOC(kFile));
+    fileButton_.setTooltip(LOC(kTooltipFile));
     fileButton_.onClick = [this] { if (onFileMenuRequested) onFileMenuRequested(); };
     addAndMakeVisible(fileButton_);
 
-    editButton_.setTooltip(LOC(kEdit));
+    editButton_.setTooltip(LOC(kTooltipEdit));
     editButton_.onClick = [this] { if (onEditMenuRequested) onEditMenuRequested(); };
     addAndMakeVisible(editButton_);
 
-    viewButton_.setTooltip(LOC(kView));
+    viewButton_.setTooltip(LOC(kTooltipView));
     viewButton_.onClick = [this] { if (onViewMenuRequested) onViewMenuRequested(); };
     addAndMakeVisible(viewButton_);
 
     // Setup Play Button
     playButton_.onClick = [this] { onPlayClicked(); };
-    playButton_.setTooltip(LOC(kPlay));
+    playButton_.setTooltip(LOC(kTooltipPlay) + "\nSpace");
     addAndMakeVisible(playButton_);
 
     // Setup Pause Button
     pauseButton_.onClick = [this] { onPauseClicked(); };
     pauseButton_.setEnabled(false);
-    pauseButton_.setTooltip(LOC(kPause));
+    pauseButton_.setTooltip(LOC(kTooltipPause) + "\nSpace");
     addAndMakeVisible(pauseButton_);
 
     // Setup Stop Button
     stopButton_.onClick = [this] { onStopClicked(); };
-    stopButton_.setTooltip(LOC(kStop));
+    stopButton_.setTooltip(LOC(kTooltipStop));
     addAndMakeVisible(stopButton_);
 
     // Setup Loop Button
     loopButton_.setClickingTogglesState(true);
     loopButton_.onClick = [this] { onLoopToggled(); };
-    loopButton_.setTooltip(LOC(kLoop));
+    loopButton_.setTooltip(LOC(kTooltipLoop));
     addAndMakeVisible(loopButton_);
+
+    // Setup Record Button (read audio from DAW via ARA)
+    recordButton_.onClick = [this] { onRecordClicked(); };
+    recordButton_.setTooltip(LOC(kTooltipRecord));
+    addAndMakeVisible(recordButton_);
 
     // Setup Track View Button
     trackViewButton_.setClickingTogglesState(true);
     trackViewButton_.setToggleState(true, juce::dontSendNotification);
     trackViewButton_.onClick = [this] { onTrackViewClicked(); };
-    trackViewButton_.setTooltip(LOC(kTrackView));
+    trackViewButton_.setTooltip(LOC(kTooltipTrackView));
     addAndMakeVisible(trackViewButton_);
 
 
@@ -619,7 +620,7 @@ TransportBarComponent::TransportBarComponent()
     pianoViewButton_.setClickingTogglesState(true);
     pianoViewButton_.setToggleState(false, juce::dontSendNotification);
     pianoViewButton_.onClick = [this] { onPianoViewClicked(); };
-    pianoViewButton_.setTooltip(LOC(kPianoRollView));
+    pianoViewButton_.setTooltip(LOC(kTooltipPianoRollView));
     addAndMakeVisible(pianoViewButton_);
     
     // Setup Joined Buttons (Segmented Control style)
@@ -634,14 +635,16 @@ TransportBarComponent::TransportBarComponent()
 
     bpmField_.setValue(120.0);
     bpmField_.onCommit = [this](double) { onBpmChanged(); };
+    bpmField_.setTooltip(LOC(kTooltipBpm));
     addAndMakeVisible(bpmField_);
 
     // Setup Tap Button
     tapButton_.onClick = [this] { onTapClicked(); };
-    tapButton_.setTooltip(LOC(kTapTempo));
+    tapButton_.setTooltip(LOC(kTooltipTapTempo));
     addAndMakeVisible(tapButton_);
 
     timeDisplay_.setTimeString("00:00");
+    timeDisplay_.setTooltip(LOC(kTooltipTimeline));
     addAndMakeVisible(timeDisplay_);
 
     // Apply styling (transport buttons use custom paintButton)
@@ -699,16 +702,17 @@ TransportBarComponent::~TransportBarComponent()
 void TransportBarComponent::refreshLocalizedText()
 {
     // 刷新所有按钮的 tooltip
-    fileButton_.setTooltip(LOC(kFile));
-    editButton_.setTooltip(LOC(kEdit));
-    viewButton_.setTooltip(LOC(kView));
-    playButton_.setTooltip(LOC(kPlay));
-    pauseButton_.setTooltip(LOC(kPause));
-    stopButton_.setTooltip(LOC(kStop));
-    loopButton_.setTooltip(LOC(kLoop));
-    trackViewButton_.setTooltip(LOC(kTrackView));
-    pianoViewButton_.setTooltip(LOC(kPianoRollView));
-    tapButton_.setTooltip(LOC(kTapTempo));
+    fileButton_.setTooltip(LOC(kTooltipFile));
+    editButton_.setTooltip(LOC(kTooltipEdit));
+    viewButton_.setTooltip(LOC(kTooltipView));
+    playButton_.setTooltip(LOC(kTooltipPlay) + "\nSpace");
+    pauseButton_.setTooltip(LOC(kTooltipPause) + "\nSpace");
+    stopButton_.setTooltip(LOC(kTooltipStop));
+    loopButton_.setTooltip(LOC(kTooltipLoop));
+    recordButton_.setTooltip(LOC(kTooltipRecord));
+    trackViewButton_.setTooltip(LOC(kTooltipTrackView));
+    pianoViewButton_.setTooltip(LOC(kTooltipPianoRollView));
+    tapButton_.setTooltip(LOC(kTooltipTapTempo));
     
     // 刷新 scaleLabel
     scaleLabel_.setText(LOC(kScale), juce::dontSendNotification);
@@ -718,7 +722,7 @@ void TransportBarComponent::refreshLocalizedText()
 
 void TransportBarComponent::applyTheme()
 {
-    bpmLabel_.setColour(juce::Label::textColourId, Theme::getActiveTheme() == ThemeId::DarkBlueGrey ? UIColors::textPrimary : UIColors::textSecondary);
+    bpmLabel_.setColour(juce::Label::textColourId, UIColors::currentThemeId() == ThemeId::DarkBlueGrey ? UIColors::textPrimary : UIColors::textSecondary);
     scaleLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
 
     scaleRootSelector_.setColour(juce::ComboBox::backgroundColourId, UIColors::backgroundLight);
@@ -740,9 +744,19 @@ void TransportBarComponent::setEmbeddedInTopBar(bool embedded)
     repaint();
 }
 
+void TransportBarComponent::setLayoutProfile(LayoutProfile profile)
+{
+    if (layoutProfile_ == profile)
+        return;
+
+    layoutProfile_ = profile;
+    resized();
+    repaint();
+}
+
 void TransportBarComponent::paint(juce::Graphics& g)
 {
-    const auto& style = Theme::getActiveStyle();
+    const auto& style = UIColors::currentThemeStyle();
     auto bounds = getLocalBounds().toFloat();
 
     if (!embeddedInTopBar_)
@@ -753,8 +767,8 @@ void TransportBarComponent::paint(juce::Graphics& g)
     }
 
     auto displayBounds = timeDisplay_.getBounds().toFloat();
-    // 时间码：LCD 风格显示屏（参考图片风格）
-    if (Theme::getActiveTheme() == ThemeId::BlueBreeze)
+    // 鏃堕棿鐮侊細LCD 椋庢牸鏄剧ず灞忥紙鍙傝€冨浘鐗囬鏍硷級
+    if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
     {
         // Reference style: Transparent background for BlueBreeze
         // g.setColour(juce::Colour(BlueBreeze::Colors::KnobBody)); 
@@ -766,7 +780,7 @@ void TransportBarComponent::paint(juce::Graphics& g)
     }
     
     // Inner shadow for depth
-    if (Theme::getActiveTheme() == ThemeId::BlueBreeze)
+    if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
     {
         // Transparent background, Light gray border
         g.setColour(juce::Colour(BlueBreeze::Colors::PanelBorder).withAlpha(0.8f));
@@ -788,10 +802,9 @@ void TransportBarComponent::paint(juce::Graphics& g)
     }
 }
 
-// 点击TransportBar非BpmField区域时，让BpmField失去焦点，停止光标闪烁
 void TransportBarComponent::mouseDown(const juce::MouseEvent& e)
 {
-    // 如果点击的不是BpmField，让BpmField失去焦点
+    // 濡傛灉鐐瑰嚮鐨勪笉鏄疊pmField锛岃BpmField澶卞幓鐒︾偣
     if (!bpmField_.getBounds().contains(e.getPosition()))
     {
         if (bpmField_.hasKeyboardFocus(true))
@@ -800,7 +813,7 @@ void TransportBarComponent::mouseDown(const juce::MouseEvent& e)
         }
     }
     
-    // 继续传递事件给父类
+    // 缁х画浼犻€掍簨浠剁粰鐖剁被
     juce::Component::mouseDown(e);
 }
 
@@ -814,6 +827,54 @@ void TransportBarComponent::resized()
     const int groupGap = 20;
     
     auto row = bounds.withHeight(controlHeight).withY(bounds.getCentreY() - controlHeight / 2);
+
+    if (layoutProfile_ == LayoutProfile::VST3AraSingleClip)
+    {
+        fileButton_.setBounds(row.removeFromLeft(buttonWidth));
+        row.removeFromLeft(spacing);
+        editButton_.setBounds(row.removeFromLeft(buttonWidth));
+        row.removeFromLeft(spacing);
+        viewButton_.setBounds(row.removeFromLeft(buttonWidth));
+        row.removeFromLeft(groupGap);
+
+        playButton_.setVisible(false);
+        pauseButton_.setVisible(false);
+        stopButton_.setVisible(false);
+        loopButton_.setVisible(false);
+
+        trackViewButton_.setVisible(false);
+        pianoViewButton_.setVisible(false);
+
+        bpmField_.setVisible(false);
+        tapButton_.setVisible(false);
+
+        const int timeDisplayWidth = 140;
+        timeDisplay_.setBounds(row.removeFromLeft(timeDisplayWidth));
+        row.removeFromLeft(spacing);
+
+        recordButton_.setVisible(true);
+        recordButton_.setBounds(row.removeFromLeft(buttonWidth));
+
+        const int rootWidth = 60;
+        const int typeWidth = 180;
+
+        scaleRootSelector_.setBounds(row.removeFromLeft(rootWidth));
+        row.removeFromLeft(4);
+        scaleTypeSelector_.setBounds(row.removeFromLeft(typeWidth));
+        row.removeFromLeft(-10);
+
+        return;
+    }
+
+    playButton_.setVisible(true);
+    pauseButton_.setVisible(true);
+    stopButton_.setVisible(true);
+    loopButton_.setVisible(true);
+    trackViewButton_.setVisible(true);
+    pianoViewButton_.setVisible(true);
+    bpmField_.setVisible(true);
+    tapButton_.setVisible(true);
+    recordButton_.setVisible(false);
 
     fileButton_.setBounds(row.removeFromLeft(buttonWidth));
     row.removeFromLeft(spacing);
@@ -847,7 +908,7 @@ void TransportBarComponent::resized()
 
     const int rootWidth = 60;
     const int typeWidth = 180;
-    
+
     scaleRootSelector_.setBounds(row.removeFromLeft(rootWidth));
     row.removeFromLeft(4);
     scaleTypeSelector_.setBounds(row.removeFromLeft(typeWidth));
@@ -922,7 +983,7 @@ void TransportBarComponent::setScale(int rootNote, int scaleType)
     // rootNote: 0-11 (C-B)
     // scaleType: 1=Maj, 2=Min, 3=Chr, 4=H.Min, 5=Dor, 6=Mix, 7=Pent, 8=m.Pent
     scaleRootSelector_.setSelectedId(rootNote + 1, juce::dontSendNotification);
-    scaleTypeSelector_.setSelectedId(juce::jlimit(1, 8, scaleType), juce::dontSendNotification);
+    scaleTypeSelector_.setSelectedId(scaleType, juce::dontSendNotification);
 }
 
 void TransportBarComponent::setPositionSeconds(double seconds)
@@ -1053,4 +1114,10 @@ void TransportBarComponent::onScaleChanged()
     listeners_.call([rootNote, scaleType](Listener& l) { l.scaleChanged(rootNote, scaleType); });
 }
 
+void TransportBarComponent::onRecordClicked()
+{
+    listeners_.call([](Listener& l) { l.recordRequested(); });
+}
+
 } // namespace OpenTune
+

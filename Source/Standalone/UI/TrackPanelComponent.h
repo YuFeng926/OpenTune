@@ -174,6 +174,9 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
 
         void timerCallback() override
         {
+            const float previousLevel = currentLevel_;
+            const bool previousClipping = isClipping_;
+
             // 平滑衰减
             if (currentLevel_ < targetLevel_)
                 currentLevel_ = targetLevel_;
@@ -189,7 +192,8 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
                     isClipping_ = false;
             }
 
-            repaint();
+            if (std::abs(currentLevel_ - previousLevel) > 0.1f || isClipping_ != previousClipping)
+                repaint();
         }
     };
 
@@ -324,7 +328,7 @@ public:
     void paint(juce::Graphics& g) override
     {
         auto bounds = getLocalBounds().toFloat().reduced(4.0f);
-        const auto& style = Theme::getActiveStyle();
+        const auto& style = UIColors::currentThemeStyle();
         
         // 背景
         auto bgColor = UIColors::backgroundLight;

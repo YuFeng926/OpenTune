@@ -16,31 +16,33 @@ enum class NoteResizeEdge
 
 struct SelectionState
 {
-    // Temporary rubber-band drag state (only valid while isSelectingArea == true)
+    bool hasSelectionArea = false;
     bool isSelectingArea = false;
-    double dragStartTime = 0.0;
-    double dragEndTime = 0.0;
-    float dragStartMidi = 0.0f;
-    float dragEndMidi = 0.0f;
+    double selectionStartTime = 0.0;
+    double selectionEndTime = 0.0;
+    float selectionStartMidi = 0.0f;
+    float selectionEndMidi = 0.0f;
     
-    // F0 frame range derived from selected notes
     int selectedF0StartFrame = -1;
-    int selectedF0EndFrame = -1;
+    int selectedF0EndFrameExclusive = -1;
     bool hasF0Selection = false;
     
-    void setF0Range(int startFrame, int endFrame);
+    void setF0Range(int startFrame, int endFrameExclusive);
     void clearF0Selection();
 };
 
 struct NoteDragState
 {
-    Note* draggedNote = nullptr;
-    std::vector<std::pair<Note*, float>> initialNoteOffsets;
+    int draggedNoteIndex = -1;
+    std::vector<int> draggedNoteIndices;
     bool isDraggingNotes = false;
     
     double manualStartTime = -1.0;
     double manualEndTime = -1.0;
     std::vector<std::pair<double, float>> initialManualTargets;
+    int previewStartFrame = -1;
+    int previewEndFrameExclusive = -1;
+    std::vector<float> previewF0;
     
     void clear();
 };
@@ -49,11 +51,20 @@ struct NoteResizeState
 {
     bool isResizing = false;
     bool isDirty = false;
-    Note* note = nullptr;
+    int noteIndex = -1;
     NoteResizeEdge edge = NoteResizeEdge::None;
     double originalStartTime = 0.0;
     double originalEndTime = 0.0;
     
+    void clear();
+};
+
+struct NoteInteractionDraft
+{
+    bool active = false;
+    std::vector<Note> baselineNotes;
+    std::vector<Note> workingNotes;
+
     void clear();
 };
 
@@ -75,15 +86,13 @@ struct DrawingState
     std::vector<LineAnchor> pendingAnchors;
     juce::Point<float> currentMousePos;
     
-    void clearF0Drawing();
-    void clearNoteDrawing();
-    void clearAnchors();
 };
 
 class InteractionState
 {
 public:
     SelectionState selection;
+    NoteInteractionDraft noteDraft;
     NoteDragState noteDrag;
     NoteResizeState noteResize;
     DrawingState drawing;
@@ -94,6 +103,8 @@ public:
     bool drawNoteToolPendingDrag = false;
     juce::Point<int> drawNoteToolMouseDownPos;
     bool handDrawPendingDrag = false;
+    
+    std::vector<int> selectedLineAnchorSegmentIds;
 };
 
 } // namespace OpenTune

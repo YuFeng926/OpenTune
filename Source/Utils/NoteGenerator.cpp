@@ -7,9 +7,10 @@
 
 namespace OpenTune {
 
-static constexpr int kMajorSemitones[]          = {0, 2, 4, 5, 7, 9, 11};
-static constexpr int kMinorSemitones[]          = {0, 2, 3, 5, 7, 8, 10};
-static constexpr int kChromaticSemitones[]      = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+static constexpr int kMajorSemitones[]     = {0, 2, 4, 5, 7, 9, 11};
+static constexpr int kMinorSemitones[]     = {0, 2, 3, 5, 7, 8, 10};
+static constexpr int kChromaticSemitones[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+
 static constexpr int kHarmonicMinorSemitones[]  = {0, 2, 3, 5, 7, 8, 11};
 static constexpr int kDorianSemitones[]         = {0, 2, 3, 5, 7, 9, 10};
 static constexpr int kMixolydianSemitones[]     = {0, 2, 4, 5, 7, 9, 10};
@@ -100,11 +101,15 @@ float NoteGenerator::representativePitch(
     return voiced[voiced.size() / 2];
 }
 
-float NoteGenerator::quantisePitch(float hz)
+float NoteGenerator::quantisePitch(
+    float hz,
+    const std::optional<ScaleSnapConfig>& snap)
 {
     if (hz <= 0.0f) return 0.0f;
 
     float midi = PitchUtils::freqToMidi(hz);
+    if (snap.has_value()) midi = snap->snapMidi(midi);
+
     return Note::midiToFrequency(static_cast<int>(std::round(midi)));
 }
 
@@ -116,7 +121,8 @@ void NoteGenerator::commitNote(
     float                      hopSizeTime,
     double                     endTime,
     double                     minNoteDuration,
-    double                     tailExtendDuration)
+    double                     tailExtendDuration,
+    const NoteGeneratorParams& params)
 {
     if (pitches.empty()) return;
 
@@ -130,7 +136,10 @@ void NoteGenerator::commitNote(
 
         if (rep > 0.0f) {
             current.originalPitch = rep;
-            current.pitch         = quantisePitch(rep);
+            current.pitch         = quantisePitch(rep, params.scaleSnap);
+            current.retuneSpeed   = params.retuneSpeed;
+            current.vibratoDepth  = params.vibratoDepth;
+            current.vibratoRate   = params.vibratoRate;
             out.push_back(current);
         }
     }
@@ -215,7 +224,7 @@ std::vector<Note> NoteGenerator::generate(
                 {
                     commitNote(out, current, pitches, energyBuf,
                                static_cast<float>(hopSecs), frameToTime(i),
-                               minNoteDuration, tailExtendDuration);
+                               minNoteDuration, tailExtendDuration, params);
 
                     current             = Note{};
                     current.startTime   = frameToTime(i);
@@ -237,7 +246,7 @@ std::vector<Note> NoteGenerator::generate(
                 if (trailingUnvoiced > gapBridgeFrames) {
                     commitNote(out, current, pitches, energyBuf,
                                static_cast<float>(hopSecs), frameToTime(lastVoicedFrame + 1),
-                               minNoteDuration, tailExtendDuration);
+                               minNoteDuration, tailExtendDuration, params);
                     inNote           = false;
                     trailingUnvoiced = 0;
                     lastVoicedFrame  = -1;
@@ -251,7 +260,7 @@ std::vector<Note> NoteGenerator::generate(
     if (inNote && !pitches.empty() && lastVoicedFrame >= 0) {
         commitNote(out, current, pitches, energyBuf,
                    static_cast<float>(hopSecs), frameToTime(lastVoicedFrame + 1),
-                   minNoteDuration, tailExtendDuration);
+                   minNoteDuration, tailExtendDuration, params);
     }
 
     std::sort(out.begin(), out.end(),

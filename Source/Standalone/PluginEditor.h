@@ -12,6 +12,8 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <optional>
+#include <unordered_map>
 #include <thread>
 #include <mutex>
 #include "PluginProcessor.h"
@@ -24,14 +26,16 @@
 #include "UI/TrackPanelComponent.h"
 #include "UI/ArrangementViewComponent.h"
 #include "UI/OpenTuneLookAndFeel.h"
+#include "UI/OpenTuneTooltipWindow.h"
 #include "UI/AuroraLookAndFeel.h"
 #include "UI/UIColors.h"
 #include "UI/RippleOverlayComponent.h"
-#include "UI/AutoRenderOverlayComponent.h"
+#include "Editor/AutoRenderOverlayComponent.h"
+#include "../Editor/RenderBadgeComponent.h"
+#include "Utils/AppPreferences.h"
 #include "Utils/PresetManager.h"
 #include "Utils/LocalizationManager.h"
 #include "Audio/AsyncAudioLoader.h"
-#include "Services/F0ExtractionService.h"
 
 namespace OpenTune {
 
@@ -73,9 +77,9 @@ public:
     void helpRequested() override;
     void showWaveformToggled(bool shouldShow) override;
     void showLanesToggled(bool shouldShow) override;
-    void noteNameModeChanged(int mode) override;
-    void showChunkBoundariesToggled(bool show) override;
-    void showUnvoicedFramesToggled(bool show) override;
+    void noteNameModeChanged(NoteNameMode noteNameMode) override;
+    void showChunkBoundariesToggled(bool shouldShow) override;
+    void showUnvoicedFramesToggled(bool shouldShow) override;
     void themeChanged(ThemeId themeId) override;
     void undoRequested() override;
     void redoRequested() override;
@@ -98,9 +102,9 @@ public:
     void trackHeightChanged(int newHeight) override;  // 与 ArrangementView 的 trackHeight 同步
 
     // ArrangementViewComponent::Listener
-    void clipSelectionChanged(int trackId, int clipIndex) override;
-    void clipTimingChanged(int trackId, int clipIndex) override;
-    void clipDoubleClicked(int trackId, int clipIndex) override;
+    void placementSelectionChanged(int trackId, uint64_t placementId) override;
+    void placementTimingChanged(int trackId, int placementIndex) override;
+    void placementDoubleClicked(int trackId, int placementIndex) override;
     void verticalScrollChanged(int newOffset) override;
     // trackHeightChanged已在TrackPanelComponent::Listener中声明
 
@@ -110,9 +114,7 @@ public:
     void stopPlaybackRequested() override;
     void autoTuneRequested() override;
     void pitchCurveEdited(int startFrame, int endFrame) override;
-    void trackTimeOffsetChanged(int trackId, double newOffset) override;
     void escapeKeyPressed() override;
-    void playFromPositionRequested(double timeSeconds) override;
 
     // Keyboard handling
     bool keyPressed(const juce::KeyPress& key) override;
@@ -121,40 +123,44 @@ public:
     void languageChanged(Language newLanguage) override;
 
 private:
+    struct PendingImport;
+
     bool shouldAcceptUndoRedoShortcut();
+    void performUndoRedoAction(bool isUndo);
 
     // 调式状态辅助
     static int scaleToUiScaleType(Scale scale);
     static Scale uiScaleTypeToScale(int scaleType);
-    static ScaleMode scaleToScaleMode(Scale scale);
     static DetectedKey makeDetectedKeyFromUi(int rootNote, int scaleType, float confidence = 1.0f);
-    DetectedKey resolveScaleForClip(int trackId, int clipIndex, juce::String* sourceOut = nullptr) const;
+    DetectedKey resolveScaleForPlacementMaterialization(int trackId, int placementIndex, juce::String* sourceOut = nullptr) const;
     void applyScaleToUi(int rootNote, int scaleType);
-    void applyResolvedScaleForClip(int trackId, int clipIndex);
-    void syncPianoRollFromClipSelection(int trackId, int clipIndex);
-
-    void performKeyDetectionForClip(int trackId, int clipIndex);
-    void requestOriginalF0ExtractionForImport(int trackId, int clipIndex);
+    void applyResolvedScaleForPlacementMaterialization(int trackId, int placementIndex);
+    void syncPianoRollFromPlacementSelection(int trackId, int placementIndex);
+    void applyPlacementSelectionContext(int trackId, uint64_t placementId);
 
     void timerCallback() override;
+    void showPreferencesDialog();
+    void syncSharedAppPreferences();
+    void applyThemeToEditor(ThemeId themeId);
+    RenderStatusSnapshot getRenderStatusSnapshot() const;
     void setInferenceActive(bool active);
     void syncParameterPanelFromSelection();
-    void audioSettingsRequested();
     void playFromStartToggleRequested();  // 播放/暂停并回到起始位置
     void importAudioFileToTrack(int trackId, const juce::File& file);
+    void queuePendingImport(PendingImport pendingImport);
+    void startPendingImport(PendingImport pendingImport);
     void processNextImportInQueue();  // 处理导入队列中的下一个文件
-    void processDeferredImportPostProcessQueue();
     void promptTrackSelectionForDroppedFile(const juce::File& file);
     void launchBackgroundUiTask(std::function<void()> task);
     void waitForBackgroundUiTasks();
-    void refreshAfterUndoRedo();
-    void performUndoWithRangeTracking();
-    void performRedoWithRangeTracking();
+    double computeTrackAppendStartSeconds(int trackId) const;
+    void releaseImportBatchSlot(int batchId);
     
-    // AUTO 启动统一 helper
-    void startAutoTuneAsUnifiedEdit();
-
     OpenTuneAudioProcessor& processorRef_;
+    AppPreferences appPreferences_;
+    std::shared_ptr<LocalizationManager::LanguageState> languageState_;
+    LocalizationManager::ScopedLanguageBinding languageBinding_;
+    KeyShortcutConfig::KeyShortcutSettings shortcutSettings_ = KeyShortcutConfig::KeyShortcutSettings::getDefault();
 
     // Custom LookAndFeel
     OpenTuneLookAndFeel openTuneLookAndFeel_;
@@ -171,28 +177,28 @@ private:
     PianoRollComponent pianoRoll_;
     RippleOverlayComponent rippleOverlay_;
     AutoRenderOverlayComponent autoRenderOverlay_;
+    RenderBadgeComponent renderBadge_;
+    OpenTuneTooltipWindow tooltipWindow_{ this, 600 };
 
     // Preset Manager
     PresetManager presetManager_;
 
     // Async loaders
     AsyncAudioLoader asyncAudioLoader_;
-    F0ExtractionService f0ExtractionService_{2, 64};
     bool isImportInProgress_ = false;
     
     // 多文件导入队列（解决并发导入问题）
     struct PendingImport {
-        int trackId;
+        OpenTuneAudioProcessor::ImportPlacement placement;
         juce::File file;
+        int batchId{0};
+        bool appendSequentially{false};
     };
     std::vector<PendingImport> importQueue_;
+    std::unordered_map<int, double> importBatchNextStartSeconds_;
+    std::unordered_map<int, int> importBatchRemainingItems_;
+    int nextImportBatchId_{1};
 
-    struct DeferredImportPostProcessRequest {
-        int trackId{-1};
-        uint64_t clipId{0};
-    };
-    std::vector<DeferredImportPostProcessRequest> deferredImportPostProcessQueue_;
-    
     bool isWorkspaceView_ = true;
 
     // 现代布局：左右面板可折叠（用于“沉浸主画布”模式）
@@ -200,14 +206,20 @@ private:
     bool isParameterPanelVisible_ = true;
 
     bool f0ParamsSyncedFromInference_ = false;
+    ThemeId appliedThemeId_ = ThemeId::Aurora;
+    Language appliedLanguage_ = Language::Chinese;
     bool inferenceActive_ = false;
     int inferenceActiveTickCounter_ = 0;
+    uint64_t lastPianoRollMaterializationId_ = 0;
     int lastPianoRollSampleRate_ = 0;
+    std::shared_ptr<PitchCurve> lastPianoRollCurve_;
     std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
-    bool lastPianoRollHasUserAudio_ = false;
     double lastSyncedBpm_ = 0.0;
     int lastSyncedTimeSigNum_ = 0;
     int lastSyncedTimeSigDenom_ = 0;
+#if JUCE_DEBUG
+    int diagnosticHeartbeatCounter_ = 0;
+#endif
     bool showingSingleNoteParams_ = false;
 
     // Undo 状态追踪
@@ -216,18 +228,10 @@ private:
     uint32_t lastUndoRedoShortcutMs_ = 0;
     bool suppressScaleChangedCallback_ = false;
     std::array<float, OpenTuneAudioProcessor::MAX_TRACKS> lastTrackVolumes_;
-    float volumeDragStartValue_ = 1.0f;
-    int volumeDragTrackId_ = -1;
     
-    // AUTO 阻塞事务锁：点击 AUTO 后立即 latch，直到完成才释放
-    bool autoOverlayLatched_ = false;
-    int autoOverlayTargetTrackId_ = -1;
-    uint64_t autoOverlayTargetClipId_ = 0;
-
     // RMVPE OriginalF0 阻塞事务锁：提取开始后 latch，直到"提取成功且当前钢琴卷帘可见"才释放
     bool rmvpeOverlayLatched_ = false;
-    int rmvpeOverlayTargetTrackId_ = -1;
-    uint64_t rmvpeOverlayTargetClipId_ = 0;
+    uint64_t rmvpeOverlayTargetMaterializationId_ = 0;
 
     // Export worker thread management
     std::thread exportWorker_;

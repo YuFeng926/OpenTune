@@ -15,7 +15,7 @@ TopBarComponent::TopBarComponent(MenuBarComponent& menuBar, TransportBarComponen
     trackPanelToggleButton_.setIcon(ToolbarIcons::getPanelRightIcon());
     trackPanelToggleButton_.setClickingTogglesState(true);
     trackPanelToggleButton_.setToggleState(true, juce::dontSendNotification);
-    trackPanelToggleButton_.setTooltip("Show/Hide Left Panel");
+    trackPanelToggleButton_.setTooltip(LOC(kTooltipTrackPanel));
     trackPanelToggleButton_.onClick = [this]() {
         if (onToggleTrackPanel) onToggleTrackPanel();
     };
@@ -24,7 +24,7 @@ TopBarComponent::TopBarComponent(MenuBarComponent& menuBar, TransportBarComponen
     parameterPanelToggleButton_.setIcon(ToolbarIcons::getPanelLeftIcon());
     parameterPanelToggleButton_.setClickingTogglesState(true);
     parameterPanelToggleButton_.setToggleState(true, juce::dontSendNotification);
-    parameterPanelToggleButton_.setTooltip("Show/Hide Right Panel");
+    parameterPanelToggleButton_.setTooltip(LOC(kTooltipParameterPanel));
     parameterPanelToggleButton_.onClick = [this]() {
         if (onToggleParameterPanel) onToggleParameterPanel();
     };
@@ -46,14 +46,22 @@ void TopBarComponent::setSidePanelsVisible(bool trackPanelVisible, bool paramete
     repaint();
 }
 
+void TopBarComponent::setTrackPanelToggleVisible(bool visible)
+{
+    trackPanelToggleVisible_ = visible;
+    trackPanelToggleButton_.setVisible(visible);
+    resized();
+    repaint();
+}
+
 void TopBarComponent::refreshLocalizedText()
 {
     // 更新按钮文本和 tooltip
     trackPanelToggleButton_.setButtonText(LOC(kTracks));
-    trackPanelToggleButton_.setTooltip(LOC(kTracks));
+    trackPanelToggleButton_.setTooltip(LOC(kTooltipTrackPanel));
     
     parameterPanelToggleButton_.setButtonText(LOC(kProps));
-    parameterPanelToggleButton_.setTooltip(LOC(kProps));
+    parameterPanelToggleButton_.setTooltip(LOC(kTooltipParameterPanel));
     
     // 刷新运输栏
     transportBar_.refreshLocalizedText();
@@ -63,13 +71,13 @@ void TopBarComponent::refreshLocalizedText()
 
 void TopBarComponent::paint(juce::Graphics& g)
 {
-    const auto& style = Theme::getActiveStyle();
+    const auto& style = UIColors::currentThemeStyle();
     // 阴影边距：背景在 reduced(12) 区域内绘制，阴影在边距内渲染
     const float shadowMargin = 12.0f;
     auto bounds = getLocalBounds().toFloat().reduced(shadowMargin);
 
     // 顶部条属于"悬浮层级"，使用更明显但仍柔和的 L2 阴影
-    if (Theme::getActiveTheme() == ThemeId::Aurora)
+    if (UIColors::currentThemeId() == ThemeId::Aurora)
     {
         // Aurora Theme: No rounded corners, soft bottom edge
         UIColors::drawShadow(g, bounds, UIColors::ShadowLevel::Float);
@@ -114,10 +122,14 @@ void TopBarComponent::resized()
 
     auto row = bounds.reduced(pad, pad);
 
-    auto leftArea = row.removeFromLeft(toggleW);
-    trackPanelToggleButton_.setBounds(leftArea.withSizeKeepingCentre(toggleW, toggleH));
+    if (trackPanelToggleVisible_) {
+        auto leftArea = row.removeFromLeft(toggleW);
+        trackPanelToggleButton_.setBounds(leftArea.withSizeKeepingCentre(toggleW, toggleH));
+        row.removeFromLeft(pad);
+    } else {
+        trackPanelToggleButton_.setBounds({});
+    }
 
-    row.removeFromLeft(pad);
     auto rightArea = row.removeFromRight(toggleW);
     parameterPanelToggleButton_.setBounds(rightArea.withSizeKeepingCentre(toggleW, toggleH));
 

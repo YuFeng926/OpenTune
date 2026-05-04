@@ -416,6 +416,12 @@ public:
         return path;
     }
 
+    static juce::Path getRecordIcon() {
+        juce::Path path;
+        path.addEllipse(6.0f, 6.0f, 12.0f, 12.0f);
+        return path;
+    }
+
     static juce::Path getKeyIcon() {
         juce::Path path;
         // Music sharp/flat symbol style abstract

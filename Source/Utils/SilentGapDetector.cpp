@@ -1,5 +1,4 @@
 #include "SilentGapDetector.h"
-#include "SimdAccelerator.h"
 #include "TimeCoordinate.h"
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
@@ -87,9 +86,8 @@ float SilentGapDetector::calculateRmsDb(const float* data, int64_t numSamples)
     // 计算 RMS 电平（dB）
     if (numSamples <= 0 || data == nullptr) return -100.0f;
     
-    // 使用 SIMD 加速平方和计算
-    auto& simd = SimdAccelerator::getInstance();
-    float sumSquares = simd.sumOfSquares(data, static_cast<size_t>(numSamples));
+    float sumSquares = 0.0f;
+    for (int i = 0; i < numSamples; ++i) sumSquares += data[i] * data[i];
     
     float rms = std::sqrt(sumSquares / static_cast<float>(numSamples));
     return linearToDb(rms);
@@ -97,12 +95,12 @@ float SilentGapDetector::calculateRmsDb(const float* data, int64_t numSamples)
 
 std::vector<SilentGap>::const_iterator SilentGapDetector::findGapAtOrAfter(
     const std::vector<SilentGap>& gaps,
-    double positionSeconds)
+    int64_t positionSample)
 {
-    // 二分查找：找到第一个 endSeconds > positionSeconds 的静息处
-    return std::lower_bound(gaps.begin(), gaps.end(), positionSeconds,
-        [](const SilentGap& gap, double posSec) {
-            return gap.endSeconds <= posSec;
+    // 二分查找：找到第一个 endSampleExclusive > positionSample 的静息处
+    return std::lower_bound(gaps.begin(), gaps.end(), positionSample,
+        [](const SilentGap& gap, int64_t posSample) {
+            return gap.endSampleExclusive <= posSample;
         });
 }
 
@@ -128,7 +126,7 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
     // 分析窗口大小：约 2ms，用于平滑电平检测
     const int64_t windowSize = std::max<int64_t>(1, static_cast<int64_t>(sampleRate * 0.002));
 
-    // 先混合到单声道（项目主路径通常是单声道，此处兼容多声道）
+    // 混合到单声道（支持多声道输入）
     std::vector<float> mono(static_cast<size_t>(numSamples), 0.0f);
     const float invChannels = 1.0f / static_cast<float>(numChannels);
     for (int ch = 0; ch < numChannels; ++ch) {
@@ -168,12 +166,11 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
         static_cast<float>(cfg.lowBandUpperHz), sampleRate, 4);
     processIIRChain(lowBand, lpCoeffs);
 
-    // 窗口 RMS 优化：预平方 + 前缀和，O(1) 窗口查询，避免每窗重复 sumOfSquares
-    auto& simd = SimdAccelerator::getInstance();
+    // 窗口 RMS 优化：预平方 + 前缀和，O(1) 窗口查询，避免每窗重复平方
     std::vector<float> highPassedSq(static_cast<size_t>(numSamples), 0.0f);
     std::vector<float> lowBandSq(static_cast<size_t>(numSamples), 0.0f);
-    simd.multiply(highPassedSq.data(), highPassed.data(), highPassed.data(), static_cast<size_t>(numSamples));
-    simd.multiply(lowBandSq.data(), lowBand.data(), lowBand.data(), static_cast<size_t>(numSamples));
+    juce::FloatVectorOperations::multiply(highPassedSq.data(), highPassed.data(), highPassed.data(), numSamples);
+    juce::FloatVectorOperations::multiply(lowBandSq.data(), lowBand.data(), lowBand.data(), numSamples);
 
     std::vector<double> prefixHigh(static_cast<size_t>(numSamples) + 1, 0.0);
     std::vector<double> prefixLow(static_cast<size_t>(numSamples) + 1, 0.0);
@@ -199,15 +196,15 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
         float totalLevel_dB = linearToDb(rmsHigh);
         float lowBandLevel_dB = linearToDb(rmsLow);
 
-        // 判定逻辑（放宽版）：
-        // 1) 兼容旧机制：总电平 <= threshold_dB(默认 -40dBFS) 必然视为静息
-        // 2) 放宽机制：总电平 <= -30dBFS 且 <=3kHz 低频带平均电平 < -40dBFS
-        const bool passLegacyVeryLow = (totalLevel_dB <= effectiveStrictThreshold);
+        // 判定逻辑（两级）：
+        // 1) 严格阈值：总电平 <= threshold_dB(默认 -40dBFS) 必然视为静息
+        // 2) 放宽频域规则：总电平 <= -30dBFS 且 <=3kHz 低频带平均电平 < -40dBFS
+        const bool passStrictThreshold = (totalLevel_dB <= effectiveStrictThreshold);
         const bool passRelaxedFreqRule =
             (totalLevel_dB <= cfg.relaxedTotalThreshold_dB) &&
             (lowBandLevel_dB < cfg.lowBandThreshold_dB);
 
-        bool isSilent = passLegacyVeryLow || passRelaxedFreqRule;
+        bool isSilent = passStrictThreshold || passRelaxedFreqRule;
         
         if (isSilent && !inSilence) {
             // 进入静息段
@@ -227,8 +224,8 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
             int64_t gapLength = pos - silenceStart;
             if (gapLength >= minGapSamples) {
                 SilentGap gap;
-                gap.startSeconds = TimeCoordinate::samplesToSeconds(silenceStart, sampleRate);
-                gap.endSeconds = TimeCoordinate::samplesToSeconds(pos, sampleRate);
+                gap.startSample = silenceStart;
+                gap.endSampleExclusive = pos;
                 gap.minLevel_dB = minLevelInGap;
                 result.push_back(gap);
             }
@@ -241,8 +238,8 @@ std::vector<SilentGap> SilentGapDetector::detectAllGaps(
         int64_t gapLength = numSamples - silenceStart;
         if (gapLength >= minGapSamples) {
             SilentGap gap;
-            gap.startSeconds = TimeCoordinate::samplesToSeconds(silenceStart, sampleRate);
-            gap.endSeconds = TimeCoordinate::samplesToSeconds(numSamples, sampleRate);
+            gap.startSample = silenceStart;
+            gap.endSampleExclusive = numSamples;
             gap.minLevel_dB = minLevelInGap;
             result.push_back(gap);
         }
@@ -271,42 +268,42 @@ std::optional<SilentGap> SilentGapDetector::findNearestGap(
     bool searchForward)
 {
     if (gaps.empty()) return std::nullopt;
+    const int64_t positionSample = TimeCoordinate::secondsToSamples(positionSeconds, kInternalSampleRate);
+    const int64_t maxSearchDistanceSamples = TimeCoordinate::secondsToSamplesCeil(maxSearchDistanceSec, kInternalSampleRate);
     
     if (searchForward) {
-        // 向后搜索：找第一个 startSeconds >= positionSeconds 的静息处
-        auto it = std::lower_bound(gaps.begin(), gaps.end(), positionSeconds,
-            [](const SilentGap& gap, double posSec) {
-                return gap.startSeconds < posSec;
+        // 向后搜索：找第一个 startSample >= positionSample 的静息处
+        auto it = std::lower_bound(gaps.begin(), gaps.end(), positionSample,
+            [](const SilentGap& gap, int64_t posSample) {
+                return gap.startSample < posSample;
             });
         
-        // 也检查包含 positionSeconds 的静息处
+        // 也检查包含 positionSample 的静息处
         if (it != gaps.begin()) {
             auto prev = std::prev(it);
-            if (prev->endSeconds > positionSeconds) {
-                return *prev;  // positionSeconds 在这个静息处内部
+            if (prev->containsSample(positionSample)) {
+                return *prev;
             }
         }
         
-        if (it != gaps.end() && (it->startSeconds - positionSeconds) <= maxSearchDistanceSec) {
+        if (it != gaps.end() && (it->startSample - positionSample) <= maxSearchDistanceSamples) {
             return *it;
         }
     }
     else {
-        // 向前搜索：找最后一个 endSeconds <= positionSeconds 的静息处
-        auto it = std::lower_bound(gaps.begin(), gaps.end(), positionSeconds,
-            [](const SilentGap& gap, double posSec) {
-                return gap.endSeconds <= posSec;
+        // 向前搜索：找最后一个 endSampleExclusive <= positionSample 的静息处
+        auto it = std::lower_bound(gaps.begin(), gaps.end(), positionSample,
+            [](const SilentGap& gap, int64_t posSample) {
+                return gap.endSampleExclusive <= posSample;
             });
         
-        // 检查是否 positionSeconds 在某个静息处内部
-        if (it != gaps.end() && it->startSeconds <= positionSeconds && it->endSeconds > positionSeconds) {
-            return *it;  // positionSeconds 在这个静息处内部
+        if (it != gaps.end() && it->containsSample(positionSample)) {
+            return *it;
         }
         
-        // 否则找前一个静息处
         if (it != gaps.begin()) {
             auto prev = std::prev(it);
-            if ((positionSeconds - prev->endSeconds) <= maxSearchDistanceSec) {
+            if ((positionSample - prev->endSampleExclusive) <= maxSearchDistanceSamples) {
                 return *prev;
             }
         }
@@ -320,9 +317,10 @@ std::optional<SilentGap> SilentGapDetector::findGapContaining(
     double positionSeconds)
 {
     if (gaps.empty()) return std::nullopt;
+    const int64_t positionSample = TimeCoordinate::secondsToSamples(positionSeconds, kInternalSampleRate);
     
-    auto it = findGapAtOrAfter(gaps, positionSeconds);
-    if (it != gaps.end() && it->startSeconds <= positionSeconds && it->endSeconds > positionSeconds) {
+    auto it = findGapAtOrAfter(gaps, positionSample);
+    if (it != gaps.end() && it->containsSample(positionSample)) {
         return *it;
     }
     
@@ -335,23 +333,24 @@ bool SilentGapDetector::hasGapBetween(
     double endSeconds)
 {
     if (gaps.empty() || endSeconds <= startSeconds) return false;
-    const double minGapSec = getMinGapDurationSec();
+    const int64_t startSample = TimeCoordinate::secondsToSamplesFloor(startSeconds, kInternalSampleRate);
+    const int64_t endSampleExclusive = TimeCoordinate::secondsToSamplesCeil(endSeconds, kInternalSampleRate);
+    const int64_t minGapSamples = TimeCoordinate::secondsToSamplesCeil(getMinGapDurationSec(), kInternalSampleRate);
     
     // 找第一个可能在范围内的静息处
-    auto it = std::lower_bound(gaps.begin(), gaps.end(), startSeconds,
-        [](const SilentGap& gap, double posSec) {
-            return gap.endSeconds <= posSec;
+    auto it = std::lower_bound(gaps.begin(), gaps.end(), startSample,
+        [](const SilentGap& gap, int64_t posSample) {
+            return gap.endSampleExclusive <= posSample;
         });
     
-    // 检查是否有静息处完全在 [startSeconds, endSeconds] 范围内
-    while (it != gaps.end() && it->startSeconds < endSeconds) {
-        if (it->startSeconds >= startSeconds && it->endSeconds <= endSeconds) {
+    // 检查是否有静息处完全在 [startSample, endSampleExclusive) 范围内
+    while (it != gaps.end() && it->startSample < endSampleExclusive) {
+        if (it->startSample >= startSample && it->endSampleExclusive <= endSampleExclusive) {
             return true;
         }
-        // 也接受部分重叠的静息处（至少有 minGap/2 在范围内）
-        double overlapStart = std::max(it->startSeconds, startSeconds);
-        double overlapEnd = std::min(it->endSeconds, endSeconds);
-        if (overlapEnd - overlapStart >= minGapSec / 2.0) {
+        const int64_t overlapStart = std::max(it->startSample, startSample);
+        const int64_t overlapEnd = std::min(it->endSampleExclusive, endSampleExclusive);
+        if (overlapEnd - overlapStart >= minGapSamples / 2) {
             return true;
         }
         ++it;
@@ -367,13 +366,15 @@ std::vector<SilentGap> SilentGapDetector::getGapsBetween(
 {
     std::vector<SilentGap> result;
     if (gaps.empty() || endSeconds <= startSeconds) return result;
+    const int64_t startSample = TimeCoordinate::secondsToSamplesFloor(startSeconds, kInternalSampleRate);
+    const int64_t endSampleExclusive = TimeCoordinate::secondsToSamplesCeil(endSeconds, kInternalSampleRate);
     
-    auto it = std::lower_bound(gaps.begin(), gaps.end(), startSeconds,
-        [](const SilentGap& gap, double posSec) {
-            return gap.endSeconds <= posSec;
+    auto it = std::lower_bound(gaps.begin(), gaps.end(), startSample,
+        [](const SilentGap& gap, int64_t posSample) {
+            return gap.endSampleExclusive <= posSample;
         });
     
-    while (it != gaps.end() && it->startSeconds < endSeconds) {
+    while (it != gaps.end() && it->startSample < endSampleExclusive) {
         result.push_back(*it);
         ++it;
     }

@@ -31,22 +31,44 @@ namespace OpenTune {
  * SilentGap - 静息处数据结构
  * 表示一段低电平区域
  * 
- * 注意：所有坐标均为秒数，与设备采样率无关
+ * 注意：所有事实坐标均为 44.1kHz sample span。
+ * 秒值只作为从 sample 投影出来的视图，不再作为内部真相源。
  */
 struct SilentGap {
-    double startSeconds;    // 静息处起始时间（秒，包含）
-    double endSeconds;      // 静息处结束时间（秒，不包含）
-    float minLevel_dB;      // 该区域内的最低电平（dB）
-    
-    /** 获取静息处时长（秒） */
-    double length() const { return endSeconds - startSeconds; }
-    
-    /** 获取静息处中点位置（秒） */
-    double midpoint() const { return startSeconds + length() * 0.5; }
-    
+    int64_t startSample{0};         // 静息处起始 sample（包含）
+    int64_t endSampleExclusive{0};  // 静息处结束 sample（不包含）
+    float minLevel_dB{0.0f};        // 该区域内的最低电平（dB）
+
+    int64_t sampleCount() const { return endSampleExclusive - startSample; }
+
+    bool isValid() const { return endSampleExclusive > startSample; }
+
+    double startSeconds() const
+    {
+        return TimeCoordinate::samplesToSeconds(startSample, TimeCoordinate::kRenderSampleRate);
+    }
+
+    double endSeconds() const
+    {
+        return TimeCoordinate::samplesToSeconds(endSampleExclusive, TimeCoordinate::kRenderSampleRate);
+    }
+
+    int64_t midpointSample() const { return startSample + sampleCount() / 2; }
+
+    double midpointSeconds() const
+    {
+        return TimeCoordinate::samplesToSeconds(midpointSample(), TimeCoordinate::kRenderSampleRate);
+    }
+
+    bool containsSample(int64_t sample) const
+    {
+        return sample >= startSample && sample < endSampleExclusive;
+    }
+
     /** 检查某个时间位置是否在此静息处内 */
-    bool contains(double seconds) const {
-        return seconds >= startSeconds && seconds < endSeconds;
+    bool contains(double seconds) const
+    {
+        return containsSample(TimeCoordinate::secondsToSamples(seconds, TimeCoordinate::kRenderSampleRate));
     }
 };
 
@@ -111,27 +133,27 @@ public:
     // ============================================================================
     
     /**
-     * 检测音频中的所有静息处（返回秒数坐标）
+     * 检测音频中的所有静息处（返回 sample span）
      * 
      * 注意：音频必须是 44.1kHz 采样率（符合内部存储标准）
      * 
      * @param audio 音频缓冲区（44.1kHz）
      * @param threshold_dB 电平阈值（默认 -40dBFS）
-     * @return 按起始位置排序的静息处列表（秒数坐标）
+     * @return 按起始 sample 排序的静息处列表（sample span）
      */
     static std::vector<SilentGap> detectAllGaps(
         const juce::AudioBuffer<float>& audio,
         float threshold_dB = std::numeric_limits<float>::quiet_NaN());
     
     /**
-     * 使用自适应阈值检测静息处（返回秒数坐标）
+     * 使用自适应阈值检测静息处（返回 sample span）
      * 使用频域约束进行检测
      * 
      * 注意：音频必须是 44.1kHz 采样率（符合内部存储标准）
      * 
      * @param audio 音频缓冲区（44.1kHz）
      * @param maxSearchDistanceSec 保留参数（当前未使用）
-     * @return 静息处列表（秒数坐标）
+     * @return 静息处列表（sample span）
      */
     static std::vector<SilentGap> detectAllGapsAdaptive(
         const juce::AudioBuffer<float>& audio,
@@ -144,7 +166,7 @@ public:
     /**
      * 从指定位置向前或向后查找最近的静息处
      * 
-     * @param gaps 预计算的静息处列表（必须按 startSeconds 排序）
+     * @param gaps 预计算的静息处列表（必须按 startSample 排序）
      * @param positionSeconds 当前位置（秒）
      * @param maxSearchDistanceSec 最大搜索距离（秒）
      * @param searchForward true=向后搜索，false=向前搜索
@@ -243,7 +265,7 @@ private:
      */
     static std::vector<SilentGap>::const_iterator findGapAtOrAfter(
         const std::vector<SilentGap>& gaps,
-        double positionSeconds);
+        int64_t positionSample);
 };
 
 } // namespace OpenTune

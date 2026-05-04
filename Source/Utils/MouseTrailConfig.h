@@ -16,25 +16,9 @@ enum class TrailTheme
     Matrix
 };
 
-inline TrailTheme& getCurrentTheme()
+inline bool isEnabled(TrailTheme theme)
 {
-    static TrailTheme currentTheme = TrailTheme::Classic;
-    return currentTheme;
-}
-
-inline bool isEnabled()
-{
-    return getCurrentTheme() != TrailTheme::None;
-}
-
-inline void setTheme(TrailTheme theme)
-{
-    getCurrentTheme() = theme;
-}
-
-inline TrailTheme getTheme()
-{
-    return getCurrentTheme();
+    return theme != TrailTheme::None;
 }
 
 struct TrailThemeStyle
