@@ -1,256 +1,95 @@
 # Technology Stack
 
-**Generated:** 2026-04-02
-**Project:** OpenTune - AI Pitch Correction Application
+**Analysis Date:** 2026-04-20
 
 ## Languages
 
 **Primary:**
-- **C++17** - Core application language for all components
-  - Standard enforced via `CMAKE_CXX_STANDARD 17` in `CMakeLists.txt:19`
-  - Used throughout `Source/` directory for audio processing, UI, and ML inference
+- C++17 - Application, plugin, ARA session, inference pipeline, UI, and tests live under `Source/**/*.cpp`, `Source/**/*.h`, and `Tests/TestMain.cpp`; enforced in `CMakeLists.txt:11`, `CMakeLists.txt:21`, `CMakeLists.txt:357`, `CMakeLists.txt:863`.
 
 **Secondary:**
-- **C** - FFT implementation in PFFFT library
-  - File: `ThirdParty/r8brain-free-src-master/fft/pffft_double.c`
-  - Used for high-performance FFT in sample rate conversion
+- C - Vendored FFT/resampling code is compiled from `ThirdParty/r8brain-free-src-master/fft/pffft_double.c` and linked into the main target through `CMakeLists.txt:11`, `ThirdParty/r8brain-free-src-master/fft/pffft_double.c`.
+- CMake - Entire build, target split, runtime packaging, install step, and test registration live in `CMakeLists.txt:6`, `CMakeLists.txt:303`, `CMakeLists.txt:709`, `CMakeLists.txt:805`, `CMakeLists.txt:961`, `CMakeLists.txt:970`.
+- PowerShell - Local MSVC bootstrap helper exists at `.planning/scripts/invoke-msvc-cmake.ps1`.
 
 ## Runtime
 
 **Environment:**
-- **Windows x64** - Primary and only target platform
-- **MSVC 2022** - Recommended compiler (Visual Studio 17 2022 generator)
-- **DirectX 12** - GPU compute runtime for DirectML inference
+- Native desktop audio runtime built on JUCE for Windows and macOS only; unsupported platforms fail at configure time in `CMakeLists.txt:49`, `CMakeLists.txt:227`.
+- Product formats are `Standalone` and `VST3` from one JUCE plugin definition in `CMakeLists.txt:303`, `CMakeLists.txt:324`.
+- VST3 ARA support is compiled through JUCE ARA integration plus `Source/ARA/*.cpp`; ARA enablement depends on a resolvable SDK path in `CMakeLists.txt:57`, `CMakeLists.txt:326`, `CMakeLists.txt:539`.
 
-**Package Manager:**
-- **NuGet** (via CMake `file(DOWNLOAD)`) - For DirectML and DirectX Agility SDK
-  - DirectML 1.15.4 from nuget.org
-  - DirectX Agility SDK 1.619.1 from nuget.org
-  - Downloaded at CMake configure time to `<build>/nuget/`
-
-**Build System:**
-- **CMake 3.22+** - Minimum required version
-- compile_commands.json exported for LSP/clangd support (`CMakeLists.txt:14`)
+**Package Manager / Project Manifests:**
+- No app-level package manager manifest is present at the repo root: no root `package.json`, `pyproject.toml`, `requirements.txt`, `Cargo.toml`, or `go.mod` was found.
+- `.jucer` files exist only inside vendored JUCE extras, not for the OpenTune app itself, so Projucer is not the active build source.
 
 ## Frameworks
 
 **Core:**
-- **JUCE 8.0.12** - Cross-platform audio application framework
-  - Source: `JUCE-master/` (vendored, AGPLv3/Commercial license)
-  - Version defined in `JUCE-master/CMakeLists.txt:35`
-  - Purpose: Audio I/O, GUI, DSP primitives, event handling
+- JUCE (vendored) - Base framework for app/plugin lifecycle, GUI, audio I/O, DSP, and plugin client integration via `JUCE-master/` and `CMakeLists.txt:49`, `CMakeLists.txt:573`.
+- ARA SDK 2.2.0 - Bundled ARA sources under `ThirdParty/ARA_SDK-releases-2.2.0/`; wired into JUCE and tests via `CMakeLists.txt:37`, `CMakeLists.txt:58`, `CMakeLists.txt:895`.
+- ONNX Runtime 1.24.4 - Local inference runtime for RMVPE and vocoder models; configured in `CMakeLists.txt:206`, `CMakeLists.txt:240`, `CMakeLists.txt:296` and consumed by `Source/Inference/ModelFactory.cpp:45`.
 
-**ML Inference:**
-- **ONNX Runtime 1.24.4** - Neural network inference engine
-  - CPU build: `onnxruntime-win-x64-1.24.4/`
-  - DirectML build: `onnxruntime-dml-1.24.4/`
-  - API version: 24
-  - Purpose: Run RMVPE F0 extraction and PC-NSF-HifiGAN vocoder
-  - Execution providers: CPU, DirectML (GPU builtin)
+**Application Structure:**
+- Shared processor runtime shell composes `SourceStore`, `MaterializationStore`, `StandaloneArrangement`, and `VST3AraSession` in `Source/PluginProcessor.h:6`, `Source/PluginProcessor.h:30`, `Source/PluginProcessor.h:31`, `Source/ARA/VST3AraSession.h:21`.
+- Standalone-only editor shell lives in `Source/Standalone/PluginEditor.cpp` and `Source/Standalone/PluginEditor.h`; VST3-only editor shell lives in `Source/Plugin/PluginEditor.cpp` and `Source/Plugin/PluginEditor.h`; target split is enforced by `CMakeLists.txt:504`, `CMakeLists.txt:518`.
+- Shared app preferences are centralized in `Source/Utils/AppPreferences.h:18` and `Source/Utils/AppPreferences.cpp:205`; shared UI pages live in `Source/Editor/Preferences/SharedPreferencePages.cpp:38`, and standalone-only pages in `Source/Editor/Preferences/StandalonePreferencePages.cpp:55`.
+- Editing behavior is driven by the explicit rule layer in `Source/Utils/AudioEditingScheme.h:8` rather than a runtime manager.
 
-**Audio Processing:**
-- **r8brain-free-src** - High-quality professional sample rate converter
-  - Source: `ThirdParty/r8brain-free-src-master/`
-  - License: MIT
-  - Author: Aleksey Vaneev (Voxengo)
-  - Purpose: Sample rate conversion for model input preparation
-
-## JUCE Modules Used
-
-| Module | Purpose | Link Target |
-|--------|---------|-------------|
-| `juce_audio_utils` | High-level audio utilities, device management | PRIVATE |
-| `juce_audio_processors` | AudioProcessor base class | PRIVATE |
-| `juce_dsp` | FFT, filters, windowing functions | PRIVATE |
-| `juce_opengl` | GPU-accelerated graphics | PRIVATE |
-| `juce_graphics` | 2D graphics, fonts, images | PRIVATE |
-| `juce_gui_basics` | UI components (buttons, sliders, windows) | PRIVATE |
-| `juce_gui_extra` | Extended UI features | PRIVATE |
+**Testing:**
+- `OpenTuneTests` is a native CMake test executable defined in `CMakeLists.txt:863`.
+- Test suites are grouped into `core`, `processor`, `ui`, and `architecture` in `Tests/TestMain.cpp:30`.
+- CTest registration is present through `enable_testing()` and `add_test(NAME OpenTuneCoreTests COMMAND OpenTuneTests)` in `CMakeLists.txt:961`, `CMakeLists.txt:963`.
 
 ## Key Dependencies
 
 **Critical:**
+- `JUCE-master/` - Supplies audio processor, standalone shell, GUI, and VST3 client code used by `CMakeLists.txt:49`, `CMakeLists.txt:575`.
+- `ThirdParty/ARA_SDK-releases-2.2.0/` - Supplies bundled ARA headers and helper sources referenced by `CMakeLists.txt:38`, `CMakeLists.txt:898`.
+- `ThirdParty/onnxruntime-win-x64-1.24.4/` - CPU ONNX Runtime headers/libs present in the live tree and referenced by `CMakeLists.txt:207`, `CMakeLists.txt:230`.
+- `ThirdParty/onnxruntime-dml-1.24.4/` - Windows DML ONNX Runtime package present in the live tree and referenced by `CMakeLists.txt:240`, `CMakeLists.txt:247`, `CMakeLists.txt:266`.
+- `ThirdParty/r8brain-free-src-master/` - Vendored DSP support library present in the live tree and included by `CMakeLists.txt:555`.
 
-| Package | Version | Purpose | Location |
-|---------|---------|---------|----------|
-| ONNX Runtime | 1.24.4 | ML model inference | `onnxruntime-win-x64-1.24.4/`, `onnxruntime-dml-1.24.4/` |
-| DirectML | 1.15.4 | GPU ML acceleration | NuGet download at build time |
-| DirectX Agility SDK | 1.619.1 | Modern D3D12 runtime | NuGet download at build time |
-| JUCE | 8.x | Audio framework, UI | `JUCE-master/` |
-| r8brain-free-src | 7.1 | Audio resampling | `ThirdParty/r8brain-free-src-master/` |
-| PFFFT | bundled | FFT implementation | `ThirdParty/r8brain-free-src-master/fft/` |
-
-**ONNX Runtime Headers:**
-- `onnxruntime_cxx_api.h` - C++ API for inference
-- `dml_provider_factory.h` - DirectML GPU execution provider (from DML package)
-- `onnxruntime_float16.h` - Float16 tensor support
-
-## AI Models
-
-**F0 Extraction - RMVPE:**
-- File: `models/rmvpe.onnx` (345 MB)
-- Source: `pc_nsf_hifigan_44.1k_ONNX/` copied during build
-- Architecture: Robust Multi-scale Vocal Pitch Estimator
-- Input: Waveform `[1, num_samples]` at 16 kHz
-- Output: F0 curve `[1, num_frames]`, UV (unvoiced) detection
-- Hop size: 160 samples (10ms frames)
-- Implementation: `Source/Inference/RMVPEExtractor.cpp`
-
-**Neural Vocoder - PC-NSF-HiFiGAN:**
-- File: `models/hifigan.onnx` (54 MB)
-- Source: `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx`
-- Architecture: Pitch Controllable NSF-HiFiGAN
-- Input: Mel spectrogram `[1, 128, num_frames]`, F0 curve `[1, num_frames]`
-- Output: Audio waveform at 44.1 kHz
-- Hop size: 512 samples (~11.6ms frames)
-- Mel bins: 128
-- Implementation: `Source/Inference/DmlVocoder.cpp`
+**Platform-Specific:**
+- `ThirdParty/microsoft.direct3d.d3d12.1.619.1/` is vendored and used for D3D12 Agility packaging on Windows in `CMakeLists.txt:137`, `CMakeLists.txt:170`, `CMakeLists.txt:741`, `CMakeLists.txt:831`.
+- No vendored `ThirdParty/microsoft.ai.directml.*` package is present in the live tree; Windows DirectML headers/runtime therefore rely on the CMake fallback to Windows SDK headers plus `C:/Windows/System32/DirectML.dll`, unless overrides are supplied, per `CMakeLists.txt:127`, `CMakeLists.txt:151`, `CMakeLists.txt:158`.
+- No vendored `ThirdParty/onnxruntime-osx-arm64-1.24.4/` directory is present in the live tree, even though macOS configuration expects that default path unless `ONNXRUNTIME_ROOT` is overridden in `CMakeLists.txt:215`, `CMakeLists.txt:217`.
 
 ## Configuration
 
 **Build Configuration:**
-- Project: `OpenTune` version 1.0.0 (`CMakeLists.txt:11`)
-- Company: DAYA (https://daya.audio)
-- Bundle ID: `com.daya.opentune`
-- Plugin formats: Standalone only
-- Manufacturer code: DAYA, Plugin code: De77
+- Root build entry is `CMakeLists.txt`.
+- Important cache variables are `ARA_SDK_PATH`, `ONNXRUNTIME_ROOT`, `ONNXRUNTIME_DML_ROOT`, `OPENTUNE_DIRECTML_ROOT`, `OPENTUNE_D3D12_AGILITY_ROOT`, and `OPENTUNE_DIRECTML_DLL` in `CMakeLists.txt:39`, `CMakeLists.txt:208`, `CMakeLists.txt:241`, `CMakeLists.txt:129`, `CMakeLists.txt:138`, `CMakeLists.txt:162`.
+- Windows builds require Windows Kits include/lib roots through `OPENTUNE_WINDOWS_KITS_INCLUDE_ROOT` and `OPENTUNE_WINDOWS_KITS_LIB_ROOT` in `CMakeLists.txt:82`, `CMakeLists.txt:84`.
 
-**Compile Definitions (CMakeLists.txt:271-289):**
-```cmake
-# JUCE Configuration
-JUCE_WEB_BROWSER=0
-JUCE_USE_CURL=0
-JUCE_VST3_CAN_REPLACE_VST2=0
-JUCE_REPORT_APP_USAGE=0
-JUCE_STRICT_REFCOUNTEDPOINTER=1
-JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
-JUCE_ASIO=1
+**Runtime / Diagnostics Knobs:**
+- `OPENTUNE_ORT_PROFILE` enables ONNX profiling in debug builds via `Source/Inference/ModelFactory.cpp:15`, `Source/Inference/ModelFactory.cpp:189`.
+- `OPENTUNE_SELFTEST` is read by the Standalone editor to trigger self-tests in `Source/Standalone/PluginEditor.cpp:450`.
 
-# Audio Format Support
-JUCE_USE_FLAC=1
-JUCE_USE_OGGVORBIS=1
-JUCE_USE_MP3AUDIOFORMAT=1
-JUCE_USE_WINDOWS_MEDIA_FORMAT=1
+**Persistent App Configuration:**
+- App preferences are stored as XML `juce::PropertiesFile` data in `app-preferences.settings` under user app-data, with an inter-process lock, via `Source/Utils/AppPreferences.h:39`, `Source/Utils/AppPreferences.cpp:52`, `Source/Utils/AppPreferences.cpp:365`.
+- Shared persisted preference fields include language, theme, editing scheme, piano-roll visual options, and zoom sensitivity in `Source/Utils/AppPreferences.cpp:9`, `Source/Utils/AppPreferences.cpp:205`, `Source/Utils/AppPreferences.cpp:234`.
+- Standalone-only persisted preference fields include shortcut bindings and mouse-trail theme in `Source/Utils/AppPreferences.cpp:18`, `Source/Utils/AppPreferences.cpp:228`, `Source/Editor/Preferences/StandalonePreferencePages.cpp:93`, `Source/Editor/Preferences/StandalonePreferencePages.cpp:148`.
 
-# ONNX Runtime
-ORT_API_MANUAL_INIT
-```
+## Resources
 
-**Compiler Flags (MSVC, CMakeLists.txt:300):**
-- `/utf-8` - Source file encoding
-- `/MP` - Multi-processor compilation
-- `/wd4100` - Suppress unreferenced formal parameter warning
-- `/wd4127` - Suppress conditional expression is constant warning
-
-**Linker Options (CMakeLists.txt:304):**
-- `/DELAYLOAD:onnxruntime.dll` - Delay load for faster startup
-- Links: `delayimp.lib` for delay-load support
+**Bundled Assets:**
+- Binary data currently embeds `Resources/Fonts/HONORSansCN-Medium.ttf` through `CMakeLists.txt:349`, `CMakeLists.txt:351`.
+- App icon file is `Resources/AppIcon.png`, referenced by `CMakeLists.txt:339`, `CMakeLists.txt:340`.
+- Help document source is `docs/UserGuide.html`; it is packaged for Standalone on macOS and copied to `docs/` beside the Standalone executable on Windows via `CMakeLists.txt:693`, `CMakeLists.txt:697`, `CMakeLists.txt:788`.
+- AI model source files in the repo are `models/rmvpe.onnx` and `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx`, then copied into output `models/` as `rmvpe.onnx` and `hifigan.onnx` in `CMakeLists.txt:704`, `CMakeLists.txt:705`, `CMakeLists.txt:753`, `CMakeLists.txt:844`.
 
 ## Platform Requirements
 
 **Development:**
-- Windows 10/11 x64
-- Visual Studio 2022 with C++ workload
-- CMake 3.22+
-- DirectX 12 SDK (for DML development)
-- ~4GB disk space (JUCE, ONNX Runtime, models)
+- Windows development expects MSVC static runtime, Windows Kits headers/libs, ONNX Runtime packages, and the vendored D3D12 Agility SDK in `CMakeLists.txt:28`, `CMakeLists.txt:82`, `CMakeLists.txt:184`, `CMakeLists.txt:196`, `CMakeLists.txt:203`.
+- macOS configuration expects arm64 ONNX Runtime plus Accelerate linkage, and injects Standalone-only bundle metadata in `CMakeLists.txt:216`, `CMakeLists.txt:596`, `CMakeLists.txt:656`.
 
-**Production:**
-- Windows 10/11 x64
-- DirectX 12 compatible GPU recommended (for DML acceleration)
-- Minimum 4GB RAM (8GB+ for long audio files)
-- ASIO driver support for low-latency audio
-
-## Audio Format Support
-
-**Import:**
-| Format | Extension | Implementation |
-|--------|-----------|----------------|
-| WAV | .wav | JUCE Windows Media |
-| FLAC | .flac | JUCE FLAC module |
-| OGG Vorbis | .ogg | JUCE OGG module |
-| MP3 | .mp3 | JUCE MP3 module |
-
-**Export:**
-- WAV (32-bit float, 44.1kHz)
-
-## GPU Acceleration
-
-**DirectML Integration:**
-- NuGet Package: `Microsoft.AI.DirectML` 1.15.4
-- Download: CMake `file(DOWNLOAD)` from `api.nuget.org` at configure time
-- Headers: `<build>/nuGet/microsoft.ai.directml.1.15.4/include/DirectML.h`
-- DLL: `<build>/nuget/microsoft.ai.directml.1.15.4/bin/x64-win/DirectML.dll`
-- Implementation: `Source/Inference/DmlVocoder.cpp`
-- GPU Detection: `Source/Utils/GpuDetector.cpp`
-- Runtime Verification: `Source/Utils/DmlRuntimeVerifier.cpp`
-- D3D12 Bootstrap: `Source/Utils/D3D12AgilityBootstrap.cpp`
-- Supported vendors: NVIDIA (0x10DE), AMD (0x1002), Intel (0x8086), Microsoft (0x1414)
-- Device filter: GPU only (`OrtDmlDeviceFilter::Gpu`)
-
-**DirectX Agility SDK:**
-- NuGet Package: `Microsoft.Direct3D.D3D12` 1.619.1
-- SDK Version Token: 619 (extracted from version)
-- Runtime files: `D3D12/D3D12Core.dll`, `D3D12/D3D12SDKLayers.dll`
-- Deployed to: `<executable_dir>/D3D12/`
-
-**DirectX Libraries Linked:**
-- `d3d12.lib` - Direct3D 12 API
-- `dxgi.lib` - DirectX Graphics Infrastructure
-- `version.lib` - Windows version API
-
-## SIMD Acceleration
-
-**Implementation:** `Source/Utils/SimdAccelerator.cpp`
-
-| Level | Vector Width | Detection Method |
-|-------|--------------|------------------|
-| AVX-512 | 16 floats | `cpu.hasAVX512()` |
-| AVX2 | 8 floats | `cpu.hasAVX2()` |
-| AVX | 8 floats | `cpu.hasAVX()` |
-| SSE2 | 4 floats | `cpu.hasSSE2()` |
-| Scalar | 1 float | Fallback |
-
-**Accelerated Operations:**
-- Sum of squares (energy calculation)
-- Dot product (correlation)
-- Multiply-add (filtering)
-
-## Build Output
-
-**Executable:**
-```
-build/OpenTune_artefacts/Release/Standalone/OpenTune.exe
-```
-
-**Bundled Dependencies (copied by CMake POST_BUILD):**
-```
-OpenTune.exe
-onnxruntime.dll                    # Core inference (DML build with builtin DirectML)
-DirectML.dll                       # Microsoft DirectML runtime
-D3D12/D3D12Core.dll                # DirectX Agility runtime
-D3D12/D3D12SDKLayers.dll           # DirectX debug layers
-models/hifigan.onnx                # Neural vocoder model
-models/rmvpe.onnx                  # Pitch extraction model
-docs/UserGuide.html                # User documentation
-```
-
-## Build Commands
-
-```bash
-# Configure
-cmake -B build -G "Visual Studio 17 2022" -A x64
-
-# Build Release
-cmake --build build --config Release
-
-# Build with tests disabled
-cmake -B build -DOPENTUNE_BUILD_TESTS=OFF
-
-# Run tests
-cmake --build build --config Release && build/OpenTuneTests.exe
-```
+**Runtime Packaging:**
+- Windows Standalone output copies `onnxruntime.dll`, optional shared providers, `DirectML.dll`, `D3D12` runtime files, models, and `docs/UserGuide.html` through `CMakeLists.txt:709`, `CMakeLists.txt:734`, `CMakeLists.txt:741`, `CMakeLists.txt:753`, `CMakeLists.txt:788`.
+- Windows VST3 output copies `onnxruntime.dll`, optional shared providers, `DirectML.dll`, `D3D12` runtime files, and models, but not the Standalone help file, through `CMakeLists.txt:805`, `CMakeLists.txt:823`, `CMakeLists.txt:831`, `CMakeLists.txt:844`.
+- macOS Standalone bundles `libonnxruntime.1.24.4.dylib`, models, and `docs/UserGuide.html` inside the app bundle in `CMakeLists.txt:686`, `CMakeLists.txt:690`, `CMakeLists.txt:693`, `CMakeLists.txt:766`, `CMakeLists.txt:775`.
 
 ---
 
-*Stack analysis: 2026-04-01*
+*Stack analysis: 2026-04-20*

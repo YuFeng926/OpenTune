@@ -1,654 +1,113 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-04-01
-
-## Overview
-
-OpenTune uses CMake's CTest framework with a single unified test executable (`OpenTuneTests`). The tests use a custom lightweight framework rather than JUCE's UnitTest infrastructure, providing simple pass/fail reporting with section organization.
+**Analysis Date:** 2026-04-20
 
 ## Test Framework
 
 **Runner:**
-- CTest (CMake's built-in test runner)
-- Custom test framework (NOT JUCE UnitTest)
+- 唯一可执行自动化测试目标仍是 `OpenTuneTests`，由 `option(OPENTUNE_BUILD_TESTS "Build unit tests" ON)` 和 `add_executable(OpenTuneTests ...)` 声明于 `CMakeLists.txt:860` 和 `CMakeLists.txt:863`。
+- CTest 只注册了一个入口 `OpenTuneCoreTests`，但命令实际运行整个 `OpenTuneTests` 可执行文件，而不是只跑 `core` suite，见 `CMakeLists.txt:961` and `CMakeLists.txt:963`。
+- 断言方式仍是手写 `logFail(...)` / `logPass(...)` 加全局失败标记 `gHasTestFailure`，入口在 `Tests/TestMain.cpp:2624`, `Tests/TestMain.cpp:2626`, `Tests/TestMain.cpp:2631`。
 
-**Configuration:**
-- Single test executable: `OpenTuneTests`
-- `enable_testing()` enables CTest integration
-- Test registered as `OpenTuneCoreTests`
+## Executable Suites
 
-**Run Commands:**
-```bash
-# Build tests
-cmake --build build --config Debug
+**Suite registry:**
+- 当前 suite 固定为 4 个：`core`, `processor`, `ui`, `architecture`，定义在 `Tests/TestMain.cpp:30`。
+- 子集运行与 suite 列表 CLI 仍可用：`--list-suites` in `Tests/TestMain.cpp:2858`，suite 分发在 `Tests/TestMain.cpp:2863`。
 
-# Run tests via CTest
-cd build && ctest -C Debug --output-on-failure
+**What each suite currently does:**
+- `core`: 目前只打印 section banner，没有实际测试体，见 `Tests/TestMain.cpp:4118`。
+- `processor`: 当前只跑一条 `runClipDerivedRefreshDoesNotMutateStandaloneSelectionTest()`，见 `Tests/TestMain.cpp:4123`。
+- `ui`: 覆盖 app preferences round-trip、shared/standalone preferences page 组合、editing scheme/parameter sync、PianoRoll source guards、visual invalidation、audio format registry、Standalone import、undo result-chain，以及新增的 `PianoRollProjection_ConsumesMaterializationIdAndPlacementProjectionOnly` / `EditingCommand_DoesNotMutatePlacement` owner guards，入口列表见 `Tests/TestMain.cpp:4131`。
+- `architecture`: 覆盖 placement/materialization owner 约束、Standalone playback placement window、ARA snapshot/render span、mac Standalone packaging 结构守护、undo architecture cleanup guard，以及新增的 `MaterializationCommands_DoNotMutateTimelinePlacementTruth` / `PlacementCommands_DoNotMutateClipCoreTruth` / `AraSession_SnapshotExposesSourceMaterializationAndPlacementOwnership` / `ProcessorModel_RejectsMixedClipOwnerApis`，入口列表见 `Tests/TestMain.cpp:4185`。
 
-# Run test executable directly
-./build/OpenTuneTests              # Linux/macOS
-build\Debug\OpenTuneTests.exe      # Windows
+## Commands In Use Now
 
-# Run via CMake
-cmake --build build --target OpenTuneTests
+**Build the test binary:**
+```powershell
+cmake --build build-debug --target OpenTuneTests --config Debug
+```
+- `OpenTuneTests` 是显式 CMake target，见 `CMakeLists.txt:863`。
+
+**Run all suites:**
+```powershell
+build-debug\Debug\OpenTuneTests.exe
 ```
 
-## Test Executable
-
-### OpenTuneTests
-
-**Location:** `Tests/TestMain.cpp` (1021 lines)
-
-**CMake Configuration:**
-```cmake
-add_executable(OpenTuneTests
-    Tests/TestMain.cpp
-)
-
-target_include_directories(OpenTuneTests
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/Source
-        ${CMAKE_CURRENT_SOURCE_DIR}/Tests
-        ${ONNXRUNTIME_INCLUDE_DIR}
-)
-
-target_link_libraries(OpenTuneTests
-    PRIVATE
-        OpenTune
-        juce::juce_core
-        juce::juce_audio_basics
-)
-
-enable_testing()
-add_test(NAME OpenTuneCoreTests COMMAND OpenTuneTests)
+**Run one suite or list suites:**
+```powershell
+build-debug\Debug\OpenTuneTests.exe --list-suites
+build-debug\Debug\OpenTuneTests.exe ui
+build-debug\Debug\OpenTuneTests.exe architecture
 ```
+- CLI 分支在 `Tests/TestMain.cpp:2856`。
+
+**Run through CTest:**
+```powershell
+ctest --test-dir build-debug -C Debug --output-on-failure
+```
+
+**Windows configure/build helper:**
+```powershell
+pwsh -NoProfile -File ".planning/scripts/invoke-msvc-cmake.ps1" -BuildDir build-debug -Target OpenTuneTests -Config Debug
+```
+- helper 脚本参数和默认值在 `.planning/scripts/invoke-msvc-cmake.ps1:1`，其内部会先 configure 再 build，见 `.planning/scripts/invoke-msvc-cmake.ps1:43`。
+
+**Format build verification also matters:**
+```powershell
+cmake --build build-debug --target OpenTune_Standalone --config Debug
+cmake --build build-debug --target OpenTune_VST3 --config Debug
+```
+- 两个 target 都在 `CMakeLists.txt` 中显式存在，见 `CMakeLists.txt:504` and `CMakeLists.txt:518`。
 
 ## Test File Organization
 
-**Primary Location:**
-- `Tests/TestMain.cpp` - All unit tests in single file
+- 测试仍集中在 `Tests/`，当前 live files 是 `Tests/TestMain.cpp`, `Tests/TestSupport.h`, `Tests/TestSupport.cpp`, `Tests/TestEditorFactoryStub.cpp`。
+- `Tests/TestMain.cpp` 仍是单文件主测试体和 suite registry，长度 2881 行，见 `Tests/TestMain.cpp:2881`。
+- `Tests/TestSupport.h` / `Tests/TestSupport.cpp` 提供 probe、mock、共享 helper，例如 `VST3AraSessionTestProbe` in `Tests/TestSupport.h:55` 和 `MockVocoderService` in `Tests/TestSupport.h:118`。
+- `Tests/TestEditorFactoryStub.cpp` 继续用于阻断真实 editor 创建，这个角色在旧文档中存在，live tree 仍保留该文件。
 
-**Test Dependencies (via OpenTune target):**
-- `Source/Utils/LockFreeQueue.h`
-- `Source/Utils/PitchCurve.h`, `Source/Utils/PitchCurve.cpp`
-- `Source/Utils/Note.h`
-- `Source/Utils/PitchUtils.h`
-- `Source/Inference/RenderCache.h`, `Source/Inference/RenderCache.cpp`
-- `Source/Inference/VocoderRenderScheduler.h`
-- `Source/Inference/F0InferenceService.h`
-- `Source/Inference/VocoderInferenceService.h`
-- `Source/Standalone/UI/PianoRoll/PianoRollUndoSupport.h`
-- `Source/PluginProcessor.h`, `Source/PluginProcessor.cpp`
+## Test Patterns Present Now
 
-## Test Executable Definitions
+**Direct state assertions:**
+- 测试更倾向直接实例化真实共享对象并断言状态，而不是经由 UI 黑盒观察，例如 `SourceStore`, `MaterializationStore`, `StandaloneArrangement`, `VST3AraSession`, `OpenTuneAudioProcessor` 均被 `Tests/TestSupport.h:10`-`Tests/TestSupport.h:24` 直接引入。
 
-### Example: SilentGapDetectorTest
+**Source-inspection guards:**
+- 当前 repo 继续用 `readWorkspaceFile()`, `extractWorkspaceFileSection()`, `sourceContains()`, `workspaceFileExists()` 直接读 live 源码做结构守护，定义在 `Tests/TestMain.cpp:153`, `Tests/TestMain.cpp:168`, `Tests/TestMain.cpp:186`, `Tests/TestMain.cpp:191`。
+- 这类 guard 仍在验证 preferences 组合、scheme manager 清理、mac packaging owner 边界等，例如 `runMacStandalonePackagingPlistMergeBelongsToStandaloneTargetOnlyTest()` in `Tests/TestMain.cpp:2700` and `runAudioEditingSchemeRulesUseExplicitSchemeInputTest()` referenced from `Tests/TestMain.cpp:2793`。
 
-```cmake
-add_executable(SilentGapDetectorTest
-    Tests/SilentGapDetectorTest.cpp
-    Source/Utils/SilentGapDetector.cpp
-    Source/Utils/SilentGapDetector.h
-    Source/Utils/SimdAccelerator.cpp
-    Source/Utils/SimdAccelerator.h
-    Source/Utils/CpuFeatures.cpp
-    Source/Utils/CpuFeatures.h
-    Source/Utils/AppLogger.cpp
-    Source/Utils/AppLogger.h
-)
+**Manual fake / probe, not external mocking library:**
+- `MockVocoderService` 仍用手写 fake 记录并发与失败路径，定义在 `Tests/TestSupport.h:118`，实现于 `Tests/TestSupport.cpp:5`。
+- 私有 seam probe 继续通过 `OPENTUNE_TEST_BUILD` 暴露，例如 `VST3AraSessionTestProbe` in `Tests/TestSupport.h:54`。
 
-target_include_directories(SilentGapDetectorTest
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/Source
-)
+## Coverage Signals
 
-target_link_libraries(SilentGapDetectorTest
-    PRIVATE
-        juce::juce_core
-        juce::juce_audio_basics
-    PUBLIC
-        juce::juce_recommended_config_flags
-        juce::juce_recommended_warning_flags
-)
-```
+- 仓库里仍没有 gcov/lcov/llvm-cov 之类覆盖率配置；当前 coverage signal 主要来自 smoke suites + architecture guards，而不是覆盖率百分比。
+- `ui` 和 `architecture` 是当前高信号 suite；`core` 为空、`processor` 很薄，因此不能把现状描述成均衡单元测试覆盖，证据见 `Tests/TestMain.cpp:2766` and `Tests/TestMain.cpp:2771`。
+- 2026-04-21 planning 明确记录了当前自动化验证现实：`OpenTuneTests.exe ui` PASS、`OpenTuneTests.exe architecture` PASS、全量 `OpenTuneTests.exe` PASS、`ctest` PASS、`OpenTune_Standalone` / `OpenTune_VST3` build PASS，见 `.planning/PROJECT.md`, `.planning/ROADMAP.md`, `.planning/STATE.md`。
 
-### Example: OpenTunePitchCurveTests
+## Manual Validation Expectations
 
-```cmake
-add_executable(OpenTunePitchCurveTests
-    Source/Tests/PitchCurveTests.cpp
-    Source/Inference/RenderCache.cpp
-    Source/Inference/RenderCache.h
-    Source/Inference/RenderingManager.cpp
-    Source/Inference/RenderingManager.h
-    Source/Utils/PitchCurve.cpp
-    Source/Utils/PitchCurve.h
-    # ... additional source files
-)
+- repo 当前仍把 manual DAW journey + `AppLogger` trace 当作 host-specific verification layer，见 `.planning/STATE.md:25` and `.planning/ROADMAP.md:54`。
+- 与 VST3/ARA 相关的问题，现行文档仍要求在真实 DAW 中复现并检查日志，REAPER 调试样例可见 `.planning/debug/reaper-vst3-record-originalf0-missing.md:10` and `.planning/debug/reaper-vst3-record-originalf0-missing.md:63`。
+- 生产代码里的 trace family 仍是手工验证的重要抓手，例如 `RecordTrace`, `MappingTrace`, `AutoTuneTrace`, `RenderTrace` 分别位于 `Source/Plugin/PluginEditor.cpp:999`, `Source/Plugin/PluginEditor.cpp:1106`, `Source/Plugin/PluginEditor.cpp:1258`, `Source/Standalone/PluginEditor.cpp:2597`。
 
-target_compile_definitions(OpenTunePitchCurveTests
-    PRIVATE
-        JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
-        JUCE_UNIT_TESTS=1
-        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
-)
-```
+## Explicit Gaps Verified From Repo Files
 
-## Test Patterns
+- `core` suite 目前没有任何真实测试，只是 banner，见 `Tests/TestMain.cpp:2766`。
+- `processor` suite 目前只有一条测试，见 `Tests/TestMain.cpp:2771`。
+- 没有 repo-level CI pipeline：工作区下未检测到 `.github/`，根目录也未检测到仓库级 `*.yml` / `*.yaml` CI 配置；自动化门禁仍依赖本地 CMake/CTest 流程。
+- L5 Standalone / VST3 手工旅程仍是显式 deferred gap，不是 PASS，见 `.planning/ROADMAP.md:53`, `.planning/ROADMAP.md:56`, `.planning/STATE.md:71`。
+- macOS 真实 `.app` bundle inspection 仍待 macOS 环境执行，见 `.planning/REQUIREMENTS.md:25`, `.planning/STATE.md:80`。
+- 由于 CTest 名称仍叫 `OpenTuneCoreTests`，但实际跑的是整包 `OpenTuneTests`，自动化入口名称与真实范围不一致，见 `CMakeLists.txt:963`。
 
-### Custom Test Framework (from `Tests/TestMain.cpp`)
+## Practical Guidance For New Work
 
-The project uses a simple custom test framework, NOT JUCE's UnitTest:
-
-```cpp
-// Test helpers
-void logPass(const char* testName) {
-    std::cout << "[PASS] " << testName << std::endl;
-}
-
-void logFail(const char* testName, const char* detail) {
-    std::cout << "[FAIL] " << testName << ": " << detail << std::endl;
-}
-
-void logSection(const char* section) {
-    std::cout << "\n=== " << section << " ===" << std::endl;
-}
-
-bool approxEqual(float a, float b, float tol = 1e-5f) {
-    return std::abs(a - b) <= tol;
-}
-
-bool approxEqual(double a, double b, double tol = 1e-9) {
-    return std::abs(a - b) <= tol;
-}
-```
-
-### Test Function Pattern
-
-Tests are organized into functions by module:
-
-```cpp
-void runLockFreeQueueTests();
-void runPitchUtilsTests();
-void runNoteTests();
-void runRenderCacheTests();
-void runPitchCurveTests();
-void runPianoRollUndoMatrixTests();
-void runVocoderSchedulerTests();
-void runF0VocoderIsolationTests();
-void runVocoderServiceSerializationTests();
-
-int main() {
-    std::cout << "========================================" << std::endl;
-    std::cout << "OpenTune Unit Tests" << std::endl;
-    std::cout << "========================================" << std::endl;
-
-    runLockFreeQueueTests();
-    runPitchUtilsTests();
-    runNoteTests();
-    runRenderCacheTests();
-    runPitchCurveTests();
-    runPianoRollUndoMatrixTests();
-    runVocoderSchedulerTests();
-    runF0VocoderIsolationTests();
-    runVocoderServiceSerializationTests();
-
-    std::cout << "\n========================================" << std::endl;
-    std::cout << "Tests Complete" << std::endl;
-    std::cout << "========================================" << std::endl;
-
-    return 0;
-}
-```
-
-### Individual Test Pattern
-
-Each test uses scoped blocks with early return on failure:
-
-```cpp
-void runLockFreeQueueTests() {
-    logSection("LockFreeQueue Tests");
-
-    {
-        const char* test = "Basic enqueue/dequeue";
-        LockFreeQueue<int> queue(16);
-
-        if (!queue.empty()) { logFail(test, "new queue not empty"); return; }
-        queue.try_enqueue(42);
-        if (queue.size() != 1) { logFail(test, "size not 1 after enqueue"); return; }
-
-        int value = 0;
-        if (!queue.try_dequeue(value)) { logFail(test, "dequeue failed"); return; }
-        if (value != 42) { logFail(test, "wrong value"); return; }
-
-        logPass(test);
-    }
-}
-```
-
-### Concurrent Test Pattern
-
-Thread-based tests for concurrent data structures:
-
-```cpp
-{
-    const char* test = "Concurrent MPMC";
-    LockFreeQueue<int> queue(1024);
-    std::atomic<int> enqueueCount{0};
-    std::atomic<int> dequeueCount{0};
-    std::atomic<bool> done{false};
-
-    const int numProducers = 4;
-    const int itemsPerProducer = 500;
-
-    std::vector<std::thread> producers, consumers;
-
-    for (int p = 0; p < numProducers; ++p) {
-        producers.emplace_back([&, p]() {
-            for (int i = 0; i < itemsPerProducer; ++i) {
-                while (!queue.try_enqueue(p * itemsPerProducer + i)) {
-                    std::this_thread::yield();
-                }
-                enqueueCount.fetch_add(1, std::memory_order_relaxed);
-            }
-        });
-    }
-
-    for (int c = 0; c < numProducers; ++c) {
-        consumers.emplace_back([&]() {
-            int value;
-            while (!done.load() || !queue.empty()) {
-                if (queue.try_dequeue(value)) {
-                    dequeueCount.fetch_add(1, std::memory_order_relaxed);
-                } else {
-                    std::this_thread::yield();
-                }
-            }
-        });
-    }
-
-    for (auto& t : producers) t.join();
-    while (dequeueCount.load() < numProducers * itemsPerProducer) std::this_thread::yield();
-    done.store(true);
-    for (auto& t : consumers) t.join();
-
-    if (enqueueCount.load() != numProducers * itemsPerProducer ||
-        dequeueCount.load() != numProducers * itemsPerProducer) {
-        logFail(test, "count mismatch");
-        return;
-    }
-
-    logPass(test);
-}
-```
-
-## Mocking Strategy
-
-**Pattern:** Custom mock classes that inherit from service interfaces
-
-### MockVocoderService Example
-
-Location: `Tests/TestMain.cpp:28-71`
-
-```cpp
-class MockVocoderService final : public OpenTune::VocoderInferenceService {
-public:
-    std::atomic<int> concurrentCalls_{0};
-    int maxConcurrentSeen_{0};
-    int numSuccessfulCalls_{0};
-    int numFailedCalls_{0};
-    std::chrono::milliseconds callDuration_{50};
-    std::atomic<bool> failOnCall_{false};
-    std::string failMessage_{"mock failure"};
-
-    MockVocoderService() = default;
-
-protected:
-    OpenTune::Result<std::vector<float>> doSynthesizeAudioWithEnergy(
-        const std::vector<float>& f0,
-        const std::vector<float>& energy,
-        const float* mel,
-        size_t melSize) override
-    {
-        (void)energy;
-        (void)mel;
-        (void)melSize;
-
-        if (failOnCall_.load()) {
-            ++numFailedCalls_;
-            return OpenTune::Result<std::vector<float>>::failure(
-                OpenTune::ErrorCode::ModelInferenceFailed, failMessage_);
-        }
-
-        int before = concurrentCalls_.fetch_add(1);
-        if (before >= maxConcurrentSeen_) {
-            maxConcurrentSeen_ = before + 1;
-        }
-
-        std::this_thread::sleep_for(callDuration_);
-
-        concurrentCalls_.fetch_sub(1);
-        ++numSuccessfulCalls_;
-
-        std::vector<float> audio;
-        audio.resize(static_cast<size_t>(f0.size()) * 512, 0.5f);
-        return OpenTune::Result<std::vector<float>>::success(std::move(audio));
-    }
-};
-```
-
-**Mock Features:**
-- Tracks concurrent calls for serialization verification
-- Configurable call duration for timing tests
-- Configurable failure mode for error handling tests
-- No ONNX Runtime dependency
-
-## Test Fixtures
-
-**Pattern:** Inline test data creation within test blocks
-
-```cpp
-void runPianoRollUndoMatrixTests() {
-    logSection("PianoRoll Undo Matrix Tests");
-
-    OpenTuneAudioProcessor processor;
-    UndoManager undoManager;
-
-    ClipSnapshot snap;
-    auto clipAudio = std::make_shared<juce::AudioBuffer<float>>(1, 44100);
-    clipAudio->clear();
-    snap.audioBuffer = clipAudio;
-    snap.name = "UndoMatrixClip";
-    snap.colour = juce::Colours::lightgrey;
-    snap.pitchCurve = std::make_shared<PitchCurve>();
-    snap.pitchCurve->setOriginalF0(std::vector<float>(512, 440.0f));
-    snap.originalF0State = OriginalF0State::Ready;
-    snap.renderCache = std::make_shared<RenderCache>();
-
-    // ... test setup continues
-}
-```
-
-**Lambda Helper Pattern:**
-```cpp
-auto resetBaseline = [&]() {
-    undoManager.clear();
-    auto notes = makeBaseNotes();
-    processor.setClipNotes(trackId, clipIndex, notes);
-    curve->clearAllCorrections();
-    curve->applyCorrectionToRange(notes, 0, frameFromSec(1.0), 0.8f, 0.0f, 6.0f, 44100.0);
-};
-
-auto captureState = [&]() -> PianoState {
-    PianoState s;
-    s.notes = processor.getClipNotes(trackId, clipIndex);
-    s.segments = CorrectedSegmentsChangeAction::captureSegments(curve);
-    return s;
-};
-```
-
-## Coverage
-
-**Requirements:** No coverage target defined.
-
-**Coverage Tools Available:**
-- MSVC: `/coverage` flag with coverage tools
-- GCC/Clang: `--coverage` flag with `gcov`/`lcov`
-
-**Recommendations:**
-```cmake
-# Add coverage support
-option(ENABLE_COVERAGE "Enable code coverage" OFF)
-if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(OpenTune PRIVATE --coverage -O0 -g)
-    target_link_options(OpenTune PRIVATE --coverage)
-endif()
-```
-
-## CI/CD Integration
-
-**Status:** No CI/CD configuration detected.
-
-**Missing:**
-- `.github/workflows/` directory (GitHub Actions)
-- `azure-pipelines.yml` (Azure Pipelines)
-- `.gitlab-ci.yml` (GitLab CI)
-- Jenkinsfile
-
-**Recommended GitHub Actions Workflow:**
-
-```yaml
-# .github/workflows/tests.yml
-name: Tests
-
-on: [push, pull_request]
-
-jobs:
-  test-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-      
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
-      
-      - name: Build
-        run: cmake --build build --config Debug
-      
-      - name: Run Tests
-        run: cd build && ctest -C Debug --output-on-failure
-
-  test-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
-      
-      - name: Build
-        run: cmake --build build
-      
-      - name: Run Tests
-        run: cd build && ctest --output-on-failure
-```
-
-## Test Categories
-
-### Unit Tests (from `Tests/TestMain.cpp`)
-
-**LockFreeQueue Tests:**
-- Basic enqueue/dequeue
-- Full queue behavior
-- Concurrent MPMC (multi-producer, multi-consumer with 4 producers, 4 consumers, 500 items each)
-
-**PitchUtils Tests:**
-- Frequency to MIDI conversion (A4=440Hz → MIDI 69)
-- MIDI to Frequency conversion
-- MIDI round trip accuracy
-- Mix retune interpolation (0%, 50%, 100%)
-
-**Note Tests:**
-- Note basics (duration calculation, MIDI conversion)
-- Note adjusted pitch with pitch offset
-- NoteSequence insert sorted
-- NoteSequence non-overlapping normalization
-
-**RenderCache Tests:**
-- Empty cache initialization
-- Add chunk operations
-- Revision mismatch handling (wrong revision rejected)
-
-**PitchCurve Tests:**
-- Empty curve state
-- Set original F0
-- Manual correction application
-- Snapshot immutability (Copy-on-Write verification)
-
-**PianoRoll Undo Matrix Tests:**
-- Draw note undo/redo
-- Move notes undo/redo
-- Resize note undo/redo
-- Delete notes undo/redo
-- Hand-draw F0 curve undo/redo
-- Line anchor undo/redo
-- Retune speed undo/redo
-- Vibrato depth undo/redo
-- Auto-tune undo/redo
-
-**VocoderRenderScheduler Tests:**
-- Scheduler starts not running, requires initialization
-- Queue accepts jobs before initialization
-- Rejects null service
-- Serializes run on single session (verifies maxConcurrentSeen=1)
-- Extreme concurrency test (32 jobs)
-
-**F0/Vocoder Isolation Tests:**
-- F0 and Vocoder are independent instances
-- Vocoder shutdown does not affect F0
-- Multiple shutdown is safe
-- Independent shutdown order
-- Scheduler shutdown does not affect services
-- No shared mutex between services
-
-**VocoderInferenceService Serialization Tests:**
-- Serializes run on single session (16 concurrent callers)
-- Verifies maxConcurrentSeen=1
-
-### Integration Tests
-
-Tests that verify component interactions:
-- PianoRollUndoSupport with OpenTuneAudioProcessor
-- RenderCache with revision tracking
-- VocoderRenderScheduler with MockVocoderService
-
-### Concurrency Tests
-
-Tests specifically for thread safety:
-- LockFreeQueue MPMC test
-- VocoderScheduler serial execution test
-- VocoderService concurrent access test
-
-## Test Dependencies
-
-### JUCE Modules Used in Tests
-
-```cmake
-# Core modules
-juce::juce_core
-juce::juce_audio_basics
-
-# Via OpenTune target
-juce::juce_audio_utils
-juce::juce_audio_processors
-juce::juce_dsp
-juce::juce_opengl
-juce::juce_graphics
-juce::juce_gui_basics
-juce::juce_gui_extra
-```
-
-### ONNX Runtime
-
-Tests link against `OpenTune` which includes ONNX Runtime. Test executable copies ONNX DLLs post-build:
-```cmake
-add_custom_command(TARGET OpenTuneTests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ONNXRUNTIME_LIB_DIR}/onnxruntime.dll"
-        "$<TARGET_FILE_DIR:OpenTuneTests>/onnxruntime.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ONNXRUNTIME_LIB_DIR}/onnxruntime_providers_shared.dll"
-        "$<TARGET_FILE_DIR:OpenTuneTests>/onnxruntime_providers_shared.dll"
-    COMMENT "Copying ONNX Runtime DLLs to unit tests..."
-)
-```
-
-### Model Files
-
-Tests do NOT require model files - they use mock implementations.
-
-## CI/CD Integration
-
-**Status:** No CI/CD configuration detected.
-
-**Missing:**
-- `.github/workflows/` directory (GitHub Actions)
-- `azure-pipelines.yml` (Azure Pipelines)
-- `.gitlab-ci.yml` (GitLab CI)
-
-**Recommended GitHub Actions Workflow:**
-
-```yaml
-# .github/workflows/tests.yml
-name: Tests
-
-on: [push, pull_request]
-
-jobs:
-  test-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-      
-      - name: Configure CMake
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64
-      
-      - name: Build
-        run: cmake --build build --config Release
-      
-      - name: Run Tests
-        run: cd build && ctest -C Release --output-on-failure
-
-  test-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
-      
-      - name: Build
-        run: cmake --build build
-      
-      - name: Run Tests
-        run: cd build && ctest --output-on-failure
-```
-
-## Coverage
-
-**Requirements:** No coverage target defined.
-
-**View Coverage:**
-```bash
-# With GCC/Clang
-cmake -B build -DENABLE_COVERAGE=ON
-cmake --build build
-cd build && ctest
-gcovr -r .. --html-details coverage.html
-```
-
-## Best Practices Used
-
-1. **Unified Test Executable:** All tests in single `OpenTuneTests` target
-2. **Mock Objects:** `MockVocoderService` for testing without ONNX
-3. **Section Organization:** Tests grouped by functional area
-4. **Early Return Pattern:** Tests fail fast on first error
-5. **Concurrent Testing:** Thread safety verified with multi-threaded tests
-
-## Anti-Patterns to Avoid
-
-1. **Don't** require model files for unit tests (use mocks)
-2. **Don't** create interdependent tests (each should be isolated)
-3. **Don't** use `std::cout` directly - use `logPass`/`logFail` helpers
-4. **Don't** skip timeout handling in concurrent tests
+- 需要高信号回归守护时，优先往 `ui` 或 `architecture` 增加 focused smoke test；不要把当前 `core` / `processor` 现状误当成充分覆盖。
+- 需要守护结构清理时，继续使用 workspace source-inspection pattern，参考 `Tests/TestMain.cpp:2704`。
+- 遇到 host-only 或 ARA-only 回归时，继续组合使用：`OpenTuneTests` 局部 smoke、格式 build、真实 DAW 手工旅程、`AppLogger` trace。
+- 写测试时继续优先断言显式 state carrier 和 published snapshot，不要引入新的隐藏 manager mock 层。
 
 ---
 
-*Testing analysis: 2026-04-01*
+*Testing analysis: 2026-04-20*
