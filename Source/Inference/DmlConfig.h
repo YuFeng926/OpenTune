@@ -3,9 +3,7 @@
 namespace OpenTune {
 
 struct DmlConfig {
-    int deviceId = 0;
-    int performancePreference = 1;  // 0=Default, 1=HighPerformance, 2=MinimumPower
-    int deviceFilter = 1;           // 1=Gpu (OrtDmlDeviceFilter::Gpu)
+    int adapterIndex = 0;       // DXGI adapter index for DML1 API
 };
 
 } // namespace OpenTune

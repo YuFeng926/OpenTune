@@ -56,6 +56,7 @@ public:
         virtual void vibratoRateChanged(float value) = 0;
         virtual void noteSplitChanged(float value) = 0;
         virtual void toolSelected(int toolId) = 0;
+        virtual void autoTuneRequested() {}
         // 参数拖动完成回调（用于 Undo 记录，oldValue 是拖动开始前的值）
         virtual void parameterDragEnded(int paramId, float oldValue, float newValue) { juce::ignoreUnused(paramId, oldValue, newValue); }
     };

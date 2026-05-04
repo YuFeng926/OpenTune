@@ -3,27 +3,18 @@
 /**
  * 加速后端检测模块
  * 
- * 检测可用的硬件加速后端，自动选择最佳的ONNX Runtime执行提供程序。
- * 优先级：CoreML (macOS) / DirectML (Windows) > CPU
+ * 检测可用的硬件加速后端。
+ * Windows: 枚举 GPU + 检查 ORT DML EP 可用性 → DirectML 或 CPU
+ * macOS:   CoreML 系统框架 → CoreML 或 CPU
  * 
- * DirectML支持所有DirectX 12兼容的GPU：
- * - NVIDIA: GTX 600系列及更新（Kepler架构 2012+）
- * - AMD: Radeon HD 7000系列及更新（GCN 1.0架构 2012+）
- * - Intel: HD Graphics 4000及更新（Ivy Bridge 2012+），以及Intel Arc独显
- * 
- * CoreML支持所有macOS设备：
- * - Apple Silicon: Neural Engine (ANE) + GPU + CPU
- * - Intel Mac: Metal GPU + CPU
+ * GPU 枚举信息（名称/VRAM/adapterIndex）用于日志和 UI 展示。
+ * 实际 DML 可用性由 ORT GetExecutionProviderApi("DML") 判断。
  */
 
 #include <juce_core/juce_core.h>
 #include <string>
 #include <vector>
 #include <cstdint>
-
-#ifdef _WIN32
-#include "DmlRuntimeVerifier.h"
-#endif
 
 namespace OpenTune {
 
@@ -64,8 +55,21 @@ public:
     /**
      * 检测可用的加速后端（在程序启动时调用一次）
      * 自动选择最佳后端
+     * @param forceCpu 若为 true，跳过 GPU 检测直接使用 CPU
      */
-    void detect();
+    void detect(bool forceCpu = false);
+
+    /**
+     * 重置检测状态，允许重新检测
+     * 调用者必须确保无并发的 detect()/getSelectedBackend() 调用
+     */
+    void reset();
+
+    /**
+     * 由 VocoderFactory 在 DML session 创建失败 fallback CPU 时调用，
+     * 确保检测状态与实际后端一致。
+     */
+    void overrideBackend(AccelBackend backend) { selectedBackend_ = backend; }
 
     /**
      * 获取选择的后端
@@ -98,9 +102,9 @@ public:
     std::string getAccelerationReport() const;
 
     /**
-     * 获取DirectML设备ID（如果使用DirectML）
+     * 获取 DirectML 使用的 DXGI adapter index
      */
-    int getDirectMLDeviceId() const { return directMLDeviceId_; }
+    int getDirectMLDeviceId() const { return dmlAdapterIndex_; }
 
     /**
      * 获取检测到的GPU设备列表
@@ -111,22 +115,6 @@ public:
      * 获取选中的GPU设备信息
      */
     const GpuDeviceInfo& getSelectedGpu() const { return selectedGpu_; }
-
-    /**
-     * 获取推荐的GPU显存限制（字节数）
-     * 返回选中GPU显存的60%，用于DML gpu_mem_limit参数
-     */
-    size_t getRecommendedGpuMemoryLimit() const;
-
-    /**
-     * 检查DML Provider DLL是否真正可用
-     */
-    bool isDmlProviderDllAvailable() const { return dmlProviderDllAvailable_; }
-
-    /**
-     * 获取DML Provider DLL路径（用于诊断）
-     */
-    std::string getDmlProviderDllPath() const { return dmlProviderDllPath_; }
 
 private:
     AccelerationDetector() = default;
@@ -148,14 +136,10 @@ private:
     bool directMLAvailable_ = false;
     bool coreMLAvailable_ = false;
 
-    int directMLDeviceId_ = 0;
+    int dmlAdapterIndex_ = 0;
 
     std::vector<GpuDeviceInfo> gpuDevices_;
     GpuDeviceInfo selectedGpu_;
-    
-    // DML Provider DLL 检测结果
-    bool dmlProviderDllAvailable_ = false;
-    std::string dmlProviderDllPath_;
 };
 
 } // namespace OpenTune

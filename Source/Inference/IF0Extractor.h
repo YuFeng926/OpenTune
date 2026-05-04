@@ -81,23 +81,23 @@ public:
      * @brief Set confidence threshold for voiced/unvoiced detection
      * @param threshold Value between 0.0 and 1.0 (default typically 0.03-0.05)
      */
-    virtual void setConfidenceThreshold(float threshold) { (void)threshold; }
+    virtual void setConfidenceThreshold(float threshold) = 0;
 
     /**
      * @brief Set minimum F0 frequency
      * @param minHz Minimum frequency in Hz (default typically 30-50Hz)
      */
-    virtual void setF0Min(float minHz) { (void)minHz; }
+    virtual void setF0Min(float minHz) = 0;
 
     /**
      * @brief Set maximum F0 frequency
      * @param maxHz Maximum frequency in Hz (default typically 1000-2000Hz)
      */
-    virtual void setF0Max(float maxHz) { (void)maxHz; }
+    virtual void setF0Max(float maxHz) = 0;
 
-    virtual float getConfidenceThreshold() const { return 0.03f; }
-    virtual float getF0Min() const { return 30.0f; }
-    virtual float getF0Max() const { return 2000.0f; }
+    virtual float getConfidenceThreshold() const = 0;
+    virtual float getF0Min() const = 0;
+    virtual float getF0Max() const = 0;
 };
 
 } // namespace OpenTune

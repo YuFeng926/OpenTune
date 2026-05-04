@@ -1,3 +1,5 @@
+#if JucePlugin_Build_Standalone
+
 #include "Editor/EditorFactory.h"
 #include "Standalone/PluginEditor.h"
 #include "PluginProcessor.h"
@@ -11,3 +13,4 @@ juce::AudioProcessorEditor* createOpenTuneEditor(OpenTuneAudioProcessor& process
 
 } // namespace OpenTune
 
+#endif // JucePlugin_Build_Standalone

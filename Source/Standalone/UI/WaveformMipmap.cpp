@@ -231,19 +231,19 @@ void WaveformMipmap::clear()
     }
 }
 
-WaveformMipmap& WaveformMipmapCache::getOrCreate(uint64_t clipId)
+WaveformMipmap& WaveformMipmapCache::getOrCreate(uint64_t materializationId)
 {
-    auto it = caches_.find(clipId);
+    auto it = caches_.find(materializationId);
     if (it != caches_.end())
         return *it->second;
     
-    auto inserted = caches_.emplace(clipId, std::make_unique<WaveformMipmap>());
+    auto inserted = caches_.emplace(materializationId, std::make_unique<WaveformMipmap>());
     return *inserted.first->second;
 }
 
-void WaveformMipmapCache::remove(uint64_t clipId)
+void WaveformMipmapCache::remove(uint64_t materializationId)
 {
-    caches_.erase(clipId);
+    caches_.erase(materializationId);
 }
 
 void WaveformMipmapCache::prune(const std::unordered_set<uint64_t>& alive)

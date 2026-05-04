@@ -24,6 +24,11 @@
 
 namespace OpenTune {
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4324) // Intentional cache-line separation for queue cursors.
+#endif
+
 template<typename T>
 class LockFreeQueue {
     struct Cell {
@@ -152,5 +157,9 @@ private:
     alignas(64) std::atomic<size_t> enqueuePos_;
     alignas(64) std::atomic<size_t> dequeuePos_;
 };
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 }  // namespace OpenTune

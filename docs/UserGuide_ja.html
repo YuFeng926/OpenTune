@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenTune ユーザーガイド</title>
+    <style>
+        @page { size: A4; margin: 2cm; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Hiragino Sans", "Yu Gothic", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.8; color: #333; font-size: 11pt;
+            max-width: 210mm; margin: 0 auto; padding: 20mm; background: #fff;
+        }
+        .cover { text-align: center; padding: 60px 0; page-break-after: always; }
+        .cover h1 { font-size: 48pt; color: #2563eb; margin-bottom: 20px; font-weight: 700; }
+        .cover .subtitle { font-size: 18pt; color: #64748b; margin-bottom: 40px; }
+        .cover .version { font-size: 14pt; color: #94a3b8; margin-top: 100px; }
+        .cover .tagline { font-size: 16pt; color: #3b82f6; margin-top: 20px; font-weight: 500; }
+        .toc { page-break-after: always; }
+        .toc h2 { font-size: 24pt; color: #1e293b; border-bottom: 3px solid #2563eb; padding-bottom: 10px; margin-bottom: 30px; }
+        .toc ul { list-style: none; }
+        .toc li { padding: 8px 0; border-bottom: 1px dotted #e2e8f0; }
+        .toc a { color: #334155; text-decoration: none; }
+        .toc a:hover { color: #2563eb; }
+        .toc .page-num { float: right; color: #94a3b8; }
+        h2 { font-size: 22pt; color: #1e293b; margin-top: 40px; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
+        h3 { font-size: 16pt; color: #334155; margin-top: 30px; margin-bottom: 15px; }
+        h4 { font-size: 13pt; color: #475569; margin-top: 20px; margin-bottom: 10px; }
+        p { margin-bottom: 12px; text-align: justify; }
+        ul, ol { margin-left: 20px; margin-bottom: 15px; }
+        li { margin-bottom: 6px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 10pt; }
+        th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; }
+        th { background: #f1f5f9; color: #1e293b; font-weight: 600; }
+        tr:nth-child(even) { background: #f8fafc; }
+        .tip, .warning, .note { padding: 15px 20px; margin: 20px 0; border-radius: 6px; border-left: 4px solid; }
+        .tip { background: #eff6ff; border-color: #3b82f6; }
+        .warning { background: #fffbeb; border-color: #f59e0b; }
+        .note { background: #f0fdf4; border-color: #22c55e; }
+        .tip-title, .warning-title, .note-title { font-weight: 600; margin-bottom: 5px; }
+        .tip-title { color: #1d4ed8; }
+        .warning-title { color: #d97706; }
+        .note-title { color: #16a34a; }
+        code { background: #f1f5f9; padding: 2px 6px; border-radius: 3px; font-family: "Consolas", "Monaco", monospace; font-size: 10pt; }
+        .workflow { background: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .workflow-step { display: flex; align-items: flex-start; margin-bottom: 15px; }
+        .step-number { background: #2563eb; color: white; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; margin-right: 15px; flex-shrink: 0; }
+        .step-content h4 { margin-top: 0; margin-bottom: 5px; }
+        .step-content p { margin-bottom: 0; color: #64748b; }
+        .legend { display: flex; flex-wrap: wrap; gap: 20px; margin: 15px 0; }
+        .legend-item { display: flex; align-items: center; gap: 8px; }
+        .legend-color { width: 20px; height: 4px; border-radius: 2px; }
+        .page-break { page-break-before: always; }
+        .shortcut-table td:first-child { white-space: nowrap; font-family: monospace; background: #f1f5f9; }
+        .tool-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin: 10px 0; background: #fafafa; }
+        .tool-card h4 { margin-top: 0; color: #2563eb; }
+        .param-item { margin: 15px 0; padding: 10px 0; border-bottom: 1px dashed #e2e8f0; }
+        .param-name { font-weight: 600; color: #1e293b; }
+        .param-range { color: #64748b; font-size: 10pt; }
+        footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #e2e8f0; text-align: center; color: #94a3b8; font-size: 10pt; }
+        @media print { body { padding: 0; } .cover { padding: 100px 0; } }
+    </style>
+</head>
+<body>
+
+<div class="cover">
+    <h1>OpenTune</h1>
+    <div class="subtitle">AI スマートピッチ補正ソフトウェア</div>
+    <div class="tagline">フォルマントを保持し、自然なピッチシフトを実現</div>
+    <div class="version">ユーザーガイド v1.5</div>
+    <div class="version" style="margin-top: 10px;">2026年5月</div>
+</div>
+
+<div class="toc">
+    <h2>目次</h2>
+    <ul>
+        <li><a href="#whats-new">★ v1.5 新機能と改善</a></li>
+<li><a href="#intro">1. 製品概要</a></li>
+        <li><a href="#requirements">2. システム要件</a></li>
+        <li><a href="#install">3. インストールと起動</a></li>
+        <li><a href="#interface">4. インターフェース概要</a></li>
+        <li><a href="#quickstart">5. クイックスタート</a></li>
+        <li><a href="#features">6. 主要機能</a></li>
+        <li><a href="#tools">7. 編集ツール</a></li>
+        <li><a href="#parameters">8. パラメータ詳細</a></li>
+        <li><a href="#schemes">9. 編集モード</a></li>
+        <li><a href="#preferences">10. 設定</a></li>
+        <li><a href="#shortcuts">11. ショートカットキー</a></li>
+        <li><a href="#themes">12. テーマとビジュアル</a></li>
+        <li><a href="#gpu">13. GPU アクセラレーション</a></li>
+        <li><a href="#vst3">14. VST3/ARA プラグインモード</a></li>
+        <li><a href="#export">15. オーディオの書き出し</a></li>
+        <li><a href="#faq">16. よくある質問</a></li>
+    </ul>
+</div>
+
+<div class="page-break"></div>
+<h2 id="whats-new">★ v1.5 新機能と改善</h2>
+
+<h3>🎉 新機能</h3>
+<table>
+    <tr><th width="25%">機能</th><th>説明</th></tr>
+    <tr><td><strong>VST3/ARA プラグインモード</strong></td><td>VST3 + ARA2 プラグインとして DAW（Studio One、Cubase、Logic Pro）で使用可能</td></tr>
+    <tr><td><strong>ユニバーサル GPU アクセラレーション</strong></td><td>NVIDIA / AMD / Intel の全 GPU で GPU アクセラレーションが使用可能</td></tr>
+    <tr><td><strong>8 種類のスケール/モード</strong></td><td>スケール検出をメジャー/マイナーから 8 種類に拡張：メジャー、マイナー、クロマチック、ハーモニックマイナー、ドリアン、ミクソリディアン、メジャーペンタトニック、マイナーペンタトニック</td></tr>
+    <tr><td><strong>鍵盤試聴</strong></td><td>ピアノロール左側の鍵盤をクリックしてピッチをプレビュー、ドラッグでキー間を移動、離して停止</td></tr>
+    <tr><td><strong>編集モード</strong></td><td>「カーブ優先」と「ノート優先」の 2 つの編集モードを新設、設定で切替可能</td></tr>
+    <tr><td><strong>設定パネル</strong></td><td>言語、テーマ、編集モード、レンダリング優先度、ズーム感度などを一元管理する設定ダイアログ</td></tr>
+    <tr><td><strong>5 言語インターフェース</strong></td><td>中国語・英語・日本語・ロシア語・スペイン語の 5 言語に対応</td></tr>
+    <tr><td><strong>マウストレイルエフェクト</strong></td><td>8 種類のマウス軌跡テーマ（Classic、Neon、Fire、Ocean、Galaxy、Cherry Blossom、Matrix など）</td></tr>
+    <tr><td><strong>パネル折りたたみ</strong></td><td>左右パネルを非表示にし、没入型フルスクリーン編集が可能</td></tr>
+    <tr><td><strong>レンダリングステータスバッジ</strong></td><td>右上にフローティング表示で現在のレンダリング進捗を表示</td></tr>
+    <tr><td><strong>ノート単位のビブラート</strong></td><td>Vibrato Depth と Rate を各ノートに個別設定可能</td></tr>
+    <tr><td><strong>Line Anchor セグメントパラメータ</strong></td><td>Line Anchor セグメントを選択し、個別の Retune Speed を設定可能</td></tr>
+    <tr><td><strong>ホバーツールチップ</strong></td><td>すべてのコントロールにホバー時ツールチップ（機能説明＋ショートカットキー）を表示</td></tr>
+    <tr><td><strong>バッチインポート</strong></td><td>複数の音声ファイルを一括インポート可能（順次配置またはトラック分配）</td></tr>
+    <tr><td><strong>View メニュークイック設定</strong></td><td>波形表示、レーン、ノート名、チャンク境界などの表示オプションを View メニューから即座に切替</td></tr>
+</table>
+
+<h3>🐛 修正と最適化</h3>
+<table>
+    <tr><th width="25%">問題</th><th>改善内容</th></tr>
+    <tr><td><strong>メモリ使用量が高い</strong></td><td>メモリ管理を最適化し、常駐メモリを約 500〜900 MB 削減</td></tr>
+    <tr><td><strong>GPU 互換性が低い</strong></td><td>全主要 GPU でアクセラレーション可能、非対応時は自動的に CPU にフォールバック</td></tr>
+    <tr><td><strong>処理速度が遅い</strong></td><td>GPU アクセラレーションにより処理速度を大幅向上</td></tr>
+
+
+</table>
+
+<h2 id="intro">1. 製品概要</h2>
+
+<p>OpenTune は、ニューラルボコーダーベースのオープンソース AI ピッチ補正ソフトウェアです。従来の DSP アルゴリズムが直接ピッチシフトを行うのとは異なり、PC-NSF-HiFiGAN ボコーダーを使用して元のフォルマントを保持したまま声を再生成するため、極端なピッチ調整でも自然で安定した音質を実現します。</p>
+
+<p>OpenTune は <strong>Standalone（スタンドアロン）</strong>と <strong>VST3/ARA（ホストプラグイン）</strong>の両方の動作モードを提供し、独立したマルチトラックエディターとしても、DAW に組み込んでリアルタイムの共同編集を行うことも可能です。</p>
+
+<h3>主な利点</h3>
+<table>
+    <tr><th width="25%">特性</th><th>説明</th></tr>
+    <tr><td><strong>フォルマント不変</strong></td><td>ピッチを変更しても声の基調色に影響せず、「アヒル声」や「別人のように聞こえる」歪み感を解消</td></tr>
+    <tr><td><strong>広範囲ピッチシフト</strong></td><td>大胆なピッチ補正や転調をサポートし、音質はクリアで安定</td></tr>
+    <tr><td><strong>AI リシンセシス</strong></td><td>PC-NSF-HiFiGAN ディープラーニングボコーダーによる高忠実度の音声再構築</td></tr>
+    <tr><td><strong>Auto-Tune ライクなワークフロー</strong></td><td>自動補正、手描き、音符、アンカーツールを完備</td></tr>
+    <tr><td><strong>自動調性検出</strong></td><td>Krumhansl-Schmuckler アルゴリズム内蔵、8種類の調性に対応</td></tr>
+    <tr><td><strong>デュアルフォーマット対応</strong></td><td>Standalone スタンドアロン + VST3/ARA プラグインで主要 DAW とシームレス連携</td></tr>
+    <tr><td><strong>GPU アクセラレーション</strong></td><td>DirectML / CoreML による AI 推論の自動高速化、CPU に自動フォールバック</td></tr>
+    <tr><td><strong>500 ステップの取り消し</strong></td><td>カスタム Undo/Redo システム、あらゆる編集操作を元に戻せます</td></tr>
+    <tr><td><strong>オープンソース・無料</strong></td><td>永久無料、コミュニティ主導、継続的な進化</td></tr>
+</table>
+
+<div class="tip">
+    <div class="tip-title">技術的ハイライト</div>
+    OpenTune は RMVPE ディープラーニングモデルを使用して高精度なピッチ抽出を行い、PC-NSF-HiFiGAN ニューラルボコーダーで高品質なリシンセシスを実現します。GPU アクセラレーションに対応し、処理速度も高速です。
+</div>
+
+<h2 id="requirements">2. システム要件</h2>
+
+<h3>最小構成</h3>
+<table>
+    <tr><th width="25%">項目</th><th>要件</th></tr>
+    <tr><td>OS</td><td>Windows 10/11 (64ビット) または macOS 11+</td></tr>
+    <tr><td>CPU</td><td>Intel Core i5 または同等性能の AMD プロセッサ</td></tr>
+    <tr><td>メモリ</td><td>8 GB RAM</td></tr>
+    <tr><td>ストレージ</td><td>500 MB の空き容量（AI モデル含む）</td></tr>
+    <tr><td>サウンドカード</td><td>ASIO または WASAPI 対応のオーディオデバイス</td></tr>
+</table>
+
+<h3>推奨構成</h3>
+<table>
+    <tr><th width="25%">項目</th><th>要件</th></tr>
+    <tr><td>CPU</td><td>Intel Core i7 / Apple M1 以上</td></tr>
+    <tr><td>メモリ</td><td>16 GB RAM 以上</td></tr>
+    <tr><td>GPU</td><td>DirectML 対応 GPU（NVIDIA / AMD / Intel）でボコーダー推論を高速化可能</td></tr>
+</table>
+
+<div class="note">
+    <div class="note-title">GPU アクセラレーションについて</div>
+    <p>OpenTune は DirectML（Windows）または CoreML（macOS）GPU アクセラレーションに対応しています。GPU が使用できない場合は自動的に CPU にフォールバックし、通常の使用に影響はありません。設定で手動で「CPU 優先」に切り替えることも可能です。</p>
+</div>
+
+<h2 id="install">3. インストールと起動</h2>
+
+<h3>3.1 ソフトウェアのダウンロード</h3>
+<p>GitHub Releases ページから最新バージョンをダウンロードしてください。</p>
+
+<h3>3.2 ファイル構成</h3>
+<ul>
+    <li><code>OpenTune.exe</code> — メインプログラム（Standalone）</li>
+    <li><code>OpenTune.vst3</code> — VST3 プラグイン（DAW 用）</li>
+    <li><code>onnxruntime.dll</code> / <code>onnxruntime_providers_shared.dll</code> — ONNX Runtime</li>
+    <li><code>DirectML.dll</code> — DirectML ランタイム（GPU アクセラレーション）</li>
+    <li><code>models/</code> — AI モデルフォルダ
+        <ul>
+            <li><code>rmvpe.onnx</code> — ピッチ抽出モデル（~28MB）</li>
+            <li><code>pc_nsf_hifigan_44.1k_ONNX/</code> — ボコーダーモデル</li>
+        </ul>
+    </li>
+    <li><code>docs/UserGuide.html</code> — 本ユーザーガイド</li>
+</ul>
+
+<h3>3.3 プログラムの起動</h3>
+<p><code>OpenTune.exe</code> をダブルクリックしてスタンドアロン版を起動します。初回起動時に AI モデルが自動的に初期化されます。VST3 プラグインは <code>OpenTune.vst3</code> をホストソフトの VST3 スキャンディレクトリにコピーする必要があります。</p>
+
+<div class="page-break"></div>
+<h2 id="interface">4. インターフェース概要</h2>
+
+<p>OpenTune Standalone のインターフェースはモダンなマルチパネルデザインを採用し、各エリアは折りたたみ可能です：</p>
+
+<h3>4.1 画面レイアウト</h3>
+<table>
+    <tr><th width="20%">エリア</th><th>機能</th></tr>
+    <tr><td><strong>上部ツールバー</strong></td><td>メニューボタン（ファイル/編集/表示）、トランスポートコントロール、BPM/調性設定、Tap Tempo、ビュー切替</td></tr>
+    <tr><td><strong>左側トラックパネル</strong></td><td>マルチトラック管理（最大12トラック）、ボリュームノブ、Solo/Mute、円形レベルメーター、トラック追加ボタン</td></tr>
+    <tr><td><strong>中央アレンジビュー</strong></td><td>オーディオクリップ配置、波形プレビュー、タイムライン、クリップのドラッグ/分割/結合/削除</td></tr>
+    <tr><td><strong>中央ピアノロール</strong></td><td>ピッチカーブ編集、音符の描画/選択、F0 カーブ可視化、プレイヘッド、鍵盤試聴（左側キーボードをクリックしてピッチをプレビュー）</td></tr>
+    <tr><td><strong>右側パラメータパネル</strong></td><td>Retune Speed / Vibrato / Note Split ノブ、ツール選択ボタン</td></tr>
+    <tr><td><strong>レンダリングステータスバッジ</strong></td><td>右上にフローティング表示、現在のレンダリング進捗（例：「レンダリング中 3/8」）</td></tr>
+</table>
+
+<h3>4.2 パネルの折りたたみ</h3>
+<p>上部ツールバーの左右両端にあるパネル切替ボタンをクリックすると、左側トラックパネルまたは右側パラメータパネルを非表示/表示し、「没入型メインキャンバス」モードにできます。</p>
+
+<h3>4.3 ビュー切替</h3>
+<ul>
+    <li><strong>トラックビュー (Track View)</strong>：アレンジビュー + ピアノロールを表示、複数オーディオクリップの管理に適しています</li>
+    <li><strong>ピアノロールビュー (Piano Roll View)</strong>：全画面ピアノロール編集、精密なピッチ編集に集中</li>
+</ul>
+
+<h3>4.4 マウスホバーヒント</h3>
+<p>任意のコントロールにマウスを約0.6秒ホバーすると、ダークスタイルのフローティングヒントウィンドウが表示され、コントロールの機能説明とショートカットキー（存在する場合）が表示されます。ヒントテキストは画面言語に応じて自動的に切り替わります。</p>
+
+<h2 id="quickstart">5. クイックスタート</h2>
+
+<div class="workflow">
+    <div class="workflow-step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+            <h4>オーディオをインポート</h4>
+            <p>オーディオファイルをソフトウェアウィンドウにドラッグ＆ドロップするか、メニュー File → Import Audio からインポートします。WAV、MP3、FLAC、OGG、AIFF などの形式に対応しています。</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+            <h4>自動ピッチ抽出</h4>
+            <p>インポート後、ソフトウェアが自動的に元のピッチカーブを抽出し、ピアノロールに赤色のカーブとして表示します。</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+            <h4>調性設定</h4>
+            <p>ソフトウェアが自動的に調性を検出するか、手動でルート音（C〜B）と調性タイプ（長調、短調、半音階など8種類）を選択します。</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+            <h4>ピッチ編集</h4>
+            <p>自動補正ツール（ワンクリック補正）を使用するか、手動で音符/アンカー/手描きカーブを描画します。補正後のピッチは青色のカーブとして表示されます。</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">5</div>
+        <div class="step-content">
+            <h4>パラメータ調整</h4>
+            <p>パラメータパネルで Retune Speed、Vibrato Depth/Rate などを調整します。音符ごとに独立したビブラートパラメータの設定をサポートします。</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">6</div>
+        <div class="step-content">
+            <h4>プレビューと書き出し</h4>
+            <p>Space キーでプレビュー再生し、満足したら File → Export から書き出します。選択クリップ、単一トラック、またはバスミックスでの書き出しに対応しています。</p>
+        </div>
+    </div>
+</div>
+
+<div class="page-break"></div>
+<h2 id="features">6. 主要機能</h2>
+
+<h3>6.1 オーディオインポート</h3>
+<ul>
+    <li>対応フォーマット：WAV、MP3、FLAC、OGG、AIFF など</li>
+    <li>インポート時に自動的に 44.1kHz にリサンプリング</li>
+    <li>ドラッグ＆ドロップインポート対応（ウィンドウに直接ドラッグ）</li>
+    <li>マルチトラック対応：最大 12 の独立したトラック、各トラックに複数クリップを配置可能</li>
+    <li>複数ファイルの一括インポート対応（順次配置またはトラック分割）</li>
+</ul>
+
+<h3>6.2 ピッチ抽出（RMVPE）</h3>
+<ul>
+    <li>インポート後、元のピッチカーブが自動抽出されます（赤色で表示）</li>
+    <li>RMVPE ディープラーニングモデルをベースに、高精度かつノイズ耐性に優れています</li>
+    <li>50Hz – 1100Hz の周波数範囲でボーカル検出に対応</li>
+</ul>
+
+<h3>6.3 調性検出と選択</h3>
+<p>Krumhansl-Schmuckler アルゴリズムによる自動調性検出を内蔵し、8種類の調性タイプに対応：</p>
+<table>
+    <tr><th>調性</th><th>略称</th><th>説明</th></tr>
+    <tr><td>長調</td><td>Maj.</td><td>自然長音階</td></tr>
+    <tr><td>短調</td><td>Min.</td><td>自然短音階</td></tr>
+    <tr><td>半音階</td><td>Chr.</td><td>全12半音が使用可能（調性フィルターなし）</td></tr>
+    <tr><td>和声短調</td><td>H.Min.</td><td>第7音を半音上げた短調</td></tr>
+    <tr><td>ドリアン</td><td>Dor.</td><td>ジャズ/ブルースでよく使用</td></tr>
+    <tr><td>ミクソリディアン</td><td>Mix.</td><td>第7音を半音下げた長調</td></tr>
+    <tr><td>長調五声</td><td>Pent.</td><td>五音音階（中国風）</td></tr>
+    <tr><td>短調五声</td><td>m.Pent.</td><td>ブルース五音音階</td></tr>
+</table>
+
+<h3>6.4 AI ボコーダーリシンセシス</h3>
+<ul>
+    <li>ピッチ補正後、PC-NSF-HiFiGAN ニューラルボコーダーでオーディオを再合成します</li>
+    <li>元のフォルマントを保持し、広範囲のピッチシフトでも歪みなし</li>
+    <li>出力サンプルレート 44.1kHz、自然でクリアな音質</li>
+    <li>GPU アクセラレーションに対応（設定で構成可能）</li>
+</ul>
+
+<h3>6.5 マルチトラック管理</h3>
+<ul>
+    <li>最大 12 の独立したトラック</li>
+    <li>各トラックに複数のオーディオクリップを配置可能</li>
+    <li>トラック操作：Solo、Mute、ボリューム調整（円形ノブ）</li>
+    <li>円形 LED レベルメーターでリアルタイム音量表示</li>
+    <li>クリップ操作：ドラッグ移動、分割（Split）、結合（Merge）、削除</li>
+</ul>
+
+<h3>6.6 取り消し/やり直し</h3>
+<ul>
+    <li>最大 <strong>500 ステップ</strong>の操作履歴を保存</li>
+    <li>すべての編集操作に対応：音符描画、パラメータ調整、クリップ操作など</li>
+    <li>ショートカット：<code>Ctrl+Z</code>（取り消し）、<code>Ctrl+Y</code> または <code>Ctrl+Shift+Z</code>（やり直し）</li>
+</ul>
+
+<div class="page-break"></div>
+<h2 id="tools">7. 編集ツール</h2>
+
+<p>OpenTune は5つのプロフェッショナル編集ツールを提供し、パラメータパネルのツールエリアまたはショートカットキーで切り替えます：</p>
+
+<div class="tool-card">
+    <h4>AutoTune — 自動補正ツール (ショートカット: 6)</h4>
+    <p>現在の調性に基づいてピッチを最も近い目標音符に自動補正します。迅速な一括補正に最適です。</p>
+</div>
+
+<div class="tool-card">
+    <h4>Select — 選択ツール (ショートカット: 3)</h4>
+    <p>音符または時間領域を選択します。選択後、移動、削除、パラメータ調整などの操作が可能です。</p>
+    <p><strong>操作</strong>：クリック選択、ドラッグボックス選択、Shift+クリック複数選択、Delete 削除。</p>
+</div>
+
+<div class="tool-card">
+    <h4>DrawNote — 音符描画ツール (ショートカット: 2)</h4>
+    <p>手動で音符ブロックを描画します。ピアノロール内でドラッグして音符を作成し、ピッチと長さを指定します。</p>
+    <p><strong>特徴</strong>：各音符に Retune Speed、Vibrato Depth/Rate パラメータを個別に設定可能です。</p>
+</div>
+
+<div class="tool-card">
+    <h4>LineAnchor — ラインアンカーツール (ショートカット: 4)</h4>
+    <p>ピッチカーブ上にキーアンカーを配置し、ソフトウェアがアンカー間を自動的に直線補間で遷移させます。ポルタメントや転音の精密な制御に最適です。</p>
+</div>
+
+<div class="tool-card">
+    <h4>HandDraw — 手描きツール</h4>
+    <p>F0 カーブを直接手描きし、ピッチの動きを完全にカスタマイズします。ビブラート、ポルタメント、ベンドなどの装飾効果の描画に適しています。</p>
+</div>
+
+<h3>7.1 鍵盤試聴</h3>
+<p>ピアノロール左側の鍵盤エリアをクリックすると、対応するピッチのピアノサンプルがリアルタイムで再生され、目標ピッチの確認に役立ちます。押したままドラッグすると異なるキー間をスライドで切り替え、マウスを離すと自動的に再生が停止します。押されたキーは青色でハイライト表示されます。</p>
+
+<h2 id="parameters">8. パラメータ詳細</h2>
+
+<h3>8.1 ピッチ補正パラメータ</h3>
+
+<div class="param-item">
+    <div class="param-name">Retune Speed（補正速度）</div>
+    <div class="param-range">範囲：0% – 100% | デフォルト：15%</div>
+    <p>ピッチ補正の速度と強度を制御します。値が大きいほど補正が速く精密になり、小さいほど元のピッチの揺れをより多く保持します。</p>
+    <ul>
+        <li><strong>低値（0–30%）</strong>：自然なビブラートを保持、リアルな質感を追求</li>
+        <li><strong>中値（30–70%）</strong>：精度と自然さのバランス</li>
+        <li><strong>高値（70–100%）</strong>：精密な補正、顕著な Auto-Tune 効果を生成</li>
+    </ul>
+    <p><strong>音符単位</strong>：音符を選択して調整すると、選択部分のみに影響します。</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Vibrato Depth（ビブラート深度）</div>
+    <div class="param-range">範囲：0 – 1 | デフォルト：0</div>
+    <p>音符に人工ビブラートの振幅を追加します。0 = 追加なし、1 = 最大深度。音符ごとの設定に対応。</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Vibrato Rate（ビブラート速度）</div>
+    <div class="param-range">範囲：0 – 15 Hz | デフォルト：7.5 Hz</div>
+    <p>人工ビブラートの振動周波数を制御します。人間の自然なビブラートは通常 5–8 Hz の範囲です。音符ごとの設定に対応。</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Note Split Threshold（音符分割閾値）</div>
+    <div class="param-range">範囲：0 – 100 セント | デフォルト：80 セント</div>
+    <p>自動音符生成時の分割感度を制御します。値が小さいほど、独立した音符に分割されやすくなります。</p>
+</div>
+
+<h3>8.2 トラックパラメータ</h3>
+<div class="param-item">
+    <div class="param-name">Volume（音量）</div>
+    <div class="param-range">範囲：0 – 4.0 倍 | デフォルト：1.0</div>
+    <p>トラック音量ノブ、1.0 を超えるゲインブーストに対応。</p>
+</div>
+
+<h3>8.3 再生パラメータ</h3>
+<div class="param-item">
+    <div class="param-name">BPM（Beats Per Minute）</div>
+    <div class="param-range">範囲：20 – 300 BPM | デフォルト：120</div>
+    <p>プロジェクトのテンポとタイムライングリッドを制御します。数値をダブルクリックして正確な値を直接入力できます。</p>
+</div>
+<div class="param-item">
+    <div class="param-name">Tap Tempo</div>
+    <p>Tap ボタンを連続クリックすると、ソフトウェアが平均間隔から自動的に BPM を計算します。最大5回のクリックを記録します。</p>
+</div>
+
+<div class="page-break"></div>
+<h2 id="schemes">9. 編集モード</h2>
+
+<p>OpenTune は2つの編集モードを提供し、ツールの動作を決定します。設定 → 編集モードから切り替え可能です。</p>
+
+<h3>9.1 カーブ優先編集（デフォルト）</h3>
+<ul>
+    <li>LineAnchor セグメントを選択し、独立した Retune Speed を設定可能</li>
+    <li>パラメータパネルは選択中の LineAnchor セグメントのパラメータを優先表示</li>
+    <li>AutoTune は選択中の時間領域を優先して作用</li>
+</ul>
+
+<h3>9.2 音符優先編集</h3>
+<ul>
+    <li>HandDraw / LineAnchor 描画後、影響を受ける音符を自動選択</li>
+    <li>AutoTune は選択中の音符範囲を優先して作用</li>
+    <li>パラメータパネルは選択中の音符のパラメータを優先表示</li>
+</ul>
+
+<h2 id="preferences">10. 設定</h2>
+
+<p>メニュー <strong>File → Options</strong> または <strong>Edit → Preferences</strong> から設定ダイアログを開きます。</p>
+
+<h3>10.1 共有設定（Standalone および VST3 共通）</h3>
+<table>
+    <tr><th>設定項目</th><th>説明</th><th>デフォルト</th></tr>
+    <tr><td>画面言語</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
+    <tr><td>テーマ</td><td>BlueBreeze / DarkBlueGrey / Aurora</td><td>Aurora</td></tr>
+    <tr><td>編集モード</td><td>カーブ優先 / 音符優先</td><td>カーブ優先</td></tr>
+    <tr><td>レンダリング優先</td><td>GPU 優先 / CPU 優先</td><td>GPU 優先</td></tr>
+    <tr><td>水平ズーム感度</td><td>マウスホイールの水平ズーム速度を制御</td><td>1.0</td></tr>
+    <tr><td>垂直ズーム感度</td><td>マウスホイールの垂直ズーム速度を制御</td><td>1.0</td></tr>
+    <tr><td>スクロール速度</td><td>ビュースクロール速度</td><td>1.0</td></tr>
+    <tr><td>音名表示</td><td>すべて表示 / C のみ / 非表示</td><td>C のみ</td></tr>
+    <tr><td>チャンク境界を表示</td><td>レンダリングチャンク境界の可視化</td><td>オフ</td></tr>
+    <tr><td>無声フレームを表示</td><td>非有声音フレームの F0 データを表示</td><td>オフ</td></tr>
+</table>
+
+<h3>10.2 Standalone 専用設定</h3>
+<table>
+    <tr><th>設定項目</th><th>説明</th></tr>
+    <tr><td>オーディオデバイス</td><td>ドライバタイプ、デバイス選択、サンプルレート、バッファサイズ</td></tr>
+    <tr><td>キーボードショートカット</td><td>10個のカスタマイズ可能なショートカットバインディング（衝突検出とリセット対応）</td></tr>
+    <tr><td>マウストレイル</td><td>8種類のマウストレイルエフェクトテーマ選択</td></tr>
+</table>
+
+<h3>10.3 表示メニュークイック設定</h3>
+<p>以下の表示設定は <strong>View</strong> メニューから直接切り替えることも可能です：</p>
+<ul>
+    <li>Show Waveform — 波形の表示/非表示</li>
+    <li>Show Lanes — 音道の表示/非表示</li>
+    <li>Note Labels — 音名表示モード</li>
+    <li>Show Chunk Boundaries — チャンク境界</li>
+    <li>Show Unvoiced Frames — 無声フレーム</li>
+    <li>Theme — テーマ切替</li>
+    <li>Mouse Trail — マウストレイルテーマ</li>
+</ul>
+
+<h2 id="shortcuts">11. ショートカットキー</h2>
+
+<h3>11.1 再生コントロール</h3>
+<table class="shortcut-table">
+    <tr><th>ショートカット</th><th>機能</th></tr>
+    <tr><td>Space</td><td>再生 / 一時停止</td></tr>
+    <tr><td>Enter</td><td>再生停止</td></tr>
+    <tr><td>A</td><td>先頭から再生</td></tr>
+    <tr><td>Escape</td><td>現在の操作をキャンセル / 停止</td></tr>
+</table>
+
+<h3>11.2 編集操作</h3>
+<table class="shortcut-table">
+    <tr><th>ショートカット</th><th>機能</th></tr>
+    <tr><td>Ctrl + Z</td><td>取り消し</td></tr>
+    <tr><td>Ctrl + Y / Ctrl + Shift + Z</td><td>やり直し</td></tr>
+    <tr><td>Ctrl + X</td><td>切り取り</td></tr>
+    <tr><td>Ctrl + C</td><td>コピー</td></tr>
+    <tr><td>Ctrl + V</td><td>貼り付け</td></tr>
+    <tr><td>Ctrl + A</td><td>すべて選択</td></tr>
+    <tr><td>Delete / Backspace</td><td>選択内容を削除</td></tr>
+</table>
+
+<h3>11.3 ツール切替</h3>
+<table class="shortcut-table">
+    <tr><th>ショートカット</th><th>ツール</th></tr>
+    <tr><td>2</td><td>DrawNote — 音符描画</td></tr>
+    <tr><td>3</td><td>Select — 選択ツール</td></tr>
+    <tr><td>4</td><td>LineAnchor — アンカーツール</td></tr>
+    <tr><td>6</td><td>AutoTune — 自動補正</td></tr>
+</table>
+
+<h3>11.4 ビュー操作</h3>
+<table class="shortcut-table">
+    <tr><th>ショートカット</th><th>機能</th></tr>
+    <tr><td>ホイール</td><td>垂直スクロール</td></tr>
+    <tr><td>Shift + ホイール</td><td>水平スクロール</td></tr>
+    <tr><td>Ctrl + ホイール</td><td>水平ズーム（タイムライン）</td></tr>
+    <tr><td>Alt + ホイール</td><td>垂直ズーム（ピッチ軸）</td></tr>
+</table>
+
+<div class="tip">
+    <div class="tip-title">カスタムショートカット</div>
+    すべてのショートカットは設定 → ショートカットページでカスタマイズ可能です。マルチバインディング、衝突検出、ワンクリックリセットに対応。macOS では自動的に ⌘/⌥/⇧ 記号が表示されます。
+</div>
+
+<div class="page-break"></div>
+<h2 id="themes">12. テーマとビジュアル</h2>
+
+<h3>12.1 画面テーマ</h3>
+<table>
+    <tr><th>テーマ</th><th>スタイル</th><th>適したシーン</th></tr>
+    <tr><td><strong>Blue Breeze</strong></td><td>ライト系、ソフトなブルートーン、モダンミニマル</td><td>明るい環境、長時間使用</td></tr>
+    <tr><td><strong>Dark Blue-Grey</strong></td><td>ダーク系、プロフェッショナルスタジオ風、立体シャドウ</td><td>暗い環境、プロフェッショナル制作</td></tr>
+    <tr><td><strong>Aurora Glass</strong></td><td>ダーク背景、ネオングロー、すりガラス質感</td><td>テクノロジー感、個性的な表現を求める場合</td></tr>
+</table>
+
+<h3>12.2 マウストレイルエフェクト（Standalone のみ）</h3>
+<table>
+    <tr><th>エフェクト</th><th>スタイル</th></tr>
+    <tr><td>オフ (Off)</td><td>トレイルなし</td></tr>
+    <tr><td>Classic</td><td>ブルークラシックトレイル（デフォルト）</td></tr>
+    <tr><td>Neon</td><td>マゼンタ/シアンのネオングラデーション</td></tr>
+    <tr><td>Fire</td><td>オレンジレッド/ゴールドの炎エフェクト</td></tr>
+    <tr><td>Ocean</td><td>ブルー/シアンの海の波紋</td></tr>
+    <tr><td>Galaxy</td><td>パープル/ピンクの銀河エフェクト</td></tr>
+    <tr><td>Cherry Blossom</td><td>ライトピンク/ピンクの桜吹雪</td></tr>
+    <tr><td>Matrix</td><td>グリーンマトリックスデジタルレイン</td></tr>
+</table>
+
+<h3>12.3 ホバーアニメーション</h3>
+<p>すべてのツールバーボタンは、マウスホバー時に微妙なビジュアルフィードバックを提供します：アイコンがわずかに拡大（1.08倍）し、15% 明るくなり、即時のインタラクション確認感を提供します。</p>
+
+<h2 id="gpu">13. GPU アクセラレーション</h2>
+
+<p>OpenTune は GPU アクセラレーションによるボコーダー推論の高速化に対応し、レンダリング速度を大幅に向上できます。</p>
+
+<h3>13.1 対応プラットフォーム</h3>
+<ul>
+    <li><strong>Windows</strong>：DirectML 経由で NVIDIA / AMD / Intel GPU に対応</li>
+    <li><strong>macOS</strong>：CoreML 経由で Apple GPU に対応</li>
+    <li>独立 GPU がない、または GPU 非互換の場合は自動的に CPU にフォールバックし、使用に影響はありません</li>
+</ul>
+
+<h3>13.2 設定方法</h3>
+<p>設定 → 共有ページ → レンダリング優先で選択：</p>
+<ul>
+    <li><strong>GPU 優先</strong>（デフォルト）：自動的に GPU アクセラレーションを使用</li>
+    <li><strong>CPU 優先</strong>：CPU を強制使用、GPU 互換性の問題がある場合に使用</li>
+</ul>
+
+<h2 id="vst3">14. VST3/ARA プラグインモード</h2>
+
+<p>OpenTune VST3 プラグインは ARA2 プロトコルを通じて DAW と深く統合され、非破壊編集を実現します。</p>
+
+<h3>14.1 動作方式</h3>
+<ul>
+    <li>VST3 + ARA2 拡張として互換 DAW（Studio One、Cubase、Logic Pro など）にロード</li>
+    <li>DAW が ARA プロトコルを通じてオーディオソースデータを提供、ファイルのインポート/エクスポート不要</li>
+    <li>編集結果は DAW のタイムライン再生にリアルタイム反映</li>
+    <li>ホストトランスポート同期（Play/Stop/Seek）および BPM 追従に対応</li>
+</ul>
+
+<h3>14.2 Standalone との違い</h3>
+<table>
+    <tr><th>機能</th><th>Standalone</th><th>VST3/ARA</th></tr>
+    <tr><td>マルチトラック編集</td><td>✓ 最大12トラック</td><td>✗ 単一素材編集</td></tr>
+    <tr><td>ファイルインポート/エクスポート</td><td>✓</td><td>✗ （DAW が管理）</td></tr>
+    <tr><td>マウストレイル</td><td>✓ 8種類のテーマ</td><td>✗</td></tr>
+    <tr><td>カスタムショートカット</td><td>✓</td><td>✗（DAW のショートカットを使用）</td></tr>
+    <tr><td>オーディオデバイス設定</td><td>✓</td><td>✗（DAW のオーディオエンジンを使用）</td></tr>
+    <tr><td>ホストトランスポート同期</td><td>✗</td><td>✓</td></tr>
+    <tr><td>ARA 非破壊編集</td><td>✗</td><td>✓</td></tr>
+    <tr><td>ピアノロール編集</td><td>✓</td><td>✓</td></tr>
+    <tr><td>パラメータパネル</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Undo/Redo</td><td>✓</td><td>✓</td></tr>
+    <tr><td>テーマ切替</td><td>✓</td><td>✓</td></tr>
+    <tr><td>多言語インターフェース</td><td>✓</td><td>✓</td></tr>
+</table>
+
+<div class="page-break"></div>
+<h2 id="export">15. オーディオの書き出し</h2>
+
+<h3>15.1 書き出しフォーマット</h3>
+<ul>
+    <li><strong>フォーマット</strong>：WAV</li>
+    <li><strong>サンプルレート</strong>：44.1kHz</li>
+    <li><strong>ビット深度</strong>：32-bit Float</li>
+    <li><strong>チャンネル</strong>：モノラル（Clip/Track）/ ステレオ（Master Mix）</li>
+</ul>
+
+<h3>15.2 書き出しオプション</h3>
+<table>
+    <tr><th>オプション</th><th>説明</th></tr>
+    <tr><td>Export Selected Clip</td><td>現在選択中のオーディオクリップのみ書き出し</td></tr>
+    <tr><td>Export Track</td><td>指定トラックの全クリップミックスを書き出し</td></tr>
+    <tr><td>Export Bus (Master Mix)</td><td>全トラックの最終ミックスを書き出し</td></tr>
+</table>
+
+<h3>15.3 書き出し手順</h3>
+<ol>
+    <li>メニュー <strong>File → Export Audio</strong></li>
+    <li>書き出し範囲を選択</li>
+    <li>保存場所とファイル名を選択</li>
+    <li>バックグラウンドレンダリングの完了を待つ（進捗はレンダリングバッジに表示）</li>
+</ol>
+
+<h2 id="faq">16. よくある質問</h2>
+
+<h3>Q1: オーディオをインポートしたがピッチカーブが表示されない？</h3>
+<p><strong>A:</strong> <code>models/rmvpe.onnx</code> が存在し完全であることを確認してください。オーディオには明瞭なボーカルメロディーが含まれている必要があります。純粋な伴奏や打楽器のみでは F0 を抽出できません。</p>
+
+<h3>Q2: GPU アクセラレーションが効いていない？</h3>
+<p><strong>A:</strong> 以下の点を確認してください：</p>
+<ul>
+    <li><code>DirectML.dll</code> がプログラムディレクトリに存在すること</li>
+    <li>GPU ドライバが最新バージョンに更新されていること</li>
+    <li>設定で「レンダリング優先」が GPU 優先に設定されていること</li>
+    <li>ログファイルで DML プロバイダーが正常にロードされたか確認</li>
+</ul>
+
+<h3>Q3: メモリ使用量が多い？</h3>
+<p><strong>A:</strong> v1.5 ではメモリ管理が最適化されており、F0 モデルは使用後に自動解放されます。それでも高い場合は、GPU アクセラレーションを無効にする（GPU セッションは追加のビデオメモリを消費します）、同時に開くトラック数を減らすなどをお試しください。</p>
+
+<h3>Q4: 補正後の音質に異常がある？</h3>
+<p><strong>A:</strong> 考えられる原因：ボコーダーモデルファイルの破損（再ダウンロード）、Retune Speed の設定が高すぎる（30% 以下に下げてお試しください）、元の録音品質が低い。</p>
+
+<h3>Q5: 自然なピッチ補正効果を得るには？</h3>
+<ul>
+    <li>低めの Retune Speed（10–30%）を使用する</li>
+    <li>元のビブラートを保持し、人工 Vibrato を追加しない</li>
+    <li>LineAnchor ツールでキーポイントを精密に調整する</li>
+    <li>「カーブ優先編集」モードを選択してより精密な制御を得る</li>
+</ul>
+
+<h3>Q6: VST3 プラグインが DAW でロードできない？</h3>
+<p><strong>A:</strong> <code>OpenTune.vst3</code> フォルダが完全であること（Contents/x86_64-win/ サブディレクトリを含む）、ONNX ランタイム DLL とモデルファイルが正しい位置にあることを確認してください。DAW で VST3 ディレクトリを再スキャンしてください。</p>
+
+<h3>Q7: 画面言語を切り替えるには？</h3>
+<p><strong>A:</strong> 設定 → 言語（Language）で目的の言語を選択すると、画面が即座に切り替わります。中文、English、日本語、Русский、Español に対応しています。</p>
+
+<hr>
+
+<footer>
+    <p>OpenTune v1.5 — AI スマートピッチ補正ソフトウェア | オープンソース・無料 | AGPL v3.0 ライセンス</p>
+    <p>DiffSinger オープンソースコミュニティとすべての貢献者に感謝します</p>
+</footer>
+
+</body>
+</html>

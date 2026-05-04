@@ -82,8 +82,7 @@ public:
 
     juce::Font getTextButtonFont(juce::TextButton& button, int height) override
     {
-        // 重要：不要用按钮高度推导字体大小，否则会出现“一大一小”。
-        // 约定：需要统一字号的按钮设置 properties["fontHeight"].
+        // 閲嶈锛氫笉瑕佺敤鎸夐挳楂樺害鎺ㄥ瀛椾綋澶у皬锛屽惁鍒欎細鍑虹幇鈥滀竴澶т竴灏忊€濄€?        // 绾﹀畾锛氶渶瑕佺粺涓€瀛楀彿鐨勬寜閽缃?properties["fontHeight"].
         if (button.getProperties().contains("fontHeight"))
         {
             const auto v = static_cast<double>(button.getProperties()["fontHeight"]);
@@ -104,7 +103,7 @@ public:
                               bool shouldDrawButtonAsDown) override
     {
         auto bounds = button.getLocalBounds().toFloat().reduced(0.5f);
-        const auto& style = Theme::getActiveStyle();
+        const auto& style = UIColors::currentThemeStyle();
         float radius = style.controlRadius;
 
         juce::Colour base = backgroundColour;
@@ -115,7 +114,7 @@ public:
                 : tb->findColour(juce::TextButton::buttonColourId);
         }
 
-        auto themeId = Theme::getActiveTheme();
+        auto themeId = UIColors::currentThemeId();
 
         if (themeId == ThemeId::DarkBlueGrey)
         {
@@ -174,7 +173,7 @@ public:
     void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
                           bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
     {
-        if (Theme::getActiveTheme() == ThemeId::BlueBreeze)
+        if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
         {
             drawBlueBreezeToggleButton(g, button, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
             return;
@@ -214,7 +213,7 @@ public:
                      bool ticked, bool isEnabled,
                      bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
     {
-        if (Theme::getActiveTheme() == ThemeId::BlueBreeze)
+        if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
         {
             juce::Rectangle<float> tickBounds(x, y, w, h);
             
@@ -293,21 +292,16 @@ public:
     {
         juce::ignoreUnused(base);
 
-        // Dark Blue-Grey：清爽、线条明快。
-        // 设计原则：
-        // - 不用“大面积纯强调色填充”，而是用“细描边 + 轻洗色”表达激活
-        // - 阴影使用冷色环境阴影，减少厚重纯黑
-
-        const auto themeId = Theme::getActiveTheme();
+        // Dark Blue-Grey锛氭竻鐖姐€佺嚎鏉℃槑蹇€?        // 璁捐鍘熷垯锛?        // - 涓嶇敤鈥滃ぇ闈㈢Н绾己璋冭壊濉厖鈥濓紝鑰屾槸鐢ㄢ€滅粏鎻忚竟 + 杞绘礂鑹测€濊〃杈炬縺娲?        // - 闃村奖浣跨敤鍐疯壊鐜闃村奖锛屽噺灏戝帤閲嶇函榛?
+        const auto themeId = UIColors::currentThemeId();
         if (themeId != ThemeId::DarkBlueGrey)
         {
-            // 防御性：本函数只为 DarkBlueGrey 设计
+            // 闃插尽鎬э細鏈嚱鏁板彧涓?DarkBlueGrey 璁捐
             return;
         }
 
         const bool toggled = button.getToggleState();
 
-        // 1) 阴影（非按下态才绘制）
         if (!isDown)
         {
             const auto shadowBase = juce::Colour { 0xFF050A12 };
@@ -323,7 +317,7 @@ public:
             ds.drawForPath(g, p);
         }
 
-        // 2) 背景填充（轻渐变，制造体积）
+        // 2) 鑳屾櫙濉厖锛堣交娓愬彉锛屽埗閫犱綋绉級
         juce::Colour bg;
         if (isDown)
             bg = UIColors::buttonPressed;
@@ -332,7 +326,6 @@ public:
         else
             bg = UIColors::buttonNormal;
 
-        // Toggle 选中态：不直接把底色变成 accent，而是让背景更“抬起”，再叠加轻洗色。
         if (toggled)
             bg = UIColors::backgroundLight.brighter(0.03f);
 
@@ -342,14 +335,13 @@ public:
         g.setGradientFill(bgGrad);
         g.fillRoundedRectangle(bounds, radius);
 
-        // 3) 轻洗色（只在选中态）
+        // 3) 杞绘礂鑹诧紙鍙湪閫変腑鎬侊級
         if (toggled && !isDown)
         {
             g.setColour(UIColors::accent.withAlpha(0.10f));
             g.fillRoundedRectangle(bounds.reduced(1.0f), juce::jmax(0.0f, radius - 1.0f));
         }
 
-        // 4) 顶部高光线（轻、薄）
         if (!isDown)
         {
             g.setColour(UIColors::textPrimary.withAlpha(0.08f));
@@ -357,7 +349,7 @@ public:
                        bounds.getRight() - radius, bounds.getY() + 1.0f, 1.0f);
         }
 
-        // 5) 按下态内阴影（轻微）
+        // 5) 鎸変笅鎬佸唴闃村奖锛堣交寰級
         if (isDown)
         {
             g.setColour(UIColors::bevelDark.withAlpha(0.26f));
@@ -366,7 +358,7 @@ public:
             g.strokePath(innerShadow, juce::PathStrokeType(2.0f));
         }
 
-        // 6) 边框
+        // 6) 杈规
         juce::Colour border = toggled ? UIColors::accent.withAlpha(0.85f)
                                       : UIColors::panelBorder.withAlpha(isHighlighted ? 0.70f : 0.55f);
         g.setColour(border);
@@ -392,22 +384,22 @@ public:
 
     void drawLabel(juce::Graphics& g, juce::Label& label) override
     {
-        // 仅定制“可编辑数值框/滑块文本框”外观，普通文字标签沿用默认绘制
-        const bool isValueField = label.isEditable() || dynamic_cast<juce::Slider*>(label.getParentComponent()) != nullptr;
+        const bool isValueField = label.isEditable()
+            || dynamic_cast<juce::Slider*>(label.getParentComponent()) != nullptr;
         if (!isValueField)
         {
             juce::LookAndFeel_V4::drawLabel(g, label);
             return;
         }
 
-        const auto themeId = Theme::getActiveTheme();
+        const auto themeId = UIColors::currentThemeId();
         if (themeId != ThemeId::DarkBlueGrey && themeId != ThemeId::BlueBreeze)
         {
             juce::LookAndFeel_V4::drawLabel(g, label);
             return;
         }
 
-        const auto& style = Theme::getActiveStyle();
+        const auto& style = UIColors::currentThemeStyle();
         auto bounds = label.getLocalBounds().toFloat().reduced(0.5f);
 
         if (themeId == ThemeId::BlueBreeze)
@@ -434,7 +426,6 @@ public:
         }
 
         // Dark Blue Grey Logic
-        // 背景：柔和厚实，避免“薄片感”
         juce::Colour bg = label.findColour(juce::Label::backgroundColourId);
         if (bg.getAlpha() == 0)
             bg = UIColors::backgroundLight;
@@ -444,12 +435,10 @@ public:
         g.setGradientFill(bgGrad);
         g.fillRoundedRectangle(bounds, style.fieldRadius);
 
-        // 顶部高光线
         g.setColour(UIColors::textPrimary.withAlpha(0.08f));
         g.drawLine(bounds.getX() + style.fieldRadius, bounds.getY() + 1.0f,
                    bounds.getRight() - style.fieldRadius, bounds.getY() + 1.0f, 1.0f);
 
-        // 边框 + 焦点环
         const bool focused = label.hasKeyboardFocus(true) && label.isEditable();
         g.setColour(focused ? UIColors::accent.withAlpha(0.95f) : UIColors::panelBorder.withAlpha(0.70f));
         g.drawRoundedRectangle(bounds, style.fieldRadius, focused ? style.focusRingThickness : style.strokeThin);
@@ -485,8 +474,8 @@ public:
     {
         juce::ignoreUnused(minSliderPos, maxSliderPos);
 
-        const auto themeId = Theme::getActiveTheme();
-        const auto& themeStyle = Theme::getActiveStyle();
+        const auto themeId = UIColors::currentThemeId();
+        const auto& themeStyle = UIColors::currentThemeStyle();
         auto bounds = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height))
                           .reduced(2.0f);
 
@@ -631,9 +620,8 @@ public:
     void drawDarkBlueGreySliderThumb(juce::Graphics& g, juce::Rectangle<float> thumb, const ThemeStyle& themeStyle)
     {
         // Soothe 2 Style: Soft pill-shaped handle with gentle shadow
-        float r = thumb.getHeight() * 0.5f; // 使用高度计算圆角，形成胶囊形状
-
-        // 1. Soft Drop Shadow - 柔和的大半径阴影
+        float r = thumb.getHeight() * 0.5f; // 浣跨敤楂樺害璁＄畻鍦嗚锛屽舰鎴愯兌鍥婂舰鐘?
+        // 1. Soft Drop Shadow - 鏌斿拰鐨勫ぇ鍗婂緞闃村奖
         juce::DropShadow ds;
         ds.colour = juce::Colours::black.withAlpha(0.22f);
         ds.radius = 8;
@@ -642,23 +630,21 @@ public:
         shadowPath.addRoundedRectangle(thumb, r);
         ds.drawForPath(g, shadowPath);
 
-        // 2. Handle Body - 与主题协调的柔和颜色
+        // 2. Handle Body - 涓庝富棰樺崗璋冪殑鏌斿拰棰滆壊
         juce::ColourGradient bodyGrad(
             UIColors::buttonNormal.brighter(0.06f), thumb.getX(), thumb.getY(),
             UIColors::buttonNormal.darker(0.04f), thumb.getX(), thumb.getBottom(), false);
         g.setGradientFill(bodyGrad);
         g.fillRoundedRectangle(thumb, r);
 
-        // 3. Top highlight - 增加立体感
         g.setColour(juce::Colours::white.withAlpha(0.15f));
         g.drawLine(thumb.getX() + r, thumb.getY() + 1.5f, 
                   thumb.getRight() - r, thumb.getY() + 1.5f, 1.5f);
 
-        // 4. Border - 柔和的边框
         g.setColour(UIColors::panelBorder.withAlpha(0.5f));
         g.drawRoundedRectangle(thumb.reduced(0.5f), r, 1.0f);
 
-        // 5. Center Grip Lines - 两条细线作为握持提示
+        // 5. Center Grip Lines - 涓ゆ潯缁嗙嚎浣滀负鎻℃寔鎻愮ず
         g.setColour(juce::Colours::black.withAlpha(0.15f));
         float midY = thumb.getCentreY();
         float lineLen = thumb.getWidth() * 0.3f;
@@ -673,8 +659,8 @@ public:
     {
         juce::ignoreUnused(slider);
 
-        const auto themeId = Theme::getActiveTheme();
-        const auto& themeStyle = Theme::getActiveStyle();
+        const auto themeId = UIColors::currentThemeId();
+        const auto& themeStyle = UIColors::currentThemeStyle();
         auto bounds = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height))
                           .reduced(10.0f);
         auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
@@ -762,17 +748,15 @@ public:
         g.drawText(text, bounds, juce::Justification::centred, false);
     }
 
-    void drawDarkBlueGreyKnob(juce::Graphics& g, juce::Rectangle<float> bounds, float cx, float cy, float radius,
+        void drawDarkBlueGreyKnob(juce::Graphics& g, juce::Rectangle<float> bounds, float cx, float cy, float radius,
                               float angle, float rotaryStartAngle, float rotaryEndAngle, const ThemeStyle& themeStyle)
     {
-        juce::ignoreUnused(themeStyle);
+        juce::ignoreUnused(themeStyle, cx, cy);
 
-        // 深蓝灰主题拟物旋钮：外环轨道 + 金属旋钮体 + 高光 + 中心帽 + 指示针
         auto center = bounds.getCentre();
         const float knobRadius = radius * 0.80f;
         const float ringRadius = knobRadius * 1.22f;
 
-        // 1) 外层阴影（空气感）
         {
             juce::DropShadow ds;
             ds.colour = juce::Colour(0xFF050A12).withAlpha(0.40f);
@@ -783,19 +767,16 @@ public:
             ds.drawForPath(g, p);
         }
 
-        // 2) 背景轨道（外环）
         juce::Path trackPath;
         trackPath.addCentredArc(center.x, center.y, ringRadius, ringRadius, 0.0f, rotaryStartAngle, rotaryEndAngle, true);
         g.setColour(UIColors::backgroundDark.brighter(0.10f));
         g.strokePath(trackPath, juce::PathStrokeType(4.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-        // 3) 活动值轨道（强调色）
         juce::Path valuePath;
         valuePath.addCentredArc(center.x, center.y, ringRadius, ringRadius, 0.0f, rotaryStartAngle, angle, true);
         g.setColour(UIColors::accent.withAlpha(0.95f));
         g.strokePath(valuePath, juce::PathStrokeType(4.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-        // 4) 旋钮外圈（薄金属环）
         {
             juce::ColourGradient rimGrad(UIColors::bevelLight.withAlpha(0.45f), center.x, center.y - knobRadius,
                                          UIColors::bevelDark.withAlpha(0.55f), center.x, center.y + knobRadius, false);
@@ -803,7 +784,6 @@ public:
             g.fillEllipse(center.x - knobRadius, center.y - knobRadius, knobRadius * 2.0f, knobRadius * 2.0f);
         }
 
-        // 5) 旋钮主体（内核）
         const float inner = knobRadius * 0.90f;
         {
             juce::ColourGradient bodyGrad(UIColors::knobBody.brighter(0.10f), center.x - inner * 0.30f, center.y - inner * 0.35f,
@@ -812,7 +792,6 @@ public:
             g.fillEllipse(center.x - inner, center.y - inner, inner * 2.0f, inner * 2.0f);
         }
 
-        // 6) 顶部半月高光
         {
             juce::Path hi;
             hi.addPieSegment(center.x - inner, center.y - inner, inner * 2.0f, inner * 2.0f,
@@ -822,7 +801,6 @@ public:
             g.fillPath(hi);
         }
 
-        // 7) 中心帽
         const float cap = inner * 0.22f;
         juce::ColourGradient capGrad(UIColors::backgroundLight.brighter(0.15f), center.x, center.y - cap,
                                      UIColors::backgroundLight.darker(0.18f), center.x, center.y + cap, false);
@@ -831,7 +809,6 @@ public:
         g.setColour(UIColors::panelBorder.withAlpha(0.75f));
         g.drawEllipse(center.x - cap, center.y - cap, cap * 2.0f, cap * 2.0f, 1.0f);
 
-        // 8) 指示针（带阴影）
         const float pinLen = inner * 0.68f;
         const float pinW = 3.0f;
         const float px = center.x + std::cos(angle) * pinLen;
@@ -841,7 +818,6 @@ public:
         g.setColour(UIColors::knobIndicator);
         g.drawLine(center.x, center.y, px, py, pinW);
 
-        // 9) 指示针末端小点
         const float tip = 3.6f;
         g.setColour(UIColors::knobIndicator.withAlpha(0.95f));
         g.fillEllipse(px - tip, py - tip, tip * 2.0f, tip * 2.0f);
@@ -852,8 +828,8 @@ public:
     {
         juce::ignoreUnused(isMouseOverBar, menuBar);
 
-        const auto themeId = Theme::getActiveTheme();
-        const auto& style = Theme::getActiveStyle();
+        const auto themeId = UIColors::currentThemeId();
+        const auto& style = UIColors::currentThemeStyle();
         auto bounds = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
 
         if (menuBar.findParentComponentOfClass<TopBarComponent>() != nullptr)
@@ -884,8 +860,8 @@ public:
     {
         juce::ignoreUnused(itemIndex, isMouseOverBar, menuBar);
 
-        const auto themeId = Theme::getActiveTheme();
-        const auto& style = Theme::getActiveStyle();
+        const auto themeId = UIColors::currentThemeId();
+        const auto& style = UIColors::currentThemeStyle();
         auto b = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)).reduced(2.0f, 4.0f);
 
         bool hot = (isMenuOpen || isMouseOverItem);
@@ -917,8 +893,8 @@ public:
         }
         else
         {
-            const auto& style = Theme::getActiveStyle();
-            const auto themeId = Theme::getActiveTheme();
+            const auto& style = UIColors::currentThemeStyle();
+            const auto themeId = UIColors::currentThemeId();
             auto bg = textEditor.findColour(juce::TextEditor::backgroundColourId);
 
             if (themeId == ThemeId::DarkBlueGrey)
@@ -945,8 +921,8 @@ public:
         {
             if (textEditor.isEnabled())
             {
-                const auto& style = Theme::getActiveStyle();
-                const auto themeId = Theme::getActiveTheme();
+                const auto& style = UIColors::currentThemeStyle();
+                const auto themeId = UIColors::currentThemeId();
                 
                 if (textEditor.hasKeyboardFocus(true) && !textEditor.isReadOnly())
                 {
@@ -993,8 +969,8 @@ public:
     {
         juce::ignoreUnused(isButtonDown, buttonX, buttonY, buttonW, buttonH);
 
-        const auto themeId = Theme::getActiveTheme();
-        const auto& style = Theme::getActiveStyle();
+        const auto themeId = UIColors::currentThemeId();
+        const auto& style = UIColors::currentThemeStyle();
         auto cornerSize = box.findParentComponentOfClass<juce::GroupComponent>() != nullptr ? 0.0f : style.fieldRadius;
         juce::Rectangle<float> boxBounds(0.0f, 0.0f, (float)width, (float)height);
 
@@ -1072,7 +1048,7 @@ public:
 
     void drawPopupMenuBackground(juce::Graphics& g, int width, int height) override
     {
-        const auto themeId = Theme::getActiveTheme();
+        const auto themeId = UIColors::currentThemeId();
         if (themeId == ThemeId::BlueBreeze)
         {
             g.fillAll(juce::Colour(BlueBreeze::Colors::ActiveWhite).withAlpha(0.98f));
@@ -1090,7 +1066,7 @@ public:
                            const juce::String& shortcutKeyText,
                            const juce::Drawable* icon, const juce::Colour* textColour) override
     {
-        const auto themeId = Theme::getActiveTheme();
+        const auto themeId = UIColors::currentThemeId();
         if (themeId == ThemeId::BlueBreeze)
         {
             if (isSeparator)
@@ -1177,8 +1153,8 @@ public:
     {
         juce::ignoreUnused(icon, drawTitleTextOnLeft);
 
-        const auto themeId = Theme::getActiveTheme();
-        const auto& style = Theme::getActiveStyle();
+        const auto themeId = UIColors::currentThemeId();
+        const auto& style = UIColors::currentThemeStyle();
 
         auto bounds = juce::Rectangle<int>(0, 0, w, h).toFloat();
         auto bg = window.findColour(juce::DocumentWindow::backgroundColourId);
@@ -1207,12 +1183,12 @@ public:
     }
 
     // ============================================================================
-    // 滚动条自定义绘制 - 灰色磨砂质感
+    // 婊氬姩鏉¤嚜瀹氫箟缁樺埗 - 鐏拌壊纾ㄧ爞璐ㄦ劅
     // ============================================================================
     
     int getDefaultScrollbarWidth() override
     {
-        return 15; // 15px 宽度
+        return 15; // 15px 瀹藉害
     }
     
     void drawScrollbar(juce::Graphics& g, juce::ScrollBar& scrollbar,
@@ -1220,34 +1196,34 @@ public:
                        bool isScrollbarVertical, int thumbStartPosition, int thumbSize,
                        bool isMouseOver, bool isMouseDown) override
     {
-        const auto themeId = Theme::getActiveTheme();
+        const auto themeId = UIColors::currentThemeId();
         auto bounds = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y),
                                              static_cast<float>(width), static_cast<float>(height));
         
-        // 根据主题选择灰色配色方案
+        // 鏍规嵁涓婚閫夋嫨鐏拌壊閰嶈壊鏂规
         juce::Colour trackBg, thumbBg, thumbHover, thumbPressed, highlight;
         
         if (themeId == ThemeId::BlueBreeze)
         {
-            // Blue Breeze 主题 - 更浅的灰色系
-            trackBg = juce::Colour(0xFFB0C0CC);      // PanelBorder - 浅灰蓝
-            thumbBg = juce::Colour(0xFF8CA2B0);      // GraphBgMid - 浅蓝灰（更浅）
-            thumbHover = juce::Colour(0xFFA0B0B8);   // 更浅的灰蓝
-            thumbPressed = juce::Colour(0xFF7A8F9E); // 中等蓝灰
-            highlight = juce::Colour(0xFFC6D4DD);    // SidebarBg - 极浅灰
+            // Blue Breeze 涓婚 - 鏇存祬鐨勭伆鑹茬郴
+            trackBg = juce::Colour(0xFFB0C0CC);
+            thumbBg = juce::Colour(0xFF8CA2B0);
+            thumbHover = juce::Colour(0xFFA0B0B8);
+            thumbPressed = juce::Colour(0xFF7A8F9E);
+            highlight = juce::Colour(0xFFC6D4DD);
         }
         else if (themeId == ThemeId::DarkBlueGrey)
         {
-            // DarkBlueGrey 主题 - 浅灰色调
+            // DarkBlueGrey 涓婚 - 娴呯伆鑹茶皟
             trackBg = UIColors::backgroundLight.darker(0.15f);
-            thumbBg = UIColors::backgroundLight.brighter(0.1f);  // 更浅的背景色
-            thumbHover = UIColors::textPrimary;                   // 主文本色（浅）
-            thumbPressed = UIColors::panelBorder;                 // 边框色
+            thumbBg = UIColors::backgroundLight.brighter(0.1f);  // 鏇存祬鐨勮儗鏅壊
+            thumbHover = UIColors::textPrimary;
+            thumbPressed = UIColors::panelBorder;
             highlight = UIColors::textPrimary;
         }
         else
         {
-            // 默认 - 使用更浅的 BlueBreeze 风格
+            // 榛樿 - 浣跨敤鏇存祬鐨?BlueBreeze 椋庢牸
             trackBg = juce::Colour(0xFFB0C0CC);
             thumbBg = juce::Colour(0xFF8CA2B0);
             thumbHover = juce::Colour(0xFFA0B0B8);
@@ -1255,11 +1231,11 @@ public:
             highlight = juce::Colour(0xFFC6D4DD);
         }
         
-        // 不绘制轨道背景 - 透明背景让滑块直接浮动在内容之上
+        // 涓嶇粯鍒惰建閬撹儗鏅?- 閫忔槑鑳屾櫙璁╂粦鍧楃洿鎺ユ诞鍔ㄥ湪鍐呭涔嬩笂
         juce::ignoreUnused(trackBg);
         
-        // 绘制滑块 (thumb) - 大圆角 + 磨砂质感
-        float cornerRadius = 5.0f; // 大角度圆角，微微圆润
+        // 缁樺埗婊戝潡 (thumb) - 澶у渾瑙?+ 纾ㄧ爞璐ㄦ劅
+        float cornerRadius = 5.0f; // 澶ц搴﹀渾瑙掞紝寰井鍦嗘鼎
         juce::Rectangle<float> thumbBounds;
         
         if (isScrollbarVertical)
@@ -1279,20 +1255,19 @@ public:
                 bounds.getHeight() - 4.0f);
         }
         
-        // 确保滑块最小尺寸
         if (isScrollbarVertical)
             thumbBounds.setHeight(juce::jmax(thumbBounds.getHeight(), 20.0f));
         else
             thumbBounds.setWidth(juce::jmax(thumbBounds.getWidth(), 20.0f));
         
-        // 选择当前状态的颜色
+        // 閫夋嫨褰撳墠鐘舵€佺殑棰滆壊
         juce::Colour currentThumbColor = thumbBg;
         if (isMouseDown)
             currentThumbColor = thumbPressed;
         else if (isMouseOver)
             currentThumbColor = thumbHover;
         
-        // 滑块阴影 - 柔和的空气感
+        // 婊戝潡闃村奖 - 鏌斿拰鐨勭┖姘旀劅
         juce::DropShadow thumbShadow;
         thumbShadow.colour = juce::Colours::black.withAlpha(0.15f);
         thumbShadow.radius = 6;
@@ -1301,7 +1276,6 @@ public:
         thumbPath.addRoundedRectangle(thumbBounds, cornerRadius);
         thumbShadow.drawForPath(g, thumbPath);
         
-        // 滑块主体 - 渐变制造磨砂质感
         juce::ColourGradient thumbGrad(
             currentThumbColor.brighter(0.08f),
             isScrollbarVertical ? thumbBounds.getX() : thumbBounds.getCentreX(),
@@ -1313,7 +1287,7 @@ public:
         g.setGradientFill(thumbGrad);
         g.fillRoundedRectangle(thumbBounds, cornerRadius);
         
-        // 滑块顶部/左侧高光线 - 晶莹剔透感
+        // 婊戝潡椤堕儴/宸︿晶楂樺厜绾?- 鏅惰幑鍓旈€忔劅
         g.setColour(highlight.withAlpha(0.25f));
         if (isScrollbarVertical)
         {
@@ -1326,7 +1300,7 @@ public:
                        thumbBounds.getX() + 1.0f, thumbBounds.getBottom() - cornerRadius, 1.5f);
         }
         
-        // 悬停时的柔和发光效果
+        // 鎮仠鏃剁殑鏌斿拰鍙戝厜鏁堟灉
         if (isMouseOver && !isMouseDown)
         {
             float glowAlpha = 0.12f;
@@ -1337,3 +1311,4 @@ public:
 };
 
 } // namespace OpenTune
+

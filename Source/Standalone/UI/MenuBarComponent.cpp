@@ -2,12 +2,12 @@
 #include "../PluginProcessor.h"
 #include "UIColors.h"
 #include "../../Utils/LocalizationManager.h"
-#include "../../Utils/KeyShortcutConfig.h"
 
 namespace OpenTune {
 
-MenuBarComponent::MenuBarComponent(OpenTuneAudioProcessor& processor)
+MenuBarComponent::MenuBarComponent(OpenTuneAudioProcessor& processor, Profile profile)
     : processor_(processor)
+    , profile_(profile)
 {
     menuBar_.setModel(this);
     addAndMakeVisible(menuBar_);
@@ -44,6 +44,36 @@ void MenuBarComponent::refreshLocalizedText()
     menuItemsChanged();
 }
 
+void MenuBarComponent::setNoteNameMode(NoteNameMode noteNameMode)
+{
+    if (noteNameMode_ == noteNameMode) {
+        return;
+    }
+
+    noteNameMode_ = noteNameMode;
+    menuItemsChanged();
+}
+
+void MenuBarComponent::setShowChunkBoundaries(bool shouldShow)
+{
+    if (showChunkBoundaries_ == shouldShow) {
+        return;
+    }
+
+    showChunkBoundaries_ = shouldShow;
+    menuItemsChanged();
+}
+
+void MenuBarComponent::setShowUnvoicedFrames(bool shouldShow)
+{
+    if (showUnvoicedFrames_ == shouldShow) {
+        return;
+    }
+
+    showUnvoicedFrames_ = shouldShow;
+    menuItemsChanged();
+}
+
 juce::StringArray MenuBarComponent::getMenuBarNames()
 {
     return { LOC(kFile), LOC(kEdit), LOC(kView) };
@@ -77,14 +107,8 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
         }
         case 1:  // Edit
         {
-            {
-                auto undoBinding = KeyShortcutConfig::getShortcutBinding(KeyShortcutConfig::ShortcutId::Undo);
-                menu.addItem(EditUndo, LOC(kUndo) + "  " + undoBinding.getDisplayNames(), true);
-            }
-            {
-                auto redoBinding = KeyShortcutConfig::getShortcutBinding(KeyShortcutConfig::ShortcutId::Redo);
-                menu.addItem(EditRedo, LOC(kRedo) + "  " + redoBinding.getDisplayNames(), true);
-            }
+            menu.addItem(EditUndo, LOC(kUndo) + "  (Ctrl+Z)", true);
+            menu.addItem(EditRedo, LOC(kRedo) + "  (Ctrl+Shift+Z)", true);
             break;
         }
         case 2:  // View
@@ -92,36 +116,37 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
             menu.addItem(ShowWaveform, LOC(kShowWaveform), true, processor_.getShowWaveform());
             menu.addItem(ShowLanes, LOC(kShowLanes), true, processor_.getShowLanes());
 
-            {
-                juce::PopupMenu noteNamesMenu;
-                noteNamesMenu.addItem(NoteNamesAll, LOC(kShowAllNotes), true, currentNoteNameMode_ == 0);
-                noteNamesMenu.addItem(NoteNamesCOnly, LOC(kShowCOnly), true, currentNoteNameMode_ == 1);
-                noteNamesMenu.addItem(NoteNamesHide, LOC(kHideNoteNames), true, currentNoteNameMode_ == 2);
-                menu.addSubMenu(LOC(kNoteNames), noteNamesMenu);
-            }
+            juce::PopupMenu noteLabelMenu;
+            noteLabelMenu.addItem(NoteNameModeShowAll, LOC(kNoteLabelsShowAll), true, noteNameMode_ == NoteNameMode::ShowAll);
+            noteLabelMenu.addItem(NoteNameModeCOnly, LOC(kNoteLabelsCOnly), true, noteNameMode_ == NoteNameMode::COnly);
+            noteLabelMenu.addItem(NoteNameModeHide, LOC(kNoteLabelsHide), true, noteNameMode_ == NoteNameMode::Hide);
 
+            menu.addSeparator();
+            menu.addSubMenu(LOC(kNoteLabels), noteLabelMenu);
             menu.addItem(ShowChunkBoundaries, LOC(kShowChunkBoundaries), true, showChunkBoundaries_);
             menu.addItem(ShowUnvoicedFrames, LOC(kShowUnvoicedFrames), true, showUnvoicedFrames_);
 
             juce::PopupMenu themeMenu;
-            themeMenu.addItem(ThemeBlueBreeze, LOC(kThemeBlueBreeze), true, Theme::getActiveTheme() == ThemeId::BlueBreeze);
-            themeMenu.addItem(ThemeDarkBlueGrey, LOC(kThemeDarkBlueGrey), true, Theme::getActiveTheme() == ThemeId::DarkBlueGrey);
-            themeMenu.addItem(ThemeAurora, LOC(kThemeAurora), true, Theme::getActiveTheme() == ThemeId::Aurora);
+            themeMenu.addItem(ThemeBlueBreeze, LOC(kThemeBlueBreeze), true, UIColors::currentThemeId() == ThemeId::BlueBreeze);
+            themeMenu.addItem(ThemeDarkBlueGrey, LOC(kThemeDarkBlueGrey), true, UIColors::currentThemeId() == ThemeId::DarkBlueGrey);
+            themeMenu.addItem(ThemeAurora, LOC(kThemeAurora), true, UIColors::currentThemeId() == ThemeId::Aurora);
             menu.addSeparator();
             menu.addSubMenu(LOC(kTheme), themeMenu);
             
-            auto currentTrailTheme = MouseTrailConfig::getTheme();
-            juce::PopupMenu mouseTrailMenu;
-            mouseTrailMenu.addItem(MouseTrailNone, LOC(kOff), true, currentTrailTheme == MouseTrailConfig::TrailTheme::None);
-            mouseTrailMenu.addSeparator();
-            mouseTrailMenu.addItem(MouseTrailClassic, LOC(kClassic), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Classic);
-            mouseTrailMenu.addItem(MouseTrailNeon, LOC(kNeon), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Neon);
-            mouseTrailMenu.addItem(MouseTrailFire, LOC(kFire), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Fire);
-            mouseTrailMenu.addItem(MouseTrailOcean, LOC(kOcean), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Ocean);
-            mouseTrailMenu.addItem(MouseTrailGalaxy, LOC(kGalaxy), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Galaxy);
-            mouseTrailMenu.addItem(MouseTrailCherryBlossom, LOC(kCherryBlossom), true, currentTrailTheme == MouseTrailConfig::TrailTheme::CherryBlossom);
-            mouseTrailMenu.addItem(MouseTrailMatrix, LOC(kMatrix), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Matrix);
-            menu.addSubMenu(LOC(kMouseTrail), mouseTrailMenu);
+            if (profile_ == Profile::Standalone) {
+                const auto currentTrailTheme = mouseTrailTheme_;
+                juce::PopupMenu mouseTrailMenu;
+                mouseTrailMenu.addItem(MouseTrailNone, LOC(kOff), true, currentTrailTheme == MouseTrailConfig::TrailTheme::None);
+                mouseTrailMenu.addSeparator();
+                mouseTrailMenu.addItem(MouseTrailClassic, LOC(kClassic), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Classic);
+                mouseTrailMenu.addItem(MouseTrailNeon, LOC(kNeon), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Neon);
+                mouseTrailMenu.addItem(MouseTrailFire, LOC(kFire), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Fire);
+                mouseTrailMenu.addItem(MouseTrailOcean, LOC(kOcean), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Ocean);
+                mouseTrailMenu.addItem(MouseTrailGalaxy, LOC(kGalaxy), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Galaxy);
+                mouseTrailMenu.addItem(MouseTrailCherryBlossom, LOC(kCherryBlossom), true, currentTrailTheme == MouseTrailConfig::TrailTheme::CherryBlossom);
+                mouseTrailMenu.addItem(MouseTrailMatrix, LOC(kMatrix), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Matrix);
+                menu.addSubMenu(LOC(kMouseTrail), mouseTrailMenu);
+            }
             break;
         }
         default:
@@ -134,13 +159,10 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
 void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
 {
     juce::ignoreUnused(topLevelMenuIndex);
-    DBG("MenuBarComponent::menuItemSelected called with ID: " + juce::String(menuItemID));
-
     switch (menuItemID)
     {
         case ImportAudio:
             // 触发导入音频，由PluginEditor处理文件选择、多选支持和导入模式询问
-            DBG("ImportAudio selected, calling listeners");
             listeners_.call([](Listener& l) { l.importAudioRequested(); });
             break;
 
@@ -186,33 +208,28 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             menuItemsChanged();
             break;
         }
-        case NoteNamesAll:
-            currentNoteNameMode_ = 0;
-            listeners_.call([](Listener& l) { l.noteNameModeChanged(0); });
+        case NoteNameModeShowAll:
+            listeners_.call([](Listener& l) { l.noteNameModeChanged(NoteNameMode::ShowAll); });
             menuItemsChanged();
             break;
-        case NoteNamesCOnly:
-            currentNoteNameMode_ = 1;
-            listeners_.call([](Listener& l) { l.noteNameModeChanged(1); });
+        case NoteNameModeCOnly:
+            listeners_.call([](Listener& l) { l.noteNameModeChanged(NoteNameMode::COnly); });
             menuItemsChanged();
             break;
-        case NoteNamesHide:
-            currentNoteNameMode_ = 2;
-            listeners_.call([](Listener& l) { l.noteNameModeChanged(2); });
+        case NoteNameModeHide:
+            listeners_.call([](Listener& l) { l.noteNameModeChanged(NoteNameMode::Hide); });
             menuItemsChanged();
             break;
         case ShowChunkBoundaries:
         {
-            showChunkBoundaries_ = !showChunkBoundaries_;
-            bool newState = showChunkBoundaries_;
+            const bool newState = !showChunkBoundaries_;
             listeners_.call([newState](Listener& l) { l.showChunkBoundariesToggled(newState); });
             menuItemsChanged();
             break;
         }
         case ShowUnvoicedFrames:
         {
-            showUnvoicedFrames_ = !showUnvoicedFrames_;
-            bool newState = showUnvoicedFrames_;
+            const bool newState = !showUnvoicedFrames_;
             listeners_.call([newState](Listener& l) { l.showUnvoicedFramesToggled(newState); });
             menuItemsChanged();
             break;

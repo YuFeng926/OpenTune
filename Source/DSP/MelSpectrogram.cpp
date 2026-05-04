@@ -1,5 +1,4 @@
 #include "MelSpectrogram.h"
-#include "../Utils/SimdAccelerator.h"
 #include "../Utils/Error.h"
 #include "../Utils/AppLogger.h"
 #include <juce_dsp/juce_dsp.h>
@@ -45,6 +44,13 @@ static int reflectIndex(int i, int n)
     return i;
 }
 
+static float dotProduct(const float* a, const float* b, size_t count)
+{
+    float sum = 0.0f;
+    for (size_t i = 0; i < count; ++i) sum += a[i] * b[i];
+    return sum;
+}
+
 MelSpectrogramProcessor::MelSpectrogramProcessor() = default;
 
 MelSpectrogramProcessor::~MelSpectrogramProcessor() = default;
@@ -83,10 +89,6 @@ Result<void> MelSpectrogramProcessor::initFftAndWindow()
         juce::dsp::WindowingFunction<float>::hann, 
         false
     );
-
-    if (!fft_ || !window_) {
-        return Result<void>::failure(ErrorCode::OutOfMemory, "Failed to allocate FFT or window");
-    }
 
     const int fftSize = config_.nFft * 2;
     fftBuffer_.resize((size_t) fftSize);
@@ -172,8 +174,6 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
     for (int i = 0; i < (int) paddedAudio_.size(); ++i)
         paddedAudio_[(size_t) i] = audio[(size_t) reflectIndex(i - pad, numSamples)];
 
-    auto& simd = SimdAccelerator::getInstance();
-
     for (int frame = 0; frame < numFrames; ++frame)
     {
         const int startSample = frame * config_.hopLength;
@@ -197,12 +197,12 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
         const int nMelsActual = std::min(config_.nMels, 128);
         for (int m = 0; m < nMelsActual; ++m)
         {
-            melSums[m] = simd.dotProduct(fftBuffer_.data(), melFilterbank_[(size_t) m].data(), nFftBins);
+            melSums[m] = dotProduct(fftBuffer_.data(), melFilterbank_[(size_t) m].data(), nFftBins);
             melSums[m] = std::max(config_.logEps, melSums[m]);
         }
 
         float logResults[128];
-        simd.vectorLog(logResults, melSums, static_cast<size_t>(nMelsActual));
+        for (int m = 0; m < nMelsActual; ++m) logResults[m] = std::log(melSums[m]);
 
         for (int m = 0; m < nMelsActual; ++m)
         {
@@ -231,19 +231,6 @@ MelResult MelSpectrogramProcessor::compute(const float* audio, int numSamples, i
         return MelResult::success(std::move(mel));
     
     return MelResult::failure(result.error());
-}
-
-void MelSpectrogramProcessor::reset()
-{
-    fft_.reset();
-    window_.reset();
-    melFilterbank_.clear();
-    paddedAudio_.clear();
-    fftBuffer_.clear();
-    magnitudeBuffer_.clear();
-    initialized_ = false;
-    configHash_ = 0;
-    lastNumSamples_ = 0;
 }
 
 MelResult computeLogMelSpectrogram(const float* audio,

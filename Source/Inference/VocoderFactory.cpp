@@ -18,7 +18,7 @@ VocoderCreationResult VocoderFactory::create(
 
     if (gpu.getSelectedBackend() == AccelerationDetector::AccelBackend::DirectML) {
         const auto& gpuInfo = gpu.getSelectedGpu();
-        const int deviceId = gpu.getDirectMLDeviceId();
+        const int adapterIndex = gpu.getDirectMLDeviceId();
 
         AppLogger::info("[VocoderFactory] DML backend selected by GPU detector");
         AppLogger::info("[VocoderFactory]   GPU: " + juce::String(gpuInfo.name));
@@ -27,8 +27,7 @@ VocoderCreationResult VocoderFactory::create(
         AppLogger::info("[VocoderFactory] Creating DML vocoder...");
 
         DmlConfig config;
-        config.deviceId = deviceId;
-        config.performancePreference = 1; // HighPerformance
+        config.adapterIndex = adapterIndex;
 
         try {
             auto vocoder = std::make_unique<DmlVocoder>(modelPath, env, config);
@@ -41,6 +40,7 @@ VocoderCreationResult VocoderFactory::create(
             AppLogger::error("[VocoderFactory] DML vocoder creation FAILED: "
                 + juce::String(e.what()));
             AppLogger::warn("[VocoderFactory] GPU DML initialization failed, switching to CPU vocoder");
+            gpu.overrideBackend(AccelerationDetector::AccelBackend::CPU);
         }
     }
 #endif
@@ -48,7 +48,6 @@ VocoderCreationResult VocoderFactory::create(
     try {
         Ort::SessionOptions sessionOptions;
         
-        sessionOptions.DisableMemPattern();
         sessionOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
         sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 

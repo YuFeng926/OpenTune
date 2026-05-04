@@ -3,12 +3,13 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Utils/PitchCurve.h"
 #include "Utils/Note.h"
-#include "Utils/UndoAction.h"
+#include "Utils/NoteGenerator.h"
 #include <vector>
 #include <memory>
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <condition_variable>
 #include <thread>
 #include <cstdint>
 
@@ -16,7 +17,7 @@ namespace OpenTune {
 
 /**
  * 钢琴卷帘音高修正异步工作器
- * 在后台线程处理音高修正任务，支持音符范围修正
+ * 在后台线程处理音高修正任务，支持音符范围修正、手动绘制修正和自动音调生成
  */
 class PianoRollCorrectionWorker
 {
@@ -27,6 +28,13 @@ public:
      */
     struct AsyncCorrectionRequest
     {
+        enum class Kind
+        {
+            ApplyNoteRange,
+            AutoTuneGenerate
+        };
+
+        Kind kind = Kind::ApplyNoteRange;
         std::shared_ptr<PitchCurve> curve;
         std::vector<Note> notes;
         int startFrame = 0;
@@ -36,7 +44,14 @@ public:
         float vibratoRate = 5.0f;
         double audioSampleRate = 44100.0;
         uint64_t version = 0;
-        bool isAutoTuneRequest = false;
+        int autoHopSize = 160;
+        double autoF0SampleRate = 16000.0;
+        int autoStartFrame = 0;
+        int autoEndFrame = 0;
+        NoteGeneratorParams autoGenParams;
+        std::vector<float> autoOriginalF0Full;
+        uint64_t materializationEpochSnapshot = 0;
+        uint64_t materializationIdSnapshot = 0;
 
         enum class ErrorKind {
             None,
@@ -59,29 +74,19 @@ public:
     RequestPtr takeCompleted();
     void stop();
 
-    void setVersion(uint64_t version) { version_.store(version, std::memory_order_release); }
-    uint64_t getVersion() const { return version_.load(std::memory_order_acquire); }
-    uint64_t incrementVersion() { return version_.fetch_add(1, std::memory_order_acq_rel) + 1; }
-
-    void setClipContextGeneration(uint64_t gen) { clipContextGeneration_.store(gen, std::memory_order_release); }
-    uint64_t getClipContextGeneration() const { return clipContextGeneration_.load(std::memory_order_acquire); }
-
-    void setClipContext(int trackId, uint64_t clipId);
-    void getClipContext(int& trackId, uint64_t& clipId) const;
-
     static void executeRequest(AsyncCorrectionRequest& request);
 
 private:
     void workerLoop();
+    uint64_t getVersion() const { return version_.load(std::memory_order_acquire); }
+    uint64_t incrementVersion() { return version_.fetch_add(1, std::memory_order_acq_rel) + 1; }
 
     std::shared_ptr<AsyncCorrectionRequest> pendingRequest_;
     std::mutex pendingRequestMutex_;
+    std::condition_variable pendingRequestCv_;
     std::atomic<bool> stopFlag_{false};
     std::thread workerThread_;
     std::atomic<uint64_t> version_{0};
-    std::atomic<uint64_t> clipContextGeneration_{0};
-    std::atomic<int> currentTrackId_{-1};
-    std::atomic<uint64_t> currentClipId_{0};
     RequestPtr completedRequest_;
     std::mutex completedRequestMutex_;
 };

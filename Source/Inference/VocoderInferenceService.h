@@ -4,42 +4,32 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <functional>
-#include <mutex>
 #include "VocoderInterface.h"
 #include "../Utils/Error.h"
 
+namespace Ort { struct Env; }
+
 namespace OpenTune {
 
+/** Thread-safety: synthesize() is only called by VocoderRenderScheduler's
+ *  single worker thread. initialize/shutdown must not race with synthesize. */
 class VocoderInferenceService {
 public:
-    VocoderInferenceService();
+    VocoderInferenceService(std::shared_ptr<Ort::Env> env);
     ~VocoderInferenceService();
 
     bool initialize(const std::string& modelDir);
-
     void shutdown();
 
-    Result<std::vector<float>> synthesizeAudioWithEnergy(
+    Result<std::vector<float>> synthesize(
         const std::vector<float>& f0,
-        const std::vector<float>& energy,
-        const float* mel,
-        size_t melSize);
-
-    virtual Result<std::vector<float>> doSynthesizeAudioWithEnergy(
-        const std::vector<float>& f0,
-        const std::vector<float>& energy,
         const float* mel,
         size_t melSize);
 
     int getVocoderHopSize() const;
-
     int getMelBins() const;
 
-    bool isInitialized() const;
-
 private:
-    std::mutex runMutex_;
     class Impl;
     std::unique_ptr<Impl> pImpl_;
 

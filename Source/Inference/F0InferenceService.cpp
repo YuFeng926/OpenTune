@@ -9,9 +9,7 @@ namespace OpenTune {
 
 class F0InferenceService::Impl {
 public:
-    Impl() {
-        Ort::InitApi();
-        env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune-F0");
+    Impl(std::shared_ptr<Ort::Env> env) : env_(std::move(env)) {
         resamplingManager_ = std::make_shared<ResamplingManager>();
     }
 
@@ -72,28 +70,36 @@ public:
         std::function<void(const std::vector<float>&, int)> partialCallback)
     {
         if (!initialized_.load(std::memory_order_acquire)) {
-            return Result<std::vector<float>>::failure(
-                ErrorCode::NotInitialized, "F0InferenceService not initialized");
+            if (!initialize(modelDir_)) {
+                return Result<std::vector<float>>::failure(
+                    ErrorCode::NotInitialized, "F0InferenceService failed to re-initialize");
+            }
         }
 
-        std::shared_lock<std::shared_mutex> lock(extractorMutex_);
-        if (!currentExtractor_) {
-            return Result<std::vector<float>>::failure(
-                ErrorCode::NotInitialized, "F0 extractor not available");
+        Result<std::vector<float>> result = Result<std::vector<float>>::failure(
+            ErrorCode::NotInitialized, "F0 extractor not available");
+
+        {
+            std::shared_lock<std::shared_mutex> lock(extractorMutex_);
+            if (currentExtractor_) {
+                try {
+                    auto f0 = currentExtractor_->extractF0(audio, length, sampleRate, 
+                                                             progressCallback, partialCallback);
+                    result = Result<std::vector<float>>::success(f0);
+                } catch (const std::exception& e) {
+                    result = Result<std::vector<float>>::failure(
+                        ErrorCode::ModelInferenceFailed, std::string(e.what()));
+                } catch (...) {
+                    AppLogger::error("[F0InferenceService] Unknown exception during F0 extraction");
+                    result = Result<std::vector<float>>::failure(
+                        ErrorCode::ModelInferenceFailed, "Unknown exception during F0 extraction");
+                }
+            }
         }
 
-        try {
-            auto f0 = currentExtractor_->extractF0(audio, length, sampleRate, 
-                                                    progressCallback, partialCallback);
-            return Result<std::vector<float>>::success(f0);
-        } catch (const std::exception& e) {
-            return Result<std::vector<float>>::failure(
-                ErrorCode::ModelInferenceFailed, std::string(e.what()));
-        } catch (...) {
-            AppLogger::error("[F0InferenceService] Unknown exception during F0 extraction");
-            return Result<std::vector<float>>::failure(
-                ErrorCode::ModelInferenceFailed, "Unknown exception during F0 extraction");
-        }
+        // 记录最后提取时间，不再立即释放模型（延迟释放策略）
+        lastExtractionTimeMs_.store(juce::Time::getMillisecondCounter(), std::memory_order_release);
+        return result;
     }
 
     bool setF0Model(F0ModelType type) {
@@ -184,8 +190,23 @@ public:
         return initialized_.load(std::memory_order_acquire);
     }
 
+    void releaseIdleModelIfNeeded() {
+        if (!initialized_.load(std::memory_order_acquire)) return;
+        const uint64_t lastTime = lastExtractionTimeMs_.load(std::memory_order_acquire);
+        if (lastTime == 0) return;
+        const uint64_t now = juce::Time::getMillisecondCounter();
+        if (now - lastTime >= kModelRetentionMs) {
+            AppLogger::info("[F0InferenceService] Releasing idle F0 model after 30s");
+            shutdown();
+            lastExtractionTimeMs_.store(0, std::memory_order_release);
+        }
+    }
+
+    std::atomic<uint64_t> lastExtractionTimeMs_{0};
+    static constexpr uint64_t kModelRetentionMs = 30000;  // 30 秒
+
 private:
-    std::unique_ptr<Ort::Env> env_;
+    std::shared_ptr<Ort::Env> env_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::unique_ptr<IF0Extractor> currentExtractor_;
     F0ModelType currentModelType_{F0ModelType::RMVPE};
@@ -194,7 +215,8 @@ private:
     std::atomic<bool> initialized_{false};
 };
 
-F0InferenceService::F0InferenceService() : pImpl_(std::make_unique<Impl>()) {}
+F0InferenceService::F0InferenceService(std::shared_ptr<Ort::Env> env) 
+    : pImpl_(std::make_unique<Impl>(std::move(env))) {}
 
 F0InferenceService::~F0InferenceService() = default;
 
@@ -262,6 +284,10 @@ int F0InferenceService::getF0SampleRate() const {
 
 bool F0InferenceService::isInitialized() const {
     return pImpl_->isInitialized();
+}
+
+void F0InferenceService::releaseIdleModelIfNeeded() {
+    if (pImpl_) pImpl_->releaseIdleModelIfNeeded();
 }
 
 } // namespace OpenTune

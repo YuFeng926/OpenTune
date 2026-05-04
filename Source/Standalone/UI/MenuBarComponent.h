@@ -11,6 +11,8 @@
  */
 
 #include <juce_gui_basics/juce_gui_basics.h>
+
+#include "Utils/PianoRollVisualPreferences.h"
 #include "ThemeTokens.h"
 #include "../Utils/MouseTrailConfig.h"
 
@@ -22,6 +24,12 @@ class MenuBarComponent : public juce::Component,
                          public juce::MenuBarModel
 {
 public:
+    enum class Profile
+    {
+        Standalone,
+        Plugin
+    };
+
     enum class ExportType
     {
         SelectedClip,
@@ -41,16 +49,16 @@ public:
         virtual void helpRequested() = 0;
         virtual void showWaveformToggled(bool shouldShow) = 0;
         virtual void showLanesToggled(bool shouldShow) = 0;
+        virtual void noteNameModeChanged(NoteNameMode noteNameMode) = 0;
+        virtual void showChunkBoundariesToggled(bool shouldShow) = 0;
+        virtual void showUnvoicedFramesToggled(bool shouldShow) = 0;
         virtual void themeChanged(ThemeId themeId) = 0;
         virtual void undoRequested() = 0;
         virtual void redoRequested() = 0;
         virtual void mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme) = 0;
-        virtual void noteNameModeChanged(int mode) {}
-        virtual void showChunkBoundariesToggled(bool show) {}
-        virtual void showUnvoicedFramesToggled(bool show) {}
     };
 
-    explicit MenuBarComponent(OpenTuneAudioProcessor& processor);
+    explicit MenuBarComponent(OpenTuneAudioProcessor& processor, Profile profile = Profile::Standalone);
     ~MenuBarComponent() override;
 
     void paint(juce::Graphics& g) override;
@@ -60,6 +68,10 @@ public:
     void removeListener(Listener* listener);
 
     void refreshLocalizedText();  // 刷新本地化文本
+    void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme) { mouseTrailTheme_ = theme; }
+    void setNoteNameMode(NoteNameMode noteNameMode);
+    void setShowChunkBoundaries(bool shouldShow);
+    void setShowUnvoicedFrames(bool shouldShow);
 
     juce::StringArray getMenuBarNames() override;
     juce::PopupMenu getMenuForIndex(int topLevelMenuIndex, const juce::String& menuName) override;
@@ -67,9 +79,11 @@ public:
 
 private:
     OpenTuneAudioProcessor& processor_;
+    Profile profile_ = Profile::Standalone;
     juce::MenuBarComponent menuBar_;
     juce::ListenerList<Listener> listeners_;
-    int currentNoteNameMode_ = 1; // 0=ShowAll, 1=COnly, 2=Hide
+    MouseTrailConfig::TrailTheme mouseTrailTheme_ = MouseTrailConfig::TrailTheme::Classic;
+    NoteNameMode noteNameMode_ = NoteNameMode::COnly;
     bool showChunkBoundaries_ = false;
     bool showUnvoicedFrames_ = false;
 
@@ -87,15 +101,14 @@ private:
 
         ShowWaveform = 100,
         ShowLanes,
+        NoteNameModeShowAll,
+        NoteNameModeCOnly,
+        NoteNameModeHide,
+        ShowChunkBoundaries,
+        ShowUnvoicedFrames,
         ThemeBlueBreeze,
         ThemeDarkBlueGrey,
         ThemeAurora,
-
-        NoteNamesAll = 110,
-        NoteNamesCOnly,
-        NoteNamesHide,
-        ShowChunkBoundaries,
-        ShowUnvoicedFrames,
 
         MouseTrailNone = 150,
         MouseTrailClassic,

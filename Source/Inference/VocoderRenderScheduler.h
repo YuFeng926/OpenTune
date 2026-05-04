@@ -1,12 +1,13 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
-#include <memory>
-#include <queue>
-#include <mutex>
+#include <atomic>
 #include <condition_variable>
-#include <thread>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <deque>
+#include <thread>
 #include <vector>
 
 namespace OpenTune {
@@ -26,8 +27,8 @@ class VocoderInferenceService;
 class VocoderRenderScheduler {
 public:
     struct Job {
+        uint64_t chunkKey{0};
         std::vector<float> f0;
-        std::vector<float> energy;
         std::vector<float> mel;
         std::function<void(bool, const juce::String&, const std::vector<float>&)> onComplete;
     };
@@ -53,21 +54,14 @@ public:
      */
     void submit(Job job);
 
-    /**
-     * Get current queue depth
-     */
-    int getQueueDepth() const;
-
-    /**
-     * Check if scheduler is accepting jobs
-     */
-    bool isRunning() const;
+    static constexpr int kMaxQueueDepth = 50;
 
 private:
+
     void workerThread();
 
     VocoderInferenceService* service_{nullptr};
-    std::queue<Job> jobQueue_;
+    std::deque<Job> jobQueue_;
     mutable std::mutex queueMutex_;
     std::condition_variable queueCV_;
     std::unique_ptr<std::thread> worker_;

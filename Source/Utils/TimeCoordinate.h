@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
 
 namespace OpenTune::TimeCoordinate {
 
@@ -27,6 +28,16 @@ inline double secondsToSamplesExact(double seconds, double sampleRate) {
 inline int64_t secondsToSamples(double seconds, double sampleRate) {
     if (sampleRate <= 0.0) return 0;
     return static_cast<int64_t>(secondsToSamplesExact(seconds, sampleRate));
+}
+
+inline int64_t secondsToSamplesFloor(double seconds, double sampleRate) {
+    if (sampleRate <= 0.0) return 0;
+    return static_cast<int64_t>(std::floor(secondsToSamplesExact(seconds, sampleRate)));
+}
+
+inline int64_t secondsToSamplesCeil(double seconds, double sampleRate) {
+    if (sampleRate <= 0.0) return 0;
+    return static_cast<int64_t>(std::ceil(secondsToSamplesExact(seconds, sampleRate)));
 }
 
 } // namespace OpenTune::TimeCoordinate

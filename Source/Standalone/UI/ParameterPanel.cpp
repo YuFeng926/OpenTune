@@ -2,6 +2,7 @@
 #include "ToolbarIcons.h"
 #include "../../Utils/PitchControlConfig.h"
 #include "../../Utils/LocalizationManager.h"
+#include "../../Utils/AppLogger.h"
 #include <vector>
 
 namespace OpenTune {
@@ -30,7 +31,17 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
     else
     {
         auto iconArea = getLocalBounds().toFloat().reduced(10.0f);
-        ToolbarIcons::drawIcon(g, iconPath_, iconArea, UIColors::textPrimary, 2.0f, fillIcon_);
+        auto iconColor = UIColors::textPrimary;
+
+        // Hover: subtle scale-up (1.08x) and brightness boost
+        if (shouldDrawButtonAsHighlighted && !shouldDrawButtonAsDown)
+        {
+            const float hoverScale = 1.08f;
+            iconArea = iconArea.withSizeKeepingCentre(iconArea.getWidth() * hoverScale, iconArea.getHeight() * hoverScale);
+            iconColor = iconColor.brighter(0.15f);
+        }
+
+        ToolbarIcons::drawIcon(g, iconPath_, iconArea, iconColor, 2.0f, fillIcon_);
     }
 }
 
@@ -129,6 +140,7 @@ ParameterPanel::ParameterPanel()
             listeners_.call([this, newVal](Listener& l) { l.parameterDragEnded(kParamRetuneSpeed, dragStartRetuneSpeed_, newVal); });
     };
     addAndMakeVisible(retuneSpeedSlider_);
+    retuneSpeedSlider_.setTooltip(LOC(kTooltipRetuneSpeed));
 
     setupLabel(vibratoDepthLabel_, LOC(kVibratoDepth));
     vibratoDepthLabel_.setJustificationType(juce::Justification::centred);
@@ -144,6 +156,7 @@ ParameterPanel::ParameterPanel()
             listeners_.call([this, newVal](Listener& l) { l.parameterDragEnded(kParamVibratoDepth, dragStartVibratoDepth_, newVal); });
     };
     addAndMakeVisible(vibratoDepthSlider_);
+    vibratoDepthSlider_.setTooltip(LOC(kTooltipVibratoDepth));
 
     setupLabel(vibratoRateLabel_, LOC(kVibratoRate));
     vibratoRateLabel_.setJustificationType(juce::Justification::centred);
@@ -159,6 +172,7 @@ ParameterPanel::ParameterPanel()
             listeners_.call([this, newVal](Listener& l) { l.parameterDragEnded(kParamVibratoRate, dragStartVibratoRate_, newVal); });
     };
     addAndMakeVisible(vibratoRateSlider_);
+    vibratoRateSlider_.setTooltip(LOC(kTooltipVibratoRate));
 
     setupLabel(noteSplitLabel_, LOC(kNoteSplit));
     noteSplitLabel_.setJustificationType(juce::Justification::centred);
@@ -178,37 +192,40 @@ ParameterPanel::ParameterPanel()
             listeners_.call([this, newVal](Listener& l) { l.parameterDragEnded(kParamNoteSplit, dragStartNoteSplit_, newVal); });
     };
     addAndMakeVisible(noteSplitSlider_);
+    noteSplitSlider_.setTooltip(LOC(kTooltipNoteSplit));
 
     // ========== Tools Section (Replaces Info Display) ==========
     setupHeader(toolsHeader_, LOC(kTools));
     addAndMakeVisible(toolsHeader_);
 
-    autoTuneToolButton_ = std::make_unique<ToolIconButton>(0, "Auto", LOC(kAuto) + " (A)");
-    autoTuneToolButton_->setRadioGroupId(1001);
+    autoTuneToolButton_ = std::make_unique<ToolIconButton>(0, "Auto", LOC(kTooltipAutoTune) + "\n6");
+    autoTuneToolButton_->setClickingTogglesState(false);
     autoTuneToolButton_->setTextIcon("AUTO");
-    autoTuneToolButton_->onClick = [this] { onToolClicked(0); };
+    autoTuneToolButton_->onClick = [this] {
+        listeners_.call([](Listener& l) { l.autoTuneRequested(); });
+    };
     addAndMakeVisible(*autoTuneToolButton_);
 
-    selectToolButton_ = std::make_unique<ToolIconButton>(1, "Select", LOC(kSelect) + " (Default)");
+    selectToolButton_ = std::make_unique<ToolIconButton>(1, "Select", LOC(kTooltipSelect) + "\n3");
     selectToolButton_->setRadioGroupId(1001);
     selectToolButton_->setToggleState(true, juce::dontSendNotification);
     selectToolButton_->setIcon(ToolbarIcons::getSelectIcon(), true);
     selectToolButton_->onClick = [this] { onToolClicked(1); };
     addAndMakeVisible(*selectToolButton_);
 
-    drawNoteToolButton_ = std::make_unique<ToolIconButton>(2, "DrawNote", LOC(kDrawNotes) + " (N)");
+    drawNoteToolButton_ = std::make_unique<ToolIconButton>(2, "DrawNote", LOC(kTooltipDrawNote) + "\n2");
     drawNoteToolButton_->setRadioGroupId(1001);
     drawNoteToolButton_->setIcon(ToolbarIcons::getDrawNoteIcon(), false);
     drawNoteToolButton_->onClick = [this] { onToolClicked(2); };
     addAndMakeVisible(*drawNoteToolButton_);
 
-    lineAnchorToolButton_ = std::make_unique<ToolIconButton>(3, "LineAnchor", LOC(kLineAnchor) + " (4)");
+    lineAnchorToolButton_ = std::make_unique<ToolIconButton>(3, "LineAnchor", LOC(kTooltipLineAnchor) + "\n4");
     lineAnchorToolButton_->setRadioGroupId(1001);
     lineAnchorToolButton_->setIcon(ToolbarIcons::getLineAnchorIcon(), false);
     lineAnchorToolButton_->onClick = [this] { onToolClicked(3); };
     addAndMakeVisible(*lineAnchorToolButton_);
 
-    handDrawToolButton_ = std::make_unique<ToolIconButton>(4, "HandDraw", LOC(kHandDraw));
+    handDrawToolButton_ = std::make_unique<ToolIconButton>(4, "HandDraw", LOC(kTooltipHandDraw) + "\n5");
     handDrawToolButton_->setRadioGroupId(1001);
     handDrawToolButton_->setIcon(ToolbarIcons::getHandDrawIcon(), false);
     handDrawToolButton_->onClick = [this] { onToolClicked(4); };
@@ -227,7 +244,7 @@ ParameterPanel::~ParameterPanel()
 
 void ParameterPanel::paint(juce::Graphics& g)
 {
-    const auto& style = Theme::getActiveStyle();
+    const auto& style = UIColors::currentThemeStyle();
     // 阴影边距：背景在 reduced(12) 区域内绘制，阴影在边距内渲染
     const float shadowMargin = 12.0f;
     auto bounds = getLocalBounds().toFloat().reduced(shadowMargin);
@@ -249,7 +266,7 @@ void ParameterPanel::paint(juce::Graphics& g)
 
 void ParameterPanel::resized()
 {
-    const auto themeId = Theme::getActiveTheme();
+    const auto themeId = UIColors::currentThemeId();
     const bool isBlueBreeze = (themeId == ThemeId::BlueBreeze);
 
     // 旋钮尺寸：BlueBreeze 主题使用更大尺寸 (115px)，其他主题使用 92px
@@ -375,15 +392,15 @@ void ParameterPanel::refreshLocalizedText()
     
     // 更新工具按钮 tooltip
     if (autoTuneToolButton_)
-        autoTuneToolButton_->setTooltip(LOC(kAuto));
+        autoTuneToolButton_->setTooltip(LOC(kTooltipAutoTune) + "\n6");
     if (selectToolButton_)
-        selectToolButton_->setTooltip(LOC(kSelect));
+        selectToolButton_->setTooltip(LOC(kTooltipSelect) + "\n3");
     if (drawNoteToolButton_)
-        drawNoteToolButton_->setTooltip(LOC(kDrawNotes));
+        drawNoteToolButton_->setTooltip(LOC(kTooltipDrawNote) + "\n2");
     if (lineAnchorToolButton_)
-        lineAnchorToolButton_->setTooltip(LOC(kLineAnchor));
+        lineAnchorToolButton_->setTooltip(LOC(kTooltipLineAnchor) + "\n4");
     if (handDrawToolButton_)
-        handDrawToolButton_->setTooltip(LOC(kHandDraw));
+        handDrawToolButton_->setTooltip(LOC(kTooltipHandDraw) + "\n5");
     
     repaint();
 }
@@ -428,7 +445,6 @@ void ParameterPanel::removeListener(Listener* listener)
 
 void ParameterPanel::setActiveTool(int toolId)
 {
-    if (autoTuneToolButton_) autoTuneToolButton_->setToggleState(toolId == 0, juce::dontSendNotification);
     if (selectToolButton_) selectToolButton_->setToggleState(toolId == 1, juce::dontSendNotification);
     if (drawNoteToolButton_) drawNoteToolButton_->setToggleState(toolId == 2, juce::dontSendNotification);
     if (lineAnchorToolButton_) lineAnchorToolButton_->setToggleState(toolId == 3, juce::dontSendNotification);

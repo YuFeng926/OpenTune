@@ -3,12 +3,18 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
+#include <functional>
 #include "UI/UIColors.h"
 #include "UI/WaveformMipmap.h"
+#include "Utils/F0Timeline.h"
+#include "Utils/MaterializationTimelineProjection.h"
 #include "Utils/PitchCurve.h"
+#include "Utils/PianoRollVisualPreferences.h"
 #include "Utils/Note.h"
+#include <algorithm>
 #include <vector>
 #include <array>
+#include <cmath>
 #include <cstdint>
 
 namespace OpenTune {
@@ -23,7 +29,6 @@ public:
     PianoRollRenderer() = default;
 
     void setWaveformMipmap(WaveformMipmap* mipmap) { waveformMipmap_ = mipmap; }
-    WaveformMipmap* getWaveformMipmap() const { return waveformMipmap_; }
 
     /**
      * 渲染上下文结构体
@@ -35,36 +40,27 @@ public:
         int height = 0;
         int pianoKeyWidth = 60;
         int rulerHeight = 30;
-        double zoomLevel = 1.0;
-        int scrollOffset = 0;
+        double pixelsPerSecond = 100.0;
         float pixelsPerSemitone = 15.0f;
         float minMidi = 24.0f;
         float maxMidi = 108.0f;
         double bpm = 120.0;
-        int timeSigNum = 4;
-        int timeSigDenom = 4;
-        double trackOffsetSeconds = 0.0;
-        double audioSampleRate = 44100.0;
-        int hopSize = 512;
-        double f0SampleRate = 16000.0;
+        MaterializationTimelineProjection materializationProjection;
+        F0Timeline f0Timeline;
         int scaleRootNote = 0;
         int scaleType = 1;
-        int noteNameMode = 1; // 0=ShowAll, 1=COnly, 2=Hide
-        bool showWaveform = true;
+        NoteNameMode noteNameMode = NoteNameMode::COnly;
         bool showLanes = true;
-        bool showOriginalF0 = true;
-        bool showCorrectedF0 = true;
-        bool isRendering = false;
-        float renderingProgress = 0.0f;
-        bool hasUserAudio = false;
-
         bool showChunkBoundaries = false;
-        std::vector<double> chunkBoundaries; // clip-relative seconds
         bool showUnvoicedFrames = false;
+        int pressedPianoKey = -1;
+        bool hasUserAudio = false;
+        std::vector<double> chunkBoundaries;
+        std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
 
         bool hasF0Selection = false;
         int f0SelectionStartFrame = -1;
-        int f0SelectionEndFrame = -1;
+        int f0SelectionEndFrameExclusive = -1;
 
         enum class TimeUnit { Seconds, Bars } timeUnit = TimeUnit::Seconds;
 
@@ -73,22 +69,17 @@ public:
         std::function<float(float)> freqToMidi;
         std::function<double(int)> xToTime;
         std::function<int(double)> timeToX;
-        std::function<double(double)> clipSecondsToFrameIndex;
-        std::function<double(int)> frameIndexToClipSeconds;
     };
 
-    void drawBackground(juce::Graphics& g, const RenderContext& ctx);
     void drawLanes(juce::Graphics& g, const RenderContext& ctx);
+    void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx);
     void drawWaveform(juce::Graphics& g, const RenderContext& ctx);
     void drawTimeRuler(juce::Graphics& g, const RenderContext& ctx);
     void drawGridLines(juce::Graphics& g, const RenderContext& ctx);
     void drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx);
-    void drawUnvoicedFrames(juce::Graphics& g, const RenderContext& ctx,
-                            const std::vector<float>& originalF0);
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
     void drawNotes(juce::Graphics& g, const RenderContext& ctx,
-                   const std::vector<Note>& notes,
-                   double trackOffsetSeconds);
+                   const std::vector<Note>& notes);
 
     void drawF0Curve(juce::Graphics& g,
                      const std::vector<float>& f0,

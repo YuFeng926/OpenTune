@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenTune — Guía del usuario</title>
+    <style>
+        @page { size: A4; margin: 2cm; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.8; color: #333; font-size: 11pt;
+            max-width: 210mm; margin: 0 auto; padding: 20mm; background: #fff;
+        }
+        .cover { text-align: center; padding: 60px 0; page-break-after: always; }
+        .cover h1 { font-size: 48pt; color: #2563eb; margin-bottom: 20px; font-weight: 700; }
+        .cover .subtitle { font-size: 18pt; color: #64748b; margin-bottom: 40px; }
+        .cover .version { font-size: 14pt; color: #94a3b8; margin-top: 100px; }
+        .cover .tagline { font-size: 16pt; color: #3b82f6; margin-top: 20px; font-weight: 500; }
+        .toc { page-break-after: always; }
+        .toc h2 { font-size: 24pt; color: #1e293b; border-bottom: 3px solid #2563eb; padding-bottom: 10px; margin-bottom: 30px; }
+        .toc ul { list-style: none; }
+        .toc li { padding: 8px 0; border-bottom: 1px dotted #e2e8f0; }
+        .toc a { color: #334155; text-decoration: none; }
+        .toc a:hover { color: #2563eb; }
+        .toc .page-num { float: right; color: #94a3b8; }
+        h2 { font-size: 22pt; color: #1e293b; margin-top: 40px; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
+        h3 { font-size: 16pt; color: #334155; margin-top: 30px; margin-bottom: 15px; }
+        h4 { font-size: 13pt; color: #475569; margin-top: 20px; margin-bottom: 10px; }
+        p { margin-bottom: 12px; text-align: justify; }
+        ul, ol { margin-left: 20px; margin-bottom: 15px; }
+        li { margin-bottom: 6px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 10pt; }
+        th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; }
+        th { background: #f1f5f9; color: #1e293b; font-weight: 600; }
+        tr:nth-child(even) { background: #f8fafc; }
+        .tip, .warning, .note { padding: 15px 20px; margin: 20px 0; border-radius: 6px; border-left: 4px solid; }
+        .tip { background: #eff6ff; border-color: #3b82f6; }
+        .warning { background: #fffbeb; border-color: #f59e0b; }
+        .note { background: #f0fdf4; border-color: #22c55e; }
+        .tip-title, .warning-title, .note-title { font-weight: 600; margin-bottom: 5px; }
+        .tip-title { color: #1d4ed8; }
+        .warning-title { color: #d97706; }
+        .note-title { color: #16a34a; }
+        code { background: #f1f5f9; padding: 2px 6px; border-radius: 3px; font-family: "Consolas", "Monaco", monospace; font-size: 10pt; }
+        .workflow { background: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .workflow-step { display: flex; align-items: flex-start; margin-bottom: 15px; }
+        .step-number { background: #2563eb; color: white; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; margin-right: 15px; flex-shrink: 0; }
+        .step-content h4 { margin-top: 0; margin-bottom: 5px; }
+        .step-content p { margin-bottom: 0; color: #64748b; }
+        .legend { display: flex; flex-wrap: wrap; gap: 20px; margin: 15px 0; }
+        .legend-item { display: flex; align-items: center; gap: 8px; }
+        .legend-color { width: 20px; height: 4px; border-radius: 2px; }
+        .page-break { page-break-before: always; }
+        .shortcut-table td:first-child { white-space: nowrap; font-family: monospace; background: #f1f5f9; }
+        .tool-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin: 10px 0; background: #fafafa; }
+        .tool-card h4 { margin-top: 0; color: #2563eb; }
+        .param-item { margin: 15px 0; padding: 10px 0; border-bottom: 1px dashed #e2e8f0; }
+        .param-name { font-weight: 600; color: #1e293b; }
+        .param-range { color: #64748b; font-size: 10pt; }
+        footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #e2e8f0; text-align: center; color: #94a3b8; font-size: 10pt; }
+        @media print { body { padding: 0; } .cover { padding: 100px 0; } }
+    </style>
+</head>
+<body>
+
+<div class="cover">
+    <h1>OpenTune</h1>
+    <div class="subtitle">Software de corrección de tono con IA</div>
+    <div class="tagline">Preserva los formantes, transpone sin distorsión</div>
+    <div class="version">Guía del usuario v1.5</div>
+    <div class="version" style="margin-top: 10px;">Mayo 2026</div>
+</div>
+
+<div class="toc">
+    <h2>Índice</h2>
+    <ul>
+        <li><a href="#whats-new">★ Novedades de v1.5</a></li>
+        <li><a href="#intro">1. Introducción al producto</a></li>
+        <li><a href="#requirements">2. Requisitos del sistema</a></li>
+        <li><a href="#install">3. Instalación e inicio</a></li>
+        <li><a href="#interface">4. Descripción general de la interfaz</a></li>
+        <li><a href="#quickstart">5. Inicio rápido</a></li>
+        <li><a href="#features">6. Funciones principales</a></li>
+        <li><a href="#tools">7. Herramientas de edición</a></li>
+        <li><a href="#parameters">8. Parámetros detallados</a></li>
+        <li><a href="#schemes">9. Modos de edición</a></li>
+        <li><a href="#preferences">10. Preferencias</a></li>
+        <li><a href="#shortcuts">11. Atajos de teclado</a></li>
+        <li><a href="#themes">12. Temas y apariencia</a></li>
+        <li><a href="#gpu">13. Aceleración GPU</a></li>
+        <li><a href="#vst3">14. Modo plugin VST3/ARA</a></li>
+        <li><a href="#export">15. Exportar audio</a></li>
+        <li><a href="#faq">16. Preguntas frecuentes</a></li>
+    </ul>
+</div>
+
+<div class="page-break"></div>
+<h2 id="whats-new">★ Novedades de v1.5</h2>
+
+<h3>🎉 Nuevas funciones</h3>
+<table>
+    <tr><th width="25%">Función</th><th>Descripción</th></tr>
+    <tr><td><strong>Modo plugin VST3/ARA</strong></td><td>Carga OpenTune como plugin VST3 + ARA2 en DAWs (Studio One, Cubase, Logic Pro)</td></tr>
+    <tr><td><strong>Aceleración GPU universal</strong></td><td>Aceleración GPU ahora compatible con GPUs NVIDIA / AMD / Intel</td></tr>
+    <tr><td><strong>8 tipos de escala/modo</strong></td><td>Detección de escala ampliada de Mayor/Menor a 8 tipos: Mayor, Menor, Cromática, Menor armónica, Dórica, Mixolidia, Pentatónica mayor, Pentatónica menor</td></tr>
+    <tr><td><strong>Audición de teclas</strong></td><td>Haga clic en las teclas del piano a la izquierda del rollo para previsualizar el tono; arrastre entre teclas, suelte para detener</td></tr>
+    <tr><td><strong>Modos de edición</strong></td><td>Nuevos modos "Prioridad curva" y "Prioridad nota", configurables en Preferencias</td></tr>
+    <tr><td><strong>Panel de preferencias</strong></td><td>Diálogo completo de preferencias para idioma, tema, modo de edición, prioridad de render, sensibilidad de zoom y más</td></tr>
+    <tr><td><strong>Interfaz en 5 idiomas</strong></td><td>Disponible en chino, inglés, japonés, ruso y español</td></tr>
+    <tr><td><strong>Efectos de estela del ratón</strong></td><td>8 temas de estela (Classic, Neon, Fire, Ocean, Galaxy, Cherry Blossom, Matrix, etc.)</td></tr>
+    <tr><td><strong>Paneles colapsables</strong></td><td>Los paneles laterales se pueden ocultar para edición inmersiva a pantalla completa</td></tr>
+    <tr><td><strong>Insignia de estado de render</strong></td><td>Insignia flotante en la esquina superior derecha mostrando el progreso de renderizado</td></tr>
+    <tr><td><strong>Vibrato por nota</strong></td><td>Vibrato Depth y Rate configurables individualmente por nota</td></tr>
+    <tr><td><strong>Parámetros de segmento Line Anchor</strong></td><td>Los segmentos de Line Anchor se pueden seleccionar y asignar valores individuales de Retune Speed</td></tr>
+    <tr><td><strong>Tooltips al pasar el ratón</strong></td><td>Todos los controles muestran tooltips con descripción y atajo de teclado</td></tr>
+    <tr><td><strong>Importación por lotes</strong></td><td>Importa múltiples archivos de audio a la vez — en secuencia o distribuidos en pistas separadas</td></tr>
+    <tr><td><strong>Ajustes rápidos del menú View</strong></td><td>Alterna forma de onda, carriles, etiquetas de notas, límites de bloques y otras opciones visuales desde el menú View</td></tr>
+</table>
+
+<h3>🐛 Correcciones y optimizaciones</h3>
+<table>
+    <tr><th width="25%">Problema</th><th>Mejora</th></tr>
+    <tr><td><strong>Alto uso de memoria</strong></td><td>Gestión de memoria optimizada, reduciendo la memoria residente en ~500–900 MB</td></tr>
+    <tr><td><strong>Pobre compatibilidad GPU</strong></td><td>Aceleración GPU disponible en todas las GPUs principales, con respaldo automático a CPU cuando no hay GPU compatible</td></tr>
+    <tr><td><strong>Procesamiento lento</strong></td><td>La aceleración GPU mejora significativamente la velocidad de procesamiento</td></tr>
+
+
+</table>
+
+<h2 id="intro">1. Introducción al producto</h2>
+
+<p>OpenTune es un software de código abierto de corrección de tono con IA basado en un vocoder neuronal. A diferencia de los algoritmos DSP tradicionales que transponen directamente, utiliza el vocoder PC-NSF-HiFiGAN para regenerar la voz preservando los formantes originales, manteniendo un timbre natural y sólido incluso con ajustes extremos de tono.</p>
+
+<p>OpenTune ofrece dos modos de funcionamiento: <strong>Standalone (independiente)</strong> y <strong>VST3/ARA (plugin para DAW)</strong>. Puede usarse como editor multipista independiente o integrarse en un DAW para edición colaborativa en tiempo real.</p>
+
+<h3>Ventajas principales</h3>
+<table>
+    <tr><th width="25%">Característica</th><th>Descripción</th></tr>
+    <tr><td><strong>Formantes preservados</strong></td><td>Cambia el tono sin alterar el timbre vocal, eliminando la distorsión tipo "pato" o cambio de identidad vocal</td></tr>
+    <tr><td><strong>Transposición de amplio rango</strong></td><td>Admite correcciones de tono extremas y transposición manteniendo una calidad nítida y estable</td></tr>
+    <tr><td><strong>Resíntesis por IA</strong></td><td>Basado en el vocoder de aprendizaje profundo PC-NSF-HiFiGAN, reconstruye la voz con alta fidelidad</td></tr>
+    <tr><td><strong>Flujo de trabajo tipo Auto-Tune</strong></td><td>Corrección automática, dibujo libre, notas y herramientas de anclaje incluidas</td></tr>
+    <tr><td><strong>Detección automática de escala</strong></td><td>Algoritmo Krumhansl-Schmuckler integrado, compatible con 8 tipos de escalas</td></tr>
+    <tr><td><strong>Soporte de formato dual</strong></td><td>Modo Standalone independiente + plugin VST3/ARA con integración perfecta en los principales DAW</td></tr>
+    <tr><td><strong>Aceleración GPU</strong></td><td>Aceleración automática de inferencia IA con DirectML / CoreML, con respaldo fluido en CPU</td></tr>
+    <tr><td><strong>500 pasos de deshacer</strong></td><td>Sistema personalizado de Deshacer/Rehacer, cualquier operación de edición es reversible</td></tr>
+    <tr><td><strong>Código abierto y gratuito</strong></td><td>Gratuito para siempre, impulsado por la comunidad, en mejora continua</td></tr>
+</table>
+
+<div class="tip">
+    <div class="tip-title">Destacado técnico</div>
+    OpenTune utiliza el modelo de aprendizaje profundo RMVPE para extracción de tono de alta precisión, combinado con el vocoder neuronal PC-NSF-HiFiGAN para resíntesis de alta calidad. Compatible con aceleración GPU para un procesamiento rápido.
+</div>
+
+<h2 id="requirements">2. Requisitos del sistema</h2>
+
+<h3>Requisitos mínimos</h3>
+<table>
+    <tr><th width="25%">Elemento</th><th>Requisito</th></tr>
+    <tr><td>Sistema operativo</td><td>Windows 10/11 (64 bits) o macOS 11+</td></tr>
+    <tr><td>Procesador</td><td>Intel Core i5 o procesador AMD equivalente</td></tr>
+    <tr><td>Memoria RAM</td><td>8 GB RAM</td></tr>
+    <tr><td>Espacio en disco</td><td>500 MB de espacio disponible (incluye modelos IA)</td></tr>
+    <tr><td>Tarjeta de sonido</td><td>Dispositivo de audio compatible con ASIO o WASAPI</td></tr>
+</table>
+
+<h3>Requisitos recomendados</h3>
+<table>
+    <tr><th width="25%">Elemento</th><th>Requisito</th></tr>
+    <tr><td>Procesador</td><td>Intel Core i7 / Apple M1 o superior</td></tr>
+    <tr><td>Memoria RAM</td><td>16 GB RAM o superior</td></tr>
+    <tr><td>Tarjeta gráfica</td><td>GPU compatible con DirectML (NVIDIA / AMD / Intel) para acelerar la inferencia del vocoder</td></tr>
+</table>
+
+<div class="note">
+    <div class="note-title">Nota sobre aceleración GPU</div>
+    <p>OpenTune es compatible con aceleración GPU mediante DirectML (Windows) o CoreML (macOS). Si la GPU no está disponible, se revierte automáticamente a CPU sin afectar el uso normal. Puede cambiarse manualmente a "Prioridad CPU" en Preferencias.</p>
+</div>
+
+<h2 id="install">3. Instalación e inicio</h2>
+
+<h3>3.1 Descargar el software</h3>
+<p>Visite la página de GitHub Releases para descargar la última versión.</p>
+
+<h3>3.2 Estructura de archivos</h3>
+<ul>
+    <li><code>OpenTune.exe</code> — Programa principal (Standalone)</li>
+    <li><code>OpenTune.vst3</code> — Plugin VST3 (para DAW)</li>
+    <li><code>onnxruntime.dll</code> / <code>onnxruntime_providers_shared.dll</code> — ONNX Runtime</li>
+    <li><code>DirectML.dll</code> — DirectML Runtime (aceleración GPU)</li>
+    <li><code>models/</code> — Carpeta de modelos IA
+        <ul>
+            <li><code>rmvpe.onnx</code> — Modelo de extracción de tono (~28 MB)</li>
+            <li><code>pc_nsf_hifigan_44.1k_ONNX/</code> — Modelo de vocoder</li>
+        </ul>
+    </li>
+    <li><code>docs/UserGuide.html</code> — Esta guía del usuario</li>
+</ul>
+
+<h3>3.3 Iniciar el programa</h3>
+<p>Haga doble clic en <code>OpenTune.exe</code> para iniciar la versión independiente. Los modelos IA se inicializan automáticamente en el primer inicio. Para el plugin VST3, copie <code>OpenTune.vst3</code> en el directorio de escaneo VST3 de su DAW.</p>
+
+<div class="page-break"></div>
+<h2 id="interface">4. Descripción general de la interfaz</h2>
+
+<p>La interfaz de OpenTune Standalone presenta un diseño moderno de paneles múltiples, con áreas que se pueden plegar y ocultar:</p>
+
+<h3>4.1 Diseño de la interfaz</h3>
+<table>
+    <tr><th width="20%">Área</th><th>Función</th></tr>
+    <tr><td><strong>Barra de herramientas superior</strong></td><td>Botones de menú (Archivo/Editar/Ver), controles de transporte, configuración de BPM/escala, Tap Tempo, cambio de vista</td></tr>
+    <tr><td><strong>Panel de pistas izquierdo</strong></td><td>Gestión multipista (hasta 12 pistas), perillas de volumen, Solo/Silencio, medidores de nivel circulares, botón para añadir pista</td></tr>
+    <tr><td><strong>Vista central de arreglo</strong></td><td>Disposición de clips de audio, previsualización de forma de onda, línea de tiempo, arrastrar/dividir/fusionar/eliminar clips</td></tr>
+    <tr><td><strong>Rollo de piano central</strong></td><td>Edición de curva de tono, dibujo/selección de notas, visualización de curva F0, cabezal de reproducción, audición de teclas (clic en el teclado para previsualizar el tono)</td></tr>
+    <tr><td><strong>Panel de parámetros derecho</strong></td><td>Perillas de Retune Speed / Vibrato / Note Split, botones de selección de herramienta</td></tr>
+    <tr><td><strong>Insignia de estado de renderizado</strong></td><td>Muestra flotante en la esquina superior derecha con el progreso de renderizado (ej. "Renderizando 3/8")</td></tr>
+</table>
+
+<h3>4.2 Plegado de paneles</h3>
+<p>Haga clic en los botones de alternar panel en los extremos izquierdo y derecho de la barra de herramientas superior para ocultar/mostrar el panel de pistas izquierdo o el panel de parámetros derecho, logrando un modo de "lienzo principal inmersivo".</p>
+
+<h3>4.3 Cambio de vista</h3>
+<ul>
+    <li><strong>Vista de Pistas (Track View)</strong>: Muestra la vista de arreglo + rollo de piano, ideal para gestionar múltiples clips de audio</li>
+    <li><strong>Vista de Rollo de Piano (Piano Roll View)</strong>: Edición de rollo de piano a pantalla completa, para edición fina de tono</li>
+</ul>
+
+<h3>4.4 Información contextual al pasar el ratón</h3>
+<p>Al posicionar el ratón sobre cualquier control durante aproximadamente 0.6 segundos, aparecerá una ventana flotante de estilo oscuro con la descripción de la función del control y su atajo de teclado (si existe). El texto de la sugerencia cambia automáticamente con el idioma de la interfaz.</p>
+
+<h2 id="quickstart">5. Inicio rápido</h2>
+
+<div class="workflow">
+    <div class="workflow-step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+            <h4>Importar audio</h4>
+            <p>Arrastre y suelte archivos de audio en la ventana del programa, o impórtelos mediante el menú File → Import Audio. Compatible con formatos WAV, MP3, FLAC, OGG, AIFF, entre otros.</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+            <h4>Extracción automática de tono</h4>
+            <p>Tras la importación, el software extrae automáticamente la curva de tono original, mostrada en rojo en el rollo de piano.</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+            <h4>Configuración de escala</h4>
+            <p>El software detecta automáticamente la escala, o puede seleccionar manualmente la nota raíz (C~B) y el tipo de escala (Mayor, Menor, Cromática, etc. 8 tipos).</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+            <h4>Editar tono</h4>
+            <p>Use la herramienta de corrección automática (corrección con un clic) o dibuje manualmente notas/anclajes/curvas a mano alzada. El tono corregido se muestra como una curva azul.</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">5</div>
+        <div class="step-content">
+            <h4>Ajustar parámetros</h4>
+            <p>Ajuste Retune Speed, Vibrato Depth/Rate, etc. en el panel de parámetros. Admite configuración de vibrato independiente por nota.</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">6</div>
+        <div class="step-content">
+            <h4>Previsualizar y exportar</h4>
+            <p>Presione Espacio para reproducir y previsualizar. Cuando esté satisfecho, exporte mediante File → Export. Admite exportar clip seleccionado, pista individual o mezcla de bus.</p>
+        </div>
+    </div>
+</div>
+
+<div class="page-break"></div>
+<h2 id="features">6. Funciones principales</h2>
+
+<h3>6.1 Importación de audio</h3>
+<ul>
+    <li>Formatos compatibles: WAV, MP3, FLAC, OGG, AIFF, entre otros</li>
+    <li>Remuestreo automático a 44.1 kHz durante la importación</li>
+    <li>Importación por arrastrar y soltar (directamente a la ventana)</li>
+    <li>Soporte multipista: hasta 12 pistas independientes, cada una con múltiples clips</li>
+    <li>Importación por lotes de múltiples archivos (secuenciales o en pistas separadas)</li>
+</ul>
+
+<h3>6.2 Extracción de tono (RMVPE)</h3>
+<ul>
+    <li>Tras importar el audio, se extrae automáticamente la curva de tono original (mostrada en rojo)</li>
+    <li>Basado en el modelo de aprendizaje profundo RMVPE, con alta precisión y fuerte resistencia al ruido</li>
+    <li>Admite detección vocal en el rango de frecuencia de 50 Hz – 1100 Hz</li>
+</ul>
+
+<h3>6.3 Detección y selección de escala</h3>
+<p>Detección automática de escala integrada mediante el algoritmo Krumhansl-Schmuckler, compatible con 8 tipos de escala:</p>
+<table>
+    <tr><th>Escala</th><th>Abrev.</th><th>Descripción</th></tr>
+    <tr><td>Mayor</td><td>Maj.</td><td>Escala mayor natural</td></tr>
+    <tr><td>Menor</td><td>Min.</td><td>Escala menor natural</td></tr>
+    <tr><td>Cromática</td><td>Chr.</td><td>Los 12 semitonos disponibles (sin filtro de escala)</td></tr>
+    <tr><td>Menor Armónica</td><td>H.Min.</td><td>Menor con séptimo grado elevado</td></tr>
+    <tr><td>Dórica</td><td>Dor.</td><td>Común en jazz/blues</td></tr>
+    <tr><td>Mixolidia</td><td>Mix.</td><td>Mayor con séptimo grado descendido</td></tr>
+    <tr><td>Pentatónica Mayor</td><td>Pent.</td><td>Escala pentatónica (estilo chino)</td></tr>
+    <tr><td>Pentatónica Menor</td><td>m.Pent.</td><td>Escala pentatónica de blues</td></tr>
+</table>
+
+<h3>6.4 Resíntesis por vocoder IA</h3>
+<ul>
+    <li>Tras corregir el tono, el software utiliza el vocoder neuronal PC-NSF-HiFiGAN para resintetizar el audio</li>
+    <li>Preserva los formantes originales, la transposición de amplio rango no produce distorsión</li>
+    <li>Frecuencia de muestreo de salida: 44.1 kHz, calidad de sonido natural y nítida</li>
+    <li>Compatible con aceleración GPU (configurable en Preferencias)</li>
+</ul>
+
+<h3>6.5 Gestión multipista</h3>
+<ul>
+    <li>Hasta 12 pistas independientes</li>
+    <li>Cada pista admite múltiples clips de audio</li>
+    <li>Operaciones de pista: Solo, Silencio, ajuste de volumen (perilla circular)</li>
+    <li>Medidores LED circulares muestran el volumen en tiempo real</li>
+    <li>Operaciones de clip: Arrastrar para mover, Dividir (Split), Fusionar (Merge), Eliminar</li>
+</ul>
+
+<h3>6.6 Deshacer/Rehacer</h3>
+<ul>
+    <li>Guarda hasta <strong>500 pasos</strong> de historial de operaciones</li>
+    <li>Compatible con todas las operaciones de edición: dibujo de notas, ajustes de parámetros, operaciones de clip, etc.</li>
+    <li>Atajos: <code>Ctrl+Z</code> (Deshacer), <code>Ctrl+Y</code> o <code>Ctrl+Shift+Z</code> (Rehacer)</li>
+</ul>
+
+<div class="page-break"></div>
+<h2 id="tools">7. Herramientas de edición</h2>
+
+<p>OpenTune ofrece cinco herramientas de edición profesionales, alternables desde la zona de herramientas del panel de parámetros o mediante atajos de teclado:</p>
+
+<div class="tool-card">
+    <h4>AutoTune — Herramienta de Corrección Automática (Atajo: 6)</h4>
+    <p>Corrige automáticamente el tono a la nota objetivo más cercana según la escala actual. Ideal para corrección rápida por lotes.</p>
+</div>
+
+<div class="tool-card">
+    <h4>Select — Herramienta de Selección (Atajo: 3)</h4>
+    <p>Selecciona notas o regiones de tiempo. Tras la selección puede mover, eliminar, ajustar parámetros, etc.</p>
+    <p><strong>Operaciones</strong>: Clic para seleccionar, arrastrar para selección por marco, Shift+clic para selección múltiple, Supr para eliminar.</p>
+</div>
+
+<div class="tool-card">
+    <h4>DrawNote — Herramienta de Dibujo de Notas (Atajo: 2)</h4>
+    <p>Dibuja bloques de notas manualmente. Arrastre en el rollo de piano para crear notas con tono y duración específicos.</p>
+    <p><strong>Característica</strong>: Cada nota puede tener configuraciones independientes de Retune Speed, Vibrato Depth/Rate.</p>
+</div>
+
+<div class="tool-card">
+    <h4>LineAnchor — Herramienta de Anclaje Lineal (Atajo: 4)</h4>
+    <p>Coloca puntos de anclaje clave en la curva de tono; el software genera automáticamente transiciones de interpolación lineal entre anclajes. Ideal para controlar con precisión glissandos y transiciones de tono.</p>
+</div>
+
+<div class="tool-card">
+    <h4>HandDraw — Herramienta de Dibujo Libre</h4>
+    <p>Dibuja directamente la curva F0 para personalizar completamente el contorno tonal. Ideal para crear vibrato, glissando, pitch bend y otros efectos decorativos.</p>
+</div>
+
+<h3>7.1 Audición de teclas del piano</h3>
+<p>Haga clic en las teclas del piano en el lado izquierdo del rollo de piano para reproducir en tiempo real una muestra de piano con el tono correspondiente, facilitando la confirmación del tono objetivo. Puede mantener presionado y arrastrar entre teclas para deslizarse entre notas; al soltar el ratón la reproducción se detiene automáticamente. La tecla pulsada se resalta en azul.</p>
+
+<h2 id="parameters">8. Parámetros detallados</h2>
+
+<h3>8.1 Parámetros de corrección de tono</h3>
+
+<div class="param-item">
+    <div class="param-name">Retune Speed (Velocidad de corrección)</div>
+    <div class="param-range">Rango: 0% – 100% | Valor predeterminado: 15%</div>
+    <p>Controla la velocidad e intensidad de la corrección de tono. Valores más altos = corrección más rápida y precisa; valores más bajos = más fluctuaciones originales preservadas.</p>
+    <ul>
+        <li><strong>Valores bajos (0–30%)</strong>: Preserva el vibrato natural, ideal para sonido realista</li>
+        <li><strong>Valores medios (30–70%)</strong>: Equilibra precisión y naturalidad</li>
+        <li><strong>Valores altos (70–100%)</strong>: Corrección precisa, produce un efecto Auto-Tune notable</li>
+    </ul>
+    <p><strong>Por nota</strong>: Ajuste tras seleccionar notas; solo afecta las notas seleccionadas.</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Vibrato Depth (Profundidad de vibrato)</div>
+    <div class="param-range">Rango: 0 – 1 | Valor predeterminado: 0</div>
+    <p>Amplitud del vibrato artificial añadido a las notas. 0 = sin vibrato, 1 = profundidad máxima. Configurable por nota.</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Vibrato Rate (Velocidad de vibrato)</div>
+    <div class="param-range">Rango: 0 – 15 Hz | Valor predeterminado: 7.5 Hz</div>
+    <p>Controla la frecuencia de oscilación del vibrato artificial. El vibrato vocal natural suele estar en el rango de 5–8 Hz. Configurable por nota.</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Note Split Threshold (Umbral de división de notas)</div>
+    <div class="param-range">Rango: 0 – 100 cents | Valor predeterminado: 80 cents</div>
+    <p>Controla la sensibilidad de división en la generación automática de notas. Valores más bajos facilitan la división en notas independientes.</p>
+</div>
+
+<h3>8.2 Parámetros de pista</h3>
+<div class="param-item">
+    <div class="param-name">Volume (Volumen)</div>
+    <div class="param-range">Rango: 0 – 4.0x | Valor predeterminado: 1.0</div>
+    <p>Perilla de volumen de pista, admite ganancia superior a 1.0.</p>
+</div>
+
+<h3>8.3 Parámetros de reproducción</h3>
+<div class="param-item">
+    <div class="param-name">BPM (Pulsaciones por minuto)</div>
+    <div class="param-range">Rango: 20 – 300 BPM | Valor predeterminado: 120</div>
+    <p>Controla el tempo del proyecto y la cuadrícula de la línea de tiempo. Haga doble clic en el número para ingresar un valor preciso.</p>
+</div>
+<div class="param-item">
+    <div class="param-name">Tap Tempo</div>
+    <p>Toque repetidamente el botón Tap; el software calcula automáticamente el intervalo promedio para determinar el BPM. Registra hasta 5 toques.</p>
+</div>
+
+<div class="page-break"></div>
+<h2 id="schemes">9. Modos de edición</h2>
+
+<p>OpenTune ofrece dos modos de edición que determinan el comportamiento de las herramientas. Se alternan desde Preferencias → Modo de edición.</p>
+
+<h3>9.1 Edición con Prioridad de Curva (predeterminado)</h3>
+<ul>
+    <li>Los segmentos LineAnchor pueden seleccionarse y configurarse con Retune Speed independiente</li>
+    <li>El panel de parámetros muestra prioritariamente los parámetros del segmento LineAnchor seleccionado</li>
+    <li>AutoTune actúa prioritariamente sobre la región temporal seleccionada</li>
+</ul>
+
+<h3>9.2 Edición con Prioridad de Notas</h3>
+<ul>
+    <li>Tras dibujar con HandDraw / LineAnchor, se seleccionan automáticamente las notas afectadas</li>
+    <li>AutoTune actúa prioritariamente sobre el rango de notas seleccionadas</li>
+    <li>El panel de parámetros muestra prioritariamente los parámetros de las notas seleccionadas</li>
+</ul>
+
+<h2 id="preferences">10. Preferencias</h2>
+
+<p>Abra el diálogo de preferencias mediante <strong>File → Options</strong> o <strong>Edit → Preferences</strong>.</p>
+
+<h3>10.1 Configuración compartida (común a Standalone y VST3)</h3>
+<table>
+    <tr><th>Elemento</th><th>Descripción</th><th>Valor pred.</th></tr>
+    <tr><td>Idioma de la interfaz</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
+    <tr><td>Tema</td><td>BlueBreeze / DarkBlueGrey / Aurora</td><td>Aurora</td></tr>
+    <tr><td>Modo de edición</td><td>Prioridad Curva / Prioridad Notas</td><td>Prioridad Curva</td></tr>
+    <tr><td>Prioridad de renderizado</td><td>Prioridad GPU / Prioridad CPU</td><td>Prioridad GPU</td></tr>
+    <tr><td>Sensibilidad de zoom horizontal</td><td>Controla la velocidad de zoom horizontal con la rueda del ratón</td><td>1.0</td></tr>
+    <tr><td>Sensibilidad de zoom vertical</td><td>Controla la velocidad de zoom vertical con la rueda del ratón</td><td>1.0</td></tr>
+    <tr><td>Velocidad de desplazamiento</td><td>Velocidad de desplazamiento de la vista</td><td>1.0</td></tr>
+    <tr><td>Visualización de nombres de nota</td><td>Mostrar todos / Solo C / Ocultar</td><td>Solo C</td></tr>
+    <tr><td>Mostrar bordes de bloques</td><td>Visualización de bordes de bloques de renderizado</td><td>Apagado</td></tr>
+    <tr><td>Mostrar fotogramas no sonoros</td><td>Mostrar datos F0 de fotogramas no sonoros</td><td>Apagado</td></tr>
+</table>
+
+<h3>10.2 Configuración exclusiva de Standalone</h3>
+<table>
+    <tr><th>Elemento</th><th>Descripción</th></tr>
+    <tr><td>Dispositivo de audio</td><td>Tipo de controlador, selección de dispositivo, frecuencia de muestreo, tamaño de búfer</td></tr>
+    <tr><td>Atajos de teclado</td><td>10 atajos de teclado personalizables (con detección de conflictos y restablecimiento)</td></tr>
+    <tr><td>Estela del ratón</td><td>8 temas de efectos de estela para elegir</td></tr>
+</table>
+
+<h3>10.3 Acceso rápido desde el menú Ver</h3>
+<p>Las siguientes configuraciones visuales también pueden alternarse directamente desde el menú <strong>View</strong>:</p>
+<ul>
+    <li>Show Waveform — Mostrar/ocultar forma de onda</li>
+    <li>Show Lanes — Mostrar/ocultar carriles</li>
+    <li>Note Labels — Modo de etiquetas de notas</li>
+    <li>Show Chunk Boundaries — Bordes de bloques</li>
+    <li>Show Unvoiced Frames — Fotogramas no sonoros</li>
+    <li>Theme — Cambiar tema</li>
+    <li>Mouse Trail — Tema de estela del ratón</li>
+</ul>
+
+<h2 id="shortcuts">11. Atajos de teclado</h2>
+
+<h3>11.1 Control de reproducción</h3>
+<table class="shortcut-table">
+    <tr><th>Atajo</th><th>Función</th></tr>
+    <tr><td>Space</td><td>Reproducir / Pausar</td></tr>
+    <tr><td>Enter</td><td>Detener reproducción</td></tr>
+    <tr><td>A</td><td>Reproducir desde el inicio</td></tr>
+    <tr><td>Escape</td><td>Cancelar operación actual / Detener</td></tr>
+</table>
+
+<h3>11.2 Operaciones de edición</h3>
+<table class="shortcut-table">
+    <tr><th>Atajo</th><th>Función</th></tr>
+    <tr><td>Ctrl + Z</td><td>Deshacer</td></tr>
+    <tr><td>Ctrl + Y / Ctrl + Shift + Z</td><td>Rehacer</td></tr>
+    <tr><td>Ctrl + X</td><td>Cortar</td></tr>
+    <tr><td>Ctrl + C</td><td>Copiar</td></tr>
+    <tr><td>Ctrl + V</td><td>Pegar</td></tr>
+    <tr><td>Ctrl + A</td><td>Seleccionar todo</td></tr>
+    <tr><td>Delete / Backspace</td><td>Eliminar selección</td></tr>
+</table>
+
+<h3>11.3 Cambio de herramienta</h3>
+<table class="shortcut-table">
+    <tr><th>Atajo</th><th>Herramienta</th></tr>
+    <tr><td>2</td><td>DrawNote — Dibujar Nota</td></tr>
+    <tr><td>3</td><td>Select — Herramienta de Selección</td></tr>
+    <tr><td>4</td><td>LineAnchor — Herramienta de Anclaje</td></tr>
+    <tr><td>6</td><td>AutoTune — Corrección Automática</td></tr>
+</table>
+
+<h3>11.4 Operaciones de vista</h3>
+<table class="shortcut-table">
+    <tr><th>Atajo</th><th>Función</th></tr>
+    <tr><td>Rueda del ratón</td><td>Desplazamiento vertical</td></tr>
+    <tr><td>Shift + Rueda</td><td>Desplazamiento horizontal</td></tr>
+    <tr><td>Ctrl + Rueda</td><td>Zoom horizontal de la línea de tiempo</td></tr>
+    <tr><td>Alt + Rueda</td><td>Zoom vertical del eje de tono</td></tr>
+</table>
+
+<div class="tip">
+    <div class="tip-title">Atajos personalizados</div>
+    Todos los atajos pueden personalizarse en Preferencias → Atajos de teclado. Admite múltiples asignaciones, detección de conflictos y restablecimiento con un clic. En macOS se muestran automáticamente los símbolos ⌘/⌥/⇧.
+</div>
+
+<div class="page-break"></div>
+<h2 id="themes">12. Temas y apariencia</h2>
+
+<h3>12.1 Temas de la interfaz</h3>
+<table>
+    <tr><th>Tema</th><th>Estilo</th><th>Uso recomendado</th></tr>
+    <tr><td><strong>Blue Breeze</strong></td><td>Claro, tonos azules suaves, moderno y minimalista</td><td>Entornos luminosos, uso prolongado</td></tr>
+    <tr><td><strong>Dark Blue-Grey</strong></td><td>Oscuro, estilo estudio profesional, sombras tridimensionales</td><td>Entornos oscuros, producción profesional</td></tr>
+    <tr><td><strong>Aurora Glass</strong></td><td>Fondo oscuro, brillo neón, efecto vidrio esmerilado</td><td>Estética tecnológica, expresión personal</td></tr>
+</table>
+
+<h3>12.2 Efectos de estela del ratón (solo Standalone)</h3>
+<table>
+    <tr><th>Efecto</th><th>Estilo</th></tr>
+    <tr><td>Apagado (Off)</td><td>Sin estela</td></tr>
+    <tr><td>Classic</td><td>Estela azul clásica (predeterminada)</td></tr>
+    <tr><td>Neon</td><td>Degradado neón magenta/cian</td></tr>
+    <tr><td>Fire</td><td>Efecto de fuego naranja/dorado</td></tr>
+    <tr><td>Ocean</td><td>Ondas marinas azul/turquesa</td></tr>
+    <tr><td>Galaxy</td><td>Efecto galaxia violeta/rosa</td></tr>
+    <tr><td>Cherry Blossom</td><td>Pétalos de cerezo rosa claro</td></tr>
+    <tr><td>Matrix</td><td>Lluvia digital Matrix verde</td></tr>
+</table>
+
+<h3>12.3 Animación al pasar el ratón</h3>
+<p>Todos los botones de la barra de herramientas tienen una sutil retroalimentación visual al pasar el ratón: el icono se agranda ligeramente (1.08x) y se ilumina un 15%, proporcionando una confirmación visual instantánea de la interacción.</p>
+
+<h2 id="gpu">13. Aceleración GPU</h2>
+
+<p>OpenTune es compatible con aceleración GPU para la inferencia del vocoder, lo que mejora significativamente la velocidad de renderizado.</p>
+
+<h3>13.1 Plataformas compatibles</h3>
+<ul>
+    <li><strong>Windows</strong>: Compatible con GPU NVIDIA / AMD / Intel mediante DirectML</li>
+    <li><strong>macOS</strong>: Compatible con GPU de Apple mediante CoreML</li>
+    <li>Si no hay GPU dedicada o es incompatible, se revierte automáticamente a CPU sin afectar el uso</li>
+</ul>
+
+<h3>13.2 Configuración</h3>
+<p>En Preferencias → página Compartido → Prioridad de renderizado, seleccione:</p>
+<ul>
+    <li><strong>Prioridad GPU</strong> (predeterminado): Usa automáticamente aceleración GPU</li>
+    <li><strong>Prioridad CPU</strong>: Fuerza el uso de CPU, útil para problemas de compatibilidad GPU</li>
+</ul>
+
+<h2 id="vst3">14. Modo plugin VST3/ARA</h2>
+
+<p>El plugin OpenTune VST3 se integra profundamente con el DAW mediante el protocolo ARA2, permitiendo edición no destructiva.</p>
+
+<h3>14.1 Modo de funcionamiento</h3>
+<ul>
+    <li>Se carga como extensión VST3 + ARA2 en DAW compatibles (como Studio One, Cubase, Logic Pro)</li>
+    <li>El DAW proporciona los datos de audio fuente mediante el protocolo ARA, sin necesidad de importar/exportar archivos</li>
+    <li>Los resultados de edición se reflejan en tiempo real en la reproducción de la línea de tiempo del DAW</li>
+    <li>Compatible con sincronización de transporte del host (Play/Stop/Seek) y seguimiento de BPM</li>
+</ul>
+
+<h3>14.2 Diferencias con Standalone</h3>
+<table>
+    <tr><th>Función</th><th>Standalone</th><th>VST3/ARA</th></tr>
+    <tr><td>Edición multipista</td><td>✓ Hasta 12 pistas</td><td>✗ Edición de material único</td></tr>
+    <tr><td>Importar/Exportar archivos</td><td>✓</td><td>✗ (Gestionado por el DAW)</td></tr>
+    <tr><td>Estela del ratón</td><td>✓ 8 temas</td><td>✗</td></tr>
+    <tr><td>Atajos personalizados</td><td>✓</td><td>✗ (Usa los atajos del DAW)</td></tr>
+    <tr><td>Configuración de dispositivo de audio</td><td>✓</td><td>✗ (Usa el motor de audio del DAW)</td></tr>
+    <tr><td>Sincronización de transporte del host</td><td>✗</td><td>✓</td></tr>
+    <tr><td>Edición no destructiva ARA</td><td>✗</td><td>✓</td></tr>
+    <tr><td>Edición de rollo de piano</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Panel de parámetros</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Deshacer/Rehacer</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Cambio de tema</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Interfaz multilingüe</td><td>✓</td><td>✓</td></tr>
+</table>
+
+<div class="page-break"></div>
+<h2 id="export">15. Exportar audio</h2>
+
+<h3>15.1 Formato de exportación</h3>
+<ul>
+    <li><strong>Formato</strong>: WAV</li>
+    <li><strong>Frecuencia de muestreo</strong>: 44.1 kHz</li>
+    <li><strong>Profundidad de bits</strong>: 32-bit Float</li>
+    <li><strong>Canales</strong>: Mono (Clip/Pista) / Estéreo (Mezcla Maestra)</li>
+</ul>
+
+<h3>15.2 Opciones de exportación</h3>
+<table>
+    <tr><th>Opción</th><th>Descripción</th></tr>
+    <tr><td>Export Selected Clip</td><td>Exporta solo el clip de audio seleccionado actualmente</td></tr>
+    <tr><td>Export Track</td><td>Exporta la mezcla de todos los clips de la pista especificada</td></tr>
+    <tr><td>Export Bus (Master Mix)</td><td>Exporta la mezcla final de todas las pistas</td></tr>
+</table>
+
+<h3>15.3 Proceso de exportación</h3>
+<ol>
+    <li>Menú <strong>File → Export Audio</strong></li>
+    <li>Seleccione el rango de exportación</li>
+    <li>Elija ubicación y nombre de archivo</li>
+    <li>Espere a que finalice el renderizado en segundo plano (el progreso se muestra en la insignia de renderizado)</li>
+</ol>
+
+<h2 id="faq">16. Preguntas frecuentes</h2>
+
+<h3>Q1: ¿No se muestra la curva de tono tras importar audio?</h3>
+<p><strong>R:</strong> Asegúrese de que <code>models/rmvpe.onnx</code> existe y está completo. El audio debe contener contenido vocal melódico claro. Las pistas de solo acompañamiento/percusión no permiten extraer F0.</p>
+
+<h3>Q2: ¿La aceleración GPU no funciona?</h3>
+<p><strong>R:</strong> Verifique lo siguiente:</p>
+<ul>
+    <li>Asegúrese de que <code>DirectML.dll</code> está en el directorio del programa</li>
+    <li>Confirme que los controladores GPU están actualizados a la última versión</li>
+    <li>En Preferencias, confirme que "Prioridad de renderizado" está en Prioridad GPU</li>
+    <li>Revise el archivo de registro para confirmar si el proveedor DML se cargó correctamente</li>
+</ul>
+
+<h3>Q3: ¿El consumo de memoria es muy alto?</h3>
+<p><strong>R:</strong> v1.5 ya optimizó la gestión de memoria: el modelo F0 se libera automáticamente tras su uso. Si aún es alto, intente: desactivar la aceleración GPU (la sesión GPU consume memoria de video adicional), reducir el número de pistas abiertas simultáneamente.</p>
+
+<h3>Q4: ¿La calidad del audio corregido es anormal?</h3>
+<p><strong>R:</strong> Posibles causas: archivo de modelo del vocoder dañado (vuelva a descargarlo), Retune Speed demasiado alto (pruebe por debajo del 30%), calidad deficiente de la grabación original.</p>
+
+<h3>Q5: ¿Cómo lograr un efecto de corrección de tono natural?</h3>
+<ul>
+    <li>Use una Retune Speed baja (10–30%)</li>
+    <li>Conserve el vibrato original, no añada Vibrato artificial</li>
+    <li>Use la herramienta LineAnchor para ajustar con precisión las posiciones clave</li>
+    <li>Seleccione el modo "Prioridad Curva" para obtener un control más fino</li>
+</ul>
+
+<h3>Q6: ¿El plugin VST3 no carga en el DAW?</h3>
+<p><strong>R:</strong> Asegúrese de que la carpeta <code>OpenTune.vst3</code> está completa (incluye el subdirectorio Contents/x86_64-win/), y que los DLL de ONNX Runtime y los archivos de modelo están en la ubicación correcta. Vuelva a escanear el directorio VST3 en su DAW.</p>
+
+<h3>Q7: ¿Cómo cambiar el idioma de la interfaz?</h3>
+<p><strong>R:</strong> Preferencias → Idioma (Language), seleccione el idioma deseado y la interfaz cambiará inmediatamente. Compatible con chino, inglés, japonés, ruso y español.</p>
+
+<hr>
+
+<footer>
+    <p>OpenTune v1.5 — Software de corrección de tono con IA | Código abierto y gratuito | Licencia AGPL v3.0</p>
+    <p>Agradecimientos a la comunidad de código abierto DiffSinger y a todos los colaboradores</p>
+</footer>
+
+</body>
+</html>

@@ -3,10 +3,26 @@
 #include "../../../Utils/AppLogger.h"
 #include "../../../Utils/NoteGenerator.h"
 #include <algorithm>
-#include <cmath>
 #include <array>
+#include <cmath>
 
 namespace OpenTune {
+
+static double selectBeatInterval(double pixelsPerBeat) {
+    if (pixelsPerBeat < 2.5) return 32.0;
+    if (pixelsPerBeat < 5.0) return 16.0;
+    if (pixelsPerBeat < 10.0) return 8.0;
+    if (pixelsPerBeat < 40.0) return 4.0;
+    return 1.0;
+}
+
+static double selectMarkerInterval(double pixelsPerSecond) {
+    if (pixelsPerSecond < 1.33) return 60.0;
+    if (pixelsPerSecond < 4.0) return 30.0;
+    if (pixelsPerSecond < 8.0) return 10.0;
+    if (pixelsPerSecond < 40.0) return 5.0;
+    return 1.0;
+}
 
 // ============================================================================
 // Shared scale computation helper
@@ -45,10 +61,56 @@ static std::array<bool, 12> buildInScalePitchClasses(int scaleType, int rootNote
     return result;
 }
 
+namespace {
+
+struct VisibleTimeWindow {
+    int viewportStartX = 0;
+    int viewportEndX = 0;
+    double visibleStartTime = 0.0;
+    double visibleEndTime = 0.0;
+    double visibleMaterializationStartTime = 0.0;
+    double visibleMaterializationEndTime = 0.0;
+
+    bool isValid() const
+    {
+        return viewportEndX > viewportStartX
+            && visibleEndTime > visibleStartTime
+            && visibleMaterializationEndTime > visibleMaterializationStartTime;
+    }
+};
+
+VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContext& ctx)
+{
+    VisibleTimeWindow window;
+    if (!ctx.materializationProjection.isValid()) {
+        return window;
+    }
+
+    window.viewportStartX = ctx.pianoKeyWidth;
+    window.viewportEndX = ctx.width;
+    if (window.viewportEndX <= window.viewportStartX)
+        return {};
+
+    window.visibleStartTime = ctx.xToTime(window.viewportStartX);
+    window.visibleEndTime = ctx.xToTime(window.viewportEndX);
+    if (window.visibleEndTime <= window.visibleStartTime)
+        return {};
+
+    window.visibleMaterializationStartTime = ctx.materializationProjection.projectTimelineTimeToMaterialization(window.visibleStartTime);
+    window.visibleMaterializationEndTime = ctx.materializationProjection.projectTimelineTimeToMaterialization(window.visibleEndTime);
+    return window;
+}
+
+bool isVoicedFrame(float frequencyHz) noexcept
+{
+    return frequencyHz > 0.0f;
+}
+
+} // namespace
+
 void PianoRollRenderer::updateCorrectedF0Cache(std::shared_ptr<const PitchCurveSnapshot> snapshot)
 {
     if (!snapshot) {
-        AppLogger::debug("[PianoRollRenderer] updateCorrectedF0Cache: snapshot is null, clearing cache");
         correctedF0Cache_.clear();
         cachedSnapshot_.reset();
         return;
@@ -56,13 +118,10 @@ void PianoRollRenderer::updateCorrectedF0Cache(std::shared_ptr<const PitchCurveS
 
     const int totalFrames = static_cast<int>(snapshot->size());
     if (totalFrames <= 0 || !snapshot->hasAnyCorrection()) {
-        AppLogger::debug("[PianoRollRenderer] updateCorrectedF0Cache: no corrections in snapshot, clearing cache");
         correctedF0Cache_.clear();
         cachedSnapshot_.reset();
         return;
     }
-
-    AppLogger::debug("[PianoRollRenderer] updateCorrectedF0Cache: building cache for " + juce::String(totalFrames) + " frames");
 
     correctedF0Cache_.assign(static_cast<std::size_t>(totalFrames), 0.0f);
     snapshot->renderCorrectedOnlyRange(0, totalFrames,
@@ -70,28 +129,13 @@ void PianoRollRenderer::updateCorrectedF0Cache(std::shared_ptr<const PitchCurveS
             std::copy(data, data + length, correctedF0Cache_.begin() + offsetFrame);
         });
     cachedSnapshot_ = snapshot;
-    
-    AppLogger::debug("[PianoRollRenderer] updateCorrectedF0Cache: cache built successfully");
-}
-
-void PianoRollRenderer::drawBackground(juce::Graphics& g, const RenderContext& ctx)
-{
-    juce::ignoreUnused(ctx);
-    PerfTimer timer("[PianoRollRenderer] drawBackground");
-    g.fillAll(UIColors::rollBackground);
 }
 
 void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
 {
-    PerfTimer timer("[PianoRollRenderer] drawLanes");
     const int w = ctx.width;
     const int h = ctx.height;
     static constexpr int kScaleTypeChromatic = 3;
-
-    AppLogger::debug("[PianoRollRenderer] drawLanes: width=" + juce::String(w) + ", height=" + juce::String(h)
-        + ", minMidi=" + juce::String(ctx.minMidi) + ", maxMidi=" + juce::String(ctx.maxMidi)
-        + ", showLanes=" + juce::String(ctx.showLanes ? "true" : "false"));
-
     const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);
 
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
@@ -109,7 +153,7 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
         {
             if (isBlackKey)
             {
-                if (Theme::getActiveTheme() == ThemeId::BlueBreeze)
+                if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
                 {
                     g.setColour(juce::Colour(BlueBreeze::Colors::GraphBgDeep).withAlpha(0.6f));
                 } else {
@@ -135,127 +179,97 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
     }
 }
 
-void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx)
+void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx)
 {
-    if (!ctx.showChunkBoundaries || ctx.chunkBoundaries.size() < 2)
+    if (!ctx.showUnvoicedFrames || ctx.pitchSnapshot == nullptr || ctx.f0Timeline.isEmpty()) {
         return;
-
-    const int h = ctx.height;
-    const int pianoW = ctx.pianoKeyWidth;
-    const int w = ctx.width;
-    const float top = static_cast<float>(ctx.rulerHeight);
-    const float bottom = static_cast<float>(h);
-
-    // Draw alternating tinted bands for odd-indexed chunks
-    for (size_t i = 0; i + 1 < ctx.chunkBoundaries.size(); ++i) {
-        if (i % 2 == 0) continue; // only odd chunks get tint
-
-        const int x1 = ctx.timeToX(ctx.chunkBoundaries[i] + ctx.trackOffsetSeconds);
-        const int x2 = ctx.timeToX(ctx.chunkBoundaries[i + 1] + ctx.trackOffsetSeconds);
-
-        const int clampedX1 = std::max(x1, pianoW);
-        const int clampedX2 = std::min(x2, w);
-        if (clampedX2 <= clampedX1) continue;
-
-        g.setColour(juce::Colour(0x08FFFFFF));
-        g.fillRect(static_cast<float>(clampedX1), top,
-                   static_cast<float>(clampedX2 - clampedX1), bottom - top);
     }
 
-    // Draw dashed boundary lines (skip first=0 and last=clipEnd)
-    g.setColour(UIColors::panelBorder.withAlpha(0.4f));
-    const float dashLengths[] = { 4.0f, 4.0f };
-
-    for (size_t i = 1; i + 1 < ctx.chunkBoundaries.size(); ++i) {
-        const int x = ctx.timeToX(ctx.chunkBoundaries[i] + ctx.trackOffsetSeconds);
-        if (x < pianoW || x > w) continue;
-
-        juce::Path linePath;
-        linePath.startNewSubPath(static_cast<float>(x), top);
-        linePath.lineTo(static_cast<float>(x), bottom);
-
-        juce::Path dashedPath;
-        juce::PathStrokeType strokeType(1.0f);
-        strokeType.createDashedStroke(dashedPath, linePath, dashLengths, 2);
-        g.fillPath(dashedPath);
-    }
-}
-
-void PianoRollRenderer::drawUnvoicedFrames(juce::Graphics& g, const RenderContext& ctx,
-                                            const std::vector<float>& originalF0)
-{
-    if (!ctx.showUnvoicedFrames || originalF0.empty())
+    const auto& originalF0 = ctx.pitchSnapshot->getOriginalF0();
+    if (originalF0.empty()) {
         return;
+    }
 
-    const int pianoW = ctx.pianoKeyWidth;
-    const int w = ctx.width;
-    const float top = static_cast<float>(ctx.rulerHeight);
-    const float bottom = static_cast<float>(ctx.height);
-    const juce::Colour unvoicedColour(0x18FF4444); // subtle red tint
+    const auto visibleWindow = computeVisibleTimeWindow(ctx);
+    if (!visibleWindow.isValid()) {
+        return;
+    }
 
-    // Scan for contiguous unvoiced regions and draw them as bands
-    const int numFrames = static_cast<int>(originalF0.size());
-    int i = 0;
-    while (i < numFrames) {
-        // Skip voiced frames
-        if (originalF0[static_cast<size_t>(i)] > 0.0f) {
-            ++i;
+    const auto visibleFrames = ctx.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleMaterializationStartTime,
+                                                                      visibleWindow.visibleMaterializationEndTime,
+                                                                      1);
+    const int visibleStartFrame = visibleFrames.startFrame;
+    const int visibleEndFrame = visibleFrames.endFrameExclusive;
+    if (visibleEndFrame <= visibleStartFrame) {
+        return;
+    }
+
+    const auto bandColour = UIColors::currentThemeId() == ThemeId::DarkBlueGrey
+        ? UIColors::backgroundDark.withAlpha(0.28f)
+        : UIColors::backgroundMedium.withAlpha(0.22f);
+    g.setColour(bandColour);
+
+    auto drawBand = [&](int startFrame, int endFrameExclusive) {
+        if (endFrameExclusive <= startFrame) {
+            return;
+        }
+
+        const double startSeconds = ctx.materializationProjection.projectMaterializationTimeToTimeline(
+            ctx.f0Timeline.timeAtFrame(startFrame));
+        const double endSeconds = ctx.materializationProjection.projectMaterializationTimeToTimeline(
+            ctx.f0Timeline.timeAtFrame(endFrameExclusive));
+        const int x1 = std::max(ctx.pianoKeyWidth, ctx.timeToX(startSeconds));
+        const int x2 = std::min(ctx.width, ctx.timeToX(endSeconds));
+        if (x2 <= x1) {
+            return;
+        }
+
+        g.fillRect(static_cast<float>(x1), 0.0f, static_cast<float>(x2 - x1), static_cast<float>(ctx.height));
+    };
+
+    int currentBandStart = -1;
+    for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
+        const bool unvoiced = !isVoicedFrame(originalF0[static_cast<std::size_t>(frame)]);
+        if (unvoiced) {
+            if (currentBandStart < 0) {
+                currentBandStart = frame;
+            }
             continue;
         }
 
-        // Found start of unvoiced region
-        const int regionStart = i;
-        while (i < numFrames && originalF0[static_cast<size_t>(i)] <= 0.0f) {
-            ++i;
+        if (currentBandStart >= 0) {
+            drawBand(currentBandStart, frame);
+            currentBandStart = -1;
         }
-        const int regionEnd = i;
+    }
 
-        // Convert frame indices to X coordinates
-        const double startSec = ctx.frameIndexToClipSeconds(regionStart);
-        const double endSec = ctx.frameIndexToClipSeconds(regionEnd);
-        const int x1 = ctx.timeToX(startSec + ctx.trackOffsetSeconds);
-        const int x2 = ctx.timeToX(endSec + ctx.trackOffsetSeconds);
-
-        const int clampedX1 = std::max(x1, pianoW);
-        const int clampedX2 = std::min(x2, w);
-        if (clampedX2 <= clampedX1) continue;
-
-        g.setColour(unvoicedColour);
-        g.fillRect(static_cast<float>(clampedX1), top,
-                   static_cast<float>(clampedX2 - clampedX1), bottom - top);
+    if (currentBandStart >= 0) {
+        drawBand(currentBandStart, visibleEndFrame);
     }
 }
 
 void PianoRollRenderer::drawWaveform(juce::Graphics& g, const RenderContext& ctx)
 {
-    PerfTimer timer("[PianoRollRenderer] drawWaveform");
-    
     if (!ctx.hasUserAudio || !waveformMipmap_)
         return;
 
-    const int startX = ctx.pianoKeyWidth;
-    const int endX = ctx.width;
+    const auto visibleWindow = computeVisibleTimeWindow(ctx);
+    if (!visibleWindow.isValid())
+        return;
+
+    const int startX = visibleWindow.viewportStartX;
+    const int endX = visibleWindow.viewportEndX;
     const int w = endX - startX;
     if (w <= 0) return;
 
-    const double pixelsPerSecond = 100.0 * ctx.zoomLevel;
-    const int levelIndex = waveformMipmap_->selectBestLevelIndex(pixelsPerSecond);
+    const int levelIndex = waveformMipmap_->selectBestLevelIndex(ctx.pixelsPerSecond);
     const auto& level = waveformMipmap_->getLevel(levelIndex);
     
     if (level.peaks.empty())
         return;
 
-    AppLogger::debug("[PianoRollRenderer] drawWaveform: using level " + juce::String(levelIndex)
-        + " with " + juce::String(static_cast<int>(level.peaks.size())) + " peaks");
-
-    const double startTime = ctx.xToTime(startX);
-    const double endTime = ctx.xToTime(endX);
-    if (endTime <= startTime) return;
-
-    const double startClipTime = startTime - ctx.trackOffsetSeconds;
-    const double endClipTime = endTime - ctx.trackOffsetSeconds;
-    const double clipVisibleDuration = endClipTime - startClipTime;
-    if (clipVisibleDuration <= 0.0) return;
+    const double materializationVisibleDuration = visibleWindow.visibleMaterializationEndTime - visibleWindow.visibleMaterializationStartTime;
+    if (materializationVisibleDuration <= 0.0) return;
 
     const float centerY = ctx.height / 2.0f;
     const float amplitudeScale = ctx.height / 2.0f;
@@ -271,7 +285,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g, const RenderContext& ctx
 
     for (int x = startX; x < endX; ++x)
     {
-        const double time = ctx.xToTime(x) - ctx.trackOffsetSeconds;
+        const double time = ctx.materializationProjection.projectTimelineTimeToMaterialization(ctx.xToTime(x));
         const int64_t peakIndex = static_cast<int64_t>(time / timePerPeak);
         
         if (peakIndex < 0 || peakIndex >= builtPeaks)
@@ -297,18 +311,12 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g, const RenderContext& ctx
 
 void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ctx)
 {
-    PerfTimer timer("[PianoRollRenderer] drawTimeRuler");
-    
     constexpr int inset = 12;
     auto bounds = juce::Rectangle<int>(0, 0, ctx.width, ctx.height).reduced(inset);
     auto rulerArea = bounds.removeFromTop(ctx.rulerHeight);
 
     const int rulerTop = rulerArea.getY();
     const int rulerBottom = rulerArea.getBottom();
-
-    AppLogger::debug("[PianoRollRenderer] drawTimeRuler: timeUnit=" 
-        + juce::String(static_cast<int>(ctx.timeUnit)) + ", bpm=" + juce::String(ctx.bpm)
-        + ", zoomLevel=" + juce::String(ctx.zoomLevel));
 
     g.setColour(UIColors::backgroundMedium);
     g.fillRect(rulerArea);
@@ -321,15 +329,11 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
         double bpm = ctx.bpm;
         if (bpm <= 0.0) bpm = 120.0;
 
-        double pixelsPerSecond = 100.0 * ctx.zoomLevel;
+        double pixelsPerSecond = ctx.pixelsPerSecond;
         double secondsPerBeat = 60.0 / bpm;
         double pixelsPerBeat = pixelsPerSecond * secondsPerBeat;
 
-        double beatInterval = 1.0;
-        if (pixelsPerBeat < 40.0) beatInterval = 4.0;
-        if (pixelsPerBeat < 10.0) beatInterval = 8.0;
-        if (pixelsPerBeat < 5.0) beatInterval = 16.0;
-        if (pixelsPerBeat < 2.5) beatInterval = 32.0;
+        double beatInterval = selectBeatInterval(pixelsPerBeat);
 
         double startTime = ctx.xToTime(0);
         double endTime = ctx.xToTime(ctx.width);
@@ -360,17 +364,13 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
             else
                 label = juce::String::formatted("%lld.%lld", (long long)bar, (long long)beatInBar);
 
-            g.setColour(UIColors::textSecondary);
-            g.drawText(label, pixelX - 20, rulerTop + 2, 40, ctx.rulerHeight - 12, juce::Justification::centred);
+        g.setColour(UIColors::textSecondary);
+        g.drawText(label, pixelX - 20, rulerTop + 2, 40, ctx.rulerHeight - 12, juce::Justification::centred);
         }
     } else {
-        double pixelsPerSecond = 100.0 * ctx.zoomLevel;
+        double pixelsPerSecond = ctx.pixelsPerSecond;
 
-        double markerInterval = 1.0;
-        if (pixelsPerSecond < 40.0) markerInterval = 5.0;
-        if (pixelsPerSecond < 8.0) markerInterval = 10.0;
-        if (pixelsPerSecond < 4.0) markerInterval = 30.0;
-        if (pixelsPerSecond < 1.33) markerInterval = 60.0;
+        double markerInterval = selectMarkerInterval(pixelsPerSecond);
 
         double startTime = ctx.xToTime(0);
         if (startTime < 0.0) startTime = 0.0;
@@ -400,26 +400,18 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
 
 void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ctx)
 {
-    PerfTimer timer("[PianoRollRenderer] drawGridLines");
-    
-    const auto themeId = Theme::getActiveTheme();
-    AppLogger::debug("[PianoRollRenderer] drawGridLines: timeUnit=" + juce::String(static_cast<int>(ctx.timeUnit))
-        + ", theme=" + juce::String(static_cast<int>(themeId)));
+    const auto themeId = UIColors::currentThemeId();
 
     if (ctx.timeUnit == RenderContext::TimeUnit::Bars)
     {
         double bpm = ctx.bpm;
         if (bpm <= 0.0) bpm = 120.0;
 
-        double pixelsPerSecond = 100.0 * ctx.zoomLevel;
+        double pixelsPerSecond = ctx.pixelsPerSecond;
         double secondsPerBeat = 60.0 / bpm;
         double pixelsPerBeat = pixelsPerSecond * secondsPerBeat;
 
-        double beatInterval = 1.0;
-        if (pixelsPerBeat < 40.0) beatInterval = 4.0;
-        if (pixelsPerBeat < 10.0) beatInterval = 8.0;
-        if (pixelsPerBeat < 5.0) beatInterval = 16.0;
-        if (pixelsPerBeat < 2.5) beatInterval = 32.0;
+        double beatInterval = selectBeatInterval(pixelsPerBeat);
 
         double startTime = ctx.xToTime(0);
         double endTime = ctx.xToTime(ctx.width);
@@ -461,13 +453,9 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ct
             }
         }
     } else {
-        double pixelsPerSecond = 100.0 * ctx.zoomLevel;
+        double pixelsPerSecond = ctx.pixelsPerSecond;
 
-        double markerInterval = 1.0;
-        if (pixelsPerSecond < 40.0) markerInterval = 5.0;
-        if (pixelsPerSecond < 8.0) markerInterval = 10.0;
-        if (pixelsPerSecond < 4.0) markerInterval = 30.0;
-        if (pixelsPerSecond < 1.33) markerInterval = 60.0;
+        double markerInterval = selectMarkerInterval(pixelsPerSecond);
 
         double startTime = ctx.xToTime(0);
         if (startTime < 0.0) startTime = 0.0;
@@ -488,14 +476,34 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ct
     }
 }
 
+void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx)
+{
+    if (!ctx.showChunkBoundaries || ctx.chunkBoundaries.size() < 3) {
+        return;
+    }
+
+    static constexpr float dashLengths[] { 4.0f, 4.0f };
+    g.setColour(UIColors::accent.withAlpha(0.75f));
+
+    for (std::size_t index = 1; index + 1 < ctx.chunkBoundaries.size(); ++index) {
+        const double absoluteSeconds = ctx.materializationProjection.projectMaterializationTimeToTimeline(ctx.chunkBoundaries[index]);
+        const int x = ctx.timeToX(absoluteSeconds);
+        if (x < ctx.pianoKeyWidth || x >= ctx.width) {
+            continue;
+        }
+
+        g.drawDashedLine(juce::Line<float>(static_cast<float>(x),
+                                          0.0f,
+                                          static_cast<float>(x),
+                                          static_cast<float>(ctx.height)),
+                         dashLengths,
+                         2,
+                         1.0f);
+    }
+}
+
 void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ctx)
 {
-    PerfTimer timer("[PianoRollRenderer] drawPianoKeys");
-    
-    AppLogger::debug("[PianoRollRenderer] drawPianoKeys: pianoKeyWidth=" + juce::String(ctx.pianoKeyWidth)
-        + ", minMidi=" + juce::String(ctx.minMidi) + ", maxMidi=" + juce::String(ctx.maxMidi)
-        + ", scaleType=" + juce::String(ctx.scaleType) + ", scaleRootNote=" + juce::String(ctx.scaleRootNote));
-
     const int height = ctx.height;
     const int w = ctx.pianoKeyWidth;
     const float blackKeyWidthRatio = 0.6f;
@@ -513,13 +521,8 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     // Build scale pitch-class membership using shared helper (supports all 8 scale types)
     const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);
 
-    const auto isMidiInCurrentScale = [&inScalePitchClass](int midiNote) noexcept {
-        const int pitchClass = ((midiNote % 12) + 12) % 12;
-        return inScalePitchClass[static_cast<std::size_t>(pitchClass)];
-    };
-
     // Compute effective note name display mode (zoom-adaptive downgrade)
-    int effectiveNoteNameMode = ctx.noteNameMode; // 0=ShowAll, 1=COnly, 2=Hide
+    int effectiveNoteNameMode = static_cast<int>(ctx.noteNameMode); // 0=ShowAll, 1=COnly, 2=Hide
     if (effectiveNoteNameMode == 0 && ctx.pixelsPerSemitone < kShowAllLabelsMinPPS)
         effectiveNoteNameMode = 1; // downgrade to C-only
     if (effectiveNoteNameMode <= 1 && ctx.pixelsPerSemitone < kShowCOnlyMinPPS)
@@ -527,6 +530,11 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
 
     // Accidental preference: sharp or flat based on root note
     const bool useFlats = (ctx.scaleType != kScaleTypeChromatic) ? kUseFlatsByRoot[juce::jlimit(0, 11, ctx.scaleRootNote)] : false;
+
+    const auto isMidiInCurrentScale = [&inScalePitchClass](int midiNote) noexcept {
+        const int pitchClass = ((midiNote % 12) + 12) % 12;
+        return inScalePitchClass[static_cast<std::size_t>(pitchClass)];
+    };
 
     g.setColour(UIColors::backgroundDark);
     g.fillRect(0, 0, w, height);
@@ -568,7 +576,14 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
                 g.fillRect(keyRect);
             }
 
-            // Note name labels (with outline for consistency)
+            // Pressed key highlight
+            if (drawMidi == ctx.pressedPianoKey)
+            {
+                g.setColour(juce::Colour(0x500078D7));
+                g.fillRect(keyRect);
+            }
+
+            // Note name labels (with outline for readability)
             if (effectiveNoteNameMode == 0 || (effectiveNoteNameMode == 1 && noteInOctave == 0))
             {
                 const float fontSize = juce::jmax(8.0f, juce::jmin(h * 0.7f, 14.0f));
@@ -599,8 +614,8 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
 
             const juce::Colour extensionA = inScale ? cWhite1 : cWhite1.darker(kOutOfScaleDimAmount);
             const juce::Colour extensionB = inScale ? cWhite2 : cWhite2.darker(kOutOfScaleDimAmount);
-            juce::ColourGradient extGrad(extensionA, blackKeyW, y, extensionB, static_cast<float>(w), y, false);
-            g.setGradientFill(extGrad);
+            juce::ColourGradient grad(extensionA, blackKeyW, y, extensionB, static_cast<float>(w), y, false);
+            g.setGradientFill(grad);
             g.fillRect(extensionRect);
 
             // Scale highlight overlay on in-scale black key extension area
@@ -612,9 +627,6 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
 
             g.setColour(UIColors::panelBorder);
             g.drawLine(blackKeyW, y + h * 0.5f, static_cast<float>(w), y + h * 0.5f, 1.0f);
-
-            // Black key labels are drawn in the third pass (after black key body)
-            // so they appear on top of the black key graphic.
         }
     }
 
@@ -677,15 +689,22 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
                 cBottom = cBottom.darker(kOutOfScaleDimAmount);
             }
 
-            juce::ColourGradient bkGrad(cTop, 0.0f, keyRect.getY(),
-                                       cBottom, 0.0f, keyRect.getBottom(), false);
-            g.setGradientFill(bkGrad);
+            juce::ColourGradient grad(cTop, 0.0f, keyRect.getY(),
+                                      cBottom, 0.0f, keyRect.getBottom(), false);
+            g.setGradientFill(grad);
             g.fillRoundedRectangle(keyRect, 2.0f);
 
             // Scale highlight overlay on in-scale black keys (reduced alpha)
             if (inScale && ctx.scaleType != kScaleTypeChromatic)
             {
                 g.setColour(UIColors::scaleHighlight.withMultipliedAlpha(0.5f));
+                g.fillRoundedRectangle(keyRect, 2.0f);
+            }
+
+            // Pressed key highlight for black keys
+            if (drawMidi == ctx.pressedPianoKey)
+            {
+                g.setColour(juce::Colour(0x500078D7));
                 g.fillRoundedRectangle(keyRect, 2.0f);
             }
 
@@ -727,25 +746,47 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
 }
 
 void PianoRollRenderer::drawNotes(juce::Graphics& g, const RenderContext& ctx,
-                                   const std::vector<Note>& notes,
-                                   double trackOffsetSeconds)
+                                  const std::vector<Note>& notes)
 {
-    PerfTimer timer("[PianoRollRenderer] drawNotes");
-    
     if (notes.empty()) return;
 
-    AppLogger::debug("[PianoRollRenderer] drawNotes: noteCount=" + juce::String(static_cast<int>(notes.size()))
-        + ", trackOffsetSeconds=" + juce::String(trackOffsetSeconds));
+    const auto visibleWindow = computeVisibleTimeWindow(ctx);
+    if (!visibleWindow.isValid())
+        return;
+
+    auto firstVisibleNote = std::lower_bound(
+        notes.begin(),
+        notes.end(),
+        visibleWindow.visibleMaterializationStartTime,
+        [](const Note& note, double visibleMaterializationStartTime) {
+            return note.startTime < visibleMaterializationStartTime;
+        });
+
+    if (firstVisibleNote != notes.begin())
+    {
+        const auto previousVisibleNote = std::prev(firstVisibleNote);
+        if (previousVisibleNote->endTime > visibleWindow.visibleMaterializationStartTime)
+            firstVisibleNote = previousVisibleNote;
+    }
+
+    const auto lastVisibleNote = std::lower_bound(
+        firstVisibleNote,
+        notes.end(),
+        visibleWindow.visibleMaterializationEndTime,
+        [](const Note& note, double visibleMaterializationEndTime) {
+            return note.startTime < visibleMaterializationEndTime;
+        });
 
     int selectedCount = 0;
-    for (const auto& note : notes)
+    for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
     {
-        if (note.selected) ++selectedCount;
+        if (noteIt->selected)
+            ++selectedCount;
     }
-    AppLogger::debug("[PianoRollRenderer] drawNotes: selectedCount=" + juce::String(selectedCount));
 
-    for (const auto& note : notes)
+    for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
     {
+        const auto& note = *noteIt;
         float adjustedPitch = note.getAdjustedPitch();
         if (adjustedPitch <= 0.0f) continue;
 
@@ -753,12 +794,15 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g, const RenderContext& ctx,
         float y = ctx.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
         float h = ctx.pixelsPerSemitone;
 
-        double noteStartTime = note.startTime + trackOffsetSeconds;
-        double noteEndTime = note.endTime + trackOffsetSeconds;
+        double noteStartTime = ctx.materializationProjection.projectMaterializationTimeToTimeline(note.startTime);
+        double noteEndTime = ctx.materializationProjection.projectMaterializationTimeToTimeline(note.endTime);
 
         int x1 = ctx.timeToX(noteStartTime);
         int x2 = ctx.timeToX(noteEndTime);
-        float w = static_cast<float>(x2 - x1);
+        if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
+            continue;
+
+        float w = std::max(1.0f, static_cast<float>(x2 - x1));
 
         juce::Colour noteColor = note.selected
             ? juce::Colour(0xFFE74C3C)
@@ -781,13 +825,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                                      std::shared_ptr<PitchCurve> currentCurve,
                                      const std::vector<uint8_t>* visibleMask)
 {
-    PerfTimer timer("[PianoRollRenderer] drawF0Curve");
-    
     if (f0.empty()) return;
-
-    AppLogger::debug("[PianoRollRenderer] drawF0Curve: f0.size=" + juce::String(static_cast<int>(f0.size()))
-        + ", alpha=" + juce::String(alpha) + ", isThinLine=" + juce::String(isThinLine ? "true" : "false")
-        + ", visibleMask=" + juce::String(visibleMask ? "provided" : "null"));
 
     const float lineWidth = isThinLine ? 1.3f : 2.2f;
 
@@ -802,35 +840,25 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     bool pathStarted = false;
     std::size_t segmentStart = 0;
 
-    std::size_t stableFrameLength = f0.size();
-    if (currentCurve != nullptr)
-    {
-        auto snapshot = currentCurve->getSnapshot();
-        const std::size_t curveFrames = snapshot->size();
-        if (curveFrames > 0)
-        {
-            stableFrameLength = curveFrames;
-        }
-    }
+    const auto visibleWindow = computeVisibleTimeWindow(ctx);
+    if (!visibleWindow.isValid())
+        return;
 
-    const int contentStartX = ctx.pianoKeyWidth;
-    const int contentEndX = ctx.width;
-
-    double visibleStartTime = ctx.xToTime(contentStartX);
-    double visibleEndTime = ctx.xToTime(contentEndX);
+    const int viewportStartX = visibleWindow.viewportStartX;
+    const int viewportEndX = visibleWindow.viewportEndX;
 
     std::size_t iStart = 0;
-    std::size_t iEnd = f0.size();
+    std::size_t iEnd = static_cast<std::size_t>(ctx.f0Timeline.endFrameExclusive());
 
-    if (ctx.hopSize > 0 && ctx.f0SampleRate > 0.0)
+    if (!ctx.f0Timeline.isEmpty())
     {
         const int marginFrames = 10;
 
-        const double framesPerSecond = ctx.f0SampleRate / static_cast<double>(ctx.hopSize);
-        const int startFrame = std::max(0, static_cast<int>(std::floor((visibleStartTime - ctx.trackOffsetSeconds) * framesPerSecond)) - marginFrames);
-        const int endFrame = std::min(static_cast<int>(f0.size()), static_cast<int>(std::ceil((visibleEndTime - ctx.trackOffsetSeconds) * framesPerSecond)) + marginFrames);
-        iStart = static_cast<std::size_t>(startFrame);
-        iEnd = static_cast<std::size_t>(std::max(startFrame, endFrame));
+        const auto visibleFrames = ctx.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleMaterializationStartTime,
+                                                                         visibleWindow.visibleMaterializationEndTime,
+                                                                         marginFrames);
+        iStart = static_cast<std::size_t>(visibleFrames.startFrame);
+        iEnd = static_cast<std::size_t>(std::max(visibleFrames.startFrame, visibleFrames.endFrameExclusive));
     }
 
     for (std::size_t i = iStart; i < iEnd; ++i)
@@ -865,11 +893,10 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         float midi = ctx.freqToMidi(frequency);
         float y = ctx.midiToY(midi);
 
-        const double frameTime = static_cast<double>(i) * static_cast<double>(ctx.hopSize) / ctx.f0SampleRate;
-        const double absoluteTime = frameTime + ctx.trackOffsetSeconds;
+        const double absoluteTime = ctx.materializationProjection.projectMaterializationTimeToTimeline(ctx.f0Timeline.timeAtFrame(static_cast<int>(i)));
         const int x = ctx.timeToX(absoluteTime);
 
-        if (x < contentStartX || x > contentEndX)
+        if (x < viewportStartX || x > viewportEndX)
         {
             if (pathStarted)
             {
@@ -909,7 +936,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         {
             bool inSelection = ctx.hasF0Selection && 
                                static_cast<int>(seg.startIdx) >= ctx.f0SelectionStartFrame &&
-                               static_cast<int>(seg.endIdx) <= ctx.f0SelectionEndFrame;
+                                static_cast<int>(seg.endIdx) < ctx.f0SelectionEndFrameExclusive;
             if (inSelection) {
                 g.setColour(selectionColour.withAlpha(alpha * 0.9f));
                 juce::PathStrokeType selStroke(selectionLineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
@@ -921,7 +948,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         } else {
             bool inSelection = ctx.hasF0Selection && 
                                static_cast<int>(seg.startIdx) >= ctx.f0SelectionStartFrame &&
-                               static_cast<int>(seg.endIdx) <= ctx.f0SelectionEndFrame;
+                               static_cast<int>(seg.endIdx) < ctx.f0SelectionEndFrameExclusive;
             if (inSelection) {
                 g.setColour(selectionColour.withAlpha(alpha));
                 juce::PathStrokeType selStroke(selectionLineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
@@ -943,8 +970,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     {
                         float midi = ctx.freqToMidi(freq);
                         float y = ctx.midiToY(midi);
-                        const double frameTime = static_cast<double>(fadeStartIdx) * static_cast<double>(ctx.hopSize) / ctx.f0SampleRate;
-                        const double absoluteTime = frameTime + ctx.trackOffsetSeconds;
+                        const double absoluteTime = ctx.materializationProjection.projectMaterializationTimeToTimeline(ctx.f0Timeline.timeAtFrame(static_cast<int>(fadeStartIdx)));
                         const int x = ctx.timeToX(absoluteTime);
 
                         g.setColour(colour.withAlpha(fadeAlpha));
@@ -960,8 +986,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     {
                         float midi = ctx.freqToMidi(freq);
                         float y = ctx.midiToY(midi);
-                        const double frameTime = static_cast<double>(fadeEndIdx) * static_cast<double>(ctx.hopSize) / ctx.f0SampleRate;
-                        const double absoluteTime = frameTime + ctx.trackOffsetSeconds;
+                        const double absoluteTime = ctx.materializationProjection.projectMaterializationTimeToTimeline(ctx.f0Timeline.timeAtFrame(static_cast<int>(fadeEndIdx)));
                         const int x = ctx.timeToX(absoluteTime);
 
                         g.setColour(colour.withAlpha(fadeAlpha));
@@ -971,9 +996,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             }
         }
     }
-    
-    AppLogger::debug("[PianoRollRenderer] drawF0Curve: completed, segments drawn=" 
-        + juce::String(static_cast<int>(segments.size())));
 }
 
 } // namespace OpenTune

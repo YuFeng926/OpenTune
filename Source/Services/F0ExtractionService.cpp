@@ -9,7 +9,7 @@ F0ExtractionService::F0ExtractionService(int workerCount, size_t maxQueueSize)
     : queue_(maxQueueSize)
     , maxQueueSize_(maxQueueSize)
 {
-    const int count = (workerCount <= 0) ? 2 : workerCount;
+    const int count = (workerCount <= 0) ? 1 : workerCount;
     workers_.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i) {
         workers_.emplace_back([this]() { workerLoop(); });
@@ -27,13 +27,13 @@ F0ExtractionService::~F0ExtractionService()
     }
 }
 
-uint64_t F0ExtractionService::makeRequestKey(uint64_t clipId, int trackId, int clipIndex)
+uint64_t F0ExtractionService::makeRequestKey(uint64_t materializationId, int trackId, int placementIndex)
 {
-    if (clipId != 0) {
-        return clipId;
+    if (materializationId != 0) {
+        return materializationId;
     }
     return (static_cast<uint64_t>(static_cast<uint32_t>(trackId)) << 32)
-        | static_cast<uint32_t>(clipIndex);
+        | static_cast<uint32_t>(placementIndex);
 }
 
 F0ExtractionService::SubmitResult F0ExtractionService::submit(uint64_t requestKey, ExecuteFn execute, CommitFn commit)

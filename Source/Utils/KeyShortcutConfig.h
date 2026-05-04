@@ -176,6 +176,8 @@ inline juce::String getShortcutDisplayName(ShortcutId id)
     return Loc::get(kShortcutInfos[static_cast<size_t>(id)].displayNameKey);
 }
 
+inline bool parseKeyBinding(const juce::String& text, KeyBinding& outBinding);
+
 struct KeyShortcutSettings {
     std::array<ShortcutBinding, static_cast<size_t>(ShortcutId::Count)> bindings;
     
@@ -196,81 +198,131 @@ struct KeyShortcutSettings {
     }
 };
 
-inline KeyShortcutSettings& getMutableSettings()
-{
-    static KeyShortcutSettings instance;
-    return instance;
-}
-
-inline const KeyShortcutSettings& getSettings()
-{
-    return getMutableSettings();
-}
-
-inline void setSettings(const KeyShortcutSettings& settings)
-{
-    getMutableSettings() = settings;
-}
-
 inline const ShortcutInfo& getShortcutInfo(ShortcutId id)
 {
     return kShortcutInfos[static_cast<size_t>(id)];
 }
 
-inline ShortcutBinding getShortcutBinding(ShortcutId id)
+inline const ShortcutBinding& getShortcutBinding(const KeyShortcutSettings& settings, ShortcutId id)
 {
-    return getSettings().bindings[static_cast<size_t>(id)];
+    return settings.bindings[static_cast<size_t>(id)];
 }
 
-inline void addShortcutBinding(ShortcutId id, const KeyBinding& binding)
+inline juce::String toCanonicalString(const KeyBinding& binding)
 {
-    getMutableSettings().bindings[static_cast<size_t>(id)].addBinding(binding);
+    juce::String text;
+    const auto modifierFlags = binding.modifiers.getRawFlags();
+
+    if ((modifierFlags & juce::ModifierKeys::ctrlModifier) != 0
+        || (modifierFlags & juce::ModifierKeys::commandModifier) != 0) {
+        text << "Ctrl+";
+    }
+    if ((modifierFlags & juce::ModifierKeys::shiftModifier) != 0) {
+        text << "Shift+";
+    }
+    if ((modifierFlags & juce::ModifierKeys::altModifier) != 0) {
+        text << "Alt+";
+    }
+
+    if (binding.keyCode == juce::KeyPress::spaceKey) {
+        text << "Space";
+    } else if (binding.keyCode == juce::KeyPress::returnKey) {
+        text << "Enter";
+    } else if (binding.keyCode == juce::KeyPress::escapeKey) {
+        text << "Esc";
+    } else if (binding.keyCode == juce::KeyPress::backspaceKey) {
+        text << "Backspace";
+    } else if (binding.keyCode == juce::KeyPress::deleteKey) {
+        text << "Delete";
+    } else if (binding.keyCode == juce::KeyPress::tabKey) {
+        text << "Tab";
+    } else if (binding.keyCode == juce::KeyPress::leftKey) {
+        text << "Left";
+    } else if (binding.keyCode == juce::KeyPress::rightKey) {
+        text << "Right";
+    } else if (binding.keyCode == juce::KeyPress::upKey) {
+        text << "Up";
+    } else if (binding.keyCode == juce::KeyPress::downKey) {
+        text << "Down";
+    } else if (binding.keyCode == juce::KeyPress::homeKey) {
+        text << "Home";
+    } else if (binding.keyCode == juce::KeyPress::endKey) {
+        text << "End";
+    } else if (binding.keyCode == juce::KeyPress::insertKey) {
+        text << "Insert";
+    } else if (binding.keyCode == juce::KeyPress::pageDownKey) {
+        text << "PageDown";
+    } else if (binding.keyCode == juce::KeyPress::pageUpKey) {
+        text << "PageUp";
+    } else if (binding.keyCode >= 32 && binding.keyCode < 127) {
+        text << juce::String::charToString(static_cast<juce::juce_wchar>(binding.keyCode)).toUpperCase();
+    }
+
+    return text;
 }
 
-inline void removeShortcutBinding(ShortcutId id, const KeyBinding& binding)
+inline juce::String toCanonicalString(const ShortcutBinding& binding)
 {
-    getMutableSettings().bindings[static_cast<size_t>(id)].removeBinding(binding);
+    juce::StringArray parts;
+    for (const auto& keyBinding : binding.bindings) {
+        parts.add(toCanonicalString(keyBinding));
+    }
+    return parts.joinIntoString("|");
 }
 
-inline void setShortcutBinding(ShortcutId id, const KeyBinding& binding)
+inline bool parseShortcutBinding(const juce::String& text, ShortcutBinding& outBinding)
 {
-    auto& settings = getMutableSettings();
-    auto idx = static_cast<size_t>(id);
-    settings.bindings[idx].bindings.clear();
-    settings.bindings[idx].addBinding(binding);
+    ShortcutBinding parsed;
+    juce::StringArray parts;
+    parts.addTokens(text, "|", "");
+
+    for (const auto& part : parts) {
+        KeyBinding keyBinding;
+        if (!parseKeyBinding(part, keyBinding)) {
+            return false;
+        }
+
+        if (keyBinding.keyCode >= 'a' && keyBinding.keyCode <= 'z') {
+            keyBinding.keyCode = keyBinding.keyCode - ('a' - 'A');
+        }
+
+        parsed.addBinding(keyBinding);
+    }
+
+    outBinding = std::move(parsed);
+    return true;
 }
 
-inline void resetShortcutBinding(ShortcutId id)
+inline bool matchesShortcut(const KeyShortcutSettings& settings, ShortcutId id, const juce::KeyPress& key)
 {
-    const auto& info = getShortcutInfo(id);
-    auto idx = static_cast<size_t>(id);
-    getMutableSettings().bindings[idx].bindings.clear();
-    for (const auto& binding : info.defaultBindings)
-        getMutableSettings().bindings[idx].addBinding(binding);
-}
-
-inline void resetAllShortcutBindings()
-{
-    getMutableSettings() = KeyShortcutSettings::getDefault();
-}
-
-inline std::vector<juce::KeyPress> getKeyPresses(ShortcutId id)
-{
-    std::vector<juce::KeyPress> result;
-    const auto& binding = getShortcutBinding(id);
-    for (const auto& b : binding.bindings)
-        result.push_back(juce::KeyPress(b.keyCode, b.modifiers, 0));
-    return result;
-}
-
-inline bool matchesShortcut(ShortcutId id, const juce::KeyPress& key)
-{
-    const auto& binding = getShortcutBinding(id);
+    const auto& binding = getShortcutBinding(settings, id);
     KeyBinding testBinding(key.getKeyCode(), key.getModifiers());
     return binding.hasBinding(testBinding);
 }
 
-inline ShortcutId findConflictingShortcut(ShortcutId excludeId, const KeyBinding& binding)
+inline void setShortcutBinding(KeyShortcutSettings& settings, ShortcutId id, const KeyBinding& binding)
+{
+    auto& shortcutBinding = settings.bindings[static_cast<size_t>(id)];
+    shortcutBinding.bindings.clear();
+    shortcutBinding.addBinding(binding);
+}
+
+inline void resetShortcutBinding(KeyShortcutSettings& settings, ShortcutId id)
+{
+    const auto& info = getShortcutInfo(id);
+    auto& shortcutBinding = settings.bindings[static_cast<size_t>(id)];
+    shortcutBinding.bindings.clear();
+    for (const auto& binding : info.defaultBindings) {
+        shortcutBinding.addBinding(binding);
+    }
+}
+
+inline void resetAllShortcutBindings(KeyShortcutSettings& settings)
+{
+    settings = KeyShortcutSettings::getDefault();
+}
+
+inline ShortcutId findConflictingShortcut(const KeyShortcutSettings& settings, ShortcutId excludeId, const KeyBinding& binding)
 {
     for (size_t i = 0; i < kShortcutCount; ++i)
     {
@@ -278,7 +330,7 @@ inline ShortcutId findConflictingShortcut(ShortcutId excludeId, const KeyBinding
         if (id == excludeId)
             continue;
         
-        const auto& shortcutBinding = getShortcutBinding(id);
+        const auto& shortcutBinding = getShortcutBinding(settings, id);
         if (shortcutBinding.hasBinding(binding))
             return id;
     }

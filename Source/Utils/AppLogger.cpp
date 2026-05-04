@@ -55,9 +55,15 @@ void AppLogger::initialize()
         return;
     }
 
-    juce::File logDir = juce::File::getCurrentWorkingDirectory()
+    juce::File logDir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("OpenTune")
         .getChildFile("Logs");
-    logDir.createDirectory();
+    if (!logDir.createDirectory()) {
+        logDir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+            .getChildFile("OpenTune")
+            .getChildFile("Logs");
+        logDir.createDirectory();
+    }
 
     logger.reset(juce::FileLogger::createDateStampedLogger(
         logDir.getFullPathName(),
@@ -126,11 +132,6 @@ juce::File AppLogger::getCurrentLogFile()
 {
     const juce::ScopedLock sl(getLoggerLock());
     return getLogFileInstance();
-}
-
-void AppLogger::logPerf(const juce::String& operation, double durationMs)
-{
-    log("[PERF] " + operation + ": " + juce::String(durationMs, 2) + " ms");
 }
 
 } // namespace OpenTune

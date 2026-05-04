@@ -98,8 +98,8 @@ void TrackPanelComponent::applyTheme()
 
 void TrackPanelComponent::paint(juce::Graphics& g)
 {
-    const auto& style = Theme::getActiveStyle();
-    const auto themeId = Theme::getActiveTheme();
+    const auto& style = UIColors::currentThemeStyle();
+    const auto themeId = UIColors::currentThemeId();
     // 阴影边距：背景在 reduced(12) 区域内绘制，阴影在边距内渲染
     const float shadowMargin = 12.0f;
     auto bounds = getLocalBounds().toFloat().reduced(shadowMargin);

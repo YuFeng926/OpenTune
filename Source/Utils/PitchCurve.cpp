@@ -371,92 +371,7 @@ void PitchCurveSnapshot::renderCorrectedOnlyRange(int startFrame, int endFrame,
     }
 }
 
-bool PitchCurveSnapshot::hasCorrectedVisibleInRange(double startSeconds, double endSeconds) const {
-    if (correctedSegments_.empty() || hopSize_ <= 0 || sampleRate_ <= 0.0) {
-        return false;
-    }
-    if (endSeconds <= startSeconds) {
-        return false;
-    }
 
-    if (startSeconds < 0) startSeconds = 0;
-
-    const double framesPerSecond = sampleRate_ / static_cast<double>(hopSize_);
-    int startFrame = static_cast<int>(std::floor(startSeconds * framesPerSecond));
-    int endFrame = static_cast<int>(std::ceil(endSeconds * framesPerSecond));
-    if (startFrame < 0) startFrame = 0;
-    if (endFrame < startFrame) endFrame = startFrame;
-
-    const int n = static_cast<int>(originalF0_.size());
-    if (startFrame >= n) {
-        return false;
-    }
-    if (endFrame >= n) {
-        endFrame = n - 1;
-    }
-
-    return hasCorrectionInRange(startFrame, endFrame + 1);
-}
-
-bool PitchCurveSnapshot::getCorrectedVisibleTimeBounds(double& outStartSeconds, double& outEndSeconds) const {
-    outStartSeconds = 0.0;
-    outEndSeconds = 0.0;
-
-    if (correctedSegments_.empty() || hopSize_ <= 0 || sampleRate_ <= 0.0) {
-        return false;
-    }
-
-    int minFrame = correctedSegments_.front().startFrame;
-    int maxFrameExcl = correctedSegments_.front().endFrame;
-    for (const auto& seg : correctedSegments_) {
-        if (seg.startFrame < minFrame) {
-            minFrame = seg.startFrame;
-        }
-        if (seg.endFrame > maxFrameExcl) {
-            maxFrameExcl = seg.endFrame;
-        }
-    }
-    if (maxFrameExcl <= minFrame) {
-        return false;
-    }
-
-    const double secondsPerFrame = static_cast<double>(hopSize_) / sampleRate_;
-    outStartSeconds = static_cast<double>(minFrame) * secondsPerFrame;
-    outEndSeconds = static_cast<double>(maxFrameExcl) * secondsPerFrame;
-    if (outStartSeconds < 0) outStartSeconds = 0.0;
-    if (outEndSeconds < outStartSeconds) outEndSeconds = outStartSeconds;
-    return true;
-}
-
-bool PitchCurveSnapshot::getCorrectedVisibleOverlapInRange(double startSeconds, double endSeconds,
-                                                            double& outOverlapStart, double& outOverlapEnd) const {
-    outOverlapStart = 0.0;
-    outOverlapEnd = 0.0;
-
-    double visStart = 0.0;
-    double visEnd = 0.0;
-    if (!getCorrectedVisibleTimeBounds(visStart, visEnd)) {
-        return false;
-    }
-
-    if (endSeconds <= startSeconds) {
-        return false;
-    }
-
-    const double a0 = std::max(0.0, startSeconds);
-    const double a1 = endSeconds;
-    const double b0 = std::max(0.0, visStart);
-    const double b1 = std::max(0.0, visEnd);
-    const double s = std::max(a0, b0);
-    const double e = std::min(a1, b1);
-    if (e <= s) {
-        return false;
-    }
-
-    outOverlapStart = s;
-    outOverlapEnd = e;
-    return true;
-}
 
 void PitchCurve::applyCorrectionToRange(
     const std::vector<Note>& notes,
@@ -644,33 +559,12 @@ void PitchCurve::applyCorrectionToRange(
         }
     }
 
-    // Instead of creating one giant segment for the entire range,
-    // create individual segments per note to minimize undo/redo re-render scope
-    for (size_t idx : relevantNoteIndices) {
-        const auto& note = notes[idx];
-        
-        size_t noteStartFrame = static_cast<size_t>(std::max(0, static_cast<int>(std::floor(note.startTime * framePerSecond))));
-        size_t noteEndFrame = static_cast<size_t>(std::max(0, static_cast<int>(std::ceil(note.endTime * framePerSecond))));
-        
-        // Clamp to the requested range
-        int segStart = std::max(startFrame, static_cast<int>(noteStartFrame));
-        int segEnd = std::min(endFrame, static_cast<int>(noteEndFrame));
-        
-        if (segStart >= segEnd) continue;
-        
-        // Extract corrected F0 for this note's range
-        std::vector<float> noteF0Data(segEnd - segStart);
-        for (int i = segStart; i < segEnd; ++i) {
-            noteF0Data[i - segStart] = correctedF0Buffer[i - startFrame];
-        }
-        
-        CorrectedSegment noteSeg(segStart, segEnd, noteF0Data, CorrectedSegment::Source::NoteBased);
-        noteSeg.retuneSpeed = (note.retuneSpeed >= 0.0f) ? note.retuneSpeed : retuneSpeed;
-        noteSeg.vibratoDepth = (note.vibratoDepth >= 0.0f) ? note.vibratoDepth : vibratoDepth;
-        noteSeg.vibratoRate = (note.vibratoRate >= 0.0f) ? note.vibratoRate : vibratoRate;
-        
-        insertSegmentWithUnifiedTransitions(correctedSegments, originalF0, std::move(noteSeg), kUnifiedTransitionFrames);
-    }
+    CorrectedSegment newSeg(startFrame, endFrame, correctedF0Buffer, CorrectedSegment::Source::NoteBased);
+    newSeg.retuneSpeed = retuneSpeed;
+    newSeg.vibratoDepth = vibratoDepth;
+    newSeg.vibratoRate = vibratoRate;
+
+    insertSegmentWithUnifiedTransitions(correctedSegments, originalF0, std::move(newSeg), kUnifiedTransitionFrames);
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(

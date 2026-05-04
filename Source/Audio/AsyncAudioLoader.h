@@ -14,6 +14,9 @@
 #include <atomic>
 #include <memory>
 
+#include "AudioFormatRegistry.h"
+#include "../Utils/AppLogger.h"
+
 namespace OpenTune {
 
 /**
@@ -86,24 +89,45 @@ public:
         updateProgress(0.0f, juce::String::fromUTF8(u8"正在打开文件..."));
 
         juce::AudioFormatManager formatManager;
-        formatManager.registerBasicFormats();
+        AudioFormatRegistry::registerImportFormats(formatManager);
 
         std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(fileToLoad_));
 
         if (reader == nullptr)
         {
             const auto fileExt = fileToLoad_.getFileExtension().toLowerCase();
-            const auto supportedWildcard = formatManager.getWildcardForAllFormats().replaceCharacters("*", "");
+            const auto probe = AudioFormatRegistry::probeFile(fileToLoad_);
+            const auto supportedWildcard = probe.wildcardFilter.replaceCharacters("*", "");
 
             juce::String detail = juce::String::fromUTF8(u8"无法打开该音频文件。\n");
             detail += juce::String::fromUTF8(u8"文件：") + fileToLoad_.getFileName() + "\n";
             if (fileExt.isNotEmpty())
                 detail += juce::String::fromUTF8(u8"扩展名：") + fileExt + "\n";
 
+            detail += juce::String::fromUTF8(u8"存在：") + juce::String(probe.fileExists ? "yes" : "no") + "\n";
+            if (probe.fileSize >= 0)
+                detail += juce::String::fromUTF8(u8"文件大小：") + juce::String(probe.fileSize) + " bytes\n";
+            detail += juce::String::fromUTF8(u8"可开流：") + juce::String(probe.streamOpened ? "yes" : "no") + "\n";
+
             if (supportedWildcard.isNotEmpty())
                 detail += juce::String::fromUTF8(u8"当前支持：") + supportedWildcard;
             else
                 detail += juce::String::fromUTF8(u8"当前环境未注册可用音频解码器。");
+
+            if (probe.registeredFormats.isNotEmpty())
+                detail += "\n" + juce::String::fromUTF8(u8"已注册解码器：") + probe.registeredFormats;
+
+            if (probe.containerDiagnostics.isNotEmpty())
+                detail += "\n" + juce::String::fromUTF8(u8"容器诊断：") + probe.containerDiagnostics;
+
+            AppLogger::error("AsyncAudioLoader: failed path=" + fileToLoad_.getFullPathName()
+                + " exists=" + juce::String(probe.fileExists ? "true" : "false")
+                + " size=" + juce::String(probe.fileSize)
+                + " stream=" + juce::String(probe.streamOpened ? "true" : "false")
+                + " registeredFormats=" + probe.registeredFormats
+                + " wildcard=" + probe.wildcardFilter
+                + " container=" + probe.containerDiagnostics
+                + " formatProbe=" + probe.formatDiagnostics);
 
             notifyCompletion({ false, detail, {}, 0.0 });
             return;

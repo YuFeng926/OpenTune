@@ -72,21 +72,9 @@ public:
     void renderCorrectedOnlyRange(int startFrame, int endFrame,
                                   std::function<void(int, const float*, int)> callback) const;
 
-    bool hasAnyCorrectedVisible() const { return !correctedSegments_.empty(); }
-
-    bool shouldDrawCorrectedF0(bool& outUseMask) const {
-        outUseMask = false;
-        return !correctedSegments_.empty();
-    }
-
     bool hasRenderableCorrectedF0() const { return !correctedSegments_.empty(); }
 
-    bool hasCorrectedVisibleInRange(double startSeconds, double endSeconds) const;
 
-    bool getCorrectedVisibleTimeBounds(double& outStartSeconds, double& outEndSeconds) const;
-
-    bool getCorrectedVisibleOverlapInRange(double startSeconds, double endSeconds,
-                                            double& outOverlapStart, double& outOverlapEnd) const;
 
     size_t getMemoryUsage() const {
         size_t total = 0;
@@ -133,19 +121,6 @@ public:
     }
     bool hasAnyCorrection() const { return getSnapshot()->hasAnyCorrection(); }
     bool hasRenderableCorrectedF0() const { return getSnapshot()->hasRenderableCorrectedF0(); }
-    bool hasCorrectedVisibleInRange(double startSeconds, double endSeconds) const {
-        return getSnapshot()->hasCorrectedVisibleInRange(startSeconds, endSeconds);
-    }
-    bool getCorrectedVisibleTimeBounds(double& outStartSeconds, double& outEndSeconds) const {
-        return getSnapshot()->getCorrectedVisibleTimeBounds(outStartSeconds, outEndSeconds);
-    }
-    bool shouldDrawCorrectedF0(bool& outUseMask) const {
-        return getSnapshot()->shouldDrawCorrectedF0(outUseMask);
-    }
-    bool getCorrectedVisibleOverlapInRange(double startSeconds, double endSeconds,
-                                            double& outOverlapStart, double& outOverlapEnd) const {
-        return getSnapshot()->getCorrectedVisibleOverlapInRange(startSeconds, endSeconds, outOverlapStart, outOverlapEnd);
-    }
     size_t getMemoryUsage() const {
         return getSnapshot()->getMemoryUsage();
     }
@@ -369,6 +344,23 @@ public:
             oldSnapshot->getRenderGeneration()
         );
         std::atomic_store(&snapshot_, newSnapshot);
+    }
+
+    std::shared_ptr<PitchCurve> clone() const {
+        auto snapshot = getSnapshot();
+        auto copiedCurve = std::make_shared<PitchCurve>();
+        copiedCurve->setHopSize(snapshot->getHopSize());
+        copiedCurve->setSampleRate(snapshot->getSampleRate());
+        copiedCurve->setOriginalF0(snapshot->getOriginalF0());
+        copiedCurve->setOriginalEnergy(snapshot->getOriginalEnergy());
+
+        std::vector<CorrectedSegment> segments;
+        segments.reserve(snapshot->getCorrectedSegments().size());
+        for (const auto& segment : snapshot->getCorrectedSegments()) {
+            segments.push_back(segment);
+        }
+        copiedCurve->replaceCorrectedSegments(segments);
+        return copiedCurve;
     }
 
 private:

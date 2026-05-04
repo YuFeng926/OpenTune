@@ -1,8 +1,13 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+
+#include <algorithm>
 #include <array>
 #include <functional>
+#include <memory>
+#include <utility>
+#include <vector>
 
 namespace OpenTune {
 
@@ -53,30 +58,107 @@ public:
 class LocalizationManager
 {
 public:
+    struct LanguageState {
+        Language language = Language::Chinese;
+    };
+
+    class ScopedLanguageBinding
+    {
+    public:
+        explicit ScopedLanguageBinding(std::shared_ptr<LanguageState> state)
+            : state_(std::move(state))
+        {
+            LocalizationManager::getInstance().bindLanguageState(state_);
+        }
+
+        ~ScopedLanguageBinding()
+        {
+            LocalizationManager::getInstance().unbindLanguageState(state_);
+        }
+
+        ScopedLanguageBinding(const ScopedLanguageBinding&) = delete;
+        ScopedLanguageBinding& operator=(const ScopedLanguageBinding&) = delete;
+
+    private:
+        std::shared_ptr<LanguageState> state_;
+    };
+
     static LocalizationManager& getInstance()
     {
         static LocalizationManager instance;
         return instance;
     }
 
-    void setLanguage(Language lang)
+    void bindLanguageState(const std::shared_ptr<LanguageState>& state)
     {
-        if (currentLanguage_ != lang)
-        {
-            currentLanguage_ = lang;
-            // 广播给所有监听者
-            listeners_.call(&LanguageChangeListener::languageChanged, lang);
+        if (state == nullptr) {
+            return;
         }
+
+        pruneExpiredBindings();
+        const auto* rawState = state.get();
+        languageBindings_.erase(std::remove_if(languageBindings_.begin(),
+                                               languageBindings_.end(),
+                                               [rawState](const std::weak_ptr<LanguageState>& binding) {
+                                                   auto locked = binding.lock();
+                                                   return locked != nullptr && locked.get() == rawState;
+                                               }),
+                                languageBindings_.end());
+        languageBindings_.push_back(state);
     }
 
-    Language getLanguage() const { return currentLanguage_; }
+    void unbindLanguageState(const std::shared_ptr<LanguageState>& state)
+    {
+        if (state == nullptr) {
+            return;
+        }
+
+        const auto* rawState = state.get();
+        languageBindings_.erase(std::remove_if(languageBindings_.begin(),
+                                               languageBindings_.end(),
+                                               [rawState](const std::weak_ptr<LanguageState>& binding) {
+                                                   auto locked = binding.lock();
+                                                   return locked == nullptr || locked.get() == rawState;
+                                               }),
+                                languageBindings_.end());
+    }
+
+    Language resolveLanguage()
+    {
+        pruneExpiredBindings();
+
+        for (auto it = languageBindings_.rbegin(); it != languageBindings_.rend(); ++it) {
+            if (auto state = it->lock()) {
+                return state->language;
+            }
+        }
+
+        jassertfalse;
+        return Language::Chinese;
+    }
+
+    void notifyLanguageChanged(Language lang)
+    {
+        listeners_.call(&LanguageChangeListener::languageChanged, lang);
+    }
 
     void addListener(LanguageChangeListener* listener) { listeners_.add(listener); }
     void removeListener(LanguageChangeListener* listener) { listeners_.remove(listener); }
 
 private:
     LocalizationManager() = default;
-    Language currentLanguage_ = Language::Chinese;
+
+    void pruneExpiredBindings()
+    {
+        languageBindings_.erase(std::remove_if(languageBindings_.begin(),
+                                               languageBindings_.end(),
+                                               [](const std::weak_ptr<LanguageState>& binding) {
+                                                   return binding.expired();
+                                               }),
+                                languageBindings_.end());
+    }
+
+    std::vector<std::weak_ptr<LanguageState>> languageBindings_;
     juce::ListenerList<LanguageChangeListener> listeners_;
 };
 
@@ -108,10 +190,10 @@ constexpr const char* kRedo = "Redo";
 
 constexpr const char* kShowWaveform = "Show Waveform";
 constexpr const char* kShowLanes = "Show Lanes";
-constexpr const char* kNoteNames = "Note Names";
-constexpr const char* kShowAllNotes = "Show All Notes";
-constexpr const char* kShowCOnly = "Show C Only";
-constexpr const char* kHideNoteNames = "Hide Note Names";
+constexpr const char* kNoteLabels = "Note Labels";
+constexpr const char* kNoteLabelsShowAll = "Show All";
+constexpr const char* kNoteLabelsCOnly = "C Only";
+constexpr const char* kNoteLabelsHide = "Hide";
 constexpr const char* kShowChunkBoundaries = "Show Chunk Boundaries";
 constexpr const char* kShowUnvoicedFrames = "Show Unvoiced Frames";
 constexpr const char* kTheme = "Theme";
@@ -129,15 +211,22 @@ constexpr const char* kCherryBlossom = "Cherry Blossom";
 constexpr const char* kMatrix = "Matrix";
 
 constexpr const char* kAudio = "Audio";
+constexpr const char* kEditing = "Editing";
 constexpr const char* kMouse = "Mouse";
 constexpr const char* kKeyswitch = "Keyswitch";
 constexpr const char* kLanguage = "Language";
 constexpr const char* kLanguageLabel = "Interface Language";
+constexpr const char* kAudioEditingScheme = "Audio Editing Scheme";
+constexpr const char* kCorrectedF0First = "Corrected F0 First";
+constexpr const char* kNotesFirst = "Notes First";
 
 constexpr const char* kHorizontalZoomSensitivity = "Horizontal Zoom Sensitivity";
 constexpr const char* kVerticalZoomSensitivity = "Vertical Zoom Sensitivity";
 constexpr const char* kScrollSpeed = "Scroll Speed";
 constexpr const char* kResetToDefaults = "Reset to Defaults";
+constexpr const char* kRenderingPriority = "Rendering Priority";
+constexpr const char* kGpuFirst = "GPU First";
+constexpr const char* kCpuFirst = "CPU First";
 
 constexpr const char* kSetShortcut = "Set Shortcut";
 constexpr const char* kPressNewKeyCombination = "Press the new key combination";
@@ -174,6 +263,7 @@ constexpr const char* kPlay = "Play";
 constexpr const char* kPause = "Pause";
 constexpr const char* kLoop = "Loop";
 constexpr const char* kTapTempo = "Tap Tempo";
+constexpr const char* kRecord = "Record";
 constexpr const char* kTrackView = "Track View";
 constexpr const char* kPianoRollView = "Piano Roll View";
 
@@ -188,6 +278,34 @@ constexpr const char* kMouseSelectTool = "Mouse Select Tool";
 constexpr const char* kDrawNoteTool = "Draw Note Tool";
 constexpr const char* kLineAnchorTool = "Line Anchor Tool";
 constexpr const char* kHandDrawTool = "Hand Draw Tool";
+
+// Tooltip descriptions (with shortcuts where applicable)
+constexpr const char* kTooltipPlay = "Play";
+constexpr const char* kTooltipPause = "Pause";
+constexpr const char* kTooltipStop = "Stop";
+constexpr const char* kTooltipLoop = "Loop";
+constexpr const char* kTooltipRecord = "Read Audio";
+constexpr const char* kTooltipTrackView = "Track View";
+constexpr const char* kTooltipPianoRollView = "Piano Roll View";
+constexpr const char* kTooltipTapTempo = "Tap Tempo";
+constexpr const char* kTooltipFile = "File Menu";
+constexpr const char* kTooltipEdit = "Edit Menu";
+constexpr const char* kTooltipView = "View Menu";
+constexpr const char* kTooltipAutoTune = "Auto Correction";
+constexpr const char* kTooltipSelect = "Selection Tool";
+constexpr const char* kTooltipDrawNote = "Draw Note";
+constexpr const char* kTooltipLineAnchor = "Line Anchor";
+constexpr const char* kTooltipHandDraw = "Hand Draw Pitch";
+constexpr const char* kTooltipTrackPanel = "Track Panel";
+constexpr const char* kTooltipParameterPanel = "Parameter Panel";
+constexpr const char* kTooltipBpm = "Tempo (BPM)";
+constexpr const char* kTooltipTimeline = "Playback Time";
+constexpr const char* kTooltipScrollMode = "Scroll Mode";
+constexpr const char* kTooltipTimeUnit = "Time Unit";
+constexpr const char* kTooltipRetuneSpeed = "Retune Speed - Controls how fast pitch is corrected";
+constexpr const char* kTooltipVibratoDepth = "Vibrato Depth - Controls vibrato amplitude";
+constexpr const char* kTooltipVibratoRate = "Vibrato Rate - Controls vibrato speed";
+constexpr const char* kTooltipNoteSplit = "Note Split - Threshold for splitting notes";
 
 }
 
@@ -218,13 +336,13 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kRedo, "Redo", "重做", "やり直す", "Повтор", "Rehacer" },
         
         { Keys::kShowWaveform, "Show Waveform", "显示波形", "波形を表示", "Волновая форма", "Ver forma de onda" },
-        { Keys::kShowLanes, "Show Lanes", "显示音道", "レーンを表示", "Дорожки", "Ver carriles" },
-        { Keys::kNoteNames, "Note Names", "音名", "ノート名", "Названия нот", "Nombres de notas" },
-        { Keys::kShowAllNotes, "Show All Notes", "显示全部音名", "すべてのノート名を表示", "Все ноты", "Mostrar todas" },
-        { Keys::kShowCOnly, "Show C Only", "仅显示C", "Cのみ表示", "Только C", "Solo C" },
-        { Keys::kHideNoteNames, "Hide Note Names", "不显示音名", "ノート名を非表示", "Скрыть", "Ocultar nombres" },
-        { Keys::kShowChunkBoundaries, "Show Chunk Boundaries", "显示Chunk边界", "チャンク境界を表示", "Границы чанков", "Límites de chunk" },
-        { Keys::kShowUnvoicedFrames, "Show Unvoiced Frames", "显示无声帧", "無声フレームを表示", "Безголосые кадры", "Marcos sin voz" },
+        { Keys::kShowLanes, "Show Lanes", "显示琴键", "レーンを表示", "Дорожки", "Ver carriles" },
+        { Keys::kNoteLabels, "Note Labels", "音名标签", "音名ラベル", "Названия нот", "Etiquetas de notas" },
+        { Keys::kNoteLabelsShowAll, "Show All", "全部显示", "全表示", "Показывать все", "Mostrar todo" },
+        { Keys::kNoteLabelsCOnly, "C Only", "仅 C", "C のみ", "Только C", "Solo C" },
+        { Keys::kNoteLabelsHide, "Hide", "隐藏", "非表示", "Скрыть", "Ocultar" },
+        { Keys::kShowChunkBoundaries, "Show Chunk Boundaries", "显示分块边界", "チャンク境界を表示", "Показывать границы чанков", "Mostrar limites de bloques" },
+        { Keys::kShowUnvoicedFrames, "Show Unvoiced Frames", "显示无声音帧", "無声音フレームを表示", "Показывать глухие кадры", "Mostrar cuadros sordos" },
         { Keys::kTheme, "Theme", "主题", "テーマ", "Тема", "Tema" },
         { Keys::kThemeBlueBreeze, "Blue Breeze", "蓝色清风", "ブルーブリーズ", "Голубой бриз", "Brisa azul" },
         { Keys::kThemeDarkBlueGrey, "Dark Blue-Grey", "深蓝灰", "ダークブルーグレー", "Тёмно-синий серый", "Azul-gris oscuro" },
@@ -240,15 +358,22 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kMatrix, "Matrix", "矩阵", "マトリックス", "Матрица", "Matriz" },
         
         { Keys::kAudio, "Audio", "音频", "オーディオ", "Аудио", "Audio" },
+        { Keys::kEditing, "Editing", "编辑", "編集", "Редактирование", "Edicion" },
         { Keys::kMouse, "Mouse", "鼠标", "マウス", "Мышь", "Ratón" },
         { Keys::kKeyswitch, "Keyswitch", "快捷键", "キースイッチ", "Клавиши", "Atajos" },
         { Keys::kLanguage, "Language", "语言", "言語", "Язык", "Idioma" },
         { Keys::kLanguageLabel, "Interface Language", "界面语言", "インターフェース言語", "Язык", "Idioma" },
+        { Keys::kAudioEditingScheme, "Audio Editing Scheme", "音频编辑方案", "音声編集方式", "Схема аудиоредактирования", "Esquema de edicion de audio" },
+        { Keys::kCorrectedF0First, "曲线优先编辑", "曲线优先编辑", "曲线优先编辑", "曲线优先编辑", "曲线优先编辑" },
+        { Keys::kNotesFirst, "音符优先编辑", "音符优先编辑", "音符优先编辑", "音符优先编辑", "音符优先编辑" },
         
         { Keys::kHorizontalZoomSensitivity, "Horizontal Zoom Sensitivity", "水平缩放灵敏度", "水平ズーム感度", "Чувств. гориз. zoom", "Sensibilidad zoom horizontal" },
         { Keys::kVerticalZoomSensitivity, "Vertical Zoom Sensitivity", "垂直缩放灵敏度", "垂直ズーム感度", "Чувств. верт. zoom", "Sensibilidad zoom vertical" },
         { Keys::kScrollSpeed, "Scroll Speed", "滚动速度", "スクロール速度", "Скорость прокрутки", "Velocidad" },
         { Keys::kResetToDefaults, "Reset to Defaults", "恢复默认设置", "デフォルトに戻す", "Сбросить", "Restablecer" },
+        { Keys::kRenderingPriority, "Rendering Priority", "渲染优先级", "レンダリング優先度", "Приоритет рендеринга", "Prioridad de renderizado" },
+        { Keys::kGpuFirst, "GPU First", "GPU 优先", "GPU 優先", "GPU приоритет", "GPU primero" },
+        { Keys::kCpuFirst, "CPU First", "CPU 优先", "CPU 優先", "CPU приоритет", "CPU primero" },
         
         { Keys::kSetShortcut, "Set Shortcut", "设置快捷键", "ショートカットを設定", "Назначить сочетание", "Atajo" },
         { Keys::kPressNewKeyCombination, "Press the new key combination", "按下新的组合键", "新しいキーの組み合わせを押してください", "Нажмите сочетание", "Pulse combinación" },
@@ -285,6 +410,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kPause, "Pause", "暂停", "一時停止", "Пауза", "Pausar" },
         { Keys::kLoop, "Loop", "循环", "ループ", "Цикл", "Bucle" },
         { Keys::kTapTempo, "Tap Tempo", "敲击节拍", "タップテンポ", "Тап темп", "Tap tempo" },
+        { Keys::kRecord, "Record", "读取音频", "読み込み", "Загрузить", "Cargar" },
         { Keys::kTrackView, "Track View", "轨道视图", "トラックビュー", "Вид дорожки", "Vista pista" },
         { Keys::kPianoRollView, "Piano Roll View", "钢琴卷帘视图", "ピアノロールビュー", "Вид пиано-ролла", "Vista piano" },
         
@@ -299,6 +425,33 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kDrawNoteTool, "Draw Note Tool", "绘制音符工具", "ノート描画ツール", "Рисование нот", "Herram. dibujo" },
         { Keys::kLineAnchorTool, "Line Anchor Tool", "锚点工具", "ラインアンカーツール", "Инструмент якоря", "Herram. ancla" },
         { Keys::kHandDrawTool, "Hand Draw Tool", "手绘工具", "手描きツール", "Рисование", "Herram. libre" },
+
+        { Keys::kTooltipPlay, "Play", "播放", "再生", "Воспроизведение", "Reproducir" },
+        { Keys::kTooltipPause, "Pause", "暂停", "一時停止", "Пауза", "Pausar" },
+        { Keys::kTooltipStop, "Stop", "停止", "停止", "Стоп", "Detener" },
+        { Keys::kTooltipLoop, "Loop", "循环", "ループ", "Цикл", "Bucle" },
+        { Keys::kTooltipRecord, "Read Audio", "读取音频", "オーディオ読み込み", "Загрузить аудио", "Leer audio" },
+        { Keys::kTooltipTrackView, "Track View", "轨道视图", "トラックビュー", "Вид дорожек", "Vista de pistas" },
+        { Keys::kTooltipPianoRollView, "Piano Roll View", "钢琴卷帘视图", "ピアノロールビュー", "Пианоролл", "Vista piano roll" },
+        { Keys::kTooltipTapTempo, "Tap Tempo", "敲击节拍", "タップテンポ", "Тап-темп", "Tap tempo" },
+        { Keys::kTooltipFile, "File Menu", "文件菜单", "ファイルメニュー", "Меню Файл", "Menú Archivo" },
+        { Keys::kTooltipEdit, "Edit Menu", "编辑菜单", "編集メニュー", "Меню Правка", "Menú Editar" },
+        { Keys::kTooltipView, "View Menu", "视图菜单", "表示メニュー", "Меню Вид", "Menú Ver" },
+        { Keys::kTooltipAutoTune, "Auto Correction", "自动校正", "オート補正", "Автокоррекция", "Corrección auto" },
+        { Keys::kTooltipSelect, "Selection Tool", "选择工具", "選択ツール", "Инструмент выбора", "Herramienta de selección" },
+        { Keys::kTooltipDrawNote, "Draw Note", "绘制音符", "ノート描画", "Рисование нот", "Dibujar nota" },
+        { Keys::kTooltipLineAnchor, "Line Anchor", "锚点工具", "ラインアンカー", "Линейный якорь", "Ancla de línea" },
+        { Keys::kTooltipHandDraw, "Hand Draw Pitch", "手绘音高", "手描きピッチ", "Рисование тона", "Dibujar tono" },
+        { Keys::kTooltipTrackPanel, "Track Panel", "轨道面板", "トラックパネル", "Панель дорожек", "Panel de pistas" },
+        { Keys::kTooltipParameterPanel, "Parameter Panel", "参数面板", "パラメータパネル", "Панель параметров", "Panel de parámetros" },
+        { Keys::kTooltipBpm, "Tempo (BPM)", "节拍速度 (BPM)", "テンポ (BPM)", "Темп (BPM)", "Tempo (BPM)" },
+        { Keys::kTooltipTimeline, "Playback Time", "播放时间", "再生時間", "Время воспроизведения", "Tiempo de reproducción" },
+        { Keys::kTooltipScrollMode, "Scroll Mode - Toggle between Continuous and Page scroll", "滚动模式 - 切换连续/翻页滚动", "スクロールモード - 連続/ページ切替", "Режим прокрутки - непрерывная/постраничная", "Modo desplazamiento - Continuo/Página" },
+        { Keys::kTooltipTimeUnit, "Time Unit - Toggle between Seconds and Bars", "时间单位 - 切换秒/小节显示", "時間単位 - 秒/小節を切替", "Единица времени - секунды/такты", "Unidad de tiempo - Segundos/Compases" },
+        { Keys::kTooltipRetuneSpeed, "Retune Speed - Controls how fast pitch is corrected", "校正速度 - 控制音高校正的速度", "チューン速度 - ピッチ補正の速度を制御", "Скорость коррекции - насколько быстро корректируется тон", "Vel. afinación - Controla la rapidez de corrección" },
+        { Keys::kTooltipVibratoDepth, "Vibrato Depth - Controls vibrato amplitude", "颤音深度 - 控制颤音幅度", "ビブラート深さ - ビブラートの振幅を制御", "Глубина вибрато - амплитуда вибрато", "Prof. vibrato - Controla la amplitud" },
+        { Keys::kTooltipVibratoRate, "Vibrato Rate - Controls vibrato speed", "颤音速率 - 控制颤音频率", "ビブラート速度 - ビブラートの速さを制御", "Скорость вибрато - частота вибрато", "Tasa vibrato - Controla la velocidad" },
+        { Keys::kTooltipNoteSplit, "Note Split - Threshold for splitting notes", "音符分割 - 控制音符分割阈值", "ノート分割 - ノート分割の閾値を制御", "Разделение нот - порог разделения", "Div. notas - Umbral de división" },
     };
     
     for (const auto& t : translations)
@@ -322,7 +475,7 @@ inline juce::String get(Language lang, const char* key)
 
 inline juce::String get(const char* key)
 {
-    return get(LocalizationManager::getInstance().getLanguage(), key);
+    return get(LocalizationManager::getInstance().resolveLanguage(), key);
 }
 
 inline juce::String format(const juce::String& pattern, const juce::String& arg0)
@@ -339,6 +492,6 @@ inline juce::String format(const juce::String& pattern, const juce::String& arg0
 
 #define LOC(key) OpenTune::Loc::get(OpenTune::Loc::Keys::key)
 #define LOC_KEY(key) OpenTune::Loc::get(key)
-#define LOC_RAW(key) OpenTune::Loc::get(OpenTune::LocalizationManager::getInstance().getLanguage(), key)
+#define LOC_RAW(key) OpenTune::Loc::get(OpenTune::LocalizationManager::getInstance().resolveLanguage(), key)
 
 }
