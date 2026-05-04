@@ -1,6 +1,6 @@
 # Milestones
 
-## Active Mainline: v2.4 PianoRoll Undo/Redo + Async Correction + Playhead Isolation
+## Active Mainline: v1.5 PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 
 - **Name:** PianoRoll 编辑体验增强
 - **Status:** Active
@@ -19,11 +19,11 @@
 
 ---
 
-## v2.3 Source/Materialization/Placement persisted truth (Shipped/Frozen: 2026-04-25)
+## v1.4 Source/Materialization/Placement persisted truth (Shipped/Frozen: 2026-04-25)
 
-- **Phase range:** post-v2.2 structure docs + Task 9-12 execution + ARA repair + F0Timeline
+- **Phase range:** post-v1.3.2 structure docs + Task 9-12 execution + ARA repair + F0Timeline
 - **Timeline:** 2026-04-17 -> 2026-04-25
-- **Archives:** `.planning/milestones/v2.3-ROADMAP.md`
+- **Archives:** `.planning/milestones/v1.4-ROADMAP.md`
 
 **Key accomplishments:**
 
@@ -39,22 +39,22 @@
 
 ---
 
-## v2.2 ARA2 线程模型与快照架构收敛 (Shipped: 2026-04-16)
+## v1.3.2 ARA2 线程模型与快照架构收敛 (Shipped: 2026-04-16)
 
 - **Phase range:** 23-26
 - **Plans completed:** 13
 - **Tasks completed:** 30
 - **Related commits:** 40
 - **Timeline:** 2026-04-16 11:14 +0800 -> 2026-04-16 18:18 +0800
-- **Archives:** `.planning/milestones/v2.2-ROADMAP.md`, `.planning/milestones/v2.2-REQUIREMENTS.md`, `.planning/milestones/v2.2-AUDIT.md`
+- **Archives:** `.planning/milestones/v1.3.2-ROADMAP.md`, `.planning/milestones/v1.3.2-REQUIREMENTS.md`, `.planning/milestones/v1.3.2-AUDIT.md`
 
 **Key accomplishments:**
 
-- `v2.2` 交付了 `mutable model + immutable published snapshot` 这条结构主线；当前 live tree 又进一步把这套真相沉到 `VST3AraSession`，但 region-level publication 语义仍然保留。
+- `v1.3.2` 交付了 `mutable model + immutable published snapshot` 这条结构主线；当前 live tree 又进一步把这套真相沉到 `VST3AraSession`，但 region-level publication 语义仍然保留。
 - sample access、content dirty、snapshot publish 和 stale-truth purge 全部回到了 callback-driven 生命周期，不再依赖 eager read 或 retry 猜测。
 - `OpenTunePlaybackRenderer` 与 VST3 `PluginEditor` 现在都只消费 snapshot / epoch / preferred-region truth，旧 getter 拼装模型已经退出读侧。
 - `AudioSourceState`、source-level helper、binding/retry 残留都已删除，shared `OpenTuneAudioProcessor` 边界和 Standalone UI 隔离没有被扩张或污染。
-- `v2.2` 发版时曾围绕 `SNAP_* / LIFE_* / CONS_* / CLEAN_*` 建立过一套 phase guard 叙事；这些资产现已不保留在 live tree，且因信号质量有限，不再被视为当前主线必须恢复的 baseline。
+- `v1.3.2` 发版时曾围绕 `SNAP_* / LIFE_* / CONS_* / CLEAN_*` 建立过一套 phase guard 叙事；这些资产现已不保留在 live tree，且因信号质量有限，不再被视为当前主线必须恢复的 baseline。
 
 ---
 

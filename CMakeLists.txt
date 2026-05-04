@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.22)
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.0.0 LANGUAGES CXX C)
+project(OpenTune VERSION 1.5.0 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

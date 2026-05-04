@@ -1,11 +1,11 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.4
+milestone: v1.5
 milestone_name: PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 status: active
-stopped_at: v2.4 活跃开发 + .planning 文档同步完成
+stopped_at: v1.5 活跃开发 + .planning 文档同步完成
 last_updated: "2026-05-05"
-last_activity: 2026-05-05 -- Synchronized .planning docs with live tree. Updated all codebase memory docs (STRUCTURE/TESTING/ARCHITECTURE/STACK/INTEGRATIONS/CONVENTIONS/CONCERNS) to reflect current source state. Deleted stale VST3Merge.md. Corrected test suite count from 4 to 6 (added undo, memory). Removed deleted Host/ directory and ScaleInference references. Updated shipped milestone to v2.3.
+last_activity: 2026-05-05 -- Synchronized .planning docs with live tree. Updated all codebase memory docs (STRUCTURE/TESTING/ARCHITECTURE/STACK/INTEGRATIONS/CONVENTIONS/CONCERNS) to reflect current source state. Deleted stale VST3Merge.md. Corrected test suite count from 4 to 6 (added undo, memory). Removed deleted Host/ directory and ScaleInference references. Updated shipped milestone to v1.4.
 progress:
   total_phases: 0
   completed_phases: 0
@@ -21,15 +21,15 @@ progress:
 See: `.planning/PROJECT.md` and `.planning/REQUIREMENTS.md` (updated 2026-05-05)
 
 **Core value:** 双格式独立编译，零交叉影响
-**Current focus:** `v2.4` PianoRoll 编辑体验增强 — 自定义 Undo/Redo、异步修正工作器、播放头独立组件、渲染状态徽章
+**Current focus:** `v1.5` PianoRoll 编辑体验增强 — 自定义 Undo/Redo、异步修正工作器、播放头独立组件、渲染状态徽章
 **Test Strategy:** `OpenTuneTests` 轻量 smoke suites + manual DAW journeys + `AppLogger` / targeted trace
 
 ## Current Position
 
-Milestone: `v2.4` — PianoRoll Undo/Redo + Async Correction + Playhead Isolation
+Milestone: `v1.5` — PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 Phase: 基础架构已落地，功能集成中
 Plan sources:
-- (承继 v2.3 全部 plan sources)
+- (承继 v1.4 全部 plan sources)
 - 2026-04-30 自定义 UndoManager + PianoRollEditAction
 - 2026-04-30 PianoRollCorrectionWorker 异步修正
 - 2026-04-30 PlayheadOverlayComponent 独立化
@@ -42,8 +42,8 @@ Last activity: 2026-05-05 -- Synchronized .planning docs with live tree; all cod
 
 ## Performance Metrics
 
-- Last shipped milestone: `v2.3` (Source/Materialization/Placement persisted truth — frozen, considered shipped)
-- Active milestone: `v2.4` PianoRoll Undo/Redo + Async Correction + Playhead Isolation
+- Last shipped milestone: `v1.4` (Source/Materialization/Placement persisted truth — frozen, considered shipped)
+- Active milestone: `v1.5` PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 - Current workspace: active development
 - Verification: 三目标（OpenTuneTests/Standalone/VST3）构建全部 PASS
 
@@ -99,15 +99,15 @@ Last activity: 2026-05-05 -- Synchronized .planning docs with live tree; all cod
 - **后续独立 Task（非阻塞）**：F3 SourceStore hydration 迁移（需锁序设计）、F5 reclaim registry 双格式统一（可选）。
 - 在合适时机补 Standalone / VST3 undo result-chain 的手工旅程确认。
 - 在有 macOS 环境时补一轮真实 `.app` bundle inspection。
-- **v2.4 待完成**：确认三目标构建通过；Undo/Redo 边界测试（undo 到空栈、redo 裁剪、500 层溢出）；CorrectionWorker 取消/覆盖语义验证。
+- **v1.5 待完成**：确认三目标构建通过；Undo/Redo 边界测试（undo 到空栈、redo 裁剪、500 层溢出）；CorrectionWorker 取消/覆盖语义验证。
 
 ### Blockers/Concerns
 
-- 当前无硬阻塞。v2.3 manual verification gaps 已降级为非阻塞 deferred items。
+- 当前无硬阻塞。v1.4 manual verification gaps 已降级为非阻塞 deferred items。
 
 ## Session Continuity
 
 Last session: 2026-05-05
 Stopped at: .planning 文档全量同步完成；三目标构建通过；40/40+ 测试 PASS
 Resume file: N/A
-Next step: 继续 v2.4 PianoRoll 编辑功能集成；补充 Undo/Redo 边界测试
+Next step: 继续 v1.5 PianoRoll 编辑功能集成；补充 Undo/Redo 边界测试
