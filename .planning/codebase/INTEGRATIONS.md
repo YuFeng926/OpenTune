@@ -1,409 +1,100 @@
 # External Integrations
 
-**Generated:** 2026-04-02
-**Project:** OpenTune - AI Pitch Correction Application
-
-## ML/AI Inference
-
-### ONNX Runtime Integration
-
-**SDK:** `onnxruntime_cxx_api.h` (C++ API)
-**Version:** 1.24.4
-**API Version:** 24
-**Locations:** 
-- CPU build: `onnxruntime-win-x64-1.24.4/`
-- DirectML build: `onnxruntime-dml-1.24.4/`
-
-**Purpose:** Neural network inference for pitch extraction and audio synthesis
-
-**Key Components:**
-| Component | File | Purpose |
-|-----------|------|---------|
-| RMVPEExtractor | `Source/Inference/RMVPEExtractor.cpp` | F0 pitch extraction from audio |
-| DmlVocoder | `Source/Inference/DmlVocoder.cpp` | Neural vocoder using DirectML GPU |
-| VocoderFactory | `Source/Inference/VocoderFactory.cpp` | Creates vocoder instances |
-| ModelFactory | `Source/Inference/ModelFactory.cpp` | Creates ONNX sessions |
-| F0InferenceService | `Source/Inference/F0InferenceService.cpp` | Service layer for F0 extraction |
-| VocoderInferenceService | `Source/Inference/VocoderInferenceService.cpp` | Service layer for vocoding |
-
-**Execution Providers:**
-| Provider | Priority | Configuration |
-|----------|----------|---------------|
-| DirectML | First (if GPU available) | GPU memory limit at 60% VRAM |
-| CPU | Fallback | Thread count from CpuBudgetManager |
-
-**Session Creation Pattern:**
-```cpp
-// From DmlVocoder.cpp
-Ort::SessionOptions sessionOptions;
-sessionOptions.SetIntraOpNumThreads(1);
-sessionOptions.SetGraphOptimizationLevel(
-    GraphOptimizationLevel::ORT_ENABLE_ALL);
-
-// DirectML provider configuration
-OrtDmlApiOptions dmlOptions;
-dmlOptions.device_id = config.deviceId;
-Ort::GetApi().AddExecutionProvider_Dml(sessionOptions, &dmlOptions);
-
-session_ = std::make_unique<Ort::Session>(env, modelPath.c_str(), sessionOptions);
-```
-
-**Model Loading:**
-- Models loaded from `<exe_dir>/models/`
-- HifiGAN: `models/hifigan.onnx` (54 MB)
-- RMVPE: `models/rmvpe.onnx` (345 MB)
-- Delay-load hook: `Source/Utils/OnnxRuntimeDelayLoadHook.cpp`
-- Manual initialization via `ORT_API_MANUAL_INIT` definition
-
-**ONNX Runtime Headers:**
-- `onnxruntime_cxx_api.h` - Core C++ API
-- `dml_provider_factory.h` - DirectML GPU provider
-- `onnxruntime_float16.h` - Float16 support
-
-## GPU Hardware Integration
-
-### DirectML (Windows)
-
-**NuGet Package:** `Microsoft.AI.DirectML` 1.15.4
-**Detection:** `Source/Utils/GpuDetector.cpp`
-**Verification:** `Source/Utils/DmlRuntimeVerifier.cpp`
-
-**NuGet Download (CMake):**
-```cmake
-# From CMakeLists.txt:53-80
-function(opentune_fetch_nuget_package package_id package_version out_dir)
-    set(download_url "https://api.nuget.org/v3-flatcontainer/${package_id_lower}/${version}/${nupkg}")
-    file(DOWNLOAD "${download_url}" "${nupkg_path}" ...)
-    file(ARCHIVE_EXTRACT INPUT "${nupkg_path}" DESTINATION "${package_dir}")
-endfunction()
-
-opentune_fetch_nuget_package("Microsoft.AI.DirectML" "1.15.4" OPENTUNE_DIRECTML_ROOT)
-```
-
-**DML Configuration (DmlConfig.h):**
-```cpp
-struct DmlConfig {
-    int deviceId = 0;
-    int performancePreference = 1;  // 0=Default, 1=HighPerformance, 2=MinimumPower
-    int deviceFilter = 1;           // 1=Gpu (OrtDmlDeviceFilter::Gpu)
-};
-```
-
-**GPU Detection Logic:**
-```cpp
-// Check DLL size (DirectML version >= 12MB)
-const int64_t dmlDllMinSize = 12 * 1024 * 1024;
-
-// Enumerate GPUs via DXGI
-Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
-CreateDXGIFactory1(__uuidof(IDXGIFactory1), &factory);
-
-// Enumerate adapters
-for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
-    DXGI_ADAPTER_DESC1 desc;
-    adapter->GetDesc1(&desc);
-    // Check vendor: NVIDIA (0x10DE), AMD (0x1002), Intel (0x8086)
-}
-```
-
-**GPU Selection Priority:**
-1. Discrete GPU (NVIDIA, AMD, Intel Arc)
-2. Integrated GPU with sufficient memory
-3. CPU fallback
-
-**Memory Configuration:**
-```cpp
-std::unordered_map<std::string, std::string> dmlOptions;
-dmlOptions["device_id"] = std::to_string(gpu.getDirectMLDeviceId());
-dmlOptions["gpu_mem_limit"] = std::to_string(gpuMemLimit);
-sessionOptions.AppendExecutionProvider("DML", dmlOptions);
-```
-
-**GPU Requirements:**
-- DirectX 12 capable GPU
-- Minimum 512MB effective VRAM
-- Latest GPU drivers
-
-**DirectX Agility SDK:**
-- NuGet Package: `Microsoft.Direct3D.D3D12` 1.619.1
-- SDK Version Token: 619 (compiled into app)
-- Bootstrap: `Source/Utils/D3D12AgilityBootstrap.cpp`
-- Deployed files:
-  - `D3D12/D3D12Core.dll`
-  - `D3D12/D3D12SDKLayers.dll`
-
-**DirectX Libraries Linked:**
-- `d3d12.lib` - Direct3D 12 API
-- `dxgi.lib` - DirectX Graphics Infrastructure
-- `version.lib` - Windows version API
-
-## Audio System Integration
-
-### JUCE Audio Framework
-
-**Audio Device Management:**
-- `juce::AudioDeviceManager` - Device enumeration and configuration
-- ASIO support enabled (`JUCE_ASIO=1`)
-- Sample rates: 44.1kHz to 192kHz supported
-- Buffer sizes: Configurable via audio settings dialog
-
-**Audio Processing:**
-- `OpenTuneAudioProcessor` extends `juce::AudioProcessor` (`Source/PluginProcessor.h:67`)
-- Supports mono and stereo input
-- Double-precision processing support (`supportsDoublePrecisionProcessing()`)
-- Real-time safe audio callback (`processBlock()`)
-
-**DSP Primitives from JUCE:**
-| Class | Purpose | Usage Location |
-|-------|---------|----------------|
-| `juce::dsp::FFT` | FFT operations | `Source/DSP/MelSpectrogram.cpp` |
-| `juce::dsp::WindowingFunction<float>` | Windowing | `Source/DSP/MelSpectrogram.cpp` |
-| `juce::LagrangeInterpolator` | Interpolation | Export resampling |
-
-### r8brain Audio Resampling
-
-**Library:** r8brain-free-src
-**Location:** `ThirdParty/r8brain-free-src-master/`
-**License:** MIT
-**Author:** Aleksey Vaneev (Voxengo)
-
-**Purpose:** Professional-grade sample rate conversion
-
-**Key Classes:**
-| Class | Purpose |
-|-------|---------|
-| `r8b::CDSPResampler` | Base resampler class |
-| `CDSPBlockConvolver` | FFT-based convolution |
-| `CDSPRealFFT` | Real FFT implementation |
-
-**Integration:** `Source/DSP/ResamplingManager.cpp`
-```cpp
-// Downsample to 16kHz for RMVPE
-r8b::CDSPResampler resampler(sourceRate, 16000, inputLength);
-resampler.oneshot(input, inputLength, output, outputLength);
-```
-
-**Key Operations:**
-- Downsample to 16kHz for RMVPE inference
-- Upsample rendered audio to device sample rate
-- Convert between F0 frame rate and audio sample rate
-
-## UI Framework Integration
-
-### JUCE GUI Components
-
-**Rendering:** OpenGL via `juce_opengl` module
-
-**Custom LookAndFeel Implementations:**
-| File | Theme |
-|------|-------|
-| `Source/Standalone/UI/OpenTuneLookAndFeel.h` | Base theme interface |
-| `Source/Standalone/UI/BlueBreezeLookAndFeel.cpp` | Blue breeze theme |
-| `Source/Standalone/UI/DarkBlueGreyLookAndFeel.cpp` | Dark blue-grey theme |
-| `Source/Standalone/UI/AuroraLookAndFeel.cpp` | Aurora theme |
-
-**Font Integration:**
-- Custom font: `Resources/Fonts/HONORSansCN-Medium.ttf` (7.7 MB)
-- Loaded via JUCE binary data system (`juce_add_binary_data`)
-- Font embedded in executable
-
-**Key UI Components:**
-| Component | File | Purpose |
-|-----------|------|---------|
-| MainControlPanel | `Source/Standalone/UI/MainControlPanel.cpp` | Main control interface |
-| PianoRollComponent | `Source/Standalone/UI/PianoRollComponent.cpp` | Pitch correction editing |
-| TimelineComponent | `Source/Standalone/UI/TimelineComponent.cpp` | Timeline display |
-| TrackPanelComponent | `Source/Standalone/UI/TrackPanelComponent.cpp` | Multi-track panel |
-| TransportBarComponent | `Source/Standalone/UI/TransportBarComponent.cpp` | Play/stop controls |
-
-## DSP Processing
-
-### FFT Integration
-- PFFFT (Pretty Fast FFT) from r8brain
-- SIMD optimizations: SSE2, AVX, AVX-512, NEON
-- Location: `ThirdParty/r8brain-free-src-master/fft/pffft_double.c`
-
-### Mel Spectrogram
-- Implementation: `Source/DSP/MelSpectrogram.cpp`
-- Used for: Vocoder input feature extraction
-- Parameters: 128 mel bins, 512 hop size, 2048 FFT size
-- Uses JUCE FFT and windowing functions
-
-**Mel Spectrogram Configuration:**
-```cpp
-// From MelSpectrogram.h
-struct MelSpectrogramConfig {
-    int sampleRate = 44100;
-    int nFft = 2048;
-    int winLength = 2048;
-    int hopLength = 512;
-    int nMels = 128;
-    float fMin = 40.0f;
-    float fMax = 16000.0f;
-};
-```
-
-### Scale Inference
-- Implementation: `Source/DSP/ScaleInference.cpp`
-- Purpose: Musical key detection from F0 curve
-
-## External Model Sources
-
-**AI Model Dependencies:**
-| Model | Source | License | Purpose |
-|-------|--------|---------|---------|
-| RMVPE | [yxlllc/RMVPE](https://github.com/yxlllc/RMVPE) | MIT | Pitch extraction |
-| PC-NSF-HiFiGAN | [openvpi/vocoders](https://github.com/openvpi/vocoders) | MIT | Neural vocoding |
-
-**Model File Structure:**
-```
-models/
-├── hifigan.onnx                    # Neural vocoder (from pc_nsf_hifigan_44.1k_ONNX/)
-├── rmvpe.onnx                      # Pitch extraction
-├── NOTICE.txt                      # License notices
-├── NOTICE.zh-CN.txt                # Chinese license notices
-└── STATEMENTS.txt                  # Dependency statements
-```
-
-**Model Specifications:**
-
-RMVPE Model:
-- Input: Waveform `[1, num_samples]` at 16 kHz, Threshold `[1]`
-- Output: F0 `[1, num_frames]`, UV `[1, num_frames]`
-- Hop size: 160 samples (10ms frames)
-- Sample rate: 16kHz
-
-PC-NSF-HiFiGAN Model:
-- Input: Mel spectrogram, F0 contour
-- Output: Audio waveform at 44.1 kHz
-- Hop size: 512 samples (~11.6ms frames)
-- Mel bins: 128
-
-## System Integration
-
-### Windows DLL Search Path
-- Custom DLL search path handling: `Source/Utils/WindowsDllSearchPath.cpp`
-- Ensures ONNX Runtime DLLs are found correctly
-- Delay-load configuration in CMakeLists.txt:304
-
-### CPU Feature Detection
-| Component | File | Purpose |
-|-----------|------|---------|
-| CpuFeatures | `Source/Utils/CpuFeatures.cpp` | Detect AVX, AVX2, AVX-512, SSE2 |
-| CpuBudgetManager | `Source/Utils/CpuBudgetManager.cpp` | Allocate threads for ONNX |
-| SimdAccelerator | `Source/Utils/SimdAccelerator.cpp` | SIMD-accelerated operations |
-
-### Performance Monitoring
-- Implementation: `Source/Utils/AppLogger.cpp`
-- Audio callback timing histogram
-- Cache hit/miss tracking
-- Render queue depth monitoring
-
-**Performance Probes in PluginProcessor:**
-```cpp
-// From PluginProcessor.h
-struct PerfProbeSnapshot {
-    double audioCallbackP99Ms{0.0};
-    double cacheMissRate{0.0};
-    int renderQueueDepth{0};
-    uint64_t cacheChecks{0};
-    uint64_t cacheMisses{0};
-};
-```
-
-## File Formats
-
-### Input Formats (Audio Import)
-| Format | Extension | Compile Flag | Implementation |
-|--------|-----------|--------------|----------------|
-| WAV | .wav | `JUCE_USE_WINDOWS_MEDIA_FORMAT=1` | JUCE |
-| FLAC | .flac | `JUCE_USE_FLAC=1` | JUCE |
-| OGG Vorbis | .ogg | `JUCE_USE_OGGVORBIS=1` | JUCE |
-| MP3 | .mp3 | `JUCE_USE_MP3AUDIOFORMAT=1` | JUCE |
-
-### Output Format (Audio Export)
-| Format | Extension | Sample Rate | Bit Depth |
-|--------|-----------|-------------|-----------|
-| WAV | .wav | 44.1kHz | 32-bit float |
-
-### Project Format
-- State serialized via `juce::ValueTree`
-- XML-based binary encoding
-- Stores: pitch curves, correction segments, BPM, zoom level, track state
-
-## Test Infrastructure
-
-**CTest Integration:**
-- Test executable: `OpenTuneTests`
-- Unit tests for core components
-- Uses `juce::juce_core` and `juce::juce_audio_basics` only
-
-**Test File:** `Tests/TestMain.cpp`
-
-**Build Option:** `OPENTUNE_BUILD_TESTS` (default ON)
-
-## No External Network Services
-
-**No External APIs:**
-- No HTTP/HTTPS calls
-- No cloud services integration
-- All processing is local/offline
-
-**No External Authentication:**
-- No OAuth or API key requirements
-- No user accounts or cloud sync
-
-**No Payment Processing:**
-- Not applicable (open-source desktop application)
-
-**No External Database:**
-- Uses local filesystem only
-- Presets stored in user preferences (JUCE PropertiesFile)
-
-**Communication Channels:**
-- No email integration
-- No SMS/notification services
-- No webhooks
-- No telemetry/analytics
-
-## Configuration Files
-
-**Model Configuration:**
-- Original hifigan model: `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx`
-
-**Application Configuration:**
-- Runtime settings via JUCE PropertiesFile (user-specific)
-- Compile-time definitions:
-  - `OPENTUNE_VERSION` - Application version string
-  - `OPENTUNE_D3D12_AGILITY_SDK_VERSION` - DirectX Agility SDK version token
-  - `ORT_API_MANUAL_INIT` - Manual ONNX Runtime initialization
-
-## Runtime DLLs
-
-**Deployed to executable directory:**
-
-| DLL | Source | Purpose |
-|-----|--------|---------|
-| `onnxruntime.dll` | ONNX Runtime DML 1.24.4 | Core inference (DML builtin) |
-| `DirectML.dll` | DirectML NuGet 1.15.4 | GPU ML acceleration |
-| `D3D12/D3D12Core.dll` | DirectX Agility NuGet | D3D12 runtime |
-| `D3D12/D3D12SDKLayers.dll` | DirectX Agility NuGet | D3D12 debug layers |
-
-**Delay Load Configuration:**
-- `/DELAYLOAD:onnxruntime.dll` - Delays loading until first inference
-- Hook: `Source/Utils/OnnxRuntimeDelayLoadHook.cpp`
-- DLL search path: `Source/Utils/WindowsDllSearchPath.cpp`
-
-## Future Integrations (Planned)
-
-**Plugin Formats:**
-- VST3 support planned
-- ARA2 support planned for DAW integration
-
-**Cross-Platform:**
-- macOS support planned
-- Linux support under consideration
+**Analysis Date:** 2026-04-20
+
+## APIs & External Services
+
+**Host Audio Platforms:**
+- VST3 host DAW integration is provided by JUCE VST3 client code and the plugin editor shell in `CMakeLists.txt:324`, `CMakeLists.txt:576`, `Source/Plugin/PluginEditor.cpp`.
+- ARA host integration is handled by `OpenTuneDocumentController`, `OpenTunePlaybackRenderer`, and `VST3AraSession` in `Source/ARA/OpenTuneDocumentController.cpp:188`, `Source/ARA/OpenTuneDocumentController.cpp:193`, `Source/ARA/OpenTunePlaybackRenderer.cpp`, `Source/ARA/VST3AraSession.h:21`.
+- Host playback control callbacks sent back to the DAW are `requestSetPlaybackPosition`, `requestStartPlayback`, and `requestStopPlayback` in `Source/ARA/OpenTuneDocumentController.cpp:193`, `Source/ARA/OpenTuneDocumentController.cpp:214`, `Source/ARA/OpenTuneDocumentController.cpp:235`.
+
+**Local AI Inference:**
+- ONNX Runtime sessions are created locally for F0 extraction in `Source/Inference/ModelFactory.cpp:45`, `Source/Inference/ModelFactory.cpp:181`.
+- Vocoder inference is local and processor-owned through `Source/PluginProcessor.h:37`, `Source/PluginProcessor.h:375`, `Source/PluginProcessor.cpp:786`, `Source/PluginProcessor.cpp:3077`.
+- Windows GPU probing uses ORT `GetExecutionProviderApi("DML")` via `Source/Utils/AccelerationDetector.cpp`; D3D12 Agility SDK bootstrap in `Source/Utils/D3D12AgilityBootstrap.cpp:9`.
+- macOS F0 extraction attempts CoreML execution provider attachment in `Source/Inference/ModelFactory.cpp:139`, `Source/Inference/ModelFactory.cpp:145`.
+
+**Remote Services:**
+- No HTTP client/server, webhook, socket, named-pipe, or remote telemetry integration was found under `Source/`.
+- No auth provider, token flow, or cloud backend integration was found under `Source/`.
+
+## Data Storage
+
+**Databases:**
+- None detected. No SQL/NoSQL client, ORM, or external database configuration is present in `Source/` or `CMakeLists.txt`.
+
+**Local Filesystem Storage:**
+- App preferences persist as XML `juce::PropertiesFile` data under user app-data via `Source/Utils/AppPreferences.h:39`, `Source/Utils/AppPreferences.cpp:52`, `Source/Utils/AppPreferences.cpp:365`.
+- Presets persist as `.otpreset` XML files under the user documents directory in `Source/Utils/PresetManager.cpp:5`, `Source/Utils/PresetManager.cpp:66`, `Source/Utils/PresetManager.cpp:108`.
+- Processor/project state persists as a JUCE `ValueTree` XML blob rooted at `OpenTuneState` in `Source/PluginProcessor.cpp:1518`, `Source/PluginProcessor.cpp:1608`.
+- Log files persist under `OpenTune/Logs` in user app-data, with temp-directory fallback, in `Source/Utils/AppLogger.cpp:58`, `Source/Utils/AppLogger.cpp:62`, `Source/Utils/AppLogger.cpp:68`.
+- Models are discovered from application install paths, ProgramData, module-adjacent `models/`, bundle `Resources/models`, registry, or current working directory in `Source/Utils/ModelPathResolver.h:40`, `Source/Utils/ModelPathResolver.h:71`, `Source/Utils/ModelPathResolver.h:92`, `Source/Utils/ModelPathResolver.h:99`, `Source/Utils/ModelPathResolver.h:110`.
+
+**In-Memory Caches:**
+- Content/render caching is in-process only through `Source/Inference/RenderCache.cpp`, `Source/MaterializationStore.cpp`, and processor playback read sources in `Source/PluginProcessor.h:251`.
+
+## Monitoring & Observability
+
+**Logging:**
+- Central local file logging is implemented by `AppLogger` in `Source/Utils/AppLogger.cpp:50`, `Source/Utils/AppLogger.cpp:93`.
+- Inference, DirectML probing, VST3 editor transport requests, and ARA mapping emit diagnostic logs in `Source/Inference/ModelFactory.cpp:32`, `Source/Utils/AccelerationDetector.cpp`, `Source/Plugin/PluginEditor.cpp:198`, `Source/ARA/OpenTuneDocumentController.cpp:210`, `Source/ARA/VST3AraSession.cpp:251`.
+
+**Error Tracking / Telemetry:**
+- No Sentry, Crashpad, Bugsnag, or remote telemetry integration was found in the live tree.
+
+## Deployment & Runtime Boundaries
+
+**Build Outputs:**
+- The repo builds a JUCE Standalone app and JUCE VST3 plugin from the same source base in `CMakeLists.txt:303`, `CMakeLists.txt:324`.
+- Tests build as a separate `OpenTuneTests` executable in `CMakeLists.txt:863`.
+
+**Format Isolation:**
+- Shared runtime logic stays in `Source/PluginProcessor.h` and `Source/PluginProcessor.cpp`.
+- Standalone-only editor/UI shell stays in `Source/Standalone/PluginEditor.cpp` and `Source/Standalone/PluginEditor.h`.
+- VST3-only editor/UI shell stays in `Source/Plugin/PluginEditor.cpp` and `Source/Plugin/PluginEditor.h`.
+- ARA session state is isolated to the VST3 path through `Source/ARA/VST3AraSession.h:21` and `Source/ARA/OpenTuneDocumentController.cpp:188`.
+
+**Shared Runtime Ownership:**
+- Shared processor runtime composes `SourceStore`, `MaterializationStore`, `StandaloneArrangement`, and `VST3AraSession` in `Source/PluginProcessor.h:6`, `Source/PluginProcessor.h:30`, `Source/PluginProcessor.h:31`, `Source/ARA/VST3AraSession.h:21`.
+- Serialized standalone arrangement state stores `Placement` objects with `placementId`, `contentId`, mapping revision, timeline range, and fades in `Source/PluginProcessor.cpp:1525`, `Source/PluginProcessor.cpp:1553`.
+- Serialized content state stores content-local pitch curve, notes, detected key, and original-F0 state in `Source/PluginProcessor.cpp:1583`, `Source/PluginProcessor.cpp:1590`.
+
+## Environment Configuration
+
+**Build-Time Knobs:**
+- ARA / ONNX / DirectML / D3D12 path overrides come from CMake cache variables `ARA_SDK_PATH`, `ONNXRUNTIME_ROOT`, `ONNXRUNTIME_DML_ROOT`, `OPENTUNE_DIRECTML_ROOT`, `OPENTUNE_D3D12_AGILITY_ROOT`, and `OPENTUNE_DIRECTML_DLL` in `CMakeLists.txt:39`, `CMakeLists.txt:208`, `CMakeLists.txt:241`, `CMakeLists.txt:129`, `CMakeLists.txt:138`, `CMakeLists.txt:162`.
+- Windows SDK include/lib roots are configurable through `OPENTUNE_WINDOWS_KITS_INCLUDE_ROOT` and `OPENTUNE_WINDOWS_KITS_LIB_ROOT` in `CMakeLists.txt:82`, `CMakeLists.txt:84`.
+
+**Runtime / Diagnostic Knobs:**
+- `OPENTUNE_ORT_PROFILE` enables debug ONNX profiling in `Source/Inference/ModelFactory.cpp:15`, `Source/Inference/ModelFactory.cpp:189`.
+- `OPENTUNE_SELFTEST` is read by the Standalone editor in `Source/Standalone/PluginEditor.cpp:450`.
+
+**Secrets:**
+- No `.env` files or credential files were found at the repo root.
+- No secret-bearing runtime configuration path was detected in `Source/`.
+
+## File Formats & User Data
+
+**Audio / Model Formats:**
+- Import formats are registered through JUCE audio formats in `Source/Audio/AudioFormatRegistry.cpp:171`; optional formats include FLAC, Ogg Vorbis, MP3, CoreAudio, and Windows Media where the build enables them in `Source/Audio/AudioFormatRegistry.cpp:134`, `CMakeLists.txt:626`, `CMakeLists.txt:634`.
+- Export path remains WAV-based in `Source/PluginProcessor.cpp`.
+- Model payloads are `.onnx` files: `models/rmvpe.onnx` and `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx`, packaged as `rmvpe.onnx` and `hifigan.onnx` by `CMakeLists.txt:704`, `CMakeLists.txt:705`, `CMakeLists.txt:757`, `CMakeLists.txt:779`, `CMakeLists.txt:848`.
+- Presets use `.otpreset` files in `Source/Utils/PresetManager.cpp:66` and Standalone preset UI in `Source/Standalone/PluginEditor.cpp:1863`, `Source/Standalone/PluginEditor.cpp:1909`.
+
+**App Preference Payloads:**
+- Shared persisted preference keys cover language, theme, editing scheme, piano-roll visual settings, and zoom sensitivity in `Source/Utils/AppPreferences.cpp:9`, `Source/Utils/AppPreferences.cpp:205`, `Source/Utils/AppPreferences.cpp:234`.
+- Standalone-only persisted preference keys cover shortcut bindings and mouse-trail theme in `Source/Utils/AppPreferences.cpp:18`, `Source/Utils/AppPreferences.cpp:228`.
+
+## Testing / CI Boundaries
+
+**Local Verification:**
+- `OpenTuneTests` exposes `core`, `processor`, `ui`, and `architecture` suites in `Tests/TestMain.cpp:30`.
+- CTest registers `OpenTuneCoreTests` in `CMakeLists.txt:961`, `CMakeLists.txt:963`.
+
+**CI/CD:**
+- No GitHub Actions workflow or GitLab CI config was found in the live repo.
 
 ---
 
-*Integration audit: 2026-04-01*
+*Integration audit: 2026-04-20*
