@@ -339,7 +339,6 @@ cmake --build build --config Release
 ### 开发指引
 
 - **代码风格**：C++17，JUCE 命名规范
-- **分支策略**：`main` 为稳定版，`standalone` 为开发分支
 - **提交规范**：简洁描述变更目的（中英文均可）
 - **UI 隔离**：`Source/Standalone/` 为独立版 UI，`Source/Plugin/` 为 VST3 版 UI，通过 `JucePlugin_Build_Standalone` 宏隔离
 - **Processor 共享**：`Source/PluginProcessor.*` 为两种格式共用，修改时需兼顾两个构建目标
