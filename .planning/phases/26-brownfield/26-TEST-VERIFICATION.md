@@ -100,4 +100,4 @@ This document is the verification source of truth for Phase 26. The phase is not
 - renderer and VST3 editor consumers do not regress to source-level fallback.
 - shared processor API and Standalone UI isolation boundaries remain unchanged.
 
-This verification source now serves as the single closure artifact for execute-phase, roadmap/state updates, and v2.2 brownfield milestone review.
+This verification source now serves as the single closure artifact for execute-phase, roadmap/state updates, and v1.3.2 brownfield milestone review.
