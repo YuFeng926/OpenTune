@@ -1,60 +1,14 @@
 CompileFlags:
-  Add:
-    - "-Wno-unknown-warning-option"
-    - "-Wno-error=unused-command-line-argument"
-    - "--driver-mode=cl"
-    - "-DJUCE_WEB_BROWSER=0"
-    - "-DJUCE_USE_CURL=0"
-    - "-DJUCE_VST3_CAN_REPLACE_VST2=0"
-    - "-DJUCE_REPORT_APP_USAGE=0"
-    - "-DJUCE_STRICT_REFCOUNTEDPOINTER=1"
-    - "-DJUCE_ASIO=1"
-    - "-DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1"
-    - "-DJUCE_USE_FLAC=1"
-    - "-DJUCE_USE_OGGVORBIS=1"
-    - "-DJUCE_USE_MP3AUDIOFORMAT=1"
-    - "-DJUCE_USE_WINDOWS_MEDIA_FORMAT=1"
-    - "-DWIN32_LEAN_AND_MEAN"
-    - "-DNOMINMAX"
-    - "-DORT_API_MANUAL_INIT"
-    - "-DOPENTUNE_VERSION=1.0.0"
-    - "-DJUCE_MODULE_AVAILABLE_juce_audio_basics=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_audio_devices=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_audio_formats=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_audio_processors=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_audio_utils=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_core=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_dsp=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_events=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_graphics=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_gui_basics=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_gui_extra=1"
-    - "-DJUCE_MODULE_AVAILABLE_juce_opengl=1"
-    - "-DJUCE_MAJOR_VERSION=8"
-    - "-DJUCE_MINOR_VERSION=0"
-    - "-DJUCE_BUILDNUMBER=12"
-    - "-DJUCE_VERSION=0x08000C"
-    - "-DJUCE_WINDOWS=1"
-    - "-DJUCE_64BIT=1"
-    - "-DJUCE_LITTLE_ENDIAN=1"
-    - "-IE:/TRAE/OpenTune0402/JUCE-master/modules"
-    - "-IE:/TRAE/OpenTune0402/JUCE-master"
-    - "-IE:/TRAE/OpenTune0402/onnxruntime-win-x64-1.24.4/include"
-    - "-IE:/TRAE/OpenTune0402/onnxruntime-dml-1.24.4/build/native/include"
-    - "-IE:/TRAE/OpenTune0402/Source"
-    - "-IE:/TRAE/OpenTune0402/Source/Standalone"
-    - "-IE:/TRAE/OpenTune0402/ThirdParty/r8brain-free-src-master"
-    - "-std=c++17"
+  CompilationDatabase: build
 
-  Remove:
-    - "-Werror"
-    - "-Wall"
+Diagnostics:
+  UnusedIncludes: Strict
+  ClangTidy:
+    Remove:
+      - modernize-use-trailing-return-type
+      - readability-identifier-length
 
-  Index:
-    Background: Build
----
-FileMatch:
-  "*.c"
-CompileFlags:
-  Remove:
-    - "-std=c++17"
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes

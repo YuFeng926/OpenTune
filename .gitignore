@@ -1,67 +1,27 @@
-# Build directories
+build-vs/
 build/
-build-*/
-cmake-build-*/
-out/
-
-# IDE files
-.vs/
-.vscode/
-.idea/
-*.suo
-*.user
-*.sln.docstates
-
-# Compiled files
-*.obj
+Build/
+models/
+pc_nsf_hifigan_44.1k_ONNX/
+docs/plans/
+docs/UserGuide.html
 *.exe
 *.dll
 *.lib
 *.pdb
+*.obj
 *.ilk
 *.exp
+*.onnx
 
-# CMake cache
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-compile_commands.json
-
-# Logs
-*.log
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Test audio files
-*.mp3
-*.wav
-*.flac
-
-# Large model files (use Git LFS or download separately)
-models/
-pc_nsf_hifigan_44.1k_ONNX/
-
-# Planning docs (local only)
+# Excluded from remote
 .planning/
-docs/
-
-# Spec-extract runtime state
-.knowledge-work/
-
-# IDE/Tool directories
-.opencode/
-.cache/
-.claude/
-
-# Release packaging artifacts
-*.dmg
-
-# Install/packaging scripts
-scripts/
-
-# Third-party source code
 JUCE-master/
-openspec/
-specs/
+AGENTS.md
+Installer/
+ThirdParty/
+
+Resources/PianoSamples/
+Resources/UprightPianoKW-raw/
+Resources/UprightPianoKW-small.7z
+Resources/PianoSamples-mp3/temp_A0.aiff

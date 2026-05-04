@@ -35,34 +35,10 @@ public:
     static LogLevel getLogLevel();
     
     static juce::File getCurrentLogFile();
-    
-    static void logPerf(const juce::String& operation, double durationMs);
 
 private:
     static void logWithLevel(LogLevel level, const juce::String& message);
     static const char* levelToString(LogLevel level);
-};
-
-/**
- * 性能计时器（RAII）
- */
-class PerfTimer {
-public:
-    explicit PerfTimer(const juce::String& operation)
-        : operation_(operation)
-        , startTime_(juce::Time::getMillisecondCounterHiRes())
-    {}
-    
-    ~PerfTimer() {
-        // 性能日志已禁用
-        return;
-        double elapsed = juce::Time::getMillisecondCounterHiRes() - startTime_;
-        AppLogger::logPerf(operation_, elapsed);
-    }
-    
-private:
-    juce::String operation_;
-    double startTime_;
 };
 
 } // namespace OpenTune

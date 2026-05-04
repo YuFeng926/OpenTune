@@ -18,12 +18,6 @@ void CrossoverMixer::prepare(double sampleRate, int maxBlockSize, int numChannel
     renderedFilter_.reset();
 }
 
-void CrossoverMixer::reset()
-{
-    dryFilter_.reset();
-    renderedFilter_.reset();
-}
-
 float CrossoverMixer::processSample(int channel, float dry, float rendered)
 {
     float dryLow, dryHigh;

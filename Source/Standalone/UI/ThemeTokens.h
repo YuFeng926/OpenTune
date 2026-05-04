@@ -117,9 +117,6 @@ struct ThemeStyle
 class Theme
 {
 public:
-    static void setActiveTheme(ThemeId themeId) { activeThemeId_ = themeId; }
-    static ThemeId getActiveTheme() { return activeThemeId_; }
-
     static const ThemeTokens& getTokens(ThemeId themeId)
     {
         switch (themeId)
@@ -135,11 +132,6 @@ public:
         }
     }
 
-    static const ThemeTokens& getActiveTokens()
-    {
-        return getTokens(getActiveTheme());
-    }
-
     static const ThemeStyle& getStyle(ThemeId themeId)
     {
         switch (themeId)
@@ -153,11 +145,6 @@ public:
             default:
                 return blueBreezeStyle();
         }
-    }
-
-    static const ThemeStyle& getActiveStyle()
-    {
-        return getStyle(getActiveTheme());
     }
 
 private:
@@ -482,8 +469,6 @@ private:
         };
         return tokens;
     }
-
-    static inline ThemeId activeThemeId_ = ThemeId::Aurora;
 };
 
 } // namespace OpenTune

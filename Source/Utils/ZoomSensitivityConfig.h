@@ -24,17 +24,4 @@ struct ZoomSensitivitySettings {
     }
 };
 
-inline ZoomSensitivitySettings& getMutableSettings() {
-    static ZoomSensitivitySettings instance;
-    return instance;
-}
-
-inline const ZoomSensitivitySettings& getSettings() {
-    return getMutableSettings();
-}
-
-inline void setSettings(const ZoomSensitivitySettings& settings) {
-    getMutableSettings() = settings;
-}
-
 } // namespace OpenTune::ZoomSensitivityConfig

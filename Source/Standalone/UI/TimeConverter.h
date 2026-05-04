@@ -19,33 +19,19 @@ public:
     TimeConverter();
     ~TimeConverter();
 
-    void setContext(double bpm, int timeSignatureNum, int timeSignatureDenom);
     void setZoom(double zoomLevel);
     void setScrollOffset(double offset);
 
     int timeToPixel(double timeInSeconds) const;
     double pixelToTime(int pixelX) const;
 
-    enum class GridResolution {
-        Bar,
-        Beat,
-        HalfBeat,
-        QuarterBeat,
-        Sixteenth
-    };
-    int snapToGrid(int pixelX, GridResolution resolution) const;
+    double getPixelsPerSecond() const;
 
-    double getBpm() const;
-    double getZoomLevel() const;
+    static constexpr double kBasePixelsPerSecond = 100.0;
 
 private:
-    double bpm_ = 120.0;
-    int timeSignatureNum_ = 4;
-    int timeSignatureDenom_ = 4;
     double zoomLevel_ = 1.0;
     double scrollOffset_ = 0.0;
-
-    static constexpr double pixelsPerSecondBase_ = 100.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TimeConverter)
 };

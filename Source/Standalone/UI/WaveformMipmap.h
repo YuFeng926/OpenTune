@@ -85,16 +85,16 @@ private:
 class WaveformMipmapCache
 {
 public:
-    WaveformMipmap& getOrCreate(uint64_t clipId);
-    void remove(uint64_t clipId);
+    WaveformMipmap& getOrCreate(uint64_t materializationId);
+    void remove(uint64_t materializationId);
     void prune(const std::unordered_set<uint64_t>& alive);
     void clear();
     
     bool buildIncremental(double timeBudgetMs);
     
-    const WaveformMipmap* get(uint64_t clipId) const
+    const WaveformMipmap* get(uint64_t materializationId) const
     {
-        auto it = caches_.find(clipId);
+        auto it = caches_.find(materializationId);
         return it != caches_.end() ? it->second.get() : nullptr;
     }
     

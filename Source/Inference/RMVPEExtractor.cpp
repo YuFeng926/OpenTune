@@ -1,13 +1,17 @@
 #include "RMVPEExtractor.h"
 #include "../DSP/ResamplingManager.h"
-#include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
-#include "../Utils/SimdAccelerator.h"
 #include <cmath>
 #include <sstream>
 #include <iomanip>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX 1
+#endif
 #include <Windows.h>
 #include <Psapi.h>
 #pragma comment(lib, "psapi.lib")
@@ -92,80 +96,33 @@ RMVPEExtractor::PreflightResult RMVPEExtractor::preflightCheck(size_t audioLengt
     // 2. Memory Budget Estimation
     // ============================================================
     size_t requiredMB = estimateMemoryRequiredMB(audioSamples16k);
+#if JucePlugin_Build_VST3
+    // VST3 runs inside the host process. By the time extractF0() is called, the ONNX session
+    // is already resident and its footprint has already been subtracted from ullAvailPhys.
+    // Counting kModelMemoryMB again here falsely rejects valid extractions under host memory pressure.
+    requiredMB = (requiredMB > kModelMemoryMB) ? (requiredMB - kModelMemoryMB) : requiredMB;
+#endif
     result.estimatedMemoryMB = requiredMB;
     
-    // Get available memory based on execution backend
-    auto& gpuDetector = AccelerationDetector::getInstance();
-    const auto backend = gpuDetector.getSelectedBackend();
-    // DirectML uses dedicated GPU VRAM; CoreML uses unified system memory (macOS UMA)
-    bool useGpuVram = (backend == AccelerationDetector::AccelBackend::DirectML);
+    // Memory check: use system memory for all backends
+    // F0 extraction runs on CPU (Windows) or CoreML unified memory (macOS)
+    size_t systemMemMB = getAvailableSystemMemoryMB();
+    size_t availableMB = (systemMemMB > kMinReservedMemoryMB) 
+        ? (systemMemMB - kMinReservedMemoryMB) : 0;
+    result.availableMemoryMB = availableMB;
     
-    if (useGpuVram) {
-        // DirectML mode: Use GPU VRAM limit from AccelerationDetector
-        size_t gpuMemLimitBytes = gpuDetector.getRecommendedGpuMemoryLimit();
-        size_t availableMB = gpuMemLimitBytes / (1024 * 1024);
-        result.availableMemoryMB = availableMB;
+    if (requiredMB > availableMB) {
+        std::ostringstream oss;
+        oss << "[RMVPE] Memory budget exceeded: estimated " << requiredMB 
+            << "MB > " << availableMB << "MB available. "
+            << "Audio duration: " << std::fixed << std::setprecision(1) << durationSec << "s. "
+            << "System memory: " << systemMemMB << "MB total available.";
+        result.errorMessage = oss.str();
+        result.errorCategory = "MEMORY";
+        result.success = false;
         
-        // Check if GPU memory is sufficient
-        if (availableMB < kMinGpuMemoryMB) {
-            std::ostringstream oss;
-            oss << "[RMVPE] GPU memory insufficient: " << availableMB << "MB < " 
-                << kMinGpuMemoryMB << "MB minimum. "
-                << "GPU: " << gpuDetector.getSelectedGpu().name;
-            result.errorMessage = oss.str();
-            result.errorCategory = "MEMORY";
-            result.success = false;
-            
-            AppLogger::error(result.errorMessage);
-            AppLogger::error("[RMVPE] Preflight FAIL - GPU Memory: " + juce::String((int)availableMB) 
-                      + "MB available, " + juce::String((int)requiredMB) + "MB estimated");
-            return result;
-        }
-        
-        // For GPU, we also check against the recommended limit
-        // ONNX Runtime with DirectML may need to allocate temp buffers
-        size_t effectiveLimitMB = (availableMB > kMinReservedMemoryMB)
-            ? (availableMB - kMinReservedMemoryMB)
-            : 0;
-        if (requiredMB > effectiveLimitMB) {
-            std::ostringstream oss;
-            oss << "[RMVPE] Memory budget exceeded: estimated " << requiredMB 
-                << "MB > " << effectiveLimitMB << "MB available on GPU. "
-                << "Audio duration: " << std::fixed << std::setprecision(1) << durationSec << "s. "
-                << "GPU: " << gpuDetector.getSelectedGpu().name;
-            result.errorMessage = oss.str();
-            result.errorCategory = "MEMORY";
-            result.success = false;
-            
-            AppLogger::error(result.errorMessage);
-            AppLogger::error("[RMVPE] Preflight FAIL - Memory Budget: " + juce::String((int)requiredMB) 
-                      + "MB required, " + juce::String((int)effectiveLimitMB) + "MB available (GPU)");
-            return result;
-        }
-    } else {
-        // CPU / CoreML mode: Use system memory
-        // CoreML on macOS uses unified memory architecture (UMA), same pool as CPU
-        size_t systemMemMB = getAvailableSystemMemoryMB();
-        size_t availableMB = (systemMemMB > kMinReservedMemoryMB) 
-            ? (systemMemMB - kMinReservedMemoryMB) : 0;
-        result.availableMemoryMB = availableMB;
-        
-        if (requiredMB > availableMB) {
-            std::ostringstream oss;
-            oss << "[RMVPE] Memory budget exceeded: estimated " << requiredMB 
-                << "MB > " << availableMB << "MB available (" << gpuDetector.getBackendName() << " mode). "
-                << "Audio duration: " << std::fixed << std::setprecision(1) << durationSec << "s. "
-                << "System memory: " << systemMemMB << "MB total available.";
-            result.errorMessage = oss.str();
-            result.errorCategory = "MEMORY";
-            result.success = false;
-            
-            AppLogger::error(result.errorMessage);
-            AppLogger::error("[RMVPE] Preflight FAIL - Memory Budget: " + juce::String((int)requiredMB) 
-                      + "MB required, " + juce::String((int)availableMB) + "MB available (" 
-                      + juce::String(gpuDetector.getBackendName()) + ")");
-            return result;
-        }
+        AppLogger::error(result.errorMessage);
+        return result;
     }
     
     // ============================================================
@@ -182,8 +139,7 @@ RMVPEExtractor::PreflightResult RMVPEExtractor::preflightCheck(size_t audioLengt
     
     AppLogger::info("[RMVPE] Preflight PASS - Duration: " + juce::String(durationSec, 1) 
               + "s, Estimated memory: " + juce::String((int)requiredMB) + "MB, "
-              + "Available: " + juce::String((int)result.availableMemoryMB) + "MB ("
-              + juce::String(gpuDetector.getBackendName()) + ")");
+              + "Available: " + juce::String((int)result.availableMemoryMB) + "MB");
     
     return result;
 }
@@ -195,35 +151,11 @@ RMVPEExtractor::RMVPEExtractor(
     , resampler_(resampler)
 {
     memoryInfo_ = std::make_unique<Ort::MemoryInfo>(
-        Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)
+        Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault)
     );
 }
 
 RMVPEExtractor::~RMVPEExtractor() = default;
-
-std::vector<float> RMVPEExtractor::computeSTFTFrame(const float* audioData, size_t totalSamples, int startSample) {
-    const int numFFTBins = fftSize_ / 2 + 1;
-    std::vector<float> magnitude(numFFTBins, 0.0f);
-
-    // Prepare windowed frame
-    std::vector<float> frame(fftSize_ * 2, 0.0f);  // Complex FFT needs double size
-
-    for (int i = 0; i < fftSize_; ++i) {
-        int sampleIdx = startSample + i;
-        if (sampleIdx >= 0 && sampleIdx < static_cast<int>(totalSamples)) {
-            frame[i] = audioData[sampleIdx] * hannWindow_[i];
-        }
-    }
-
-    // Perform FFT
-    forwardFFT_->performRealOnlyForwardTransform(frame.data());
-
-    // Compute magnitude via SimdAccelerator (uses vDSP_vdist on macOS, scalar on others)
-    auto& simd = SimdAccelerator::getInstance();
-    simd.complexMagnitude(magnitude.data(), frame.data(), static_cast<size_t>(numFFTBins));
-
-    return magnitude;
-}
 
 void RMVPEExtractor::fixOctaveErrors(std::vector<float>& f0) {
     if (f0.empty()) return;

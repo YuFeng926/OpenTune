@@ -73,8 +73,6 @@ public:
 
     MelResult compute(const float* audio, int numSamples, int numFrames);
 
-    void reset();
-
     bool isInitialized() const noexcept { return initialized_; }
 
 private:

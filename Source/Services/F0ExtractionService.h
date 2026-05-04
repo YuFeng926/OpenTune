@@ -5,7 +5,7 @@
  * 
  * 多线程异步 F0 提取任务管理器：
  * - 使用工作线程池处理 F0 提取请求
- * - 支持请求去重（同一 clip 不会同时提取）
+ * - 支持请求去重（同一 materialization 不会同时提取）
  * - 支持任务取消
  * - 线程安全的结果回调
  */
@@ -18,7 +18,11 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include <juce_audio_basics/juce_audio_basics.h>
+
 #include "../Utils/LockFreeQueue.h"
+#include "../Utils/SilentGapDetector.h"
 
 namespace OpenTune {
 
@@ -27,15 +31,25 @@ public:
     struct Result {
         bool success{false};
         int trackId{0};
-        int clipIndexHint{-1};
-        uint64_t clipId{0};
+        int placementIndexHint{-1};
+        uint64_t materializationId{0};
         uint64_t requestKey{0};
+        uint64_t requestToken{0};
+        std::shared_ptr<const juce::AudioBuffer<float>> sourceAudioBuffer;
         int hopSize{0};
         int f0SampleRate{0};
         std::vector<float> f0;
         std::vector<float> energy;
+        std::vector<SilentGap> silentGaps;
         const char* modelName{"Unknown"};
         std::string errorMessage;
+
+        // F0Alignment diagnostics (populated by extractOriginalF0ForImportedClip)
+        double audioDurationSeconds{0.0};
+        double firstAudibleTimeSeconds{-1.0};
+        double firstVoicedTimeSeconds{-1.0};
+        int firstVoicedFrame{-1};
+        int expectedInferenceFrameCount{0};
     };
 
     using ExecuteFn = std::function<Result()>;
@@ -48,10 +62,10 @@ public:
         InvalidTask
     };
 
-    explicit F0ExtractionService(int workerCount = 2, size_t maxQueueSize = 64);
+    explicit F0ExtractionService(int workerCount = 1, size_t maxQueueSize = 64);
     ~F0ExtractionService();
 
-    static uint64_t makeRequestKey(uint64_t clipId, int trackId, int clipIndex);
+    static uint64_t makeRequestKey(uint64_t materializationId, int trackId, int placementIndex);
 
     SubmitResult submit(uint64_t requestKey, ExecuteFn execute, CommitFn commit);
 

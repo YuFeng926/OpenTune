@@ -228,18 +228,8 @@ hdiutil attach "${TEMP_DMG}.sparseimage" -mountpoint "$MOUNT_POINT" -nobrowse
 # Copy app bundle
 cp -R "$APP_BUNDLE" "$MOUNT_POINT/"
 
-# Copy install script (for unsigned builds, removes quarantine)
-INSTALL_SCRIPT="$SCRIPT_DIR/install.command"
-if [ -f "$INSTALL_SCRIPT" ]; then
-    cp "$INSTALL_SCRIPT" "$MOUNT_POINT/Install OpenTune.command"
-    chmod +x "$MOUNT_POINT/Install OpenTune.command"
-fi
-
 # Create Applications symlink
 ln -s /Applications "$MOUNT_POINT/Applications"
-
-# Set window properties via .DS_Store (optional - basic layout)
-# For a more polished DMG, consider using a template .DS_Store
 
 # Unmount
 sync

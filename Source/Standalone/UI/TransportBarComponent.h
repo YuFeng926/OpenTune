@@ -34,7 +34,6 @@ public:
     UnifiedToolbarButton(const juce::String& name, juce::Path iconPath, juce::Path toggledIconPath = {});
     
     void setIcon(juce::Path iconPath);
-    void setToggledIcon(juce::Path iconPath);
     void setConnectedEdges(int edges);
 
     void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
@@ -45,41 +44,27 @@ private:
     int connectedEdges_ = None;
 };
 
-class DigitalTimeDisplay : public juce::Component
+class DigitalTimeDisplay : public juce::Component,
+                           public juce::TooltipClient
 {
 public:
     DigitalTimeDisplay();
     void setTimeString(const juce::String& time);
     void paint(juce::Graphics& g) override;
 
+    juce::String getTooltip() override { return tooltip_; }
+    void setTooltip(const juce::String& t) { tooltip_ = t; }
+
 private:
     void drawChar(juce::Graphics& g, juce::juce_wchar c, juce::Rectangle<float> area);
     void drawSegment(juce::Graphics& g, int segment, juce::Rectangle<float> area, bool active);
 
     juce::String timeString_ = "00:00";
-};
-
-class RoundedActionButton : public juce::Button
-{
-public:
-    explicit RoundedActionButton(const juce::String& text, float fontSize = 13.0f);
-    void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
-
-private:
-    juce::String text_;
-    float fontSize_ = 13.0f;
-};
-
-// 视图切换开关（轨道视图 vs 音高视图）
-class ViewToggleSwitch : public juce::Button
-{
-public:
-    ViewToggleSwitch();
-    void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
-    void mouseDown(const juce::MouseEvent& e) override;
+    juce::String tooltip_;
 };
 
 class BpmValueField : public juce::Component,
+                      public juce::TooltipClient,
                       private juce::Timer
 {
 public:
@@ -90,6 +75,9 @@ public:
     void mouseDown(const juce::MouseEvent& e) override;
     bool keyPressed(const juce::KeyPress& key) override;
     void focusLost(juce::Component::FocusChangeType cause) override;
+
+    juce::String getTooltip() override { return tooltip_; }
+    void setTooltip(const juce::String& t) { tooltip_ = t; }
 
     std::function<void(double)> onCommit;
 
@@ -103,11 +91,18 @@ private:
     int caretIndex_ = 0;
     bool isEditing_ = false;
     int lastValidValue_ = 120;
+    juce::String tooltip_;
 };
 
 class TransportBarComponent : public juce::Component
 {
 public:
+    enum class LayoutProfile
+    {
+        StandaloneFull,
+        VST3AraSingleClip
+    };
+
     class Listener
     {
     public:
@@ -119,7 +114,7 @@ public:
         virtual void bpmChanged(double newBpm) = 0;
         virtual void scaleChanged(int rootNote, int scaleType) = 0;
         virtual void viewToggled(bool workspaceView) = 0;
-        virtual void audioSettingsRequested() {}
+        virtual void recordRequested() {}
     };
 
     // Callback functions for Menu requests (File/Edit/View)
@@ -136,6 +131,8 @@ public:
 
     void applyTheme();
     void setEmbeddedInTopBar(bool embedded);
+    void setLayoutProfile(LayoutProfile profile);
+    LayoutProfile getLayoutProfile() const { return layoutProfile_; }
 
     void addListener(Listener* l);
     void removeListener(Listener* l);
@@ -147,8 +144,6 @@ public:
 
     void setLoopEnabled(bool enabled);
     bool isLoopEnabled() const;
-    // Alias for compatibility
-    void setLooping(bool looping) { setLoopEnabled(looping); }
 
     void setBpm(double bpm);
     double getBpm() const;
@@ -175,6 +170,7 @@ private:
     void onScaleChanged();
     void onTrackViewClicked();
     void onPianoViewClicked();
+    void onRecordClicked();
 
     juce::ListenerList<Listener> listeners_;
 
@@ -188,6 +184,7 @@ private:
     UnifiedToolbarButton pauseButton_;
     UnifiedToolbarButton stopButton_;
     UnifiedToolbarButton loopButton_;
+    UnifiedToolbarButton recordButton_;
     
     // Split View Buttons
     UnifiedToolbarButton trackViewButton_;
@@ -207,6 +204,7 @@ private:
     bool isPlaying_ = false;
     bool workspaceView_ = true;
     bool embeddedInTopBar_ = false;
+    LayoutProfile layoutProfile_ = LayoutProfile::StandaloneFull;
     juce::String renderStatusText_;
     juce::Time lastTapTime_;
     std::vector<double> tapIntervals_;

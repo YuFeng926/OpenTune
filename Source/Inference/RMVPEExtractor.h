@@ -23,7 +23,7 @@ class ResamplingManager;
  * - Preflight resource check before inference (duration gate + memory budget)
  * - Fail-fast with structured logging (no silent degradation)
  * - All-or-nothing: returns complete F0 or empty on failure
- * - Uses AccelerationDetector and system memory for conservative budgeting
+ * - Uses system memory for conservative budgeting
  * - Inference is single-pass on the full resampled waveform
  */
 class RMVPEExtractor : public IF0Extractor {
@@ -78,13 +78,9 @@ public:
     void setConfidenceThreshold(float threshold) override { confidenceThreshold_ = threshold; }
     void setF0Min(float minHz) override { f0Min_ = minHz; }
     void setF0Max(float maxHz) override { f0Max_ = maxHz; }
-    void setEnableUvCheck(bool enable) { enableUvCheck_ = enable; }
-
     float getConfidenceThreshold() const override { return confidenceThreshold_; }
     float getF0Min() const override { return f0Min_; }
     float getF0Max() const override { return f0Max_; }
-    bool getEnableUvCheck() const { return enableUvCheck_; }
-
     /**
      * @brief Validate preconditions before inference
      * @param audioLength Number of audio samples
@@ -101,8 +97,6 @@ private:
     // Post-processing
     void fixOctaveErrors(std::vector<float>& f0);
     void fillF0Gaps(std::vector<float>& f0, int maxGapFrames);
-    std::vector<float> computeSTFTFrame(const float* audioData, size_t totalSamples, int startSample);
-
     // FFT resources
     static constexpr int fftOrder_ = 10;
     static constexpr int fftSize_ = 1024;
@@ -125,8 +119,7 @@ private:
     static constexpr double kMaxAudioDurationSec = 600.0; // 10 minutes
     static constexpr double kMemoryOverheadFactor = 6.0;
     static constexpr size_t kMinReservedMemoryMB = 512;
-    static constexpr size_t kMinGpuMemoryMB = 256;
-    static constexpr size_t kModelMemoryMB = 200;
+    static constexpr size_t kModelMemoryMB = 350;
     static constexpr int kMaxGapFramesDefault = 8;
     
     // Memory estimation helper

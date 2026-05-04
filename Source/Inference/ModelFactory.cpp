@@ -6,7 +6,6 @@
 #include "../Utils/AppLogger.h"
 #include "../Utils/Error.h"
 #include <juce_core/juce_core.h>
-#include <cstdlib>
 #include <iomanip>
 
 namespace OpenTune {
@@ -16,12 +15,12 @@ namespace {
 bool shouldEnableOrtProfilingInDebug()
 {
 #if JUCE_DEBUG
-    const char* envValue = std::getenv("OPENTUNE_ORT_PROFILE");
-    if (envValue == nullptr) {
+    const auto envValue = juce::SystemStats::getEnvironmentVariable("OPENTUNE_ORT_PROFILE", {});
+    if (envValue.isEmpty()) {
         return false;
     }
 
-    const juce::String normalized = juce::String(envValue).trim().toLowerCase();
+    const juce::String normalized = envValue.trim().toLowerCase();
     return normalized == "1" || normalized == "true" || normalized == "on" || normalized == "yes";
 #else
     return false;
@@ -134,6 +133,11 @@ std::vector<F0ModelInfo> ModelFactory::getAvailableF0Models(const std::string& m
 
 Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
     Ort::SessionOptions sessionOptions;
+
+    // F0 推理是低频后台操作、输入 shape 随音频长度变化。
+    // 禁用 MemPattern 和 CPU Arena 避免 ORT 内部 BFC arena 常驻大量内存不释放。
+    sessionOptions.DisableMemPattern();
+    sessionOptions.DisableCpuMemArena();
     
     bool gpuMode = false;
 

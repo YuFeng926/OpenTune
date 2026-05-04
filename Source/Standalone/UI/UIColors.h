@@ -91,6 +91,8 @@ struct UIColors
 
     // Global Corner Radius
     static inline float cornerRadius = 8.0f;
+    static inline ThemeId currentThemeId_ = ThemeId::Aurora;
+    static inline ThemeStyle currentThemeStyle_ = Theme::getStyle(ThemeId::Aurora);
 
     // 阴影层级（用于现代 UI 的立体感表达）
     // L1: Ambient（面板贴底）
@@ -168,6 +170,28 @@ struct UIColors
         cornerRadius = tokens.cornerRadius;
     }
 
+    static void applyTheme(ThemeId themeId)
+    {
+        currentThemeId_ = themeId;
+        currentThemeStyle_ = Theme::getStyle(themeId);
+        applyTheme(Theme::getTokens(themeId));
+    }
+
+    static ThemeId currentThemeId()
+    {
+        return currentThemeId_;
+    }
+
+    static const ThemeTokens& currentTokens()
+    {
+        return Theme::getTokens(currentThemeId_);
+    }
+
+    static const ThemeStyle& currentThemeStyle()
+    {
+        return currentThemeStyle_;
+    }
+
     // Shadow Helper - Dark Blue-Grey 主题：冷色环境阴影 + 更柔和扩散
     static void drawShadow(juce::Graphics& g, const juce::Rectangle<float>& bounds)
     {
@@ -176,8 +200,8 @@ struct UIColors
 
     static void drawShadow(juce::Graphics& g, const juce::Rectangle<float>& bounds, ShadowLevel level)
     {
-        const auto themeId = Theme::getActiveTheme();
-        const auto& style = Theme::getActiveStyle();
+        const auto themeId = currentThemeId();
+        const auto& style = currentThemeStyle();
 
         juce::DropShadow ds;
 
@@ -220,7 +244,7 @@ struct UIColors
 
     static void fillSoothe2CanvasBackground(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)
     {
-        const auto themeId = Theme::getActiveTheme();
+        const auto themeId = currentThemeId();
 
         auto top = juce::Colour { 0xFFF7F3EA };
         auto bottom = juce::Colour { 0xFFD2E0E8 };
@@ -248,7 +272,7 @@ struct UIColors
 
     static void fillSoothe2SpectrumBackground(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)
     {
-        const auto themeId = Theme::getActiveTheme();
+        const auto themeId = currentThemeId();
 
         // For DarkBlueGrey (Soothe2 style): Use the actual theme colors
         if (themeId == ThemeId::DarkBlueGrey)
@@ -284,8 +308,8 @@ struct UIColors
 
     static void fillPanelBackground(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)
     {
-        const auto themeId = Theme::getActiveTheme();
-        const auto& style = Theme::getActiveStyle();
+        const auto themeId = currentThemeId();
+        const auto& style = currentThemeStyle();
 
         if (themeId == ThemeId::DarkBlueGrey)
         {
@@ -357,8 +381,8 @@ struct UIColors
 
     static void drawPanelFrame(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)
     {
-        const auto themeId = Theme::getActiveTheme();
-        const auto& style = Theme::getActiveStyle();
+        const auto themeId = currentThemeId();
+        const auto& style = currentThemeStyle();
 
         float borderAlpha = 0.9f;
         float innerAlpha = 0.05f;
