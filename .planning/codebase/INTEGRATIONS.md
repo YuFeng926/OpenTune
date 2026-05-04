@@ -1,6 +1,6 @@
 # External Integrations
 
-**Analysis Date:** 2026-04-20
+**Analysis Date:** 2026-05-05
 
 ## APIs & External Services
 
@@ -38,7 +38,7 @@
 
 **Logging:**
 - Central local file logging is implemented by `AppLogger` in `Source/Utils/AppLogger.cpp:50`, `Source/Utils/AppLogger.cpp:93`.
-- Inference, DirectML probing, VST3 editor transport requests, and ARA mapping emit diagnostic logs in `Source/Inference/ModelFactory.cpp:32`, `Source/Utils/AccelerationDetector.cpp`, `Source/Plugin/PluginEditor.cpp:198`, `Source/ARA/OpenTuneDocumentController.cpp:210`, `Source/ARA/VST3AraSession.cpp:251`.
+- Inference, DirectML probing, VST3 editor transport requests, and ARA mapping emit diagnostic logs in `Source/Inference/ModelFactory.cpp:32`, `Source/Utils/AccelerationDetector.cpp`, `Source/Plugin/PluginEditor.cpp:198`, `Source/ARA/OpenTuneDocumentController.cpp:210`, `Source/ARA/VST3AraSession.cpp:251`. Note: `DmlRuntimeVerifier` was deleted entirely (2026-05-02); DirectML probing now uses `AccelerationDetector` alone with `GetExecutionProviderApi("DML")`.
 
 **Error Tracking / Telemetry:**
 - No Sentry, Crashpad, Bugsnag, or remote telemetry integration was found in the live tree.
@@ -89,7 +89,7 @@
 ## Testing / CI Boundaries
 
 **Local Verification:**
-- `OpenTuneTests` exposes `core`, `processor`, `ui`, and `architecture` suites in `Tests/TestMain.cpp:30`.
+- `OpenTuneTests` exposes `core`, `processor`, `ui`, `architecture`, `undo`, and `memory` suites in `Tests/TestMain.cpp:30`.
 - CTest registers `OpenTuneCoreTests` in `CMakeLists.txt:961`, `CMakeLists.txt:963`.
 
 **CI/CD:**
@@ -97,4 +97,4 @@
 
 ---
 
-*Integration audit: 2026-04-20*
+*Integration audit: 2026-05-05*

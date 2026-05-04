@@ -1,6 +1,6 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-04-30
+**Analysis Date:** 2026-05-05
 
 ## Directory Layout
 
@@ -44,7 +44,7 @@
 
 **`Source/`:**
 - Main production tree.
-- Top-level subdirectories are architecture boundaries: `ARA/`, `Audio/`, `DSP/`, `Editor/`, `Host/`, `Inference/`, `Plugin/`, `Services/`, `Standalone/`, `Utils/`.
+- Top-level subdirectories are architecture boundaries: `ARA/`, `Audio/`, `DSP/`, `Editor/`, `Inference/`, `Plugin/`, `Services/`, `Standalone/`, `Utils/`.
 - Top-level shared owners also live directly under `Source/`: `SourceStore.*`, `MaterializationStore.*`, `StandaloneArrangement.*`, and `PluginProcessor.*`.
 
 **`Source/PluginProcessor.h`, `Source/PluginProcessor.cpp`:**
@@ -77,22 +77,17 @@
 
 **`Source/DSP/`:**
 - DSP-only helpers that do not own application workflow state.
-- Files: `ResamplingManager.*`, `MelSpectrogram.*`, `ScaleInference.*`.
+- Files: `ChromaKeyDetector.*`, `CrossoverMixer.*`, `MelSpectrogram.*`, `ResamplingManager.*`.
 
 **`Source/Editor/`:**
 - Small shared editor seams.
-- Files: `EditorFactory.h`, `EditorFactoryPlugin.cpp`, `Preferences/`.
+- Files: `EditorFactory.h`, `EditorFactoryPlugin.cpp`, `AutoRenderOverlayComponent.h`, `RenderBadgeComponent.h`, `Preferences/`.
 - Boundary: cross-product editor creation seam and preference-page composition.
 
 **`Source/Editor/Preferences/`:**
 - Shared preferences dialog construction.
 - Files: `SharedPreferencePages.*`, `StandalonePreferencePages.*`, `TabbedPreferencesDialog.h`.
 - Boundary: shared pages vs standalone-only pages are split here, not inside the processor.
-
-**`Source/Host/`:**
-- Host abstraction boundary.
-- Files: `HostIntegration.h`, `HostIntegrationPlugin.cpp`, `HostIntegrationStandalone.cpp`.
-- Boundary: initial processor configuration and format-specific processing hooks.
 
 **`Source/Inference/`:**
 - Model inference, render cache, and vocoder pipeline.
@@ -115,29 +110,29 @@
 **`Source/Standalone/UI/`:**
 - Reusable JUCE UI components used heavily by Standalone and partly by VST3.
 - Key files: `MenuBarComponent.*`, `TransportBarComponent.*`, `TopBarComponent.*`, `ParameterPanel.*`, `PianoRollComponent.*`, `ArrangementViewComponent.*`, `TrackPanelComponent.*`, `PlayheadOverlayComponent.*`, `AutoRenderOverlayComponent.h`, `RenderBadgeComponent.h`.
-- Theme/look-and-feel files present in live tree: `OpenTuneLookAndFeel.h`, `BlueBreezeLookAndFeel.*`, `DarkBlueGreyLookAndFeel.*`, `AuroraLookAndFeel.*`, plus matching theme headers.
+- Theme/look-and-feel files present in live tree: `AuroraLookAndFeel.*`, `AuroraTheme.h`, `BlueBreezeTheme.h`, `DarkBlueGreyTheme.h`, `OpenTuneLookAndFeel.h`, `ThemeTokens.h`.
 
 **`Source/Standalone/UI/PianoRoll/`:**
 - Piano-roll internal submodules.
-- Files: `InteractionState.*`, `PianoRollCorrectionWorker.*`, `PianoRollRenderer.*`, `PianoRollToolHandler.*`, `PianoRollUndoSupport.*`, `PianoRollVisualInvalidation.*`.
+- Files: `InteractionState.*`, `PianoRollCorrectionWorker.*`, `PianoRollRenderer.*`, `PianoRollToolHandler.*`, `PianoRollVisualInvalidation.*`.
 
 **`Source/Utils/`:**
 - Shared low-level models, preference carriers, logging, and policy helpers.
-- Key files: `AppPreferences.*`, `AudioEditingScheme.h`, `ParameterPanelSync.h`, `PitchCurve.*`, `PresetManager.*`, `SilentGapDetector.*`, `TimeCoordinate.h`, `UndoAction.*`, `UndoManager.*`, `PianoRollEditAction.*`, `F0Timeline.h`, `LocalizationManager.h`.
+- Key files: `AppPreferences.*`, `AudioEditingScheme.h`, `ParameterPanelSync.h`, `PitchCurve.*`, `PresetManager.*`, `SilentGapDetector.*`, `TimeCoordinate.h`, `UndoManager.*`, `PianoRollEditAction.*`, `F0Timeline.h`, `MaterializationTimelineProjection.h`, `MaterializationState.h`, `SourceWindow.h`, `PlacementActions.*`, `AccelerationDetector.*`, `PianoRollVisualPreferences.h`, `LocalizationManager.h`.
 
 ## Tests And Verification Assets
 
 **`Tests/`:**
 - Native test target sources.
-- Files: `TestMain.cpp`, `TestSupport.cpp`, `TestSupport.h`, `TestEditorFactoryStub.cpp`.
-- `TestMain.cpp` declares four suites: `core`, `processor`, `ui`, and `architecture`.
+- Files: `TestMain.cpp`, `TestSupport.h`, `TestEditorFactoryStub.cpp`.
+- `TestMain.cpp` declares six suites: `core`, `processor`, `ui`, `architecture`, `undo`, `memory`.
 - Tests verify both source behavior and selected repository structure/contracts by reading workspace files directly.
 
 ## Build-Vs-Source Ownership
 
 **Shared production sources:**
 - Declared under `target_sources(OpenTune ...)` in `CMakeLists.txt`.
-- Include processor, content store, standalone arrangement, shared UI, inference, utilities, host integration, and ARA source files.
+- Include processor, content store, standalone arrangement, shared UI, inference, utilities, and ARA source files.
 
 **Standalone-only sources:**
 - Declared under `target_sources(OpenTune_Standalone ...)`.
@@ -175,7 +170,7 @@
 **Policy And Preferences:**
 - `Source/Utils/AppPreferences.h`: shared and standalone-only app preference schemas.
 - `Source/Utils/AudioEditingScheme.h`: explicit editing-scheme rules.
-- `Source/Utils/UndoAction.h`: undo result-chain types.
+- `Source/Utils/PianoRollEditAction.h`: undo result-chain types.
 
 ## Structure Of The Current UI Tree
 
@@ -213,7 +208,7 @@
 
 **Directories:**
 - Product boundaries are top-level folders under `Source/`: `Standalone/`, `Plugin/`, `ARA/`.
-- Shared technical domains are separate peer folders: `Audio/`, `DSP/`, `Inference/`, `Services/`, `Utils/`, `Editor/`, `Host/`.
+- Shared technical domains are separate peer folders: `Audio/`, `DSP/`, `Inference/`, `Services/`, `Utils/`, `Editor/`.
 - Piano-roll internals are the only deeper feature subtree under shared UI: `Source/Standalone/UI/PianoRoll/`.
 
 ## Where Code Belongs
@@ -259,4 +254,4 @@
 
 ---
 
-*Structure analysis: 2026-04-20*
+*Structure analysis: 2026-05-05*

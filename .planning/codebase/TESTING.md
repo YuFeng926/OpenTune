@@ -1,6 +1,6 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-04-20
+**Analysis Date:** 2026-05-05
 
 ## Test Framework
 
@@ -12,7 +12,7 @@
 ## Executable Suites
 
 **Suite registry:**
-- 当前 suite 固定为 4 个：`core`, `processor`, `ui`, `architecture`，定义在 `Tests/TestMain.cpp:30`。
+- 当前 suite 固定为 6 个：`core`, `processor`, `ui`, `architecture`, `undo`, `memory`，定义在 `Tests/TestMain.cpp:30`。
 - 子集运行与 suite 列表 CLI 仍可用：`--list-suites` in `Tests/TestMain.cpp:2858`，suite 分发在 `Tests/TestMain.cpp:2863`。
 
 **What each suite currently does:**
@@ -20,6 +20,8 @@
 - `processor`: 当前只跑一条 `runClipDerivedRefreshDoesNotMutateStandaloneSelectionTest()`，见 `Tests/TestMain.cpp:4123`。
 - `ui`: 覆盖 app preferences round-trip、shared/standalone preferences page 组合、editing scheme/parameter sync、PianoRoll source guards、visual invalidation、audio format registry、Standalone import、undo result-chain，以及新增的 `PianoRollProjection_ConsumesMaterializationIdAndPlacementProjectionOnly` / `EditingCommand_DoesNotMutatePlacement` owner guards，入口列表见 `Tests/TestMain.cpp:4131`。
 - `architecture`: 覆盖 placement/materialization owner 约束、Standalone playback placement window、ARA snapshot/render span、mac Standalone packaging 结构守护、undo architecture cleanup guard，以及新增的 `MaterializationCommands_DoNotMutateTimelinePlacementTruth` / `PlacementCommands_DoNotMutateClipCoreTruth` / `AraSession_SnapshotExposesSourceMaterializationAndPlacementOwnership` / `ProcessorModel_RejectsMixedClipOwnerApis`，入口列表见 `Tests/TestMain.cpp:4185`。
+- `undo`: 覆盖 undo/redo 边界测试，包括空栈、redo 裁剪、溢出等场景。
+- `memory`: 覆盖 ONNX 运行时内存生命周期测试。
 
 ## Commands In Use Now
 
@@ -62,7 +64,7 @@ cmake --build build-debug --target OpenTune_VST3 --config Debug
 
 ## Test File Organization
 
-- 测试仍集中在 `Tests/`，当前 live files 是 `Tests/TestMain.cpp`, `Tests/TestSupport.h`, `Tests/TestSupport.cpp`, `Tests/TestEditorFactoryStub.cpp`。
+- 测试仍集中在 `Tests/`，当前 live files 是 `Tests/TestMain.cpp`, `Tests/TestSupport.h`, `Tests/TestEditorFactoryStub.cpp`。
 - `Tests/TestMain.cpp` 仍是单文件主测试体和 suite registry，长度 2881 行，见 `Tests/TestMain.cpp:2881`。
 - `Tests/TestSupport.h` / `Tests/TestSupport.cpp` 提供 probe、mock、共享 helper，例如 `VST3AraSessionTestProbe` in `Tests/TestSupport.h:55` 和 `MockVocoderService` in `Tests/TestSupport.h:118`。
 - `Tests/TestEditorFactoryStub.cpp` 继续用于阻断真实 editor 创建，这个角色在旧文档中存在，live tree 仍保留该文件。
@@ -110,4 +112,4 @@ cmake --build build-debug --target OpenTune_VST3 --config Debug
 
 ---
 
-*Testing analysis: 2026-04-20*
+*Testing analysis: 2026-05-05*

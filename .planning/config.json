@@ -1,0 +1,50 @@
+{
+  "mode": "yolo",
+  "granularity": "coarse",
+  "parallelization": true,
+  "commit_docs": true,
+  "model_profile": "inherit",
+  "model_overrides": {
+    "gsd-planner": { "id": "A60/claude-opus-4-6", "variant": "max" },
+    "gsd-plan-checker": { "id": "A60/claude-opus-4-6", "variant": "max" },
+    "gsd-roadmapper": { "id": "A60/claude-opus-4-6", "variant": "max" },
+    "gsd-advisor-researcher": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-assumptions-analyzer": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-codebase-mapper": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-phase-researcher": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-project-researcher": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-research-synthesizer": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-intel-updater": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-doc-verifier": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-ui-researcher": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-user-profiler": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-integration-checker": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-security-auditor": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-ui-auditor": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-ui-checker": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-nyquist-auditor": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-debugger": { "id": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "gsd-executor": { "id": "deepseek/deepseek-v4-flash", "variant": "max" },
+    "gsd-code-fixer": { "id": "deepseek/deepseek-v4-flash", "variant": "max" },
+    "gsd-code-reviewer": { "id": "aicodemirror-gpt/gpt-5.3-codex", "variant": "xhigh" },
+    "gsd-doc-writer": { "id": "deepseek/deepseek-v4-flash", "variant": "max" },
+    "gsd-verifier": { "id": "aicodemirror-gpt/gpt-5.3-codex", "variant": "xhigh" }
+  },
+  "resolve_model_ids": "omit",
+  "project_path": "G:\\OPenTune0430",
+  "project_root": "G:\\OPenTune0430",
+  "workflow": {
+    "research": false,
+    "plan_check": true,
+    "verifier": true,
+    "nyquist_validation": false,
+    "auto_advance": true,
+    "_auto_chain_active": false
+  },
+  "planning": {
+    "sub_repos": [
+      "VST3 References"
+    ],
+    "commit_docs": false
+  }
+}
