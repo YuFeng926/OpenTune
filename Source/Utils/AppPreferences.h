@@ -48,7 +48,8 @@ public:
         juce::String fileName = "app-preferences.settings";
     };
 
-    explicit AppPreferences(const StorageOptions& storageOptions = StorageOptions{});
+    AppPreferences();
+    explicit AppPreferences(const StorageOptions& storageOptions);
 
     AppPreferencesState getState() const;
 
