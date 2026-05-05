@@ -588,6 +588,8 @@ target_sources(OpenTune
         Source/Utils/CpuBudgetManager.h
         Source/Utils/AccelerationDetector.cpp
         Source/Utils/AccelerationDetector.h
+        Source/Utils/SimdAccelerator.cpp
+        Source/Utils/SimdAccelerator.h
         Source/Utils/UndoManager.cpp
         Source/Utils/UndoManager.h
         Source/Utils/PianoRollEditAction.cpp
@@ -741,6 +743,12 @@ endif()
 if(WIN32)
     if(MSVC)
         target_compile_options(OpenTune PRIVATE /utf-8 /MP /wd4100 /wd4127)
+        # AVX2 仅对 SIMD 热点文件开启，避免影响 JUCE 编译单元和老 CPU 兼容性
+        set_source_files_properties(
+            Source/Utils/SimdAccelerator.cpp
+            Source/DSP/MelSpectrogram.cpp
+            PROPERTIES COMPILE_FLAGS "/arch:AVX2"
+        )
         # Delay load onnxruntime.dll for Standalone
         target_link_options(OpenTune_Standalone PRIVATE "/DELAYLOAD:onnxruntime.dll")
         target_link_libraries(OpenTune_Standalone PRIVATE delayimp)
