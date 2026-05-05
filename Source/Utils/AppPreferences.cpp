@@ -275,6 +275,11 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
 
 } // namespace
 
+AppPreferences::AppPreferences()
+    : AppPreferences(StorageOptions{})
+{
+}
+
 AppPreferences::AppPreferences(const StorageOptions& storageOptions)
     : storageOptions_(storageOptions)
 {
