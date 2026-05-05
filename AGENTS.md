@@ -2,9 +2,11 @@
 
 ## Project Overview
 
-OpenTune is an AI-powered pitch correction standalone application built with the JUCE
-framework (C++17). It uses NSF-HiFiGAN neural vocoder and RMVPE pitch extraction via
-ONNX Runtime for formant-preserving vocal pitch shifting. Company: DAYA. License: AGPL-3.0.
+OpenTune is an AI-powered pitch correction application built with the JUCE framework
+(C++17). It ships as both a **Standalone** desktop app and a **VST3/ARA** plugin. It uses
+PC-NSF-HiFiGAN neural vocoder and RMVPE pitch extraction via ONNX Runtime (DirectML GPU
+acceleration on Windows) for formant-preserving vocal pitch shifting. Company: DAYA.
+License: AGPL-3.0.
 
 ## Build Commands
 
@@ -12,7 +14,9 @@ ONNX Runtime for formant-preserving vocal pitch shifting. Company: DAYA. License
 
 - CMake 3.22+
 - C++17 compiler (MSVC 2022 / Visual Studio 17 on Windows)
-- All dependencies are vendored (JUCE, ONNX Runtime 1.17.3, r8brain-free-src)
+- Dependencies: JUCE (vendored, `JUCE-master/`), ARA SDK 2.2.0 (vendored,
+  `ThirdParty/ARA_SDK-releases-2.2.0/`), r8brain-free-src (vendored, `ThirdParty/`)
+- ONNX Runtime: DirectML 1.15.4 + D3D12 Agility SDK 1.619.1 (auto-downloaded via NuGet)
 - `.onnx` model files are tracked via Git LFS -- run `git lfs pull` after cloning
 
 ### Configure and Build (Windows)
@@ -23,7 +27,9 @@ cmake .. -G "Visual Studio 17 2022" -A x64
 cmake --build . --config Release
 ```
 
-Output: `build/OpenTune_artefacts/Release/Standalone/OpenTune.exe`
+Output:
+- Standalone: `build/OpenTune_artefacts/Release/Standalone/OpenTune.exe`
+- VST3: `build/OpenTune_artefacts/Release/VST3/OpenTune.vst3`
 
 Post-build automatically copies ONNX Runtime DLLs and model files to the output directory.
 
@@ -31,7 +37,7 @@ Post-build automatically copies ONNX Runtime DLLs and model files to the output 
 
 Not officially supported yet. The CMakeLists.txt targets Windows/MSVC. A macOS or Linux
 build would require providing a platform-appropriate ONNX Runtime library and adjusting
-the linker configuration (currently hardcoded to `.lib` / `.dll`).
+the linker configuration.
 
 ### LSP Support
 
@@ -52,41 +58,124 @@ pipelines exist. Follow the conventions documented below to maintain consistency
 
 ```
 Source/
-  PluginProcessor.cpp/h      # Core audio processor (multi-track, playback, mixing)
-  Inference/                  # AI model layer (ONNX Runtime wrappers)
-    InferenceManager.h        # Singleton, Pimpl pattern
-    RMVPEExtractor.h          # F0 pitch extraction
-    HifiGANVocoder.h          # Neural vocoder
-    ModelFactory.h             # Static factory for model creation
-    RenderingManager.h        # Chunk-based render pipeline
-    RenderCache.h             # Cached render results
-  DSP/                        # Signal processing
-    MelSpectrogram.h          # Mel spectrogram computation
-    ResamplingManager.h       # Audio resampling (r8brain)
-    ScaleInference.h          # Musical scale/key detection
-  Services/                   # Background services
-    F0ExtractionService.h     # Async F0 extraction with worker threads
-  Standalone/                 # Standalone app UI
-    PluginEditor.h            # Main editor window (central mediator)
-    UI/                       # All UI components
-      PianoRollComponent.h    # Piano roll editor
-      MainControlPanel.h      # Control panel
-      ThemeTokens.h           # Theme system
-  Utils/                      # Utilities
-    PitchCurve.h              # Immutable-snapshot pitch curve (COW)
-    Note.h                    # Note data structures
-    AppLogger.h               # Static logging
-    UndoAction.h              # Command pattern undo/redo
-    LockFreeQueue.h           # Lock-free concurrent containers
-  Host/                       # Host integration abstractions
-  Audio/                      # Audio subsystem
-  Editor/                     # Editor factory
+  PluginProcessor.cpp/h        # Core audio processor (Standalone + VST3 shared)
+  SourceStore.cpp/h             # Original audio source storage (identity, buffer, metadata)
+  MaterializationStore.cpp/h    # Editable materialization storage (notes, F0, render cache)
+  StandaloneArrangement.cpp/h   # Standalone multi-track timeline (12 tracks, placements, playback snapshot)
+  Inference/                    # AI model layer (ONNX Runtime wrappers)
+    IF0Extractor.h              # F0 extractor abstract interface
+    RMVPEExtractor.h            # RMVPE F0 pitch extraction (implements IF0Extractor)
+    F0InferenceService.h        # CPU-only F0 extraction service (concurrent, auto-release idle model)
+    ModelFactory.h              # Static factory for IF0Extractor creation
+    VocoderInterface.h          # Vocoder abstract interface
+    OnnxVocoderBase.h           # ONNX vocoder base class (mel/F0 tensor management)
+    PCNSFHifiGANVocoder.h       # Pitch-Controllable NSF-HiFiGAN vocoder
+    DmlVocoder.h                # DirectML GPU-accelerated vocoder (IO binding)
+    DmlConfig.h                 # DirectML adapter configuration
+    VocoderFactory.h            # Vocoder factory (CPU/DML/CoreML backends)
+    VocoderInferenceService.h   # Vocoder ONNX session lifecycle management
+    VocoderRenderScheduler.h    # Serial vocoder synthesis task queue (DML requires serial Run())
+    VocoderDomain.h             # Vocoder scheduling facade (InferenceService + RenderScheduler)
+    RenderCache.h               # Cached render results (per-chunk, multi-rate, LRU eviction)
+  DSP/                          # Signal processing
+    MelSpectrogram.h            # Log-mel spectrogram (2048 FFT, 128 mel, 512 hop)
+    ResamplingManager.h         # Audio resampling (r8brain)
+    ChromaKeyDetector.h         # Musical key/scale detection (Chroma/HPCP + template matching)
+    CrossoverMixer.h            # LR4 crossover mixer (14kHz, rendered LPF + dry HPF)
+  Services/                     # Background services
+    F0ExtractionService.h       # Async F0 extraction task manager (worker pool, dedup, cancel)
+    ImportedClipF0Extraction.h  # Convenience wrapper for F0 extraction from materialization
+  ARA/                          # VST3 ARA integration
+    OpenTuneDocumentController.h # ARA document controller (lifecycle callbacks)
+    OpenTunePlaybackRenderer.h   # ARA playback renderer (fills ARA regions with rendered audio)
+    VST3AraSession.h             # ARA session manager (region/source ↔ SourceStore/MaterializationStore)
+  Standalone/                   # Standalone app
+    PluginEditor.h              # Standalone main editor (central mediator, all UI coordination)
+    EditorFactoryStandalone.cpp # Standalone editor factory
+    UI/                         # UI components
+      PianoRollComponent.h      # Piano roll editor (F0 curve + note editing, tools, zoom)
+      ParameterPanel.h          # Side parameter panel (Retune Speed, Vibrato knobs, tool select)
+      TopBarComponent.h         # Top navigation container (MenuBar + TransportBar)
+      MenuBarComponent.h        # Menu bar (File/Edit/View, JUCE MenuBarModel)
+      TransportBarComponent.h   # Transport controls (play/stop/loop, BPM, key, time display)
+      TrackPanelComponent.h     # Track side panel (mute/solo/volume/meter per track)
+      ArrangementViewComponent.h # Multi-track arrangement view (clip drag, waveform, timeline)
+      ThemeTokens.h             # Theme system (BlueBreeze / DarkBlueGrey / Aurora)
+      AuroraLookAndFeel.h       # Aurora theme renderer (neon knobs, glass buttons)
+      OpenTuneLookAndFeel.h     # Base LookAndFeel (knob/slider/button rendering)
+      FrameScheduler.h          # Frame-level task scheduler (priority-based repaint coalescing)
+      TimeConverter.h           # Time ↔ pixel coordinate conversion
+      PlayheadOverlayComponent.h # Playhead vertical line overlay
+      WaveformMipmap.h          # Waveform multi-level mipmap + LRU cache
+      UIColors.h                # Global UI color constants and metrics
+      ToolIds.h                 # Edit tool IDs (AutoTune/Select/DrawNote/LineAnchor/HandDraw)
+      ToolbarIcons.h            # SVG toolbar icon paths
+      SmallButton.h             # Small rounded button component
+      RippleOverlayComponent.h  # Mouse click ripple effect overlay
+      OpenTuneTooltipWindow.h   # Dark-style tooltip with shortcut badge
+      UiText.h                  # Localized tooltip text factory
+      PianoRoll/                # Piano roll subsystem (extracted from PianoRollComponent)
+        InteractionState.h      # Interaction state container (selection, drag, anchor, draw)
+        PianoRollCorrectionWorker.h # Background pitch correction worker (4 correction types)
+        PianoRollRenderer.h     # Piano roll renderer (F0 lines, notes, grid, beats)
+        PianoRollToolHandler.h  # Mouse/keyboard → tool state machine router
+        PianoRollVisualInvalidation.h # Visual invalidation flags and refresh priorities
+  Plugin/                       # VST3 plugin
+    PluginEditor.h              # VST3/ARA plugin editor shell (Timer-polled, ARA region projection)
+  Audio/                        # Audio subsystem
+    AudioFormatRegistry.h       # Audio format registration (WAV/AIFF/FLAC/MP3) and file probing
+    AsyncAudioLoader.h          # Background async audio loader (thread pool, cancel token, mipmap)
+  Editor/                       # Editor factory and overlays
+    EditorFactory.h             # Factory function: createOpenTuneEditor() (Standalone vs VST3)
+    AutoRenderOverlayComponent.h # Render status overlay (progress animation, chunk stats)
+    RenderBadgeComponent.h      # Floating render status badge
+    Preferences/                # Preferences dialog
+      TabbedPreferencesDialog.h # Tabbed preferences dialog container
+      SharedPreferencePages.h   # Shared preference pages (Standalone + VST3)
+      StandalonePreferencePages.h # Standalone-only preference pages
+  Host/                         # Host integration
+    HostIntegration.h           # Host integration abstraction
+  Utils/                        # Utilities
+    PitchCurve.h                # Immutable-snapshot pitch curve (COW, atomic lock-free reads)
+    Note.h                      # Note / LineAnchor / NoteSequence data structures
+    NoteGenerator.h             # Auto-generate notes from F0 (segmentation, scale snap, vibrato)
+    PitchUtils.h                # Pitch math (MIDI↔freq, retune blend, note names)
+    PitchControlConfig.h        # Default pitch correction parameters
+    SimdPerceptualPitchEstimator.h # Perceptual pitch estimation (PIP, VNC, Fletcher-Munson)
+    AppLogger.h                 # Static logging system (file output)
+    UndoManager.h               # Linear undo stack (500 levels, cursor-based)
+    PianoRollEditAction.h       # Piano roll undo action (notes + segments snapshot)
+    PlacementActions.h          # Placement undo actions (split/merge/delete/move/gain)
+    LockFreeQueue.h             # Lock-free MPMC queue (atomic, pre-allocated)
+    SilentGapDetector.h         # Silent gap detection (-40dBFS, 50ms min, spectral gate)
+    F0Timeline.h                # F0 frame ↔ time bidirectional mapping (100fps @ 16kHz)
+    TimeCoordinate.h            # Time ↔ sample conversion (kRenderSampleRate = 44100)
+    Error.h                     # Result<T> type (Rust-style ErrorCode + message)
+    AccelerationDetector.h      # GPU / DirectML / CoreML hardware detection
+    CpuFeatures.h               # CPU SIMD detection (SSE2/AVX/AVX2/AVX-512)
+    CpuBudgetManager.h          # ONNX thread budget allocation (GPU vs CPU mode)
+    ModelPathResolver.h         # ONNX model/DLL path resolution (multi-fallback search)
+    AppPreferences.h            # Global app preferences (theme, language, rendering priority)
+    PresetManager.h             # Preset save/load/delete (XML format)
+    LocalizationManager.h       # Multi-language i18n (EN/ZH/JA/RU/ES, singleton, listener)
+    KeyShortcutConfig.h         # Keyboard shortcut configuration and mapping
+    AudioEditingScheme.h        # Editing scheme selector (CorrectedF0Primary vs NotesPrimary)
+    ParameterPanelSync.h        # Parameter panel ↔ selection sync context
+    PianoRollVisualPreferences.h # Piano roll visual preferences (note names, chunk borders)
+    ZoomSensitivityConfig.h     # Zoom sensitivity settings
+    MouseTrailConfig.h          # Mouse trail effect theme config
+    PianoKeyAudition.h          # 88-key piano audition (MP3 samples, lock-free FIFO)
+    MaterializationState.h      # F0 extraction state enum (NotRequested/Extracting/Ready/Failed)
+    MaterializationTimelineProjection.h # Timeline ↔ local time projection for materializations
+    SourceWindow.h              # Source absolute window (sourceId + time range)
 ThirdParty/
-  r8brain-free-src-master/    # Vendored resampling library
-JUCE-master/                  # Vendored JUCE framework
-onnxruntime-win-x64-1.17.3/  # Vendored ONNX Runtime (Windows x64)
-models/                       # ONNX model files (Git LFS)
-Resources/                    # App icon, fonts
+  r8brain-free-src-master/      # Vendored resampling library
+  ARA_SDK-releases-2.2.0/       # Vendored ARA SDK for VST3 ARA extension
+pc_nsf_hifigan_44.1k_ONNX/     # PC-NSF-HiFiGAN vocoder model (~50 MB, hop=512, 128 mel)
+models/                         # ONNX model files (Git LFS) -- contains rmvpe.onnx
+Resources/                      # App icon, fonts, piano samples
+  Fonts/                        # Bundled fonts
+  PianoSamples-mp3/             # Piano key audition MP3 samples
 ```
 
 ## Code Style Guidelines
@@ -95,8 +184,8 @@ Resources/                    # App icon, fonts
 
 | Element              | Convention                          | Example                              |
 |----------------------|-------------------------------------|--------------------------------------|
-| Classes / Structs    | PascalCase                          | `InferenceManager`, `TrackState`     |
-| Interfaces (ABC)     | `I` prefix + PascalCase             | `IF0Extractor`, `IVocoder`           |
+| Classes / Structs    | PascalCase                          | `VocoderDomain`, `TrackState`        |
+| Interfaces (ABC)     | `I` prefix + PascalCase             | `IF0Extractor`, `VocoderInterface`   |
 | Methods              | camelCase                           | `extractF0()`, `prepareToPlay()`     |
 | Member variables     | camelCase + trailing underscore     | `sampleRate_`, `inferenceReady_`     |
 | Local variables      | camelCase                           | `numSamples`, `clipGain`             |
@@ -158,6 +247,7 @@ Use forward declarations to avoid unnecessary includes where possible.
 
 - **No exceptions thrown** by project code. Catch exceptions only at external API boundaries
   (ONNX Runtime calls) using `try { ... } catch (const std::exception& e) { ... } catch (...) { ... }`
+- **Result<T>** type for structured error returns (Rust-style `ErrorCode` + message)
 - **Bool returns** for success/failure: `bool initialize(...)`, `bool configure(...)`
 - **Enum results** for richer status: `SubmitResult::Accepted`, `SubmitResult::QueueFull`
 - **Structured diagnostics**: `PreflightResult` with `success`, `errorMessage`, `errorCategory`
@@ -187,10 +277,9 @@ Use forward declarations to avoid unnecessary includes where possible.
   via `std::atomic_store` / `std::atomic_load` for lock-free audio thread reads
 - **Atomics**: Use `std::atomic<T>` with explicit memory ordering (`relaxed`, `acquire`,
   `release`) where appropriate
-- **Lock-free structures**: Custom `LockFreeQueue`, `SPSCRingBuffer` with cache-line
-  alignment (`alignas(64)`)
-- **Two-phase import**: Heavy work in worker thread (`prepareImportClip`), lightweight
-  commit under write lock on main thread (`commitPreparedImportClip`)
+- **Lock-free structures**: Custom `LockFreeQueue` with cache-line alignment (`alignas(64)`)
+- **Playback snapshot**: `StandaloneArrangement` publishes immutable `PlaybackSnapshot` for
+  zero-lock audio thread reads
 
 ### Comments
 
@@ -203,13 +292,13 @@ Use forward declarations to avoid unnecessary includes where possible.
 ### Common Design Patterns
 
 - **Listener / Observer**: Nested `Listener` class with virtual callbacks; `juce::ListenerList`
-- **Singleton**: `InferenceManager::getInstance()` with private constructor
-- **Pimpl**: `InferenceManager` hides implementation behind `std::unique_ptr<Impl>`
-- **Factory**: `ModelFactory::createF0Extractor(...)`, `ModelFactory::createVocoder(...)`
-- **Command (Undo/Redo)**: `UndoAction` base class with concrete actions like `NotesChangeAction`,
-  `ClipMoveAction`; `CompoundUndoAction` for atomic multi-step ops
-- **RAII**: Lock guards, smart pointers, `OriginalF0ExtractionGuard`, `PerfTimer`
-- **Move semantics**: Explicitly support where needed (`PreparedImportClip&&`)
+- **Factory**: `ModelFactory::createF0Extractor(...)`, `VocoderFactory::create(...)`
+- **Domain Facade**: `VocoderDomain` composes `VocoderInferenceService` + `VocoderRenderScheduler`
+- **Command (Undo/Redo)**: `UndoAction` base class with concrete actions `PianoRollEditAction`,
+  `SplitPlacementAction`, `MovePlacementAction`, etc.; `UndoManager` with 500-level linear stack
+- **RAII**: Lock guards, smart pointers, `PerfTimer`
+- **Result type**: `Result<T>` for error propagation without exceptions
+- **Move semantics**: Explicitly support where needed
 
 ### Compile Definitions to Know
 
@@ -217,6 +306,8 @@ Use forward declarations to avoid unnecessary includes where possible.
 - `ORT_API_MANUAL_INIT` -- manual ONNX Runtime initialization
 - `NOMINMAX` / `WIN32_LEAN_AND_MEAN` -- standard Windows defines
 - `JucePlugin_Build_Standalone` -- conditional compilation for standalone vs plugin builds
+- `JucePlugin_Build_VST3` -- conditional compilation for VST3 builds
+- `JucePlugin_Enable_ARA` -- ARA extension support
 
 ## Audio Pipeline
 
@@ -224,17 +315,19 @@ End-to-end flow from user edit to audible output:
 
 ```
 User Edit (UI) --> PitchCurve snapshot update --> Chunk Render Queue
---> Mel spectrogram + corrected F0 preparation --> NSF-HiFiGAN vocoder (ONNX)
---> RenderCache --> processBlock reads cache --> Audio Output
+--> Mel spectrogram + corrected F0 preparation --> PC-NSF-HiFiGAN vocoder (ONNX)
+--> RenderCache --> processBlock reads cache --> CrossoverMixer --> Audio Output
 ```
 
 ### Import Phase
 
-1. User imports audio file. `PluginProcessor` resamples to 44100 Hz via `ResamplingManager`
-   (r8brain), stores in `clip.audioBuffer`.
-2. `F0ExtractionService` (2 worker threads) submits async extraction. Worker resamples
-   audio to 16 kHz, runs `RMVPEExtractor` (ONNX), returns F0 + energy arrays at 100 fps
-   (hop=160 @ 16 kHz). Result committed on message thread into `PitchCurve`.
+1. User imports audio file. `AsyncAudioLoader` loads and resamples to 44100 Hz via
+   `ResamplingManager` (r8brain), builds `WaveformMipmap`, stores in `SourceStore`.
+2. `F0ExtractionService` submits async extraction. Worker calls `F0InferenceService`
+   which manages `RMVPEExtractor` lifecycle (auto-loads on demand, auto-releases after
+   30s idle). Extractor resamples audio to 16 kHz, runs RMVPE (ONNX), returns F0 + energy
+   arrays at 100 fps (hop=160 @ 16 kHz). Result committed on message thread into
+   `MaterializationStore`'s `PitchCurve`.
 
 ### Edit Phase (Pure Algorithm -- No Models)
 
@@ -243,27 +336,26 @@ When user edits pitch (note drag, hand-draw, line-anchor, auto-tune):
 2. Computes corrected F0 array via `PitchCurve::applyCorrectionToRange` (see
    Pitch Correction Algorithm section below).
 3. Atomically publishes a new immutable `PitchCurveSnapshot` (COW pattern).
-4. Callback on message thread fires `PluginEditor::pitchCurveEdited` -->
-   `PluginProcessor::enqueuePartialRender`.
+4. Callback on message thread triggers render enqueue.
 
 ### Chunk Rendering Phase
 
-`enqueuePartialRender` (`PluginProcessor.cpp`):
-1. Splits clip by `silentGaps` into natural chunks (boundaries at gap midpoints).
+Render enqueue:
+1. Splits materialization by `silentGaps` (from `SilentGapDetector`) into natural chunks.
 2. For each chunk overlapping the edited range: bumps `desiredRevision` in `RenderCache`,
-   pushes `ChunkRenderTask` to front of deque (newest edits render first).
+   pushes render task (newest edits render first).
 
 `chunkRenderWorkerThread_` (dedicated `std::thread`):
-1. Extracts mono audio from `clip.audioBuffer` (44100 Hz) for the chunk time range.
+1. Extracts mono audio from source buffer (44100 Hz) for the chunk time range.
 2. Calls `snap->renderF0Range` to get corrected F0 (merges original + corrections).
 3. Interpolates F0 from 100 fps to mel frame rate (~86 fps at 44100/512 hop).
 4. Fills F0 gaps via `fillF0GapsForVocoder` (internal interpolation + boundary lookahead).
 5. Computes log-mel spectrogram: 128 mels, 2048 FFT, 512 hop, 44100 Hz, 40--16000 Hz.
-6. Packages `ChunkInputs{mel, f0, energy, targetSamples}` and submits to `RenderingManager`.
+6. Submits to `VocoderDomain`.
 
-`RenderingManager` worker pool (hardware_concurrency / 2 threads):
+`VocoderRenderScheduler` (serial execution -- DML requires serial `Run()`):
 1. Applies psychoacoustic calibration (`SimdPerceptualPitchEstimator::getPerceptualOffset`).
-2. Calls `InferenceManager::synthesizeAudioWithEnergy` --> ONNX vocoder inference.
+2. Calls `VocoderInferenceService` --> ONNX vocoder inference (CPU or DirectML).
 3. Crops output to exact `targetSamples`, stores in `RenderCache` at 44100 Hz +
    resampled copy at device sample rate.
 
@@ -271,13 +363,15 @@ When user edits pitch (note drag, hand-draw, line-anchor, auto-tune):
 
 `processBlock` (`PluginProcessor.cpp`) runs on the **audio thread**:
 1. `juce::ScopedNoDenormals` for CPU safety.
-2. Reads playback position from `positionAtomic_` (lock-free atomic).
-3. Acquires `ScopedReadLock` on `tracksLock_`.
-4. For each track/clip: reads dry signal from `clip.drySignalBuffer_` (pre-resampled
-   to device rate). If corrected F0 exists, attempts `RenderCache::readAtTimeForRate`
-   with `ScopedTryLock` (non-blocking). On lock contention, falls back to dry signal.
-5. Mix: rendered audio (if available) or dry signal, scaled by `clipGain * trackVolume *
-   fadeGain`. Sum all tracks into output buffer.
+2. Reads playback position (lock-free atomic).
+3. For Standalone: reads immutable `PlaybackSnapshot` from `StandaloneArrangement`.
+   For VST3/ARA: reads ARA playback regions.
+4. For each placement/clip: reads dry signal. If corrected F0 exists, attempts
+   `RenderCache::readAtTimeForRate` with `ScopedTryLock` (non-blocking). On lock
+   contention, falls back to dry signal.
+5. `CrossoverMixer` blends rendered audio (LPF < 14kHz) with dry signal (HPF > 14kHz)
+   for artifact-free mixing.
+6. Mix: scaled by `clipGain * trackVolume * fadeGain`. Sum all tracks into output buffer.
 
 **Key invariant**: the audio thread **never blocks**. `ScopedTryLock` on `RenderCache`
 ensures zero priority inversion.
@@ -285,15 +379,14 @@ ensures zero priority inversion.
 ## Pitch Correction Algorithm
 
 All pitch correction is **pure math / DSP**. No ML models are involved. Models are only
-used at the endpoints: RMVPE for F0 extraction (input) and NSF-HiFiGAN for synthesis
+used at the endpoints: RMVPE for F0 extraction (input) and PC-NSF-HiFiGAN for synthesis
 (output).
 
 ### NoteBased Correction (`PitchCurve::applyCorrectionToRange`)
 
-Core entry point at `Source/Utils/PitchCurve.cpp:439`. Processes each F0 frame in the
-requested range through four stages:
+Processes each F0 frame in the requested range through five stages:
 
-**Stage 1 -- Slope Rotation Compensation** (`PitchCurve.cpp:510-546`)
+**Stage 1 -- Slope Rotation Compensation**
 
 Compensates for natural pitch drift (e.g. rising intonation at phrase end) so that the
 corrected output sounds level.
@@ -311,7 +404,7 @@ corrected output sounds level.
    baseF0 = midiToFreq(anchorMidi + yRotated)
    ```
 
-**Stage 2 -- Pitch Shifting** (`PitchCurve.cpp:608-611`)
+**Stage 2 -- Pitch Shifting**
 
 Translates the (rotation-compensated) original F0 to the target pitch region while
 **preserving all original detail** (vibrato, slides, micro-variations):
@@ -322,7 +415,7 @@ shiftedF0 = baseF0 * shiftRatio
 ```
 `shiftedF0` is the result at retuneSpeed = 0% (full detail, just shifted).
 
-**Stage 3 -- Vibrato LFO Injection** (`PitchCurve.cpp:590-595`)
+**Stage 3 -- Vibrato LFO Injection**
 
 Standard sine LFO applied to the flat target pitch:
 ```
@@ -333,7 +426,7 @@ targetF0 *= 2^(lfoValue / 12)
 - `vibratoRate`: oscillation frequency in Hz (typical 5--7 Hz)
 - `vibratoDepth`: amplitude as percentage (100 = 1 semitone peak)
 
-**Stage 4 -- Retune Speed Blending** (`PitchUtils::mixRetune`, `PitchUtils.h:16`)
+**Stage 4 -- Retune Speed Blending** (`PitchUtils::mixRetune`)
 
 Log-space linear interpolation between the detail-preserving shifted F0 and the flat
 target F0:
@@ -347,7 +440,7 @@ result = 2^logResult
 
 Log2 space is used because human pitch perception is logarithmic (octave = 2x frequency).
 
-**Stage 5 -- Transition Smoothing** (`PitchCurve.cpp:76-196`)
+**Stage 5 -- Transition Smoothing**
 
 Each corrected segment gets 10-frame (~100 ms) transition ramps on both sides:
 ```
@@ -402,45 +495,64 @@ F0 frame range (`selectedF0StartFrame/EndFrame`). Deselection triggers: Escape k
 
 - **Purpose**: Extract fundamental frequency (F0) from vocal audio.
 - **Location**: `Source/Inference/RMVPEExtractor.h`
-- **Format**: ONNX, run via ONNX Runtime 1.17.3.
+- **Model file**: `models/rmvpe.onnx` (Git LFS)
+- **Format**: ONNX, run via ONNX Runtime (CPU only).
 - **Input**: mono audio resampled to 16 kHz `[1, num_samples]` + threshold `[1]`.
 - **Output**: F0 `[1, num_frames]` + UV (unvoiced) `[1, num_frames]`.
 - **Frame rate**: 100 fps (hop = 160 samples at 16 kHz = 10 ms per frame).
 - **Post-processing**: octave error correction, gap filling (up to 8 frames).
 - **Preflight**: estimates 6x memory overhead, enforces 10-minute max duration, checks
   available system memory.
-- **When called**: once per clip import, via `F0ExtractionService` (2 worker threads).
+- **Lifecycle**: `F0InferenceService` loads model on first use, auto-releases after 30s idle.
 
-### NSF-HiFiGAN -- Neural Vocoder
+### PC-NSF-HiFiGAN -- Neural Vocoder
 
 - **Purpose**: Synthesize audio from mel spectrogram + corrected F0, preserving original
   timbre while changing pitch.
-- **Variants** (tried in order):
-  1. `PCNSFHifiGANVocoder` (~50 MB) -- Pitch-Controllable NSF-HiFiGAN. Preferred.
-     Input: mel `[1,128,frames]` + f0 `[1,frames]` + UV tensor.
-  2. `HifiGANVocoder` (~14 MB) -- standard HiFiGAN. Fallback.
-     Input: mel `[1,128,frames]` + f0 `[1,frames]`.
+- **Location**: `Source/Inference/PCNSFHifiGANVocoder.h` (CPU), `Source/Inference/DmlVocoder.h` (GPU)
+- **Model file**: `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx` (~50 MB)
+- **Input**: mel `[1,128,frames]` + f0 `[1,frames]`
 - **Output**: audio at 44100 Hz, length = frames * 512 samples.
-- **Managed by**: `InferenceManager` (singleton, Pimpl), created via `ModelFactory`.
-- **When called**: during chunk rendering in `RenderingManager` worker threads.
+- **Backends**: CPU (OnnxVocoderBase) or DirectML GPU (DmlVocoder with IO binding).
+  Backend selected by `VocoderFactory` based on `AccelerationDetector` results.
+- **Managed by**: `VocoderDomain` facade → `VocoderInferenceService` (session) +
+  `VocoderRenderScheduler` (serial queue).
+- **DML constraint**: DirectML requires serial `Run()` calls -- `VocoderRenderScheduler`
+  enforces single-threaded synthesis.
 
 ### Psychoacoustic Calibration
 
-`SimdPerceptualPitchEstimator::getPerceptualOffset` (`Source/Utils/SimdPerceptualPitchEstimator.h:92`):
+`SimdPerceptualPitchEstimator::getPerceptualOffset` (`Source/Utils/SimdPerceptualPitchEstimator.h`):
 - Compensates for Fletcher-Munson equal-loudness contour effects.
 - < 1000 Hz and loud (> -12 dB): +2 cents.
 - \> 2500 Hz and loud (> -12 dB): -3 cents.
-- Applied to F0 before vocoder inference in `RenderingManager`.
+- Applied to F0 before vocoder inference in `VocoderRenderScheduler`.
 
 ### Perceptual Intentional Pitch (PIP)
 
-`SimdPerceptualPitchEstimator::estimatePIP` (`Source/Utils/SimdPerceptualPitchEstimator.h:22`):
+`SimdPerceptualPitchEstimator::estimatePIP` (`Source/Utils/SimdPerceptualPitchEstimator.h`):
 - Used by `NoteGenerator` to compute representative pitch per note.
 - Vibrato-Neutral Center (VNC): 150 ms centered moving average of F0.
 - Stable-State Analysis (SSA): Tukey window (15% cosine ramp edges).
 - Final: `Sum(VNC * SSA * Energy) / Sum(SSA * Energy)`.
 
-## Key Data Structures
+## Core Data Model
+
+### Three-Store Architecture
+
+The data model separates concerns into three stores:
+
+- **`SourceStore`**: Original audio sources. Immutable after import. Holds audio buffers,
+  sample rate, channel count. Identity-based (sourceId). No editing state.
+- **`MaterializationStore`**: Editable processing state per source region. Holds notes,
+  corrected F0 segments, detected key/scale, silent gaps, render cache. One materialization
+  per source window. All pitch editing happens here.
+- **`StandaloneArrangement`** (Standalone only): Multi-track timeline with 12 tracks.
+  Placements reference materializations at timeline positions. Publishes immutable
+  `PlaybackSnapshot` for lock-free audio thread reads.
+
+For VST3/ARA mode, `VST3AraSession` maps ARA regions/sources to the same SourceStore
+and MaterializationStore, replacing StandaloneArrangement's role.
 
 ### PitchCurve / PitchCurveSnapshot (COW)
 
@@ -460,7 +572,7 @@ F0 frame range (`selectedF0StartFrame/EndFrame`). Deselection triggers: Escape k
 
 ### CorrectedSegment
 
-`Source/Utils/PitchCurve.h:15`
+`Source/Utils/PitchCurve.h`
 
 - `startFrame`, `endFrame` -- frame range.
 - `f0Data` -- corrected F0 values (Hz).
@@ -485,26 +597,25 @@ F0 frame range (`selectedF0StartFrame/EndFrame`). Deselection triggers: Escape k
   of resampled versions keyed by target sample rate.
 - Revision protocol: `desiredRevision` (bumped by edits) vs `publishedRevision` (set by
   render completion). Read succeeds only when `desired == published`.
-- Memory limit: 1.5 GB global cap, LRU eviction.
+- Memory limit: 256 MB cap, LRU eviction.
 - Thread safety: `juce::SpinLock` -- audio thread uses `ScopedTryLock` (non-blocking).
 
 ## Threading Model
 
 | Thread | Count | Role | Key Data Access |
 |--------|-------|------|-----------------|
-| Audio thread (`processBlock`) | 1 | Real-time mixing | Reads `drySignalBuffer_`, `RenderCache` (non-blocking try-lock), `positionAtomic_`. Holds `ScopedReadLock` on `tracksLock_`. |
-| UI / Message thread | 1 | User interaction, state mutation | Writes `PitchCurve`, `NoteSequence`. Calls `enqueuePartialRender`. Holds `ScopedWriteLock` on `tracksLock_` for clip mutations. |
-| `chunkRenderWorkerThread_` | 1 | Mel + F0 preparation for vocoder | Reads `tracksLock_` (read lock), `PitchCurveSnapshot` (immutable COW). Writes to chunk task queue. |
-| `RenderingManager` workers | N/2 | ONNX vocoder inference | Reads `ChunkInputs`. Writes to `RenderCache`. |
-| `F0ExtractionService` workers | 2 | RMVPE inference | Reads clip audio (copy). Results committed on message thread. |
+| Audio thread (`processBlock`) | 1 | Real-time mixing | Reads `PlaybackSnapshot` (immutable), `RenderCache` (non-blocking try-lock). |
+| UI / Message thread | 1 | User interaction, state mutation | Writes `MaterializationStore`, `SourceStore`, `StandaloneArrangement`. |
+| `chunkRenderWorkerThread_` | 1 | Mel + F0 preparation for vocoder | Reads `PitchCurveSnapshot` (immutable COW). Submits to `VocoderDomain`. |
+| `VocoderRenderScheduler` | 1 | Serial ONNX vocoder inference (DML requires serial Run()) | Reads chunk inputs. Writes to `RenderCache`. |
+| `F0InferenceService` | concurrent | RMVPE inference (shared_mutex, CPU-only) | Reads source audio (copy). Results committed on message thread. |
 | `PianoRollCorrectionWorker` | 1 | Pitch correction computation | Reads/writes `PitchCurve` snapshots. Results applied on message thread. |
 
 ### Synchronization Primitives
 
-- `tracksLock_` (`juce::ReadWriteLock`): protects track/clip data. Audio thread holds
-  read lock; UI thread holds write lock for mutations.
 - `PitchCurve` snapshots: `std::atomic_store`/`load` for lock-free COW.
+- `PlaybackSnapshot`: immutable snapshot published by `StandaloneArrangement` for audio thread.
 - `RenderCache::lock_` (`juce::SpinLock`): audio thread uses `ScopedTryLock`.
-- `chunkQueueMutex_` + `chunkQueueCv_`: chunk render task queue coordination.
+- `schedulerMutex_` + `schedulerCv_`: chunk render task queue coordination.
 - `pendingRequestMutex_` on `PianoRollCorrectionWorker`: guards request handoff.
-- `std::shared_mutex` on F0 extractor in `InferenceManager`.
+- `std::shared_mutex` on F0 extractor in `F0InferenceService`.
