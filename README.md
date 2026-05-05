@@ -137,9 +137,13 @@ git clone -b standalone https://github.com/YuFeng926/OpenTune.git
 cd OpenTune
 ```
 
+> **重要：所有三方依赖均不在 Git 仓库中**（`JUCE-master/` 与 `ThirdParty/` 已加入 `.gitignore`，避免数百 MB 二进制 blob 进入历史）。请按下列步骤分别获取并放置到指定路径。
+>
+> **CMake 自动检测：** 依赖按下方规范放置后，配置时**无需任何 `-D` 覆盖**。CMakeLists.txt 在缓存路径失效时会自动 fallback 到 `ThirdParty/<dep>/` 的 bundled 默认路径。
+
 #### 1. JUCE Framework
 
-克隆到项目根目录，文件夹名必须为 `JUCE-master`：
+克隆到项目根目录（**JUCE 例外，不在 `ThirdParty/`**），文件夹名必须为 `JUCE-master`：
 
 ```bash
 git clone https://github.com/juce-framework/JUCE.git JUCE-master

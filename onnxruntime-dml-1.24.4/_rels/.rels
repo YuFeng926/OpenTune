@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Type="http://schemas.microsoft.com/packaging/2010/07/manifest" Target="/Microsoft.ML.OnnxRuntime.DirectML.nuspec" Id="R605BB99C1A1EA48B" />
-  <Relationship Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="/package/services/metadata/core-properties/03c9b3fd7cf24e9db9730abb90b13586.psmdcp" Id="RF21F20D3DA52B6D5" />
-</Relationships>
