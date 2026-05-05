@@ -29,6 +29,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 APP_BUNDLE="$PROJECT_ROOT/build-arm64/OpenTune_artefacts/Release/Standalone/OpenTune.app"
+VST3_BUNDLE="$PROJECT_ROOT/build-arm64/OpenTune_artefacts/Release/VST3/OpenTune.vst3"
 ENTITLEMENTS="$PROJECT_ROOT/Resources/macOS/OpenTune.entitlements"
 DYLIB_NAME="libonnxruntime.1.24.4.dylib"
 
@@ -78,6 +79,7 @@ echo "Version:      $VERSION"
 echo "Developer ID: $DEVELOPER_ID"
 echo "Notarize:     $([ "$SKIP_NOTARIZE" = true ] && echo "SKIP" || echo "YES")"
 echo "App Bundle:   $APP_BUNDLE"
+echo "VST3 Bundle:  $VST3_BUNDLE"
 echo "DMG Output:   $DMG_OUTPUT"
 echo "========================================"
 echo ""
@@ -95,6 +97,16 @@ if [ ! -f "$ENTITLEMENTS" ]; then
     exit 1
 fi
 
+# Detect VST3 bundle (optional — packaged when present)
+INCLUDE_VST3=false
+VST3_DYLIB_PATH=""
+VST3_BINARY_PATH=""
+if [ -d "$VST3_BUNDLE" ]; then
+    INCLUDE_VST3=true
+    VST3_DYLIB_PATH="$VST3_BUNDLE/Contents/Frameworks/$DYLIB_NAME"
+    VST3_BINARY_PATH="$VST3_BUNDLE/Contents/MacOS/OpenTune"
+fi
+
 # Verify bundle structure
 echo "[1/8] Verifying bundle structure..."
 DYLIB_PATH="$APP_BUNDLE/Contents/Frameworks/$DYLIB_NAME"
@@ -110,7 +122,23 @@ if [ ! -f "$BINARY_PATH" ]; then
     exit 1
 fi
 
-echo "  Bundle structure OK"
+echo "  Standalone bundle OK"
+
+if [ "$INCLUDE_VST3" = true ]; then
+    if [ ! -f "$VST3_BINARY_PATH" ]; then
+        echo "Error: VST3 binary not found at $VST3_BINARY_PATH"
+        exit 1
+    fi
+    if [ ! -f "$VST3_DYLIB_PATH" ]; then
+        echo "Warning: VST3 has no embedded ONNX dylib at $VST3_DYLIB_PATH"
+        echo "         (will sign binary + bundle only)"
+        VST3_DYLIB_PATH=""
+    fi
+    echo "  VST3 bundle OK"
+else
+    echo "  VST3 bundle not present — building Standalone-only DMG"
+    echo "  (To include VST3: cmake --build build-arm64 --config Release --target OpenTune_VST3)"
+fi
 
 # ==============================================================================
 # Step 2: Fix dylib install name (ensure @rpath is correct)
@@ -118,50 +146,83 @@ echo "  Bundle structure OK"
 
 echo "[2/8] Fixing dylib install names..."
 
-# Ensure the dylib ID uses @rpath
+# Standalone: ensure dylib ID + main binary reference both use @rpath
 install_name_tool -id "@rpath/$DYLIB_NAME" "$DYLIB_PATH" 2>/dev/null || true
-
-# Verify the main binary references the dylib via @rpath
 if ! otool -L "$BINARY_PATH" | grep -q "@rpath/$DYLIB_NAME"; then
-    echo "Warning: Binary doesn't reference dylib via @rpath. Attempting fix..."
-    # Find the current reference and change it
+    echo "  Standalone: binary doesn't reference dylib via @rpath. Attempting fix..."
     CURRENT_REF=$(otool -L "$BINARY_PATH" | grep "onnxruntime" | awk '{print $1}')
     if [ -n "$CURRENT_REF" ]; then
         install_name_tool -change "$CURRENT_REF" "@rpath/$DYLIB_NAME" "$BINARY_PATH"
     fi
 fi
+echo "  Standalone install names OK"
 
-echo "  Install names OK"
+# VST3: same install-name normalization (only if VST3 has its own embedded dylib)
+if [ "$INCLUDE_VST3" = true ] && [ -n "$VST3_DYLIB_PATH" ]; then
+    install_name_tool -id "@rpath/$DYLIB_NAME" "$VST3_DYLIB_PATH" 2>/dev/null || true
+    if ! otool -L "$VST3_BINARY_PATH" | grep -q "@rpath/$DYLIB_NAME"; then
+        echo "  VST3: binary doesn't reference dylib via @rpath. Attempting fix..."
+        CURRENT_REF=$(otool -L "$VST3_BINARY_PATH" | grep "onnxruntime" | awk '{print $1}')
+        if [ -n "$CURRENT_REF" ]; then
+            install_name_tool -change "$CURRENT_REF" "@rpath/$DYLIB_NAME" "$VST3_BINARY_PATH"
+        fi
+    fi
+    echo "  VST3 install names OK"
+fi
 
 # ==============================================================================
 # Step 3: Sign inside-out with Hardened Runtime
 # ==============================================================================
 
-echo "[3/8] Signing app bundle (inside-out, Hardened Runtime)..."
+echo "[3/8] Signing bundles (inside-out, Hardened Runtime)..."
 
-# Sign the dylib first
-echo "  Signing Frameworks/$DYLIB_NAME..."
+# --- Standalone (.app) ---
+echo "  [Standalone] Signing Frameworks/$DYLIB_NAME..."
 codesign --force --options runtime \
     --sign "$DEVELOPER_ID" \
     --entitlements "$ENTITLEMENTS" \
     --timestamp \
     "$DYLIB_PATH"
 
-# Sign the main binary
-echo "  Signing MacOS/OpenTune..."
+echo "  [Standalone] Signing MacOS/OpenTune..."
 codesign --force --options runtime \
     --sign "$DEVELOPER_ID" \
     --entitlements "$ENTITLEMENTS" \
     --timestamp \
     "$BINARY_PATH"
 
-# Sign the entire app bundle
-echo "  Signing OpenTune.app..."
+echo "  [Standalone] Signing OpenTune.app..."
 codesign --force --options runtime \
     --sign "$DEVELOPER_ID" \
     --entitlements "$ENTITLEMENTS" \
     --timestamp \
     "$APP_BUNDLE"
+
+# --- VST3 (.vst3 bundle) ---
+if [ "$INCLUDE_VST3" = true ]; then
+    if [ -n "$VST3_DYLIB_PATH" ]; then
+        echo "  [VST3] Signing Frameworks/$DYLIB_NAME..."
+        codesign --force --options runtime \
+            --sign "$DEVELOPER_ID" \
+            --entitlements "$ENTITLEMENTS" \
+            --timestamp \
+            "$VST3_DYLIB_PATH"
+    fi
+
+    echo "  [VST3] Signing MacOS/OpenTune..."
+    codesign --force --options runtime \
+        --sign "$DEVELOPER_ID" \
+        --entitlements "$ENTITLEMENTS" \
+        --timestamp \
+        "$VST3_BINARY_PATH"
+
+    echo "  [VST3] Signing OpenTune.vst3..."
+    codesign --force --options runtime \
+        --sign "$DEVELOPER_ID" \
+        --entitlements "$ENTITLEMENTS" \
+        --timestamp \
+        "$VST3_BUNDLE"
+fi
 
 echo "  Signing complete"
 
@@ -169,29 +230,38 @@ echo "  Signing complete"
 # Step 4: Verify signature
 # ==============================================================================
 
-echo "[4/8] Verifying code signature..."
+echo "[4/8] Verifying code signatures..."
 
-if codesign --verify --strict --verbose=2 "$APP_BUNDLE" 2>&1; then
-    echo "  Signature verification PASSED"
-else
-    echo "Error: Signature verification FAILED"
-    exit 1
-fi
+verify_signed_bundle() {
+    local label="$1"
+    local bundle="$2"
 
-# Verify Hardened Runtime flag
-if codesign -d --verbose=4 "$APP_BUNDLE" 2>&1 | grep -q "flags=.*runtime"; then
-    echo "  Hardened Runtime confirmed"
-else
-    echo "Error: Hardened Runtime flag not set"
-    exit 1
-fi
+    if codesign --verify --strict --verbose=2 "$bundle" 2>&1; then
+        echo "  [$label] Signature verification PASSED"
+    else
+        echo "Error: [$label] Signature verification FAILED"
+        exit 1
+    fi
 
-# Verify entitlements are embedded
-if codesign -d --entitlements - "$APP_BUNDLE" 2>&1 | grep -q "disable-library-validation"; then
-    echo "  Entitlements embedded OK"
-else
-    echo "Error: Entitlements not found in signature"
-    exit 1
+    if codesign -d --verbose=4 "$bundle" 2>&1 | grep -q "flags=.*runtime"; then
+        echo "  [$label] Hardened Runtime confirmed"
+    else
+        echo "Error: [$label] Hardened Runtime flag not set"
+        exit 1
+    fi
+
+    if codesign -d --entitlements - "$bundle" 2>&1 | grep -q "disable-library-validation"; then
+        echo "  [$label] Entitlements embedded OK"
+    else
+        echo "Error: [$label] Entitlements not found in signature"
+        exit 1
+    fi
+}
+
+verify_signed_bundle "Standalone" "$APP_BUNDLE"
+
+if [ "$INCLUDE_VST3" = true ]; then
+    verify_signed_bundle "VST3" "$VST3_BUNDLE"
 fi
 
 # ==============================================================================
@@ -211,9 +281,13 @@ if [ -d "$MOUNT_POINT" ]; then
     hdiutil detach "$MOUNT_POINT" -force 2>/dev/null || true
 fi
 
-# Calculate required size (app size + 50MB headroom)
+# Calculate required size (app + vst3 + 50MB headroom)
 APP_SIZE_KB=$(du -sk "$APP_BUNDLE" | awk '{print $1}')
-DMG_SIZE_KB=$((APP_SIZE_KB + 51200))
+VST3_SIZE_KB=0
+if [ "$INCLUDE_VST3" = true ]; then
+    VST3_SIZE_KB=$(du -sk "$VST3_BUNDLE" | awk '{print $1}')
+fi
+DMG_SIZE_KB=$((APP_SIZE_KB + VST3_SIZE_KB + 51200))
 
 # Create temporary writable DMG
 hdiutil create -size "${DMG_SIZE_KB}k" \
@@ -227,6 +301,18 @@ hdiutil attach "${TEMP_DMG}.sparseimage" -mountpoint "$MOUNT_POINT" -nobrowse
 
 # Copy app bundle
 cp -R "$APP_BUNDLE" "$MOUNT_POINT/"
+
+# Copy VST3 bundle (when present)
+if [ "$INCLUDE_VST3" = true ]; then
+    cp -R "$VST3_BUNDLE" "$MOUNT_POINT/"
+fi
+
+# Copy install script (removes quarantine for unsigned builds; installs both formats)
+INSTALL_SCRIPT="$SCRIPT_DIR/install.command"
+if [ -f "$INSTALL_SCRIPT" ]; then
+    cp "$INSTALL_SCRIPT" "$MOUNT_POINT/Install OpenTune.command"
+    chmod +x "$MOUNT_POINT/Install OpenTune.command"
+fi
 
 # Create Applications symlink
 ln -s /Applications "$MOUNT_POINT/Applications"
