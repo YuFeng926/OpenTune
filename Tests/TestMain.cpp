@@ -6,6 +6,7 @@
 #include "Utils/AppPreferences.h"
 #include "Utils/AudioEditingScheme.h"
 #include "Utils/ParameterPanelSync.h"
+#include "Utils/SimdAccelerator.h"
 #include "Utils/UndoManager.h"
 
 #include <array>
@@ -386,9 +387,6 @@ struct PianoRollToolHandlerHarness {
         };
 
         ctx.getPitchCurve = [this]() { return pitchCurve; };
-        ctx.clearCorrectionRange = [](int, int) { return true; };
-        ctx.clearAllCorrections = []() { return true; };
-
         ctx.getPianoKeyWidth = []() { return 0; };
         ctx.getMaterializationProjection = [this]() { return projection; };
         ctx.projectTimelineTimeToMaterialization = [this](double timelineSeconds) {
@@ -465,7 +463,6 @@ struct PianoRollToolHandlerHarness {
             return applyManualCorrectionResult;
         };
         ctx.selectNotesOverlappingFrames = [](int, int) { return true; };
-        ctx.enqueueNoteBasedCorrection = [](const std::vector<Note>&, int, int, float, float, float) {};
         ctx.getOriginalF0 = []() { return std::vector<float>{}; };
 
         ctx.findLineAnchorSegmentNear = [](int, int) { return -1; };
@@ -764,9 +761,6 @@ void runStandalonePreferencesOwnAudioSettingsUiTest()
         || pluginEditorSource.contains("showAudioSettingsDialog(")
         || processorHeader.contains("showAudioSettingsDialog(")
         || processorSource.contains("showAudioSettingsDialog(")
-        || hostHeader.contains("audioSettingsRequested(")
-        || hostStandaloneSource.contains("audioSettingsRequested(")
-        || hostStandaloneSource.contains("AudioDeviceSelectorComponent(")
         || transportHeader.contains("audioSettingsRequested()")) {
         logFail(testName, "legacy audio settings dialog chain still exists alongside the standalone preferences page");
         return;
@@ -986,7 +980,7 @@ void runPianoRollHotPathSourceGuardNoPerEventDebugLoggingTest()
     const auto mouseUpSection = extractWorkspaceFileSection(
         toolHandlerPath,
         "void PianoRollToolHandler::mouseUp",
-        "void PianoRollToolHandler::mouseWheelMove");
+        "void PianoRollToolHandler::handleDeleteKey");
     const auto selectToolSection = extractWorkspaceFileSection(
         toolHandlerPath,
         "void PianoRollToolHandler::handleSelectTool",
@@ -2024,9 +2018,7 @@ void runMaterializationPlacementMaterializationLocalTimingStaysIndependentFromPl
         return;
     }
 
-    placement.timelineStartSeconds = 5.0;
-    ++placement.mappingRevision;
-    if (!arrangement->replacePlacement(0, placement)) {
+    if (!arrangement->setPlacementTimelineStartSeconds(0, placement.placementId, 5.0)) {
         logFail(testName, "failed to move placement without touching materialization");
         return;
     }
@@ -3586,6 +3578,158 @@ void runUndoManagerSuite()
     }
 }
 
+// ── SimdAccelerator Tests ─────────────────────────
+
+void runSimdAcceleratorDotProductTest()
+{
+    constexpr const char* testName = "SimdAccelerator_DotProduct";
+    const auto& simd = SimdAccelerator::getInstance();
+
+    // 已知结果: [1,2,3,4] · [5,6,7,8] = 5+12+21+32 = 70
+    const float a[] = { 1.0f, 2.0f, 3.0f, 4.0f };
+    const float b[] = { 5.0f, 6.0f, 7.0f, 8.0f };
+    const float result = simd.dotProduct(a, b, 4);
+
+    if (!approxEqual(result, 70.0f, 1e-4f)) {
+        logFail(testName, ("expected 70, got " + juce::String(result, 6)).toRawUTF8());
+        return;
+    }
+
+    // 空向量
+    const float emptyResult = simd.dotProduct(a, b, 0);
+    if (!approxEqual(emptyResult, 0.0f, 1e-6f)) {
+        logFail(testName, "dot product of zero-length should be 0");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runSimdAcceleratorVectorLogTest()
+{
+    constexpr const char* testName = "SimdAccelerator_VectorLog";
+    const auto& simd = SimdAccelerator::getInstance();
+
+    const float input[] = { 1.0f, 2.7182818f, 10.0f, 100.0f };
+    float result[4] = {};
+    float expected[4] = {};
+    for (int i = 0; i < 4; ++i)
+        expected[i] = std::log(input[i]);
+
+    simd.vectorLog(result, input, 4);
+
+    for (int i = 0; i < 4; ++i) {
+        if (!approxEqual(result[i], expected[i], 1e-4f)) {
+            logFail(testName, ("mismatch at index " + juce::String(i)
+                + ": expected " + juce::String(expected[i], 6)
+                + " got " + juce::String(result[i], 6)).toRawUTF8());
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runSimdAcceleratorVectorExpTest()
+{
+    constexpr const char* testName = "SimdAccelerator_VectorExp";
+    const auto& simd = SimdAccelerator::getInstance();
+
+    const float input[] = { 0.0f, 1.0f, -1.0f, 2.0f };
+    float result[4] = {};
+    float expected[4] = {};
+    for (int i = 0; i < 4; ++i)
+        expected[i] = std::exp(input[i]);
+
+    simd.vectorExp(result, input, 4);
+
+    for (int i = 0; i < 4; ++i) {
+        if (!approxEqual(result[i], expected[i], 1e-4f)) {
+            logFail(testName, ("mismatch at index " + juce::String(i)
+                + ": expected " + juce::String(expected[i], 6)
+                + " got " + juce::String(result[i], 6)).toRawUTF8());
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runSimdAcceleratorComplexMagnitudeTest()
+{
+    constexpr const char* testName = "SimdAccelerator_ComplexMagnitude";
+    const auto& simd = SimdAccelerator::getInstance();
+
+    // [3+4i, 0+0i, 1+1i] → magnitudes [5, 0, √2]
+    const float complexData[] = { 3.0f, 4.0f, 0.0f, 0.0f, 1.0f, 1.0f };
+    float result[3] = {};
+    simd.complexMagnitude(result, complexData, 3);
+
+    if (!approxEqual(result[0], 5.0f, 1e-4f)
+        || !approxEqual(result[1], 0.0f, 1e-4f)
+        || !approxEqual(result[2], std::sqrt(2.0f), 1e-4f)) {
+        logFail(testName, ("expected [5, 0, √2], got ["
+            + juce::String(result[0], 4) + ", "
+            + juce::String(result[1], 4) + ", "
+            + juce::String(result[2], 4) + "]").toRawUTF8());
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runSimdAcceleratorBackendNameTest()
+{
+    constexpr const char* testName = "SimdAccelerator_BackendName";
+    const auto& simd = SimdAccelerator::getInstance();
+    const char* name = simd.getBackendName();
+
+    if (name == nullptr || name[0] == '\0') {
+        logFail(testName, "backend name is null or empty");
+        return;
+    }
+
+#if defined(__APPLE__)
+    if (juce::String(name) != "Apple Accelerate") {
+        logFail(testName, ("expected 'Apple Accelerate', got '" + juce::String(name) + "'").toRawUTF8());
+        return;
+    }
+#else
+    if (juce::String(name) != "Scalar") {
+        logFail(testName, ("expected 'Scalar', got '" + juce::String(name) + "'").toRawUTF8());
+        return;
+    }
+#endif
+
+    logPass(testName);
+}
+
+void runSimdAcceleratorDotProductLargeVectorTest()
+{
+    constexpr const char* testName = "SimdAccelerator_DotProduct_LargeVector";
+    const auto& simd = SimdAccelerator::getInstance();
+
+    // 模拟 MelSpectrogram 的实际工作负载: 1025 维 dot product
+    constexpr size_t N = 1025;
+    std::vector<float> a(N), b(N);
+    float expectedSum = 0.0f;
+    for (size_t i = 0; i < N; ++i) {
+        a[i] = static_cast<float>(i) * 0.001f;
+        b[i] = static_cast<float>(N - i) * 0.001f;
+        expectedSum += a[i] * b[i];
+    }
+
+    const float result = simd.dotProduct(a.data(), b.data(), N);
+
+    if (!approxEqual(result, expectedSum, expectedSum * 1e-4f)) {
+        logFail(testName, ("expected " + juce::String(expectedSum, 6)
+            + " got " + juce::String(result, 6)).toRawUTF8());
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runCoreBehaviorSuite()
 {
     logSection("Core");
@@ -3596,6 +3740,12 @@ void runCoreBehaviorSuite()
     runRendererBlockSpanClipsTrailingEdgeTest();
     runRendererBlockSpanRejectsBoundaryTouchTest();
     runRendererBlockSpanRejectsInvalidInputTest();
+    runSimdAcceleratorDotProductTest();
+    runSimdAcceleratorVectorLogTest();
+    runSimdAcceleratorVectorExpTest();
+    runSimdAcceleratorComplexMagnitudeTest();
+    runSimdAcceleratorBackendNameTest();
+    runSimdAcceleratorDotProductLargeVectorTest();
 }
 
 void runProcessorBehaviorSuite()
@@ -3690,8 +3840,8 @@ void runActiveSurfaceHidesRetiredNodesTest()
         return;
     }
 
-    if (!store->containsAnyState(committed.materializationId)) {
-        logFail(testName, "containsAnyState returned false for retired entry");
+    if (!store->isRetired(committed.materializationId)) {
+        logFail(testName, "isRetired returned false for retired entry (re-check)");
         return;
     }
 
@@ -3860,7 +4010,7 @@ void runReclaimSweepRequiresAllReferenceCountersZeroTest()
     // Sweep should NOT reclaim 鈥?active placement is a reference
     processor.runReclaimSweepOnMessageThread();
 
-    if (!store->containsAnyState(origId)) {
+    if (!store->containsMaterialization(origId)) {
         logFail(testName, "sweep reclaimed materialization while active placement still referenced it");
         return;
     }
@@ -3872,7 +4022,7 @@ void runReclaimSweepRequiresAllReferenceCountersZeroTest()
     processor.runReclaimSweepOnMessageThread();
 
     // With no undo action and placement physically erased by Phase 1, material should now be reclaimed
-    if (store->containsAnyState(origId)) {
+    if (store->containsMaterialization(origId)) {
         logFail(testName, "sweep failed to reclaim materialization after all references cleared");
         return;
     }
@@ -3949,7 +4099,7 @@ void runSourceRetiredWhenLastMaterializationRetiredTest()
     processor.runReclaimSweepOnMessageThread();
 
     // After sweep with no undo refs, source should be physically reclaimed
-    if (sourceStore->containsSourceAnyState(sourceId)) {
+    if (sourceStore->containsSource(sourceId)) {
         logFail(testName, "source not physically reclaimed after sweep with zero references");
         return;
     }

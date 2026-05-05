@@ -1,6 +1,7 @@
 #include "MelSpectrogram.h"
 #include "../Utils/Error.h"
 #include "../Utils/AppLogger.h"
+#include "../Utils/SimdAccelerator.h"
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
 #include <cmath>
@@ -42,13 +43,6 @@ static int reflectIndex(int i, int n)
         if (i >= n) i = 2 * n - i - 2;
     }
     return i;
-}
-
-static float dotProduct(const float* a, const float* b, size_t count)
-{
-    float sum = 0.0f;
-    for (size_t i = 0; i < count; ++i) sum += a[i] * b[i];
-    return sum;
 }
 
 MelSpectrogramProcessor::MelSpectrogramProcessor() = default;
@@ -193,16 +187,17 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
         fft_->performFrequencyOnlyForwardTransform(fftBuffer_.data());
 
         // 应用Mel滤波器组: 点积 → epsilon clamping → 向量化 log
+        const auto& simd = SimdAccelerator::getInstance();
         float melSums[128];
         const int nMelsActual = std::min(config_.nMels, 128);
         for (int m = 0; m < nMelsActual; ++m)
         {
-            melSums[m] = dotProduct(fftBuffer_.data(), melFilterbank_[(size_t) m].data(), nFftBins);
+            melSums[m] = simd.dotProduct(fftBuffer_.data(), melFilterbank_[(size_t) m].data(), nFftBins);
             melSums[m] = std::max(config_.logEps, melSums[m]);
         }
 
         float logResults[128];
-        for (int m = 0; m < nMelsActual; ++m) logResults[m] = std::log(melSums[m]);
+        simd.vectorLog(logResults, melSums, static_cast<size_t>(nMelsActual));
 
         for (int m = 0; m < nMelsActual; ++m)
         {
