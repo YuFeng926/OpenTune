@@ -1,26 +1,18 @@
-# knowledge/ - OpenTune Knowledge Base
+# knowledge/ — Spec Extract 知识库
 
-This directory contains reference documents that provide historical context,
-design rationale, and implementation details for past changes. These are **not**
-active specifications — they are supplementary reading material for agents and
-developers working on related areas.
+## 读取规则
+- 日常读取：knowledge/current/（永远是最新激活版本）
+- 历史回溯：knowledge/snapshots/（按日期版本归档）
+- 运行时状态：.knowledge-work/（gitignore，不读）
 
-## When to Read These Documents
+## 目录职责
 
-Read a document from this directory when:
+| 目录 | 职责 |
+|------|------|
+| current/ | 当前激活的完整知识库（模型读这里） |
+| snapshots/ | 历史快照归档（二等公民，日常不读） |
+| CURRENT.md | 当前版本元数据（版本号、时间、状态） |
 
-- You are working on a feature that touches the same subsystem
-- You need to understand **why** something was designed a certain way
-- A code comment or `AGENTS.md` references a concept explained here
-- You are investigating a bug in an area covered by one of these documents
+## 入口
 
-Do **not** treat these as authoritative specifications. The source of truth is
-always the code itself and the project-level `AGENTS.md` at the repository root.
-
-## Documents
-
-| File | Topic | Read When |
-|------|-------|-----------|
-| `MACOS_PORT.md` | macOS platform porting status, ORT integration, code signing, known issues | Working on macOS-specific code, build system, or platform compatibility |
-| `unify-selection-mechanism-tasks.md` | Original task breakdown for unifying the piano roll selection model (HandDraw, LineAnchor, Note selection) | Working on piano roll selection, HandDraw/LineAnchor tools, or undo/redo in the pitch correction pipeline |
-| `BUILD_AND_TEST.md` | macOS 编译流程、测试验证体系（L0-L6）、应用启动规范（必须从项目根目录启动以生成日志） | 执行编译验证、手动 E2E 测试、或编写 test-verification.md 时 |
+从 `current/_index.md` 开始，获取模块状态总览。
