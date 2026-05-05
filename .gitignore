@@ -5,6 +5,11 @@ models/
 pc_nsf_hifigan_44.1k_ONNX/
 docs/plans/
 docs/UserGuide.html
+build-*/
+.*/
+Logs/
+openspec/
+specs/
 *.exe
 *.dll
 *.lib
@@ -13,6 +18,10 @@ docs/UserGuide.html
 *.ilk
 *.exp
 *.onnx
+*.dmg
+
+# macOS metadata
+.DS_Store
 
 # Excluded from remote
 .planning/
