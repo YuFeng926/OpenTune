@@ -935,59 +935,117 @@ endif()
 # ==============================================================================
 # VST3-Specific POST_BUILD Commands
 # ==============================================================================
-# Copy runtime DLLs and AI models to VST3 plugin bundle
-if(NOT JucePlugin_Build_Standalone)
-    # ONNX Runtime DLL
-    add_custom_command(TARGET OpenTune_VST3 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNXRUNTIME_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_VST3>/onnxruntime.dll"
-        COMMENT "Copying ONNX Runtime DLL to VST3 plugin..."
-    )
-
-    # ONNX Runtime providers shared DLL
-    if(ONNXRUNTIME_PROVIDERS_SHARED_DLL)
+# Copy runtime libraries and AI models into the VST3 plugin bundle.
+# Windows lays files alongside the .vst3, macOS embeds them in the bundle.
+if(TARGET OpenTune_VST3)
+    if(WIN32)
+        # ONNX Runtime DLL
         add_custom_command(TARGET OpenTune_VST3 POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${ONNXRUNTIME_PROVIDERS_SHARED_DLL}"
-                "$<TARGET_FILE_DIR:OpenTune_VST3>/onnxruntime_providers_shared.dll"
-            COMMENT "Copying ONNX Runtime shared providers DLL to VST3 plugin..."
+                "${ONNXRUNTIME_DLL}"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/onnxruntime.dll"
+            COMMENT "Copying ONNX Runtime DLL to VST3 plugin..."
+        )
+
+        # ONNX Runtime providers shared DLL
+        if(ONNXRUNTIME_PROVIDERS_SHARED_DLL)
+            add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_PROVIDERS_SHARED_DLL}"
+                    "$<TARGET_FILE_DIR:OpenTune_VST3>/onnxruntime_providers_shared.dll"
+                COMMENT "Copying ONNX Runtime shared providers DLL to VST3 plugin..."
+            )
+        endif()
+
+        if(ONNXRUNTIME_PROVIDERS_DML_DLL)
+            add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_PROVIDERS_DML_DLL}"
+                    "$<TARGET_FILE_DIR:OpenTune_VST3>/onnxruntime_providers_dml.dll"
+                COMMENT "Copying ONNX Runtime DML providers DLL to VST3 plugin..."
+            )
+        endif()
+
+        # DirectML DLL
+        add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${DIRECTML_DLL}"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/DirectML.dll"
+            COMMENT "Copying DirectML runtime DLL to VST3 plugin..."
+        )
+
+        # D3D12 Agility SDK
+        add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/D3D12"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${D3D12_CORE_DLL}"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/D3D12/D3D12Core.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${D3D12_SDK_LAYERS_DLL}"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/D3D12/D3D12SDKLayers.dll"
+            COMMENT "Copying DirectX Agility runtime to VST3 plugin..."
+        )
+
+        # AI Models (alongside the .vst3)
+        add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HIFIGAN_MODEL}"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/hifigan.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${RMVPE_MODEL}"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/rmvpe.onnx"
+            COMMENT "Copying AI models to VST3 plugin..."
+        )
+
+    elseif(APPLE)
+        # ONNX Runtime dylib → Contents/Frameworks/
+        add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Frameworks"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.1.24.4.dylib"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Frameworks/"
+            COMMENT "Copying ONNX Runtime dylib to VST3 bundle Frameworks..."
+        )
+
+        # AI Models → Contents/Resources/models/
+        add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HIFIGAN_MODEL}"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/hifigan.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${RMVPE_MODEL}"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/rmvpe.onnx"
+            COMMENT "Copying AI models to VST3 bundle Resources..."
+        )
+
+        # UserGuide translations → Contents/Resources/docs/
+        add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide.html"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs/UserGuide.html"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_en.html"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs/UserGuide_en.html"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_ja.html"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs/UserGuide_ja.html"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_ru.html"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs/UserGuide_ru.html"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_es.html"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs/UserGuide_es.html"
+            COMMENT "Copying UserGuide translations to VST3 bundle Resources..."
         )
     endif()
-
-    # DirectML DLL
-    add_custom_command(TARGET OpenTune_VST3 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${DIRECTML_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_VST3>/DirectML.dll"
-        COMMENT "Copying DirectML runtime DLL to VST3 plugin..."
-    )
-
-    # D3D12 Agility SDK
-    add_custom_command(TARGET OpenTune_VST3 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:OpenTune_VST3>/D3D12"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${D3D12_CORE_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_VST3>/D3D12/D3D12Core.dll"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${D3D12_SDK_LAYERS_DLL}"
-            "$<TARGET_FILE_DIR:OpenTune_VST3>/D3D12/D3D12SDKLayers.dll"
-        COMMENT "Copying DirectX Agility runtime to VST3 plugin..."
-    )
-
-    # AI Models
-    add_custom_command(TARGET OpenTune_VST3 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:OpenTune_VST3>/models"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${HIFIGAN_MODEL}"
-            "$<TARGET_FILE_DIR:OpenTune_VST3>/models/hifigan.onnx"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${RMVPE_MODEL}"
-            "$<TARGET_FILE_DIR:OpenTune_VST3>/models/rmvpe.onnx"
-        COMMENT "Copying AI models to VST3 plugin..."
-    )
 endif()
 
 # ==============================================================================
