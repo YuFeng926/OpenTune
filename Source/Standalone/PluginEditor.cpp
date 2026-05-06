@@ -556,6 +556,11 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Apply the purple theme to the window
     getLookAndFeel().setColour(juce::ResizableWindow::backgroundColourId, UIColors::backgroundDark);
 
+    // 在首次推理服务初始化前，将持久化的渲染优先级应用到检测器
+    if (appPreferences_.getState().shared.renderingPriority == RenderingPriority::CpuFirst) {
+        processorRef_.resetInferenceBackend(true);
+    }
+
     // 启用原生标题栏（系统风格的最大化/最小化/关闭按钮）
     juce::Timer::callAfterDelay(60, [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)]
     {
