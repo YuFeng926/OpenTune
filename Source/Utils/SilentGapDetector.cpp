@@ -1,5 +1,6 @@
 #include "SilentGapDetector.h"
 #include "TimeCoordinate.h"
+#include "SimdAccelerator.h"
 #include <juce_dsp/juce_dsp.h>
 #include <algorithm>
 #include <cmath>
@@ -85,10 +86,9 @@ float SilentGapDetector::calculateRmsDb(const float* data, int64_t numSamples)
 {
     // 计算 RMS 电平（dB）
     if (numSamples <= 0 || data == nullptr) return -100.0f;
-    
-    float sumSquares = 0.0f;
-    for (int i = 0; i < numSamples; ++i) sumSquares += data[i] * data[i];
-    
+
+    const float sumSquares = SimdAccelerator::getInstance().dotProduct(data, data, static_cast<size_t>(numSamples));
+
     float rms = std::sqrt(sumSquares / static_cast<float>(numSamples));
     return linearToDb(rms);
 }
