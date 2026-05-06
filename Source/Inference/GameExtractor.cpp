@@ -354,7 +354,8 @@ std::vector<bool> GameExtractor::runSegmenter(
     // Pre-compute constant tensor data buffers
     std::vector<int64_t> xSegShape = {1, T, C};
     std::vector<int64_t> bdShape = {1, T};
-    std::vector<int64_t> scalarShape = {1};
+    std::vector<int64_t> batchShape = {1};      // 1-D [B] for language, t
+    std::vector<int64_t> scalarShape = {};       // 0-D scalar for threshold, radius
 
     const std::vector<uint8_t> knownU8 = boolVecToU8(knownBoundaries);
     const std::vector<uint8_t> maskU8  = boolVecToU8(maskT);
@@ -379,8 +380,8 @@ std::vector<bool> GameExtractor::runSegmenter(
             *memoryInfo_,
             const_cast<int64_t*>(&iLanguage),
             1,
-            scalarShape.data(),
-            scalarShape.size()
+            batchShape.data(),
+            batchShape.size()
         );
 
         auto knownTensor = Ort::Value::CreateTensor(
@@ -406,8 +407,8 @@ std::vector<bool> GameExtractor::runSegmenter(
             *memoryInfo_,
             const_cast<float*>(&tVal),
             1,
-            scalarShape.data(),
-            scalarShape.size()
+            batchShape.data(),
+            batchShape.size()
         );
 
         auto maskTTensor = Ort::Value::CreateTensor(
@@ -592,8 +593,8 @@ GameExtractor::EstimatorOutput GameExtractor::runEstimator(
         ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL
     );
 
-    // Input: threshold float32 scalar
-    std::vector<int64_t> scalarShape = {1};
+    // Input: threshold float32 scalar (0-D)
+    std::vector<int64_t> scalarShape = {};
     auto threshTensor = Ort::Value::CreateTensor<float>(
         *memoryInfo_,
         const_cast<float*>(&presenceThreshold),
