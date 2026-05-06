@@ -1934,7 +1934,12 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
                  std::make_move_iterator(sharedPages.end()));
 
     auto standalonePages = StandalonePreferencePages::createStandaloneOnlyPages(appPreferences_, [this] {
-        syncSharedAppPreferences();
+    // 在首次推理服务初始化前，将持久化的渲染优先级应用到检测器
+    if (appPreferences_.getState().shared.renderingPriority == RenderingPriority::CpuFirst) {
+        processorRef_.resetInferenceBackend(true);
+    }
+
+    syncSharedAppPreferences();
     });
     pages.insert(pages.end(),
                  std::make_move_iterator(standalonePages.begin()),
