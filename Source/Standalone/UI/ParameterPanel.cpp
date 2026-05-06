@@ -332,7 +332,8 @@ void ParameterPanel::resized()
     const int referenceHeight = 20 + 4 + 16 + 2 + 70 + 4 + 28 + 4 + 28 + 12;
 
     // 预留底部空间（Tools + Reference），分层取出
-    auto bottomReserve = mainArea.removeFromBottom(toolsHeight + referenceHeight);
+    // 工具栏上移一个旋钮高度，平衡各区域间距
+    auto bottomReserve = mainArea.removeFromBottom(toolsHeight + referenceHeight + knobSize);
     auto toolsArea = bottomReserve.removeFromTop(toolsHeight);
     // bottomReserve 剩余空间留给 Reference section
 
