@@ -601,4 +601,14 @@ int ParameterPanel::getNoteDetail() const
     return static_cast<int>(noteDetailSlider_.getValue());
 }
 
+void ParameterPanel::setReferenceSectionVisible(bool visible)
+{
+    referenceHeader_.setVisible(visible);
+    noteDetailLabel_.setVisible(visible);
+    noteDetailSlider_.setVisible(visible);
+    analyzeReferenceButton_->setVisible(visible);
+    regenerateButton_->setVisible(visible);
+    autoSnapButton_->setVisible(visible);
+}
+
 } // namespace OpenTune

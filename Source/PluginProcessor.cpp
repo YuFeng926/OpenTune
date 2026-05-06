@@ -13,7 +13,6 @@
 #include "Plugin/Capture/CaptureSession.h"
 #include <onnxruntime_cxx_api.h>
 #include "Utils/AccelerationDetector.h"
-#include "Inference/GameTypes.h"
 #include "Utils/TimeCoordinate.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
@@ -575,7 +574,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 } // anonymous namespace
 
 constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
-constexpr int kProcessorStateVersion = 5;
+constexpr int kProcessorStateVersion = 4;
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
 constexpr int kStandaloneSettingsVersion = 1;
 
@@ -758,34 +757,6 @@ static bool readNotes(juce::InputStream& input, std::vector<Note>& out)
         out.push_back(note);
     }
 
-    return true;
-}
-
-static void writeReferenceNotes(juce::OutputStream& output, const std::vector<ReferenceNote>& notes)
-{
-    output.writeInt(static_cast<int>(notes.size()));
-    for (const auto& note : notes) {
-        output.writeDouble(note.onset);
-        output.writeDouble(note.offset);
-        output.writeFloat(note.midiPitch);
-        output.writeBool(note.voiced);
-    }
-}
-
-static bool readReferenceNotes(juce::InputStream& input, std::vector<ReferenceNote>& out)
-{
-    out.clear();
-    const int count = input.readInt();
-    if (count < 0) return false;
-    out.reserve(static_cast<size_t>(count));
-    for (int i = 0; i < count; ++i) {
-        ReferenceNote note;
-        note.onset = input.readDouble();
-        note.offset = input.readDouble();
-        note.midiPitch = input.readFloat();
-        note.voiced = input.readBool();
-        out.push_back(note);
-    }
     return true;
 }
 
@@ -2026,7 +1997,6 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
         writePitchCurve(output, contentSnapshot.pitchCurve);
         writeNotes(output, contentSnapshot.notes);
         writeSilentGaps(output, contentSnapshot.silentGaps);
-        writeReferenceNotes(output, contentSnapshot.referenceNotes);
     }
 
     output.writeInt(standaloneArrangement_->getActiveTrackId());
@@ -2103,7 +2073,7 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     }
 
     // Full state payload (VST3 / legacy)
-    if (magic != static_cast<int>(kProcessorStateMagic) || version < 4 || version > kProcessorStateVersion) {
+    if (magic != static_cast<int>(kProcessorStateMagic) || version != kProcessorStateVersion) {
         AppLogger::warn("StateRestore: unsupported processor state payload");
         return;
     }
@@ -2175,18 +2145,12 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
         auto pitchCurve = readPitchCurve(input);
         std::vector<Note> notes;
         std::vector<SilentGap> silentGaps;
-        std::vector<ReferenceNote> referenceNotes;
         if (materializationId == 0
             || audioBuffer == nullptr
             || !readNotes(input, notes)
             || !readSilentGaps(input, silentGaps)
             || sourceId == 0) {
             return;
-        }
-        if (version >= 5) {
-            if (!readReferenceNotes(input, referenceNotes)) {
-                return;
-            }
         }
         jassert(materializationStore_ != nullptr);
 
@@ -2213,9 +2177,6 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
             renderCache->clear();
         }
 
-        if (!referenceNotes.empty()) {
-            materializationStore_->setReferenceNotes(materializationId, std::move(referenceNotes));
-        }
     }
 
     const int restoredActiveTrackId = input.readInt();

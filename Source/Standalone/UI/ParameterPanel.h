@@ -84,6 +84,8 @@ public:
     void setF0Min(float value);
     void setF0Max(float value);
 
+    void setReferenceSectionVisible(bool visible);
+
     void applyTheme();
     void refreshLocalizedText();  // 刷新本地化文本
 
