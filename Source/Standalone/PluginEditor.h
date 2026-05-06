@@ -117,6 +117,7 @@ public:
     // ParameterPanel::Listener (Reference)
     void analyzeReferenceRequested() override;
     void regenerateReferenceRequested() override;
+    void autoSnapRequested() override;
     void noteDetailChanged(int detail) override;
 
     void pitchCurveEdited(int startFrame, int endFrame) override;

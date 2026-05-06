@@ -2408,6 +2408,13 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     pianoRoll_.applyAutoTuneToSelection();
 }
 
+void OpenTuneAudioProcessorEditor::autoSnapRequested()
+{
+    if (pianoRoll_.applyAutoSnap()) {
+        AppLogger::info("[Editor] Auto-Snap applied successfully");
+    }
+}
+
 void OpenTuneAudioProcessorEditor::noteDetailChanged(int detail)
 {
     currentNoteDetail_ = detail;

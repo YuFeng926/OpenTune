@@ -2655,6 +2655,94 @@ bool PianoRollComponent::applyAutoTuneToSelection()
     return true;
 }
 
+bool PianoRollComponent::applyAutoSnap()
+{
+    if (processor_ == nullptr || editedMaterializationId_ == 0 || currentCurve_ == nullptr)
+        return false;
+
+    auto refNotes = processor_->getMaterializationStore()->getReferenceNotes(editedMaterializationId_);
+    if (refNotes.empty()) return false;
+
+    auto notes = getEditedMaterializationNotesCopy();
+    if (notes.empty()) return false;
+
+    const auto f0tl = currentF0Timeline();
+    if (f0tl.isEmpty()) return false;
+
+    // Capture undo before state
+    captureBeforeUndoSnapshot();
+
+    auto snapshot = currentCurve_->getSnapshot();
+    auto segments = snapshot->getCorrectedSegments();
+    bool anyChanged = false;
+
+    for (auto& note : notes) {
+        // Find best matching reference note (max time overlap)
+        const ReferenceNote* bestRef = nullptr;
+        double bestOverlap = 0.0;
+
+        for (const auto& ref : refNotes) {
+            if (!ref.voiced) continue;
+            const double overlapStart = std::max(note.startTime, ref.onset);
+            const double overlapEnd = std::min(note.endTime, ref.offset);
+            const double overlap = overlapEnd - overlapStart;
+            if (overlap > bestOverlap) {
+                bestOverlap = overlap;
+                bestRef = &ref;
+            }
+        }
+
+        if (bestRef == nullptr) continue;
+
+        // Skip notes with no valid pitch
+        if (note.getAdjustedPitch() <= 0.0f) continue;
+
+        // Compute pitch difference in semitones
+        const float currentMidi = 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) + 69.0f;
+        const float diff = bestRef->midiPitch - currentMidi;
+        if (std::abs(diff) < 0.05f) continue; // Already close enough
+
+        // Snap note pitch to reference
+        note.pitch = 440.0f * std::pow(2.0f, (bestRef->midiPitch - 69.0f) / 12.0f);
+        note.pitchOffset = 0.0f;
+        note.dirty = true;
+        anyChanged = true;
+
+        // Compute note frame range
+        const auto noteRange = f0tl.rangeForTimes(note.startTime, note.endTime);
+        if (noteRange.isEmpty()) continue;
+
+        // Shift CorrectedF0 in this note's frame range
+        const float ratio = std::pow(2.0f, diff / 12.0f);
+        for (auto& seg : segments) {
+            const int overlapStart = std::max(seg.startFrame, noteRange.startFrame);
+            const int overlapEnd = std::min(seg.endFrame, noteRange.endFrameExclusive);
+            if (overlapEnd <= overlapStart) continue;
+
+            const int dataOffset = overlapStart - seg.startFrame;
+            const int dataEnd = overlapEnd - seg.startFrame;
+            for (int i = dataOffset; i < dataEnd && i < static_cast<int>(seg.f0Data.size()); ++i) {
+                if (seg.f0Data[i] > 0.0f) {
+                    seg.f0Data[i] *= ratio;
+                }
+            }
+        }
+    }
+
+    if (!anyChanged) {
+        undoSnapshotCaptured_ = false;
+        return false;
+    }
+
+    // Commit changes (handles undo recording internally)
+    pendingUndoDescription_ = TRANS("Auto-Snap");
+    const bool committed = commitEditedMaterializationNotesAndSegments(notes, segments);
+    if (committed) {
+        invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
+    }
+    return committed;
+}
+
 void PianoRollComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) {
     if (scrollBar == &horizontalScrollBar_) {
         setScrollOffset(static_cast<int>(newRangeStart));

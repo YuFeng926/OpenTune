@@ -261,6 +261,13 @@ ParameterPanel::ParameterPanel()
         listeners_.call([](Listener& l) { l.regenerateReferenceRequested(); });
     };
     addAndMakeVisible(*regenerateButton_);
+
+    autoSnapButton_ = std::make_unique<ToolIconButton>(102, "AutoSnap", "Auto-Snap notes to reference");
+    autoSnapButton_->setTextIcon("SNAP");
+    autoSnapButton_->onClick = [this]() {
+        listeners_.call([](Listener& l) { l.autoSnapRequested(); });
+    };
+    addAndMakeVisible(*autoSnapButton_);
 }
 
 ParameterPanel::~ParameterPanel()
@@ -404,6 +411,8 @@ void ParameterPanel::resized()
         y += 74;
         analyzeReferenceButton_->setBounds(x, y, (panelWidth - 4) / 2, 28);
         regenerateButton_->setBounds(x + (panelWidth - 4) / 2 + 4, y, (panelWidth - 4) / 2, 28);
+        y += 32;
+        autoSnapButton_->setBounds(x, y, panelWidth, 28);
     }
 }
 
