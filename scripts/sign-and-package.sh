@@ -41,7 +41,7 @@ if [ -z "$VERSION" ]; then
     VERSION="1.0.0"
 fi
 
-DMG_NAME="OpenTune-${VERSION}-arm64.dmg"
+DMG_NAME="OpenTune-${VERSION}-macOS-arm64.dmg"
 DMG_OUTPUT="$PROJECT_ROOT/$DMG_NAME"
 
 # ==============================================================================
