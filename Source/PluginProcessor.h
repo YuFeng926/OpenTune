@@ -35,6 +35,8 @@
 #include "DSP/ChromaKeyDetector.h"
 #include "Inference/RenderCache.h"
 #include "Inference/F0InferenceService.h"
+#include "Inference/GameInferenceService.h"
+#include "Utils/InferenceGate.h"
 #include "Inference/VocoderDomain.h"
 #include "Services/F0ExtractionService.h"
 #include "Utils/MaterializationState.h"
@@ -418,6 +420,8 @@ private:
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::unique_ptr<F0InferenceService> f0Service_;
     std::unique_ptr<VocoderDomain> vocoderDomain_;
+    std::unique_ptr<GameInferenceService> gameService_;
+    InferenceGate inferenceGate_;
     F0ExtractionService materializationRefreshService_{1, 64};
     std::shared_ptr<std::atomic<bool>> materializationRefreshAliveFlag_{std::make_shared<std::atomic<bool>>(true)};
 
@@ -433,6 +437,7 @@ private:
 
     bool ensureF0Ready();
     bool ensureVocoderReady();
+    bool ensureGameServiceReady();
 
     bool ensureServiceReady(std::atomic<bool>& readyFlag,
                             std::atomic<bool>& attemptedFlag,
@@ -480,6 +485,8 @@ public:
 
     F0InferenceService* getF0Service() const { return f0Service_.get(); }
     VocoderDomain* getVocoderDomain() const { return vocoderDomain_.get(); }
+    GameInferenceService* getGameService() const { return gameService_.get(); }
+    InferenceGate& getInferenceGate() { return inferenceGate_; }
     SourceStore* getSourceStore() noexcept { return sourceStore_.get(); }
     const SourceStore* getSourceStore() const noexcept { return sourceStore_.get(); }
     MaterializationStore* getMaterializationStore() noexcept { return materializationStore_.get(); }

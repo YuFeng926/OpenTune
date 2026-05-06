@@ -120,6 +120,22 @@ public:
         return "./models";
     }
 
+    static std::string getGameModelsDirectory() {
+        const std::string modelsDir = getModelsDirectory();
+        juce::File gameDir(juce::String(modelsDir) + "/game");
+        if (gameDir.isDirectory()) {
+            return gameDir.getFullPathName().toStdString();
+        }
+        // Fallback: check Resources/GAME-1.0.3-large-onnx (development)
+        const juce::File moduleFile = getCurrentModuleFile();
+        juce::File devGameDir = moduleFile.getParentDirectory().getParentDirectory()
+            .getChildFile("Resources").getChildFile("GAME-1.0.3-large-onnx");
+        if (devGameDir.isDirectory()) {
+            return devGameDir.getFullPathName().toStdString();
+        }
+        return modelsDir + "/game";
+    }
+
 private:
     static juce::File getCurrentModuleFile() {
 #if defined(_WIN32)

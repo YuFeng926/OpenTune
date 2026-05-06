@@ -281,6 +281,8 @@ bool MaterializationStore::getSnapshot(uint64_t materializationId, Materializati
     out.notesRevision = it->second.notesRevision;
     out.silentGaps = it->second.silentGaps;
     out.renderRevision = it->second.renderRevision;
+    out.referenceNotes = it->second.referenceNotes;
+    out.referenceNotesRevision = it->second.referenceNotesRevision;
     return true;
 }
 
@@ -446,6 +448,37 @@ bool MaterializationStore::setNotes(uint64_t materializationId, std::vector<Note
     it->second.notes = std::move(notes);
     ++it->second.notesRevision;
     return true;
+}
+
+std::vector<ReferenceNote> MaterializationStore::getReferenceNotes(uint64_t materializationId) const
+{
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    return it != materializations_.end() ? it->second.referenceNotes : std::vector<ReferenceNote>{};
+}
+
+bool MaterializationStore::setReferenceNotes(uint64_t materializationId, std::vector<ReferenceNote> notes)
+{
+    if (materializationId == 0) {
+        return false;
+    }
+
+    const juce::ScopedWriteLock writeLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end()) {
+        return false;
+    }
+
+    it->second.referenceNotes = std::move(notes);
+    ++it->second.referenceNotesRevision;
+    return true;
+}
+
+uint64_t MaterializationStore::getReferenceNotesRevision(uint64_t materializationId) const
+{
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    return it != materializations_.end() ? it->second.referenceNotesRevision : 0;
 }
 
 bool MaterializationStore::setSilentGaps(uint64_t materializationId, std::vector<SilentGap> silentGaps)
