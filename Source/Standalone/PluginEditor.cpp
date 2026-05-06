@@ -2445,6 +2445,7 @@ void OpenTuneAudioProcessorEditor::analyzeReferenceRequested()
             if (safeThis == nullptr) return;
             auto results = fc.getResults();
             if (results.isEmpty()) return;
+            safeThis->lastReferenceFile_ = results[0];
             safeThis->runGameAnalysis(matId, results[0]);
         });
 }
@@ -2460,8 +2461,7 @@ void OpenTuneAudioProcessorEditor::regenerateReferenceRequested()
     // TODO: store reference audio path and reload
     AppLogger::info("[Editor] Regenerate reference: re-running with current detail=" + juce::String(currentNoteDetail_));
 
-    // For now, use the materialization's own audio as reference (self-reference for testing)
-    runGameAnalysis(matId, juce::File{});
+    runGameAnalysis(matId, lastReferenceFile_);
 }
 
 void OpenTuneAudioProcessorEditor::runGameAnalysis(uint64_t materializationId, const juce::File& referenceFile)
