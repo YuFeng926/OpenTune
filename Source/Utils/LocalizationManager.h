@@ -227,6 +227,7 @@ constexpr const char* kResetToDefaults = "Reset to Defaults";
 constexpr const char* kRenderingPriority = "Rendering Priority";
 constexpr const char* kGpuFirst = "GPU First";
 constexpr const char* kCpuFirst = "CPU First";
+constexpr const char* kForceAlignReferenceStart = "Force Align Reference Start";
 
 constexpr const char* kSetShortcut = "Set Shortcut";
 constexpr const char* kPressNewKeyCombination = "Press the new key combination";
@@ -374,6 +375,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kRenderingPriority, "Rendering Priority", "渲染优先级", "レンダリング優先度", "Приоритет рендеринга", "Prioridad de renderizado" },
         { Keys::kGpuFirst, "GPU First", "GPU 优先", "GPU 優先", "GPU приоритет", "GPU primero" },
         { Keys::kCpuFirst, "CPU First", "CPU 优先", "CPU 優先", "CPU приоритет", "CPU primero" },
+        { Keys::kForceAlignReferenceStart, "Force Align Reference Start", "参考音轨强制对齐开头", "リファレンス先頭を強制整列", "Принудительное выравнивание", "Forzar alinear inicio" },
         
         { Keys::kSetShortcut, "Set Shortcut", "设置快捷键", "ショートカットを設定", "Назначить сочетание", "Atajo" },
         { Keys::kPressNewKeyCombination, "Press the new key combination", "按下新的组合键", "新しいキーの組み合わせを押してください", "Нажмите сочетание", "Pulse combinación" },

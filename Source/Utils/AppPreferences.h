@@ -28,6 +28,7 @@ struct SharedPreferencesState {
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity =
         ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
     RenderingPriority renderingPriority = RenderingPriority::GpuFirst;
+    bool forceAlignReferenceStart = false;
 };
 
 struct StandalonePreferencesState {
@@ -67,6 +68,7 @@ public:
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity);
     void setStandaloneShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
     void setRenderingPriority(RenderingPriority priority);
+    void setForceAlignReferenceStart(bool enabled);
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme);
 
 private:

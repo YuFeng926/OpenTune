@@ -397,6 +397,7 @@ private:
     std::vector<Note> cachedNotes_;
     std::vector<ReferenceNote> cachedReferenceNotes_;
     uint64_t cachedReferenceNotesRevision_ = 0;
+    double cachedReferenceTimeOffset_ = 0.0;
 
     // Undo support
     juce::String pendingUndoDescription_;

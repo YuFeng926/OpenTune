@@ -17,6 +17,7 @@ constexpr const char* kSharedZoomVerticalFactorKey = "shared.zoom.verticalFactor
 constexpr const char* kSharedScrollSpeedKey = "shared.scroll.speed";
 constexpr const char* kStandaloneMouseTrailThemeKey = "standalone.mouseTrail.theme";
 constexpr const char* kSharedRenderingPriorityKey = "shared.rendering.priority";
+constexpr const char* kSharedForceAlignReferenceStartKey = "shared.reference.forceAlignStart";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
     "standalone.shortcuts.playPause",
@@ -243,6 +244,8 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.renderingPriority = renderingPriorityFromToken(
         properties.getValue(kSharedRenderingPriorityKey,
                             toRenderingPriorityToken(state.shared.renderingPriority)));
+    state.shared.forceAlignReferenceStart = properties.getBoolValue(
+        kSharedForceAlignReferenceStartKey, state.shared.forceAlignReferenceStart);
 
     state.standalone.shortcuts = decodeShortcutSettings(properties);
     state.standalone.mouseTrailTheme = mouseTrailThemeFromToken(
@@ -266,6 +269,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedScrollSpeedKey, static_cast<double>(state.shared.zoomSensitivity.scrollSpeed));
     properties.setValue(kSharedRenderingPriorityKey,
                         toRenderingPriorityToken(state.shared.renderingPriority));
+    properties.setValue(kSharedForceAlignReferenceStartKey,
+                        state.shared.forceAlignReferenceStart);
     properties.setValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme));
 
     for (size_t index = 0; index < kShortcutStorageKeys.size(); ++index) {
@@ -383,6 +388,13 @@ void AppPreferences::setRenderingPriority(RenderingPriority priority)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.renderingPriority = priority;
+    saveLocked();
+}
+
+void AppPreferences::setForceAlignReferenceStart(bool enabled)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.forceAlignReferenceStart = enabled;
     saveLocked();
 }
 

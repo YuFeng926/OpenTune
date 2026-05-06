@@ -144,6 +144,17 @@ public:
         };
         initialiseComboBox(renderingPrioritySelector_);
         addAndMakeVisible(renderingPrioritySelector_);
+
+        forceAlignToggle_.setButtonText(LOC(kForceAlignReferenceStart));
+        forceAlignToggle_.setToggleState(state.shared.forceAlignReferenceStart,
+                                         juce::dontSendNotification);
+        forceAlignToggle_.setColour(juce::ToggleButton::textColourId, UIColors::textPrimary);
+        forceAlignToggle_.setColour(juce::ToggleButton::tickColourId, UIColors::accent);
+        forceAlignToggle_.onClick = [this] {
+            appPreferences_.setForceAlignReferenceStart(forceAlignToggle_.getToggleState());
+            notifyChanged();
+        };
+        addAndMakeVisible(forceAlignToggle_);
     }
 
     void paint(juce::Graphics& g) override
@@ -160,6 +171,10 @@ public:
         auto row = bounds.removeFromTop(rowHeight);
         renderingPriorityLabel_.setBounds(row.removeFromLeft(labelWidth));
         renderingPrioritySelector_.setBounds(row.removeFromLeft(240).reduced(0, 4));
+
+        auto alignRow = bounds.removeFromTop(rowHeight);
+        alignRow.removeFromLeft(labelWidth);  // indent to match selector column
+        forceAlignToggle_.setBounds(alignRow.removeFromLeft(300).reduced(0, 4));
     }
 
 private:
@@ -175,6 +190,7 @@ private:
     std::function<void(bool)> onRenderingPriorityChanged_;
     juce::Label renderingPriorityLabel_;
     juce::ComboBox renderingPrioritySelector_;
+    juce::ToggleButton forceAlignToggle_;
 };
 
 class SharedEditingPage final : public juce::Component

@@ -88,6 +88,16 @@ struct DrawingState
     
 };
 
+struct ReferenceDragState
+{
+    bool isDragging = false;
+    double dragStartOffsetSeconds = 0.0;  // offset value when drag began
+    double dragStartMouseTime = 0.0;      // mouse time when drag began
+    double currentOffset = 0.0;           // live offset during drag (not yet committed)
+    
+    void clear() { isDragging = false; dragStartOffsetSeconds = 0.0; dragStartMouseTime = 0.0; currentOffset = 0.0; }
+};
+
 class InteractionState
 {
 public:
@@ -96,6 +106,7 @@ public:
     NoteDragState noteDrag;
     NoteResizeState noteResize;
     DrawingState drawing;
+    ReferenceDragState referenceDrag;
     
     bool isPanning = false;
     juce::Point<int> dragStartPos;
