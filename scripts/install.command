@@ -3,7 +3,7 @@
 # OpenTune Installer
 #
 # Double-click this file to install OpenTune to /Applications, and optionally
-# install the VST3 plugin to ~/Library/Audio/Plug-Ins/VST3 or system-wide.
+# install the VST3 plugin to /Library/Audio/Plug-Ins/VST3 (requires sudo).
 # Automatically removes macOS quarantine flag for unsigned builds.
 # ==============================================================================
 
@@ -12,7 +12,6 @@ set -euo pipefail
 APP_NAME="OpenTune.app"
 VST3_NAME="OpenTune.vst3"
 INSTALL_DIR="/Applications"
-VST3_USER_DIR="$HOME/Library/Audio/Plug-Ins/VST3"
 VST3_SYSTEM_DIR="/Library/Audio/Plug-Ins/VST3"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_APP="$SCRIPT_DIR/$APP_NAME"
@@ -75,31 +74,21 @@ if [ -d "$SOURCE_VST3" ]; then
     echo "  VST3 Plugin Installation"
     echo "----------------------------------------"
     echo ""
-    echo "Found $VST3_NAME. Choose install location:"
-    echo "  [U] User only       (~/Library/Audio/Plug-Ins/VST3, no admin password)"
-    echo "  [S] System-wide     (/Library/Audio/Plug-Ins/VST3, requires admin password)"
-    echo "  [N] Skip VST3 installation"
+    echo "Found $VST3_NAME. Will install to $VST3_SYSTEM_DIR (requires admin password)."
     echo ""
-    read -p "Choice [U/s/n]: " -n 1 -r
+    read -p "Install VST3 plugin? [Y/n]: " -n 1 -r
     echo ""
 
     VST3_TARGET=""
     USE_SUDO=""
 
-    case "${REPLY:-U}" in
-        u|U|"")
-            VST3_TARGET="$VST3_USER_DIR"
-            ;;
-        s|S)
-            VST3_TARGET="$VST3_SYSTEM_DIR"
-            USE_SUDO="sudo"
-            ;;
+    case "${REPLY:-Y}" in
         n|N)
             echo "VST3 installation skipped."
             ;;
         *)
-            echo "Unrecognized choice — defaulting to user-level install."
-            VST3_TARGET="$VST3_USER_DIR"
+            VST3_TARGET="$VST3_SYSTEM_DIR"
+            USE_SUDO="sudo"
             ;;
     esac
 
