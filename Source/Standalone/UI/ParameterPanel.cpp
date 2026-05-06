@@ -405,7 +405,7 @@ void ParameterPanel::resized()
     {
         const int panelWidth = toolsColumn.getWidth();
         const int x = toolsColumn.getX();
-        int y = bottomReserve.getY() + 4 + interSectionGap;
+        int y = bottomReserve.getY() + 4 + interSectionGap - 20;
         referenceHeader_.setBounds(x, y, panelWidth, 20);
         y += 20 + toolHeaderGap;  // header→knob 间距对齐 tools header→buttons
         noteDetailSlider_.setBounds(x + (panelWidth - 70) / 2, y, 70, 70);
