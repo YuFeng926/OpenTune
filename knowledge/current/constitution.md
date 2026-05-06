@@ -63,7 +63,7 @@ Standalone 与 VST3/ARA 共享同一 `PluginProcessor` 内核，差异通过 `So
 - 所有 JUCE 模块启用严格引用计数指针：`JUCE_STRICT_REFCOUNTEDPOINTER=1`
 - ONNX Runtime 使用手动初始化：`ORT_API_MANUAL_INIT`
 - Windows MSVC 运行时静态链接：`/MT` / `/MTd`
-- macOS 最低系统版本：12.0（Monterey）
+- macOS 最低系统版本：14.0（Sonoma） — 受 bundled libonnxruntime 1.24.4（按 macOS 14 构建）约束
 - 采样率标准：内部 44100 Hz；RMVPE 推理 16000 Hz
 - 共用 `EditorFactory` 接口：Standalone 与 VST3 各自实现一份 `.cpp`，不允许任一方直接引用对方符号
 
