@@ -6,6 +6,14 @@
 cmake_minimum_required(VERSION 3.22)
 
 # ==============================================================================
+# macOS Deployment Target (must be set before project() to take effect)
+# Locks both the binary's LC_VERSION_MIN_MACOSX and Info.plist LSMinimumSystemVersion
+# to macOS 14 (Sonoma) — required because bundled libonnxruntime 1.24.4 was built
+# for macOS 14+ and its internal API references would lazy-bind fail on older systems.
+# ==============================================================================
+set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment target")
+
+# ==============================================================================
 # Project Definition
 # ==============================================================================
 project(OpenTune VERSION 1.5.0 LANGUAGES CXX C)
@@ -313,7 +321,7 @@ juce_add_plugin(OpenTune
     # Product Information
     PRODUCT_NAME "OpenTune"
     BUNDLE_ID "com.daya.opentune"
-    VERSION "1.0.0"
+    VERSION "${PROJECT_VERSION}"
 
     # Plugin Metadata
     PLUGIN_NAME "OpenTune"
@@ -347,7 +355,7 @@ juce_add_plugin(OpenTune
     "<plist version=\"1.0\">
     <dict>
         <key>LSMinimumSystemVersion</key>
-        <string>12.0</string>
+        <string>14.0</string>
         <key>LSApplicationCategoryType</key>
         <string>public.app-category.music</string>
         <key>NSHumanReadableCopyright</key>
@@ -572,6 +580,8 @@ target_sources(OpenTune
         Source/Utils/PianoKeyAudition.h
         Source/Utils/AppLogger.cpp
         Source/Utils/AppLogger.h
+        Source/Utils/ChannelLayoutLogger.cpp
+        Source/Utils/ChannelLayoutLogger.h
         Source/Utils/AppPreferences.cpp
         Source/Utils/AppPreferences.h
         Source/Utils/PianoRollVisualPreferences.h
@@ -646,6 +656,22 @@ target_sources(OpenTune PRIVATE
     Source/ARA/OpenTunePlaybackRenderer.h
     Source/ARA/VST3AraSession.cpp
     Source/ARA/VST3AraSession.h
+)
+
+# Capture module (VST3 non-ARA capture workflow)
+# Runtime-isolated: included unconditionally in shared lib; CaptureSession is only
+# instantiated when getWrapperType() == wrapperType_VST3.
+target_sources(OpenTune PRIVATE
+    Source/Plugin/Capture/CaptureRingBuffer.cpp
+    Source/Plugin/Capture/CaptureRingBuffer.h
+    Source/Plugin/Capture/CaptureSegment.cpp
+    Source/Plugin/Capture/CaptureSegment.h
+    Source/Plugin/Capture/CaptureCompactor.cpp
+    Source/Plugin/Capture/CaptureCompactor.h
+    Source/Plugin/Capture/CaptureSession.cpp
+    Source/Plugin/Capture/CaptureSession.h
+    Source/Plugin/Capture/CapturePersistence.cpp
+    Source/Plugin/Capture/CapturePersistence.h
 )
 
 # ==============================================================================
@@ -761,42 +787,15 @@ if(WIN32)
     endif()
 elseif(APPLE)
     target_compile_options(OpenTune PRIVATE -Wall -Wno-unused-parameter)
-    get_target_property(OPENTUNE_GENERATED_SOURCES_DIR OpenTune JUCE_GENERATED_SOURCES_DIRECTORY)
-    set(OPENTUNE_STANDALONE_DEFAULT_PLIST "${OPENTUNE_GENERATED_SOURCES_DIR}/OpenTune_Standalone/Info.plist")
-    set(OPENTUNE_STANDALONE_MERGED_PLIST "${OPENTUNE_GENERATED_SOURCES_DIR}/OpenTune_Standalone/Info-Standalone.plist")
-    set(OPENTUNE_STANDALONE_PLIST_ENTRIES
-        "    <key>LSMinimumSystemVersion</key>\n"
-        "    <string>12.0</string>\n"
-        "    <key>LSApplicationCategoryType</key>\n"
-        "    <string>public.app-category.music</string>\n"
-        "    <key>NSHumanReadableCopyright</key>\n"
-        "    <string>Copyright (c) 2024-2026 DAYA. All rights reserved.</string>\n"
-        "    <key>NSMicrophoneUsageDescription</key>\n"
-        "    <string>OpenTune needs microphone access for real-time audio monitoring.</string>"
-    )
 
-    if(NOT EXISTS "${OPENTUNE_STANDALONE_DEFAULT_PLIST}")
-        message(FATAL_ERROR "JUCE did not generate the standalone Info.plist at ${OPENTUNE_STANDALONE_DEFAULT_PLIST}")
-    endif()
-
-    file(READ "${OPENTUNE_STANDALONE_DEFAULT_PLIST}" OPENTUNE_STANDALONE_PLIST_CONTENT)
-    string(REGEX REPLACE "</dict>[ \t\r\n]*</plist>"
-        "${OPENTUNE_STANDALONE_PLIST_ENTRIES}\n</dict>\n</plist>"
-        OPENTUNE_STANDALONE_PLIST_CONTENT
-        "${OPENTUNE_STANDALONE_PLIST_CONTENT}"
-    )
-
-    if(NOT OPENTUNE_STANDALONE_PLIST_CONTENT MATCHES "NSMicrophoneUsageDescription")
-        message(FATAL_ERROR "Failed to merge standalone-only macOS Info.plist metadata")
-    endif()
-
-    file(WRITE "${OPENTUNE_STANDALONE_MERGED_PLIST}" "${OPENTUNE_STANDALONE_PLIST_CONTENT}")
+    # Info.plist metadata (LSMinimumSystemVersion / LSApplicationCategoryType /
+    # NSHumanReadableCopyright / NSMicrophoneUsageDescription) is injected via
+    # juce_add_plugin's PLIST_TO_MERGE above — no second pass needed here.
 
     # Set rpath so the app bundle can find the embedded dylib
     set_target_properties(OpenTune_Standalone PROPERTIES
         BUILD_RPATH "@executable_path/../Frameworks"
         INSTALL_RPATH "@executable_path/../Frameworks"
-        MACOSX_BUNDLE_INFO_PLIST "${OPENTUNE_STANDALONE_MERGED_PLIST}"
     )
 
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide.html" PROPERTIES

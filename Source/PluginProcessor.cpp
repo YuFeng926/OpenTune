@@ -9,6 +9,8 @@
 #include "Services/ImportedClipF0Extraction.h"
 #include "Utils/ModelPathResolver.h"
 #include "Utils/AppLogger.h"
+#include "Utils/ChannelLayoutLogger.h"
+#include "Plugin/Capture/CaptureSession.h"
 #include <onnxruntime_cxx_api.h>
 #include "Utils/AccelerationDetector.h"
 #include "Utils/TimeCoordinate.h"
@@ -862,6 +864,96 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
 
     resamplingManager_ = std::make_shared<ResamplingManager>();
+
+    // Capture session: only instantiated when host is VST3 (runtime isolation,
+    // see spec REQ 14). Standalone / VST3+ARA instances leave captureSession_
+    // as nullptr and the original processBlock paths run unchanged.
+    if (wrapperType == juce::AudioProcessor::wrapperType_VST3) {
+        Capture::ProcessorBindings bindings;
+
+        bindings.submitForRender = [this](std::shared_ptr<juce::AudioBuffer<float>> pcm,
+                                           double sampleRate,
+                                           juce::String displayName) -> uint64_t {
+            if (!pcm) return 0;
+            PreparedImport prepared;
+            // prepareImport takes the buffer by rvalue; copy out of shared_ptr
+            // into a local owning buffer.
+            juce::AudioBuffer<float> owningCopy;
+            owningCopy.makeCopyOf(*pcm);
+            if (!prepareImport(std::move(owningCopy), sampleRate, displayName, prepared,
+                               "vst3-capture-submit"))
+                return 0;
+            const auto matId = commitPreparedImportAsMaterialization(std::move(prepared));
+            if (matId == 0) return 0;
+            MaterializationRefreshRequest req;
+            req.materializationId = matId;
+            requestMaterializationRefresh(req);
+            return matId;
+        };
+
+        bindings.replaceWithRendered = [this](juce::AudioBuffer<float>& buffer,
+                                               int destStart, int numSamples,
+                                               uint64_t materializationId,
+                                               double readStartSeconds,
+                                               double targetSampleRate) {
+            if (materializationStore_ == nullptr) return;
+            MaterializationStore::PlaybackReadSource readSource;
+            if (!materializationStore_->getPlaybackReadSource(materializationId, readSource)
+                || !readSource.hasAudio()) {
+                buffer.clear(destStart, numSamples);
+                return;
+            }
+            PlaybackReadRequest req;
+            req.source.renderCache = readSource.renderCache;
+            req.source.audioBuffer = readSource.audioBuffer;
+            req.readStartSeconds = readStartSeconds;
+            req.targetSampleRate = targetSampleRate;
+            req.numSamples = numSamples;
+            CrossoverMixer* mixer = readSource.renderCache
+                ? &readSource.renderCache->getCrossoverMixer()
+                : nullptr;
+            buffer.clear(destStart, numSamples);
+            readPlaybackAudio(req, buffer, destStart, mixer);
+        };
+
+        bindings.isRenderReady = [this](uint64_t materializationId) -> bool {
+            return getMaterializationOriginalF0StateById(materializationId) == OriginalF0State::Ready;
+        };
+
+        bindings.isRenderFailed = [this](uint64_t materializationId) -> bool {
+            return getMaterializationOriginalF0StateById(materializationId) == OriginalF0State::Failed;
+        };
+
+        bindings.retireMaterialization = [this](uint64_t materializationId) {
+            if (materializationStore_ != nullptr)
+                materializationStore_->retireMaterialization(materializationId);
+        };
+
+        bindings.containsMaterialization = [this](uint64_t materializationId) -> bool {
+            return materializationStore_ != nullptr
+                   && materializationStore_->containsMaterialization(materializationId);
+        };
+
+        bindings.refreshMaterialization = [this](uint64_t materializationId) {
+            // Trigger vocoder-only re-render against the existing materialization. Used
+            // by CapturePersistence::deserialize to repopulate RenderCache after restore.
+            //
+            // CRITICAL: must NOT call requestMaterializationRefresh — that path re-runs
+            // F0 extraction and overwrites the user's restored PitchCurve / Notes. We
+            // need the same vocoder-chunk-render path PianoRoll edits already use:
+            // it skips F0, reads the existing pitchCurve, runs vocoder, publishes to
+            // RenderCache. F0State stays Ready throughout.
+            if (materializationStore_ == nullptr)
+                return;
+            const auto duration = getMaterializationAudioDurationById(materializationId);
+            if (duration <= 0.0)
+                return;
+            enqueueMaterializationPartialRenderById(materializationId, 0.0, duration);
+        };
+
+        captureSession_ = std::make_unique<Capture::CaptureSession>(std::move(bindings));
+        AppLogger::log("OpenTuneAudioProcessor: VST3 capture session created");
+    }
 }
 
 OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
@@ -1150,6 +1242,9 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
                         getProcessingPrecision());
 #endif
     pianoKeyAudition_.loadSamples();
+
+    if (captureSession_ != nullptr)
+        captureSession_->prepareToPlay(sampleRate, samplesPerBlock, getMainBusNumInputChannels());
 }
 
 void OpenTuneAudioProcessor::releaseResources() {
@@ -1158,6 +1253,9 @@ void OpenTuneAudioProcessor::releaseResources() {
 #if JucePlugin_Enable_ARA
     releaseResourcesForARA();
 #endif
+
+    if (captureSession_ != nullptr)
+        captureSession_->releaseResources();
 }
 
 #if JucePlugin_Enable_ARA
@@ -1281,6 +1379,53 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         return;
     }
 #endif
+
+    // VST3 non-ARA capture path: dry pass-through unless an Edited segment claims this host_t,
+    // recording the dry input into the active Capturing segment if any.
+    // captureSession_ is only non-null when getWrapperType() == wrapperType_VST3 (per ctor),
+    // so this branch is naturally inert in Standalone instances.
+    if (captureSession_ != nullptr) {
+        double host_t = 0.0;
+        bool isPlayingNow = false;
+        if (auto* hostPlayHead = getPlayHead()) {
+            const auto pos = hostPlayHead->getPosition().orFallback(juce::AudioPlayHead::PositionInfo{});
+            host_t = pos.getTimeInSeconds().orFallback(0.0);
+            isPlayingNow = pos.getIsPlaying();
+        }
+
+        // Host transport mirror: in non-ARA VST3 mode the plugin is a passive observer.
+        // Forcing positionAtomic_ and isPlaying_ to host values every block ensures any
+        // local transport change (spacebar / setPlaying) is overridden by host within
+        // one audio block — there is no plugin-side play/pause illusion to maintain.
+        positionAtomic_->store(host_t, std::memory_order_relaxed);
+        isPlaying_.store(isPlayingNow, std::memory_order_relaxed);
+
+        // Diagnostic: once per ~1 second, post a sample snapshot of the input buffer to
+        // help diagnose host routing issues (silent buffer / int24-as-float / etc.).
+        // Audio thread cannot call AppLogger directly; we stash data into atomics that a
+        // periodic message-thread inspection (PluginEditor timer) could later read. For
+        // now we just log inline using JUCE Logger which is thread-safe enough for
+        // diagnostic-only paths.
+        static std::atomic<int> diagBlockCounter { 0 };
+        const int blockIdx = diagBlockCounter.fetch_add(1, std::memory_order_relaxed);
+        const int blocksPerSecond = static_cast<int>(juce::jmax(1.0, getSampleRate())) / juce::jmax(1, numSamples);
+        if (totalNumOutputChannels > 0 && numSamples > 0 && blockIdx % juce::jmax(1, blocksPerSecond) == 0) {
+            const float* ch0 = buffer.getReadPointer(0);
+            const float mag = buffer.getMagnitude(0, juce::jmin(numSamples, 256));
+            juce::Logger::writeToLog("CaptureDiag: numChannels=" + juce::String(totalNumOutputChannels)
+                + " numSamples=" + juce::String(numSamples)
+                + " mag=" + juce::String(mag, 6)
+                + " s[0,1,2,3,64]=" + juce::String(ch0[0], 4)
+                + "," + juce::String(ch0[juce::jmin(1, numSamples - 1)], 4)
+                + "," + juce::String(ch0[juce::jmin(2, numSamples - 1)], 4)
+                + "," + juce::String(ch0[juce::jmin(3, numSamples - 1)], 4)
+                + "," + juce::String(ch0[juce::jmin(64, numSamples - 1)], 4));
+        }
+
+        captureSession_->processBlock(buffer, host_t, getSampleRate(), isPlayingNow);
+        pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+        return;
+    }
 
     // Clear output buffer
     for (int i = 0; i < totalNumOutputChannels; ++i) {
@@ -2839,21 +2984,40 @@ void OpenTuneAudioProcessor::setZoomLevel(double zoom) {
 bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
                                            double inSampleRate,
                                            const juce::String& displayName,
-                                           OpenTuneAudioProcessor::PreparedImport& out)
+                                           OpenTuneAudioProcessor::PreparedImport& out,
+                                           const char* entrySourceTag)
 {
+    const int declaredChannels = inBuffer.getNumChannels();
+
     if (inBuffer.getNumSamples() <= 0) {
         AppLogger::log("Import rejected: empty audio buffer (zero samples) for '" + displayName + "'");
+        ChannelLayoutLog::logReject(entrySourceTag, declaredChannels,
+                                     "empty-buffer", displayName);
         return false;
     }
-    if (inBuffer.getNumChannels() <= 0) {
-        AppLogger::log("Import rejected: invalid channel count=" + juce::String(inBuffer.getNumChannels()) + " for '" + displayName + "'");
+    if (declaredChannels <= 0) {
+        AppLogger::log("Import rejected: invalid channel count=" + juce::String(declaredChannels) + " for '" + displayName + "'");
+        ChannelLayoutLog::logReject(entrySourceTag, declaredChannels,
+                                     "invalid-channel-count", displayName);
+        return false;
+    }
+    if (declaredChannels > 2) {
+        // Multichannel (>2) imports are explicitly unsupported per channel-layout-policy.
+        AppLogger::log("Import rejected: multichannel (>2) audio not supported, channels=" + juce::String(declaredChannels) + " for '" + displayName + "'");
+        ChannelLayoutLog::logReject(entrySourceTag, declaredChannels,
+                                     "multichannel-not-supported", displayName);
         return false;
     }
     if (inSampleRate <= 0.0) {
         AppLogger::log("Import rejected: invalid sample rate=" + juce::String(inSampleRate, 2) + " for '" + displayName + "'");
+        ChannelLayoutLog::logReject(entrySourceTag, declaredChannels,
+                                     "invalid-sample-rate", displayName);
         return false;
     }
-    
+
+    // Storage layout exactly matches the declaration (1 → mono, 2 → stereo).
+    ChannelLayoutLog::logEntry(entrySourceTag, declaredChannels, declaredChannels, displayName);
+
     out.displayName = displayName;
 
     // 导入后的 materialization 在 shared runtime 内统一落到固定 44.1kHz 的 materialization-local 存储采样率。
@@ -3017,7 +3181,8 @@ OpenTuneAudioProcessor::ensureAraRegionMaterialization(
     }
 
     PreparedImport preparedImport;
-    if (!prepareImport(std::move(windowBuffer), copiedAudioSampleRate, sourceName, preparedImport))
+    if (!prepareImport(std::move(windowBuffer), copiedAudioSampleRate, sourceName, preparedImport,
+                       "ara-hydrate"))
         return std::nullopt;
 
     preparedImport.sourceWindow = SourceWindow{sourceId,
@@ -3585,14 +3750,19 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                 if (audioNumChannels > 0) {
                     numFrames = boundaries.frameCount;
                     monoAudio.resize(static_cast<size_t>(boundaries.synthSampleCount), 0.0f);
+
+                    // Per channel-layout-policy spec: vocoder mel input is unconditionally
+                    // sourced from channel 0 (L) of the stored audio. No averaging, no
+                    // active-channel detection. Storage is guaranteed 1 or 2 channels, and
+                    // ch 0 is "L" in stereo or "the mono channel" in mono — either way the
+                    // canonical mono input.
+                    const float* ch0 = coreJob.audioBuffer->getReadPointer(0);
                     for (int64_t i = 0; i < boundaries.publishSampleCount; ++i) {
-                        float sum = 0.0f;
-                        for (int ch = 0; ch < audioNumChannels; ++ch) {
-                            const float* channelData = coreJob.audioBuffer->getReadPointer(ch);
-                            sum += channelData[static_cast<int>(boundaries.trueStartSample + i)];
-                        }
-                        monoAudio[static_cast<size_t>(i)] = sum / static_cast<float>(audioNumChannels);
+                        monoAudio[static_cast<size_t>(i)] = ch0[static_cast<int>(boundaries.trueStartSample + i)];
                     }
+                    ChannelLayoutLog::logChunkRender(
+                        static_cast<juce::int64>(coreJob.materializationId),
+                        audioNumChannels);
                     clipFound = true;
                 }
             }
@@ -3815,7 +3985,14 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
         }
     }
 
-    // Write dry signal with linear interpolation (single pass, pointer-based)
+    // Write dry signal with linear interpolation (single pass, pointer-based).
+    //
+    // Per channel-layout-policy spec: srcChannels is guaranteed ∈ {1, 2} (enforced
+    // at `MaterializationStore::createMaterialization`). The `srcCh = ch % srcChannels`
+    // mapping below covers both layouts naturally:
+    //   - srcChannels=1 (mono storage): every dest ch maps to src 0 → broadcast.
+    //   - srcChannels=2 (stereo storage): dest ch 0 → src 0, ch 1 → src 1 → 1:1 map.
+    // No extra channel-count guards or general-N-channel handling needed.
     for (int channel = 0; channel < destinationChannels; ++channel) {
         const int srcCh = channel % srcChannels;
         const float* srcPtr = srcBuffer.getReadPointer(srcCh);
