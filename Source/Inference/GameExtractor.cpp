@@ -116,6 +116,7 @@ static std::unique_ptr<Ort::Session> loadOneSession(
 
 bool GameExtractor::loadSessions(const std::string& modelDir)
 {
+    loadConfig(modelDir);
     try {
         auto sessionOptions = createSessionOptions();
 
@@ -151,6 +152,35 @@ void GameExtractor::releaseSessions()
     dur2bdSession_.reset();
     bd2durSession_.reset();
     AppLogger::info("[GameExtractor] All GAME sessions released");
+}
+
+bool GameExtractor::loadConfig(const std::string& modelDir)
+{
+    juce::File configFile(juce::String(modelDir) + "/config.json");
+    if (!configFile.existsAsFile()) return false;
+
+    auto content = configFile.loadFileAsString();
+    auto json = juce::JSON::parse(content);
+    if (!json.isObject()) return false;
+
+    auto languages = json.getProperty("languages", {});
+    if (languages.isObject()) {
+        auto* obj = languages.getDynamicObject();
+        if (obj != nullptr) {
+            for (const auto& prop : obj->getProperties()) {
+                languageMap_[prop.name.toString().toStdString()] = static_cast<int64_t>(prop.value);
+            }
+        }
+    }
+
+    AppLogger::info("[GameExtractor] Loaded config.json: " + juce::String(static_cast<int>(languageMap_.size())) + " languages");
+    return true;
+}
+
+int64_t GameExtractor::getLanguageId(const std::string& languageName) const
+{
+    auto it = languageMap_.find(languageName);
+    return (it != languageMap_.end()) ? it->second : 0;
 }
 
 bool GameExtractor::isLoaded() const

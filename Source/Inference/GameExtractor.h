@@ -44,6 +44,13 @@ public:
     bool isLoaded() const;
 
     /**
+     * Load language mapping from config.json in model directory.
+     * Maps language name string to int64 ID.
+     */
+    bool loadConfig(const std::string& modelDir);
+    int64_t getLanguageId(const std::string& languageName) const;
+
+    /**
      * Extract reference notes from a single audio chunk.
      * @param audio Audio samples at 44100Hz
      * @param numSamples Number of samples
@@ -70,6 +77,8 @@ private:
 
     static constexpr int kSampleRate = 44100;
     static constexpr float kTimestep = 0.01f;  // 10ms per frame
+
+    std::unordered_map<std::string, int64_t> languageMap_;
 
     Ort::SessionOptions createSessionOptions();
 

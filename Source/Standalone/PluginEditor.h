@@ -247,6 +247,7 @@ private:
     // GAME Reference Analysis
     int currentNoteDetail_ = 5;
     std::atomic<bool> gameAnalysisInProgress_{false};
+    juce::File lastReferenceFile_;
     void runGameAnalysis(uint64_t materializationId, const juce::File& referenceFile);
 
     // Detached-safe background tasks (import/deferred post-process)
