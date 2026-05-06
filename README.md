@@ -361,4 +361,4 @@ cmake --build build --config Release
 
 
 ## License
-Copyright © 2024-2026 DAYA. All rights reserved.
+AGPL V3.0
