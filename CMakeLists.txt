@@ -510,6 +510,11 @@ target_sources(OpenTune
         Source/Inference/PCNSFHifiGANVocoder.h
         Source/Inference/ModelFactory.cpp
         Source/Inference/ModelFactory.h
+        Source/Inference/GameTypes.h
+        Source/Inference/GameExtractor.cpp
+        Source/Inference/GameExtractor.h
+        Source/Inference/GameInferenceService.cpp
+        Source/Inference/GameInferenceService.h
         Source/Inference/F0InferenceService.cpp
         Source/Inference/VocoderDomain.cpp
         Source/Inference/VocoderInferenceService.cpp
@@ -608,6 +613,9 @@ target_sources(OpenTune
         Source/Utils/PlacementActions.h
         Source/Utils/SilentGapDetector.cpp
         Source/Utils/SilentGapDetector.h
+        Source/Utils/VuvBoundaryExtractor.cpp
+        Source/Utils/VuvBoundaryExtractor.h
+        Source/Utils/InferenceGate.h
         Source/Utils/TimeCoordinate.h
 )
 
@@ -812,6 +820,9 @@ endif()
 set(HIFIGAN_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx")
 set(RMVPE_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/models/rmvpe.onnx")
 
+# GAME model files
+set(GAME_MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Resources/GAME-1.0.3-large-onnx")
+
 # --- ONNX Runtime library copying ---
 if(WIN32)
     add_custom_command(TARGET OpenTune_Standalone POST_BUILD
@@ -870,6 +881,31 @@ if(WIN32)
         COMMENT "Copying AI models to Standalone..."
     )
 
+    # GAME models → models/game/
+    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/game"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/encoder.onnx"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/game/encoder.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/segmenter.onnx"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/game/segmenter.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/estimator.onnx"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/game/estimator.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/dur2bd.onnx"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/game/dur2bd.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/bd2dur.onnx"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/game/bd2dur.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/config.json"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/game/config.json"
+        COMMENT "Copying GAME models to Standalone..."
+    )
+
 elseif(APPLE)
     add_custom_command(TARGET OpenTune_Standalone POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -890,6 +926,31 @@ elseif(APPLE)
             "${RMVPE_MODEL}"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/rmvpe.onnx"
         COMMENT "Copying AI models to app bundle Resources..."
+    )
+
+    # GAME models → Contents/Resources/models/game/
+    add_custom_command(TARGET OpenTune_Standalone POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/game"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/encoder.onnx"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/game/encoder.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/segmenter.onnx"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/game/segmenter.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/estimator.onnx"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/game/estimator.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/dur2bd.onnx"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/game/dur2bd.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/bd2dur.onnx"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/game/bd2dur.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${GAME_MODEL_DIR}/config.json"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/game/config.json"
+        COMMENT "Copying GAME models to app bundle Resources..."
     )
 endif()
 
@@ -1007,6 +1068,31 @@ if(TARGET OpenTune_VST3)
             COMMENT "Copying AI models to VST3 plugin..."
         )
 
+        # GAME models → models/game/
+        add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/game"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/encoder.onnx"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/game/encoder.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/segmenter.onnx"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/game/segmenter.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/estimator.onnx"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/game/estimator.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/dur2bd.onnx"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/game/dur2bd.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/bd2dur.onnx"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/game/bd2dur.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/config.json"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/game/config.json"
+            COMMENT "Copying GAME models to VST3 plugin..."
+        )
+
     elseif(APPLE)
         # ONNX Runtime dylib → Contents/Frameworks/
         add_custom_command(TARGET OpenTune_VST3 POST_BUILD
@@ -1029,6 +1115,31 @@ if(TARGET OpenTune_VST3)
                 "${RMVPE_MODEL}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/rmvpe.onnx"
             COMMENT "Copying AI models to VST3 bundle Resources..."
+        )
+
+        # GAME models → Contents/Resources/models/game/
+        add_custom_command(TARGET OpenTune_VST3 POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/game"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/encoder.onnx"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/game/encoder.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/segmenter.onnx"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/game/segmenter.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/estimator.onnx"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/game/estimator.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/dur2bd.onnx"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/game/dur2bd.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/bd2dur.onnx"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/game/bd2dur.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GAME_MODEL_DIR}/config.json"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/game/config.json"
+            COMMENT "Copying GAME models to VST3 bundle Resources..."
         )
 
         # UserGuide translations → Contents/Resources/docs/

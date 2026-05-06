@@ -28,6 +28,7 @@
 #include "Utils/PitchCurve.h"
 #include "Utils/SilentGapDetector.h"
 #include "Utils/SourceWindow.h"
+#include "Inference/GameTypes.h"
 
 namespace OpenTune {
 
@@ -79,6 +80,8 @@ public:
         uint64_t notesRevision{0};
         std::vector<SilentGap> silentGaps;
         uint64_t renderRevision{0};
+        std::vector<ReferenceNote> referenceNotes;
+        uint64_t referenceNotesRevision{0};
     };
 
     // 仅 notes 部分的轻量快照
@@ -145,6 +148,10 @@ public:
     bool getNotesSnapshot(uint64_t materializationId, MaterializationNotesSnapshot& out) const;
     bool setNotes(uint64_t materializationId, std::vector<Note> notes);
 
+    std::vector<ReferenceNote> getReferenceNotes(uint64_t materializationId) const;
+    bool setReferenceNotes(uint64_t materializationId, std::vector<ReferenceNote> notes);
+    uint64_t getReferenceNotesRevision(uint64_t materializationId) const;
+
     bool setSilentGaps(uint64_t materializationId, std::vector<SilentGap> silentGaps);
     bool replaceAudio(uint64_t materializationId,
                        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
@@ -188,6 +195,8 @@ private:
         std::shared_ptr<RenderCache> renderCache;
         std::vector<Note> notes;
         std::vector<SilentGap> silentGaps;
+        std::vector<ReferenceNote> referenceNotes;
+        uint64_t referenceNotesRevision{0};
         bool isRetired_{false};
     };
 

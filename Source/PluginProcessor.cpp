@@ -987,6 +987,10 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     if (f0Service_) {
         f0Service_->shutdown();
     }
+    if (gameService_) {
+        gameService_->shutdown();
+        gameService_.reset();
+    }
 
     AppLogger::shutdown();
 }
@@ -1087,6 +1091,23 @@ bool OpenTuneAudioProcessor::ensureVocoderReady()
         });
 }
 
+bool OpenTuneAudioProcessor::ensureGameServiceReady()
+{
+    if (gameService_ && gameService_->isInitialized()) return true;
+
+    if (!ortEnv_) {
+        Ort::InitApi();
+        ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
+    }
+
+    if (!gameService_) {
+        gameService_ = std::make_unique<GameInferenceService>(ortEnv_);
+    }
+
+    const auto gameModelsDir = ModelPathResolver::getGameModelsDirectory();
+    return gameService_->initialize(gameModelsDir);
+}
+
 void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
 {
     AppLogger::info("[Processor] Resetting inference backend, forceCpu=" 
@@ -1116,6 +1137,11 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     }
     f0Ready_.store(false);
     f0InitAttempted_.store(false);
+    
+    if (gameService_) {
+        gameService_->shutdown();
+        gameService_.reset();
+    }
     
     // 3. 重置加速检测器并重新检测
     auto& detector = AccelerationDetector::getInstance();
@@ -3737,6 +3763,9 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
             // 空闲时检查是否需要释放 F0 模型
             if (f0Service_) {
                 f0Service_->releaseIdleModelIfNeeded();
+            }
+            if (gameService_) {
+                gameService_->releaseIdleModelIfNeeded();
             }
 
             if (!chunkRenderWorkerRunning_) {
