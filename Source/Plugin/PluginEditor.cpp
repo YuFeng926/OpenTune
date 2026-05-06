@@ -295,6 +295,11 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     setResizeLimits(960, 640, 3000, 2000);
     setSize(1280, 820);
 
+    // 在首次推理服务初始化前，将持久化的渲染优先级应用到检测器
+    if (appPreferences_.getState().shared.renderingPriority == RenderingPriority::CpuFirst) {
+        processorRef_.resetInferenceBackend(true);
+    }
+
     syncMaterializationProjectionToPianoRoll();
     syncSharedAppPreferences();
 
