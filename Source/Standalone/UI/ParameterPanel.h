@@ -57,6 +57,9 @@ public:
         virtual void noteSplitChanged(float value) = 0;
         virtual void toolSelected(int toolId) = 0;
         virtual void autoTuneRequested() {}
+        virtual void analyzeReferenceRequested() {}
+        virtual void regenerateReferenceRequested() {}
+        virtual void noteDetailChanged(int detail) { juce::ignoreUnused(detail); }
         // 参数拖动完成回调（用于 Undo 记录，oldValue 是拖动开始前的值）
         virtual void parameterDragEnded(int paramId, float oldValue, float newValue) { juce::ignoreUnused(paramId, oldValue, newValue); }
     };
@@ -90,6 +93,7 @@ public:
     float getNoteSplit() const;
     float getF0Min() const;
     float getF0Max() const;
+    int getNoteDetail() const;
 
 private:
     class ToolIconButton : public juce::Button
@@ -145,6 +149,13 @@ private:
     std::unique_ptr<ToolIconButton> drawNoteToolButton_;
     std::unique_ptr<ToolIconButton> lineAnchorToolButton_;
     std::unique_ptr<ToolIconButton> handDrawToolButton_;
+
+    // GAME Reference Section
+    juce::Label referenceHeader_;
+    juce::Slider noteDetailSlider_;
+    juce::Label noteDetailLabel_;
+    std::unique_ptr<ToolIconButton> analyzeReferenceButton_;
+    std::unique_ptr<ToolIconButton> regenerateButton_;
 
     LargeKnobLookAndFeel largeKnobLookAndFeel_;
 

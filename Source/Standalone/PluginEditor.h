@@ -113,6 +113,12 @@ public:
     void playPauseToggleRequested() override;
     void stopPlaybackRequested() override;
     void autoTuneRequested() override;
+
+    // ParameterPanel::Listener (Reference)
+    void analyzeReferenceRequested() override;
+    void regenerateReferenceRequested() override;
+    void noteDetailChanged(int detail) override;
+
     void pitchCurveEdited(int startFrame, int endFrame) override;
     void escapeKeyPressed() override;
 
@@ -236,6 +242,11 @@ private:
     // Export worker thread management
     std::thread exportWorker_;
     std::atomic<bool> exportInProgress_{false};
+
+    // GAME Reference Analysis
+    int currentNoteDetail_ = 5;
+    std::atomic<bool> gameAnalysisInProgress_{false};
+    void runGameAnalysis(uint64_t materializationId, const juce::File& referenceFile);
 
     // Detached-safe background tasks (import/deferred post-process)
     std::vector<std::future<void>> backgroundTasks_;

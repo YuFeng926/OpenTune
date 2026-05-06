@@ -437,7 +437,6 @@ private:
 
     bool ensureF0Ready();
     bool ensureVocoderReady();
-    bool ensureGameServiceReady();
 
     bool ensureServiceReady(std::atomic<bool>& readyFlag,
                             std::atomic<bool>& attemptedFlag,
@@ -486,6 +485,7 @@ public:
     F0InferenceService* getF0Service() const { return f0Service_.get(); }
     VocoderDomain* getVocoderDomain() const { return vocoderDomain_.get(); }
     GameInferenceService* getGameService() const { return gameService_.get(); }
+    bool ensureGameServiceReady();
     InferenceGate& getInferenceGate() { return inferenceGate_; }
     SourceStore* getSourceStore() noexcept { return sourceStore_.get(); }
     const SourceStore* getSourceStore() const noexcept { return sourceStore_.get(); }

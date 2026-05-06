@@ -11,6 +11,7 @@
 #include "Utils/PitchCurve.h"
 #include "Utils/PianoRollVisualPreferences.h"
 #include "Utils/Note.h"
+#include "Inference/GameTypes.h"
 #include <algorithm>
 #include <vector>
 #include <array>
@@ -80,6 +81,9 @@ public:
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
     void drawNotes(juce::Graphics& g, const RenderContext& ctx,
                    const std::vector<Note>& notes);
+
+    void drawReferenceNotes(juce::Graphics& g, const RenderContext& ctx,
+                            const std::vector<ReferenceNote>& referenceNotes);
 
     void drawF0Curve(juce::Graphics& g,
                      const std::vector<float>& f0,
