@@ -332,8 +332,9 @@ void ParameterPanel::resized()
     const int referenceHeight = 20 + 4 + 16 + 2 + 70 + 4 + 28 + 4 + 28 + 12;
 
     // 预留底部空间（Tools + Reference），分层取出
-    // 工具栏上移一个旋钮高度，平衡各区域间距
-    auto bottomReserve = mainArea.removeFromBottom(toolsHeight + referenceHeight + knobSize);
+    // 工具栏上移半个旋钮高度，Reference 额外下移半个旋钮高度，三层间距平衡
+    const int interSectionGap = knobSize / 2;
+    auto bottomReserve = mainArea.removeFromBottom(toolsHeight + referenceHeight + interSectionGap);
     auto toolsArea = bottomReserve.removeFromTop(toolsHeight);
     // bottomReserve 剩余空间留给 Reference section
 
@@ -407,7 +408,7 @@ void ParameterPanel::resized()
     {
         const int panelWidth = toolsColumn.getWidth();
         const int x = toolsColumn.getX();
-        int y = bottomReserve.getY() + 4;
+        int y = bottomReserve.getY() + 4 + interSectionGap;
         referenceHeader_.setBounds(x, y, panelWidth, 20);
         y += 24;
         noteDetailLabel_.setBounds(x, y, panelWidth, 16);
