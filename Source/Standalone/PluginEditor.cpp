@@ -21,6 +21,8 @@
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/TimeCoordinate.h"
 #include "Utils/KeyShortcutConfig.h"
+#include "Utils/VuvBoundaryExtractor.h"
+#include "Inference/GameTypes.h"
 #include <cmath>
 #include <atomic>
 #include <cstdlib>
@@ -2404,6 +2406,176 @@ void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
 void OpenTuneAudioProcessorEditor::autoTuneRequested()
 {
     pianoRoll_.applyAutoTuneToSelection();
+}
+
+void OpenTuneAudioProcessorEditor::noteDetailChanged(int detail)
+{
+    currentNoteDetail_ = detail;
+}
+
+void OpenTuneAudioProcessorEditor::analyzeReferenceRequested()
+{
+    if (gameAnalysisInProgress_.load()) return;
+
+    const uint64_t matId = lastPianoRollMaterializationId_;
+    if (matId == 0) return;
+
+    // Check OriginalF0 is ready
+    if (processorRef_.getMaterializationOriginalF0StateById(matId) != OriginalF0State::Ready) {
+        AppLogger::warn("[Editor] Cannot analyze reference: OriginalF0 not ready");
+        return;
+    }
+
+    // Open file chooser for reference audio
+    auto chooser = std::make_shared<juce::FileChooser>(
+        "Select Reference Audio",
+        juce::File::getSpecialLocation(juce::File::userMusicDirectory),
+        "*.wav;*.mp3;*.flac;*.aiff;*.ogg");
+
+    auto safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
+    chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [safeThis, chooser, matId](const juce::FileChooser& fc) {
+            if (safeThis == nullptr) return;
+            auto results = fc.getResults();
+            if (results.isEmpty()) return;
+            safeThis->runGameAnalysis(matId, results[0]);
+        });
+}
+
+void OpenTuneAudioProcessorEditor::regenerateReferenceRequested()
+{
+    if (gameAnalysisInProgress_.load()) return;
+
+    const uint64_t matId = lastPianoRollMaterializationId_;
+    if (matId == 0) return;
+
+    // Regenerate uses the same reference audio already loaded — for now just re-analyze the materialization's own audio
+    // TODO: store reference audio path and reload
+    AppLogger::info("[Editor] Regenerate reference: re-running with current detail=" + juce::String(currentNoteDetail_));
+
+    // For now, use the materialization's own audio as reference (self-reference for testing)
+    runGameAnalysis(matId, juce::File{});
+}
+
+void OpenTuneAudioProcessorEditor::runGameAnalysis(uint64_t materializationId, const juce::File& referenceFile)
+{
+    if (gameAnalysisInProgress_.exchange(true)) return;
+
+    renderBadge_.setMessageText("Analyzing reference...");
+    renderBadge_.setVisible(true);
+
+    const int noteDetail = currentNoteDetail_;
+    auto safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
+
+    launchBackgroundUiTask([safeThis, matId = materializationId, referenceFile, noteDetail]() {
+        if (safeThis == nullptr) return;
+        auto& processor = safeThis->processorRef_;
+
+        // Ensure GAME service ready
+        if (!processor.ensureGameServiceReady()) {
+            AppLogger::error("[Editor] Failed to initialize GAME service");
+            juce::MessageManager::callAsync([safeThis]() {
+                if (safeThis == nullptr) return;
+                safeThis->gameAnalysisInProgress_.store(false);
+                safeThis->renderBadge_.setVisible(false);
+            });
+            return;
+        }
+
+        // Get VUV boundaries from OriginalF0
+        auto pitchCurve = processor.getMaterializationPitchCurveById(matId);
+        if (!pitchCurve) {
+            juce::MessageManager::callAsync([safeThis]() {
+                if (safeThis == nullptr) return;
+                safeThis->gameAnalysisInProgress_.store(false);
+                safeThis->renderBadge_.setVisible(false);
+            });
+            return;
+        }
+        auto snapshot = pitchCurve->getSnapshot();
+        const auto& originalF0 = snapshot->getOriginalF0();
+        if (originalF0.empty()) {
+            juce::MessageManager::callAsync([safeThis]() {
+                if (safeThis == nullptr) return;
+                safeThis->gameAnalysisInProgress_.store(false);
+                safeThis->renderBadge_.setVisible(false);
+            });
+            return;
+        }
+
+        // Extract VUV durations
+        auto segments = VuvBoundaryExtractor::extractSegments(originalF0, 160, 16000);
+        double audioDuration = processor.getMaterializationAudioDurationById(matId);
+        auto knownDurations = VuvBoundaryExtractor::segmentsToDurations(segments, audioDuration);
+
+        // Get reference audio (from file, or self-reference)
+        std::shared_ptr<const juce::AudioBuffer<float>> refAudioBuffer;
+        int refSampleRate = 44100;
+
+        if (referenceFile.existsAsFile()) {
+            // Load reference file
+            juce::AudioFormatManager formatManager;
+            formatManager.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(referenceFile));
+            if (reader != nullptr) {
+                auto buffer = std::make_shared<juce::AudioBuffer<float>>(1, static_cast<int>(reader->lengthInSamples));
+                reader->read(buffer.get(), 0, static_cast<int>(reader->lengthInSamples), 0, true, false);
+                refAudioBuffer = buffer;
+                refSampleRate = static_cast<int>(reader->sampleRate);
+            }
+        }
+
+        if (!refAudioBuffer) {
+            // Self-reference: use materialization's own audio
+            refAudioBuffer = processor.getMaterializationAudioBufferById(matId);
+            refSampleRate = 44100;
+        }
+
+        if (!refAudioBuffer || refAudioBuffer->getNumSamples() == 0) {
+            juce::MessageManager::callAsync([safeThis]() {
+                if (safeThis == nullptr) return;
+                safeThis->gameAnalysisInProgress_.store(false);
+                safeThis->renderBadge_.setVisible(false);
+            });
+            return;
+        }
+
+        // Acquire inference gate
+        auto lock = processor.getInferenceGate().acquire();
+
+        // Build config from detail level
+        auto config = GameConfig::fromDetailLevel(noteDetail);
+
+        // Run extraction
+        const float* audioData = refAudioBuffer->getReadPointer(0);
+        const size_t audioLength = static_cast<size_t>(refAudioBuffer->getNumSamples());
+
+        auto result = processor.getGameService()->extractReferenceNotes(
+            audioData, audioLength, refSampleRate, knownDurations, config,
+            [safeThis](float progress) {
+                juce::MessageManager::callAsync([safeThis, progress]() {
+                    if (safeThis == nullptr) return;
+                    safeThis->renderBadge_.setMessageText("Analyzing reference... " + juce::String(static_cast<int>(progress * 100)) + "%");
+                });
+            });
+
+        // Store results
+        if (result.ok()) {
+            processor.getMaterializationStore()->setReferenceNotes(matId, result.value());
+            AppLogger::info("[Editor] GAME analysis complete: " + juce::String(static_cast<int>(result.value().size())) + " reference notes");
+        } else {
+            AppLogger::error("[Editor] GAME analysis failed: " + juce::String(result.error().fullMessage()));
+        }
+
+        // Update UI
+        juce::MessageManager::callAsync([safeThis]() {
+            if (safeThis == nullptr) return;
+            safeThis->gameAnalysisInProgress_.store(false);
+            safeThis->renderBadge_.setVisible(false);
+            safeThis->pianoRoll_.invalidateVisual(
+                static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
+        });
+    });
 }
 
 void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame)

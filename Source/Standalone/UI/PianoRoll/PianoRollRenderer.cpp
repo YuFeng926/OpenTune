@@ -1001,4 +1001,45 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     }
 }
 
+void PianoRollRenderer::drawReferenceNotes(juce::Graphics& g, const RenderContext& ctx,
+                                           const std::vector<ReferenceNote>& referenceNotes)
+{
+    if (referenceNotes.empty() || !ctx.midiToY || !ctx.timeToX)
+        return;
+
+    const auto viewportRight = ctx.width;
+    const auto viewportLeft = ctx.pianoKeyWidth;
+    const float noteHeight = ctx.pixelsPerSemitone * 0.8f;
+
+    // Semi-transparent blue/purple for reference notes
+    const auto voicedColour = juce::Colour(130, 160, 255).withAlpha(0.30f);
+    const auto voicedBorder = juce::Colour(130, 160, 255).withAlpha(0.50f);
+
+    for (const auto& note : referenceNotes) {
+        if (!note.voiced) continue;
+
+        const int x1 = ctx.timeToX(note.onset);
+        const int x2 = ctx.timeToX(note.offset);
+
+        // Cull off-screen notes
+        if (x2 < viewportLeft || x1 > viewportRight) continue;
+
+        const float clippedX1 = static_cast<float>(std::max(x1, viewportLeft));
+        const float clippedX2 = static_cast<float>(std::min(x2, viewportRight));
+        const float width = clippedX2 - clippedX1;
+        if (width < 1.0f) continue;
+
+        const float centerY = ctx.midiToY(note.midiPitch);
+        const float top = centerY - noteHeight * 0.5f;
+
+        // Fill
+        g.setColour(voicedColour);
+        g.fillRoundedRectangle(clippedX1, top, width, noteHeight, 2.0f);
+
+        // Border
+        g.setColour(voicedBorder);
+        g.drawRoundedRectangle(clippedX1, top, width, noteHeight, 2.0f, 1.0f);
+    }
+}
+
 } // namespace OpenTune

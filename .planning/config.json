@@ -31,8 +31,8 @@
     "gsd-verifier": { "id": "aicodemirror-gpt/gpt-5.3-codex", "variant": "xhigh" }
   },
   "resolve_model_ids": "omit",
-  "project_path": "G:\\OPenTune0430",
-  "project_root": "G:\\OPenTune0430",
+  "project_path": "E:\\TRAE\\OpenTune-latest",
+  "project_root": "E:\\TRAE\\OpenTune-latest",
   "workflow": {
     "research": false,
     "plan_check": true,

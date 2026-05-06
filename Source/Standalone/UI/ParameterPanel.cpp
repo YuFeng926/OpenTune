@@ -230,6 +230,37 @@ ParameterPanel::ParameterPanel()
     handDrawToolButton_->setIcon(ToolbarIcons::getHandDrawIcon(), false);
     handDrawToolButton_->onClick = [this] { onToolClicked(4); };
     addAndMakeVisible(*handDrawToolButton_);
+
+    // GAME Reference Section
+    setupHeader(referenceHeader_, "Reference");
+    addAndMakeVisible(referenceHeader_);
+
+    setupLabel(noteDetailLabel_, "Note Detail");
+    addAndMakeVisible(noteDetailLabel_);
+
+    noteDetailSlider_.setSliderStyle(juce::Slider::Rotary);
+    noteDetailSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 18);
+    noteDetailSlider_.setRange(1.0, 10.0, 1.0);
+    noteDetailSlider_.setValue(5.0, juce::dontSendNotification);
+    noteDetailSlider_.setLookAndFeel(&largeKnobLookAndFeel_);
+    noteDetailSlider_.onValueChange = [this]() {
+        listeners_.call([this](Listener& l) { l.noteDetailChanged(static_cast<int>(noteDetailSlider_.getValue())); });
+    };
+    addAndMakeVisible(noteDetailSlider_);
+
+    analyzeReferenceButton_ = std::make_unique<ToolIconButton>(100, "AnalyzeRef", "Analyze Reference Audio");
+    analyzeReferenceButton_->setTextIcon("REF");
+    analyzeReferenceButton_->onClick = [this]() {
+        listeners_.call([](Listener& l) { l.analyzeReferenceRequested(); });
+    };
+    addAndMakeVisible(*analyzeReferenceButton_);
+
+    regenerateButton_ = std::make_unique<ToolIconButton>(101, "Regenerate", "Regenerate with current settings");
+    regenerateButton_->setTextIcon("GEN");
+    regenerateButton_->onClick = [this]() {
+        listeners_.call([](Listener& l) { l.regenerateReferenceRequested(); });
+    };
+    addAndMakeVisible(*regenerateButton_);
 }
 
 ParameterPanel::~ParameterPanel()
@@ -240,6 +271,7 @@ ParameterPanel::~ParameterPanel()
     noteSplitSlider_.setLookAndFeel(nullptr);
     f0MinSlider_.setLookAndFeel(nullptr);
     f0MaxSlider_.setLookAndFeel(nullptr);
+    noteDetailSlider_.setLookAndFeel(nullptr);
 }
 
 void ParameterPanel::paint(juce::Graphics& g)
@@ -289,8 +321,8 @@ void ParameterPanel::resized()
     // Tools区域高度计算：header + gap + 3行按钮 + 2个行间距
     const int toolsHeight = headerHeight + toolHeaderGap + rows * toolButtonSize + (rows - 1) * toolButtonGap;
 
-    // 向上平移 150px：先预留底部空间，再取出 Tools 区域
-    mainArea.removeFromBottom(150);
+    // 向上平移 340px：先预留底部空间（Tools + Reference），再取出 Tools 区域
+    mainArea.removeFromBottom(340);
     auto toolsArea = mainArea.removeFromBottom(toolsHeight);
 
     // Pitch Correction
@@ -358,17 +390,34 @@ void ParameterPanel::resized()
 
         buttons[i]->setBounds(x, y, toolButtonSize, toolButtonSize);
     }
+
+    // Reference Section
+    {
+        const int panelWidth = toolsColumn.getWidth();
+        const int x = toolsColumn.getX();
+        int y = startY + 2 * (toolButtonSize + toolButtonGap) + toolButtonSize + 20;
+        referenceHeader_.setBounds(x, y, panelWidth, 20);
+        y += 24;
+        noteDetailLabel_.setBounds(x, y, panelWidth, 16);
+        y += 18;
+        noteDetailSlider_.setBounds(x + (panelWidth - 70) / 2, y, 70, 70);
+        y += 74;
+        analyzeReferenceButton_->setBounds(x, y, (panelWidth - 4) / 2, 28);
+        regenerateButton_->setBounds(x + (panelWidth - 4) / 2 + 4, y, (panelWidth - 4) / 2, 28);
+    }
 }
 
 void ParameterPanel::applyTheme()
 {
     pitchCorrectionHeader_.setColour(juce::Label::textColourId, UIColors::textPrimary);
     toolsHeader_.setColour(juce::Label::textColourId, UIColors::textPrimary);
+    referenceHeader_.setColour(juce::Label::textColourId, UIColors::textPrimary);
 
     retuneSpeedLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
     vibratoDepthLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
     vibratoRateLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
     noteSplitLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
+    noteDetailLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
 
     largeKnobLookAndFeel_.setColour(juce::Slider::textBoxTextColourId, UIColors::textPrimary);
     largeKnobLookAndFeel_.setColour(juce::Slider::textBoxBackgroundColourId, UIColors::backgroundDark);
@@ -536,6 +585,11 @@ void ParameterPanel::onNoteSplitChanged()
 void ParameterPanel::onToolClicked(int toolId)
 {
     listeners_.call([this, toolId](Listener& l) { l.toolSelected(toolId); });
+}
+
+int ParameterPanel::getNoteDetail() const
+{
+    return static_cast<int>(noteDetailSlider_.getValue());
 }
 
 } // namespace OpenTune

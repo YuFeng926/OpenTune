@@ -15,6 +15,7 @@
 #include "ToolbarIcons.h"
 #include "../../Utils/AudioEditingScheme.h"
 #include "Utils/PianoKeyAudition.h"
+#include "Inference/GameTypes.h"
 namespace OpenTune {
 
 namespace {
@@ -1105,6 +1106,14 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         }
 
         renderer_->drawLanes(g, ctx);
+
+        // Draw reference notes layer (below user notes, above lanes)
+        if (processor_ != nullptr && editedMaterializationId_ != 0) {
+            auto refNotes = processor_->getMaterializationStore()->getReferenceNotes(editedMaterializationId_);
+            if (!refNotes.empty()) {
+                renderer_->drawReferenceNotes(g, ctx, refNotes);
+            }
+        }
 
         const auto& notes = getDisplayedNotes();
         renderer_->drawNotes(g, ctx, notes);
