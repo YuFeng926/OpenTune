@@ -156,7 +156,6 @@ private:
     // GAME Reference Section
     juce::Label referenceHeader_;
     juce::Slider noteDetailSlider_;
-    juce::Label noteDetailLabel_;
     std::unique_ptr<ToolIconButton> analyzeReferenceButton_;
     std::unique_ptr<ToolIconButton> regenerateButton_;
     std::unique_ptr<ToolIconButton> autoSnapButton_;
