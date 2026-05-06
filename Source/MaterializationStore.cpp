@@ -481,6 +481,26 @@ uint64_t MaterializationStore::getReferenceNotesRevision(uint64_t materializatio
     return it != materializations_.end() ? it->second.referenceNotesRevision : 0;
 }
 
+double MaterializationStore::getReferenceTimeOffset(uint64_t materializationId) const
+{
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    return it != materializations_.end() ? it->second.referenceTimeOffset : 0.0;
+}
+
+bool MaterializationStore::setReferenceTimeOffset(uint64_t materializationId, double offsetSeconds)
+{
+    if (materializationId == 0) return false;
+
+    const juce::ScopedWriteLock writeLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end()) return false;
+
+    it->second.referenceTimeOffset = offsetSeconds;
+    ++it->second.referenceNotesRevision;  // reuse revision to trigger UI refresh
+    return true;
+}
+
 bool MaterializationStore::setSilentGaps(uint64_t materializationId, std::vector<SilentGap> silentGaps)
 {
     if (materializationId == 0) {

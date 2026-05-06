@@ -2493,9 +2493,10 @@ void OpenTuneAudioProcessorEditor::runGameAnalysis(uint64_t materializationId, c
     renderBadge_.setVisible(true);
 
     const int noteDetail = currentNoteDetail_;
+    const bool forceAlign = appPreferences_.getState().shared.forceAlignReferenceStart;
     auto safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
 
-    launchBackgroundUiTask([safeThis, matId = materializationId, referenceFile, noteDetail]() {
+    launchBackgroundUiTask([safeThis, matId = materializationId, referenceFile, noteDetail, forceAlign]() {
         if (safeThis == nullptr) return;
         auto& processor = safeThis->processorRef_;
 
@@ -2590,6 +2591,35 @@ void OpenTuneAudioProcessorEditor::runGameAnalysis(uint64_t materializationId, c
         // Store results
         if (result.ok()) {
             processor.getMaterializationStore()->setReferenceNotes(matId, result.value());
+
+            // Force-align reference start if enabled
+            if (forceAlign) {
+                // Find dry vocal's first voiced time from VUV segments
+                double dryFirstVoicedTime = 0.0;
+                for (const auto& seg : segments) {
+                    if (seg.voiced) {
+                        dryFirstVoicedTime = seg.start;
+                        break;
+                    }
+                }
+
+                // Find reference audio's first audible sample
+                double refFirstAudibleTime = 0.0;
+                const float* refData = refAudioBuffer->getReadPointer(0);
+                const int refNumSamples = refAudioBuffer->getNumSamples();
+                for (int i = 0; i < refNumSamples; ++i) {
+                    if (std::abs(refData[i]) > 1.0e-4f) {
+                        refFirstAudibleTime = static_cast<double>(i) / static_cast<double>(refSampleRate);
+                        break;
+                    }
+                }
+
+                const double alignOffset = dryFirstVoicedTime - refFirstAudibleTime;
+                processor.getMaterializationStore()->setReferenceTimeOffset(matId, alignOffset);
+            } else {
+                processor.getMaterializationStore()->setReferenceTimeOffset(matId, 0.0);
+            }
+
             AppLogger::info("[Editor] GAME analysis complete: " + juce::String(static_cast<int>(result.value().size())) + " reference notes");
         } else {
             AppLogger::error("[Editor] GAME analysis failed: " + juce::String(result.error().fullMessage()));

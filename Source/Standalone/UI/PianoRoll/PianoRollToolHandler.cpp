@@ -255,6 +255,18 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
     }
 
     if (!cursorSet) {
+        // Check if hovering over a reference note
+        if (ctx_.hitTestReferenceNote) {
+            double hoverTime = ctx_.xToTime(e.x);
+            float hoverPitch = ctx_.yToFreq(static_cast<float>(e.y));
+            if (ctx_.hitTestReferenceNote(hoverTime, hoverPitch)) {
+                ctx_.setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+                cursorSet = true;
+            }
+        }
+    }
+
+    if (!cursorSet) {
         ctx_.setMouseCursor(juce::MouseCursor::NormalCursor);
     }
 }
@@ -757,6 +769,14 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 
         invalidateNoteChange(ctx_, beforeNotes, notes);
     } else {
+        // No user note clicked — check if reference note is under cursor
+        if (ctx_.hitTestReferenceNote && ctx_.hitTestReferenceNote(trackRelativeTime, clickedPitch)) {
+            ctx_.getState().referenceDrag.isDragging = true;
+            ctx_.getState().referenceDrag.dragStartMouseTime = trackRelativeTime;
+            ctx_.getState().referenceDrag.dragStartOffsetSeconds = ctx_.getReferenceTimeOffset ? ctx_.getReferenceTimeOffset() : 0.0;
+            return;
+        }
+
         if (!isCtrlDown) {
             deselectAllNotes(notes);
             updateF0SelectionFromNotes(notes);
@@ -974,8 +994,18 @@ void PianoRollToolHandler::handleAutoTuneTool(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
-// 选择工具拖拽处理：框选区域、音符边缘调整、音符拖拽移动
+// 选择工具拖拽处理：框选区域、音符边缘调整、音符拖拽移动、参考音符整体平移
 {
+    // Reference note drag — move all reference notes horizontally
+    if (ctx_.getState().referenceDrag.isDragging) {
+        double currentTime = ctx_.projectTimelineTimeToMaterialization(ctx_.xToTime(e.x));
+        double delta = currentTime - ctx_.getState().referenceDrag.dragStartMouseTime;
+        ctx_.getState().referenceDrag.currentOffset = ctx_.getState().referenceDrag.dragStartOffsetSeconds + delta;
+        // Trigger visual refresh without store write — paint reads from referenceDrag.currentOffset
+        ctx_.invalidateVisual(juce::Rectangle<int>{});
+        return;
+    }
+
     const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
 
     if (ctx_.getState().selection.isSelectingArea) {
@@ -1109,6 +1139,15 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 // 选择工具鼠标释放处理：完成音符拖拽/调整/框选，提交音高修正
 {
     juce::ignoreUnused(e);
+
+    // End reference drag — commit final offset to store
+    if (ctx_.getState().referenceDrag.isDragging) {
+        if (ctx_.setReferenceTimeOffset) {
+            ctx_.setReferenceTimeOffset(ctx_.getState().referenceDrag.currentOffset);
+        }
+        ctx_.getState().referenceDrag.clear();
+        return;
+    }
 
     const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
     bool queuedAsyncCommit = false;

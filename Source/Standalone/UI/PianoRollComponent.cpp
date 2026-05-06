@@ -240,6 +240,31 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.toggleLineAnchorSegmentSelection = [this](int idx) { toggleLineAnchorSegmentSelection(idx); };
     toolCtx.clearLineAnchorSegmentSelection = [this]() { clearLineAnchorSegmentSelection(); };
     toolCtx.setUndoDescription = [this](juce::String desc) { pendingUndoDescription_ = std::move(desc); };
+
+    // Reference note drag support
+    toolCtx.hitTestReferenceNote = [this](double time, float pitch) -> bool {
+        if (cachedReferenceNotes_.empty()) return false;
+        const double refOffset = cachedReferenceTimeOffset_;
+        const float pitchMidi = 69.0f + 12.0f * std::log2(pitch / 440.0f) - 0.5f;
+        for (const auto& ref : cachedReferenceNotes_) {
+            if (!ref.voiced) continue;
+            const double onset = ref.onset + refOffset;
+            const double offset = ref.offset + refOffset;
+            if (time >= onset && time <= offset && std::abs(pitchMidi - ref.midiPitch) < 1.0f) {
+                return true;
+            }
+        }
+        return false;
+    };
+    toolCtx.getReferenceTimeOffset = [this]() -> double {
+        if (processor_ == nullptr || editedMaterializationId_ == 0) return 0.0;
+        return processor_->getMaterializationStore()->getReferenceTimeOffset(editedMaterializationId_);
+    };
+    toolCtx.setReferenceTimeOffset = [this](double offset) {
+        if (processor_ == nullptr || editedMaterializationId_ == 0) return;
+        processor_->getMaterializationStore()->setReferenceTimeOffset(editedMaterializationId_, offset);
+    };
+
     return toolCtx;
 }
 
@@ -1109,7 +1134,23 @@ void PianoRollComponent::paint(juce::Graphics& g) {
 
         // Draw reference notes layer (below user notes, above lanes)
         if (!cachedReferenceNotes_.empty()) {
-            renderer_->drawReferenceNotes(g, ctx, cachedReferenceNotes_);
+            // Use live drag offset during active drag, cached offset otherwise
+            const double refOffset = interactionState_.referenceDrag.isDragging
+                ? interactionState_.referenceDrag.currentOffset
+                : cachedReferenceTimeOffset_;
+            if (std::abs(refOffset) < 1.0e-9) {
+                renderer_->drawReferenceNotes(g, ctx, cachedReferenceNotes_);
+            } else {
+                std::vector<ReferenceNote> offsetNotes;
+                offsetNotes.reserve(cachedReferenceNotes_.size());
+                for (const auto& note : cachedReferenceNotes_) {
+                    ReferenceNote shifted = note;
+                    shifted.onset  += refOffset;
+                    shifted.offset += refOffset;
+                    offsetNotes.push_back(shifted);
+                }
+                renderer_->drawReferenceNotes(g, ctx, offsetNotes);
+            }
         }
 
         const auto& notes = getDisplayedNotes();
@@ -1858,6 +1899,7 @@ void PianoRollComponent::onHeartbeatTick()
         const auto rev = processor_->getMaterializationStore()->getReferenceNotesRevision(editedMaterializationId_);
         if (rev != cachedReferenceNotesRevision_) {
             cachedReferenceNotes_ = processor_->getMaterializationStore()->getReferenceNotes(editedMaterializationId_);
+            cachedReferenceTimeOffset_ = processor_->getMaterializationStore()->getReferenceTimeOffset(editedMaterializationId_);
             cachedReferenceNotesRevision_ = rev;
             invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
         }
@@ -2669,6 +2711,15 @@ bool PianoRollComponent::applyAutoSnap()
 
     auto refNotes = processor_->getMaterializationStore()->getReferenceNotes(editedMaterializationId_);
     if (refNotes.empty()) return false;
+
+    // Apply reference time offset to notes for matching
+    const double refOffset = processor_->getMaterializationStore()->getReferenceTimeOffset(editedMaterializationId_);
+    if (std::abs(refOffset) > 1.0e-9) {
+        for (auto& ref : refNotes) {
+            ref.onset  += refOffset;
+            ref.offset += refOffset;
+        }
+    }
 
     auto notes = getEditedMaterializationNotesCopy();
     if (notes.empty()) return false;

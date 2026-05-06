@@ -152,6 +152,9 @@ public:
     bool setReferenceNotes(uint64_t materializationId, std::vector<ReferenceNote> notes);
     uint64_t getReferenceNotesRevision(uint64_t materializationId) const;
 
+    double getReferenceTimeOffset(uint64_t materializationId) const;
+    bool setReferenceTimeOffset(uint64_t materializationId, double offsetSeconds);
+
     bool setSilentGaps(uint64_t materializationId, std::vector<SilentGap> silentGaps);
     bool replaceAudio(uint64_t materializationId,
                        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
@@ -197,6 +200,7 @@ private:
         std::vector<SilentGap> silentGaps;
         std::vector<ReferenceNote> referenceNotes;
         uint64_t referenceNotesRevision{0};
+        double referenceTimeOffset{0.0};  // seconds, applied to reference notes at render/snap time
         bool isRetired_{false};
     };
 

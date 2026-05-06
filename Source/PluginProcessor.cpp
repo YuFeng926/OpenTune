@@ -574,7 +574,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 } // anonymous namespace
 
 constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
-constexpr int kProcessorStateVersion = 4;
+constexpr int kProcessorStateVersion = 5;
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
 constexpr int kStandaloneSettingsVersion = 1;
 

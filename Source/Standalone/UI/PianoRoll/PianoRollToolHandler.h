@@ -133,6 +133,11 @@ public:
         std::function<void()> clearLineAnchorSegmentSelection;
 
         std::function<void(juce::String)> setUndoDescription;
+
+        // Reference note drag support
+        std::function<bool(double, float)> hitTestReferenceNote;  // (time, pitch) -> bool
+        std::function<double()> getReferenceTimeOffset;
+        std::function<void(double)> setReferenceTimeOffset;
     };
 
     explicit PianoRollToolHandler(Context context);
