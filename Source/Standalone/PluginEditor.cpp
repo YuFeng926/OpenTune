@@ -507,6 +507,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     parameterPanel_.setF0Max(2000.0f);
     
     addAndMakeVisible(parameterPanel_);
+    parameterPanel_.setReferenceSectionVisible(false);  // Hidden by default until PianoRoll opened
 
     arrangementView_.addListener(this);
     arrangementView_.setZoomLevel(processorRef_.getZoomLevel());
@@ -2234,6 +2235,8 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
     resized();
     repaint();
 
+    parameterPanel_.setReferenceSectionVisible(!workspaceView);
+
     // 延迟调用自动缩放，确保resized()完成后执行
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     juce::Timer::callAfterDelay(50, [safeThis, workspaceView]() {
@@ -2424,18 +2427,26 @@ void OpenTuneAudioProcessorEditor::analyzeReferenceRequested()
 {
     if (gameAnalysisInProgress_.load()) return;
 
+    // Precondition: must have an active clip in PianoRoll
     const uint64_t matId = lastPianoRollMaterializationId_;
-    if (matId == 0) return;
+    if (matId == 0) {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+            TRANS("Reference Analysis"),
+            TRANS("Please import audio first before analyzing a reference."));
+        return;
+    }
 
-    // Check OriginalF0 is ready
+    // Precondition: OriginalF0 must be ready (RMVPE extraction complete)
     if (processorRef_.getMaterializationOriginalF0StateById(matId) != OriginalF0State::Ready) {
-        AppLogger::warn("[Editor] Cannot analyze reference: OriginalF0 not ready");
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+            TRANS("Reference Analysis"),
+            TRANS("Please extract the pitch curve first (wait for F0 analysis to complete)."));
         return;
     }
 
     // Open file chooser for reference audio
     auto chooser = std::make_shared<juce::FileChooser>(
-        "Select Reference Audio",
+        TRANS("Select Reference Audio"),
         juce::File::getSpecialLocation(juce::File::userMusicDirectory),
         "*.wav;*.mp3;*.flac;*.aiff;*.ogg");
 
