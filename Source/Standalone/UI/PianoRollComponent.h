@@ -191,6 +191,8 @@ public:
 
     bool applyAutoTuneToSelection();
 
+    bool applyAutoSnap();
+
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
 
