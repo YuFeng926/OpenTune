@@ -1868,12 +1868,22 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
 {
     juce::ignoreUnused(timestampSec);
 
-    if (!isShowing() || !isPlaying_.load(std::memory_order_relaxed)) {
+    if (!isShowing()) {
         pendingSeekTime_ = -1.0;
         return;
     }
 
     const double hostTime = readProjectedPlayheadTime();
+
+    if (!isPlaying_.load(std::memory_order_relaxed)) {
+        // Paused: still mirror the host transport position so DAW timeline seeks
+        // (and standalone setPosition writes) appear in the plugin window without
+        // requiring playback. The playing-only auto-scroll/centering logic below
+        // is intentionally skipped — when paused, the user controls the view.
+        playheadOverlay_.setPlayheadSeconds(hostTime);
+        pendingSeekTime_ = -1.0;
+        return;
+    }
 
     // 如果有 pending seek，检查 host 是否已确认（position 接近 pending 值）
     double playheadTime;
