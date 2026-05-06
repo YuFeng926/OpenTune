@@ -328,9 +328,10 @@ void ParameterPanel::resized()
     // Tools区域高度计算：header + gap + 3行按钮 + 2个行间距
     const int toolsHeight = headerHeight + toolHeaderGap + rows * toolButtonSize + (rows - 1) * toolButtonGap;
 
-    // 向上平移 340px：先预留底部空间（Tools + Reference），再取出 Tools 区域
-    mainArea.removeFromBottom(340);
-    auto toolsArea = mainArea.removeFromBottom(toolsHeight);
+    // 预留底部空间（Tools + Reference），分层取出
+    auto bottomReserve = mainArea.removeFromBottom(340);
+    auto toolsArea = bottomReserve.removeFromTop(toolsHeight);
+    // bottomReserve 剩余空间留给 Reference section
 
     // Pitch Correction
     pitchCorrectionHeader_.setBounds(mainArea.removeFromTop(headerHeight));
@@ -398,11 +399,11 @@ void ParameterPanel::resized()
         buttons[i]->setBounds(x, y, toolButtonSize, toolButtonSize);
     }
 
-    // Reference Section
+    // Reference Section — 位于 Tools 下方，使用预留底部空间的剩余区域
     {
         const int panelWidth = toolsColumn.getWidth();
         const int x = toolsColumn.getX();
-        int y = startY + 2 * (toolButtonSize + toolButtonGap) + toolButtonSize + 20;
+        int y = bottomReserve.getY() + 4;
         referenceHeader_.setBounds(x, y, panelWidth, 20);
         y += 24;
         noteDetailLabel_.setBounds(x, y, panelWidth, 16);
