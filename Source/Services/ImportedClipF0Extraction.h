@@ -31,16 +31,12 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
     constexpr double internalSampleRate = TimeCoordinate::kRenderSampleRate;
     out.audioDurationSeconds = static_cast<double>(numSamples) / internalSampleRate;
 
-    // F0Alignment: first audible sample (first sample where average abs across channels > 1.0e-4)
+    // F0Alignment: first audible sample on channel 0 (matches the F0 input below).
     {
         int firstAudibleSample = -1;
+        const float* probe = snap.audioBuffer->getReadPointer(0);
         for (int i = 0; i < numSamples; ++i) {
-            double channelSum = 0.0;
-            for (int ch = 0; ch < numChannels; ++ch) {
-                channelSum += std::abs(snap.audioBuffer->getSample(ch, i));
-            }
-            const double avg = channelSum / static_cast<double>(numChannels);
-            if (avg > 1.0e-4) {
+            if (std::abs(probe[i]) > 1.0e-4f) {
                 firstAudibleSample = i;
                 break;
             }
@@ -50,13 +46,13 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
             : -1.0;
     }
 
+    // Per channel-layout-policy spec: F0 extraction always sources from channel 0
+    // of the stored audio. Storage is guaranteed to be 1 or 2 channels (mono or
+    // stereo); ch 0 is the mono channel or the L of stereo, treated identically.
     std::vector<float> monoAudio(static_cast<size_t>(numSamples), 0.0f);
-    const float invChannels = 1.0f / static_cast<float>(numChannels);
-    for (int ch = 0; ch < numChannels; ++ch) {
-        const float* src = snap.audioBuffer->getReadPointer(ch);
-        for (int i = 0; i < numSamples; ++i) {
-            monoAudio[static_cast<size_t>(i)] += src[i] * invChannels;
-        }
+    const float* src = snap.audioBuffer->getReadPointer(0);
+    for (int i = 0; i < numSamples; ++i) {
+        monoAudio[static_cast<size_t>(i)] = src[i];
     }
 
     // Materialization audio is stored in the shared runtime's fixed local sample-rate domain.

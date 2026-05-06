@@ -1,6 +1,9 @@
 ﻿#include "TestSupport.h"
 #include "ARA/OpenTunePlaybackRenderer.h"
 #include "Audio/AudioFormatRegistry.h"
+#include "Plugin/Capture/CaptureSession.h"
+#include "Plugin/Capture/CapturePersistence.h"
+#include "Plugin/Capture/CaptureSegment.h"
 #include "Standalone/UI/MenuBarComponent.h"
 #include "Standalone/UI/PianoRoll/PianoRollVisualInvalidation.h"
 #include "Utils/AppPreferences.h"
@@ -3725,6 +3728,175 @@ void runSimdAcceleratorDotProductLargeVectorTest()
         logFail(testName, ("expected " + juce::String(expectedSum, 6)
             + " got " + juce::String(result, 6)).toRawUTF8());
         return;
+    }
+
+    logPass(testName);
+}
+
+// ── ChannelLayoutPolicy Tests (channel-layout-policy spec) ────────────────────
+
+void runChannelLayoutNumericGuardTest()
+{
+    constexpr const char* testName = "ChannelLayout_NumericGuard_PreservesHighAmplitude";
+
+    juce::AudioBuffer<float> buf(1, 8);
+    auto* p = buf.getWritePointer(0);
+    p[0] = 0.5f;
+    p[1] = std::numeric_limits<float>::quiet_NaN();
+    p[2] = std::numeric_limits<float>::infinity();
+    p[3] = -std::numeric_limits<float>::infinity();
+    p[4] = 5.0f;
+    p[5] = -7.0f;
+    p[6] = 0.0f;
+    p[7] = 1e-9f;
+
+    Capture::CaptureSession::applyNumericGuardForTest(buf);
+
+    if (!approxEqual(p[0], 0.5f)) { logFail(testName, "p[0] mutated unexpectedly"); return; }
+    if (!approxEqual(p[1], 0.0f)) { logFail(testName, "NaN not zeroed"); return; }
+    if (!approxEqual(p[2], 0.0f)) { logFail(testName, "+Inf not zeroed"); return; }
+    if (!approxEqual(p[3], 0.0f)) { logFail(testName, "-Inf not zeroed"); return; }
+    if (!approxEqual(p[4], 5.0f)) { logFail(testName, "high amplitude 5.0 NOT preserved"); return; }
+    if (!approxEqual(p[5], -7.0f)) { logFail(testName, "high amplitude -7.0 NOT preserved"); return; }
+    if (!approxEqual(p[6], 0.0f)) { logFail(testName, "zero mutated unexpectedly"); return; }
+    if (!approxEqual(p[7], 1e-9f, 1e-12f)) { logFail(testName, "low amplitude not preserved"); return; }
+
+    logPass(testName);
+}
+
+void runChannelLayoutCaptureSegmentSnapshotTest()
+{
+    constexpr const char* testName = "ChannelLayout_CaptureSegment_Snapshot";
+
+    Capture::ProcessorBindings bindings{};
+    Capture::CaptureSession session(std::move(bindings));
+
+    // Initial config: mono
+    session.prepareToPlay(44100.0, 512, /*hostInputChannels=*/1);
+    if (session.getCaptureChannels() != 1) {
+        logFail(testName, "captureChannels should be 1 after mono prepareToPlay");
+        return;
+    }
+    if (!session.armNewCapture()) {
+        logFail(testName, "armNewCapture failed");
+        return;
+    }
+    const auto& segs = session.testSegments();
+    if (segs.empty() || segs.back()->captureChannels != 1) {
+        logFail(testName, "first segment captureChannels snapshot must be 1");
+        return;
+    }
+
+    // Bus reconfigure mid-session: still-armed segment must retain its snapshot.
+    session.prepareToPlay(44100.0, 512, /*hostInputChannels=*/2);
+    if (session.getCaptureChannels() != 2) {
+        logFail(testName, "captureChannels should update to 2 after stereo prepareToPlay");
+        return;
+    }
+    if (segs.back()->captureChannels != 1) {
+        logFail(testName, "armed segment must retain captureChannels=1 across session reconfigure");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runChannelLayoutMaterializationStoreInvariantTest()
+{
+    constexpr const char* testName = "ChannelLayout_MaterializationStore_Invariant";
+
+    MaterializationStore store;
+
+    // Mono: accepted.
+    {
+        auto buf = std::make_shared<juce::AudioBuffer<float>>(1, 1024);
+        buf->clear();
+        MaterializationStore::CreateMaterializationRequest req{};
+        req.sourceId = 1;
+        req.audioBuffer = buf;
+        req.sourceWindow = SourceWindow{1, 0.0, 1.0};
+        const uint64_t id = store.createMaterialization(std::move(req));
+        if (id == 0) { logFail(testName, "mono materialization creation failed"); return; }
+    }
+
+    // Stereo: accepted.
+    {
+        auto buf = std::make_shared<juce::AudioBuffer<float>>(2, 1024);
+        buf->clear();
+        MaterializationStore::CreateMaterializationRequest req{};
+        req.sourceId = 2;
+        req.audioBuffer = buf;
+        req.sourceWindow = SourceWindow{2, 0.0, 1.0};
+        const uint64_t id = store.createMaterialization(std::move(req));
+        if (id == 0) { logFail(testName, "stereo materialization creation failed"); return; }
+    }
+
+    // 4 channels: rejected.
+    {
+        auto buf = std::make_shared<juce::AudioBuffer<float>>(4, 1024);
+        buf->clear();
+        MaterializationStore::CreateMaterializationRequest req{};
+        req.sourceId = 3;
+        req.audioBuffer = buf;
+        req.sourceWindow = SourceWindow{3, 0.0, 1.0};
+        const uint64_t id = store.createMaterialization(std::move(req));
+        if (id != 0) {
+            logFail(testName, "4-channel materialization MUST be rejected");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runChannelLayoutPrepareImportRejectsMultichannelTest()
+{
+    constexpr const char* testName = "ChannelLayout_PrepareImport_RejectsMultichannel";
+
+    OpenTuneAudioProcessor processor;
+
+    // 1ch import → accepted, stored as 1.
+    {
+        juce::AudioBuffer<float> mono(1, 4410);
+        mono.clear();
+        OpenTuneAudioProcessor::PreparedImport prep;
+        if (!processor.prepareImport(std::move(mono), 44100.0,
+                                      juce::String("mono.wav"), prep)) {
+            logFail(testName, "mono import unexpectedly rejected");
+            return;
+        }
+        if (prep.storedAudioBuffer.getNumChannels() != 1) {
+            logFail(testName, "mono storage channel count must be 1");
+            return;
+        }
+    }
+
+    // 2ch import → accepted, stored as 2.
+    {
+        juce::AudioBuffer<float> stereo(2, 4410);
+        stereo.clear();
+        OpenTuneAudioProcessor::PreparedImport prep;
+        if (!processor.prepareImport(std::move(stereo), 44100.0,
+                                      juce::String("stereo.wav"), prep)) {
+            logFail(testName, "stereo import unexpectedly rejected");
+            return;
+        }
+        if (prep.storedAudioBuffer.getNumChannels() != 2) {
+            logFail(testName, "stereo storage channel count must be 2");
+            return;
+        }
+    }
+
+    // 6ch import → rejected.
+    {
+        juce::AudioBuffer<float> surround(6, 4410);
+        surround.clear();
+        OpenTuneAudioProcessor::PreparedImport prep;
+        if (processor.prepareImport(std::move(surround), 44100.0,
+                                     juce::String("surround.wav"), prep)) {
+            logFail(testName, "5.1 import MUST be rejected");
+            return;
+        }
     }
 
     logPass(testName);
