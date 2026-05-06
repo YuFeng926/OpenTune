@@ -33,8 +33,10 @@ VST3_BUNDLE="$PROJECT_ROOT/build-arm64/OpenTune_artefacts/Release/VST3/OpenTune.
 ENTITLEMENTS="$PROJECT_ROOT/Resources/macOS/OpenTune.entitlements"
 DYLIB_NAME="libonnxruntime.1.24.4.dylib"
 
-# Extract version from CMakeLists.txt
-VERSION=$(grep 'VERSION "' "$PROJECT_ROOT/CMakeLists.txt" | head -1 | sed 's/.*VERSION "\([^"]*\)".*/\1/')
+# Extract project version from CMakeLists.txt's `project(... VERSION X.Y.Z ...)` line
+VERSION=$(grep -E '^[[:space:]]*project\([^)]*VERSION[[:space:]]+[0-9.]+' "$PROJECT_ROOT/CMakeLists.txt" \
+    | head -1 \
+    | sed -E 's/.*VERSION[[:space:]]+([0-9]+(\.[0-9]+){0,3}).*/\1/')
 if [ -z "$VERSION" ]; then
     VERSION="1.0.0"
 fi
@@ -48,10 +50,16 @@ DMG_OUTPUT="$PROJECT_ROOT/$DMG_NAME"
 
 DEVELOPER_ID=""
 SKIP_NOTARIZE=false
+IS_ADHOC=false
 
 for arg in "$@"; do
     case "$arg" in
         --skip-notarize)
+            SKIP_NOTARIZE=true
+            ;;
+        --ad-hoc)
+            IS_ADHOC=true
+            DEVELOPER_ID="-"
             SKIP_NOTARIZE=true
             ;;
         *)
@@ -63,10 +71,27 @@ for arg in "$@"; do
 done
 
 if [ -z "$DEVELOPER_ID" ]; then
-    echo "Error: Developer ID is required."
+    echo "Error: Developer ID is required (or pass --ad-hoc for unsigned local builds)."
     echo "Usage: $0 \"Developer ID Application: <Name> (<TeamID>)\" [--skip-notarize]"
+    echo "       $0 --ad-hoc"
     exit 1
 fi
+
+# In ad-hoc mode, Hardened Runtime + entitlements + secure timestamp are not used,
+# notarization is impossible, and Gatekeeper will block first launch
+# (install.command in DMG strips quarantine for the user).
+do_codesign() {
+    local target="$1"
+    if [ "$IS_ADHOC" = true ]; then
+        codesign --force --sign "-" "$target"
+    else
+        codesign --force --options runtime \
+            --sign "$DEVELOPER_ID" \
+            --entitlements "$ENTITLEMENTS" \
+            --timestamp \
+            "$target"
+    fi
+}
 
 # ==============================================================================
 # Preflight checks
@@ -76,7 +101,11 @@ echo "========================================"
 echo "OpenTune Sign & Package"
 echo "========================================"
 echo "Version:      $VERSION"
-echo "Developer ID: $DEVELOPER_ID"
+if [ "$IS_ADHOC" = true ]; then
+    echo "Sign mode:    ad-hoc (unsigned local build, install.command strips quarantine)"
+else
+    echo "Developer ID: $DEVELOPER_ID"
+fi
 echo "Notarize:     $([ "$SKIP_NOTARIZE" = true ] && echo "SKIP" || echo "YES")"
 echo "App Bundle:   $APP_BUNDLE"
 echo "VST3 Bundle:  $VST3_BUNDLE"
@@ -174,54 +203,40 @@ fi
 # Step 3: Sign inside-out with Hardened Runtime
 # ==============================================================================
 
-echo "[3/8] Signing bundles (inside-out, Hardened Runtime)..."
+if [ "$IS_ADHOC" = true ]; then
+    echo "[3/8] Signing bundles (inside-out, ad-hoc identity)..."
+    # Remove any stale signatures from JUCE auto-signing or prior runs so the
+    # new ad-hoc cdhash-based designated requirement is the only one present.
+    codesign --remove-signature --deep "$APP_BUNDLE" 2>/dev/null || true
+    if [ "$INCLUDE_VST3" = true ]; then
+        codesign --remove-signature --deep "$VST3_BUNDLE" 2>/dev/null || true
+    fi
+else
+    echo "[3/8] Signing bundles (inside-out, Hardened Runtime)..."
+fi
 
 # --- Standalone (.app) ---
 echo "  [Standalone] Signing Frameworks/$DYLIB_NAME..."
-codesign --force --options runtime \
-    --sign "$DEVELOPER_ID" \
-    --entitlements "$ENTITLEMENTS" \
-    --timestamp \
-    "$DYLIB_PATH"
+do_codesign "$DYLIB_PATH"
 
 echo "  [Standalone] Signing MacOS/OpenTune..."
-codesign --force --options runtime \
-    --sign "$DEVELOPER_ID" \
-    --entitlements "$ENTITLEMENTS" \
-    --timestamp \
-    "$BINARY_PATH"
+do_codesign "$BINARY_PATH"
 
 echo "  [Standalone] Signing OpenTune.app..."
-codesign --force --options runtime \
-    --sign "$DEVELOPER_ID" \
-    --entitlements "$ENTITLEMENTS" \
-    --timestamp \
-    "$APP_BUNDLE"
+do_codesign "$APP_BUNDLE"
 
 # --- VST3 (.vst3 bundle) ---
 if [ "$INCLUDE_VST3" = true ]; then
     if [ -n "$VST3_DYLIB_PATH" ]; then
         echo "  [VST3] Signing Frameworks/$DYLIB_NAME..."
-        codesign --force --options runtime \
-            --sign "$DEVELOPER_ID" \
-            --entitlements "$ENTITLEMENTS" \
-            --timestamp \
-            "$VST3_DYLIB_PATH"
+        do_codesign "$VST3_DYLIB_PATH"
     fi
 
     echo "  [VST3] Signing MacOS/OpenTune..."
-    codesign --force --options runtime \
-        --sign "$DEVELOPER_ID" \
-        --entitlements "$ENTITLEMENTS" \
-        --timestamp \
-        "$VST3_BINARY_PATH"
+    do_codesign "$VST3_BINARY_PATH"
 
     echo "  [VST3] Signing OpenTune.vst3..."
-    codesign --force --options runtime \
-        --sign "$DEVELOPER_ID" \
-        --entitlements "$ENTITLEMENTS" \
-        --timestamp \
-        "$VST3_BUNDLE"
+    do_codesign "$VST3_BUNDLE"
 fi
 
 echo "  Signing complete"
@@ -235,6 +250,21 @@ echo "[4/8] Verifying code signatures..."
 verify_signed_bundle() {
     local label="$1"
     local bundle="$2"
+
+    # Ad-hoc signatures cannot satisfy Developer-ID-style designated requirements,
+    # so --verify is meaningless. Display the signature instead to confirm it exists.
+    if [ "$IS_ADHOC" = true ]; then
+        # Capture into variable to avoid SIGPIPE on grep -q early-exit under pipefail
+        local sig_info
+        sig_info=$(codesign -dvv "$bundle" 2>&1 || true)
+        if echo "$sig_info" | grep -q "^Signature="; then
+            echo "  [$label] Ad-hoc signature present (Gatekeeper will block; install.command strips quarantine)"
+            return 0
+        else
+            echo "Error: [$label] No signature found on bundle"
+            exit 1
+        fi
+    fi
 
     if codesign --verify --strict --verbose=2 "$bundle" 2>&1; then
         echo "  [$label] Signature verification PASSED"
@@ -310,8 +340,8 @@ fi
 # Copy install script (removes quarantine for unsigned builds; installs both formats)
 INSTALL_SCRIPT="$SCRIPT_DIR/install.command"
 if [ -f "$INSTALL_SCRIPT" ]; then
-    cp "$INSTALL_SCRIPT" "$MOUNT_POINT/Install OpenTune.command"
-    chmod +x "$MOUNT_POINT/Install OpenTune.command"
+    cp "$INSTALL_SCRIPT" "$MOUNT_POINT/install.command"
+    chmod +x "$MOUNT_POINT/install.command"
 fi
 
 # Create Applications symlink
@@ -338,7 +368,11 @@ echo "  DMG created: $DMG_NAME"
 
 echo "[6/8] Signing DMG..."
 
-codesign --force --sign "$DEVELOPER_ID" --timestamp "$DMG_OUTPUT"
+if [ "$IS_ADHOC" = true ]; then
+    codesign --force --sign "-" "$DMG_OUTPUT"
+else
+    codesign --force --sign "$DEVELOPER_ID" --timestamp "$DMG_OUTPUT"
+fi
 
 echo "  DMG signed"
 
@@ -407,7 +441,10 @@ echo "Format:  $(hdiutil imageinfo "$DMG_OUTPUT" 2>/dev/null | grep 'Format Desc
 echo "========================================"
 echo ""
 
-if [ "$SKIP_NOTARIZE" = true ]; then
+if [ "$IS_ADHOC" = true ]; then
+    echo "Note: DMG is ad-hoc signed only — Gatekeeper will block first launch."
+    echo "Recipients must double-click 'install.command' in the DMG to strip quarantine."
+elif [ "$SKIP_NOTARIZE" = true ]; then
     echo "Note: DMG is signed but NOT notarized."
     echo "For distribution, re-run without --skip-notarize."
 else
