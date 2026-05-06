@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SimdAccelerator.h"
+
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <vector>
 #include <cmath>
@@ -70,14 +72,9 @@ public:
             return sortedF0[numSamples / 2];
         }
 
-        // Numerator: Sum(VNC * Weight)
-        // Optimization: Vector multiplication then sum
-        juce::FloatVectorOperations::multiply(vncBuffer.getData(), weightBuffer.getData(), numSamples);
-        
-        float weightedF0Sum = 0.0f;
-        for (int i = 0; i < numSamples; ++i) {
-            weightedF0Sum += vncBuffer[i];
-        }
+        // Numerator: Sum(VNC * Weight) — single fused dot product (Apple Accelerate vDSP_dotpr on macOS).
+        const float weightedF0Sum = SimdAccelerator::getInstance().dotProduct(
+            vncBuffer.getData(), weightBuffer.getData(), static_cast<size_t>(numSamples));
 
         return weightedF0Sum / totalWeight;
     }
