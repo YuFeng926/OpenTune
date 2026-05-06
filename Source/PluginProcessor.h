@@ -95,6 +95,10 @@ namespace AudioConstants {
 class OpenTuneDocumentController;
 #endif
 
+namespace Capture {
+    class CaptureSession;  // forward decl; full type in Source/Plugin/Capture/CaptureSession.h
+}
+
 void fillF0GapsForVocoder(std::vector<float>& f0,
                           const std::shared_ptr<const PitchCurveSnapshot>& snap,
                           double frameStartTimeSec,
@@ -225,7 +229,8 @@ public:
     bool prepareImport(juce::AudioBuffer<float>&& inBuffer,
                        double inSampleRate,
                        const juce::String& displayName,
-                       PreparedImport& out);
+                       PreparedImport& out,
+                       const char* entrySourceTag = "standalone-import");
     
     /**
      * 提交预处理内容并创建 placement（主线程调用，写锁内只做轻量挂接）
@@ -389,6 +394,11 @@ private:
     std::shared_ptr<MaterializationStore> materializationStore_;
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
 
+    // VST3 non-ARA capture session (runtime-isolated to wrapperType_VST3, see spec REQ 14).
+    // nullptr in Standalone instances and in VST3 instances bound to ARA — both paths
+    // continue to use the original processBlock fallback.
+    std::unique_ptr<Capture::CaptureSession> captureSession_;
+
     // Transport control
     std::atomic<bool> isPlaying_{false};
     std::atomic<bool> loopEnabled_{false};
@@ -474,6 +484,10 @@ public:
     const SourceStore* getSourceStore() const noexcept { return sourceStore_.get(); }
     MaterializationStore* getMaterializationStore() noexcept { return materializationStore_.get(); }
     const MaterializationStore* getMaterializationStore() const noexcept { return materializationStore_.get(); }
+
+    /** Returns the VST3 non-ARA capture session, or nullptr in Standalone / pre-VST3 contexts. */
+    Capture::CaptureSession* getCaptureSession() noexcept { return captureSession_.get(); }
+    const Capture::CaptureSession* getCaptureSession() const noexcept { return captureSession_.get(); }
     StandaloneArrangement* getStandaloneArrangement() noexcept { return standaloneArrangement_.get(); }
     const StandaloneArrangement* getStandaloneArrangement() const noexcept { return standaloneArrangement_.get(); }
 

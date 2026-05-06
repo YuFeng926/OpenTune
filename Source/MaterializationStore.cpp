@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "Utils/TimeCoordinate.h"
+#include "Utils/ChannelLayoutLogger.h"
 
 namespace OpenTune {
 
@@ -52,6 +53,14 @@ uint64_t MaterializationStore::createMaterialization(CreateMaterializationReques
         || request.audioBuffer->getNumSamples() <= 0) {
         return 0;
     }
+    // Channel-layout-policy invariant: storage MUST have 1 or 2 channels. Anything
+    // outside that range indicates a caller bypassed prepareImport — fail loudly.
+    const int requestChannels = request.audioBuffer->getNumChannels();
+    if (requestChannels < 1 || requestChannels > 2) {
+        jassertfalse;
+        ChannelLayoutLog::logMaterializationReject(requestChannels);
+        return 0;
+    }
 
     MaterializationEntry materialization;
     materialization.materializationId = forcedMaterializationId != 0
@@ -78,6 +87,8 @@ uint64_t MaterializationStore::createMaterialization(CreateMaterializationReques
                                      std::memory_order_relaxed);
     }
     materializations_.emplace(materializationId, std::move(materialization));
+    ChannelLayoutLog::logMaterializationCreate(static_cast<juce::int64>(materializationId),
+                                                requestChannels);
     return materializationId;
 }
 
@@ -486,6 +497,12 @@ uint64_t MaterializationStore::replaceMaterializationWithNewLineage(uint64_t old
         || request.audioBuffer == nullptr
         || request.audioBuffer->getNumChannels() <= 0
         || request.audioBuffer->getNumSamples() <= 0) {
+        return 0;
+    }
+    const int newRequestChannels = request.audioBuffer->getNumChannels();
+    if (newRequestChannels < 1 || newRequestChannels > 2) {
+        jassertfalse;
+        ChannelLayoutLog::logMaterializationReject(newRequestChannels);
         return 0;
     }
 

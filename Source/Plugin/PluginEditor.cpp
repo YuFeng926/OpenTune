@@ -7,6 +7,7 @@
 
 #include "Editor/Preferences/SharedPreferencePages.h"
 #include "Editor/Preferences/TabbedPreferencesDialog.h"
+#include "Plugin/Capture/CaptureSession.h"
 #include "Utils/AppLogger.h"
 #include "Utils/ParameterPanelSync.h"
 #include "Utils/Note.h"
@@ -296,6 +297,12 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     syncMaterializationProjectionToPianoRoll();
     syncSharedAppPreferences();
+
+    // Non-ARA VST3 host-mirror mode: PianoRoll display is driven entirely by host_t
+    // via timerCallback → syncMaterializationProjectionToPianoRoll(). No active-segment
+    // callback is registered: when the host playhead enters a segment's range, the
+    // timer-tick fallback picks it up; when it leaves, PianoRoll goes blank.
+
     startTimerHz(kHeartbeatHz);
 }
 
@@ -381,6 +388,17 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
     syncSharedAppPreferences();
+
+    // Drive capture session tick (poll Capturing→Pending and Processing→Edited transitions,
+    // run reclaim sweep). No-op when capture session is null (Standalone / VST3+ARA).
+    if (auto* session = processorRef_.getCaptureSession()) {
+        session->tick();
+        // Reflect "currently recording" as a sticky toggle on the record button so the
+        // user gets explicit visual feedback that capture is in progress.
+        const bool isCapturingNow =
+            session->getGlobalState() == OpenTune::Capture::SessionState::HasCapturing;
+        transportBar_.setRecordIndicatorActive(isCapturingNow);
+    }
 
     const double currentPositionSeconds = processorRef_.getPosition();
     const bool playing = processorRef_.isPlaying();
@@ -521,8 +539,9 @@ uint64_t OpenTuneAudioProcessorEditor::resolveCurrentMaterializationId()
     return materializationId;
 }
 
-bool OpenTuneAudioProcessorEditor::resolveCurrentMaterializationProjection(uint64_t& materializationId,
-                                                                          MaterializationTimelineProjection& projection)
+OpenTuneAudioProcessorEditor::MaterializationSource
+OpenTuneAudioProcessorEditor::resolveCurrentMaterializationProjection(uint64_t& materializationId,
+                                                                     MaterializationTimelineProjection& projection)
 {
     materializationId = 0;
     projection = {};
@@ -535,14 +554,38 @@ bool OpenTuneAudioProcessorEditor::resolveCurrentMaterializationProjection(uint6
                 if (const auto* preferredRegion = resolvePreferredAraRegionView(*snapshot)) {
                     materializationId = preferredRegion->appliedProjection.materializationId;
                     projection = makePianoRollLocalProjection(*preferredRegion);
-                    return materializationId != 0;
+                    if (materializationId != 0)
+                        return MaterializationSource::Ara;
                 }
             }
         }
     }
 #endif
 
-    return false;
+    // Non-ARA VST3 fallback: pick the Edited capture segment whose host time range
+    // contains the current host playhead. Used by AUTO / pen-tool / scale / any other
+    // code path that goes through resolveCurrentMaterializationId so they can find
+    // the active take instead of returning 0.
+    if (auto* session = processorRef_.getCaptureSession()) {
+        const double host_t = processorRef_.getPosition();
+        const auto segments = session->listSegments();
+        for (auto it = segments.rbegin(); it != segments.rend(); ++it) {
+            if (it->state != OpenTune::Capture::SegmentState::Edited
+                || it->materializationId == 0)
+                continue;
+            const double segStart = it->T_start;
+            const double segEnd = segStart + it->durationSeconds;
+            if (host_t >= segStart && host_t < segEnd) {
+                materializationId = it->materializationId;
+                projection.timelineStartSeconds = segStart;
+                projection.timelineDurationSeconds = it->durationSeconds;
+                projection.materializationDurationSeconds = it->durationSeconds;
+                return MaterializationSource::Capture;
+            }
+        }
+    }
+
+    return MaterializationSource::None;
 }
 
 bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
@@ -902,6 +945,27 @@ void OpenTuneAudioProcessorEditor::recordRequested()
     araClipImportArmed_ = true;
     auto* dc = processorRef_.getDocumentController();
     if (dc == nullptr) {
+        // Non-ARA VST3 context: dispatch to capture session (Melodyne Transfer-style flow)
+        // instead of failing with an alert. Empty session → arm a new capture; capturing →
+        // stop and submit; processing → ignore (button is disabled in tooltip update).
+        if (auto* session = processorRef_.getCaptureSession()) {
+            using OpenTune::Capture::SessionState;
+            switch (session->getGlobalState()) {
+                case SessionState::Idle:
+                    session->armNewCapture();
+                    AppLogger::log("VST3 Capture: armNewCapture (non-ARA path)");
+                    break;
+                case SessionState::HasCapturing:
+                    session->stopCapture();
+                    AppLogger::log("VST3 Capture: stopCapture (non-ARA path)");
+                    break;
+                case SessionState::HasProcessing:
+                    AppLogger::log("VST3 Capture: ignored (Processing — wait for render)");
+                    break;
+            }
+            return;
+        }
+        // True fallback: no capture session and no ARA — show original error.
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                "Read Audio",
                                                "Unable to access VST3 ARA DocumentController.");
@@ -1349,9 +1413,14 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
 {
     uint64_t materializationId = 0;
     MaterializationTimelineProjection projection;
-    resolveCurrentMaterializationProjection(materializationId, projection);
 
-    if (!araClipImportArmed_) {
+    const MaterializationSource source =
+        resolveCurrentMaterializationProjection(materializationId, projection);
+
+    // ARA path requires explicit user arm (Read Audio click) before we attach the
+    // detected materialization to PianoRoll. Capture path bypasses this — each
+    // Edited segment IS the user's explicit capture, no separate arm needed.
+    if (source == MaterializationSource::Ara && !araClipImportArmed_) {
         pianoRoll_.setMaterializationProjection({});
         pianoRoll_.setEditedMaterialization(0, nullptr, nullptr,
             static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));

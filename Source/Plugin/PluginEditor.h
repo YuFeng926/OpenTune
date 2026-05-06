@@ -100,9 +100,10 @@ private:
     void timerCallback() override;
     void syncSharedAppPreferences();
     void applyThemeToEditor(ThemeId themeId);
+    enum class MaterializationSource { None, Ara, Capture };
     uint64_t resolveCurrentMaterializationId();
-    bool resolveCurrentMaterializationProjection(uint64_t& materializationId,
-                                                 MaterializationTimelineProjection& projection);
+    MaterializationSource resolveCurrentMaterializationProjection(uint64_t& materializationId,
+                                                                  MaterializationTimelineProjection& projection);
     void syncParameterPanelFromSelection();
     void syncMaterializationProjectionToPianoRoll();
     void syncImportedAraClipIfNeeded();
