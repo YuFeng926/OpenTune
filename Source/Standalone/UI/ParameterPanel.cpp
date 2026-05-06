@@ -235,9 +235,6 @@ ParameterPanel::ParameterPanel()
     setupHeader(referenceHeader_, "Reference");
     addAndMakeVisible(referenceHeader_);
 
-    setupLabel(noteDetailLabel_, "Note Detail");
-    addAndMakeVisible(noteDetailLabel_);
-
     noteDetailSlider_.setSliderStyle(juce::Slider::Rotary);
     noteDetailSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 18);
     noteDetailSlider_.setRange(1.0, 10.0, 1.0);
@@ -328,8 +325,8 @@ void ParameterPanel::resized()
     // Tools区域高度计算：header + gap + 3行按钮 + 2个行间距
     const int toolsHeight = headerHeight + toolHeaderGap + rows * toolButtonSize + (rows - 1) * toolButtonGap;
 
-    // Reference section 高度：header(20)+gap(4)+label(16)+gap(2)+knob(70)+gap(4)+按钮行(28)+gap(4)+Snap按钮(28)+余量(12)
-    const int referenceHeight = 20 + 4 + 16 + 2 + 70 + 4 + 28 + 4 + 28 + 12;
+    // Reference section 高度：header(20)+toolHeaderGap(8)+knob(70)+toolButtonGap(10)+按钮行(28)+toolButtonGap(10)+Snap(28)+余量(12)
+    const int referenceHeight = 20 + toolHeaderGap + 70 + toolButtonGap + 28 + toolButtonGap + 28 + 12;
 
     // 预留底部空间（Tools + Reference），分层取出
     // 工具栏上移半个旋钮高度，Reference 额外下移半个旋钮高度，三层间距平衡
@@ -410,14 +407,12 @@ void ParameterPanel::resized()
         const int x = toolsColumn.getX();
         int y = bottomReserve.getY() + 4 + interSectionGap;
         referenceHeader_.setBounds(x, y, panelWidth, 20);
-        y += 24;
-        noteDetailLabel_.setBounds(x, y, panelWidth, 16);
-        y += 18;
+        y += 20 + toolHeaderGap;  // header→knob 间距对齐 tools header→buttons
         noteDetailSlider_.setBounds(x + (panelWidth - 70) / 2, y, 70, 70);
-        y += 74;
+        y += 70 + toolButtonGap;  // knob→buttons 间距对齐 tools 按钮行间距
         analyzeReferenceButton_->setBounds(x, y, (panelWidth - 4) / 2, 28);
         regenerateButton_->setBounds(x + (panelWidth - 4) / 2 + 4, y, (panelWidth - 4) / 2, 28);
-        y += 32;
+        y += 28 + toolButtonGap;
         autoSnapButton_->setBounds(x, y, panelWidth, 28);
     }
 }
@@ -432,7 +427,6 @@ void ParameterPanel::applyTheme()
     vibratoDepthLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
     vibratoRateLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
     noteSplitLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
-    noteDetailLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
 
     largeKnobLookAndFeel_.setColour(juce::Slider::textBoxTextColourId, UIColors::textPrimary);
     largeKnobLookAndFeel_.setColour(juce::Slider::textBoxBackgroundColourId, UIColors::backgroundDark);
@@ -610,7 +604,6 @@ int ParameterPanel::getNoteDetail() const
 void ParameterPanel::setReferenceSectionVisible(bool visible)
 {
     referenceHeader_.setVisible(visible);
-    noteDetailLabel_.setVisible(visible);
     noteDetailSlider_.setVisible(visible);
     analyzeReferenceButton_->setVisible(visible);
     regenerateButton_->setVisible(visible);
