@@ -145,6 +145,11 @@ public:
     void setLoopEnabled(bool enabled);
     bool isLoopEnabled() const;
 
+    /** Set the record button's sticky toggle state (lit while VST3 capture session
+     *  is in HasCapturing). The button uses UnifiedToolbarButton's toggleState path
+     *  for visual feedback; pure cosmetic, does not change click semantics. */
+    void setRecordIndicatorActive(bool active);
+
     void setBpm(double bpm);
     double getBpm() const;
 

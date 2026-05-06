@@ -955,6 +955,12 @@ bool TransportBarComponent::isLoopEnabled() const
     return loopButton_.getToggleState();
 }
 
+void TransportBarComponent::setRecordIndicatorActive(bool active)
+{
+    recordButton_.setToggleState(active, juce::dontSendNotification);
+    recordButton_.repaint();
+}
+
 void TransportBarComponent::setWorkspaceView(bool workspaceView)
 {
     workspaceView_ = workspaceView;

@@ -387,9 +387,12 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerBottom - 10),
                        static_cast<float>(pixelX), static_cast<float>(rulerBottom), 1.0f);
 
-            int totalSecs = static_cast<int>(time);
-            int mins = totalSecs / 60;
-            int secs = totalSecs % 60;
+            // `time` here is absolute (host/arrangement) time: ctx.xToTime already
+            // applies the projection's timelineStartSeconds offset internally
+            // (see PianoRollComponent::xToTime → toAbsoluteTimelineSeconds).
+            const int totalSecs = static_cast<int>(time);
+            const int mins = totalSecs / 60;
+            const int secs = totalSecs % 60;
             juce::String timeStr = juce::String::formatted("%d:%02d", mins, secs);
 
             g.setColour(UIColors::textSecondary);
