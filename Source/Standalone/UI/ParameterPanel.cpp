@@ -328,8 +328,11 @@ void ParameterPanel::resized()
     // Tools区域高度计算：header + gap + 3行按钮 + 2个行间距
     const int toolsHeight = headerHeight + toolHeaderGap + rows * toolButtonSize + (rows - 1) * toolButtonGap;
 
+    // Reference section 高度：header(20)+gap(4)+label(16)+gap(2)+knob(70)+gap(4)+按钮行(28)+gap(4)+Snap按钮(28)+余量(12)
+    const int referenceHeight = 20 + 4 + 16 + 2 + 70 + 4 + 28 + 4 + 28 + 12;
+
     // 预留底部空间（Tools + Reference），分层取出
-    auto bottomReserve = mainArea.removeFromBottom(340);
+    auto bottomReserve = mainArea.removeFromBottom(toolsHeight + referenceHeight);
     auto toolsArea = bottomReserve.removeFromTop(toolsHeight);
     // bottomReserve 剩余空间留给 Reference section
 
