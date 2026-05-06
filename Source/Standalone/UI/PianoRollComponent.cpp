@@ -1108,11 +1108,8 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         renderer_->drawLanes(g, ctx);
 
         // Draw reference notes layer (below user notes, above lanes)
-        if (processor_ != nullptr && editedMaterializationId_ != 0) {
-            auto refNotes = processor_->getMaterializationStore()->getReferenceNotes(editedMaterializationId_);
-            if (!refNotes.empty()) {
-                renderer_->drawReferenceNotes(g, ctx, refNotes);
-            }
+        if (!cachedReferenceNotes_.empty()) {
+            renderer_->drawReferenceNotes(g, ctx, cachedReferenceNotes_);
         }
 
         const auto& notes = getDisplayedNotes();
@@ -1855,6 +1852,16 @@ void PianoRollComponent::onHeartbeatTick()
     }
 
     consumeCompletedCorrectionResults();
+
+    // Refresh cached reference notes on revision change (avoids per-frame lock+copy in paint)
+    if (processor_ != nullptr && editedMaterializationId_ != 0) {
+        const auto rev = processor_->getMaterializationStore()->getReferenceNotesRevision(editedMaterializationId_);
+        if (rev != cachedReferenceNotesRevision_) {
+            cachedReferenceNotes_ = processor_->getMaterializationStore()->getReferenceNotes(editedMaterializationId_);
+            cachedReferenceNotesRevision_ = rev;
+            invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
+        }
+    }
 
     if (!waveformMipmap_.isComplete() && showWaveform_) {
         if (inferenceActive_) {
@@ -2673,6 +2680,10 @@ bool PianoRollComponent::applyAutoSnap()
     captureBeforeUndoSnapshot();
 
     auto snapshot = currentCurve_->getSnapshot();
+    if (snapshot == nullptr) {
+        undoSnapshotCaptured_ = false;
+        return false;
+    }
     auto segments = snapshot->getCorrectedSegments();
     bool anyChanged = false;
 
