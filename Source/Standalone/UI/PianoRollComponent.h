@@ -21,6 +21,7 @@
 #include "Utils/PianoRollVisualPreferences.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/Note.h"
+#include "Inference/GameTypes.h"
 #include "Utils/NoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
 #include "Utils/KeyShortcutConfig.h"
@@ -394,6 +395,8 @@ private:
 
     uint64_t editedMaterializationId_ = 0;
     std::vector<Note> cachedNotes_;
+    std::vector<ReferenceNote> cachedReferenceNotes_;
+    uint64_t cachedReferenceNotesRevision_ = 0;
 
     // Undo support
     juce::String pendingUndoDescription_;

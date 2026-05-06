@@ -1156,6 +1156,9 @@ bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const Materialization
                                                            F0ExtractionService::Result& out,
                                                            std::string& errorMessage)
 {
+    // Acquire inference gate to prevent concurrent GAME/RMVPE execution
+    auto gateLock = inferenceGate_.acquire();
+
     if (!ensureF0Ready()) {
         errorMessage = "inference_not_ready";
         AppLogger::log("RecordTrace: F0 initialization unavailable"
