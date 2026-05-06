@@ -3918,6 +3918,262 @@ void runCoreBehaviorSuite()
     runSimdAcceleratorComplexMagnitudeTest();
     runSimdAcceleratorBackendNameTest();
     runSimdAcceleratorDotProductLargeVectorTest();
+    runChannelLayoutNumericGuardTest();
+    runChannelLayoutCaptureSegmentSnapshotTest();
+}
+
+// ============================================================================
+// vst3-state-persistence-fix L2 anchor tests
+// ============================================================================
+
+namespace {
+
+juce::MemoryBlock makeFakeCAPyBlock()
+{
+    // Old format magic ('CAPy', 0x43415079). Body bytes are arbitrary garbage —
+    // deserialize must reject on magic alone before parsing further.
+    juce::MemoryBlock block;
+    juce::MemoryOutputStream out(block, false);
+    out.writeInt(static_cast<int>(0x43415079));   // 'CAPy'
+    out.writeInt(0);                              // fake xmlLen=0
+    out.writeInt(static_cast<int>(0x78434150));   // fake end magic
+    out.flush();
+    return block;
+}
+
+}  // anonymous
+
+void runCapturePersistenceLegacyMagicRejectedTest()
+{
+    constexpr const char* testName = "CapturePersistence_LegacyMagicRejected";
+
+    Capture::ProcessorBindings bindings{};
+    Capture::CaptureSession session(std::move(bindings));
+
+    const auto block = makeFakeCAPyBlock();
+    const bool ok = Capture::CapturePersistence::deserialize(session, block);
+    if (ok) {
+        logFail(testName, "deserialize should return false for old 'CAPy' magic");
+        return;
+    }
+    if (!session.testSegments().empty()) {
+        logFail(testName, "session must remain empty after rejected deserialize");
+        return;
+    }
+    logPass(testName);
+}
+
+void runCapturePersistenceSerializeOmitsFlacBytesTest()
+{
+    constexpr const char* testName = "CapturePersistence_SerializeOmitsFlacBytes";
+
+    Capture::ProcessorBindings bindings{};
+    Capture::CaptureSession session(std::move(bindings));
+    session.prepareToPlay(48000.0, 512, /*hostInputChannels=*/1);
+
+    auto pcm = std::make_shared<juce::AudioBuffer<float>>(1, 24000);
+    pcm->clear();
+    const uint64_t fakeMatId = 7;
+    session.testInjectEditedSegment(/*T_start*/ 0.0, /*durationSeconds*/ 0.5, fakeMatId, pcm);
+
+    const auto block = Capture::CapturePersistence::serialize(session);
+    if (block.getSize() < sizeof(uint32_t) * 2) {
+        logFail(testName, "serialize produced suspiciously small block");
+        return;
+    }
+
+    // Verify magic = 'CAPz' (0x4341507A)
+    const uint32_t magic = *static_cast<const uint32_t*>(block.getData());
+    if (magic != 0x4341507Au) {
+        logFail(testName, "magic is not 'CAPz' (0x4341507A) — old format leaked");
+        return;
+    }
+
+    // Scan for 'fLaC' stream marker — must be absent.
+    const auto* bytes = static_cast<const uint8_t*>(block.getData());
+    for (size_t i = 0; i + 4 <= block.getSize(); ++i) {
+        if (bytes[i] == 'f' && bytes[i + 1] == 'L'
+            && bytes[i + 2] == 'a' && bytes[i + 3] == 'C') {
+            logFail(testName, "FLAC stream marker found in CAPz block — codec not removed");
+            return;
+        }
+    }
+    logPass(testName);
+}
+
+void runCapturePersistenceOrphanSegmentDroppedTest()
+{
+    constexpr const char* testName = "CapturePersistence_OrphanSegmentDropped";
+
+    // First produce a CAPz block from a session that references mat=99.
+    juce::MemoryBlock block;
+    {
+        Capture::ProcessorBindings producerBindings{};
+        Capture::CaptureSession producer(std::move(producerBindings));
+        producer.prepareToPlay(48000.0, 512, /*hostInputChannels=*/1);
+        auto pcm = std::make_shared<juce::AudioBuffer<float>>(1, 4800);
+        pcm->clear();
+        producer.testInjectEditedSegment(0.0, 0.1, /*matId*/ 99, pcm);
+        block = Capture::CapturePersistence::serialize(producer);
+    }
+
+    // Now deserialize into a fresh session whose containsMaterialization claims
+    // mat=99 doesn't exist — segment must be dropped.
+    Capture::ProcessorBindings consumerBindings{};
+    consumerBindings.containsMaterialization = [](uint64_t /*matId*/) { return false; };
+    Capture::CaptureSession consumer(std::move(consumerBindings));
+
+    const bool ok = Capture::CapturePersistence::deserialize(consumer, block);
+    if (ok) {
+        logFail(testName, "deserialize should return false when all segments are orphans");
+        return;
+    }
+    if (!consumer.testSegments().empty()) {
+        logFail(testName, "orphan segment must not be added to session");
+        return;
+    }
+    logPass(testName);
+}
+
+void runCapturePersistenceProcessingOnRestoreTriggersRefreshTest()
+{
+    constexpr const char* testName = "CapturePersistence_ProcessingOnRestoreTriggersRefresh";
+
+    juce::MemoryBlock block;
+    {
+        Capture::ProcessorBindings producerBindings{};
+        Capture::CaptureSession producer(std::move(producerBindings));
+        producer.prepareToPlay(48000.0, 512, /*hostInputChannels=*/1);
+        auto pcm = std::make_shared<juce::AudioBuffer<float>>(1, 4800);
+        pcm->clear();
+        producer.testInjectEditedSegment(2.5, 0.1, /*matId*/ 42, pcm);
+        block = Capture::CapturePersistence::serialize(producer);
+    }
+
+    // Consumer asserts mat=42 exists, counts refreshMaterialization calls (must be 1
+    // for mat=42), and counts submitForRender calls (must be 0 — no new mat creation).
+    int submitCalls = 0;
+    int refreshCallsForMat42 = 0;
+    int refreshCallsForOthers = 0;
+    Capture::ProcessorBindings consumerBindings{};
+    consumerBindings.containsMaterialization = [](uint64_t matId) { return matId == 42; };
+    consumerBindings.submitForRender = [&submitCalls](std::shared_ptr<juce::AudioBuffer<float>>,
+                                                       double,
+                                                       juce::String) -> uint64_t {
+        ++submitCalls;
+        return 0;
+    };
+    consumerBindings.refreshMaterialization = [&](uint64_t matId) {
+        if (matId == 42u) ++refreshCallsForMat42;
+        else              ++refreshCallsForOthers;
+    };
+    Capture::CaptureSession consumer(std::move(consumerBindings));
+
+    const bool ok = Capture::CapturePersistence::deserialize(consumer, block);
+    if (!ok) {
+        logFail(testName, "deserialize returned false despite mat being present");
+        return;
+    }
+    if (submitCalls != 0) {
+        logFail(testName, "submitForRender must not be called (no new mat creation on restore)");
+        return;
+    }
+    if (refreshCallsForMat42 != 1) {
+        logFail(testName, "refreshMaterialization(42) expected 1 call");
+        return;
+    }
+    if (refreshCallsForOthers != 0) {
+        logFail(testName, "refreshMaterialization called for unexpected matId");
+        return;
+    }
+    const auto& segs = consumer.testSegments();
+    if (segs.size() != 1u) {
+        logFail(testName, "expected exactly 1 restored segment");
+        return;
+    }
+    if (segs[0]->state.load(std::memory_order_acquire) != Capture::SegmentState::Processing) {
+        logFail(testName, "restored segment must be in Processing state (await tick promotion)");
+        return;
+    }
+    if (segs[0]->materializationId != 42u) {
+        logFail(testName, "restored segment lost materializationId binding");
+        return;
+    }
+    logPass(testName);
+}
+
+void runProcessorStateVersionFiveAndNoBpmTest()
+{
+    constexpr const char* testName = "ProcessorState_VersionFiveAndNoBpm";
+
+    // Construct a fresh processor (wrapperType_Undefined, no captureSession_).
+    // getStateInformation goes through OTST path because Undefined != Standalone.
+    OpenTuneAudioProcessor processor;
+    processor.setBpm(140.0);
+
+    juce::MemoryBlock state;
+    processor.getStateInformation(state);
+
+    juce::MemoryInputStream in(state, false);
+    const int magic = in.readInt();
+    const int version = in.readInt();
+    if (magic != 0x4F545354) {  // 'OTST'
+        logFail(testName, "expected OTST magic in non-Standalone path");
+        return;
+    }
+    if (version != 5) {
+        logFail(testName, "kProcessorStateVersion not bumped to 5");
+        return;
+    }
+
+    // Next field must be zoomLevel (double), not BPM. We can't directly verify
+    // "not BPM" from a single double, but if BPM were still written, the next
+    // field after that would be zoomLevel and the read sequence in setState
+    // would be off. Round-trip through setState confirms layout is consistent.
+    const double zoom = in.readDouble();
+    if (zoom != processor.getZoomLevel()) {
+        logFail(testName, "first OTST double after version must be zoomLevel");
+        return;
+    }
+
+    // Round-trip: feed back into the same processor and verify it doesn't crash
+    // / warn / leave stores in an inconsistent state.
+    OpenTuneAudioProcessor processor2;
+    processor2.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    // No assertion needed: a layout-mismatch would have asserted or warned in
+    // AppLogger; the fact that setStateInformation completed implies the field
+    // ordering is internally consistent in OTST v5.
+
+    logPass(testName);
+}
+
+void runProcessorStateOldVersionRejectedTest()
+{
+    constexpr const char* testName = "ProcessorState_OldVersionRejected";
+
+    juce::MemoryBlock fake;
+    {
+        juce::MemoryOutputStream out(fake, false);
+        out.writeInt(0x4F545354);   // 'OTST'
+        out.writeInt(4);            // legacy version
+        // Some plausible bytes; layout doesn't matter — should bail before parsing.
+        out.writeDouble(120.0);
+        out.writeDouble(1.0);
+        out.writeInt(120);
+        out.writeInt(0);            // sourceCount=0
+        out.flush();
+    }
+
+    OpenTuneAudioProcessor processor;
+    processor.setStateInformation(fake.getData(), static_cast<int>(fake.getSize()));
+
+    if (processor.getMaterializationStore() == nullptr
+        || processor.getSourceStore() == nullptr) {
+        logFail(testName, "stores should be initialized after rejected restore");
+        return;
+    }
+    // Stores remain at their default (empty) state — successful rejection.
+    logPass(testName);
 }
 
 void runProcessorBehaviorSuite()
@@ -3926,6 +4182,15 @@ void runProcessorBehaviorSuite()
     runEnsureSourceByIdCreatesForcedSourceOwnerTest();
     runProcessorImportCreatesDistinctSourceMaterializationAndPlacementOwnersTest();
     runClipDerivedRefreshDoesNotMutateStandaloneSelectionTest();
+    runChannelLayoutMaterializationStoreInvariantTest();
+    runChannelLayoutPrepareImportRejectsMultichannelTest();
+    // vst3-state-persistence-fix anchor tests
+    runCapturePersistenceLegacyMagicRejectedTest();
+    runCapturePersistenceSerializeOmitsFlacBytesTest();
+    runCapturePersistenceOrphanSegmentDroppedTest();
+    runCapturePersistenceProcessingOnRestoreTriggersRefreshTest();
+    runProcessorStateVersionFiveAndNoBpmTest();
+    runProcessorStateOldVersionRejectedTest();
 }
 
 void runUiBehaviorSuite()

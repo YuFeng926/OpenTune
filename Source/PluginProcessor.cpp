@@ -574,12 +574,14 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 } // anonymous namespace
 
 constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
-constexpr int kProcessorStateVersion = 4;
+constexpr int kProcessorStateVersion = 5;
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
 constexpr int kStandaloneSettingsVersion = 1;
 
-#if !JucePlugin_Build_Standalone
-// --- Serialization helpers (full state, VST3 only) ---
+// --- Serialization helpers (full state) ---
+// Compiled unconditionally into the shared OpenTune lib; getStateInformation /
+// setStateInformation dispatch by runtime wrapperType, so both Standalone and
+// VST3 binaries link the same compiled object and need these symbols available.
 
 static bool readBytesExact(juce::InputStream& input, void* destination, size_t numBytes)
 {
@@ -833,7 +835,6 @@ static bool readSilentGaps(juce::InputStream& input, std::vector<SilentGap>& out
 
     return true;
 }
-#endif // !JucePlugin_Build_Standalone
 
 
 static std::shared_ptr<PitchCurve> clonePitchCurveWithCorrectedSegments(
@@ -1853,16 +1854,20 @@ bool OpenTuneAudioProcessor::hasEditor() const {
 // ============================================================================
 
 void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
-#if JucePlugin_Build_Standalone
-    destData.reset();
-    juce::MemoryOutputStream output(destData, false);
-    output.writeInt(static_cast<int>(kStandaloneSettingsMagic));
-    output.writeInt(kStandaloneSettingsVersion);
-    output.writeDouble(getBpm());
-    output.writeDouble(zoomLevel_);
-    output.writeInt(trackHeight_);
-    return;
-#else
+    // Dispatch by runtime wrapperType — same compiled object serves both
+    // Standalone and VST3 binaries (shared `OpenTune` lib), so a build-time
+    // guard cannot differentiate. Standalone owns its own project save format
+    // and only needs settings here; VST3 needs full state for host round-trip.
+    if (wrapperType == juce::AudioProcessor::wrapperType_Standalone) {
+        destData.reset();
+        juce::MemoryOutputStream output(destData, false);
+        output.writeInt(static_cast<int>(kStandaloneSettingsMagic));
+        output.writeInt(kStandaloneSettingsVersion);
+        output.writeDouble(getBpm());
+        output.writeDouble(zoomLevel_);
+        output.writeInt(trackHeight_);
+        return;
+    }
 
     std::vector<uint64_t> serializedMaterializationIds;
     jassert(standaloneArrangement_ != nullptr);
@@ -1875,6 +1880,17 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
             }
 
             appendUniqueMaterializationId(serializedMaterializationIds, placement.materializationId);
+        }
+    }
+
+    // Capture-flow materializations live only inside captureSession_ (no placement),
+    // but their full snapshot — audio + pitchCurve + notes + detectedKey — must
+    // round-trip. Union them into the standard state set.
+    if (captureSession_ != nullptr) {
+        for (const auto& info : captureSession_->listSegments()) {
+            if (info.materializationId != 0) {
+                appendUniqueMaterializationId(serializedMaterializationIds, info.materializationId);
+            }
         }
     }
 
@@ -1925,7 +1941,8 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
     juce::MemoryOutputStream output(destData, false);
     output.writeInt(static_cast<int>(kProcessorStateMagic));
     output.writeInt(kProcessorStateVersion);
-    output.writeDouble(getBpm());
+    // BPM intentionally omitted in non-Standalone path: host owns transport
+    // tempo via PlayHead PositionInfo, plugin reads it live.
     output.writeDouble(zoomLevel_);
     output.writeInt(trackHeight_);
     output.writeInt(static_cast<int>(sourceSnapshots.size()));
@@ -1993,7 +2010,15 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
             output.writeInt(static_cast<int>(placement.colour.getARGB()));
         }
     }
-#endif // JucePlugin_Build_Standalone
+
+    // Append capture session data (VST3 non-ARA persistence) at end of stream.
+    // Old projects (no captureSession_) write nothing; setStateInformation
+    // tolerates missing capture section.
+    if (captureSession_ != nullptr) {
+        const auto captureBlock = captureSession_->serialize();
+        if (captureBlock.getSize() > 0)
+            output.write(captureBlock.getData(), captureBlock.getSize());
+    }
 }
 
 
@@ -2018,21 +2043,22 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
         return;
     }
 
-    // Full state payload (VST3 / legacy)
+    // Full state payload (VST3)
     if (magic != static_cast<int>(kProcessorStateMagic) || version != kProcessorStateVersion) {
         AppLogger::warn("StateRestore: unsupported processor state payload");
         return;
     }
 
-#if JucePlugin_Build_Standalone
-    // Standalone receiving a legacy full-state payload: only restore settings
-    setBpm(input.readDouble());
-    zoomLevel_ = input.readDouble();
-    trackHeight_ = input.readInt();
-    return;
-#else
+    AppLogger::log("StateRestore: VST3 full-state begin sizeBytes=" + juce::String(sizeInBytes));
 
-    setBpm(input.readDouble());
+    // Standalone instance receiving a full-state payload: settings are not in
+    // this format anymore (BPM/zoom/trackHeight live in OTSS), so there is
+    // nothing meaningful to restore — return without touching stores.
+    if (wrapperType == juce::AudioProcessor::wrapperType_Standalone) {
+        return;
+    }
+
+    // Note: BPM is not in OTST v5 — host owns transport tempo in plugin mode.
     zoomLevel_ = input.readDouble();
     trackHeight_ = input.readInt();
 
@@ -2165,7 +2191,22 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     }
 
     standaloneArrangement_->setActiveTrack(restoredActiveTrackId);
-#endif // JucePlugin_Build_Standalone
+
+    // After project state is restored, attempt to load capture session payload from
+    // remaining bytes (VST3 non-ARA persistence). Old projects have no trailing capture
+    // section; deserialize() returns false and the session stays empty.
+    if (captureSession_ != nullptr) {
+        const auto remaining = static_cast<int>(input.getNumBytesRemaining());
+        if (remaining > 0) {
+            juce::MemoryBlock captureBlock;
+            captureBlock.setSize(static_cast<size_t>(remaining));
+            input.read(captureBlock.getData(), remaining);
+            const bool ok = captureSession_->deserialize(captureBlock);
+            if (ok)
+                AppLogger::log("CaptureSession: state restored ("
+                               + juce::String(captureSession_->listSegments().size()) + " segments)");
+        }
+    }
 }
 
 // ============================================================================
