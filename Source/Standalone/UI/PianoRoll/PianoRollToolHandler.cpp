@@ -577,7 +577,10 @@ void PianoRollToolHandler::handleDeleteKey()
             }
             auto snap = clonedCurve->getSnapshot();
             if (snap) {
-                ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments());
+                // delete 路径：affectedRange = globalDirty*Frame 的覆盖范围（含端点），
+                // 转 F0FrameRange 的 endFrameExclusive 语义。
+                const F0FrameRange affectedRange{globalDirtyStartFrame, globalDirtyEndFrame + 1};
+                ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange);
             } else {
                 ctx_.commitNoteDraft();
             }
@@ -1168,7 +1171,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
                 if (pitchCurve != nullptr && ctx_.commitNotesAndSegments) {
                     const auto updatedSegments = buildSegmentsWithManualOps(pitchCurve, ops);
                     ctx_.setUndoDescription(juce::String("移动音符"));
-                    if (ctx_.commitNotesAndSegments(notes, updatedSegments)) {
+                    if (ctx_.commitNotesAndSegments(notes, updatedSegments, affectedRange)) {
                         ctx_.notifyPitchCurveEdited(affectedRange.startFrame,
                                                     affectedRange.endFrameExclusive - 1);
                     }
@@ -1190,7 +1193,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
                         44100.0);
                     auto snap = clonedCurve->getSnapshot();
                     if (snap) {
-                        ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments());
+                        ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange);
                     } else {
                         ctx_.commitNoteDraft();
                     }
@@ -1253,7 +1256,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
                 44100.0);
             auto snap = clonedCurve->getSnapshot();
             if (snap) {
-                ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments());
+                ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange);
             } else {
                 ctx_.commitNoteDraft();
             }
@@ -1498,7 +1501,7 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
 
             auto snap = clonedCurve->getSnapshot();
             if (snap) {
-                ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments());
+                ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments(), noteRange);
                 ctx_.notifyPitchCurveEdited(noteRange.startFrame, noteRange.endFrameExclusive - 1);
             } else {
                 ctx_.commitNoteDraft();
