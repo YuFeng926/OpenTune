@@ -54,7 +54,9 @@ public:
         std::function<void()> beginNoteDraft;
         std::function<bool()> commitNoteDraft;
         std::function<void()> clearNoteDraft;
-        std::function<bool(const std::vector<Note>&, const std::vector<CorrectedSegment>&)> commitNotesAndSegments;
+        // 第三参 affectedRange 来自 ToolHandler 编辑时计算的精确范围，用于
+        // undo/redo 时只重渲染该范围（而不是 segments 列表反推的并集 = 全长）。
+        std::function<bool(const std::vector<Note>&, const std::vector<CorrectedSegment>&, F0FrameRange)> commitNotesAndSegments;
 
         std::function<std::shared_ptr<PitchCurve>()> getPitchCurve;
 

@@ -18,7 +18,9 @@ public:
                         std::vector<Note> oldNotes,
                         std::vector<Note> newNotes,
                         std::vector<CorrectedSegment> oldSegments,
-                        std::vector<CorrectedSegment> newSegments);
+                        std::vector<CorrectedSegment> newSegments,
+                        int affectedStartFrame,
+                        int affectedEndFrame);
 
     void undo() override;
     void redo() override;

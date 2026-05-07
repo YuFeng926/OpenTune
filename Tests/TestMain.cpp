@@ -4,6 +4,7 @@
 #include "Plugin/Capture/CaptureSession.h"
 #include "Plugin/Capture/CapturePersistence.h"
 #include "Plugin/Capture/CaptureSegment.h"
+#include "Utils/PianoRollEditAction.h"
 #include "Standalone/UI/MenuBarComponent.h"
 #include "Standalone/UI/PianoRoll/PianoRollVisualInvalidation.h"
 #include "Utils/AppPreferences.h"
@@ -377,7 +378,8 @@ struct PianoRollToolHandlerHarness {
         };
         ctx.clearNoteDraft = [this]() { state.noteDraft.clear(); };
         ctx.commitNotesAndSegments = [this](const std::vector<Note>& notes,
-                                            const std::vector<CorrectedSegment>&) {
+                                            const std::vector<CorrectedSegment>&,
+                                            F0FrameRange) {
             ++commitNotesAndSegmentsCalls;
             if (!commitNotesAndSegmentsResult) {
                 return false;
@@ -4176,6 +4178,65 @@ void runProcessorStateOldVersionRejectedTest()
     logPass(testName);
 }
 
+// ============================================================================
+// undo-affected-range-passthrough L2 anchor tests
+// ============================================================================
+
+void runPianoRollEditActionAffectedRangeStoredVerbatimTest()
+{
+    constexpr const char* testName = "PianoRollEditAction_AffectedRangeStoredVerbatim";
+
+    OpenTuneAudioProcessor processor;
+    PianoRollEditAction action(
+        processor, /*matId*/ 1, /*desc*/ juce::String("test"),
+        /*oldNotes*/ {}, /*newNotes*/ {},
+        /*oldSegs*/ {}, /*newSegs*/ {},
+        /*affectedStartFrame*/ 120,
+        /*affectedEndFrame*/ 480);
+
+    if (action.getAffectedStartFrame() != 120) {
+        logFail(testName, "affectedStartFrame mismatch (expected 120)");
+        return;
+    }
+    if (action.getAffectedEndFrame() != 480) {
+        logFail(testName, "affectedEndFrame mismatch (expected 480)");
+        return;
+    }
+    logPass(testName);
+}
+
+void runPianoRollEditActionAffectedRangeIndependentOfSegmentsTest()
+{
+    constexpr const char* testName = "PianoRollEditAction_AffectedRangeIndependentOfSegments";
+
+    OpenTuneAudioProcessor processor;
+    // Construct segments whose union under the old algorithm would produce [0, 8800].
+    // The new passthrough logic must ignore this and return the explicit affectedRange [4000, 4500].
+    std::vector<CorrectedSegment> oldSegs = {
+        CorrectedSegment(0, 4400, std::vector<float>(4400, 220.0f), CorrectedSegment::Source::NoteBased)
+    };
+    std::vector<CorrectedSegment> newSegs = {
+        CorrectedSegment(4400, 8800, std::vector<float>(4400, 440.0f), CorrectedSegment::Source::NoteBased)
+    };
+
+    PianoRollEditAction action(
+        processor, /*matId*/ 1, /*desc*/ juce::String("test"),
+        /*oldNotes*/ {}, /*newNotes*/ {},
+        std::move(oldSegs), std::move(newSegs),
+        /*affectedStartFrame*/ 4000,
+        /*affectedEndFrame*/ 4500);
+
+    if (action.getAffectedStartFrame() != 4000) {
+        logFail(testName, "segments leaked into affectedStartFrame — old union algorithm regressed");
+        return;
+    }
+    if (action.getAffectedEndFrame() != 4500) {
+        logFail(testName, "segments leaked into affectedEndFrame — old union algorithm regressed");
+        return;
+    }
+    logPass(testName);
+}
+
 void runProcessorBehaviorSuite()
 {
     logSection("Processor");
@@ -4191,6 +4252,9 @@ void runProcessorBehaviorSuite()
     runCapturePersistenceProcessingOnRestoreTriggersRefreshTest();
     runProcessorStateVersionFiveAndNoBpmTest();
     runProcessorStateOldVersionRejectedTest();
+    // undo-affected-range-passthrough anchor tests
+    runPianoRollEditActionAffectedRangeStoredVerbatimTest();
+    runPianoRollEditActionAffectedRangeIndependentOfSegmentsTest();
 }
 
 void runUiBehaviorSuite()
