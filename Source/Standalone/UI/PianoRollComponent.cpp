@@ -1700,12 +1700,18 @@ void PianoRollComponent::setEditedMaterialization(uint64_t materializationId,
     if (materializationChanged) {
         editedMaterializationId_ = materializationId;
         clearNoteDraft();
-        refreshEditedMaterializationNotes();
         autoTuneInFlight_.store(false, std::memory_order_release);
         pendingUndoDescription_ = {};
         beforeUndoNotes_.clear();
         beforeUndoSegments_.clear();
         undoSnapshotCaptured_ = false;
+    }
+
+    // notes 与 pitchCurve 通过 commitNotesAndPitchCurve 同写到 store；
+    // 读侧也必须同读：curveChanged 时必须 refresh notes，否则 undo/redo 会
+    // 出现 curve 回退但 notes 视觉残留的不对称（cachedNotes_ 滞后）。
+    if (materializationChanged || curveChanged) {
+        refreshEditedMaterializationNotes();
     }
 
     if (materializationChanged || curveChanged) {
