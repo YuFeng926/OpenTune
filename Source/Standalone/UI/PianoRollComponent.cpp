@@ -117,8 +117,9 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.commitNoteDraft = [this]() { return commitNoteDraft(); };
     toolCtx.clearNoteDraft = [this]() { clearNoteDraft(); };
     toolCtx.commitNotesAndSegments = [this](const std::vector<Note>& notes,
-                                            const std::vector<CorrectedSegment>& segments) {
-        return commitEditedMaterializationNotesAndSegments(notes, segments);
+                                            const std::vector<CorrectedSegment>& segments,
+                                            F0FrameRange affectedRange) {
+        return commitEditedMaterializationNotesAndSegments(notes, segments, affectedRange);
     };
     toolCtx.getPitchCurve = [this]() { return currentCurve_; };
     toolCtx.getOriginalF0 = [this]() -> std::vector<float> {
@@ -410,7 +411,10 @@ bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrection
     AppLogger::log("AutoTune: after outer updateScrollBars");
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
     AppLogger::log("AutoTune: after outer invalidateVisual, before recordUndoAction");
-    recordUndoAction(pendingUndoDescription_);
+    // AutoTune 修正范围 = [autoStartFrame, autoEndFrame+1]（completed 已记录），
+    // 直接当作 affectedRange 传给 undo action；undo 该 AutoTune 等价于重渲染该范围。
+    const F0FrameRange autoTuneRange{completed.autoStartFrame, completed.autoEndFrame + 1};
+    recordUndoAction(pendingUndoDescription_, autoTuneRange);
     AppLogger::log("AutoTune: commitCompletedAutoTuneResult done");
     return true;
 }
@@ -427,7 +431,9 @@ bool PianoRollComponent::commitCompletedNoteCorrectionResult(const PianoRollCorr
         return false;
     }
 
-    if (!commitEditedMaterializationCorrectedSegments(copyCorrectedSegments(completed.curve))) {
+    const F0FrameRange correctionRange{completed.startFrame, completed.endFrameExclusive};
+    if (!commitEditedMaterializationCorrectedSegments(copyCorrectedSegments(completed.curve),
+                                                       correctionRange)) {
         return false;
     }
 
@@ -486,7 +492,9 @@ bool PianoRollComponent::commitNoteDraft()
         return true;
     }
 
-    const auto success = commitEditedMaterializationNotes(interactionState_.noteDraft.workingNotes);
+    // commitNoteDraft 不知道精确范围（被多个 mouseUp fallback 调），用全长 fallback。
+    const auto success = commitEditedMaterializationNotes(interactionState_.noteDraft.workingNotes,
+                                                          currentFullF0Range());
     if (success) {
         interactionState_.noteDraft.clear();
     }
@@ -498,7 +506,8 @@ void PianoRollComponent::clearNoteDraft()
     interactionState_.noteDraft.clear();
 }
 
-bool PianoRollComponent::commitEditedMaterializationNotes(const std::vector<Note>& notes)
+bool PianoRollComponent::commitEditedMaterializationNotes(const std::vector<Note>& notes,
+                                                          F0FrameRange affectedRange)
 {
     if (processor_ == nullptr || editedMaterializationId_ == 0) {
         return false;
@@ -512,12 +521,13 @@ bool PianoRollComponent::commitEditedMaterializationNotes(const std::vector<Note
     }
 
     refreshEditedMaterializationNotes();
-    recordUndoAction(pendingUndoDescription_);
+    recordUndoAction(pendingUndoDescription_, affectedRange);
     return true;
 }
 
 bool PianoRollComponent::commitEditedMaterializationNotesAndSegments(const std::vector<Note>& notes,
-                                                             const std::vector<CorrectedSegment>& segments)
+                                                             const std::vector<CorrectedSegment>& segments,
+                                                             F0FrameRange affectedRange)
 {
     if (processor_ == nullptr || editedMaterializationId_ == 0) {
         return false;
@@ -537,11 +547,12 @@ bool PianoRollComponent::commitEditedMaterializationNotesAndSegments(const std::
         setEditedMaterialization(editedMaterializationId_, committedCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
     }
 
-    recordUndoAction(pendingUndoDescription_);
+    recordUndoAction(pendingUndoDescription_, affectedRange);
     return true;
 }
 
-bool PianoRollComponent::commitEditedMaterializationCorrectedSegments(const std::vector<CorrectedSegment>& segments)
+bool PianoRollComponent::commitEditedMaterializationCorrectedSegments(const std::vector<CorrectedSegment>& segments,
+                                                                       F0FrameRange affectedRange)
 {
     if (processor_ == nullptr || editedMaterializationId_ == 0) {
         return false;
@@ -559,7 +570,7 @@ bool PianoRollComponent::commitEditedMaterializationCorrectedSegments(const std:
         setEditedMaterialization(editedMaterializationId_, committedCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
     }
 
-    recordUndoAction(pendingUndoDescription_);
+    recordUndoAction(pendingUndoDescription_, affectedRange);
     return true;
 }
 
@@ -571,6 +582,15 @@ std::vector<CorrectedSegment> PianoRollComponent::getCurrentSegments() const
     return snap->getCorrectedSegments();
 }
 
+F0FrameRange PianoRollComponent::currentFullF0Range() const
+{
+    if (!currentCurve_) return F0FrameRange{0, 0};
+    auto snap = currentCurve_->getSnapshot();
+    if (!snap) return F0FrameRange{0, 0};
+    const int totalFrames = static_cast<int>(snap->getOriginalF0().size());
+    return F0FrameRange{0, totalFrames};
+}
+
 void PianoRollComponent::captureBeforeUndoSnapshot()
 {
     beforeUndoNotes_ = cachedNotes_;
@@ -578,20 +598,30 @@ void PianoRollComponent::captureBeforeUndoSnapshot()
     undoSnapshotCaptured_ = true;
 }
 
-void PianoRollComponent::recordUndoAction(const juce::String& description)
+void PianoRollComponent::recordUndoAction(const juce::String& description, F0FrameRange affectedRange)
 {
     if (processor_ == nullptr || editedMaterializationId_ == 0 || !undoSnapshotCaptured_)
         return;
 
     AppLogger::log("AutoTune: recordUndoAction entry beforeNotes=" + juce::String(static_cast<int>(beforeUndoNotes_.size()))
         + " beforeSegments=" + juce::String(static_cast<int>(beforeUndoSegments_.size()))
-        + " cachedNotes=" + juce::String(static_cast<int>(cachedNotes_.size())));
+        + " cachedNotes=" + juce::String(static_cast<int>(cachedNotes_.size()))
+        + " affectedRange=[" + juce::String(affectedRange.startFrame)
+        + "," + juce::String(affectedRange.endFrameExclusive) + ")");
 
     auto afterNotes = cachedNotes_;
     auto afterSegments = getCurrentSegments();
 
     AppLogger::log("AutoTune: recordUndoAction afterSegments=" + juce::String(static_cast<int>(afterSegments.size()))
         + " constructing PianoRollEditAction");
+
+    // F0FrameRange.endFrameExclusive 是开区间右端；PianoRollEditAction 的
+    // affectedEndFrame 是闭区间右端（兼容既有 getter 语义），换算 -1。
+    const int affectedStart = std::max(0, affectedRange.startFrame);
+    const int affectedEnd = std::max(affectedStart,
+                                      affectedRange.endFrameExclusive > 0
+                                          ? affectedRange.endFrameExclusive - 1
+                                          : 0);
 
     auto action = std::make_unique<PianoRollEditAction>(
         *processor_,
@@ -600,7 +630,9 @@ void PianoRollComponent::recordUndoAction(const juce::String& description)
         std::move(beforeUndoNotes_),
         std::move(afterNotes),
         std::move(beforeUndoSegments_),
-        std::move(afterSegments));
+        std::move(afterSegments),
+        affectedStart,
+        affectedEnd);
 
     AppLogger::log("AutoTune: recordUndoAction before addAction");
     processor_->getUndoManager().addAction(std::move(action));
@@ -636,7 +668,10 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
     }
 
     if (selectionChanged) {
-        commitEditedMaterializationNotes(notes);
+        // 选中态变化只动 note.selected，不影响 vocoder 渲染；用 selectionRange 作为
+        // 可能的 affected 范围（注意：选中态变化通常不需要 enqueuePartialRender，
+        // 但一致性起见仍透传）。
+        commitEditedMaterializationNotes(notes, selectionRange);
     }
 
     interactionState_.selection.hasSelectionArea = false;
@@ -835,7 +870,10 @@ bool PianoRollComponent::enqueueManualCorrectionPatchAsync(const std::vector<Pia
             op.retuneSpeed);
     }
 
-    if (!commitEditedMaterializationCorrectedSegments(copyCorrectedSegments(editedCurve))) {
+    // dirtyStartFrame/dirtyEndFrame 是所有 manual ops 的 dirty 帧并集（含端点）。
+    const F0FrameRange affectedRange{dirtyStartFrame,
+                                      dirtyEndFrame >= dirtyStartFrame ? dirtyEndFrame + 1 : dirtyStartFrame};
+    if (!commitEditedMaterializationCorrectedSegments(copyCorrectedSegments(editedCurve), affectedRange)) {
         return false;
     }
 
@@ -1227,16 +1265,16 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
                 retuneSpeed, vibratoDepth, vibratoRate, 44100.0);
             auto snap = clonedCurve->getSnapshot();
             if (snap) {
-                commitEditedMaterializationNotesAndSegments(notes, snap->getCorrectedSegments());
+                commitEditedMaterializationNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange);
             } else {
-                commitEditedMaterializationNotes(notes);
+                commitEditedMaterializationNotes(notes, affectedRange);
             }
             listeners_.call([affectedRange](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1); });
         } else {
-            commitEditedMaterializationNotes(notes);
+            commitEditedMaterializationNotes(notes, currentFullF0Range());
         }
     } else {
-        commitEditedMaterializationNotes(notes);
+        commitEditedMaterializationNotes(notes, currentFullF0Range());
     }
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
     return true;
@@ -1397,7 +1435,9 @@ bool PianoRollComponent::applyRetuneSpeedToSelectedLineAnchorSegments(float spee
         updatedSegments[static_cast<size_t>(idx)].retuneSpeed = juce::jlimit(0.0f, 1.0f, speed);
     }
 
-    commitEditedMaterializationCorrectedSegments(updatedSegments);
+    const F0FrameRange affectedRange{affectedStartFrame,
+                                      affectedEndFrame >= affectedStartFrame ? affectedEndFrame + 1 : affectedStartFrame};
+    commitEditedMaterializationCorrectedSegments(updatedSegments, affectedRange);
 
     if (affectedStartFrame <= affectedEndFrame) {
         listeners_.call([affectedStartFrame, affectedEndFrame](Listener& l) {
@@ -1756,12 +1796,18 @@ void PianoRollComponent::setEditedMaterialization(uint64_t materializationId,
 
         editedMaterializationId_ = materializationId;
         clearNoteDraft();
-        refreshEditedMaterializationNotes();
         autoTuneInFlight_.store(false, std::memory_order_release);
         pendingUndoDescription_ = {};
         beforeUndoNotes_.clear();
         beforeUndoSegments_.clear();
         undoSnapshotCaptured_ = false;
+    }
+
+    // notes 与 pitchCurve 通过 commitNotesAndPitchCurve 同写到 store；
+    // 读侧也必须同读：curveChanged 时必须 refresh notes，否则 undo/redo 会
+    // 出现 curve 回退但 notes 视觉残留的不对称（cachedNotes_ 滞后）。
+    if (materializationChanged || curveChanged) {
+        refreshEditedMaterializationNotes();
     }
 
     if (materializationChanged || curveChanged) {

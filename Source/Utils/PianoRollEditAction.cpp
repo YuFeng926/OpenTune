@@ -10,7 +10,9 @@ PianoRollEditAction::PianoRollEditAction(OpenTuneAudioProcessor& processor,
                                          std::vector<Note> oldNotes,
                                          std::vector<Note> newNotes,
                                          std::vector<CorrectedSegment> oldSegments,
-                                         std::vector<CorrectedSegment> newSegments)
+                                         std::vector<CorrectedSegment> newSegments,
+                                         int affectedStartFrame,
+                                         int affectedEndFrame)
     : processor_(processor)
     , materializationId_(materializationId)
     , description_(std::move(description))
@@ -18,20 +20,15 @@ PianoRollEditAction::PianoRollEditAction(OpenTuneAudioProcessor& processor,
     , newNotes_(std::move(newNotes))
     , oldSegments_(std::move(oldSegments))
     , newSegments_(std::move(newSegments))
+    , affectedStartFrame_(affectedStartFrame)
+    , affectedEndFrame_(affectedEndFrame)
 {
-    // Compute affected frame range from union of old and new segments
-    int minFrame = std::numeric_limits<int>::max();
-    int maxFrame = 0;
-    for (const auto& seg : oldSegments_) {
-        minFrame = std::min(minFrame, seg.startFrame);
-        maxFrame = std::max(maxFrame, seg.endFrame);
-    }
-    for (const auto& seg : newSegments_) {
-        minFrame = std::min(minFrame, seg.startFrame);
-        maxFrame = std::max(maxFrame, seg.endFrame);
-    }
-    affectedStartFrame_ = (minFrame == std::numeric_limits<int>::max()) ? 0 : minFrame;
-    affectedEndFrame_ = maxFrame;
+    // affected range 由 ToolHandler 计算时直接传入，不从 segments 反推。
+    // 反推（union of all segments min/max）会被 PitchCurve 上无关分布的早段/晚段
+    // 漂移成 [0, 全长]，让 undo/redo 退化为全长 vocoder 渲染（regression of c5c6c29
+    // optimization, lost in v2.0 a122bca rewrite）。
+    jassert(affectedStartFrame_ >= 0);
+    jassert(affectedEndFrame_ >= affectedStartFrame_);
 }
 
 void PianoRollEditAction::undo()

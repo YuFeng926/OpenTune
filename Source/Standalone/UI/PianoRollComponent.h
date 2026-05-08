@@ -282,10 +282,16 @@ private:
     void beginNoteDraft();
     bool commitNoteDraft();
     void clearNoteDraft();
-    bool commitEditedMaterializationNotes(const std::vector<Note>& notes);
+    // affectedRange: 编辑时已知的精确帧范围；undo/redo 用此范围 enqueuePartialRender，
+    // 避免 PianoRollEditAction 事后从 segments 反推退化为全长。无明确范围的调用方
+    // 用 [0, totalFrames] 作为安全 fallback（行为等同本 change 之前的全长渲染）。
+    bool commitEditedMaterializationNotes(const std::vector<Note>& notes,
+                                          F0FrameRange affectedRange);
     bool commitEditedMaterializationNotesAndSegments(const std::vector<Note>& notes,
-                                             const std::vector<CorrectedSegment>& segments);
-    bool commitEditedMaterializationCorrectedSegments(const std::vector<CorrectedSegment>& segments);
+                                             const std::vector<CorrectedSegment>& segments,
+                                             F0FrameRange affectedRange);
+    bool commitEditedMaterializationCorrectedSegments(const std::vector<CorrectedSegment>& segments,
+                                                       F0FrameRange affectedRange);
     bool selectNotesOverlappingFrames(int startFrame, int endFrameExclusive);
     juce::Rectangle<int> getNoteBounds(const Note& note) const;
     juce::Rectangle<int> getNotesBounds(const std::vector<Note>& notes) const;
@@ -408,7 +414,11 @@ private:
     std::vector<CorrectedSegment> beforeUndoSegments_;
     bool undoSnapshotCaptured_{false};
     void captureBeforeUndoSnapshot();
-    void recordUndoAction(const juce::String& description);
+    void recordUndoAction(const juce::String& description, F0FrameRange affectedRange);
+
+    // 当 commit 调用方没有精确 affectedRange 时（如 commitNoteDraft 后兜底、参数面板调整），
+    // 用当前 currentCurve_ 的全长 F0 范围作为安全 fallback。退化等同于本 change 之前的全长渲染。
+    F0FrameRange currentFullF0Range() const;
     std::vector<CorrectedSegment> getCurrentSegments() const;
     
     bool applyVibratoParameterToSelection(VibratoParam param, float value);
