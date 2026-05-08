@@ -255,11 +255,11 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
     }
 
     if (!cursorSet) {
-        // Check if hovering over a reference note
-        if (ctx_.hitTestReferenceNote) {
+        // Check if hovering over reference F0 curve
+        if (ctx_.hitTestReferenceF0Curve) {
             double hoverTime = ctx_.xToTime(e.x);
             float hoverPitch = ctx_.yToFreq(static_cast<float>(e.y));
-            if (ctx_.hitTestReferenceNote(hoverTime, hoverPitch)) {
+            if (ctx_.hitTestReferenceF0Curve(hoverTime, hoverPitch)) {
                 ctx_.setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
                 cursorSet = true;
             }
@@ -769,11 +769,13 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 
         invalidateNoteChange(ctx_, beforeNotes, notes);
     } else {
-        // No user note clicked — check if reference note is under cursor
-        if (ctx_.hitTestReferenceNote && ctx_.hitTestReferenceNote(trackRelativeTime, clickedPitch)) {
+        // No user note clicked — check if reference F0 curve is under cursor
+        if (ctx_.hitTestReferenceF0Curve && ctx_.hitTestReferenceF0Curve(trackRelativeTime, clickedPitch)) {
+            const double currentStoreOffset = ctx_.getReferenceTimeOffset ? ctx_.getReferenceTimeOffset() : 0.0;
             ctx_.getState().referenceDrag.isDragging = true;
             ctx_.getState().referenceDrag.dragStartMouseTime = trackRelativeTime;
-            ctx_.getState().referenceDrag.dragStartOffsetSeconds = ctx_.getReferenceTimeOffset ? ctx_.getReferenceTimeOffset() : 0.0;
+            ctx_.getState().referenceDrag.dragStartOffsetSeconds = currentStoreOffset;
+            ctx_.getState().referenceDrag.currentOffset = currentStoreOffset;
             return;
         }
 

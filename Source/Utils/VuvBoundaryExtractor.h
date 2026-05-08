@@ -8,7 +8,7 @@ namespace OpenTune {
  * VuvBoundaryExtractor - Derives VUV segments from OriginalF0
  *
  * Extracts voiced/unvoiced segments from F0 curve (f0>0 = voiced, f0==0 = unvoiced),
- * merges short unvoiced gaps, and produces known_durations for GAME alignment.
+ * merges short unvoiced gaps, and produces known_durations for reference alignment.
  */
 class VuvBoundaryExtractor {
 public:
@@ -30,7 +30,7 @@ public:
         const std::vector<float>& f0, int hopSize, int sampleRate, double minGapMs = 50.0);
 
     /**
-     * Convert VUV segments to known_durations array for GAME.
+     * Convert VUV segments to known_durations array for reference alignment.
      * Each element is the duration of one segment in seconds.
      * Sum must equal totalDuration.
      * @param segments VUV segments from extractSegments()

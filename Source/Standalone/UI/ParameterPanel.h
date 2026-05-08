@@ -59,8 +59,7 @@ public:
         virtual void autoTuneRequested() {}
         virtual void analyzeReferenceRequested() {}
         virtual void regenerateReferenceRequested() {}
-        virtual void autoSnapRequested() {}
-        virtual void noteDetailChanged(int detail) { juce::ignoreUnused(detail); }
+        virtual void referenceTrackTypeChanged(int typeIndex) { juce::ignoreUnused(typeIndex); }
         // 参数拖动完成回调（用于 Undo 记录，oldValue 是拖动开始前的值）
         virtual void parameterDragEnded(int paramId, float oldValue, float newValue) { juce::ignoreUnused(paramId, oldValue, newValue); }
     };
@@ -85,6 +84,7 @@ public:
     void setF0Max(float value);
 
     void setReferenceSectionVisible(bool visible);
+    void setReferenceTrackType(int typeIndex);  // 0=Vocals, 1=Song
 
     void applyTheme();
     void refreshLocalizedText();  // 刷新本地化文本
@@ -96,7 +96,6 @@ public:
     float getNoteSplit() const;
     float getF0Min() const;
     float getF0Max() const;
-    int getNoteDetail() const;
 
 private:
     class ToolIconButton : public juce::Button
@@ -153,12 +152,12 @@ private:
     std::unique_ptr<ToolIconButton> lineAnchorToolButton_;
     std::unique_ptr<ToolIconButton> handDrawToolButton_;
 
-    // GAME Reference Section
+    // Reference Section
     juce::Label referenceHeader_;
-    juce::Slider noteDetailSlider_;
+    std::unique_ptr<juce::Label> referenceTrackTypeLabel_;
+    std::unique_ptr<juce::ComboBox> referenceTrackTypeCombo_;
     std::unique_ptr<ToolIconButton> analyzeReferenceButton_;
     std::unique_ptr<ToolIconButton> regenerateButton_;
-    std::unique_ptr<ToolIconButton> autoSnapButton_;
 
     LargeKnobLookAndFeel largeKnobLookAndFeel_;
 

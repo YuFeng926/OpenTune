@@ -12,12 +12,13 @@ constexpr const char* kSharedAudioEditingSchemeKey = "shared.audioEditing.scheme
 constexpr const char* kSharedPianoRollNoteNameModeKey = "shared.pianoRoll.noteNameMode";
 constexpr const char* kSharedPianoRollShowChunkBoundariesKey = "shared.pianoRoll.showChunkBoundaries";
 constexpr const char* kSharedPianoRollShowUnvoicedFramesKey = "shared.pianoRoll.showUnvoicedFrames";
+constexpr const char* kSharedPianoRollReferenceVisualizationKey = "shared.pianoRoll.referenceVisualization";
 constexpr const char* kSharedZoomHorizontalFactorKey = "shared.zoom.horizontalFactor";
 constexpr const char* kSharedZoomVerticalFactorKey = "shared.zoom.verticalFactor";
 constexpr const char* kSharedScrollSpeedKey = "shared.scroll.speed";
 constexpr const char* kStandaloneMouseTrailThemeKey = "standalone.mouseTrail.theme";
 constexpr const char* kSharedRenderingPriorityKey = "shared.rendering.priority";
-constexpr const char* kSharedForceAlignReferenceStartKey = "shared.reference.forceAlignStart";
+constexpr const char* kSharedReferenceTrackTypeKey = "shared.reference.trackType";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
     "standalone.shortcuts.playPause",
@@ -156,6 +157,22 @@ NoteNameMode noteNameModeFromToken(const juce::String& token)
     return NoteNameMode::COnly;
 }
 
+const char* toReferenceVisualizationToken(ReferenceVisualization viz)
+{
+    switch (viz) {
+        case ReferenceVisualization::F0Curve: return "f0Curve";
+        case ReferenceVisualization::Off:     return "off";
+    }
+    return "f0Curve";
+}
+
+ReferenceVisualization referenceVisualizationFromToken(const juce::String& token)
+{
+    if (token == "f0Curve") return ReferenceVisualization::F0Curve;
+    if (token == "off")     return ReferenceVisualization::Off;
+    return ReferenceVisualization::F0Curve;
+}
+
 const char* toMouseTrailThemeToken(MouseTrailConfig::TrailTheme theme)
 {
     switch (theme) {
@@ -235,6 +252,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.pianoRollVisualPreferences.showUnvoicedFrames = properties.getBoolValue(
         kSharedPianoRollShowUnvoicedFramesKey,
         state.shared.pianoRollVisualPreferences.showUnvoicedFrames);
+    state.shared.pianoRollVisualPreferences.referenceVisualization = referenceVisualizationFromToken(
+        properties.getValue(kSharedPianoRollReferenceVisualizationKey,
+                            toReferenceVisualizationToken(state.shared.pianoRollVisualPreferences.referenceVisualization)));
     state.shared.zoomSensitivity.horizontalZoomFactor = static_cast<float>(
         properties.getDoubleValue(kSharedZoomHorizontalFactorKey, state.shared.zoomSensitivity.horizontalZoomFactor));
     state.shared.zoomSensitivity.verticalZoomFactor = static_cast<float>(
@@ -244,8 +264,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.renderingPriority = renderingPriorityFromToken(
         properties.getValue(kSharedRenderingPriorityKey,
                             toRenderingPriorityToken(state.shared.renderingPriority)));
-    state.shared.forceAlignReferenceStart = properties.getBoolValue(
-        kSharedForceAlignReferenceStartKey, state.shared.forceAlignReferenceStart);
+    state.shared.referenceTrackType = referenceTrackTypeFromToken(
+        properties.getValue(kSharedReferenceTrackTypeKey,
+                            toString(state.shared.referenceTrackType)));
 
     state.standalone.shortcuts = decodeShortcutSettings(properties);
     state.standalone.mouseTrailTheme = mouseTrailThemeFromToken(
@@ -264,13 +285,15 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         state.shared.pianoRollVisualPreferences.showChunkBoundaries);
     properties.setValue(kSharedPianoRollShowUnvoicedFramesKey,
                         state.shared.pianoRollVisualPreferences.showUnvoicedFrames);
+    properties.setValue(kSharedPianoRollReferenceVisualizationKey,
+                        toReferenceVisualizationToken(state.shared.pianoRollVisualPreferences.referenceVisualization));
     properties.setValue(kSharedZoomHorizontalFactorKey, static_cast<double>(state.shared.zoomSensitivity.horizontalZoomFactor));
     properties.setValue(kSharedZoomVerticalFactorKey, static_cast<double>(state.shared.zoomSensitivity.verticalZoomFactor));
     properties.setValue(kSharedScrollSpeedKey, static_cast<double>(state.shared.zoomSensitivity.scrollSpeed));
     properties.setValue(kSharedRenderingPriorityKey,
                         toRenderingPriorityToken(state.shared.renderingPriority));
-    properties.setValue(kSharedForceAlignReferenceStartKey,
-                        state.shared.forceAlignReferenceStart);
+    properties.setValue(kSharedReferenceTrackTypeKey,
+                        toString(state.shared.referenceTrackType));
     properties.setValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme));
 
     for (size_t index = 0; index < kShortcutStorageKeys.size(); ++index) {
@@ -370,6 +393,13 @@ void AppPreferences::setShowUnvoicedFrames(bool shouldShow)
     saveLocked();
 }
 
+void AppPreferences::setReferenceVisualization(ReferenceVisualization viz)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.pianoRollVisualPreferences.referenceVisualization = viz;
+    saveLocked();
+}
+
 void AppPreferences::setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
@@ -391,10 +421,10 @@ void AppPreferences::setRenderingPriority(RenderingPriority priority)
     saveLocked();
 }
 
-void AppPreferences::setForceAlignReferenceStart(bool enabled)
+void AppPreferences::setReferenceTrackType(ReferenceTrackType type)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
-    state_.shared.forceAlignReferenceStart = enabled;
+    state_.shared.referenceTrackType = type;
     saveLocked();
 }
 

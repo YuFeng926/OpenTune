@@ -8,7 +8,7 @@ namespace OpenTune {
 /**
  * InferenceGate - Serializes large model inference operations.
  *
- * Ensures RMVPE and GAME never run concurrently (they share GPU/memory budget).
+ * Ensures RMVPE and reference analysis never run concurrently (they share GPU/memory budget).
  * Vocoder does NOT use this gate (it's streaming, not batch).
  *
  * Thread-safe: Yes (mutex-based serialization)

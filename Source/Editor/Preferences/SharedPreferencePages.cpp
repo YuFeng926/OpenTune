@@ -145,16 +145,22 @@ public:
         initialiseComboBox(renderingPrioritySelector_);
         addAndMakeVisible(renderingPrioritySelector_);
 
-        forceAlignToggle_.setButtonText(LOC(kForceAlignReferenceStart));
-        forceAlignToggle_.setToggleState(state.shared.forceAlignReferenceStart,
-                                         juce::dontSendNotification);
-        forceAlignToggle_.setColour(juce::ToggleButton::textColourId, UIColors::textPrimary);
-        forceAlignToggle_.setColour(juce::ToggleButton::tickColourId, UIColors::accent);
-        forceAlignToggle_.onClick = [this] {
-            appPreferences_.setForceAlignReferenceStart(forceAlignToggle_.getToggleState());
+        initialiseLabel(referenceVizLabel_, LOC(kReferenceVisualization));
+        addAndMakeVisible(referenceVizLabel_);
+
+        referenceVizSelector_.addItem(LOC(kRefVizF0CurveOnly), 1);
+        referenceVizSelector_.addItem(LOC(kRefVizOff), 2);
+        referenceVizSelector_.setSelectedId(
+            static_cast<int>(state.shared.pianoRollVisualPreferences.referenceVisualization) + 1,
+            juce::dontSendNotification);
+        referenceVizSelector_.onChange = [this] {
+            const auto viz = static_cast<ReferenceVisualization>(
+                referenceVizSelector_.getSelectedId() - 1);
+            appPreferences_.setReferenceVisualization(viz);
             notifyChanged();
         };
-        addAndMakeVisible(forceAlignToggle_);
+        initialiseComboBox(referenceVizSelector_);
+        addAndMakeVisible(referenceVizSelector_);
     }
 
     void paint(juce::Graphics& g) override
@@ -172,9 +178,9 @@ public:
         renderingPriorityLabel_.setBounds(row.removeFromLeft(labelWidth));
         renderingPrioritySelector_.setBounds(row.removeFromLeft(240).reduced(0, 4));
 
-        auto alignRow = bounds.removeFromTop(rowHeight);
-        alignRow.removeFromLeft(labelWidth);  // indent to match selector column
-        forceAlignToggle_.setBounds(alignRow.removeFromLeft(300).reduced(0, 4));
+        auto vizRow = bounds.removeFromTop(rowHeight);
+        referenceVizLabel_.setBounds(vizRow.removeFromLeft(labelWidth));
+        referenceVizSelector_.setBounds(vizRow.removeFromLeft(240).reduced(0, 4));
     }
 
 private:
@@ -190,7 +196,8 @@ private:
     std::function<void(bool)> onRenderingPriorityChanged_;
     juce::Label renderingPriorityLabel_;
     juce::ComboBox renderingPrioritySelector_;
-    juce::ToggleButton forceAlignToggle_;
+    juce::Label referenceVizLabel_;
+    juce::ComboBox referenceVizSelector_;
 };
 
 class SharedEditingPage final : public juce::Component

@@ -231,19 +231,9 @@ ParameterPanel::ParameterPanel()
     handDrawToolButton_->onClick = [this] { onToolClicked(4); };
     addAndMakeVisible(*handDrawToolButton_);
 
-    // GAME Reference Section
+    // Reference Section
     setupHeader(referenceHeader_, "Reference");
     addAndMakeVisible(referenceHeader_);
-
-    noteDetailSlider_.setSliderStyle(juce::Slider::Rotary);
-    noteDetailSlider_.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 18);
-    noteDetailSlider_.setRange(1.0, 10.0, 1.0);
-    noteDetailSlider_.setValue(5.0, juce::dontSendNotification);
-    noteDetailSlider_.setLookAndFeel(&largeKnobLookAndFeel_);
-    noteDetailSlider_.onValueChange = [this]() {
-        listeners_.call([this](Listener& l) { l.noteDetailChanged(static_cast<int>(noteDetailSlider_.getValue())); });
-    };
-    addAndMakeVisible(noteDetailSlider_);
 
     analyzeReferenceButton_ = std::make_unique<ToolIconButton>(100, "AnalyzeRef", "Analyze Reference Audio");
     analyzeReferenceButton_->setTextIcon("REF");
@@ -252,19 +242,29 @@ ParameterPanel::ParameterPanel()
     };
     addAndMakeVisible(*analyzeReferenceButton_);
 
+    // Reference track type dropdown
+    referenceTrackTypeLabel_ = std::make_unique<juce::Label>("RefTrackType", LOC(kRefTrackType));
+    referenceTrackTypeLabel_->setFont(UIColors::getLabelFont(12.0f));
+    referenceTrackTypeLabel_->setColour(juce::Label::textColourId, UIColors::textSecondary);
+    addAndMakeVisible(*referenceTrackTypeLabel_);
+
+    referenceTrackTypeCombo_ = std::make_unique<juce::ComboBox>("RefTrackTypeCombo");
+    referenceTrackTypeCombo_->addItem(LOC(kRefVocals), 1);
+    referenceTrackTypeCombo_->addItem(LOC(kRefSong), 2);
+    referenceTrackTypeCombo_->setSelectedId(1, juce::dontSendNotification);
+    referenceTrackTypeCombo_->onChange = [this]() {
+        listeners_.call([this](Listener& l) {
+            l.referenceTrackTypeChanged(referenceTrackTypeCombo_->getSelectedId() - 1);
+        });
+    };
+    addAndMakeVisible(*referenceTrackTypeCombo_);
+
     regenerateButton_ = std::make_unique<ToolIconButton>(101, "Regenerate", "Regenerate with current settings");
-    regenerateButton_->setTextIcon("GEN");
+    regenerateButton_->setTextIcon("RELOAD");
     regenerateButton_->onClick = [this]() {
         listeners_.call([](Listener& l) { l.regenerateReferenceRequested(); });
     };
     addAndMakeVisible(*regenerateButton_);
-
-    autoSnapButton_ = std::make_unique<ToolIconButton>(102, "AutoSnap", "Auto-Snap notes to reference");
-    autoSnapButton_->setTextIcon("SNAP");
-    autoSnapButton_->onClick = [this]() {
-        listeners_.call([](Listener& l) { l.autoSnapRequested(); });
-    };
-    addAndMakeVisible(*autoSnapButton_);
 }
 
 ParameterPanel::~ParameterPanel()
@@ -275,7 +275,6 @@ ParameterPanel::~ParameterPanel()
     noteSplitSlider_.setLookAndFeel(nullptr);
     f0MinSlider_.setLookAndFeel(nullptr);
     f0MaxSlider_.setLookAndFeel(nullptr);
-    noteDetailSlider_.setLookAndFeel(nullptr);
 }
 
 void ParameterPanel::paint(juce::Graphics& g)
@@ -325,8 +324,8 @@ void ParameterPanel::resized()
     // Tools区域高度计算：header + gap + 3行按钮 + 2个行间距
     const int toolsHeight = headerHeight + toolHeaderGap + rows * toolButtonSize + (rows - 1) * toolButtonGap;
 
-    // Reference section 高度：header(20)+toolHeaderGap(8)+knob(70)+toolButtonGap(10)+按钮行(28)+toolButtonGap(10)+Snap(28)+余量(12)
-    const int referenceHeight = 20 + toolHeaderGap + 70 + toolButtonGap + 28 + toolButtonGap + 28 + 12;
+    // Reference section 高度：header(20)+toolHeaderGap(8)+combo(24)+toolButtonGap(10)+按钮行(28)+toolButtonGap(10)+Snap(28)+余量(12)
+    const int referenceHeight = 20 + toolHeaderGap + 24 + toolButtonGap + 28 + toolButtonGap + 28 + 12;
 
     // 预留底部空间（Tools + Reference），分层取出
     // 工具栏上移半个旋钮高度，Reference 额外下移半个旋钮高度，三层间距平衡
@@ -407,13 +406,14 @@ void ParameterPanel::resized()
         const int x = toolsColumn.getX();
         int y = bottomReserve.getY() + 4 + interSectionGap - 20;
         referenceHeader_.setBounds(x, y, panelWidth, 20);
-        y += 20 + toolHeaderGap;  // header→knob 间距对齐 tools header→buttons
-        noteDetailSlider_.setBounds(x + (panelWidth - 70) / 2, y, 70, 70);
-        y += 70 + toolButtonGap;  // knob→buttons 间距对齐 tools 按钮行间距
+        y += 20 + toolHeaderGap;  // header→combo spacing
+        // Reference track type dropdown
+        referenceTrackTypeLabel_->setBounds(x, y, 80, 24);
+        referenceTrackTypeCombo_->setBounds(x + 84, y, panelWidth - 84, 24);
+        y += 24 + toolButtonGap;  // combo→buttons spacing
         analyzeReferenceButton_->setBounds(x, y, (panelWidth - 4) / 2, 28);
         regenerateButton_->setBounds(x + (panelWidth - 4) / 2 + 4, y, (panelWidth - 4) / 2, 28);
         y += 28 + toolButtonGap;
-        autoSnapButton_->setBounds(x, y, panelWidth, 28);
     }
 }
 
@@ -459,6 +459,15 @@ void ParameterPanel::refreshLocalizedText()
         lineAnchorToolButton_->setTooltip(LOC(kTooltipLineAnchor) + "\n4");
     if (handDrawToolButton_)
         handDrawToolButton_->setTooltip(LOC(kTooltipHandDraw) + "\n5");
+    
+    // 更新 Reference 部分
+    referenceHeader_.setText("Reference", juce::dontSendNotification);
+    if (referenceTrackTypeLabel_)
+        referenceTrackTypeLabel_->setText(LOC(kRefTrackType), juce::dontSendNotification);
+    if (referenceTrackTypeCombo_) {
+        referenceTrackTypeCombo_->changeItemText(1, LOC(kRefVocals));
+        referenceTrackTypeCombo_->changeItemText(2, LOC(kRefSong));
+    }
     
     repaint();
 }
@@ -596,18 +605,18 @@ void ParameterPanel::onToolClicked(int toolId)
     listeners_.call([this, toolId](Listener& l) { l.toolSelected(toolId); });
 }
 
-int ParameterPanel::getNoteDetail() const
-{
-    return static_cast<int>(noteDetailSlider_.getValue());
-}
-
 void ParameterPanel::setReferenceSectionVisible(bool visible)
 {
     referenceHeader_.setVisible(visible);
-    noteDetailSlider_.setVisible(visible);
+    referenceTrackTypeLabel_->setVisible(visible);
+    referenceTrackTypeCombo_->setVisible(visible);
     analyzeReferenceButton_->setVisible(visible);
     regenerateButton_->setVisible(visible);
-    autoSnapButton_->setVisible(visible);
+}
+
+void ParameterPanel::setReferenceTrackType(int typeIndex)
+{
+    referenceTrackTypeCombo_->setSelectedId(typeIndex + 1, juce::dontSendNotification);
 }
 
 } // namespace OpenTune

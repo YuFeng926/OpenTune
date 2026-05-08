@@ -134,8 +134,8 @@ public:
 
         std::function<void(juce::String)> setUndoDescription;
 
-        // Reference note drag support
-        std::function<bool(double, float)> hitTestReferenceNote;  // (time, pitch) -> bool
+        // Reference F0 curve drag support
+        std::function<bool(double, float)> hitTestReferenceF0Curve;  // (time, pitch) -> bool
         std::function<double()> getReferenceTimeOffset;
         std::function<void(double)> setReferenceTimeOffset;
     };

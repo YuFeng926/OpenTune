@@ -987,10 +987,7 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     if (f0Service_) {
         f0Service_->shutdown();
     }
-    if (gameService_) {
-        gameService_->shutdown();
-        gameService_.reset();
-    }
+
 
     AppLogger::shutdown();
 }
@@ -1091,22 +1088,7 @@ bool OpenTuneAudioProcessor::ensureVocoderReady()
         });
 }
 
-bool OpenTuneAudioProcessor::ensureGameServiceReady()
-{
-    if (gameService_ && gameService_->isInitialized()) return true;
 
-    if (!ortEnv_) {
-        Ort::InitApi();
-        ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
-    }
-
-    if (!gameService_) {
-        gameService_ = std::make_unique<GameInferenceService>(ortEnv_);
-    }
-
-    const auto gameModelsDir = ModelPathResolver::getGameModelsDirectory();
-    return gameService_->initialize(gameModelsDir);
-}
 
 void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
 {
@@ -1124,6 +1106,11 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     }
     
     // 2. worker 已停，安全释放推理服务
+    if (mdxNetService_) {
+        mdxNetService_->shutdown();
+        mdxNetService_.reset();
+    }
+
     if (vocoderDomain_) {
         vocoderDomain_->shutdown();
         vocoderDomain_.reset();
@@ -1138,11 +1125,6 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     f0Ready_.store(false);
     f0InitAttempted_.store(false);
     
-    if (gameService_) {
-        gameService_->shutdown();
-        gameService_.reset();
-    }
-    
     // 3. 重置加速检测器并重新检测
     auto& detector = AccelerationDetector::getInstance();
     detector.reset();
@@ -1156,7 +1138,7 @@ bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const Materialization
                                                            F0ExtractionService::Result& out,
                                                            std::string& errorMessage)
 {
-    // Acquire inference gate to prevent concurrent GAME/RMVPE execution
+    // Acquire inference gate to prevent concurrent RMVPE/reference execution
     auto gateLock = inferenceGate_.acquire();
 
     if (!ensureF0Ready()) {
@@ -1183,6 +1165,63 @@ bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const Materialization
     }
 
     return extractOriginalF0ForImportedClip(*f0Service, snap, out, errorMessage);
+}
+
+Result<std::vector<float>> OpenTuneAudioProcessor::extractF0FromBuffer(
+    const juce::AudioBuffer<float>& monoBuffer, int sampleRate)
+{
+    if (!ensureF0Ready())
+        return Result<std::vector<float>>::failure(ErrorCode::NotInitialized, "F0 service not ready");
+
+    return f0Service_->extractF0(
+        monoBuffer.getReadPointer(0),
+        static_cast<size_t>(monoBuffer.getNumSamples()),
+        sampleRate);
+}
+
+Result<std::vector<float>> OpenTuneAudioProcessor::extractVocalsWithMDX(
+    const juce::AudioBuffer<float>& input, int sampleRate)
+{
+    // Lazy-init MDXNet service
+    if (!mdxNetService_) {
+        if (!ortEnv_) {
+            Ort::InitApi();
+            ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
+        }
+        mdxNetService_ = std::make_unique<MDXNetInferenceService>(ortEnv_);
+        const auto modelsDir = ModelPathResolver::getModelsDirectory();
+        if (!mdxNetService_->initialize(modelsDir)) {
+            return Result<std::vector<float>>::failure(ErrorCode::NotInitialized,
+                "MDX-NET model not found: " + modelsDir + "/mdxnet_kara.onnx");
+        }
+    }
+
+    if (!mdxNetService_->isInitialized())
+        return Result<std::vector<float>>::failure(ErrorCode::NotInitialized, "MDX-NET service not initialized");
+
+    const int numSamples = input.getNumSamples();
+    const int numChannels = input.getNumChannels();
+
+    // Pack planar JUCE AudioBuffer to interleaved (MDX service expects interleaved)
+    std::vector<float> interleaved((size_t)numSamples * numChannels);
+    if (numChannels == 1) {
+        std::copy(input.getReadPointer(0), input.getReadPointer(0) + numSamples, interleaved.begin());
+    } else {
+        for (int i = 0; i < numSamples; ++i)
+            for (int ch = 0; ch < numChannels; ++ch)
+                interleaved[(size_t)(i * numChannels + ch)] = input.getReadPointer(ch)[i];
+    }
+
+    auto result = mdxNetService_->extractVocals(
+        interleaved.data(),
+        static_cast<int64_t>(numSamples),
+        sampleRate,
+        numChannels);
+
+    if (result.empty())
+        return Result<std::vector<float>>::failure(ErrorCode::ModelInferenceFailed, "MDX-NET vocal extraction returned empty");
+
+    return Result<std::vector<float>>::success(std::move(result));
 }
 
 // ============================================================================
@@ -3768,9 +3807,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
             if (f0Service_) {
                 f0Service_->releaseIdleModelIfNeeded();
             }
-            if (gameService_) {
-                gameService_->releaseIdleModelIfNeeded();
-            }
+
 
             if (!chunkRenderWorkerRunning_) {
                 return;

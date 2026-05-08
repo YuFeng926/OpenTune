@@ -22,7 +22,6 @@
 #include "Utils/TimeCoordinate.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/VuvBoundaryExtractor.h"
-#include "Inference/GameTypes.h"
 #include <cmath>
 #include <atomic>
 #include <cstdlib>
@@ -1083,6 +1082,8 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
     pianoRoll_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+    pianoRoll_.setReferenceVisualization(visualPreferences.referenceVisualization);
+    parameterPanel_.setReferenceTrackType(static_cast<int>(sharedPreferences.referenceTrackType));
     arrangementView_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
     menuBar_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
@@ -2421,23 +2422,10 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     pianoRoll_.applyAutoTuneToSelection();
 }
 
-void OpenTuneAudioProcessorEditor::autoSnapRequested()
-{
-    if (pianoRoll_.applyAutoSnap()) {
-        AppLogger::info("[Editor] Auto-Snap applied successfully");
-    }
-}
-
-void OpenTuneAudioProcessorEditor::noteDetailChanged(int detail)
-{
-    currentNoteDetail_ = detail;
-}
-
 void OpenTuneAudioProcessorEditor::analyzeReferenceRequested()
 {
-    if (gameAnalysisInProgress_.load()) return;
+    if (referenceAnalysisInProgress_.load()) return;
 
-    // Precondition: must have an active clip in PianoRoll
     const uint64_t matId = lastPianoRollMaterializationId_;
     if (matId == 0) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
@@ -2446,7 +2434,6 @@ void OpenTuneAudioProcessorEditor::analyzeReferenceRequested()
         return;
     }
 
-    // Precondition: OriginalF0 must be ready (RMVPE extraction complete)
     if (processorRef_.getMaterializationOriginalF0StateById(matId) != OriginalF0State::Ready) {
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
             TRANS("Reference Analysis"),
@@ -2454,7 +2441,6 @@ void OpenTuneAudioProcessorEditor::analyzeReferenceRequested()
         return;
     }
 
-    // Open file chooser for reference audio
     auto chooser = std::make_shared<juce::FileChooser>(
         TRANS("Select Reference Audio"),
         juce::File::getSpecialLocation(juce::File::userMusicDirectory),
@@ -2467,82 +2453,65 @@ void OpenTuneAudioProcessorEditor::analyzeReferenceRequested()
             auto results = fc.getResults();
             if (results.isEmpty()) return;
             safeThis->lastReferenceFile_ = results[0];
-            safeThis->runGameAnalysis(matId, results[0]);
+            safeThis->runReferenceAnalysis(matId, results[0],
+                safeThis->appPreferences_.getState().shared.referenceTrackType);
         });
 }
 
 void OpenTuneAudioProcessorEditor::regenerateReferenceRequested()
 {
-    if (gameAnalysisInProgress_.load()) return;
+    if (referenceAnalysisInProgress_.load()) return;
 
     const uint64_t matId = lastPianoRollMaterializationId_;
     if (matId == 0) return;
 
-    // Regenerate uses the same reference audio already loaded — for now just re-analyze the materialization's own audio
-    // TODO: store reference audio path and reload
-    AppLogger::info("[Editor] Regenerate reference: re-running with current detail=" + juce::String(currentNoteDetail_));
-
-    runGameAnalysis(matId, lastReferenceFile_);
+    AppLogger::info("[Editor] Regenerate reference: re-running with current reference file");
+    runReferenceAnalysis(matId, lastReferenceFile_,
+        appPreferences_.getState().shared.referenceTrackType);
 }
 
-void OpenTuneAudioProcessorEditor::runGameAnalysis(uint64_t materializationId, const juce::File& referenceFile)
+void OpenTuneAudioProcessorEditor::referenceTrackTypeChanged(int typeIndex)
 {
-    if (gameAnalysisInProgress_.exchange(true)) return;
+    auto trackType = static_cast<ReferenceTrackType>(typeIndex);
+    appPreferences_.setReferenceTrackType(trackType);
+    syncSharedAppPreferences();
+}
+
+void OpenTuneAudioProcessorEditor::runReferenceAnalysis(uint64_t materializationId,
+                                                          const juce::File& referenceFile,
+                                                          ReferenceTrackType trackType)
+{
+    if (referenceAnalysisInProgress_.exchange(true)) return;
 
     renderBadge_.setMessageText("Analyzing reference...");
     renderBadge_.setVisible(true);
 
-    const int noteDetail = currentNoteDetail_;
-    const bool forceAlign = appPreferences_.getState().shared.forceAlignReferenceStart;
     auto safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this);
 
-    launchBackgroundUiTask([safeThis, matId = materializationId, referenceFile, noteDetail, forceAlign]() {
+    launchBackgroundUiTask([safeThis, matId = materializationId, referenceFile, trackType]() {
         if (safeThis == nullptr) return;
         auto& processor = safeThis->processorRef_;
 
-        // Ensure GAME service ready
-        if (!processor.ensureGameServiceReady()) {
-            AppLogger::error("[Editor] Failed to initialize GAME service");
+        auto resetOnExit = [&safeThis]() {
             juce::MessageManager::callAsync([safeThis]() {
                 if (safeThis == nullptr) return;
-                safeThis->gameAnalysisInProgress_.store(false);
+                safeThis->referenceAnalysisInProgress_.store(false);
                 safeThis->renderBadge_.setVisible(false);
             });
-            return;
-        }
+        };
 
-        // Get VUV boundaries from OriginalF0
+        // 1. Get dry vocal OriginalF0
         auto pitchCurve = processor.getMaterializationPitchCurveById(matId);
-        if (!pitchCurve) {
-            juce::MessageManager::callAsync([safeThis]() {
-                if (safeThis == nullptr) return;
-                safeThis->gameAnalysisInProgress_.store(false);
-                safeThis->renderBadge_.setVisible(false);
-            });
-            return;
-        }
+        if (!pitchCurve) { resetOnExit(); return; }
         auto snapshot = pitchCurve->getSnapshot();
-        const auto& originalF0 = snapshot->getOriginalF0();
-        if (originalF0.empty()) {
-            juce::MessageManager::callAsync([safeThis]() {
-                if (safeThis == nullptr) return;
-                safeThis->gameAnalysisInProgress_.store(false);
-                safeThis->renderBadge_.setVisible(false);
-            });
-            return;
-        }
+        const auto& dryF0 = snapshot->getOriginalF0();
+        if (dryF0.empty()) { resetOnExit(); return; }
 
-        // Extract VUV durations
-        auto segments = VuvBoundaryExtractor::extractSegments(originalF0, 160, 16000);
-        double audioDuration = processor.getMaterializationAudioDurationById(matId);
-        auto knownDurations = VuvBoundaryExtractor::segmentsToDurations(segments, audioDuration);
-
-        // Get reference audio (from file, or self-reference)
-        std::shared_ptr<const juce::AudioBuffer<float>> refAudioBuffer;
-        int refSampleRate = 44100;
+        // 2. Load reference audio
+        std::shared_ptr<juce::AudioBuffer<float>> refAudioBuffer;
+        int refSampleRate = 44100;  // default: project render sample rate (TimeCoordinate::kRenderSampleRate)
 
         if (referenceFile.existsAsFile()) {
-            // Load reference file
             juce::AudioFormatManager formatManager;
             formatManager.registerBasicFormats();
             std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(referenceFile));
@@ -2555,81 +2524,90 @@ void OpenTuneAudioProcessorEditor::runGameAnalysis(uint64_t materializationId, c
         }
 
         if (!refAudioBuffer) {
-            // Self-reference: use materialization's own audio
-            refAudioBuffer = processor.getMaterializationAudioBufferById(matId);
-            refSampleRate = 44100;
+            // Self-reference: materialization audio is always at kRenderSampleRate (44100)
+            auto matBuffer = processor.getMaterializationAudioBufferById(matId);
+            if (matBuffer && matBuffer->getNumSamples() > 0) {
+                refAudioBuffer = std::make_shared<juce::AudioBuffer<float>>(*matBuffer);
+            }
         }
 
         if (!refAudioBuffer || refAudioBuffer->getNumSamples() == 0) {
-            juce::MessageManager::callAsync([safeThis]() {
-                if (safeThis == nullptr) return;
-                safeThis->gameAnalysisInProgress_.store(false);
-                safeThis->renderBadge_.setVisible(false);
-            });
-            return;
+            resetOnExit(); return;
         }
 
-        // Acquire inference gate
-        auto lock = processor.getInferenceGate().acquire();
-
-        // Build config from detail level
-        auto config = GameConfig::fromDetailLevel(noteDetail);
-
-        // Run extraction
-        const float* audioData = refAudioBuffer->getReadPointer(0);
-        const size_t audioLength = static_cast<size_t>(refAudioBuffer->getNumSamples());
-
-        auto result = processor.getGameService()->extractReferenceNotes(
-            audioData, audioLength, refSampleRate, knownDurations, config,
-            [safeThis](float progress) {
-                juce::MessageManager::callAsync([safeThis, progress]() {
-                    if (safeThis == nullptr) return;
-                    safeThis->renderBadge_.setMessageText("Analyzing reference... " + juce::String(static_cast<int>(progress * 100)) + "%");
-                });
+        // 3. For Song track type: MDX-NET vocal separation before RMVPE
+        if (trackType == ReferenceTrackType::Song) {
+            juce::MessageManager::callAsync([safeThis]() {
+                if (safeThis) safeThis->renderBadge_.setMessageText("Separating vocals...");
             });
 
-        // Store results
-        if (result.ok()) {
-            processor.getMaterializationStore()->setReferenceNotes(matId, result.value());
-
-            // Force-align reference start if enabled
-            if (forceAlign) {
-                // Find dry vocal's first voiced time from VUV segments
-                double dryFirstVoicedTime = 0.0;
-                for (const auto& seg : segments) {
-                    if (seg.voiced) {
-                        dryFirstVoicedTime = seg.start;
-                        break;
-                    }
+            std::vector<float> vocalAudio;
+            {
+                auto gateLock = processor.getInferenceGate().acquire();
+                auto result = processor.extractVocalsWithMDX(*refAudioBuffer, refSampleRate);
+                if (!result.ok()) {
+                    AppLogger::error("[Editor] MDX-NET vocal separation failed: " + juce::String(result.error().fullMessage()));
+                    resetOnExit(); return;
                 }
-
-                // Find reference audio's first audible sample
-                double refFirstAudibleTime = 0.0;
-                const float* refData = refAudioBuffer->getReadPointer(0);
-                const int refNumSamples = refAudioBuffer->getNumSamples();
-                for (int i = 0; i < refNumSamples; ++i) {
-                    if (std::abs(refData[i]) > 1.0e-4f) {
-                        refFirstAudibleTime = static_cast<double>(i) / static_cast<double>(refSampleRate);
-                        break;
-                    }
-                }
-
-                const double alignOffset = dryFirstVoicedTime - refFirstAudibleTime;
-                processor.getMaterializationStore()->setReferenceTimeOffset(matId, alignOffset);
-            } else {
-                processor.getMaterializationStore()->setReferenceTimeOffset(matId, 0.0);
+                vocalAudio = std::move(result).value();
             }
 
-            AppLogger::info("[Editor] GAME analysis complete: " + juce::String(static_cast<int>(result.value().size())) + " reference notes");
-        } else {
-            AppLogger::error("[Editor] GAME analysis failed: " + juce::String(result.error().fullMessage()));
+            if (vocalAudio.empty()) { resetOnExit(); return; }
+
+            // Replace refAudioBuffer with separated vocals
+            refAudioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, static_cast<int>(vocalAudio.size()));
+            std::copy(vocalAudio.begin(), vocalAudio.end(), refAudioBuffer->getWritePointer(0));
+            refSampleRate = 44100;  // MDX output is always 44100Hz
         }
 
-        // Update UI
+        // 4. Extract reference F0 via RMVPE (under InferenceGate)
+        juce::MessageManager::callAsync([safeThis]() {
+            if (safeThis) safeThis->renderBadge_.setMessageText("Extracting reference pitch...");
+        });
+
+        std::vector<float> refF0;
+        {
+            auto gateLock = processor.getInferenceGate().acquire();
+            auto result = processor.extractF0FromBuffer(*refAudioBuffer, refSampleRate);
+            if (!result.ok()) {
+                AppLogger::error("[Editor] Reference F0 extraction failed: " + juce::String(result.error().fullMessage()));
+                resetOnExit(); return;
+            }
+            refF0 = std::move(result).value();
+        }
+
+        if (refF0.empty()) { resetOnExit(); return; }
+
+        // 5. Compute VUV offset: align first voiced frames of reference and dry F0
+        auto refAllSegments = VuvBoundaryExtractor::extractSegments(refF0, 160, 16000);
+        auto dryAllSegments = VuvBoundaryExtractor::extractSegments(dryF0, 160, 16000);
+
+        double refFirstVoicedTime = 0.0;
+        double dryFirstVoicedTime = 0.0;
+
+        for (const auto& s : refAllSegments) {
+            if (s.voiced) { refFirstVoicedTime = s.start; break; }
+        }
+        for (const auto& s : dryAllSegments) {
+            if (s.voiced) { dryFirstVoicedTime = s.start; break; }
+        }
+        const double alignOffset = dryFirstVoicedTime - refFirstVoicedTime;
+
+        // 6. Store results (guard against async matId deletion)
+        if (!processor.getMaterializationStore()->setReferenceF0(matId, std::move(refF0), 160, 16000)) {
+            AppLogger::error("[Editor] Reference F0 analysis: store write failed (matId may have been deleted)");
+            resetOnExit(); return;
+        }
+        processor.getMaterializationStore()->setReferenceTimeOffset(matId, alignOffset);
+
+        AppLogger::info("[Editor] Reference F0 analysis complete, alignOffset=" + juce::String(alignOffset, 3) + "s");
+
+        // 7. UI update
         juce::MessageManager::callAsync([safeThis]() {
             if (safeThis == nullptr) return;
-            safeThis->gameAnalysisInProgress_.store(false);
+            safeThis->referenceAnalysisInProgress_.store(false);
             safeThis->renderBadge_.setVisible(false);
+            safeThis->pianoRoll_.refreshReferenceF0Cache();
             safeThis->pianoRoll_.invalidateVisual(
                 static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
         });

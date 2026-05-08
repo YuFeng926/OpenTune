@@ -28,7 +28,6 @@
 #include "Utils/PitchCurve.h"
 #include "Utils/SilentGapDetector.h"
 #include "Utils/SourceWindow.h"
-#include "Inference/GameTypes.h"
 
 namespace OpenTune {
 
@@ -80,8 +79,6 @@ public:
         uint64_t notesRevision{0};
         std::vector<SilentGap> silentGaps;
         uint64_t renderRevision{0};
-        std::vector<ReferenceNote> referenceNotes;
-        uint64_t referenceNotesRevision{0};
     };
 
     // 仅 notes 部分的轻量快照
@@ -148,12 +145,15 @@ public:
     bool getNotesSnapshot(uint64_t materializationId, MaterializationNotesSnapshot& out) const;
     bool setNotes(uint64_t materializationId, std::vector<Note> notes);
 
-    std::vector<ReferenceNote> getReferenceNotes(uint64_t materializationId) const;
-    bool setReferenceNotes(uint64_t materializationId, std::vector<ReferenceNote> notes);
-    uint64_t getReferenceNotesRevision(uint64_t materializationId) const;
+    uint64_t getReferenceF0Revision(uint64_t materializationId) const;
 
     double getReferenceTimeOffset(uint64_t materializationId) const;
     bool setReferenceTimeOffset(uint64_t materializationId, double offsetSeconds);
+
+    std::vector<float> getReferenceF0(uint64_t materializationId) const;
+    bool setReferenceF0(uint64_t materializationId, std::vector<float> f0, int hopSize, int f0SampleRate);
+    int getReferenceF0HopSize(uint64_t materializationId) const;
+    int getReferenceF0SampleRate(uint64_t materializationId) const;
 
     bool setSilentGaps(uint64_t materializationId, std::vector<SilentGap> silentGaps);
     bool replaceAudio(uint64_t materializationId,
@@ -198,9 +198,11 @@ private:
         std::shared_ptr<RenderCache> renderCache;
         std::vector<Note> notes;
         std::vector<SilentGap> silentGaps;
-        std::vector<ReferenceNote> referenceNotes;
-        uint64_t referenceNotesRevision{0};
-        double referenceTimeOffset{0.0};  // seconds, applied to reference notes at render/snap time
+        uint64_t referenceF0Revision{0};
+        double referenceTimeOffset{0.0};  // seconds, used for F0 curve display offset
+        std::vector<float> referenceF0;        // raw F0 curve from reference track RMVPE
+        int referenceF0HopSize{160};
+        int referenceF0SampleRate{16000};
         bool isRetired_{false};
     };
 

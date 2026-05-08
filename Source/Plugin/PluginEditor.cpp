@@ -520,6 +520,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
     pianoRoll_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+    pianoRoll_.setReferenceVisualization(visualPreferences.referenceVisualization);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
     menuBar_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);

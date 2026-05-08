@@ -21,7 +21,6 @@
 #include "Utils/PianoRollVisualPreferences.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/Note.h"
-#include "Inference/GameTypes.h"
 #include "Utils/NoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
 #include "Utils/KeyShortcutConfig.h"
@@ -115,6 +114,8 @@ public:
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowChunkBoundaries(bool shouldShow);
     void setShowUnvoicedFrames(bool shouldShow);
+    void setReferenceVisualization(ReferenceVisualization viz);
+    void refreshReferenceF0Cache();  // force-refresh cached F0 from store (call after analysis completes)
     void setInferenceActive(bool active);
     void setBpm(double bpm);
     void setTimeSignature(int numerator, int denominator);
@@ -192,7 +193,6 @@ public:
 
     bool applyAutoTuneToSelection();
 
-    bool applyAutoSnap();
 
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
@@ -366,6 +366,7 @@ private:
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
     bool showChunkBoundaries_ = false;
     bool showUnvoicedFrames_ = false;
+    ReferenceVisualization referenceVisualization_ = ReferenceVisualization::F0Curve;
     bool showOriginalF0_ = true;
     bool showCorrectedF0_ = true;
     float currentRetuneSpeed_ = PitchControlConfig::kDefaultRetuneSpeedNormalized;
@@ -395,9 +396,11 @@ private:
 
     uint64_t editedMaterializationId_ = 0;
     std::vector<Note> cachedNotes_;
-    std::vector<ReferenceNote> cachedReferenceNotes_;
-    uint64_t cachedReferenceNotesRevision_ = 0;
+    uint64_t cachedReferenceF0Revision_ = 0;
     double cachedReferenceTimeOffset_ = 0.0;
+    std::vector<float> cachedReferenceF0_;
+    int cachedReferenceF0HopSize_ = 160;
+    int cachedReferenceF0SampleRate_ = 16000;
 
     // Undo support
     juce::String pendingUndoDescription_;

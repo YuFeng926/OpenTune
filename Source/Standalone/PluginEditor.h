@@ -117,9 +117,7 @@ public:
     // ParameterPanel::Listener (Reference)
     void analyzeReferenceRequested() override;
     void regenerateReferenceRequested() override;
-    void autoSnapRequested() override;
-    void noteDetailChanged(int detail) override;
-
+    void referenceTrackTypeChanged(int typeIndex) override;
     void pitchCurveEdited(int startFrame, int endFrame) override;
     void escapeKeyPressed() override;
 
@@ -244,11 +242,10 @@ private:
     std::thread exportWorker_;
     std::atomic<bool> exportInProgress_{false};
 
-    // GAME Reference Analysis
-    int currentNoteDetail_ = 5;
-    std::atomic<bool> gameAnalysisInProgress_{false};
+    // Reference Analysis (RMVPE F0 extraction + VUV alignment)
+    std::atomic<bool> referenceAnalysisInProgress_{false};
     juce::File lastReferenceFile_;
-    void runGameAnalysis(uint64_t materializationId, const juce::File& referenceFile);
+    void runReferenceAnalysis(uint64_t materializationId, const juce::File& referenceFile, ReferenceTrackType trackType);
 
     // Detached-safe background tasks (import/deferred post-process)
     std::vector<std::future<void>> backgroundTasks_;

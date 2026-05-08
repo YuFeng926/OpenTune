@@ -1001,44 +1001,72 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     }
 }
 
-void PianoRollRenderer::drawReferenceNotes(juce::Graphics& g, const RenderContext& ctx,
-                                           const std::vector<ReferenceNote>& referenceNotes)
+void PianoRollRenderer::drawReferenceF0Curve(juce::Graphics& g,
+                                              const std::vector<float>& referenceF0,
+                                              int hopSize, int f0SampleRate,
+                                              float alpha,
+                                              const RenderContext& ctx,
+                                              double timeOffset)
 {
-    if (referenceNotes.empty() || !ctx.midiToY || !ctx.timeToX)
-        return;
+    if (referenceF0.empty() || !ctx.midiToY || !ctx.timeToX) return;
 
-    const auto viewportRight = ctx.width;
-    const auto viewportLeft = ctx.pianoKeyWidth;
-    const float noteHeight = ctx.pixelsPerSemitone * 0.8f;
+    const juce::Colour colour = juce::Colour(130, 160, 255).withAlpha(alpha);
+    const double hopDurSec = static_cast<double>(hopSize) / f0SampleRate;
 
-    // Semi-transparent blue/purple for reference notes
-    const auto voicedColour = juce::Colour(130, 160, 255).withAlpha(0.30f);
-    const auto voicedBorder = juce::Colour(130, 160, 255).withAlpha(0.50f);
+    // Build path segments (break at unvoiced frames)
+    std::vector<juce::Path> segments;
+    juce::Path currentPath;
+    bool inSegment = false;
 
-    for (const auto& note : referenceNotes) {
-        if (!note.voiced) continue;
+    const float viewLeft = static_cast<float>(ctx.pianoKeyWidth);
+    const float viewRight = static_cast<float>(ctx.width);
 
-        const int x1 = ctx.timeToX(note.onset);
-        const int x2 = ctx.timeToX(note.offset);
+    for (size_t i = 0; i < referenceF0.size(); ++i) {
+        if (referenceF0[i] <= 0.0f) {
+            if (inSegment) {
+                segments.push_back(std::move(currentPath));
+                currentPath = juce::Path();
+                inSegment = false;
+            }
+            continue;
+        }
 
-        // Cull off-screen notes
-        if (x2 < viewportLeft || x1 > viewportRight) continue;
+        const double materializationTimeSec = static_cast<double>(i) * hopDurSec + timeOffset;
+        const double absoluteTimeSec = ctx.materializationProjection.projectMaterializationTimeToTimeline(materializationTimeSec);
+        const float x = static_cast<float>(ctx.timeToX(absoluteTimeSec));
+        if (x < viewLeft - 20.0f || x > viewRight + 20.0f) {
+            if (inSegment) {
+                segments.push_back(std::move(currentPath));
+                currentPath = juce::Path();
+                inSegment = false;
+            }
+            continue;
+        }
 
-        const float clippedX1 = static_cast<float>(std::max(x1, viewportLeft));
-        const float clippedX2 = static_cast<float>(std::min(x2, viewportRight));
-        const float width = clippedX2 - clippedX1;
-        if (width < 1.0f) continue;
+        const float midi = ctx.freqToMidi(referenceF0[i]);
+        const float y = ctx.midiToY(midi);
 
-        const float centerY = ctx.midiToY(note.midiPitch);
-        const float top = centerY - noteHeight * 0.5f;
+        if (!inSegment) {
+            currentPath.startNewSubPath(x, y);
+            inSegment = true;
+        } else {
+            currentPath.lineTo(x, y);
+        }
+    }
+    if (inSegment) {
+        segments.push_back(std::move(currentPath));
+    }
 
-        // Fill
-        g.setColour(voicedColour);
-        g.fillRoundedRectangle(clippedX1, top, width, noteHeight, 2.0f);
+    // Draw dashed lines
+    g.setColour(colour);
+    const float dashLengths[] = { 6.0f, 4.0f };
+    juce::PathStrokeType strokeType(1.5f, juce::PathStrokeType::curved,
+                                     juce::PathStrokeType::rounded);
 
-        // Border
-        g.setColour(voicedBorder);
-        g.drawRoundedRectangle(clippedX1, top, width, noteHeight, 2.0f, 1.0f);
+    for (auto& path : segments) {
+        juce::Path dashedPath;
+        strokeType.createDashedStroke(dashedPath, path, dashLengths, 2);
+        g.fillPath(dashedPath);
     }
 }
 

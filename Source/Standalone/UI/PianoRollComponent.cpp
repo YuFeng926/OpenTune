@@ -15,7 +15,6 @@
 #include "ToolbarIcons.h"
 #include "../../Utils/AudioEditingScheme.h"
 #include "Utils/PianoKeyAudition.h"
-#include "Inference/GameTypes.h"
 namespace OpenTune {
 
 namespace {
@@ -241,19 +240,25 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.clearLineAnchorSegmentSelection = [this]() { clearLineAnchorSegmentSelection(); };
     toolCtx.setUndoDescription = [this](juce::String desc) { pendingUndoDescription_ = std::move(desc); };
 
-    // Reference note drag support
-    toolCtx.hitTestReferenceNote = [this](double time, float pitch) -> bool {
-        if (cachedReferenceNotes_.empty()) return false;
+    // Reference F0 curve hit-test support
+    toolCtx.hitTestReferenceF0Curve = [this](double time, float pitch) -> bool {
         const double refOffset = cachedReferenceTimeOffset_;
-        const float pitchMidi = 69.0f + 12.0f * std::log2(pitch / 440.0f) - 0.5f;
-        for (const auto& ref : cachedReferenceNotes_) {
-            if (!ref.voiced) continue;
-            const double onset = ref.onset + refOffset;
-            const double offset = ref.offset + refOffset;
-            if (time >= onset && time <= offset && std::abs(pitchMidi - ref.midiPitch) < 1.0f) {
-                return true;
+        const float pitchMidi = 69.0f + 12.0f * std::log2(pitch / 440.0f);
+        if (!cachedReferenceF0_.empty() && cachedReferenceF0HopSize_ > 0 && cachedReferenceF0SampleRate_ > 0) {
+            const double hopDurSec = static_cast<double>(cachedReferenceF0HopSize_) / cachedReferenceF0SampleRate_;
+            const double refTime = time - refOffset;  // convert to reference-local time
+            const int frame = static_cast<int>(refTime / hopDurSec);
+            // Check a small window of frames around the cursor
+            for (int f = std::max(0, frame - 2); f <= std::min(static_cast<int>(cachedReferenceF0_.size()) - 1, frame + 2); ++f) {
+                if (cachedReferenceF0_[f] > 0.0f) {
+                    const float curveMidi = 12.0f * std::log2(cachedReferenceF0_[f] / 440.0f) + 69.0f;
+                    if (std::abs(pitchMidi - curveMidi) < 1.5f) {
+                        return true;
+                    }
+                }
             }
         }
+
         return false;
     };
     toolCtx.getReferenceTimeOffset = [this]() -> double {
@@ -263,6 +268,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.setReferenceTimeOffset = [this](double offset) {
         if (processor_ == nullptr || editedMaterializationId_ == 0) return;
         processor_->getMaterializationStore()->setReferenceTimeOffset(editedMaterializationId_, offset);
+        cachedReferenceTimeOffset_ = offset;  // sync cache immediately to avoid one-frame flicker on mouse-up
     };
 
     return toolCtx;
@@ -1132,24 +1138,22 @@ void PianoRollComponent::paint(juce::Graphics& g) {
 
         renderer_->drawLanes(g, ctx);
 
-        // Draw reference notes layer (below user notes, above lanes)
-        if (!cachedReferenceNotes_.empty()) {
-            // Use live drag offset during active drag, cached offset otherwise
+        // Draw reference layers (below user notes, above lanes)
+        // Reference F0 curve display controlled by ReferenceVisualization preference
+        {
+            const auto refViz = referenceVisualization_;
+            const bool showRefF0 = (refViz == ReferenceVisualization::F0Curve);
+
+            // Compute reference time offset (live drag or cached)
             const double refOffset = interactionState_.referenceDrag.isDragging
                 ? interactionState_.referenceDrag.currentOffset
                 : cachedReferenceTimeOffset_;
-            if (std::abs(refOffset) < 1.0e-9) {
-                renderer_->drawReferenceNotes(g, ctx, cachedReferenceNotes_);
-            } else {
-                std::vector<ReferenceNote> offsetNotes;
-                offsetNotes.reserve(cachedReferenceNotes_.size());
-                for (const auto& note : cachedReferenceNotes_) {
-                    ReferenceNote shifted = note;
-                    shifted.onset  += refOffset;
-                    shifted.offset += refOffset;
-                    offsetNotes.push_back(shifted);
-                }
-                renderer_->drawReferenceNotes(g, ctx, offsetNotes);
+
+            // Draw reference F0 curve (dashed line)
+            if (showRefF0 && !cachedReferenceF0_.empty()) {
+                renderer_->drawReferenceF0Curve(g, cachedReferenceF0_,
+                    cachedReferenceF0HopSize_, cachedReferenceF0SampleRate_,
+                    0.45f, ctx, refOffset);
             }
         }
 
@@ -1745,6 +1749,11 @@ void PianoRollComponent::setEditedMaterialization(uint64_t materializationId,
     const bool hasAudio = (buffer != nullptr);
 
     if (materializationChanged) {
+        // Clear cached reference F0 — different mat may share same revision counter
+        cachedReferenceF0_.clear();
+        cachedReferenceF0Revision_ = 0;
+        cachedReferenceTimeOffset_ = 0.0;
+
         editedMaterializationId_ = materializationId;
         clearNoteDraft();
         refreshEditedMaterializationNotes();
@@ -1894,13 +1903,15 @@ void PianoRollComponent::onHeartbeatTick()
 
     consumeCompletedCorrectionResults();
 
-    // Refresh cached reference notes on revision change (avoids per-frame lock+copy in paint)
+    // Refresh cached reference F0 on revision change (avoids per-frame lock+copy in paint)
     if (processor_ != nullptr && editedMaterializationId_ != 0) {
-        const auto rev = processor_->getMaterializationStore()->getReferenceNotesRevision(editedMaterializationId_);
-        if (rev != cachedReferenceNotesRevision_) {
-            cachedReferenceNotes_ = processor_->getMaterializationStore()->getReferenceNotes(editedMaterializationId_);
+        const auto rev = processor_->getMaterializationStore()->getReferenceF0Revision(editedMaterializationId_);
+        if (rev != cachedReferenceF0Revision_) {
             cachedReferenceTimeOffset_ = processor_->getMaterializationStore()->getReferenceTimeOffset(editedMaterializationId_);
-            cachedReferenceNotesRevision_ = rev;
+            cachedReferenceF0_ = processor_->getMaterializationStore()->getReferenceF0(editedMaterializationId_);
+            cachedReferenceF0HopSize_ = processor_->getMaterializationStore()->getReferenceF0HopSize(editedMaterializationId_);
+            cachedReferenceF0SampleRate_ = processor_->getMaterializationStore()->getReferenceF0SampleRate(editedMaterializationId_);
+            cachedReferenceF0Revision_ = rev;
             invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
         }
     }
@@ -2080,6 +2091,31 @@ void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow)
 
     showUnvoicedFrames_ = shouldShow;
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+}
+
+void PianoRollComponent::setReferenceVisualization(ReferenceVisualization viz)
+{
+    if (referenceVisualization_ == viz) {
+        return;
+    }
+
+    referenceVisualization_ = viz;
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+}
+
+void PianoRollComponent::refreshReferenceF0Cache()
+{
+    // NOTE: reads from the currently edited materialization, which may differ
+    // from the materialization targeted by the background analysis if the user
+    // switched clips mid-analysis. This is intentional — we display reference
+    // F0 for whatever the user is looking at right now.
+    if (processor_ == nullptr || editedMaterializationId_ == 0) return;
+
+    cachedReferenceTimeOffset_ = processor_->getMaterializationStore()->getReferenceTimeOffset(editedMaterializationId_);
+    cachedReferenceF0_ = processor_->getMaterializationStore()->getReferenceF0(editedMaterializationId_);
+    cachedReferenceF0HopSize_ = processor_->getMaterializationStore()->getReferenceF0HopSize(editedMaterializationId_);
+    cachedReferenceF0SampleRate_ = processor_->getMaterializationStore()->getReferenceF0SampleRate(editedMaterializationId_);
+    cachedReferenceF0Revision_ = processor_->getMaterializationStore()->getReferenceF0Revision(editedMaterializationId_);
 }
 
 void PianoRollComponent::setBpm(double bpm) {
@@ -2704,106 +2740,6 @@ bool PianoRollComponent::applyAutoTuneToSelection()
     return true;
 }
 
-bool PianoRollComponent::applyAutoSnap()
-{
-    if (processor_ == nullptr || editedMaterializationId_ == 0 || currentCurve_ == nullptr)
-        return false;
-
-    auto refNotes = processor_->getMaterializationStore()->getReferenceNotes(editedMaterializationId_);
-    if (refNotes.empty()) return false;
-
-    // Apply reference time offset to notes for matching
-    const double refOffset = processor_->getMaterializationStore()->getReferenceTimeOffset(editedMaterializationId_);
-    if (std::abs(refOffset) > 1.0e-9) {
-        for (auto& ref : refNotes) {
-            ref.onset  += refOffset;
-            ref.offset += refOffset;
-        }
-    }
-
-    auto notes = getEditedMaterializationNotesCopy();
-    if (notes.empty()) return false;
-
-    const auto f0tl = currentF0Timeline();
-    if (f0tl.isEmpty()) return false;
-
-    // Capture undo before state
-    captureBeforeUndoSnapshot();
-
-    auto snapshot = currentCurve_->getSnapshot();
-    if (snapshot == nullptr) {
-        undoSnapshotCaptured_ = false;
-        return false;
-    }
-    auto segments = snapshot->getCorrectedSegments();
-    bool anyChanged = false;
-
-    for (auto& note : notes) {
-        // Find best matching reference note (max time overlap)
-        const ReferenceNote* bestRef = nullptr;
-        double bestOverlap = 0.0;
-
-        for (const auto& ref : refNotes) {
-            if (!ref.voiced) continue;
-            const double overlapStart = std::max(note.startTime, ref.onset);
-            const double overlapEnd = std::min(note.endTime, ref.offset);
-            const double overlap = overlapEnd - overlapStart;
-            if (overlap > bestOverlap) {
-                bestOverlap = overlap;
-                bestRef = &ref;
-            }
-        }
-
-        if (bestRef == nullptr) continue;
-
-        // Skip notes with no valid pitch
-        if (note.getAdjustedPitch() <= 0.0f) continue;
-
-        // Compute pitch difference in semitones
-        const float currentMidi = 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) + 69.0f;
-        const float diff = bestRef->midiPitch - currentMidi;
-        if (std::abs(diff) < 0.05f) continue; // Already close enough
-
-        // Snap note pitch to reference
-        note.pitch = 440.0f * std::pow(2.0f, (bestRef->midiPitch - 69.0f) / 12.0f);
-        note.pitchOffset = 0.0f;
-        note.dirty = true;
-        anyChanged = true;
-
-        // Compute note frame range
-        const auto noteRange = f0tl.rangeForTimes(note.startTime, note.endTime);
-        if (noteRange.isEmpty()) continue;
-
-        // Shift CorrectedF0 in this note's frame range
-        const float ratio = std::pow(2.0f, diff / 12.0f);
-        for (auto& seg : segments) {
-            const int overlapStart = std::max(seg.startFrame, noteRange.startFrame);
-            const int overlapEnd = std::min(seg.endFrame, noteRange.endFrameExclusive);
-            if (overlapEnd <= overlapStart) continue;
-
-            const int dataOffset = overlapStart - seg.startFrame;
-            const int dataEnd = overlapEnd - seg.startFrame;
-            for (int i = dataOffset; i < dataEnd && i < static_cast<int>(seg.f0Data.size()); ++i) {
-                if (seg.f0Data[i] > 0.0f) {
-                    seg.f0Data[i] *= ratio;
-                }
-            }
-        }
-    }
-
-    if (!anyChanged) {
-        undoSnapshotCaptured_ = false;
-        return false;
-    }
-
-    // Commit changes (handles undo recording internally)
-    pendingUndoDescription_ = TRANS("Auto-Snap");
-    const bool committed = commitEditedMaterializationNotesAndSegments(notes, segments);
-    if (committed) {
-        invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
-    }
-    return committed;
-}
 
 void PianoRollComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) {
     if (scrollBar == &horizontalScrollBar_) {

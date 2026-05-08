@@ -281,8 +281,6 @@ bool MaterializationStore::getSnapshot(uint64_t materializationId, Materializati
     out.notesRevision = it->second.notesRevision;
     out.silentGaps = it->second.silentGaps;
     out.renderRevision = it->second.renderRevision;
-    out.referenceNotes = it->second.referenceNotes;
-    out.referenceNotesRevision = it->second.referenceNotesRevision;
     return true;
 }
 
@@ -450,35 +448,11 @@ bool MaterializationStore::setNotes(uint64_t materializationId, std::vector<Note
     return true;
 }
 
-std::vector<ReferenceNote> MaterializationStore::getReferenceNotes(uint64_t materializationId) const
+uint64_t MaterializationStore::getReferenceF0Revision(uint64_t materializationId) const
 {
     const juce::ScopedReadLock readLock(lock_);
     const auto it = materializations_.find(materializationId);
-    return it != materializations_.end() ? it->second.referenceNotes : std::vector<ReferenceNote>{};
-}
-
-bool MaterializationStore::setReferenceNotes(uint64_t materializationId, std::vector<ReferenceNote> notes)
-{
-    if (materializationId == 0) {
-        return false;
-    }
-
-    const juce::ScopedWriteLock writeLock(lock_);
-    const auto it = materializations_.find(materializationId);
-    if (it == materializations_.end()) {
-        return false;
-    }
-
-    it->second.referenceNotes = std::move(notes);
-    ++it->second.referenceNotesRevision;
-    return true;
-}
-
-uint64_t MaterializationStore::getReferenceNotesRevision(uint64_t materializationId) const
-{
-    const juce::ScopedReadLock readLock(lock_);
-    const auto it = materializations_.find(materializationId);
-    return it != materializations_.end() ? it->second.referenceNotesRevision : 0;
+    return it != materializations_.end() ? it->second.referenceF0Revision : 0;
 }
 
 double MaterializationStore::getReferenceTimeOffset(uint64_t materializationId) const
@@ -497,8 +471,44 @@ bool MaterializationStore::setReferenceTimeOffset(uint64_t materializationId, do
     if (it == materializations_.end()) return false;
 
     it->second.referenceTimeOffset = offsetSeconds;
-    ++it->second.referenceNotesRevision;  // reuse revision to trigger UI refresh
+    ++it->second.referenceF0Revision;
     return true;
+}
+
+std::vector<float> MaterializationStore::getReferenceF0(uint64_t materializationId) const
+{
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    return it != materializations_.end() ? it->second.referenceF0 : std::vector<float>{};
+}
+
+bool MaterializationStore::setReferenceF0(uint64_t materializationId, std::vector<float> f0, int hopSize, int f0SampleRate)
+{
+    if (materializationId == 0) return false;
+
+    const juce::ScopedWriteLock writeLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end()) return false;
+
+    it->second.referenceF0 = std::move(f0);
+    it->second.referenceF0HopSize = hopSize;
+    it->second.referenceF0SampleRate = f0SampleRate;
+    ++it->second.referenceF0Revision;
+    return true;
+}
+
+int MaterializationStore::getReferenceF0HopSize(uint64_t materializationId) const
+{
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    return it != materializations_.end() ? it->second.referenceF0HopSize : 160;
+}
+
+int MaterializationStore::getReferenceF0SampleRate(uint64_t materializationId) const
+{
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    return it != materializations_.end() ? it->second.referenceF0SampleRate : 16000;
 }
 
 bool MaterializationStore::setSilentGaps(uint64_t materializationId, std::vector<SilentGap> silentGaps)

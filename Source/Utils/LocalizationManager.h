@@ -227,7 +227,15 @@ constexpr const char* kResetToDefaults = "Reset to Defaults";
 constexpr const char* kRenderingPriority = "Rendering Priority";
 constexpr const char* kGpuFirst = "GPU First";
 constexpr const char* kCpuFirst = "CPU First";
-constexpr const char* kForceAlignReferenceStart = "Force Align Reference Start";
+
+constexpr const char* kReferenceVisualization = "Reference Visualization";
+constexpr const char* kRefVizF0CurveOnly = "F0 Curve Only";
+constexpr const char* kRefVizNotesOnly = "Notes Only";
+constexpr const char* kRefVizF0CurveAndNotes = "F0 Curve and Notes";
+constexpr const char* kRefVizOff = "Off";
+constexpr const char* kRefVocals = "Vocals";
+constexpr const char* kRefSong = "Song";
+constexpr const char* kRefTrackType = "Reference Track Type";
 
 constexpr const char* kSetShortcut = "Set Shortcut";
 constexpr const char* kPressNewKeyCombination = "Press the new key combination";
@@ -375,7 +383,15 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kRenderingPriority, "Rendering Priority", "渲染优先级", "レンダリング優先度", "Приоритет рендеринга", "Prioridad de renderizado" },
         { Keys::kGpuFirst, "GPU First", "GPU 优先", "GPU 優先", "GPU приоритет", "GPU primero" },
         { Keys::kCpuFirst, "CPU First", "CPU 优先", "CPU 優先", "CPU приоритет", "CPU primero" },
-        { Keys::kForceAlignReferenceStart, "Force Align Reference Start", "参考音轨强制对齐开头", "リファレンス先頭を強制整列", "Принудительное выравнивание", "Forzar alinear inicio" },
+        
+        { Keys::kReferenceVisualization, "Reference Visualization", "参考音轨可视化", "リファレンス表示", "Визуализация референса", "Visualización de referencia" },
+        { Keys::kRefVizF0CurveOnly, "F0 Curve Only", "仅参考音高曲线", "F0カーブのみ", "Только кривая F0", "Solo curva F0" },
+        { Keys::kRefVizNotesOnly, "Notes Only", "仅参考音符", "ノートのみ", "Только ноты", "Solo notas" },
+        { Keys::kRefVizF0CurveAndNotes, "F0 Curve and Notes", "参考音高曲线和音符", "F0カーブとノート", "Кривая F0 и ноты", "Curva F0 y notas" },
+        { Keys::kRefVizOff, "Off", "关闭参考轨", "オフ", "Выкл", "Desactivado" },
+        { Keys::kRefVocals, "Vocals", "人声", "ボーカル", "Вокал", "Vocales" },
+        { Keys::kRefSong, "Song", "歌曲", "楽曲", "Песня", "Canción" },
+        { Keys::kRefTrackType, "Reference Track Type", "参考轨类型", "参照トラックタイプ", "Тип референса", "Tipo de referencia" },
         
         { Keys::kSetShortcut, "Set Shortcut", "设置快捷键", "ショートカットを設定", "Назначить сочетание", "Atajo" },
         { Keys::kPressNewKeyCombination, "Press the new key combination", "按下新的组合键", "新しいキーの組み合わせを押してください", "Нажмите сочетание", "Pulse combinación" },

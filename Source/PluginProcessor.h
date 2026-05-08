@@ -35,7 +35,8 @@
 #include "DSP/ChromaKeyDetector.h"
 #include "Inference/RenderCache.h"
 #include "Inference/F0InferenceService.h"
-#include "Inference/GameInferenceService.h"
+#include "Inference/MDXNetInferenceService.h"
+
 #include "Utils/InferenceGate.h"
 #include "Inference/VocoderDomain.h"
 #include "Services/F0ExtractionService.h"
@@ -419,8 +420,9 @@ private:
     std::shared_ptr<Ort::Env> ortEnv_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::unique_ptr<F0InferenceService> f0Service_;
+    std::unique_ptr<MDXNetInferenceService> mdxNetService_;
     std::unique_ptr<VocoderDomain> vocoderDomain_;
-    std::unique_ptr<GameInferenceService> gameService_;
+
     InferenceGate inferenceGate_;
     F0ExtractionService materializationRefreshService_{1, 64};
     std::shared_ptr<std::atomic<bool>> materializationRefreshAliveFlag_{std::make_shared<std::atomic<bool>>(true)};
@@ -483,9 +485,17 @@ public:
     bool isInferenceReady() const { return f0Ready_.load(); }
 
     F0InferenceService* getF0Service() const { return f0Service_.get(); }
+
+    /** Extract F0 from an arbitrary mono audio buffer (for reference track analysis).
+     *  Caller must hold InferenceGate. Reuses existing F0 service. */
+    Result<std::vector<float>> extractF0FromBuffer(const juce::AudioBuffer<float>& monoBuffer, int sampleRate);
+
+    /** Extract clean vocals from mixed audio using MDX-NET-KARA ONNX model.
+     *  Caller must hold InferenceGate. Returns mono vocal audio at 44100Hz. */
+    Result<std::vector<float>> extractVocalsWithMDX(const juce::AudioBuffer<float>& input, int sampleRate);
+
     VocoderDomain* getVocoderDomain() const { return vocoderDomain_.get(); }
-    GameInferenceService* getGameService() const { return gameService_.get(); }
-    bool ensureGameServiceReady();
+
     InferenceGate& getInferenceGate() { return inferenceGate_; }
     SourceStore* getSourceStore() noexcept { return sourceStore_.get(); }
     const SourceStore* getSourceStore() const noexcept { return sourceStore_.get(); }
