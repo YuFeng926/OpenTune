@@ -18,7 +18,7 @@ OpenTune 是 AI 自动调音应用，集成 RMVPE F0 提取与 PC-NSF-HiFiGAN �
 
 `v1.4` 已冻结/发布。当前 live tree 进入 **`v1.5 PianoRoll Undo/Redo + Async Correction + Playhead Isolation`** 活跃开发阶段。
 
-截至 2026-05-05 工作区：
+截至 2026-05-17 工作区：
 
 - (v1.4 全部已落地内容继续保持)
 - **自定义 Undo/Redo 系统**：`UndoManager`（cursor-based，500 层上限）+ `PianoRollEditAction`（notes + correctedSegments 双快照对），Processor 持有，双 Editor 共享
@@ -36,7 +36,7 @@ OpenTune 是 AI 自动调音应用，集成 RMVPE F0 提取与 PC-NSF-HiFiGAN �
 - `showUnvoicedFrames` / `noteNameMode` / `showChunkBoundaries` 已收敛为 shared app preferences，并接入 shared preferences page、两套 editor 同步和 PianoRoll 渲染
 - dual-format 仓库下的 mac Standalone bundle metadata / docs 路径已落地到 `OpenTune_Standalone` 边界内，并有 source/build structure smoke guards
 - `UndoAction` / `UndoManager` / `OpenTuneAudioProcessor` / `PianoRollComponent` / Standalone+VST3 editor 当前已进一步收敛到 `materializationId + projection` public contract；`MaterializationRefreshRequest`、`setEditedMaterialization(...)`、`reclaimUnreferencedMaterialization()` / `reclaimUnreferencedSource()` 已替换旧 content-era 命名
-- VST3 ARA published contract 现在已经显式改成 `AppliedMaterializationProjection` + `bindPlaybackRegionToMaterialization()` / `updatePlaybackRegionMaterializationRevisions()` / `clearPlaybackRegionMaterialization()`；`PublishedRegionView` 公开 `sourceId`，`recordRequested()` 默认为当前 region birth 新 materialization，不再复用 previous workspace materialization
+- VST3 ARA published contract 现在已经显式改成 `AppliedMaterializationProjection` + `bindPlaybackRegionToMaterialization()` / `updatePlaybackRegionMaterializationRevisions()` / `clearPlaybackRegionMaterialization()`；`PublishedRegionView` 公开 `sourceId`，`RegionSlot` 记录 `audioModificationPersistentId`，`VST3AraSession` 用 `materializationBindings_` 按 AudioModification persistent ID 绑定 materialization。多个 PlaybackRegion 属于同一 AudioModification 时共享同一 materialization；不同 AudioModification 即使 source window 相同也默认独立 materialization。
 - Standalone `ArrangementViewComponent` 与 `PluginEditor` 当前选择/overlay/main sync 路径已经继续往 `placementIndex + placementId + materializationId` 收口；Piano Roll 当前公开 contract 也已从 `ContentTimelineProjection` / `setEditedContent(...)` 切到 `MaterializationTimelineProjection` / `setEditedMaterialization(...)`
 - `OpenTuneTests` 已覆盖 app preferences、scheme 决策、shared visual preferences、mac Standalone packaging、parameter panel sync、undo result-chain owner guard、compound clip-core delta、scheme-independent replay、undo matrix、ARA renderer block span，以及本 phase 新增的 projection/materialization-owner guards（`PianoRollProjection_ConsumesMaterializationIdAndPlacementProjectionOnly`、`SplitPlacement_PianoRollDisplaysProjectedWindowOnly`、`ContentMetadataUndo_SharedContentDoesNotResolvePlacementByContentId`、`EditingCommand_DoesNotMutatePlacement`、`MaterializationCommands_DoNotMutateTimelinePlacementTruth`、`PlacementCommands_DoNotMutateClipCoreTruth`、`AraSession_SnapshotExposesSourceMaterializationAndPlacementOwnership`、`ProcessorModel_RejectsMixedClipOwnerApis`）
 - Piano Roll 当前已从 content-era 选择协议升级为显式 `MaterializationTimelineProjection` value object；Standalone placement 与 VST3 preferred region 都会把 `timelineStart/timelineDuration/materializationStart/materializationDuration` 完整喂给同一条 UI contract，split trailing placement / partial region 不再按整段 materialization 窗口显示
@@ -45,7 +45,10 @@ OpenTune 是 AI 自动调音应用，集成 RMVPE F0 提取与 PC-NSF-HiFiGAN �
 - 已知 stale deleted-helper 导致的 compile-break baseline 已清掉；`ArrangementViewComponent` / `PianoRollComponent` / `Tests` 当前不再卡在那批已删接口残留上
 - Standalone delete / split / merge / ARA unbind 当前 live-tree 语义已收敛为 `placement -> materialization -> source` 生命周期；`reclaimUnreferencedContent()` 两层回收 public contract 已删除
 - materialization 当前还显式持有 source provenance window + lineage metadata；split 会 birth 两个 child materialization 并继承 / 重写 provenance，merge 只在 source window 连续且 payload 可无损合并时成立
-- 当前自动化验证现实已更新为：`OpenTuneTests.exe processor/ui/architecture` PASS、全量 `OpenTuneTests.exe` PASS、`ctest` PASS、`OpenTune_Standalone` / `OpenTune_VST3` build PASS；这些结果现在覆盖了 materialization-facing public contract、source provenance / lineage 持久化、merge payload preservation、forced ARA source seeding 与 region-local ARA 录音路径，但 L5 手工旅程与 macOS bundle inspection 仍是显式 gap
+- 2026-05-15 ARA multi-region root-cause 修复已落地：ARA default birth 不再按 `sourceId + sourceWindow` 复用 materialization，DocumentController archive hooks 已接入 versioned binding store/restore，VST3 editor 不再用 `araClipImportArmed_` 阻断已绑定 materialization 的 PianoRoll 显示。
+- 2026-05-17 Studio One stopped/pause ARA playback noise 已定位到 realtime renderer 语义：host reports `playing=false` but continues pulling ARA playback at frozen time. Renderer-local silence is implemented before mapping/readback for realtime stopped blocks, non-realtime ARA reads are preserved, and `processBlock(...)` returns `true` to report ARA-handled silence rather than non-ARA fallback. See `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate.md` and `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate-test-verification.md`.
+- 2026-05-17 Studio One track-insert `Read Audio` failure has been traced to a runtime-mode assumption, not ARA sample access failure: an ARA-capable VST3 binary can be instantiated without host ARA binding, so `getDocumentController() == nullptr` is valid regular VST3 mode. REAPER may bind ARA from track FX, Cubase uses an explicit extension workflow, and Live is regular VST3 only. The runtime split is implemented: ARA-bound instances use DocumentController/session/snapshot, while unbound VST3 instances use regular `CaptureSession`. See `.planning/plans/2026-05-17-ara-capable-regular-vst3-runtime-mode.md` and its test verification document.
+- 当前自动化验证现实已更新为：ARA build dir 中 `OpenTuneTests` Release build PASS，`architecture/core/processor/memory/undo` suites PASS，ARA VST3 build PASS，non-ARA VST3 build PASS；`ui` suite 仍有 runner exit=1 且无 `[FAIL]` 文本的待解释问题，不能继续写成 full-suite PASS。Reaper ARA multi-item/project reload L5 手工旅程与 macOS bundle inspection 仍是显式 gap。
 
 ## Current Mainline Goals
 
@@ -153,7 +156,7 @@ OpenTune 是 AI 自动调音应用，集成 RMVPE F0 提取与 PC-NSF-HiFiGAN �
 |----------|-----------|---------|
 | `OpenTuneAudioProcessor` 继续作为组合 `SourceStore + MaterializationStore + StandaloneArrangement + VST3AraSession` 的 runtime shell | source identity、materialization payload、placement、ARA binding 四类真相拥有不同生命周期，不应再混回单体容器 | ✓ Good |
 | VST3 当前产品语义固定为单实例单 active workspace | 当前阶段不做多 source 并行编辑，先把 single-source workspace 语义收紧到唯一正确结构 | ✓ Good |
-| same-source sibling regions 默认不得共享 editable owner；共享的只能是 source provenance 与 hydration 资产 | 用户已明确要求 region-local 编辑彼此隔离；旧 workspace-clip reuse 只剩历史实现价值，不再是目标产品语义 | ✓ Good |
+| ARA editable owner 以 AudioModification persistent ID 为单位，而不是 source/window 或 playback-region 指针 | 官方 ARA 模型中 AudioModification 是持久用户编辑状态，PlaybackRegion 是可重建 projection；同一 AudioModification 的多个 PlaybackRegion 才是显式 alias | ✓ Good |
 | Standalone `commitPreparedImportAsPlacement()` 必须接收显式 `ImportPlacement` | placement 是 UI 语义，不应藏在 processor commit 内部猜测 | ✓ Good |
 | chooser async callback 必须捕获 `SafePointer` | 裸 editor `this` 会重新引入异步生命周期悬空风险 | ✓ Good |
 | 应用级偏好由 `AppPreferences` 统一承载，不进入 processor/project state | app-level preference 与 clip/project truth 生命周期不同；写进 processor state 会污染工程边界 | ✓ Good |
@@ -181,4 +184,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-05 after synchronizing .planning docs with live tree — updated codebase memory docs (STRUCTURE/TESTING/ARCHITECTURE/STACK/INTEGRATIONS/CONVENTIONS/CONCERNS), deleted stale VST3Merge.md, corrected test suite count to 6, removed deleted Host/ and ScaleInference references*
+*Last updated: 2026-05-17 after implementing ARA-capable regular VST3 runtime mode split*

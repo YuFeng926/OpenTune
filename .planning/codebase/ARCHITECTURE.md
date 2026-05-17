@@ -1,6 +1,6 @@
 # Architecture
 
-**Analysis Date:** 2026-05-05
+**Analysis Date:** 2026-05-15
 
 ## Pattern Overview
 
@@ -27,9 +27,10 @@
 
 **Implications:**
 
-- 同一份 source 再次出现于新的 placement / playback region 时，默认必须 birth 新 materialization，而不是共享 editable owner。
+- 同一份 source 再次出现于新的 Standalone placement 或新的 ARA AudioModification 时，默认必须 birth 新 materialization，而不是共享 editable owner。
+- ARA binding unit is `AudioModification persistentID`: multiple PlaybackRegions under one AudioModification intentionally share the same materialization; different AudioModifications with the same source window remain independent.
 - split 默认必须 birth left/right materialization，而不是只改 placement window。
-- ARA sibling regions 只能共享 source hydration 资产，不能共享 editable materialization。
+- ARA PlaybackRegion is placement/projection truth, not persisted edit owner.
 
 ## Current Object Mapping And Role Mismatch
 
@@ -40,7 +41,8 @@
 | `StandaloneArrangement::Placement` | placement + `materializationId` | `Placement` | Landed |
 | `MaterializationTimelineProjection` | 显式 timeline/materialization window 映射 | `Projection` value object | Landed |
 | `VST3AraSession::SourceSlot` | source identity + copied host audio hydration | Source adapter carrier | Mostly right |
-| `VST3AraSession::RegionSlot` | region timing + applied content binding | region-local placement/materialization binding | Currently mixed |
+| `VST3AraSession::RegionSlot` | region timing + `audioModificationPersistentId` + applied materialization projection | playback-region projection over AudioModification-bound materialization | Landed |
+| `VST3AraSession::AraMaterializationBinding` | `audioModificationPersistentId -> materializationId/sourceWindow/revision/duration` | ARA persistent edit binding | Landed |
 | `AppliedMaterializationProjection` | region-local applied owner + projection revision | `AppliedMaterializationProjection` | Landed |
 | `PublishedRegionView` | immutable ARA read model publishing `sourceId + appliedProjection + projection` | `PublishedRegionView` | Landed |
 | `PluginEditor::recordRequested()` / `syncImportedAraClipIfNeeded()` | current region birth + current region refresh | region-local materialization creation/refresh | Landed |
@@ -96,12 +98,14 @@
 - Location: `Source/ARA/VST3AraSession.h`, `Source/ARA/VST3AraSession.cpp`
 - Verified responsibilities:
 - `SourceSlot` stores `ARAAudioSource` identity, copied host audio, sample-access reader leases, and source content revisions.
-- `RegionSlot` stores `RegionIdentity`, source/playback time ranges, `projectionRevision`, and `AppliedMaterializationProjection`.
+- `RegionSlot` stores `RegionIdentity`, `audioModificationPersistentId`, source/playback time ranges, `projectionRevision`, and `AppliedMaterializationProjection`.
+- `AraMaterializationBinding` stores the persistent ARA binding keyed by AudioModification persistent ID.
+- `materializationBindings_` is the session-owned binding table. It is not keyed by transient `ARAPlaybackRegion*` and does not infer aliasing from `sourceId + sourceWindow`.
 - `AppliedMaterializationProjection` stores `sourceId`, `materializationId`, applied materialization/projection revisions, source range, playback start, and the explicit `appliedRegionIdentity`.
 - `PublishedRegionView` and `PublishedSnapshot` are the immutable read models consumed by the VST3 editor and ARA renderer, and now publish `sourceId` explicitly.
 - `bindPlaybackRegionToMaterialization()`, `updatePlaybackRegionMaterializationRevisions()`, and `clearPlaybackRegionMaterialization()` define the visible source/materialization-plus-projection bridge toward the VST3 path.
 - A dedicated hydration worker thread is implemented inside `VST3AraSession.cpp`.
-- 2026-04-21 clarification: the source carrier itself is still useful, but the current region-to-content bridge is no longer considered the correct editable-owner model because sibling regions must not share one editable materialization by default.
+- 2026-05-15 clarification: the source carrier itself is still useful, but editable-owner truth now lives at AudioModification/materialization binding level. Same AudioModification aliases share one materialization by design; sibling PlaybackRegions from different AudioModifications do not.
 
 **ARA Adapter Layer:**
 - Purpose: Bridge ARA host callbacks and host playback requests into `VST3AraSession` and the shared playback read path.
@@ -109,6 +113,7 @@
 - Verified responsibilities:
 - `OpenTuneDocumentController::setProcessor()` stores the processor pointer and resolves the shared `VST3AraSession`.
 - Most document-controller lifecycle callbacks forward directly into the session.
+- `doStoreObjectsToStream()` and `doRestoreObjectsFromStream()` forward versioned ARA binding archive persistence into `VST3AraSession`.
 - `doCreatePlaybackRenderer()` returns `OpenTunePlaybackRenderer`.
 - `OpenTunePlaybackRenderer` maps overlap between host playback blocks and published ARA region spans, then calls `OpenTuneAudioProcessor::readPlaybackAudio()`.
 
@@ -119,8 +124,9 @@
 - Owns arrangement view, track panel, drag-and-drop import, queued background import, preset handling, and placement selection to piano-roll sync.
 - Calls `commitPreparedImportAsPlacement()` with explicit `ImportPlacement` from editor-side workflow.
 - Verified VST3 responsibilities:
-- Owns single-workspace piano-roll flow, host transport requests, ARA read-audio import, and ARA snapshot consumption.
-- `recordRequested()` reads the preferred ARA region, ensures the referenced `SourceStore` owner exists, births a fresh region-local materialization, registers the region-materialization binding, and triggers derived refresh.
+- Owns single-workspace piano-roll focus flow, host transport requests, ARA Read Audio refresh command, and ARA snapshot consumption.
+- `recordRequested()` reads the focused/preferred ARA region, ensures the referenced `SourceStore` owner exists, asks processor/session to birth a materialization if the AudioModification is not already bound, and triggers derived refresh for the bound materialization.
+- Snapshot sync can attach an already-bound renderable materialization without a Read Audio arm/display gate.
 
 **Shared UI Layer:**
 - Purpose: Provide reusable JUCE widgets used by both editor shells.
@@ -163,11 +169,11 @@
 - `enqueueMaterializationPartialRenderById()` leads to `MaterializationStore::enqueuePartialRender()`, which stores hop-aligned pending jobs.
 - `chunkRenderWorkerLoop()` consumes pending jobs, submits vocoder work through `VocoderDomain`, and writes completion back into `RenderCache`.
 
-**VST3 Read Audio -> Region-Local Materialization Binding -> Piano Roll Sync:**
+**VST3 ARA Binding -> Focused Read Audio -> Piano Roll Sync:**
 - `PluginUI::OpenTuneAudioProcessorEditor::recordRequested()` loads the current `VST3AraSession::PublishedSnapshot`.
-- It resolves the preferred `PublishedRegionView`, seeds the missing `SourceStore` owner if needed, preprocesses copied ARA audio, and births a fresh materialization using the existing `sourceId` of that ARA source.
-- The editor calls `VST3AraSession::bindPlaybackRegionToMaterialization()` with `materializationId`, projection revision, source range, and playback start.
-- The editor then syncs the piano roll and requests derived refresh for the bound materialization.
+- It resolves the focused/preferred `PublishedRegionView`, seeds the missing `SourceStore` owner if needed, and ensures that the region's parent AudioModification has a bound materialization.
+- `VST3AraSession` stores the binding by AudioModification persistent ID and projects it through each PlaybackRegion's current `RegionSlot`.
+- The editor then syncs the piano roll and requests derived refresh for the bound materialization. Existing renderable bindings can sync without re-running Read Audio.
 
 **VST3 ARA Playback -> Published Region -> Shared Read Path:**
 - `OpenTuneDocumentController` forwards host edits and sample-access lifecycle into `VST3AraSession`.
@@ -180,6 +186,11 @@
 - It serializes `Contents` and `StandaloneArrangement` as separate child trees, rather than one mixed placement-content container.
 - Only content IDs referenced by current Standalone placements or current VST3 published bindings are added to `Contents`.
 - `setStateInformation()` restores content-local metadata into already-existing content entries, then restores Standalone arrangement state if placement records are valid.
+
+**ARA Binding Archive Persistence:**
+- `OpenTuneDocumentController::doStoreObjectsToStream()` writes session-owned binding archive data.
+- `OpenTuneDocumentController::doRestoreObjectsFromStream()` restores binding records before the host recreates playback regions.
+- `VST3AraSession` remaps AudioModification persistent IDs through the ARA restore filter when provided, then later re-applies restored bindings to recreated `RegionSlot` projections.
 
 ## Ownership Boundaries
 
@@ -196,7 +207,7 @@
 - Does not own: audio buffers, pitch data, ARA host objects.
 
 **`VST3AraSession`:**
-- Owns: ARA source slots, region slots, preferred region, copied host audio hydration, region-to-materialization binding snapshots.
+- Owns: ARA source slots, region slots, preferred region, copied host audio hydration, AudioModification persistentID -> materialization binding table, and immutable region snapshots.
 - Does not own: materialization-local edit payload or Standalone track arrangement.
 
 **`OpenTuneAudioProcessor`:**
@@ -286,4 +297,4 @@ These bullets now describe the updated target naming after the 2026-04-21 clarif
 
 ---
 
-*Architecture analysis: 2026-05-05*
+*Architecture analysis: 2026-05-15*

@@ -249,6 +249,7 @@ public:
                           std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
                           double sampleRate);
 
+#if JucePlugin_Enable_ARA
     struct AraRegionMaterializationBirthResult {
         uint64_t sourceId{0};
         uint64_t materializationId{0};
@@ -263,6 +264,7 @@ public:
         double copiedAudioSampleRate,
         const SourceWindow& sourceWindow,
         double playbackStartSeconds);
+#endif
 
     bool movePlacementToTrack(int sourceTrackId,
                               int targetTrackId,
@@ -394,9 +396,9 @@ private:
     std::shared_ptr<MaterializationStore> materializationStore_;
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
 
-    // VST3 non-ARA capture session (runtime-isolated to wrapperType_VST3, see spec REQ 14).
-    // nullptr in Standalone instances and in VST3 instances bound to ARA — both paths
-    // continue to use the original processBlock fallback.
+    // Regular VST3 capture state. ARA-capable builds still create this for
+    // unbound insert instances; access is suppressed after the instance binds to ARA.
+    // nullptr in Standalone instances and in VST3 instances bound to ARA.
     std::unique_ptr<Capture::CaptureSession> captureSession_;
 
     // Transport control
@@ -485,9 +487,9 @@ public:
     MaterializationStore* getMaterializationStore() noexcept { return materializationStore_.get(); }
     const MaterializationStore* getMaterializationStore() const noexcept { return materializationStore_.get(); }
 
-    /** Returns the VST3 non-ARA capture session, or nullptr in Standalone / pre-VST3 contexts. */
-    Capture::CaptureSession* getCaptureSession() noexcept { return captureSession_.get(); }
-    const Capture::CaptureSession* getCaptureSession() const noexcept { return captureSession_.get(); }
+    /** Returns the regular VST3 capture session, or nullptr outside regular VST3 mode. */
+    Capture::CaptureSession* getCaptureSession() noexcept;
+    const Capture::CaptureSession* getCaptureSession() const noexcept;
     StandaloneArrangement* getStandaloneArrangement() noexcept { return standaloneArrangement_.get(); }
     const StandaloneArrangement* getStandaloneArrangement() const noexcept { return standaloneArrangement_.get(); }
 

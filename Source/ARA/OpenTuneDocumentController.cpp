@@ -125,15 +125,13 @@ void OpenTuneDocumentController::willDestroyAudioSource(juce::ARAAudioSource* au
 bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream& input,
                                                             const juce::ARARestoreObjectsFilter* filter)
 {
-    juce::ignoreUnused(input, filter);
-    return true;
+    return session_->restoreMaterializationBindings(input, filter);
 }
 
 bool OpenTuneDocumentController::doStoreObjectsToStream(juce::ARAOutputStream& output,
                                                         const juce::ARAStoreObjectsFilter* filter)
 {
-    juce::ignoreUnused(output, filter);
-    return true;
+    return session_->storeMaterializationBindings(output, filter);
 }
 
 juce::ARAPlaybackRenderer* OpenTuneDocumentController::doCreatePlaybackRenderer()

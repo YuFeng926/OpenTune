@@ -10,6 +10,8 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -149,6 +151,7 @@ public:
     struct RegionSlot
     {
         RegionIdentity identity;
+        juce::String audioModificationPersistentId;
         AppliedMaterializationProjection appliedProjection;
         double playbackStartSeconds{0.0};
         double playbackEndSeconds{0.0};
@@ -159,6 +162,24 @@ public:
         bool isValid() const noexcept
         {
             return identity.isValid() && playbackEndSeconds > playbackStartSeconds && sourceWindow.isValid();
+        }
+    };
+
+    struct AraMaterializationBinding
+    {
+        juce::String audioModificationPersistentId;
+        uint64_t sourceId{0};
+        uint64_t materializationId{0};
+        SourceWindow sourceWindow;
+        uint64_t materializationRevision{0};
+        double materializationDurationSeconds{0.0};
+
+        bool isValid() const noexcept
+        {
+            return audioModificationPersistentId.isNotEmpty()
+                && sourceId != 0
+                && materializationId != 0
+                && sourceWindow.isValid();
         }
     };
 
@@ -264,6 +285,12 @@ public:
                                               uint64_t materializationRevision,
                                               uint64_t projectionRevision);
     void clearPlaybackRegionMaterialization(juce::ARAPlaybackRegion* playbackRegion);
+    std::vector<AraMaterializationBinding> exportMaterializationBindings() const;
+    void replaceMaterializationBindings(std::vector<AraMaterializationBinding> bindings);
+    bool storeMaterializationBindings(juce::OutputStream& output,
+                                      const juce::ARAStoreObjectsFilter* filter) const;
+    bool restoreMaterializationBindings(juce::InputStream& input,
+                                        const juce::ARARestoreObjectsFilter* filter);
 
     void setProcessor(OpenTuneAudioProcessor* processor) noexcept;
 
@@ -274,6 +301,7 @@ private:
 
     using SourceMap = std::map<juce::ARAAudioSource*, SourceSlot>;
     using RegionMap = std::map<juce::ARAPlaybackRegion*, RegionSlot>;
+    using BindingMap = std::map<juce::String, AraMaterializationBinding>;
 
     SourceSlot* findSourceSlot(juce::ARAAudioSource* audioSource);
     const SourceSlot* findSourceSlot(juce::ARAAudioSource* audioSource) const;
@@ -295,6 +323,10 @@ private:
     void bumpRegionProjectionRevisionLocked(juce::ARAPlaybackRegion* playbackRegion);
     bool updateRegionProjectionFromPlaybackRegionLocked(RegionSlot& regionSlot,
                                                         const juce::ARAPlaybackRegion* playbackRegion);
+    juce::String copyAudioModificationPersistentId(juce::ARAAudioModification* audioModification) const;
+    bool applyBindingToRegionSlotLocked(RegionSlot& regionSlot);
+    void applyBindingsToRegionSlotsLocked();
+    void upsertMaterializationBindingLocked(const AraMaterializationBinding& binding);
     bool removePlaybackRegionFromStateLocked(juce::ARAPlaybackRegion* playbackRegion);
     bool removeAudioSourceFromStateLocked(juce::ARAAudioSource* audioSource);
     void updatePreferredRegionLocked(const RegionIdentity& regionIdentity);
@@ -304,6 +336,7 @@ private:
     mutable std::mutex stateMutex_;
     SourceMap sources_;
     RegionMap regions_;
+    BindingMap materializationBindings_;
     RegionIdentity preferredRegion_;
     SnapshotHandle publishedSnapshot_;
     int editingDepth_{0};

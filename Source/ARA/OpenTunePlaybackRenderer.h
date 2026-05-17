@@ -19,6 +19,9 @@ std::optional<RenderBlockSpan> computeRegionBlockRenderSpan(double blockStartSec
                                                             double playbackStartSeconds,
                                                             double playbackEndSeconds) noexcept;
 
+bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
+                                  const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept;
+
 class OpenTuneDocumentController;
 
 class OpenTunePlaybackRenderer : public juce::ARAPlaybackRenderer

@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 status: active
-stopped_at: v1.5 活跃开发 + .planning 文档同步完成
-last_updated: "2026-05-05"
-last_activity: 2026-05-05 -- Synchronized .planning docs with live tree. Updated all codebase memory docs (STRUCTURE/TESTING/ARCHITECTURE/STACK/INTEGRATIONS/CONVENTIONS/CONCERNS) to reflect current source state. Deleted stale VST3Merge.md. Corrected test suite count from 4 to 6 (added undo, memory). Removed deleted Host/ directory and ScaleInference references. Updated shipped milestone to v1.4.
+stopped_at: v1.5 active development + ARA-capable regular VST3 runtime split implemented
+last_updated: "2026-05-17"
+last_activity: 2026-05-17 -- Implemented ARA-capable VST3 runtime split so unbound regular insert instances use CaptureSession while ARA-bound instances keep DocumentController/session/snapshot paths.
 progress:
   total_phases: 0
   completed_phases: 0
@@ -18,10 +18,10 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` and `.planning/REQUIREMENTS.md` (updated 2026-05-05)
+See: `.planning/PROJECT.md` and `.planning/REQUIREMENTS.md` (updated 2026-05-17)
 
 **Core value:** 双格式独立编译，零交叉影响
-**Current focus:** `v1.5` PianoRoll 编辑体验增强 — 自定义 Undo/Redo、异步修正工作器、播放头独立组件、渲染状态徽章
+**Current focus:** `v1.5` PianoRoll 编辑体验增强 + VST3 ARA multi-region binding 收口
 **Test Strategy:** `OpenTuneTests` 轻量 smoke suites + manual DAW journeys + `AppLogger` / targeted trace
 
 ## Current Position
@@ -38,14 +38,14 @@ Plan sources:
 - 2026-05-02 GPU/CPU 推理后端重构（删除 DmlRuntimeVerifier、简化 AccelerationDetector、DML1 API）
 
 Status: Active development
-Last activity: 2026-05-05 -- Synchronized .planning docs with live tree; all codebase memory docs updated
+Last activity: 2026-05-17 -- Implemented ARA-capable regular VST3 runtime mode split after Studio One track-insert Read Audio failure.
 
 ## Performance Metrics
 
 - Last shipped milestone: `v1.4` (Source/Materialization/Placement persisted truth — frozen, considered shipped)
 - Active milestone: `v1.5` PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 - Current workspace: active development
-- Verification: 三目标（OpenTuneTests/Standalone/VST3）构建全部 PASS
+- Verification: ARA `OpenTuneTests` Release build PASS; `architecture/core/processor/memory/undo` suites PASS; ARA VST3 build PASS; non-ARA VST3 build PASS. `ui` suite currently exits 1 after a PASS line and no `[FAIL]` text, so full-suite PASS must not be claimed.
 
 ## Accumulated Context
 
@@ -72,6 +72,8 @@ Last activity: 2026-05-05 -- Synchronized .planning docs with live tree; all cod
 - 2026-04-23 (Task 10)：`PlacementSplitAction.undo/redo` 现在持 `SplitOutcome`（trackId + originalPlacementId/MaterializationId + leadingPlacementId/MaterializationId + trailingPlacementId/MaterializationId），undo 走 retire/revive 切换而不是重跑 mergeStandaloneSplit。Task 11 将基于此扩 PlacementMergeAction / PlacementDeleteAction。
 - 2026-04-23 (Task 10 verify)：OpenTuneTests CMake target 现在显式定义 `JucePlugin_Build_Standalone=1 / JucePlugin_Build_VST3=0`。这是硬约束 — 与 SharedCode .lib 编译开关必须对齐，否则 `#if !JucePlugin_Build_Standalone` 守护的 `hostTransportSnapshot_` 等成员会让测试 TU 看到的 `OpenTuneAudioProcessor` 类布局比真实对象多 64 字节，导致 ODR 违规与字段偏移静默错位。
 
+- 2026-05-15 (VST3 ARA multi-region binding)：按官方 ARA owner 模型收口 — `AudioSource` 只对应 source/provenance，`AudioModification persistentID` 对应持久 editable materialization binding，`PlaybackRegion` 只对应 projection。`VST3AraSession::RegionSlot` 保存 `audioModificationPersistentId`，`materializationBindings_` 保存 persistentID -> materialization binding；同一 AudioModification 的多个 PlaybackRegion 共享 materialization，不同 AudioModification 即使 sourceWindow 相同也默认独立。`OpenTuneDocumentController` archive hooks 转发 versioned binding store/restore；VST3 editor 不再用 `araClipImportArmed_` 作为已绑定 materialization 的显示门。L5 Reaper 多 item/保存恢复仍待手工验证。
+
 - 2026-04-24 (Task 12 F6)：VST3 PluginEditor.cpp 4 处 command-path silent-return 改为 `AppLogger::log("InvariantViolation: ...")` + `jassertfalse`。涉及 `syncImportedAraClipIfNeeded` 的 prepareImport 失败和 null buffer，以及 `pitchCurveEdited` 的 no-materialization 和 null-curve。新增 architecture guard 测试。
 - 2026-04-24 (Task 12 scope)：F3 (SourceStore hydration 迁移) 经评估为高风险（hydration worker 跨 store 锁序问题），标记为后续独立 Task 需专门锁序设计。F5 (reclaim registry 统一) 评估为低价值（sweep 里只有 15 行 `#if`），标记为可选后续 Task。
 
@@ -93,9 +95,15 @@ Last activity: 2026-05-05 -- Synchronized .planning docs with live tree; all cod
 - 2026-05-01 (Memory optimization)：F0 模型用完释放（extractF0 完成后自动 shutdown，下次调用 re-initialize）；F0 与 Vocoder 共享单个 `std::shared_ptr<Ort::Env>`；所有推理 session 统一 `DisableCpuMemArena()` + `OrtDeviceAllocator`。预计节省 ~500-900MB 常驻内存。
 - 2026-05-02 (Backend restructure)：删除 `DmlRuntimeVerifier`（512行整文件）和 AccelerationDetector 中的 DLL 大小检测(12MB)、VRAM 阈值(512MB)、`getRecommendedGpuMemoryLimit()` 等启发式检查层。DML 可用性改为 `Ort::GetApi().GetExecutionProviderApi("DML")` 直接查询 ORT 编译时注册。DmlVocoder 从 DML2 API（Preference+Filter 隐式选 GPU）改为 DML1 API（`SessionOptionsAppendExecutionProvider_DML(adapterIndex)` 显式绑定 DXGI adapter）。VocoderFactory DML 创建失败 catch 块新增 `overrideBackend(CPU)` 确保检测状态与实际后端一致。RMVPEExtractor preflight 从 GPU/CPU 双分支（73行）简化为纯系统内存路径（18行），因 F0 始终 CPU。detect() 调用移到 ensureOnnxRuntimeLoaded() 之后，防止 ORT DLL 延迟加载未就绪时误判 DML 不可用。
 
+- 2026-05-17 (Studio One ARA stopped playback gate): Studio One logs show `HostTransportSnapshot: playing=false time=80.000000` immediately followed by repeated ARA playback renderer mappings at the same playback/materialization sample (`mappedLocalSampleForLog=3528000`). This confirms Studio One can pull realtime ARA playback while transport is stopped or paused. `OpenTunePlaybackRenderer` now silences realtime stopped blocks before region mapping/readback while preserving non-realtime ARA reads. The gate clears output and returns `true` from `processBlock(...)` to express ARA-handled silence rather than non-ARA fallback. Plan source: `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate.md`; verification source: `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate-test-verification.md`.
+- 2026-05-17 (ARA-capable regular VST3 runtime split): Studio One short failure logs for track-insert `Read Audio` contain ctor/prepare only and no `DocumentController created` / `didBindToARA`, proving the failing instance is regular VST3 mode. Cubase uses explicit ARA extension workflows rather than plain channel inserts, REAPER can bind ARA from track FX when enabled, and Live should be treated as regular VST3 only. Implemented fix: ARA builds also create regular `CaptureSession`, expose/use it only when `!isBoundToARA()`, keep ARA-bound instances on DocumentController/session/snapshot, and log `recordRequested mode=ara-bound|regular-vst3 processor=... dc=...`. Plan source: `.planning/plans/2026-05-17-ara-capable-regular-vst3-runtime-mode.md`; verification source: `.planning/plans/2026-05-17-ara-capable-regular-vst3-runtime-mode-test-verification.md`.
+
 ### Pending Todos
 
 - 持续把 `.planning` 与 live tree 保持同步。
+- Request user confirmation for Studio One / REAPER / Cubase / Live L5 journeys after installing the rebuilt VST3.
+- 补 Reaper ARA multi-item/project reload L5 验证，确认 persistentID binding 在真实 host 中不再表现为 last-item-only 或重开丢失。
+- 解释并修复 `OpenTuneTests.exe ui` exit=1/no `[FAIL]` text 的 runner 现象，然后才能恢复 full-suite PASS 口径。
 - **后续独立 Task（非阻塞）**：F3 SourceStore hydration 迁移（需锁序设计）、F5 reclaim registry 双格式统一（可选）。
 - 在合适时机补 Standalone / VST3 undo result-chain 的手工旅程确认。
 - 在有 macOS 环境时补一轮真实 `.app` bundle inspection。
@@ -107,7 +115,7 @@ Last activity: 2026-05-05 -- Synchronized .planning docs with live tree; all cod
 
 ## Session Continuity
 
-Last session: 2026-05-05
-Stopped at: .planning 文档全量同步完成；三目标构建通过；40/40+ 测试 PASS
+Last session: 2026-05-17
+Stopped at: ARA-capable regular VST3 runtime split implemented; host L5 pending
 Resume file: N/A
-Next step: 继续 v1.5 PianoRoll 编辑功能集成；补充 Undo/Redo 边界测试
+Next step: Install/reload the rebuilt VST3 and confirm Studio One track insert uses `mode=regular-vst3`, while ARA workflows log `mode=ara-bound`.

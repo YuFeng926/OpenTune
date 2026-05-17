@@ -87,15 +87,6 @@ juce::String buildRenderingOverlayTitle(int completedTasks, int totalTasks, floa
         + juce::String(totalTasks) + ")";
 }
 
-MaterializationTimelineProjection makePianoRollLocalProjection(const VST3AraSession::PublishedRegionView& region)
-{
-    MaterializationTimelineProjection projection;
-    projection.timelineStartSeconds = region.playbackStartSeconds;
-    projection.timelineDurationSeconds = region.materializationDurationSeconds;
-    projection.materializationDurationSeconds = region.materializationDurationSeconds;
-    return projection;
-}
-
 AudioDiffRange detectAudioDiffRange(const juce::AudioBuffer<float>& oldBuffer,
                                     const juce::AudioBuffer<float>& newBuffer)
 {
@@ -196,6 +187,15 @@ bool prepareImportFromAraRegion(OpenTuneAudioProcessor& processor,
 }
 
 #if JucePlugin_Enable_ARA
+MaterializationTimelineProjection makePianoRollLocalProjection(const VST3AraSession::PublishedRegionView& region)
+{
+    MaterializationTimelineProjection projection;
+    projection.timelineStartSeconds = region.playbackStartSeconds;
+    projection.timelineDurationSeconds = region.materializationDurationSeconds;
+    projection.materializationDurationSeconds = region.materializationDurationSeconds;
+    return projection;
+}
+
 const VST3AraSession::PublishedRegionView* resolvePreferredAraRegionView(
     const VST3AraSession::PublishedSnapshot& snapshot)
 {
@@ -393,11 +393,18 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // run reclaim sweep). No-op when capture session is null (Standalone / VST3+ARA).
     if (auto* session = processorRef_.getCaptureSession()) {
         session->tick();
-        // Reflect "currently recording" as a sticky toggle on the record button so the
-        // user gets explicit visual feedback that capture is in progress.
-        const bool isCapturingNow =
-            session->getGlobalState() == OpenTune::Capture::SessionState::HasCapturing;
-        transportBar_.setRecordIndicatorActive(isCapturingNow);
+        // Drive record button visual state from capture session state:
+        //   HasCapturing → Capturing (toggled + enabled)
+        //   HasProcessing → Processing (disabled to prevent re-trigger)
+        //   Idle → Idle (normal appearance)
+        using OpenTune::Capture::SessionState;
+        const auto captureState = session->getGlobalState();
+        if (captureState == SessionState::HasCapturing)
+            transportBar_.setRecordButtonState(OpenTune::RecordButtonState::Capturing);
+        else if (captureState == SessionState::HasProcessing)
+            transportBar_.setRecordButtonState(OpenTune::RecordButtonState::Processing);
+        else
+            transportBar_.setRecordButtonState(OpenTune::RecordButtonState::Idle);
     }
 
     const double currentPositionSeconds = processorRef_.getPosition();
@@ -936,41 +943,42 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
 
 void OpenTuneAudioProcessorEditor::recordRequested()
 {
+    if (auto* session = processorRef_.getCaptureSession()) {
+        AppLogger::log("VST3 recordRequested mode=regular-vst3 processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(&processorRef_)));
+        using OpenTune::Capture::SessionState;
+        switch (session->getGlobalState()) {
+            case SessionState::Idle:
+                session->armNewCapture();
+                AppLogger::log("VST3 Capture: armNewCapture (regular-vst3 path)");
+                break;
+            case SessionState::HasCapturing:
+                session->stopCapture();
+                AppLogger::log("VST3 Capture: stopCapture (regular-vst3 path)");
+                break;
+            case SessionState::HasProcessing:
+                AppLogger::log("VST3 Capture: ignored (Processing - wait for render)");
+                break;
+        }
+        return;
+    }
+
 #if !JucePlugin_Enable_ARA
     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                            "Read Audio",
-                                           "ARA is not available in current build.");
+                                           "This VST3 instance is not ready for audio capture or ARA reading.");
     return;
 #else
-    araClipImportArmed_ = true;
     auto* dc = processorRef_.getDocumentController();
     if (dc == nullptr) {
-        // Non-ARA VST3 context: dispatch to capture session (Melodyne Transfer-style flow)
-        // instead of failing with an alert. Empty session → arm a new capture; capturing →
-        // stop and submit; processing → ignore (button is disabled in tooltip update).
-        if (auto* session = processorRef_.getCaptureSession()) {
-            using OpenTune::Capture::SessionState;
-            switch (session->getGlobalState()) {
-                case SessionState::Idle:
-                    session->armNewCapture();
-                    AppLogger::log("VST3 Capture: armNewCapture (non-ARA path)");
-                    break;
-                case SessionState::HasCapturing:
-                    session->stopCapture();
-                    AppLogger::log("VST3 Capture: stopCapture (non-ARA path)");
-                    break;
-                case SessionState::HasProcessing:
-                    AppLogger::log("VST3 Capture: ignored (Processing — wait for render)");
-                    break;
-            }
-            return;
-        }
-        // True fallback: no capture session and no ARA — show original error.
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                "Read Audio",
-                                               "Unable to access VST3 ARA DocumentController.");
+                                               "This VST3 instance is not ready for audio capture or ARA reading.");
         return;
     }
+    AppLogger::log("VST3 recordRequested mode=ara-bound processor="
+        + juce::String::toHexString(reinterpret_cast<uintptr_t>(&processorRef_))
+        + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc)));
     auto* session = dc->getSession();
     if (session == nullptr) {
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
@@ -1296,7 +1304,10 @@ void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
         return;
     }
 #endif
-    processorRef_.setPosition(timeSeconds);
+    // Non-ARA VST3: playhead is host-controlled only. Do NOT call setPosition() —
+    // the host would ignore it and the next processBlock would overwrite the value.
+    // PianoRoll click/drag on timeline should not change plugin-internal position.
+    juce::ignoreUnused(timeSeconds);
 }
 
 void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
@@ -1414,18 +1425,7 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
     uint64_t materializationId = 0;
     MaterializationTimelineProjection projection;
 
-    const MaterializationSource source =
-        resolveCurrentMaterializationProjection(materializationId, projection);
-
-    // ARA path requires explicit user arm (Read Audio click) before we attach the
-    // detected materialization to PianoRoll. Capture path bypasses this — each
-    // Edited segment IS the user's explicit capture, no separate arm needed.
-    if (source == MaterializationSource::Ara && !araClipImportArmed_) {
-        pianoRoll_.setMaterializationProjection({});
-        pianoRoll_.setEditedMaterialization(0, nullptr, nullptr,
-            static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
-        return;
-    }
+    resolveCurrentMaterializationProjection(materializationId, projection);
 
     if (materializationId == 0) {
         pianoRoll_.setMaterializationProjection({});

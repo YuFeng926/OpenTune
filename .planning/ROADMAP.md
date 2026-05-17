@@ -44,9 +44,16 @@
   - Both Standalone/VST3 Editors expose `undoRequested()`/`redoRequested()` callbacks through processor
   - ONNX Runtime memory optimization: F0 model release-after-use, shared Ort::Env, DisableCpuMemArena (~500-900MB saving)
   - GPU/CPU inference backend restructure: deleted DmlRuntimeVerifier, AccelerationDetector simplified to ORT API probe, DmlVocoder DML2→DML1, VocoderFactory overrideBackend, RMVPEExtractor unified CPU preflight, DirectML 1.15.4 vendored deployment fix
+  - VST3 ARA multi-region binding repair: `AudioModification persistentID -> materializationId` binding table in `VST3AraSession`, source/window reuse removed from ARA default birth, ARA archive hooks wired, existing renderable binding display no longer depends on Read Audio arm state
+  - Studio One stopped/pause ARA playback gate implemented: realtime stopped blocks clear output before mapping/readback and `processBlock(...)` returns ARA-handled silence (`true`), with plan and verification source under `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate*.md`
+  - Studio One normal track-insert `Read Audio` failure implemented as a runtime-mode split: ARA-capable VST3 instances are ARA-bound only after host `bindToDocumentController*()`, otherwise they are regular VST3 and use `CaptureSession`.
 - Still open on this line:
+  - Validate ARA-bound vs regular VST3 runtime split in Studio One track insert, Studio One ARA workflow, REAPER ARA track FX, Cubase extension workflow, and Live VST3 insert
+  - Validate Studio One pause/stop/play behavior with the rebuilt ARA VST3
   - Undo/Redo 边界测试（空栈、redo 裁剪、500 层溢出）
   - CorrectionWorker 取消/覆盖并发语义验证
+  - `OpenTuneTests.exe ui` runner exit=1/no `[FAIL]` text needs explanation before claiming full-suite PASS
+  - Reaper ARA multi-item/project reload L5 journey remains pending
   - L5 manual journeys 和 macOS bundle inspection 继续 deferred
 - Next planning action:
   - 确认构建通过后补充自动化测试
@@ -67,10 +74,12 @@
 
 ## Active Convergence Scope
 
+- **Studio One ARA stopped gate:** renderer-local realtime stopped-state silence is implemented; non-realtime ARA reads are preserved; Studio One pause/stop/play L5 behavior remains pending.
+- **ARA-capable regular VST3 mode:** implemented runtime split so unbound ARA-capable VST3 instances use regular capture instead of reporting missing `DocumentController`; host L5 remains pending.
 - **Done (v1.5):** Custom UndoManager + PianoRollEditAction, PianoRollCorrectionWorker async worker, PlayheadOverlayComponent isolation, RenderBadgeComponent, F0Timeline finalized, Line Anchor tool, Vibrato per-note control, Continuous scroll mode, ONNX Runtime memory optimization, GPU/CPU inference backend restructure
-- **Open:** 三目标构建验证、Undo 边界测试、CorrectionWorker 并发验证
+- **Open:** ARA-bound/regular VST3 host L5 validation, Undo 边界测试、CorrectionWorker 并发验证、UI suite exit-code investigation、Reaper ARA multi-item L5 validation
 - **Deferred:** L5 manual journeys, macOS bundle inspection, F3/F5 follow-up tasks
 
 ---
-*Roadmap updated: 2026-05-05 after .planning docs synchronization with live tree*
+*Roadmap updated: 2026-05-17 after implementing ARA-capable regular VST3 runtime mode split*
 *Current state: `v1.4` shipped/frozen; `v1.5` is active milestone*

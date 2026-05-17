@@ -38,6 +38,9 @@
 - [ ] **MAIN-23**: Standalone playback 与 VST3 ARA mapping 必须按 placement projection 把 timeline block 映射到 materialization-local audio/time；不得继续使用 `AudioSource -> shared content -> sibling reuse` 这类混合 owner 读法
 - [ ] **MAIN-24**: delete/reclaim 流程必须从“placement -> materialization -> source”三层生命周期重写；`reclaimUnreferencedContent()` 这类两层回收逻辑不再足够表达产品真相
 - [ ] **MAIN-25**: 现有 `OpenTuneTests` 的 L1-L4/L6 绿灯只证明旧 `Content/Placement` 假设下的一部分结构守护仍成立；official planning 必须把它明确记成 partial evidence，而不是 owner-model PASS。L5 手工旅程与 macOS bundle inspection 继续显式保留为未完成 gap
+- [x] **MAIN-26**: VST3 ARA editable owner 必须按 AudioModification persistent ID 绑定 materialization；同一 AudioModification 的多个 PlaybackRegion 共享一个 materialization，新的 AudioModification 即使 source window 相同也默认独立 materialization。binding table 必须由 ARA session/document archive 持久化，不得由 editor preferred-region 或 transient PlaybackRegion 指针拥有。
+- [x] **MAIN-27**: VST3 ARA playback renderer 在 realtime host block 且 transport `isPlaying=false` 时必须输出静音并停止 region mapping/readback；非实时 ARA reads/export/materialization access 不得因此被静音。实现已采用 ARA-handled silence return semantics（gate 分支 `buffer.clear()` 后 `processBlock(...)` 返回 `true`，不请求 non-ARA fallback）。Studio One pause/stop/play 行为仍保留为 L5 验证项，不能只凭 REAPER 行为推断。
+- [x] **MAIN-28**: ARA-capable VST3 binary 必须按运行时绑定状态分流，而不能把 `JucePlugin_Enable_ARA` 等同于 ARA-bound instance。`isBoundToARA() == true` 时继续只走 ARA `DocumentController` / `VST3AraSession` / immutable snapshot；未绑定但作为 VST3 insert 运行时必须启用 regular `CaptureSession`。`recordRequested()` 和 `processBlock()` 必须先判运行时 mode：有 DC 走 ARA Read Audio / focused-region refresh，无 DC 但有 capture session 走普通轨道录音读取，两者都没有才提示当前实例不可读取。实现已让 ARA build 也创建 regular capture state，并通过 `getCaptureSession()` 在 ARA-bound 后隐藏；Studio One / REAPER / Cubase / Live host L5 仍需用户确认。
 
 ## Out of Scope
 
@@ -75,6 +78,10 @@
 | `docs/plans/2026-04-21-content-placement-boundary-repair.md` | 在旧 owner 假设下做的边界修复计划；需按 materialization-local 语义重新解释 |
 | `docs/plans/2026-04-21-content-placement-boundary-repair-test-verification.md` | 边界修复验证口径；仍有参考价值，但不再单独证明 owner model 正确 |
 | `docs/plans/2026-04-21-source-materialization-placement-projection-clarification.md` | 当前唯一正确的 owner-model 澄清：`Source + Materialization + Placement` persisted truth，`Projection` 为 derived contract |
+| `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate.md` | Studio One stopped/pause ARA playback noise root cause and renderer-local fix plan |
+| `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate-test-verification.md` | ARA stopped-state render gate automated and manual verification contract |
+| `.planning/plans/2026-05-17-ara-capable-regular-vst3-runtime-mode.md` | Runtime split plan for ARA-capable VST3 instances loaded without ARA binding in Studio One/Live/regular insert contexts |
+| `.planning/plans/2026-05-17-ara-capable-regular-vst3-runtime-mode-test-verification.md` | Verification source for ARA-bound versus regular VST3 runtime mode split |
 | `.planning/codebase/TESTING.md` | 当前 live tree 的 smoke tests、人工验证方式与日志调试口径 |
 
 ## Notes
@@ -83,8 +90,8 @@
 - 当前 active mainline 的 live-tree reality 已包含 2026-04-18 app preferences refactor、2026-04-19 landed 的 scheme-managed voiced-only 行为 / shared visual preferences / Standalone-only mac bundle packaging cleanup / undo result-chain 实现，以及 2026-04-20 启动的 `Content/Placement` owner-cleanup 尝试；但 2026-04-21 的用户澄清已经说明：`ContentStore` 这层 live-tree reality 更接近 materialization owner，而不是最终想要共享的 source/content owner。
 - 当前主线仍不把队友仓库的 `tracks_` 单体模型、mutable note ref、curve-bound undo、standalone-only build 假设当成回流目标；只迁移其中与当前 owner 边界兼容、且符合 fixed-scheme + shared-preference 合约的正确部分。
 - 当前 phase 的完整验证仍未结束：旧 `Content/Placement` phase 自己的 L1-L4/L6 已按旧 verification source 重新执行并 PASS，但这不再等价于 owner-model PASS；现在新的 `Source/Materialization/Placement` guards 也已覆盖 source provenance / lineage、structured merge rejection、merge payload preservation 与 ARA source owner seeding，并重新执行通过。剩余未完成项只剩 L5 Standalone/VST3 手工旅程与 macOS bundle inspection。
-- 2026-04-21 reality 补充：ARA session / renderer / VST3 editor 当前公开 contract 已进一步收口到 `AppliedMaterializationProjection` + `bindPlaybackRegionToMaterialization()`；`PublishedRegionView` 已公开 `sourceId`，`recordRequested()` 默认为当前 region birth 新 materialization，不再复用 previous workspace materialization，并会在首次导入前显式 seed 缺失的 `SourceStore` owner。processor refresh / undo / reclaim side 也已切到 `MaterializationRefreshRequest`、materialization-facing getter/setter、`reclaimUnreferencedMaterialization()` / `reclaimUnreferencedSource()`；Piano Roll 当前公开 contract 已切到 `MaterializationTimelineProjection` + `setEditedMaterialization(...)`；split / merge / state serialization 现在都会保留 materialization 的 source provenance window 与 lineage metadata。
+- 2026-05-15 reality 补充：ARA session / renderer / VST3 editor 当前公开 contract 已进一步收口到 `AppliedMaterializationProjection` + `bindPlaybackRegionToMaterialization()`；`PublishedRegionView` 已公开 `sourceId`，`RegionSlot` 保存 `audioModificationPersistentId`，session 用 `materializationBindings_` 按 AudioModification persistent ID 绑定 materialization。`recordRequested()` 仍是 focused-region refresh/ensure command，但不再是多 region 播放真相 owner；processor refresh / undo / reclaim side 也已切到 `MaterializationRefreshRequest`、materialization-facing getter/setter、`reclaimUnreferencedMaterialization()` / `reclaimUnreferencedSource()`；Piano Roll 当前公开 contract 已切到 `MaterializationTimelineProjection` + `setEditedMaterialization(...)`；split / merge / state serialization 现在都会保留 materialization 的 source provenance window 与 lineage metadata。
 
 ---
 *Requirements defined: 2026-04-20*
-*Last updated: 2026-05-05 after synchronizing .planning docs with live tree*
+*Last updated: 2026-05-17 after implementing ARA-capable regular VST3 runtime mode split*

@@ -94,6 +94,14 @@ private:
     juce::String tooltip_;
 };
 
+/** Record button visual states for non-ARA VST3 capture workflow. */
+enum class RecordButtonState
+{
+    Idle = 0,
+    Capturing,
+    Processing
+};
+
 class TransportBarComponent : public juce::Component
 {
 public:
@@ -145,10 +153,11 @@ public:
     void setLoopEnabled(bool enabled);
     bool isLoopEnabled() const;
 
-    /** Set the record button's sticky toggle state (lit while VST3 capture session
-     *  is in HasCapturing). The button uses UnifiedToolbarButton's toggleState path
-     *  for visual feedback; pure cosmetic, does not change click semantics. */
-    void setRecordIndicatorActive(bool active);
+    /** Set record button visual state for non-ARA VST3 capture workflow.
+     *  Idle: normal appearance, enabled
+     *  Capturing: toggled/active with record accent
+     *  Processing: disabled to prevent re-triggering during render */
+    void setRecordButtonState(RecordButtonState state);
 
     void setBpm(double bpm);
     double getBpm() const;

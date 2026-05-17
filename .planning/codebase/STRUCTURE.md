@@ -1,6 +1,6 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-05-05
+**Analysis Date:** 2026-05-15
 
 ## Directory Layout
 
@@ -15,7 +15,8 @@
 |-- Source/                     # production C++ source tree
 |-- Tests/                      # native smoke and architecture tests
 |-- ThirdParty/                 # vendored ARA, ONNX, DirectML, and other dependencies
-|-- build-debug/                # generated build tree
+|-- build-ara-overlay-vs18-clean/     # generated ARA VS/MSBuild build tree
+|-- build-nonara-overlay-vs18-clean/  # generated non-ARA VS/MSBuild build tree
 `-- CMakeLists.txt              # shared build definition for app, plugin, and tests
 ```
 
@@ -36,9 +37,13 @@
 - Contains `docs/plans/` and `docs/UserGuide.html`.
 - `docs/UserGuide.html` is copied into Standalone outputs by `CMakeLists.txt`.
 
-**`build-debug/`:**
-- Generated build output tree.
-- Contains Visual Studio projects, test logs, and built artifacts for Standalone, VST3, and tests.
+**Build directories:**
+- Current local VS/MSBuild build trees are relative to the repository root.
+- ARA builds use `build-ara-overlay-vs18-clean/`.
+- Non-ARA builds use `build-nonara-overlay-vs18-clean/`.
+- These directories contain generated Visual Studio projects, test logs, and built artifacts for Standalone, VST3, and tests; they are not source-owned live state.
+- On Windows, use the MSBuild PATH workaround when invoking CMake builds from Codex/desktop shells:
+  `cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build <build-dir> --config Release --target <target>"`
 
 ## Production Source Tree
 
@@ -68,7 +73,7 @@
 **`Source/ARA/`:**
 - VST3 ARA adapter and session state.
 - Files: `OpenTuneDocumentController.*`, `OpenTunePlaybackRenderer.*`, `VST3AraSession.*`.
-- Boundary: host callbacks, published region snapshots, source hydration, and ARA playback rendering.
+- Boundary: host callbacks, published region snapshots, source hydration, AudioModification persistentID -> materialization bindings, ARA archive binding persistence, and ARA playback rendering.
 
 **`Source/Audio/`:**
 - Import-time audio helpers.
@@ -145,6 +150,7 @@
 **Shared ARA sources still compiled from the shared target:**
 - `Source/ARA/OpenTuneDocumentController.*`, `Source/ARA/OpenTunePlaybackRenderer.*`, `Source/ARA/VST3AraSession.*` are attached via `target_sources(OpenTune PRIVATE ...)`.
 - Usage is still gated by build flags and source-level `#if` branches.
+- ARA materialization binding state lives under `Source/ARA/VST3AraSession.*`; VST3 editor may request focused refresh, but it must not own binding persistence or infer aliasing from source/window equality.
 
 ## Key File Locations
 
@@ -161,7 +167,7 @@
 - `Source/SourceStore.cpp`: source identity and provenance truth.
 - `Source/MaterializationStore.cpp`: materialization payload truth.
 - `Source/StandaloneArrangement.cpp`: placement and track truth.
-- `Source/ARA/VST3AraSession.cpp`: ARA source/region/binding truth.
+- `Source/ARA/VST3AraSession.cpp`: ARA source/region/AudioModification persistentID binding truth.
 
 **ARA Bridge:**
 - `Source/ARA/OpenTuneDocumentController.cpp`: host callback bridge.
@@ -227,6 +233,7 @@
 
 **VST3 ARA source, region, or binding state:**
 - Put it in `Source/ARA/VST3AraSession.*`.
+- Persisted ARA binding archive hooks belong in `Source/ARA/OpenTuneDocumentController.*` and must delegate to session-owned binding state.
 
 **Reusable UI widget:**
 - Put it in `Source/Standalone/UI/` or `Source/Standalone/UI/PianoRoll/`.
@@ -254,4 +261,4 @@
 
 ---
 
-*Structure analysis: 2026-05-05*
+*Structure analysis: 2026-05-15*

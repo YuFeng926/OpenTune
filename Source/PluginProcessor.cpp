@@ -866,9 +866,8 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 
     resamplingManager_ = std::make_shared<ResamplingManager>();
 
-    // Capture session: only instantiated when host is VST3 (runtime isolation,
-    // see spec REQ 14). Standalone / VST3+ARA instances leave captureSession_
-    // as nullptr and the original processBlock paths run unchanged.
+    // Capture session: regular VST3 runtime mode. ARA-capable VST3 builds also
+    // need this when the host loads the binary as an unbound insert instance.
     if (wrapperType == juce::AudioProcessor::wrapperType_VST3) {
         Capture::ProcessorBindings bindings;
 
@@ -953,11 +952,21 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
         };
 
         captureSession_ = std::make_unique<Capture::CaptureSession>(std::move(bindings));
-        AppLogger::log("OpenTuneAudioProcessor: VST3 capture session created");
+        AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
     }
 }
 
 OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
+    AppLogger::log("OpenTuneAudioProcessor: dtor processor="
+        + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+#if JucePlugin_Enable_ARA
+        + " araBound=" + juce::String(isBoundToARA() ? "true" : "false")
+#else
+        + " araBound=false"
+#endif
+    );
+
     // Detach ARA back-pointer so DocumentController no longer calls into this processor.
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
@@ -1244,8 +1253,8 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 #endif
     pianoKeyAudition_.loadSamples();
 
-    if (captureSession_ != nullptr)
-        captureSession_->prepareToPlay(sampleRate, samplesPerBlock, getMainBusNumInputChannels());
+    if (auto* captureSession = getCaptureSession())
+        captureSession->prepareToPlay(sampleRate, samplesPerBlock, getMainBusNumInputChannels());
 }
 
 void OpenTuneAudioProcessor::releaseResources() {
@@ -1255,8 +1264,26 @@ void OpenTuneAudioProcessor::releaseResources() {
     releaseResourcesForARA();
 #endif
 
-    if (captureSession_ != nullptr)
-        captureSession_->releaseResources();
+    if (auto* captureSession = getCaptureSession())
+        captureSession->releaseResources();
+}
+
+Capture::CaptureSession* OpenTuneAudioProcessor::getCaptureSession() noexcept
+{
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+        return nullptr;
+#endif
+    return captureSession_.get();
+}
+
+const Capture::CaptureSession* OpenTuneAudioProcessor::getCaptureSession() const noexcept
+{
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+        return nullptr;
+#endif
+    return captureSession_.get();
 }
 
 #if JucePlugin_Enable_ARA
@@ -1290,7 +1317,9 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
 
         dc->setProcessor(this);
         AppLogger::log("ARA: didBindToARA - attached shared stores"
-            " sourceStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(sourceStore_.get()))
+            " processor=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+            + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc))
+            + " sourceStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(sourceStore_.get()))
             + " materializationStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(materializationStore_.get())));
     }
 }
@@ -1375,17 +1404,18 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    if (processBlockForARA(buffer, isRealtime(), getPlayHead())) {
-        pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
-        return;
+    if (isBoundToARA()) {
+        if (processBlockForARA(buffer, isRealtime(), getPlayHead())) {
+            pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+            return;
+        }
     }
 #endif
 
-    // VST3 non-ARA capture path: dry pass-through unless an Edited segment claims this host_t,
-    // recording the dry input into the active Capturing segment if any.
-    // captureSession_ is only non-null when getWrapperType() == wrapperType_VST3 (per ctor),
-    // so this branch is naturally inert in Standalone instances.
-    if (captureSession_ != nullptr) {
+    // Regular VST3 capture path: dry pass-through unless an Edited segment claims
+    // this host_t, recording the dry input into the active Capturing segment if any.
+    // ARA-capable builds reach this path only while the instance is not ARA-bound.
+    if (auto* captureSession = getCaptureSession()) {
         double host_t = 0.0;
         bool isPlayingNow = false;
         if (auto* hostPlayHead = getPlayHead()) {
@@ -1423,7 +1453,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 + "," + juce::String(ch0[juce::jmin(64, numSamples - 1)], 4));
         }
 
-        captureSession_->processBlock(buffer, host_t, getSampleRate(), isPlayingNow);
+        captureSession->processBlock(buffer, host_t, getSampleRate(), isPlayingNow);
         pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
         return;
     }
@@ -1886,8 +1916,8 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
     // Capture-flow materializations live only inside captureSession_ (no placement),
     // but their full snapshot — audio + pitchCurve + notes + detectedKey — must
     // round-trip. Union them into the standard state set.
-    if (captureSession_ != nullptr) {
-        for (const auto& info : captureSession_->listSegments()) {
+    if (const auto* captureSession = getCaptureSession()) {
+        for (const auto& info : captureSession->listSegments()) {
             if (info.materializationId != 0) {
                 appendUniqueMaterializationId(serializedMaterializationIds, info.materializationId);
             }
@@ -2011,11 +2041,10 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
         }
     }
 
-    // Append capture session data (VST3 non-ARA persistence) at end of stream.
-    // Old projects (no captureSession_) write nothing; setStateInformation
-    // tolerates missing capture section.
-    if (captureSession_ != nullptr) {
-        const auto captureBlock = captureSession_->serialize();
+    // Append regular VST3 capture data at end of stream. ARA-bound instances keep
+    // their edit state in the ARA document/session archive instead.
+    if (const auto* captureSession = getCaptureSession()) {
+        const auto captureBlock = captureSession->serialize();
         if (captureBlock.getSize() > 0)
             output.write(captureBlock.getData(), captureBlock.getSize());
     }
@@ -2192,19 +2221,18 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
 
     standaloneArrangement_->setActiveTrack(restoredActiveTrackId);
 
-    // After project state is restored, attempt to load capture session payload from
-    // remaining bytes (VST3 non-ARA persistence). Old projects have no trailing capture
-    // section; deserialize() returns false and the session stays empty.
-    if (captureSession_ != nullptr) {
+    // After project state is restored, attempt to load regular VST3 capture payload
+    // from remaining bytes. ARA-bound instances keep their state in the ARA archive.
+    if (auto* captureSession = getCaptureSession()) {
         const auto remaining = static_cast<int>(input.getNumBytesRemaining());
         if (remaining > 0) {
             juce::MemoryBlock captureBlock;
             captureBlock.setSize(static_cast<size_t>(remaining));
             input.read(captureBlock.getData(), remaining);
-            const bool ok = captureSession_->deserialize(captureBlock);
+            const bool ok = captureSession->deserialize(captureBlock);
             if (ok)
                 AppLogger::log("CaptureSession: state restored ("
-                               + juce::String(captureSession_->listSegments().size()) + " segments)");
+                               + juce::String(captureSession->listSegments().size()) + " segments)");
         }
     }
 }
@@ -3169,6 +3197,7 @@ uint64_t OpenTuneAudioProcessor::commitPreparedImportAsMaterialization(PreparedI
     return ensureSourceAndCreateMaterialization(std::move(prepared), sourceId, createdSource);
 }
 
+#if JucePlugin_Enable_ARA
 std::optional<OpenTuneAudioProcessor::AraRegionMaterializationBirthResult>
 OpenTuneAudioProcessor::ensureAraRegionMaterialization(
     juce::ARAAudioSource* audioSource,
@@ -3179,21 +3208,6 @@ OpenTuneAudioProcessor::ensureAraRegionMaterialization(
     double playbackStartSeconds)
 {
     juce::ignoreUnused(playbackStartSeconds);
-
-    // Shared store: reuse existing materialization for same source+window
-    {
-        const auto existingId = materializationStore_->findMaterializationBySourceWindow(sourceId, sourceWindow);
-        if (existingId != 0) {
-            AraRegionMaterializationBirthResult result;
-            result.sourceId = sourceId;
-            result.materializationId = existingId;
-            result.materializationRevision = 0;
-            result.materializationDurationSeconds = getMaterializationAudioDurationById(existingId);
-            AppLogger::log("ARA auto-birth: reuse existing materializationId="
-                + juce::String(static_cast<juce::int64>(existingId)));
-            return result;
-        }
-    }
 
     if (audioSource == nullptr || copiedAudio == nullptr || copiedAudio->getNumSamples() <= 0 || sourceId == 0)
         return std::nullopt;
@@ -3246,6 +3260,7 @@ OpenTuneAudioProcessor::ensureAraRegionMaterialization(
 
     return result;
 }
+#endif
 
 bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioProcessor::MaterializationRefreshRequest& request)
 {

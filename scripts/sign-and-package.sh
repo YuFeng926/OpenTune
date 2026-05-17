@@ -16,7 +16,7 @@
 # Prerequisites:
 #   - Xcode command line tools installed
 #   - Valid Developer ID certificate in keychain
-#   - Release build completed: cmake --build build-arm64 --config Release
+#   - Release build completed: cmake --build "${OPENTUNE_BUILD_DIR:-build-arm64}" --config Release
 # ==============================================================================
 
 set -euo pipefail
@@ -27,9 +27,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BUILD_DIR="${OPENTUNE_BUILD_DIR:-build-arm64}"
 
-APP_BUNDLE="$PROJECT_ROOT/build-arm64/OpenTune_artefacts/Release/Standalone/OpenTune.app"
-VST3_BUNDLE="$PROJECT_ROOT/build-arm64/OpenTune_artefacts/Release/VST3/OpenTune.vst3"
+APP_BUNDLE="$PROJECT_ROOT/$BUILD_DIR/OpenTune_artefacts/Release/Standalone/OpenTune.app"
+VST3_BUNDLE="$PROJECT_ROOT/$BUILD_DIR/OpenTune_artefacts/Release/VST3/OpenTune.vst3"
 ENTITLEMENTS="$PROJECT_ROOT/Resources/macOS/OpenTune.entitlements"
 DYLIB_NAME="libonnxruntime.1.24.4.dylib"
 
@@ -107,6 +108,7 @@ else
     echo "Developer ID: $DEVELOPER_ID"
 fi
 echo "Notarize:     $([ "$SKIP_NOTARIZE" = true ] && echo "SKIP" || echo "YES")"
+echo "Build Dir:    $BUILD_DIR"
 echo "App Bundle:   $APP_BUNDLE"
 echo "VST3 Bundle:  $VST3_BUNDLE"
 echo "DMG Output:   $DMG_OUTPUT"
@@ -116,7 +118,7 @@ echo ""
 # Verify app bundle exists
 if [ ! -d "$APP_BUNDLE" ]; then
     echo "Error: App bundle not found at $APP_BUNDLE"
-    echo "Run 'cmake --build build-arm64 --config Release' first."
+    echo "Run 'cmake --build \"$BUILD_DIR\" --config Release' first."
     exit 1
 fi
 
@@ -166,7 +168,7 @@ if [ "$INCLUDE_VST3" = true ]; then
     echo "  VST3 bundle OK"
 else
     echo "  VST3 bundle not present — building Standalone-only DMG"
-    echo "  (To include VST3: cmake --build build-arm64 --config Release --target OpenTune_VST3)"
+    echo "  (To include VST3: cmake --build \"$BUILD_DIR\" --config Release --target OpenTune_VST3)"
 fi
 
 # ==============================================================================
