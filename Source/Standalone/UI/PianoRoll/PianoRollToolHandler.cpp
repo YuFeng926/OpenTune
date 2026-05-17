@@ -213,6 +213,14 @@ PianoRollToolHandler::PianoRollToolHandler(Context context)
     : ctx_(std::move(context))
 {}
 
+void PianoRollToolHandler::setTool(ToolId tool)
+{
+    if (currentTool_ != tool) {
+        cancelActiveMouseGesture();
+    }
+    currentTool_ = tool;
+}
+
 void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
 // 鼠标移动处理：更新光标形状（音符边缘调整、线锚点预览）
 {
@@ -262,6 +270,7 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
 void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
 {
     ctx_.grabKeyboardFocus();
+    ctx_.getState().emptySpaceIntent.clear();
 
     if (e.mods.isPopupMenu()) {
         if (currentTool_ == ToolId::LineAnchor && ctx_.getState().drawing.isPlacingAnchors) {
@@ -290,11 +299,9 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
 
     dragStartPos_ = e.getPosition();
 
-    if (e.x > ctx_.getPianoKeyWidth()) {
-        double clickedTime = ctx_.xToTime(e.x);
-        if (clickedTime >= 0) {
-            ctx_.notifyPlayheadChange(clickedTime);
-        }
+    if (isEmptySpaceMouseDown(e)) {
+        beginEmptySpaceIntent(e);
+        return;
     }
 
     switch (currentTool_) {
@@ -321,6 +328,10 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
 
 void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
 {
+    if (consumeEmptySpaceIntentDrag(e)) {
+        return;
+    }
+
     switch (currentTool_) {
         case ToolId::Select:
             handleSelectDrag(e);
@@ -351,6 +362,10 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
 
 void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
 {
+    if (consumeEmptySpaceIntentUp(e)) {
+        return;
+    }
+
     if (ctx_.getState().selection.hasSelectionArea) {
         double timeDelta = std::abs(ctx_.getState().selection.selectionEndTime - ctx_.getState().selection.selectionStartTime);
         float midiDelta = std::abs(ctx_.getState().selection.selectionEndMidi - ctx_.getState().selection.selectionStartMidi);
@@ -465,6 +480,175 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
     }
 
     return false;
+}
+
+bool PianoRollToolHandler::isEmptySpaceMouseDown(const juce::MouseEvent& e)
+{
+    if (e.x <= ctx_.getPianoKeyWidth()) {
+        return false;
+    }
+
+    if (hitsNoteBodyOrResizeEdge(e)) {
+        return false;
+    }
+
+    if (currentTool_ == ToolId::LineAnchor && hitsLineAnchorSegment(e)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool PianoRollToolHandler::hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e)
+{
+    const auto projection = ctx_.getMaterializationProjection();
+    double time = ctx_.projectTimelineTimeToMaterialization(ctx_.xToTime(e.x));
+    if (projection.isValid()) {
+        time = projection.clampMaterializationTime(time);
+    }
+
+    if (time < 0.0) {
+        return false;
+    }
+
+    const float clickedPitch = ctx_.yToFreq(static_cast<float>(e.y));
+    const float mouseMidi = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
+    constexpr int edgeThreshold = 6;
+
+    for (const auto& note : displayNotes(ctx_)) {
+        const float noteMidi = 69.0f + 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) - 0.5f;
+        if (std::abs(mouseMidi - noteMidi) >= 1.0f) {
+            continue;
+        }
+
+        const int x1 = ctx_.timeToX(ctx_.projectMaterializationTimeToTimeline(note.startTime));
+        const int x2 = ctx_.timeToX(ctx_.projectMaterializationTimeToTimeline(note.endTime));
+        const bool insideBody = e.x >= x1 && e.x <= x2;
+        const bool nearEdge = std::abs(e.x - x1) <= edgeThreshold || std::abs(e.x - x2) <= edgeThreshold;
+        if (insideBody || nearEdge) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool PianoRollToolHandler::hitsLineAnchorSegment(const juce::MouseEvent& e)
+{
+    if (!AudioEditingScheme::allowsLineAnchorSegmentSelection(ctx_.getAudioEditingScheme())) {
+        return false;
+    }
+
+    return ctx_.findLineAnchorSegmentNear(e.x, e.y) >= 0;
+}
+
+void PianoRollToolHandler::beginEmptySpaceIntent(const juce::MouseEvent& e)
+{
+    auto& intent = ctx_.getState().emptySpaceIntent;
+    intent.active = true;
+    intent.tool = currentTool_;
+    intent.mouseDownPos = e.getPosition();
+    intent.mouseDownTime = ctx_.xToTime(e.x);
+}
+
+bool PianoRollToolHandler::consumeEmptySpaceIntentDrag(const juce::MouseEvent& e)
+{
+    auto& intent = ctx_.getState().emptySpaceIntent;
+    if (!intent.active) {
+        return false;
+    }
+
+    const int dx = e.x - intent.mouseDownPos.x;
+    const int dy = e.y - intent.mouseDownPos.y;
+    if (dx * dx + dy * dy <= kEmptySpaceDragThreshold * kEmptySpaceDragThreshold) {
+        return true;
+    }
+
+    const auto startEvent = eventAtEmptySpaceMouseDown(e);
+    const ToolId tool = intent.tool;
+    intent.clear();
+
+    switch (tool) {
+        case ToolId::Select:
+            handleSelectTool(startEvent);
+            handleSelectDrag(e);
+            return true;
+        case ToolId::DrawNote:
+            handleDrawNoteMouseDown(startEvent);
+            handleDrawNoteDrag(e);
+            return true;
+        case ToolId::HandDraw:
+            handleDrawCurveTool(startEvent);
+            handleDrawCurveTool(e);
+            return true;
+        case ToolId::LineAnchor:
+            return true;
+        default:
+            return true;
+    }
+}
+
+bool PianoRollToolHandler::consumeEmptySpaceIntentUp(const juce::MouseEvent& e)
+{
+    auto& intent = ctx_.getState().emptySpaceIntent;
+    if (!intent.active) {
+        return false;
+    }
+
+    const int dx = e.x - intent.mouseDownPos.x;
+    const int dy = e.y - intent.mouseDownPos.y;
+    if (dx * dx + dy * dy > kEmptySpaceDragThreshold * kEmptySpaceDragThreshold) {
+        const ToolId tool = intent.tool;
+        if (!consumeEmptySpaceIntentDrag(e)) {
+            return true;
+        }
+        switch (tool) {
+            case ToolId::Select:
+                handleSelectUp(e);
+                break;
+            case ToolId::HandDraw:
+                handleDrawCurveUp(e);
+                break;
+            case ToolId::DrawNote:
+                handleDrawNoteUp(e);
+                break;
+            case ToolId::LineAnchor:
+                handleLineAnchorMouseUp(e);
+                break;
+            default:
+                break;
+        }
+        return true;
+    }
+
+    if (intent.mouseDownTime >= 0.0) {
+        ctx_.notifyPlayheadChange(intent.mouseDownTime);
+    }
+
+    intent.clear();
+    return true;
+}
+
+juce::MouseEvent PianoRollToolHandler::eventAtEmptySpaceMouseDown(const juce::MouseEvent& e)
+{
+    return e.withNewPosition(ctx_.getState().emptySpaceIntent.mouseDownPos.toFloat());
+}
+
+void PianoRollToolHandler::cancelActiveMouseGesture()
+{
+    auto& state = ctx_.getState();
+    state.emptySpaceIntent.clear();
+    state.drawNoteToolPendingDrag = false;
+    state.handDrawPendingDrag = false;
+    state.noteDrag.clear();
+    state.noteResize.clear();
+    state.selection.isSelectingArea = false;
+    state.drawing.isDrawingF0 = false;
+    state.drawing.handDrawBuffer.clear();
+    state.drawing.isDrawingNote = false;
+    state.drawing.isPlacingAnchors = false;
+    state.drawing.pendingAnchors.clear();
+    ctx_.clearNoteDraft();
 }
 
 void PianoRollToolHandler::handleDeleteKey()

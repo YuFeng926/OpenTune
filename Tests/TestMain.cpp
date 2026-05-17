@@ -37,10 +37,11 @@ struct SuiteEntry {
     void (*run)();
 };
 
-constexpr std::array<SuiteEntry, 6> kSuites{{
+constexpr std::array<SuiteEntry, 7> kSuites{{
     { "core", "leaf utilities and render primitives", &runCoreBehaviorSuite },
     { "processor", "shared processor and render contracts", &runProcessorBehaviorSuite },
     { "ui", "piano-roll and visual loop behavior", &runUiBehaviorSuite },
+    { "piano-roll-intent", "piano-roll mouse intent behavior", &runPianoRollIntentBehaviorSuite },
     { "architecture", "clip core, arrangement, session, and guards", &runArchitectureBehaviorSuite },
     { "undo", "undo/redo manager", &runUndoManagerSuite },
     { "memory", "memory optimization and render cache refactor", &runMemoryOptimizationSuite },
@@ -337,6 +338,14 @@ struct PianoRollToolHandlerHarness {
     int applyManualCorrectionCalls = 0;
     int commitNotesAndSegmentsCalls = 0;
     int notifyPitchCurveEditedCalls = 0;
+    int notifyPlayheadChangeCalls = 0;
+    std::vector<double> notifiedPlayheadTimes;
+    std::vector<float> originalF0;
+    F0Timeline f0Timeline;
+    int lineAnchorHitSegment = -1;
+    int selectLineAnchorSegmentCalls = 0;
+    int toggleLineAnchorSegmentSelectionCalls = 0;
+    int clearLineAnchorSegmentSelectionCalls = 0;
     std::vector<Note> lastCommittedNotes;
     juce::Rectangle<int> lastInvalidatedArea;
     PianoRollToolHandler handler;
@@ -416,7 +425,7 @@ struct PianoRollToolHandlerHarness {
         ctx.getAudioEditingScheme = []() { return AudioEditingScheme::Scheme::CorrectedF0Primary; };
         ctx.getShortcutSettings = [this]() -> const KeyShortcutConfig::KeyShortcutSettings& { return shortcutSettings; };
         ctx.recalculatePIP = [](Note&) { return -1.0f; };
-        ctx.getF0Timeline = []() { return F0Timeline{}; };
+        ctx.getF0Timeline = [this]() { return f0Timeline; };
 
         ctx.getDirtyStartTime = [this]() { return state.drawing.dirtyStartTime; };
         ctx.setDirtyStartTime = [this](double v) { state.drawing.dirtyStartTime = v; };
@@ -457,7 +466,10 @@ struct PianoRollToolHandlerHarness {
         ctx.setCurrentTool = [](ToolId) {};
         ctx.showToolSelectionMenu = []() {};
 
-        ctx.notifyPlayheadChange = [](double) {};
+        ctx.notifyPlayheadChange = [this](double time) {
+            ++notifyPlayheadChangeCalls;
+            notifiedPlayheadTimes.push_back(time);
+        };
         ctx.notifyPitchCurveEdited = [this](int, int) { ++notifyPitchCurveEditedCalls; };
         ctx.notifyAutoTuneRequested = []() {};
         ctx.notifyPlayPauseToggle = []() {};
@@ -470,12 +482,13 @@ struct PianoRollToolHandlerHarness {
             return applyManualCorrectionResult;
         };
         ctx.selectNotesOverlappingFrames = [](int, int) { return true; };
-        ctx.getOriginalF0 = []() { return std::vector<float>{}; };
+        ctx.getOriginalF0 = [this]() { return originalF0; };
 
-        ctx.findLineAnchorSegmentNear = [](int, int) { return -1; };
-        ctx.selectLineAnchorSegment = [](int) {};
-        ctx.toggleLineAnchorSegmentSelection = [](int) {};
-        ctx.clearLineAnchorSegmentSelection = []() {};
+        ctx.findLineAnchorSegmentNear = [this](int, int) { return lineAnchorHitSegment; };
+        ctx.selectLineAnchorSegment = [this](int) { ++selectLineAnchorSegmentCalls; };
+        ctx.toggleLineAnchorSegmentSelection = [this](int) { ++toggleLineAnchorSegmentSelectionCalls; };
+        ctx.clearLineAnchorSegmentSelection = [this]() { ++clearLineAnchorSegmentSelectionCalls; };
+        ctx.setUndoDescription = [](juce::String) {};
         return ctx;
     }
 };
@@ -1165,6 +1178,315 @@ void runPianoRollDrawNoteDraftSurvivesMultiEventDragTest()
 
     if (harness.state.noteDraft.workingNotes.front().endTime <= firstEndTime) {
         logFail(testName, "second draw-note drag event did not advance the existing working draft note");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekMouseDownOnlyArmsPendingTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_MouseDownOnlyArmsPending";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::Select);
+
+    const auto pos = juce::Point<float>(120.0f, 160.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, pos, pos, false));
+
+    if (harness.notifyPlayheadChangeCalls != 0) {
+        logFail(testName, "empty-space mouseDown should not seek before mouseUp");
+        return;
+    }
+
+    if (harness.state.selection.isSelectingArea || harness.state.noteDraft.active) {
+        logFail(testName, "empty-space mouseDown should arm only pending seek intent");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekMouseUpWithinThresholdSeeksOnceTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_MouseUpWithinThresholdSeeksOnce";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::Select);
+
+    const auto down = juce::Point<float>(120.0f, 160.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, down, down, false));
+    harness.handler.mouseUp(makeMouseEvent(harness.component,
+                                           juce::Point<float>(128.0f, 164.0f),
+                                           down,
+                                           false));
+
+    if (harness.notifyPlayheadChangeCalls != 1) {
+        logFail(testName, "empty-space click should seek exactly once on mouseUp");
+        return;
+    }
+
+    if (harness.notifiedPlayheadTimes.empty() || !approxEqual(harness.notifiedPlayheadTimes.front(), 1.20, 1.0e-9)) {
+        logFail(testName, "empty-space click should seek to the original down time");
+        return;
+    }
+
+    if (harness.state.selection.hasSelectionArea || harness.state.noteDraft.active) {
+        logFail(testName, "empty-space click should not leave selection or note draft state");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekDrawNoteClickDoesNotCreateNoteTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_DrawNoteClickDoesNotCreateNote";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::DrawNote);
+
+    const auto down = juce::Point<float>(120.0f, 160.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, down, down, false));
+    harness.handler.mouseUp(makeMouseEvent(harness.component, down, down, false));
+
+    if (harness.notifyPlayheadChangeCalls != 1) {
+        logFail(testName, "draw-note empty-space click should seek once");
+        return;
+    }
+
+    if (!harness.committedNotes.empty()
+        || harness.commitNoteDraftCalls != 0
+        || harness.state.noteDraft.active
+        || harness.state.drawNoteToolPendingDrag
+        || harness.state.drawing.isDrawingNote) {
+        logFail(testName, "draw-note empty-space click should not create or commit a note");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekHandDrawClickDoesNotApplyCorrectionTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_HandDrawClickDoesNotApplyCorrection";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::HandDraw);
+    harness.pitchCurve = makePitchCurveWithPayload({ 220.0f, 221.0f, 222.0f }, { 1.0f, 1.0f, 1.0f }, {}, 1, 100.0);
+    harness.originalF0 = { 220.0f, 221.0f, 222.0f };
+    harness.f0Timeline = F0Timeline{ 1, 100.0, 3 };
+
+    const auto down = juce::Point<float>(120.0f, 160.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, down, down, false));
+    harness.handler.mouseUp(makeMouseEvent(harness.component, down, down, false));
+
+    if (harness.notifyPlayheadChangeCalls != 1) {
+        logFail(testName, "hand-draw empty-space click should seek once");
+        return;
+    }
+
+    if (harness.applyManualCorrectionCalls != 0
+        || harness.notifyPitchCurveEditedCalls != 0
+        || harness.state.handDrawPendingDrag
+        || harness.state.drawing.isDrawingF0) {
+        logFail(testName, "hand-draw empty-space click should not start or commit correction");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekLineAnchorClickDoesNotPlaceAnchorTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_LineAnchorClickDoesNotPlaceAnchor";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::LineAnchor);
+    harness.pitchCurve = makePitchCurveWithPayload({ 220.0f, 221.0f, 222.0f }, { 1.0f, 1.0f, 1.0f }, {}, 1, 100.0);
+    harness.originalF0 = { 220.0f, 221.0f, 222.0f };
+    harness.f0Timeline = F0Timeline{ 1, 100.0, 3 };
+
+    const auto down = juce::Point<float>(120.0f, 160.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, down, down, false));
+    harness.handler.mouseUp(makeMouseEvent(harness.component, down, down, false));
+
+    if (harness.notifyPlayheadChangeCalls != 1) {
+        logFail(testName, "line-anchor empty-space click should seek once");
+        return;
+    }
+
+    if (harness.state.drawing.isPlacingAnchors
+        || !harness.state.drawing.pendingAnchors.empty()
+        || harness.applyManualCorrectionCalls != 0
+        || harness.notifyPitchCurveEditedCalls != 0) {
+        logFail(testName, "line-anchor empty-space click should not place anchors or edit F0");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekSelectDragBeyondThresholdStartsBoxSelectionTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_SelectDragBeyondThresholdStartsBoxSelection";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::Select);
+
+    const auto down = juce::Point<float>(120.0f, 160.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, down, down, false));
+    harness.handler.mouseDrag(makeMouseEvent(harness.component,
+                                             juce::Point<float>(140.0f, 178.0f),
+                                             down,
+                                             true));
+
+    if (harness.notifyPlayheadChangeCalls != 0) {
+        logFail(testName, "empty-space drag should not seek while converting to tool drag");
+        return;
+    }
+
+    if (!harness.state.selection.isSelectingArea || !harness.state.selection.hasSelectionArea) {
+        logFail(testName, "select empty-space drag beyond threshold should start box selection");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekSelectDragMouseUpFinishesBoxSelectionTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_SelectDragMouseUpFinishesBoxSelection";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::Select);
+
+    const auto down = juce::Point<float>(120.0f, 160.0f);
+    const auto drag = juce::Point<float>(150.0f, 188.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, down, down, false));
+    harness.handler.mouseDrag(makeMouseEvent(harness.component, drag, down, true));
+    harness.handler.mouseUp(makeMouseEvent(harness.component, drag, down, true));
+
+    if (harness.notifyPlayheadChangeCalls != 0) {
+        logFail(testName, "select empty-space drag should not seek on mouseUp");
+        return;
+    }
+
+    if (harness.state.selection.isSelectingArea) {
+        logFail(testName, "select empty-space drag should run the normal selection mouseUp path");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekDrawNoteDragBeyondThresholdCommitsNoteWithoutSeekTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_DrawNoteDragBeyondThresholdCommitsNoteWithoutSeek";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::DrawNote);
+
+    const auto down = juce::Point<float>(120.0f, 160.0f);
+    const auto release = juce::Point<float>(165.0f, 160.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, down, down, false));
+    harness.handler.mouseDrag(makeMouseEvent(harness.component, release, down, true));
+    harness.handler.mouseUp(makeMouseEvent(harness.component, release, down, true));
+
+    if (harness.notifyPlayheadChangeCalls != 0) {
+        logFail(testName, "draw-note empty-space drag should not also seek");
+        return;
+    }
+
+    if (harness.commitNoteDraftCalls != 1 || harness.committedNotes.size() != 1) {
+        logFail(testName, "draw-note empty-space drag should create exactly one note");
+        return;
+    }
+
+    if (!approxEqual(harness.committedNotes.front().startTime, 1.20, 1.0e-9)
+        || harness.committedNotes.front().endTime <= harness.committedNotes.front().startTime) {
+        logFail(testName, "draw-note empty-space drag should use the original down time and release time");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekToolSwitchCancelsPendingIntentTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_ToolSwitchCancelsPendingIntent";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::Select);
+
+    const auto down = juce::Point<float>(120.0f, 160.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, down, down, false));
+    harness.handler.setTool(ToolId::DrawNote);
+    harness.handler.mouseUp(makeMouseEvent(harness.component, down, down, false));
+
+    if (harness.notifyPlayheadChangeCalls != 0) {
+        logFail(testName, "tool switch should cancel a pending empty-space click seek");
+        return;
+    }
+
+    if (harness.state.emptySpaceIntent.active
+        || harness.state.drawNoteToolPendingDrag
+        || harness.state.handDrawPendingDrag
+        || harness.state.noteDraft.active) {
+        logFail(testName, "tool switch should clear transient mouse gesture state");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekLineAnchorSegmentHitStillSelectsSegmentTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_LineAnchorSegmentHitStillSelectsSegment";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::LineAnchor);
+    harness.pitchCurve = makePitchCurveWithPayload({ 220.0f, 221.0f, 222.0f }, { 1.0f, 1.0f, 1.0f }, {}, 1, 100.0);
+    harness.originalF0 = { 220.0f, 221.0f, 222.0f };
+    harness.f0Timeline = F0Timeline{ 1, 100.0, 3 };
+    harness.lineAnchorHitSegment = 7;
+
+    const auto down = juce::Point<float>(120.0f, 160.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, down, down, false));
+
+    if (harness.notifyPlayheadChangeCalls != 0) {
+        logFail(testName, "line-anchor segment hit should not be treated as empty-space seek");
+        return;
+    }
+
+    if (harness.selectLineAnchorSegmentCalls != 1
+        || harness.state.drawing.isPlacingAnchors
+        || !harness.state.drawing.pendingAnchors.empty()) {
+        logFail(testName, "line-anchor segment hit should keep existing segment selection behavior");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollEmptySpaceSeekContinuousModeCentersOnSeekTest()
+{
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_ContinuousModeCentersOnSeek";
+
+    const auto notifySection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "toolCtx.notifyPlayheadChange = [this](double time)",
+        "toolCtx.notifyPitchCurveEdited");
+
+    if (notifySection.isEmpty()) {
+        logFail(testName, "failed to locate playhead notification context");
+        return;
+    }
+
+    if (!notifySection.contains("scrollMode_ == ScrollMode::Continuous")
+        || !notifySection.contains("getPlayheadAbsolutePixelX(time)")
+        || !notifySection.contains("setScrollOffset(centeredScroll)")) {
+        logFail(testName, "continuous scroll mode no longer centers the playhead on seek");
         return;
     }
 
@@ -4327,6 +4649,17 @@ void runUiBehaviorSuite()
     runEditingCommandDoesNotMutatePlacementTest();
     runPianoRollComponentSourceGuardPaintUsesCachedNotesInsteadOfProcessorReadTest();
     runPianoRollDrawNoteDraftSurvivesMultiEventDragTest();
+    runPianoRollEmptySpaceSeekMouseDownOnlyArmsPendingTest();
+    runPianoRollEmptySpaceSeekMouseUpWithinThresholdSeeksOnceTest();
+    runPianoRollEmptySpaceSeekDrawNoteClickDoesNotCreateNoteTest();
+    runPianoRollEmptySpaceSeekHandDrawClickDoesNotApplyCorrectionTest();
+    runPianoRollEmptySpaceSeekLineAnchorClickDoesNotPlaceAnchorTest();
+    runPianoRollEmptySpaceSeekSelectDragBeyondThresholdStartsBoxSelectionTest();
+    runPianoRollEmptySpaceSeekSelectDragMouseUpFinishesBoxSelectionTest();
+    runPianoRollEmptySpaceSeekDrawNoteDragBeyondThresholdCommitsNoteWithoutSeekTest();
+    runPianoRollEmptySpaceSeekToolSwitchCancelsPendingIntentTest();
+    runPianoRollEmptySpaceSeekLineAnchorSegmentHitStillSelectsSegmentTest();
+    runPianoRollEmptySpaceSeekContinuousModeCentersOnSeekTest();
     runManualPreviewMouseUpCommitIsAtomicTest();
     runCorrectedF0PreviewOnlyActivatesInCorrectedF0PrimaryTest();
     runPianoRollVisualInvalidationDirtyAreasMergeWithoutForcedFullRepaintTest();
@@ -4339,6 +4672,22 @@ void runUiBehaviorSuite()
     runStandaloneEditorParameterPanelSyncFollowsEditingSchemeTest();
     runParameterPanelSyncDecisionRestoresClipDefaultsAfterSelectionEndsTest();
 
+}
+
+void runPianoRollIntentBehaviorSuite()
+{
+    logSection("Piano Roll Intent");
+    runPianoRollEmptySpaceSeekMouseDownOnlyArmsPendingTest();
+    runPianoRollEmptySpaceSeekMouseUpWithinThresholdSeeksOnceTest();
+    runPianoRollEmptySpaceSeekDrawNoteClickDoesNotCreateNoteTest();
+    runPianoRollEmptySpaceSeekHandDrawClickDoesNotApplyCorrectionTest();
+    runPianoRollEmptySpaceSeekLineAnchorClickDoesNotPlaceAnchorTest();
+    runPianoRollEmptySpaceSeekSelectDragBeyondThresholdStartsBoxSelectionTest();
+    runPianoRollEmptySpaceSeekSelectDragMouseUpFinishesBoxSelectionTest();
+    runPianoRollEmptySpaceSeekDrawNoteDragBeyondThresholdCommitsNoteWithoutSeekTest();
+    runPianoRollEmptySpaceSeekToolSwitchCancelsPendingIntentTest();
+    runPianoRollEmptySpaceSeekLineAnchorSegmentHitStillSelectsSegmentTest();
+    runPianoRollEmptySpaceSeekContinuousModeCentersOnSeekTest();
 }
 
 void runActiveSurfaceHidesRetiredNodesTest()

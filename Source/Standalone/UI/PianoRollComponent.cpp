@@ -208,12 +208,16 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.notifyPlayheadChange = [this](double time) {
         listeners_.call([time](Listener& l) { l.playheadPositionChangeRequested(time); });
         userScrollHold_ = false;
-        if (!isPlaying_.load(std::memory_order_relaxed)) {
+        const bool isPlaying = isPlaying_.load(std::memory_order_relaxed);
+        if (!isPlaying) {
             playheadOverlay_.setPlayheadSeconds(time);
         } else {
             // 播放中 seek：设置 pending，VBlank 用 pending 值居中直到 host 确认
             pendingSeekTime_ = time;
             playheadOverlay_.setPlayheadSeconds(time);
+        }
+
+        if (scrollMode_ == ScrollMode::Continuous || isPlaying) {
             // 立即居中到新位置，不需要 smooth offset
             const auto bounds = getTimelineViewportBounds();
             const int visibleWidth = bounds.getWidth() - pianoKeyWidth_;

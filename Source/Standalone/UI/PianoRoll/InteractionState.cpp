@@ -51,4 +51,12 @@ void NoteInteractionDraft::clear()
     workingNotes.clear();
 }
 
+void EmptySpaceMouseIntent::clear()
+{
+    active = false;
+    tool = ToolId::Select;
+    mouseDownPos = {};
+    mouseDownTime = 0.0;
+}
+
 } // namespace OpenTune
