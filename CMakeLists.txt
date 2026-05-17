@@ -22,6 +22,7 @@ project(OpenTune VERSION 1.5.0 LANGUAGES CXX C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(OPENTUNE_THIRDPARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty")
+option(OPENTUNE_ENABLE_ARA "Build VST3 with ARA extension support" ON)
 
 # ==============================================================================
 # C++ Standard
@@ -57,18 +58,24 @@ endif()
 set(OPENTUNE_JUCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/JUCE-master")
 set(JUCE_SOURCE_DIR "${OPENTUNE_JUCE_DIR}" CACHE INTERNAL "Vendored JUCE source root")
 set(JUCE_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/JUCE" CACHE INTERNAL "Vendored JUCE binary root")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneJuceVST3ClientOverlay.cmake")
 include("${OPENTUNE_JUCE_DIR}/extras/Build/CMake/JUCEModuleSupport.cmake")
 include("${OPENTUNE_JUCE_DIR}/extras/Build/CMake/JUCEUtils.cmake")
 add_subdirectory("${OPENTUNE_JUCE_DIR}/extras/Build" "${JUCE_BINARY_DIR}/extras/Build")
 add_subdirectory("${OPENTUNE_JUCE_DIR}/modules" "${JUCE_BINARY_DIR}/modules")
+opentune_use_juce_vst3_client_ara_legacy_bind_overlay("${OPENTUNE_JUCE_DIR}")
 
 # Set ARA SDK path for JUCE before creating plugin targets (align with VST3 reference workspace)
-if(EXISTS "${ARA_SDK_PATH}")
-    juce_set_ara_sdk_path("${ARA_SDK_PATH}")
-    message(STATUS "ARA SDK found at: ${ARA_SDK_PATH} (VST3 ARA support enabled)")
+if(OPENTUNE_ENABLE_ARA)
+    if(EXISTS "${ARA_SDK_PATH}")
+        juce_set_ara_sdk_path("${ARA_SDK_PATH}")
+        message(STATUS "ARA SDK found at: ${ARA_SDK_PATH} (VST3 ARA support enabled)")
+    else()
+        message(WARNING "ARA SDK not found at ${ARA_SDK_PATH}. VST3 ARA features will be disabled.")
+        message(STATUS "To enable ARA, clone: git clone --recursive --branch releases/${OPENTUNE_ARA_SDK_VERSION} https://github.com/Celemony/ARA_SDK")
+    endif()
 else()
-    message(WARNING "ARA SDK not found at ${ARA_SDK_PATH}. VST3 ARA features will be disabled.")
-    message(STATUS "To enable ARA, clone: git clone --recursive --branch releases/${OPENTUNE_ARA_SDK_VERSION} https://github.com/Celemony/ARA_SDK")
+    message(STATUS "VST3 ARA support disabled by OPENTUNE_ENABLE_ARA=OFF")
 endif()
 
 # ==============================================================================
@@ -332,7 +339,7 @@ juce_add_plugin(OpenTune
     FORMATS Standalone VST3
 
     # Enable ARA Extension (VST3 target only, but required here for SDK detection)
-    IS_ARA_EFFECT TRUE
+    IS_ARA_EFFECT ${OPENTUNE_ENABLE_ARA}
     
     # Plugin Type
     IS_SYNTH FALSE
@@ -647,16 +654,17 @@ if(MSVC)
     target_compile_options(OpenTune_VST3 PRIVATE /utf-8 /bigobj)
 endif()
 
-# ARA files (conditionally compiled via #if JucePlugin_Enable_ARA in source files)
-# These are only used in VST3 builds but we include them unconditionally
-target_sources(OpenTune PRIVATE
-    Source/ARA/OpenTuneDocumentController.cpp
-    Source/ARA/OpenTuneDocumentController.h
-    Source/ARA/OpenTunePlaybackRenderer.cpp
-    Source/ARA/OpenTunePlaybackRenderer.h
-    Source/ARA/VST3AraSession.cpp
-    Source/ARA/VST3AraSession.h
-)
+# ARA files (VST3 ARA extension build only)
+if(OPENTUNE_ENABLE_ARA)
+    target_sources(OpenTune PRIVATE
+        Source/ARA/OpenTuneDocumentController.cpp
+        Source/ARA/OpenTuneDocumentController.h
+        Source/ARA/OpenTunePlaybackRenderer.cpp
+        Source/ARA/OpenTunePlaybackRenderer.h
+        Source/ARA/VST3AraSession.cpp
+        Source/ARA/VST3AraSession.h
+    )
+endif()
 
 # Capture module (VST3 non-ARA capture workflow)
 # Runtime-isolated: included unconditionally in shared lib; CaptureSession is only

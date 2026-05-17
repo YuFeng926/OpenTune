@@ -16,7 +16,7 @@ namespace OpenTune::Capture {
  * Per-segment lifecycle state.
  *
  * Capturing  : audio thread is writing dry samples into fifo
- * Pending    : capture stopped, awaiting submit to render pipeline
+ * Pending    : capture stopped, waiting for a safe message-thread drain/submit
  * Processing : submitted; F0/Vocoder rendering in progress
  * Edited     : rendered; eligible for replacement playback
  */
@@ -64,7 +64,7 @@ struct CaptureSegment
     /** Maximum samples (= 600 s × captureSampleRate, set at arm time). */
     int maxSamples = 0;
 
-    /** Anchor: first audio block with isPlaying==true sets anchored=true and stores host_t into T_start. */
+    /** Anchor: first audio block with advancing host transport sets anchored=true and stores host_t into T_start. */
     std::atomic<bool> anchored { false };
     std::atomic<double> T_start { 0.0 };
 
@@ -74,8 +74,13 @@ struct CaptureSegment
     /** Lifecycle state. Audio thread reads, message thread writes (with publish-subscribe). */
     std::atomic<SegmentState> state { SegmentState::Capturing };
 
-    /** Set by audio thread when capture must end (duration cap or host stop). */
+    /** Set by audio thread when capture must end (duration cap or transport discontinuity). */
     std::atomic<bool> stopRequested { false };
+
+    /** Message-thread countdown before draining a stopped capture.
+     *  This gives any in-flight audio block that already passed the Capturing state
+     *  check time to leave CaptureRingBuffer::write before FIFO release. */
+    int pendingDrainTicks = 0;
 
     /** Diagnostic: peak absolute sample value seen during capture. Audio thread writes,
      *  message thread reads in stopCapture log. Helps distinguish "host sends silence"
@@ -112,4 +117,3 @@ struct SegmentsView
 };
 
 }  // namespace OpenTune::Capture
-

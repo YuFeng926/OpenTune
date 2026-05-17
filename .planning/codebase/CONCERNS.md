@@ -1,6 +1,6 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-05-05
+**Analysis Date:** 2026-05-15
 
 ## Tech Debt
 
@@ -42,9 +42,9 @@
 ## Fragile Areas
 
 **[Confirmed] ARA session correctness is still highly lifecycle- and threading-sensitive:**
-- Why fragile: snapshot publication depends on `editingDepth_`, `sampleAccessEnabled`, `leaseGeneration`, `cancelRead`, `pendingLeaseReset`, `pendingRemoval`, and the hydration worker staying aligned across callbacks and worker-thread reads.
-- Files: `Source/ARA/VST3AraSession.h:123`, `Source/ARA/VST3AraSession.h:126`, `Source/ARA/VST3AraSession.h:130`, `Source/ARA/VST3AraSession.cpp:234`, `Source/ARA/VST3AraSession.cpp:389`, `Source/ARA/VST3AraSession.cpp:647`, `Source/ARA/VST3AraSession.cpp:693`
-- Impact: seemingly local callback changes can easily reintroduce stale snapshot publication, leaked leases, or broken sample-access transitions.
+- Why fragile: snapshot publication depends on `editingDepth_`, `sampleAccessEnabled`, `leaseGeneration`, `cancelRead`, `pendingLeaseReset`, `pendingRemoval`, `audioModificationPersistentId`, `materializationBindings_`, and the hydration worker staying aligned across callbacks and worker-thread reads.
+- Files: `Source/ARA/VST3AraSession.h`, `Source/ARA/VST3AraSession.cpp`
+- Impact: seemingly local callback changes can easily reintroduce stale snapshot publication, leaked leases, broken sample-access transitions, or wrong AudioModification/materialization rebinding.
 
 **[Confirmed] Standalone import/export orchestration still mixes UI lifetime, async coordination, and processor mutation inside one editor class:**
 - Why fragile: chooser callbacks, background task dispatch, export threading, undo wiring, and UI refresh logic still meet inside `OpenTuneAudioProcessorEditor`.
@@ -55,8 +55,8 @@
 
 **[Confirmed] VST3 ARA remains intentionally single-workspace in practice:**
 - Current shape: the repo still centers ARA state on one active published snapshot with one preferred region and source/region maps inside a single `VST3AraSession`.
-- Files: `Source/ARA/VST3AraSession.h:178`, `Source/ARA/VST3AraSession.h:181`, `Source/ARA/VST3AraSession.h:258`, `Source/ARA/VST3AraSession.h:259`
-- Limit: the current session model is not a drop-in path to multi-workspace or Melodyne-style concurrent source editing.
+- Files: `Source/ARA/VST3AraSession.h`, `Source/ARA/VST3AraSession.cpp`
+- Limit: the current session model now supports multiple PlaybackRegions and AudioModification-bound materializations inside one ARA session, but it is still not a drop-in path to Melodyne-style multi-document or multi-workspace editing UI.
 
 ## Dependencies At Risk
 
@@ -83,6 +83,17 @@
 - Files: `Tests/TestMain.cpp:153`, `Tests/TestMain.cpp:186`, `Tests/TestMain.cpp:1085`, `Tests/TestMain.cpp:1207`, `Tests/TestMain.cpp:1250`, `Tests/TestMain.cpp:1285`
 - Impact: naming/structure drift is guarded, but JUCE lifecycle, async ordering, and host/runtime behavior can still regress behind green tests.
 
+**[Confirmed] UI suite exit status currently disagrees with visible failure output:**
+- Evidence: `OpenTuneTests.exe ui` exits with code 1 after printing `[PASS] PianoRoll_DrawNoteDraft_SurvivesMultiEventDrag` and no `[FAIL]` text in the observed output.
+- Files: `Tests/TestMain.cpp`
+- Impact: full-suite PASS claims are not reliable until the runner exit path or the following UI test state is explained.
+
+**[Resolved] ARA multi-region binding no longer uses source/window equality as editable-state owner:**
+- Issue: default ARA birth could reuse materialization by `sourceId + sourceWindow`, which collapsed independent items that happened to cover the same source window.
+- Resolution: ARA binding is keyed by AudioModification persistent ID in `VST3AraSession::materializationBindings_`; same AudioModification PlaybackRegions share intentionally, different persistent IDs remain independent.
+- Files: `Source/ARA/VST3AraSession.*`, `Source/PluginProcessor.cpp`, `Source/ARA/OpenTuneDocumentController.cpp`
+- Date: 2026-05-15
+
 **[Confirmed] No host-level plugin validation is wired into CMake test registration:**
 - Evidence: CMake exposes one `add_test(...)` entry for `OpenTuneTests`; there is no separate DAW/host automation target in the test registration path.
 - Files: `CMakeLists.txt:861`, `CMakeLists.txt:963`
@@ -90,4 +101,4 @@
 
 ---
 
-*Concerns audit: 2026-05-05 after rechecking the live tree and removing 2026-04-19 concerns that are no longer supported by current source state*
+*Concerns audit: 2026-05-15 after ARA multi-region binding implementation and verification-status sync*

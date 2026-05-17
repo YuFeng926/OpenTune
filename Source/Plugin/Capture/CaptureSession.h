@@ -153,7 +153,7 @@ public:
      * Process one audio block. Behavior depends on current segments:
      *   - If any Edited segment covers host_t  → buffer.clear() + write rendered audio.
      *   - Else                                  → leave buffer untouched (dry pass-through).
-     *   - If a Capturing segment exists and isPlaying → write dry copy to its fifo.
+     *   - If a Capturing segment exists and host_t advances continuously → write dry copy to its fifo.
      */
     void processBlock(juce::AudioBuffer<float>& buffer,
                       double hostTimeSeconds,
@@ -200,6 +200,12 @@ private:
     /** Build a new immutable view from current mutableSegments_ and atomic-store it. */
     void publishSegmentsView();
 
+    /** Park a removed segment until old published views have aged out. mutableMutex_ must be held. */
+    void queueForReclaimLocked(std::unique_ptr<CaptureSegment> segment);
+
+    /** Drain a Pending capture after the audio-thread grace window and submit it for rendering. */
+    bool finalizePendingCapture(CaptureSegment& pending);
+
     /** Compaction: remove older segments fully covered by 'newlyEdited'. */
     void runCompaction(const CaptureSegment& newlyEdited);
 
@@ -224,8 +230,14 @@ private:
     // cleaner but the project targets C++17.
     std::shared_ptr<const SegmentsView> publishedSegments_;
 
+    struct ReclaimEntry
+    {
+        std::unique_ptr<CaptureSegment> segment;
+        int queuedTick = 0;
+    };
+
     // Reclaim sweep: segments removed from mutable but still possibly visible to audio thread.
-    std::vector<std::unique_ptr<CaptureSegment>> pendingReclaim_;
+    std::vector<ReclaimEntry> pendingReclaim_;
     std::atomic<int> tickCounter_ { 0 };
 
     // Audio-thread scratch (allocated in prepareToPlay; resized only on message thread).
@@ -243,4 +255,3 @@ private:
 };
 
 }  // namespace OpenTune::Capture
-

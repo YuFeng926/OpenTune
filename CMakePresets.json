@@ -1,0 +1,54 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-ara-vs2022",
+      "displayName": "Windows VS2022 Release Tree (ARA)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-ara-overlay-vs18-clean",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "OPENTUNE_ENABLE_ARA": "ON"
+      }
+    },
+    {
+      "name": "windows-nonara-vs2022",
+      "displayName": "Windows VS2022 Release Tree (non-ARA)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-nonara-overlay-vs18-clean",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "OPENTUNE_ENABLE_ARA": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-ara-release",
+      "configurePreset": "windows-ara-vs2022",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-nonara-release",
+      "configurePreset": "windows-nonara-vs2022",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-ara-release",
+      "configurePreset": "windows-ara-vs2022",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <limits>
+#include <set>
 
 namespace OpenTune {
 
@@ -13,6 +14,27 @@ namespace {
 bool nearlyEqualSeconds(double lhs, double rhs)
 {
     return std::abs(lhs - rhs) <= 1.0e-9;
+}
+
+constexpr int kAraBindingArchiveMagic = 0x4F544142; // OTAB
+constexpr int kAraBindingArchiveVersion = 1;
+constexpr int kAraBindingArchiveMaxBindings = 4096;
+
+juce::String mapRestoredAudioModificationPersistentId(const juce::String& archivedPersistentId,
+                                                      const juce::ARARestoreObjectsFilter* filter)
+{
+    if (archivedPersistentId.isEmpty())
+        return {};
+
+    if (filter == nullptr)
+        return archivedPersistentId;
+
+    auto* audioModification = filter->getAudioModificationToRestoreStateWithID(archivedPersistentId.toRawUTF8());
+    if (audioModification == nullptr)
+        return {};
+
+    const auto& restoredPersistentId = audioModification->getPersistentID();
+    return restoredPersistentId.empty() ? juce::String() : juce::String::fromUTF8(restoredPersistentId.c_str());
 }
 
 const VST3AraSession::SourceSlot* findSourceSlotInCollection(
@@ -224,13 +246,15 @@ void VST3AraSession::didUpdatePlaybackRegionProperties(juce::ARAPlaybackRegion* 
     auto& regionSlot = ensureRegionSlot(playbackRegion, identity.audioSource);
     const bool projectionChanged = updateRegionProjectionFromPlaybackRegionLocked(regionSlot, playbackRegion);
     regionSlot.sourceWindow.sourceId = sourceSlot.sourceId;
-    const bool preferredChanged = preferredRegion_ != identity;
-    updatePreferredRegionLocked(identity);
 
     if (projectionChanged)
         bumpRegionProjectionRevisionLocked(playbackRegion);
 
-    if (projectionChanged || preferredChanged)
+    const bool bindingChanged = applyBindingToRegionSlotLocked(regionSlot);
+    const bool preferredChanged = preferredRegion_ != identity;
+    updatePreferredRegionLocked(identity);
+
+    if (projectionChanged || bindingChanged || preferredChanged)
         markSnapshotDirtyLocked();
 }
 
@@ -258,15 +282,23 @@ void VST3AraSession::didAddPlaybackRegionToAudioModification(
 
     auto& sourceSlot = ensureSourceSlot(audioSource);
     auto& regionSlot = ensureRegionSlot(playbackRegion, audioSource);
+    regionSlot.audioModificationPersistentId = copyAudioModificationPersistentId(audioModification);
     const bool projectionChanged = updateRegionProjectionFromPlaybackRegionLocked(regionSlot, playbackRegion);
     regionSlot.sourceWindow.sourceId = sourceSlot.sourceId;
-    const bool preferredChanged = preferredRegion_ != regionSlot.identity;
-    updatePreferredRegionLocked(regionSlot.identity);
 
     if (projectionChanged)
         bumpRegionProjectionRevisionLocked(playbackRegion);
 
-    if (projectionChanged || preferredChanged)
+    const bool bindingChanged = applyBindingToRegionSlotLocked(regionSlot);
+    const bool preferredChanged = preferredRegion_ != regionSlot.identity;
+    updatePreferredRegionLocked(regionSlot.identity);
+
+    if (regionSlot.audioModificationPersistentId.isEmpty())
+    {
+        AppLogger::error("[ARA] AudioModification has no persistent ID; materialization binding cannot be restored");
+    }
+
+    if (projectionChanged || bindingChanged || preferredChanged)
         markSnapshotDirtyLocked();
 }
 
@@ -447,13 +479,30 @@ void VST3AraSession::bindPlaybackRegionToMaterialization(juce::ARAPlaybackRegion
 
     auto& sourceSlot = ensureSourceSlot(identity.audioSource);
     auto& regionSlot = ensureRegionSlot(playbackRegion, identity.audioSource);
-    regionSlot.appliedProjection.sourceId = sourceSlot.sourceId;
-    regionSlot.appliedProjection.materializationId = materializationId;
-    regionSlot.appliedProjection.appliedMaterializationRevision = materializationRevision;
+    if (regionSlot.audioModificationPersistentId.isEmpty())
+    {
+        if (auto* audioModification = playbackRegion->getAudioModification())
+            regionSlot.audioModificationPersistentId = copyAudioModificationPersistentId(audioModification);
+    }
+
+    if (regionSlot.audioModificationPersistentId.isEmpty())
+    {
+        AppLogger::error("[ARA] bindPlaybackRegionToMaterialization: AudioModification persistent ID is missing");
+        return;
+    }
+
+    AraMaterializationBinding binding;
+    binding.audioModificationPersistentId = regionSlot.audioModificationPersistentId;
+    binding.sourceId = sourceSlot.sourceId;
+    binding.materializationId = materializationId;
+    binding.sourceWindow = sourceWindow;
+    binding.materializationRevision = materializationRevision;
+    binding.materializationDurationSeconds = materializationDurationSeconds;
+    upsertMaterializationBindingLocked(binding);
+
+    applyBindingToRegionSlotLocked(regionSlot);
     regionSlot.appliedProjection.appliedProjectionRevision = projectionRevision;
-    regionSlot.appliedProjection.appliedSourceWindow = sourceWindow;
     regionSlot.appliedProjection.playbackStartSeconds = playbackStartSeconds;
-    regionSlot.appliedProjection.appliedRegionIdentity = identity;
     regionSlot.sourceWindow = sourceWindow;
     regionSlot.materializationDurationSeconds = materializationDurationSeconds;
 
@@ -474,8 +523,22 @@ void VST3AraSession::updatePlaybackRegionMaterializationRevisions(juce::ARAPlayb
         return;
     }
 
-    regionSlot->appliedProjection.appliedMaterializationRevision = materializationRevision;
-    regionSlot->appliedProjection.appliedProjectionRevision = projectionRevision;
+    if (regionSlot->audioModificationPersistentId.isNotEmpty())
+    {
+        auto bindingIt = materializationBindings_.find(regionSlot->audioModificationPersistentId);
+        if (bindingIt != materializationBindings_.end())
+            bindingIt->second.materializationRevision = materializationRevision;
+    }
+
+    for (auto& [playbackRegionKey, siblingRegionSlot] : regions_)
+    {
+        juce::ignoreUnused(playbackRegionKey);
+        if (siblingRegionSlot.audioModificationPersistentId == regionSlot->audioModificationPersistentId)
+        {
+            siblingRegionSlot.appliedProjection.appliedMaterializationRevision = materializationRevision;
+            siblingRegionSlot.appliedProjection.appliedProjectionRevision = projectionRevision;
+        }
+    }
     publishSnapshotLocked();
 }
 
@@ -488,8 +551,145 @@ void VST3AraSession::clearPlaybackRegionMaterialization(juce::ARAPlaybackRegion*
     if (regionSlot == nullptr)
         return;
 
-    regionSlot->appliedProjection.clear();
+    if (regionSlot->audioModificationPersistentId.isNotEmpty())
+        materializationBindings_.erase(regionSlot->audioModificationPersistentId);
+
+    for (auto& [playbackRegionKey, siblingRegionSlot] : regions_)
+    {
+        juce::ignoreUnused(playbackRegionKey);
+        if (siblingRegionSlot.audioModificationPersistentId == regionSlot->audioModificationPersistentId)
+        {
+            siblingRegionSlot.appliedProjection.clear();
+            siblingRegionSlot.materializationDurationSeconds = 0.0;
+        }
+    }
     publishSnapshotLocked();
+}
+
+std::vector<VST3AraSession::AraMaterializationBinding> VST3AraSession::exportMaterializationBindings() const
+{
+    const std::lock_guard<std::mutex> lock(stateMutex_);
+
+    std::vector<AraMaterializationBinding> result;
+    result.reserve(materializationBindings_.size());
+    for (const auto& [persistentId, binding] : materializationBindings_)
+    {
+        juce::ignoreUnused(persistentId);
+        result.push_back(binding);
+    }
+    return result;
+}
+
+void VST3AraSession::replaceMaterializationBindings(std::vector<AraMaterializationBinding> bindings)
+{
+    const std::lock_guard<std::mutex> lock(stateMutex_);
+    materializationBindings_.clear();
+
+    for (const auto& binding : bindings)
+        upsertMaterializationBindingLocked(binding);
+
+    applyBindingsToRegionSlotsLocked();
+    publishSnapshotLocked();
+}
+
+bool VST3AraSession::storeMaterializationBindings(juce::OutputStream& output,
+                                                  const juce::ARAStoreObjectsFilter* filter) const
+{
+    juce::ignoreUnused(filter);
+
+    const auto bindings = exportMaterializationBindings();
+
+    bool ok = output.writeInt(kAraBindingArchiveMagic);
+    ok = output.writeInt(kAraBindingArchiveVersion) && ok;
+    ok = output.writeInt(static_cast<int>(bindings.size())) && ok;
+
+    for (const auto& binding : bindings)
+    {
+        ok = output.writeString(binding.audioModificationPersistentId) && ok;
+        ok = output.writeInt64(static_cast<juce::int64>(binding.sourceId)) && ok;
+        ok = output.writeInt64(static_cast<juce::int64>(binding.materializationId)) && ok;
+        ok = output.writeInt64(static_cast<juce::int64>(binding.sourceWindow.sourceId)) && ok;
+        ok = output.writeDouble(binding.sourceWindow.sourceStartSeconds) && ok;
+        ok = output.writeDouble(binding.sourceWindow.sourceEndSeconds) && ok;
+        ok = output.writeInt64(static_cast<juce::int64>(binding.materializationRevision)) && ok;
+        ok = output.writeDouble(binding.materializationDurationSeconds) && ok;
+    }
+
+    return ok;
+}
+
+bool VST3AraSession::restoreMaterializationBindings(juce::InputStream& input,
+                                                    const juce::ARARestoreObjectsFilter* filter)
+{
+    const int magic = input.readInt();
+    if (magic != kAraBindingArchiveMagic)
+    {
+        AppLogger::error("[ARA] Binding archive restore failed: invalid magic");
+        return false;
+    }
+
+    const int version = input.readInt();
+    if (version != kAraBindingArchiveVersion)
+    {
+        AppLogger::error("[ARA] Binding archive restore failed: unsupported version "
+                         + juce::String(version));
+        return false;
+    }
+
+    const int bindingCount = input.readInt();
+    if (bindingCount < 0 || bindingCount > kAraBindingArchiveMaxBindings)
+    {
+        AppLogger::error("[ARA] Binding archive restore failed: invalid binding count "
+                         + juce::String(bindingCount));
+        return false;
+    }
+
+    std::vector<AraMaterializationBinding> restored;
+    restored.reserve(static_cast<size_t>(bindingCount));
+    for (int i = 0; i < bindingCount; ++i)
+    {
+        AraMaterializationBinding binding;
+        binding.audioModificationPersistentId = input.readString();
+        binding.audioModificationPersistentId = mapRestoredAudioModificationPersistentId(binding.audioModificationPersistentId,
+                                                                                         filter);
+        if (binding.audioModificationPersistentId.isEmpty())
+        {
+            const auto ignoredSourceId = input.readInt64();
+            const auto ignoredMaterializationId = input.readInt64();
+            const auto ignoredSourceWindowId = input.readInt64();
+            const auto ignoredStart = input.readDouble();
+            const auto ignoredEnd = input.readDouble();
+            const auto ignoredRevision = input.readInt64();
+            const auto ignoredDuration = input.readDouble();
+            juce::ignoreUnused(ignoredSourceId,
+                               ignoredMaterializationId,
+                               ignoredSourceWindowId,
+                               ignoredStart,
+                               ignoredEnd,
+                               ignoredRevision,
+                               ignoredDuration);
+            continue;
+        }
+
+        binding.sourceId = static_cast<uint64_t>(input.readInt64());
+        binding.materializationId = static_cast<uint64_t>(input.readInt64());
+        binding.sourceWindow.sourceId = static_cast<uint64_t>(input.readInt64());
+        binding.sourceWindow.sourceStartSeconds = input.readDouble();
+        binding.sourceWindow.sourceEndSeconds = input.readDouble();
+        binding.materializationRevision = static_cast<uint64_t>(input.readInt64());
+        binding.materializationDurationSeconds = input.readDouble();
+
+        if (!binding.isValid() || binding.materializationDurationSeconds <= 0.0)
+        {
+            AppLogger::error("[ARA] Binding archive restore failed: invalid binding record");
+            return false;
+        }
+
+        restored.push_back(std::move(binding));
+    }
+
+    replaceMaterializationBindings(std::move(restored));
+    return true;
 }
 
 VST3AraSession::SourceSlot* VST3AraSession::findSourceSlot(juce::ARAAudioSource* audioSource)
@@ -531,6 +731,11 @@ VST3AraSession::RegionSlot& VST3AraSession::ensureRegionSlot(juce::ARAPlaybackRe
     auto& slot = regions_[playbackRegion];
     slot.identity.playbackRegion = playbackRegion;
     slot.identity.audioSource = audioSource;
+    if (slot.audioModificationPersistentId.isEmpty())
+    {
+        if (auto* audioModification = playbackRegion != nullptr ? playbackRegion->getAudioModification() : nullptr)
+            slot.audioModificationPersistentId = copyAudioModificationPersistentId(audioModification);
+    }
     return slot;
 }
 
@@ -784,7 +989,6 @@ void VST3AraSession::hydrationWorkerLoop()
                 if (editingDepth_ == 0)
                     publishSnapshotLocked();
 
-                // Auto-birth: collect unbound regions into worklist under lock, then process outside
                 auto* processor = processor_.load(std::memory_order_acquire);
                 if (processor != nullptr)
                 {
@@ -798,11 +1002,21 @@ void VST3AraSession::hydrationWorkerLoop()
                     };
 
                     std::vector<BirthWorkItem> worklist;
+                    std::set<juce::String> queuedAudioModifications;
                     for (const auto& [playbackRegion, regionSlot] : regions_)
                     {
                         if (regionSlot.identity.audioSource != audioSource)
                             continue;
                         if (regionSlot.appliedProjection.isValid() && regionSlot.appliedProjection.materializationId != 0)
+                            continue;
+                        if (regionSlot.audioModificationPersistentId.isEmpty())
+                        {
+                            AppLogger::error("[ARA] auto-birth skipped: AudioModification persistent ID is missing");
+                            continue;
+                        }
+                        if (materializationBindings_.find(regionSlot.audioModificationPersistentId) != materializationBindings_.end())
+                            continue;
+                        if (!queuedAudioModifications.insert(regionSlot.audioModificationPersistentId).second)
                             continue;
 
                         BirthWorkItem item;
@@ -833,17 +1047,18 @@ void VST3AraSession::hydrationWorkerLoop()
                         {
                             auto* updatedRegionSlot = findRegionSlot(item.regionIdentity.playbackRegion);
                             if (updatedRegionSlot != nullptr
-                                && (!updatedRegionSlot->appliedProjection.isValid()
-                                    || updatedRegionSlot->appliedProjection.materializationId == 0))
+                                && updatedRegionSlot->audioModificationPersistentId.isNotEmpty()
+                                && materializationBindings_.find(updatedRegionSlot->audioModificationPersistentId) == materializationBindings_.end())
                             {
-                                updatedRegionSlot->appliedProjection.sourceId = birthResult->sourceId;
-                                updatedRegionSlot->appliedProjection.materializationId = birthResult->materializationId;
-                                updatedRegionSlot->appliedProjection.appliedMaterializationRevision = birthResult->materializationRevision;
-                                updatedRegionSlot->appliedProjection.appliedProjectionRevision = updatedRegionSlot->projectionRevision;
-                                updatedRegionSlot->appliedProjection.appliedSourceWindow = updatedRegionSlot->sourceWindow;
-                                updatedRegionSlot->appliedProjection.playbackStartSeconds = updatedRegionSlot->playbackStartSeconds;
-                                updatedRegionSlot->appliedProjection.appliedRegionIdentity = item.regionIdentity;
-                                updatedRegionSlot->materializationDurationSeconds = birthResult->materializationDurationSeconds;
+                                AraMaterializationBinding binding;
+                                binding.audioModificationPersistentId = updatedRegionSlot->audioModificationPersistentId;
+                                binding.sourceId = birthResult->sourceId;
+                                binding.materializationId = birthResult->materializationId;
+                                binding.sourceWindow = updatedRegionSlot->sourceWindow;
+                                binding.materializationRevision = birthResult->materializationRevision;
+                                binding.materializationDurationSeconds = birthResult->materializationDurationSeconds;
+                                upsertMaterializationBindingLocked(binding);
+                                applyBindingsToRegionSlotsLocked();
                                 markSnapshotDirtyLocked();
                             }
                         }
@@ -899,6 +1114,90 @@ bool VST3AraSession::updateRegionProjectionFromPlaybackRegionLocked(
         || !nearlyEqualSeconds(regionSlot.playbackEndSeconds, previousPlaybackEnd)
         || !nearlyEqualSeconds(regionSlot.sourceWindow.sourceStartSeconds, previousSourceWindow.sourceStartSeconds)
         || !nearlyEqualSeconds(regionSlot.sourceWindow.sourceEndSeconds, previousSourceWindow.sourceEndSeconds);
+}
+
+juce::String VST3AraSession::copyAudioModificationPersistentId(juce::ARAAudioModification* audioModification) const
+{
+    if (audioModification == nullptr)
+        return {};
+
+    const auto& persistentId = audioModification->getPersistentID();
+    return persistentId.empty() ? juce::String() : juce::String::fromUTF8(persistentId.c_str());
+}
+
+bool VST3AraSession::applyBindingToRegionSlotLocked(RegionSlot& regionSlot)
+{
+    const auto previousProjection = regionSlot.appliedProjection;
+    const double previousDuration = regionSlot.materializationDurationSeconds;
+
+    if (regionSlot.audioModificationPersistentId.isEmpty())
+    {
+        const bool hadProjection = regionSlot.appliedProjection.isValid()
+            || regionSlot.materializationDurationSeconds != 0.0;
+        regionSlot.appliedProjection.clear();
+        regionSlot.materializationDurationSeconds = 0.0;
+        return hadProjection;
+    }
+
+    const auto bindingIt = materializationBindings_.find(regionSlot.audioModificationPersistentId);
+    if (bindingIt == materializationBindings_.end())
+    {
+        const bool hadProjection = regionSlot.appliedProjection.isValid()
+            || regionSlot.materializationDurationSeconds != 0.0;
+        regionSlot.appliedProjection.clear();
+        regionSlot.materializationDurationSeconds = 0.0;
+        return hadProjection;
+    }
+
+    const auto& binding = bindingIt->second;
+    if (binding.sourceId != regionSlot.sourceWindow.sourceId)
+    {
+        const bool hadProjection = regionSlot.appliedProjection.isValid()
+            || regionSlot.materializationDurationSeconds != 0.0;
+        regionSlot.appliedProjection.clear();
+        regionSlot.materializationDurationSeconds = 0.0;
+        return hadProjection;
+    }
+
+    regionSlot.appliedProjection.sourceId = binding.sourceId;
+    regionSlot.appliedProjection.materializationId = binding.materializationId;
+    regionSlot.appliedProjection.appliedMaterializationRevision = binding.materializationRevision;
+    regionSlot.appliedProjection.appliedProjectionRevision = regionSlot.projectionRevision;
+    regionSlot.appliedProjection.appliedSourceWindow = binding.sourceWindow;
+    regionSlot.appliedProjection.playbackStartSeconds = regionSlot.playbackStartSeconds;
+    regionSlot.appliedProjection.appliedRegionIdentity = regionSlot.identity;
+    regionSlot.materializationDurationSeconds = binding.materializationDurationSeconds;
+
+    return previousProjection.sourceId != regionSlot.appliedProjection.sourceId
+        || previousProjection.materializationId != regionSlot.appliedProjection.materializationId
+        || previousProjection.appliedMaterializationRevision != regionSlot.appliedProjection.appliedMaterializationRevision
+        || previousProjection.appliedProjectionRevision != regionSlot.appliedProjection.appliedProjectionRevision
+        || previousProjection.appliedRegionIdentity != regionSlot.appliedProjection.appliedRegionIdentity
+        || !nearlyEqualSeconds(previousProjection.playbackStartSeconds, regionSlot.appliedProjection.playbackStartSeconds)
+        || !nearlyEqualSeconds(previousDuration, regionSlot.materializationDurationSeconds)
+        || !nearlyEqualSeconds(previousProjection.appliedSourceWindow.sourceStartSeconds, regionSlot.appliedProjection.appliedSourceWindow.sourceStartSeconds)
+        || !nearlyEqualSeconds(previousProjection.appliedSourceWindow.sourceEndSeconds, regionSlot.appliedProjection.appliedSourceWindow.sourceEndSeconds)
+        || previousProjection.appliedSourceWindow.sourceId != regionSlot.appliedProjection.appliedSourceWindow.sourceId;
+}
+
+void VST3AraSession::applyBindingsToRegionSlotsLocked()
+{
+    for (auto& [playbackRegion, regionSlot] : regions_)
+    {
+        juce::ignoreUnused(playbackRegion);
+        applyBindingToRegionSlotLocked(regionSlot);
+    }
+}
+
+void VST3AraSession::upsertMaterializationBindingLocked(const AraMaterializationBinding& binding)
+{
+    if (!binding.isValid())
+    {
+        AppLogger::error("[ARA] Ignored invalid materialization binding");
+        return;
+    }
+
+    materializationBindings_[binding.audioModificationPersistentId] = binding;
 }
 
 bool VST3AraSession::removePlaybackRegionFromStateLocked(juce::ARAPlaybackRegion* playbackRegion)

@@ -134,7 +134,6 @@ private:
     int lastSyncedTimeSigDenom_ = 4;
     bool rmvpeOverlayLatched_{false};
     uint64_t rmvpeOverlayTargetMaterializationId_{0};
-    bool araClipImportArmed_{false};
     bool showingSingleNoteParams_{false};
     bool initialFocusGrabbed_{false};
 

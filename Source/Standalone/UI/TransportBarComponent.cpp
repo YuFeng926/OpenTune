@@ -955,9 +955,22 @@ bool TransportBarComponent::isLoopEnabled() const
     return loopButton_.getToggleState();
 }
 
-void TransportBarComponent::setRecordIndicatorActive(bool active)
+void TransportBarComponent::setRecordButtonState(RecordButtonState state)
 {
-    recordButton_.setToggleState(active, juce::dontSendNotification);
+    switch (state) {
+        case RecordButtonState::Idle:
+            recordButton_.setToggleState(false, juce::dontSendNotification);
+            recordButton_.setEnabled(true);
+            break;
+        case RecordButtonState::Capturing:
+            recordButton_.setToggleState(true, juce::dontSendNotification);
+            recordButton_.setEnabled(true);
+            break;
+        case RecordButtonState::Processing:
+            recordButton_.setToggleState(false, juce::dontSendNotification);
+            recordButton_.setEnabled(false);
+            break;
+    }
     recordButton_.repaint();
 }
 

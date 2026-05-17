@@ -63,9 +63,19 @@ std::optional<RenderBlockSpan> computeRegionBlockRenderSpan(double blockStartSec
     return span.samplesToCopy > 0 ? std::optional<RenderBlockSpan>(span) : std::nullopt;
 }
 
+bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
+                                  const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
+{
+    if (realtime == juce::AudioProcessor::Realtime::yes && !positionInfo.getIsPlaying())
+        return false;
+
+    return true;
+}
+
 namespace {
     std::atomic<bool> firstProcessCall{true};
     std::atomic<int> mappingLogCounter{0};
+    std::atomic<int> renderGateLogCounter{0};
 
     const VST3AraSession::PublishedRegionView* findRenderableRegionView(
         const VST3AraSession::PublishedSnapshot& snapshot,
@@ -114,8 +124,16 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
                                               juce::AudioProcessor::Realtime realtime,
                                               const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
 {
-    juce::ignoreUnused(realtime);
-    
+    if (!shouldRenderAraPlaybackBlock(realtime, positionInfo))
+    {
+        buffer.clear();
+        if (renderGateLogCounter.fetch_add(1) < 8)
+        {
+            AppLogger::log("ARA RenderGate: playing=false realtime=yes");
+        }
+        return true;
+    }
+
     const auto& regions = getPlaybackRegions();
     
     if (firstProcessCall.exchange(false))

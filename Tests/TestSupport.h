@@ -84,6 +84,83 @@ struct VST3AraSessionTestProbe {
         session.pendingSnapshotPublication_ = true;
         session.publishSnapshotLocked();
     }
+
+    static void seedSource(VST3AraSession& session,
+                           juce::ARAAudioSource* audioSource,
+                           uint64_t sourceId,
+                           double sampleRate = 44100.0,
+                           int64_t numSamples = 44100)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+
+        auto& sourceSlot = session.sources_[audioSource];
+        sourceSlot.audioSource = audioSource;
+        sourceSlot.sourceId = sourceId;
+        sourceSlot.sampleRate = sampleRate;
+        sourceSlot.numChannels = 1;
+        sourceSlot.numSamples = numSamples;
+        sourceSlot.contentRevision = 1;
+        sourceSlot.hydratedContentRevision = 1;
+        sourceSlot.copiedAudio = std::make_shared<juce::AudioBuffer<float>>(1, static_cast<int>(numSamples));
+        sourceSlot.copiedAudio->clear();
+    }
+
+    static void seedAudioModificationBinding(VST3AraSession& session,
+                                             const juce::String& persistentId,
+                                             uint64_t sourceId,
+                                             uint64_t materializationId,
+                                             SourceWindow sourceWindow,
+                                             uint64_t materializationRevision = 1,
+                                             double materializationDurationSeconds = 1.0)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+
+        VST3AraSession::AraMaterializationBinding binding;
+        binding.audioModificationPersistentId = persistentId;
+        binding.sourceId = sourceId;
+        binding.materializationId = materializationId;
+        binding.sourceWindow = sourceWindow;
+        binding.materializationRevision = materializationRevision;
+        binding.materializationDurationSeconds = materializationDurationSeconds;
+        session.upsertMaterializationBindingLocked(binding);
+    }
+
+    static void seedPlaybackRegionForModification(VST3AraSession& session,
+                                                  juce::ARAAudioSource* audioSource,
+                                                  juce::ARAPlaybackRegion* playbackRegion,
+                                                  const juce::String& persistentId,
+                                                  SourceWindow sourceWindow,
+                                                  double playbackStartSeconds,
+                                                  double playbackEndSeconds)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+
+        auto& regionSlot = session.regions_[playbackRegion];
+        regionSlot.identity.audioSource = audioSource;
+        regionSlot.identity.playbackRegion = playbackRegion;
+        regionSlot.audioModificationPersistentId = persistentId;
+        regionSlot.playbackStartSeconds = playbackStartSeconds;
+        regionSlot.playbackEndSeconds = playbackEndSeconds;
+        regionSlot.sourceWindow = sourceWindow;
+        regionSlot.materializationDurationSeconds = sourceWindow.durationSeconds();
+        regionSlot.projectionRevision = session.nextRegionProjectionRevision_++;
+        session.applyBindingToRegionSlotLocked(regionSlot);
+        session.preferredRegion_ = regionSlot.identity;
+    }
+
+    static void publish(VST3AraSession& session)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+        session.publishSnapshotLocked();
+    }
+
+    static uint64_t bindingMaterializationForPersistentId(const VST3AraSession& session,
+                                                          const juce::String& persistentId)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+        const auto it = session.materializationBindings_.find(persistentId);
+        return it != session.materializationBindings_.end() ? it->second.materializationId : 0;
+    }
 };
 #endif
 
@@ -149,4 +226,3 @@ void runUiBehaviorSuite();
 void runArchitectureBehaviorSuite();
 void runUndoManagerSuite();
 void runMemoryOptimizationSuite();
-
