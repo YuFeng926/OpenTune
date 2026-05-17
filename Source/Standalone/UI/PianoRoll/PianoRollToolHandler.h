@@ -139,7 +139,7 @@ public:
 
     explicit PianoRollToolHandler(Context context);
 
-    void setTool(ToolId tool) { currentTool_ = tool; }
+    void setTool(ToolId tool);
     void mouseMove(const juce::MouseEvent& e);
     void mouseDown(const juce::MouseEvent& e);
     void mouseDrag(const juce::MouseEvent& e);
@@ -168,6 +168,15 @@ private:
 
     void showToolContextMenu(const juce::MouseEvent& e);
 
+    bool isEmptySpaceMouseDown(const juce::MouseEvent& e);
+    bool hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e);
+    bool hitsLineAnchorSegment(const juce::MouseEvent& e);
+    void beginEmptySpaceIntent(const juce::MouseEvent& e);
+    bool consumeEmptySpaceIntentDrag(const juce::MouseEvent& e);
+    bool consumeEmptySpaceIntentUp(const juce::MouseEvent& e);
+    juce::MouseEvent eventAtEmptySpaceMouseDown(const juce::MouseEvent& e);
+    void cancelActiveMouseGesture();
+
     void deleteSelectedNotes(std::vector<Note>& notes);
     void handleDeleteKey();
 
@@ -182,6 +191,8 @@ private:
 
     Context ctx_;
     ToolId currentTool_ = ToolId::Select;
+
+    static constexpr int kEmptySpaceDragThreshold = 12;
 
     juce::Point<int> dragStartPos_;
     juce::Point<float> lastDrawPoint_;

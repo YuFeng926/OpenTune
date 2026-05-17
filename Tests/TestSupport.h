@@ -223,6 +223,7 @@ bool seedPublishedIdleChunk(RenderCache& cache,
 void runCoreBehaviorSuite();
 void runProcessorBehaviorSuite();
 void runUiBehaviorSuite();
+void runPianoRollIntentBehaviorSuite();
 void runArchitectureBehaviorSuite();
 void runUndoManagerSuite();
 void runMemoryOptimizationSuite();

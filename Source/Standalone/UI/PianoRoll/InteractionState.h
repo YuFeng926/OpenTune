@@ -4,6 +4,7 @@
 #include <vector>
 #include <utility>
 #include "Utils/Note.h"
+#include "UI/ToolIds.h"
 
 namespace OpenTune {
 
@@ -88,6 +89,16 @@ struct DrawingState
     
 };
 
+struct EmptySpaceMouseIntent
+{
+    bool active = false;
+    ToolId tool = ToolId::Select;
+    juce::Point<int> mouseDownPos;
+    double mouseDownTime = 0.0;
+
+    void clear();
+};
+
 class InteractionState
 {
 public:
@@ -103,6 +114,7 @@ public:
     bool drawNoteToolPendingDrag = false;
     juce::Point<int> drawNoteToolMouseDownPos;
     bool handDrawPendingDrag = false;
+    EmptySpaceMouseIntent emptySpaceIntent;
     
     std::vector<int> selectedLineAnchorSegmentIds;
 };
