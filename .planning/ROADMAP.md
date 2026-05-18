@@ -47,16 +47,23 @@
   - VST3 ARA multi-region binding repair: `AudioModification persistentID -> materializationId` binding table in `VST3AraSession`, source/window reuse removed from ARA default birth, ARA archive hooks wired, existing renderable binding display no longer depends on Read Audio arm state
   - Studio One stopped/pause ARA playback gate implemented: realtime stopped blocks clear output before mapping/readback and `processBlock(...)` returns ARA-handled silence (`true`), with plan and verification source under `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate*.md`
   - Studio One normal track-insert `Read Audio` failure implemented as a runtime-mode split: ARA-capable VST3 instances are ARA-bound only after host `bindToDocumentController*()`, otherwise they are regular VST3 and use `CaptureSession`.
+  - 2026-05-18 PianoRoll empty-space seek intent: one mouse gesture = one intent (click seeks, drag edits, tool switch cancels pending); `piano-roll-intent` suite 11 tests PASS
+  - 2026-05-18 Regular VST3 capture display selection: completed capture stays visible when host playhead leaves segment; `architecture/processor/core` PASS, ARA/non-ARA builds PASS
+  - 2026-05-18 Regular VST3 capture timeline view domain: PianoRoll view defaults to zero so late-capture segments remain scrollable to earlier time
+  - 2026-05-18 Regular VST3 transport shortcuts: unified routing helper, no fake host transport truth; architecture guards PASS
 - Still open on this line:
   - Validate ARA-bound vs regular VST3 runtime split in Studio One track insert, Studio One ARA workflow, REAPER ARA track FX, Cubase extension workflow, and Live VST3 insert
   - Validate Studio One pause/stop/play behavior with the rebuilt ARA VST3
+  - Validate PianoRoll empty-space seek intent L5 manual visual behavior
+  - Validate regular VST3 capture display selection (completed capture visibility), timeline view domain (late-capture scroll), and transport shortcuts L5
   - Undo/Redo 边界测试（空栈、redo 裁剪、500 层溢出）
   - CorrectionWorker 取消/覆盖并发语义验证
   - `OpenTuneTests.exe ui` runner exit=1/no `[FAIL]` text needs explanation before claiming full-suite PASS
   - Reaper ARA multi-item/project reload L5 journey remains pending
   - L5 manual journeys 和 macOS bundle inspection 继续 deferred
 - Next planning action:
-  - 确认构建通过后补充自动化测试
+  - 用户确认 2026-05-18 各项 L5 手工旅程
+  - 确认构建通过后评估是否需要更多自动化测试
   - 评估 v1.5 是否需要更多编辑工具集成
 
 ## Progress
@@ -76,10 +83,14 @@
 
 - **Studio One ARA stopped gate:** renderer-local realtime stopped-state silence is implemented; non-realtime ARA reads are preserved; Studio One pause/stop/play L5 behavior remains pending.
 - **ARA-capable regular VST3 mode:** implemented runtime split so unbound ARA-capable VST3 instances use regular capture instead of reporting missing `DocumentController`; host L5 remains pending.
+- **PianoRoll empty-space seek intent (2026-05-18):** `mouseDown` arms pending, `mouseUp` within 12px seeks, drag beyond threshold starts tool editing; `piano-roll-intent` suite PASS; L5 remains pending.
+- **Regular VST3 capture display selection (2026-05-18):** completed capture stays visible when playhead leaves segment; architecture guards PASS; host L5 pending.
+- **Regular VST3 capture timeline view domain (2026-05-18):** PianoRoll view defaults to zero so late-capture segments remain scrollable; automated test PASS; host L5 pending.
+- **Regular VST3 transport shortcuts (2026-05-18):** unified routing helper, no fake host transport truth; architecture guards PASS; host L5 pending.
 - **Done (v1.5):** Custom UndoManager + PianoRollEditAction, PianoRollCorrectionWorker async worker, PlayheadOverlayComponent isolation, RenderBadgeComponent, F0Timeline finalized, Line Anchor tool, Vibrato per-note control, Continuous scroll mode, ONNX Runtime memory optimization, GPU/CPU inference backend restructure
-- **Open:** ARA-bound/regular VST3 host L5 validation, Undo 边界测试、CorrectionWorker 并发验证、UI suite exit-code investigation、Reaper ARA multi-item L5 validation
+- **Open:** ARA-bound/regular VST3 host L5 validation, Undo 边界测试、CorrectionWorker 并发验证、UI suite exit-code investigation、Reaper ARA multi-item L5 validation、2026-05-18 四项 L5
 - **Deferred:** L5 manual journeys, macOS bundle inspection, F3/F5 follow-up tasks
 
 ---
-*Roadmap updated: 2026-05-17 after implementing ARA-capable regular VST3 runtime mode split*
+*Roadmap updated: 2026-05-18 after implementing PianoRoll empty-space seek intent and regular VST3 capture UX refinement*
 *Current state: `v1.4` shipped/frozen; `v1.5` is active milestone*

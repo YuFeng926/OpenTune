@@ -15,6 +15,7 @@
 
 #include <array>
 #include <cmath>
+#include <initializer_list>
 #include <map>
 #include <optional>
 
@@ -213,6 +214,17 @@ juce::String extractWorkspaceFileSection(const juce::String& relativePath,
 bool sourceContains(const juce::String& relativePath, const juce::String& needle)
 {
     return getFileCache().get(relativePath).contains(needle);
+}
+
+bool sourceContainsAny(const juce::String& relativePath, std::initializer_list<const char*> needles)
+{
+    const auto& source = getFileCache().get(relativePath);
+    for (const auto* needle : needles) {
+        if (source.contains(needle))
+            return true;
+    }
+
+    return false;
 }
 
 bool workspaceFileExists(const juce::String& relativePath)
@@ -1128,18 +1140,28 @@ void runPianoRollComponentSourceGuardPaintUsesCachedNotesInsteadOfProcessorReadT
         "Source/Standalone/UI/PianoRollComponent.cpp",
         "void PianoRollComponent::paint",
         "void PianoRollComponent::setInferenceActive");
+    const auto renderItemSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "PianoRollRenderer::MaterializationRenderItem PianoRollComponent::buildMaterializationRenderItem",
+        "void PianoRollComponent::visibilityChanged");
     if (paintSection.isEmpty()) {
         logFail(testName, "failed to locate piano-roll paint source section");
         return;
     }
-
-    if (paintSection.contains("getCurrentClipNotesCopy()") || paintSection.contains("getMaterializationNotesById(")) {
-        logFail(testName, "paint path still reads notes through a processor/store round-trip");
+    if (renderItemSection.isEmpty()) {
+        logFail(testName, "failed to locate piano-roll materialization render item source section");
         return;
     }
 
-    if (!paintSection.contains("getDisplayedNotes()")) {
-        logFail(testName, "paint path does not consume the cached/display notes owner yet");
+    if (paintSection.contains("getCurrentClipNotesCopy()")) {
+        logFail(testName, "paint path still reads legacy clip notes");
+        return;
+    }
+
+    if (!renderItemSection.contains("item.notes = getDisplayedNotes()")
+        || !renderItemSection.contains("item.notes = processor_->getMaterializationNotesById(placement.materializationId)")
+        || !paintSection.contains("renderer_->drawNotes(g, ctx, item)")) {
+        logFail(testName, "paint path must draw notes from per-placement render items while active notes use the cached/display owner");
         return;
     }
 
@@ -1822,7 +1844,9 @@ void runPianoRollPlayheadUsesDedicatedOverlayTest()
     }
 
     if (!header.contains("playheadOverlay_.setPlaying(playing);")
-        || !componentSource.contains("playheadOverlay_.setPlayheadViewportX")
+        || !componentSource.contains("playheadOverlay_.setTimelineStartSeconds")
+        || !componentSource.contains("playheadOverlay_.setPlayheadSeconds")
+        || !componentSource.contains("playheadOverlay_.setScrollOffset")
         || componentSource.contains("renderer_->drawPlayhead(g, ctx)")) {
         logFail(testName, "piano roll still paints the playhead through the heavy main layer");
         return;
@@ -2998,7 +3022,7 @@ void runProcessorModelRejectsMixedClipOwnerApisTest()
         || !expectPresent(arrangementPlacementSection, "materializationId", "Standalone placement is missing materializationId")
         || !expectPresent(materializationProjectionHeader, "MaterializationTimelineProjection", "MaterializationTimelineProjection type is missing")
         || !expectPresent(pluginEditorHeader, "resolveCurrentMaterializationId", "VST3 editor is missing materialization selection helper")
-        || !expectPresent(pluginEditorHeader, "resolveCurrentMaterializationProjection", "VST3 editor is missing materialization projection helper")) {
+        || !expectPresent(pluginEditorHeader, "resolveCurrentMaterializationSync", "VST3 editor is missing materialization placement sync helper")) {
         return;
     }
 
@@ -3070,6 +3094,91 @@ void runSplitPlacementPianoRollDisplaysProjectedWindowOnlyTest()
     const auto visibleNoteBounds = PianoRollComponentTestProbe::getNoteBounds(pianoRoll, trailingNotes.front());
     if (visibleNoteBounds.isEmpty()) {
         logFail(testName, "piano roll failed to render note payload that lies inside the projected trailing window");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollTimelineViewDomainLateCaptureCanBrowseBeforeSegmentTest()
+{
+    constexpr const char* testName = "PianoRollTimelineViewDomain_LateCaptureCanBrowseBeforeSegment";
+
+    MaterializationTimelineProjection projection;
+    projection.timelineStartSeconds = 205.0;
+    projection.timelineDurationSeconds = 11.84;
+    projection.materializationDurationSeconds = 11.84;
+
+    PianoRollComponent pianoRoll;
+    pianoRoll.setSize(900, 420);
+    pianoRoll.setMaterializationProjection(projection);
+    pianoRoll.setTimelineViewDomain(0.0, projection.timelineEndSeconds());
+
+    if (!PianoRollComponentTestProbe::hasExplicitTimelineViewDomain(pianoRoll)) {
+        logFail(testName, "late regular capture must install an explicit timeline view domain");
+        return;
+    }
+
+    if (!approxEqual(PianoRollComponentTestProbe::toVisibleTimelineSeconds(pianoRoll, 0.0), 0.0, 1.0e-6)) {
+        logFail(testName, "timeline zero must remain visible in the widened view domain");
+        return;
+    }
+
+    if (!approxEqual(PianoRollComponentTestProbe::toAbsoluteTimelineSeconds(pianoRoll, 0.0), 0.0, 1.0e-6)) {
+        logFail(testName, "scroll origin must address DAW timeline zero, not the capture segment start");
+        return;
+    }
+
+    if (PianoRollComponentTestProbe::timeToX(pianoRoll, 0.0)
+        < PianoRollComponentTestProbe::getPianoKeyWidth(pianoRoll)) {
+        logFail(testName, "timeline zero must map into the browsable ruler area");
+        return;
+    }
+
+    if (PianoRollComponentTestProbe::timeToX(pianoRoll, projection.timelineStartSeconds)
+        <= PianoRollComponentTestProbe::timeToX(pianoRoll, 0.0)) {
+        logFail(testName, "captured content must still project to its absolute host-time position");
+        return;
+    }
+
+    if (!approxEqual(projection.projectMaterializationTimeToTimeline(0.0), 205.0, 1.0e-6)
+        || !approxEqual(projection.projectTimelineTimeToMaterialization(205.0), 0.0, 1.0e-6)) {
+        logFail(testName, "projection mapping must remain anchored to the captured host time");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollTimelineViewDomainDefaultProjectionWindowUnchangedTest()
+{
+    constexpr const char* testName = "PianoRollTimelineViewDomain_DefaultProjectionWindowUnchanged";
+
+    MaterializationTimelineProjection projection;
+    projection.timelineStartSeconds = 8.0;
+    projection.timelineDurationSeconds = 2.0;
+    projection.materializationDurationSeconds = 2.0;
+
+    PianoRollComponent pianoRoll;
+    pianoRoll.setSize(640, 360);
+    pianoRoll.setMaterializationProjection(projection);
+
+    if (PianoRollComponentTestProbe::hasExplicitTimelineViewDomain(pianoRoll)) {
+        logFail(testName, "default placement/ARA projection must not install a widened view domain");
+        return;
+    }
+
+    if (!approxEqual(PianoRollComponentTestProbe::toVisibleTimelineSeconds(pianoRoll, projection.timelineStartSeconds),
+                     0.0,
+                     1.0e-6)) {
+        logFail(testName, "default projection window origin changed unexpectedly");
+        return;
+    }
+
+    if (!approxEqual(PianoRollComponentTestProbe::toAbsoluteTimelineSeconds(pianoRoll, 0.0),
+                     projection.timelineStartSeconds,
+                     1.0e-6)) {
+        logFail(testName, "default visible origin must remain the projection start");
         return;
     }
 
@@ -4463,6 +4572,116 @@ void runCapturePersistenceProcessingOnRestoreTriggersRefreshTest()
     logPass(testName);
 }
 
+void runCaptureSessionEditedSegmentsListIsPlacementSourceTest()
+{
+    constexpr const char* testName = "CaptureSession_EditedSegmentsListIsPlacementSource";
+
+    Capture::ProcessorBindings bindings{};
+    Capture::CaptureSession session(std::move(bindings));
+    session.prepareToPlay(48000.0, 512, /*hostInputChannels=*/1);
+
+    auto pcmA = std::make_shared<juce::AudioBuffer<float>>(1, 4800);
+    pcmA->clear();
+    session.testInjectEditedSegment(/*T_start*/ 10.0, /*durationSeconds*/ 1.0, /*matId*/ 101, pcmA);
+
+    Capture::SegmentInfo segment;
+    if (!session.resolveDisplaySegment(/*hostTimeSeconds*/ 0.0, segment)
+        || segment.materializationId != 101u
+        || segment.id == 0) {
+        logFail(testName, "latest completed capture must remain displayable when host_t is outside every segment");
+        return;
+    }
+
+    auto pcmB = std::make_shared<juce::AudioBuffer<float>>(1, 4800);
+    pcmB->clear();
+    session.testInjectEditedSegment(/*T_start*/ 20.0, /*durationSeconds*/ 1.0, /*matId*/ 202, pcmB);
+
+    auto pcmWithoutMaterialization = std::make_shared<juce::AudioBuffer<float>>(1, 4800);
+    pcmWithoutMaterialization->clear();
+    session.testInjectEditedSegment(/*T_start*/ 30.0, /*durationSeconds*/ 1.0, /*matId*/ 0, pcmWithoutMaterialization);
+
+    const auto editedSegments = session.listEditedSegments();
+    if (editedSegments.size() != 2) {
+        logFail(testName, "regular capture placement snapshot must include every edited segment");
+        return;
+    }
+
+    if (editedSegments[0].materializationId != 101u
+        || editedSegments[0].state != Capture::SegmentState::Edited
+        || !approxEqual(editedSegments[0].T_start, 10.0)
+        || editedSegments[1].materializationId != 202u
+        || editedSegments[1].state != Capture::SegmentState::Edited
+        || !approxEqual(editedSegments[1].T_start, 20.0)) {
+        logFail(testName, "edited segment placement snapshot lost stable insertion order or materialization binding");
+        return;
+    }
+
+    if (!session.resolveDisplaySegment(/*hostTimeSeconds*/ 10.25, segment)
+        || segment.materializationId != 101u) {
+        logFail(testName, "single display resolution should remain a host-time selection helper");
+        return;
+    }
+
+    const auto placementsAfterResolve = session.listEditedSegments();
+    if (placementsAfterResolve.size() != 2
+        || placementsAfterResolve[0].materializationId != 101u
+        || placementsAfterResolve[1].materializationId != 202u) {
+        logFail(testName, "single display resolution must not replace the multi-segment placement source");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runCaptureSessionDisplaySegmentUpdatesOnRenderCompleteTest()
+{
+    constexpr const char* testName = "CaptureSession_DisplaySegmentUpdatesOnRenderComplete";
+
+    uint64_t submittedMaterializationId = 0;
+    Capture::ProcessorBindings bindings{};
+    bindings.submitForRender = [&](std::shared_ptr<juce::AudioBuffer<float>> pcm,
+                                   double sampleRate,
+                                   juce::String displayName) -> uint64_t {
+        juce::ignoreUnused(sampleRate, displayName);
+        if (pcm == nullptr || pcm->getNumSamples() == 0) {
+            logFail(testName, "captured PCM was not submitted");
+            return 0;
+        }
+        submittedMaterializationId = 303;
+        return submittedMaterializationId;
+    };
+    bindings.isRenderReady = [&](uint64_t materializationId) {
+        return materializationId == submittedMaterializationId;
+    };
+
+    Capture::CaptureSession session(std::move(bindings));
+    session.prepareToPlay(48000.0, 512, /*hostInputChannels=*/1);
+    if (!session.armNewCapture()) {
+        logFail(testName, "armNewCapture failed");
+        return;
+    }
+
+    juce::AudioBuffer<float> buffer(1, 512);
+    buffer.clear();
+    buffer.setSample(0, 0, 0.5f);
+    session.processBlock(buffer, /*hostTimeSeconds*/ 12.0, /*hostSampleRate*/ 48000.0, /*isPlaying*/ true);
+    session.stopCapture();
+
+    for (int i = 0; i < 8; ++i)
+        session.tick();
+
+    Capture::SegmentInfo segment;
+    if (!session.resolveDisplaySegment(/*hostTimeSeconds*/ 0.0, segment)
+        || segment.materializationId != 303u
+        || segment.state != Capture::SegmentState::Edited
+        || !approxEqual(segment.T_start, 12.0)) {
+        logFail(testName, "render completion must update session-owned display segment");
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runProcessorStateVersionFiveAndNoBpmTest()
 {
     constexpr const char* testName = "ProcessorState_VersionFiveAndNoBpm";
@@ -4609,6 +4828,8 @@ void runProcessorBehaviorSuite()
     runCapturePersistenceSerializeOmitsFlacBytesTest();
     runCapturePersistenceOrphanSegmentDroppedTest();
     runCapturePersistenceProcessingOnRestoreTriggersRefreshTest();
+    runCaptureSessionEditedSegmentsListIsPlacementSourceTest();
+    runCaptureSessionDisplaySegmentUpdatesOnRenderCompleteTest();
     runProcessorStateVersionFiveAndNoBpmTest();
     runProcessorStateOldVersionRejectedTest();
     // undo-affected-range-passthrough anchor tests
@@ -4646,6 +4867,8 @@ void runUiBehaviorSuite()
     runPianoRollInteractionSourceGuardDeleteLegacyCopyWritebackApiBeforeRefactorTest();
     runMaterializationStoreNotesRevisionAdvancesOnSetNotesTest();
     runSplitPlacementPianoRollDisplaysProjectedWindowOnlyTest();
+    runPianoRollTimelineViewDomainLateCaptureCanBrowseBeforeSegmentTest();
+    runPianoRollTimelineViewDomainDefaultProjectionWindowUnchangedTest();
     runEditingCommandDoesNotMutatePlacementTest();
     runPianoRollComponentSourceGuardPaintUsesCachedNotesInsteadOfProcessorReadTest();
     runPianoRollDrawNoteDraftSurvivesMultiEventDragTest();
@@ -5352,7 +5575,7 @@ void runAraEditorAttachesRenderableBindingWithoutReadAudioArmTest()
     const auto editorHeader = getFileCache().get("Source/Plugin/PluginEditor.h");
     const auto projectionSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
                                                                "void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()",
-                                                               "pianoRoll_.setMaterializationProjection(projection);");
+                                                               "} // namespace OpenTune::PluginUI");
     if (editorHeader.contains("araClipImportArmed_")
         || projectionSection.contains("araClipImportArmed_")) {
         logFail(testName, "ARA renderable binding is still gated by Read Audio arm state");
@@ -5675,6 +5898,249 @@ void runAraRuntimeCapturePersistenceUsesRuntimeAccessorTest()
     if (!deserializeSection.contains("getCaptureSession()")
         || deserializeSection.contains("if (captureSession_ != nullptr)")) {
         logFail(testName, "state deserialization must use runtime capture accessor");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runVst3KeyboardShortcutsRouteThroughUnifiedHelperTest()
+{
+    constexpr const char* testName = "Vst3KeyboardShortcuts_RouteThroughUnifiedHelper";
+    const auto keySection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                        "bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)",
+                                                        "void OpenTuneAudioProcessorEditor::retuneSpeedChanged");
+
+    if (keySection.isEmpty()) {
+        logFail(testName, "PluginEditor keyPressed section not found");
+        return;
+    }
+
+    const bool usesShortcutRouter = keySection.contains("handleEditorShortcut(key)")
+        || keySection.contains("handleKeyCommand(key)")
+        || keySection.contains("handleTransportShortcut(key)")
+        || keySection.contains("dispatchKeyboardShortcut(key)")
+        || keySection.contains("routeKeyPress(key)");
+
+    if (!usesShortcutRouter) {
+        logFail(testName, "VST3 keyPressed must delegate to a unified shortcut helper/router");
+        return;
+    }
+
+    if (keySection.contains("key == juce::KeyPress::spaceKey")
+        || keySection.contains("key.getKeyCode() == juce::KeyPress::spaceKey")) {
+        logFail(testName, "VST3 keyPressed must not hard-code Space directly at the editor entrypoint");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runVst3TransportButtonsDoNotForgeRegularPlaybackTruthTest()
+{
+    constexpr const char* testName = "Vst3TransportButtons_DoNotForgeRegularPlaybackTruth";
+    const auto playSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                         "void OpenTuneAudioProcessorEditor::playRequested()",
+                                                         "void OpenTuneAudioProcessorEditor::pauseRequested()");
+    const auto pauseSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                          "void OpenTuneAudioProcessorEditor::pauseRequested()",
+                                                          "void OpenTuneAudioProcessorEditor::stopRequested()");
+    const auto stopSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                         "void OpenTuneAudioProcessorEditor::stopRequested()",
+                                                         "void OpenTuneAudioProcessorEditor::loopToggled");
+
+    if (playSection.isEmpty() || pauseSection.isEmpty() || stopSection.isEmpty()) {
+        logFail(testName, "VST3 transport listener sections not found");
+        return;
+    }
+
+    if (!playSection.contains("docController->requestStartPlayback()")
+        || !pauseSection.contains("docController->requestStopPlayback()")
+        || !stopSection.contains("docController->requestStopPlayback()")
+        || !stopSection.contains("docController->requestSetPlaybackPosition(0.0)")) {
+        logFail(testName, "ARA-bound transport branch must keep using DocumentController playback requests");
+        return;
+    }
+
+    const auto playRegular = playSection.fromLastOccurrenceOf("#endif", false, false);
+    const auto pauseRegular = pauseSection.fromLastOccurrenceOf("#endif", false, false);
+    const auto stopRegular = stopSection.fromLastOccurrenceOf("#endif", false, false);
+
+    if (playRegular.contains("processorRef_.setPlaying(")
+        || pauseRegular.contains("processorRef_.setPlaying(")
+        || stopRegular.contains("processorRef_.setPlaying(")
+        || playRegular.contains("processorRef_.setPosition(")
+        || pauseRegular.contains("processorRef_.setPosition(")
+        || stopRegular.contains("processorRef_.setPosition(")) {
+        logFail(testName, "regular VST3 transport must not call processorRef_.setPlaying()/setPosition()");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runVst3RegularTransportSurfacesHostControlledSemanticsTest()
+{
+    constexpr const char* testName = "Vst3RegularTransport_SurfacesHostControlledSemantics";
+    const auto transportSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                              "void OpenTuneAudioProcessorEditor::playRequested()",
+                                                              "void OpenTuneAudioProcessorEditor::loopToggled");
+    const auto keySection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                        "bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)",
+                                                        "void OpenTuneAudioProcessorEditor::retuneSpeedChanged");
+
+    if (transportSection.isEmpty() || keySection.isEmpty()) {
+        logFail(testName, "VST3 transport/key sections not found");
+        return;
+    }
+
+    const auto regularTransport = transportSection.fromLastOccurrenceOf("#endif", false, false);
+    const bool hasUserVisibleOrLogSignal = regularTransport.contains("AppLogger::")
+        || regularTransport.contains("showHostManagedMessage")
+        || regularTransport.contains("showHostControlled")
+        || regularTransport.contains("setStatus")
+        || regularTransport.contains("setTooltip");
+    const bool namesHostControlled = regularTransport.contains("host-controlled")
+        || regularTransport.contains("Host-controlled")
+        || regularTransport.contains("host controlled")
+        || regularTransport.contains("Host controlled");
+    const bool shortcutUsesSameRoute = keySection.contains("playPauseToggleRequested()")
+        || keySection.contains("handleTransportShortcut(key)")
+        || keySection.contains("handleEditorShortcut(key)")
+        || keySection.contains("routeKeyPress(key)");
+
+    if (!hasUserVisibleOrLogSignal || !namesHostControlled) {
+        logFail(testName, "regular VST3 transport must surface explicit host-controlled semantics");
+        return;
+    }
+
+    if (!shortcutUsesSameRoute) {
+        logFail(testName, "regular VST3 shortcut path must share the transport semantic route");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runRegularVst3CaptureUsesHostPlayheadTruthTest()
+{
+    constexpr const char* testName = "RegularVst3Capture_UsesHostPlayheadTruth";
+    const auto processSection = extractWorkspaceFileSection("Source/PluginProcessor.cpp",
+                                                            "// Regular VST3 capture path:",
+                                                            "// Clear output buffer");
+    const auto captureSection = extractWorkspaceFileSection("Source/Plugin/Capture/CaptureSession.cpp",
+                                                            "// Detect \"transport is running\" by observing host_t advance across blocks.",
+                                                            "// Step 2: Reverse-iterate to find newest Edited segment covering host_t.");
+
+    if (processSection.isEmpty() || captureSection.isEmpty()) {
+        logFail(testName, "regular capture process sections not found");
+        return;
+    }
+
+    if (!processSection.contains("hostPlayHead->getPosition()")
+        || !processSection.contains("host_t = pos.getTimeInSeconds().orFallback(0.0)")
+        || !processSection.contains("isPlayingNow = pos.getIsPlaying()")
+        || !processSection.contains("positionAtomic_->store(host_t")
+        || !processSection.contains("isPlaying_.store(isPlayingNow")
+        || !processSection.contains("captureSession->processBlock(buffer, host_t, getSampleRate(), isPlayingNow)")) {
+        logFail(testName, "regular VST3 processBlock must overwrite local transport state from host playhead");
+        return;
+    }
+
+    if (!captureSection.contains("hostDeltaSeconds")
+        || !captureSection.contains("transportRunning = hostDeltaSeconds > kTransportAdvanceEpsilonSeconds")
+        || !sourceContains("Source/Plugin/Capture/CaptureSession.cpp", "if (!transportRunning)")
+        || !sourceContains("Source/Plugin/Capture/CaptureSession.cpp", "continue;")) {
+        logFail(testName, "CaptureSession must continue using host time advancement as capture truth");
+        return;
+    }
+
+    if (sourceContainsAny("Source/PluginProcessor.cpp", {
+            "captureSession->processBlock(buffer, positionAtomic_->load",
+            "captureSession->processBlock(buffer, getPosition()",
+            "captureSession->processBlock(buffer, currentPosition"
+        })) {
+        logFail(testName, "regular capture must not feed plugin-local position into CaptureSession");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraRuntimeRegularCapturePlacementSnapshotUsesEditedSegmentsTest()
+{
+    constexpr const char* testName = "AraRuntime_RegularCapturePlacementSnapshotUsesEditedSegments";
+    const auto& editorHeader = getFileCache().get("Source/Plugin/PluginEditor.h");
+    const auto& sessionHeader = getFileCache().get("Source/Plugin/Capture/CaptureSession.h");
+    const auto& sessionSource = getFileCache().get("Source/Plugin/Capture/CaptureSession.cpp");
+    const auto ctorSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                         "OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& processor)",
+                                                         "OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()");
+    const auto destructorSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                               "OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()",
+                                                               "void OpenTuneAudioProcessorEditor::paint");
+    const auto updateCallbackSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                                   "void OpenTuneAudioProcessorEditor::updateRegularCaptureSessionCallback()",
+                                                                   "void OpenTuneAudioProcessorEditor::clearRegularCaptureSessionCallback()");
+    const auto clearCallbackSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                                  "void OpenTuneAudioProcessorEditor::clearRegularCaptureSessionCallback()",
+                                                                  "bool OpenTuneAudioProcessorEditor::keyPressed");
+
+    if (!sessionHeader.contains("listEditedSegments")
+        || !sessionHeader.contains("resolveDisplaySegment")
+        || !sessionSource.contains("std::vector<SegmentInfo> CaptureSession::listEditedSegments() const")
+        || !sessionSource.contains("seg->state.load(std::memory_order_acquire) == SegmentState::Edited")
+        || !sessionSource.contains("seg->materializationId != 0")
+        || !sessionSource.contains("activeDisplaySegmentId_ = seg->id")
+        || !sessionSource.contains("containsTime(hostTimeSeconds)")) {
+        logFail(testName, "CaptureSession must expose edited segments as the regular capture placement source");
+        return;
+    }
+
+    if (editorHeader.contains("selectedCaptureSegmentId_")
+        || editorHeader.contains("selectedCaptureMaterializationId_")
+        || editorHeader.contains("selectCaptureMaterializationForDisplay")
+        || editorHeader.contains("resolveSelectedCaptureProjection")) {
+        logFail(testName, "VST3 editor must not own a parallel regular capture display selection");
+        return;
+    }
+
+    if (!ctorSection.contains("updateRegularCaptureSessionCallback")
+        || !updateCallbackSection.contains("setActiveSegmentChangedCallback")
+        || !updateCallbackSection.contains("syncMaterializationProjectionToPianoRoll")
+        || ctorSection.contains("No active-segment")) {
+        logFail(testName, "regular VST3 editor must subscribe to capture completion as a repaint/sync notification");
+        return;
+    }
+
+    if (!destructorSection.contains("clearRegularCaptureSessionCallback")
+        || !clearCallbackSection.contains("setActiveSegmentChangedCallback(nullptr)")) {
+        logFail(testName, "regular capture display callback must be cleared on editor destruction");
+        return;
+    }
+
+    const auto resolveSyncSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                                "OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()",
+                                                                "void OpenTuneAudioProcessorEditor::updateRegularCaptureSessionCallback()");
+    const auto syncSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
+                                                         "void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()",
+                                                         "} // namespace OpenTune::PluginUI");
+    if (!resolveSyncSection.contains("session->listEditedSegments()")
+        || !resolveSyncSection.contains("sync.placements.push_back")
+        || !resolveSyncSection.contains("chooseActiveCaptureMaterialization")
+        || !resolveSyncSection.contains("sync.usesRegularCaptureTimelineDomain = true")
+        || !resolveSyncSection.contains("sync.timelineViewStartSeconds = 0.0")
+        || !resolveSyncSection.contains("sync.timelineViewEndSeconds = viewEndSeconds")
+        || resolveSyncSection.contains("MaterializationSource")) {
+        logFail(testName, "regular capture sync must build one placement collection from edited segments without the old single-source branch");
+        return;
+    }
+
+    if (!syncSection.contains("pianoRoll_.setTimelineMaterializationPlacements(sync.placements)")
+        || !syncSection.contains("pianoRoll_.setTimelineViewDomain(sync.timelineViewStartSeconds, sync.timelineViewEndSeconds)")
+        || !syncSection.contains("pianoRoll_.clearTimelineViewDomain()")
+        || syncSection.contains("setMaterializationProjection")) {
+        logFail(testName, "PianoRoll sync must use placement collection plus view-domain policy, not the old single projection path");
         return;
     }
 
@@ -6092,6 +6558,11 @@ void runArchitectureBehaviorSuite()
     runAraRuntimeRecordRequestedSplitsByRuntimeModeTest();
     runAraRuntimeProcessBlockAraFirstThenRegularCaptureTest();
     runAraRuntimeCapturePersistenceUsesRuntimeAccessorTest();
+    runVst3KeyboardShortcutsRouteThroughUnifiedHelperTest();
+    runVst3TransportButtonsDoNotForgeRegularPlaybackTruthTest();
+    runVst3RegularTransportSurfacesHostControlledSemanticsTest();
+    runRegularVst3CaptureUsesHostPlayheadTruthTest();
+    runAraRuntimeRegularCapturePlacementSnapshotUsesEditedSegmentsTest();
     runStandaloneArrangementMultipleClipPlacementsStayTrackLocalTest();
     runMaterializationDetectedKeyStateStaysMaterializationLocalTest();
     runDeletePlacementLastReferenceReclaimsMaterializationTest();

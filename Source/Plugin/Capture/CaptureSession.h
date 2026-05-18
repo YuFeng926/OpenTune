@@ -177,6 +177,8 @@ public:
 
     /** GUI snapshot (message thread). */
     std::vector<SegmentInfo> listSegments() const;
+    std::vector<SegmentInfo> listEditedSegments() const;
+    bool resolveDisplaySegment(double hostTimeSeconds, SegmentInfo& out) const;
 
     // ─── Persistence (message thread) ──────────────────────────────────────
     juce::MemoryBlock serialize() const;
@@ -220,8 +222,9 @@ private:
     int currentMaxBlockSize_ = 0;
 
     // Mutable owners (message thread).
-    mutable std::mutex mutableMutex_;  // guards mutableSegments_ + nextId
+    mutable std::mutex mutableMutex_;  // guards mutableSegments_, activeDisplaySegmentId_ + idCounter_
     std::vector<std::unique_ptr<CaptureSegment>> mutableSegments_;
+    uint64_t activeDisplaySegmentId_ = 0;
     uint64_t idCounter_ = 0;
 
     // Published view for audio thread (lock-free read).

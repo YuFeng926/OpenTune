@@ -18,6 +18,17 @@ namespace {
     constexpr double kApproxStopDrainTickHz = 30.0;
     constexpr double kTransportAdvanceEpsilonSeconds = 1.0e-6;
     constexpr double kMinTransportDiscontinuitySeconds = 0.05;
+
+    SegmentInfo makeSegmentInfo(const CaptureSegment& segment)
+    {
+        SegmentInfo info;
+        info.id = segment.id;
+        info.T_start = segment.T_start.load(std::memory_order_acquire);
+        info.durationSeconds = segment.durationSeconds;
+        info.state = segment.state.load(std::memory_order_acquire);
+        info.materializationId = segment.materializationId;
+        return info;
+    }
 }
 
 CaptureSession::CaptureSession(ProcessorBindings bindings)
@@ -443,6 +454,7 @@ void CaptureSession::onSegmentRenderingComplete(uint64_t segmentId, uint64_t mat
             if (seg->id == segmentId) {
                 seg->materializationId = materializationId;
                 seg->state.store(SegmentState::Edited, std::memory_order_release);
+                activeDisplaySegmentId_ = seg->id;
                 edited = seg.get();
                 break;
             }
@@ -520,16 +532,48 @@ std::vector<SegmentInfo> CaptureSession::listSegments() const
     std::vector<SegmentInfo> result;
     std::lock_guard<std::mutex> lock(mutableMutex_);
     result.reserve(mutableSegments_.size());
+    for (const auto& seg : mutableSegments_)
+        result.push_back(makeSegmentInfo(*seg));
+    return result;
+}
+
+std::vector<SegmentInfo> CaptureSession::listEditedSegments() const
+{
+    std::vector<SegmentInfo> result;
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    result.reserve(mutableSegments_.size());
     for (const auto& seg : mutableSegments_) {
-        SegmentInfo info;
-        info.id = seg->id;
-        info.T_start = seg->T_start.load(std::memory_order_acquire);
-        info.durationSeconds = seg->durationSeconds;
-        info.state = seg->state.load(std::memory_order_acquire);
-        info.materializationId = seg->materializationId;
-        result.push_back(info);
+        if (seg->state.load(std::memory_order_acquire) == SegmentState::Edited
+            && seg->materializationId != 0) {
+            result.push_back(makeSegmentInfo(*seg));
+        }
     }
     return result;
+}
+
+bool CaptureSession::resolveDisplaySegment(double hostTimeSeconds, SegmentInfo& out) const
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    for (auto it = mutableSegments_.rbegin(); it != mutableSegments_.rend(); ++it) {
+        const auto& seg = **it;
+        if (seg.state.load(std::memory_order_acquire) == SegmentState::Edited
+            && seg.materializationId != 0
+            && seg.containsTime(hostTimeSeconds)) {
+            out = makeSegmentInfo(seg);
+            return true;
+        }
+    }
+
+    for (const auto& seg : mutableSegments_) {
+        if (seg->id == activeDisplaySegmentId_
+            && seg->state.load(std::memory_order_acquire) == SegmentState::Edited
+            && seg->materializationId != 0) {
+            out = makeSegmentInfo(*seg);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // ─── Persistence (delegated to CapturePersistence) ─────────────────────────
@@ -564,6 +608,7 @@ uint64_t CaptureSession::testInjectEditedSegment(double T_start,
     seg->materializationId = materializationId;
     seg->state.store(SegmentState::Edited, std::memory_order_release);
     const auto id = seg->id;
+    activeDisplaySegmentId_ = id;
     mutableSegments_.push_back(std::move(seg));
     publishSegmentsView();
     return id;

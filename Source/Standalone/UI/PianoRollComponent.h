@@ -84,6 +84,8 @@ public:
         Continuous
     };
 
+    using TimelineMaterializationPlacement = OpenTune::TimelineMaterializationPlacement;
+
     PianoRollComponent();
     ~PianoRollComponent() override;
 
@@ -169,7 +171,7 @@ public:
     void setNoteSplit(float value);
     
     bool isAutoTuneProcessing() const;
-    double getMaterializationDurationSeconds() const { return materializationProjection_.materializationDurationSeconds; }
+    double getMaterializationDurationSeconds() const;
     bool hasSelectionRange() const { return interactionState_.selection.hasSelectionArea && interactionState_.selection.selectionStartTime != interactionState_.selection.selectionEndTime; }
     std::pair<double, double> getSelectionTimeRange() const
     {
@@ -178,6 +180,9 @@ public:
     }
 
     void setMaterializationProjection(const MaterializationTimelineProjection& projection);
+    void setTimelineMaterializationPlacements(std::vector<TimelineMaterializationPlacement> placements);
+    void setTimelineViewDomain(double viewStartSeconds, double viewEndSeconds);
+    void clearTimelineViewDomain();
     
     void setPlayheadColour(juce::Colour colour) {
         playheadOverlay_.setPlayheadColour(colour);
@@ -271,6 +276,8 @@ private:
     void initializeToolHandler();
     void applyEditedMaterializationCurve(std::shared_ptr<PitchCurve> curve);
     void applyEditedMaterializationAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
+    PianoRollRenderer::MaterializationRenderItem buildMaterializationRenderItem(
+        const TimelineMaterializationPlacement& placement) const;
     void refreshEditedMaterializationNotes();
     const std::vector<Note>& getCommittedNotes() const;
     const std::vector<Note>& getDisplayedNotes() const;
@@ -317,6 +324,11 @@ private:
 
     double toVisibleTimelineSeconds(double absoluteSeconds) const;
     double toAbsoluteTimelineSeconds(double visibleSeconds) const;
+    double timelineViewOriginSeconds() const noexcept;
+    double timelineViewEndSeconds() const noexcept;
+    bool hasExplicitTimelineViewDomain() const noexcept;
+    const TimelineMaterializationPlacement* findActiveTimelineMaterializationPlacement() const noexcept;
+    MaterializationTimelineProjection activeMaterializationProjection() const noexcept;
     double projectTimelineTimeToMaterialization(double timelineSeconds) const;
     double projectMaterializationTimeToTimeline(double materializationSeconds) const;
     double getTimelinePixelsPerSecond() const;
@@ -388,7 +400,16 @@ private:
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer_;
     double audioBufferSampleRate_ = static_cast<double>(kAudioSampleRate);
 
-    MaterializationTimelineProjection materializationProjection_;
+    std::vector<TimelineMaterializationPlacement> timelineMaterializationPlacements_;
+    MaterializationTimelineProjection pendingSingleMaterializationProjection_;
+    bool explicitTimelineMaterializationPlacements_ = false;
+    struct TimelineViewDomain {
+        double startSeconds{0.0};
+        double endSeconds{0.0};
+
+        bool isValid() const noexcept { return endSeconds > startSeconds; }
+    };
+    TimelineViewDomain timelineViewDomain_;
     PianoRollVisualInvalidationState pendingVisualInvalidation_;
     double lastVisualFlushMs_ = 0.0;
     bool inferenceActive_ = false;
@@ -413,13 +434,16 @@ private:
     std::vector<CorrectedSegment> getCurrentSegments() const;
     
     bool applyVibratoParameterToSelection(VibratoParam param, float value);
+    bool applyTimelineMaterializationPlacements(std::vector<TimelineMaterializationPlacement> placements,
+                                                bool explicitContract);
+    void deriveSingleTimelineMaterializationPlacement();
 
     std::vector<Note> getEditedMaterializationNotesCopy() const;
 
     std::unique_ptr<PianoRollRenderer> renderer_;
     std::unique_ptr<PianoRollToolHandler> toolHandler_;
     std::unique_ptr<PianoRollCorrectionWorker> correctionWorker_;
-    WaveformMipmap waveformMipmap_;
+    mutable WaveformMipmapCache waveformMipmapCache_;
 
     static constexpr int pianoKeyWidth_ = 60;
     static constexpr int rulerHeight_ = 30;

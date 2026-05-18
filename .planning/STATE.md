@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 status: active
-stopped_at: v1.5 active development + ARA-capable regular VST3 runtime split implemented
-last_updated: "2026-05-17"
-last_activity: 2026-05-17 -- Implemented ARA-capable VST3 runtime split so unbound regular insert instances use CaptureSession while ARA-bound instances keep DocumentController/session/snapshot paths.
+stopped_at: v1.5 active development + PianoRoll empty-space seek intent + regular VST3 capture UX refinement (display selection, timeline view domain, transport shortcuts)
+last_updated: "2026-05-18"
+last_activity: 2026-05-18 -- PianoRoll empty-space seek intent: mouseDown arms pending, mouseUp within threshold seeks, drag beyond threshold starts tool editing. Regular VST3 capture display selection keeps completed capture visible when playhead leaves segment. Regular VST3 capture timeline view domain: PianoRoll view origin defaults to zero so late-capture segments remain scrollable. Regular VST3 transport shortcuts: keyboard shortcuts and transport buttons route through unified helper, no fake host transport truth.
 progress:
   total_phases: 0
   completed_phases: 0
@@ -98,10 +98,19 @@ Last activity: 2026-05-17 -- Implemented ARA-capable regular VST3 runtime mode s
 - 2026-05-17 (Studio One ARA stopped playback gate): Studio One logs show `HostTransportSnapshot: playing=false time=80.000000` immediately followed by repeated ARA playback renderer mappings at the same playback/materialization sample (`mappedLocalSampleForLog=3528000`). This confirms Studio One can pull realtime ARA playback while transport is stopped or paused. `OpenTunePlaybackRenderer` now silences realtime stopped blocks before region mapping/readback while preserving non-realtime ARA reads. The gate clears output and returns `true` from `processBlock(...)` to express ARA-handled silence rather than non-ARA fallback. Plan source: `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate.md`; verification source: `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate-test-verification.md`.
 - 2026-05-17 (ARA-capable regular VST3 runtime split): Studio One short failure logs for track-insert `Read Audio` contain ctor/prepare only and no `DocumentController created` / `didBindToARA`, proving the failing instance is regular VST3 mode. Cubase uses explicit ARA extension workflows rather than plain channel inserts, REAPER can bind ARA from track FX when enabled, and Live should be treated as regular VST3 only. Implemented fix: ARA builds also create regular `CaptureSession`, expose/use it only when `!isBoundToARA()`, keep ARA-bound instances on DocumentController/session/snapshot, and log `recordRequested mode=ara-bound|regular-vst3 processor=... dc=...`. Plan source: `.planning/plans/2026-05-17-ara-capable-regular-vst3-runtime-mode.md`; verification source: `.planning/plans/2026-05-17-ara-capable-regular-vst3-runtime-mode-test-verification.md`.
 
+- 2026-05-18 (Piano Roll empty-space seek intent): One mouse gesture = one intent. `mouseDown` on empty PianoRoll space arms `EmptySpacePending`; `mouseUp` within 12px threshold seeks to click time and consumes gesture; drag beyond threshold converts to current tool drag path (box selection / note drawing / hand-draw / line-anchor). `setTool()` cancels pending intent so transient state cannot leak across tool switches. Timeline ruler seeking remains immediate. Continuous scroll mode centers on seek via `notifyPlayheadChange`. Automated tests: `PianoRollToolHandlerHarness` 11 focused tests PASS. Plan: `.planning/plans/2026-05-18-piano-roll-empty-space-seek-intent.md`; verification: `.planning/plans/2026-05-18-piano-roll-empty-space-seek-intent-test-verification.md`.
+
+- 2026-05-18 (Regular VST3 capture display selection): After regular VST3 insert capture finishes, the VST3 editor maintains display of the captured materialization even when host playhead leaves the segment. `CaptureSession` callback stores active segment/materialization id; `resolveCurrentMaterializationProjection()` updates selection on playhead hit and resolves stored selection on miss. ARA-bound instances continue using ARA snapshot truth and do not consume capture display selection. Automated architecture guard `AraRuntime_RegularCaptureDisplayKeepsCompletedSelection` PASS; `architecture/processor/core` suites PASS; ARA/non-ARA VST3 builds PASS. Status: Implemented; host L5 pending. Plan: `.planning/plans/2026-05-18-regular-vst3-capture-display-selection.md`; verification: `.planning/plans/2026-05-18-regular-vst3-capture-display-selection-test-verification.md`.
+
+- 2026-05-18 (Regular VST3 capture timeline view domain): Studio One regular VST3 capture can record a late timeline slice (e.g. at `03:25`). Previously PianoRoll treated the captured segment projection start as scroll/view origin, making earlier timeline time negative and unreachable. Fix: PianoRoll view domain defaults to time zero, preserving the recorded segment at its actual timeline position while allowing horizontal scroll to earlier time. Automated test `PianoRollTimelineViewDomain_LateCaptureCanBrowseBeforeSegment` PASS. Status: active implementation; host L5 pending. Plan: `.planning/plans/2026-05-18-regular-vst3-capture-timeline-view-domain.md`; verification: `.planning/plans/2026-05-18-regular-vst3-capture-timeline-view-domain-test-verification.md`.
+
+- 2026-05-18 (Regular VST3 transport shortcuts): Regular VST3 must not pretend to own host transport. Keyboard shortcuts and transport buttons route through a unified helper; no host-specific branch, no global keyboard hook, no fake transport truth. Architecture guards (`Vst3KeyboardShortcuts_RouteThroughUnifiedHelper`, `Vst3TransportButtons_DoNotForgeRegularPlaybackTruth`, `Vst3RegularTransport_SurfacesHostControlledSemantics`, `RegularVst3Capture_UsesHostPlayheadTruth`) PASS; ARA/non-ARA VST3 builds PASS. Status: Implemented; host L5 pending. Verification: `.planning/plans/2026-05-18-regular-vst3-transport-shortcuts-test-verification.md`.
+
 ### Pending Todos
 
 - 持续把 `.planning` 与 live tree 保持同步。
-- Request user confirmation for Studio One / REAPER / Cubase / Live L5 journeys after installing the rebuilt VST3.
+- Request user confirmation for Studio One / REAPER / Cubase / Live L5 journeys after installing the rebuilt VST3 (regular-vst3 capture display, timeline view domain, transport shortcuts).
+- Request user confirmation for PianoRoll empty-space seek intent L5 manual visual behavior.
 - 补 Reaper ARA multi-item/project reload L5 验证，确认 persistentID binding 在真实 host 中不再表现为 last-item-only 或重开丢失。
 - 解释并修复 `OpenTuneTests.exe ui` exit=1/no `[FAIL]` text 的 runner 现象，然后才能恢复 full-suite PASS 口径。
 - **后续独立 Task（非阻塞）**：F3 SourceStore hydration 迁移（需锁序设计）、F5 reclaim registry 双格式统一（可选）。
@@ -111,11 +120,11 @@ Last activity: 2026-05-17 -- Implemented ARA-capable regular VST3 runtime mode s
 
 ### Blockers/Concerns
 
-- 当前无硬阻塞。v1.4 manual verification gaps 已降级为非阻塞 deferred items。
+- 当前无硬阻塞。v1.4 manual verification gaps 已降级为非阻塞 deferred items。2026-05-18 四组计划自动化验证全部 PASS，L5 所有项待用户确认。
 
 ## Session Continuity
 
-Last session: 2026-05-17
-Stopped at: ARA-capable regular VST3 runtime split implemented; host L5 pending
+Last session: 2026-05-18
+Stopped at: PianoRoll empty-space seek intent + regular VST3 capture display selection + timeline view domain + transport shortcuts implemented; all automated tests PASS; host L5 pending across all four items
 Resume file: N/A
-Next step: Install/reload the rebuilt VST3 and confirm Studio One track insert uses `mode=regular-vst3`, while ARA workflows log `mode=ara-bound`.
+Next step: User confirmation for all 2026-05-18 L5 manual journeys; commit pending working tree changes
