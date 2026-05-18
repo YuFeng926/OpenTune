@@ -491,7 +491,6 @@ void PitchCurve::applyCorrectionToRange(
     }
 
     std::vector<float> correctedF0Buffer(endFrame - startFrame, 0.0f);
-    std::vector<int> activeNotePerFrame(endFrame - startFrame, -1);
 
     for (int i = startFrame; i < endFrame; ++i) {
         float f0 = originalF0[i];
@@ -515,8 +514,6 @@ void PitchCurve::applyCorrectionToRange(
         }
 
         if (activeNote) {
-            activeNotePerFrame[i - startFrame] = static_cast<int>(activeNoteIndex);
-
             float targetBaseF0 = activeNote->getAdjustedPitch();
             float targetF0 = targetBaseF0;
 
