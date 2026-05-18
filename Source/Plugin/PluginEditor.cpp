@@ -9,6 +9,7 @@
 #include "Editor/Preferences/TabbedPreferencesDialog.h"
 #include "Plugin/Capture/CaptureSession.h"
 #include "Utils/AppLogger.h"
+#include "Utils/KeyShortcutConfig.h"
 #include "Utils/ParameterPanelSync.h"
 #include "Utils/Note.h"
 #include "Utils/PianoRollEditAction.h"
@@ -74,6 +75,40 @@ bool nearlyEqualAudioFrameAtIndices(const juce::AudioBuffer<float>& lhs,
 bool nearlyEqualSeconds(double a, double b)
 {
     return std::abs(a - b) <= (1.0 / TimeCoordinate::kRenderSampleRate);
+}
+
+MaterializationTimelineProjection makeCaptureSegmentProjection(const Capture::SegmentInfo& segment)
+{
+    MaterializationTimelineProjection projection;
+    projection.timelineStartSeconds = segment.T_start;
+    projection.timelineDurationSeconds = segment.durationSeconds;
+    projection.materializationDurationSeconds = segment.durationSeconds;
+    return projection;
+}
+
+TimelineMaterializationPlacement makePlacement(uint64_t materializationId,
+                                               const MaterializationTimelineProjection& projection)
+{
+    TimelineMaterializationPlacement placement;
+    placement.materializationId = materializationId;
+    placement.projection = projection;
+    return placement;
+}
+
+uint64_t chooseActiveCaptureMaterialization(Capture::CaptureSession& session,
+                                            double hostTimeSeconds)
+{
+    Capture::SegmentInfo activeSegment;
+    if (session.resolveDisplaySegment(hostTimeSeconds, activeSegment))
+        return activeSegment.materializationId;
+
+    return 0;
+}
+
+const KeyShortcutConfig::KeyShortcutSettings& vst3EditorShortcutSettings()
+{
+    static const auto settings = KeyShortcutConfig::KeyShortcutSettings::getDefault();
+    return settings;
 }
 
 juce::String buildRenderingOverlayTitle(int completedTasks, int totalTasks, float progress)
@@ -297,11 +332,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     syncMaterializationProjectionToPianoRoll();
     syncSharedAppPreferences();
-
-    // Non-ARA VST3 host-mirror mode: PianoRoll display is driven entirely by host_t
-    // via timerCallback → syncMaterializationProjectionToPianoRoll(). No active-segment
-    // callback is registered: when the host playhead enters a segment's range, the
-    // timer-tick fallback picks it up; when it leaves, PianoRoll goes blank.
+    updateRegularCaptureSessionCallback();
 
     startTimerHz(kHeartbeatHz);
 }
@@ -309,6 +340,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
     stopTimer();
+    clearRegularCaptureSessionCallback();
     LocalizationManager::getInstance().removeListener(this);
     pianoRoll_.removeListener(this);
     parameterPanel_.removeListener(this);
@@ -388,6 +420,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
     syncSharedAppPreferences();
+    updateRegularCaptureSessionCallback();
 
     // Drive capture session tick (poll Capturing→Pending and Processing→Edited transitions,
     // run reclaim sweep). No-op when capture session is null (Standalone / VST3+ARA).
@@ -540,18 +573,13 @@ void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
 
 uint64_t OpenTuneAudioProcessorEditor::resolveCurrentMaterializationId()
 {
-    uint64_t materializationId = 0;
-    MaterializationTimelineProjection projection;
-    resolveCurrentMaterializationProjection(materializationId, projection);
-    return materializationId;
+    return resolveCurrentMaterializationSync().activeMaterializationId;
 }
 
-OpenTuneAudioProcessorEditor::MaterializationSource
-OpenTuneAudioProcessorEditor::resolveCurrentMaterializationProjection(uint64_t& materializationId,
-                                                                     MaterializationTimelineProjection& projection)
+OpenTuneAudioProcessorEditor::PianoRollMaterializationSync
+OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()
 {
-    materializationId = 0;
-    projection = {};
+    PianoRollMaterializationSync sync;
 
 #if JucePlugin_Enable_ARA
     if (const auto* dc = processorRef_.getDocumentController()) {
@@ -559,55 +587,95 @@ OpenTuneAudioProcessorEditor::resolveCurrentMaterializationProjection(uint64_t& 
             const auto snapshot = session->loadSnapshot();
             if (snapshot != nullptr) {
                 if (const auto* preferredRegion = resolvePreferredAraRegionView(*snapshot)) {
-                    materializationId = preferredRegion->appliedProjection.materializationId;
-                    projection = makePianoRollLocalProjection(*preferredRegion);
-                    if (materializationId != 0)
-                        return MaterializationSource::Ara;
+                    sync.activeMaterializationId = preferredRegion->appliedProjection.materializationId;
+                    sync.placements.push_back(makePlacement(sync.activeMaterializationId,
+                                                            makePianoRollLocalProjection(*preferredRegion)));
+                    return sync;
                 }
             }
         }
     }
 #endif
 
-    // Non-ARA VST3 fallback: pick the Edited capture segment whose host time range
-    // contains the current host playhead. Used by AUTO / pen-tool / scale / any other
-    // code path that goes through resolveCurrentMaterializationId so they can find
-    // the active take instead of returning 0.
     if (auto* session = processorRef_.getCaptureSession()) {
-        const double host_t = processorRef_.getPosition();
-        const auto segments = session->listSegments();
-        for (auto it = segments.rbegin(); it != segments.rend(); ++it) {
-            if (it->state != OpenTune::Capture::SegmentState::Edited
-                || it->materializationId == 0)
-                continue;
-            const double segStart = it->T_start;
-            const double segEnd = segStart + it->durationSeconds;
-            if (host_t >= segStart && host_t < segEnd) {
-                materializationId = it->materializationId;
-                projection.timelineStartSeconds = segStart;
-                projection.timelineDurationSeconds = it->durationSeconds;
-                projection.materializationDurationSeconds = it->durationSeconds;
-                return MaterializationSource::Capture;
-            }
+        double viewEndSeconds = 0.0;
+        for (const auto& segment : session->listEditedSegments()) {
+            const auto projection = makeCaptureSegmentProjection(segment);
+            sync.placements.push_back(makePlacement(segment.materializationId, projection));
+            viewEndSeconds = std::max(viewEndSeconds, projection.timelineEndSeconds());
+        }
+
+        if (!sync.placements.empty()) {
+            sync.activeMaterializationId = chooseActiveCaptureMaterialization(*session, processorRef_.getPosition());
+            const bool activeBelongsToPlacements = std::any_of(sync.placements.begin(),
+                                                               sync.placements.end(),
+                                                               [&sync](const auto& placement) {
+                                                                   return placement.materializationId == sync.activeMaterializationId;
+                                                               });
+            if (!activeBelongsToPlacements)
+                sync.activeMaterializationId = 0;
+
+            sync.usesRegularCaptureTimelineDomain = true;
+            sync.timelineViewStartSeconds = 0.0;
+            sync.timelineViewEndSeconds = viewEndSeconds;
         }
     }
 
-    return MaterializationSource::None;
+    return sync;
+}
+
+void OpenTuneAudioProcessorEditor::updateRegularCaptureSessionCallback()
+{
+    auto* session = processorRef_.getCaptureSession();
+    if (session == regularCaptureCallbackSession_)
+        return;
+
+    clearRegularCaptureSessionCallback();
+
+    if (session == nullptr)
+        return;
+
+    regularCaptureCallbackSession_ = session;
+    session->setActiveSegmentChangedCallback([this](uint64_t materializationId) {
+        AppLogger::log("VST3 Capture: completed materializationId="
+            + juce::String(static_cast<juce::int64>(materializationId)));
+        syncMaterializationProjectionToPianoRoll();
+    });
+}
+
+void OpenTuneAudioProcessorEditor::clearRegularCaptureSessionCallback()
+{
+    if (regularCaptureCallbackSession_ != nullptr) {
+        regularCaptureCallbackSession_->setActiveSegmentChangedCallback(nullptr);
+        regularCaptureCallbackSession_ = nullptr;
+    }
 }
 
 bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
-    if (key == juce::KeyPress::spaceKey) {
+    return handleEditorShortcut(key);
+}
+
+bool OpenTuneAudioProcessorEditor::handleEditorShortcut(const juce::KeyPress& key)
+{
+    const auto& shortcutSettings = vst3EditorShortcutSettings();
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::PlayPause, key)) {
         playPauseToggleRequested();
         return true;
     }
 
-    if (key.getModifiers().isCommandDown() && key.getKeyCode() == 'z') {
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Stop, key)) {
+        stopPlaybackRequested();
+        return true;
+    }
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Undo, key)) {
         undoRequested();
         return true;
     }
 
-    if (key.getModifiers().isCommandDown() && key.getKeyCode() == 'y') {
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Redo, key)) {
         redoRequested();
         return true;
     }
@@ -858,9 +926,7 @@ void OpenTuneAudioProcessorEditor::playRequested()
         return;
     }
 #endif
-    processorRef_.setPlaying(true);
-    transportBar_.setPlaying(true);
-    pianoRoll_.setIsPlaying(true);
+    surfaceRegularVst3HostControlledTransport("play");
 }
 
 void OpenTuneAudioProcessorEditor::pauseRequested()
@@ -874,9 +940,7 @@ void OpenTuneAudioProcessorEditor::pauseRequested()
         return;
     }
 #endif
-    processorRef_.setPlaying(false);
-    transportBar_.setPlaying(false);
-    pianoRoll_.setIsPlaying(false);
+    surfaceRegularVst3HostControlledTransport("pause");
 }
 
 void OpenTuneAudioProcessorEditor::stopRequested()
@@ -891,10 +955,15 @@ void OpenTuneAudioProcessorEditor::stopRequested()
         return;
     }
 #endif
-    processorRef_.setPlaying(false);
-    processorRef_.setPosition(0.0);
-    transportBar_.setPlaying(false);
-    pianoRoll_.setIsPlaying(false);
+    surfaceRegularVst3HostControlledTransport("stop");
+}
+
+void OpenTuneAudioProcessorEditor::surfaceRegularVst3HostControlledTransport(const char* actionName)
+{
+    const juce::String action(actionName);
+    const juce::String message = "Regular VST3 " + action + " requested: host-controlled transport";
+    AppLogger::log("VST3Editor: " + message);
+    transportBar_.setRenderStatusText("Host-controlled transport");
 }
 
 void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
@@ -1422,13 +1491,11 @@ void OpenTuneAudioProcessorEditor::escapeKeyPressed()
 
 void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
 {
-    uint64_t materializationId = 0;
-    MaterializationTimelineProjection projection;
+    const auto sync = resolveCurrentMaterializationSync();
 
-    resolveCurrentMaterializationProjection(materializationId, projection);
-
-    if (materializationId == 0) {
-        pianoRoll_.setMaterializationProjection({});
+    if (!sync.hasPlacements()) {
+        pianoRoll_.clearTimelineViewDomain();
+        pianoRoll_.setTimelineMaterializationPlacements({});
         pianoRoll_.setEditedMaterialization(0,
                                     nullptr,
                                     nullptr,
@@ -1436,26 +1503,36 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
         return;
     }
 
-    if (processorRef_.getMaterializationAudioBufferById(materializationId) == nullptr) {
-        pianoRoll_.setMaterializationProjection({});
+    if (!sync.hasActiveMaterialization()
+        || processorRef_.getMaterializationAudioBufferById(sync.activeMaterializationId) == nullptr) {
         pianoRoll_.setEditedMaterialization(0,
                                     nullptr,
                                     nullptr,
                                     static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
+        pianoRoll_.setTimelineMaterializationPlacements(sync.placements);
+        if (sync.usesRegularCaptureTimelineDomain) {
+            pianoRoll_.setTimelineViewDomain(sync.timelineViewStartSeconds, sync.timelineViewEndSeconds);
+        } else {
+            pianoRoll_.clearTimelineViewDomain();
+        }
         return;
     }
 
-    pianoRoll_.setMaterializationProjection(projection);
+    auto curve = processorRef_.getMaterializationPitchCurveById(sync.activeMaterializationId);
+    auto buffer = processorRef_.getMaterializationAudioBufferById(sync.activeMaterializationId);
 
-    auto curve = processorRef_.getMaterializationPitchCurveById(materializationId);
-    auto buffer = processorRef_.getMaterializationAudioBufferById(materializationId);
-
-    pianoRoll_.setEditedMaterialization(materializationId,
+    pianoRoll_.setEditedMaterialization(sync.activeMaterializationId,
                                 curve,
                                 buffer,
                                 static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
+    pianoRoll_.setTimelineMaterializationPlacements(sync.placements);
+    if (sync.usesRegularCaptureTimelineDomain) {
+        pianoRoll_.setTimelineViewDomain(sync.timelineViewStartSeconds, sync.timelineViewEndSeconds);
+    } else {
+        pianoRoll_.clearTimelineViewDomain();
+    }
 
-    const auto key = processorRef_.getMaterializationDetectedKeyById(materializationId);
+    const auto key = processorRef_.getMaterializationDetectedKeyById(sync.activeMaterializationId);
     const int rootNote = static_cast<int>(key.root);
     const int scaleType = (key.scale == Scale::Minor) ? 2 : ((key.scale == Scale::Chromatic) ? 3 : 1);
 

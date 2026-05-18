@@ -47,3 +47,8 @@ Resources/PianoSamples/
 Resources/UprightPianoKW-raw/
 Resources/UprightPianoKW-small.7z
 Resources/PianoSamples-mp3/temp_A0.aiff
+
+# Root-level temporary and reference images
+/bug1.png
+/bug2.png
+/*.png

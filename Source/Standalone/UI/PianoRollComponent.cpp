@@ -155,7 +155,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         listeners_.call([noteIndex, oldOffset, newOffset](Listener& l) { l.noteOffsetChanged(noteIndex, oldOffset, newOffset); });
     };
     toolCtx.getPianoKeyWidth = [this]() { return pianoKeyWidth_; };
-    toolCtx.getMaterializationProjection = [this]() { return materializationProjection_; };
+    toolCtx.getMaterializationProjection = [this]() { return activeMaterializationProjection(); };
     toolCtx.projectTimelineTimeToMaterialization = [this](double timelineSeconds) {
         return projectTimelineTimeToMaterialization(timelineSeconds);
     };
@@ -664,9 +664,10 @@ juce::Rectangle<int> PianoRollComponent::getNoteBounds(const Note& note) const
         return {};
     }
 
-    if (materializationProjection_.isValid()
+    const auto projection = activeMaterializationProjection();
+    if (projection.isValid()
         && (note.endTime <= 0.0
-            || note.startTime >= materializationProjection_.materializationDurationSeconds)) {
+            || note.startTime >= projection.materializationDurationSeconds)) {
         return {};
     }
 
@@ -998,7 +999,8 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
 
 void PianoRollComponent::drawNoteDragCurvePreview(juce::Graphics& g)
 {
-    if (!showCorrectedF0_
+    if (audioEditingScheme_ != AudioEditingScheme::Scheme::CorrectedF0Primary
+        || !showCorrectedF0_
         || interactionState_.noteDrag.previewStartFrame < 0
         || interactionState_.noteDrag.previewEndFrameExclusive <= interactionState_.noteDrag.previewStartFrame
         || interactionState_.noteDrag.previewF0.empty()) {
@@ -1140,41 +1142,54 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         g.reduceClipRegion(timelineViewportBounds.withTrimmedLeft(pianoKeyWidth_));
 
         renderer_->drawGridLines(g, ctx);
-        renderer_->drawUnvoicedFrameBands(g, ctx);
+        for (const auto& item : ctx.materializations)
+            renderer_->drawUnvoicedFrameBands(g, ctx, item);
 
-        if (showWaveform_ && audioBuffer_ != nullptr) {
-            renderer_->drawWaveform(g, ctx);
+        if (showWaveform_) {
+            for (const auto& item : ctx.materializations)
+                renderer_->drawWaveform(g, ctx, item);
         }
 
         renderer_->drawLanes(g, ctx);
 
-        const auto& notes = getDisplayedNotes();
-        renderer_->drawNotes(g, ctx, notes);
+        for (const auto& item : ctx.materializations)
+            renderer_->drawNotes(g, ctx, item);
 
-        if (ctx.pitchSnapshot != nullptr && currentCurve_ != nullptr) {
+        bool drewActivePitch = false;
+        for (const auto& item : ctx.materializations) {
+            if (item.pitchSnapshot == nullptr)
+                continue;
+
             if (showOriginalF0_) {
-                const auto& originalF0 = ctx.pitchSnapshot->getOriginalF0();
-                if (!originalF0.empty()) {
-                    renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, 0.55f, true, ctx, currentCurve_);
-                    drawSelectedOriginalF0Curve(g, originalF0);
-                }
+                const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+                if (!originalF0.empty())
+                    renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, 0.55f, true, ctx, item);
             }
 
-            if (showCorrectedF0_) {
-                const int totalFrames = static_cast<int>(ctx.pitchSnapshot->size());
-                if (totalFrames > 0 && ctx.pitchSnapshot->hasAnyCorrection()) {
-                    renderer_->updateCorrectedF0Cache(ctx.pitchSnapshot);
-                    renderer_->drawF0Curve(g, renderer_->getCorrectedF0Cache(), UIColors::correctedF0, 1.0f, false, ctx, currentCurve_, nullptr);
+            if (showCorrectedF0_ && !item.correctedF0.empty())
+                renderer_->drawF0Curve(g, item.correctedF0, UIColors::correctedF0, 1.0f, false, ctx, item, nullptr);
+
+            if (item.active) {
+                if (showOriginalF0_) {
+                    const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+                    if (!originalF0.empty())
+                        drawSelectedOriginalF0Curve(g, originalF0);
                 }
 
                 drawNoteDragCurvePreview(g);
+                drawHandDrawPreview(g);
+                drawLineAnchorPreview(g);
+                drewActivePitch = true;
             }
+        }
 
+        if (!drewActivePitch && currentCurve_ != nullptr) {
             drawHandDrawPreview(g);
             drawLineAnchorPreview(g);
         }
 
-        renderer_->drawChunkBoundaries(g, ctx);
+        for (const auto& item : ctx.materializations)
+            renderer_->drawChunkBoundaries(g, ctx, item);
     }
 
     renderer_->drawPianoKeys(g, ctx);
@@ -1682,9 +1697,6 @@ void PianoRollComponent::resized() {
 void PianoRollComponent::applyEditedMaterializationCurve(std::shared_ptr<PitchCurve> curve)
 {
     currentCurve_ = std::move(curve);
-    if (renderer_) {
-        renderer_->clearCorrectedF0Cache();
-    }
 
     interactionState_.selection.hasSelectionArea = false;
     interactionState_.selection.selectionStartTime = 0.0;
@@ -1702,24 +1714,156 @@ void PianoRollComponent::applyEditedMaterializationAudioBuffer(std::shared_ptr<c
 
     timeConverter_.setZoom(zoomLevel_);
     timeConverter_.setScrollOffset(scrollOffset_);
+}
 
-    waveformMipmap_.setAudioSource(audioBuffer_);
-    renderer_->setWaveformMipmap(&waveformMipmap_);
+double PianoRollComponent::getMaterializationDurationSeconds() const
+{
+    return activeMaterializationProjection().materializationDurationSeconds;
+}
+
+const PianoRollComponent::TimelineMaterializationPlacement* PianoRollComponent::findActiveTimelineMaterializationPlacement() const noexcept
+{
+    const auto activeIt = std::find_if(timelineMaterializationPlacements_.begin(),
+                                       timelineMaterializationPlacements_.end(),
+                                       [this](const auto& placement) {
+                                           return placement.materializationId == editedMaterializationId_
+                                               && placement.isValid();
+                                       });
+    if (activeIt != timelineMaterializationPlacements_.end()) {
+        return &(*activeIt);
+    }
+
+    const auto firstValidIt = std::find_if(timelineMaterializationPlacements_.begin(),
+                                           timelineMaterializationPlacements_.end(),
+                                           [](const auto& placement) { return placement.isValid(); });
+    return firstValidIt != timelineMaterializationPlacements_.end() ? &(*firstValidIt) : nullptr;
+}
+
+MaterializationTimelineProjection PianoRollComponent::activeMaterializationProjection() const noexcept
+{
+    const auto* activePlacement = findActiveTimelineMaterializationPlacement();
+    if (activePlacement != nullptr) {
+        return activePlacement->projection;
+    }
+    return !explicitTimelineMaterializationPlacements_
+        ? pendingSingleMaterializationProjection_
+        : MaterializationTimelineProjection{};
+}
+
+bool PianoRollComponent::applyTimelineMaterializationPlacements(std::vector<TimelineMaterializationPlacement> placements,
+                                                               bool explicitContract)
+{
+    placements.erase(std::remove_if(placements.begin(),
+                                    placements.end(),
+                                    [](const auto& placement) { return !placement.isValid(); }),
+                     placements.end());
+
+    const bool changed = placements.size() != timelineMaterializationPlacements_.size()
+        || !std::equal(placements.begin(), placements.end(), timelineMaterializationPlacements_.begin(),
+            [](const auto& lhs, const auto& rhs) {
+                return lhs.materializationId == rhs.materializationId
+                    && std::abs(lhs.projection.timelineStartSeconds - rhs.projection.timelineStartSeconds) <= 1.0e-9
+                    && std::abs(lhs.projection.timelineDurationSeconds - rhs.projection.timelineDurationSeconds) <= 1.0e-9
+                    && std::abs(lhs.projection.materializationDurationSeconds - rhs.projection.materializationDurationSeconds) <= 1.0e-9;
+            });
+
+    explicitTimelineMaterializationPlacements_ = explicitContract;
+
+    if (!changed) {
+        return false;
+    }
+
+    timelineMaterializationPlacements_ = std::move(placements);
+
+    std::unordered_set<uint64_t> aliveMaterializations;
+    aliveMaterializations.reserve(timelineMaterializationPlacements_.size());
+    for (const auto& placement : timelineMaterializationPlacements_)
+        aliveMaterializations.insert(placement.materializationId);
+    waveformMipmapCache_.prune(aliveMaterializations);
+
+    if (!timelineViewDomain_.isValid()) {
+        playheadOverlay_.setTimelineStartSeconds(timelineViewOriginSeconds());
+    }
+    userScrollHold_ = false;
+    updateScrollBars();
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
+                     PianoRollVisualInvalidationPriority::Interactive);
+    return true;
+}
+
+void PianoRollComponent::deriveSingleTimelineMaterializationPlacement()
+{
+    if (explicitTimelineMaterializationPlacements_) {
+        return;
+    }
+
+    std::vector<TimelineMaterializationPlacement> placements;
+    if (editedMaterializationId_ != 0 && pendingSingleMaterializationProjection_.isValid()) {
+        placements.push_back({ editedMaterializationId_, pendingSingleMaterializationProjection_ });
+    }
+
+    applyTimelineMaterializationPlacements(std::move(placements), false);
 }
 
 void PianoRollComponent::setMaterializationProjection(const MaterializationTimelineProjection& projection)
 {
-    const bool changed = std::abs(materializationProjection_.timelineStartSeconds - projection.timelineStartSeconds) > 1.0e-9
-        || std::abs(materializationProjection_.timelineDurationSeconds - projection.timelineDurationSeconds) > 1.0e-9
-        || std::abs(materializationProjection_.materializationDurationSeconds - projection.materializationDurationSeconds) > 1.0e-9;
+    const bool changed = std::abs(pendingSingleMaterializationProjection_.timelineStartSeconds - projection.timelineStartSeconds) > 1.0e-9
+        || std::abs(pendingSingleMaterializationProjection_.timelineDurationSeconds - projection.timelineDurationSeconds) > 1.0e-9
+        || std::abs(pendingSingleMaterializationProjection_.materializationDurationSeconds - projection.materializationDurationSeconds) > 1.0e-9;
 
     if (!changed) {
         return;
     }
 
-    materializationProjection_ = projection;
-    playheadOverlay_.setTimelineStartSeconds(projection.timelineStartSeconds);
+    pendingSingleMaterializationProjection_ = projection;
+    explicitTimelineMaterializationPlacements_ = false;
+    deriveSingleTimelineMaterializationPlacement();
+    if (!timelineViewDomain_.isValid()) {
+        playheadOverlay_.setTimelineStartSeconds(timelineViewOriginSeconds());
+    }
     userScrollHold_ = false;
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
+                     PianoRollVisualInvalidationPriority::Interactive);
+}
+
+void PianoRollComponent::setTimelineMaterializationPlacements(std::vector<TimelineMaterializationPlacement> placements)
+{
+    if (applyTimelineMaterializationPlacements(std::move(placements), true)) {
+        pendingSingleMaterializationProjection_ = activeMaterializationProjection();
+    }
+}
+
+void PianoRollComponent::setTimelineViewDomain(double viewStartSeconds, double viewEndSeconds)
+{
+    TimelineViewDomain domain;
+    domain.startSeconds = std::max(0.0, viewStartSeconds);
+    domain.endSeconds = std::max(domain.startSeconds, viewEndSeconds);
+
+    const bool changed = std::abs(timelineViewDomain_.startSeconds - domain.startSeconds) > 1.0e-9
+        || std::abs(timelineViewDomain_.endSeconds - domain.endSeconds) > 1.0e-9;
+
+    if (!changed) {
+        return;
+    }
+
+    timelineViewDomain_ = domain;
+    playheadOverlay_.setTimelineStartSeconds(timelineViewOriginSeconds());
+    userScrollHold_ = false;
+    updateScrollBars();
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
+                     PianoRollVisualInvalidationPriority::Interactive);
+}
+
+void PianoRollComponent::clearTimelineViewDomain()
+{
+    if (!timelineViewDomain_.isValid()) {
+        return;
+    }
+
+    timelineViewDomain_ = {};
+    playheadOverlay_.setTimelineStartSeconds(timelineViewOriginSeconds());
+    userScrollHold_ = false;
+    updateScrollBars();
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
                      PianoRollVisualInvalidationPriority::Interactive);
 }
@@ -1767,13 +1911,18 @@ void PianoRollComponent::setEditedMaterialization(uint64_t materializationId,
         applyEditedMaterializationAudioBuffer(std::move(buffer), sampleRate);
     }
 
+    if (materializationChanged || bufferChanged) {
+        deriveSingleTimelineMaterializationPlacement();
+    }
+
     if (hasAudio && (materializationChanged || bufferChanged)) {
         fitToScreen();
     }
 
     userScrollHold_ = false;
     updateScrollBars();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content)
+                         | toInvalidationMask(PianoRollVisualInvalidationReason::Decoration));
 }
 
 void PianoRollComponent::invalidateVisual(const PianoRollVisualInvalidationRequest& request)
@@ -1876,9 +2025,10 @@ double PianoRollComponent::readPlayheadTime() const
 double PianoRollComponent::readProjectedPlayheadTime() const
 {
     const double raw = readPlayheadTime();
-    if (!materializationProjection_.isValid())
+    const auto projection = activeMaterializationProjection();
+    if (!projection.isValid())
         return raw;
-    return materializationProjection_.clampTimelineTime(raw);
+    return projection.clampTimelineTime(raw);
 }
 
 juce::Rectangle<int> PianoRollComponent::getTimelineViewportBounds() const
@@ -1897,18 +2047,16 @@ void PianoRollComponent::onHeartbeatTick()
 
     consumeCompletedCorrectionResults();
 
-    if (!waveformMipmap_.isComplete() && showWaveform_) {
-        if (inferenceActive_) {
+    if (showWaveform_) {
+        if (inferenceActive_)
             waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 8;
-            if (waveformBuildTickCounter_ == 0 && waveformMipmap_.buildIncremental(1.0)) {
-                invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
-            }
-        } else {
+        else
             waveformBuildTickCounter_ = 0;
-            if (waveformMipmap_.buildIncremental(5.0)) {
-                invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
-            }
-        }
+
+        const bool shouldBuild = !inferenceActive_ || waveformBuildTickCounter_ == 0;
+        const double budgetMs = inferenceActive_ ? 1.0 : 5.0;
+        if (shouldBuild && waveformMipmapCache_.buildIncremental(budgetMs))
+            invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
     }
 
     flushPendingVisualInvalidation();
@@ -2314,6 +2462,56 @@ bool PianoRollComponent::keyPressed(const juce::KeyPress& key) {
     return toolHandler_->keyPressed(key);
 }
 
+PianoRollRenderer::MaterializationRenderItem PianoRollComponent::buildMaterializationRenderItem(
+    const TimelineMaterializationPlacement& placement) const
+{
+    PianoRollRenderer::MaterializationRenderItem item;
+    item.materializationId = placement.materializationId;
+    item.projection = placement.projection;
+    item.active = placement.materializationId == editedMaterializationId_;
+
+    std::shared_ptr<PitchCurve> curve;
+    if (item.active) {
+        curve = currentCurve_;
+        item.audioBuffer = audioBuffer_;
+        item.notes = getDisplayedNotes();
+    } else if (processor_ != nullptr) {
+        curve = processor_->getMaterializationPitchCurveById(placement.materializationId);
+        item.audioBuffer = processor_->getMaterializationAudioBufferById(placement.materializationId);
+        item.notes = processor_->getMaterializationNotesById(placement.materializationId);
+    }
+
+    if (curve != nullptr) {
+        item.pitchSnapshot = curve->getSnapshot();
+        if (item.pitchSnapshot != nullptr && item.pitchSnapshot->size() > 0)
+            item.f0Timeline = { item.pitchSnapshot->getHopSize(),
+                                item.pitchSnapshot->getSampleRate(),
+                                static_cast<int>(item.pitchSnapshot->size()) };
+
+        if (item.pitchSnapshot != nullptr && item.pitchSnapshot->hasAnyCorrection()) {
+            item.correctedF0.assign(item.pitchSnapshot->size(), 0.0f);
+            item.pitchSnapshot->renderCorrectedOnlyRange(
+                0,
+                static_cast<int>(item.pitchSnapshot->size()),
+                [&item](int offsetFrame, const float* data, int length) {
+                    std::copy(data, data + length, item.correctedF0.begin() + offsetFrame);
+                });
+        }
+    }
+
+    if (item.audioBuffer != nullptr) {
+        auto& mipmap = waveformMipmapCache_.getOrCreate(placement.materializationId);
+        if (mipmap.isSourceChanged(item.audioBuffer))
+            mipmap.setAudioSource(item.audioBuffer);
+        item.waveformMipmap = &mipmap;
+    }
+
+    if (showChunkBoundaries_ && processor_ != nullptr)
+        processor_->getMaterializationChunkBoundariesById(placement.materializationId, item.chunkBoundaries);
+
+    return item;
+}
+
 void PianoRollComponent::visibilityChanged()
 {
     // 当组件变为可见时，自动获取键盘焦点
@@ -2347,23 +2545,20 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext() const
     ctx.minMidi = minMidi_;
     ctx.maxMidi = maxMidi_;
     ctx.bpm = bpm_;
-    ctx.materializationProjection = materializationProjection_;
     ctx.scaleRootNote = scaleRootNote_;
     ctx.scaleType = scaleType_;
     ctx.noteNameMode = noteNameMode_;
     ctx.showLanes = showLanes_;
     ctx.showChunkBoundaries = showChunkBoundaries_;
     ctx.showUnvoicedFrames = showUnvoicedFrames_;
-    ctx.hasUserAudio = (audioBuffer_ != nullptr);
-    ctx.pitchSnapshot = currentCurve_ != nullptr ? currentCurve_->getSnapshot() : nullptr;
-    ctx.f0Timeline = currentF0Timeline();
     ctx.timeUnit = (timeUnit_ == TimeUnit::Bars)
         ? PianoRollRenderer::RenderContext::TimeUnit::Bars
         : PianoRollRenderer::RenderContext::TimeUnit::Seconds;
 
-    if (ctx.showChunkBoundaries && processor_ != nullptr && editedMaterializationId_ != 0) {
-        processor_->getMaterializationChunkBoundariesById(editedMaterializationId_, ctx.chunkBoundaries);
-    }
+    ctx.materializations.reserve(timelineMaterializationPlacements_.size());
+    for (const auto& placement : timelineMaterializationPlacements_)
+        if (placement.isValid())
+            ctx.materializations.push_back(buildMaterializationRenderItem(placement));
 
     ctx.midiToY = [this](float midi) { return midiToY(midi); };
     ctx.freqToY = [this](float freq) { return freqToY(freq); };
@@ -2406,11 +2601,11 @@ void PianoRollComponent::fitToScreen() {
     // 2. Horizontal Fit:
     // If has audio: fit audio length
     // If no audio: fit 16 seconds
-    double projectedStartSeconds = materializationProjection_.timelineStartSeconds;
     double duration = 16.0;
-    const bool hasProjectedClipTimeline = materializationProjection_.isValid();
+    const auto activeProjection = activeMaterializationProjection();
+    const bool hasProjectedClipTimeline = activeProjection.isValid();
     if (hasProjectedClipTimeline) {
-        duration = materializationProjection_.timelineDurationSeconds;
+        duration = activeProjection.timelineDurationSeconds;
     }
     if (!hasProjectedClipTimeline && audioBuffer_ && audioBufferSampleRate_ > 0.0) {
         duration = static_cast<double>(audioBuffer_->getNumSamples()) / audioBufferSampleRate_;
@@ -2428,9 +2623,11 @@ void PianoRollComponent::fitToScreen() {
     }
 
     if (hasProjectedClipTimeline) {
-        setScrollOffset(0);
+        const auto projectedStartPixels = static_cast<int>(std::llround(
+            toVisibleTimelineSeconds(activeProjection.timelineStartSeconds) * getTimelinePixelsPerSecond()));
+        setScrollOffset(projectedStartPixels);
     } else if (audioBuffer_ && audioBufferSampleRate_ > 0.0) {
-        int newScroll = (int) std::llround(projectedStartSeconds * getTimelinePixelsPerSecond());
+        int newScroll = (int) std::llround(toVisibleTimelineSeconds(timelineViewOriginSeconds()) * getTimelinePixelsPerSecond());
         setScrollOffset(newScroll);
     } else {
         setScrollOffset(0);
@@ -2473,22 +2670,49 @@ float PianoRollComponent::freqToY(float freq) const {
 }
 
 double PianoRollComponent::toVisibleTimelineSeconds(double absoluteSeconds) const {
-    return absoluteSeconds - materializationProjection_.timelineStartSeconds;
+    return absoluteSeconds - timelineViewOriginSeconds();
 }
 
 double PianoRollComponent::toAbsoluteTimelineSeconds(double visibleSeconds) const {
-    return visibleSeconds + materializationProjection_.timelineStartSeconds;
+    return visibleSeconds + timelineViewOriginSeconds();
+}
+
+double PianoRollComponent::timelineViewOriginSeconds() const noexcept
+{
+    if (timelineViewDomain_.isValid()) {
+        return timelineViewDomain_.startSeconds;
+    }
+
+    const auto projection = activeMaterializationProjection();
+    return projection.isValid() ? projection.timelineStartSeconds : 0.0;
+}
+
+double PianoRollComponent::timelineViewEndSeconds() const noexcept
+{
+    if (timelineViewDomain_.isValid()) {
+        return timelineViewDomain_.endSeconds;
+    }
+
+    const auto projection = activeMaterializationProjection();
+    return projection.isValid() ? projection.timelineEndSeconds() : 0.0;
+}
+
+bool PianoRollComponent::hasExplicitTimelineViewDomain() const noexcept
+{
+    return timelineViewDomain_.isValid();
 }
 
 double PianoRollComponent::projectTimelineTimeToMaterialization(double timelineSeconds) const {
-    return materializationProjection_.isValid()
-        ? materializationProjection_.projectTimelineTimeToMaterialization(timelineSeconds)
+    const auto projection = activeMaterializationProjection();
+    return projection.isValid()
+        ? projection.projectTimelineTimeToMaterialization(timelineSeconds)
         : timelineSeconds;
 }
 
 double PianoRollComponent::projectMaterializationTimeToTimeline(double contentSeconds) const {
-    return materializationProjection_.isValid()
-        ? materializationProjection_.projectMaterializationTimeToTimeline(contentSeconds)
+    const auto projection = activeMaterializationProjection();
+    return projection.isValid()
+        ? projection.projectMaterializationTimeToTimeline(contentSeconds)
         : contentSeconds;
 }
 
@@ -2584,7 +2808,7 @@ bool PianoRollComponent::applyAutoTuneToSelection()
     AppLogger::log("AutoTune: snapshot frames=" + juce::String(static_cast<int>(snapshot->size()))
         + " hop=" + juce::String(snapshot->getHopSize())
         + " sampleRate=" + juce::String(snapshot->getSampleRate())
-        + " duration=" + juce::String(materializationProjection_.materializationDurationSeconds));
+        + " duration=" + juce::String(getMaterializationDurationSeconds()));
 
     const auto& originalF0 = snapshot->getOriginalF0();
     if (originalF0.empty()) {
@@ -2726,9 +2950,19 @@ void PianoRollComponent::updateScrollBars() {
         }
     }
     
-    // Add some padding
-    maxTime = std::max(maxTime, 10.0); // Minimum 10 seconds
-    maxTime += 5.0; // Extra padding
+    double contentEndSeconds = timelineViewEndSeconds();
+    for (const auto& placement : timelineMaterializationPlacements_) {
+        if (placement.isValid()) {
+            contentEndSeconds = std::max(contentEndSeconds, placement.projection.timelineEndSeconds());
+        }
+    }
+    if (contentEndSeconds <= timelineViewOriginSeconds()) {
+        contentEndSeconds = timelineViewOriginSeconds() + maxTime;
+    }
+    maxTime = contentEndSeconds - timelineViewOriginSeconds();
+
+    maxTime = std::max(maxTime, 10.0);
+    maxTime += 5.0;
     
     double pixelsPerSecond = getTimelinePixelsPerSecond();
     int totalContentWidth = static_cast<int>(maxTime * pixelsPerSecond);

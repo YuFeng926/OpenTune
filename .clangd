@@ -1,5 +1,5 @@
 CompileFlags:
-  CompilationDatabase: build
+  CompilationDatabase: build-ara-overlay-vs18-clean
 
 Diagnostics:
   UnusedIncludes: Strict

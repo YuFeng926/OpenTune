@@ -19,6 +19,17 @@
 
 namespace OpenTune {
 
+struct TimelineMaterializationPlacement
+{
+    uint64_t materializationId = 0;
+    MaterializationTimelineProjection projection;
+
+    bool isValid() const noexcept
+    {
+        return materializationId != 0 && projection.isValid();
+    }
+};
+
 /**
  * 钢琴卷帘渲染器
  * 负责绘制钢琴卷帘界面的所有元素，包括背景、琴键、音符、波形和音高曲线
@@ -28,12 +39,29 @@ class PianoRollRenderer
 public:
     PianoRollRenderer() = default;
 
-    void setWaveformMipmap(WaveformMipmap* mipmap) { waveformMipmap_ = mipmap; }
-
     /**
      * 渲染上下文结构体
      * 包含渲染所需的所有参数和回调函数
      */
+    struct MaterializationRenderItem
+    {
+        uint64_t materializationId = 0;
+        MaterializationTimelineProjection projection;
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+        WaveformMipmap* waveformMipmap = nullptr;
+        std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
+        std::vector<float> correctedF0;
+        F0Timeline f0Timeline;
+        std::vector<Note> notes;
+        std::vector<double> chunkBoundaries;
+        bool active = false;
+
+        bool isValid() const noexcept
+        {
+            return materializationId != 0 && projection.isValid();
+        }
+    };
+
     struct RenderContext
     {
         int width = 0;
@@ -45,8 +73,7 @@ public:
         float minMidi = 24.0f;
         float maxMidi = 108.0f;
         double bpm = 120.0;
-        MaterializationTimelineProjection materializationProjection;
-        F0Timeline f0Timeline;
+        std::vector<MaterializationRenderItem> materializations;
         int scaleRootNote = 0;
         int scaleType = 1;
         NoteNameMode noteNameMode = NoteNameMode::COnly;
@@ -54,9 +81,6 @@ public:
         bool showChunkBoundaries = false;
         bool showUnvoicedFrames = false;
         int pressedPianoKey = -1;
-        bool hasUserAudio = false;
-        std::vector<double> chunkBoundaries;
-        std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
 
         bool hasF0Selection = false;
         int f0SelectionStartFrame = -1;
@@ -72,14 +96,13 @@ public:
     };
 
     void drawLanes(juce::Graphics& g, const RenderContext& ctx);
-    void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx);
-    void drawWaveform(juce::Graphics& g, const RenderContext& ctx);
+    void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
+    void drawWaveform(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
     void drawTimeRuler(juce::Graphics& g, const RenderContext& ctx);
     void drawGridLines(juce::Graphics& g, const RenderContext& ctx);
-    void drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx);
+    void drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
-    void drawNotes(juce::Graphics& g, const RenderContext& ctx,
-                   const std::vector<Note>& notes);
+    void drawNotes(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
 
     void drawF0Curve(juce::Graphics& g,
                      const std::vector<float>& f0,
@@ -87,17 +110,10 @@ public:
                      float alpha,
                      bool isThinLine,
                      const RenderContext& ctx,
-                     std::shared_ptr<PitchCurve> currentCurve,
+                     const MaterializationRenderItem& item,
                      const std::vector<uint8_t>* visibleMask = nullptr);
 
-    void updateCorrectedF0Cache(std::shared_ptr<const PitchCurveSnapshot> snapshot);
-    void clearCorrectedF0Cache() { correctedF0Cache_.clear(); cachedSnapshot_.reset(); }
-    const std::vector<float>& getCorrectedF0Cache() const { return correctedF0Cache_; }
-
 private:
-    WaveformMipmap* waveformMipmap_ = nullptr;
-    std::vector<float> correctedF0Cache_;
-    std::shared_ptr<const PitchCurveSnapshot> cachedSnapshot_;
 };
 
 } // namespace OpenTune

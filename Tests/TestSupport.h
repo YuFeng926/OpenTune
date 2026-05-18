@@ -187,7 +187,33 @@ struct PianoRollComponentTestProbe {
 
     static MaterializationTimelineProjection getMaterializationProjection(const PianoRollComponent& pianoRoll)
     {
-        return pianoRoll.materializationProjection_;
+        return pianoRoll.activeMaterializationProjection();
+    }
+
+    static std::vector<TimelineMaterializationPlacement> getTimelineMaterializationPlacements(
+        const PianoRollComponent& pianoRoll)
+    {
+        return pianoRoll.timelineMaterializationPlacements_;
+    }
+
+    static bool hasExplicitTimelineViewDomain(const PianoRollComponent& pianoRoll)
+    {
+        return pianoRoll.hasExplicitTimelineViewDomain();
+    }
+
+    static double toVisibleTimelineSeconds(const PianoRollComponent& pianoRoll, double seconds)
+    {
+        return pianoRoll.toVisibleTimelineSeconds(seconds);
+    }
+
+    static double toAbsoluteTimelineSeconds(const PianoRollComponent& pianoRoll, double seconds)
+    {
+        return pianoRoll.toAbsoluteTimelineSeconds(seconds);
+    }
+
+    static int getPianoKeyWidth(const PianoRollComponent&)
+    {
+        return PianoRollComponent::pianoKeyWidth_;
     }
 
     static juce::Rectangle<int> getNoteBounds(const PianoRollComponent& pianoRoll, const Note& note)

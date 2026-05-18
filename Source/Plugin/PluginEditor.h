@@ -16,6 +16,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <memory>
+#include <vector>
 
 #if JucePlugin_Enable_ARA
 #include "ARA/VST3AraSession.h"
@@ -37,6 +38,11 @@
 #include "UI/UIColors.h"
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
+
+namespace OpenTune::Capture {
+class CaptureSession;
+struct SegmentInfo;
+}
 
 namespace OpenTune::PluginUI {
 
@@ -97,17 +103,38 @@ public:
     void escapeKeyPressed() override;
 
 private:
+    struct PianoRollMaterializationSync
+    {
+        std::vector<TimelineMaterializationPlacement> placements;
+        uint64_t activeMaterializationId = 0;
+        bool usesRegularCaptureTimelineDomain = false;
+        double timelineViewStartSeconds = 0.0;
+        double timelineViewEndSeconds = 0.0;
+
+        bool hasPlacements() const noexcept
+        {
+            return !placements.empty();
+        }
+
+        bool hasActiveMaterialization() const noexcept
+        {
+            return activeMaterializationId != 0;
+        }
+    };
+
     void timerCallback() override;
     void syncSharedAppPreferences();
     void applyThemeToEditor(ThemeId themeId);
-    enum class MaterializationSource { None, Ara, Capture };
     uint64_t resolveCurrentMaterializationId();
-    MaterializationSource resolveCurrentMaterializationProjection(uint64_t& materializationId,
-                                                                  MaterializationTimelineProjection& projection);
+    PianoRollMaterializationSync resolveCurrentMaterializationSync();
     void syncParameterPanelFromSelection();
     void syncMaterializationProjectionToPianoRoll();
     void syncImportedAraClipIfNeeded();
     void showPreferencesDialog();
+    void updateRegularCaptureSessionCallback();
+    void clearRegularCaptureSessionCallback();
+    bool handleEditorShortcut(const juce::KeyPress& key);
+    void surfaceRegularVst3HostControlledTransport(const char* actionName);
 
     OpenTuneAudioProcessor& processorRef_;
     AppPreferences appPreferences_;
@@ -136,6 +163,8 @@ private:
     uint64_t rmvpeOverlayTargetMaterializationId_{0};
     bool showingSingleNoteParams_{false};
     bool initialFocusGrabbed_{false};
+
+    Capture::CaptureSession* regularCaptureCallbackSession_ = nullptr;
 
 #if JucePlugin_Enable_ARA
     uint64_t lastConsumedAraSnapshotEpoch_{0};

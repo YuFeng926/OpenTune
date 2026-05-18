@@ -79,10 +79,11 @@ struct VisibleTimeWindow {
     }
 };
 
-VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContext& ctx)
+VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContext& ctx,
+                                           const PianoRollRenderer::MaterializationRenderItem& item)
 {
     VisibleTimeWindow window;
-    if (!ctx.materializationProjection.isValid()) {
+    if (!item.projection.isValid()) {
         return window;
     }
 
@@ -96,8 +97,8 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
     if (window.visibleEndTime <= window.visibleStartTime)
         return {};
 
-    window.visibleMaterializationStartTime = ctx.materializationProjection.projectTimelineTimeToMaterialization(window.visibleStartTime);
-    window.visibleMaterializationEndTime = ctx.materializationProjection.projectTimelineTimeToMaterialization(window.visibleEndTime);
+    window.visibleMaterializationStartTime = item.projection.projectTimelineTimeToMaterialization(window.visibleStartTime);
+    window.visibleMaterializationEndTime = item.projection.projectTimelineTimeToMaterialization(window.visibleEndTime);
     return window;
 }
 
@@ -107,29 +108,6 @@ bool isVoicedFrame(float frequencyHz) noexcept
 }
 
 } // namespace
-
-void PianoRollRenderer::updateCorrectedF0Cache(std::shared_ptr<const PitchCurveSnapshot> snapshot)
-{
-    if (!snapshot) {
-        correctedF0Cache_.clear();
-        cachedSnapshot_.reset();
-        return;
-    }
-
-    const int totalFrames = static_cast<int>(snapshot->size());
-    if (totalFrames <= 0 || !snapshot->hasAnyCorrection()) {
-        correctedF0Cache_.clear();
-        cachedSnapshot_.reset();
-        return;
-    }
-
-    correctedF0Cache_.assign(static_cast<std::size_t>(totalFrames), 0.0f);
-    snapshot->renderCorrectedOnlyRange(0, totalFrames,
-        [&](int offsetFrame, const float* data, int length) {
-            std::copy(data, data + length, correctedF0Cache_.begin() + offsetFrame);
-        });
-    cachedSnapshot_ = snapshot;
-}
 
 void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
 {
@@ -179,25 +157,27 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
     }
 }
 
-void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx)
+void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
+                                               const RenderContext& ctx,
+                                               const MaterializationRenderItem& item)
 {
-    if (!ctx.showUnvoicedFrames || ctx.pitchSnapshot == nullptr || ctx.f0Timeline.isEmpty()) {
+    if (!ctx.showUnvoicedFrames || item.pitchSnapshot == nullptr || item.f0Timeline.isEmpty()) {
         return;
     }
 
-    const auto& originalF0 = ctx.pitchSnapshot->getOriginalF0();
+    const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
     if (originalF0.empty()) {
         return;
     }
 
-    const auto visibleWindow = computeVisibleTimeWindow(ctx);
+    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
     if (!visibleWindow.isValid()) {
         return;
     }
 
-    const auto visibleFrames = ctx.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleMaterializationStartTime,
-                                                                      visibleWindow.visibleMaterializationEndTime,
-                                                                      1);
+    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleMaterializationStartTime,
+                                                                       visibleWindow.visibleMaterializationEndTime,
+                                                                       1);
     const int visibleStartFrame = visibleFrames.startFrame;
     const int visibleEndFrame = visibleFrames.endFrameExclusive;
     if (visibleEndFrame <= visibleStartFrame) {
@@ -214,10 +194,10 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g, const RenderCo
             return;
         }
 
-        const double startSeconds = ctx.materializationProjection.projectMaterializationTimeToTimeline(
-            ctx.f0Timeline.timeAtFrame(startFrame));
-        const double endSeconds = ctx.materializationProjection.projectMaterializationTimeToTimeline(
-            ctx.f0Timeline.timeAtFrame(endFrameExclusive));
+        const double startSeconds = item.projection.projectMaterializationTimeToTimeline(
+            item.f0Timeline.timeAtFrame(startFrame));
+        const double endSeconds = item.projection.projectMaterializationTimeToTimeline(
+            item.f0Timeline.timeAtFrame(endFrameExclusive));
         const int x1 = std::max(ctx.pianoKeyWidth, ctx.timeToX(startSeconds));
         const int x2 = std::min(ctx.width, ctx.timeToX(endSeconds));
         if (x2 <= x1) {
@@ -248,12 +228,14 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g, const RenderCo
     }
 }
 
-void PianoRollRenderer::drawWaveform(juce::Graphics& g, const RenderContext& ctx)
+void PianoRollRenderer::drawWaveform(juce::Graphics& g,
+                                     const RenderContext& ctx,
+                                     const MaterializationRenderItem& item)
 {
-    if (!ctx.hasUserAudio || !waveformMipmap_)
+    if (item.audioBuffer == nullptr || item.waveformMipmap == nullptr)
         return;
 
-    const auto visibleWindow = computeVisibleTimeWindow(ctx);
+    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
     if (!visibleWindow.isValid())
         return;
 
@@ -262,8 +244,8 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g, const RenderContext& ctx
     const int w = endX - startX;
     if (w <= 0) return;
 
-    const int levelIndex = waveformMipmap_->selectBestLevelIndex(ctx.pixelsPerSecond);
-    const auto& level = waveformMipmap_->getLevel(levelIndex);
+    const int levelIndex = item.waveformMipmap->selectBestLevelIndex(ctx.pixelsPerSecond);
+    const auto& level = item.waveformMipmap->getLevel(levelIndex);
     
     if (level.peaks.empty())
         return;
@@ -285,7 +267,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g, const RenderContext& ctx
 
     for (int x = startX; x < endX; ++x)
     {
-        const double time = ctx.materializationProjection.projectTimelineTimeToMaterialization(ctx.xToTime(x));
+        const double time = item.projection.projectTimelineTimeToMaterialization(ctx.xToTime(x));
         const int64_t peakIndex = static_cast<int64_t>(time / timePerPeak);
         
         if (peakIndex < 0 || peakIndex >= builtPeaks)
@@ -387,9 +369,8 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerBottom - 10),
                        static_cast<float>(pixelX), static_cast<float>(rulerBottom), 1.0f);
 
-            // `time` here is absolute (host/arrangement) time: ctx.xToTime already
-            // applies the projection's timelineStartSeconds offset internally
-            // (see PianoRollComponent::xToTime → toAbsoluteTimelineSeconds).
+            // `time` here is absolute host/arrangement time; the component's
+            // xToTime callback applies the current timeline view-domain origin.
             const int totalSecs = static_cast<int>(time);
             const int mins = totalSecs / 60;
             const int secs = totalSecs % 60;
@@ -479,17 +460,19 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ct
     }
 }
 
-void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx)
+void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g,
+                                            const RenderContext& ctx,
+                                            const MaterializationRenderItem& item)
 {
-    if (!ctx.showChunkBoundaries || ctx.chunkBoundaries.size() < 3) {
+    if (!ctx.showChunkBoundaries || item.chunkBoundaries.size() < 3) {
         return;
     }
 
     static constexpr float dashLengths[] { 4.0f, 4.0f };
     g.setColour(UIColors::accent.withAlpha(0.75f));
 
-    for (std::size_t index = 1; index + 1 < ctx.chunkBoundaries.size(); ++index) {
-        const double absoluteSeconds = ctx.materializationProjection.projectMaterializationTimeToTimeline(ctx.chunkBoundaries[index]);
+    for (std::size_t index = 1; index + 1 < item.chunkBoundaries.size(); ++index) {
+        const double absoluteSeconds = item.projection.projectMaterializationTimeToTimeline(item.chunkBoundaries[index]);
         const int x = ctx.timeToX(absoluteSeconds);
         if (x < ctx.pianoKeyWidth || x >= ctx.width) {
             continue;
@@ -748,12 +731,14 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     g.drawVerticalLine(w, 0.0f, static_cast<float>(height));
 }
 
-void PianoRollRenderer::drawNotes(juce::Graphics& g, const RenderContext& ctx,
-                                  const std::vector<Note>& notes)
+void PianoRollRenderer::drawNotes(juce::Graphics& g,
+                                  const RenderContext& ctx,
+                                  const MaterializationRenderItem& item)
 {
+    const auto& notes = item.notes;
     if (notes.empty()) return;
 
-    const auto visibleWindow = computeVisibleTimeWindow(ctx);
+    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
     if (!visibleWindow.isValid())
         return;
 
@@ -797,8 +782,8 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g, const RenderContext& ctx,
         float y = ctx.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
         float h = ctx.pixelsPerSemitone;
 
-        double noteStartTime = ctx.materializationProjection.projectMaterializationTimeToTimeline(note.startTime);
-        double noteEndTime = ctx.materializationProjection.projectMaterializationTimeToTimeline(note.endTime);
+        double noteStartTime = item.projection.projectMaterializationTimeToTimeline(note.startTime);
+        double noteEndTime = item.projection.projectMaterializationTimeToTimeline(note.endTime);
 
         int x1 = ctx.timeToX(noteStartTime);
         int x2 = ctx.timeToX(noteEndTime);
@@ -825,7 +810,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                                      float alpha,
                                      bool isThinLine,
                                      const RenderContext& ctx,
-                                     std::shared_ptr<PitchCurve> currentCurve,
+                                     const MaterializationRenderItem& item,
                                      const std::vector<uint8_t>* visibleMask)
 {
     if (f0.empty()) return;
@@ -843,7 +828,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     bool pathStarted = false;
     std::size_t segmentStart = 0;
 
-    const auto visibleWindow = computeVisibleTimeWindow(ctx);
+    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
     if (!visibleWindow.isValid())
         return;
 
@@ -851,17 +836,18 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const int viewportEndX = visibleWindow.viewportEndX;
 
     std::size_t iStart = 0;
-    std::size_t iEnd = static_cast<std::size_t>(ctx.f0Timeline.endFrameExclusive());
+    std::size_t iEnd = f0.size();
 
-    if (!ctx.f0Timeline.isEmpty())
+    if (!item.f0Timeline.isEmpty())
     {
         const int marginFrames = 10;
 
-        const auto visibleFrames = ctx.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleMaterializationStartTime,
-                                                                         visibleWindow.visibleMaterializationEndTime,
-                                                                         marginFrames);
-        iStart = static_cast<std::size_t>(visibleFrames.startFrame);
-        iEnd = static_cast<std::size_t>(std::max(visibleFrames.startFrame, visibleFrames.endFrameExclusive));
+        const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleMaterializationStartTime,
+                                                                          visibleWindow.visibleMaterializationEndTime,
+                                                                          marginFrames);
+        iStart = std::min(static_cast<std::size_t>(visibleFrames.startFrame), f0.size());
+        iEnd = std::min(static_cast<std::size_t>(std::max(visibleFrames.startFrame, visibleFrames.endFrameExclusive)),
+                        f0.size());
     }
 
     for (std::size_t i = iStart; i < iEnd; ++i)
@@ -896,7 +882,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         float midi = ctx.freqToMidi(frequency);
         float y = ctx.midiToY(midi);
 
-        const double absoluteTime = ctx.materializationProjection.projectMaterializationTimeToTimeline(ctx.f0Timeline.timeAtFrame(static_cast<int>(i)));
+        const double absoluteTime = item.projection.projectMaterializationTimeToTimeline(item.f0Timeline.timeAtFrame(static_cast<int>(i)));
         const int x = ctx.timeToX(absoluteTime);
 
         if (x < viewportStartX || x > viewportEndX)
@@ -973,7 +959,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     {
                         float midi = ctx.freqToMidi(freq);
                         float y = ctx.midiToY(midi);
-                        const double absoluteTime = ctx.materializationProjection.projectMaterializationTimeToTimeline(ctx.f0Timeline.timeAtFrame(static_cast<int>(fadeStartIdx)));
+                        const double absoluteTime = item.projection.projectMaterializationTimeToTimeline(item.f0Timeline.timeAtFrame(static_cast<int>(fadeStartIdx)));
                         const int x = ctx.timeToX(absoluteTime);
 
                         g.setColour(colour.withAlpha(fadeAlpha));
@@ -989,7 +975,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                     {
                         float midi = ctx.freqToMidi(freq);
                         float y = ctx.midiToY(midi);
-                        const double absoluteTime = ctx.materializationProjection.projectMaterializationTimeToTimeline(ctx.f0Timeline.timeAtFrame(static_cast<int>(fadeEndIdx)));
+                        const double absoluteTime = item.projection.projectMaterializationTimeToTimeline(item.f0Timeline.timeAtFrame(static_cast<int>(fadeEndIdx)));
                         const int x = ctx.timeToX(absoluteTime);
 
                         g.setColour(colour.withAlpha(fadeAlpha));
