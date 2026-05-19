@@ -476,6 +476,8 @@ target_sources(OpenTune
     PRIVATE
         Source/Services/F0ExtractionService.cpp
         Source/Services/F0ExtractionService.h
+        Source/Services/VadExtractionService.cpp
+        Source/Services/VadExtractionService.h
         Source/Audio/AudioFormatRegistry.cpp
         Source/Audio/AudioFormatRegistry.h
 
@@ -502,6 +504,16 @@ target_sources(OpenTune
         Source/Inference/VocoderFactory.cpp
         Source/Inference/DmlVocoder.h
         Source/Inference/DmlVocoder.cpp
+        Source/Inference/RubberBandStretcher.cpp
+        Source/Inference/RubberBandStretcher.h
+        Source/Inference/TimeStretchCache.cpp
+        Source/Inference/TimeStretchCache.h
+        Source/Inference/PitchCache.h
+        Source/Inference/IVadExtractor.h
+        Source/Inference/SileroVadExtractor.cpp
+        Source/Inference/SileroVadExtractor.h
+        Source/Inference/VadInferenceService.cpp
+        Source/Inference/VadInferenceService.h
 
         # AI Model Interfaces
         Source/Inference/IF0Extractor.h
@@ -515,6 +527,8 @@ target_sources(OpenTune
         Source/Inference/RMVPEExtractor.h
         Source/Inference/PCNSFHifiGANVocoder.cpp
         Source/Inference/PCNSFHifiGANVocoder.h
+        Source/Inference/GameNoteGenerator.cpp
+        Source/Inference/GameNoteGenerator.h
         Source/Inference/ModelFactory.cpp
         Source/Inference/ModelFactory.h
         Source/Inference/F0InferenceService.cpp
@@ -529,8 +543,14 @@ target_sources(OpenTune
         Source/DSP/MelSpectrogram.h
         Source/DSP/ChromaKeyDetector.cpp
         Source/DSP/ChromaKeyDetector.h
-        Source/DSP/CrossoverMixer.cpp
-        Source/DSP/CrossoverMixer.h
+        Source/DSP/OnsetDetector.cpp
+        Source/DSP/OnsetDetector.h
+        Source/DSP/HandleNoteMerger.cpp
+        Source/DSP/HandleNoteMerger.h
+        Source/DSP/PhonemeClassifier.cpp
+        Source/DSP/PhonemeClassifier.h
+        Source/DSP/WordSegmenter.cpp
+        Source/DSP/WordSegmenter.h
 
         # UI Layer
         Source/Standalone/UI/UIColors.h
@@ -581,8 +601,10 @@ target_sources(OpenTune
         # Utilities
         Source/Utils/PitchCurve.cpp
         Source/Utils/PitchCurve.h
-        Source/Utils/NoteGenerator.cpp
-        Source/Utils/NoteGenerator.h
+        Source/Utils/LegacyNoteGenerator.cpp
+        Source/Utils/LegacyNoteGenerator.h
+        Source/Utils/NoteGeneratorTypes.h
+        Source/Inference/INoteGenerator.h
         Source/Utils/PianoKeyAudition.cpp
         Source/Utils/PianoKeyAudition.h
         Source/Utils/AppLogger.cpp
@@ -611,6 +633,10 @@ target_sources(OpenTune
         Source/Utils/UndoManager.h
         Source/Utils/PianoRollEditAction.cpp
         Source/Utils/PianoRollEditAction.h
+        Source/Utils/TimeGrid.cpp
+        Source/Utils/TimeGrid.h
+        Source/Utils/TimeGridEditAction.cpp
+        Source/Utils/TimeGridEditAction.h
         Source/Utils/PlacementActions.cpp
         Source/Utils/PlacementActions.h
         Source/Utils/SilentGapDetector.cpp
@@ -682,6 +708,19 @@ target_sources(OpenTune PRIVATE
     Source/Plugin/Capture/CapturePersistence.h
 )
 
+# Rubber Band Library v4.0.0 (single-file build for vocal time-stretch).
+# Uses RubberBandSingle.cpp which transitively includes all needed sources.
+# License: GPL-2.0+ / commercial dual; AGPL-3.0 compatible. See LICENSES/rubberband.GPL-2.0.txt.
+set(RUBBERBAND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/rubberband-4.0.0)
+if(EXISTS ${RUBBERBAND_DIR}/single/RubberBandSingle.cpp)
+    target_sources(OpenTune PRIVATE
+        ${RUBBERBAND_DIR}/single/RubberBandSingle.cpp
+    )
+    message(STATUS "Rubber Band: vendored at ${RUBBERBAND_DIR} (single-file build)")
+else()
+    message(WARNING "Rubber Band single-file source not found at ${RUBBERBAND_DIR}/single/RubberBandSingle.cpp")
+endif()
+
 # ==============================================================================
 # Include Directories
 # ==============================================================================
@@ -690,6 +729,7 @@ target_include_directories(OpenTune
         ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone
         ${CMAKE_CURRENT_SOURCE_DIR}/Source
         ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master
+        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/rubberband-4.0.0
         ${ONNXRUNTIME_INCLUDE_DIR}
 )
 
@@ -817,8 +857,9 @@ endif()
 # Standalone Bundle Resources
 # ==============================================================================
 # Define model files
-set(HIFIGAN_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx")
+set(HIFIGAN_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx")
 set(RMVPE_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/models/rmvpe.onnx")
+set(GAME_MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/models/GAME")
 
 # --- ONNX Runtime library copying ---
 if(WIN32)
@@ -875,6 +916,9 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RMVPE_MODEL}"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/rmvpe.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${GAME_MODEL_DIR}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/GAME"
         COMMENT "Copying AI models to Standalone..."
     )
 
@@ -897,6 +941,9 @@ elseif(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RMVPE_MODEL}"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/rmvpe.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${GAME_MODEL_DIR}"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/GAME"
         COMMENT "Copying AI models to app bundle Resources..."
     )
 endif()
@@ -1012,6 +1059,9 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${RMVPE_MODEL}"
                 "$<TARGET_FILE_DIR:OpenTune_VST3>/models/rmvpe.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${GAME_MODEL_DIR}"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/GAME"
             COMMENT "Copying AI models to VST3 plugin..."
         )
 
@@ -1036,6 +1086,9 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${RMVPE_MODEL}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/rmvpe.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${GAME_MODEL_DIR}"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/GAME"
             COMMENT "Copying AI models to VST3 bundle Resources..."
         )
 
@@ -1073,6 +1126,19 @@ if(OPENTUNE_BUILD_TESTS)
         Source/Utils/D3D12AgilityBootstrap.cpp
         Tests/TestMain.cpp
         Tests/TestEditorFactoryStub.cpp
+        Tests/TimeGridTests.cpp
+        Tests/DspDetectionTests.cpp
+        Tests/RubberBandStretcherTests.cpp
+        Tests/TimeStretchCacheTests.cpp
+        Tests/MaterializationStoreTimeGridTests.cpp
+        Tests/Stage2WorkerTests.cpp
+        Tests/TimeToolHandlerTests.cpp
+        Tests/IntegrationPipelineTests.cpp
+        Tests/InvariantContractTests.cpp
+        Tests/SileroVadExtractorTests.cpp
+        Tests/GameNoteGeneratorTests.cpp
+        Tests/VocoderConfigTests.cpp
+        Tests/HandleNoteMergerTests.cpp
     )
 
     target_include_directories(OpenTuneTests

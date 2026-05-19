@@ -156,10 +156,11 @@ public:
         auto bounds = getLocalBounds().reduced(10, 4);
         const int rowHeight = 34;
         const int labelWidth = 160;
+        const int selectorWidth = 240;
 
         auto row = bounds.removeFromTop(rowHeight);
         renderingPriorityLabel_.setBounds(row.removeFromLeft(labelWidth));
-        renderingPrioritySelector_.setBounds(row.removeFromLeft(240).reduced(0, 4));
+        renderingPrioritySelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
     }
 
 private:
@@ -437,7 +438,9 @@ std::unique_ptr<juce::Component> SharedPreferencePages::createRenderingPriorityC
     std::function<void()> onPreferencesChanged,
     std::function<void(bool forceCpu)> onRenderingPriorityChanged)
 {
-    return std::make_unique<SharedAudioPage>(appPreferences, std::move(onPreferencesChanged), std::move(onRenderingPriorityChanged));
+    return std::make_unique<SharedAudioPage>(appPreferences,
+                                              std::move(onPreferencesChanged),
+                                              std::move(onRenderingPriorityChanged));
 }
 
 } // namespace OpenTune

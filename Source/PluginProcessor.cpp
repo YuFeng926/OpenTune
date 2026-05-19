@@ -11,6 +11,13 @@
 #include "Utils/AppLogger.h"
 #include "Utils/ChannelLayoutLogger.h"
 #include "Plugin/Capture/CaptureSession.h"
+#include "Inference/GameNoteGenerator.h"      // add-game-note-generator: GAME backend
+#include "Utils/LegacyNoteGenerator.h"        // add-game-note-generator: Legacy fallback
+#include "Inference/RubberBandStretcher.h"   // §7 Phase D — Stage 2 worker
+#include "DSP/OnsetDetector.h"                // §4.9 Phase G — auto-seed TimeGrid
+#include "DSP/PhonemeClassifier.h"            // §4.9 Phase G
+#include "DSP/WordSegmenter.h"                // §4.9 Phase G
+#include "DSP/HandleNoteMerger.h"             // add-note-confirmed-handles §3.2
 #include <onnxruntime_cxx_api.h>
 #include "Utils/AccelerationDetector.h"
 #include "Utils/TimeCoordinate.h"
@@ -530,17 +537,13 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     juce::AudioBuffer<float> placementBuffer(out.getNumChannels(), samplesToRender);
     placementBuffer.clear();
 
-    // Local crossover mixer for export (isolated from audio thread)
-    CrossoverMixer exportMixer;
-    exportMixer.prepare(kExportSr, samplesToRender, out.getNumChannels());
-
     OpenTuneAudioProcessor::PlaybackReadRequest readRequest;
     readRequest.source = source;
     readRequest.readStartSeconds = 0.0;
     readRequest.targetSampleRate = kExportSr;
     readRequest.numSamples = samplesToRender;
 
-    const int renderedSamples = processor.readPlaybackAudio(readRequest, placementBuffer, 0, &exportMixer);
+    const int renderedSamples = processor.readPlaybackAudio(readRequest, placementBuffer, 0);
     if (renderedSamples <= 0) {
         return;
     }
@@ -574,7 +577,11 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 } // anonymous namespace
 
 constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
-constexpr int kProcessorStateVersion = 5;
+constexpr int kProcessorStateVersion = 7;
+// vocal-time-stretch §3.8: bumped 5 → 6 to add per-materialization TimeGrid section.
+// v5 projects load with auto-seeded identity TimeGrid (output==source).
+// add-note-confirmed-handles: bumped 6 → 7 to add per-handle confidence field +
+// HandleKind::NoteOnly value. v6 reads default confidence=Default for all handles.
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
 constexpr int kStandaloneSettingsVersion = 1;
 
@@ -836,6 +843,71 @@ static bool readSilentGaps(juce::InputStream& input, std::vector<SilentGap>& out
     return true;
 }
 
+// ============================================================================
+// vocal-time-stretch §3.8 — TimeGrid serialization (state version ≥ 6)
+// add-note-confirmed-handles §1 — confidence field added at state version ≥ 7
+//
+// Layout per materialization (v6+ writes; v7+ writes confidence):
+//   int32  handleCount
+//   for each handle:
+//     int64   id
+//     double  source_seconds
+//     double  output_seconds
+//     int32   kind (HandleKind enum value, range 0-6 in v6, 0-7 in v7)
+//     bool    locked
+//     uint8   confidence  // v7+ only; v6 reads default to Default(0)
+//
+// If a v5 (or earlier) project is loaded, readTimeGridHandles writes nothing
+// and the createMaterialization auto-seed path produces an identity TimeGrid
+// downstream.
+// ============================================================================
+
+static void writeTimeGridHandles(juce::OutputStream& output,
+                                  const std::shared_ptr<const TimeGridSnapshot>& snapshot)
+{
+    if (snapshot == nullptr) {
+        output.writeInt(0);
+        return;
+    }
+    const auto& handles = snapshot->handles();
+    output.writeInt(static_cast<int>(handles.size()));
+    for (const auto& h : handles) {
+        output.writeInt64(static_cast<juce::int64>(h.id));
+        output.writeDouble(h.source_seconds);
+        output.writeDouble(h.output_seconds);
+        output.writeInt(static_cast<int>(h.kind));
+        output.writeBool(h.locked);
+        output.writeByte(static_cast<char>(h.confidence)); // v7+
+    }
+}
+
+static bool readTimeGridHandles(juce::InputStream& input,
+                                 std::vector<TimeHandle>& out,
+                                 bool readConfidenceField /* v7+ */)
+{
+    out.clear();
+    const int count = input.readInt();
+    if (count < 0) return false;
+    out.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        TimeHandle h;
+        h.id             = static_cast<uint64_t>(input.readInt64());
+        h.source_seconds = input.readDouble();
+        h.output_seconds = input.readDouble();
+        const int kindRaw = input.readInt();
+        h.kind = static_cast<HandleKind>(kindRaw);
+        h.locked = input.readBool();
+        if (readConfidenceField) {
+            const int confRaw = static_cast<unsigned char>(input.readByte());
+            h.confidence = static_cast<Confidence>(confRaw);
+        } else {
+            h.confidence = Confidence::Default; // v6 backward compat
+        }
+        out.push_back(h);
+    }
+    return true;
+}
+
 
 static std::shared_ptr<PitchCurve> clonePitchCurveWithCorrectedSegments(
     const std::shared_ptr<PitchCurve>& sourceCurve,
@@ -906,14 +978,17 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             PlaybackReadRequest req;
             req.source.renderCache = readSource.renderCache;
             req.source.audioBuffer = readSource.audioBuffer;
+            // §7 — propagate Stage 2 fast-path fields (vocal-time-stretch).
+            req.source.timeStretchCache    = readSource.timeStretchCache;
+            req.source.materializationId   = readSource.materializationId;
+            req.source.pitchRevision       = readSource.pitchRevision;
+            req.source.timeGridRevision    = readSource.timeGridRevision;
+            req.source.timeGridIsIdentity  = readSource.timeGridIsIdentity;
             req.readStartSeconds = readStartSeconds;
             req.targetSampleRate = targetSampleRate;
             req.numSamples = numSamples;
-            CrossoverMixer* mixer = readSource.renderCache
-                ? &readSource.renderCache->getCrossoverMixer()
-                : nullptr;
             buffer.clear(destStart, numSamples);
-            readPlaybackAudio(req, buffer, destStart, mixer);
+            readPlaybackAudio(req, buffer, destStart);
         };
 
         bindings.isRenderReady = [this](uint64_t materializationId) -> bool {
@@ -990,6 +1065,16 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
         chunkRenderWorkerThread_.join();
     }
 
+    // §7 (Phase D) — stop Stage 2 worker before destroying stores
+    {
+        std::lock_guard<std::mutex> lock(stage2Mutex_);
+        stage2WorkerRunning_.store(false, std::memory_order_release);
+    }
+    stage2Cv_.notify_all();
+    if (stage2WorkerThread_.joinable()) {
+        stage2WorkerThread_.join();
+    }
+
     if (vocoderDomain_) {
         vocoderDomain_->shutdown();
     }
@@ -1015,6 +1100,227 @@ void OpenTuneAudioProcessor::ensureChunkRenderWorkerStarted()
     }
 
     chunkRenderWorkerThread_ = std::thread([this]() { chunkRenderWorkerLoop(); });
+}
+
+// ============================================================================
+// vocal-time-stretch §7 (Phase D MVP) — Stage 2 worker lifecycle + processing
+// ============================================================================
+
+void OpenTuneAudioProcessor::ensureStage2WorkerStarted()
+{
+    bool expected = false;
+    if (!stage2WorkerRunning_.compare_exchange_strong(expected,
+                                                       true,
+                                                       std::memory_order_acq_rel,
+                                                       std::memory_order_acquire)) {
+        return;
+    }
+    stage2WorkerThread_ = std::thread([this]() { stage2WorkerLoop(); });
+}
+
+void OpenTuneAudioProcessor::requestStage2Rebuild(uint64_t materializationId)
+{
+    if (materializationId == 0) return;
+    ensureStage2WorkerStarted();
+    {
+        std::lock_guard<std::mutex> lock(stage2Mutex_);
+        // Coalesce: don't enqueue duplicate matIds; the worker always pulls the
+        // most recent revision from the store anyway.
+        for (uint64_t pending : stage2RebuildQueue_) {
+            if (pending == materializationId) return;
+        }
+        stage2RebuildQueue_.push_back(materializationId);
+        stage2QueueDepth_.store(static_cast<int>(stage2RebuildQueue_.size()),
+                                 std::memory_order_release);
+    }
+    stage2Cv_.notify_one();
+}
+
+void OpenTuneAudioProcessor::stage2WorkerLoop()
+{
+    AppLogger::log("Stage2Worker: started");
+    while (true) {
+        uint64_t materializationId = 0;
+        {
+            std::unique_lock<std::mutex> lock(stage2Mutex_);
+            stage2Cv_.wait_for(lock, std::chrono::seconds(10), [this]() {
+                return !stage2WorkerRunning_.load(std::memory_order_acquire)
+                    || !stage2RebuildQueue_.empty();
+            });
+            if (!stage2WorkerRunning_.load(std::memory_order_acquire)) {
+                AppLogger::log("Stage2Worker: stopping");
+                return;
+            }
+            if (stage2RebuildQueue_.empty()) continue;
+            materializationId = stage2RebuildQueue_.front();
+            stage2RebuildQueue_.pop_front();
+            stage2QueueDepth_.store(static_cast<int>(stage2RebuildQueue_.size()),
+                                     std::memory_order_release);
+        }
+
+        // §7 (Journey-1 fix) — publish "in-flight" status for UI badge.
+        stage2InFlight_.store(true, std::memory_order_release);
+        stage2InFlightMatId_.store(materializationId, std::memory_order_release);
+
+        const bool ok = runStage2RebuildForMaterialization(materializationId);
+
+        stage2InFlight_.store(false, std::memory_order_release);
+        stage2InFlightMatId_.store(0, std::memory_order_release);
+
+        if (!ok) {
+            AppLogger::warn("Stage2Worker: rebuild failed for matId="
+                            + juce::String(static_cast<juce::int64>(materializationId)));
+        }
+    }
+}
+
+bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materializationId)
+{
+    if (materializationId == 0 || materializationStore_ == nullptr) return false;
+
+    // Pull the freshest snapshot the message thread has published.
+    MaterializationStore::MaterializationSnapshot snap;
+    if (!materializationStore_->getSnapshot(materializationId, snap)) return false;
+    if (snap.audioBuffer == nullptr) return false;
+    if (snap.audioBuffer->getNumChannels() <= 0 || snap.audioBuffer->getNumSamples() <= 0) return false;
+
+    // If TimeGrid is identity, nothing to do — invalidate any stale entry.
+    if (snap.timeGrid == nullptr || snap.timeGrid->isIdentity()) {
+        materializationStore_->getTimeStretchCache().invalidate(materializationId);
+        return true;
+    }
+
+    // Lazy-construct (or fetch) the per-materialization stretcher.
+    constexpr double sampleRate = TimeCoordinate::kRenderSampleRate;
+    auto* stretcher = materializationStore_->getRubberBandStretcher(materializationId, sampleRate, /*channels=*/1);
+    if (stretcher == nullptr) return false;
+
+    // Total ratio with locked-endpoints invariant is exactly 1.0; the keyframe
+    // map redistributes time within the clip without changing total length.
+    auto keyframes = stretcher->buildKeyframesFromTimeGrid(*snap.timeGrid);
+    stretcher->beginRebuild(/*timeRatio=*/1.0, keyframes);
+
+    // ============================================================
+    // §7 (Phase E) — Stage 2 input = Stage 1 (NSF + LR4 mix) output
+    //
+    // We collect the materialization's playback signal *as if TimeGrid were
+    // identity* (i.e., pre-stretch) by calling readPlaybackAudio in chunks
+    // with TimeStretchCache fast-path explicitly disabled.  This pulls:
+    //   - dry source (interpolated to sampleRate)
+    //   - + RenderCache overlay (NSF output for chunks that are already
+    //     rendered; silence for not-yet-rendered chunks)
+    // → This is exactly what Phase E v7 wants Stage 2 to consume.
+    //
+    // Edge cases:
+    //   - PitchCurve untouched / RenderCache empty → buffer == dry source
+    //     (graceful degradation; result equals Phase D MVP behavior).
+    //   - RenderCache partially populated (mid-edit) → mix of corrected and
+    //     dry chunks; Phase F may add a "wait for Stage 1 complete" gate.
+    // ============================================================
+    const int totalSamples = snap.audioBuffer->getNumSamples();
+    constexpr int kBlock = 4096;
+
+    // Build a PlaybackReadSource with TimeStretchCache fast-path DISABLED to
+    // avoid recursion (Stage 2 reading its own output).
+    PlaybackReadSource stage1Source;
+    stage1Source.renderCache         = snap.renderCache;
+    stage1Source.audioBuffer         = snap.audioBuffer;
+    stage1Source.timeStretchCache    = nullptr;   // ⚠️ explicit disable
+    stage1Source.materializationId   = 0;          // ⚠️ explicit disable
+    stage1Source.timeGridIsIdentity  = true;       // forces dry-path branch
+
+    // Mono read buffer; we ignore stereo because storage is mono-channel-0
+    // canonical (per channel-layout-policy).
+    juce::AudioBuffer<float> readBuf(/*channels=*/1, kBlock);
+
+    std::vector<float> stage1Buffer;
+    stage1Buffer.reserve(static_cast<size_t>(totalSamples));
+
+    for (int offset = 0; offset < totalSamples; offset += kBlock) {
+        const int n = std::min(kBlock, totalSamples - offset);
+        readBuf.clear(0, 0, n);
+
+        PlaybackReadRequest req(stage1Source,
+                                /*readStartSeconds=*/static_cast<double>(offset) / sampleRate,
+                                /*targetSampleRate=*/sampleRate,
+                                /*numSamples=*/n);
+
+        const int wrote = readPlaybackAudio(req, readBuf, /*destStart=*/0);
+        const int actuallyWrote = (wrote > 0) ? wrote : 0;
+
+        const float* readPtr = readBuf.getReadPointer(0);
+        // If readPlaybackAudio short-wrote (e.g., end-of-source), pad with
+        // dry tail from snap.audioBuffer to keep input length == totalSamples.
+        for (int i = 0; i < actuallyWrote; ++i) {
+            stage1Buffer.push_back(readPtr[i]);
+        }
+        for (int i = actuallyWrote; i < n; ++i) {
+            const int srcIdx = offset + i;
+            stage1Buffer.push_back((srcIdx < totalSamples)
+                                    ? snap.audioBuffer->getSample(0, srcIdx)
+                                    : 0.0f);
+        }
+    }
+
+    if (static_cast<int>(stage1Buffer.size()) != totalSamples) {
+        // Should never happen given the padding loop above; defensive log.
+        AppLogger::warn("Stage2Worker: stage1Buffer length mismatch (got "
+                        + juce::String(static_cast<int>(stage1Buffer.size()))
+                        + " expected " + juce::String(totalSamples) + ")");
+        stage1Buffer.resize(static_cast<size_t>(totalSamples), 0.0f);
+    }
+
+    // Pass 1: study
+    for (int offset = 0; offset < totalSamples; offset += kBlock) {
+        const int n = std::min(kBlock, totalSamples - offset);
+        const bool isLast = (offset + n) >= totalSamples;
+        stretcher->study(stage1Buffer.data() + offset, static_cast<size_t>(n), isLast);
+    }
+
+    // Pass 2: process
+    std::vector<float> output;
+    output.reserve(static_cast<size_t>(totalSamples + kBlock));
+    std::vector<float> retrieveBuf(static_cast<size_t>(kBlock));
+
+    for (int offset = 0; offset < totalSamples; offset += kBlock) {
+        const int n = std::min(kBlock, totalSamples - offset);
+        const bool isLast = (offset + n) >= totalSamples;
+        stretcher->process(stage1Buffer.data() + offset, static_cast<size_t>(n), isLast);
+
+        while (true) {
+            const size_t avail = stretcher->available();
+            if (avail == 0) break;
+            const size_t want = std::min<size_t>(avail, retrieveBuf.size());
+            const size_t got = stretcher->retrieve(retrieveBuf.data(), want);
+            if (got == 0) break;
+            output.insert(output.end(), retrieveBuf.begin(), retrieveBuf.begin() + static_cast<std::ptrdiff_t>(got));
+        }
+    }
+    // Final drain after process(isLast=true) — some output may still be buffered.
+    while (true) {
+        const size_t avail = stretcher->available();
+        if (avail == 0) break;
+        const size_t want = std::min<size_t>(avail, retrieveBuf.size());
+        const size_t got = stretcher->retrieve(retrieveBuf.data(), want);
+        if (got == 0) break;
+        output.insert(output.end(), retrieveBuf.begin(), retrieveBuf.begin() + static_cast<std::ptrdiff_t>(got));
+    }
+
+    // Re-fetch revisions just before publish (they may have advanced again).
+    const uint64_t timeGridRev = materializationStore_->getTimeGridRevision(materializationId);
+
+    materializationStore_->getTimeStretchCache().store(materializationId,
+                                                        std::move(output),
+                                                        /*pitchRev=*/0,
+                                                        static_cast<uint32_t>(timeGridRev),
+                                                        sampleRate);
+
+    AppLogger::log("Stage2Worker: rebuilt matId="
+                   + juce::String(static_cast<juce::int64>(materializationId))
+                   + " timeGridRev=" + juce::String(static_cast<juce::int64>(timeGridRev))
+                   + " stage1InputSamples=" + juce::String(totalSamples)
+                   + " (Stage 1 via readPlaybackAudio + LR4 mix)");
+    return true;
 }
 
 bool OpenTuneAudioProcessor::ensureServiceReady(
@@ -1093,6 +1399,198 @@ bool OpenTuneAudioProcessor::ensureVocoderReady()
                 vocoderDomain_ = std::make_unique<VocoderDomain>(ortEnv_);
             }
             return vocoderDomain_->initialize(modelsDir);
+        });
+}
+
+bool OpenTuneAudioProcessor::isNoteGenInFlightForMaterialization(uint64_t materializationId) const
+{
+    if (materializationId == 0) return false;
+    std::lock_guard<std::mutex> lk(noteGenInFlightMutex_);
+    return noteGenInFlightMatIds_.count(materializationId) > 0;
+}
+
+// add-note-confirmed-handles §3.2: Per-materialization barrier merger.
+// WordSegmenter completion delivers handles; GameNoteGenerator completion delivers notes.
+// First call creates merger; second arrival fires merge once; merger then erased.
+// 顺序无关 (per spec: 哪个先完成都拿来用,不要求顺序).
+void OpenTuneAudioProcessor::deliverHandlesToMerger(uint64_t materializationId,
+                                                    std::vector<TimeHandle> handles)
+{
+    if (materializationId == 0) return;
+    HandleNoteMerger* merger = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(handleNoteMergersMutex_);
+        auto& slot = handleNoteMergers_[materializationId];
+        if (!slot) {
+            slot = std::make_unique<HandleNoteMerger>();
+            slot->onMergeComplete = [this, materializationId](std::vector<TimeHandle> merged) {
+                auto snap = TimeGridSnapshot::makeFromHandles(std::move(merged), /*revision=*/3);
+                if (!snap) {
+                    AppLogger::warn("[HandleNoteMerger] merged snapshot validation failed; skip publish for matId="
+                                    + juce::String(static_cast<juce::int64>(materializationId)));
+                    return;
+                }
+                if (materializationStore_) {
+                    materializationStore_->setTimeGrid(materializationId, snap);
+                    AppLogger::log("[HandleNoteMerger] merge complete: matId="
+                                   + juce::String(static_cast<juce::int64>(materializationId))
+                                   + " handles=" + juce::String(static_cast<int>(snap->handles().size())));
+                }
+                // Erase merger after one-shot fire (zombie protection per spec).
+                std::lock_guard<std::mutex> lk(handleNoteMergersMutex_);
+                handleNoteMergers_.erase(materializationId);
+            };
+        }
+        merger = slot.get();
+    }
+    merger->deliverHandles(std::move(handles));
+}
+
+// add-note-confirmed-handles §4.2: Manual re-seed handler.
+// 入参验证 + 收集 inputs + 调 HandleNoteMerger::reSeed + publish。
+bool OpenTuneAudioProcessor::canReSeedTimeGridFromNotesById(uint64_t materializationId) const
+{
+    if (materializationId == 0) return false;
+    if (materializationStore_ == nullptr) return false;
+    std::shared_ptr<const TimeGridSnapshot> snap;
+    if (!materializationStore_->getTimeGrid(materializationId, snap) || !snap) return false;
+    const auto notes = materializationStore_->getNotes(materializationId);
+    return !notes.empty();
+}
+
+bool OpenTuneAudioProcessor::reSeedTimeGridFromNotesById(uint64_t materializationId)
+{
+    if (materializationId == 0 || materializationStore_ == nullptr) return false;
+    std::shared_ptr<const TimeGridSnapshot> current;
+    if (!materializationStore_->getTimeGrid(materializationId, current) || !current) {
+        AppLogger::warn("[reSeed] no current TimeGrid for matId=" + juce::String(static_cast<juce::int64>(materializationId)));
+        return false;
+    }
+    const auto notes = materializationStore_->getNotes(materializationId);
+    if (notes.empty()) {
+        AppLogger::warn("[reSeed] no notes available; legacy mode or GameNoteGenerator disabled");
+        return false;
+    }
+    // 收集 handlesPre: 把当前 snapshot 中所有非 UserAdded、非 NoteOnly 的 handle 视为 WordSegmenter 输出。
+    // (实际的 WordSegmenter 重运行不在 manual re-seed 范围内 — re-seed 仅基于已有 auto handles 集合 + 新 notes。)
+    std::vector<TimeHandle> handlesPre;
+    for (const auto& h : current->handles()) {
+        if (h.kind == HandleKind::UserAdded) continue;
+        if (h.kind == HandleKind::NoteOnly) continue;
+        handlesPre.push_back(h);
+    }
+    // Count handle kinds before for logging (sanity that re-seed actually ran).
+    int beforeUserAdded = 0, beforeNoteOnly = 0, beforeOther = 0;
+    for (const auto& h : current->handles()) {
+        if (h.kind == HandleKind::UserAdded) ++beforeUserAdded;
+        else if (h.kind == HandleKind::NoteOnly) ++beforeNoteOnly;
+        else ++beforeOther;
+    }
+    auto merged = HandleNoteMerger::reSeed(*current, handlesPre, notes);
+    auto newSnap = TimeGridSnapshot::makeFromHandles(std::move(merged), /*revision=*/current->revision() + 1);
+    if (!newSnap) {
+        AppLogger::warn("[reSeed] merged snapshot validation failed");
+        return false;
+    }
+    int afterUserAdded = 0, afterNoteOnly = 0, afterOther = 0, afterHigh = 0;
+    for (const auto& h : newSnap->handles()) {
+        if (h.kind == HandleKind::UserAdded) ++afterUserAdded;
+        else if (h.kind == HandleKind::NoteOnly) ++afterNoteOnly;
+        else ++afterOther;
+        if (h.confidence == Confidence::High) ++afterHigh;
+    }
+    materializationStore_->setTimeGrid(materializationId, newSnap);
+    // Stage 2 needs to re-render audio with new TimeGrid (KeyFrameMap may have changed
+    // due to NoteOnly handles that affect interpolation).
+    requestStage2Rebuild(materializationId);
+    AppLogger::info("[reSeed] matId="
+                    + juce::String(static_cast<juce::int64>(materializationId))
+                    + " before(user=" + juce::String(beforeUserAdded)
+                    + " noteOnly=" + juce::String(beforeNoteOnly)
+                    + " other=" + juce::String(beforeOther)
+                    + ") after(user=" + juce::String(afterUserAdded)
+                    + " noteOnly=" + juce::String(afterNoteOnly)
+                    + " other=" + juce::String(afterOther)
+                    + " high=" + juce::String(afterHigh) + ")");
+    return true;
+}
+
+void OpenTuneAudioProcessor::deliverNotesToMerger(uint64_t materializationId,
+                                                   const std::vector<Note>& notes)
+{
+    if (materializationId == 0) return;
+    HandleNoteMerger* merger = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(handleNoteMergersMutex_);
+        auto it = handleNoteMergers_.find(materializationId);
+        if (it == handleNoteMergers_.end()) {
+            // Notes arrived before handles; create merger and cache notes.
+            auto& slot = handleNoteMergers_[materializationId];
+            slot = std::make_unique<HandleNoteMerger>();
+            slot->onMergeComplete = [this, materializationId](std::vector<TimeHandle> merged) {
+                auto snap = TimeGridSnapshot::makeFromHandles(std::move(merged), /*revision=*/3);
+                if (!snap) return;
+                if (materializationStore_) {
+                    materializationStore_->setTimeGrid(materializationId, snap);
+                    AppLogger::log("[HandleNoteMerger] merge complete: matId="
+                                   + juce::String(static_cast<juce::int64>(materializationId))
+                                   + " handles=" + juce::String(static_cast<int>(snap->handles().size())));
+                }
+                std::lock_guard<std::mutex> lk(handleNoteMergersMutex_);
+                handleNoteMergers_.erase(materializationId);
+            };
+            merger = slot.get();
+        } else {
+            merger = it->second.get();
+        }
+    }
+    merger->deliverNotes(notes);
+}
+
+bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
+{
+    // Backend selection (per design D7):
+    //   1. env OPENTUNE_NOTE_BACKEND=legacy  → LegacyNoteGenerator
+    //   2. else if GAME-small ONNX bundle present → GameNoteGenerator
+    //   3. else fallback to LegacyNoteGenerator
+    // Logged once at first init so support can identify which path ran.
+    return ensureServiceReady(noteGenReady_, noteGenInitAttempted_, noteGenInitMutex_, "NoteGen",
+        [this](const std::string& modelsDir) {
+            if (noteGenerator_) return true;
+
+            const auto envBackendRaw = juce::SystemStats::getEnvironmentVariable(
+                "OPENTUNE_NOTE_BACKEND", {});
+            const auto envBackend = envBackendRaw.trim().toLowerCase();
+            const bool forceLegacy = (envBackend == "legacy");
+            AppLogger::info(juce::String("[NoteGen] env OPENTUNE_NOTE_BACKEND=")
+                            + (envBackendRaw.isEmpty() ? "<unset>" : envBackendRaw)
+                            + " → forceLegacy=" + (forceLegacy ? "true" : "false"));
+
+            if (!forceLegacy) {
+                if (!ortEnv_) {
+                    Ort::InitApi();
+                    ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
+                }
+                const auto gameDir = juce::File(juce::String(modelsDir))
+                                         .getChildFile("GAME").getFullPathName().toStdString();
+                if (juce::File(juce::String(gameDir)).getChildFile("encoder.onnx").existsAsFile()) {
+                    try {
+                        noteGenerator_ = std::make_unique<GameNoteGenerator>(gameDir, *ortEnv_);
+                        AppLogger::info("[NoteGen] backend=GAME-small (modelsDir=" + juce::String(gameDir) + ")");
+                        return true;
+                    } catch (const std::exception& e) {
+                        AppLogger::warn(juce::String("[NoteGen] GAME init failed, falling back to Legacy: ") + e.what());
+                    }
+                } else {
+                    AppLogger::info("[NoteGen] GAME bundle missing at " + juce::String(gameDir)
+                                    + " — falling back to Legacy");
+                }
+            }
+
+            noteGenerator_ = std::make_unique<LegacyNoteGenerator>();
+            AppLogger::info(juce::String("[NoteGen] backend=Legacy (forceLegacy=")
+                            + (forceLegacy ? "true" : "false") + ")");
+            return true;
         });
 }
 
@@ -1237,9 +1735,7 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     }
 
-    // Always prepare crossover mixers for current sample rate (covers first init + rate change)
     jassert(materializationStore_ != nullptr);
-    materializationStore_->prepareAllCrossoverMixers(sampleRate, samplesPerBlock);
 
     doublePrecisionScratch_.setSize(std::max(1, getTotalNumOutputChannels()), std::max(1, currentBlockSize_), false, true, true);
     trackMixScratch_.setSize(std::max(1, getTotalNumOutputChannels()), std::max(1, currentBlockSize_), false, true, true);
@@ -1564,15 +2060,22 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             PlaybackReadRequest readRequest;
             readRequest.source.renderCache = materializationReadSource.renderCache;
             readRequest.source.audioBuffer = materializationReadSource.audioBuffer;
+            // ⚡️ vocal-time-stretch §7 — propagate Stage 2 fast-path fields so
+            // readPlaybackAudio can consume the TimeStretchCache when the user
+            // has placed non-identity TimeGrid handles.  Forgetting these fields
+            // makes the audio path silently degrade to dry passthrough (the bug
+            // observed in Journey 1 manual smoke test 2026-05-12).
+            readRequest.source.timeStretchCache    = materializationReadSource.timeStretchCache;
+            readRequest.source.materializationId   = materializationReadSource.materializationId;
+            readRequest.source.pitchRevision       = materializationReadSource.pitchRevision;
+            readRequest.source.timeGridRevision    = materializationReadSource.timeGridRevision;
+            readRequest.source.timeGridIsIdentity  = materializationReadSource.timeGridIsIdentity;
             readRequest.readStartSeconds = readStartSeconds;
             readRequest.targetSampleRate = deviceSampleRate;
             readRequest.numSamples = samplesToCopy;
 
             clipReadScratch_.clear();
-            CrossoverMixer* placementMixer = materializationReadSource.renderCache
-                ? &materializationReadSource.renderCache->getCrossoverMixer()
-                : nullptr;
-            const int availableReadSamples = readPlaybackAudio(readRequest, clipReadScratch_, 0, placementMixer);
+            const int availableReadSamples = readPlaybackAudio(readRequest, clipReadScratch_, 0);
 
             for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
                 const float* src = clipReadScratch_.getReadPointer(ch);
@@ -1803,6 +2306,12 @@ bool OpenTuneAudioProcessor::getPlaybackReadSourceByMaterializationId(uint64_t m
 
     out.renderCache = coreSource.renderCache;
     out.audioBuffer = coreSource.audioBuffer;
+    // §7 (Phase D): forward TimeStretchCache + revision snapshot to audio thread
+    out.timeStretchCache    = coreSource.timeStretchCache;
+    out.materializationId   = coreSource.materializationId;
+    out.pitchRevision       = coreSource.pitchRevision;
+    out.timeGridRevision    = coreSource.timeGridRevision;
+    out.timeGridIsIdentity  = coreSource.timeGridIsIdentity;
     return out.canRead();
 }
 
@@ -1998,6 +2507,8 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
         writePitchCurve(output, contentSnapshot.pitchCurve);
         writeNotes(output, contentSnapshot.notes);
         writeSilentGaps(output, contentSnapshot.silentGaps);
+        // §3.8 (state v6+): TimeGrid handles
+        writeTimeGridHandles(output, contentSnapshot.timeGrid);
     }
 
     output.writeInt(standaloneArrangement_->getActiveTrackId());
@@ -2073,10 +2584,16 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     }
 
     // Full state payload (VST3)
-    if (magic != static_cast<int>(kProcessorStateMagic) || version != kProcessorStateVersion) {
-        AppLogger::warn("StateRestore: unsupported processor state payload");
+    // vocal-time-stretch §3.8: state v6 adds TimeGrid section per materialization.
+    // add-note-confirmed-handles §1: state v7 adds per-handle confidence field + NoteOnly kind.
+    // Accept v5 (no TimeGrid), v6 (TimeGrid w/o confidence), v7 (TimeGrid w/ confidence).
+    if (magic != static_cast<int>(kProcessorStateMagic)
+        || (version != kProcessorStateVersion && version != 6 && version != 5)) {
+        AppLogger::warn("StateRestore: unsupported processor state payload (version=" + juce::String(version) + ")");
         return;
     }
+    const bool stateHasTimeGrid = (version >= 6);
+    const bool stateHasConfidence = (version >= 7);
 
     AppLogger::log("StateRestore: VST3 full-state begin sizeBytes=" + juce::String(sizeInBytes));
 
@@ -2152,6 +2669,26 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
             || sourceId == 0) {
             return;
         }
+
+        // §3.8 (state v6+): read TimeGrid handles. v5 projects skip this and
+        // let createMaterialization auto-seed an identity TimeGrid.
+        // add-note-confirmed-handles: v7+ also reads per-handle confidence byte.
+        std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
+        if (stateHasTimeGrid) {
+            std::vector<TimeHandle> handles;
+            if (!readTimeGridHandles(input, handles, stateHasConfidence)) {
+                return;
+            }
+            if (!handles.empty()) {
+                timeGridSnapshot = TimeGridSnapshot::makeFromHandles(std::move(handles), /*revision=*/1);
+                if (timeGridSnapshot == nullptr) {
+                    AppLogger::warn("StateRestore: TimeGrid validation failed for matId="
+                                    + juce::String(static_cast<juce::int64>(materializationId))
+                                    + ", falling back to identity");
+                }
+            }
+        }
+
         jassert(materializationStore_ != nullptr);
 
         MaterializationStore::CreateMaterializationRequest request;
@@ -2166,6 +2703,7 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
         request.notes = normalizeStoredNotes(notes);
         request.silentGaps = std::move(silentGaps);
         request.renderRevision = renderRevision;
+        request.timeGrid = std::move(timeGridSnapshot);   // null → createMaterialization auto-seeds identity
 
         if (materializationStore_->createMaterialization(std::move(request),
                                                          materializationId) != materializationId) {
@@ -3464,7 +4002,333 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
                 }
             }
 
+            // ============================================================
+            // ⚡️ vocal-time-stretch §4.9 — auto-seed TimeGrid handles.
+            //
+            // Phase G original algorithm seeded one handle per WordSegmenter
+            // tier-1 PhonemeClass transition + one per OnsetDetector tier-2
+            // event.  User testing 2026-05-12 (Journey 1) reported 700+ handles
+            // on a 5-min vocal — over-segmenting sustained notes (V/U flips
+            // inside a held vowel each emitted a handle).
+            //
+            // Current algorithm (rewrite, see Stage 3 below):
+            //   - Use ONLY OnsetDetector strong-onset peaks (α=2.5, 300 ms
+            //     min internal distance) as seed candidates
+            //   - Filter to onsets in voiced/sibilant regions (skip silence)
+            //   - Tag each with PhonemeClass at frame for UI tinting
+            //   - Apply 500 ms minimum spacing as final density limiter
+            //
+            // PhonemeClassifier still runs (its output drives kind tagging
+            // + Time view tinting + future Sib/Sil-aware features).
+            //
+            // V/U fusion uses F0 as voicing indicator (uv_prob = (f0 > 0 ? 0 : 1))
+            // since Silero VAD downstream of this seeding pass is best-effort.
+            //
+            // Only fires when the existing TimeGrid is identity (i.e., user
+            // hasn't manually placed handles yet).  Subsequent F0 re-extractions
+            // (after audio replace) preserve user-placed handles.
+            // ============================================================
+            if (auto existingGrid = processor->getMaterializationTimeGridById(result.materializationId);
+                existingGrid != nullptr && existingGrid->isIdentity()
+                && existingGrid->handles().size() == 2 /* only ClipStart+ClipEnd */) {
+                auto audioBuffer = processor->getMaterializationAudioBufferById(result.materializationId);
+                if (audioBuffer != nullptr && audioBuffer->getNumSamples() > 0
+                    && audioBuffer->getNumChannels() > 0) {
+                    const int numSamples = audioBuffer->getNumSamples();
+                    const float* mono = audioBuffer->getReadPointer(0);
+                    constexpr int kSr = static_cast<int>(TimeCoordinate::kRenderSampleRate);
+
+                    // Stage 1: detect onsets — Journey-1 fix 2026-05-12 raises
+                    // adaptive-threshold α from 1.5 → 2.5 (only strong musical
+                    // onsets pass) and minDistanceFrames from 3 → 30 (≥300 ms
+                    // between onsets, syllable-rate ceiling).  PhonemeClass
+                    // tier-1 transitions are no longer used as primary seed
+                    // (too noisy on V/U flips inside sustained vowels).
+                    OnsetDetector onsetDet;
+                    OnsetDetectorConfig oCfg;
+                    oCfg.sampleRate = kSr;
+                    oCfg.nFft = 2048;
+                    oCfg.hopLength = 441;       // 100 fps grid alignment
+                    oCfg.alpha = 2.5f;          // raised: only confident onsets
+                    oCfg.minDistanceFrames = 30; // ≈ 300 ms between onsets
+                    onsetDet.configure(oCfg);
+                    auto onsetResult = onsetDet.detect(mono, static_cast<size_t>(numSamples));
+
+                    // Stage 2: classify phonemes (synthesize uvProb from F0)
+                    PhonemeClassifier phonemeClassifier;
+                    PhonemeClassifierConfig pCfg;
+                    pCfg.sampleRate = kSr;
+                    pCfg.frameRateHz = 100;
+                    phonemeClassifier.configure(pCfg);
+
+                    const int n100fps = static_cast<int>(
+                        std::ceil(static_cast<double>(numSamples) / (kSr / 100)));
+                    std::vector<float> uvProb(static_cast<size_t>(n100fps), 1.0f);
+                    {
+                        // Synthesize uvProb from F0:
+                        //   uv_prob[t] = 0 if f0[t] > 0 (voiced), else 1 (unvoiced).
+                        // F0 is at result.f0SampleRate / hopSize fps; we resample
+                        // to 100 fps via nearest-neighbor.
+                        const double f0FrameRate =
+                            static_cast<double>(result.f0SampleRate)
+                            / static_cast<double>(juce::jmax(1, result.hopSize));
+                        const double srcToDstRatio = f0FrameRate / 100.0;
+                        for (int t = 0; t < n100fps; ++t) {
+                            const int f0Idx = static_cast<int>(std::round(t * srcToDstRatio));
+                            if (f0Idx >= 0 && f0Idx < static_cast<int>(result.f0.size())
+                                && result.f0[static_cast<size_t>(f0Idx)] > 0.0f) {
+                                uvProb[static_cast<size_t>(t)] = 0.0f;   // voiced
+                            }
+                        }
+                    }
+
+                    auto classifyResult = phonemeClassifier.classify(
+                        mono, static_cast<size_t>(numSamples),
+                        uvProb.data(), uvProb.size(),
+                        nullptr, 0);   // no Silero VAD — degraded V/U fusion
+
+                    // Stage 3: build seed handles (Journey-1 rewrite 2026-05-12).
+                    //
+                    // Old algorithm used WordSegmenter tier-1 PhonemeClass
+                    // transitions as primary seed — produced 700+ handles on
+                    // a 5 min vocal because every V/U flip inside a sustained
+                    // vowel emitted a handle.  User feedback: handles
+                    // over-segmented notes and accuracy was poor.
+                    //
+                    // New algorithm:
+                    //   1. Use ONLY OnsetDetector strong-onset peaks (raised
+                    //      α=2.5 + 300 ms min distance, see Stage 1 above) as
+                    //      seed candidates — these are musically meaningful
+                    //      attacks (note onsets, syllable starts).
+                    //   2. Skip onsets whose surrounding 100ms window is
+                    //      classified as Silence (no point seeding handles in
+                    //      silent gaps; user can still add manually).
+                    //   3. Tag each onset with the dominant PhonemeClass at
+                    //      its frame for UI tinting (HandleKind from class).
+                    //   4. Enforce 500 ms minimum spacing as final filter
+                    //      (typical singing syllable cadence).
+                    //
+                    // PhonemeClassifier output (`classifyResult.classes`)
+                    // remains useful for tagging and class-aware Time view
+                    // tinting, but does NOT generate handles directly.
+                    struct SeedResult {
+                        std::vector<int> seedHandleFrames;
+                        std::vector<HandleKind> seedHandleKinds;
+                    } segResult;
+
+                    constexpr int kAutoSeedMinSpacingMs    = 500;   // syllable cadence ceiling
+                    constexpr int kAutoSeedMinSpacingFrames = (kAutoSeedMinSpacingMs * 100) / 1000;
+                    const int classCount = static_cast<int>(classifyResult.classes.size());
+
+                    auto classAtFrame = [&](int f) -> PhonemeClass {
+                        if (f < 0 || f >= classCount) return PhonemeClass::Silence;
+                        return classifyResult.classes[static_cast<size_t>(f)];
+                    };
+                    auto isFrameInVoicedRegion = [&](int f) {
+                        // ±50 ms window — accept if any frame is Voiced or Sibilant.
+                        for (int dt = -5; dt <= 5; ++dt) {
+                            const auto c = classAtFrame(f + dt);
+                            if (c == PhonemeClass::Voiced || c == PhonemeClass::Sibilant) return true;
+                        }
+                        return false;
+                    };
+                    auto kindFromClass = [](PhonemeClass c) {
+                        switch (c) {
+                            case PhonemeClass::Voiced:   return HandleKind::OnsetVoiced;
+                            case PhonemeClass::Sibilant: return HandleKind::OnsetSibilant;
+                            case PhonemeClass::Silence:  return HandleKind::OnsetSilence;
+                        }
+                        return HandleKind::InternalOnset;
+                    };
+
+                    int rawOnsets = 0;
+                    int silenceFiltered = 0;
+                    int spacingFiltered = 0;
+                    int lastAcceptedFrame = -kAutoSeedMinSpacingFrames;
+                    for (int frame : onsetResult.onsetFrames100fps) {
+                        ++rawOnsets;
+                        if (!isFrameInVoicedRegion(frame)) {
+                            ++silenceFiltered;
+                            continue;
+                        }
+                        if (frame - lastAcceptedFrame < kAutoSeedMinSpacingFrames) {
+                            ++spacingFiltered;
+                            continue;
+                        }
+                        segResult.seedHandleFrames.push_back(frame);
+                        segResult.seedHandleKinds.push_back(kindFromClass(classAtFrame(frame)));
+                        lastAcceptedFrame = frame;
+                    }
+                    AppLogger::log("AutoSeedTimeGrid: rawOnsets=" + juce::String(rawOnsets)
+                                   + " silenceFiltered=" + juce::String(silenceFiltered)
+                                   + " spacingFiltered=" + juce::String(spacingFiltered)
+                                   + " accepted=" + juce::String(segResult.seedHandleFrames.size())
+                                   + " (min-spacing " + juce::String(kAutoSeedMinSpacingMs) + "ms)");
+
+                    // Stage 4: build new TimeGrid with seeded handles.
+                    // Each handle is identity (source_seconds == output_seconds);
+                    // user's drag operations move output_seconds.
+                    if (!segResult.seedHandleFrames.empty()) {
+                        const double durationSec = static_cast<double>(numSamples)
+                                                  / TimeCoordinate::kRenderSampleRate;
+                        std::vector<TimeHandle> handles;
+                        handles.reserve(segResult.seedHandleFrames.size() + 2);
+
+                        TimeHandle clipStart;
+                        clipStart.id = 1;
+                        clipStart.source_seconds = 0.0;
+                        clipStart.output_seconds = 0.0;
+                        clipStart.kind = HandleKind::ClipStart;
+                        clipStart.locked = true;
+                        handles.push_back(clipStart);
+
+                        uint64_t nextId = 2;
+                        for (size_t i = 0; i < segResult.seedHandleFrames.size(); ++i) {
+                            const int frame = segResult.seedHandleFrames[i];
+                            const double t = static_cast<double>(frame) / 100.0;
+                            // Skip handles that fall on or past the clip end
+                            // (would violate strict monotonicity with ClipEnd).
+                            if (t <= 0.001 || t >= durationSec - 0.001) continue;
+
+                            TimeHandle h;
+                            h.id = nextId++;
+                            h.source_seconds = t;
+                            h.output_seconds = t;   // identity — user drags later
+                            h.kind = segResult.seedHandleKinds[i];
+                            h.locked = false;
+                            handles.push_back(h);
+                        }
+
+                        TimeHandle clipEnd;
+                        clipEnd.id = nextId++;
+                        clipEnd.source_seconds = durationSec;
+                        clipEnd.output_seconds = durationSec;
+                        clipEnd.kind = HandleKind::ClipEnd;
+                        clipEnd.locked = true;
+                        handles.push_back(clipEnd);
+
+                        // Enforce 30ms minimum spacing between adjacent
+                        // handles by dropping any too-close interior handle.
+                        if (handles.size() > 2) {
+                            std::vector<TimeHandle> deduped;
+                            deduped.reserve(handles.size());
+                            deduped.push_back(handles.front());
+                            for (size_t i = 1; i < handles.size(); ++i) {
+                                if (handles[i].source_seconds - deduped.back().source_seconds >= 0.030) {
+                                    deduped.push_back(handles[i]);
+                                }
+                            }
+                            // Always keep ClipEnd — swap if it got dropped
+                            if (deduped.back().kind != HandleKind::ClipEnd) {
+                                deduped.back() = clipEnd;
+                            }
+                            handles = std::move(deduped);
+                        }
+
+                        auto seededGrid = TimeGridSnapshot::makeFromHandles(
+                            std::move(handles), /*revision=*/2);
+                        if (seededGrid != nullptr) {
+                            // Publish via store directly (skip processor's
+                            // setMaterializationTimeGridById which would also
+                            // requestStage2Rebuild — unnecessary because
+                            // seededGrid is identity).
+                            processor->materializationStore_->setTimeGrid(
+                                result.materializationId, seededGrid);
+                            AppLogger::log("AutoSeedTimeGrid: matId="
+                                + juce::String(static_cast<juce::int64>(result.materializationId))
+                                + " handles=" + juce::String(static_cast<int>(seededGrid->handles().size()))
+                                + " seededFromOnsets=" + juce::String(static_cast<int>(segResult.seedHandleFrames.size()))
+                                + " rawOnsetFrames=" + juce::String(static_cast<int>(onsetResult.onsetFrames100fps.size())));
+                            // add-note-confirmed-handles §3.2: deliver handles to merger barrier;
+                            // notes arriving later from GameNoteGenerator will trigger merge publish.
+                            processor->deliverHandlesToMerger(result.materializationId, seededGrid->handles());
+                        } else {
+                            AppLogger::warn("AutoSeedTimeGrid: validation failed; keeping identity grid");
+                        }
+                    }
+                }
+            }
+
             processor->setMaterializationOriginalF0StateById(result.materializationId, OriginalF0State::Ready);
+
+            // Auto-generate notes via the active backend (GAME by default,
+            // Legacy fallback). Runs on a single-threaded pool so concurrent
+            // imports serialise (ORT sessions are not safe to share across
+            // concurrent inference calls). All three flows (standalone import
+            // / plugin ARA / plugin non-ARA capture) converge here, so this
+            // single hook covers them all.
+            //
+            // We capture by value the few fields the worker needs so the
+            // F0 result object can be destroyed independently.
+            const auto materializationId = result.materializationId;
+            const auto sourceAudioBuffer = result.sourceAudioBuffer;
+            const auto f0Snapshot        = result.f0;
+            const auto energySnapshot    = result.energy;
+            const auto hopSize           = result.hopSize;
+            const auto f0SampleRate      = static_cast<double>(result.f0SampleRate);
+
+            // Mark this materialization as note-gen-in-flight so editors can
+            // keep the shared "正在处理音频" overlay visible until BOTH F0 and
+            // note generation are done.
+            {
+                std::lock_guard<std::mutex> lk(processor->noteGenInFlightMutex_);
+                processor->noteGenInFlightMatIds_.insert(materializationId);
+            }
+
+            processor->noteGeneratorPool_.addJob([processor, lifetimeFlag,
+                                                  materializationId,
+                                                  sourceAudioBuffer,
+                                                  f0Snapshot, energySnapshot,
+                                                  hopSize, f0SampleRate]() {
+                // Always remove this materialization from the in-flight set
+                // when the job finishes (success / no-op / exception),
+                // regardless of whether we got to commit notes.
+                struct InFlightGuard {
+                    OpenTuneAudioProcessor* p;
+                    uint64_t                matId;
+                    ~InFlightGuard() {
+                        std::lock_guard<std::mutex> lk(p->noteGenInFlightMutex_);
+                        p->noteGenInFlightMatIds_.erase(matId);
+                    }
+                } guard{processor, materializationId};
+
+                if (!lifetimeFlag->load(std::memory_order_acquire)) return;
+                if (!processor->ensureNoteGeneratorReady()) {
+                    AppLogger::warn("[NoteGen] generator not ready; skipping auto-note for materializationId="
+                                     + juce::String(static_cast<juce::int64>(materializationId)));
+                    return;
+                }
+                if (!processor->noteGenerator_) return;
+                if (!sourceAudioBuffer || sourceAudioBuffer->getNumSamples() <= 0) return;
+
+                NoteGeneratorInput input;
+                input.sampleRate     = TimeCoordinate::kRenderSampleRate;
+                input.audio.assign(sourceAudioBuffer->getReadPointer(0),
+                                    sourceAudioBuffer->getReadPointer(0) + sourceAudioBuffer->getNumSamples());
+                input.f0             = f0Snapshot;
+                input.energy         = energySnapshot;
+                input.hopSize        = hopSize;
+                input.f0SampleRate   = f0SampleRate;
+                input.hostSampleRate = TimeCoordinate::kRenderSampleRate;
+
+                std::vector<Note> notes;
+                try {
+                    std::lock_guard<std::mutex> lk(processor->noteGeneratorInferenceMutex_);
+                    notes = processor->noteGenerator_->generate(input);
+                } catch (const std::exception& e) {
+                    AppLogger::error(juce::String("[NoteGen] generate threw: ") + e.what());
+                    return;
+                }
+
+                if (!lifetimeFlag->load(std::memory_order_acquire)) return;
+                processor->setMaterializationNotesById(materializationId, notes);
+                AppLogger::info("[NoteGen] committed " + juce::String(static_cast<int>(notes.size()))
+                                + " notes for materializationId="
+                                + juce::String(static_cast<juce::int64>(materializationId)));
+                // add-note-confirmed-handles §3.2: deliver notes to merger barrier;
+                // if WordSegmenter handles already delivered, this fires merge publish.
+                processor->deliverNotesToMerger(materializationId, notes);
+            });
         });
 
     if (submitResult != F0ExtractionService::SubmitResult::Accepted) {
@@ -3508,7 +4372,23 @@ bool OpenTuneAudioProcessor::setMaterializationPitchCurveById(uint64_t materiali
     }
 
     jassert(materializationStore_ != nullptr);
-    return materializationStore_->setPitchCurve(materializationId, std::move(curve));
+    if (!materializationStore_->setPitchCurve(materializationId, std::move(curve))) {
+        return false;
+    }
+
+    // §7 (Phase E): pitch edit invalidates Stage 2 (handled inside
+    // setPitchCurve via TimeStretchCache::invalidate).  If the materialization
+    // currently has a non-identity TimeGrid, the user is hearing stretched
+    // audio — we must enqueue a Stage 2 rebuild so the new pitch is reflected.
+    // For identity grids, Stage 2 is unused; skip the rebuild.
+    {
+        std::shared_ptr<const TimeGridSnapshot> tg;
+        if (materializationStore_->getTimeGrid(materializationId, tg)
+            && tg != nullptr && !tg->isIdentity()) {
+            requestStage2Rebuild(materializationId);
+        }
+    }
+    return true;
 }
 
 OriginalF0State OpenTuneAudioProcessor::getMaterializationOriginalF0StateById(uint64_t materializationId) const
@@ -3535,6 +4415,48 @@ bool OpenTuneAudioProcessor::setMaterializationDetectedKeyById(uint64_t material
 {
     jassert(materializationStore_ != nullptr);
     return materializationId != 0 && materializationStore_->setDetectedKey(materializationId, key);
+}
+
+// ============================================================================
+// vocal-time-stretch §3.6 — TimeGrid processor accessors
+// ============================================================================
+
+std::shared_ptr<const TimeGridSnapshot>
+OpenTuneAudioProcessor::getMaterializationTimeGridById(uint64_t materializationId) const
+{
+    if (materializationId == 0) return nullptr;
+    jassert(materializationStore_ != nullptr);
+    std::shared_ptr<const TimeGridSnapshot> snapshot;
+    return materializationStore_->getTimeGrid(materializationId, snapshot) ? snapshot : nullptr;
+}
+
+uint64_t OpenTuneAudioProcessor::getMaterializationTimeGridRevisionById(uint64_t materializationId) const
+{
+    if (materializationId == 0) return 0;
+    jassert(materializationStore_ != nullptr);
+    return materializationStore_->getTimeGridRevision(materializationId);
+}
+
+bool OpenTuneAudioProcessor::setMaterializationTimeGridById(uint64_t materializationId,
+                                                              std::shared_ptr<const TimeGridSnapshot> snapshot,
+                                                              int64_t affectedSrcStartFrame,
+                                                              int64_t affectedSrcEndFrame)
+{
+    if (materializationId == 0 || snapshot == nullptr) return false;
+    jassert(materializationStore_ != nullptr);
+    if (!materializationStore_->setTimeGrid(materializationId, std::move(snapshot))) {
+        return false;
+    }
+
+    // §7 (Phase D MVP): TimeStretchCache invalidation is performed inside
+    // setTimeGrid (§6.5).  Here we additionally enqueue a Stage 2 rebuild on
+    // the dedicated worker thread — it will read the freshest snapshot and
+    // produce a new TimeStretchCache entry asynchronously.  affectedSrcStart/End
+    // bounds are reserved for future region-scoped re-stretch optimization
+    // (current Offline mode is clip-wide).
+    juce::ignoreUnused(affectedSrcStartFrame, affectedSrcEndFrame);
+    requestStage2Rebuild(materializationId);
+    return true;
 }
 
 std::shared_ptr<RenderCache> OpenTuneAudioProcessor::getMaterializationRenderCacheById(uint64_t materializationId) const
@@ -3605,10 +4527,19 @@ bool OpenTuneAudioProcessor::commitMaterializationNotesAndSegmentsById(uint64_t 
     }
 
     auto committedCurve = clonePitchCurveWithCorrectedSegments(pitchCurve, segments);
-    return committedCurve != nullptr
+    const bool committed = committedCurve != nullptr
         && materializationStore_->commitNotesAndPitchCurve(materializationId,
                                                            normalizedNotes,
                                                            std::move(committedCurve));
+    if (committed) {
+        // §7 (Phase E): pitch edit → Stage 2 rebuild if non-identity grid
+        std::shared_ptr<const TimeGridSnapshot> tg;
+        if (materializationStore_->getTimeGrid(materializationId, tg)
+            && tg != nullptr && !tg->isIdentity()) {
+            requestStage2Rebuild(materializationId);
+        }
+    }
+    return committed;
 }
 
 bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByMaterializationId(uint64_t materializationId,
@@ -3684,6 +4615,14 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByMaterializationId(uin
                                                                     mergedNotes,
                                                                     std::move(derivedCurve));
     AppLogger::log("AutoTune: commitNotesAndPitchCurve result=" + juce::String(result ? "true" : "false"));
+    if (result) {
+        // §7 (Phase E): pitch edit → Stage 2 rebuild if non-identity grid
+        std::shared_ptr<const TimeGridSnapshot> tg;
+        if (materializationStore_->getTimeGrid(materializationId, tg)
+            && tg != nullptr && !tg->isIdentity()) {
+            requestStage2Rebuild(materializationId);
+        }
+    }
     return result;
 }
 
@@ -3897,6 +4836,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
         MelSpectrogramConfig melConfig;
         melConfig.sampleRate = static_cast<int>(RenderCache::kSampleRate);
         melConfig.nMels = vocoderDomain_->getMelBins();
+        melConfig.fMax = vocoderDomain_->getFMax();
 
         auto melResult = computeLogMelSpectrogram(monoAudio.data(), static_cast<int>(monoAudio.size()), numFrames, melConfig);
         if (!melResult.ok() || melResult.value().empty()) {
@@ -3950,13 +4890,14 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
 
         auto renderCache = coreJob.renderCache;
         auto targetRevision = coreJob.targetRevision;
+        const uint64_t chunkMatId = coreJob.materializationId;
         double jobStartSeconds = TimeCoordinate::samplesToSeconds(job->boundaries.trueStartSample,
                                                                   TimeCoordinate::kRenderSampleRate);
         const FrozenRenderBoundaries frozenBoundaries = job->boundaries;
 
         chunkRenderJobsInFlight_.fetch_add(1, std::memory_order_acq_rel);
 
-        vocoderJob.onComplete = [this, renderCache, targetRevision, jobStartSeconds, frozenBoundaries](bool success, const juce::String& error, const std::vector<float>& audio) {
+        vocoderJob.onComplete = [this, renderCache, targetRevision, chunkMatId, jobStartSeconds, frozenBoundaries](bool success, const juce::String& error, const std::vector<float>& audio) {
             chunkRenderJobsInFlight_.fetch_sub(1, std::memory_order_acq_rel);
             const auto& boundaries = frozenBoundaries;
 
@@ -3975,6 +4916,31 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                     targetRevision);
 
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::Succeeded);
+
+                // ⚡️ vocal-time-stretch §7 (Journey-1 fix 2026-05-12) — Stage 2
+                // depends on Stage 1's RenderCache via readPlaybackAudio.  When
+                // a chunk is freshly published, any prior Stage 2 cache entry
+                // captured before this chunk landed is now stale: the worker
+                // had read the OLD RenderCache (or an empty slot for that chunk)
+                // and produced stretched output that doesn't include the new
+                // pitch correction.
+                //
+                // Without this trigger, the user-visible symptom (per Journey 1
+                // testing): "edit pitch then time-stretched, can't hear pitch
+                // change until I edit again to bump revisions and retrigger
+                // Stage 2".
+                //
+                // Fix: invalidate Stage 2 cache + enqueue a rebuild so the
+                // freshly rendered chunk gets composed into a new Stage 2 PCM.
+                // requestStage2Rebuild dedups on matId, so multiple chunk
+                // completions in quick succession collapse to a single rebuild.
+                // For identity-TimeGrid clips, runStage2RebuildForMaterialization
+                // bails out early after invalidating — net cost is a worker
+                // wakeup + early return.
+                if (chunkMatId != 0 && materializationStore_ != nullptr) {
+                    materializationStore_->getTimeStretchCache().invalidate(chunkMatId);
+                    requestStage2Rebuild(chunkMatId);
+                }
             } else {
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
             }
@@ -3991,8 +4957,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
 
 int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request,
                                               juce::AudioBuffer<float>& destination,
-                                              int destinationStartSample,
-                                              CrossoverMixer* mixer) const
+                                              int destinationStartSample) const
 {
     if (request.numSamples <= 0
         || request.targetSampleRate <= 0.0
@@ -4013,6 +4978,35 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     const int writableSamples = juce::jmin(request.numSamples, destinationSamples - destinationStartSample);
     if (writableSamples <= 0) {
         return 0;
+    }
+
+    // ============================================================
+    // vocal-time-stretch §7 (Phase D MVP) — TimeStretchCache fast-path
+    //
+    // When a non-identity TimeGrid is published AND the Stage 2 worker has
+    // populated the TimeStretchCache for this (materializationId, pitchRev,
+    // timeGridRev), serve the audio directly from cache.  This bypasses the
+    // dry-source resample + RenderCache overlay + LR4 mix path entirely.
+    //
+    // On any miss (cache not yet populated, locked, or revision mismatch),
+    // fall through to the existing dry-path — perceptually the user hears
+    // unstretched audio for the brief moment until Stage 2 finishes.
+    // ============================================================
+    if (!request.source.timeGridIsIdentity
+        && request.source.timeStretchCache != nullptr
+        && request.source.materializationId != 0) {
+        const int wrote = request.source.timeStretchCache->sliceForOutputRange(
+            request.source.materializationId,
+            request.readStartSeconds,
+            destination,
+            destinationStartSample,
+            writableSamples,
+            static_cast<int>(request.targetSampleRate));
+        if (wrote > 0) {
+            return wrote;
+        }
+        // Cache miss → fall through to the dry-path (silent-stretch fallback)
+        // until Stage 2 finishes populating the cache for this revision.
     }
 
     const auto& srcBuffer = *request.source.audioBuffer;
@@ -4063,42 +5057,12 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
         }
     }
 
-    // Overlay rendered audio from cache
     if (request.source.renderCache != nullptr) {
-        const bool hasCrossover = (mixer != nullptr);
-
-        // When crossover is needed, save dry signal before overlay overwrites destination.
-        // thread_local vector reuses its allocation across calls (no realtime alloc after warmup).
-        thread_local std::vector<float> dryScratch;
-        if (hasCrossover) {
-            const int totalScratchSamples = destinationChannels * availableSamples;
-            if (static_cast<int>(dryScratch.size()) < totalScratchSamples)
-                dryScratch.resize(static_cast<size_t>(totalScratchSamples));
-
-            for (int ch = 0; ch < destinationChannels; ++ch) {
-                std::memcpy(dryScratch.data() + ch * availableSamples,
-                            destination.getReadPointer(ch, destinationStartSample),
-                            static_cast<size_t>(availableSamples) * sizeof(float));
-            }
-        }
-
         request.source.renderCache->overlayPublishedAudioForRate(destination,
                                                                  destinationStartSample,
                                                                  availableSamples,
                                                                  request.readStartSeconds,
                                                                  static_cast<int>(request.targetSampleRate));
-
-        // Crossover mix: HPF(dry) + LPF(rendered)
-        if (hasCrossover) {
-            for (int ch = 0; ch < destinationChannels; ++ch) {
-                const float* dryPtr = dryScratch.data() + ch * availableSamples;
-                float* outPtr = destination.getWritePointer(ch, destinationStartSample);
-
-                for (int s = 0; s < availableSamples; ++s) {
-                    outPtr[s] = mixer->processSample(ch, dryPtr[s], outPtr[s]);
-                }
-            }
-        }
     }
 
     return availableSamples;

@@ -14,7 +14,7 @@
 #include "Audio/AsyncAudioLoader.h"
 #include "Utils/PresetManager.h"
 #include "Utils/PitchCurve.h"
-#include "Utils/NoteGenerator.h"
+#include "Utils/LegacyNoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
 #include "Utils/AppLogger.h"
 #include "Utils/ParameterPanelSync.h"
@@ -221,11 +221,11 @@ static bool runDebugSelfTests() {
         NoteGeneratorParams params;
         params.policy.transitionThresholdCents = 512.0f;
         params.policy.minDurationMs = 100.0f;
-        auto notes = NoteGenerator::generate(f0, energy, kHopSize, kF0SampleRate, kHostSampleRate, params);
+        auto notes = LegacyNoteGenerator::generate(f0, energy, kHopSize, kF0SampleRate, kHostSampleRate, params);
         if (notes.empty()) {
             return false;
         }
-        // NoteGenerator extends the tail by whole-frame steps derived from tailExtendMs.
+        // LegacyNoteGenerator extends the tail by whole-frame steps derived from tailExtendMs.
         const double hopSecs = 160.0 / 16000.0;
         const double baseEndSeconds = static_cast<double>(f0.size()) * hopSecs;
         const double tailExtendSeconds = (std::ceil(params.policy.tailExtendMs / 1000.0 / hopSecs)) * hopSecs;
@@ -942,16 +942,30 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         auto curve = processorRef_.getMaterializationPitchCurveById(activeMaterializationId);
         std::shared_ptr<const juce::AudioBuffer<float>> materializationBuffer =
             processorRef_.getMaterializationAudioBufferById(activeMaterializationId);
-        if (activeMaterializationId != lastPianoRollMaterializationId_
+        // notesRevision changes (without matId / curve / buffer changing) when
+        // an async note generator commits new notes to the active materialization.
+        // Without polling this we'd miss the GAME backend's late note commit and
+        // the user would have to switch tracks to see the notes appear.
+        const uint64_t currentNotesRevision = activeMaterializationId != 0
+            ? processorRef_.getMaterializationNotesSnapshotById(activeMaterializationId).notesRevision
+            : 0;
+        const bool materializationChanged =
+            activeMaterializationId != lastPianoRollMaterializationId_
             || sr != lastPianoRollSampleRate_
             || curve != lastPianoRollCurve_
-            || materializationBuffer != lastPianoRollBuffer_) {
+            || materializationBuffer != lastPianoRollBuffer_;
+        if (materializationChanged) {
             pianoRoll_.setEditedMaterialization(activeMaterializationId, curve, materializationBuffer, sr);
             lastPianoRollMaterializationId_ = activeMaterializationId;
             lastPianoRollSampleRate_ = sr;
             lastPianoRollCurve_ = curve;
             lastPianoRollBuffer_ = materializationBuffer;
+        } else if (currentNotesRevision != lastPianoRollNotesRevision_) {
+            // Same materialization, fresh notes — typically GAME's async commit.
+            pianoRoll_.refreshEditedMaterializationNotes();
+            pianoRoll_.repaint();
         }
+        lastPianoRollNotesRevision_ = currentNotesRevision;
     }
 
     // 播放头位置由各组件通过 positionSource_ 直接从 Processor 读取
@@ -968,7 +982,12 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             shouldUnlatch = true;
         } else {
             const auto f0State = processorRef_.getMaterializationOriginalF0StateById(targetMaterializationId);
-            if (f0State == OriginalF0State::Ready || f0State == OriginalF0State::Failed) {
+            const bool f0Done = (f0State == OriginalF0State::Ready
+                                  || f0State == OriginalF0State::Failed);
+            const bool noteGenBusy = processorRef_.isNoteGenInFlightForMaterialization(targetMaterializationId);
+            // Only unlatch when BOTH F0 and note generation are finished —
+            // shared "正在处理音频" overlay covers the whole import pipeline.
+            if (f0Done && !noteGenBusy) {
                 shouldUnlatch = true;
             }
         }
@@ -982,11 +1001,31 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     bool shouldShowOverlay = false;
 
     if (rmvpeOverlayLatched_ && !isWorkspaceView_) {
-        autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在分析音高"));
+        autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在处理音频"));
         shouldShowOverlay = true;
     }
 
-    // Sync Rendering Progress（vocoder 相关）
+    // ============================================================================
+    // Render badge logic — Stage 2 (Rubber Band) is INDEPENDENT of vocoder.
+    // Pre-2026-05-19: entire badge gated on `vocoderDomain != nullptr` → users
+    // dragging Time tool handles before vocoder lazy-load saw no badge even
+    // though Stage 2 was running. Refactored: Stage 2 lifecycle checked
+    // unconditionally; Stage 1 chunk stats only when vocoder loaded.
+    // ============================================================================
+    const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
+
+    // Stage 2 — always available
+    const bool stage2InFlight = processorRef_.isStage2InFlight();
+    const int  stage2Queue    = processorRef_.getStage2QueueDepth();
+    // stage2HasWork covers entire lifecycle: enqueued but not yet pulled by worker
+    // → in-flight → done. Previously only checking inFlight missed the enqueue
+    // window for short clips processed faster than the 33ms heartbeat.
+    const bool stage2HasWork  = stage2InFlight || stage2Queue > 0;
+
+    // Stage 1 — meaningful only when vocoder loaded
+    bool stage1HasWork = false;
+    int  stage1Done = 0;
+    int  stage1Total = 0;
     if (vocoderDomain != nullptr) {
         const int activeTrack = getStandaloneActiveTrack(processorRef_);
         const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
@@ -995,30 +1034,37 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             ? getStandaloneMaterializationId(processorRef_, activeTrack, activePlacementIndex)
             : 0;
         const auto chunkStats = processorRef_.getMaterializationChunkStatsById(activeMaterializationId);
-        const bool isTxnActive = chunkStats.hasActiveWork();
-
-        const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
+        stage1HasWork = chunkStats.hasActiveWork();
+        stage1Done    = chunkStats.idle + chunkStats.blank;
+        stage1Total   = chunkStats.total();
 
         if (isAutoProcessing) {
-            const int olDone = chunkStats.idle + chunkStats.blank;
-            const int olTotal = chunkStats.total();
-            const float olProgress = (olTotal > 0) ? static_cast<float>(olDone) / static_cast<float>(olTotal) : 0.0f;
-            autoRenderOverlay_.setMessageText(buildRenderingOverlayTitle(olDone, olTotal, olProgress));
+            const float olProgress = (stage1Total > 0)
+                ? static_cast<float>(stage1Done) / static_cast<float>(stage1Total) : 0.0f;
+            autoRenderOverlay_.setMessageText(buildRenderingOverlayTitle(stage1Done, stage1Total, olProgress));
             shouldShowOverlay = true;
         }
-
-        const bool shouldShowBadge = isTxnActive && !isAutoProcessing;
-        if (shouldShowBadge) {
-            const int stDone = chunkStats.idle + chunkStats.blank;
-            const int stTotal = chunkStats.total();
-            renderBadge_.setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u4e2d (")
-                + juce::String(stDone) + "/" + juce::String(stTotal) + ")");
-        }
-        if (renderBadge_.isVisible() != shouldShowBadge) {
-            renderBadge_.setVisible(shouldShowBadge);
-        }
-        transportBar_.setRenderStatusText(juce::String());
     }
+
+    // Combined badge visibility. Stage 2 takes precedence over Stage 1 in text
+    // since Stage 2 produces the audio user actually hears after time edits.
+    const bool shouldShowBadge = (stage1HasWork && !isAutoProcessing) || stage2HasWork;
+    if (shouldShowBadge) {
+        if (stage2HasWork) {
+            juce::String msg = juce::String::fromUTF8(u8"\u65f6\u95f4\u62c9\u4f38\u4e2d");
+            if (stage2Queue > 0) {
+                msg += " (+" + juce::String(stage2Queue) + ")";
+            }
+            renderBadge_.setMessageText(msg);
+        } else {
+            renderBadge_.setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u4e2d (")
+                + juce::String(stage1Done) + "/" + juce::String(stage1Total) + ")");
+        }
+    }
+    if (renderBadge_.isVisible() != shouldShowBadge) {
+        renderBadge_.setVisible(shouldShowBadge);
+    }
+    transportBar_.setRenderStatusText(juce::String());
 
     if (autoRenderOverlay_.isVisible() != shouldShowOverlay) {
         autoRenderOverlay_.setVisible(shouldShowOverlay);
@@ -1183,7 +1229,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
-    if (toolId < 0 || toolId > static_cast<int>(ToolId::HandDraw)) {
+    if (toolId < 0 || toolId > static_cast<int>(ToolId::TimeTool)) {
         return;
     }
 

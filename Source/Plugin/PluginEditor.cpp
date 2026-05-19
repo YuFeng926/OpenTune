@@ -473,7 +473,12 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             shouldUnlatch = true;
         } else {
             const auto f0State = processorRef_.getMaterializationOriginalF0StateById(targetMaterializationId);
-            if (f0State == OriginalF0State::Ready || f0State == OriginalF0State::Failed) {
+            const bool f0Done = (f0State == OriginalF0State::Ready
+                                  || f0State == OriginalF0State::Failed);
+            const bool noteGenBusy = processorRef_.isNoteGenInFlightForMaterialization(targetMaterializationId);
+            // Only unlatch when BOTH F0 and note generation are finished —
+            // shared "正在处理音频" overlay covers the whole import pipeline.
+            if (f0Done && !noteGenBusy) {
                 shouldUnlatch = true;
             }
         }
@@ -496,6 +501,26 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
     const bool hasActiveRender = chunkStats.hasActiveWork();
 
+    // Pull fresh notes when an async generator (GAME) commits late.  Only
+    // refresh when the same materialization advances its notesRevision —
+    // changing materializationId already triggers a refresh via
+    // syncMaterializationProjectionToPianoRoll → setEditedMaterialization.
+    if (activeMaterializationId != 0) {
+        const uint64_t currentNotesRevision =
+            processorRef_.getMaterializationNotesSnapshotById(activeMaterializationId).notesRevision;
+        if (activeMaterializationId == lastPianoRollNotesRevisionMatId_
+            && currentNotesRevision != lastPianoRollNotesRevision_
+            && pianoRoll_.isShowing()) {
+            pianoRoll_.refreshEditedMaterializationNotes();
+            pianoRoll_.repaint();
+        }
+        lastPianoRollNotesRevisionMatId_ = activeMaterializationId;
+        lastPianoRollNotesRevision_      = currentNotesRevision;
+    } else {
+        lastPianoRollNotesRevisionMatId_ = 0;
+        lastPianoRollNotesRevision_      = 0;
+    }
+
     if (isAutoProcessing) {
         const int total = chunkStats.total();
         const int done = chunkStats.idle + chunkStats.blank;
@@ -505,7 +530,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
     if (rmvpeOverlayLatched_) {
-        autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在分析音高"));
+        autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在处理音频"));
         shouldShowOverlay = true;
     }
 
@@ -722,7 +747,7 @@ void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
-    if (toolId < 0 || toolId > static_cast<int>(ToolId::HandDraw)) {
+    if (toolId < 0 || toolId > static_cast<int>(ToolId::TimeTool)) {
         return;
     }
 
@@ -1529,6 +1554,11 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
     } else {
         pianoRoll_.clearTimelineViewDomain();
     }
+    // vocal-time-stretch §8.8 — TimeGrid follows the same materializationId
+    // automatically (PianoRollComponent::buildToolHandlerContext queries
+    // processorRef_.getMaterializationTimeGridById(editedMaterializationId_)).
+    // repaint here ensures handles redraw with the new region's TimeGrid.
+    pianoRoll_.repaint();
 
     const auto key = processorRef_.getMaterializationDetectedKeyById(sync.activeMaterializationId);
     const int rootNote = static_cast<int>(key.root);

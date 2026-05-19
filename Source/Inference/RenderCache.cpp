@@ -228,11 +228,6 @@ void RenderCache::overlayPublishedAudioForRate(juce::AudioBuffer<float>& destina
     overlayWithLock();
 }
 
-void RenderCache::prepareCrossoverMixer(double sampleRate, int maxBlockSize, int numChannels)
-{
-    crossoverMixer_.prepare(sampleRate, maxBlockSize, numChannels);
-}
-
 void RenderCache::clear() {
     const juce::SpinLock::ScopedLockType guard(lock_);
     for (const auto& [key, chunk] : chunks_) {

@@ -21,7 +21,7 @@
 #include "Utils/PianoRollVisualPreferences.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/Note.h"
-#include "Utils/NoteGenerator.h"
+#include "Utils/LegacyNoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/ZoomSensitivityConfig.h"
@@ -242,9 +242,15 @@ private:
     void mouseMove(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;   // ⚡️ §8.4 Time tool
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 public:
     bool keyPressed(const juce::KeyPress& key) override;
+
+    /// Re-read notes from the materialization store and update the cache.
+    /// Public so editors can drive a refresh after an async note generator
+    /// (e.g. GAME) commits without changing the active materializationId.
+    void refreshEditedMaterializationNotes();
 
 private:
     void onScrollVBlankCallback(double timestampSec);

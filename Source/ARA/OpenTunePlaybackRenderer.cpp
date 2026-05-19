@@ -273,10 +273,7 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
             requestedSamples);
 
         playbackScratch_.clear();
-        CrossoverMixer* araMixer = readSource.renderCache
-            ? &readSource.renderCache->getCrossoverMixer()
-            : nullptr;
-        const int samplesToCopy = processor->readPlaybackAudio(request, playbackScratch_, 0, araMixer);
+        const int samplesToCopy = processor->readPlaybackAudio(request, playbackScratch_, 0);
         if (samplesToCopy <= 0)
         {
             continue;

@@ -88,9 +88,9 @@ public:
     void resized() override
     {
         auto bounds = getLocalBounds().reduced(20);
-        const int priorityRowHeight = 44;
+        const int sharedAudioPageHeight = 42;
         if (renderingPriorityComponent_ != nullptr) {
-            renderingPriorityComponent_->setBounds(bounds.removeFromTop(priorityRowHeight));
+            renderingPriorityComponent_->setBounds(bounds.removeFromTop(sharedAudioPageHeight));
             bounds.removeFromTop(8);
         }
         if (audioSelector_ != nullptr) {
@@ -416,7 +416,8 @@ std::vector<TabbedPreferencesDialog::PageSpec> StandalonePreferencePages::create
 {
     std::vector<TabbedPreferencesDialog::PageSpec> pages;
     auto renderingPriorityComponent = SharedPreferencePages::createRenderingPriorityComponent(
-        appPreferences, onPreferencesChanged, std::move(onRenderingPriorityChanged));
+        appPreferences, onPreferencesChanged,
+        std::move(onRenderingPriorityChanged));
     if (audioDeviceManager != nullptr) {
         pages.push_back({ LOC(kAudio), std::make_unique<AudioSettingsPage>(audioDeviceManager, std::move(renderingPriorityComponent)) });
     }

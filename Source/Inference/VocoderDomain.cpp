@@ -59,4 +59,8 @@ int VocoderDomain::getMelBins() const {
     return inferenceService_ ? inferenceService_->getMelBins() : 0;
 }
 
+float VocoderDomain::getFMax() const {
+    return inferenceService_ ? inferenceService_->getFMax() : 22050.0f;
+}
+
 } // namespace OpenTune

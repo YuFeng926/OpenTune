@@ -296,6 +296,7 @@ constexpr const char* kTooltipSelect = "Selection Tool";
 constexpr const char* kTooltipDrawNote = "Draw Note";
 constexpr const char* kTooltipLineAnchor = "Line Anchor";
 constexpr const char* kTooltipHandDraw = "Hand Draw Pitch";
+constexpr const char* kTooltipTimeTool = "Time Tool";
 constexpr const char* kTooltipTrackPanel = "Track Panel";
 constexpr const char* kTooltipParameterPanel = "Parameter Panel";
 constexpr const char* kTooltipBpm = "Tempo (BPM)";
@@ -374,7 +375,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kRenderingPriority, "Rendering Priority", "渲染优先级", "レンダリング優先度", "Приоритет рендеринга", "Prioridad de renderizado" },
         { Keys::kGpuFirst, "GPU First", "GPU 优先", "GPU 優先", "GPU приоритет", "GPU primero" },
         { Keys::kCpuFirst, "CPU First", "CPU 优先", "CPU 優先", "CPU приоритет", "CPU primero" },
-        
+
         { Keys::kSetShortcut, "Set Shortcut", "设置快捷键", "ショートカットを設定", "Назначить сочетание", "Atajo" },
         { Keys::kPressNewKeyCombination, "Press the new key combination", "按下新的组合键", "新しいキーの組み合わせを押してください", "Нажмите сочетание", "Pulse combinación" },
         { Keys::kCurrent, "Current", "当前", "現在", "Текущий", "Actual" },
@@ -442,6 +443,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kTooltipDrawNote, "Draw Note", "绘制音符", "ノート描画", "Рисование нот", "Dibujar nota" },
         { Keys::kTooltipLineAnchor, "Line Anchor", "锚点工具", "ラインアンカー", "Линейный якорь", "Ancla de línea" },
         { Keys::kTooltipHandDraw, "Hand Draw Pitch", "手绘音高", "手描きピッチ", "Рисование тона", "Dibujar tono" },
+        { Keys::kTooltipTimeTool, "Time Tool - Drag handles to retime audio", "时间工具 - 拖动手柄重定时", "タイムツール - ハンドルで時間調整", "Инструмент времени - перетягивайте маркеры", "Herramienta de tiempo - Arrastra anclajes" },
         { Keys::kTooltipTrackPanel, "Track Panel", "轨道面板", "トラックパネル", "Панель дорожек", "Panel de pistas" },
         { Keys::kTooltipParameterPanel, "Parameter Panel", "参数面板", "パラメータパネル", "Панель параметров", "Panel de parámetros" },
         { Keys::kTooltipBpm, "Tempo (BPM)", "节拍速度 (BPM)", "テンポ (BPM)", "Темп (BPM)", "Tempo (BPM)" },

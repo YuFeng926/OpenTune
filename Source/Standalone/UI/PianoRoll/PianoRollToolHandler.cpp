@@ -324,6 +324,25 @@ void PianoRollToolHandler::setTool(ToolId tool)
     currentTool_ = tool;
 }
 
+double PianoRollToolHandler::pixelXToSourceTime(int pixelX) const
+{
+    // Stage 1: pixel → output (timeline coords).
+    const double timelineTime = ctx_.xToTime(pixelX);
+    // Stage 2: timeline → output (materialization coords).
+    const double outputMatTime = ctx_.projectTimelineTimeToMaterialization
+        ? ctx_.projectTimelineTimeToMaterialization(timelineTime)
+        : timelineTime;
+    // Stage 3: output → source via tauInverse (vocal-time-stretch §8.5).
+    if (ctx_.getTimeGridSnapshot) {
+        if (auto snap = ctx_.getTimeGridSnapshot()) {
+            if (!snap->isIdentity()) {
+                return snap->tauInverse(outputMatTime);
+            }
+        }
+    }
+    return outputMatTime;
+}
+
 void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
 // 鼠标移动处理：更新光标形状（音符边缘调整、线锚点预览）
 {
@@ -331,6 +350,11 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
         const auto dirtyBefore = ctx_.getLineAnchorPreviewBounds();
         ctx_.getState().drawing.currentMousePos = e.position;
         invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
+        return;
+    }
+
+    if (currentTool_ == ToolId::TimeTool) {
+        handleTimeToolMouseMove(e);
         return;
     }
 
@@ -423,6 +447,9 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
         case ToolId::LineAnchor:
             handleLineAnchorMouseDown(e);
             break;
+        case ToolId::TimeTool:
+            handleTimeToolMouseDown(e);
+            break;
         default:
             AppLogger::warn("[PianoRollToolHandler] mouseDown: unknown tool " + juce::String(static_cast<int>(currentTool_)));
             break;
@@ -458,9 +485,20 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
         case ToolId::LineAnchor:
             handleLineAnchorMouseDrag(e);
             break;
+        case ToolId::TimeTool:
+            handleTimeToolMouseDrag(e);
+            break;
         default:
             break;
     }
+}
+
+void PianoRollToolHandler::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (currentTool_ == ToolId::TimeTool) {
+        handleTimeToolMouseDoubleClick(e);
+    }
+    // Other tools: no-op (could be extended later for note resize / etc.)
 }
 
 void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
@@ -486,6 +524,12 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
             break;
         case ToolId::DrawNote:
             handleDrawNoteUp(e);
+            break;
+        case ToolId::LineAnchor:
+            handleLineAnchorMouseUp(e);
+            break;
+        case ToolId::TimeTool:
+            handleTimeToolMouseUp(e);
             break;
         default:
             ctx_.getState().noteDrag.draggedNoteIndex = -1;
@@ -552,6 +596,20 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
             return true;
         }
 
+        if (key.getTextCharacter() == '5') {
+            ctx_.setCurrentTool(ToolId::HandDraw);
+            return true;
+        }
+
+        // ⚡️ vocal-time-stretch §8.1 (Phase E scaffolding):
+        // Time tool key shortcut. Phase F adds the full ToolHandler / Renderer
+        // wiring + UI cursor / handle dragging behavior; this commit lands the
+        // tool selection plumbing only.
+        if (key.getTextCharacter() == 't' || key.getTextCharacter() == 'T') {
+            ctx_.setCurrentTool(ToolId::TimeTool);
+            return true;
+        }
+
         if (key.getTextCharacter() == '6') {
             ctx_.notifyAutoTuneRequested();
             return true;
@@ -570,6 +628,13 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Delete, key) ||
         key.getTextCharacter() == '1') {
+        // ⚡️ vocal-time-stretch §8.4 (Phase G): Time tool always consumes
+        // Delete to avoid accidentally deleting notes when a handle isn't
+        // selected.  No-op when nothing's selected.
+        if (currentTool_ == ToolId::TimeTool) {
+            handleTimeToolDeleteSelected();
+            return true;
+        }
         handleDeleteKey();
         return true;
     }
@@ -879,7 +944,8 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
     ctx_.getState().noteResize.edge = NoteResizeEdge::None;
 
     const auto projection = ctx_.getMaterializationProjection();
-    double trackRelativeTime = ctx_.projectTimelineTimeToMaterialization(ctx_.xToTime(e.x));
+    // §8.5 — pixelX → SOURCE time (Note tool writes startTime in source time).
+    double trackRelativeTime = pixelXToSourceTime(e.x);
     if (projection.isValid()) {
         trackRelativeTime = projection.clampMaterializationTime(trackRelativeTime);
     }
@@ -1067,7 +1133,8 @@ void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
     const auto dirtyBefore = ctx_.getHandDrawPreviewBounds();
 
     const auto projection = ctx_.getMaterializationProjection();
-    double curveTime = ctx_.projectTimelineTimeToMaterialization(ctx_.xToTime(e.x));
+    // §8.5 — F0 hand-draw writes into PitchCurve which is indexed by SOURCE time.
+    double curveTime = pixelXToSourceTime(e.x);
     if (projection.isValid()) {
         curveTime = projection.clampMaterializationTime(curveTime);
     }
@@ -1186,7 +1253,8 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
 
     auto& notes = workingDraftNotes(ctx_);
     const auto projection = ctx_.getMaterializationProjection();
-    double currentTime = ctx_.projectTimelineTimeToMaterialization(ctx_.xToTime(e.x));
+    // §8.5 — Note drag writes startTime/endTime in SOURCE time.
+    double currentTime = pixelXToSourceTime(e.x);
     if (currentTime < 0) {
         currentTime = 0;
     }
@@ -1251,7 +1319,8 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
     const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
 
     if (ctx_.getState().selection.isSelectingArea) {
-        double currentTime = ctx_.projectTimelineTimeToMaterialization(ctx_.xToTime(e.x));
+        // §8.5 — selection box bounds compared against note.startTime (source time).
+        double currentTime = pixelXToSourceTime(e.x);
         const auto projection = ctx_.getMaterializationProjection();
         if (projection.isValid()) {
             currentTime = projection.clampMaterializationTime(currentTime);
@@ -1288,7 +1357,8 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
             return;
         }
 
-        double currentTime = ctx_.projectTimelineTimeToMaterialization(ctx_.xToTime(e.x));
+        // §8.5 — Note resize edge writes startTime/endTime in SOURCE time.
+        double currentTime = pixelXToSourceTime(e.x);
         const auto projection = ctx_.getMaterializationProjection();
         if (projection.isValid()) {
             currentTime = projection.clampMaterializationTime(currentTime);
@@ -1616,7 +1686,8 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
     ctx_.getState().drawing.isDrawingNote = false;
 
     const auto projection = ctx_.getMaterializationProjection();
-    double releaseTime = ctx_.projectTimelineTimeToMaterialization(ctx_.xToTime(e.x));
+    // §8.5 — DrawNote release writes endTime in SOURCE time.
+    double releaseTime = pixelXToSourceTime(e.x);
     if (projection.isValid()) {
         releaseTime = projection.clampMaterializationTime(releaseTime);
     }
@@ -1741,6 +1812,32 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
 void PianoRollToolHandler::showToolContextMenu(const juce::MouseEvent& e)
 {
     juce::ignoreUnused(e);
+    // add-note-confirmed-handles §4.2: Time tool 空白右键 → 提供 Re-seed handles from notes 入口
+    // 与原 tool selection menu 共存:Time tool active 时显示组合菜单。
+    if (currentTool_ == ToolId::TimeTool && ctx_.reSeedTimeGridFromNotes) {
+        juce::PopupMenu menu;
+        const bool canReSeed = ctx_.canReSeedTimeGridFromNotes
+                                ? ctx_.canReSeedTimeGridFromNotes()
+                                : false;
+        menu.addItem(/*itemId*/1,
+                     juce::String("Re-seed handles from notes"),
+                     /*isActive*/canReSeed,
+                     /*isTicked*/false);
+        if (!canReSeed) {
+            menu.addSectionHeader(juce::String("(needs auto note generation enabled)"));
+        }
+        menu.addSeparator();
+        menu.addItem(/*itemId*/2, juce::String("Switch tool..."));
+        menu.showMenuAsync(juce::PopupMenu::Options{},
+                           [this](int result) {
+                               if (result == 1) {
+                                   if (ctx_.reSeedTimeGridFromNotes) ctx_.reSeedTimeGridFromNotes();
+                               } else if (result == 2) {
+                                   if (ctx_.showToolSelectionMenu) ctx_.showToolSelectionMenu();
+                               }
+                           });
+        return;
+    }
     ctx_.showToolSelectionMenu();
 }
 
@@ -1758,7 +1855,8 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
 // 线锚点工具鼠标按下处理：放置锚点，在锚点间生成线性插值的F0曲线
 {
     const auto projection = ctx_.getMaterializationProjection();
-    double clickTime = ctx_.projectTimelineTimeToMaterialization(ctx_.xToTime(e.x));
+    // §8.5 — LineAnchor places anchors at SOURCE time (PitchCurve indexing).
+    double clickTime = pixelXToSourceTime(e.x);
     if (projection.isValid()) {
         clickTime = projection.clampMaterializationTime(clickTime);
     }
@@ -1989,6 +2087,425 @@ void PianoRollToolHandler::updateF0SelectionFromNotes(const std::vector<Note>& n
     const auto selectedRange = f0tl.nonEmptyRangeForTimes(minStart, maxEnd);
     ctx_.getState().selection.setF0Range(selectedRange.startFrame,
                                          selectedRange.endFrameExclusive);
+}
+
+// ============================================================================
+// vocal-time-stretch §8.4 (Phase F) — Time tool handlers
+//
+// Minimal scaffolding: hover detection + selection + drag + commit.
+// Phase G will add: double-click-insert, delete-handle, Alt-snap-disable,
+// group multi-handle drag, and 30 ms minimum spacing clamp.
+// ============================================================================
+
+uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) const
+{
+    if (!ctx_.getTimeGridSnapshot) return 0;
+    auto snap = ctx_.getTimeGridSnapshot();
+    if (snap == nullptr) return 0;
+
+    constexpr int kHitToleranceX = 5;  // pixels
+
+    // add-note-confirmed-handles fix: use uint64_t throughout. Previous
+    // `static_cast<int>(h.id)` truncated 64-bit handle ids to 32-bit signed,
+    // which silently broke handles whose id value used high bits (e.g.
+    // NoteOnly handles produced by HandleNoteMerger with `1ULL<<62` tag bit).
+    uint64_t closestId = 0;
+    int closestDistance = std::numeric_limits<int>::max();
+    for (const auto& h : snap->handles()) {
+        if (h.locked) continue;   // endpoints not selectable
+        const int handleX = ctx_.timeToX(h.output_seconds);
+        const int dx = std::abs(e.x - handleX);
+        if (dx <= kHitToleranceX && dx < closestDistance) {
+            closestId = h.id;
+            closestDistance = dx;
+        }
+    }
+    return closestId;
+}
+
+void PianoRollToolHandler::handleTimeToolMouseMove(const juce::MouseEvent& e)
+{
+    auto& tt = ctx_.getState().timeTool;
+    const uint64_t prevHovered = tt.hoveredHandleId;
+    const uint64_t hovered = hitTestTimeGridHandle(e);
+    tt.hoveredHandleId = hovered;
+
+    if (hovered != 0) {
+        ctx_.setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+    } else {
+        ctx_.setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
+    if (prevHovered != hovered && ctx_.notifyTimeGridChanged) {
+        ctx_.notifyTimeGridChanged();
+    }
+}
+
+void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
+{
+    auto& tt = ctx_.getState().timeTool;
+    const uint64_t hitId = hitTestTimeGridHandle(e);
+
+    if (hitId == 0) {
+        // Clicked empty space — clear selection (unless Shift held).
+        if (!e.mods.isShiftDown()) {
+            if ((tt.selectedHandleId != 0 || !tt.additionalSelectedIds.empty())
+                && ctx_.notifyTimeGridChanged) {
+                ctx_.notifyTimeGridChanged();
+            }
+            tt.selectedHandleId = 0;
+            tt.additionalSelectedIds.clear();
+        }
+        tt.isDraggingHandle = false;
+        return;
+    }
+
+    // Found a handle — select + arm drag.
+    auto snap = ctx_.getTimeGridSnapshot ? ctx_.getTimeGridSnapshot() : nullptr;
+    if (snap == nullptr) {
+        AppLogger::warn("[TimeTool] mouseDown: no TimeGridSnapshot available");
+        return;
+    }
+
+    const TimeHandle* hitHandle = nullptr;
+    for (const auto& h : snap->handles()) {
+        if (h.id == hitId) { hitHandle = &h; break; }
+    }
+    if (hitHandle == nullptr || hitHandle->locked) return;
+
+    // ⚡️ §8.4 (Phase H) — Shift+click toggles in additionalSelectedIds
+    // (multi-select).  Bare click replaces the selection.
+    if (e.mods.isShiftDown()) {
+        if (tt.selectedHandleId == 0) {
+            tt.selectedHandleId = hitId;
+        } else if (hitId == tt.selectedHandleId) {
+            // No-op: clicking primary selection again with Shift is
+            // typically a no-op in DAW conventions (would otherwise demote
+            // primary to secondary which is confusing).
+        } else {
+            // Toggle in additionalSelectedIds
+            auto it = std::find(tt.additionalSelectedIds.begin(),
+                                 tt.additionalSelectedIds.end(), hitId);
+            if (it != tt.additionalSelectedIds.end()) {
+                tt.additionalSelectedIds.erase(it);
+            } else {
+                tt.additionalSelectedIds.push_back(hitId);
+            }
+        }
+    } else {
+        tt.selectedHandleId = hitId;
+        tt.additionalSelectedIds.clear();
+    }
+
+    tt.isDraggingHandle = true;
+    tt.draggedHandleId = hitId;
+    tt.dragSnapDisabled = e.mods.isAltDown();   // Phase H: Alt disables clamp
+    tt.dragOriginalSnapshot = snap;
+    tt.dragWorkingSnapshot = snap;   // identity at drag start
+    tt.dragStartOutputSeconds = hitHandle->output_seconds;
+    tt.dragStartPixel = e.getPosition();
+
+    if (ctx_.notifyTimeGridChanged) ctx_.notifyTimeGridChanged();
+}
+
+void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
+{
+    auto& tt = ctx_.getState().timeTool;
+    if (!tt.isDraggingHandle || tt.dragOriginalSnapshot == nullptr) return;
+
+    const double newOutputTime = ctx_.xToTime(e.x);
+    if (newOutputTime < 0.0) return;
+
+    const auto& origHandles = tt.dragOriginalSnapshot->handles();
+
+    // Locate the dragged handle's index.
+    int draggedIdx = -1;
+    for (int i = 0; i < static_cast<int>(origHandles.size()); ++i) {
+        if (origHandles[i].id == tt.draggedHandleId) { draggedIdx = i; break; }
+    }
+    if (draggedIdx <= 0 || draggedIdx >= static_cast<int>(origHandles.size()) - 1) {
+        return;   // endpoints can't be dragged
+    }
+
+    // ⚡️ §8.4 (Phase H) — group-drag detection.
+    // If the user has multi-selected handles AND the dragged handle is part
+    // of that selection, every selected handle moves by the same delta
+    // (uniformDelta).  Otherwise only the dragged handle moves.
+    const bool isGroupDrag = (!tt.additionalSelectedIds.empty())
+                              && tt.isSelected(tt.draggedHandleId);
+
+    // Phase G/H spacing rule: 30 ms minimum between adjacent handles.
+    // Alt held at drag start (`dragSnapDisabled`) bypasses the clamp for
+    // power-user nudging into tight regions.
+    const double kMinSpacingSec = tt.dragSnapDisabled ? 0.000 : 0.030;
+    const double minOutput = origHandles[static_cast<size_t>(draggedIdx - 1)].output_seconds + kMinSpacingSec;
+    const double maxOutput = origHandles[static_cast<size_t>(draggedIdx + 1)].output_seconds - kMinSpacingSec;
+    const double clampedOutput = juce::jlimit(minOutput, maxOutput, newOutputTime);
+    const double uniformDelta = clampedOutput - tt.dragStartOutputSeconds;
+
+    // Build new handle vector.  For group drag we shift every selected,
+    // non-locked handle by uniformDelta and clamp each individually to its
+    // own neighbor bounds.  Non-selected handles keep their original output.
+    std::vector<TimeHandle> newHandles(origHandles.begin(), origHandles.end());
+
+    auto isHandleSelected = [&tt](uint64_t id) -> bool {
+        return tt.isSelected(id);
+    };
+
+    if (isGroupDrag) {
+        // First pass: tentative outputs by uniform delta.
+        std::vector<double> tentative(newHandles.size());
+        for (size_t i = 0; i < newHandles.size(); ++i) {
+            tentative[i] = newHandles[i].output_seconds;
+        }
+        for (size_t i = 1; i < newHandles.size() - 1; ++i) {
+            if (newHandles[i].locked) continue;
+            if (isHandleSelected(newHandles[i].id)) {
+                tentative[i] = newHandles[i].output_seconds + uniformDelta;
+            }
+        }
+
+        // Second pass: clamp each tentative to its already-clamped neighbors
+        // (left-to-right sweep ensures monotonicity is preserved).
+        for (size_t i = 1; i < tentative.size() - 1; ++i) {
+            const double localMin = tentative[i - 1] + kMinSpacingSec;
+            const double localMax = tentative[i + 1] - kMinSpacingSec;
+            if (localMin > localMax) {
+                // Region too tight — abort the drag step (keep last valid
+                // working snapshot).
+                return;
+            }
+            tentative[i] = juce::jlimit(localMin, localMax, tentative[i]);
+        }
+
+        for (size_t i = 0; i < newHandles.size(); ++i) {
+            newHandles[i].output_seconds = tentative[i];
+        }
+    } else {
+        newHandles[static_cast<size_t>(draggedIdx)].output_seconds = clampedOutput;
+    }
+
+    auto newSnap = TimeGridSnapshot::makeFromHandles(
+        std::move(newHandles),
+        /*revision=*/tt.dragOriginalSnapshot->revision() + 1);
+    if (newSnap == nullptr) {
+        AppLogger::warn("[TimeTool] makeFromHandles failed during drag (validation)");
+        return;
+    }
+
+    tt.dragWorkingSnapshot = newSnap;
+    if (ctx_.notifyTimeGridChanged) ctx_.notifyTimeGridChanged();
+}
+
+void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
+{
+    auto& tt = ctx_.getState().timeTool;
+    if (!tt.isDraggingHandle) return;
+
+    if (tt.dragWorkingSnapshot != nullptr
+        && tt.dragWorkingSnapshot != tt.dragOriginalSnapshot
+        && ctx_.commitTimeGrid) {
+        // Compute affected source frame range from the dragged handle's
+        // source_seconds neighborhood (per undo-affected-range-invariant.md
+        // — the range must be supplied by the UI at edit time, never derived
+        // from snapshot diff afterwards).
+        const auto& handles = tt.dragWorkingSnapshot->handles();
+        int draggedIdx = -1;
+        for (int i = 0; i < static_cast<int>(handles.size()); ++i) {
+            if (handles[i].id == tt.draggedHandleId) { draggedIdx = i; break; }
+        }
+
+        int64_t affectedStartFrame = 0;
+        int64_t affectedEndFrame   = 0;
+        if (draggedIdx > 0 && draggedIdx < static_cast<int>(handles.size()) - 1) {
+            const F0Timeline f0tl = ctx_.getF0Timeline ? ctx_.getF0Timeline() : F0Timeline{};
+            const double srcStartSec = handles[static_cast<size_t>(draggedIdx - 1)].source_seconds;
+            const double srcEndSec   = handles[static_cast<size_t>(draggedIdx + 1)].source_seconds;
+            if (!f0tl.isEmpty()) {
+                const auto range = f0tl.rangeForTimes(srcStartSec, srcEndSec);
+                affectedStartFrame = range.startFrame;
+                affectedEndFrame   = range.endFrameExclusive;
+            } else {
+                affectedStartFrame = static_cast<int64_t>(srcStartSec * 100.0);
+                affectedEndFrame   = static_cast<int64_t>(srcEndSec   * 100.0);
+            }
+        }
+
+        ctx_.commitTimeGrid(tt.dragWorkingSnapshot,
+                             tt.dragOriginalSnapshot,
+                             affectedStartFrame,
+                             affectedEndFrame,
+                             juce::String("拖动时间手柄"));
+    }
+
+    tt.isDraggingHandle = false;
+    tt.draggedHandleId = 0;
+    tt.dragOriginalSnapshot.reset();
+    tt.dragWorkingSnapshot.reset();
+    if (ctx_.notifyTimeGridChanged) ctx_.notifyTimeGridChanged();
+}
+
+// ============================================================================
+// §8.4 (Phase G) — Double-click to insert UserAdded handle
+//
+// Constraints (per spec time-tool-interaction.md):
+//   - Click must be on empty area (no existing handle within ±5 px)
+//   - Click position must be ≥0.030 s away from any neighbor's output_seconds
+//   - source_seconds initially equals output_seconds (identity insertion);
+//     subsequent drag operations modify only output_seconds
+// ============================================================================
+void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (!ctx_.getTimeGridSnapshot || !ctx_.commitTimeGrid) return;
+    auto snap = ctx_.getTimeGridSnapshot();
+    if (snap == nullptr) return;
+
+    const double clickedTime = ctx_.xToTime(e.x);
+    if (clickedTime <= 0.0) return;
+
+    const auto& handles = snap->handles();
+    if (handles.size() < 2) return;
+
+    // Reject if too close to existing handle (would violate 30ms spacing).
+    constexpr double kMinSpacingSec = 0.030;
+    for (const auto& h : handles) {
+        if (std::abs(h.output_seconds - clickedTime) < kMinSpacingSec) {
+            AppLogger::log("[TimeTool] insert rejected: within 30ms of existing handle");
+            return;
+        }
+    }
+
+    // Find insertion index by output_seconds order.
+    int insertIdx = -1;
+    for (int i = 0; i < static_cast<int>(handles.size()) - 1; ++i) {
+        if (handles[static_cast<size_t>(i)].output_seconds < clickedTime
+            && clickedTime < handles[static_cast<size_t>(i + 1)].output_seconds) {
+            insertIdx = i + 1;
+            break;
+        }
+    }
+    if (insertIdx <= 0 || insertIdx >= static_cast<int>(handles.size())) {
+        AppLogger::log("[TimeTool] insert rejected: click outside [ClipStart, ClipEnd] range");
+        return;
+    }
+
+    // Build new handle vector with the inserted UserAdded handle.  Generate a
+    // fresh handle id by taking max-existing + 1 (matches TimeGrid's stable-id
+    // semantics; survives validation because it's monotonic w.r.t. existing).
+    std::vector<TimeHandle> newHandles(handles.begin(), handles.end());
+    uint64_t maxId = 0;
+    for (const auto& h : newHandles) maxId = std::max(maxId, h.id);
+
+    TimeHandle newHandle;
+    newHandle.id = maxId + 1;
+    newHandle.source_seconds = clickedTime;   // identity insert
+    newHandle.output_seconds = clickedTime;
+    newHandle.kind = HandleKind::UserAdded;
+    newHandle.locked = false;
+    newHandles.insert(newHandles.begin() + insertIdx, newHandle);
+
+    auto newSnap = TimeGridSnapshot::makeFromHandles(
+        std::move(newHandles), /*revision=*/snap->revision() + 1);
+    if (newSnap == nullptr) {
+        AppLogger::warn("[TimeTool] insert: makeFromHandles validation failed");
+        return;
+    }
+
+    // Compute affected source frame range from neighbors.
+    int64_t affectedStart = 0;
+    int64_t affectedEnd   = 0;
+    {
+        const F0Timeline f0tl = ctx_.getF0Timeline ? ctx_.getF0Timeline() : F0Timeline{};
+        const double srcStartSec = handles[static_cast<size_t>(insertIdx - 1)].source_seconds;
+        const double srcEndSec   = handles[static_cast<size_t>(insertIdx)].source_seconds;
+        if (!f0tl.isEmpty()) {
+            const auto range = f0tl.rangeForTimes(srcStartSec, srcEndSec);
+            affectedStart = range.startFrame;
+            affectedEnd   = range.endFrameExclusive;
+        } else {
+            affectedStart = static_cast<int64_t>(srcStartSec * 100.0);
+            affectedEnd   = static_cast<int64_t>(srcEndSec   * 100.0);
+        }
+    }
+
+    ctx_.commitTimeGrid(newSnap, snap, affectedStart, affectedEnd,
+                         juce::String("插入时间手柄"));
+
+    // Auto-select the newly-inserted handle so user can immediately drag.
+    auto& tt = ctx_.getState().timeTool;
+    tt.selectedHandleId = newHandle.id;
+    if (ctx_.notifyTimeGridChanged) ctx_.notifyTimeGridChanged();
+}
+
+// ============================================================================
+// §8.4 (Phase G) — Delete key removes selected handle (non-endpoint only)
+//
+// Returns true when a handle was deleted (caller should not fall through to
+// note-delete logic).  Returns false when nothing was selected or the only
+// selected handle is a locked endpoint.
+// ============================================================================
+bool PianoRollToolHandler::handleTimeToolDeleteSelected()
+{
+    if (!ctx_.getTimeGridSnapshot || !ctx_.commitTimeGrid) return false;
+    auto& tt = ctx_.getState().timeTool;
+    if (tt.selectedHandleId == 0) return false;
+
+    auto snap = ctx_.getTimeGridSnapshot();
+    if (snap == nullptr) return false;
+
+    const auto& handles = snap->handles();
+    int targetIdx = -1;
+    for (int i = 0; i < static_cast<int>(handles.size()); ++i) {
+        if (handles[static_cast<size_t>(i)].id == tt.selectedHandleId) {
+            targetIdx = i;
+            break;
+        }
+    }
+    if (targetIdx <= 0 || targetIdx >= static_cast<int>(handles.size()) - 1) {
+        // Endpoint or not found — cannot delete
+        AppLogger::log("[TimeTool] delete rejected: cannot delete endpoint or unknown handle");
+        return false;
+    }
+    if (handles[static_cast<size_t>(targetIdx)].locked) {
+        AppLogger::log("[TimeTool] delete rejected: handle is locked");
+        return false;
+    }
+
+    // Build new handle vector without the target.
+    std::vector<TimeHandle> newHandles(handles.begin(), handles.end());
+    newHandles.erase(newHandles.begin() + targetIdx);
+
+    auto newSnap = TimeGridSnapshot::makeFromHandles(
+        std::move(newHandles), /*revision=*/snap->revision() + 1);
+    if (newSnap == nullptr) {
+        AppLogger::warn("[TimeTool] delete: makeFromHandles validation failed");
+        return false;
+    }
+
+    // Affected range = source span between the deleted handle's neighbors.
+    int64_t affectedStart = 0;
+    int64_t affectedEnd   = 0;
+    {
+        const F0Timeline f0tl = ctx_.getF0Timeline ? ctx_.getF0Timeline() : F0Timeline{};
+        const double srcStartSec = handles[static_cast<size_t>(targetIdx - 1)].source_seconds;
+        const double srcEndSec   = handles[static_cast<size_t>(targetIdx + 1)].source_seconds;
+        if (!f0tl.isEmpty()) {
+            const auto range = f0tl.rangeForTimes(srcStartSec, srcEndSec);
+            affectedStart = range.startFrame;
+            affectedEnd   = range.endFrameExclusive;
+        } else {
+            affectedStart = static_cast<int64_t>(srcStartSec * 100.0);
+            affectedEnd   = static_cast<int64_t>(srcEndSec   * 100.0);
+        }
+    }
+
+    ctx_.commitTimeGrid(newSnap, snap, affectedStart, affectedEnd,
+                         juce::String("删除时间手柄"));
+
+    tt.selectedHandleId = 0;
+    tt.hoveredHandleId  = 0;
+    if (ctx_.notifyTimeGridChanged) ctx_.notifyTimeGridChanged();
+    return true;
 }
 
 } // namespace OpenTune

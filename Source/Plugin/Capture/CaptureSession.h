@@ -52,7 +52,6 @@ using SubmitForRenderFn = std::function<uint64_t(std::shared_ptr<juce::AudioBuff
  * from the given materialization. Implementation MUST:
  *   - clear destination range
  *   - call processor.readPlaybackAudio({materializationId, readStartSeconds, targetSampleRate}, ...)
- *     with the per-materialization CrossoverMixer so LR4 path is preserved.
  *
  * Captures a small (one-pointer) lambda; no heap allocation expected when called.
  */
