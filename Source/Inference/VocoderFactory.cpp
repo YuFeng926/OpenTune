@@ -34,6 +34,18 @@ VocoderCreationResult VocoderFactory::create(
 
             AppLogger::info("[VocoderFactory] DML vocoder created successfully");
 
+            const float fmax = vocoder->getFMax();
+            const float nyquist = static_cast<float>(vocoder->getSampleRate()) * 0.5f;
+            if (fmax > nyquist) {
+                return VocoderCreationResult::failure(VocoderBackend::DML,
+                    "Vocoder config violates Nyquist: fmax=" + std::to_string(fmax)
+                    + " > Nyquist=" + std::to_string(nyquist)
+                    + " (sampleRate=" + std::to_string(vocoder->getSampleRate()) + ")");
+            }
+            AppLogger::info("[VocoderFactory] Vocoder config OK: fmax=" + juce::String(fmax)
+                + ", sampleRate=" + juce::String(vocoder->getSampleRate())
+                + " (Nyquist=" + juce::String(nyquist) + ")");
+
             return VocoderCreationResult::success(std::move(vocoder), VocoderBackend::DML);
 
         } catch (const std::exception& e) {
@@ -86,10 +98,22 @@ VocoderCreationResult VocoderFactory::create(
 #endif
         
         auto vocoder = std::make_unique<PCNSFHifiGANVocoder>(std::move(session));
-        
+
         const juce::String backendStr = (selectedBackend == VocoderBackend::CoreML) ? "CoreML" : "CPU";
         AppLogger::info("[VocoderFactory] " + backendStr + " vocoder created successfully");
-        
+
+        const float fmax = vocoder->getFMax();
+        const float nyquist = static_cast<float>(vocoder->getSampleRate()) * 0.5f;
+        if (fmax > nyquist) {
+            return VocoderCreationResult::failure(selectedBackend,
+                "Vocoder config violates Nyquist: fmax=" + std::to_string(fmax)
+                + " > Nyquist=" + std::to_string(nyquist)
+                + " (sampleRate=" + std::to_string(vocoder->getSampleRate()) + ")");
+        }
+        AppLogger::info("[VocoderFactory] Vocoder config OK: fmax=" + juce::String(fmax)
+            + ", sampleRate=" + juce::String(vocoder->getSampleRate())
+            + " (Nyquist=" + juce::String(nyquist) + ")");
+
         return VocoderCreationResult::success(std::move(vocoder), selectedBackend);
         
     } catch (const std::exception& e) {

@@ -110,6 +110,27 @@ private:
     float confidenceThreshold_ = 0.5f; // UV threshold for RMVPE
     float f0Min_ = 50.0f;
     float f0Max_ = 1100.0f;
+    //
+    // ⚠️ 重要 — RMVPE "uv" 输出语义反向
+    //
+    // The current rmvpe.onnx checkpoint outputs the second tensor ("uv") as the
+    // *unvoiced probability*: voiced frames have uv ≈ 0, unvoiced frames have uv ≈ 1.
+    // This is the OPPOSITE of what "UV check" / "confidence threshold" naming
+    // intuitively suggests.
+    //
+    // The post-hoc UV mask in extractF0() (currently disabled by enableUvCheck_=false):
+    //     if (enableUvCheck_ && uvData[i] < confidenceThreshold_) value = 0.0f;
+    //
+    // Reads as "if voicing confidence too low, drop F0" — but with the actual
+    // model semantics it instead means "if frame is *very voiced* (uv < 0.5),
+    // drop F0", which would zero out every voiced frame and break F0 entirely.
+    //
+    // 本 bug 在当前项目中是休眠状态 (enableUvCheck_=false default), 不会影响生产;
+    // 但任何未来改动 enable 这条路径的人必须同时修复语义：为 `„uv > (1 - confidenceThreshold_)` 或重命名为 `unvoicedProbability_`。
+    //
+    // 详见 research/p0_time_stretch/DESIGN.md v7 §11.1、
+    // openspec/changes/vocal-time-stretch/design.md §Decision 10、
+    // 以及 v7 prototype phoneme_classifier 使用 (1 - uv_prob) 作为 voicing 评分。
     bool enableUvCheck_ = false;
 
     // ============================================================

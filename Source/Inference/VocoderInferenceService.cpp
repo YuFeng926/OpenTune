@@ -70,6 +70,10 @@ public:
         return currentVocoder_ ? currentVocoder_->getMelBins() : 128;
     }
 
+    float getFMax() const {
+        return currentVocoder_ ? currentVocoder_->getFMax() : 22050.0f;
+    }
+
 private:
     std::shared_ptr<Ort::Env> env_;
     std::unique_ptr<VocoderInterface> currentVocoder_;
@@ -104,6 +108,10 @@ int VocoderInferenceService::getVocoderHopSize() const {
 
 int VocoderInferenceService::getMelBins() const {
     return pImpl_->getMelBins();
+}
+
+float VocoderInferenceService::getFMax() const {
+    return pImpl_->getFMax();
 }
 
 } // namespace OpenTune
