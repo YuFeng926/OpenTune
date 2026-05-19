@@ -88,7 +88,7 @@ void PianoRollCorrectionWorker::executeRequest(AsyncCorrectionRequest& request)
 
         case AsyncCorrectionRequest::Kind::AutoTuneGenerate:
         {
-            request.notes = NoteGenerator::generate(
+            request.notes = LegacyNoteGenerator::generate(
                 request.autoOriginalF0Full.data(),
                 static_cast<int>(request.autoOriginalF0Full.size()),
                 nullptr,
@@ -99,7 +99,14 @@ void PianoRollCorrectionWorker::executeRequest(AsyncCorrectionRequest& request)
                 request.audioSampleRate,
                 request.autoGenParams);
 
-            NoteGenerator::validate(request.notes);
+            // Apply scale snap as a separate AutoTune-only step. Note
+            // generation itself stays chromatic; AutoTune supplies a snap
+            // config when the user picked a scale in the UI.
+            if (request.postSnap.has_value()) {
+                request.postSnap->applyToNotes(request.notes);
+            }
+
+            LegacyNoteGenerator::validate(request.notes);
             break;
         }
     }

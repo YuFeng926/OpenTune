@@ -1,13 +1,21 @@
 #pragma once
 
 /**
- * NoteGenerator - 音符生成器
- * 
- * 从 F0（基频）曲线生成音符序列，支持：
- * - 自动分段（基于音高变化阈值）
- * - 静默段桥接
- * - 音阶吸附（可选）
- * - 颤音参数提取
+ * LegacyNoteGenerator - DSP-based note generator (existing implementation,
+ * formerly named `NoteGenerator`).
+ *
+ * Generates a note sequence from an F0 curve via:
+ * - Pitch-transition thresholding (cents) for segmentation
+ * - Unvoiced-gap bridging
+ * - Optional scale snapping
+ *
+ * This is the byte-equivalent successor to the prior `NoteGenerator` class.
+ * It is kept as a hidden fallback path; new imports default to GAME-small
+ * via `GameNoteGenerator` (see Source/Inference/GameNoteGenerator.h).
+ *
+ * Implements `INoteGenerator` (`generate(const NoteGeneratorInput&)`) so the
+ * import flow can dispatch polymorphically; the static API is preserved for
+ * existing call sites (PianoRollCorrectionWorker, Standalone/PluginEditor).
  */
 
 #include <vector>
@@ -15,49 +23,21 @@
 #include <optional>
 
 #include "Note.h"
+#include "NoteGeneratorTypes.h"
+#include "../Inference/INoteGenerator.h"
 
 namespace OpenTune {
 
-using RootNote = int;
-
-enum class ScaleMode {
-    Chromatic,
-    Major,
-    Minor,
-    HarmonicMinor,
-    Dorian,
-    Mixolydian,
-    PentatonicMajor,
-    PentatonicMinor
-};
-
-struct ScaleSnapConfig {
-    RootNote  root  = 0;
-    ScaleMode mode  = ScaleMode::Chromatic;
-
-    static const int* semitones(ScaleMode mode, int& outCount) noexcept;
-    float snapMidi(float midiNote) const noexcept;
-};
-
-struct NoteSegmentationPolicy {
-    float transitionThresholdCents = 80.0f;
-    float gapBridgeMs              = 10.0f;
-    float minDurationMs            = 100.0f;
-    float tailExtendMs             = 15.0f;
-};
-
-struct NoteGeneratorParams {
-    NoteSegmentationPolicy policy;
-    float retuneSpeed  = -1.0f;
-    float vibratoDepth = -1.0f;
-    float vibratoRate  = -1.0f;
-    std::optional<ScaleSnapConfig> scaleSnap;
-};
-
-class NoteGenerator {
+class LegacyNoteGenerator : public INoteGenerator {
 public:
-    NoteGenerator() = delete;
+    LegacyNoteGenerator() = default;
 
+    // INoteGenerator override — used by the import flow via std::unique_ptr<INoteGenerator>.
+    // Reads input.f0/energy/hopSize/f0SampleRate/hostSampleRate/start/endFrame/params,
+    // ignores input.audio and input.sampleRate.
+    std::vector<Note> generate(const NoteGeneratorInput& input) override;
+
+    // Static API — preserved for legacy callers (PianoRollCorrectionWorker, etc.)
     static std::vector<Note> generate(
         const float*               f0,
         int                        f0Count,
@@ -86,9 +66,10 @@ private:
         int          count,
         float        hopSizeTime);
 
-    static float quantisePitch(
-        float hz,
-        const std::optional<ScaleSnapConfig>& snap);
+    // Always rounds to the nearest chromatic semitone. ScaleSnap is no longer
+    // applied here — see ScaleSnapConfig::applyToNotes for the post-generation
+    // hook that AutoTune uses.
+    static float quantisePitch(float hz);
 
     static void commitNote(
         std::vector<Note>&         out,
