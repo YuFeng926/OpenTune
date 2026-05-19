@@ -1,4 +1,4 @@
-#include "NoteGenerator.h"
+#include "LegacyNoteGenerator.h"
 #include "SimdPerceptualPitchEstimator.h"
 #include "PitchUtils.h"
 
@@ -77,7 +77,7 @@ float ScaleSnapConfig::snapMidi(float midiNote) const noexcept
     return midiNote + adj;
 }
 
-float NoteGenerator::representativePitch(
+float LegacyNoteGenerator::representativePitch(
     const float* pitches,
     const float* energyWeights,
     int          count,
@@ -101,19 +101,28 @@ float NoteGenerator::representativePitch(
     return voiced[voiced.size() / 2];
 }
 
-float NoteGenerator::quantisePitch(
-    float hz,
-    const std::optional<ScaleSnapConfig>& snap)
+float LegacyNoteGenerator::quantisePitch(float hz)
 {
     if (hz <= 0.0f) return 0.0f;
 
-    float midi = PitchUtils::freqToMidi(hz);
-    if (snap.has_value()) midi = snap->snapMidi(midi);
-
+    const float midi = PitchUtils::freqToMidi(hz);
     return Note::midiToFrequency(static_cast<int>(std::round(midi)));
 }
 
-void NoteGenerator::commitNote(
+void ScaleSnapConfig::applyToNotes(std::vector<Note>& notes) const
+{
+    if (mode == ScaleMode::Chromatic) return;
+
+    for (auto& note : notes) {
+        const float src = (note.originalPitch > 0.0f) ? note.originalPitch : note.pitch;
+        if (src <= 0.0f) continue;
+        const float midi = PitchUtils::freqToMidi(src);
+        const float snapped = snapMidi(midi);
+        note.pitch = Note::midiToFrequency(static_cast<int>(std::round(snapped)));
+    }
+}
+
+void LegacyNoteGenerator::commitNote(
     std::vector<Note>&         out,
     Note&                      current,
     std::vector<float>&        pitches,
@@ -136,7 +145,7 @@ void NoteGenerator::commitNote(
 
         if (rep > 0.0f) {
             current.originalPitch = rep;
-            current.pitch         = quantisePitch(rep, params.scaleSnap);
+            current.pitch         = quantisePitch(rep);
             current.retuneSpeed   = params.retuneSpeed;
             current.vibratoDepth  = params.vibratoDepth;
             current.vibratoRate   = params.vibratoRate;
@@ -149,7 +158,7 @@ void NoteGenerator::commitNote(
     current = Note{};
 }
 
-std::vector<Note> NoteGenerator::generate(
+std::vector<Note> LegacyNoteGenerator::generate(
     const float*               f0,
     int                        f0Count,
     const float*               energy,
@@ -283,7 +292,7 @@ std::vector<Note> NoteGenerator::generate(
     return out;
 }
 
-std::vector<Note> NoteGenerator::generate(
+std::vector<Note> LegacyNoteGenerator::generate(
     const std::vector<float>&  f0,
     const std::vector<float>&  energy,
     int                        hopSize,
@@ -304,21 +313,43 @@ std::vector<Note> NoteGenerator::generate(
         params);
 }
 
-bool NoteGenerator::validate(const std::vector<Note>& notes)
+// INoteGenerator override — forwards to the static frame-domain API using
+// the Legacy fields of NoteGeneratorInput. The audio fields are ignored.
+std::vector<Note> LegacyNoteGenerator::generate(const NoteGeneratorInput& input)
+{
+    const float* energyPtr = (input.energy.size() == input.f0.size() && !input.energy.empty())
+                             ? input.energy.data()
+                             : nullptr;
+    const int endFrame = (input.endFrameExclusive > 0)
+                         ? input.endFrameExclusive
+                         : static_cast<int>(input.f0.size());
+    return generate(
+        input.f0.data(),
+        static_cast<int>(input.f0.size()),
+        energyPtr,
+        input.startFrame,
+        endFrame,
+        input.hopSize,
+        input.f0SampleRate,
+        input.hostSampleRate,
+        input.params);
+}
+
+bool LegacyNoteGenerator::validate(const std::vector<Note>& notes)
 {
     bool ok = true;
     for (size_t i = 0; i < notes.size(); ++i) {
         if (notes[i].endTime <= notes[i].startTime) {
-            DBG("NoteGenerator::validate: zero/negative duration note at index " << i);
+            DBG("LegacyNoteGenerator::validate: zero/negative duration note at index " << i);
             ok = false;
         }
         if (i > 0) {
             if (notes[i].startTime < notes[i - 1].startTime) {
-                DBG("NoteGenerator::validate: notes not sorted at index " << i);
+                DBG("LegacyNoteGenerator::validate: notes not sorted at index " << i);
                 ok = false;
             }
             if (notes[i].startTime < notes[i - 1].endTime) {
-                DBG("NoteGenerator::validate: overlapping notes at index " << i);
+                DBG("LegacyNoteGenerator::validate: overlapping notes at index " << i);
                 ok = false;
             }
         }

@@ -3,9 +3,10 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Utils/PitchCurve.h"
 #include "Utils/Note.h"
-#include "Utils/NoteGenerator.h"
+#include "Utils/LegacyNoteGenerator.h"
 #include <vector>
 #include <memory>
+#include <optional>
 #include <string>
 #include <atomic>
 #include <mutex>
@@ -49,6 +50,10 @@ public:
         int autoStartFrame = 0;
         int autoEndFrame = 0;
         NoteGeneratorParams autoGenParams;
+        // Optional post-generation scale snap for AutoTune flows. When set,
+        // the worker calls `postSnap->applyToNotes(notes)` after the segmenter
+        // returns. Note generation itself is always chromatic.
+        std::optional<ScaleSnapConfig> postSnap;
         std::vector<float> autoOriginalF0Full;
         uint64_t materializationEpochSnapshot = 0;
         uint64_t materializationIdSnapshot = 0;
