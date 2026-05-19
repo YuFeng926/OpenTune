@@ -263,6 +263,16 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
         OpenTuneAudioProcessor::PlaybackReadSource readSource;
         readSource.renderCache = contentReadSource.renderCache;
         readSource.audioBuffer = contentReadSource.audioBuffer;
+        // vocal-time-stretch §7 — propagate Stage 2 fast-path fields so the
+        // ARA playback path consumes TimeStretchCache (RB stretched) when the
+        // user has placed non-identity handles.  Without these fields, ARA
+        // playback silently degrades to the dry+vocoder LR4-style mix and the
+        // RB v5 phase-purity tuning is bypassed, producing severe chorus.
+        readSource.timeStretchCache    = contentReadSource.timeStretchCache;
+        readSource.materializationId   = contentReadSource.materializationId;
+        readSource.pitchRevision       = contentReadSource.pitchRevision;
+        readSource.timeGridRevision    = contentReadSource.timeGridRevision;
+        readSource.timeGridIsIdentity  = contentReadSource.timeGridIsIdentity;
 
         const double clipReadStartSeconds = mappedLocalTime;
 
