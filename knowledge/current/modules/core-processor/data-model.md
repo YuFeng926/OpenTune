@@ -311,10 +311,9 @@ Undo/Redo 通过 retire/revive 实现可逆切换，**不**破坏数据。
 | `NotesPrimary` | 编辑音符；仅有声帧（`f0 > 0`）可编辑 |
 
 参数（RetuneSpeed / VibratoDepth / VibratoRate）的目标解析优先级（`resolveParameterTarget`）：
-1. RetuneSpeed + 有 LineAnchor 选中 + 允许（非 NotesPrimary）→ `SelectedLineAnchorSegments`
-2. 有选中 note → `SelectedNotes`
-3. 有帧选择 → `FrameSelection`
-4. 若允许整片 → `WholeClip`，否则 `None`
+1. 有选中 note → `SelectedNotes`
+2. 有帧选择 → `FrameSelection`
+3. 若允许整片 → `WholeClip`，否则 `None`
 
 AutoTune 范围解析（`resolveAutoTuneRange`）：
 - NotesPrimary：SelectedNotes > f0Selection > selectionArea > WholeClip

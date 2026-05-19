@@ -135,16 +135,15 @@ timeSeconds    = audioSamplePos / audioSampleRate
 
 | 来源 | 谁创建 | 注意 |
 |---|---|---|
-| `Source::NoteBased` | `applyCorrectionToRange` 末尾 | 一次写覆盖整个 `[start, end)`，并附加两侧 Hermite smoothstep 过渡段（10 帧）|
-| `Source::HandDraw` / `LineAnchor` | `setManualCorrectionRange` | 同样附加过渡段；`LineAnchor` 在渲染阶段额外叠加 `mixRetune` |
+| `Source::NoteBased` | `applyCorrectionToRange` 末尾 | 一次写覆盖扩展后的 note-based 计算范围；音符边界连续性在计算阶段处理，不额外生成过渡段 |
+| `Source::HandDraw` / `LineAnchor` | `setManualCorrectionRange` | 只写入用户提交的 `[start, end)` committed `f0Data`；渲染 / 音频读取阶段直接输出该数据 |
 | `Source::None` | 构造默认值；实际路径下不应写入 | ⚠️ 待确认 |
 
-### 过渡段（Hermite smoothstep）
+### 段边界
 
-- 左过渡：`[startFrame - 10, startFrame)`，权重 `w = t² * (3 - 2t)`，值域 0→1（从 originalF0 缓进到 boundary）。
-- 右过渡：`[endFrame, endFrame + 10)`，权重 `1 - t² * (3 - 2t)`，1→0。
-- **仅当两侧原始 F0 全部 voiced 且无段冲突时生成**；否则跳过。
-- 过渡段 `source = center.source`（复用"这是哪一类修正"语义）。
+- `PitchCurve` 不再为 `setManualCorrectionRange` 或 NoteBased 写入生成额外 edge transition segment。
+- Manual correctedF0 的范围外保持未修正状态；需要形状或平滑时必须在提交前生成进 `f0Data`。
+- NoteBased 的音符间连续性由 `applyCorrectionToRange` 内部计算得到，仍以单一 `Source::NoteBased` segment 写入。
 
 ---
 

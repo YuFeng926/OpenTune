@@ -3641,18 +3641,6 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByMaterializationId(uin
         return false;
     }
 
-    AppLogger::log("AutoTune: cloning curve and applying correction");
-    auto derivedCurve = sharedCurve->clone();
-    derivedCurve->applyCorrectionToRange(normalizedNotes,
-                                         startFrame,
-                                         endFrameExclusive,
-                                         retuneSpeed,
-                                         vibratoDepth,
-                                         vibratoRate,
-                                         audioSampleRate);
-    AppLogger::log("AutoTune: applyCorrectionToRange completed");
-
-    // Range-aware merge: retain existing notes outside the selection range
     const double secondsPerFrame = static_cast<double>(sharedCurve->getHopSize()) / sharedCurve->getSampleRate();
     const double rangeStartTime = static_cast<double>(startFrame) * secondsPerFrame;
     const double rangeEndTime = static_cast<double>(endFrameExclusive) * secondsPerFrame;
@@ -3674,6 +3662,17 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByMaterializationId(uin
 
     std::sort(mergedNotes.begin(), mergedNotes.end(),
         [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
+
+    AppLogger::log("AutoTune: cloning curve and applying correction");
+    auto derivedCurve = sharedCurve->clone();
+    derivedCurve->applyCorrectionToRange(mergedNotes,
+                                         startFrame,
+                                         endFrameExclusive,
+                                         retuneSpeed,
+                                         vibratoDepth,
+                                         vibratoRate,
+                                         audioSampleRate);
+    AppLogger::log("AutoTune: applyCorrectionToRange completed");
 
     if (getMaterializationPitchCurveById(materializationId) != sharedCurve) {
         AppLogger::log("AutoTune: commitAutoTuneGenerated abort - curve replaced during correction (TOCTOU)");

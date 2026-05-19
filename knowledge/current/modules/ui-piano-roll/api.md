@@ -103,11 +103,10 @@ static constexpr int kAudioSampleRate = 44100;
 |------|------|
 | `bool hasSelectionArea() const` | 是否存在矩形选区（基于 `selectionStartTime != selectionEndTime`） |
 | `std::pair<double,double> getSelectionTimeRange() const` | 返回 `{min,max}` 的时间范围（素材秒） |
-| `bool applyRetuneSpeedToSelection(float)` / `applyRetuneSpeedToSelectedLineAnchorSegments(float)` | 根据 `AudioEditingScheme::resolveParameterTarget` 决定落点：选中音符 / 线段 / 帧选区；clamp 到 `[0,1]`；设 `pendingUndoDescription_ = "修改调速"` |
+| `bool applyRetuneSpeedToSelection(float)` | 根据 `AudioEditingScheme::resolveParameterTarget` 决定落点：选中音符 / 帧选区 / 整片；clamp 到 `[0,1]`；设 `pendingUndoDescription_ = "修改调速"` |
 | `bool applyVibratoDepthToSelection(float)` / `applyVibratoRateToSelection(float)` | Depth clamp `[0,100]`；Rate clamp `[0.1,30]` |
 | `bool applyVibratoParameterToSelection(VibratoParam, float)` *(private)* | 内部分派 Depth/Rate |
 | `bool getSingleSelectedNoteParameters(float&,float&,float&)` | 仅当恰好 1 个选中音符时返回 true；百分比形式的 retune 和 depth/rate |
-| `bool getSelectedSegmentRetuneSpeed(float&)` | 仅当方案允许选中线段且恰好 1 段被选时返回 |
 | `bool applyAutoTuneToSelection()` | 触发一次性 AutoTune（内部走 `applyCorrectionAsyncForEntireClip` 或选区范围） |
 | `bool applyCorrectionAsyncForEntireClip(float retune,float depth,float rate)` | 入队 `PianoRollCorrectionWorker::AsyncCorrectionRequest::Kind::ApplyNoteRange` 覆盖整个 clip；若 `isAutoTuneProcessing()` 为 true 则返回 false |
 

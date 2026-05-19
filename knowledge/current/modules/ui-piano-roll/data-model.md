@@ -193,13 +193,12 @@ struct ManualCorrectionOp {
     int endFrameExclusive     = 0;
     std::vector<float> f0Data;                                          // f0Data.size() == endFrameExclusive - startFrame
     CorrectedSegment::Source source = CorrectedSegment::Source::HandDraw;
-    float retuneSpeed         = -1.0f;                                  // -1 → 使用默认
 };
 ```
 
 生成路径：
 - HandDraw：`appendManualCorrectionOps` 遍历 `trimmedRange`（由 `AudioEditingScheme::trimFrameRangeToEditableBounds` 裁剪），遇不可编辑帧或 ≤0 的 F0 值时切断当前 Op，形成多段；
-- LineAnchor：对两个锚点间每帧计算 `pow(2, logA + (logB-logA)*t)`；
+- LineAnchor：先生成两个锚点间的 log-domain 目标线，再把 OriginalF0 去位置/去趋势后的局部形状残差按 `1 - retuneSpeed` 烘入 `f0Data`；锚点目标位置不被 retuneSpeed 拉回原曲线；
 - NoteDrag（带原手动修正）：直接按 `previewF0` 生成单段。
 
 ---

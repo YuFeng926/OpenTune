@@ -52,7 +52,7 @@ public:
         std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
         std::vector<float> correctedF0;
         F0Timeline f0Timeline;
-        std::vector<Note> notes;
+        std::vector<Note> displayNotes;
         std::vector<double> chunkBoundaries;
         bool active = false;
 
@@ -112,8 +112,6 @@ public:
                      const RenderContext& ctx,
                      const MaterializationRenderItem& item,
                      const std::vector<uint8_t>* visibleMask = nullptr);
-
-private:
 };
 
 } // namespace OpenTune

@@ -66,10 +66,10 @@ void renderCorrectedOnlyRange(int startFrame, int endFrame,
 
 - 遍历 `[startFrame, endFrame)`，按原始段与修正段交替，以 `callback(frameStart, dataPtr, length)` 推送切片。
 - 边界裁剪：`endFrame` 超过 `originalF0_.size()` 时自动截断；`startFrame >= maxFrame` 直接返回。
-- **`renderF0Range`**：修正段内产出修正后 F0（含 `LineAnchor` 源额外叠加 `mixRetune`），段外产出原始 F0。
-- **`renderCorrectedOnlyRange`**：修正段内产出同上，**段外产出零向量**（用于可视化差值）。
-- `LineAnchor` 源 + `retuneSpeed >= 0.0f` 时，对段内每帧调用 `PitchUtils::mixRetune(originalF0, targetF0, retuneSpeed)`；`originalF0 <= 0 || targetF0 <= 0` 时直接输出 `targetF0`。
-- callback 的 `dataPtr` 可能指向临时缓冲（LineAnchor 路径），**不允许在回调返回后继续持有**。
+- **`renderF0Range`**：修正段内直接产出 `CorrectedSegment::f0Data`，段外产出原始 F0。
+- **`renderCorrectedOnlyRange`**：修正段内直接产出 `CorrectedSegment::f0Data`，**段外产出零向量**（用于可视化差值）。
+- `LineAnchor` 与 `HandDraw` 一样，`f0Data` 是唯一输出真相；渲染 / 音频读取阶段不得再用 `retuneSpeed` 重新解释该段。
+- callback 的 `dataPtr` 指向 snapshot 内部段数据或临时零缓冲，**不允许在回调返回后继续持有**。
 
 ---
 
@@ -113,8 +113,7 @@ auto hop = snap->getHopSize();  // 两者属于同一个快照
 | `setOriginalF0Range(size_t startFrame, const std::vector<float>&)` | 在指定位置 splice；不足自动 `resize(endFrame, 0.0f)`；同步 resize energy |
 | `setOriginalEnergyRange(size_t startFrame, const std::vector<float>&)` | 类似上；同步 resize f0 |
 | `applyCorrectionToRange(notes, start, end, retuneSpeed, vibratoDepth=0, vibratoRate=7.5, audioSR=44100)` | 五阶段修正；见 business.md。**新 segment `source = NoteBased`** |
-| `setManualCorrectionRange(s, e, f0Data, source)` | 写入手绘/锚点段；自动附加两侧 smoothstep 过渡段 |
-| `setManualCorrectionRange(s, e, f0Data, source, retuneSpeed)` | 同上 + 携带 per-segment retune |
+| `setManualCorrectionRange(s, e, f0Data, source)` | 写入手绘/锚点段；manual segment 的唯一输出真相是传入的 `f0Data`，不生成额外过渡段 |
 | `clearCorrectionRange(s, e)` | 删除区间内段（两侧段被裁切保留） |
 | `clearAllCorrections()` | 清空所有修正段，递增 generation |
 | `replaceCorrectedSegments(const std::vector<CorrectedSegment>&)` | 排序后整体替换 |

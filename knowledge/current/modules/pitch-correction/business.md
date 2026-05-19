@@ -30,7 +30,7 @@ flowchart TD
     I --> J[Worker 入队 ApplyNoteRange]
     J --> K[workerLoop 版本校验 + executeRequest]
     K --> L[PitchCurve::applyCorrectionToRange<br/>五阶段修正]
-    L --> M[clearSegmentsInRangePreserveOutside<br/>+ insertSegmentWithUnifiedTransitions]
+    L --> M[clear NoteBased only<br/>+ insert NoteBased segment<br/>preserving manual f0Data]
     M --> N[std::atomic_store 新 Snapshot<br/>renderGeneration_ ++]
     N --> O[UI takeCompleted() 刷新可视化]
     N --> P[Audio thread atomic_load<br/>renderF0Range 拉取 F0]
@@ -101,7 +101,7 @@ workerLoop:
 |---|---|---|
 | 拖动 Note 修改 `pitchOffset` / 调整 `vibrato*` / `retuneSpeed` | `ApplyNoteRange` | 受影响 note 覆盖的帧区间（可能多个 note 合并为一个 request） |
 | 手绘 F0 曲线 | `setManualCorrectionRange(Source::HandDraw)` 同步写（不经 Worker） | UI 手势覆盖的帧区间 |
-| LineAnchor 调整 | `setManualCorrectionRange(Source::LineAnchor, retuneSpeed)` 同步写 | 相邻锚点之间的区间 |
+| LineAnchor 调整 | `setManualCorrectionRange(Source::LineAnchor)` 同步写 committed `f0Data` | 相邻锚点之间的区间 |
 | 清除修正 | `clearCorrectionRange` / `clearAllCorrections` 同步写 | 用户选区 / 全部 |
 
 **注意**：手绘 / LineAnchor 走 UI 线程同步写入（因为这是交互式高频小范围写，同步更自然）；note-based 批量修正走 Worker 异步（因为涉及整首歌重算）。
@@ -176,15 +176,15 @@ Stage 5 — 音高偏移 + retune 混合
 
 Stage 6 — 落地
   new CorrectedSegment(start, end, buffer, Source::NoteBased)
-  insertSegmentWithUnifiedTransitions (Hermite smoothstep 10 帧)
+  insertNoteBasedSegmentPreservingNonNoteBasedSegments
   atomic_store 新 Snapshot (renderGeneration++)
 ```
 
-### 3.4 过渡平滑（Hermite smoothstep）
+### 3.4 NoteBased 与手动修正边界
 
-- 左右各 10 帧（`kUnifiedTransitionFrames`）。
-- 权重 `w = t² (3 - 2t)` 左，`1 - t²(3-2t)` 右；端点导数为 0，保证拼接无一阶突变。
-- 仅当两侧原始 F0 全部 voiced 且不与现有段冲突时生成；否则跳过该侧（避免把静音 ramp 进修正）。
+- NoteBased 重算只清理 `Source::NoteBased` 段，并在插入时避开 `HandDraw` / `LineAnchor` 等手动 committed `f0Data`。
+- 音符间 correctedF0 的连续性在 NoteBased 计算阶段处理，不再通过额外 edge transition segment 作为并行平滑层。
+- `HandDraw` / `LineAnchor` 的输出真相是提交时生成的 `f0Data`；渲染、音频读取和 frame-selection 参数编辑都不得再临时解释 retune metadata。
 
 ---
 
@@ -263,7 +263,7 @@ if (snap->hasCorrectionInRange(bStart, bEnd)) {
 1. **单源写**：每个 PitchCurve 实例在任一时刻只能有一个写入线程（UI 或 Worker 择一）；跨线程写需上层协调。
 2. **Generation 单调**：`renderGeneration_` 仅递增，永不回退或重复。
 3. **Worker 最新优先**：旧 pending 永远被新 pending 取代，旧结果以 `VersionMismatch` 失败退回。
-4. **过渡段两侧保护**：任何写入 `CorrectedSegment` 的路径（applyCorrection / setManualCorrection）都附加 Hermite smoothstep 过渡（仅当条件满足）。
+4. **Manual f0Data 是输出真相**：`HandDraw` / `LineAnchor` 不在写入、渲染或音频读取阶段追加过渡段或重新解释 retune metadata。
 5. **段落按 startFrame 排序 + 不重叠**：写操作前先 `clearSegmentsInRangePreserveOutside`，写后 `insertSegmentSorted`。
 6. **音阶吸附只在导入**：`ScaleSnapConfig` 当前只通过 `NoteGenerator::quantisePitch` 生效；用户后续拖动 `pitchOffset` 不会重新吸附。
 
@@ -274,7 +274,7 @@ if (snap->hasCorrectionInRange(bStart, bEnd)) {
 ### 算法参数来源
 1. **斜率角度阈值 `[10°, 30°]` + `slopeAt45DegSemitonesPerSecond = 7.0f`**：`PitchCurve.cpp` 硬编码。来源是调参实验还是音乐学先验？是否需要暴露为用户可调？
 2. **`transitionThresholdCents = 80`**：80 cents 介于半音（100）与四分之一音（50）之间。是否考虑针对 vibrato 多的素材调大？
-3. **`kUnifiedTransitionFrames = 10`**：按 hop=160 / sr=16000 约 100 ms。过渡时长是否该按 `hopSize / sampleRate` 动态推导？
+3. **NoteBased 音符边界上下文长度**：当前边界衔接使用固定帧上下文。是否需要按 `hopSize / sampleRate` 动态推导？
 
 ### 业务语义
 4. **全 unvoiced note 覆盖范围的输出**：`applyCorrectionToRange` 中 f0<=0 帧赋 0，但这 0 会落入 `correctedF0Buffer` 并进入 snapshot；下游 `renderF0Range` 会原样返回 0，导致声码器静音。这是预期吗？是否应退回原始 F0（也是 0）以便下游判空？

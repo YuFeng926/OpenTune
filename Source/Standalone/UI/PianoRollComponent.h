@@ -154,7 +154,6 @@ public:
     void setRetuneSpeed(float speed) { currentRetuneSpeed_ = speed; }
     float getCurrentRetuneSpeed() const { return currentRetuneSpeed_; }
     bool applyRetuneSpeedToSelection(float speed);
-    bool applyRetuneSpeedToSelectedLineAnchorSegments(float speed);
     void setVibratoDepth(float depth) { currentVibratoDepth_ = depth; }
     float getCurrentVibratoDepth() const { return currentVibratoDepth_; }
     bool applyVibratoDepthToSelection(float depth);
@@ -162,7 +161,6 @@ public:
     float getCurrentVibratoRate() const { return currentVibratoRate_; }
     bool applyVibratoRateToSelection(float rate);
     bool getSingleSelectedNoteParameters(float& retuneSpeedPercent, float& vibratoDepth, float& vibratoRate) const;
-    bool getSelectedSegmentRetuneSpeed(float& retuneSpeedPercent) const;
     int findLineAnchorSegmentNear(int x, int y) const;
     void selectLineAnchorSegment(int idx);
     void toggleLineAnchorSegmentSelection(int idx);
@@ -226,7 +224,7 @@ private:
 
     enum class VibratoParam { Depth, Rate };
 
-    bool hasHandDrawCorrectionInRange(int startFrame, int endFrame) const;
+    bool hasManualCorrectionInRange(int startFrame, int endFrame) const;
     bool applyNoteParameterToSelectedNotes(float retuneSpeed, float vibratoDepth, float vibratoRate);
     bool applyParameterToFrameRange(float retuneSpeed, float vibratoDepth, float vibratoRate, int startFrame, int endFrameExclusive);
     bool getFrameRangeForTimeSpan(double startTime, double endTime, int& startFrame, int& endFrameExclusive) const;
@@ -286,9 +284,8 @@ private:
     void beginNoteDraft();
     bool commitNoteDraft();
     void clearNoteDraft();
-    // affectedRange: 编辑时已知的精确帧范围；undo/redo 用此范围 enqueuePartialRender，
-    // 避免 PianoRollEditAction 事后从 segments 反推退化为全长。无明确范围的调用方
-    // 用 [0, totalFrames] 作为安全 fallback（行为等同本 change 之前的全长渲染）。
+    // affectedRange: 编辑时已知的精确帧范围；undo/redo 用此范围 enqueuePartialRender。
+    // 纯 note 编辑没有 corrected-F0 所有权时，调用方传入完整 F0 物化范围。
     bool commitEditedMaterializationNotes(const std::vector<Note>& notes,
                                           F0FrameRange affectedRange);
     bool commitEditedMaterializationNotesAndSegments(const std::vector<Note>& notes,
@@ -428,8 +425,7 @@ private:
     void captureBeforeUndoSnapshot();
     void recordUndoAction(const juce::String& description, F0FrameRange affectedRange);
 
-    // 当 commit 调用方没有精确 affectedRange 时（如 commitNoteDraft 后兜底、参数面板调整），
-    // 用当前 currentCurve_ 的全长 F0 范围作为安全 fallback。退化等同于本 change 之前的全长渲染。
+    // 纯 note 编辑或全局参数操作使用当前 currentCurve_ 的完整 F0 物化范围。
     F0FrameRange currentFullF0Range() const;
     std::vector<CorrectedSegment> getCurrentSegments() const;
     

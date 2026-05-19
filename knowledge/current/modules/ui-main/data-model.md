@@ -326,8 +326,6 @@ FrameScheduler (singleton)
 ParameterPanelSyncContext
 ├─ bool hasSelectedNoteParameters
 ├─ float selectedNoteRetuneSpeedPercent / selectedNoteVibratoDepth / selectedNoteVibratoRate
-├─ bool hasSelectedSegmentRetuneSpeed
-├─ float selectedSegmentRetuneSpeedPercent
 ├─ float clipRetuneSpeedPercent / clipVibratoDepth / clipVibratoRate
 └─ bool wasShowingSelectionParameters
 

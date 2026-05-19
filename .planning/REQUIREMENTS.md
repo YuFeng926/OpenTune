@@ -18,7 +18,7 @@
 - [x] **MAIN-06**: 应用级 shared/standalone preferences 统一收敛到 `AppPreferences` typed schema；processor state 不再承接 app-level preference
 - [x] **MAIN-07**: Standalone 与 VST3 当前都使用显式 preferences page composition；VST3 只暴露 shared pages，Standalone 组装 `Audio + Shared + Standalone-only`
 - [x] **MAIN-08**: `AudioEditingScheme` 当前以显式输入规则驱动 parameter target、auto-tune target 与 parameter panel sync，不再依赖隐藏 scheme owner
-- [x] **MAIN-09**: notes-first 的第一轮交互反馈已进入 live tree：`NotesPrimary` 下 hand-draw / line-anchor 后会自动选中受影响 notes；`CorrectedF0Primary` 继续保留 line-anchor segment 优先语义
+- [x] **MAIN-09**: notes-first 的第一轮交互反馈已进入 live tree：`NotesPrimary` 下 hand-draw / line-anchor 后会自动选中受影响 notes；`CorrectedF0Primary` 允许 line-anchor segment selection，但参数面板不再把 LineAnchor segment 元数据作为 retune target，LineAnchor 输出真相固定为 committed `f0Data`
 - [x] **MAIN-12**: `曲线优先编辑` / `音符优先编辑` 现在已经固定为仅有的两套交互方案；hand-draw / line-anchor 的 voiced-only 行为已由 `AudioEditingScheme` 纯规则推导，`showUnvoicedFrames` / `noteNameMode` / `showChunkBoundaries` 已作为 shared app preferences 独立持久化
 - [x] **MAIN-13**: undo/redo 当前已从“整条曲线刷新”收敛为 content/placement-aware affected-range 执行结果链；`UndoAction` / `UndoManager` / `OpenTuneAudioProcessor` 返回 immutable result，`PianoRollComponent` 与 Standalone/VST3 editor 消费同一份 result chain，且 `createForCurve`、curve-bound applier、static side-channel、whole-curve fallback 已被移除
 - [x] **MAIN-14**: dual-format 仓库下的 mac Standalone 打包已补齐 app-only plist metadata 与 bundle docs 路径，并保持 VST3 target 不受污染；当前剩余 gap 仅是 macOS 实机 bundle inspection 仍需在对应环境执行
