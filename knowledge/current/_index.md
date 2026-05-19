@@ -73,9 +73,12 @@ last_updated: 2026-05-05
 1. **TimeGrid 数据模型**：`Source/Utils/TimeGrid.{h,cpp}`，COW `TimeGridSnapshot` 与
    `PitchCurve` 平级存于 `MaterializationStore`；piecewise-linear `τ` / `τ⁻¹`；
    端点 ClipStart/ClipEnd 永远 locked
-2. **Rubber Band R3 拉伸引擎**：`Source/Inference/RubberBandStretcher.{h,cpp}` 包装
-   `ThirdParty/rubberband-4.0.0` single-file build，OptionProcessOffline + EngineFiner
-   + FormantPreserved；每编辑 reset → setKeyFrameMap → study → process 全重建
+2. **SoundTouch WSOLA 拉伸引擎**：`Source/Inference/SoundTouchStretcher.{h,cpp}` 包装
+   vendored `ThirdParty/soundtouch-2.3.3`（LGPL-2.1）。WSOLA 时域算法，**物理上不存在
+   STFT 相位重建**，从根本消除 phase vocoder 引起的 chorus / phasing artifact。
+   每编辑 clear → push（按 TempoSchedule setTempo 时变切换） → flush → pull 全重建；
+   端点 ±N sample 漂移由 wrapper truncate/zero-pad 修正以保严格守恒。**v0-v5 用 RB R3
+   时代结束后由本 capability 替代**（详 `swap-time-stretch-to-soundtouch` archive）
 3. **双阶段渲染**：Stage 1 `RenderCache`(=PitchCache, chunk-wise) +
    Stage 2 `TimeStretchCache`(clip-wide per-matId)，共享 256MB LRU；详见
    `cross-cutting/two-stage-render-pipeline.md`

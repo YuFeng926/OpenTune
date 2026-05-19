@@ -508,7 +508,7 @@ private:
     // ========================================================================
     // ⚡️ vocal-time-stretch §7 (Phase D MVP) — Stage 2 (Time-Stretch) Worker
     //
-    // A SECOND, dedicated worker thread that owns Rubber Band re-build cycles.
+    // A SECOND, dedicated worker thread that owns SoundTouch re-build cycles.
     // Why a separate thread (not extend chunkRenderWorker)?
     //   - chunkRenderWorker is chunk-incremental (low-latency UI updates per
     //     small region edit).  Stage 2 is clip-wide (RB Offline mode forces a

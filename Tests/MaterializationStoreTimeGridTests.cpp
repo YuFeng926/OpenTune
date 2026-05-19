@@ -1,12 +1,12 @@
 /**
  * Tests/MaterializationStoreTimeGridTests.cpp — Phase C integration tests for
- * MaterializationStore TimeGrid + TimeStretchCache + RubberBandStretcher
+ * MaterializationStore TimeGrid + TimeStretchCache + SoundTouchStretcher
  * lifecycle (vocal-time-stretch §3.6, §5.5, §6.2, §6.5).
  *
  * Suite aggregator: runMaterializationStoreTimeGridSuite() — registered in TestMain.cpp.
  */
 #include "TestSupport.h"
-#include "Inference/RubberBandStretcher.h"
+#include "Inference/SoundTouchStretcher.h"
 #include "Inference/TimeStretchCache.h"
 #include "Utils/TimeGrid.h"
 #include "Utils/TimeCoordinate.h"
@@ -194,26 +194,26 @@ void runMatStore_TimeStretchCache_InvalidatedOnDeleteTest()
     logPass(testName);
 }
 
-void runMatStore_RubberBandStretcher_LazyConstructTest()
+void runMatStore_SoundTouchStretcher_LazyConstructTest()
 {
-    constexpr const char* testName = "MatStore_RubberBandStretcher_LazyConstruct";
+    constexpr const char* testName = "MatStore_SoundTouchStretcher_LazyConstruct";
 
     MaterializationStore store;
     const uint64_t matId = store.createMaterialization(makeMatRequestWithDuration(2.0));
 
-    RubberBandStretcher* rb1 = store.getRubberBandStretcher(matId, kSampleRate, 1);
+    SoundTouchStretcher* rb1 = store.getOpenTuneStretcher(matId, kSampleRate, 1);
     if (rb1 == nullptr) {
-        logFail(testName, "first call should lazily construct RubberBandStretcher");
+        logFail(testName, "first call should lazily construct SoundTouchStretcher");
         return;
     }
 
-    RubberBandStretcher* rb2 = store.getRubberBandStretcher(matId, kSampleRate, 1);
+    SoundTouchStretcher* rb2 = store.getOpenTuneStretcher(matId, kSampleRate, 1);
     if (rb2 != rb1) {
         logFail(testName, "subsequent calls should return the same instance");
         return;
     }
 
-    if (rb1->phase() != RubberBandStretcher::Phase::Idle) {
+    if (rb1->phase() != SoundTouchStretcher::Phase::Idle) {
         logFail(testName, "freshly-constructed stretcher should be in Idle phase");
         return;
     }
@@ -221,12 +221,12 @@ void runMatStore_RubberBandStretcher_LazyConstructTest()
     logPass(testName);
 }
 
-void runMatStore_RubberBandStretcher_NullForUnknownIdTest()
+void runMatStore_SoundTouchStretcher_NullForUnknownIdTest()
 {
-    constexpr const char* testName = "MatStore_RubberBandStretcher_NullForUnknownId";
+    constexpr const char* testName = "MatStore_SoundTouchStretcher_NullForUnknownId";
 
     MaterializationStore store;
-    RubberBandStretcher* rb = store.getRubberBandStretcher(/*matId=*/9999, kSampleRate, 1);
+    SoundTouchStretcher* rb = store.getOpenTuneStretcher(/*matId=*/9999, kSampleRate, 1);
     if (rb != nullptr) {
         logFail(testName, "expected nullptr for unknown materializationId");
         return;
@@ -267,6 +267,6 @@ void runMaterializationStoreTimeGridSuite()
     runMatStore_TimeStretchCache_InvalidatedOnTimeGridSetTest();
     runMatStore_TimeStretchCache_InvalidatedOnPitchCurveSetTest();
     runMatStore_TimeStretchCache_InvalidatedOnDeleteTest();
-    runMatStore_RubberBandStretcher_LazyConstructTest();
-    runMatStore_RubberBandStretcher_NullForUnknownIdTest();
+    runMatStore_SoundTouchStretcher_LazyConstructTest();
+    runMatStore_SoundTouchStretcher_NullForUnknownIdTest();
 }

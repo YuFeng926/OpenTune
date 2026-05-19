@@ -504,8 +504,8 @@ target_sources(OpenTune
         Source/Inference/VocoderFactory.cpp
         Source/Inference/DmlVocoder.h
         Source/Inference/DmlVocoder.cpp
-        Source/Inference/RubberBandStretcher.cpp
-        Source/Inference/RubberBandStretcher.h
+        Source/Inference/SoundTouchStretcher.cpp
+        Source/Inference/SoundTouchStretcher.h
         Source/Inference/TimeStretchCache.cpp
         Source/Inference/TimeStretchCache.h
         Source/Inference/PitchCache.h
@@ -708,17 +708,32 @@ target_sources(OpenTune PRIVATE
     Source/Plugin/Capture/CapturePersistence.h
 )
 
-# Rubber Band Library v4.0.0 (single-file build for vocal time-stretch).
-# Uses RubberBandSingle.cpp which transitively includes all needed sources.
-# License: GPL-2.0+ / commercial dual; AGPL-3.0 compatible. See LICENSES/rubberband.GPL-2.0.txt.
-set(RUBBERBAND_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/rubberband-4.0.0)
-if(EXISTS ${RUBBERBAND_DIR}/single/RubberBandSingle.cpp)
+# SoundTouch Library v2.3.3 (WSOLA time-stretch for vocal Stage 2).
+# Replaced Rubber Band R3 (phase vocoder) — see archive change swap-time-stretch-to-soundtouch.
+# License: LGPL-2.1. See LICENSES/soundtouch.LGPL-2.1.txt.
+set(SOUNDTOUCH_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/soundtouch-2.3.3)
+if(EXISTS ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp)
     target_sources(OpenTune PRIVATE
-        ${RUBBERBAND_DIR}/single/RubberBandSingle.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/AAFilter.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/FIFOSampleBuffer.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/FIRFilter.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateCubic.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateLinear.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateShannon.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/RateTransposer.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/TDStretch.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/cpu_detect_x86.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/sse_optimized.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/mmx_optimized.cpp
     )
-    message(STATUS "Rubber Band: vendored at ${RUBBERBAND_DIR} (single-file build)")
+    target_compile_definitions(OpenTune PRIVATE SOUNDTOUCH_FLOAT_SAMPLES)
+    if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+        target_compile_definitions(OpenTune PRIVATE SOUNDTOUCH_DISABLE_X86_OPTIMIZATIONS)
+    endif()
+    message(STATUS "SoundTouch: vendored at ${SOUNDTOUCH_DIR}")
 else()
-    message(WARNING "Rubber Band single-file source not found at ${RUBBERBAND_DIR}/single/RubberBandSingle.cpp")
+    message(FATAL_ERROR "SoundTouch source not found at ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp")
 endif()
 
 # ==============================================================================
@@ -729,7 +744,7 @@ target_include_directories(OpenTune
         ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone
         ${CMAKE_CURRENT_SOURCE_DIR}/Source
         ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master
-        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/rubberband-4.0.0
+        ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/soundtouch-2.3.3/include
         ${ONNXRUNTIME_INCLUDE_DIR}
 )
 
@@ -1128,7 +1143,7 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/TestEditorFactoryStub.cpp
         Tests/TimeGridTests.cpp
         Tests/DspDetectionTests.cpp
-        Tests/RubberBandStretcherTests.cpp
+        Tests/SoundTouchStretcherTests.cpp
         Tests/TimeStretchCacheTests.cpp
         Tests/MaterializationStoreTimeGridTests.cpp
         Tests/Stage2WorkerTests.cpp

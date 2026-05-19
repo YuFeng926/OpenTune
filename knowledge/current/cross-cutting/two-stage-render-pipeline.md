@@ -10,7 +10,7 @@ last_updated: 2026-05-12
 # 双阶段渲染管线（v7+：Pitch + Time）
 
 vocal-time-stretch v7 在原有"Pitch correction → vocoder → playback"单阶段管线之上
-新增了**Stage 2 时间拉伸**阶段，使用 Rubber Band Library R3（Finer）引擎。本文档
+新增了**Stage 2 时间拉伸**阶段，使用 SoundTouch (WSOLA) 时域引擎。本文档
 记录两个阶段的契约、cache 协议、edit 失效规则与 bypass 不变量。
 
 ## 阶段总览
@@ -22,7 +22,7 @@ vocal-time-stretch v7 在原有"Pitch correction → vocoder → playback"单阶
 ┌────────────────┐  source PCM  ┌──────────────────┐  ┌────────────────────┐
 │  Materializa-  │ ───────────▶ │   Stage 1        │  │   Stage 2          │
 │  tionStore     │              │   (chunk-wise)   │  │   (clip-wide)      │
-│                │              │   NSF + LR4 mix  │  │   Rubber Band R3   │
+│                │              │   NSF + LR4 mix  │  │   SoundTouch WSOLA   │
 │  audioBuffer   │              │   ───────────▶   │  │   ───────────▶     │
 │  pitchCurve    │              │   PitchCache     │  │   TimeStretchCache │
 │  timeGrid      │              │   (= RenderCache)│  │                    │
@@ -58,7 +58,7 @@ vocal-time-stretch v7 在原有"Pitch correction → vocoder → playback"单阶
 单 sample 风格)。Phase F+ 计划下沉到 chunkRenderWorker 内部，让 PitchCache 直接
 存全频段 mix 后 PCM——但 v7 当前实现为渐进迁移，audio thread 仍执行 LR4 mix。
 
-## 阶段 2：Time stretch → Rubber Band R3 → TimeStretchCache
+## 阶段 2：Time stretch → SoundTouch WSOLA → TimeStretchCache
 
 **Owner**：`OpenTuneAudioProcessor::stage2WorkerLoop`，独立 worker thread（独立于
 chunkRenderWorker，避免 RB ~5× 实时 CPU 阻塞 Stage 1 路径）。
@@ -68,23 +68,24 @@ buffer 后送入 RB。
 **输出**：clip-wide stretched PCM 写入 `TimeStretchCache`（一 materialization 一
 单条目）。
 
-**RB 生命周期 per edit**（`runStage2RebuildForMaterialization`）：
+**SoundTouch 生命周期 per edit**（`runStage2RebuildForMaterialization`）：
 
 ```
 1. snap = store.getSnapshot(matId)
 2. 若 snap.timeGrid->isIdentity() → 跳过 + invalidate Stage 2 cache + return
-3. rb = store.getRubberBandStretcher(matId, sr, ch)   // lazy construct
-4. keyframes = rb->buildKeyframesFromTimeGrid(*snap.timeGrid)
-5. rb->beginRebuild(timeRatio=1.0, keyframes)         // reset → setRatio → setKeyFrameMap
-6. for chunk in input chunks:
-       rb->study(chunk, isLast)
-7. for chunk in input chunks:
-       rb->process(chunk, isLast)
-       drain rb->retrieve(...) into output buffer
-8. tsCache.store(matId, output, snap.pitchRevision, snap.timeGridRevision, sr)
+3. st = store.getOpenTuneStretcher(matId, sr, ch)              // lazy construct
+4. schedule = st->buildTempoScheduleFromTimeGrid(*snap.timeGrid)
+5. st->beginRebuild(schedule)                                   // clear + cache schedule
+6. for chunk in input chunks:                                   // single pass
+       st->push(chunk, n, isLast)                                // setTempo per-segment + putSamples
+       drain st->pull(...) into output buffer
+7. (push(isLast=true) already calls SoundTouch::flush internally)
+8. truncate-or-zero-pad output to expectedOutputSamples (端点严格守恒)
+9. tsCache.store(matId, output, snap.pitchRevision, snap.timeGridRevision, sr)
 ```
 
-详见 RB Offline mode 决策的 `openspec/changes/vocal-time-stretch/design.md` Decision 2。
+详见 SoundTouch 替换 RB 的 `openspec/changes/swap-time-stretch-to-soundtouch/design.md`
+（chorus 根因诊断 + WSOLA 时域算法选型 + TempoSchedule 数学）。
 
 ## 双 cache 命中规则
 
@@ -124,7 +125,7 @@ RenderCache overlay + LR4 mix（与 v6 行为兼容）。
 
 ## RB Offline 模式硬约束
 
-`Source/Inference/RubberBandStretcher.cpp` 包装 `RubberBand::RubberBandStretcher`
+`Source/Inference/SoundTouchStretcher.cpp` 包装 `soundtouch::SoundTouch`
 (`OptionProcessOffline + EngineFiner + TransientsCrisp + FormantPreserved +
 PitchHighQuality + WindowStandard`)：
 
@@ -133,7 +134,7 @@ PitchHighQuality + WindowStandard`)：
   reset → setTimeRatio → setKeyFrameMap → study → process 全周期
 - Phase 状态机 (`Idle / Studying / Processing`) 拒绝调用顺序违反
 
-由 `Invariant_RubberBandStretcher_ResetReappliesKeyFrameMap` 单测固化。
+由 `Invariant_SoundTouchStretcher_ResetReappliesSchedule` 单测固化。
 
 ## 关键性能预算
 
@@ -156,11 +157,11 @@ UX 上 stage 2 在 drag-release 时触发，不在 drag move 中实时跑——�
       顺序不能颠倒）
 - [ ] `OpenTuneAudioProcessor::runStage2RebuildForMaterialization` 与
       `requestStage2Rebuild` (worker 入队 + identity skip + revision 重读)
-- [ ] `RubberBandStretcher::beginRebuild` 调用顺序（reset → setRatio → setKeyFrameMap）
+- [ ] `SoundTouchStretcher::beginRebuild` 调用顺序（reset → setRatio → setKeyFrameMap）
 - [ ] `RenderCache::globalCacheCurrentBytes()` 共享 LRU 计数（TimeStretchCache 进出
       也必须同步累加/减去）
 
-跑全部 vocal-time-stretch suite（time-grid + dsp-detection + rubberband +
+跑全部 vocal-time-stretch suite（time-grid + dsp-detection + soundtouch +
 time-stretch-cache + matstore-timegrid + stage2-worker + timetool-handler +
 integration-pipeline + invariant-contract，共 9 suite 72 tests）确认本管线
 契约不被新逻辑污染。
@@ -170,6 +171,6 @@ integration-pipeline + invariant-contract，共 9 suite 72 tests）确认本管�
 - 实现: `Source/PluginProcessor.cpp::stage2WorkerLoop` / `runStage2RebuildForMaterialization`
 - 缓存: `Source/Inference/RenderCache.{h,cpp}` (PitchCache alias 在
   `Source/Inference/PitchCache.h`) + `Source/Inference/TimeStretchCache.{h,cpp}`
-- 拉伸引擎: `Source/Inference/RubberBandStretcher.{h,cpp}`
+- 拉伸引擎: `Source/Inference/SoundTouchStretcher.{h,cpp}`
 - 设计冻结: `research/p0_time_stretch/DESIGN.md` v7 §5
 - vocal-time-stretch change: `openspec/changes/vocal-time-stretch/specs/two-stage-render-pipeline/spec.md`

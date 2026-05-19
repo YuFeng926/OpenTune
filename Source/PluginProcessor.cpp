@@ -13,7 +13,7 @@
 #include "Plugin/Capture/CaptureSession.h"
 #include "Inference/GameNoteGenerator.h"      // add-game-note-generator: GAME backend
 #include "Utils/LegacyNoteGenerator.h"        // add-game-note-generator: Legacy fallback
-#include "Inference/RubberBandStretcher.h"   // §7 Phase D — Stage 2 worker
+#include "Inference/SoundTouchStretcher.h"   // §7 Phase D — Stage 2 worker (WSOLA, replaces RB)
 #include "DSP/OnsetDetector.h"                // §4.9 Phase G — auto-seed TimeGrid
 #include "DSP/PhonemeClassifier.h"            // §4.9 Phase G
 #include "DSP/WordSegmenter.h"                // §4.9 Phase G
@@ -1192,13 +1192,15 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
 
     // Lazy-construct (or fetch) the per-materialization stretcher.
     constexpr double sampleRate = TimeCoordinate::kRenderSampleRate;
-    auto* stretcher = materializationStore_->getRubberBandStretcher(materializationId, sampleRate, /*channels=*/1);
+    auto* stretcher = materializationStore_->getOpenTuneStretcher(materializationId, sampleRate, /*channels=*/1);
     if (stretcher == nullptr) return false;
 
-    // Total ratio with locked-endpoints invariant is exactly 1.0; the keyframe
-    // map redistributes time within the clip without changing total length.
-    auto keyframes = stretcher->buildKeyframesFromTimeGrid(*snap.timeGrid);
-    stretcher->beginRebuild(/*timeRatio=*/1.0, keyframes);
+    // SoundTouch (WSOLA) drives time-stretch via a TempoSchedule derived from the
+    // TimeGrid.  Endpoint-locked invariant ensures totalOutputSeconds ==
+    // totalSourceSeconds, so the output length matches the input length within
+    // a few WSOLA hops (corrected by truncate/zero-pad below).
+    auto schedule = stretcher->buildTempoScheduleFromTimeGrid(*snap.timeGrid);
+    stretcher->beginRebuild(schedule);
 
     // ============================================================
     // §7 (Phase E) — Stage 2 input = Stage 1 (NSF vocoder) output
@@ -1271,40 +1273,42 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
         stage1Buffer.resize(static_cast<size_t>(totalSamples), 0.0f);
     }
 
-    // Pass 1: study
-    for (int offset = 0; offset < totalSamples; offset += kBlock) {
-        const int n = std::min(kBlock, totalSamples - offset);
-        const bool isLast = (offset + n) >= totalSamples;
-        stretcher->study(stage1Buffer.data() + offset, static_cast<size_t>(n), isLast);
-    }
-
-    // Pass 2: process
+    // SoundTouch single-pass push + drain (replaces RB's study + process double pass).
     std::vector<float> output;
     output.reserve(static_cast<size_t>(totalSamples + kBlock));
     std::vector<float> retrieveBuf(static_cast<size_t>(kBlock));
 
-    for (int offset = 0; offset < totalSamples; offset += kBlock) {
-        const int n = std::min(kBlock, totalSamples - offset);
-        const bool isLast = (offset + n) >= totalSamples;
-        stretcher->process(stage1Buffer.data() + offset, static_cast<size_t>(n), isLast);
-
+    auto drainAvailable = [&]() {
         while (true) {
             const size_t avail = stretcher->available();
             if (avail == 0) break;
             const size_t want = std::min<size_t>(avail, retrieveBuf.size());
-            const size_t got = stretcher->retrieve(retrieveBuf.data(), want);
+            const size_t got = stretcher->pull(retrieveBuf.data(), want);
             if (got == 0) break;
-            output.insert(output.end(), retrieveBuf.begin(), retrieveBuf.begin() + static_cast<std::ptrdiff_t>(got));
+            output.insert(output.end(),
+                          retrieveBuf.begin(),
+                          retrieveBuf.begin() + static_cast<std::ptrdiff_t>(got));
         }
+    };
+
+    for (int offset = 0; offset < totalSamples; offset += kBlock) {
+        const int n = std::min(kBlock, totalSamples - offset);
+        const bool isLast = (offset + n) >= totalSamples;
+        stretcher->push(stage1Buffer.data() + offset, static_cast<size_t>(n), isLast);
+        drainAvailable();
     }
-    // Final drain after process(isLast=true) — some output may still be buffered.
-    while (true) {
-        const size_t avail = stretcher->available();
-        if (avail == 0) break;
-        const size_t want = std::min<size_t>(avail, retrieveBuf.size());
-        const size_t got = stretcher->retrieve(retrieveBuf.data(), want);
-        if (got == 0) break;
-        output.insert(output.end(), retrieveBuf.begin(), retrieveBuf.begin() + static_cast<std::ptrdiff_t>(got));
+    // After push(isLast=true), SoundTouch::flush() has been called — drain any
+    // remaining buffered output (typically a few WSOLA hops worth).
+    drainAvailable();
+
+    // Endpoint enforcement (WSOLA discrete hops can drift ±N samples around the
+    // mathematical expected output length).  Truncate-or-zero-pad to the value
+    // the schedule predicts so TimeStretchCache length contract holds.
+    const size_t expectedSamples = stretcher->expectedOutputSamples();
+    if (output.size() > expectedSamples) {
+        output.resize(expectedSamples);
+    } else if (output.size() < expectedSamples) {
+        output.resize(expectedSamples, 0.0f);
     }
 
     // Re-fetch revisions just before publish (they may have advanced again).
@@ -1320,7 +1324,8 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
                    + juce::String(static_cast<juce::int64>(materializationId))
                    + " timeGridRev=" + juce::String(static_cast<juce::int64>(timeGridRev))
                    + " stage1InputSamples=" + juce::String(totalSamples)
-                   + " (Stage 1 via readPlaybackAudio dry+vocoder-overlay)");
+                   + " stage2OutputSamples=" + juce::String(static_cast<int>(stretcher->expectedOutputSamples()))
+                   + " (SoundTouch WSOLA, Stage 1 via readPlaybackAudio dry+vocoder-overlay)");
     return true;
 }
 
