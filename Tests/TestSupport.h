@@ -255,7 +255,7 @@ void runUndoManagerSuite();
 void runMemoryOptimizationSuite();
 void runTimeGridSuite();
 void runDspDetectionSuite();
-void runRubberBandStretcherSuite();
+void runSoundTouchStretcherSuite();
 void runTimeStretchCacheSuite();
 void runMaterializationStoreTimeGridSuite();
 void runStage2WorkerSuite();

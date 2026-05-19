@@ -24,6 +24,7 @@ Logs/
 openspec/
 specs/
 research/
+spike/
 *.exe
 *.dll
 *.lib

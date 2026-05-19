@@ -5,7 +5,7 @@
 
 #include "Utils/TimeCoordinate.h"
 #include "Utils/ChannelLayoutLogger.h"
-#include "Inference/RubberBandStretcher.h"   // §5.5 — needed for ~unique_ptr<RB> + lazy construction
+#include "Inference/SoundTouchStretcher.h"   // §5.5 — needed for ~unique_ptr<ST> + lazy construction
 
 namespace OpenTune {
 
@@ -466,12 +466,13 @@ bool MaterializationStore::setTimeGrid(uint64_t materializationId,
 }
 
 // ============================================================================
-// vocal-time-stretch §5.5 — lazy RubberBandStretcher accessor
+// vocal-time-stretch §5.5 — lazy SoundTouchStretcher accessor
+// (replaces RubberBandStretcher; see swap-time-stretch-to-soundtouch change)
 // ============================================================================
 
-RubberBandStretcher* MaterializationStore::getRubberBandStretcher(uint64_t materializationId,
-                                                                    double sampleRate,
-                                                                    int channels)
+SoundTouchStretcher* MaterializationStore::getOpenTuneStretcher(uint64_t materializationId,
+                                                                   double sampleRate,
+                                                                   int channels)
 {
     if (materializationId == 0 || sampleRate <= 0.0 || channels <= 0) return nullptr;
 
@@ -488,7 +489,7 @@ RubberBandStretcher* MaterializationStore::getRubberBandStretcher(uint64_t mater
     const auto it = materializations_.find(materializationId);
     if (it == materializations_.end() || it->second.isRetired_) return nullptr;
     if (it->second.stretcher == nullptr) {
-        it->second.stretcher = std::make_unique<RubberBandStretcher>(sampleRate, channels);
+        it->second.stretcher = std::make_unique<SoundTouchStretcher>(sampleRate, channels);
     }
     return it->second.stretcher.get();
 }

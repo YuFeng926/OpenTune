@@ -32,7 +32,7 @@
 #include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §3.6 — per-materialization TimeGrid
 
 namespace OpenTune {
-class RubberBandStretcher;   // forward-decl — §5.5
+class SoundTouchStretcher;   // forward-decl — §5.5 (replaces RubberBandStretcher)
 }
 
 namespace OpenTune {
@@ -175,15 +175,15 @@ public:
                      std::shared_ptr<const TimeGridSnapshot> snapshot);
 
     // ============================================================
-    // vocal-time-stretch §5.5 — per-materialization Rubber Band stretcher
+    // vocal-time-stretch §5.5 — per-materialization SoundTouch stretcher
     //
     // The stretcher is constructed lazily when first needed (Stage 2 render
     // worker) and destroyed when the materialization is destroyed.  Returns
     // a non-owning pointer; caller must NOT delete.
     // ============================================================
-    RubberBandStretcher* getRubberBandStretcher(uint64_t materializationId,
-                                                  double sampleRate,
-                                                  int channels);
+    SoundTouchStretcher* getOpenTuneStretcher(uint64_t materializationId,
+                                                double sampleRate,
+                                                int channels);
 
     // ============================================================
     // vocal-time-stretch §6.2 — store-wide TimeStretchCache
@@ -249,7 +249,7 @@ private:
         std::vector<SilentGap> silentGaps;
         std::shared_ptr<const TimeGridSnapshot> timeGrid;   // §3.6
         uint64_t timeGridRevision{0};                        // §3.6
-        std::unique_ptr<RubberBandStretcher> stretcher;     // §5.5 — lazy-constructed
+        std::unique_ptr<SoundTouchStretcher> stretcher;     // §5.5 — lazy-constructed
         bool isRetired_{false};
     };
 

@@ -12,14 +12,14 @@
  *        (anchored — already covered in TimeGridTests but re-asserted here)
  *   13.5 ARA region length invariant: τ(end_src) - τ(start_src) ≡ src duration
  *        regardless of internal handle drag (locked endpoints)
- *   13.6 RubberBandStretcher reset (via beginRebuild) re-applies KeyFrameMap
+ *   13.6 SoundTouchStretcher reset (via beginRebuild) re-applies TempoSchedule
  *        — verifies that after a previous rebuild, calling beginRebuild again
  *        with a different keyframe map transitions cleanly back to Studying.
  *
  * Suite aggregator: runInvariantContractSuite() — registered in TestMain.cpp.
  */
 #include "TestSupport.h"
-#include "Inference/RubberBandStretcher.h"
+#include "Inference/SoundTouchStretcher.h"
 #include "Utils/TimeGrid.h"
 #include "Utils/TimeGridEditAction.h"
 #include "Utils/TimeCoordinate.h"
@@ -304,58 +304,59 @@ void runInvariant_AraRegionLengthEqualsSourceDurationTest()
 }
 
 // ============================================================================
-// 13.6 — RubberBandStretcher reset (via beginRebuild) re-applies KeyFrameMap
+// 13.6 — SoundTouchStretcher reset (via beginRebuild) re-applies TempoSchedule
+// (replaces archived RubberBandStretcher equivalent;
+//  see swap-time-stretch-to-soundtouch change)
 // ============================================================================
 
-void runInvariant_RubberBandResetReappliesKeyFrameMapTest()
+void runInvariant_SoundTouchResetReappliesScheduleTest()
 {
-    constexpr const char* testName = "Invariant_RubberBandStretcher_ResetReappliesKeyFrameMap";
+    constexpr const char* testName = "Invariant_SoundTouchStretcher_ResetReappliesSchedule";
 
-    RubberBandStretcher rb(kSampleRate, /*channels=*/1);
+    SoundTouchStretcher st(kSampleRate, /*channels=*/1);
 
     auto firstSnap = TimeGridSnapshot::makeIdentity(1.0);
-    auto firstKF = rb.buildKeyframesFromTimeGrid(*firstSnap);
-    rb.beginRebuild(/*timeRatio=*/1.0, firstKF);
-    if (rb.phase() != RubberBandStretcher::Phase::Studying) {
-        logFail(testName, "after first beginRebuild, expect Studying phase");
+    auto firstSched = st.buildTempoScheduleFromTimeGrid(*firstSnap);
+    st.beginRebuild(firstSched);
+    if (st.phase() != SoundTouchStretcher::Phase::Pushing) {
+        logFail(testName, "after first beginRebuild, expect Pushing phase");
         return;
     }
 
-    // Run a partial study cycle.
+    // Push a partial cycle (isLast=true to flush + transition to Drained).
     std::vector<float> tone(static_cast<size_t>(kSampleRate / 4), 0.1f);
-    rb.study(tone.data(), tone.size(), /*isLast=*/true);
-    if (rb.phase() != RubberBandStretcher::Phase::Processing) {
-        logFail(testName, "post-study should be in Processing phase");
+    st.push(tone.data(), tone.size(), /*isLast=*/true);
+    if (st.phase() != SoundTouchStretcher::Phase::Drained) {
+        logFail(testName, "after push(isLast=true) expect Drained phase");
         return;
     }
 
-    // Now build a different keyframe map (non-identity 1.5× stretch on segment 1).
+    // Build a different schedule (non-identity 1.5× stretch on segment 1).
     std::vector<TimeHandle> stretched = {
         {1, 0.0, 0.0, HandleKind::ClipStart, true},
         {2, 0.5, 0.75, HandleKind::OnsetVoiced, false},
         {3, 1.0, 1.0, HandleKind::ClipEnd, true},
     };
     auto secondSnap = TimeGridSnapshot::makeFromHandles(std::move(stretched), 2);
-    auto secondKF = rb.buildKeyframesFromTimeGrid(*secondSnap);
-    if (secondKF == firstKF) {
-        logFail(testName, "test setup error: keyframe maps should differ");
+    auto secondSched = st.buildTempoScheduleFromTimeGrid(*secondSnap);
+    if (secondSched.identity || firstSched.identity == false) {
+        // Both should be sensible: first identity, second non-identity.
+        logFail(testName, "test setup error: schedules should differ in identity flag");
         return;
     }
 
-    // Reset and reapply via beginRebuild — phase should drop back to Studying.
-    rb.beginRebuild(/*timeRatio=*/1.0, secondKF);
-    if (rb.phase() != RubberBandStretcher::Phase::Studying) {
-        logFail(testName, "beginRebuild should reset stretcher to Studying phase, "
-                          "regardless of prior Processing phase");
+    // Reset and reapply via beginRebuild — phase should drop back to Pushing.
+    st.beginRebuild(secondSched);
+    if (st.phase() != SoundTouchStretcher::Phase::Pushing) {
+        logFail(testName, "beginRebuild should reset stretcher to Pushing phase, "
+                          "regardless of prior Drained phase");
         return;
     }
 
-    // Studying with an empty study() cycle should still allow process()/retrieve()
-    // to consume the new map.
-    rb.study(tone.data(), tone.size(), /*isLast=*/true);
-    rb.process(tone.data(), tone.size(), /*isLast=*/true);
-    if (rb.available() == 0) {
-        logFail(testName, "after second rebuild + study + process, RB should produce output");
+    // Pushing + Drained should produce non-zero output for non-identity schedule.
+    st.push(tone.data(), tone.size(), /*isLast=*/true);
+    if (st.available() == 0) {
+        logFail(testName, "after second rebuild + push, ST should produce output");
         return;
     }
     logPass(testName);
@@ -373,5 +374,5 @@ void runInvariantContractSuite()
     runInvariant_DualBypassEqualsSourcePCMTest();
     runInvariant_TimeGridEditActionConstructorVerbatimTest();
     runInvariant_AraRegionLengthEqualsSourceDurationTest();
-    runInvariant_RubberBandResetReappliesKeyFrameMapTest();
+    runInvariant_SoundTouchResetReappliesScheduleTest();
 }

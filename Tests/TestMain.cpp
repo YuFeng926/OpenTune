@@ -48,7 +48,7 @@ constexpr std::array<SuiteEntry, 20> kSuites{{
     { "memory", "memory optimization and render cache refactor", &runMemoryOptimizationSuite },
     { "time-grid", "vocal-time-stretch TimeGrid data model + tau", &runTimeGridSuite },
     { "dsp-detection", "vocal-time-stretch onset/phoneme/word-segmenter detection chain", &runDspDetectionSuite },
-    { "rubberband", "vocal-time-stretch RubberBandStretcher wrapper (Offline + R3)", &runRubberBandStretcherSuite },
+    { "soundtouch", "vocal-time-stretch SoundTouchStretcher wrapper (WSOLA)", &runSoundTouchStretcherSuite },
     { "time-stretch-cache", "vocal-time-stretch TimeStretchCache clip-wide single-entry cache", &runTimeStretchCacheSuite },
     { "matstore-timegrid", "vocal-time-stretch MaterializationStore + TimeGrid + RB lifecycle integration", &runMaterializationStoreTimeGridSuite },
     { "stage2-worker", "vocal-time-stretch Stage 2 worker + readPlaybackAudio fast path", &runStage2WorkerSuite },
