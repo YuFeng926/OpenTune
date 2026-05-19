@@ -654,6 +654,12 @@ bool PianoRollToolHandler::isEmptySpaceMouseDown(const juce::MouseEvent& e)
         return false;
     }
 
+    // TimeTool 的 mouseDown 自己处理 hit-test handle / 空区两种语义；
+    // 不能被空区意图捕获，否则 handleTimeToolMouseDown 永不触发，handle 无法拖动。
+    if (currentTool_ == ToolId::TimeTool) {
+        return false;
+    }
+
     if (hitsNoteBodyOrResizeEdge(e)) {
         return false;
     }
