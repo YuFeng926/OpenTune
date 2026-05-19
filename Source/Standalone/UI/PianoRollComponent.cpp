@@ -1226,40 +1226,41 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         if (!ctx.isTimeView()) {
             renderer_->drawLanes(g, ctx);
 
-        for (const auto& item : ctx.materializations)
-            renderer_->drawNotes(g, ctx, item);
+            for (const auto& item : ctx.materializations)
+                renderer_->drawNotes(g, ctx, item);
 
-        bool drewActivePitch = false;
-        for (const auto& item : ctx.materializations) {
-            if (item.pitchSnapshot == nullptr)
-                continue;
+            bool drewActivePitch = false;
+            for (const auto& item : ctx.materializations) {
+                if (item.pitchSnapshot == nullptr)
+                    continue;
 
-            if (showOriginalF0_) {
-                const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
-                if (!originalF0.empty())
-                    renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, 0.55f, true, ctx, item);
-            }
-
-            if (showCorrectedF0_ && !item.correctedF0.empty())
-                renderer_->drawF0Curve(g, item.correctedF0, UIColors::correctedF0, 1.0f, false, ctx, item, nullptr);
-
-            if (item.active) {
                 if (showOriginalF0_) {
                     const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
                     if (!originalF0.empty())
-                        drawSelectedOriginalF0Curve(g, originalF0);
+                        renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, 0.55f, true, ctx, item);
                 }
 
-                drawNoteDragCurvePreview(g);
+                if (showCorrectedF0_ && !item.correctedF0.empty())
+                    renderer_->drawF0Curve(g, item.correctedF0, UIColors::correctedF0, 1.0f, false, ctx, item, nullptr);
+
+                if (item.active) {
+                    if (showOriginalF0_) {
+                        const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+                        if (!originalF0.empty())
+                            drawSelectedOriginalF0Curve(g, originalF0);
+                    }
+
+                    drawNoteDragCurvePreview(g);
+                    drawHandDrawPreview(g);
+                    drawLineAnchorPreview(g);
+                    drewActivePitch = true;
+                }
+            }
+
+            if (!drewActivePitch && currentCurve_ != nullptr) {
                 drawHandDrawPreview(g);
                 drawLineAnchorPreview(g);
-                drewActivePitch = true;
             }
-        }
-
-        if (!drewActivePitch && currentCurve_ != nullptr) {
-            drawHandDrawPreview(g);
-            drawLineAnchorPreview(g);
         }
 
         for (const auto& item : ctx.materializations)
