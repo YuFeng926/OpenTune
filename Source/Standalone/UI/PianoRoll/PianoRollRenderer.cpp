@@ -735,7 +735,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                   const RenderContext& ctx,
                                   const MaterializationRenderItem& item)
 {
-    const auto& notes = item.notes;
+    const auto& notes = item.displayNotes;
     if (notes.empty()) return;
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
@@ -816,6 +816,9 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     if (f0.empty()) return;
 
     const float lineWidth = isThinLine ? 1.3f : 2.2f;
+    const juce::PathStrokeType strokeType(lineWidth,
+                                          juce::PathStrokeType::curved,
+                                          juce::PathStrokeType::rounded);
 
     struct Segment {
         juce::Path path;
@@ -837,7 +840,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
     std::size_t iStart = 0;
     std::size_t iEnd = f0.size();
-
     if (!item.f0Timeline.isEmpty())
     {
         const int marginFrames = 10;
@@ -882,7 +884,8 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         float midi = ctx.freqToMidi(frequency);
         float y = ctx.midiToY(midi);
 
-        const double absoluteTime = item.projection.projectMaterializationTimeToTimeline(item.f0Timeline.timeAtFrame(static_cast<int>(i)));
+        const double materializationTime = item.f0Timeline.timeAtFrame(static_cast<int>(i));
+        const double absoluteTime = item.projection.projectMaterializationTimeToTimeline(materializationTime);
         const int x = ctx.timeToX(absoluteTime);
 
         if (x < viewportStartX || x > viewportEndX)
@@ -911,10 +914,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         segments.push_back({currentPath, segmentStart, iEnd - 1});
     }
 
-    juce::PathStrokeType strokeType(lineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
-
     const juce::Colour selectionColour(0xFFE74C3C);
     const float selectionLineWidth = 3.0f;
+    const juce::PathStrokeType selectionStrokeType(selectionLineWidth,
+                                                   juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded);
 
     for (const auto& seg : segments)
     {
@@ -928,8 +932,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                                 static_cast<int>(seg.endIdx) < ctx.f0SelectionEndFrameExclusive;
             if (inSelection) {
                 g.setColour(selectionColour.withAlpha(alpha * 0.9f));
-                juce::PathStrokeType selStroke(selectionLineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
-                g.strokePath(seg.path, selStroke);
+                g.strokePath(seg.path, selectionStrokeType);
             } else {
                 g.setColour(colour.withAlpha(alpha * 0.7f));
                 g.strokePath(seg.path, strokeType);
@@ -940,8 +943,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                                static_cast<int>(seg.endIdx) < ctx.f0SelectionEndFrameExclusive;
             if (inSelection) {
                 g.setColour(selectionColour.withAlpha(alpha));
-                juce::PathStrokeType selStroke(selectionLineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
-                g.strokePath(seg.path, selStroke);
+                g.strokePath(seg.path, selectionStrokeType);
             } else {
                 g.setColour(colour.withAlpha(alpha));
                 g.strokePath(seg.path, strokeType);

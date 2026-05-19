@@ -45,7 +45,7 @@ sequenceDiagram
     else 空闲
         E->>E: setInferenceActive(false) → startTimerHz(30)
     end
-    E->>PR: getSingleSelectedNoteParameters / getSelectedSegmentRetuneSpeed
+    E->>PR: getSingleSelectedNoteParameters
     E->>E: resolveParameterPanelSyncDecision(scheme, ctx)
     E->>PP: setRetuneSpeed / setVibratoDepth / setVibratoRate (if decision)
     E->>AV: onHeartbeatTick() (仅在 isShowing)

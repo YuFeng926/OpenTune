@@ -313,6 +313,40 @@ std::shared_ptr<PitchCurve> makePitchCurveWithPayload(std::vector<float> origina
     return curve;
 }
 
+std::vector<float> renderPitchCurveF0(const std::shared_ptr<PitchCurve>& curve, int frameCount)
+{
+    std::vector<float> rendered(static_cast<size_t>(frameCount), 0.0f);
+    if (!curve) {
+        return rendered;
+    }
+
+    curve->renderF0Range(0,
+                         frameCount,
+                         [&](int startFrame, const float* data, int length) {
+                             std::copy(data,
+                                       data + length,
+                                       rendered.begin() + static_cast<std::ptrdiff_t>(startFrame));
+                         });
+    return rendered;
+}
+
+std::vector<float> renderPitchCurveCorrectedOnlyF0(const std::shared_ptr<PitchCurve>& curve, int frameCount)
+{
+    std::vector<float> rendered(static_cast<size_t>(frameCount), 0.0f);
+    if (!curve) {
+        return rendered;
+    }
+
+    curve->renderCorrectedOnlyRange(0,
+                                    frameCount,
+                                    [&](int startFrame, const float* data, int length) {
+                                        std::copy(data,
+                                                  data + length,
+                                                  rendered.begin() + static_cast<std::ptrdiff_t>(startFrame));
+                                    });
+    return rendered;
+}
+
 juce::MouseEvent makeMouseEvent(juce::Component& component,
                                 juce::Point<float> position,
                                 juce::Point<float> mouseDownPosition,
@@ -346,6 +380,7 @@ struct PianoRollToolHandlerHarness {
     bool commitNoteDraftResult = true;
     bool applyManualCorrectionResult = true;
     bool commitNotesAndSegmentsResult = false;
+    float retuneSpeed = 0.35f;
     int commitNoteDraftCalls = 0;
     int applyManualCorrectionCalls = 0;
     int commitNotesAndSegmentsCalls = 0;
@@ -359,6 +394,11 @@ struct PianoRollToolHandlerHarness {
     int toggleLineAnchorSegmentSelectionCalls = 0;
     int clearLineAnchorSegmentSelectionCalls = 0;
     std::vector<Note> lastCommittedNotes;
+    std::vector<PianoRollToolHandler::ManualCorrectionOp> lastManualCorrectionOps;
+    int lastManualCorrectionStartFrame = -1;
+    int lastManualCorrectionEndFrame = -1;
+    bool lastManualCorrectionPreviewOnly = false;
+    std::function<float(float)> yToFreqOverride;
     juce::Rectangle<int> lastInvalidatedArea;
     PianoRollToolHandler handler;
 
@@ -375,7 +415,7 @@ struct PianoRollToolHandlerHarness {
 
         ctx.xToTime = [](int x) { return static_cast<double>(x) * 0.01; };
         ctx.timeToX = [](double seconds) { return static_cast<int>(std::lround(seconds * 100.0)); };
-        ctx.yToFreq = [](float) { return 440.0f; };
+        ctx.yToFreq = [this](float y) { return yToFreqOverride ? yToFreqOverride(y) : 440.0f; };
         ctx.freqToY = [](float) { return 0.0f; };
 
         ctx.getCommittedNotes = [this]() -> const std::vector<Note>& { return committedNotes; };
@@ -431,7 +471,7 @@ struct PianoRollToolHandlerHarness {
 
         ctx.getMinMidi = []() { return 36.0f; };
         ctx.getMaxMidi = []() { return 84.0f; };
-        ctx.getRetuneSpeed = []() { return 0.35f; };
+        ctx.getRetuneSpeed = [this]() { return retuneSpeed; };
         ctx.getVibratoDepth = []() { return 0.0f; };
         ctx.getVibratoRate = []() { return 0.0f; };
         ctx.getAudioEditingScheme = []() { return AudioEditingScheme::Scheme::CorrectedF0Primary; };
@@ -489,8 +529,15 @@ struct PianoRollToolHandlerHarness {
         ctx.notifyEscapeKey = []() {};
         ctx.notifyNoteOffsetChanged = [](size_t, float, float) {};
 
-        ctx.applyManualCorrection = [this](std::vector<PianoRollToolHandler::ManualCorrectionOp>, int, int, bool) {
+        ctx.applyManualCorrection = [this](std::vector<PianoRollToolHandler::ManualCorrectionOp> ops,
+                                           int startFrame,
+                                           int endFrame,
+                                           bool previewOnly) {
             ++applyManualCorrectionCalls;
+            lastManualCorrectionOps = std::move(ops);
+            lastManualCorrectionStartFrame = startFrame;
+            lastManualCorrectionEndFrame = endFrame;
+            lastManualCorrectionPreviewOnly = previewOnly;
             return applyManualCorrectionResult;
         };
         ctx.selectNotesOverlappingFrames = [](int, int) { return true; };
@@ -964,7 +1011,6 @@ void runAudioEditingSchemeNotesPrimaryContractRemainsUnchangedTest()
 
     AudioEditingScheme::ParameterTargetContext parameterContext;
     parameterContext.hasSelectedNotes = true;
-    parameterContext.hasSelectedLineAnchorSegments = true;
     parameterContext.hasFrameSelection = true;
 
     const auto parameterTarget = AudioEditingScheme::resolveParameterTarget(
@@ -1158,10 +1204,26 @@ void runPianoRollComponentSourceGuardPaintUsesCachedNotesInsteadOfProcessorReadT
         return;
     }
 
-    if (!renderItemSection.contains("item.notes = getDisplayedNotes()")
-        || !renderItemSection.contains("item.notes = processor_->getMaterializationNotesById(placement.materializationId)")
+    if (!renderItemSection.contains("item.displayNotes = getDisplayedNotes()")
+        || !renderItemSection.contains("item.displayNotes = processor_->getMaterializationNotesById(placement.materializationId)")
         || !paintSection.contains("renderer_->drawNotes(g, ctx, item)")) {
-        logFail(testName, "paint path must draw notes from per-placement render items while active notes use the cached/display owner");
+        logFail(testName, "paint path must keep draft/display notes scoped to note rendering");
+        return;
+    }
+
+    const auto rendererSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp",
+        "void PianoRollRenderer::drawNotes",
+        "} // namespace OpenTune");
+    if (rendererSection.isEmpty()) {
+        logFail(testName, "failed to locate piano-roll renderer source section");
+        return;
+    }
+
+    if (!rendererSection.contains("const auto& notes = item.displayNotes")
+        || rendererSection.contains("item.notes")
+        || rendererSection.contains("committedNotes")) {
+        logFail(testName, "renderer must not let draft notes feed correctedF0 curve shaping");
         return;
     }
 
@@ -1319,9 +1381,9 @@ void runPianoRollEmptySpaceSeekHandDrawClickDoesNotApplyCorrectionTest()
     logPass(testName);
 }
 
-void runPianoRollEmptySpaceSeekLineAnchorClickDoesNotPlaceAnchorTest()
+void runPianoRollEmptySpaceSeekLineAnchorClickPlacesAnchorWithoutSeekTest()
 {
-    constexpr const char* testName = "PianoRollEmptySpaceSeek_LineAnchorClickDoesNotPlaceAnchor";
+    constexpr const char* testName = "PianoRollEmptySpaceSeek_LineAnchorClickPlacesAnchorWithoutSeek";
 
     PianoRollToolHandlerHarness harness;
     harness.handler.setTool(ToolId::LineAnchor);
@@ -1333,16 +1395,17 @@ void runPianoRollEmptySpaceSeekLineAnchorClickDoesNotPlaceAnchorTest()
     harness.handler.mouseDown(makeMouseEvent(harness.component, down, down, false));
     harness.handler.mouseUp(makeMouseEvent(harness.component, down, down, false));
 
-    if (harness.notifyPlayheadChangeCalls != 1) {
-        logFail(testName, "line-anchor empty-space click should seek once");
+    if (harness.notifyPlayheadChangeCalls != 0) {
+        logFail(testName, "line-anchor main-edit click should not seek");
         return;
     }
 
-    if (harness.state.drawing.isPlacingAnchors
-        || !harness.state.drawing.pendingAnchors.empty()
+    if (!harness.state.drawing.isPlacingAnchors
+        || harness.state.drawing.pendingAnchors.size() != 1
         || harness.applyManualCorrectionCalls != 0
-        || harness.notifyPitchCurveEditedCalls != 0) {
-        logFail(testName, "line-anchor empty-space click should not place anchors or edit F0");
+        || harness.notifyPitchCurveEditedCalls != 0
+        || harness.state.emptySpaceIntent.active) {
+        logFail(testName, "line-anchor click should start the anchor tool state without routing through empty-space seek");
         return;
     }
 
@@ -1491,6 +1554,155 @@ void runPianoRollEmptySpaceSeekLineAnchorSegmentHitStillSelectsSegmentTest()
     logPass(testName);
 }
 
+void runPianoRollLineAnchorRetuneSpeedAppliesOnlyOriginalF0ShapeResidualTest()
+{
+    constexpr const char* testName = "PianoRoll_LineAnchorRetuneSpeedAppliesOnlyOriginalF0ShapeResidual";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::LineAnchor);
+    harness.retuneSpeed = 0.25f;
+    harness.originalF0 = { 100.0f, 130.0f, 190.0f, 170.0f, 200.0f };
+    harness.pitchCurve = makePitchCurveWithPayload(harness.originalF0,
+                                                   std::vector<float>(harness.originalF0.size(), 1.0f),
+                                                   {},
+                                                   1,
+                                                   100.0);
+    harness.f0Timeline = F0Timeline{ 1, 100.0, static_cast<int>(harness.originalF0.size()) };
+    harness.yToFreqOverride = [](float y) {
+        return y < 100.0f ? 440.0f : 880.0f;
+    };
+
+    const auto first = juce::Point<float>(0.0f, 50.0f);
+    const auto second = juce::Point<float>(4.0f, 150.0f);
+    harness.handler.mouseDown(makeMouseEvent(harness.component, first, first, false));
+    harness.handler.mouseDown(makeMouseEvent(harness.component, second, second, false));
+
+    if (harness.applyManualCorrectionCalls != 1 || harness.lastManualCorrectionOps.size() != 1) {
+        logFail(testName, "line-anchor should submit one ManualCorrectionOp through the real ToolHandler path");
+        return;
+    }
+
+    const auto& op = harness.lastManualCorrectionOps.front();
+    if (op.source != CorrectedSegment::Source::LineAnchor
+        || op.startFrame != 0
+        || op.endFrameExclusive != 4
+        || op.f0Data.size() != 4
+        || harness.lastManualCorrectionStartFrame != 0
+        || harness.lastManualCorrectionEndFrame != 3
+        || harness.lastManualCorrectionPreviewOnly) {
+        logFail(testName, "line-anchor ManualCorrectionOp frame/source contract changed");
+        return;
+    }
+
+    const auto sourceTrend = [&]() {
+        double sumX = 0.0;
+        double sumY = 0.0;
+        double sumXX = 0.0;
+        double sumXY = 0.0;
+        int count = 0;
+
+        for (int frame = op.startFrame; frame < op.endFrameExclusive; ++frame) {
+            const float sourceF0 = harness.originalF0[static_cast<size_t>(frame)];
+            if (sourceF0 <= 0.0f) {
+                continue;
+            }
+
+            const double x = static_cast<double>(frame - op.startFrame);
+            const double y = std::log2(sourceF0);
+            sumX += x;
+            sumY += y;
+            sumXX += x * x;
+            sumXY += x * y;
+            ++count;
+        }
+
+        struct Trend {
+            float intercept = 0.0f;
+            float slope = 0.0f;
+        };
+
+        Trend trend;
+        const double n = static_cast<double>(count);
+        const double denom = n * sumXX - sumX * sumX;
+        trend.slope = denom != 0.0
+            ? static_cast<float>((n * sumXY - sumX * sumY) / denom)
+            : 0.0f;
+        trend.intercept = count > 0
+            ? static_cast<float>((sumY - static_cast<double>(trend.slope) * sumX) / n)
+            : 0.0f;
+        return trend;
+    }();
+
+    const auto targetLineF0 = [](int frame) {
+        const float t = static_cast<float>(frame) / 4.0f;
+        return std::pow(2.0f, std::log2(440.0f) + (std::log2(880.0f) - std::log2(440.0f)) * t);
+    };
+
+    const auto expectedF0 = [&](int frame) {
+        const float sourceLogTrend = sourceTrend.intercept
+            + sourceTrend.slope * static_cast<float>(frame - op.startFrame);
+        const float logShape = std::log2(harness.originalF0[static_cast<size_t>(frame)]) - sourceLogTrend;
+        return targetLineF0(frame) * std::pow(2.0f, logShape * (1.0f - harness.retuneSpeed));
+    };
+
+    double residualLogSum = 0.0;
+    double residualSlopeNum = 0.0;
+    for (int frame = 0; frame < 4; ++frame) {
+        if (!approxEqual(op.f0Data[static_cast<size_t>(frame)], expectedF0(frame), 1.0e-4f)) {
+            logFail(testName, "retune speed should scale only the de-positioned OriginalF0 shape residual");
+            return;
+        }
+
+        const double x = static_cast<double>(frame) - 1.5;
+        const double residualLog = std::log2(op.f0Data[static_cast<size_t>(frame)] / targetLineF0(frame));
+        residualLogSum += residualLog;
+        residualSlopeNum += x * residualLog;
+    }
+
+    if (!approxEqual(static_cast<float>(residualLogSum), 0.0f, 1.0e-5f)) {
+        logFail(testName, "line-anchor residual introduced an overall high/low pitch offset");
+        return;
+    }
+
+    if (!approxEqual(static_cast<float>(residualSlopeNum), 0.0f, 1.0e-5f)) {
+        logFail(testName, "line-anchor residual retained the OriginalF0 large-scale trend");
+        return;
+    }
+
+    const auto pureTargetAtFrame2 = targetLineF0(2);
+    if (approxEqual(op.f0Data[2], pureTargetAtFrame2, 1.0e-4f)) {
+        logFail(testName, "line-anchor generation fell back to a target-only line and lost OriginalF0 shape");
+        return;
+    }
+
+    if (harness.state.drawing.pendingAnchors.size() != 2
+        || !approxEqual(harness.state.drawing.pendingAnchors[0].freq, 440.0f, 1.0e-4f)
+        || !approxEqual(harness.state.drawing.pendingAnchors[1].freq, 880.0f, 1.0e-4f)) {
+        logFail(testName, "retune speed must not move the anchor target positions");
+        return;
+    }
+
+    CorrectedSegment committed(op.startFrame, op.endFrameExclusive, op.f0Data, op.source);
+    committed.retuneSpeed = 0.95f;
+    auto committedCurve = makePitchCurveWithPayload(harness.originalF0,
+                                                    std::vector<float>(harness.originalF0.size(), 1.0f),
+                                                    { committed },
+                                                    1,
+                                                    100.0);
+    const auto rendered = renderPitchCurveF0(committedCurve, static_cast<int>(harness.originalF0.size()));
+    const auto correctedOnly = renderPitchCurveCorrectedOnlyF0(committedCurve, static_cast<int>(harness.originalF0.size()));
+    for (int frame = 0; frame < 4; ++frame) {
+        const auto idx = static_cast<size_t>(frame);
+        if (!approxEqual(rendered[idx], op.f0Data[idx], 1.0e-4f)
+            || !approxEqual(correctedOnly[idx], op.f0Data[idx], 1.0e-4f)) {
+            logFail(testName, "render/read should consume committed f0Data without retune-time remixing");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
 void runPianoRollEmptySpaceSeekContinuousModeCentersOnSeekTest()
 {
     constexpr const char* testName = "PianoRollEmptySpaceSeek_ContinuousModeCentersOnSeek";
@@ -1573,6 +1785,108 @@ void runManualPreviewMouseUpCommitIsAtomicTest()
         || processorSection.contains("replaceCorrectedSegments(")
         || processorSection.contains("materializationStore_->setNotes(")) {
         logFail(testName, "manual preview mouse-up still mutates store-owned curve before one atomic materialization commit");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runNoteBasedSyncCommitDoesNotFallBackToNotesOnlyTest()
+{
+    constexpr const char* testName = "NoteBasedSyncCommit_DoesNotFallBackToNotesOnly";
+
+    PianoRollToolHandlerHarness harness;
+    harness.handler.setTool(ToolId::Select);
+    harness.pitchCurve = makePitchCurveWithPayload(std::vector<float>(60, 220.0f),
+                                                   std::vector<float>(60, 1.0f),
+                                                   {},
+                                                   1,
+                                                   100.0);
+    harness.f0Timeline = F0Timeline{ 1, 100.0, 60 };
+    harness.commitNotesAndSegmentsResult = false;
+
+    const auto originalNote = makeUndoTestNote(0.10, 0.20, 220.0f);
+    harness.committedNotes = { originalNote };
+    harness.state.noteDraft.active = true;
+    harness.state.noteDraft.baselineNotes = { originalNote };
+    harness.state.noteDraft.workingNotes = { originalNote };
+    harness.state.noteResize.isResizing = true;
+    harness.state.noteResize.noteIndex = 0;
+    harness.state.noteResize.edge = NoteResizeEdge::Right;
+    harness.state.noteResize.originalStartTime = originalNote.startTime;
+    harness.state.noteResize.originalEndTime = originalNote.endTime;
+
+    harness.handler.mouseDrag(makeMouseEvent(harness.component,
+                                             juce::Point<float>(35.0f, 50.0f),
+                                             juce::Point<float>(20.0f, 50.0f),
+                                             true));
+
+    harness.handler.mouseUp(makeMouseEvent(harness.component,
+                                           juce::Point<float>(35.0f, 50.0f),
+                                           juce::Point<float>(20.0f, 50.0f),
+                                           true));
+
+    if (harness.commitNotesAndSegmentsCalls != 1) {
+        logFail(testName, "note-based sync edit did not attempt notes+segments commit");
+        return;
+    }
+
+    if (harness.commitNoteDraftCalls != 0) {
+        logFail(testName, "note-based sync edit fell back to notes-only commit after notes+segments failure");
+        return;
+    }
+
+    if (harness.committedNotes.size() != 1
+        || !approxEqual(harness.committedNotes.front().startTime, originalNote.startTime, 1.0e-6)
+        || !approxEqual(harness.committedNotes.front().endTime, originalNote.endTime, 1.0e-6)) {
+        logFail(testName, "note-based sync failure still advanced notes without correctedF0");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runNoteBasedCorrectedF0SyncHasNoNotesOnlyFallbackGuardTest()
+{
+    constexpr const char* testName = "Architecture_NoteBasedCorrectedF0SyncHasNoNotesOnlyFallback";
+
+    const auto toolSource = getFileCache().get("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto componentSource = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto checkCorrectedF0SyncBranch = [&](const juce::String& source,
+                                                const juce::String& functionStart,
+                                                const juce::String& functionEnd) {
+        const auto section = source.substring(source.indexOf(functionStart),
+                                              source.indexOf(functionEnd));
+        if (section.isEmpty()) {
+            return false;
+        }
+
+        const int snapIndex = section.indexOf("auto snap = clonedCurve->getSnapshot();");
+        const int correctedCommitIndex = section.indexOf("commitEditedMaterializationNotesAndSegments(");
+        if (snapIndex < 0 || correctedCommitIndex <= snapIndex) {
+            return false;
+        }
+
+        const auto syncBranch = section.substring(snapIndex, correctedCommitIndex);
+        return !syncBranch.contains("commitNoteDraft()")
+            && !syncBranch.contains("commitEditedMaterializationNotes(notes");
+    };
+
+    if (!checkCorrectedF0SyncBranch(componentSource,
+                                    "bool PianoRollComponent::applyNoteParameterToSelectedNotes",
+                                    "bool PianoRollComponent::applyParameterToFrameRange")) {
+        logFail(testName, "notes-only fallback remains in correctedF0 sync branch");
+        return;
+    }
+
+    const juce::String helperName = "bool commitNoteBasedCorrection";
+    const auto helperSection = toolSource.substring(toolSource.indexOf(helperName),
+                                                    toolSource.indexOf("const std::vector<Note>& committedNotes"));
+    if (helperSection.isEmpty()
+        || helperSection.contains("commitNoteDraft()")
+        || !helperSection.contains("commitNotesAndSegments(")) {
+        logFail(testName, "note-based tool edits no longer use a single notes+segments commit helper");
         return;
     }
 
@@ -3300,13 +3614,12 @@ void runRenderableAraRegionViewRejectsNonAppliedSiblingTest()
     logPass(testName);
 }
 
-void runNotesPrimaryRetuneTargetPrefersNotesOverLineAnchorsTest()
+void runNotesPrimaryRetuneTargetPrefersSelectedNotesTest()
 {
-    constexpr const char* testName = "NotesPrimaryRetuneTarget_PrefersNotesOverLineAnchors";
+    constexpr const char* testName = "NotesPrimaryRetuneTarget_PrefersSelectedNotes";
 
     AudioEditingScheme::ParameterTargetContext context;
     context.hasSelectedNotes = true;
-    context.hasSelectedLineAnchorSegments = true;
     context.hasFrameSelection = true;
 
     const auto target = AudioEditingScheme::resolveParameterTarget(
@@ -3322,13 +3635,19 @@ void runNotesPrimaryRetuneTargetPrefersNotesOverLineAnchorsTest()
     logPass(testName);
 }
 
-void runCorrectedF0PrimaryRetuneTargetPreservesLineAnchorPriorityTest()
+void runCorrectedF0PrimaryRetuneTargetDoesNotExposeLineAnchorSegmentTargetTest()
 {
-    constexpr const char* testName = "CorrectedF0PrimaryRetuneTarget_PreservesLineAnchorPriority";
+    constexpr const char* testName = "CorrectedF0PrimaryRetuneTarget_DoesNotExposeLineAnchorSegmentTarget";
+
+    const auto& schemeSource = getFileCache().get("Source/Utils/AudioEditingScheme.h");
+    if (schemeSource.contains("SelectedLineAnchorSegments")
+        || schemeSource.contains("hasSelectedLineAnchorSegments")) {
+        logFail(testName, "retune target routing still exposes line-anchor segment metadata as a parameter target");
+        return;
+    }
 
     AudioEditingScheme::ParameterTargetContext context;
     context.hasSelectedNotes = true;
-    context.hasSelectedLineAnchorSegments = true;
     context.hasFrameSelection = true;
 
     const auto target = AudioEditingScheme::resolveParameterTarget(
@@ -3336,8 +3655,47 @@ void runCorrectedF0PrimaryRetuneTargetPreservesLineAnchorPriorityTest()
         AudioEditingScheme::ParameterKind::RetuneSpeed,
         context);
 
-    if (target != AudioEditingScheme::ParameterTarget::SelectedLineAnchorSegments) {
-        logFail(testName, "corrected-f0-first retune target stopped honoring selected line anchors");
+    if (target != AudioEditingScheme::ParameterTarget::SelectedNotes) {
+        logFail(testName, "corrected-f0-first retune target should not route through selected line-anchor segments");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runFrameSelectionParametersTreatManualCorrectedF0AsCommittedTruthTest()
+{
+    constexpr const char* testName = "FrameSelectionParameters_TreatManualCorrectedF0AsCommittedTruth";
+
+    const auto componentSource = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto componentHeader = getFileCache().get("Source/Standalone/UI/PianoRollComponent.h");
+
+    if (componentSource.contains("hasHandDrawCorrectionInRange")
+        || componentHeader.contains("hasHandDrawCorrectionInRange")) {
+        logFail(testName, "frame-selection parameter routing still has a HandDraw-only manual-correction guard");
+        return;
+    }
+
+    const auto helperSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "bool isManualCorrectionSource",
+        "} // namespace");
+    if (helperSection.isEmpty()
+        || !helperSection.contains("CorrectedSegment::Source::HandDraw")
+        || !helperSection.contains("CorrectedSegment::Source::LineAnchor")) {
+        logFail(testName, "manual correctedF0 source helper must cover both HandDraw and LineAnchor");
+        return;
+    }
+
+    const auto parameterSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "bool PianoRollComponent::applyParameterToFrameRange",
+        "bool PianoRollComponent::getFrameRangeForTimeSpan");
+    if (parameterSection.isEmpty()
+        || !parameterSection.contains("hasManualCorrectionInRange(startFrame, endFrameExclusive)")
+        || parameterSection.indexOf("hasManualCorrectionInRange(startFrame, endFrameExclusive)")
+            >= parameterSection.indexOf("enqueueNoteBasedCorrectionAsync(")) {
+        logFail(testName, "frame-selection parameter edits can still enqueue NoteBased recompute over manual correctedF0");
         return;
     }
 
@@ -3409,17 +3767,16 @@ void runStandaloneEditorParameterPanelSyncFollowsEditingSchemeTest()
     correctedF0Context.selectedNoteRetuneSpeedPercent = 31.0f;
     correctedF0Context.selectedNoteVibratoDepth = 17.0f;
     correctedF0Context.selectedNoteVibratoRate = 9.0f;
-    correctedF0Context.hasSelectedSegmentRetuneSpeed = true;
-    correctedF0Context.selectedSegmentRetuneSpeedPercent = 82.0f;
-
     const auto correctedF0Decision = resolveParameterPanelSyncDecision(
         AudioEditingScheme::Scheme::CorrectedF0Primary,
         correctedF0Context);
     if (!correctedF0Decision.shouldSetRetuneSpeed
-        || !approxEqual(correctedF0Decision.retuneSpeedPercent, 82.0f, 1.0e-4f)
-        || correctedF0Decision.shouldSetVibratoDepth
-        || correctedF0Decision.shouldSetVibratoRate) {
-        logFail(testName, "corrected-f0-first sync decision did not prioritize line-anchor retune speed");
+        || !correctedF0Decision.shouldSetVibratoDepth
+        || !correctedF0Decision.shouldSetVibratoRate
+        || !approxEqual(correctedF0Decision.retuneSpeedPercent, 31.0f, 1.0e-4f)
+        || !approxEqual(correctedF0Decision.vibratoDepth, 17.0f, 1.0e-4f)
+        || !approxEqual(correctedF0Decision.vibratoRate, 9.0f, 1.0e-4f)) {
+        logFail(testName, "corrected-f0-first sync decision should use selected note parameters, not line-anchor segment metadata");
         return;
     }
 
@@ -3661,6 +4018,547 @@ bool approxEqual(float a, float b, float tol)
 bool approxEqual(double a, double b, double tol)
 {
     return std::abs(a - b) <= tol;
+}
+
+void runPitchCurveNoteBasedSmoothsAdjacentNoteBoundaryTest()
+{
+    constexpr const char* testName = "PitchCurve_NoteBasedSmoothsAdjacentNoteBoundary";
+    constexpr int frameCount = 120;
+    constexpr int hopSize = 160;
+    constexpr double f0SampleRate = 16000.0;
+    constexpr double audioSampleRate = 44100.0;
+
+    std::vector<Note> notes(2);
+    notes[0].startTime = 0.0;
+    notes[0].endTime = 0.6;
+    notes[0].pitch = 220.0f;
+    notes[0].originalPitch = 220.0f;
+    notes[1].startTime = 0.6;
+    notes[1].endTime = 1.2;
+    notes[1].pitch = 440.0f;
+    notes[1].originalPitch = 220.0f;
+
+    auto makeCurve = [&] {
+        std::vector<float> originalF0(frameCount, 220.0f);
+        return makePitchCurveWithPayload(std::move(originalF0),
+                                         std::vector<float>(frameCount, 1.0f),
+                                         {},
+                                         hopSize,
+                                         f0SampleRate);
+    };
+
+    {
+        auto curve = makeCurve();
+        curve->applyCorrectionToRange(notes, 0, frameCount, 1.0f, 0.0f, 7.5f, audioSampleRate);
+
+        const auto f0 = renderPitchCurveF0(curve, frameCount);
+        if (!approxEqual(f0[59], 220.0f, 1.0e-3f) || !approxEqual(f0[60], 440.0f, 1.0e-3f)) {
+            logFail(testName, "retuneSpeed=1 should keep the note boundary fully locked to note targets");
+            return;
+        }
+    }
+
+    {
+        auto curve = makeCurve();
+        curve->applyCorrectionToRange(notes, 0, frameCount, 0.0f, 0.0f, 7.5f, audioSampleRate);
+
+        const auto f0 = renderPitchCurveF0(curve, frameCount);
+        const float boundaryJumpSemitones = std::abs(PitchUtils::freqToMidi(f0[60]) - PitchUtils::freqToMidi(f0[59]));
+        if (boundaryJumpSemitones >= 3.0f) {
+            logFail(testName, "retuneSpeed=0 should smooth the correctedF0 output across adjacent note boundaries");
+            return;
+        }
+
+        if (!(f0[56] > 220.0f
+              && f0[56] < f0[59]
+              && f0[59] < f0[60]
+              && f0[60] < f0[63]
+              && f0[63] < 440.0f)) {
+            logFail(testName, "retuneSpeed=0 should form a monotonic local output transition, not a two-frame corner nudge");
+            return;
+        }
+
+        if (!approxEqual(f0[50], 220.0f, 1.0e-3f) || !approxEqual(f0[70], 440.0f, 1.0e-3f)) {
+            logFail(testName, "note-boundary smoothing should stay local to the transition context");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runPitchCurveNoteBasedLocalRecomputeMatchesSmoothBoundaryTest()
+{
+    constexpr const char* testName = "PitchCurve_NoteBasedLocalRecomputeMatchesSmoothBoundary";
+    constexpr int frameCount = 180;
+    constexpr int hopSize = 160;
+    constexpr double f0SampleRate = 16000.0;
+    constexpr double audioSampleRate = 44100.0;
+    constexpr float retuneSpeed = 0.15f;
+
+    std::vector<Note> notes(3);
+    notes[0].startTime = 0.0;
+    notes[0].endTime = 0.6;
+    notes[0].pitch = 220.0f;
+    notes[0].originalPitch = 220.0f;
+    notes[1].startTime = 0.6;
+    notes[1].endTime = 1.2;
+    notes[1].pitch = 440.0f;
+    notes[1].originalPitch = 220.0f;
+    notes[2].startTime = 1.2;
+    notes[2].endTime = 1.8;
+    notes[2].pitch = 330.0f;
+    notes[2].originalPitch = 220.0f;
+
+    auto makeCurve = [&] {
+        return makePitchCurveWithPayload(std::vector<float>(frameCount, 220.0f),
+                                         std::vector<float>(frameCount, 1.0f),
+                                         {},
+                                         hopSize,
+                                         f0SampleRate);
+    };
+
+    auto fullRangeCurve = makeCurve();
+    fullRangeCurve->applyCorrectionToRange(notes, 0, frameCount, retuneSpeed, 0.0f, 7.5f, audioSampleRate);
+    const auto fullRangeF0 = renderPitchCurveF0(fullRangeCurve, frameCount);
+
+    auto locallyRecomputedCurve = makeCurve();
+    locallyRecomputedCurve->applyCorrectionToRange(notes, 0, frameCount, retuneSpeed, 0.0f, 7.5f, audioSampleRate);
+    locallyRecomputedCurve->applyCorrectionToRange(notes, 60, 120, retuneSpeed, 0.0f, 7.5f, audioSampleRate);
+    const auto localF0 = renderPitchCurveF0(locallyRecomputedCurve, frameCount);
+
+    for (int frame = 50; frame < 70; ++frame) {
+        if (!approxEqual(fullRangeF0[frame], localF0[frame], 1.0e-4f)) {
+            logFail(testName, "local recompute produced a different correctedF0 corner at the first note boundary");
+            return;
+        }
+    }
+
+    for (int frame = 110; frame < 130; ++frame) {
+        if (!approxEqual(fullRangeF0[frame], localF0[frame], 1.0e-4f)) {
+            logFail(testName, "local recompute produced a different correctedF0 corner at the second note boundary");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runPitchCurveNoteBasedDoesNotCreateEdgeTransitionSegmentsTest()
+{
+    constexpr const char* testName = "PitchCurve_NoteBasedDoesNotCreateEdgeTransitionSegments";
+    constexpr int frameCount = 140;
+    constexpr int hopSize = 160;
+    constexpr double f0SampleRate = 16000.0;
+    constexpr double audioSampleRate = 44100.0;
+    constexpr float retuneSpeed = 0.15f;
+
+    std::vector<Note> notes(2);
+    notes[0].startTime = 0.0;
+    notes[0].endTime = 0.7;
+    notes[0].pitch = 220.0f;
+    notes[0].originalPitch = 220.0f;
+    notes[1].startTime = 0.7;
+    notes[1].endTime = 1.4;
+    notes[1].pitch = 440.0f;
+    notes[1].originalPitch = 220.0f;
+
+    auto curve = makePitchCurveWithPayload(std::vector<float>(frameCount, 220.0f),
+                                           std::vector<float>(frameCount, 1.0f),
+                                           {},
+                                           hopSize,
+                                           f0SampleRate);
+
+    curve->applyCorrectionToRange(notes, 50, 90, retuneSpeed, 0.0f, 7.5f, audioSampleRate);
+
+    const auto snap = curve->getSnapshot();
+    if (!snap) {
+        logFail(testName, "pitch curve snapshot missing after note-based correction");
+        return;
+    }
+
+    const auto& segments = snap->getCorrectedSegments();
+    if (segments.size() != 1) {
+        logFail(testName, "note-based correction should not create separate edge transition segments");
+        return;
+    }
+
+    const auto expectedRange = PitchCurve::expandNoteBasedCorrectionRange(50, 90, frameCount);
+    const auto& segment = segments.front();
+    if (segment.source != CorrectedSegment::Source::NoteBased
+        || segment.startFrame != expectedRange.startFrame
+        || segment.endFrame != expectedRange.endFrameExclusive
+            || segment.f0Data.size() != static_cast<size_t>(expectedRange.endFrameExclusive - expectedRange.startFrame)) {
+        logFail(testName, "note-based correction segment does not match the expanded calculation range");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPitchCurveNoteBasedPreservesAdjacentManualSegmentsTest()
+{
+    constexpr const char* testName = "PitchCurve_NoteBasedPreservesAdjacentManualSegments";
+    constexpr int frameCount = 140;
+    constexpr int hopSize = 160;
+    constexpr double f0SampleRate = 16000.0;
+    constexpr double audioSampleRate = 44100.0;
+
+    std::vector<Note> notes(1);
+    notes[0].startTime = 0.5;
+    notes[0].endTime = 1.0;
+    notes[0].pitch = 330.0f;
+    notes[0].originalPitch = 220.0f;
+
+    CorrectedSegment handDraw(45, 52, { 301.0f, 302.0f, 303.0f, 304.0f, 305.0f, 306.0f, 307.0f }, CorrectedSegment::Source::HandDraw);
+    handDraw.retuneSpeed = 0.42f;
+    CorrectedSegment lineAnchor(108, 116, { 401.0f, 402.0f, 403.0f, 404.0f, 405.0f, 406.0f, 407.0f, 408.0f }, CorrectedSegment::Source::LineAnchor);
+    lineAnchor.retuneSpeed = 0.65f;
+    CorrectedSegment overlappingManual(80, 84, { 501.0f, 502.0f, 503.0f, 504.0f }, CorrectedSegment::Source::HandDraw);
+
+    auto curve = makePitchCurveWithPayload(std::vector<float>(frameCount, 220.0f),
+                                           std::vector<float>(frameCount, 1.0f),
+                                           { handDraw, overlappingManual, lineAnchor },
+                                           hopSize,
+                                           f0SampleRate);
+
+    curve->applyCorrectionToRange(notes, 60, 100, 0.2f, 0.0f, 7.5f, audioSampleRate);
+
+    const auto snap = curve->getSnapshot();
+    if (!snap) {
+        logFail(testName, "pitch curve snapshot missing after note-based correction");
+        return;
+    }
+
+    const auto& segments = snap->getCorrectedSegments();
+    const auto handIt = std::find_if(segments.begin(), segments.end(), [](const CorrectedSegment& seg) {
+        return seg.source == CorrectedSegment::Source::HandDraw;
+    });
+    const auto lineIt = std::find_if(segments.begin(), segments.end(), [](const CorrectedSegment& seg) {
+        return seg.source == CorrectedSegment::Source::LineAnchor;
+    });
+    const auto overlapIt = std::find_if(segments.begin(), segments.end(), [](const CorrectedSegment& seg) {
+        return seg.startFrame == 80 && seg.endFrame == 84 && seg.source == CorrectedSegment::Source::HandDraw;
+    });
+
+    if (handIt == segments.end() || lineIt == segments.end() || overlapIt == segments.end()) {
+        logFail(testName, "note-based recompute removed adjacent manual segment");
+        return;
+    }
+
+    if (handIt->startFrame != handDraw.startFrame
+        || handIt->endFrame != handDraw.endFrame
+        || handIt->source != handDraw.source
+        || handIt->retuneSpeed != handDraw.retuneSpeed
+        || handIt->f0Data != handDraw.f0Data) {
+        logFail(testName, "hand-draw segment changed during note-based recompute");
+        return;
+    }
+
+    if (lineIt->startFrame != lineAnchor.startFrame
+        || lineIt->endFrame != lineAnchor.endFrame
+        || lineIt->source != lineAnchor.source
+        || lineIt->retuneSpeed != lineAnchor.retuneSpeed
+        || lineIt->f0Data != lineAnchor.f0Data) {
+        logFail(testName, "line-anchor segment changed during note-based recompute");
+        return;
+    }
+
+    if (overlapIt->f0Data != overlappingManual.f0Data) {
+        logFail(testName, "manual segment inside expanded note-based context changed");
+        return;
+    }
+
+    for (const auto& seg : segments) {
+        if (seg.source != CorrectedSegment::Source::NoteBased) {
+            continue;
+        }
+        if (seg.startFrame < overlappingManual.endFrame && seg.endFrame > overlappingManual.startFrame) {
+            logFail(testName, "note-based insertion overlapped a preserved manual segment");
+            return;
+        }
+    }
+
+    const auto noteBasedCount = std::count_if(segments.begin(), segments.end(), [](const CorrectedSegment& seg) {
+        return seg.source == CorrectedSegment::Source::NoteBased;
+    });
+    if (noteBasedCount == 0) {
+        logFail(testName, "note-based recompute should replace only note-based source segments");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPitchCurveLineAnchorRenderUsesCommittedCorrectedF0Test()
+{
+    constexpr const char* testName = "PitchCurve_LineAnchorRenderUsesCommittedCorrectedF0";
+
+    CorrectedSegment lineAnchor(1, 4, { 200.0f, 200.0f, 200.0f }, CorrectedSegment::Source::LineAnchor);
+    lineAnchor.retuneSpeed = 0.15f;
+
+    auto curve = makePitchCurveWithPayload({ 100.0f, 100.0f, 100.0f, 100.0f, 100.0f },
+                                           { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f },
+                                           { lineAnchor },
+                                           1,
+                                           100.0);
+
+    const auto f0 = renderPitchCurveF0(curve, 5);
+    if (!approxEqual(f0[1], 200.0f, 1.0e-4f)
+        || !approxEqual(f0[2], 200.0f, 1.0e-4f)
+        || !approxEqual(f0[3], 200.0f, 1.0e-4f)) {
+        logFail(testName, "LineAnchor renderF0Range reinterpreted committed f0Data through retuneSpeed");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPitchCurveLineAnchorCorrectedOnlyUsesCommittedCorrectedF0Test()
+{
+    constexpr const char* testName = "PitchCurve_LineAnchorCorrectedOnlyUsesCommittedCorrectedF0";
+
+    CorrectedSegment lineAnchor(1, 4, { 200.0f, 200.0f, 200.0f }, CorrectedSegment::Source::LineAnchor);
+    lineAnchor.retuneSpeed = 0.15f;
+
+    auto curve = makePitchCurveWithPayload({ 100.0f, 100.0f, 100.0f, 100.0f, 100.0f },
+                                           { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f },
+                                           { lineAnchor },
+                                           1,
+                                           100.0);
+
+    const auto f0 = renderPitchCurveCorrectedOnlyF0(curve, 5);
+    if (!approxEqual(f0[0], 0.0f, 1.0e-4f)
+        || !approxEqual(f0[1], 200.0f, 1.0e-4f)
+        || !approxEqual(f0[2], 200.0f, 1.0e-4f)
+        || !approxEqual(f0[3], 200.0f, 1.0e-4f)
+        || !approxEqual(f0[4], 0.0f, 1.0e-4f)) {
+        logFail(testName, "LineAnchor renderCorrectedOnlyRange reinterpreted committed f0Data through retuneSpeed");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPitchCurveManualCorrectionDoesNotCreateEdgeTransitionSegmentsTest()
+{
+    constexpr const char* testName = "PitchCurve_ManualCorrectionDoesNotCreateEdgeTransitionSegments";
+
+    auto curve = makePitchCurveWithPayload({ 100.0f, 105.0f, 110.0f, 115.0f, 120.0f, 125.0f, 130.0f },
+                                           { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f },
+                                           {},
+                                           1,
+                                           100.0);
+
+    const std::vector<float> committedF0 { 220.0f, 230.0f, 240.0f };
+    curve->setManualCorrectionRange(2, 5, committedF0, CorrectedSegment::Source::LineAnchor);
+
+    const auto snap = curve->getSnapshot();
+    if (!snap) {
+        logFail(testName, "pitch curve snapshot missing after manual correction");
+        return;
+    }
+
+    const auto& segments = snap->getCorrectedSegments();
+    if (segments.size() != 1) {
+        logFail(testName, "manual correction created derived edge transition segments");
+        return;
+    }
+
+    const auto& segment = segments.front();
+    if (segment.source != CorrectedSegment::Source::LineAnchor
+        || segment.startFrame != 2
+        || segment.endFrame != 5
+        || segment.f0Data != committedF0) {
+        logFail(testName, "manual correction segment should be exactly the committed f0Data range");
+        return;
+    }
+
+    const auto correctedOnly = renderPitchCurveCorrectedOnlyF0(curve, 7);
+    if (!approxEqual(correctedOnly[0], 0.0f, 1.0e-4f)
+        || !approxEqual(correctedOnly[1], 0.0f, 1.0e-4f)
+        || !approxEqual(correctedOnly[2], 220.0f, 1.0e-4f)
+        || !approxEqual(correctedOnly[3], 230.0f, 1.0e-4f)
+        || !approxEqual(correctedOnly[4], 240.0f, 1.0e-4f)
+        || !approxEqual(correctedOnly[5], 0.0f, 1.0e-4f)
+        || !approxEqual(correctedOnly[6], 0.0f, 1.0e-4f)) {
+        logFail(testName, "manual correction leaked correctedF0 outside the committed range");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollRendererCorrectedF0DoesNotForceHardBoundaryStrokeTest()
+{
+    constexpr const char* testName = "PianoRollRenderer_CorrectedF0DoesNotForceHardBoundaryStroke";
+
+    const auto& rendererSource = getFileCache().get("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    if (rendererSource.contains("drawHardCorrectedF0Corners")
+        || rendererSource.contains("previousNoteIndex != currentNoteIndex")
+        || rendererSource.contains("rightNote.startTime")) {
+        logFail(testName, "correctedF0 rendering still forces visual note-boundary corners");
+        return;
+    }
+
+    if (!rendererSource.contains("juce::PathStrokeType::curved")
+        || !rendererSource.contains("juce::PathStrokeType::rounded")
+        || rendererSource.contains("juce::PathStrokeType::mitered")
+        || rendererSource.contains("juce::PathStrokeType::butt")) {
+        logFail(testName, "correctedF0 rendering should draw the data curve instead of enforcing a hard-corner style");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runProcessorAutoTuneAndLocalRetuneFifteenPercentKeepSameSmoothBoundaryTest()
+{
+    constexpr const char* testName = "Processor_AutoTuneAndLocalRetuneFifteenPercentKeepSameSmoothBoundary";
+    constexpr int frameCount = 180;
+    constexpr int hopSize = 160;
+    constexpr double f0SampleRate = 16000.0;
+    constexpr double audioSampleRate = 44100.0;
+    constexpr float retuneSpeed = 0.15f;
+
+    auto makeAutoNotes = [] {
+        std::vector<Note> notes(3);
+        notes[0].startTime = 0.0;
+        notes[0].endTime = 0.6;
+        notes[0].pitch = 220.0f;
+        notes[0].originalPitch = 220.0f;
+        notes[1].startTime = 0.6;
+        notes[1].endTime = 1.2;
+        notes[1].pitch = 440.0f;
+        notes[1].originalPitch = 220.0f;
+        notes[2].startTime = 1.2;
+        notes[2].endTime = 1.8;
+        notes[2].pitch = 330.0f;
+        notes[2].originalPitch = 220.0f;
+        return notes;
+    };
+
+    OpenTuneAudioProcessor processor;
+    const auto committed = processor.commitPreparedImportAsPlacement(
+        makePreparedImport("auto-local-retune-15", frameCount),
+        {0, 0.0});
+    if (!committed.isValid()) {
+        logFail(testName, "failed to create materialization for auto/local retune comparison");
+        return;
+    }
+
+    auto baseCurve = makePitchCurveWithPayload(std::vector<float>(frameCount, 220.0f),
+                                               std::vector<float>(frameCount, 1.0f),
+                                               {},
+                                               hopSize,
+                                               f0SampleRate);
+    if (!processor.setMaterializationPitchCurveById(committed.materializationId, baseCurve)) {
+        logFail(testName, "failed to seed materialization pitch curve");
+        return;
+    }
+
+    const auto autoNotes = makeAutoNotes();
+    if (!processor.commitAutoTuneGeneratedNotesByMaterializationId(committed.materializationId,
+                                                                   autoNotes,
+                                                                   0,
+                                                                   frameCount,
+                                                                   retuneSpeed,
+                                                                   0.0f,
+                                                                   7.5f,
+                                                                   audioSampleRate)) {
+        logFail(testName, "processor AutoTune commit failed");
+        return;
+    }
+
+    const auto autoF0 = renderPitchCurveF0(
+        processor.getMaterializationPitchCurveById(committed.materializationId),
+        frameCount);
+
+    auto retunedNotes = processor.getMaterializationNotesById(committed.materializationId);
+    if (retunedNotes.size() != autoNotes.size()) {
+        logFail(testName, "AutoTune commit did not store the generated notes");
+        return;
+    }
+
+    retunedNotes[1].selected = true;
+    retunedNotes[1].retuneSpeed = retuneSpeed;
+    retunedNotes[1].dirty = true;
+
+    auto localCurve = processor.getMaterializationPitchCurveById(committed.materializationId);
+    if (!localCurve) {
+        logFail(testName, "missing materialization pitch curve before local retune");
+        return;
+    }
+
+    auto recomputedCurve = localCurve->clone();
+    recomputedCurve->applyCorrectionToRange(retunedNotes, 60, 120, retuneSpeed, 0.0f, 7.5f, audioSampleRate);
+    const auto recomputedSnap = recomputedCurve->getSnapshot();
+    if (!recomputedSnap
+        || !processor.commitMaterializationNotesAndSegmentsById(committed.materializationId,
+                                                                retunedNotes,
+                                                                recomputedSnap->getCorrectedSegments())) {
+        logFail(testName, "local 15 percent retune commit failed");
+        return;
+    }
+
+    const auto localF0 = renderPitchCurveF0(
+        processor.getMaterializationPitchCurveById(committed.materializationId),
+        frameCount);
+
+    for (int frame = 50; frame < 70; ++frame) {
+        if (!approxEqual(autoF0[frame], localF0[frame], 1.0e-4f)) {
+            logFail(testName, "AutoTune 15 percent and local 15 percent retune differ at the first note boundary");
+            return;
+        }
+    }
+
+    for (int frame = 110; frame < 130; ++frame) {
+        if (!approxEqual(autoF0[frame], localF0[frame], 1.0e-4f)) {
+            logFail(testName, "AutoTune 15 percent and local 15 percent retune differ at the second note boundary");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runProcessorLineAnchorRenderUsesCommittedCorrectedF0Test()
+{
+    constexpr const char* testName = "Processor_LineAnchorRenderUsesCommittedCorrectedF0";
+
+    OpenTuneAudioProcessor processor;
+    const auto committed = processor.commitPreparedImportAsPlacement(
+        makePreparedImport("processor-line-anchor-f0-truth", 128),
+        {0, 0.0});
+    if (!committed.isValid()) {
+        logFail(testName, "failed to create materialization for processor line-anchor render test");
+        return;
+    }
+
+    CorrectedSegment lineAnchor(1, 4, { 200.0f, 200.0f, 200.0f }, CorrectedSegment::Source::LineAnchor);
+    lineAnchor.retuneSpeed = 0.15f;
+
+    auto curve = makePitchCurveWithPayload({ 100.0f, 100.0f, 100.0f, 100.0f, 100.0f },
+                                           { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f },
+                                           { lineAnchor },
+                                           1,
+                                           100.0);
+    if (!processor.setMaterializationPitchCurveById(committed.materializationId, curve)) {
+        logFail(testName, "failed to seed processor materialization pitch curve");
+        return;
+    }
+
+    const auto f0 = renderPitchCurveF0(
+        processor.getMaterializationPitchCurveById(committed.materializationId),
+        5);
+    if (!approxEqual(f0[1], 200.0f, 1.0e-4f)
+        || !approxEqual(f0[2], 200.0f, 1.0e-4f)
+        || !approxEqual(f0[3], 200.0f, 1.0e-4f)) {
+        logFail(testName, "processor-owned render path reinterpreted LineAnchor f0Data through retuneSpeed");
+        return;
+    }
+
+    logPass(testName);
 }
 
 MaterializationStore::CreateMaterializationRequest makeTestClipRequest()
@@ -4390,6 +5288,15 @@ void runCoreBehaviorSuite()
     runSimdAcceleratorDotProductLargeVectorTest();
     runChannelLayoutNumericGuardTest();
     runChannelLayoutCaptureSegmentSnapshotTest();
+    runPitchCurveNoteBasedSmoothsAdjacentNoteBoundaryTest();
+    runPitchCurveNoteBasedLocalRecomputeMatchesSmoothBoundaryTest();
+    runPitchCurveNoteBasedDoesNotCreateEdgeTransitionSegmentsTest();
+    runPitchCurveNoteBasedPreservesAdjacentManualSegmentsTest();
+    runPitchCurveLineAnchorRenderUsesCommittedCorrectedF0Test();
+    runPitchCurveLineAnchorCorrectedOnlyUsesCommittedCorrectedF0Test();
+    runPitchCurveManualCorrectionDoesNotCreateEdgeTransitionSegmentsTest();
+    runPianoRollRendererCorrectedF0DoesNotForceHardBoundaryStrokeTest();
+    runProcessorAutoTuneAndLocalRetuneFifteenPercentKeepSameSmoothBoundaryTest();
 }
 
 // ============================================================================
@@ -4832,6 +5739,7 @@ void runProcessorBehaviorSuite()
     runCaptureSessionDisplaySegmentUpdatesOnRenderCompleteTest();
     runProcessorStateVersionFiveAndNoBpmTest();
     runProcessorStateOldVersionRejectedTest();
+    runProcessorLineAnchorRenderUsesCommittedCorrectedF0Test();
     // undo-affected-range-passthrough anchor tests
     runPianoRollEditActionAffectedRangeStoredVerbatimTest();
     runPianoRollEditActionAffectedRangeIndependentOfSegmentsTest();
@@ -4858,8 +5766,9 @@ void runUiBehaviorSuite()
     runAudioEditingSchemeNotesPrimaryContractRemainsUnchangedTest();
     runKeyShortcutMatchingUsesExplicitSettingsInputTest();
     runThemeAndLanguageStartupInitializeFromAppPreferencesTest();
-    runNotesPrimaryRetuneTargetPrefersNotesOverLineAnchorsTest();
-    runCorrectedF0PrimaryRetuneTargetPreservesLineAnchorPriorityTest();
+    runNotesPrimaryRetuneTargetPrefersSelectedNotesTest();
+    runCorrectedF0PrimaryRetuneTargetDoesNotExposeLineAnchorSegmentTargetTest();
+    runFrameSelectionParametersTreatManualCorrectedF0AsCommittedTruthTest();
     runNotesPrimaryAutoTuneUsesSelectedNotesRangeTest();
     runCorrectedF0PrimaryAutoTunePrefersSelectionAreaTest();
     runPianoRollHotPathSourceGuardNoPerEventDebugLoggingTest();
@@ -4876,14 +5785,17 @@ void runUiBehaviorSuite()
     runPianoRollEmptySpaceSeekMouseUpWithinThresholdSeeksOnceTest();
     runPianoRollEmptySpaceSeekDrawNoteClickDoesNotCreateNoteTest();
     runPianoRollEmptySpaceSeekHandDrawClickDoesNotApplyCorrectionTest();
-    runPianoRollEmptySpaceSeekLineAnchorClickDoesNotPlaceAnchorTest();
+    runPianoRollEmptySpaceSeekLineAnchorClickPlacesAnchorWithoutSeekTest();
     runPianoRollEmptySpaceSeekSelectDragBeyondThresholdStartsBoxSelectionTest();
     runPianoRollEmptySpaceSeekSelectDragMouseUpFinishesBoxSelectionTest();
     runPianoRollEmptySpaceSeekDrawNoteDragBeyondThresholdCommitsNoteWithoutSeekTest();
     runPianoRollEmptySpaceSeekToolSwitchCancelsPendingIntentTest();
     runPianoRollEmptySpaceSeekLineAnchorSegmentHitStillSelectsSegmentTest();
+    runPianoRollLineAnchorRetuneSpeedAppliesOnlyOriginalF0ShapeResidualTest();
     runPianoRollEmptySpaceSeekContinuousModeCentersOnSeekTest();
     runManualPreviewMouseUpCommitIsAtomicTest();
+    runNoteBasedSyncCommitDoesNotFallBackToNotesOnlyTest();
+    runNoteBasedCorrectedF0SyncHasNoNotesOnlyFallbackGuardTest();
     runCorrectedF0PreviewOnlyActivatesInCorrectedF0PrimaryTest();
     runPianoRollVisualInvalidationDirtyAreasMergeWithoutForcedFullRepaintTest();
     runAudioFormatRegistryRegistersImportFormatsTest();
@@ -4904,12 +5816,13 @@ void runPianoRollIntentBehaviorSuite()
     runPianoRollEmptySpaceSeekMouseUpWithinThresholdSeeksOnceTest();
     runPianoRollEmptySpaceSeekDrawNoteClickDoesNotCreateNoteTest();
     runPianoRollEmptySpaceSeekHandDrawClickDoesNotApplyCorrectionTest();
-    runPianoRollEmptySpaceSeekLineAnchorClickDoesNotPlaceAnchorTest();
+    runPianoRollEmptySpaceSeekLineAnchorClickPlacesAnchorWithoutSeekTest();
     runPianoRollEmptySpaceSeekSelectDragBeyondThresholdStartsBoxSelectionTest();
     runPianoRollEmptySpaceSeekSelectDragMouseUpFinishesBoxSelectionTest();
     runPianoRollEmptySpaceSeekDrawNoteDragBeyondThresholdCommitsNoteWithoutSeekTest();
     runPianoRollEmptySpaceSeekToolSwitchCancelsPendingIntentTest();
     runPianoRollEmptySpaceSeekLineAnchorSegmentHitStillSelectsSegmentTest();
+    runPianoRollLineAnchorRetuneSpeedAppliesOnlyOriginalF0ShapeResidualTest();
     runPianoRollEmptySpaceSeekContinuousModeCentersOnSeekTest();
 }
 

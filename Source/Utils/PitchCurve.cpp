@@ -6,23 +6,7 @@
 
 namespace OpenTune {
 
-constexpr int kUnifiedTransitionFrames = 10;
-
 namespace {
-
-bool hasSegmentOverlap(const std::vector<CorrectedSegment>& segments, int rangeStart, int rangeEnd)
-{
-    if (rangeEnd <= rangeStart) {
-        return false;
-    }
-    for (const auto& seg : segments) {
-        if (seg.endFrame <= rangeStart || seg.startFrame >= rangeEnd) {
-            continue;
-        }
-        return true;
-    }
-    return false;
-}
 
 void insertSegmentSorted(std::vector<CorrectedSegment>& segments, CorrectedSegment&& seg)
 {
@@ -31,6 +15,54 @@ void insertSegmentSorted(std::vector<CorrectedSegment>& segments, CorrectedSegme
             return s.startFrame < frame;
         });
     segments.insert(insertPos, std::move(seg));
+}
+
+void clearSegmentsMatchingSourceInRangePreserveOutside(std::vector<CorrectedSegment>& segments,
+                                                       int startFrame,
+                                                       int endFrame,
+                                                       CorrectedSegment::Source source)
+{
+    if (startFrame >= endFrame) {
+        return;
+    }
+
+    std::vector<CorrectedSegment> kept;
+    kept.reserve(segments.size() + 1);
+
+    for (const auto& seg : segments) {
+        if (seg.source != source) {
+            kept.push_back(seg);
+            continue;
+        }
+
+        if (seg.endFrame <= startFrame || seg.startFrame >= endFrame) {
+            kept.push_back(seg);
+            continue;
+        }
+
+        if (seg.startFrame < startFrame) {
+            CorrectedSegment left = seg;
+            left.endFrame = startFrame;
+            const int leftLen = left.endFrame - left.startFrame;
+            if (leftLen > 0 && leftLen <= static_cast<int>(seg.f0Data.size())) {
+                left.f0Data.assign(seg.f0Data.begin(), seg.f0Data.begin() + leftLen);
+                kept.push_back(std::move(left));
+            }
+        }
+
+        if (seg.endFrame > endFrame) {
+            CorrectedSegment right = seg;
+            right.startFrame = endFrame;
+            const int offset = right.startFrame - seg.startFrame;
+            const int rightLen = right.endFrame - right.startFrame;
+            if (offset >= 0 && rightLen > 0 && offset + rightLen <= static_cast<int>(seg.f0Data.size())) {
+                right.f0Data.assign(seg.f0Data.begin() + offset, seg.f0Data.begin() + offset + rightLen);
+                kept.push_back(std::move(right));
+            }
+        }
+    }
+
+    segments.swap(kept);
 }
 
 void clearSegmentsInRangePreserveOutside(std::vector<CorrectedSegment>& segments, int startFrame, int endFrame)
@@ -73,128 +105,142 @@ void clearSegmentsInRangePreserveOutside(std::vector<CorrectedSegment>& segments
     segments.swap(kept);
 }
 
-std::optional<CorrectedSegment> buildLeftTransitionSegment(
-    const CorrectedSegment& centerSeg,
-    const std::vector<float>& originalF0,
-    const std::vector<CorrectedSegment>& existingSegments,
-    int transitionFrames)
+void insertNoteBasedSegmentPreservingNonNoteBasedSegments(std::vector<CorrectedSegment>& segments,
+                                                          CorrectedSegment&& noteBasedSegment)
 {
-    if (centerSeg.f0Data.empty() || transitionFrames <= 0 || originalF0.empty()) {
-        return std::nullopt;
+    std::vector<std::pair<int, int>> preservedRanges;
+    for (const auto& seg : segments) {
+        if (seg.source == CorrectedSegment::Source::NoteBased
+            || seg.endFrame <= noteBasedSegment.startFrame
+            || seg.startFrame >= noteBasedSegment.endFrame) {
+            continue;
+        }
+
+        preservedRanges.emplace_back(std::max(seg.startFrame, noteBasedSegment.startFrame),
+                                     std::min(seg.endFrame, noteBasedSegment.endFrame));
     }
 
-    const float boundaryF0 = centerSeg.f0Data.front();
-    if (boundaryF0 <= 0.0f || centerSeg.startFrame <= 0) {
-        return std::nullopt;
+    if (preservedRanges.empty()) {
+        insertSegmentSorted(segments, std::move(noteBasedSegment));
+        return;
     }
 
-    const int transStart = std::max(0, centerSeg.startFrame - transitionFrames);
-    const int transEnd = centerSeg.startFrame;
-    if (transEnd <= transStart || transEnd > static_cast<int>(originalF0.size())) {
-        return std::nullopt;
+    std::sort(preservedRanges.begin(), preservedRanges.end());
+
+    int cursor = noteBasedSegment.startFrame;
+    for (const auto& [protectedStart, protectedEnd] : preservedRanges) {
+        if (cursor < protectedStart) {
+            CorrectedSegment piece = noteBasedSegment;
+            piece.startFrame = cursor;
+            piece.endFrame = protectedStart;
+            const int offset = piece.startFrame - noteBasedSegment.startFrame;
+            const int length = piece.endFrame - piece.startFrame;
+            if (offset >= 0
+                && length > 0
+                && offset + length <= static_cast<int>(noteBasedSegment.f0Data.size())) {
+                piece.f0Data.assign(noteBasedSegment.f0Data.begin() + offset,
+                                    noteBasedSegment.f0Data.begin() + offset + length);
+                insertSegmentSorted(segments, std::move(piece));
+            }
+        }
+
+        cursor = std::max(cursor, protectedEnd);
     }
 
-    if (hasSegmentOverlap(existingSegments, transStart, transEnd)) {
-        return std::nullopt;
+    if (cursor < noteBasedSegment.endFrame) {
+        CorrectedSegment piece = noteBasedSegment;
+        piece.startFrame = cursor;
+        const int offset = piece.startFrame - noteBasedSegment.startFrame;
+        const int length = piece.endFrame - piece.startFrame;
+        if (offset >= 0
+            && length > 0
+            && offset + length <= static_cast<int>(noteBasedSegment.f0Data.size())) {
+            piece.f0Data.assign(noteBasedSegment.f0Data.begin() + offset,
+                                noteBasedSegment.f0Data.begin() + offset + length);
+            insertSegmentSorted(segments, std::move(piece));
+        }
+    }
+}
+
+float smootherstep(float t) noexcept
+{
+    t = juce::jlimit(0.0f, 1.0f, t);
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+double noteTransitionFrameAt(const Note& leftNote,
+                             const Note& rightNote,
+                             double framePerSecond) noexcept
+{
+    return 0.5 * (leftNote.endTime + rightNote.startTime) * framePerSecond;
+}
+
+float noteBoundaryShiftSemitoneOffset(const std::vector<Note>& notes,
+                                      const std::vector<size_t>& relevantNoteIndices,
+                                      const std::vector<float>& noteAnchorMidis,
+                                      size_t activeNoteIndex,
+                                      float activeOffsetSemitones,
+                                      int frame,
+                                      double framePerSecond,
+                                      float frameRetuneSpeed)
+{
+    const int maxBridgeFrames = PitchCurve::getCorrectedF0BoundaryContextFrames();
+    const int bridgeFrames = static_cast<int>(std::lround(
+        static_cast<float>(maxBridgeFrames) * (1.0f - juce::jlimit(0.0f, 1.0f, frameRetuneSpeed))));
+    if (bridgeFrames <= 0) {
+        return activeOffsetSemitones;
     }
 
-    for (int f = transStart; f < transEnd; ++f) {
-        if (originalF0[static_cast<size_t>(f)] <= 0.0f) {
+    const auto activeIt = std::find(relevantNoteIndices.begin(), relevantNoteIndices.end(), activeNoteIndex);
+    if (activeIt == relevantNoteIndices.end()) {
+        return activeOffsetSemitones;
+    }
+
+    const auto transitionOffsetFor = [&](size_t otherNoteIndex,
+                                         double boundaryFrame,
+                                         bool activeIsRight) -> std::optional<float> {
+        const float otherAnchorMidi = noteAnchorMidis[otherNoteIndex];
+        const float activeAnchorMidi = noteAnchorMidis[activeNoteIndex];
+        if (otherAnchorMidi <= 0.0f || activeAnchorMidi <= 0.0f) {
             return std::nullopt;
+        }
+
+        const double distance = std::abs((static_cast<double>(frame) + 0.5) - boundaryFrame);
+        if (distance > static_cast<double>(bridgeFrames)) {
+            return std::nullopt;
+        }
+
+        const float otherOffset = PitchUtils::freqToMidi(notes[otherNoteIndex].getAdjustedPitch()) - otherAnchorMidi;
+        const float t = static_cast<float>((static_cast<double>(frame) + 0.5 - (boundaryFrame - bridgeFrames))
+                                           / static_cast<double>(bridgeFrames * 2));
+        const float w = smootherstep(t);
+        return activeIsRight
+            ? otherOffset + (activeOffsetSemitones - otherOffset) * w
+            : activeOffsetSemitones + (otherOffset - activeOffsetSemitones) * w;
+    };
+
+    const auto position = static_cast<size_t>(std::distance(relevantNoteIndices.begin(), activeIt));
+    if (position > 0) {
+        const size_t leftNoteIndex = relevantNoteIndices[position - 1];
+        const auto bridged = transitionOffsetFor(leftNoteIndex,
+                                                 noteTransitionFrameAt(notes[leftNoteIndex], notes[activeNoteIndex], framePerSecond),
+                                                 true);
+        if (bridged.has_value()) {
+            return *bridged;
         }
     }
 
-    std::vector<float> transitionData;
-    transitionData.reserve(static_cast<size_t>(transEnd - transStart));
-    const float safeBoundary = std::max(boundaryF0, 1.0e-6f);
-    const int len = transEnd - transStart;
-
-    for (int i = 0; i < len; ++i) {
-        const int f = transStart + i;
-        const float orig = std::max(originalF0[static_cast<size_t>(f)], 1.0e-6f);
-        const float t = (len > 1) ? static_cast<float>(i) / static_cast<float>(len - 1) : 0.5f;
-        const float w = t * t * (3.0f - 2.0f * t); // Hermite smoothstep: 0→1, dw/dt=0 at endpoints
-        const float logOrig = std::log2(orig);
-        const float logBoundary = std::log2(safeBoundary);
-        transitionData.push_back(std::pow(2.0f, logOrig + (logBoundary - logOrig) * w));
-    }
-
-    CorrectedSegment seg(transStart, transEnd, transitionData, centerSeg.source);
-    seg.retuneSpeed = centerSeg.retuneSpeed;
-    seg.vibratoDepth = centerSeg.vibratoDepth;
-    seg.vibratoRate = centerSeg.vibratoRate;
-    return seg;
-}
-
-std::optional<CorrectedSegment> buildRightTransitionSegment(
-    const CorrectedSegment& centerSeg,
-    const std::vector<float>& originalF0,
-    const std::vector<CorrectedSegment>& existingSegments,
-    int transitionFrames)
-{
-    if (centerSeg.f0Data.empty() || transitionFrames <= 0 || originalF0.empty()) {
-        return std::nullopt;
-    }
-
-    const float boundaryF0 = centerSeg.f0Data.back();
-    if (boundaryF0 <= 0.0f || centerSeg.endFrame >= static_cast<int>(originalF0.size())) {
-        return std::nullopt;
-    }
-
-    const int transStart = centerSeg.endFrame;
-    const int transEnd = std::min(centerSeg.endFrame + transitionFrames, static_cast<int>(originalF0.size()));
-    if (transEnd <= transStart) {
-        return std::nullopt;
-    }
-
-    if (hasSegmentOverlap(existingSegments, transStart, transEnd)) {
-        return std::nullopt;
-    }
-
-    for (int f = transStart; f < transEnd; ++f) {
-        if (originalF0[static_cast<size_t>(f)] <= 0.0f) {
-            return std::nullopt;
+    if (position + 1 < relevantNoteIndices.size()) {
+        const size_t rightNoteIndex = relevantNoteIndices[position + 1];
+        const auto bridged = transitionOffsetFor(rightNoteIndex,
+                                                 noteTransitionFrameAt(notes[activeNoteIndex], notes[rightNoteIndex], framePerSecond),
+                                                 false);
+        if (bridged.has_value()) {
+            return *bridged;
         }
     }
 
-    std::vector<float> transitionData;
-    transitionData.reserve(static_cast<size_t>(transEnd - transStart));
-    const float safeBoundary = std::max(boundaryF0, 1.0e-6f);
-    const int len = transEnd - transStart;
-
-    for (int i = 0; i < len; ++i) {
-        const int f = transStart + i;
-        const float orig = std::max(originalF0[static_cast<size_t>(f)], 1.0e-6f);
-        const float t = (len > 1) ? static_cast<float>(i) / static_cast<float>(len - 1) : 0.5f;
-        const float w = 1.0f - t * t * (3.0f - 2.0f * t); // Inverse smoothstep: 1→0, dw/dt=0 at endpoints
-        const float logOrig = std::log2(orig);
-        const float logBoundary = std::log2(safeBoundary);
-        transitionData.push_back(std::pow(2.0f, logOrig + (logBoundary - logOrig) * w));
-    }
-
-    CorrectedSegment seg(transStart, transEnd, transitionData, centerSeg.source);
-    seg.retuneSpeed = centerSeg.retuneSpeed;
-    seg.vibratoDepth = centerSeg.vibratoDepth;
-    seg.vibratoRate = centerSeg.vibratoRate;
-    return seg;
-}
-
-void insertSegmentWithUnifiedTransitions(
-    std::vector<CorrectedSegment>& segments,
-    const std::vector<float>& originalF0,
-    CorrectedSegment&& centerSeg,
-    int transitionFrames)
-{
-    std::optional<CorrectedSegment> leftTransition = buildLeftTransitionSegment(centerSeg, originalF0, segments, transitionFrames);
-    std::optional<CorrectedSegment> rightTransition = buildRightTransitionSegment(centerSeg, originalF0, segments, transitionFrames);
-
-    if (leftTransition.has_value()) {
-        insertSegmentSorted(segments, std::move(leftTransition.value()));
-    }
-    insertSegmentSorted(segments, std::move(centerSeg));
-    if (rightTransition.has_value()) {
-        insertSegmentSorted(segments, std::move(rightTransition.value()));
-    }
+    return activeOffsetSemitones;
 }
 
 } // namespace
@@ -239,8 +285,6 @@ void PitchCurveSnapshot::renderF0Range(int startFrame, int endFrame,
         });
 
     int currentPos = startFrame;
-    std::vector<float> tempBuffer;
-
     while (currentPos < endFrame) {
         if (it != correctedSegments_.end() && it->startFrame < endFrame) {
             if (currentPos < it->startFrame) {
@@ -266,22 +310,7 @@ void PitchCurveSnapshot::renderF0Range(int startFrame, int endFrame,
                     continue;
                 }
 
-                if (it->retuneSpeed >= 0.0f && it->source == CorrectedSegment::Source::LineAnchor) {
-                    tempBuffer.resize(static_cast<size_t>(length));
-                    for (int i = 0; i < length; ++i) {
-                        int frameIdx = segStart + i;
-                        float targetF0 = it->f0Data[static_cast<size_t>(offset + i)];
-                        float originalF0 = originalF0_[static_cast<size_t>(frameIdx)];
-                        if (originalF0 > 0.0f && targetF0 > 0.0f) {
-                            tempBuffer[static_cast<size_t>(i)] = PitchUtils::mixRetune(originalF0, targetF0, it->retuneSpeed);
-                        } else {
-                            tempBuffer[static_cast<size_t>(i)] = targetF0;
-                        }
-                    }
-                    callback(segStart, tempBuffer.data(), length);
-                } else {
-                    callback(segStart, it->f0Data.data() + offset, length);
-                }
+                callback(segStart, it->f0Data.data() + offset, length);
                 currentPos = segEnd;
             }
 
@@ -342,22 +371,7 @@ void PitchCurveSnapshot::renderCorrectedOnlyRange(int startFrame, int endFrame,
                     continue;
                 }
 
-                if (it->retuneSpeed >= 0.0f && it->source == CorrectedSegment::Source::LineAnchor) {
-                    tempBuffer.resize(static_cast<size_t>(length));
-                    for (int i = 0; i < length; ++i) {
-                        int frameIdx = segStart + i;
-                        float targetF0 = it->f0Data[static_cast<size_t>(offset + i)];
-                        float originalF0 = originalF0_[static_cast<size_t>(frameIdx)];
-                        if (originalF0 > 0.0f && targetF0 > 0.0f) {
-                            tempBuffer[static_cast<size_t>(i)] = PitchUtils::mixRetune(originalF0, targetF0, it->retuneSpeed);
-                        } else {
-                            tempBuffer[static_cast<size_t>(i)] = targetF0;
-                        }
-                    }
-                    callback(segStart, tempBuffer.data(), length);
-                } else {
-                    callback(segStart, it->f0Data.data() + offset, length);
-                }
+                callback(segStart, it->f0Data.data() + offset, length);
                 currentPos = segEnd;
             }
 
@@ -369,6 +383,24 @@ void PitchCurveSnapshot::renderCorrectedOnlyRange(int startFrame, int endFrame,
             currentPos = endFrame;
         }
     }
+}
+
+F0FrameRange PitchCurve::expandNoteBasedCorrectionRange(int startFrame, int endFrameExclusive, int frameCount) noexcept
+{
+    if (frameCount <= 0 || endFrameExclusive <= startFrame) {
+        return {};
+    }
+
+    const int rangeStart = juce::jlimit(0, frameCount, startFrame);
+    const int rangeEnd = juce::jlimit(0, frameCount, endFrameExclusive);
+    if (rangeEnd <= rangeStart) {
+        return {};
+    }
+
+    return {
+        std::max(0, rangeStart - getCorrectedF0BoundaryContextFrames()),
+        std::min(frameCount, rangeEnd + getCorrectedF0BoundaryContextFrames())
+    };
 }
 
 
@@ -394,24 +426,34 @@ void PitchCurve::applyCorrectionToRange(
     if (endFrame > maxFrame) endFrame = maxFrame;
     if (startFrame < 0) startFrame = 0;
 
-    auto correctedSegments = oldSnapshot->getCorrectedSegments();
-    clearSegmentsInRangePreserveOutside(correctedSegments, startFrame, endFrame);
-
     const int hopSize = oldSnapshot->getHopSize();
     const double sampleRate = oldSnapshot->getSampleRate();
     if (hopSize <= 0 || sampleRate <= 0.0 || audioSampleRate <= 0.0) {
         return;
     }
 
+    const auto calculationRange = expandNoteBasedCorrectionRange(startFrame, endFrame, maxFrame);
+    if (calculationRange.isEmpty()) {
+        return;
+    }
+    const int calculationStartFrame = calculationRange.startFrame;
+    const int calculationEndFrame = calculationRange.endFrameExclusive;
+
+    auto correctedSegments = oldSnapshot->getCorrectedSegments();
+    clearSegmentsMatchingSourceInRangePreserveOutside(correctedSegments,
+                                                      calculationStartFrame,
+                                                      calculationEndFrame,
+                                                      CorrectedSegment::Source::NoteBased);
+
     struct NoteCorrectionInfo {
         float anchorPitch = 0.0f;
         float anchorMidi = 0.0f;
-        float offsetSemitones = 0.0f;
         float rotationRad = 0.0f;
         float timeCenterSeconds = 0.0f;
     };
 
     std::vector<NoteCorrectionInfo> noteInfos(notes.size());
+    std::vector<float> noteAnchorMidis(notes.size(), 0.0f);
 
     const float radToDeg = 180.0f / juce::MathConstants<float>::pi;
     const float slopeAngleMinDeg = 10.0f;
@@ -426,7 +468,8 @@ void PitchCurve::applyCorrectionToRange(
         size_t noteStartFrame = static_cast<size_t>(std::max(0, static_cast<int>(std::floor(note.startTime * framePerSecond))));
         size_t noteEndFrame = static_cast<size_t>(std::max(0, static_cast<int>(std::ceil(note.endTime * framePerSecond))));
 
-        if (static_cast<int>(noteEndFrame) <= startFrame || static_cast<int>(noteStartFrame) >= endFrame) {
+        if (static_cast<int>(noteEndFrame) <= calculationStartFrame
+            || static_cast<int>(noteStartFrame) >= calculationEndFrame) {
             continue;
         }
 
@@ -438,11 +481,6 @@ void PitchCurve::applyCorrectionToRange(
         info.anchorPitch = anchorPitch;
         info.anchorMidi = PitchUtils::freqToMidi(anchorPitch);
         info.timeCenterSeconds = static_cast<float>((note.startTime + note.endTime) * 0.5);
-
-        float targetBaseF0 = note.getAdjustedPitch();
-        if (targetBaseF0 > 0.0f && anchorPitch > 0.0f) {
-            info.offsetSemitones = PitchUtils::freqToMidi(targetBaseF0) - PitchUtils::freqToMidi(anchorPitch);
-        }
 
         if (info.anchorMidi > 0.0f && noteStartFrame < noteEndFrame) {
             std::vector<float> voicedTimes;
@@ -484,18 +522,23 @@ void PitchCurve::applyCorrectionToRange(
         }
 
         noteInfos[noteIndex] = info;
+        noteAnchorMidis[noteIndex] = info.anchorMidi;
     }
 
     if (relevantNoteIndices.empty()) {
         return;
     }
+    std::sort(relevantNoteIndices.begin(), relevantNoteIndices.end(),
+        [&notes](size_t left, size_t right) {
+            return notes[left].startTime < notes[right].startTime;
+        });
 
-    std::vector<float> correctedF0Buffer(endFrame - startFrame, 0.0f);
+    std::vector<float> correctedF0Buffer(calculationEndFrame - calculationStartFrame, 0.0f);
 
-    for (int i = startFrame; i < endFrame; ++i) {
+    for (int i = calculationStartFrame; i < calculationEndFrame; ++i) {
         float f0 = originalF0[i];
         if (f0 <= 0.0f) {
-            correctedF0Buffer[i - startFrame] = 0.0f;
+            correctedF0Buffer[i - calculationStartFrame] = 0.0f;
             continue;
         }
 
@@ -504,7 +547,8 @@ void PitchCurve::applyCorrectionToRange(
 
         const Note* activeNote = nullptr;
         size_t activeNoteIndex = 0;
-        for (size_t idx : relevantNoteIndices) {
+        for (size_t relevantPosition = 0; relevantPosition < relevantNoteIndices.size(); ++relevantPosition) {
+            const size_t idx = relevantNoteIndices[relevantPosition];
             const auto& note = notes[idx];
             if (timeSeconds >= note.startTime && timeSeconds < note.endTime) {
                 activeNote = &note;
@@ -514,6 +558,11 @@ void PitchCurve::applyCorrectionToRange(
         }
 
         if (activeNote) {
+            float frameRetuneSpeed = retuneSpeed;
+            if (activeNote->retuneSpeed >= 0.0f) {
+                frameRetuneSpeed = activeNote->retuneSpeed;
+            }
+
             float targetBaseF0 = activeNote->getAdjustedPitch();
             float targetF0 = targetBaseF0;
 
@@ -529,7 +578,7 @@ void PitchCurve::applyCorrectionToRange(
             }
 
             float baseF0 = f0;
-            if (activeNoteIndex < noteInfos.size() && noteInfos[activeNoteIndex].rotationRad != 0.0f) {
+            if (noteInfos[activeNoteIndex].rotationRad != 0.0f) {
                 float tSec = static_cast<float>(timeSeconds);
                 float x = tSec - noteInfos[activeNoteIndex].timeCenterSeconds;
                 float y = PitchUtils::freqToMidi(f0) - noteInfos[activeNoteIndex].anchorMidi;
@@ -540,28 +589,33 @@ void PitchCurve::applyCorrectionToRange(
             }
 
             float shiftedF0 = baseF0;
-            if (activeNoteIndex < noteInfos.size() && noteInfos[activeNoteIndex].anchorPitch > 0.0f && targetBaseF0 > 0.0f) {
-                float shiftRatio = std::pow(2.0f, noteInfos[activeNoteIndex].offsetSemitones / 12.0f);
+            if (noteInfos[activeNoteIndex].anchorPitch > 0.0f && targetBaseF0 > 0.0f) {
+                const float activeOffsetSemitones =
+                    PitchUtils::freqToMidi(targetBaseF0) - noteInfos[activeNoteIndex].anchorMidi;
+                const float dynamicOffsetSemitones = noteBoundaryShiftSemitoneOffset(notes,
+                                                                                     relevantNoteIndices,
+                                                                                     noteAnchorMidis,
+                                                                                     activeNoteIndex,
+                                                                                     activeOffsetSemitones,
+                                                                                     i,
+                                                                                     framePerSecond,
+                                                                                     frameRetuneSpeed);
+                float shiftRatio = std::pow(2.0f, dynamicOffsetSemitones / 12.0f);
                 shiftedF0 = baseF0 * shiftRatio;
             }
 
-            float frameRetuneSpeed = retuneSpeed;
-            if (activeNote->retuneSpeed >= 0.0f) {
-                frameRetuneSpeed = activeNote->retuneSpeed;
-            }
-
-            correctedF0Buffer[i - startFrame] = PitchUtils::mixRetune(shiftedF0, targetF0, frameRetuneSpeed);
+            correctedF0Buffer[i - calculationStartFrame] = PitchUtils::mixRetune(shiftedF0, targetF0, frameRetuneSpeed);
         } else {
-            correctedF0Buffer[i - startFrame] = f0;
+            correctedF0Buffer[i - calculationStartFrame] = f0;
         }
     }
 
-    CorrectedSegment newSeg(startFrame, endFrame, correctedF0Buffer, CorrectedSegment::Source::NoteBased);
+    CorrectedSegment newSeg(calculationStartFrame, calculationEndFrame, correctedF0Buffer, CorrectedSegment::Source::NoteBased);
     newSeg.retuneSpeed = retuneSpeed;
     newSeg.vibratoDepth = vibratoDepth;
     newSeg.vibratoRate = vibratoRate;
 
-    insertSegmentWithUnifiedTransitions(correctedSegments, originalF0, std::move(newSeg), kUnifiedTransitionFrames);
+    insertNoteBasedSegmentPreservingNonNoteBasedSegments(correctedSegments, std::move(newSeg));
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
@@ -586,33 +640,7 @@ void PitchCurve::setManualCorrectionRange(int startFrame, int endFrame, const st
     
     CorrectedSegment newSeg(startFrame, endFrame, f0Data, source);
     clearSegmentsInRangePreserveOutside(correctedSegments, startFrame, endFrame);
-    insertSegmentWithUnifiedTransitions(correctedSegments, oldSnapshot->getOriginalF0(), std::move(newSeg), kUnifiedTransitionFrames);
-
-    uint64_t newGen = incrementGeneration();
-    auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
-        oldSnapshot->getOriginalF0(),
-        oldSnapshot->getOriginalEnergy(),
-        std::move(correctedSegments),
-        oldSnapshot->getHopSize(),
-        oldSnapshot->getSampleRate(),
-        newGen
-    );
-    std::atomic_store(&snapshot_, newSnapshot);
-}
-
-void PitchCurve::setManualCorrectionRange(int startFrame, int endFrame, const std::vector<float>& f0Data,
-                                          CorrectedSegment::Source source, float retuneSpeed) {
-    if (startFrame >= endFrame || f0Data.empty()) {
-        return;
-    }
-
-    auto oldSnapshot = getSnapshot();
-    auto correctedSegments = oldSnapshot->getCorrectedSegments();
-    
-    CorrectedSegment newSeg(startFrame, endFrame, f0Data, source);
-    newSeg.retuneSpeed = retuneSpeed;
-    clearSegmentsInRangePreserveOutside(correctedSegments, startFrame, endFrame);
-    insertSegmentWithUnifiedTransitions(correctedSegments, oldSnapshot->getOriginalF0(), std::move(newSeg), kUnifiedTransitionFrames);
+    insertSegmentSorted(correctedSegments, std::move(newSeg));
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(

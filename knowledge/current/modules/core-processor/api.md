@@ -642,12 +642,11 @@ enum class OriginalF0State : uint8_t { NotRequested=0, Extracting, Ready, Failed
 ```cpp
 enum class Scheme { CorrectedF0Primary=0, NotesPrimary=1 };
 enum class ParameterKind { RetuneSpeed, VibratoDepth, VibratoRate };
-enum class ParameterTarget { None, SelectedLineAnchorSegments, SelectedNotes,
-                             FrameSelection, WholeClip };
+enum class ParameterTarget { None, SelectedNotes, FrameSelection, WholeClip };
 enum class AutoTuneTarget { None, SelectedNotes, FrameSelection, WholeClip };
 struct FrameRange { int startFrame, endFrameExclusive; bool isValid() const noexcept; };
-struct ParameterTargetContext { bool hasSelectedNotes, hasSelectedLineAnchorSegments,
-                                     hasFrameSelection, allowWholeClipFallback=true; };
+struct ParameterTargetContext { bool hasSelectedNotes, hasFrameSelection,
+                                allowWholeClipFallback=true; };
 struct AutoTuneTargetContext { int totalFrameCount; FrameRange selectedNotesRange,
                                      selectionAreaRange, f0SelectionRange;
                                bool allowWholeClipFallback=true; };

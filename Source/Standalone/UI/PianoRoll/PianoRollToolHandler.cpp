@@ -34,8 +34,7 @@ void appendManualCorrectionOps(std::vector<ManualOp>& outOps,
                                const std::vector<float>& originalF0,
                                AudioEditingScheme::FrameRange requestedRange,
                                const std::function<float(int)>& valueForFrame,
-                               CorrectedSegment::Source source,
-                               float retuneSpeed = -1.0f)
+                               CorrectedSegment::Source source)
 {
     const auto trimmedRange = AudioEditingScheme::trimFrameRangeToEditableBounds(scheme, originalF0, requestedRange);
     if (!trimmedRange.isValid()) {
@@ -57,7 +56,6 @@ void appendManualCorrectionOps(std::vector<ManualOp>& outOps,
         op.endFrameExclusive = endFrameExclusive;
         op.f0Data = std::move(currentOpData);
         op.source = source;
-        op.retuneSpeed = retuneSpeed;
         outOps.push_back(std::move(op));
 
         currentOpStart = -1;
@@ -83,6 +81,85 @@ void appendManualCorrectionOps(std::vector<ManualOp>& outOps,
     }
 
     flushCurrentOp(trimmedRange.endFrameExclusive);
+}
+
+float interpolateLogF0(float leftF0, float rightF0, float t)
+{
+    const float logLeft = std::log2(std::max(leftF0, 1.0f));
+    const float logRight = std::log2(std::max(rightF0, 1.0f));
+    return std::pow(2.0f, logLeft + (logRight - logLeft) * t);
+}
+
+struct LogLineFit
+{
+    float intercept = 0.0f;
+    float slope = 0.0f;
+};
+
+LogLineFit fitOriginalF0LogTrend(const std::vector<float>& originalF0,
+                                 int startFrame,
+                                 int endFrameExclusive)
+{
+    double sumX = 0.0;
+    double sumY = 0.0;
+    double sumXX = 0.0;
+    double sumXY = 0.0;
+    int count = 0;
+
+    for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
+        const float sourceF0 = originalF0[static_cast<std::size_t>(frame)];
+        if (sourceF0 <= 0.0f) continue;
+
+        const double x = static_cast<double>(frame - startFrame);
+        const double y = std::log2(sourceF0);
+        sumX += x;
+        sumY += y;
+        sumXX += x * x;
+        sumXY += x * y;
+        ++count;
+    }
+
+    if (count == 0) {
+        return {};
+    }
+
+    const double n = static_cast<double>(count);
+    const double denom = n * sumXX - sumX * sumX;
+    LogLineFit fit;
+    fit.slope = denom != 0.0
+        ? static_cast<float>((n * sumXY - sumX * sumY) / denom)
+        : 0.0f;
+    fit.intercept = static_cast<float>((sumY - static_cast<double>(fit.slope) * sumX) / n);
+    return fit;
+}
+
+float lineAnchorF0WithSourceShape(const std::vector<float>& originalF0,
+                                  int frame,
+                                  int startFrame,
+                                  int endFrameExclusive,
+                                  float leftTargetF0,
+                                  float rightTargetF0,
+                                  float retuneSpeed,
+                                  LogLineFit sourceTrend)
+{
+    const int spanFrames = std::max(1, endFrameExclusive - startFrame);
+    const float t = std::clamp(static_cast<float>(frame - startFrame) / static_cast<float>(spanFrames),
+                               0.0f,
+                               1.0f);
+    const float targetLineF0 = interpolateLogF0(leftTargetF0, rightTargetF0, t);
+    const float shapeAmount = 1.0f - std::clamp(retuneSpeed, 0.0f, 1.0f);
+    if (shapeAmount <= 0.0f) {
+        return targetLineF0;
+    }
+
+    const float sourceF0 = originalF0[static_cast<std::size_t>(frame)];
+    if (sourceF0 <= 0.0f) {
+        return targetLineF0;
+    }
+
+    const float logShape = std::log2(sourceF0)
+        - (sourceTrend.intercept + sourceTrend.slope * static_cast<float>(frame - startFrame));
+    return targetLineF0 * std::pow(2.0f, logShape * shapeAmount);
 }
 
 std::vector<Note>& workingDraftNotes(PianoRollToolHandler::Context& ctx)
@@ -113,8 +190,7 @@ std::vector<CorrectedSegment> buildSegmentsWithManualOps(
         editedCurve->setManualCorrectionRange(op.startFrame,
                                               op.endFrameExclusive,
                                               op.f0Data,
-                                              op.source,
-                                              op.retuneSpeed);
+                                              op.source);
     }
 
     const auto snapshot = editedCurve->getSnapshot();
@@ -123,6 +199,33 @@ std::vector<CorrectedSegment> buildSegmentsWithManualOps(
         segments.push_back(segment);
     }
     return segments;
+}
+
+bool commitNoteBasedCorrection(PianoRollToolHandler::Context& ctx,
+                               const std::vector<Note>& notes,
+                               const std::shared_ptr<PitchCurve>& pitchCurve,
+                               F0FrameRange editRange)
+{
+    const auto f0tl = ctx.getF0Timeline();
+    auto clonedCurve = pitchCurve->clone();
+    clonedCurve->applyCorrectionToRange(notes,
+                                        editRange.startFrame,
+                                        editRange.endFrameExclusive,
+                                        ctx.getRetuneSpeed(),
+                                        ctx.getVibratoDepth(),
+                                        ctx.getVibratoRate(),
+                                        44100.0);
+
+    const auto snap = clonedCurve->getSnapshot();
+    const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(editRange.startFrame,
+                                                                          editRange.endFrameExclusive,
+                                                                          f0tl.endFrameExclusive());
+    if (!ctx.commitNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange)) {
+        return false;
+    }
+
+    ctx.notifyPitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1);
+    return true;
 }
 
 const std::vector<Note>& committedNotes(PianoRollToolHandler::Context& ctx)
@@ -384,9 +487,6 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
         case ToolId::DrawNote:
             handleDrawNoteUp(e);
             break;
-        case ToolId::LineAnchor:
-            handleLineAnchorMouseUp(e);
-            break;
         default:
             ctx_.getState().noteDrag.draggedNoteIndex = -1;
             break;
@@ -488,11 +588,11 @@ bool PianoRollToolHandler::isEmptySpaceMouseDown(const juce::MouseEvent& e)
         return false;
     }
 
-    if (hitsNoteBodyOrResizeEdge(e)) {
+    if (currentTool_ == ToolId::LineAnchor) {
         return false;
     }
 
-    if (currentTool_ == ToolId::LineAnchor && hitsLineAnchorSegment(e)) {
+    if (hitsNoteBodyOrResizeEdge(e)) {
         return false;
     }
 
@@ -531,15 +631,6 @@ bool PianoRollToolHandler::hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e)
     }
 
     return false;
-}
-
-bool PianoRollToolHandler::hitsLineAnchorSegment(const juce::MouseEvent& e)
-{
-    if (!AudioEditingScheme::allowsLineAnchorSegmentSelection(ctx_.getAudioEditingScheme())) {
-        return false;
-    }
-
-    return ctx_.findLineAnchorSegmentNear(e.x, e.y) >= 0;
 }
 
 void PianoRollToolHandler::beginEmptySpaceIntent(const juce::MouseEvent& e)
@@ -581,8 +672,6 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentDrag(const juce::MouseEvent& e
             handleDrawCurveTool(startEvent);
             handleDrawCurveTool(e);
             return true;
-        case ToolId::LineAnchor:
-            return true;
         default:
             return true;
     }
@@ -611,9 +700,6 @@ bool PianoRollToolHandler::consumeEmptySpaceIntentUp(const juce::MouseEvent& e)
                 break;
             case ToolId::DrawNote:
                 handleDrawNoteUp(e);
-                break;
-            case ToolId::LineAnchor:
-                handleLineAnchorMouseUp(e);
                 break;
             default:
                 break;
@@ -754,28 +840,27 @@ void PianoRollToolHandler::handleDeleteKey()
         ctx_.setUndoDescription(juce::String("删除音符"));
 
         // 同步计算清除修正 + 删除音符 → 一次性原子提交
+        bool committed = false;
         if (curve && !correctionClearRanges.empty()) {
             auto clonedCurve = curve->clone();
             for (const auto& range : correctionClearRanges) {
                 clonedCurve->clearCorrectionRange(range.startFrame, range.endFrameExclusive);
             }
             auto snap = clonedCurve->getSnapshot();
-            if (snap) {
-                // delete 路径：affectedRange = globalDirty*Frame 的覆盖范围（含端点），
-                // 转 F0FrameRange 的 endFrameExclusive 语义。
-                const F0FrameRange affectedRange{globalDirtyStartFrame, globalDirtyEndFrame + 1};
-                ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange);
-            } else {
-                ctx_.commitNoteDraft();
+            // delete 路径：affectedRange = globalDirty*Frame 的覆盖范围（含端点），
+            // 转 F0FrameRange 的 endFrameExclusive 语义。
+            const F0FrameRange affectedRange{globalDirtyStartFrame, globalDirtyEndFrame + 1};
+            committed = ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange);
+            if (committed) {
+                ctx_.notifyPitchCurveEdited(globalDirtyStartFrame, globalDirtyEndFrame);
             }
         } else {
-            ctx_.commitNoteDraft();
+            committed = ctx_.commitNoteDraft();
         }
 
-        if (globalDirtyEndFrame >= globalDirtyStartFrame && globalDirtyStartFrame != INT_MAX) {
-            ctx_.notifyPitchCurveEdited(globalDirtyStartFrame, globalDirtyEndFrame);
+        if (committed) {
+            invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
         }
-        invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
         return;
     }
 
@@ -1336,9 +1421,9 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
                 rangeEndTime = std::max(rangeEndTime, dirtyEndTime);
             }
 
-            F0FrameRange affectedRange;
+            F0FrameRange editRange;
             if (pitchCurve) {
-                affectedRange = f0tl.rangeForTimes(rangeStartTime, rangeEndTime);
+                editRange = f0tl.rangeForTimes(rangeStartTime, rangeEndTime);
             }
 
             if (hasManualTargets) {
@@ -1355,9 +1440,9 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
                 if (pitchCurve != nullptr && ctx_.commitNotesAndSegments) {
                     const auto updatedSegments = buildSegmentsWithManualOps(pitchCurve, ops);
                     ctx_.setUndoDescription(juce::String("移动音符"));
-                    if (ctx_.commitNotesAndSegments(notes, updatedSegments, affectedRange)) {
-                        ctx_.notifyPitchCurveEdited(affectedRange.startFrame,
-                                                    affectedRange.endFrameExclusive - 1);
+                    if (ctx_.commitNotesAndSegments(notes, updatedSegments, editRange)) {
+                        ctx_.notifyPitchCurveEdited(editRange.startFrame,
+                                                    editRange.endFrameExclusive - 1);
                     }
                 }
             } else {
@@ -1365,24 +1450,8 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
                 ctx_.setUndoDescription(juce::String("移动音符"));
 
                 // 同步计算修正并一次性提交音符和F0段
-                if (pitchCurve && !affectedRange.isEmpty()) {
-                    auto clonedCurve = pitchCurve->clone();
-                    clonedCurve->applyCorrectionToRange(
-                        notes,
-                        affectedRange.startFrame,
-                        affectedRange.endFrameExclusive,
-                        ctx_.getRetuneSpeed(),
-                        ctx_.getVibratoDepth(),
-                        ctx_.getVibratoRate(),
-                        44100.0);
-                    auto snap = clonedCurve->getSnapshot();
-                    if (snap) {
-                        ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange);
-                    } else {
-                        ctx_.commitNoteDraft();
-                    }
-                    ctx_.notifyPitchCurveEdited(affectedRange.startFrame,
-                                                affectedRange.endFrameExclusive - 1);
+                if (pitchCurve && !editRange.isEmpty()) {
+                    commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
                 } else {
                     ctx_.commitNoteDraft();
                 }
@@ -1419,33 +1488,17 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
         double dirtyStartTime = std::min(ctx_.getState().noteResize.originalStartTime, resizedStartTime);
         double dirtyEndTime = std::max(ctx_.getState().noteResize.originalEndTime, resizedEndTime);
         auto pitchCurve = ctx_.getPitchCurve();
-        F0FrameRange affectedRange;
+        F0FrameRange editRange;
         if (pitchCurve) {
-            affectedRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
+            editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
         }
 
         ctx_.getNoteDraft().workingNotes = notes;
         ctx_.setUndoDescription(juce::String("调整音符长度"));
 
         // 同步计算修正并一次性提交音符和F0段
-        if (pitchCurve && !affectedRange.isEmpty()) {
-            auto clonedCurve = pitchCurve->clone();
-            clonedCurve->applyCorrectionToRange(
-                notes,
-                affectedRange.startFrame,
-                affectedRange.endFrameExclusive,
-                ctx_.getRetuneSpeed(),
-                ctx_.getVibratoDepth(),
-                ctx_.getVibratoRate(),
-                44100.0);
-            auto snap = clonedCurve->getSnapshot();
-            if (snap) {
-                ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange);
-            } else {
-                ctx_.commitNoteDraft();
-            }
-            ctx_.notifyPitchCurveEdited(affectedRange.startFrame,
-                                        affectedRange.endFrameExclusive - 1);
+        if (pitchCurve && !editRange.isEmpty()) {
+            commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
         } else {
             ctx_.commitNoteDraft();
         }
@@ -1670,26 +1723,10 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
     auto pitchCurve = ctx_.getPitchCurve();
     if (pitchCurve) {
         const auto f0tl = ctx_.getF0Timeline();
-        F0FrameRange noteRange = f0tl.rangeForTimes(startTime, endTime);
+        const F0FrameRange noteRange = f0tl.rangeForTimes(startTime, endTime);
 
         if (!noteRange.isEmpty()) {
-            auto clonedCurve = pitchCurve->clone();
-            clonedCurve->applyCorrectionToRange(
-                notes,
-                noteRange.startFrame,
-                noteRange.endFrameExclusive,
-                ctx_.getRetuneSpeed(),
-                ctx_.getVibratoDepth(),
-                ctx_.getVibratoRate(),
-                44100.0);
-
-            auto snap = clonedCurve->getSnapshot();
-            if (snap) {
-                ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments(), noteRange);
-                ctx_.notifyPitchCurveEdited(noteRange.startFrame, noteRange.endFrameExclusive - 1);
-            } else {
-                ctx_.commitNoteDraft();
-            }
+            commitNoteBasedCorrection(ctx_, notes, pitchCurve, noteRange);
         } else {
             ctx_.commitNoteDraft();
         }
@@ -1743,7 +1780,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     int clickFrame = f0tl.frameAtOrBefore(clickTime);
 
     if (e.getNumberOfClicks() >= 2 && ctx_.getState().drawing.isPlacingAnchors) {
-        commitLineAnchorOperation();
+        clearLineAnchorPreview();
         return;
     }
 
@@ -1786,8 +1823,11 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     auto anchorRange = f0tl.nonEmptyRangeForTimes(prev.time, clickTime);
     const int startFrame = anchorRange.startFrame;
     const int endFrameExclusive = anchorRange.endFrameExclusive;
-    float logA = std::log2(std::max(prev.freq, 1.0f));
-    float logB = std::log2(std::max(snappedFreq, 1.0f));
+    const bool previousAnchorIsLeft = prev.time <= clickTime;
+    const float leftTargetF0 = previousAnchorIsLeft ? prev.freq : snappedFreq;
+    const float rightTargetF0 = previousAnchorIsLeft ? snappedFreq : prev.freq;
+    const float retuneSpeed = ctx_.getRetuneSpeed();
+    const auto sourceTrend = fitOriginalF0LogTrend(originalF0, startFrame, endFrameExclusive);
 
     std::vector<ManualOp> ops;
     appendManualCorrectionOps(ops,
@@ -1795,12 +1835,16 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
                               originalF0,
                               { startFrame, endFrameExclusive },
                               [&](int frame) {
-                                  const float t = static_cast<float>(frame - startFrame)
-                                      / static_cast<float>(std::max(1, endFrameExclusive - startFrame));
-                                  return std::pow(2.0f, logA + (logB - logA) * t);
+                                  return lineAnchorF0WithSourceShape(originalF0,
+                                                                     frame,
+                                                                     startFrame,
+                                                                     endFrameExclusive,
+                                                                     leftTargetF0,
+                                                                     rightTargetF0,
+                                                                     retuneSpeed,
+                                                                     sourceTrend);
                               },
-                              CorrectedSegment::Source::LineAnchor,
-                              ctx_.getRetuneSpeed());
+                              CorrectedSegment::Source::LineAnchor);
 
     if (ops.empty()) {
         return;
@@ -1830,11 +1874,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDrag(const juce::MouseEvent& e) 
     invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
 }
 
-void PianoRollToolHandler::handleLineAnchorMouseUp(const juce::MouseEvent& e) {
-    juce::ignoreUnused(e);
-}
-
-void PianoRollToolHandler::commitLineAnchorOperation()
+void PianoRollToolHandler::clearLineAnchorPreview()
 {
     const auto dirtyBefore = ctx_.getLineAnchorPreviewBounds();
     ctx_.getState().drawing.isPlacingAnchors = false;

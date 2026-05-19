@@ -534,8 +534,6 @@ struct StorageOptions {
 struct ParameterPanelSyncContext {
     bool hasSelectedNoteParameters;
     float selectedNoteRetuneSpeedPercent, selectedNoteVibratoDepth, selectedNoteVibratoRate;
-    bool hasSelectedSegmentRetuneSpeed;
-    float selectedSegmentRetuneSpeedPercent;
     float clipRetuneSpeedPercent, clipVibratoDepth, clipVibratoRate;
     bool wasShowingSelectionParameters;
 };
@@ -554,7 +552,6 @@ inline ParameterPanelSyncDecision resolveParameterPanelSyncDecision(
 
 决策逻辑：调用 `AudioEditingScheme::resolveParameterTarget(scheme, ParameterKind::RetuneSpeed, targetContext)`：
 - `SelectedNotes` 且 `hasSelectedNoteParameters` → 推送选中 Note 的三参数，`nextShowingSelectionParameters = true`
-- `SelectedLineAnchorSegments` 且 `hasSelectedSegmentRetuneSpeed` → 推送 segment retune
 - 否则若 `wasShowingSelectionParameters` 为 true，恢复到 Clip 参数（并将 `nextShowingSelectionParameters = false`）
 - 其余返回空决策
 

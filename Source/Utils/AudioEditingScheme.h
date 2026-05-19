@@ -32,7 +32,6 @@ enum class ParameterKind
 enum class ParameterTarget
 {
     None = 0,
-    SelectedLineAnchorSegments,
     SelectedNotes,
     FrameSelection,
     WholeClip
@@ -41,7 +40,6 @@ enum class ParameterTarget
 struct ParameterTargetContext
 {
     bool hasSelectedNotes = false;
-    bool hasSelectedLineAnchorSegments = false;
     bool hasFrameSelection = false;
     bool allowWholeClipFallback = true;
 };
@@ -139,13 +137,6 @@ inline ParameterTarget resolveParameterTarget(Scheme scheme,
                                              ParameterKind kind,
                                              const ParameterTargetContext& context) noexcept
 {
-    const bool canUseSelectedLineAnchors = kind == ParameterKind::RetuneSpeed
-        && context.hasSelectedLineAnchorSegments
-        && allowsLineAnchorSegmentSelection(scheme);
-    if (canUseSelectedLineAnchors) {
-        return ParameterTarget::SelectedLineAnchorSegments;
-    }
-
     if (context.hasSelectedNotes) {
         return ParameterTarget::SelectedNotes;
     }

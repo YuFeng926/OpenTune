@@ -47,7 +47,7 @@
   - VST3 ARA multi-region binding repair: `AudioModification persistentID -> materializationId` binding table in `VST3AraSession`, source/window reuse removed from ARA default birth, ARA archive hooks wired, existing renderable binding display no longer depends on Read Audio arm state
   - Studio One stopped/pause ARA playback gate implemented: realtime stopped blocks clear output before mapping/readback and `processBlock(...)` returns ARA-handled silence (`true`), with plan and verification source under `.planning/plans/2026-05-17-studio-one-ara-stopped-render-gate*.md`
   - Studio One normal track-insert `Read Audio` failure implemented as a runtime-mode split: ARA-capable VST3 instances are ARA-bound only after host `bindToDocumentController*()`, otherwise they are regular VST3 and use `CaptureSession`.
-  - 2026-05-18 PianoRoll empty-space seek intent: one mouse gesture = one intent (click seeks, drag edits, tool switch cancels pending); `piano-roll-intent` suite 11 tests PASS
+  - 2026-05-18 PianoRoll empty-space seek intent: one mouse gesture = one intent (click seeks, drag edits, tool switch cancels pending) for seek-enabled tools; 2026-05-19 correction keeps LineAnchor main-edit clicks inside the anchor tool and disables playhead seek there
   - 2026-05-18 Regular VST3 capture display selection: completed capture stays visible when host playhead leaves segment; `architecture/processor/core` PASS, ARA/non-ARA builds PASS
   - 2026-05-18 Regular VST3 capture timeline view domain: PianoRoll view defaults to zero so late-capture segments remain scrollable to earlier time
   - 2026-05-18 Regular VST3 transport shortcuts: unified routing helper, no fake host transport truth; architecture guards PASS

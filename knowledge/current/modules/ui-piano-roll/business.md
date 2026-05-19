@@ -103,8 +103,8 @@ flowchart TD
     G -- yes --> H[选中/toggle 段 → 重绘预览区\nreturn]
     G -- no --> I[clearLineAnchorSegmentSelection\n创建 pendingAnchors[0]\nisPlacingAnchors=true]
     F -- yes --> J{e.getNumberOfClicks >= 2 ?}
-    J -- yes --> K[commitLineAnchorOperation → 退出预览]
-    J -- no --> L[按 log2 插值生成 ManualCorrectionOp\nsource=LineAnchor]
+    J -- yes --> K[clearLineAnchorPreview → 退出预览]
+    J -- no --> L[按 log2 目标线 + OriginalF0 形状残差\n生成 ManualCorrectionOp\nsource=LineAnchor]
     L --> M[applyManualCorrection → notifyPitchCurveEdited]
     M --> N[selectNotesForEditedFrameRange]
     N --> O[anchors.push_back newAnchor]
@@ -113,15 +113,16 @@ flowchart TD
 
 关键要点：
 - **pitch 吸附**：点击频率先 `midi = 69 + 12*log2(f/440)`，再 `round` 后转回频率（`snappedFreq`）；
+- **retuneSpeed 语义**：LineAnchor 的 retuneSpeed 只在生成 `f0Data` 时控制 OriginalF0 局部形状残差保留量，`100%` 为纯锚点目标线，`0%` 为最大程度保留原曲线形状；它不移动锚点目标位置，也不在渲染 / 音频读取阶段重新解释 committed 数据；
 - **段命中优先于新增锚点**：当方案允许选段 (`allowsLineAnchorSegmentSelection`) 且未在预览中，首次点击优先选段；
-- **双击提交**：清空 `pendingAnchors` 和 `isPlacingAnchors`，仅保留已落段；
+- **双击结束预览**：清空 `pendingAnchors` 和 `isPlacingAnchors`，仅保留此前点击已经落段的 committed LineAnchor 段；
 - **右键**：预览中直接取消并 `clearLineAnchorSegmentSelection`；其他情况弹工具菜单。
 
 ### 3.2 锚点移动/删除
 
 当前实现**不支持**对已放置 anchor 的逐点移动或删除；锚点落下即固化为 `CorrectedSegment::Source::LineAnchor` 段。若需修改，须：
-1. 用 Select 工具选中段（方案允许时），通过 `applyRetuneSpeedToSelectedLineAnchorSegments` 修改 retune；
-2. 或者 HandDraw/再次 LineAnchor 覆写相应帧范围，产生新的 `CorrectedSegment` 覆盖旧段。
+1. 用 HandDraw/再次 LineAnchor 覆写相应帧范围，产生新的 `CorrectedSegment` 覆盖旧段；
+2. 若后续要实现“调整已选锚点线段强度”，必须在编辑命令层重新生成并提交新的 `f0Data`，不能在渲染 / 音频读取阶段临时解释 `retuneSpeed`。
 
 ---
 
@@ -231,16 +232,15 @@ applyXxxToSelection(value):
   计算 hasSelectedNotesRange / hasF0Selection / hasSelectionAreaRange
   target = AudioEditingScheme::resolveParameterTarget(scheme, kind, context)
   switch target:
-    SelectedLineAnchorSegments → applyRetuneSpeedToSelectedLineAnchorSegments
     SelectedNotes              → applyNoteParameterToSelectedNotes
-    FrameSelection             → if hasHandDrawCorrectionInRange: return true
+    FrameSelection             → if hasManualCorrectionInRange: return true
                                  else applyParameterToFrameRange → enqueueNoteBasedCorrectionAsync
     default                    → return false
 ```
 
 要点：
-- `SelectedLineAnchorSegments`：遍历选中段，若 `source != LineAnchor` 跳过；修改 `retuneSpeed`（clamp [0,1]），`commitEditedMaterializationCorrectedSegments`；
-- `FrameSelection` 时若该帧范围内存在 `HandDraw` 段，**不改写 retune**（语义上 HandDraw 是绝对 F0，无 retune 概念），直接 `return true`；
+- LineAnchor / HandDraw segment 的输出真相是 committed `f0Data`，批量参数编辑不再写 LineAnchor segment metadata；
+- `FrameSelection` 时若该帧范围内存在 `HandDraw` 或 `LineAnchor` 段，**不通过参数面板重解释 manual correctedF0**，直接 `return true`；
 - `applyParameterToFrameRange` 需先校验 `hasCorrectionInRange`，否则返回 false（无修正可调参数）。
 
 ---

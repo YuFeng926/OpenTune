@@ -866,8 +866,6 @@ void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection()
         context.selectedNoteRetuneSpeedPercent,
         context.selectedNoteVibratoDepth,
         context.selectedNoteVibratoRate);
-    context.hasSelectedSegmentRetuneSpeed = pianoRoll_.getSelectedSegmentRetuneSpeed(
-        context.selectedSegmentRetuneSpeedPercent);
 
     const auto scheme = appPreferences_.getState().shared.audioEditingScheme;
     const auto decision = resolveParameterPanelSyncDecision(scheme, context);

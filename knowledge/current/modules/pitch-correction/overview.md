@@ -20,7 +20,7 @@ last_updated: 2026-05-05
 |---|---|---|
 | 音高曲线数据管理 | `PitchCurve` + `PitchCurveSnapshot` | COW 不可变快照，承载 originalF0、originalEnergy、correctedSegments、renderGeneration |
 | 修正段落管理 | `CorrectedSegment` + `applyCorrectionToRange` | 基于音符/手绘/LineAnchor 三种来源的修正段 |
-| 音高修正算法 | `PitchCurve::applyCorrectionToRange` | 斜率旋转补偿 → 音高偏移 → 颤音注入 → retune 混合 → 边界 Hermite smoothstep 过渡 |
+| 音高修正算法 | `PitchCurve::applyCorrectionToRange` | 斜率旋转补偿 → 音高偏移 → 颤音注入 → retune 混合；音符间连续性在 NoteBased 计算阶段完成 |
 | 音符自动分割 | `NoteGenerator` | 从 F0 曲线基于 transitionThresholdCents / gapBridge / minDuration 分段生成 Note |
 | 感知音高估算 | `SimdPerceptualPitchEstimator` | PIP = VNC (Vibrato-Neutral Center) × SSA (Tukey 边缘衰减) × Energy |
 | 音阶吸附 | `ScaleSnapConfig::snapMidi` | 按调式（Major/Minor/Dorian/Mixolydian/Harmonic Minor/Pentatonic 等）量化到最近的合法半音 |
@@ -87,7 +87,7 @@ last_updated: 2026-05-05
 | 文件 | 行数 | 核心内容 |
 |---|---|---|
 | `Source/Utils/PitchCurve.h` | 376 | `PitchCurveSnapshot`（不可变）+ `PitchCurve`（COW 外壳，setter 全部 `atomic_store`）+ `CorrectedSegment` |
-| `Source/Utils/PitchCurve.cpp` | 654 | `applyCorrectionToRange` 五阶段修正 + Hermite smoothstep 过渡段构建 + `renderF0Range` / `renderCorrectedOnlyRange` |
+| `Source/Utils/PitchCurve.cpp` | 654 | `applyCorrectionToRange` 五阶段修正 + NoteBased 边界连续性 + `renderF0Range` / `renderCorrectedOnlyRange` |
 | `Source/Utils/PitchUtils.h` | 45 | `mixRetune` / `freqToMidi` / `midiToFreq`（纯 inline 函数） |
 | `Source/Utils/Note.h` | 288 | `Note` / `NoteSequence`（含 `eraseRange` 分割 + `dirty` 标记 + `normalizeNonOverlapping`）/ `LineAnchor` |
 | `Source/Utils/NoteGenerator.h` | 106 | `NoteGenerator`（静态类）+ `NoteSegmentationPolicy` + `ScaleSnapConfig` + `NoteGeneratorParams` |
@@ -116,7 +116,7 @@ last_updated: 2026-05-05
 5. **段落不重叠** — `clearSegmentsInRangePreserveOutside` 会裁剪或保留外侧、删除被覆盖的段。
 6. **Note 序列非重叠** — `NoteSequence::normalizeNonOverlapping` 强制后者 startTime 截断前者 endTime。
 7. **Worker 单 pending 槽** — 新请求进入时，旧 pending 立即标记 `VersionMismatch` 退回 completedRequest。
-8. **过渡段（Hermite smoothstep）** 统一 10 帧长度（`kUnifiedTransitionFrames`），仅在两侧原始 F0 均 voiced 且无段冲突时生成。
+8. **NoteBased 与 manual correctedF0 分层**：NoteBased 重算只替换 NoteBased 段，保留 HandDraw / LineAnchor committed `f0Data`；音符边界衔接在 NoteBased 计算阶段完成，不再生成额外 edge transition 段。
 
 ## 文档索引
 

@@ -44,6 +44,12 @@ std::vector<CorrectedSegment> copyCorrectedSegments(const std::shared_ptr<PitchC
     return copiedSegments;
 }
 
+bool isManualCorrectionSource(CorrectedSegment::Source source) noexcept
+{
+    return source == CorrectedSegment::Source::HandDraw
+        || source == CorrectedSegment::Source::LineAnchor;
+}
+
 } // namespace
 
 void PianoRollComponent::initializeUIComponents() {
@@ -322,10 +328,19 @@ void PianoRollComponent::consumeCompletedCorrectionResults()
     }
 
     if (committedSuccessfully) {
-        const int notifyStart = wasAutoTune ? completed->autoStartFrame : completed->startFrame;
-        const int notifyEndExclusive = wasAutoTune ? (completed->autoEndFrame + 1) : completed->endFrameExclusive;
-        const int notifyEnd = std::max(notifyStart, notifyEndExclusive - 1);
-        listeners_.call([notifyStart, notifyEnd](Listener& l) { l.pitchCurveEdited(notifyStart, notifyEnd); });
+        F0FrameRange notifyRange;
+        if (wasAutoTune) {
+            notifyRange = PitchCurve::expandNoteBasedCorrectionRange(completed->autoStartFrame,
+                                                                     completed->autoEndFrame + 1,
+                                                                     currentF0Timeline().endFrameExclusive());
+        } else {
+            notifyRange = PitchCurve::expandNoteBasedCorrectionRange(completed->startFrame,
+                                                                     completed->endFrameExclusive,
+                                                                     currentF0Timeline().endFrameExclusive());
+        }
+
+        const int notifyEnd = std::max(notifyRange.startFrame, notifyRange.endFrameExclusive - 1);
+        listeners_.call([notifyRange, notifyEnd](Listener& l) { l.pitchCurveEdited(notifyRange.startFrame, notifyEnd); });
     }
 
     if (wasAutoTune) {
@@ -383,9 +398,10 @@ bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrection
     AppLogger::log("AutoTune: after outer updateScrollBars");
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
     AppLogger::log("AutoTune: after outer invalidateVisual, before recordUndoAction");
-    // AutoTune 修正范围 = [autoStartFrame, autoEndFrame+1]（completed 已记录），
-    // 直接当作 affectedRange 传给 undo action；undo 该 AutoTune 等价于重渲染该范围。
-    const F0FrameRange autoTuneRange{completed.autoStartFrame, completed.autoEndFrame + 1};
+    const auto autoTuneRange = PitchCurve::expandNoteBasedCorrectionRange(
+        completed.autoStartFrame,
+        completed.autoEndFrame + 1,
+        currentF0Timeline().endFrameExclusive());
     recordUndoAction(pendingUndoDescription_, autoTuneRange);
     AppLogger::log("AutoTune: commitCompletedAutoTuneResult done");
     return true;
@@ -403,7 +419,10 @@ bool PianoRollComponent::commitCompletedNoteCorrectionResult(const PianoRollCorr
         return false;
     }
 
-    const F0FrameRange correctionRange{completed.startFrame, completed.endFrameExclusive};
+    const auto correctionRange = PitchCurve::expandNoteBasedCorrectionRange(
+        completed.startFrame,
+        completed.endFrameExclusive,
+        currentF0Timeline().endFrameExclusive());
     if (!commitEditedMaterializationCorrectedSegments(copyCorrectedSegments(completed.curve),
                                                        correctionRange)) {
         return false;
@@ -464,7 +483,7 @@ bool PianoRollComponent::commitNoteDraft()
         return true;
     }
 
-    // commitNoteDraft 不知道精确范围（被多个 mouseUp fallback 调），用全长 fallback。
+    // Pure note edits do not own a corrected-F0 range, so the undo snapshot covers the materialization.
     const auto success = commitEditedMaterializationNotes(interactionState_.noteDraft.workingNotes,
                                                           currentFullF0Range());
     if (success) {
@@ -839,8 +858,7 @@ bool PianoRollComponent::enqueueManualCorrectionPatchAsync(const std::vector<Pia
             op.startFrame,
             op.endFrameExclusive,
             op.f0Data,
-            op.source,
-            op.retuneSpeed);
+            op.source);
     }
 
     // dirtyStartFrame/dirtyEndFrame 是所有 manual ops 的 dirty 帧并集（含端点）。
@@ -1225,24 +1243,34 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
     if (!anySelected) return false;
 
     if (dirtyEndTime > dirtyStartTime && currentCurve_) {
-        const auto affectedRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
-        if (!affectedRange.isEmpty()) {
+        const auto editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
+        if (!editRange.isEmpty()) {
             auto clonedCurve = currentCurve_->clone();
             clonedCurve->applyCorrectionToRange(
-                notes, affectedRange.startFrame, affectedRange.endFrameExclusive,
+                notes, editRange.startFrame, editRange.endFrameExclusive,
                 retuneSpeed, vibratoDepth, vibratoRate, 44100.0);
             auto snap = clonedCurve->getSnapshot();
-            if (snap) {
-                commitEditedMaterializationNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange);
-            } else {
-                commitEditedMaterializationNotes(notes, affectedRange);
+
+            const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
+                editRange.startFrame,
+                editRange.endFrameExclusive,
+                f0tl.endFrameExclusive());
+            if (!commitEditedMaterializationNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange)) {
+                return false;
             }
+
             listeners_.call([affectedRange](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1); });
+            invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+            return true;
         } else {
-            commitEditedMaterializationNotes(notes, currentFullF0Range());
+            if (!commitEditedMaterializationNotes(notes, currentFullF0Range())) {
+                return false;
+            }
         }
     } else {
-        commitEditedMaterializationNotes(notes, currentFullF0Range());
+        if (!commitEditedMaterializationNotes(notes, currentFullF0Range())) {
+            return false;
+        }
     }
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
     return true;
@@ -1251,13 +1279,17 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
 bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vibratoDepth, float vibratoRate, int startFrame, int endFrameExclusive) {
     if (!currentCurve_ || endFrameExclusive <= startFrame) return false;
     if (!currentCurve_->hasCorrectionInRange(startFrame, endFrameExclusive)) return false;
+    if (hasManualCorrectionInRange(startFrame, endFrameExclusive)) return true;
 
     enqueueNoteBasedCorrectionAsync(getEditedMaterializationNotesCopy(),
                                     startFrame, endFrameExclusive,
                                     retuneSpeed, vibratoDepth, vibratoRate);
 
-    const int notifyEndFrame = std::max(startFrame, endFrameExclusive - 1);
-    listeners_.call([startFrame, notifyEndFrame](Listener& l) { l.pitchCurveEdited(startFrame, notifyEndFrame); });
+    const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(startFrame,
+                                                                          endFrameExclusive,
+                                                                          currentF0Timeline().endFrameExclusive());
+    const int notifyEndFrame = std::max(affectedRange.startFrame, affectedRange.endFrameExclusive - 1);
+    listeners_.call([affectedRange, notifyEndFrame](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, notifyEndFrame); });
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
     return true;
 }
@@ -1335,7 +1367,6 @@ bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
 
     AudioEditingScheme::ParameterTargetContext context;
     context.hasSelectedNotes = hasSelectedNotesRange;
-    context.hasSelectedLineAnchorSegments = !interactionState_.selectedLineAnchorSegmentIds.empty();
     context.hasFrameSelection = hasSelectionAreaRange;
     context.allowWholeClipFallback = false;
 
@@ -1343,14 +1374,9 @@ bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
         audioEditingScheme_,
         AudioEditingScheme::ParameterKind::RetuneSpeed,
         context)) {
-        case AudioEditingScheme::ParameterTarget::SelectedLineAnchorSegments:
-            return applyRetuneSpeedToSelectedLineAnchorSegments(speed);
         case AudioEditingScheme::ParameterTarget::SelectedNotes:
             return applyNoteParameterToSelectedNotes(speed, currentVibratoDepth_, currentVibratoRate_);
         case AudioEditingScheme::ParameterTarget::FrameSelection:
-            if (hasHandDrawCorrectionInRange(frameSelectionStartFrame, frameSelectionEndFrameExclusive)) {
-                return true;
-            }
             return applyParameterToFrameRange(speed,
                                               currentVibratoDepth_,
                                               currentVibratoRate_,
@@ -1361,60 +1387,6 @@ bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
     }
 
     return false;
-}
-
-bool PianoRollComponent::applyRetuneSpeedToSelectedLineAnchorSegments(float speed) {
-    if (isAutoTuneProcessing()) {
-        return false;
-    }
-
-    if (currentCurve_ == nullptr || interactionState_.selectedLineAnchorSegmentIds.empty()) {
-        return false;
-    }
-
-    auto snapshot = currentCurve_->getSnapshot();
-    const auto& allSegments = snapshot->getCorrectedSegments();
-
-    int modifiedCount = 0;
-    int affectedStartFrame = INT_MAX;
-    int affectedEndFrame = -1;
-
-    for (int idx : interactionState_.selectedLineAnchorSegmentIds) {
-        if (idx < 0 || idx >= static_cast<int>(allSegments.size())) continue;
-        const auto& seg = allSegments[idx];
-        if (seg.source != CorrectedSegment::Source::LineAnchor) continue;
-
-        modifiedCount++;
-        affectedStartFrame = std::min(affectedStartFrame, seg.startFrame);
-        affectedEndFrame = std::max(affectedEndFrame, seg.endFrame);
-    }
-
-    if (modifiedCount == 0) {
-        return false;
-    }
-
-    auto updatedSegments = copyCorrectedSegments(currentCurve_);
-
-    for (int idx : interactionState_.selectedLineAnchorSegmentIds) {
-        if (idx < 0 || idx >= static_cast<int>(allSegments.size())) continue;
-        const auto& seg = allSegments[idx];
-        if (seg.source != CorrectedSegment::Source::LineAnchor) continue;
-
-        updatedSegments[static_cast<size_t>(idx)].retuneSpeed = juce::jlimit(0.0f, 1.0f, speed);
-    }
-
-    const F0FrameRange affectedRange{affectedStartFrame,
-                                      affectedEndFrame >= affectedStartFrame ? affectedEndFrame + 1 : affectedStartFrame};
-    commitEditedMaterializationCorrectedSegments(updatedSegments, affectedRange);
-
-    if (affectedStartFrame <= affectedEndFrame) {
-        listeners_.call([affectedStartFrame, affectedEndFrame](Listener& l) {
-            l.pitchCurveEdited(affectedStartFrame, affectedEndFrame);
-        });
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
-    }
-
-    return true;
 }
 
 bool PianoRollComponent::applyVibratoDepthToSelection(float depth) {
@@ -1454,7 +1426,6 @@ bool PianoRollComponent::applyVibratoParameterToSelection(VibratoParam param, fl
 
     AudioEditingScheme::ParameterTargetContext context;
     context.hasSelectedNotes = hasSelectedNotesRange;
-    context.hasSelectedLineAnchorSegments = !interactionState_.selectedLineAnchorSegmentIds.empty();
     context.hasFrameSelection = hasSelectionAreaRange;
     context.allowWholeClipFallback = false;
 
@@ -1509,64 +1480,6 @@ bool PianoRollComponent::getSingleSelectedNoteParameters(float& retuneSpeedPerce
     retuneSpeedPercent = juce::jlimit(0.0f, 100.0f, resolvedRetuneSpeed * 100.0f);
     vibratoDepth = juce::jlimit(0.0f, 100.0f, resolvedVibratoDepth);
     vibratoRate = juce::jlimit(3.0f, 12.0f, resolvedVibratoRate);
-    return true;
-}
-
-bool PianoRollComponent::getSelectedSegmentRetuneSpeed(float& retuneSpeedPercent) const
-{
-    if (currentCurve_ == nullptr || interactionState_.selectedLineAnchorSegmentIds.empty()) {
-        return false;
-    }
-
-    int selectedNotesStartFrame = 0;
-    int selectedNotesEndFrameExclusive = 0;
-    const bool hasSelectedNotesRange = getSelectedNotesFrameRange(selectedNotesStartFrame,
-                                                                  selectedNotesEndFrameExclusive);
-
-    int frameSelectionStartFrame = 0;
-    int frameSelectionEndFrameExclusive = 0;
-    const bool hasF0SelectionRange = getF0SelectionFrameRange(frameSelectionStartFrame,
-                                                              frameSelectionEndFrameExclusive);
-    const bool hasSelectionAreaRange = hasF0SelectionRange
-        || getSelectionAreaFrameRange(frameSelectionStartFrame, frameSelectionEndFrameExclusive);
-
-    AudioEditingScheme::ParameterTargetContext context;
-    context.hasSelectedNotes = hasSelectedNotesRange;
-    context.hasSelectedLineAnchorSegments = !interactionState_.selectedLineAnchorSegmentIds.empty();
-    context.hasFrameSelection = hasSelectionAreaRange;
-    context.allowWholeClipFallback = false;
-
-    if (AudioEditingScheme::resolveParameterTarget(
-            audioEditingScheme_,
-            AudioEditingScheme::ParameterKind::RetuneSpeed,
-            context) != AudioEditingScheme::ParameterTarget::SelectedLineAnchorSegments) {
-        return false;
-    }
-
-    auto snapshot = currentCurve_->getSnapshot();
-    const auto& allSegments = snapshot->getCorrectedSegments();
-
-    if (interactionState_.selectedLineAnchorSegmentIds.size() != 1) {
-        return false;
-    }
-
-    int idx = interactionState_.selectedLineAnchorSegmentIds[0];
-    if (idx < 0 || idx >= static_cast<int>(allSegments.size())) {
-        return false;
-    }
-
-    const auto& seg = allSegments[idx];
-    if (seg.source != CorrectedSegment::Source::LineAnchor) {
-        return false;
-    }
-
-    if (seg.retuneSpeed < 0.0f) {
-        retuneSpeedPercent = currentRetuneSpeed_ * 100.0f;
-    } else {
-        retuneSpeedPercent = seg.retuneSpeed * 100.0f;
-    }
-
-    retuneSpeedPercent = juce::jlimit(0.0f, 100.0f, retuneSpeedPercent);
     return true;
 }
 
@@ -1652,7 +1565,7 @@ void PianoRollComponent::setNoteSplit(float value) {
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
 }
 
-bool PianoRollComponent::hasHandDrawCorrectionInRange(int startFrame, int endFrame) const {
+bool PianoRollComponent::hasManualCorrectionInRange(int startFrame, int endFrame) const {
     if (currentCurve_ == nullptr || startFrame >= endFrame) {
         return false;
     }
@@ -1660,7 +1573,7 @@ bool PianoRollComponent::hasHandDrawCorrectionInRange(int startFrame, int endFra
     auto snapshot = currentCurve_->getSnapshot();
     const auto& segments = snapshot->getCorrectedSegments();
     for (const auto& seg : segments) {
-        if (seg.source != CorrectedSegment::Source::HandDraw) {
+        if (!isManualCorrectionSource(seg.source)) {
             continue;
         }
         if (seg.endFrame <= startFrame || seg.startFrame >= endFrame) {
@@ -2474,11 +2387,11 @@ PianoRollRenderer::MaterializationRenderItem PianoRollComponent::buildMaterializ
     if (item.active) {
         curve = currentCurve_;
         item.audioBuffer = audioBuffer_;
-        item.notes = getDisplayedNotes();
+        item.displayNotes = getDisplayedNotes();
     } else if (processor_ != nullptr) {
         curve = processor_->getMaterializationPitchCurveById(placement.materializationId);
         item.audioBuffer = processor_->getMaterializationAudioBufferById(placement.materializationId);
-        item.notes = processor_->getMaterializationNotesById(placement.materializationId);
+        item.displayNotes = processor_->getMaterializationNotesById(placement.materializationId);
     }
 
     if (curve != nullptr) {

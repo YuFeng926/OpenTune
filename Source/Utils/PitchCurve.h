@@ -7,6 +7,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include "F0Timeline.h"
 #include "Note.h"
 #include "PitchUtils.h"
 
@@ -234,11 +235,11 @@ public:
         float vibratoRate = 7.5f,
         double audioSampleRate = 44100.0);
 
-    void setManualCorrectionRange(int startFrame, int endFrame, const std::vector<float>& f0Data,
-                                   CorrectedSegment::Source source);
+    static constexpr int getCorrectedF0BoundaryContextFrames() noexcept { return 8; }
+    static F0FrameRange expandNoteBasedCorrectionRange(int startFrame, int endFrameExclusive, int frameCount) noexcept;
 
     void setManualCorrectionRange(int startFrame, int endFrame, const std::vector<float>& f0Data,
-                                   CorrectedSegment::Source source, float retuneSpeed);
+                                   CorrectedSegment::Source source);
 
     void clearCorrectionRange(int startFrame, int endFrame);
 

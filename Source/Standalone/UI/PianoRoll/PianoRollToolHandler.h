@@ -33,7 +33,6 @@ public:
         int endFrameExclusive = 0;
         std::vector<float> f0Data;
         CorrectedSegment::Source source = CorrectedSegment::Source::HandDraw;
-        float retuneSpeed = -1.0f;
     };
 
     // PianoRoll 组件提供的回调上下文。
@@ -156,8 +155,7 @@ private:
     void handleAutoTuneTool(const juce::MouseEvent& e);
     void handleLineAnchorMouseDown(const juce::MouseEvent& e);
     void handleLineAnchorMouseDrag(const juce::MouseEvent& e);
-    void handleLineAnchorMouseUp(const juce::MouseEvent& e);
-    void commitLineAnchorOperation();
+    void clearLineAnchorPreview();
 
     void handleSelectDrag(const juce::MouseEvent& e);
     void handleDrawNoteDrag(const juce::MouseEvent& e);
@@ -170,7 +168,6 @@ private:
 
     bool isEmptySpaceMouseDown(const juce::MouseEvent& e);
     bool hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e);
-    bool hitsLineAnchorSegment(const juce::MouseEvent& e);
     void beginEmptySpaceIntent(const juce::MouseEvent& e);
     bool consumeEmptySpaceIntentDrag(const juce::MouseEvent& e);
     bool consumeEmptySpaceIntentUp(const juce::MouseEvent& e);

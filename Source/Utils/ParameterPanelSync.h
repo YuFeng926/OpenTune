@@ -10,9 +10,6 @@ struct ParameterPanelSyncContext {
     float selectedNoteVibratoDepth = 0.0f;
     float selectedNoteVibratoRate = 0.0f;
 
-    bool hasSelectedSegmentRetuneSpeed = false;
-    float selectedSegmentRetuneSpeedPercent = 0.0f;
-
     float clipRetuneSpeedPercent = 0.0f;
     float clipVibratoDepth = 0.0f;
     float clipVibratoRate = 0.0f;
@@ -42,7 +39,6 @@ inline ParameterPanelSyncDecision resolveParameterPanelSyncDecision(
 
     AudioEditingScheme::ParameterTargetContext targetContext;
     targetContext.hasSelectedNotes = context.hasSelectedNoteParameters;
-    targetContext.hasSelectedLineAnchorSegments = context.hasSelectedSegmentRetuneSpeed;
     targetContext.hasFrameSelection = false;
     targetContext.allowWholeClipFallback = false;
 
@@ -59,14 +55,6 @@ inline ParameterPanelSyncDecision resolveParameterPanelSyncDecision(
         decision.vibratoDepth = context.selectedNoteVibratoDepth;
         decision.shouldSetVibratoRate = true;
         decision.vibratoRate = context.selectedNoteVibratoRate;
-        decision.nextShowingSelectionParameters = true;
-        return decision;
-    }
-
-    if (parameterTarget == AudioEditingScheme::ParameterTarget::SelectedLineAnchorSegments
-        && context.hasSelectedSegmentRetuneSpeed) {
-        decision.shouldSetRetuneSpeed = true;
-        decision.retuneSpeedPercent = context.selectedSegmentRetuneSpeedPercent;
         decision.nextShowingSelectionParameters = true;
         return decision;
     }
