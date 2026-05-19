@@ -282,7 +282,6 @@ private:
     void applyEditedMaterializationAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
     PianoRollRenderer::MaterializationRenderItem buildMaterializationRenderItem(
         const TimelineMaterializationPlacement& placement) const;
-    void refreshEditedMaterializationNotes();
     const std::vector<Note>& getCommittedNotes() const;
     const std::vector<Note>& getDisplayedNotes() const;
     NoteInteractionDraft& getNoteDraft();

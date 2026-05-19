@@ -525,9 +525,6 @@ void PianoRollToolHandler::mouseUp(const juce::MouseEvent& e)
         case ToolId::DrawNote:
             handleDrawNoteUp(e);
             break;
-        case ToolId::LineAnchor:
-            handleLineAnchorMouseUp(e);
-            break;
         case ToolId::TimeTool:
             handleTimeToolMouseUp(e);
             break;
