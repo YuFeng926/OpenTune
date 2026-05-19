@@ -145,6 +145,8 @@ private:
     std::unique_ptr<ToolIconButton> drawNoteToolButton_;
     std::unique_ptr<ToolIconButton> lineAnchorToolButton_;
     std::unique_ptr<ToolIconButton> handDrawToolButton_;
+    // ⚡️ vocal-time-stretch §8.4 — Time tool palette button (toolId=5)
+    std::unique_ptr<ToolIconButton> timeToolButton_;
 
     LargeKnobLookAndFeel largeKnobLookAndFeel_;
 

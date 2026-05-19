@@ -38,7 +38,7 @@ struct SuiteEntry {
     void (*run)();
 };
 
-constexpr std::array<SuiteEntry, 7> kSuites{{
+constexpr std::array<SuiteEntry, 20> kSuites{{
     { "core", "leaf utilities and render primitives", &runCoreBehaviorSuite },
     { "processor", "shared processor and render contracts", &runProcessorBehaviorSuite },
     { "ui", "piano-roll and visual loop behavior", &runUiBehaviorSuite },
@@ -46,6 +46,19 @@ constexpr std::array<SuiteEntry, 7> kSuites{{
     { "architecture", "clip core, arrangement, session, and guards", &runArchitectureBehaviorSuite },
     { "undo", "undo/redo manager", &runUndoManagerSuite },
     { "memory", "memory optimization and render cache refactor", &runMemoryOptimizationSuite },
+    { "time-grid", "vocal-time-stretch TimeGrid data model + tau", &runTimeGridSuite },
+    { "dsp-detection", "vocal-time-stretch onset/phoneme/word-segmenter detection chain", &runDspDetectionSuite },
+    { "rubberband", "vocal-time-stretch RubberBandStretcher wrapper (Offline + R3)", &runRubberBandStretcherSuite },
+    { "time-stretch-cache", "vocal-time-stretch TimeStretchCache clip-wide single-entry cache", &runTimeStretchCacheSuite },
+    { "matstore-timegrid", "vocal-time-stretch MaterializationStore + TimeGrid + RB lifecycle integration", &runMaterializationStoreTimeGridSuite },
+    { "stage2-worker", "vocal-time-stretch Stage 2 worker + readPlaybackAudio fast path", &runStage2WorkerSuite },
+    { "timetool-handler", "vocal-time-stretch Time tool ToolHandler hover/drag/commit", &runTimeToolHandlerSuite },
+    { "integration-pipeline", "vocal-time-stretch L3 integration: order independence, undo, waveform tau", &runIntegrationPipelineSuite },
+    { "invariant-contract", "vocal-time-stretch L4 contract / invariants: bypass bit-exactness, ARA region length, RB reset", &runInvariantContractSuite },
+    { "silero-vad", "vocal-time-stretch SileroVadExtractor lifecycle + ONNX inference (16k + 44.1k)", &runSileroVadExtractorSuite },
+    { "game-note-generator", "GameNoteGenerator D3PM ONNX transcription + mergeChunkNotes seam dedup", &runGameNoteGeneratorSuite },
+    { "vocoder-config", "vocoder-runtime-config: forward chain defaults + mel hash invariants", &runVocoderConfigSuite },
+    { "handle-note-merger", "time-grid-note-confirmation: merge alg + barrier + reSeed + invariants", &runHandleNoteMergerSuite },
 }};
 
 void printHeader()
@@ -5608,8 +5621,11 @@ void runProcessorStateVersionFiveAndNoBpmTest()
         logFail(testName, "expected OTST magic in non-Standalone path");
         return;
     }
-    if (version != 5) {
-        logFail(testName, "kProcessorStateVersion not bumped to 5");
+    // §3.8: vocal-time-stretch bumped state version 5 → 6 (TimeGrid section
+    // appended after PitchCurve per materialization).  v5 projects are still
+    // accepted via backward-compat path in setStateInformation.
+    if (version != 6) {
+        logFail(testName, "kProcessorStateVersion expected 6 (vocal-time-stretch §3.8)");
         return;
     }
 
@@ -7252,7 +7268,6 @@ void runRenderCache_OverlayReadsFromChunkAudioAtRenderSampleRateTest()
     constexpr const char* testName = "RenderCache_OverlayReadsFromChunkAudioAtRenderSampleRate";
 
     RenderCache cache;
-    cache.prepareCrossoverMixer(44100.0, 512);
 
     // Create a chunk with known audio data at 44.1kHz
     const int numSamples = 441; // 0.01 seconds at 44.1kHz
@@ -7293,7 +7308,6 @@ void runRenderCache_OverlayWithDifferentTargetSampleRateTest()
     constexpr const char* testName = "RenderCache_OverlayWithDifferentTargetSampleRate";
 
     RenderCache cache;
-    cache.prepareCrossoverMixer(96000.0, 512);
 
     // Create a chunk with known audio data at 44.1kHz
     const int numSamples = 441;

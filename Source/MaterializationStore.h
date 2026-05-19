@@ -23,11 +23,17 @@
 
 #include "DSP/ChromaKeyDetector.h"
 #include "Inference/RenderCache.h"
+#include "Inference/TimeStretchCache.h"  // ⚡️ vocal-time-stretch §6.2 — store-wide Stage 2 cache
 #include "Utils/MaterializationState.h"
 #include "Utils/Note.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/SilentGapDetector.h"
 #include "Utils/SourceWindow.h"
+#include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §3.6 — per-materialization TimeGrid
+
+namespace OpenTune {
+class RubberBandStretcher;   // forward-decl — §5.5
+}
 
 namespace OpenTune {
 
@@ -46,12 +52,30 @@ public:
         std::vector<Note> notes;
         std::vector<SilentGap> silentGaps;
         uint64_t renderRevision{0};
+
+        // vocal-time-stretch §3.7: optional initial TimeGrid.
+        // If null, createMaterialization auto-seeds an identity grid spanning
+        // [0, audioDurationSeconds] with locked endpoints (output==source).
+        std::shared_ptr<const TimeGridSnapshot> timeGrid;
     };
 
     // 播放时的只读音频来源（优先 RenderCache，降级为原始音频）
     struct PlaybackReadSource {
         std::shared_ptr<RenderCache> renderCache;
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+
+        // vocal-time-stretch §7 (Phase D MVP):
+        //   When timeGridIsIdentity == false AND timeStretchCache != nullptr,
+        //   readPlaybackAudio fast-paths from the TimeStretchCache (Stage 2 output),
+        //   bypassing the dry+overlay LR4 mix path.  When the cache misses (Stage 2
+        //   not yet rendered), readPlaybackAudio falls back to the dry path until
+        //   the worker finishes.  When timeGridIsIdentity == true (default after
+        //   import), behavior is unchanged.
+        TimeStretchCache* timeStretchCache{nullptr};
+        uint64_t materializationId{0};
+        uint32_t pitchRevision{0};
+        uint32_t timeGridRevision{0};
+        bool timeGridIsIdentity{true};
 
         bool hasAudio() const
         {
@@ -79,6 +103,8 @@ public:
         uint64_t notesRevision{0};
         std::vector<SilentGap> silentGaps;
         uint64_t renderRevision{0};
+        std::shared_ptr<const TimeGridSnapshot> timeGrid;
+        uint64_t timeGridRevision{0};
     };
 
     // 仅 notes 部分的轻量快照
@@ -135,6 +161,40 @@ public:
                                   std::vector<Note> notes,
                                   std::shared_ptr<PitchCurve> curve);
 
+    // ============================================================
+    // vocal-time-stretch §3.6 — TimeGrid accessors (per-materialization)
+    //
+    // The TimeGrid lives alongside PitchCurve: COW snapshot, atomic publish.
+    // setTimeGridById bumps timeGridRevision so cache layers can detect change.
+    // ============================================================
+
+    bool getTimeGrid(uint64_t materializationId,
+                     std::shared_ptr<const TimeGridSnapshot>& outSnapshot) const;
+    uint64_t getTimeGridRevision(uint64_t materializationId) const;
+    bool setTimeGrid(uint64_t materializationId,
+                     std::shared_ptr<const TimeGridSnapshot> snapshot);
+
+    // ============================================================
+    // vocal-time-stretch §5.5 — per-materialization Rubber Band stretcher
+    //
+    // The stretcher is constructed lazily when first needed (Stage 2 render
+    // worker) and destroyed when the materialization is destroyed.  Returns
+    // a non-owning pointer; caller must NOT delete.
+    // ============================================================
+    RubberBandStretcher* getRubberBandStretcher(uint64_t materializationId,
+                                                  double sampleRate,
+                                                  int channels);
+
+    // ============================================================
+    // vocal-time-stretch §6.2 — store-wide TimeStretchCache
+    //
+    // Single Stage 2 cache shared across all materializations (each entry
+    // keyed by materializationId).  Owned by the store so its lifecycle
+    // matches materializations.
+    // ============================================================
+    TimeStretchCache& getTimeStretchCache() noexcept { return timeStretchCache_; }
+    const TimeStretchCache& getTimeStretchCache() const noexcept { return timeStretchCache_; }
+
     OriginalF0State getOriginalF0State(uint64_t materializationId) const;
     bool setOriginalF0State(uint64_t materializationId, OriginalF0State state);
 
@@ -156,7 +216,6 @@ public:
     uint64_t replaceMaterializationWithNewLineage(uint64_t oldId,
                                                    CreateMaterializationRequest request);
 
-    void prepareAllCrossoverMixers(double sampleRate, int maxBlockSize);
     bool enqueuePartialRender(uint64_t materializationId,
                               double relStartSeconds,
                               double relEndSeconds,
@@ -188,6 +247,9 @@ private:
         std::shared_ptr<RenderCache> renderCache;
         std::vector<Note> notes;
         std::vector<SilentGap> silentGaps;
+        std::shared_ptr<const TimeGridSnapshot> timeGrid;   // §3.6
+        uint64_t timeGridRevision{0};                        // §3.6
+        std::unique_ptr<RubberBandStretcher> stretcher;     // §5.5 — lazy-constructed
         bool isRetired_{false};
     };
 
@@ -205,6 +267,7 @@ private:
     juce::ReadWriteLock lock_;
     std::map<uint64_t, MaterializationEntry> materializations_;
     std::atomic<uint64_t> nextMaterializationId_{1};
+    TimeStretchCache timeStretchCache_;   // §6.2 — store-wide Stage 2 cache
 };
 
 } // namespace OpenTune

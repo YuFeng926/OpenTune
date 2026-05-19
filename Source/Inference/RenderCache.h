@@ -9,7 +9,6 @@
 #include <cstdint>
 
 #include "Utils/TimeCoordinate.h"
-#include "DSP/CrossoverMixer.h"
 
 struct RenderCacheTestAccessor;
 
@@ -104,12 +103,6 @@ public:
 
     void clear();
 
-    /** Prepare the crossover mixer for the given playback sample rate. */
-    void prepareCrossoverMixer(double sampleRate, int maxBlockSize, int numChannels = 2);
-
-    /** Per-materialization crossover mixer (mutable for use in const read path). */
-    CrossoverMixer& getCrossoverMixer() const { return crossoverMixer_; }
-
 private:
     friend struct RenderCacheTestAccessor;
     mutable juce::SpinLock lock_;
@@ -117,11 +110,15 @@ private:
     std::set<double> pendingChunks_;  // 待渲染 Chunk 的 startSeconds 索引
     size_t totalMemoryUsage_ = 0;
 
+public:
+    // ⚡️ vocal-time-stretch §6.3 — shared global LRU pool accessors.
+    // Promoted to public so TimeStretchCache (Stage 2 cache) can account its
+    // bytes into the same 256 MB global limit.  Both caches feed the same
+    // counter; eviction is per-cache (RenderCache evicts its oldest chunk
+    // when over limit; TimeStretchCache replaces by materializationId).
     static std::atomic<size_t>& globalCacheLimitBytes();
     static std::atomic<size_t>& globalCacheCurrentBytes();
     static std::atomic<size_t>& globalCachePeakBytes();
-
-    mutable CrossoverMixer crossoverMixer_;
 };
 
 } // namespace OpenTune

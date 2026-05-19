@@ -163,6 +163,10 @@ private:
     uint64_t rmvpeOverlayTargetMaterializationId_{0};
     bool showingSingleNoteParams_{false};
     bool initialFocusGrabbed_{false};
+    // Tracks last-seen notesRevision per active materialization so the timer
+    // can pull fresh notes when an async note generator (GAME) commits late.
+    uint64_t lastPianoRollNotesRevision_{0};
+    uint64_t lastPianoRollNotesRevisionMatId_{0};
 
     Capture::CaptureSession* regularCaptureCallbackSession_ = nullptr;
 

@@ -250,6 +250,25 @@ public:
     }
 
     /**
+     * @brief Get Time tool icon path (vocal-time-stretch §8.4).
+     * A horizontal "stretch" arrow with two anchor handles, evoking the
+     * TimeGrid handle-drag affordance — distinct from a clock face which
+     * could be confused with playback time.
+     */
+    static juce::Path getTimeToolIcon() {
+        juce::Path path;
+        // Center horizontal track (timeline)
+        path.addRoundedRectangle(3.0f, 11.0f, 18.0f, 2.0f, 1.0f);
+        // Left handle (square anchor)
+        path.addRoundedRectangle(2.0f, 8.0f, 4.0f, 8.0f, 1.0f);
+        // Right handle (square anchor)
+        path.addRoundedRectangle(18.0f, 8.0f, 4.0f, 8.0f, 1.0f);
+        // Movable middle handle (circle, slightly offset to suggest drag)
+        path.addEllipse(11.0f, 7.0f, 5.0f, 5.0f);
+        return path;
+    }
+
+    /**
      * @brief Get waveform/track icon path
      * Bars representing audio waveform
      */
@@ -494,6 +513,13 @@ public:
      */
     static juce::Image createHandDrawIconImage() {
         return createIconImage(getHandDrawIcon(), juce::Colours::white);
+    }
+
+    /**
+     * @brief Create time tool icon image (vocal-time-stretch §8.4)
+     */
+    static juce::Image createTimeToolIconImage() {
+        return createIconImage(getTimeToolIcon(), juce::Colours::white);
     }
 
     /**

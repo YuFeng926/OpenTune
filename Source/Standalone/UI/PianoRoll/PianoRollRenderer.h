@@ -11,6 +11,8 @@
 #include "Utils/PitchCurve.h"
 #include "Utils/PianoRollVisualPreferences.h"
 #include "Utils/Note.h"
+#include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §8.5 — TimeGrid handles
+#include "UI/ToolIds.h"       // ⚡️ vocal-time-stretch §8.5 (Phase J) — currentTool
 #include <algorithm>
 #include <vector>
 #include <array>
@@ -86,6 +88,21 @@ public:
         int f0SelectionStartFrame = -1;
         int f0SelectionEndFrameExclusive = -1;
 
+        // ⚡️ vocal-time-stretch §8.5 — TimeGrid handles overlay.
+        // When non-null, renderer paints vertical guide lines at each handle's
+        // output_seconds (because piano-roll x-axis is OUTPUT/display time).
+        // Endpoint handles are visually distinguished (locked = solid, dimmer);
+        // user-draggable handles use kind-specific colors.
+        std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
+        uint64_t timeGridHoveredHandleId = 0;
+        uint64_t timeGridSelectedHandleId = 0;
+
+        // ⚡️ vocal-time-stretch §8.5 (Phase J) — current tool drives view
+        // mode: TimeTool → Time view (no piano keys, no notes/F0, full-height
+        // handles); else → Pitch view (existing).
+        ToolId currentTool = ToolId::Select;
+        bool isTimeView() const { return currentTool == ToolId::TimeTool; }
+
         enum class TimeUnit { Seconds, Bars } timeUnit = TimeUnit::Seconds;
 
         std::function<float(float)> midiToY;
@@ -103,6 +120,9 @@ public:
     void drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
     void drawNotes(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
+
+    // ⚡️ §8.5 — paint TimeGrid handles as vertical guide lines.
+    void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx);
 
     void drawF0Curve(juce::Graphics& g,
                      const std::vector<float>& f0,

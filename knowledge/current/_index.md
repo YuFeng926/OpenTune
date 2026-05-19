@@ -43,6 +43,9 @@ last_updated: 2026-05-05
 | cross-cutting/caching.md | ✅ |
 | cross-cutting/error-handling.md | ✅ |
 | cross-cutting/threading.md | ✅ |
+| cross-cutting/undo-affected-range-invariant.md | ✅ |
+| cross-cutting/coordinate-system-source-time-display-output.md | ✅ (vocal-time-stretch v7) |
+| cross-cutting/two-stage-render-pipeline.md | ✅ (vocal-time-stretch v7) |
 
 ## 本次运行摘要
 
@@ -64,3 +67,25 @@ last_updated: 2026-05-05
 6. **PianoRoll 视觉失效拆分**：`PianoRollVisualInvalidation` 独立模块
 7. **三主题统一**：`OpenTuneLookAndFeel` header-only 集成 BlueBreeze/DarkBlueGrey；Aurora 保留独立 `.cpp`
 8. **RenderCache 容量**：256 MB（旧文档误记 1.5 GB，已修正）
+
+## vocal-time-stretch v7 关键架构新增（2026-05-12）
+
+1. **TimeGrid 数据模型**：`Source/Utils/TimeGrid.{h,cpp}`，COW `TimeGridSnapshot` 与
+   `PitchCurve` 平级存于 `MaterializationStore`；piecewise-linear `τ` / `τ⁻¹`；
+   端点 ClipStart/ClipEnd 永远 locked
+2. **Rubber Band R3 拉伸引擎**：`Source/Inference/RubberBandStretcher.{h,cpp}` 包装
+   `ThirdParty/rubberband-4.0.0` single-file build，OptionProcessOffline + EngineFiner
+   + FormantPreserved；每编辑 reset → setKeyFrameMap → study → process 全重建
+3. **双阶段渲染**：Stage 1 `RenderCache`(=PitchCache, chunk-wise) +
+   Stage 2 `TimeStretchCache`(clip-wide per-matId)，共享 256MB LRU；详见
+   `cross-cutting/two-stage-render-pipeline.md`
+4. **检测管线**：`Source/DSP/{OnsetDetector,PhonemeClassifier,WordSegmenter}` +
+   `Source/Inference/SileroVadExtractor`(Phase H scaffolding) 在 F0 提取后自动播种
+   TimeGrid handles
+5. **Time tool UI**：`ToolId::TimeTool=5`，参数面板第 6 按钮 + 'T' 快捷；与 Note 工具
+   家族**互斥**(setCurrentTool 内 §8.4 切换清理)；Phase H 增 Shift 多选 + Alt 取消吸附
+   + 组拖动同 Δ
+6. **τ 投影 cross-cutting 不变量**：`cross-cutting/coordinate-system-source-time-display-output.md`
+   规定数据层永远存源时间、显示层 τ 投影、输入层 τ⁻¹ 反投影
+7. **Undo affected-range 不变量延伸**：`TimeGridEditAction` 与 `PianoRollEditAction`
+   严格平级；构造时显式接受 affected source frame range，禁止从 snapshot diff 反推

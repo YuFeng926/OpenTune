@@ -2,11 +2,12 @@
 #include "../../Utils/LocalizationManager.h"
 #include "../Utils/AppLogger.h"
 #include "../../Utils/PianoRollEditAction.h"
+#include "../../Utils/TimeGridEditAction.h"   // ⚡️ vocal-time-stretch §8.7
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include "../DSP/ChromaKeyDetector.h"
-#include "../Utils/NoteGenerator.h"
+#include "../Utils/LegacyNoteGenerator.h"
 #include "../Utils/SimdPerceptualPitchEstimator.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../../PluginProcessor.h"
@@ -151,7 +152,17 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         menu.addItem("Draw Note (2)", [this]() { setCurrentTool(ToolId::DrawNote); });
         menu.addItem("Line Anchor (4)", [this]() { setCurrentTool(ToolId::LineAnchor); });
         menu.addItem("Hand Draw (5)", [this]() { setCurrentTool(ToolId::HandDraw); });
+        menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
         menu.showMenuAsync(juce::PopupMenu::Options());
+    };
+    // add-note-confirmed-handles §4.2: Re-seed handles from notes (Time tool 空白右键)
+    toolCtx.canReSeedTimeGridFromNotes = [this]() -> bool {
+        if (processor_ == nullptr || editedMaterializationId_ == 0) return false;
+        return processor_->canReSeedTimeGridFromNotesById(editedMaterializationId_);
+    };
+    toolCtx.reSeedTimeGridFromNotes = [this]() {
+        if (processor_ == nullptr || editedMaterializationId_ == 0) return;
+        processor_->reSeedTimeGridFromNotesById(editedMaterializationId_);
     };
     toolCtx.notifyAutoTuneRequested = [this]() { listeners_.call([](Listener& l) { l.autoTuneRequested(); }); };
     toolCtx.notifyPlayPauseToggle = [this]() { listeners_.call([](Listener& l) { l.playPauseToggleRequested(); }); };
@@ -250,6 +261,46 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.toggleLineAnchorSegmentSelection = [this](int idx) { toggleLineAnchorSegmentSelection(idx); };
     toolCtx.clearLineAnchorSegmentSelection = [this]() { clearLineAnchorSegmentSelection(); };
     toolCtx.setUndoDescription = [this](juce::String desc) { pendingUndoDescription_ = std::move(desc); };
+
+    // ============================================================
+    // ⚡️ vocal-time-stretch §8.7 — Time tool / TimeGrid wiring
+    // ============================================================
+    toolCtx.getMaterializationIdForView = [this]() -> uint64_t {
+        return editedMaterializationId_;
+    };
+    toolCtx.getTimeGridSnapshot = [this]() -> std::shared_ptr<const TimeGridSnapshot> {
+        if (processor_ == nullptr || editedMaterializationId_ == 0) return nullptr;
+        return processor_->getMaterializationTimeGridById(editedMaterializationId_);
+    };
+    toolCtx.commitTimeGrid = [this](std::shared_ptr<const TimeGridSnapshot> newSnap,
+                                     std::shared_ptr<const TimeGridSnapshot> oldSnap,
+                                     int64_t affectedSrcStart,
+                                     int64_t affectedSrcEnd,
+                                     juce::String description) -> bool {
+        if (processor_ == nullptr || editedMaterializationId_ == 0) return false;
+        if (newSnap == nullptr) return false;
+
+        auto action = std::make_unique<TimeGridEditAction>(
+            *processor_,
+            editedMaterializationId_,
+            description.isNotEmpty() ? description : juce::String("编辑时间网格"),
+            std::move(oldSnap),
+            newSnap,
+            affectedSrcStart,
+            affectedSrcEnd);
+        // First publish the new snapshot to the processor (the action's redo()
+        // will replay this); then push the action so undo() reverts.
+        const bool published = processor_->setMaterializationTimeGridById(
+            editedMaterializationId_, newSnap, affectedSrcStart, affectedSrcEnd);
+        if (!published) return false;
+        processor_->getUndoManager().addAction(std::move(action));
+        return true;
+    };
+    toolCtx.notifyTimeGridChanged = [this]() {
+        // §8.6 — wider repaint via VisualInvalidation TimeGrid reason.
+        repaint();
+    };
+
     return toolCtx;
 }
 
@@ -1168,7 +1219,12 @@ void PianoRollComponent::paint(juce::Graphics& g) {
                 renderer_->drawWaveform(g, ctx, item);
         }
 
-        renderer_->drawLanes(g, ctx);
+        // ⚡️ vocal-time-stretch §8.5 (Phase J) — Time view hides Pitch
+        // furniture (note rows / staves / piano keys / F0 curves) so the user
+        // can focus on time anchors.  Lanes / notes / F0 are skipped; waveform
+        // + handles + chunk boundaries remain.
+        if (!ctx.isTimeView()) {
+            renderer_->drawLanes(g, ctx);
 
         for (const auto& item : ctx.materializations)
             renderer_->drawNotes(g, ctx, item);
@@ -1210,7 +1266,17 @@ void PianoRollComponent::paint(juce::Graphics& g) {
             renderer_->drawChunkBoundaries(g, ctx, item);
     }
 
-    renderer_->drawPianoKeys(g, ctx);
+    // ⚡️ §8.5 — paint TimeGrid handles ABOVE chunk boundaries / waveform but
+    // BELOW the piano keys (which sit on the left edge).  In Time view we
+    // also force-render endpoint handles (even on identity grid) so the user
+    // sees ClipStart / ClipEnd as anchor references.
+    renderer_->drawTimeGridHandles(g, ctx);
+
+    // §8.5 (Phase J) — Pitch view shows piano keys; Time view replaces the
+    // left band with a dim spacer so the timeline aligns visually.
+    if (!ctx.isTimeView()) {
+        renderer_->drawPianoKeys(g, ctx);
+    }
 
     drawSelectionBox(g, themeId);
 }
@@ -2067,6 +2133,22 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
         clearedAnchorPreview = true;
     }
 
+    // ⚡️ vocal-time-stretch §8.4 (Phase F) — Time tool is mutually exclusive
+    // with the Note family of tools.  Switching INTO TimeTool drops any
+    // inflight note-side state so the user's next mouseDown is interpreted
+    // strictly as a TimeGrid handle action; switching OUT clears Time-tool
+    // selection so a stale handle highlight doesn't persist into Note tools.
+    if (toolChanged) {
+        if (tool == ToolId::TimeTool) {
+            interactionState_.noteDrag.clear();
+            interactionState_.noteResize.clear();
+            interactionState_.noteDraft.clear();
+            interactionState_.selection.clearF0Selection();
+        } else if (currentTool_ == ToolId::TimeTool) {
+            interactionState_.timeTool.clear();
+        }
+    }
+
     currentTool_ = tool;
     if (toolHandler_) {
         toolHandler_->setTool(tool);
@@ -2085,6 +2167,11 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             break;
         case ToolId::AutoTune:
             setMouseCursor(juce::MouseCursor::PointingHandCursor);
+            break;
+        case ToolId::TimeTool:
+            // §8.4: Time tool uses normal cursor + per-handle hover hand cursor
+            // applied by handleTimeToolMouseMove (via ctx.setMouseCursor).
+            setMouseCursor(juce::MouseCursor::NormalCursor);
             break;
     }
 
@@ -2169,6 +2256,13 @@ void PianoRollComponent::removeListener(Listener* listener) {
 
 void PianoRollComponent::mouseMove(const juce::MouseEvent& e) {
     toolHandler_->mouseMove(e);
+}
+
+void PianoRollComponent::mouseDoubleClick(const juce::MouseEvent& e) {
+    // ⚡️ vocal-time-stretch §8.4 — Time tool double-click forwarded to handler.
+    // Other tools currently have no double-click semantics, so the handler
+    // ignores them by switching on currentTool_.
+    toolHandler_->mouseDoubleClick(e);
 }
 
 void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
@@ -2483,6 +2577,20 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext() const
     ctx.f0SelectionStartFrame = interactionState_.selection.selectedF0StartFrame;
     ctx.f0SelectionEndFrameExclusive = interactionState_.selection.selectedF0EndFrameExclusive;
 
+    // ⚡️ vocal-time-stretch §8.7 — inject TimeGrid snapshot for §8.5 renderer.
+    // During an active drag, prefer the working snapshot for live preview;
+    // otherwise pull from the processor's published TimeGrid.
+    if (interactionState_.timeTool.isDraggingHandle
+        && interactionState_.timeTool.dragWorkingSnapshot != nullptr) {
+        ctx.timeGridSnapshot = interactionState_.timeTool.dragWorkingSnapshot;
+    } else if (processor_ != nullptr && editedMaterializationId_ != 0) {
+        ctx.timeGridSnapshot = processor_->getMaterializationTimeGridById(editedMaterializationId_);
+    }
+    ctx.timeGridHoveredHandleId  = interactionState_.timeTool.hoveredHandleId;
+    ctx.timeGridSelectedHandleId = interactionState_.timeTool.selectedHandleId;
+    // §8.5 (Phase J) — currentTool drives view-mode in renderer.
+    ctx.currentTool = currentTool_;
+
     return ctx;
 }
 
@@ -2787,6 +2895,12 @@ bool PianoRollComponent::applyAutoTuneToSelection()
     genParams.retuneSpeed = currentRetuneSpeed_;
     genParams.vibratoDepth = currentVibratoDepth_;
     genParams.vibratoRate = currentVibratoRate_;
+
+    // Build scale-snap config separately from generation params. The snap is
+    // applied post-generation by the worker; note generation itself stays
+    // chromatic so the two responsibilities (segmentation vs scale theory)
+    // do not bleed into each other.
+    std::optional<ScaleSnapConfig> postSnapCfg;
     if (useScaleSnap) {
         ScaleSnapConfig snapCfg;
         snapCfg.root = scaleRootNote_ % 12;
@@ -2800,7 +2914,7 @@ bool PianoRollComponent::applyAutoTuneToSelection()
             case 8: snapCfg.mode = ScaleMode::PentatonicMinor; break;
             default: snapCfg.mode = ScaleMode::Major; break;
         }
-        genParams.scaleSnap = snapCfg;
+        postSnapCfg = snapCfg;
     }
 
     auto request = std::make_shared<PianoRollCorrectionWorker::AsyncCorrectionRequest>();
@@ -2810,6 +2924,7 @@ bool PianoRollComponent::applyAutoTuneToSelection()
     request->retuneSpeed = currentRetuneSpeed_;
     request->vibratoDepth = currentVibratoDepth_;
     request->vibratoRate = currentVibratoRate_;
+    request->postSnap = postSnapCfg;
     request->audioSampleRate = static_cast<double>(PianoRollComponent::kAudioSampleRate);
 
     request->autoOriginalF0Full = originalF0;

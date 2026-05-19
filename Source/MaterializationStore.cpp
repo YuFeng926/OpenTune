@@ -5,6 +5,7 @@
 
 #include "Utils/TimeCoordinate.h"
 #include "Utils/ChannelLayoutLogger.h"
+#include "Inference/RubberBandStretcher.h"   // §5.5 — needed for ~unique_ptr<RB> + lazy construction
 
 namespace OpenTune {
 
@@ -80,6 +81,18 @@ uint64_t MaterializationStore::createMaterialization(CreateMaterializationReques
     materialization.notes = std::move(request.notes);
     materialization.silentGaps = std::move(request.silentGaps);
 
+    // §3.6/3.7: Auto-seed identity TimeGrid if request didn't provide one.
+    // The duration matches audioBuffer length at kRenderSampleRate.
+    if (request.timeGrid != nullptr) {
+        materialization.timeGrid = std::move(request.timeGrid);
+    } else {
+        const double durationSec = TimeCoordinate::samplesToSeconds(
+            materialization.audioBuffer->getNumSamples(),
+            TimeCoordinate::kRenderSampleRate);
+        materialization.timeGrid = TimeGridSnapshot::makeIdentity(durationSec);
+    }
+    materialization.timeGridRevision = 1;
+
     const juce::ScopedWriteLock writeLock(lock_);
     const uint64_t materializationId = materialization.materializationId;
     if (forcedMaterializationId != 0) {
@@ -103,6 +116,7 @@ void MaterializationStore::clear()
         std::lock_guard<std::mutex> qLock(renderQueueMutex_);
         pendingRenderQueue_.clear();
     }
+    timeStretchCache_.clear();   // §6.2: clear store-wide Stage 2 cache
 }
 
 bool MaterializationStore::deleteMaterialization(uint64_t materializationId)
@@ -112,7 +126,9 @@ bool MaterializationStore::deleteMaterialization(uint64_t materializationId)
     }
 
     const juce::ScopedWriteLock writeLock(lock_);
-    return materializations_.erase(materializationId) > 0;
+    const bool erased = materializations_.erase(materializationId) > 0;
+    if (erased) timeStretchCache_.invalidate(materializationId);
+    return erased;
 }
 
 bool MaterializationStore::containsMaterialization(uint64_t materializationId) const
@@ -196,6 +212,7 @@ bool MaterializationStore::physicallyDeleteIfReclaimable(uint64_t id)
     const auto it = materializations_.find(id);
     if (it == materializations_.end() || !it->second.isRetired_) return false;
     materializations_.erase(it);
+    timeStretchCache_.invalidate(id);   // §6.2
     return true;
 }
 
@@ -252,6 +269,17 @@ bool MaterializationStore::getPlaybackReadSource(uint64_t materializationId, Pla
 
     out.renderCache = it->second.renderCache;
     out.audioBuffer = it->second.audioBuffer;
+
+    // §7 (Phase D MVP): publish TimeStretchCache + revisions snapshot for the
+    // audio thread to fast-path against when TimeGrid is non-identity.
+    out.timeStretchCache = const_cast<TimeStretchCache*>(&timeStretchCache_);
+    out.materializationId = materializationId;
+    out.timeGridRevision  = static_cast<uint32_t>(it->second.timeGridRevision);
+    // pitchRevision: derived from PitchCurve internals if available; for MVP
+    // we use 0 (Stage 1 caching is not yet branched by this).
+    out.pitchRevision = 0;
+    out.timeGridIsIdentity = (it->second.timeGrid == nullptr) || it->second.timeGrid->isIdentity();
+
     return out.canRead();
 }
 
@@ -281,6 +309,8 @@ bool MaterializationStore::getSnapshot(uint64_t materializationId, Materializati
     out.notesRevision = it->second.notesRevision;
     out.silentGaps = it->second.silentGaps;
     out.renderRevision = it->second.renderRevision;
+    out.timeGrid = it->second.timeGrid;
+    out.timeGridRevision = it->second.timeGridRevision;
     return true;
 }
 
@@ -334,6 +364,10 @@ bool MaterializationStore::setPitchCurve(uint64_t materializationId, std::shared
     it->second.originalF0State = (it->second.pitchCurve != nullptr && !it->second.pitchCurve->getSnapshot()->getOriginalF0().empty())
         ? OriginalF0State::Ready
         : OriginalF0State::NotRequested;
+    // §6.5 (Phase C.4): pitch edit invalidates Stage 2 cache
+    // (PitchCache invalidation handled by RenderCache itself via revision protocol;
+    // here we explicitly drop the downstream Stage 2 entry).
+    timeStretchCache_.invalidate(materializationId);
     return true;
 }
 
@@ -357,6 +391,8 @@ bool MaterializationStore::commitNotesAndPitchCurve(uint64_t materializationId,
     it->second.originalF0State = !it->second.pitchCurve->getSnapshot()->getOriginalF0().empty()
         ? OriginalF0State::Ready
         : OriginalF0State::NotRequested;
+    // §6.5: pitch edit invalidates Stage 2 cache (downstream)
+    timeStretchCache_.invalidate(materializationId);
     return true;
 }
 
@@ -381,6 +417,80 @@ bool MaterializationStore::setOriginalF0State(uint64_t materializationId, Origin
 
     it->second.originalF0State = state;
     return true;
+}
+
+// ============================================================================
+// vocal-time-stretch §3.6 — TimeGrid accessors
+// ============================================================================
+
+bool MaterializationStore::getTimeGrid(uint64_t materializationId,
+                                       std::shared_ptr<const TimeGridSnapshot>& outSnapshot) const
+{
+    outSnapshot.reset();
+    if (materializationId == 0) return false;
+
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) return false;
+
+    outSnapshot = it->second.timeGrid;
+    return outSnapshot != nullptr;
+}
+
+uint64_t MaterializationStore::getTimeGridRevision(uint64_t materializationId) const
+{
+    if (materializationId == 0) return 0;
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) return 0;
+    return it->second.timeGridRevision;
+}
+
+bool MaterializationStore::setTimeGrid(uint64_t materializationId,
+                                       std::shared_ptr<const TimeGridSnapshot> snapshot)
+{
+    if (materializationId == 0 || snapshot == nullptr) return false;
+
+    const juce::ScopedWriteLock writeLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) return false;
+
+    it->second.timeGrid = std::move(snapshot);
+    ++it->second.timeGridRevision;
+
+    // §6.5 (Phase C.4): TimeGrid edit invalidates Stage 2 only.
+    // PitchCache is NOT invalidated — the core latency win of v7 (handle drag
+    // doesn't re-run NSF) lives here.
+    timeStretchCache_.invalidate(materializationId);
+    return true;
+}
+
+// ============================================================================
+// vocal-time-stretch §5.5 — lazy RubberBandStretcher accessor
+// ============================================================================
+
+RubberBandStretcher* MaterializationStore::getRubberBandStretcher(uint64_t materializationId,
+                                                                    double sampleRate,
+                                                                    int channels)
+{
+    if (materializationId == 0 || sampleRate <= 0.0 || channels <= 0) return nullptr;
+
+    // Fast path: read lock + check existing
+    {
+        const juce::ScopedReadLock readLock(lock_);
+        const auto it = materializations_.find(materializationId);
+        if (it == materializations_.end() || it->second.isRetired_) return nullptr;
+        if (it->second.stretcher != nullptr) return it->second.stretcher.get();
+    }
+
+    // Slow path: write lock + lazy construct
+    const juce::ScopedWriteLock writeLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) return nullptr;
+    if (it->second.stretcher == nullptr) {
+        it->second.stretcher = std::make_unique<RubberBandStretcher>(sampleRate, channels);
+    }
+    return it->second.stretcher.get();
 }
 
 DetectedKey MaterializationStore::getDetectedKey(uint64_t materializationId) const
@@ -522,6 +632,17 @@ uint64_t MaterializationStore::replaceMaterializationWithNewLineage(uint64_t old
     newEntry.notes = std::move(request.notes);
     newEntry.silentGaps = std::move(request.silentGaps);
 
+    // §3.6: carry TimeGrid forward; auto-seed identity if absent.
+    if (request.timeGrid != nullptr) {
+        newEntry.timeGrid = std::move(request.timeGrid);
+    } else {
+        const double durationSec = TimeCoordinate::samplesToSeconds(
+            newEntry.audioBuffer->getNumSamples(),
+            TimeCoordinate::kRenderSampleRate);
+        newEntry.timeGrid = TimeGridSnapshot::makeIdentity(durationSec);
+    }
+    newEntry.timeGridRevision = 1;
+
     const juce::ScopedWriteLock writeLock(lock_);
     jassert(materializations_.find(oldId) != materializations_.end());
     if (materializations_.find(oldId) == materializations_.end()) {
@@ -534,15 +655,6 @@ uint64_t MaterializationStore::replaceMaterializationWithNewLineage(uint64_t old
     return newId;
 }
 
-void MaterializationStore::prepareAllCrossoverMixers(double sampleRate, int maxBlockSize)
-{
-    const juce::ScopedReadLock readLock(lock_);
-    for (const auto& entry : materializations_) {
-        if (entry.second.renderCache != nullptr) {
-            entry.second.renderCache->prepareCrossoverMixer(sampleRate, maxBlockSize, 2);
-        }
-    }
-}
 
 bool MaterializationStore::enqueuePartialRender(uint64_t materializationId,
                                                 double relStartSeconds,

@@ -30,6 +30,7 @@ public:
     void submit(Job job);
     int getVocoderHopSize() const;
     int getMelBins() const;
+    float getFMax() const;
 
 private:
     std::unique_ptr<VocoderInferenceService> inferenceService_;

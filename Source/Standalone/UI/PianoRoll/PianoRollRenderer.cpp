@@ -1,7 +1,7 @@
 #include "PianoRollRenderer.h"
 #include "../UIColors.h"
 #include "../../../Utils/AppLogger.h"
-#include "../../../Utils/NoteGenerator.h"
+#include "../../../Utils/LegacyNoteGenerator.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -99,7 +99,32 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
 
     window.visibleMaterializationStartTime = item.projection.projectTimelineTimeToMaterialization(window.visibleStartTime);
     window.visibleMaterializationEndTime = item.projection.projectTimelineTimeToMaterialization(window.visibleEndTime);
+
+    // vocal-time-stretch §8.5 — When a non-identity TimeGrid is published,
+    // projectTimelineTimeToMaterialization returns OUTPUT time inside the
+    // materialization, but Notes / PitchCurve / F0 timeline / WaveformMipmap
+    // are all indexed by SOURCE time. Convert to source time via tauInverse
+    // so downstream filters work correctly. Identity grid → no-op.
+    if (ctx.timeGridSnapshot != nullptr && !ctx.timeGridSnapshot->isIdentity()) {
+        window.visibleMaterializationStartTime = ctx.timeGridSnapshot->tauInverse(window.visibleMaterializationStartTime);
+        window.visibleMaterializationEndTime   = ctx.timeGridSnapshot->tauInverse(window.visibleMaterializationEndTime);
+    }
     return window;
+}
+
+// vocal-time-stretch §8.5 — convert a SOURCE-time anchor (Note.startTime,
+// f0Timeline frame timestamp, WaveformMipmap peak) into screen X via the
+// item's projection. Identity TimeGrid → degenerates to existing pipeline.
+inline int sourceTimeToScreenX(double sourceTime,
+                                const PianoRollRenderer::RenderContext& ctx,
+                                const PianoRollRenderer::MaterializationRenderItem& item)
+{
+    double outputTime = sourceTime;
+    if (ctx.timeGridSnapshot != nullptr && !ctx.timeGridSnapshot->isIdentity()) {
+        outputTime = ctx.timeGridSnapshot->tauForward(sourceTime);
+    }
+    const double timelineTime = item.projection.projectMaterializationTimeToTimeline(outputTime);
+    return ctx.timeToX(timelineTime);
 }
 
 bool isVoicedFrame(float frequencyHz) noexcept
@@ -194,12 +219,12 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
             return;
         }
 
-        const double startSeconds = item.projection.projectMaterializationTimeToTimeline(
-            item.f0Timeline.timeAtFrame(startFrame));
-        const double endSeconds = item.projection.projectMaterializationTimeToTimeline(
-            item.f0Timeline.timeAtFrame(endFrameExclusive));
-        const int x1 = std::max(ctx.pianoKeyWidth, ctx.timeToX(startSeconds));
-        const int x2 = std::min(ctx.width, ctx.timeToX(endSeconds));
+        // §8.5 — frame timestamps are SOURCE time; project through τ so
+        // unvoiced bands align with the stretched waveform.
+        const int x1 = std::max(ctx.pianoKeyWidth,
+            sourceTimeToScreenX(item.f0Timeline.timeAtFrame(startFrame), ctx, item));
+        const int x2 = std::min(ctx.width,
+            sourceTimeToScreenX(item.f0Timeline.timeAtFrame(endFrameExclusive), ctx, item));
         if (x2 <= x1) {
             return;
         }
@@ -265,10 +290,22 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
 
     juce::Path waveformPath;
 
+    // ⚡️ vocal-time-stretch §8.5 (Phase H) — waveform stretching.
+    // When the TimeGrid is non-identity, the visible waveform must reflect
+    // the user's retiming.  We invert the output → source mapping (tau_inverse)
+    // so the screen X axis (output time) reads from the SOURCE peaks at the
+    // tau-inverted time.  Identity grid → zero-cost passthrough.
+    const bool useTauInverse = (ctx.timeGridSnapshot != nullptr
+                                  && !ctx.timeGridSnapshot->isIdentity());
+
     for (int x = startX; x < endX; ++x)
     {
-        const double time = item.projection.projectTimelineTimeToMaterialization(ctx.xToTime(x));
-        const int64_t peakIndex = static_cast<int64_t>(time / timePerPeak);
+        double matTime = item.projection.projectTimelineTimeToMaterialization(ctx.xToTime(x));
+        if (useTauInverse) {
+            // §8.5 — output materialization time → source time (TimeGrid stretching).
+            matTime = ctx.timeGridSnapshot->tauInverse(matTime);
+        }
+        const int64_t peakIndex = static_cast<int64_t>(matTime / timePerPeak);
         
         if (peakIndex < 0 || peakIndex >= builtPeaks)
             continue;
@@ -472,8 +509,8 @@ void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g,
     g.setColour(UIColors::accent.withAlpha(0.75f));
 
     for (std::size_t index = 1; index + 1 < item.chunkBoundaries.size(); ++index) {
-        const double absoluteSeconds = item.projection.projectMaterializationTimeToTimeline(item.chunkBoundaries[index]);
-        const int x = ctx.timeToX(absoluteSeconds);
+        // §8.5 — chunk boundaries are SOURCE time; project through τ.
+        const int x = sourceTimeToScreenX(item.chunkBoundaries[index], ctx, item);
         if (x < ctx.pianoKeyWidth || x >= ctx.width) {
             continue;
         }
@@ -782,11 +819,10 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         float y = ctx.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
         float h = ctx.pixelsPerSemitone;
 
-        double noteStartTime = item.projection.projectMaterializationTimeToTimeline(note.startTime);
-        double noteEndTime = item.projection.projectMaterializationTimeToTimeline(note.endTime);
-
-        int x1 = ctx.timeToX(noteStartTime);
-        int x2 = ctx.timeToX(noteEndTime);
+        // §8.5 — note.startTime/endTime are SOURCE time; project through τ
+        // so a stretched segment renders at its correct visual width.
+        int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
+        int x2 = sourceTimeToScreenX(note.endTime,   ctx, item);
         if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
             continue;
 
@@ -884,9 +920,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         float midi = ctx.freqToMidi(frequency);
         float y = ctx.midiToY(midi);
 
-        const double materializationTime = item.f0Timeline.timeAtFrame(static_cast<int>(i));
-        const double absoluteTime = item.projection.projectMaterializationTimeToTimeline(materializationTime);
-        const int x = ctx.timeToX(absoluteTime);
+        // §8.5 — F0 timeline frames are anchored in SOURCE time; project
+        // through τ so the F0 curve aligns with its (potentially stretched)
+        // waveform underlay.
+        const int x = sourceTimeToScreenX(
+            item.f0Timeline.timeAtFrame(static_cast<int>(i)), ctx, item);
 
         if (x < viewportStartX || x > viewportEndX)
         {
@@ -986,6 +1024,97 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 }
             }
         }
+    }
+}
+
+// ============================================================================
+// vocal-time-stretch §8.5 (Phase F) — TimeGrid handles overlay
+//
+// Each handle is rendered as a vertical guide line at output_seconds (because
+// the piano roll x-axis represents OUTPUT/display time per the v7 "data stores
+// source time, display uses output time" invariant).  HandleKind drives color:
+//   ClipStart / ClipEnd     → solid grey, locked (dimmer)
+//   OnsetVoiced             → cyan
+//   OnsetSibilant           → yellow
+//   OnsetSilence            → dim grey
+//   InternalOnset           → lavender
+//   UserAdded               → white
+//
+// Selected / hovered handles get extra emphasis (thicker line + glow box).
+// ============================================================================
+void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx)
+{
+    if (ctx.timeGridSnapshot == nullptr) return;
+    // §8.5 (Phase J / Journey-1 fix): handles are a Time-tool-only affordance.
+    // Pitch view (note/F0 editing) hides them entirely so the user has a clean
+    // canvas; Time view always shows them (including endpoint locked anchors
+    // on identity grid as visual reference + double-click target).
+    if (!ctx.isTimeView()) {
+        return;
+    }
+
+    const int contentTop    = ctx.rulerHeight;
+    const int contentBottom = ctx.height;
+    if (contentBottom <= contentTop) return;
+
+    auto colorForKind = [](HandleKind k) -> juce::Colour {
+        switch (k) {
+            case HandleKind::ClipStart:     return juce::Colours::lightgrey;
+            case HandleKind::ClipEnd:       return juce::Colours::lightgrey;
+            case HandleKind::OnsetVoiced:   return juce::Colour::fromRGB(64, 200, 220);
+            case HandleKind::OnsetSibilant: return juce::Colour::fromRGB(220, 200, 64);
+            case HandleKind::OnsetSilence:  return juce::Colours::dimgrey;
+            case HandleKind::InternalOnset: return juce::Colour::fromRGB(180, 140, 220);
+            case HandleKind::UserAdded:     return juce::Colours::white;
+            case HandleKind::NoteOnly:      return juce::Colour::fromRGB(140, 200, 100); // soft green
+        }
+        return juce::Colours::white;
+    };
+
+    // add-note-confirmed-handles §4.1: High confidence handle 用金色高亮覆盖默认色,
+    // 让用户视觉一眼识别"双源命中"的高置信度建议。Locked endpoint 不应用此覆盖
+    // (per spec: locked overrides confidence styling)。
+    const juce::Colour kHighConfidenceColour = juce::Colour::fromRGB(0xE0, 0xB0, 0x40); // #E0B040 金色
+
+    for (const auto& h : ctx.timeGridSnapshot->handles()) {
+        const int x = ctx.timeToX(h.output_seconds);
+        if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
+
+        juce::Colour col = colorForKind(h.kind);
+        if (h.locked) {
+            col = col.withAlpha(0.45f); // endpoints dimmer; confidence styling 不应用于 locked
+        } else if (h.confidence == Confidence::High) {
+            col = kHighConfidenceColour;
+        }
+
+        const bool selected = (ctx.timeGridSelectedHandleId == h.id);
+        const bool hovered  = (ctx.timeGridHoveredHandleId  == h.id);
+        // High confidence: 默认线宽 +50% (1.5×); selected/hovered 优先级仍最高。
+        const bool isHigh = (!h.locked && h.confidence == Confidence::High);
+        const float baseThickness = isHigh ? 1.5f : 1.0f;
+        const float lineThickness = (selected ? 2.0f : (hovered ? 1.5f : baseThickness));
+
+        // Vertical guide line spanning full content area (below ruler).
+        g.setColour(col.withMultipliedAlpha(selected ? 1.0f : (hovered ? 0.85f : 0.65f)));
+        g.drawLine(static_cast<float>(x),
+                   static_cast<float>(contentTop),
+                   static_cast<float>(x),
+                   static_cast<float>(contentBottom),
+                   lineThickness);
+
+        // Top "diamond" affordance under the ruler so user can grab it.
+        constexpr float kDiamondSize = 6.0f;
+        const float cy = static_cast<float>(contentTop) + kDiamondSize;
+        juce::Path diamond;
+        diamond.startNewSubPath(static_cast<float>(x), cy - kDiamondSize);
+        diamond.lineTo(static_cast<float>(x) + kDiamondSize, cy);
+        diamond.lineTo(static_cast<float>(x), cy + kDiamondSize);
+        diamond.lineTo(static_cast<float>(x) - kDiamondSize, cy);
+        diamond.closeSubPath();
+        g.setColour(col);
+        g.fillPath(diamond);
+        g.setColour(col.darker(0.35f));
+        g.strokePath(diamond, juce::PathStrokeType(0.8f));
     }
 }
 

@@ -114,6 +114,11 @@ public:
         std::function<void()> grabKeyboardFocus;
         std::function<void(ToolId)> setCurrentTool;
         std::function<void()> showToolSelectionMenu;
+        // add-note-confirmed-handles §4.2: Re-seed handles from notes (Time tool 空白右键)
+        // 实现方负责调 processor->reSeedTimeGridFromNotesById(currentMatId).
+        // 如 GameNoteGenerator 禁用或 notes 不可用,UI 应自动 disable 菜单项 + tooltip.
+        std::function<void()> reSeedTimeGridFromNotes;
+        std::function<bool()> canReSeedTimeGridFromNotes;
 
         std::function<void(double)> notifyPlayheadChange;
         std::function<void(int, int)> notifyPitchCurveEdited;
@@ -134,6 +139,28 @@ public:
         std::function<void()> clearLineAnchorSegmentSelection;
 
         std::function<void(juce::String)> setUndoDescription;
+
+        // ============================================================
+        // ⚡️ vocal-time-stretch §8.4/8.7 — Time tool / TimeGrid integration
+        //
+        // Component injects these for the Time tool to read/publish the
+        // current materialization's TimeGrid snapshot.  All four callbacks
+        // are optional: if the materialization has none (e.g., loose source
+        // not yet bound), Time tool drag is suppressed by ToolHandler.
+        // ============================================================
+        std::function<uint64_t()> getMaterializationIdForView;
+        std::function<std::shared_ptr<const TimeGridSnapshot>()> getTimeGridSnapshot;
+        // commitTimeGrid: publish (newSnapshot) and record undo with
+        // (oldSnapshot, affectedSourceFrameRange) supplied by caller.  Returns
+        // true when the processor accepted the snapshot (validation passed).
+        std::function<bool(std::shared_ptr<const TimeGridSnapshot> /*newSnapshot*/,
+                            std::shared_ptr<const TimeGridSnapshot> /*oldSnapshot*/,
+                            int64_t /*affectedSrcStartFrame*/,
+                            int64_t /*affectedSrcEndFrame*/,
+                            juce::String /*description*/)> commitTimeGrid;
+        // notifyTimeGridChanged: lighter visual-only notification (e.g., for
+        // hover/select state changes that don't need an undo entry).
+        std::function<void()> notifyTimeGridChanged;
     };
 
     explicit PianoRollToolHandler(Context context);
@@ -143,6 +170,8 @@ public:
     void mouseDown(const juce::MouseEvent& e);
     void mouseDrag(const juce::MouseEvent& e);
     void mouseUp(const juce::MouseEvent& e);
+    // ⚡️ §8.4 — Phase G: double-click insert (Time tool only)
+    void mouseDoubleClick(const juce::MouseEvent& e);
 
     bool keyPressed(const juce::KeyPress& key);
 
@@ -156,6 +185,20 @@ private:
     void handleLineAnchorMouseDown(const juce::MouseEvent& e);
     void handleLineAnchorMouseDrag(const juce::MouseEvent& e);
     void clearLineAnchorPreview();
+
+    // ⚡️ §8.4 — Time tool handlers (Phase F minimal scaffolding;
+    // Phase G adds full drag math + double-click insert + Alt-snap-disable).
+    void handleTimeToolMouseMove(const juce::MouseEvent& e);
+    void handleTimeToolMouseDown(const juce::MouseEvent& e);
+    void handleTimeToolMouseDrag(const juce::MouseEvent& e);
+    void handleTimeToolMouseUp(const juce::MouseEvent& e);
+    // §8.4 Phase G: double-click empty area to insert UserAdded handle.
+    void handleTimeToolMouseDoubleClick(const juce::MouseEvent& e);
+    // §8.4 Phase G: Delete key removes selected handle (non-endpoint).
+    bool handleTimeToolDeleteSelected();
+    // Hit-test handles within ±5 px of a TimeGrid handle's output_seconds.
+    // Returns 0 if no hit.
+    uint64_t hitTestTimeGridHandle(const juce::MouseEvent& e) const;
 
     void handleSelectDrag(const juce::MouseEvent& e);
     void handleDrawNoteDrag(const juce::MouseEvent& e);
@@ -185,6 +228,17 @@ private:
     static int findLastSelectedNoteIndex(const std::vector<Note>& notes);
     static void selectNotesBetween(std::vector<Note>& notes, int startIndex, int endIndex);
     void updateF0SelectionFromNotes(const std::vector<Note>& notes);
+
+    // ⚡️ vocal-time-stretch §8.5 — convert pixelX directly to SOURCE time.
+    // Pipeline: pixelX → output(timeline) → output(materialization) →
+    // tauInverse → source.  Identity TimeGrid degenerates to existing
+    // "xToTime + projectTimelineTimeToMaterialization" path.
+    //
+    // All Note tool write-back paths (drag / draw / resize) MUST use this
+    // helper instead of computing source time directly, otherwise non-identity
+    // TimeGrid causes pixel→data shift (data layer stores source time per
+    // cross-cutting/coordinate-system-source-time-display-output.md).
+    double pixelXToSourceTime(int pixelX) const;
 
     Context ctx_;
     ToolId currentTool_ = ToolId::Select;

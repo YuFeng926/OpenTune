@@ -214,6 +214,10 @@ private:
     int lastPianoRollSampleRate_ = 0;
     std::shared_ptr<PitchCurve> lastPianoRollCurve_;
     std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
+    // Notes-revision tracking so the timer can pull fresh notes when an
+    // async note generator (GAME) commits to the active materialization
+    // without changing matId / curve / buffer.
+    uint64_t lastPianoRollNotesRevision_ = 0;
     double lastSyncedBpm_ = 0.0;
     int lastSyncedTimeSigNum_ = 0;
     int lastSyncedTimeSigDenom_ = 0;

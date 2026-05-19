@@ -230,6 +230,15 @@ ParameterPanel::ParameterPanel()
     handDrawToolButton_->setIcon(ToolbarIcons::getHandDrawIcon(), false);
     handDrawToolButton_->onClick = [this] { onToolClicked(4); };
     addAndMakeVisible(*handDrawToolButton_);
+
+    // ⚡️ vocal-time-stretch §8.4 — Time tool palette button.
+    // toolId=5 matches ToolId::TimeTool; tooltip uses 'T' shortcut to align
+    // with PianoRollToolHandler::keyPressed binding.
+    timeToolButton_ = std::make_unique<ToolIconButton>(5, "TimeTool", LOC(kTooltipTimeTool) + "\nT");
+    timeToolButton_->setRadioGroupId(1001);
+    timeToolButton_->setIcon(ToolbarIcons::getTimeToolIcon(), false);
+    timeToolButton_->onClick = [this] { onToolClicked(5); };
+    addAndMakeVisible(*timeToolButton_);
 }
 
 ParameterPanel::~ParameterPanel()
@@ -329,33 +338,24 @@ void ParameterPanel::resized()
     auto toolsColumn = toolsArea.reduced(5, 0);
     int startY = toolsColumn.getY();
 
-    // 按钮数组（重新排序：AUTO放最后，以便单独处理居中）
+    // 按钮数组（vocal-time-stretch §8.4: 6 个按钮 = 3 行 × 2 列网格）
     std::vector<juce::Component*> buttons;
-    if (selectToolButton_) buttons.push_back(selectToolButton_.get());       // 第1行第1列
-    if (drawNoteToolButton_) buttons.push_back(drawNoteToolButton_.get());   // 第1行第2列
+    if (selectToolButton_) buttons.push_back(selectToolButton_.get());        // 第1行第1列
+    if (drawNoteToolButton_) buttons.push_back(drawNoteToolButton_.get());    // 第1行第2列
     if (lineAnchorToolButton_) buttons.push_back(lineAnchorToolButton_.get()); // 第2行第1列
-    if (handDrawToolButton_) buttons.push_back(handDrawToolButton_.get());   // 第2行第2列
-    if (autoTuneToolButton_) buttons.push_back(autoTuneToolButton_.get());   // 第3行居中
+    if (handDrawToolButton_) buttons.push_back(handDrawToolButton_.get());    // 第2行第2列
+    if (timeToolButton_) buttons.push_back(timeToolButton_.get());            // 第3行第1列
+    if (autoTuneToolButton_) buttons.push_back(autoTuneToolButton_.get());    // 第3行第2列
 
     // 2列×3行网格布局
     for (int i = 0; i < static_cast<int>(buttons.size()); ++i) {
-        int x, y;
-
-        if (i < 4) {
-            // 前4个按钮：2×2网格布局
-            int row = i / 2;
-            int col = i % 2;
-            // 计算2列网格的起始X坐标（居中对齐）
-            int totalWidth = 2 * toolButtonSize + toolButtonHorizontalGap;
-            int gridStartX = toolsColumn.getCentreX() - totalWidth / 2;
-            x = gridStartX + col * (toolButtonSize + toolButtonHorizontalGap);
-            y = startY + row * (toolButtonSize + toolButtonGap);
-        } else {
-            // 第5个按钮（AUTO）：第3行居中
-            x = toolsColumn.getCentreX() - toolButtonSize / 2;
-            y = startY + 2 * (toolButtonSize + toolButtonGap);
-        }
-
+        int row = i / 2;
+        int col = i % 2;
+        // 计算2列网格的起始X坐标（居中对齐）
+        int totalWidth = 2 * toolButtonSize + toolButtonHorizontalGap;
+        int gridStartX = toolsColumn.getCentreX() - totalWidth / 2;
+        int x = gridStartX + col * (toolButtonSize + toolButtonHorizontalGap);
+        int y = startY + row * (toolButtonSize + toolButtonGap);
         buttons[i]->setBounds(x, y, toolButtonSize, toolButtonSize);
     }
 }
@@ -401,7 +401,9 @@ void ParameterPanel::refreshLocalizedText()
         lineAnchorToolButton_->setTooltip(LOC(kTooltipLineAnchor) + "\n4");
     if (handDrawToolButton_)
         handDrawToolButton_->setTooltip(LOC(kTooltipHandDraw) + "\n5");
-    
+    if (timeToolButton_)
+        timeToolButton_->setTooltip(LOC(kTooltipTimeTool) + "\nT");
+
     repaint();
 }
 
@@ -449,6 +451,7 @@ void ParameterPanel::setActiveTool(int toolId)
     if (drawNoteToolButton_) drawNoteToolButton_->setToggleState(toolId == 2, juce::dontSendNotification);
     if (lineAnchorToolButton_) lineAnchorToolButton_->setToggleState(toolId == 3, juce::dontSendNotification);
     if (handDrawToolButton_) handDrawToolButton_->setToggleState(toolId == 4, juce::dontSendNotification);
+    if (timeToolButton_) timeToolButton_->setToggleState(toolId == 5, juce::dontSendNotification);
 }
 
 // Getters and Setters

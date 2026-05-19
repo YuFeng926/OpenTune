@@ -24,6 +24,7 @@
 #include <map>
 #include <deque>
 #include <mutex>
+#include <unordered_set>
 #include <condition_variable>
 #include <thread>
 #include <optional>
@@ -35,6 +36,7 @@
 #include "DSP/ChromaKeyDetector.h"
 #include "Inference/RenderCache.h"
 #include "Inference/F0InferenceService.h"
+#include "Inference/INoteGenerator.h"
 #include "Inference/VocoderDomain.h"
 #include "Services/F0ExtractionService.h"
 #include "Utils/MaterializationState.h"
@@ -292,6 +294,10 @@ private:
     std::atomic<bool> vocoderInitAttempted_{false};
     std::mutex vocoderInitMutex_;
 
+    std::atomic<bool> noteGenReady_{false};
+    std::atomic<bool> noteGenInitAttempted_{false};
+    std::mutex noteGenInitMutex_;
+
 public:
     // ========================================================================
     // Playback Read API Types (Unified read path for Standalone/VST3)
@@ -306,6 +312,17 @@ public:
     struct PlaybackReadSource {
         std::shared_ptr<RenderCache> renderCache;
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+
+        // vocal-time-stretch §7 (Phase D MVP):
+        //   When `timeGridIsIdentity` is false and `timeStretchCache` is non-null,
+        //   readPlaybackAudio prefers Stage 2 output (TimeStretchCache::sliceForOutputRange).
+        //   On miss, falls back to the dry path (existing behavior).  When identity
+        //   (default after import), behavior is unchanged.
+        TimeStretchCache* timeStretchCache{nullptr};
+        uint64_t materializationId{0};
+        uint32_t pitchRevision{0};
+        uint32_t timeGridRevision{0};
+        bool timeGridIsIdentity{true};
 
         bool hasAudio() const
         {
@@ -386,8 +403,7 @@ public:
      */
     int readPlaybackAudio(const PlaybackReadRequest& request,
                           juce::AudioBuffer<float>& destination,
-                          int destinationStartSample,
-                          CrossoverMixer* mixer = nullptr) const;
+                          int destinationStartSample) const;
     DiagnosticInfo getDiagnosticInfo(int trackId = 0, uint64_t placementId = 0) const;
     void recordControlCall(DiagnosticControlCall controlCall);
 
@@ -420,7 +436,38 @@ private:
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::unique_ptr<F0InferenceService> f0Service_;
     std::unique_ptr<VocoderDomain> vocoderDomain_;
+
+    // Polymorphic note generator (GAME-small by default; LegacyNoteGenerator
+    // when env OPENTUNE_NOTE_BACKEND=legacy or models missing). Lazily
+    // initialised by ensureNoteGeneratorReady() — same pattern as f0Service_.
+    // Used after F0 commits to auto-generate notes for ALL three flows
+    // (standalone import, plugin ARA, plugin non-ARA capture) which
+    // converge through requestMaterializationRefresh.
+    std::unique_ptr<INoteGenerator> noteGenerator_;
+    std::mutex                      noteGeneratorInferenceMutex_; // serialise inference calls
+    juce::ThreadPool                noteGeneratorPool_{1};         // single-threaded ORT-safe
+
+    // Set of materializationIds with a note-generation job pending or running
+    // on noteGeneratorPool_. Editors poll `isNoteGenInFlightForMaterialization`
+    // to drive the shared "正在处理音频" overlay (covers F0 + note-gen).
+    mutable std::mutex                  noteGenInFlightMutex_;
+    std::unordered_set<uint64_t>        noteGenInFlightMatIds_;
+
+    // add-note-confirmed-handles §3.2: per-materialization merger that barriers
+    // WordSegmenter handles + GameNoteGenerator notes and publishes merged
+    // TimeGridSnapshot once both arrive (顺序无关). Lifecycle: create on first
+    // delivery, erased after merge fires once. Manual re-seed uses static
+    // HandleNoteMerger::reSeed() and does not touch this map.
+    mutable std::mutex                                                     handleNoteMergersMutex_;
+    std::unordered_map<uint64_t, std::unique_ptr<class HandleNoteMerger>>  handleNoteMergers_;
+
+public:
+    bool isNoteGenInFlightForMaterialization(uint64_t materializationId) const;
+private:
+    void deliverHandlesToMerger(uint64_t materializationId, std::vector<TimeHandle> handles);
+    void deliverNotesToMerger(uint64_t materializationId, const std::vector<Note>& notes);
     F0ExtractionService materializationRefreshService_{1, 64};
+
     std::shared_ptr<std::atomic<bool>> materializationRefreshAliveFlag_{std::make_shared<std::atomic<bool>>(true)};
 
     // UI state
@@ -435,6 +482,7 @@ private:
 
     bool ensureF0Ready();
     bool ensureVocoderReady();
+    bool ensureNoteGeneratorReady();
 
     bool ensureServiceReady(std::atomic<bool>& readyFlag,
                             std::atomic<bool>& attemptedFlag,
@@ -456,6 +504,52 @@ private:
     std::condition_variable schedulerCv_;
     std::atomic<bool> chunkRenderWorkerRunning_{false};
     std::atomic<int> chunkRenderJobsInFlight_{0};
+
+    // ========================================================================
+    // ⚡️ vocal-time-stretch §7 (Phase D MVP) — Stage 2 (Time-Stretch) Worker
+    //
+    // A SECOND, dedicated worker thread that owns Rubber Band re-build cycles.
+    // Why a separate thread (not extend chunkRenderWorker)?
+    //   - chunkRenderWorker is chunk-incremental (low-latency UI updates per
+    //     small region edit).  Stage 2 is clip-wide (RB Offline mode forces a
+    //     full study + process pass after every TimeGrid revision change).
+    //   - Mixing the two would force every Stage 1 chunk to wait for the slow
+    //     Stage 2 pass.  Independent threads keep Stage 1 responsive.
+    //   - Phase E will rewire Stage 2 to consume Stage 1 output (Pitch → Mix
+    //     → RB).  Phase D MVP runs RB on the source PCM directly to prove the
+    //     wiring; output sounds dry-only when TimeGrid is non-identity.
+    // ========================================================================
+    void ensureStage2WorkerStarted();
+    void stage2WorkerLoop();
+    bool runStage2RebuildForMaterialization(uint64_t materializationId);
+
+    std::thread stage2WorkerThread_;
+    mutable std::mutex stage2Mutex_;
+    std::condition_variable stage2Cv_;
+    std::atomic<bool> stage2WorkerRunning_{false};
+    std::deque<uint64_t> stage2RebuildQueue_;
+
+    // ⚡️ vocal-time-stretch §7 (Journey-1 fix 2026-05-12) — Stage 2 in-flight
+    // status for UI progress badge.  Set when worker enters
+    // runStage2RebuildForMaterialization, cleared on exit (success or failure).
+    // Editor's per-frame update reads via isStage2InFlight() and shows
+    // "时间拉伸中..." badge so the user knows their handle drag is being
+    // processed (RB R3 is ~5× realtime; ~6s for 30s clip).
+    std::atomic<bool>     stage2InFlight_{false};
+    std::atomic<uint64_t> stage2InFlightMatId_{0};
+    std::atomic<int>      stage2QueueDepth_{0};
+
+public:
+    // Public API for triggering Stage 2 rebuilds (called from
+    // setMaterializationTimeGridById and from tests).
+    void requestStage2Rebuild(uint64_t materializationId);
+
+    // §7 — Stage 2 worker progress query for UI feedback.
+    bool     isStage2InFlight() const noexcept { return stage2InFlight_.load(std::memory_order_acquire); }
+    uint64_t getStage2InFlightMaterializationId() const noexcept { return stage2InFlightMatId_.load(std::memory_order_acquire); }
+    int      getStage2QueueDepth() const noexcept { return stage2QueueDepth_.load(std::memory_order_acquire); }
+
+private:
 
 public:
     // Clip Chunk 状态查询（替代原 RenderQueueStatus）
@@ -520,6 +614,31 @@ public:
     bool setMaterializationOriginalF0StateById(uint64_t materializationId, OriginalF0State state);
     DetectedKey getMaterializationDetectedKeyById(uint64_t materializationId) const;
     bool setMaterializationDetectedKeyById(uint64_t materializationId, const DetectedKey& key);
+
+    // ⚡️ vocal-time-stretch §3.6 — TimeGrid accessors per materialization
+    //
+    // setMaterializationTimeGridById publishes a new TimeGridSnapshot AND triggers
+    // any required cache invalidation in the affected source range.  TimeGrid
+    // edits do NOT invalidate PitchCache (Stage 1) — only TimeStretchCache (Stage 2).
+    // Caller (TimeGridEditAction::undo/redo, ToolHandler::commit) is responsible
+    // for providing affected-source-range bounds (see
+    // knowledge/current/cross-cutting/undo-affected-range-invariant.md).
+    std::shared_ptr<const TimeGridSnapshot> getMaterializationTimeGridById(uint64_t materializationId) const;
+    uint64_t getMaterializationTimeGridRevisionById(uint64_t materializationId) const;
+    bool setMaterializationTimeGridById(uint64_t materializationId,
+                                         std::shared_ptr<const TimeGridSnapshot> snapshot,
+                                         int64_t affectedSrcStartFrame,
+                                         int64_t affectedSrcEndFrame);
+
+    // add-note-confirmed-handles §4.2: Manual re-seed via UI right-click menu.
+    // Re-runs HandleNoteMerger::reSeed using current TimeGridSnapshot + freshly
+    // computed WordSegmenter handles (auto kinds in current snapshot are treated
+    // as the WordSegmenter source) + current notes from MaterializationStore.
+    // UserAdded handles preserved; user-edited output_seconds preserved per source.
+    // Returns true on successful publish; false if materialization missing or
+    // GameNoteGenerator notes unavailable (legacy mode).
+    bool reSeedTimeGridFromNotesById(uint64_t materializationId);
+    bool canReSeedTimeGridFromNotesById(uint64_t materializationId) const;
 
     std::shared_ptr<RenderCache> getMaterializationRenderCacheById(uint64_t materializationId) const;
     

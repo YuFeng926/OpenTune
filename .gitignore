@@ -23,6 +23,7 @@ docs/UserGuide.html
 Logs/
 openspec/
 specs/
+research/
 *.exe
 *.dll
 *.lib

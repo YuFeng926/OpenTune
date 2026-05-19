@@ -1,6 +1,9 @@
 #include "AppPreferences.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <limits>
 
 namespace OpenTune {
 
