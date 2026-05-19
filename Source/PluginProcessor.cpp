@@ -1201,21 +1201,22 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
     stretcher->beginRebuild(/*timeRatio=*/1.0, keyframes);
 
     // ============================================================
-    // §7 (Phase E) — Stage 2 input = Stage 1 (NSF + LR4 mix) output
+    // §7 (Phase E) — Stage 2 input = Stage 1 (NSF vocoder) output
     //
     // We collect the materialization's playback signal *as if TimeGrid were
     // identity* (i.e., pre-stretch) by calling readPlaybackAudio in chunks
-    // with TimeStretchCache fast-path explicitly disabled.  This pulls:
-    //   - dry source (interpolated to sampleRate)
-    //   - + RenderCache overlay (NSF output for chunks that are already
-    //     rendered; silence for not-yet-rendered chunks)
-    // → This is exactly what Phase E v7 wants Stage 2 to consume.
+    // with TimeStretchCache fast-path explicitly disabled.  readPlaybackAudio
+    // here writes dry source then has RenderCache overlay REPLACE
+    // (setSample, not additive) every sample inside published chunk ranges
+    // with NSF vocoder output.  When all chunks are published this yields
+    // pure vocoder; gaps fall back to dry source.
     //
     // Edge cases:
     //   - PitchCurve untouched / RenderCache empty → buffer == dry source
     //     (graceful degradation; result equals Phase D MVP behavior).
-    //   - RenderCache partially populated (mid-edit) → mix of corrected and
-    //     dry chunks; Phase F may add a "wait for Stage 1 complete" gate.
+    //   - RenderCache partially populated (mid-edit) → vocoder for rendered
+    //     chunks, dry for the rest; Phase F may add a "wait for Stage 1
+    //     complete" gate.
     // ============================================================
     const int totalSamples = snap.audioBuffer->getNumSamples();
     constexpr int kBlock = 4096;
@@ -1319,7 +1320,7 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
                    + juce::String(static_cast<juce::int64>(materializationId))
                    + " timeGridRev=" + juce::String(static_cast<juce::int64>(timeGridRev))
                    + " stage1InputSamples=" + juce::String(totalSamples)
-                   + " (Stage 1 via readPlaybackAudio + LR4 mix)");
+                   + " (Stage 1 via readPlaybackAudio dry+vocoder-overlay)");
     return true;
 }
 
@@ -4986,7 +4987,7 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     // When a non-identity TimeGrid is published AND the Stage 2 worker has
     // populated the TimeStretchCache for this (materializationId, pitchRev,
     // timeGridRev), serve the audio directly from cache.  This bypasses the
-    // dry-source resample + RenderCache overlay + LR4 mix path entirely.
+    // dry-source resample + RenderCache piecewise-replace overlay path entirely.
     //
     // On any miss (cache not yet populated, locked, or revision mismatch),
     // fall through to the existing dry-path — perceptually the user hears

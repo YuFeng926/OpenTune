@@ -67,10 +67,10 @@ public:
         // vocal-time-stretch §7 (Phase D MVP):
         //   When timeGridIsIdentity == false AND timeStretchCache != nullptr,
         //   readPlaybackAudio fast-paths from the TimeStretchCache (Stage 2 output),
-        //   bypassing the dry+overlay LR4 mix path.  When the cache misses (Stage 2
-        //   not yet rendered), readPlaybackAudio falls back to the dry path until
-        //   the worker finishes.  When timeGridIsIdentity == true (default after
-        //   import), behavior is unchanged.
+        //   bypassing the dry-then-overlay piecewise path.  When the cache misses
+        //   (Stage 2 not yet rendered), readPlaybackAudio falls back to that path
+        //   until the worker finishes.  When timeGridIsIdentity == true (default
+        //   after import), behavior is unchanged.
         TimeStretchCache* timeStretchCache{nullptr};
         uint64_t materializationId{0};
         uint32_t pitchRevision{0};
