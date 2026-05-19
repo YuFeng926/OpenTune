@@ -76,13 +76,16 @@ Result<void> MelSpectrogramProcessor::configure(const MelSpectrogramConfig& cfg)
 Result<void> MelSpectrogramProcessor::initFftAndWindow()
 {
     const int fftOrder = (int) std::round(std::log2((double) config_.nFft));
-    
+
     fft_ = std::make_unique<juce::dsp::FFT>(fftOrder);
-    window_ = std::make_unique<juce::dsp::WindowingFunction<float>>(
-        (size_t) config_.winLength, 
-        juce::dsp::WindowingFunction<float>::hann, 
-        false
-    );
+
+    // Periodic Hann window matching torch.hann_window default (periodic=True):
+    //   w[n] = 0.5 * (1 - cos(2*pi*n / N)),  n = 0..N-1
+    // NOT the symmetric variant 2*pi*n/(N-1) used by JUCE's WindowingFunction::hann.
+    hannWindow_.resize((size_t) config_.winLength);
+    const float twoPiOverN = 2.0f * 3.14159265358979323846f / (float) config_.winLength;
+    for (int n = 0; n < config_.winLength; ++n)
+        hannWindow_[(size_t) n] = 0.5f * (1.0f - std::cos(twoPiOverN * (float) n));
 
     const int fftSize = config_.nFft * 2;
     fftBuffer_.resize((size_t) fftSize);
@@ -95,6 +98,13 @@ Result<void> MelSpectrogramProcessor::initFftAndWindow()
 
 void MelSpectrogramProcessor::initMelFilterbank()
 {
+    // librosa.filters.mel(htk=False, norm='slaney') reference algorithm:
+    //   1. Mel-spaced anchor frequencies in Hz (n_mels + 2 points), Slaney scale
+    //   2. Sample triangular filters at exact FFT bin frequencies (NOT integer-snap)
+    //   3. Slaney normalization: weights /= (mel_f[m+2] - mel_f[m]) / 2
+    // Differs from old HTK-style integer-bin snap which lost precision in low
+    // frequencies where mel spacing is dense.
+
     const int nFftBins = config_.nFft / 2 + 1;
     melFilterbank_.clear();
     melFilterbank_.resize((size_t) config_.nMels, std::vector<float>((size_t) nFftBins, 0.0f));
@@ -102,38 +112,45 @@ void MelSpectrogramProcessor::initMelFilterbank()
     const float melMin = hzToMel(config_.fMin);
     const float melMax = hzToMel(std::min(config_.fMax, 0.5f * (float) config_.sampleRate));
 
-    std::vector<float> melPoints((size_t) config_.nMels + 2);
-    std::vector<float> hzPoints((size_t) config_.nMels + 2);
-    std::vector<int> binPoints((size_t) config_.nMels + 2);
-
-    for (int i = 0; i < (int) melPoints.size(); ++i)
+    // mel_f: n_mels + 2 mel-spaced anchor frequencies in Hz
+    std::vector<float> melF((size_t) config_.nMels + 2);
+    for (int i = 0; i < (int) melF.size(); ++i)
     {
-        melPoints[(size_t) i] = melMin + (melMax - melMin) * ((float) i / (float) (config_.nMels + 1));
-        hzPoints[(size_t) i] = melToHz(melPoints[(size_t) i]);
-        const int bin = (int) std::floor((config_.nFft + 1) * hzPoints[(size_t) i] / (float) config_.sampleRate);
-        binPoints[(size_t) i] = juce::jlimit(0, nFftBins - 1, bin);
+        const float mel = melMin + (melMax - melMin) * ((float) i / (float) (config_.nMels + 1));
+        melF[(size_t) i] = melToHz(mel);
     }
 
+    // FFT bin frequencies (matches np.fft.rfftfreq(n_fft, d=1/sr))
+    std::vector<float> fftFreqs((size_t) nFftBins);
+    const float binHz = (float) config_.sampleRate / (float) config_.nFft;
+    for (int k = 0; k < nFftBins; ++k)
+        fftFreqs[(size_t) k] = (float) k * binHz;
+
+    // Triangle for filter m: peak at mel_f[m+1], shoulders at mel_f[m] and mel_f[m+2].
+    // Sampled at every fftFreq (fractional value, NOT snapped to integer bin).
     for (int m = 0; m < config_.nMels; ++m)
     {
-        const int left = binPoints[m];
-        const int center = binPoints[m + 1];
-        const int right = binPoints[m + 2];
+        const float left   = melF[(size_t) m];
+        const float center = melF[(size_t) (m + 1)];
+        const float right  = melF[(size_t) (m + 2)];
 
-        if (center == left || right == center)
+        const float leftSpan  = center - left;   // both > 0 by mel_f construction
+        const float rightSpan = right - center;
+        if (leftSpan <= 0.0f || rightSpan <= 0.0f)
             continue;
 
-        for (int k = left; k < center; ++k)
-            melFilterbank_[m][k] = (float) (k - left) / (float) (center - left);
+        // Slaney norm: total triangle area = 1 / ((right - left) / 2)
+        const float enorm = 2.0f / (right - left);
 
-        for (int k = center; k < right; ++k)
-            melFilterbank_[m][k] = (float) (right - k) / (float) (right - center);
-
-        const float hzLeft = hzPoints[(size_t) m];
-        const float hzRight = hzPoints[(size_t) m + 2];
-        const float enorm = (hzRight > hzLeft) ? (2.0f / (hzRight - hzLeft)) : 1.0f;
-        
-        juce::FloatVectorOperations::multiply(melFilterbank_[m].data(), enorm, nFftBins);
+        for (int k = 0; k < nFftBins; ++k)
+        {
+            const float f = fftFreqs[(size_t) k];
+            const float lower = (f - left)  / leftSpan;   // ramps up 0 → 1 on [left, center]
+            const float upper = (right - f) / rightSpan;  // ramps down 1 → 0 on [center, right]
+            const float w = std::min(lower, upper);
+            if (w > 0.0f)
+                melFilterbank_[(size_t) m][(size_t) k] = w * enorm;
+        }
     }
 }
 
@@ -141,7 +158,10 @@ void MelSpectrogramProcessor::resizeBuffers(int numSamples)
 {
     if (numSamples != lastNumSamples_)
     {
-        const int pad = config_.nFft / 2;
+        // Match training-time pad: (win_size - hop_length) // 2 (wav2mel.py:62-66).
+        // NOT n_fft / 2 — padding offset controls per-frame center alignment;
+        // n_fft / 2 would shift every frame center by 256 samples vs training.
+        const int pad = (config_.winLength - config_.hopLength) / 2;
         paddedAudio_.resize((size_t) numSamples + (size_t) pad * 2);
         lastNumSamples_ = numSamples;
     }
@@ -163,7 +183,9 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
     resizeBuffers(numSamples);
 
     const int nFftBins = config_.nFft / 2 + 1;
-    const int pad = config_.nFft / 2;
+    // Pad must match training-time `(win_size - hop_length) // 2` (wav2mel.py:62-66).
+    // resizeBuffers uses the same formula; keep them in lockstep.
+    const int pad = (config_.winLength - config_.hopLength) / 2;
 
     for (int i = 0; i < (int) paddedAudio_.size(); ++i)
         paddedAudio_[(size_t) i] = audio[(size_t) reflectIndex(i - pad, numSamples)];
@@ -171,18 +193,18 @@ Result<void> MelSpectrogramProcessor::compute(const float* audio, int numSamples
     for (int frame = 0; frame < numFrames; ++frame)
     {
         const int startSample = frame * config_.hopLength;
-        
+
         juce::FloatVectorOperations::clear(fftBuffer_.data(), (int) fftBuffer_.size());
 
+        // Copy + apply periodic Hann window in one pass.
         for (int i = 0; i < config_.winLength; ++i)
         {
             const int idx = startSample + i;
-            fftBuffer_[(size_t) i] = (idx < (int) paddedAudio_.size()) 
-                ? paddedAudio_[(size_t) idx] 
+            const float sample = (idx < (int) paddedAudio_.size())
+                ? paddedAudio_[(size_t) idx]
                 : 0.0f;
+            fftBuffer_[(size_t) i] = sample * hannWindow_[(size_t) i];
         }
-
-        window_->multiplyWithWindowingTable(fftBuffer_.data(), (size_t) config_.winLength);
 
         fft_->performFrequencyOnlyForwardTransform(fftBuffer_.data());
 

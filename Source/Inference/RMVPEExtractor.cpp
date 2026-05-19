@@ -373,12 +373,24 @@ std::vector<float> RMVPEExtractor::extractF0(
     }
 
     // Step 6: Build F0 vector with UV filtering
+    //
+    // ⚠️ 重要: 该 RMVPE checkpoint 输出的 "uv" 是 *unvoiced* 概率
+    // (voiced 帧 uv≈0, unvoiced 帧 uv≈1), 与 RMVPEExtractor.h 中
+    // confidenceThreshold_ 的命名是反的。详见该头文件中
+    // enableUvCheck_ 字段附近的警告注释。
+    //
+    // 当前默认 enableUvCheck_=false, 并未走这条分支。仅保留
+    // 原始实现以保证 ABI/行为不变 —— vocal-time-stretch change 只加
+    // 注释, 不修复逻辑。
     std::vector<float> finalF0;
     finalF0.reserve(f0Length);
 
     for (size_t i = 0; i < f0Length; ++i) {
         float value = f0Data[i];
         if (enableUvCheck_ && uvData[i] < confidenceThreshold_) {
+            // ⚠️ 语义与实际 uv 语义反向——一旦未来需要 enable 这条,
+            // 必须改为 `if (uvData[i] > (1.0f - confidenceThreshold_))` 或
+            // 重命名字段为 unvoicedProbability_.
             value = 0.0f;
         }
         finalF0.push_back(value);

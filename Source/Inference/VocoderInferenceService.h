@@ -28,6 +28,7 @@ public:
 
     int getVocoderHopSize() const;
     int getMelBins() const;
+    float getFMax() const;
 
 private:
     class Impl;

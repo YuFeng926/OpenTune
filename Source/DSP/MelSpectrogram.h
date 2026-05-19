@@ -8,7 +8,6 @@
 namespace juce {
 namespace dsp {
     class FFT;
-    template<typename T> class WindowingFunction;
 }
 }
 
@@ -26,7 +25,10 @@ struct MelSpectrogramConfig
     int nMels = 128;
     float fMin = 40.0f;
     float fMax = 16000.0f;
-    float logEps = 1.0e-5f;
+    // Match training-time `process.py::dynamic_range_compression_torch(clip_val=1e-9)`.
+    // Lower than 1e-5 default so silent / low-energy mel bins reach the same
+    // -20.7 nepers floor the vocoder was trained on.
+    float logEps = 1.0e-9f;
 
     size_t hash() const noexcept
     {
@@ -95,7 +97,11 @@ private:
 
     // JUCE DSP对象 (使用unique_ptr因为不可拷贝/无默认构造)
     std::unique_ptr<juce::dsp::FFT> fft_;
-    std::unique_ptr<juce::dsp::WindowingFunction<float>> window_;
+
+    // Periodic Hann window (matches torch.hann_window default periodic=True),
+    // applied manually in compute(). JUCE's WindowingFunction<float>::hann is
+    // symmetric (2π/(N-1)) which differs from training reference.
+    std::vector<float> hannWindow_;
 
     // Mel滤波器组 [nMels][nFftBins]
     std::vector<std::vector<float>> melFilterbank_;

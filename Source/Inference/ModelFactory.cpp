@@ -1,5 +1,6 @@
 #include "ModelFactory.h"
 #include "RMVPEExtractor.h"
+#include "SileroVadExtractor.h"   // ⚡️ vocal-time-stretch §4.4
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/CpuBudgetManager.h"
 #include "../Utils/AccelerationDetector.h"
@@ -125,6 +126,54 @@ std::vector<F0ModelInfo> ModelFactory::getAvailableF0Models(const std::string& m
     models.push_back(rmvpe);
 
     return models;
+}
+
+// ==============================================================================
+// ⚡️ vocal-time-stretch §4.4 — VAD extractor factory
+// ==============================================================================
+
+std::string ModelFactory::getVadModelPath(VadModelType type, const std::string& modelDir)
+{
+    switch (type) {
+        case VadModelType::SileroV5:
+            return modelDir + "/silero_vad.onnx";
+    }
+    return modelDir + "/silero_vad.onnx";
+}
+
+bool ModelFactory::isVadModelAvailable(VadModelType type, const std::string& modelDir)
+{
+    return juce::File(getVadModelPath(type, modelDir)).existsAsFile();
+}
+
+std::vector<VadModelInfo> ModelFactory::getAvailableVadModels(const std::string& modelDir)
+{
+    std::vector<VadModelInfo> models;
+    VadModelInfo silero;
+    silero.type = VadModelType::SileroV5;
+    silero.name = "silero_v5";
+    silero.displayName = "Silero VAD v5";
+    silero.modelSizeBytes = 1800000;
+    silero.isAvailable = isVadModelAvailable(VadModelType::SileroV5, modelDir);
+    models.push_back(silero);
+    return models;
+}
+
+ModelFactory::VadExtractorResult ModelFactory::createVadExtractor(
+    VadModelType type, const std::string& modelDir)
+{
+    juce::ignoreUnused(type);
+    auto extractor = std::make_unique<SileroVadExtractor>();
+    const std::string path = getVadModelPath(type, modelDir);
+    if (!extractor->initialize(path)) {
+        // Soft failure: model missing or load error.  Caller should treat
+        // this as "VAD unavailable; degrade to F0-only V/U fusion" rather
+        // than fail the whole import.
+        return VadExtractorResult::failure(
+            ErrorCode::ModelLoadFailed,
+            "Silero VAD model unavailable at " + path + "; PhonemeClassifier will use RMVPE-only V/U fusion");
+    }
+    return VadExtractorResult::success(std::move(extractor));
 }
 
 // ==============================================================================
