@@ -17,10 +17,22 @@ ParameterPanel::ToolIconButton::ToolIconButton(int toolId, const juce::String& n
 void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {
     auto bounds = getLocalBounds().toFloat().reduced(2.0f);
-    juce::ignoreUnused(bounds);
 
-    auto base = getToggleState() ? UIColors::accent : UIColors::buttonNormal;
-    getLookAndFeel().drawButtonBackground(g, *this, base, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
+    if (UIColors::currentThemeId() == ThemeId::Aurora)
+    {
+        const auto active = getToggleState();
+        UIColors::drawAuroraButtonChrome(g,
+                                         bounds,
+                                         UIColors::currentThemeStyle().controlRadius,
+                                         shouldDrawButtonAsHighlighted,
+                                         shouldDrawButtonAsDown,
+                                         active);
+    }
+    else
+    {
+        auto base = getToggleState() ? UIColors::accent : UIColors::buttonNormal;
+        getLookAndFeel().drawButtonBackground(g, *this, base, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
+    }
 
     if (textIcon_.isNotEmpty())
     {
@@ -61,6 +73,36 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
                                            float sliderPosProportional, float rotaryStartAngle,
                                            float rotaryEndAngle, juce::Slider& slider)
 {
+    if (UIColors::currentThemeId() == ThemeId::Aurora)
+    {
+        auto bounds = juce::Rectangle<float>(static_cast<float>(x),
+                                            static_cast<float>(y),
+                                            static_cast<float>(width),
+                                            static_cast<float>(height)).reduced(2.0f);
+        UIColors::drawAuroraKnob(g,
+                                 bounds,
+                                 sliderPosProportional,
+                                 slider.isMouseOverOrDragging(),
+                                 rotaryStartAngle,
+                                 rotaryEndAngle);
+        return;
+    }
+
+    if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+    {
+        auto bounds = juce::Rectangle<float>(static_cast<float>(x),
+                                            static_cast<float>(y),
+                                            static_cast<float>(width),
+                                            static_cast<float>(height)).reduced(2.0f);
+        UIColors::drawBlueBreezePianoKnob(g,
+                                          bounds,
+                                          sliderPosProportional,
+                                          slider.isMouseOverOrDragging(),
+                                          rotaryStartAngle,
+                                          rotaryEndAngle);
+        return;
+    }
+
     // Piano Black Minimalist Knob
     auto bounds = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height)).reduced(2.0f);
     auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
@@ -71,7 +113,7 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
     juce::DropShadow ds;
     ds.radius = 10;
     ds.offset = { 0, 4 };
-    ds.colour = juce::Colours::black.withAlpha(0.5f);
+    ds.colour = UIColors::backgroundDark.withAlpha(0.50f);
     
     juce::Path shadowPath;
     shadowPath.addEllipse(center.x - trackRadius, center.y - trackRadius, trackRadius * 2, trackRadius * 2);

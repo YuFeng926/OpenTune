@@ -305,8 +305,8 @@ bool ArrangementViewComponent::isWaveformCacheCompleteForMaterialization(int tra
 void ArrangementViewComponent::resized()
 {
     auto bounds = getLocalBounds();
-    horizontalScrollBar_.setBounds(bounds.removeFromBottom(15));
-    verticalScrollBar_.setBounds(bounds.removeFromLeft(15));
+    horizontalScrollBar_.setBounds(bounds.removeFromBottom(UIColors::scrollBarThickness));
+    verticalScrollBar_.setBounds(bounds.removeFromLeft(UIColors::scrollBarThickness));
 
     // Position toggle buttons in top right of ruler
     int btnW = 50;
@@ -363,13 +363,13 @@ void ArrangementViewComponent::updateScrollBars()
 
     double pixelsPerSecond = 100.0 * zoomLevel_;
     int totalContentWidth = static_cast<int>(maxEndTime * pixelsPerSecond);
-    int visibleWidth = getWidth() - 15;
+    int visibleWidth = getWidth() - UIColors::scrollBarThickness;
     
     horizontalScrollBar_.setRangeLimits(0.0, totalContentWidth + visibleWidth);
     horizontalScrollBar_.setCurrentRange(scrollOffset_, visibleWidth);
 
     int totalTrackHeight = rulerHeight_ + OpenTuneAudioProcessor::MAX_TRACKS * processor_.getTrackHeight();
-    int visibleHeight = getHeight() - 15;
+    int visibleHeight = getHeight() - UIColors::scrollBarThickness;
     verticalScrollBar_.setRangeLimits(0.0, totalTrackHeight + visibleHeight);
     verticalScrollBar_.setCurrentRange(verticalScrollOffset_, visibleHeight);
 }
@@ -398,8 +398,8 @@ double ArrangementViewComponent::viewportXToAbsoluteTime(int x) const
 juce::Rectangle<int> ArrangementViewComponent::getTrackLaneBounds(int trackId) const
 {
     auto bounds = getLocalBounds().withTrimmedTop(rulerHeight_);
-    bounds.removeFromLeft(15); // Reserve space for vertical scrollbar
-    bounds.removeFromBottom(15); // Reserve space for horizontal scrollbar
+    bounds.removeFromLeft(UIColors::scrollBarThickness); // Reserve space for vertical scrollbar
+    bounds.removeFromBottom(UIColors::scrollBarThickness); // Reserve space for horizontal scrollbar
     int h = processor_.getTrackHeight();
     return bounds.withY(rulerHeight_ + trackId * h - verticalScrollOffset_).withHeight(h);
 }
@@ -516,12 +516,47 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
     
     auto bounds = getLocalBounds().toFloat();
     
-    if (themeId == ThemeId::DarkBlueGrey) {
+    if (themeId == ThemeId::Aurora)
+    {
+        UIColors::fillAuroraTimelineBackground(g, bounds, 0.0f);
+    }
+    else if (themeId == ThemeId::BlueBreeze)
+    {
+        UIColors::fillMistedTimelineField(g, bounds, 0.0f);
+    }
+    else if (themeId == ThemeId::DarkBlueGrey) {
         // Soothe 2 Spectrum Background Style
         // It has a specific gradient and grid look
         UIColors::fillSoothe2SpectrumBackground(g, bounds, 0.0f);
     } else {
-        g.fillAll(UIColors::backgroundMedium);
+        g.fillAll(UIColors::rollBackground);
+    }
+
+    if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze)
+    {
+        for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
+        {
+            auto lane = getTrackLaneBounds(trackId).toFloat();
+            if (lane.getBottom() < static_cast<float>(rulerHeight_) || lane.getY() > bounds.getBottom())
+                continue;
+
+            lane.setX(bounds.getX());
+            lane.setWidth(bounds.getWidth());
+            const auto laneFill = themeId == ThemeId::Aurora
+                ? ((trackId % 2 == 0) ? UIColors::glassSurface.withAlpha(0.055f) : UIColors::pianoRollLane.withAlpha(0.030f))
+                : ((trackId % 2 == 0) ? UIColors::pianoRollLane.withAlpha(0.060f) : UIColors::glassSurface.withAlpha(0.022f));
+            g.setColour(laneFill);
+            g.fillRect(lane);
+
+            if (trackId == selectedTrack_)
+            {
+                g.setColour(UIColors::panelGlow.withAlpha(themeId == ThemeId::Aurora ? 0.040f : 0.038f));
+                g.fillRect(lane);
+            }
+
+            g.setColour((themeId == ThemeId::Aurora ? UIColors::gridLine : UIColors::pianoRollGrid).withAlpha(themeId == ThemeId::Aurora ? 0.026f : 0.036f));
+            g.drawHorizontalLine(juce::roundToInt(lane.getBottom()), lane.getX(), lane.getRight());
+        }
     }
 
     drawGridLines(g);
@@ -557,19 +592,30 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
             }
             else if (themeId == ThemeId::BlueBreeze)
             {
-                // Blue Breeze Clip Style - Sky Blue Gradient
-                juce::Colour topColor = isSelected ? juce::Colour(BlueBreeze::Colors::ClipSelectedTop) 
-                                                   : juce::Colour(BlueBreeze::Colors::ClipGradientTop);
-                juce::Colour bottomColor = isSelected ? juce::Colour(BlueBreeze::Colors::ClipSelectedBottom) 
-                                                      : juce::Colour(BlueBreeze::Colors::ClipGradientBottom);
-                
+                const auto topColor = isSelected
+                    ? UIColors::buttonHover.interpolatedWith(UIColors::glassHighlight, 0.12f)
+                    : UIColors::buttonNormal.interpolatedWith(UIColors::glassHighlight, 0.075f);
+                const auto bottomColor = isSelected
+                    ? UIColors::buttonPressed.interpolatedWith(UIColors::pianoRollBackground, 0.22f)
+                    : UIColors::buttonNormal.interpolatedWith(UIColors::pianoRollBackground, 0.22f);
+
                 juce::ColourGradient grad(topColor, placementArea.getX(), placementArea.getY(),
-                                          bottomColor, placementArea.getX(), placementArea.getBottom(), false);
+                                          bottomColor, placementArea.getRight(), placementArea.getBottom(), false);
                 g.setGradientFill(grad);
                 g.fillRoundedRectangle(placementArea, 6.0f);
-                
-                g.setColour(juce::Colour(BlueBreeze::Colors::ClipBorder));
-                g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
+
+                juce::ColourGradient source(UIColors::glassHighlight.withAlpha(isSelected ? 0.15f : 0.085f),
+                                            placementArea.getX() + placementArea.getWidth() * 0.18f,
+                                            placementArea.getY() + placementArea.getHeight() * 0.12f,
+                                            juce::Colours::transparentBlack,
+                                            placementArea.getRight(),
+                                            placementArea.getBottom(),
+                                            true);
+                g.setGradientFill(source);
+                g.fillRoundedRectangle(placementArea.reduced(1.0f), 5.0f);
+
+                g.setColour((isSelected ? UIColors::accent : UIColors::panelBorder).withAlpha(isSelected ? 0.72f : 0.42f));
+                g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, isSelected ? 1.2f : 0.9f);
             }
             else if (themeId == ThemeId::Aurora)
             {
@@ -622,10 +668,13 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
                 auto waveformBounds = placementBounds.reduced(6, 6);
 
-                // Aurora主题使用更亮的波形颜色，其他主题使用深灰色
                 if (themeId == ThemeId::Aurora)
                 {
                     g.setColour(juce::Colours::white.withAlpha(0.85f));
+                }
+                else if (themeId == ThemeId::BlueBreeze)
+                {
+                    g.setColour(UIColors::pianoRollWaveform.withAlpha(0.26f));
                 }
                 else
                 {
@@ -784,11 +833,26 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
     auto bounds = getLocalBounds();
     auto rulerArea = bounds.removeFromTop(rulerHeight_);
     
-    g.setColour(UIColors::backgroundMedium);
-    g.fillRect(rulerArea);
+    if (themeId == ThemeId::Aurora)
+    {
+        UIColors::fillAuroraTimelineBackground(g, rulerArea.toFloat(), 0.0f);
+    }
+    else if (themeId == ThemeId::BlueBreeze)
+    {
+        UIColors::fillMistedTimelineField(g, rulerArea.toFloat(), 0.0f);
+    }
+    else
+    {
+        g.setColour(UIColors::rollBackground);
+        g.fillRect(rulerArea);
+    }
 
-    g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::panelBorder.withAlpha(0.18f) : UIColors::panelBorder);
-    g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), 1.0f);
+    g.setColour(themeId == ThemeId::DarkBlueGrey
+                    ? UIColors::panelBorder.withAlpha(0.18f)
+                    : (themeId == ThemeId::Aurora
+                           ? UIColors::gridLine.withAlpha(0.060f)
+                           : (themeId == ThemeId::BlueBreeze ? UIColors::pianoRollGrid.withAlpha(0.040f) : UIColors::panelBorder)));
+    g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), themeId == ThemeId::BlueBreeze ? 0.7f : 1.0f);
 
     double sr = processor_.getSampleRate();
     if (sr <= 0.0)
@@ -828,9 +892,13 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
             int pixelX = absoluteTimeToViewportX(time);
             
             // Draw tick
-            g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::gridLine.withAlpha(0.10f) : UIColors::gridLine);
+            g.setColour(themeId == ThemeId::DarkBlueGrey
+                            ? UIColors::gridLine.withAlpha(0.10f)
+                            : (themeId == ThemeId::Aurora
+                                   ? UIColors::gridLine.withAlpha(0.080f)
+                                   : (themeId == ThemeId::BlueBreeze ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine)));
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerHeight_ - 10),
-                       static_cast<float>(pixelX), static_cast<float>(rulerHeight_), 1.0f);
+                       static_cast<float>(pixelX), static_cast<float>(rulerHeight_), themeId == ThemeId::BlueBreeze ? 0.7f : 1.0f);
             
             // Draw label (Bar:Beat) -> actually just Bar number usually for overview
             // Let's show Bar number (1-based)
@@ -843,7 +911,7 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
             else
                 label = juce::String::formatted("%lld.%lld", (long long) bar, (long long) beatInBar);
             
-            g.setColour(UIColors::textSecondary);
+            g.setColour(themeId == ThemeId::BlueBreeze ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary);
             g.drawText(label, pixelX - 20, 2, 40, rulerHeight_ - 12, juce::Justification::centred);
         }
     }
@@ -865,16 +933,20 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         for (double time = startTime; time < endTime; time += markerInterval) {
             int pixelX = absoluteTimeToViewportX(time);
             
-            g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::gridLine.withAlpha(0.10f) : UIColors::gridLine);
+            g.setColour(themeId == ThemeId::DarkBlueGrey
+                            ? UIColors::gridLine.withAlpha(0.10f)
+                            : (themeId == ThemeId::Aurora
+                                   ? UIColors::gridLine.withAlpha(0.080f)
+                                   : (themeId == ThemeId::BlueBreeze ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine)));
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerHeight_ - 10),
-                       static_cast<float>(pixelX), static_cast<float>(rulerHeight_), 1.0f);
+                       static_cast<float>(pixelX), static_cast<float>(rulerHeight_), themeId == ThemeId::BlueBreeze ? 0.7f : 1.0f);
 
             int totalSecs = static_cast<int>(time);
             int mins = totalSecs / 60;
             int secs = totalSecs % 60;
             juce::String timeStr = juce::String::formatted("%d:%02d", mins, secs);
 
-            g.setColour(UIColors::textSecondary);
+            g.setColour(themeId == ThemeId::BlueBreeze ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary);
             g.drawText(timeStr, pixelX - 20, 2, 40, rulerHeight_ - 12, juce::Justification::centred);
         }
     }
@@ -935,6 +1007,16 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
                 g.setColour(UIColors::panelBorder.withAlpha(0.12f));
                 g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
             }
+            else if (themeId == ThemeId::Aurora)
+            {
+                g.setColour(UIColors::gridLine.withAlpha(isMeasure ? 0.060f : 0.022f));
+                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
+            }
+            else if (themeId == ThemeId::BlueBreeze)
+            {
+                g.setColour(UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f));
+                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
+            }
             else
             {
                 if (isMeasure) {
@@ -969,7 +1051,12 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
             
             if (pixelX < -2 || pixelX > getWidth() + 2) continue;
 
-            g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::panelBorder.withAlpha(0.12f) : UIColors::panelBorder.withAlpha(0.25f));
+            if (themeId == ThemeId::Aurora)
+                g.setColour(UIColors::gridLine.withAlpha(0.022f));
+            else if (themeId == ThemeId::BlueBreeze)
+                g.setColour(UIColors::pianoRollGrid.withAlpha(0.022f));
+            else
+                g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::panelBorder.withAlpha(0.12f) : UIColors::panelBorder.withAlpha(0.25f));
             g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
         }
     }

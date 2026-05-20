@@ -93,7 +93,7 @@ void PianoRollComponent::initializeUIComponents() {
 
     addAndMakeVisible(playheadOverlay_);
     playheadOverlay_.setPianoKeyWidth(pianoKeyWidth_);
-    playheadOverlay_.setPlayheadColour(juce::Colour{0xFFE74C3C});
+    playheadOverlay_.setPlayheadColour(UIColors::playhead);
 
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
         this, [this](double timestampSec) { onScrollVBlankCallback(timestampSec); });
@@ -1017,6 +1017,12 @@ void PianoRollComponent::drawSelectedOriginalF0Curve(juce::Graphics& g, const st
     }
 
     if (!selectedPath.isEmpty()) {
+        if (UIColors::currentThemeId() == ThemeId::Aurora) {
+            g.setColour(UIColors::originalF0.withAlpha(0.16f));
+            juce::PathStrokeType glowStrokeType(5.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+            g.strokePath(selectedPath, glowStrokeType);
+        }
+
         g.setColour(UIColors::originalF0.withAlpha(0.85f));
         juce::PathStrokeType strokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
         g.strokePath(selectedPath, strokeType);
@@ -1032,7 +1038,7 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
 
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) return;
-    juce::Colour previewColour = juce::Colour(0xFF00DDDD);
+    juce::Colour previewColour = UIColors::correctedF0;
     juce::Path previewPath;
     bool pathStarted = false;
 
@@ -1198,10 +1204,14 @@ void PianoRollComponent::paint(juce::Graphics& g) {
 
     if (themeId == ThemeId::DarkBlueGrey)
         UIColors::fillSoothe2SpectrumBackground(g, bounds, UIColors::cornerRadius);
+    else if (themeId == ThemeId::Aurora)
+        UIColors::fillAuroraTimelineBackground(g, bounds, UIColors::cornerRadius);
+    else if (themeId == ThemeId::BlueBreeze)
+        UIColors::fillMistedTimelineField(g, bounds, UIColors::cornerRadius);
     else
         g.setColour(UIColors::rollBackground);
 
-    if (themeId != ThemeId::DarkBlueGrey)
+    if (themeId != ThemeId::DarkBlueGrey && themeId != ThemeId::Aurora && themeId != ThemeId::BlueBreeze)
         g.fillPath(backgroundPath);
 
     renderer_->drawTimeRuler(g, ctx);
@@ -1237,7 +1247,7 @@ void PianoRollComponent::paint(juce::Graphics& g) {
                 if (showOriginalF0_) {
                     const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
                     if (!originalF0.empty())
-                        renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, 0.55f, true, ctx, item);
+                        renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, UIColors::isAuroraTheme() ? 0.84f : 0.55f, true, ctx, item);
                 }
 
                 if (showCorrectedF0_ && !item.correctedF0.empty())
@@ -1655,8 +1665,8 @@ void PianoRollComponent::resized() {
     auto bounds = getLocalBounds().reduced(12);
 
     // Reserve space for scrollbars
-    horizontalScrollBar_.setBounds(bounds.removeFromBottom(15));
-    verticalScrollBar_.setBounds(bounds.removeFromRight(15));
+    horizontalScrollBar_.setBounds(bounds.removeFromBottom(UIColors::scrollBarThickness));
+    verticalScrollBar_.setBounds(bounds.removeFromRight(UIColors::scrollBarThickness));
 
     updateScrollBars();
 
@@ -2373,14 +2383,13 @@ void PianoRollComponent::handleVerticalZoomWheel(const juce::MouseEvent& e, floa
     verticalScrollOffset_ = targetY - (float)e.y;
     
     float totalHeight = getTotalHeight();
-    float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - 15);
+    float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
     float maxScroll = totalHeight - visibleHeight;
     if (maxScroll > 0.0f) {
         verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
     } else {
         verticalScrollOffset_ = 0.0f;
     }
-    
     updateScrollBars();
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
                      PianoRollVisualInvalidationPriority::Interactive);
@@ -2399,7 +2408,7 @@ void PianoRollComponent::handleVerticalScrollWheel(float deltaY) {
     float scrollDelta = deltaY * settings.scrollSpeed;
     verticalScrollOffset_ -= scrollDelta;
     float totalHeight = getTotalHeight();
-    float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - 15);
+    float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
     float maxScroll = totalHeight - visibleHeight;
     if (maxScroll > 0.0f) {
         verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
@@ -2995,7 +3004,7 @@ void PianoRollComponent::updateScrollBars() {
     
     double pixelsPerSecond = getTimelinePixelsPerSecond();
     int totalContentWidth = static_cast<int>(maxTime * pixelsPerSecond);
-    int visibleWidth = getWidth() - pianoKeyWidth_ - 15; // -15 for vertical scrollbar
+    int visibleWidth = getWidth() - pianoKeyWidth_ - UIColors::scrollBarThickness;
     visibleWidth = juce::jmax(1, visibleWidth);
     
     horizontalScrollBar_.setRangeLimits(0.0, totalContentWidth + visibleWidth, juce::dontSendNotification);
@@ -3003,7 +3012,7 @@ void PianoRollComponent::updateScrollBars() {
     
     // Vertical
     float totalHeight = getTotalHeight();
-    int visibleHeight = getHeight() - rulerHeight_ - 15; // -15 for horizontal scrollbar
+    int visibleHeight = getHeight() - rulerHeight_ - UIColors::scrollBarThickness;
     visibleHeight = juce::jmax(1, visibleHeight);
     
     verticalScrollBar_.setRangeLimits(0.0, totalHeight, juce::dontSendNotification);

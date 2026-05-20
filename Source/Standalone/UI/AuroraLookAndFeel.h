@@ -43,6 +43,15 @@ public:
                       int buttonX, int buttonY, int buttonW, int buttonH,
                       juce::ComboBox& box) override;
 
+    int getDefaultScrollbarWidth() override;
+
+    // Draw ScrollBar
+    void drawScrollbar(juce::Graphics& g, juce::ScrollBar& scrollBar,
+                       int x, int y, int width, int height,
+                       bool isScrollbarVertical,
+                       int thumbStartPosition, int thumbSize,
+                       bool isMouseOver, bool isMouseDown) override;
+
     // Draw Popup Menu
     void drawPopupMenuBackground(juce::Graphics& g, int width, int height) override;
     

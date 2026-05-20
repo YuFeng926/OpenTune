@@ -80,6 +80,142 @@ public:
         ds.drawForPath(g, p);
     }
 
+    static void drawBlueBreezeSurface(juce::Graphics& g,
+                                      juce::Rectangle<float> bounds,
+                                      float radius,
+                                      bool highlighted,
+                                      bool down,
+                                      bool active,
+                                      const juce::Path* shapeOverride = nullptr)
+    {
+        juce::Path shape;
+        if (shapeOverride != nullptr)
+            shape = *shapeOverride;
+        else
+            shape.addRoundedRectangle(bounds, radius);
+
+        const bool isPressed = down;
+        const bool isActive = active || isPressed;
+        const bool isHovered = highlighted && !isPressed;
+
+        const auto shadowAlpha = isPressed ? 0.05f : (isActive || isHovered ? 0.10f : 0.08f);
+        juce::DropShadow softShadow(juce::Colour(BlueBreeze::Colors::ControlShadow).withAlpha(shadowAlpha),
+                                    isPressed ? 7 : 12,
+                                    isPressed ? juce::Point<int> { 0, 1 } : juce::Point<int> { 0, 3 });
+        softShadow.drawForPath(g, shape);
+
+        if (isActive || isHovered)
+        {
+            juce::DropShadow accentGlow(juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(isActive ? 0.08f : 0.04f),
+                                        isActive ? 10 : 8,
+                                        {});
+            accentGlow.drawForPath(g, shape);
+
+            juce::DropShadow responseHalo(juce::Colour(BlueBreeze::Colors::SourceLight).withAlpha(isActive ? 0.10f : 0.05f),
+                                          isActive ? 12 : 9,
+                                          { 0, 1 });
+            responseHalo.drawForPath(g, shape);
+        }
+
+        const auto top = (isActive ? juce::Colour(BlueBreeze::Colors::ControlHover)
+                                   : juce::Colour(BlueBreeze::Colors::ControlTop))
+                             .interpolatedWith(juce::Colour(BlueBreeze::Colors::SourceLight), isHovered ? 0.07f : 0.04f);
+        const auto mid = (isHovered ? juce::Colour(BlueBreeze::Colors::ControlHover)
+                                    : juce::Colour(BlueBreeze::Colors::PanelTop))
+                             .interpolatedWith(juce::Colour(BlueBreeze::Colors::TrayInset), isPressed ? 0.05f : 0.015f)
+                             .interpolatedWith(juce::Colour(BlueBreeze::Colors::CanvasTop), isActive ? 0.10f : 0.05f);
+        const auto bottom = (isPressed ? juce::Colour(BlueBreeze::Colors::ControlPressed)
+                                       : juce::Colour(BlueBreeze::Colors::ControlBottom))
+                                .interpolatedWith(juce::Colour(BlueBreeze::Colors::PanelInset), isPressed ? 0.08f : 0.03f)
+                                .interpolatedWith(juce::Colour(BlueBreeze::Colors::PanelBottom), isPressed ? 0.12f : 0.06f);
+
+        juce::ColourGradient body(top, bounds.getX(), bounds.getY(),
+                                  bottom, bounds.getRight(), bounds.getBottom(), false);
+        body.addColour(0.38, top.interpolatedWith(mid, 0.42f));
+        body.addColour(0.68, mid);
+        g.setGradientFill(body);
+        g.fillPath(shape);
+
+        {
+            juce::Graphics::ScopedSaveState clipState(g);
+            g.reduceClipRegion(shape);
+
+            juce::ColourGradient light(juce::Colour(BlueBreeze::Colors::SourceLight).withAlpha(isPressed ? 0.06f : 0.12f),
+                                       bounds.getX() + bounds.getWidth() * 0.14f,
+                                       bounds.getY() + bounds.getHeight() * 0.10f,
+                                       juce::Colours::transparentWhite,
+                                       bounds.getRight(),
+                                       bounds.getBottom(),
+                                       true);
+            g.setGradientFill(light);
+            g.fillRect(bounds);
+
+            auto topBand = bounds.withHeight(bounds.getHeight() * 0.46f);
+            juce::ColourGradient glassSheen(juce::Colour(BlueBreeze::Colors::SourceLight).withAlpha(isActive ? 0.15f : 0.10f),
+                                            topBand.getX(),
+                                            topBand.getY(),
+                                            juce::Colours::transparentWhite,
+                                            topBand.getX(),
+                                            topBand.getBottom(),
+                                            false);
+            g.setGradientFill(glassSheen);
+            g.fillRect(topBand);
+
+            juce::ColourGradient faceLift(juce::Colour(BlueBreeze::Colors::CanvasTop).withAlpha(isActive ? 0.10f : 0.06f),
+                                          bounds.getX() + bounds.getWidth() * 0.10f,
+                                          bounds.getY() + bounds.getHeight() * 0.08f,
+                                          juce::Colours::transparentWhite,
+                                          bounds.getCentreX(),
+                                          bounds.getY() + bounds.getHeight() * 0.42f,
+                                          true);
+            g.setGradientFill(faceLift);
+            g.fillRect(bounds);
+
+            auto lowerBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.56f);
+            juce::ColourGradient lowerShade(juce::Colours::transparentBlack,
+                                            lowerBand.getX(),
+                                            lowerBand.getY(),
+                                            juce::Colour(BlueBreeze::Colors::PanelInset).withAlpha(isPressed ? 0.14f : 0.09f),
+                                            lowerBand.getX(),
+                                            lowerBand.getBottom(),
+                                            false);
+            g.setGradientFill(lowerShade);
+            g.fillRect(lowerBand);
+
+            if (isActive || isHovered)
+            {
+                juce::ColourGradient response(juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(isActive ? 0.08f : 0.04f),
+                                              bounds.getCentreX(),
+                                              bounds.getY(),
+                                              juce::Colours::transparentBlack,
+                                              bounds.getRight(),
+                                              bounds.getBottom(),
+                                              true);
+                g.setGradientFill(response);
+                g.fillRect(bounds);
+            }
+
+            g.setColour(juce::Colours::white.withAlpha(isPressed ? 0.06f : 0.14f));
+            g.drawLine(bounds.getX() + radius * 0.75f, bounds.getY() + 1.0f,
+                       bounds.getRight() - radius * 0.75f, bounds.getY() + 1.0f, 1.0f);
+        }
+
+        const auto border = isActive
+            ? juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.56f)
+            : juce::Colour(BlueBreeze::Colors::PanelBorder).withAlpha(isHovered ? 0.58f : 0.40f);
+        g.setColour(border);
+        g.strokePath(shape, juce::PathStrokeType(isActive ? 1.35f : 1.0f));
+
+        g.setColour(juce::Colour(BlueBreeze::Colors::SourceLight).withAlpha(isActive ? 0.14f : (isHovered ? 0.10f : 0.07f)));
+        g.strokePath(shape, juce::PathStrokeType(0.8f));
+
+        if (isPressed)
+        {
+            g.setColour(juce::Colour(BlueBreeze::Colors::PanelInset).withAlpha(0.18f));
+            g.strokePath(shape, juce::PathStrokeType(2.0f));
+        }
+    }
+
     juce::Font getTextButtonFont(juce::TextButton& button, int height) override
     {
         // 閲嶈锛氫笉瑕佺敤鎸夐挳楂樺害鎺ㄥ瀛椾綋澶у皬锛屽惁鍒欎細鍑虹幇鈥滀竴澶т竴灏忊€濄€?        // 绾﹀畾锛氶渶瑕佺粺涓€瀛楀彿鐨勬寜閽缃?properties["fontHeight"].
@@ -135,39 +271,7 @@ public:
     void drawBlueBreezeButton(juce::Graphics& g, juce::Button& button, juce::Rectangle<float> bounds, float radius,
                               bool isHighlighted, bool isDown)
     {
-        bool isActive = button.getToggleState() || isDown;
-        
-        if (isActive)
-        {
-            // Active: Pure White Background + Dark Text (Inverted)
-            
-            // Shadow for depth
-            drawSoftShadow(g, bounds, radius, juce::Colour(BlueBreeze::Colors::ShadowColor).withAlpha(0.2f));
-            
-            g.setColour(juce::Colour(BlueBreeze::Colors::ActiveWhite));
-            g.fillRoundedRectangle(bounds, radius);
-            
-            // Inner shadow for pressed state
-            if (isDown)
-            {
-                g.setColour(juce::Colours::black.withAlpha(0.1f));
-                g.fillRoundedRectangle(bounds, radius);
-            }
-        }
-        else
-        {
-            // Inactive: Transparent/Subtle Background + Dark Text
-            
-            if (isHighlighted)
-            {
-                g.setColour(juce::Colour(BlueBreeze::Colors::HoverOverlay)); // Slight white overlay
-                g.fillRoundedRectangle(bounds, radius);
-            }
-            
-            // Optional: Very subtle border
-            g.setColour(juce::Colour(BlueBreeze::Colors::PanelBorder).withAlpha(0.5f));
-            g.drawRoundedRectangle(bounds, radius, 1.0f);
-        }
+        drawBlueBreezeSurface(g, bounds, radius, isHighlighted, isDown, button.getToggleState() || isDown);
     }
 
     void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
@@ -216,27 +320,15 @@ public:
         if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
         {
             juce::Rectangle<float> tickBounds(x, y, w, h);
-            
-            // Background
-            g.setColour(juce::Colour(BlueBreeze::Colors::ActiveWhite));
-            g.fillRoundedRectangle(tickBounds, 3.0f);
-            
-            // Border
-            juce::Colour border = juce::Colour(BlueBreeze::Colors::PanelBorder);
-            if (shouldDrawButtonAsHighlighted || shouldDrawButtonAsDown)
-                border = juce::Colour(BlueBreeze::Colors::AccentBlue);
-                
-            g.setColour(border);
-            g.drawRoundedRectangle(tickBounds, 3.0f, 1.0f);
-            
-            // Tick
+            drawBlueBreezeSurface(g, tickBounds, 4.0f, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown, ticked);
+
             if (ticked)
             {
-                g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
                 juce::Path tickPath;
                 tickPath.startNewSubPath(tickBounds.getX() + 3.0f, tickBounds.getCentreY());
                 tickPath.lineTo(tickBounds.getCentreX(), tickBounds.getBottom() - 3.0f);
                 tickPath.lineTo(tickBounds.getRight() - 3.0f, tickBounds.getY() + 3.0f);
+                g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
                 g.strokePath(tickPath, juce::PathStrokeType(2.0f));
             }
             return;
@@ -404,20 +496,8 @@ public:
 
         if (themeId == ThemeId::BlueBreeze)
         {
-            float radius = 4.0f;
-            g.setColour(juce::Colour(BlueBreeze::Colors::ActiveWhite).withAlpha(0.8f));
-            g.fillRoundedRectangle(bounds, radius);
-
-            if (label.hasKeyboardFocus(true) && label.isEditable())
-            {
-                g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
-                g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 2.0f);
-            }
-            else
-            {
-                g.setColour(juce::Colour(BlueBreeze::Colors::PanelBorder));
-                g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
-            }
+            const bool focused = label.hasKeyboardFocus(true) && label.isEditable();
+            drawBlueBreezeSurface(g, bounds, style.fieldRadius, label.isMouseOver(), false, focused);
             
             g.setColour(label.findColour(juce::Label::textColourId));
             g.setFont(label.getFont());
@@ -487,35 +567,20 @@ public:
         {
             if (themeId == ThemeId::BlueBreeze)
             {
-                 // Horizontal logic similar to Vertical...
-                 // Implement horizontal Blue Breeze slider
                 float trackH = 4.0f;
                 auto trackRect = bounds.withHeight(trackH).withY(bounds.getCentreY() - trackH/2).reduced(4, 0);
                 
-                // Track Background
-                g.setColour(juce::Colour(BlueBreeze::Colors::KnobBody).withAlpha(0.2f));
+                g.setColour(juce::Colour(BlueBreeze::Colors::KnobTrack).withAlpha(0.32f));
                 g.fillRoundedRectangle(trackRect, trackH/2);
                 
-                // Active Fill
                 auto fillRect = trackRect.withWidth(sliderPos - trackRect.getX());
-                g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
+                g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.78f));
                 g.fillRoundedRectangle(fillRect, trackH/2);
                 
-                // Capsule Thumb
                 float thumbW = 12.0f;
                 float thumbH = 24.0f;
                 auto thumbRect = juce::Rectangle<float>(sliderPos - thumbW/2, bounds.getCentreY() - thumbH/2, thumbW, thumbH);
-                
-                drawSoftShadow(g, thumbRect, 4.0f, juce::Colour(BlueBreeze::Colors::ShadowColor).withAlpha(0.2f));
-                
-                g.setColour(juce::Colour(BlueBreeze::Colors::ActiveWhite));
-                g.fillRoundedRectangle(thumbRect, thumbW/2);
-                
-                if (slider.isMouseOverOrDragging())
-                {
-                    g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
-                    g.drawRoundedRectangle(thumbRect, thumbW/2, 1.0f);
-                }
+                drawBlueBreezeSurface(g, thumbRect, thumbW / 2.0f, slider.isMouseOverOrDragging(), slider.isMouseButtonDown(), false);
             }
             else
             {
@@ -583,8 +648,7 @@ public:
         float trackW = 4.0f;
         auto trackRect = bounds.withWidth(trackW).withX(bounds.getCentreX() - trackW/2).reduced(0, 4);
         
-        // Track Background
-        g.setColour(juce::Colour(BlueBreeze::Colors::KnobBody).withAlpha(0.2f));
+        g.setColour(juce::Colour(BlueBreeze::Colors::KnobTrack).withAlpha(0.32f));
         g.fillRoundedRectangle(trackRect, trackW/2);
         
         // Active Fill
@@ -596,7 +660,7 @@ public:
         if (fillTop < fillBottom)
         {
             juce::Rectangle<float> activeTrack(trackRect.getX(), fillTop, trackRect.getWidth(), fillBottom - fillTop);
-            g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
+            g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.78f));
             g.fillRoundedRectangle(activeTrack, trackW/2);
         }
         
@@ -605,16 +669,7 @@ public:
         float thumbH = 12.0f;
         auto thumbRect = juce::Rectangle<float>(bounds.getCentreX() - thumbW/2, sliderPos - thumbH/2, thumbW, thumbH);
         
-        drawSoftShadow(g, thumbRect, 4.0f, juce::Colour(BlueBreeze::Colors::ShadowColor).withAlpha(0.2f));
-        
-        g.setColour(juce::Colour(BlueBreeze::Colors::ActiveWhite));
-        g.fillRoundedRectangle(thumbRect, thumbH/2);
-        
-        if (slider.isMouseOverOrDragging())
-        {
-            g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
-            g.drawRoundedRectangle(thumbRect, thumbH/2, 1.0f);
-        }
+        drawBlueBreezeSurface(g, thumbRect, thumbH / 2.0f, slider.isMouseOverOrDragging(), slider.isMouseButtonDown(), false);
     }
 
     void drawDarkBlueGreySliderThumb(juce::Graphics& g, juce::Rectangle<float> thumb, const ThemeStyle& themeStyle)
@@ -701,51 +756,15 @@ public:
                             float angle, float rotaryStartAngle, float rotaryEndAngle, juce::Slider& slider)
     {
         auto trackRadius = radius * 0.85f;
-
-        // 1. Shadow (Soft, diffused)
-        drawSoftShadow(g, 
-                       juce::Rectangle<float>(cx - trackRadius, cy - trackRadius, trackRadius * 2, trackRadius * 2), 
-                       trackRadius, 
-                       juce::Colour(BlueBreeze::Colors::ShadowColor).withAlpha(BlueBreeze::Style::ShadowAlpha));
-
-        // 2. Knob Body (Deep Charcoal)
-        g.setColour(juce::Colour(BlueBreeze::Colors::KnobBody));
-        g.fillEllipse(cx - trackRadius, cy - trackRadius, trackRadius * 2, trackRadius * 2);
-
-        // 3. Value Arc (Thin, Precise)
-        
-        // Track background (Very subtle)
-        juce::Path bgArc;
-        bgArc.addCentredArc(cx, cy, trackRadius * 0.85f, trackRadius * 0.85f, 
-                            0.0f, rotaryStartAngle, rotaryEndAngle, true);
-        g.setColour(juce::Colour(BlueBreeze::Colors::KnobTrack).withAlpha(0.1f));
-        g.strokePath(bgArc, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        // Value Indicator
-        juce::Path valueArc;
-        valueArc.addCentredArc(cx, cy, trackRadius * 0.85f, trackRadius * 0.85f, 
-                               0.0f, rotaryStartAngle, angle, true);
-        
-        // Outer Glow for Value
-        if (slider.isMouseOverOrDragging())
-        {
-            g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.3f));
-            g.strokePath(valueArc, juce::PathStrokeType(7.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-
-        g.setColour(juce::Colour(BlueBreeze::Colors::KnobIndicator));
-        g.strokePath(valueArc, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        // 4. Center Value Text (Soothe2 style)
-        g.setColour(juce::Colour(BlueBreeze::Colors::KnobIndicator));
-        g.setFont(UIColors::getUIFont(12.0f)); // Small, geometric font
-        
-        // Format value text
-        juce::String text;
-        if (std::abs(slider.getValue()) < 10.0) text = juce::String(slider.getValue(), 1);
-        else text = juce::String((int)slider.getValue());
-        
-        g.drawText(text, bounds, juce::Justification::centred, false);
+        juce::ignoreUnused(cx, cy, radius, angle, trackRadius);
+        const auto denominator = rotaryEndAngle - rotaryStartAngle;
+        const auto normalised = denominator != 0.0f ? (angle - rotaryStartAngle) / denominator : 0.0f;
+        UIColors::drawBlueBreezePianoKnob(g,
+                                          bounds,
+                                          normalised,
+                                          slider.isMouseOverOrDragging(),
+                                          rotaryStartAngle,
+                                          rotaryEndAngle);
     }
 
         void drawDarkBlueGreyKnob(juce::Graphics& g, juce::Rectangle<float> bounds, float cx, float cy, float radius,
@@ -907,9 +926,17 @@ public:
             }
             else
             {
-                // BlueBreeze - flat look
-                g.setColour(bg);
-                g.fillRoundedRectangle(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), style.fieldRadius);
+                const auto field = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
+                if (themeId == ThemeId::BlueBreeze)
+                {
+                    juce::ignoreUnused(bg);
+                    drawBlueBreezeSurface(g, field.reduced(0.5f), style.fieldRadius, textEditor.isMouseOver(), false, textEditor.hasKeyboardFocus(true));
+                }
+                else
+                {
+                    g.setColour(bg);
+                    g.fillRoundedRectangle(field, style.fieldRadius);
+                }
             }
         }
     }
@@ -976,31 +1003,11 @@ public:
 
         if (themeId == ThemeId::BlueBreeze)
         {
-            // Pill/Rounded shape
-            float radius = 4.0f;
+            const float radius = style.fieldRadius;
             bool isActive = isButtonDown || box.isPopupActive();
             bool isHover = box.isMouseOver(true);
 
-            if (isActive)
-            {
-                drawSoftShadow(g, boxBounds, radius, juce::Colour(BlueBreeze::Colors::ShadowColor).withAlpha(0.2f));
-                g.setColour(juce::Colour(BlueBreeze::Colors::ActiveWhite));
-                g.fillRoundedRectangle(boxBounds, radius);
-            }
-            else
-            {
-                g.setColour(juce::Colour(BlueBreeze::Colors::ActiveWhite).withAlpha(0.6f));
-                g.fillRoundedRectangle(boxBounds, radius);
-                
-                if (isHover)
-                {
-                    g.setColour(juce::Colour(BlueBreeze::Colors::HoverOverlay));
-                    g.fillRoundedRectangle(boxBounds, radius);
-                }
-            }
-
-            g.setColour(isActive ? juce::Colour(BlueBreeze::Colors::AccentBlue) : juce::Colour(BlueBreeze::Colors::PanelBorder));
-            g.drawRoundedRectangle(boxBounds.reduced(0.5f), radius, 1.0f);
+            drawBlueBreezeSurface(g, boxBounds.reduced(0.5f), radius, isHover, isButtonDown, isActive);
             
             if (!box.getProperties().contains("noArrow"))
             {
@@ -1051,7 +1058,7 @@ public:
         const auto themeId = UIColors::currentThemeId();
         if (themeId == ThemeId::BlueBreeze)
         {
-            g.fillAll(juce::Colour(BlueBreeze::Colors::ActiveWhite).withAlpha(0.98f));
+            g.fillAll(juce::Colour(BlueBreeze::Colors::PanelTop).withAlpha(0.98f));
             g.setColour(juce::Colour(BlueBreeze::Colors::PanelBorder));
             g.drawRect(0, 0, width, height);
             return;
@@ -1082,7 +1089,7 @@ public:
             
             if (isHighlighted)
             {
-                g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.1f));
+                g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.13f));
                 g.fillRect(area);
                 g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
                 textCol = juce::Colour(BlueBreeze::Colors::AccentBlue);
@@ -1188,7 +1195,7 @@ public:
     
     int getDefaultScrollbarWidth() override
     {
-        return 15; // 15px 瀹藉害
+        return UIColors::scrollBarThickness;
     }
     
     void drawScrollbar(juce::Graphics& g, juce::ScrollBar& scrollbar,
@@ -1205,12 +1212,11 @@ public:
         
         if (themeId == ThemeId::BlueBreeze)
         {
-            // Blue Breeze 涓婚 - 鏇存祬鐨勭伆鑹茬郴
-            trackBg = juce::Colour(0xFFB0C0CC);
-            thumbBg = juce::Colour(0xFF8CA2B0);
-            thumbHover = juce::Colour(0xFFA0B0B8);
-            thumbPressed = juce::Colour(0xFF7A8F9E);
-            highlight = juce::Colour(0xFFC6D4DD);
+            trackBg = juce::Colour(BlueBreeze::Colors::PanelBorder);
+            thumbBg = juce::Colour(BlueBreeze::Colors::ControlBottom);
+            thumbHover = juce::Colour(BlueBreeze::Colors::ControlHover);
+            thumbPressed = juce::Colour(BlueBreeze::Colors::ControlPressed);
+            highlight = juce::Colour(BlueBreeze::Colors::SourceLight);
         }
         else if (themeId == ThemeId::DarkBlueGrey)
         {
@@ -1223,7 +1229,6 @@ public:
         }
         else
         {
-            // 榛樿 - 浣跨敤鏇存祬鐨?BlueBreeze 椋庢牸
             trackBg = juce::Colour(0xFFB0C0CC);
             thumbBg = juce::Colour(0xFF8CA2B0);
             thumbHover = juce::Colour(0xFFA0B0B8);
@@ -1311,4 +1316,3 @@ public:
 };
 
 } // namespace OpenTune
-

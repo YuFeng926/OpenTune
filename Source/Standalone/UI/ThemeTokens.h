@@ -75,6 +75,31 @@ struct ThemeTokens
 
     juce::Colour knobBody;
     juce::Colour knobIndicator;
+    juce::Colour displayWellTop;
+    juce::Colour displayWellBottom;
+    juce::Colour displayWellEdge;
+    juce::Colour displayText;
+    juce::Colour displayTextDim;
+    juce::Colour darkControlFace;
+    juce::Colour darkControlEdge;
+    juce::Colour keyBedWhite;
+    juce::Colour keyBedBlack;
+    juce::Colour keyBedDivider;
+
+    juce::Colour glassSurface;
+    juce::Colour glassHighlight;
+    juce::Colour glassEdge;
+    juce::Colour panelGlow;
+    juce::Colour auroraButtonNormal;
+    juce::Colour auroraButtonHover;
+    juce::Colour auroraButtonActive;
+    juce::Colour pianoRollBackground;
+    juce::Colour pianoRollLane;
+    juce::Colour pianoRollGrid;
+    juce::Colour pianoRollWaveform;
+    juce::Colour sidebarTrackFade;
+    juce::Colour knobRim;
+    juce::Colour knobGlow;
 
     float cornerRadius = 8.0f;
 };
@@ -160,9 +185,9 @@ private:
             BlueBreeze::Style::StrokeThick,
             2.0f,
 
-            BlueBreeze::Style::ShadowAlpha,
-            BlueBreeze::Style::ShadowRadius,
-            { 0, 4 },
+            0.16f,
+            18,
+            { 0, 5 },
 
             0.0f,
             0.0f,
@@ -230,24 +255,24 @@ private:
     {
         static const ThemeTokens tokens {
             juce::Colour { BlueBreeze::Colors::AccentBlue },
-            juce::Colour { BlueBreeze::Colors::ActiveWhite },
-            juce::Colour { 0xFFD6E4ED },
-            juce::Colour { 0xFF5A6A75 },
-
-            juce::Colour { BlueBreeze::Colors::SidebarBg },
-            juce::Colour { 0xFFD4E0E8 },
-            juce::Colour { 0xFFE7EEF3 },
-
-            juce::Colour { BlueBreeze::Colors::GraphBgLight },
+            juce::Colour { BlueBreeze::Colors::AccentBlue },
+            juce::Colour { BlueBreeze::Colors::AccentBlueSoft },
             juce::Colour { BlueBreeze::Colors::GraphBgDeep },
 
-            juce::Colour { BlueBreeze::Colors::PanelBorder },
-            juce::Colour { 0x00000000 },
-            juce::Colour { BlueBreeze::Colors::HoverOverlay },
-            juce::Colour { BlueBreeze::Colors::ActiveWhite },
+            juce::Colour { BlueBreeze::Colors::GraphBgDeep },
+            juce::Colour { BlueBreeze::Colors::FieldFogMid },
+            juce::Colour { BlueBreeze::Colors::FieldFogTop },
 
-            juce::Colour { 0xFFFFFFFF },
-            juce::Colour { 0xFF8FA2AF },
+            juce::Colour { BlueBreeze::Colors::CanvasTop },
+            juce::Colour { BlueBreeze::Colors::CanvasBottom },
+
+            juce::Colour { BlueBreeze::Colors::PanelBorder },
+            juce::Colour { BlueBreeze::Colors::ControlBottom },
+            juce::Colour { BlueBreeze::Colors::ControlHover },
+            juce::Colour { BlueBreeze::Colors::ControlPressed },
+
+            juce::Colour { BlueBreeze::Colors::SourceLight },
+            juce::Colour { BlueBreeze::Colors::PanelInset },
             juce::Colour { BlueBreeze::Colors::AccentBlue },
 
             juce::Colour { BlueBreeze::Colors::TextDark },
@@ -255,23 +280,23 @@ private:
             juce::Colour { 0xFFA1AFBA },
             juce::Colour { BlueBreeze::Colors::AccentBlue },
 
-            juce::Colour { BlueBreeze::Colors::GraphBgLight }, // rollBackground
-            juce::Colour { 0x0FFFFFFF },
-            juce::Colour { 0x08FFFFFF },
-            juce::Colour { 0x20FFFFFF },
-
-            juce::Colour { BlueBreeze::Colors::NodeRed },
-            juce::Colour { BlueBreeze::Colors::AccentBlue },
-            juce::Colour { 0x3060A5FA },
+            juce::Colour { BlueBreeze::Colors::FieldFogMid },
+            juce::Colour { BlueBreeze::Colors::LaneSoft }.withAlpha(0.16f),
+            juce::Colour { BlueBreeze::Colors::GraphBgDeep }.withAlpha(0.14f),
+            juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.18f),
 
             juce::Colour { BlueBreeze::Colors::NodeYellow },
-            juce::Colour { 0xFFE5C75E },
-            juce::Colour { 0xFFFFE8A0 },
-            juce::Colour { 0xFFFBE090 },
+            juce::Colour { 0xFF2DFFC4 }, // correctedF0
+            juce::Colour { 0x302DFFC4 }, // shadowTrack
 
-            juce::Colour { BlueBreeze::Colors::ActiveWhite },
             juce::Colour { BlueBreeze::Colors::AccentBlue },
-            juce::Colour { 0x303B4D5A },
+            juce::Colour { 0xFF8AC9EF },
+            juce::Colour { 0xFFB9E4FB },
+            juce::Colour { 0xFFA6D9F5 },
+
+            juce::Colour { BlueBreeze::Colors::SourceLight },
+            juce::Colour { BlueBreeze::Colors::AccentBlue },
+            juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.24f),
 
             juce::Colour { BlueBreeze::Colors::ActiveWhite },
             juce::Colour { BlueBreeze::Colors::TextDim },
@@ -281,13 +306,38 @@ private:
             juce::Colour { 0xFF2ECC71 },
             juce::Colour { BlueBreeze::Colors::NodeRed },
 
-            juce::Colour { 0x25FFFFFF },
-            juce::Colour { 0x60FFFFFF },
+            juce::Colour { BlueBreeze::Colors::GraphBgLight }.withAlpha(0.18f),
+            juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.26f),
 
-            juce::Colour { 0x60FBBF24 },
+            juce::Colour { 0x305AA8E6 },
 
             juce::Colour { BlueBreeze::Colors::KnobBody },
             juce::Colour { BlueBreeze::Colors::KnobIndicator },
+            juce::Colour { BlueBreeze::Colors::DisplayTop },
+            juce::Colour { BlueBreeze::Colors::DisplayBottom },
+            juce::Colour { BlueBreeze::Colors::DisplayEdge },
+            juce::Colour { BlueBreeze::Colors::DisplayText },
+            juce::Colour { BlueBreeze::Colors::DisplayTextDim },
+            juce::Colour { BlueBreeze::Colors::DarkFaceBottom },
+            juce::Colour { BlueBreeze::Colors::DarkFaceEdge },
+            juce::Colour { BlueBreeze::Colors::KeyBedTop },
+            juce::Colour { BlueBreeze::Colors::KeyBlackTop },
+            juce::Colour { BlueBreeze::Colors::KeyBedDivider },
+
+            juce::Colour { BlueBreeze::Colors::ControlBottom }.withAlpha(0.58f),
+            juce::Colour { BlueBreeze::Colors::SourceLight }.withAlpha(0.56f),
+            juce::Colour { BlueBreeze::Colors::PanelBorder },
+            juce::Colour { BlueBreeze::Colors::AccentGlow },
+            juce::Colour { BlueBreeze::Colors::ControlBottom },
+            juce::Colour { BlueBreeze::Colors::ControlHover },
+            juce::Colour { BlueBreeze::Colors::ControlPressed },
+            juce::Colour { BlueBreeze::Colors::FieldFogBottom },
+            juce::Colour { BlueBreeze::Colors::LaneSoft }.withAlpha(0.14f),
+            juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.14f),
+            juce::Colour { BlueBreeze::Colors::GraphBgLight }.withAlpha(0.30f),
+            juce::Colour { BlueBreeze::Colors::GraphBgDeep },
+            juce::Colour { BlueBreeze::Colors::KnobEdge },
+            juce::Colour { BlueBreeze::Colors::KnobGlow },
 
             BlueBreeze::Style::PanelRadius
         };
@@ -357,6 +407,31 @@ private:
 
             juce::Colour { DarkBlueGrey::Colors::KnobBody },
             juce::Colour { DarkBlueGrey::Colors::KnobIndicator },
+            juce::Colour { DarkBlueGrey::Colors::BackgroundDark },
+            juce::Colour { DarkBlueGrey::Colors::BackgroundDark }.darker(0.18f),
+            juce::Colour { DarkBlueGrey::Colors::PanelBorder },
+            juce::Colour { DarkBlueGrey::Colors::TextPrimary },
+            juce::Colour { DarkBlueGrey::Colors::TextDisabled },
+            juce::Colour { DarkBlueGrey::Colors::BackgroundDark },
+            juce::Colour { DarkBlueGrey::Colors::PanelBorder },
+            juce::Colour { DarkBlueGrey::Colors::TextPrimary },
+            juce::Colour { DarkBlueGrey::Colors::BackgroundDark },
+            juce::Colour { DarkBlueGrey::Colors::PanelBorder },
+
+            juce::Colour { DarkBlueGrey::Colors::BackgroundMedium },
+            juce::Colour { DarkBlueGrey::Colors::BevelLight },
+            juce::Colour { DarkBlueGrey::Colors::PanelBorder },
+            juce::Colour { DarkBlueGrey::Colors::GlowColor }.withAlpha(0.25f),
+            juce::Colour { DarkBlueGrey::Colors::ButtonNormal },
+            juce::Colour { DarkBlueGrey::Colors::ButtonHover },
+            juce::Colour { DarkBlueGrey::Colors::ButtonPressed },
+            juce::Colour { DarkBlueGrey::Colors::RollBackground },
+            juce::Colour { DarkBlueGrey::Colors::LaneC },
+            juce::Colour { DarkBlueGrey::Colors::GridLine },
+            juce::Colour { DarkBlueGrey::Colors::WaveformFill },
+            juce::Colour { DarkBlueGrey::Colors::ShadowTrack },
+            juce::Colour { DarkBlueGrey::Colors::KnobIndicator },
+            juce::Colour { DarkBlueGrey::Colors::GlowColor }.withAlpha(0.25f),
 
             DarkBlueGrey::Style::CornerRadius
         };
@@ -431,19 +506,19 @@ private:
             juce::Colour { Aurora::Colors::TextDim },
             juce::Colour { Aurora::Colors::Cyan }, // textHighlight
 
-            juce::Colour { Aurora::Colors::BgDeep }, // rollBackground
+            juce::Colour { Aurora::Colors::PianoRollBg }, // rollBackground
             juce::Colour { 0x08FFFFFF }, // laneC
             juce::Colour { 0x03FFFFFF }, // laneOther
             juce::Colour { Aurora::Colors::BorderLight }, // gridLine
 
-            juce::Colour { 0xFFFF0000 }, // originalF0 - 正红色
-            juce::Colour { 0xFF00FFFF },   // correctedF0 - 青色
+            juce::Colour { Aurora::Colors::OriginalF0 }, // originalF0
+            juce::Colour { Aurora::Colors::CorrectedF0 }, // correctedF0
             juce::Colour { 0x40000000 }, // shadowTrack
 
-            juce::Colour { Aurora::Colors::Cyan }, // noteBlock
-            juce::Colour { Aurora::Colors::TextPrimary }, // noteBlockBorder
-            juce::Colour { Aurora::Colors::ElectricBlue }, // noteBlockSelected
-            juce::Colour { Aurora::Colors::Magenta }, // noteBlockHover
+            juce::Colour { Aurora::Colors::NoteBlock }, // noteBlock
+            juce::Colour { Aurora::Colors::NoteBlockEdge }, // noteBlockBorder
+            juce::Colour { Aurora::Colors::NeonRed }, // noteBlockSelected
+            juce::Colour { Aurora::Colors::NoteBlockHot }, // noteBlockHover
 
             juce::Colour { Aurora::Colors::Cyan }, // playhead
             juce::Colour { Aurora::Colors::TextSecondary }, // timelineMarker
@@ -462,8 +537,33 @@ private:
 
             juce::Colour { 0x20FFFFFF }, // scaleHighlight
 
-            juce::Colour { Aurora::Colors::KnobBody },
+            juce::Colour { Aurora::Colors::KnobGlassBody },
             juce::Colour { Aurora::Colors::KnobIndicator },
+            juce::Colour { Aurora::Colors::BgDeep },
+            juce::Colour { Aurora::Colors::BgDeep }.darker(0.20f),
+            juce::Colour { Aurora::Colors::GlassEdge },
+            juce::Colour { Aurora::Colors::TextPrimary },
+            juce::Colour { Aurora::Colors::TextDim },
+            juce::Colour { Aurora::Colors::BgDeep },
+            juce::Colour { Aurora::Colors::GlassEdge },
+            juce::Colour { Aurora::Colors::TextPrimary },
+            juce::Colour { Aurora::Colors::BgDeep },
+            juce::Colour { Aurora::Colors::BorderLight },
+
+            juce::Colour { Aurora::Colors::GlassSurface },
+            juce::Colour { Aurora::Colors::GlassHighlight },
+            juce::Colour { Aurora::Colors::GlassEdge },
+            juce::Colour { Aurora::Colors::PanelGlow },
+            juce::Colour { Aurora::Colors::ButtonNormal },
+            juce::Colour { Aurora::Colors::ButtonHover },
+            juce::Colour { Aurora::Colors::ButtonActive },
+            juce::Colour { Aurora::Colors::PianoRollBg },
+            juce::Colour { Aurora::Colors::PianoLane },
+            juce::Colour { Aurora::Colors::PianoGrid },
+            juce::Colour { Aurora::Colors::PianoWaveform },
+            juce::Colour { Aurora::Colors::SidebarTrackFade },
+            juce::Colour { Aurora::Colors::KnobRim },
+            juce::Colour { Aurora::Colors::KnobGlow },
 
             Aurora::Style::PanelRadius
         };

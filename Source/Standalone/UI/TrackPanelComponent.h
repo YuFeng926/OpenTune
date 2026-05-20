@@ -78,6 +78,7 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
         {
             auto bounds = getLocalBounds().toFloat();
             auto center = bounds.getCentre();
+            const bool isBlueBreeze = UIColors::currentThemeId() == ThemeId::BlueBreeze;
             
             // 外环半径和内环半径
             float outerRadius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f - 2.0f;
@@ -142,11 +143,27 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
                 // 绘制弧形段
                 juce::Path arcPath;
                 arcPath.addCentredArc(center.x, center.y, outerRadius, outerRadius,
-                                      0.0f, segStart, segEnd, true);
+                                       0.0f, segStart, segEnd, true);
                 arcPath.addCentredArc(center.x, center.y, innerRadius, innerRadius,
-                                      0.0f, segEnd, segStart, false);
+                                       0.0f, segEnd, segStart, false);
                 arcPath.closeSubPath();
                 
+                if (isBlueBreeze)
+                {
+                    auto base = UIColors::knobRim.withAlpha(isLit ? 0.30f : 0.20f);
+                    if (isLit)
+                        base = UIColors::accent.withAlpha(segPos < 0.82f ? 0.38f : 0.52f);
+                    if (isClipping_ && i >= numSegments - 2)
+                        base = UIColors::statusError.withAlpha(0.66f);
+
+                    g.setColour(base);
+                    g.fillPath(arcPath);
+
+                    g.setColour((isLit ? UIColors::glassHighlight : UIColors::darkControlEdge).withAlpha(isLit ? 0.22f : 0.16f));
+                    g.strokePath(arcPath, juce::PathStrokeType(0.85f));
+                    continue;
+                }
+
                 if (isLit)
                 {
                     // 点亮状态 - 使用渐变增加立体感
@@ -225,6 +242,36 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
         void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
             const float rotaryStartAngle, const float rotaryEndAngle, juce::Slider& slider) override
         {
+            if (UIColors::currentThemeId() == ThemeId::Aurora)
+            {
+                auto bounds = juce::Rectangle<float>(static_cast<float>(x),
+                                                    static_cast<float>(y),
+                                                    static_cast<float>(width),
+                                                    static_cast<float>(height)).reduced(1.0f);
+                UIColors::drawAuroraKnob(g,
+                                         bounds,
+                                         sliderPos,
+                                         slider.isMouseOverOrDragging(),
+                                         rotaryStartAngle,
+                                         rotaryEndAngle);
+                return;
+            }
+
+            if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+            {
+                auto bounds = juce::Rectangle<float>(static_cast<float>(x),
+                                                    static_cast<float>(y),
+                                                    static_cast<float>(width),
+                                                    static_cast<float>(height)).reduced(0.5f);
+                UIColors::drawBlueBreezePianoKnob(g,
+                                                  bounds,
+                                                  sliderPos,
+                                                  slider.isMouseOverOrDragging(),
+                                                  rotaryStartAngle,
+                                                  rotaryEndAngle);
+                return;
+            }
+
             auto radius = (float)juce::jmin(width / 2, height / 2) - 2.0f;
             auto centreX = (float)x + (float)width * 0.5f;
             auto centreY = (float)y + (float)height * 0.5f;
@@ -329,20 +376,34 @@ public:
     {
         auto bounds = getLocalBounds().toFloat().reduced(4.0f);
         const auto& style = UIColors::currentThemeStyle();
-        
-        // 背景
-        auto bgColor = UIColors::backgroundLight;
-        if (isMouseOver_)
-            bgColor = bgColor.brighter(0.1f);
-        if (isMouseDown_)
-            bgColor = bgColor.darker(0.1f);
-        
-        g.setColour(bgColor);
-        g.fillRoundedRectangle(bounds, style.controlRadius);
-        
-        // 边框
-        g.setColour(UIColors::panelBorder.withAlpha(isMouseOver_ ? 0.8f : 0.5f));
-        g.drawRoundedRectangle(bounds, style.controlRadius, 1.0f);
+
+        if (UIColors::isAuroraTheme())
+        {
+            UIColors::drawAuroraButtonChrome(g,
+                                             bounds,
+                                             style.controlRadius,
+                                             isMouseOver_,
+                                             isMouseDown_,
+                                             false,
+                                             UIColors::panelGlow,
+                                             UIColors::glassEdge);
+        }
+        else
+        {
+            // 背景
+            auto bgColor = UIColors::backgroundLight;
+            if (isMouseOver_)
+                bgColor = bgColor.brighter(0.1f);
+            if (isMouseDown_)
+                bgColor = bgColor.darker(0.1f);
+
+            g.setColour(bgColor);
+            g.fillRoundedRectangle(bounds, style.controlRadius);
+
+            // 边框
+            g.setColour(UIColors::panelBorder.withAlpha(isMouseOver_ ? 0.8f : 0.5f));
+            g.drawRoundedRectangle(bounds, style.controlRadius, 1.0f);
+        }
         
         // +号图标
         auto iconColor = isMouseOver_ ? UIColors::accent : UIColors::textSecondary;
