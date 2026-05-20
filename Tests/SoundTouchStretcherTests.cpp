@@ -26,13 +26,14 @@
 namespace {
 
 constexpr double kSampleRate = 44100.0;
+constexpr double kPi = 3.14159265358979323846264338327950288;
 
 std::vector<float> makeSineTone(double freqHz, double durationSec, double amp = 0.4)
 {
     const int n = static_cast<int>(std::round(durationSec * kSampleRate));
     std::vector<float> out(static_cast<size_t>(n));
     for (int i = 0; i < n; ++i) {
-        out[static_cast<size_t>(i)] = static_cast<float>(amp * std::sin(2.0 * M_PI * freqHz * i / kSampleRate));
+        out[static_cast<size_t>(i)] = static_cast<float>(amp * std::sin(2.0 * kPi * freqHz * i / kSampleRate));
     }
     return out;
 }

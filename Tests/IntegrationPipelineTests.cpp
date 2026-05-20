@@ -39,6 +39,7 @@
 namespace {
 
 constexpr double kSampleRate = TimeCoordinate::kRenderSampleRate;
+constexpr double kPi = 3.14159265358979323846264338327950288;
 
 OpenTuneAudioProcessor::PreparedImport makeIntegrationImport(const juce::String& name,
                                                               double durationSec = 1.0)
@@ -49,7 +50,7 @@ OpenTuneAudioProcessor::PreparedImport makeIntegrationImport(const juce::String&
     prep.storedAudioBuffer.setSize(1, n);
     auto* w = prep.storedAudioBuffer.getWritePointer(0);
     for (int i = 0; i < n; ++i) {
-        w[i] = 0.3f * static_cast<float>(std::sin(2.0 * M_PI * 440.0 * i / kSampleRate));
+        w[i] = 0.3f * static_cast<float>(std::sin(2.0 * kPi * 440.0 * i / kSampleRate));
     }
     return prep;
 }

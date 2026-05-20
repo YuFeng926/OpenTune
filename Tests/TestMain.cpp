@@ -2116,15 +2116,23 @@ void runStandaloneImportFlowCopiesPendingFileBeforeMovingPendingImportTest()
     constexpr const char* testName = "StandaloneImportFlow_CopiesPendingFileBeforeMove";
 
     const auto& source = getFileCache().get("Source/Standalone/PluginEditor.cpp");
-    if (source.contains("loadAudioFile(\n        pendingImport.file,")
-        || source.contains("loadAudioFile(pendingImport.file,")) {
+    const int copyIndex = source.indexOf("const auto sourceFile = pendingImport.file;");
+    const int loadIndex = copyIndex >= 0 ? source.indexOf(copyIndex, "asyncAudioLoader_.loadAudioFile(") : -1;
+    const int moveIndex = loadIndex >= 0 ? source.indexOf(loadIndex, "std::move(pendingImport)") : -1;
+
+    if (copyIndex < 0 || loadIndex < 0 || moveIndex < 0 || !(copyIndex < loadIndex && loadIndex < moveIndex)) {
+        logFail(testName, "standalone import does not copy pendingImport.file before moving PendingImport into the completion lambda");
+        return;
+    }
+
+    const auto loadCallBeforeMove = source.substring(loadIndex, moveIndex);
+    if (loadCallBeforeMove.contains("pendingImport.file")) {
         logFail(testName, "standalone import still reads pendingImport.file inline while moving the same PendingImport into the completion lambda");
         return;
     }
 
-    if (!source.contains("const auto sourceFile = pendingImport.file;")
-        || !source.contains("asyncAudioLoader_.loadAudioFile(\n        sourceFile,")) {
-        logFail(testName, "standalone import does not keep a stable file copy before moving PendingImport");
+    if (!loadCallBeforeMove.contains("sourceFile")) {
+        logFail(testName, "standalone import loadAudioFile call does not use the stable sourceFile copy");
         return;
     }
 
@@ -5602,9 +5610,9 @@ void runCaptureSessionDisplaySegmentUpdatesOnRenderCompleteTest()
     logPass(testName);
 }
 
-void runProcessorStateVersionFiveAndNoBpmTest()
+void runProcessorStateVersionSevenAndNoBpmTest()
 {
-    constexpr const char* testName = "ProcessorState_VersionFiveAndNoBpm";
+    constexpr const char* testName = "ProcessorState_VersionSevenAndNoBpm";
 
     // Construct a fresh processor (wrapperType_Undefined, no captureSession_).
     // getStateInformation goes through OTST path because Undefined != Standalone.
@@ -5622,10 +5630,11 @@ void runProcessorStateVersionFiveAndNoBpmTest()
         return;
     }
     // §3.8: vocal-time-stretch bumped state version 5 → 6 (TimeGrid section
-    // appended after PitchCurve per materialization).  v5 projects are still
-    // accepted via backward-compat path in setStateInformation.
-    if (version != 6) {
-        logFail(testName, "kProcessorStateVersion expected 6 (vocal-time-stretch §3.8)");
+    // appended after PitchCurve per materialization). add-note-confirmed-handles
+    // then bumped 6 → 7 for per-handle confidence. v5/v6 projects are still
+    // accepted via backward-compat paths in setStateInformation.
+    if (version != 7) {
+        logFail(testName, "kProcessorStateVersion expected 7 (time grid confidence field)");
         return;
     }
 
@@ -5645,7 +5654,7 @@ void runProcessorStateVersionFiveAndNoBpmTest()
     processor2.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
     // No assertion needed: a layout-mismatch would have asserted or warned in
     // AppLogger; the fact that setStateInformation completed implies the field
-    // ordering is internally consistent in OTST v5.
+    // ordering is internally consistent in OTST v7.
 
     logPass(testName);
 }
@@ -5753,7 +5762,7 @@ void runProcessorBehaviorSuite()
     runCapturePersistenceProcessingOnRestoreTriggersRefreshTest();
     runCaptureSessionEditedSegmentsListIsPlacementSourceTest();
     runCaptureSessionDisplaySegmentUpdatesOnRenderCompleteTest();
-    runProcessorStateVersionFiveAndNoBpmTest();
+    runProcessorStateVersionSevenAndNoBpmTest();
     runProcessorStateOldVersionRejectedTest();
     runProcessorLineAnchorRenderUsesCommittedCorrectedF0Test();
     // undo-affected-range-passthrough anchor tests
@@ -6724,7 +6733,7 @@ void runAraRuntimeCaptureSessionAccessorSuppressesAraBoundInstancesTest()
                                                              "const Capture::CaptureSession* OpenTuneAudioProcessor::getCaptureSession() const noexcept");
     const auto constAccessorSection = extractWorkspaceFileSection("Source/PluginProcessor.cpp",
                                                                   "const Capture::CaptureSession* OpenTuneAudioProcessor::getCaptureSession() const noexcept",
-                                                                  "#if JucePlugin_Enable_ARA\nOpenTuneDocumentController* OpenTuneAudioProcessor::getDocumentController() const");
+                                                                  "OpenTuneDocumentController* OpenTuneAudioProcessor::getDocumentController() const");
 
     if (!accessorSection.contains("if (isBoundToARA())")
         || !accessorSection.contains("return nullptr;")

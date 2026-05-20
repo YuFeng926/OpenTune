@@ -876,6 +876,32 @@ set(HIFIGAN_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_
 set(RMVPE_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/models/rmvpe.onnx")
 set(GAME_MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/models/GAME")
 
+if(EXISTS "${GAME_MODEL_DIR}")
+    message(STATUS "GAME note generator model bundle found: ${GAME_MODEL_DIR}")
+    set(STANDALONE_GAME_MODEL_COPY_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${GAME_MODEL_DIR}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/GAME"
+    )
+    set(STANDALONE_APPLE_GAME_MODEL_COPY_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${GAME_MODEL_DIR}"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/GAME"
+    )
+    set(VST3_GAME_MODEL_COPY_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${GAME_MODEL_DIR}"
+            "$<TARGET_FILE_DIR:OpenTune_VST3>/models/GAME"
+    )
+    set(VST3_APPLE_GAME_MODEL_COPY_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${GAME_MODEL_DIR}"
+            "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/GAME"
+    )
+else()
+    message(STATUS "Optional GAME note generator model bundle not found at ${GAME_MODEL_DIR}; Standalone/VST3 packages will omit models/GAME and use Legacy fallback.")
+endif()
+
 # --- ONNX Runtime library copying ---
 if(WIN32)
     add_custom_command(TARGET OpenTune_Standalone POST_BUILD
@@ -931,9 +957,7 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RMVPE_MODEL}"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/rmvpe.onnx"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${GAME_MODEL_DIR}"
-            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/GAME"
+        ${STANDALONE_GAME_MODEL_COPY_COMMANDS}
         COMMENT "Copying AI models to Standalone..."
     )
 
@@ -956,9 +980,7 @@ elseif(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RMVPE_MODEL}"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/rmvpe.onnx"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${GAME_MODEL_DIR}"
-            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/GAME"
+        ${STANDALONE_APPLE_GAME_MODEL_COPY_COMMANDS}
         COMMENT "Copying AI models to app bundle Resources..."
     )
 endif()
@@ -1074,9 +1096,7 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${RMVPE_MODEL}"
                 "$<TARGET_FILE_DIR:OpenTune_VST3>/models/rmvpe.onnx"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${GAME_MODEL_DIR}"
-                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/GAME"
+            ${VST3_GAME_MODEL_COPY_COMMANDS}
             COMMENT "Copying AI models to VST3 plugin..."
         )
 
@@ -1101,9 +1121,7 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${RMVPE_MODEL}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/rmvpe.onnx"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${GAME_MODEL_DIR}"
-                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/GAME"
+            ${VST3_APPLE_GAME_MODEL_COPY_COMMANDS}
             COMMENT "Copying AI models to VST3 bundle Resources..."
         )
 

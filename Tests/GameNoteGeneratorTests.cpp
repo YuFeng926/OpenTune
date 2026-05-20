@@ -22,6 +22,8 @@
 
 namespace {
 
+constexpr double kPi = 3.14159265358979323846264338327950288;
+
 juce::String findGameModelDir()
 {
     auto cwd = juce::File::getCurrentWorkingDirectory();
@@ -53,8 +55,8 @@ std::vector<float> makeSyntheticVocalA4(double seconds, double sampleRate)
     std::vector<float> out(static_cast<size_t>(n));
     for (int64_t i = 0; i < n; ++i) {
         const double t = static_cast<double>(i) / sampleRate;
-        const double f = 440.0 * (1.0 + 0.01 * std::sin(2.0 * M_PI * 5.0 * t));
-        out[static_cast<size_t>(i)] = 0.4f * static_cast<float>(std::sin(2.0 * M_PI * f * t));
+        const double f = 440.0 * (1.0 + 0.01 * std::sin(2.0 * kPi * 5.0 * t));
+        out[static_cast<size_t>(i)] = 0.4f * static_cast<float>(std::sin(2.0 * kPi * f * t));
     }
     return out;
 }

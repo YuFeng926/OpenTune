@@ -54,11 +54,21 @@ GameNoteGenerator::GameNoteGenerator(const std::string& modelDir, Ort::Env& env)
     opts.DisableMemPattern();
     opts.DisableCpuMemArena();
 
+    auto makeSession = [&env, &opts](const std::string& modelPath) {
+#if JUCE_WINDOWS
+        const juce::String jucePath(modelPath);
+        auto widePath = jucePath.toWideCharPointer();
+        return std::make_unique<Ort::Session>(env, widePath, opts);
+#else
+        return std::make_unique<Ort::Session>(env, modelPath.c_str(), opts);
+#endif
+    };
+
     try {
-        encoder_   = std::make_unique<Ort::Session>(env, encoderPath.c_str(),   opts);
-        segmenter_ = std::make_unique<Ort::Session>(env, segmenterPath.c_str(), opts);
-        estimator_ = std::make_unique<Ort::Session>(env, estimatorPath.c_str(), opts);
-        bd2dur_    = std::make_unique<Ort::Session>(env, bd2durPath.c_str(),    opts);
+        encoder_   = makeSession(encoderPath);
+        segmenter_ = makeSession(segmenterPath);
+        estimator_ = makeSession(estimatorPath);
+        bd2dur_    = makeSession(bd2durPath);
     } catch (const Ort::Exception& e) {
         throw std::runtime_error(std::string("[GameNoteGenerator] ONNX load failure: ") + e.what());
     }

@@ -25,6 +25,7 @@
 namespace {
 
 constexpr double kSampleRate = TimeCoordinate::kRenderSampleRate;
+constexpr double kPi = 3.14159265358979323846264338327950288;
 
 // Generate a 1-second sine tone PreparedImport.  RB Offline mode needs a
 // reasonable amount of audio (>= a few thousand samples) to produce output.
@@ -38,7 +39,7 @@ OpenTuneAudioProcessor::PreparedImport makeSineToneImport(const juce::String& na
     prep.storedAudioBuffer.setSize(1, n);
     auto* w = prep.storedAudioBuffer.getWritePointer(0);
     for (int i = 0; i < n; ++i) {
-        w[i] = 0.4f * static_cast<float>(std::sin(2.0 * M_PI * freqHz * i / kSampleRate));
+        w[i] = 0.4f * static_cast<float>(std::sin(2.0 * kPi * freqHz * i / kSampleRate));
     }
     return prep;
 }
