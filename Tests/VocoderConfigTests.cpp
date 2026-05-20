@@ -16,7 +16,7 @@
  *
  *   L4 contract tests (real ONNX schema check, requires file on disk):
  *   - Bundled hifigan.onnx exists at the expected path
- *   - Bundled file size matches v3 archive copy (防 baseline ONNX 误覆盖)
+ *   - Bundled file size matches v4 archive copy (防 baseline ONNX 误覆盖)
  *
  * Suite aggregator: runVocoderConfigSuite() — registered in TestMain.cpp.
  *
@@ -146,11 +146,11 @@ void runVocoderConfig_BundledOnnxConsistentWithSourceTest()
         return;
     }
 
-    // Source ONNX (the v3 file CMake's HIFIGAN_MODEL points at)
+    // Source ONNX (the v4 file CMake's HIFIGAN_MODEL points at)
     auto srcOnnx = root.getChildFile("pc_nsf_hifigan_44.1k_ONNX")
-                       .getChildFile("pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v3_step80kactual.onnx");
+                       .getChildFile("pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx");
     if (!srcOnnx.existsAsFile()) {
-        logFail(testName, "source v3 ONNX not found at expected path");
+        logFail(testName, "source v4 ONNX not found at expected path");
         return;
     }
 
@@ -164,7 +164,7 @@ void runVocoderConfig_BundledOnnxConsistentWithSourceTest()
     }
 
     if (srcOnnx.getSize() != bundled.getSize()) {
-        logFail(testName, "bundled hifigan.onnx size mismatch with source v3 ONNX (wrong file bundled?)");
+        logFail(testName, "bundled hifigan.onnx size mismatch with source v4 ONNX (wrong file bundled?)");
         return;
     }
     logPass(testName);

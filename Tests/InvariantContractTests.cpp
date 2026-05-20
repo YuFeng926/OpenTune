@@ -31,6 +31,7 @@
 namespace {
 
 constexpr double kSampleRate = TimeCoordinate::kRenderSampleRate;
+constexpr double kPi = 3.14159265358979323846264338327950288;
 
 // Build a random valid TimeGrid: ClipStart locked, K interior handles with
 // strictly-monotonic source (jittered linearly), output drift bounded so
@@ -186,7 +187,7 @@ void runInvariant_DualBypassEqualsSourcePCMTest()
     prep.storedAudioBuffer.setSize(1, N);
     auto* w = prep.storedAudioBuffer.getWritePointer(0);
     for (int i = 0; i < N; ++i) {
-        w[i] = 0.25f * static_cast<float>(std::sin(2.0 * M_PI * 220.0 * i / kSampleRate));
+        w[i] = 0.25f * static_cast<float>(std::sin(2.0 * kPi * 220.0 * i / kSampleRate));
     }
 
     OpenTuneAudioProcessor processor;

@@ -23,6 +23,7 @@
 namespace {
 
 constexpr int kSr = 44100;
+constexpr double kPi = 3.14159265358979323846264338327950288;
 
 // ─── Audio synthesis helpers ────────────────────────────────────────────
 
@@ -31,7 +32,7 @@ std::vector<float> makeSineTone(double freqHz, double durationSec, double amp = 
     const int n = static_cast<int>(std::round(durationSec * kSr));
     std::vector<float> out(static_cast<size_t>(n));
     for (int i = 0; i < n; ++i) {
-        out[static_cast<size_t>(i)] = static_cast<float>(amp * std::sin(2.0 * M_PI * freqHz * i / kSr));
+        out[static_cast<size_t>(i)] = static_cast<float>(amp * std::sin(2.0 * kPi * freqHz * i / kSr));
     }
     return out;
 }
@@ -56,7 +57,7 @@ std::vector<float> makeClickTrain(int numClicks, double clickIntervalSec, double
         const int clickStartSample = static_cast<int>(clickTimeSec * kSr);
         for (int i = 0; i < clickWidthSamples && clickStartSample + i < (int) out.size(); ++i) {
             // Half-cosine envelope click (broadband transient)
-            const float env = 0.9f * static_cast<float>(std::sin(M_PI * static_cast<double>(i) / clickWidthSamples));
+            const float env = 0.9f * static_cast<float>(std::sin(kPi * static_cast<double>(i) / clickWidthSamples));
             out[static_cast<size_t>(clickStartSample + i)] = env;
         }
     }
@@ -149,8 +150,8 @@ void runOnsetDetectorMinDistanceFiltersTest()
     const int click2 = click1 + static_cast<int>(0.020 * kSr);  // 20 ms later
     const int wid = static_cast<int>(0.005 * kSr);
     for (int i = 0; i < wid; ++i) {
-        audio[static_cast<size_t>(click1 + i)] = 0.9f * std::sin(M_PI * i / wid);
-        audio[static_cast<size_t>(click2 + i)] = 0.9f * std::sin(M_PI * i / wid);
+        audio[static_cast<size_t>(click1 + i)] = 0.9f * std::sin(kPi * i / wid);
+        audio[static_cast<size_t>(click2 + i)] = 0.9f * std::sin(kPi * i / wid);
     }
 
     auto result = det.detect(audio.data(), audio.size());
