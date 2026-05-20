@@ -31,106 +31,32 @@ void AuroraLookAndFeel::drawNeonGlow(juce::Graphics& g, juce::Path& path, juce::
     }
 }
 
-// Helper: Glass Gradient
-static juce::ColourGradient createGlassGradient(juce::Rectangle<float> bounds)
-{
-    // Subtle vertical gradient for card depth
-    return juce::ColourGradient(
-        juce::Colour(Aurora::Colors::BgSurface).brighter(0.05f), bounds.getTopLeft(),
-        juce::Colour(Aurora::Colors::BgSurface).darker(0.05f), bounds.getBottomRight(),
-        false
-    );
-}
-
-// Helper: Rainbow Gradient for Text
-static void drawRainbowText(juce::Graphics& g, const juce::String& text, juce::Rectangle<float> bounds, juce::Justification justification)
-{
-    juce::ColourGradient rainbow(
-        juce::Colour(Aurora::Colors::Cyan), bounds.getX(), bounds.getCentreY(),
-        juce::Colour(Aurora::Colors::NeonOrange), bounds.getRight(), bounds.getCentreY(),
-        false
-    );
-    rainbow.addColour(0.3f, juce::Colour(Aurora::Colors::NeonGreen));
-    rainbow.addColour(0.6f, juce::Colour(Aurora::Colors::NeonYellow));
-    
-    g.setGradientFill(rainbow);
-    g.drawText(text, bounds, justification, false);
-}
-
 void AuroraLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
                                        float sliderPosProportional, float rotaryStartAngle,
                                        float rotaryEndAngle, juce::Slider& slider)
 {
     auto bounds = juce::Rectangle<float>((float)x, (float)y, (float)width, (float)height).reduced(2.0f);
-    auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
-    auto center = bounds.getCentre();
-    auto trackRadius = radius * 0.85f;
+    const auto enabledAlpha = slider.isEnabled() ? 1.0f : 0.42f;
 
-    // 1. Knob Body (Deep Card Style)
-    g.setColour(juce::Colour(Aurora::Colors::KnobBody));
-    g.fillEllipse(center.x - trackRadius, center.y - trackRadius, trackRadius * 2, trackRadius * 2);
+    juce::Graphics::ScopedSaveState saveState(g);
+    g.setOpacity(enabledAlpha);
+    UIColors::drawAuroraKnob(g,
+                             bounds,
+                             sliderPosProportional,
+                             slider.isMouseOverOrDragging(),
+                             rotaryStartAngle,
+                             rotaryEndAngle);
 
-    // 2. Track Background (Dashed/Tech Look)
-    juce::Path bgArc;
-    bgArc.addCentredArc(center.x, center.y, trackRadius * 0.9f, trackRadius * 0.9f, 
-                        0.0f, rotaryStartAngle, rotaryEndAngle, true);
-    
-    // Dashed effect for tech feel
-    float dashLengths[] = { 2.0f, 2.0f };
-    juce::PathStrokeType stroke(2.0f);
-    stroke.createDashedStroke(bgArc, bgArc, dashLengths, 2);
-    
-    g.setColour(juce::Colour(Aurora::Colors::BorderLight));
-    g.strokePath(bgArc, stroke);
-
-    // 3. Value Arc (Gradient Neon)
-    float currentAngle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
-    
-    juce::Path valueArc;
-    valueArc.addCentredArc(center.x, center.y, trackRadius * 0.9f, trackRadius * 0.9f, 
-                           0.0f, rotaryStartAngle, currentAngle, true);
-
-    if (slider.isEnabled())
-    {
-        // Dynamic Color based on value (Blue -> Green -> Orange -> Red)
-        juce::Colour valueColor;
-        if (sliderPosProportional < 0.33f) valueColor = juce::Colour(Aurora::Colors::Cyan).interpolatedWith(juce::Colour(Aurora::Colors::NeonGreen), sliderPosProportional * 3.0f);
-        else if (sliderPosProportional < 0.66f) valueColor = juce::Colour(Aurora::Colors::NeonGreen).interpolatedWith(juce::Colour(Aurora::Colors::NeonOrange), (sliderPosProportional - 0.33f) * 3.0f);
-        else valueColor = juce::Colour(Aurora::Colors::NeonOrange).interpolatedWith(juce::Colour(Aurora::Colors::NeonRed), (sliderPosProportional - 0.66f) * 3.0f);
-
-        // Glow Effect
-        float intensity = slider.isMouseOverOrDragging() ? 1.0f : 0.6f;
-        drawNeonGlow(g, valueArc, valueColor, intensity);
-
-        g.setColour(valueColor);
-        g.strokePath(valueArc, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        
-        // Knob Indicator Dot
-        juce::Point<float> thumbPoint(
-            center.x + trackRadius * 0.9f * std::cos(currentAngle - juce::MathConstants<float>::halfPi),
-            center.y + trackRadius * 0.9f * std::sin(currentAngle - juce::MathConstants<float>::halfPi)
-        );
-        
-        float dotSize = 6.0f;
-        g.setColour(valueColor.brighter());
-        g.fillEllipse(thumbPoint.x - dotSize/2, thumbPoint.y - dotSize/2, dotSize, dotSize);
-        
-        juce::Path dotPath;
-        dotPath.addEllipse(thumbPoint.x - dotSize/2, thumbPoint.y - dotSize/2, dotSize, dotSize);
-        drawNeonGlow(g, dotPath, valueColor, intensity);
-    }
-
-    // 4. Value Text (Rainbow Gradient)
-    if (slider.isMouseOverOrDragging())
+    if (slider.isMouseOverOrDragging() && slider.isEnabled())
     {
         g.setFont(UIColors::getUIFont(12.0f).withStyle(juce::Font::bold));
-        
+
         juce::String text;
         if (slider.getValue() < 10.0) text = juce::String(slider.getValue(), 1);
         else text = juce::String((int)slider.getValue());
-        
-        // Draw centered rainbow text
-        drawRainbowText(g, text, bounds, juce::Justification::centred);
+
+        g.setColour(UIColors::textPrimary.withMultipliedAlpha(0.86f));
+        g.drawText(text, bounds.reduced(4.0f), juce::Justification::centred, false);
     }
 }
 
@@ -195,38 +121,12 @@ void AuroraLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& bu
     auto bounds = button.getLocalBounds().toFloat().reduced(1.0f);
     float radius = Aurora::Style::ControlRadius;
 
-    bool isActive = button.getToggleState() || shouldDrawButtonAsDown;
-    
-    if (isActive)
-    {
-        // Neon Border + Glow
-        g.setColour(juce::Colour(Aurora::Colors::Cyan).withAlpha(0.1f));
-        g.fillRoundedRectangle(bounds, radius);
-        
-        g.setColour(juce::Colour(Aurora::Colors::Cyan));
-        g.drawRoundedRectangle(bounds, radius, 1.5f);
-        
-        juce::Path p;
-        p.addRoundedRectangle(bounds, radius);
-        drawNeonGlow(g, p, juce::Colour(Aurora::Colors::Cyan), 0.6f);
-    }
-    else
-    {
-        // Glass Look
-        g.setGradientFill(createGlassGradient(bounds));
-        g.fillRoundedRectangle(bounds, radius);
-        
-        if (shouldDrawButtonAsHighlighted)
-        {
-            g.setColour(juce::Colour(Aurora::Colors::BorderGlow));
-            g.drawRoundedRectangle(bounds, radius, 1.0f);
-        }
-        else
-        {
-            g.setColour(juce::Colour(Aurora::Colors::BorderLight));
-            g.drawRoundedRectangle(bounds, radius, 1.0f);
-        }
-    }
+    UIColors::drawAuroraButtonChrome(g,
+                                     bounds,
+                                     radius,
+                                     shouldDrawButtonAsHighlighted,
+                                     shouldDrawButtonAsDown,
+                                     button.getToggleState());
 }
 
 void AuroraLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
@@ -274,9 +174,8 @@ void AuroraLookAndFeel::fillTextEditorBackground(juce::Graphics& g, int width, i
 {
     auto bounds = juce::Rectangle<float>((float)width, (float)height);
     float radius = Aurora::Style::ControlRadius;
-    
-    g.setColour(juce::Colour(Aurora::Colors::BgDeep).withAlpha(0.6f));
-    g.fillRoundedRectangle(bounds, radius);
+
+    UIColors::fillAuroraGlass(g, bounds, radius);
 }
 
 void AuroraLookAndFeel::drawTextEditorOutline(juce::Graphics& g, int width, int height,
@@ -285,20 +184,11 @@ void AuroraLookAndFeel::drawTextEditorOutline(juce::Graphics& g, int width, int 
     auto bounds = juce::Rectangle<float>((float)width, (float)height);
     float radius = Aurora::Style::ControlRadius;
     
-    if (textEditor.hasKeyboardFocus(true) && !textEditor.isReadOnly())
-    {
-        g.setColour(juce::Colour(Aurora::Colors::Cyan));
-        g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.5f);
-        
-        juce::Path p;
-        p.addRoundedRectangle(bounds.reduced(0.5f), radius);
-        drawNeonGlow(g, p, juce::Colour(Aurora::Colors::Cyan), 0.5f);
-    }
-    else
-    {
-        g.setColour(juce::Colour(Aurora::Colors::BorderLight));
-        g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
-    }
+    const auto focused = textEditor.hasKeyboardFocus(true) && !textEditor.isReadOnly();
+    if (focused)
+        UIColors::drawAuroraGlow(g, bounds.reduced(0.5f), UIColors::knobGlow, 0.38f, 0.58f);
+
+    UIColors::drawAuroraGlassFrame(g, bounds, radius, focused);
 }
 
 void AuroraLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, bool isButtonDown,
@@ -309,21 +199,13 @@ void AuroraLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, b
     float radius = Aurora::Style::ControlRadius;
 
     bool isActive = isButtonDown || box.isPopupActive();
-    
-    // Glass Background
-    g.setGradientFill(createGlassGradient(bounds));
-    g.fillRoundedRectangle(bounds, radius);
-    
-    if (isActive)
-    {
-        g.setColour(juce::Colour(Aurora::Colors::Cyan));
-        g.drawRoundedRectangle(bounds, radius, 1.5f);
-    }
-    else
-    {
-        g.setColour(juce::Colour(Aurora::Colors::BorderLight));
-        g.drawRoundedRectangle(bounds, radius, 1.0f);
-    }
+
+    UIColors::drawAuroraButtonChrome(g,
+                                     bounds,
+                                     radius,
+                                     box.isMouseOver(),
+                                     isButtonDown,
+                                     isActive);
     
     // Arrow
     if (buttonW > 0 && buttonH > 0)
@@ -340,6 +222,72 @@ void AuroraLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, b
         g.setColour(juce::Colour(Aurora::Colors::TextSecondary));
         g.fillPath(arrow);
     }
+}
+
+int AuroraLookAndFeel::getDefaultScrollbarWidth()
+{
+    return UIColors::scrollBarThickness;
+}
+
+void AuroraLookAndFeel::drawScrollbar(juce::Graphics& g,
+                                      juce::ScrollBar& scrollBar,
+                                      int x,
+                                      int y,
+                                      int width,
+                                      int height,
+                                      bool isScrollbarVertical,
+                                      int thumbStartPosition,
+                                      int thumbSize,
+                                      bool isMouseOver,
+                                      bool isMouseDown)
+{
+    juce::ignoreUnused(scrollBar);
+
+    auto bounds = juce::Rectangle<float>(static_cast<float>(x),
+                                         static_cast<float>(y),
+                                         static_cast<float>(width),
+                                         static_cast<float>(height));
+    if (bounds.isEmpty())
+        return;
+
+    const float availableThickness = isScrollbarVertical ? bounds.getWidth() : bounds.getHeight();
+    const float trackThickness = juce::jmin(UIColors::scrollBarThumbThickness, availableThickness * 0.55f);
+    auto track = isScrollbarVertical
+        ? bounds.withWidth(trackThickness).withX(bounds.getCentreX() - trackThickness * 0.5f).reduced(0.0f, 8.0f)
+        : bounds.withHeight(trackThickness).withY(bounds.getCentreY() - trackThickness * 0.5f).reduced(8.0f, 0.0f);
+
+    g.setColour(UIColors::glassSurface.withAlpha(0.12f));
+    g.fillRoundedRectangle(track, trackThickness * 0.5f);
+
+    if (thumbSize <= 0)
+        return;
+
+    auto thumb = isScrollbarVertical
+        ? juce::Rectangle<float>(bounds.getCentreX() - trackThickness * 0.5f,
+                                 static_cast<float>(thumbStartPosition),
+                                 trackThickness,
+                                 static_cast<float>(thumbSize)).reduced(0.0f, 2.0f)
+        : juce::Rectangle<float>(static_cast<float>(thumbStartPosition),
+                                 bounds.getCentreY() - trackThickness * 0.5f,
+                                 static_cast<float>(thumbSize),
+                                 trackThickness).reduced(2.0f, 0.0f);
+
+    thumb = thumb.getIntersection(bounds.reduced(3.0f));
+    if (thumb.isEmpty())
+        return;
+
+    const auto glowAlpha = isMouseDown ? 0.30f : (isMouseOver ? 0.22f : 0.10f);
+    UIColors::drawAuroraGlow(g, thumb, UIColors::correctedF0, glowAlpha, 0.38f);
+
+    juce::ColourGradient fill(UIColors::correctedF0.withAlpha(isMouseDown ? 0.58f : 0.42f),
+                              thumb.getX(),
+                              thumb.getY(),
+                              UIColors::panelGlow.withAlpha(isMouseDown ? 0.36f : 0.24f),
+                              thumb.getRight(),
+                              thumb.getBottom(),
+                              false);
+    g.setGradientFill(fill);
+    g.fillRoundedRectangle(thumb, trackThickness * 0.5f);
 }
 
 void AuroraLookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int width, int height)

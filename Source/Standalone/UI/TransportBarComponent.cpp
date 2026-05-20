@@ -1,4 +1,5 @@
 ﻿#include "TransportBarComponent.h"
+#include "OpenTuneLookAndFeel.h"
 #include "UIColors.h"
 #include "ToolbarIcons.h"
 #include "../../Utils/LocalizationManager.h"
@@ -69,8 +70,7 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
         
         if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
         {
-             juce::Colour lightBlueText(0xFF9BB2C4);
-             g.setColour(lightBlueText);
+             g.setColour(juce::Colour { BlueBreeze::Colors::DisplayText });
         }
         else
         {
@@ -88,8 +88,7 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
         
         if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
         {
-             juce::Colour lightBlueText(0xFF9BB2C4);
-             g.setColour(lightBlueText);
+             g.setColour(juce::Colour { BlueBreeze::Colors::DisplayText });
         }
         else
         {
@@ -127,9 +126,8 @@ void DigitalTimeDisplay::drawSegment(juce::Graphics& g, int segment, juce::Recta
     
     if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
     {
-        // Light Blue/Grey color (e.g. #9BB2C4 or similar)
-        juce::Colour lightBlueText(0xFF9BB2C4);
-        g.setColour(active ? lightBlueText : lightBlueText.withAlpha(0.1f));
+        g.setColour(active ? juce::Colour { BlueBreeze::Colors::DisplayText }
+                           : juce::Colour { BlueBreeze::Colors::DisplayTextDim });
     }
     else
     {
@@ -182,9 +180,22 @@ void BpmValueField::paint(juce::Graphics& g)
     const auto& style = UIColors::currentThemeStyle();
     const auto themeId = UIColors::currentThemeId();
     auto bounds = getLocalBounds().toFloat();
+    const auto focused = isEditing_ && hasKeyboardFocus(true);
 
-    // 鏇村帤瀹炵殑杈撳叆妗嗚川鎰燂紙娣辫摑鐏颁富棰橈級
-    if (themeId == ThemeId::DarkBlueGrey)
+    if (themeId == ThemeId::Aurora)
+    {
+        if (focused)
+            UIColors::drawAuroraGlow(g, bounds, UIColors::correctedF0, 0.46f, 0.62f);
+
+        UIColors::drawAuroraButtonChrome(g,
+                                         bounds,
+                                         style.fieldRadius,
+                                         isMouseOver() || focused,
+                                         false,
+                                         focused);
+    }
+    // 更厚实的输入框质感（深蓝灰主题）
+    else if (themeId == ThemeId::DarkBlueGrey)
     {
         juce::ColourGradient grad(UIColors::backgroundLight.brighter(0.06f), bounds.getX(), bounds.getY(),
                                   UIColors::backgroundLight.darker(0.08f), bounds.getX(), bounds.getBottom(), false);
@@ -196,13 +207,19 @@ void BpmValueField::paint(juce::Graphics& g)
     }
     else
     {
-        g.setColour(UIColors::backgroundLight);
-        g.fillRoundedRectangle(bounds, style.fieldRadius);
+        OpenTuneLookAndFeel::drawBlueBreezeSurface(g,
+                                                   bounds.reduced(0.5f),
+                                                   style.fieldRadius,
+                                                   isMouseOver() || focused,
+                                                   false,
+                                                   focused);
     }
 
-    auto focused = isEditing_ && hasKeyboardFocus(true);
-    g.setColour(focused ? UIColors::accent : UIColors::panelBorder);
-    g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, focused ? style.focusRingThickness : style.strokeThin);
+    if (themeId != ThemeId::Aurora && themeId != ThemeId::BlueBreeze)
+    {
+        g.setColour(focused ? UIColors::accent : UIColors::panelBorder);
+        g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, focused ? style.focusRingThickness : style.strokeThin);
+    }
 
     auto font = UIColors::getLabelFont(UIColors::navFontHeight);
     g.setFont(font);
@@ -376,77 +393,64 @@ void UnifiedToolbarButton::setConnectedEdges(int edges)
 void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {
     auto bounds = getLocalBounds().toFloat().reduced(2.0f);
-    float radius = 6.0f; 
-    
-    // Handle connected edges for corners
-    // JUCE Rectangle doesn't have topLeft/topRight/bottomLeft/bottomRight static members
-    // We'll use boolean flags directly below
-    
-    // We will use Path to draw specific rounded corners
-    bool roundTopLeft = ! (connectedEdges_ & Left);
-    bool roundBottomLeft = ! (connectedEdges_ & Left);
-    bool roundTopRight = ! (connectedEdges_ & Right);
-    bool roundBottomRight = ! (connectedEdges_ & Right);
+    const auto themeId = UIColors::currentThemeId();
+    float radius = themeId == ThemeId::BlueBreeze ? UIColors::currentThemeStyle().controlRadius : 6.0f;
 
-    // If connected, we might want to extend the background slightly to avoid double borders
-    // But for now let's just handle the shape.
+    const bool roundTopLeft = ! (connectedEdges_ & Left);
+    const bool roundBottomLeft = ! (connectedEdges_ & Left);
+    const bool roundTopRight = ! (connectedEdges_ & Right);
+    const bool roundBottomRight = ! (connectedEdges_ & Right);
 
     bool isToggled = getToggleState();
     bool isActive = isToggled || shouldDrawButtonAsDown;
     bool isHover = shouldDrawButtonAsHighlighted;
 
-    const auto themeId = UIColors::currentThemeId();
-
-    // 杈呭姪鍑芥暟锛氬垱寤哄甫閫夋嫨鎬у渾瑙掔殑鐭╁舰璺緞
-    auto createRoundedRectPath = [](juce::Rectangle<float> rect, float r, 
-                                    bool tl, bool tr, bool bl, bool br) -> juce::Path {
+    auto createRoundedRectPath = [](juce::Rectangle<float> rect, float r,
+                                    bool tl, bool tr, bool bl, bool br) -> juce::Path
+    {
         juce::Path p;
-        float x = rect.getX(), y = rect.getY(), w = rect.getWidth(), h = rect.getHeight();
-        
-        if (tl) {
-            p.startNewSubPath(x, y + r);
-            p.addArc(x, y, r * 2, r * 2, juce::MathConstants<float>::pi, juce::MathConstants<float>::pi * 1.5f);
-        } else {
-            p.startNewSubPath(x, y);
-        }
-        
-        // 涓婅竟鍒板彸涓婅
-        if (tr) {
-            p.lineTo(x + w - r, y);
-            p.addArc(x + w - r * 2, y, r * 2, r * 2, juce::MathConstants<float>::pi * 1.5f, 0);
-        } else {
-            p.lineTo(x + w, y);
-        }
-        
-        // 鍙宠竟鍒板彸涓嬭
-        if (br) {
-            p.lineTo(x + w, y + h - r);
-            p.addArc(x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, juce::MathConstants<float>::pi * 0.5f);
-        } else {
-            p.lineTo(x + w, y + h);
-        }
-        
-        // 涓嬭竟鍒板乏涓嬭
-        if (bl) {
-            p.lineTo(x + r, y + h);
-            p.addArc(x, y + h - r * 2, r * 2, r * 2, juce::MathConstants<float>::pi * 0.5f, juce::MathConstants<float>::pi);
-        } else {
-            p.lineTo(x, y + h);
-        }
-        
-        // 鍏抽棴璺緞
-        if (tl) {
-            p.lineTo(x, y + r);
-        } else {
-            p.lineTo(x, y);
-        }
-        
-        p.closeSubPath();
+        p.addRoundedRectangle(rect.getX(),
+                              rect.getY(),
+                              rect.getWidth(),
+                              rect.getHeight(),
+                              r, r,
+                              tl, tr, bl, br);
         return p;
     };
 
     // 1. Background
     if (themeId == ThemeId::BlueBreeze)
+    {
+        juce::Path p;
+        if (connectedEdges_ == None)
+        {
+            p.addRoundedRectangle(bounds, radius);
+        }
+        else
+        {
+            p = createRoundedRectPath(bounds, radius,
+                                      roundTopLeft, roundTopRight,
+                                      roundBottomLeft, roundBottomRight);
+        }
+
+        OpenTuneLookAndFeel::drawBlueBreezeSurface(g,
+                                                   bounds,
+                                                   radius,
+                                                   isHover,
+                                                   shouldDrawButtonAsDown,
+                                                   isActive,
+                                                   &p);
+
+        if (connectedEdges_ != None)
+        {
+            g.setColour(juce::Colour { BlueBreeze::Colors::PanelInset }.withAlpha(0.22f));
+            if (connectedEdges_ & Left)
+                g.drawLine(bounds.getX(), bounds.getY() + 3.0f, bounds.getX(), bounds.getBottom() - 3.0f, 1.0f);
+            if (connectedEdges_ & Right)
+                g.drawLine(bounds.getRight(), bounds.getY() + 3.0f, bounds.getRight(), bounds.getBottom() - 3.0f, 1.0f);
+        }
+    }
+    else if (themeId == ThemeId::Aurora)
     {
         juce::Path p;
         if (connectedEdges_ == None) {
@@ -457,44 +461,15 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
                                       roundBottomLeft, roundBottomRight);
         }
 
-        if (isActive)
-        {
-            // Active: White Background with Shadow
-            g.setColour(juce::Colour(BlueBreeze::Colors::ActiveWhite));
-            g.fillPath(p);
-            
-            // Subtle Shadow
-            g.setColour(juce::Colour(BlueBreeze::Colors::ShadowColor).withAlpha(0.15f));
-            g.strokePath(p, juce::PathStrokeType(1.0f));
-        }
-        else if (isHover)
-        {
-            // Hover: Light Overlay
-            g.setColour(juce::Colour(BlueBreeze::Colors::HoverOverlay));
-            g.fillPath(p);
-            
-            // Subtle Border
-            g.setColour(juce::Colour(BlueBreeze::Colors::PanelBorder).withAlpha(0.5f));
-            g.strokePath(p, juce::PathStrokeType(1.0f));
-        }
-        else
-        {
-             // Normal state - if connected, maybe draw a separator or border?
-             // If we want them to look "joined", we usually draw a border around the whole group
-             // or draw borders for each segment.
-             
-             // For BlueBreeze normal buttons are usually transparent/flat.
-             // But if they are joined, we might want a border to define the area?
-             // Let's stick to the original logic: no background for normal state unless needed.
-             // But wait, user said "two knobs joined together". 
-             // If they are toggle buttons (View Switch), one is usually active.
-             
-             // Let's add a faint border for the structure if it's a connected group
-             if (connectedEdges_ != None) {
-                 g.setColour(juce::Colour(BlueBreeze::Colors::PanelBorder).withAlpha(0.3f));
-                 g.strokePath(p, juce::PathStrokeType(1.0f));
-             }
-        }
+        UIColors::drawAuroraButtonChrome(g,
+                                         bounds,
+                                         radius,
+                                         isHover,
+                                         shouldDrawButtonAsDown,
+                                         isToggled,
+                                         {},
+                                         {},
+                                         &p);
     }
     else
     {
@@ -529,6 +504,17 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             else
                 iconColor = juce::Colour(BlueBreeze::Colors::TextDim); // Normal = Grey
         }
+    }
+    else if (themeId == ThemeId::Aurora)
+    {
+        if (!isEnabled())
+            iconColor = UIColors::textDisabled.withAlpha(0.46f);
+        else if (isActive)
+            iconColor = UIColors::correctedF0.brighter(0.30f);
+        else if (isHover)
+            iconColor = UIColors::textPrimary.interpolatedWith(UIColors::correctedF0, 0.28f);
+        else
+            iconColor = UIColors::textPrimary.withAlpha(isTransportButton ? 0.92f : 0.78f);
     }
     else
     {
@@ -761,8 +747,11 @@ void TransportBarComponent::paint(juce::Graphics& g)
 
     if (!embeddedInTopBar_)
     {
-        UIColors::drawShadow(g, bounds);
-        UIColors::fillPanelBackground(g, bounds, style.panelRadius);
+        UIColors::drawShadow(g, bounds, UIColors::ShadowLevel::Float);
+        if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+            UIColors::fillBlueBreezeTray(g, bounds, style.panelRadius);
+        else
+            UIColors::fillPanelBackground(g, bounds, style.panelRadius);
         UIColors::drawPanelFrame(g, bounds, style.panelRadius);
     }
 
@@ -773,18 +762,24 @@ void TransportBarComponent::paint(juce::Graphics& g)
         // Reference style: Transparent background for BlueBreeze
         // g.setColour(juce::Colour(BlueBreeze::Colors::KnobBody)); 
     }
+    else if (UIColors::currentThemeId() == ThemeId::Aurora)
+    {
+        UIColors::drawAuroraButtonChrome(g,
+                                         displayBounds,
+                                         style.fieldRadius,
+                                         false,
+                                         false,
+                                         false);
+    }
     else
     {
         g.setColour(UIColors::backgroundDark.darker(0.2f));
         g.fillRoundedRectangle(displayBounds, style.fieldRadius);
     }
     
-    // Inner shadow for depth
     if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
     {
-        // Transparent background, Light gray border
-        g.setColour(juce::Colour(BlueBreeze::Colors::PanelBorder).withAlpha(0.8f));
-        g.drawRoundedRectangle(displayBounds, style.fieldRadius, 1.5f);
+        UIColors::fillBlueBreezeDisplayWell(g, displayBounds, style.fieldRadius);
     }
     else
     {

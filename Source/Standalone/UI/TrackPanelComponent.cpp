@@ -18,8 +18,22 @@ void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsH
     else
         activeBase = juce::Colour(0xFFE67E22); // Orange (Standard Studio Color)
 
-    auto base = isToggled ? activeBase : UIColors::buttonNormal;
-    getLookAndFeel().drawButtonBackground(g, *this, base, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
+    if (UIColors::currentThemeId() == ThemeId::Aurora)
+    {
+        UIColors::drawAuroraButtonChrome(g,
+                                         bounds,
+                                         UIColors::currentThemeStyle().controlRadius,
+                                         shouldDrawButtonAsHighlighted,
+                                         shouldDrawButtonAsDown,
+                                         isToggled,
+                                         isToggled ? activeBase : UIColors::panelGlow,
+                                         isToggled ? activeBase.brighter(0.25f) : UIColors::glassEdge);
+    }
+    else
+    {
+        auto base = isToggled ? activeBase : UIColors::buttonNormal;
+        getLookAndFeel().drawButtonBackground(g, *this, base, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
+    }
 
     // Icon text
     g.setColour(UIColors::textPrimary);
@@ -107,14 +121,8 @@ void TrackPanelComponent::paint(juce::Graphics& g)
     // Fill background (shadow is drawn internally by fillPanelBackground if needed, or we add it)
     if (themeId == ThemeId::Aurora)
     {
-        // Aurora: Flat background, no frame, colorful tracks
         UIColors::drawShadow(g, bounds);
-        
-        // Background
-        g.setColour(UIColors::backgroundMedium);
-        g.fillRect(bounds);
-        
-        // No Panel Frame for Aurora to "dilute boundary"
+        UIColors::fillAuroraTimelineBackground(g, bounds, style.panelRadius);
     }
     else if (themeId == ThemeId::DarkBlueGrey) {
         // Draw Soft Shadow for the whole panel
@@ -162,48 +170,51 @@ void TrackPanelComponent::paint(juce::Graphics& g)
         
         if (themeId == ThemeId::Aurora)
         {
-            // Aurora 主题：霓虹风格，锐利边缘配合彩色轨道
-            // 使用颜色循环支持12条轨道
-            juce::Colour trackColor;
-            switch(i % 6) {
-                case 0: trackColor = juce::Colour(Aurora::Colors::Cyan); break;
-                case 1: trackColor = juce::Colour(Aurora::Colors::Violet); break;
-                case 2: trackColor = juce::Colour(Aurora::Colors::NeonGreen); break;
-                case 3: trackColor = juce::Colour(Aurora::Colors::Magenta); break;
-                case 4: trackColor = juce::Colour(Aurora::Colors::ElectricBlue); break;
-                case 5: trackColor = juce::Colour(Aurora::Colors::Warning); break;
-            }
+            const auto trackColor = UIColors::auroraTrackAccent(i);
+            const auto laneBounds = trackBounds.reduced(2.0f, 1.0f);
+            const auto tintBounds = laneBounds.withX(bounds.getX()).withRight(bounds.getRight());
+            const auto active = tracks_[i].isActive;
 
-            // 平时显示各轨道颜色，选中时背景变亮
-            if (tracks_[i].isActive)
+            g.setColour((i % 2 == 0 ? UIColors::pianoRollLane : UIColors::glassSurface).withAlpha(active ? 0.058f : 0.036f));
+            g.fillRect(tintBounds);
+
+            if (active)
+                UIColors::drawAuroraGlow(g, tintBounds.reduced(4.0f, 7.0f), trackColor, 0.28f, 0.42f);
+
+            juce::ColourGradient tint(trackColor.withAlpha(active ? 0.34f : 0.20f),
+                                      tintBounds.getX(), tintBounds.getCentreY(),
+                                      juce::Colours::transparentBlack,
+                                      tintBounds.getRight(), tintBounds.getCentreY(), false);
+            tint.addColour(0.15, trackColor.withAlpha(active ? 0.24f : 0.13f));
+            tint.addColour(0.48, UIColors::sidebarTrackFade.withAlpha(active ? 0.08f : 0.04f));
+            tint.addColour(1.0, juce::Colours::transparentBlack);
+            g.setGradientFill(tint);
+            g.fillRect(tintBounds);
+
+            const auto fadeRadius = juce::jmax(tintBounds.getWidth(), tintBounds.getHeight());
+            juce::ColourGradient radial(trackColor.withAlpha(active ? 0.22f : 0.10f),
+                                        tintBounds.getX() + tintBounds.getWidth() * 0.16f,
+                                        tintBounds.getCentreY(),
+                                        juce::Colours::transparentBlack,
+                                        tintBounds.getX() + fadeRadius,
+                                        tintBounds.getBottom(),
+                                        true);
+            g.setGradientFill(radial);
+            g.fillRect(tintBounds);
+
+            const auto stripWidth = active ? 5.0f : 3.0f;
+            auto stripBounds = tintBounds.withWidth(stripWidth).reduced(0.0f, 5.0f);
+            g.setColour(trackColor.withAlpha(active ? 0.95f : 0.62f));
+            g.fillRoundedRectangle(stripBounds, stripWidth * 0.5f);
+
+            if (active)
             {
-                // Active: 背景整体变亮
-                g.setColour(trackColor.withAlpha(0.25f));
-                g.fillRect(trackBounds);
-
-                // Left Strip (Neon Glow)
-                g.setColour(trackColor);
-                g.fillRect(trackBounds.getX(), trackBounds.getY(), 3.0f, trackBounds.getHeight());
-                
-                // Gradient Overlay - 更亮的渐变
-                juce::ColourGradient highlight(trackColor.withAlpha(0.35f), trackBounds.getX(), trackBounds.getCentreY(),
-                                               juce::Colours::transparentBlack, trackBounds.getX() + 80.0f, trackBounds.getCentreY(), false);
-                g.setGradientFill(highlight);
-                g.fillRect(trackBounds);
-            }
-            else
-            {
-                // Inactive: 显示各轨道颜色（平时状态）
-                g.setColour(trackColor.withAlpha(0.12f));
-                g.fillRect(trackBounds);
-
-                // Left Strip (subtle)
-                g.setColour(trackColor.withAlpha(0.6f));
-                g.fillRect(trackBounds.getX(), trackBounds.getY(), 3.0f, trackBounds.getHeight());
+                g.setColour(trackColor.withAlpha(0.30f));
+                g.drawLine(tintBounds.getX() + stripWidth + 4.0f, tintBounds.getY() + 1.0f,
+                           tintBounds.getRight() - 8.0f, tintBounds.getY() + 1.0f, 1.0f);
             }
 
-            // Separator (very subtle)
-            g.setColour(UIColors::panelBorder.withAlpha(0.3f));
+            g.setColour(UIColors::gridLine.withAlpha(active ? 0.075f : 0.040f));
             g.fillRect(trackBounds.getX(), trackBounds.getBottom() - 1.0f, trackBounds.getWidth(), 1.0f);
             
             continue; // Skip standard drawing
@@ -212,44 +223,23 @@ void TrackPanelComponent::paint(juce::Graphics& g)
         // 轨道卡片区域 - 增加内边距确保圆角完整显示
         auto cardBounds = trackBounds.reduced(trackCardMarginX, trackCardMarginY);
 
-        // BlueBreeze 主题：淡彩色背景 + 渐变
-        if (themeId == ThemeId::BlueBreeze || themeId != ThemeId::DarkBlueGrey)
+        if (themeId == ThemeId::BlueBreeze)
         {
-            // 获取该轨道的淡彩色
-            juce::Colour pastelColor(trackPastelColors[i % 12]);
-            
-            // 基础背景色
-            auto baseBg = tracks_[i].isActive 
-                ? UIColors::backgroundLight.brighter(0.12f)
-                : UIColors::backgroundLight.darker(0.05f);
-            
-            // 混合淡彩色和基础背景
-            auto mixedBg = baseBg.overlaidWith(pastelColor);
-            
-            // 绘制渐变背景（从上到下，淡彩色渐变到基础灰色）
-            juce::ColourGradient cardGrad(
-                mixedBg.brighter(0.05f), cardBounds.getX(), cardBounds.getY(),
-                baseBg, cardBounds.getX(), cardBounds.getBottom(), false);
-            g.setGradientFill(cardGrad);
-            g.fillRoundedRectangle(cardBounds, style.controlRadius);
-            
+            const auto trackTint = juce::Colour(trackPastelColors[i % 12]);
+            const auto active = tracks_[i].isActive;
+            UIColors::fillBlueBreezeTrackCard(g, cardBounds, style.controlRadius, active, trackTint);
+
             if (tracks_[i].isActive)
             {
-                // 选中时添加强调色覆盖层
-                g.setColour(UIColors::accent.withAlpha(0.12f));
+                g.setColour(UIColors::accent.withAlpha(0.045f));
                 g.fillRoundedRectangle(cardBounds.reduced(1.0f), juce::jmax(0.0f, style.controlRadius - 1.0f));
-                
-                // 左侧亮线（激活指示）
+
                 const float x = cardBounds.getX() + 2.0f;
                 const float y0 = cardBounds.getY() + style.controlRadius;
                 const float y1 = cardBounds.getBottom() - style.controlRadius;
-                g.setColour(UIColors::accent.withAlpha(0.90f));
+                g.setColour(UIColors::accent.withAlpha(0.66f));
                 g.drawLine(x, y0, x, y1, 2.5f);
             }
-            
-            // 绘制边框
-            g.setColour(UIColors::panelBorder.withAlpha(0.6f));
-            g.drawRoundedRectangle(cardBounds, style.controlRadius, style.strokeThin);
         }
         else if (themeId == ThemeId::DarkBlueGrey)
         {

@@ -79,20 +79,20 @@ void TopBarComponent::paint(juce::Graphics& g)
     // 顶部条属于"悬浮层级"，使用更明显但仍柔和的 L2 阴影
     if (UIColors::currentThemeId() == ThemeId::Aurora)
     {
-        // Aurora Theme: No rounded corners, soft bottom edge
         UIColors::drawShadow(g, bounds, UIColors::ShadowLevel::Float);
-        
-        // Background - Dark gradient
-        juce::ColourGradient bgGrad(UIColors::backgroundDark, 0.0f, 0.0f,
-                                    UIColors::backgroundMedium, 0.0f, bounds.getHeight(), false);
-        g.setGradientFill(bgGrad);
-        g.fillRect(bounds);
 
-        // Bottom Edge - Gradient Blur (Dilute boundary)
-        juce::ColourGradient bottomBlur(juce::Colours::transparentBlack, 0.0f, bounds.getBottom() - 4.0f,
-                                        juce::Colour(Aurora::Colors::BorderGlow).withAlpha(0.2f), 0.0f, bounds.getBottom(), false);
-        g.setGradientFill(bottomBlur);
-        g.fillRect(bounds.getX(), bounds.getBottom() - 4.0f, bounds.getWidth(), 4.0f);
+        UIColors::fillAuroraGlass(g, bounds, 0.0f);
+        UIColors::drawAuroraGlassFrame(g, bounds, 0.0f, false);
+
+        juce::ColourGradient bottomGlow(UIColors::panelGlow.withAlpha(0.0f), bounds.getX(), bounds.getBottom() - 8.0f,
+                                        UIColors::panelGlow.withAlpha(0.26f), bounds.getX(), bounds.getBottom(), false);
+        g.setGradientFill(bottomGlow);
+        g.fillRect(bounds.getX(), bounds.getBottom() - 8.0f, bounds.getWidth(), 8.0f);
+
+        juce::ColourGradient bottomFade(juce::Colours::transparentBlack, bounds.getX(), bounds.getBottom() - 5.0f,
+                                        UIColors::backgroundDark.withAlpha(0.46f), bounds.getX(), bounds.getBottom(), false);
+        g.setGradientFill(bottomFade);
+        g.fillRect(bounds.getX(), bounds.getBottom() - 5.0f, bounds.getWidth(), 5.0f);
     }
     else
     {
