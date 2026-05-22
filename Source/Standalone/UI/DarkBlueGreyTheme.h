@@ -52,8 +52,8 @@ namespace DarkBlueGrey {
 
         // 音高曲线
         static const juce::uint32 OriginalF0   = 0xFFE53935; // 正红 (Material Red 600)
-        static const juce::uint32 CorrectedF0  = 0xFF2DFFC4; // 高饱和青绿色
-        static const juce::uint32 ShadowTrack  = 0x402DFFC4;
+        static const juce::uint32 CorrectedF0  = 0xFF2DFFA0; // 高饱和青绿色
+        static const juce::uint32 ShadowTrack  = 0x402DFFA0;
 
         // 音符块（以"边框强调"为主，填充克制）
         static const juce::uint32 NoteBlock        = 0xFF60A5FA;

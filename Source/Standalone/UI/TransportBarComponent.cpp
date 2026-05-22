@@ -2,10 +2,19 @@
 #include "OpenTuneLookAndFeel.h"
 #include "UIColors.h"
 #include "ToolbarIcons.h"
+#include "UiAssets.h"
 #include "../../Utils/LocalizationManager.h"
 #include <cmath>
 
 namespace OpenTune {
+
+namespace {
+
+constexpr const char* kOverdoseUiRoleKey = "overdoseUiRole";
+constexpr const char* kOverdoseUiRoleTransport = "transport";
+constexpr const char* kOverdoseUiRoleSegment = "segment";
+
+} // namespace
 
 DigitalTimeDisplay::DigitalTimeDisplay()
 {
@@ -29,6 +38,9 @@ void DigitalTimeDisplay::paint(juce::Graphics& g)
     bounds = bounds.translated(0.0f, yOffset);
     if (bounds.getWidth() <= 0.0f || bounds.getHeight() <= 0.0f)
         return;
+
+    if (UIColors::currentThemeId() == ThemeId::Overdose)
+        UiAssets::drawAssetStretch(g, UiAssetId::PanelDisplayPanel, bounds.reduced(3.0f, 2.0f));
 
     if (!style.timeSegmentStyle)
     {
@@ -68,7 +80,11 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
         const float dotSize = area.getWidth() * 0.55f;
         const float cx = area.getCentreX();
         
-        if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+        if (UIColors::currentThemeId() == ThemeId::Overdose)
+        {
+             g.setColour(UIColors::displayText);
+        }
+        else if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
         {
              g.setColour(juce::Colour { BlueBreeze::Colors::DisplayText });
         }
@@ -86,7 +102,11 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
     {
         const float dotSize = area.getWidth() * 0.75f;
         
-        if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+        if (UIColors::currentThemeId() == ThemeId::Overdose)
+        {
+             g.setColour(UIColors::displayText);
+        }
+        else if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
         {
              g.setColour(juce::Colour { BlueBreeze::Colors::DisplayText });
         }
@@ -124,7 +144,11 @@ void DigitalTimeDisplay::drawSegment(juce::Graphics& g, int segment, juce::Recta
 {
     const auto& style = UIColors::currentThemeStyle();
     
-    if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+    if (UIColors::currentThemeId() == ThemeId::Overdose)
+    {
+        g.setColour(active ? UIColors::displayText : UIColors::displayTextDim);
+    }
+    else if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
     {
         g.setColour(active ? juce::Colour { BlueBreeze::Colors::DisplayText }
                            : juce::Colour { BlueBreeze::Colors::DisplayTextDim });
@@ -182,7 +206,17 @@ void BpmValueField::paint(juce::Graphics& g)
     auto bounds = getLocalBounds().toFloat();
     const auto focused = isEditing_ && hasKeyboardFocus(true);
 
-    if (themeId == ThemeId::Aurora)
+    if (themeId == ThemeId::Overdose)
+    {
+        UiAssets::drawAssetStretch(g, UiAssetId::ToolbarBpmField, bounds);
+
+        if (focused || isMouseOver())
+        {
+            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(focused ? 0.38f : 0.18f));
+            g.drawRoundedRectangle(bounds.reduced(0.75f), style.fieldRadius, focused ? 1.35f : 1.0f);
+        }
+    }
+    else if (themeId == ThemeId::Aurora)
     {
         if (focused)
             UIColors::drawAuroraGlow(g, bounds, UIColors::correctedF0, 0.46f, 0.62f);
@@ -215,7 +249,7 @@ void BpmValueField::paint(juce::Graphics& g)
                                                    focused);
     }
 
-    if (themeId != ThemeId::Aurora && themeId != ThemeId::BlueBreeze)
+    if (themeId != ThemeId::Aurora && themeId != ThemeId::BlueBreeze && themeId != ThemeId::Overdose)
     {
         g.setColour(focused ? UIColors::accent : UIColors::panelBorder);
         g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, focused ? style.focusRingThickness : style.strokeThin);
@@ -394,7 +428,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
 {
     auto bounds = getLocalBounds().toFloat().reduced(2.0f);
     const auto themeId = UIColors::currentThemeId();
-    float radius = themeId == ThemeId::BlueBreeze ? UIColors::currentThemeStyle().controlRadius : 6.0f;
+    float radius = (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? UIColors::currentThemeStyle().controlRadius : 6.0f;
 
     const bool roundTopLeft = ! (connectedEdges_ & Left);
     const bool roundBottomLeft = ! (connectedEdges_ & Left);
@@ -404,6 +438,9 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     bool isToggled = getToggleState();
     bool isActive = isToggled || shouldDrawButtonAsDown;
     bool isHover = shouldDrawButtonAsHighlighted;
+    const auto overdoseRole = getProperties()[kOverdoseUiRoleKey].toString();
+    const bool isTransportRole = overdoseRole == kOverdoseUiRoleTransport;
+    const bool isSegmentRole = overdoseRole == kOverdoseUiRoleSegment;
 
     auto createRoundedRectPath = [](juce::Rectangle<float> rect, float r,
                                     bool tl, bool tr, bool bl, bool br) -> juce::Path
@@ -419,7 +456,77 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     };
 
     // 1. Background
-    if (themeId == ThemeId::BlueBreeze)
+    if (themeId == ThemeId::Overdose)
+    {
+        juce::Path p;
+        if (connectedEdges_ == None)
+        {
+            p.addRoundedRectangle(bounds, radius);
+        }
+        else
+        {
+            p = createRoundedRectPath(bounds, radius,
+                                      roundTopLeft, roundTopRight,
+                                      roundBottomLeft, roundBottomRight);
+        }
+
+        if (isSegmentRole)
+        {
+            if (isActive)
+                UiAssets::drawAssetStretch(g, UiAssetId::TabSegmentActiveShell, bounds.reduced(1.5f, 2.0f));
+        }
+        else
+        {
+            UiAssets::drawAssetStretch(g,
+                                       isTransportRole ? UiAssetId::TransportButtonShell
+                                                       : (isActive ? UiAssetId::ToolbarTopbarButtonActive
+                                                                   : UiAssetId::ToolbarTopbarButtonIdle),
+                                       bounds);
+        }
+
+        // Active transport fill — pink gradient glow
+        if (isActive && isTransportRole)
+        {
+            juce::Graphics::ScopedSaveState clipState(g);
+            g.reduceClipRegion(p);
+            juce::ColourGradient activeFill(
+                juce::Colour(Overdose::Colors::ButtonActiveTop).withAlpha(0.96f),
+                bounds.getX(), bounds.getY(),
+                juce::Colour(Overdose::Colors::ButtonActiveBottom).withAlpha(0.96f),
+                bounds.getX(), bounds.getBottom(),
+                false);
+            activeFill.addColour(0.48f, juce::Colour(Overdose::Colors::PalePink).withAlpha(0.62f));
+            g.setGradientFill(activeFill);
+            g.fillPath(p);
+        }
+
+        if (isHover && !isActive)
+        {
+            juce::Graphics::ScopedSaveState clip(g);
+            g.reduceClipRegion(p);
+            g.setColour(juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(isSegmentRole ? 0.12f : 0.18f));
+            g.fillRect(bounds);
+        }
+
+        if (isActive || isHover)
+        {
+            const auto outlineAlpha = isSegmentRole
+                ? (isActive ? 0.54f : 0.18f)
+                : (isActive ? 0.62f : 0.24f);
+            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(outlineAlpha));
+            g.strokePath(p, juce::PathStrokeType(isActive ? 1.55f : 1.0f));
+        }
+
+        if (connectedEdges_ != None && !isSegmentRole)
+        {
+            g.setColour(juce::Colour(Overdose::Colors::PanelInsetShadow).withAlpha(0.20f));
+            if (connectedEdges_ & Left)
+                g.drawLine(bounds.getX(), bounds.getY() + 3.0f, bounds.getX(), bounds.getBottom() - 3.0f, 1.0f);
+            if (connectedEdges_ & Right)
+                g.drawLine(bounds.getRight(), bounds.getY() + 3.0f, bounds.getRight(), bounds.getBottom() - 3.0f, 1.0f);
+        }
+    }
+    else if (themeId == ThemeId::BlueBreeze)
     {
         juce::Path p;
         if (connectedEdges_ == None)
@@ -498,21 +605,30 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
         }
         else
         {
-            // Play/Pause/Stop 鎸夐挳浣跨敤娣辫壊锛堜笌 TAP 鎸夐挳涓€鑷达級
+            // Play/Pause/Stop 按钮使用深色（与 TAP 按钮一致）
             if (isTransportButton)
-                iconColor = juce::Colour(BlueBreeze::Colors::TextDark); // 娣辫壊
+                iconColor = juce::Colour(BlueBreeze::Colors::TextDark); // 深色
             else
                 iconColor = juce::Colour(BlueBreeze::Colors::TextDim); // Normal = Grey
         }
+    }
+    else if (themeId == ThemeId::Overdose)
+    {
+        if (isActive)
+            iconColor = isSegmentRole ? UIColors::textPrimary : UIColors::accent;
+        else if (isHover)
+            iconColor = UIColors::textPrimary;
+        else
+            iconColor = (isTransportRole || isTransportButton) ? UIColors::textPrimary : UIColors::textSecondary;
     }
     else if (themeId == ThemeId::Aurora)
     {
         if (!isEnabled())
             iconColor = UIColors::textDisabled.withAlpha(0.46f);
         else if (isActive)
-            iconColor = UIColors::correctedF0.brighter(0.30f);
+            iconColor = UIColors::accent;
         else if (isHover)
-            iconColor = UIColors::textPrimary.interpolatedWith(UIColors::correctedF0, 0.28f);
+            iconColor = UIColors::textPrimary.interpolatedWith(UIColors::accent, 0.28f);
         else
             iconColor = UIColors::textPrimary.withAlpha(isTransportButton ? 0.92f : 0.78f);
     }
@@ -570,28 +686,33 @@ TransportBarComponent::TransportBarComponent()
     // Setup Play Button
     playButton_.onClick = [this] { onPlayClicked(); };
     playButton_.setTooltip(LOC(kTooltipPlay) + "\nSpace");
+    playButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
     addAndMakeVisible(playButton_);
 
     // Setup Pause Button
     pauseButton_.onClick = [this] { onPauseClicked(); };
     pauseButton_.setEnabled(false);
     pauseButton_.setTooltip(LOC(kTooltipPause) + "\nSpace");
+    pauseButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
     addAndMakeVisible(pauseButton_);
 
     // Setup Stop Button
     stopButton_.onClick = [this] { onStopClicked(); };
     stopButton_.setTooltip(LOC(kTooltipStop));
+    stopButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
     addAndMakeVisible(stopButton_);
 
     // Setup Loop Button
     loopButton_.setClickingTogglesState(true);
     loopButton_.onClick = [this] { onLoopToggled(); };
     loopButton_.setTooltip(LOC(kTooltipLoop));
+    loopButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
     addAndMakeVisible(loopButton_);
 
     // Setup Record Button (read audio from DAW via ARA)
     recordButton_.onClick = [this] { onRecordClicked(); };
     recordButton_.setTooltip(LOC(kTooltipRecord));
+    recordButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
     addAndMakeVisible(recordButton_);
 
     // Setup Track View Button
@@ -599,6 +720,7 @@ TransportBarComponent::TransportBarComponent()
     trackViewButton_.setToggleState(true, juce::dontSendNotification);
     trackViewButton_.onClick = [this] { onTrackViewClicked(); };
     trackViewButton_.setTooltip(LOC(kTooltipTrackView));
+    trackViewButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleSegment);
     addAndMakeVisible(trackViewButton_);
 
 
@@ -607,6 +729,7 @@ TransportBarComponent::TransportBarComponent()
     pianoViewButton_.setToggleState(false, juce::dontSendNotification);
     pianoViewButton_.onClick = [this] { onPianoViewClicked(); };
     pianoViewButton_.setTooltip(LOC(kTooltipPianoRollView));
+    pianoViewButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleSegment);
     addAndMakeVisible(pianoViewButton_);
     
     // Setup Joined Buttons (Segmented Control style)
@@ -627,6 +750,7 @@ TransportBarComponent::TransportBarComponent()
     // Setup Tap Button
     tapButton_.onClick = [this] { onTapClicked(); };
     tapButton_.setTooltip(LOC(kTooltipTapTempo));
+    tapButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
     addAndMakeVisible(tapButton_);
 
     timeDisplay_.setTimeString("00:00");
@@ -743,26 +867,55 @@ void TransportBarComponent::setLayoutProfile(LayoutProfile profile)
 void TransportBarComponent::paint(juce::Graphics& g)
 {
     const auto& style = UIColors::currentThemeStyle();
+    const auto themeId = UIColors::currentThemeId();
     auto bounds = getLocalBounds().toFloat();
 
     if (!embeddedInTopBar_)
     {
         UIColors::drawShadow(g, bounds, UIColors::ShadowLevel::Float);
-        if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+        if (themeId == ThemeId::Overdose)
+        {
+            juce::Path tray;
+            tray.addRoundedRectangle(bounds, style.panelRadius);
+
+            // 扁平面板：纯色填充 + 柔和边框
+            g.setColour(juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(0.96f));
+            g.fillPath(tray);
+
+            g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.48f));
+            g.strokePath(tray, juce::PathStrokeType(1.0f));
+        }
+        else if (themeId == ThemeId::BlueBreeze)
+        {
             UIColors::fillBlueBreezeTray(g, bounds, style.panelRadius);
+            UIColors::drawPanelFrame(g, bounds, style.panelRadius);
+        }
         else
+        {
             UIColors::fillPanelBackground(g, bounds, style.panelRadius);
-        UIColors::drawPanelFrame(g, bounds, style.panelRadius);
+            UIColors::drawPanelFrame(g, bounds, style.panelRadius);
+        }
+    }
+
+    if (themeId == ThemeId::Overdose
+        && trackViewButton_.isVisible()
+        && pianoViewButton_.isVisible())
+    {
+        auto segmentBounds = trackViewButton_.getBounds().getUnion(pianoViewButton_.getBounds()).toFloat().reduced(2.0f);
+        UiAssets::drawAssetStretch(g, UiAssetId::TabSegmentTrack, segmentBounds);
     }
 
     auto displayBounds = timeDisplay_.getBounds().toFloat();
     // 鏃堕棿鐮侊細LCD 椋庢牸鏄剧ず灞忥紙鍙傝€冨浘鐗囬鏍硷級
-    if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+    if (themeId == ThemeId::Overdose)
     {
-        // Reference style: Transparent background for BlueBreeze
-        // g.setColour(juce::Colour(BlueBreeze::Colors::KnobBody)); 
+        UiAssets::drawAssetStretch(g, UiAssetId::ToolbarTransportTimeField, displayBounds);
     }
-    else if (UIColors::currentThemeId() == ThemeId::Aurora)
+    else if (themeId == ThemeId::BlueBreeze)
+    {
+        UIColors::fillBlueBreezeDisplayWell(g, displayBounds, style.fieldRadius);
+    }
+    else if (themeId == ThemeId::Aurora)
     {
         UIColors::drawAuroraButtonChrome(g,
                                          displayBounds,
@@ -775,14 +928,6 @@ void TransportBarComponent::paint(juce::Graphics& g)
     {
         g.setColour(UIColors::backgroundDark.darker(0.2f));
         g.fillRoundedRectangle(displayBounds, style.fieldRadius);
-    }
-    
-    if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
-    {
-        UIColors::fillBlueBreezeDisplayWell(g, displayBounds, style.fieldRadius);
-    }
-    else
-    {
         g.setColour(juce::Colours::black.withAlpha(0.3f));
         g.drawRoundedRectangle(displayBounds, style.fieldRadius, 1.0f);
     }
