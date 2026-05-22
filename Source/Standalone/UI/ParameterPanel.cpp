@@ -1,5 +1,6 @@
 #include "ParameterPanel.h"
 #include "ToolbarIcons.h"
+#include "UiAssets.h"
 #include "../../Utils/PitchControlConfig.h"
 #include "../../Utils/LocalizationManager.h"
 #include "../../Utils/AppLogger.h"
@@ -18,7 +19,65 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
 {
     auto bounds = getLocalBounds().toFloat().reduced(2.0f);
 
-    if (UIColors::currentThemeId() == ThemeId::Aurora)
+    const auto themeId = UIColors::currentThemeId();
+
+    if (themeId == ThemeId::Overdose)
+    {
+        const auto active = getToggleState() || shouldDrawButtonAsDown;
+        UiAssets::drawAssetStretch(g,
+                                   toolId_ == 0 ? UiAssetId::ToolRightPanelAutoButton
+                                                : UiAssetId::ToolRightPanelButtonShell,
+                                   bounds);
+
+        if (toolId_ != 0 && active)
+        {
+            juce::Graphics::ScopedSaveState clip(g);
+            juce::Path activeShape;
+            activeShape.addRoundedRectangle(bounds.reduced(1.5f),
+                                            juce::jmax(0.0f, UIColors::currentThemeStyle().controlRadius - 1.5f));
+            g.reduceClipRegion(activeShape);
+
+            juce::ColourGradient fill(juce::Colour(Overdose::Colors::ButtonActiveTop).withAlpha(0.96f),
+                                      bounds.getX(),
+                                      bounds.getY(),
+                                      juce::Colour(Overdose::Colors::ButtonActiveBottom).withAlpha(0.96f),
+                                      bounds.getX(),
+                                      bounds.getBottom(),
+                                      false);
+            fill.addColour(0.54f, juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.74f));
+            g.setGradientFill(fill);
+            g.fillRoundedRectangle(bounds.reduced(1.5f),
+                                   juce::jmax(0.0f, UIColors::currentThemeStyle().controlRadius - 1.5f));
+
+            g.setColour(juce::Colours::white.withAlpha(0.22f));
+            g.drawLine(bounds.getX() + 9.0f,
+                       bounds.getY() + 3.0f,
+                       bounds.getRight() - 9.0f,
+                       bounds.getY() + 3.0f,
+                       1.0f);
+        }
+        else if (toolId_ != 0 && shouldDrawButtonAsHighlighted)
+        {
+            juce::Graphics::ScopedSaveState clip(g);
+            juce::Path hoverShape;
+            hoverShape.addRoundedRectangle(bounds.reduced(1.5f),
+                                           juce::jmax(0.0f, UIColors::currentThemeStyle().controlRadius - 1.5f));
+            g.reduceClipRegion(hoverShape);
+            g.setColour(juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.14f));
+            g.fillRoundedRectangle(bounds.reduced(1.5f),
+                                   juce::jmax(0.0f, UIColors::currentThemeStyle().controlRadius - 1.5f));
+        }
+
+        if (shouldDrawButtonAsHighlighted || active || shouldDrawButtonAsDown)
+        {
+            const auto colour = active || shouldDrawButtonAsDown
+                ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.58f)
+                : juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.22f);
+            g.setColour(colour);
+            g.drawRoundedRectangle(bounds.reduced(0.75f), UIColors::currentThemeStyle().controlRadius, active ? 1.6f : 1.1f);
+        }
+    }
+    else if (themeId == ThemeId::Aurora)
     {
         const auto active = getToggleState();
         UIColors::drawAuroraButtonChrome(g,
@@ -36,21 +95,23 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
 
     if (textIcon_.isNotEmpty())
     {
-        g.setColour(UIColors::textPrimary);
+        const auto active = themeId == ThemeId::Overdose && (getToggleState() || shouldDrawButtonAsDown) && toolId_ != 0;
+        g.setColour(active ? juce::Colours::white.withAlpha(0.96f) : UIColors::textPrimary);
         g.setFont(UIColors::getUIFont(16.0f));
         g.drawText(textIcon_, getLocalBounds().toFloat(), juce::Justification::centred);
     }
     else
     {
         auto iconArea = getLocalBounds().toFloat().reduced(10.0f);
-        auto iconColor = UIColors::textPrimary;
+        const auto active = themeId == ThemeId::Overdose && (getToggleState() || shouldDrawButtonAsDown) && toolId_ != 0;
+        auto iconColor = active ? juce::Colours::white.withAlpha(0.96f) : UIColors::textPrimary;
 
         // Hover: subtle scale-up (1.08x) and brightness boost
         if (shouldDrawButtonAsHighlighted && !shouldDrawButtonAsDown)
         {
             const float hoverScale = 1.08f;
             iconArea = iconArea.withSizeKeepingCentre(iconArea.getWidth() * hoverScale, iconArea.getHeight() * hoverScale);
-            iconColor = iconColor.brighter(0.15f);
+            iconColor = active ? iconColor : iconColor.brighter(0.15f);
         }
 
         ToolbarIcons::drawIcon(g, iconPath_, iconArea, iconColor, 2.0f, fillIcon_);
@@ -73,7 +134,22 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
                                            float sliderPosProportional, float rotaryStartAngle,
                                            float rotaryEndAngle, juce::Slider& slider)
 {
-    if (UIColors::currentThemeId() == ThemeId::Aurora)
+    const auto themeId = UIColors::currentThemeId();
+    if (themeId == ThemeId::Overdose)
+    {
+        auto bounds = juce::Rectangle<float>(static_cast<float>(x),
+                                            static_cast<float>(y),
+                                            static_cast<float>(width),
+                                            static_cast<float>(height)).reduced(2.0f);
+        UiAssets::drawFilmstripFrame(g,
+                                     UiAssetId::KnobLargeParameterFilmstrip,
+                                     bounds,
+                                     sliderPosProportional,
+                                     121);
+        return;
+    }
+
+    if (themeId == ThemeId::Aurora)
     {
         auto bounds = juce::Rectangle<float>(static_cast<float>(x),
                                             static_cast<float>(y),
@@ -88,7 +164,7 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
         return;
     }
 
-    if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+    if (themeId == ThemeId::BlueBreeze)
     {
         auto bounds = juce::Rectangle<float>(static_cast<float>(x),
                                             static_cast<float>(y),
@@ -296,12 +372,43 @@ ParameterPanel::~ParameterPanel()
 void ParameterPanel::paint(juce::Graphics& g)
 {
     const auto& style = UIColors::currentThemeStyle();
+    const auto themeId = UIColors::currentThemeId();
     // 阴影边距：背景在 reduced(12) 区域内绘制，阴影在边距内渲染
     const float shadowMargin = 12.0f;
     auto bounds = getLocalBounds().toFloat().reduced(shadowMargin);
 
     // Background Shadow (if needed, though MainControlPanel usually handles the main shadow)
     UIColors::drawShadow(g, bounds);
+
+    if (themeId == ThemeId::Overdose)
+    {
+        UiAssets::drawAssetStretch(g, UiAssetId::PanelParameterSidebar, bounds);
+
+        const auto drawSectionHeader = [&](const juce::Label& header)
+        {
+            if (!header.isVisible())
+                return;
+
+            auto headerBounds = header.getBounds().toFloat();
+            if (headerBounds.isEmpty())
+                return;
+
+            // 粉色半透明下划线，比之前更明显
+            const float lineY = headerBounds.getBottom() - 1.5f;
+            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.32f));
+            g.drawLine(headerBounds.getX() + 6.0f, lineY,
+                       headerBounds.getRight() - 6.0f, lineY, 1.0f);
+
+            // 标题文字柔光底层（label 自身 paint 在上层）
+            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.08f));
+            g.drawText(header.getText(), headerBounds.translated(0.0f, -0.5f),
+                       juce::Justification::centred);
+        };
+
+        drawSectionHeader(pitchCorrectionHeader_);
+        drawSectionHeader(toolsHeader_);
+        return;
+    }
 
     // Create rounded path for background and clipping
     juce::Path backgroundPath;
@@ -318,7 +425,7 @@ void ParameterPanel::paint(juce::Graphics& g)
 void ParameterPanel::resized()
 {
     const auto themeId = UIColors::currentThemeId();
-    const bool isBlueBreeze = (themeId == ThemeId::BlueBreeze);
+    const bool isBlueBreeze = (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose);
 
     // 旋钮尺寸：BlueBreeze 主题使用更大尺寸 (115px)，其他主题使用 92px
     const int knobSize = isBlueBreeze ? 115 : 92;

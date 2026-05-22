@@ -2,8 +2,8 @@
 
 #include <juce_graphics/juce_graphics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
-#include "BinaryData.h"
 #include "UIColors.h"
+#include "UiAssets.h"
 #include "TopBarComponent.h"
 
 namespace OpenTune {
@@ -57,10 +57,7 @@ class OpenTuneLookAndFeel : public juce::LookAndFeel_V4
 public:
     OpenTuneLookAndFeel()
     {
-        auto typeface = juce::Typeface::createSystemTypefaceFor(
-            BinaryData::HONORSansCNMedium_ttf,
-            BinaryData::HONORSansCNMedium_ttfSize
-        );
+        auto typeface = UiAssets::createHonorSansTypeface();
 
         if (typeface != nullptr)
         {
@@ -216,6 +213,93 @@ public:
         }
     }
 
+    static void drawOverdoseSurface(juce::Graphics& g,
+                                    juce::Rectangle<float> bounds,
+                                    float radius,
+                                    bool highlighted,
+                                    bool down,
+                                    bool active,
+                                    const juce::Path* shapeOverride = nullptr)
+    {
+        juce::Path shape;
+        if (shapeOverride != nullptr)
+            shape = *shapeOverride;
+        else
+            shape.addRoundedRectangle(bounds, radius);
+
+        const bool isPressed = down;
+        const bool isActive = active || isPressed;
+        const bool isHovered = highlighted && !isPressed;
+
+        juce::DropShadow softShadow;
+        softShadow.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(isPressed ? 0.16f : 0.24f);
+        softShadow.radius = isPressed ? 8 : 12;
+        softShadow.offset = { 0, isPressed ? 1 : 3 };
+        softShadow.drawForPath(g, shape);
+
+        if (isActive || isHovered)
+        {
+            juce::DropShadow accentGlow;
+            accentGlow.colour = juce::Colour(Overdose::Colors::PinkGlowSoft).withAlpha(isActive ? 0.28f : 0.16f);
+            accentGlow.radius = isActive ? 12 : 9;
+            accentGlow.offset = {};
+            accentGlow.drawForPath(g, shape);
+        }
+
+        juce::ColourGradient body(juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(isActive ? 0.98f : 0.94f),
+                                  bounds.getX(),
+                                  bounds.getY(),
+                                  juce::Colour(Overdose::Colors::PanelOpaqueBottom).withAlpha(isPressed ? 0.98f : 0.94f),
+                                  bounds.getX(),
+                                  bounds.getBottom(),
+                                  false);
+        body.addColour(0.42f, juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(isActive ? 0.96f : 0.90f));
+        g.setGradientFill(body);
+        g.fillPath(shape);
+
+        {
+            juce::Graphics::ScopedSaveState clipState(g);
+            g.reduceClipRegion(shape);
+
+            juce::ColourGradient sheen(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(isActive ? 0.28f : 0.20f),
+                                       bounds.getX() + bounds.getWidth() * 0.16f,
+                                       bounds.getY() + bounds.getHeight() * 0.10f,
+                                       juce::Colours::transparentWhite,
+                                       bounds.getRight(),
+                                       bounds.getBottom(),
+                                       true);
+            g.setGradientFill(sheen);
+            g.fillRect(bounds);
+
+            auto lowerBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.58f);
+            juce::ColourGradient lowerShade(juce::Colours::transparentBlack,
+                                            lowerBand.getX(),
+                                            lowerBand.getY(),
+                                            juce::Colour(Overdose::Colors::PanelInsetShadow).withAlpha(isPressed ? 0.16f : 0.09f),
+                                            lowerBand.getX(),
+                                            lowerBand.getBottom(),
+                                            false);
+            g.setGradientFill(lowerShade);
+            g.fillRect(lowerBand);
+
+            g.setColour(juce::Colours::white.withAlpha(isPressed ? 0.08f : 0.16f));
+            g.drawLine(bounds.getX() + radius * 0.75f,
+                       bounds.getY() + 1.0f,
+                       bounds.getRight() - radius * 0.75f,
+                       bounds.getY() + 1.0f,
+                       1.0f);
+        }
+
+        const auto border = isActive
+            ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.72f)
+            : juce::Colour(Overdose::Colors::PanelBorder).withAlpha(isHovered ? 0.64f : 0.48f);
+        g.setColour(border);
+        g.strokePath(shape, juce::PathStrokeType(isActive ? 1.45f : 1.0f));
+
+        g.setColour(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(isActive ? 0.22f : 0.12f));
+        g.strokePath(shape, juce::PathStrokeType(0.8f));
+    }
+
     juce::Font getTextButtonFont(juce::TextButton& button, int height) override
     {
         // 閲嶈锛氫笉瑕佺敤鎸夐挳楂樺害鎺ㄥ瀛椾綋澶у皬锛屽惁鍒欎細鍑虹幇鈥滀竴澶т竴灏忊€濄€?        // 绾﹀畾锛氶渶瑕佺粺涓€瀛楀彿鐨勬寜閽缃?properties["fontHeight"].
@@ -256,6 +340,10 @@ public:
         {
             drawDarkBlueGreyButton(g, button, bounds, radius, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown, base);
         }
+        else if (themeId == ThemeId::Overdose)
+        {
+            drawOverdoseButton(g, button, bounds, radius, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
+        }
         else
         {
             drawBlueBreezeButton(g, button, bounds, radius, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
@@ -274,20 +362,85 @@ public:
         drawBlueBreezeSurface(g, bounds, radius, isHighlighted, isDown, button.getToggleState() || isDown);
     }
 
+    void drawOverdoseButton(juce::Graphics& g, juce::Button& button, juce::Rectangle<float> bounds, float radius,
+                            bool isHighlighted, bool isDown)
+    {
+        juce::ignoreUnused(button);
+        bool isActive = isDown || button.getToggleState();
+
+        // 柔和阴影
+        {
+            juce::DropShadow ds;
+            ds.colour = juce::Colour(Overdose::Colors::SoftShadow);
+            ds.radius = Overdose::Style::ShadowRadius;
+            ds.offset = { Overdose::Style::ShadowOffsetX, Overdose::Style::ShadowOffsetY };
+            juce::Path p;
+            p.addRoundedRectangle(bounds, radius, radius);
+            ds.drawForPath(g, p);
+        }
+
+        // 表面渐变
+        juce::Colour top, bottom;
+        if (isActive)
+        {
+            top = juce::Colour(Overdose::Colors::ButtonActiveTop);
+            bottom = juce::Colour(Overdose::Colors::ButtonActiveBottom);
+        }
+        else if (isHighlighted)
+        {
+            top = juce::Colour(Overdose::Colors::ButtonHover);
+            bottom = juce::Colour(Overdose::Colors::ButtonHover).darker(0.04f);
+        }
+        else
+        {
+            top = juce::Colour(Overdose::Colors::ButtonNormal);
+            bottom = juce::Colour(Overdose::Colors::ButtonNormal).darker(0.06f);
+        }
+
+        juce::ColourGradient grad(top, bounds.getX(), bounds.getY(),
+                                   bottom, bounds.getX(), bounds.getBottom(), false);
+        g.setGradientFill(grad);
+        g.fillRoundedRectangle(bounds, radius);
+
+        // 粉白玻璃边
+        g.setColour(juce::Colour(Overdose::Colors::GlassEdge));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), radius, Overdose::Style::StrokeThin);
+
+        // 顶部高光
+        if (!isActive && !isDown)
+        {
+            auto highlightRect = bounds.reduced(2.0f).withHeight(bounds.getHeight() * 0.38f);
+            juce::ColourGradient hl(juce::Colour(Overdose::Colors::GlassHighlight),
+                                     highlightRect.getX(), highlightRect.getY(),
+                                     juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.0f),
+                                     highlightRect.getX(), highlightRect.getBottom(), false);
+            g.setGradientFill(hl);
+            g.fillRoundedRectangle(highlightRect, radius - 2.0f);
+        }
+
+        // Active 时粉色辉光
+        if (isActive)
+        {
+            g.setColour(juce::Colour(Overdose::Colors::ButtonActiveGlow));
+            g.drawRoundedRectangle(bounds, radius, Overdose::Style::StrokeThick);
+        }
+    }
+
     void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
                           bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
     {
-        if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+        const auto themeId = UIColors::currentThemeId();
+        if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
         {
-            drawBlueBreezeToggleButton(g, button, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
+            drawModernToggleButton(g, button, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
             return;
         }
         
         juce::LookAndFeel_V4::drawToggleButton(g, button, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
     }
 
-    void drawBlueBreezeToggleButton(juce::Graphics& g, juce::ToggleButton& button,
-                                    bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
+    void drawModernToggleButton(juce::Graphics& g, juce::ToggleButton& button,
+                                bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
     {
         // Minimalist Checkbox/Radio
         auto fontSize = juce::jmin(15.0f, (float)button.getHeight() * 0.75f);
@@ -317,7 +470,8 @@ public:
                      bool ticked, bool isEnabled,
                      bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
     {
-        if (UIColors::currentThemeId() == ThemeId::BlueBreeze)
+        const auto themeId = UIColors::currentThemeId();
+        if (themeId == ThemeId::BlueBreeze)
         {
             juce::Rectangle<float> tickBounds(x, y, w, h);
             drawBlueBreezeSurface(g, tickBounds, 4.0f, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown, ticked);
@@ -329,6 +483,23 @@ public:
                 tickPath.lineTo(tickBounds.getCentreX(), tickBounds.getBottom() - 3.0f);
                 tickPath.lineTo(tickBounds.getRight() - 3.0f, tickBounds.getY() + 3.0f);
                 g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
+                g.strokePath(tickPath, juce::PathStrokeType(2.0f));
+            }
+            return;
+        }
+
+        if (themeId == ThemeId::Overdose)
+        {
+            juce::Rectangle<float> tickBounds(x, y, w, h);
+            drawOverdoseSurface(g, tickBounds, 4.0f, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown, ticked);
+
+            if (ticked)
+            {
+                juce::Path tickPath;
+                tickPath.startNewSubPath(tickBounds.getX() + 3.0f, tickBounds.getCentreY());
+                tickPath.lineTo(tickBounds.getCentreX(), tickBounds.getBottom() - 3.0f);
+                tickPath.lineTo(tickBounds.getRight() - 3.0f, tickBounds.getY() + 3.0f);
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink));
                 g.strokePath(tickPath, juce::PathStrokeType(2.0f));
             }
             return;
@@ -485,7 +656,9 @@ public:
         }
 
         const auto themeId = UIColors::currentThemeId();
-        if (themeId != ThemeId::DarkBlueGrey && themeId != ThemeId::BlueBreeze)
+        if (themeId != ThemeId::DarkBlueGrey
+            && themeId != ThemeId::BlueBreeze
+            && themeId != ThemeId::Overdose)
         {
             juce::LookAndFeel_V4::drawLabel(g, label);
             return;
@@ -499,6 +672,28 @@ public:
             const bool focused = label.hasKeyboardFocus(true) && label.isEditable();
             drawBlueBreezeSurface(g, bounds, style.fieldRadius, label.isMouseOver(), false, focused);
             
+            g.setColour(label.findColour(juce::Label::textColourId));
+            g.setFont(label.getFont());
+            g.drawFittedText(label.getText(), label.getLocalBounds().reduced(8, 2), label.getJustificationType(), 1);
+            return;
+        }
+
+        if (themeId == ThemeId::Overdose)
+        {
+            const bool focused = label.hasKeyboardFocus(true) && label.isEditable();
+            UiAssets::drawAssetStretch(g, UiAssetId::ParameterSmallReadout, bounds);
+
+            if (label.isMouseOver() || focused)
+            {
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(focused ? 0.62f : 0.28f));
+                g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, focused ? style.focusRingThickness : 1.0f);
+            }
+            else
+            {
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.55f));
+                g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, 1.0f);
+            }
+
             g.setColour(label.findColour(juce::Label::textColourId));
             g.setFont(label.getFont());
             g.drawFittedText(label.getText(), label.getLocalBounds().reduced(8, 2), label.getJustificationType(), 1);
@@ -565,18 +760,48 @@ public:
         }
         else
         {
-            if (themeId == ThemeId::BlueBreeze)
+            if (themeId == ThemeId::Overdose)
+            {
+                const float trackH = 10.0f;
+                auto trackRect = bounds.withHeight(trackH)
+                                     .withY(bounds.getCentreY() - trackH * 0.5f)
+                                     .reduced(4.0f, 0.0f);
+                UiAssets::drawAssetStretch(g, UiAssetId::SliderTrack, trackRect);
+
+                const float activeW = juce::jlimit(0.0f, trackRect.getWidth(), sliderPos - trackRect.getX());
+                if (activeW > 0.0f)
+                {
+                    auto fillRect = trackRect.withWidth(activeW).reduced(4.0f, 2.5f);
+                    g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.78f));
+                    g.fillRoundedRectangle(fillRect, fillRect.getHeight() * 0.5f);
+                }
+
+                const float thumbSize = 18.0f;
+                auto thumbRect = juce::Rectangle<float>(sliderPos - thumbSize * 0.5f,
+                                                        bounds.getCentreY() - thumbSize * 0.5f,
+                                                        thumbSize,
+                                                        thumbSize);
+                UiAssets::drawAssetStretch(g, UiAssetId::SliderThumb, thumbRect);
+
+                if (slider.isMouseOverOrDragging() || slider.isMouseButtonDown())
+                {
+                    g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(slider.isMouseButtonDown() ? 0.42f : 0.22f));
+                    g.drawEllipse(thumbRect.reduced(0.5f), slider.isMouseButtonDown() ? 1.6f : 1.1f);
+                }
+            }
+            else if (themeId == ThemeId::BlueBreeze)
             {
                 float trackH = 4.0f;
                 auto trackRect = bounds.withHeight(trackH).withY(bounds.getCentreY() - trackH/2).reduced(4, 0);
-                
+
                 g.setColour(juce::Colour(BlueBreeze::Colors::KnobTrack).withAlpha(0.32f));
                 g.fillRoundedRectangle(trackRect, trackH/2);
-                
+
+                auto fillColour = juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.78f);
                 auto fillRect = trackRect.withWidth(sliderPos - trackRect.getX());
-                g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.78f));
+                g.setColour(fillColour);
                 g.fillRoundedRectangle(fillRect, trackH/2);
-                
+
                 float thumbW = 12.0f;
                 float thumbH = 24.0f;
                 auto thumbRect = juce::Rectangle<float>(sliderPos - thumbW/2, bounds.getCentreY() - thumbH/2, thumbW, thumbH);
@@ -632,6 +857,30 @@ public:
         if (themeId == ThemeId::DarkBlueGrey)
         {
             drawDarkBlueGreySliderThumb(g, thumb, themeStyle);
+        }
+        else if (themeId == ThemeId::Overdose)
+        {
+            // 粉色玻璃胶囊拇指
+            juce::DropShadow ds;
+            ds.colour = juce::Colour(Overdose::Colors::SoftShadow);
+            ds.radius = 8;
+            ds.offset = { 0, 2 };
+            juce::Path shadowPath;
+            shadowPath.addRoundedRectangle(thumb, thumbH * 0.5f);
+            ds.drawForPath(g, shadowPath);
+
+            juce::ColourGradient bodyGrad(
+                juce::Colour(Overdose::Colors::SliderThumb), thumb.getX(), thumb.getY(),
+                juce::Colour(Overdose::Colors::SliderThumb).darker(0.08f), thumb.getX(), thumb.getBottom(), false);
+            g.setGradientFill(bodyGrad);
+            g.fillRoundedRectangle(thumb, thumbH * 0.5f);
+
+            g.setColour(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.25f));
+            g.drawLine(thumb.getX() + thumbH * 0.5f, thumb.getY() + 1.5f,
+                       thumb.getRight() - thumbH * 0.5f, thumb.getY() + 1.5f, 1.5f);
+
+            g.setColour(juce::Colour(Overdose::Colors::SliderThumbEdge));
+            g.drawRoundedRectangle(thumb.reduced(0.5f), thumbH * 0.5f, 1.0f);
         }
         else
         {
@@ -732,6 +981,17 @@ public:
         else if (themeId == ThemeId::BlueBreeze)
         {
             drawBlueBreezeKnob(g, bounds, cx, cy, radius, angle, rotaryStartAngle, rotaryEndAngle, slider);
+        }
+        else if (themeId == ThemeId::Overdose)
+        {
+            const bool isLargeKnob = (static_cast<int>(bounds.getWidth()) > 100);
+            const int numFrames = isLargeKnob ? 121 : 61;
+            UiAssets::drawFilmstripFrame(g,
+                                         isLargeKnob ? UiAssetId::KnobLargeParameterFilmstrip
+                                                     : UiAssetId::KnobPrimaryFilmstrip,
+                                         bounds,
+                                         sliderPosProportional,
+                                         numFrames);
         }
         else
         {
@@ -861,6 +1121,10 @@ public:
             g.setGradientFill(grad);
             g.fillAll();
         }
+        else if (themeId == ThemeId::Overdose)
+        {
+            g.fillAll(juce::Colour(Overdose::Colors::CanvasTop));
+        }
         else
         {
             g.fillAll(UIColors::backgroundMedium);
@@ -927,7 +1191,12 @@ public:
             else
             {
                 const auto field = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
-                if (themeId == ThemeId::BlueBreeze)
+                if (themeId == ThemeId::Overdose)
+                {
+                    juce::ignoreUnused(bg);
+                    UiAssets::drawAssetStretch(g, UiAssetId::ParameterSmallReadout, field);
+                }
+                else if (themeId == ThemeId::BlueBreeze)
                 {
                     juce::ignoreUnused(bg);
                     drawBlueBreezeSurface(g, field.reduced(0.5f), style.fieldRadius, textEditor.isMouseOver(), false, textEditor.hasKeyboardFocus(true));
@@ -958,6 +1227,11 @@ public:
                         g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
                         g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, 2.0f);
                     }
+                    else if (themeId == ThemeId::Overdose)
+                    {
+                        g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f));
+                        g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, style.focusRingThickness);
+                    }
                     else
                     {
                         g.setColour(textEditor.findColour(juce::TextEditor::focusedOutlineColourId));
@@ -967,14 +1241,24 @@ public:
                 else
                 {
                     auto border = textEditor.findColour(juce::TextEditor::outlineColourId);
-                    
+
                     if (themeId == ThemeId::BlueBreeze)
                     {
                         if (textEditor.isMouseOver())
                             border = juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.6f);
                         else
                             border = juce::Colour(BlueBreeze::Colors::PanelBorder);
-                            
+
+                        g.setColour(border);
+                        g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, 1.0f);
+                    }
+                    else if (themeId == ThemeId::Overdose)
+                    {
+                        if (textEditor.isMouseOver())
+                            border = juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.6f);
+                        else
+                            border = juce::Colour(Overdose::Colors::PanelBorder);
+
                         g.setColour(border);
                         g.drawRoundedRectangle(0.5f, 0.5f, static_cast<float>(width) - 1.0f, static_cast<float>(height) - 1.0f, style.fieldRadius, 1.0f);
                     }
@@ -1001,14 +1285,20 @@ public:
         auto cornerSize = box.findParentComponentOfClass<juce::GroupComponent>() != nullptr ? 0.0f : style.fieldRadius;
         juce::Rectangle<float> boxBounds(0.0f, 0.0f, (float)width, (float)height);
 
-        if (themeId == ThemeId::BlueBreeze)
+        if (themeId == ThemeId::Overdose)
         {
-            const float radius = style.fieldRadius;
-            bool isActive = isButtonDown || box.isPopupActive();
-            bool isHover = box.isMouseOver(true);
+            const bool isActive = isButtonDown || box.isPopupActive();
+            const bool isHover = box.isMouseOver(true);
+            const auto assetId = width <= 96 ? UiAssetId::ToolbarDropdownNarrowField
+                                             : UiAssetId::ToolbarDropdownWideField;
+            UiAssets::drawAssetStretch(g, assetId, boxBounds);
 
-            drawBlueBreezeSurface(g, boxBounds.reduced(0.5f), radius, isHover, isButtonDown, isActive);
-            
+            if (isHover || isActive)
+            {
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(isActive ? 0.34f : 0.18f));
+                g.drawRoundedRectangle(boxBounds.reduced(0.75f), style.fieldRadius, isActive ? 1.35f : 1.0f);
+            }
+
             if (!box.getProperties().contains("noArrow"))
             {
                 auto arrowZone = boxBounds.removeFromRight(boxBounds.getHeight()).reduced(boxBounds.getHeight() * 0.35f);
@@ -1016,7 +1306,29 @@ public:
                 path.startNewSubPath(arrowZone.getX(), arrowZone.getY());
                 path.lineTo(arrowZone.getCentreX(), arrowZone.getBottom());
                 path.lineTo(arrowZone.getRight(), arrowZone.getY());
-                
+
+                g.setColour(juce::Colour(Overdose::Colors::TextSecondary));
+                g.strokePath(path, juce::PathStrokeType(1.5f));
+            }
+            return;
+        }
+
+        if (themeId == ThemeId::BlueBreeze)
+        {
+            const float radius = style.fieldRadius;
+            bool isActive = isButtonDown || box.isPopupActive();
+            bool isHover = box.isMouseOver(true);
+
+            drawBlueBreezeSurface(g, boxBounds.reduced(0.5f), radius, isHover, isButtonDown, isActive);
+
+            if (!box.getProperties().contains("noArrow"))
+            {
+                auto arrowZone = boxBounds.removeFromRight(boxBounds.getHeight()).reduced(boxBounds.getHeight() * 0.35f);
+                juce::Path path;
+                path.startNewSubPath(arrowZone.getX(), arrowZone.getY());
+                path.lineTo(arrowZone.getCentreX(), arrowZone.getBottom());
+                path.lineTo(arrowZone.getRight(), arrowZone.getY());
+
                 g.setColour(juce::Colour(BlueBreeze::Colors::TextDim));
                 g.strokePath(path, juce::PathStrokeType(1.5f));
             }
@@ -1063,7 +1375,15 @@ public:
             g.drawRect(0, 0, width, height);
             return;
         }
-        
+
+        if (themeId == ThemeId::Overdose)
+        {
+            g.fillAll(juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(0.98f));
+            g.setColour(juce::Colour(Overdose::Colors::PanelBorder));
+            g.drawRect(0, 0, width, height);
+            return;
+        }
+
         juce::LookAndFeel_V4::drawPopupMenuBackground(g, width, height);
     }
 
@@ -1086,7 +1406,7 @@ public:
             }
 
             auto textCol = (textColour != nullptr ? *textColour : juce::Colour(BlueBreeze::Colors::TextDark));
-            
+
             if (isHighlighted)
             {
                 g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue).withAlpha(0.13f));
@@ -1097,23 +1417,71 @@ public:
 
             g.setColour(textCol);
             g.setFont(UIColors::getUIFont(15.0f));
-            
+
             auto r = area.reduced(1);
             r.removeFromLeft(r.getHeight());
-            
+
             g.drawFittedText(text, r, juce::Justification::centredLeft, 1);
-            
+
             if (isTicked)
             {
                 auto tickArea = r.removeFromRight(20);
                 auto tickCenter = tickArea.getCentre().toFloat();
                 float tickRadius = static_cast<float>(tickArea.getHeight()) * 0.2f;
-                
+
                 g.setColour(juce::Colour(BlueBreeze::Colors::AccentBlue));
-                g.fillEllipse(tickCenter.x - tickRadius, tickCenter.y - tickRadius, 
+                g.fillEllipse(tickCenter.x - tickRadius, tickCenter.y - tickRadius,
                               tickRadius * 2.0f, tickRadius * 2.0f);
             }
-            
+
+            if (shortcutKeyText.isNotEmpty())
+            {
+                g.setColour(textCol.withAlpha(0.6f));
+                g.drawText(shortcutKeyText, r, juce::Justification::centredRight, true);
+            }
+            return;
+        }
+
+        if (themeId == ThemeId::Overdose)
+        {
+            if (isSeparator)
+            {
+                auto r = area.reduced(5, 0);
+                r.removeFromTop(juce::roundToInt(((float)r.getHeight() * 0.5f) - 0.5f));
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.5f));
+                g.fillRect(r.removeFromTop(1));
+                return;
+            }
+
+            auto textCol = (textColour != nullptr ? *textColour : juce::Colour(Overdose::Colors::TextPrimary));
+
+            if (isHighlighted)
+            {
+                g.setColour(juce::Colour(Overdose::Colors::PinkGlowSoft));
+                g.fillRect(area);
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink));
+                textCol = juce::Colour(Overdose::Colors::PrimaryPink);
+            }
+
+            g.setColour(textCol);
+            g.setFont(UIColors::getUIFont(15.0f));
+
+            auto r = area.reduced(1);
+            r.removeFromLeft(r.getHeight());
+
+            g.drawFittedText(text, r, juce::Justification::centredLeft, 1);
+
+            if (isTicked)
+            {
+                auto tickArea = r.removeFromRight(20);
+                auto tickCenter = tickArea.getCentre().toFloat();
+                float tickRadius = static_cast<float>(tickArea.getHeight()) * 0.2f;
+
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink));
+                g.fillEllipse(tickCenter.x - tickRadius, tickCenter.y - tickRadius,
+                              tickRadius * 2.0f, tickRadius * 2.0f);
+            }
+
             if (shortcutKeyText.isNotEmpty())
             {
                 g.setColour(textCol.withAlpha(0.6f));
@@ -1206,6 +1574,57 @@ public:
         const auto themeId = UIColors::currentThemeId();
         auto bounds = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y),
                                              static_cast<float>(width), static_cast<float>(height));
+
+        if (themeId == ThemeId::Overdose)
+        {
+            juce::ignoreUnused(scrollbar);
+
+            juce::Rectangle<float> thumbBounds;
+            if (isScrollbarVertical)
+            {
+                thumbBounds = juce::Rectangle<float>(bounds.getX() + 2.0f,
+                                                     bounds.getY() + static_cast<float>(thumbStartPosition),
+                                                     bounds.getWidth() - 4.0f,
+                                                     static_cast<float>(thumbSize));
+                thumbBounds.setHeight(juce::jmax(thumbBounds.getHeight(), 28.0f));
+                UiAssets::drawAssetStretch(g, UiAssetId::ScrollbarTrack, bounds.reduced(2.0f, 0.0f));
+            }
+            else
+            {
+                thumbBounds = juce::Rectangle<float>(bounds.getX() + static_cast<float>(thumbStartPosition),
+                                                     bounds.getY() + 2.0f,
+                                                     static_cast<float>(thumbSize),
+                                                     bounds.getHeight() - 4.0f);
+                thumbBounds.setWidth(juce::jmax(thumbBounds.getWidth(), 28.0f));
+                UiAssets::drawAssetStretch(g, UiAssetId::ScrollbarTrack, bounds.reduced(0.0f, 2.0f));
+            }
+
+            // Soft pink glow beneath thumb
+            if (isMouseOver || isMouseDown)
+            {
+                juce::DropShadow glow;
+                glow.colour = juce::Colour(Overdose::Colors::PinkGlowSoft).withAlpha(isMouseDown ? 0.42f : 0.28f);
+                glow.radius = isMouseDown ? 12 : 8;
+                glow.offset = {};
+                juce::Path thumbPath;
+                const float thumbRadius = juce::jmin(thumbBounds.getWidth(), thumbBounds.getHeight()) * 0.45f;
+                thumbPath.addRoundedRectangle(thumbBounds, thumbRadius);
+                glow.drawForPath(g, thumbPath);
+            }
+
+            UiAssets::drawAssetStretch(g, UiAssetId::ScrollbarThumb, thumbBounds);
+
+            if (isMouseOver || isMouseDown)
+            {
+                const auto outline = juce::Colour(Overdose::Colors::PrimaryPink)
+                    .withAlpha(isMouseDown ? 0.58f : 0.32f);
+                g.setColour(outline);
+                g.drawRoundedRectangle(thumbBounds.reduced(0.5f),
+                                       juce::jmin(thumbBounds.getWidth(), thumbBounds.getHeight()) * 0.45f,
+                                       isMouseDown ? 1.8f : 1.2f);
+            }
+            return;
+        }
         
         // 鏍规嵁涓婚閫夋嫨鐏拌壊閰嶈壊鏂规
         juce::Colour trackBg, thumbBg, thumbHover, thumbPressed, highlight;
@@ -1220,9 +1639,9 @@ public:
         }
         else if (themeId == ThemeId::DarkBlueGrey)
         {
-            // DarkBlueGrey 涓婚 - 娴呯伆鑹茶皟
+            // DarkBlueGrey 主题 - 浅灰色调
             trackBg = UIColors::backgroundLight.darker(0.15f);
-            thumbBg = UIColors::backgroundLight.brighter(0.1f);  // 鏇存祬鐨勮儗鏅壊
+            thumbBg = UIColors::backgroundLight.brighter(0.1f);  // 更浅的背景色
             thumbHover = UIColors::textPrimary;
             thumbPressed = UIColors::panelBorder;
             highlight = UIColors::textPrimary;
@@ -1235,7 +1654,6 @@ public:
             thumbPressed = juce::Colour(0xFF7A8F9E);
             highlight = juce::Colour(0xFFC6D4DD);
         }
-        
         // 涓嶇粯鍒惰建閬撹儗鏅?- 閫忔槑鑳屾櫙璁╂粦鍧楃洿鎺ユ诞鍔ㄥ湪鍐呭涔嬩笂
         juce::ignoreUnused(trackBg);
         
@@ -1313,6 +1731,7 @@ public:
             g.drawRoundedRectangle(thumbBounds.reduced(0.5f), cornerRadius, 1.5f);
         }
     }
+
 };
 
 } // namespace OpenTune

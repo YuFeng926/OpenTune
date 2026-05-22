@@ -109,6 +109,7 @@ const char* toThemeToken(ThemeId theme)
         case ThemeId::BlueBreeze: return "blue-breeze";
         case ThemeId::DarkBlueGrey: return "dark-blue-grey";
         case ThemeId::Aurora: return "aurora";
+        case ThemeId::Overdose: return "overdose";
     }
 
     return "aurora";
@@ -118,6 +119,7 @@ ThemeId themeFromToken(const juce::String& token)
 {
     if (token == "blue-breeze") return ThemeId::BlueBreeze;
     if (token == "dark-blue-grey") return ThemeId::DarkBlueGrey;
+    if (token == "overdose") return ThemeId::Overdose;
     return ThemeId::Aurora;
 }
 

@@ -9,7 +9,8 @@ namespace OpenTune {
 namespace {
 
 constexpr double kTotalDurationEpsilon = 1e-6;
-constexpr double kMinSegmentSeconds = 0.030;     // 30 ms minimum segment duration (RB R3 stable threshold)
+constexpr double kMinSegmentSeconds = 0.030;        // 30 ms minimum OUTPUT segment duration (visual / RB R3 threshold)
+constexpr double kMinSourceSpacingSeconds = 0.150;   // 150 ms minimum SOURCE spacing between handles
 
 uint64_t makeStableId() noexcept
 {
@@ -53,6 +54,23 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
         return false;
     }
 
+    // Check that all handles have finite source_seconds and output_seconds.
+    // NaN/Inf would bypass inequality comparisons, polluting downstream
+    // tauForward/tauInverse calculations.
+    for (size_t i = 0; i < handles.size(); ++i) {
+        const auto& h = handles[i];
+        if (!std::isfinite(h.source_seconds)) {
+            outError = "Handle at index " + juce::String((int)i)
+                       + " has non-finite source_seconds";
+            return false;
+        }
+        if (!std::isfinite(h.output_seconds)) {
+            outError = "Handle at index " + juce::String((int)i)
+                       + " has non-finite output_seconds";
+            return false;
+        }
+    }
+
     // Strict monotonicity (source AND output)
     for (size_t i = 1; i < handles.size(); ++i) {
         const auto& prev = handles[i - 1];
@@ -69,6 +87,18 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
                        + juce::String((int) i)
                        + " (prev=" + juce::String(prev.output_seconds, 9)
                        + ", curr=" + juce::String(curr.output_seconds, 9) + ")";
+            return false;
+        }
+        // 150 ms minimum source-time spacing between handles.
+        // Tighter spacing produces segments too short for WSOLA to stretch
+        // without artifacts; 150 ms ≈ 1/16 note at 120 BPM.
+        const double srcGap = curr.source_seconds - prev.source_seconds;
+        if (srcGap < kMinSourceSpacingSeconds) {
+            outError = "Handles must have source_seconds spacing >=150 ms at index "
+                       + juce::String((int)i)
+                       + " (prev=" + juce::String(prev.source_seconds, 9)
+                       + ", curr=" + juce::String(curr.source_seconds, 9)
+                       + ", gap=" + juce::String(srcGap * 1000.0, 3) + " ms)";
             return false;
         }
     }
@@ -105,7 +135,7 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
 
 std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::makeIdentity(double totalDurationSeconds)
 {
-    if (totalDurationSeconds <= 0.0) {
+    if (!std::isfinite(totalDurationSeconds) || totalDurationSeconds <= 0.0) {
         AppLogger::warn("[TimeGrid] makeIdentity rejected: non-positive total duration "
                         + juce::String(totalDurationSeconds, 9));
         return nullptr;

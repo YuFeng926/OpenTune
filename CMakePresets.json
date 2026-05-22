@@ -9,7 +9,7 @@
     {
       "name": "windows-ara-vs2022",
       "displayName": "Windows VS2022 Release Tree (ARA)",
-      "generator": "Visual Studio 18 2026",
+      "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build-ara-overlay-vs18-clean",
       "cacheVariables": {
@@ -20,7 +20,7 @@
     {
       "name": "windows-nonara-vs2022",
       "displayName": "Windows VS2022 Release Tree (non-ARA)",
-      "generator": "Visual Studio 18 2026",
+      "generator": "Visual Studio 17 2022",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build-nonara-overlay-vs18-clean",
       "cacheVariables": {

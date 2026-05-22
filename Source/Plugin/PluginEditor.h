@@ -101,6 +101,7 @@ public:
     void autoTuneRequested() override;
     void pitchCurveEdited(int startFrame, int endFrame) override;
     void escapeKeyPressed() override;
+    void currentToolChanged(ToolId tool) override;
 
 private:
     struct PianoRollMaterializationSync

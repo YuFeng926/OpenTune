@@ -70,6 +70,7 @@ public:
         virtual void escapeKeyPressed() {}
         virtual void undoRequested() {}
         virtual void redoRequested() {}
+        virtual void currentToolChanged(ToolId tool) { (void)tool; }
     };
 
     enum class TimeUnit

@@ -109,6 +109,7 @@ private:
         ThemeBlueBreeze,
         ThemeDarkBlueGrey,
         ThemeAurora,
+        ThemeOverdose,
 
         MouseTrailNone = 150,
         MouseTrailClassic,

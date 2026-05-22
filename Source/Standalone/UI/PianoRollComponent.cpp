@@ -12,6 +12,7 @@
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../../PluginProcessor.h"
 #include "FrameScheduler.h"
+#include "UiAssets.h"
 #include "UiText.h"
 #include "ToolbarIcons.h"
 #include "../../Utils/AudioEditingScheme.h"
@@ -1017,7 +1018,7 @@ void PianoRollComponent::drawSelectedOriginalF0Curve(juce::Graphics& g, const st
     }
 
     if (!selectedPath.isEmpty()) {
-        if (UIColors::currentThemeId() == ThemeId::Aurora) {
+        if (UIColors::currentThemeId() == ThemeId::Aurora || UIColors::currentThemeId() == ThemeId::Overdose) {
             g.setColour(UIColors::originalF0.withAlpha(0.16f));
             juce::PathStrokeType glowStrokeType(5.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
             g.strokePath(selectedPath, glowStrokeType);
@@ -1183,6 +1184,13 @@ void PianoRollComponent::drawSelectionBox(juce::Graphics& g, ThemeId themeId) {
         strokeAlpha = 0.90f;
         strokeThickness = 2.0f;
     }
+    else if (themeId == ThemeId::Overdose) {
+        fill = UIColors::lightPurple;
+        stroke = UIColors::accent;
+        fillAlpha = 0.15f;
+        strokeAlpha = 0.65f;
+        strokeThickness = 1.2f;
+    }
 
     g.setColour(fill.withAlpha(fillAlpha));
     g.fillRoundedRectangle(rect, 3.0f);
@@ -1208,10 +1216,12 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         UIColors::fillAuroraTimelineBackground(g, bounds, UIColors::cornerRadius);
     else if (themeId == ThemeId::BlueBreeze)
         UIColors::fillMistedTimelineField(g, bounds, UIColors::cornerRadius);
+    else if (themeId == ThemeId::Overdose)
+        UiAssets::drawAssetStretch(g, UiAssetId::PanelEditorMain, bounds);
     else
         g.setColour(UIColors::rollBackground);
 
-    if (themeId != ThemeId::DarkBlueGrey && themeId != ThemeId::Aurora && themeId != ThemeId::BlueBreeze)
+    if (themeId != ThemeId::DarkBlueGrey && themeId != ThemeId::Aurora && themeId != ThemeId::BlueBreeze && themeId != ThemeId::Overdose)
         g.fillPath(backgroundPath);
 
     renderer_->drawTimeRuler(g, ctx);
@@ -1247,7 +1257,7 @@ void PianoRollComponent::paint(juce::Graphics& g) {
                 if (showOriginalF0_) {
                     const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
                     if (!originalF0.empty())
-                        renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, UIColors::isAuroraTheme() ? 0.84f : 0.55f, true, ctx, item);
+                        renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, (UIColors::isAuroraTheme() || UIColors::isOverdoseTheme()) ? 0.84f : 0.55f, true, ctx, item);
                 }
 
                 if (showCorrectedF0_ && !item.correctedF0.empty())
@@ -2186,6 +2196,11 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             break;
     }
 
+    // 通知监听者工具已切换（参数面板需要同步按钮高亮）
+    if (toolChanged) {
+        listeners_.call([tool](Listener& l) { l.currentToolChanged(tool); });
+    }
+
     if (toolChanged || clearedAnchorPreview) {
         invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Interaction),
                          getLocalBounds(),
@@ -2600,6 +2615,12 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext() const
     ctx.timeGridSelectedHandleId = interactionState_.timeTool.selectedHandleId;
     // §8.5 (Phase J) — currentTool drives view-mode in renderer.
     ctx.currentTool = currentTool_;
+
+    // §8.5 (Phase I): TimeGrid handles 使用 materialization-local
+    // output_seconds，需要投影到 timeline time 再通过 timeToX 转屏幕坐标。
+    ctx.materializationTimeToTimeline = [this](double materializationSeconds) {
+        return projectMaterializationTimeToTimeline(materializationSeconds);
+    };
 
     return ctx;
 }

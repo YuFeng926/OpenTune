@@ -802,6 +802,7 @@ void PianoRollToolHandler::cancelActiveMouseGesture()
     state.drawing.isDrawingNote = false;
     state.drawing.isPlacingAnchors = false;
     state.drawing.pendingAnchors.clear();
+    state.timeTool.clear();
     ctx_.clearNoteDraft();
 }
 
@@ -2116,7 +2117,10 @@ uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) 
     int closestDistance = std::numeric_limits<int>::max();
     for (const auto& h : snap->handles()) {
         if (h.locked) continue;   // endpoints not selectable
-        const int handleX = ctx_.timeToX(h.output_seconds);
+        const double timelineTime = ctx_.projectMaterializationTimeToTimeline
+            ? ctx_.projectMaterializationTimeToTimeline(h.output_seconds)
+            : h.output_seconds;
+        const int handleX = ctx_.timeToX(timelineTime);
         const int dx = std::abs(e.x - handleX);
         if (dx <= kHitToleranceX && dx < closestDistance) {
             closestId = h.id;
@@ -2150,7 +2154,18 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
     const uint64_t hitId = hitTestTimeGridHandle(e);
 
     if (hitId == 0) {
-        // Clicked empty space — clear selection (unless Shift held).
+        // Clicked empty space — seek playhead + clear selection.
+        // §8.4 (Phase I): TimeTool 下主区空白点击现在也会重定位播放头，
+        // 与标尺区点击行为一致，消除"点击无响应"的用户困惑。
+        // §8.4 (Phase I bugfix): playhead seek must use TIMELINE time
+        // (host-absolute), NOT materialization-local time.  As a general
+        // rule, everything that's "seek/play/pause/transport" operates in
+        // timeline time; everything that's "edit handle/grid" operates in
+        // materialization-local output time.
+        const double timelineTime = ctx_.xToTime(e.x);
+        if (timelineTime >= 0.0 && ctx_.notifyPlayheadChange) {
+            ctx_.notifyPlayheadChange(timelineTime);
+        }
         if (!e.mods.isShiftDown()) {
             if ((tt.selectedHandleId != 0 || !tt.additionalSelectedIds.empty())
                 && ctx_.notifyTimeGridChanged) {
@@ -2200,7 +2215,10 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
         tt.additionalSelectedIds.clear();
     }
 
-    tt.isDraggingHandle = true;
+    // §8.4 (Phase I): 命中 handle 后先进入 pending 状态。
+    // mouseDrag 越过阈值后才转为真正拖拽，防止轻微抖动触发 undo。
+    tt.dragPending = true;
+    tt.isDraggingHandle = false;
     tt.draggedHandleId = hitId;
     tt.dragSnapDisabled = e.mods.isAltDown();   // Phase H: Alt disables clamp
     tt.dragOriginalSnapshot = snap;
@@ -2214,9 +2232,27 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
 void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
 {
     auto& tt = ctx_.getState().timeTool;
+
+    // §8.4 (Phase I): 检查 dragPending 阈值。
+    // Time handles only move horizontally; use X-axis-only threshold so
+    // vertical jitter does not start a drag that produces an identical output.
+    if (tt.dragPending) {
+        const int dx = std::abs(e.x - tt.dragStartPixel.x);
+        constexpr int kHandleDragThreshold = 6;
+        if (dx <= kHandleDragThreshold) {
+            return;   // 尚未越过阈值，保持 pending
+        }
+        tt.dragPending = false;
+        tt.isDraggingHandle = true;
+    }
+
     if (!tt.isDraggingHandle || tt.dragOriginalSnapshot == nullptr) return;
 
-    const double newOutputTime = ctx_.xToTime(e.x);
+    // pixel → timeline time → materialization-local output time
+    const double timelineTime = ctx_.xToTime(e.x);
+    const double newOutputTime = ctx_.projectTimelineTimeToMaterialization
+        ? ctx_.projectTimelineTimeToMaterialization(timelineTime)
+        : timelineTime;
     if (newOutputTime < 0.0) return;
 
     const auto& origHandles = tt.dragOriginalSnapshot->handles();
@@ -2303,6 +2339,15 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
 void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
 {
     auto& tt = ctx_.getState().timeTool;
+
+    // §8.4 (Phase I): 如果从未越过拖动阈值，仅保留 selection 不提交。
+    if (tt.dragPending) {
+        tt.dragPending = false;
+        tt.dragOriginalSnapshot.reset();
+        tt.dragWorkingSnapshot.reset();
+        return;
+    }
+
     if (!tt.isDraggingHandle) return;
 
     if (tt.dragWorkingSnapshot != nullptr
@@ -2363,17 +2408,34 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
     auto snap = ctx_.getTimeGridSnapshot();
     if (snap == nullptr) return;
 
-    const double clickedTime = ctx_.xToTime(e.x);
+    const double timelineTime = ctx_.xToTime(e.x);
+    const double clickedTime = ctx_.projectTimelineTimeToMaterialization
+        ? ctx_.projectTimelineTimeToMaterialization(timelineTime)
+        : timelineTime;
     if (clickedTime <= 0.0) return;
 
     const auto& handles = snap->handles();
     if (handles.size() < 2) return;
 
-    // Reject if too close to existing handle (would violate 30ms spacing).
-    constexpr double kMinSpacingSec = 0.030;
+    // Reject if too close to existing handle.
+    // Output spacing ≥30 ms (visual / RB R3 threshold).
+    // Source spacing ≥150 ms (≈1/16 note @ 120 BPM; shorter segments
+    //   degrade WSOLA quality and create audible artifacts).
+    //
+    // § Phase I bugfix: clickedTime is output/materialization time.
+    // Source spacing check must compare against source_seconds, so
+    // compute clickedOutput ↔ clickedSource via tauInverse.
+    // Identity grid → tauInverse is identity → same value.
+    const double clickedSourceSeconds = snap->tauInverse(clickedTime);
+    constexpr double kMinOutputSpacingSec = 0.030;
+    constexpr double kMinSourceSpacingSec = 0.150;
     for (const auto& h : handles) {
-        if (std::abs(h.output_seconds - clickedTime) < kMinSpacingSec) {
-            AppLogger::log("[TimeTool] insert rejected: within 30ms of existing handle");
+        if (std::abs(h.output_seconds - clickedTime) < kMinOutputSpacingSec) {
+            AppLogger::log("[TimeTool] insert rejected: within 30ms of existing handle (output)");
+            return;
+        }
+        if (std::abs(h.source_seconds - clickedSourceSeconds) < kMinSourceSpacingSec) {
+            AppLogger::log("[TimeTool] insert rejected: within 150ms of existing handle (source)");
             return;
         }
     }
@@ -2401,7 +2463,9 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
 
     TimeHandle newHandle;
     newHandle.id = maxId + 1;
-    newHandle.source_seconds = clickedTime;   // identity insert
+    // For non-identity TimeGrid, map output (display) time back to source
+    // time via tauInverse.  Identity grid → tauInverse is identity.
+    newHandle.source_seconds = snap->tauInverse(clickedTime);
     newHandle.output_seconds = clickedTime;
     newHandle.kind = HandleKind::UserAdded;
     newHandle.locked = false;

@@ -144,6 +144,11 @@ struct TimeToolState
     // mouseUp via TimeGridEditAction.
     std::shared_ptr<const TimeGridSnapshot> dragWorkingSnapshot;
 
+    // §8.4 (Phase I) — 拖动待定状态。handleMouseDown 命中 handle 后设为 true，
+    // 但直到 mouseDrag 距离超过阈值才进入 isDraggingHandle。如果 mouseUp 时仍
+    // 处于 dragPending（未越过阈值），则仅保留 selection 不提交 undo。
+    bool dragPending = false;
+
     void clear()
     {
         hoveredHandleId = 0;
@@ -156,6 +161,7 @@ struct TimeToolState
         dragStartOutputSeconds = 0.0;
         dragStartPixel = {};
         dragWorkingSnapshot.reset();
+        dragPending = false;
     }
 
     bool isSelected(uint64_t id) const

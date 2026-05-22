@@ -10,7 +10,7 @@
 - 研究与后续规划必须用中文，并且以结构性正确方案为第一优先，禁止止血、最小改动、防御性编程、兜底、并行旧新结构、兼容层。[VERIFIED: AGENTS.md:10][VERIFIED: AGENTS.md:12][VERIFIED: AGENTS.md:14]
 - VST3 UI 与 Standalone UI 必须继续隔离；`Source/Plugin/PluginEditor.h/.cpp` 只属于 VST3，`Source/Standalone/PluginEditor.h/.cpp` 只属于 Standalone。[VERIFIED: AGENTS.md:17][VERIFIED: .planning/codebase/ARCHITECTURE.md:11]
 - shared processor 继续由 `Source/PluginProcessor.h/.cpp` 统一负责，ARA 适配层问题不得通过扩 core 把复杂度继续扩散到共享层。[VERIFIED: AGENTS.md:18][VERIFIED: .planning/PROJECT.md:70][VERIFIED: .planning/PROJECT.md:76]
-- `VST3 References/docs/adr/ADR-0003-ara-playback-controller-interface.md` 被 AGENTS 作为参考文件列出，但当前 live tree 根目录不存在 `VST3 References/` 目录，因此该 ADR 不能作为本 phase 的可读 live evidence；本研究改用 vendored JUCE ARA 源码与 example 校对宿主播放控制与 edit-batch 契约。[VERIFIED: AGENTS.md:24][VERIFIED: read `E:\\TRAE\\OPenTune0427` directory][VERIFIED: glob/read `E:\\TRAE\\OPenTune0427\VST3 References\docs\adr\ADR-0003-ara-playback-controller-interface.md` failed][VERIFIED: JUCE-master/examples/Plugins/ARAPluginDemo.h:2074]
+- `VST3 References/docs/adr/ADR-0003-ara-playback-controller-interface.md` 被 AGENTS 作为参考文件列出，但当前 live tree 根目录不存在 `VST3 References/` 目录，因此该 ADR 不能作为本 phase 的可读 live evidence；本研究改用 vendored JUCE ARA 源码与 example 校对宿主播放控制与 edit-batch 契约。[VERIFIED: AGENTS.md:24][VERIFIED: read `G:\\OpenTune0519New1` directory][VERIFIED: glob/read `G:\\OpenTune0519New1\VST3 References\docs\adr\ADR-0003-ara-playback-controller-interface.md` failed][VERIFIED: JUCE-master/examples/Plugins/ARAPluginDemo.h:2074]
 
 ## Phase Requirements
 
@@ -55,7 +55,7 @@
 ### 5. 与文档/记忆的偏差
 
 - `ROADMAP.md`、`PROJECT.md` 与 `REQUIREMENTS.md` 对 Phase 23 的方向性要求与 live tree 问题是对齐的；本研究没有发现这三份 phase 文档与当前源码的目标冲突。[VERIFIED: .planning/PROJECT.md:16][VERIFIED: .planning/REQUIREMENTS.md:12][VERIFIED: .planning/ROADMAP.md:233][VERIFIED: Source/ARA/OpenTuneDocumentController.h:150]
-- 偏差主要来自历史参考资产：`AGENTS.md` 指向的 `VST3 References/.../ADR-0003...` 在当前 live tree 不存在，而 `.planning/codebase/CONCERNS.md` 仍提到 `AudioSourceState::renderCache`，但 live tree 的 `AudioSourceState` 只剩 `name + audioBuffer + sampleRate + channelCount + sampleCount`；因此后续 planner 必须继续以 live tree 为准，而不能把记忆文档当作结构事实源。[VERIFIED: AGENTS.md:24][VERIFIED: read `E:\\TRAE\\OPenTune0427` directory][VERIFIED: .planning/codebase/CONCERNS.md:47][VERIFIED: Source/ARA/AudioSourceState.h:9]
+- 偏差主要来自历史参考资产：`AGENTS.md` 指向的 `VST3 References/.../ADR-0003...` 在当前 live tree 不存在，而 `.planning/codebase/CONCERNS.md` 仍提到 `AudioSourceState::renderCache`，但 live tree 的 `AudioSourceState` 只剩 `name + audioBuffer + sampleRate + channelCount + sampleCount`；因此后续 planner 必须继续以 live tree 为准，而不能把记忆文档当作结构事实源。[VERIFIED: AGENTS.md:24][VERIFIED: read `G:\\OpenTune0519New1` directory][VERIFIED: .planning/codebase/CONCERNS.md:47][VERIFIED: Source/ARA/AudioSourceState.h:9]
 
 ## 结构建议
 

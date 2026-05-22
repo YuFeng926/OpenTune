@@ -1,6 +1,7 @@
 #include "ArrangementViewComponent.h"
 #include "AuroraTheme.h"
 #include "FrameScheduler.h"
+#include "UiAssets.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../../Utils/KeyShortcutConfig.h"
 #include "../../Utils/PlacementActions.h"
@@ -524,6 +525,10 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
     {
         UIColors::fillMistedTimelineField(g, bounds, 0.0f);
     }
+    else if (themeId == ThemeId::Overdose)
+    {
+        UiAssets::drawAssetStretch(g, UiAssetId::PanelEditorMain, bounds);
+    }
     else if (themeId == ThemeId::DarkBlueGrey) {
         // Soothe 2 Spectrum Background Style
         // It has a specific gradient and grid look
@@ -532,7 +537,7 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         g.fillAll(UIColors::rollBackground);
     }
 
-    if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze)
+    if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
     {
         for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
         {
@@ -590,7 +595,7 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
                 g.setColour(UIColors::panelBorder.withAlpha(0.55f));
                 g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
             }
-            else if (themeId == ThemeId::BlueBreeze)
+            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
             {
                 const auto topColor = isSelected
                     ? UIColors::buttonHover.interpolatedWith(UIColors::glassHighlight, 0.12f)
@@ -672,7 +677,7 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
                 {
                     g.setColour(juce::Colours::white.withAlpha(0.85f));
                 }
-                else if (themeId == ThemeId::BlueBreeze)
+            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
                 {
                     g.setColour(UIColors::pianoRollWaveform.withAlpha(0.26f));
                 }
@@ -841,6 +846,10 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
     {
         UIColors::fillMistedTimelineField(g, rulerArea.toFloat(), 0.0f);
     }
+    else if (themeId == ThemeId::Overdose)
+    {
+        // Overdose panel skin is drawn once by ArrangementViewComponent::paint().
+    }
     else
     {
         g.setColour(UIColors::rollBackground);
@@ -851,8 +860,8 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
                     ? UIColors::panelBorder.withAlpha(0.18f)
                     : (themeId == ThemeId::Aurora
                            ? UIColors::gridLine.withAlpha(0.060f)
-                           : (themeId == ThemeId::BlueBreeze ? UIColors::pianoRollGrid.withAlpha(0.040f) : UIColors::panelBorder)));
-    g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), themeId == ThemeId::BlueBreeze ? 0.7f : 1.0f);
+                           : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? UIColors::pianoRollGrid.withAlpha(0.040f) : UIColors::panelBorder)));
+    g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.7f : 1.0f);
 
     double sr = processor_.getSampleRate();
     if (sr <= 0.0)
@@ -896,9 +905,9 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
                             ? UIColors::gridLine.withAlpha(0.10f)
                             : (themeId == ThemeId::Aurora
                                    ? UIColors::gridLine.withAlpha(0.080f)
-                                   : (themeId == ThemeId::BlueBreeze ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine)));
+                                   : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine)));
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerHeight_ - 10),
-                       static_cast<float>(pixelX), static_cast<float>(rulerHeight_), themeId == ThemeId::BlueBreeze ? 0.7f : 1.0f);
+                       static_cast<float>(pixelX), static_cast<float>(rulerHeight_), (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.7f : 1.0f);
             
             // Draw label (Bar:Beat) -> actually just Bar number usually for overview
             // Let's show Bar number (1-based)
@@ -911,7 +920,7 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
             else
                 label = juce::String::formatted("%lld.%lld", (long long) bar, (long long) beatInBar);
             
-            g.setColour(themeId == ThemeId::BlueBreeze ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary);
+            g.setColour((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary);
             g.drawText(label, pixelX - 20, 2, 40, rulerHeight_ - 12, juce::Justification::centred);
         }
     }
@@ -937,16 +946,16 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
                             ? UIColors::gridLine.withAlpha(0.10f)
                             : (themeId == ThemeId::Aurora
                                    ? UIColors::gridLine.withAlpha(0.080f)
-                                   : (themeId == ThemeId::BlueBreeze ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine)));
+                                   : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine)));
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerHeight_ - 10),
-                       static_cast<float>(pixelX), static_cast<float>(rulerHeight_), themeId == ThemeId::BlueBreeze ? 0.7f : 1.0f);
+                       static_cast<float>(pixelX), static_cast<float>(rulerHeight_), (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.7f : 1.0f);
 
             int totalSecs = static_cast<int>(time);
             int mins = totalSecs / 60;
             int secs = totalSecs % 60;
             juce::String timeStr = juce::String::formatted("%d:%02d", mins, secs);
 
-            g.setColour(themeId == ThemeId::BlueBreeze ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary);
+            g.setColour((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary);
             g.drawText(timeStr, pixelX - 20, 2, 40, rulerHeight_ - 12, juce::Justification::centred);
         }
     }
@@ -1012,7 +1021,7 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
                 g.setColour(UIColors::gridLine.withAlpha(isMeasure ? 0.060f : 0.022f));
                 g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
             }
-            else if (themeId == ThemeId::BlueBreeze)
+            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
             {
                 g.setColour(UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f));
                 g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
@@ -1053,7 +1062,7 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
 
             if (themeId == ThemeId::Aurora)
                 g.setColour(UIColors::gridLine.withAlpha(0.022f));
-            else if (themeId == ThemeId::BlueBreeze)
+            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
                 g.setColour(UIColors::pianoRollGrid.withAlpha(0.022f));
             else
                 g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::panelBorder.withAlpha(0.12f) : UIColors::panelBorder.withAlpha(0.25f));

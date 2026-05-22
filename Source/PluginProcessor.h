@@ -170,7 +170,7 @@ public:
     void getStateInformation(juce::MemoryBlock& destData) override;
     void setStateInformation(const void* data, int sizeInBytes) override;
 
-    void handleAsyncUpdate() override { runReclaimSweepOnMessageThread(); }
+    void handleAsyncUpdate() override;
 
     double getSampleRate() const { return currentSampleRate_.load(std::memory_order_relaxed); }
     

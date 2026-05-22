@@ -1,5 +1,6 @@
 #include "TrackPanelComponent.h"
 #include "UIColors.h"
+#include "UiAssets.h"
 
 namespace OpenTune {
 
@@ -8,8 +9,7 @@ void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsH
 {
     auto bounds = getLocalBounds().toFloat().reduced(2.0f);
     bool isToggled = getToggleState();
-
-    juce::ignoreUnused(bounds);
+    const auto themeId = UIColors::currentThemeId();
     
     // Custom colors requested by user: Mute = Deep Red, Solo = Orange
     juce::Colour activeBase;
@@ -18,7 +18,22 @@ void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsH
     else
         activeBase = juce::Colour(0xFFE67E22); // Orange (Standard Studio Color)
 
-    if (UIColors::currentThemeId() == ThemeId::Aurora)
+    if (themeId == ThemeId::Overdose)
+    {
+        UiAssets::drawAssetStretch(g, UiAssetId::TransportButtonShell, bounds);
+
+        if (isToggled || shouldDrawButtonAsHighlighted || shouldDrawButtonAsDown)
+        {
+            const auto outline = (isToggled || shouldDrawButtonAsDown)
+                ? activeBase.brighter(0.18f).withAlpha(0.92f)
+                : juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.42f);
+            g.setColour(outline);
+            g.drawRoundedRectangle(bounds.reduced(0.75f),
+                                   UIColors::currentThemeStyle().controlRadius,
+                                   (isToggled || shouldDrawButtonAsDown) ? 1.45f : 1.0f);
+        }
+    }
+    else if (themeId == ThemeId::Aurora)
     {
         UIColors::drawAuroraButtonChrome(g,
                                          bounds,
@@ -36,7 +51,9 @@ void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsH
     }
 
     // Icon text
-    g.setColour(UIColors::textPrimary);
+    g.setColour(themeId == ThemeId::Overdose && isToggled
+                    ? activeBase.brighter(0.42f)
+                    : UIColors::textPrimary);
     g.setFont(UIColors::getUIFont(14.0f));
 
     juce::String iconText = (iconType_ == IconType::Mute) ? "M" : "S";
@@ -119,7 +136,12 @@ void TrackPanelComponent::paint(juce::Graphics& g)
     auto bounds = getLocalBounds().toFloat().reduced(shadowMargin);
 
     // Fill background (shadow is drawn internally by fillPanelBackground if needed, or we add it)
-    if (themeId == ThemeId::Aurora)
+    if (themeId == ThemeId::Overdose)
+    {
+        UIColors::drawShadow(g, bounds);
+        UiAssets::drawAssetStretch(g, UiAssetId::PanelTrackColumn, bounds);
+    }
+    else if (themeId == ThemeId::Aurora)
     {
         UIColors::drawShadow(g, bounds);
         UIColors::fillAuroraTimelineBackground(g, bounds, style.panelRadius);
@@ -239,6 +261,23 @@ void TrackPanelComponent::paint(juce::Graphics& g)
                 const float y1 = cardBounds.getBottom() - style.controlRadius;
                 g.setColour(UIColors::accent.withAlpha(0.66f));
                 g.drawLine(x, y0, x, y1, 2.5f);
+            }
+        }
+        else if (themeId == ThemeId::Overdose)
+        {
+            const auto active = tracks_[i].isActive;
+            UiAssets::drawAssetStretch(g, UiAssetId::PanelTrackCard, cardBounds);
+
+            if (active)
+            {
+                g.setColour(juce::Colour(Overdose::Colors::PinkGlowSoft).withAlpha(0.36f));
+                g.fillRoundedRectangle(cardBounds.reduced(1.0f), juce::jmax(0.0f, style.controlRadius - 1.0f));
+
+                const float x = cardBounds.getX() + 2.0f;
+                const float y0 = cardBounds.getY() + style.controlRadius;
+                const float y1 = cardBounds.getBottom() - style.controlRadius;
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.72f));
+                g.drawLine(x, y0, x, y1, 2.4f);
             }
         }
         else if (themeId == ThemeId::DarkBlueGrey)

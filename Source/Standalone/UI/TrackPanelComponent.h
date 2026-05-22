@@ -15,6 +15,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <cmath>
 #include "UIColors.h"
+#include "UiAssets.h"
 
 namespace OpenTune {
 
@@ -269,6 +270,20 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
                                                   slider.isMouseOverOrDragging(),
                                                   rotaryStartAngle,
                                                   rotaryEndAngle);
+                return;
+            }
+
+            if (UIColors::currentThemeId() == ThemeId::Overdose)
+            {
+                auto bounds = juce::Rectangle<float>(static_cast<float>(x),
+                                                    static_cast<float>(y),
+                                                    static_cast<float>(width),
+                                                    static_cast<float>(height)).reduced(0.5f);
+                UiAssets::drawFilmstripFrame(g,
+                                             UiAssetId::KnobPrimaryFilmstrip,
+                                             bounds,
+                                             sliderPos,
+                                             61);
                 return;
             }
 

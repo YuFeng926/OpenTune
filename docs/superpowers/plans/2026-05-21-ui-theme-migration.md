@@ -8,8 +8,8 @@
 
 **Tech Stack:** C++17, JUCE, header-only theme system
 
-**源仓库:** `E:\TRAE\OpenTune-bugfix518`
-**目标仓库:** `E:\TRAE\OpenTune0519New`
+**源仓库:** `G:\OpenTune0519New1`
+**目标仓库:** `G:\OpenTune0519New1`
 
 ---
 
@@ -26,17 +26,17 @@
 
 - [ ] **Step 1: Copy BlueBreezeTheme.h**
 ```bash
-Copy-Item "E:\TRAE\OpenTune-bugfix518\Source\Standalone\UI\BlueBreezeTheme.h" -Destination "E:\TRAE\OpenTune0519New\Source\Standalone\UI\BlueBreezeTheme.h" -Force
+Copy-Item "G:\OpenTune0519New1\Source\Standalone\UI\BlueBreezeTheme.h" -Destination "G:\OpenTune0519New1\Source\Standalone\UI\BlueBreezeTheme.h" -Force
 ```
 
 - [ ] **Step 2: Copy DarkBlueGreyTheme.h**
 ```bash
-Copy-Item "E:\TRAE\OpenTune-bugfix518\Source\Standalone\UI\DarkBlueGreyTheme.h" -Destination "E:\TRAE\OpenTune0519New\Source\Standalone\UI\DarkBlueGreyTheme.h" -Force
+Copy-Item "G:\OpenTune0519New1\Source\Standalone\UI\DarkBlueGreyTheme.h" -Destination "G:\OpenTune0519New1\Source\Standalone\UI\DarkBlueGreyTheme.h" -Force
 ```
 
 - [ ] **Step 3: Copy AuroraTheme.h**
 ```bash
-Copy-Item "E:\TRAE\OpenTune-bugfix518\Source\Standalone\UI\AuroraTheme.h" -Destination "E:\TRAE\OpenTune0519New\Source\Standalone\UI\AuroraTheme.h" -Force
+Copy-Item "G:\OpenTune0519New1\Source\Standalone\UI\AuroraTheme.h" -Destination "G:\OpenTune0519New1\Source\Standalone\UI\AuroraTheme.h" -Force
 ```
 
 ### Task 1.2: 覆盖 Token 聚合与缓存层 (2 files)
@@ -46,12 +46,12 @@ Copy-Item "E:\TRAE\OpenTune-bugfix518\Source\Standalone\UI\AuroraTheme.h" -Desti
 
 - [ ] **Step 4: Copy ThemeTokens.h**
 ```bash
-Copy-Item "E:\TRAE\OpenTune-bugfix518\Source\Standalone\UI\ThemeTokens.h" -Destination "E:\TRAE\OpenTune0519New\Source\Standalone\UI\ThemeTokens.h" -Force
+Copy-Item "G:\OpenTune0519New1\Source\Standalone\UI\ThemeTokens.h" -Destination "G:\OpenTune0519New1\Source\Standalone\UI\ThemeTokens.h" -Force
 ```
 
 - [ ] **Step 5: Copy UIColors.h**
 ```bash
-Copy-Item "E:\TRAE\OpenTune-bugfix518\Source\Standalone\UI\UIColors.h" -Destination "E:\TRAE\OpenTune0519New\Source\Standalone\UI\UIColors.h" -Force
+Copy-Item "G:\OpenTune0519New1\Source\Standalone\UI\UIColors.h" -Destination "G:\OpenTune0519New1\Source\Standalone\UI\UIColors.h" -Force
 ```
 
 ### Task 1.3: 覆盖 LookAndFeel 层 (3 files)
@@ -62,17 +62,17 @@ Copy-Item "E:\TRAE\OpenTune-bugfix518\Source\Standalone\UI\UIColors.h" -Destinat
 
 - [ ] **Step 6: Copy OpenTuneLookAndFeel.h**
 ```bash
-Copy-Item "E:\TRAE\OpenTune-bugfix518\Source\Standalone\UI\OpenTuneLookAndFeel.h" -Destination "E:\TRAE\OpenTune0519New\Source\Standalone\UI\OpenTuneLookAndFeel.h" -Force
+Copy-Item "G:\OpenTune0519New1\Source\Standalone\UI\OpenTuneLookAndFeel.h" -Destination "G:\OpenTune0519New1\Source\Standalone\UI\OpenTuneLookAndFeel.h" -Force
 ```
 
 - [ ] **Step 7: Copy AuroraLookAndFeel.h**
 ```bash
-Copy-Item "E:\TRAE\OpenTune-bugfix518\Source\Standalone\UI\AuroraLookAndFeel.h" -Destination "E:\TRAE\OpenTune0519New\Source\Standalone\UI\AuroraLookAndFeel.h" -Force
+Copy-Item "G:\OpenTune0519New1\Source\Standalone\UI\AuroraLookAndFeel.h" -Destination "G:\OpenTune0519New1\Source\Standalone\UI\AuroraLookAndFeel.h" -Force
 ```
 
 - [ ] **Step 8: Copy AuroraLookAndFeel.cpp**
 ```bash
-Copy-Item "E:\TRAE\OpenTune-bugfix518\Source\Standalone\UI\AuroraLookAndFeel.cpp" -Destination "E:\TRAE\OpenTune0519New\Source\Standalone\UI\AuroraLookAndFeel.cpp" -Force
+Copy-Item "G:\OpenTune0519New1\Source\Standalone\UI\AuroraLookAndFeel.cpp" -Destination "G:\OpenTune0519New1\Source\Standalone\UI\AuroraLookAndFeel.cpp" -Force
 ```
 
 ---

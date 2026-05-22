@@ -77,7 +77,28 @@ void TopBarComponent::paint(juce::Graphics& g)
     auto bounds = getLocalBounds().toFloat().reduced(shadowMargin);
 
     // 顶部条属于"悬浮层级"，使用更明显但仍柔和的 L2 阴影
-    if (UIColors::currentThemeId() == ThemeId::Aurora)
+    if (UIColors::currentThemeId() == ThemeId::Overdose)
+    {
+        UIColors::drawShadow(g, bounds, UIColors::ShadowLevel::Float);
+
+        juce::Path tray;
+        tray.addRoundedRectangle(bounds, style.panelRadius);
+
+        // 扁平面板：纯色填充 + 柔和边框 + 顶线高光
+        g.setColour(juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(0.96f));
+        g.fillPath(tray);
+
+        g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.48f));
+        g.strokePath(tray, juce::PathStrokeType(1.0f));
+
+        g.setColour(juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.38f));
+        g.drawLine(bounds.getX() + style.panelRadius,
+                   bounds.getY() + 1.0f,
+                   bounds.getRight() - style.panelRadius,
+                   bounds.getY() + 1.0f,
+                   1.0f);
+    }
+    else if (UIColors::currentThemeId() == ThemeId::Aurora)
     {
         UIColors::drawShadow(g, bounds, UIColors::ShadowLevel::Float);
 
