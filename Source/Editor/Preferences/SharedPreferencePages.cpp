@@ -51,6 +51,7 @@ public:
         themeSelector_.addItem(LOC(kThemeBlueBreeze), 1);
         themeSelector_.addItem(LOC(kThemeDarkBlueGrey), 2);
         themeSelector_.addItem(LOC(kThemeAurora), 3);
+        themeSelector_.addItem(LOC(kThemeOverdose), 4);
         themeSelector_.setSelectedId(static_cast<int>(state.shared.theme) + 1, juce::dontSendNotification);
         themeSelector_.onChange = [this] {
             appPreferences_.setTheme(static_cast<ThemeId>(themeSelector_.getSelectedId() - 1));

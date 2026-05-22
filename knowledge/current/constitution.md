@@ -80,7 +80,7 @@ Standalone 与 VST3/ARA 共享同一 `PluginProcessor` 内核，差异通过 `So
 | 模型 | 用途 | 路径 |
 |------|------|------|
 | RMVPE | F0 音高提取 | `models/rmvpe.onnx` |
-| PC-NSF-HiFiGAN | 神经声码器 | `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx` |
+| PC-NSF-HiFiGAN | 神经声码器 | `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx`（构建后复制为 `models/hifigan.onnx`） |
 
 ## 关键编译宏
 

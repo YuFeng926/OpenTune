@@ -97,6 +97,11 @@ public:
         uint64_t timeGridHoveredHandleId = 0;
         uint64_t timeGridSelectedHandleId = 0;
 
+        // ⚡️ vocal-time-stretch §8.5 (Phase I) — 将 materialization-local 的
+        // handle output_seconds 转换为 timeline time，供 drawTimeGridHandles
+        // 通过 timeToX 正确映射到屏幕坐标。在 Standalone 模式下此投影为恒等。
+        std::function<double(double)> materializationTimeToTimeline;
+
         // ⚡️ vocal-time-stretch §8.5 (Phase J) — current tool drives view
         // mode: TimeTool → Time view (no piano keys, no notes/F0, full-height
         // handles); else → Pitch view (existing).

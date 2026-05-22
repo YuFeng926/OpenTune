@@ -376,6 +376,10 @@ juce_add_plugin(OpenTune
 # ==============================================================================
 # Binary Data (Resources)
 # ==============================================================================
+file(GLOB OPENTUNE_UI_THEME_ASSETS CONFIGURE_DEPENDS
+    "Resources/UI/assets/*.png")
+list(SORT OPENTUNE_UI_THEME_ASSETS)
+
 juce_add_binary_data(OpenTuneResources
     SOURCES
         Resources/Fonts/HONORSansCN-Medium.ttf
@@ -467,6 +471,7 @@ juce_add_binary_data(OpenTuneResources
         Resources/PianoSamples-mp3/piano_106.mp3
         Resources/PianoSamples-mp3/piano_107.mp3
         Resources/PianoSamples-mp3/piano_108.mp3
+        ${OPENTUNE_UI_THEME_ASSETS}
 )
 
 # ==============================================================================
@@ -554,6 +559,7 @@ target_sources(OpenTune
 
         # UI Layer
         Source/Standalone/UI/UIColors.h
+        Source/Standalone/UI/UiAssets.h
         Source/Standalone/UI/UiText.h
         Source/Standalone/UI/ThemeTokens.h
         Source/Standalone/UI/OpenTuneLookAndFeel.h

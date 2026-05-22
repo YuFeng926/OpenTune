@@ -77,7 +77,7 @@
 - Binary data currently embeds `Resources/Fonts/HONORSansCN-Medium.ttf` through `CMakeLists.txt:349`, `CMakeLists.txt:351`.
 - App icon file is `Resources/AppIcon.png`, referenced by `CMakeLists.txt:339`, `CMakeLists.txt:340`.
 - Help document source is `docs/UserGuide.html`; it is packaged for Standalone on macOS and copied to `docs/` beside the Standalone executable on Windows via `CMakeLists.txt:693`, `CMakeLists.txt:697`, `CMakeLists.txt:788`.
-- AI model source files in the repo are `models/rmvpe.onnx` and `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx`, then copied into output `models/` as `rmvpe.onnx` and `hifigan.onnx` in `CMakeLists.txt:704`, `CMakeLists.txt:705`, `CMakeLists.txt:753`, `CMakeLists.txt:844`.
+- AI model source files in the repo are `models/rmvpe.onnx` and `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx`, then copied into output `models/` as `rmvpe.onnx` and `hifigan.onnx` in `CMakeLists.txt:704`, `CMakeLists.txt:705`, `CMakeLists.txt:753`, `CMakeLists.txt:844`.
 
 ## Platform Requirements
 

@@ -14,6 +14,7 @@
 #include "Utils/Note.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/TimeCoordinate.h"
+#include "UI/UiAssets.h"
 
 #if JucePlugin_Enable_ARA
 #include "ARA/OpenTuneDocumentController.h"
@@ -351,6 +352,12 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 
 void OpenTuneAudioProcessorEditor::paint(juce::Graphics& g)
 {
+    if (UIColors::currentThemeId() == ThemeId::Overdose)
+    {
+        UiAssets::drawAssetCover(g, UiAssetId::BackgroundMain, getLocalBounds().toFloat());
+        return;
+    }
+
     g.fillAll(UIColors::backgroundDark);
 }
 
@@ -1455,6 +1462,11 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
         return;
     }
 
+}
+
+void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
+{
+    parameterPanel_.setActiveTool(static_cast<int>(tool));
 }
 
 void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame)

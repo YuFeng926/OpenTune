@@ -1,4 +1,5 @@
 #include "PianoRollRenderer.h"
+#include "../UiAssets.h"
 #include "../UIColors.h"
 #include "../../../Utils/AppLogger.h"
 #include "../../../Utils/LegacyNoteGenerator.h"
@@ -141,6 +142,7 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
+    const bool isOverdose = themeId == ThemeId::Overdose;
     static constexpr int kScaleTypeChromatic = 3;
     const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);
 
@@ -167,7 +169,7 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
             }
             else if (isBlackKey)
             {
-                g.setColour(isBlueBreeze
+                g.setColour((isBlueBreeze || isOverdose)
                     ? UIColors::pianoRollLane.withAlpha(0.16f)
                     : UIColors::backgroundDark.withAlpha(0.3f));
                 g.fillRect(static_cast<float>(ctx.pianoKeyWidth), y, static_cast<float>(w - ctx.pianoKeyWidth), laneH);
@@ -179,7 +181,7 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
                 const int pitchClass = ((midi % 12) + 12) % 12;
                 if (inScalePitchClass[static_cast<std::size_t>(pitchClass)])
                 {
-                    const float scaleAlpha = isAurora ? 0.060f : (isBlueBreeze ? 0.14f : 0.65f);
+                    const float scaleAlpha = isAurora ? 0.060f : ((isBlueBreeze || isOverdose) ? 0.14f : 0.65f);
                     g.setColour(UIColors::scaleHighlight.withMultipliedAlpha(scaleAlpha));
                     g.fillRect(static_cast<float>(ctx.pianoKeyWidth), y, static_cast<float>(w - ctx.pianoKeyWidth), laneH);
                 }
@@ -188,9 +190,9 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
 
         const auto rowLineColour = isAurora
             ? UIColors::pianoRollGrid.withAlpha(0.022f)
-            : (isBlueBreeze ? UIColors::pianoRollGrid.withAlpha(0.030f) : UIColors::panelBorder.withAlpha(0.15f));
+            : ((isBlueBreeze || isOverdose) ? UIColors::pianoRollGrid.withAlpha(0.030f) : UIColors::panelBorder.withAlpha(0.15f));
         g.setColour(rowLineColour);
-        g.drawLine(static_cast<float>(ctx.pianoKeyWidth), y, static_cast<float>(w), y, (isAurora || isBlueBreeze) ? 0.55f : 1.0f);
+        g.drawLine(static_cast<float>(ctx.pianoKeyWidth), y, static_cast<float>(w), y, (isAurora || isBlueBreeze || isOverdose) ? 0.55f : 1.0f);
     }
 }
 
@@ -300,6 +302,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
+    const bool isOverdose = themeId == ThemeId::Overdose;
 
     juce::Path waveformPath;
 
@@ -345,7 +348,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
             g.setColour(waveformColour.withAlpha(0.52f));
             g.strokePath(waveformPath, juce::PathStrokeType(1.25f));
         }
-        else if (isBlueBreeze)
+        else if (isBlueBreeze || isOverdose)
         {
             const auto waveformColour = UIColors::pianoRollWaveform;
             g.setColour(waveformColour.withAlpha(0.13f));
@@ -372,6 +375,7 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
+    const bool isOverdose = themeId == ThemeId::Overdose;
 
     if (isAurora)
     {
@@ -381,6 +385,10 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
     {
         UIColors::fillMistedTimelineField(g, rulerArea.toFloat(), 0.0f);
     }
+    else if (isOverdose)
+    {
+        // Overdose panel skin is drawn once by PianoRollComponent::paint().
+    }
     else
     {
         g.setColour(UIColors::backgroundMedium);
@@ -389,8 +397,8 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
 
     g.setColour(isAurora
         ? UIColors::gridLine.withAlpha(0.060f)
-        : (isBlueBreeze ? UIColors::pianoRollGrid.withAlpha(0.040f) : UIColors::panelBorder));
-    g.drawLine(0.0f, static_cast<float>(rulerBottom), static_cast<float>(ctx.width), static_cast<float>(rulerBottom), (isAurora || isBlueBreeze) ? 0.7f : 1.0f);
+        : ((isBlueBreeze || isOverdose) ? UIColors::pianoRollGrid.withAlpha(0.040f) : UIColors::panelBorder));
+    g.drawLine(0.0f, static_cast<float>(rulerBottom), static_cast<float>(ctx.width), static_cast<float>(rulerBottom), (isAurora || isBlueBreeze || isOverdose) ? 0.7f : 1.0f);
 
     if (ctx.timeUnit == RenderContext::TimeUnit::Bars)
     {
@@ -421,9 +429,9 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
 
             g.setColour(isAurora
                 ? UIColors::gridLine.withAlpha(0.080f)
-                : (isBlueBreeze ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine));
+                : ((isBlueBreeze || isOverdose) ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine));
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerBottom - 10),
-                       static_cast<float>(pixelX), static_cast<float>(rulerBottom), (isAurora || isBlueBreeze) ? 0.7f : 1.0f);
+                       static_cast<float>(pixelX), static_cast<float>(rulerBottom), (isAurora || isBlueBreeze || isOverdose) ? 0.7f : 1.0f);
 
             int64_t bar = (beat / 4) + 1;
             int64_t beatInBar = (beat % 4) + 1;
@@ -436,7 +444,7 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
 
         g.setColour(isAurora
             ? UIColors::textSecondary.withMultipliedAlpha(0.48f)
-            : (isBlueBreeze ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary));
+            : ((isBlueBreeze || isOverdose) ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary));
         g.drawText(label, pixelX - 20, rulerTop + 2, 40, ctx.rulerHeight - 12, juce::Justification::centred);
         }
     } else {
@@ -457,9 +465,9 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
 
             g.setColour(isAurora
                 ? UIColors::gridLine.withAlpha(0.080f)
-                : (isBlueBreeze ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine));
+                : ((isBlueBreeze || isOverdose) ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine));
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerBottom - 10),
-                       static_cast<float>(pixelX), static_cast<float>(rulerBottom), (isAurora || isBlueBreeze) ? 0.7f : 1.0f);
+                       static_cast<float>(pixelX), static_cast<float>(rulerBottom), (isAurora || isBlueBreeze || isOverdose) ? 0.7f : 1.0f);
 
             // `time` here is absolute host/arrangement time; the component's
             // xToTime callback applies the current timeline view-domain origin.
@@ -470,7 +478,7 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
 
             g.setColour(isAurora
                 ? UIColors::textSecondary.withMultipliedAlpha(0.48f)
-                : (isBlueBreeze ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary));
+                : ((isBlueBreeze || isOverdose) ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary));
             g.drawText(timeStr, pixelX - 20, rulerTop + 2, 40, ctx.rulerHeight - 12, juce::Justification::centred);
         }
     }
@@ -479,8 +487,6 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
 void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ctx)
 {
     const auto themeId = UIColors::currentThemeId();
-    const bool isAurora = themeId == ThemeId::Aurora;
-    const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
 
     if (ctx.timeUnit == RenderContext::TimeUnit::Bars)
     {
@@ -526,7 +532,7 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ct
                 g.setColour(colour);
                 g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(ctx.height));
             }
-            else if (themeId == ThemeId::BlueBreeze)
+            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
             {
                 g.setColour(UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f));
                 g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(ctx.height));
@@ -565,7 +571,7 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ct
             if (pixelX < ctx.pianoKeyWidth - 2 || pixelX > ctx.width + 2) continue;
             if (themeId == ThemeId::Aurora)
                 g.setColour(UIColors::pianoRollGrid.withAlpha(0.016f));
-            else if (themeId == ThemeId::BlueBreeze)
+            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
                 g.setColour(UIColors::pianoRollGrid.withAlpha(0.022f));
             else
                 g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::panelBorder.withAlpha(0.12f) : UIColors::panelBorder.withAlpha(0.25f));
@@ -612,7 +618,24 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     static constexpr float kOutOfScaleDimAmount = 0.30f;
 
     const bool isBlueBreeze = UIColors::currentThemeId() == ThemeId::BlueBreeze;
-    const float outOfScaleDimAmount = isBlueBreeze ? 0.06f : kOutOfScaleDimAmount;
+    const bool isOverdose = UIColors::currentThemeId() == ThemeId::Overdose;
+    const bool isLightTheme = isBlueBreeze || isOverdose;
+    const float outOfScaleDimAmount = isLightTheme ? 0.06f : kOutOfScaleDimAmount;
+    const auto& overdoseAtlas = UiAssets::get(UiAssetId::PianoKeyAtlas);
+    const bool hasOverdoseAtlas = isOverdose && overdoseAtlas.isValid() && overdoseAtlas.getHeight() >= 5;
+    const int overdoseAtlasSliceHeight = hasOverdoseAtlas ? overdoseAtlas.getHeight() / 5 : 0;
+
+    const auto overdoseAtlasSliceIndex = [](int noteInOctave) noexcept -> int {
+        switch (noteInOctave)
+        {
+            case 1:  return 0;
+            case 3:  return 1;
+            case 6:  return 2;
+            case 8:  return 3;
+            case 10: return 4;
+            default: return 0;
+        }
+    };
 
     // Note name lookup tables
     static const char* kSharpNames[12] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
@@ -639,11 +662,18 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
         return inScalePitchClass[static_cast<std::size_t>(pitchClass)];
     };
 
-    g.setColour(isBlueBreeze ? UIColors::keyBedWhite : UIColors::backgroundDark);
+    g.setColour(isLightTheme ? UIColors::keyBedWhite : UIColors::backgroundDark);
     g.fillRect(0, 0, w, height);
 
-    juce::Colour cWhite1 = isBlueBreeze ? UIColors::keyBedWhite : juce::Colour(0xFFF7F9F9);
-    juce::Colour cWhite2 = isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyBedBottom } : juce::Colour(0xFFECF0F1);
+    juce::Colour cWhite1 = isLightTheme ? UIColors::keyBedWhite : juce::Colour(0xFFF7F9F9);
+    juce::Colour cWhite2 = isOverdose ? juce::Colour { Overdose::Colors::KeyBedWhiteBottom }
+                          : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyBedBottom } : juce::Colour(0xFFECF0F1));
+
+    juce::Colour cBlackBottom = isOverdose ? juce::Colour { Overdose::Colors::KeyBedBlackBottom }
+                             : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyBlackBottom } : juce::Colour(0xFF1B2026));
+
+    juce::Colour keyPressedGlowColor = isOverdose ? juce::Colour { Overdose::Colors::KeyPressedGlow }
+                                    : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyPressedGlow } : juce::Colour(0x500078D7));
 
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
@@ -671,11 +701,11 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             juce::ColourGradient grad(whiteA,
                                       static_cast<float>(0),
                                       y,
-                                      whiteB.interpolatedWith(UIColors::keyBedDivider, isBlueBreeze ? 0.08f : 0.0f),
+                                       whiteB.interpolatedWith(UIColors::keyBedDivider, isLightTheme ? 0.08f : 0.0f),
                                       static_cast<float>(0 + w),
                                       y + drawH,
                                       false);
-            if (isBlueBreeze)
+            if (isLightTheme)
                 grad.addColour(0.16, whiteA.interpolatedWith(juce::Colours::white, 0.12f));
             g.setGradientFill(grad);
             g.fillRect(keyRect);
@@ -683,19 +713,19 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             // Scale highlight overlay on in-scale white keys
             if (inScale && ctx.scaleType != kScaleTypeChromatic)
             {
-                g.setColour(isBlueBreeze ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
+                g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
                 g.fillRect(keyRect);
             }
 
             // Pressed key highlight
             if (drawMidi == ctx.pressedPianoKey)
             {
-                g.setColour(isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyPressedGlow }.withAlpha(0.22f)
+                g.setColour(isLightTheme ? keyPressedGlowColor.withAlpha(0.22f)
                                          : juce::Colour(0x500078D7));
                 g.fillRect(keyRect);
             }
 
-            if (isBlueBreeze)
+            if (isLightTheme)
             {
                 g.setColour(juce::Colours::white.withAlpha(0.24f));
                 g.drawLine(keyRect.getX() + 2.0f, keyRect.getY() + 1.0f,
@@ -726,7 +756,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
                         if (ox != 0 || oy != 0)
                             g.drawText(noteName, tx + ox, ty + oy, tw, th, juce::Justification::centredRight);
 
-                const juce::Colour noteLabelColour = isBlueBreeze
+                const juce::Colour noteLabelColour = isLightTheme
                     ? juce::Colour(0xFF25303A).withMultipliedAlpha(inScale ? 0.90f : 0.62f)
                     : juce::Colour(0xFFE0E0E0).withMultipliedAlpha(inScale ? 1.0f : 0.78f);
                 g.setColour(noteLabelColour);
@@ -742,7 +772,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             juce::ColourGradient grad(extensionA,
                                       static_cast<float>(0) + blackKeyW,
                                       y,
-                                      extensionB.interpolatedWith(UIColors::keyBedDivider, isBlueBreeze ? 0.08f : 0.0f),
+                                      extensionB.interpolatedWith(UIColors::keyBedDivider, isLightTheme ? 0.08f : 0.0f),
                                       static_cast<float>(0 + w),
                                       y + drawH,
                                       false);
@@ -752,11 +782,11 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             // Scale highlight overlay on in-scale black key extension area
             if (inScale && ctx.scaleType != kScaleTypeChromatic)
             {
-                g.setColour(isBlueBreeze ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
+                g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
                 g.fillRect(extensionRect);
             }
 
-            g.setColour(UIColors::panelBorder.withAlpha(isBlueBreeze ? 0.22f : 1.0f));
+            g.setColour(UIColors::panelBorder.withAlpha(isLightTheme ? 0.22f : 1.0f));
             g.drawLine(blackKeyW, y + h * 0.5f, static_cast<float>(w), y + h * 0.5f, 1.0f);
         }
     }
@@ -771,7 +801,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
         int noteInOctave = drawMidi % 12;
         if (noteInOctave == 5 || noteInOctave == 0)
         {
-            g.setColour(isBlueBreeze ? UIColors::keyBedDivider.withAlpha(0.36f) : UIColors::panelBorder);
+            g.setColour(isLightTheme ? UIColors::keyBedDivider.withAlpha(0.36f) : UIColors::panelBorder);
             g.drawLine(0.0f, y + h, static_cast<float>(w), y + h, 1.0f);
         }
     }
@@ -796,52 +826,71 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             float keyY = y + (h - keyH) * 0.5f;
 
             juce::Rectangle<float> keyRect(0.0f, keyY, blackKeyW, keyH);
+            const bool useOverdoseAtlas = hasOverdoseAtlas && overdoseAtlasSliceHeight > 0;
 
-            juce::DropShadow ds;
-            ds.colour = juce::Colours::black.withAlpha(isBlueBreeze ? 0.28f : 0.25f);
-            ds.radius = isBlueBreeze ? 6 : 5;
-            ds.offset = {0, 1};
-
-            juce::Path shadowPath;
-            shadowPath.addRoundedRectangle(keyRect, 2.0f);
-            ds.drawForPath(g, shadowPath);
-
-            juce::ColourGradient sideShadow(juce::Colours::black.withAlpha(isBlueBreeze ? 0.12f : 0.2f), blackKeyW, keyY,
-                                            juce::Colours::transparentBlack, blackKeyW + 1.25f, keyY, false);
-            g.setGradientFill(sideShadow);
-            g.fillRect(static_cast<int>(blackKeyW), static_cast<int>(keyY + 1.0f), 
-                       static_cast<int>(1.25f), static_cast<int>(keyH - 1.0f));
-
-            juce::Colour cTop = isBlueBreeze ? UIColors::keyBedBlack : juce::Colour(0xFF34495E);
-            juce::Colour cBottom = isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyBlackBottom } : juce::Colour(0xFF1B2026);
-            if (!inScale)
+            if (useOverdoseAtlas)
             {
-                cTop = cTop.darker(outOfScaleDimAmount);
-                cBottom = cBottom.darker(outOfScaleDimAmount);
+                const auto sliceIndex = overdoseAtlasSliceIndex(noteInOctave);
+                UiAssets::drawAssetSliceStretch(g,
+                                               UiAssetId::PianoKeyAtlas,
+                                               keyRect,
+                                               { 0, sliceIndex * overdoseAtlasSliceHeight,
+                                                 overdoseAtlas.getWidth(), overdoseAtlasSliceHeight });
             }
-
-            juce::ColourGradient grad(cTop, 0.0f, keyRect.getY(),
-                                      cBottom, 0.0f, keyRect.getBottom(), false);
-            g.setGradientFill(grad);
-            g.fillRoundedRectangle(keyRect, 2.0f);
-
-            if (isBlueBreeze)
+            else
             {
-                juce::ColourGradient keySource(juce::Colours::white.withAlpha(0.14f),
-                                               keyRect.getX() + keyRect.getWidth() * 0.18f,
-                                               keyRect.getY(),
-                                               juce::Colours::transparentWhite,
-                                               keyRect.getCentreX(),
-                                               keyRect.getY() + keyRect.getHeight() * 0.42f,
-                                               false);
-                g.setGradientFill(keySource);
-                g.fillRoundedRectangle(keyRect.reduced(0.5f), 1.8f);
+                juce::DropShadow ds;
+                ds.colour = juce::Colours::black.withAlpha(isLightTheme ? 0.28f : 0.25f);
+                ds.radius = isLightTheme ? 6 : 5;
+                ds.offset = {0, 1};
+
+                juce::Path shadowPath;
+                shadowPath.addRoundedRectangle(keyRect, 2.0f);
+                ds.drawForPath(g, shadowPath);
+
+                juce::ColourGradient sideShadow(juce::Colours::black.withAlpha(isLightTheme ? 0.12f : 0.2f), blackKeyW, keyY,
+                                                juce::Colours::transparentBlack, blackKeyW + 1.25f, keyY, false);
+                g.setGradientFill(sideShadow);
+                g.fillRect(static_cast<int>(blackKeyW), static_cast<int>(keyY + 1.0f),
+                           static_cast<int>(1.25f), static_cast<int>(keyH - 1.0f));
+
+                juce::Colour cTop = isLightTheme ? UIColors::keyBedBlack : juce::Colour(0xFF34495E);
+                juce::Colour cBottom = cBlackBottom;
+                if (!inScale)
+                {
+                    cTop = cTop.darker(outOfScaleDimAmount);
+                    cBottom = cBottom.darker(outOfScaleDimAmount);
+                }
+
+                juce::ColourGradient grad(cTop, 0.0f, keyRect.getY(),
+                                          cBottom, 0.0f, keyRect.getBottom(), false);
+                g.setGradientFill(grad);
+                g.fillRoundedRectangle(keyRect, 2.0f);
+
+                if (isLightTheme)
+                {
+                    juce::ColourGradient keySource(juce::Colours::white.withAlpha(0.14f),
+                                                   keyRect.getX() + keyRect.getWidth() * 0.18f,
+                                                   keyRect.getY(),
+                                                   juce::Colours::transparentWhite,
+                                                   keyRect.getCentreX(),
+                                                   keyRect.getY() + keyRect.getHeight() * 0.42f,
+                                                   false);
+                    g.setGradientFill(keySource);
+                    g.fillRoundedRectangle(keyRect.reduced(0.5f), 1.8f);
+                }
+
+                g.setColour(juce::Colours::white.withAlpha(isLightTheme ? 0.14f : 0.2f));
+                g.fillRect(keyRect.getX() + 2.0f, keyRect.getY(), keyRect.getWidth() - 4.0f, keyH * 0.15f);
+
+                g.setColour(juce::Colours::black.withAlpha(isLightTheme ? 0.50f : 0.6f));
+                g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
             }
 
             // Scale highlight overlay on in-scale black keys (reduced alpha)
             if (inScale && ctx.scaleType != kScaleTypeChromatic)
             {
-                g.setColour(isBlueBreeze ? UIColors::scaleHighlight.withMultipliedAlpha(0.22f)
+                g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.22f)
                                          : UIColors::scaleHighlight.withMultipliedAlpha(0.5f));
                 g.fillRoundedRectangle(keyRect, 2.0f);
             }
@@ -849,16 +898,10 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             // Pressed key highlight for black keys
             if (drawMidi == ctx.pressedPianoKey)
             {
-                g.setColour(isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyPressedGlow }.withAlpha(0.30f)
+                g.setColour(isLightTheme ? keyPressedGlowColor.withAlpha(0.30f)
                                          : juce::Colour(0x500078D7));
                 g.fillRoundedRectangle(keyRect, 2.0f);
             }
-
-            g.setColour(juce::Colours::white.withAlpha(isBlueBreeze ? 0.14f : 0.2f));
-            g.fillRect(keyRect.getX() + 2.0f, keyRect.getY(), keyRect.getWidth() - 4.0f, keyH * 0.15f);
-
-            g.setColour(juce::Colours::black.withAlpha(isBlueBreeze ? 0.50f : 0.6f));
-            g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
 
             // Note name labels for black keys (drawn on top of the black key body with outline)
             if (effectiveNoteNameMode == 0)
@@ -887,7 +930,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
         }
     }
 
-    g.setColour(isBlueBreeze ? UIColors::keyBedDivider.withAlpha(0.84f) : UIColors::panelBorder);
+    g.setColour(isLightTheme ? UIColors::keyBedDivider.withAlpha(0.84f) : UIColors::panelBorder);
     g.drawVerticalLine(w, 0.0f, static_cast<float>(height));
 }
 
@@ -935,6 +978,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
+    const bool isOverdose = themeId == ThemeId::Overdose;
 
     for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
     {
@@ -987,7 +1031,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                        noteBounds.getY() + 1.0f,
                        1.0f);
         }
-        else if (isBlueBreeze)
+        else if (isBlueBreeze || isOverdose)
         {
             g.setColour(noteColor.withAlpha(note.selected ? 0.72f : 0.56f));
             g.fillRect(noteBounds);
@@ -1038,9 +1082,10 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
+    const bool isOverdose = themeId == ThemeId::Overdose;
     const float lineWidth = isAurora
         ? (isThinLine ? 1.65f : 2.65f)
-        : (isBlueBreeze ? (isThinLine ? 1.25f : 2.05f) : (isThinLine ? 1.3f : 2.2f));
+        : ((isBlueBreeze || isOverdose) ? (isThinLine ? 1.25f : 2.05f) : (isThinLine ? 1.3f : 2.2f));
     const juce::PathStrokeType strokeType(lineWidth,
                                            juce::PathStrokeType::curved,
                                            juce::PathStrokeType::rounded);
@@ -1173,7 +1218,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             return;
         }
 
-        if (isBlueBreeze)
+        if (isBlueBreeze || isOverdose)
         {
             g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.16f : 0.18f)));
             g.strokePath(path, glowStrokeType);
@@ -1196,7 +1241,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             g.setColour(selectionColour.withAlpha(effectiveAlpha * 0.22f));
             g.strokePath(path, glowStrokeType);
         }
-        else if (isBlueBreeze)
+        else if (isBlueBreeze || isOverdose)
         {
             g.setColour(selectionColour.withAlpha(effectiveAlpha * 0.18f));
             g.strokePath(path, glowStrokeType);
@@ -1319,7 +1364,10 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
     const juce::Colour kHighConfidenceColour = juce::Colour::fromRGB(0xE0, 0xB0, 0x40); // #E0B040 金色
 
     for (const auto& h : ctx.timeGridSnapshot->handles()) {
-        const int x = ctx.timeToX(h.output_seconds);
+        const double timelineTime = ctx.materializationTimeToTimeline
+            ? ctx.materializationTimeToTimeline(h.output_seconds)
+            : h.output_seconds;
+        const int x = ctx.timeToX(timelineTime);
         if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
 
         juce::Colour col = colorForKind(h.kind);

@@ -66,7 +66,7 @@ This document is the verification source of truth for Phase 24. The phase is not
 - Status: PASS (2026-04-16)
 - L1 command: `pwsh -NoProfile -File ".planning/scripts/invoke-msvc-cmake.ps1" -BuildDir build-phase24-docs -Target OpenTuneTests`
 - L1 result:
-  - `Build files have been written to: E:/TRAE/OPenTune0427/build-phase24-docs`
+  - `Build files have been written to: G:/OpenTune0519New1/build-phase24-docs`
   - `ninja: no work to do.`
 - L2 command: `& ".\build-phase24-docs\OpenTuneTests.exe"`
 - L2 key results:

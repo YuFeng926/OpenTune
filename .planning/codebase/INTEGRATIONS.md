@@ -79,7 +79,7 @@
 **Audio / Model Formats:**
 - Import formats are registered through JUCE audio formats in `Source/Audio/AudioFormatRegistry.cpp:171`; optional formats include FLAC, Ogg Vorbis, MP3, CoreAudio, and Windows Media where the build enables them in `Source/Audio/AudioFormatRegistry.cpp:134`, `CMakeLists.txt:626`, `CMakeLists.txt:634`.
 - Export path remains WAV-based in `Source/PluginProcessor.cpp`.
-- Model payloads are `.onnx` files: `models/rmvpe.onnx` and `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx`, packaged as `rmvpe.onnx` and `hifigan.onnx` by `CMakeLists.txt:704`, `CMakeLists.txt:705`, `CMakeLists.txt:757`, `CMakeLists.txt:779`, `CMakeLists.txt:848`.
+- Model payloads are `.onnx` files: `models/rmvpe.onnx` and `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx`, packaged as `models/rmvpe.onnx` and `models/hifigan.onnx` by `CMakeLists.txt:704`, `CMakeLists.txt:705`, `CMakeLists.txt:757`, `CMakeLists.txt:779`, `CMakeLists.txt:848`.
 - Presets use `.otpreset` files in `Source/Utils/PresetManager.cpp:66` and Standalone preset UI in `Source/Standalone/PluginEditor.cpp:1863`, `Source/Standalone/PluginEditor.cpp:1909`.
 
 **App Preference Payloads:**

@@ -115,6 +115,7 @@ public:
     void autoTuneRequested() override;
     void pitchCurveEdited(int startFrame, int endFrame) override;
     void escapeKeyPressed() override;
+    void currentToolChanged(ToolId tool) override;
 
     // Keyboard handling
     bool keyPressed(const juce::KeyPress& key) override;

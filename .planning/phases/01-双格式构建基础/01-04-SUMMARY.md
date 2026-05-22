@@ -21,7 +21,7 @@ CMake configure 失败，但失败原因均为**环境问题**，与本次 Phase
 ### Blocker 1: JUCE-master 不存在
 ```
 CMake Error at CMakeLists.txt:42 (add_subdirectory):
-  add_subdirectory given source "E:/TRAE/OPenTune0427/JUCE-master" which is not an
+  add_subdirectory given source "G:/OpenTune0519New1/JUCE-master" which is not an
   existing directory.
 ```
 **影响**: 无法进入 `add_subdirectory(JUCE)`，后续配置无法进行
@@ -31,7 +31,7 @@ CMake Error at CMakeLists.txt:42 (add_subdirectory):
 ```
 CMake Error at CMakeLists.txt:168 (message):
   DirectML provider header missing:
-  E:/TRAE/OPenTune0427/onnxruntime-dml-1.24.4/build/native/include/dml_provider_factory.h
+  G:/OpenTune0519New1/onnxruntime-dml-1.24.4/build/native/include/dml_provider_factory.h
 ```
 **影响**: CMake 配置在 ONNX Runtime 检查阶段失败
 **状态**: 环境缺失（NuGet 包未解压/构建）

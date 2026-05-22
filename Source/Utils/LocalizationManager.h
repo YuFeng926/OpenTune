@@ -200,6 +200,7 @@ constexpr const char* kTheme = "Theme";
 constexpr const char* kThemeBlueBreeze = "Blue Breeze";
 constexpr const char* kThemeDarkBlueGrey = "Dark Blue-Grey";
 constexpr const char* kThemeAurora = "Aurora Glass";
+constexpr const char* kThemeOverdose = "升天 / Overdose";
 constexpr const char* kMouseTrail = "Mouse Trail";
 constexpr const char* kOff = "Off";
 constexpr const char* kClassic = "Classic";
@@ -348,6 +349,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kThemeBlueBreeze, "Blue Breeze", "蓝色清风", "ブルーブリーズ", "Голубой бриз", "Brisa azul" },
         { Keys::kThemeDarkBlueGrey, "Dark Blue-Grey", "深蓝灰", "ダークブルーグレー", "Тёмно-синий серый", "Azul-gris oscuro" },
         { Keys::kThemeAurora, "Aurora Glass", "极光玻璃", "オーロラグラス", "Аврора", "Aurora cristal" },
+        { Keys::kThemeOverdose, "Overdose", "升天", "オーバードーズ", "Передозировка", "Sobredosis" },
         { Keys::kMouseTrail, "Mouse Trail", "鼠标轨迹", "マウストレイル", "След мыши", "Ratón" },
         { Keys::kOff, "Off", "关闭", "オフ", "Выкл", "Apagado" },
         { Keys::kClassic, "Classic", "经典", "クラシック", "Классика", "Clásico" },

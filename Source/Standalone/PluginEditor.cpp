@@ -6,6 +6,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "UI/UIColors.h"
+#include "UI/UiAssets.h"
 #include "UI/FrameScheduler.h"
 #include "Editor/Preferences/SharedPreferencePages.h"
 #include "Editor/Preferences/StandalonePreferencePages.h"
@@ -786,7 +787,12 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
 
 void OpenTuneAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    // Solid background (Soft Blue-Grey)
+    if (UIColors::currentThemeId() == ThemeId::Overdose)
+    {
+        UiAssets::drawAssetCover(g, UiAssetId::BackgroundMain, getLocalBounds().toFloat());
+        return;
+    }
+
     g.fillAll(UIColors::backgroundDark);
 }
 
@@ -2520,6 +2526,11 @@ void OpenTuneAudioProcessorEditor::escapeKeyPressed()
     const bool targetWorkspaceView = !isWorkspaceView_;
     transportBar_.setWorkspaceView(targetWorkspaceView);
     viewToggled(targetWorkspaceView);
+}
+
+void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
+{
+    parameterPanel_.setActiveTool(static_cast<int>(tool));
 }
 
 } // namespace OpenTune
