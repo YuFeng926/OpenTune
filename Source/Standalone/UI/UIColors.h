@@ -56,8 +56,8 @@ struct UIColors
 
     // Pitch Curve Colors
     static inline juce::Colour originalF0 { 0xFFFF6666 };   // 柔和红色
-    static inline juce::Colour correctedF0 { 0xFF2DFFC4 };  // 高饱和青绿色
-    static inline juce::Colour shadowTrack { 0x402DFFC4 };
+    static inline juce::Colour correctedF0 { 0xFF2DFFA0 };  // 高饱和青绿色
+    static inline juce::Colour shadowTrack { 0x402DFFA0 };
 
     // Note Block Colors
     static inline juce::Colour noteBlock { 0xFF7FB3D5 };
@@ -247,6 +247,11 @@ struct UIColors
         return currentThemeId_ == ThemeId::Aurora;
     }
 
+    static bool isOverdoseTheme()
+    {
+        return currentThemeId_ == ThemeId::Overdose;
+    }
+
     static juce::Colour auroraTrackAccent(int trackIndex)
     {
         static constexpr juce::uint32 colours[] = {
@@ -332,6 +337,7 @@ struct UIColors
     static void fillMistedTimelineField(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)
     {
         const auto themeId = currentThemeId();
+        jassert(themeId != ThemeId::Overdose);
         const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
         const auto top = isBlueBreeze ? juce::Colour { BlueBreeze::Colors::FieldFogTop } : pianoRollBackground.brighter(0.050f);
         const auto middle = isBlueBreeze ? juce::Colour { BlueBreeze::Colors::FieldFogMid } : pianoRollBackground.interpolatedWith(backgroundMedium, 0.12f);
@@ -822,8 +828,8 @@ struct UIColors
         const auto isActive = active || isPressed;
         const auto isHovered = highlighted && !isPressed;
         const auto fill = isActive ? auroraButtonActive : (isHovered ? auroraButtonHover : auroraButtonNormal);
-        const auto glow = glowColour.getAlpha() > 0 ? glowColour : (isActive ? correctedF0 : panelGlow);
-        const auto edge = edgeColour.getAlpha() > 0 ? edgeColour : (isActive ? correctedF0 : glassEdge);
+        const auto glow = glowColour.getAlpha() > 0 ? glowColour : (isActive ? knobGlow : panelGlow);
+        const auto edge = edgeColour.getAlpha() > 0 ? edgeColour : (isActive ? knobGlow : glassEdge);
 
         juce::Path shape;
         if (shapeOverride != nullptr)
@@ -917,7 +923,16 @@ struct UIColors
         const auto radius = juce::jmin(knobBounds.getWidth(), knobBounds.getHeight()) * 0.5f;
         const auto centre = knobBounds.getCentre();
 
-        drawAuroraGlow(g, knobBounds, knobGlow, highlighted ? 0.62f : 0.26f, highlighted ? 0.72f : 0.48f);
+        {
+            const float alpha = highlighted ? 0.62f : 0.26f;
+            const float radiusScale = highlighted ? 0.72f : 0.48f;
+            juce::Path glowPath;
+            glowPath.addEllipse(knobBounds);
+            juce::DropShadow ds(knobGlow.withMultipliedAlpha(0.42f * alpha),
+                                juce::roundToInt(18.0f * radiusScale),
+                                {});
+            ds.drawForPath(g, glowPath);
+        }
 
         juce::ColourGradient body(knobBody.brighter(0.05f), knobBounds.getX(), knobBounds.getY(),
                                   juce::Colour { 0xFF01040A }, knobBounds.getRight(), knobBounds.getBottom(), false);
@@ -1010,6 +1025,28 @@ struct UIColors
             {
                 ds.colour = shadowBase.withAlpha(0.22f);
                 ds.radius = 34;
+                ds.offset = { 0, 10 };
+            }
+        }
+        else if (themeId == ThemeId::Overdose)
+        {
+            const auto shadowBase = juce::Colour { Overdose::Colors::SoftShadow };
+            if (level == ShadowLevel::Ambient)
+            {
+                ds.colour = shadowBase.withAlpha(0.12f);
+                ds.radius = 14;
+                ds.offset = { 0, 4 };
+            }
+            else if (level == ShadowLevel::Float)
+            {
+                ds.colour = shadowBase.withAlpha(0.18f);
+                ds.radius = 22;
+                ds.offset = { 0, 7 };
+            }
+            else
+            {
+                ds.colour = shadowBase.withAlpha(0.24f);
+                ds.radius = 30;
                 ds.offset = { 0, 10 };
             }
         }
@@ -1204,7 +1241,7 @@ struct UIColors
             borderAlpha = 0.55f;  // 深色底上的边框需要更清晰，但仍保持克制
             innerAlpha = 0.06f;   // 内高光更弱，避免“发灰”
         }
-        else if (themeId == ThemeId::BlueBreeze)
+        else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
         {
             borderAlpha = 0.26f;
             innerAlpha = 0.08f;
@@ -1216,17 +1253,19 @@ struct UIColors
 
         // 内高光线 - 增加立体感
         g.setColour((themeId == ThemeId::BlueBreeze ? juce::Colour { BlueBreeze::Colors::SourceLight }
-                                                     : UIColors::textPrimary).withAlpha(innerAlpha));
+                    : (themeId == ThemeId::Overdose ? juce::Colour { Overdose::Colors::PanelHighlight }
+                    : UIColors::textPrimary)).withAlpha(innerAlpha));
         if (radius > 1.0f) 
             g.drawRoundedRectangle(bounds.reduced(1.5f), radius - 1.0f, static_cast<float>(style.strokeThin));
         else 
             g.drawRect(bounds.reduced(1.5f), static_cast<float>(style.strokeThin));
 
-        if (themeId == ThemeId::BlueBreeze && radius > 2.0f)
+        if ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) && radius > 2.0f)
         {
             juce::Path contour;
             contour.addRoundedRectangle(bounds.reduced(2.2f), radius - 1.7f);
-            g.setColour(juce::Colour { BlueBreeze::Colors::CanvasTop }.withAlpha(0.12f));
+            g.setColour((themeId == ThemeId::Overdose ? juce::Colour { Overdose::Colors::PanelTop }
+                                                      : juce::Colour { BlueBreeze::Colors::CanvasTop }).withAlpha(0.12f));
             g.strokePath(contour, juce::PathStrokeType(0.85f));
         }
 

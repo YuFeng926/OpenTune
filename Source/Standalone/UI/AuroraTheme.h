@@ -44,7 +44,7 @@ namespace Aurora {
         static const juce::uint32 NeonRed       = 0xFFEF4444; // Red (#EF4444)
         static const juce::uint32 NeonYellow    = 0xFFEAB308; // Yellow
         static const juce::uint32 OriginalF0    = 0xFFE0A128; // Deep glass gold
-        static const juce::uint32 CorrectedF0   = 0xFF2DFFC4; // Bright cyan-green
+        static const juce::uint32 CorrectedF0   = 0xFF2DFFA0; // Bright green
         static const juce::uint32 NoteBlock     = 0xFF35C6EF; // Saturated piano-roll note
         static const juce::uint32 NoteBlockEdge = 0xFFB7F4FF; // Glassy note edge
         static const juce::uint32 NoteBlockHot  = 0xFF66E8FF; // Hovered note accent

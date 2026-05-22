@@ -4,6 +4,7 @@
 #include "BlueBreezeTheme.h"
 #include "DarkBlueGreyTheme.h"
 #include "AuroraTheme.h"
+#include "OverdoseTheme.h"
 
 namespace OpenTune {
 
@@ -11,7 +12,8 @@ enum class ThemeId : int
 {
     BlueBreeze = 0,
     DarkBlueGrey = 1,
-    Aurora = 2
+    Aurora = 2,
+    Overdose = 3
 };
 
 struct ThemeTokens
@@ -152,6 +154,8 @@ public:
                 return darkBlueGreyTokens();
             case ThemeId::Aurora:
                 return auroraTokens();
+            case ThemeId::Overdose:
+                return overdoseTokens();
             default:
                 return blueBreezeTokens();
         }
@@ -167,6 +171,8 @@ public:
                 return darkBlueGreyStyle();
             case ThemeId::Aurora:
                 return auroraStyle();
+            case ThemeId::Overdose:
+                return overdoseStyle();
             default:
                 return blueBreezeStyle();
         }
@@ -286,8 +292,8 @@ private:
             juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.18f),
 
             juce::Colour { BlueBreeze::Colors::NodeYellow },
-            juce::Colour { 0xFF2DFFC4 }, // correctedF0
-            juce::Colour { 0x302DFFC4 }, // shadowTrack
+            juce::Colour { 0xFF2DFFA0 }, // correctedF0
+            juce::Colour { 0x302DFFA0 }, // shadowTrack
 
             juce::Colour { BlueBreeze::Colors::AccentBlue },
             juce::Colour { 0xFF8AC9EF },
@@ -477,6 +483,22 @@ private:
         return style;
     }
 
+    static const ThemeStyle& overdoseStyle()
+    {
+        static const ThemeStyle style {
+            22.0f, 14.0f, 11.0f, 999.0f,
+            1.0f, 2.0f, 2.0f,
+            0.18f, 18, { 0, 6 },
+            0.36f, 18.0f,
+            1.5f, 0.22f,
+            180.0f, 0.65f,
+            juce::Colour(0xFF7CDCCC), juce::Colour(0xFFFF7CBD), juce::Colour(0xFFFFB030), juce::Colour(0xFFFF4F77),
+            juce::Colour(0xFFFF7CBD), juce::Colour(0xFF7E8391),
+            false // timeSegmentStyle
+        };
+        return style;
+    }
+
     static const ThemeTokens& auroraTokens()
     {
         static const ThemeTokens tokens {
@@ -566,6 +588,36 @@ private:
             juce::Colour { Aurora::Colors::KnobGlow },
 
             Aurora::Style::PanelRadius
+        };
+        return tokens;
+    }
+
+    static const ThemeTokens& overdoseTokens()
+    {
+        static const ThemeTokens tokens {
+            juce::Colour(0xFFFF7CBD), juce::Colour(0xFFF098C0),
+            juce::Colour(0xFFFFC8E4), juce::Colour(0xFFFF5FA8),
+            juce::Colour(0xFFDCDCE4), juce::Colour(0xFFE8E8F0), juce::Colour(0xFFF4F0F6),
+            juce::Colour(0xFFF9F1F7), juce::Colour(0xFFDCDCE4),
+            juce::Colour(0x80FFD4E8), juce::Colour(0xFFE8E8F0), juce::Colour(0xFFF6F3FA), juce::Colour(0xFFD6D8E2),
+            juce::Colour(0xCFFFFFFF), juce::Colour(0x3C8D8590), juce::Colour(0xFFFF7CBD),
+            juce::Colour(0xFF343744), juce::Colour(0xFF7E8391), juce::Colour(0xFFB2B5C1), juce::Colour(0xFFFF7CBD),
+            juce::Colour(0xFFE0E0E8), juce::Colour(0x22FFFFFF), juce::Colour(0x14D8D8E0), juce::Colour(0x45C8CAD3),
+            juce::Colour(0xFFF8A818), juce::Colour(0xFFFF5FA8), juce::Colour(0x40FF80BD),
+            juce::Colour(0x45FF9FCC), juce::Colour(0xCCFF77B6), juce::Colour(0x80FFB8D8), juce::Colour(0x66FFC8E4),
+            juce::Colour(0xFFFF7CBD), juce::Colour(0xFFFF7CBD), juce::Colour(0x66AEB3C0),
+            juce::Colour(0xFFFF7CBD), juce::Colour(0xFF7E8391), juce::Colour(0xFFE8E8F0),
+            juce::Colour(0xFFFFB030), juce::Colour(0xFF7CDCCC), juce::Colour(0xFFFF4F77),
+            juce::Colour(0x66B8BBC6), juce::Colour(0x90AEB3C0),
+            juce::Colour(0x24FFD4E8),
+            juce::Colour(0xFFF8F8FF), juce::Colour(0xFFFF7CBD), juce::Colour(0xFFF8F8FF), juce::Colour(0xFFDADDE6), juce::Colour(0xFFCCD0D8), juce::Colour(0xFF343744), juce::Colour(0xFFB2B5C1),
+            juce::Colour(0xFF202830), juce::Colour(0xFF707880),
+            juce::Colour(0xFFE8E8F0), juce::Colour(0xFF303840), juce::Colour(0xFFCED2DC),
+            juce::Colour(0xDDF8F0F8), juce::Colour(0xBFFFFFFF), juce::Colour(0x80FFD4E8), juce::Colour(0x32FF80B8),
+            juce::Colour(0xFFE8E8F0), juce::Colour(0xFFF6F3FA), juce::Colour(0xFFFFE0F0),
+            juce::Colour(0xFFF4F0F6), juce::Colour(0x22FFFFFF), juce::Colour(0x70AEB3C0), juce::Colour(0x90AEB3C0),
+            juce::Colour(0x24FFD4E8), juce::Colour(0xFFA8B0C0), juce::Colour(0x52FF80B8),
+            22.0f
         };
         return tokens;
     }
