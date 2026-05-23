@@ -768,6 +768,55 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
             g.setColour(UIColors::textSecondary.withAlpha(0.9f));
             g.setFont(UIColors::getUIFont(11.0f));
             g.drawText(gainStr, placementBounds.reduced(6, 4), juce::Justification::topRight);
+
+            // ========================================================================
+            // Analysis stroke animation（描边动画）
+            // ========================================================================
+            auto stateIt = clipAnalysisStates_.find(placementId);
+            if (stateIt != clipAnalysisStates_.end() && stateIt->second.isAnalysisInProgress)
+            {
+                const double currentTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
+                const float alpha = 0.3f + 0.7f * (1.0f + std::sin(static_cast<float>(currentTime) * 3.0f)) * 0.5f;
+
+                juce::Path clipOutline;
+                clipOutline.addRoundedRectangle(placementBounds.toFloat().reduced(2.0f), 6.0f);
+
+                juce::Path dashedPath;
+                float dashes[2] = { 5.0f, 5.0f };
+                juce::PathStrokeType(1.5f).createDashedStroke(dashedPath, clipOutline, dashes, 2);
+
+                g.setColour(juce::Colours::white.withAlpha(alpha));
+                g.fillPath(dashedPath);
+            }
+
+            // ========================================================================
+            // Reference button icon（参考图标）
+            // ========================================================================
+            const bool hasRef = (stateIt != clipAnalysisStates_.end() && stateIt->second.hasReferenceBinding);
+            if (hasRef && placementBounds.getWidth() > 30)
+            {
+                const bool isHovering = (hoveredPlacementId_ == placementId && mouseOverReferenceButton_);
+                const auto iconColor = isHovering
+                    ? UIColors::accent
+                    : UIColors::textSecondary.withAlpha(0.75f);
+
+                // 14×14 px reference icon in top-right corner
+                auto refRect = juce::Rectangle<float>(
+                    static_cast<float>(placementBounds.getRight() - 19),
+                    static_cast<float>(placementBounds.getY() + 4),
+                    14.0f, 14.0f);
+
+                // Draw outer rounded rect (document outline, 2px)
+                juce::Path refOutline;
+                refOutline.addRoundedRectangle(refRect, 3.0f);
+                g.setColour(iconColor);
+                g.strokePath(refOutline, juce::PathStrokeType(2.0f));
+
+                // Draw inner vertical divider line (spine, ~40% from left)
+                const float spineX = refRect.getX() + refRect.getWidth() * 0.4f;
+                g.drawLine(spineX, refRect.getY() + 2.5f,
+                           spineX, refRect.getBottom() - 2.5f, 2.0f);
+            }
         }
     }
 
@@ -1210,6 +1259,24 @@ void ArrangementViewComponent::syncPlayheadOverlayToAbsoluteTime(double absolute
 
 void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
 {
+    // Update reference button hover state
+    hoveredPlacementId_ = 0;
+    mouseOverReferenceButton_ = false;
+
+    auto moveHit = hitTestPlacement(e.getPosition());
+    if (moveHit.trackId >= 0 && moveHit.placementIndex >= 0)
+    {
+        const uint64_t movePlacementId = processor_.getPlacementId(moveHit.trackId, moveHit.placementIndex);
+        hoveredPlacementId_ = movePlacementId;
+
+        juce::Rectangle<int> refBtnArea(moveHit.placementBounds.getRight() - 20,
+                                         moveHit.placementBounds.getY(), 20, 20);
+        if (refBtnArea.contains(e.getPosition()))
+        {
+            mouseOverReferenceButton_ = true;
+        }
+    }
+
     if (juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey))
     {
         setMouseCursor(juce::MouseCursor::DraggingHandCursor);
@@ -1276,6 +1343,25 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     }
 
     const uint64_t hitPlacementId = processor_.getPlacementId(hit.trackId, hit.placementIndex);
+
+    // ========================================================================
+    // Check reference button click (top-right corner)
+    // ========================================================================
+    {
+        auto stateIt = clipAnalysisStates_.find(hitPlacementId);
+        if (stateIt != clipAnalysisStates_.end() && stateIt->second.hasReferenceBinding)
+        {
+            juce::Rectangle<int> refBtnArea(hit.placementBounds.getRight() - 20,
+                                             hit.placementBounds.getY(), 20, 20);
+            if (refBtnArea.contains(e.getPosition()))
+            {
+                listeners_.call([&](Listener& l) {
+                    l.referenceButtonClicked(hit.trackId, hitPlacementId);
+                });
+                return;
+            }
+        }
+    }
 
     if (e.mods.isCtrlDown() && !e.mods.isShiftDown())
     {
@@ -1863,5 +1949,28 @@ void ArrangementViewComponent::selectAllPlacementsInTrack(int trackId)
     repaint();
 }
 
+// ============================================================================
+// Reference binding 状态管理
+// ============================================================================
+
+void ArrangementViewComponent::setClipAnalysisInProgress(uint64_t placementId, bool inProgress)
+{
+    auto& state = clipAnalysisStates_[placementId];
+    if (state.isAnalysisInProgress != inProgress)
+    {
+        state.isAnalysisInProgress = inProgress;
+        repaint();
+    }
+}
+
+void ArrangementViewComponent::setClipHasReferenceBinding(uint64_t placementId, bool hasRef)
+{
+    auto& state = clipAnalysisStates_[placementId];
+    if (state.hasReferenceBinding != hasRef)
+    {
+        state.hasReferenceBinding = hasRef;
+        repaint();
+    }
+}
 
 } // namespace OpenTune

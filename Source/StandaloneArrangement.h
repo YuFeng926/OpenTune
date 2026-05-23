@@ -40,6 +40,9 @@ public:
         juce::Colour colour;
         bool isRetired{false};
 
+        uint64_t referencePlacementId{0};        // 0 = 无参考
+        int64_t  referenceBindingRevision{0};     // 每次 binding 变更 +1
+
         bool isValid() const noexcept
         {
             return placementId != 0 && materializationId != 0 && durationSeconds > 0.0;
@@ -130,6 +133,14 @@ public:
     struct RetiredPlacementEntry { int trackId; uint64_t placementId; uint64_t materializationId; };
     std::vector<RetiredPlacementEntry> getRetiredPlacements() const;
 
+    // ============================================================================
+    // Reference binding API
+    // ============================================================================
+    bool setPlacementReferencePlacement(int trackId, uint64_t targetPlacementId, uint64_t referencePlacementId);
+    bool clearPlacementReferencePlacement(int trackId, uint64_t targetPlacementId);
+    uint64_t getPlacementReferencePlacement(int trackId, uint64_t targetPlacementId) const;
+    bool isCyclicReference(int trackId, uint64_t targetPlacementId, uint64_t candidateReferenceId) const;
+
 private:
     static bool isValidTrackId(int trackId) noexcept;
     static int selectIndexAfterErase(int currentSelectedIndex, int erasedIndex, int remainingCount);
@@ -137,6 +148,11 @@ private:
     int findPlacementIndexUnlocked(int trackId, uint64_t placementId) const;
     void refreshSelectedPlacementUnlocked(int trackId, int preferredIndex);
     void publishPlaybackSnapshotLocked();
+
+    // Reference binding helpers (要求调用方已持有 stateLock_ 写锁)
+    bool findPlacementByIdGlobalUnlocked(uint64_t placementId, int& outTrackId, size_t& outIndex) const;
+    bool isCyclicReferenceUnlocked(int trackId, uint64_t targetPlacementId, uint64_t candidateReferenceId) const;
+    void checkOverlapAndClearReferenceUnlocked(int trackId, uint64_t targetPlacementId);
 
     mutable juce::ReadWriteLock stateLock_;
     std::array<Track, kTrackCount> tracks_;

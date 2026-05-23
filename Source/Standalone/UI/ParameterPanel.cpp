@@ -603,6 +603,23 @@ void ParameterPanel::setActiveTool(int toolId)
     if (timeToolButton_) timeToolButton_->setToggleState(toolId == 5, juce::dontSendNotification);
 }
 
+void ParameterPanel::setAutoButtonMode(bool hasReference)
+{
+    if (autoTuneToolButton_)
+    {
+        if (hasReference)
+        {
+            autoTuneToolButton_->setTextIcon("AUTO (Ref)");
+            autoTuneToolButton_->setTooltip("按参考 Clip 自动修音并对齐节奏");
+        }
+        else
+        {
+            autoTuneToolButton_->setTextIcon("AUTO");
+            autoTuneToolButton_->setTooltip("自动修音（吸附到临近音阶）");
+        }
+    }
+}
+
 // Getters and Setters
 
 void ParameterPanel::setRetuneSpeed(float speed)

@@ -38,7 +38,7 @@ struct SuiteEntry {
     void (*run)();
 };
 
-constexpr std::array<SuiteEntry, 20> kSuites{{
+constexpr std::array<SuiteEntry, 31> kSuites{{
     { "core", "leaf utilities and render primitives", &runCoreBehaviorSuite },
     { "processor", "shared processor and render contracts", &runProcessorBehaviorSuite },
     { "ui", "piano-roll and visual loop behavior", &runUiBehaviorSuite },
@@ -59,6 +59,17 @@ constexpr std::array<SuiteEntry, 20> kSuites{{
     { "game-note-generator", "GameNoteGenerator D3PM ONNX transcription + mergeChunkNotes seam dedup", &runGameNoteGeneratorSuite },
     { "vocoder-config", "vocoder-runtime-config: forward chain defaults + mel hash invariants", &runVocoderConfigSuite },
     { "handle-note-merger", "time-grid-note-confirmation: merge alg + barrier + reSeed + invariants", &runHandleNoteMergerSuite },
+    { "composite-undo-action", "CompositeUndoAction: undo/reverse order, empty safety, single-step count", &runCompositeUndoActionSuite },
+    { "undo-manager-contract", "UndoManager + CompositeUndoAction: nested composite safety", &runUndoManagerContractSuite },
+    { "auto-ref-failure", "ReferenceAutoAlign failure modes: NoOverlap, NotReady, InsufficientAnchors", &runAutoRefFailureSuite },
+    { "basic-derived-analysis", "DerivedAnalysis slot smoke test", &runBasicDerivedAnalysisSuite },
+    { "auto-ref-integration", "ReferenceAutoAlign + StandaloneArrangement reference binding wire-up stub", &runAutoRefIntegrationSuite },
+    { "derived-analysis", "MaterializationStore DerivedAnalysis slot set/get/invalidate lifecycle", &runMaterializationDerivedAnalysisSuite },
+    { "mat-contract", "MaterializationStore contract: derived analysis isolation from snapshot/notes", &runMaterializationContractSuite },
+    { "ref-analysis-svc", "ReferenceAnalysisService lifecycle and submit/cancel safety", &runReferenceAnalysisServiceSuite },
+    { "ref-binding", "StandaloneArrangement reference binding lifecycle (set/get/clear/delete/move)", &runReferenceBindingSuite },
+    { "ref-binding-cascade", "StandaloneArrangement reference binding cascade (delete/move cross-track/split)", &runPlacementReferenceCascadeSuite },
+    { "arrangement-contract", "StandaloneArrangement contract (idempotent, invalid-id, snapshot)", &runArrangementContractSuite },
 }};
 
 void printHeader()
