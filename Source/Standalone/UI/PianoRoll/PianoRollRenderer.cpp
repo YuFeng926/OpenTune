@@ -1408,4 +1408,93 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
     }
 }
 
+// ============================================================================
+// Ghost Notes & Reference Anchors Overlay
+//
+// 参考 clip 的 derived notes 以半透明形式投影到当前视图，帮助用户对齐编辑。
+// Ghost notes 在当前轨活跃 notes 之下绘制；ghost anchors 为竖虚线参考线。
+// ============================================================================
+void PianoRollRenderer::drawGhostNotes(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay)
+{
+    if (overlay.ghostNotes.empty())
+        return;
+
+    static constexpr float kDashLengths[] = { 2.0f, 4.0f };
+    const juce::Colour fillColour = overlay.ghostColour.withMultipliedAlpha(overlay.ghostOpacity);
+    const juce::Colour borderColour = overlay.ghostColour.withMultipliedAlpha(overlay.ghostOpacity * 0.7f);
+
+    for (const auto& note : overlay.ghostNotes)
+    {
+        const float adjustedPitch = note.getAdjustedPitch();
+        if (adjustedPitch <= 0.0f)
+            continue;
+
+        const double timelineStart = ctx.materializationTimeToTimeline
+            ? ctx.materializationTimeToTimeline(note.startTime)
+            : note.startTime;
+        const double timelineEnd = ctx.materializationTimeToTimeline
+            ? ctx.materializationTimeToTimeline(note.endTime)
+            : note.endTime;
+
+        const int x1 = ctx.timeToX(timelineStart);
+        const int x2 = ctx.timeToX(timelineEnd);
+        if (x2 <= ctx.pianoKeyWidth || x1 >= ctx.width)
+            continue;
+
+        const float midi = ctx.freqToMidi(adjustedPitch);
+        const float y = ctx.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
+        const float w = std::max(1.0f, static_cast<float>(x2 - x1));
+        const float h = ctx.pixelsPerSemitone;
+        const auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
+
+        g.setColour(fillColour);
+        g.fillRect(noteBounds);
+
+        g.setColour(borderColour);
+        g.drawDashedLine(
+            juce::Line<float>(noteBounds.getX(), noteBounds.getY(),
+                              noteBounds.getRight(), noteBounds.getY()),
+            kDashLengths, 2, 1.0f);
+        g.drawDashedLine(
+            juce::Line<float>(noteBounds.getX(), noteBounds.getBottom(),
+                              noteBounds.getRight(), noteBounds.getBottom()),
+            kDashLengths, 2, 1.0f);
+        g.drawDashedLine(
+            juce::Line<float>(noteBounds.getX(), noteBounds.getY(),
+                              noteBounds.getX(), noteBounds.getBottom()),
+            kDashLengths, 2, 1.0f);
+        g.drawDashedLine(
+            juce::Line<float>(noteBounds.getRight(), noteBounds.getY(),
+                              noteBounds.getRight(), noteBounds.getBottom()),
+            kDashLengths, 2, 1.0f);
+    }
+}
+
+void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay)
+{
+    if (overlay.ghostAnchors.empty())
+        return;
+
+    static constexpr float kDashLengths[] = { 2.0f, 4.0f };
+    const float yTop = ctx.midiToY(ctx.minMidi);
+    const float yBottom = ctx.midiToY(ctx.maxMidi);
+
+    for (const auto& anchor : overlay.ghostAnchors)
+    {
+        const double timelineTime = overlay.projectSourceTime
+            ? overlay.projectSourceTime(anchor.sourceSeconds)
+            : anchor.sourceSeconds;
+        const int x = ctx.timeToX(timelineTime);
+        if (x < ctx.pianoKeyWidth || x >= ctx.width)
+            continue;
+
+        const float alpha = overlay.ghostOpacity * std::min(1.0f, anchor.strength);
+        g.setColour(overlay.ghostColour.withMultipliedAlpha(alpha));
+        g.drawDashedLine(
+            juce::Line<float>(static_cast<float>(x), yTop,
+                              static_cast<float>(x), yBottom),
+            kDashLengths, 2, 1.0f);
+    }
+}
+
 } // namespace OpenTune

@@ -71,6 +71,11 @@ public:
     void removeListener(Listener* listener);
 
     void setActiveTool(int toolId);
+
+    /** 设置 AUTO 按钮的模式显示。
+     *  @param hasReference  true: "AUTO (Ref)", false: "AUTO"
+     */
+    void setAutoButtonMode(bool hasReference);
     
     // Setters for UI state
     void setRetuneSpeed(float speed);

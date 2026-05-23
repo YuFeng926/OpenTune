@@ -18,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace OpenTune {
 
@@ -64,6 +65,22 @@ public:
         }
     };
 
+    struct ReferenceOverlay
+    {
+        std::vector<Note> ghostNotes;               // reference materialization 的 derived notes（materialization-local source time）
+        struct GhostAnchor {
+            double sourceSeconds{0.0};
+            float strength{0.0f};
+        };
+        std::vector<GhostAnchor> ghostAnchors;
+        float ghostOpacity{0.20f};                   // 透明度
+        juce::Colour ghostColour;                    // ghost 颜色（不同于当前轨）
+        bool enabled{false};                         // 是否启用 overlay
+
+        // sourceSeconds → timeline time 的投影函数
+        std::function<double(double)> projectSourceTime;
+    };
+
     struct RenderContext
     {
         int width = 0;
@@ -87,6 +104,8 @@ public:
         bool hasF0Selection = false;
         int f0SelectionStartFrame = -1;
         int f0SelectionEndFrameExclusive = -1;
+
+        std::optional<ReferenceOverlay> referenceOverlay; // 可选参考投射
 
         // ⚡️ vocal-time-stretch §8.5 — TimeGrid handles overlay.
         // When non-null, renderer paints vertical guide lines at each handle's
@@ -137,6 +156,9 @@ public:
                      const RenderContext& ctx,
                      const MaterializationRenderItem& item,
                      const std::vector<uint8_t>* visibleMask = nullptr);
+
+    void drawGhostNotes(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);
+    void drawGhostAnchors(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);
 };
 
 } // namespace OpenTune

@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <vector>
 #include <set>
+#include <map>
 #include "../PluginProcessor.h"
 #include "UIColors.h"
 #include "SmallButton.h"
@@ -39,6 +40,7 @@ public:
         virtual void placementSelectionChanged(int trackId, uint64_t placementId) = 0;
         virtual void placementTimingChanged(int trackId, int placementIndex) = 0;
         virtual void placementDoubleClicked(int /*trackId*/, int /*placementIndex*/) {}
+        virtual void referenceButtonClicked(int /*trackId*/, uint64_t /*placementId*/) {}
         // Y轴缩放回调 - 通知外部轨道高度变化（用于同步TrackPanel）
         virtual void trackHeightChanged(int newHeight) { juce::ignoreUnused(newHeight); }
         // Y轴滚动回调 - 通知外部垂直滚动偏移变化（用于同步TrackPanel）
@@ -93,6 +95,10 @@ public:
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
     bool hasUserManuallyZoomed() const { return userHasManuallyZoomed_; }
 
+    // reference binding 状态管理
+    void setClipAnalysisInProgress(uint64_t placementId, bool inProgress);
+    void setClipHasReferenceBinding(uint64_t placementId, bool hasRef);
+
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
 
@@ -109,6 +115,12 @@ private:
     };
 
     HitTestResult hitTestPlacement(juce::Point<int> p) const;
+
+    // reference binding 状态
+    struct ClipAnalysisState {
+        bool isAnalysisInProgress{false};      // true: 显示描边动画
+        bool hasReferenceBinding{false};       // true: 显示参考图标
+    };
 
     juce::Rectangle<int> getTrackLaneBounds(int trackId) const;
     juce::Rectangle<int> buildProjectedPlacementBounds(int trackId, int placementIndex) const;
@@ -171,6 +183,11 @@ private:
     int selectedTrack_{0};
     int selectedPlacementIndex_{0};
     uint64_t selectedPlacementId_{0};
+
+    // reference binding 状态（placementId → state）
+    std::map<uint64_t, ClipAnalysisState> clipAnalysisStates_;
+    uint64_t hoveredPlacementId_{0};       // 当前鼠标悬停的 placement
+    bool mouseOverReferenceButton_{false}; // 鼠标在参考按钮区域内
 
     // === 多选支持 ===
     struct PlacementSelectionKey {

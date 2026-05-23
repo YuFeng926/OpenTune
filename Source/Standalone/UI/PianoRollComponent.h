@@ -183,6 +183,10 @@ public:
     void setTimelineViewDomain(double viewStartSeconds, double viewEndSeconds);
     void clearTimelineViewDomain();
     
+    /** 设置 reference overlay 数据（ghost notes + anchors）。
+     *  传入 std::nullopt 清除 overlay。 */
+    void setReferenceOverlay(std::optional<PianoRollRenderer::ReferenceOverlay> overlay);
+
     void setPlayheadColour(juce::Colour colour) {
         playheadOverlay_.setPlayheadColour(colour);
     }
@@ -422,6 +426,8 @@ private:
 
     uint64_t editedMaterializationId_ = 0;
     std::vector<Note> cachedNotes_;
+
+    std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
 
     // Undo support
     juce::String pendingUndoDescription_;

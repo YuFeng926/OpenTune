@@ -1234,6 +1234,12 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         for (const auto& item : ctx.materializations)
             renderer_->drawUnvoicedFrameBands(g, ctx, item);
 
+        // Ghost notes & reference anchors overlay（参考 clip 半透明投影）
+        if (ctx.referenceOverlay.has_value() && ctx.referenceOverlay->enabled) {
+            renderer_->drawGhostNotes(g, ctx, *ctx.referenceOverlay);
+            renderer_->drawGhostAnchors(g, ctx, *ctx.referenceOverlay);
+        }
+
         if (showWaveform_) {
             for (const auto& item : ctx.materializations)
                 renderer_->drawWaveform(g, ctx, item);
@@ -2562,6 +2568,13 @@ void PianoRollComponent::visibilityChanged()
     }
 }
 
+void PianoRollComponent::setReferenceOverlay(std::optional<PianoRollRenderer::ReferenceOverlay> overlay)
+{
+    referenceOverlay_ = std::move(overlay);
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
+                     PianoRollVisualInvalidationPriority::Interactive);
+}
+
 PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext() const
 {
     const auto timelineViewportBounds = getTimelineViewportBounds();
@@ -2621,6 +2634,8 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext() const
     ctx.materializationTimeToTimeline = [this](double materializationSeconds) {
         return projectMaterializationTimeToTimeline(materializationSeconds);
     };
+
+    ctx.referenceOverlay = referenceOverlay_;
 
     return ctx;
 }
