@@ -24,6 +24,7 @@ uint64_t SourceStore::createSource(CreateSourceRequest request, uint64_t forcedS
     SourceEntry source;
     source.sourceId = forcedSourceId != 0 ? forcedSourceId : nextSourceId_.fetch_add(1, std::memory_order_relaxed);
     source.displayName = std::move(request.displayName);
+    source.sourceFilePath = std::move(request.sourceFilePath);
     source.audioBuffer = std::move(request.audioBuffer);
     source.sampleRate = request.sampleRate;
     source.numChannels = source.audioBuffer->getNumChannels();
@@ -133,6 +134,7 @@ bool SourceStore::getSnapshot(uint64_t sourceId, SourceSnapshot& out) const
 
     out.sourceId = it->second.sourceId;
     out.displayName = it->second.displayName;
+    out.sourceFilePath = it->second.sourceFilePath;
     out.audioBuffer = it->second.audioBuffer;
     out.sampleRate = it->second.sampleRate;
     out.numChannels = it->second.numChannels;
@@ -155,6 +157,25 @@ bool SourceStore::getAudioBuffer(uint64_t sourceId, std::shared_ptr<const juce::
 
     out = it->second.audioBuffer;
     return out != nullptr;
+}
+
+std::vector<uint64_t> SourceStore::getAllActiveSourceIds() const
+{
+    std::vector<uint64_t> ids;
+    const juce::ScopedReadLock readLock(lock_);
+    ids.reserve(sources_.size());
+    for (const auto& kv : sources_) {
+        if (!kv.second.isRetired_) {
+            ids.push_back(kv.first);
+        }
+    }
+    return ids;
+}
+
+int SourceStore::getTotalCount() const
+{
+    const juce::ScopedReadLock readLock(lock_);
+    return static_cast<int>(sources_.size());
 }
 
 } // namespace OpenTune

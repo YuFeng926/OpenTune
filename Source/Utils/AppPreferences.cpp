@@ -20,6 +20,7 @@ constexpr const char* kSharedZoomVerticalFactorKey = "shared.zoom.verticalFactor
 constexpr const char* kSharedScrollSpeedKey = "shared.scroll.speed";
 constexpr const char* kStandaloneMouseTrailThemeKey = "standalone.mouseTrail.theme";
 constexpr const char* kSharedRenderingPriorityKey = "shared.rendering.priority";
+constexpr const char* kSharedRecentProjectsKey = "shared.recentProjects";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
     "standalone.shortcuts.playPause",
@@ -252,6 +253,17 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.standalone.shortcuts = decodeShortcutSettings(properties);
     state.standalone.mouseTrailTheme = mouseTrailThemeFromToken(
         properties.getValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme)));
+
+    const auto recentRaw = properties.getValue(kSharedRecentProjectsKey, "");
+    if (recentRaw.isNotEmpty()) {
+        state.shared.recentProjects.clear();
+        juce::StringArray parts;
+        parts.addTokens(recentRaw, "|", "");
+        for (const auto& path : parts) {
+            state.shared.recentProjects.push_back(path);
+        }
+    }
+
     return state;
 }
 
@@ -272,6 +284,12 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedRenderingPriorityKey,
                         toRenderingPriorityToken(state.shared.renderingPriority));
     properties.setValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme));
+
+    juce::StringArray recentPaths;
+    for (const auto& path : state.shared.recentProjects) {
+        recentPaths.add(path);
+    }
+    properties.setValue(kSharedRecentProjectsKey, recentPaths.joinIntoString("|"));
 
     for (size_t index = 0; index < kShortcutStorageKeys.size(); ++index) {
         properties.setValue(kShortcutStorageKeys[index], KeyShortcutConfig::toCanonicalString(state.standalone.shortcuts.bindings[index]));
@@ -419,6 +437,34 @@ void AppPreferences::saveLocked()
 
     writeStateToProperties(*userSettings, state_);
     userSettings->saveIfNeeded();
+}
+
+std::vector<juce::String> AppPreferences::getRecentProjects() const
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return state_.shared.recentProjects;
+}
+
+void AppPreferences::pushRecentProject(const juce::String& projectPath)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    auto& list = state_.shared.recentProjects;
+    // Remove existing entry
+    list.erase(std::remove(list.begin(), list.end(), projectPath), list.end());
+    // Insert at front
+    list.insert(list.begin(), projectPath);
+    // Trim to 10
+    if (list.size() > 10) {
+        list.resize(10);
+    }
+    saveLocked();
+}
+
+void AppPreferences::clearRecentProjects()
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.recentProjects.clear();
+    saveLocked();
 }
 
 } // namespace OpenTune

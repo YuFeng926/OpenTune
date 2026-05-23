@@ -127,6 +127,43 @@ public:
         uint64_t targetRevision{0};
     };
 
+    // ============================================================
+    // Derived Analysis Slot (reference auto-align cache)
+    //
+    // Each materialization holds one DerivedAnalysis that captures
+    // basic backend analysis results.  Invalidated whenever audio
+    // or F0 data changes (e.g. setPitchCurve, replaceAudio).
+    // setNotes does NOT invalidate — user note edits are independent.
+    // ============================================================
+    struct DerivedAnalysis {
+        int analysisRevision{0};                    // bumped each time analysis is generated
+        F0ExtractionState state{F0ExtractionState::NotRequested};
+
+        // Basic-mode output
+        std::vector<Note> basicDerivedNotes;
+        struct TimeAnchor {
+            uint64_t id{0};
+            double sourceSeconds{0.0};
+            float strength{0.0f};
+        };
+        std::vector<TimeAnchor> basicDerivedAnchors;
+
+        // Fingerprint for staleness detection
+        int64_t inputFingerprint{0};                // snapshot of renderRevision at analysis time
+
+        // Backend mode (0 = Basic; Enhanced reserved for future)
+        int backendMode{0};
+
+        void reset() {
+            analysisRevision = 0;
+            state = F0ExtractionState::NotRequested;
+            basicDerivedNotes.clear();
+            basicDerivedAnchors.clear();
+            inputFingerprint = 0;
+            backendMode = 0;
+        }
+    };
+
     MaterializationStore();
     ~MaterializationStore();
 
@@ -140,6 +177,15 @@ public:
     bool containsMaterialization(uint64_t materializationId) const;   // active only
     bool hasMaterializationForSource(uint64_t sourceId) const;         // active only
     bool hasMaterializationForSourceAnyState(uint64_t sourceId) const; // active + retired
+
+    /** 获取所有 active materialization 的 ID 列表（用于工程保存等需要枚举的场景） */
+    std::vector<uint64_t> getAllActiveMaterializationIds() const;
+
+    /** 获取所有 active materialization 的完整快照列表（批量获取，用于工程保存） */
+    std::vector<MaterializationSnapshot> getAllActiveMaterializationSnapshots() const;
+
+    /** 获取 materialization 总数（含 retired），用于容量估计 */
+    int getTotalCount() const;
 
     // 软删除/恢复接口，供 UndoAction 和垃圾回收使用
     bool retireMaterialization(uint64_t id);
@@ -228,8 +274,16 @@ public:
     uint64_t findMaterializationBySourceWindow(uint64_t sourceId, const SourceWindow& window) const;
 
     static std::vector<int64_t> buildChunkBoundariesFromSilentGaps(int64_t materializationSampleCount,
-                                                                    const std::vector<SilentGap>& silentGaps,
-                                                                    int hopSize);
+                                                                     const std::vector<SilentGap>& silentGaps,
+                                                                     int hopSize);
+
+    // ============================================================
+    // Derived Analysis API
+    // ============================================================
+    bool setDerivedAnalysis(uint64_t materializationId, const DerivedAnalysis& analysis);
+    bool getDerivedAnalysis(uint64_t materializationId, DerivedAnalysis& out) const;
+    void invalidateDerivedAnalysis(uint64_t materializationId);
+    bool hasValidDerivedAnalysis(uint64_t materializationId) const;
 
 private:
     // 内部存储条目
@@ -250,6 +304,7 @@ private:
         std::shared_ptr<const TimeGridSnapshot> timeGrid;   // §3.6
         uint64_t timeGridRevision{0};                        // §3.6
         std::unique_ptr<SoundTouchStretcher> stretcher;     // §5.5 — lazy-constructed
+        DerivedAnalysis derivedAnalysis;                 // reference auto-align cache
         bool isRetired_{false};
     };
 

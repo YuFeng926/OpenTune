@@ -13,7 +13,7 @@
 #include "Editor/Preferences/TabbedPreferencesDialog.h"
 #include "Audio/AudioFormatRegistry.h"
 #include "Audio/AsyncAudioLoader.h"
-#include "Utils/PresetManager.h"
+#include "Utils/ProjectSession.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/LegacyNoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
@@ -22,6 +22,10 @@
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/TimeCoordinate.h"
 #include "Utils/KeyShortcutConfig.h"
+#include "Utils/CompositeUndoAction.h"
+#include "Utils/TimeGridEditAction.h"
+#include "../Services/ReferenceAnalysisService.h"
+#include "../DSP/ReferenceAutoAlign.h"
 #include <cmath>
 #include <atomic>
 #include <cstdlib>
@@ -366,6 +370,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , menuBar_(p, MenuBarComponent::Profile::Standalone)
     , topBar_(menuBar_, transportBar_)
     , arrangementView_(p)
+    , projectSession_(p, appPreferences_)
 {
     // Initialize track volumes array
     lastTrackVolumes_.fill(1.0f);
@@ -480,6 +485,67 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     };
 
     topBar_.setSidePanelsVisible(isTrackPanelVisible_, isParameterPanelVisible_);
+
+    // ============================================================================
+    // Reference Analysis Service
+    // ============================================================================
+    referenceAnalysisService_ = std::make_unique<ReferenceAnalysisService>();
+    {
+        auto* matStore = processorRef_.getMaterializationStore();
+        referenceAnalysisService_->setAnalysisFunc(
+            [matStore](uint64_t materializationId) -> MaterializationStore::DerivedAnalysis {
+                MaterializationStore::DerivedAnalysis result;
+                MaterializationStore::MaterializationSnapshot snapshot;
+                if (!matStore->getSnapshot(materializationId, snapshot)) {
+                    result.state = F0ExtractionState::Failed;
+                    return result;
+                }
+                if (!snapshot.pitchCurve) {
+                    result.state = F0ExtractionState::Failed;
+                    return result;
+                }
+                auto curve = snapshot.pitchCurve;
+                auto curveSnap = curve->getSnapshot();
+                const auto& originalF0 = curveSnap->getOriginalF0();
+                const auto& originalEnergy = curveSnap->getOriginalEnergy();
+                if (originalF0.empty()) {
+                    result.state = F0ExtractionState::Failed;
+                    return result;
+                }
+                const int hopSize = curve->getHopSize();
+                const double f0SampleRate = curve->getSampleRate();
+                if (hopSize <= 0 || f0SampleRate <= 0.0) {
+                    result.state = F0ExtractionState::Failed;
+                    return result;
+                }
+
+                NoteGeneratorParams params;
+                auto notes = LegacyNoteGenerator::generate(originalF0, originalEnergy,
+                    hopSize, f0SampleRate, 44100.0, params);
+
+                result.basicDerivedNotes = std::move(notes);
+                // Derive basic anchors from note start/end times
+                for (const auto& note : result.basicDerivedNotes) {
+                    MaterializationStore::DerivedAnalysis::TimeAnchor anchor;
+                    anchor.sourceSeconds = note.startTime;
+                    anchor.strength = 1.0f;
+                    result.basicDerivedAnchors.push_back(anchor);
+
+                    anchor.id = 0;  // will be re-assigned
+                    anchor.sourceSeconds = note.endTime;
+                    anchor.strength = 0.5f;
+                    result.basicDerivedAnchors.push_back(anchor);
+                }
+
+                result.analysisRevision = 1;
+                result.state = F0ExtractionState::Ready;
+                result.inputFingerprint = snapshot.renderRevision;
+                result.backendMode = 0;
+
+                return result;
+            });
+        referenceAnalysisService_->addListener(this);
+    }
 
     trackPanel_.addListener(this);
     trackPanel_.setActiveTrack(getStandaloneActiveTrack(processorRef_));
@@ -636,6 +702,12 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 
     // Remove language change listener
     LocalizationManager::getInstance().removeListener(this);
+
+    // Shutdown reference analysis service
+    if (referenceAnalysisService_) {
+        referenceAnalysisService_->removeListener(this);
+        referenceAnalysisService_->cancelAll();
+    }
 
     transportBar_.removeListener(this);
     trackPanel_.removeListener(this);
@@ -1258,6 +1330,8 @@ void OpenTuneAudioProcessorEditor::retuneSpeedChanged(float speed)
     const float vibratoDepth = parameterPanel_.getVibratoDepth();
     const float vibratoRate = parameterPanel_.getVibratoRate();
     pianoRoll_.applyCorrectionAsyncForEntireClip(normalizedSpeed, vibratoDepth, vibratoRate);
+
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
@@ -1267,6 +1341,8 @@ void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
     const float speed = parameterPanel_.getRetuneSpeed() / 100.0f;
     const float rate = parameterPanel_.getVibratoRate();
     pianoRoll_.applyCorrectionAsyncForEntireClip(speed, value, rate);
+
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
@@ -1276,6 +1352,8 @@ void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
     const float speed = parameterPanel_.getRetuneSpeed() / 100.0f;
     const float depth = parameterPanel_.getVibratoDepth();
     pianoRoll_.applyCorrectionAsyncForEntireClip(speed, depth, value);
+
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
@@ -1513,11 +1591,12 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     const auto sourceFile = pendingImport.file;
     const auto fileName = sourceFile.getFileName();
+    const auto sourceFilePath = sourceFile.getFullPathName();
 
     asyncAudioLoader_.loadAudioFile(
         sourceFile,
         {},
-        [safeThis, pendingImport = std::move(pendingImport), fileName](AsyncAudioLoader::LoadResult result) mutable
+        [safeThis, pendingImport = std::move(pendingImport), fileName, sourceFilePath](AsyncAudioLoader::LoadResult result) mutable
         {
             if (safeThis == nullptr)
                 return;
@@ -1548,6 +1627,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                                               pendingImport,
                                               placement,
                                               fileName,
+                                              sourceFilePath,
                                               sampleRate = result.sampleRate,
                                               audioBuffer = std::move(result.audioBuffer)]() mutable
             {
@@ -1556,7 +1636,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
 
                 OpenTuneAudioProcessor::PreparedImport preparedImport;
                 {
-                    if (!safeThis->processorRef_.prepareImport(std::move(audioBuffer), sampleRate, fileName, preparedImport))
+                    if (!safeThis->processorRef_.prepareImport(std::move(audioBuffer), sampleRate, fileName, sourceFilePath, preparedImport))
                     {
                         juce::MessageManager::callAsync([safeThis, batchId = pendingImport.batchId]()
                         {
@@ -1875,94 +1955,135 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
     });
 }
 
-void OpenTuneAudioProcessorEditor::savePresetRequested()
+void OpenTuneAudioProcessorEditor::saveProjectRequested()
 {
-    auto chooser = std::make_shared<juce::FileChooser>("Save Preset",
-                                                         presetManager_.getDefaultPresetDirectory(),
-                                                         "*.otpreset");
+    if (!projectSession_.hasProjectPath()) {
+        saveProjectAsRequested();
+        return;
+    }
+    auto result = projectSession_.saveProject();
+    if (!result.ok()) {
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+            "保存工程失败", result.error().fullMessage());
+        return;
+    }
+    projectSession_.clearDirty();
+    syncRecentProjectsToMenu();
+    updateTitleWithProjectPath();
+}
 
-    auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
+void OpenTuneAudioProcessorEditor::openProjectRequested()
+{
+    if (!projectSession_.isDirty()) {
+        launchOpenProjectChooser();
+        return;
+    }
 
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(juce::MessageBoxIconType::QuestionIcon)
+            .withTitle("当前工程尚未保存")
+            .withMessage("打开其他工程前，是否保存当前工程的更改？")
+            .withButton("保存")    // result=1
+            .withButton("不保存")  // result=2
+            .withButton("取消"),   // result=3
+        [safeThis](int result) {
+            if (safeThis == nullptr) return;
+            if (result == 0 || result == 3) return; // Dismissed or Cancel
+            if (result == 1) {
+                // Save
+                if (!safeThis->projectSession_.hasProjectPath()) {
+                    safeThis->saveProjectAsThenOpenProject();
+                    return;
+                }
+                auto saveResult = safeThis->projectSession_.saveProject();
+                if (!saveResult.ok()) {
+                    juce::AlertWindow::showMessageBoxAsync(
+                        juce::MessageBoxIconType::WarningIcon,
+                        "保存工程失败", saveResult.error().fullMessage());
+                    return;
+                }
+                safeThis->projectSession_.clearDirty();
+                safeThis->updateTitleWithProjectPath();
+                safeThis->syncRecentProjectsToMenu();
+            }
+            // Don't save (result==2) or after successful save: continue to open
+            safeThis->launchOpenProjectChooser();
+        });
+}
 
-    chooser->launchAsync(chooserFlags, [safeThis, chooser](const juce::FileChooser& fc)
-    {
-        if (safeThis == nullptr) {
+void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
+{
+    auto chooser = std::make_shared<juce::FileChooser>("打开工程", juce::File(), "*.otproj");
+    auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+
+    chooser->launchAsync(chooserFlags, [safeThis, chooser](const juce::FileChooser& fc) {
+        if (safeThis == nullptr) return;
+        auto file = fc.getResult();
+        if (file == juce::File{}) return;
+
+        auto result = safeThis->projectSession_.openProject(file);
+        if (!result.ok()) {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                "打开工程失败", result.error().fullMessage());
             return;
         }
-
-        auto file = fc.getResult();
-        if (file != juce::File{})
-        {
-            if (!file.hasFileExtension(".otpreset"))
-            {
-                file = file.withFileExtension(".otpreset");
-            }
-
-            PresetData preset = safeThis->presetManager_.captureCurrentState(safeThis->processorRef_);
-            preset.name = file.getFileNameWithoutExtension();
-
-            if (safeThis->presetManager_.savePreset(preset, file))
-            {
-                DBG("Preset saved: " + file.getFullPathName());
-                juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::InfoIcon,
-                    "Preset Saved",
-                    "Preset saved to: " + file.getFullPathName());
-            }
-            else
-            {
-                juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::WarningIcon,
-                    "Save Failed",
-                    "Failed to save preset to: " + file.getFullPathName());
-            }
-        }
+        safeThis->syncRecentProjectsToMenu();
+        safeThis->updateTitleWithProjectPath();
     });
 }
 
-void OpenTuneAudioProcessorEditor::loadPresetRequested()
+void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
 {
-    auto chooser = std::make_shared<juce::FileChooser>("Load Preset",
-                                                         presetManager_.getDefaultPresetDirectory(),
-                                                         "*.otpreset");
-
-    auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
-
+    auto chooser = std::make_shared<juce::FileChooser>("保存工程", juce::File(), "*.otproj");
+    auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
-    chooser->launchAsync(chooserFlags, [safeThis, chooser](const juce::FileChooser& fc)
-    {
-        if (safeThis == nullptr) {
+    chooser->launchAsync(chooserFlags, [safeThis, chooser](const juce::FileChooser& fc) {
+        if (safeThis == nullptr) return;
+        auto file = fc.getResult();
+        if (file == juce::File{}) return;
+        if (!file.hasFileExtension(".otproj"))
+            file = file.withFileExtension(".otproj");
+
+        if (file.existsAsFile()) {
+            juce::AlertWindow::showAsync(
+                juce::MessageBoxOptions()
+                    .withIconType(juce::MessageBoxIconType::QuestionIcon)
+                    .withTitle("覆盖现有工程？")
+                    .withMessage("目标工程文件已存在，是否覆盖？")
+                    .withButton("覆盖")
+                    .withButton("取消"),
+                [safeThis, file](int r) {
+                    if (safeThis == nullptr) return;
+                    if (r != 1) return;
+                    auto result = safeThis->projectSession_.saveProjectAs(file);
+                    if (!result.ok()) {
+                        juce::AlertWindow::showMessageBoxAsync(
+                            juce::MessageBoxIconType::WarningIcon,
+                            "保存工程失败", result.error().fullMessage());
+                        return;
+                    }
+                    safeThis->syncRecentProjectsToMenu();
+                    safeThis->updateTitleWithProjectPath();
+                    safeThis->launchOpenProjectChooser();
+                });
             return;
         }
 
-        auto file = fc.getResult();
-        if (file != juce::File{})
-        {
-            PresetData preset = safeThis->presetManager_.loadPreset(file);
-
-            if (preset.name.isNotEmpty())
-            {
-                safeThis->presetManager_.applyPreset(preset, safeThis->processorRef_);
-
-                // Update UI to reflect loaded preset
-                safeThis->parameterPanel_.setRetuneSpeed(preset.retuneSpeed);
-
-                DBG("Preset loaded: " + preset.name);
-                juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::InfoIcon,
-                    "Preset Loaded",
-                    "Loaded preset: " + preset.name);
-            }
-            else
-            {
-                juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::WarningIcon,
-                    "Load Failed",
-                    "Failed to load preset from: " + file.getFullPathName());
-            }
+        auto result = safeThis->projectSession_.saveProjectAs(file);
+        if (!result.ok()) {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                "保存工程失败", result.error().fullMessage());
+            return;
         }
+        safeThis->syncRecentProjectsToMenu();
+        safeThis->updateTitleWithProjectPath();
+
+        // Chain: after save-as completes, continue to open project
+        safeThis->launchOpenProjectChooser();
     });
 }
 
@@ -2168,6 +2289,8 @@ void OpenTuneAudioProcessorEditor::performUndoRedoAction(bool isUndo)
         endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
     }
     processorRef_.enqueueMaterializationPartialRenderById(matId, startSec, endSec);
+
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::undoRequested() { performUndoRedoAction(true); }
@@ -2234,6 +2357,8 @@ void OpenTuneAudioProcessorEditor::bpmChanged(double newBpm)
 {
     processorRef_.setBpm(newBpm);
     pianoRoll_.setBpm(newBpm);  // Update piano roll to redraw time grid
+
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
@@ -2270,6 +2395,8 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
         + " materializationId=" + juce::String(static_cast<juce::int64>(activeMaterializationId))
         + " root=" + juce::String(newRoot)
         + " scale=" + juce::String(newScaleType));
+
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
@@ -2356,6 +2483,14 @@ void OpenTuneAudioProcessorEditor::placementSelectionChanged(int trackId, uint64
 {
     applyPlacementSelectionContext(trackId, placementId);
 
+    // 更新 reference context
+    if (auto* arrangement = processorRef_.getStandaloneArrangement()) {
+        currentReferencePlacementId_ = arrangement->getPlacementReferencePlacement(trackId, placementId);
+    } else {
+        currentReferencePlacementId_ = 0;
+    }
+    refreshReferenceContext();
+
     // 如果当前在PianoRoll视图，且用户没有手动缩放过，自动适配新clip
     if (!isWorkspaceView_) {
         juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
@@ -2374,6 +2509,8 @@ void OpenTuneAudioProcessorEditor::placementTimingChanged(int trackId, int place
     {
         syncPianoRollFromPlacementSelection(trackId, placementIndex);
     }
+
+    projectSession_.markDirty();
 }
 
 // Y轴滚动同步：ArrangementView或TrackPanel滚动时通知另一个组件跟随
@@ -2458,7 +2595,13 @@ void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
 
 void OpenTuneAudioProcessorEditor::autoTuneRequested()
 {
-    pianoRoll_.applyAutoTuneToSelection();
+    if (currentReferencePlacementId_ != 0) {
+        handleAutoRefExecute();
+    } else {
+        pianoRoll_.applyAutoTuneToSelection();
+    }
+
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame)
@@ -2518,6 +2661,8 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
         + " secRange=[" + juce::String(editStartSec, 3) + "," + juce::String(editEndSec, 3) + "]");
 
     processorRef_.enqueueMaterializationPartialRenderById(materializationId, editStartSec, editEndSec);
+
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::escapeKeyPressed()
@@ -2531,6 +2676,492 @@ void OpenTuneAudioProcessorEditor::escapeKeyPressed()
 void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
 {
     parameterPanel_.setActiveTool(static_cast<int>(tool));
+}
+
+void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
+{
+    auto chooser = std::make_shared<juce::FileChooser>("保存工程", juce::File(), "*.otproj");
+    auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
+    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+
+    chooser->launchAsync(chooserFlags, [safeThis, chooser](const juce::FileChooser& fc) {
+        if (safeThis == nullptr) return;
+        auto file = fc.getResult();
+        if (file == juce::File{}) return;
+        if (!file.hasFileExtension(".otproj"))
+            file = file.withFileExtension(".otproj");
+
+        if (file.existsAsFile()) {
+            juce::AlertWindow::showAsync(
+                juce::MessageBoxOptions()
+                    .withIconType(juce::MessageBoxIconType::QuestionIcon)
+                    .withTitle("覆盖现有工程？")
+                    .withMessage("目标工程文件已存在，是否覆盖？")
+                    .withButton("覆盖")
+                    .withButton("取消"),
+                [safeThis, file](int r) {
+                    if (safeThis == nullptr) return;
+                    if (r != 1) return; // Cancel or dismissed
+                    auto result = safeThis->projectSession_.saveProjectAs(file);
+                    if (!result.ok()) {
+                        juce::AlertWindow::showMessageBoxAsync(
+                            juce::MessageBoxIconType::WarningIcon,
+                            "保存工程失败", result.error().fullMessage());
+                        return;
+                    }
+                    safeThis->syncRecentProjectsToMenu();
+                    safeThis->updateTitleWithProjectPath();
+                });
+            return; // Don't continue in outer callback — the inner callback handles save
+        }
+
+        auto result = safeThis->projectSession_.saveProjectAs(file);
+        if (!result.ok()) {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                "保存工程失败", result.error().fullMessage());
+            return;
+        }
+        safeThis->syncRecentProjectsToMenu();
+        safeThis->updateTitleWithProjectPath();
+    });
+}
+
+void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& file)
+{
+    if (!projectSession_.isDirty()) {
+        auto result = projectSession_.openProject(file);
+        if (!result.ok()) {
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::MessageBoxIconType::WarningIcon,
+                "打开工程失败", result.error().fullMessage());
+            projectSession_.clearRecentProjects();
+            return;
+        }
+        syncRecentProjectsToMenu();
+        updateTitleWithProjectPath();
+        return;
+    }
+
+    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+    juce::AlertWindow::showAsync(
+        juce::MessageBoxOptions()
+            .withIconType(juce::MessageBoxIconType::QuestionIcon)
+            .withTitle("当前工程尚未保存")
+            .withMessage("打开其他工程前，是否保存当前工程的更改？")
+            .withButton("保存")
+            .withButton("不保存")
+            .withButton("取消"),
+        [safeThis, file](int result) {
+            if (safeThis == nullptr) return;
+            if (result == 0 || result == 3) return; // Dismissed or Cancel
+            if (result == 1) {
+                // Save
+                if (!safeThis->projectSession_.hasProjectPath()) {
+                    safeThis->saveProjectAsRequested(); // async, don't continue
+                    return;
+                }
+                auto saveResult = safeThis->projectSession_.saveProject();
+                if (!saveResult.ok()) {
+                    juce::AlertWindow::showMessageBoxAsync(
+                        juce::MessageBoxIconType::WarningIcon,
+                        "保存工程失败", saveResult.error().fullMessage());
+                    return;
+                }
+                safeThis->projectSession_.clearDirty();
+                safeThis->updateTitleWithProjectPath();
+                safeThis->syncRecentProjectsToMenu();
+            }
+            // Don't save (result==2) or after successful save: open the project
+            auto openResult = safeThis->projectSession_.openProject(file);
+            if (!openResult.ok()) {
+                juce::AlertWindow::showMessageBoxAsync(
+                    juce::MessageBoxIconType::WarningIcon,
+                    "打开工程失败", openResult.error().fullMessage());
+                safeThis->projectSession_.clearRecentProjects();
+                return;
+            }
+            safeThis->syncRecentProjectsToMenu();
+            safeThis->updateTitleWithProjectPath();
+        });
+}
+
+void OpenTuneAudioProcessorEditor::clearRecentProjectsRequested()
+{
+    projectSession_.clearRecentProjects();
+    syncRecentProjectsToMenu();
+}
+
+void OpenTuneAudioProcessorEditor::updateTitleWithProjectPath()
+{
+    const auto name = projectSession_.getProjectName();
+    juce::String title = "OpenTune - " + name;
+    if (projectSession_.isDirty()) {
+        title += " *";
+    }
+    if (auto* dw = getTopLevelComponent()) {
+        dw->setName(title);
+    }
+}
+
+void OpenTuneAudioProcessorEditor::syncRecentProjectsToMenu()
+{
+    const auto files = projectSession_.getRecentProjects();
+    menuBar_.setRecentProjects(files);
+}
+
+// ============================================================================
+// Reference Auto-Align Methods
+// ============================================================================
+
+// Look up a reference placement's materialization across all tracks.
+static bool findReferencePlacementInfo(OpenTuneAudioProcessor& processor,
+                                       uint64_t refPlacementId,
+                                       StandaloneArrangement::Placement& out)
+{
+    for (int t = 0; t < MAX_TRACKS; ++t) {
+        if (processor.getPlacementById(t, refPlacementId, out)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void OpenTuneAudioProcessorEditor::refreshReferenceContext()
+{
+    const bool hasRef = (currentReferencePlacementId_ != 0);
+    parameterPanel_.setAutoButtonMode(hasRef);
+
+    // Update arrangement view clip visuals
+    const int trackId = getStandaloneActiveTrack(processorRef_);
+    const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, trackId);
+    if (placementIndex >= 0) {
+        const uint64_t placementId = processorRef_.getPlacementId(trackId, placementIndex);
+        arrangementView_.setClipHasReferenceBinding(placementId, hasRef);
+    }
+
+    if (!hasRef) {
+        pianoRoll_.setReferenceOverlay(std::nullopt);
+        currentReferenceMaterializationId_ = 0;
+        return;
+    }
+
+    // Resolve reference materialization
+    StandaloneArrangement::Placement refPlacement;
+    if (findReferencePlacementInfo(processorRef_, currentReferencePlacementId_, refPlacement)) {
+        currentReferenceMaterializationId_ = refPlacement.materializationId;
+    } else {
+        currentReferenceMaterializationId_ = 0;
+    }
+
+    // If derived analysis is ready, set up piano roll overlay
+    if (currentReferenceMaterializationId_ != 0) {
+        auto* matStore = processorRef_.getMaterializationStore();
+        MaterializationStore::DerivedAnalysis refAnalysis;
+        if (matStore->getDerivedAnalysis(currentReferenceMaterializationId_, refAnalysis)
+            && refAnalysis.state == F0ExtractionState::Ready)
+        {
+            PianoRollRenderer::ReferenceOverlay overlay;
+            overlay.ghostNotes = refAnalysis.basicDerivedNotes;
+            // Convert TimeAnchor → GhostAnchor
+            for (const auto& ta : refAnalysis.basicDerivedAnchors) {
+                PianoRollRenderer::ReferenceOverlay::GhostAnchor ga;
+                ga.sourceSeconds = ta.sourceSeconds;
+                ga.strength = ta.strength;
+                overlay.ghostAnchors.push_back(ga);
+            }
+            overlay.ghostColour = juce::Colours::steelblue;
+            overlay.enabled = true;
+            // Source time projection: reference's local source time → timeline time
+            const double refTimelineStart = refPlacement.timelineStartSeconds;
+            overlay.projectSourceTime = [refTimelineStart](double srcSec) -> double {
+                return srcSec + refTimelineStart;
+            };
+            pianoRoll_.setReferenceOverlay(overlay);
+        } else {
+            pianoRoll_.setReferenceOverlay(std::nullopt);
+        }
+    } else {
+        pianoRoll_.setReferenceOverlay(std::nullopt);
+    }
+}
+
+void OpenTuneAudioProcessorEditor::referenceButtonClicked(int trackId, uint64_t placementId)
+{
+    resolveReferenceBindingMenu(trackId, placementId);
+}
+
+void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint64_t targetPlacementId)
+{
+    auto* arrangement = processorRef_.getStandaloneArrangement();
+    juce::PopupMenu menu;
+
+    // 获取 target placement 信息
+    StandaloneArrangement::Placement targetPlacement;
+    if (!processorRef_.getPlacementById(trackId, targetPlacementId, targetPlacement)) {
+        return;
+    }
+
+    // 检查是否已有 reference binding
+    const uint64_t existingRef = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
+    if (existingRef != 0) {
+        menu.addItem("不使用参考 Clip", [this, arrangement, trackId, targetPlacementId]() {
+            arrangement->clearPlacementReferencePlacement(trackId, targetPlacementId);
+            currentReferencePlacementId_ = 0;
+            currentReferenceMaterializationId_ = 0;
+            refreshReferenceContext();
+        });
+        menu.addSeparator();
+    }
+
+    // 子菜单: 选择参考 Clip (列出同视图内其他 clip, 排除自身)
+    juce::PopupMenu refMenu;
+    bool hasCandidates = false;
+
+    for (int t = 0; t < MAX_TRACKS; ++t) {
+        const int numPlacements = arrangement->getNumPlacements(t);
+        for (int pi = 0; pi < numPlacements; ++pi) {
+            StandaloneArrangement::Placement candidate;
+            if (!processorRef_.getPlacementByIndex(t, pi, candidate)) continue;
+            if (candidate.placementId == targetPlacementId) continue; // 排除自身
+            if (candidate.isRetired) continue;
+
+            // 排除已作为 target 的 (被其他 clip 引用)
+            // 简化检查: 只排除循环引用情况
+            if (arrangement->isCyclicReference(trackId, targetPlacementId, candidate.placementId)) continue;
+
+            hasCandidates = true;
+            const juce::String label = juce::String("Track ") + juce::String(t + 1)
+                + " - " + (candidate.name.isNotEmpty() ? candidate.name : "Clip")
+                + juce::String(" (Mat#") + juce::String(static_cast<juce::int64>(candidate.materializationId)) + ")";
+            const uint64_t targetMatId = targetPlacement.materializationId;
+            refMenu.addItem(label, [this, arrangement, trackId, targetPlacementId, targetMatId, candidate]() {
+                arrangement->setPlacementReferencePlacement(trackId, targetPlacementId, candidate.placementId);
+                currentReferencePlacementId_ = candidate.placementId;
+                currentReferenceMaterializationId_ = candidate.materializationId;
+                refreshReferenceContext();
+                // 启动后台分析 (target + reference)
+                startReferenceAnalysis(targetPlacementId, targetMatId);
+                startReferenceAnalysis(candidate.placementId, candidate.materializationId);
+            });
+        }
+    }
+
+    if (hasCandidates) {
+        menu.addSubMenu("选择参考 Clip", refMenu);
+    } else {
+        menu.addItem("(无可用的参考 Clip)", false, false, nullptr);
+    }
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+        .withTargetComponent(this));
+}
+
+void OpenTuneAudioProcessorEditor::startReferenceAnalysis(uint64_t placementId, uint64_t materializationId)
+{
+    auto* matStore = processorRef_.getMaterializationStore();
+    if (matStore->hasValidDerivedAnalysis(materializationId)) return;
+
+    MaterializationStore::MaterializationSnapshot snapshot;
+    if (!matStore->getSnapshot(materializationId, snapshot)) return;
+
+    // 更新 Clip 的描边动画状态 (per placementId)
+    arrangementView_.setClipAnalysisInProgress(placementId, true);
+    analysisPendingPlacements_[materializationId] = placementId;
+
+    referenceAnalysisService_->submitAnalysis(materializationId, snapshot.renderRevision);
+}
+
+void OpenTuneAudioProcessorEditor::analysisCompleted(uint64_t materializationId,
+                                                      const MaterializationStore::DerivedAnalysis& result)
+{
+    // 在 worker 线程写数据（MaterializationStore 内部加锁保护）
+    processorRef_.getMaterializationStore()->setDerivedAnalysis(materializationId, result);
+
+    // UI 操作必须调度到消息线程执行
+    juce::MessageManager::callAsync([this, materializationId]() {
+        // 清除进度指示器
+        if (auto it = analysisPendingPlacements_.find(materializationId);
+            it != analysisPendingPlacements_.end()) {
+            arrangementView_.setClipAnalysisInProgress(it->second, false);
+            analysisPendingPlacements_.erase(it);
+        }
+        refreshReferenceContext(); // 更新 overlay
+    });
+}
+
+void OpenTuneAudioProcessorEditor::analysisFailed(uint64_t materializationId, const juce::String& reason)
+{
+    // UI 操作必须调度到消息线程
+    juce::MessageManager::callAsync([this, materializationId, reason]() {
+        // 清除进度指示器
+        if (auto it = analysisPendingPlacements_.find(materializationId);
+            it != analysisPendingPlacements_.end()) {
+            arrangementView_.setClipAnalysisInProgress(it->second, false);
+            analysisPendingPlacements_.erase(it);
+        }
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "自动分析失败",
+            reason);
+    });
+}
+
+void OpenTuneAudioProcessorEditor::handleAutoRefExecute()
+{
+    if (currentReferencePlacementId_ == 0 || currentReferenceMaterializationId_ == 0) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "无参考 Clip",
+            "请先选择一个参考 Clip。");
+        return;
+    }
+
+    const int trackId = getStandaloneActiveTrack(processorRef_);
+    const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, trackId);
+    if (placementIndex < 0) return;
+
+    const uint64_t targetPlacementId = processorRef_.getPlacementId(trackId, placementIndex);
+
+    // 获取 target 和 reference placement 信息
+    StandaloneArrangement::Placement targetPlacement;
+    if (!processorRef_.getPlacementById(trackId, targetPlacementId, targetPlacement)) {
+        return;
+    }
+
+    StandaloneArrangement::Placement refPlacement;
+    if (!findReferencePlacementInfo(processorRef_, currentReferencePlacementId_, refPlacement)) {
+        return;
+    }
+
+    // 获取双方的 derived analysis
+    auto* matStore = processorRef_.getMaterializationStore();
+    MaterializationStore::DerivedAnalysis targetAnalysis;
+    MaterializationStore::DerivedAnalysis refAnalysis;
+
+    if (!matStore->getDerivedAnalysis(targetPlacement.materializationId, targetAnalysis)) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "分析未就绪",
+            "Target clip 的自动分析尚未完成，请稍后重试。");
+        return;
+    }
+
+    if (!matStore->getDerivedAnalysis(refPlacement.materializationId, refAnalysis)) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "分析未就绪",
+            "Reference clip 的自动分析尚未完成，请稍后重试。");
+        return;
+    }
+
+    // 计算 overlap 区间
+    const double overlapStart = std::max(targetPlacement.timelineStartSeconds,
+                                          refPlacement.timelineStartSeconds);
+    const double overlapEnd = std::min(targetPlacement.timelineEndSeconds(),
+                                        refPlacement.timelineEndSeconds());
+
+    const double targetTotalDuration =
+        processorRef_.getMaterializationAudioDurationById(targetPlacement.materializationId);
+
+    // 执行对齐
+    auto alignResult = ReferenceAutoAlign::align(
+        targetAnalysis, refAnalysis,
+        overlapStart, overlapEnd,
+        targetPlacement.timelineStartSeconds,
+        refPlacement.timelineStartSeconds,
+        targetTotalDuration);
+
+    if (!alignResult.success) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "自动对轨失败",
+            alignResult.errorMessage);
+        return;
+    }
+
+    // 组装 CompositeUndoAction
+    auto composite = std::make_unique<CompositeUndoAction>(
+        juce::String::fromUTF8("AUTO (Ref) 对齐"));
+
+    // 1. 获取旧的 notes 和 segments
+    auto* matStoreRaw = processorRef_.getMaterializationStore();
+    const uint64_t targetMatId = targetPlacement.materializationId;
+    auto oldNotes = matStoreRaw->getNotes(targetMatId);
+
+    auto curve = processorRef_.getMaterializationPitchCurveById(targetMatId);
+    std::vector<CorrectedSegment> oldSegments;
+    if (curve) {
+        auto snap = curve->getSnapshot();
+        if (snap) {
+            oldSegments = snap->getCorrectedSegments();
+        }
+    }
+
+    // 计算 affected frame range (粗略: 整个 overlap 范围)
+    // F0 100 fps, 转换时间→帧
+    constexpr double kF0Fps = 100.0;
+    const int affectedStartFrame = static_cast<int>(std::round(
+        (overlapStart - targetPlacement.timelineStartSeconds) * kF0Fps));
+    const int affectedEndFrame = static_cast<int>(std::round(
+        (overlapEnd - targetPlacement.timelineStartSeconds) * kF0Fps));
+
+    // 合并旧的 segments 和新的 aligned segments
+    // 策略: 保留 overlap 区间外的旧 segments, overlay 区间内用新 aligned segments
+    std::vector<CorrectedSegment> newSegments;
+    for (const auto& seg : oldSegments) {
+        // 如果 segment 完全在 overlap 区间外，保留
+        if (seg.endFrame <= affectedStartFrame || seg.startFrame >= affectedEndFrame) {
+            newSegments.push_back(seg);
+        }
+    }
+    // 添加 aligned segments
+    for (auto& seg : alignResult.correctedSegments) {
+        // 偏移坐标到 F0 帧
+        seg.startFrame += affectedStartFrame;
+        seg.endFrame += affectedStartFrame;
+        newSegments.push_back(seg);
+    }
+
+    // Pitch action
+    auto pitchAction = std::make_unique<PianoRollEditAction>(
+        processorRef_,
+        targetMatId,
+        juce::String::fromUTF8("AUTO (Ref) - 音高"),
+        oldNotes,
+        alignResult.correctedNotes,
+        oldSegments,
+        newSegments,
+        affectedStartFrame,
+        affectedEndFrame);
+    composite->addAction(std::move(pitchAction));
+
+    // 2. TimeGrid action (如果有)
+    if (alignResult.timeGrid) {
+        std::shared_ptr<const TimeGridSnapshot> oldGrid;
+        matStoreRaw->getTimeGrid(targetMatId, oldGrid);
+
+        auto timeGridAction = std::make_unique<TimeGridEditAction>(
+            processorRef_,
+            targetMatId,
+            juce::String::fromUTF8("AUTO (Ref) - 时间"),
+            oldGrid,
+            alignResult.timeGrid,
+            affectedStartFrame,
+            affectedEndFrame);
+        composite->addAction(std::move(timeGridAction));
+    }
+
+    // 提交 undo
+    processorRef_.getUndoManager().addAction(std::move(composite));
+
+    // 触发重渲染
+    const double editStartSec = static_cast<double>(affectedStartFrame) / kF0Fps;
+    const double editEndSec = static_cast<double>(affectedEndFrame + 1) / kF0Fps;
+    processorRef_.enqueueMaterializationPartialRenderById(targetMatId, editStartSec, editEndSec);
+
+    // 刷新 UI
+    syncPianoRollFromPlacementSelection(trackId, placementIndex);
+    refreshReferenceContext();
 }
 
 } // namespace OpenTune

@@ -4,6 +4,7 @@
 #include <juce_data_structures/juce_data_structures.h>
 
 #include <mutex>
+#include <vector>
 
 #include "AudioEditingScheme.h"
 #include "KeyShortcutConfig.h"
@@ -28,6 +29,7 @@ struct SharedPreferencesState {
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity =
         ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
     RenderingPriority renderingPriority = RenderingPriority::GpuFirst;
+    std::vector<juce::String> recentProjects;   // Most recently used project paths (MRU, max 10)
 };
 
 struct StandalonePreferencesState {
@@ -68,6 +70,10 @@ public:
     void setStandaloneShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
     void setRenderingPriority(RenderingPriority priority);
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme);
+
+    std::vector<juce::String> getRecentProjects() const;
+    void pushRecentProject(const juce::String& projectPath);
+    void clearRecentProjects();
 
 private:
     StorageOptions storageOptions_;

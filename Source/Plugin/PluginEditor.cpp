@@ -212,6 +212,7 @@ bool prepareImportFromAraRegion(OpenTuneAudioProcessor& processor,
     if (!processor.prepareImport(std::move(sliced),
                                  sourceSampleRate,
                                  displayName,
+                                 {},
                                  outPreparedImport)) {
         return false;
     }
@@ -777,16 +778,33 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                                            "Please render/export from your DAW in VST3 mode.");
 }
 
-void OpenTuneAudioProcessorEditor::savePresetRequested()
+void OpenTuneAudioProcessorEditor::openProjectRequested()
 {
-    showHostManagedMessage("Save Preset",
-                           "Use your DAW preset/chunk save workflow to persist plugin state.");
+    showHostManagedMessage("Open Project",
+                           "Project file management is handled in the Standalone version.");
 }
 
-void OpenTuneAudioProcessorEditor::loadPresetRequested()
+void OpenTuneAudioProcessorEditor::saveProjectRequested()
 {
-    showHostManagedMessage("Load Preset",
-                           "Use your DAW preset/chunk load workflow to restore plugin state.");
+    showHostManagedMessage("Save Project",
+                           "Project file management is handled in the Standalone version.");
+}
+
+void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
+{
+    showHostManagedMessage("Save Project As...",
+                           "Project file management is handled in the Standalone version.");
+}
+
+void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File&)
+{
+    showHostManagedMessage("Open Recent Project",
+                           "Project file management is handled in the Standalone version.");
+}
+
+void OpenTuneAudioProcessorEditor::clearRecentProjectsRequested()
+{
+    // No-op in VST3 mode
 }
 
 void OpenTuneAudioProcessorEditor::preferencesRequested()

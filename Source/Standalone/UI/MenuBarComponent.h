@@ -43,8 +43,11 @@ public:
         virtual ~Listener() = default;
         virtual void importAudioRequested() = 0;
         virtual void exportAudioRequested(ExportType exportType) = 0;
-        virtual void savePresetRequested() = 0;
-        virtual void loadPresetRequested() = 0;
+        virtual void openProjectRequested() = 0;
+        virtual void saveProjectRequested() = 0;
+        virtual void saveProjectAsRequested() = 0;
+        virtual void openRecentProjectRequested(const juce::File& file) = 0;
+        virtual void clearRecentProjectsRequested() = 0;
         virtual void preferencesRequested() = 0;
         virtual void helpRequested() = 0;
         virtual void showWaveformToggled(bool shouldShow) = 0;
@@ -69,6 +72,7 @@ public:
 
     void refreshLocalizedText();  // 刷新本地化文本
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme) { mouseTrailTheme_ = theme; }
+    void setRecentProjects(const std::vector<juce::File>& recentFiles);
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowChunkBoundaries(bool shouldShow);
     void setShowUnvoicedFrames(bool shouldShow);
@@ -82,6 +86,7 @@ private:
     Profile profile_ = Profile::Standalone;
     juce::MenuBarComponent menuBar_;
     juce::ListenerList<Listener> listeners_;
+    std::vector<juce::File> recentProjects_;
     MouseTrailConfig::TrailTheme mouseTrailTheme_ = MouseTrailConfig::TrailTheme::Classic;
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
     bool showChunkBoundaries_ = false;
@@ -93,8 +98,11 @@ private:
         ExportSelectedClip,
         ExportTrack,
         ExportBus,
-        SavePreset,
-        LoadPreset,
+        SaveProject,
+        LoadProject,
+        SaveProjectAs,
+        RecentProjectBase = 500,
+        ClearRecentProjects = 600,
 
         EditUndo = 50,
         EditRedo,

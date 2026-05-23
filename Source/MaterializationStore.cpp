@@ -368,6 +368,8 @@ bool MaterializationStore::setPitchCurve(uint64_t materializationId, std::shared
     // (PitchCache invalidation handled by RenderCache itself via revision protocol;
     // here we explicitly drop the downstream Stage 2 entry).
     timeStretchCache_.invalidate(materializationId);
+    // Derived analysis is stale when pitch curve changes
+    it->second.derivedAnalysis.reset();
     return true;
 }
 
@@ -393,6 +395,9 @@ bool MaterializationStore::commitNotesAndPitchCurve(uint64_t materializationId,
         : OriginalF0State::NotRequested;
     // §6.5: pitch edit invalidates Stage 2 cache (downstream)
     timeStretchCache_.invalidate(materializationId);
+    // Derived analysis is stale when pitch curve changes (notes alone wouldn't invalidate,
+    // but pitch curve change means F0 data changed)
+    it->second.derivedAnalysis.reset();
     return true;
 }
 
@@ -596,6 +601,7 @@ bool MaterializationStore::replaceAudio(uint64_t materializationId,
     it->second.silentGaps = std::move(silentGaps);
     it->second.detectedKey = DetectedKey{};
     it->second.originalF0State = OriginalF0State::NotRequested;
+    it->second.derivedAnalysis.reset();  // audio buffer changed — derived analysis stale
     // sourceWindow 不改变：replaceAudio 语义 = 换 audio buffer，lineage 不变
     return true;
 }
@@ -821,6 +827,109 @@ std::vector<int64_t> MaterializationStore::buildChunkBoundariesFromSilentGaps(in
     std::sort(boundaries.begin(), boundaries.end());
     boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
     return boundaries;
+}
+
+std::vector<uint64_t> MaterializationStore::getAllActiveMaterializationIds() const
+{
+    std::vector<uint64_t> ids;
+    const juce::ScopedReadLock readLock(lock_);
+    ids.reserve(materializations_.size());
+    for (const auto& entry : materializations_) {
+        if (!entry.second.isRetired_) {
+            ids.push_back(entry.first);
+        }
+    }
+    return ids;
+}
+
+std::vector<MaterializationStore::MaterializationSnapshot> MaterializationStore::getAllActiveMaterializationSnapshots() const
+{
+    const auto ids = getAllActiveMaterializationIds();
+    std::vector<MaterializationSnapshot> snapshots;
+    snapshots.reserve(ids.size());
+    for (auto id : ids) {
+        MaterializationSnapshot snap;
+        if (getSnapshot(id, snap)) {
+            snapshots.push_back(snap);
+        }
+    }
+    return snapshots;
+}
+
+int MaterializationStore::getTotalCount() const
+{
+    const juce::ScopedReadLock readLock(lock_);
+    return static_cast<int>(materializations_.size());
+}
+
+// ============================================================================
+// Derived Analysis API
+// ============================================================================
+
+bool MaterializationStore::setDerivedAnalysis(uint64_t materializationId, const DerivedAnalysis& analysis)
+{
+    if (materializationId == 0) {
+        return false;
+    }
+
+    const juce::ScopedWriteLock writeLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) {
+        return false;
+    }
+
+    it->second.derivedAnalysis = analysis;
+    ++it->second.derivedAnalysis.analysisRevision;
+    it->second.derivedAnalysis.state = F0ExtractionState::Ready;
+    return true;
+}
+
+bool MaterializationStore::getDerivedAnalysis(uint64_t materializationId, DerivedAnalysis& out) const
+{
+    out = DerivedAnalysis{};
+    if (materializationId == 0) {
+        return false;
+    }
+
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) {
+        return false;
+    }
+
+    out = it->second.derivedAnalysis;
+    return out.state == F0ExtractionState::Ready;
+}
+
+void MaterializationStore::invalidateDerivedAnalysis(uint64_t materializationId)
+{
+    if (materializationId == 0) {
+        return;
+    }
+
+    const juce::ScopedWriteLock writeLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end()) {
+        return;
+    }
+
+    it->second.derivedAnalysis.reset();
+}
+
+bool MaterializationStore::hasValidDerivedAnalysis(uint64_t materializationId) const
+{
+    if (materializationId == 0) {
+        return false;
+    }
+
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) {
+        return false;
+    }
+
+    const auto& da = it->second.derivedAnalysis;
+    return da.state == F0ExtractionState::Ready && da.analysisRevision > 0;
 }
 
 } // namespace OpenTune

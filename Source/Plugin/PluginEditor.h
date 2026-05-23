@@ -71,8 +71,11 @@ public:
 
     void importAudioRequested() override;
     void exportAudioRequested(MenuBarComponent::ExportType exportType) override;
-    void savePresetRequested() override;
-    void loadPresetRequested() override;
+    void openProjectRequested() override;
+    void saveProjectRequested() override;
+    void saveProjectAsRequested() override;
+    void openRecentProjectRequested(const juce::File& file) override;
+    void clearRecentProjectsRequested() override;
     void preferencesRequested() override;
     void helpRequested() override;
     void showWaveformToggled(bool shouldShow) override;

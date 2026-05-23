@@ -181,8 +181,11 @@ constexpr const char* kExportAudio = "Export Audio";
 constexpr const char* kExportSelectedClip = "Export Selected Clip";
 constexpr const char* kExportTrack = "Export Track";
 constexpr const char* kExportBus = "Export Bus (Master Mix)";
-constexpr const char* kSavePreset = "Save Preset...";
-constexpr const char* kLoadPreset = "Load Preset...";
+constexpr const char* kSaveProject = "Save Project";
+constexpr const char* kSaveProjectAs = "Save Project As...";
+constexpr const char* kOpenProject = "Open Project...";
+constexpr const char* kRecentProjects = "Recent Projects";
+constexpr const char* kClearRecentProjects = "Clear Recent Projects";
 constexpr const char* kOptions = "Options";
 
 constexpr const char* kUndo = "Undo";
@@ -330,8 +333,11 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kExportSelectedClip, "Export Selected Clip", "导出选中的片段", "選択したクリップをエクスポート", "Экспорт клипа", "Exportar clip seleccionado" },
         { Keys::kExportTrack, "Export Track", "导出轨道", "トラックをエクスポート", "Экспорт дорожки", "Exportar pista" },
         { Keys::kExportBus, "Export Bus (Master Mix)", "导出总线混音", "バス（マスターミックス）をエクスポート", "Экспорт шины", "Exportar bus (mezcla maestra)" },
-        { Keys::kSavePreset, "Save Preset...", "保存预设...", "プリセットを保存...", "Сохранить...", "Guardar preset..." },
-        { Keys::kLoadPreset, "Load Preset...", "加载预设...", "プリセットを読み込む...", "Загрузить...", "Cargar preset..." },
+        { Keys::kSaveProject, "Save Project", "保存工程", "プロジェクトを保存", "Сохранить проект", "Guardar proyecto" },
+        { Keys::kSaveProjectAs, "Save Project As...", "另存为工程...", "プロジェクトを別名で保存...", "Сохранить как...", "Guardar proyecto como..." },
+        { Keys::kOpenProject, "Open Project...", "打开工程...", "プロジェクトを開く...", "Открыть проект...", "Abrir proyecto..." },
+        { Keys::kRecentProjects, "Recent Projects", "最近工程", "最近のプロジェクト", "Недавние проекты", "Proyectos recientes" },
+        { Keys::kClearRecentProjects, "Clear Recent Projects", "清除最近工程", "最近のプロジェクトをクリア", "Очистить список", "Limpiar proyectos recientes" },
         { Keys::kOptions, "Options", "选项", "オプション", "Настройки", "Opciones" },
         
         { Keys::kUndo, "Undo", "撤销", "元に戻す", "Отменить", "Deshacer" },

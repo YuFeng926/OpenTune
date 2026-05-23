@@ -483,6 +483,8 @@ target_sources(OpenTune
         Source/Services/F0ExtractionService.h
         Source/Services/VadExtractionService.cpp
         Source/Services/VadExtractionService.h
+        Source/Services/ReferenceAnalysisService.cpp
+        Source/Services/ReferenceAnalysisService.h
         Source/Audio/AudioFormatRegistry.cpp
         Source/Audio/AudioFormatRegistry.h
 
@@ -556,6 +558,8 @@ target_sources(OpenTune
         Source/DSP/PhonemeClassifier.h
         Source/DSP/WordSegmenter.cpp
         Source/DSP/WordSegmenter.h
+        Source/DSP/ReferenceAutoAlign.cpp
+        Source/DSP/ReferenceAutoAlign.h
 
         # UI Layer
         Source/Standalone/UI/UIColors.h
@@ -627,6 +631,12 @@ target_sources(OpenTune
         Source/Utils/ModelPathResolver.h
         Source/Utils/PresetManager.cpp
         Source/Utils/PresetManager.h
+        Source/Utils/ProjectModel.cpp
+        Source/Utils/ProjectModel.h
+        Source/Utils/ProjectPersistence.cpp
+        Source/Utils/ProjectPersistence.h
+        Source/Utils/ProjectSession.cpp
+        Source/Utils/ProjectSession.h
         Source/Utils/CpuFeatures.cpp
         Source/Utils/CpuFeatures.h
         Source/Utils/CpuBudgetManager.cpp
@@ -1178,6 +1188,17 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/GameNoteGeneratorTests.cpp
         Tests/VocoderConfigTests.cpp
         Tests/HandleNoteMergerTests.cpp
+        Tests/TestCompositeUndoAction.cpp
+        Tests/TestUndoManagerContract.cpp
+        Tests/TestAutoRefFailure.cpp
+        Tests/TestBasicDerivedAnalysis.cpp
+        Tests/TestAutoRefIntegration.cpp
+        Tests/TestReferenceBinding.cpp
+        Tests/TestPlacementReferenceCascade.cpp
+        Tests/TestArrangementContract.cpp
+        Tests/TestMaterializationDerivedAnalysis.cpp
+        Tests/TestMaterializationContract.cpp
+        Tests/TestReferenceAnalysisService.cpp
     )
 
     target_include_directories(OpenTuneTests
