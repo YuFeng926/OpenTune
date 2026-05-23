@@ -96,8 +96,22 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
             menu.addSubMenu(LOC(kExportAudio), exportMenu);
 
             menu.addSeparator();
-            menu.addItem(SavePreset, LOC(kSavePreset));
-            menu.addItem(LoadPreset, LOC(kLoadPreset));
+            menu.addItem(SaveProject, LOC(kSaveProject));
+            menu.addItem(SaveProjectAs, LOC(kSaveProjectAs));
+            menu.addSeparator();
+            menu.addItem(LoadProject, LOC(kOpenProject));
+            if (!recentProjects_.empty()) {
+                juce::PopupMenu recentMenu;
+                int baseId = RecentProjectBase;
+                for (const auto& f : recentProjects_) {
+                    recentMenu.addItem(baseId, f.getFileName());
+                    ++baseId;
+                }
+                recentMenu.addSeparator();
+                recentMenu.addItem(ClearRecentProjects, LOC(kClearRecentProjects));
+                menu.addSubMenu(LOC(kRecentProjects), recentMenu);
+            }
+            menu.addSeparator();
 
             menu.addSeparator();
             menu.addItem(OpenPreferences, LOC(kOptions));
@@ -178,11 +192,18 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             listeners_.call([](Listener& l) { l.exportAudioRequested(ExportType::Bus); });
             break;
 
-        case SavePreset:
-            listeners_.call([](Listener& l) { l.savePresetRequested(); });
+        case SaveProject:
+            listeners_.call([](Listener& l) { l.saveProjectRequested(); });
             break;
-        case LoadPreset:
-            listeners_.call([](Listener& l) { l.loadPresetRequested(); });
+        case SaveProjectAs:
+            listeners_.call([](Listener& l) { l.saveProjectAsRequested(); });
+            break;
+        case LoadProject:
+            listeners_.call([](Listener& l) { l.openProjectRequested(); });
+            break;
+
+        case ClearRecentProjects:
+            listeners_.call([](Listener& l) { l.clearRecentProjectsRequested(); });
             break;
 
         case OpenPreferences:
@@ -294,8 +315,24 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             break;
 
         default:
+        {
+            // Handle recent project items
+            if (menuItemID >= RecentProjectBase && menuItemID < RecentProjectBase + static_cast<int>(recentProjects_.size())) {
+                const auto index = static_cast<size_t>(menuItemID - RecentProjectBase);
+                if (index < recentProjects_.size()) {
+                    listeners_.call([&recentProjects = recentProjects_, index](Listener& l) {
+                        l.openRecentProjectRequested(recentProjects[index]);
+                    });
+                }
+            }
             break;
+        }
     }
+}
+
+void MenuBarComponent::setRecentProjects(const std::vector<juce::File>& recentFiles)
+{
+    recentProjects_ = recentFiles;
 }
 
 } // namespace OpenTune

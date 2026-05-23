@@ -24,6 +24,7 @@ class SourceStore {
 public:
     struct CreateSourceRequest {
         juce::String displayName;
+        juce::String sourceFilePath;  // 原始导入文件路径（空字符串表示无文件来源）
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
         double sampleRate{0.0};
     };
@@ -31,6 +32,7 @@ public:
     struct SourceSnapshot {
         uint64_t sourceId{0};
         juce::String displayName;
+        juce::String sourceFilePath;  // 原始导入文件路径
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
         double sampleRate{0.0};
         int numChannels{0};
@@ -50,6 +52,12 @@ public:
     bool getSnapshot(uint64_t sourceId, SourceSnapshot& out) const; // 获取指定 Source 的只读快照
     bool getAudioBuffer(uint64_t sourceId, std::shared_ptr<const juce::AudioBuffer<float>>& out) const; // 获取指定 Source 的音频缓冲区共享指针
 
+    /** 获取所有 active source 的 ID 列表（用于工程保存等需要枚举的场景） */
+    std::vector<uint64_t> getAllActiveSourceIds() const;
+
+    /** 获取 source 总数（含 retired），用于容量估计 */
+    int getTotalCount() const;
+
     // 软删除/恢复接口，供 UndoAction 和垃圾回收使用
     bool retireSource(uint64_t id);
     bool reviveSource(uint64_t id);
@@ -62,6 +70,7 @@ private:
     struct SourceEntry {
         uint64_t sourceId{0};
         juce::String displayName;
+        juce::String sourceFilePath;  // 原始导入文件路径
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
         double sampleRate{0.0};
         int numChannels{0};

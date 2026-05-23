@@ -36,6 +36,7 @@ public:
         juce::String errorMessage;          // 错误信息
         juce::AudioBuffer<float> audioBuffer;   // 音频缓冲区
         double sampleRate;                  // 采样率
+        juce::String sourceFilePath;        // 原始导入文件路径（空字符串表示无文件来源，如 ARA）
     };
 
     /**

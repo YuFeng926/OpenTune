@@ -187,6 +187,7 @@ public:
      */
     struct PreparedImport {
         juce::String displayName;
+        juce::String sourceFilePath;  // 原始导入文件路径（空字符串表示无文件来源，如 ARA）
         juce::AudioBuffer<float> storedAudioBuffer;
         std::vector<SilentGap> silentGaps;
         SourceWindow sourceWindow;
@@ -225,12 +226,14 @@ public:
      * @param inBuffer 原始音频 buffer
      * @param inSampleRate 原始采样率
      * @param displayName 显示名称
+     * @param sourceFilePath 原始导入文件路径（空字符串表示无文件来源，如 ARA/Capture）
      * @param out 输出预处理结果
      * @return 成功返回 true
      */
     bool prepareImport(juce::AudioBuffer<float>&& inBuffer,
                        double inSampleRate,
                        const juce::String& displayName,
+                       const juce::String& sourceFilePath,
                        PreparedImport& out,
                        const char* entrySourceTag = "standalone-import");
     

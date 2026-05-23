@@ -952,7 +952,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             // into a local owning buffer.
             juce::AudioBuffer<float> owningCopy;
             owningCopy.makeCopyOf(*pcm);
-            if (!prepareImport(std::move(owningCopy), sampleRate, displayName, prepared,
+            if (!prepareImport(std::move(owningCopy), sampleRate, displayName, {}, prepared,
                                "vst3-capture-submit"))
                 return 0;
             const auto matId = commitPreparedImportAsMaterialization(std::move(prepared));
@@ -3613,6 +3613,7 @@ void OpenTuneAudioProcessor::setZoomLevel(double zoom) {
 bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
                                            double inSampleRate,
                                            const juce::String& displayName,
+                                           const juce::String& sourceFilePath,
                                            OpenTuneAudioProcessor::PreparedImport& out,
                                            const char* entrySourceTag)
 {
@@ -3648,6 +3649,7 @@ bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
     ChannelLayoutLog::logEntry(entrySourceTag, declaredChannels, declaredChannels, displayName);
 
     out.displayName = displayName;
+    out.sourceFilePath = sourceFilePath;
 
     // 导入后的 materialization 在 shared runtime 内统一落到固定 44.1kHz 的 materialization-local 存储采样率。
     const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
@@ -3690,6 +3692,7 @@ uint64_t OpenTuneAudioProcessor::ensureSourceAndCreateMaterialization(PreparedIm
     if (sourceId == 0) {
         SourceStore::CreateSourceRequest sourceRequest;
         sourceRequest.displayName = prepared.displayName;
+        sourceRequest.sourceFilePath = prepared.sourceFilePath;
         sourceRequest.audioBuffer = storedAudioBuffer;
         sourceRequest.sampleRate = TimeCoordinate::kRenderSampleRate;
         sourceId = sourceStore_->createSource(std::move(sourceRequest));
@@ -3796,7 +3799,7 @@ OpenTuneAudioProcessor::ensureAraRegionMaterialization(
     }
 
     PreparedImport preparedImport;
-    if (!prepareImport(std::move(windowBuffer), copiedAudioSampleRate, sourceName, preparedImport,
+    if (!prepareImport(std::move(windowBuffer), copiedAudioSampleRate, sourceName, {}, preparedImport,
                        "ara-hydrate"))
         return std::nullopt;
 
