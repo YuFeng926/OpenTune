@@ -1310,7 +1310,10 @@ void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
         repaint();
     }
 
-    if (juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey))
+    auto hit = hitTestPlacement(e.getPosition());
+
+    // Ctrl+drag cursor preview — only on empty area, consistent with mouseDown
+    if (e.mods.isCtrlDown() && hit.trackId < 0)
     {
         setMouseCursor(juce::MouseCursor::DraggingHandCursor);
         return;
@@ -1329,7 +1332,6 @@ void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
         return;
     }
 
-    auto hit = hitTestPlacement(e.getPosition());
     if (hit.trackId >= 0)
     {
         if (hit.isTopEdge)
@@ -1347,12 +1349,16 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
 
-    if (juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey))
-    {
-        isPanning_ = true;
-        lastMousePos_ = e.getPosition();
-        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
-        return;
+    // Ctrl+drag panning — only on empty area (not on a placement, to avoid
+    // conflicting with Ctrl+click toggle placement selection).
+    if (e.mods.isCtrlDown()) {
+        auto hit = hitTestPlacement(e.getPosition());
+        if (hit.trackId < 0) {
+            isPanning_ = true;
+            lastMousePos_ = e.getPosition();
+            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+            return;
+        }
     }
 
     // Hit-test placement before seek — reference button intercepts without seeking
