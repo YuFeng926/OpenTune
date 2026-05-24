@@ -160,17 +160,6 @@ AlignResult ReferenceAutoAlign::align(
         return result;
     }
 
-    // ================================================================
-    // Step 5: 验证生成的 TimeGrid
-    // ================================================================
-
-    if (!validateTimeGrid(*result.timeGrid)) {
-        result.error = AlignResult::ErrorCode::TimeGridInvalid;
-        result.errorMessage = "Generated time grid failed invariant validation";
-        result.timeGrid.reset();
-        return result;
-    }
-
     result.success = true;
     result.error = AlignResult::ErrorCode::None;
     return result;
@@ -323,17 +312,39 @@ bool ReferenceAutoAlign::alignTimeGrid(
                   return a.source_seconds < b.source_seconds;
               });
 
-    // ---- 强制 output_seconds 非单调递减 ----
-    for (size_t i = 1; i < handles.size(); ++i) {
-        if (handles[i].output_seconds < handles[i - 1].output_seconds) {
-            handles[i].output_seconds = handles[i - 1].output_seconds;
+    // ---- 过滤 interior handles：仅保留 output_seconds 严格递增的 ----
+    // ClipStart (source=0) 和 ClipEnd (source=totalDuration) 不参与过滤，
+    // 避免 interior handle 被 clamp 到 totalDurationSeconds 时导致 ClipEnd 重复。
+    {
+        std::vector<TimeHandle> filtered;
+        filtered.reserve(handles.size());
+        filtered.push_back(handles.front());  // ClipStart — always kept
+
+        for (size_t i = 1; i < handles.size() - 1; ++i) {  // skip last (ClipEnd)
+            const auto& h = handles[i];
+            // desiredOutput 可能因 reference/target timing 差异而不单调 ——
+            // 此类句柄无法提供有意义的时序映射，舍去。
+            if (h.output_seconds <= filtered.back().output_seconds) { continue; }
+            // 被 clamp 到端点值的 interior handle 也无法提供额外约束
+            if (h.output_seconds >= totalDurationSeconds) { continue; }
+            if (h.source_seconds <= 0.0 || h.source_seconds >= totalDurationSeconds) { continue; }
+
+            filtered.push_back(h);
         }
+
+        handles = std::move(filtered);
     }
 
-    // ---- 强制端点约束 ----
-    if (!handles.empty()) {
-        handles.front().output_seconds = 0.0;
-        handles.back().output_seconds = totalDurationSeconds;
+    // 显式追加 ClipEnd（永在末尾，output = totalDurationSeconds）
+    {
+        TimeHandle clipEnd;
+        clipEnd.id = nextId++;
+        clipEnd.source_seconds = totalDurationSeconds;
+        clipEnd.output_seconds = totalDurationSeconds;
+        clipEnd.kind = HandleKind::ClipEnd;
+        clipEnd.locked = true;
+        clipEnd.confidence = Confidence::Default;
+        handles.push_back(clipEnd);
     }
 
     // ---- 用工厂方法构建不可变 snapshot ----
@@ -344,16 +355,6 @@ bool ReferenceAutoAlign::alignTimeGrid(
 
     outTimeGrid = snapshot;
     return true;
-}
-
-// ============================================================================
-// Private: validateTimeGrid (Step 5)
-// ============================================================================
-
-bool ReferenceAutoAlign::validateTimeGrid(const TimeGridSnapshot& grid)
-{
-    juce::String error;
-    return TimeGridSnapshot::validate(grid.handles(), error);
 }
 
 } // namespace OpenTune

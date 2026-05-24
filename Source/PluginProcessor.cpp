@@ -4239,7 +4239,11 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
                             deduped.reserve(handles.size());
                             deduped.push_back(handles.front());
                             for (size_t i = 1; i < handles.size(); ++i) {
-                                if (handles[i].source_seconds - deduped.back().source_seconds >= 0.030) {
+                                // 30ms minimum spacing = 3 frames @ 100 fps F0 rate.
+                                // Frame-domain comparison avoids IEEE 754 rounding issues with 0.03.
+                                const int prevF = static_cast<int>(std::round(deduped.back().source_seconds * 100.0));
+                                const int currF = static_cast<int>(std::round(handles[i].source_seconds * 100.0));
+                                if (currF - prevF >= 3) {
                                     deduped.push_back(handles[i]);
                                 }
                             }

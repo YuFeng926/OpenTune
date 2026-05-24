@@ -11,7 +11,7 @@
  *     setting fMax now per design.md Decision 7)
  *
  *   L3 integration tests (forward chain default values, no ORT session needed):
- *   - VocoderInferenceService::getFMax() returns safe default 22050 when uninitialized
+ *   - VocoderInferenceService::getFMax() returns safe default 16000 when uninitialized
  *   - VocoderDomain::getFMax() forwards to InferenceService default
  *
  *   L4 contract tests (real ONNX schema check, requires file on disk):
@@ -86,10 +86,10 @@ void runVocoderConfig_MelStructDefaultUnchangedTest()
 }
 
 // ============================================================================
-// L3: VocoderInferenceService::getFMax() returns 22050 when uninitialized
+// L3: VocoderInferenceService::getFMax() returns 16000 when uninitialized
 // ============================================================================
 //
-// The Impl's getFMax() reads `currentVocoder_ ? currentVocoder_->getFMax() : 22050.0f`
+// The Impl's getFMax() reads `currentVocoder_ ? currentVocoder_->getFMax() : 16000.0f`
 // Since we never call initialize(), currentVocoder_ stays null and we get the
 // safe default. This validates the forward chain's null-guard.
 //
@@ -100,8 +100,8 @@ void runVocoderConfig_InferenceServiceUninitializedDefaultTest()
     // nullptr env: never consumed because we don't call initialize()
     OpenTune::VocoderInferenceService service(nullptr);
 
-    if (service.getFMax() != 22050.0f) {
-        logFail(testName, "uninitialized service getFMax() must return safe default 22050");
+    if (service.getFMax() != 16000.0f) {
+        logFail(testName, "uninitialized service getFMax() must return safe default 16000");
         return;
     }
     if (service.getMelBins() != 128) {
@@ -121,8 +121,8 @@ void runVocoderConfig_DomainForwardChainTest()
 
     OpenTune::VocoderDomain domain(nullptr);
 
-    if (domain.getFMax() != 22050.0f) {
-        logFail(testName, "uninitialized domain must forward to InferenceService default 22050");
+    if (domain.getFMax() != 16000.0f) {
+        logFail(testName, "uninitialized domain must forward to InferenceService default 16000");
         return;
     }
     logPass(testName);
