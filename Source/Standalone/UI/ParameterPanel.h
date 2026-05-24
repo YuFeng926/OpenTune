@@ -73,7 +73,7 @@ public:
     void setActiveTool(int toolId);
 
     /** 设置 AUTO 按钮的模式显示。
-     *  @param hasReference  true: "AUTO (Ref)", false: "AUTO"
+     *  @param hasReference  true: 主文本 "AUTO" + 副标题 "(Ref)"（小字在下方）, false: 仅 "AUTO" 居中
      */
     void setAutoButtonMode(bool hasReference);
     
@@ -104,13 +104,15 @@ private:
         void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
         int getToolId() const { return toolId_; }
         void setIcon(const juce::Path& path, bool fill) { iconPath_ = path; fillIcon_ = fill; }
-        void setTextIcon(const juce::String& iconText) { textIcon_ = iconText; }
+        void setTextIcon(const juce::String& iconText) { textIcon_ = iconText; repaint(); }
+        void setSubTextIcon(const juce::String& subText) { subTextIcon_ = subText; repaint(); }
 
     private:
         int toolId_ = 0;
         juce::Path iconPath_;
         bool fillIcon_ = false;
         juce::String textIcon_;
+        juce::String subTextIcon_;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ToolIconButton)
     };

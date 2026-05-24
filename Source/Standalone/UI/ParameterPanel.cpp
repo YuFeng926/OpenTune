@@ -96,9 +96,28 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
     if (textIcon_.isNotEmpty())
     {
         const auto active = themeId == ThemeId::Overdose && (getToggleState() || shouldDrawButtonAsDown) && toolId_ != 0;
-        g.setColour(active ? juce::Colours::white.withAlpha(0.96f) : UIColors::textPrimary);
-        g.setFont(UIColors::getUIFont(16.0f));
-        g.drawText(textIcon_, getLocalBounds().toFloat(), juce::Justification::centred);
+
+        if (subTextIcon_.isNotEmpty())
+        {
+            auto textArea = getLocalBounds().toFloat();
+            const float mainFontSize = 16.0f;
+            const float subFontSize = 11.0f;
+
+            auto mainArea = textArea.removeFromTop(textArea.getHeight() * 0.55f);
+            g.setColour(active ? juce::Colours::white.withAlpha(0.96f) : UIColors::textPrimary);
+            g.setFont(UIColors::getUIFont(mainFontSize));
+            g.drawText(textIcon_, mainArea, juce::Justification::centredBottom);
+
+            g.setColour(UIColors::textSecondary);
+            g.setFont(UIColors::getUIFont(subFontSize));
+            g.drawText(subTextIcon_, textArea, juce::Justification::centredTop);
+        }
+        else
+        {
+            g.setColour(active ? juce::Colours::white.withAlpha(0.96f) : UIColors::textPrimary);
+            g.setFont(UIColors::getUIFont(16.0f));
+            g.drawText(textIcon_, getLocalBounds().toFloat(), juce::Justification::centred);
+        }
     }
     else
     {
@@ -607,14 +626,15 @@ void ParameterPanel::setAutoButtonMode(bool hasReference)
 {
     if (autoTuneToolButton_)
     {
+        autoTuneToolButton_->setTextIcon("AUTO");
         if (hasReference)
         {
-            autoTuneToolButton_->setTextIcon("AUTO (Ref)");
+            autoTuneToolButton_->setSubTextIcon("(Ref)");
             autoTuneToolButton_->setTooltip(juce::String::fromUTF8(u8"按参考 Clip 自动修音并对齐节奏"));
         }
         else
         {
-            autoTuneToolButton_->setTextIcon("AUTO");
+            autoTuneToolButton_->setSubTextIcon({});
             autoTuneToolButton_->setTooltip(juce::String::fromUTF8(u8"自动修音（吸附到临近音阶）"));
         }
     }
