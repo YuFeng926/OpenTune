@@ -9,8 +9,7 @@ namespace OpenTune {
 namespace {
 
 constexpr double kTotalDurationEpsilon = 1e-6;
-constexpr double kMinSegmentSeconds = 0.030;        // 30 ms minimum OUTPUT segment duration (visual / RB R3 threshold)
-constexpr double kMinSourceSpacingSeconds = 0.150;   // 150 ms minimum SOURCE spacing between handles
+constexpr int kMinSourceSpacingFrames = 15;            // 150 ms = 15 frames @ 100 fps (F0 frame rate)
 
 uint64_t makeStableId() noexcept
 {
@@ -89,16 +88,23 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
                        + ", curr=" + juce::String(curr.output_seconds, 9) + ")";
             return false;
         }
-        // 150 ms minimum source-time spacing between handles.
+        // 150 ms minimum source-time spacing between handles (15 frames @ 100 fps F0 rate).
         // Tighter spacing produces segments too short for WSOLA to stretch
         // without artifacts; 150 ms ≈ 1/16 note at 120 BPM.
-        const double srcGap = curr.source_seconds - prev.source_seconds;
-        if (srcGap < kMinSourceSpacingSeconds) {
+        //
+        // Comparison in frame domain (integers): source_seconds originated as
+        // integer frames ÷ 100.0, and kMinSourceSpacingFrames=15 is the exact
+        // integer equivalent of 150 ms.  Frame-domain comparison avoids IEEE 754
+        // decimal-fraction rounding issues with 0.15.
+        const int prevFrame = static_cast<int>(std::round(prev.source_seconds * 100.0));
+        const int currFrame = static_cast<int>(std::round(curr.source_seconds * 100.0));
+        if (currFrame - prevFrame < kMinSourceSpacingFrames) {
+            const double srcGapMs = (curr.source_seconds - prev.source_seconds) * 1000.0;
             outError = "Handles must have source_seconds spacing >=150 ms at index "
                        + juce::String((int)i)
                        + " (prev=" + juce::String(prev.source_seconds, 9)
                        + ", curr=" + juce::String(curr.source_seconds, 9)
-                       + ", gap=" + juce::String(srcGap * 1000.0, 3) + " ms)";
+                       + ", gap=" + juce::String(srcGapMs, 3) + " ms)";
             return false;
         }
     }

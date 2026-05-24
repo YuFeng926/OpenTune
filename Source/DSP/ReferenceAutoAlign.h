@@ -98,10 +98,6 @@ private:
         double totalDurationSeconds,
         std::shared_ptr<const TimeGridSnapshot>& outTimeGrid);
 
-    /** Step 5: 验证生成的 TimeGrid。
-     *  调用 TimeGridSnapshot::validate 检查 outputSeconds 非单调递减、端点守恒等不变量。
-     */
-    static bool validateTimeGrid(const TimeGridSnapshot& grid);
 };
 
 } // namespace OpenTune
