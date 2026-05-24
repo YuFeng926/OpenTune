@@ -75,136 +75,143 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
     snap.header.createdAt = cachedCreatedAt_;
     snap.header.lastSavedAt = ProjectSnapshot::generateTimestamp();
 
-    // Sources (from SourceStore)
+    // Core stores
     auto* sourceStore = processorRef_.getSourceStore();
-    if (sourceStore) {
-        const auto sourceIds = sourceStore->getAllActiveSourceIds();
-        for (auto sid : sourceIds) {
-            SourceStore::SourceSnapshot srcSnap;
-            if (!sourceStore->getSnapshot(sid, srcSnap)) { continue; }
+    auto* matStore = processorRef_.getMaterializationStore();
+    auto* arrangement = processorRef_.getStandaloneArrangement();
 
-            ProjectSourceEntry entry;
-            entry.sourceId = srcSnap.sourceId;
-            entry.displayName = srcSnap.displayName;
-            entry.originalImportPath = srcSnap.sourceFilePath.isNotEmpty() 
-                ? srcSnap.sourceFilePath 
-                : srcSnap.displayName;
-            entry.sampleRate = srcSnap.sampleRate;
-            entry.numChannels = srcSnap.numChannels;
-            entry.lengthSamples = srcSnap.numSamples;
-            entry.lengthSeconds = (srcSnap.sampleRate > 0.0)
-                ? static_cast<double>(srcSnap.numSamples) / srcSnap.sampleRate : 0.0;
-            // Compute content hash from audio data
-            if (srcSnap.audioBuffer && srcSnap.audioBuffer->getNumSamples() > 0) {
-                const auto numSamples = srcSnap.audioBuffer->getNumSamples();
-                const auto numChannels = srcSnap.audioBuffer->getNumChannels();
-                // Simple hash: combine sample count, channel count, and first N samples
-                juce::int64 hash = numSamples ^ (static_cast<juce::int64>(numChannels) << 32);
-                const int sampleCount = std::min(numSamples, 1024);
-                for (int ch = 0; ch < numChannels; ++ch) {
-                    const auto* data = srcSnap.audioBuffer->getReadPointer(ch);
-                    for (int i = 0; i < sampleCount; ++i) {
-                        hash = hash * 31 + static_cast<juce::int64>(data[i] * 1000000.0f);
-                    }
-                }
-                entry.contentHash = juce::String::toHexString(hash);
-            }
-            entry.fileSizeBytes = 0; // Unknown until file copy
+    // All three stores are essential for a valid snapshot
+    if (!sourceStore || !matStore || !arrangement) {
+        AppLogger::error("ProjectSession: Cannot capture snapshot — one or more core stores are unavailable");
+        return ProjectSnapshot{};  // Empty snapshot
+    }
 
-            snap.sources.push_back(entry);
-        }
+    // Sources (from SourceStore)
+    const auto sourceIds = sourceStore->getAllActiveSourceIds();
+    for (auto sid : sourceIds) {
+        SourceStore::SourceSnapshot srcSnap;
+        if (!sourceStore->getSnapshot(sid, srcSnap)) { continue; }
+
+        ProjectSourceEntry entry;
+        entry.sourceId = srcSnap.sourceId;
+        entry.displayName = srcSnap.displayName;
+        entry.originalImportPath = srcSnap.sourceFilePath.isNotEmpty() 
+            ? srcSnap.sourceFilePath 
+            : srcSnap.displayName;
+        entry.sampleRate = srcSnap.sampleRate;
+        entry.numChannels = srcSnap.numChannels;
+        entry.lengthSamples = srcSnap.numSamples;
+        entry.lengthSeconds = (srcSnap.sampleRate > 0.0)
+            ? static_cast<double>(srcSnap.numSamples) / srcSnap.sampleRate : 0.0;
+        entry.contentHash = juce::String::toHexString(static_cast<juce::int64>(srcSnap.sourceId));
+        entry.fileSizeBytes = 0; // Unknown until file copy
+
+        snap.sources.push_back(entry);
     }
 
     // Materializations (from MaterializationStore)
-    auto* matStore = processorRef_.getMaterializationStore();
-    if (matStore) {
-        const auto matIds = matStore->getAllActiveMaterializationIds();
-        for (auto mid : matIds) {
-            MaterializationStore::MaterializationSnapshot matSnap;
-            if (!matStore->getSnapshot(mid, matSnap)) { continue; }
+    const auto matIds = matStore->getAllActiveMaterializationIds();
+    for (auto mid : matIds) {
+        MaterializationStore::MaterializationSnapshot matSnap;
+        if (!matStore->getSnapshot(mid, matSnap)) { continue; }
 
-            ProjectMaterializationEntry entry;
-            entry.materializationId = matSnap.materializationId;
-            entry.sourceId = matSnap.sourceId;
-            entry.retired = false;
-            entry.renderRevision = matSnap.renderRevision;
-            entry.lineageParentMaterializationId = matSnap.lineageParentMaterializationId;
-            entry.sourceWindow = matSnap.sourceWindow;
-            entry.detectedKey = matSnap.detectedKey;
-            entry.notes = matSnap.notes;
+        ProjectMaterializationEntry entry;
+        entry.materializationId = matSnap.materializationId;
+        entry.sourceId = matSnap.sourceId;
+        entry.retired = false;
+        entry.renderRevision = matSnap.renderRevision;
+        entry.lineageParentMaterializationId = matSnap.lineageParentMaterializationId;
+        entry.sourceWindow = matSnap.sourceWindow;
+        entry.detectedKey = matSnap.detectedKey;
+        entry.notes = matSnap.notes;
 
-            // Extract corrected segments from pitch curve
-            if (matSnap.pitchCurve) {
-                auto snap = matSnap.pitchCurve->getSnapshot();
-                const auto& segments = snap->getCorrectedSegments();
-                for (const auto& seg : segments) {
-                    ProjectMaterializationEntry::SegmentEntry segEntry;
-                    segEntry.startFrame = seg.startFrame;
-                    segEntry.endFrame = seg.endFrame;
-                    segEntry.source = static_cast<uint8_t>(seg.source);
-                    segEntry.retuneSpeed = seg.retuneSpeed;
-                    segEntry.vibratoDepth = seg.vibratoDepth;
-                    segEntry.vibratoRate = seg.vibratoRate;
-                    // F0 data not serialized (reconstructed on load)
-                    entry.correctedSegments.push_back(segEntry);
-                }
-            }
-
-            // TimeGrid
-            if (matSnap.timeGrid) {
-                entry.timeGrid.revision = matSnap.timeGridRevision;
-                for (const auto& handle : matSnap.timeGrid->handles()) {
-                    ProjectMaterializationEntry::TimeGridEntry::HandleEntry he;
-                    he.id = static_cast<int>(handle.id);
-                    he.kind = static_cast<uint8_t>(handle.kind);
-                    he.sourceSeconds = handle.source_seconds;
-                    he.outputSeconds = handle.output_seconds;
-                    he.confidence = static_cast<float>(static_cast<uint8_t>(handle.confidence));
-                    he.isUserAdded = (handle.kind == HandleKind::UserAdded);
-                    entry.timeGrid.handles.push_back(he);
-                }
-            }
-
-            snap.materializations.push_back(entry);
+        // Extract corrected segments from pitch curve
+        if (matSnap.pitchCurve) {
+            auto pcSnap = matSnap.pitchCurve->getSnapshot();
+            const auto& segments = pcSnap->getCorrectedSegments();
+            for (const auto& seg : segments) {
+                ProjectMaterializationEntry::SegmentEntry segEntry;
+                segEntry.startFrame = seg.startFrame;
+                segEntry.endFrame = seg.endFrame;
+                segEntry.source = static_cast<uint8_t>(seg.source);
+                segEntry.retuneSpeed = seg.retuneSpeed;
+                segEntry.vibratoDepth = seg.vibratoDepth;
+                segEntry.vibratoRate = seg.vibratoRate;
+                // Always serialize f0Data — HandDraw/LineAnchor segments rely on it
+                segEntry.f0Data = seg.f0Data;
+                entry.correctedSegments.push_back(segEntry);
             }
         }
+
+        // TimeGrid
+        if (matSnap.timeGrid) {
+            entry.timeGrid.revision = matSnap.timeGridRevision;
+            for (const auto& handle : matSnap.timeGrid->handles()) {
+                ProjectMaterializationEntry::TimeGridEntry::HandleEntry he;
+                he.id = static_cast<int>(handle.id);
+                he.kind = static_cast<uint8_t>(handle.kind);
+                he.sourceSeconds = handle.source_seconds;
+                he.outputSeconds = handle.output_seconds;
+                he.confidence = static_cast<float>(static_cast<uint8_t>(handle.confidence));
+                he.isUserAdded = (handle.kind == HandleKind::UserAdded);
+                entry.timeGrid.handles.push_back(he);
+            }
+        }
+
+        snap.materializations.push_back(entry);
+    }
 
     // Tracks and Placements (from StandaloneArrangement)
-    auto* arrangement = processorRef_.getStandaloneArrangement();
-    if (arrangement) {
-        const int numTracks = arrangement->getNumTracks();
-        for (int trackId = 0; trackId < numTracks; ++trackId) {
-            ProjectTrackEntry trackEntry;
-            trackEntry.trackId = trackId;
-            trackEntry.gain = arrangement->getTrackVolume(trackId);
-            trackEntry.mute = arrangement->isTrackMuted(trackId);
-            trackEntry.solo = arrangement->isTrackSolo(trackId);
+    const int numTracks = arrangement->getNumTracks();
+    for (int trackId = 0; trackId < numTracks; ++trackId) {
+        ProjectTrackEntry trackEntry;
+        trackEntry.trackId = trackId;
+        trackEntry.gain = arrangement->getTrackVolume(trackId);
+        trackEntry.mute = arrangement->isTrackMuted(trackId);
+        trackEntry.solo = arrangement->isTrackSolo(trackId);
 
-            const int numPlacements = arrangement->getNumPlacements(trackId);
-            for (int pi = 0; pi < numPlacements; ++pi) {
-                StandaloneArrangement::Placement placement;
-                if (!arrangement->getPlacementByIndex(trackId, pi, placement)) { continue; }
-                if (placement.isRetired) { continue; }
+        const int numPlacements = arrangement->getNumPlacements(trackId);
+        for (int pi = 0; pi < numPlacements; ++pi) {
+            StandaloneArrangement::Placement placement;
+            if (!arrangement->getPlacementByIndex(trackId, pi, placement)) { continue; }
+            if (placement.isRetired) { continue; }
 
-                ProjectPlacementEntry pEntry;
-                pEntry.placementId = placement.placementId;
-                pEntry.materializationId = placement.materializationId;
-                pEntry.mappingRevision = placement.mappingRevision;
-                pEntry.timelineStartSeconds = placement.timelineStartSeconds;
-                pEntry.timelineDurationSeconds = placement.durationSeconds;
-                pEntry.clipGain = placement.gain;
-                pEntry.fadeInDurationSeconds = placement.fadeInDuration;
-                pEntry.fadeOutDurationSeconds = placement.fadeOutDuration;
-                pEntry.name = placement.name;
-                pEntry.colour = placement.colour;
-                trackEntry.placements.push_back(pEntry);
-            }
-
-            snap.tracks.push_back(trackEntry);
+            ProjectPlacementEntry pEntry;
+            pEntry.placementId = placement.placementId;
+            pEntry.materializationId = placement.materializationId;
+            pEntry.mappingRevision = placement.mappingRevision;
+            pEntry.timelineStartSeconds = placement.timelineStartSeconds;
+            pEntry.timelineDurationSeconds = placement.durationSeconds;
+            pEntry.clipGain = placement.gain;
+            pEntry.fadeInDurationSeconds = placement.fadeInDuration;
+            pEntry.fadeOutDurationSeconds = placement.fadeOutDuration;
+            pEntry.name = placement.name;
+            pEntry.colour = placement.colour;
+            trackEntry.placements.push_back(pEntry);
         }
 
-        // Selected track/placement for session state
-        snap.recentSessionState.selectedTrackId = arrangement->getActiveTrackId();
+        snap.tracks.push_back(trackEntry);
+    }
+
+    // Selected track/placement for session state
+    snap.settings.selectedTrackId = arrangement->getActiveTrackId();
+
+    // Reference bindings
+    for (int trackId = 0; trackId < numTracks; ++trackId) {
+        const int numPlacements = arrangement->getNumPlacements(trackId);
+        for (int pi = 0; pi < numPlacements; ++pi) {
+            StandaloneArrangement::Placement placement;
+            if (!arrangement->getPlacementByIndex(trackId, pi, placement)) { continue; }
+            if (placement.isRetired) { continue; }
+            if (placement.referencePlacementId == 0) { continue; }
+
+            ProjectReferenceBinding binding;
+            binding.targetPlacementId = placement.placementId;
+            binding.referencePlacementId = placement.referencePlacementId;
+            binding.bindingRevision = static_cast<uint64_t>(placement.referenceBindingRevision);
+            binding.analysisMode = "Basic";
+            snap.referenceBindings.push_back(binding);
+        }
     }
 
     // Settings
@@ -218,12 +225,13 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
 // 快照应用
 // ============================================================================
 
+namespace {
 static std::shared_ptr<juce::AudioBuffer<float>> loadAudioFile(const juce::File& file, double& outSampleRate)
 {
     juce::AudioFormatManager formatManager;
     formatManager.registerBasicFormats();
 
-    auto* reader = formatManager.createReaderFor(file);
+    auto reader = std::unique_ptr<juce::AudioFormatReader>(formatManager.createReaderFor(file));
     if (!reader) { return nullptr; }
 
     auto buffer = std::make_shared<juce::AudioBuffer<float>>(
@@ -231,9 +239,9 @@ static std::shared_ptr<juce::AudioBuffer<float>> loadAudioFile(const juce::File&
         static_cast<int>(reader->lengthInSamples));
     reader->read(buffer.get(), 0, static_cast<int>(reader->lengthInSamples), 0, true, true);
     outSampleRate = reader->sampleRate;
-    delete reader;
     return buffer;
 }
+} // namespace
 
 Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
 {
@@ -242,9 +250,17 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
     auto* matStore = processorRef_.getMaterializationStore();
     auto* arrangement = processorRef_.getStandaloneArrangement();
 
-    if (sourceStore) { sourceStore->clear(); }
-    if (matStore) { matStore->clear(); }
-    if (arrangement) { arrangement->clear(); }
+    // All three stores are essential for applying a snapshot
+    if (!sourceStore || !matStore || !arrangement) {
+        AppLogger::error("ProjectSession: Cannot apply snapshot — one or more core stores are unavailable");
+        return Result<void>::failure(
+            Error::fromCode(ErrorCode::InvalidParameter,
+                "Cannot apply snapshot: core stores unavailable"));
+    }
+
+    sourceStore->clear();
+    matStore->clear();
+    arrangement->clear();
 
     processorRef_.getUndoManager().clear();
 
@@ -290,7 +306,7 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
     for (const auto& matEntry : snapshot.materializations) {
         // Get source buffer for this materialization
         std::shared_ptr<const juce::AudioBuffer<float>> sourceBuf;
-        if (sourceStore && !sourceStore->getAudioBuffer(matEntry.sourceId, sourceBuf)) {
+        if (!sourceStore->getAudioBuffer(matEntry.sourceId, sourceBuf)) {
             AppLogger::log("ProjectSession: Source " + juce::String(matEntry.sourceId)
                 + " not found for materialization " + juce::String(matEntry.materializationId) + ", skipping");
             continue;
@@ -339,39 +355,74 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
     }
 
     // 3. 重建 Tracks & Placements
-    if (arrangement) {
-        for (const auto& trackEntry : snapshot.tracks) {
-            const int trackId = trackEntry.trackId;
-            arrangement->setTrackVolume(trackId, trackEntry.gain);
-            arrangement->setTrackMuted(trackId, trackEntry.mute);
-            arrangement->setTrackSolo(trackId, trackEntry.solo);
+    for (const auto& trackEntry : snapshot.tracks) {
+        const int trackId = trackEntry.trackId;
+        arrangement->setTrackVolume(trackId, trackEntry.gain);
+        arrangement->setTrackMuted(trackId, trackEntry.mute);
+        arrangement->setTrackSolo(trackId, trackEntry.solo);
 
-            for (const auto& pEntry : trackEntry.placements) {
-                // Verify materialization exists
-                if (matStore && !matStore->containsMaterialization(pEntry.materializationId)) {
-                    AppLogger::log("ProjectSession: Materialization "
-                        + juce::String(pEntry.materializationId)
-                        + " not found for placement " + juce::String(pEntry.placementId) + ", skipping");
-                    continue;
-                }
-
-                StandaloneArrangement::Placement placement;
-                placement.placementId = pEntry.placementId;
-                placement.materializationId = pEntry.materializationId;
-                placement.mappingRevision = pEntry.mappingRevision;
-                placement.timelineStartSeconds = pEntry.timelineStartSeconds;
-                placement.durationSeconds = pEntry.timelineDurationSeconds;
-                placement.gain = pEntry.clipGain;
-                placement.fadeInDuration = pEntry.fadeInDurationSeconds;
-                placement.fadeOutDuration = pEntry.fadeOutDurationSeconds;
-                placement.name = pEntry.name;
-                placement.colour = pEntry.colour;
-
-                arrangement->insertPlacement(trackId, placement);
+        for (const auto& pEntry : trackEntry.placements) {
+            // Verify materialization exists
+            if (!matStore->containsMaterialization(pEntry.materializationId)) {
+                AppLogger::log("ProjectSession: Materialization "
+                    + juce::String(pEntry.materializationId)
+                    + " not found for placement " + juce::String(pEntry.placementId) + ", skipping");
+                continue;
             }
-        }
 
-        arrangement->setActiveTrack(snapshot.recentSessionState.selectedTrackId);
+            StandaloneArrangement::Placement placement;
+            placement.placementId = pEntry.placementId;
+            placement.materializationId = pEntry.materializationId;
+            placement.mappingRevision = pEntry.mappingRevision;
+            placement.timelineStartSeconds = pEntry.timelineStartSeconds;
+            placement.durationSeconds = pEntry.timelineDurationSeconds;
+            placement.gain = pEntry.clipGain;
+            placement.fadeInDuration = pEntry.fadeInDurationSeconds;
+            placement.fadeOutDuration = pEntry.fadeOutDurationSeconds;
+            placement.name = pEntry.name;
+            placement.colour = pEntry.colour;
+
+            arrangement->insertPlacement(trackId, placement);
+        }
+    }
+
+    arrangement->setActiveTrack(snapshot.settings.selectedTrackId);
+
+    // Restore reference bindings (不触发 analysis)
+    bool anyBindingLost = false;
+    for (const auto& binding : snapshot.referenceBindings) {
+        // Find which track the target placement is on
+        bool restored = false;
+        for (int tid = 0; tid < arrangement->getNumTracks(); ++tid) {
+            StandaloneArrangement::Placement target;
+            if (!arrangement->getPlacementById(tid, binding.targetPlacementId, target)) { continue; }
+
+            // Verify reference placement still exists
+            bool refExists = false;
+            for (int rtid = 0; rtid < arrangement->getNumTracks(); ++rtid) {
+                StandaloneArrangement::Placement ref;
+                if (arrangement->getPlacementById(rtid, binding.referencePlacementId, ref)
+                    && !ref.isRetired) {
+                    refExists = true;
+                    break;
+                }
+            }
+
+            if (refExists
+                && arrangement->setPlacementReferencePlacement(tid, binding.targetPlacementId,
+                    binding.referencePlacementId)) {
+                restored = true;
+            } else {
+                anyBindingLost = true;
+            }
+            break; // Found target, stop searching
+        }
+        if (!restored) {
+            anyBindingLost = true;
+        }
+    }
+    if (anyBindingLost) {
+        markDirty(); // 工程损坏：部分 reference binding 无法恢复
     }
 
     // 恢复工程设置
@@ -392,13 +443,23 @@ Result<void> ProjectSession::openProject(const juce::File& file)
         return Result<void>::failure(result.error());
     }
 
+    auto& snapshot = result.value();
     currentProjectFile_ = file;
-    auto applyResult = applySnapshot(result.value());
+    auto applyResult = applySnapshot(snapshot);
     if (!applyResult.ok()) {
         return applyResult;
     }
 
+    // 恢复持久化工程身份
+    cachedProjectId_ = snapshot.header.projectId;
+    cachedCreatedAt_ = snapshot.header.createdAt;
+
+    // 保留 applySnapshot 中因绑定丢失设置的脏标记
+    const bool repairedDuringLoad = dirty_;
     clearDirty();
+    if (repairedDuringLoad) {
+        markDirty();
+    }
     pushRecentProject(file);
     return Result<void>::success();
 }
@@ -470,12 +531,9 @@ juce::File ProjectSession::getProjectMediaDirectory() const
 
 juce::String ProjectSession::generateMediaFileName(const ProjectSourceEntry& source) const
 {
-    // Stable naming: content hash + display name extension
-    juce::String base = source.contentHash.isNotEmpty()
-        ? source.contentHash.substring(0, 16)
-        : juce::String(source.sourceId);
+    // Stable naming: sourceId + sanitized display name extension
+    juce::String base = juce::String(source.sourceId);
 
-    // Determine extension from original import path or default to .wav
     juce::String extension = ".wav";
     if (source.originalImportPath.isNotEmpty()) {
         extension = juce::File(source.originalImportPath).getFileExtension();
@@ -507,9 +565,9 @@ Result<void> ProjectSession::copyMediaToProjectDirectory(ProjectSnapshot& snapsh
         }
 
         if (!sourceFile.existsAsFile()) {
-            AppLogger::log("ProjectSession: Source file not found for copy: "
-                + srcEntry.originalImportPath);
-            continue;
+            return Result<void>::failure(
+                Error::fromCode(ErrorCode::ModelNotFound,
+                    ("Source file not found for copy: " + srcEntry.originalImportPath).toStdString()));
         }
 
         const auto destFileName = generateMediaFileName(srcEntry);

@@ -13,6 +13,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <vector>
 #include <unordered_map>
 #include <thread>
 #include <mutex>
@@ -36,7 +37,6 @@
 #include "Utils/ProjectSession.h"
 #include "Utils/LocalizationManager.h"
 #include "Audio/AsyncAudioLoader.h"
-#include "../Services/ReferenceAnalysisService.h"
 
 namespace OpenTune {
 
@@ -51,7 +51,6 @@ class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
                                       public PianoRollComponent::Listener,
                                       public juce::FileDragAndDropTarget,
                                       public LanguageChangeListener,  // 语言变化监听
-                                      public ReferenceAnalysisService::Listener, // 参考分析回调
                                       private juce::Timer
 {
 public:
@@ -113,7 +112,7 @@ public:
     void placementTimingChanged(int trackId, int placementIndex) override;
     void placementDoubleClicked(int trackId, int placementIndex) override;
     void verticalScrollChanged(int newOffset) override;
-    void referenceButtonClicked(int trackId, uint64_t placementId) override;
+    void referenceButtonClicked(int trackId, uint64_t placementId, juce::Rectangle<int> buttonScreenArea) override;
     // trackHeightChanged已在TrackPanelComponent::Listener中声明
 
     // PianoRollComponent::Listener
@@ -149,11 +148,8 @@ private:
 
     // Reference auto-align methods
     void refreshReferenceContext();
-    void resolveReferenceBindingMenu(int trackId, uint64_t placementId);
-    void startReferenceAnalysis(uint64_t placementId, uint64_t materializationId);
-    void handleAutoRefExecute();
-    void analysisCompleted(uint64_t materializationId, const MaterializationStore::DerivedAnalysis& result) override;
-    void analysisFailed(uint64_t materializationId, const juce::String& reason) override;
+    void resolveReferenceBindingMenu(int trackId, uint64_t placementId, juce::Rectangle<int> buttonScreenArea = {});
+    bool handleAutoRefExecute();
 
     void timerCallback() override;
     void showPreferencesDialog();
@@ -257,13 +253,6 @@ private:
     // RMVPE OriginalF0 阻塞事务锁：提取开始后 latch，直到"提取成功且当前钢琴卷帘可见"才释放
     bool rmvpeOverlayLatched_ = false;
     uint64_t rmvpeOverlayTargetMaterializationId_ = 0;
-
-    // Reference auto-align
-    std::unique_ptr<ReferenceAnalysisService> referenceAnalysisService_;
-    uint64_t currentReferencePlacementId_{0};
-    uint64_t currentReferenceMaterializationId_{0};
-    // 跟踪正在分析中的 materializationId → placementId 映射 (用于进度指示器)
-    std::unordered_map<uint64_t, uint64_t> analysisPendingPlacements_;
 
     // Export worker thread management
     std::thread exportWorker_;

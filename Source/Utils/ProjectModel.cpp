@@ -1,22 +1,16 @@
 #include "ProjectModel.h"
 
 #include <juce_core/juce_core.h>
-#include <random>
 #include <sstream>
 
 namespace OpenTune {
 
 juce::String ProjectSnapshot::generateProjectId()
 {
-    static std::random_device rd;
-    static std::mt19937_64 gen(rd());
-    static std::uniform_int_distribution<uint64_t> dis;
-
     const auto timestamp = juce::Time::currentTimeMillis();
-    const auto random = dis(gen);
-
+    const auto uuid = juce::Uuid().toString().substring(0, 8);
     std::ostringstream oss;
-    oss << std::hex << timestamp << "-" << random;
+    oss << std::hex << timestamp << "-" << uuid;
     return juce::String(oss.str());
 }
 

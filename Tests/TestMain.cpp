@@ -38,7 +38,7 @@ struct SuiteEntry {
     void (*run)();
 };
 
-constexpr std::array<SuiteEntry, 31> kSuites{{
+constexpr std::array<SuiteEntry, 33> kSuites{{
     { "core", "leaf utilities and render primitives", &runCoreBehaviorSuite },
     { "processor", "shared processor and render contracts", &runProcessorBehaviorSuite },
     { "ui", "piano-roll and visual loop behavior", &runUiBehaviorSuite },
@@ -62,14 +62,16 @@ constexpr std::array<SuiteEntry, 31> kSuites{{
     { "composite-undo-action", "CompositeUndoAction: undo/reverse order, empty safety, single-step count", &runCompositeUndoActionSuite },
     { "undo-manager-contract", "UndoManager + CompositeUndoAction: nested composite safety", &runUndoManagerContractSuite },
     { "auto-ref-failure", "ReferenceAutoAlign failure modes: NoOverlap, NotReady, InsufficientAnchors", &runAutoRefFailureSuite },
+    { "auto-ref-architecture", "AUTO Ref UI architecture source-scan guards", &runAutoRefArchitectureSuite },
     { "basic-derived-analysis", "DerivedAnalysis slot smoke test", &runBasicDerivedAnalysisSuite },
-    { "auto-ref-integration", "ReferenceAutoAlign + StandaloneArrangement reference binding wire-up stub", &runAutoRefIntegrationSuite },
+    { "auto-ref-integration", "AUTO Ref domain applier transaction and composite undo", &runAutoRefIntegrationSuite },
     { "derived-analysis", "MaterializationStore DerivedAnalysis slot set/get/invalidate lifecycle", &runMaterializationDerivedAnalysisSuite },
     { "mat-contract", "MaterializationStore contract: derived analysis isolation from snapshot/notes", &runMaterializationContractSuite },
     { "ref-analysis-svc", "ReferenceAnalysisService lifecycle and submit/cancel safety", &runReferenceAnalysisServiceSuite },
     { "ref-binding", "StandaloneArrangement reference binding lifecycle (set/get/clear/delete/move)", &runReferenceBindingSuite },
     { "ref-binding-cascade", "StandaloneArrangement reference binding cascade (delete/move cross-track/split)", &runPlacementReferenceCascadeSuite },
     { "arrangement-contract", "StandaloneArrangement contract (idempotent, invalid-id, snapshot)", &runArrangementContractSuite },
+    { "project-session-reference", "ProjectSession reference binding roundtrip and corruption", &runProjectSessionReferenceSuite },
 }};
 
 void printHeader()
@@ -5261,7 +5263,7 @@ void runChannelLayoutPrepareImportRejectsMultichannelTest()
         mono.clear();
         OpenTuneAudioProcessor::PreparedImport prep;
         if (!processor.prepareImport(std::move(mono), 44100.0,
-                                      juce::String("mono.wav"), prep)) {
+                                       juce::String("mono.wav"), juce::String("mono.wav"), prep)) {
             logFail(testName, "mono import unexpectedly rejected");
             return;
         }
@@ -5277,7 +5279,7 @@ void runChannelLayoutPrepareImportRejectsMultichannelTest()
         stereo.clear();
         OpenTuneAudioProcessor::PreparedImport prep;
         if (!processor.prepareImport(std::move(stereo), 44100.0,
-                                      juce::String("stereo.wav"), prep)) {
+                                       juce::String("stereo.wav"), juce::String("stereo.wav"), prep)) {
             logFail(testName, "stereo import unexpectedly rejected");
             return;
         }
@@ -5293,7 +5295,7 @@ void runChannelLayoutPrepareImportRejectsMultichannelTest()
         surround.clear();
         OpenTuneAudioProcessor::PreparedImport prep;
         if (processor.prepareImport(std::move(surround), 44100.0,
-                                     juce::String("surround.wav"), prep)) {
+                                      juce::String("surround.wav"), juce::String("surround.wav"), prep)) {
             logFail(testName, "5.1 import MUST be rejected");
             return;
         }

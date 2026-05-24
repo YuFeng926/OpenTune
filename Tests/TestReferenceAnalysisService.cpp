@@ -23,7 +23,8 @@
 namespace {
 
 // A trivial analysis function that returns an empty Ready DerivedAnalysis
-MaterializationStore::DerivedAnalysis trivialAnalysisFunc(uint64_t /*materializationId*/)
+MaterializationStore::DerivedAnalysis trivialAnalysisFunc(
+    const ReferenceAnalysisService::AnalysisJobKey& /*jobKey*/)
 {
     MaterializationStore::DerivedAnalysis result;
     result.state = F0ExtractionState::Ready;
@@ -116,7 +117,7 @@ void runReferenceAnalysisService_CancelSafety()
     constexpr const char* testName = "ReferenceAnalysisService_CancelSafety";
 
     ReferenceAnalysisService service;
-    service.setAnalysisFunc([](uint64_t) -> MaterializationStore::DerivedAnalysis {
+    service.setAnalysisFunc([](const ReferenceAnalysisService::AnalysisJobKey&) -> MaterializationStore::DerivedAnalysis {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         MaterializationStore::DerivedAnalysis result;
         result.state = F0ExtractionState::Ready;
@@ -139,6 +140,42 @@ void runReferenceAnalysisService_CancelSafety()
     logPass(testName);
 }
 
+void runReferenceAnalysisService_FailedStateRoutesToFailedCallback()
+{
+    constexpr const char* testName = "ReferenceAnalysisService_FailedStateRoutesToFailedCallback";
+
+    ReferenceAnalysisService service;
+    service.setNotificationDispatcher([](std::function<void()> task) {
+        task();
+    });
+    service.setAnalysisFunc([](const ReferenceAnalysisService::AnalysisJobKey& jobKey) {
+        MaterializationStore::DerivedAnalysis result;
+        result.state = F0ExtractionState::Failed;
+        result.errorMessage = "synthetic failure";
+        result.inputFingerprint = jobKey.renderRevision;
+        return result;
+    });
+
+    TestListener listener;
+    service.addListener(&listener);
+    service.submitAnalysis(/*materializationId=*/101, /*renderRevision=*/7);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1000);
+    while (std::chrono::steady_clock::now() < deadline
+        && listener.failedCount.load() == 0
+        && listener.completedCount.load() == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    service.removeListener(&listener);
+    if (listener.completedCount.load() != 0 || listener.failedCount.load() != 1) {
+        logFail(testName, "Failed DerivedAnalysis should notify analysisFailed exactly once");
+        return;
+    }
+
+    logPass(testName);
+}
+
 // ============================================================================
 // Suite entry point
 // ============================================================================
@@ -148,5 +185,5 @@ void runReferenceAnalysisServiceSuite()
     runReferenceAnalysisService_Lifecycle();
     runReferenceAnalysisService_ListenerRegistration();
     runReferenceAnalysisService_CancelSafety();
+    runReferenceAnalysisService_FailedStateRoutesToFailedCallback();
 }
-

@@ -1354,6 +1354,7 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
             case HandleKind::InternalOnset: return juce::Colour::fromRGB(180, 140, 220);
             case HandleKind::UserAdded:     return juce::Colours::white;
             case HandleKind::NoteOnly:      return juce::Colour::fromRGB(140, 200, 100); // soft green
+            case HandleKind::ReferenceAuto: return juce::Colour::fromRGB(255, 196, 87);
         }
         return juce::Colours::white;
     };

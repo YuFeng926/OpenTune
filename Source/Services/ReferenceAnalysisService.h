@@ -37,7 +37,8 @@ public:
     // 分析函数类型（调用方注入，避免服务耦合具体算法）
     // ==========================================================================
     using AnalysisFunc = std::function<MaterializationStore::DerivedAnalysis(
-        uint64_t materializationId)>;
+        const AnalysisJobKey& jobKey)>;
+    using NotificationDispatcher = std::function<void(std::function<void()> task)>;
 
     // ==========================================================================
     // Listener
@@ -59,6 +60,7 @@ public:
 
     /** 注入分析函数（必须在 submitAnalysis 前调用） */
     void setAnalysisFunc(AnalysisFunc func);
+    void setNotificationDispatcher(NotificationDispatcher dispatcher);
 
     /** 添加 Listener */
     void addListener(Listener* listener);
@@ -82,6 +84,7 @@ private:
     void notifyListenersFailed(uint64_t matId, const juce::String& reason);
 
     AnalysisFunc analysisFunc_;
+    NotificationDispatcher notificationDispatcher_;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -92,8 +95,10 @@ private:
 
     // 当前正在处理
     std::optional<AnalysisJobKey> activeJob_;
+    std::set<uint64_t> cancelledActiveJobs_;
 
     std::atomic<bool> running_{true};
+    std::shared_ptr<std::atomic<bool>> aliveToken_{std::make_shared<std::atomic<bool>>(true)};
     std::thread workerThread_;
 
     juce::ListenerList<Listener> listeners_;

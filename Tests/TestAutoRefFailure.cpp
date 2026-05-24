@@ -11,6 +11,8 @@
 #include "TestSupport.h"
 #include "DSP/ReferenceAutoAlign.h"
 
+#include <utility>
+
 namespace {
 
 MaterializationStore::DerivedAnalysis makeReadyAnalysis()
@@ -38,6 +40,32 @@ MaterializationStore::DerivedAnalysis makeReadyAnalysisWithAnchors(int numAnchor
     return da;
 }
 
+ReferenceAlignmentRequest makeRequest(MaterializationStore::DerivedAnalysis target,
+                                      MaterializationStore::DerivedAnalysis reference,
+                                      double overlapStartTimelineSeconds,
+                                      double overlapEndTimelineSeconds,
+                                      double targetTimelineStartSeconds,
+                                      double referenceTimelineStartSeconds,
+                                      double targetTotalDurationSeconds)
+{
+    ReferenceAlignmentRequest request;
+    request.target.materializationId = 1001;
+    request.reference.materializationId = 2001;
+    request.target.timelineStartSeconds = targetTimelineStartSeconds;
+    request.target.timelineEndSeconds = targetTimelineStartSeconds + targetTotalDurationSeconds;
+    request.reference.timelineStartSeconds = referenceTimelineStartSeconds;
+    request.reference.timelineEndSeconds = referenceTimelineStartSeconds + targetTotalDurationSeconds;
+    request.target.timeGrid = TimeGridSnapshot::makeIdentity(targetTotalDurationSeconds);
+    request.reference.timeGrid = TimeGridSnapshot::makeIdentity(targetTotalDurationSeconds);
+    request.targetFeatures = std::move(target);
+    request.referenceFeatures = std::move(reference);
+    request.targetNotesBefore = request.targetFeatures.basicDerivedNotes;
+    request.targetTimeGridBefore = request.target.timeGrid;
+    request.overlapStartTimelineSeconds = overlapStartTimelineSeconds;
+    request.overlapEndTimelineSeconds = overlapEndTimelineSeconds;
+    return request;
+}
+
 } // namespace
 
 // ============================================================================
@@ -52,19 +80,20 @@ void runAutoRefFailureNoOverlapTest()
     auto reference = makeReadyAnalysisWithAnchors(3);
 
     // overlapEndSeconds <= overlapStartSeconds → NoOverlap
-    const auto result = ReferenceAutoAlign::align(
-        target, reference,
+    const auto request = makeRequest(
+        std::move(target), std::move(reference),
         /*overlapStartSeconds=*/1.0,
         /*overlapEndSeconds=*/0.5,
         /*targetTimelineStartSeconds=*/0.0,
         /*referenceTimelineStartSeconds=*/2.0,
         /*targetTotalDurationSeconds=*/2.0);
+    const auto result = ReferenceAutoAlign::align(request);
 
     if (result.success) {
         logFail(testName, "align should fail with non-overlapping placements");
         return;
     }
-    if (result.error != AlignResult::ErrorCode::NoOverlap) {
+    if (result.error != AlignmentPatch::ErrorCode::NoOverlap) {
         logFail(testName, "error code should be NoOverlap");
         return;
     }
@@ -91,18 +120,19 @@ void runAutoRefFailureNoReferenceTest()
     auto referenceNotReady = makeReadyAnalysisWithAnchors(3);
     referenceNotReady.state = F0ExtractionState::NotRequested;
 
-    const auto result = ReferenceAutoAlign::align(
-        target, referenceNotReady,
+    const auto request = makeRequest(
+        std::move(target), std::move(referenceNotReady),
         0.0, 1.0,
         0.0, 0.0,
         1.0);
+    const auto result = ReferenceAutoAlign::align(request);
 
     if (result.success) {
         logFail(testName, "align should fail when reference analysis is not ready");
         return;
     }
     // align() checks reference state first → precise assertion
-    if (result.error != AlignResult::ErrorCode::ReferenceAnalysisNotReady) {
+    if (result.error != AlignmentPatch::ErrorCode::ReferenceAnalysisNotReady) {
         logFail(testName, "error code should be ReferenceAnalysisNotReady (checked before target)");
         return;
     }
@@ -124,17 +154,18 @@ void runAutoRefFailureTargetNotReadyTest()
     
     auto reference = makeReadyAnalysisWithAnchors(3);
 
-    const auto result = ReferenceAutoAlign::align(
-        targetNotReady, reference,
+    const auto request = makeRequest(
+        std::move(targetNotReady), std::move(reference),
         0.0, 1.0,
         0.0, 0.0,
         1.0);
+    const auto result = ReferenceAutoAlign::align(request);
 
     if (result.success) {
         logFail(testName, "align should fail when target analysis is not ready");
         return;
     }
-    if (result.error != AlignResult::ErrorCode::TargetAnalysisNotReady) {
+    if (result.error != AlignmentPatch::ErrorCode::TargetAnalysisNotReady) {
         logFail(testName, "error code should be TargetAnalysisNotReady");
         return;
     }
@@ -151,20 +182,23 @@ void runAutoRefFailureInsufficientAnchorsTest()
     constexpr const char* testName = "AutoRefFailure_InsufficientAnchors";
 
     auto target = makeReadyAnalysisWithAnchors(3);
+    target.basicDerivedNotes.clear();
     auto reference = makeReadyAnalysisWithAnchors(1);  // only 1 anchor
+    reference.basicDerivedNotes.clear();
 
-    const auto result = ReferenceAutoAlign::align(
-        target, reference,
+    const auto request = makeRequest(
+        std::move(target), std::move(reference),
         0.0, 2.0,
         0.0, 0.0,
         2.0);
+    const auto result = ReferenceAutoAlign::align(request);
 
     if (result.success) {
         logFail(testName, "align should fail with insufficient anchors");
         return;
     }
-    if (result.error != AlignResult::ErrorCode::InsufficientAnchors) {
-        logFail(testName, "error code should be InsufficientAnchors");
+    if (result.error != AlignmentPatch::ErrorCode::InsufficientFeatures) {
+        logFail(testName, "error code should be InsufficientFeatures");
         return;
     }
 
@@ -188,11 +222,12 @@ void runAutoRefFailureDoesNotModifyOutputTest()
     const auto revBefore = target.analysisRevision;
 
     // Call with non-overlapping params to trigger failure
-    const auto result = ReferenceAutoAlign::align(
+    const auto request = makeRequest(
         target, reference,
         0.0, 1.0,
         0.0, 2.0,
         1.0);
+    const auto result = ReferenceAutoAlign::align(request);
 
     // Verify failure
     if (result.success) {

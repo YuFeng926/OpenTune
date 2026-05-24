@@ -18,9 +18,14 @@
 #include "DSP/PhonemeClassifier.h"            // §4.9 Phase G
 #include "DSP/WordSegmenter.h"                // §4.9 Phase G
 #include "DSP/HandleNoteMerger.h"             // add-note-confirmed-handles §3.2
+#include "DSP/BasicReferenceFeatureBuilder.h"
+#include "DSP/ReferenceAutoAlign.h"
 #include <onnxruntime_cxx_api.h>
 #include "Utils/AccelerationDetector.h"
 #include "Utils/TimeCoordinate.h"
+#include "Utils/CompositeUndoAction.h"
+#include "Utils/PianoRollEditAction.h"
+#include "Utils/TimeGridEditAction.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
 #include <atomic>
@@ -108,6 +113,25 @@ bool hasRemainingPlacementForMaterialization(const StandaloneArrangement& arrang
                 && placement.materializationId == materializationId) {
                 return true;
             }
+        }
+    }
+
+    return false;
+}
+
+bool findPlacementByIdGlobal(const StandaloneArrangement& arrangement,
+                             uint64_t placementId,
+                             int& outTrackId,
+                             StandaloneArrangement::Placement& outPlacement)
+{
+    if (placementId == 0) {
+        return false;
+    }
+
+    for (int trackId = 0; trackId < arrangement.getNumTracks(); ++trackId) {
+        if (arrangement.getPlacementById(trackId, placementId, outPlacement)) {
+            outTrackId = trackId;
+            return true;
         }
     }
 
@@ -843,6 +867,80 @@ static bool readSilentGaps(juce::InputStream& input, std::vector<SilentGap>& out
     return true;
 }
 
+void OpenTuneAudioProcessor::configureReferenceAnalysisService()
+{
+    referenceAnalysisService_.setAnalysisFunc(
+        [this](const ReferenceAnalysisService::AnalysisJobKey& jobKey) {
+            return buildReferenceAlignmentFeaturesForJob(jobKey);
+        });
+    referenceAnalysisService_.addListener(this);
+}
+
+MaterializationStore::DerivedAnalysis OpenTuneAudioProcessor::buildReferenceAlignmentFeaturesForJob(
+    const ReferenceAnalysisService::AnalysisJobKey& jobKey) const
+{
+    MaterializationStore::DerivedAnalysis failed;
+    failed.inputFingerprint = jobKey.renderRevision;
+    failed.backendMode = 0;
+
+    MaterializationStore::MaterializationSnapshot snapshot;
+    if (materializationStore_ == nullptr
+        || !materializationStore_->getSnapshot(jobKey.materializationId, snapshot)) {
+        failed.state = F0ExtractionState::Failed;
+        failed.errorMessage = "AUTO Ref analysis could not read materialization";
+        return failed;
+    }
+
+    if (static_cast<int64_t>(snapshot.renderRevision) != jobKey.renderRevision) {
+        failed.state = F0ExtractionState::Failed;
+        failed.errorMessage = "AUTO Ref analysis job is stale";
+        return failed;
+    }
+
+    return BasicReferenceFeatureBuilder::build(snapshot);
+}
+
+void OpenTuneAudioProcessor::analysisCompleted(
+    uint64_t materializationId,
+    const MaterializationStore::DerivedAnalysis& result)
+{
+    if (materializationStore_ == nullptr || result.state != F0ExtractionState::Ready) {
+        return;
+    }
+
+    MaterializationStore::MaterializationSnapshot snapshot;
+    if (!materializationStore_->getSnapshot(materializationId, snapshot)) {
+        return;
+    }
+    if (result.inputFingerprint != static_cast<int64_t>(snapshot.renderRevision)) {
+        return;
+    }
+
+    materializationStore_->setDerivedAnalysis(materializationId, result);
+}
+
+void OpenTuneAudioProcessor::analysisFailed(uint64_t materializationId, const juce::String& reason)
+{
+    if (materializationStore_ == nullptr) {
+        return;
+    }
+
+    MaterializationStore::MaterializationSnapshot snapshot;
+    if (!materializationStore_->getSnapshot(materializationId, snapshot)) {
+        return;
+    }
+
+    MaterializationStore::DerivedAnalysis failed;
+    failed.state = F0ExtractionState::Failed;
+    failed.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
+    failed.sourceDurationSeconds = snapshot.audioBuffer != nullptr
+        ? TimeCoordinate::samplesToSeconds(snapshot.audioBuffer->getNumSamples(),
+                                           TimeCoordinate::kRenderSampleRate)
+        : 0.0;
+    failed.errorMessage = reason;
+    materializationStore_->setDerivedAnalysis(materializationId, failed);
+}
+
 // ============================================================================
 // vocal-time-stretch §3.8 — TimeGrid serialization (state version ≥ 6)
 // add-note-confirmed-handles §1 — confidence field added at state version ≥ 7
@@ -935,6 +1033,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     sourceStore_ = std::make_shared<SourceStore>();
     materializationStore_ = std::make_shared<MaterializationStore>();
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
+    configureReferenceAnalysisService();
 
     resamplingManager_ = std::make_shared<ResamplingManager>();
 
@@ -1052,6 +1151,8 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 
     // Cancel any pending async reclaim sweep to avoid JUCE jassert in AsyncUpdater destructor
     cancelPendingUpdate();
+    referenceAnalysisService_.removeListener(this);
+    referenceAnalysisService_.cancelAll();
 
     isPlaying_.store(false);
     materializationRefreshAliveFlag_->store(false, std::memory_order_release);
@@ -4569,6 +4670,266 @@ bool OpenTuneAudioProcessor::commitMaterializationNotesAndSegmentsById(uint64_t 
         }
     }
     return committed;
+}
+
+OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus
+OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(uint64_t materializationId)
+{
+    if (materializationStore_ == nullptr || materializationId == 0) {
+        return ReferenceAnalysisPreheatStatus::InvalidMaterialization;
+    }
+
+    MaterializationStore::MaterializationSnapshot snapshot;
+    if (!materializationStore_->getSnapshot(materializationId, snapshot)) {
+        return ReferenceAnalysisPreheatStatus::InvalidMaterialization;
+    }
+
+    MaterializationStore::DerivedAnalysis analysis;
+    if (materializationStore_->getDerivedAnalysis(materializationId, analysis)
+        && analysis.state == F0ExtractionState::Ready
+        && analysis.inputFingerprint == static_cast<int64_t>(snapshot.renderRevision)) {
+        return ReferenceAnalysisPreheatStatus::AlreadyReady;
+    }
+
+    if (analysis.state == F0ExtractionState::Failed
+        && analysis.inputFingerprint == static_cast<int64_t>(snapshot.renderRevision)) {
+        return ReferenceAnalysisPreheatStatus::AnalysisFailed;
+    }
+
+    referenceAnalysisService_.submitAnalysis(materializationId,
+                                             static_cast<int64_t>(snapshot.renderRevision));
+    return ReferenceAnalysisPreheatStatus::Queued;
+}
+
+OpenTuneAudioProcessor::ReferenceAlignmentResult
+OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPlacementId)
+{
+    ReferenceAlignmentResult result;
+
+    if (targetPlacementId == 0 || standaloneArrangement_ == nullptr || materializationStore_ == nullptr) {
+        result.status = ReferenceAlignmentResult::Status::TargetPlacementNotFound;
+        result.message = "AUTO Ref target placement is not available";
+        return result;
+    }
+
+    int targetTrackId = -1;
+    StandaloneArrangement::Placement targetPlacement;
+    if (!findPlacementByIdGlobal(*standaloneArrangement_, targetPlacementId, targetTrackId, targetPlacement)) {
+        result.status = ReferenceAlignmentResult::Status::TargetPlacementNotFound;
+        result.message = "AUTO Ref target placement is not available";
+        return result;
+    }
+
+    const uint64_t referencePlacementId =
+        standaloneArrangement_->getPlacementReferencePlacement(targetTrackId, targetPlacementId);
+    if (referencePlacementId == 0) {
+        result.status = ReferenceAlignmentResult::Status::NoReferenceBinding;
+        result.message = "AUTO Ref target has no reference clip binding";
+        return result;
+    }
+
+    if (referencePlacementId == targetPlacementId) {
+        result.status = ReferenceAlignmentResult::Status::SelfReference;
+        result.message = "AUTO Ref cannot align a clip to itself";
+        return result;
+    }
+
+    int referenceTrackId = -1;
+    StandaloneArrangement::Placement referencePlacement;
+    if (!findPlacementByIdGlobal(*standaloneArrangement_, referencePlacementId, referenceTrackId, referencePlacement)) {
+        result.status = ReferenceAlignmentResult::Status::ReferencePlacementNotFound;
+        result.message = "AUTO Ref reference placement is not available";
+        return result;
+    }
+    juce::ignoreUnused(referenceTrackId);
+
+    const double overlapStart = std::max(targetPlacement.timelineStartSeconds,
+                                         referencePlacement.timelineStartSeconds);
+    const double overlapEnd = std::min(targetPlacement.timelineEndSeconds(),
+                                       referencePlacement.timelineEndSeconds());
+    if (overlapEnd <= overlapStart) {
+        result.status = ReferenceAlignmentResult::Status::NoOverlap;
+        result.message = "AUTO Ref target and reference clips do not overlap";
+        return result;
+    }
+
+    MaterializationStore::MaterializationSnapshot targetSnapshot;
+    MaterializationStore::MaterializationSnapshot referenceSnapshot;
+    if (!materializationStore_->getSnapshot(targetPlacement.materializationId, targetSnapshot)) {
+        result.status = ReferenceAlignmentResult::Status::TargetAnalysisNotReady;
+        result.message = "AUTO Ref target analysis could not read materialization";
+        return result;
+    }
+    if (!materializationStore_->getSnapshot(referencePlacement.materializationId, referenceSnapshot)) {
+        result.status = ReferenceAlignmentResult::Status::ReferenceAnalysisNotReady;
+        result.message = "AUTO Ref reference analysis could not read materialization";
+        return result;
+    }
+
+    MaterializationStore::DerivedAnalysis targetFeatures;
+    if (!materializationStore_->getDerivedAnalysis(targetPlacement.materializationId, targetFeatures)
+        || targetFeatures.state != F0ExtractionState::Ready
+        || targetFeatures.inputFingerprint != static_cast<int64_t>(targetSnapshot.renderRevision)) {
+        targetFeatures = BasicReferenceFeatureBuilder::build(targetSnapshot);
+        materializationStore_->setDerivedAnalysis(targetPlacement.materializationId, targetFeatures);
+    }
+    if (targetFeatures.state != F0ExtractionState::Ready) {
+        result.status = ReferenceAlignmentResult::Status::TargetAnalysisNotReady;
+        result.message = targetFeatures.errorMessage.isNotEmpty()
+            ? targetFeatures.errorMessage
+            : "AUTO Ref target alignment features are not ready";
+        return result;
+    }
+
+    MaterializationStore::DerivedAnalysis referenceFeatures;
+    if (!materializationStore_->getDerivedAnalysis(referencePlacement.materializationId, referenceFeatures)
+        || referenceFeatures.state != F0ExtractionState::Ready
+        || referenceFeatures.inputFingerprint != static_cast<int64_t>(referenceSnapshot.renderRevision)) {
+        referenceFeatures = BasicReferenceFeatureBuilder::build(referenceSnapshot);
+        materializationStore_->setDerivedAnalysis(referencePlacement.materializationId, referenceFeatures);
+    }
+    if (referenceFeatures.state != F0ExtractionState::Ready) {
+        result.status = ReferenceAlignmentResult::Status::ReferenceAnalysisNotReady;
+        result.message = referenceFeatures.errorMessage.isNotEmpty()
+            ? referenceFeatures.errorMessage
+            : "AUTO Ref reference alignment features are not ready";
+        return result;
+    }
+
+    const auto oldNotes = materializationStore_->getNotes(targetPlacement.materializationId);
+    std::shared_ptr<PitchCurve> oldCurve;
+    if (!materializationStore_->getPitchCurve(targetPlacement.materializationId, oldCurve) || oldCurve == nullptr) {
+        result.status = ReferenceAlignmentResult::Status::TargetAnalysisNotReady;
+        result.message = "AUTO Ref target pitch curve is not available";
+        return result;
+    }
+
+    const auto oldSegments = copyCorrectedSegments(oldCurve);
+    std::shared_ptr<const TimeGridSnapshot> oldTimeGrid = targetSnapshot.timeGrid;
+    if (oldTimeGrid == nullptr) {
+        oldTimeGrid = TimeGridSnapshot::makeIdentity(targetPlacement.durationSeconds);
+    }
+    auto referenceTimeGrid = referenceSnapshot.timeGrid;
+    if (referenceTimeGrid == nullptr) {
+        referenceTimeGrid = TimeGridSnapshot::makeIdentity(referencePlacement.durationSeconds);
+    }
+    if (oldTimeGrid == nullptr || referenceTimeGrid == nullptr) {
+        result.status = ReferenceAlignmentResult::Status::InvalidTimeGrid;
+        result.message = "AUTO Ref could not build identity TimeGrid for clip duration";
+        return result;
+    }
+
+    ReferenceAlignmentRequest request;
+    request.target.placementId = targetPlacement.placementId;
+    request.target.materializationId = targetPlacement.materializationId;
+    request.target.timelineStartSeconds = targetPlacement.timelineStartSeconds;
+    request.target.timelineEndSeconds = targetPlacement.timelineEndSeconds();
+    request.target.timeGrid = oldTimeGrid;
+    request.reference.placementId = referencePlacement.placementId;
+    request.reference.materializationId = referencePlacement.materializationId;
+    request.reference.timelineStartSeconds = referencePlacement.timelineStartSeconds;
+    request.reference.timelineEndSeconds = referencePlacement.timelineEndSeconds();
+    request.reference.timeGrid = referenceTimeGrid;
+    request.targetFeatures = targetFeatures;
+    request.referenceFeatures = referenceFeatures;
+    request.targetNotesBefore = oldNotes;
+    request.targetSegmentsBefore = oldSegments;
+    request.targetTimeGridBefore = oldTimeGrid;
+    request.overlapStartTimelineSeconds = overlapStart;
+    request.overlapEndTimelineSeconds = overlapEnd;
+
+    auto patch = ReferenceAutoAlign::align(request);
+    if (!patch.success) {
+        switch (patch.error) {
+            case AlignmentPatch::ErrorCode::NoOverlap:
+                result.status = ReferenceAlignmentResult::Status::NoOverlap;
+                break;
+            case AlignmentPatch::ErrorCode::TargetAnalysisNotReady:
+                result.status = ReferenceAlignmentResult::Status::TargetAnalysisNotReady;
+                break;
+            case AlignmentPatch::ErrorCode::ReferenceAnalysisNotReady:
+                result.status = ReferenceAlignmentResult::Status::ReferenceAnalysisNotReady;
+                break;
+            case AlignmentPatch::ErrorCode::InsufficientFeatures:
+            case AlignmentPatch::ErrorCode::InsufficientNotes:
+            case AlignmentPatch::ErrorCode::InsufficientAnchors:
+                result.status = ReferenceAlignmentResult::Status::InsufficientFeatures;
+                break;
+            case AlignmentPatch::ErrorCode::TimeGridInvalid:
+                result.status = ReferenceAlignmentResult::Status::InvalidTimeGrid;
+                break;
+            case AlignmentPatch::ErrorCode::NoMutation:
+                result.status = ReferenceAlignmentResult::Status::NoMutation;
+                break;
+            case AlignmentPatch::ErrorCode::InvalidRequest:
+            case AlignmentPatch::ErrorCode::None:
+                result.status = ReferenceAlignmentResult::Status::CommitFailed;
+                break;
+        }
+        result.message = patch.diagnostics;
+        result.targetMaterializationId = targetPlacement.materializationId;
+        result.affectedStartFrame = patch.affectedStartFrame;
+        result.affectedEndFrame = patch.affectedEndFrame;
+        return result;
+    }
+
+    auto newCurve = clonePitchCurveWithCorrectedSegments(oldCurve, patch.correctedSegmentsAfter);
+    if (newCurve == nullptr || patch.timeGridAfter == nullptr) {
+        result.status = ReferenceAlignmentResult::Status::CommitFailed;
+        result.message = "AUTO Ref produced an incomplete patch";
+        return result;
+    }
+
+    const auto normalizedNotes = normalizeStoredNotes(patch.notesAfter);
+    if (!materializationStore_->commitReferenceAlignmentPatch(targetPlacement.materializationId,
+                                                             normalizedNotes,
+                                                             std::move(newCurve),
+                                                             patch.timeGridAfter)) {
+        result.status = ReferenceAlignmentResult::Status::CommitFailed;
+        result.message = "AUTO Ref could not commit patch";
+        return result;
+    }
+
+    auto composite = std::make_unique<CompositeUndoAction>("AUTO (Ref)");
+    if (patch.pitchChanged) {
+        composite->addAction(std::make_unique<PianoRollEditAction>(
+            *this,
+            targetPlacement.materializationId,
+            "AUTO (Ref) Pitch",
+            oldNotes,
+            normalizedNotes,
+            oldSegments,
+            patch.correctedSegmentsAfter,
+            patch.affectedStartFrame,
+            patch.affectedEndFrame));
+    }
+    if (patch.timeGridChanged) {
+        composite->addAction(std::make_unique<TimeGridEditAction>(
+            *this,
+            targetPlacement.materializationId,
+            "AUTO (Ref) Time",
+            oldTimeGrid,
+            patch.timeGridAfter,
+            patch.affectedStartFrame,
+            patch.affectedEndFrame));
+    }
+    if (composite->getNumActions() > 0) {
+        undoManager_.addAction(std::move(composite));
+    }
+
+    const double editStartSec = static_cast<double>(patch.affectedStartFrame) / 100.0;
+    const double editEndSec = static_cast<double>(patch.affectedEndFrame) / 100.0;
+    enqueueMaterializationPartialRenderById(targetPlacement.materializationId, editStartSec, editEndSec);
+    if (patch.timeGridChanged) {
+        requestStage2Rebuild(targetPlacement.materializationId);
+    }
+
+    result.status = ReferenceAlignmentResult::Status::Succeeded;
+    result.message = "AUTO Ref alignment applied";
+    result.targetMaterializationId = targetPlacement.materializationId;
+    result.affectedStartFrame = patch.affectedStartFrame;
+    result.affectedEndFrame = patch.affectedEndFrame;
+    return result;
 }
 
 bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByMaterializationId(uint64_t materializationId,

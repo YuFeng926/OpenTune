@@ -637,7 +637,8 @@ public:
 
     juce::Font getPopupMenuFont() override
     {
-        return UIColors::getLabelFont(16.0f);
+        // 显式使用 HONOR Sans CN Medium 确保 CJK 字符正确渲染
+        return juce::Font(juce::FontOptions("HONOR Sans CN", "Medium", 16.0f));
     }
 
     juce::Font getLabelFont(juce::Label&) override

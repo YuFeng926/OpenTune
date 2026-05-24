@@ -38,9 +38,6 @@ public:
     /** 工程目录下的媒体子目录名 */
     static constexpr const char* kMediaDirectoryName = "Project_Media";
 
-    /** 最近工程列表最大条目数 */
-    static constexpr int kMaxRecentProjects = 10;
-
     // ============================================================================
     // 构造
     // ============================================================================
@@ -160,8 +157,8 @@ private:
     bool dirty_{false};
 
     // 固化工程身份（首次保存生成，后续复用）
-    juce::String cachedProjectId_;
-    juce::String cachedCreatedAt_;
+    mutable juce::String cachedProjectId_;
+    mutable juce::String cachedCreatedAt_;
 };
 
 } // namespace OpenTune

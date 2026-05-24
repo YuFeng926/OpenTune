@@ -153,6 +153,8 @@ public:
 
         // Backend mode (0 = Basic; Enhanced reserved for future)
         int backendMode{0};
+        double sourceDurationSeconds{0.0};
+        juce::String errorMessage;
 
         void reset() {
             analysisRevision = 0;
@@ -161,6 +163,8 @@ public:
             basicDerivedAnchors.clear();
             inputFingerprint = 0;
             backendMode = 0;
+            sourceDurationSeconds = 0.0;
+            errorMessage.clear();
         }
     };
 
@@ -206,6 +210,10 @@ public:
     bool commitNotesAndPitchCurve(uint64_t materializationId,
                                   std::vector<Note> notes,
                                   std::shared_ptr<PitchCurve> curve);
+    bool commitReferenceAlignmentPatch(uint64_t materializationId,
+                                       std::vector<Note> notesAfter,
+                                       std::shared_ptr<PitchCurve> pitchCurveAfter,
+                                       std::shared_ptr<const TimeGridSnapshot> timeGridAfter);
 
     // ============================================================
     // vocal-time-stretch §3.6 — TimeGrid accessors (per-materialization)

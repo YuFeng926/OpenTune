@@ -13,9 +13,7 @@ void ProjectPersistence::setOptionalProperty(juce::ValueTree& tree,
                                               const juce::Identifier& name,
                                               const juce::String& value)
 {
-    if (value.isNotEmpty()) {
-        tree.setProperty(name, value, nullptr);
-    }
+    tree.setProperty(name, value, nullptr);
 }
 
 juce::String ProjectPersistence::getOptionalProperty(const juce::ValueTree& tree,
@@ -85,8 +83,6 @@ juce::ValueTree ProjectPersistence::toValueTree(const ProjectSnapshot& snapshot)
     for (const auto& binding : snapshot.referenceBindings) {
         root.addChild(referenceBindingToValueTree(binding), -1, nullptr);
     }
-
-    root.addChild(recentSessionStateToValueTree(snapshot.recentSessionState), -1, nullptr);
 
     return root;
 }
@@ -163,12 +159,6 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
         }
     }
 
-    // RecentSessionState
-    auto rssTree = tree.getChildWithName("RecentSessionState");
-    if (rssTree.isValid()) {
-        snapshot.recentSessionState = recentSessionStateFromValueTree(rssTree);
-    }
-
     return Result<ProjectSnapshot>::success(snapshot);
 }
 
@@ -208,34 +198,6 @@ Result<ProjectSnapshot> ProjectPersistence::readProjectFile(const juce::File& fi
 }
 
 // ============================================================================
-// 序列化辅助 — Header
-// ============================================================================
-
-juce::ValueTree ProjectPersistence::headerToValueTree(const ProjectHeader& header)
-{
-    juce::ValueTree tree("Header");
-    tree.setProperty(kProjectFormatVersionAttr, header.projectFormatVersion, nullptr);
-    setOptionalProperty(tree, juce::Identifier(kAppVersionAttr), header.appVersion);
-    setOptionalProperty(tree, "projectName", header.projectName);
-    setOptionalProperty(tree, "projectId", header.projectId);
-    setOptionalProperty(tree, "createdAt", header.createdAt);
-    setOptionalProperty(tree, "lastSavedAt", header.lastSavedAt);
-    return tree;
-}
-
-ProjectHeader ProjectPersistence::headerFromValueTree(const juce::ValueTree& tree)
-{
-    ProjectHeader h;
-    h.projectFormatVersion = static_cast<int>(tree.getProperty(kProjectFormatVersionAttr, 1));
-    h.appVersion = getOptionalProperty(tree, juce::Identifier(kAppVersionAttr), "");
-    h.projectName = getOptionalProperty(tree, "projectName", "Untitled");
-    h.projectId = getOptionalProperty(tree, "projectId", "");
-    h.createdAt = getOptionalProperty(tree, "createdAt", "");
-    h.lastSavedAt = getOptionalProperty(tree, "lastSavedAt", "");
-    return h;
-}
-
-// ============================================================================
 // 序列化辅助 — Settings
 // ============================================================================
 
@@ -250,6 +212,8 @@ juce::ValueTree ProjectPersistence::settingsToValueTree(const ProjectSettings& s
     tree.setProperty("scrollX", settings.scrollX, nullptr);
     tree.setProperty("scrollY", settings.scrollY, nullptr);
     tree.setProperty("zoomLevel", settings.zoomLevel, nullptr);
+    tree.setProperty("verticalZoom", settings.verticalZoom, nullptr);
+    tree.setProperty("timelineOriginSeconds", settings.timelineOriginSeconds, nullptr);
     return tree;
 }
 
@@ -264,6 +228,8 @@ ProjectSettings ProjectPersistence::settingsFromValueTree(const juce::ValueTree&
     s.scrollX = tree.getProperty("scrollX", 0.0);
     s.scrollY = tree.getProperty("scrollY", 0.0);
     s.zoomLevel = tree.getProperty("zoomLevel", 1.0);
+    s.verticalZoom = tree.getProperty("verticalZoom", 1.0);
+    s.timelineOriginSeconds = tree.getProperty("timelineOriginSeconds", 0.0);
     return s;
 }
 
@@ -296,10 +262,10 @@ ProjectSourceEntry ProjectPersistence::sourceFromValueTree(const juce::ValueTree
     s.relativeMediaPath = getOptionalProperty(tree, "relativeMediaPath", "");
     s.sampleRate = tree.getProperty("sampleRate", 0.0);
     s.numChannels = static_cast<int>(tree.getProperty("numChannels", 0));
-    s.lengthSamples = static_cast<int64_t>(static_cast<int64_t>(tree.getProperty("lengthSamples", 0)));
+    s.lengthSamples = static_cast<int64_t>(tree.getProperty("lengthSamples", 0));
     s.lengthSeconds = tree.getProperty("lengthSeconds", 0.0);
     s.contentHash = getOptionalProperty(tree, "contentHash", "");
-    s.fileSizeBytes = static_cast<int64_t>(static_cast<int64_t>(tree.getProperty("fileSizeBytes", 0)));
+    s.fileSizeBytes = static_cast<int64_t>(tree.getProperty("fileSizeBytes", 0));
     return s;
 }
 
@@ -326,7 +292,7 @@ juce::ValueTree ProjectPersistence::materializationToValueTree(const ProjectMate
     // DetectedKey
     juce::ValueTree dkTree("DetectedKey");
     dkTree.setProperty("tonic", static_cast<int>(mat.detectedKey.root), nullptr);
-    dkTree.setProperty("isMinor", static_cast<int>(mat.detectedKey.scale), nullptr);
+    dkTree.setProperty("scale", static_cast<int>(mat.detectedKey.scale), nullptr);
     dkTree.setProperty("confidence", mat.detectedKey.confidence, nullptr);
     tree.addChild(dkTree, -1, nullptr);
 
@@ -375,7 +341,7 @@ ProjectMaterializationEntry ProjectPersistence::materializationFromValueTree(con
     auto dkTree = tree.getChildWithName("DetectedKey");
     if (dkTree.isValid()) {
         m.detectedKey.root = static_cast<Key>(static_cast<int>(dkTree.getProperty("tonic", 0)));
-        m.detectedKey.scale = static_cast<Scale>(static_cast<int>(dkTree.getProperty("isMinor", 0)));
+        m.detectedKey.scale = static_cast<Scale>(static_cast<int>(dkTree.getProperty("scale", 0)));
         m.detectedKey.confidence = dkTree.getProperty("confidence", 0.0f);
     }
 
@@ -718,36 +684,6 @@ ProjectReferenceBinding ProjectPersistence::referenceBindingFromValueTree(const 
     rb.bindingRevision = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("bindingRevision", 0)));
     rb.analysisMode = getOptionalProperty(tree, "analysisMode", "Basic");
     return rb;
-}
-
-// ============================================================================
-// RecentSessionState 序列化
-// ============================================================================
-
-juce::ValueTree ProjectPersistence::recentSessionStateToValueTree(const ProjectRecentSessionState& state)
-{
-    juce::ValueTree tree("RecentSessionState");
-    tree.setProperty("selectedTrackId", state.selectedTrackId, nullptr);
-    tree.setProperty("selectedPlacementId", static_cast<int64_t>(state.selectedPlacementId), nullptr);
-    tree.setProperty("scrollX", state.scrollX, nullptr);
-    tree.setProperty("scrollY", state.scrollY, nullptr);
-    tree.setProperty("horizontalZoom", state.horizontalZoom, nullptr);
-    tree.setProperty("verticalZoom", state.verticalZoom, nullptr);
-    tree.setProperty("timelineOriginSeconds", state.timelineOriginSeconds, nullptr);
-    return tree;
-}
-
-ProjectRecentSessionState ProjectPersistence::recentSessionStateFromValueTree(const juce::ValueTree& tree)
-{
-    ProjectRecentSessionState s;
-    s.selectedTrackId = static_cast<int>(tree.getProperty("selectedTrackId", 0));
-    s.selectedPlacementId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("selectedPlacementId", 0)));
-    s.scrollX = tree.getProperty("scrollX", 0.0);
-    s.scrollY = tree.getProperty("scrollY", 0.0);
-    s.horizontalZoom = tree.getProperty("horizontalZoom", 1.0);
-    s.verticalZoom = tree.getProperty("verticalZoom", 1.0);
-    s.timelineOriginSeconds = tree.getProperty("timelineOriginSeconds", 0.0);
-    return s;
 }
 
 } // namespace OpenTune

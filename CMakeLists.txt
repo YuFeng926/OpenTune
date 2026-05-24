@@ -485,6 +485,8 @@ target_sources(OpenTune
         Source/Services/VadExtractionService.h
         Source/Services/ReferenceAnalysisService.cpp
         Source/Services/ReferenceAnalysisService.h
+        Source/DSP/BasicReferenceFeatureBuilder.cpp
+        Source/DSP/BasicReferenceFeatureBuilder.h
         Source/Audio/AudioFormatRegistry.cpp
         Source/Audio/AudioFormatRegistry.h
 
@@ -629,8 +631,6 @@ target_sources(OpenTune
         Source/Utils/WindowsDllSearchPath.cpp
         Source/Utils/OnnxRuntimeDelayLoadHook.cpp
         Source/Utils/ModelPathResolver.h
-        Source/Utils/PresetManager.cpp
-        Source/Utils/PresetManager.h
         Source/Utils/ProjectModel.cpp
         Source/Utils/ProjectModel.h
         Source/Utils/ProjectPersistence.cpp
@@ -1191,6 +1191,7 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/TestCompositeUndoAction.cpp
         Tests/TestUndoManagerContract.cpp
         Tests/TestAutoRefFailure.cpp
+        Tests/TestAutoRefArchitecture.cpp
         Tests/TestBasicDerivedAnalysis.cpp
         Tests/TestAutoRefIntegration.cpp
         Tests/TestReferenceBinding.cpp
@@ -1199,6 +1200,7 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/TestMaterializationDerivedAnalysis.cpp
         Tests/TestMaterializationContract.cpp
         Tests/TestReferenceAnalysisService.cpp
+        Tests/TestProjectSessionReference.cpp
     )
 
     target_include_directories(OpenTuneTests

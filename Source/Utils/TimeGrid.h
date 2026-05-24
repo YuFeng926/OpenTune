@@ -39,7 +39,8 @@ enum class HandleKind : uint8_t {
     OnsetSilence = 4,   // WordSegmenter Tier 1: 进入 Silence 段的边界
     InternalOnset = 5,  // WordSegmenter Tier 2: 同类内瞬态(OnsetDetector)
     UserAdded = 6,      // 用户手动双击插入
-    NoteOnly = 7        // HandleNoteMerger Pass 2: note 边界失配补位 (单源信号)
+    NoteOnly = 7,       // HandleNoteMerger Pass 2: note 边界失配补位 (单源信号)
+    ReferenceAuto = 8   // AUTO (Ref) generated alignment handle
 };
 
 // Confidence 标识 handle 的播种置信度。

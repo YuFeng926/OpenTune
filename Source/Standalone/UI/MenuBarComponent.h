@@ -4,7 +4,7 @@
  * 菜单栏组件
  * 
  * 实现 JUCE MenuBarModel 接口，提供应用程序菜单：
- * - File（导入、导出、预设等）
+ * - File（导入、导出、工程存取等）
  * - Edit（撤销、重做等）
  * - View（波形显示、调式、主题等）
  * - 鼠标轨迹特效设置
@@ -99,7 +99,7 @@ private:
         ExportTrack,
         ExportBus,
         SaveProject,
-        LoadProject,
+        OpenProject,
         SaveProjectAs,
         RecentProjectBase = 500,
         ClearRecentProjects = 600,
