@@ -136,6 +136,39 @@ public:
         std::function<int(double)> timeToX;
     };
 
+    struct F0VisualPoint
+    {
+        int frame = 0;
+        float x = 0.0f;
+        float y = 0.0f;
+        float energyAlpha = 1.0f;
+    };
+
+    struct F0VisualSegment
+    {
+        std::vector<F0VisualPoint> points;
+    };
+
+    struct F0VisualBuildOptions
+    {
+        int startFrame = 0;
+        int endFrameExclusive = 0;
+        int viewportStartX = 0;
+        int viewportEndX = 0;
+        double pixelsPerSecond = 100.0;
+        double secondsPerFrame = 0.01;
+    };
+
+    using F0FrameToX = std::function<float(int)>;
+    using F0FrameToY = std::function<float(int, float)>;
+
+    static std::vector<F0VisualSegment> buildF0VisualSegments(const std::vector<float>& f0,
+                                                              const std::vector<float>* originalEnergy,
+                                                              const std::vector<uint8_t>* visibleMask,
+                                                              const F0VisualBuildOptions& options,
+                                                              const F0FrameToX& frameToX,
+                                                              const F0FrameToY& frameToY);
+
     void drawLanes(juce::Graphics& g, const RenderContext& ctx);
     void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
     void drawWaveform(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);

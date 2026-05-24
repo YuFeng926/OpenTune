@@ -33,7 +33,7 @@
 namespace {
 
 // Walk up from CWD until we find the project root (CMakeLists.txt sibling).
-// Mirrors findSileroVadModel() pattern in SileroVadExtractorTests.cpp.
+// Shared project-root lookup for model-backed tests.
 juce::File findProjectRoot()
 {
     auto cwd = juce::File::getCurrentWorkingDirectory();
@@ -154,12 +154,10 @@ void runVocoderConfig_BundledOnnxConsistentWithSourceTest()
         return;
     }
 
-    // Try to find the bundled copy. Two candidate paths depending on build setup.
-    auto bundledA = root.getChildFile("build/OpenTune_artefacts/Release/Standalone/OpenTune.app/Contents/Resources/models/hifigan.onnx");
-    auto bundledB = root.getChildFile("build/OpenTune_artefacts/Standalone/OpenTune.app/Contents/Resources/models/hifigan.onnx");
-    juce::File bundled = bundledA.existsAsFile() ? bundledA : bundledB;
+    // Current Windows VS preset bundle location.
+    auto bundled = root.getChildFile("build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/Standalone/models/hifigan.onnx");
     if (!bundled.existsAsFile()) {
-        logFail(testName, "bundled hifigan.onnx not found in build artifacts (run CMake build first)");
+        logFail(testName, "bundled hifigan.onnx not found in build-ara-overlay-vs18-clean Standalone artifacts");
         return;
     }
 

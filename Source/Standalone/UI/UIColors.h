@@ -55,15 +55,15 @@ struct UIColors
     static inline juce::Colour gridLine { 0xFF3E4652 };
 
     // Pitch Curve Colors
-    static inline juce::Colour originalF0 { 0xFFFF6666 };   // 柔和红色
-    static inline juce::Colour correctedF0 { 0xFF2DFFA0 };  // 高饱和青绿色
-    static inline juce::Colour shadowTrack { 0x402DFFA0 };
+    static inline juce::Colour originalF0 { 0xFFD24A3A };   // Piano Roll reference red
+    static inline juce::Colour correctedF0 { 0xFF2EC7F8 };  // Piano Roll reference cyan
+    static inline juce::Colour shadowTrack { 0x302EC7F8 };
 
     // Note Block Colors
-    static inline juce::Colour noteBlock { 0xFF7FB3D5 };
-    static inline juce::Colour noteBlockBorder { 0xFFA9CCE3 };
-    static inline juce::Colour noteBlockSelected { 0xFFFF7675 };
-    static inline juce::Colour noteBlockHover { 0xFFAED6F1 };
+    static inline juce::Colour noteBlock { 0xFF72D8F7 };
+    static inline juce::Colour noteBlockBorder { 0xFFB6F0FF };
+    static inline juce::Colour noteBlockSelected { 0xFF9CEAFF };
+    static inline juce::Colour noteBlockHover { 0xFF8CE4FF };
 
     // Playhead & Timeline
     static inline juce::Colour playhead { 0xFFFFFFFF };

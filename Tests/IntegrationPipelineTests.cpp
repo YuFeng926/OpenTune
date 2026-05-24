@@ -16,7 +16,7 @@
  *   - 12.6: τ⁻¹ projection used by waveform renderer maps screen-pixel widths
  *           correctly through stretched segments
  *
- * 12.3 (timeGridSeededOnImport) and 12.4 (drag-30ms / doubleClick-exact) are
+ * 12.3 (identity TimeGrid on import) and 12.4 (drag/output spacing / doubleClick-exact) are
  * already covered by MaterializationStoreTimeGridTests and TimeToolHandlerTests
  * respectively; the remaining 12.4 case (groupDragUniformDelta) is added to
  * TimeToolHandlerTests.

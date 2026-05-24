@@ -47,13 +47,6 @@ gratefully acknowledge the work of their authors.
   pitch correction. Runs via ONNX Runtime (CPU/DirectML on Windows;
   CoreML on macOS).
 
-### Silero VAD
-- **License**: MIT
-- **Project**: https://github.com/snakers4/silero-vad
-- **Use**: ⚡️ vocal-time-stretch v7 — Voice Activity Detection. Reserved
-  for fusion with RMVPE UV in the V/U classifier. Currently degrades
-  gracefully when the model file is absent (synthesises UV from F0).
-
 ## ONNX Runtime
 - **License**: MIT
 - **Project**: https://onnxruntime.ai/

@@ -76,6 +76,19 @@ PianoRollToolHandler::Context makeStubContextForTimeTool(
     static const std::vector<Note> sEmptyNotes;
     ctx.getCommittedNotes = []() -> const std::vector<Note>& { return sEmptyNotes; };
     ctx.getDisplayNotes   = []() -> const std::vector<Note>& { return sEmptyNotes; };
+    ctx.getNoteDraft = [&]() -> NoteInteractionDraft& { return state.noteDraft; };
+    ctx.beginNoteDraft = [&]() {
+        state.noteDraft.active = true;
+        state.noteDraft.baselineNotes = sEmptyNotes;
+        state.noteDraft.workingNotes = sEmptyNotes;
+    };
+    ctx.commitNoteDraft = [&]() {
+        state.noteDraft.clear();
+        return true;
+    };
+    ctx.clearNoteDraft = [&]() {
+        state.noteDraft.clear();
+    };
 
     ctx.invalidateVisual = [](const juce::Rectangle<int>&) {};
     ctx.setMouseCursor   = [](const juce::MouseCursor&) {};
@@ -244,8 +257,8 @@ void runTimeTool_DragMutatesWorkingSnapshotTest()
     juce::Component dummy;
     auto down = makeMouseEvent(timeToTestX(0.5), 100, dummy);
     handler.mouseDown(down);
-    if (!state.timeTool.isDraggingHandle || state.timeTool.draggedHandleId != 2) {
-        logFail(testName, "mouseDown on handle 2 should arm drag state");
+    if (!state.timeTool.dragPending || state.timeTool.isDraggingHandle || state.timeTool.draggedHandleId != 2) {
+        logFail(testName, "mouseDown on handle 2 should enter pending drag state");
         return;
     }
 
@@ -295,9 +308,7 @@ void runTimeTool_DragClampedAtNeighborsTest()
     juce::Component dummy;
     handler.mouseDown(makeMouseEvent(timeToTestX(0.5), 100, dummy));
 
-    // Drag past ClipEnd at 1.0 → should clamp to (1.0 - 30ms minimum spacing)
-    // = 0.970.  Phase G tightened the clamp from 1ms to 30ms (per spec
-    // time-tool-interaction.md "30ms minimum gap").
+    // Drag past ClipEnd at 1.0 → should clamp to the TimeGrid output-spacing invariant.
     handler.mouseDrag(makeMouseEvent(timeToTestX(2.0), 100, dummy));
 
     const double newOutput = state.timeTool.dragWorkingSnapshot->handles()[1].output_seconds;
@@ -305,11 +316,10 @@ void runTimeTool_DragClampedAtNeighborsTest()
         logFail(testName, "dragged output must stay strictly less than ClipEnd");
         return;
     }
-    constexpr double kMinSpacingSec = 0.030;
-    const double expected = 1.0 - kMinSpacingSec;
+    const double expected = 1.0 - TimeGridSnapshot::kMinOutputSpacingSeconds;
     if (std::abs(newOutput - expected) > 1e-3) {
         logFail(testName, ("dragged output should clamp to ~" + std::to_string(expected)
-                           + " (1.0 - 30ms), got " + std::to_string(newOutput)).c_str());
+                           + " (1.0 - output spacing), got " + std::to_string(newOutput)).c_str());
         return;
     }
     logPass(testName);
@@ -390,7 +400,7 @@ void runTimeTool_MouseDownOnEmptyClearsSelectionTest()
 // ============================================================================
 
 // ============================================================================
-// Phase G — double-click insert + delete + 30ms spacing tests
+// Phase G — double-click insert/delete and TimeGrid output-spacing tests
 // ============================================================================
 
 void runTimeTool_DoubleClickInsertsHandleTest()
@@ -444,7 +454,7 @@ void runTimeTool_DoubleClickInsertsHandleTest()
 
 void runTimeTool_DoubleClickRejectsTooCloseTest()
 {
-    constexpr const char* testName = "TimeTool_DoubleClick_RejectsWithin30msOfNeighbor";
+    constexpr const char* testName = "TimeTool_DoubleClick_RejectsWithinOutputSpacingOfNeighbor";
 
     InteractionState state;
     auto grid = makeTestGridForTimeTool();
@@ -585,12 +595,12 @@ void runTimeTool_GroupDragUniformDeltaTest()
         return;
     }
 
-    // Step 3: drag handle 3 by +0.05s.  Shift held during drag preserves
+    // Step 3: drag handle 3 by +0.10s.  Shift held during drag preserves
     // the multi-select (bare click on a handle clears additionalSelectedIds
     // per current Phase H toolHandler logic; matches DAW convention of
-    // Shift+drag for group operations).
+    // Shift+drag for group operations). Delta must exceed the pending drag threshold.
     handler.mouseDown(makeMouseEventWithMods(timeToTestX(0.5), 100, dummy, shift));
-    handler.mouseDrag(makeMouseEventWithMods(timeToTestX(0.55), 100, dummy, shift));
+    handler.mouseDrag(makeMouseEventWithMods(timeToTestX(0.60), 100, dummy, shift));
 
     if (state.timeTool.dragWorkingSnapshot == nullptr) {
         logFail(testName, "dragWorkingSnapshot should be non-null during drag");
@@ -603,8 +613,8 @@ void runTimeTool_GroupDragUniformDeltaTest()
     const double dxH4 = newH[3].output_seconds - 0.7;
 
     // Δ should be ~0.05s on both selected handles (within clamp tolerance).
-    if (std::abs(dxH3 - 0.05) > 1e-3) {
-        logFail(testName, ("handle 3 should shift by ~0.05s (got " + std::to_string(dxH3) + ")").c_str());
+    if (std::abs(dxH3 - 0.10) > 1e-3) {
+        logFail(testName, ("handle 3 should shift by ~0.10s (got " + std::to_string(dxH3) + ")").c_str());
         return;
     }
     if (std::abs(dxH4 - dxH3) > 1e-3) {

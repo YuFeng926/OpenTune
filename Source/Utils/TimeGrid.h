@@ -34,18 +34,17 @@ namespace OpenTune {
 enum class HandleKind : uint8_t {
     ClipStart = 0,      // 永远 locked, output==source==0
     ClipEnd = 1,        // 永远 locked
-    OnsetVoiced = 2,    // WordSegmenter Tier 1: 进入 Voiced 段的边界
-    OnsetSibilant = 3,  // WordSegmenter Tier 1: 进入 Sibilant 段的边界
-    OnsetSilence = 4,   // WordSegmenter Tier 1: 进入 Silence 段的边界
-    InternalOnset = 5,  // WordSegmenter Tier 2: 同类内瞬态(OnsetDetector)
+    OnsetVoiced = 2,
+    OnsetSibilant = 3,
+    OnsetSilence = 4,
+    InternalOnset = 5,
     UserAdded = 6,      // 用户手动双击插入
-    NoteOnly = 7,       // HandleNoteMerger Pass 2: note 边界失配补位 (单源信号)
-    ReferenceAuto = 8   // AUTO (Ref) generated alignment handle
+    ReferenceAuto = 7   // AUTO (Ref) generated alignment handle
 };
 
-// Confidence 标识 handle 的播种置信度。
-// Default: 单源播种 (仅 WordSegmenter / 仅 GameNoteGenerator) 或用户手动添加。
-// High: 双源命中 — WordSegmenter handle 与 GameNoteGenerator note 边界 ±50ms 对齐。
+// Confidence 标识 handle 的生成置信度。
+// Default: 用户或单源算法生成。
+// High: 参考对齐等多源事实命中。
 // Once-confirmed-always: 一旦标记为 High，永远不变 (与 source_seconds 同 immutable)。
 enum class Confidence : uint8_t {
     Default = 0,
@@ -69,6 +68,15 @@ struct TimeHandle {
 class TimeGridSnapshot {
 public:
     TimeGridSnapshot() = default;
+
+    static constexpr double kSourceSpacingFrameRate = 100.0;
+    static constexpr double kMinOutputSpacingSeconds = 0.030;
+    static constexpr int kMinSourceSpacingFrames = 15;
+    static constexpr double kMinSourceSpacingSeconds =
+        static_cast<double>(kMinSourceSpacingFrames) / kSourceSpacingFrameRate;
+
+    static bool hasMinimumSourceSpacing(double previousSourceSeconds,
+                                        double currentSourceSeconds) noexcept;
 
     /**
      * 构造一个恒等映射 snapshot (output==source 全部 handle, τ=identity)。

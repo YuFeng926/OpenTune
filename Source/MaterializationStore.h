@@ -141,12 +141,20 @@ public:
 
         // Basic-mode output
         std::vector<Note> basicDerivedNotes;
-        struct TimeAnchor {
-            uint64_t id{0};
+
+        enum class TemporalEventKind : uint8_t {
+            Onset = 0,
+            PitchTransition = 1
+        };
+
+        struct TemporalEvent {
+            uint64_t eventId{0};
             double sourceSeconds{0.0};
             float strength{0.0f};
+            TemporalEventKind kind{TemporalEventKind::Onset};
+            float confidence{0.0f};
         };
-        std::vector<TimeAnchor> basicDerivedAnchors;
+        std::vector<TemporalEvent> temporalEvents;
 
         // Fingerprint for staleness detection
         int64_t inputFingerprint{0};                // snapshot of renderRevision at analysis time
@@ -160,7 +168,7 @@ public:
             analysisRevision = 0;
             state = F0ExtractionState::NotRequested;
             basicDerivedNotes.clear();
-            basicDerivedAnchors.clear();
+            temporalEvents.clear();
             inputFingerprint = 0;
             backendMode = 0;
             sourceDurationSeconds = 0.0;

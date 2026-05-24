@@ -2793,11 +2793,11 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
         {
             PianoRollRenderer::ReferenceOverlay overlay;
             overlay.ghostNotes = refAnalysis.basicDerivedNotes;
-            // Convert TimeAnchor → GhostAnchor
-            for (const auto& ta : refAnalysis.basicDerivedAnchors) {
+            // Convert temporal events for overlay.
+            for (const auto& event : refAnalysis.temporalEvents) {
                 PianoRollRenderer::ReferenceOverlay::GhostAnchor ga;
-                ga.sourceSeconds = ta.sourceSeconds;
-                ga.strength = ta.strength;
+                ga.sourceSeconds = event.sourceSeconds;
+                ga.strength = event.strength;
                 overlay.ghostAnchors.push_back(ga);
             }
             overlay.ghostColour = juce::Colours::steelblue;

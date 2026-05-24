@@ -1816,32 +1816,6 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
 void PianoRollToolHandler::showToolContextMenu(const juce::MouseEvent& e)
 {
     juce::ignoreUnused(e);
-    // add-note-confirmed-handles §4.2: Time tool 空白右键 → 提供 Re-seed handles from notes 入口
-    // 与原 tool selection menu 共存:Time tool active 时显示组合菜单。
-    if (currentTool_ == ToolId::TimeTool && ctx_.reSeedTimeGridFromNotes) {
-        juce::PopupMenu menu;
-        const bool canReSeed = ctx_.canReSeedTimeGridFromNotes
-                                ? ctx_.canReSeedTimeGridFromNotes()
-                                : false;
-        menu.addItem(/*itemId*/1,
-                     juce::String("Re-seed handles from notes"),
-                     /*isActive*/canReSeed,
-                     /*isTicked*/false);
-        if (!canReSeed) {
-            menu.addSectionHeader(juce::String("(needs auto note generation enabled)"));
-        }
-        menu.addSeparator();
-        menu.addItem(/*itemId*/2, juce::String("Switch tool..."));
-        menu.showMenuAsync(juce::PopupMenu::Options{},
-                           [this](int result) {
-                               if (result == 1) {
-                                   if (ctx_.reSeedTimeGridFromNotes) ctx_.reSeedTimeGridFromNotes();
-                               } else if (result == 2) {
-                                   if (ctx_.showToolSelectionMenu) ctx_.showToolSelectionMenu();
-                               }
-                           });
-        return;
-    }
     ctx_.showToolSelectionMenu();
 }
 
@@ -2098,7 +2072,7 @@ void PianoRollToolHandler::updateF0SelectionFromNotes(const std::vector<Note>& n
 //
 // Minimal scaffolding: hover detection + selection + drag + commit.
 // Phase G will add: double-click-insert, delete-handle, Alt-snap-disable,
-// group multi-handle drag, and 30 ms minimum spacing clamp.
+// group multi-handle drag, and output spacing clamp.
 // ============================================================================
 
 uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) const
@@ -2109,10 +2083,7 @@ uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) 
 
     constexpr int kHitToleranceX = 5;  // pixels
 
-    // add-note-confirmed-handles fix: use uint64_t throughout. Previous
-    // `static_cast<int>(h.id)` truncated 64-bit handle ids to 32-bit signed,
-    // which silently broke handles whose id value used high bits (e.g.
-    // NoteOnly handles produced by HandleNoteMerger with `1ULL<<62` tag bit).
+    // Use uint64_t throughout; handle ids are stable opaque values.
     uint64_t closestId = 0;
     int closestDistance = std::numeric_limits<int>::max();
     for (const auto& h : snap->handles()) {
@@ -2273,10 +2244,10 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
     const bool isGroupDrag = (!tt.additionalSelectedIds.empty())
                               && tt.isSelected(tt.draggedHandleId);
 
-    // Phase G/H spacing rule: 30 ms minimum between adjacent handles.
+    // Phase G/H spacing rule between adjacent outputs.
     // Alt held at drag start (`dragSnapDisabled`) bypasses the clamp for
     // power-user nudging into tight regions.
-    const double kMinSpacingSec = tt.dragSnapDisabled ? 0.000 : 0.030;
+    const double kMinSpacingSec = tt.dragSnapDisabled ? 0.000 : TimeGridSnapshot::kMinOutputSpacingSeconds;
     const double minOutput = origHandles[static_cast<size_t>(draggedIdx - 1)].output_seconds + kMinSpacingSec;
     const double maxOutput = origHandles[static_cast<size_t>(draggedIdx + 1)].output_seconds - kMinSpacingSec;
     const double clampedOutput = juce::jlimit(minOutput, maxOutput, newOutputTime);
@@ -2398,7 +2369,7 @@ void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
 //
 // Constraints (per spec time-tool-interaction.md):
 //   - Click must be on empty area (no existing handle within ±5 px)
-//   - Click position must be ≥0.030 s away from any neighbor's output_seconds
+//   - Click position must satisfy TimeGrid output/source spacing
 //   - source_seconds initially equals output_seconds (identity insertion);
 //     subsequent drag operations modify only output_seconds
 // ============================================================================
@@ -2417,25 +2388,22 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
     const auto& handles = snap->handles();
     if (handles.size() < 2) return;
 
-    // Reject if too close to existing handle.
-    // Output spacing ≥30 ms (visual / RB R3 threshold).
-    // Source spacing ≥150 ms (≈1/16 note @ 120 BPM; shorter segments
-    //   degrade WSOLA quality and create audible artifacts).
+    // Reject if too close to existing handle in output or source time.
     //
     // § Phase I bugfix: clickedTime is output/materialization time.
     // Source spacing check must compare against source_seconds, so
     // compute clickedOutput ↔ clickedSource via tauInverse.
     // Identity grid → tauInverse is identity → same value.
     const double clickedSourceSeconds = snap->tauInverse(clickedTime);
-    constexpr double kMinOutputSpacingSec = 0.030;
-    constexpr double kMinSourceSpacingSec = 0.150;
     for (const auto& h : handles) {
-        if (std::abs(h.output_seconds - clickedTime) < kMinOutputSpacingSec) {
-            AppLogger::log("[TimeTool] insert rejected: within 30ms of existing handle (output)");
+        if (std::abs(h.output_seconds - clickedTime) < TimeGridSnapshot::kMinOutputSpacingSeconds) {
+            AppLogger::log("[TimeTool] insert rejected: output spacing invariant");
             return;
         }
-        if (std::abs(h.source_seconds - clickedSourceSeconds) < kMinSourceSpacingSec) {
-            AppLogger::log("[TimeTool] insert rejected: within 150ms of existing handle (source)");
+        const double previous = std::min(h.source_seconds, clickedSourceSeconds);
+        const double current = std::max(h.source_seconds, clickedSourceSeconds);
+        if (!TimeGridSnapshot::hasMinimumSourceSpacing(previous, current)) {
+            AppLogger::log("[TimeTool] insert rejected: source spacing invariant");
             return;
         }
     }

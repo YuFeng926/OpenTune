@@ -1,6 +1,5 @@
 #include "ModelFactory.h"
 #include "RMVPEExtractor.h"
-#include "SileroVadExtractor.h"   // ⚡️ vocal-time-stretch §4.4
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/CpuBudgetManager.h"
 #include "../Utils/AccelerationDetector.h"
@@ -52,7 +51,7 @@ ModelFactory::F0ExtractorResult ModelFactory::createF0Extractor(
     std::string modelPath = getModelPath(type, modelDir);
 
     if (!isModelAvailable(type, modelDir)) {
-        return F0ExtractorResult::failure(ErrorCode::ModelNotFound, 
+        return F0ExtractorResult::failure(ErrorCode::ModelNotFound,
             "F0 model file: " + modelPath);
     }
 
@@ -129,69 +128,19 @@ std::vector<F0ModelInfo> ModelFactory::getAvailableF0Models(const std::string& m
 }
 
 // ==============================================================================
-// ⚡️ vocal-time-stretch §4.4 — VAD extractor factory
-// ==============================================================================
-
-std::string ModelFactory::getVadModelPath(VadModelType type, const std::string& modelDir)
-{
-    switch (type) {
-        case VadModelType::SileroV5:
-            return modelDir + "/silero_vad.onnx";
-    }
-    return modelDir + "/silero_vad.onnx";
-}
-
-bool ModelFactory::isVadModelAvailable(VadModelType type, const std::string& modelDir)
-{
-    return juce::File(getVadModelPath(type, modelDir)).existsAsFile();
-}
-
-std::vector<VadModelInfo> ModelFactory::getAvailableVadModels(const std::string& modelDir)
-{
-    std::vector<VadModelInfo> models;
-    VadModelInfo silero;
-    silero.type = VadModelType::SileroV5;
-    silero.name = "silero_v5";
-    silero.displayName = "Silero VAD v5";
-    silero.modelSizeBytes = 1800000;
-    silero.isAvailable = isVadModelAvailable(VadModelType::SileroV5, modelDir);
-    models.push_back(silero);
-    return models;
-}
-
-ModelFactory::VadExtractorResult ModelFactory::createVadExtractor(
-    VadModelType type, const std::string& modelDir)
-{
-    juce::ignoreUnused(type);
-    auto extractor = std::make_unique<SileroVadExtractor>();
-    const std::string path = getVadModelPath(type, modelDir);
-    if (!extractor->initialize(path)) {
-        // Soft failure: model missing or load error.  Caller should treat
-        // this as "VAD unavailable; degrade to F0-only V/U fusion" rather
-        // than fail the whole import.
-        return VadExtractorResult::failure(
-            ErrorCode::ModelLoadFailed,
-            "Silero VAD model unavailable at " + path + "; PhonemeClassifier will use RMVPE-only V/U fusion");
-    }
-    return VadExtractorResult::success(std::move(extractor));
-}
-
-// ==============================================================================
 // F0 Session Options
 // ==============================================================================
 
 Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
     Ort::SessionOptions sessionOptions;
 
-    // F0 推理是低频后台操作、输入 shape 随音频长度变化。
-    // 禁用 MemPattern 和 CPU Arena 避免 ORT 内部 BFC arena 常驻大量内存不释放。
+    // F0 inference uses variable input shapes; disable ORT arenas that retain large buffers.
     sessionOptions.DisableMemPattern();
     sessionOptions.DisableCpuMemArena();
-    
+
     bool gpuMode = false;
 
 #if defined(__APPLE__)
-    // macOS: attempt CoreML acceleration for F0 extraction via Neural Engine
     try {
         std::unordered_map<std::string, std::string> coremlOptions;
         coremlOptions["ModelFormat"] = "MLProgram";
@@ -217,10 +166,10 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
     sessionOptions.SetExecutionMode(budget.onnxSequential ? ExecutionMode::ORT_SEQUENTIAL : ExecutionMode::ORT_PARALLEL);
     sessionOptions.AddConfigEntry("session.intra_op.allow_spinning", budget.allowSpinning ? "1" : "0");
     sessionOptions.AddConfigEntry("session.inter_op.allow_spinning", budget.allowSpinning ? "1" : "0");
-    
+
     logOnnxSessionCpuConfig(budget);
     sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-    
+
     if (!gpuMode) {
         AppLogger::info("[ModelFactory] F0 session: CPU-only mode");
     }

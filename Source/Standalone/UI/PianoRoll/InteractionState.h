@@ -130,8 +130,8 @@ struct TimeToolState
     bool   isDraggingHandle = false;
     uint64_t draggedHandleId = 0;
 
-    // §8.4 (Phase H) — Alt modifier at drag start disables 30ms
-    // minimum-spacing clamp + future snap-to-grid behavior.
+    // §8.4 (Phase H): Alt modifier at drag start disables output-spacing
+    // clamp + future snap-to-grid behavior.
     bool dragSnapDisabled = false;
 
     // Snapshot of the TimeGrid at drag start — used to recompute working

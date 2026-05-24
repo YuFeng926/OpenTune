@@ -29,11 +29,13 @@ MaterializationStore::DerivedAnalysis makeReadyAnalysis()
     note.isVoiced = true;
     da.basicDerivedNotes.push_back(note);
 
-    MaterializationStore::DerivedAnalysis::TimeAnchor anchor;
-    anchor.id = 1;
-    anchor.sourceSeconds = 0.25;
-    anchor.strength = 0.85f;
-    da.basicDerivedAnchors.push_back(anchor);
+    MaterializationStore::DerivedAnalysis::TemporalEvent event;
+    event.eventId = 1;
+    event.sourceSeconds = 0.25;
+    event.strength = 0.85f;
+    event.kind = MaterializationStore::DerivedAnalysis::TemporalEventKind::PitchTransition;
+    event.confidence = 0.85f;
+    da.temporalEvents.push_back(event);
 
     da.inputFingerprint = 42;
     return da;
@@ -99,13 +101,15 @@ void runDerivedAnalysis_SetAndGet()
         logFail(testName, "round-trip: basicDerivedNotes pitch mismatch");
         return;
     }
-    if (out.basicDerivedAnchors.size() != 1) {
-        logFail(testName, "round-trip: basicDerivedAnchors count mismatch");
+    if (out.temporalEvents.size() != 1) {
+        logFail(testName, "round-trip: temporalEvents count mismatch");
         return;
     }
-    if (out.basicDerivedAnchors.front().id != 1
-        || out.basicDerivedAnchors.front().strength != 0.85f) {
-        logFail(testName, "round-trip: basicDerivedAnchors data mismatch");
+    if (out.temporalEvents.front().eventId != 1
+        || out.temporalEvents.front().strength != 0.85f
+        || out.temporalEvents.front().kind
+            != MaterializationStore::DerivedAnalysis::TemporalEventKind::PitchTransition) {
+        logFail(testName, "round-trip: temporalEvents data mismatch");
         return;
     }
     if (out.inputFingerprint != 42) {
