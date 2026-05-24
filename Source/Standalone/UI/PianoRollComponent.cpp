@@ -2287,6 +2287,10 @@ void PianoRollComponent::removeListener(Listener* listener) {
 }
 
 void PianoRollComponent::mouseMove(const juce::MouseEvent& e) {
+    if (e.mods.isCtrlDown()) {
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        return;
+    }
     toolHandler_->mouseMove(e);
 }
 
@@ -2302,13 +2306,24 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
         return;
     }
 
-    if (juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey)) {
-        interactionState_.isPanning = true;
-        interactionState_.dragStartPos = e.getPosition();
-        dragStartScrollOffset_ = scrollOffset_;
-        dragStartVerticalScrollOffset_ = verticalScrollOffset_;
-        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
-        return;
+    // Ctrl+drag panning — only on non-interactive area, so existing
+    // Ctrl+click behaviors (note toggle selection, context menu) work.
+    if (e.mods.isCtrlDown() && !e.mods.isPopupMenu() && e.x >= pianoKeyWidth_) {
+        bool onNote = false;
+        for (const auto& note : getCommittedNotes()) {
+            if (getNoteBounds(note).contains(e.getPosition())) {
+                onNote = true;
+                break;
+            }
+        }
+        if (!onNote) {
+            interactionState_.isPanning = true;
+            interactionState_.dragStartPos = e.getPosition();
+            dragStartScrollOffset_ = scrollOffset_;
+            dragStartVerticalScrollOffset_ = verticalScrollOffset_;
+            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+            return;
+        }
     }
 
     // Piano key audition: click in piano key area triggers note preview
