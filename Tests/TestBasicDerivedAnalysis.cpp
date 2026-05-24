@@ -3,10 +3,11 @@
  *
  * Covers:
  *   - DerivedAnalysis slot exists and defaults to NotRequested
- *   - Stub for future generated analysis tests
+ *   - BasicReferenceFeatureBuilder generates source-derived notes and anchors from original F0
  */
 
 #include "TestSupport.h"
+#include "DSP/BasicReferenceFeatureBuilder.h"
 #include "MaterializationStore.h"
 #include "Utils/PitchCurve.h"
 
@@ -14,9 +15,9 @@
 // Test: Derived analysis slot exists and defaults correctly
 // ============================================================================
 
-void runBasicDerivedAnalysisGeneratesNotesAndAnchorsTest()
+void runBasicDerivedAnalysisSlotSetGetSmokeTest()
 {
-    constexpr const char* testName = "BasicDerivedAnalysis_GeneratesNotesAndAnchorsFromF0";
+    constexpr const char* testName = "DerivedAnalysisSlot_SetGetSmoke";
 
     MaterializationStore store;
     const uint64_t matId = store.createMaterialization(makeTestClipRequest());
@@ -56,6 +57,62 @@ void runBasicDerivedAnalysisGeneratesNotesAndAnchorsTest()
     logPass(testName);
 }
 
+void runBasicReferenceFeatureBuilderGeneratesNotesAndAnchorsFromF0Test()
+{
+    constexpr const char* testName = "BasicReferenceFeatureBuilder_GeneratesNotesAndAnchorsFromF0";
+
+    MaterializationStore store;
+    auto request = makeTestClipRequest();
+    auto pitchCurve = std::make_shared<PitchCurve>();
+    std::vector<float> f0(140, 0.0f);
+    std::vector<float> energy(f0.size(), 1.0f);
+    std::fill(f0.begin() + 10, f0.begin() + 55, 220.0f);
+    std::fill(f0.begin() + 80, f0.begin() + 125, 330.0f);
+    pitchCurve->setHopSize(160);
+    pitchCurve->setSampleRate(16000.0);
+    pitchCurve->setOriginalF0(f0);
+    pitchCurve->setOriginalEnergy(energy);
+    request.pitchCurve = std::move(pitchCurve);
+    request.notes.clear();
+    request.timeGrid.reset();
+
+    const uint64_t matId = store.createMaterialization(std::move(request));
+    if (matId == 0) {
+        logFail(testName, "failed to create materialization");
+        return;
+    }
+
+    MaterializationStore::MaterializationSnapshot snapshot;
+    if (!store.getSnapshot(matId, snapshot)) {
+        logFail(testName, "failed to read materialization snapshot");
+        return;
+    }
+
+    const auto analysis = BasicReferenceFeatureBuilder::build(snapshot);
+    if (analysis.state != F0ExtractionState::Ready) {
+        logFail(testName, "builder should produce Ready source-derived features");
+        return;
+    }
+    if (analysis.basicDerivedNotes.empty()) {
+        logFail(testName, "builder did not generate notes from original F0");
+        return;
+    }
+    if (analysis.basicDerivedAnchors.size() < 2) {
+        logFail(testName, "builder did not generate at least two temporal anchors from original F0");
+        return;
+    }
+    for (size_t i = 1; i < analysis.basicDerivedAnchors.size(); ++i) {
+        const double spacing = analysis.basicDerivedAnchors[i].sourceSeconds
+                             - analysis.basicDerivedAnchors[i - 1].sourceSeconds;
+        if (spacing < 0.150) {
+            logFail(testName, "builder emitted anchors closer than TimeGrid spacing invariant");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
 // ============================================================================
 // Suite aggregator
 // ============================================================================
@@ -63,5 +120,6 @@ void runBasicDerivedAnalysisGeneratesNotesAndAnchorsTest()
 void runBasicDerivedAnalysisSuite()
 {
     logSection("BasicDerivedAnalysis");
-    runBasicDerivedAnalysisGeneratesNotesAndAnchorsTest();
+    runBasicDerivedAnalysisSlotSetGetSmokeTest();
+    runBasicReferenceFeatureBuilderGeneratesNotesAndAnchorsFromF0Test();
 }

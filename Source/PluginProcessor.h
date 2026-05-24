@@ -39,6 +39,7 @@
 #include "Inference/INoteGenerator.h"
 #include "Inference/VocoderDomain.h"
 #include "Services/F0ExtractionService.h"
+#include "Services/ReferenceAnalysisService.h"
 #include "Utils/MaterializationState.h"
 #include "Utils/SourceWindow.h"
 #include "Utils/SilentGapDetector.h"
@@ -116,7 +117,8 @@ void fillF0GapsForVocoder(std::vector<float>& f0,
  * 管理多轨道、Clip、音高曲线、渲染缓存等核心数据。
  */
 class OpenTuneAudioProcessor : public juce::AudioProcessor,
-                               public juce::AsyncUpdater
+                               public juce::AsyncUpdater,
+                               private ReferenceAnalysisService::Listener
 #if JucePlugin_Enable_ARA
                            , public juce::AudioProcessorARAExtension
 #endif
@@ -133,6 +135,38 @@ public:
         bool isRecording{false};
         int timeSignatureNumerator{4};
         int timeSignatureDenominator{4};
+    };
+
+    struct ReferenceAlignmentResult {
+        enum class Status : uint8_t {
+            Succeeded = 0,
+            TargetPlacementNotFound,
+            NoReferenceBinding,
+            ReferencePlacementNotFound,
+            SelfReference,
+            NoOverlap,
+            TargetAnalysisNotReady,
+            ReferenceAnalysisNotReady,
+            InsufficientFeatures,
+            InvalidTimeGrid,
+            NoMutation,
+            CommitFailed
+        };
+
+        Status status{Status::CommitFailed};
+        juce::String message;
+        uint64_t targetMaterializationId{0};
+        int affectedStartFrame{0};
+        int affectedEndFrame{0};
+
+        bool succeeded() const noexcept { return status == Status::Succeeded; }
+    };
+
+    enum class ReferenceAnalysisPreheatStatus : uint8_t {
+        AlreadyReady = 0,
+        Queued,
+        InvalidMaterialization,
+        AnalysisFailed
     };
 
     static constexpr int MAX_TRACKS = 12;
@@ -414,6 +448,7 @@ private:
     std::shared_ptr<SourceStore> sourceStore_;
     std::shared_ptr<MaterializationStore> materializationStore_;
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
+    ReferenceAnalysisService referenceAnalysisService_;
 
     // Regular VST3 capture state. ARA-capable builds still create this for
     // unbound insert instances; access is suppressed after the instance binds to ARA.
@@ -494,6 +529,13 @@ private:
                             std::function<bool(const std::string&)> initFunc);
 
     uint64_t ensureSourceAndCreateMaterialization(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
+    void configureReferenceAnalysisService();
+    MaterializationStore::DerivedAnalysis buildReferenceAlignmentFeaturesForJob(
+        const ReferenceAnalysisService::AnalysisJobKey& jobKey) const;
+    void analysisCompleted(uint64_t materializationId,
+                           const MaterializationStore::DerivedAnalysis& result) override;
+    void analysisFailed(uint64_t materializationId,
+                        const juce::String& reason) override;
 
     // ========================================================================
     // Chunk-Level Render Queue (重构：状态驱动，无任务快照队列)
@@ -655,6 +697,15 @@ public:
     bool commitMaterializationNotesAndSegmentsById(uint64_t materializationId,
                                           const std::vector<Note>& notes,
                                           const std::vector<CorrectedSegment>& segments);
+    ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(uint64_t materializationId);
+#if defined(OPENTUNE_TEST_BUILD)
+    void setReferenceAnalysisNotificationDispatcherForTests(
+        ReferenceAnalysisService::NotificationDispatcher dispatcher)
+    {
+        referenceAnalysisService_.setNotificationDispatcher(std::move(dispatcher));
+    }
+#endif
+    ReferenceAlignmentResult executeReferenceAlignmentForPlacement(uint64_t targetPlacementId);
     bool commitAutoTuneGeneratedNotesByMaterializationId(uint64_t materializationId,
                                                   const std::vector<Note>& generatedNotes,
                                                   int startFrame,

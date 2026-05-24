@@ -1,207 +1,229 @@
 #include "ReferenceAutoAlign.h"
 
-#include "../Utils/F0Timeline.h"
 #include "../Utils/MaterializationState.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <set>
 
 namespace OpenTune {
 
 namespace {
-    constexpr double kF0FramesPerSecond = 100.0;
 
-    int timeToFrame(double timeSeconds) {
-        return static_cast<int>(std::round(timeSeconds * kF0FramesPerSecond));
-    }
+constexpr double kF0FramesPerSecond = 100.0;
+constexpr double kMinHandleSpacingSeconds = 0.150;
 
-    /** 找到时间最接近 targetTime 的 note，返回指针（可能为 nullptr） */
-    const Note* findNearestNote(const std::vector<Note>& notes, double targetTime) {
-        const Note* best = nullptr;
-        double bestDist = std::numeric_limits<double>::max();
-
-        for (const auto& note : notes) {
-            const double center = (note.startTime + note.endTime) * 0.5;
-            const double dist = std::abs(center - targetTime);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = &note;
-            }
-        }
-        return best;
-    }
-
-    /** 找到 sourceSeconds 最接近 targetSourceSeconds 的 anchor */
-    const MaterializationStore::DerivedAnalysis::TimeAnchor*
-    findNearestAnchor(const std::vector<MaterializationStore::DerivedAnalysis::TimeAnchor>& anchors,
-                      double targetSourceSeconds) {
-        const MaterializationStore::DerivedAnalysis::TimeAnchor* best = nullptr;
-        double bestDist = std::numeric_limits<double>::max();
-
-        for (const auto& a : anchors) {
-            const double dist = std::abs(a.sourceSeconds - targetSourceSeconds);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = &a;
-            }
-        }
-        return best;
-    }
-
-    /** 将 source time 上的 anchor 投影到 timeline */
-    double anchorToTimeline(double sourceSeconds, double timelineStart) {
-        return sourceSeconds + timelineStart;
-    }
-
-    /** 将 timeline 位置投影回 target 的 materialization-local time */
-    double timelineToTargetLocal(double timelineSeconds, double targetTimelineStart) {
-        return timelineSeconds - targetTimelineStart;
-    }
-
-} // anonymous namespace
-
-// ============================================================================
-// Public: align()
-// ============================================================================
-
-AlignResult ReferenceAutoAlign::align(
-    const MaterializationStore::DerivedAnalysis& targetAnalysis,
-    const MaterializationStore::DerivedAnalysis& referenceAnalysis,
-    double overlapStartSeconds,
-    double overlapEndSeconds,
-    double targetTimelineStartSeconds,
-    double referenceTimelineStartSeconds,
-    double targetTotalDurationSeconds)
+int timeToFrame(double timeSeconds)
 {
-    AlignResult result;
-
-    // ================================================================
-    // 前置检查（失败矩阵）
-    // ================================================================
-
-    if (referenceAnalysis.basicDerivedNotes.empty()) {
-        result.error = AlignResult::ErrorCode::InsufficientNotes;
-        result.errorMessage = "Reference analysis has no derived notes";
-        return result;
-    }
-
-    if (referenceAnalysis.basicDerivedAnchors.size() < 2) {
-        result.error = AlignResult::ErrorCode::InsufficientAnchors;
-        result.errorMessage = juce::String("Reference analysis has ") + juce::String(referenceAnalysis.basicDerivedAnchors.size()) + " derived anchors (need >= 2)";
-        return result;
-    }
-
-    if (targetAnalysis.basicDerivedNotes.empty()) {
-        result.error = AlignResult::ErrorCode::InsufficientNotes;
-        result.errorMessage = "Target analysis has no derived notes";
-        return result;
-    }
-
-    if (targetAnalysis.basicDerivedAnchors.size() < 2) {
-        result.error = AlignResult::ErrorCode::InsufficientAnchors;
-        result.errorMessage = juce::String("Target analysis has ") + juce::String(targetAnalysis.basicDerivedAnchors.size()) + " derived anchors (need >= 2)";
-        return result;
-    }
-
-    if (targetAnalysis.state != F0ExtractionState::Ready) {
-        result.error = AlignResult::ErrorCode::TargetAnalysisNotReady;
-        result.errorMessage = "Target derived analysis not ready (state != Ready)";
-        return result;
-    }
-
-    if (referenceAnalysis.state != F0ExtractionState::Ready) {
-        result.error = AlignResult::ErrorCode::ReferenceAnalysisNotReady;
-        result.errorMessage = "Reference derived analysis not ready (state != Ready)";
-        return result;
-    }
-
-    if (overlapEndSeconds <= overlapStartSeconds) {
-        result.error = AlignResult::ErrorCode::NoOverlap;
-        result.errorMessage = "No time overlap between target and reference";
-        return result;
-    }
-
-    if (targetTotalDurationSeconds <= 0.0) {
-        result.error = AlignResult::ErrorCode::TimeGridInvalid;
-        result.errorMessage = "targetTotalDurationSeconds must be positive";
-        return result;
-    }
-
-    // ================================================================
-    // Step 3: 音高对齐
-    // ================================================================
-
-    alignPitch(targetAnalysis.basicDerivedNotes,
-               referenceAnalysis.basicDerivedNotes,
-               overlapStartSeconds,
-               overlapEndSeconds,
-               targetTimelineStartSeconds,
-               referenceTimelineStartSeconds,
-               result.correctedNotes,
-               result.correctedSegments);
-
-    // ================================================================
-    // Step 4: 时间对齐（生成 TimeGrid）
-    // ================================================================
-
-    const bool timeOk = alignTimeGrid(targetAnalysis.basicDerivedAnchors,
-                                      referenceAnalysis.basicDerivedAnchors,
-                                      overlapStartSeconds,
-                                      overlapEndSeconds,
-                                      targetTimelineStartSeconds,
-                                      referenceTimelineStartSeconds,
-                                      targetTotalDurationSeconds,
-                                      result.timeGrid);
-
-    if (!timeOk || !result.timeGrid) {
-        result.error = AlignResult::ErrorCode::TimeGridInvalid;
-        result.errorMessage = "Failed to generate valid time grid";
-        return result;
-    }
-
-    result.success = true;
-    result.error = AlignResult::ErrorCode::None;
-    return result;
+    return static_cast<int>(std::round(timeSeconds * kF0FramesPerSecond));
 }
 
-// ============================================================================
-// Private: alignPitch (Step 3)
-// ============================================================================
-
-void ReferenceAutoAlign::alignPitch(
-    const std::vector<Note>& targetNotes,
-    const std::vector<Note>& referenceNotes,
-    double overlapStart,
-    double overlapEnd,
-    double targetTimelineStart,
-    double referenceTimelineStart,
-    std::vector<Note>& outCorrectedNotes,
-    std::vector<CorrectedSegment>& outSegments)
+double frameToTime(int frame)
 {
-    // 遍历所有 reference notes，过滤出落在 overlap 区间内的
-    for (const auto& refNote : referenceNotes) {
-        // 将 reference note 的中心时间投影到 timeline
-        const double refNoteCenterSource = (refNote.startTime + refNote.endTime) * 0.5;
-        const double refNoteTimeline = anchorToTimeline(refNoteCenterSource, referenceTimelineStart);
+    return static_cast<double>(frame) / kF0FramesPerSecond;
+}
 
-        // 仅处理 overlap 区间内的 reference note
-        if (refNoteTimeline < overlapStart || refNoteTimeline > overlapEnd) {
+bool isReady(const AlignmentFeatures& features) noexcept
+{
+    return features.state == F0ExtractionState::Ready;
+}
+
+double clampToDuration(double value, double duration) noexcept
+{
+    return juce::jlimit(0.0, duration, value);
+}
+
+std::shared_ptr<const TimeGridSnapshot> gridOrIdentity(
+    const std::shared_ptr<const TimeGridSnapshot>& grid,
+    double durationSeconds)
+{
+    if (grid != nullptr) {
+        return grid;
+    }
+    return TimeGridSnapshot::makeIdentity(durationSeconds);
+}
+
+double sourceToTimeline(const ReferenceClipProjection& clip, double sourceSeconds)
+{
+    return clip.timelineStartSeconds + clip.timeGrid->tauForward(sourceSeconds);
+}
+
+double timelineToSource(const ReferenceClipProjection& clip, double timelineSeconds)
+{
+    return clip.timeGrid->tauInverse(timelineSeconds - clip.timelineStartSeconds);
+}
+
+size_t findNearestUnmatchedNote(const std::vector<Note>& notes,
+                                double sourceSeconds,
+                                double affectedStartSeconds,
+                                double affectedEndSeconds,
+                                const std::set<size_t>& used)
+{
+    size_t bestIndex = static_cast<size_t>(-1);
+    double bestDistance = std::numeric_limits<double>::max();
+
+    for (size_t i = 0; i < notes.size(); ++i) {
+        if (used.find(i) != used.end()) {
             continue;
         }
 
-        // 将 timeline 位置映射回 target 的 materialization-local time
-        const double targetLocalTime = timelineToTargetLocal(refNoteTimeline, targetTimelineStart);
-
-        // 找时间最近的 target derived note
-        const Note* tgtNote = findNearestNote(targetNotes, targetLocalTime);
-        if (!tgtNote) {
+        const auto& note = notes[i];
+        const double center = (note.startTime + note.endTime) * 0.5;
+        if (center < affectedStartSeconds || center > affectedEndSeconds) {
             continue;
         }
 
-        // ---- 生成 corrected Note ----
-        // 保留 target note 的时间范围，但采纳 reference note 的音高参数
-        Note corrected = *tgtNote;
+        const double distance = std::abs(center - sourceSeconds);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = i;
+        }
+    }
+
+    return bestIndex;
+}
+
+const MaterializationStore::DerivedAnalysis::TimeAnchor* findNearestAnchor(
+    const std::vector<MaterializationStore::DerivedAnalysis::TimeAnchor>& anchors,
+    double sourceSeconds)
+{
+    const MaterializationStore::DerivedAnalysis::TimeAnchor* best = nullptr;
+    double bestDistance = std::numeric_limits<double>::max();
+
+    for (const auto& anchor : anchors) {
+        const double distance = std::abs(anchor.sourceSeconds - sourceSeconds);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = &anchor;
+        }
+    }
+
+    return best;
+}
+
+bool noteEqualsForPatch(const Note& a, const Note& b)
+{
+    return a.startTime == b.startTime
+        && a.endTime == b.endTime
+        && a.pitch == b.pitch
+        && a.originalPitch == b.originalPitch
+        && a.pitchOffset == b.pitchOffset
+        && a.retuneSpeed == b.retuneSpeed
+        && a.vibratoDepth == b.vibratoDepth
+        && a.vibratoRate == b.vibratoRate
+        && a.velocity == b.velocity
+        && a.isVoiced == b.isVoiced;
+}
+
+bool segmentsEqualForPatch(const std::vector<CorrectedSegment>& a,
+                           const std::vector<CorrectedSegment>& b)
+{
+    if (a.size() != b.size()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < a.size(); ++i) {
+        const auto& left = a[i];
+        const auto& right = b[i];
+        if (left.startFrame != right.startFrame
+            || left.endFrame != right.endFrame
+            || left.source != right.source
+            || left.retuneSpeed != right.retuneSpeed
+            || left.vibratoDepth != right.vibratoDepth
+            || left.vibratoRate != right.vibratoRate
+            || left.f0Data != right.f0Data) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool gridsEqualForPatch(const std::shared_ptr<const TimeGridSnapshot>& a,
+                        const std::shared_ptr<const TimeGridSnapshot>& b)
+{
+    if (a == b) {
+        return true;
+    }
+    if (a == nullptr || b == nullptr) {
+        return false;
+    }
+    const auto& ah = a->handles();
+    const auto& bh = b->handles();
+    if (ah.size() != bh.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < ah.size(); ++i) {
+        if (ah[i].id != bh[i].id
+            || ah[i].source_seconds != bh[i].source_seconds
+            || ah[i].output_seconds != bh[i].output_seconds
+            || ah[i].kind != bh[i].kind
+            || ah[i].locked != bh[i].locked
+            || ah[i].confidence != bh[i].confidence) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void fail(AlignmentPatch& patch, AlignmentPatch::ErrorCode error, const juce::String& message)
+{
+    patch.success = false;
+    patch.error = error;
+    patch.diagnostics = message;
+    patch.notesAfter.clear();
+    patch.correctedSegmentsAfter.clear();
+    patch.timeGridAfter.reset();
+    patch.pitchChanged = false;
+    patch.timeGridChanged = false;
+}
+
+bool buildPitchPatch(const ReferenceAlignmentRequest& request,
+                     double affectedStartSeconds,
+                     double affectedEndSeconds,
+                     AlignmentPatch& patch)
+{
+    if (request.referenceFeatures.basicDerivedNotes.empty()
+        || request.targetNotesBefore.empty()) {
+        return false;
+    }
+
+    patch.notesAfter = request.targetNotesBefore;
+
+    std::vector<CorrectedSegment> segmentsAfter;
+    segmentsAfter.reserve(request.targetSegmentsBefore.size() + request.referenceFeatures.basicDerivedNotes.size());
+    for (const auto& segment : request.targetSegmentsBefore) {
+        const bool overlaps = segment.endFrame > patch.affectedStartFrame
+                           && segment.startFrame < patch.affectedEndFrame;
+        if (!overlaps) {
+            segmentsAfter.push_back(segment);
+        }
+    }
+
+    std::set<size_t> usedTargetNotes;
+    bool changed = false;
+
+    for (const auto& refNote : request.referenceFeatures.basicDerivedNotes) {
+        const double refCenterSource = (refNote.startTime + refNote.endTime) * 0.5;
+        const double refCenterTimeline = sourceToTimeline(request.reference, refCenterSource);
+        if (refCenterTimeline < request.overlapStartTimelineSeconds
+            || refCenterTimeline > request.overlapEndTimelineSeconds) {
+            continue;
+        }
+
+        const double targetCenterSource = timelineToSource(request.target, refCenterTimeline);
+        const size_t targetIndex = findNearestUnmatchedNote(patch.notesAfter,
+                                                            targetCenterSource,
+                                                            affectedStartSeconds,
+                                                            affectedEndSeconds,
+                                                            usedTargetNotes);
+        if (targetIndex == static_cast<size_t>(-1)) {
+            continue;
+        }
+
+        auto& targetNote = patch.notesAfter[targetIndex];
+        Note corrected = targetNote;
         corrected.pitch = refNote.pitch;
         corrected.originalPitch = refNote.originalPitch;
         corrected.pitchOffset = refNote.pitchOffset;
@@ -210,151 +232,252 @@ void ReferenceAutoAlign::alignPitch(
         corrected.vibratoRate = refNote.vibratoRate;
         corrected.selected = false;
         corrected.dirty = true;
-        outCorrectedNotes.push_back(corrected);
 
-        // ---- 生成 CorrectedSegment ----
-        // F0 frame 范围从 target note 的时间换算（100 fps）
-        CorrectedSegment seg;
-        seg.startFrame = timeToFrame(tgtNote->startTime);
-        seg.endFrame = timeToFrame(tgtNote->endTime);
-        seg.source = CorrectedSegment::Source::NoteBased;
-        seg.retuneSpeed = refNote.retuneSpeed;
-        seg.vibratoDepth = refNote.vibratoDepth;
-        seg.vibratoRate = refNote.vibratoRate;
-        outSegments.push_back(seg);
+        if (!noteEqualsForPatch(targetNote, corrected)) {
+            changed = true;
+        }
+        targetNote = corrected;
+        usedTargetNotes.insert(targetIndex);
+
+        CorrectedSegment segment;
+        segment.startFrame = timeToFrame(targetNote.startTime);
+        segment.endFrame = timeToFrame(targetNote.endTime);
+        segment.source = CorrectedSegment::Source::NoteBased;
+        segment.retuneSpeed = refNote.retuneSpeed;
+        segment.vibratoDepth = refNote.vibratoDepth;
+        segment.vibratoRate = refNote.vibratoRate;
+        segmentsAfter.push_back(std::move(segment));
     }
+
+    std::sort(segmentsAfter.begin(), segmentsAfter.end(),
+              [](const CorrectedSegment& a, const CorrectedSegment& b) {
+                  return a.startFrame < b.startFrame;
+              });
+
+    if (!segmentsEqualForPatch(segmentsAfter, request.targetSegmentsBefore)) {
+        changed = true;
+    }
+
+    patch.correctedSegmentsAfter = std::move(segmentsAfter);
+    patch.pitchChanged = changed;
+    return changed;
 }
 
-// ============================================================================
-// Private: alignTimeGrid (Step 4)
-// ============================================================================
-
-bool ReferenceAutoAlign::alignTimeGrid(
-    const std::vector<MaterializationStore::DerivedAnalysis::TimeAnchor>& targetAnchors,
-    const std::vector<MaterializationStore::DerivedAnalysis::TimeAnchor>& referenceAnchors,
-    double overlapStart,
-    double overlapEnd,
-    double targetTimelineStart,
-    double referenceTimelineStart,
-    double totalDurationSeconds,
-    std::shared_ptr<const TimeGridSnapshot>& outTimeGrid)
+bool buildTimeGridPatch(const ReferenceAlignmentRequest& request,
+                        double affectedStartSeconds,
+                        double affectedEndSeconds,
+                        AlignmentPatch& patch,
+                        juce::String& outError)
 {
-    if (targetAnchors.empty()) {
+    const auto& targetAnchors = request.targetFeatures.basicDerivedAnchors;
+    const auto& referenceAnchors = request.referenceFeatures.basicDerivedAnchors;
+    if (targetAnchors.size() < 2 || referenceAnchors.size() < 2) {
         return false;
     }
 
+    const auto targetGrid = request.targetTimeGridBefore;
+    const double duration = targetGrid->totalDurationSeconds();
+
     std::vector<TimeHandle> handles;
+    const auto& beforeHandles = targetGrid->handles();
+    handles.reserve(beforeHandles.size() + targetAnchors.size());
+
+    for (const auto& handle : beforeHandles) {
+        const bool inAffectedRange = handle.source_seconds > affectedStartSeconds
+                                  && handle.source_seconds < affectedEndSeconds;
+        const bool staleAutoRef = inAffectedRange && handle.kind == HandleKind::ReferenceAuto;
+        if (staleAutoRef) {
+            continue;
+        }
+        handles.push_back(handle);
+    }
+
     uint64_t nextId = 1;
-
-    // ---- Handle 0: ClipStart（端点锁定） ----
-    {
-        TimeHandle h;
-        h.id = nextId++;
-        h.source_seconds = 0.0;
-        h.output_seconds = 0.0;
-        h.kind = HandleKind::ClipStart;
-        h.locked = true;
-        h.confidence = Confidence::Default;
-        handles.push_back(h);
+    for (const auto& handle : handles) {
+        nextId = std::max(nextId, handle.id + 1);
     }
 
-    // ---- Interior handles: 对齐 overlap 区间内的 target anchors ----
-    for (const auto& tgtAnchor : targetAnchors) {
-        // 将 target anchor 投影到 timeline
-        const double tgtTimeline = anchorToTimeline(tgtAnchor.sourceSeconds, targetTimelineStart);
+    std::vector<TimeHandle> generated;
+    generated.reserve(targetAnchors.size());
 
-        // 仅处理 overlap 区间内的 target anchor
-        if (tgtTimeline < overlapStart || tgtTimeline > overlapEnd) {
+    for (const auto& targetAnchor : targetAnchors) {
+        if (targetAnchor.sourceSeconds <= 0.0 || targetAnchor.sourceSeconds >= duration) {
+            continue;
+        }
+        if (targetAnchor.sourceSeconds < affectedStartSeconds
+            || targetAnchor.sourceSeconds > affectedEndSeconds) {
             continue;
         }
 
-        // 找到 reference 中最接近的 anchor（在 reference 的 materialization-local 时间中搜索）
-        const double refLocalTarget = timelineToTargetLocal(tgtTimeline, referenceTimelineStart);
-        const auto* refAnchor = findNearestAnchor(referenceAnchors, refLocalTarget);
-        if (!refAnchor) {
+        const double targetTimeline = sourceToTimeline(request.target, targetAnchor.sourceSeconds);
+        if (targetTimeline < request.overlapStartTimelineSeconds
+            || targetTimeline > request.overlapEndTimelineSeconds) {
             continue;
         }
 
-        // 计算期望的 output_seconds：
-        // 我们想要 target anchor 在播放时，其 output 时间与 reference anchor 的 timeline 位置对齐。
-        // τ(tgtAnchor.sourceSeconds) = refAnchor.timeline - targetTimelineStart
-        const double refTimeline = anchorToTimeline(refAnchor->sourceSeconds, referenceTimelineStart);
-        double desiredOutput = timelineToTargetLocal(refTimeline, targetTimelineStart);
+        const double referenceGuessSource = timelineToSource(request.reference, targetTimeline);
+        const auto* referenceAnchor = findNearestAnchor(referenceAnchors, referenceGuessSource);
+        if (referenceAnchor == nullptr) {
+            continue;
+        }
 
-        // 将 output_seconds clamp 到 [0, totalDurationSeconds] 范围
-        desiredOutput = std::max(0.0, std::min(desiredOutput, totalDurationSeconds));
+        const double referenceTimeline = sourceToTimeline(request.reference, referenceAnchor->sourceSeconds);
+        const double desiredOutput = referenceTimeline - request.target.timelineStartSeconds;
+        if (desiredOutput <= 0.0 || desiredOutput >= duration) {
+            outError = "AUTO Ref produced a TimeGrid handle outside target duration";
+            return false;
+        }
+        if (std::abs(desiredOutput - targetAnchor.sourceSeconds) < 1.0e-9) {
+            continue;
+        }
 
-        TimeHandle h;
-        h.id = nextId++;
-        h.source_seconds = tgtAnchor.sourceSeconds;
-        h.output_seconds = desiredOutput;
-        h.kind = HandleKind::UserAdded;
-        h.locked = false;
-        h.confidence = Confidence::Default;
-        handles.push_back(h);
+        TimeHandle handle;
+        handle.id = nextId++;
+        handle.source_seconds = targetAnchor.sourceSeconds;
+        handle.output_seconds = desiredOutput;
+        handle.kind = HandleKind::ReferenceAuto;
+        handle.locked = false;
+        handle.confidence = Confidence::Default;
+        generated.push_back(handle);
     }
 
-    // ---- Handle N-1: ClipEnd（端点锁定：总时长守恒） ----
-    {
-        TimeHandle h;
-        h.id = nextId++;
-        h.source_seconds = totalDurationSeconds;
-        h.output_seconds = totalDurationSeconds;
-        h.kind = HandleKind::ClipEnd;
-        h.locked = true;
-        h.confidence = Confidence::Default;
-        handles.push_back(h);
+    if (generated.empty()) {
+        patch.timeGridAfter = request.targetTimeGridBefore;
+        patch.timeGridChanged = false;
+        return false;
     }
 
-    // ---- 按 source_seconds 升序排序 ----
+    handles.insert(handles.end(), generated.begin(), generated.end());
     std::sort(handles.begin(), handles.end(),
               [](const TimeHandle& a, const TimeHandle& b) {
                   return a.source_seconds < b.source_seconds;
               });
 
-    // ---- 过滤 interior handles：仅保留 output_seconds 严格递增的 ----
-    // ClipStart (source=0) 和 ClipEnd (source=totalDuration) 不参与过滤，
-    // 避免 interior handle 被 clamp 到 totalDurationSeconds 时导致 ClipEnd 重复。
-    {
-        std::vector<TimeHandle> filtered;
-        filtered.reserve(handles.size());
-        filtered.push_back(handles.front());  // ClipStart — always kept
-
-        for (size_t i = 1; i < handles.size() - 1; ++i) {  // skip last (ClipEnd)
-            const auto& h = handles[i];
-            // desiredOutput 可能因 reference/target timing 差异而不单调 ——
-            // 此类句柄无法提供有意义的时序映射，舍去。
-            if (h.output_seconds <= filtered.back().output_seconds) { continue; }
-            // 被 clamp 到端点值的 interior handle 也无法提供额外约束
-            if (h.output_seconds >= totalDurationSeconds) { continue; }
-            if (h.source_seconds <= 0.0 || h.source_seconds >= totalDurationSeconds) { continue; }
-
-            filtered.push_back(h);
+    for (size_t i = 1; i < handles.size(); ++i) {
+        if (handles[i].source_seconds - handles[i - 1].source_seconds < kMinHandleSpacingSeconds) {
+            outError = "AUTO Ref produced handles closer than TimeGrid spacing invariant";
+            return false;
         }
-
-        handles = std::move(filtered);
     }
 
-    // 显式追加 ClipEnd（永在末尾，output = totalDurationSeconds）
-    {
-        TimeHandle clipEnd;
-        clipEnd.id = nextId++;
-        clipEnd.source_seconds = totalDurationSeconds;
-        clipEnd.output_seconds = totalDurationSeconds;
-        clipEnd.kind = HandleKind::ClipEnd;
-        clipEnd.locked = true;
-        clipEnd.confidence = Confidence::Default;
-        handles.push_back(clipEnd);
-    }
-
-    // ---- 用工厂方法构建不可变 snapshot ----
     auto snapshot = TimeGridSnapshot::makeFromHandles(std::move(handles));
-    if (!snapshot) {
+    if (snapshot == nullptr) {
+        outError = "AUTO Ref produced an invalid TimeGrid";
         return false;
     }
 
-    outTimeGrid = snapshot;
-    return true;
+    patch.timeGridAfter = std::move(snapshot);
+    patch.timeGridChanged = !gridsEqualForPatch(patch.timeGridAfter, request.targetTimeGridBefore);
+    return patch.timeGridChanged;
+}
+
+} // namespace
+
+AlignmentPatch ReferenceAutoAlign::align(const ReferenceAlignmentRequest& request)
+{
+    AlignmentPatch patch;
+    patch.targetMaterializationId = request.target.materializationId;
+
+    if (request.target.materializationId == 0
+        || request.reference.materializationId == 0
+        || request.target.timelineEndSeconds <= request.target.timelineStartSeconds
+        || request.reference.timelineEndSeconds <= request.reference.timelineStartSeconds) {
+        fail(patch, AlignmentPatch::ErrorCode::InvalidRequest, "Invalid AUTO Ref request");
+        return patch;
+    }
+
+    if (!isReady(request.targetFeatures)) {
+        fail(patch, AlignmentPatch::ErrorCode::TargetAnalysisNotReady, "Target alignment features are not ready");
+        return patch;
+    }
+
+    if (!isReady(request.referenceFeatures)) {
+        fail(patch, AlignmentPatch::ErrorCode::ReferenceAnalysisNotReady, "Reference alignment features are not ready");
+        return patch;
+    }
+
+    if (request.overlapEndTimelineSeconds <= request.overlapStartTimelineSeconds) {
+        fail(patch, AlignmentPatch::ErrorCode::NoOverlap, "Target and reference placements do not overlap");
+        return patch;
+    }
+
+    const double targetDuration = request.target.durationSeconds();
+    const double referenceDuration = request.reference.durationSeconds();
+    if (targetDuration <= 0.0 || referenceDuration <= 0.0) {
+        fail(patch, AlignmentPatch::ErrorCode::InvalidRequest, "AUTO Ref requires positive clip durations");
+        return patch;
+    }
+
+    auto targetGrid = gridOrIdentity(request.target.timeGrid, targetDuration);
+    auto referenceGrid = gridOrIdentity(request.reference.timeGrid, referenceDuration);
+    auto targetTimeGridBefore = gridOrIdentity(request.targetTimeGridBefore, targetDuration);
+    if (targetGrid == nullptr || referenceGrid == nullptr || targetTimeGridBefore == nullptr) {
+        fail(patch, AlignmentPatch::ErrorCode::TimeGridInvalid, "AUTO Ref could not resolve clip TimeGrid");
+        return patch;
+    }
+
+    ReferenceAlignmentRequest working = request;
+    working.target.timeGrid = targetGrid;
+    working.reference.timeGrid = referenceGrid;
+    working.targetTimeGridBefore = targetTimeGridBefore;
+
+    const double overlapTargetOutputStart = clampToDuration(
+        request.overlapStartTimelineSeconds - request.target.timelineStartSeconds,
+        targetTimeGridBefore->totalDurationSeconds());
+    const double overlapTargetOutputEnd = clampToDuration(
+        request.overlapEndTimelineSeconds - request.target.timelineStartSeconds,
+        targetTimeGridBefore->totalDurationSeconds());
+    const double affectedStartSeconds = targetTimeGridBefore->tauInverse(overlapTargetOutputStart);
+    const double affectedEndSeconds = targetTimeGridBefore->tauInverse(overlapTargetOutputEnd);
+
+    patch.affectedStartFrame = timeToFrame(std::min(affectedStartSeconds, affectedEndSeconds));
+    patch.affectedEndFrame = timeToFrame(std::max(affectedStartSeconds, affectedEndSeconds));
+    if (patch.affectedEndFrame <= patch.affectedStartFrame) {
+        fail(patch, AlignmentPatch::ErrorCode::NoOverlap, "AUTO Ref overlap maps to an empty target source range");
+        return patch;
+    }
+
+    patch.notesAfter = working.targetNotesBefore;
+    patch.correctedSegmentsAfter = working.targetSegmentsBefore;
+    patch.timeGridAfter = working.targetTimeGridBefore;
+
+    const bool hasPitchFeatures = !working.referenceFeatures.basicDerivedNotes.empty()
+                               && !working.targetNotesBefore.empty();
+    const bool hasTimeFeatures = working.referenceFeatures.basicDerivedAnchors.size() >= 2
+                              && working.targetFeatures.basicDerivedAnchors.size() >= 2;
+    if (!hasPitchFeatures && !hasTimeFeatures) {
+        fail(patch, AlignmentPatch::ErrorCode::InsufficientFeatures, "AUTO Ref has neither pitch nor time features");
+        return patch;
+    }
+
+    const bool pitchAttempted = hasPitchFeatures
+                             && buildPitchPatch(working,
+                                                frameToTime(patch.affectedStartFrame),
+                                                frameToTime(patch.affectedEndFrame),
+                                                patch);
+
+    juce::String timeError;
+    const bool timeAttempted = hasTimeFeatures
+                            && buildTimeGridPatch(working,
+                                                  frameToTime(patch.affectedStartFrame),
+                                                  frameToTime(patch.affectedEndFrame),
+                                                  patch,
+                                                  timeError);
+    if (hasTimeFeatures && !timeError.isEmpty()) {
+        fail(patch, AlignmentPatch::ErrorCode::TimeGridInvalid, timeError);
+        return patch;
+    }
+
+    if (!pitchAttempted && !timeAttempted) {
+        fail(patch, AlignmentPatch::ErrorCode::NoMutation, "AUTO Ref produced no materialization changes");
+        return patch;
+    }
+
+    patch.success = true;
+    patch.error = AlignmentPatch::ErrorCode::None;
+    patch.pitchChanged = pitchAttempted;
+    patch.timeGridChanged = timeAttempted;
+    return patch;
 }
 
 } // namespace OpenTune

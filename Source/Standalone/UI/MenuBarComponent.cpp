@@ -99,7 +99,7 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
             menu.addItem(SaveProject, LOC(kSaveProject));
             menu.addItem(SaveProjectAs, LOC(kSaveProjectAs));
             menu.addSeparator();
-            menu.addItem(LoadProject, LOC(kOpenProject));
+            menu.addItem(OpenProject, LOC(kOpenProject));
             if (!recentProjects_.empty()) {
                 juce::PopupMenu recentMenu;
                 int baseId = RecentProjectBase;
@@ -113,7 +113,6 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
             }
             menu.addSeparator();
 
-            menu.addSeparator();
             menu.addItem(OpenPreferences, LOC(kOptions));
             menu.addSeparator();
             menu.addItem(OpenHelp, LOC(kHelp));
@@ -198,7 +197,7 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
         case SaveProjectAs:
             listeners_.call([](Listener& l) { l.saveProjectAsRequested(); });
             break;
-        case LoadProject:
+        case OpenProject:
             listeners_.call([](Listener& l) { l.openProjectRequested(); });
             break;
 

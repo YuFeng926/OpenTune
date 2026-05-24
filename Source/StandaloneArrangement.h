@@ -152,7 +152,11 @@ private:
     // Reference binding helpers (要求调用方已持有 stateLock_ 写锁)
     bool findPlacementByIdGlobalUnlocked(uint64_t placementId, int& outTrackId, size_t& outIndex) const;
     bool isCyclicReferenceUnlocked(int trackId, uint64_t targetPlacementId, uint64_t candidateReferenceId) const;
+    static bool placementsOverlap(const Placement& target, const Placement& reference) noexcept;
+    static bool clearReferenceBindingUnlocked(Placement& target) noexcept;
     void checkOverlapAndClearReferenceUnlocked(int trackId, uint64_t targetPlacementId);
+    void clearInboundReferencesToPlacementUnlocked(uint64_t referencePlacementId);
+    void clearInvalidInboundReferencesToPlacementUnlocked(uint64_t referencePlacementId);
 
     mutable juce::ReadWriteLock stateLock_;
     std::array<Track, kTrackCount> tracks_;

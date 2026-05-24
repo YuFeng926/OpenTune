@@ -401,6 +401,35 @@ bool MaterializationStore::commitNotesAndPitchCurve(uint64_t materializationId,
     return true;
 }
 
+bool MaterializationStore::commitReferenceAlignmentPatch(
+    uint64_t materializationId,
+    std::vector<Note> notesAfter,
+    std::shared_ptr<PitchCurve> pitchCurveAfter,
+    std::shared_ptr<const TimeGridSnapshot> timeGridAfter)
+{
+    if (materializationId == 0 || pitchCurveAfter == nullptr || timeGridAfter == nullptr) {
+        return false;
+    }
+
+    const juce::ScopedWriteLock writeLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) {
+        return false;
+    }
+
+    it->second.notes = std::move(notesAfter);
+    ++it->second.notesRevision;
+    it->second.pitchCurve = std::move(pitchCurveAfter);
+    it->second.originalF0State = !it->second.pitchCurve->getSnapshot()->getOriginalF0().empty()
+        ? OriginalF0State::Ready
+        : OriginalF0State::NotRequested;
+    it->second.timeGrid = std::move(timeGridAfter);
+    ++it->second.timeGridRevision;
+
+    timeStretchCache_.invalidate(materializationId);
+    return true;
+}
+
 OriginalF0State MaterializationStore::getOriginalF0State(uint64_t materializationId) const
 {
     const juce::ScopedReadLock readLock(lock_);
@@ -880,7 +909,6 @@ bool MaterializationStore::setDerivedAnalysis(uint64_t materializationId, const 
 
     it->second.derivedAnalysis = analysis;
     ++it->second.derivedAnalysis.analysisRevision;
-    it->second.derivedAnalysis.state = F0ExtractionState::Ready;
     return true;
 }
 
@@ -898,7 +926,7 @@ bool MaterializationStore::getDerivedAnalysis(uint64_t materializationId, Derive
     }
 
     out = it->second.derivedAnalysis;
-    return out.state == F0ExtractionState::Ready;
+    return out.state != F0ExtractionState::NotRequested || out.analysisRevision > 0;
 }
 
 void MaterializationStore::invalidateDerivedAnalysis(uint64_t materializationId)

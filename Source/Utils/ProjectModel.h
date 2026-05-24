@@ -17,14 +17,11 @@
 #include <juce_graphics/juce_graphics.h>
 
 #include <cstdint>
-#include <string>
 #include <vector>
 
 #include "DSP/ChromaKeyDetector.h"
 #include "Utils/Note.h"
-#include "Utils/PitchCurve.h"
 #include "Utils/SourceWindow.h"
-#include "Utils/TimeGrid.h"
 
 namespace OpenTune {
 
@@ -54,6 +51,8 @@ struct ProjectSettings {
     double scrollX{0.0};
     double scrollY{0.0};
     double zoomLevel{1.0};
+    double verticalZoom{1.0};
+    double timelineOriginSeconds{0.0};
 };
 
 // ============================================================================
@@ -179,20 +178,6 @@ struct ProjectTrackEntry {
 };
 
 // ============================================================================
-// 最近会话状态（写入 .otproj 的视图恢复信息）
-// ============================================================================
-
-struct ProjectRecentSessionState {
-    int selectedTrackId{0};
-    uint64_t selectedPlacementId{0};
-    double scrollX{0.0};
-    double scrollY{0.0};
-    double horizontalZoom{1.0};
-    double verticalZoom{1.0};
-    double timelineOriginSeconds{0.0};
-};
-
-// ============================================================================
 // 完整工程快照
 // ============================================================================
 
@@ -203,7 +188,6 @@ struct ProjectSnapshot {
     std::vector<ProjectMaterializationEntry> materializations;
     std::vector<ProjectTrackEntry> tracks;
     std::vector<ProjectReferenceBinding> referenceBindings;
-    ProjectRecentSessionState recentSessionState;
 
     /** 生成唯一的工程 ID（时间戳 + 随机数） */
     static juce::String generateProjectId();

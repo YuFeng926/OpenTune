@@ -40,7 +40,8 @@ public:
         virtual void placementSelectionChanged(int trackId, uint64_t placementId) = 0;
         virtual void placementTimingChanged(int trackId, int placementIndex) = 0;
         virtual void placementDoubleClicked(int /*trackId*/, int /*placementIndex*/) {}
-        virtual void referenceButtonClicked(int /*trackId*/, uint64_t /*placementId*/) {}
+        virtual void referenceButtonClicked(int /*trackId*/, uint64_t /*placementId*/,
+                                              juce::Rectangle<int> /*buttonScreenArea*/ = {}) {}
         // Y轴缩放回调 - 通知外部轨道高度变化（用于同步TrackPanel）
         virtual void trackHeightChanged(int newHeight) { juce::ignoreUnused(newHeight); }
         // Y轴滚动回调 - 通知外部垂直滚动偏移变化（用于同步TrackPanel）
@@ -95,9 +96,8 @@ public:
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
     bool hasUserManuallyZoomed() const { return userHasManuallyZoomed_; }
 
-    // reference binding 状态管理
+    // Analysis animation 状态管理
     void setClipAnalysisInProgress(uint64_t placementId, bool inProgress);
-    void setClipHasReferenceBinding(uint64_t placementId, bool hasRef);
 
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
@@ -116,10 +116,9 @@ private:
 
     HitTestResult hitTestPlacement(juce::Point<int> p) const;
 
-    // reference binding 状态
+    // Analysis state（reference binding 状态由 placement.referencePlacementId 驱动，不再缓存）
     struct ClipAnalysisState {
         bool isAnalysisInProgress{false};      // true: 显示描边动画
-        bool hasReferenceBinding{false};       // true: 显示参考图标
     };
 
     juce::Rectangle<int> getTrackLaneBounds(int trackId) const;

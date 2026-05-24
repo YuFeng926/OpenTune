@@ -1,13 +1,11 @@
 #include "ReferenceAnalysisService.h"
+
 #include "../Utils/AppLogger.h"
+
 #include <juce_events/juce_events.h>
 #include <exception>
 
 namespace OpenTune {
-
-// ============================================================================
-// Construction / Destruction
-// ============================================================================
 
 ReferenceAnalysisService::ReferenceAnalysisService()
 {
@@ -16,25 +14,26 @@ ReferenceAnalysisService::ReferenceAnalysisService()
 
 ReferenceAnalysisService::~ReferenceAnalysisService()
 {
+    aliveToken_->store(false, std::memory_order_release);
     running_.store(false, std::memory_order_release);
+    cancelAll();
     cv_.notify_all();
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
 }
 
-// ============================================================================
-// Configuration
-// ============================================================================
-
 void ReferenceAnalysisService::setAnalysisFunc(AnalysisFunc func)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     analysisFunc_ = std::move(func);
 }
 
-// ============================================================================
-// Listener Management
-// ============================================================================
+void ReferenceAnalysisService::setNotificationDispatcher(NotificationDispatcher dispatcher)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    notificationDispatcher_ = std::move(dispatcher);
+}
 
 void ReferenceAnalysisService::addListener(Listener* listener)
 {
@@ -46,10 +45,6 @@ void ReferenceAnalysisService::removeListener(Listener* listener)
     listeners_.remove(listener);
 }
 
-// ============================================================================
-// Submit / Cancel / Query
-// ============================================================================
-
 void ReferenceAnalysisService::submitAnalysis(uint64_t materializationId,
                                                int64_t renderRevision)
 {
@@ -58,26 +53,21 @@ void ReferenceAnalysisService::submitAnalysis(uint64_t materializationId,
         return;
     }
 
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!analysisFunc_) {
         AppLogger::warn("[ReferenceAnalysisService] submitAnalysis rejected: analysisFunc_ not set");
         return;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    // 如果同一 matId 正在活跃处理中，丢弃
     if (activeJob_.has_value() && activeJob_->materializationId == materializationId) {
         AppLogger::debug("[ReferenceAnalysisService] submitAnalysis: materialization "
             + juce::String(materializationId) + " already active, dropping");
         return;
     }
 
-    // 同一 matId 已在 pendingJobs_ 中：覆盖（latest-wins 去重）
     AnalysisJobKey key;
     key.materializationId = materializationId;
     key.renderRevision = renderRevision;
-    key.analysisRevision = 0; // 由调用方在 Listener 中处理
-
     pendingJobs_[materializationId] = key;
     cv_.notify_one();
 }
@@ -86,12 +76,18 @@ void ReferenceAnalysisService::cancelAnalysis(uint64_t materializationId)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     pendingJobs_.erase(materializationId);
+    if (activeJob_.has_value() && activeJob_->materializationId == materializationId) {
+        cancelledActiveJobs_.insert(materializationId);
+    }
 }
 
 void ReferenceAnalysisService::cancelAll()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     pendingJobs_.clear();
+    if (activeJob_.has_value()) {
+        cancelledActiveJobs_.insert(activeJob_->materializationId);
+    }
 }
 
 bool ReferenceAnalysisService::isAnalysisInProgress(uint64_t materializationId) const
@@ -103,14 +99,11 @@ bool ReferenceAnalysisService::isAnalysisInProgress(uint64_t materializationId) 
     return pendingJobs_.find(materializationId) != pendingJobs_.end();
 }
 
-// ============================================================================
-// Worker Loop
-// ============================================================================
-
 void ReferenceAnalysisService::workerLoop()
 {
     while (running_.load(std::memory_order_acquire)) {
         AnalysisJobKey job;
+        AnalysisFunc analysisFunc;
         {
             std::unique_lock<std::mutex> lock(mutex_);
             cv_.wait(lock, [this]() {
@@ -121,25 +114,30 @@ void ReferenceAnalysisService::workerLoop()
                 break;
             }
 
-            // 从 pendingJobs_ 取第一个任务
             auto it = pendingJobs_.begin();
             job = it->second;
             pendingJobs_.erase(it);
-
-            // 标记为 active
             activeJob_ = job;
+            analysisFunc = analysisFunc_;
         }
 
         const uint64_t matId = job.materializationId;
-
-        // 执行分析（同步，在 worker 线程）
         MaterializationStore::DerivedAnalysis result;
         bool success = false;
         juce::String errorReason;
 
         try {
-            result = analysisFunc_(matId);
-            success = true;
+            if (!analysisFunc) {
+                errorReason = "Reference analysis function is not configured";
+            } else {
+                result = analysisFunc(job);
+            }
+            success = result.state == F0ExtractionState::Ready;
+            if (!success) {
+                errorReason = result.errorMessage.isNotEmpty()
+                    ? result.errorMessage
+                    : "Reference analysis did not produce Ready features";
+            }
         } catch (const std::exception& e) {
             AppLogger::error("[ReferenceAnalysisService] Exception during analysis for matId "
                 + juce::String(matId) + ": " + juce::String(e.what()));
@@ -150,16 +148,24 @@ void ReferenceAnalysisService::workerLoop()
             errorReason = "Unknown exception during analysis";
         }
 
-        // 清除 active job
+        bool cancelled = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (activeJob_.has_value() && activeJob_->materializationId == matId) {
                 activeJob_.reset();
             }
+
+            const auto cancelledIt = cancelledActiveJobs_.find(matId);
+            if (cancelledIt != cancelledActiveJobs_.end()) {
+                cancelled = true;
+                cancelledActiveJobs_.erase(cancelledIt);
+            }
         }
 
-        // 通知 Listener（在消息线程上执行）
-        // stale 检查与存储写入由调用方在 Listener 回调中完成
+        if (cancelled) {
+            continue;
+        }
+
         if (success) {
             notifyListenersCompleted(matId, result);
         } else {
@@ -168,28 +174,54 @@ void ReferenceAnalysisService::workerLoop()
     }
 }
 
-// ============================================================================
-// Listener Notification Helpers
-// ============================================================================
-
 void ReferenceAnalysisService::notifyListenersCompleted(
     uint64_t matId, const MaterializationStore::DerivedAnalysis& result)
 {
-    juce::MessageManager::callAsync([this, matId, result]() {
+    auto notify = [this, alive = aliveToken_, matId, result]() {
+        if (!alive->load(std::memory_order_acquire)) {
+            return;
+        }
         listeners_.call([matId, &result](Listener& l) {
             l.analysisCompleted(matId, result);
         });
-    });
+    };
+
+    NotificationDispatcher dispatcher;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        dispatcher = notificationDispatcher_;
+    }
+    if (dispatcher) {
+        dispatcher(std::move(notify));
+        return;
+    }
+
+    juce::MessageManager::callAsync(std::move(notify));
 }
 
 void ReferenceAnalysisService::notifyListenersFailed(
     uint64_t matId, const juce::String& reason)
 {
-    juce::MessageManager::callAsync([this, matId, reason]() {
+    auto notify = [this, alive = aliveToken_, matId, reason]() {
+        if (!alive->load(std::memory_order_acquire)) {
+            return;
+        }
         listeners_.call([matId, &reason](Listener& l) {
             l.analysisFailed(matId, reason);
         });
-    });
+    };
+
+    NotificationDispatcher dispatcher;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        dispatcher = notificationDispatcher_;
+    }
+    if (dispatcher) {
+        dispatcher(std::move(notify));
+        return;
+    }
+
+    juce::MessageManager::callAsync(std::move(notify));
 }
 
 } // namespace OpenTune

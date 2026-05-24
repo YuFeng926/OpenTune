@@ -61,22 +61,18 @@ public:
 
 private:
     // 序列化辅助
-    static juce::ValueTree headerToValueTree(const ProjectHeader& header);
     static juce::ValueTree settingsToValueTree(const ProjectSettings& settings);
     static juce::ValueTree sourceToValueTree(const ProjectSourceEntry& source);
     static juce::ValueTree materializationToValueTree(const ProjectMaterializationEntry& mat);
     static juce::ValueTree trackToValueTree(const ProjectTrackEntry& track);
     static juce::ValueTree referenceBindingToValueTree(const ProjectReferenceBinding& binding);
-    static juce::ValueTree recentSessionStateToValueTree(const ProjectRecentSessionState& state);
 
     // 反序列化辅助
-    static ProjectHeader headerFromValueTree(const juce::ValueTree& tree);
     static ProjectSettings settingsFromValueTree(const juce::ValueTree& tree);
     static ProjectSourceEntry sourceFromValueTree(const juce::ValueTree& tree);
     static ProjectMaterializationEntry materializationFromValueTree(const juce::ValueTree& tree);
     static ProjectTrackEntry trackFromValueTree(const juce::ValueTree& tree);
     static ProjectReferenceBinding referenceBindingFromValueTree(const juce::ValueTree& tree);
-    static ProjectRecentSessionState recentSessionStateFromValueTree(const juce::ValueTree& tree);
 
     // 子节点反序列化
     static std::vector<Note> notesFromValueTree(const juce::ValueTree& tree);
