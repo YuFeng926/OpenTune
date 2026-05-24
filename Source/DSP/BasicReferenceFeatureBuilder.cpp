@@ -2,6 +2,7 @@
 
 #include "../Utils/MaterializationState.h"
 #include "../Utils/TimeCoordinate.h"
+#include "../Utils/TimeGrid.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,7 +11,6 @@ namespace OpenTune {
 
 namespace {
 
-constexpr double kMinAnchorSpacingSeconds = 0.150;
 constexpr double kMinNoteDurationSeconds = 0.100;
 constexpr float kPitchTransitionCents = 80.0f;
 
@@ -19,30 +19,33 @@ bool isVoiced(float f0) noexcept
     return std::isfinite(f0) && f0 > 0.0f;
 }
 
-bool appendAnchor(std::vector<MaterializationStore::DerivedAnalysis::TimeAnchor>& anchors,
-                  double sourceSeconds,
-                  float strength,
-                  uint64_t& nextId)
+bool appendTemporalEvent(std::vector<MaterializationStore::DerivedAnalysis::TemporalEvent>& events,
+                         double sourceSeconds,
+                         float strength,
+                         MaterializationStore::DerivedAnalysis::TemporalEventKind kind,
+                         uint64_t& nextId)
 {
     if (sourceSeconds <= 0.0) {
         return false;
     }
-    if (!anchors.empty()
-        && sourceSeconds - anchors.back().sourceSeconds < kMinAnchorSpacingSeconds) {
+    if (!events.empty()
+        && !TimeGridSnapshot::hasMinimumSourceSpacing(events.back().sourceSeconds, sourceSeconds)) {
         return false;
     }
 
-    MaterializationStore::DerivedAnalysis::TimeAnchor anchor;
-    anchor.id = nextId++;
-    anchor.sourceSeconds = sourceSeconds;
-    anchor.strength = strength;
-    anchors.push_back(anchor);
+    MaterializationStore::DerivedAnalysis::TemporalEvent event;
+    event.eventId = nextId++;
+    event.sourceSeconds = sourceSeconds;
+    event.strength = strength;
+    event.kind = kind;
+    event.confidence = strength;
+    events.push_back(event);
     return true;
 }
 
-void buildAnchorsFromF0(const std::vector<float>& f0,
-                        double secondsPerFrame,
-                        std::vector<MaterializationStore::DerivedAnalysis::TimeAnchor>& anchors)
+void buildTemporalEventsFromF0(const std::vector<float>& f0,
+                               double secondsPerFrame,
+                               std::vector<MaterializationStore::DerivedAnalysis::TemporalEvent>& events)
 {
     uint64_t nextId = 1;
     bool wasVoiced = false;
@@ -58,11 +61,19 @@ void buildAnchorsFromF0(const std::vector<float>& f0,
 
         const double sourceSeconds = static_cast<double>(i) * secondsPerFrame;
         if (!wasVoiced) {
-            appendAnchor(anchors, sourceSeconds, 1.0f, nextId);
+            appendTemporalEvent(events,
+                                sourceSeconds,
+                                1.0f,
+                                MaterializationStore::DerivedAnalysis::TemporalEventKind::Onset,
+                                nextId);
         } else if (previousVoiced > 0.0f) {
             const float cents = std::abs(1200.0f * std::log2(value / previousVoiced));
-            if (cents >= 80.0f) {
-                appendAnchor(anchors, sourceSeconds, 0.85f, nextId);
+            if (cents >= kPitchTransitionCents) {
+                appendTemporalEvent(events,
+                                    sourceSeconds,
+                                    0.85f,
+                                    MaterializationStore::DerivedAnalysis::TemporalEventKind::PitchTransition,
+                                    nextId);
             }
         }
 
@@ -193,22 +204,22 @@ MaterializationStore::DerivedAnalysis BasicReferenceFeatureBuilder::build(
     const double secondsPerFrame =
         static_cast<double>(pitchSnapshot->getHopSize()) / pitchSnapshot->getSampleRate();
     result.basicDerivedNotes = buildNotesFromF0(originalF0, secondsPerFrame);
-    buildAnchorsFromF0(originalF0, secondsPerFrame, result.basicDerivedAnchors);
+    buildTemporalEventsFromF0(originalF0, secondsPerFrame, result.temporalEvents);
 
-    std::sort(result.basicDerivedAnchors.begin(), result.basicDerivedAnchors.end(),
+    std::sort(result.temporalEvents.begin(), result.temporalEvents.end(),
               [](const auto& a, const auto& b) {
                   return a.sourceSeconds < b.sourceSeconds;
               });
-    result.basicDerivedAnchors.erase(
-        std::unique(result.basicDerivedAnchors.begin(), result.basicDerivedAnchors.end(),
+    result.temporalEvents.erase(
+        std::unique(result.temporalEvents.begin(), result.temporalEvents.end(),
                     [](const auto& a, const auto& b) {
                         return std::abs(a.sourceSeconds - b.sourceSeconds) < 1.0e-9;
                     }),
-        result.basicDerivedAnchors.end());
+        result.temporalEvents.end());
 
-    if (result.basicDerivedNotes.empty() && result.basicDerivedAnchors.size() < 2) {
+    if (result.basicDerivedNotes.empty() && result.temporalEvents.size() < 2) {
         result.state = F0ExtractionState::Failed;
-        result.errorMessage = "AUTO Ref analysis found no source-derived notes or temporal anchors";
+        result.errorMessage = "AUTO Ref analysis found no source-derived notes or temporal events";
         return result;
     }
 

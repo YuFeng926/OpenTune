@@ -157,6 +157,11 @@ void runAutoRefArchitectureReferenceAutoAlignUsesRequestPatchContractTest()
         return;
     }
 
+    if (source.contains("targetTimeGridBefore")) {
+        logFail(testName, "ReferenceAlignmentRequest must not retain a dead targetTimeGridBefore field");
+        return;
+    }
+
     logPass(testName);
 }
 
@@ -172,6 +177,133 @@ void runAutoRefArchitectureReferenceAutoAlignDoesNotWriteUserAddedHandlesTest()
 
     if (containsGeneratedUserAddedAssignment(source)) {
         logFail(testName, "ReferenceAutoAlign.cpp must not generate HandleKind::UserAdded handles");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefArchitectureReferenceAutoAlignDoesNotConstructTimeHandlesTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_ReferenceAutoAlignDoesNotConstructTimeHandles";
+    constexpr const char* relativePath = "Source/DSP/ReferenceAutoAlign.cpp";
+
+    const auto source = readWorkspaceFile(relativePath);
+    if (!assertReadable(testName, relativePath, source)) {
+        return;
+    }
+
+    if (source.contains("TimeHandle")
+        || source.contains("makeFromHandles")
+        || source.contains("HandleKind::ReferenceAuto")) {
+        logFail(testName, "ReferenceAutoAlign.cpp must output timing intents, not TimeHandle/TimeGrid after-state");
+        return;
+    }
+
+    if (source.contains("gridOrIdentity")
+        || source.contains("makeIdentity(")) {
+        logFail(testName, "ReferenceAutoAlign.cpp must not synthesize fallback TimeGrid state");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefArchitectureProductionPathDoesNotUseHandleNoteMergerTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_ProductionPathDoesNotUseHandleNoteMerger";
+
+    const auto processorHeader = readWorkspaceFile("Source/PluginProcessor.h");
+    const auto processorCpp = readWorkspaceFile("Source/PluginProcessor.cpp");
+    const auto cmake = readWorkspaceFile("CMakeLists.txt");
+
+    if (processorHeader.isEmpty() || processorCpp.isEmpty() || cmake.isEmpty()) {
+        logFail(testName, "could not read processor or CMake source files");
+        return;
+    }
+
+    if (processorHeader.contains("HandleNoteMerger")
+        || processorHeader.contains("handleNoteMergers_")
+        || processorHeader.contains("deliverHandlesToMerger")
+        || processorHeader.contains("deliverNotesToMerger")
+        || processorCpp.contains("HandleNoteMerger")
+        || processorCpp.contains("handleNoteMergers_")
+        || processorCpp.contains("deliverHandlesToMerger")
+        || processorCpp.contains("deliverNotesToMerger")
+        || cmake.contains("Source/DSP/HandleNoteMerger.cpp")
+        || cmake.contains("Source/DSP/HandleNoteMerger.h")
+        || cmake.contains("Tests/HandleNoteMergerTests.cpp")) {
+        logFail(testName, "AUTO Ref production path must not retain HandleNoteMerger or its test/source registrations");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefArchitectureNoLegacyAnalysisAnchorsTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_NoLegacyAnalysisAnchors";
+
+    const auto materializationStore = readWorkspaceFile("Source/MaterializationStore.h");
+    const auto featureBuilder = readWorkspaceFile("Source/DSP/BasicReferenceFeatureBuilder.cpp");
+    const auto aligner = readWorkspaceFile("Source/DSP/ReferenceAutoAlign.cpp");
+    const auto editor = readWorkspaceFile("Source/Standalone/PluginEditor.cpp");
+
+    if (materializationStore.isEmpty() || featureBuilder.isEmpty() || aligner.isEmpty() || editor.isEmpty()) {
+        logFail(testName, "could not read AUTO Ref source files");
+        return;
+    }
+
+    if (materializationStore.contains("basicDerivedAnchors")
+        || materializationStore.contains("TimeAnchor")
+        || featureBuilder.contains("basicDerivedAnchors")
+        || featureBuilder.contains("TimeAnchor")
+        || aligner.contains("basicDerivedAnchors")
+        || aligner.contains("TimeAnchor")
+        || editor.contains("basicDerivedAnchors")) {
+        logFail(testName, "AUTO Ref analysis timing facts must be temporalEvents, not legacy basicDerivedAnchors");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefArchitectureNoPrivateAutoRefSpacingConstantsTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_NoPrivateAutoRefSpacingConstants";
+
+    const auto featureBuilder = readWorkspaceFile("Source/DSP/BasicReferenceFeatureBuilder.cpp");
+    const auto aligner = readWorkspaceFile("Source/DSP/ReferenceAutoAlign.cpp");
+
+    if (featureBuilder.isEmpty() || aligner.isEmpty()) {
+        logFail(testName, "could not read AUTO Ref source files");
+        return;
+    }
+
+    if (featureBuilder.contains("0.150")
+        || featureBuilder.contains("150 ms")
+        || aligner.contains("0.150")
+        || aligner.contains("150 ms")) {
+        logFail(testName, "AUTO Ref code must use the TimeGrid spacing contract instead of private constants");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefArchitectureFailedAnalysisIsNotForcedReadyTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_FailedAnalysisIsNotForcedReady";
+    constexpr const char* relativePath = "Source/MaterializationStore.cpp";
+
+    const auto source = readWorkspaceFile(relativePath);
+    if (!assertReadable(testName, relativePath, source)) {
+        return;
+    }
+
+    if (source.contains("state = F0ExtractionState::Ready")
+        && source.contains("setDerivedAnalysis")) {
+        logFail(testName, "MaterializationStore::setDerivedAnalysis must not force failed analysis into Ready");
         return;
     }
 
@@ -213,5 +345,10 @@ void runAutoRefArchitectureSuite()
     runAutoRefArchitectureStandaloneEditorCppDoesNotRunAnalysisOrAlignTest();
     runAutoRefArchitectureReferenceAutoAlignUsesRequestPatchContractTest();
     runAutoRefArchitectureReferenceAutoAlignDoesNotWriteUserAddedHandlesTest();
+    runAutoRefArchitectureReferenceAutoAlignDoesNotConstructTimeHandlesTest();
+    runAutoRefArchitectureProductionPathDoesNotUseHandleNoteMergerTest();
+    runAutoRefArchitectureNoLegacyAnalysisAnchorsTest();
+    runAutoRefArchitectureNoPrivateAutoRefSpacingConstantsTest();
+    runAutoRefArchitectureFailedAnalysisIsNotForcedReadyTest();
     runAutoRefArchitectureReferenceAnalysisServiceIsProcessorDomainTest();
 }

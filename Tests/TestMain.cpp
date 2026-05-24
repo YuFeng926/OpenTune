@@ -6,6 +6,7 @@
 #include "Plugin/Capture/CaptureSegment.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Standalone/UI/MenuBarComponent.h"
+#include "Standalone/UI/PianoRoll/PianoRollRenderer.h"
 #include "Standalone/UI/PianoRoll/PianoRollVisualInvalidation.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/AudioEditingScheme.h"
@@ -42,12 +43,12 @@ constexpr std::array<SuiteEntry, 33> kSuites{{
     { "core", "leaf utilities and render primitives", &runCoreBehaviorSuite },
     { "processor", "shared processor and render contracts", &runProcessorBehaviorSuite },
     { "ui", "piano-roll and visual loop behavior", &runUiBehaviorSuite },
+    { "piano-roll-f0-visual", "piano-roll F0 curve visual rendering contracts", &runPianoRollF0VisualSuite },
     { "piano-roll-intent", "piano-roll mouse intent behavior", &runPianoRollIntentBehaviorSuite },
     { "architecture", "clip core, arrangement, session, and guards", &runArchitectureBehaviorSuite },
     { "undo", "undo/redo manager", &runUndoManagerSuite },
     { "memory", "memory optimization and render cache refactor", &runMemoryOptimizationSuite },
     { "time-grid", "vocal-time-stretch TimeGrid data model + tau", &runTimeGridSuite },
-    { "dsp-detection", "vocal-time-stretch onset/phoneme/word-segmenter detection chain", &runDspDetectionSuite },
     { "soundtouch", "vocal-time-stretch SoundTouchStretcher wrapper (WSOLA)", &runSoundTouchStretcherSuite },
     { "time-stretch-cache", "vocal-time-stretch TimeStretchCache clip-wide single-entry cache", &runTimeStretchCacheSuite },
     { "matstore-timegrid", "vocal-time-stretch MaterializationStore + TimeGrid + RB lifecycle integration", &runMaterializationStoreTimeGridSuite },
@@ -55,13 +56,13 @@ constexpr std::array<SuiteEntry, 33> kSuites{{
     { "timetool-handler", "vocal-time-stretch Time tool ToolHandler hover/drag/commit", &runTimeToolHandlerSuite },
     { "integration-pipeline", "vocal-time-stretch L3 integration: order independence, undo, waveform tau", &runIntegrationPipelineSuite },
     { "invariant-contract", "vocal-time-stretch L4 contract / invariants: bypass bit-exactness, ARA region length, RB reset", &runInvariantContractSuite },
-    { "silero-vad", "vocal-time-stretch SileroVadExtractor lifecycle + ONNX inference (16k + 44.1k)", &runSileroVadExtractorSuite },
     { "game-note-generator", "GameNoteGenerator D3PM ONNX transcription + mergeChunkNotes seam dedup", &runGameNoteGeneratorSuite },
     { "vocoder-config", "vocoder-runtime-config: forward chain defaults + mel hash invariants", &runVocoderConfigSuite },
-    { "handle-note-merger", "time-grid-note-confirmation: merge alg + barrier + reSeed + invariants", &runHandleNoteMergerSuite },
+    { "timegrid-patch", "AUTO Ref TimeGrid intent compiler", &runTimeGridPatchBuilderSuite },
     { "composite-undo-action", "CompositeUndoAction: undo/reverse order, empty safety, single-step count", &runCompositeUndoActionSuite },
     { "undo-manager-contract", "UndoManager + CompositeUndoAction: nested composite safety", &runUndoManagerContractSuite },
-    { "auto-ref-failure", "ReferenceAutoAlign failure modes: NoOverlap, NotReady, InsufficientAnchors", &runAutoRefFailureSuite },
+    { "reference-auto-align", "ReferenceAutoAlign pure request/patch contract", &runReferenceAutoAlignSuite },
+    { "auto-ref-failure", "ReferenceAutoAlign failure modes: NoOverlap, NotReady, InsufficientFeatures", &runAutoRefFailureSuite },
     { "auto-ref-architecture", "AUTO Ref UI architecture source-scan guards", &runAutoRefArchitectureSuite },
     { "basic-derived-analysis", "DerivedAnalysis slot smoke test", &runBasicDerivedAnalysisSuite },
     { "auto-ref-integration", "AUTO Ref domain applier transaction and composite undo", &runAutoRefIntegrationSuite },
@@ -4446,6 +4447,209 @@ void runPianoRollRendererCorrectedF0DoesNotForceHardBoundaryStrokeTest()
     logPass(testName);
 }
 
+std::vector<PianoRollRenderer::F0VisualSegment> buildTestF0VisualSegments(
+    const std::vector<float>& f0,
+    const std::vector<float>& energy,
+    double pixelsPerSecond,
+    const std::vector<uint8_t>* visibleMask = nullptr)
+{
+    PianoRollRenderer::F0VisualBuildOptions options;
+    options.startFrame = 0;
+    options.endFrameExclusive = static_cast<int>(f0.size());
+    options.viewportStartX = -100000;
+    options.viewportEndX = 100000;
+    options.pixelsPerSecond = pixelsPerSecond;
+    options.secondsPerFrame = 0.01;
+
+    const auto* energyPtr = energy.empty() ? nullptr : &energy;
+    return PianoRollRenderer::buildF0VisualSegments(
+        f0,
+        energyPtr,
+        visibleMask,
+        options,
+        [pixelsPerSecond](int frame) {
+            return static_cast<float>(static_cast<double>(frame) * 0.01 * pixelsPerSecond);
+        },
+        [](int, float frequency) {
+            return frequency;
+        });
+}
+
+void runPianoRollF0VisualUsesEnergyAlphaWithinBoundsTest()
+{
+    constexpr const char* testName = "PianoRollF0Visual_UsesEnergyAlphaWithinBounds";
+
+    const auto segments = buildTestF0VisualSegments(
+        { 220.0f, 221.0f, 222.0f, 223.0f, 224.0f },
+        { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f },
+        200.0);
+
+    if (segments.size() != 1 || segments.front().points.size() != 5) {
+        logFail(testName, "high-zoom F0 visual builder should keep one visual point per voiced frame");
+        return;
+    }
+
+    const auto& points = segments.front().points;
+    if (!approxEqual(points.front().energyAlpha, 0.70f, 1.0e-4f)
+        || !approxEqual(points[2].energyAlpha, 0.85f, 1.0e-4f)
+        || !approxEqual(points.back().energyAlpha, 1.00f, 1.0e-4f)) {
+        logFail(testName, "energy alpha should map local energy into the [70%, 100%] range");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollF0VisualZoomedOutBucketsAreBoundedByPixelDensityTest()
+{
+    constexpr const char* testName = "PianoRollF0Visual_ZoomedOutBucketsAreBoundedByPixelDensity";
+
+    std::vector<float> f0(1000, 220.0f);
+    const auto segments = buildTestF0VisualSegments(f0, {}, 10.0);
+
+    if (segments.size() != 1 || segments.front().points.size() >= 120) {
+        logFail(testName, "zoomed-out F0 curve should be smoothed into screen-density visual buckets");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollF0VisualZoomedInRestoresFrameDetailTest()
+{
+    constexpr const char* testName = "PianoRollF0Visual_ZoomedInRestoresFrameDetail";
+
+    std::vector<float> f0(24, 220.0f);
+    const auto segments = buildTestF0VisualSegments(f0, {}, 140.0);
+
+    if (segments.size() != 1 || segments.front().points.size() != f0.size()) {
+        logFail(testName, "zoomed-in F0 curve should expand back to frame-level detail");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollF0VisualVoicelessGapsDoNotConnectAcrossSegmentsTest()
+{
+    constexpr const char* testName = "PianoRollF0Visual_VoicelessGapsDoNotConnectAcrossSegments";
+
+    const auto segments = buildTestF0VisualSegments(
+        { 220.0f, 221.0f, 0.0f, 222.0f, 223.0f, 2501.0f, 224.0f, 225.0f },
+        {},
+        200.0);
+
+    if (segments.size() != 3
+        || segments[0].points.size() != 2
+        || segments[1].points.size() != 2
+        || segments[2].points.size() != 2) {
+        logFail(testName, "invalid and out-of-range F0 frames should split visual segments");
+        return;
+    }
+
+    std::vector<uint8_t> mismatchedMask { 1, 1 };
+    const auto maskedSegments = buildTestF0VisualSegments({ 220.0f, 221.0f, 222.0f }, {}, 200.0, &mismatchedMask);
+    if (!maskedSegments.empty()) {
+        logFail(testName, "mismatched visible masks should not draw a potentially wrong connected curve");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollF0VisualStyleTokensAndLayeringTest()
+{
+    constexpr const char* testName = "PianoRollF0Visual_StyleTokensAndLayering";
+
+    const auto& componentSource = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
+    const int originalDrawIndex = componentSource.indexOf(
+        "renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, 0.62f, true");
+    const int selectedOriginalDrawIndex = componentSource.indexOf(
+        "drawSelectedOriginalF0Curve(g, originalF0);");
+    const int correctedDrawIndex = componentSource.indexOf(
+        "renderer_->drawF0Curve(g, item.correctedF0, UIColors::correctedF0, 0.94f, false");
+    if (originalDrawIndex < 0
+        || selectedOriginalDrawIndex < 0
+        || correctedDrawIndex < 0
+        || originalDrawIndex > selectedOriginalDrawIndex
+        || selectedOriginalDrawIndex > correctedDrawIndex) {
+        logFail(testName, "OriginalF0, including active selection emphasis, should draw below CorrectedF0");
+        return;
+    }
+
+    const auto& uiColors = getFileCache().get("Source/Standalone/UI/UIColors.h");
+    const auto& themeTokens = getFileCache().get("Source/Standalone/UI/ThemeTokens.h");
+    if (!uiColors.contains("originalF0 { 0xFFD24A3A }")
+        || !uiColors.contains("correctedF0 { 0xFF2EC7F8 }")
+        || !themeTokens.contains("0xFFD24A3A }, // originalF0")
+        || !themeTokens.contains("0xFF2EC7F8 }, // correctedF0")) {
+        logFail(testName, "F0 visual color tokens should match the reference red/cyan palette");
+        return;
+    }
+
+    if (!uiColors.contains("noteBlock { 0xFF72D8F7 }")
+        || !uiColors.contains("noteBlockBorder { 0xFFB6F0FF }")
+        || !uiColors.contains("noteBlockSelected { 0xFF9CEAFF }")
+        || !themeTokens.contains("0xFF72D8F7")
+        || !themeTokens.contains("0xFFB6F0FF")) {
+        logFail(testName, "note blocks should use a paler reference blue palette");
+        return;
+    }
+
+    if (!componentSource.contains("UIColors::originalF0.withAlpha(0.42f)")
+        || !componentSource.contains("UIColors::originalF0.withAlpha(0.055f)")) {
+        logFail(testName, "selected OriginalF0 emphasis should remain softer than CorrectedF0");
+        return;
+    }
+
+    const auto& rendererSource = getFileCache().get("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    if (!rendererSource.contains("note.selected ? 0.42f : 0.28f")
+        || !rendererSource.contains("edgeColour.withAlpha(note.selected ? 0.66f : 0.48f)")
+        || !rendererSource.contains("note.selected ? 0.48f : 0.34f")) {
+        logFail(testName, "note block opacity should stay low enough for CorrectedF0 to read through");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollF0VisualEndpointFadeAndGlowContractTest()
+{
+    constexpr const char* testName = "PianoRollF0Visual_EndpointFadeAndGlowContract";
+
+    const auto& rendererSource = getFileCache().get("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    const auto drawFunction = rendererSource
+        .fromFirstOccurrenceOf("void PianoRollRenderer::drawF0Curve", true, false)
+        .upToFirstOccurrenceOf("// ============================================================================", false, false);
+
+    if (!drawFunction.contains("drawTaperedCurve")
+        || !drawFunction.contains("fadeSpanCount")
+        || !drawFunction.contains("taperAlpha")
+        || !drawFunction.contains("energyAlpha")
+        || !rendererSource.contains("appendSmoothedF0Path")) {
+        logFail(testName, "F0 draw path should taper segment endpoints, multiply by energy alpha, and use smoothed paths");
+        return;
+    }
+
+    if (drawFunction.contains("fillEllipse")
+        || drawFunction.contains("noteBlockSelected")
+        || drawFunction.contains("spanPath")
+        || drawFunction.contains("startNewSubPath(a.x")
+        || !drawFunction.contains("0.055f")
+        || !drawFunction.contains("0.070f")) {
+        logFail(testName, "F0 draw path should avoid endpoint dots, per-span strokes, foreign selection colors, and keep glow reduced");
+        return;
+    }
+
+    if (!drawFunction.contains("kAlphaBucketStep")
+        || !drawFunction.contains("DrawRun")) {
+        logFail(testName, "F0 draw path should group adjacent spans instead of stroking every frame independently");
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runProcessorAutoTuneAndLocalRetuneFifteenPercentKeepSameSmoothBoundaryTest()
 {
     constexpr const char* testName = "Processor_AutoTuneAndLocalRetuneFifteenPercentKeepSameSmoothBoundary";
@@ -5643,8 +5847,8 @@ void runProcessorStateVersionSevenAndNoBpmTest()
         return;
     }
     // §3.8: vocal-time-stretch bumped state version 5 → 6 (TimeGrid section
-    // appended after PitchCurve per materialization). add-note-confirmed-handles
-    // then bumped 6 → 7 for per-handle confidence. v5/v6 projects are still
+    // appended after PitchCurve per materialization), then 6 → 7 for
+    // per-handle confidence. v5/v6 projects are still
     // accepted via backward-compat paths in setStateInformation.
     if (version != 7) {
         logFail(testName, "kProcessorStateVersion expected 7 (time grid confidence field)");
@@ -5809,6 +6013,12 @@ void runUiBehaviorSuite()
     runFrameSelectionParametersTreatManualCorrectedF0AsCommittedTruthTest();
     runNotesPrimaryAutoTuneUsesSelectedNotesRangeTest();
     runCorrectedF0PrimaryAutoTunePrefersSelectionAreaTest();
+    runPianoRollF0VisualUsesEnergyAlphaWithinBoundsTest();
+    runPianoRollF0VisualZoomedOutBucketsAreBoundedByPixelDensityTest();
+    runPianoRollF0VisualZoomedInRestoresFrameDetailTest();
+    runPianoRollF0VisualVoicelessGapsDoNotConnectAcrossSegmentsTest();
+    runPianoRollF0VisualStyleTokensAndLayeringTest();
+    runPianoRollF0VisualEndpointFadeAndGlowContractTest();
     runPianoRollHotPathSourceGuardNoPerEventDebugLoggingTest();
     runPianoRollInteractionSourceGuardInteractiveInvalidationIsNotFullBoundsTest();
     runPianoRollInteractionSourceGuardDeleteLegacyCopyWritebackApiBeforeRefactorTest();
@@ -5845,6 +6055,17 @@ void runUiBehaviorSuite()
     runStandaloneEditorParameterPanelSyncFollowsEditingSchemeTest();
     runParameterPanelSyncDecisionRestoresClipDefaultsAfterSelectionEndsTest();
 
+}
+
+void runPianoRollF0VisualSuite()
+{
+    logSection("Piano Roll F0 Visual");
+    runPianoRollF0VisualUsesEnergyAlphaWithinBoundsTest();
+    runPianoRollF0VisualZoomedOutBucketsAreBoundedByPixelDensityTest();
+    runPianoRollF0VisualZoomedInRestoresFrameDetailTest();
+    runPianoRollF0VisualVoicelessGapsDoNotConnectAcrossSegmentsTest();
+    runPianoRollF0VisualStyleTokensAndLayeringTest();
+    runPianoRollF0VisualEndpointFadeAndGlowContractTest();
 }
 
 void runPianoRollIntentBehaviorSuite()

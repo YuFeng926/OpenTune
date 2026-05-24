@@ -3,8 +3,7 @@
  * (D3PM ONNX vocal note transcription) and the mergeChunkNotes stitcher.
  *
  * Tests gracefully self-skip when the GAME-small ONNX bundle is not on disk
- * (e.g., dev environment without LFS / fresh clone), matching the
- * SileroVadExtractor pattern.
+ * (e.g., dev environment without LFS / fresh clone).
  */
 #include "TestSupport.h"
 

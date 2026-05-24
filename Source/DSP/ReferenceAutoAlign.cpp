@@ -12,7 +12,6 @@ namespace OpenTune {
 namespace {
 
 constexpr double kF0FramesPerSecond = 100.0;
-constexpr double kMinHandleSpacingSeconds = 0.150;
 
 int timeToFrame(double timeSeconds)
 {
@@ -32,16 +31,6 @@ bool isReady(const AlignmentFeatures& features) noexcept
 double clampToDuration(double value, double duration) noexcept
 {
     return juce::jlimit(0.0, duration, value);
-}
-
-std::shared_ptr<const TimeGridSnapshot> gridOrIdentity(
-    const std::shared_ptr<const TimeGridSnapshot>& grid,
-    double durationSeconds)
-{
-    if (grid != nullptr) {
-        return grid;
-    }
-    return TimeGridSnapshot::makeIdentity(durationSeconds);
 }
 
 double sourceToTimeline(const ReferenceClipProjection& clip, double sourceSeconds)
@@ -84,18 +73,18 @@ size_t findNearestUnmatchedNote(const std::vector<Note>& notes,
     return bestIndex;
 }
 
-const MaterializationStore::DerivedAnalysis::TimeAnchor* findNearestAnchor(
-    const std::vector<MaterializationStore::DerivedAnalysis::TimeAnchor>& anchors,
+const MaterializationStore::DerivedAnalysis::TemporalEvent* findNearestTemporalEvent(
+    const std::vector<MaterializationStore::DerivedAnalysis::TemporalEvent>& events,
     double sourceSeconds)
 {
-    const MaterializationStore::DerivedAnalysis::TimeAnchor* best = nullptr;
+    const MaterializationStore::DerivedAnalysis::TemporalEvent* best = nullptr;
     double bestDistance = std::numeric_limits<double>::max();
 
-    for (const auto& anchor : anchors) {
-        const double distance = std::abs(anchor.sourceSeconds - sourceSeconds);
+    for (const auto& event : events) {
+        const double distance = std::abs(event.sourceSeconds - sourceSeconds);
         if (distance < bestDistance) {
             bestDistance = distance;
-            best = &anchor;
+            best = &event;
         }
     }
 
@@ -140,33 +129,6 @@ bool segmentsEqualForPatch(const std::vector<CorrectedSegment>& a,
     return true;
 }
 
-bool gridsEqualForPatch(const std::shared_ptr<const TimeGridSnapshot>& a,
-                        const std::shared_ptr<const TimeGridSnapshot>& b)
-{
-    if (a == b) {
-        return true;
-    }
-    if (a == nullptr || b == nullptr) {
-        return false;
-    }
-    const auto& ah = a->handles();
-    const auto& bh = b->handles();
-    if (ah.size() != bh.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < ah.size(); ++i) {
-        if (ah[i].id != bh[i].id
-            || ah[i].source_seconds != bh[i].source_seconds
-            || ah[i].output_seconds != bh[i].output_seconds
-            || ah[i].kind != bh[i].kind
-            || ah[i].locked != bh[i].locked
-            || ah[i].confidence != bh[i].confidence) {
-            return false;
-        }
-    }
-    return true;
-}
-
 void fail(AlignmentPatch& patch, AlignmentPatch::ErrorCode error, const juce::String& message)
 {
     patch.success = false;
@@ -174,9 +136,9 @@ void fail(AlignmentPatch& patch, AlignmentPatch::ErrorCode error, const juce::St
     patch.diagnostics = message;
     patch.notesAfter.clear();
     patch.correctedSegmentsAfter.clear();
-    patch.timeGridAfter.reset();
+    patch.timingIntents.clear();
     patch.pitchChanged = false;
-    patch.timeGridChanged = false;
+    patch.timingChanged = false;
 }
 
 bool buildPitchPatch(const ReferenceAlignmentRequest& request,
@@ -263,112 +225,63 @@ bool buildPitchPatch(const ReferenceAlignmentRequest& request,
     return changed;
 }
 
-bool buildTimeGridPatch(const ReferenceAlignmentRequest& request,
+bool buildTimingIntents(const ReferenceAlignmentRequest& request,
                         double affectedStartSeconds,
                         double affectedEndSeconds,
                         AlignmentPatch& patch,
                         juce::String& outError)
 {
-    const auto& targetAnchors = request.targetFeatures.basicDerivedAnchors;
-    const auto& referenceAnchors = request.referenceFeatures.basicDerivedAnchors;
-    if (targetAnchors.size() < 2 || referenceAnchors.size() < 2) {
+    const auto& targetEvents = request.targetFeatures.temporalEvents;
+    const auto& referenceEvents = request.referenceFeatures.temporalEvents;
+    if (targetEvents.size() < 2 || referenceEvents.size() < 2) {
         return false;
     }
 
-    const auto targetGrid = request.targetTimeGridBefore;
-    const double duration = targetGrid->totalDurationSeconds();
+    const double duration = request.target.timeGrid->totalDurationSeconds();
+    bool changed = false;
 
-    std::vector<TimeHandle> handles;
-    const auto& beforeHandles = targetGrid->handles();
-    handles.reserve(beforeHandles.size() + targetAnchors.size());
-
-    for (const auto& handle : beforeHandles) {
-        const bool inAffectedRange = handle.source_seconds > affectedStartSeconds
-                                  && handle.source_seconds < affectedEndSeconds;
-        const bool staleAutoRef = inAffectedRange && handle.kind == HandleKind::ReferenceAuto;
-        if (staleAutoRef) {
+    for (const auto& targetEvent : targetEvents) {
+        if (targetEvent.sourceSeconds <= 0.0 || targetEvent.sourceSeconds >= duration) {
             continue;
         }
-        handles.push_back(handle);
-    }
-
-    uint64_t nextId = 1;
-    for (const auto& handle : handles) {
-        nextId = std::max(nextId, handle.id + 1);
-    }
-
-    std::vector<TimeHandle> generated;
-    generated.reserve(targetAnchors.size());
-
-    for (const auto& targetAnchor : targetAnchors) {
-        if (targetAnchor.sourceSeconds <= 0.0 || targetAnchor.sourceSeconds >= duration) {
-            continue;
-        }
-        if (targetAnchor.sourceSeconds < affectedStartSeconds
-            || targetAnchor.sourceSeconds > affectedEndSeconds) {
+        if (targetEvent.sourceSeconds < affectedStartSeconds
+            || targetEvent.sourceSeconds > affectedEndSeconds) {
             continue;
         }
 
-        const double targetTimeline = sourceToTimeline(request.target, targetAnchor.sourceSeconds);
+        const double targetTimeline = sourceToTimeline(request.target, targetEvent.sourceSeconds);
         if (targetTimeline < request.overlapStartTimelineSeconds
             || targetTimeline > request.overlapEndTimelineSeconds) {
             continue;
         }
 
         const double referenceGuessSource = timelineToSource(request.reference, targetTimeline);
-        const auto* referenceAnchor = findNearestAnchor(referenceAnchors, referenceGuessSource);
-        if (referenceAnchor == nullptr) {
+        const auto* referenceEvent = findNearestTemporalEvent(referenceEvents, referenceGuessSource);
+        if (referenceEvent == nullptr) {
             continue;
         }
 
-        const double referenceTimeline = sourceToTimeline(request.reference, referenceAnchor->sourceSeconds);
+        const double referenceTimeline = sourceToTimeline(request.reference, referenceEvent->sourceSeconds);
         const double desiredOutput = referenceTimeline - request.target.timelineStartSeconds;
         if (desiredOutput <= 0.0 || desiredOutput >= duration) {
-            outError = "AUTO Ref produced a TimeGrid handle outside target duration";
+            outError = "AUTO Ref produced a timing intent outside target duration";
             return false;
         }
-        if (std::abs(desiredOutput - targetAnchor.sourceSeconds) < 1.0e-9) {
+        const double currentOutput = request.target.timeGrid->tauForward(targetEvent.sourceSeconds);
+        if (std::abs(desiredOutput - currentOutput) < 1.0e-9) {
             continue;
         }
 
-        TimeHandle handle;
-        handle.id = nextId++;
-        handle.source_seconds = targetAnchor.sourceSeconds;
-        handle.output_seconds = desiredOutput;
-        handle.kind = HandleKind::ReferenceAuto;
-        handle.locked = false;
-        handle.confidence = Confidence::Default;
-        generated.push_back(handle);
+        TimeGridIntent intent;
+        intent.targetSourceSeconds = targetEvent.sourceSeconds;
+        intent.desiredOutputSeconds = desiredOutput;
+        intent.confidence = std::max(targetEvent.confidence, referenceEvent->confidence);
+        patch.timingIntents.push_back(intent);
+        changed = true;
     }
 
-    if (generated.empty()) {
-        patch.timeGridAfter = request.targetTimeGridBefore;
-        patch.timeGridChanged = false;
-        return false;
-    }
-
-    handles.insert(handles.end(), generated.begin(), generated.end());
-    std::sort(handles.begin(), handles.end(),
-              [](const TimeHandle& a, const TimeHandle& b) {
-                  return a.source_seconds < b.source_seconds;
-              });
-
-    for (size_t i = 1; i < handles.size(); ++i) {
-        if (handles[i].source_seconds - handles[i - 1].source_seconds < kMinHandleSpacingSeconds) {
-            outError = "AUTO Ref produced handles closer than TimeGrid spacing invariant";
-            return false;
-        }
-    }
-
-    auto snapshot = TimeGridSnapshot::makeFromHandles(std::move(handles));
-    if (snapshot == nullptr) {
-        outError = "AUTO Ref produced an invalid TimeGrid";
-        return false;
-    }
-
-    patch.timeGridAfter = std::move(snapshot);
-    patch.timeGridChanged = !gridsEqualForPatch(patch.timeGridAfter, request.targetTimeGridBefore);
-    return patch.timeGridChanged;
+    patch.timingChanged = changed;
+    return changed;
 }
 
 } // namespace
@@ -408,27 +321,19 @@ AlignmentPatch ReferenceAutoAlign::align(const ReferenceAlignmentRequest& reques
         return patch;
     }
 
-    auto targetGrid = gridOrIdentity(request.target.timeGrid, targetDuration);
-    auto referenceGrid = gridOrIdentity(request.reference.timeGrid, referenceDuration);
-    auto targetTimeGridBefore = gridOrIdentity(request.targetTimeGridBefore, targetDuration);
-    if (targetGrid == nullptr || referenceGrid == nullptr || targetTimeGridBefore == nullptr) {
-        fail(patch, AlignmentPatch::ErrorCode::TimeGridInvalid, "AUTO Ref could not resolve clip TimeGrid");
+    if (request.target.timeGrid == nullptr || request.reference.timeGrid == nullptr) {
+        fail(patch, AlignmentPatch::ErrorCode::TimeGridInvalid, "AUTO Ref requires target and reference TimeGrid");
         return patch;
     }
 
-    ReferenceAlignmentRequest working = request;
-    working.target.timeGrid = targetGrid;
-    working.reference.timeGrid = referenceGrid;
-    working.targetTimeGridBefore = targetTimeGridBefore;
-
     const double overlapTargetOutputStart = clampToDuration(
         request.overlapStartTimelineSeconds - request.target.timelineStartSeconds,
-        targetTimeGridBefore->totalDurationSeconds());
+        request.target.timeGrid->totalDurationSeconds());
     const double overlapTargetOutputEnd = clampToDuration(
         request.overlapEndTimelineSeconds - request.target.timelineStartSeconds,
-        targetTimeGridBefore->totalDurationSeconds());
-    const double affectedStartSeconds = targetTimeGridBefore->tauInverse(overlapTargetOutputStart);
-    const double affectedEndSeconds = targetTimeGridBefore->tauInverse(overlapTargetOutputEnd);
+        request.target.timeGrid->totalDurationSeconds());
+    const double affectedStartSeconds = request.target.timeGrid->tauInverse(overlapTargetOutputStart);
+    const double affectedEndSeconds = request.target.timeGrid->tauInverse(overlapTargetOutputEnd);
 
     patch.affectedStartFrame = timeToFrame(std::min(affectedStartSeconds, affectedEndSeconds));
     patch.affectedEndFrame = timeToFrame(std::max(affectedStartSeconds, affectedEndSeconds));
@@ -437,28 +342,27 @@ AlignmentPatch ReferenceAutoAlign::align(const ReferenceAlignmentRequest& reques
         return patch;
     }
 
-    patch.notesAfter = working.targetNotesBefore;
-    patch.correctedSegmentsAfter = working.targetSegmentsBefore;
-    patch.timeGridAfter = working.targetTimeGridBefore;
+    patch.notesAfter = request.targetNotesBefore;
+    patch.correctedSegmentsAfter = request.targetSegmentsBefore;
 
-    const bool hasPitchFeatures = !working.referenceFeatures.basicDerivedNotes.empty()
-                               && !working.targetNotesBefore.empty();
-    const bool hasTimeFeatures = working.referenceFeatures.basicDerivedAnchors.size() >= 2
-                              && working.targetFeatures.basicDerivedAnchors.size() >= 2;
+    const bool hasPitchFeatures = !request.referenceFeatures.basicDerivedNotes.empty()
+                               && !request.targetNotesBefore.empty();
+    const bool hasTimeFeatures = request.referenceFeatures.temporalEvents.size() >= 2
+                              && request.targetFeatures.temporalEvents.size() >= 2;
     if (!hasPitchFeatures && !hasTimeFeatures) {
         fail(patch, AlignmentPatch::ErrorCode::InsufficientFeatures, "AUTO Ref has neither pitch nor time features");
         return patch;
     }
 
     const bool pitchAttempted = hasPitchFeatures
-                             && buildPitchPatch(working,
+                             && buildPitchPatch(request,
                                                 frameToTime(patch.affectedStartFrame),
                                                 frameToTime(patch.affectedEndFrame),
                                                 patch);
 
     juce::String timeError;
     const bool timeAttempted = hasTimeFeatures
-                            && buildTimeGridPatch(working,
+                            && buildTimingIntents(request,
                                                   frameToTime(patch.affectedStartFrame),
                                                   frameToTime(patch.affectedEndFrame),
                                                   patch,
@@ -476,7 +380,7 @@ AlignmentPatch ReferenceAutoAlign::align(const ReferenceAlignmentRequest& reques
     patch.success = true;
     patch.error = AlignmentPatch::ErrorCode::None;
     patch.pitchChanged = pitchAttempted;
-    patch.timeGridChanged = timeAttempted;
+    patch.timingChanged = timeAttempted;
     return patch;
 }
 

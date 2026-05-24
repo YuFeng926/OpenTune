@@ -9,7 +9,6 @@ namespace OpenTune {
 namespace {
 
 constexpr double kTotalDurationEpsilon = 1e-6;
-constexpr int kMinSourceSpacingFrames = 15;            // 150 ms = 15 frames @ 100 fps (F0 frame rate)
 
 uint64_t makeStableId() noexcept
 {
@@ -18,6 +17,18 @@ uint64_t makeStableId() noexcept
 }
 
 } // namespace
+
+bool TimeGridSnapshot::hasMinimumSourceSpacing(double previousSourceSeconds,
+                                               double currentSourceSeconds) noexcept
+{
+    if (!std::isfinite(previousSourceSeconds) || !std::isfinite(currentSourceSeconds)) {
+        return false;
+    }
+
+    const int previousFrame = static_cast<int>(std::round(previousSourceSeconds * kSourceSpacingFrameRate));
+    const int currentFrame = static_cast<int>(std::round(currentSourceSeconds * kSourceSpacingFrameRate));
+    return currentFrame - previousFrame >= kMinSourceSpacingFrames;
+}
 
 bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::String& outError)
 {
@@ -96,11 +107,11 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
         // integer frames ÷ 100.0, and kMinSourceSpacingFrames=15 is the exact
         // integer equivalent of 150 ms.  Frame-domain comparison avoids IEEE 754
         // decimal-fraction rounding issues with 0.15.
-        const int prevFrame = static_cast<int>(std::round(prev.source_seconds * 100.0));
-        const int currFrame = static_cast<int>(std::round(curr.source_seconds * 100.0));
-        if (currFrame - prevFrame < kMinSourceSpacingFrames) {
+        if (!hasMinimumSourceSpacing(prev.source_seconds, curr.source_seconds)) {
             const double srcGapMs = (curr.source_seconds - prev.source_seconds) * 1000.0;
-            outError = "Handles must have source_seconds spacing >=150 ms at index "
+            outError = "Handles must have source_seconds spacing >= "
+                       + juce::String(static_cast<int>(kMinSourceSpacingSeconds * 1000.0))
+                       + " ms at index "
                        + juce::String((int)i)
                        + " (prev=" + juce::String(prev.source_seconds, 9)
                        + ", curr=" + juce::String(curr.source_seconds, 9)

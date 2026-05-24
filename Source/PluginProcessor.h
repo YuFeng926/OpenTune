@@ -491,19 +491,9 @@ private:
     mutable std::mutex                  noteGenInFlightMutex_;
     std::unordered_set<uint64_t>        noteGenInFlightMatIds_;
 
-    // add-note-confirmed-handles §3.2: per-materialization merger that barriers
-    // WordSegmenter handles + GameNoteGenerator notes and publishes merged
-    // TimeGridSnapshot once both arrive (顺序无关). Lifecycle: create on first
-    // delivery, erased after merge fires once. Manual re-seed uses static
-    // HandleNoteMerger::reSeed() and does not touch this map.
-    mutable std::mutex                                                     handleNoteMergersMutex_;
-    std::unordered_map<uint64_t, std::unique_ptr<class HandleNoteMerger>>  handleNoteMergers_;
-
 public:
     bool isNoteGenInFlightForMaterialization(uint64_t materializationId) const;
 private:
-    void deliverHandlesToMerger(uint64_t materializationId, std::vector<TimeHandle> handles);
-    void deliverNotesToMerger(uint64_t materializationId, const std::vector<Note>& notes);
     F0ExtractionService materializationRefreshService_{1, 64};
 
     std::shared_ptr<std::atomic<bool>> materializationRefreshAliveFlag_{std::make_shared<std::atomic<bool>>(true)};
@@ -674,16 +664,6 @@ public:
                                          std::shared_ptr<const TimeGridSnapshot> snapshot,
                                          int64_t affectedSrcStartFrame,
                                          int64_t affectedSrcEndFrame);
-
-    // add-note-confirmed-handles §4.2: Manual re-seed via UI right-click menu.
-    // Re-runs HandleNoteMerger::reSeed using current TimeGridSnapshot + freshly
-    // computed WordSegmenter handles (auto kinds in current snapshot are treated
-    // as the WordSegmenter source) + current notes from MaterializationStore.
-    // UserAdded handles preserved; user-edited output_seconds preserved per source.
-    // Returns true on successful publish; false if materialization missing or
-    // GameNoteGenerator notes unavailable (legacy mode).
-    bool reSeedTimeGridFromNotesById(uint64_t materializationId);
-    bool canReSeedTimeGridFromNotesById(uint64_t materializationId) const;
 
     std::shared_ptr<RenderCache> getMaterializationRenderCacheById(uint64_t materializationId) const;
     

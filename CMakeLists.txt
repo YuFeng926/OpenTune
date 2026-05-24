@@ -481,8 +481,6 @@ target_sources(OpenTune
     PRIVATE
         Source/Services/F0ExtractionService.cpp
         Source/Services/F0ExtractionService.h
-        Source/Services/VadExtractionService.cpp
-        Source/Services/VadExtractionService.h
         Source/Services/ReferenceAnalysisService.cpp
         Source/Services/ReferenceAnalysisService.h
         Source/DSP/BasicReferenceFeatureBuilder.cpp
@@ -518,11 +516,6 @@ target_sources(OpenTune
         Source/Inference/TimeStretchCache.cpp
         Source/Inference/TimeStretchCache.h
         Source/Inference/PitchCache.h
-        Source/Inference/IVadExtractor.h
-        Source/Inference/SileroVadExtractor.cpp
-        Source/Inference/SileroVadExtractor.h
-        Source/Inference/VadInferenceService.cpp
-        Source/Inference/VadInferenceService.h
 
         # AI Model Interfaces
         Source/Inference/IF0Extractor.h
@@ -552,14 +545,8 @@ target_sources(OpenTune
         Source/DSP/MelSpectrogram.h
         Source/DSP/ChromaKeyDetector.cpp
         Source/DSP/ChromaKeyDetector.h
-        Source/DSP/OnsetDetector.cpp
-        Source/DSP/OnsetDetector.h
-        Source/DSP/HandleNoteMerger.cpp
-        Source/DSP/HandleNoteMerger.h
-        Source/DSP/PhonemeClassifier.cpp
-        Source/DSP/PhonemeClassifier.h
-        Source/DSP/WordSegmenter.cpp
-        Source/DSP/WordSegmenter.h
+        Source/DSP/TimeGridPatchBuilder.cpp
+        Source/DSP/TimeGridPatchBuilder.h
         Source/DSP/ReferenceAutoAlign.cpp
         Source/DSP/ReferenceAutoAlign.h
 
@@ -1176,7 +1163,6 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/TestMain.cpp
         Tests/TestEditorFactoryStub.cpp
         Tests/TimeGridTests.cpp
-        Tests/DspDetectionTests.cpp
         Tests/SoundTouchStretcherTests.cpp
         Tests/TimeStretchCacheTests.cpp
         Tests/MaterializationStoreTimeGridTests.cpp
@@ -1184,10 +1170,10 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/TimeToolHandlerTests.cpp
         Tests/IntegrationPipelineTests.cpp
         Tests/InvariantContractTests.cpp
-        Tests/SileroVadExtractorTests.cpp
         Tests/GameNoteGeneratorTests.cpp
         Tests/VocoderConfigTests.cpp
-        Tests/HandleNoteMergerTests.cpp
+        Tests/TestTimeGridPatchBuilder.cpp
+        Tests/TestReferenceAutoAlign.cpp
         Tests/TestCompositeUndoAction.cpp
         Tests/TestUndoManagerContract.cpp
         Tests/TestAutoRefFailure.cpp

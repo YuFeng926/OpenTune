@@ -82,9 +82,9 @@ last_updated: 2026-05-05
 3. **双阶段渲染**：Stage 1 `RenderCache`(=PitchCache, chunk-wise) +
    Stage 2 `TimeStretchCache`(clip-wide per-matId)，共享 256MB LRU；详见
    `cross-cutting/two-stage-render-pipeline.md`
-4. **检测管线**：`Source/DSP/{OnsetDetector,PhonemeClassifier,WordSegmenter}` +
-   `Source/Inference/SileroVadExtractor`(Phase H scaffolding) 在 F0 提取后自动播种
-   TimeGrid handles
+4. **TimeGrid 权威**：TimeGrid 初始化只保留 identity handles；AUTO Ref 不再由检测管线
+   直接播种 handles，只能通过 `TimeGridPatchBuilder` 将 alignment intent 编译为可验证的
+   editable TimeGrid patch
 5. **Time tool UI**：`ToolId::TimeTool=5`，参数面板第 6 按钮 + 'T' 快捷；与 Note 工具
    家族**互斥**(setCurrentTool 内 §8.4 切换清理)；Phase H 增 Shift 多选 + Alt 取消吸附
    + 组拖动同 Δ

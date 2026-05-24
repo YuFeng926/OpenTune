@@ -291,14 +291,14 @@ private:
             juce::Colour { BlueBreeze::Colors::GraphBgDeep }.withAlpha(0.14f),
             juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.18f),
 
-            juce::Colour { BlueBreeze::Colors::NodeYellow },
-            juce::Colour { 0xFF2DFFA0 }, // correctedF0
-            juce::Colour { 0x302DFFA0 }, // shadowTrack
+            juce::Colour { 0xFFD24A3A }, // originalF0
+            juce::Colour { 0xFF2EC7F8 }, // correctedF0
+            juce::Colour { 0x302EC7F8 }, // shadowTrack
 
-            juce::Colour { BlueBreeze::Colors::AccentBlue },
-            juce::Colour { 0xFF8AC9EF },
-            juce::Colour { 0xFFB9E4FB },
-            juce::Colour { 0xFFA6D9F5 },
+            juce::Colour { 0xFF72D8F7 },
+            juce::Colour { 0xFFB6F0FF },
+            juce::Colour { 0xFF9CEAFF },
+            juce::Colour { 0xFF8CE4FF },
 
             juce::Colour { BlueBreeze::Colors::SourceLight },
             juce::Colour { BlueBreeze::Colors::AccentBlue },
@@ -539,7 +539,7 @@ private:
 
             juce::Colour { Aurora::Colors::NoteBlock }, // noteBlock
             juce::Colour { Aurora::Colors::NoteBlockEdge }, // noteBlockBorder
-            juce::Colour { Aurora::Colors::NeonRed }, // noteBlockSelected
+            juce::Colour { Aurora::Colors::NoteBlockHot }, // noteBlockSelected
             juce::Colour { Aurora::Colors::NoteBlockHot }, // noteBlockHover
 
             juce::Colour { Aurora::Colors::Cyan }, // playhead
@@ -603,8 +603,8 @@ private:
             juce::Colour(0xCFFFFFFF), juce::Colour(0x3C8D8590), juce::Colour(0xFFFF7CBD),
             juce::Colour(0xFF343744), juce::Colour(0xFF7E8391), juce::Colour(0xFFB2B5C1), juce::Colour(0xFFFF7CBD),
             juce::Colour(0xFFE0E0E8), juce::Colour(0x22FFFFFF), juce::Colour(0x14D8D8E0), juce::Colour(0x45C8CAD3),
-            juce::Colour(0xFFF8A818), juce::Colour(0xFFFF5FA8), juce::Colour(0x40FF80BD),
-            juce::Colour(0x45FF9FCC), juce::Colour(0xCCFF77B6), juce::Colour(0x80FFB8D8), juce::Colour(0x66FFC8E4),
+            juce::Colour(0xFFD24A3A), juce::Colour(0xFF2EC7F8), juce::Colour(0x302EC7F8),
+            juce::Colour(0xFF72D8F7), juce::Colour(0xFFB6F0FF), juce::Colour(0xFF9CEAFF), juce::Colour(0xFF8CE4FF),
             juce::Colour(0xFFFF7CBD), juce::Colour(0xFFFF7CBD), juce::Colour(0x66AEB3C0),
             juce::Colour(0xFFFF7CBD), juce::Colour(0xFF7E8391), juce::Colour(0xFFE8E8F0),
             juce::Colour(0xFFFFB030), juce::Colour(0xFF7CDCCC), juce::Colour(0xFFFF4F77),

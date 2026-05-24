@@ -51,15 +51,15 @@ namespace DarkBlueGrey {
         static const juce::uint32 GridLine       = 0xFF2B3643;
 
         // 音高曲线
-        static const juce::uint32 OriginalF0   = 0xFFE53935; // 正红 (Material Red 600)
-        static const juce::uint32 CorrectedF0  = 0xFF2DFFA0; // 高饱和青绿色
-        static const juce::uint32 ShadowTrack  = 0x402DFFA0;
+        static const juce::uint32 OriginalF0   = 0xFFD24A3A; // Piano Roll reference red
+        static const juce::uint32 CorrectedF0  = 0xFF2EC7F8; // Piano Roll reference cyan
+        static const juce::uint32 ShadowTrack  = 0x302EC7F8;
 
         // 音符块（以"边框强调"为主，填充克制）
-        static const juce::uint32 NoteBlock        = 0xFF60A5FA;
-        static const juce::uint32 NoteBlockBorder  = 0xFF3B82F6;
-        static const juce::uint32 NoteBlockSelected = 0xFF93C5FD;
-        static const juce::uint32 NoteBlockHover   = 0xFF93C5FD;
+        static const juce::uint32 NoteBlock        = 0xFF72D8F7;
+        static const juce::uint32 NoteBlockBorder  = 0xFFB6F0FF;
+        static const juce::uint32 NoteBlockSelected = 0xFF9CEAFF;
+        static const juce::uint32 NoteBlockHover   = 0xFF8CE4FF;
 
         // 播放头与时间线
         static const juce::uint32 Playhead       = 0xFFE6EDF5;

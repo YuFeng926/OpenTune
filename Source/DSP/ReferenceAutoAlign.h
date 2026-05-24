@@ -4,6 +4,7 @@
 #include "../Utils/Note.h"
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"
+#include "TimeGridPatchBuilder.h"
 
 #include <cstdint>
 #include <memory>
@@ -33,7 +34,6 @@ struct ReferenceAlignmentRequest {
     AlignmentFeatures referenceFeatures;
     std::vector<Note> targetNotesBefore;
     std::vector<CorrectedSegment> targetSegmentsBefore;
-    std::shared_ptr<const TimeGridSnapshot> targetTimeGridBefore;
     double overlapStartTimelineSeconds{0.0};
     double overlapEndTimelineSeconds{0.0};
 };
@@ -47,7 +47,6 @@ struct AlignmentPatch {
         ReferenceAnalysisNotReady,
         InsufficientFeatures,
         InsufficientNotes,
-        InsufficientAnchors,
         TimeGridInvalid,
         NoMutation
     };
@@ -58,9 +57,9 @@ struct AlignmentPatch {
     int affectedEndFrame{0};
     std::vector<Note> notesAfter;
     std::vector<CorrectedSegment> correctedSegmentsAfter;
-    std::shared_ptr<const TimeGridSnapshot> timeGridAfter;
+    std::vector<TimeGridIntent> timingIntents;
     bool pitchChanged{false};
-    bool timeGridChanged{false};
+    bool timingChanged{false};
     ErrorCode error{ErrorCode::None};
     juce::String diagnostics;
 };

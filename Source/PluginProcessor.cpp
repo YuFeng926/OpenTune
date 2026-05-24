@@ -14,12 +14,9 @@
 #include "Inference/GameNoteGenerator.h"      // add-game-note-generator: GAME backend
 #include "Utils/LegacyNoteGenerator.h"        // add-game-note-generator: Legacy fallback
 #include "Inference/SoundTouchStretcher.h"   // §7 Phase D — Stage 2 worker (WSOLA, replaces RB)
-#include "DSP/OnsetDetector.h"                // §4.9 Phase G — auto-seed TimeGrid
-#include "DSP/PhonemeClassifier.h"            // §4.9 Phase G
-#include "DSP/WordSegmenter.h"                // §4.9 Phase G
-#include "DSP/HandleNoteMerger.h"             // add-note-confirmed-handles §3.2
 #include "DSP/BasicReferenceFeatureBuilder.h"
 #include "DSP/ReferenceAutoAlign.h"
+#include "DSP/TimeGridPatchBuilder.h"
 #include <onnxruntime_cxx_api.h>
 #include "Utils/AccelerationDetector.h"
 #include "Utils/TimeCoordinate.h"
@@ -604,8 +601,7 @@ constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
 constexpr int kProcessorStateVersion = 7;
 // vocal-time-stretch §3.8: bumped 5 → 6 to add per-materialization TimeGrid section.
 // v5 projects load with auto-seeded identity TimeGrid (output==source).
-// add-note-confirmed-handles: bumped 6 → 7 to add per-handle confidence field +
-// HandleKind::NoteOnly value. v6 reads default confidence=Default for all handles.
+// Processor state v7 adds per-handle confidence. v6 reads default confidence=Default.
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
 constexpr int kStandaloneSettingsVersion = 1;
 
@@ -943,7 +939,7 @@ void OpenTuneAudioProcessor::analysisFailed(uint64_t materializationId, const ju
 
 // ============================================================================
 // vocal-time-stretch §3.8 — TimeGrid serialization (state version ≥ 6)
-// add-note-confirmed-handles §1 — confidence field added at state version ≥ 7
+// State version 7 adds the per-handle confidence field.
 //
 // Layout per materialization (v6+ writes; v7+ writes confidence):
 //   int32  handleCount
@@ -1520,144 +1516,6 @@ bool OpenTuneAudioProcessor::isNoteGenInFlightForMaterialization(uint64_t materi
     if (materializationId == 0) return false;
     std::lock_guard<std::mutex> lk(noteGenInFlightMutex_);
     return noteGenInFlightMatIds_.count(materializationId) > 0;
-}
-
-// add-note-confirmed-handles §3.2: Per-materialization barrier merger.
-// WordSegmenter completion delivers handles; GameNoteGenerator completion delivers notes.
-// First call creates merger; second arrival fires merge once; merger then erased.
-// 顺序无关 (per spec: 哪个先完成都拿来用,不要求顺序).
-void OpenTuneAudioProcessor::deliverHandlesToMerger(uint64_t materializationId,
-                                                    std::vector<TimeHandle> handles)
-{
-    if (materializationId == 0) return;
-    HandleNoteMerger* merger = nullptr;
-    {
-        std::lock_guard<std::mutex> lk(handleNoteMergersMutex_);
-        auto& slot = handleNoteMergers_[materializationId];
-        if (!slot) {
-            slot = std::make_unique<HandleNoteMerger>();
-            slot->onMergeComplete = [this, materializationId](std::vector<TimeHandle> merged) {
-                auto snap = TimeGridSnapshot::makeFromHandles(std::move(merged), /*revision=*/3);
-                if (!snap) {
-                    AppLogger::warn("[HandleNoteMerger] merged snapshot validation failed; skip publish for matId="
-                                    + juce::String(static_cast<juce::int64>(materializationId)));
-                    return;
-                }
-                if (materializationStore_) {
-                    materializationStore_->setTimeGrid(materializationId, snap);
-                    AppLogger::log("[HandleNoteMerger] merge complete: matId="
-                                   + juce::String(static_cast<juce::int64>(materializationId))
-                                   + " handles=" + juce::String(static_cast<int>(snap->handles().size())));
-                }
-                // Erase merger after one-shot fire (zombie protection per spec).
-                std::lock_guard<std::mutex> lk(handleNoteMergersMutex_);
-                handleNoteMergers_.erase(materializationId);
-            };
-        }
-        merger = slot.get();
-    }
-    merger->deliverHandles(std::move(handles));
-}
-
-// add-note-confirmed-handles §4.2: Manual re-seed handler.
-// 入参验证 + 收集 inputs + 调 HandleNoteMerger::reSeed + publish。
-bool OpenTuneAudioProcessor::canReSeedTimeGridFromNotesById(uint64_t materializationId) const
-{
-    if (materializationId == 0) return false;
-    if (materializationStore_ == nullptr) return false;
-    std::shared_ptr<const TimeGridSnapshot> snap;
-    if (!materializationStore_->getTimeGrid(materializationId, snap) || !snap) return false;
-    const auto notes = materializationStore_->getNotes(materializationId);
-    return !notes.empty();
-}
-
-bool OpenTuneAudioProcessor::reSeedTimeGridFromNotesById(uint64_t materializationId)
-{
-    if (materializationId == 0 || materializationStore_ == nullptr) return false;
-    std::shared_ptr<const TimeGridSnapshot> current;
-    if (!materializationStore_->getTimeGrid(materializationId, current) || !current) {
-        AppLogger::warn("[reSeed] no current TimeGrid for matId=" + juce::String(static_cast<juce::int64>(materializationId)));
-        return false;
-    }
-    const auto notes = materializationStore_->getNotes(materializationId);
-    if (notes.empty()) {
-        AppLogger::warn("[reSeed] no notes available; legacy mode or GameNoteGenerator disabled");
-        return false;
-    }
-    // 收集 handlesPre: 把当前 snapshot 中所有非 UserAdded、非 NoteOnly 的 handle 视为 WordSegmenter 输出。
-    // (实际的 WordSegmenter 重运行不在 manual re-seed 范围内 — re-seed 仅基于已有 auto handles 集合 + 新 notes。)
-    std::vector<TimeHandle> handlesPre;
-    for (const auto& h : current->handles()) {
-        if (h.kind == HandleKind::UserAdded) continue;
-        if (h.kind == HandleKind::NoteOnly) continue;
-        handlesPre.push_back(h);
-    }
-    // Count handle kinds before for logging (sanity that re-seed actually ran).
-    int beforeUserAdded = 0, beforeNoteOnly = 0, beforeOther = 0;
-    for (const auto& h : current->handles()) {
-        if (h.kind == HandleKind::UserAdded) ++beforeUserAdded;
-        else if (h.kind == HandleKind::NoteOnly) ++beforeNoteOnly;
-        else ++beforeOther;
-    }
-    auto merged = HandleNoteMerger::reSeed(*current, handlesPre, notes);
-    auto newSnap = TimeGridSnapshot::makeFromHandles(std::move(merged), /*revision=*/current->revision() + 1);
-    if (!newSnap) {
-        AppLogger::warn("[reSeed] merged snapshot validation failed");
-        return false;
-    }
-    int afterUserAdded = 0, afterNoteOnly = 0, afterOther = 0, afterHigh = 0;
-    for (const auto& h : newSnap->handles()) {
-        if (h.kind == HandleKind::UserAdded) ++afterUserAdded;
-        else if (h.kind == HandleKind::NoteOnly) ++afterNoteOnly;
-        else ++afterOther;
-        if (h.confidence == Confidence::High) ++afterHigh;
-    }
-    materializationStore_->setTimeGrid(materializationId, newSnap);
-    // Stage 2 needs to re-render audio with new TimeGrid (KeyFrameMap may have changed
-    // due to NoteOnly handles that affect interpolation).
-    requestStage2Rebuild(materializationId);
-    AppLogger::info("[reSeed] matId="
-                    + juce::String(static_cast<juce::int64>(materializationId))
-                    + " before(user=" + juce::String(beforeUserAdded)
-                    + " noteOnly=" + juce::String(beforeNoteOnly)
-                    + " other=" + juce::String(beforeOther)
-                    + ") after(user=" + juce::String(afterUserAdded)
-                    + " noteOnly=" + juce::String(afterNoteOnly)
-                    + " other=" + juce::String(afterOther)
-                    + " high=" + juce::String(afterHigh) + ")");
-    return true;
-}
-
-void OpenTuneAudioProcessor::deliverNotesToMerger(uint64_t materializationId,
-                                                   const std::vector<Note>& notes)
-{
-    if (materializationId == 0) return;
-    HandleNoteMerger* merger = nullptr;
-    {
-        std::lock_guard<std::mutex> lk(handleNoteMergersMutex_);
-        auto it = handleNoteMergers_.find(materializationId);
-        if (it == handleNoteMergers_.end()) {
-            // Notes arrived before handles; create merger and cache notes.
-            auto& slot = handleNoteMergers_[materializationId];
-            slot = std::make_unique<HandleNoteMerger>();
-            slot->onMergeComplete = [this, materializationId](std::vector<TimeHandle> merged) {
-                auto snap = TimeGridSnapshot::makeFromHandles(std::move(merged), /*revision=*/3);
-                if (!snap) return;
-                if (materializationStore_) {
-                    materializationStore_->setTimeGrid(materializationId, snap);
-                    AppLogger::log("[HandleNoteMerger] merge complete: matId="
-                                   + juce::String(static_cast<juce::int64>(materializationId))
-                                   + " handles=" + juce::String(static_cast<int>(snap->handles().size())));
-                }
-                std::lock_guard<std::mutex> lk(handleNoteMergersMutex_);
-                handleNoteMergers_.erase(materializationId);
-            };
-            merger = slot.get();
-        } else {
-            merger = it->second.get();
-        }
-    }
-    merger->deliverNotes(notes);
 }
 
 bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
@@ -2698,7 +2556,6 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
 
     // Full state payload (VST3)
     // vocal-time-stretch §3.8: state v6 adds TimeGrid section per materialization.
-    // add-note-confirmed-handles §1: state v7 adds per-handle confidence field + NoteOnly kind.
     // Accept v5 (no TimeGrid), v6 (TimeGrid w/o confidence), v7 (TimeGrid w/ confidence).
     if (magic != static_cast<int>(kProcessorStateMagic)
         || (version != kProcessorStateVersion && version != 6 && version != 5)) {
@@ -2783,9 +2640,7 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
             return;
         }
 
-        // §3.8 (state v6+): read TimeGrid handles. v5 projects skip this and
-        // let createMaterialization auto-seed an identity TimeGrid.
-        // add-note-confirmed-handles: v7+ also reads per-handle confidence byte.
+        // §3.8 (state v6+): read TimeGrid handles. v7+ also reads per-handle confidence.
         std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
         if (stateHasTimeGrid) {
             std::vector<TimeHandle> handles;
@@ -4128,257 +3983,6 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
                 }
             }
 
-            // ============================================================
-            // ⚡️ vocal-time-stretch §4.9 — auto-seed TimeGrid handles.
-            //
-            // Phase G original algorithm seeded one handle per WordSegmenter
-            // tier-1 PhonemeClass transition + one per OnsetDetector tier-2
-            // event.  User testing 2026-05-12 (Journey 1) reported 700+ handles
-            // on a 5-min vocal — over-segmenting sustained notes (V/U flips
-            // inside a held vowel each emitted a handle).
-            //
-            // Current algorithm (rewrite, see Stage 3 below):
-            //   - Use ONLY OnsetDetector strong-onset peaks (α=2.5, 300 ms
-            //     min internal distance) as seed candidates
-            //   - Filter to onsets in voiced/sibilant regions (skip silence)
-            //   - Tag each with PhonemeClass at frame for UI tinting
-            //   - Apply 500 ms minimum spacing as final density limiter
-            //
-            // PhonemeClassifier still runs (its output drives kind tagging
-            // + Time view tinting + future Sib/Sil-aware features).
-            //
-            // V/U fusion uses F0 as voicing indicator (uv_prob = (f0 > 0 ? 0 : 1))
-            // since Silero VAD downstream of this seeding pass is best-effort.
-            //
-            // Only fires when the existing TimeGrid is identity (i.e., user
-            // hasn't manually placed handles yet).  Subsequent F0 re-extractions
-            // (after audio replace) preserve user-placed handles.
-            // ============================================================
-            if (auto existingGrid = processor->getMaterializationTimeGridById(result.materializationId);
-                existingGrid != nullptr && existingGrid->isIdentity()
-                && existingGrid->handles().size() == 2 /* only ClipStart+ClipEnd */) {
-                auto audioBuffer = processor->getMaterializationAudioBufferById(result.materializationId);
-                if (audioBuffer != nullptr && audioBuffer->getNumSamples() > 0
-                    && audioBuffer->getNumChannels() > 0) {
-                    const int numSamples = audioBuffer->getNumSamples();
-                    const float* mono = audioBuffer->getReadPointer(0);
-                    constexpr int kSr = static_cast<int>(TimeCoordinate::kRenderSampleRate);
-
-                    // Stage 1: detect onsets — Journey-1 fix 2026-05-12 raises
-                    // adaptive-threshold α from 1.5 → 2.5 (only strong musical
-                    // onsets pass) and minDistanceFrames from 3 → 30 (≥300 ms
-                    // between onsets, syllable-rate ceiling).  PhonemeClass
-                    // tier-1 transitions are no longer used as primary seed
-                    // (too noisy on V/U flips inside sustained vowels).
-                    OnsetDetector onsetDet;
-                    OnsetDetectorConfig oCfg;
-                    oCfg.sampleRate = kSr;
-                    oCfg.nFft = 2048;
-                    oCfg.hopLength = 441;       // 100 fps grid alignment
-                    oCfg.alpha = 2.5f;          // raised: only confident onsets
-                    oCfg.minDistanceFrames = 30; // ≈ 300 ms between onsets
-                    onsetDet.configure(oCfg);
-                    auto onsetResult = onsetDet.detect(mono, static_cast<size_t>(numSamples));
-
-                    // Stage 2: classify phonemes (synthesize uvProb from F0)
-                    PhonemeClassifier phonemeClassifier;
-                    PhonemeClassifierConfig pCfg;
-                    pCfg.sampleRate = kSr;
-                    pCfg.frameRateHz = 100;
-                    phonemeClassifier.configure(pCfg);
-
-                    const int n100fps = static_cast<int>(
-                        std::ceil(static_cast<double>(numSamples) / (kSr / 100)));
-                    std::vector<float> uvProb(static_cast<size_t>(n100fps), 1.0f);
-                    {
-                        // Synthesize uvProb from F0:
-                        //   uv_prob[t] = 0 if f0[t] > 0 (voiced), else 1 (unvoiced).
-                        // F0 is at result.f0SampleRate / hopSize fps; we resample
-                        // to 100 fps via nearest-neighbor.
-                        const double f0FrameRate =
-                            static_cast<double>(result.f0SampleRate)
-                            / static_cast<double>(juce::jmax(1, result.hopSize));
-                        const double srcToDstRatio = f0FrameRate / 100.0;
-                        for (int t = 0; t < n100fps; ++t) {
-                            const int f0Idx = static_cast<int>(std::round(t * srcToDstRatio));
-                            if (f0Idx >= 0 && f0Idx < static_cast<int>(result.f0.size())
-                                && result.f0[static_cast<size_t>(f0Idx)] > 0.0f) {
-                                uvProb[static_cast<size_t>(t)] = 0.0f;   // voiced
-                            }
-                        }
-                    }
-
-                    auto classifyResult = phonemeClassifier.classify(
-                        mono, static_cast<size_t>(numSamples),
-                        uvProb.data(), uvProb.size(),
-                        nullptr, 0);   // no Silero VAD — degraded V/U fusion
-
-                    // Stage 3: build seed handles (Journey-1 rewrite 2026-05-12).
-                    //
-                    // Old algorithm used WordSegmenter tier-1 PhonemeClass
-                    // transitions as primary seed — produced 700+ handles on
-                    // a 5 min vocal because every V/U flip inside a sustained
-                    // vowel emitted a handle.  User feedback: handles
-                    // over-segmented notes and accuracy was poor.
-                    //
-                    // New algorithm:
-                    //   1. Use ONLY OnsetDetector strong-onset peaks (raised
-                    //      α=2.5 + 300 ms min distance, see Stage 1 above) as
-                    //      seed candidates — these are musically meaningful
-                    //      attacks (note onsets, syllable starts).
-                    //   2. Skip onsets whose surrounding 100ms window is
-                    //      classified as Silence (no point seeding handles in
-                    //      silent gaps; user can still add manually).
-                    //   3. Tag each onset with the dominant PhonemeClass at
-                    //      its frame for UI tinting (HandleKind from class).
-                    //   4. Enforce 500 ms minimum spacing as final filter
-                    //      (typical singing syllable cadence).
-                    //
-                    // PhonemeClassifier output (`classifyResult.classes`)
-                    // remains useful for tagging and class-aware Time view
-                    // tinting, but does NOT generate handles directly.
-                    struct SeedResult {
-                        std::vector<int> seedHandleFrames;
-                        std::vector<HandleKind> seedHandleKinds;
-                    } segResult;
-
-                    constexpr int kAutoSeedMinSpacingMs    = 500;   // syllable cadence ceiling
-                    constexpr int kAutoSeedMinSpacingFrames = (kAutoSeedMinSpacingMs * 100) / 1000;
-                    const int classCount = static_cast<int>(classifyResult.classes.size());
-
-                    auto classAtFrame = [&](int f) -> PhonemeClass {
-                        if (f < 0 || f >= classCount) return PhonemeClass::Silence;
-                        return classifyResult.classes[static_cast<size_t>(f)];
-                    };
-                    auto isFrameInVoicedRegion = [&](int f) {
-                        // ±50 ms window — accept if any frame is Voiced or Sibilant.
-                        for (int dt = -5; dt <= 5; ++dt) {
-                            const auto c = classAtFrame(f + dt);
-                            if (c == PhonemeClass::Voiced || c == PhonemeClass::Sibilant) return true;
-                        }
-                        return false;
-                    };
-                    auto kindFromClass = [](PhonemeClass c) {
-                        switch (c) {
-                            case PhonemeClass::Voiced:   return HandleKind::OnsetVoiced;
-                            case PhonemeClass::Sibilant: return HandleKind::OnsetSibilant;
-                            case PhonemeClass::Silence:  return HandleKind::OnsetSilence;
-                        }
-                        return HandleKind::InternalOnset;
-                    };
-
-                    int rawOnsets = 0;
-                    int silenceFiltered = 0;
-                    int spacingFiltered = 0;
-                    int lastAcceptedFrame = -kAutoSeedMinSpacingFrames;
-                    for (int frame : onsetResult.onsetFrames100fps) {
-                        ++rawOnsets;
-                        if (!isFrameInVoicedRegion(frame)) {
-                            ++silenceFiltered;
-                            continue;
-                        }
-                        if (frame - lastAcceptedFrame < kAutoSeedMinSpacingFrames) {
-                            ++spacingFiltered;
-                            continue;
-                        }
-                        segResult.seedHandleFrames.push_back(frame);
-                        segResult.seedHandleKinds.push_back(kindFromClass(classAtFrame(frame)));
-                        lastAcceptedFrame = frame;
-                    }
-                    AppLogger::log("AutoSeedTimeGrid: rawOnsets=" + juce::String(rawOnsets)
-                                   + " silenceFiltered=" + juce::String(silenceFiltered)
-                                   + " spacingFiltered=" + juce::String(spacingFiltered)
-                                   + " accepted=" + juce::String(segResult.seedHandleFrames.size())
-                                   + " (min-spacing " + juce::String(kAutoSeedMinSpacingMs) + "ms)");
-
-                    // Stage 4: build new TimeGrid with seeded handles.
-                    // Each handle is identity (source_seconds == output_seconds);
-                    // user's drag operations move output_seconds.
-                    if (!segResult.seedHandleFrames.empty()) {
-                        const double durationSec = static_cast<double>(numSamples)
-                                                  / TimeCoordinate::kRenderSampleRate;
-                        std::vector<TimeHandle> handles;
-                        handles.reserve(segResult.seedHandleFrames.size() + 2);
-
-                        TimeHandle clipStart;
-                        clipStart.id = 1;
-                        clipStart.source_seconds = 0.0;
-                        clipStart.output_seconds = 0.0;
-                        clipStart.kind = HandleKind::ClipStart;
-                        clipStart.locked = true;
-                        handles.push_back(clipStart);
-
-                        uint64_t nextId = 2;
-                        for (size_t i = 0; i < segResult.seedHandleFrames.size(); ++i) {
-                            const int frame = segResult.seedHandleFrames[i];
-                            const double t = static_cast<double>(frame) / 100.0;
-                            // Skip handles that fall on or past the clip end
-                            // (would violate strict monotonicity with ClipEnd).
-                            if (t <= 0.001 || t >= durationSec - 0.001) continue;
-
-                            TimeHandle h;
-                            h.id = nextId++;
-                            h.source_seconds = t;
-                            h.output_seconds = t;   // identity — user drags later
-                            h.kind = segResult.seedHandleKinds[i];
-                            h.locked = false;
-                            handles.push_back(h);
-                        }
-
-                        TimeHandle clipEnd;
-                        clipEnd.id = nextId++;
-                        clipEnd.source_seconds = durationSec;
-                        clipEnd.output_seconds = durationSec;
-                        clipEnd.kind = HandleKind::ClipEnd;
-                        clipEnd.locked = true;
-                        handles.push_back(clipEnd);
-
-                        // Enforce 30ms minimum spacing between adjacent
-                        // handles by dropping any too-close interior handle.
-                        if (handles.size() > 2) {
-                            std::vector<TimeHandle> deduped;
-                            deduped.reserve(handles.size());
-                            deduped.push_back(handles.front());
-                            for (size_t i = 1; i < handles.size(); ++i) {
-                                // 30ms minimum spacing = 3 frames @ 100 fps F0 rate.
-                                // Frame-domain comparison avoids IEEE 754 rounding issues with 0.03.
-                                const int prevF = static_cast<int>(std::round(deduped.back().source_seconds * 100.0));
-                                const int currF = static_cast<int>(std::round(handles[i].source_seconds * 100.0));
-                                if (currF - prevF >= 3) {
-                                    deduped.push_back(handles[i]);
-                                }
-                            }
-                            // Always keep ClipEnd — swap if it got dropped
-                            if (deduped.back().kind != HandleKind::ClipEnd) {
-                                deduped.back() = clipEnd;
-                            }
-                            handles = std::move(deduped);
-                        }
-
-                        auto seededGrid = TimeGridSnapshot::makeFromHandles(
-                            std::move(handles), /*revision=*/2);
-                        if (seededGrid != nullptr) {
-                            // Publish via store directly (skip processor's
-                            // setMaterializationTimeGridById which would also
-                            // requestStage2Rebuild — unnecessary because
-                            // seededGrid is identity).
-                            processor->materializationStore_->setTimeGrid(
-                                result.materializationId, seededGrid);
-                            AppLogger::log("AutoSeedTimeGrid: matId="
-                                + juce::String(static_cast<juce::int64>(result.materializationId))
-                                + " handles=" + juce::String(static_cast<int>(seededGrid->handles().size()))
-                                + " seededFromOnsets=" + juce::String(static_cast<int>(segResult.seedHandleFrames.size()))
-                                + " rawOnsetFrames=" + juce::String(static_cast<int>(onsetResult.onsetFrames100fps.size())));
-                            // add-note-confirmed-handles §3.2: deliver handles to merger barrier;
-                            // notes arriving later from GameNoteGenerator will trigger merge publish.
-                            processor->deliverHandlesToMerger(result.materializationId, seededGrid->handles());
-                        } else {
-                            AppLogger::warn("AutoSeedTimeGrid: validation failed; keeping identity grid");
-                        }
-                    }
-                }
-            }
-
             processor->setMaterializationOriginalF0StateById(result.materializationId, OriginalF0State::Ready);
 
             // Auto-generate notes via the active backend (GAME by default,
@@ -4455,9 +4059,6 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
                 AppLogger::info("[NoteGen] committed " + juce::String(static_cast<int>(notes.size()))
                                 + " notes for materializationId="
                                 + juce::String(static_cast<juce::int64>(materializationId)));
-                // add-note-confirmed-handles §3.2: deliver notes to merger barrier;
-                // if WordSegmenter handles already delivered, this fires merge publish.
-                processor->deliverNotesToMerger(materializationId, notes);
             });
         });
 
@@ -4805,17 +4406,11 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     }
 
     const auto oldSegments = copyCorrectedSegments(oldCurve);
-    std::shared_ptr<const TimeGridSnapshot> oldTimeGrid = targetSnapshot.timeGrid;
-    if (oldTimeGrid == nullptr) {
-        oldTimeGrid = TimeGridSnapshot::makeIdentity(targetPlacement.durationSeconds);
-    }
-    auto referenceTimeGrid = referenceSnapshot.timeGrid;
-    if (referenceTimeGrid == nullptr) {
-        referenceTimeGrid = TimeGridSnapshot::makeIdentity(referencePlacement.durationSeconds);
-    }
+    const auto oldTimeGrid = targetSnapshot.timeGrid;
+    const auto referenceTimeGrid = referenceSnapshot.timeGrid;
     if (oldTimeGrid == nullptr || referenceTimeGrid == nullptr) {
         result.status = ReferenceAlignmentResult::Status::InvalidTimeGrid;
-        result.message = "AUTO Ref could not build identity TimeGrid for clip duration";
+        result.message = "AUTO Ref requires target and reference TimeGrid";
         return result;
     }
 
@@ -4834,7 +4429,6 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     request.referenceFeatures = referenceFeatures;
     request.targetNotesBefore = oldNotes;
     request.targetSegmentsBefore = oldSegments;
-    request.targetTimeGridBefore = oldTimeGrid;
     request.overlapStartTimelineSeconds = overlapStart;
     request.overlapEndTimelineSeconds = overlapEnd;
 
@@ -4852,7 +4446,6 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
                 break;
             case AlignmentPatch::ErrorCode::InsufficientFeatures:
             case AlignmentPatch::ErrorCode::InsufficientNotes:
-            case AlignmentPatch::ErrorCode::InsufficientAnchors:
                 result.status = ReferenceAlignmentResult::Status::InsufficientFeatures;
                 break;
             case AlignmentPatch::ErrorCode::TimeGridInvalid:
@@ -4873,8 +4466,29 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         return result;
     }
 
+    auto timeGridAfter = oldTimeGrid;
+    if (patch.timingChanged) {
+        TimeGridPatchRequest timeRequest;
+        timeRequest.before = oldTimeGrid;
+        timeRequest.affectedSourceStartSeconds =
+            static_cast<double>(patch.affectedStartFrame) / TimeGridSnapshot::kSourceSpacingFrameRate;
+        timeRequest.affectedSourceEndSeconds =
+            static_cast<double>(patch.affectedEndFrame) / TimeGridSnapshot::kSourceSpacingFrameRate;
+        timeRequest.intents = patch.timingIntents;
+
+        const auto timeResult = TimeGridPatchBuilder::build(timeRequest);
+        if (!timeResult.success || timeResult.after == nullptr) {
+            result.status = ReferenceAlignmentResult::Status::InvalidTimeGrid;
+            result.message = timeResult.diagnostic.isEmpty()
+                ? juce::String("AUTO Ref produced an invalid TimeGrid patch")
+                : timeResult.diagnostic;
+            return result;
+        }
+        timeGridAfter = timeResult.after;
+    }
+
     auto newCurve = clonePitchCurveWithCorrectedSegments(oldCurve, patch.correctedSegmentsAfter);
-    if (newCurve == nullptr || patch.timeGridAfter == nullptr) {
+    if (newCurve == nullptr || timeGridAfter == nullptr) {
         result.status = ReferenceAlignmentResult::Status::CommitFailed;
         result.message = "AUTO Ref produced an incomplete patch";
         return result;
@@ -4884,7 +4498,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     if (!materializationStore_->commitReferenceAlignmentPatch(targetPlacement.materializationId,
                                                              normalizedNotes,
                                                              std::move(newCurve),
-                                                             patch.timeGridAfter)) {
+                                                             timeGridAfter)) {
         result.status = ReferenceAlignmentResult::Status::CommitFailed;
         result.message = "AUTO Ref could not commit patch";
         return result;
@@ -4903,13 +4517,13 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
             patch.affectedStartFrame,
             patch.affectedEndFrame));
     }
-    if (patch.timeGridChanged) {
+    if (patch.timingChanged) {
         composite->addAction(std::make_unique<TimeGridEditAction>(
             *this,
             targetPlacement.materializationId,
             "AUTO (Ref) Time",
             oldTimeGrid,
-            patch.timeGridAfter,
+            timeGridAfter,
             patch.affectedStartFrame,
             patch.affectedEndFrame));
     }
@@ -4917,10 +4531,12 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         undoManager_.addAction(std::move(composite));
     }
 
-    const double editStartSec = static_cast<double>(patch.affectedStartFrame) / 100.0;
-    const double editEndSec = static_cast<double>(patch.affectedEndFrame) / 100.0;
+    const double editStartSec = static_cast<double>(patch.affectedStartFrame)
+                              / TimeGridSnapshot::kSourceSpacingFrameRate;
+    const double editEndSec = static_cast<double>(patch.affectedEndFrame)
+                            / TimeGridSnapshot::kSourceSpacingFrameRate;
     enqueueMaterializationPartialRenderById(targetPlacement.materializationId, editStartSec, editEndSec);
-    if (patch.timeGridChanged) {
+    if (patch.timingChanged) {
         requestStage2Rebuild(targetPlacement.materializationId);
     }
 

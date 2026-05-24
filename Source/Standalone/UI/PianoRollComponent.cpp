@@ -156,15 +156,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
         menu.showMenuAsync(juce::PopupMenu::Options());
     };
-    // add-note-confirmed-handles §4.2: Re-seed handles from notes (Time tool 空白右键)
-    toolCtx.canReSeedTimeGridFromNotes = [this]() -> bool {
-        if (processor_ == nullptr || editedMaterializationId_ == 0) return false;
-        return processor_->canReSeedTimeGridFromNotesById(editedMaterializationId_);
-    };
-    toolCtx.reSeedTimeGridFromNotes = [this]() {
-        if (processor_ == nullptr || editedMaterializationId_ == 0) return;
-        processor_->reSeedTimeGridFromNotesById(editedMaterializationId_);
-    };
     toolCtx.notifyAutoTuneRequested = [this]() { listeners_.call([](Listener& l) { l.autoTuneRequested(); }); };
     toolCtx.notifyPlayPauseToggle = [this]() { listeners_.call([](Listener& l) { l.playPauseToggleRequested(); }); };
     toolCtx.notifyStopPlayback = [this]() { listeners_.call([](Listener& l) { l.stopPlaybackRequested(); }); };
@@ -1019,13 +1010,13 @@ void PianoRollComponent::drawSelectedOriginalF0Curve(juce::Graphics& g, const st
 
     if (!selectedPath.isEmpty()) {
         if (UIColors::currentThemeId() == ThemeId::Aurora || UIColors::currentThemeId() == ThemeId::Overdose) {
-            g.setColour(UIColors::originalF0.withAlpha(0.16f));
-            juce::PathStrokeType glowStrokeType(5.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+            g.setColour(UIColors::originalF0.withAlpha(0.055f));
+            juce::PathStrokeType glowStrokeType(3.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
             g.strokePath(selectedPath, glowStrokeType);
         }
 
-        g.setColour(UIColors::originalF0.withAlpha(0.85f));
-        juce::PathStrokeType strokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        g.setColour(UIColors::originalF0.withAlpha(0.42f));
+        juce::PathStrokeType strokeType(1.45f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
         g.strokePath(selectedPath, strokeType);
     }
 }
@@ -1263,19 +1254,17 @@ void PianoRollComponent::paint(juce::Graphics& g) {
                 if (showOriginalF0_) {
                     const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
                     if (!originalF0.empty())
-                        renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, (UIColors::isAuroraTheme() || UIColors::isOverdoseTheme()) ? 0.84f : 0.55f, true, ctx, item);
+                        // OriginalF0 stays underneath CorrectedF0 and uses a softer base opacity.
+                        renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, 0.62f, true, ctx, item);
+
+                    if (item.active && !originalF0.empty())
+                        drawSelectedOriginalF0Curve(g, originalF0);
                 }
 
                 if (showCorrectedF0_ && !item.correctedF0.empty())
-                    renderer_->drawF0Curve(g, item.correctedF0, UIColors::correctedF0, 1.0f, false, ctx, item, nullptr);
+                    renderer_->drawF0Curve(g, item.correctedF0, UIColors::correctedF0, 0.94f, false, ctx, item, nullptr);
 
                 if (item.active) {
-                    if (showOriginalF0_) {
-                        const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
-                        if (!originalF0.empty())
-                            drawSelectedOriginalF0Curve(g, originalF0);
-                    }
-
                     drawNoteDragCurvePreview(g);
                     drawHandDrawPreview(g);
                     drawLineAnchorPreview(g);

@@ -5,7 +5,7 @@
  *   - TimeHandle 数据结构与字段语义
  *   - TimeGridSnapshot 不变量
  *   - TimeWarpCurve piecewise-linear τ / τ⁻¹ 查询
- *   - (handle drag physical-bound test deferred to Phase B; UI layer enforces 30ms)
+ *   - TimeGrid-owned source/output spacing contracts
  *
  * Test functions follow the existing logPass/logFail pattern in TestMain.cpp.
  * Aggregator: runTimeGridSuite() — registered in TestMain.cpp's suite array.
@@ -198,6 +198,76 @@ void runTimeGridValidateRejectsLockedNonEndpointTest()
 // ============================================================================
 // τ forward / inverse — anchor exactness + linear interp + identity roundtrip
 // ============================================================================
+
+void runTimeGridExposesMinimumSourceSpacingContractTest()
+{
+    constexpr const char* testName = "TimeGridRules_ExposesMinimumSourceSpacingContract";
+
+    if (TimeGridSnapshot::kSourceSpacingFrameRate != 100.0) {
+        logFail(testName, "source spacing frame rate must be 100 fps");
+        return;
+    }
+    if (TimeGridSnapshot::kMinSourceSpacingFrames != 15) {
+        logFail(testName, "minimum source spacing must be 15 analysis frames");
+        return;
+    }
+    if (std::abs(TimeGridSnapshot::kMinSourceSpacingSeconds - 0.15) > 1.0e-12) {
+        logFail(testName, "minimum source spacing seconds mismatch");
+        return;
+    }
+    if (TimeGridSnapshot::hasMinimumSourceSpacing(1.0, 1.14)) {
+        logFail(testName, "14 frames must be below minimum source spacing");
+        return;
+    }
+    if (!TimeGridSnapshot::hasMinimumSourceSpacing(1.0, 1.15)) {
+        logFail(testName, "15 frames must satisfy minimum source spacing");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimeGridValidateRejectsSourceSpacingBelowFifteenFramesTest()
+{
+    constexpr const char* testName = "TimeGridRules_RejectsSourceSpacingBelowFifteenFrames";
+
+    std::vector<TimeHandle> bad = {
+        makeHandle(1, 0.0,  0.0,  HandleKind::ClipStart, true),
+        makeHandle(2, 0.14, 0.14, HandleKind::OnsetVoiced, false),
+        makeHandle(3, 1.0,  1.0,  HandleKind::ClipEnd, true),
+    };
+
+    juce::String err;
+    if (TimeGridSnapshot::validate(bad, err)) {
+        logFail(testName, "validate should reject source spacing below 15 frames");
+        return;
+    }
+    if (!err.contains("source_seconds spacing")) {
+        logFail(testName, "validate should report source spacing failure");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimeGridValidateAcceptsSourceSpacingAtFifteenFramesTest()
+{
+    constexpr const char* testName = "TimeGridRules_AcceptsSourceSpacingAtFifteenFrames";
+
+    std::vector<TimeHandle> good = {
+        makeHandle(1, 0.0,  0.0,  HandleKind::ClipStart, true),
+        makeHandle(2, 0.15, 0.15, HandleKind::OnsetVoiced, false),
+        makeHandle(3, 1.0,  1.0,  HandleKind::ClipEnd, true),
+    };
+
+    juce::String err;
+    if (!TimeGridSnapshot::validate(good, err)) {
+        logFail(testName, ("validate should accept source spacing at 15 frames: " + err).toStdString().c_str());
+        return;
+    }
+
+    logPass(testName);
+}
 
 void runTimeGridTauAnchorBitExactTest()
 {
@@ -475,6 +545,9 @@ void runTimeGridSuite()
     runTimeGridValidateRejectsUnlockedClipStartTest();
     runTimeGridValidateRejectsTotalDurationViolationTest();
     runTimeGridValidateRejectsLockedNonEndpointTest();
+    runTimeGridExposesMinimumSourceSpacingContractTest();
+    runTimeGridValidateRejectsSourceSpacingBelowFifteenFramesTest();
+    runTimeGridValidateAcceptsSourceSpacingAtFifteenFramesTest();
     runTimeGridTauAnchorBitExactTest();
     runTimeGridTauLinearInterpTest();
     runTimeGridTauIdentityRoundtripTest();

@@ -114,12 +114,6 @@ public:
         std::function<void()> grabKeyboardFocus;
         std::function<void(ToolId)> setCurrentTool;
         std::function<void()> showToolSelectionMenu;
-        // add-note-confirmed-handles §4.2: Re-seed handles from notes (Time tool 空白右键)
-        // 实现方负责调 processor->reSeedTimeGridFromNotesById(currentMatId).
-        // 如 GameNoteGenerator 禁用或 notes 不可用,UI 应自动 disable 菜单项 + tooltip.
-        std::function<void()> reSeedTimeGridFromNotes;
-        std::function<bool()> canReSeedTimeGridFromNotes;
-
         std::function<void(double)> notifyPlayheadChange;
         std::function<void(int, int)> notifyPitchCurveEdited;
         std::function<void()> notifyAutoTuneRequested;

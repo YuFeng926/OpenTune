@@ -41,7 +41,9 @@ std::shared_ptr<const TimeGridSnapshot> tryRandomGrid(std::mt19937& rng,
                                                        double durationSec,
                                                        int interiorHandles)
 {
-    std::uniform_real_distribution<double> srcJitter(0.05, 0.15);   // 50–150 ms gaps
+    std::uniform_real_distribution<double> srcJitter(
+        TimeGridSnapshot::kMinSourceSpacingSeconds,
+        TimeGridSnapshot::kMinSourceSpacingSeconds + 0.05);
     std::uniform_real_distribution<double> outDelta(-0.02, 0.02);    // ±20 ms drift
 
     std::vector<TimeHandle> handles;
@@ -51,8 +53,8 @@ std::shared_ptr<const TimeGridSnapshot> tryRandomGrid(std::mt19937& rng,
     for (int i = 0; i < interiorHandles; ++i) {
         srcCursor += srcJitter(rng);
         if (srcCursor >= durationSec - 0.05) return nullptr;
-        const double outVal = juce::jlimit(handles.back().output_seconds + 0.030,
-                                            durationSec - 0.030,
+        const double outVal = juce::jlimit(handles.back().output_seconds + TimeGridSnapshot::kMinOutputSpacingSeconds,
+                                            durationSec - TimeGridSnapshot::kMinOutputSpacingSeconds,
                                             srcCursor + outDelta(rng));
         if (outVal <= handles.back().output_seconds + 1e-6) return nullptr;
         handles.push_back({static_cast<uint64_t>(i + 2),

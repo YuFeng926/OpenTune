@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace OpenTune {
 
@@ -133,7 +134,217 @@ bool isVoicedFrame(float frequencyHz) noexcept
     return frequencyHz > 0.0f;
 }
 
+float clampF0VisualAlpha(float alpha) noexcept
+{
+    return juce::jlimit(0.0f, 1.0f, alpha);
+}
+
+float calculateF0VisualEnergyAlpha(float energy,
+                                   float minEnergy,
+                                   float maxEnergy) noexcept
+{
+    static constexpr float kMinEnergyAlpha = 0.70f;
+    static constexpr float kMaxEnergyAlpha = 1.00f;
+
+    if (!std::isfinite(energy) || maxEnergy <= minEnergy + std::numeric_limits<float>::epsilon()) {
+        return kMaxEnergyAlpha;
+    }
+
+    const float normalized = juce::jlimit(0.0f, 1.0f, (energy - minEnergy) / (maxEnergy - minEnergy));
+    return kMinEnergyAlpha + (kMaxEnergyAlpha - kMinEnergyAlpha) * normalized;
+}
+
+float f0VisualTargetPointSpacing(double framePixelSpacing) noexcept
+{
+    if (framePixelSpacing >= 1.05) {
+        return 0.0f;
+    }
+
+    if (framePixelSpacing >= 0.50) {
+        return 1.0f;
+    }
+
+    return 1.5f;
+}
+
+void appendSmoothedF0Path(juce::Path& path,
+                          const std::vector<PianoRollRenderer::F0VisualPoint>& points,
+                          std::size_t startIndex,
+                          std::size_t endIndexInclusive)
+{
+    if (points.empty() || startIndex >= points.size()) {
+        return;
+    }
+
+    endIndexInclusive = std::min(endIndexInclusive, points.size() - 1);
+    if (endIndexInclusive <= startIndex) {
+        const auto& point = points[startIndex];
+        path.startNewSubPath(point.x - 0.01f, point.y);
+        path.lineTo(point.x + 0.01f, point.y);
+        return;
+    }
+
+    path.startNewSubPath(points[startIndex].x, points[startIndex].y);
+    for (std::size_t i = startIndex + 1; i < endIndexInclusive; ++i) {
+        const auto& control = points[i];
+        const auto& next = points[i + 1];
+        path.quadraticTo(control.x,
+                         control.y,
+                         (control.x + next.x) * 0.5f,
+                         (control.y + next.y) * 0.5f);
+    }
+
+    const auto& last = points[endIndexInclusive];
+    path.lineTo(last.x, last.y);
+}
+
 } // namespace
+
+std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0VisualSegments(
+    const std::vector<float>& f0,
+    const std::vector<float>* originalEnergy,
+    const std::vector<uint8_t>* visibleMask,
+    const F0VisualBuildOptions& options,
+    const F0FrameToX& frameToX,
+    const F0FrameToY& frameToY)
+{
+    std::vector<F0VisualSegment> segments;
+    if (f0.empty() || !frameToX || !frameToY) {
+        return segments;
+    }
+
+    const int startFrame = juce::jlimit(0, static_cast<int>(f0.size()), options.startFrame);
+    const int endFrameExclusive = juce::jlimit(startFrame, static_cast<int>(f0.size()), options.endFrameExclusive);
+    if (endFrameExclusive <= startFrame) {
+        return segments;
+    }
+
+    const bool hasEnergy = originalEnergy != nullptr && originalEnergy->size() == f0.size();
+    if (visibleMask != nullptr && visibleMask->size() != f0.size()) {
+        return segments;
+    }
+
+    const bool hasVisibleMask = visibleMask != nullptr;
+
+    float minEnergy = std::numeric_limits<float>::max();
+    float maxEnergy = std::numeric_limits<float>::lowest();
+    if (hasEnergy) {
+        for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
+            const float frequency = f0[static_cast<std::size_t>(frame)];
+            if (frequency < 20.0f || frequency > 2000.0f) {
+                continue;
+            }
+            if (hasVisibleMask && (*visibleMask)[static_cast<std::size_t>(frame)] == 0) {
+                continue;
+            }
+
+            const float energy = (*originalEnergy)[static_cast<std::size_t>(frame)];
+            if (std::isfinite(energy)) {
+                minEnergy = std::min(minEnergy, energy);
+                maxEnergy = std::max(maxEnergy, energy);
+            }
+        }
+    }
+
+    const float targetPointSpacing = f0VisualTargetPointSpacing(options.pixelsPerSecond * options.secondsPerFrame);
+
+    struct BucketAccumulator {
+        bool active = false;
+        int frame = 0;
+        float xSum = 0.0f;
+        float ySum = 0.0f;
+        float alphaSum = 0.0f;
+        float weightSum = 0.0f;
+
+        void clear() noexcept
+        {
+            active = false;
+            frame = 0;
+            xSum = 0.0f;
+            ySum = 0.0f;
+            alphaSum = 0.0f;
+            weightSum = 0.0f;
+        }
+    };
+
+    F0VisualSegment currentSegment;
+    BucketAccumulator bucket;
+    float bucketAnchorX = 0.0f;
+
+    auto flushBucket = [&]() {
+        if (!bucket.active || bucket.weightSum <= 0.0f) {
+            bucket.clear();
+            return;
+        }
+
+        currentSegment.points.push_back({
+            bucket.frame,
+            bucket.xSum / bucket.weightSum,
+            bucket.ySum / bucket.weightSum,
+            clampF0VisualAlpha(bucket.alphaSum / bucket.weightSum)
+        });
+        bucket.clear();
+    };
+
+    auto flushSegment = [&]() {
+        flushBucket();
+        if (!currentSegment.points.empty()) {
+            segments.push_back(std::move(currentSegment));
+            currentSegment = {};
+        }
+    };
+
+    for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
+        if (hasVisibleMask && (*visibleMask)[static_cast<std::size_t>(frame)] == 0) {
+            flushSegment();
+            continue;
+        }
+
+        const float frequency = f0[static_cast<std::size_t>(frame)];
+        if (frequency < 20.0f || frequency > 2000.0f) {
+            flushSegment();
+            continue;
+        }
+
+        const float x = frameToX(frame);
+        if (x < static_cast<float>(options.viewportStartX) || x > static_cast<float>(options.viewportEndX)) {
+            flushSegment();
+            continue;
+        }
+
+        const float y = frameToY(frame, frequency);
+        const float energyAlpha = hasEnergy
+            ? calculateF0VisualEnergyAlpha((*originalEnergy)[static_cast<std::size_t>(frame)], minEnergy, maxEnergy)
+            : 1.0f;
+        const float weight = juce::jmax(0.001f, energyAlpha);
+
+        if (targetPointSpacing <= 0.0f) {
+            flushBucket();
+            currentSegment.points.push_back({ frame, x, y, energyAlpha });
+            continue;
+        }
+
+        if (!bucket.active) {
+            bucket.active = true;
+            bucketAnchorX = x;
+            bucket.frame = frame;
+        } else if (std::abs(x - bucketAnchorX) >= targetPointSpacing) {
+            flushBucket();
+            bucket.active = true;
+            bucketAnchorX = x;
+            bucket.frame = frame;
+        }
+
+        bucket.xSum += x * weight;
+        bucket.ySum += y * weight;
+        bucket.alphaSum += energyAlpha * weight;
+        bucket.weightSum += weight;
+        bucket.frame = frame;
+    }
+
+    flushSegment();
+    return segments;
+}
 
 void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
 {
@@ -1004,11 +1215,11 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
         if (isAurora)
         {
-            g.setColour(noteColor.withAlpha(note.selected ? 0.82f : 0.70f));
+            g.setColour(noteColor.withAlpha(note.selected ? 0.48f : 0.34f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 7.0f));
-            juce::ColourGradient topSheen(noteColor.brighter(0.58f).withAlpha(note.selected ? 0.30f : 0.24f),
+            juce::ColourGradient topSheen(noteColor.brighter(0.58f).withAlpha(note.selected ? 0.18f : 0.12f),
                                           topSheenBounds.getX(),
                                           topSheenBounds.getY(),
                                           juce::Colours::transparentWhite,
@@ -1021,10 +1232,10 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             const auto edgeColour = note.selected
                 ? noteColor.brighter(0.32f)
                 : UIColors::noteBlockBorder;
-            g.setColour(edgeColour.withAlpha(note.selected ? 0.98f : 0.90f));
-            g.drawRect(noteBounds, note.selected ? 1.6f : 1.35f);
+            g.setColour(edgeColour.withAlpha(note.selected ? 0.72f : 0.56f));
+            g.drawRect(noteBounds, note.selected ? 1.35f : 1.0f);
 
-            g.setColour(UIColors::glassHighlight.withAlpha(note.selected ? 0.34f : 0.26f));
+            g.setColour(UIColors::glassHighlight.withAlpha(note.selected ? 0.22f : 0.14f));
             g.drawLine(noteBounds.getX() + 1.0f,
                        noteBounds.getY() + 1.0f,
                        noteBounds.getRight() - 1.0f,
@@ -1033,11 +1244,11 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(noteColor.withAlpha(note.selected ? 0.72f : 0.56f));
+            g.setColour(noteColor.withAlpha(note.selected ? 0.42f : 0.28f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 6.0f));
-            juce::ColourGradient topSheen(noteColor.brighter(0.42f).withAlpha(note.selected ? 0.28f : 0.20f),
+            juce::ColourGradient topSheen(noteColor.brighter(0.42f).withAlpha(note.selected ? 0.16f : 0.10f),
                                           topSheenBounds.getX(),
                                           topSheenBounds.getY(),
                                           juce::Colours::transparentWhite,
@@ -1047,23 +1258,23 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.setGradientFill(topSheen);
             g.fillRect(topSheenBounds);
 
-            g.setColour(noteColor.withAlpha(note.selected ? 0.24f : 0.14f));
+            g.setColour(noteColor.withAlpha(note.selected ? 0.14f : 0.08f));
             g.drawRect(noteBounds.expanded(1.0f, 0.5f), 2.0f);
 
             const auto edgeColour = note.selected
                 ? noteColor.brighter(0.28f)
                 : UIColors::noteBlockBorder;
-            g.setColour(edgeColour.withAlpha(note.selected ? 0.90f : 0.72f));
-            g.drawRect(noteBounds, note.selected ? 1.35f : 1.0f);
+            g.setColour(edgeColour.withAlpha(note.selected ? 0.66f : 0.48f));
+            g.drawRect(noteBounds, note.selected ? 1.25f : 0.9f);
         }
         else
         {
-            g.setColour(noteColor.withAlpha(0.8f));
+            g.setColour(noteColor.withAlpha(note.selected ? 0.44f : 0.30f));
             g.fillRect(noteBounds);
 
             const auto edgeColour = note.selected ? noteColor.brighter(0.3f) : UIColors::noteBlockBorder;
-            g.setColour(edgeColour);
-            g.drawRect(noteBounds, 1.5f);
+            g.setColour(edgeColour.withAlpha(note.selected ? 0.66f : 0.50f));
+            g.drawRect(noteBounds, note.selected ? 1.25f : 1.0f);
         }
     }
 }
@@ -1077,39 +1288,28 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                                      const MaterializationRenderItem& item,
                                      const std::vector<uint8_t>* visibleMask)
 {
-    if (f0.empty()) return;
+    if (f0.empty() || item.f0Timeline.isEmpty()) return;
 
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
     const bool isOverdose = themeId == ThemeId::Overdose;
     const float lineWidth = isAurora
-        ? (isThinLine ? 1.65f : 2.65f)
-        : ((isBlueBreeze || isOverdose) ? (isThinLine ? 1.25f : 2.05f) : (isThinLine ? 1.3f : 2.2f));
+        ? (isThinLine ? 1.35f : 2.25f)
+        : ((isBlueBreeze || isOverdose) ? (isThinLine ? 1.15f : 1.85f) : (isThinLine ? 1.25f : 2.05f));
     const juce::PathStrokeType strokeType(lineWidth,
                                            juce::PathStrokeType::curved,
                                            juce::PathStrokeType::rounded);
-    const float glowLineWidth = lineWidth + (isAurora ? (isThinLine ? 4.2f : 4.8f) : 3.2f);
+    const float glowLineWidth = lineWidth + (isAurora ? (isThinLine ? 2.2f : 2.7f) : 1.8f);
     const juce::PathStrokeType glowStrokeType(glowLineWidth,
                                                juce::PathStrokeType::curved,
                                                juce::PathStrokeType::rounded);
-    const juce::PathStrokeType innerGlowStrokeType(lineWidth + (isThinLine ? 1.25f : 1.45f),
+    const juce::PathStrokeType innerGlowStrokeType(lineWidth + (isThinLine ? 0.72f : 0.95f),
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded);
     const juce::PathStrokeType highlightStrokeType(juce::jmax(0.75f, lineWidth * 0.46f),
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded);
-
-    struct Segment {
-        juce::Path path;
-        std::size_t startIdx;
-        std::size_t endIdx;
-    };
-    std::vector<Segment> segments;
-
-    juce::Path currentPath;
-    bool pathStarted = false;
-    std::size_t segmentStart = 0;
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
     if (!visibleWindow.isValid())
@@ -1118,88 +1318,48 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const int viewportStartX = visibleWindow.viewportStartX;
     const int viewportEndX = visibleWindow.viewportEndX;
 
-    std::size_t iStart = 0;
-    std::size_t iEnd = f0.size();
-    if (!item.f0Timeline.isEmpty())
-    {
-        const int marginFrames = 10;
+    const int marginFrames = 10;
+    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleMaterializationStartTime,
+                                                                       visibleWindow.visibleMaterializationEndTime,
+                                                                       marginFrames);
+    const auto iStart = std::min(static_cast<std::size_t>(visibleFrames.startFrame), f0.size());
+    const auto iEnd = std::min(static_cast<std::size_t>(std::max(visibleFrames.startFrame, visibleFrames.endFrameExclusive)),
+                               f0.size());
 
-        const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleMaterializationStartTime,
-                                                                          visibleWindow.visibleMaterializationEndTime,
-                                                                          marginFrames);
-        iStart = std::min(static_cast<std::size_t>(visibleFrames.startFrame), f0.size());
-        iEnd = std::min(static_cast<std::size_t>(std::max(visibleFrames.startFrame, visibleFrames.endFrameExclusive)),
-                        f0.size());
+    double secondsPerFrame = 0.01;
+    if (item.f0Timeline.endFrameExclusive() > 1) {
+        secondsPerFrame = item.f0Timeline.timeAtFrame(1) - item.f0Timeline.timeAtFrame(0);
     }
 
-    for (std::size_t i = iStart; i < iEnd; ++i)
-    {
-        if (visibleMask != nullptr)
-        {
-            if (visibleMask->size() != f0.size() || (*visibleMask)[i] == 0)
-            {
-                if (pathStarted)
-                {
-                    segments.push_back({currentPath, segmentStart, i - 1});
-                    currentPath.clear();
-                    pathStarted = false;
-                }
-                continue;
-            }
-        }
+    F0VisualBuildOptions visualOptions;
+    visualOptions.startFrame = static_cast<int>(iStart);
+    visualOptions.endFrameExclusive = static_cast<int>(iEnd);
+    visualOptions.viewportStartX = viewportStartX;
+    visualOptions.viewportEndX = viewportEndX;
+    visualOptions.pixelsPerSecond = ctx.pixelsPerSecond;
+    visualOptions.secondsPerFrame = secondsPerFrame;
 
-        const float frequency = f0[i];
-
-        if (frequency <= 0.0f || frequency < 20.0f || frequency > 2000.0f)
-        {
-            if (pathStarted)
-            {
-                segments.push_back({currentPath, segmentStart, i - 1});
-                currentPath.clear();
-                pathStarted = false;
-            }
-            continue;
-        }
-
-        float midi = ctx.freqToMidi(frequency);
-        float y = ctx.midiToY(midi);
-
-        // §8.5 — F0 timeline frames are anchored in SOURCE time; project
-        // through τ so the F0 curve aligns with its (potentially stretched)
-        // waveform underlay.
-        const int x = sourceTimeToScreenX(
-            item.f0Timeline.timeAtFrame(static_cast<int>(i)), ctx, item);
-
-        if (x < viewportStartX || x > viewportEndX)
-        {
-            if (pathStarted)
-            {
-                segments.push_back({currentPath, segmentStart, i - 1});
-                currentPath.clear();
-                pathStarted = false;
-            }
-            continue;
-        }
-
-        if (!pathStarted)
-        {
-            currentPath.startNewSubPath(static_cast<float>(x), y);
-            pathStarted = true;
-            segmentStart = i;
-        } else {
-            currentPath.lineTo(static_cast<float>(x), y);
-        }
+    const std::vector<float>* originalEnergy = nullptr;
+    if (item.pitchSnapshot != nullptr) {
+        originalEnergy = &item.pitchSnapshot->getOriginalEnergy();
     }
 
-    if (pathStarted)
-    {
-        segments.push_back({currentPath, segmentStart, iEnd - 1});
-    }
+    const auto visualSegments = buildF0VisualSegments(
+        f0,
+        originalEnergy,
+        visibleMask,
+        visualOptions,
+        [&](int frame) -> float {
+            return static_cast<float>(sourceTimeToScreenX(item.f0Timeline.timeAtFrame(frame), ctx, item));
+        },
+        [&](int, float frequency) -> float {
+            return ctx.midiToY(ctx.freqToMidi(frequency));
+        });
 
     const juce::Colour selectionColour = isAurora
         ? colour.brighter(0.18f)
-        : UIColors::noteBlockSelected;
-    const float selectionLineWidth = isAurora ? lineWidth + 1.1f : 3.0f;
+        : colour.brighter(0.14f);
+    const float selectionLineWidth = isAurora ? lineWidth + 0.85f : lineWidth + 0.65f;
     const juce::PathStrokeType selectionStrokeType(selectionLineWidth,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded);
@@ -1207,26 +1367,26 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     {
         if (isAurora)
         {
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.24f : 0.22f)));
+            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.080f : 0.095f)));
             g.strokePath(path, glowStrokeType);
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.54f : 0.50f)));
+            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.22f : 0.20f)));
             g.strokePath(path, innerGlowStrokeType);
-            g.setColour(colour.withAlpha(effectiveAlpha));
+            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.96f : 0.98f)));
             g.strokePath(path, strokeType);
-            g.setColour(colour.brighter(isThinLine ? 0.38f : 0.24f).withAlpha(effectiveAlpha * (isThinLine ? 0.52f : 0.40f)));
+            g.setColour(colour.brighter(isThinLine ? 0.30f : 0.20f).withAlpha(effectiveAlpha * (isThinLine ? 0.18f : 0.15f)));
             g.strokePath(path, highlightStrokeType);
             return;
         }
 
         if (isBlueBreeze || isOverdose)
         {
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.16f : 0.18f)));
+            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.055f : 0.070f)));
             g.strokePath(path, glowStrokeType);
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.36f : 0.34f)));
+            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.14f : 0.15f)));
             g.strokePath(path, innerGlowStrokeType);
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.94f : 0.84f)));
+            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.96f : 0.92f)));
             g.strokePath(path, strokeType);
-            g.setColour(colour.brighter(0.18f).withAlpha(effectiveAlpha * 0.24f));
+            g.setColour(colour.brighter(0.16f).withAlpha(effectiveAlpha * 0.12f));
             g.strokePath(path, highlightStrokeType);
             return;
         }
@@ -1238,79 +1398,101 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     {
         if (isAurora)
         {
-            g.setColour(selectionColour.withAlpha(effectiveAlpha * 0.22f));
+            g.setColour(selectionColour.withAlpha(effectiveAlpha * 0.10f));
             g.strokePath(path, glowStrokeType);
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(selectionColour.withAlpha(effectiveAlpha * 0.18f));
+            g.setColour(selectionColour.withAlpha(effectiveAlpha * 0.075f));
             g.strokePath(path, glowStrokeType);
         }
 
-        g.setColour(selectionColour.withAlpha(effectiveAlpha));
+        g.setColour(selectionColour.withAlpha(effectiveAlpha * 0.96f));
         g.strokePath(path, selectionStrokeType);
     };
 
-    for (const auto& seg : segments)
-    {
-        std::size_t segLen = seg.endIdx - seg.startIdx + 1;
-        const int fadeFrames = 3;
-
-        if (segLen <= static_cast<std::size_t>(fadeFrames * 2))
-        {
-            bool inSelection = ctx.hasF0Selection && 
-                               static_cast<int>(seg.startIdx) >= ctx.f0SelectionStartFrame &&
-                                static_cast<int>(seg.endIdx) < ctx.f0SelectionEndFrameExclusive;
-            if (inSelection) {
-                drawSelectionCurve(seg.path, alpha * 0.9f);
-            } else {
-                drawNormalCurve(seg.path, alpha * 0.7f);
-            }
-        } else {
-            bool inSelection = ctx.hasF0Selection && 
-                               static_cast<int>(seg.startIdx) >= ctx.f0SelectionStartFrame &&
-                               static_cast<int>(seg.endIdx) < ctx.f0SelectionEndFrameExclusive;
-            if (inSelection) {
-                drawSelectionCurve(seg.path, alpha);
-            } else {
-                drawNormalCurve(seg.path, alpha);
-            }
-
-            for (int fade = 0; fade < fadeFrames; ++fade)
-            {
-                float fadeAlpha = alpha * (static_cast<float>(fade + 1) / static_cast<float>(fadeFrames + 1));
-
-                std::size_t fadeStartIdx = seg.startIdx + static_cast<std::size_t>(fade);
-                if (fadeStartIdx < seg.endIdx)
-                {
-                    const float freq = f0[fadeStartIdx];
-                    if (freq > 20.0f && freq < 2000.0f)
-                    {
-                        float midi = ctx.freqToMidi(freq);
-                        float y = ctx.midiToY(midi);
-                        const int x = sourceTimeToScreenX(item.f0Timeline.timeAtFrame(static_cast<int>(fadeStartIdx)), ctx, item);
-
-                        g.setColour(colour.brighter(isAurora ? 0.20f : 0.0f).withAlpha(fadeAlpha));
-                        g.fillEllipse(static_cast<float>(x) - lineWidth * 0.5f, y - lineWidth * 0.5f, lineWidth, lineWidth);
-                    }
-                }
-
-                std::size_t fadeEndIdx = seg.endIdx - static_cast<std::size_t>(fade);
-                if (fadeEndIdx > seg.startIdx && fadeEndIdx < f0.size())
-                {
-                    const float freq = f0[fadeEndIdx];
-                    if (freq > 20.0f && freq < 2000.0f)
-                    {
-                        float midi = ctx.freqToMidi(freq);
-                        float y = ctx.midiToY(midi);
-                        const int x = sourceTimeToScreenX(item.f0Timeline.timeAtFrame(static_cast<int>(fadeEndIdx)), ctx, item);
-
-                        g.setColour(colour.brighter(isAurora ? 0.20f : 0.0f).withAlpha(fadeAlpha));
-                        g.fillEllipse(static_cast<float>(x) - lineWidth * 0.5f, y - lineWidth * 0.5f, lineWidth, lineWidth);
-                    }
-                }
-            }
+    const auto drawTaperedCurve = [&](const F0VisualSegment& segment) {
+        if (segment.points.empty()) {
+            return;
         }
+
+        if (segment.points.size() == 1) {
+            const auto& point = segment.points.front();
+            juce::Path pointPath;
+            pointPath.startNewSubPath(point.x - 0.01f, point.y);
+            pointPath.lineTo(point.x + 0.01f, point.y);
+            drawNormalCurve(pointPath, alpha * point.energyAlpha * 0.35f);
+            return;
+        }
+
+        struct DrawRun {
+            std::size_t startSpan = 0;
+            std::size_t endSpanInclusive = 0;
+            float alphaSum = 0.0f;
+            int spanTotal = 0;
+            int alphaBucket = 0;
+            bool inSelection = false;
+
+            float effectiveAlpha() const noexcept
+            {
+                return spanTotal > 0 ? alphaSum / static_cast<float>(spanTotal) : 0.0f;
+            }
+        };
+
+        const std::size_t spanCount = segment.points.size() - 1;
+        const std::size_t fadeSpanCount = std::min<std::size_t>(6, std::max<std::size_t>(1, spanCount / 4));
+        static constexpr float kAlphaBucketStep = 0.12f;
+
+        auto makeRunForSpan = [&](std::size_t span) {
+            const auto& a = segment.points[span];
+            const auto& b = segment.points[span + 1];
+            const float startFade = juce::jmin(1.0f, static_cast<float>(span + 1) / static_cast<float>(fadeSpanCount + 1));
+            const float endFade = juce::jmin(1.0f, static_cast<float>(spanCount - span) / static_cast<float>(fadeSpanCount + 1));
+            const float taperAlpha = juce::jlimit(0.18f, 1.0f, juce::jmin(startFade, endFade));
+            const float energyAlpha = (a.energyAlpha + b.energyAlpha) * 0.5f;
+            const float effectiveAlpha = alpha * energyAlpha * taperAlpha;
+
+            DrawRun run;
+            run.startSpan = span;
+            run.endSpanInclusive = span;
+            run.alphaSum = effectiveAlpha;
+            run.spanTotal = 1;
+            run.alphaBucket = static_cast<int>(std::round(effectiveAlpha / kAlphaBucketStep));
+            run.inSelection = ctx.hasF0Selection
+                && a.frame >= ctx.f0SelectionStartFrame
+                && b.frame < ctx.f0SelectionEndFrameExclusive;
+            return run;
+        };
+
+        auto drawRun = [&](const DrawRun& run) {
+            juce::Path runPath;
+            appendSmoothedF0Path(runPath, segment.points, run.startSpan, run.endSpanInclusive + 1);
+            if (run.inSelection) {
+                drawSelectionCurve(runPath, run.effectiveAlpha());
+            } else {
+                drawNormalCurve(runPath, run.effectiveAlpha());
+            }
+        };
+
+        auto activeRun = makeRunForSpan(0);
+        for (std::size_t span = 1; span < spanCount; ++span) {
+            const auto nextRun = makeRunForSpan(span);
+            if (nextRun.alphaBucket == activeRun.alphaBucket
+                && nextRun.inSelection == activeRun.inSelection) {
+                activeRun.endSpanInclusive = span;
+                activeRun.alphaSum += nextRun.alphaSum;
+                activeRun.spanTotal += nextRun.spanTotal;
+                continue;
+            }
+
+            drawRun(activeRun);
+            activeRun = nextRun;
+        }
+        drawRun(activeRun);
+    };
+
+    for (const auto& segment : visualSegments) {
+        drawTaperedCurve(segment);
     }
 }
 
@@ -1353,15 +1535,13 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
             case HandleKind::OnsetSilence:  return juce::Colours::dimgrey;
             case HandleKind::InternalOnset: return juce::Colour::fromRGB(180, 140, 220);
             case HandleKind::UserAdded:     return juce::Colours::white;
-            case HandleKind::NoteOnly:      return juce::Colour::fromRGB(140, 200, 100); // soft green
             case HandleKind::ReferenceAuto: return juce::Colour::fromRGB(255, 196, 87);
         }
         return juce::Colours::white;
     };
 
-    // add-note-confirmed-handles §4.1: High confidence handle 用金色高亮覆盖默认色,
-    // 让用户视觉一眼识别"双源命中"的高置信度建议。Locked endpoint 不应用此覆盖
-    // (per spec: locked overrides confidence styling)。
+    // High-confidence handles use a gold overlay. Locked endpoints do not use
+    // this overlay.
     const juce::Colour kHighConfidenceColour = juce::Colour::fromRGB(0xE0, 0xB0, 0x40); // #E0B040 金色
 
     for (const auto& h : ctx.timeGridSnapshot->handles()) {

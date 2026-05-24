@@ -363,7 +363,7 @@ void runAutoRefIntegrationProcessorOwnsReferenceAnalysisPreheatTest()
         if (store->getDerivedAnalysis(placement.materializationId, analysis)
             && analysis.state == F0ExtractionState::Ready
             && !analysis.basicDerivedNotes.empty()
-            && analysis.basicDerivedAnchors.size() >= 2) {
+            && analysis.temporalEvents.size() >= 2) {
             logPass(testName);
             return;
         }

@@ -3,13 +3,14 @@
  *
  * Covers:
  *   - DerivedAnalysis slot exists and defaults to NotRequested
- *   - BasicReferenceFeatureBuilder generates source-derived notes and anchors from original F0
+ *   - BasicReferenceFeatureBuilder generates source-derived notes and temporal events from original F0
  */
 
 #include "TestSupport.h"
 #include "DSP/BasicReferenceFeatureBuilder.h"
 #include "MaterializationStore.h"
 #include "Utils/PitchCurve.h"
+#include "Utils/TimeGrid.h"
 
 // ============================================================================
 // Test: Derived analysis slot exists and defaults correctly
@@ -57,9 +58,9 @@ void runBasicDerivedAnalysisSlotSetGetSmokeTest()
     logPass(testName);
 }
 
-void runBasicReferenceFeatureBuilderGeneratesNotesAndAnchorsFromF0Test()
+void runBasicReferenceFeatureBuilderGeneratesNotesAndTemporalEventsFromF0Test()
 {
-    constexpr const char* testName = "BasicReferenceFeatureBuilder_GeneratesNotesAndAnchorsFromF0";
+    constexpr const char* testName = "AlignmentFeatures_BuilderProducesTemporalEventsNotHandles";
 
     MaterializationStore store;
     auto request = makeTestClipRequest();
@@ -97,15 +98,14 @@ void runBasicReferenceFeatureBuilderGeneratesNotesAndAnchorsFromF0Test()
         logFail(testName, "builder did not generate notes from original F0");
         return;
     }
-    if (analysis.basicDerivedAnchors.size() < 2) {
-        logFail(testName, "builder did not generate at least two temporal anchors from original F0");
+    if (analysis.temporalEvents.size() < 2) {
+        logFail(testName, "builder did not generate at least two temporal events from original F0");
         return;
     }
-    for (size_t i = 1; i < analysis.basicDerivedAnchors.size(); ++i) {
-        const double spacing = analysis.basicDerivedAnchors[i].sourceSeconds
-                             - analysis.basicDerivedAnchors[i - 1].sourceSeconds;
-        if (spacing < 0.150) {
-            logFail(testName, "builder emitted anchors closer than TimeGrid spacing invariant");
+    for (size_t i = 1; i < analysis.temporalEvents.size(); ++i) {
+        if (!TimeGridSnapshot::hasMinimumSourceSpacing(analysis.temporalEvents[i - 1].sourceSeconds,
+                                                       analysis.temporalEvents[i].sourceSeconds)) {
+            logFail(testName, "builder emitted temporal events closer than TimeGrid spacing invariant");
             return;
         }
     }
@@ -121,5 +121,5 @@ void runBasicDerivedAnalysisSuite()
 {
     logSection("BasicDerivedAnalysis");
     runBasicDerivedAnalysisSlotSetGetSmokeTest();
-    runBasicReferenceFeatureBuilderGeneratesNotesAndAnchorsFromF0Test();
+    runBasicReferenceFeatureBuilderGeneratesNotesAndTemporalEventsFromF0Test();
 }
