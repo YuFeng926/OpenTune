@@ -71,7 +71,7 @@ public:
     }
 
     float getFMax() const {
-        return currentVocoder_ ? currentVocoder_->getFMax() : 22050.0f;
+        return currentVocoder_ ? currentVocoder_->getFMax() : 16000.0f;
     }
 
 private:

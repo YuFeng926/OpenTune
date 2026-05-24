@@ -33,7 +33,7 @@ public:
     int getHopSize() const override { return 512; }
     int getSampleRate() const override { return 44100; }
     int getMelBins() const override { return static_cast<int>(melBinsHint_); }
-    float getFMax() const override { return 22050.0f; }
+    float getFMax() const override { return 16000.0f; }
 
 protected:
     void detectInputOutputNames();
