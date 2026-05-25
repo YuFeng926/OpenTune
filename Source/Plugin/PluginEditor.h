@@ -171,6 +171,10 @@ private:
     uint64_t lastPianoRollNotesRevision_{0};
     uint64_t lastPianoRollNotesRevisionMatId_{0};
 
+    // When true, the blocking overlay is shown until ARA materialization birth completes.
+    bool waitingForAraMaterialization_ = false;
+    juce::uint32 araWaitStartMs_ = 0;
+
     Capture::CaptureSession* regularCaptureCallbackSession_ = nullptr;
 
 #if JucePlugin_Enable_ARA
