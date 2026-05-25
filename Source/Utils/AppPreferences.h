@@ -12,6 +12,7 @@
 #include "MouseTrailConfig.h"
 #include "PianoRollVisualPreferences.h"
 #include "../Standalone/UI/ThemeTokens.h"
+#include "VocoderModelWeight.h"
 #include "ZoomSensitivityConfig.h"
 
 namespace OpenTune {
@@ -29,6 +30,7 @@ struct SharedPreferencesState {
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity =
         ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
     RenderingPriority renderingPriority = RenderingPriority::GpuFirst;
+    VocoderModelWeight vocoderModelWeight = VocoderModelWeight::Community;
     std::vector<juce::String> recentProjects;   // Most recently used project paths (MRU, max 10)
 };
 
@@ -69,6 +71,7 @@ public:
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity);
     void setStandaloneShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
     void setRenderingPriority(RenderingPriority priority);
+    void setVocoderModelWeight(VocoderModelWeight weight);
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme);
 
     std::vector<juce::String> getRecentProjects() const;
