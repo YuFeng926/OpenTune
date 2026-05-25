@@ -119,10 +119,12 @@ class SharedAudioPage final : public juce::Component
 public:
     SharedAudioPage(AppPreferences& appPreferences,
                     std::function<void()> onPreferencesChanged,
-                    std::function<void(bool)> onRenderingPriorityChanged)
+                    std::function<void(bool)> onRenderingPriorityChanged,
+                    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged)
         : appPreferences_(appPreferences)
         , onPreferencesChanged_(std::move(onPreferencesChanged))
         , onRenderingPriorityChanged_(std::move(onRenderingPriorityChanged))
+        , onVocoderModelWeightChanged_(std::move(onVocoderModelWeightChanged))
     {
         auto state = appPreferences_.getState();
 
@@ -145,6 +147,26 @@ public:
         };
         initialiseComboBox(renderingPrioritySelector_);
         addAndMakeVisible(renderingPrioritySelector_);
+
+        vocoderWeightLabel_.setText(LOC(kVocoderWeight), juce::dontSendNotification);
+        initialiseLabel(vocoderWeightLabel_);
+        addAndMakeVisible(vocoderWeightLabel_);
+
+        vocoderWeightSelector_.addItem(LOC(kVocoderWeightCommunity), 1);
+        vocoderWeightSelector_.addItem(LOC(kVocoderWeightCoulin9), 2);
+        auto weight = appPreferences_.getState().shared.vocoderModelWeight;
+        vocoderWeightSelector_.setSelectedId(static_cast<int>(weight) + 1, juce::dontSendNotification);
+        initialiseComboBox(vocoderWeightSelector_);
+        addAndMakeVisible(vocoderWeightSelector_);
+
+        vocoderWeightSelector_.onChange = [this] {
+            const auto w = static_cast<VocoderModelWeight>(vocoderWeightSelector_.getSelectedId() - 1);
+            appPreferences_.setVocoderModelWeight(w);
+            if (onVocoderModelWeightChanged_)
+                onVocoderModelWeightChanged_(w);
+            if (onPreferencesChanged_)
+                onPreferencesChanged_();
+        };
     }
 
     void paint(juce::Graphics& g) override
@@ -162,6 +184,11 @@ public:
         auto row = bounds.removeFromTop(rowHeight);
         renderingPriorityLabel_.setBounds(row.removeFromLeft(labelWidth));
         renderingPrioritySelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
+
+        bounds.removeFromTop(8);
+        row = bounds.removeFromTop(rowHeight);
+        vocoderWeightLabel_.setBounds(row.removeFromLeft(labelWidth));
+        vocoderWeightSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
     }
 
 private:
@@ -175,8 +202,11 @@ private:
     AppPreferences& appPreferences_;
     std::function<void()> onPreferencesChanged_;
     std::function<void(bool)> onRenderingPriorityChanged_;
+    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged_;
     juce::Label renderingPriorityLabel_;
     juce::ComboBox renderingPrioritySelector_;
+    juce::Label vocoderWeightLabel_;
+    juce::ComboBox vocoderWeightSelector_;
 };
 
 class SharedEditingPage final : public juce::Component
@@ -437,11 +467,13 @@ std::vector<TabbedPreferencesDialog::PageSpec> SharedPreferencePages::create(
 std::unique_ptr<juce::Component> SharedPreferencePages::createRenderingPriorityComponent(
     AppPreferences& appPreferences,
     std::function<void()> onPreferencesChanged,
-    std::function<void(bool forceCpu)> onRenderingPriorityChanged)
+    std::function<void(bool forceCpu)> onRenderingPriorityChanged,
+    std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged)
 {
     return std::make_unique<SharedAudioPage>(appPreferences,
                                               std::move(onPreferencesChanged),
-                                              std::move(onRenderingPriorityChanged));
+                                              std::move(onRenderingPriorityChanged),
+                                              std::move(onVocoderModelWeightChanged));
 }
 
 } // namespace OpenTune

@@ -6,6 +6,7 @@
 #include <juce_audio_devices/juce_audio_devices.h>
 
 #include "Utils/AppPreferences.h"
+#include "Utils/VocoderModelWeight.h"
 #include "Editor/Preferences/TabbedPreferencesDialog.h"
 
 namespace OpenTune {
@@ -15,7 +16,8 @@ struct StandalonePreferencePages {
         juce::AudioDeviceManager* audioDeviceManager,
         AppPreferences& appPreferences,
         std::function<void()> onPreferencesChanged,
-        std::function<void(bool forceCpu)> onRenderingPriorityChanged);
+        std::function<void(bool forceCpu)> onRenderingPriorityChanged,
+        std::function<void(VocoderModelWeight)> onVocoderModelWeightChanged);
     static std::vector<TabbedPreferencesDialog::PageSpec> createStandaloneOnlyPages(AppPreferences& appPreferences,
                                                                                     std::function<void()> onPreferencesChanged);
 };
