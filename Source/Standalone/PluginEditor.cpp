@@ -611,6 +611,11 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     });
 
     syncSharedAppPreferences();
+
+    // 启动时应用持久化声码器权重偏好
+    const auto weight = appPreferences_.getState().shared.vocoderModelWeight;
+    processorRef_.setVocoderModelWeight(weight);
+    // 幂等：weight==Community 时 setVocoderModelWeight 会 return early
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
@@ -2025,11 +2030,15 @@ void OpenTuneAudioProcessorEditor::preferencesRequested()
 void OpenTuneAudioProcessorEditor::showPreferencesDialog()
 {
     auto* holder = juce::StandalonePluginHolder::getInstance();
+    auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {
+        processorRef_.setVocoderModelWeight(weight);
+    };
     auto pages = StandalonePreferencePages::createAudioPages(
         holder != nullptr ? &holder->deviceManager : nullptr,
         appPreferences_,
         [this] { syncSharedAppPreferences(); },
-        [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); });
+        [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
+        std::move(onVocoderModelWeightChanged));
 
     auto sharedPages = SharedPreferencePages::create(appPreferences_, [this] { syncSharedAppPreferences(); });
     pages.insert(pages.end(),
