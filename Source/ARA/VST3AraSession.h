@@ -79,9 +79,7 @@ public:
             , sampleRate(other.sampleRate)
             , numChannels(other.numChannels)
             , numSamples(other.numSamples)
-            , copiedAudio(other.copiedAudio)
             , contentRevision(other.contentRevision)
-            , hydratedContentRevision(other.hydratedContentRevision)
             , leaseGeneration(other.leaseGeneration)
             , sampleAccessEnabled(other.sampleAccessEnabled)
             , hostReadInFlight(false)
@@ -101,18 +99,15 @@ public:
             sampleRate = other.sampleRate;
             numChannels = other.numChannels;
             numSamples = other.numSamples;
-            copiedAudio = other.copiedAudio;
             readerLease.reset();
             retiringReaderLease.reset();
             contentRevision = other.contentRevision;
-            hydratedContentRevision = other.hydratedContentRevision;
             leaseGeneration = other.leaseGeneration;
             sampleAccessEnabled = other.sampleAccessEnabled;
             hostReadInFlight = false;
-            queuedForHydration = false;
+            queuedForMaterializationBirth = false;
             readingFromHost = false;
             cancelRead = false;
-            enablePendingHydration = false;
             pendingLeaseReset = false;
             pendingRemoval = false;
             return *this;
@@ -127,25 +122,18 @@ public:
         double sampleRate{0.0};
         int numChannels{0};
         int64_t numSamples{0};
-        std::shared_ptr<juce::AudioBuffer<float>> copiedAudio;
-        std::unique_ptr<ARA::PlugIn::HostAudioReader> readerLease;
-        std::unique_ptr<ARA::PlugIn::HostAudioReader> retiringReaderLease;
+        std::shared_ptr<ARA::PlugIn::HostAudioReader> readerLease;
+        std::shared_ptr<ARA::PlugIn::HostAudioReader> retiringReaderLease;
         uint64_t contentRevision{0};
-        uint64_t hydratedContentRevision{0};
         uint64_t leaseGeneration{0};
         bool sampleAccessEnabled{false};
         bool hostReadInFlight{false};
-        bool queuedForHydration{false};
+        bool queuedForMaterializationBirth{false};
         bool readingFromHost{false};
         bool cancelRead{false};
-        bool enablePendingHydration{false};
         bool pendingLeaseReset{false};
         bool pendingRemoval{false};
 
-        bool hasAudio() const noexcept
-        {
-            return copiedAudio != nullptr && numSamples > 0 && hydratedContentRevision == contentRevision;
-        }
     };
 
     struct RegionSlot
@@ -195,7 +183,6 @@ public:
         RegionIdentity regionIdentity;
         uint64_t sourceId{0};
         AppliedMaterializationProjection appliedProjection;
-        std::shared_ptr<const juce::AudioBuffer<float>> copiedAudio;
         double sampleRate{0.0};
         int numChannels{0};
         int64_t numSamples{0};
@@ -313,12 +300,14 @@ private:
 
     SnapshotHandle buildPublishedSnapshotLocked() const;
     void publishSnapshotLocked();
-    bool sourceNeedsHydrationLocked(const SourceSlot& sourceSlot) const noexcept;
     void clearSourcePayloadLocked(SourceSlot& sourceSlot) noexcept;
-    void enqueueSourceHydrationLocked(juce::ARAAudioSource* audioSource);
+    bool regionNeedsMaterializationBirthLocked(const RegionSlot& regionSlot) const;
+    void enqueueMaterializationBirthLocked(juce::ARAAudioSource* audioSource);
+    void runMaterializationBirthsForSourceLocked(std::unique_lock<std::mutex>& lock,
+                                                 juce::ARAAudioSource* audioSource);
     void invalidateSourceReaderLeaseLocked(SourceSlot& sourceSlot) noexcept;
     void drainDeferredSourceCleanupLocked();
-    void hydrationWorkerLoop();
+    void birthWorkerLoop();
     void bumpSourceContentRevisionLocked(juce::ARAAudioSource* audioSource);
     void bumpRegionProjectionRevisionLocked(juce::ARAPlaybackRegion* playbackRegion);
     bool updateRegionProjectionFromPlaybackRegionLocked(RegionSlot& regionSlot,
@@ -345,10 +334,10 @@ private:
     uint64_t nextRegionProjectionRevision_{1};
     uint64_t nextPublishedEpoch_{1};
     bool pendingSnapshotPublication_{false};
-    std::deque<juce::ARAAudioSource*> hydrationQueue_;
-    std::condition_variable hydrationCv_;
-    std::thread hydrationWorkerThread_;
-    bool hydrationWorkerRunning_{true};
+    std::deque<juce::ARAAudioSource*> materializationBirthQueue_;
+    std::condition_variable birthCv_;
+    std::thread birthWorkerThread_;
+    bool birthWorkerRunning_{true};
 
     std::atomic<OpenTuneAudioProcessor*> processor_{nullptr};
 

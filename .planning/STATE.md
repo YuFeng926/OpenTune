@@ -4,8 +4,8 @@ milestone: v1.5
 milestone_name: PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 status: active
 stopped_at: v1.5 active development + PianoRoll empty-space seek intent + regular VST3 capture UX refinement (display selection, timeline view domain, transport shortcuts)
-last_updated: "2026-05-18"
-last_activity: 2026-05-18 -- PianoRoll empty-space seek intent: mouseDown arms pending, mouseUp within threshold seeks, drag beyond threshold starts tool editing. Regular VST3 capture display selection keeps completed capture visible when playhead leaves segment. Regular VST3 capture timeline view domain: PianoRoll view origin defaults to zero so late-capture segments remain scrollable. Regular VST3 transport shortcuts: keyboard shortcuts and transport buttons route through unified helper, no fake host transport truth.
+last_updated: "2026-05-26"
+last_activity: 2026-05-26 -- VST3 ARA OriginalF0 final convergence completed: metadata-only SourceStore, ARA birth 语义收紧 (hydration→birth 命名收口, Failed 显式写入, releaseImmediately 始终调用), ARA-bound Editor 残留 rmvpeOverlayLatched_ 删除, requestMaterializationRefresh 注释刷新为非 ARA 契约, 7 个 AraFinal 终审守卫 PASS, 三目标编译通过.
 progress:
   total_phases: 0
   completed_phases: 0
@@ -36,9 +36,10 @@ Plan sources:
 - 2026-04-30 RenderBadgeComponent 浮动状态徽章
 - 2026-05-01 ONNX Runtime 内存优化（F0 释放、共享 Env、DisableCpuMemArena）
 - 2026-05-02 GPU/CPU 推理后端重构（删除 DmlRuntimeVerifier、简化 AccelerationDetector、DML1 API）
+- 2026-05-26 VST3 ARA OriginalF0 final convergence（metadata-only SourceStore、birth 语义收紧、Editor 残留删除、AraFinal 终审守卫）
 
 Status: Active development
-Last activity: 2026-05-17 -- Implemented ARA-capable regular VST3 runtime mode split after Studio One track-insert Read Audio failure.
+Last activity: 2026-05-26 -- VST3 ARA OriginalF0 final convergence 实施完成，三目标编译 PASS
 
 ## Performance Metrics
 
@@ -106,6 +107,20 @@ Last activity: 2026-05-17 -- Implemented ARA-capable regular VST3 runtime mode s
 
 - 2026-05-18 (Regular VST3 transport shortcuts): Regular VST3 must not pretend to own host transport. Keyboard shortcuts and transport buttons route through a unified helper; no host-specific branch, no global keyboard hook, no fake transport truth. Architecture guards (`Vst3KeyboardShortcuts_RouteThroughUnifiedHelper`, `Vst3TransportButtons_DoNotForgeRegularPlaybackTruth`, `Vst3RegularTransport_SurfacesHostControlledSemantics`, `RegularVst3Capture_UsesHostPlayheadTruth`) PASS; ARA/non-ARA VST3 builds PASS. Status: Implemented; host L5 pending. Verification: `.planning/plans/2026-05-18-regular-vst3-transport-shortcuts-test-verification.md`.
 
+### VST3 ARA OriginalF0 Final Convergence (2026-05-26)
+
+All convergence items completed:
+
+- **Phase 1: SourceStore metadata-only** — `CreateSourceRequest` 新增 `numChannels`/`numSamples`；`createSource()` 允许 `audioBuffer == nullptr` 时从 request 字段直接注册；Standalone full-PCM 路径不变。
+- **Phase 2: ARA birth 结果语义收紧** — 删除 `makePartialResult`，改为 `buildBirthResult`；F0 service not ready/nullptr 时显式写 `OriginalF0State::Failed`；成功/失败路径都调用 `releaseImmediately()`。
+- **Phase 3: Worker 命名收口** — `hydrationWorkerLoop` → `birthWorkerLoop`；`hydrationCv_` → `birthCv_`；`hydrationWorkerThread_` → `birthWorkerThread_`。
+- **Phase 4: Editor 残留删除** — 删除 `rmvpeOverlayLatched_`/`rmvpeOverlayTargetMaterializationId_`；`PluginEditor.h/.cpp` ARA-related 代码精简 358 行。
+- **Phase 5: 契约注释刷新** — `requestMaterializationRefresh` 改为正向"Standalone/regular VST3 F0 refresh"；不再以 ARA 为中心解释。
+- **Phase 6: 测试收口** — 7 个 `AraFinal_*` 终审守卫（negative guard + path guard）；3 个 active test 从旧 `copiedAudio` 叙事改名为中立 binding/payload 语义。
+- **setStateInformation 修复** — 移除 ARA source 恢复路径中 `sourceAudioBuffer == nullptr` 早退条件，null buffer 的 source 通过 metadata-only 注册创建。
+- 三目标编译通过（Tests/Standalone/VST3）+ architecture suite 7/7 AraFinal PASS。
+- 2026-05-26 之前 5 个 commit（vocal-time-stretch + reference auto-align + vocoder dual weights + Aurora theme）也包含在内，当前工作区快照同步完成。
+
 ### Pending Todos
 
 - 持续把 `.planning` 与 live tree 保持同步。
@@ -124,7 +139,7 @@ Last activity: 2026-05-17 -- Implemented ARA-capable regular VST3 runtime mode s
 
 ## Session Continuity
 
-Last session: 2026-05-18
-Stopped at: PianoRoll empty-space seek intent + regular VST3 capture display selection + timeline view domain + transport shortcuts implemented; all automated tests PASS; host L5 pending across all four items
+Last session: 2026-05-26
+Stopped at: VST3 ARA OriginalF0 final convergence implementation complete; ARA-bound Editor 残留删除、birth 语义收口、AraFinal 终审守卫全部 PASS；用户询问 Materialization audioBuffer 角色后，同步 .planning 文档群到最新状态
 Resume file: N/A
-Next step: User confirmation for all 2026-05-18 L5 manual journeys; commit pending working tree changes
+Next step: 等待用户确认下一步方向；Host L5（Studio One ARA 长音频自动 OriginalF0）仍待验证

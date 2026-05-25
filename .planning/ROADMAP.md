@@ -88,9 +88,25 @@
 - **Regular VST3 capture timeline view domain (2026-05-18):** PianoRoll view defaults to zero so late-capture segments remain scrollable; automated test PASS; host L5 pending.
 - **Regular VST3 transport shortcuts (2026-05-18):** unified routing helper, no fake host transport truth; architecture guards PASS; host L5 pending.
 - **Done (v1.5):** Custom UndoManager + PianoRollEditAction, PianoRollCorrectionWorker async worker, PlayheadOverlayComponent isolation, RenderBadgeComponent, F0Timeline finalized, Line Anchor tool, Vibrato per-note control, Continuous scroll mode, ONNX Runtime memory optimization, GPU/CPU inference backend restructure
-- **Open:** ARA-bound/regular VST3 host L5 validation, Undo 边界测试、CorrectionWorker 并发验证、UI suite exit-code investigation、Reaper ARA multi-item L5 validation、2026-05-18 四项 L5
+- **Done (2026-05-26):** VST3 ARA OriginalF0 final convergence — metadata-only SourceStore, birth 语义收紧, Editor 残留删除, AraFinal 终审守卫 7/7 PASS
+- **Open:** ARA-bound/regular VST3 host L5 validation, Undo 边界测试、CorrectionWorker 并发验证、UI suite exit-code investigation、Reaper ARA multi-item L5 validation、2026-05-18 四项 L5、Studio One long-audio ARA L5
 - **Deferred:** L5 manual journeys, macOS bundle inspection, F3/F5 follow-up tasks
 
 ---
-*Roadmap updated: 2026-05-18 after implementing PianoRoll empty-space seek intent and regular VST3 capture UX refinement*
+## 2026-05-26 Roadmap Update: VST3 ARA OriginalF0 Final Convergence — DONE
+
+The VST3 ARA OriginalF0 final convergence plan is now fully implemented:
+
+1. **SourceStore metadata-only**: `createSource` 支持 `audioBuffer==nullptr`
+2. **ARA birth 语义收紧**: Failed 显式写入；`releaseImmediately()` 始终调用
+3. **Worker 命名收口**: `hydration*` → `birth*` in VST3AraSession
+4. **Editor 残留删除**: `rmvpeOverlayLatched_` 删除；PluginEditor.cpp ARA path 精简 358 行
+5. **契约注释刷新**: `requestMaterializationRefresh` 改为正向非 ARA 契约
+6. **AraFinal 终审守卫**: 7 个新增守卫全部 PASS
+7. **setStateInformation 修复**: null buffer source 通过 metadata-only 注册
+
+三目标编译通过 + architecture suite 7/7 AraFinal PASS。Studio One long-audio ARA L5 待用户确认为 deferred verification gap。
+
+---
+*Roadmap updated: 2026-05-26 after completing VST3 ARA OriginalF0 final convergence implementation*
 *Current state: `v1.4` shipped/frozen; `v1.5` is active milestone*

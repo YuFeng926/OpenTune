@@ -3567,9 +3567,9 @@ void runClipDerivedRefreshDoesNotMutateStandaloneSelectionTest()
     logPass(testName);
 }
 
-void runVst3AraSnapshotDoesNotPublishStaleCopiedAudioTest()
+void runVst3AraSnapshotDoesNotPublishStalePayloadTest()
 {
-    constexpr const char* testName = "VST3AraSnapshot_DoesNotPublishStaleCopiedAudio";
+    constexpr const char* testName = "VST3AraSnapshot_DoesNotPublishStalePayload";
 
     VST3AraSession::SourceSlot sourceSlot;
     sourceSlot.audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x1);
@@ -3577,8 +3577,7 @@ void runVst3AraSnapshotDoesNotPublishStaleCopiedAudioTest()
     sourceSlot.numChannels = 1;
     sourceSlot.numSamples = 64;
     sourceSlot.contentRevision = 2;
-    sourceSlot.hydratedContentRevision = 1;
-    sourceSlot.copiedAudio = std::make_shared<juce::AudioBuffer<float>>(1, 64);
+    sourceSlot.sampleAccessEnabled = true;
 
     VST3AraSession::RegionSlot regionSlot;
     regionSlot.identity.audioSource = sourceSlot.audioSource;
@@ -3595,17 +3594,13 @@ void runVst3AraSnapshotDoesNotPublishStaleCopiedAudioTest()
         return;
     }
 
-    if (snapshot->publishedRegions.front().copiedAudio != nullptr) {
-        logFail(testName, "stale copied audio leaked into published snapshot");
-        return;
-    }
-
+    // Published snapshot carries only identity/binding metadata, no raw audio payload
     logPass(testName);
 }
 
-void runRenderableAraRegionViewDoesNotRequireCopiedAudioTest()
+void runRenderableAraRegionViewAcceptsBindingWithoutRawAudioTest()
 {
-    constexpr const char* testName = "RenderableAraRegionView_DoesNotRequireCopiedAudio";
+    constexpr const char* testName = "RenderableAraRegionView_AcceptsBindingWithoutRawAudio";
 
     VST3AraSession::PublishedRegionView view;
     view.regionIdentity.audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x3);
@@ -3619,7 +3614,7 @@ void runRenderableAraRegionViewDoesNotRequireCopiedAudioTest()
     view.bindingState = VST3AraSession::BindingState::Renderable;
 
     if (!OpenTune::canRenderPublishedRegionView(view)) {
-        logFail(testName, "renderer still requires copiedAudio for a valid bound region");
+        logFail(testName, "renderer rejected a fully bound region view with no raw audio field");
         return;
     }
 
@@ -3643,6 +3638,156 @@ void runRenderableAraRegionViewRejectsNonAppliedSiblingTest()
 
     if (OpenTune::canRenderPublishedRegionView(view)) {
         logFail(testName, "renderer accepted sibling region whose appliedRegion does not match");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraBindingStateRenderableRequiresMatchingSourceWindowTest()
+{
+    constexpr const char* testName = "AraBindingState_RenderableRequiresMatchingSourceWindow";
+
+    VST3AraSession session;
+    auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0xC0);
+    auto* playbackRegion = reinterpret_cast<juce::ARAPlaybackRegion*>(0xC1);
+    const SourceWindow sourceWindow{42, 0.0, 1.0};
+
+    VST3AraSessionTestProbe::seedSource(session, audioSource, sourceWindow.sourceId);
+    VST3AraSessionTestProbe::seedAudioModificationBinding(session,
+                                                          "mod-renderable-current-window",
+                                                          sourceWindow.sourceId,
+                                                          9101,
+                                                          sourceWindow,
+                                                          3,
+                                                          sourceWindow.durationSeconds());
+    VST3AraSessionTestProbe::seedPlaybackRegionForModification(session,
+                                                               audioSource,
+                                                               playbackRegion,
+                                                               "mod-renderable-current-window",
+                                                               sourceWindow,
+                                                               2.0,
+                                                               3.0);
+    VST3AraSessionTestProbe::publish(session);
+
+    const auto snapshot = session.loadSnapshot();
+    const auto* view = snapshot != nullptr ? snapshot->findRegion(playbackRegion) : nullptr;
+    if (view == nullptr) {
+        logFail(testName, "failed to publish renderable binding view");
+        return;
+    }
+
+    if (view->bindingState != VST3AraSession::BindingState::Renderable
+        || !OpenTune::canRenderPublishedRegionView(*view)) {
+        logFail(testName, "matching sourceWindow/region identity binding should be renderable");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraBindingStateStaleSourceWindowNeedsRenderTest()
+{
+    constexpr const char* testName = "AraBindingState_StaleSourceWindowNeedsRender";
+
+    VST3AraSession session;
+    auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0xC2);
+    auto* playbackRegion = reinterpret_cast<juce::ARAPlaybackRegion*>(0xC3);
+    const SourceWindow staleWindow{42, 0.0, 1.0};
+    const SourceWindow currentWindow{42, 0.5, 1.5};
+
+    VST3AraSessionTestProbe::seedSource(session, audioSource, currentWindow.sourceId);
+    VST3AraSessionTestProbe::seedPlaybackRegionWithStaleAppliedProjection(session,
+                                                                          audioSource,
+                                                                          playbackRegion,
+                                                                          "mod-stale-window",
+                                                                          currentWindow,
+                                                                          staleWindow,
+                                                                          playbackRegion,
+                                                                          9102);
+    VST3AraSessionTestProbe::publish(session);
+
+    const auto snapshot = session.loadSnapshot();
+    const auto* view = snapshot != nullptr ? snapshot->findRegion(playbackRegion) : nullptr;
+    if (view == nullptr) {
+        logFail(testName, "failed to publish stale sourceWindow view");
+        return;
+    }
+
+    if (view->bindingState != VST3AraSession::BindingState::BoundNeedsRender
+        || OpenTune::canRenderPublishedRegionView(*view)) {
+        logFail(testName, "stale applied sourceWindow must publish BoundNeedsRender and stay non-renderable");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraBindingStateStaleRegionIdentityNeedsRenderTest()
+{
+    constexpr const char* testName = "AraBindingState_StaleRegionIdentityNeedsRender";
+
+    VST3AraSession session;
+    auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0xC4);
+    auto* playbackRegion = reinterpret_cast<juce::ARAPlaybackRegion*>(0xC5);
+    auto* staleAppliedRegion = reinterpret_cast<juce::ARAPlaybackRegion*>(0xC6);
+    const SourceWindow sourceWindow{43, 0.0, 1.0};
+
+    VST3AraSessionTestProbe::seedSource(session, audioSource, sourceWindow.sourceId);
+    VST3AraSessionTestProbe::seedPlaybackRegionWithStaleAppliedProjection(session,
+                                                                          audioSource,
+                                                                          playbackRegion,
+                                                                          "mod-stale-region",
+                                                                          sourceWindow,
+                                                                          sourceWindow,
+                                                                          staleAppliedRegion,
+                                                                          9103);
+    VST3AraSessionTestProbe::publish(session);
+
+    const auto snapshot = session.loadSnapshot();
+    const auto* view = snapshot != nullptr ? snapshot->findRegion(playbackRegion) : nullptr;
+    if (view == nullptr) {
+        logFail(testName, "failed to publish stale region identity view");
+        return;
+    }
+
+    if (view->bindingState != VST3AraSession::BindingState::BoundNeedsRender
+        || OpenTune::canRenderPublishedRegionView(*view)) {
+        logFail(testName, "stale applied region identity must publish BoundNeedsRender and stay non-renderable");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraBindingStateStaleSourceWindowRequeuesBirthTest()
+{
+    constexpr const char* testName = "AraBindingState_StaleSourceWindowRequeuesBirth";
+
+    VST3AraSession session;
+    auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0xC7);
+    auto* playbackRegion = reinterpret_cast<juce::ARAPlaybackRegion*>(0xC8);
+    const SourceWindow staleWindow{44, 0.0, 1.0};
+    const SourceWindow currentWindow{44, 0.25, 1.25};
+
+    VST3AraSessionTestProbe::seedSource(session, audioSource, currentWindow.sourceId);
+    VST3AraSessionTestProbe::seedAudioModificationBinding(session,
+                                                          "mod-stale-window-requeue",
+                                                          staleWindow.sourceId,
+                                                          9104,
+                                                          staleWindow,
+                                                          1,
+                                                          staleWindow.durationSeconds());
+    VST3AraSessionTestProbe::seedPlaybackRegionForModification(session,
+                                                               audioSource,
+                                                               playbackRegion,
+                                                               "mod-stale-window-requeue",
+                                                               currentWindow,
+                                                               0.0,
+                                                               currentWindow.durationSeconds());
+
+    if (!VST3AraSessionTestProbe::enqueueMaterializationBirthIfNeeded(session, audioSource)) {
+        logFail(testName, "stale binding on a hydrated source should be eligible for session-side auto-birth");
         return;
     }
 
@@ -4033,6 +4178,15 @@ void logPass(const char* testName)
 // Forward declarations for ARA playback/transport repair guard tests
 void runAraBindingStateEnumDefinesLifecycleStatesTest();
 void runAraPublishedRegionViewExposesBindingStateTest();
+
+// AraFinal — terminal ARA architecture contract guards
+void runAraFinalRecordRequestedDoesNotTriggerGame();
+void runAraFinalRecordRequestedDoesNotFallbackToMaterializationRefresh();
+void runAraFinalSessionHasNoSourceLevelHydrationReadPass();
+void runAraFinalPublishedRegionViewExposesNoRawAudioPayload();
+void runAraFinalPluginEditorHasNoPrepareImportFromAraRegionHelper();
+void runAraFinalRequestMaterializationRefreshContractIsNonAra();
+void runAraFinalBirthPathOwnsOriginalF0Release();
 
 void logFail(const char* testName, const char* detail)
 {
@@ -4475,13 +4629,24 @@ std::vector<PianoRollRenderer::F0VisualSegment> buildTestF0VisualSegments(
         });
 }
 
+float dbfsToLinearRms(float dbfs)
+{
+    return std::pow(10.0f, dbfs / 20.0f);
+}
+
 void runPianoRollF0VisualUsesEnergyAlphaWithinBoundsTest()
 {
     constexpr const char* testName = "PianoRollF0Visual_UsesEnergyAlphaWithinBounds";
 
     const auto segments = buildTestF0VisualSegments(
         { 220.0f, 221.0f, 222.0f, 223.0f, 224.0f },
-        { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f },
+        {
+            dbfsToLinearRms(-70.0f),
+            dbfsToLinearRms(-48.0f),
+            dbfsToLinearRms(-30.0f),
+            dbfsToLinearRms(-18.0f),
+            dbfsToLinearRms(-12.0f)
+        },
         200.0);
 
     if (segments.size() != 1 || segments.front().points.size() != 5) {
@@ -4490,10 +4655,44 @@ void runPianoRollF0VisualUsesEnergyAlphaWithinBoundsTest()
     }
 
     const auto& points = segments.front().points;
-    if (!approxEqual(points.front().energyAlpha, 0.70f, 1.0e-4f)
-        || !approxEqual(points[2].energyAlpha, 0.85f, 1.0e-4f)
-        || !approxEqual(points.back().energyAlpha, 1.00f, 1.0e-4f)) {
-        logFail(testName, "energy alpha should map local energy into the [70%, 100%] range");
+    if (!(points.front().energyAlpha < points[1].energyAlpha
+          && points[1].energyAlpha < points[2].energyAlpha
+          && points[2].energyAlpha < points[3].energyAlpha)
+        || !approxEqual(points[3].energyAlpha, 1.0f, 1.0e-4f)
+        || !approxEqual(points.back().energyAlpha, 1.0f, 1.0e-4f)) {
+        logFail(testName, "energy alpha should fade by absolute dBFS and reach full opacity by -18 dBFS");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollF0VisualHotLevelAddsGoldTintTest()
+{
+    constexpr const char* testName = "PianoRollF0Visual_HotLevelAddsGoldTint";
+
+    const auto segments = buildTestF0VisualSegments(
+        { 220.0f, 221.0f, 222.0f, 223.0f },
+        {
+            dbfsToLinearRms(-24.0f),
+            dbfsToLinearRms(-18.0f),
+            dbfsToLinearRms(-12.0f),
+            dbfsToLinearRms(-6.0f)
+        },
+        200.0);
+
+    if (segments.size() != 1 || segments.front().points.size() != 4) {
+        logFail(testName, "test setup should keep one visual point per voiced frame");
+        return;
+    }
+
+    const auto& points = segments.front().points;
+    if (!(points.front().levelHotMix < points[1].levelHotMix
+          && points[1].levelHotMix < points[2].levelHotMix
+          && points[2].levelHotMix < points.back().levelHotMix)
+        || !approxEqual(points[1].energyAlpha, 1.0f, 1.0e-4f)
+        || !approxEqual(points.back().energyAlpha, 1.0f, 1.0e-4f)) {
+        logFail(testName, "hot levels should stay fully opaque and increasingly blend toward gold above the threshold");
         return;
     }
 
@@ -4626,8 +4825,9 @@ void runPianoRollF0VisualEndpointFadeAndGlowContractTest()
         || !drawFunction.contains("fadeSpanCount")
         || !drawFunction.contains("taperAlpha")
         || !drawFunction.contains("energyAlpha")
+        || !drawFunction.contains("levelHotMix")
         || !rendererSource.contains("appendSmoothedF0Path")) {
-        logFail(testName, "F0 draw path should taper segment endpoints, multiply by energy alpha, and use smoothed paths");
+        logFail(testName, "F0 draw path should taper endpoints, multiply by energy alpha, blend hot levels, and use smoothed paths");
         return;
     }
 
@@ -4642,8 +4842,66 @@ void runPianoRollF0VisualEndpointFadeAndGlowContractTest()
     }
 
     if (!drawFunction.contains("kAlphaBucketStep")
+        || !drawFunction.contains("kHotBucketStep")
+        || !drawFunction.contains("buildDisplaySmoothedF0Points(segment.points, isThinLine ? 1 : 2)")
+        || !drawFunction.contains("0xFFFFC24A")
         || !drawFunction.contains("DrawRun")) {
-        logFail(testName, "F0 draw path should group adjacent spans instead of stroking every frame independently");
+        logFail(testName, "F0 draw path should group adjacent spans, smooth display points, and blend high-level gold locally");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAuroraTopBarReferenceRestyleSourceGuardTest()
+{
+    constexpr const char* testName = "AuroraTopBar_ReferenceRestyleSourceGuard";
+
+    const auto& topBarSource = getFileCache().get("Source/Standalone/UI/TopBarComponent.cpp");
+    if (!topBarSource.contains("const float shadowMargin = UIColors::currentThemeId() == ThemeId::Aurora ? 10.0f : 12.0f;")
+        || !topBarSource.contains("UIColors::fillAuroraGlass(g, bounds, 7.0f);")
+        || !topBarSource.contains("UIColors::drawAuroraGlassFrame(g, bounds, 7.0f, false);")
+        || !topBarSource.contains("juce::ColourGradient bottomClosure")
+        || topBarSource.contains("juce::ColourGradient bottomGlow")
+        || topBarSource.contains("juce::ColourGradient bottomFade")) {
+        logFail(testName, "Aurora top tray should use a tighter rounded shell and remove the old bottom glow/fade stack");
+        return;
+    }
+
+    const auto& transportSource = getFileCache().get("Source/Standalone/UI/TransportBarComponent.cpp");
+    if (!transportSource.contains("const bool isAuroraTheme = themeId == ThemeId::Aurora;")
+        || !transportSource.contains("iconColor = UIColors::textPrimary.interpolatedWith(UIColors::accent, 0.52f);")
+        || !transportSource.contains("iconColor = UIColors::textPrimary.withAlpha(isTransportButton ? 0.82f : 0.68f);")
+        || !transportSource.contains("const float hoverScale = isAuroraTheme ? 1.03f : 1.08f;")
+        || !transportSource.contains("const int buttonWidth = isAuroraTheme ? 46 : 50;")
+        || !transportSource.contains("const int groupGap = isAuroraTheme ? 16 : 20;")
+        || !transportSource.contains("const int typeWidth = isAuroraTheme ? 150 : 180;")) {
+        logFail(testName, "Aurora transport content hierarchy and layout rhythm should stay tightened");
+        return;
+    }
+
+    const auto& lookAndFeelSource = getFileCache().get("Source/Standalone/UI/AuroraLookAndFeel.cpp");
+    if (!lookAndFeelSource.contains("float arrowSize = 4.25f;")
+        || !lookAndFeelSource.contains("UIColors::textSecondary.withAlpha(isActive ? 0.78f : 0.62f)")) {
+        logFail(testName, "Aurora combo arrows should remain visually subordinate to the shared chrome");
+        return;
+    }
+
+    const auto& auroraThemeSource = getFileCache().get("Source/Standalone/UI/AuroraTheme.h");
+    const auto& uiColorsSource = getFileCache().get("Source/Standalone/UI/UIColors.h");
+    if (!auroraThemeSource.contains("static const juce::uint32 TrayTop         = 0xFF14263A;")
+        || !auroraThemeSource.contains("static const juce::uint32 ButtonFaceTop   = 0xFF182A3C;")
+        || !auroraThemeSource.contains("static const juce::uint32 ButtonActiveEdge = 0xD07BCFFF;")
+        || !auroraThemeSource.contains("static const juce::uint32 ButtonActiveTint = 0x2E2C74BE;")
+        || !uiColorsSource.contains("const auto trayTop = juce::Colour { Aurora::Colors::TrayTop };")
+        || !uiColorsSource.contains("const auto faceTop = juce::Colour { Aurora::Colors::ButtonFaceTop };")
+        || !uiColorsSource.contains("const auto activeTint = juce::Colour { Aurora::Colors::ButtonActiveTint };")
+        || !uiColorsSource.contains("juce::ColourGradient leftHotspot")
+        || !uiColorsSource.contains("juce::ColourGradient rightHotspot")
+        || !uiColorsSource.contains("const auto structuralEdge = coreShadow.interpolatedWith(juce::Colour { Aurora::Colors::BgDeep }, 0.42f);")
+        || !uiColorsSource.contains("g.setColour(outerEdge.withMultipliedAlpha(strong ? 0.92f : 0.64f));")
+        || !uiColorsSource.contains("juce::DropShadow outerGlow(glow.withMultipliedAlpha(isActive ? 0.07f : (isHovered ? 0.042f : 0.016f)),")) {
+        logFail(testName, "Aurora shared tokens and chrome should stay structured around localized active hotspots and a harder button edge");
         return;
     }
 
@@ -6014,11 +6272,13 @@ void runUiBehaviorSuite()
     runNotesPrimaryAutoTuneUsesSelectedNotesRangeTest();
     runCorrectedF0PrimaryAutoTunePrefersSelectionAreaTest();
     runPianoRollF0VisualUsesEnergyAlphaWithinBoundsTest();
+    runPianoRollF0VisualHotLevelAddsGoldTintTest();
     runPianoRollF0VisualZoomedOutBucketsAreBoundedByPixelDensityTest();
     runPianoRollF0VisualZoomedInRestoresFrameDetailTest();
     runPianoRollF0VisualVoicelessGapsDoNotConnectAcrossSegmentsTest();
     runPianoRollF0VisualStyleTokensAndLayeringTest();
     runPianoRollF0VisualEndpointFadeAndGlowContractTest();
+    runAuroraTopBarReferenceRestyleSourceGuardTest();
     runPianoRollHotPathSourceGuardNoPerEventDebugLoggingTest();
     runPianoRollInteractionSourceGuardInteractiveInvalidationIsNotFullBoundsTest();
     runPianoRollInteractionSourceGuardDeleteLegacyCopyWritebackApiBeforeRefactorTest();
@@ -6061,11 +6321,13 @@ void runPianoRollF0VisualSuite()
 {
     logSection("Piano Roll F0 Visual");
     runPianoRollF0VisualUsesEnergyAlphaWithinBoundsTest();
+    runPianoRollF0VisualHotLevelAddsGoldTintTest();
     runPianoRollF0VisualZoomedOutBucketsAreBoundedByPixelDensityTest();
     runPianoRollF0VisualZoomedInRestoresFrameDetailTest();
     runPianoRollF0VisualVoicelessGapsDoNotConnectAcrossSegmentsTest();
     runPianoRollF0VisualStyleTokensAndLayeringTest();
     runPianoRollF0VisualEndpointFadeAndGlowContractTest();
+    runAuroraTopBarReferenceRestyleSourceGuardTest();
 }
 
 void runPianoRollIntentBehaviorSuite()
@@ -6425,44 +6687,6 @@ void runAraPublishedReferencePreventsMaterializationSweepTest()
 
 
 
-void runVst3CommandPathOwnerMissingSignalsInvariantTest()
-{
-    constexpr const char* testName = "Architecture_Vst3CommandPathOwnerMissingSignalsInvariant";
-
-    const juce::File root = locateWorkspaceRoot();
-    if (!root.isDirectory()) { logFail(testName, "cannot locate project root"); return; }
-    const auto file = root.getChildFile("Source/Plugin/PluginEditor.cpp");
-    if (!file.existsAsFile()) { logFail(testName, "cannot locate Plugin/PluginEditor.cpp"); return; }
-
-    const auto content = file.loadFileAsString();
-
-    // syncImportedAraClipIfNeeded: prepareImportFromAraRegion failure must signal
-    if (!content.contains("InvariantViolation: syncImportedAraClipIfNeeded - prepareImportFromAraRegion failed")) {
-        logFail(testName, "syncImportedAraClipIfNeeded prepareImport failure is not signaled");
-        return;
-    }
-
-    // syncImportedAraClipIfNeeded: null oldBuffer must signal
-    if (!content.contains("InvariantViolation: syncImportedAraClipIfNeeded - materialization")) {
-        logFail(testName, "syncImportedAraClipIfNeeded null buffer failure is not signaled");
-        return;
-    }
-
-    // pitchCurveEdited: no active materialization must signal
-    if (!content.contains("InvariantViolation: pitchCurveEdited - no active materialization")) {
-        logFail(testName, "pitchCurveEdited no-materialization failure is not signaled");
-        return;
-    }
-
-    // pitchCurveEdited: null pitch curve must signal
-    if (!content.contains("InvariantViolation: pitchCurveEdited - materialization")) {
-        logFail(testName, "pitchCurveEdited null-curve failure is not signaled");
-        return;
-    }
-
-    logPass(testName);
-}
-
 void runSessionOwnershipProcessorDoesNotOwnSessionTest()
 {
     constexpr const char* testName = "SessionOwnership_ProcessorDoesNotOwnVST3AraSession";
@@ -6588,40 +6812,26 @@ void runAraPublishedRegionViewExposesBindingStateTest()
 
 void runAraSessionHydrationWorkerRoutesThroughProcessorBirthApiTest()
 {
-    constexpr const char* testName = "AraSession_HydrationWorkerRoutesThroughProcessorBirthApi";
+    constexpr const char* testName = "AraSession_BirthWorkerRoutesThroughProcessorBirthApi";
     if (!sourceContains("Source/ARA/VST3AraSession.h", "setProcessor(")) {
         logFail(testName, "setProcessor not found in VST3AraSession.h");
         return;
     }
-    if (!sourceContains("Source/ARA/VST3AraSession.cpp", "ensureAraRegionMaterialization")) {
-        logFail(testName, "ensureAraRegionMaterialization call not found in VST3AraSession.cpp");
+    if (!sourceContains("Source/ARA/VST3AraSession.cpp", "AraOriginalF0BirthRequest")) {
+        logFail(testName, "AraOriginalF0BirthRequest usage not found in VST3AraSession.cpp");
         return;
     }
-    logPass(testName);
-}
-
-void runAraProcessorExposesRegionBirthApiTest()
-{
-    constexpr const char* testName = "ARA-BIND-02: processor exposes ensureAraRegionMaterialization API";
-    if (!sourceContains("Source/PluginProcessor.h", "ensureAraRegionMaterialization")) {
-        logFail(testName, "ensureAraRegionMaterialization not found in PluginProcessor.h");
+    // Worker loop name updated from hydrationWorkerLoop → birthWorkerLoop
+    if (sourceContains("Source/ARA/VST3AraSession.h", "hydrationWorkerLoop")) {
+        logFail(testName, "VST3AraSession.h still uses hydrationWorkerLoop");
         return;
     }
-    if (!sourceContains("Source/PluginProcessor.h", "AraRegionMaterializationBirthResult")) {
-        logFail(testName, "AraRegionMaterializationBirthResult not found in PluginProcessor.h");
+    if (sourceContains("Source/ARA/VST3AraSession.h", "hydrationWorkerThread_")) {
+        logFail(testName, "VST3AraSession.h still uses hydrationWorkerThread_");
         return;
     }
-    logPass(testName);
-}
-
-void runAraAutoBirthPreservesSourceWindowLineageTest()
-{
-    constexpr const char* testName = "ARA-BIND-02b: auto-birth preserves sourceWindow lineage";
-    const auto birthSection = extractWorkspaceFileSection("Source/PluginProcessor.cpp",
-                                                          "OpenTuneAudioProcessor::ensureAraRegionMaterialization(",
-                                                          "const uint64_t materializationId = commitPreparedImportAsMaterialization");
-    if (!birthSection.contains("preparedImport.sourceWindow = SourceWindow{sourceId")) {
-        logFail(testName, "ensureAraRegionMaterialization does not stamp the real ARA sourceWindow before commit");
+    if (sourceContains("Source/ARA/VST3AraSession.h", "hydrationCv_")) {
+        logFail(testName, "VST3AraSession.h still uses hydrationCv_");
         return;
     }
     logPass(testName);
@@ -6757,21 +6967,6 @@ void runAraEditorAttachesRenderableBindingWithoutReadAudioArmTest()
     logPass(testName);
 }
 
-void runAraEditorRecordRequestedBirthsIfNeededThenRefreshesTest()
-{
-    constexpr const char* testName = "AraEditor_RecordRequestedBirthsIfNeededThenRefreshes";
-    const auto editorSource = getFileCache().get("Source/Plugin/PluginEditor.cpp");
-    if (!editorSource.contains("ensureAraRegionMaterialization")) {
-        logFail(testName, "ensureAraRegionMaterialization not found in PluginEditor.cpp");
-        return;
-    }
-    if (!editorSource.contains("requestMaterializationRefresh")) {
-        logFail(testName, "requestMaterializationRefresh not found in PluginEditor.cpp");
-        return;
-    }
-    logPass(testName);
-}
-
 void runAraSnapshotBindingStateIsSetTest()
 {
     constexpr const char* testName = "ARA-BIND-04: published region view has bindingState derived from state";
@@ -6782,11 +6977,175 @@ void runAraSnapshotBindingStateIsSetTest()
     logPass(testName);
 }
 
+// ============================================================================
+// ARA-F0 minimal pipeline guards
+// ============================================================================
 
+void runAraFinalRecordRequestedDoesNotTriggerGame()
+{
+    constexpr const char* testName = "AraFinal_RecordRequestedDoesNotTriggerGame";
 
+    const auto branch = extractWorkspaceFileSection(
+        "Source/Plugin/PluginEditor.cpp",
+        "// Binding/display only",
+        "void OpenTuneAudioProcessorEditor::syncAraPreferredRegionBindingOnly");
+    if (branch.isEmpty()) {
+        logFail(testName, "failed to locate ARA recordRequested binding-only branch");
+        return;
+    }
 
+    // Must NOT contain GAME-related calls
+    if (branch.contains("requestReferenceNoteGeneration")
+        || branch.contains("noteGenerator")) {
+        logFail(testName, "ARA recordRequested still triggers note generation");
+        return;
+    }
 
+    // Must NOT contain ensureAraRegionMaterialization (inline birth)
+    if (branch.contains("ensureAraRegionMaterialization")) {
+        logFail(testName, "ARA recordRequested still calls inline birth");
+        return;
+    }
 
+    logPass(testName);
+}
+
+void runAraFinalRecordRequestedDoesNotFallbackToMaterializationRefresh()
+{
+    constexpr const char* testName = "AraFinal_RecordRequestedDoesNotFallbackToMaterializationRefresh";
+
+    const auto& source = getFileCache().get("Source/Plugin/PluginEditor.cpp");
+    const auto araElsePos = source.indexOf("#else");
+    const auto syncFuncPos = source.indexOf("syncAraPreferredRegionBindingOnly");
+    if (araElsePos < 0 || syncFuncPos < 0) {
+        logFail(testName, "failed to locate ARA branch boundaries");
+        return;
+    }
+
+    const auto recordAraBranch = source.substring(araElsePos, syncFuncPos);
+    if (recordAraBranch.contains("requestMaterializationRefresh")) {
+        logFail(testName, "ARA recordRequested still calls requestMaterializationRefresh");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraFinalSessionHasNoSourceLevelHydrationReadPass()
+{
+    constexpr const char* testName = "AraFinal_SessionHasNoSourceLevelHydrationReadPass";
+
+    const auto& sessionCpp = getFileCache().get("Source/ARA/VST3AraSession.cpp");
+    // The worker loop must route through birthAraMaterializationWithOriginalF0
+    // and NOT do a separate source-level full read pass
+    if (!sessionCpp.contains("birthAraMaterializationWithOriginalF0")) {
+        logFail(testName, "VST3AraSession worker does not route through birthAraMaterializationWithOriginalF0");
+        return;
+    }
+
+    // No structure/function that reads raw audio from the source and creates a full materialization
+    if (sessionCpp.contains("prepareImport") && !sessionCpp.contains("// Standalone-only"))
+    {
+        logFail(testName, "VST3AraSession.cpp still references prepareImport (source-level read pass)");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraFinalPublishedRegionViewExposesNoRawAudioPayload()
+{
+    constexpr const char* testName = "AraFinal_PublishedRegionViewExposesNoRawAudioPayload";
+
+    // PublishedRegionView must not expose a raw audio buffer field
+    if (sourceContains("Source/ARA/VST3AraSession.h", "copiedAudio")) {
+        logFail(testName, "PublishedRegionView still exposes a raw audio field");
+        return;
+    }
+
+    // buildPublishedRegionViewFromState must not write raw audio into the view
+    if (sourceContains("Source/ARA/VST3AraSession.cpp", "copiedAudio")) {
+        logFail(testName, "buildPublishedRegionViewFromState still writes raw audio into view");
+        return;
+    }
+
+    // renderer must not reference raw audio from the published view
+    if (sourceContains("Source/ARA/OpenTunePlaybackRenderer.cpp", "copiedAudio")) {
+        logFail(testName, "OpenTunePlaybackRenderer still references raw audio from the view");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraFinalPluginEditorHasNoPrepareImportFromAraRegionHelper()
+{
+    constexpr const char* testName = "AraFinal_PluginEditorHasNoPrepareImportFromAraRegionHelper";
+
+    if (sourceContains("Source/Plugin/PluginEditor.cpp", "prepareImportFromAraRegion")) {
+        logFail(testName, "PluginEditor.cpp still contains prepareImportFromAraRegion");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraFinalRequestMaterializationRefreshContractIsNonAra()
+{
+    constexpr const char* testName = "AraFinal_RequestMaterializationRefreshContractIsNonAra";
+
+    const auto& source = getFileCache().get("Source/Plugin/PluginEditor.cpp");
+    const auto araElsePos = source.indexOf("#else");
+    const auto syncFuncPos = source.indexOf("syncAraPreferredRegionBindingOnly");
+    if (araElsePos < 0 || syncFuncPos < 0) {
+        logFail(testName, "failed to locate ARA branch boundaries");
+        return;
+    }
+
+    const auto recordAraBranch = source.substring(araElsePos, syncFuncPos);
+    if (recordAraBranch.contains("requestMaterializationRefresh")) {
+        logFail(testName, "ARA recordRequested still calls requestMaterializationRefresh");
+        return;
+    }
+
+    const auto syncAraBranch = extractWorkspaceFileSection(
+        "Source/Plugin/PluginEditor.cpp",
+        "void OpenTuneAudioProcessorEditor::syncAraPreferredRegionBindingOnly",
+        "void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested");
+    if (syncAraBranch.contains("requestMaterializationRefresh")) {
+        logFail(testName, "syncAraPreferredRegionBindingOnly still calls requestMaterializationRefresh");
+        return;
+    }
+
+    // VST3AraSession itself should NOT call requestMaterializationRefresh
+    if (sourceContains("Source/ARA/VST3AraSession.cpp", "requestMaterializationRefresh")) {
+        logFail(testName, "VST3AraSession.cpp still calls requestMaterializationRefresh");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraFinalBirthPathOwnsOriginalF0Release()
+{
+    constexpr const char* testName = "AraFinal_BirthPathOwnsOriginalF0Release";
+
+    const auto& source = getFileCache().get("Source/PluginProcessor.cpp");
+    const auto funcPos = source.indexOf("birthAraMaterializationWithOriginalF0(AraOriginalF0BirthRequest");
+    if (funcPos < 0) {
+        logFail(testName, "birthAraMaterializationWithOriginalF0 signature not found");
+        return;
+    }
+
+    // Verify releaseImmediately() appears in the function body (within 500 chars of signature)
+    const auto releasePos = source.indexOf(funcPos, "releaseImmediately");
+    if (releasePos < 0) {
+        logFail(testName, "birthAraMaterializationWithOriginalF0 does not release F0 inference service after birth");
+        return;
+    }
+
+    logPass(testName);
+}
 
 void runAraRenderabilityUsesBindingStateTest()
 {
@@ -6991,7 +7350,7 @@ void runAraRuntimeRecordRequestedSplitsByRuntimeModeTest()
     constexpr const char* testName = "AraRuntime_RecordRequestedSplitsByRuntimeMode";
     const auto recordSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
                                                            "void OpenTuneAudioProcessorEditor::recordRequested()",
-                                                           "void OpenTuneAudioProcessorEditor::syncImportedAraClipIfNeeded()");
+                                                           "void OpenTuneAudioProcessorEditor::syncAraPreferredRegionBindingOnly()");
 
     const auto captureIndex = recordSection.indexOf("processorRef_.getCaptureSession()");
     const auto regularLogIndex = recordSection.indexOf("mode=regular-vst3");
@@ -7706,14 +8065,20 @@ void runArchitectureBehaviorSuite()
     runAraBindingStateEnumDefinesLifecycleStatesTest();
     runAraPublishedRegionViewExposesBindingStateTest();
     runAraSessionHydrationWorkerRoutesThroughProcessorBirthApiTest();
-    runAraProcessorExposesRegionBirthApiTest();
-    runAraAutoBirthPreservesSourceWindowLineageTest();
     runAraBindingNewPersistentIdSameSourceWindowCreatesIndependentMaterializationTest();
     runAraBindingArchiveHooksPersistPersistentIdMaterializationBindingsTest();
     runAraBindingRestoredPersistentIdRebindsNewPlaybackRegionTest();
     runAraEditorAttachesRenderableBindingWithoutReadAudioArmTest();
-    runAraEditorRecordRequestedBirthsIfNeededThenRefreshesTest();
     runAraSnapshotBindingStateIsSetTest();
+
+    logSection("AraFinal terminal ARA architecture contract guards");
+    runAraFinalRecordRequestedDoesNotTriggerGame();
+    runAraFinalRecordRequestedDoesNotFallbackToMaterializationRefresh();
+    runAraFinalSessionHasNoSourceLevelHydrationReadPass();
+    runAraFinalPublishedRegionViewExposesNoRawAudioPayload();
+    runAraFinalPluginEditorHasNoPrepareImportFromAraRegionHelper();
+    runAraFinalRequestMaterializationRefreshContractIsNonAra();
+    runAraFinalBirthPathOwnsOriginalF0Release();
 
     runAraRenderabilityUsesBindingStateTest();
     runAraSessionSourceDefinesRenderableBindingStateTest();
@@ -7751,9 +8116,13 @@ void runArchitectureBehaviorSuite()
     runAraSessionSnapshotExposesSourceMaterializationAndPlacementOwnershipTest();
     runAraBindingMultiplePlaybackRegionsSameAudioModificationShareMaterializationTest();
     runProcessorModelRejectsMixedClipOwnerApisTest();
-    runVst3AraSnapshotDoesNotPublishStaleCopiedAudioTest();
-    runRenderableAraRegionViewDoesNotRequireCopiedAudioTest();
+    runVst3AraSnapshotDoesNotPublishStalePayloadTest();
+    runRenderableAraRegionViewAcceptsBindingWithoutRawAudioTest();
     runRenderableAraRegionViewRejectsNonAppliedSiblingTest();
+    runAraBindingStateRenderableRequiresMatchingSourceWindowTest();
+    runAraBindingStateStaleSourceWindowNeedsRenderTest();
+    runAraBindingStateStaleRegionIdentityNeedsRenderTest();
+    runAraBindingStateStaleSourceWindowRequeuesBirthTest();
     runVst3AraSessionDefersRegionRemovalUntilDidEndEditingTest();
     runVst3AraSessionDefersSourceDestroyUntilDidEndEditingTest();
     runMacStandalonePackagingMacDocsGoToBundleResourcesTest();
@@ -7765,7 +8134,6 @@ void runArchitectureBehaviorSuite()
     runSourceRetiredWhenLastMaterializationRetiredTest();
 
     runAraPublishedReferencePreventsMaterializationSweepTest();
-    runVst3CommandPathOwnerMissingSignalsInvariantTest();
     runSessionOwnershipProcessorDoesNotOwnSessionTest();
     runSessionOwnershipEditorAndRendererReadThroughDocumentControllerTest();
 }

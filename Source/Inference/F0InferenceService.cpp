@@ -290,4 +290,8 @@ void F0InferenceService::releaseIdleModelIfNeeded() {
     if (pImpl_) pImpl_->releaseIdleModelIfNeeded();
 }
 
+void F0InferenceService::releaseImmediately() {
+    if (pImpl_) pImpl_->shutdown();
+}
+
 } // namespace OpenTune

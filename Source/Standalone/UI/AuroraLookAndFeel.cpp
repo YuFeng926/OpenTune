@@ -211,7 +211,7 @@ void AuroraLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, b
     if (buttonW > 0 && buttonH > 0)
     {
         juce::Path arrow;
-        float arrowSize = 5.0f;
+        float arrowSize = 4.25f;
         float cx = buttonX + buttonW * 0.5f;
         float cy = buttonY + buttonH * 0.5f;
         
@@ -219,7 +219,7 @@ void AuroraLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, b
                           cx + arrowSize, cy - arrowSize * 0.5f,
                           cx, cy + arrowSize * 0.5f);
                           
-        g.setColour(juce::Colour(Aurora::Colors::TextSecondary));
+        g.setColour(UIColors::textSecondary.withAlpha(isActive ? 0.78f : 0.62f));
         g.fillPath(arrow);
     }
 }

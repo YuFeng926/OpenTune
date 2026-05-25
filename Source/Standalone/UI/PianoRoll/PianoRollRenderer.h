@@ -142,6 +142,7 @@ public:
         float x = 0.0f;
         float y = 0.0f;
         float energyAlpha = 1.0f;
+        float levelHotMix = 0.0f;
     };
 
     struct F0VisualSegment
