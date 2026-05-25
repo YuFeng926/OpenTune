@@ -18,7 +18,6 @@ struct FileProbeResult {
 
 void registerImportFormats(juce::AudioFormatManager& formatManager);
 juce::String getImportWildcardFilter();
-juce::String describeRegisteredImportFormats();
 FileProbeResult probeFile(const juce::File& file);
 std::unique_ptr<juce::AudioFormatReader> createReaderFor(const juce::File& file);
 

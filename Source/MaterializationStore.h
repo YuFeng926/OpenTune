@@ -298,8 +298,6 @@ public:
     // ============================================================
     bool setDerivedAnalysis(uint64_t materializationId, const DerivedAnalysis& analysis);
     bool getDerivedAnalysis(uint64_t materializationId, DerivedAnalysis& out) const;
-    void invalidateDerivedAnalysis(uint64_t materializationId);
-    bool hasValidDerivedAnalysis(uint64_t materializationId) const;
 
 private:
     // 内部存储条目

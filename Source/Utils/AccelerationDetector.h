@@ -60,8 +60,8 @@ public:
     void detect(bool forceCpu = false);
 
     /**
-     * 重置检测状态，允许重新检测
-     * 调用者必须确保无并发的 detect()/getSelectedBackend() 调用
+     * 重置检测状态，允许重新检测。
+     * 调用者必须确保无并发的 detect()/getSelectedBackend() 调用。
      */
     void reset();
 
@@ -77,39 +77,14 @@ public:
     AccelBackend getSelectedBackend() const { return selectedBackend_; }
 
     /**
-     * 检查DirectML是否可用
-     */
-    bool isDirectMLAvailable() const { return directMLAvailable_; }
-
-    /**
-     * 检查CoreML是否可用
-     */
-    bool isCoreMLAvailable() const { return coreMLAvailable_; }
-
-    /**
      * 获取后端名称字符串（用于日志）
      */
     std::string getBackendName() const;
 
     /**
-     * 获取GPU信息字符串（用于日志）
-     */
-    std::string getGpuInfoString() const;
-
-    /**
-     * 获取完整的加速状态报告（用于UI显示）
-     */
-    std::string getAccelerationReport() const;
-
-    /**
      * 获取 DirectML 使用的 DXGI adapter index
      */
     int getDirectMLDeviceId() const { return dmlAdapterIndex_; }
-
-    /**
-     * 获取检测到的GPU设备列表
-     */
-    const std::vector<GpuDeviceInfo>& getGpuDevices() const { return gpuDevices_; }
 
     /**
      * 获取选中的GPU设备信息

@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "Editor/Preferences/SharedPreferencePages.h"
+#include "Editor/Preferences/StandalonePreferencePages.h"
 #include "Editor/Preferences/TabbedPreferencesDialog.h"
 #include "Plugin/Capture/CaptureSession.h"
 #include "Utils/AppLogger.h"
@@ -662,8 +663,15 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         std::move(onVocoderModelWeightChanged));
     pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage) });
 
+    // Append standalone-only pages (Keyswitch, MouseTrail)
+    auto standalonePages = StandalonePreferencePages::createStandaloneOnlyPages(
+        appPreferences_, [this] { syncSharedAppPreferences(); });
+    for (auto& page : standalonePages) {
+        pages.push_back(std::move(page));
+    }
+
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
-    dialogContent->setSize(560, 420);
+    dialogContent->setSize(640, 500);
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(dialogContent);

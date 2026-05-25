@@ -52,14 +52,14 @@ namespace DarkBlueGrey {
 
         // 音高曲线
         static const juce::uint32 OriginalF0   = 0xFFD24A3A; // Piano Roll reference red
-        static const juce::uint32 CorrectedF0  = 0xFF2EC7F8; // Piano Roll reference cyan
-        static const juce::uint32 ShadowTrack  = 0x302EC7F8;
+        static const juce::uint32 CorrectedF0  = 0xFF196FC4; // Piano Roll reference blue
+        static const juce::uint32 ShadowTrack  = 0x30196FC4;
 
         // 音符块（以"边框强调"为主，填充克制）
-        static const juce::uint32 NoteBlock        = 0xFF72D8F7;
-        static const juce::uint32 NoteBlockBorder  = 0xFFB6F0FF;
-        static const juce::uint32 NoteBlockSelected = 0xFF9CEAFF;
-        static const juce::uint32 NoteBlockHover   = 0xFF8CE4FF;
+        static const juce::uint32 NoteBlock        = 0xFF235AA8;
+        static const juce::uint32 NoteBlockBorder  = 0xFF3A69A2;
+        static const juce::uint32 NoteBlockSelected = 0xFF2F6FC4;
+        static const juce::uint32 NoteBlockHover   = 0xFF2A63B8;
 
         // 播放头与时间线
         static const juce::uint32 Playhead       = 0xFFE6EDF5;
@@ -77,8 +77,9 @@ namespace DarkBlueGrey {
         static const juce::uint32 StatusError       = 0xFFF87171;
 
         // 波形
-        static const juce::uint32 WaveformFill    = 0x403B82F6;
-        static const juce::uint32 WaveformOutline = 0xFF60A5FA;
+        static const juce::uint32 WaveformFill    = 0x600C3C4A;
+        static const juce::uint32 WaveformOutline = 0xFF0C3C4A;
+        static const juce::uint32 PianoWaveform   = 0xFF0C3C4A;
 
         // 音阶
         static const juce::uint32 ScaleHighlight = 0x60FBBF24;

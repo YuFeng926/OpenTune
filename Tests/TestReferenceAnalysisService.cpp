@@ -127,9 +127,9 @@ void runReferenceAnalysisService_CancelSafety()
     TestListener listener;
     service.addListener(&listener);
 
-    // Submit and cancel immediately — race with worker
+    // Submit and cancel all immediately — race with worker
     service.submitAnalysis(/*materializationId=*/99, /*renderRevision=*/1);
-    service.cancelAnalysis(99);
+    service.cancelAll();
 
     // Submit another job and let it finish
     service.submitAnalysis(/*materializationId=*/100, /*renderRevision=*/1);

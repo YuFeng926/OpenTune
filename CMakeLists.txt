@@ -515,14 +515,12 @@ target_sources(OpenTune
         Source/Inference/SoundTouchStretcher.h
         Source/Inference/TimeStretchCache.cpp
         Source/Inference/TimeStretchCache.h
-        Source/Inference/PitchCache.h
 
         # AI Model Interfaces
         Source/Inference/IF0Extractor.h
         Source/Inference/VocoderInterface.h
         Source/Inference/OnnxVocoderBase.h
         Source/Inference/OnnxVocoderBase.cpp
-        Source/Inference/DmlConfig.h
 
         # AI Model Implementations
         Source/Inference/RMVPEExtractor.cpp
@@ -624,8 +622,6 @@ target_sources(OpenTune
         Source/Utils/ProjectPersistence.h
         Source/Utils/ProjectSession.cpp
         Source/Utils/ProjectSession.h
-        Source/Utils/CpuFeatures.cpp
-        Source/Utils/CpuFeatures.h
         Source/Utils/CpuBudgetManager.cpp
         Source/Utils/CpuBudgetManager.h
         Source/Utils/AccelerationDetector.cpp

@@ -429,6 +429,13 @@ void ParameterPanel::paint(juce::Graphics& g)
         return;
     }
 
+    if (themeId == ThemeId::Aurora)
+    {
+        UIColors::fillAuroraSidebarShell(g, bounds, style.panelRadius);
+        UIColors::drawAuroraSidebarShellFrame(g, bounds, style.panelRadius);
+        return;
+    }
+
     // Create rounded path for background and clipping
     juce::Path backgroundPath;
     backgroundPath.addRoundedRectangle(bounds, style.panelRadius);

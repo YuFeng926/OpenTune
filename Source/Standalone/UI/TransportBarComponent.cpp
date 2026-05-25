@@ -429,7 +429,6 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     auto bounds = getLocalBounds().toFloat().reduced(2.0f);
     const auto themeId = UIColors::currentThemeId();
     float radius = (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? UIColors::currentThemeStyle().controlRadius : 6.0f;
-    const bool isAuroraTheme = themeId == ThemeId::Aurora;
 
     const bool roundTopLeft = ! (connectedEdges_ & Left);
     const bool roundBottomLeft = ! (connectedEdges_ & Left);
@@ -627,11 +626,11 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
         if (!isEnabled())
             iconColor = UIColors::textDisabled.withAlpha(0.46f);
         else if (isActive)
-            iconColor = UIColors::textPrimary.interpolatedWith(UIColors::accent, 0.52f);
+            iconColor = UIColors::textPrimary.withAlpha(0.96f);
         else if (isHover)
-            iconColor = UIColors::textPrimary.interpolatedWith(UIColors::accent, 0.16f);
+            iconColor = UIColors::textPrimary.interpolatedWith(UIColors::accent, 0.28f);
         else
-            iconColor = UIColors::textPrimary.withAlpha(isTransportButton ? 0.82f : 0.68f);
+            iconColor = UIColors::textPrimary.withAlpha(isTransportButton ? 0.92f : 0.78f);
     }
     else
     {
@@ -644,15 +643,14 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     }
 
     // Draw Icon centered with hover scale animation
-    auto iconArea = bounds.reduced(bounds.getWidth() * (isAuroraTheme ? 0.25f : 0.22f),
-                                   bounds.getHeight() * (isAuroraTheme ? 0.25f : 0.22f));
+    auto iconArea = bounds.reduced(bounds.getWidth() * 0.22f, bounds.getHeight() * 0.22f);
 
-    // Hover: Aurora keeps the content restrained so the shell material stays in front.
+    // Hover: subtle scale-up (1.08x) and brightness boost
     if (shouldDrawButtonAsHighlighted && !shouldDrawButtonAsDown)
     {
-        const float hoverScale = isAuroraTheme ? 1.03f : 1.08f;
+        const float hoverScale = 1.08f;
         iconArea = iconArea.withSizeKeepingCentre(iconArea.getWidth() * hoverScale, iconArea.getHeight() * hoverScale);
-        iconColor = iconColor.brighter(isAuroraTheme ? 0.06f : 0.15f);
+        iconColor = iconColor.brighter(0.15f);
     }
     
     // Use ToolbarIcons helper
@@ -962,12 +960,11 @@ void TransportBarComponent::mouseDown(const juce::MouseEvent& e)
 void TransportBarComponent::resized()
 {
     auto bounds = getLocalBounds().reduced(12, 4);
-    const bool isAuroraTheme = UIColors::currentThemeId() == ThemeId::Aurora;
 
     const int controlHeight = 40;
-    const int buttonWidth = isAuroraTheme ? 46 : 50;
-    const int spacing = isAuroraTheme ? 8 : 10;
-    const int groupGap = isAuroraTheme ? 16 : 20;
+    const int buttonWidth = 50;
+    const int spacing = 10;
+    const int groupGap = 20;
     
     auto row = bounds.withHeight(controlHeight).withY(bounds.getCentreY() - controlHeight / 2);
 
@@ -991,20 +988,20 @@ void TransportBarComponent::resized()
         bpmField_.setVisible(false);
         tapButton_.setVisible(false);
 
-        const int timeDisplayWidth = isAuroraTheme ? 134 : 140;
+        const int timeDisplayWidth = 140;
         timeDisplay_.setBounds(row.removeFromLeft(timeDisplayWidth));
         row.removeFromLeft(spacing);
 
         recordButton_.setVisible(true);
         recordButton_.setBounds(row.removeFromLeft(buttonWidth));
 
-        const int rootWidth = isAuroraTheme ? 54 : 60;
-        const int typeWidth = isAuroraTheme ? 150 : 180;
+        const int rootWidth = 60;
+        const int typeWidth = 180;
 
         scaleRootSelector_.setBounds(row.removeFromLeft(rootWidth));
         row.removeFromLeft(4);
         scaleTypeSelector_.setBounds(row.removeFromLeft(typeWidth));
-        row.removeFromLeft(isAuroraTheme ? -4 : -10);
+        row.removeFromLeft(-10);
 
         return;
     }
@@ -1039,23 +1036,23 @@ void TransportBarComponent::resized()
     pianoViewButton_.setBounds(row.removeFromLeft(buttonWidth));
     row.removeFromLeft(spacing);
 
-    const int timeDisplayWidth = isAuroraTheme ? 148 : 156;
+    const int timeDisplayWidth = 156;
     timeDisplay_.setBounds(row.removeFromLeft(timeDisplayWidth));
     row.removeFromLeft(spacing);
 
-    const int bpmWidth = isAuroraTheme ? 104 : 110;
+    const int bpmWidth = 110;
     bpmField_.setBounds(row.removeFromLeft(bpmWidth));
     row.removeFromLeft(spacing);
     tapButton_.setBounds(row.removeFromLeft(buttonWidth));
-    row.removeFromLeft(isAuroraTheme ? 2 : 4);
+    row.removeFromLeft(4);
 
-    const int rootWidth = isAuroraTheme ? 54 : 60;
-    const int typeWidth = isAuroraTheme ? 150 : 180;
+    const int rootWidth = 60;
+    const int typeWidth = 180;
 
     scaleRootSelector_.setBounds(row.removeFromLeft(rootWidth));
     row.removeFromLeft(4);
     scaleTypeSelector_.setBounds(row.removeFromLeft(typeWidth));
-    row.removeFromLeft(isAuroraTheme ? -4 : -10);
+    row.removeFromLeft(-10);
 }
 
 void TransportBarComponent::addListener(Listener* listener)

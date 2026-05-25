@@ -873,8 +873,8 @@ void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g,
         return;
     }
 
-    static constexpr float dashLengths[] { 4.0f, 4.0f };
-    g.setColour(UIColors::accent.withAlpha(0.75f));
+    static constexpr float dashLengths[] { 6.0f, 2.5f };
+    g.setColour(UIColors::accent.withAlpha(0.92f));
 
     for (std::size_t index = 1; index + 1 < item.chunkBoundaries.size(); ++index) {
         // §8.5 — chunk boundaries are SOURCE time; project through τ.
@@ -889,7 +889,7 @@ void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g,
                                           static_cast<float>(ctx.height)),
                          dashLengths,
                          2,
-                         1.0f);
+                         1.5f);
     }
 }
 

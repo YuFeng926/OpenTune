@@ -86,17 +86,18 @@ namespace Overdose {
         static const juce::uint32 GridLine           = 0x45C8CAD3;
         static const juce::uint32 GridLineStrong     = 0x70AEB3C0;
 
-        static const juce::uint32 WaveformFill       = 0x66B8BBC6;
-        static const juce::uint32 WaveformOutline    = 0x90AEB3C0;
+        static const juce::uint32 WaveformFill       = 0x600C3C4A;
+        static const juce::uint32 WaveformOutline    = 0xFF0C3C4A;
+        static const juce::uint32 PianoWaveform      = 0xFF0C3C4A;
 
         static const juce::uint32 OriginalF0         = 0xFFD24A3A;
-        static const juce::uint32 CorrectedF0        = 0xFF2EC7F8;
-        static const juce::uint32 ShadowTrack        = 0x302EC7F8;
+        static const juce::uint32 CorrectedF0        = 0xFF196FC4;
+        static const juce::uint32 ShadowTrack        = 0x30196FC4;
 
-        static const juce::uint32 NoteBlock          = 0xFF72D8F7;
-        static const juce::uint32 NoteBlockBorder    = 0xFFB6F0FF;
-        static const juce::uint32 NoteBlockSelected  = 0xFF9CEAFF;
-        static const juce::uint32 NoteBlockHover     = 0xFF8CE4FF;
+        static const juce::uint32 NoteBlock          = 0xFF235AA8;
+        static const juce::uint32 NoteBlockBorder    = 0xFF3A69A2;
+        static const juce::uint32 NoteBlockSelected  = 0xFF2F6FC4;
+        static const juce::uint32 NoteBlockHover     = 0xFF2A63B8;
 
         static const juce::uint32 Playhead           = 0xFFFF7CBD;
         static const juce::uint32 PlayheadGlow       = 0x50FF80BD;

@@ -60,9 +60,13 @@ void runDerivedAnalysis_SetAndGet()
     const auto da = makeReadyAnalysis();
 
     // Precondition: no valid derived analysis initially
-    if (store.hasValidDerivedAnalysis(matId)) {
-        logFail(testName, "precondition: should NOT have valid derived analysis after import");
-        return;
+    {
+        MaterializationStore::DerivedAnalysis check;
+        if (store.getDerivedAnalysis(matId, check)
+            && check.state == F0ExtractionState::Ready && check.analysisRevision > 0) {
+            logFail(testName, "precondition: should NOT have valid derived analysis after import");
+            return;
+        }
     }
 
     if (!store.setDerivedAnalysis(matId, da)) {
@@ -70,9 +74,13 @@ void runDerivedAnalysis_SetAndGet()
         return;
     }
 
-    if (!store.hasValidDerivedAnalysis(matId)) {
-        logFail(testName, "hasValidDerivedAnalysis should return true after set");
-        return;
+    {
+        MaterializationStore::DerivedAnalysis check;
+        if (!store.getDerivedAnalysis(matId, check)
+            || check.state != F0ExtractionState::Ready || check.analysisRevision <= 0) {
+            logFail(testName, "hasValidDerivedAnalysis should return true after set");
+            return;
+        }
     }
 
     MaterializationStore::DerivedAnalysis out;
@@ -140,9 +148,13 @@ void runDerivedAnalysis_InvalidateOnPitchCurveSet()
         logFail(testName, "setDerivedAnalysis returned false");
         return;
     }
-    if (!store.hasValidDerivedAnalysis(matId)) {
-        logFail(testName, "precondition: should have valid derived analysis");
-        return;
+    {
+        MaterializationStore::DerivedAnalysis check;
+        if (!store.getDerivedAnalysis(matId, check)
+            || check.state != F0ExtractionState::Ready || check.analysisRevision <= 0) {
+            logFail(testName, "precondition: should have valid derived analysis");
+            return;
+        }
     }
 
     // Now set a new PitchCurve — should invalidate derived analysis
@@ -152,9 +164,13 @@ void runDerivedAnalysis_InvalidateOnPitchCurveSet()
         return;
     }
 
-    if (store.hasValidDerivedAnalysis(matId)) {
-        logFail(testName, "derived analysis should be invalid after setPitchCurve");
-        return;
+    {
+        MaterializationStore::DerivedAnalysis check;
+        if (store.getDerivedAnalysis(matId, check)
+            && check.state == F0ExtractionState::Ready && check.analysisRevision > 0) {
+            logFail(testName, "derived analysis should be invalid after setPitchCurve");
+            return;
+        }
     }
 
     logPass(testName);
@@ -180,9 +196,13 @@ void runDerivedAnalysis_InvalidateOnReplaceAudio()
         logFail(testName, "setDerivedAnalysis returned false");
         return;
     }
-    if (!store.hasValidDerivedAnalysis(matId)) {
-        logFail(testName, "precondition: should have valid derived analysis");
-        return;
+    {
+        MaterializationStore::DerivedAnalysis check;
+        if (!store.getDerivedAnalysis(matId, check)
+            || check.state != F0ExtractionState::Ready || check.analysisRevision <= 0) {
+            logFail(testName, "precondition: should have valid derived analysis");
+            return;
+        }
     }
 
     // Replace audio — should invalidate derived analysis
@@ -195,9 +215,13 @@ void runDerivedAnalysis_InvalidateOnReplaceAudio()
         return;
     }
 
-    if (store.hasValidDerivedAnalysis(matId)) {
-        logFail(testName, "derived analysis should be invalid after replaceAudio");
-        return;
+    {
+        MaterializationStore::DerivedAnalysis check;
+        if (store.getDerivedAnalysis(matId, check)
+            && check.state == F0ExtractionState::Ready && check.analysisRevision > 0) {
+            logFail(testName, "derived analysis should be invalid after replaceAudio");
+            return;
+        }
     }
 
     logPass(testName);

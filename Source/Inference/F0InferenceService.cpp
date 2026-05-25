@@ -97,8 +97,6 @@ public:
             }
         }
 
-        // 记录最后提取时间，不再立即释放模型（延迟释放策略）
-        lastExtractionTimeMs_.store(juce::Time::getMillisecondCounter(), std::memory_order_release);
         return result;
     }
 
@@ -190,21 +188,6 @@ public:
         return initialized_.load(std::memory_order_acquire);
     }
 
-    void releaseIdleModelIfNeeded() {
-        if (!initialized_.load(std::memory_order_acquire)) return;
-        const uint64_t lastTime = lastExtractionTimeMs_.load(std::memory_order_acquire);
-        if (lastTime == 0) return;
-        const uint64_t now = juce::Time::getMillisecondCounter();
-        if (now - lastTime >= kModelRetentionMs) {
-            AppLogger::info("[F0InferenceService] Releasing idle F0 model after 30s");
-            shutdown();
-            lastExtractionTimeMs_.store(0, std::memory_order_release);
-        }
-    }
-
-    std::atomic<uint64_t> lastExtractionTimeMs_{0};
-    static constexpr uint64_t kModelRetentionMs = 30000;  // 30 秒
-
 private:
     std::shared_ptr<Ort::Env> env_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
@@ -284,10 +267,6 @@ int F0InferenceService::getF0SampleRate() const {
 
 bool F0InferenceService::isInitialized() const {
     return pImpl_->isInitialized();
-}
-
-void F0InferenceService::releaseIdleModelIfNeeded() {
-    if (pImpl_) pImpl_->releaseIdleModelIfNeeded();
 }
 
 void F0InferenceService::releaseImmediately() {

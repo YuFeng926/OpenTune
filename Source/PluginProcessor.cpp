@@ -1249,11 +1249,6 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
                 return;
             }
 
-            // 空闲时检查是否需要释放 F0 模型（与 chunkRenderWorker 保持一致）
-            if (f0Service_) {
-                f0Service_->releaseIdleModelIfNeeded();
-            }
-
             if (stage2RebuildQueue_.empty()) continue;
             materializationId = stage2RebuildQueue_.front();
             stage2RebuildQueue_.pop_front();
@@ -1697,6 +1692,15 @@ bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const Materialization
             + " f0InitAttempted=" + juce::String(f0InitAttempted_.load() ? 1 : 0));
         return false;
     }
+
+    struct ReleaseGuard {
+        F0InferenceService* service = nullptr;
+        ~ReleaseGuard()
+        {
+            if (service != nullptr)
+                service->releaseImmediately();
+        }
+    } releaseGuard{f0Service};
 
     return extractOriginalF0ForImportedClip(*f0Service, snap, out, errorMessage);
 }
@@ -3194,10 +3198,6 @@ void OpenTuneAudioProcessor::handleAsyncUpdate()
 {
     runReclaimSweepOnMessageThread();
 
-    // 检查 F0 模型空闲释放（解耦 F0 释放与渲染 Worker 生命周期）
-    if (f0Service_) {
-        f0Service_->releaseIdleModelIfNeeded();
-    }
 }
 
 void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
@@ -4977,11 +4977,6 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                     || (chunkRenderJobsInFlight_.load(std::memory_order_acquire) == 0
                         && materializationStore_ != nullptr && materializationStore_->hasPendingRenderJobs());
             });
-
-            // 空闲时检查是否需要释放 F0 模型
-            if (f0Service_) {
-                f0Service_->releaseIdleModelIfNeeded();
-            }
 
             if (!chunkRenderWorkerRunning_) {
                 return;

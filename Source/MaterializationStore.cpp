@@ -929,35 +929,4 @@ bool MaterializationStore::getDerivedAnalysis(uint64_t materializationId, Derive
     return out.state != F0ExtractionState::NotRequested || out.analysisRevision > 0;
 }
 
-void MaterializationStore::invalidateDerivedAnalysis(uint64_t materializationId)
-{
-    if (materializationId == 0) {
-        return;
-    }
-
-    const juce::ScopedWriteLock writeLock(lock_);
-    const auto it = materializations_.find(materializationId);
-    if (it == materializations_.end()) {
-        return;
-    }
-
-    it->second.derivedAnalysis.reset();
-}
-
-bool MaterializationStore::hasValidDerivedAnalysis(uint64_t materializationId) const
-{
-    if (materializationId == 0) {
-        return false;
-    }
-
-    const juce::ScopedReadLock readLock(lock_);
-    const auto it = materializations_.find(materializationId);
-    if (it == materializations_.end() || it->second.isRetired_) {
-        return false;
-    }
-
-    const auto& da = it->second.derivedAnalysis;
-    return da.state == F0ExtractionState::Ready && da.analysisRevision > 0;
-}
-
 } // namespace OpenTune

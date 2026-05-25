@@ -104,9 +104,13 @@ void runMaterializationContract_DerivedAnalysisPersistsAcrossSetNotes()
         logFail(testName, "setDerivedAnalysis returned false");
         return;
     }
-    if (!store.hasValidDerivedAnalysis(matId)) {
-        logFail(testName, "precondition: should have valid derived analysis");
-        return;
+    {
+        MaterializationStore::DerivedAnalysis check;
+        if (!store.getDerivedAnalysis(matId, check)
+            || check.state != F0ExtractionState::Ready || check.analysisRevision <= 0) {
+            logFail(testName, "precondition: should have valid derived analysis");
+            return;
+        }
     }
 
     // Now set notes — this should NOT invalidate derived analysis
@@ -125,9 +129,13 @@ void runMaterializationContract_DerivedAnalysisPersistsAcrossSetNotes()
     }
 
     // Derived analysis MUST still be valid after setNotes
-    if (!store.hasValidDerivedAnalysis(matId)) {
-        logFail(testName, "derived analysis should NOT be invalidated by setNotes");
-        return;
+    {
+        MaterializationStore::DerivedAnalysis check;
+        if (!store.getDerivedAnalysis(matId, check)
+            || check.state != F0ExtractionState::Ready || check.analysisRevision <= 0) {
+            logFail(testName, "derived analysis should NOT be invalidated by setNotes");
+            return;
+        }
     }
 
     // Also verify the derived analysis data is intact
