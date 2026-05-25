@@ -67,12 +67,6 @@ uint64_t chooseActiveCaptureMaterialization(Capture::CaptureSession& session,
     return 0;
 }
 
-const KeyShortcutConfig::KeyShortcutSettings& vst3EditorShortcutSettings()
-{
-    static const auto settings = KeyShortcutConfig::KeyShortcutSettings::getDefault();
-    return settings;
-}
-
 juce::String buildRenderingOverlayTitle(int completedTasks, int totalTasks, float progress)
 {
     if (totalTasks <= 0)
@@ -526,7 +520,7 @@ bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 
 bool OpenTuneAudioProcessorEditor::handleEditorShortcut(const juce::KeyPress& key)
 {
-    const auto& shortcutSettings = vst3EditorShortcutSettings();
+    const auto& shortcutSettings = appPreferences_.getState().standalone.shortcuts;
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::PlayPause, key)) {
         playPauseToggleRequested();
@@ -671,7 +665,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     }
 
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
-    dialogContent->setSize(640, 500);
+    dialogContent->setSize(640, 560);
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(dialogContent);

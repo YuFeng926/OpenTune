@@ -795,14 +795,13 @@ void runStandalonePreferencesDialogContainsStandaloneOnlyPagesTest()
 
 void runPluginPreferencesDialogExcludesStandaloneOnlyPagesTest()
 {
-    constexpr const char* testName = "PluginPreferencesDialog_ExcludesStandaloneOnlyPages";
+    constexpr const char* testName = "PluginPreferencesDialog_IncludesShortcutsAndTrail";
 
     const auto& source = getFileCache().get("Source/Plugin/PluginEditor.cpp");
     if (!source.contains("TabbedPreferencesDialog")
         || !source.contains("SharedPreferencePages")
-        || source.contains("StandalonePreferencePages")
-        || source.contains("OptionsDialogComponent(")) {
-        logFail(testName, "plugin editor still uses mixed dialog composition or exposes standalone-only pages");
+        || !source.contains("StandalonePreferencePages")) {
+        logFail(testName, "plugin editor does not include shortcut and mouse-trail preference pages");
         return;
     }
 

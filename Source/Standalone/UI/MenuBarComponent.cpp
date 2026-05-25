@@ -87,15 +87,15 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
     {
         case 0:  // File
         {
-            menu.addItem(ImportAudio, LOC(kImportAudio));
-
-            juce::PopupMenu exportMenu;
-            exportMenu.addItem(ExportSelectedClip, LOC(kExportSelectedClip));
-            exportMenu.addItem(ExportTrack, LOC(kExportTrack));
-            exportMenu.addItem(ExportBus, LOC(kExportBus));
-            menu.addSubMenu(LOC(kExportAudio), exportMenu);
-
             if (profile_ == Profile::Standalone) {
+                menu.addItem(ImportAudio, LOC(kImportAudio));
+
+                juce::PopupMenu exportMenu;
+                exportMenu.addItem(ExportSelectedClip, LOC(kExportSelectedClip));
+                exportMenu.addItem(ExportTrack, LOC(kExportTrack));
+                exportMenu.addItem(ExportBus, LOC(kExportBus));
+                menu.addSubMenu(LOC(kExportAudio), exportMenu);
+
                 menu.addSeparator();
                 menu.addItem(SaveProject, LOC(kSaveProject));
                 menu.addItem(SaveProjectAs, LOC(kSaveProjectAs));
