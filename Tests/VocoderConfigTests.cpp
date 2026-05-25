@@ -29,6 +29,8 @@
 #include "DSP/MelSpectrogram.h"
 #include "Inference/VocoderDomain.h"
 #include "Inference/VocoderInferenceService.h"
+#include "Utils/AppPreferences.h"
+#include "Utils/VocoderModelWeight.h"
 
 namespace {
 
@@ -129,16 +131,18 @@ void runVocoderConfig_DomainForwardChainTest()
 }
 
 // ============================================================================
-// L4: Bundled hifigan.onnx file consistency check
+// L4: Dual bundled vocoder ONNX file consistency check
 // ============================================================================
 //
-// The CMake build copies the source ONNX (HIFIGAN_MODEL) into the bundle as
-// hifigan.onnx. We verify both exist and have identical size — a smoke test
-// that the right file got bundled (catches "forgot to update CMake variable").
+// The CMake build copies two vocoder weights into the bundle:
+//   hifigan.onnx         — community vocoder (default)
+//   hifigan_coulin9.onnx  — Coulin9 fine-tuned (experimental)
+// We verify both exist and are non-empty — a smoke test that both models
+// were bundled correctly by the build system.
 //
-void runVocoderConfig_BundledOnnxConsistentWithSourceTest()
+void runVocoderConfig_DualBundledOnnxConsistencyTest()
 {
-    constexpr const char* testName = "VocoderConfig_BundledOnnx_ConsistentWithSource";
+    constexpr const char* testName = "VocoderConfig_DualBundledOnnx_Consistency";
 
     auto root = findProjectRoot();
     if (!root.isDirectory()) {
@@ -146,25 +150,75 @@ void runVocoderConfig_BundledOnnxConsistentWithSourceTest()
         return;
     }
 
-    // Source ONNX (the v4 file CMake's HIFIGAN_MODEL points at)
-    auto srcOnnx = root.getChildFile("pc_nsf_hifigan_44.1k_ONNX")
-                       .getChildFile("pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx");
-    if (!srcOnnx.existsAsFile()) {
-        logFail(testName, "source v4 ONNX not found at expected path");
+    // Community vocoder (default weight)
+    auto bundledCommunity = root.getChildFile("build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/Standalone/models/hifigan.onnx");
+    if (!bundledCommunity.existsAsFile() || bundledCommunity.getSize() == 0) {
+        logFail(testName, "bundled hifigan.onnx (community vocoder) missing or empty");
         return;
     }
 
-    // Current Windows VS preset bundle location.
-    auto bundled = root.getChildFile("build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/Standalone/models/hifigan.onnx");
-    if (!bundled.existsAsFile()) {
-        logFail(testName, "bundled hifigan.onnx not found in build-ara-overlay-vs18-clean Standalone artifacts");
+    // Coulin9 fine-tuned (experimental weight)
+    auto bundledCoulin9 = root.getChildFile("build-ara-overlay-vs18-clean/OpenTune_artefacts/Release/Standalone/models/hifigan_coulin9.onnx");
+    if (!bundledCoulin9.existsAsFile() || bundledCoulin9.getSize() == 0) {
+        logFail(testName, "bundled hifigan_coulin9.onnx (Coulin9 fine-tuned) missing or empty");
         return;
     }
 
-    if (srcOnnx.getSize() != bundled.getSize()) {
-        logFail(testName, "bundled hifigan.onnx size mismatch with source v4 ONNX (wrong file bundled?)");
+    logPass(testName);
+}
+
+// ============================================================================
+// L2: VocoderModelWeight preference default is Community
+// ============================================================================
+
+void runVocoderConfig_VocoderWeightDefaultTest()
+{
+    constexpr const char* testName = "VocoderConfig_VocoderWeight_DefaultIsCommunity";
+
+    AppPreferences prefs;
+    const auto state = prefs.getState();
+
+    if (state.shared.vocoderModelWeight != OpenTune::VocoderModelWeight::Community) {
+        logFail(testName, "default vocoder model weight must be Community");
         return;
     }
+    logPass(testName);
+}
+
+// ============================================================================
+// L2: VocoderModelWeight preference roundtrip (set → persist → re-read)
+// ============================================================================
+
+void runVocoderConfig_VocoderWeightRoundtripTest()
+{
+    constexpr const char* testName = "VocoderConfig_VocoderWeight_Roundtrip";
+
+    auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile("OpenTuneTests")
+        .getChildFile("vocoder-weight-roundtrip");
+    dir.deleteRecursively();
+    dir.createDirectory();
+
+    AppPreferences::StorageOptions storageOpts;
+    storageOpts.applicationName = "OpenTuneTests";
+    storageOpts.settingsDirectory = dir;
+    storageOpts.fileName = "app-preferences.settings";
+
+    {
+        AppPreferences prefs(storageOpts);
+        prefs.setVocoderModelWeight(OpenTune::VocoderModelWeight::Coulin9V4);
+        prefs.flush();
+    }
+
+    {
+        AppPreferences prefs(storageOpts);
+        const auto state = prefs.getState();
+        if (state.shared.vocoderModelWeight != OpenTune::VocoderModelWeight::Coulin9V4) {
+            logFail(testName, "vocoder model weight roundtrip failed: Coulin9V4 not persisted");
+            return;
+        }
+    }
+
     logPass(testName);
 }
 
@@ -186,5 +240,7 @@ void runVocoderConfigSuite()
     runVocoderConfig_MelStructDefaultUnchangedTest();
     runVocoderConfig_InferenceServiceUninitializedDefaultTest();
     runVocoderConfig_DomainForwardChainTest();
-    runVocoderConfig_BundledOnnxConsistentWithSourceTest();
+    runVocoderConfig_DualBundledOnnxConsistencyTest();
+    runVocoderConfig_VocoderWeightDefaultTest();
+    runVocoderConfig_VocoderWeightRoundtripTest();
 }
