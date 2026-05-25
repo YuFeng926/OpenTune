@@ -875,9 +875,12 @@ endif()
 # Standalone Bundle Resources
 # ==============================================================================
 # Define model files
-set(HIFIGAN_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx")
-set(RMVPE_MODEL "${CMAKE_CURRENT_SOURCE_DIR}/models/rmvpe.onnx")
-set(GAME_MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/models/GAME")
+# 社区声码器权重（默认）
+set(HIFIGAN_MODEL_COMMUNITY "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx")
+# Coulin9 微调版声码器权重（实验性）
+set(HIFIGAN_MODEL_COULIN9   "${CMAKE_CURRENT_SOURCE_DIR}/pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx")
+set(RMVPE_MODEL             "${CMAKE_CURRENT_SOURCE_DIR}/models/rmvpe.onnx")
+set(GAME_MODEL_DIR          "${CMAKE_CURRENT_SOURCE_DIR}/models/GAME")
 
 if(EXISTS "${GAME_MODEL_DIR}")
     message(STATUS "GAME note generator model bundle found: ${GAME_MODEL_DIR}")
@@ -955,8 +958,13 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/models"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${HIFIGAN_MODEL}"
+            "${HIFIGAN_MODEL_COMMUNITY}"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/hifigan.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${HIFIGAN_MODEL_COULIN9}"
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/hifigan_coulin9.onnx"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/vocoder_weights"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RMVPE_MODEL}"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/models/rmvpe.onnx"
@@ -978,8 +986,13 @@ elseif(APPLE)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${HIFIGAN_MODEL}"
+            "${HIFIGAN_MODEL_COMMUNITY}"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/hifigan.onnx"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${HIFIGAN_MODEL_COULIN9}"
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/hifigan_coulin9.onnx"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/vocoder_weights"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${RMVPE_MODEL}"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/models/rmvpe.onnx"
@@ -1094,8 +1107,13 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E make_directory
                 "$<TARGET_FILE_DIR:OpenTune_VST3>/models"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${HIFIGAN_MODEL}"
+                "${HIFIGAN_MODEL_COMMUNITY}"
                 "$<TARGET_FILE_DIR:OpenTune_VST3>/models/hifigan.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HIFIGAN_MODEL_COULIN9}"
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/hifigan_coulin9.onnx"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:OpenTune_VST3>/models/vocoder_weights"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${RMVPE_MODEL}"
                 "$<TARGET_FILE_DIR:OpenTune_VST3>/models/rmvpe.onnx"
@@ -1119,8 +1137,13 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E make_directory
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${HIFIGAN_MODEL}"
+                "${HIFIGAN_MODEL_COMMUNITY}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/hifigan.onnx"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HIFIGAN_MODEL_COULIN9}"
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/hifigan_coulin9.onnx"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/vocoder_weights"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${RMVPE_MODEL}"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/models/rmvpe.onnx"

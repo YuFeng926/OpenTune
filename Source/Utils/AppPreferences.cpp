@@ -20,6 +20,7 @@ constexpr const char* kSharedZoomVerticalFactorKey = "shared.zoom.verticalFactor
 constexpr const char* kSharedScrollSpeedKey = "shared.scroll.speed";
 constexpr const char* kStandaloneMouseTrailThemeKey = "standalone.mouseTrail.theme";
 constexpr const char* kSharedRenderingPriorityKey = "shared.rendering.priority";
+constexpr const char* kSharedVocoderWeightKey = "shared.rendering.vocoderWeight";
 constexpr const char* kSharedRecentProjectsKey = "shared.recentProjects";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
@@ -205,6 +206,21 @@ RenderingPriority renderingPriorityFromToken(const juce::String& token)
     return RenderingPriority::GpuFirst;
 }
 
+static juce::String toVocoderWeightToken(VocoderModelWeight w)
+{
+    switch (w) {
+        case VocoderModelWeight::Community: return "community";
+        case VocoderModelWeight::Coulin9V4: return "coulin9-v4";
+    }
+    return "community";
+}
+
+static VocoderModelWeight fromVocoderWeightToken(const juce::String& token)
+{
+    if (token == "coulin9-v4") return VocoderModelWeight::Coulin9V4;
+    return VocoderModelWeight::Community;
+}
+
 KeyShortcutConfig::KeyShortcutSettings decodeShortcutSettings(const juce::PropertiesFile& properties)
 {
     auto settings = KeyShortcutConfig::KeyShortcutSettings::getDefault();
@@ -249,6 +265,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.renderingPriority = renderingPriorityFromToken(
         properties.getValue(kSharedRenderingPriorityKey,
                             toRenderingPriorityToken(state.shared.renderingPriority)));
+    state.shared.vocoderModelWeight = fromVocoderWeightToken(
+        properties.getValue(kSharedVocoderWeightKey,
+                            toVocoderWeightToken(state.shared.vocoderModelWeight)));
 
     state.standalone.shortcuts = decodeShortcutSettings(properties);
     state.standalone.mouseTrailTheme = mouseTrailThemeFromToken(
@@ -283,6 +302,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedScrollSpeedKey, static_cast<double>(state.shared.zoomSensitivity.scrollSpeed));
     properties.setValue(kSharedRenderingPriorityKey,
                         toRenderingPriorityToken(state.shared.renderingPriority));
+    properties.setValue(kSharedVocoderWeightKey,
+                        toVocoderWeightToken(state.shared.vocoderModelWeight));
     properties.setValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme));
 
     juce::StringArray recentPaths;
@@ -406,6 +427,13 @@ void AppPreferences::setRenderingPriority(RenderingPriority priority)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.renderingPriority = priority;
+    saveLocked();
+}
+
+void AppPreferences::setVocoderModelWeight(VocoderModelWeight weight)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.vocoderModelWeight = weight;
     saveLocked();
 }
 
