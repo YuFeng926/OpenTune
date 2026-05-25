@@ -373,6 +373,23 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         shouldShowOverlay = true;
     }
 
+    // Waiting for ARA materialization birth (Read Audio) — blocking overlay with spinner.
+    // Auto-dismissed when the materialization is ready (detected via resolveCurrentMaterializationId).
+    if (waitingForAraMaterialization_) {
+        if (activeMaterializationId != 0) {
+            waitingForAraMaterialization_ = false;
+        } else {
+            // Safety timeout: if birth takes > 60s, dismiss to avoid trapping user.
+            const auto nowMs = juce::Time::getApproximateMillisecondCounter();
+            if (nowMs - araWaitStartMs_ > 60000) {
+                AppLogger::log("ReadAudio: ARA materialization birth timed out after 60s");
+                waitingForAraMaterialization_ = false;
+            } else {
+                shouldShowOverlay = true;
+            }
+        }
+    }
+
     if (autoRenderOverlay_.isVisible() != shouldShowOverlay) {
         autoRenderOverlay_.setVisible(shouldShowOverlay);
     }
@@ -966,9 +983,14 @@ void OpenTuneAudioProcessorEditor::recordRequested()
     uint64_t materializationId = preferredRegionView->appliedProjection.materializationId;
     if (materializationId == 0)
     {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-                                               "Read Audio",
-                                               "Audio data is being processed. The region will appear shortly.");
+        // Show blocking overlay instead of modal popup — the timer callback
+        // auto-dismisses it once the materialization is ready.
+        waitingForAraMaterialization_ = true;
+        araWaitStartMs_ = juce::Time::getApproximateMillisecondCounter();
+        autoRenderOverlay_.setMessageText(
+            juce::String::fromUTF8("\xe9\x9f\xb3\xe9\xa2\x91\xe5\xa4\x84\xe7\x90\x86\xe4\xb8\xad"),
+            "Audio data is being processed. The region will appear shortly.");
+        autoRenderOverlay_.setVisible(true);
         return;
     }
 
