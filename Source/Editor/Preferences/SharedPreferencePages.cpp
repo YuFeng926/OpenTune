@@ -148,8 +148,7 @@ public:
         initialiseComboBox(renderingPrioritySelector_);
         addAndMakeVisible(renderingPrioritySelector_);
 
-        vocoderWeightLabel_.setText(LOC(kVocoderWeight), juce::dontSendNotification);
-        initialiseLabel(vocoderWeightLabel_);
+        initialiseLabel(vocoderWeightLabel_, LOC(kVocoderWeight));
         addAndMakeVisible(vocoderWeightLabel_);
 
         vocoderWeightSelector_.addItem(LOC(kVocoderWeightCommunity), 1);
