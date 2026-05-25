@@ -18,7 +18,7 @@ public:
     VocoderInferenceService(std::shared_ptr<Ort::Env> env);
     ~VocoderInferenceService();
 
-    bool initialize(const std::string& modelDir);
+    bool initialize(const std::string& modelPath);
     void shutdown();
 
     Result<std::vector<float>> synthesize(

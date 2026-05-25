@@ -10,9 +10,8 @@ public:
     Impl(std::shared_ptr<Ort::Env> env) : env_(std::move(env)) {}
     ~Impl() { shutdown(); }
 
-    bool initialize(const std::string& modelDir) {
+    bool initialize(const std::string& modelPath) {
         try {
-            const std::string modelPath = modelDir + "/hifigan.onnx";
             auto result = VocoderFactory::create(modelPath, *env_);
 
             if (!result.success()) {
@@ -86,8 +85,8 @@ VocoderInferenceService::VocoderInferenceService(std::shared_ptr<Ort::Env> env)
 
 VocoderInferenceService::~VocoderInferenceService() = default;
 
-bool VocoderInferenceService::initialize(const std::string& modelDir) {
-    return pImpl_->initialize(modelDir);
+bool VocoderInferenceService::initialize(const std::string& modelPath) {
+    return pImpl_->initialize(modelPath);
 }
 
 void VocoderInferenceService::shutdown() {
