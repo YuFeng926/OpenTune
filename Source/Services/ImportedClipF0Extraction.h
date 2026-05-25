@@ -49,11 +49,7 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
     // Per channel-layout-policy spec: F0 extraction always sources from channel 0
     // of the stored audio. Storage is guaranteed to be 1 or 2 channels (mono or
     // stereo); ch 0 is the mono channel or the L of stereo, treated identically.
-    std::vector<float> monoAudio(static_cast<size_t>(numSamples), 0.0f);
     const float* src = snap.audioBuffer->getReadPointer(0);
-    for (int i = 0; i < numSamples; ++i) {
-        monoAudio[static_cast<size_t>(i)] = src[i];
-    }
 
     // Materialization audio is stored in the shared runtime's fixed local sample-rate domain.
     const int hopSize = f0Service.getF0HopSize();
@@ -63,7 +59,7 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
     out.expectedInferenceFrameCount = static_cast<int>(std::ceil(out.audioDurationSeconds
         * static_cast<double>(f0SampleRate) / static_cast<double>(juce::jmax(1, hopSize))));
 
-    auto extraction = f0Service.extractF0(monoAudio.data(), monoAudio.size(),
+    auto extraction = f0Service.extractF0(src, static_cast<size_t>(numSamples),
                                           static_cast<int>(internalSampleRate));
     if (!extraction.ok() || extraction.value().empty()) {
         errorMessage = "f0_empty_or_unvoiced";
@@ -72,9 +68,32 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
 
     out.f0 = extraction.value();
     out.energy.resize(out.f0.size(), 0.0f);
+    const double f0SecondsPerFrame = static_cast<double>(hopSize)
+        / static_cast<double>(juce::jmax(1, f0SampleRate));
+    const int halfRmsWindowSamples = juce::jmax(1, static_cast<int>(std::round(internalSampleRate * 0.010)));
     for (size_t i = 0; i < out.f0.size(); ++i) {
-        if (std::isfinite(out.f0[i]) && out.f0[i] > 0.0f)
-            out.energy[i] = 1.0f;
+        if (!std::isfinite(out.f0[i]) || out.f0[i] <= 0.0f) {
+            continue;
+        }
+
+        const int centerSample = juce::jlimit(
+            0,
+            numSamples - 1,
+            static_cast<int>(std::round(static_cast<double>(i) * f0SecondsPerFrame * internalSampleRate)));
+        const int startSample = juce::jmax(0, centerSample - halfRmsWindowSamples);
+        const int endSampleExclusive = juce::jmin(numSamples, centerSample + halfRmsWindowSamples);
+        if (endSampleExclusive <= startSample) {
+            continue;
+        }
+
+        double squareSum = 0.0;
+        for (int sample = startSample; sample < endSampleExclusive; ++sample) {
+            const float value = src[sample];
+            squareSum += static_cast<double>(value) * static_cast<double>(value);
+        }
+
+        const double meanSquare = squareSum / static_cast<double>(endSampleExclusive - startSample);
+        out.energy[i] = juce::jlimit(0.0f, 1.0f, static_cast<float>(std::sqrt(meanSquare)));
     }
 
     out.hopSize = hopSize;

@@ -13,14 +13,37 @@ namespace Aurora {
         static const juce::uint32 BgSurface     = 0xFF0D1D2F; // Lifted inner surface
         static const juce::uint32 BgOverlay     = 0x1FFFFFFF; // Light Overlay
 
-        // Aurora Glass v2 semantic surfaces
-        static const juce::uint32 GlassSurface   = 0xD40E2237; // Lifted inner glass
-        static const juce::uint32 GlassHighlight = 0x229EDFFF; // Fine upper sheen
-        static const juce::uint32 GlassEdge      = 0x805CC8FF; // Crisp blue glass edge
-        static const juce::uint32 PanelGlow      = 0x521A78D0; // Soft electric blue glow
-        static const juce::uint32 ButtonNormal   = 0xC00B1728; // Resting dark glass button
-        static const juce::uint32 ButtonHover    = 0xD1112A44; // Hover glass button
-        static const juce::uint32 ButtonActive   = 0xE51B5F9E; // Pressed/active glass button
+        // Aurora Glass v3 semantic surfaces
+        static const juce::uint32 GlassSurface   = 0xE10B1827; // Deeper neutral glass body
+        static const juce::uint32 GlassHighlight = 0x1A7CC5F4; // Restrained upper sheen
+        static const juce::uint32 GlassEdge      = 0x666DA8D8; // Cooler, thinner default edge
+        static const juce::uint32 PanelGlow      = 0x2A133964; // Subtle ambient cyan-blue aura
+        static const juce::uint32 ButtonNormal   = 0xE10A1420; // Resting dark capsule
+        static const juce::uint32 ButtonHover    = 0xE4101B29; // Hover dark capsule
+        static const juce::uint32 ButtonActive   = 0xE8112437; // Active state keeps dark body
+
+        // Top tray semantics
+        static const juce::uint32 TrayTop         = 0xFF14263A; // Subtle upper lift
+        static const juce::uint32 TrayMid         = 0xFF0D1A29; // Stable core tone
+        static const juce::uint32 TrayBottom      = 0xFF08121D; // Deep lower settle
+        static const juce::uint32 TraySideGlow    = 0x18367AC4; // Localized cool air, not full wash
+        static const juce::uint32 TrayTopHighlight = 0x3E9FD6FF; // Thin cold top edge
+        static const juce::uint32 TrayInnerEdge   = 0x2299CFFF; // Inner glass lip
+        static const juce::uint32 TrayOuterEdge   = 0x4F4F83B2; // Outer structural frame
+
+        // Button chrome semantics
+        static const juce::uint32 ButtonFaceTop   = 0xFF182A3C; // Compressed top light
+        static const juce::uint32 ButtonFaceMid   = 0xFF0D1826; // Dense centre mass
+        static const juce::uint32 ButtonFaceBottom = 0xFF08111A; // Deep lower glass
+        static const juce::uint32 ButtonSheen     = 0x2496D6FF; // Tighter top ridge sheen
+        static const juce::uint32 ButtonInnerLight = 0x1687C3FF; // Narrower inner refraction
+        static const juce::uint32 ButtonEdge      = 0x7989B2DC; // Resting cold edge
+        static const juce::uint32 ButtonActiveEdge = 0xD07BCFFF; // Active cyan hotspot
+        static const juce::uint32 ButtonCoreShadow = 0x6E01060D; // Centre cavity shade
+        static const juce::uint32 ButtonRestGlow  = 0x10164A84; // Minimal idle halo
+        static const juce::uint32 ButtonHoverGlow = 0x182965A6; // Hover edge aura
+        static const juce::uint32 ButtonActiveGlow = 0x1F357DD6; // Active edge aura
+        static const juce::uint32 ButtonActiveTint = 0x2E2C74BE; // Active internal tint, not full fill
         static const juce::uint32 PianoRollBg    = 0xFF0C1D2F; // Clean deep piano roll field
         static const juce::uint32 PianoLane      = 0xFF87B6D4; // Low contrast pitch lane
         static const juce::uint32 PianoGrid      = 0xFF9BD5FF; // Thin blue grid

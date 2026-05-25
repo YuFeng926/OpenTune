@@ -27,6 +27,8 @@ public:
         juce::String sourceFilePath;  // 原始导入文件路径（空字符串表示无文件来源）
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
         double sampleRate{0.0};
+        int numChannels{0};
+        int64_t numSamples{0};
     };
 
     struct SourceSnapshot {

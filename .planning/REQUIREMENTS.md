@@ -94,4 +94,23 @@
 
 ---
 *Requirements defined: 2026-04-20*
-*Last updated: 2026-05-17 after implementing ARA-capable regular VST3 runtime mode split*
+## 2026-05-26 Requirement Addendum: ARA OriginalF0 Minimal Chain
+
+### Active
+
+- [x] **MAIN-29**: VST3 ARA automatic OriginalF0 must have exactly one content-processing owner: `VST3AraSession` schedules source-window birth and `OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(AraOriginalF0BirthRequest)` performs the only ARA content read/F0 commit path. — **Done**: `birthAraMaterializationWithOriginalF0` 是唯一 ARA 内容读取/F0 提交路径
+- [x] **MAIN-30**: ARA-bound `PluginEditor::recordRequested()` must be binding/display only. It must not trigger `requestReferenceNoteGeneration()` and must not fallback to `requestMaterializationRefresh()`. — **Done**: `rmvpeOverlayLatched_` 删除；`requestReferenceNoteGeneration()` 调用删除；`requestMaterializationRefresh()` fallback 删除
+- [x] **MAIN-31**: VST3 ARA automatic OriginalF0 and ARA Read Audio must never enqueue GAME reference-note generation. GAME remains allowed only in Standalone / regular VST3 explicit entry points. — **Done**: ARA-bound Editor 路径不再调用 GAME
+- [x] **MAIN-32**: ARA session must remove source-level full-read hydration validation. Host sample reads for this path must happen only for the target source window inside the materialization birth request. — **Done**: hydration worker 重命名为 birth worker；source-level full-read pass 删除
+- [x] **MAIN-33**: `PublishedRegionView` must not expose obsolete `copiedAudio` state. Playback/renderability must be expressed by materialization binding state, not copied PCM availability. — **Done**: `copiedAudio` 删除；测试从 copiedAudio 叙事改名为 binding/payload 语义
+- [x] **MAIN-34**: ARA-F0 tests must include negative contract guards and behavior evidence for no GAME, no refresh fallback, RMVPE immediate release, and playback via born materialization. Source-shape-only tests are insufficient as final proof. — **Done**: 7 个 `AraFinal_*` 终审守卫（negative guard + path guard）全部 PASS
+
+### Traceability Addendum
+
+| Source | Responsibility |
+|--------|----------------|
+| `.planning/plans/2026-05-26-vst3-ara-originalf0-final-convergence.md` | Code-level execution plan for removing remaining ARA-F0 fallback, parallel structure, and dead API residue |
+| `.planning/plans/2026-05-26-vst3-ara-originalf0-final-convergence-test-verification.md` | Verification contract for final ARA-F0 convergence, including negative guards, focused suites, builds, and Studio One L5 |
+
+---
+*Last updated: 2026-05-26 after completing VST3 ARA OriginalF0 final convergence implementation*

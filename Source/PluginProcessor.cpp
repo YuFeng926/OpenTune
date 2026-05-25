@@ -11,8 +11,6 @@
 #include "Utils/AppLogger.h"
 #include "Utils/ChannelLayoutLogger.h"
 #include "Plugin/Capture/CaptureSession.h"
-#include "Inference/GameNoteGenerator.h"      // add-game-note-generator: GAME backend
-#include "Utils/LegacyNoteGenerator.h"        // add-game-note-generator: Legacy fallback
 #include "Inference/SoundTouchStretcher.h"   // §7 Phase D — Stage 2 worker (WSOLA, replaces RB)
 #include "DSP/BasicReferenceFeatureBuilder.h"
 #include "DSP/ReferenceAutoAlign.h"
@@ -20,6 +18,8 @@
 #include <onnxruntime_cxx_api.h>
 #include "Utils/AccelerationDetector.h"
 #include "Utils/TimeCoordinate.h"
+#include "Inference/GameNoteGenerator.h"      // GAME backend (Standalone / regular VST3)
+#include "Utils/LegacyNoteGenerator.h"        // Legacy fallback
 #include "Utils/CompositeUndoAction.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/TimeGridEditAction.h"
@@ -2665,15 +2665,21 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
         const auto displayName = input.readString();
         const auto sourceSampleRate = input.readDouble();
         const auto sourceAudioBuffer = readAudioBuffer(input);
-        if (sourceId == 0 || sourceAudioBuffer == nullptr) {
+        if (sourceId == 0) {
             return;
         }
         jassert(sourceStore_ != nullptr);
 
         SourceStore::CreateSourceRequest request;
         request.displayName = displayName;
-        request.audioBuffer = sourceAudioBuffer;
-        request.sampleRate = sourceSampleRate;
+        request.sampleRate = sourceSampleRate > 0.0 ? sourceSampleRate : TimeCoordinate::kRenderSampleRate;
+        if (sourceAudioBuffer != nullptr) {
+            request.audioBuffer = sourceAudioBuffer;
+        } else {
+            // Metadata-only source (e.g. ARA): register without PCM buffer.
+            // The source may already exist from ARA document controller restore;
+            // if not, createSource will register it with identity only.
+        }
         if (sourceStore_->createSource(std::move(request), sourceId) != sourceId) {
             return;
         }
@@ -3784,69 +3790,257 @@ uint64_t OpenTuneAudioProcessor::commitPreparedImportAsMaterialization(PreparedI
 }
 
 #if JucePlugin_Enable_ARA
-std::optional<OpenTuneAudioProcessor::AraRegionMaterializationBirthResult>
-OpenTuneAudioProcessor::ensureAraRegionMaterialization(
-    juce::ARAAudioSource* audioSource,
-    uint64_t sourceId,
-    std::shared_ptr<const juce::AudioBuffer<float>> copiedAudio,
-    double copiedAudioSampleRate,
-    const SourceWindow& sourceWindow,
-    double playbackStartSeconds)
-{
-    juce::ignoreUnused(playbackStartSeconds);
 
-    if (audioSource == nullptr || copiedAudio == nullptr || copiedAudio->getNumSamples() <= 0 || sourceId == 0)
+
+
+
+std::optional<OpenTuneAudioProcessor::AraRegionMaterializationBirthResult>
+OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(AraOriginalF0BirthRequest request)
+{
+    // ================================================================
+    // 1. Validation — immediately take ownership of the reader lease
+    // ================================================================
+    auto readerLease = std::move(request.readerLease);
+    if (readerLease == nullptr || request.audioSource == nullptr || request.sourceId == 0
+        || request.numChannels <= 0 || request.numSamples <= 0 || request.sourceSampleRate <= 0.0)
         return std::nullopt;
 
-    const juce::String sourceName = audioSource->getName() != nullptr
-        ? juce::String::fromUTF8(audioSource->getName())
+    const juce::String sourceName = request.audioSource->getName() != nullptr
+        ? juce::String::fromUTF8(request.audioSource->getName())
         : juce::String("ARA Source");
 
-    if (!ensureSourceById(sourceId, sourceName, copiedAudio, copiedAudioSampleRate))
-        return std::nullopt;
+    AppLogger::info("ARA OriginalF0 pipeline: start sourceId="
+        + juce::String(static_cast<juce::int64>(request.sourceId))
+        + " window=[" + juce::String(request.sourceWindow.sourceStartSeconds, 3)
+        + ", " + juce::String(request.sourceWindow.sourceEndSeconds, 3) + "]");
 
-    const int64_t sourceStartSample = static_cast<int64_t>(std::round(sourceWindow.sourceStartSeconds * copiedAudioSampleRate));
-    const int64_t sourceEndSample = static_cast<int64_t>(std::round(sourceWindow.sourceEndSeconds * copiedAudioSampleRate));
+    // ================================================================
+    // 2. Source window bounds
+    // ================================================================
+    const int64_t sourceStartSample = static_cast<int64_t>(
+        std::round(request.sourceWindow.sourceStartSeconds * request.sourceSampleRate));
+    const int64_t sourceEndSample = static_cast<int64_t>(
+        std::round(request.sourceWindow.sourceEndSeconds * request.sourceSampleRate));
     const int64_t windowSamples = std::max<int64_t>(0,
-        std::min<int64_t>(sourceEndSample, copiedAudio->getNumSamples()) - std::max<int64_t>(0, sourceStartSample));
+        std::min<int64_t>(sourceEndSample, request.numSamples)
+        - std::max<int64_t>(0, sourceStartSample));
 
     if (windowSamples <= 0)
         return std::nullopt;
 
-    juce::AudioBuffer<float> windowBuffer(copiedAudio->getNumChannels(), static_cast<int>(windowSamples));
-    for (int ch = 0; ch < copiedAudio->getNumChannels(); ++ch)
+    // ================================================================
+    // 3. Allocate playable accum buffer (multi-channel)
+    // ================================================================
+    juce::AudioBuffer<float> playableAccum(request.numChannels, static_cast<int>(windowSamples));
+    playableAccum.clear();
+
+    // ================================================================
+    // 4. Chunked ARA read — fail fast on read failure (no silence fill)
+    // ================================================================
+    constexpr int64_t kChunkSamples = 32768;
     {
-        windowBuffer.copyFrom(ch, 0,
-                              copiedAudio->getReadPointer(ch, static_cast<int>(std::max<int64_t>(0, sourceStartSample))),
-                              static_cast<int>(windowSamples));
+        int64_t readOffset = sourceStartSample;
+        int64_t accumWriteOffset = 0;
+        int64_t remaining = windowSamples;
+
+        while (remaining > 0)
+        {
+            const int64_t chunkSamples = std::min(kChunkSamples, remaining);
+            const int accumOffset = static_cast<int>(accumWriteOffset);
+
+            std::vector<void*> channelPointers(static_cast<size_t>(request.numChannels));
+            for (int ch = 0; ch < request.numChannels; ++ch)
+                channelPointers[static_cast<size_t>(ch)] = playableAccum.getWritePointer(ch, accumOffset);
+
+            if (!readerLease->readAudioSamples(readOffset,
+                                               static_cast<int>(chunkSamples),
+                                               channelPointers.data()))
+            {
+                AppLogger::error("ARA OriginalF0 pipeline: readAudioSamples failed at offset="
+                    + juce::String(readOffset) + " chunkSamples=" + juce::String(chunkSamples));
+                return std::nullopt;
+            }
+
+            readOffset += chunkSamples;
+            accumWriteOffset += chunkSamples;
+            remaining -= chunkSamples;
+        }
     }
 
+    AppLogger::info("ARA OriginalF0 pipeline: playableBuffer44k built samples="
+        + juce::String(playableAccum.getNumSamples()));
+
+    // ================================================================
+    // 5. Extract ch0 for RMVPE (source sample rate — RMVPE internally
+    //    handles 16kHz downsampling via ResamplingManager)
+    // ================================================================
+    std::vector<float> channel0Data(static_cast<size_t>(playableAccum.getNumSamples()));
+    {
+        const float* ch0Read = playableAccum.getReadPointer(0);
+        std::copy(ch0Read, ch0Read + playableAccum.getNumSamples(), channel0Data.begin());
+    }
+
+    // ================================================================
+    // 6. Ensure source exists in SourceStore (metadata-only, no full PCM)
+    // ================================================================
+    if (!sourceStore_->containsSource(request.sourceId))
+    {
+        SourceStore::CreateSourceRequest sourceRequest;
+        sourceRequest.displayName = sourceName;
+        sourceRequest.numChannels = request.numChannels;
+        sourceRequest.numSamples = request.numSamples;
+        sourceRequest.sampleRate = request.sourceSampleRate > 0.0
+            ? request.sourceSampleRate
+            : TimeCoordinate::kRenderSampleRate;
+        if (sourceStore_->createSource(std::move(sourceRequest), request.sourceId) != request.sourceId)
+            return std::nullopt;
+    }
+
+    // ================================================================
+    // 7. prepareImport (internally resamples to 44.1kHz) then birth
+    // ================================================================
     PreparedImport preparedImport;
-    if (!prepareImport(std::move(windowBuffer), copiedAudioSampleRate, sourceName, {}, preparedImport,
+    if (!prepareImport(std::move(playableAccum), request.sourceSampleRate, sourceName, {}, preparedImport,
                        "ara-hydrate"))
+    {
+        channel0Data.clear();
+        channel0Data.shrink_to_fit();
         return std::nullopt;
+    }
 
-    preparedImport.sourceWindow = SourceWindow{sourceId,
-                                               sourceWindow.sourceStartSeconds,
-                                               sourceWindow.sourceEndSeconds};
+    preparedImport.sourceWindow = SourceWindow{request.sourceId,
+                                               request.sourceWindow.sourceStartSeconds,
+                                               request.sourceWindow.sourceEndSeconds};
 
-    const uint64_t materializationId = commitPreparedImportAsMaterialization(std::move(preparedImport), sourceId);
+    const uint64_t materializationId = commitPreparedImportAsMaterialization(std::move(preparedImport), request.sourceId);
     if (materializationId == 0)
+    {
+        channel0Data.clear();
+        channel0Data.shrink_to_fit();
         return std::nullopt;
+    }
 
-    AraRegionMaterializationBirthResult result;
-    result.sourceId = sourceId;
-    result.materializationId = materializationId;
-    result.materializationRevision = 0;
-    result.materializationDurationSeconds = getMaterializationAudioDurationById(materializationId);
+    AppLogger::info("ARA OriginalF0 pipeline: materialization born materializationId="
+        + juce::String(static_cast<juce::int64>(materializationId)));
 
-    AppLogger::log("ARA auto-birth: sourceId=" + juce::String(static_cast<juce::int64>(sourceId))
-        + " materializationId=" + juce::String(static_cast<juce::int64>(materializationId))
-        + " duration=" + juce::String(result.materializationDurationSeconds, 6));
+    // Helper: build birth result from the born materialization (revision=0 at birth).
+    auto buildBirthResult = [&]() -> AraRegionMaterializationBirthResult
+    {
+        AraRegionMaterializationBirthResult r;
+        r.sourceId = request.sourceId;
+        r.materializationId = materializationId;
+        r.materializationRevision = 0;
+        r.materializationDurationSeconds = getMaterializationAudioDurationById(materializationId);
+        return r;
+    };
 
-    return result;
+    // ================================================================
+    // 8. F0 extraction via RMVPE (source-rate input; internal 16kHz resampling)
+    // ================================================================
+    if (!ensureF0Ready())
+    {
+        AppLogger::warn("ARA OriginalF0 pipeline: F0 service not ready");
+        setMaterializationOriginalF0StateById(materializationId, OriginalF0State::Failed);
+        channel0Data.clear();
+        channel0Data.shrink_to_fit();
+        return buildBirthResult();
+    }
+
+    F0InferenceService* f0Service = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(f0InitMutex_);
+        f0Service = f0Service_.get();
+    }
+    if (f0Service == nullptr)
+    {
+        AppLogger::warn("ARA OriginalF0 pipeline: F0 service missing");
+        setMaterializationOriginalF0StateById(materializationId, OriginalF0State::Failed);
+        channel0Data.clear();
+        channel0Data.shrink_to_fit();
+        return buildBirthResult();
+    }
+
+    auto extraction = f0Service->extractF0(
+        channel0Data.data(), channel0Data.size(),
+        static_cast<int>(request.sourceSampleRate));
+
+    if (!extraction.ok() || extraction.value().empty())
+    {
+        AppLogger::error("ARA OriginalF0 pipeline: RMVPE extraction failed");
+        setMaterializationOriginalF0StateById(materializationId, OriginalF0State::Failed);
+        f0Service->releaseImmediately();
+        channel0Data.clear();
+        channel0Data.shrink_to_fit();
+        return buildBirthResult();
+    }
+
+    // ================================================================
+    // 9. Commit F0 and energy to materialization
+    // ================================================================
+    const int hopSize = f0Service->getF0HopSize();
+    const int f0SampleRate = f0Service->getF0SampleRate();
+
+    auto pitchCurve = std::make_shared<PitchCurve>();
+    pitchCurve->setHopSize(hopSize);
+    pitchCurve->setSampleRate(static_cast<double>(f0SampleRate));
+    pitchCurve->setOriginalF0(extraction.value());
+
+    // Compute energy from channel0Data at source sample rate
+    {
+        std::vector<float> energy(extraction.value().size(), 0.0f);
+        const double f0SecondsPerFrame = static_cast<double>(hopSize)
+            / static_cast<double>(juce::jmax(1, f0SampleRate));
+        const int halfRmsWindowSamples = juce::jmax(1,
+            static_cast<int>(std::round(request.sourceSampleRate * 0.010)));
+        for (size_t i = 0; i < extraction.value().size(); ++i)
+        {
+            if (!std::isfinite(extraction.value()[i]) || extraction.value()[i] <= 0.0f)
+                continue;
+            const int centerSample = juce::jlimit(0, static_cast<int>(channel0Data.size()) - 1,
+                static_cast<int>(std::round(static_cast<double>(i) * f0SecondsPerFrame * request.sourceSampleRate)));
+            const int startSample = juce::jmax(0, centerSample - halfRmsWindowSamples);
+            const int endSampleExclusive = juce::jmin(static_cast<int>(channel0Data.size()),
+                centerSample + halfRmsWindowSamples);
+            if (endSampleExclusive <= startSample) continue;
+            double squareSum = 0.0;
+            for (int s = startSample; s < endSampleExclusive; ++s)
+            {
+                const float v = channel0Data[static_cast<size_t>(s)];
+                squareSum += static_cast<double>(v) * static_cast<double>(v);
+            }
+            const double meanSquare = squareSum / static_cast<double>(endSampleExclusive - startSample);
+            energy[i] = juce::jlimit(0.0f, 1.0f, static_cast<float>(std::sqrt(meanSquare)));
+        }
+        pitchCurve->setOriginalEnergy(energy);
+    }
+
+    setMaterializationPitchCurveById(materializationId, std::move(pitchCurve));
+    setMaterializationOriginalF0StateById(materializationId, OriginalF0State::Ready);
+
+    AppLogger::info("ARA OriginalF0 pipeline: F0 committed frames="
+        + juce::String(static_cast<juce::int64>(extraction.value().size())));
+
+    // ================================================================
+    // 10. Release RMVPE immediately, clean temp buffers
+    // ================================================================
+    f0Service->releaseImmediately();
+    channel0Data.clear();
+    channel0Data.shrink_to_fit();
+
+    AppLogger::info("ARA OriginalF0 pipeline: complete materializationId="
+        + juce::String(static_cast<juce::int64>(materializationId)));
+
+    return buildBirthResult();
 }
-#endif
+
+#endif // JucePlugin_Enable_ARA
+
+// ============================================================================
+// requestMaterializationRefresh — Standalone / regular VST3 F0 refresh.
+// F0 only — does NOT run GAME note generation.
+// Callers should invoke requestReferenceNoteGeneration() separately
+// when note generation is needed.
+// ============================================================================
 
 bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioProcessor::MaterializationRefreshRequest& request)
 {
@@ -4052,87 +4246,6 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
 
             processor->setMaterializationOriginalF0StateById(result.materializationId, OriginalF0State::Ready);
 
-            // Auto-generate notes via the active backend (GAME by default,
-            // Legacy fallback). Runs on a single-threaded pool so concurrent
-            // imports serialise (ORT sessions are not safe to share across
-            // concurrent inference calls). All three flows (standalone import
-            // / plugin ARA / plugin non-ARA capture) converge here, so this
-            // single hook covers them all.
-            //
-            // We capture by value the few fields the worker needs so the
-            // F0 result object can be destroyed independently.
-            const auto materializationId = result.materializationId;
-            const auto sourceAudioBuffer = result.sourceAudioBuffer;
-            const auto f0Snapshot        = result.f0;
-            const auto energySnapshot    = result.energy;
-            const auto hopSize           = result.hopSize;
-            const auto f0SampleRate      = static_cast<double>(result.f0SampleRate);
-
-            // Mark this materialization as note-gen-in-flight so editors can
-            // keep the shared "正在处理音频" overlay visible until BOTH F0 and
-            // note generation are done.
-            {
-                std::lock_guard<std::mutex> lk(processor->noteGenInFlightMutex_);
-                processor->noteGenInFlightMatIds_.insert(materializationId);
-            }
-
-            processor->noteGeneratorPool_.addJob([processor, lifetimeFlag,
-                                                  materializationId,
-                                                  sourceAudioBuffer,
-                                                  f0Snapshot, energySnapshot,
-                                                  hopSize, f0SampleRate]() {
-                // Always remove this materialization from the in-flight set
-                // when the job finishes (success / no-op / exception),
-                // regardless of whether we got to commit notes.
-                struct InFlightGuard {
-                    OpenTuneAudioProcessor* p;
-                    uint64_t                matId;
-                    ~InFlightGuard() {
-                        std::lock_guard<std::mutex> lk(p->noteGenInFlightMutex_);
-                        p->noteGenInFlightMatIds_.erase(matId);
-                    }
-                } guard{processor, materializationId};
-
-                if (!lifetimeFlag->load(std::memory_order_acquire)) return;
-                if (!processor->ensureNoteGeneratorReady()) {
-                    AppLogger::warn("[NoteGen] generator not ready; skipping auto-note for materializationId="
-                                     + juce::String(static_cast<juce::int64>(materializationId)));
-                    return;
-                }
-                if (!processor->noteGenerator_) return;
-                if (!sourceAudioBuffer || sourceAudioBuffer->getNumSamples() <= 0) return;
-
-                NoteGeneratorInput input;
-                input.sampleRate     = TimeCoordinate::kRenderSampleRate;
-                input.audio.assign(sourceAudioBuffer->getReadPointer(0),
-                                    sourceAudioBuffer->getReadPointer(0) + sourceAudioBuffer->getNumSamples());
-                input.f0             = f0Snapshot;
-                input.energy         = energySnapshot;
-                input.hopSize        = hopSize;
-                input.f0SampleRate   = f0SampleRate;
-                input.hostSampleRate = TimeCoordinate::kRenderSampleRate;
-
-                std::vector<Note> notes;
-                try {
-                    std::lock_guard<std::mutex> lk(processor->noteGeneratorInferenceMutex_);
-                    notes = processor->noteGenerator_->generate(input);
-                } catch (const std::exception& e) {
-                    AppLogger::error(juce::String("[NoteGen] generate threw: ") + e.what());
-                    return;
-                }
-
-                if (!lifetimeFlag->load(std::memory_order_acquire)) return;
-                // Game-generated reference notes are hidden from the UI — they serve only as
-                // visual reminders and will be regenerated by a different algorithm on AutoTune.
-                // Notes stored here are indistinguishable from user-editable notes (same Note
-                // struct, same store field), so the cleanest way to hide them is to not persist.
-                // The GAME model runs for internal reference; only AutoTune-committed notes
-                // (via commitAutoTuneGeneratedNotesByMaterializationId) enter the store and UI.
-                AppLogger::info("[NoteGen] generated " + juce::String(static_cast<int>(notes.size()))
-                                + " reference notes for materializationId="
-                                + juce::String(static_cast<juce::int64>(materializationId))
-                                + " (not committed — hidden from UI)");
-            });
         });
 
     if (submitResult != F0ExtractionService::SubmitResult::Accepted) {
@@ -4141,6 +4254,105 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
         setMaterializationOriginalF0StateById(request.materializationId, OriginalF0State::Failed);
         return false;
     }
+
+    return true;
+}
+
+// ============================================================================
+// requestReferenceNoteGeneration — GAME reference-note 提取（显式调用）
+// 非 ARA 入口（Standalone / regular VST3）。ARA OriginalF0 路径不调用此函数。
+// ============================================================================
+
+bool OpenTuneAudioProcessor::requestReferenceNoteGeneration(uint64_t materializationId)
+{
+    if (materializationId == 0 || materializationStore_ == nullptr)
+        return false;
+
+    // Must have Ready F0 to generate reference notes
+    const auto f0State = getMaterializationOriginalF0StateById(materializationId);
+    if (f0State != OriginalF0State::Ready)
+        return false;
+
+    auto pitchCurve = getMaterializationPitchCurveById(materializationId);
+    if (pitchCurve == nullptr)
+        return false;
+
+    // Read audio buffer from materialization store (already at 44.1kHz)
+    MaterializationSnapshot snapshot;
+    if (!getMaterializationSnapshotById(materializationId, snapshot)
+        || snapshot.audioBuffer == nullptr
+        || snapshot.audioBuffer->getNumSamples() <= 0)
+        return false;
+
+    auto sourceAudioBuffer = snapshot.audioBuffer;
+
+    // Get F0/energy from pitch curve
+    const auto curveSnapshot = pitchCurve->getSnapshot();
+    const auto f0Vec = curveSnapshot->getOriginalF0();
+    const auto energyVec = curveSnapshot->getOriginalEnergy();
+    const int hopSize = curveSnapshot->getHopSize();
+    const double f0SampleRate = curveSnapshot->getSampleRate();
+
+    if (f0Vec.empty())
+        return false;
+
+    const auto lifetimeFlag = materializationRefreshAliveFlag_;
+    OpenTuneAudioProcessor* const processor = this;
+    const auto matId = materializationId;
+
+    {
+        std::lock_guard<std::mutex> lk(noteGenInFlightMutex_);
+        noteGenInFlightMatIds_.insert(matId);
+    }
+
+    noteGeneratorPool_.addJob([processor, lifetimeFlag, matId,
+                                sourceAudioBuffer,
+                                f0Vec, energyVec,
+                                hopSize, f0SampleRate]()
+    {
+        struct InFlightGuard {
+            OpenTuneAudioProcessor* p;
+            uint64_t                mat;
+            ~InFlightGuard() {
+                std::lock_guard<std::mutex> lk(p->noteGenInFlightMutex_);
+                p->noteGenInFlightMatIds_.erase(mat);
+            }
+        } guard{processor, matId};
+
+        if (!lifetimeFlag->load(std::memory_order_acquire)) return;
+        if (!processor->ensureNoteGeneratorReady()) {
+            AppLogger::warn("[NoteGen] generator not ready for materializationId="
+                             + juce::String(static_cast<juce::int64>(matId)));
+            return;
+        }
+        if (!processor->noteGenerator_) return;
+        if (!sourceAudioBuffer || sourceAudioBuffer->getNumSamples() <= 0) return;
+
+        NoteGeneratorInput input;
+        input.sampleRate     = TimeCoordinate::kRenderSampleRate;
+        input.audio.assign(sourceAudioBuffer->getReadPointer(0),
+                            sourceAudioBuffer->getReadPointer(0) + sourceAudioBuffer->getNumSamples());
+        input.f0             = f0Vec;
+        input.energy         = energyVec;
+        input.hopSize        = hopSize;
+        input.f0SampleRate   = f0SampleRate;
+        input.hostSampleRate = TimeCoordinate::kRenderSampleRate;
+
+        std::vector<Note> notes;
+        try {
+            std::lock_guard<std::mutex> lk(processor->noteGeneratorInferenceMutex_);
+            notes = processor->noteGenerator_->generate(input);
+        } catch (const std::exception& e) {
+            AppLogger::error(juce::String("[NoteGen] generate threw: ") + e.what());
+            return;
+        }
+
+        if (!lifetimeFlag->load(std::memory_order_acquire)) return;
+        AppLogger::info("[NoteGen] generated " + juce::String(static_cast<int>(notes.size()))
+                        + " reference notes for materializationId="
+                        + juce::String(static_cast<juce::int64>(matId))
+                        + " (not committed — hidden from UI)");
+    });
 
     return true;
 }

@@ -139,19 +139,49 @@ float clampF0VisualAlpha(float alpha) noexcept
     return juce::jlimit(0.0f, 1.0f, alpha);
 }
 
-float calculateF0VisualEnergyAlpha(float energy,
-                                   float minEnergy,
-                                   float maxEnergy) noexcept
-{
-    static constexpr float kMinEnergyAlpha = 0.70f;
-    static constexpr float kMaxEnergyAlpha = 1.00f;
+struct F0VisualLevelStyle {
+    float energyAlpha = 1.0f;
+    float levelHotMix = 0.0f;
+};
 
-    if (!std::isfinite(energy) || maxEnergy <= minEnergy + std::numeric_limits<float>::epsilon()) {
-        return kMaxEnergyAlpha;
+float smootherStep(float value) noexcept
+{
+    const float t = juce::jlimit(0.0f, 1.0f, value);
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
+float linearRmsToDbfs(float rms) noexcept
+{
+    if (!std::isfinite(rms) || rms <= 0.0f) {
+        return -120.0f;
     }
 
-    const float normalized = juce::jlimit(0.0f, 1.0f, (energy - minEnergy) / (maxEnergy - minEnergy));
-    return kMinEnergyAlpha + (kMaxEnergyAlpha - kMinEnergyAlpha) * normalized;
+    return 20.0f * std::log10(juce::jmax(1.0e-6f, std::abs(rms)));
+}
+
+F0VisualLevelStyle calculateF0VisualLevelStyle(float linearRms,
+                                               bool hasAbsoluteEnergy) noexcept
+{
+    static constexpr float kMinEnergyAlpha = 0.34f;
+    static constexpr float kQuietDb = -60.0f;
+    static constexpr float kOpaqueDb = -18.0f;
+    static constexpr float kHotFadeStartDb = -21.0f;
+    static constexpr float kHotFullDb = -6.0f;
+    static constexpr float kMaxHotMix = 0.34f;
+
+    if (!hasAbsoluteEnergy || !std::isfinite(linearRms)) {
+        return {};
+    }
+
+    const float dbfs = linearRmsToDbfs(linearRms);
+    const float levelAlpha = kMinEnergyAlpha + (1.0f - kMinEnergyAlpha)
+        * smootherStep((dbfs - kQuietDb) / (kOpaqueDb - kQuietDb));
+    const float hotMix = kMaxHotMix * smootherStep((dbfs - kHotFadeStartDb) / (kHotFullDb - kHotFadeStartDb));
+
+    return {
+        clampF0VisualAlpha(levelAlpha),
+        juce::jlimit(0.0f, kMaxHotMix, hotMix)
+    };
 }
 
 float f0VisualTargetPointSpacing(double framePixelSpacing) noexcept
@@ -198,6 +228,38 @@ void appendSmoothedF0Path(juce::Path& path,
     path.lineTo(last.x, last.y);
 }
 
+std::vector<PianoRollRenderer::F0VisualPoint> buildDisplaySmoothedF0Points(
+    const std::vector<PianoRollRenderer::F0VisualPoint>& points,
+    int radius)
+{
+    if (radius <= 0 || points.size() < 3) {
+        return points;
+    }
+
+    auto smoothed = points;
+    for (std::size_t i = 1; i + 1 < points.size(); ++i) {
+        const std::size_t start = (i > static_cast<std::size_t>(radius)) ? i - static_cast<std::size_t>(radius) : 0;
+        const std::size_t end = std::min(points.size() - 1, i + static_cast<std::size_t>(radius));
+
+        float ySum = 0.0f;
+        float weightSum = 0.0f;
+        for (std::size_t j = start; j <= end; ++j) {
+            const float distance = static_cast<float>(std::abs(static_cast<int>(j) - static_cast<int>(i)));
+            const float weight = static_cast<float>(radius + 1) - distance;
+            ySum += points[j].y * weight;
+            weightSum += weight;
+        }
+
+        if (weightSum > 0.0f) {
+            smoothed[i].y = ySum / weightSum;
+        }
+    }
+
+    smoothed.front().y = points.front().y;
+    smoothed.back().y = points.back().y;
+    return smoothed;
+}
+
 } // namespace
 
 std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0VisualSegments(
@@ -226,8 +288,9 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
 
     const bool hasVisibleMask = visibleMask != nullptr;
 
-    float minEnergy = std::numeric_limits<float>::max();
-    float maxEnergy = std::numeric_limits<float>::lowest();
+    int validEnergyCount = 0;
+    bool allEnergyIsLegacyUnit = true;
+    bool allEnergyIsZero = true;
     if (hasEnergy) {
         for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
             const float frequency = f0[static_cast<std::size_t>(frame)];
@@ -240,11 +303,17 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
 
             const float energy = (*originalEnergy)[static_cast<std::size_t>(frame)];
             if (std::isfinite(energy)) {
-                minEnergy = std::min(minEnergy, energy);
-                maxEnergy = std::max(maxEnergy, energy);
+                ++validEnergyCount;
+                if (std::abs(energy - 1.0f) > 1.0e-4f) {
+                    allEnergyIsLegacyUnit = false;
+                }
+                if (std::abs(energy) > 1.0e-6f) {
+                    allEnergyIsZero = false;
+                }
             }
         }
     }
+    const bool hasAbsoluteEnergy = hasEnergy && validEnergyCount > 0 && !allEnergyIsLegacyUnit && !allEnergyIsZero;
 
     const float targetPointSpacing = f0VisualTargetPointSpacing(options.pixelsPerSecond * options.secondsPerFrame);
 
@@ -254,6 +323,7 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
         float xSum = 0.0f;
         float ySum = 0.0f;
         float alphaSum = 0.0f;
+        float hotMixSum = 0.0f;
         float weightSum = 0.0f;
 
         void clear() noexcept
@@ -263,6 +333,7 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
             xSum = 0.0f;
             ySum = 0.0f;
             alphaSum = 0.0f;
+            hotMixSum = 0.0f;
             weightSum = 0.0f;
         }
     };
@@ -281,7 +352,8 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
             bucket.frame,
             bucket.xSum / bucket.weightSum,
             bucket.ySum / bucket.weightSum,
-            clampF0VisualAlpha(bucket.alphaSum / bucket.weightSum)
+            clampF0VisualAlpha(bucket.alphaSum / bucket.weightSum),
+            juce::jlimit(0.0f, 1.0f, bucket.hotMixSum / bucket.weightSum)
         });
         bucket.clear();
     };
@@ -313,14 +385,15 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
         }
 
         const float y = frameToY(frame, frequency);
-        const float energyAlpha = hasEnergy
-            ? calculateF0VisualEnergyAlpha((*originalEnergy)[static_cast<std::size_t>(frame)], minEnergy, maxEnergy)
-            : 1.0f;
+        const auto levelStyle = hasEnergy
+            ? calculateF0VisualLevelStyle((*originalEnergy)[static_cast<std::size_t>(frame)], hasAbsoluteEnergy)
+            : F0VisualLevelStyle {};
+        const float energyAlpha = levelStyle.energyAlpha;
         const float weight = juce::jmax(0.001f, energyAlpha);
 
         if (targetPointSpacing <= 0.0f) {
             flushBucket();
-            currentSegment.points.push_back({ frame, x, y, energyAlpha });
+            currentSegment.points.push_back({ frame, x, y, energyAlpha, levelStyle.levelHotMix });
             continue;
         }
 
@@ -338,6 +411,7 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
         bucket.xSum += x * weight;
         bucket.ySum += y * weight;
         bucket.alphaSum += energyAlpha * weight;
+        bucket.hotMixSum += levelStyle.levelHotMix * weight;
         bucket.weightSum += weight;
         bucket.frame = frame;
     }
@@ -1363,51 +1437,57 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const juce::PathStrokeType selectionStrokeType(selectionLineWidth,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded);
-    const auto drawNormalCurve = [&](const juce::Path& path, float effectiveAlpha)
+    static const juce::Colour kLevelHotGold { 0xFFFFC24A };
+    const auto blendLevelHotColour = [&](juce::Colour base, float levelHotMix) {
+        return base.interpolatedWith(kLevelHotGold, juce::jlimit(0.0f, 0.42f, levelHotMix));
+    };
+    const auto drawNormalCurve = [&](const juce::Path& path, float effectiveAlpha, float levelHotMix)
     {
+        const auto curveColour = blendLevelHotColour(colour, levelHotMix);
         if (isAurora)
         {
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.080f : 0.095f)));
+            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.080f : 0.095f)));
             g.strokePath(path, glowStrokeType);
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.22f : 0.20f)));
+            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.22f : 0.20f)));
             g.strokePath(path, innerGlowStrokeType);
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.96f : 0.98f)));
+            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.96f : 0.98f)));
             g.strokePath(path, strokeType);
-            g.setColour(colour.brighter(isThinLine ? 0.30f : 0.20f).withAlpha(effectiveAlpha * (isThinLine ? 0.18f : 0.15f)));
+            g.setColour(curveColour.brighter(isThinLine ? 0.30f : 0.20f).withAlpha(effectiveAlpha * (isThinLine ? 0.18f : 0.15f)));
             g.strokePath(path, highlightStrokeType);
             return;
         }
 
         if (isBlueBreeze || isOverdose)
         {
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.055f : 0.070f)));
+            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.055f : 0.070f)));
             g.strokePath(path, glowStrokeType);
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.14f : 0.15f)));
+            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.14f : 0.15f)));
             g.strokePath(path, innerGlowStrokeType);
-            g.setColour(colour.withAlpha(effectiveAlpha * (isThinLine ? 0.96f : 0.92f)));
+            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.96f : 0.92f)));
             g.strokePath(path, strokeType);
-            g.setColour(colour.brighter(0.16f).withAlpha(effectiveAlpha * 0.12f));
+            g.setColour(curveColour.brighter(0.16f).withAlpha(effectiveAlpha * 0.12f));
             g.strokePath(path, highlightStrokeType);
             return;
         }
 
-        g.setColour(colour.withAlpha(effectiveAlpha));
+        g.setColour(curveColour.withAlpha(effectiveAlpha));
         g.strokePath(path, strokeType);
     };
-    const auto drawSelectionCurve = [&](const juce::Path& path, float effectiveAlpha)
+    const auto drawSelectionCurve = [&](const juce::Path& path, float effectiveAlpha, float levelHotMix)
     {
+        const auto curveColour = blendLevelHotColour(selectionColour, levelHotMix);
         if (isAurora)
         {
-            g.setColour(selectionColour.withAlpha(effectiveAlpha * 0.10f));
+            g.setColour(curveColour.withAlpha(effectiveAlpha * 0.10f));
             g.strokePath(path, glowStrokeType);
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(selectionColour.withAlpha(effectiveAlpha * 0.075f));
+            g.setColour(curveColour.withAlpha(effectiveAlpha * 0.075f));
             g.strokePath(path, glowStrokeType);
         }
 
-        g.setColour(selectionColour.withAlpha(effectiveAlpha * 0.96f));
+        g.setColour(curveColour.withAlpha(effectiveAlpha * 0.96f));
         g.strokePath(path, selectionStrokeType);
     };
 
@@ -1416,12 +1496,14 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             return;
         }
 
-        if (segment.points.size() == 1) {
-            const auto& point = segment.points.front();
+        const auto displayPoints = buildDisplaySmoothedF0Points(segment.points, isThinLine ? 1 : 2);
+
+        if (displayPoints.size() == 1) {
+            const auto& point = displayPoints.front();
             juce::Path pointPath;
             pointPath.startNewSubPath(point.x - 0.01f, point.y);
             pointPath.lineTo(point.x + 0.01f, point.y);
-            drawNormalCurve(pointPath, alpha * point.energyAlpha * 0.35f);
+            drawNormalCurve(pointPath, alpha * point.energyAlpha * 0.35f, point.levelHotMix);
             return;
         }
 
@@ -1429,35 +1511,46 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             std::size_t startSpan = 0;
             std::size_t endSpanInclusive = 0;
             float alphaSum = 0.0f;
+            float hotMixSum = 0.0f;
             int spanTotal = 0;
             int alphaBucket = 0;
+            int hotBucket = 0;
             bool inSelection = false;
 
             float effectiveAlpha() const noexcept
             {
                 return spanTotal > 0 ? alphaSum / static_cast<float>(spanTotal) : 0.0f;
             }
+
+            float levelHotMix() const noexcept
+            {
+                return spanTotal > 0 ? hotMixSum / static_cast<float>(spanTotal) : 0.0f;
+            }
         };
 
-        const std::size_t spanCount = segment.points.size() - 1;
+        const std::size_t spanCount = displayPoints.size() - 1;
         const std::size_t fadeSpanCount = std::min<std::size_t>(6, std::max<std::size_t>(1, spanCount / 4));
         static constexpr float kAlphaBucketStep = 0.12f;
+        static constexpr float kHotBucketStep = 0.07f;
 
         auto makeRunForSpan = [&](std::size_t span) {
-            const auto& a = segment.points[span];
-            const auto& b = segment.points[span + 1];
+            const auto& a = displayPoints[span];
+            const auto& b = displayPoints[span + 1];
             const float startFade = juce::jmin(1.0f, static_cast<float>(span + 1) / static_cast<float>(fadeSpanCount + 1));
             const float endFade = juce::jmin(1.0f, static_cast<float>(spanCount - span) / static_cast<float>(fadeSpanCount + 1));
             const float taperAlpha = juce::jlimit(0.18f, 1.0f, juce::jmin(startFade, endFade));
             const float energyAlpha = (a.energyAlpha + b.energyAlpha) * 0.5f;
+            const float levelHotMix = (a.levelHotMix + b.levelHotMix) * 0.5f;
             const float effectiveAlpha = alpha * energyAlpha * taperAlpha;
 
             DrawRun run;
             run.startSpan = span;
             run.endSpanInclusive = span;
             run.alphaSum = effectiveAlpha;
+            run.hotMixSum = levelHotMix;
             run.spanTotal = 1;
             run.alphaBucket = static_cast<int>(std::round(effectiveAlpha / kAlphaBucketStep));
+            run.hotBucket = static_cast<int>(std::round(levelHotMix / kHotBucketStep));
             run.inSelection = ctx.hasF0Selection
                 && a.frame >= ctx.f0SelectionStartFrame
                 && b.frame < ctx.f0SelectionEndFrameExclusive;
@@ -1466,11 +1559,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
         auto drawRun = [&](const DrawRun& run) {
             juce::Path runPath;
-            appendSmoothedF0Path(runPath, segment.points, run.startSpan, run.endSpanInclusive + 1);
+            appendSmoothedF0Path(runPath, displayPoints, run.startSpan, run.endSpanInclusive + 1);
             if (run.inSelection) {
-                drawSelectionCurve(runPath, run.effectiveAlpha());
+                drawSelectionCurve(runPath, run.effectiveAlpha(), run.levelHotMix());
             } else {
-                drawNormalCurve(runPath, run.effectiveAlpha());
+                drawNormalCurve(runPath, run.effectiveAlpha(), run.levelHotMix());
             }
         };
 
@@ -1478,9 +1571,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         for (std::size_t span = 1; span < spanCount; ++span) {
             const auto nextRun = makeRunForSpan(span);
             if (nextRun.alphaBucket == activeRun.alphaBucket
+                && nextRun.hotBucket == activeRun.hotBucket
                 && nextRun.inSelection == activeRun.inSelection) {
                 activeRun.endSpanInclusive = span;
                 activeRun.alphaSum += nextRun.alphaSum;
+                activeRun.hotMixSum += nextRun.hotMixSum;
                 activeRun.spanTotal += nextRun.spanTotal;
                 continue;
             }

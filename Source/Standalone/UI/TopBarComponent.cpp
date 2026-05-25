@@ -73,7 +73,7 @@ void TopBarComponent::paint(juce::Graphics& g)
 {
     const auto& style = UIColors::currentThemeStyle();
     // 阴影边距：背景在 reduced(12) 区域内绘制，阴影在边距内渲染
-    const float shadowMargin = 12.0f;
+    const float shadowMargin = UIColors::currentThemeId() == ThemeId::Aurora ? 10.0f : 12.0f;
     auto bounds = getLocalBounds().toFloat().reduced(shadowMargin);
 
     // 顶部条属于"悬浮层级"，使用更明显但仍柔和的 L2 阴影
@@ -102,18 +102,18 @@ void TopBarComponent::paint(juce::Graphics& g)
     {
         UIColors::drawShadow(g, bounds, UIColors::ShadowLevel::Float);
 
-        UIColors::fillAuroraGlass(g, bounds, 0.0f);
-        UIColors::drawAuroraGlassFrame(g, bounds, 0.0f, false);
+        UIColors::fillAuroraGlass(g, bounds, 7.0f);
+        UIColors::drawAuroraGlassFrame(g, bounds, 7.0f, false);
 
-        juce::ColourGradient bottomGlow(UIColors::panelGlow.withAlpha(0.0f), bounds.getX(), bounds.getBottom() - 8.0f,
-                                        UIColors::panelGlow.withAlpha(0.26f), bounds.getX(), bounds.getBottom(), false);
-        g.setGradientFill(bottomGlow);
-        g.fillRect(bounds.getX(), bounds.getBottom() - 8.0f, bounds.getWidth(), 8.0f);
-
-        juce::ColourGradient bottomFade(juce::Colours::transparentBlack, bounds.getX(), bounds.getBottom() - 5.0f,
-                                        UIColors::backgroundDark.withAlpha(0.46f), bounds.getX(), bounds.getBottom(), false);
-        g.setGradientFill(bottomFade);
-        g.fillRect(bounds.getX(), bounds.getBottom() - 5.0f, bounds.getWidth(), 5.0f);
+        juce::ColourGradient bottomClosure(juce::Colours::transparentBlack,
+                                           bounds.getX(),
+                                           bounds.getBottom() - 3.0f,
+                                           UIColors::backgroundDark.withAlpha(0.20f),
+                                           bounds.getX(),
+                                           bounds.getBottom(),
+                                           false);
+        g.setGradientFill(bottomClosure);
+        g.fillRect(bounds.getX() + 6.0f, bounds.getBottom() - 3.0f, bounds.getWidth() - 12.0f, 3.0f);
     }
     else
     {
@@ -126,7 +126,7 @@ void TopBarComponent::paint(juce::Graphics& g)
 void TopBarComponent::resized()
 {
     // 阴影边距：内容区域在 reduced(12) 范围内布局
-    const int shadowMargin = 12;
+    const int shadowMargin = UIColors::currentThemeId() == ThemeId::Aurora ? 10 : 12;
     auto bounds = getLocalBounds().reduced(shadowMargin);
 
     // 顶部菜单条
@@ -137,8 +137,8 @@ void TopBarComponent::resized()
         menuBar_.setBounds({});
 
     // Transport 行：左/右留给侧边栏开关按钮
-    const int pad = 6;
-    const int toggleW = 50; // 统一宽度 (50px) - Scaled 1.25x
+    const int pad = UIColors::currentThemeId() == ThemeId::Aurora ? 5 : 6;
+    const int toggleW = UIColors::currentThemeId() == ThemeId::Aurora ? 46 : 50; // Aurora 更贴近参考图的紧凑节奏
     const int toggleH = 40; // 统一高度 (40px) - Scaled 1.25x
 
     auto row = bounds.reduced(pad, pad);

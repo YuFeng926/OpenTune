@@ -62,7 +62,7 @@ struct VST3AraSessionTestProbe {
         sourceSlot.numChannels = 1;
         sourceSlot.numSamples = 128;
         sourceSlot.contentRevision = 1;
-        sourceSlot.hydratedContentRevision = 0;
+        sourceSlot.sampleAccessEnabled = true;
 
         auto& regionSlot = session.regions_[playbackRegion];
         regionSlot.identity.audioSource = audioSource;
@@ -100,9 +100,7 @@ struct VST3AraSessionTestProbe {
         sourceSlot.numChannels = 1;
         sourceSlot.numSamples = numSamples;
         sourceSlot.contentRevision = 1;
-        sourceSlot.hydratedContentRevision = 1;
-        sourceSlot.copiedAudio = std::make_shared<juce::AudioBuffer<float>>(1, static_cast<int>(numSamples));
-        sourceSlot.copiedAudio->clear();
+        sourceSlot.sampleAccessEnabled = true;
     }
 
     static void seedAudioModificationBinding(VST3AraSession& session,
@@ -146,6 +144,55 @@ struct VST3AraSessionTestProbe {
         regionSlot.projectionRevision = session.nextRegionProjectionRevision_++;
         session.applyBindingToRegionSlotLocked(regionSlot);
         session.preferredRegion_ = regionSlot.identity;
+    }
+
+    static void seedPlaybackRegionWithStaleAppliedProjection(VST3AraSession& session,
+                                                             juce::ARAAudioSource* audioSource,
+                                                             juce::ARAPlaybackRegion* playbackRegion,
+                                                             const juce::String& persistentId,
+                                                             SourceWindow currentSourceWindow,
+                                                             SourceWindow appliedSourceWindow,
+                                                             juce::ARAPlaybackRegion* appliedPlaybackRegion = nullptr,
+                                                             uint64_t materializationId = 9001)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+
+        auto& regionSlot = session.regions_[playbackRegion];
+        regionSlot.identity.audioSource = audioSource;
+        regionSlot.identity.playbackRegion = playbackRegion;
+        regionSlot.audioModificationPersistentId = persistentId;
+        regionSlot.playbackStartSeconds = 0.0;
+        regionSlot.playbackEndSeconds = currentSourceWindow.durationSeconds();
+        regionSlot.sourceWindow = currentSourceWindow;
+        regionSlot.materializationDurationSeconds = appliedSourceWindow.durationSeconds();
+        regionSlot.projectionRevision = session.nextRegionProjectionRevision_++;
+
+        regionSlot.appliedProjection.sourceId = appliedSourceWindow.sourceId;
+        regionSlot.appliedProjection.materializationId = materializationId;
+        regionSlot.appliedProjection.appliedMaterializationRevision = 1;
+        regionSlot.appliedProjection.appliedProjectionRevision = 1;
+        regionSlot.appliedProjection.appliedSourceWindow = appliedSourceWindow;
+        regionSlot.appliedProjection.playbackStartSeconds = 0.0;
+        regionSlot.appliedProjection.appliedRegionIdentity.audioSource = audioSource;
+        regionSlot.appliedProjection.appliedRegionIdentity.playbackRegion =
+            appliedPlaybackRegion != nullptr ? appliedPlaybackRegion : playbackRegion;
+
+        session.preferredRegion_ = regionSlot.identity;
+    }
+
+    static bool enqueueMaterializationBirthIfNeeded(VST3AraSession& session,
+                                                    juce::ARAAudioSource* audioSource)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+
+        session.enqueueMaterializationBirthLocked(audioSource);
+
+        const auto* sourceSlot = session.findSourceSlot(audioSource);
+        return sourceSlot != nullptr
+            && sourceSlot->queuedForMaterializationBirth
+            && std::find(session.materializationBirthQueue_.begin(),
+                         session.materializationBirthQueue_.end(),
+                         audioSource) != session.materializationBirthQueue_.end();
     }
 
     static void publish(VST3AraSession& session)

@@ -33,46 +33,6 @@ void showHostManagedMessage(const juce::String& title, const juce::String& detai
                                                + detail);
 }
 
-struct AudioDiffRange {
-    bool changed{false};
-    int64_t startSample{0};
-    int64_t endSampleExclusive{0};
-};
-
-float getAudioSampleOrZero(const juce::AudioBuffer<float>& buffer, int channel, int64_t sampleIndex)
-{
-    if (channel < 0 || channel >= buffer.getNumChannels()) {
-        return 0.0f;
-    }
-    if (sampleIndex < 0 || sampleIndex >= static_cast<int64_t>(buffer.getNumSamples())) {
-        return 0.0f;
-    }
-
-    return buffer.getSample(channel, static_cast<int>(sampleIndex));
-}
-
-bool nearlyEqualAudioSample(float a, float b)
-{
-    return std::abs(a - b) <= 1.0e-5f;
-}
-
-bool nearlyEqualAudioFrameAtIndices(const juce::AudioBuffer<float>& lhs,
-                                    int64_t lhsSampleIndex,
-                                    const juce::AudioBuffer<float>& rhs,
-                                    int64_t rhsSampleIndex)
-{
-    const int maxChannels = std::max(lhs.getNumChannels(), rhs.getNumChannels());
-    for (int channel = 0; channel < maxChannels; ++channel) {
-        const float lhsSample = getAudioSampleOrZero(lhs, channel, lhsSampleIndex);
-        const float rhsSample = getAudioSampleOrZero(rhs, channel, rhsSampleIndex);
-        if (!nearlyEqualAudioSample(lhsSample, rhsSample)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 bool nearlyEqualSeconds(double a, double b)
 {
     return std::abs(a - b) <= (1.0 / TimeCoordinate::kRenderSampleRate);
@@ -121,106 +81,6 @@ juce::String buildRenderingOverlayTitle(int completedTasks, int totalTasks, floa
         + juce::String(pct) + "% ("
         + juce::String(completedTasks) + "/"
         + juce::String(totalTasks) + ")";
-}
-
-AudioDiffRange detectAudioDiffRange(const juce::AudioBuffer<float>& oldBuffer,
-                                    const juce::AudioBuffer<float>& newBuffer)
-{
-    const int64_t oldSamples = static_cast<int64_t>(oldBuffer.getNumSamples());
-    const int64_t newSamples = static_cast<int64_t>(newBuffer.getNumSamples());
-    const int64_t maxSamples = std::max(oldSamples, newSamples);
-
-    AudioDiffRange out;
-    if (maxSamples <= 0) {
-        return out;
-    }
-
-    int64_t prefix = 0;
-    while (prefix < maxSamples) {
-        if (!nearlyEqualAudioFrameAtIndices(oldBuffer, prefix, newBuffer, prefix)) {
-            break;
-        }
-        ++prefix;
-    }
-
-    if (prefix == maxSamples) {
-        return out;
-    }
-
-    int64_t suffix = 0;
-    while ((suffix + prefix) < maxSamples) {
-        const int64_t oldIndex = oldSamples - 1 - suffix;
-        const int64_t newIndex = newSamples - 1 - suffix;
-        if (!nearlyEqualAudioFrameAtIndices(oldBuffer, oldIndex, newBuffer, newIndex)) {
-            break;
-        }
-        ++suffix;
-    }
-
-    out.changed = true;
-    out.startSample = prefix;
-    out.endSampleExclusive = maxSamples - suffix;
-    if (out.endSampleExclusive < out.startSample) {
-        out.endSampleExclusive = out.startSample;
-    }
-    return out;
-}
-
-bool prepareImportFromAraRegion(OpenTuneAudioProcessor& processor,
-                                const juce::AudioBuffer<float>& sourceBuffer,
-                                double sourceSampleRate,
-                                double sourceStartSeconds,
-                                double sourceEndSeconds,
-                                const juce::String& displayName,
-                                OpenTuneAudioProcessor::PreparedImport& outPreparedImport)
-{
-    if (sourceSampleRate <= 0.0 || sourceBuffer.getNumSamples() <= 0 || sourceBuffer.getNumChannels() <= 0) {
-        return false;
-    }
-
-    if (!(sourceEndSeconds > sourceStartSeconds)) {
-        return false;
-    }
-
-    const int64_t sourceStartSample = juce::jmax<int64_t>(0,
-        TimeCoordinate::secondsToSamples(sourceStartSeconds, sourceSampleRate));
-    const int64_t sourceEndSample = juce::jmax<int64_t>(sourceStartSample,
-        TimeCoordinate::secondsToSamples(sourceEndSeconds, sourceSampleRate));
-
-    const int64_t sourceLengthSamples = static_cast<int64_t>(sourceBuffer.getNumSamples());
-    if (sourceStartSample >= sourceLengthSamples) {
-        return false;
-    }
-
-    const int64_t clampedEndSample = juce::jmin<int64_t>(sourceEndSample, sourceLengthSamples);
-    const int64_t regionSamples = clampedEndSample - sourceStartSample;
-    if (regionSamples <= 0) {
-        return false;
-    }
-
-    juce::AudioBuffer<float> sliced(static_cast<int>(sourceBuffer.getNumChannels()),
-                                    static_cast<int>(regionSamples));
-    for (int ch = 0; ch < sliced.getNumChannels(); ++ch) {
-        sliced.copyFrom(ch,
-                        0,
-                        sourceBuffer,
-                        ch,
-                        static_cast<int>(sourceStartSample),
-                        static_cast<int>(regionSamples));
-    }
-
-    if (!processor.prepareImport(std::move(sliced),
-                                 sourceSampleRate,
-                                 displayName,
-                                 {},
-                                 outPreparedImport)) {
-        return false;
-    }
-
-    outPreparedImport.sourceWindow.sourceId = 0; // sourceId filled at commit time
-    outPreparedImport.sourceWindow.sourceStartSeconds = sourceStartSeconds;
-    outPreparedImport.sourceWindow.sourceEndSeconds = sourceEndSeconds;
-    return true;
 }
 
 #if JucePlugin_Enable_ARA
@@ -478,30 +338,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         pianoRoll_.setIsPlaying(playing);
     }
 
-    if (rmvpeOverlayLatched_) {
-        const uint64_t targetMaterializationId = rmvpeOverlayTargetMaterializationId_;
-
-        bool shouldUnlatch = false;
-        if (targetMaterializationId == 0) {
-            shouldUnlatch = true;
-        } else {
-            const auto f0State = processorRef_.getMaterializationOriginalF0StateById(targetMaterializationId);
-            const bool f0Done = (f0State == OriginalF0State::Ready
-                                  || f0State == OriginalF0State::Failed);
-            const bool noteGenBusy = processorRef_.isNoteGenInFlightForMaterialization(targetMaterializationId);
-            // Only unlatch when BOTH F0 and note generation are finished —
-            // shared "正在处理音频" overlay covers the whole import pipeline.
-            if (f0Done && !noteGenBusy) {
-                shouldUnlatch = true;
-            }
-        }
-
-        if (shouldUnlatch) {
-            rmvpeOverlayLatched_ = false;
-            rmvpeOverlayTargetMaterializationId_ = 0;
-        }
-    }
-
     // Drive PianoRoll heartbeat first so autoTuneInFlight_ is up-to-date
     if (pianoRoll_.isShowing()) {
         pianoRoll_.onHeartbeatTick();
@@ -542,11 +378,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         shouldShowOverlay = true;
     }
 
-    if (rmvpeOverlayLatched_) {
-        autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在处理音频"));
-        shouldShowOverlay = true;
-    }
-
     if (autoRenderOverlay_.isVisible() != shouldShowOverlay) {
         autoRenderOverlay_.setVisible(shouldShowOverlay);
     }
@@ -566,7 +397,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // Unified materialization → PianoRoll sync (projection + curve + buffer + scale)
     syncMaterializationProjectionToPianoRoll();
 
-    syncImportedAraClipIfNeeded();
+    syncAraPreferredRegionBindingOnly();
 }
 
 void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
@@ -1125,67 +956,27 @@ void OpenTuneAudioProcessorEditor::recordRequested()
     if (preferredRegionView == nullptr || preferredRegionView->regionIdentity.audioSource == nullptr) {
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                "Read Audio",
-                                               "No preferred ARA playback region is available. Select the target item in the DAW, then invoke Read Audio again.");
+                                               "No preferred ARA playback region is available.");
         return;
     }
 
-    if (preferredRegionView->copiedAudio == nullptr || preferredRegionView->numSamples <= 0) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                               "Read Audio",
-                                               "Audio data is not yet available. Please wait for source hydration to complete.");
-        return;
-    }
-
-    // Birth: ensure materialization exists for this region
+    // Binding/display only — materialization birth worker handles content processing.
     uint64_t materializationId = preferredRegionView->appliedProjection.materializationId;
     if (materializationId == 0)
     {
-        const auto birthResult = processorRef_.ensureAraRegionMaterialization(
-            preferredRegionView->regionIdentity.audioSource,
-            preferredRegionView->sourceId,
-            preferredRegionView->copiedAudio,
-            preferredRegionView->sampleRate,
-            preferredRegionView->sourceWindow,
-            preferredRegionView->playbackStartSeconds);
-
-        if (!birthResult.has_value() || birthResult->materializationId == 0) {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                                   "Read Audio",
-                                                   "Failed to create materialization from ARA audio.");
-            return;
-        }
-
-        materializationId = birthResult->materializationId;
-
-        session->bindPlaybackRegionToMaterialization(
-            preferredRegionView->regionIdentity.playbackRegion,
-            materializationId,
-            birthResult->materializationRevision,
-            preferredRegionView->projectionRevision,
-            preferredRegionView->sourceWindow,
-            birthResult->materializationDurationSeconds,
-            preferredRegionView->playbackStartSeconds);
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                                               "Read Audio",
+                                               "Audio data is being processed. The region will appear shortly.");
+        return;
     }
 
-    // Refresh: trigger F0 extraction
     syncMaterializationProjectionToPianoRoll();
-
-    OpenTuneAudioProcessor::MaterializationRefreshRequest refreshRequest;
-    refreshRequest.materializationId = materializationId;
-    if (!processorRef_.requestMaterializationRefresh(refreshRequest)) {
-        AppLogger::log("RecordTrace: VST3 refresh rejected materializationId="
-            + juce::String(static_cast<juce::int64>(materializationId)));
-    } else {
-        rmvpeOverlayLatched_ = true;
-        rmvpeOverlayTargetMaterializationId_ = materializationId;
-    }
-
     AppLogger::log("RecordTrace: VST3 recordRequested materializationId="
         + juce::String(static_cast<juce::int64>(materializationId)));
 #endif
 }
 
-void OpenTuneAudioProcessorEditor::syncImportedAraClipIfNeeded()
+void OpenTuneAudioProcessorEditor::syncAraPreferredRegionBindingOnly()
 {
 #if !JucePlugin_Enable_ARA
     return;
@@ -1238,13 +1029,10 @@ void OpenTuneAudioProcessorEditor::syncImportedAraClipIfNeeded()
     if (!snapshotAdvanced && !preferredRegionChanged && !materializationChanged && !projectionChanged && !appliedRegionChanged)
         return;
 
-    if (preferredRegionView->copiedAudio == nullptr || preferredRegionView->numSamples <= 0)
-        return;
-
     const double playbackStartSeconds = preferredRegionView->playbackStartSeconds;
     const SourceWindow& sourceWindow = preferredRegionView->sourceWindow;
 
-    if (processorRef_.getMaterializationAudioBufferById(materializationId) == nullptr)
+    if (materializationId == 0 || processorRef_.getMaterializationAudioBufferById(materializationId) == nullptr)
     {
         session->clearPlaybackRegionMaterialization(currentPlaybackRegion);
         syncMaterializationProjectionToPianoRoll();
@@ -1294,130 +1082,24 @@ void OpenTuneAudioProcessorEditor::syncImportedAraClipIfNeeded()
         return;
     }
 
-    OpenTuneAudioProcessor::PreparedImport preparedImport;
-    if (!prepareImportFromAraRegion(processorRef_,
-                                    *preferredRegionView->copiedAudio,
-                                    preferredRegionView->sampleRate,
-                                    sourceWindow.sourceStartSeconds,
-                                    sourceWindow.sourceEndSeconds,
-                                    "ARA Audio",
-                                    preparedImport)) {
-        AppLogger::log("InvariantViolation: syncImportedAraClipIfNeeded - prepareImportFromAraRegion failed for active region");
-        jassertfalse;
-        return;
-    }
-
-    auto oldBuffer = processorRef_.getMaterializationAudioBufferById(materializationId);
-    if (oldBuffer == nullptr) {
-        AppLogger::log("InvariantViolation: syncImportedAraClipIfNeeded - materialization " + juce::String(static_cast<juce::int64>(materializationId)) + " has no audio buffer");
-        jassertfalse;
-        return;
-    }
-
-    const AudioDiffRange diff = detectAudioDiffRange(*oldBuffer, preparedImport.storedAudioBuffer);
-    if (!diff.changed && !sourceRangeChanged && playbackStartChanged)
+    // ================================================================
+    // VST3 ARA: materialization birth worker handles all content.
+    // This function only updates bindings and syncs PianoRoll display.
+    // ================================================================
     {
-        session->bindPlaybackRegionToMaterialization(
-            currentPlaybackRegion, materializationId,
-            materializationRevision, projectionRevision,
-            sourceWindow, processorRef_.getMaterializationAudioDurationById(materializationId), playbackStartSeconds
-        );
-        markSnapshotConsumed();
-        syncMaterializationProjectionToPianoRoll();
-        return;
-    }
-
-    if (!diff.changed && !sourceRangeChanged && !playbackStartChanged)
-    {
-        if (appliedRegionChanged)
+        const auto f0State = processorRef_.getMaterializationOriginalF0StateById(materializationId);
+        if (f0State == OriginalF0State::Ready)
         {
-            session->bindPlaybackRegionToMaterialization(
-                currentPlaybackRegion,
-                materializationId,
-                materializationRevision,
-                projectionRevision,
-                sourceWindow,
-                processorRef_.getMaterializationAudioDurationById(materializationId),
-                playbackStartSeconds);
-        }
-        else
-        {
-            session->updatePlaybackRegionMaterializationRevisions(currentPlaybackRegion,
-                                                                  materializationRevision,
-                                                                  projectionRevision);
-        }
-
-        markSnapshotConsumed();
-        return;
-    }
-
-    auto updatedBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(preparedImport.storedAudioBuffer));
-
-    uint64_t activeMaterializationId = materializationId;
-
-    if (sourceRangeChanged)
-    {
-        // lineage 变了（source range 改变）：原子新建 + erase 旧，调用方（此处）负责 bind 新 id
-        MaterializationStore::CreateMaterializationRequest newRequest;
-        newRequest.sourceId = appliedProjection.sourceId;
-        newRequest.lineageParentMaterializationId = materializationId;
-        newRequest.sourceWindow = sourceWindow;
-        newRequest.audioBuffer = updatedBuffer;
-        newRequest.silentGaps = std::move(preparedImport.silentGaps);
-        newRequest.renderCache = std::make_shared<RenderCache>();
-        activeMaterializationId = processorRef_.replaceMaterializationWithNewLineage(materializationId, std::move(newRequest));
-        if (activeMaterializationId == 0)
+            markSnapshotConsumed();
+            syncMaterializationProjectionToPianoRoll();
             return;
-    }
-    else
-    {
-        // 同 lineage 重渲染（audio 内容变，source range 不变）：sourceWindow 不动
-        if (!processorRef_.replaceMaterializationAudioById(materializationId,
-                                                           updatedBuffer,
-                                                           std::move(preparedImport.silentGaps)))
-            return;
-    }
-
-    double changedStartSeconds = 0.0;
-    double changedEndSeconds = TimeCoordinate::samplesToSeconds(updatedBuffer->getNumSamples(), TimeCoordinate::kRenderSampleRate);
-    if (diff.changed)
-    {
-        changedStartSeconds = TimeCoordinate::samplesToSeconds(diff.startSample, TimeCoordinate::kRenderSampleRate);
-        changedEndSeconds = TimeCoordinate::samplesToSeconds(diff.endSampleExclusive, TimeCoordinate::kRenderSampleRate);
-    }
-
-    // Invalidate affected chunks via partial render (STAB-01: partial invalidation, not full cache rebuild)
-    // Only invalidate if there's actual content change (diff.changed or sourceRangeChanged)
-    if (diff.changed || sourceRangeChanged)
-    {
-        processorRef_.enqueueMaterializationPartialRenderById(activeMaterializationId,
-                                               changedStartSeconds,
-                                               changedEndSeconds);
-    }
-
-    if (processorRef_.getMaterializationAudioBufferById(activeMaterializationId) != nullptr)
-    {
-        OpenTuneAudioProcessor::MaterializationRefreshRequest refreshRequest;
-        refreshRequest.materializationId = activeMaterializationId;
-        refreshRequest.preserveCorrectionsOutsideChangedRange = true;
-        refreshRequest.changedStartSeconds = changedStartSeconds;
-        refreshRequest.changedEndSeconds = changedEndSeconds;
-        if (!processorRef_.requestMaterializationRefresh(refreshRequest)) {
-            AppLogger::log("ClipDerivedRefresh: VST3 sync request rejected materializationId="
-                + juce::String(static_cast<juce::int64>(activeMaterializationId)));
-        } else {
-            rmvpeOverlayLatched_ = true;
-            rmvpeOverlayTargetMaterializationId_ = activeMaterializationId;
         }
-        syncMaterializationProjectionToPianoRoll();
     }
 
-        session->bindPlaybackRegionToMaterialization(
-            currentPlaybackRegion, activeMaterializationId,
-            materializationRevision, projectionRevision,
-            sourceWindow, processorRef_.getMaterializationAudioDurationById(activeMaterializationId), playbackStartSeconds
-        );
+    // F0 not yet Ready — wait for next timer tick.
     markSnapshotConsumed();
+    syncMaterializationProjectionToPianoRoll();
+    return;
 #endif
 }
 

@@ -133,7 +133,7 @@ private:
     PianoRollMaterializationSync resolveCurrentMaterializationSync();
     void syncParameterPanelFromSelection();
     void syncMaterializationProjectionToPianoRoll();
-    void syncImportedAraClipIfNeeded();
+    void syncAraPreferredRegionBindingOnly();
     void showPreferencesDialog();
     void updateRegularCaptureSessionCallback();
     void clearRegularCaptureSessionCallback();
@@ -163,8 +163,7 @@ private:
     double lastSyncedBpm_ = 120.0;
     int lastSyncedTimeSigNum_ = 4;
     int lastSyncedTimeSigDenom_ = 4;
-    bool rmvpeOverlayLatched_{false};
-    uint64_t rmvpeOverlayTargetMaterializationId_{0};
+
     bool showingSingleNoteParams_{false};
     bool initialFocusGrabbed_{false};
     // Tracks last-seen notesRevision per active materialization so the timer

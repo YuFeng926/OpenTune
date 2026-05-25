@@ -188,4 +188,23 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-18 after implementing PianoRoll empty-space seek intent and regular VST3 capture UX refinement*
+## 2026-05-26 Update: VST3 ARA OriginalF0 Final Convergence — DONE
+
+The VST3 ARA OriginalF0 final convergence plan has been fully implemented. All structural residues removed:
+
+1. **SourceStore metadata-only**: `CreateSourceRequest` 新增 `numChannels`/`numSamples`；`createSource()` 支持 `audioBuffer == nullptr` metadata-only 注册
+2. **ARA birth 语义收紧**: 删除 `makePartialResult`，改为 `buildBirthResult`；Failed 显式写入；`releaseImmediately()` 始终调用
+3. **Worker 命名收口**: `hydrationWorkerLoop` → `birthWorkerLoop`；`VST3AraSession.h/.cpp` 全部命名迁移
+4. **Editor 残留删除**: `rmvpeOverlayLatched_`/`rmvpeOverlayTargetMaterializationId_` 删除；`PluginEditor.cpp` ARA path 精简 358 行
+5. **契约注释刷新**: `requestMaterializationRefresh` 改为正向非 ARA 契约
+6. **AraFinal 终审守卫**: 7 个新增守卫（negative guard + path guard）全部 PASS
+7. **setStateInformation 修复**: 移除 ARA source 恢复中 null buffer 早退条件
+
+三目标编译通过 + architecture suite 7/7 AraFinal PASS。
+
+Plan source:
+- `.planning/plans/2026-05-26-vst3-ara-originalf0-final-convergence.md`
+- `.planning/plans/2026-05-26-vst3-ara-originalf0-final-convergence-test-verification.md`
+
+---
+*Last updated: 2026-05-26 after VST3 ARA OriginalF0 final-convergence implementation*

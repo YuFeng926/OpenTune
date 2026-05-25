@@ -24,7 +24,6 @@
 #include <map>
 #include <deque>
 #include <mutex>
-#include <unordered_set>
 #include <condition_variable>
 #include <thread>
 #include <optional>
@@ -36,7 +35,6 @@
 #include "DSP/ChromaKeyDetector.h"
 #include "Inference/RenderCache.h"
 #include "Inference/F0InferenceService.h"
-#include "Inference/INoteGenerator.h"
 #include "Inference/VocoderDomain.h"
 #include "Services/F0ExtractionService.h"
 #include "Services/ReferenceAnalysisService.h"
@@ -47,6 +45,7 @@
 #include "Utils/UndoManager.h"
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
+#include "Inference/INoteGenerator.h"
 #include <functional>
 
 namespace OpenTune {
@@ -284,6 +283,11 @@ public:
     uint64_t commitPreparedImportAsMaterialization(PreparedImport&& prepared,
                                                    uint64_t sourceId = 0);
     bool requestMaterializationRefresh(const MaterializationRefreshRequest& request);
+
+    // GAME reference-note generation, non-ARA entry points only (Standalone / regular VST3).
+    // ARA OriginalF0 path does not call this function.
+    bool requestReferenceNoteGeneration(uint64_t materializationId);
+
     bool ensureSourceById(uint64_t sourceId,
                           const juce::String& displayName,
                           std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
@@ -297,13 +301,34 @@ public:
         double materializationDurationSeconds{0.0};
     };
 
-    std::optional<AraRegionMaterializationBirthResult> ensureAraRegionMaterialization(
-        juce::ARAAudioSource* audioSource,
-        uint64_t sourceId,
-        std::shared_ptr<const juce::AudioBuffer<float>> copiedAudio,
-        double copiedAudioSampleRate,
-        const SourceWindow& sourceWindow,
-        double playbackStartSeconds);
+    /**
+     * Self-contained ARA OriginalF0 birth request.
+     * Caller must provide a shared HostAudioReader lease — the processor
+     * immediately moves it to a local shared_ptr to guarantee lifetime.
+     */
+    struct AraOriginalF0BirthRequest {
+        juce::ARAAudioSource* audioSource = nullptr;
+        uint64_t sourceId = 0;
+        std::shared_ptr<ARA::PlugIn::HostAudioReader> readerLease;
+        int numChannels = 0;
+        int64_t numSamples = 0;
+        double sourceSampleRate = 0.0;
+        SourceWindow sourceWindow;
+        double playbackStartSeconds = 0.0;
+    };
+
+    /**
+     * ARA OriginalF0 birth 唯一入口（reader-based）。
+     * 从 AraOriginalF0BirthRequest 按 chunk 读取 ARA source window，
+     * 构建 playable buffer + 提取 ch0 喂给 RMVPE。
+     * RMVPE 内部通过 ResamplingManager 处理 16kHz 降采样。
+     * F0 可见后立即释放 RMVPE 模型资源。
+     * 不走 requestMaterializationRefresh 通用链，不进入 GAME。
+     * Source 注册为 metadata-only（无 PCM buffer），全量音频在
+     * prepareImport 阶段写入 MaterializationStore。
+     */
+    std::optional<AraRegionMaterializationBirthResult>
+    birthAraMaterializationWithOriginalF0(AraOriginalF0BirthRequest request);
 #endif
 
     bool movePlacementToTrack(int sourceTrackId,
@@ -327,15 +352,14 @@ private:
     std::atomic<bool> f0Ready_{false};
     std::atomic<bool> f0InitAttempted_{false};
     std::mutex f0InitMutex_;
+    std::atomic<bool> noteGenReady_{false};
+    std::atomic<bool> noteGenInitAttempted_{false};
+    std::mutex noteGenInitMutex_;
 
     std::atomic<bool> vocoderReady_{false};
     std::atomic<bool> vocoderInitAttempted_{false};
     std::mutex vocoderInitMutex_;
     VocoderModelWeight currentVocoderModelWeight_ = VocoderModelWeight::Community;
-
-    std::atomic<bool> noteGenReady_{false};
-    std::atomic<bool> noteGenInitAttempted_{false};
-    std::mutex noteGenInitMutex_;
 
 public:
     // ========================================================================
@@ -480,9 +504,11 @@ private:
     // Polymorphic note generator (GAME-small by default; LegacyNoteGenerator
     // when env OPENTUNE_NOTE_BACKEND=legacy or models missing). Lazily
     // initialised by ensureNoteGeneratorReady() — same pattern as f0Service_.
-    // Used after F0 commits to auto-generate notes for ALL three flows
-    // (standalone import, plugin ARA, plugin non-ARA capture) which
-    // converge through requestMaterializationRefresh.
+    // GAME ref-note generation is only triggered by explicit call to
+    // requestReferenceNoteGeneration() from Standalone / regular VST3 entry
+    // points. VST3 ARA auto-OriginalF0 path and ARA Read Audio must never
+    // invoke GAME; noteGenerator_/noteGeneratorPool_ are retained here solely
+    // for non-ARA flows.
     std::unique_ptr<INoteGenerator> noteGenerator_;
     std::mutex                      noteGeneratorInferenceMutex_; // serialise inference calls
     juce::ThreadPool                noteGeneratorPool_{1};         // single-threaded ORT-safe

@@ -97,6 +97,12 @@ public:
      */
     void releaseIdleModelIfNeeded();
 
+    /**
+     * 立即释放 F0 模型资源（不等 idle timer）。
+     * 用于 VST3 ARA 自动 OriginalF0 成功后立即回收推理内存。
+     */
+    void releaseImmediately();
+
 private:
     class Impl;
     std::unique_ptr<Impl> pImpl_;

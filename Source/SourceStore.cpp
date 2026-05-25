@@ -15,10 +15,15 @@ uint64_t SourceStore::createSource(CreateSourceRequest request, uint64_t forcedS
         }
     }
 
-    if (request.audioBuffer == nullptr
-        || request.audioBuffer->getNumChannels() <= 0
-        || request.audioBuffer->getNumSamples() <= 0) {
+    if (request.sampleRate <= 0.0)
         return 0;
+
+    if (request.audioBuffer != nullptr)
+    {
+        if (request.audioBuffer->getNumChannels() <= 0 || request.audioBuffer->getNumSamples() <= 0)
+            return 0;
+        request.numChannels = request.audioBuffer->getNumChannels();
+        request.numSamples = request.audioBuffer->getNumSamples();
     }
 
     SourceEntry source;
@@ -27,8 +32,8 @@ uint64_t SourceStore::createSource(CreateSourceRequest request, uint64_t forcedS
     source.sourceFilePath = std::move(request.sourceFilePath);
     source.audioBuffer = std::move(request.audioBuffer);
     source.sampleRate = request.sampleRate;
-    source.numChannels = source.audioBuffer->getNumChannels();
-    source.numSamples = source.audioBuffer->getNumSamples();
+    source.numChannels = request.numChannels;
+    source.numSamples = request.numSamples;
     const uint64_t sourceId = source.sourceId;
 
     const juce::ScopedWriteLock writeLock(lock_);
