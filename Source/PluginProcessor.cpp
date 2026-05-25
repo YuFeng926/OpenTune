@@ -1496,6 +1496,15 @@ bool OpenTuneAudioProcessor::ensureF0Ready()
         });
 }
 
+std::string OpenTuneAudioProcessor::modelPathForWeight(const std::string& modelDir, VocoderModelWeight weight)
+{
+    switch (weight) {
+        case VocoderModelWeight::Community: return modelDir + "/hifigan.onnx";
+        case VocoderModelWeight::Coulin9V4: return modelDir + "/hifigan_coulin9.onnx";
+    }
+    return modelDir + "/hifigan.onnx";
+}
+
 bool OpenTuneAudioProcessor::ensureVocoderReady()
 {
     return ensureServiceReady(vocoderReady_, vocoderInitAttempted_, vocoderInitMutex_, "Vocoder",
@@ -1507,7 +1516,8 @@ bool OpenTuneAudioProcessor::ensureVocoderReady()
                 }
                 vocoderDomain_ = std::make_unique<VocoderDomain>(ortEnv_);
             }
-            return vocoderDomain_->initialize(modelsDir);
+            const auto modelPath = modelPathForWeight(modelsDir, currentVocoderModelWeight_);
+            return vocoderDomain_->initialize(modelPath);
         });
 }
 
@@ -1602,6 +1612,63 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     
     AppLogger::info("[Processor] Inference backend reset to: " 
         + juce::String(detector.getBackendName()));
+}
+
+void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
+{
+    if (currentVocoderModelWeight_ == weight) return;  // 幂等
+
+    // 1. 停 chunk render worker（对齐 resetInferenceBackend 模式）
+    {
+        std::lock_guard<std::mutex> lock(schedulerMutex_);
+        chunkRenderWorkerRunning_.store(false, std::memory_order_release);
+    }
+    schedulerCv_.notify_all();
+    if (chunkRenderWorkerThread_.joinable()) {
+        chunkRenderWorkerThread_.join();
+    }
+
+    // 2. Shutdown + 销毁 vocoder domain（释放旧 ONNX session）
+    if (vocoderDomain_) {
+        vocoderDomain_->shutdown();
+        vocoderDomain_.reset();
+    }
+    vocoderReady_.store(false);
+    vocoderInitAttempted_.store(false);
+
+    // 3. 更新 runtime 权重（worker 已停，线程安全）
+    currentVocoderModelWeight_ = weight;
+
+    // 4. 清所有 materialization 的 RenderCache + TimeStretchCache
+    if (materializationStore_) {
+        const auto ids = materializationStore_->getAllActiveMaterializationIds();
+        bool hasJobs = false;
+        for (const auto matId : ids) {
+            std::shared_ptr<RenderCache> cache;
+            if (materializationStore_->getRenderCache(matId, cache) && cache) {
+                cache->clear();
+            }
+            MaterializationSnapshot snap;
+            if (getMaterializationSnapshotById(matId, snap) && snap.audioBuffer) {
+                const int numSamples = snap.audioBuffer->getNumSamples();
+                const double durationSec = static_cast<double>(numSamples) / 44100.0;
+                if (durationSec > 0.0) {
+                    materializationStore_->enqueuePartialRender(matId, 0.0, durationSec, 512);
+                    hasJobs = true;
+                }
+            }
+        }
+        // 清 TimeStretchCache
+        materializationStore_->getTimeStretchCache().clear();
+
+        // 5. 重启 chunk worker（最后执行，避免 worker 与 vocoderDomain_ 重建竞态）
+        //    vocoderDomain_ 保持 nullptr，由 worker 内 ensureVocoderReady() 懒创建（vocoderInitMutex_ 保护）
+        if (hasJobs) {
+            ensureChunkRenderWorkerStarted();
+            schedulerCv_.notify_one();
+        }
+    }
+    // 不重置 F0 / AccelerationDetector / GAME
 }
 
 bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const MaterializationSnapshot& snap,

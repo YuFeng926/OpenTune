@@ -45,6 +45,7 @@
 #include "Utils/SilentGapDetector.h"
 #include "Utils/TimeCoordinate.h"
 #include "Utils/UndoManager.h"
+#include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
 #include <functional>
 
@@ -330,6 +331,7 @@ private:
     std::atomic<bool> vocoderReady_{false};
     std::atomic<bool> vocoderInitAttempted_{false};
     std::mutex vocoderInitMutex_;
+    VocoderModelWeight currentVocoderModelWeight_ = VocoderModelWeight::Community;
 
     std::atomic<bool> noteGenReady_{false};
     std::atomic<bool> noteGenInitAttempted_{false};
@@ -510,6 +512,7 @@ private:
 
     bool ensureF0Ready();
     bool ensureVocoderReady();
+    static std::string modelPathForWeight(const std::string& modelDir, VocoderModelWeight weight);
     bool ensureNoteGeneratorReady();
 
     bool ensureServiceReady(std::atomic<bool>& readyFlag,
@@ -606,6 +609,9 @@ public:
      * 停止 render worker → 释放推理服务 → 重新检测 → worker 惰性重启
      */
     void resetInferenceBackend(bool forceCpu);
+
+    /** @brief 切换声码器模型权重。停worker→清cache→懒重建vocoder。调用方负责持久化偏好。 */
+    void setVocoderModelWeight(VocoderModelWeight weight);
 
     bool isInferenceReady() const { return f0Ready_.load(); }
 
