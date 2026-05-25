@@ -1,7 +1,6 @@
 #pragma once
 
 #include "OnnxVocoderBase.h"
-#include "DmlConfig.h"
 #ifdef _WIN32
 #include <dml_provider_factory.h>
 #endif
@@ -12,7 +11,7 @@ class DmlVocoder : public OnnxVocoderBase {
 public:
     explicit DmlVocoder(const std::string& modelPath,
                         Ort::Env& env,
-                        const DmlConfig& config);
+                        int adapterIndex);
     ~DmlVocoder() override;
 
 protected:
@@ -23,7 +22,7 @@ protected:
 private:
     void initializeSession(const std::string& modelPath,
                            Ort::Env& env,
-                           const DmlConfig& config);
+                           int adapterIndex);
     void initializeIOBinding();
 
     Ort::MemoryInfo cpuMemoryInfo_;

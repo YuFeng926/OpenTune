@@ -98,17 +98,6 @@ void logChunkRender(juce::int64 materializationId, int stored)
     AppLogger::log(makeLine(line));
 }
 
-void logPlaybackRead(juce::int64 materializationId, int stored, int dest,
-                     const char* mode)
-{
-    juce::String line;
-    line << "event=playback-read materializationId=" << materializationId
-         << " stored=" << stored
-         << " dest=" << dest
-         << " mode=" << mode;
-    AppLogger::log(makeLine(line));
-}
-
 void logNumericGuard(int zeroedSamples, int channel)
 {
     // Throttle to ~1 Hz to avoid log flooding when a host injects continuous garbage.
@@ -140,14 +129,6 @@ void logPersistenceDeserializeReject(juce::uint32 magic)
     line << "event=persistence-deserialize REJECT magic=0x"
          << juce::String::toHexString(static_cast<int>(magic))
          << " reason=incompatible-format";
-    AppLogger::log(makeLine(line));
-}
-
-void logLoadAuditReject(juce::int64 materializationId, int channels)
-{
-    juce::String line;
-    line << "event=load-audit REJECT materializationId=" << materializationId
-         << " channels=" << channels;
     AppLogger::log(makeLine(line));
 }
 

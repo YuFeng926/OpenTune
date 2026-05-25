@@ -4187,6 +4187,8 @@ void runAraFinalPublishedRegionViewExposesNoRawAudioPayload();
 void runAraFinalPluginEditorHasNoPrepareImportFromAraRegionHelper();
 void runAraFinalRequestMaterializationRefreshContractIsNonAra();
 void runAraFinalBirthPathOwnsOriginalF0Release();
+void runAuroraRightSidebarBackgroundReferenceRestyleSourceGuardTest();
+void runAuroraScrollbarOutlineSourceGuardTest();
 
 void logFail(const char* testName, const char* detail)
 {
@@ -4779,19 +4781,19 @@ void runPianoRollF0VisualStyleTokensAndLayeringTest()
     const auto& uiColors = getFileCache().get("Source/Standalone/UI/UIColors.h");
     const auto& themeTokens = getFileCache().get("Source/Standalone/UI/ThemeTokens.h");
     if (!uiColors.contains("originalF0 { 0xFFD24A3A }")
-        || !uiColors.contains("correctedF0 { 0xFF2EC7F8 }")
+        || !uiColors.contains("correctedF0 { 0xFF196FC4 }")
         || !themeTokens.contains("0xFFD24A3A }, // originalF0")
-        || !themeTokens.contains("0xFF2EC7F8 }, // correctedF0")) {
-        logFail(testName, "F0 visual color tokens should match the reference red/cyan palette");
+        || !themeTokens.contains("0xFF196FC4 }, // correctedF0")) {
+        logFail(testName, "F0 visual color tokens should keep OriginalF0 red and use the deeper reference blue for CorrectedF0");
         return;
     }
 
-    if (!uiColors.contains("noteBlock { 0xFF72D8F7 }")
-        || !uiColors.contains("noteBlockBorder { 0xFFB6F0FF }")
-        || !uiColors.contains("noteBlockSelected { 0xFF9CEAFF }")
-        || !themeTokens.contains("0xFF72D8F7")
-        || !themeTokens.contains("0xFFB6F0FF")) {
-        logFail(testName, "note blocks should use a paler reference blue palette");
+    if (!uiColors.contains("noteBlock { 0xFF235AA8 }")
+        || !uiColors.contains("noteBlockBorder { 0xFF3A69A2 }")
+        || !uiColors.contains("noteBlockSelected { 0xFF2F6FC4 }")
+        || !themeTokens.contains("0xFF235AA8")
+        || !themeTokens.contains("0xFF3A69A2")) {
+        logFail(testName, "note blocks should use the deeper reference blue palette");
         return;
     }
 
@@ -4869,14 +4871,13 @@ void runAuroraTopBarReferenceRestyleSourceGuardTest()
     }
 
     const auto& transportSource = getFileCache().get("Source/Standalone/UI/TransportBarComponent.cpp");
-    if (!transportSource.contains("const bool isAuroraTheme = themeId == ThemeId::Aurora;")
-        || !transportSource.contains("iconColor = UIColors::textPrimary.interpolatedWith(UIColors::accent, 0.52f);")
-        || !transportSource.contains("iconColor = UIColors::textPrimary.withAlpha(isTransportButton ? 0.82f : 0.68f);")
-        || !transportSource.contains("const float hoverScale = isAuroraTheme ? 1.03f : 1.08f;")
-        || !transportSource.contains("const int buttonWidth = isAuroraTheme ? 46 : 50;")
-        || !transportSource.contains("const int groupGap = isAuroraTheme ? 16 : 20;")
-        || !transportSource.contains("const int typeWidth = isAuroraTheme ? 150 : 180;")) {
-        logFail(testName, "Aurora transport content hierarchy and layout rhythm should stay tightened");
+    if (!transportSource.contains("iconColor = UIColors::textPrimary.withAlpha(0.96f);")
+        || !transportSource.contains("iconColor = UIColors::textPrimary.withAlpha(isTransportButton ? 0.92f : 0.78f);")
+        || !transportSource.contains("const float hoverScale = 1.08f;")
+        || !transportSource.contains("const int buttonWidth = 50;")
+        || !transportSource.contains("const int groupGap = 20;")
+        || !transportSource.contains("const int typeWidth = 180;")) {
+        logFail(testName, "Aurora transport controls should keep the original layout rhythm while using white active icons instead of accent-blue active icons");
         return;
     }
 
@@ -4890,18 +4891,15 @@ void runAuroraTopBarReferenceRestyleSourceGuardTest()
     const auto& auroraThemeSource = getFileCache().get("Source/Standalone/UI/AuroraTheme.h");
     const auto& uiColorsSource = getFileCache().get("Source/Standalone/UI/UIColors.h");
     if (!auroraThemeSource.contains("static const juce::uint32 TrayTop         = 0xFF14263A;")
-        || !auroraThemeSource.contains("static const juce::uint32 ButtonFaceTop   = 0xFF182A3C;")
-        || !auroraThemeSource.contains("static const juce::uint32 ButtonActiveEdge = 0xD07BCFFF;")
-        || !auroraThemeSource.contains("static const juce::uint32 ButtonActiveTint = 0x2E2C74BE;")
+        || !auroraThemeSource.contains("static const juce::uint32 ButtonNormal   = 0xC00B1728;")
         || !uiColorsSource.contains("const auto trayTop = juce::Colour { Aurora::Colors::TrayTop };")
-        || !uiColorsSource.contains("const auto faceTop = juce::Colour { Aurora::Colors::ButtonFaceTop };")
-        || !uiColorsSource.contains("const auto activeTint = juce::Colour { Aurora::Colors::ButtonActiveTint };")
-        || !uiColorsSource.contains("juce::ColourGradient leftHotspot")
-        || !uiColorsSource.contains("juce::ColourGradient rightHotspot")
-        || !uiColorsSource.contains("const auto structuralEdge = coreShadow.interpolatedWith(juce::Colour { Aurora::Colors::BgDeep }, 0.42f);")
+        || !uiColorsSource.contains("const auto fill = isActive ? auroraButtonActive : (isHovered ? auroraButtonHover : auroraButtonNormal);")
+        || !uiColorsSource.contains("juce::DropShadow outerGlow(glow.withMultipliedAlpha(isActive ? 0.20f : (isHovered ? 0.12f : 0.055f)),")
         || !uiColorsSource.contains("g.setColour(outerEdge.withMultipliedAlpha(strong ? 0.92f : 0.64f));")
-        || !uiColorsSource.contains("juce::DropShadow outerGlow(glow.withMultipliedAlpha(isActive ? 0.07f : (isHovered ? 0.042f : 0.016f)),")) {
-        logFail(testName, "Aurora shared tokens and chrome should stay structured around localized active hotspots and a harder button edge");
+        || uiColorsSource.contains("juce::ColourGradient leftHotspot")
+        || uiColorsSource.contains("juce::ColourGradient rightHotspot")
+        || uiColorsSource.contains("const auto structuralEdge = coreShadow.interpolatedWith(juce::Colour { Aurora::Colors::BgDeep }, 0.42f);")) {
+        logFail(testName, "Aurora should keep the refined tray background while button chrome falls back to the original broader glass treatment");
         return;
     }
 
@@ -5497,54 +5495,6 @@ void runSimdAcceleratorVectorLogTest()
     logPass(testName);
 }
 
-void runSimdAcceleratorVectorExpTest()
-{
-    constexpr const char* testName = "SimdAccelerator_VectorExp";
-    const auto& simd = SimdAccelerator::getInstance();
-
-    const float input[] = { 0.0f, 1.0f, -1.0f, 2.0f };
-    float result[4] = {};
-    float expected[4] = {};
-    for (int i = 0; i < 4; ++i)
-        expected[i] = std::exp(input[i]);
-
-    simd.vectorExp(result, input, 4);
-
-    for (int i = 0; i < 4; ++i) {
-        if (!approxEqual(result[i], expected[i], 1e-4f)) {
-            logFail(testName, ("mismatch at index " + juce::String(i)
-                + ": expected " + juce::String(expected[i], 6)
-                + " got " + juce::String(result[i], 6)).toRawUTF8());
-            return;
-        }
-    }
-
-    logPass(testName);
-}
-
-void runSimdAcceleratorComplexMagnitudeTest()
-{
-    constexpr const char* testName = "SimdAccelerator_ComplexMagnitude";
-    const auto& simd = SimdAccelerator::getInstance();
-
-    // [3+4i, 0+0i, 1+1i] → magnitudes [5, 0, √2]
-    const float complexData[] = { 3.0f, 4.0f, 0.0f, 0.0f, 1.0f, 1.0f };
-    float result[3] = {};
-    simd.complexMagnitude(result, complexData, 3);
-
-    if (!approxEqual(result[0], 5.0f, 1e-4f)
-        || !approxEqual(result[1], 0.0f, 1e-4f)
-        || !approxEqual(result[2], std::sqrt(2.0f), 1e-4f)) {
-        logFail(testName, ("expected [5, 0, √2], got ["
-            + juce::String(result[0], 4) + ", "
-            + juce::String(result[1], 4) + ", "
-            + juce::String(result[2], 4) + "]").toRawUTF8());
-        return;
-    }
-
-    logPass(testName);
-}
-
 void runSimdAcceleratorBackendNameTest()
 {
     constexpr const char* testName = "SimdAccelerator_BackendName";
@@ -5778,8 +5728,6 @@ void runCoreBehaviorSuite()
     runRendererBlockSpanRejectsInvalidInputTest();
     runSimdAcceleratorDotProductTest();
     runSimdAcceleratorVectorLogTest();
-    runSimdAcceleratorVectorExpTest();
-    runSimdAcceleratorComplexMagnitudeTest();
     runSimdAcceleratorBackendNameTest();
     runSimdAcceleratorDotProductLargeVectorTest();
     runChannelLayoutNumericGuardTest();
@@ -6279,6 +6227,8 @@ void runUiBehaviorSuite()
     runPianoRollF0VisualStyleTokensAndLayeringTest();
     runPianoRollF0VisualEndpointFadeAndGlowContractTest();
     runAuroraTopBarReferenceRestyleSourceGuardTest();
+    runAuroraRightSidebarBackgroundReferenceRestyleSourceGuardTest();
+    runAuroraScrollbarOutlineSourceGuardTest();
     runPianoRollHotPathSourceGuardNoPerEventDebugLoggingTest();
     runPianoRollInteractionSourceGuardInteractiveInvalidationIsNotFullBoundsTest();
     runPianoRollInteractionSourceGuardDeleteLegacyCopyWritebackApiBeforeRefactorTest();
@@ -6328,6 +6278,7 @@ void runPianoRollF0VisualSuite()
     runPianoRollF0VisualStyleTokensAndLayeringTest();
     runPianoRollF0VisualEndpointFadeAndGlowContractTest();
     runAuroraTopBarReferenceRestyleSourceGuardTest();
+    runAuroraRightSidebarBackgroundReferenceRestyleSourceGuardTest();
 }
 
 void runPianoRollIntentBehaviorSuite()
@@ -7141,6 +7092,121 @@ void runAraFinalBirthPathOwnsOriginalF0Release()
     const auto releasePos = source.indexOf(funcPos, "releaseImmediately");
     if (releasePos < 0) {
         logFail(testName, "birthAraMaterializationWithOriginalF0 does not release F0 inference service after birth");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAuroraRightSidebarBackgroundReferenceRestyleSourceGuardTest()
+{
+    constexpr const char* testName = "AuroraRightSidebar_ReferenceRestyleSourceGuard";
+
+    const auto& parameterPanelSource = getFileCache().get("Source/Standalone/UI/ParameterPanel.cpp");
+    const auto auroraBlockStart = parameterPanelSource.indexOf("if (themeId == ThemeId::Aurora)");
+    const auto clipStart = parameterPanelSource.indexOf("g.reduceClipRegion(backgroundPath);");
+    if (auroraBlockStart < 0
+        || clipStart < 0
+        || auroraBlockStart > clipStart
+        || !parameterPanelSource.contains("UIColors::fillAuroraSidebarShell(g, bounds, style.panelRadius);")
+        || !parameterPanelSource.contains("UIColors::drawAuroraSidebarShellFrame(g, bounds, style.panelRadius);")) {
+        logFail(testName, "Aurora parameter sidebar should switch to a dedicated shell painter before the generic clipped panel path");
+        return;
+    }
+
+    const auto& auroraThemeSource = getFileCache().get("Source/Standalone/UI/AuroraTheme.h");
+    if (!auroraThemeSource.contains("static const juce::uint32 SidebarShellTop      = 0xFF18314C;")
+        || !auroraThemeSource.contains("static const juce::uint32 SidebarEdgeAura      = 0x1A2D7FD0;")
+        || !auroraThemeSource.contains("static const juce::uint32 SidebarCornerBloom   = 0x142E8BE4;")) {
+        logFail(testName, "Aurora theme should define dedicated right-sidebar shell tokens instead of reusing tray colors");
+        return;
+    }
+
+    const auto& themeTokensSource = getFileCache().get("Source/Standalone/UI/ThemeTokens.h");
+    if (!themeTokensSource.contains("juce::Colour auroraSidebarShellTop;")
+        || !themeTokensSource.contains("juce::Colour auroraSidebarEdgeAura;")
+        || !themeTokensSource.contains("juce::Colour auroraSidebarCornerBloom;")) {
+        logFail(testName, "ThemeTokens should cache dedicated Aurora right-sidebar shell colors");
+        return;
+    }
+
+    const auto& uiColorsSource = getFileCache().get("Source/Standalone/UI/UIColors.h");
+    if (!uiColorsSource.contains("static void fillAuroraSidebarShell(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)")
+        || !uiColorsSource.contains("static void drawAuroraSidebarShellFrame(juce::Graphics& g,")
+        || !uiColorsSource.contains("const float edgeAuraWidth = juce::jmax(6.0f, bounds.getWidth() * 0.085f);")
+        || !uiColorsSource.contains("juce::ColourGradient leftAura")
+        || !uiColorsSource.contains("juce::ColourGradient rightAura")
+        || !uiColorsSource.contains("const auto leftEdgeVeilBounds")
+        || !uiColorsSource.contains("const auto rightEdgeVeilBounds")
+        || !uiColorsSource.contains("const auto topLeftCornerBloomBounds")
+        || !uiColorsSource.contains("const auto topRightCornerBloomBounds")
+        || !uiColorsSource.contains("const auto bottomSettleBounds")
+        || !uiColorsSource.contains("const auto lowerSettleMidBandBounds")
+        || !uiColorsSource.contains("const auto lowerSettleTailBandBounds")
+        || !uiColorsSource.contains("auroraSidebarTopLip")
+        || !uiColorsSource.contains("auroraSidebarOuterRim")
+        || !uiColorsSource.contains("auroraSidebarInnerRim")
+        || uiColorsSource.contains("const auto bodyLiftBounds")
+        || uiColorsSource.contains("juce::ColourGradient bodyLift")
+        || uiColorsSource.contains("const auto leftAuraBounds = bounds.withWidth(bounds.getWidth() * 0.22f)")
+        || uiColorsSource.contains("g.fillEllipse(bounds.getRight() - bloomSize * 0.86f")) {
+        logFail(testName, "Aurora right sidebar shell should keep the narrow edge aura, remove the top-center rectangular lift, refine the lower settle layers, and avoid restoring the old oversized side band or bottom-right spotlight");
+        return;
+    }
+
+    if (uiColorsSource.contains("bool sidebar")) {
+        logFail(testName, "Right sidebar background must not be folded into button chrome flags");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAuroraScrollbarOutlineSourceGuardTest()
+{
+    constexpr const char* testName = "AuroraScrollbar_OutlineSourceGuard";
+
+    const auto& lookAndFeelSource = getFileCache().get("Source/Standalone/UI/AuroraLookAndFeel.cpp");
+    if (!lookAndFeelSource.contains("const auto glowAlpha = isMouseDown ? 0.24f : (isMouseOver ? 0.18f : 0.08f);")
+        || !lookAndFeelSource.contains("juce::ColourGradient fill(UIColors::correctedF0.withAlpha(isMouseDown ? 0.44f : 0.34f),")
+        || !lookAndFeelSource.contains("UIColors::panelGlow.withAlpha(isMouseDown ? 0.20f : 0.14f),")
+        || !lookAndFeelSource.contains("const auto outline = UIColors::correctedF0.withAlpha(isMouseDown ? 0.82f : (isMouseOver ? 0.70f : 0.56f));")
+        || !lookAndFeelSource.contains("g.drawRoundedRectangle(thumb.reduced(0.5f), trackThickness * 0.5f, 1.0f);")) {
+        logFail(testName, "Aurora scrollbars should keep a thin blue thumb outline while the internal glow and gradient stay more restrained");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runImportedClipF0PathOwnsOriginalF0Release()
+{
+    constexpr const char* testName = "ImportedClipF0Path_OwnsOriginalF0Release";
+
+    const auto& source = getFileCache().get("Source/PluginProcessor.cpp");
+    const auto funcPos = source.indexOf("extractImportedClipOriginalF0(const MaterializationSnapshot& snap");
+    if (funcPos < 0) {
+        logFail(testName, "extractImportedClipOriginalF0 signature not found");
+        return;
+    }
+
+    const auto releasePos = source.indexOf(funcPos, "releaseImmediately");
+    if (releasePos < 0) {
+        logFail(testName, "extractImportedClipOriginalF0 does not release F0 inference service after extraction");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runF0ServiceDoesNotRetainIdleReleaseLoopTest()
+{
+    constexpr const char* testName = "F0Service_DoesNotRetainIdleReleaseLoop";
+
+    const auto& source = getFileCache().get("Source/Inference/F0InferenceService.cpp");
+    if (source.contains("releaseIdleModelIfNeeded") || source.contains("lastExtractionTimeMs_")
+        || source.contains("kModelRetentionMs")) {
+        logFail(testName, "F0InferenceService still retains idle release bookkeeping");
         return;
     }
 
@@ -8079,6 +8145,8 @@ void runArchitectureBehaviorSuite()
     runAraFinalPluginEditorHasNoPrepareImportFromAraRegionHelper();
     runAraFinalRequestMaterializationRefreshContractIsNonAra();
     runAraFinalBirthPathOwnsOriginalF0Release();
+    runImportedClipF0PathOwnsOriginalF0Release();
+    runF0ServiceDoesNotRetainIdleReleaseLoopTest();
 
     runAraRenderabilityUsesBindingStateTest();
     runAraSessionSourceDefinesRenderableBindingStateTest();

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "VocoderInterface.h"
-#include "DmlConfig.h"
 #include "../Utils/Error.h"
 #include <onnxruntime_cxx_api.h>
 #include <memory>

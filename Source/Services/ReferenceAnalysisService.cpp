@@ -72,15 +72,6 @@ void ReferenceAnalysisService::submitAnalysis(uint64_t materializationId,
     cv_.notify_one();
 }
 
-void ReferenceAnalysisService::cancelAnalysis(uint64_t materializationId)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    pendingJobs_.erase(materializationId);
-    if (activeJob_.has_value() && activeJob_->materializationId == materializationId) {
-        cancelledActiveJobs_.insert(materializationId);
-    }
-}
-
 void ReferenceAnalysisService::cancelAll()
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -88,15 +79,6 @@ void ReferenceAnalysisService::cancelAll()
     if (activeJob_.has_value()) {
         cancelledActiveJobs_.insert(activeJob_->materializationId);
     }
-}
-
-bool ReferenceAnalysisService::isAnalysisInProgress(uint64_t materializationId) const
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (activeJob_.has_value() && activeJob_->materializationId == materializationId) {
-        return true;
-    }
-    return pendingJobs_.find(materializationId) != pendingJobs_.end();
 }
 
 void ReferenceAnalysisService::workerLoop()

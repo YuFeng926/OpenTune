@@ -126,7 +126,7 @@ void TopBarComponent::paint(juce::Graphics& g)
 void TopBarComponent::resized()
 {
     // 阴影边距：内容区域在 reduced(12) 范围内布局
-    const int shadowMargin = UIColors::currentThemeId() == ThemeId::Aurora ? 10 : 12;
+    const int shadowMargin = 12;
     auto bounds = getLocalBounds().reduced(shadowMargin);
 
     // 顶部菜单条
@@ -137,8 +137,8 @@ void TopBarComponent::resized()
         menuBar_.setBounds({});
 
     // Transport 行：左/右留给侧边栏开关按钮
-    const int pad = UIColors::currentThemeId() == ThemeId::Aurora ? 5 : 6;
-    const int toggleW = UIColors::currentThemeId() == ThemeId::Aurora ? 46 : 50; // Aurora 更贴近参考图的紧凑节奏
+    const int pad = 6;
+    const int toggleW = 50; // 统一宽度 (50px) - Scaled 1.25x
     const int toggleH = 40; // 统一高度 (40px) - Scaled 1.25x
 
     auto row = bounds.reduced(pad, pad);

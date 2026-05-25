@@ -276,18 +276,22 @@ void AuroraLookAndFeel::drawScrollbar(juce::Graphics& g,
     if (thumb.isEmpty())
         return;
 
-    const auto glowAlpha = isMouseDown ? 0.30f : (isMouseOver ? 0.22f : 0.10f);
+    const auto glowAlpha = isMouseDown ? 0.24f : (isMouseOver ? 0.18f : 0.08f);
     UIColors::drawAuroraGlow(g, thumb, UIColors::correctedF0, glowAlpha, 0.38f);
 
-    juce::ColourGradient fill(UIColors::correctedF0.withAlpha(isMouseDown ? 0.58f : 0.42f),
+    juce::ColourGradient fill(UIColors::correctedF0.withAlpha(isMouseDown ? 0.44f : 0.34f),
                               thumb.getX(),
                               thumb.getY(),
-                              UIColors::panelGlow.withAlpha(isMouseDown ? 0.36f : 0.24f),
+                              UIColors::panelGlow.withAlpha(isMouseDown ? 0.20f : 0.14f),
                               thumb.getRight(),
                               thumb.getBottom(),
                               false);
     g.setGradientFill(fill);
     g.fillRoundedRectangle(thumb, trackThickness * 0.5f);
+
+    const auto outline = UIColors::correctedF0.withAlpha(isMouseDown ? 0.82f : (isMouseOver ? 0.70f : 0.56f));
+    g.setColour(outline);
+    g.drawRoundedRectangle(thumb.reduced(0.5f), trackThickness * 0.5f, 1.0f);
 }
 
 void AuroraLookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int width, int height)

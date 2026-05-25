@@ -183,13 +183,6 @@ juce::String getImportWildcardFilter()
     return formatManager.getWildcardForAllFormats();
 }
 
-juce::String describeRegisteredImportFormats()
-{
-    juce::AudioFormatManager formatManager;
-    registerImportFormats(formatManager);
-    return collectRegisteredFormatNames(formatManager).joinIntoString(", ");
-}
-
 FileProbeResult probeFile(const juce::File& file)
 {
     FileProbeResult result;

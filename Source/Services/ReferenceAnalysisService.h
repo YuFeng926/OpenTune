@@ -69,14 +69,8 @@ public:
     /** 提交分析任务（自动去重） */
     void submitAnalysis(uint64_t materializationId, int64_t renderRevision);
 
-    /** 取消指定 materialization 的分析 */
-    void cancelAnalysis(uint64_t materializationId);
-
     /** 取消所有分析 */
     void cancelAll();
-
-    /** 是否有分析正在进行 */
-    bool isAnalysisInProgress(uint64_t materializationId) const;
 
 private:
     void workerLoop();

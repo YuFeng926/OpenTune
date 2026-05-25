@@ -75,19 +75,6 @@ public:
 
     bool hasRenderableCorrectedF0() const { return !correctedSegments_.empty(); }
 
-
-
-    size_t getMemoryUsage() const {
-        size_t total = 0;
-        total += originalF0_.capacity() * sizeof(float);
-        total += originalEnergy_.capacity() * sizeof(float);
-        for (const auto& seg : correctedSegments_) {
-            total += sizeof(CorrectedSegment);
-            total += seg.f0Data.capacity() * sizeof(float);
-        }
-        return total;
-    }
-
 private:
     const std::vector<float> originalF0_;
     const std::vector<float> originalEnergy_;
@@ -122,9 +109,6 @@ public:
     }
     bool hasAnyCorrection() const { return getSnapshot()->hasAnyCorrection(); }
     bool hasRenderableCorrectedF0() const { return getSnapshot()->hasRenderableCorrectedF0(); }
-    size_t getMemoryUsage() const {
-        return getSnapshot()->getMemoryUsage();
-    }
     void renderCorrectedOnlyRange(int startFrame, int endFrame,
                                   std::function<void(int, const float*, int)> callback) const {
         getSnapshot()->renderCorrectedOnlyRange(startFrame, endFrame, callback);

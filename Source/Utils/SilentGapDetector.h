@@ -115,12 +115,6 @@ public:
 
     /** 获取当前检测配置（线程安全） */
     static DetectionConfig getConfig();
-
-    /** 设置检测配置（线程安全，内部会做参数归一化） */
-    static void setConfig(const DetectionConfig& config);
-
-    /** 恢复默认检测配置 */
-    static void resetConfig();
     
     /** 固定采样率 44.1kHz（内部音频存储标准） */
     static constexpr double kInternalSampleRate = TimeCoordinate::kRenderSampleRate;
@@ -160,62 +154,6 @@ public:
         double maxSearchDistanceSec = -1.0);  // -1 表示使用默认值
     
     // ============================================================================
-    // 静息处查找
-    // ============================================================================
-    
-    /**
-     * 从指定位置向前或向后查找最近的静息处
-     * 
-     * @param gaps 预计算的静息处列表（必须按 startSample 排序）
-     * @param positionSeconds 当前位置（秒）
-     * @param maxSearchDistanceSec 最大搜索距离（秒）
-     * @param searchForward true=向后搜索，false=向前搜索
-     * @return 找到的静息处，如果没找到返回 nullopt
-     */
-    static std::optional<SilentGap> findNearestGap(
-        const std::vector<SilentGap>& gaps,
-        double positionSeconds,
-        double maxSearchDistanceSec,
-        bool searchForward);
-    
-    /**
-     * 查找包含指定位置的静息处
-     * 
-     * @param gaps 预计算的静息处列表
-     * @param positionSeconds 要检查的位置（秒）
-     * @return 包含该位置的静息处，如果不在任何静息处内返回 nullopt
-     */
-    static std::optional<SilentGap> findGapContaining(
-        const std::vector<SilentGap>& gaps,
-        double positionSeconds);
-    
-    /**
-     * 检查两个位置之间是否存在静息处
-     * 
-     * @param gaps 预计算的静息处列表
-     * @param startSeconds 起始位置（秒）
-     * @param endSeconds 结束位置（秒）
-     * @return 如果存在静息处返回 true
-     */
-    static bool hasGapBetween(
-        const std::vector<SilentGap>& gaps,
-        double startSeconds,
-        double endSeconds);
-    
-    /**
-     * 获取两个位置之间的所有静息处
-     * 
-     * @param gaps 预计算的静息处列表
-     * @param startSeconds 起始位置（秒）
-     * @param endSeconds 结束位置（秒）
-     * @return 该范围内的静息处列表
-     */
-    static std::vector<SilentGap> getGapsBetween(
-        const std::vector<SilentGap>& gaps,
-        double startSeconds,
-        double endSeconds);
-    
-    // ============================================================================
     // 辅助函数
     // ============================================================================
     
@@ -229,27 +167,11 @@ public:
     }
     
     /**
-     * 获取最大搜索距离（秒）
-     * @param maxSearchSeconds 最大搜索距离（秒，默认 20 秒）
-     * @return 秒数
-     */
-    static double getMaxSearchDistanceSec(double maxSearchSeconds = 20.0) {
-        return maxSearchSeconds;
-    }
-    
-    /**
      * 将线性幅度转换为 dB
      */
     static float linearToDb(float linear) {
         if (linear <= 0.0f) return -100.0f;
         return 20.0f * std::log10(linear);
-    }
-    
-    /**
-     * 将 dB 转换为线性幅度
-     */
-    static float dbToLinear(float db) {
-        return std::pow(10.0f, db / 20.0f);
     }
 
 private:

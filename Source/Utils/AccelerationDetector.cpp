@@ -172,7 +172,6 @@ void AccelerationDetector::reset() {
     dmlAdapterIndex_ = 0;
     gpuDevices_.clear();
     selectedGpu_ = GpuDeviceInfo{};
-    AppLogger::info("[AccelerationDetector] Detection state reset");
 }
 
 void AccelerationDetector::detect(bool forceCpu) {
@@ -218,59 +217,6 @@ std::string AccelerationDetector::getBackendName() const {
         case AccelBackend::CPU: return "CPU";
     }
     return "Unknown";
-}
-
-std::string AccelerationDetector::getGpuInfoString() const {
-    std::string result = "Backend: " + getBackendName();
-    
-    if (selectedBackend_ == AccelBackend::DirectML && !selectedGpu_.name.empty()) {
-        float vramGB = static_cast<float>(selectedGpu_.dedicatedVideoMemory) / (1024.0f * 1024.0f * 1024.0f);
-        std::ostringstream oss;
-        oss << std::fixed << std::setprecision(1) << vramGB;
-        result += " (" + selectedGpu_.name + ", " + oss.str() + " GB)";
-    }
-    
-    return result;
-}
-
-std::string AccelerationDetector::getAccelerationReport() const {
-    std::ostringstream report;
-    
-    report << "=== 加速状态报告 ===\n";
-    report << "推理后端: " << getBackendName() << "\n";
-    
-    if (selectedBackend_ == AccelBackend::DirectML) {
-        report << "GPU 设备: " << selectedGpu_.name << "\n";
-        
-        float vramGB = static_cast<float>(selectedGpu_.dedicatedVideoMemory) / (1024.0f * 1024.0f * 1024.0f);
-        report << "显存大小: " << std::fixed << std::setprecision(1) << vramGB << " GB\n";
-        
-        // 厂商名称
-        std::string vendorName;
-        switch (selectedGpu_.vendorId) {
-            case 0x10DE: vendorName = "NVIDIA"; break;
-            case 0x1002: vendorName = "AMD"; break;
-            case 0x8086: vendorName = "Intel"; break;
-            case 0x1414: vendorName = "Microsoft"; break;
-            default: vendorName = "Unknown"; break;
-        }
-        report << "GPU 厂商: " << vendorName << "\n";
-    } else {
-        report << "使用 CPU 推理\n";
-    }
-    
-    if (!gpuDevices_.empty()) {
-        report << "\n检测到的 GPU 列表:\n";
-        for (size_t i = 0; i < gpuDevices_.size(); ++i) {
-            const auto& gpu = gpuDevices_[i];
-            float vramGB = static_cast<float>(gpu.dedicatedVideoMemory) / (1024.0f * 1024.0f * 1024.0f);
-            report << "  [" << i << "] " << gpu.name 
-                   << " (" << std::fixed << std::setprecision(1) << vramGB << " GB)"
-                   << (gpu.isIntegrated ? " [集成]" : " [独立]") << "\n";
-        }
-    }
-    
-    return report.str();
 }
 
 } // namespace OpenTune

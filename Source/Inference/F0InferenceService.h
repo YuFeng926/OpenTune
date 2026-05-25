@@ -19,9 +19,9 @@ namespace OpenTune {
  * - Manage F0 extractor lifecycle (CPU-only, no GPU)
  * - Support concurrent F0 extraction
  * - Handle model switching and configuration
- * 
+ *
  * Thread-safe: Yes (shared_mutex for model access)
- * Lifecycle: Model loaded on demand, released after 30s idle
+ * Lifecycle: Model loaded on demand, released explicitly by caller after use
  */
 class F0InferenceService {
 public:
@@ -93,13 +93,8 @@ public:
     bool isInitialized() const;
 
     /**
-     * 释放闲置超过 30 秒的 F0 模型，由外部定期调用
-     */
-    void releaseIdleModelIfNeeded();
-
-    /**
      * 立即释放 F0 模型资源（不等 idle timer）。
-     * 用于 VST3 ARA 自动 OriginalF0 成功后立即回收推理内存。
+     * 用于提取完成后立即回收推理内存。
      */
     void releaseImmediately();
 

@@ -92,10 +92,10 @@ DmlInitDiagnostic createOrtDiagnostic(const char* stage, OrtStatus* status, cons
 
 DmlVocoder::DmlVocoder(const std::string& modelPath,
                        Ort::Env& env,
-                       const DmlConfig& config)
+                       int adapterIndex)
     : cpuMemoryInfo_(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault))
 {
-    initializeSession(modelPath, env, config);
+    initializeSession(modelPath, env, adapterIndex);
     detectInputOutputNames();
 }
 
@@ -103,7 +103,7 @@ DmlVocoder::~DmlVocoder() = default;
 
 void DmlVocoder::initializeSession(const std::string& modelPath,
                                     Ort::Env& env,
-                                    const DmlConfig& config)
+                                    int adapterIndex)
 {
     Ort::SessionOptions sessionOptions;
     auto& api = Ort::GetApi();
@@ -125,10 +125,10 @@ void DmlVocoder::initializeSession(const std::string& modelPath,
         throw std::runtime_error("DmlVocoder: DML API pointer is null after GetExecutionProviderApi");
 
     AppLogger::info("[DmlVocoder] Appending DML EP with adapterIndex="
-        + juce::String(config.adapterIndex).toStdString());
+        + juce::String(static_cast<int>(adapterIndex)).toStdString());
 
     OrtStatus* dmlStatus = dmlApi->SessionOptionsAppendExecutionProvider_DML(
-        sessionOptions, config.adapterIndex);
+        sessionOptions, static_cast<int>(adapterIndex));
     if (dmlStatus != nullptr) {
         DmlInitDiagnostic diag = createOrtDiagnostic(
             "ort_append_dml", dmlStatus, api,

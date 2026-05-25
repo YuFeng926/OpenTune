@@ -38,9 +38,6 @@ void logMaterializationReject(int requestChannels);
 
 void logChunkRender(juce::int64 materializationId, int stored);
 
-void logPlaybackRead(juce::int64 materializationId, int stored, int dest,
-                     const char* mode);
-
 /** Throttled to ~1 Hz internally (caller MAY invoke per block; the helper
  *  drops calls that arrive faster than that). */
 void logNumericGuard(int zeroedSamples, int channel);
@@ -48,7 +45,5 @@ void logNumericGuard(int zeroedSamples, int channel);
 void logPersistenceSerialize(int segmentCount);
 
 void logPersistenceDeserializeReject(juce::uint32 magic);
-
-void logLoadAuditReject(juce::int64 materializationId, int channels);
 
 }  // namespace OpenTune::ChannelLayoutLog

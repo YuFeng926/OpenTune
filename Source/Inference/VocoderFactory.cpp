@@ -26,11 +26,8 @@ VocoderCreationResult VocoderFactory::create(
 
         AppLogger::info("[VocoderFactory] Creating DML vocoder...");
 
-        DmlConfig config;
-        config.adapterIndex = adapterIndex;
-
         try {
-            auto vocoder = std::make_unique<DmlVocoder>(modelPath, env, config);
+            auto vocoder = std::make_unique<DmlVocoder>(modelPath, env, adapterIndex);
 
             AppLogger::info("[VocoderFactory] DML vocoder created successfully");
 

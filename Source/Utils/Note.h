@@ -84,13 +84,6 @@ public:
         normalizeNonOverlapping(notes_);
     }
 
-    void replaceRangeWithNotes(double startTime, double endTime, const std::vector<Note>& replacements) {
-        eraseRange(startTime, endTime);
-        for (const auto& n : replacements) {
-            insertNoteSorted(n);
-        }
-    }
-
     void clear() {
         notes_.clear();
     }
@@ -109,71 +102,6 @@ public:
 
     bool isEmpty() const {
         return notes_.empty();
-    }
-
-    const Note* getNoteAtTime(double time) const {
-        for (const auto& note : notes_) {
-            if (time >= note.startTime && time < note.endTime) {
-                return &note;
-            }
-        }
-        return nullptr;
-    }
-
-    Note* getNoteAtTime(double time) {
-        for (auto& note : notes_) {
-            if (time >= note.startTime && time < note.endTime) {
-                return &note;
-            }
-        }
-        return nullptr;
-    }
-
-    Note* findNoteAt(double time, float targetPitch, float pitchTolerance = 50.0f) {
-        for (auto& note : notes_) {
-            if (time >= note.startTime && time < note.endTime) {
-                float adjustedPitch = note.getAdjustedPitch();
-                if (std::abs(adjustedPitch - targetPitch) <= pitchTolerance) {
-                    return &note;
-                }
-            }
-        }
-        return nullptr;
-    }
-
-    void selectAll() {
-        for (auto& note : notes_) {
-            note.selected = true;
-        }
-    }
-
-    void deselectAll() {
-        for (auto& note : notes_) {
-            note.selected = false;
-        }
-    }
-
-    std::vector<Note*> getSelectedNotes() {
-        std::vector<Note*> selected;
-        for (auto& note : notes_) {
-            if (note.selected) {
-                selected.push_back(&note);
-            }
-        }
-        return selected;
-    }
-
-    void deleteSelectedNotes() {
-        notes_.erase(
-            std::remove_if(
-                notes_.begin(),
-                notes_.end(),
-                [](const Note& note) {
-                    return note.selected;
-                }
-            ),
-            notes_.end()
-        );
     }
 
     void eraseRange(double startTime, double endTime) {
@@ -216,38 +144,6 @@ public:
         }
 
         notes_ = std::move(updated);
-    }
-
-    void clearAllDirty() {
-        for (auto& note : notes_) {
-            note.dirty = false;
-        }
-    }
-
-    bool hasDirtyNotes() const {
-        for (const auto& note : notes_) {
-            if (note.dirty) return true;
-        }
-        return false;
-    }
-
-    std::pair<double, double> getDirtyRange() const {
-        double minTime = 1e30;
-        double maxTime = -1e30;
-        bool found = false;
-
-        for (const auto& note : notes_) {
-            if (note.dirty) {
-                minTime = std::min(minTime, note.startTime);
-                maxTime = std::max(maxTime, note.endTime);
-                found = true;
-            }
-        }
-
-        if (!found) {
-            return {-1.0, -1.0};
-        }
-        return {minTime, maxTime};
     }
 
 private:

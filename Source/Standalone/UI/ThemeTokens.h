@@ -100,6 +100,15 @@ struct ThemeTokens
     juce::Colour pianoRollGrid;
     juce::Colour pianoRollWaveform;
     juce::Colour sidebarTrackFade;
+    juce::Colour auroraSidebarShellTop;
+    juce::Colour auroraSidebarShellMid;
+    juce::Colour auroraSidebarShellBottom;
+    juce::Colour auroraSidebarTopLip;
+    juce::Colour auroraSidebarOuterRim;
+    juce::Colour auroraSidebarInnerRim;
+    juce::Colour auroraSidebarEdgeAura;
+    juce::Colour auroraSidebarCornerBloom;
+    juce::Colour auroraSidebarLowerSettle;
     juce::Colour knobRim;
     juce::Colour knobGlow;
 
@@ -292,13 +301,13 @@ private:
             juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.18f),
 
             juce::Colour { 0xFFD24A3A }, // originalF0
-            juce::Colour { 0xFF2EC7F8 }, // correctedF0
-            juce::Colour { 0x302EC7F8 }, // shadowTrack
+            juce::Colour { 0xFF196FC4 }, // correctedF0
+            juce::Colour { 0x30196FC4 }, // shadowTrack
 
-            juce::Colour { 0xFF72D8F7 },
-            juce::Colour { 0xFFB6F0FF },
-            juce::Colour { 0xFF9CEAFF },
-            juce::Colour { 0xFF8CE4FF },
+            juce::Colour { 0xFF235AA8 },
+            juce::Colour { 0xFF3A69A2 },
+            juce::Colour { 0xFF2F6FC4 },
+            juce::Colour { 0xFF2A63B8 },
 
             juce::Colour { BlueBreeze::Colors::SourceLight },
             juce::Colour { BlueBreeze::Colors::AccentBlue },
@@ -312,8 +321,8 @@ private:
             juce::Colour { 0xFF2ECC71 },
             juce::Colour { BlueBreeze::Colors::NodeRed },
 
-            juce::Colour { BlueBreeze::Colors::GraphBgLight }.withAlpha(0.18f),
-            juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.26f),
+            juce::Colour { 0x600C3C4A },
+            juce::Colour { 0xFF0C3C4A },
 
             juce::Colour { 0x305AA8E6 },
 
@@ -340,7 +349,16 @@ private:
             juce::Colour { BlueBreeze::Colors::FieldFogBottom },
             juce::Colour { BlueBreeze::Colors::LaneSoft }.withAlpha(0.14f),
             juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.14f),
-            juce::Colour { BlueBreeze::Colors::GraphBgLight }.withAlpha(0.30f),
+            juce::Colour { 0xFF0C3C4A },
+            juce::Colour { BlueBreeze::Colors::FieldFogBottom },
+            juce::Colour { BlueBreeze::Colors::FieldFogMid },
+            juce::Colour { BlueBreeze::Colors::GraphBgDeep },
+            juce::Colour { BlueBreeze::Colors::SourceLight }.withAlpha(0.18f),
+            juce::Colour { BlueBreeze::Colors::PanelBorder }.withAlpha(0.50f),
+            juce::Colour { BlueBreeze::Colors::AccentBlue }.withAlpha(0.18f),
+            juce::Colour { BlueBreeze::Colors::AccentBlue }.withAlpha(0.10f),
+            juce::Colour { BlueBreeze::Colors::AccentBlue }.withAlpha(0.08f),
+            juce::Colour { BlueBreeze::Colors::GraphBgDeep },
             juce::Colour { BlueBreeze::Colors::GraphBgDeep },
             juce::Colour { BlueBreeze::Colors::KnobEdge },
             juce::Colour { BlueBreeze::Colors::KnobGlow },
@@ -436,6 +454,15 @@ private:
             juce::Colour { DarkBlueGrey::Colors::GridLine },
             juce::Colour { DarkBlueGrey::Colors::WaveformFill },
             juce::Colour { DarkBlueGrey::Colors::ShadowTrack },
+            juce::Colour { DarkBlueGrey::Colors::BackgroundMedium },
+            juce::Colour { DarkBlueGrey::Colors::BackgroundDark },
+            juce::Colour { DarkBlueGrey::Colors::BackgroundDark }.darker(0.18f),
+            juce::Colour { DarkBlueGrey::Colors::BevelLight }.withAlpha(0.16f),
+            juce::Colour { DarkBlueGrey::Colors::PanelBorder }.withAlpha(0.64f),
+            juce::Colour { DarkBlueGrey::Colors::GlowColor }.withAlpha(0.16f),
+            juce::Colour { DarkBlueGrey::Colors::GlowColor }.withAlpha(0.08f),
+            juce::Colour { DarkBlueGrey::Colors::GlowColor }.withAlpha(0.06f),
+            juce::Colour { DarkBlueGrey::Colors::BackgroundDark }.darker(0.30f),
             juce::Colour { DarkBlueGrey::Colors::KnobIndicator },
             juce::Colour { DarkBlueGrey::Colors::GlowColor }.withAlpha(0.25f),
 
@@ -535,12 +562,12 @@ private:
 
             juce::Colour { Aurora::Colors::OriginalF0 }, // originalF0
             juce::Colour { Aurora::Colors::CorrectedF0 }, // correctedF0
-            juce::Colour { 0x40000000 }, // shadowTrack
+            juce::Colour { Aurora::Colors::ShadowTrack }, // shadowTrack
 
             juce::Colour { Aurora::Colors::NoteBlock }, // noteBlock
             juce::Colour { Aurora::Colors::NoteBlockEdge }, // noteBlockBorder
             juce::Colour { Aurora::Colors::NoteBlockHot }, // noteBlockSelected
-            juce::Colour { Aurora::Colors::NoteBlockHot }, // noteBlockHover
+            juce::Colour { Aurora::Colors::NoteBlockHover }, // noteBlockHover
 
             juce::Colour { Aurora::Colors::Cyan }, // playhead
             juce::Colour { Aurora::Colors::TextSecondary }, // timelineMarker
@@ -554,8 +581,8 @@ private:
             juce::Colour { Aurora::Colors::Success }, // statusReady
             juce::Colour { Aurora::Colors::Error }, // statusError
 
-            juce::Colour { 0x4000F0FF }, // waveformFill
-            juce::Colour { 0x8000F0FF }, // waveformOutline
+            juce::Colour { 0x600C3C4A }, // waveformFill
+            juce::Colour { 0xFF0C3C4A }, // waveformOutline
 
             juce::Colour { 0x20FFFFFF }, // scaleHighlight
 
@@ -584,6 +611,15 @@ private:
             juce::Colour { Aurora::Colors::PianoGrid },
             juce::Colour { Aurora::Colors::PianoWaveform },
             juce::Colour { Aurora::Colors::SidebarTrackFade },
+            juce::Colour { Aurora::Colors::SidebarShellTop },
+            juce::Colour { Aurora::Colors::SidebarShellMid },
+            juce::Colour { Aurora::Colors::SidebarShellBottom },
+            juce::Colour { Aurora::Colors::SidebarTopLip },
+            juce::Colour { Aurora::Colors::SidebarOuterRim },
+            juce::Colour { Aurora::Colors::SidebarInnerRim },
+            juce::Colour { Aurora::Colors::SidebarEdgeAura },
+            juce::Colour { Aurora::Colors::SidebarCornerBloom },
+            juce::Colour { Aurora::Colors::SidebarLowerSettle },
             juce::Colour { Aurora::Colors::KnobRim },
             juce::Colour { Aurora::Colors::KnobGlow },
 
@@ -603,19 +639,22 @@ private:
             juce::Colour(0xCFFFFFFF), juce::Colour(0x3C8D8590), juce::Colour(0xFFFF7CBD),
             juce::Colour(0xFF343744), juce::Colour(0xFF7E8391), juce::Colour(0xFFB2B5C1), juce::Colour(0xFFFF7CBD),
             juce::Colour(0xFFE0E0E8), juce::Colour(0x22FFFFFF), juce::Colour(0x14D8D8E0), juce::Colour(0x45C8CAD3),
-            juce::Colour(0xFFD24A3A), juce::Colour(0xFF2EC7F8), juce::Colour(0x302EC7F8),
-            juce::Colour(0xFF72D8F7), juce::Colour(0xFFB6F0FF), juce::Colour(0xFF9CEAFF), juce::Colour(0xFF8CE4FF),
+            juce::Colour(0xFFD24A3A), juce::Colour(0xFF196FC4), juce::Colour(0x30196FC4),
+            juce::Colour(0xFF235AA8), juce::Colour(0xFF3A69A2), juce::Colour(0xFF2F6FC4), juce::Colour(0xFF2A63B8),
             juce::Colour(0xFFFF7CBD), juce::Colour(0xFFFF7CBD), juce::Colour(0x66AEB3C0),
             juce::Colour(0xFFFF7CBD), juce::Colour(0xFF7E8391), juce::Colour(0xFFE8E8F0),
             juce::Colour(0xFFFFB030), juce::Colour(0xFF7CDCCC), juce::Colour(0xFFFF4F77),
-            juce::Colour(0x66B8BBC6), juce::Colour(0x90AEB3C0),
+            juce::Colour(0x600C3C4A), juce::Colour(0xFF0C3C4A),
             juce::Colour(0x24FFD4E8),
             juce::Colour(0xFFF8F8FF), juce::Colour(0xFFFF7CBD), juce::Colour(0xFFF8F8FF), juce::Colour(0xFFDADDE6), juce::Colour(0xFFCCD0D8), juce::Colour(0xFF343744), juce::Colour(0xFFB2B5C1),
             juce::Colour(0xFF202830), juce::Colour(0xFF707880),
             juce::Colour(0xFFE8E8F0), juce::Colour(0xFF303840), juce::Colour(0xFFCED2DC),
             juce::Colour(0xDDF8F0F8), juce::Colour(0xBFFFFFFF), juce::Colour(0x80FFD4E8), juce::Colour(0x32FF80B8),
             juce::Colour(0xFFE8E8F0), juce::Colour(0xFFF6F3FA), juce::Colour(0xFFFFE0F0),
-            juce::Colour(0xFFF4F0F6), juce::Colour(0x22FFFFFF), juce::Colour(0x70AEB3C0), juce::Colour(0x90AEB3C0),
+            juce::Colour(0xFFF4F0F6), juce::Colour(0x22FFFFFF), juce::Colour(0x70AEB3C0), juce::Colour(0xFF0C3C4A),
+            juce::Colour(0xFFF4F0F6), juce::Colour(0xFFE8E8F0), juce::Colour(0xFFDADDE6),
+            juce::Colour(0x30FFFFFF), juce::Colour(0x70AEB3C0), juce::Colour(0x24FFD4E8),
+            juce::Colour(0x18FFD4E8), juce::Colour(0x14FFD4E8), juce::Colour(0xFFCCD0D8),
             juce::Colour(0x24FFD4E8), juce::Colour(0xFFA8B0C0), juce::Colour(0x52FF80B8),
             22.0f
         };

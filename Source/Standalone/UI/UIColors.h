@@ -56,14 +56,14 @@ struct UIColors
 
     // Pitch Curve Colors
     static inline juce::Colour originalF0 { 0xFFD24A3A };   // Piano Roll reference red
-    static inline juce::Colour correctedF0 { 0xFF2EC7F8 };  // Piano Roll reference cyan
-    static inline juce::Colour shadowTrack { 0x302EC7F8 };
+    static inline juce::Colour correctedF0 { 0xFF196FC4 };  // Piano Roll reference blue
+    static inline juce::Colour shadowTrack { 0x30196FC4 };
 
     // Note Block Colors
-    static inline juce::Colour noteBlock { 0xFF72D8F7 };
-    static inline juce::Colour noteBlockBorder { 0xFFB6F0FF };
-    static inline juce::Colour noteBlockSelected { 0xFF9CEAFF };
-    static inline juce::Colour noteBlockHover { 0xFF8CE4FF };
+    static inline juce::Colour noteBlock { 0xFF235AA8 };
+    static inline juce::Colour noteBlockBorder { 0xFF3A69A2 };
+    static inline juce::Colour noteBlockSelected { 0xFF2F6FC4 };
+    static inline juce::Colour noteBlockHover { 0xFF2A63B8 };
 
     // Playhead & Timeline
     static inline juce::Colour playhead { 0xFFFFFFFF };
@@ -81,8 +81,8 @@ struct UIColors
     static inline juce::Colour statusError { 0xFFE74C3C };
 
     // Waveform Colors - Dark Grey to match button style
-    static inline juce::Colour waveformFill { 0x603E4652 };
-    static inline juce::Colour waveformOutline { 0xFF3E4652 };
+    static inline juce::Colour waveformFill { 0x600C3C4A };
+    static inline juce::Colour waveformOutline { 0xFF0C3C4A };
 
     // Scale Detection
     static inline juce::Colour scaleHighlight { 0x60F39C12 };
@@ -104,14 +104,23 @@ struct UIColors
     static inline juce::Colour glassHighlight { 0x1A7CC5F4 };
     static inline juce::Colour glassEdge { 0x666DA8D8 };
     static inline juce::Colour panelGlow { 0x2A133964 };
-    static inline juce::Colour auroraButtonNormal { 0xE10A1420 };
-    static inline juce::Colour auroraButtonHover { 0xE4101B29 };
-    static inline juce::Colour auroraButtonActive { 0xE8112437 };
+    static inline juce::Colour auroraButtonNormal { 0xC00B1728 };
+    static inline juce::Colour auroraButtonHover { 0xD1112A44 };
+    static inline juce::Colour auroraButtonActive { 0xE51B5F9E };
     static inline juce::Colour pianoRollBackground { 0xFF0C1D2F };
     static inline juce::Colour pianoRollLane { 0xFF87B6D4 };
     static inline juce::Colour pianoRollGrid { 0xFF9BD5FF };
-    static inline juce::Colour pianoRollWaveform { 0xFF8EB8CE };
+    static inline juce::Colour pianoRollWaveform { 0xFF0C3C4A };
     static inline juce::Colour sidebarTrackFade { 0x7A1F7BFF };
+    static inline juce::Colour auroraSidebarShellTop { 0xFF18314C };
+    static inline juce::Colour auroraSidebarShellMid { 0xFF0E2238 };
+    static inline juce::Colour auroraSidebarShellBottom { 0xFF081523 };
+    static inline juce::Colour auroraSidebarTopLip { 0x4CA9D8FF };
+    static inline juce::Colour auroraSidebarOuterRim { 0x4A46719B };
+    static inline juce::Colour auroraSidebarInnerRim { 0x2193CCFF };
+    static inline juce::Colour auroraSidebarEdgeAura { 0x1A2D7FD0 };
+    static inline juce::Colour auroraSidebarCornerBloom { 0x142E8BE4 };
+    static inline juce::Colour auroraSidebarLowerSettle { 0xFF030A12 };
     static inline juce::Colour knobRim { 0x9A4FC3FF };
     static inline juce::Colour knobGlow { 0x821688FF };
 
@@ -214,6 +223,15 @@ struct UIColors
         pianoRollGrid = tokens.pianoRollGrid;
         pianoRollWaveform = tokens.pianoRollWaveform;
         sidebarTrackFade = tokens.sidebarTrackFade;
+        auroraSidebarShellTop = tokens.auroraSidebarShellTop;
+        auroraSidebarShellMid = tokens.auroraSidebarShellMid;
+        auroraSidebarShellBottom = tokens.auroraSidebarShellBottom;
+        auroraSidebarTopLip = tokens.auroraSidebarTopLip;
+        auroraSidebarOuterRim = tokens.auroraSidebarOuterRim;
+        auroraSidebarInnerRim = tokens.auroraSidebarInnerRim;
+        auroraSidebarEdgeAura = tokens.auroraSidebarEdgeAura;
+        auroraSidebarCornerBloom = tokens.auroraSidebarCornerBloom;
+        auroraSidebarLowerSettle = tokens.auroraSidebarLowerSettle;
         knobRim = tokens.knobRim;
         knobGlow = tokens.knobGlow;
 
@@ -351,6 +369,172 @@ struct UIColors
                                          false);
         g.setGradientFill(lowerSettle);
         g.fillRect(bounds);
+    }
+
+    static void fillAuroraSidebarShell(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)
+    {
+        juce::Path shape;
+        if (radius > 0.0f)
+            shape.addRoundedRectangle(bounds, radius);
+        else
+            shape.addRectangle(bounds);
+
+        const float edgeAuraWidth = juce::jmax(6.0f, bounds.getWidth() * 0.085f);
+        const float edgeAuraInsetY = bounds.getHeight() * 0.055f;
+        const auto leftAuraBounds = juce::Rectangle<float>(bounds.getX() - edgeAuraWidth * 0.18f,
+                                                           bounds.getY() + edgeAuraInsetY,
+                                                           edgeAuraWidth,
+                                                           bounds.getHeight() - edgeAuraInsetY * 2.0f);
+        juce::ColourGradient leftAura(auroraSidebarEdgeAura.withAlpha(0.14f),
+                                      leftAuraBounds.getX(),
+                                      leftAuraBounds.getCentreY(),
+                                      juce::Colours::transparentBlack,
+                                      leftAuraBounds.getRight(),
+                                      leftAuraBounds.getCentreY(),
+                                      false);
+        leftAura.addColour(0.30, auroraSidebarEdgeAura.withAlpha(0.07f));
+        g.setGradientFill(leftAura);
+        g.fillRoundedRectangle(leftAuraBounds, juce::jmax(0.0f, radius - 3.0f));
+
+        const auto rightAuraBounds = juce::Rectangle<float>(bounds.getRight() - edgeAuraWidth * 0.82f,
+                                                            bounds.getY() + edgeAuraInsetY,
+                                                            edgeAuraWidth,
+                                                            bounds.getHeight() - edgeAuraInsetY * 2.0f);
+        juce::ColourGradient rightAura(auroraSidebarEdgeAura.withAlpha(0.13f),
+                                       rightAuraBounds.getX(),
+                                       rightAuraBounds.getCentreY(),
+                                       juce::Colours::transparentBlack,
+                                       rightAuraBounds.getRight(),
+                                       rightAuraBounds.getCentreY(),
+                                       false);
+        rightAura.addColour(0.32, auroraSidebarEdgeAura.withAlpha(0.06f));
+        g.setGradientFill(rightAura);
+        g.fillRoundedRectangle(rightAuraBounds, juce::jmax(0.0f, radius - 3.0f));
+
+        juce::ColourGradient shell(auroraSidebarShellTop,
+                                   bounds.getX(),
+                                   bounds.getY(),
+                                   auroraSidebarShellBottom,
+                                   bounds.getX(),
+                                   bounds.getBottom(),
+                                   false);
+        shell.addColour(0.16, auroraSidebarShellTop.interpolatedWith(auroraSidebarShellMid, 0.34f));
+        shell.addColour(0.42, auroraSidebarShellMid);
+        shell.addColour(0.74, auroraSidebarShellMid.interpolatedWith(auroraSidebarShellBottom, 0.38f));
+        g.setGradientFill(shell);
+        g.fillPath(shape);
+
+        juce::Graphics::ScopedSaveState clipState(g);
+        g.reduceClipRegion(shape);
+
+        const auto topLipBand = bounds.withHeight(bounds.getHeight() * 0.10f);
+        juce::ColourGradient topLip(auroraSidebarTopLip.withAlpha(0.14f),
+                                    topLipBand.getCentreX(),
+                                    topLipBand.getY(),
+                                    juce::Colours::transparentWhite,
+                                    topLipBand.getCentreX(),
+                                    topLipBand.getBottom(),
+                                    false);
+        g.setGradientFill(topLip);
+        g.fillRect(topLipBand);
+
+        const auto leftEdgeVeilBounds = juce::Rectangle<float>(bounds.getX() + 1.0f,
+                                                               bounds.getY() + bounds.getHeight() * 0.10f,
+                                                               juce::jmax(4.0f, bounds.getWidth() * 0.055f),
+                                                               bounds.getHeight() * 0.76f);
+        juce::ColourGradient leftEdgeVeil(auroraSidebarEdgeAura.withAlpha(0.09f),
+                                          leftEdgeVeilBounds.getX(),
+                                          leftEdgeVeilBounds.getCentreY(),
+                                          juce::Colours::transparentBlack,
+                                          leftEdgeVeilBounds.getRight(),
+                                          leftEdgeVeilBounds.getCentreY(),
+                                          false);
+        leftEdgeVeil.addColour(0.26, auroraSidebarEdgeAura.withAlpha(0.05f));
+        g.setGradientFill(leftEdgeVeil);
+        g.fillRect(leftEdgeVeilBounds);
+
+        const auto rightEdgeVeilBounds = juce::Rectangle<float>(bounds.getRight() - juce::jmax(4.0f, bounds.getWidth() * 0.055f) - 1.0f,
+                                                                bounds.getY() + bounds.getHeight() * 0.10f,
+                                                                juce::jmax(4.0f, bounds.getWidth() * 0.055f),
+                                                                bounds.getHeight() * 0.76f);
+        juce::ColourGradient rightEdgeVeil(juce::Colours::transparentBlack,
+                                           rightEdgeVeilBounds.getX(),
+                                           rightEdgeVeilBounds.getCentreY(),
+                                           auroraSidebarEdgeAura.withAlpha(0.08f),
+                                           rightEdgeVeilBounds.getRight(),
+                                           rightEdgeVeilBounds.getCentreY(),
+                                           false);
+        rightEdgeVeil.addColour(0.74, auroraSidebarEdgeAura.withAlpha(0.05f));
+        g.setGradientFill(rightEdgeVeil);
+        g.fillRect(rightEdgeVeilBounds);
+
+        const auto topLeftCornerBloomBounds = juce::Rectangle<float>(bounds.getX() - bounds.getWidth() * 0.06f,
+                                                                     bounds.getY() - bounds.getWidth() * 0.05f,
+                                                                     bounds.getWidth() * 0.30f,
+                                                                     bounds.getWidth() * 0.24f);
+        g.setGradientFill(juce::ColourGradient(auroraSidebarCornerBloom.withAlpha(0.10f),
+                                               topLeftCornerBloomBounds.getX() + topLeftCornerBloomBounds.getWidth() * 0.24f,
+                                               topLeftCornerBloomBounds.getY() + topLeftCornerBloomBounds.getHeight() * 0.22f,
+                                               juce::Colours::transparentBlack,
+                                               topLeftCornerBloomBounds.getRight(),
+                                               topLeftCornerBloomBounds.getBottom(),
+                                               true));
+        g.fillEllipse(topLeftCornerBloomBounds);
+
+        const auto topRightCornerBloomBounds = juce::Rectangle<float>(bounds.getRight() - bounds.getWidth() * 0.24f,
+                                                                      bounds.getY() - bounds.getWidth() * 0.05f,
+                                                                      bounds.getWidth() * 0.30f,
+                                                                      bounds.getWidth() * 0.24f);
+        g.setGradientFill(juce::ColourGradient(auroraSidebarCornerBloom.withAlpha(0.09f),
+                                               topRightCornerBloomBounds.getRight() - topRightCornerBloomBounds.getWidth() * 0.24f,
+                                               topRightCornerBloomBounds.getY() + topRightCornerBloomBounds.getHeight() * 0.22f,
+                                               juce::Colours::transparentBlack,
+                                               topRightCornerBloomBounds.getX(),
+                                               topRightCornerBloomBounds.getBottom(),
+                                               true));
+        g.fillEllipse(topRightCornerBloomBounds);
+
+        const auto bottomSettleBounds = bounds.withTrimmedTop(bounds.getHeight() * 0.58f);
+        juce::ColourGradient lowerSettle(juce::Colours::transparentBlack,
+                                         bottomSettleBounds.getCentreX(),
+                                         bottomSettleBounds.getY(),
+                                         auroraSidebarLowerSettle.withAlpha(0.32f),
+                                         bottomSettleBounds.getCentreX(),
+                                         bottomSettleBounds.getBottom(),
+                                         false);
+        lowerSettle.addColour(0.22, auroraSidebarLowerSettle.withAlpha(0.05f));
+        lowerSettle.addColour(0.52, auroraSidebarLowerSettle.withAlpha(0.13f));
+        lowerSettle.addColour(0.80, auroraSidebarLowerSettle.withAlpha(0.24f));
+        g.setGradientFill(lowerSettle);
+        g.fillRect(bottomSettleBounds);
+
+        const auto lowerSettleMidBandBounds = bounds.reduced(bounds.getWidth() * 0.12f, 0.0f)
+                                              .withTrimmedTop(bounds.getHeight() * 0.67f)
+                                              .withHeight(bounds.getHeight() * 0.12f);
+        juce::ColourGradient lowerSettleMidBand(auroraSidebarShellMid.withAlpha(0.05f),
+                                                lowerSettleMidBandBounds.getCentreX(),
+                                                lowerSettleMidBandBounds.getY(),
+                                                juce::Colours::transparentBlack,
+                                                lowerSettleMidBandBounds.getCentreX(),
+                                                lowerSettleMidBandBounds.getBottom(),
+                                                false);
+        lowerSettleMidBand.addColour(0.58, auroraSidebarShellBottom.withAlpha(0.04f));
+        g.setGradientFill(lowerSettleMidBand);
+        g.fillRect(lowerSettleMidBandBounds);
+
+        const auto lowerSettleTailBandBounds = bounds.reduced(bounds.getWidth() * 0.09f, 0.0f)
+                                               .withTrimmedTop(bounds.getHeight() * 0.79f)
+                                               .withHeight(bounds.getHeight() * 0.17f);
+        juce::ColourGradient lowerSettleTailBand(juce::Colours::transparentBlack,
+                                                 lowerSettleTailBandBounds.getCentreX(),
+                                                 lowerSettleTailBandBounds.getY(),
+                                                 auroraSidebarLowerSettle.withAlpha(0.16f),
+                                                 lowerSettleTailBandBounds.getCentreX(),
+                                                 lowerSettleTailBandBounds.getBottom(),
+                                                 false);
+        lowerSettleTailBand.addColour(0.44, auroraSidebarLowerSettle.withAlpha(0.08f));
+        g.setGradientFill(lowerSettleTailBand);
+        g.fillRect(lowerSettleTailBandBounds);
     }
 
     static void fillSoftTimelineCanvas(juce::Graphics& g,
@@ -882,6 +1066,31 @@ struct UIColors
                    0.95f);
     }
 
+    static void drawAuroraSidebarShellFrame(juce::Graphics& g,
+                                            const juce::Rectangle<float>& bounds,
+                                            float radius)
+    {
+        g.setColour(auroraSidebarOuterRim.withAlpha(0.72f));
+        if (radius > 0.0f)
+            g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
+        else
+            g.drawRect(bounds.reduced(0.5f), 1.0f);
+
+        if (radius > 1.5f)
+        {
+            g.setColour(auroraSidebarInnerRim.withAlpha(0.30f));
+            g.drawRoundedRectangle(bounds.reduced(1.35f), juce::jmax(0.0f, radius - 0.9f), 0.80f);
+        }
+
+        g.setColour(auroraSidebarTopLip.withAlpha(0.58f));
+        const auto topInset = juce::jmin(radius + 2.0f, bounds.getWidth() * 0.26f);
+        g.drawLine(bounds.getX() + topInset,
+                   bounds.getY() + 1.0f,
+                   bounds.getRight() - topInset,
+                   bounds.getY() + 1.0f,
+                   0.95f);
+    }
+
     static void drawAuroraButtonChrome(juce::Graphics& g,
                                        const juce::Rectangle<float>& bounds,
                                        float radius,
@@ -896,22 +1105,8 @@ struct UIColors
         const auto isActive = active || isPressed;
         const auto isHovered = highlighted && !isPressed;
         const auto fill = isActive ? auroraButtonActive : (isHovered ? auroraButtonHover : auroraButtonNormal);
-        const auto glow = glowColour.getAlpha() > 0
-                              ? glowColour
-                              : (isActive ? juce::Colour { Aurora::Colors::ButtonActiveGlow }
-                                          : (isHovered ? juce::Colour { Aurora::Colors::ButtonHoverGlow }
-                                                       : juce::Colour { Aurora::Colors::ButtonRestGlow }));
-        const auto edge = edgeColour.getAlpha() > 0
-                              ? edgeColour
-                              : (isActive ? juce::Colour { Aurora::Colors::ButtonActiveEdge }
-                                          : juce::Colour { Aurora::Colors::ButtonEdge });
-        const auto faceTop = juce::Colour { Aurora::Colors::ButtonFaceTop };
-        const auto faceMid = juce::Colour { Aurora::Colors::ButtonFaceMid };
-        const auto faceBottom = juce::Colour { Aurora::Colors::ButtonFaceBottom };
-        const auto sheenColour = juce::Colour { Aurora::Colors::ButtonSheen };
-        const auto innerLight = juce::Colour { Aurora::Colors::ButtonInnerLight };
-        const auto activeTint = juce::Colour { Aurora::Colors::ButtonActiveTint };
-        const auto coreShadow = juce::Colour { Aurora::Colors::ButtonCoreShadow };
+        const auto glow = glowColour.getAlpha() > 0 ? glowColour : (isActive ? knobGlow : panelGlow);
+        const auto edge = edgeColour.getAlpha() > 0 ? edgeColour : (isActive ? knobGlow : glassEdge);
 
         juce::Path shape;
         if (shapeOverride != nullptr)
@@ -921,32 +1116,24 @@ struct UIColors
         else
             shape.addRectangle(bounds);
 
-        // Keep the light attached to the silhouette instead of a uniform fuzzy halo.
-        juce::DropShadow outerGlow(glow.withMultipliedAlpha(isActive ? 0.07f : (isHovered ? 0.042f : 0.016f)),
-                                   isActive ? 5 : 4,
-                                   { 0, 1 });
+        juce::DropShadow outerGlow(glow.withMultipliedAlpha(isActive ? 0.20f : (isHovered ? 0.12f : 0.055f)),
+                                   isActive ? 13 : 9,
+                                   {});
         outerGlow.drawForPath(g, shape);
 
-        if (isActive || isHovered)
-        {
-            g.setColour(glow.withMultipliedAlpha(isActive ? 0.11f : 0.06f));
-            g.strokePath(shape, juce::PathStrokeType(isActive ? 1.55f : 1.28f));
-        }
-
-        const auto topLight = faceTop.interpolatedWith(fill.brighter(isPressed ? 0.02f : 0.08f),
-                                                       isActive ? 0.22f : (isHovered ? 0.18f : 0.12f));
-        const auto midTone = faceMid.interpolatedWith(fill, isActive ? 0.42f : (isHovered ? 0.30f : 0.18f));
-        const auto lowerTone = faceBottom.interpolatedWith(fill.darker(isPressed ? 0.14f : 0.04f),
-                                                           isActive ? 0.24f : 0.18f);
+        const auto topLight = fill.brighter(isPressed ? 0.08f : 0.16f)
+                                  .interpolatedWith(glassHighlight, isActive ? 0.18f : 0.14f);
+        const auto midTone = fill.brighter(isHovered ? 0.07f : 0.02f);
+        const auto lowerTone = fill.darker(isPressed ? 0.22f : 0.10f);
         juce::ColourGradient chrome(topLight,
                                     bounds.getX(),
                                     bounds.getY(),
                                     lowerTone,
-                                    bounds.getX(),
+                                    bounds.getRight(),
                                     bounds.getBottom(),
                                     false);
-        chrome.addColour(0.46, midTone);
-        chrome.addColour(0.76, midTone.interpolatedWith(lowerTone, 0.46f));
+        chrome.addColour(0.34, midTone);
+        chrome.addColour(0.70, fill);
         g.setGradientFill(chrome);
         g.fillPath(shape);
 
@@ -954,9 +1141,9 @@ struct UIColors
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(shape);
 
-            juce::ColourGradient sourceLight(textPrimary.withAlpha(isActive ? 0.08f : (isHovered ? 0.055f : 0.035f)),
-                                             bounds.getX() + bounds.getWidth() * 0.16f,
-                                             bounds.getY() + bounds.getHeight() * 0.10f,
+            juce::ColourGradient sourceLight(textPrimary.withAlpha(isActive ? 0.15f : 0.105f),
+                                             bounds.getX() + bounds.getWidth() * 0.12f,
+                                             bounds.getY() + bounds.getHeight() * 0.08f,
                                              juce::Colours::white.withAlpha(0.0f),
                                              bounds.getRight(),
                                              bounds.getBottom(),
@@ -964,8 +1151,8 @@ struct UIColors
             g.setGradientFill(sourceLight);
             g.fillRect(bounds);
 
-            const auto topBand = bounds.withHeight(bounds.getHeight() * 0.18f);
-            juce::ColourGradient topSheen(sheenColour.withMultipliedAlpha(isActive ? 0.30f : (isHovered ? 0.24f : 0.18f)),
+            auto topBand = bounds.withHeight(bounds.getHeight() * 0.44f);
+            juce::ColourGradient topSheen(glassHighlight.withMultipliedAlpha(isActive ? 0.44f : 0.36f),
                                           topBand.getX(),
                                           topBand.getY(),
                                           juce::Colours::white.withAlpha(0.0f),
@@ -975,85 +1162,33 @@ struct UIColors
             g.setGradientFill(topSheen);
             g.fillRect(topBand);
 
-            if (isActive || isHovered)
-            {
-                const auto hotspotEdgeAlpha = isActive ? 0.46f : 0.18f;
-                const auto hotspotAuraAlpha = isActive ? 0.14f : 0.06f;
-                const auto hotspotTopY = bounds.getY() + bounds.getHeight() * 0.16f;
-                const auto hotspotLowerY = bounds.getY() + bounds.getHeight() * 0.72f;
-                const auto leftHotspotX = bounds.getX() + bounds.getWidth() * 0.24f;
-                const auto rightHotspotX = bounds.getRight() - bounds.getWidth() * 0.24f;
-
-                juce::ColourGradient leftHotspot(edge.withMultipliedAlpha(hotspotEdgeAlpha),
-                                                 leftHotspotX,
-                                                 hotspotTopY,
-                                                 juce::Colours::transparentBlack,
-                                                 leftHotspotX,
-                                                 hotspotLowerY,
-                                                 true);
-                leftHotspot.addColour(0.36, edge.withMultipliedAlpha(hotspotAuraAlpha));
-                g.setGradientFill(leftHotspot);
-                g.fillRect(bounds.reduced(0.9f));
-
-                juce::ColourGradient rightHotspot(edge.withMultipliedAlpha(hotspotEdgeAlpha),
-                                                  rightHotspotX,
-                                                  hotspotTopY,
-                                                  juce::Colours::transparentBlack,
-                                                  rightHotspotX,
-                                                  hotspotLowerY,
-                                                  true);
-                rightHotspot.addColour(0.36, edge.withMultipliedAlpha(hotspotAuraAlpha));
-                g.setGradientFill(rightHotspot);
-                g.fillRect(bounds.reduced(0.9f));
-
-                juce::ColourGradient topRidge(activeTint.withMultipliedAlpha(isActive ? 0.24f : 0.10f),
-                                              bounds.getCentreX(),
-                                              bounds.getY() + bounds.getHeight() * 0.14f,
-                                              juce::Colours::transparentBlack,
-                                              bounds.getCentreX(),
-                                              bounds.getY() + bounds.getHeight() * 0.58f,
-                                              false);
-                topRidge.addColour(0.32, activeTint.withMultipliedAlpha(isActive ? 0.09f : 0.03f));
-                g.setGradientFill(topRidge);
-                g.fillRect(bounds.reduced(1.0f));
-            }
-
-            juce::ColourGradient centreDepth(juce::Colours::transparentBlack,
-                                             bounds.getCentreX(),
-                                             bounds.getY() + bounds.getHeight() * 0.28f,
-                                             coreShadow.withAlpha(isPressed ? 0.34f : (isActive ? 0.30f : 0.26f)),
-                                             bounds.getCentreX(),
-                                             bounds.getBottom(),
+            auto bottomBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.56f);
+            juce::ColourGradient bottomShade(juce::Colours::transparentBlack,
+                                             bottomBand.getX(),
+                                             bottomBand.getY(),
+                                             juce::Colours::black.withAlpha(isPressed ? 0.34f : 0.24f),
+                                             bottomBand.getX(),
+                                             bottomBand.getBottom(),
                                              false);
-            g.setGradientFill(centreDepth);
-            g.fillRect(bounds);
+            g.setGradientFill(bottomShade);
+            g.fillRect(bottomBand);
 
-            g.setColour(innerLight.withMultipliedAlpha(isActive ? 0.22f : (isHovered ? 0.18f : 0.14f)));
-            g.strokePath(shape, juce::PathStrokeType(0.9f));
+            g.setColour(edge.withMultipliedAlpha(isActive ? 0.42f : (isHovered ? 0.30f : 0.20f)));
+            g.strokePath(shape, juce::PathStrokeType(1.0f));
         }
 
-        const auto structuralEdge = coreShadow.interpolatedWith(juce::Colour { Aurora::Colors::BgDeep }, 0.42f);
-        g.setColour(structuralEdge.withAlpha(isActive ? 0.78f : (isHovered ? 0.70f : 0.62f)));
-        g.strokePath(shape, juce::PathStrokeType(isActive ? 1.44f : 1.28f));
-
-        if (shapeOverride == nullptr && radius > 1.75f)
-        {
-            g.setColour(innerLight.withMultipliedAlpha(isActive ? 0.18f : (isHovered ? 0.13f : 0.09f)));
-            g.drawRoundedRectangle(bounds.reduced(1.25f), juce::jmax(0.0f, radius - 0.85f), 0.75f);
-        }
-
-        const auto stroke = isActive ? 0.96f : (isHovered ? 0.88f : 0.80f);
-        g.setColour(edge.withMultipliedAlpha(isActive ? 0.84f : (isHovered ? 0.60f : 0.42f)));
+        const auto stroke = isActive ? 1.45f : (isHovered ? 1.15f : 1.0f);
+        g.setColour(edge.withMultipliedAlpha(isActive ? 0.94f : (isHovered ? 0.70f : 0.52f)));
         g.strokePath(shape, juce::PathStrokeType(stroke));
 
         {
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(shape);
-            g.setColour(sheenColour.withMultipliedAlpha(isActive ? 0.58f : (isHovered ? 0.44f : 0.32f)));
+            g.setColour(glassHighlight.withMultipliedAlpha(isActive ? 0.78f : 0.48f));
             const auto topInset = juce::jmin(radius, bounds.getWidth() * 0.25f);
             g.drawLine(bounds.getX() + topInset, bounds.getY() + 1.0f,
                        bounds.getRight() - topInset, bounds.getY() + 1.0f,
-                       0.78f);
+                       1.0f);
         }
     }
 

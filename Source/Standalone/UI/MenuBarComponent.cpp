@@ -95,23 +95,25 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
             exportMenu.addItem(ExportBus, LOC(kExportBus));
             menu.addSubMenu(LOC(kExportAudio), exportMenu);
 
-            menu.addSeparator();
-            menu.addItem(SaveProject, LOC(kSaveProject));
-            menu.addItem(SaveProjectAs, LOC(kSaveProjectAs));
-            menu.addSeparator();
-            menu.addItem(OpenProject, LOC(kOpenProject));
-            if (!recentProjects_.empty()) {
-                juce::PopupMenu recentMenu;
-                int baseId = RecentProjectBase;
-                for (const auto& f : recentProjects_) {
-                    recentMenu.addItem(baseId, f.getFileName());
-                    ++baseId;
+            if (profile_ == Profile::Standalone) {
+                menu.addSeparator();
+                menu.addItem(SaveProject, LOC(kSaveProject));
+                menu.addItem(SaveProjectAs, LOC(kSaveProjectAs));
+                menu.addSeparator();
+                menu.addItem(OpenProject, LOC(kOpenProject));
+                if (!recentProjects_.empty()) {
+                    juce::PopupMenu recentMenu;
+                    int baseId = RecentProjectBase;
+                    for (const auto& f : recentProjects_) {
+                        recentMenu.addItem(baseId, f.getFileName());
+                        ++baseId;
+                    }
+                    recentMenu.addSeparator();
+                    recentMenu.addItem(ClearRecentProjects, LOC(kClearRecentProjects));
+                    menu.addSubMenu(LOC(kRecentProjects), recentMenu);
                 }
-                recentMenu.addSeparator();
-                recentMenu.addItem(ClearRecentProjects, LOC(kClearRecentProjects));
-                menu.addSubMenu(LOC(kRecentProjects), recentMenu);
+                menu.addSeparator();
             }
-            menu.addSeparator();
 
             menu.addItem(OpenPreferences, LOC(kOptions));
             menu.addSeparator();
