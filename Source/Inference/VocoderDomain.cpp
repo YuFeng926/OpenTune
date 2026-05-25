@@ -12,8 +12,8 @@ VocoderDomain::~VocoderDomain() {
     shutdown();
 }
 
-bool VocoderDomain::initialize(const std::string& modelDir) {
-    if (!inferenceService_->initialize(modelDir)) {
+bool VocoderDomain::initialize(const std::string& modelPath) {
+    if (!inferenceService_->initialize(modelPath)) {
         AppLogger::error("[VocoderDomain] Failed to initialize inference service");
         return false;
     }

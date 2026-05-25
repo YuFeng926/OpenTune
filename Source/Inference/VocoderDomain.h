@@ -25,7 +25,7 @@ public:
     VocoderDomain(std::shared_ptr<Ort::Env> env);
     ~VocoderDomain();
 
-    bool initialize(const std::string& modelDir);
+    bool initialize(const std::string& modelPath);
     void shutdown();
     void submit(Job job);
     int getVocoderHopSize() const;
