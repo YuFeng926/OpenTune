@@ -337,6 +337,11 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     updateRegularCaptureSessionCallback();
 
     startTimerHz(kHeartbeatHz);
+
+    // 启动时应用持久化声码器权重偏好
+    const auto weight = appPreferences_.getState().shared.vocoderModelWeight;
+    processorRef_.setVocoderModelWeight(weight);
+    // 幂等：weight==Community 时 setVocoderModelWeight 会 return early
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
@@ -817,9 +822,13 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
     auto pages = SharedPreferencePages::create(appPreferences_, [this] { syncSharedAppPreferences(); });
 
     // Insert Audio page (with rendering priority) at the beginning
+    auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {
+        processorRef_.setVocoderModelWeight(weight);
+    };
     auto audioPage = SharedPreferencePages::createRenderingPriorityComponent(
         appPreferences_, [this] { syncSharedAppPreferences(); },
-        [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); });
+        [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
+        std::move(onVocoderModelWeightChanged));
     pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage) });
 
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
