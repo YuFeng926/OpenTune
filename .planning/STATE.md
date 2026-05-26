@@ -5,7 +5,7 @@ milestone_name: PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 status: active
 stopped_at: v1.5 active development + PianoRoll empty-space seek intent + regular VST3 capture UX refinement (display selection, timeline view domain, transport shortcuts)
 last_updated: "2026-05-27"
-last_activity: 2026-05-27 -- VST3 ARA multi-item birth + editor reopen structural fix landed: persistentId-owned pending birth, stale worker-result drop, editor destructive clear removal, metadata-only ARA pre-bind restore caching, architecture/processor/core/memory PASS, ARA VST3/non-ARA VST3/Standalone builds PASS; user explicitly said REAPER manual test is not required for this closure.
+last_activity: 2026-05-27 -- Standalone Arrangement min-zoom waveform visibility and cross-track drag preview repair planned; plan + verification docs added, project state synchronized; implementation and tests pending.
 progress:
   total_phases: 0
   completed_phases: 0

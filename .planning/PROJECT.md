@@ -216,4 +216,24 @@ Follow-up plan source:
 - `.planning/plans/2026-05-26-vst3-ara-multi-item-birth-and-editor-reopen-test-verification.md`
 
 ---
-*Last updated: 2026-05-27 after closing ARA multi-item birth and editor-reopen automated contract*
+## 2026-05-27 Update: Arrangement Min-Zoom Waveform And Cross-Track Drag Preview Planned
+
+Two Standalone Arrangement visual issues are now captured as an execution plan:
+
+1. Minimum horizontal zoom can make clip waveforms invisible because the visible placement can be clamped to an `8 px`
+   body while `ArrangementRenderModelCache` still applies a fixed `reduced(6, 6)` waveform inset, collapsing the
+   drawable waveform width.
+2. Cross-track clip move drag currently commits on `mouseUp()`, but has no UI-only preview projected onto the target
+   track before release.
+
+Plan source:
+
+- `.planning/plans/2026-05-27-arrangement-min-zoom-waveform-and-cross-track-drag-preview.md`
+- `.planning/plans/2026-05-27-arrangement-min-zoom-waveform-and-cross-track-drag-preview-test-verification.md`
+
+The planned fix is Standalone Arrangement UI only. It must not add persisted preview state, processor truth, audio-thread
+state, VST3/ARA state, or a parallel placement commit path. The move drag preview must be transient UI render-model data;
+real placement time/track truth remains committed only on `mouseUp()`.
+
+---
+*Last updated: 2026-05-27 after adding Arrangement min-zoom waveform and cross-track drag preview plan*

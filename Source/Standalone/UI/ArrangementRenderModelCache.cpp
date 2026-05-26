@@ -25,7 +25,8 @@ ArrangementRenderModelCache::makeKey(OpenTuneAudioProcessor& processor,
                                       int selectedPlacementIndex,
                                       uint64_t hoveredPlacementId,
                                       bool mouseOverReferenceButton,
-                                      int trackHeight)
+                                      int trackHeight,
+                                      const MoveDragPreviewState& movePreview)
 {
     Key key;
     key.visibleTimeStartMs = timeToMs(viewport.visibleTimeStart());
@@ -39,6 +40,7 @@ ArrangementRenderModelCache::makeKey(OpenTuneAudioProcessor& processor,
     key.selectedPlacementIndex = selectedPlacementIndex;
     key.hoveredPlacementId = hoveredPlacementId;
     key.mouseOverReferenceButton = mouseOverReferenceButton;
+    key.previewRevision = movePreview.active ? movePreview.revision : 0;
 
     const auto* arrangement = processor.getStandaloneArrangement();
     if (arrangement != nullptr) {
@@ -69,6 +71,24 @@ ArrangementRenderModelCache::makeKey(OpenTuneAudioProcessor& processor,
     return key;
 }
 
+juce::Rectangle<int>
+ArrangementRenderModelCache::computeWaveformDrawableBounds(juce::Rectangle<int> placementBounds) noexcept
+{
+    if (placementBounds.isEmpty())
+        return {};
+
+    const int horizontalInset = juce::jmin(6, juce::jmax(0, (placementBounds.getWidth() - 1) / 2));
+    const int verticalInset = juce::jmin(6, juce::jmax(0, (placementBounds.getHeight() - 1) / 2));
+    auto bounds = placementBounds.reduced(horizontalInset, verticalInset);
+
+    if (bounds.getWidth() <= 0)
+        bounds.setWidth(1);
+    if (bounds.getHeight() <= 0)
+        bounds.setHeight(1);
+
+    return bounds;
+}
+
 const ArrangementRenderModelCache::RenderModel&
 ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
                                     const TimelineViewportState& viewport,
@@ -80,8 +100,9 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
                                     bool mouseOverReferenceButton,
                                     WaveformTileCache& tileCache,
                                     WaveformMipmapCache& mipmapCache,
-                                     int trackHeight,
-                                     bool forceRebuild)
+                                    int trackHeight,
+                                    const MoveDragPreviewState& movePreview,
+                                    bool forceRebuild)
 {
     const auto nextKey = makeKey(processor,
                                  viewport,
@@ -89,7 +110,8 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
                                  selectedPlacementIndex,
                                  hoveredPlacementId,
                                  mouseOverReferenceButton,
-                                 trackHeight);
+                                 trackHeight,
+                                 movePreview);
 
     if (!needsRebuild_ && !forceRebuild && currentKey_ == nextKey)
         return model_;
@@ -114,6 +136,112 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
 
     const double visibleTimeStart = viewport.visibleTimeStart();
     const double visibleTimeEnd = viewport.visibleTimeEnd();
+
+    auto findPreviewForPlacement = [&movePreview](int trackId, uint64_t placementId)
+        -> const MoveDragPreviewPlacement*
+    {
+        if (!movePreview.active)
+            return nullptr;
+
+        for (const auto& preview : movePreview.placements) {
+            if (preview.sourceTrackId == trackId && preview.placementId == placementId)
+                return &preview;
+        }
+
+        return nullptr;
+    };
+
+    auto appendVisiblePlacement = [&](int sourceTrackId,
+                                      int displayTrackId,
+                                      const StandaloneArrangement::Placement& placement,
+                                      int placementIndex,
+                                      double timelineStartSeconds,
+                                      bool isPreview)
+    {
+        const double timelineEndSeconds = timelineStartSeconds + placement.durationSeconds;
+        if (timelineEndSeconds < visibleTimeStart || timelineStartSeconds > visibleTimeEnd)
+            return;
+
+        if (placement.durationSeconds <= 0.0)
+            return;
+
+        auto laneBounds = [&]() -> juce::Rectangle<int> {
+            auto bounds = juce::Rectangle<int>(0, 0, viewport.viewportWidthPx, viewport.viewportHeightPx)
+                              .withTrimmedTop(kRulerHeight);
+            int h = trackHeight;
+            return bounds.withY(kRulerHeight + displayTrackId * h).withHeight(h);
+        }();
+
+        auto lane = laneBounds.reduced(6, 8);
+        const int x1 = viewport.timeToViewportX(timelineStartSeconds);
+        const int x2 = viewport.timeToViewportX(timelineEndSeconds);
+        const int width = juce::jmax(8, x2 - x1);
+        juce::Rectangle<int> placementBounds{x1, lane.getY(), width, lane.getHeight()};
+
+        if (placementBounds.isEmpty())
+            return;
+
+        const uint64_t placementId = placement.placementId;
+        const uint64_t materializationId = placement.materializationId;
+
+        bool isSelected = (sourceTrackId == selectedTrack && placementIndex == selectedPlacementIndex)
+                       || (isPlacementSelected && isPlacementSelected(sourceTrackId, placementId));
+
+        VisiblePlacement vp;
+        vp.placementId = placementId;
+        vp.materializationId = materializationId;
+        vp.referencePlacementId = placement.referencePlacementId;
+        vp.pixelBounds = placementBounds;
+        vp.pixelArea = placementBounds.toFloat();
+        vp.isSelected = isSelected;
+        vp.gain = placement.gain;
+        vp.name = placement.name;
+        vp.isHovered = (hoveredPlacementId == placementId);
+        vp.mouseOverReferenceButton = (hoveredPlacementId == placementId) && mouseOverReferenceButton;
+        vp.trackId = displayTrackId;
+        vp.fadeInDuration = placement.fadeInDuration;
+        vp.fadeOutDuration = placement.fadeOutDuration;
+        vp.isPreview = isPreview;
+
+        if (getAnalysisState)
+            vp.analysisInProgress = getAnalysisState(placementId);
+
+        auto audioBuffer = processor.getMaterializationAudioBufferById(materializationId);
+        vp.hasAudioBuffer = (audioBuffer != nullptr);
+
+        if (audioBuffer != nullptr)
+        {
+            auto& mipmap = mipmapCache.getOrCreate(materializationId);
+            mipmap.setAudioSource(audioBuffer);
+
+            const double visibleMaterializationStart = juce::jmax(0.0,
+                visibleTimeStart - timelineStartSeconds);
+            const double visibleMaterializationEnd = juce::jmin(placement.durationSeconds,
+                visibleTimeEnd - timelineStartSeconds);
+            auto waveformBounds = computeWaveformDrawableBounds(placementBounds);
+            const int zoomBucket = static_cast<int>(viewport.zoomLevel * 10.0 + 0.5);
+            const uint64_t waveformSourceId = materializationId;
+            const uint64_t waveformStyleHash = static_cast<uint64_t>(placement.gain * 1000.0f);
+            tileCache.getOrCreate(materializationId,
+                                  waveformSourceId,
+                                  zoomBucket,
+                                  mipmap,
+                                  placement.gain,
+                                  waveformBounds,
+                                  visibleMaterializationStart,
+                                  visibleMaterializationEnd,
+                                  waveformStyleHash,
+                                  0);
+            vp.waveformSourceId = waveformSourceId;
+            vp.waveformZoomBucket = zoomBucket;
+            vp.waveformVisibleStartSeconds = visibleMaterializationStart;
+            vp.waveformVisibleEndSeconds = visibleMaterializationEnd;
+            vp.waveformStyleHash = waveformStyleHash;
+            vp.waveformTimeGridRevision = 0;
+        }
+
+        model_.placements.push_back(std::move(vp));
+    };
 
     for (int trackId = 0; trackId < kMaxTracks; ++trackId)
     {
@@ -144,81 +272,16 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
             if (!arrangement->getPlacementByIndex(trackId, i, placement))
                 continue;
 
-            if (placement.timelineEndSeconds() < visibleTimeStart
-                || placement.timelineStartSeconds > visibleTimeEnd)
+            const auto* preview = findPreviewForPlacement(trackId, placement.placementId);
+            if (preview == nullptr
+                && (placement.timelineEndSeconds() < visibleTimeStart
+                    || placement.timelineStartSeconds > visibleTimeEnd))
                 continue;
 
-            if (placement.durationSeconds <= 0.0)
-                continue;
-
-            auto lane = laneBounds.reduced(6, 8);
-            const int x1 = viewport.timeToViewportX(placement.timelineStartSeconds);
-            const int x2 = viewport.timeToViewportX(placement.timelineEndSeconds());
-            const int width = juce::jmax(8, x2 - x1);
-            juce::Rectangle<int> placementBounds{x1, lane.getY(), width, lane.getHeight()};
-
-            if (placementBounds.isEmpty())
-                continue;
-
-            const uint64_t placementId = placement.placementId;
-            const uint64_t materializationId = placement.materializationId;
-
-            bool isSelected = (trackId == selectedTrack && i == selectedPlacementIndex)
-                           || (isPlacementSelected && isPlacementSelected(trackId, placementId));
-
-            VisiblePlacement vp;
-            vp.placementId = placementId;
-            vp.materializationId = materializationId;
-            vp.referencePlacementId = placement.referencePlacementId;
-            vp.pixelBounds = placementBounds;
-            vp.pixelArea = placementBounds.toFloat();
-            vp.isSelected = isSelected;
-            vp.gain = placement.gain;
-            vp.name = placement.name;
-            vp.isHovered = (hoveredPlacementId == placementId);
-            vp.mouseOverReferenceButton = (hoveredPlacementId == placementId) && mouseOverReferenceButton;
-            vp.trackId = trackId;
-            vp.fadeInDuration = placement.fadeInDuration;
-            vp.fadeOutDuration = placement.fadeOutDuration;
-
-            if (getAnalysisState)
-                vp.analysisInProgress = getAnalysisState(placementId);
-
-            auto audioBuffer = processor.getMaterializationAudioBufferById(materializationId);
-            vp.hasAudioBuffer = (audioBuffer != nullptr);
-
-            if (audioBuffer != nullptr)
-            {
-                auto& mipmap = mipmapCache.getOrCreate(materializationId);
-                mipmap.setAudioSource(audioBuffer);
-
-                const double visibleMaterializationStart = juce::jmax(0.0,
-                    visibleTimeStart - placement.timelineStartSeconds);
-                const double visibleMaterializationEnd = juce::jmin(placement.durationSeconds,
-                    visibleTimeEnd - placement.timelineStartSeconds);
-                auto waveformBounds = placementBounds.reduced(6, 6);
-                const int zoomBucket = static_cast<int>(viewport.zoomLevel * 10.0 + 0.5);
-                const uint64_t waveformSourceId = materializationId;
-                const uint64_t waveformStyleHash = static_cast<uint64_t>(placement.gain * 1000.0f);
-                tileCache.getOrCreate(materializationId,
-                                      waveformSourceId,
-                                      zoomBucket,
-                                      mipmap,
-                                      placement.gain,
-                                      waveformBounds,
-                                      visibleMaterializationStart,
-                                      visibleMaterializationEnd,
-                                      waveformStyleHash,
-                                      0);
-                vp.waveformSourceId = waveformSourceId;
-                vp.waveformZoomBucket = zoomBucket;
-                vp.waveformVisibleStartSeconds = visibleMaterializationStart;
-                vp.waveformVisibleEndSeconds = visibleMaterializationEnd;
-                vp.waveformStyleHash = waveformStyleHash;
-                vp.waveformTimeGridRevision = 0;
-            }
-
-            model_.placements.push_back(std::move(vp));
+            if (preview == nullptr)
+                appendVisiblePlacement(trackId, trackId, placement, i, placement.timelineStartSeconds, false);
+            else
+                appendVisiblePlacement(trackId, preview->previewTrackId, placement, i, preview->previewStartSeconds, true);
         }
     }
 

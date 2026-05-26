@@ -7,8 +7,10 @@
 #include "Utils/PitchCurve.h"
 #include "Utils/Note.h"
 #include "Utils/PitchUtils.h"
+#if JucePlugin_Enable_ARA
 #include "ARA/OpenTuneDocumentController.h"
 #include "ARA/VST3AraSession.h"
+#endif
 #include "MaterializationStore.h"
 #include "StandaloneArrangement.h"
 #include "PluginProcessor.h"
@@ -46,7 +48,7 @@ int computeSourceSamplesForHostBlock(int hostSamples,
                                      double hostSampleRate,
                                      double sourceSampleRate);
 
-#if defined(OPENTUNE_TEST_BUILD)
+#if defined(OPENTUNE_TEST_BUILD) && JucePlugin_Enable_ARA
 struct VST3AraSessionTestProbe {
     static void seedSinglePublishedRegion(VST3AraSession& session,
                                           juce::ARAAudioSource* audioSource,

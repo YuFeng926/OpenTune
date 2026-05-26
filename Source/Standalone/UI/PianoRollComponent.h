@@ -385,6 +385,8 @@ private:
      *  Called from every state-change path (scroll, zoom, visual prefs, materialization),
      *  NEVER from paint(). */
     void prepareVisibleRenderModel() const;
+    void refreshVerticalViewportGeometry(PianoRollVisualInvalidationPriority priority =
+                                             PianoRollVisualInvalidationPriority::Interactive);
 
     TimeConverter timeConverter_;
 

@@ -31,38 +31,6 @@ int computeSourceSamplesForHostBlock(int hostSamples,
     return juce::jmax(1, sourceSamples);
 }
 
-std::optional<RenderBlockSpan> computeRegionBlockRenderSpan(double blockStartSeconds,
-                                                            int blockSamples,
-                                                            double hostSampleRate,
-                                                            double playbackStartSeconds,
-                                                            double playbackEndSeconds) noexcept
-{
-    if (blockSamples <= 0 || hostSampleRate <= 0.0)
-        return std::nullopt;
-
-    const double blockEndSeconds = blockStartSeconds
-        + (static_cast<double>(blockSamples) / hostSampleRate);
-    const double overlapStartSeconds = juce::jmax(blockStartSeconds, playbackStartSeconds);
-    const double overlapEndSeconds = juce::jmin(blockEndSeconds, playbackEndSeconds);
-    if (!(overlapEndSeconds > overlapStartSeconds))
-        return std::nullopt;
-
-    const int destinationStartSample = juce::jlimit(0,
-                                                    blockSamples,
-                                                    static_cast<int>(TimeCoordinate::secondsToSamplesFloor(overlapStartSeconds - blockStartSeconds,
-                                                                                                           hostSampleRate)));
-    const int destinationEndSample = juce::jlimit(destinationStartSample,
-                                                  blockSamples,
-                                                  static_cast<int>(TimeCoordinate::secondsToSamplesCeil(overlapEndSeconds - blockStartSeconds,
-                                                                                                        hostSampleRate)));
-
-    RenderBlockSpan span;
-    span.destinationStartSample = destinationStartSample;
-    span.samplesToCopy = destinationEndSample - destinationStartSample;
-    span.overlapStartSeconds = overlapStartSeconds;
-    return span.samplesToCopy > 0 ? std::optional<RenderBlockSpan>(span) : std::nullopt;
-}
-
 bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
                                   const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
 {

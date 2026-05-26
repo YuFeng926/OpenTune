@@ -123,5 +123,20 @@ Verification:
 - REAPER manual testing was explicitly not required from Codex for this closure; it must not be reported as PASS unless executed later
 
 ---
-*Roadmap updated: 2026-05-27 after closing ARA multi-item birth/editor-reopen automated gates*
+## 2026-05-27 Roadmap Addendum: Arrangement Visual Contract Plan
+
+The next Standalone Arrangement UI task is planned but not implemented:
+
+- minimum horizontal zoom must still show a waveform/envelope for clips with drawable audio;
+- cross-track move drag must show a target-track preview before release;
+- real placement truth must still commit only on `mouseUp()`;
+- focused proof gate is `timeline-rendering`, not the broad `ui` runner.
+
+Plan source:
+
+- `.planning/plans/2026-05-27-arrangement-min-zoom-waveform-and-cross-track-drag-preview.md`
+- `.planning/plans/2026-05-27-arrangement-min-zoom-waveform-and-cross-track-drag-preview-test-verification.md`
+
+---
+*Roadmap updated: 2026-05-27 after adding Arrangement visual contract plan*
 *Current state: `v1.4` shipped/frozen; `v1.5` is active milestone*

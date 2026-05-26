@@ -9,6 +9,9 @@
 #include "../../Utils/LocalizationManager.h"
 #include "../../Utils/SnapUtils.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace OpenTune {
 
 namespace {
@@ -559,7 +562,8 @@ void ArrangementViewComponent::requestRenderModelUpdate()
                              mouseOverReferenceButton_,
                              waveformTileCache_,
                              waveformMipmapCache_,
-                             processor_.getTrackHeight());
+                             processor_.getTrackHeight(),
+                             moveDragPreview_);
 
     const auto& renderModel = renderModelCache_.getModel();
     lastContextBpm_ = renderModel.bpm;
@@ -571,6 +575,64 @@ void ArrangementViewComponent::refreshRenderModel()
 {
     renderModelCache_.invalidate();
     requestRenderModelUpdate();
+}
+
+int ArrangementViewComponent::trackIdForViewportY(int y) const noexcept
+{
+    const int trackHeight = processor_.getTrackHeight();
+    if (trackHeight <= 0)
+        return 0;
+
+    const int adjustedY = y + verticalScrollOffset_;
+    return juce::jlimit(0,
+                        OpenTuneAudioProcessor::MAX_TRACKS - 1,
+                        (adjustedY - rulerHeight_) / trackHeight);
+}
+
+void ArrangementViewComponent::clearMoveDragPreview()
+{
+    if (!moveDragPreview_.active && moveDragPreview_.placements.empty())
+        return;
+
+    moveDragPreview_ = {};
+    moveDragPreview_.revision = nextMoveDragPreviewRevision_++;
+    refreshRenderModel();
+}
+
+void ArrangementViewComponent::updateMoveDragPreview(const juce::MouseEvent& e)
+{
+    if (!isDraggingPlacement_ || currentDragOp_ != DragOperation::Move)
+        return;
+
+    const double startT = viewportXToAbsoluteTime(dragStartPos_.x);
+    const double currentT = viewportXToAbsoluteTime(e.x);
+    const double deltaSeconds = currentT - startT;
+    const double bpm = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
+    const SnapSettings snap = processor_.getSnapSettings();
+    const int previewTrackId = trackIdForViewportY(e.y);
+
+    ArrangementRenderModelCache::MoveDragPreviewState preview;
+    preview.active = true;
+    preview.revision = nextMoveDragPreviewRevision_++;
+
+    auto appendPreview = [&](const DragStartState& state) {
+        double newStart = state.startSeconds + deltaSeconds;
+        if (newStart < 0.0)
+            newStart = 0.0;
+        newStart = SnapUtils::snapTime(newStart, bpm, snap);
+
+        preview.placements.push_back({ state.trackId, previewTrackId, state.placementId, newStart });
+    };
+
+    if (selectedPlacements_.size() > 1 && !multiDragStartStates_.empty()) {
+        for (const auto& state : multiDragStartStates_)
+            appendPreview(state);
+    } else if (selectedPlacementId_ != 0) {
+        appendPreview({ dragStartTrackId_, selectedPlacementId_, dragStartPlacementSeconds_ });
+    }
+
+    moveDragPreview_ = std::move(preview);
+    refreshRenderModel();
 }
 
 void ArrangementViewComponent::paint(juce::Graphics& g)
@@ -774,6 +836,14 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
             g.fillRoundedRectangle(placementArea, 6.0f);
             g.setColour(UIColors::panelBorder);
             g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
+        }
+
+        if (vp.isPreview)
+        {
+            g.setColour(UIColors::accent.withAlpha(0.18f));
+            g.fillRoundedRectangle(placementArea.reduced(1.0f), 5.0f);
+            g.setColour(UIColors::accent.withAlpha(0.82f));
+            g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.6f);
         }
 
         // Waveform from tile cache
@@ -1628,6 +1698,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     currentDragOp_ = hit.isTopEdge ? DragOperation::Gain : DragOperation::Move;
     isAdjustingGain_ = hit.isTopEdge;
     isDraggingPlacement_ = !isAdjustingGain_;
+    clearMoveDragPreview();
 
     multiDragStartStates_.clear();
     if (isDraggingPlacement_ && selectedPlacements_.size() > 1)
@@ -1765,21 +1836,14 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
 
         if (selectedPlacements_.size() > 1 && !multiDragStartStates_.empty())
         {
-            for (const auto& state : multiDragStartStates_)
-            {
-                double newStart = state.startSeconds + deltaSeconds;
-                if (newStart < 0.0) newStart = 0.0;
-                newStart = SnapUtils::snapTime(newStart, bpm, snap);
-                setStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, newStart);
-            }
+            juce::ignoreUnused(deltaSeconds, bpm, snap);
         }
         else
         {
-            double newStart = dragStartPlacementSeconds_ + deltaSeconds;
-            if (newStart < 0.0) newStart = 0.0;
-            newStart = SnapUtils::snapTime(newStart, bpm, snap);
-            setStandalonePlacementStartSeconds(processor_, selectedTrack_, selectedPlacementId_, newStart);
+            juce::ignoreUnused(deltaSeconds, bpm, snap);
         }
+
+        updateMoveDragPreview(e);
 
         listeners_.call([this](Listener& l) {
             l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
@@ -1845,9 +1909,7 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
         const float dragThreshold = 5.0f;
         bool isDraggedSignificantly = delta.getDistanceFromOrigin() > dragThreshold;
 
-        int adjustedY = e.y + verticalScrollOffset_;
-        int mouseTrackId = (adjustedY - rulerHeight_) / processor_.getTrackHeight();
-        mouseTrackId = juce::jlimit(0, OpenTuneAudioProcessor::MAX_TRACKS - 1, mouseTrackId);
+        const int mouseTrackId = trackIdForViewportY(e.y);
 
         if (selectedPlacements_.size() > 1 && !multiDragStartStates_.empty())
         {
@@ -1865,8 +1927,13 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
 
                     for (const auto& state : sortedStates)
                     {
-                        double currentStart = 0.0;
-                        getStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, currentStart);
+                        double currentStart = state.startSeconds;
+                        for (const auto& preview : moveDragPreview_.placements) {
+                            if (preview.sourceTrackId == state.trackId && preview.placementId == state.placementId) {
+                                currentStart = preview.previewStartSeconds;
+                                break;
+                            }
+                        }
                         moveStandalonePlacement(processor_, state.trackId, mouseTrackId, state.placementId, currentStart);
                     }
 
@@ -1897,16 +1964,21 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
                 {
                     for (const auto& state : multiDragStartStates_)
                     {
-                        double currentStart = 0.0;
-                        getStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, currentStart);
+                        for (const auto& preview : moveDragPreview_.placements) {
+                            if (preview.sourceTrackId == state.trackId && preview.placementId == state.placementId) {
+                                setStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, preview.previewStartSeconds);
+                                break;
+                            }
+                        }
                     }
                 }
             }
         }
         else if (dragStartPlacementId_ != 0)
         {
-            double currentStart = 0.0;
-            getStandalonePlacementStartSeconds(processor_, dragStartTrackId_, dragStartPlacementId_, currentStart);
+            double currentStart = dragStartPlacementSeconds_;
+            if (!moveDragPreview_.placements.empty())
+                currentStart = moveDragPreview_.placements.front().previewStartSeconds;
 
             if (isDraggedSignificantly && mouseTrackId != dragStartTrackId_) {
                 if (moveStandalonePlacement(processor_, dragStartTrackId_, mouseTrackId, dragStartPlacementId_, currentStart)) {
@@ -1917,6 +1989,8 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
                         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
                     });
                 }
+            } else if (isDraggedSignificantly) {
+                setStandalonePlacementStartSeconds(processor_, dragStartTrackId_, dragStartPlacementId_, currentStart);
             }
         }
     }
@@ -1933,11 +2007,12 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
 
     // Record undo for single-placement move
     if (isDraggingPlacement_ && dragStartPlacementId_ != 0 && selectedPlacements_.size() <= 1) {
+        const int finalTrack = selectedTrack_;
         double finalStart = 0.0;
-        getStandalonePlacementStartSeconds(processor_, selectedTrack_, dragStartPlacementId_, finalStart);
-        if (finalStart != dragStartPlacementSeconds_) {
+        getStandalonePlacementStartSeconds(processor_, finalTrack, dragStartPlacementId_, finalStart);
+        if (finalTrack != dragStartTrackId_ || finalStart != dragStartPlacementSeconds_) {
             processor_.getUndoManager().addAction(
-                std::make_unique<MovePlacementAction>(processor_, dragStartTrackId_, selectedTrack_,
+                std::make_unique<MovePlacementAction>(processor_, dragStartTrackId_, finalTrack,
                                                       dragStartPlacementId_,
                                                       dragStartPlacementSeconds_, finalStart));
         }
@@ -1951,6 +2026,7 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
     dragOperationPlacementId_ = 0;
     dragStartTrackId_ = -1;
     multiDragStartStates_.clear();
+    clearMoveDragPreview();
     setMouseCursor(juce::MouseCursor::NormalCursor);
 }
 

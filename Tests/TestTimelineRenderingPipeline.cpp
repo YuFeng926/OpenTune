@@ -5,10 +5,76 @@
 
 #include "TestSupport.h"
 #include "../Source/Standalone/UI/TimelineViewportState.h"
+#include "../Source/Standalone/UI/ArrangementRenderModelCache.h"
 #include "../Source/Standalone/UI/WaveformTileCache.h"
 #include "../Source/Standalone/UI/WaveformMipmap.h"
 
 namespace OpenTune {
+
+namespace {
+
+juce::File locateTimelineRenderingWorkspaceRoot()
+{
+    auto current = juce::File::getCurrentWorkingDirectory();
+    for (int depth = 0; depth < 8 && current.isDirectory(); ++depth) {
+        if (current.getChildFile("CMakeLists.txt").existsAsFile())
+            return current;
+
+        const auto parent = current.getParentDirectory();
+        if (parent == current)
+            break;
+
+        current = parent;
+    }
+
+    return {};
+}
+
+juce::String readTimelineRenderingWorkspaceFile(const juce::String& relativePath)
+{
+    const auto root = locateTimelineRenderingWorkspaceRoot();
+    if (!root.isDirectory())
+        return {};
+
+    const auto file = root.getChildFile(relativePath);
+    return file.existsAsFile() ? file.loadFileAsString() : juce::String{};
+}
+
+juce::String extractTimelineRenderingWorkspaceSection(const juce::String& relativePath,
+                                                      const juce::String& startNeedle,
+                                                      const juce::String& endNeedle)
+{
+    const auto source = readTimelineRenderingWorkspaceFile(relativePath);
+    const int start = source.indexOf(startNeedle);
+    if (start < 0)
+        return {};
+
+    const int end = source.indexOf(start + startNeedle.length(), endNeedle);
+    if (end < 0 || end <= start)
+        return {};
+
+    return source.substring(start, end);
+}
+
+WaveformMipmap makeCompleteTestMipmap(int numSamples)
+{
+    WaveformMipmap mipmap;
+    auto audio = std::make_shared<juce::AudioBuffer<float>>(1, numSamples);
+    audio->clear();
+    for (int i = 0; i < audio->getNumSamples(); ++i)
+        audio->setSample(0, i, std::sin(static_cast<float>(i) * 0.18f) * 0.75f);
+
+    mipmap.setAudioSource(audio);
+    int guard = 0;
+    while (!mipmap.isComplete() && guard < 1000) {
+        mipmap.buildIncremental(1.0);
+        ++guard;
+    }
+
+    return mipmap;
+}
+
+} // namespace
 
 // ============================================================================
 // TimelineViewportState tests
@@ -310,6 +376,126 @@ void runWaveformTileCachePruneByMaterializationTest()
     logPass(testName);
 }
 
+void runArrangementWaveformMinZoomNarrowClipKeepsPositiveDrawableBoundsTest()
+{
+    constexpr const char* testName = "ArrangementWaveform_MinZoomNarrowClipKeepsPositiveDrawableBounds";
+
+    const juce::Rectangle<int> minZoomPlacementBounds(100, 40, 8, 48);
+    const auto waveformBounds = ArrangementRenderModelCache::computeWaveformDrawableBounds(minZoomPlacementBounds);
+
+    if (waveformBounds.isEmpty() || waveformBounds.getWidth() <= 0 || waveformBounds.getHeight() <= 0) {
+        logFail(testName, "8px visible placement collapsed to an empty waveform drawable bounds");
+        return;
+    }
+
+    if (!minZoomPlacementBounds.contains(waveformBounds)) {
+        logFail(testName, "waveform drawable bounds must stay inside the visible placement bounds");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runWaveformTileCacheNarrowDrawableBoundsBuildsNonEmptyPathTest()
+{
+    constexpr const char* testName = "WaveformTileCache_NarrowDrawableBoundsBuildsNonEmptyPath";
+
+    auto mipmap = makeCompleteTestMipmap(4096);
+    if (!mipmap.isComplete()) {
+        logFail(testName, "failed to build complete synthetic waveform mipmap");
+        return;
+    }
+
+    WaveformTileCache cache;
+    const juce::Rectangle<int> narrowBounds(12, 8, 1, 32);
+    const auto& tile = cache.getOrCreate(11, 11, 1, mipmap, 1.0f, narrowBounds, 0.0, 0.08, 0, 0);
+
+    if (tile.widthPx != 1 || tile.path.isEmpty()) {
+        logFail(testName, "positive narrow drawable bounds should build a non-empty waveform path");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runArrangementDragPreviewMouseDragDoesNotCommitMoveTest()
+{
+    constexpr const char* testName = "ArrangementDragPreview_MouseDragDoesNotCommitMove";
+
+    const auto mouseDragSection = extractTimelineRenderingWorkspaceSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::mouseDrag",
+        "void ArrangementViewComponent::mouseUp");
+
+    const auto updatePreviewSection = extractTimelineRenderingWorkspaceSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::updateMoveDragPreview",
+        "void ArrangementViewComponent::paint");
+
+    if (mouseDragSection.isEmpty() || updatePreviewSection.isEmpty()) {
+        logFail(testName, "failed to locate ArrangementViewComponent move drag sections");
+        return;
+    }
+
+    if (mouseDragSection.contains("moveStandalonePlacement(")) {
+        logFail(testName, "mouseDrag must not call the real cross-track move commit helper");
+        return;
+    }
+
+    if (updatePreviewSection.contains("setStandalonePlacementStartSeconds(")
+        || updatePreviewSection.contains("moveStandalonePlacement(")) {
+        logFail(testName, "move preview update must not mutate placement truth");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runArrangementDragPreviewTargetTrackVisibleBeforeMouseUpTest()
+{
+    constexpr const char* testName = "ArrangementDragPreview_TargetTrackVisibleBeforeMouseUp";
+
+    const auto header = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementRenderModelCache.h");
+    const auto source = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementRenderModelCache.cpp");
+    const auto viewSource = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementViewComponent.cpp");
+
+    if (!header.contains("MoveDragPreviewState")
+        || !header.contains("isPreview")
+        || !source.contains("previewTrackId")
+        || !source.contains("appendVisiblePlacement(trackId, preview->previewTrackId")
+        || !viewSource.contains("updateMoveDragPreview(e)")) {
+        logFail(testName, "render model does not project active move preview onto the target track");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runArrangementDragPreviewMouseUpCommitsOnceAndClearsPreviewTest()
+{
+    constexpr const char* testName = "ArrangementDragPreview_MouseUpCommitsOnceAndClearsPreview";
+
+    const auto mouseUpSection = extractTimelineRenderingWorkspaceSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::mouseUp",
+        "void ArrangementViewComponent::mouseDoubleClick");
+
+    if (mouseUpSection.isEmpty()) {
+        logFail(testName, "failed to locate ArrangementViewComponent::mouseUp");
+        return;
+    }
+
+    if (!mouseUpSection.contains("moveStandalonePlacement(")
+        || !mouseUpSection.contains("setStandalonePlacementStartSeconds(")
+        || !mouseUpSection.contains("clearMoveDragPreview();")
+        || !mouseUpSection.contains("finalTrack != dragStartTrackId_")) {
+        logFail(testName, "mouseUp must commit final move/time once and clear the UI-only preview");
+        return;
+    }
+
+    logPass(testName);
+}
+
 // ============================================================================
 // Suite runner
 // ============================================================================
@@ -324,6 +510,11 @@ void runTimelineRenderingPipelineCacheTests()
     runTimelineViewportStateTimeMathTest(); // (already called above — kept for suite completeness)
     runWaveformTileCacheBoundedLruTest();
     runWaveformTileCachePruneByMaterializationTest();
+    runArrangementWaveformMinZoomNarrowClipKeepsPositiveDrawableBoundsTest();
+    runWaveformTileCacheNarrowDrawableBoundsBuildsNonEmptyPathTest();
+    runArrangementDragPreviewMouseDragDoesNotCommitMoveTest();
+    runArrangementDragPreviewTargetTrackVisibleBeforeMouseUpTest();
+    runArrangementDragPreviewMouseUpCommitsOnceAndClearsPreviewTest();
 }
 
 } // namespace OpenTune

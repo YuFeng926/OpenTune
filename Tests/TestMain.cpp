@@ -25,14 +25,16 @@
 #include <optional>
 
 namespace OpenTune {
+#if JucePlugin_Enable_ARA
 bool canRenderPublishedRegionView(const ::OpenTune::VST3AraSession::PublishedRegionView& view) noexcept;
+bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
+                                  const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept;
+#endif
 std::optional<RenderBlockSpan> computeRegionBlockRenderSpan(double blockStartSeconds,
                                                             int blockSamples,
                                                             double hostSampleRate,
                                                             double playbackStartSeconds,
                                                             double playbackEndSeconds) noexcept;
-bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
-                                  const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept;
 }
 
 namespace {
@@ -3212,6 +3214,7 @@ void runPlacementCommandsDoNotMutateClipCoreTruthTest()
     logPass(testName);
 }
 
+#if JucePlugin_Enable_ARA
 void runAraSessionSnapshotExposesSourceMaterializationAndPlacementOwnershipTest()
 {
     constexpr const char* testName = "AraSession_SnapshotExposesSourceMaterializationAndPlacementOwnership";
@@ -3239,7 +3242,9 @@ void runAraSessionSnapshotExposesSourceMaterializationAndPlacementOwnershipTest(
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void runAraBindingMultiplePlaybackRegionsSameAudioModificationShareMaterializationTest()
 {
     constexpr const char* testName = "AraBinding_MultiplePlaybackRegionsSameAudioModificationShareMaterialization";
@@ -3278,6 +3283,7 @@ void runAraBindingMultiplePlaybackRegionsSameAudioModificationShareMaterializati
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
 void runProcessorModelRejectsMixedClipOwnerApisTest()
 {
@@ -3610,6 +3616,7 @@ void runClipDerivedRefreshDoesNotMutateStandaloneSelectionTest()
     logPass(testName);
 }
 
+#if JucePlugin_Enable_ARA
 void runVst3AraSnapshotDoesNotPublishStalePayloadTest()
 {
     constexpr const char* testName = "VST3AraSnapshot_DoesNotPublishStalePayload";
@@ -3640,7 +3647,9 @@ void runVst3AraSnapshotDoesNotPublishStalePayloadTest()
     // Published snapshot carries only identity/binding metadata, no raw audio payload
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void runRenderableAraRegionViewAcceptsBindingWithoutRawAudioTest()
 {
     constexpr const char* testName = "RenderableAraRegionView_AcceptsBindingWithoutRawAudio";
@@ -3663,7 +3672,9 @@ void runRenderableAraRegionViewAcceptsBindingWithoutRawAudioTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void runRenderableAraRegionViewRejectsNonAppliedSiblingTest()
 {
     constexpr const char* testName = "RenderableAraRegionView_RejectsNonAppliedSibling";
@@ -3686,7 +3697,9 @@ void runRenderableAraRegionViewRejectsNonAppliedSiblingTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void runAraBindingStateRenderableRequiresMatchingSourceWindowTest()
 {
     constexpr const char* testName = "AraBindingState_RenderableRequiresMatchingSourceWindow";
@@ -3698,19 +3711,19 @@ void runAraBindingStateRenderableRequiresMatchingSourceWindowTest()
 
     VST3AraSessionTestProbe::seedSource(session, audioSource, sourceWindow.sourceId);
     VST3AraSessionTestProbe::seedAudioModificationBinding(session,
-                                                          "mod-renderable-current-window",
-                                                          sourceWindow.sourceId,
-                                                          9101,
-                                                          sourceWindow,
-                                                          3,
-                                                          sourceWindow.durationSeconds());
+                                                           "mod-renderable-current-window",
+                                                           sourceWindow.sourceId,
+                                                           9101,
+                                                           sourceWindow,
+                                                           3,
+                                                           sourceWindow.durationSeconds());
     VST3AraSessionTestProbe::seedPlaybackRegionForModification(session,
-                                                               audioSource,
-                                                               playbackRegion,
-                                                               "mod-renderable-current-window",
-                                                               sourceWindow,
-                                                               2.0,
-                                                               3.0);
+                                                                audioSource,
+                                                                playbackRegion,
+                                                                "mod-renderable-current-window",
+                                                                sourceWindow,
+                                                                2.0,
+                                                                3.0);
     VST3AraSessionTestProbe::publish(session);
 
     const auto snapshot = session.loadSnapshot();
@@ -3728,7 +3741,9 @@ void runAraBindingStateRenderableRequiresMatchingSourceWindowTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void runAraBindingStateStaleSourceWindowNeedsRenderTest()
 {
     constexpr const char* testName = "AraBindingState_StaleSourceWindowNeedsRender";
@@ -3741,13 +3756,13 @@ void runAraBindingStateStaleSourceWindowNeedsRenderTest()
 
     VST3AraSessionTestProbe::seedSource(session, audioSource, currentWindow.sourceId);
     VST3AraSessionTestProbe::seedPlaybackRegionWithStaleAppliedProjection(session,
-                                                                          audioSource,
-                                                                          playbackRegion,
-                                                                          "mod-stale-window",
-                                                                          currentWindow,
-                                                                          staleWindow,
-                                                                          playbackRegion,
-                                                                          9102);
+                                                                           audioSource,
+                                                                           playbackRegion,
+                                                                           "mod-stale-window",
+                                                                           currentWindow,
+                                                                           staleWindow,
+                                                                           playbackRegion,
+                                                                           9102);
     VST3AraSessionTestProbe::publish(session);
 
     const auto snapshot = session.loadSnapshot();
@@ -3765,7 +3780,9 @@ void runAraBindingStateStaleSourceWindowNeedsRenderTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void runAraBindingStateStaleRegionIdentityNeedsRenderTest()
 {
     constexpr const char* testName = "AraBindingState_StaleRegionIdentityNeedsRender";
@@ -3778,13 +3795,13 @@ void runAraBindingStateStaleRegionIdentityNeedsRenderTest()
 
     VST3AraSessionTestProbe::seedSource(session, audioSource, sourceWindow.sourceId);
     VST3AraSessionTestProbe::seedPlaybackRegionWithStaleAppliedProjection(session,
-                                                                          audioSource,
-                                                                          playbackRegion,
-                                                                          "mod-stale-region",
-                                                                          sourceWindow,
-                                                                          sourceWindow,
-                                                                          staleAppliedRegion,
-                                                                          9103);
+                                                                           audioSource,
+                                                                           playbackRegion,
+                                                                           "mod-stale-region",
+                                                                           sourceWindow,
+                                                                           sourceWindow,
+                                                                           staleAppliedRegion,
+                                                                           9103);
     VST3AraSessionTestProbe::publish(session);
 
     const auto snapshot = session.loadSnapshot();
@@ -3802,7 +3819,9 @@ void runAraBindingStateStaleRegionIdentityNeedsRenderTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void runAraBindingStateStaleSourceWindowRequeuesBirthTest()
 {
     constexpr const char* testName = "AraBindingState_StaleSourceWindowRequeuesBirth";
@@ -3815,19 +3834,19 @@ void runAraBindingStateStaleSourceWindowRequeuesBirthTest()
 
     VST3AraSessionTestProbe::seedSource(session, audioSource, currentWindow.sourceId);
     VST3AraSessionTestProbe::seedAudioModificationBinding(session,
-                                                          "mod-stale-window-requeue",
-                                                          staleWindow.sourceId,
-                                                          9104,
-                                                          staleWindow,
-                                                          1,
-                                                          staleWindow.durationSeconds());
+                                                           "mod-stale-window-requeue",
+                                                           staleWindow.sourceId,
+                                                           9104,
+                                                           staleWindow,
+                                                           1,
+                                                           staleWindow.durationSeconds());
     VST3AraSessionTestProbe::seedPlaybackRegionForModification(session,
-                                                               audioSource,
-                                                               playbackRegion,
-                                                               "mod-stale-window-requeue",
-                                                               currentWindow,
-                                                               0.0,
-                                                               currentWindow.durationSeconds());
+                                                                audioSource,
+                                                                playbackRegion,
+                                                                "mod-stale-window-requeue",
+                                                                currentWindow,
+                                                                0.0,
+                                                                currentWindow.durationSeconds());
 
     if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-stale-window-requeue")) {
         logFail(testName, "stale binding on a hydrated source should be eligible for session-side auto-birth");
@@ -3836,6 +3855,7 @@ void runAraBindingStateStaleSourceWindowRequeuesBirthTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
 void runNotesPrimaryRetuneTargetPrefersSelectedNotesTest()
 {
@@ -4121,6 +4141,7 @@ void runRendererBlockSpanRejectsInvalidInputTest()
     logPass(testName);
 }
 
+#if JucePlugin_Enable_ARA
 void runVst3AraSessionDefersRegionRemovalUntilDidEndEditingTest()
 {
     constexpr const char* testName = "VST3AraSession_DefersRegionRemovalUntilDidEndEditing";
@@ -4164,7 +4185,9 @@ void runVst3AraSessionDefersRegionRemovalUntilDidEndEditingTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void runVst3AraSessionDefersSourceDestroyUntilDidEndEditingTest()
 {
     constexpr const char* testName = "VST3AraSession_DefersSourceDestroyUntilDidEndEditing";
@@ -4208,6 +4231,7 @@ void runVst3AraSessionDefersSourceDestroyUntilDidEndEditingTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
 }
 
@@ -4219,8 +4243,10 @@ void logPass(const char* testName)
 }
 
 // Forward declarations for ARA playback/transport repair guard tests
+#if JucePlugin_Enable_ARA
 void runAraBindingStateEnumDefinesLifecycleStatesTest();
 void runAraPublishedRegionViewExposesBindingStateTest();
+#endif
 
 // AraFinal — terminal ARA architecture contract guards
 void runAraFinalRecordRequestedDoesNotTriggerGame();
@@ -4239,6 +4265,7 @@ void runRenderingPriorityRemainsGpuFirstAndCpuFirstOnly();
 void runStage2WorkerStreamsStage1InputDirectly();
 
 // ARA birth lifecycle contract tests
+#if JucePlugin_Enable_ARA
 void runAraBirthSameSourceTwoDifferentPersistentIdsBothBirth();
 void runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlight_NotLost();
 void runAraBirthStaleResultForOldWindowDoesNotOverrideLatestDesiredWindow();
@@ -4249,6 +4276,7 @@ void runAraBirthSamePidNewWindowBumpsRevisionAndReplacesWindow();
 void runAraEditorMissingPayloadDoesNotClearBinding();
 void runAraEditorDestroyRecreateReattachesExistingBinding();
 void runAraStateRestorePreBindSetStateStillRestoresIntoFinalSharedStores();
+#endif
 
 void logFail(const char* testName, const char* detail)
 {
@@ -6151,6 +6179,116 @@ void runPianoRollVisibleRangeCullsNotesF0AndWaveformTilesTest()
     logPass(testName);
 }
 
+void runPianoRollVerticalGeometryInvalidatesRenderModelKeyTest()
+{
+    constexpr const char* testName = "PianoRoll_VerticalGeometryInvalidatesRenderModelKey";
+
+    const auto& cacheHeader = getFileCache().get("Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h");
+    const auto& componentHeader = getFileCache().get("Source/Standalone/UI/PianoRollComponent.h");
+    const auto prepareSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::prepareVisibleRenderModel() const",
+        "void PianoRollComponent::refreshVerticalViewportGeometry");
+    const auto refreshSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::refreshVerticalViewportGeometry",
+        "void PianoRollComponent::setScale");
+
+    if (prepareSection.isEmpty() || refreshSection.isEmpty()) {
+        logFail(testName, "failed to locate PianoRoll vertical geometry preparation sections");
+        return;
+    }
+
+    if (!cacheHeader.contains("verticalZoomBucket")
+        || !cacheHeader.contains("verticalScrollBucket")
+        || !cacheHeader.contains("verticalZoomBucket == o.verticalZoomBucket")
+        || !cacheHeader.contains("verticalScrollBucket == o.verticalScrollBucket")) {
+        logFail(testName, "PianoRoll render-model key does not compare vertical zoom/scroll geometry");
+        return;
+    }
+
+    if (!prepareSection.contains("cacheKey.verticalZoomBucket = quantizeGeometryPx(pixelsPerSemitone_);")
+        || !prepareSection.contains("cacheKey.verticalScrollBucket = quantizeGeometryPx(verticalScrollOffset_);")) {
+        logFail(testName, "PianoRoll render-model key is not populated from current vertical geometry");
+        return;
+    }
+
+    if (!componentHeader.contains("refreshVerticalViewportGeometry")
+        || !refreshSection.contains("updateScrollBars();")
+        || !refreshSection.contains("prepareVisibleRenderModel();")
+        || !refreshSection.contains("invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport)")) {
+        logFail(testName, "vertical geometry helper must update scrollbars, prepare model, and invalidate viewport");
+        return;
+    }
+
+    struct SectionSpec {
+        const char* label;
+        const char* start;
+        const char* end;
+    };
+    const std::array<SectionSpec, 5> verticalEntrypoints{{
+        { "vertical zoom", "void PianoRollComponent::handleVerticalZoomWheel", "void PianoRollComponent::handleHorizontalScrollWheel" },
+        { "vertical wheel scroll", "void PianoRollComponent::handleVerticalScrollWheel", "void PianoRollComponent::handleHorizontalZoomWheel" },
+        { "vertical scrollbar", "void PianoRollComponent::scrollBarMoved", "std::vector<Note> PianoRollComponent::getEditedMaterializationNotesCopy" },
+        { "fit-to-screen", "void PianoRollComponent::fitToScreen", "// HachiTune-style MIDI-based coordinate conversion" },
+        { "panning", "void PianoRollComponent::mouseDrag", "void PianoRollComponent::mouseUp" }
+    }};
+    for (const auto& entrypoint : verticalEntrypoints) {
+        const auto entrySection = extractWorkspaceFileSection(
+            "Source/Standalone/UI/PianoRollComponent.cpp",
+            entrypoint.start,
+            entrypoint.end);
+        if (entrySection.isEmpty()) {
+            logFail(testName, (juce::String("failed to locate vertical geometry entrypoint: ") + entrypoint.label).toRawUTF8());
+            return;
+        }
+        if (!entrySection.contains("refreshVerticalViewportGeometry")) {
+            logFail(testName, (juce::String("vertical geometry entrypoint does not refresh prepared model: ") + entrypoint.label).toRawUTF8());
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollRenderContextUsesSnapshotVerticalCoordinatesTest()
+{
+    constexpr const char* testName = "PianoRoll_RenderContextUsesSnapshotVerticalCoordinates";
+
+    const auto buildSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext",
+        "void PianoRollComponent::prepareVisibleRenderModel");
+
+    if (buildSection.isEmpty()) {
+        logFail(testName, "failed to locate PianoRoll buildRenderContext section");
+        return;
+    }
+
+    if (!buildSection.contains("snapshotPixelsPerSemitone")
+        || !buildSection.contains("snapshotVerticalScrollOffset")
+        || !buildSection.contains("snapshotMaxMidi")) {
+        logFail(testName, "RenderContext does not snapshot vertical geometry before building lambdas");
+        return;
+    }
+
+    if (buildSection.contains("ctx.midiToY = [this]")
+        || buildSection.contains("ctx.freqToY = [this]")
+        || buildSection.contains("ctx.freqToMidi = [this]")) {
+        logFail(testName, "RenderContext vertical coordinate lambdas still capture live component state");
+        return;
+    }
+
+    if (!buildSection.contains("ctx.midiToY = [snapshotPixelsPerSemitone, snapshotVerticalScrollOffset, snapshotMaxMidi]")
+        || !buildSection.contains("ctx.freqToY = [snapshotPixelsPerSemitone, snapshotVerticalScrollOffset, snapshotMaxMidi]")
+        || !buildSection.contains("ctx.freqToMidi = []")) {
+        logFail(testName, "RenderContext vertical coordinate lambdas are not built from the same snapshot");
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runArrangementScrollOffsetDoesNotInvalidateWholeComponentTest()
 {
     constexpr const char* testName = "Arrangement_ScrollOffsetDoesNotInvalidateWholeComponent";
@@ -7602,6 +7740,7 @@ void runSessionOwnershipEditorAndRendererReadThroughDocumentControllerTest()
 
 // ---- ARA Playback/Transport Repair Guard Tests ----
 
+#if JucePlugin_Enable_ARA
 void runAraBindingStateEnumDefinesLifecycleStatesTest()
 {
     constexpr const char* testName = "AraBindingState_EnumDefinesLifecycleStates";
@@ -7625,6 +7764,7 @@ void runAraBindingStateEnumDefinesLifecycleStatesTest()
     }
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
 void runAraPublishedRegionViewExposesBindingStateTest()
 {
@@ -7710,6 +7850,7 @@ void runAraBindingArchiveHooksPersistPersistentIdMaterializationBindingsTest()
     logPass(testName);
 }
 
+#if JucePlugin_Enable_ARA
 void runAraBindingRestoredPersistentIdRebindsNewPlaybackRegionTest()
 {
     constexpr const char* testName = "AraBinding_RestoredPersistentIdRebindsNewPlaybackRegion";
@@ -7722,12 +7863,12 @@ void runAraBindingRestoredPersistentIdRebindsNewPlaybackRegionTest()
     auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x230);
     VST3AraSessionTestProbe::seedSource(stored, audioSource, sourceId);
     VST3AraSessionTestProbe::seedAudioModificationBinding(stored,
-                                                          "mod-restored",
-                                                          sourceId,
-                                                          materializationId,
-                                                          sourceWindow,
-                                                          materializationRevision,
-                                                          sourceWindow.durationSeconds());
+                                                           "mod-restored",
+                                                           sourceId,
+                                                           materializationId,
+                                                           sourceWindow,
+                                                           materializationRevision,
+                                                           sourceWindow.durationSeconds());
 
     juce::MemoryBlock archive;
     juce::MemoryOutputStream output(archive, false);
@@ -7748,12 +7889,12 @@ void runAraBindingRestoredPersistentIdRebindsNewPlaybackRegionTest()
     auto* restoredPlaybackRegion = reinterpret_cast<juce::ARAPlaybackRegion*>(0x232);
     VST3AraSessionTestProbe::seedSource(restored, restoredAudioSource, sourceId);
     VST3AraSessionTestProbe::seedPlaybackRegionForModification(restored,
-                                                               restoredAudioSource,
-                                                               restoredPlaybackRegion,
-                                                               "mod-restored",
-                                                               sourceWindow,
-                                                               3.0,
-                                                               4.0);
+                                                                restoredAudioSource,
+                                                                restoredPlaybackRegion,
+                                                                "mod-restored",
+                                                                sourceWindow,
+                                                                3.0,
+                                                                4.0);
     VST3AraSessionTestProbe::publish(restored);
 
     if (VST3AraSessionTestProbe::bindingMaterializationForPersistentId(restored, "mod-restored") != materializationId) {
@@ -7781,6 +7922,7 @@ void runAraBindingRestoredPersistentIdRebindsNewPlaybackRegionTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
 void runAraEditorAttachesRenderableBindingWithoutReadAudioArmTest()
 {
@@ -8282,6 +8424,7 @@ void runAraRendererOnlyConsumesRenderableSnapshotTest()
     logPass(testName);
 }
 
+#if JucePlugin_Enable_ARA
 void runAraRenderGateRejectsRealtimeStoppedBlocksTest()
 {
     constexpr const char* testName = "AraRenderGate_RejectsRealtimeStoppedBlocks";
@@ -8297,7 +8440,9 @@ void runAraRenderGateRejectsRealtimeStoppedBlocksTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void runAraRenderGateAllowsRealtimePlayingBlocksTest()
 {
     constexpr const char* testName = "AraRenderGate_AllowsRealtimePlayingBlocks";
@@ -8313,7 +8458,9 @@ void runAraRenderGateAllowsRealtimePlayingBlocksTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
+#if JucePlugin_Enable_ARA
 void runAraRenderGateAllowsNonRealtimeStoppedBlocksTest()
 {
     constexpr const char* testName = "AraRenderGate_AllowsNonRealtimeStoppedBlocks";
@@ -8329,6 +8476,7 @@ void runAraRenderGateAllowsNonRealtimeStoppedBlocksTest()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
 void runAraRenderGateRunsBeforeMappingAndReadTest()
 {
@@ -9246,6 +9394,7 @@ void runIntegration_RetireAndReviveRoundTripTest()
 // ============================================================================
 // ARA birth lifecycle contract tests
 // ============================================================================
+#if JucePlugin_Enable_ARA
 //
 // 测试 1: Same source, two regions with different persistentIds, both complete birth independently.
 void runAraBirthSameSourceTwoDifferentPersistentIdsBothBirth()
@@ -9733,6 +9882,7 @@ void runAraEditorDestroyRecreateReattachesExistingBinding()
 
     logPass(testName);
 }
+#endif // JucePlugin_Enable_ARA
 
 // 测试 7: setStateInformation called before didBindToARA should still restore
 //         into final shared stores — currently didBindToARA overwrites local stores.
@@ -9810,6 +9960,7 @@ void runMemoryOptimizationSuite()
 void runArchitectureBehaviorSuite()
 {
     logSection("Architecture");
+#if JucePlugin_Enable_ARA
     runAraBindingStateEnumDefinesLifecycleStatesTest();
     runAraPublishedRegionViewExposesBindingStateTest();
     runAraSessionHydrationWorkerRoutesThroughProcessorBirthApiTest();
@@ -9818,6 +9969,7 @@ void runArchitectureBehaviorSuite()
     runAraBindingRestoredPersistentIdRebindsNewPlaybackRegionTest();
     runAraEditorAttachesRenderableBindingWithoutReadAudioArmTest();
     runAraSnapshotBindingStateIsSetTest();
+#endif
 
     logSection("AraFinal terminal ARA architecture contract guards");
     runAraFinalRecordRequestedDoesNotTriggerGame();
@@ -9837,6 +9989,7 @@ void runArchitectureBehaviorSuite()
     runRenderingPriorityRemainsGpuFirstAndCpuFirstOnly();
     runAraStateRestorePreBindSetStateStillRestoresIntoFinalSharedStores();
 
+#if JucePlugin_Enable_ARA
     logSection("ARA birth lifecycle contract tests");
     runAraBirthSameSourceTwoDifferentPersistentIdsBothBirth();
     runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlight_NotLost();
@@ -9856,6 +10009,7 @@ void runArchitectureBehaviorSuite()
     runAraRenderGateAllowsNonRealtimeStoppedBlocksTest();
     runAraRenderGateRunsBeforeMappingAndReadTest();
     runAraRenderGateStoppedRealtimeClearReturnsTrueTest();
+#endif
     runAraCapableVst3CreatesCaptureSessionWithoutBuildTimeAraExclusionTest();
     runAraRuntimeCaptureSessionAccessorSuppressesAraBoundInstancesTest();
     runAraRuntimeRecordRequestedSplitsByRuntimeModeTest();
@@ -9881,9 +10035,12 @@ void runArchitectureBehaviorSuite()
     runProcessorStateRestoreReplacesExistingOwnerStateTest();
     runSourceMaterializationStoresReplaceContentStoreTest();
     runPlacementCommandsDoNotMutateClipCoreTruthTest();
+#if JucePlugin_Enable_ARA
     runAraSessionSnapshotExposesSourceMaterializationAndPlacementOwnershipTest();
     runAraBindingMultiplePlaybackRegionsSameAudioModificationShareMaterializationTest();
+#endif
     runProcessorModelRejectsMixedClipOwnerApisTest();
+#if JucePlugin_Enable_ARA
     runVst3AraSnapshotDoesNotPublishStalePayloadTest();
     runRenderableAraRegionViewAcceptsBindingWithoutRawAudioTest();
     runRenderableAraRegionViewRejectsNonAppliedSiblingTest();
@@ -9893,6 +10050,7 @@ void runArchitectureBehaviorSuite()
     runAraBindingStateStaleSourceWindowRequeuesBirthTest();
     runVst3AraSessionDefersRegionRemovalUntilDidEndEditingTest();
     runVst3AraSessionDefersSourceDestroyUntilDidEndEditingTest();
+#endif
     runMacStandalonePackagingMacDocsGoToBundleResourcesTest();
     runActiveSurfaceHidesRetiredNodesTest();
     runRetireAndReviveAreReversibleTest();
@@ -9920,6 +10078,8 @@ void runTimelineRenderingSuite()
     runPianoRollPaintConsumesPreparedRenderModelOnlyTest();
     runPianoRollF0VisualsUseSingleRenderPathTest();
     runPianoRollVisibleRangeCullsNotesF0AndWaveformTilesTest();
+    runPianoRollVerticalGeometryInvalidatesRenderModelKeyTest();
+    runPianoRollRenderContextUsesSnapshotVerticalCoordinatesTest();
     runArrangementScrollOffsetDoesNotInvalidateWholeComponentTest();
     runArrangementScrollBarsUseSharedTimeMathAndBoundedOffsetsTest();
     runArrangementPaintConsumesVisibleRenderModelOnlyTest();
