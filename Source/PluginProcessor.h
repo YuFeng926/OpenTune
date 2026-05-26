@@ -47,6 +47,7 @@
 #include "Utils/PianoKeyAudition.h"
 #include "Inference/INoteGenerator.h"
 #include "Utils/AppPreferences.h"
+#include "Utils/PlacementClipboard.h"
 #include <functional>
 
 namespace OpenTune {
@@ -333,6 +334,16 @@ public:
                               uint64_t placementId,
                               double newTimelineStartSeconds);
 
+    // Clipboard for arrangement clip copy/paste
+    PlacementClipboard& getClipClipboard() { return clipClipboard_; }
+
+    // Deep copy materialization audio data for paste/duplicate operations.
+    // Creates a new materialization from a range of an existing one.
+    uint64_t copyMaterializationRange(uint64_t sourceMaterializationId,
+                                       double offsetSeconds,
+                                       double durationSeconds,
+                                       const juce::String& newName = {});
+
 private:
     std::atomic<double> currentSampleRate_{44100.0};
     int currentBlockSize_ = 512;
@@ -471,6 +482,7 @@ private:
     std::shared_ptr<SourceStore> sourceStore_;
     std::shared_ptr<MaterializationStore> materializationStore_;
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
+    PlacementClipboard clipClipboard_;
     ReferenceAnalysisService referenceAnalysisService_;
 
     // Regular VST3 capture state. ARA-capable builds still create this for
@@ -820,12 +832,18 @@ public:
     void setZoomLevel(double zoom);
     double getZoomLevel() const { return zoomLevel_; }
 
+    SnapSettings getSnapSettings() const;
+
+    /** Wire AppPreferences pointer so getSnapSettings() returns live data. */
+    void setAppPreferences(AppPreferences* prefs) { appPreferences_ = prefs; }
+
     UndoManager& getUndoManager() { return undoManager_; }
     PianoKeyAudition& getPianoKeyAudition() { return pianoKeyAudition_; }
 
 private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
+    AppPreferences* appPreferences_{nullptr};
 
 #if JucePlugin_Enable_ARA
     // Cached project state for pre-bind restore.

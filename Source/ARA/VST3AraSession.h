@@ -175,6 +175,7 @@ public:
         juce::ARAAudioSource* audioSource{nullptr};
         SourceWindow desiredWindow;
         uint64_t revision{0};
+        bool queuedForReadyWork{false};
     };
 
     enum class BindingState : uint8_t {
@@ -277,7 +278,6 @@ public:
     void updatePlaybackRegionMaterializationRevisions(juce::ARAPlaybackRegion* playbackRegion,
                                               uint64_t materializationRevision,
                                               uint64_t projectionRevision);
-    void clearPlaybackRegionMaterialization(juce::ARAPlaybackRegion* playbackRegion);
     std::vector<AraMaterializationBinding> exportMaterializationBindings() const;
     void replaceMaterializationBindings(std::vector<AraMaterializationBinding> bindings);
     bool storeMaterializationBindings(juce::OutputStream& output,
@@ -340,7 +340,7 @@ private:
     uint64_t nextRegionProjectionRevision_{1};
     uint64_t nextPublishedEpoch_{1};
     bool pendingSnapshotPublication_{false};
-    std::deque<juce::String> materializationBirthQueue_;   // pending birth keys (persistentIds)
+    std::deque<juce::String> readyBirthWorkQueue_;         // worker-ready birth keys (persistentIds)
     std::map<juce::String, PendingBirth> pendingBirths_;   // active birth targets by persistentId
     uint64_t nextBirthRevision_{1};
     std::condition_variable birthCv_;

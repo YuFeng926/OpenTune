@@ -45,6 +45,9 @@ public:
         double waveformVisibleEndSeconds = 0.0;
         uint64_t waveformStyleHash = 0;
         uint64_t waveformTimeGridRevision = 0;
+        int trackId = 0;
+        double fadeInDuration = 0.0;
+        double fadeOutDuration = 0.0;
     };
 
     struct RenderModel {

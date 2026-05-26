@@ -4,8 +4,8 @@ milestone: v1.5
 milestone_name: PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 status: active
 stopped_at: v1.5 active development + PianoRoll empty-space seek intent + regular VST3 capture UX refinement (display selection, timeline view domain, transport shortcuts)
-last_updated: "2026-05-26"
-last_activity: 2026-05-26 -- VST3 ARA OriginalF0 final convergence completed: metadata-only SourceStore, ARA birth 语义收紧 (hydration→birth 命名收口, Failed 显式写入, releaseImmediately 始终调用), ARA-bound Editor 残留 rmvpeOverlayLatched_ 删除, requestMaterializationRefresh 注释刷新为非 ARA 契约, 7 个 AraFinal 终审守卫 PASS, 三目标编译通过.
+last_updated: "2026-05-27"
+last_activity: 2026-05-27 -- VST3 ARA multi-item birth + editor reopen structural fix landed: persistentId-owned pending birth, stale worker-result drop, editor destructive clear removal, metadata-only ARA pre-bind restore caching, architecture/processor/core/memory PASS, ARA VST3/non-ARA VST3/Standalone builds PASS; user explicitly said REAPER manual test is not required for this closure.
 progress:
   total_phases: 0
   completed_phases: 0
@@ -21,7 +21,7 @@ progress:
 See: `.planning/PROJECT.md` and `.planning/REQUIREMENTS.md` (updated 2026-05-17)
 
 **Core value:** 双格式独立编译，零交叉影响
-**Current focus:** `v1.5` PianoRoll 编辑体验增强 + VST3 ARA multi-region binding 收口
+**Current focus:** `v1.5` PianoRoll 编辑体验增强 + VST3 ARA multi-item birth / editor-reopen 生命周期修复
 **Test Strategy:** `OpenTuneTests` 轻量 smoke suites + manual DAW journeys + `AppLogger` / targeted trace
 
 ## Current Position
@@ -36,17 +36,18 @@ Plan sources:
 - 2026-04-30 RenderBadgeComponent 浮动状态徽章
 - 2026-05-01 ONNX Runtime 内存优化（F0 释放、共享 Env、DisableCpuMemArena）
 - 2026-05-02 GPU/CPU 推理后端重构（删除 DmlRuntimeVerifier、简化 AccelerationDetector、DML1 API）
-- 2026-05-26 VST3 ARA OriginalF0 final convergence（metadata-only SourceStore、birth 语义收紧、Editor 残留删除、AraFinal 终审守卫）
+- 2026-05-26 VST3 ARA OriginalF0 收口子项（metadata-only SourceStore、birth 结果语义收紧、Editor 残留删除、AraFinal 守卫）
+- 2026-05-26/27 VST3 ARA multi-item birth + editor reopen structural fix（自动化闭环；REAPER 手工测试用户明确不要求本次执行）
 
 Status: Active development
-Last activity: 2026-05-26 -- VST3 ARA OriginalF0 final convergence 实施完成，三目标编译 PASS
+Last activity: 2026-05-27 -- ARA multi-item birth 与 editor reopen 结构性缺口已按计划修复并通过自动化门禁；用户明确表示 REAPER 手工测试不用本次执行，因此不得把 L5 写成 PASS，但也不作为本次闭环阻塞项。
 
 ## Performance Metrics
 
 - Last shipped milestone: `v1.4` (Source/Materialization/Placement persisted truth — frozen, considered shipped)
 - Active milestone: `v1.5` PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 - Current workspace: active development
-- Verification: ARA `OpenTuneTests` Release build PASS; `architecture/core/processor/memory/undo` suites PASS; ARA VST3 build PASS; non-ARA VST3 build PASS. `ui` suite currently exits 1 after a PASS line and no `[FAIL]` text, so full-suite PASS must not be claimed.
+- Verification: ARA `OpenTuneTests` Release build PASS; `architecture` / `processor` / `core` / `memory` suites PASS for the 2026-05-27 ARA lifecycle fix; ARA VST3 build PASS; non-ARA VST3 build PASS; Standalone build PASS. `timeline-rendering` / `piano-roll-f0-visual` remain prior focused PASS evidence. `ui` suite currently exits 1 after a PASS line and no `[FAIL]` text, so full-suite PASS must not be claimed.
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Last activity: 2026-05-26 -- VST3 ARA OriginalF0 final convergence 实施完成�
 - 2026-04-23 (Task 10 verify)：OpenTuneTests CMake target 现在显式定义 `JucePlugin_Build_Standalone=1 / JucePlugin_Build_VST3=0`。这是硬约束 — 与 SharedCode .lib 编译开关必须对齐，否则 `#if !JucePlugin_Build_Standalone` 守护的 `hostTransportSnapshot_` 等成员会让测试 TU 看到的 `OpenTuneAudioProcessor` 类布局比真实对象多 64 字节，导致 ODR 违规与字段偏移静默错位。
 
 - 2026-05-15 (VST3 ARA multi-region binding)：按官方 ARA owner 模型收口 — `AudioSource` 只对应 source/provenance，`AudioModification persistentID` 对应持久 editable materialization binding，`PlaybackRegion` 只对应 projection。`VST3AraSession::RegionSlot` 保存 `audioModificationPersistentId`，`materializationBindings_` 保存 persistentID -> materialization binding；同一 AudioModification 的多个 PlaybackRegion 共享 materialization，不同 AudioModification 即使 sourceWindow 相同也默认独立。`OpenTuneDocumentController` archive hooks 转发 versioned binding store/restore；VST3 editor 不再用 `araClipImportArmed_` 作为已绑定 materialization 的显示门。L5 Reaper 多 item/保存恢复仍待手工验证。
+- 2026-05-27（ARA multi-item / reopen fix）：birth pending truth 已迁到 `audioModificationPersistentId + SourceWindow + revision`；worker-ready 队列只表达“哪些 persistentId 当前可执行”，不再承担 source 级 birth 真相。旧 worker result 必须在 commit 前按 revision/window 丢弃。
+- 2026-05-27（ARA multi-item / reopen fix）：`PluginEditor` 是只读消费者；payload/buffer 暂缺不再触发 destructive clear。`clearPlaybackRegionMaterialization()` 已从 production session API 删除，缺 payload 只能表现为 pending/restoring UI 状态。
+- 2026-05-27（ARA pre-bind restore fix）：metadata-only ARA VST3 state 在 `didBindToARA()` 前只缓存，绑定后 replay 到最终 shared stores；regular unbound VST3 state 不走 ARA 缓存路径，仍立即恢复本地 capture/project 状态。
 
 - 2026-04-24 (Task 12 F6)：VST3 PluginEditor.cpp 4 处 command-path silent-return 改为 `AppLogger::log("InvariantViolation: ...")` + `jassertfalse`。涉及 `syncImportedAraClipIfNeeded` 的 prepareImport 失败和 null buffer，以及 `pitchCurveEdited` 的 no-materialization 和 null-curve。新增 architecture guard 测试。
 - 2026-04-24 (Task 12 scope)：F3 (SourceStore hydration 迁移) 经评估为高风险（hydration worker 跨 store 锁序问题），标记为后续独立 Task 需专门锁序设计。F5 (reclaim registry 统一) 评估为低价值（sweep 里只有 15 行 `#if`），标记为可选后续 Task。
@@ -107,9 +111,9 @@ Last activity: 2026-05-26 -- VST3 ARA OriginalF0 final convergence 实施完成�
 
 - 2026-05-18 (Regular VST3 transport shortcuts): Regular VST3 must not pretend to own host transport. Keyboard shortcuts and transport buttons route through a unified helper; no host-specific branch, no global keyboard hook, no fake transport truth. Architecture guards (`Vst3KeyboardShortcuts_RouteThroughUnifiedHelper`, `Vst3TransportButtons_DoNotForgeRegularPlaybackTruth`, `Vst3RegularTransport_SurfacesHostControlledSemantics`, `RegularVst3Capture_UsesHostPlayheadTruth`) PASS; ARA/non-ARA VST3 builds PASS. Status: Implemented; host L5 pending. Verification: `.planning/plans/2026-05-18-regular-vst3-transport-shortcuts-test-verification.md`.
 
-### VST3 ARA OriginalF0 Final Convergence (2026-05-26)
+### VST3 ARA OriginalF0 子收口 (2026-05-26)
 
-All convergence items completed:
+This subset did land, but it is not the final closure for the Reaper multi-item / editor reopen bug family:
 
 - **Phase 1: SourceStore metadata-only** — `CreateSourceRequest` 新增 `numChannels`/`numSamples`；`createSource()` 允许 `audioBuffer == nullptr` 时从 request 字段直接注册；Standalone full-PCM 路径不变。
 - **Phase 2: ARA birth 结果语义收紧** — 删除 `makePartialResult`，改为 `buildBirthResult`；F0 service not ready/nullptr 时显式写 `OriginalF0State::Failed`；成功/失败路径都调用 `releaseImmediately()`。
@@ -121,12 +125,24 @@ All convergence items completed:
 - 三目标编译通过（Tests/Standalone/VST3）+ architecture suite 7/7 AraFinal PASS。
 - 2026-05-26 之前 5 个 commit（vocal-time-stretch + reference auto-align + vocoder dual weights + Aurora theme）也包含在内，当前工作区快照同步完成。
 
+2026-05-27 follow-up structural fix closed the audit gaps:
+
+- auto-birth pending truth is now keyed by `audioModificationPersistentId + SourceWindow + revision`
+- callback paths that leave `regionNeedsMaterializationBirthLocked()` true upsert the persistentId pending birth, including attach-only and ready-source requeue paths
+- editor destructive clear is gone; `clearPlaybackRegionMaterialization()` is no longer a production session API
+- metadata-only ARA pre-bind state is cached and replayed after `didBindToARA()` into final shared stores; regular unbound VST3 state restores immediately
+
+Plan source:
+
+- `.planning/plans/2026-05-26-vst3-ara-multi-item-birth-and-editor-reopen-structural-fix.md`
+- `.planning/plans/2026-05-26-vst3-ara-multi-item-birth-and-editor-reopen-test-verification.md`
+
 ### Pending Todos
 
 - 持续把 `.planning` 与 live tree 保持同步。
 - Request user confirmation for Studio One / REAPER / Cubase / Live L5 journeys after installing the rebuilt VST3 (regular-vst3 capture display, timeline view domain, transport shortcuts).
 - Request user confirmation for PianoRoll empty-space seek intent L5 manual visual behavior.
-- 补 Reaper ARA multi-item/project reload L5 验证，确认 persistentID binding 在真实 host 中不再表现为 last-item-only 或重开丢失。
+- REAPER ARA multi-item/project reload L5 不由 Codex 本次执行；用户明确说手工测试不用做。若之后有人手工执行，可补记录，但不得倒填为本次 PASS。
 - 解释并修复 `OpenTuneTests.exe ui` exit=1/no `[FAIL]` text 的 runner 现象，然后才能恢复 full-suite PASS 口径。
 - **后续独立 Task（非阻塞）**：F3 SourceStore hydration 迁移（需锁序设计）、F5 reclaim registry 双格式统一（可选）。
 - 在合适时机补 Standalone / VST3 undo result-chain 的手工旅程确认。
@@ -139,7 +155,7 @@ All convergence items completed:
 
 ## Session Continuity
 
-Last session: 2026-05-26
-Stopped at: VST3 ARA OriginalF0 final convergence implementation complete; ARA-bound Editor 残留删除、birth 语义收口、AraFinal 终审守卫全部 PASS；用户询问 Materialization audioBuffer 角色后，同步 .planning 文档群到最新状态
+Last session: 2026-05-27
+Stopped at: ARA multi-item birth / editor reopen structural fix 已完成自动化闭环；REAPER 手工测试用户明确不要求 Codex 执行
 Resume file: N/A
-Next step: 等待用户确认下一步方向；Host L5（Studio One ARA 长音频自动 OriginalF0）仍待验证
+Next step: 继续 v1.5 其它 open 项（UI suite exit-code、Undo 边界、CorrectionWorker 并发、其它宿主 L5），不要把已关闭的 ARA multi-item/reopen 自动化合同重新列为待实现。

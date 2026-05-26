@@ -36,6 +36,7 @@ public:
         float gain{1.0f};
         double fadeInDuration{0.0};
         double fadeOutDuration{0.0};
+        double clipInSeconds{0.0};          // Trim start offset in source materialization (0 = start from beginning)
         juce::String name;
         juce::Colour colour;
         bool isRetired{false};
@@ -123,6 +124,8 @@ public:
     bool movePlacementToTrack(int sourceTrackId, int targetTrackId, uint64_t placementId, double newTimelineStartSeconds);
     bool setPlacementTimelineStartSeconds(int trackId, uint64_t placementId, double timelineStartSeconds);
     bool setPlacementGain(int trackId, uint64_t placementId, float gain);
+    bool setPlacementTrim(int trackId, uint64_t placementId, double clipInSeconds, double durationSeconds);
+    bool setPlacementFade(int trackId, uint64_t placementId, double fadeInDuration, double fadeOutDuration);
 
     // 软删除/恢复接口，供 UndoAction 和垃圾回收使用
     bool retirePlacement(int trackId, uint64_t placementId);

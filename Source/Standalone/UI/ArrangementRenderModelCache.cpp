@@ -177,6 +177,9 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
             vp.name = placement.name;
             vp.isHovered = (hoveredPlacementId == placementId);
             vp.mouseOverReferenceButton = (hoveredPlacementId == placementId) && mouseOverReferenceButton;
+            vp.trackId = trackId;
+            vp.fadeInDuration = placement.fadeInDuration;
+            vp.fadeOutDuration = placement.fadeOutDuration;
 
             if (getAnalysisState)
                 vp.analysisInProgress = getAnalysisState(placementId);

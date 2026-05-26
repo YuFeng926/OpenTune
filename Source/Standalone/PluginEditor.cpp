@@ -369,6 +369,9 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , arrangementView_(p)
     , projectSession_(p, appPreferences_)
 {
+    // Wire AppPreferences to processor for getSnapSettings()
+    processorRef_.setAppPreferences(&appPreferences_);
+
     // Initialize track volumes array
     lastTrackVolumes_.fill(1.0f);
     

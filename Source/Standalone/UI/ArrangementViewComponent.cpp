@@ -5,7 +5,9 @@
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../../Utils/KeyShortcutConfig.h"
 #include "../../Utils/PlacementActions.h"
+#include "../../Utils/PlacementClipboard.h"
 #include "../../Utils/LocalizationManager.h"
+#include "../../Utils/SnapUtils.h"
 
 namespace OpenTune {
 
@@ -484,6 +486,16 @@ ArrangementViewComponent::HitTestResult ArrangementViewComponent::hitTestPlaceme
             r.placementIndex = i;
             r.placementBounds = bounds;
             r.isTopEdge = (p.y - bounds.getY()) <= 6;
+            r.isLeftEdge = (p.x - bounds.getX()) <= 8 && bounds.getWidth() > 30;
+            r.isRightEdge = (bounds.getRight() - p.x) <= 8 && bounds.getWidth() > 30;
+
+            // Fade handle hit-test (top corners, 16x16 areas)
+            if (bounds.getWidth() > 40) {
+                juce::Rectangle<int> fadeInRect(bounds.getX(), bounds.getY(), 16, 16);
+                juce::Rectangle<int> fadeOutRect(bounds.getRight() - 16, bounds.getY(), 16, 16);
+                r.isFadeInHandle = fadeInRect.contains(p);
+                r.isFadeOutHandle = fadeOutRect.contains(p);
+            }
             return r;
         }
     }
@@ -689,7 +701,6 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
     for (const auto& vp : model.placements)
     {
         const auto& placementArea = vp.pixelArea;
-        const auto& placementBounds = vp.pixelBounds;
 
         if (themeId == ThemeId::DarkBlueGrey && vp.isSelected)
         {
@@ -786,6 +797,97 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
                 g.strokePath(tile->path, juce::PathStrokeType(1.0f));
         }
 
+        // Draw fade curves
+        if (vp.fadeInDuration > 0.001 || vp.fadeOutDuration > 0.001) {
+            const double pixelsPerSec = 100.0 * zoomLevel_;
+
+            if (vp.fadeInDuration > 0.001) {
+                const double fadePixels = vp.fadeInDuration * pixelsPerSec;
+                // Fade-in triangle overlay
+                juce::Path fadeInPath;
+                fadeInPath.addTriangle(
+                    placementArea.getX(), placementArea.getY(),
+                    static_cast<float>(placementArea.getX() + fadePixels), placementArea.getY(),
+                    placementArea.getX(), placementArea.getBottom());
+                g.setColour(juce::Colours::white.withAlpha(0.12f));
+                g.fillPath(fadeInPath);
+
+                // Fade-in handle (small square at top-left)
+                juce::Rectangle<float> handleInRect(
+                    placementArea.getX(), placementArea.getY(), 10.0f, 10.0f);
+                g.setColour(juce::Colours::white.withAlpha(0.35f));
+                g.fillRect(handleInRect);
+            }
+
+            if (vp.fadeOutDuration > 0.001) {
+                const double fadePixels = vp.fadeOutDuration * pixelsPerSec;
+                // Fade-out triangle overlay
+                juce::Path fadeOutPath;
+                fadeOutPath.addTriangle(
+                    placementArea.getRight(), placementArea.getY(),
+                    static_cast<float>(placementArea.getRight() - fadePixels), placementArea.getY(),
+                    placementArea.getRight(), placementArea.getBottom());
+                g.setColour(juce::Colours::white.withAlpha(0.12f));
+                g.fillPath(fadeOutPath);
+
+                // Fade-out handle (small square at top-right)
+                juce::Rectangle<float> handleOutRect(
+                    placementArea.getRight() - 10.0f, placementArea.getY(), 10.0f, 10.0f);
+                g.setColour(juce::Colours::white.withAlpha(0.35f));
+                g.fillRect(handleOutRect);
+            }
+        }
+
+        // Clip name — drawn in a second pass so overlap overlay does not occlude it
+    }
+
+    // ==========================================================================
+    // Overlap detection: darken overlapping regions between placements on the same track
+    // Drawn AFTER waveforms/fades but BEFORE text overlays, so clip name/gain/reference remain visible.
+    // ==========================================================================
+    if (model.placements.size() > 1)
+    {
+        for (size_t i = 0; i < model.placements.size(); ++i)
+        {
+            for (size_t j = i + 1; j < model.placements.size(); ++j)
+            {
+                const auto& vpA = model.placements[i];
+                const auto& vpB = model.placements[j];
+
+                if (vpA.trackId != vpB.trackId)
+                    continue;
+
+                const float aLeft = vpA.pixelArea.getX();
+                const float aRight = vpA.pixelArea.getRight();
+                const float bLeft = vpB.pixelArea.getX();
+                const float bRight = vpB.pixelArea.getRight();
+
+                // Check time overlap on X axis
+                if (aRight > bLeft && bRight > aLeft)
+                {
+                    const float overlapLeft = std::max(aLeft, bLeft);
+                    const float overlapRight = std::min(aRight, bRight);
+
+                    if (overlapRight > overlapLeft)
+                    {
+                        // Same track → same Y/height, draw dark overlay once on the overlap region
+                        juce::Rectangle<float> overlapRect(
+                            overlapLeft, vpA.pixelArea.getY(),
+                            overlapRight - overlapLeft, vpA.pixelArea.getHeight());
+                        g.setColour(juce::Colours::black.withAlpha(0.30f));
+                        g.fillRect(overlapRect);
+                    }
+                }
+            }
+        }
+    }
+
+    // Second pass: text overlays on top of overlap overlay
+    for (const auto& vp : model.placements)
+    {
+        const auto& placementArea = vp.pixelArea;
+        const auto& placementBounds = vp.pixelBounds;
+
         // Clip name
         if (vp.name.isNotEmpty())
         {
@@ -869,6 +971,9 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
             }
         }
     }
+
+    // Debug: draw revision/state info when available
+    // (Intentionally blank — reserved for future diagnostic overlay)
 }
 
 void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
@@ -1300,6 +1405,14 @@ void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
 
     if (hit.trackId >= 0)
     {
+        if (hit.isLeftEdge || hit.isRightEdge) {
+            setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+            return;
+        }
+        if (hit.isFadeInHandle || hit.isFadeOutHandle) {
+            setMouseCursor(juce::MouseCursor::PointingHandCursor);
+            return;
+        }
         if (hit.isTopEdge)
             setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
         else
@@ -1450,6 +1563,69 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     dragStartPlacementId_ = selectedPlacementId_;
     dragStartTrackId_ = selectedTrack_;
 
+    // Check Fade handles first (before trim — to give priority to 16x16 fade handle areas
+    // over 8px edge hit zones that would otherwise absorb clicks in the top corners)
+    if (hit.isFadeInHandle) {
+        currentDragOp_ = DragOperation::FadeIn;
+        StandaloneArrangement::Placement placement;
+        if (getStandalonePlacementById(processor_, hit.trackId, hitPlacementId, placement)) {
+            fadeStartInDuration_ = placement.fadeInDuration;
+            dragOperationPlacementId_ = hitPlacementId;
+            dragStartPos_ = e.getPosition();
+            dragStartTrackId_ = hit.trackId;
+        }
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        return;
+    }
+
+    if (hit.isFadeOutHandle) {
+        currentDragOp_ = DragOperation::FadeOut;
+        StandaloneArrangement::Placement placement;
+        if (getStandalonePlacementById(processor_, hit.trackId, hitPlacementId, placement)) {
+            fadeStartOutDuration_ = placement.fadeOutDuration;
+            dragOperationPlacementId_ = hitPlacementId;
+            dragStartPos_ = e.getPosition();
+            dragStartTrackId_ = hit.trackId;
+        }
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        return;
+    }
+
+    // Check Trim edges (after fade — 8px edge zones should not steal hits from 16x16 fade handles)
+    if (hit.isLeftEdge) {
+        currentDragOp_ = DragOperation::TrimLeft;
+        StandaloneArrangement::Placement placement;
+        if (getStandalonePlacementById(processor_, hit.trackId, hitPlacementId, placement)) {
+            trimStartClipInSeconds_ = placement.clipInSeconds;
+            trimStartDurationSeconds_ = placement.durationSeconds;
+            dragStartPlacementSeconds_ = placement.timelineStartSeconds;
+            dragOperationPlacementId_ = hitPlacementId;
+            dragStartPos_ = e.getPosition();
+            dragStartTrackId_ = hit.trackId;
+        }
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        return;
+    }
+
+    if (hit.isRightEdge) {
+        currentDragOp_ = DragOperation::TrimRight;
+        StandaloneArrangement::Placement placement;
+        if (getStandalonePlacementById(processor_, hit.trackId, hitPlacementId, placement)) {
+            trimStartClipInSeconds_ = placement.clipInSeconds;
+            trimStartDurationSeconds_ = placement.durationSeconds;
+            dragOperationPlacementId_ = hitPlacementId;
+            dragStartPos_ = e.getPosition();
+            dragStartTrackId_ = hit.trackId;
+        }
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        return;
+    }
+
+    currentDragOp_ = hit.isTopEdge ? DragOperation::Gain : DragOperation::Move;
     isAdjustingGain_ = hit.isTopEdge;
     isDraggingPlacement_ = !isAdjustingGain_;
 
@@ -1500,6 +1676,71 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
         return;
     }
 
+    if (currentDragOp_ == DragOperation::TrimLeft || currentDragOp_ == DragOperation::TrimRight) {
+        const double pixelsPerSec = 100.0 * zoomLevel_;
+        const double deltaSeconds = static_cast<double>(e.x - dragStartPos_.x) / pixelsPerSec;
+        const double bpm = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
+        const SnapSettings snap = processor_.getSnapSettings();
+        const double snappedDelta = SnapUtils::snapDelta(deltaSeconds, bpm, snap);
+
+        auto* arr = processor_.getStandaloneArrangement();
+        if (!arr || dragOperationPlacementId_ == 0) return;
+
+        StandaloneArrangement::Placement placement;
+        if (!arr->getPlacementById(dragStartTrackId_, dragOperationPlacementId_, placement)) return;
+
+        if (currentDragOp_ == DragOperation::TrimLeft) {
+            double newClipIn = trimStartClipInSeconds_ + snappedDelta;
+            if (newClipIn < 0.0) newClipIn = 0.0;
+            double newDuration = trimStartDurationSeconds_ - snappedDelta;
+            constexpr double minDur = 0.01;
+            if (newDuration < minDur) { newDuration = minDur; newClipIn = trimStartClipInSeconds_ + trimStartDurationSeconds_ - minDur; }
+            if (newClipIn < 0.0) newClipIn = 0.0;
+            // Shift timelineStart to keep right edge static
+            double newStart = dragStartPlacementSeconds_ + snappedDelta;
+            if (newStart < 0.0) newStart = 0.0;
+            arr->setPlacementTrim(dragStartTrackId_, dragOperationPlacementId_, newClipIn, newDuration);
+            arr->setPlacementTimelineStartSeconds(dragStartTrackId_, dragOperationPlacementId_, newStart);
+        } else { // TrimRight
+            double newDuration = trimStartDurationSeconds_ + snappedDelta;
+            constexpr double minDur = 0.01;
+            if (newDuration < minDur) newDuration = minDur;
+            arr->setPlacementTrim(dragStartTrackId_, dragOperationPlacementId_, trimStartClipInSeconds_, newDuration);
+        }
+
+        listeners_.call([this](Listener& l) {
+            l.placementTimingChanged(dragStartTrackId_, selectedPlacementIndex_);
+        });
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        return;
+    }
+
+    if (currentDragOp_ == DragOperation::FadeIn || currentDragOp_ == DragOperation::FadeOut) {
+        const double pixelsPerSec = 100.0 * zoomLevel_;
+        const double deltaSeconds = static_cast<double>(e.x - dragStartPos_.x) / pixelsPerSec;
+
+        auto* arr = processor_.getStandaloneArrangement();
+        if (!arr || dragOperationPlacementId_ == 0) return;
+
+        StandaloneArrangement::Placement placement;
+        if (!arr->getPlacementById(dragStartTrackId_, dragOperationPlacementId_, placement)) return;
+
+        const double maxFade = placement.durationSeconds * 0.9;
+        if (currentDragOp_ == DragOperation::FadeIn) {
+            double newFade = fadeStartInDuration_ + deltaSeconds;
+            if (newFade < 0.0) newFade = 0.0;
+            if (newFade > maxFade) newFade = maxFade;
+            arr->setPlacementFade(dragStartTrackId_, dragOperationPlacementId_, newFade, placement.fadeOutDuration);
+        } else {
+            double newFade = fadeStartOutDuration_ - deltaSeconds; // opposite direction for right side
+            if (newFade < 0.0) newFade = 0.0;
+            if (newFade > maxFade) newFade = maxFade;
+            arr->setPlacementFade(dragStartTrackId_, dragOperationPlacementId_, placement.fadeInDuration, newFade);
+        }
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        return;
+    }
+
     if (selectedTrack_ < 0 || selectedTrack_ >= OpenTuneAudioProcessor::MAX_TRACKS)
         return;
 
@@ -1519,6 +1760,8 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
         double startT = viewportXToAbsoluteTime(dragStartPos_.x);
         double currentT = viewportXToAbsoluteTime(e.x);
         double deltaSeconds = currentT - startT;
+        const double bpm = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
+        const SnapSettings snap = processor_.getSnapSettings();
 
         if (selectedPlacements_.size() > 1 && !multiDragStartStates_.empty())
         {
@@ -1526,12 +1769,16 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
             {
                 double newStart = state.startSeconds + deltaSeconds;
                 if (newStart < 0.0) newStart = 0.0;
+                newStart = SnapUtils::snapTime(newStart, bpm, snap);
                 setStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, newStart);
             }
         }
         else
         {
-            setStandalonePlacementStartSeconds(processor_, selectedTrack_, selectedPlacementId_, dragStartPlacementSeconds_ + deltaSeconds);
+            double newStart = dragStartPlacementSeconds_ + deltaSeconds;
+            if (newStart < 0.0) newStart = 0.0;
+            newStart = SnapUtils::snapTime(newStart, bpm, snap);
+            setStandalonePlacementStartSeconds(processor_, selectedTrack_, selectedPlacementId_, newStart);
         }
 
         listeners_.call([this](Listener& l) {
@@ -1551,6 +1798,47 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
 
 void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
 {
+    // Record Trim undo
+    if ((currentDragOp_ == DragOperation::TrimLeft || currentDragOp_ == DragOperation::TrimRight) && dragOperationPlacementId_ != 0) {
+        auto* arr = processor_.getStandaloneArrangement();
+        if (arr) {
+            StandaloneArrangement::Placement placement;
+            if (arr->getPlacementById(dragStartTrackId_, dragOperationPlacementId_, placement)) {
+                if (placement.clipInSeconds != trimStartClipInSeconds_ || placement.durationSeconds != trimStartDurationSeconds_) {
+                    processor_.getUndoManager().addAction(
+                        std::make_unique<TrimPlacementAction>(processor_, dragStartTrackId_, dragOperationPlacementId_,
+                                                               trimStartClipInSeconds_, trimStartDurationSeconds_,
+                                                               placement.clipInSeconds, placement.durationSeconds,
+                                                               dragStartPlacementSeconds_, placement.timelineStartSeconds));
+                }
+            }
+        }
+    }
+
+    // Record Fade undo
+    if ((currentDragOp_ == DragOperation::FadeIn || currentDragOp_ == DragOperation::FadeOut) && dragOperationPlacementId_ != 0) {
+        auto* arr = processor_.getStandaloneArrangement();
+        if (arr) {
+            StandaloneArrangement::Placement placement;
+            if (arr->getPlacementById(dragStartTrackId_, dragOperationPlacementId_, placement)) {
+                if (placement.fadeInDuration != fadeStartInDuration_ || placement.fadeOutDuration != fadeStartOutDuration_) {
+                    processor_.getUndoManager().addAction(
+                        std::make_unique<FadeChangeAction>(processor_, dragStartTrackId_, dragOperationPlacementId_,
+                                                           fadeStartInDuration_, fadeStartOutDuration_,
+                                                           placement.fadeInDuration, placement.fadeOutDuration));
+                }
+            }
+        }
+    }
+
+    // Reset drag op for non-move/gain operations
+    if (currentDragOp_ != DragOperation::Move && currentDragOp_ != DragOperation::Gain) {
+        currentDragOp_ = DragOperation::None;
+        dragOperationPlacementId_ = 0;
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+    }
+
     if (isDraggingPlacement_)
     {
         auto delta = e.getPosition() - dragStartPos_;
@@ -1659,6 +1947,8 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
     isAdjustingGain_ = false;
     isDraggingPlayhead_ = false;
     isPanning_ = false;
+    currentDragOp_ = DragOperation::None;
+    dragOperationPlacementId_ = 0;
     dragStartTrackId_ = -1;
     multiDragStartStates_.clear();
     setMouseCursor(juce::MouseCursor::NormalCursor);
@@ -1766,23 +2056,167 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    if (key.getTextCharacter() == 's' || key.getTextCharacter() == 'S')
+    // CopyClips — Ctrl+C
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Copy, key))
+    {
+        if (!selectedPlacements_.empty())
+        {
+            std::vector<PlacementClipEntry> entries;
+            for (const auto& sel : selectedPlacements_)
+            {
+                StandaloneArrangement::Placement placement;
+                if (getStandalonePlacementById(processor_, sel.trackId, sel.placementId, placement))
+                {
+                    entries.push_back({
+                        sel.trackId,
+                        placement.materializationId,
+                        placement.clipInSeconds,
+                        placement.durationSeconds,
+                        placement.gain,
+                        placement.fadeInDuration,
+                        placement.fadeOutDuration,
+                        placement.name,
+                        placement.colour
+                    });
+                }
+            }
+            processor_.getClipClipboard().store(std::move(entries));
+        }
+        return true;
+    }
+
+    // PasteClips — Ctrl+V (at playhead)
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Paste, key))
+    {
+        auto& clipboard = processor_.getClipClipboard();
+        if (clipboard.hasEntries())
+        {
+            double pasteTime = processor_.getPosition();
+            if (pasteTime < 0.0) pasteTime = 0.0;
+
+            for (const auto& entry : clipboard.entries())
+            {
+                auto* arr = processor_.getStandaloneArrangement();
+                if (!arr) break;
+
+                // Copy materialization range
+                uint64_t newMatId = processor_.copyMaterializationRange(
+                    entry.sourceMaterializationId, entry.clipInSeconds, entry.durationSeconds);
+                if (newMatId == 0) continue;
+
+                StandaloneArrangement::Placement newPlacement;
+                newPlacement.placementId = 0; // will be assigned by insertPlacement
+                newPlacement.materializationId = newMatId;
+                newPlacement.mappingRevision = 1;
+                newPlacement.timelineStartSeconds = pasteTime;
+                newPlacement.durationSeconds = entry.durationSeconds;
+                newPlacement.gain = entry.gain;
+                newPlacement.fadeInDuration = entry.fadeInDuration;
+                newPlacement.fadeOutDuration = entry.fadeOutDuration;
+                newPlacement.name = entry.name;
+                newPlacement.colour = entry.colour;
+                newPlacement.clipInSeconds = 0.0; // copy starts from beginning of new materialization
+
+                if (!arr->insertPlacement(selectedTrack_, newPlacement)) {
+                    // Rollback — delete the orphan materialization
+                    processor_.getMaterializationStore()->deleteMaterialization(newMatId);
+                    continue;
+                }
+                pasteTime += entry.durationSeconds; // chain placements sequentially
+            }
+
+            refreshRenderModel();
+            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        }
+        return true;
+    }
+
+    // DuplicateClip — Ctrl+D
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::DuplicateClip, key))
+    {
+        if (selectedPlacementId_ != 0 && selectedTrack_ >= 0)
+        {
+            StandaloneArrangement::Placement placement;
+            if (getStandalonePlacementById(processor_, selectedTrack_, selectedPlacementId_, placement))
+            {
+                uint64_t newMatId = processor_.copyMaterializationRange(
+                    placement.materializationId, placement.clipInSeconds, placement.durationSeconds);
+                if (newMatId != 0)
+                {
+                    auto* arr = processor_.getStandaloneArrangement();
+                    if (arr)
+                    {
+                        StandaloneArrangement::Placement dup;
+                        dup.placementId = 0;
+                        dup.materializationId = newMatId;
+                        dup.mappingRevision = 1;
+                        dup.timelineStartSeconds = placement.timelineEndSeconds() + 0.1;
+                        dup.durationSeconds = placement.durationSeconds;
+                        dup.gain = placement.gain;
+                        dup.fadeInDuration = placement.fadeInDuration;
+                        dup.fadeOutDuration = placement.fadeOutDuration;
+                        dup.name = placement.name;
+                        dup.colour = placement.colour;
+                        dup.clipInSeconds = 0.0;
+
+                        const int count = arr->getNumPlacements(selectedTrack_);
+                        if (!arr->insertPlacement(selectedTrack_, count, dup)) {
+                            // Rollback — delete the orphan materialization
+                            processor_.getMaterializationStore()->deleteMaterialization(newMatId);
+                            return true;
+                        }
+
+                        refreshRenderModel();
+                        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::SplitClip, key))
     {
         if (selectedTrack_ < 0 || selectedTrack_ >= OpenTuneAudioProcessor::MAX_TRACKS)
             return true;
 
-        if (selectedPlacementIndex_ < 0 || selectedPlacementIndex_ >= getStandalonePlacementCount(processor_, selectedTrack_))
-            return true;
-
         double splitSeconds = processor_.getPosition();
-        auto splitOutcome = processor_.splitPlacementAtSeconds(selectedTrack_, selectedPlacementIndex_, splitSeconds);
-        if (splitOutcome.has_value())
-        {
-            processor_.getUndoManager().addAction(
-                std::make_unique<SplitPlacementAction>(processor_, *splitOutcome));
+        bool anySplit = false;
 
-            const int newPlacementIndex = getStandaloneSelectedPlacementIndex(processor_, selectedTrack_);
-            selectedPlacementIndex_ = newPlacementIndex;
+        // Copy selected placements to a vector to avoid iterator invalidation during split
+        std::vector<std::pair<int, uint64_t>> toSplit;
+        for (const auto& sel : selectedPlacements_)
+            toSplit.emplace_back(sel.trackId, sel.placementId);
+
+        for (const auto& [trackId, placementId] : toSplit)
+        {
+            int idx = processor_.findPlacementIndexById(trackId, placementId);
+            if (idx < 0) continue;
+
+            StandaloneArrangement::Placement placement;
+            if (!getStandalonePlacementById(processor_, trackId, placementId, placement)) continue;
+
+            // Only split if playhead is within this placement's timeline range
+            double start = placement.timelineStartSeconds;
+            double end = placement.timelineEndSeconds();
+            if (splitSeconds <= start || splitSeconds >= end) continue;
+
+            auto splitOutcome = processor_.splitPlacementAtSeconds(trackId, idx, splitSeconds);
+            if (splitOutcome.has_value())
+            {
+                processor_.getUndoManager().addAction(
+                    std::make_unique<SplitPlacementAction>(processor_, *splitOutcome));
+                anySplit = true;
+            }
+        }
+
+        if (anySplit)
+        {
+            // Refresh selection state after splits
+            selectedTrack_ = processor_.getStandaloneArrangement()
+                ? processor_.getStandaloneArrangement()->getActiveTrackId()
+                : selectedTrack_;
+            selectedPlacementIndex_ = getStandaloneSelectedPlacementIndex(processor_, selectedTrack_);
             if (selectedPlacementIndex_ >= 0 && selectedPlacementIndex_ < getStandalonePlacementCount(processor_, selectedTrack_)) {
                 selectedPlacementId_ = processor_.getPlacementId(selectedTrack_, selectedPlacementIndex_);
             } else {
@@ -1797,7 +2231,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    if (key.getTextCharacter() == 'm' || key.getTextCharacter() == 'M')
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::MergeClips, key))
     {
         if (selectedTrack_ < 0 || selectedTrack_ >= OpenTuneAudioProcessor::MAX_TRACKS)
             return true;
@@ -1835,17 +2269,30 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Delete, key))
     {
-        if (selectedTrack_ < 0 || selectedTrack_ >= OpenTuneAudioProcessor::MAX_TRACKS)
-            return true;
+        bool anyDeleted = false;
 
-        if (selectedPlacementIndex_ < 0 || selectedPlacementIndex_ >= getStandalonePlacementCount(processor_, selectedTrack_))
-            return true;
+        // Copy to avoid iterator invalidation
+        std::vector<std::pair<int, uint64_t>> toDelete;
+        for (const auto& sel : selectedPlacements_)
+            toDelete.emplace_back(sel.trackId, sel.placementId);
 
-        auto deleteOutcome = processor_.deletePlacement(selectedTrack_, selectedPlacementIndex_);
-        if (deleteOutcome.has_value()) {
-            processor_.getUndoManager().addAction(
-                std::make_unique<DeletePlacementAction>(processor_, *deleteOutcome));
+        for (const auto& [trackId, placementId] : toDelete)
+        {
+            int idx = processor_.findPlacementIndexById(trackId, placementId);
+            if (idx < 0) continue;
 
+            auto deleteOutcome = processor_.deletePlacement(trackId, idx);
+            if (deleteOutcome.has_value())
+            {
+                processor_.getUndoManager().addAction(
+                    std::make_unique<DeletePlacementAction>(processor_, *deleteOutcome));
+                anyDeleted = true;
+            }
+        }
+
+        if (anyDeleted)
+        {
+            clearPlacementSelection();
             selectedPlacementIndex_ = getStandaloneSelectedPlacementIndex(processor_, selectedTrack_);
             if (selectedPlacementIndex_ >= 0 && selectedPlacementIndex_ < getStandalonePlacementCount(processor_, selectedTrack_)) {
                 selectedPlacementId_ = processor_.getPlacementId(selectedTrack_, selectedPlacementIndex_);
@@ -1858,6 +2305,61 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             refreshRenderModel();
             FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         }
+        return true;
+    }
+
+    // Nudge Left — move selected placements earlier by 10ms
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::NudgeLeft, key))
+    {
+        const double nudgeAmount = -0.01;
+        auto* arr = processor_.getStandaloneArrangement();
+        if (!arr) return true;
+
+        for (const auto& sel : selectedPlacements_)
+        {
+            StandaloneArrangement::Placement placement;
+            if (arr->getPlacementById(sel.trackId, sel.placementId, placement))
+            {
+                double newStart = placement.timelineStartSeconds + nudgeAmount;
+                if (newStart < 0.0) newStart = 0.0;
+                arr->setPlacementTimelineStartSeconds(sel.trackId, sel.placementId, newStart);
+            }
+        }
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        return true;
+    }
+
+    // Nudge Right — move selected placements later by 10ms
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::NudgeRight, key))
+    {
+        const double nudgeAmount = 0.01;
+        auto* arr = processor_.getStandaloneArrangement();
+        if (!arr) return true;
+
+        for (const auto& sel : selectedPlacements_)
+        {
+            StandaloneArrangement::Placement placement;
+            if (arr->getPlacementById(sel.trackId, sel.placementId, placement))
+            {
+                double newStart = placement.timelineStartSeconds + nudgeAmount;
+                if (newStart < 0.0) newStart = 0.0;
+                arr->setPlacementTimelineStartSeconds(sel.trackId, sel.placementId, newStart);
+            }
+        }
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        return true;
+    }
+
+    // ToggleSnap — Ctrl+Shift+S
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::ToggleSnap, key))
+    {
+        auto snap = processor_.getSnapSettings();
+        snap.enabled = !snap.enabled;
+        if (!snap.enabled) snap.mode = SnapSettings::Mode::Off;
+        // Note: full snap settings write-back needs AppPreferences wire-up (Fix 3 in other task)
+        // Without it, the toggle only affects the local copy within this handler.
         return true;
     }
 

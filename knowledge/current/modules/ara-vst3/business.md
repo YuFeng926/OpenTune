@@ -316,11 +316,11 @@ sequenceDiagram
 1. **preferred region 不存在或 audioSource 为空** → 清 PianoRoll + markSnapshotConsumed + return
 2. **appliedProjection 未 valid / materializationId==0** → 清 PianoRoll + markConsumed
 3. **全部 revision 未变 + range 未变 + playbackStart 未变 + appliedRegion 未变** → 无操作 return
-4. **MaterializationStore 中 matId 对应的 audio buffer 已消失** → `clearPlaybackRegionMaterialization` + 清 PianoRoll
+4. **MaterializationStore 中 matId 对应的 audio buffer 暂不可见** → editor 保持只读/pending 状态，不清 session binding
 5. **仅 appliedRegion 漂移（identity 变了但数据一致）** → 重新 bind（不重渲染）
 6. **仅 playbackStart 变（mapping-only）** → bind 更新，log `"MappingTrace"`，不重渲染
 7. **diff.changed==false && sourceRange 未变** → 仅 update revisions 或重 bind（按 appliedRegionChanged 分）
-8. **sourceRange 变** → `replaceMaterializationWithNewLineage`（新 lineage，旧 materialization 被 erase）
+8. **sourceRange 变** → session upsert persistentId-owned pending birth；stale worker result 在 commit 前丢弃
 9. **同 lineage 音频内容变** → `replaceMaterializationAudioById`（不变 sourceWindow）
 10. 任一第 8/9 分支后：`enqueueMaterializationPartialRenderById(matId, changedStart, changedEnd)` + `requestMaterializationRefresh`（带 `preserveCorrectionsOutsideChangedRange=true`）+ 重新 bind
 
@@ -363,17 +363,17 @@ User → transportBar → playRequested/pauseRequested/stopRequested
 
 | 线程 | 可以做的 | 禁止的 |
 |------|----------|-------|
-| Host Message Thread（Editing callbacks） | 持 `stateMutex_` 读写 sources/regions/preferredRegion、publish snapshot、enqueue hydration | 阻塞调用（会阻住 host UI） |
-| `hydrationWorkerThread_` | 持 `stateMutex_` 做 snapshot commit 与 auto-birth worklist 收集；锁外执行 `readAudioSamples` 与 `processor->ensureAraRegionMaterialization` | 不得长时间持锁做 I/O（用 `retiringReaderLease` + `cancelRead` 协调） |
+| Host Message Thread（Editing callbacks） | 持 `stateMutex_` 读写 sources/regions/preferredRegion、publish snapshot、upsert persistentId-owned birth | 阻塞调用（会阻住 host UI） |
+| `birthWorkerThread_` | 消费 worker-ready persistentId，锁外执行 birth request，commit 前验证 pending revision/window | 不得长时间持锁做 I/O；不得提交 stale worker result |
 | Host RT Thread（processBlock） | `atomic_load` snapshot、读取 `shared_ptr<const>` 字段、调用 `processor->readPlaybackAudio`（内部必须 RT-safe） | 加锁、分配内存、日志（除 `mappingLogCounter < 24` 的有界日志）、调用 session mutation 方法 |
-| Editor Message Thread（Timer） | `atomic_load` snapshot、读 processor 状态、调 session 的 `bindPlaybackRegionToMaterialization`、调 processor 的 replace/refresh | 持 session 锁时调 PianoRoll（会引发 UI 重排） |
-| JUCE GUI Thread（listeners） | 调 session 的 `clearPlaybackRegionMaterialization` / `bindPlaybackRegionToMaterialization` | 同上 |
+| Editor Message Thread（Timer） | `atomic_load` snapshot、读 processor 状态、调 session 的 `bindPlaybackRegionToMaterialization`、调 processor 的 replace/refresh | 持 session 锁时调 PianoRoll（会引发 UI 重排）；payload 暂缺时不得清 binding |
+| JUCE GUI Thread（listeners） | 调 session 的 `bindPlaybackRegionToMaterialization` / revision update | destructive clear binding |
 
 ### 关键同步点
 
 1. **`publishedSnapshot_` 是 RT 与非 RT 间唯一共享状态**：靠 `atomic_load/store<shared_ptr>` 保证，无锁。
-2. **`processor_` 是 hydration worker 与主线程间共享**：`std::atomic<OpenTuneAudioProcessor*>`，DC 析构时先 `store(nullptr, release)` 再等 worker join。
-3. **`leaseGeneration` 防 stale commit**：即使 worker 正在读旧 lease 的数据，commit 时发现 `leaseGeneration` 已变会直接丢弃。
+2. **`processor_` 是 birth worker 与主线程间共享**：`std::atomic<OpenTuneAudioProcessor*>`，DC 析构时先 `store(nullptr, release)` 再等 worker join。
+3. **pending revision/window 防 stale commit**：即使 worker 正在处理旧 birth，commit 时发现 `PendingBirth.revision` 或 desired window 已变会直接丢弃。
 4. **`editingDepth_` 支持 nested**：理论上支持 ARA 嵌套事务，但当前实现只做计数不做栈。
 
 ---
@@ -385,9 +385,9 @@ User → transportBar → playRequested/pauseRequested/stopRequested
 | `readAudioSamples` 返回 false | 宿主 reader 出错 | `readSuccess=false` → 不 commit；session 保持 previous state；下次 `doUpdateAudioSourceContent` 或 `didEnableAudioSourceSamplesAccess(true)` 会重新入队 |
 | Projection 非 isometric | 时间映射异常 | Renderer skip region + `jassertfalse`（Debug 中断，Release 静默） |
 | `snapshot->publishedRegions` 为空 | session 尚未发布或全部 region 无效 | Renderer 输出静音 |
-| auto-birth 返回 materializationId==0 | processor 拒绝创建 | 不更新 appliedProjection；region 保持 Unbound，下次 Editor 心跳会通过 `syncImportedAraClipIfNeeded` 再次尝试（或主动 import） |
+| auto-birth 返回 materializationId==0 | processor 拒绝创建 | 不更新 appliedProjection；pending birth 保留/后续由新 callback 或 ready-source requeue 驱动 |
 | DC 析构时 worker 仍在运行 | 插件卸载 | `~VST3AraSession` 加锁设 running=false + 所有 source cancelRead + notify_all + join；DC 在析构 session_ 之前先 `setProcessor(nullptr)` 避免 worker 回调到已销毁 processor |
-| ARA persistency 读写 | restore/store | 当前实现直接 `return true`，不做任何事 — 所有编辑结果在 DAW 重新打开工程时会重新从 host 拷贝 source 并重新分析（F0 / render） |
+| ARA persistency / processor state restore | restore/store | AudioModification persistentId binding 与 metadata-only pre-bind restore 已有自动化覆盖；REAPER 手工 reload 未由本次 Codex 执行，不能写成 PASS |
 
 ---
 
@@ -399,7 +399,7 @@ User → transportBar → playRequested/pauseRequested/stopRequested
 | 裁剪 clip | UI 拖动 clip 边界 → 直接改 StandaloneArrangement | host 改 `playbackRegion` 边界 → `didUpdatePlaybackRegionProperties` → projectionRevision bump → Editor `syncImportedAraClipIfNeeded` 检测 sourceRange 变 → `replaceMaterializationWithNewLineage` |
 | 播放控制 | 内部 transport | DC 转发 host PlaybackController |
 | BPM / 拍号 | UI 改 → processor 同步 | host 改 → `didUpdateMusicalContextProperties`（当前未回写；Editor 单向读 processor BPM） |
-| 工程保存 | OpenTune 自己的工程文件 | host DAW 的 session file（ARA persistency 待实现） |
+| 工程保存 | OpenTune 自己的工程文件 | host DAW 的 session file + OpenTune processor state；binding/pre-bind restore 自动化覆盖，宿主手工 reload 需单独执行才可宣称 PASS |
 | 多轨 | `StandaloneArrangement` 多 clip | session preferred region 一次只聚焦一条；UI 不显示 arrangement |
 
 ---
@@ -407,7 +407,7 @@ User → transportBar → playRequested/pauseRequested/stopRequested
 ## ⚠️ 待确认
 
 ### 一、生命周期
-1. **ARA persistency 未实现**：`doRestoreObjectsFromStream / doStoreObjectsToStream` 返回 true 且 ignore 输入/输出。用户在 DAW 重新打开工程时，OpenTune 的所有编辑（pitch curve、correction 参数）会丢失 — 是否计划在 v1.3 后续迭代补齐？
+1. **ARA host reload 手工证据未由本次执行**：binding/pre-bind restore 已有自动化覆盖，但 REAPER project reload L5 只有手工执行后才能宣称 PASS。
 2. **MusicalContext 回写方向**：host BPM 改变只触发 `didUpdateMusicalContextProperties`（当前只 log），Editor 心跳读的是 processor 的 BPM 而不是 MusicalContext — 需要确认业务是否依赖 host BPM 实时进入 processor。
 
 ### 二、Hydration 与版本

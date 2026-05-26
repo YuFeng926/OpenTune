@@ -489,6 +489,56 @@ bool StandaloneArrangement::setPlacementGain(int trackId, uint64_t placementId, 
     return true;
 }
 
+bool StandaloneArrangement::setPlacementTrim(int trackId, uint64_t placementId, double clipInSeconds, double durationSeconds)
+{
+    const juce::ScopedWriteLock lock(stateLock_);
+    if (!isValidTrackId(trackId)) return false;
+    const auto index = findPlacementIndexUnlocked(trackId, placementId);
+    if (index < 0) return false;
+
+    auto& placement = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)];
+    if (clipInSeconds < 0.0) clipInSeconds = 0.0;
+    if (durationSeconds < 0.01) durationSeconds = 0.01;
+
+    placement.clipInSeconds = clipInSeconds;
+    placement.durationSeconds = durationSeconds;
+
+    // Re-clamp fade durations after trim — existing fades may exceed 90% of new duration
+    {
+        const double maxFade = placement.durationSeconds * 0.9;
+        if (placement.fadeInDuration > maxFade) placement.fadeInDuration = maxFade;
+        if (placement.fadeOutDuration > maxFade) placement.fadeOutDuration = maxFade;
+    }
+
+    ++placement.mappingRevision;
+    publishPlaybackSnapshotLocked();
+    return true;
+}
+
+bool StandaloneArrangement::setPlacementFade(int trackId, uint64_t placementId, double fadeInDuration, double fadeOutDuration)
+{
+    const juce::ScopedWriteLock lock(stateLock_);
+    if (!isValidTrackId(trackId)) return false;
+    const auto index = findPlacementIndexUnlocked(trackId, placementId);
+    if (index < 0) return false;
+
+    auto& placement = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)];
+    if (fadeInDuration < 0.0) fadeInDuration = 0.0;
+    if (fadeOutDuration < 0.0) fadeOutDuration = 0.0;
+    const double maxFade = placement.durationSeconds * 0.9;
+    if (fadeInDuration > maxFade) fadeInDuration = maxFade;
+    if (fadeOutDuration > maxFade) fadeOutDuration = maxFade;
+
+    if (placement.fadeInDuration == fadeInDuration && placement.fadeOutDuration == fadeOutDuration)
+        return true; // Idempotent: values unchanged, but operation succeeded
+
+    placement.fadeInDuration = fadeInDuration;
+    placement.fadeOutDuration = fadeOutDuration;
+    ++placement.mappingRevision;
+    publishPlaybackSnapshotLocked();
+    return true;
+}
+
 bool StandaloneArrangement::isValidTrackId(int trackId) noexcept
 {
     return trackId >= 0 && trackId < kTrackCount;

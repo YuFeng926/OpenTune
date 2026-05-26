@@ -23,6 +23,8 @@ constexpr const char* kSharedRenderingPriorityKey = "shared.rendering.priority";
 constexpr const char* kSharedVocoderWeightKey = "shared.rendering.vocoderWeight";
 constexpr const char* kSharedExperimentalReferenceAlignKey = "shared.align.experimental";
 constexpr const char* kSharedRecentProjectsKey = "shared.recentProjects";
+constexpr const char* kSharedSnapEnabledKey = "shared.snap.enabled";
+constexpr const char* kSharedSnapModeKey = "shared.snap.mode";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
     "standalone.shortcuts.playPause",
@@ -35,6 +37,12 @@ constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::Shortcu
     "standalone.shortcuts.paste",
     "standalone.shortcuts.selectAll",
     "standalone.shortcuts.delete",
+    "standalone.shortcuts.splitClip",
+    "standalone.shortcuts.mergeClips",
+    "standalone.shortcuts.duplicateClip",
+    "standalone.shortcuts.nudgeLeft",
+    "standalone.shortcuts.nudgeRight",
+    "standalone.shortcuts.toggleSnap",
 }};
 
 juce::File resolveSettingsDirectory(const AppPreferences::StorageOptions& storageOptions)
@@ -289,6 +297,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.experimentalReferenceAlignMode = fromExperimentalRefAlignModeToken(
         properties.getValue(kSharedExperimentalReferenceAlignKey,
                             toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode)));
+    state.shared.snap.enabled = properties.getBoolValue(kSharedSnapEnabledKey, false);
+    state.shared.snap.mode = static_cast<SnapSettings::Mode>(
+        properties.getIntValue(kSharedSnapModeKey, static_cast<int>(SnapSettings::Mode::Off)));
 
     state.standalone.shortcuts = decodeShortcutSettings(properties);
     state.standalone.mouseTrailTheme = mouseTrailThemeFromToken(
@@ -327,6 +338,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         toVocoderWeightToken(state.shared.vocoderModelWeight));
     properties.setValue(kSharedExperimentalReferenceAlignKey,
                         toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode));
+    properties.setValue(kSharedSnapEnabledKey, state.shared.snap.enabled);
+    properties.setValue(kSharedSnapModeKey, static_cast<int>(state.shared.snap.mode));
     properties.setValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme));
 
     juce::StringArray recentPaths;
@@ -472,6 +485,19 @@ void AppPreferences::setMouseTrailTheme(MouseTrailConfig::TrailTheme theme)
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.standalone.mouseTrailTheme = theme;
     saveLocked();
+}
+
+void AppPreferences::setSnapSettings(const SnapSettings& snap)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.snap = snap;
+    saveLocked();
+}
+
+SnapSettings AppPreferences::getSnapSettings() const
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return state_.shared.snap;
 }
 
 void AppPreferences::initialiseStorage()
