@@ -50,8 +50,12 @@ public:
         int64_t projectionDurationMs = 0;
         uint64_t placementProjectionRevision = 0;
 
-        /** Zoom quantised to 1 % buckets so tiny scroll-wheel deltas skip rebuild. */
+        /** Horizontal zoom quantised to 1 % buckets. */
         int zoomBucket = 0;
+
+        /** Vertical pitch-lane geometry; keys, lanes, notes, and F0 y positions depend on it. */
+        int verticalZoomBucket = 0;
+        int verticalScrollBucket = 0;
 
         /** Incremented when component is resized (viewport width/height change). */
         uint64_t viewportSizeRevision = 0;
@@ -68,6 +72,8 @@ public:
                 && projectionDurationMs == o.projectionDurationMs
                 && placementProjectionRevision == o.placementProjectionRevision
                 && zoomBucket == o.zoomBucket
+                && verticalZoomBucket == o.verticalZoomBucket
+                && verticalScrollBucket == o.verticalScrollBucket
                 && viewportSizeRevision == o.viewportSizeRevision;
         }
         bool operator!=(const Key& o) const noexcept { return !(*this == o); }

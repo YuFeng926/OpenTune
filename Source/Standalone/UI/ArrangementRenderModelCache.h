@@ -48,6 +48,7 @@ public:
         int trackId = 0;
         double fadeInDuration = 0.0;
         double fadeOutDuration = 0.0;
+        bool isPreview = false;
     };
 
     struct RenderModel {
@@ -68,6 +69,19 @@ public:
         int64_t generation = 0;
     };
 
+    struct MoveDragPreviewPlacement {
+        int sourceTrackId = -1;
+        int previewTrackId = -1;
+        uint64_t placementId = 0;
+        double previewStartSeconds = 0.0;
+    };
+
+    struct MoveDragPreviewState {
+        bool active = false;
+        uint64_t revision = 0;
+        std::vector<MoveDragPreviewPlacement> placements;
+    };
+
     /** Single-entry cache — memory is inherently bounded to one RenderModel. */
     static constexpr std::size_t kMaxEntries = 1;
 
@@ -85,6 +99,7 @@ public:
         bool mouseOverReferenceButton = false;
         uint64_t arrangementRevision = 0;
         uint64_t snapshotRevision = 0;
+        uint64_t previewRevision = 0;
 
         bool operator==(const Key& other) const noexcept
         {
@@ -100,7 +115,8 @@ public:
                 && hoveredPlacementId == other.hoveredPlacementId
                 && mouseOverReferenceButton == other.mouseOverReferenceButton
                 && arrangementRevision == other.arrangementRevision
-                && snapshotRevision == other.snapshotRevision;
+                && snapshotRevision == other.snapshotRevision
+                && previewRevision == other.previewRevision;
         }
 
         bool operator!=(const Key& other) const noexcept { return !(*this == other); }
@@ -125,9 +141,12 @@ public:
                               WaveformTileCache& tileCache,
                               WaveformMipmapCache& mipmapCache,
                               int trackHeight,
+                              const MoveDragPreviewState& movePreview = {},
                               bool forceRebuild = false);
 
     const RenderModel& getModel() const noexcept { return model_; }
+
+    static juce::Rectangle<int> computeWaveformDrawableBounds(juce::Rectangle<int> placementBounds) noexcept;
 
     void invalidate() { needsRebuild_ = true; }
     void clear() { model_.placements.clear(); needsRebuild_ = true; }
@@ -139,7 +158,8 @@ private:
                        int selectedPlacementIndex,
                        uint64_t hoveredPlacementId,
                        bool mouseOverReferenceButton,
-                       int trackHeight);
+                       int trackHeight,
+                       const MoveDragPreviewState& movePreview);
 
     RenderModel model_;
     Key currentKey_;

@@ -156,6 +156,9 @@ private:
     /** Request render model rebuild from current state. */
     void requestRenderModelUpdate();
     void refreshRenderModel();
+    int trackIdForViewportY(int y) const noexcept;
+    void updateMoveDragPreview(const juce::MouseEvent& e);
+    void clearMoveDragPreview();
 
     OpenTuneAudioProcessor& processor_;
     juce::ListenerList<Listener> listeners_;
@@ -240,6 +243,8 @@ private:
         double startSeconds;
     };
     std::vector<DragStartState> multiDragStartStates_;
+    ArrangementRenderModelCache::MoveDragPreviewState moveDragPreview_;
+    uint64_t nextMoveDragPreviewRevision_{ 1 };
 
     bool isDraggingPlacement_{false};
     bool isAdjustingGain_{false};

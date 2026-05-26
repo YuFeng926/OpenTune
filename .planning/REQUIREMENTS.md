@@ -120,4 +120,24 @@
 | `.planning/plans/2026-05-26-vst3-ara-multi-item-birth-and-editor-reopen-test-verification.md` | Verification contract for the ARA multi-item birth and editor-reopen lifecycle fix |
 
 ---
-*Last updated: 2026-05-27 after closing MAIN-35..MAIN-39 automated contract and preserving Reaper L5 as an external host-validation gap*
+## 2026-05-27 Requirement Addendum: Standalone Arrangement Visual Contracts
+
+### Active
+
+- [ ] **MAIN-40**: Standalone Arrangement clip waveform drawing must preserve a positive drawable waveform bounds when
+  a visible placement has positive width, including at the minimum horizontal zoom. The fix must address the bounds/tile
+  contract, not hide the problem by raising the minimum zoom or only changing waveform alpha/color.
+- [ ] **MAIN-41**: Standalone Arrangement cross-track move drag must expose a target-track clip preview before
+  `mouseUp()`, while real placement time/track truth remains unchanged until the final release commit. Preview state must
+  remain UI-only render-model state and must not enter `StandaloneArrangement`, `OpenTuneAudioProcessor`, undo history,
+  project serialization, VST3/ARA state, or audio-thread snapshots.
+
+### Traceability Addendum
+
+| Source | Responsibility |
+|--------|----------------|
+| `.planning/plans/2026-05-27-arrangement-min-zoom-waveform-and-cross-track-drag-preview.md` | Standalone Arrangement visual contract plan for min-zoom waveform visibility and target-track drag preview |
+| `.planning/plans/2026-05-27-arrangement-min-zoom-waveform-and-cross-track-drag-preview-test-verification.md` | Verification contract for Arrangement waveform bounds, UI-only move preview, focused tests, and manual smoke |
+
+---
+*Last updated: 2026-05-27 after adding MAIN-40..MAIN-41 Arrangement visual contracts*

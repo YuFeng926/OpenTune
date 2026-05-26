@@ -57,6 +57,11 @@ int64_t secondsToMs(double seconds) noexcept
     return static_cast<int64_t>(std::llround(seconds * 1000.0));
 }
 
+int quantizeGeometryPx(float value) noexcept
+{
+    return static_cast<int>(std::lround(value * 1000.0f));
+}
+
 uint64_t hashCombine(uint64_t seed, uint64_t value) noexcept
 {
     return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
@@ -1223,10 +1228,10 @@ void PianoRollComponent::paint(juce::Graphics& g) {
                     continue;
 
                 if (showOriginalF0_ && !item.originalF0VisualSegments.empty())
-                    renderer_->drawPreparedF0Curve(g, item.originalF0VisualSegments, UIColors::originalF0, 0.62f, true, ctx);
+                    renderer_->drawPreparedF0Curve(g, item.originalF0VisualSegments, UIColors::originalF0, 0.78f, true, ctx);
 
                 if (showCorrectedF0_ && !item.correctedF0VisualSegments.empty())
-                    renderer_->drawPreparedF0Curve(g, item.correctedF0VisualSegments, UIColors::correctedF0, 0.94f, false, ctx);
+                    renderer_->drawPreparedF0Curve(g, item.correctedF0VisualSegments, UIColors::correctedF0, 1.0f, false, ctx);
 
                 if (item.active) {
                     drawNoteDragCurvePreview(g);
@@ -2361,8 +2366,7 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
         float newScrollY = dragStartVerticalScrollOffset_ - (float)deltaY;
         float maxScroll = getTotalHeight() - getHeight();
         verticalScrollOffset_ = juce::jlimit(0.0f, std::max(0.0f, maxScroll), newScrollY);
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                         PianoRollVisualInvalidationPriority::Interactive);
+        refreshVerticalViewportGeometry();
         return;
     }
 
@@ -2433,9 +2437,7 @@ void PianoRollComponent::handleVerticalZoomWheel(const juce::MouseEvent& e, floa
     } else {
         verticalScrollOffset_ = 0.0f;
     }
-    updateScrollBars();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    refreshVerticalViewportGeometry();
 }
 
 void PianoRollComponent::handleHorizontalScrollWheel(float deltaX, float deltaY) {
@@ -2458,9 +2460,7 @@ void PianoRollComponent::handleVerticalScrollWheel(float deltaY) {
     } else {
         verticalScrollOffset_ = 0.0f;
     }
-    updateScrollBars();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    refreshVerticalViewportGeometry();
 }
 
 void PianoRollComponent::handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY) {
@@ -2687,6 +2687,10 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext(double v
         ? PianoRollRenderer::RenderContext::TimeUnit::Bars
         : PianoRollRenderer::RenderContext::TimeUnit::Seconds;
 
+    const float snapshotPixelsPerSemitone = pixelsPerSemitone_;
+    const float snapshotVerticalScrollOffset = verticalScrollOffset_;
+    const float snapshotMaxMidi = maxMidi_;
+
     ctx.materializations.reserve(timelineMaterializationPlacements_.size());
     for (const auto& placement : timelineMaterializationPlacements_)
         if (placement.isValid())
@@ -2696,9 +2700,22 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext(double v
                                                                          viewportStartX,
                                                                          viewportEndX));
 
-    ctx.midiToY = [this](float midi) { return midiToY(midi); };
-    ctx.freqToY = [this](float freq) { return freqToY(freq); };
-    ctx.freqToMidi = [this](float freq) { return freqToMidi(freq); };
+    ctx.midiToY = [snapshotPixelsPerSemitone, snapshotVerticalScrollOffset, snapshotMaxMidi](float midi) {
+        return (snapshotMaxMidi - midi) * snapshotPixelsPerSemitone - snapshotVerticalScrollOffset;
+    };
+    ctx.freqToY = [snapshotPixelsPerSemitone, snapshotVerticalScrollOffset, snapshotMaxMidi](float freq) {
+        if (freq <= 0.0f) {
+            return (snapshotMaxMidi * snapshotPixelsPerSemitone) - snapshotVerticalScrollOffset;
+        }
+        const float midi = 12.0f * std::log2(freq / 440.0f) + 69.0f - 0.5f;
+        return (snapshotMaxMidi - midi) * snapshotPixelsPerSemitone - snapshotVerticalScrollOffset;
+    };
+    ctx.freqToMidi = [](float freq) {
+        if (freq <= 0.0f) {
+            return 0.0f;
+        }
+        return 12.0f * std::log2(freq / 440.0f) + 69.0f - 0.5f;
+    };
     ctx.xToTime = [this](int x) { return xToTime(x); };
     ctx.timeToX = [this](double seconds) { return timeToX(seconds); };
 
@@ -2761,12 +2778,21 @@ void PianoRollComponent::prepareVisibleRenderModel() const {
     cacheKey.projectionDurationMs = secondsToMs(projection.timelineDurationSeconds);
     cacheKey.placementProjectionRevision = placementRevision;
     cacheKey.zoomBucket = static_cast<int>(zoomLevel_ * 100.0 + 0.5);
+    cacheKey.verticalZoomBucket = quantizeGeometryPx(pixelsPerSemitone_);
+    cacheKey.verticalScrollBucket = quantizeGeometryPx(verticalScrollOffset_);
     cacheKey.viewportSizeRevision = viewportSizeRevision_;
     if (!renderModelCache_.isValid() || renderModelCache_.getCurrentKey() != cacheKey) {
         auto ctx = buildRenderContext(visibleTimeStart, visibleTimeEnd, viewportStartX, viewportEndX);
         renderModelCache_.rebuild(cacheKey, std::move(ctx));
         FrameScheduler::instance().recordRenderModelRebuild(FrameScheduler::TimelineReason::ContentModelInvalid);
     }
+}
+
+void PianoRollComponent::refreshVerticalViewportGeometry(PianoRollVisualInvalidationPriority priority)
+{
+    updateScrollBars();
+    prepareVisibleRenderModel();
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport), priority);
 }
 
 void PianoRollComponent::setScale(int rootNote, int scaleType)
@@ -2794,6 +2820,7 @@ void PianoRollComponent::fitToScreen() {
         
         // Reset scroll to show top
         verticalScrollOffset_ = 0; 
+        refreshVerticalViewportGeometry();
     }
 
     // 2. Horizontal Fit:
@@ -2830,7 +2857,7 @@ void PianoRollComponent::fitToScreen() {
     } else {
         setScrollOffset(0);
     }
-    
+
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
                      PianoRollVisualInvalidationPriority::Interactive);
 }
@@ -3131,7 +3158,7 @@ void PianoRollComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRa
         userScrollHold_ = true;
     } else if (scrollBar == &verticalScrollBar_) {
         verticalScrollOffset_ = static_cast<float>(newRangeStart);
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport));
+        refreshVerticalViewportGeometry(PianoRollVisualInvalidationPriority::Normal);
     }
 }
 
