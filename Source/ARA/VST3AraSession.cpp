@@ -141,11 +141,11 @@ VST3AraSession::~VST3AraSession()
         const std::lock_guard<std::mutex> lock(stateMutex_);
         birthWorkerRunning_ = false;
         materializationBirthQueue_.clear();
+        pendingBirths_.clear();
         for (auto& [audioSource, sourceSlot] : sources_)
         {
             juce::ignoreUnused(audioSource);
             sourceSlot.cancelRead = true;
-            sourceSlot.queuedForMaterializationBirth = false;
         }
     }
 
@@ -266,8 +266,9 @@ void VST3AraSession::didUpdatePlaybackRegionProperties(juce::ARAPlaybackRegion* 
     const bool preferredChanged = preferredRegion_ != identity;
     updatePreferredRegionLocked(identity);
 
-    if (projectionChanged || bindingChanged)
-        enqueueMaterializationBirthLocked(identity.audioSource);
+    if (regionNeedsMaterializationBirthLocked(regionSlot))
+        upsertPendingBirthLocked(regionSlot.audioModificationPersistentId,
+                                  regionSlot.sourceWindow, identity.audioSource);
 
     if (projectionChanged || bindingChanged || preferredChanged)
         markSnapshotDirtyLocked();
@@ -308,8 +309,9 @@ void VST3AraSession::didAddPlaybackRegionToAudioModification(
     const bool preferredChanged = preferredRegion_ != regionSlot.identity;
     updatePreferredRegionLocked(regionSlot.identity);
 
-    if (projectionChanged || bindingChanged)
-        enqueueMaterializationBirthLocked(audioSource);
+    if (regionNeedsMaterializationBirthLocked(regionSlot))
+        upsertPendingBirthLocked(regionSlot.audioModificationPersistentId,
+                                  regionSlot.sourceWindow, audioSource);
 
     if (regionSlot.audioModificationPersistentId.isEmpty())
     {
@@ -362,7 +364,14 @@ void VST3AraSession::didUpdateAudioSourceProperties(juce::ARAAudioSource* audioS
         if (sourceSlot.readingFromHost)
             sourceSlot.cancelRead = true;
 
-        enqueueMaterializationBirthLocked(audioSource);
+        for (const auto& [pr, slot] : regions_) {
+            juce::ignoreUnused(pr);
+            if (slot.identity.audioSource == audioSource
+                && regionNeedsMaterializationBirthLocked(slot)) {
+                upsertPendingBirthLocked(slot.audioModificationPersistentId,
+                                          slot.sourceWindow, audioSource);
+            }
+        }
     }
 
     if (metadataChanged)
@@ -388,7 +397,14 @@ void VST3AraSession::doUpdateAudioSourceContent(juce::ARAAudioSource* audioSourc
     clearSourcePayloadLocked(sourceSlot);
     if (sourceSlot.readingFromHost)
         sourceSlot.cancelRead = true;
-    enqueueMaterializationBirthLocked(audioSource);
+    for (const auto& [pr, slot] : regions_) {
+        juce::ignoreUnused(pr);
+        if (slot.identity.audioSource == audioSource
+            && regionNeedsMaterializationBirthLocked(slot)) {
+            upsertPendingBirthLocked(slot.audioModificationPersistentId,
+                                      slot.sourceWindow, audioSource);
+        }
+    }
     markSnapshotDirtyLocked();
 }
 
@@ -439,7 +455,14 @@ void VST3AraSession::didEnableAudioSourceSamplesAccess(juce::ARAAudioSource* aud
         ++sourceSlot.leaseGeneration;
     }
 
-    enqueueMaterializationBirthLocked(audioSource);
+    for (const auto& [pr, slot] : regions_) {
+        juce::ignoreUnused(pr);
+        if (slot.identity.audioSource == audioSource
+            && regionNeedsMaterializationBirthLocked(slot)) {
+            upsertPendingBirthLocked(slot.audioModificationPersistentId,
+                                      slot.sourceWindow, audioSource);
+        }
+    }
 }
 
 void VST3AraSession::willRemovePlaybackRegionFromAudioModification(
@@ -803,116 +826,30 @@ bool VST3AraSession::regionNeedsMaterializationBirthLocked(const RegionSlot& reg
         || !sourceWindowsMatch(binding.sourceWindow, regionSlot.sourceWindow);
 }
 
-void VST3AraSession::enqueueMaterializationBirthLocked(juce::ARAAudioSource* audioSource)
+void VST3AraSession::upsertPendingBirthLocked(const juce::String& persistentId,
+                                               const SourceWindow& desiredWindow,
+                                               juce::ARAAudioSource* audioSource)
 {
+    if (persistentId.isEmpty() || audioSource == nullptr)
+        return;
+
     auto* sourceSlot = findSourceSlot(audioSource);
-    if (audioSource == nullptr || sourceSlot == nullptr || !sourceSlot->sampleAccessEnabled
+    if (sourceSlot == nullptr || !sourceSlot->sampleAccessEnabled
         || sourceSlot->numSamples <= 0 || sourceSlot->numChannels <= 0)
         return;
 
-    const bool hasBirthCandidate = std::any_of(regions_.begin(),
-                                               regions_.end(),
-                                               [this, audioSource](const auto& entry)
-                                               {
-                                                   const auto& regionSlot = entry.second;
-                                                   return regionSlot.identity.audioSource == audioSource
-                                                       && regionNeedsMaterializationBirthLocked(regionSlot);
-                                               });
-    if (!hasBirthCandidate || sourceSlot->queuedForMaterializationBirth)
-        return;
+    auto& pending = pendingBirths_[persistentId];
+    const bool isNew = pending.audioSource == nullptr;
+    const bool windowChanged = !sourceWindowsMatch(pending.desiredWindow, desiredWindow);
 
-    sourceSlot->queuedForMaterializationBirth = true;
-    materializationBirthQueue_.push_back(audioSource);
-    birthCv_.notify_one();
-}
+    pending.audioModificationPersistentId = persistentId;
+    pending.audioSource = audioSource;
+    pending.desiredWindow = desiredWindow;
+    pending.revision = nextBirthRevision_++;
 
-void VST3AraSession::runMaterializationBirthsForSourceLocked(std::unique_lock<std::mutex>& lock,
-                                                             juce::ARAAudioSource* audioSource)
-{
-    auto* sourceSlot = findSourceSlot(audioSource);
-    if (sourceSlot == nullptr || sourceSlot->readerLease == nullptr || !sourceSlot->sampleAccessEnabled)
-        return;
-
-    auto* processor = processor_.load(std::memory_order_acquire);
-    if (processor == nullptr)
-        return;
-
-    struct BirthTarget {
-        OpenTuneAudioProcessor::AraOriginalF0BirthRequest request;
-        RegionIdentity regionIdentity;
-        juce::String persistentId;
-        SourceWindow sourceWindow;
-    };
-
-    std::vector<BirthTarget> worklist;
-    std::set<juce::String> queuedAudioModifications;
-    for (const auto& [playbackRegion, regionSlot] : regions_)
-    {
-        juce::ignoreUnused(playbackRegion);
-
-        if (regionSlot.identity.audioSource != audioSource)
-            continue;
-
-        if (!regionNeedsMaterializationBirthLocked(regionSlot))
-            continue;
-
-        if (regionSlot.audioModificationPersistentId.isEmpty())
-        {
-            AppLogger::error("[ARA] auto-birth skipped: AudioModification persistent ID is missing");
-            continue;
-        }
-
-        if (!queuedAudioModifications.insert(regionSlot.audioModificationPersistentId).second)
-            continue;
-
-        BirthTarget target;
-        target.request.audioSource = regionSlot.identity.audioSource;
-        target.request.sourceId = sourceSlot->sourceId;
-        target.request.readerLease = sourceSlot->readerLease;
-        target.request.numChannels = sourceSlot->numChannels;
-        target.request.numSamples = sourceSlot->numSamples;
-        target.request.sourceSampleRate = sourceSlot->sampleRate;
-        target.request.sourceWindow = regionSlot.sourceWindow;
-        target.request.playbackStartSeconds = regionSlot.playbackStartSeconds;
-        target.regionIdentity = regionSlot.identity;
-        target.sourceWindow = regionSlot.sourceWindow;
-        target.persistentId = regionSlot.audioModificationPersistentId;
-        worklist.push_back(std::move(target));
-    }
-
-    for (auto& target : worklist)
-    {
-        lock.unlock();
-
-        auto birthResult = processor->birthAraMaterializationWithOriginalF0(std::move(target.request));
-
-        lock.lock();
-
-        if (!birthResult.has_value() || birthResult->materializationId == 0)
-            continue;
-
-        auto* updatedRegionSlot = findRegionSlot(target.regionIdentity.playbackRegion);
-        if (updatedRegionSlot == nullptr
-            || updatedRegionSlot->audioModificationPersistentId != target.persistentId
-            || updatedRegionSlot->identity != target.regionIdentity
-            || !sourceWindowsMatch(updatedRegionSlot->sourceWindow, target.sourceWindow)
-            || !regionNeedsMaterializationBirthLocked(*updatedRegionSlot))
-        {
-            if (updatedRegionSlot != nullptr && updatedRegionSlot->identity.audioSource != nullptr)
-                enqueueMaterializationBirthLocked(updatedRegionSlot->identity.audioSource);
-            continue;
-        }
-
-        AraMaterializationBinding binding;
-        binding.audioModificationPersistentId = updatedRegionSlot->audioModificationPersistentId;
-        binding.sourceId = birthResult->sourceId;
-        binding.materializationId = birthResult->materializationId;
-        binding.sourceWindow = updatedRegionSlot->sourceWindow;
-        binding.materializationRevision = birthResult->materializationRevision;
-        binding.materializationDurationSeconds = birthResult->materializationDurationSeconds;
-        upsertMaterializationBindingLocked(binding);
-        applyBindingsToRegionSlotsLocked();
-        markSnapshotDirtyLocked();
+    if (isNew || windowChanged) {
+        materializationBirthQueue_.push_back(persistentId);
+        birthCv_.notify_one();
     }
 }
 
@@ -921,7 +858,6 @@ void VST3AraSession::invalidateSourceReaderLeaseLocked(SourceSlot& sourceSlot) n
     ++sourceSlot.leaseGeneration;
     sourceSlot.sampleAccessEnabled = false;
     sourceSlot.cancelRead = true;
-    sourceSlot.queuedForMaterializationBirth = false;
 
     if (sourceSlot.readingFromHost)
     {
@@ -967,6 +903,7 @@ void VST3AraSession::birthWorkerLoop()
     while (true)
     {
         juce::ARAAudioSource* audioSource = nullptr;
+        juce::String persistentId;
 
         {
             std::unique_lock<std::mutex> lock(stateMutex_);
@@ -980,13 +917,133 @@ void VST3AraSession::birthWorkerLoop()
             if (!birthWorkerRunning_ && materializationBirthQueue_.empty())
                 return;
 
-            audioSource = materializationBirthQueue_.front();
+            persistentId = std::move(materializationBirthQueue_.front());
             materializationBirthQueue_.pop_front();
 
-            if (auto* sourceSlot = findSourceSlot(audioSource))
-                sourceSlot->queuedForMaterializationBirth = false;
+            // 查找 PendingBirth
+            auto pendingIt = pendingBirths_.find(persistentId);
+            if (pendingIt == pendingBirths_.end())
+                continue; // stale entry
 
-            runMaterializationBirthsForSourceLocked(lock, audioSource);
+            PendingBirth pending = pendingIt->second; // 快照
+            const uint64_t revision = pending.revision;
+            audioSource = pending.audioSource;
+
+            auto* sourceSlot = findSourceSlot(audioSource);
+            if (sourceSlot == nullptr || sourceSlot->readerLease == nullptr
+                || !sourceSlot->sampleAccessEnabled)
+            {
+                // Sample access not ready yet — re-queue
+                if (sourceSlot != nullptr && sourceSlot->sampleAccessEnabled
+                    && sourceSlot->numSamples > 0 && sourceSlot->numChannels > 0)
+                {
+                    materializationBirthQueue_.push_back(persistentId);
+                    birthCv_.notify_one();
+                }
+                continue;
+            }
+
+            // 查找有此 persistentId 且需要 birth 的 region
+            RegionSlot* targetRegionSlot = nullptr;
+            for (auto& [pr, slot] : regions_)
+            {
+                juce::ignoreUnused(pr);
+                if (slot.identity.audioSource == audioSource
+                    && slot.audioModificationPersistentId == persistentId
+                    && regionNeedsMaterializationBirthLocked(slot))
+                {
+                    targetRegionSlot = &slot;
+                    break;
+                }
+            }
+
+            if (targetRegionSlot == nullptr)
+            {
+                // 不再需要 birth 了——清理 pending
+                pendingBirths_.erase(persistentId);
+                continue;
+            }
+
+            // 构建 birth request
+            OpenTuneAudioProcessor::AraOriginalF0BirthRequest request;
+            request.audioSource = audioSource;
+            request.sourceId = sourceSlot->sourceId;
+            request.readerLease = sourceSlot->readerLease;
+            request.numChannels = sourceSlot->numChannels;
+            request.numSamples = sourceSlot->numSamples;
+            request.sourceSampleRate = sourceSlot->sampleRate;
+            request.sourceWindow = targetRegionSlot->sourceWindow;
+            request.playbackStartSeconds = targetRegionSlot->playbackStartSeconds;
+
+            auto* processor = processor_.load(std::memory_order_acquire);
+
+            lock.unlock();
+
+            if (processor == nullptr)
+            {
+                lock.lock();
+                pendingBirths_.erase(persistentId);
+                continue;
+            }
+
+            auto birthResult = processor->birthAraMaterializationWithOriginalF0(std::move(request));
+
+            lock.lock();
+
+            // ====== 提交前检查 revision ======
+            auto currentPendingIt = pendingBirths_.find(persistentId);
+
+            // revision 检查：如果 pending 已不存在或 revision 不匹配（被新目标覆盖）→ 丢弃结果
+            if (currentPendingIt == pendingBirths_.end()
+                || currentPendingIt->second.revision != revision)
+            {
+                // stale result — 丢弃
+                continue;
+            }
+
+            // 重新检查 region 是否仍然需要 birth
+            targetRegionSlot = nullptr;
+            for (auto& [pr, slot] : regions_)
+            {
+                juce::ignoreUnused(pr);
+                if (slot.identity.audioSource == audioSource
+                    && slot.audioModificationPersistentId == persistentId)
+                {
+                    targetRegionSlot = &slot;
+                    break;
+                }
+            }
+
+            if (targetRegionSlot == nullptr
+                || !sourceWindowsMatch(targetRegionSlot->sourceWindow,
+                                       currentPendingIt->second.desiredWindow)
+                || !regionNeedsMaterializationBirthLocked(*targetRegionSlot))
+            {
+                pendingBirths_.erase(currentPendingIt);
+                continue;
+            }
+
+            if (!birthResult.has_value() || birthResult->materializationId == 0)
+            {
+                pendingBirths_.erase(currentPendingIt);
+                continue;
+            }
+
+            // 提交 binding
+            AraMaterializationBinding binding;
+            binding.audioModificationPersistentId = persistentId;
+            binding.sourceId = birthResult->sourceId;
+            binding.materializationId = birthResult->materializationId;
+            binding.sourceWindow = targetRegionSlot->sourceWindow;
+            binding.materializationRevision = birthResult->materializationRevision;
+            binding.materializationDurationSeconds = birthResult->materializationDurationSeconds;
+
+            upsertMaterializationBindingLocked(binding);
+            applyBindingsToRegionSlotsLocked();
+            markSnapshotDirtyLocked();
+
+            // 清理 pending（birth 成功）
+            pendingBirths_.erase(currentPendingIt);
 
             if (pendingSnapshotPublication_ && editingDepth_ == 0)
                 publishSnapshotLocked();

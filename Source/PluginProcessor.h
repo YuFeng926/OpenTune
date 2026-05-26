@@ -827,6 +827,13 @@ private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
 
+#if JucePlugin_Enable_ARA
+    // Cached project state for pre-bind restore.
+    // When setStateInformation arrives before didBindToARA, we cache the raw
+    // block and replay it into the final shared stores after attach.
+    juce::MemoryBlock pendingAraState_;
+#endif
+
 public:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessor)
 };

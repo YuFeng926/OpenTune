@@ -93,7 +93,7 @@ DmlInitDiagnostic createOrtDiagnostic(const char* stage, OrtStatus* status, cons
 DmlVocoder::DmlVocoder(const std::string& modelPath,
                        Ort::Env& env,
                        int adapterIndex)
-    : cpuMemoryInfo_(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault))
+    : env_(&env)
 {
     initializeSession(modelPath, env, adapterIndex);
     detectInputOutputNames();
@@ -154,12 +154,60 @@ void DmlVocoder::initializeSession(const std::string& modelPath,
 #endif
 
     AppLogger::info("[DmlVocoder] ONNX session created (DML backend)");
+    outputMemoryInfos_ = session_->GetMemoryInfoForOutputs();
 }
 
 void DmlVocoder::initializeIOBinding() {
     if (!session_ || ioBindingInitialized_) return;
     ioBinding_ = std::make_unique<Ort::IoBinding>(*session_);
     ioBindingInitialized_ = true;
+}
+
+std::vector<float> DmlVocoder::copyBoundOutputToCpu(Ort::Value deviceOutput,
+                                                    size_t expectedAudioLength)
+{
+    if (env_ == nullptr) {
+        throw std::runtime_error("DmlVocoder: ORT env missing for device-to-CPU copy");
+    }
+
+    auto tensorInfo = deviceOutput.GetTensorTypeAndShapeInfo();
+    const auto shape = tensorInfo.GetShape();
+    const auto elementType = tensorInfo.GetElementType();
+    const size_t elementCount = tensorInfo.GetElementCount();
+
+    if (elementType != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+        throw std::runtime_error("DmlVocoder: unexpected output tensor type from DML session");
+    }
+
+    if (elementCount == 0) {
+        return {};
+    }
+
+    if (expectedAudioLength != 0 && elementCount != expectedAudioLength) {
+        AppLogger::warn("[DmlVocoder] Device output size mismatch: expected="
+            + juce::String(static_cast<juce::int64>(expectedAudioLength))
+            + " actual="
+            + juce::String(static_cast<juce::int64>(elementCount)));
+    }
+
+    const auto cpuMemoryInfo = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
+    Ort::Allocator cpuAllocator(*session_, cpuMemoryInfo);
+    auto cpuOutput = Ort::Value::CreateTensor<float>(cpuAllocator, shape.data(), shape.size());
+
+    std::vector<Ort::Value> srcTensors;
+    srcTensors.push_back(std::move(deviceOutput));
+
+    std::vector<Ort::Value> dstTensors;
+    dstTensors.push_back(std::move(cpuOutput));
+
+    const Ort::Status copyStatus = env_->CopyTensors(srcTensors, dstTensors, nullptr);
+    if (!copyStatus.IsOK()) {
+        throw std::runtime_error("DmlVocoder: failed to copy device output to CPU: "
+            + copyStatus.GetErrorMessage());
+    }
+
+    const float* cpuData = dstTensors.front().GetTensorData<float>();
+    return std::vector<float>(cpuData, cpuData + elementCount);
 }
 
 std::vector<float> DmlVocoder::runSession(
@@ -177,27 +225,21 @@ std::vector<float> DmlVocoder::runSession(
 
     const std::string outputName = outputNames_.empty() ? "audio" : outputNames_[0];
     const size_t expectedAudioLength = numFrames * 512;
-
-    if (!preallocatedOutput_ || preallocatedFrames_ != numFrames) {
-        outputBuffer_.assign(expectedAudioLength, 0.0f);
-        std::vector<int64_t> outputShape = {1, static_cast<int64_t>(expectedAudioLength)};
-
-        preallocatedOutput_ = std::make_unique<Ort::Value>(
-            Ort::Value::CreateTensor<float>(
-                cpuMemoryInfo_,
-                outputBuffer_.data(),
-                outputBuffer_.size(),
-                outputShape.data(),
-                outputShape.size()));
-        preallocatedFrames_ = numFrames;
+    if (outputMemoryInfos_.empty()) {
+        throw std::runtime_error("DmlVocoder: session has no output memory info");
     }
 
-    ioBinding_->BindOutput(outputName.c_str(), *preallocatedOutput_);
+    ioBinding_->BindOutput(outputName.c_str(), outputMemoryInfos_.front());
 
     session_->Run(Ort::RunOptions{nullptr}, *ioBinding_);
     ioBinding_->SynchronizeOutputs();
 
-    return outputBuffer_;
+    auto outputValues = ioBinding_->GetOutputValues();
+    if (outputValues.empty()) {
+        throw std::runtime_error("DmlVocoder: session returned no bound outputs");
+    }
+
+    return copyBoundOutputToCpu(std::move(outputValues.front()), expectedAudioLength);
 }
 
 } // namespace OpenTune

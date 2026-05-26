@@ -1384,7 +1384,7 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
     // ============================================================
     // §7 (Phase E) — Stage 2 input = Stage 1 (NSF vocoder) output
     //
-    // We collect the materialization's playback signal *as if TimeGrid were
+    // We stream the materialization's playback signal *as if TimeGrid were
     // identity* (i.e., pre-stretch) by calling readPlaybackAudio in chunks
     // with TimeStretchCache fast-path explicitly disabled.  readPlaybackAudio
     // here writes dry source then has RenderCache overlay REPLACE
@@ -1415,43 +1415,6 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
     // canonical (per channel-layout-policy).
     juce::AudioBuffer<float> readBuf(/*channels=*/1, kBlock);
 
-    std::vector<float> stage1Buffer;
-    stage1Buffer.reserve(static_cast<size_t>(totalSamples));
-
-    for (int offset = 0; offset < totalSamples; offset += kBlock) {
-        const int n = std::min(kBlock, totalSamples - offset);
-        readBuf.clear(0, 0, n);
-
-        PlaybackReadRequest req(stage1Source,
-                                /*readStartSeconds=*/static_cast<double>(offset) / sampleRate,
-                                /*targetSampleRate=*/sampleRate,
-                                /*numSamples=*/n);
-
-        const int wrote = readPlaybackAudio(req, readBuf, /*destStart=*/0);
-        const int actuallyWrote = (wrote > 0) ? wrote : 0;
-
-        const float* readPtr = readBuf.getReadPointer(0);
-        // If readPlaybackAudio short-wrote (e.g., end-of-source), pad with
-        // dry tail from snap.audioBuffer to keep input length == totalSamples.
-        for (int i = 0; i < actuallyWrote; ++i) {
-            stage1Buffer.push_back(readPtr[i]);
-        }
-        for (int i = actuallyWrote; i < n; ++i) {
-            const int srcIdx = offset + i;
-            stage1Buffer.push_back((srcIdx < totalSamples)
-                                    ? snap.audioBuffer->getSample(0, srcIdx)
-                                    : 0.0f);
-        }
-    }
-
-    if (static_cast<int>(stage1Buffer.size()) != totalSamples) {
-        // Should never happen given the padding loop above; defensive log.
-        AppLogger::warn("Stage2Worker: stage1Buffer length mismatch (got "
-                        + juce::String(static_cast<int>(stage1Buffer.size()))
-                        + " expected " + juce::String(totalSamples) + ")");
-        stage1Buffer.resize(static_cast<size_t>(totalSamples), 0.0f);
-    }
-
     // SoundTouch single-pass push + drain (replaces RB's study + process double pass).
     std::vector<float> output;
     output.reserve(static_cast<size_t>(totalSamples + kBlock));
@@ -1472,8 +1435,27 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
 
     for (int offset = 0; offset < totalSamples; offset += kBlock) {
         const int n = std::min(kBlock, totalSamples - offset);
+        readBuf.clear(0, 0, n);
+
+        PlaybackReadRequest req(stage1Source,
+                                /*readStartSeconds=*/static_cast<double>(offset) / sampleRate,
+                                /*targetSampleRate=*/sampleRate,
+                                /*numSamples=*/n);
+
+        const int wrote = readPlaybackAudio(req, readBuf, /*destStart=*/0);
+        const int actuallyWrote = juce::jlimit(0, n, wrote);
+
+        // If readPlaybackAudio short-wrote (e.g., end-of-source), pad with
+        // dry tail from snap.audioBuffer to keep input length == totalSamples.
+        for (int i = actuallyWrote; i < n; ++i) {
+            const int srcIdx = offset + i;
+            readBuf.setSample(0, i,
+                              (srcIdx < totalSamples)
+                                  ? snap.audioBuffer->getSample(0, srcIdx)
+                                  : 0.0f);
+        }
         const bool isLast = (offset + n) >= totalSamples;
-        stretcher->push(stage1Buffer.data() + offset, static_cast<size_t>(n), isLast);
+        stretcher->push(readBuf.getReadPointer(0), static_cast<size_t>(n), isLast);
         drainAvailable();
     }
     // After push(isLast=true), SoundTouch::flush() has been called — drain any
@@ -1940,6 +1922,18 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
             + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc))
             + " sourceStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(sourceStore_.get()))
             + " materializationStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(materializationStore_.get())));
+
+        // Replay any pre-bind state that was cached by setStateInformation.
+        // After shared-store attach, isBoundToARA() returns true, so the
+        // replay will restore directly into the final shared stores.
+        if (pendingAraState_.getSize() > 0) {
+            AppLogger::log("ARA: didBindToARA \xe2\x80\x94 replaying cached state ("
+                           + juce::String(static_cast<int>(pendingAraState_.getSize()))
+                           + " bytes) into shared stores");
+            setStateInformation(pendingAraState_.getData(),
+                              static_cast<int>(pendingAraState_.getSize()));
+            pendingAraState_.reset();
+        }
     }
 }
 #endif
@@ -2716,6 +2710,20 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     }
     const bool stateHasTimeGrid = (version >= 6);
     const bool stateHasConfidence = (version >= 7);
+
+#if JucePlugin_Enable_ARA
+    // Pre-bind cache: when the ARA host sends state before didBindToARA,
+    // we must not restore into temporary local stores that will be
+    // replaced by shared stores.  Cache the raw block and replay after
+    // didBindToARA attaches the final shared stores.
+    if (wrapperType != juce::AudioProcessor::wrapperType_Standalone && !isBoundToARA()) {
+        pendingAraState_.reset();
+        pendingAraState_.append(data, static_cast<size_t>(sizeInBytes));
+        AppLogger::log("StateRestore: ARA pre-bind \xe2\x80\x94 caching "
+                       + juce::String(sizeInBytes) + " bytes for replay after didBindToARA");
+        return;
+    }
+#endif
 
     AppLogger::log("StateRestore: VST3 full-state begin sizeBytes=" + juce::String(sizeInBytes));
 
@@ -3988,6 +3996,8 @@ OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(AraOriginalF0Birth
         channel0Data.shrink_to_fit();
         return std::nullopt;
     }
+
+    preparedImport.silentGaps = SilentGapDetector::detectAllGapsAdaptive(preparedImport.storedAudioBuffer);
 
     preparedImport.sourceWindow = SourceWindow{request.sourceId,
                                                request.sourceWindow.sourceStartSeconds,

@@ -105,7 +105,6 @@ public:
             leaseGeneration = other.leaseGeneration;
             sampleAccessEnabled = other.sampleAccessEnabled;
             hostReadInFlight = false;
-            queuedForMaterializationBirth = false;
             readingFromHost = false;
             cancelRead = false;
             pendingLeaseReset = false;
@@ -128,7 +127,6 @@ public:
         uint64_t leaseGeneration{0};
         bool sampleAccessEnabled{false};
         bool hostReadInFlight{false};
-        bool queuedForMaterializationBirth{false};
         bool readingFromHost{false};
         bool cancelRead{false};
         bool pendingLeaseReset{false};
@@ -169,6 +167,14 @@ public:
                 && materializationId != 0
                 && sourceWindow.isValid();
         }
+    };
+
+    struct PendingBirth
+    {
+        juce::String audioModificationPersistentId;
+        juce::ARAAudioSource* audioSource{nullptr};
+        SourceWindow desiredWindow;
+        uint64_t revision{0};
     };
 
     enum class BindingState : uint8_t {
@@ -302,9 +308,9 @@ private:
     void publishSnapshotLocked();
     void clearSourcePayloadLocked(SourceSlot& sourceSlot) noexcept;
     bool regionNeedsMaterializationBirthLocked(const RegionSlot& regionSlot) const;
-    void enqueueMaterializationBirthLocked(juce::ARAAudioSource* audioSource);
-    void runMaterializationBirthsForSourceLocked(std::unique_lock<std::mutex>& lock,
-                                                 juce::ARAAudioSource* audioSource);
+    void upsertPendingBirthLocked(const juce::String& persistentId,
+                                   const SourceWindow& desiredWindow,
+                                   juce::ARAAudioSource* audioSource);
     void invalidateSourceReaderLeaseLocked(SourceSlot& sourceSlot) noexcept;
     void drainDeferredSourceCleanupLocked();
     void birthWorkerLoop();
@@ -334,7 +340,9 @@ private:
     uint64_t nextRegionProjectionRevision_{1};
     uint64_t nextPublishedEpoch_{1};
     bool pendingSnapshotPublication_{false};
-    std::deque<juce::ARAAudioSource*> materializationBirthQueue_;
+    std::deque<juce::String> materializationBirthQueue_;   // pending birth keys (persistentIds)
+    std::map<juce::String, PendingBirth> pendingBirths_;   // active birth targets by persistentId
+    uint64_t nextBirthRevision_{1};
     std::condition_variable birthCv_;
     std::thread birthWorkerThread_;
     bool birthWorkerRunning_{true};
