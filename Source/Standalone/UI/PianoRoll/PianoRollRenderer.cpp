@@ -1353,16 +1353,14 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
     }
 }
 
-void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
-                                     const std::vector<float>& f0,
-                                     juce::Colour colour,
-                                     float alpha,
-                                     bool isThinLine,
-                                     const RenderContext& ctx,
-                                     const MaterializationRenderItem& item,
-                                     const std::vector<uint8_t>* visibleMask)
+void PianoRollRenderer::drawPreparedF0Curve(juce::Graphics& g,
+                                            const std::vector<F0VisualSegment>& visualSegments,
+                                            juce::Colour colour,
+                                            float alpha,
+                                            bool isThinLine,
+                                            const RenderContext& ctx)
 {
-    if (f0.empty() || item.f0Timeline.isEmpty()) return;
+    if (visualSegments.empty()) return;
 
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
@@ -1384,51 +1382,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const juce::PathStrokeType highlightStrokeType(juce::jmax(0.75f, lineWidth * 0.46f),
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded);
-
-    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
-    if (!visibleWindow.isValid())
-        return;
-
-    const int viewportStartX = visibleWindow.viewportStartX;
-    const int viewportEndX = visibleWindow.viewportEndX;
-
-    const int marginFrames = 10;
-    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleMaterializationStartTime,
-                                                                       visibleWindow.visibleMaterializationEndTime,
-                                                                       marginFrames);
-    const auto iStart = std::min(static_cast<std::size_t>(visibleFrames.startFrame), f0.size());
-    const auto iEnd = std::min(static_cast<std::size_t>(std::max(visibleFrames.startFrame, visibleFrames.endFrameExclusive)),
-                               f0.size());
-
-    double secondsPerFrame = 0.01;
-    if (item.f0Timeline.endFrameExclusive() > 1) {
-        secondsPerFrame = item.f0Timeline.timeAtFrame(1) - item.f0Timeline.timeAtFrame(0);
-    }
-
-    F0VisualBuildOptions visualOptions;
-    visualOptions.startFrame = static_cast<int>(iStart);
-    visualOptions.endFrameExclusive = static_cast<int>(iEnd);
-    visualOptions.viewportStartX = viewportStartX;
-    visualOptions.viewportEndX = viewportEndX;
-    visualOptions.pixelsPerSecond = ctx.pixelsPerSecond;
-    visualOptions.secondsPerFrame = secondsPerFrame;
-
-    const std::vector<float>* originalEnergy = nullptr;
-    if (item.pitchSnapshot != nullptr) {
-        originalEnergy = &item.pitchSnapshot->getOriginalEnergy();
-    }
-
-    const auto visualSegments = buildF0VisualSegments(
-        f0,
-        originalEnergy,
-        visibleMask,
-        visualOptions,
-        [&](int frame) -> float {
-            return static_cast<float>(sourceTimeToScreenX(item.f0Timeline.timeAtFrame(frame), ctx, item));
-        },
-        [&](int, float frequency) -> float {
-            return ctx.midiToY(ctx.freqToMidi(frequency));
-        });
 
     const juce::Colour selectionColour = isAurora
         ? colour.brighter(0.18f)

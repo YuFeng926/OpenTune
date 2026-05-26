@@ -46,6 +46,7 @@
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
 #include "Inference/INoteGenerator.h"
+#include "Utils/AppPreferences.h"
 #include <functional>
 
 namespace OpenTune {
@@ -284,10 +285,6 @@ public:
                                                    uint64_t sourceId = 0);
     bool requestMaterializationRefresh(const MaterializationRefreshRequest& request);
 
-    // GAME reference-note generation, non-ARA entry points only (Standalone / regular VST3).
-    // ARA OriginalF0 path does not call this function.
-    bool requestReferenceNoteGeneration(uint64_t materializationId);
-
     bool ensureSourceById(uint64_t sourceId,
                           const juce::String& displayName,
                           std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
@@ -501,17 +498,14 @@ private:
     std::unique_ptr<F0InferenceService> f0Service_;
     std::unique_ptr<VocoderDomain> vocoderDomain_;
 
-    // Polymorphic note generator (GAME-small by default; LegacyNoteGenerator
+    // Note generator (GAME-small by default; LegacyNoteGenerator
     // when env OPENTUNE_NOTE_BACKEND=legacy or models missing). Lazily
-    // initialised by ensureNoteGeneratorReady() — same pattern as f0Service_.
-    // GAME ref-note generation is only triggered by explicit call to
-    // requestReferenceNoteGeneration() from Standalone / regular VST3 entry
-    // points. VST3 ARA auto-OriginalF0 path and ARA Read Audio must never
-    // invoke GAME; noteGenerator_/noteGeneratorPool_ are retained here solely
-    // for non-ARA flows.
+    // initialised by ensureNoteGeneratorReady().
     std::unique_ptr<INoteGenerator> noteGenerator_;
     std::mutex                      noteGeneratorInferenceMutex_; // serialise inference calls
     juce::ThreadPool                noteGeneratorPool_{1};         // single-threaded ORT-safe
+
+    ExperimentalReferenceAlignMode experimentalReferenceAlignMode_ = ExperimentalReferenceAlignMode::Off;
 
     // Set of materializationIds with a note-generation job pending or running
     // on noteGeneratorPool_. Editors poll `isNoteGenInFlightForMaterialization`
@@ -547,10 +541,9 @@ private:
                             const char* serviceName,
                             std::function<bool(const std::string&)> initFunc);
 
+    void detectAndCommitMaterializationKeyIfUnset(uint64_t materializationId);
     uint64_t ensureSourceAndCreateMaterialization(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
     void configureReferenceAnalysisService();
-    MaterializationStore::DerivedAnalysis buildReferenceAlignmentFeaturesForJob(
-        const ReferenceAnalysisService::AnalysisJobKey& jobKey) const;
     void analysisCompleted(uint64_t materializationId,
                            const MaterializationStore::DerivedAnalysis& result) override;
     void analysisFailed(uint64_t materializationId,
@@ -710,6 +703,27 @@ public:
                                           const std::vector<Note>& notes,
                                           const std::vector<CorrectedSegment>& segments);
     ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(uint64_t materializationId);
+
+    /** 参考特征生产的唯一正式入口。
+        无论 Basic 还是 Aggressive，所有 reference DerivedAnalysis 生产
+        都必须经过此函数，不得有第二条 producer 路径。 */
+    MaterializationStore::DerivedAnalysis buildReferenceDerivedAnalysis(
+        const MaterializationStore::MaterializationSnapshot& snapshot,
+        ExperimentalReferenceAlignMode mode);
+
+    /** 设置当前实验性参考对齐模式。由 UI 首选项变更驱动。 */
+    void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode)
+    {
+        experimentalReferenceAlignMode_ = mode;
+    }
+
+private:
+    MaterializationStore::DerivedAnalysis buildBasicReferenceDerivedAnalysis(
+        const MaterializationStore::MaterializationSnapshot& snapshot) const;
+    MaterializationStore::DerivedAnalysis buildGameReferenceDerivedAnalysis(
+        const MaterializationStore::MaterializationSnapshot& snapshot);
+public:
+
 #if defined(OPENTUNE_TEST_BUILD)
     void setReferenceAnalysisNotificationDispatcherForTests(
         ReferenceAnalysisService::NotificationDispatcher dispatcher)

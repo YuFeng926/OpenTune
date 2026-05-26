@@ -976,8 +976,18 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         } else if (currentNotesRevision != lastPianoRollNotesRevision_) {
             // Same materialization, fresh notes — typically GAME's async commit.
             pianoRoll_.refreshEditedMaterializationNotes();
-            pianoRoll_.repaint();
+            pianoRoll_.requestContentRedraw();
         }
+        if (activeTrack >= 0 && activePlacementIndex >= 0) {
+            const DetectedKey resolvedKey =
+                resolveScaleForPlacementMaterialization(activeTrack, activePlacementIndex, nullptr);
+            const int resolvedRootNote = static_cast<int>(resolvedKey.root);
+            const int resolvedScaleType = scaleToUiScaleType(resolvedKey.scale);
+            if (resolvedRootNote != lastScaleRootNote_ || resolvedScaleType != lastScaleType_) {
+                applyResolvedScaleForPlacementMaterialization(activeTrack, activePlacementIndex);
+            }
+        }
+
         lastPianoRollNotesRevision_ = currentNotesRevision;
     }
 
@@ -2779,7 +2789,10 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
         ? arrangement->getPlacementReferencePlacement(trackId, targetPlacementId)
         : 0;
     const bool hasRef = referencePlacementId != 0;
-    parameterPanel_.setAutoButtonMode(hasRef);
+    const auto expMode = appPreferences_.getState().shared.experimentalReferenceAlignMode;
+    processorRef_.setExperimentalReferenceAlignMode(expMode);
+    const bool hasEnabledRef = hasRef && expMode != ExperimentalReferenceAlignMode::Off;
+    parameterPanel_.setAutoButtonMode(hasEnabledRef);
 
     if (!hasRef) {
         pianoRoll_.setReferenceOverlay(std::nullopt);

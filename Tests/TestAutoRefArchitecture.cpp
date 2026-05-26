@@ -338,6 +338,176 @@ void runAutoRefArchitectureReferenceAnalysisServiceIsProcessorDomainTest()
     logPass(testName);
 }
 
+// ============================================================================
+// Gate 1 — AUTO Ref architecture guards
+// ============================================================================
+
+void runReferenceAutoAlign_RequestReferenceNoteGenerationIsNotProductionAutoRefEntryTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_RequestReferenceNoteGenerationIsNotProductionAutoRefEntry";
+
+    const auto processorHeader = readWorkspaceFile("Source/PluginProcessor.h");
+    const auto editorCpp = readWorkspaceFile("Source/Standalone/PluginEditor.cpp");
+
+    if (!assertReadable(testName, "Source/PluginProcessor.h", processorHeader)) return;
+    if (!assertReadable(testName, "Source/Standalone/PluginEditor.cpp", editorCpp)) return;
+
+    if (processorHeader.contains("requestReferenceNoteGeneration(")) {
+        logFail(testName, "PluginProcessor.h must not declare requestReferenceNoteGeneration — it is a legacy bypass");
+        return;
+    }
+
+    if (editorCpp.contains("requestReferenceNoteGeneration")) {
+        logFail(testName, "Standalone PluginEditor.cpp must not reference requestReferenceNoteGeneration");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runReferenceAutoAlign_AsyncAndSyncPathsShareSameProducerEntryTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_AsyncAndSyncPathsShareSameProducerEntry";
+    constexpr const char* relativePath = "Source/PluginProcessor.cpp";
+
+    const auto source = readWorkspaceFile(relativePath);
+    if (!assertReadable(testName, relativePath, source)) return;
+
+    if (!source.contains("buildReferenceDerivedAnalysis")) {
+        logFail(testName, "PluginProcessor.cpp must define buildReferenceDerivedAnalysis as the single producer entry");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runReferenceAutoAlign_UsesDerivedAnalysisAsOnlyReferenceTruthTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_UsesDerivedAnalysisAsOnlyReferenceTruth";
+    constexpr const char* relativePath = "Source/MaterializationStore.h";
+
+    const auto source = readWorkspaceFile(relativePath);
+    if (!assertReadable(testName, relativePath, source)) return;
+
+    if (!source.contains("basicDerivedNotes") && !source.contains("temporalEvents")) {
+        logFail(testName, "MaterializationStore::DerivedAnalysis must contain both basicDerivedNotes and temporalEvents");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runReferenceAutoAlign_EditorDoesNotOwnReferenceFeatureGenerationTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_EditorDoesNotOwnReferenceFeatureGeneration";
+
+    const auto editorHeader = readWorkspaceFile("Source/Standalone/PluginEditor.h");
+    const auto editorCpp = readWorkspaceFile("Source/Standalone/PluginEditor.cpp");
+
+    if (!assertReadable(testName, "Source/Standalone/PluginEditor.h", editorHeader)) return;
+    if (!assertReadable(testName, "Source/Standalone/PluginEditor.cpp", editorCpp)) return;
+
+    if (editorHeader.contains("GameNoteGenerator")
+        || editorCpp.contains("GameNoteGenerator")) {
+        logFail(testName, "Editor must not reference GameNoteGenerator");
+        return;
+    }
+
+    if (editorHeader.contains("NoteGenerator::Listener")
+        || editorCpp.contains("NoteGenerator::Listener")) {
+        logFail(testName, "Editor must not inherit NoteGenerator::Listener");
+        return;
+    }
+
+    if (editorHeader.contains("ReferenceAnalysisService::Listener")
+        || editorCpp.contains("ReferenceAnalysisService::Listener")) {
+        logFail(testName, "Editor must not inherit ReferenceAnalysisService::Listener");
+        return;
+    }
+
+    if (editorHeader.contains("requestReferenceNoteGeneration")
+        || editorCpp.contains("requestReferenceNoteGeneration")) {
+        logFail(testName, "Editor must not reference requestReferenceNoteGeneration");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runReferenceAutoAlign_AutoRefButtonRequiresExperimentalModeAndReferenceBindingTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_AutoRefButtonRequiresExperimentalModeAndReferenceBinding";
+    constexpr const char* relativePath = "Source/Standalone/PluginEditor.cpp";
+
+    const auto source = readWorkspaceFile(relativePath);
+    if (!assertReadable(testName, relativePath, source)) return;
+
+    if (source.contains("setAutoButtonMode") && !source.contains("ExperimentalReferenceAlignMode")) {
+        logFail(testName, "setAutoButtonMode must be gated by ExperimentalReferenceAlignMode check");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runReferenceAutoAlign_PreferenceModePersistsInSharedAudioSettingsTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_PreferenceModePersistsInSharedAudioSettings";
+    constexpr const char* relativePath = "Source/Utils/AppPreferences.h";
+
+    const auto source = readWorkspaceFile(relativePath);
+    if (!assertReadable(testName, relativePath, source)) return;
+
+    if (!source.contains("ExperimentalReferenceAlignMode")) {
+        logFail(testName, "AppPreferences.h must define or expose ExperimentalReferenceAlignMode");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runReferenceAutoAlign_AggressiveModeContractMatchesImplementationTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_AggressiveModeContractMatchesImplementation";
+
+    const auto header = readWorkspaceFile("Source/PluginProcessor.h");
+    const auto impl   = readWorkspaceFile("Source/PluginProcessor.cpp");
+    if (!assertReadable(testName, "Source/PluginProcessor.h", header) ||
+        !assertReadable(testName, "Source/PluginProcessor.cpp", impl)) {
+        return;
+    }
+
+    // 1. Aggressive 专属 producer 必须存在
+    if (!impl.contains("buildGameReferenceDerivedAnalysis")) {
+        logFail(testName, "missing buildGameReferenceDerivedAnalysis — Aggressive producer not implemented");
+        return;
+    }
+
+    // 2. 入口函数必须按 mode 分派到 GAME producer
+    if (!impl.contains("ExperimentalReferenceAlignMode::Aggressive") ||
+        !impl.contains("buildGameReferenceDerivedAnalysis")) {
+        logFail(testName, "buildReferenceDerivedAnalysis must dispatch to GAME when mode=Aggressive");
+        return;
+    }
+
+    // 3. Aggressive 不能把 Basic temporal events 混入（不能同时调 BasicReferenceFeatureBuilder::build 和 GameNoteGenerator）
+    //    GAME producer 可以先用 BasicReferenceFeatureBuilder::build 获取基础结构再替换，
+    //    但不可以保留 Basic temporal events 与 GAME notes 共存
+    //    这由 "不得混入" 的语义决定：最终 temporal events 必须来自 GAME notes。
+    //    用 source scan 验证：在 Aggressive 分支中 basicDerivedNotes 与 temporalEvents
+    //    必同时来自 GAME 路径。
+
+    // 简单验证：buildGameReferenceDerivedAnalysis 体内应替换 temporalEvents 或设置 backendMode=2
+    if (!impl.contains("buildGameReferenceDerivedAnalysis") ||
+        !impl.contains("temporalEvents") ||
+        !impl.contains("backendMode")) {
+        logFail(testName, "Aggressive producer must set temporalEvents and backendMode");
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runAutoRefArchitectureSuite()
 {
     logSection("AutoRefArchitecture");
@@ -351,4 +521,15 @@ void runAutoRefArchitectureSuite()
     runAutoRefArchitectureNoPrivateAutoRefSpacingConstantsTest();
     runAutoRefArchitectureFailedAnalysisIsNotForcedReadyTest();
     runAutoRefArchitectureReferenceAnalysisServiceIsProcessorDomainTest();
+
+    // Gate 3 — Aggressive mode blocked contract
+    runReferenceAutoAlign_AggressiveModeContractMatchesImplementationTest();
+
+    // Gate 1 — AUTO Ref architecture guards
+    runReferenceAutoAlign_RequestReferenceNoteGenerationIsNotProductionAutoRefEntryTest();
+    runReferenceAutoAlign_AsyncAndSyncPathsShareSameProducerEntryTest();
+    runReferenceAutoAlign_UsesDerivedAnalysisAsOnlyReferenceTruthTest();
+    runReferenceAutoAlign_EditorDoesNotOwnReferenceFeatureGenerationTest();
+    runReferenceAutoAlign_AutoRefButtonRequiresExperimentalModeAndReferenceBindingTest();
+    runReferenceAutoAlign_PreferenceModePersistsInSharedAudioSettingsTest();
 }

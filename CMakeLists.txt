@@ -568,6 +568,8 @@ target_sources(OpenTune
         Source/Standalone/UI/PianoRollComponent.h
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.h
+        Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.cpp
+        Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h
         Source/Standalone/UI/PianoRoll/PianoRollVisualInvalidation.cpp
         Source/Standalone/UI/PianoRoll/PianoRollVisualInvalidation.h
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp
@@ -590,6 +592,12 @@ target_sources(OpenTune
         Source/Standalone/UI/TrackPanelComponent.h
         Source/Standalone/UI/ArrangementViewComponent.cpp
         Source/Standalone/UI/ArrangementViewComponent.h
+        Source/Standalone/UI/ArrangementRenderModelCache.cpp
+        Source/Standalone/UI/ArrangementRenderModelCache.h
+        Source/Standalone/UI/TimelineRenderingDiagnostics.cpp
+        Source/Standalone/UI/TimelineRenderingDiagnostics.h
+        Source/Standalone/UI/TimelineViewportState.h
+        Source/Standalone/UI/WaveformTileCache.h
         Source/Standalone/UI/WaveformMipmap.cpp
         Source/Standalone/UI/WaveformMipmap.h
         Source/Standalone/UI/RippleOverlayComponent.h
@@ -729,6 +737,28 @@ if(EXISTS ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp)
     target_compile_definitions(OpenTune PRIVATE SOUNDTOUCH_FLOAT_SAMPLES)
     if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
         target_compile_definitions(OpenTune PRIVATE SOUNDTOUCH_DISABLE_X86_OPTIMIZATIONS)
+    endif()
+    if(MSVC)
+        # Suppress benign MSVC warnings from vendored SoundTouch code:
+        #   C4458 - 'output' parameter shadows FIFOProcessor::output member (SoundTouch.cpp:511)
+        #   C4702 - unreachable code after ST_THROW_RT_ERROR (FIFOSamplePipe.h:63)
+        set(SOUNDTOUCH_MSVC_WARN "/wd4458" "/wd4702")
+        set_source_files_properties(
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/AAFilter.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/FIFOSampleBuffer.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/FIRFilter.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateCubic.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateLinear.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateShannon.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/RateTransposer.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/TDStretch.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/cpu_detect_x86.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/sse_optimized.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/mmx_optimized.cpp"
+            PROPERTIES
+                COMPILE_OPTIONS "${SOUNDTOUCH_MSVC_WARN}"
+        )
     endif()
     message(STATUS "SoundTouch: vendored at ${SOUNDTOUCH_DIR}")
 else()
@@ -1201,6 +1231,7 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/TestAutoRefIntegration.cpp
         Tests/TestReferenceBinding.cpp
         Tests/TestPlacementReferenceCascade.cpp
+        Tests/TestTimelineRenderingPipeline.cpp
         Tests/TestArrangementContract.cpp
         Tests/TestMaterializationDerivedAnalysis.cpp
         Tests/TestMaterializationContract.cpp

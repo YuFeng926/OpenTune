@@ -356,7 +356,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             && currentNotesRevision != lastPianoRollNotesRevision_
             && pianoRoll_.isShowing()) {
             pianoRoll_.refreshEditedMaterializationNotes();
-            pianoRoll_.repaint();
+            pianoRoll_.requestContentRedraw();
         }
         lastPianoRollNotesRevisionMatId_ = activeMaterializationId;
         lastPianoRollNotesRevision_      = currentNotesRevision;
@@ -1303,7 +1303,7 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
     // automatically (PianoRollComponent::buildToolHandlerContext queries
     // processorRef_.getMaterializationTimeGridById(editedMaterializationId_)).
     // repaint here ensures handles redraw with the new region's TimeGrid.
-    pianoRoll_.repaint();
+    pianoRoll_.requestContentRedraw();
 
     const auto key = processorRef_.getMaterializationDetectedKeyById(sync.activeMaterializationId);
     const int rootNote = static_cast<int>(key.root);

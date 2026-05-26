@@ -110,12 +110,19 @@
     <tr><td><strong>5 国语言界面</strong></td><td>支持中文、English、日本語、Русский、Español 五种界面语言</td></tr>
     <tr><td><strong>鼠标拖尾特效</strong></td><td>8 种鼠标轨迹特效主题（Classic、Neon、Fire、Ocean、Galaxy、Cherry Blossom、Matrix 等）</td></tr>
     <tr><td><strong>面板折叠</strong></td><td>左右面板可折叠隐藏，实现沉浸式全屏编辑</td></tr>
-    <tr><td><strong>渲染状态徽章</strong></td><td>右上角浮动显示当前渲染进度（如"渲染中 3/8"）</td></tr>
+    <tr><td><strong>渲染状态徽章</strong></td><td>右上角浮动显示双阶段渲染进度（Stage 1 音高修正 + Stage 2 时间拉伸）</td></tr>
     <tr><td><strong>逐音符颤音控制</strong></td><td>Vibrato Depth 和 Vibrato Rate 支持为每个音符独立设置</td></tr>
     <tr><td><strong>Line Anchor 段参数</strong></td><td>Line Anchor 工具绘制的段可被选中并独立设置 Retune Speed</td></tr>
     <tr><td><strong>悬浮提示</strong></td><td>所有控件支持鼠标悬浮提示（功能说明 + 快捷键），随界面语言切换</td></tr>
     <tr><td><strong>批量导入</strong></td><td>支持一次导入多个音频文件，可选择顺序排列或分配到不同轨道</td></tr>
     <tr><td><strong>视图菜单快捷设置</strong></td><td>波形显示、音道、音名标签、分块边界等视觉选项可通过 View 菜单快速切换</td></tr>
+    <tr><td><strong>时间工具 (TimeTool)</strong></td><td>全新第 6 种编辑工具，通过拖拽时间手柄实现音频的时间拉伸/压缩。快捷键 T</td></tr>
+    <tr><td><strong>双阶段渲染管线</strong></td><td>Stage 1 音高修正（现有）+ Stage 2 时间拉伸（SoundTouch WSOLA），编辑时间网格不影响音高缓存</td></tr>
+    <tr><td><strong>三坐标系</strong></td><td>源时间 ↔ 输出时间（通过 TimeGrid τ 映射）↔ 屏幕像素，支持精确的时间域编辑</td></tr>
+    <tr><td><strong>声码器双权重</strong></td><td>新增社区版 (Community) 和 Coulin9 v4 专业版声码器模型权重，可在偏好设置中切换</td></tr>
+    <tr><td><strong>参考自动对齐</strong></td><td>ARA 模式下多 region 之间的参考音高自动对齐，提升多轨编辑一致性</td></tr>
+    <tr><td><strong>工程系统</strong></td><td>.otproj 工程文件保存/加载，完整恢复项目编辑状态、轨道布局和音高校正</td></tr>
+    <tr><td><strong>Overdose 主题</strong></td><td>第四套界面主题，深色霓虹风格，为音乐制作提供更激进的视觉选项</td></tr>
 </table>
 
 <h3>🐛 修复与优化</h3>
@@ -210,9 +217,9 @@
     <tr><td><strong>顶部工具栏</strong></td><td>菜单按钮（文件/编辑/视图）、传输控制、BPM/调式设置、Tap Tempo、视图切换</td></tr>
     <tr><td><strong>左侧轨道面板</strong></td><td>多轨道管理（最多 12 轨）、音量旋钮、Solo/Mute、圆形电平表、添加轨道按钮</td></tr>
     <tr><td><strong>中央编曲视图</strong></td><td>音频片段排列、波形预览、时间轴、片段拖动/分割/合并/删除</td></tr>
-    <tr><td><strong>中央钢琴卷帘</strong></td><td>音高曲线编辑、音符绘制/选择、F0 曲线可视化、播放头、钢琴键试听（点击左侧键盘预览音高）</td></tr>
+    <tr><td><strong>中央钢琴卷帘</strong></td><td>音高曲线编辑、音符绘制/选择、F0 曲线可视化、播放头、钢琴键试听（点击左侧键盘预览音高）、时间工具下显示时间手柄（TimeGrid handles）</td></tr>
     <tr><td><strong>右侧参数面板</strong></td><td>Retune Speed / Vibrato / Note Split 旋钮、工具选择按钮</td></tr>
-    <tr><td><strong>渲染状态徽章</strong></td><td>右上角浮动显示当前渲染进度（如"渲染中 3/8"）</td></tr>
+    <tr><td><strong>渲染状态徽章</strong></td><td>右上角浮动显示当前渲染进度（如"渲染中 3/8"），Stage 2 时间拉伸进度单独显示（如"+2"）</td></tr>
 </table>
 
 <h3>4.2 面板折叠</h3>
@@ -334,7 +341,7 @@
 <div class="page-break"></div>
 <h2 id="tools">7. 编辑工具</h2>
 
-<p>OpenTune 提供五种专业编辑工具，通过参数面板的工具区或快捷键切换：</p>
+<p>OpenTune 提供六种专业编辑工具，通过参数面板的工具区或快捷键切换：</p>
 
 <div class="tool-card">
     <h4>AutoTune — 自动修正工具 (快捷键: 6)</h4>
@@ -359,8 +366,15 @@
 </div>
 
 <div class="tool-card">
-    <h4>HandDraw — 手绘工具</h4>
+    <h4>HandDraw — 手绘工具 (快捷键: 5)</h4>
     <p>直接手绘 F0 曲线，完全自定义音高走向。适合绘制颤音、滑音、弯音等装饰效果。</p>
+</div>
+
+<div class="tool-card">
+    <h4>TimeTool — 时间工具 (快捷键: T)</h4>
+    <p>拖拽时间手柄调整音频的播放速度，实现时间拉伸/压缩效果。进入时间工具视图时，钢琴键和音符/F0 曲线自动隐藏，专注时间域编辑。</p>
+    <p><strong>操作</strong>：拖拽手柄调整输出时间、双击空白区域插入新手柄、Delete 删除选中手柄（端点保护）、Shift+拖拽以 30ms 步进吸附、空白区点击重定位播放头。</p>
+    <p><strong>原理</strong>：编辑 TimeGrid 仅触发 Stage 2（时间拉伸）重渲染，不影响 Stage 1 音高缓存。</p>
 </div>
 
 <h3>7.1 钢琴键试听</h3>
@@ -445,9 +459,10 @@
 <table>
     <tr><th>设置项</th><th>说明</th><th>默认值</th></tr>
     <tr><td>界面语言</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
-    <tr><td>主题</td><td>BlueBreeze / DarkBlueGrey / Aurora</td><td>Aurora</td></tr>
+    <tr><td>主题</td><td>BlueBreeze / DarkBlueGrey / Aurora / Overdose</td><td>Aurora</td></tr>
     <tr><td>编辑方案</td><td>曲线优先 / 音符优先</td><td>曲线优先</td></tr>
     <tr><td>渲染优先级</td><td>GPU 优先 / CPU 优先</td><td>GPU 优先</td></tr>
+    <tr><td>声码器模型权重</td><td>Community（社区版）/ Coulin9 v4（专业版）</td><td>Community</td></tr>
     <tr><td>水平缩放灵敏度</td><td>控制鼠标滚轮水平缩放速度</td><td>1.0</td></tr>
     <tr><td>垂直缩放灵敏度</td><td>控制鼠标滚轮垂直缩放速度</td><td>1.0</td></tr>
     <tr><td>滚动速度</td><td>视图滚动速度</td><td>1.0</td></tr>
@@ -472,7 +487,7 @@
     <li>Note Labels — 音名显示模式</li>
     <li>Show Chunk Boundaries — 分块边界</li>
     <li>Show Unvoiced Frames — 无声帧</li>
-    <li>Theme — 主题切换</li>
+    <li>Theme — 主题切换（含 Overdose）</li>
     <li>Mouse Trail — 鼠标拖尾主题</li>
 </ul>
 
@@ -505,7 +520,9 @@
     <tr><td>2</td><td>DrawNote — 绘制音符</td></tr>
     <tr><td>3</td><td>Select — 选择工具</td></tr>
     <tr><td>4</td><td>LineAnchor — 锚点工具</td></tr>
+    <tr><td>5</td><td>HandDraw — 手绘工具</td></tr>
     <tr><td>6</td><td>AutoTune — 自动修正</td></tr>
+    <tr><td>T</td><td>TimeTool — 时间工具</td></tr>
 </table>
 
 <h3>11.4 视图操作</h3>
@@ -531,6 +548,7 @@
     <tr><td><strong>Blue Breeze</strong></td><td>浅色系、柔和蓝调、现代简约</td><td>明亮环境、长时间使用</td></tr>
     <tr><td><strong>Dark Blue-Grey</strong></td><td>深色系、专业录音室风格、立体阴影</td><td>暗室环境、专业制作</td></tr>
     <tr><td><strong>Aurora Glass</strong></td><td>深色背景、霓虹发光、毛玻璃质感</td><td>追求科技感、个性表达</td></tr>
+    <tr><td><strong>Overdose</strong></td><td>深色霓虹风格、高饱和度、激进视觉</td><td>音乐制作、个性表达</td></tr>
 </table>
 
 <h3>12.2 鼠标拖尾特效（仅 Standalone）</h3>
@@ -577,6 +595,9 @@
     <li>DAW 通过 ARA 协议提供音频源数据，无需导入/导出文件</li>
     <li>编辑结果实时反映到 DAW 时间线播放中</li>
     <li>支持宿主传输同步（Play/Stop/Seek）和 BPM 跟随</li>
+    <li>支持 ARA 多 region 绑定，同一 source 的多个 region 共享编辑状态</li>
+    <li>参考自动对齐：ARA 模式下多 region 之间自动对齐参考音高，提升多轨编辑一致性</li>
+    <li>VST3 插件模式下隐藏项目/导入/导出等 Standalone 专有菜单项</li>
 </ul>
 
 <h3>14.2 与 Standalone 的区别</h3>

@@ -22,6 +22,13 @@ enum class RenderingPriority {
     CpuFirst         // CPU 优先
 };
 
+enum class ExperimentalReferenceAlignMode
+{
+    Off = 0,        // 关闭（默认）
+    Basic = 1,      // 自动对齐参考源（基础）— LegacyNoteGenerator
+    Aggressive = 2  // 自动对齐参考源（激进）— GAME note generator
+};
+
 struct SharedPreferencesState {
     Language language = Language::Chinese;
     ThemeId theme = ThemeId::Aurora;
@@ -31,6 +38,7 @@ struct SharedPreferencesState {
         ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
     RenderingPriority renderingPriority = RenderingPriority::GpuFirst;
     VocoderModelWeight vocoderModelWeight = VocoderModelWeight::Community;
+    ExperimentalReferenceAlignMode experimentalReferenceAlignMode = ExperimentalReferenceAlignMode::Off;
     std::vector<juce::String> recentProjects;   // Most recently used project paths (MRU, max 10)
 };
 
@@ -72,6 +80,7 @@ public:
     void setStandaloneShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
     void setRenderingPriority(RenderingPriority priority);
     void setVocoderModelWeight(VocoderModelWeight weight);
+    void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode);
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme);
 
     std::vector<juce::String> getRecentProjects() const;

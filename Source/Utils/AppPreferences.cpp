@@ -21,6 +21,7 @@ constexpr const char* kSharedScrollSpeedKey = "shared.scroll.speed";
 constexpr const char* kStandaloneMouseTrailThemeKey = "standalone.mouseTrail.theme";
 constexpr const char* kSharedRenderingPriorityKey = "shared.rendering.priority";
 constexpr const char* kSharedVocoderWeightKey = "shared.rendering.vocoderWeight";
+constexpr const char* kSharedExperimentalReferenceAlignKey = "shared.align.experimental";
 constexpr const char* kSharedRecentProjectsKey = "shared.recentProjects";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
@@ -221,6 +222,23 @@ static VocoderModelWeight fromVocoderWeightToken(const juce::String& token)
     return VocoderModelWeight::Community;
 }
 
+static juce::String toExperimentalRefAlignModeToken(ExperimentalReferenceAlignMode mode)
+{
+    switch (mode) {
+        case ExperimentalReferenceAlignMode::Off:        return "off";
+        case ExperimentalReferenceAlignMode::Basic:      return "basic";
+        case ExperimentalReferenceAlignMode::Aggressive: return "aggressive";
+    }
+    return "off";
+}
+
+static ExperimentalReferenceAlignMode fromExperimentalRefAlignModeToken(const juce::String& token)
+{
+    if (token == "basic")      return ExperimentalReferenceAlignMode::Basic;
+    if (token == "aggressive") return ExperimentalReferenceAlignMode::Aggressive;
+    return ExperimentalReferenceAlignMode::Off;
+}
+
 KeyShortcutConfig::KeyShortcutSettings decodeShortcutSettings(const juce::PropertiesFile& properties)
 {
     auto settings = KeyShortcutConfig::KeyShortcutSettings::getDefault();
@@ -268,6 +286,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.vocoderModelWeight = fromVocoderWeightToken(
         properties.getValue(kSharedVocoderWeightKey,
                             toVocoderWeightToken(state.shared.vocoderModelWeight)));
+    state.shared.experimentalReferenceAlignMode = fromExperimentalRefAlignModeToken(
+        properties.getValue(kSharedExperimentalReferenceAlignKey,
+                            toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode)));
 
     state.standalone.shortcuts = decodeShortcutSettings(properties);
     state.standalone.mouseTrailTheme = mouseTrailThemeFromToken(
@@ -304,6 +325,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         toRenderingPriorityToken(state.shared.renderingPriority));
     properties.setValue(kSharedVocoderWeightKey,
                         toVocoderWeightToken(state.shared.vocoderModelWeight));
+    properties.setValue(kSharedExperimentalReferenceAlignKey,
+                        toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode));
     properties.setValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme));
 
     juce::StringArray recentPaths;
@@ -434,6 +457,13 @@ void AppPreferences::setVocoderModelWeight(VocoderModelWeight weight)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.vocoderModelWeight = weight;
+    saveLocked();
+}
+
+void AppPreferences::setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.experimentalReferenceAlignMode = mode;
     saveLocked();
 }
 

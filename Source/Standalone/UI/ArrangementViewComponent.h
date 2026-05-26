@@ -5,9 +5,9 @@
  * 
  * 显示多轨道的音频片段排列视图，支持：
  * - 片段显示与拖拽
- * - 波形可视化
+ * - 波形可视化（通过 WaveformTileCache 和 ArrangementRenderModelCache）
  * - 时间标尺和网格
- * - 播放头位置显示
+ * - 播放头位置显示（通过 PlayheadOverlayComponent）
  */
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -23,6 +23,9 @@
 #include "SmallButton.h"
 #include "PlayheadOverlayComponent.h"
 #include "WaveformMipmap.h"
+#include "WaveformTileCache.h"
+#include "ArrangementRenderModelCache.h"
+#include "TimelineViewportState.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../Utils/KeyShortcutConfig.h"
 
@@ -125,10 +128,12 @@ private:
     juce::Rectangle<int> buildProjectedPlacementBounds(int trackId, int placementIndex) const;
     juce::Rectangle<int> getPlacementBounds(int trackId, int placementIndex) const;
 
+    // 时间 ↔ 像素坐标（委托给 TimelineViewportState）
     int absoluteTimeToContentX(double seconds) const;
     int absoluteTimeToViewportX(double seconds) const;
     int absoluteTimeToViewportX(double seconds, double projectedScrollOffset) const;
     double viewportXToAbsoluteTime(int x) const;
+    int getTotalContentWidth() const;
     void updateAutoScroll();
     void performPageScroll(double playheadTime);
     void onScrollVBlankCallback(double timestampSec);
@@ -138,13 +143,25 @@ private:
     void updateScrollBars();
     void drawTimeRuler(juce::Graphics& g);
     void drawGridLines(juce::Graphics& g);
+    void drawPlacementClips(juce::Graphics& g,
+                            const ArrangementRenderModelCache::RenderModel& model,
+                            const TimelineViewportState& viewport);
+
+    /** Request render model rebuild from current state. */
+    void requestRenderModelUpdate();
+    void refreshRenderModel();
 
     OpenTuneAudioProcessor& processor_;
     juce::ListenerList<Listener> listeners_;
 
     bool buildWaveformCaches(double timeBudgetMs);
 
+    // ---- Timeline rendering pipeline ----
+    TimelineViewportState viewportState_;
+    ArrangementRenderModelCache renderModelCache_;
+    WaveformTileCache waveformTileCache_;
     WaveformMipmapCache waveformMipmapCache_;
+
     double lastContextBpm_{ 0.0 };
     int lastContextTimeSigNum_{ 0 };
     int lastContextTimeSigDenom_{ 0 };

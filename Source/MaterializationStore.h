@@ -159,7 +159,7 @@ public:
         // Fingerprint for staleness detection
         int64_t inputFingerprint{0};                // snapshot of renderRevision at analysis time
 
-        // Backend mode (0 = Basic; Enhanced reserved for future)
+        // Backend mode (0 = Basic, 2 = GAME)
         int backendMode{0};
         double sourceDurationSeconds{0.0};
         juce::String errorMessage;

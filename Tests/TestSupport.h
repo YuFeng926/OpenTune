@@ -326,3 +326,5 @@ void runReferenceBindingSuite();
 void runPlacementReferenceCascadeSuite();
 void runArrangementContractSuite();
 void runProjectSessionReferenceSuite();
+void runTimelineRenderingSuite();
+void runTimelineRenderingPerfSuite();
