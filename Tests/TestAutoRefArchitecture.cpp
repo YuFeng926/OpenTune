@@ -70,6 +70,34 @@ bool containsGeneratedUserAddedAssignment(const juce::String& source)
         || compact.contains("TimeHandle{.kind=HandleKind::UserAdded");
 }
 
+juce::String extractFunctionBody(const juce::String& source, const juce::String& signature)
+{
+    const auto signatureIndex = source.indexOf(signature);
+    if (signatureIndex < 0) {
+        return {};
+    }
+
+    const auto braceIndex = source.indexOf(signatureIndex, "{");
+    if (braceIndex < 0) {
+        return {};
+    }
+
+    int depth = 0;
+    for (int i = braceIndex; i < source.length(); ++i) {
+        const auto c = source[(size_t) i];
+        if (c == '{') {
+            ++depth;
+        } else if (c == '}') {
+            --depth;
+            if (depth == 0) {
+                return source.substring(braceIndex, i + 1);
+            }
+        }
+    }
+
+    return {};
+}
+
 } // namespace
 
 void runAutoRefArchitectureStandaloneEditorHeaderDropsServiceOwnershipTest()
@@ -470,10 +498,16 @@ void runReferenceAutoAlign_AggressiveModeContractMatchesImplementationTest()
 {
     constexpr const char* testName = "AutoRefArchitecture_AggressiveModeContractMatchesImplementation";
 
-    const auto header = readWorkspaceFile("Source/PluginProcessor.h");
-    const auto impl   = readWorkspaceFile("Source/PluginProcessor.cpp");
-    if (!assertReadable(testName, "Source/PluginProcessor.h", header) ||
-        !assertReadable(testName, "Source/PluginProcessor.cpp", impl)) {
+    const auto impl = readWorkspaceFile("Source/PluginProcessor.cpp");
+    if (!assertReadable(testName, "Source/PluginProcessor.cpp", impl)) {
+        return;
+    }
+
+    const auto producerBody = extractFunctionBody(
+        impl,
+        "MaterializationStore::DerivedAnalysis OpenTuneAudioProcessor::buildGameReferenceDerivedAnalysis");
+    if (producerBody.isEmpty()) {
+        logFail(testName, "missing buildGameReferenceDerivedAnalysis body");
         return;
     }
 
@@ -490,6 +524,23 @@ void runReferenceAutoAlign_AggressiveModeContractMatchesImplementationTest()
         return;
     }
 
+    if (!producerBody.contains("dynamic_cast<GameNoteGenerator*>")
+        || !producerBody.contains("gameGenerator->generate(input)")) {
+        logFail(testName, "Aggressive producer must require a real GAME backend");
+        return;
+    }
+
+    if (!producerBody.contains("state = F0ExtractionState::Failed")
+        || !producerBody.contains("requires GAME")) {
+        logFail(testName, "Aggressive producer must fail explicitly when GAME is unavailable");
+        return;
+    }
+
+    if (producerBody.contains("Basic fallback") || producerBody.contains("backendMode = 0")) {
+        logFail(testName, "Aggressive producer must not silently fall back to Basic");
+        return;
+    }
+
     // 3. Aggressive 不能把 Basic temporal events 混入（不能同时调 BasicReferenceFeatureBuilder::build 和 GameNoteGenerator）
     //    GAME producer 可以先用 BasicReferenceFeatureBuilder::build 获取基础结构再替换，
     //    但不可以保留 Basic temporal events 与 GAME notes 共存
@@ -498,9 +549,8 @@ void runReferenceAutoAlign_AggressiveModeContractMatchesImplementationTest()
     //    必同时来自 GAME 路径。
 
     // 简单验证：buildGameReferenceDerivedAnalysis 体内应替换 temporalEvents 或设置 backendMode=2
-    if (!impl.contains("buildGameReferenceDerivedAnalysis") ||
-        !impl.contains("temporalEvents") ||
-        !impl.contains("backendMode")) {
+    if (!producerBody.contains("result.backendMode = 2")
+        || !producerBody.contains("result.temporalEvents.clear()")) {
         logFail(testName, "Aggressive producer must set temporalEvents and backendMode");
         return;
     }
