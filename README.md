@@ -16,7 +16,8 @@ OpenTune 是一款基于神经声码器的开源修音工具。与传统 DSP 算
 
 ## ✨ 亮点特性
 
-<img width="1672" height="941" alt="OpenTune特性" src="https://github.com/user-attachments/assets/5535364f-1433-4e0f-b1ef-87553a16f10b" />
+<img width="1672" height="941" alt="OpenTune特性" src="https://github.com/user-attachments/assets/37c38b4a-040e-4ce2-96fc-053e46c35d05" />
+
 
 
 
