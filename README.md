@@ -1,7 +1,8 @@
 <div align="center">
 
 ## OpenTune – AI 智能修音软件
-<img width="512" alt="1" src="https://github.com/user-attachments/assets/5f018b53-e78c-4eec-a2da-e71b0724bc9b" />
+<img width="1672" height="941" alt="OpenTune主图" src="https://github.com/user-attachments/assets/822c7d23-9e12-4f26-afd7-5ae1587d46c7" />
+
 
 
 保留共振峰，移调不失真
@@ -15,7 +16,8 @@ OpenTune 是一款基于神经声码器的开源修音工具。与传统 DSP 算
 
 ## ✨ 亮点特性
 
-<img width="512" alt="2" src="https://github.com/user-attachments/assets/55f7136e-fc8b-4576-af0b-2cbeea3c2f6e" />
+<img width="1672" height="941" alt="flu-image-2026-05-26T03-10-23-761Z" src="https://github.com/user-attachments/assets/af9df25d-ba33-4b67-838b-954d5505f678" />
+
 
 
 
@@ -29,24 +31,10 @@ OpenTune 是一款基于神经声码器的开源修音工具。与传统 DSP 算
 AI 重合成：基于深度学习的声码器，而非传统移调
 
 
-
-
-<img width="512" alt="3" src="https://github.com/user-attachments/assets/d99c088a-46f6-4177-a761-0af737416b41" />
-
-
-
-
 类Auto-Tune工作流：手绘、音符、锚点工具一应俱全，助你快速进入心流状态
 
 
-
-<img width="512" alt="4" src="https://github.com/user-attachments/assets/c95636d1-2eb8-4cad-8c2c-61b208adb961" />
-
-
-
-
 内置类Auto-Key自动检测调式：上手即修，不修也准，修了更准
-
 
 
 双格式输出：Standalone 独立运行 + VST3 插件（支持 ARA2 扩展）
