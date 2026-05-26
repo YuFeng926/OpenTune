@@ -133,7 +133,6 @@ private:
     PianoRollMaterializationSync resolveCurrentMaterializationSync();
     void syncParameterPanelFromSelection();
     void syncMaterializationProjectionToPianoRoll();
-    void syncAraPreferredRegionBindingOnly();
     void showPreferencesDialog();
     void updateRegularCaptureSessionCallback();
     void clearRegularCaptureSessionCallback();
@@ -176,11 +175,6 @@ private:
     juce::uint32 araWaitStartMs_ = 0;
 
     Capture::CaptureSession* regularCaptureCallbackSession_ = nullptr;
-
-#if JucePlugin_Enable_ARA
-    uint64_t lastConsumedAraSnapshotEpoch_{0};
-    VST3AraSession::RegionIdentity lastConsumedPreferredAraRegion_{};
-#endif
 
     static constexpr int TOP_BAR_HEIGHT = 96;
     static constexpr int PARAMETER_PANEL_WIDTH = 240;

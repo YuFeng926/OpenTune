@@ -191,7 +191,7 @@ const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory();
 |------|------|
 | `bindPlaybackRegionToMaterialization(ARAPlaybackRegion*, uint64_t materializationId, uint64_t materializationRevision, uint64_t projectionRevision, SourceWindow, double materializationDurationSeconds, double playbackStartSeconds)` | 填充 regionSlot 的 appliedProjection；立即 `publishSnapshotLocked()` |
 | `updatePlaybackRegionMaterializationRevisions(ARAPlaybackRegion*, uint64_t materializationRevision, uint64_t projectionRevision)` | 仅更新 revision 字段（不变 materializationId / window / playbackStart） |
-| `clearPlaybackRegionMaterialization(ARAPlaybackRegion*)` | 清空 appliedProjection，region 回到 Unbound 状态 |
+| `bindPlaybackRegionToMaterialization(...)` / `updatePlaybackRegionMaterializationRevisions(...)` | Editor/session 只允许通过显式 bind 或 revision update 表达已有 materialization；payload 暂缺不触发 destructive clear |
 
 ### 3.7 辅助接口
 
@@ -206,8 +206,8 @@ const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory();
 | `sources_ / regions_ / preferredRegion_ / editingDepth_ / pendingSnapshotPublication_ / nextXxxRevision` | `stateMutex_` (`std::mutex`) |
 | `publishedSnapshot_` | `std::atomic_load / std::atomic_store` 配合 `shared_ptr<const PublishedSnapshot>` |
 | `processor_` | `std::atomic<OpenTuneAudioProcessor*>` (acquire / release) |
-| `hydrationQueue_` | `stateMutex_` + `hydrationCv_` (`std::condition_variable`) |
-| `hydrationWorkerThread_` | 独占成员，析构时 join |
+| `readyBirthWorkQueue_ / pendingBirths_` | `stateMutex_` + `birthCv_` (`std::condition_variable`)；birth truth keyed by `AudioModification persistentId + SourceWindow + revision` |
+| `birthWorkerThread_` | 独占成员，析构时 join |
 
 ---
 

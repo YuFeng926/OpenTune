@@ -180,12 +180,12 @@ struct VST3AraSessionTestProbe {
         session.preferredRegion_ = regionSlot.identity;
     }
 
-    static bool enqueueMaterializationBirthIfNeeded(VST3AraSession& session,
-                                                     const juce::String& persistentId)
+    static bool upsertPendingBirthIfNeededForPersistentId(VST3AraSession& session,
+                                                          const juce::String& persistentId)
     {
         const std::lock_guard<std::mutex> lock(session.stateMutex_);
 
-        // Find the region for this persistentId and enqueue birth if needed
+        // Find the region for this persistentId and upsert pending birth if needed.
         for (const auto& [pr, slot] : session.regions_) {
             juce::ignoreUnused(pr);
             if (slot.audioModificationPersistentId == persistentId
@@ -202,9 +202,9 @@ struct VST3AraSessionTestProbe {
         if (pendingIt == session.pendingBirths_.end())
             return false;
 
-        return std::find(session.materializationBirthQueue_.begin(),
-                         session.materializationBirthQueue_.end(),
-                         persistentId) != session.materializationBirthQueue_.end();
+        return std::find(session.readyBirthWorkQueue_.begin(),
+                         session.readyBirthWorkQueue_.end(),
+                         persistentId) != session.readyBirthWorkQueue_.end();
     }
 
     static void publish(VST3AraSession& session)
@@ -222,27 +222,140 @@ struct VST3AraSessionTestProbe {
     }
 
     // ========================================================================
-    // ARA birth lifecycle RED guard probes
+    // ARA birth lifecycle contract probes
     // ========================================================================
 
-    /** Returns the number of entries in the materialization birth queue. */
-    static int birthQueueSize(const VST3AraSession& session)
+    /** Returns the number of worker-ready birth entries. */
+    static int readyBirthWorkQueueSize(const VST3AraSession& session)
     {
         const std::lock_guard<std::mutex> lock(session.stateMutex_);
-        return static_cast<int>(session.materializationBirthQueue_.size());
+        return static_cast<int>(session.readyBirthWorkQueue_.size());
     }
 
-    /** Returns whether a persistentId is currently queued for materialization birth. */
-    static bool isPersistentIdQueuedForBirth(const VST3AraSession& session,
-                                              const juce::String& persistentId)
+    /** Returns whether a persistentId is queued for worker-ready birth work. */
+    static bool isPersistentIdQueuedForReadyBirthWork(const VST3AraSession& session,
+                                                       const juce::String& persistentId)
     {
         const std::lock_guard<std::mutex> lock(session.stateMutex_);
         const auto pendingIt = session.pendingBirths_.find(persistentId);
         if (pendingIt == session.pendingBirths_.end())
             return false;
-        return std::find(session.materializationBirthQueue_.begin(),
-                         session.materializationBirthQueue_.end(),
-                         persistentId) != session.materializationBirthQueue_.end();
+        return std::find(session.readyBirthWorkQueue_.begin(),
+                         session.readyBirthWorkQueue_.end(),
+                         persistentId) != session.readyBirthWorkQueue_.end();
+    }
+
+    /** Simulates a worker result commit. Returns false for stale or invalid results. */
+    static bool simulateReadyBirthWorkerResult(VST3AraSession& session,
+                                               const juce::String& persistentId,
+                                               uint64_t pendingRevision,
+                                               uint64_t sourceId,
+                                               uint64_t materializationId,
+                                               uint64_t materializationRevision = 1,
+                                               double materializationDurationSeconds = 1.0)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+
+        auto pendingIt = session.pendingBirths_.find(persistentId);
+        if (pendingIt == session.pendingBirths_.end()
+            || pendingIt->second.revision != pendingRevision
+            || materializationId == 0)
+        {
+            return false;
+        }
+
+        VST3AraSession::RegionSlot* targetRegionSlot = nullptr;
+        for (auto& [playbackRegion, slot] : session.regions_)
+        {
+            juce::ignoreUnused(playbackRegion);
+            if (slot.identity.audioSource == pendingIt->second.audioSource
+                && slot.audioModificationPersistentId == persistentId)
+            {
+                targetRegionSlot = &slot;
+                break;
+            }
+        }
+
+        if (targetRegionSlot == nullptr
+            || targetRegionSlot->sourceWindow.sourceId != pendingIt->second.desiredWindow.sourceId
+            || targetRegionSlot->sourceWindow.sourceStartSeconds != pendingIt->second.desiredWindow.sourceStartSeconds
+            || targetRegionSlot->sourceWindow.sourceEndSeconds != pendingIt->second.desiredWindow.sourceEndSeconds
+            || !session.regionNeedsMaterializationBirthLocked(*targetRegionSlot))
+        {
+            session.pendingBirths_.erase(pendingIt);
+            return false;
+        }
+
+        VST3AraSession::AraMaterializationBinding binding;
+        binding.audioModificationPersistentId = persistentId;
+        binding.sourceId = sourceId;
+        binding.materializationId = materializationId;
+        binding.sourceWindow = targetRegionSlot->sourceWindow;
+        binding.materializationRevision = materializationRevision;
+        binding.materializationDurationSeconds = materializationDurationSeconds;
+
+        session.upsertMaterializationBindingLocked(binding);
+        session.applyBindingsToRegionSlotsLocked();
+        session.markSnapshotDirtyLocked();
+        session.pendingBirths_.erase(pendingIt);
+        return true;
+    }
+
+    /** Returns whether a persistentId has a PendingBirth record (regardless of queue). */
+    static bool hasPendingBirth(const VST3AraSession& session,
+                                const juce::String& persistentId)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+        return session.pendingBirths_.find(persistentId) != session.pendingBirths_.end();
+    }
+
+    /** Returns the revision of a PendingBirth (0 if not found). */
+    static uint64_t getPendingBirthRevision(const VST3AraSession& session,
+                                            const juce::String& persistentId)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+        const auto it = session.pendingBirths_.find(persistentId);
+        return it != session.pendingBirths_.end() ? it->second.revision : 0;
+    }
+
+    /** Returns the desiredWindow of a PendingBirth (or empty window if not found). */
+    static SourceWindow getPendingBirthWindow(const VST3AraSession& session,
+                                              const juce::String& persistentId)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+        const auto it = session.pendingBirths_.find(persistentId);
+        return it != session.pendingBirths_.end() ? it->second.desiredWindow : SourceWindow{};
+    }
+
+    /** Seeds a source slot with sampleAccessEnabled=false (unready for birth). */
+    static void seedSourceUnready(VST3AraSession& session,
+                                  juce::ARAAudioSource* audioSource,
+                                  uint64_t sourceId,
+                                  double sampleRate = 44100.0,
+                                  int64_t numSamples = 44100)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+        auto& sourceSlot = session.sources_[audioSource];
+        sourceSlot.audioSource = audioSource;
+        sourceSlot.sourceId = sourceId;
+        sourceSlot.sampleRate = sampleRate;
+        sourceSlot.numChannels = 1;
+        sourceSlot.numSamples = numSamples;
+        sourceSlot.contentRevision = 1;
+        sourceSlot.sampleAccessEnabled = false;
+    }
+
+    /** Enables sample access on a source slot (without creating a real HostAudioReader,
+     *  which would crash on fake ARA pointers used in unit tests). */
+    static void setSourceReady(VST3AraSession& session,
+                               juce::ARAAudioSource* audioSource)
+    {
+        const std::lock_guard<std::mutex> lock(session.stateMutex_);
+        auto* sourceSlot = session.findSourceSlot(audioSource);
+        if (sourceSlot != nullptr)
+        {
+            sourceSlot->sampleAccessEnabled = true;
+        }
     }
 
     /** Returns whether a region needs materialization birth (calls the private method). */

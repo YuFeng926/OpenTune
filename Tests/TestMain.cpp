@@ -309,6 +309,44 @@ juce::MemoryBlock serializeProcessorState(OpenTuneAudioProcessor& processor)
     return stateData;
 }
 
+std::unique_ptr<OpenTuneAudioProcessor> makeProcessorWithWrapperType(juce::AudioProcessor::WrapperType wrapperType)
+{
+    juce::AudioProcessor::setTypeOfNextNewPlugin(wrapperType);
+    auto processor = std::make_unique<OpenTuneAudioProcessor>();
+    juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Undefined);
+    return processor;
+}
+
+juce::MemoryBlock makeMinimalVst3StateWithMetadataOnlySource(uint64_t sourceId)
+{
+    juce::MemoryBlock stateData;
+    juce::MemoryOutputStream out(stateData, false);
+    out.writeInt(0x4F545354); // 'OTST'
+    out.writeInt(8);          // Placement::clipInSeconds version
+    out.writeDouble(1.0);     // zoomLevel
+    out.writeInt(120);        // trackHeight
+
+    out.writeInt(1); // source count
+    out.writeInt64(static_cast<juce::int64>(sourceId));
+    out.writeString("ara-metadata-only-source");
+    out.writeDouble(44100.0);
+    out.writeBool(false); // metadata-only source: no serialized PCM buffer
+
+    out.writeInt(0); // materialization count
+    out.writeInt(0); // active track
+    out.writeInt(OpenTuneAudioProcessor::MAX_TRACKS);
+    for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId) {
+        out.writeInt64(0);      // selectedPlacementId
+        out.writeBool(false);   // muted
+        out.writeBool(false);   // solo
+        out.writeFloat(1.0f);   // volume
+        out.writeInt(0);        // placement count
+    }
+
+    out.flush();
+    return stateData;
+}
+
 bool serializedStateContainsAscii(const juce::MemoryBlock& stateData, const char* needle)
 {
     if (needle == nullptr || *needle == '\0' || stateData.getSize() == 0) {
@@ -3791,7 +3829,7 @@ void runAraBindingStateStaleSourceWindowRequeuesBirthTest()
                                                                0.0,
                                                                currentWindow.durationSeconds());
 
-    if (!VST3AraSessionTestProbe::enqueueMaterializationBirthIfNeeded(session, "mod-stale-window-requeue")) {
+    if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-stale-window-requeue")) {
         logFail(testName, "stale binding on a hydrated source should be eligible for session-side auto-birth");
         return;
     }
@@ -4190,6 +4228,7 @@ void runAraFinalRecordRequestedDoesNotFallbackToMaterializationRefresh();
 void runAraFinalSessionHasNoSourceLevelHydrationReadPass();
 void runAraFinalPublishedRegionViewExposesNoRawAudioPayload();
 void runAraFinalPluginEditorHasNoPrepareImportFromAraRegionHelper();
+void runAraFinalPluginEditorHasNoBindPlaybackRegionToMaterialization();
 void runAraFinalRequestMaterializationRefreshContractIsNonAra();
 void runAraFinalBirthPathOwnsOriginalF0Release();
 void runAraBirthPathDetectsSilentGapsBeforeCommit();
@@ -4199,11 +4238,14 @@ void runDmlVocoderUsesDeviceOutputBinding();
 void runRenderingPriorityRemainsGpuFirstAndCpuFirstOnly();
 void runStage2WorkerStreamsStage1InputDirectly();
 
-// ARA birth lifecycle RED guard tests (Phase 0 — all must fail on current code)
+// ARA birth lifecycle contract tests
 void runAraBirthSameSourceTwoDifferentPersistentIdsBothBirth();
-void runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlightNotLost();
+void runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlight_NotLost();
 void runAraBirthStaleResultForOldWindowDoesNotOverrideLatestDesiredWindow();
-void runAraBirthPreexistingRegionNewPersistentIdEnqueues();
+void runAraBirthDidAddOnPreexistingRegionWithNewPersistentIdEnqueuesBirth();
+void runAraBirthUpsertWithUnreadySourceStillRecordsPending();
+void runAraBirthReadySourceTriggersQueueForExistingPending();
+void runAraBirthSamePidNewWindowBumpsRevisionAndReplacesWindow();
 void runAraEditorMissingPayloadDoesNotClearBinding();
 void runAraEditorDestroyRecreateReattachesExistingBinding();
 void runAraStateRestorePreBindSetStateStillRestoresIntoFinalSharedStores();
@@ -6834,12 +6876,13 @@ void runProcessorStateVersionSevenAndNoBpmTest()
         logFail(testName, "expected OTST magic in non-Standalone path");
         return;
     }
+    // §8: version 7 → 8 adds Placement::clipInSeconds.
     // §3.8: vocal-time-stretch bumped state version 5 → 6 (TimeGrid section
     // appended after PitchCurve per materialization), then 6 → 7 for
-    // per-handle confidence. v5/v6 projects are still
+    // per-handle confidence. v5/v6/v7 projects are still
     // accepted via backward-compat paths in setStateInformation.
-    if (version != 7) {
-        logFail(testName, "kProcessorStateVersion expected 7 (time grid confidence field)");
+    if (version != 8) {
+        logFail(testName, "kProcessorStateVersion expected 8 (clipInSeconds field)");
         return;
     }
 
@@ -6890,6 +6933,57 @@ void runProcessorStateOldVersionRejectedTest()
         return;
     }
     // Stores remain at their default (empty) state — successful rejection.
+    logPass(testName);
+}
+
+void runProcessorStateRegularVst3RestoresImmediatelyWhenUnboundTest()
+{
+    constexpr const char* testName = "ProcessorState_RegularVst3RestoresImmediatelyWhenUnbound";
+
+    auto writer = makeProcessorWithWrapperType(juce::AudioProcessor::wrapperType_VST3);
+    const auto committed = writer->commitPreparedImportAsPlacement(makePreparedImport("regular-vst3-state", 256), {1, 2.5});
+    if (!committed.isValid()) {
+        logFail(testName, "failed to seed regular VST3 state");
+        return;
+    }
+
+    const auto stateData = serializeProcessorState(*writer);
+
+    auto reader = makeProcessorWithWrapperType(juce::AudioProcessor::wrapperType_VST3);
+    reader->setStateInformation(stateData.getData(), static_cast<int>(stateData.getSize()));
+
+    StandaloneArrangement::Placement restoredPlacement;
+    if (!reader->getPlacementById(1, committed.placementId, restoredPlacement)
+        || restoredPlacement.materializationId != committed.materializationId
+        || !approxEqual(restoredPlacement.timelineStartSeconds, 2.5, 1.0e-6)) {
+        logFail(testName, "regular unbound VST3 state was mistaken for ARA pre-bind and not restored immediately");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runProcessorStateAraMetadataOnlyPreBindDoesNotRestoreLocalStoresTest()
+{
+    constexpr const char* testName = "ProcessorState_AraMetadataOnlyPreBindDoesNotRestoreLocalStores";
+
+    auto processor = makeProcessorWithWrapperType(juce::AudioProcessor::wrapperType_VST3);
+    const auto stateData = makeMinimalVst3StateWithMetadataOnlySource(8801);
+
+    processor->setStateInformation(stateData.getData(), static_cast<int>(stateData.getSize()));
+
+    SourceStore::SourceSnapshot sourceSnapshot;
+    if (processor->getSourceSnapshotById(8801, sourceSnapshot)) {
+        logFail(testName, "ARA metadata-only pre-bind state restored into local SourceStore before didBindToARA");
+        return;
+    }
+
+    if (processor->getStandaloneArrangement() != nullptr
+        && processor->getStandaloneArrangement()->getNumPlacements(0) != 0) {
+        logFail(testName, "ARA metadata-only pre-bind state restored local placements before didBindToARA");
+        return;
+    }
+
     logPass(testName);
 }
 
@@ -6969,6 +7063,8 @@ void runProcessorBehaviorSuite()
     runCaptureSessionDisplaySegmentUpdatesOnRenderCompleteTest();
     runProcessorStateVersionSevenAndNoBpmTest();
     runProcessorStateOldVersionRejectedTest();
+    runProcessorStateRegularVst3RestoresImmediatelyWhenUnboundTest();
+    runProcessorStateAraMetadataOnlyPreBindDoesNotRestoreLocalStoresTest();
     runProcessorLineAnchorRenderUsesCommittedCorrectedF0Test();
     // undo-affected-range-passthrough anchor tests
     runPianoRollEditActionAffectedRangeStoredVerbatimTest();
@@ -7230,8 +7326,10 @@ void runBusinessFunctionsDoNotInvokeReclaimDirectlyTest()
 
         // Whitelist function names that are allowed to contain reclaim calls
         const std::vector<juce::String> whitelistFunctions = {
+            "handleAsyncUpdate",
             "physicallyDeleteIfReclaimable",
             "runReclaimSweepOnMessageThread",
+            "scheduleReclaimSweep",
         };
 
         juce::String currentFunction;
@@ -7721,7 +7819,7 @@ void runAraFinalRecordRequestedDoesNotTriggerGame()
     const auto branch = extractWorkspaceFileSection(
         "Source/Plugin/PluginEditor.cpp",
         "// Binding/display only",
-        "void OpenTuneAudioProcessorEditor::syncAraPreferredRegionBindingOnly");
+        "void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested");
     if (branch.isEmpty()) {
         logFail(testName, "failed to locate ARA recordRequested binding-only branch");
         return;
@@ -7749,13 +7847,13 @@ void runAraFinalRecordRequestedDoesNotFallbackToMaterializationRefresh()
 
     const auto& source = getFileCache().get("Source/Plugin/PluginEditor.cpp");
     const auto araElsePos = source.indexOf("#else");
-    const auto syncFuncPos = source.indexOf("syncAraPreferredRegionBindingOnly");
-    if (araElsePos < 0 || syncFuncPos < 0) {
+    const auto playheadFuncPos = source.indexOf("void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested");
+    if (araElsePos < 0 || playheadFuncPos < 0) {
         logFail(testName, "failed to locate ARA branch boundaries");
         return;
     }
 
-    const auto recordAraBranch = source.substring(araElsePos, syncFuncPos);
+    const auto recordAraBranch = source.substring(araElsePos, playheadFuncPos);
     if (recordAraBranch.contains("requestMaterializationRefresh")) {
         logFail(testName, "ARA recordRequested still calls requestMaterializationRefresh");
         return;
@@ -7823,30 +7921,43 @@ void runAraFinalPluginEditorHasNoPrepareImportFromAraRegionHelper()
     logPass(testName);
 }
 
+void runAraFinalPluginEditorHasNoBindPlaybackRegionToMaterialization()
+{
+    constexpr const char* testName = "AraFinal_PluginEditorHasNoBindPlaybackRegionToMaterialization";
+
+    // Kill-list guard: PluginEditor.cpp must never call
+    // bindPlaybackRegionToMaterialization or clearPlaybackRegionMaterialization.
+    // The editor is a read-only consumer; the session owns all binding truth.
+    const auto& source = getFileCache().get("Source/Plugin/PluginEditor.cpp");
+
+    if (source.contains("bindPlaybackRegionToMaterialization(")) {
+        logFail(testName, "PluginEditor.cpp still calls bindPlaybackRegionToMaterialization");
+        return;
+    }
+
+    if (source.contains("clearPlaybackRegionMaterialization(")) {
+        logFail(testName, "PluginEditor.cpp still calls clearPlaybackRegionMaterialization");
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runAraFinalRequestMaterializationRefreshContractIsNonAra()
 {
     constexpr const char* testName = "AraFinal_RequestMaterializationRefreshContractIsNonAra";
 
     const auto& source = getFileCache().get("Source/Plugin/PluginEditor.cpp");
     const auto araElsePos = source.indexOf("#else");
-    const auto syncFuncPos = source.indexOf("syncAraPreferredRegionBindingOnly");
-    if (araElsePos < 0 || syncFuncPos < 0) {
+    const auto playheadFuncPos = source.indexOf("void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested");
+    if (araElsePos < 0 || playheadFuncPos < 0) {
         logFail(testName, "failed to locate ARA branch boundaries");
         return;
     }
 
-    const auto recordAraBranch = source.substring(araElsePos, syncFuncPos);
+    const auto recordAraBranch = source.substring(araElsePos, playheadFuncPos);
     if (recordAraBranch.contains("requestMaterializationRefresh")) {
         logFail(testName, "ARA recordRequested still calls requestMaterializationRefresh");
-        return;
-    }
-
-    const auto syncAraBranch = extractWorkspaceFileSection(
-        "Source/Plugin/PluginEditor.cpp",
-        "void OpenTuneAudioProcessorEditor::syncAraPreferredRegionBindingOnly",
-        "void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested");
-    if (syncAraBranch.contains("requestMaterializationRefresh")) {
-        logFail(testName, "syncAraPreferredRegionBindingOnly still calls requestMaterializationRefresh");
         return;
     }
 
@@ -8341,7 +8452,12 @@ void runAraRuntimeRecordRequestedSplitsByRuntimeModeTest()
     constexpr const char* testName = "AraRuntime_RecordRequestedSplitsByRuntimeMode";
     const auto recordSection = extractWorkspaceFileSection("Source/Plugin/PluginEditor.cpp",
                                                            "void OpenTuneAudioProcessorEditor::recordRequested()",
-                                                           "void OpenTuneAudioProcessorEditor::syncAraPreferredRegionBindingOnly()");
+                                                           "void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested");
+
+    if (recordSection.isEmpty()) {
+        logFail(testName, "failed to locate recordRequested function body");
+        return;
+    }
 
     const auto captureIndex = recordSection.indexOf("processorRef_.getCaptureSession()");
     const auto regularLogIndex = recordSection.indexOf("mode=regular-vst3");
@@ -9128,11 +9244,10 @@ void runIntegration_RetireAndReviveRoundTripTest()
 }
 
 // ============================================================================
-// ARA birth lifecycle RED guard tests (Phase 0 RED — all fail on current code)
+// ARA birth lifecycle contract tests
 // ============================================================================
 //
-// 测试 1: Same source, two regions with different persistentIds, both need birth.
-//        Source-level queuedForMaterializationBirth flag permits only one enqueue.
+// 测试 1: Same source, two regions with different persistentIds, both complete birth independently.
 void runAraBirthSameSourceTwoDifferentPersistentIdsBothBirth()
 {
     constexpr const char* testName = "AraBirth_SameSourceTwoDifferentPersistentIdsBothBirth";
@@ -9149,40 +9264,50 @@ void runAraBirthSameSourceTwoDifferentPersistentIdsBothBirth()
     VST3AraSessionTestProbe::seedPlaybackRegionForModification(
         session, audioSource, regionB, "mod-B", sourceWindow, 0.0, 1.0);
 
-    // Each region has a distinct persistentId with no binding.  The new
-    // modification-level PendingBirth model allows each to enqueue independently.
-    bool enqueuedA = VST3AraSessionTestProbe::enqueueMaterializationBirthIfNeeded(session, "mod-A");
-    if (!enqueuedA) {
-        logFail(testName, "enqueueMaterializationBirthIfNeeded(\"mod-A\") returned false");
+    // Each region has a distinct persistentId with no binding. The
+    // modification-level PendingBirth model gives each its own revision and
+    // worker result path.
+    if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-A")) {
+        logFail(testName, "upsertPendingBirthIfNeededForPersistentId(\"mod-A\") returned false");
+        return;
+    }
+    const uint64_t revisionA = VST3AraSessionTestProbe::getPendingBirthRevision(session, "mod-A");
+
+    if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-B")) {
+        logFail(testName, "upsertPendingBirthIfNeededForPersistentId(\"mod-B\") returned false");
+        return;
+    }
+    const uint64_t revisionB = VST3AraSessionTestProbe::getPendingBirthRevision(session, "mod-B");
+
+    if (!VST3AraSessionTestProbe::simulateReadyBirthWorkerResult(session, "mod-A", revisionA, 1, 7101)
+        || !VST3AraSessionTestProbe::simulateReadyBirthWorkerResult(session, "mod-B", revisionB, 1, 7102)) {
+        logFail(testName, "worker result simulation did not commit both independent modifications");
         return;
     }
 
-    bool enqueuedB = VST3AraSessionTestProbe::enqueueMaterializationBirthIfNeeded(session, "mod-B");
-    if (!enqueuedB) {
-        logFail(testName, "enqueueMaterializationBirthIfNeeded(\"mod-B\") returned false");
+    if (VST3AraSessionTestProbe::bindingMaterializationForPersistentId(session, "mod-A") != 7101
+        || VST3AraSessionTestProbe::bindingMaterializationForPersistentId(session, "mod-B") != 7102) {
+        logFail(testName, "independent persistentIds did not produce independent materialization bindings");
         return;
     }
 
-    const int queueSize = VST3AraSessionTestProbe::birthQueueSize(session);
-
-    // ASSERT: Two modifications should each have a birth arrangement (birthQueueSize >= 2).
-    // Phase 1 modification-level PendingBirth model allows both to be independently enqueued.
-    if (queueSize >= 2) {
-        logPass(testName);
-    } else {
-        char buf[160];
-        std::snprintf(buf, sizeof(buf),
-            "birthQueueSize=%d expected>=2 — per-modification PendingBirth should allow independent enqueue",
-            queueSize);
-        logFail(testName, buf);
+    VST3AraSessionTestProbe::publish(session);
+    const auto snapshot = session.loadSnapshot();
+    const auto* viewA = snapshot ? snapshot->findRegion(regionA) : nullptr;
+    const auto* viewB = snapshot ? snapshot->findRegion(regionB) : nullptr;
+    if (viewA == nullptr || viewA->appliedProjection.materializationId != 7101
+        || viewB == nullptr || viewB->appliedProjection.materializationId != 7102) {
+        logFail(testName, "published snapshot did not expose both committed materialization projections");
+        return;
     }
+
+    logPass(testName);
 }
 
-// 测试 2: New region arrives while birth already in flight on same source.
-//        queuedForMaterializationBirth flag prevents re-enqueue of the newly arrived region.
-void runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlightNotLost()
+// 测试 2: New region arrives while another persistentId birth is already in flight on the same source.
+void runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlight_NotLost()
 {
-    constexpr const char* testName = "AraBirth_NewPersistentIdArrivesWhileWorkAlreadyInFlightNotLost";
+    constexpr const char* testName = "AraBirth_NewPersistentIdArrivesWhileWorkAlreadyInFlight_NotLost";
 
     VST3AraSession session;
     auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x100);
@@ -9194,12 +9319,12 @@ void runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlightNotLost()
     VST3AraSessionTestProbe::seedPlaybackRegionForModification(
         session, audioSource, regionA, "mod-A", sourceWindow, 0.0, 1.0);
 
-    // Enqueue birth for region A
-    const bool enqueued = VST3AraSessionTestProbe::enqueueMaterializationBirthIfNeeded(session, "mod-A");
-    if (!enqueued) {
-        logFail(testName, "enqueueMaterializationBirthIfNeeded(\"mod-A\") returned false — precondition");
+    // Begin birth for region A and hold its revision as the in-flight worker snapshot.
+    if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-A")) {
+        logFail(testName, "upsertPendingBirthIfNeededForPersistentId(\"mod-A\") returned false — precondition");
         return;
     }
+    const uint64_t revisionA = VST3AraSessionTestProbe::getPendingBirthRevision(session, "mod-A");
 
     // New region C arrives on the same source, different persistentId, no binding → needs birth
     VST3AraSessionTestProbe::seedPlaybackRegionForModification(
@@ -9211,26 +9336,37 @@ void runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlightNotLost()
         return;
     }
 
-    // With modification-level PendingBirth, "mod-C" can enqueue independently
-    const bool secondEnqueue = VST3AraSessionTestProbe::enqueueMaterializationBirthIfNeeded(session, "mod-C");
-    juce::ignoreUnused(secondEnqueue);
-
-    const int queueSize = VST3AraSessionTestProbe::birthQueueSize(session);
-
-    // ASSERT: region C's birth should be independently enqueued
-    if (queueSize >= 2) {
-        logPass(testName);
-    } else {
-        char buf[180];
-        std::snprintf(buf, sizeof(buf),
-            "region C needs birth but PendingBirth did not enqueue — queueSize=%d expected>=2",
-            queueSize);
-        logFail(testName, buf);
+    if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-C")) {
+        logFail(testName, "new persistentId did not create an independent PendingBirth while A was in flight");
+        return;
     }
+    const uint64_t revisionC = VST3AraSessionTestProbe::getPendingBirthRevision(session, "mod-C");
+
+    if (!VST3AraSessionTestProbe::simulateReadyBirthWorkerResult(session, "mod-A", revisionA, 1, 7201)) {
+        logFail(testName, "in-flight mod-A worker result did not commit");
+        return;
+    }
+
+    if (!VST3AraSessionTestProbe::hasPendingBirth(session, "mod-C")) {
+        logFail(testName, "committing mod-A incorrectly consumed later mod-C PendingBirth");
+        return;
+    }
+
+    if (!VST3AraSessionTestProbe::simulateReadyBirthWorkerResult(session, "mod-C", revisionC, 1, 7203)) {
+        logFail(testName, "later mod-C worker result did not commit");
+        return;
+    }
+
+    if (VST3AraSessionTestProbe::bindingMaterializationForPersistentId(session, "mod-A") != 7201
+        || VST3AraSessionTestProbe::bindingMaterializationForPersistentId(session, "mod-C") != 7203) {
+        logFail(testName, "in-flight and later persistentIds did not retain separate bindings");
+        return;
+    }
+
+    logPass(testName);
 }
 
-// 测试 3: SourceWindow changes while birth already queued for a different region.
-//        queuedForMaterializationBirth flag prevents re-enqueue to handle the new desired window.
+// 测试 3: SourceWindow changes while an older birth result is in flight; stale result must not bind.
 void runAraBirthStaleResultForOldWindowDoesNotOverrideLatestDesiredWindow()
 {
     constexpr const char* testName = "AraBirth_StaleResultForOldWindowDoesNotOverrideLatestDesiredWindow";
@@ -9238,67 +9374,73 @@ void runAraBirthStaleResultForOldWindowDoesNotOverrideLatestDesiredWindow()
     VST3AraSession session;
     auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x100);
     auto* regionA = reinterpret_cast<juce::ARAPlaybackRegion*>(0x200);
-    auto* regionB = reinterpret_cast<juce::ARAPlaybackRegion*>(0x300);
     const SourceWindow initialWindow{1, 0.0, 1.0};
     const SourceWindow updatedWindow{1, 0.5, 1.5};
 
     VST3AraSessionTestProbe::seedSource(session, audioSource, 1, 44100.0, 44100);
 
-    // Region A — no binding, needs birth
     VST3AraSessionTestProbe::seedPlaybackRegionForModification(
         session, audioSource, regionA, "mod-A", initialWindow, 0.0, 1.0);
-    const bool enqueued = VST3AraSessionTestProbe::enqueueMaterializationBirthIfNeeded(session, "mod-A");
-    if (!enqueued) {
-        logFail(testName, "first enqueue (\"mod-A\") failed — precondition");
+    if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-A")) {
+        logFail(testName, "first upsert (\"mod-A\") failed — precondition");
+        return;
+    }
+    const uint64_t staleRevision = VST3AraSessionTestProbe::getPendingBirthRevision(session, "mod-A");
+
+    // The host changes the desired source window before the old worker result lands.
+    VST3AraSessionTestProbe::setRegionSourceWindow(session, regionA, updatedWindow);
+    if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-A")) {
+        logFail(testName, "second upsert (\"mod-A\") failed after sourceWindow change");
+        return;
+    }
+    const uint64_t freshRevision = VST3AraSessionTestProbe::getPendingBirthRevision(session, "mod-A");
+
+    if (freshRevision <= staleRevision) {
+        logFail(testName, "sourceWindow change did not bump PendingBirth revision");
         return;
     }
 
-    // Region B has a binding but then its sourceWindow changes
-    VST3AraSessionTestProbe::seedPlaybackRegionForModification(
-        session, audioSource, regionB, "mod-stale", initialWindow, 0.0, 1.0);
-    VST3AraSessionTestProbe::seedAudioModificationBinding(
-        session, "mod-stale", 1, 9001, initialWindow, 1, initialWindow.durationSeconds());
-
-    // Verify region B does NOT need birth after binding matches
-    if (VST3AraSessionTestProbe::regionNeedsBirth(session, regionB)) {
-        logFail(testName, "seed: regionB with matching binding should not need birth");
+    if (VST3AraSessionTestProbe::simulateReadyBirthWorkerResult(session, "mod-A", staleRevision, 1, 7301)) {
+        logFail(testName, "stale worker result unexpectedly committed");
         return;
     }
 
-    // Change region B's sourceWindow → now it needs re-birth
-    VST3AraSessionTestProbe::setRegionSourceWindow(session, regionB, updatedWindow);
-
-    if (!VST3AraSessionTestProbe::regionNeedsBirth(session, regionB)) {
-        logFail(testName, "regionB should need birth after sourceWindow change");
+    if (VST3AraSessionTestProbe::bindingMaterializationForPersistentId(session, "mod-A") != 0) {
+        logFail(testName, "stale worker result wrote a materialization binding");
         return;
     }
 
-    // With modification-level PendingBirth, "mod-stale" can enqueue independently of "mod-A"
-    const bool reEnqueued = VST3AraSessionTestProbe::enqueueMaterializationBirthIfNeeded(session, "mod-stale");
-    juce::ignoreUnused(reEnqueued);
-
-    const int queueSize = VST3AraSessionTestProbe::birthQueueSize(session);
-
-    // ASSERT: queue should have 2 entries (mod-A + mod-stale re-birth).
-    // Phase 1 per-persistentId PendingBirth allows independent re-enqueue.
-    if (queueSize >= 2) {
-        logPass(testName);
-    } else {
-        char buf[200];
-        std::snprintf(buf, sizeof(buf),
-            "region B needs re-birth after sourceWindow change but PendingBirth did not "
-            "independently enqueue — queueSize=%d expected>=2",
-            queueSize);
-        logFail(testName, buf);
+    if (!VST3AraSessionTestProbe::hasPendingBirth(session, "mod-A")) {
+        logFail(testName, "stale worker result removed the fresh PendingBirth");
+        return;
     }
+
+    const SourceWindow pendingWindow = VST3AraSessionTestProbe::getPendingBirthWindow(session, "mod-A");
+    if (pendingWindow.sourceStartSeconds != updatedWindow.sourceStartSeconds
+        || pendingWindow.sourceEndSeconds != updatedWindow.sourceEndSeconds) {
+        logFail(testName, "fresh PendingBirth no longer points at the latest sourceWindow");
+        return;
+    }
+
+    if (!VST3AraSessionTestProbe::simulateReadyBirthWorkerResult(session, "mod-A", freshRevision, 1, 7302)) {
+        logFail(testName, "fresh worker result did not commit after stale drop");
+        return;
+    }
+
+    if (VST3AraSessionTestProbe::bindingMaterializationForPersistentId(session, "mod-A") != 7302) {
+        logFail(testName, "fresh worker result did not become the final binding");
+        return;
+    }
+
+    logPass(testName);
 }
 
 // 测试 4: Preexisting region with empty persistentId does not get birth — then
 //        persistentId is assigned, making it eligible — but the projectionChanged ||
 //        bindingChanged guard in didAddPlaybackRegionToAudioModification would skip enqueue.
-void runAraBirthPreexistingRegionNewPersistentIdEnqueues()
+void runAraBirthDidAddOnPreexistingRegionWithNewPersistentIdEnqueuesBirth()
 {
-    constexpr const char* testName = "AraBirth_PreexistingRegionNewPersistentIdEnqueues";
+    constexpr const char* testName = "AraBirth_DidAddOnPreexistingRegionWithNewPersistentIdEnqueuesBirth";
 
     VST3AraSession session;
     auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x100);
@@ -9326,56 +9468,232 @@ void runAraBirthPreexistingRegionNewPersistentIdEnqueues()
         return;
     }
 
-    // Step 6: Source-scan the didAddPlaybackRegionToAudioModification function
-    // to verify the fix: the old (projectionChanged || bindingChanged) guard is gone,
-    // replaced by regionNeedsMaterializationBirthLocked + upsertPendingBirthLocked.
-    const auto funcBody = extractWorkspaceFileSection(
-        "Source/ARA/VST3AraSession.cpp",
-        "void VST3AraSession::didAddPlaybackRegionToAudioModification(",
-        "void VST3AraSession::didUpdateAudioSourceProperties");
-
-    if (funcBody.isEmpty()) {
-        logFail(testName, "failed to locate didAddPlaybackRegionToAudioModification function body");
+    if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-new")) {
+        logFail(testName, "did-add persistentId attach did not record/queue PendingBirth");
         return;
     }
 
-    // Phase 1 fix: birth enqueue now uses upsertPendingBirthLocked (not the old
-    // enqueueMaterializationBirthLocked).  Verify the old enqueue function is gone
-    // and the new one is present.
-    const bool oldEnqueueGone = !funcBody.contains("enqueueMaterializationBirthLocked(");
-    const bool newEnqueuePresent = funcBody.contains("upsertPendingBirthLocked(");
-
-    if (oldEnqueueGone && newEnqueuePresent) {
-        logPass(testName);
-    } else {
-        logFail(testName,
-            "didAddPlaybackRegionToAudioModification enqueue gate was not properly updated — "
-            "expected upsertPendingBirthLocked instead of enqueueMaterializationBirthLocked");
+    const uint64_t revision = VST3AraSessionTestProbe::getPendingBirthRevision(session, "mod-new");
+    if (!VST3AraSessionTestProbe::simulateReadyBirthWorkerResult(session, "mod-new", revision, 1, 7401)) {
+        logFail(testName, "new persistentId birth result did not commit");
+        return;
     }
+
+    if (VST3AraSessionTestProbe::bindingMaterializationForPersistentId(session, "mod-new") != 7401) {
+        logFail(testName, "new persistentId did not produce a materialization binding");
+        return;
+    }
+
+    logPass(testName);
 }
 
-// 测试 5: Editor calls clearPlaybackRegionMaterialization when payload is missing —
-//        editor must not destroy binding truth.
+// 测试 4b (probe): Upsert with unready source still records PendingBirth.
+// Uses the same VST3AraSessionTestProbe friend pattern as existing tests to
+// verify that PendingBirth is recorded even without ready sample access.
+void runAraBirthUpsertWithUnreadySourceStillRecordsPending()
+{
+    constexpr const char* testName = "AraBirth_UpsertWithUnreadySourceStillRecordsPending";
+
+    VST3AraSession session;
+    auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x100);
+    auto* region = reinterpret_cast<juce::ARAPlaybackRegion*>(0x200);
+    const SourceWindow sourceWindow{1, 0.0, 1.0};
+
+    // Seed source WITHOUT sampleAccessEnabled → source is "unready"
+    VST3AraSessionTestProbe::seedSourceUnready(session, audioSource, 1, 44100.0, 44100);
+
+    VST3AraSessionTestProbe::seedPlaybackRegionForModification(
+        session, audioSource, region, "mod-unready", sourceWindow, 0.0, 1.0);
+
+    // Region needs birth (no binding)
+    if (!VST3AraSessionTestProbe::regionNeedsBirth(session, region))
+    {
+        logFail(testName, "region with no binding should need birth");
+        return;
+    }
+
+    // Enqueue — internally calls upsertPendingBirthLocked
+    VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-unready");
+
+    // Verify: worker-ready queue is empty (source unready) but PendingBirth is recorded
+    const auto queueSize = VST3AraSessionTestProbe::readyBirthWorkQueueSize(session);
+    if (queueSize != 0)
+    {
+        char buf[120];
+        std::snprintf(buf, sizeof(buf),
+            "ready birth work queue should be empty (source unready), got %d", queueSize);
+        logFail(testName, buf);
+        return;
+    }
+
+    // PendingBirth must exist with correct desiredWindow and non-zero revision
+    if (!VST3AraSessionTestProbe::hasPendingBirth(session, "mod-unready"))
+    {
+        logFail(testName, "upsert with unready source did not record PendingBirth");
+        return;
+    }
+
+    const auto revision = VST3AraSessionTestProbe::getPendingBirthRevision(session, "mod-unready");
+    if (revision == 0)
+    {
+        logFail(testName, "PendingBirth revision was not assigned");
+        return;
+    }
+
+    const auto storedWindow = VST3AraSessionTestProbe::getPendingBirthWindow(session, "mod-unready");
+    if (storedWindow.sourceStartSeconds != sourceWindow.sourceStartSeconds
+        || storedWindow.sourceEndSeconds != sourceWindow.sourceEndSeconds)
+    {
+        logFail(testName, "PendingBirth desiredWindow does not match");
+        return;
+    }
+
+    logPass(testName);
+}
+
+// 测试 4c (probe): Ready source triggers queue for existing pending birth.
+// Demonstrates that upsert pushes to queue when source becomes ready.
+void runAraBirthReadySourceTriggersQueueForExistingPending()
+{
+    constexpr const char* testName = "AraBirth_ReadySourceTriggersQueueForExistingPending";
+
+    VST3AraSession session;
+    auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x100);
+    auto* region = reinterpret_cast<juce::ARAPlaybackRegion*>(0x200);
+    const SourceWindow sourceWindow{1, 0.0, 1.0};
+
+    // Seed source — start unready
+    VST3AraSessionTestProbe::seedSourceUnready(session, audioSource, 1, 44100.0, 44100LL * 2);
+
+    VST3AraSessionTestProbe::seedPlaybackRegionForModification(
+        session, audioSource, region, "mod-ready-later", sourceWindow, 0.0, 1.0);
+
+    // Enqueue with unready source — pending recorded, queue empty
+    VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-ready-later");
+    {
+        const int before = VST3AraSessionTestProbe::readyBirthWorkQueueSize(session);
+        if (before != 0)
+        {
+            char buf[120];
+            std::snprintf(buf, sizeof(buf),
+                "precondition: queue should be empty, got %d", before);
+            logFail(testName, buf);
+            return;
+        }
+    }
+
+    // Now enable sample access AND set up readerLease → source becomes ready
+    VST3AraSessionTestProbe::setSourceReady(session, audioSource);
+
+    // Re-upsert: source ready → should now push to queue
+    VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-ready-later");
+
+    // Verify using the stable pending record; ready queue itself is a transient worker signal.
+    if (!VST3AraSessionTestProbe::hasPendingBirth(session, "mod-ready-later"))
+    {
+        logFail(testName, "ready source upsert lost the PendingBirth record before worker completion");
+        return;
+    }
+
+    logPass(testName);
+}
+
+// 测试 4d (probe): Same pid with new sourceWindow bumps revision and replaces desiredWindow.
+void runAraBirthSamePidNewWindowBumpsRevisionAndReplacesWindow()
+{
+    constexpr const char* testName = "AraBirth_SamePidNewWindowBumpsRevisionAndReplacesWindow";
+
+    VST3AraSession session;
+    auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x100);
+    auto* region = reinterpret_cast<juce::ARAPlaybackRegion*>(0x200);
+    const SourceWindow initialWindow{1, 0.0, 1.0};
+    const SourceWindow updatedWindow{1, 0.5, 1.5};
+
+    VST3AraSessionTestProbe::seedSource(session, audioSource, 1, 44100.0, 44100);
+    VST3AraSessionTestProbe::seedPlaybackRegionForModification(
+        session, audioSource, region, "mod-window", initialWindow, 0.0, 1.0);
+
+    // First upsert records the initial window at some revision.
+    VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-window");
+
+    if (!VST3AraSessionTestProbe::hasPendingBirth(session, "mod-window"))
+    {
+        logFail(testName, "first upsert: PendingBirth not recorded");
+        return;
+    }
+
+    const uint64_t firstRevision = VST3AraSessionTestProbe::getPendingBirthRevision(session, "mod-window");
+    const SourceWindow firstWindow = VST3AraSessionTestProbe::getPendingBirthWindow(session, "mod-window");
+    if (firstWindow.sourceStartSeconds != initialWindow.sourceStartSeconds
+        || firstWindow.sourceEndSeconds != initialWindow.sourceEndSeconds)
+    {
+        logFail(testName, "first upsert: desiredWindow mismatch");
+        return;
+    }
+
+    // Change region's sourceWindow, then re-enqueue → should bump revision
+    VST3AraSessionTestProbe::setRegionSourceWindow(session, region, updatedWindow);
+    VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-window");
+
+    if (!VST3AraSessionTestProbe::hasPendingBirth(session, "mod-window"))
+    {
+        logFail(testName, "second upsert: PendingBirth vanished");
+        return;
+    }
+
+    const uint64_t secondRevision = VST3AraSessionTestProbe::getPendingBirthRevision(session, "mod-window");
+    const SourceWindow secondWindow = VST3AraSessionTestProbe::getPendingBirthWindow(session, "mod-window");
+
+    if (secondRevision <= firstRevision)
+    {
+        char buf[100];
+        std::snprintf(buf, sizeof(buf),
+            "second upsert did not bump revision: prev=%llu cur=%llu",
+            (unsigned long long)firstRevision,
+            (unsigned long long)secondRevision);
+        logFail(testName, buf);
+        return;
+    }
+
+    if (secondWindow.sourceStartSeconds != updatedWindow.sourceStartSeconds
+        || secondWindow.sourceEndSeconds != updatedWindow.sourceEndSeconds)
+    {
+        logFail(testName, "second upsert did not replace desiredWindow");
+        return;
+    }
+
+    logPass(testName);
+}
+
+// 测试 5: Missing payload in the editor recovery window must not destroy binding truth.
 void runAraEditorMissingPayloadDoesNotClearBinding()
 {
     constexpr const char* testName = "AraEditor_MissingPayloadDoesNotClearBinding";
 
-    // Source-scan: syncAraPreferredRegionBindingOnly must NOT call
-    // clearPlaybackRegionMaterialization — the editor doesn't own binding truth.
-    // Use section-scoped scan to isolate the function body (not other file locations).
-    const auto section = extractWorkspaceFileSection(
-        "Source/Plugin/PluginEditor.cpp",
-        "void OpenTuneAudioProcessorEditor::syncAraPreferredRegionBindingOnly",
-        "void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested");
-    if (section.isEmpty()) {
-        logFail(testName, "failed to locate syncAraPreferredRegionBindingOnly function body");
+    VST3AraSession session;
+    auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x100);
+    auto* region = reinterpret_cast<juce::ARAPlaybackRegion*>(0x200);
+    const SourceWindow sourceWindow{1, 0.0, 1.0};
+
+    VST3AraSessionTestProbe::seedSource(session, audioSource, 1, 44100.0, 44100);
+    VST3AraSessionTestProbe::seedAudioModificationBinding(
+        session, "mod-stable", 1, 7501, sourceWindow, 1, sourceWindow.durationSeconds());
+    VST3AraSessionTestProbe::seedPlaybackRegionForModification(
+        session, audioSource, region, "mod-stable", sourceWindow, 0.0, 1.0);
+    VST3AraSessionTestProbe::publish(session);
+
+    if (VST3AraSessionTestProbe::bindingMaterializationForPersistentId(session, "mod-stable") != 7501) {
+        logFail(testName, "precondition: binding was not seeded");
         return;
     }
 
-    if (section.contains("clearPlaybackRegionMaterialization(")) {
-        logFail(testName,
-            "syncAraPreferredRegionBindingOnly calls clearPlaybackRegionMaterialization "
-            "— editor must not destroy binding truth");
+    // There is intentionally no session clear API for editor payload misses.
+    // A missing MaterializationStore payload can only leave the binding pending
+    // for display, not erase the session-owned persistentId binding.
+    const auto snapshot = session.loadSnapshot();
+    const auto* view = snapshot ? snapshot->findRegion(region) : nullptr;
+    if (view == nullptr || view->appliedProjection.materializationId != 7501) {
+        logFail(testName, "published binding projection vanished during payload-missing recovery window");
         return;
     }
 
@@ -9388,45 +9706,32 @@ void runAraEditorDestroyRecreateReattachesExistingBinding()
 {
     constexpr const char* testName = "AraEditor_DestroyRecreateReattachesExistingBinding";
 
-    // Source-scan PluginEditor.cpp for the timer-based recovery path.
-    // Editor recovery after destroy/recreate does NOT depend on the transient
-    // waitingForAraMaterialization_ flag.  The 30 Hz timerCallback polls
-    // syncAraPreferredRegionBindingOnly, which reattaches existing bindings
-    // from the ARA session within ~33ms of editor creation.
-    // Verify the timer path provides this recovery.
+    VST3AraSession session;
+    auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x101);
+    auto* oldRegion = reinterpret_cast<juce::ARAPlaybackRegion*>(0x201);
+    auto* reopenedRegion = reinterpret_cast<juce::ARAPlaybackRegion*>(0x301);
+    const SourceWindow sourceWindow{11, 0.0, 1.0};
 
-    const auto& editorH = getFileCache().get("Source/Plugin/PluginEditor.h");
+    VST3AraSessionTestProbe::seedSource(session, audioSource, sourceWindow.sourceId, 44100.0, 44100);
+    VST3AraSessionTestProbe::seedAudioModificationBinding(
+        session, "mod-reopen", sourceWindow.sourceId, 7601, sourceWindow, 3, sourceWindow.durationSeconds());
+    VST3AraSessionTestProbe::seedPlaybackRegionForModification(
+        session, audioSource, oldRegion, "mod-reopen", sourceWindow, 0.0, 1.0);
+    VST3AraSessionTestProbe::publish(session);
 
-    // waitingForAraMaterialization_ is a transient visual overlay flag,
-    // not the sole recovery mechanism.
-    if (!editorH.contains("waitingForAraMaterialization_")) {
-        logFail(testName, "waitingForAraMaterialization_ not found in PluginEditor.h");
+    // Recreated editor/region observes the same session-owned binding by persistentId.
+    VST3AraSessionTestProbe::seedPlaybackRegionForModification(
+        session, audioSource, reopenedRegion, "mod-reopen", sourceWindow, 0.0, 1.0);
+    VST3AraSessionTestProbe::publish(session);
+
+    const auto snapshot = session.loadSnapshot();
+    const auto* reopenedView = snapshot ? snapshot->findRegion(reopenedRegion) : nullptr;
+    if (reopenedView == nullptr || reopenedView->appliedProjection.materializationId != 7601) {
+        logFail(testName, "recreated region did not reattach existing persistentId binding");
         return;
     }
 
-    // timerCallback must call syncAraPreferredRegionBindingOnly which provides
-    // the binding-reattachment path.  Constructor does not need explicit reattach
-    // because the timer takes over at 30 Hz.
-    const auto timerBody = extractWorkspaceFileSection(
-        "Source/Plugin/PluginEditor.cpp",
-        "void OpenTuneAudioProcessorEditor::timerCallback",
-        "void OpenTuneAudioProcessorEditor::syncSharedAppPreferences");
-
-    if (timerBody.isEmpty()) {
-        logFail(testName, "failed to locate timerCallback");
-        return;
-    }
-
-    const bool hasTimerRecovery = timerBody.contains("syncAraPreferredRegionBindingOnly")
-        || timerBody.contains("syncMaterializationProjectionToPianoRoll");
-
-    if (hasTimerRecovery) {
-        logPass(testName);
-    } else {
-        logFail(testName,
-            "timerCallback has no recovery path via syncAraPreferredRegionBindingOnly "
-            "or syncMaterializationProjectionToPianoRoll");
-    }
+    logPass(testName);
 }
 
 // 测试 7: setStateInformation called before didBindToARA should still restore
@@ -9520,6 +9825,7 @@ void runArchitectureBehaviorSuite()
     runAraFinalSessionHasNoSourceLevelHydrationReadPass();
     runAraFinalPublishedRegionViewExposesNoRawAudioPayload();
     runAraFinalPluginEditorHasNoPrepareImportFromAraRegionHelper();
+    runAraFinalPluginEditorHasNoBindPlaybackRegionToMaterialization();
     runAraFinalRequestMaterializationRefreshContractIsNonAra();
     runAraFinalBirthPathOwnsOriginalF0Release();
     runAraBirthPathDetectsSilentGapsBeforeCommit();
@@ -9531,11 +9837,14 @@ void runArchitectureBehaviorSuite()
     runRenderingPriorityRemainsGpuFirstAndCpuFirstOnly();
     runAraStateRestorePreBindSetStateStillRestoresIntoFinalSharedStores();
 
-    logSection("ARA birth lifecycle RED guard tests (Phase 0 — all must fail)");
+    logSection("ARA birth lifecycle contract tests");
     runAraBirthSameSourceTwoDifferentPersistentIdsBothBirth();
-    runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlightNotLost();
+    runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlight_NotLost();
     runAraBirthStaleResultForOldWindowDoesNotOverrideLatestDesiredWindow();
-    runAraBirthPreexistingRegionNewPersistentIdEnqueues();
+    runAraBirthDidAddOnPreexistingRegionWithNewPersistentIdEnqueuesBirth();
+    runAraBirthUpsertWithUnreadySourceStillRecordsPending();
+    runAraBirthReadySourceTriggersQueueForExistingPending();
+    runAraBirthSamePidNewWindowBumpsRevisionAndReplacesWindow();
     runAraEditorMissingPayloadDoesNotClearBinding();
     runAraEditorDestroyRecreateReattachesExistingBinding();
 

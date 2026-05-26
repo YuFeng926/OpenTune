@@ -80,7 +80,10 @@ Standalone 与 VST3/ARA 共享同一 `PluginProcessor` 内核，差异通过 `So
 | 模型 | 用途 | 路径 |
 |------|------|------|
 | RMVPE | F0 音高提取 | `models/rmvpe.onnx` |
-| PC-NSF-HiFiGAN | 神经声码器 | `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx`（构建后复制为 `models/hifigan.onnx`） |
+| PC-NSF-HiFiGAN（Community） | 神经声码器（默认） | `models/hifigan.onnx` |
+| PC-NSF-HiFiGAN（Coulin9 V4） | 神经声码器（实验性） | `models/hifigan_coulin9.onnx` |
+
+> 两套声码器权重 Mel 参数一致：128 bins，Fmax = **16000 Hz**（`OnnxVocoderBase::getFMax()` 硬编码），与权重名无关。源模型文件名中的 `fmax22050` 仅为历史命名遗留。
 
 ## 关键编译宏
 

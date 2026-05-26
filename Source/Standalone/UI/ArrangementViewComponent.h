@@ -110,11 +110,17 @@ public:
 #endif
 
 private:
+    enum class DragOperation { None, Move, Gain, TrimLeft, TrimRight, FadeIn, FadeOut };
+
     struct HitTestResult {
         int trackId{-1};
         int placementIndex{-1};
         juce::Rectangle<int> placementBounds;
         bool isTopEdge{false};
+        bool isLeftEdge{false};
+        bool isRightEdge{false};
+        bool isFadeInHandle{false};
+        bool isFadeOutHandle{false};
     };
 
     HitTestResult hitTestPlacement(juce::Point<int> p) const;
@@ -245,6 +251,13 @@ private:
     float dragStartPlacementGain_{1.0f};
     uint64_t dragStartPlacementId_{0};
     int dragStartTrackId_{-1};  // 拖拽开始时的轨道ID（用于跨轨道移动）
+
+    DragOperation currentDragOp_{DragOperation::None};
+    double trimStartClipInSeconds_{0.0};
+    double trimStartDurationSeconds_{0.0};
+    double fadeStartInDuration_{0.0};
+    double fadeStartOutDuration_{0.0};
+    uint64_t dragOperationPlacementId_{0};
 
     // 高性能播放头覆盖层（VBlank同步，独立于主组件重绘）
     PlayheadOverlayComponent playheadOverlay_;

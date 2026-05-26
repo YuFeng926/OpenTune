@@ -140,7 +140,7 @@ VST3AraSession::~VST3AraSession()
     {
         const std::lock_guard<std::mutex> lock(stateMutex_);
         birthWorkerRunning_ = false;
-        materializationBirthQueue_.clear();
+        readyBirthWorkQueue_.clear();
         pendingBirths_.clear();
         for (auto& [audioSource, sourceSlot] : sources_)
         {
@@ -577,30 +577,6 @@ void VST3AraSession::updatePlaybackRegionMaterializationRevisions(juce::ARAPlayb
     publishSnapshotLocked();
 }
 
-void VST3AraSession::clearPlaybackRegionMaterialization(juce::ARAPlaybackRegion* playbackRegion)
-{
-    const std::lock_guard<std::mutex> lock(stateMutex_);
-    drainDeferredSourceCleanupLocked();
-
-    auto* regionSlot = findRegionSlot(playbackRegion);
-    if (regionSlot == nullptr)
-        return;
-
-    if (regionSlot->audioModificationPersistentId.isNotEmpty())
-        materializationBindings_.erase(regionSlot->audioModificationPersistentId);
-
-    for (auto& [playbackRegionKey, siblingRegionSlot] : regions_)
-    {
-        juce::ignoreUnused(playbackRegionKey);
-        if (siblingRegionSlot.audioModificationPersistentId == regionSlot->audioModificationPersistentId)
-        {
-            siblingRegionSlot.appliedProjection.clear();
-            siblingRegionSlot.materializationDurationSeconds = 0.0;
-        }
-    }
-    publishSnapshotLocked();
-}
-
 std::vector<VST3AraSession::AraMaterializationBinding> VST3AraSession::exportMaterializationBindings() const
 {
     const std::lock_guard<std::mutex> lock(stateMutex_);
@@ -833,23 +809,30 @@ void VST3AraSession::upsertPendingBirthLocked(const juce::String& persistentId,
     if (persistentId.isEmpty() || audioSource == nullptr)
         return;
 
-    auto* sourceSlot = findSourceSlot(audioSource);
-    if (sourceSlot == nullptr || !sourceSlot->sampleAccessEnabled
-        || sourceSlot->numSamples <= 0 || sourceSlot->numChannels <= 0)
-        return;
-
+    // Always record/update the PendingBirth regardless of source readiness.
+    // The PendingBirth stores the latest desired revision even when sample
+    // access is not yet available. Source readiness only determines whether
+    // we push to the worker queue.
     auto& pending = pendingBirths_[persistentId];
-    const bool isNew = pending.audioSource == nullptr;
-    const bool windowChanged = !sourceWindowsMatch(pending.desiredWindow, desiredWindow);
-
     pending.audioModificationPersistentId = persistentId;
     pending.audioSource = audioSource;
     pending.desiredWindow = desiredWindow;
     pending.revision = nextBirthRevision_++;
 
-    if (isNew || windowChanged) {
-        materializationBirthQueue_.push_back(persistentId);
-        birthCv_.notify_one();
+    // Only push to worker queue if source sample access is actually ready.
+    // Do NOT require readerLease here: the worker itself checks readerLease
+    // before starting actual audio reads (tests may seed ready source without
+    // a real HostAudioReader to avoid crashing on fake ARA pointers).
+    auto* sourceSlot = findSourceSlot(audioSource);
+    if (sourceSlot != nullptr && sourceSlot->sampleAccessEnabled
+        && sourceSlot->numSamples > 0 && sourceSlot->numChannels > 0)
+    {
+        if (!pending.queuedForReadyWork)
+        {
+            readyBirthWorkQueue_.push_back(persistentId);
+            pending.queuedForReadyWork = true;
+            birthCv_.notify_one();
+        }
     }
 }
 
@@ -909,21 +892,23 @@ void VST3AraSession::birthWorkerLoop()
             std::unique_lock<std::mutex> lock(stateMutex_);
             birthCv_.wait(lock,
                           [this]()
-                          {
-                              return !birthWorkerRunning_
-                                  || !materializationBirthQueue_.empty();
+                              {
+                                  return !birthWorkerRunning_
+                                  || !readyBirthWorkQueue_.empty();
                           });
 
-            if (!birthWorkerRunning_ && materializationBirthQueue_.empty())
+            if (!birthWorkerRunning_ && readyBirthWorkQueue_.empty())
                 return;
 
-            persistentId = std::move(materializationBirthQueue_.front());
-            materializationBirthQueue_.pop_front();
+            persistentId = std::move(readyBirthWorkQueue_.front());
+            readyBirthWorkQueue_.pop_front();
 
             // 查找 PendingBirth
             auto pendingIt = pendingBirths_.find(persistentId);
             if (pendingIt == pendingBirths_.end())
                 continue; // stale entry
+
+            pendingIt->second.queuedForReadyWork = false;
 
             PendingBirth pending = pendingIt->second; // 快照
             const uint64_t revision = pending.revision;
@@ -933,13 +918,9 @@ void VST3AraSession::birthWorkerLoop()
             if (sourceSlot == nullptr || sourceSlot->readerLease == nullptr
                 || !sourceSlot->sampleAccessEnabled)
             {
-                // Sample access not ready yet — re-queue
-                if (sourceSlot != nullptr && sourceSlot->sampleAccessEnabled
-                    && sourceSlot->numSamples > 0 && sourceSlot->numChannels > 0)
-                {
-                    materializationBirthQueue_.push_back(persistentId);
-                    birthCv_.notify_one();
-                }
+                // Source not ready — keep pending, don't busy retry.
+                // When source becomes ready, upsertPendingBirthLocked or
+                // setProcessor picks up the pending and pushes to queue.
                 continue;
             }
 
@@ -982,7 +963,6 @@ void VST3AraSession::birthWorkerLoop()
             if (processor == nullptr)
             {
                 lock.lock();
-                pendingBirths_.erase(persistentId);
                 continue;
             }
 
@@ -1269,6 +1249,29 @@ void VST3AraSession::markSnapshotDirtyLocked() noexcept
 void VST3AraSession::setProcessor(OpenTuneAudioProcessor* processor) noexcept
 {
     processor_.store(processor, std::memory_order_release);
+
+    if (processor != nullptr)
+    {
+        // Wake pending births whose sources are now ready (processor may have
+        // been null during early birth upserts).
+        const std::lock_guard<std::mutex> lock(stateMutex_);
+        for (auto& [persistentId, pending] : pendingBirths_)
+        {
+            juce::ignoreUnused(persistentId);
+            auto* sourceSlot = findSourceSlot(pending.audioSource);
+            if (sourceSlot != nullptr && sourceSlot->sampleAccessEnabled
+                && sourceSlot->numSamples > 0 && sourceSlot->numChannels > 0)
+            {
+                if (!pending.queuedForReadyWork)
+                {
+                    readyBirthWorkQueue_.push_back(pending.audioModificationPersistentId);
+                    pending.queuedForReadyWork = true;
+                }
+            }
+        }
+        if (!readyBirthWorkQueue_.empty())
+            birthCv_.notify_one();
+    }
 }
 
 } // namespace OpenTune

@@ -560,7 +560,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 
     OpenTuneAudioProcessor::PlaybackReadRequest readRequest;
     readRequest.source = source;
-    readRequest.readStartSeconds = 0.0;
+    readRequest.readStartSeconds = placement.clipInSeconds; // was 0.0 — respect trim offset
     readRequest.targetSampleRate = kExportSr;
     readRequest.numSamples = samplesToRender;
 
@@ -598,7 +598,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 } // anonymous namespace
 
 constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
-constexpr int kProcessorStateVersion = 7;
+constexpr int kProcessorStateVersion = 8; // v8 adds Placement::clipInSeconds
 // vocal-time-stretch §3.8: bumped 5 → 6 to add per-materialization TimeGrid section.
 // v5 projects load with auto-seeded identity TimeGrid (output==source).
 // Processor state v7 adds per-handle confidence. v6 reads default confidence=Default.
@@ -829,6 +829,97 @@ static std::shared_ptr<const juce::AudioBuffer<float>> readAudioBuffer(juce::Inp
 
     return buffer;
 }
+
+#if JucePlugin_Enable_ARA
+static bool scanAudioBufferHeader(juce::InputStream& input, bool& hasAudioBuffer)
+{
+    if (input.getNumBytesRemaining() < 1) {
+        return false;
+    }
+
+    hasAudioBuffer = input.readBool();
+    if (!hasAudioBuffer) {
+        return true;
+    }
+
+    if (input.getNumBytesRemaining() < 8) {
+        return false;
+    }
+
+    const int numChannels = input.readInt();
+    const int numSamples = input.readInt();
+    if (numChannels <= 0 || numSamples <= 0) {
+        return false;
+    }
+
+    const auto bytesToSkip = static_cast<int64_t>(numChannels)
+        * static_cast<int64_t>(numSamples)
+        * static_cast<int64_t>(sizeof(float));
+    if (bytesToSkip < 0 || bytesToSkip > input.getNumBytesRemaining()) {
+        return false;
+    }
+
+    input.skipNextBytes(bytesToSkip);
+    return true;
+}
+
+static bool processorStateContainsMetadataOnlySource(const void* data, int sizeInBytes)
+{
+    if (data == nullptr || sizeInBytes <= 0) {
+        return false;
+    }
+
+    juce::MemoryInputStream scan(data, static_cast<size_t>(sizeInBytes), false);
+    if (scan.getNumBytesRemaining() < 8) {
+        return false;
+    }
+
+    const int magic = scan.readInt();
+    const int version = scan.readInt();
+    if (magic != static_cast<int>(kProcessorStateMagic)
+        || (version != kProcessorStateVersion && version != 7 && version != 6 && version != 5)) {
+        return false;
+    }
+
+    if (scan.getNumBytesRemaining() < 16) {
+        return false;
+    }
+
+    scan.readDouble(); // zoomLevel
+    scan.readInt();    // trackHeight
+
+    const int sourceCount = scan.readInt();
+    if (sourceCount < 0) {
+        return false;
+    }
+
+    for (int sourceIndex = 0; sourceIndex < sourceCount; ++sourceIndex) {
+        if (scan.getNumBytesRemaining() < 8) {
+            return false;
+        }
+
+        scan.readInt64();  // sourceId
+        scan.readString(); // displayName
+
+        if (scan.getNumBytesRemaining() < 8) {
+            return false;
+        }
+
+        scan.readDouble(); // sampleRate
+
+        bool hasAudioBuffer = false;
+        if (!scanAudioBufferHeader(scan, hasAudioBuffer)) {
+            return false;
+        }
+
+        if (!hasAudioBuffer) {
+            return true;
+        }
+    }
+
+    return false;
+}
+#endif
 
 static void writeSilentGaps(juce::OutputStream& output,
                             const std::vector<SilentGap>& silentGaps)
@@ -1927,7 +2018,7 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         // After shared-store attach, isBoundToARA() returns true, so the
         // replay will restore directly into the final shared stores.
         if (pendingAraState_.getSize() > 0) {
-            AppLogger::log("ARA: didBindToARA \xe2\x80\x94 replaying cached state ("
+            AppLogger::log("ARA: didBindToARA - replaying cached state ("
                            + juce::String(static_cast<int>(pendingAraState_.getSize()))
                            + " bytes) into shared stores");
             setStateInformation(pendingAraState_.getData(),
@@ -2162,7 +2253,8 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 continue;
             }
 
-            const int64_t readStartSample = overlapStartSample - placementStartSample;
+            const int64_t clipInSampleOffset = TimeCoordinate::secondsToSamples(placement.clipInSeconds, deviceSampleRate);
+            const int64_t readStartSample = overlapStartSample - placementStartSample + clipInSampleOffset;
             const double readStartSeconds = TimeCoordinate::samplesToSeconds(readStartSample, deviceSampleRate);
             const int offsetInBlock = static_cast<int>(overlapStartSample - blockStartSample);
             const int samplesToCopy = static_cast<int>(samplesToCopy64);
@@ -2198,7 +2290,9 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 const float* src = clipReadScratch_.getReadPointer(ch);
                 float* dst = trackMixScratch_.getWritePointer(ch, offsetInBlock);
 
-                double timeInPlacement = TimeCoordinate::samplesToSeconds(readStartSample, deviceSampleRate);
+                // Use placement-local time (offset by clipInSeconds so fade works
+                // relative to visible clip, not from raw materialization start)
+                double timeInPlacement = TimeCoordinate::samplesToSeconds(readStartSample, deviceSampleRate) - placement.clipInSeconds;
                 const double dt = 1.0 / deviceSampleRate;
                 for (int s = 0; s < availableReadSamples; ++s) {
                     float gain = placementGain;
@@ -2642,18 +2736,10 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
         for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
             StandaloneArrangement::Placement placement;
             if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-                output.writeInt64(0);
-                output.writeInt64(0);
-                output.writeInt64(0);
-                output.writeDouble(0.0);
-                output.writeDouble(0.0);
-                output.writeDouble(0.0);
-                output.writeFloat(1.0f);
-                output.writeDouble(0.0);
-                output.writeDouble(0.0);
-                output.writeString({});
-                output.writeInt(0);
-                continue;
+                jassertfalse; // Placement index/track mismatch — data integrity error
+                AppLogger::error("SerializationCorruption: getPlacementByIndex failed for track="
+                                 + juce::String(trackId) + " index=" + juce::String(placementIndex));
+                return; // Don't serialize known-corrupt data
             }
 
             output.writeInt64(static_cast<juce::int64>(placement.placementId));
@@ -2664,6 +2750,7 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
             output.writeFloat(placement.gain);
             output.writeDouble(placement.fadeInDuration);
             output.writeDouble(placement.fadeOutDuration);
+            output.writeDouble(placement.clipInSeconds);
             output.writeString(placement.name);
             output.writeInt(static_cast<int>(placement.colour.getARGB()));
         }
@@ -2704,23 +2791,26 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     // vocal-time-stretch §3.8: state v6 adds TimeGrid section per materialization.
     // Accept v5 (no TimeGrid), v6 (TimeGrid w/o confidence), v7 (TimeGrid w/ confidence).
     if (magic != static_cast<int>(kProcessorStateMagic)
-        || (version != kProcessorStateVersion && version != 6 && version != 5)) {
+        || (version != kProcessorStateVersion && version != 7 && version != 6 && version != 5)) {
         AppLogger::warn("StateRestore: unsupported processor state payload (version=" + juce::String(version) + ")");
         return;
     }
     const bool stateHasTimeGrid = (version >= 6);
     const bool stateHasConfidence = (version >= 7);
+    const bool stateHasClipInSeconds = (version >= 8);
 
 #if JucePlugin_Enable_ARA
-    // Pre-bind cache: when the ARA host sends state before didBindToARA,
-    // we must not restore into temporary local stores that will be
-    // replaced by shared stores.  Cache the raw block and replay after
-    // didBindToARA attaches the final shared stores.
-    if (wrapperType != juce::AudioProcessor::wrapperType_Standalone && !isBoundToARA()) {
+    // ARA-capable VST3 can receive ARA document state before didBindToARA. Only
+    // metadata-only source payloads are treated as that ARA pre-bind path;
+    // regular unbound VST3 state still restores immediately into local stores.
+    if (wrapperType == juce::AudioProcessor::wrapperType_VST3
+        && !isBoundToARA()
+        && processorStateContainsMetadataOnlySource(data, sizeInBytes)) {
         pendingAraState_.reset();
         pendingAraState_.append(data, static_cast<size_t>(sizeInBytes));
-        AppLogger::log("StateRestore: ARA pre-bind \xe2\x80\x94 caching "
-                       + juce::String(sizeInBytes) + " bytes for replay after didBindToARA");
+        AppLogger::log("StateRestore: ARA pre-bind metadata-only state - caching "
+                       + juce::String(sizeInBytes)
+                       + " bytes for replay after didBindToARA without restoring local stores");
         return;
     }
 #endif
@@ -2878,6 +2968,9 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
             placement.gain = input.readFloat();
             placement.fadeInDuration = input.readDouble();
             placement.fadeOutDuration = input.readDouble();
+            if (stateHasClipInSeconds) {
+                placement.clipInSeconds = input.readDouble();
+            }
             placement.name = input.readString();
             placement.colour = juce::Colour(static_cast<juce::uint32>(input.readInt()));
 
@@ -3045,6 +3138,8 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     leadingPlacement.materializationId = leadingMaterializationId;
     leadingPlacement.durationSeconds = splitOffsetSeconds;
     leadingPlacement.fadeOutDuration = 0.0;
+    // leading clipInSeconds stays the same as original (trim offset from original)
+    // leadingPlacement.clipInSeconds = originalPlacement.clipInSeconds; (already correct from copy)
     ++leadingPlacement.mappingRevision;
 
     StandaloneArrangement::Placement trailingPlacement = originalPlacement;
@@ -3053,6 +3148,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     trailingPlacement.timelineStartSeconds = splitSeconds;
     trailingPlacement.durationSeconds = originalPlacement.durationSeconds - splitOffsetSeconds;
     trailingPlacement.fadeInDuration = 0.0;
+    trailingPlacement.clipInSeconds = originalPlacement.clipInSeconds + splitOffsetSeconds;
     ++trailingPlacement.mappingRevision;
 
     if (!standaloneArrangement_->insertPlacement(trackId, placementIndex, leadingPlacement)) {
@@ -3209,6 +3305,7 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     mergedPlacement.materializationId = mergedMaterializationId;
     mergedPlacement.durationSeconds = leadingPlacement.durationSeconds + trailingPlacement.durationSeconds;
     mergedPlacement.fadeOutDuration = trailingPlacement.fadeOutDuration;
+    mergedPlacement.clipInSeconds = leadingPlacement.clipInSeconds; // merge uses leading trim offset
     ++mergedPlacement.mappingRevision;
 
     const int mergedInsertIndex = targetPlacementIndex >= 0 ? targetPlacementIndex : 0;
@@ -3722,6 +3819,12 @@ void OpenTuneAudioProcessor::setBpm(double bpm) {
 
 void OpenTuneAudioProcessor::setZoomLevel(double zoom) {
     zoomLevel_ = zoom;
+}
+
+SnapSettings OpenTuneAudioProcessor::getSnapSettings() const {
+    if (appPreferences_ != nullptr)
+        return appPreferences_->getSnapSettings();
+    return SnapSettings{};
 }
 
 // ============================================================================
@@ -5353,6 +5456,169 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     }
 
     return availableSamples;
+}
+
+// ============================================================================
+// Clipboard — materialization range copy for paste/duplicate
+// ============================================================================
+
+uint64_t OpenTuneAudioProcessor::copyMaterializationRange(uint64_t sourceMaterializationId,
+                                                           double offsetSeconds,
+                                                           double durationSeconds,
+                                                           const juce::String& newName)
+{
+    juce::ignoreUnused(newName);
+    if (materializationStore_ == nullptr || durationSeconds <= 0.0)
+        return 0;
+
+    MaterializationStore::MaterializationSnapshot sourceSnap;
+    if (!materializationStore_->getSnapshot(sourceMaterializationId, sourceSnap))
+        return 0;
+    if (!sourceSnap.audioBuffer || sourceSnap.audioBuffer->getNumSamples() == 0)
+        return 0;
+
+    const int64_t totalSamples = sourceSnap.audioBuffer->getNumSamples();
+    constexpr double sr = 44100.0;
+    const int64_t offsetSamples = static_cast<int64_t>(offsetSeconds * sr);
+    const int64_t durSamples = static_cast<int64_t>(durationSeconds * sr);
+
+    if (offsetSamples < 0 || durSamples <= 0 || offsetSamples + durSamples > totalSamples)
+        return 0;
+
+    // Slice audio buffer
+    auto newBuffer = std::make_shared<juce::AudioBuffer<float>>(
+        sourceSnap.audioBuffer->getNumChannels(),
+        static_cast<int>(durSamples));
+    for (int ch = 0; ch < sourceSnap.audioBuffer->getNumChannels(); ++ch)
+        newBuffer->copyFrom(ch, 0, *sourceSnap.audioBuffer, ch,
+                           static_cast<int>(offsetSamples), static_cast<int>(durSamples));
+
+    // Build request
+    MaterializationStore::CreateMaterializationRequest req;
+    req.sourceId = sourceSnap.sourceId;
+    req.audioBuffer = newBuffer;
+    req.renderCache = std::make_shared<RenderCache>();
+    req.sourceWindow = SourceWindow{
+        sourceSnap.sourceWindow.sourceId,
+        sourceSnap.sourceWindow.sourceStartSeconds + offsetSeconds,
+        sourceSnap.sourceWindow.sourceStartSeconds + offsetSeconds + durationSeconds
+    };
+    req.originalF0State = sourceSnap.originalF0State;
+    req.detectedKey = sourceSnap.detectedKey;
+    req.lineageParentMaterializationId = sourceMaterializationId;
+
+    // Copy pitch curve range (slice originalF0/originalEnergy by frame domain)
+    if (sourceSnap.pitchCurve && sourceSnap.pitchCurve->getSnapshot() != nullptr
+        && !sourceSnap.pitchCurve->isEmpty())
+    {
+        auto snap = sourceSnap.pitchCurve->getSnapshot();
+        const double frameRate = snap->getSampleRate() / snap->getHopSize();
+        const int startFrame = static_cast<int>(std::round(offsetSeconds * frameRate));
+        const int endFrame   = static_cast<int>(std::round((offsetSeconds + durationSeconds) * frameRate));
+        const int numFrames  = endFrame - startFrame;
+
+        if (startFrame >= 0 && endFrame <= static_cast<int>(snap->size()) && numFrames > 0)
+        {
+            const auto& origF0 = snap->getOriginalF0();
+            const auto& origEnergy = snap->getOriginalEnergy();
+
+            std::vector<float> slicedF0(origF0.begin() + startFrame, origF0.begin() + endFrame);
+
+            std::vector<float> slicedEnergy;
+            if (!origEnergy.empty()
+                && static_cast<size_t>(endFrame) <= origEnergy.size())
+            {
+                slicedEnergy.assign(origEnergy.begin() + startFrame,
+                                    origEnergy.begin() + endFrame);
+            }
+
+            auto slicedCurve = std::make_shared<PitchCurve>();
+            slicedCurve->setHopSize(snap->getHopSize());
+            slicedCurve->setSampleRate(snap->getSampleRate());
+            slicedCurve->setOriginalF0(slicedF0);
+            if (!slicedEnergy.empty())
+                slicedCurve->setOriginalEnergy(slicedEnergy);
+
+            req.pitchCurve = slicedCurve;
+        }
+    }
+
+    // Copy notes shifted by offsetSeconds
+    if (!sourceSnap.notes.empty())
+    {
+        req.notes.reserve(sourceSnap.notes.size());
+        for (auto note : sourceSnap.notes)
+        {
+            if (note.endTime <= offsetSeconds || note.startTime >= offsetSeconds + durationSeconds)
+                continue;
+
+            note.startTime = std::max(0.0, note.startTime - offsetSeconds);
+            note.endTime = std::min(durationSeconds, note.endTime - offsetSeconds);
+            if (note.endTime > note.startTime)
+                req.notes.push_back(note);
+        }
+    }
+
+    // Copy silent gaps shifted by offsetSamples
+    if (!sourceSnap.silentGaps.empty())
+    {
+        req.silentGaps.reserve(sourceSnap.silentGaps.size());
+        for (auto gap : sourceSnap.silentGaps)
+        {
+            if (gap.endSampleExclusive <= offsetSamples
+                || gap.startSample >= offsetSamples + durSamples)
+                continue;
+
+            gap.startSample = std::max<int64_t>(0, gap.startSample - offsetSamples);
+            gap.endSampleExclusive = std::min<int64_t>(durSamples,
+                                                        gap.endSampleExclusive - offsetSamples);
+            if (gap.endSampleExclusive > gap.startSample)
+                req.silentGaps.push_back(gap);
+        }
+    }
+
+    // Copy corrected segments (pitch correction data)
+    if (sourceSnap.pitchCurve)
+    {
+        auto sourceSnapCurve = sourceSnap.pitchCurve->getSnapshot();
+        if (sourceSnapCurve && !sourceSnapCurve->getCorrectedSegments().empty())
+        {
+            std::vector<CorrectedSegment> segments;
+            segments.reserve(sourceSnapCurve->getCorrectedSegments().size());
+            for (auto seg : sourceSnapCurve->getCorrectedSegments())
+            {
+                if (seg.endFrame <= offsetSamples || seg.startFrame >= offsetSamples + durSamples)
+                    continue;
+                seg.startFrame = static_cast<int>(std::max<int64_t>(0, seg.startFrame - offsetSamples));
+                seg.endFrame   = static_cast<int>(std::min<int64_t>(durSamples, seg.endFrame - offsetSamples));
+                if (seg.endFrame > seg.startFrame)
+                    segments.push_back(std::move(seg));
+            }
+            if (!segments.empty() && req.pitchCurve)
+                req.pitchCurve->replaceCorrectedSegments(segments);
+        }
+    }
+
+    // Copy time grid (v7 vocal-time-stretch data) — offset handles to new origin
+    if (sourceSnap.timeGrid && !sourceSnap.timeGrid->empty())
+    {
+        const auto& srcHandles = sourceSnap.timeGrid->handles();
+        std::vector<TimeHandle> newHandles;
+        newHandles.reserve(srcHandles.size());
+        for (const auto& h : srcHandles)
+        {
+            TimeHandle nh = h;
+            nh.source_seconds -= offsetSeconds;
+            nh.output_seconds -= offsetSeconds;
+            if (nh.source_seconds >= 0.0 && nh.source_seconds <= durationSeconds)
+                newHandles.push_back(std::move(nh));
+        }
+        if (!newHandles.empty())
+            req.timeGrid = TimeGridSnapshot::makeFromHandles(std::move(newHandles),
+                                                              sourceSnap.timeGrid->revision());
+    }
+
+    return materializationStore_->createMaterialization(std::move(req));
 }
 
 } // namespace OpenTune

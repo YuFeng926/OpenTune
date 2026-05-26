@@ -51,15 +51,17 @@
   - 2026-05-18 Regular VST3 capture display selection: completed capture stays visible when host playhead leaves segment; `architecture/processor/core` PASS, ARA/non-ARA builds PASS
   - 2026-05-18 Regular VST3 capture timeline view domain: PianoRoll view defaults to zero so late-capture segments remain scrollable to earlier time
   - 2026-05-18 Regular VST3 transport shortcuts: unified routing helper, no fake host transport truth; architecture guards PASS
+  - 2026-05-27 VST3 ARA multi-item birth + editor reopen structural fix: persistentId-owned pending birth, stale worker-result drop, editor destructive clear removal, metadata-only ARA pre-bind restore caching, architecture/processor/core/memory PASS, ARA VST3/non-ARA VST3/Standalone builds PASS
 - Still open on this line:
   - Validate ARA-bound vs regular VST3 runtime split in Studio One track insert, Studio One ARA workflow, REAPER ARA track FX, Cubase extension workflow, and Live VST3 insert
   - Validate Studio One pause/stop/play behavior with the rebuilt ARA VST3
   - Validate PianoRoll empty-space seek intent L5 manual visual behavior
   - Validate regular VST3 capture display selection (completed capture visibility), timeline view domain (late-capture scroll), and transport shortcuts L5
+  - DAW timeline rendering pipeline refactor landed: prepared render models, exposed-strip scroll invalidation, and timeline focused suites PASS; runtime perf / L5 smoke still pending if needed
   - Undo/Redo 边界测试（空栈、redo 裁剪、500 层溢出）
   - CorrectionWorker 取消/覆盖并发语义验证
   - `OpenTuneTests.exe ui` runner exit=1/no `[FAIL]` text needs explanation before claiming full-suite PASS
-  - Reaper ARA multi-item/project reload L5 journey remains pending
+  - Reaper ARA multi-item/project reload L5 journey is not required from Codex for the 2026-05-27 closure; do not report it as PASS unless manually executed later
   - L5 manual journeys 和 macOS bundle inspection 继续 deferred
 - Next planning action:
   - 用户确认 2026-05-18 各项 L5 手工旅程
@@ -88,25 +90,38 @@
 - **Regular VST3 capture timeline view domain (2026-05-18):** PianoRoll view defaults to zero so late-capture segments remain scrollable; automated test PASS; host L5 pending.
 - **Regular VST3 transport shortcuts (2026-05-18):** unified routing helper, no fake host transport truth; architecture guards PASS; host L5 pending.
 - **Done (v1.5):** Custom UndoManager + PianoRollEditAction, PianoRollCorrectionWorker async worker, PlayheadOverlayComponent isolation, RenderBadgeComponent, F0Timeline finalized, Line Anchor tool, Vibrato per-note control, Continuous scroll mode, ONNX Runtime memory optimization, GPU/CPU inference backend restructure
-- **Done (2026-05-26):** VST3 ARA OriginalF0 final convergence — metadata-only SourceStore, birth 语义收紧, Editor 残留删除, AraFinal 终审守卫 7/7 PASS
-- **Open:** ARA-bound/regular VST3 host L5 validation, Undo 边界测试、CorrectionWorker 并发验证、UI suite exit-code investigation、Reaper ARA multi-item L5 validation、2026-05-18 四项 L5、Studio One long-audio ARA L5
+- **Done (2026-05-27):** VST3 ARA multi-item birth + editor reopen structural fix automated closure: persistentId 单槽 birth、stale result pre-commit drop、editor 只读、metadata-only ARA pre-bind restore cache/replay 全部落地
+- **Open:** ARA-bound/regular VST3 host L5 validation、Undo 边界测试、CorrectionWorker 并发验证、UI suite exit-code investigation、2026-05-18 四项 L5、Studio One long-audio ARA L5
 - **Deferred:** L5 manual journeys, macOS bundle inspection, F3/F5 follow-up tasks
 
 ---
-## 2026-05-26 Roadmap Update: VST3 ARA OriginalF0 Final Convergence — DONE
+## 2026-05-27 Roadmap Closure: Multi-Item / Reopen 自动化闭环
 
-The VST3 ARA OriginalF0 final convergence plan is now fully implemented:
+The 2026-05-26 audit was correct at the time: OriginalF0 convergence alone did not finish the Reaper multi-item / editor reopen lifecycle repair. The follow-up structural fix is now implemented and automatically verified.
+
+Already landed:
 
 1. **SourceStore metadata-only**: `createSource` 支持 `audioBuffer==nullptr`
-2. **ARA birth 语义收紧**: Failed 显式写入；`releaseImmediately()` 始终调用
+2. **ARA birth 结果语义收紧**: Failed 显式写入；`releaseImmediately()` 始终调用
 3. **Worker 命名收口**: `hydration*` → `birth*` in VST3AraSession
-4. **Editor 残留删除**: `rmvpeOverlayLatched_` 删除；PluginEditor.cpp ARA path 精简 358 行
+4. **Editor 残留删除**: `rmvpeOverlayLatched_` 删除；ARA path 精简
 5. **契约注释刷新**: `requestMaterializationRefresh` 改为正向非 ARA 契约
-6. **AraFinal 终审守卫**: 7 个新增守卫全部 PASS
-7. **setStateInformation 修复**: null buffer source 通过 metadata-only 注册
+6. **AraFinal 终审守卫**: 7 个新增守卫 PASS
+7. **setStateInformation` null-buffer 子项修复**
 
-三目标编译通过 + architecture suite 7/7 AraFinal PASS。Studio One long-audio ARA L5 待用户确认为 deferred verification gap。
+Now closed in current code:
+
+1. source 级 pending 压扁已删除；birth owner 是 `AudioModification persistentId + SourceWindow + revision`
+2. attach-only/new persistentId 与 ready-source requeue 都会 upsert pending birth
+3. editor destructive clear 路径已删除，`clearPlaybackRegionMaterialization()` 不再是 production session API
+4. metadata-only ARA pre-bind state 只缓存，`didBindToARA()` 后 replay 到最终 shared stores；regular unbound VST3 state 仍立即恢复
+
+Verification:
+
+- `OpenTuneTests.exe architecture`, `processor`, `core`, `memory` PASS
+- ARA VST3, non-ARA VST3, Standalone Release builds PASS
+- REAPER manual testing was explicitly not required from Codex for this closure; it must not be reported as PASS unless executed later
 
 ---
-*Roadmap updated: 2026-05-26 after completing VST3 ARA OriginalF0 final convergence implementation*
+*Roadmap updated: 2026-05-27 after closing ARA multi-item birth/editor-reopen automated gates*
 *Current state: `v1.4` shipped/frozen; `v1.5` is active milestone*

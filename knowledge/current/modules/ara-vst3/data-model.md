@@ -167,11 +167,10 @@ else
 ```mermaid
 stateDiagram-v2
     [*] --> HydratingSource: didAddPlaybackRegion / enable samples access
-    HydratingSource --> Unbound: hydration worker commits copiedAudio
-    Unbound --> Renderable: auto-birth or Editor bindPlaybackRegionToMaterialization
+    HydratingSource --> Unbound: source metadata/sample access ready
+    Unbound --> Renderable: persistentId birth worker or Editor bindPlaybackRegionToMaterialization
     Renderable --> BoundNeedsRender: region identity drift (rare)
     BoundNeedsRender --> Renderable: Editor re-binds
-    Renderable --> Unbound: clearPlaybackRegionMaterialization
     Renderable --> [*]: willDestroyPlaybackRegion / willRemoveRegion
     HydratingSource --> [*]: willDestroyAudioSource
 ```

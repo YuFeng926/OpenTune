@@ -632,6 +632,7 @@ juce::ValueTree ProjectPersistence::placementsToValueTree(const std::vector<Proj
         pt.setProperty("clipGain", p.clipGain, nullptr);
         pt.setProperty("fadeInDurationSeconds", p.fadeInDurationSeconds, nullptr);
         pt.setProperty("fadeOutDurationSeconds", p.fadeOutDurationSeconds, nullptr);
+        pt.setProperty("clipInSeconds", p.clipInSeconds, nullptr);
         setOptionalProperty(pt, "name", p.name);
         setColourProperty(pt, "colour", p.colour);
         tree.addChild(pt, -1, nullptr);
@@ -655,6 +656,7 @@ std::vector<ProjectPlacementEntry> ProjectPersistence::placementsFromValueTree(c
         p.clipGain = static_cast<float>(child.getProperty("clipGain", 1.0));
         p.fadeInDurationSeconds = child.getProperty("fadeInDurationSeconds", 0.0);
         p.fadeOutDurationSeconds = child.getProperty("fadeOutDurationSeconds", 0.0);
+        p.clipInSeconds = child.getProperty("clipInSeconds", 0.0);
         p.name = getOptionalProperty(child, "name", "");
         p.colour = getColourProperty(child, "colour", juce::Colours::grey);
         placements.push_back(p);

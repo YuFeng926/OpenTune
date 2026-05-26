@@ -163,6 +163,7 @@ struct ProjectPlacementEntry {
     float clipGain{1.0f};
     double fadeInDurationSeconds{0.0};
     double fadeOutDurationSeconds{0.0};
+    double clipInSeconds{0.0};
     juce::String name;
     juce::Colour colour;
 };

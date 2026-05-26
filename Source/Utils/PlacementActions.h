@@ -105,4 +105,49 @@ private:
     float newGain_;
 };
 
+// Trim undo: 恢复原始 clipInSeconds、durationSeconds 和 timelineStartSeconds
+class TrimPlacementAction : public UndoAction {
+public:
+    TrimPlacementAction(OpenTuneAudioProcessor& processor,
+                        int trackId, uint64_t placementId,
+                        double oldClipInSeconds, double oldDurationSeconds,
+                        double newClipInSeconds, double newDurationSeconds,
+                        double oldTimelineStart, double newTimelineStart);
+    void undo() override;
+    void redo() override;
+    juce::String getDescription() const override { return TRANS("裁剪片段"); }
+
+private:
+    OpenTuneAudioProcessor& processor_;
+    int trackId_;
+    uint64_t placementId_;
+    double oldClipInSeconds_;
+    double oldDurationSeconds_;
+    double newClipInSeconds_;
+    double newDurationSeconds_;
+    double oldTimelineStart_;  // left trim also shifts timeline start
+    double newTimelineStart_;
+};
+
+// Fade undo: 恢复原始 fadeIn/fadeOut duration
+class FadeChangeAction : public UndoAction {
+public:
+    FadeChangeAction(OpenTuneAudioProcessor& processor,
+                     int trackId, uint64_t placementId,
+                     double oldFadeIn, double oldFadeOut,
+                     double newFadeIn, double newFadeOut);
+    void undo() override;
+    void redo() override;
+    juce::String getDescription() const override { return TRANS("调整淡变"); }
+
+private:
+    OpenTuneAudioProcessor& processor_;
+    int trackId_;
+    uint64_t placementId_;
+    double oldFadeIn_;
+    double oldFadeOut_;
+    double newFadeIn_;
+    double newFadeOut_;
+};
+
 } // namespace OpenTune

@@ -36,7 +36,7 @@ OpenTune 是 AI 自动调音应用，集成 RMVPE F0 提取与 PC-NSF-HiFiGAN �
 - `showUnvoicedFrames` / `noteNameMode` / `showChunkBoundaries` 已收敛为 shared app preferences，并接入 shared preferences page、两套 editor 同步和 PianoRoll 渲染
 - dual-format 仓库下的 mac Standalone bundle metadata / docs 路径已落地到 `OpenTune_Standalone` 边界内，并有 source/build structure smoke guards
 - `UndoAction` / `UndoManager` / `OpenTuneAudioProcessor` / `PianoRollComponent` / Standalone+VST3 editor 当前已进一步收敛到 `materializationId + projection` public contract；`MaterializationRefreshRequest`、`setEditedMaterialization(...)`、`reclaimUnreferencedMaterialization()` / `reclaimUnreferencedSource()` 已替换旧 content-era 命名
-- VST3 ARA published contract 现在已经显式改成 `AppliedMaterializationProjection` + `bindPlaybackRegionToMaterialization()` / `updatePlaybackRegionMaterializationRevisions()` / `clearPlaybackRegionMaterialization()`；`PublishedRegionView` 公开 `sourceId`，`RegionSlot` 记录 `audioModificationPersistentId`，`VST3AraSession` 用 `materializationBindings_` 按 AudioModification persistent ID 绑定 materialization。多个 PlaybackRegion 属于同一 AudioModification 时共享同一 materialization；不同 AudioModification 即使 source window 相同也默认独立 materialization。
+- VST3 ARA published contract 现在已经显式改成 `AppliedMaterializationProjection` + `bindPlaybackRegionToMaterialization()` / `updatePlaybackRegionMaterializationRevisions()`；`PublishedRegionView` 公开 `sourceId`，`RegionSlot` 记录 `audioModificationPersistentId`，`VST3AraSession` 用 `materializationBindings_` 按 AudioModification persistent ID 绑定 materialization。多个 PlaybackRegion 属于同一 AudioModification 时共享同一 materialization；不同 AudioModification 即使 source window 相同也默认独立 materialization。2026-05-27 后，birth pending truth 也由 `audioModificationPersistentId + SourceWindow + revision` 持有，editor destructive clear API 已删除。
 - Standalone `ArrangementViewComponent` 与 `PluginEditor` 当前选择/overlay/main sync 路径已经继续往 `placementIndex + placementId + materializationId` 收口；Piano Roll 当前公开 contract 也已从 `ContentTimelineProjection` / `setEditedContent(...)` 切到 `MaterializationTimelineProjection` / `setEditedMaterialization(...)`
 - `OpenTuneTests` 已覆盖 app preferences、scheme 决策、shared visual preferences、mac Standalone packaging、parameter panel sync、undo result-chain owner guard、compound clip-core delta、scheme-independent replay、undo matrix、ARA renderer block span，以及本 phase 新增的 projection/materialization-owner guards（`PianoRollProjection_ConsumesMaterializationIdAndPlacementProjectionOnly`、`SplitPlacement_PianoRollDisplaysProjectedWindowOnly`、`ContentMetadataUndo_SharedContentDoesNotResolvePlacementByContentId`、`EditingCommand_DoesNotMutatePlacement`、`MaterializationCommands_DoNotMutateTimelinePlacementTruth`、`PlacementCommands_DoNotMutateClipCoreTruth`、`AraSession_SnapshotExposesSourceMaterializationAndPlacementOwnership`、`ProcessorModel_RejectsMixedClipOwnerApis`）
 - Piano Roll 当前已从 content-era 选择协议升级为显式 `MaterializationTimelineProjection` value object；Standalone placement 与 VST3 preferred region 都会把 `timelineStart/timelineDuration/materializationStart/materializationDuration` 完整喂给同一条 UI contract，split trailing placement / partial region 不再按整段 materialization 窗口显示
@@ -52,7 +52,7 @@ OpenTune 是 AI 自动调音应用，集成 RMVPE F0 提取与 PC-NSF-HiFiGAN �
 - 2026-05-18 Regular VST3 capture display selection: after capture completes in Studio One regular insert, the VST3 editor keeps displaying the captured materialization even when host playhead leaves the segment. `CaptureSession` callback stores active selection; `resolveCurrentMaterializationProjection()` resolves stored selection on playhead miss. Architecture guards PASS. Plan: `.planning/plans/2026-05-18-regular-vst3-capture-display-selection.md`.
 - 2026-05-18 Regular VST3 capture timeline view domain: PianoRoll view domain defaults to time zero instead of captured segment projection start. Late-capture segments (e.g. at `03:25`) remain scrollable to earlier timeline time. Automated test `PianoRollTimelineViewDomain_LateCaptureCanBrowseBeforeSegment` PASS. Plan: `.planning/plans/2026-05-18-regular-vst3-capture-timeline-view-domain.md`.
 - 2026-05-18 Regular VST3 transport shortcuts: keyboard shortcuts and transport buttons route through unified helper; regular VST3 does not forge host transport truth. Architecture guards PASS; ARA/non-ARA builds PASS. Verification: `.planning/plans/2026-05-18-regular-vst3-transport-shortcuts-test-verification.md`.
-- 当前自动化验证现实已更新为：ARA build dir 中 `OpenTuneTests` Release build PASS，`architecture/core/processor/memory/undo` suites PASS，ARA VST3 build PASS，non-ARA VST3 build PASS；`ui` suite 仍有 runner exit=1 且无 `[FAIL]` 文本的待解释问题，不能继续写成 full-suite PASS。Reaper ARA multi-item/project reload L5 手工旅程与 macOS bundle inspection 仍是显式 gap。
+- 当前自动化验证现实已更新为：ARA build dir 中 `OpenTuneTests` Release build PASS，`architecture/core/processor/memory/undo` suites PASS，ARA VST3 build PASS，non-ARA VST3 build PASS；`ui` suite 仍有 runner exit=1 且无 `[FAIL]` 文本的待解释问题，不能继续写成 full-suite PASS。Reaper ARA multi-item/project reload L5 手工旅程与 macOS bundle inspection 仍是显式 gap。2026-05-26 的 DAW timeline rendering pipeline refactor 已完成，`timeline-rendering` 与 `piano-roll-f0-visual` focused suites PASS。
 
 ## Current Mainline Goals
 
@@ -188,23 +188,32 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-## 2026-05-26 Update: VST3 ARA OriginalF0 Final Convergence — DONE
+## 2026-05-26 Update: VST3 ARA OriginalF0 收口已落地，但未完成 Multi-Item / Reopen 生命周期闭环
 
-The VST3 ARA OriginalF0 final convergence plan has been fully implemented. All structural residues removed:
+2026-05-26 的 OriginalF0 收口工作有一批重要子项已经落地：
 
 1. **SourceStore metadata-only**: `CreateSourceRequest` 新增 `numChannels`/`numSamples`；`createSource()` 支持 `audioBuffer == nullptr` metadata-only 注册
-2. **ARA birth 语义收紧**: 删除 `makePartialResult`，改为 `buildBirthResult`；Failed 显式写入；`releaseImmediately()` 始终调用
-3. **Worker 命名收口**: `hydrationWorkerLoop` → `birthWorkerLoop`；`VST3AraSession.h/.cpp` 全部命名迁移
-4. **Editor 残留删除**: `rmvpeOverlayLatched_`/`rmvpeOverlayTargetMaterializationId_` 删除；`PluginEditor.cpp` ARA path 精简 358 行
+2. **ARA birth 结果语义收紧**: 删除 `makePartialResult`，改为 `buildBirthResult`；Failed 显式写入；`releaseImmediately()` 始终调用
+3. **Worker 命名收口**: `hydrationWorkerLoop` → `birthWorkerLoop`；`VST3AraSession.h/.cpp` 命名迁移
+4. **Editor 残留删除**: `rmvpeOverlayLatched_`/`rmvpeOverlayTargetMaterializationId_` 删除；`PluginEditor.cpp` ARA path 精简
 5. **契约注释刷新**: `requestMaterializationRefresh` 改为正向非 ARA 契约
-6. **AraFinal 终审守卫**: 7 个新增守卫（negative guard + path guard）全部 PASS
-7. **setStateInformation 修复**: 移除 ARA source 恢复中 null buffer 早退条件
+6. **AraFinal 终审守卫**: 7 个新增守卫（negative guard + path guard）PASS
+7. **setStateInformation 子项修复**: 移除 ARA source 恢复中 null buffer 早退条件
 
-三目标编译通过 + architecture suite 7/7 AraFinal PASS。
+但对当前工作区再次按代码审计后，必须明确修正一个事实：
 
-Plan source:
-- `.planning/plans/2026-05-26-vst3-ara-originalf0-final-convergence.md`
-- `.planning/plans/2026-05-26-vst3-ara-originalf0-final-convergence-test-verification.md`
+2026-05-27 follow-up structural fix 已关闭 “Reaper 多 item birth + editor 关闭重开恢复” 的自动化合同：
+
+1. birth pending truth 已从 source 粒度迁移到 `audioModificationPersistentId + SourceWindow + revision`
+2. `didAddPlaybackRegionToAudioModification()` / attach-only new persistentId / ready-source requeue 都会 upsert pending birth
+3. `PluginEditor` 不再拥有 destructive clear 路径，`clearPlaybackRegionMaterialization()` 已从 production session API 删除
+4. metadata-only ARA pre-bind state 只缓存，`didBindToARA()` 后 replay 到最终 shared stores；regular unbound VST3 state 仍立即恢复
+
+本次 Codex 闭环为自动化闭环：`architecture` / `processor` / `core` / `memory` PASS，ARA VST3 / non-ARA VST3 / Standalone builds PASS。用户明确表示 REAPER 手工测试不用本次执行，因此不得把 REAPER L5 写成 PASS，也不得把它作为本次自动化闭环阻塞项。
+
+Follow-up plan source:
+- `.planning/plans/2026-05-26-vst3-ara-multi-item-birth-and-editor-reopen-structural-fix.md`
+- `.planning/plans/2026-05-26-vst3-ara-multi-item-birth-and-editor-reopen-test-verification.md`
 
 ---
-*Last updated: 2026-05-26 after VST3 ARA OriginalF0 final-convergence implementation*
+*Last updated: 2026-05-27 after closing ARA multi-item birth and editor-reopen automated contract*

@@ -18,6 +18,12 @@ enum class ShortcutId {
     Paste,
     SelectAll,
     Delete,
+    SplitClip,
+    MergeClips,
+    DuplicateClip,
+    NudgeLeft,
+    NudgeRight,
+    ToggleSnap,
     Count
 };
 
@@ -166,7 +172,13 @@ inline const ShortcutInfo kShortcutInfos[] = {
     { ShortcutId::Delete, Loc::Keys::kDelete, { 
         KeyBinding(juce::KeyPress::deleteKey, {}),
         KeyBinding(juce::KeyPress::backspaceKey, {})
-    } }
+    } },
+    { ShortcutId::SplitClip, Loc::Keys::kSplitClip, { KeyBinding('S', {}) } },
+    { ShortcutId::MergeClips, Loc::Keys::kMergeClips, { KeyBinding('M', {}) } },
+    { ShortcutId::DuplicateClip, Loc::Keys::kDuplicateClip, { KeyBinding('D', juce::ModifierKeys::commandModifier) } },
+    { ShortcutId::NudgeLeft, Loc::Keys::kNudgeLeft, { KeyBinding(juce::KeyPress::leftKey, {}) } },
+    { ShortcutId::NudgeRight, Loc::Keys::kNudgeRight, { KeyBinding(juce::KeyPress::rightKey, {}) } },
+    { ShortcutId::ToggleSnap, Loc::Keys::kToggleSnap, { KeyBinding('S', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier) } }
 };
 
 inline const size_t kShortcutCount = sizeof(kShortcutInfos) / sizeof(kShortcutInfos[0]);

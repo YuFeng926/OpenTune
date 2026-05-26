@@ -185,6 +185,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
             pEntry.clipGain = placement.gain;
             pEntry.fadeInDurationSeconds = placement.fadeInDuration;
             pEntry.fadeOutDurationSeconds = placement.fadeOutDuration;
+            pEntry.clipInSeconds = placement.clipInSeconds;
             pEntry.name = placement.name;
             pEntry.colour = placement.colour;
             trackEntry.placements.push_back(pEntry);
@@ -379,6 +380,7 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
             placement.gain = pEntry.clipGain;
             placement.fadeInDuration = pEntry.fadeInDurationSeconds;
             placement.fadeOutDuration = pEntry.fadeOutDurationSeconds;
+            placement.clipInSeconds = pEntry.clipInSeconds;
             placement.name = pEntry.name;
             placement.colour = pEntry.colour;
 

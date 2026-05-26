@@ -103,8 +103,8 @@
 - `materializationBindings_` is the session-owned binding table. It is not keyed by transient `ARAPlaybackRegion*` and does not infer aliasing from `sourceId + sourceWindow`.
 - `AppliedMaterializationProjection` stores `sourceId`, `materializationId`, applied materialization/projection revisions, source range, playback start, and the explicit `appliedRegionIdentity`.
 - `PublishedRegionView` and `PublishedSnapshot` are the immutable read models consumed by the VST3 editor and ARA renderer, and now publish `sourceId` explicitly.
-- `bindPlaybackRegionToMaterialization()`, `updatePlaybackRegionMaterializationRevisions()`, and `clearPlaybackRegionMaterialization()` define the visible source/materialization-plus-projection bridge toward the VST3 path.
-- A dedicated hydration worker thread is implemented inside `VST3AraSession.cpp`.
+- `bindPlaybackRegionToMaterialization()` and `updatePlaybackRegionMaterializationRevisions()` define the visible source/materialization-plus-projection bridge toward the VST3 path. Destructive editor/session clear is not part of the current production API.
+- A dedicated birth worker thread is implemented inside `VST3AraSession.cpp`; pending birth truth is keyed by `AudioModification persistentId + SourceWindow + revision`, while the worker-ready queue only carries persistentIds that can currently run.
 - 2026-05-15 clarification: the source carrier itself is still useful, but editable-owner truth now lives at AudioModification/materialization binding level. Same AudioModification aliases share one materialization by design; sibling PlaybackRegions from different AudioModifications do not.
 
 **ARA Adapter Layer:**

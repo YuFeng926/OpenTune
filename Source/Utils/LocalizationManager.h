@@ -254,6 +254,12 @@ constexpr const char* kCopy = "Copy";
 constexpr const char* kPaste = "Paste";
 constexpr const char* kSelectAll = "Select All";
 constexpr const char* kDelete = "Delete";
+constexpr const char* kSplitClip = "Split Clip";
+constexpr const char* kMergeClips = "Merge Clips";
+constexpr const char* kDuplicateClip = "Duplicate Clip";
+constexpr const char* kNudgeLeft = "Nudge Left";
+constexpr const char* kNudgeRight = "Nudge Right";
+constexpr const char* kToggleSnap = "Toggle Snap";
 
 constexpr const char* kPitchCorrection = "Pitch correction";
 constexpr const char* kRetuneSpeed = "Retune Speed";
@@ -409,6 +415,12 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kPaste, "Paste", "粘贴", "貼り付け", "Вставить", "Pegar" },
         { Keys::kSelectAll, "Select All", "全选", "すべて選択", "Выбрать всё", "Selec. todo" },
         { Keys::kDelete, "Delete", "删除", "削除", "Удалить", "Eliminar" },
+        { Keys::kSplitClip, "Split Clip", "拆分片段", "クリップを分割", "Разрезать клип", "Dividir clip" },
+        { Keys::kMergeClips, "Merge Clips", "合并片段", "クリップを結合", "Объединить клипы", "Unir clips" },
+        { Keys::kDuplicateClip, "Duplicate Clip", "原地复制", "クリップを複製", "Дублировать клип", "Duplicar clip" },
+        { Keys::kNudgeLeft, "Nudge Left", "左移", "左に微調整", "Сдвинуть влево", "Desplazar izq." },
+        { Keys::kNudgeRight, "Nudge Right", "右移", "右に微調整", "Сдвинуть вправо", "Desplazar der." },
+        { Keys::kToggleSnap, "Toggle Snap", "切换吸附", "スナップ切替", "Перекл. привязку", "Activar ajuste" },
         
         { Keys::kPitchCorrection, "Pitch correction", "音高校正", "ピッチ補正", "Коррекция тона", "Corrección de tono" },
         { Keys::kRetuneSpeed, "Retune Speed", "校正速度", "チューン速度", "Скорость коррекции", "Vel. afinación" },
