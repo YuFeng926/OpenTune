@@ -1058,7 +1058,9 @@ void OpenTuneAudioProcessorEditor::syncAraPreferredRegionBindingOnly()
 
     if (materializationId == 0 || processorRef_.getMaterializationAudioBufferById(materializationId) == nullptr)
     {
-        session->clearPlaybackRegionMaterialization(currentPlaybackRegion);
+        // Payload temporarily unavailable — do NOT destroy binding.
+        // Birth worker will eventually make it available; editor must not
+        // upgrade a transient missing payload into permanent binding loss.
         syncMaterializationProjectionToPianoRoll();
         markSnapshotConsumed();
         return;
