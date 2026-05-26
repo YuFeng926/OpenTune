@@ -51,8 +51,9 @@ public:
         themeSelector_.addItem(LOC(kThemeBlueBreeze), 1);
         themeSelector_.addItem(LOC(kThemeDarkBlueGrey), 2);
         themeSelector_.addItem(LOC(kThemeAurora), 3);
-        themeSelector_.addItem(LOC(kThemeOverdose), 4);
-        themeSelector_.setSelectedId(static_cast<int>(state.shared.theme) + 1, juce::dontSendNotification);
+        // themeSelector_.addItem(LOC(kThemeOverdose), 4);  // "升天" 主题暂时隐藏
+        const int themeIdx = static_cast<int>(state.shared.theme);
+        themeSelector_.setSelectedId(themeIdx >= static_cast<int>(ThemeId::Overdose) ? 1 : themeIdx + 1, juce::dontSendNotification);
         themeSelector_.onChange = [this] {
             appPreferences_.setTheme(static_cast<ThemeId>(themeSelector_.getSelectedId() - 1));
             notifyChanged();
@@ -166,6 +167,24 @@ public:
             if (onPreferencesChanged_)
                 onPreferencesChanged_();
         };
+
+        initialiseLabel(experimentalFeatureLabel_, juce::String::fromUTF8(u8"实验性功能"));
+        addAndMakeVisible(experimentalFeatureLabel_);
+
+        experimentalFeatureSelector_.addItem(juce::String::fromUTF8(u8"关闭"), 1);
+        experimentalFeatureSelector_.addItem(juce::String::fromUTF8(u8"自动对齐参考源（基础）"), 2);
+        experimentalFeatureSelector_.addItem(juce::String::fromUTF8(u8"自动对齐参考源（激进）"), 3);
+        experimentalFeatureSelector_.setSelectedId(
+            static_cast<int>(state.shared.experimentalReferenceAlignMode) + 1,
+            juce::dontSendNotification);
+        experimentalFeatureSelector_.onChange = [this] {
+            const auto mode = static_cast<ExperimentalReferenceAlignMode>(
+                experimentalFeatureSelector_.getSelectedId() - 1);
+            appPreferences_.setExperimentalReferenceAlignMode(mode);
+            notifyChanged();
+        };
+        initialiseComboBox(experimentalFeatureSelector_);
+        addAndMakeVisible(experimentalFeatureSelector_);
     }
 
     void paint(juce::Graphics& g) override
@@ -188,6 +207,11 @@ public:
         row = bounds.removeFromTop(rowHeight);
         vocoderWeightLabel_.setBounds(row.removeFromLeft(labelWidth));
         vocoderWeightSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
+
+        bounds.removeFromTop(8);
+        row = bounds.removeFromTop(rowHeight);
+        experimentalFeatureLabel_.setBounds(row.removeFromLeft(labelWidth));
+        experimentalFeatureSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
     }
 
 private:
@@ -206,6 +230,8 @@ private:
     juce::ComboBox renderingPrioritySelector_;
     juce::Label vocoderWeightLabel_;
     juce::ComboBox vocoderWeightSelector_;
+    juce::Label experimentalFeatureLabel_;
+    juce::ComboBox experimentalFeatureSelector_;
 };
 
 class SharedEditingPage final : public juce::Component

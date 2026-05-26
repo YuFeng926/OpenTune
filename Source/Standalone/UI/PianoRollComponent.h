@@ -37,6 +37,7 @@
 #include "SmallButton.h"
 #include "PlayheadOverlayComponent.h"
 #include "PianoRoll/PianoRollRenderer.h"
+#include "PianoRoll/PianoRollRenderModelCache.h"
 #include "PianoRoll/PianoRollToolHandler.h"
 #include "PianoRoll/PianoRollVisualInvalidation.h"
 #include "PianoRoll/PianoRollCorrectionWorker.h"
@@ -106,8 +107,12 @@ public:
         bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
         isPlaying_.store(playing, std::memory_order_relaxed);
         playheadOverlay_.setPlaying(playing);
-        if (stateChanged)
+        if (stateChanged && playing)
+            pendingSeekTime_ = -1.0;
+        if (stateChanged) {
+            lastObservedRawPlayheadTime_ = readPlayheadTime();
             userScrollHold_ = false;
+        }
     }
     void setZoomLevel(double zoom);
     void setCurrentTool(ToolId tool);
@@ -128,6 +133,7 @@ public:
         }
 
         scrollMode_ = mode;
+        prepareVisibleRenderModel();
         invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Viewport),
                          PianoRollVisualInvalidationPriority::Interactive);
     }
@@ -143,11 +149,17 @@ public:
     bool hasUserManuallyZoomed() const { return userHasManuallyZoomed_; }
 
     void setShowOriginalF0(bool show) {
+        if (showOriginalF0_ == show) return;
         showOriginalF0_ = show;
+        ++visualPrefsRevision_;
+        prepareVisibleRenderModel();
         invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
     }
     void setShowCorrectedF0(bool show) {
+        if (showCorrectedF0_ == show) return;
         showCorrectedF0_ = show;
+        ++visualPrefsRevision_;
+        prepareVisibleRenderModel();
         invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
     }
     bool isShowingOriginalF0() const { return showOriginalF0_; }
@@ -210,6 +222,9 @@ public:
                           PianoRollVisualInvalidationPriority priority = PianoRollVisualInvalidationPriority::Interactive);
     void flushPendingVisualInvalidation();
 
+    /** Request a semantic content redraw via FrameScheduler. */
+    void requestContentRedraw();
+
     void scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) override;
     void updateScrollBars();
 
@@ -260,14 +275,16 @@ public:
 private:
     void onScrollVBlankCallback(double timestampSec);
     double readPlayheadTime() const;
+    double projectPlayheadTime(double rawPlayheadTime) const;
     double readProjectedPlayheadTime() const;
     juce::Rectangle<int> getTimelineViewportBounds() const;
 
-    void drawSelectedOriginalF0Curve(juce::Graphics& g, const std::vector<float>& originalF0);
     void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
     void drawLineAnchorPreview(juce::Graphics& g);
     void drawSelectionBox(juce::Graphics& g, ThemeId themeId);
+    /** Draw just the background/theme when the prepared render model is not ready. */
+    void paintBackgroundOnly(juce::Graphics& g);
 
 
     void handleVerticalZoomWheel(const juce::MouseEvent& e, float deltaY);
@@ -286,7 +303,11 @@ private:
     void applyEditedMaterializationCurve(std::shared_ptr<PitchCurve> curve);
     void applyEditedMaterializationAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
     PianoRollRenderer::MaterializationRenderItem buildMaterializationRenderItem(
-        const TimelineMaterializationPlacement& placement) const;
+        const TimelineMaterializationPlacement& placement,
+        double visibleTimeStart,
+        double visibleTimeEnd,
+        int viewportStartX,
+        int viewportEndX) const;
     const std::vector<Note>& getCommittedNotes() const;
     const std::vector<Note>& getDisplayedNotes() const;
     NoteInteractionDraft& getNoteDraft();
@@ -344,7 +365,26 @@ private:
     int timeToX(double seconds) const;
     double xToTime(int x) const;
 
-    PianoRollRenderer::RenderContext buildRenderContext() const;
+    PianoRollRenderer::RenderContext buildRenderContext() const
+    {
+        const auto viewport = getTimelineViewportBounds();
+        const int viewportStartX = pianoKeyWidth_;
+        const int viewportEndX = viewport.getRight();
+        return buildRenderContext(xToTime(viewportStartX),
+                                  xToTime(viewportEndX),
+                                  viewportStartX,
+                                  viewportEndX);
+    }
+
+    PianoRollRenderer::RenderContext buildRenderContext(double visibleTimeStart,
+                                                        double visibleTimeEnd,
+                                                        int viewportStartX,
+                                                        int viewportEndX) const;
+
+    /** Rebuild the prepared render model from current state if the cache key has changed.
+     *  Called from every state-change path (scroll, zoom, visual prefs, materialization),
+     *  NEVER from paint(). */
+    void prepareVisibleRenderModel() const;
 
     TimeConverter timeConverter_;
 
@@ -358,7 +398,8 @@ private:
     // Cont-mode scroll state
     bool userScrollHold_{false};         // user manually scrolled → pause auto-follow
     float scrollSeekOffset_{0.0f};       // smooth seek: decays to 0 each frame
-    double pendingSeekTime_{-1.0};       // ARA seek pending host confirmation; -1 = none
+    double pendingSeekTime_{-1.0};       // pending playhead presentation intent; -1 = none
+    double lastObservedRawPlayheadTime_{0.0}; // host raw playhead last seen by stopped-state presentation
 
     bool userHasManuallyZoomed_ = false;
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity_ = ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
@@ -428,6 +469,10 @@ private:
     std::vector<Note> cachedNotes_;
 
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
+
+    mutable PianoRollRenderModelCache renderModelCache_;
+    uint64_t visualPrefsRevision_ = 0;
+    uint64_t viewportSizeRevision_ = 0;
 
     // Undo support
     juce::String pendingUndoDescription_;

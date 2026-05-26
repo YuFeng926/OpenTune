@@ -6,8 +6,12 @@
 #include "Plugin/Capture/CaptureSegment.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Standalone/UI/MenuBarComponent.h"
+#include "Standalone/UI/FrameScheduler.h"
 #include "Standalone/UI/PianoRoll/PianoRollRenderer.h"
 #include "Standalone/UI/PianoRoll/PianoRollVisualInvalidation.h"
+#include "Standalone/UI/TimelineViewportState.h"
+#include "Standalone/UI/WaveformMipmap.h"
+#include "Standalone/UI/WaveformTileCache.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/AudioEditingScheme.h"
 #include "Utils/ParameterPanelSync.h"
@@ -39,7 +43,7 @@ struct SuiteEntry {
     void (*run)();
 };
 
-constexpr std::array<SuiteEntry, 33> kSuites{{
+constexpr std::array<SuiteEntry, 35> kSuites{{
     { "core", "leaf utilities and render primitives", &runCoreBehaviorSuite },
     { "processor", "shared processor and render contracts", &runProcessorBehaviorSuite },
     { "ui", "piano-roll and visual loop behavior", &runUiBehaviorSuite },
@@ -73,6 +77,8 @@ constexpr std::array<SuiteEntry, 33> kSuites{{
     { "ref-binding-cascade", "StandaloneArrangement reference binding cascade (delete/move cross-track/split)", &runPlacementReferenceCascadeSuite },
     { "arrangement-contract", "StandaloneArrangement contract (idempotent, invalid-id, snapshot)", &runArrangementContractSuite },
     { "project-session-reference", "ProjectSession reference binding roundtrip and corruption", &runProjectSessionReferenceSuite },
+    { "timeline-rendering", "DAW timeline rendering pipeline contracts", &runTimelineRenderingSuite },
+    { "timeline-rendering-perf", "DAW timeline rendering runtime diagnostics contracts", &runTimelineRenderingPerfSuite },
 }};
 
 void printHeader()
@@ -4763,17 +4769,15 @@ void runPianoRollF0VisualStyleTokensAndLayeringTest()
 
     const auto& componentSource = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
     const int originalDrawIndex = componentSource.indexOf(
-        "renderer_->drawF0Curve(g, originalF0, UIColors::originalF0, 0.62f, true");
-    const int selectedOriginalDrawIndex = componentSource.indexOf(
-        "drawSelectedOriginalF0Curve(g, originalF0);");
+        "renderer_->drawPreparedF0Curve(g, item.originalF0VisualSegments, UIColors::originalF0, 0.62f, true");
     const int correctedDrawIndex = componentSource.indexOf(
-        "renderer_->drawF0Curve(g, item.correctedF0, UIColors::correctedF0, 0.94f, false");
+        "renderer_->drawPreparedF0Curve(g, item.correctedF0VisualSegments, UIColors::correctedF0, 0.94f, false");
+    // selected OriginalF0 emphasis is now unified inside drawPreparedF0Curve via
+    // the note.selected alpha ramp, so only the two-level z-order matters.
     if (originalDrawIndex < 0
-        || selectedOriginalDrawIndex < 0
         || correctedDrawIndex < 0
-        || originalDrawIndex > selectedOriginalDrawIndex
-        || selectedOriginalDrawIndex > correctedDrawIndex) {
-        logFail(testName, "OriginalF0, including active selection emphasis, should draw below CorrectedF0");
+        || originalDrawIndex > correctedDrawIndex) {
+        logFail(testName, "OriginalF0 should draw below CorrectedF0 in the unified F0 path");
         return;
     }
 
@@ -4796,9 +4800,12 @@ void runPianoRollF0VisualStyleTokensAndLayeringTest()
         return;
     }
 
+    // After timeline-rendering refactor, selected OriginalF0 emphasis lives
+    // inside drawPreparedF0Curve via note.selected alpha ramp, not a separate path.
     if (!componentSource.contains("UIColors::originalF0.withAlpha(0.42f)")
-        || !componentSource.contains("UIColors::originalF0.withAlpha(0.055f)")) {
-        logFail(testName, "selected OriginalF0 emphasis should remain softer than CorrectedF0");
+        && !componentSource.contains("note.selected"))
+    {
+        logFail(testName, "selected OriginalF0 emphasis must remain softer than CorrectedF0 via unified path");
         return;
     }
 
@@ -4819,7 +4826,7 @@ void runPianoRollF0VisualEndpointFadeAndGlowContractTest()
 
     const auto& rendererSource = getFileCache().get("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
     const auto drawFunction = rendererSource
-        .fromFirstOccurrenceOf("void PianoRollRenderer::drawF0Curve", true, false)
+        .fromFirstOccurrenceOf("void PianoRollRenderer::drawPreparedF0Curve", true, false)
         .upToFirstOccurrenceOf("// ============================================================================", false, false);
 
     if (!drawFunction.contains("drawTaperedCurve")
@@ -5708,6 +5715,769 @@ void runChannelLayoutPrepareImportRejectsMultichannelTest()
         if (processor.prepareImport(std::move(surround), 44100.0,
                                       juce::String("surround.wav"), juce::String("surround.wav"), prep)) {
             logFail(testName, "5.1 import MUST be rejected");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+// ============================================================================
+// Timeline Rendering Pipeline Tests — L1 Static Contract Gate (Source Guards)
+// ============================================================================
+
+void runTimelinePlayheadOverlayDirtyRectOnlyTest()
+{
+    constexpr const char* testName = "TimelinePlayhead_OverlayDirtyRectOnly";
+
+    const auto setPlayheadSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PlayheadOverlayComponent.h",
+        "void setPlayheadSeconds",
+        "void setZoomLevel");
+    const auto setZoomSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PlayheadOverlayComponent.h",
+        "void setZoomLevel",
+        "void setScrollOffset");
+    const auto setScrollSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PlayheadOverlayComponent.h",
+        "void setScrollOffset",
+        "void setTimelineStart");
+    const auto setTimelineSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PlayheadOverlayComponent.h",
+        "void setTimelineStartSeconds",
+        "void setPianoKeyWidth");
+
+    if (setPlayheadSection.isEmpty() || setZoomSection.isEmpty()
+        || setScrollSection.isEmpty() || setTimelineSection.isEmpty()) {
+        logFail(testName, "failed to locate PlayheadOverlayComponent setter sections");
+        return;
+    }
+
+    // Each setter must NOT use unconditional repaint() — must use dirty-rect union of old+new
+    bool anyUnconditionalRepaint = false;
+    if (setPlayheadSection.contains("repaint()")) anyUnconditionalRepaint = true;
+    if (setZoomSection.contains("repaint()")) anyUnconditionalRepaint = true;
+    if (setScrollSection.contains("repaint()")) anyUnconditionalRepaint = true;
+    if (setTimelineSection.contains("repaint()")) anyUnconditionalRepaint = true;
+
+    if (anyUnconditionalRepaint) {
+        logFail(testName, "PlayheadOverlay setter(s) still use unconditional repaint() — must use dirty-rect union of old+new narrow rects");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelinePlayheadPositionDoesNotEnterRenderModelKeyTest()
+{
+    constexpr const char* testName = "TimelinePlayhead_PositionDoesNotEnterRenderModelKey";
+
+    const auto& pianoCacheHeader = getFileCache().get("Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h");
+    const auto& arrangementCacheHeader = getFileCache().get("Source/Standalone/UI/ArrangementRenderModelCache.h");
+
+    std::initializer_list<const char*> forbidden = {
+        "playhead", "Playhead", "positionSeconds", "PositionSeconds", "transportPosition"
+    };
+
+    for (const auto* needle : forbidden) {
+        if (pianoCacheHeader.contains(needle)) {
+            logFail(testName,
+                    (juce::String("PianoRoll render-model key/cache contains playhead dependency: ")
+                     + needle).toRawUTF8());
+            return;
+        }
+        if (arrangementCacheHeader.contains(needle)) {
+            logFail(testName,
+                    (juce::String("Arrangement render-model key/cache contains playhead dependency: ")
+                     + needle).toRawUTF8());
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runTimelineInvalidationViewportShiftExposesOnlyNewStripTest()
+{
+    constexpr const char* testName = "TimelineInvalidation_ViewportShiftExposesOnlyNewStrip";
+
+    const auto pianoScrollSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::setScrollOffset",
+        "void PianoRollComponent::onHeartbeatTick");
+
+    const auto arrScrollSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::setScrollOffset",
+        "void ArrangementViewComponent::mouseDown");
+
+    if (pianoScrollSection.isEmpty() || arrScrollSection.isEmpty()) {
+        logFail(testName, "failed to locate scroll methods");
+        return;
+    }
+
+    bool pianoFull = pianoScrollSection.contains("repaint()") && !pianoScrollSection.contains("FrameScheduler");
+    bool arrFull = arrScrollSection.contains("repaint()") && !arrScrollSection.contains("FrameScheduler");
+
+    if (pianoFull || arrFull) {
+        logFail(testName,
+            (juce::String("scroll still triggers whole-component repaint: PianoRoll=")
+             + juce::String(pianoFull ? "yes" : "no")
+             + juce::String(", Arrangement=")
+             + juce::String(arrFull ? "yes" : "no")).toRawUTF8());
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineInvalidationBigJumpPromotesToSingleFullRedrawTest()
+{
+    constexpr const char* testName = "TimelineInvalidation_BigJumpPromotesToSingleFullRedraw";
+
+    TimelineViewportState viewport;
+    viewport.viewportWidthPx = 800;
+    viewport.viewportHeightPx = 240;
+
+    const auto smallStrip = viewport.exposedStripForScrollDelta(0, 120);
+    if (smallStrip.isEmpty() || viewport.requiresFullRedrawForDelta(0, 120)) {
+        logFail(testName, "small scroll should expose a dirty strip instead of requiring full redraw");
+        return;
+    }
+
+    const auto bigStrip = viewport.exposedStripForScrollDelta(0, 801);
+    if (!bigStrip.isEmpty() || !viewport.requiresFullRedrawForDelta(0, 801)) {
+        logFail(testName, "big scroll should promote to one full redraw decision");
+        return;
+    }
+
+    const auto& frameScheduler = getFileCache().get("Source/Standalone/UI/FrameScheduler.h");
+    if (!frameScheduler.contains("full repaint promotion") && !frameScheduler.contains("recordFullRepaintPromotion")) {
+        logFail(testName, "FrameScheduler does not record full repaint promotions for large viewport jumps");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollPlayheadOnlyTicksDoNotRebuildRenderModelTest()
+{
+    constexpr const char* testName = "PianoRoll_PlayheadOnlyTicksDoNotRebuildRenderModel";
+
+    const auto overlayHeader = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PlayheadOverlayComponent.h",
+        "void setPlayheadSeconds",
+        "void setZoomLevel");
+    const auto componentSource = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    if (overlayHeader.isEmpty()) {
+        logFail(testName, "failed to locate PlayheadOverlayComponent playhead setter");
+        return;
+    }
+
+    if (overlayHeader.contains("prepareVisibleRenderModel")
+        || overlayHeader.contains("invalidateRenderModel")
+        || overlayHeader.contains("buildRenderContext")) {
+        logFail(testName, "playhead setter still rebuilds or invalidates PianoRoll content model");
+        return;
+    }
+
+    const auto playheadNotifySection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::notifyPlayheadChange",
+        "void PianoRollComponent::updatePlayheadOverlay");
+    if (!playheadNotifySection.isEmpty()
+        && (playheadNotifySection.contains("prepareVisibleRenderModel")
+            || playheadNotifySection.contains("renderModelCache_.invalidate"))) {
+        logFail(testName, "PianoRoll playhead notification invalidates/rebuilds the render model");
+        return;
+    }
+
+    if (componentSource.contains("playhead") && componentSource.contains("PianoRollRenderModelCache::Key")
+        && componentSource.contains("playheadSeconds")) {
+        logFail(testName, "PianoRoll render model key appears to include playhead position");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollStoppedSeekKeepsPresentationIntentTest()
+{
+    constexpr const char* testName = "PianoRoll_StoppedSeekKeepsPresentationIntent";
+
+    const auto header = getFileCache().get("Source/Standalone/UI/PianoRollComponent.h");
+    const auto source = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto notifySection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "toolCtx.notifyPlayheadChange = [this](double time) {",
+        "toolCtx.notifyPitchCurveEdited = [this](int s, int e) {");
+    const auto vblankSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::onScrollVBlankCallback",
+        "void PianoRollComponent::setZoomLevel");
+
+    if (header.isEmpty() || source.isEmpty() || notifySection.isEmpty() || vblankSection.isEmpty()) {
+        logFail(testName, "failed to locate PianoRoll stopped-seek implementation sections");
+        return;
+    }
+
+    if (!header.contains("double pendingSeekTime_{-1.0};")
+        || !header.contains("pending playhead presentation intent")) {
+        logFail(testName, "pendingSeekTime_ contract comment was not updated to presentation-intent semantics");
+        return;
+    }
+
+    if (!header.contains("double lastObservedRawPlayheadTime_{0.0};")) {
+        logFail(testName, "stopped presentation path must track the last observed raw host playhead");
+        return;
+    }
+
+    if (!notifySection.contains("pendingSeekTime_ = time;")) {
+        logFail(testName, "notifyPlayheadChange no longer records presentation intent");
+        return;
+    }
+
+    if (!notifySection.contains("playheadOverlay_.setPlayheadSeconds(time);")) {
+        logFail(testName, "notifyPlayheadChange must still update overlay immediately");
+        return;
+    }
+
+    if (!header.contains("if (stateChanged && playing)")
+        || !header.contains("pendingSeekTime_ = -1.0;")) {
+        logFail(testName, "setIsPlaying must clear pending presentation intent when playback resumes");
+        return;
+    }
+
+    if (!source.contains("const double rawHostTime = readPlayheadTime();")
+        || !source.contains("const double hostTime = projectPlayheadTime(rawHostTime);")) {
+        logFail(testName, "stopped presentation path must read raw host time and project it explicitly");
+        return;
+    }
+
+    if (!vblankSection.contains("if (pendingSeekTime_ >= 0.0)")) {
+        logFail(testName, "stopped VBlank path does not honor pending presentation intent");
+        return;
+    }
+
+    if (vblankSection.contains("playheadOverlay_.setPlayheadSeconds(hostTime);\n        pendingSeekTime_ = -1.0;\n        return;")) {
+        logFail(testName, "stopped VBlank path still immediately overwrites seek intent with host/clamped time");
+        return;
+    }
+
+    if (!vblankSection.contains("const double stoppedPresentationTime = pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : hostTime;")
+        || !vblankSection.contains("playheadOverlay_.setPlayheadSeconds(stoppedPresentationTime);")) {
+        logFail(testName, "stopped VBlank path must prefer pending presentation intent over host time");
+        return;
+    }
+
+    if (!vblankSection.contains("std::abs(rawHostTime - lastObservedRawPlayheadTime_) > 0.001")
+        || !vblankSection.contains("lastObservedRawPlayheadTime_ = rawHostTime;")) {
+        logFail(testName, "stopped presentation path must yield back to host truth when the stopped raw host position changes");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollPaintConsumesPreparedRenderModelOnlyTest()
+{
+    constexpr const char* testName = "PianoRoll_PaintConsumesPreparedRenderModelOnly";
+
+    const auto paintSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::paint",
+        "void PianoRollComponent::resized");
+
+    if (paintSection.isEmpty()) {
+        logFail(testName, "failed to locate paint() method");
+        return;
+    }
+
+    if (paintSection.contains("buildRenderContext")
+        || paintSection.contains("prepareVisibleRenderModel")
+        || paintSection.contains("buildMaterializationRenderItem")) {
+        logFail(testName, "paint() still builds or refreshes PianoRoll render-model data");
+        return;
+    }
+
+    // paint() must NOT have processor/store side-effect reads
+    if (paintSection.contains("getMaterializationStore()")
+        || paintSection.contains("getSourceStore()")
+        || paintSection.contains("getProcessor()")
+        || paintSection.contains("processor_")) {
+        logFail(testName, "paint() still has processor/store side-effect reads");
+        return;
+    }
+
+    if (paintSection.contains("renderCorrectedOnlyRange")
+        || paintSection.contains("getOriginalF0()")
+        || paintSection.contains("drawF0Curve")) {
+        logFail(testName, "paint() still performs raw F0 preparation/draw calls instead of prepared visual segments");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollF0VisualsUseSingleRenderPathTest()
+{
+    constexpr const char* testName = "PianoRoll_F0VisualsUseSingleRenderPath";
+
+    const auto& componentHeader = getFileCache().get("Source/Standalone/UI/PianoRollComponent.h");
+    const auto& componentSource = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto paintSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::paint",
+        "void PianoRollComponent::resized");
+    const auto drawCurveSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp",
+        "void PianoRollRenderer::drawF0Curve",
+        "void PianoRollRenderer::drawGhostNotes");
+
+    if (componentHeader.contains("drawSelectedOriginalF0Curve")) {
+        logFail(testName, "drawSelectedOriginalF0Curve declaration still exists — parallel F0 render path");
+        return;
+    }
+
+    if (componentSource.contains("drawSelectedOriginalF0Curve")) {
+        logFail(testName, "drawSelectedOriginalF0Curve implementation still exists — parallel F0 render path");
+        return;
+    }
+
+    if (!paintSection.isEmpty()
+        && (paintSection.contains("getOriginalF0()")
+            || paintSection.contains("drawF0Curve"))) {
+        logFail(testName, "PianoRoll paint still has a raw F0 draw path instead of prepared F0 visuals");
+        return;
+    }
+
+    if (!drawCurveSection.isEmpty() && drawCurveSection.contains("buildF0VisualSegments")) {
+        logFail(testName, "PianoRollRenderer::drawF0Curve still builds F0 visual segments at draw time");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollVisibleRangeCullsNotesF0AndWaveformTilesTest()
+{
+    constexpr const char* testName = "PianoRoll_VisibleRangeCullsNotesF0AndWaveformTiles";
+
+    const auto& cacheHeader = getFileCache().get("Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h");
+    const auto& componentSource = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    if (!cacheHeader.contains("visibleStart") || !cacheHeader.contains("visibleEnd")) {
+        logFail(testName, "PianoRoll render-model key does not include viewport visible time/frame range");
+        return;
+    }
+
+    if (!cacheHeader.contains("projection") && !cacheHeader.contains("Projection")) {
+        logFail(testName, "PianoRoll render-model key does not include projection identity/revision");
+        return;
+    }
+
+    const auto buildItemSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "PianoRollRenderer::MaterializationRenderItem PianoRollComponent::buildMaterializationRenderItem",
+        "void PianoRollComponent::visibilityChanged");
+    if (!buildItemSection.isEmpty()
+        && buildItemSection.contains("renderCorrectedOnlyRange(\n                0,")) {
+        logFail(testName, "PianoRoll corrected F0 is still generated from frame 0 instead of visible range");
+        return;
+    }
+
+    if (!componentSource.contains("rangeForTimesWithMargin")
+        && !componentSource.contains("visibleTimeStart")) {
+        logFail(testName, "PianoRoll model preparation does not derive visible F0/note range");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runArrangementScrollOffsetDoesNotInvalidateWholeComponentTest()
+{
+    constexpr const char* testName = "Arrangement_ScrollOffsetDoesNotInvalidateWholeComponent";
+
+    const auto paintSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::paint",
+        "void ArrangementViewComponent::drawTimeRuler");
+
+    if (paintSection.isEmpty()) {
+        logFail(testName, "failed to locate Arrangement paint() — check section boundaries");
+        return;
+    }
+
+    // Anti-pattern: paint() enumerates all tracks and placements
+    if (paintSection.contains("getNumPlacements()") || paintSection.contains("getNumTracks()")) {
+        logFail(testName, "paint() still enumerates all tracks/placements per-paint");
+        return;
+    }
+
+    // Anti-pattern: paint() builds waveform paths per-paint
+    // Detected by: creating a new Path AND iterating waveform peaks in paint section
+    if (paintSection.contains("juce::Path waveformPath") || paintSection.contains("juce::Path  waveformPath")) {
+        logFail(testName, "paint() still builds waveform paths (juce::Path waveformPath) per-paint");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runArrangementPaintConsumesVisibleRenderModelOnlyTest()
+{
+    constexpr const char* testName = "Arrangement_PaintConsumesVisibleRenderModelOnly";
+
+    const auto paintSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::paint",
+        "void ArrangementViewComponent::drawTimeRuler");
+
+    if (paintSection.isEmpty()) return;
+
+    // paint() must NOT lock placements or refresh the model per-paint
+    if (paintSection.contains("getPlacementByIndex")
+        || paintSection.contains("requestRenderModelUpdate")
+        || paintSection.contains("renderModelCache_.update")
+        || paintSection.contains("processor_.")) {
+        logFail(testName, "Arrangement paint() still performs model update or processor reads");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runArrangementVisibleRangeCullsOffscreenPlacementsTest()
+{
+    constexpr const char* testName = "Arrangement_VisibleRangeCullsOffscreenPlacements";
+
+    const auto& cacheHeader = getFileCache().get("Source/Standalone/UI/ArrangementRenderModelCache.h");
+    const auto& cacheSource = getFileCache().get("Source/Standalone/UI/ArrangementRenderModelCache.cpp");
+
+    if (!cacheHeader.contains("visibleTimeStart") || !cacheHeader.contains("visibleTimeEnd")) {
+        logFail(testName, "Arrangement render-model key does not include visible time range");
+        return;
+    }
+
+    if (!cacheHeader.contains("arrangementRevision") && !cacheHeader.contains("snapshotRevision")) {
+        logFail(testName, "Arrangement render-model cache lacks arrangement revision in its key");
+        return;
+    }
+
+    if (!cacheSource.contains("timelineEndSeconds() < visibleTimeStart")
+        || !cacheSource.contains("timelineStartSeconds > visibleTimeEnd")) {
+        logFail(testName, "Arrangement render-model update does not cull offscreen placements by visible range");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runWaveformTileCacheHasBoundedMemoryAndEvictionTest()
+{
+    constexpr const char* testName = "WaveformTileCache_HasBoundedMemoryAndEviction";
+
+    WaveformTileCache cache;
+    WaveformMipmap mipmap;
+    auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 4096);
+    audio->clear();
+    for (int i = 0; i < audio->getNumSamples(); ++i)
+        audio->setSample(0, i, std::sin(static_cast<float>(i) * 0.03f));
+    mipmap.setAudioSource(audio);
+
+    int guard = 0;
+    while (!mipmap.isComplete() && guard < 1000) {
+        mipmap.buildIncremental(1.0);
+        ++guard;
+    }
+
+    juce::Rectangle<int> bounds(0, 0, 80, 32);
+    const auto maxTiles = WaveformTileCache::kMaxTiles;
+    for (std::size_t i = 0; i < maxTiles + 24; ++i) {
+        cache.getOrCreate(static_cast<uint64_t>(i + 1),
+                          static_cast<uint64_t>(i + 1),
+                          static_cast<int>(i % 9),
+                          mipmap,
+                          1.0f,
+                          bounds,
+                          static_cast<double>(i),
+                          static_cast<double>(i) + 1.0,
+                          0,
+                          0);
+    }
+
+    if (cache.size() > maxTiles) {
+        logFail(testName, "WaveformTileCache exceeded its configured max tile count");
+        return;
+    }
+
+    if (cache.get(1, 1, 0, 0.0, 1.0, 0, 0) != nullptr) {
+        logFail(testName, "WaveformTileCache did not evict the oldest tile after capacity pressure");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineFrameDriverCoalescesRequestsByPriorityTest()
+{
+    constexpr const char* testName = "TimelineFrameDriver_CoalescesRequestsByPriority";
+
+    FrameScheduler::instance().resetDiagnosticsForTests();
+    juce::Component component;
+    component.setBounds(0, 0, 200, 100);
+
+    FrameScheduler::instance().requestViewportShift(component, {0, 0, 10, 100});
+    FrameScheduler::instance().requestViewportShift(component, {10, 0, 10, 100});
+
+    const auto snapshot = FrameScheduler::instance().diagnosticsSnapshot();
+    if (snapshot.viewportShiftRequests < 2 || snapshot.pendingComponentCount != 1) {
+        logFail(testName, "FrameScheduler did not coalesce multiple viewport requests by component");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineFrameDriverDropsNonCriticalAnimationRateDuringPlaybackTest()
+{
+    constexpr const char* testName = "TimelineFrameDriver_DropsNonCriticalAnimationRateDuringPlayback";
+
+    FrameScheduler::instance().resetDiagnosticsForTests();
+    FrameScheduler::instance().setPlaybackActiveForTimeline(true);
+    juce::Component component;
+    component.setBounds(0, 0, 200, 100);
+
+    for (int i = 0; i < 8; ++i)
+        FrameScheduler::instance().requestLowPriorityAnimation(component, {0, 0, 50, 20});
+
+    FrameScheduler::instance().setPlaybackActiveForTimeline(false);
+
+    const auto snapshot = FrameScheduler::instance().diagnosticsSnapshot();
+    if (snapshot.lowPriorityAnimationDropped == 0) {
+        logFail(testName, "FrameScheduler did not drop/throttle low-priority animation while playback is active");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineEditorHeartbeatNoDirectRepaintTest()
+{
+    constexpr const char* testName = "TimelineEditor_HeartbeatNoDirectRepaint";
+
+    const auto& standaloneEditor = getFileCache().get("Source/Standalone/PluginEditor.cpp");
+    const auto& vst3Editor = getFileCache().get("Source/Plugin/PluginEditor.cpp");
+
+    // Anti-pattern: pianoRoll_.repaint() called directly from editor sync paths
+    if (standaloneEditor.contains("pianoRoll_.repaint()")) {
+        logFail(testName, "Standalone editor still has direct pianoRoll_.repaint() calls");
+        return;
+    }
+    if (vst3Editor.contains("pianoRoll_.repaint()")) {
+        logFail(testName, "VST3 editor still has direct pianoRoll_.repaint() calls");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineNoParallelF0RenderPathsTest()
+{
+    constexpr const char* testName = "Timeline_NoParallelF0RenderPaths";
+
+    const auto& componentSource = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto& componentHeader = getFileCache().get("Source/Standalone/UI/PianoRollComponent.h");
+    const auto& rendererSource = getFileCache().get("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+
+    // No drawSelectedOriginalF0Curve
+    if (componentHeader.contains("drawSelectedOriginalF0Curve")
+        || componentSource.contains("drawSelectedOriginalF0Curve")) {
+        logFail(testName, "drawSelectedOriginalF0Curve still exists — separate F0 render path");
+        return;
+    }
+
+    // No old/new render path switches
+    if (componentSource.contains("useOldRenderer") || componentSource.contains("useNewRenderer")) {
+        logFail(testName, "old/new renderer switch still present in component");
+        return;
+    }
+    if (rendererSource.contains("useOldRenderer") || rendererSource.contains("useNewRenderer")) {
+        logFail(testName, "old/new renderer switch still present in renderer");
+        return;
+    }
+
+    // No fallback to full repaint
+    if (componentSource.contains("fallbackRepaint") || componentSource.contains("fullRepaintFallback")) {
+        logFail(testName, "fallback full-repaint path still exists");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineKillListNoFullOverlayRepaintForPositionTest()
+{
+    constexpr const char* testName = "TimelineKillList_NoFullOverlayRepaintForPosition";
+
+    const auto setPlayheadSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PlayheadOverlayComponent.h",
+        "void setPlayheadSeconds",
+        "void setZoomLevel");
+
+    if (!setPlayheadSection.isEmpty()
+        && setPlayheadSection.contains("repaint()")
+        && !setPlayheadSection.contains("dirty")) {
+        logFail(testName, "Playhead setPosition still triggers unconditional full repaint()");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineKillListNoPaintTimeRenderContextBuildTest()
+{
+    constexpr const char* testName = "TimelineKillList_NoPaintTimeRenderContextBuild";
+
+    const auto paintSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::paint",
+        "void PianoRollComponent::resized");
+
+    if (!paintSection.isEmpty()) {
+        if (paintSection.contains("buildRenderContext")
+            || paintSection.contains("prepareVisibleRenderModel")
+            || paintSection.contains("buildMaterializationRenderItem")) {
+            logFail(testName, "paint() still builds or refreshes render context/model");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runTimelineKillListNoScrollTimeWholeInvalidationTest()
+{
+    constexpr const char* testName = "TimelineKillList_NoScrollTimeWholeInvalidation";
+
+    const auto pianoScrollSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::setScrollOffset",
+        "void PianoRollComponent::onHeartbeatTick");
+    const auto arrScrollSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::setScrollOffset",
+        "void ArrangementViewComponent::mouseDown");
+
+    bool pianoFull = !pianoScrollSection.isEmpty() && pianoScrollSection.contains("repaint()")
+        && !pianoScrollSection.contains("FrameScheduler");
+    bool arrFull = !arrScrollSection.isEmpty() && arrScrollSection.contains("repaint()")
+        && !arrScrollSection.contains("FrameScheduler");
+
+    if (pianoFull || arrFull) {
+        logFail(testName,
+            (juce::String("scroll still triggers whole-component invalidation: PianoRoll=")
+             + juce::String(pianoFull ? "yes" : "no")
+             + juce::String(", Arrangement=")
+             + juce::String(arrFull ? "yes" : "no")).toRawUTF8());
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineKillListNoUnboundedUiCachesTest()
+{
+    constexpr const char* testName = "TimelineKillList_NoUnboundedUiCaches";
+
+    bool tileCacheExists = workspaceFileExists("Source/Standalone/UI/WaveformTileCache.h");
+    bool pianoCacheExists = workspaceFileExists("Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h");
+    bool arrCacheExists = workspaceFileExists("Source/Standalone/UI/ArrangementRenderModelCache.h");
+
+    // If any cache already exists, verify bounded memory
+    auto checkBounded = [](const juce::String& relativePath, const char* label) -> bool {
+        const auto& source = getFileCache().get(relativePath);
+        juce::ignoreUnused(label);
+        return source.contains("kMaxEntries")
+            || source.contains("kMaxTiles")
+            || source.contains("evict");
+    };
+
+    if (tileCacheExists && !checkBounded("Source/Standalone/UI/WaveformTileCache.h", "WaveformTileCache")) {
+        logFail(testName, "WaveformTileCache missing bounded memory guard");
+        return;
+    }
+    if (pianoCacheExists && !checkBounded("Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h", "PianoCache")) {
+        logFail(testName, "PianoRollRenderModelCache missing bounded memory guard");
+        return;
+    }
+    if (arrCacheExists && !checkBounded("Source/Standalone/UI/ArrangementRenderModelCache.h", "ArrangementCache")) {
+        logFail(testName, "ArrangementRenderModelCache missing bounded memory guard");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineKillListNoProcessorOwnedUiCacheTest()
+{
+    constexpr const char* testName = "TimelineKillList_NoProcessorOwnedUiCache";
+
+    const auto& processorHeader = getFileCache().get("Source/PluginProcessor.h");
+    const auto& processorSource = getFileCache().get("Source/PluginProcessor.cpp");
+
+    std::initializer_list<const char*> forbiddenInProcessor = {
+        "RenderModelCache", "WaveformTileCache", "ArrangementRenderModel",
+        "TimelineViewportState", "PianoRollRenderModel", "TimelineFrameCoordinator"
+    };
+
+    for (const auto* needle : forbiddenInProcessor) {
+        if (processorHeader.contains(needle)) {
+            logFail(testName,
+                (juce::String("processor header contains UI cache: ") + juce::String(needle)).toRawUTF8());
+            return;
+        }
+        if (processorSource.contains(needle)) {
+            logFail(testName,
+                (juce::String("processor source contains UI cache: ") + juce::String(needle)).toRawUTF8());
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+namespace OpenTune { void runTimelineRenderingPipelineCacheTests(); }
+
+void runTimelinePaintHasNoProcessorOrStoreSideEffectsTest()
+{
+    constexpr const char* testName = "TimelinePaint_HasNoProcessorOrStoreSideEffects";
+
+    const auto pianoPaintSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::paint",
+        "void PianoRollComponent::resized");
+    const auto arrPaintSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::paint",
+        "void ArrangementViewComponent::drawTimeRuler");
+
+    std::initializer_list<const char*> forbiddenInPaint = {
+        "getMaterializationStore()", "getSourceStore()", "getProcessor()",
+        "processor_.", "requestRenderModelUpdate", "renderModelCache_.update"
+    };
+
+    for (const auto* needle : forbiddenInPaint) {
+        if (!pianoPaintSection.isEmpty() && pianoPaintSection.contains(needle)) {
+            logFail(testName,
+                (juce::String("PianoRoll paint() contains side-effect: ") + juce::String(needle)).toRawUTF8());
+            return;
+        }
+        if (!arrPaintSection.isEmpty() && arrPaintSection.contains(needle)) {
+            logFail(testName,
+                (juce::String("Arrangement paint() contains side-effect: ") + juce::String(needle)).toRawUTF8());
             return;
         }
     }
@@ -7097,6 +7867,53 @@ void runAraFinalBirthPathOwnsOriginalF0Release()
     logPass(testName);
 }
 
+void runArrangementScrollBarsUseSharedTimeMathAndBoundedOffsetsTest()
+{
+    constexpr const char* testName = "Arrangement_ScrollBarsUseSharedTimeMathAndBoundedOffsets";
+
+    const auto source = getFileCache().get("Source/Standalone/UI/ArrangementViewComponent.cpp");
+    const auto scrollSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::setScrollOffset",
+        "void ArrangementViewComponent::setVerticalScrollOffset");
+    const auto scrollBarSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::updateScrollBars",
+        "int ArrangementViewComponent::absoluteTimeToContentX");
+
+    if (source.isEmpty() || scrollSection.isEmpty() || scrollBarSection.isEmpty()) {
+        logFail(testName, "failed to locate Arrangement scroll sections");
+        return;
+    }
+
+    if (!source.contains("int ArrangementViewComponent::getTotalContentWidth() const")
+        || !source.contains("return viewportState_.timeToContentX(maxEndTime);")) {
+        logFail(testName, "Arrangement content width must come from shared TimelineViewportState time math");
+        return;
+    }
+
+    if (scrollBarSection.contains("static_cast<int>(maxEndTime * pixelsPerSecond)")) {
+        logFail(testName, "Arrangement scroll bars still use a second hand-written width calculation");
+        return;
+    }
+
+    if (!scrollBarSection.contains("const int visibleWidth = juce::jmax(1, getWidth() - UIColors::scrollBarThickness);")
+        || !scrollBarSection.contains("horizontalScrollBar_.setRangeLimits(0.0, totalContentWidth + visibleWidth, juce::dontSendNotification);")
+        || !scrollBarSection.contains("horizontalScrollBar_.setCurrentRange(scrollOffset_, visibleWidth, juce::dontSendNotification);")) {
+        logFail(testName, "Arrangement scroll bar contract must guard visible width and suppress self-feedback notifications");
+        return;
+    }
+
+    if (!scrollSection.contains("const int maxScrollOffset = juce::jmax(0, getTotalContentWidth() - visibleWidth);")
+        || !scrollSection.contains("const int newOffset = juce::jlimit(0, maxScrollOffset, pixels);")
+        || !scrollSection.contains("horizontalScrollBar_.setCurrentRangeStart(scrollOffset_, juce::dontSendNotification);")) {
+        logFail(testName, "Arrangement setScrollOffset must upper-clamp and avoid scrollbar feedback loops");
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runAuroraRightSidebarBackgroundReferenceRestyleSourceGuardTest()
 {
     constexpr const char* testName = "AuroraRightSidebar_ReferenceRestyleSourceGuard";
@@ -7192,6 +8009,73 @@ void runImportedClipF0PathOwnsOriginalF0Release()
     const auto releasePos = source.indexOf(funcPos, "releaseImmediately");
     if (releasePos < 0) {
         logFail(testName, "extractImportedClipOriginalF0 does not release F0 inference service after extraction");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runKeyDetectionAraBirthPathRunsUnifiedDetectionContractTest()
+{
+    constexpr const char* testName = "KeyDetection_AraBirthPathRunsUnifiedDetectionContract";
+
+    const auto birthSection = extractWorkspaceFileSection("Source/PluginProcessor.cpp",
+                                                          "OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(",
+                                                          "#endif // JucePlugin_Enable_ARA");
+    if (birthSection.isEmpty()) {
+        logFail(testName, "failed to locate ARA birth path");
+        return;
+    }
+
+    if (!birthSection.contains("detectAndCommitMaterializationKeyIfUnset(materializationId)")) {
+        logFail(testName, "ARA birth path does not call the unified detectedKey commit helper");
+        return;
+    }
+
+    const auto helperSection = extractWorkspaceFileSection("Source/PluginProcessor.cpp",
+                                                           "void OpenTuneAudioProcessor::detectAndCommitMaterializationKeyIfUnset(",
+                                                           "DetectedKey OpenTuneAudioProcessor::getMaterializationDetectedKeyById");
+    if (helperSection.isEmpty()) {
+        logFail(testName, "detectedKey helper section not found");
+        return;
+    }
+
+    if (!helperSection.contains("ChromaKeyDetector")
+        || !helperSection.contains("setMaterializationDetectedKeyById(materializationId, key)")) {
+        logFail(testName, "detectedKey helper no longer runs chroma detection and commit");
+        return;
+    }
+
+    const auto detectPos = birthSection.indexOf("detectAndCommitMaterializationKeyIfUnset(materializationId)");
+    const auto readyPos = birthSection.indexOf("setMaterializationOriginalF0StateById(materializationId, OriginalF0State::Ready)");
+    if (detectPos < 0 || readyPos < 0 || detectPos > readyPos) {
+        logFail(testName, "ARA birth path must commit detectedKey before OriginalF0State::Ready");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runScaleSyncStandaloneTimerPullsDetectedKeyForActivePlacementTest()
+{
+    constexpr const char* testName = "ScaleSync_StandaloneTimerPullsDetectedKeyForActivePlacement";
+
+    const auto timerSection = extractWorkspaceFileSection("Source/Standalone/PluginEditor.cpp",
+                                                          "void OpenTuneAudioProcessorEditor::timerCallback()",
+                                                          "void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()");
+    if (timerSection.isEmpty()) {
+        logFail(testName, "Standalone timerCallback section not found");
+        return;
+    }
+
+    if (!timerSection.contains("resolveScaleForPlacementMaterialization(activeTrack, activePlacementIndex, nullptr)")
+        || !timerSection.contains("applyResolvedScaleForPlacementMaterialization(activeTrack, activePlacementIndex)")) {
+        logFail(testName, "Standalone timer no longer pulls detectedKey and reapplies scale for the active placement");
+        return;
+    }
+
+    if (!timerSection.contains("resolvedRootNote != lastScaleRootNote_ || resolvedScaleType != lastScaleType_")) {
+        logFail(testName, "Standalone timer no longer guards scale sync with last applied UI scale state");
         return;
     }
 
@@ -8145,6 +9029,8 @@ void runArchitectureBehaviorSuite()
     runAraFinalRequestMaterializationRefreshContractIsNonAra();
     runAraFinalBirthPathOwnsOriginalF0Release();
     runImportedClipF0PathOwnsOriginalF0Release();
+    runKeyDetectionAraBirthPathRunsUnifiedDetectionContractTest();
+    runScaleSyncStandaloneTimerPullsDetectedKeyForActivePlacementTest();
     runF0ServiceDoesNotRetainIdleReleaseLoopTest();
 
     runAraRenderabilityUsesBindingStateTest();
@@ -8203,6 +9089,104 @@ void runArchitectureBehaviorSuite()
     runAraPublishedReferencePreventsMaterializationSweepTest();
     runSessionOwnershipProcessorDoesNotOwnSessionTest();
     runSessionOwnershipEditorAndRendererReadThroughDocumentControllerTest();
+}
+
+void runTimelineRenderingSuite()
+{
+    logSection("Timeline Rendering Pipeline");
+
+    // L1: Static Contract Gate (source guards)
+    runTimelinePlayheadOverlayDirtyRectOnlyTest();
+    runTimelinePlayheadPositionDoesNotEnterRenderModelKeyTest();
+    runTimelineInvalidationViewportShiftExposesOnlyNewStripTest();
+    runTimelineInvalidationBigJumpPromotesToSingleFullRedrawTest();
+    runPianoRollPlayheadOnlyTicksDoNotRebuildRenderModelTest();
+    runPianoRollStoppedSeekKeepsPresentationIntentTest();
+    runPianoRollPaintConsumesPreparedRenderModelOnlyTest();
+    runPianoRollF0VisualsUseSingleRenderPathTest();
+    runPianoRollVisibleRangeCullsNotesF0AndWaveformTilesTest();
+    runArrangementScrollOffsetDoesNotInvalidateWholeComponentTest();
+    runArrangementScrollBarsUseSharedTimeMathAndBoundedOffsetsTest();
+    runArrangementPaintConsumesVisibleRenderModelOnlyTest();
+    runArrangementVisibleRangeCullsOffscreenPlacementsTest();
+    runWaveformTileCacheHasBoundedMemoryAndEvictionTest();
+    runTimelineFrameDriverCoalescesRequestsByPriorityTest();
+    runTimelineFrameDriverDropsNonCriticalAnimationRateDuringPlaybackTest();
+    runTimelineEditorHeartbeatNoDirectRepaintTest();
+    runTimelineNoParallelF0RenderPathsTest();
+    runTimelinePaintHasNoProcessorOrStoreSideEffectsTest();
+
+    // Cache object unit tests
+    OpenTune::runTimelineRenderingPipelineCacheTests();
+
+    // Kill list guards
+    runTimelineKillListNoFullOverlayRepaintForPositionTest();
+    runTimelineKillListNoPaintTimeRenderContextBuildTest();
+    runTimelineKillListNoScrollTimeWholeInvalidationTest();
+    runTimelineKillListNoUnboundedUiCachesTest();
+    runTimelineKillListNoProcessorOwnedUiCacheTest();
+}
+
+void runTimelineRenderingPerfSuite()
+{
+    logSection("Timeline Rendering Runtime Diagnostics");
+
+    FrameScheduler::instance().resetDiagnosticsForTests();
+    FrameScheduler::instance().setPlaybackActiveForTimeline(true);
+
+    juce::Component contentComponent;
+    contentComponent.setBounds(0, 0, 1280, 720);
+    juce::Component overlayComponent;
+    overlayComponent.setBounds(0, 0, 1280, 720);
+
+    for (int i = 0; i < 120; ++i)
+        FrameScheduler::instance().requestPlayheadOverlay(overlayComponent, {i % 1200, 0, 4, 720});
+
+    for (int i = 0; i < 180; ++i)
+        FrameScheduler::instance().requestViewportShift(contentComponent, {1200, 0, 80, 720});
+
+    for (int i = 0; i < 16; ++i)
+        FrameScheduler::instance().requestLowPriorityAnimation(contentComponent, {0, 0, 200, 80});
+
+    FrameScheduler::instance().recordRenderModelRebuild(FrameScheduler::TimelineReason::ContentModelInvalid);
+    FrameScheduler::instance().recordWaveformTileHit();
+    FrameScheduler::instance().recordWaveformTileMiss();
+    FrameScheduler::instance().setPlaybackActiveForTimeline(false);
+
+    const auto snapshot = FrameScheduler::instance().diagnosticsSnapshot();
+
+    constexpr const char* diagnosticsTest = "TimelineRenderingDiagnostics_RecordsRuntimeCounters";
+    if (snapshot.playheadOverlayRequests < 120
+        || snapshot.viewportShiftRequests < 180
+        || snapshot.lowPriorityAnimationDropped == 0
+        || snapshot.renderModelRebuilds != 1
+        || snapshot.waveformTileHits != 1
+        || snapshot.waveformTileMisses != 1) {
+        logFail(diagnosticsTest, "diagnostics counters did not record overlay/scroll/cache/runtime activity");
+        return;
+    }
+    logPass(diagnosticsTest);
+
+    constexpr const char* playheadPerfTest = "TimelinePerf_PlayheadOnlyTicksRebuildZeroContentModels";
+    if (snapshot.contentInvalidationRequests != 0 || snapshot.fullRepaintPromotions != 0) {
+        logFail(playheadPerfTest, "playhead-only runtime simulation promoted content invalidation/full repaint");
+        return;
+    }
+    logPass(playheadPerfTest);
+
+    constexpr const char* scrollPerfTest = "TimelinePerf_ContinuousScrollAvoidsFullRepaintStorm";
+    if (snapshot.viewportShiftRequests == 0 || snapshot.fullRepaintPromotions > 1) {
+        logFail(scrollPerfTest, "continuous scroll simulation did not stay on exposed-strip requests");
+        return;
+    }
+    logPass(scrollPerfTest);
+
+    constexpr const char* lowPriorityPerfTest = "TimelinePerf_PlaybackDropsLowPriorityAnimation";
+    if (snapshot.lowPriorityAnimationDropped == 0) {
+        logFail(lowPriorityPerfTest, "playback did not drop low-priority animation requests");
+        return;
+    }
+    logPass(lowPriorityPerfTest);
 }
 
 int main(int argc, char* argv[])

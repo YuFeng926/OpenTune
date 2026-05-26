@@ -42,6 +42,20 @@ class PianoRollRenderer
 public:
     PianoRollRenderer() = default;
 
+    struct F0VisualPoint
+    {
+        int frame = 0;
+        float x = 0.0f;
+        float y = 0.0f;
+        float energyAlpha = 1.0f;
+        float levelHotMix = 0.0f;
+    };
+
+    struct F0VisualSegment
+    {
+        std::vector<F0VisualPoint> points;
+    };
+
     /**
      * 渲染上下文结构体
      * 包含渲染所需的所有参数和回调函数
@@ -54,6 +68,8 @@ public:
         WaveformMipmap* waveformMipmap = nullptr;
         std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
         std::vector<float> correctedF0;
+        std::vector<F0VisualSegment> originalF0VisualSegments;
+        std::vector<F0VisualSegment> correctedF0VisualSegments;
         F0Timeline f0Timeline;
         std::vector<Note> displayNotes;
         std::vector<double> chunkBoundaries;
@@ -136,20 +152,6 @@ public:
         std::function<int(double)> timeToX;
     };
 
-    struct F0VisualPoint
-    {
-        int frame = 0;
-        float x = 0.0f;
-        float y = 0.0f;
-        float energyAlpha = 1.0f;
-        float levelHotMix = 0.0f;
-    };
-
-    struct F0VisualSegment
-    {
-        std::vector<F0VisualPoint> points;
-    };
-
     struct F0VisualBuildOptions
     {
         int startFrame = 0;
@@ -182,14 +184,12 @@ public:
     // ⚡️ §8.5 — paint TimeGrid handles as vertical guide lines.
     void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx);
 
-    void drawF0Curve(juce::Graphics& g,
-                     const std::vector<float>& f0,
-                     juce::Colour colour,
-                     float alpha,
-                     bool isThinLine,
-                     const RenderContext& ctx,
-                     const MaterializationRenderItem& item,
-                     const std::vector<uint8_t>* visibleMask = nullptr);
+    void drawPreparedF0Curve(juce::Graphics& g,
+                             const std::vector<F0VisualSegment>& visualSegments,
+                             juce::Colour colour,
+                             float alpha,
+                             bool isThinLine,
+                             const RenderContext& ctx);
 
     void drawGhostNotes(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);
     void drawGhostAnchors(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);

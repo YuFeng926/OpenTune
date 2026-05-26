@@ -145,7 +145,7 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
             themeMenu.addItem(ThemeBlueBreeze, LOC(kThemeBlueBreeze), true, UIColors::currentThemeId() == ThemeId::BlueBreeze);
             themeMenu.addItem(ThemeDarkBlueGrey, LOC(kThemeDarkBlueGrey), true, UIColors::currentThemeId() == ThemeId::DarkBlueGrey);
             themeMenu.addItem(ThemeAurora, LOC(kThemeAurora), true, UIColors::currentThemeId() == ThemeId::Aurora);
-            themeMenu.addItem(ThemeOverdose, LOC(kThemeOverdose), true, UIColors::currentThemeId() == ThemeId::Overdose);
+            // themeMenu.addItem(ThemeOverdose, LOC(kThemeOverdose), true, UIColors::currentThemeId() == ThemeId::Overdose);  // "升天" 暂时隐藏
             menu.addSeparator();
             menu.addSubMenu(LOC(kTheme), themeMenu);
             
@@ -269,10 +269,10 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             listeners_.call([](Listener& l) { l.themeChanged(ThemeId::Aurora); });
             menuItemsChanged();
             break;
-        case ThemeOverdose:
-            listeners_.call([](Listener& l) { l.themeChanged(ThemeId::Overdose); });
-            menuItemsChanged();
-            break;
+        // case ThemeOverdose:  // "升天" 暂时隐藏
+        //     listeners_.call([](Listener& l) { l.themeChanged(ThemeId::Overdose); });
+        //     menuItemsChanged();
+        //     break;
             
         case MouseTrailNone:
             listeners_.call([](Listener& l) { l.mouseTrailThemeChanged(MouseTrailConfig::TrailTheme::None); });

@@ -27,6 +27,25 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "OPENTUNE_ENABLE_ARA": "OFF"
       }
+    },
+    {
+      "name": "windows-ara-lsp",
+      "displayName": "Windows LSP (Ninja, compile_commands.json only)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-ara-lsp",
+      "environment": {
+        "INCLUDE": "F:/VSC/VC/Tools/MSVC/14.44.35207/include;C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/ucrt;C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared;C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um;C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/winrt",
+        "LIB": "F:/VSC/VC/Tools/MSVC/14.44.35207/lib/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "OPENTUNE_ENABLE_ARA": "ON",
+        "CMAKE_C_COMPILER": "F:/VSC/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe",
+        "CMAKE_CXX_COMPILER": "F:/VSC/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe",
+        "CMAKE_MT": "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/mt.exe",
+        "CMAKE_RC_COMPILER": "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe"
+      }
     }
   ],
   "buildPresets": [

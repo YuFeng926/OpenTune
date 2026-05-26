@@ -867,33 +867,114 @@ void OpenTuneAudioProcessor::configureReferenceAnalysisService()
 {
     referenceAnalysisService_.setAnalysisFunc(
         [this](const ReferenceAnalysisService::AnalysisJobKey& jobKey) {
-            return buildReferenceAlignmentFeaturesForJob(jobKey);
+            MaterializationStore::MaterializationSnapshot snapshot;
+            if (materializationStore_ == nullptr
+                || !materializationStore_->getSnapshot(jobKey.materializationId, snapshot)) {
+                MaterializationStore::DerivedAnalysis failed;
+                failed.inputFingerprint = jobKey.renderRevision;
+                failed.backendMode = 0;
+                failed.state = F0ExtractionState::Failed;
+                failed.errorMessage = "AUTO Ref analysis could not read materialization";
+                return failed;
+            }
+            if (static_cast<int64_t>(snapshot.renderRevision) != jobKey.renderRevision) {
+                MaterializationStore::DerivedAnalysis failed;
+                failed.inputFingerprint = jobKey.renderRevision;
+                failed.backendMode = 0;
+                failed.state = F0ExtractionState::Failed;
+                failed.errorMessage = "AUTO Ref analysis job is stale";
+                return failed;
+            }
+            return buildReferenceDerivedAnalysis(snapshot, experimentalReferenceAlignMode_);
         });
     referenceAnalysisService_.addListener(this);
 }
 
-MaterializationStore::DerivedAnalysis OpenTuneAudioProcessor::buildReferenceAlignmentFeaturesForJob(
-    const ReferenceAnalysisService::AnalysisJobKey& jobKey) const
+MaterializationStore::DerivedAnalysis OpenTuneAudioProcessor::buildReferenceDerivedAnalysis(
+    const MaterializationStore::MaterializationSnapshot& snapshot,
+    ExperimentalReferenceAlignMode mode)
 {
-    MaterializationStore::DerivedAnalysis failed;
-    failed.inputFingerprint = jobKey.renderRevision;
-    failed.backendMode = 0;
-
-    MaterializationStore::MaterializationSnapshot snapshot;
-    if (materializationStore_ == nullptr
-        || !materializationStore_->getSnapshot(jobKey.materializationId, snapshot)) {
-        failed.state = F0ExtractionState::Failed;
-        failed.errorMessage = "AUTO Ref analysis could not read materialization";
-        return failed;
+    if (mode == ExperimentalReferenceAlignMode::Aggressive) {
+        return buildGameReferenceDerivedAnalysis(snapshot);
     }
+    return buildBasicReferenceDerivedAnalysis(snapshot);
+}
 
-    if (static_cast<int64_t>(snapshot.renderRevision) != jobKey.renderRevision) {
-        failed.state = F0ExtractionState::Failed;
-        failed.errorMessage = "AUTO Ref analysis job is stale";
-        return failed;
-    }
-
+MaterializationStore::DerivedAnalysis OpenTuneAudioProcessor::buildBasicReferenceDerivedAnalysis(
+    const MaterializationStore::MaterializationSnapshot& snapshot) const
+{
     return BasicReferenceFeatureBuilder::build(snapshot);
+}
+
+MaterializationStore::DerivedAnalysis OpenTuneAudioProcessor::buildGameReferenceDerivedAnalysis(
+    const MaterializationStore::MaterializationSnapshot& snapshot)
+{
+    auto result = BasicReferenceFeatureBuilder::build(snapshot);
+    result.backendMode = 2; // GAME
+
+    auto failAggressive = [&](const juce::String& reason) {
+        result.state = F0ExtractionState::Failed;
+        result.basicDerivedNotes.clear();
+        result.temporalEvents.clear();
+        result.errorMessage = reason;
+        return result;
+    };
+
+    if (!ensureNoteGeneratorReady() || noteGenerator_ == nullptr) {
+        return failAggressive("AUTO Ref Aggressive requires GAME note generator");
+    }
+
+    auto* const gameGenerator = dynamic_cast<GameNoteGenerator*>(noteGenerator_.get());
+    if (gameGenerator == nullptr) {
+        return failAggressive("AUTO Ref Aggressive requires GAME backend and cannot fall back to Basic");
+    }
+
+    // 构建 GAME 输入
+    if (snapshot.audioBuffer == nullptr || snapshot.audioBuffer->getNumSamples() <= 0) {
+        return result;
+    }
+
+    NoteGeneratorInput input;
+    input.sampleRate = TimeCoordinate::kRenderSampleRate;
+    const auto* readPtr = snapshot.audioBuffer->getReadPointer(0);
+    input.audio.assign(readPtr, readPtr + snapshot.audioBuffer->getNumSamples());
+    input.hostSampleRate = TimeCoordinate::kRenderSampleRate;
+
+    std::vector<Note> gameNotes;
+    try {
+        std::lock_guard<std::mutex> lk(noteGeneratorInferenceMutex_);
+        gameNotes = gameGenerator->generate(input);
+    } catch (const std::exception& e) {
+        return failAggressive("AUTO Ref Aggressive GAME note generation failed: " + juce::String(e.what()));
+    } catch (...) {
+        return failAggressive("AUTO Ref Aggressive GAME note generation failed");
+    }
+
+    // 替换 notes 为 GAME 输出
+    result.basicDerivedNotes = std::move(gameNotes);
+
+    // 从 GAME notes 的 startTime 派生 temporal events
+    // GAME notes 的 startTime 是 bd2dur 从 segmenter boundaries 编码后的边界点
+    // 每个 voiced segment (presence=true) 对应一个 note
+    result.temporalEvents.clear();
+    for (const auto& note : result.basicDerivedNotes) {
+        MaterializationStore::DerivedAnalysis::TemporalEvent event;
+        event.sourceSeconds = note.startTime;
+        event.strength = 1.0f;
+        result.temporalEvents.push_back(event);
+    }
+
+    // 按 sourceSeconds 排序去重
+    std::sort(result.temporalEvents.begin(), result.temporalEvents.end(),
+              [](const auto& a, const auto& b) { return a.sourceSeconds < b.sourceSeconds; });
+    result.temporalEvents.erase(
+        std::unique(result.temporalEvents.begin(), result.temporalEvents.end(),
+                    [](const auto& a, const auto& b) {
+                        return std::abs(a.sourceSeconds - b.sourceSeconds) < 0.005;
+                    }),
+        result.temporalEvents.end());
+
+    return result;
 }
 
 void OpenTuneAudioProcessor::analysisCompleted(
@@ -4015,6 +4096,7 @@ OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(AraOriginalF0Birth
     }
 
     setMaterializationPitchCurveById(materializationId, std::move(pitchCurve));
+    detectAndCommitMaterializationKeyIfUnset(materializationId);
     setMaterializationOriginalF0StateById(materializationId, OriginalF0State::Ready);
 
     AppLogger::info("ARA OriginalF0 pipeline: F0 committed frames="
@@ -4038,8 +4120,6 @@ OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(AraOriginalF0Birth
 // ============================================================================
 // requestMaterializationRefresh — Standalone / regular VST3 F0 refresh.
 // F0 only — does NOT run GAME note generation.
-// Callers should invoke requestReferenceNoteGeneration() separately
-// when note generation is needed.
 // ============================================================================
 
 bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioProcessor::MaterializationRefreshRequest& request)
@@ -4233,16 +4313,7 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
                     + "," + juce::String(sw.sourceEndSeconds, 6) + "]");
             }
 
-            const auto existingKey = processor->getMaterializationDetectedKeyById(result.materializationId);
-            if (existingKey.confidence <= 0.0f) {
-                auto audioBuffer = processor->getMaterializationAudioBufferById(result.materializationId);
-                if (audioBuffer && audioBuffer->getNumSamples() > 0) {
-                    ChromaKeyDetector detector;
-                    const auto key = detector.detect(audioBuffer->getReadPointer(0),
-                                                      audioBuffer->getNumSamples(), 44100);
-                    processor->setMaterializationDetectedKeyById(result.materializationId, key);
-                }
-            }
+            processor->detectAndCommitMaterializationKeyIfUnset(result.materializationId);
 
             processor->setMaterializationOriginalF0StateById(result.materializationId, OriginalF0State::Ready);
 
@@ -4254,105 +4325,6 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
         setMaterializationOriginalF0StateById(request.materializationId, OriginalF0State::Failed);
         return false;
     }
-
-    return true;
-}
-
-// ============================================================================
-// requestReferenceNoteGeneration — GAME reference-note 提取（显式调用）
-// 非 ARA 入口（Standalone / regular VST3）。ARA OriginalF0 路径不调用此函数。
-// ============================================================================
-
-bool OpenTuneAudioProcessor::requestReferenceNoteGeneration(uint64_t materializationId)
-{
-    if (materializationId == 0 || materializationStore_ == nullptr)
-        return false;
-
-    // Must have Ready F0 to generate reference notes
-    const auto f0State = getMaterializationOriginalF0StateById(materializationId);
-    if (f0State != OriginalF0State::Ready)
-        return false;
-
-    auto pitchCurve = getMaterializationPitchCurveById(materializationId);
-    if (pitchCurve == nullptr)
-        return false;
-
-    // Read audio buffer from materialization store (already at 44.1kHz)
-    MaterializationSnapshot snapshot;
-    if (!getMaterializationSnapshotById(materializationId, snapshot)
-        || snapshot.audioBuffer == nullptr
-        || snapshot.audioBuffer->getNumSamples() <= 0)
-        return false;
-
-    auto sourceAudioBuffer = snapshot.audioBuffer;
-
-    // Get F0/energy from pitch curve
-    const auto curveSnapshot = pitchCurve->getSnapshot();
-    const auto f0Vec = curveSnapshot->getOriginalF0();
-    const auto energyVec = curveSnapshot->getOriginalEnergy();
-    const int hopSize = curveSnapshot->getHopSize();
-    const double f0SampleRate = curveSnapshot->getSampleRate();
-
-    if (f0Vec.empty())
-        return false;
-
-    const auto lifetimeFlag = materializationRefreshAliveFlag_;
-    OpenTuneAudioProcessor* const processor = this;
-    const auto matId = materializationId;
-
-    {
-        std::lock_guard<std::mutex> lk(noteGenInFlightMutex_);
-        noteGenInFlightMatIds_.insert(matId);
-    }
-
-    noteGeneratorPool_.addJob([processor, lifetimeFlag, matId,
-                                sourceAudioBuffer,
-                                f0Vec, energyVec,
-                                hopSize, f0SampleRate]()
-    {
-        struct InFlightGuard {
-            OpenTuneAudioProcessor* p;
-            uint64_t                mat;
-            ~InFlightGuard() {
-                std::lock_guard<std::mutex> lk(p->noteGenInFlightMutex_);
-                p->noteGenInFlightMatIds_.erase(mat);
-            }
-        } guard{processor, matId};
-
-        if (!lifetimeFlag->load(std::memory_order_acquire)) return;
-        if (!processor->ensureNoteGeneratorReady()) {
-            AppLogger::warn("[NoteGen] generator not ready for materializationId="
-                             + juce::String(static_cast<juce::int64>(matId)));
-            return;
-        }
-        if (!processor->noteGenerator_) return;
-        if (!sourceAudioBuffer || sourceAudioBuffer->getNumSamples() <= 0) return;
-
-        NoteGeneratorInput input;
-        input.sampleRate     = TimeCoordinate::kRenderSampleRate;
-        input.audio.assign(sourceAudioBuffer->getReadPointer(0),
-                            sourceAudioBuffer->getReadPointer(0) + sourceAudioBuffer->getNumSamples());
-        input.f0             = f0Vec;
-        input.energy         = energyVec;
-        input.hopSize        = hopSize;
-        input.f0SampleRate   = f0SampleRate;
-        input.hostSampleRate = TimeCoordinate::kRenderSampleRate;
-
-        std::vector<Note> notes;
-        try {
-            std::lock_guard<std::mutex> lk(processor->noteGeneratorInferenceMutex_);
-            notes = processor->noteGenerator_->generate(input);
-        } catch (const std::exception& e) {
-            AppLogger::error(juce::String("[NoteGen] generate threw: ") + e.what());
-            return;
-        }
-
-        if (!lifetimeFlag->load(std::memory_order_acquire)) return;
-        AppLogger::info("[NoteGen] generated " + juce::String(static_cast<int>(notes.size()))
-                        + " reference notes for materializationId="
-                        + juce::String(static_cast<juce::int64>(matId))
-                        + " (not committed — hidden from UI)");
-    });
 
     return true;
 }
@@ -4419,6 +4391,25 @@ bool OpenTuneAudioProcessor::setMaterializationOriginalF0StateById(uint64_t mate
 {
     jassert(materializationStore_ != nullptr);
     return materializationId != 0 && materializationStore_->setOriginalF0State(materializationId, state);
+}
+
+void OpenTuneAudioProcessor::detectAndCommitMaterializationKeyIfUnset(uint64_t materializationId)
+{
+    const auto existingKey = getMaterializationDetectedKeyById(materializationId);
+    if (existingKey.confidence > 0.0f) {
+        return;
+    }
+
+    auto audioBuffer = getMaterializationAudioBufferById(materializationId);
+    if (audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0) {
+        return;
+    }
+
+    ChromaKeyDetector detector;
+    const auto key = detector.detect(audioBuffer->getReadPointer(0),
+                                     audioBuffer->getNumSamples(),
+                                     44100);
+    setMaterializationDetectedKeyById(materializationId, key);
 }
 
 DetectedKey OpenTuneAudioProcessor::getMaterializationDetectedKeyById(uint64_t materializationId) const
@@ -4656,7 +4647,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     if (!materializationStore_->getDerivedAnalysis(targetPlacement.materializationId, targetFeatures)
         || targetFeatures.state != F0ExtractionState::Ready
         || targetFeatures.inputFingerprint != static_cast<int64_t>(targetSnapshot.renderRevision)) {
-        targetFeatures = BasicReferenceFeatureBuilder::build(targetSnapshot);
+        targetFeatures = buildReferenceDerivedAnalysis(targetSnapshot, experimentalReferenceAlignMode_);
         materializationStore_->setDerivedAnalysis(targetPlacement.materializationId, targetFeatures);
     }
     if (targetFeatures.state != F0ExtractionState::Ready) {
@@ -4671,7 +4662,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     if (!materializationStore_->getDerivedAnalysis(referencePlacement.materializationId, referenceFeatures)
         || referenceFeatures.state != F0ExtractionState::Ready
         || referenceFeatures.inputFingerprint != static_cast<int64_t>(referenceSnapshot.renderRevision)) {
-        referenceFeatures = BasicReferenceFeatureBuilder::build(referenceSnapshot);
+        referenceFeatures = buildReferenceDerivedAnalysis(referenceSnapshot, experimentalReferenceAlignMode_);
         materializationStore_->setDerivedAnalysis(referencePlacement.materializationId, referenceFeatures);
     }
     if (referenceFeatures.state != F0ExtractionState::Ready) {

@@ -143,6 +143,7 @@ static double selectMarkerInterval(double pixelsPerSecond) {
 ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& processor)
     : processor_(processor)
 {
+    viewportState_.contentStartX = kArrangementContentStartX;
     setWantsKeyboardFocus(true);
 
     addAndMakeVisible(horizontalScrollBar_);
@@ -181,7 +182,8 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
             timeUnit_ = TimeUnit::Seconds;
             timeUnitToggleButton_.setButtonText("Time");
         }
-        repaint();
+        refreshRenderModel();
+        FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
     };
     timeUnitToggleButton_.setColour(juce::TextButton::buttonColourId, UIColors::backgroundLight);
     timeUnitToggleButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
@@ -218,23 +220,39 @@ void ArrangementViewComponent::setZoomLevel(double zoom)
 {
     // 限制缩放范围：0.02~10.0（支持更长音频的完整显示）
     zoomLevel_ = juce::jlimit(0.02, 10.0, zoom);
+    viewportState_.zoomLevel = zoomLevel_;
     playheadOverlay_.setZoomLevel(zoomLevel_);
     syncPlayheadOverlay();
     updateScrollBars();
+    refreshRenderModel();
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
 }
 
 void ArrangementViewComponent::setScrollOffset(int pixels)
 {
-    const int newOffset = juce::jmax(0, pixels);
+    const int oldOffset = scrollOffset_;
+    const int visibleWidth = juce::jmax(1, getWidth() - UIColors::scrollBarThickness);
+    const int maxScrollOffset = juce::jmax(0, getTotalContentWidth() - visibleWidth);
+    const int newOffset = juce::jlimit(0, maxScrollOffset, pixels);
     if (newOffset == scrollOffset_)
         return;
 
     scrollOffset_ = newOffset;
-    horizontalScrollBar_.setCurrentRangeStart(scrollOffset_);
+
+    // Update TimelineViewportState for shared time math
+    viewportState_.scrollOffsetPx = scrollOffset_;
+
+    horizontalScrollBar_.setCurrentRangeStart(scrollOffset_, juce::dontSendNotification);
     playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
     syncPlayheadOverlay();
-    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+
+    // Use exposed-strip repaint when possible, full invalidate only for large scrolls
+    const auto exposedStrip = viewportState_.exposedStripForScrollDelta(oldOffset, newOffset);
+    requestRenderModelUpdate();
+    if (!exposedStrip.isEmpty())
+        FrameScheduler::instance().requestViewportShift(*this, exposedStrip);
+    else
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
 }
 
 void ArrangementViewComponent::setVerticalScrollOffset(int offset)
@@ -247,6 +265,7 @@ void ArrangementViewComponent::setVerticalScrollOffset(int offset)
     // 限制滚动范围 [0, maxScrollOffset]
     verticalScrollOffset_ = juce::jlimit(0, maxScrollOffset, offset);
     verticalScrollBar_.setCurrentRangeStart(verticalScrollOffset_);
+    refreshRenderModel();
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
 }
 
@@ -319,10 +338,15 @@ void ArrangementViewComponent::resized()
     currentX -= (btnW + spacing);
     timeUnitToggleButton_.setBounds(currentX, 5, btnW, btnH);
 
+    // Sync viewport state dimensions
+    viewportState_.viewportWidthPx = getWidth();
+    viewportState_.viewportHeightPx = getHeight();
+
     updateScrollBars();
 
     // 播放头覆盖层覆盖整个组件区域
     playheadOverlay_.setBounds(getLocalBounds());
+    refreshRenderModel();
 }
 
 void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart)
@@ -341,11 +365,9 @@ void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double
     }
 }
 
-void ArrangementViewComponent::updateScrollBars()
+int ArrangementViewComponent::getTotalContentWidth() const
 {
     double maxEndTime = 60.0 * 5.0; // Default 5 minutes
-    // [TIME-01] Audio is stored at fixed 44.1kHz
-    constexpr double storedSampleRate = 44100.0;
 
     for (int t = 0; t < OpenTuneAudioProcessor::MAX_TRACKS; ++t)
     {
@@ -357,17 +379,20 @@ void ArrangementViewComponent::updateScrollBars()
                 continue;
             }
 
-            juce::ignoreUnused(storedSampleRate);
             maxEndTime = juce::jmax(maxEndTime, placement.timelineEndSeconds() + 10.0);
         }
     }
 
-    double pixelsPerSecond = 100.0 * zoomLevel_;
-    int totalContentWidth = static_cast<int>(maxEndTime * pixelsPerSecond);
-    int visibleWidth = getWidth() - UIColors::scrollBarThickness;
-    
-    horizontalScrollBar_.setRangeLimits(0.0, totalContentWidth + visibleWidth);
-    horizontalScrollBar_.setCurrentRange(scrollOffset_, visibleWidth);
+    return viewportState_.timeToContentX(maxEndTime);
+}
+
+void ArrangementViewComponent::updateScrollBars()
+{
+    const int totalContentWidth = getTotalContentWidth();
+    const int visibleWidth = juce::jmax(1, getWidth() - UIColors::scrollBarThickness);
+
+    horizontalScrollBar_.setRangeLimits(0.0, totalContentWidth + visibleWidth, juce::dontSendNotification);
+    horizontalScrollBar_.setCurrentRange(scrollOffset_, visibleWidth, juce::dontSendNotification);
 
     int totalTrackHeight = rulerHeight_ + OpenTuneAudioProcessor::MAX_TRACKS * processor_.getTrackHeight();
     int visibleHeight = getHeight() - UIColors::scrollBarThickness;
@@ -377,23 +402,22 @@ void ArrangementViewComponent::updateScrollBars()
 
 int ArrangementViewComponent::absoluteTimeToContentX(double seconds) const
 {
-    return static_cast<int>(std::llround(seconds * 100.0 * zoomLevel_));
+    return viewportState_.timeToContentX(seconds);
 }
 
 int ArrangementViewComponent::absoluteTimeToViewportX(double seconds) const
 {
-    return absoluteTimeToViewportX(seconds, static_cast<double>(scrollOffset_));
+    return viewportState_.timeToViewportX(seconds);
 }
 
 int ArrangementViewComponent::absoluteTimeToViewportX(double seconds, double projectedScrollOffset) const
 {
-    const double contentX = static_cast<double>(absoluteTimeToContentX(seconds));
-    return static_cast<int>(std::llround(contentX - projectedScrollOffset)) + kArrangementContentStartX;
+    return viewportState_.timeToViewportX(seconds, static_cast<int>(std::llround(projectedScrollOffset)));
 }
 
 double ArrangementViewComponent::viewportXToAbsoluteTime(int x) const
 {
-    return (static_cast<double>(x - kArrangementContentStartX + scrollOffset_)) / (100.0 * zoomLevel_);
+    return viewportState_.viewportXToTime(x);
 }
 
 juce::Rectangle<int> ArrangementViewComponent::getTrackLaneBounds(int trackId) const
@@ -501,17 +525,45 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
     return waveformMipmapCache_.buildIncremental(timeBudgetMs);
 }
 
+void ArrangementViewComponent::requestRenderModelUpdate()
+{
+    // Update viewport state geometry
+    viewportState_.viewportWidthPx = getWidth();
+    viewportState_.viewportHeightPx = getHeight();
+
+    // Invoke render model cache update with current state
+    renderModelCache_.update(processor_,
+                             viewportState_,
+                             selectedTrack_,
+                             selectedPlacementIndex_,
+                             [this](int trackId, uint64_t placementId) -> bool {
+                                 return isPlacementSelected(trackId, placementId);
+                             },
+                             [this](uint64_t placementId) -> bool {
+                                 auto it = clipAnalysisStates_.find(placementId);
+                                 return it != clipAnalysisStates_.end() && it->second.isAnalysisInProgress;
+                             },
+                             hoveredPlacementId_,
+                             mouseOverReferenceButton_,
+                             waveformTileCache_,
+                             waveformMipmapCache_,
+                             processor_.getTrackHeight());
+
+    const auto& renderModel = renderModelCache_.getModel();
+    lastContextBpm_ = renderModel.bpm;
+    lastContextTimeSigNum_ = renderModel.timeSigNumerator;
+    lastContextTimeSigDenom_ = renderModel.timeSigDenominator;
+}
+
+void ArrangementViewComponent::refreshRenderModel()
+{
+    renderModelCache_.invalidate();
+    requestRenderModelUpdate();
+}
+
 void ArrangementViewComponent::paint(juce::Graphics& g)
 {
-    const double bpm = processor_.getBpm();
-    const int timeSigNum = processor_.getTimeSigNumerator();
-    const int timeSigDenom = processor_.getTimeSigDenominator();
-    if (lastContextBpm_ != bpm || lastContextTimeSigNum_ != timeSigNum || lastContextTimeSigDenom_ != timeSigDenom)
-    {
-        lastContextBpm_ = bpm;
-        lastContextTimeSigNum_ = timeSigNum;
-        lastContextTimeSigDenom_ = timeSigDenom;
-    }
+    const auto& renderModel = renderModelCache_.getModel();
 
     const auto themeId = UIColors::currentThemeId();
     
@@ -539,21 +591,19 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
     if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
     {
-        for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
+        for (const auto& laneModel : renderModel.lanes)
         {
-            auto lane = getTrackLaneBounds(trackId).toFloat();
+            auto lane = laneModel.area;
             if (lane.getBottom() < static_cast<float>(rulerHeight_) || lane.getY() > bounds.getBottom())
                 continue;
 
-            lane.setX(bounds.getX());
-            lane.setWidth(bounds.getWidth());
             const auto laneFill = themeId == ThemeId::Aurora
-                ? ((trackId % 2 == 0) ? UIColors::glassSurface.withAlpha(0.055f) : UIColors::pianoRollLane.withAlpha(0.030f))
-                : ((trackId % 2 == 0) ? UIColors::pianoRollLane.withAlpha(0.060f) : UIColors::glassSurface.withAlpha(0.022f));
+                ? ((laneModel.trackId % 2 == 0) ? UIColors::glassSurface.withAlpha(0.055f) : UIColors::pianoRollLane.withAlpha(0.030f))
+                : ((laneModel.trackId % 2 == 0) ? UIColors::pianoRollLane.withAlpha(0.060f) : UIColors::glassSurface.withAlpha(0.022f));
             g.setColour(laneFill);
             g.fillRect(lane);
 
-            if (trackId == selectedTrack_)
+            if (laneModel.selected)
             {
                 g.setColour(UIColors::panelGlow.withAlpha(themeId == ThemeId::Aurora ? 0.040f : 0.038f));
                 g.fillRect(lane);
@@ -566,278 +616,8 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
     drawGridLines(g);
 
-    for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
-    {
-        const int placementCount = getStandalonePlacementCount(processor_, trackId);
-        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex)
-        {
-            StandaloneArrangement::Placement placement;
-            if (!getStandalonePlacementByIndex(processor_, trackId, placementIndex, placement)) {
-                continue;
-            }
-
-            auto placementBounds = getPlacementBounds(trackId, placementIndex);
-            if (placementBounds.isEmpty())
-                continue;
-
-            const uint64_t placementId = placement.placementId;
-            const uint64_t materializationId = placement.materializationId;
-            bool isSelected = (trackId == selectedTrack_ && placementIndex == selectedPlacementIndex_)
-                           || isPlacementSelected(trackId, placementId);
-
-            auto placementArea = placementBounds.toFloat();
-            if (themeId == ThemeId::DarkBlueGrey && isSelected)
-            {
-                juce::ColourGradient sel(juce::Colour { 0xFFF7F3EA }, placementArea.getX(), placementArea.getBottom(),
-                                         juce::Colour { 0xFFBFE0EF }, placementArea.getX(), placementArea.getY(), false);
-                g.setGradientFill(sel);
-                g.fillRoundedRectangle(placementArea, 6.0f);
-                g.setColour(UIColors::panelBorder.withAlpha(0.55f));
-                g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
-            }
-            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-            {
-                const auto topColor = isSelected
-                    ? UIColors::buttonHover.interpolatedWith(UIColors::glassHighlight, 0.12f)
-                    : UIColors::buttonNormal.interpolatedWith(UIColors::glassHighlight, 0.075f);
-                const auto bottomColor = isSelected
-                    ? UIColors::buttonPressed.interpolatedWith(UIColors::pianoRollBackground, 0.22f)
-                    : UIColors::buttonNormal.interpolatedWith(UIColors::pianoRollBackground, 0.22f);
-
-                juce::ColourGradient grad(topColor, placementArea.getX(), placementArea.getY(),
-                                          bottomColor, placementArea.getRight(), placementArea.getBottom(), false);
-                g.setGradientFill(grad);
-                g.fillRoundedRectangle(placementArea, 6.0f);
-
-                juce::ColourGradient source(UIColors::glassHighlight.withAlpha(isSelected ? 0.15f : 0.085f),
-                                            placementArea.getX() + placementArea.getWidth() * 0.18f,
-                                            placementArea.getY() + placementArea.getHeight() * 0.12f,
-                                            juce::Colours::transparentBlack,
-                                            placementArea.getRight(),
-                                            placementArea.getBottom(),
-                                            true);
-                g.setGradientFill(source);
-                g.fillRoundedRectangle(placementArea.reduced(1.0f), 5.0f);
-
-                g.setColour((isSelected ? UIColors::accent : UIColors::panelBorder).withAlpha(isSelected ? 0.72f : 0.42f));
-                g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, isSelected ? 1.2f : 0.9f);
-            }
-            else if (themeId == ThemeId::Aurora)
-            {
-                // Aurora主题：CLIP背景色跟随轨道面板颜色（使用相同的霓虹色系）
-                // 与 TrackPanelComponent 的轨道颜色循环保持一致（6色循环）
-                juce::Colour trackColor;
-                switch(trackId % 6) {
-                    case 0: trackColor = juce::Colour(Aurora::Colors::Cyan); break;
-                    case 1: trackColor = juce::Colour(Aurora::Colors::Violet); break;
-                    case 2: trackColor = juce::Colour(Aurora::Colors::NeonGreen); break;
-                    case 3: trackColor = juce::Colour(Aurora::Colors::Magenta); break;
-                    case 4: trackColor = juce::Colour(Aurora::Colors::ElectricBlue); break;
-                    case 5: trackColor = juce::Colour(Aurora::Colors::Warning); break;
-                }
-                
-                if (isSelected)
-                {
-                    // 选中状态：使用更深的颜色
-                    g.setColour(trackColor.withAlpha(0.45f));
-                    g.fillRoundedRectangle(placementArea, 6.0f);
-                    // 选中边框使用霓虹蓝色
-                    g.setColour(juce::Colour(Aurora::Colors::Cyan));
-                    g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 2.0f);
-                }
-                else
-                {
-                    // 正常状态：使用与轨道背景相同的颜色，透明度稍高使CLIP更明显
-                    g.setColour(trackColor.withAlpha(0.30f));
-                    g.fillRoundedRectangle(placementArea, 6.0f);
-                    g.setColour(trackColor.withAlpha(0.6f));
-                    g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
-                }
-            }
-            else
-            {
-                juce::Colour fill = isSelected ? UIColors::primaryPurple : UIColors::buttonNormal;
-                g.setColour(fill);
-                g.fillRoundedRectangle(placementArea, 6.0f);
-                g.setColour(UIColors::panelBorder);
-                g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
-            }
-
-            const auto audioBuffer = processor_.getMaterializationAudioBufferById(placement.materializationId);
-            const float gain = placement.gain;
-
-            if (audioBuffer != nullptr)
-            {
-                auto& mipmap = waveformMipmapCache_.getOrCreate(materializationId);
-                mipmap.setAudioSource(audioBuffer);
-
-                auto waveformBounds = placementBounds.reduced(6, 6);
-
-                if (themeId == ThemeId::Aurora)
-                {
-                    g.setColour(juce::Colours::white.withAlpha(0.85f));
-                }
-            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-                {
-                    g.setColour(UIColors::pianoRollWaveform.withAlpha(0.26f));
-                }
-                else
-                {
-                    g.setColour(juce::Colour(0xFF3E4652).withAlpha(0.85f));
-                }
-
-                // 使用MIP-map渲染波形
-                const double pixelsPerSecond = 100.0 * zoomLevel_;
-                const int levelIndex = mipmap.selectBestLevelIndex(pixelsPerSecond);
-                const auto& level = mipmap.getLevel(levelIndex);
-
-                if (!level.peaks.empty())
-                {
-                    const float midY = static_cast<float>(waveformBounds.getCentreY());
-                    const float halfH = waveformBounds.getHeight() * 0.45f;
-                    const int x0 = waveformBounds.getX();
-                    const int placementWidth = waveformBounds.getWidth();
-
-                    const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[levelIndex];
-                    const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
-
-                    const int64_t numPeaks = static_cast<int64_t>(level.peaks.size());
-                    const int64_t builtPeaks = level.complete ? numPeaks : level.buildProgress;
-
-                    juce::Path waveformPath;
-
-                    for (int x = 0; x < placementWidth; ++x)
-                    {
-                        const double absTime = viewportXToAbsoluteTime(x0 + x);
-                        const double placementLocalTime = absTime - placement.timelineStartSeconds;
-                        if (placementLocalTime < 0.0 || placementLocalTime >= placement.durationSeconds)
-                            continue;
-
-                        const double contentTime = placementLocalTime;
-
-                        const int64_t peakIndex = static_cast<int64_t>(contentTime / timePerPeak);
-
-                        if (peakIndex < 0 || peakIndex >= builtPeaks)
-                            continue;
-
-                        const auto& peak = level.peaks[static_cast<std::size_t>(peakIndex)];
-                        const float magnitude = peak.getMagnitude() * gain;
-                        float displayHeight = magnitude * halfH * 2.0f;
-
-                        if (magnitude > 0.0001f)
-                            displayHeight = juce::jmax(displayHeight, 2.0f);
-
-                        const float y1 = midY - displayHeight * 0.5f;
-                        const float y2 = midY + displayHeight * 0.5f;
-
-                        waveformPath.startNewSubPath(static_cast<float>(x0 + x), y1);
-                        waveformPath.lineTo(static_cast<float>(x0 + x), y2);
-                    }
-
-                    if (!waveformPath.isEmpty())
-                        g.strokePath(waveformPath, juce::PathStrokeType(1.0f));
-                }
-            }
-
-            // 在片段左上角显示名称（小字体）
-            juce::String placementName = placement.name;
-            if (placementName.isNotEmpty())
-            {
-                // 截断过长的文件名
-                if (placementName.length() > 20)
-                    placementName = placementName.substring(0, 17) + "...";
-                
-                g.setColour(UIColors::textPrimary.withAlpha(0.85f));
-                g.setFont(UIColors::getUIFont(10.0f));  // 小字体
-                g.drawText(placementName, placementBounds.reduced(6, 4), juce::Justification::topLeft);
-            }
-
-            // 在右上角显示增益值
-            float db = 0.0f;
-            if (gain > 0.0001f)
-                db = 20.0f * std::log10(gain);
-            else
-                db = -100.0f;
-
-            juce::String gainStr;
-            if (db > -90.0f)
-                gainStr = (db >= 0 ? "+" : "") + juce::String(db, 1) + " dB";
-            else
-                gainStr = "-inf dB";
-
-            g.setColour(UIColors::textSecondary.withAlpha(0.9f));
-            g.setFont(UIColors::getUIFont(11.0f));
-            g.drawText(gainStr, placementBounds.reduced(6, 4), juce::Justification::topRight);
-
-            // ========================================================================
-            // Analysis stroke animation（描边动画）
-            // ========================================================================
-            auto stateIt = clipAnalysisStates_.find(placementId);
-            if (stateIt != clipAnalysisStates_.end() && stateIt->second.isAnalysisInProgress)
-            {
-                const double currentTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
-                const float alpha = 0.3f + 0.7f * (1.0f + std::sin(static_cast<float>(currentTime) * 3.0f)) * 0.5f;
-
-                juce::Path clipOutline;
-                clipOutline.addRoundedRectangle(placementBounds.toFloat().reduced(2.0f), 6.0f);
-
-                juce::Path dashedPath;
-                float dashes[2] = { 5.0f, 5.0f };
-                juce::PathStrokeType(1.5f).createDashedStroke(dashedPath, clipOutline, dashes, 2);
-
-                g.setColour(juce::Colours::white.withAlpha(alpha));
-                g.fillPath(dashedPath);
-            }
-
-            // ========================================================================
-            // Reference button icon（参考图标）— 始终可见，作为参考源管理入口
-            // ========================================================================
-            if (placementBounds.getWidth() > 30)
-            {
-                const bool hasRef = (placement.referencePlacementId != 0);
-                const bool isHovering = (hoveredPlacementId_ == placementId && mouseOverReferenceButton_);
-                const auto iconColor = isHovering
-                    ? UIColors::accent
-                    : (hasRef
-                        ? UIColors::textSecondary.withAlpha(0.75f)
-                        : UIColors::textSecondary.withAlpha(0.35f));
-
-                // 14×14 px reference icon in bottom-right corner
-                auto refRect = juce::Rectangle<float>(
-                    static_cast<float>(placementBounds.getRight() - 19),
-                    static_cast<float>(placementBounds.getBottom() - 4 - 14),
-                    14.0f, 14.0f);
-
-                if (hasRef)
-                {
-                    // 已有参考绑定：文档轮廓 + 竖线脊柱
-                    juce::Path refOutline;
-                    refOutline.addRoundedRectangle(refRect, 3.0f);
-                    g.setColour(iconColor);
-                    g.strokePath(refOutline, juce::PathStrokeType(2.0f));
-
-                    const float spineX = refRect.getX() + refRect.getWidth() * 0.4f;
-                    g.drawLine(spineX, refRect.getY() + 2.5f,
-                               spineX, refRect.getBottom() - 2.5f, 2.0f);
-                }
-                else
-                {
-                    // 无参考绑定：文档轮廓 + 加号图标（鼓励用户点击添加）
-                    juce::Path refOutline;
-                    refOutline.addRoundedRectangle(refRect, 3.0f);
-                    g.setColour(iconColor);
-                    g.strokePath(refOutline, juce::PathStrokeType(1.5f));
-
-                    // 加号（+）十字
-                    const float cx = refRect.getCentreX();
-                    const float cy = refRect.getCentreY();
-                    const float halfLen = 3.5f;
-                    g.drawLine(cx - halfLen, cy, cx + halfLen, cy, 1.5f); // 横
-                    g.drawLine(cx, cy - halfLen, cx, cy + halfLen, 1.5f); // 竖
-                }
-            }
-        }
-    }
+    // Draw placement clips from the prepared render model (no processor data access)
+    drawPlacementClips(g, renderModel, viewportState_);
 
     drawTimeRuler(g);
 
@@ -900,6 +680,197 @@ bool ArrangementViewComponent::runDebugSelfTest()
 }
 #endif
 
+void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
+                                                    const ArrangementRenderModelCache::RenderModel& model,
+                                                    const TimelineViewportState& /*viewport*/)
+{
+    const auto themeId = UIColors::currentThemeId();
+
+    for (const auto& vp : model.placements)
+    {
+        const auto& placementArea = vp.pixelArea;
+        const auto& placementBounds = vp.pixelBounds;
+
+        if (themeId == ThemeId::DarkBlueGrey && vp.isSelected)
+        {
+            juce::ColourGradient sel(juce::Colour { 0xFFF7F3EA }, placementArea.getX(), placementArea.getBottom(),
+                                     juce::Colour { 0xFFBFE0EF }, placementArea.getX(), placementArea.getY(), false);
+            g.setGradientFill(sel);
+            g.fillRoundedRectangle(placementArea, 6.0f);
+            g.setColour(UIColors::panelBorder.withAlpha(0.55f));
+            g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
+        }
+        else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+        {
+            const auto topColor = vp.isSelected
+                ? UIColors::buttonHover.interpolatedWith(UIColors::glassHighlight, 0.12f)
+                : UIColors::buttonNormal.interpolatedWith(UIColors::glassHighlight, 0.075f);
+            const auto bottomColor = vp.isSelected
+                ? UIColors::buttonPressed.interpolatedWith(UIColors::pianoRollBackground, 0.22f)
+                : UIColors::buttonNormal.interpolatedWith(UIColors::pianoRollBackground, 0.22f);
+
+            juce::ColourGradient grad(topColor, placementArea.getX(), placementArea.getY(),
+                                      bottomColor, placementArea.getRight(), placementArea.getBottom(), false);
+            g.setGradientFill(grad);
+            g.fillRoundedRectangle(placementArea, 6.0f);
+
+            juce::ColourGradient source(UIColors::glassHighlight.withAlpha(vp.isSelected ? 0.15f : 0.085f),
+                                        placementArea.getX() + placementArea.getWidth() * 0.18f,
+                                        placementArea.getY() + placementArea.getHeight() * 0.12f,
+                                        juce::Colours::transparentBlack,
+                                        placementArea.getRight(),
+                                        placementArea.getBottom(),
+                                        true);
+            g.setGradientFill(source);
+            g.fillRoundedRectangle(placementArea.reduced(1.0f), 5.0f);
+
+            g.setColour((vp.isSelected ? UIColors::accent : UIColors::panelBorder).withAlpha(vp.isSelected ? 0.72f : 0.42f));
+            g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, vp.isSelected ? 1.2f : 0.9f);
+        }
+        else if (themeId == ThemeId::Aurora)
+        {
+            // For Aurora, derive track color from placement (cycle available)
+            juce::Colour trackColor;
+            int colorIdx = static_cast<int>(vp.placementId % 6);
+            switch(colorIdx) {
+                case 0: trackColor = juce::Colour(Aurora::Colors::Cyan); break;
+                case 1: trackColor = juce::Colour(Aurora::Colors::Violet); break;
+                case 2: trackColor = juce::Colour(Aurora::Colors::NeonGreen); break;
+                case 3: trackColor = juce::Colour(Aurora::Colors::Magenta); break;
+                case 4: trackColor = juce::Colour(Aurora::Colors::ElectricBlue); break;
+                case 5: trackColor = juce::Colour(Aurora::Colors::Warning); break;
+            }
+
+            if (vp.isSelected)
+            {
+                g.setColour(trackColor.withAlpha(0.45f));
+                g.fillRoundedRectangle(placementArea, 6.0f);
+                g.setColour(juce::Colour(Aurora::Colors::Cyan));
+                g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 2.0f);
+            }
+            else
+            {
+                g.setColour(trackColor.withAlpha(0.30f));
+                g.fillRoundedRectangle(placementArea, 6.0f);
+                g.setColour(trackColor.withAlpha(0.6f));
+                g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
+            }
+        }
+        else
+        {
+            juce::Colour fill = vp.isSelected ? UIColors::primaryPurple : UIColors::buttonNormal;
+            g.setColour(fill);
+            g.fillRoundedRectangle(placementArea, 6.0f);
+            g.setColour(UIColors::panelBorder);
+            g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.0f);
+        }
+
+        // Waveform from tile cache
+        if (vp.hasAudioBuffer)
+        {
+            if (themeId == ThemeId::Aurora)
+                g.setColour(juce::Colours::white.withAlpha(0.85f));
+            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+                g.setColour(UIColors::pianoRollWaveform.withAlpha(0.26f));
+            else
+                g.setColour(juce::Colour(0xFF3E4652).withAlpha(0.85f));
+
+            const auto* tile = waveformTileCache_.get(vp.materializationId,
+                                                       vp.waveformSourceId,
+                                                       vp.waveformZoomBucket,
+                                                       vp.waveformVisibleStartSeconds,
+                                                       vp.waveformVisibleEndSeconds,
+                                                       vp.waveformStyleHash,
+                                                       vp.waveformTimeGridRevision);
+            if (tile != nullptr && !tile->path.isEmpty())
+                g.strokePath(tile->path, juce::PathStrokeType(1.0f));
+        }
+
+        // Clip name
+        if (vp.name.isNotEmpty())
+        {
+            juce::String displayName = vp.name;
+            if (displayName.length() > 20)
+                displayName = displayName.substring(0, 17) + "...";
+            g.setColour(UIColors::textPrimary.withAlpha(0.85f));
+            g.setFont(UIColors::getUIFont(10.0f));
+            g.drawText(displayName, placementBounds.reduced(6, 4), juce::Justification::topLeft);
+        }
+
+        // Gain label
+        {
+            float db = (vp.gain > 0.0001f) ? 20.0f * std::log10(vp.gain) : -100.0f;
+            juce::String gainStr;
+            if (db > -90.0f)
+                gainStr = (db >= 0 ? "+" : "") + juce::String(db, 1) + " dB";
+            else
+                gainStr = "-inf dB";
+            g.setColour(UIColors::textSecondary.withAlpha(0.9f));
+            g.setFont(UIColors::getUIFont(11.0f));
+            g.drawText(gainStr, placementBounds.reduced(6, 4), juce::Justification::topRight);
+        }
+
+        // Analysis animation
+        if (vp.analysisInProgress)
+        {
+            const double currentTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
+            const float alpha = 0.3f + 0.7f * (1.0f + std::sin(static_cast<float>(currentTime) * 3.0f)) * 0.5f;
+
+            juce::Path clipOutline;
+            clipOutline.addRoundedRectangle(placementArea.reduced(2.0f), 6.0f);
+
+            juce::Path dashedPath;
+            float dashes[2] = { 5.0f, 5.0f };
+            juce::PathStrokeType(1.5f).createDashedStroke(dashedPath, clipOutline, dashes, 2);
+
+            g.setColour(juce::Colours::white.withAlpha(alpha));
+            g.fillPath(dashedPath);
+        }
+
+        // Reference button icon
+        if (placementBounds.getWidth() > 30)
+        {
+            const bool hasRef = (vp.referencePlacementId != 0);
+            const bool isHovering = vp.isHovered && vp.mouseOverReferenceButton;
+            const auto iconColor = isHovering
+                ? UIColors::accent
+                : (hasRef
+                    ? UIColors::textSecondary.withAlpha(0.75f)
+                    : UIColors::textSecondary.withAlpha(0.35f));
+
+            auto refRect = juce::Rectangle<float>(
+                static_cast<float>(placementBounds.getRight() - 19),
+                static_cast<float>(placementBounds.getBottom() - 4 - 14),
+                14.0f, 14.0f);
+
+            if (hasRef)
+            {
+                juce::Path refOutline;
+                refOutline.addRoundedRectangle(refRect, 3.0f);
+                g.setColour(iconColor);
+                g.strokePath(refOutline, juce::PathStrokeType(2.0f));
+
+                const float spineX = refRect.getX() + refRect.getWidth() * 0.4f;
+                g.drawLine(spineX, refRect.getY() + 2.5f,
+                           spineX, refRect.getBottom() - 2.5f, 2.0f);
+            }
+            else
+            {
+                juce::Path refOutline;
+                refOutline.addRoundedRectangle(refRect, 3.0f);
+                g.setColour(iconColor);
+                g.strokePath(refOutline, juce::PathStrokeType(1.5f));
+
+                const float cx = refRect.getCentreX();
+                const float cy = refRect.getCentreY();
+                const float halfLen = 3.5f;
+                g.drawLine(cx - halfLen, cy, cx + halfLen, cy, 1.5f);
+                g.drawLine(cx, cy - halfLen, cx, cy + halfLen, 1.5f);
+            }
+        }
+    }
+}
+
 void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
 {
     const auto themeId = UIColors::currentThemeId();
@@ -931,14 +902,10 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
                            : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? UIColors::pianoRollGrid.withAlpha(0.040f) : UIColors::panelBorder)));
     g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.7f : 1.0f);
 
-    double sr = processor_.getSampleRate();
-    if (sr <= 0.0)
-        sr = 44100.0;
-    
     // Switch between Seconds and Bars based on timeUnit_
     if (timeUnit_ == TimeUnit::Bars)
     {
-        double bpm = processor_.getBpm();
+        double bpm = lastContextBpm_;
         if (bpm <= 0.0) bpm = 120.0;
         
         // Calculate pixels per beat
@@ -1032,14 +999,11 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
 void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
 {
     const auto themeId = UIColors::currentThemeId();
-    double sr = processor_.getSampleRate();
-    if (sr <= 0.0)
-        sr = 44100.0;
-    
+
     // Switch between Seconds and Bars based on timeUnit_ (match drawTimeRuler logic)
     if (timeUnit_ == TimeUnit::Bars)
     {
-        double bpm = processor_.getBpm();
+        double bpm = lastContextBpm_;
         if (bpm <= 0.0) bpm = 120.0;
         
         double pixelsPerSecond = 100.0 * zoomLevel_;
@@ -1181,6 +1145,7 @@ void ArrangementViewComponent::onHeartbeatTick()
         return;
     }
 
+    // Heartbeat does NOT drive content-level rebuilds. Playhead is overlay only.
 }
 
 void ArrangementViewComponent::performPageScroll(double playheadTime)
@@ -1270,10 +1235,8 @@ void ArrangementViewComponent::syncPlayheadOverlay()
 
 void ArrangementViewComponent::syncPlayheadOverlayToAbsoluteTime(double absoluteSeconds, bool repaintOverlay)
 {
+    juce::ignoreUnused(repaintOverlay);
     playheadOverlay_.setPlayheadSeconds(absoluteSeconds);
-    if (repaintOverlay) {
-        playheadOverlay_.repaint();
-    }
 }
 
 void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
@@ -1303,11 +1266,14 @@ void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
         }
     }
 
-    // Repaint if reference button hover state or target placement changed
+    // Repaint reference button area (narrow dirty zone) if hover state changed
     if (oldHoveredPlacementId != hoveredPlacementId_
         || wasOverRefBtn != mouseOverReferenceButton_)
     {
-        repaint();
+        // Narrow dirty rect for reference button icon area (bottom-right corner)
+        FrameScheduler::instance().requestInvalidate(*this,
+            juce::Rectangle<int>(getWidth() - 60, getHeight() - 60, 60, 60),
+            FrameScheduler::Priority::Interactive);
     }
 
     auto hit = hitTestPlacement(e.getPosition());
@@ -1385,19 +1351,16 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
             listeners_.call([&](Listener& l) {
                 l.referenceButtonClicked(hit.trackId, hitPlacementId, refBtnScreenArea);
             });
-            repaint();
+            refreshRenderModel();
+            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
             return;
         }
     }
 
     // Seek playhead (for clicks outside reference button area)
-    double sr = processor_.getSampleRate();
-    if (sr <= 0.0) sr = 44100.0;
-
     double newPosSeconds = viewportXToAbsoluteTime(e.x);
     processor_.setPosition(newPosSeconds);
     syncPlayheadOverlayToAbsoluteTime(newPosSeconds, true);
-    repaint();
 
     if (e.y <= rulerHeight_)
     {
@@ -1414,7 +1377,8 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         {
             clearPlacementSelection();
         }
-        repaint();
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
@@ -1429,7 +1393,8 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         listeners_.call([this](Listener& l) {
             l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
         });
-        repaint();
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
@@ -1443,7 +1408,8 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         listeners_.call([this](Listener& l) {
             l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
         });
-        repaint();
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
@@ -1498,7 +1464,8 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         }
     }
     
-    repaint();
+    refreshRenderModel();
+    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
 }
 
 void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
@@ -1521,12 +1488,8 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
         listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
         
         lastMousePos_ = e.getPosition();
-        repaint();
         return;
     }
-
-    double sr = processor_.getSampleRate();
-    if (sr <= 0.0) sr = 44100.0;
 
     if (isDraggingPlayhead_)
     {
@@ -1731,7 +1694,8 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
             {
                 processor_.setTrackHeight(newHeight);
                 listeners_.call([newHeight](Listener& l) { l.trackHeightChanged(newHeight); });
-                repaint();
+                refreshRenderModel();
+                FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
             }
         }
         return;
@@ -1827,7 +1791,8 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
-            repaint();
+            refreshRenderModel();
+            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         }
         return true;
     }
@@ -1862,7 +1827,8 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
-            repaint();
+            refreshRenderModel();
+            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         }
         return true;
     }
@@ -1889,7 +1855,8 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
-            repaint();
+            refreshRenderModel();
+            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         }
         return true;
     }
@@ -2003,7 +1970,8 @@ void ArrangementViewComponent::selectAllPlacementsInTrack(int trackId)
     listeners_.call([this](Listener& l) {
         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
     });
-    repaint();
+    refreshRenderModel();
+    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
 }
 
 // ============================================================================
@@ -2016,7 +1984,8 @@ void ArrangementViewComponent::setClipAnalysisInProgress(uint64_t placementId, b
     if (state.isAnalysisInProgress != inProgress)
     {
         state.isAnalysisInProgress = inProgress;
-        repaint();
+        refreshRenderModel();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
     }
 }
 
