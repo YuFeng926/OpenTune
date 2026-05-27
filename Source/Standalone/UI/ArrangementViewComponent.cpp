@@ -615,6 +615,25 @@ void ArrangementViewComponent::clearMoveDragPreview()
     refreshRenderModel();
 }
 
+// ============================================================================
+// Import Drop Preview
+// ============================================================================
+
+void ArrangementViewComponent::setImportDropPreview(const ImportDropPreview& preview)
+{
+    importDropPreview_ = preview;
+    repaint();
+}
+
+void ArrangementViewComponent::clearImportDropPreview()
+{
+    if (!importDropPreview_.active && importDropPreview_.targetTrackId < 0 && !importDropPreview_.isNewTrack)
+        return;
+
+    importDropPreview_ = {};
+    repaint();
+}
+
 void ArrangementViewComponent::updateMoveDragPreview(const juce::MouseEvent& e)
 {
     if (!isDraggingPlacement_ || currentDragOp_ != DragOperation::Move)
@@ -705,6 +724,53 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
     }
 
     drawGridLines(g);
+
+    // ---- Import drop preview highlight (transient, UI-only) ----
+    if (importDropPreview_.active)
+    {
+        if (importDropPreview_.isNewTrack)
+        {
+            // Draw a "new track" indicator below the last visible track
+            const int visibleTracks = juce::jmax(1, importDropPreview_.visibleTrackCount);
+            const int newTrackHeight = juce::jmax(1, importDropPreview_.trackHeight);
+            const int newTrackY = rulerHeight_ + visibleTracks * newTrackHeight - verticalScrollOffset_;
+            const int barWidth = juce::jmax(getTotalContentWidth(), getWidth() - UIColors::scrollBarThickness * 2);
+
+            juce::Rectangle<int> newTrackRect(0, newTrackY, barWidth, newTrackHeight);
+            if (newTrackRect.getBottom() > 0 && newTrackRect.getY() < getHeight())
+            {
+                g.setColour(UIColors::panelGlow.withAlpha(0.12f));
+                g.fillRect(newTrackRect);
+                g.setColour(UIColors::panelGlow.withAlpha(0.40f));
+                g.drawHorizontalLine(newTrackRect.getY(), 0.0f, static_cast<float>(barWidth));
+                g.setColour(UIColors::panelGlow.withAlpha(0.60f));
+                g.setFont(16.0f);
+                g.drawText(juce::String::fromUTF8(u8"+ 新建轨道"),
+                           newTrackRect.toFloat(),
+                           juce::Justification::centredLeft);
+            }
+        }
+        else if (importDropPreview_.targetTrackId >= 0)
+        {
+            // Highlight the target existing track lane
+            const auto laneBounds = getTrackLaneBounds(importDropPreview_.targetTrackId);
+            if (!laneBounds.isEmpty())
+            {
+                const juce::Colour previewFill = themeId == ThemeId::Aurora
+                    ? UIColors::panelGlow.withAlpha(0.10f)
+                    : UIColors::panelGlow.withAlpha(0.12f);
+                const juce::Colour previewBorder = themeId == ThemeId::Aurora
+                    ? UIColors::panelGlow.withAlpha(0.30f)
+                    : UIColors::panelGlow.withAlpha(0.35f);
+
+                g.setColour(previewFill);
+                g.fillRect(laneBounds);
+
+                g.setColour(previewBorder);
+                g.drawRect(laneBounds.toFloat(), 1.5f);
+            }
+        }
+    }
 
     // Draw placement clips from the prepared render model (no processor data access)
     drawPlacementClips(g, renderModel, viewportState_);

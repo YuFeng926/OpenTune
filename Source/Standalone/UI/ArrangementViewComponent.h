@@ -31,6 +31,18 @@
 
 namespace OpenTune {
 
+// ============================================================================
+// Import Drop Preview — transient UI-only state for drag-drop visual feedback
+// ============================================================================
+
+struct ImportDropPreview {
+    bool active = false;
+    int targetTrackId = -1;        // -1 = none, track index for existing-track drop
+    bool isNewTrack = false;       // true = blank-area drop; render a "new track" indicator
+    int visibleTrackCount = 0;     // current visible track count (for positioning new-track indicator)
+    int trackHeight = 100;         // track lane height in pixels (for positioning; avoids paint() processor read)
+};
+
 class ArrangementViewComponent : public juce::Component,
                                  public juce::ScrollBar::Listener,
                                  public juce::Timer
@@ -106,6 +118,15 @@ public:
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
 
+    // Import drop preview (transient, UI-only)
+    void setImportDropPreview(const ImportDropPreview& preview);
+    void clearImportDropPreview();
+
+    // Public geometry queries for import target resolution
+    int trackIdForViewportY(int y) const noexcept;
+    double viewportXToAbsoluteTime(int x) const;
+    int getRulerHeight() const noexcept { return rulerHeight_; }
+
 #if JUCE_DEBUG
     static bool runDebugSelfTest();
 #endif
@@ -139,7 +160,6 @@ private:
     int absoluteTimeToContentX(double seconds) const;
     int absoluteTimeToViewportX(double seconds) const;
     int absoluteTimeToViewportX(double seconds, double projectedScrollOffset) const;
-    double viewportXToAbsoluteTime(int x) const;
     int getTotalContentWidth() const;
     void updateAutoScroll();
     void performPageScroll(double playheadTime);
@@ -157,7 +177,6 @@ private:
     /** Request render model rebuild from current state. */
     void requestRenderModelUpdate();
     void refreshRenderModel();
-    int trackIdForViewportY(int y) const noexcept;
     void updateMoveDragPreview(const juce::MouseEvent& e);
     void clearMoveDragPreview();
 
@@ -274,6 +293,9 @@ private:
 
     // 播放头位置源（来自 Processor 的原子位置）
     std::weak_ptr<std::atomic<double>> positionSource_;
+
+    // Import drop preview state (transient, cleared on drop/cancel)
+    ImportDropPreview importDropPreview_;
 
     static constexpr int rulerHeight_ = 30;
 };

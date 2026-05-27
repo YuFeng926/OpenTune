@@ -42,6 +42,21 @@ namespace OpenTune {
 
 class ProjectSession;
 
+// ============================================================================
+// Import Drop Target — resolved by the Standalone editor from drag-drop geometry
+// ============================================================================
+
+struct ImportDropTarget {
+    enum class Kind { ExistingTrack, NewTrack, FallbackActiveTrack, Reject };
+
+    Kind kind = Kind::FallbackActiveTrack;
+    int trackId = 0;
+    double timelineStartSeconds = 0.0;
+    juce::String rejectReason;  // Only for Kind::Reject
+
+    bool isActionable() const { return kind != Kind::Reject; }
+};
+
 class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
                                       public ParameterPanel::Listener,
                                       public MenuBarComponent::Listener,
@@ -62,6 +77,9 @@ public:
 
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int x, int y) override;
+    void fileDragEnter(const juce::StringArray& files, int x, int y) override;
+    void fileDragMove(const juce::StringArray& files, int x, int y) override;
+    void fileDragExit(const juce::StringArray& files) override;
 
     // ParameterPanel::Listener
     void retuneSpeedChanged(float speed) override;
@@ -163,11 +181,15 @@ private:
     void launchOpenProjectChooser();
     void saveProjectAsThenOpenProject();
     void playFromStartToggleRequested();  // 播放/暂停并回到起始位置
-    void importAudioFileToTrack(int trackId, const juce::File& file);
+    void importAudioFileToTrack(int trackId, const juce::File& file,
+                                double timelineStartSeconds = -1.0);  // -1 = auto-append
+    ImportDropTarget resolveImportDropTarget(int globalX, int globalY) const;
+    void applyImportDropTarget(ImportDropTarget target, const juce::File& file);
+    void updateImportDropPreview(ImportDropTarget target);
+    void clearImportDropPreview();
     void queuePendingImport(PendingImport pendingImport);
     void startPendingImport(PendingImport pendingImport);
     void processNextImportInQueue();  // 处理导入队列中的下一个文件
-    void promptTrackSelectionForDroppedFile(const juce::File& file);
     void launchBackgroundUiTask(std::function<void()> task);
     void waitForBackgroundUiTasks();
     double computeTrackAppendStartSeconds(int trackId) const;
