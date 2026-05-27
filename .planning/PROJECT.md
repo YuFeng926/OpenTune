@@ -56,11 +56,19 @@ OpenTune 是 AI 自动调音应用，集成 RMVPE F0 提取与 PC-NSF-HiFiGAN �
 
 ## Current Mainline Goals
 
+- 下一个 shared-core 规划任务不再是扩展旧 experimental seed 原型，而是按 2026-05-27 新合同重写 `AUTO(REF)`：把它收口为 `ClipA -> ClipB` 的参考驱动音高+节奏对轨，拆分 `ReferencePitchFeatures` / `ReferenceTimingFeatures`，用 `EffectiveTimeMap` 替代“先 seed TimeTool / 先有 TimeGrid 才能 timing align”的错误前提，并让 `basicAnalysis` / `enhancedAnalysis` / `analysisMode` 退出正式 project truth
 - 持续把 `docs/plans/2026-04-18-*`、`docs/plans/2026-04-19-*`、`docs/plans/2026-04-20-*`、`docs/plans/2026-04-21-*` 与源码已经反映的 live-tree 现实折回 `.planning`，不再让 official planning 落后于源码
 - 把 shared runtime 的 owner model 从旧 `Content/Placement` 两层假设，改正为 `Source + Materialization + Placement`；彻底删除 mixed `clipId` 公共协议和“same-source shared editable content”假设
 - 把 Standalone playback、PianoRoll、split/delete、以及 VST3 ARA source/region mapping 全部接回 `materialization + projection` 协议；默认 timeline 命令只允许改 placement，editable payload 只允许改 materialization
 - 继续守住 `single active workspace`、Standalone explicit placement、async `SafePointer`、app preferences 不进入 processor/project state 这些已完成边界，但不再把 `same-source shared-clip + appliedRegion` 当作目标架构
 - 把现有自动化绿灯明确标注为“旧假设下的 partial evidence”，继续把 Standalone / VST3 手工旅程与 macOS bundle inspection 记成显式 gap，而不是假 PASS
+- ✅ Standalone Import Track-Target Drop UX（几何拖放定位 + hover preview + blank-area create-track）已通过 8ea7305 / 706c844 实现落地
+- ✅ Experimental Features Gate（experimentalFeaturesEnabled 布尔开关）已通过 706c844 实现落地
+- ✅ Track-level color system（Placement::colour → TrackState::colour, TrackColorMode）已通过 919c544 实现落地
+- ✅ Shortcuts 从 Standalone-only 提升为 Shared（22 项）已通过 7b9945d 实现落地
+- ✅ Snap Settings（SnapSettings + preference page）已通过 8ea7305 实现落地
+- ✅ ARA revision-based PendingBirth lifecycle 已通过 c4766c5 实现落地
+- ✅ Arrangement waveform tile cache + drag preview + vertical geometry caching 已通过 c77d847 / c03fabe 实现落地
 - 当前结构范围已冻结为 `v1.4`；下一步是补齐 release gate（L5 manual journeys + macOS bundle inspection）并决定是否发版
 
 <details>
@@ -236,9 +244,9 @@ state, VST3/ARA state, or a parallel placement commit path. The move drag previe
 real placement time/track truth remains committed only on `mouseUp()`.
 
 ---
-*Last updated: 2026-05-27 after adding Arrangement min-zoom waveform and cross-track drag preview plan*
+*Last updated: 2026-05-27 after adding Import Drop UX, experimental features gate, track-level color system, shortcuts migration, snap settings, ARA pending-birth revision, and arrangement render cache refactoring completion updates*
 ---
-## 2026-05-27 Update: Experimental Features Gate And TimeTool Anchor Seed Planned
+## 2026-05-27 Update: Experimental Features Gate And TimeTool Anchor Seed
 
 当前 Standalone 对“实验性功能”的产品暴露存在一处合同混淆：
 
@@ -256,8 +264,8 @@ real placement time/track truth remains committed only on `mouseUp()`.
 
 本轮计划还明确修正一个当前回退：
 
-1. `setCurrentTool(TimeTool)` 当前只切工具，不再触发任何 GAME / DerivedAnalysis / TimeGrid 预热
-2. 正式修复应下沉到 processor 单一入口，复用既有 `DerivedAnalysis` 主链
+1. `setCurrentTool(TimeTool)` 当前只切工具，不再触发任何 reference feature / TimeGrid 预热
+2. 正式修复应下沉到 processor 单一入口，但只允许共享 timing-feature extraction，不再把 `DerivedAnalysis` 或 seed 流程当作 `AUTO(REF)` backbone
 3. UI 不得自己生成 `TimeGridSnapshot`，也不得为 stretch 再长出一条专用 GAME 旁路
 
 Plan source:
@@ -265,8 +273,44 @@ Plan source:
 - `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed.md`
 - `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed-test-verification.md`
 
+当前状态：**已实现。** 已通过 706c844 实现：experimentalFeaturesEnabled 布尔开关 + ExperimentalReferenceAlignMode。
+
 ---
-## 2026-05-27 Update: Standalone Import Track-Target Drop UX Planned
+
+## 2026-05-27 Update: AUTO(REF) Reference-Driven Pitch And Timing Alignment Replan
+
+The current experimental reference-track path is no longer allowed to evolve by extending the old
+`DerivedAnalysis + TimeTool seed` prototype. The product-level requirement has been restated as:
+
+1. bind `ClipA` to `ClipB` as a reference source at placement truth;
+2. run `AUTO(REF)` on `ClipA`;
+3. use GAME to derive `ClipA` and `ClipB` note/anchor features;
+4. align A/B features inside the overlap window;
+5. write back only `ClipA.notesAfter + ClipA.correctedSegmentsAfter + ClipA.timeGridAfter`.
+
+This replan makes three architectural corrections explicit:
+
+1. `AUTO(REF)` is a formal `ClipA -> ClipB` reference-driven pitch and timing alignment flow; `ClipB` remains read-only reference input.
+2. timing alignment must depend on `ReferenceTimingFeatures + EffectiveTimeMap`, not on a prior seeded `TimeGridSnapshot` or a requirement that the user enter `TimeTool` first.
+3. project persistence must keep only user/product truth (`referencePlacementId + notes + correctedSegments + timeGrid`); `basicAnalysis`, `enhancedAnalysis`, and `analysisMode` are no longer accepted long-term project truth.
+
+The replan also fixes the timing-result product semantics:
+
+1. `ClipA.timeGridAfter` is the formal timing output of `AUTO(REF)`, expressed as constrained auto handle drag written back into the normal `TimeTool` truth.
+2. the auto timing patch must obey a hard local speed window of `0.8x~1.3x`; if the reference asks for more, the result must saturate/project to the nearest feasible alignment instead of over-stretching audio.
+3. this constraint applies to the auto patch only; it does not silently rewrite the existing manual `TimeTool` editing contract.
+
+Plan source:
+
+- `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment.md`
+- `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment-test-verification.md`
+
+This addendum supersedes the old narrative where `TimeTool` seed was treated as the backbone of
+reference timing alignment. From this point on, seed and `AUTO(REF)` are only allowed to share
+timing-feature extraction, not product semantics.
+
+---
+## 2026-05-27 Update: Standalone Import Track-Target Drop UX Implemented
 
 The current Standalone audio import UX now has a dedicated execution plan because drag-drop behavior has fallen behind normal DAW expectations:
 
@@ -289,4 +333,4 @@ Plan source:
 
 The planned fix must not move track inference into `OpenTuneAudioProcessor`, must not persist preview state, and must not resurrect modal per-drop track picking as the default path.
 
-当前状态：**已规划，未实现。**
+当前状态：**已实现。** 已通过 8ea7305 / 706c844 实现：ImportDropTarget 几何解析 + hover preview + blank-area create-track。

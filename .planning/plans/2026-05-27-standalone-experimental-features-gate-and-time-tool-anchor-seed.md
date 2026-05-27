@@ -1,6 +1,13 @@
 # Standalone Experimental Features Gate And Time Tool Anchor Seed Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+>
+> **2026-05-27 supersede note:** This document now defines only the experimental-features gate and
+> `TimeTool` first-entry identity seed contract. The formal `AUTO(REF)` shared-core backbone has been
+> superseded by `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment.md`.
+> If this document still mentions `DerivedAnalysis`, `Aggressive`, or a seed-driven `AUTO(REF)` main chain,
+> read those passages as historical wording only. The current formal meaning is limited to
+> “reuse the timing-feature extraction entry and compile identity handles from it.”
 
 **Goal:** 在 Standalone 侧为“参考轨 / 时间伸缩工具”增加单一的实验性功能总开关，明确当前能力仍不完善；同时修复 TimeTool 首次进入当前 clip 时不再触发 GAME 锚点来源准备的问题，但这次准备只允许播种 identity 锚点，不允许偷偷改动时间拉伸结果。
 

@@ -144,13 +144,25 @@
 ---
 ## 2026-05-27 Requirement Addendum: Experimental Features Gate And TimeTool Anchor Seed
 
-### Active
+### Validated (2026-05-27 via 706c844)
 
-- [ ] **MAIN-42**: Standalone 必须把“实验性功能入口可见性”与 `ExperimentalReferenceAlignMode` 解耦。前者是 shared app-level boolean，用于控制参考轨/TimeTool 入口是否对用户暴露；后者继续只表达 AUTO Ref 后端模式（`Off / Basic / Aggressive`），不得兼任入口开关。
-- [ ] **MAIN-43**: TimeTool 的所有 Standalone 入口必须统一受实验性功能总开关控制，包括 ParameterPanel toolbar、PianoRoll 工具菜单、快捷切换后的 current-tool 收口。关闭开关时，不得仍能通过隐藏旁路停留在 TimeTool。
-- [ ] **MAIN-44**: Arrangement clip 右下角参考源入口必须统一受实验性功能总开关控制。draw、hover hit-test、cursor、click/menu 四条路径都必须同时关闭；只藏绘制而保留交互命中不算完成。
-- [ ] **MAIN-45**: 每个 materialization 第一次进入 TimeTool 时，processor 必须负责一次性准备 stretch 锚点来源；若当前仅有默认 identity `TimeGridSnapshot` 且无内部 handles，则应复用正式 `DerivedAnalysis` producer 生成内部时间锚点并提交新的 identity `TimeGridSnapshot`。这一步只允许播种 handles，不允许自动生成非 identity 时间映射、自动改 clip 时长或自动执行 stretch。
-- [ ] **MAIN-46**: TimeTool stretch anchors 的生产必须只有 processor 单一入口。UI、ToolHandler、菜单点击、鼠标事件都不得自行拼 `TimeGridSnapshot`，也不得再造独立 `GAME` 旁路。若 Aggressive 模式代表 GAME producer，则也必须通过既有 `DerivedAnalysis` 正式主链表达，而不是新增第二生产者。
+- [x] **MAIN-42**: Standalone 必须把"实验性功能入口可见性"与 `ExperimentalReferenceAlignMode` 解耦。前者是 shared app-level boolean，用于控制参考轨/TimeTool 入口是否对用户暴露；后者继续只表达 AUTO Ref 后端模式（`Off / Basic / Aggressive`），不得兼任入口开关。
+- [x] **MAIN-43**: TimeTool 的所有 Standalone 入口必须统一受实验性功能总开关控制，包括 ParameterPanel toolbar、PianoRoll 工具菜单、快捷切换后的 current-tool 收口。关闭开关时，不得仍能通过隐藏旁路停留在 TimeTool。
+- [x] **MAIN-44**: Arrangement clip 右下角参考源入口必须统一受实验性功能总开关控制。draw、hover hit-test、cursor、click/menu 四条路径都必须同时关闭；只藏绘制而保留交互命中不算完成。
+
+### Active (TimeTool anchor seed still pending)
+
+> 2026-05-27 contract correction: the legacy wording in `MAIN-45..47` is no longer the formal `AUTO(REF)` backbone.
+> Read these seed-only requirements together with `MAIN-66..70`, which supersede the old `DerivedAnalysis + TimeTool seed`
+> product narrative and reduce `TimeTool` seed to timing-feature extraction reuse only.
+>
+> Interpretation override:
+> `MAIN-45` 中出现的 `DerivedAnalysis producer` 现在一律应理解为“正式 timing-feature extraction 单入口”。
+> `MAIN-46` 中出现的 `GAME` / `Aggressive` / `DerivedAnalysis` 主链表述现在只保留“禁止新增第二 producer 旁路”这一含义，
+> 不再代表正式 `AUTO(REF)` 产品主链，也不再允许把旧 prototype 合同抬回 shared-core 正式语义。
+
+- [ ] **MAIN-45**: 每个 materialization 第一次进入 TimeTool 时，processor 必须负责一次性准备 stretch 锚点来源；若当前仅有默认 identity `TimeGridSnapshot` 且无内部 handles，则应复用正式 timing-feature extraction 单入口生成内部时间锚点并提交新的 identity `TimeGridSnapshot`。这一步只允许播种 handles，不允许自动生成非 identity 时间映射、自动改 clip 时长或自动执行 stretch。
+- [ ] **MAIN-46**: TimeTool stretch anchors 的生产必须只有 processor 单一入口。UI、ToolHandler、菜单点击、鼠标事件都不得自行拼 `TimeGridSnapshot`，也不得再造独立 producer 旁路。实验模式或调试模式可以影响分析细节，但不得变成第二套 persisted timing truth 或第二条 seed 主链。
 - [ ] **MAIN-47**: 已经存在内部 handles 或已有非 identity stretch 编辑的 materialization，再次进入 TimeTool 时不得重新 seed，不得覆盖用户已有时间拉伸编辑。
 
 ### Traceability Addendum
@@ -166,23 +178,23 @@
 ---
 ## 2026-05-27 Requirement Addendum: Standalone Import Track-Target Drop UX
 
-### Active
+### Validated (2026-05-27 via 8ea7305 / 706c844)
 
-- [ ] **MAIN-48**: Standalone drag-drop import must resolve target track from the actual drop location when the drop lands
+- [x] **MAIN-48**: Standalone drag-drop import must resolve target track from the actual drop location when the drop lands
   on Arrangement track lanes. `PluginEditor::filesDropped(...)` receiving `x,y` but ignoring them is no longer acceptable as
   product behavior.
-- [ ] **MAIN-49**: Drag-drop onto Arrangement blank space below the last visible track must create one new visible track and
+- [x] **MAIN-49**: Drag-drop onto Arrangement blank space below the last visible track must create one new visible track and
   import there, unless the editor is already at `MAX_TRACKS`. At the limit, the app must surface a direct limit failure and
   must not reopen the legacy per-drop track picker.
-- [ ] **MAIN-50**: Drag-drop outside the Arrangement drop surface must keep a deterministic fallback path: import to the
+- [x] **MAIN-50**: Drag-drop outside the Arrangement drop surface must keep a deterministic fallback path: import to the
   current active track using explicit editor-owned placement, rather than guessing from unrelated widget geometry.
-- [ ] **MAIN-51**: Single-file chooser import must remain the fast path: current active track, explicit `ImportPlacement`,
+- [x] **MAIN-51**: Single-file chooser import must remain the fast path: current active track, explicit `ImportPlacement`,
   no track-choice popup. Multi-file chooser import may stay explicit only at the import-mode level, not via per-file or
   per-drop track-choice prompts.
-- [ ] **MAIN-52**: Import target hover/preview for drag-drop must remain transient Standalone UI state only. It must not
+- [x] **MAIN-52**: Import target hover/preview for drag-drop must remain transient Standalone UI state only. It must not
   enter `StandaloneArrangement`, `OpenTuneAudioProcessor`, undo history, playback snapshots, project serialization, or
   VST3/ARA state.
-- [ ] **MAIN-53**: All real import commits must continue to pass an explicit `ImportPlacement` from Standalone editor code
+- [x] **MAIN-53**: All real import commits must continue to pass an explicit `ImportPlacement` from Standalone editor code
   into `commitPreparedImportAsPlacement()`. The processor must not infer `trackId` or `startSeconds` from pointer location,
   hover state, Arrangement geometry, or drag-preview state.
 
@@ -192,3 +204,50 @@
 |--------|----------------|
 | `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux.md` | Standalone import UX contract for track-target drag-drop, blank-area create-track behavior, chooser alignment, and explicit placement ownership |
 | `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux-test-verification.md` | Verification contract for import target resolution, transient preview state, focused suites, and manual Standalone smoke |
+
+---
+*Last updated: 2026-05-27 after adding MAIN-54..MAIN-65 cumulative feature landing contracts*
+---
+## 2026-05-27 Requirement Addendum: Cumulative Feature Landing
+
+### Validated (2026-05-27)
+
+- [x] **MAIN-54**: Track-level color system must move colour ownership from per-placement `Placement::colour` to per-track `TrackState::colour`, with `TrackColorMode` enum (`Fixed / Custom / Random`) to support per-track colour assignment. Placement-level `colour` field is removed. — **Done 919c544**
+- [x] **MAIN-55**: Keyboard shortcut settings must be promoted from Standalone-only to a shared `AppPreferences` feature, available in both Standalone and VST3 preference pages. A minimum of 22 shortcut entries must be migrated, including tool-switching shortcuts. — **Done 7b9945d**
+- [x] **MAIN-56**: Snap settings must be exposed as a typed `SnapSettings` struct in `AppPreferences`, with an associated shared preference page for configuring snap-to-grid behavior. — **Done 8ea7305**
+- [x] **MAIN-57**: ARA PendingBirth lifecycle must be revision-based. Each `audioModificationPersistentId` may hold at most one current pending birth target, defined by `SourceWindow + revision`. Worker results with stale revisions are discarded before binding commit, not committed and cleaned later. — **Done c4766c5**
+- [x] **MAIN-58**: ArrangementRenderModelCache must use waveform tile caching with proper tile-bounds keys to avoid redundant waveform regeneration during scroll/zoom. — **Done c77d847**
+- [x] **MAIN-59**: Arrangement cross-track clip drag must expose a target-track clip preview via UI-only render-model state before mouseUp, while real placement time/track truth remains committed only on final release. — **Done c03fabe**
+- [x] **MAIN-60**: Arrangement vertical geometry coordinates must be cached to avoid repeated recalculation during drag operations and scroll invalidation. — **Done c03fabe**
+
+### Traceability Addendum
+
+| Source | Responsibility |
+|--------|----------------|
+| `919c544` | Track-level color system refactor: `Placement::colour` → `TrackState::colour`, `TrackColorMode` |
+| `7b9945d` | Shortcuts promoted from Standalone-only to Shared (22 entries, tool-switching) |
+| `8ea7305` | Snap settings (`SnapSettings` + preference page) |
+| `c4766c5` | ARA birth lifecycle revision-based `PendingBirth` + state v8 clipInSeconds |
+| `c77d847` | Timeline rendering pipeline with model caches, tile cache, playhead dirty-rect optimization |
+| `c03fabe` | Non-ARA compilation guards, arrangement drag preview, vertical geometry caching |
+
+---
+## 2026-05-27 Requirement Addendum: AUTO(REF) Reference-Driven Pitch And Timing Alignment
+
+### Active
+
+- [ ] **MAIN-66**: `AUTO(REF)` 的正式产品语义必须是 `ClipA -> ClipB` 参考驱动音高+节奏对轨。参考绑定的 persisted truth 仍然只在 `StandaloneArrangement::Placement::referencePlacementId`，`ClipB` 只作为参考，不得被写回。
+- [ ] **MAIN-67**: `AUTO(REF)` 的特征合同必须逻辑拆分为 `ReferencePitchFeatures` 与 `ReferenceTimingFeatures`，两者都以 materialization-local source-time 为唯一时间域。正式 production path 不再允许以 `MaterializationStore::DerivedAnalysis` 充当 reference-auto mixed contract。
+- [ ] **MAIN-68**: `AUTO(REF)` 必须只依赖 target/reference feature set、placement overlap window，以及 target/reference `EffectiveTimeMap`，而不再要求 target/reference 先有 seeded `TimeGridSnapshot` 或 existing `TimeTool` handles 才能进入 timing alignment。
+- [ ] **MAIN-69**: `TimeTool` seed 只允许共享 timing-feature extraction，用于生成 identity handles。它不是 `AUTO(REF)` 的主链，不是 timing alignment 的前置门槛，也不得再被语义化为“先 seed，再 reference align”。
+- [ ] **MAIN-70**: project persistence 只允许持久化 `referencePlacementId + notes + correctedSegments + timeGrid` 这些产品真相。`basicAnalysis`、`enhancedAnalysis`、`analysisMode` 必须退出正式 project truth，仅允许 legacy reader ignore/migration path 短期存在。
+- [ ] **MAIN-71**: `AUTO(REF)` 的 timing 输出必须正式定义为“把 `ClipA` 的自动锚点拖拽结果写回普通 `ClipA.timeGridAfter`”。它不是 reference-only 黑盒状态，也不是第二套 timing truth；`AUTO(REF)` 前后用户都必须还能在 `TimeTool` 中继续手动拖拽这些锚点。
+- [ ] **MAIN-72**: `AUTO(REF)` 自动 timing patch 触及到的每个局部区间都必须满足速度窗口 `0.8 <= speed_i <= 1.3`，其中 `speed_i = (sourceSeconds[i + 1] - sourceSeconds[i]) / (outputSeconds[i + 1] - outputSeconds[i])`。若参考对齐目标超出可行区间，系统必须把结果投影/饱和到最近可行解，只允许有限对齐，不得越界强拉。
+- [ ] **MAIN-73**: `0.8x~1.3x` 速度窗口当前只约束 `AUTO(REF)` 自动 patch，不自动改写现有 `TimeTool` 手动拖拽合同。手动拖拽是否也引入同类限速，必须后续单独立项。
+
+### Traceability Addendum
+
+| Source | Responsibility |
+|--------|----------------|
+| `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment.md` | `AUTO(REF)` reference-driven pitch and timing alignment 正式合同、feature split、effective time map、普通 `timeGridAfter` truth、受约束 auto handle drag 与 persistence 边界 |
+| `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment-test-verification.md` | `AUTO(REF)` contract rewrite 的 L0-L6 验证口径、阻断断言、可编辑 `TimeTool` truth、`0.8x~1.3x` 速度窗口与 kill-list 审查 |

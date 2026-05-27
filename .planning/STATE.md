@@ -5,7 +5,7 @@ milestone_name: PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 status: active
 stopped_at: v1.5 active development + PianoRoll empty-space seek intent + regular VST3 capture UX refinement (display selection, timeline view domain, transport shortcuts)
 last_updated: "2026-05-27"
-last_activity: 2026-05-27 -- Standalone import track-target drop UX planned; plan + verification docs added, top-level project state synchronized; implementation and tests pending.
+last_activity: 2026-05-27 -- AUTO(REF) reference-driven pitch and timing alignment replan documented; main-memory contract synchronized on top of the latest cumulative feature landings.
 progress:
   total_phases: 0
   completed_phases: 0
@@ -38,9 +38,10 @@ Plan sources:
 - 2026-05-02 GPU/CPU 推理后端重构（删除 DmlRuntimeVerifier、简化 AccelerationDetector、DML1 API）
 - 2026-05-26 VST3 ARA OriginalF0 收口子项（metadata-only SourceStore、birth 结果语义收紧、Editor 残留删除、AraFinal 守卫）
 - 2026-05-26/27 VST3 ARA multi-item birth + editor reopen structural fix（自动化闭环；REAPER 手工测试用户明确不要求本次执行）
+- 2026-05-27 AUTO(REF) reference-driven pitch and timing alignment replan + test-verification（合同重写，尚未实现）
 
 Status: Active development
-Last activity: 2026-05-27 -- Standalone experimental-features gate 与 TimeTool 首次入场 identity 锚点播种已完成规划建档；当前仅完成代码现状审计与合同收口，尚未进入实现与验证。
+Last activity: 2026-05-27 -- AUTO(REF) reference-driven pitch and timing alignment replan has been documented and synchronized into main memory. The cumulative feature landings from the last 8 commits remain the latest implementation baseline; AUTO(REF) work is still at the planning/contract stage only.
 
 ## Performance Metrics
 
@@ -78,7 +79,7 @@ Last activity: 2026-05-27 -- Standalone experimental-features gate 与 TimeTool 
 - 2026-05-27（ARA multi-item / reopen fix）：birth pending truth 已迁到 `audioModificationPersistentId + SourceWindow + revision`；worker-ready 队列只表达“哪些 persistentId 当前可执行”，不再承担 source 级 birth 真相。旧 worker result 必须在 commit 前按 revision/window 丢弃。
 - 2026-05-27（ARA multi-item / reopen fix）：`PluginEditor` 是只读消费者；payload/buffer 暂缺不再触发 destructive clear。`clearPlaybackRegionMaterialization()` 已从 production session API 删除，缺 payload 只能表现为 pending/restoring UI 状态。
 - 2026-05-27（ARA pre-bind restore fix）：metadata-only ARA VST3 state 在 `didBindToARA()` 前只缓存，绑定后 replay 到最终 shared stores；regular unbound VST3 state 不走 ARA 缓存路径，仍立即恢复本地 capture/project 状态。
-- 2026-05-27（Experimental features gate / TimeTool seed plan）：现有 `ExperimentalReferenceAlignMode` 已被明确界定为 AUTO Ref 模式，不再允许兼任实验功能总开关。下一轮 Standalone 计划将新增独立 `experimentalFeaturesEnabled` shared preference，用于统一门控 TimeTool 与 Arrangement 参考源入口；同时 `PianoRollComponent::setCurrentTool(TimeTool)` 将恢复为“首次进入当前 materialization 时请求 processor 播种 identity stretch anchors”的正式语义点，seed 逻辑只能复用 `DerivedAnalysis` 主链，UI 不得自行造 `TimeGridSnapshot`。
+- 2026-05-27（Experimental features gate / TimeTool seed re-scope）：现有 `ExperimentalReferenceAlignMode` 已被明确界定为 AUTO Ref 模式，不再允许兼任实验功能总开关。下一轮 Standalone 计划将新增独立 `experimentalFeaturesEnabled` shared preference，用于统一门控 TimeTool 与 Arrangement 参考源入口；同时 `PianoRollComponent::setCurrentTool(TimeTool)` 将恢复为“首次进入当前 materialization 时请求 processor 播种 identity stretch anchors”的正式语义点，但 seed 只允许共享 timing-feature extraction，不再复用 `DerivedAnalysis` 作为 `AUTO(REF)` backbone，UI 不得自行造 `TimeGridSnapshot`。
 
 - 2026-04-24 (Task 12 F6)：VST3 PluginEditor.cpp 4 处 command-path silent-return 改为 `AppLogger::log("InvariantViolation: ...")` + `jassertfalse`。涉及 `syncImportedAraClipIfNeeded` 的 prepareImport 失败和 null buffer，以及 `pitchCurveEdited` 的 no-materialization 和 null-curve。新增 architecture guard 测试。
 - 2026-04-24 (Task 12 scope)：F3 (SourceStore hydration 迁移) 经评估为高风险（hydration worker 跨 store 锁序问题），标记为后续独立 Task 需专门锁序设计。F5 (reclaim registry 统一) 评估为低价值（sweep 里只有 15 行 `#if`），标记为可选后续 Task。
@@ -138,11 +139,21 @@ Plan source:
 - `.planning/plans/2026-05-26-vst3-ara-multi-item-birth-and-editor-reopen-structural-fix.md`
 - `.planning/plans/2026-05-26-vst3-ara-multi-item-birth-and-editor-reopen-test-verification.md`
 
+### AUTO(REF) Contract Corrections (2026-05-27)
+
+- `AUTO(REF)` 的正式产品语义改为 `ClipA -> ClipB` 参考驱动音高+节奏对轨；formal output 只允许写回 `ClipA.notesAfter + ClipA.correctedSegmentsAfter + ClipA.timeGridAfter`。
+- `AUTO(REF)` 的 timing path 必须依赖 `ReferenceTimingFeatures + EffectiveTimeMap`，而不是要求 target/reference 先有 seeded `TimeGridSnapshot` 或先进入一次 `TimeTool`。
+- `TimeTool` 首次 identity anchor seed 仍是 processor-owned 入口，但只允许共享 timing-feature extraction，不再复用 `DerivedAnalysis` 作为 `AUTO(REF)` backbone。
+- `basicAnalysis`、`enhancedAnalysis`、`analysisMode` 必须退出正式 project truth，只允许短期存在于 legacy reader ignore/migration path。
+- `ClipA.timeGridAfter` 的正式含义进一步收口为“受约束 auto handle drag 写回普通 `TimeTool` truth”；`AUTO(REF)` 前后用户都必须还能继续手工拖拽这些 handles。
+- `AUTO(REF)` 自动 timing patch 触及到的每个局部区间都必须满足 `0.8 <= speed_i <= 1.3`；超出参考要求时只能投影/饱和到最近可行解，不允许为了强行命中参考而过度拉伸。
+- 上述 `0.8x~1.3x` 速度窗口当前只约束 `AUTO(REF)` 自动 patch，不自动改写既有手工 `TimeTool` 拖拽合同。
+
 ### Pending Todos
 
 - 持续把 `.planning` 与 live tree 保持同步。
-- 实现并验证 experimental-features gate：独立 boolean、提示文案、TimeTool/Arrangement 入口统一门控。
-- 实现并验证 TimeTool 首次入场 identity 锚点播种：processor 单入口、复用 `DerivedAnalysis`、不覆盖既有 stretch 编辑。
+- ✅ 实现并验证 experimental-features gate：独立 boolean、提示文案、TimeTool/Arrangement 入口统一门控。已通过 706c844 落地。
+- 实现并验证 TimeTool 首次入场 identity 锚点播种：processor 单入口、只共享 timing-feature extraction、不覆盖既有 stretch 编辑，也不再承担 `AUTO(REF)` backbone 语义。
 - Request user confirmation for Studio One / REAPER / Cubase / Live L5 journeys after installing the rebuilt VST3 (regular-vst3 capture display, timeline view domain, transport shortcuts).
 - Request user confirmation for PianoRoll empty-space seek intent L5 manual visual behavior.
 - REAPER ARA multi-item/project reload L5 不由 Codex 本次执行；用户明确说手工测试不用做。若之后有人手工执行，可补记录，但不得倒填为本次 PASS。
@@ -152,34 +163,64 @@ Plan source:
 - 在有 macOS 环境时补一轮真实 `.app` bundle inspection。
 - **v1.5 待完成**：确认三目标构建通过；Undo/Redo 边界测试（undo 到空栈、redo 裁剪、500 层溢出）；CorrectionWorker 取消/覆盖语义验证。
 
+### AUTO(REF) Priority Reset
+
+- 最高优先级：重写 `AUTO(REF)` 正式 shared-core 合同，拆分 `ReferencePitchFeatures` / `ReferenceTimingFeatures`，把 formal output 收口为 target-only `notes + correctedSegments + timeGrid`。
+- 最高优先级：移除 `AUTO(REF)` 对 seeded `TimeGridSnapshot` / existing `TimeTool` handles 的前置依赖，改用 target/reference `EffectiveTimeMap` 驱动 timing alignment。
+- 最高优先级：把 `basicAnalysis` / `enhancedAnalysis` / `analysisMode` 从正式 project truth 退场，只保留必要的 legacy reader ignore/migration path。
+- 最高优先级：把 timing 结果明确落成普通可编辑 `ClipA.timeGridAfter`，并在 auto patch 范围内施加 `0.8x~1.3x` 局部速度窗口与超限饱和语义。
+- TimeTool 首次入场 identity 锚点播种只允许共享 timing-feature extraction，不再承担 `AUTO(REF)` backbone 语义；旧的 “reuse DerivedAnalysis main chain” 口径在此处视为 superseded。
+
 ### Blockers/Concerns
 
 - 当前无硬阻塞。v1.4 manual verification gaps 已降级为非阻塞 deferred items。2026-05-18 四组计划自动化验证全部 PASS，L5 所有项待用户确认。
 
 ## 2026-05-27 State Addendum: Standalone Import Track-Target Drop UX
 
-Status: planned, implementation pending.
+Status: implemented.
 
 What changed:
 
-- Current Standalone import UX root cause is now explicitly recorded: `PluginEditor::filesDropped(...)` receives the drop point but currently ignores `x,y`, so drag-drop cannot resolve a target track from Arrangement geometry.
-- The legacy modal `promptTrackSelectionForDroppedFile(...)` flow is now classified as the wrong default for drag-drop.
-- Blank-area drop behavior is now fixed as a contract item: below the last visible Arrangement lane, one new visible track is created and used as the import target unless `MAX_TRACKS` is already reached.
-- The processor boundary remains unchanged: real imports still require explicit editor-owned `ImportPlacement`.
+- `PluginEditor::filesDropped(...)` now uses `x,y` coordinates to resolve a target track from Arrangement track-lane geometry, enabling spatial drag-drop import.
+- `ImportDropTarget` component handles geometry resolution, hover preview, and click-to-import for the blank-area case.
+- Drop onto an existing track lane → import into that track.
+- Drop into Arrangement blank space below visible tracks → creates one new visible track (unless `MAX_TRACKS` reached) and imports there.
+- Drop outside Arrangement → deterministic active-track fallback.
+- Single-file chooser import remains popup-free.
+- All real commits still go through explicit editor-owned `ImportPlacement`.
+- Preview state remains transient Standalone UI-only data; it does not enter `StandaloneArrangement`, `OpenTuneAudioProcessor`, undo history, project serialization, or VST3/ARA state.
 
 Plan source:
 
 - `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux.md`
 - `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux-test-verification.md`
 
-Suggested next-step options:
+Implemented in commits 8ea7305 / 706c844.
 
-- Implement the Standalone drop target resolver + hover preview + blank-area create-track import path.
-- Or continue with the separately planned experimental-features gate / TimeTool anchor-seed work first.
+## 2026-05-27 State Addendum: AUTO(REF) Contract Replan
+
+Status: planned, not implemented.
+
+What changed:
+
+- `AUTO(REF)` is now defined as formal `ClipA -> ClipB` reference-driven pitch and timing alignment, not as an extension of the old experimental seed path.
+- Reference binding truth remains on `StandaloneArrangement::Placement::referencePlacementId`; `ClipB` is read-only reference input.
+- Feature production is split into `ReferencePitchFeatures` and `ReferenceTimingFeatures`, both in materialization-local source-time.
+- Timing alignment must consume target/reference `EffectiveTimeMap` instead of requiring seeded `TimeGridSnapshot` handles before the operation can run.
+- `TimeTool` first-entry seed is reduced to processor-owned identity-handle preparation that only shares timing-feature extraction.
+- Long-term project truth is reduced to `referencePlacementId + notes + correctedSegments + timeGrid`; `basicAnalysis`, `enhancedAnalysis`, and `analysisMode` must leave formal persistence.
+- The timing result is further defined as constrained auto handle drag written back into ordinary `ClipA.timeGridAfter`, so the post-run state remains directly editable in `TimeTool`.
+- The auto timing patch must obey the local speed window `0.8x~1.3x`; when exact reference timing would exceed it, alignment must saturate/project to the nearest feasible result instead of over-processing audio.
+- That speed window is currently scoped only to `AUTO(REF)` automatic patch semantics; manual `TimeTool` dragging remains unchanged unless planned separately later.
+
+Plan source:
+
+- `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment.md`
+- `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment-test-verification.md`
 
 ## Session Continuity
 
 Last session: 2026-05-27
 Stopped at: ARA multi-item birth / editor reopen structural fix 已完成自动化闭环；REAPER 手工测试用户明确不要求 Codex 执行
 Resume file: N/A
-Next step: 先按 2026-05-27 规划落地 experimental-features gate 与 TimeTool 首次 anchor-seed，再继续 v1.5 其它 open 项（UI suite exit-code、Undo 边界、CorrectionWorker 并发、其它宿主 L5）。
+Next step: 先按 2026-05-27 新规划重写 `AUTO(REF)` 正式合同，再把 TimeTool identity seed 收紧为 timing-feature extraction 共享语义，之后再继续 v1.5 其它 open 项（UI suite exit-code、Undo 边界、CorrectionWorker 并发、其它宿主 L5）。

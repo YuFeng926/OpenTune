@@ -52,6 +52,14 @@
   - 2026-05-18 Regular VST3 capture timeline view domain: PianoRoll view defaults to zero so late-capture segments remain scrollable to earlier time
   - 2026-05-18 Regular VST3 transport shortcuts: unified routing helper, no fake host transport truth; architecture guards PASS
   - 2026-05-27 VST3 ARA multi-item birth + editor reopen structural fix: persistentId-owned pending birth, stale worker-result drop, editor destructive clear removal, metadata-only ARA pre-bind restore caching, architecture/processor/core/memory PASS, ARA VST3/non-ARA VST3/Standalone builds PASS
+  - 2026-05-27 Cumulative features:
+    - Track-level color system: `Placement::colour` → `TrackState::colour`, `TrackColorMode` (919c544)
+    - ImportDropTarget with hover preview: 几何拖放定位 + blank-area create-track (8ea7305 / 706c844)
+    - Shortcuts promotion from Standalone-only to Shared: 22 entries + tool-switching (7b9945d)
+    - Experimental features gate: `experimentalFeaturesEnabled` boolean (706c844)
+    - Snap settings: `SnapSettings` + preference page (8ea7305)
+    - ARA revision-based PendingBirth lifecycle: persistentId + SourceWindow + revision (c4766c5)
+    - Arrangement render model cache: waveform tile caching + drag preview + vertical geometry caching (c77d847 / c03fabe)
 - Still open on this line:
   - Validate ARA-bound vs regular VST3 runtime split in Studio One track insert, Studio One ARA workflow, REAPER ARA track FX, Cubase extension workflow, and Live VST3 insert
   - Validate Studio One pause/stop/play behavior with the rebuilt ARA VST3
@@ -64,9 +72,9 @@
   - Reaper ARA multi-item/project reload L5 journey is not required from Codex for the 2026-05-27 closure; do not report it as PASS unless manually executed later
   - L5 manual journeys 和 macOS bundle inspection 继续 deferred
 - Next planning action:
-  - 用户确认 2026-05-18 各项 L5 手工旅程
-  - 确认构建通过后评估是否需要更多自动化测试
-  - 评估 v1.5 是否需要更多编辑工具集成
+  - 先按 2026-05-27 新规划重写 `AUTO(REF)` 正式 shared-core 合同，收口为 `ClipA -> ClipB` 参考驱动音高+节奏对轨
+  - 把 TimeTool identity seed 收紧为“只共享 timing-feature extraction”的辅助路径，不再扩展旧 experimental seed backbone
+  - 再继续 v1.5 其余验证与编辑器侧 open 项
 
 ## Progress
 
@@ -91,6 +99,14 @@
 - **Regular VST3 transport shortcuts (2026-05-18):** unified routing helper, no fake host transport truth; architecture guards PASS; host L5 pending.
 - **Done (v1.5):** Custom UndoManager + PianoRollEditAction, PianoRollCorrectionWorker async worker, PlayheadOverlayComponent isolation, RenderBadgeComponent, F0Timeline finalized, Line Anchor tool, Vibrato per-note control, Continuous scroll mode, ONNX Runtime memory optimization, GPU/CPU inference backend restructure
 - **Done (2026-05-27):** VST3 ARA multi-item birth + editor reopen structural fix automated closure: persistentId 单槽 birth、stale result pre-commit drop、editor 只读、metadata-only ARA pre-bind restore cache/replay 全部落地
+- **Done (2026-05-27 cumulative):**
+  - Track-level color system: `Placement::colour` → `TrackState::colour`, `TrackColorMode` 枚举 — 919c544
+  - ImportDropTarget with hover preview: 几何拖放定位 + blank-area create-track — 8ea7305 / 706c844
+  - Shortcuts migration from Standalone-only to Shared (22 entries + tool-switching) — 7b9945d
+  - Experimental features gate: `experimentalFeaturesEnabled` boolean 开关 + `ExperimentalReferenceAlignMode` 解耦 — 706c844
+  - Snap settings: `SnapSettings` + preference page — 8ea7305
+  - ARA revision-based PendingBirth lifecycle: persistentId + SourceWindow + revision — c4766c5
+  - Arrangement render model cache: waveform tile caching + drag preview + vertical geometry caching — c77d847 / c03fabe
 - **Open:** ARA-bound/regular VST3 host L5 validation、Undo 边界测试、CorrectionWorker 并发验证、UI suite exit-code investigation、2026-05-18 四项 L5、Studio One long-audio ARA L5
 - **Deferred:** L5 manual journeys, macOS bundle inspection, F3/F5 follow-up tasks
 
@@ -138,10 +154,10 @@ Plan source:
 - `.planning/plans/2026-05-27-arrangement-min-zoom-waveform-and-cross-track-drag-preview-test-verification.md`
 
 ---
-*Roadmap updated: 2026-05-27 after adding Arrangement visual contract plan*
+*Roadmap updated: 2026-05-27 after cumulative feature landing: track color system, import drop UX, shortcuts migration, experimental gate, snap settings, ARA pending-birth revision, arrangement cache refactoring*
 *Current state: `v1.4` shipped/frozen; `v1.5` is active milestone*
 ---
-## 2026-05-27 Roadmap Addendum: Experimental Features Gate And TimeTool Anchor Seed Plan
+## 2026-05-27 Roadmap Addendum: Experimental Features Gate And TimeTool Anchor Seed (Gate Implemented, Seed Planned)
 
 The next Standalone editor-facing task is planned but not implemented:
 
@@ -162,7 +178,29 @@ This plan is intentionally contract-first:
 2. UI may only expose or trigger the flow, not own anchor generation;
 3. processor/store remain the only place allowed to publish seeded `TimeGridSnapshot` truth.
 
-Status: planned, implementation pending.
+Status: **入口门控已实现**（706c844）；TimeTool identity anchor seed 仍为后续计划，但按新的 `AUTO(REF)` 合同它只允许共享 timing-feature extraction，不再充当 reference alignment backbone。
+
+---
+## 2026-05-27 Roadmap Addendum: AUTO(REF) Reference-Driven Pitch And Timing Alignment Replan
+
+The next shared-core task is not to extend the old experimental seed path. It is to rewrite
+`AUTO(REF)` as a formal `ClipA -> ClipB` reference-driven pitch and timing alignment contract.
+
+Roadmap-level corrections:
+
+1. formal output is target-only mutation: `ClipA.notesAfter`, `ClipA.correctedSegmentsAfter`, and `ClipA.timeGridAfter`;
+2. timing alignment must depend on `ReferenceTimingFeatures + EffectiveTimeMap`, not on pre-seeded `TimeGridSnapshot` handles;
+3. project persistence must converge to `referencePlacementId + notes + correctedSegments + timeGrid`, while `basicAnalysis`, `enhancedAnalysis`, and `analysisMode` exit long-term product truth.
+4. `ClipA.timeGridAfter` is not a reference-only side state; it is the normal editable `TimeTool` truth produced by constrained auto handle drag.
+5. the auto timing patch must respect a hard local speed window of `0.8x~1.3x`; when exact reference timing would exceed that envelope, the system must keep only the nearest feasible limited alignment.
+6. the speed window is scoped to `AUTO(REF)` auto patch semantics only; manual `TimeTool` dragging is not implicitly redefined by this roadmap item.
+
+Plan source:
+
+- `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment.md`
+- `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment-test-verification.md`
+
+Status: planned; this is a contract rewrite and roadmap realignment only. Implementation has not started.
 
 ---
 ## 2026-05-27 Roadmap Addendum: Standalone Import Track-Target Drop UX Plan
@@ -187,4 +225,4 @@ This plan is intentionally contract-first:
 3. hover/preview state must remain transient UI-only data;
 4. focused proof gate is `arrangement-contract` / `timeline-rendering`, not the broad `ui` runner.
 
-Status: planned, implementation pending.
+Status: implemented (8ea7305 / 706c844).
