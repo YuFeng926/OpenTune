@@ -560,7 +560,7 @@ private:
     uint64_t ensureSourceAndCreateMaterialization(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
     void configureReferenceAnalysisService();
     void analysisCompleted(uint64_t materializationId,
-                           const MaterializationStore::DerivedAnalysis& result) override;
+                           const ReferenceFeatureSet& result) override;
     void analysisFailed(uint64_t materializationId,
                         const juce::String& reason) override;
 
@@ -720,12 +720,9 @@ public:
                                           const std::vector<CorrectedSegment>& segments);
     ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(uint64_t materializationId);
 
-    /** 参考特征生产的唯一正式入口。
-        无论 Basic 还是 Aggressive，所有 reference DerivedAnalysis 生产
-        都必须经过此函数，不得有第二条 producer 路径。 */
-    MaterializationStore::DerivedAnalysis buildReferenceDerivedAnalysis(
-        const MaterializationStore::MaterializationSnapshot& snapshot,
-        ExperimentalReferenceAlignMode mode);
+    /** AUTO(REF) 正式特征生产入口。产品合同固定使用 GAME producer。 */
+    ReferenceFeatureSet buildReferenceFeatureSet(
+        const MaterializationStore::MaterializationSnapshot& snapshot);
 
     /** 设置当前实验性参考对齐模式。由 UI 首选项变更驱动。 */
     void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode)
@@ -734,9 +731,9 @@ public:
     }
 
 private:
-    MaterializationStore::DerivedAnalysis buildBasicReferenceDerivedAnalysis(
+    ReferenceFeatureSet buildBasicReferenceFeatureSet(
         const MaterializationStore::MaterializationSnapshot& snapshot) const;
-    MaterializationStore::DerivedAnalysis buildGameReferenceDerivedAnalysis(
+    ReferenceFeatureSet buildGameReferenceFeatureSet(
         const MaterializationStore::MaterializationSnapshot& snapshot);
 public:
 

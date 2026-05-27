@@ -2,18 +2,19 @@
  * Tests/TestAutoRefIntegration.cpp - Reference alignment domain applier tests.
  *
  * Covers:
- *   - ReferenceBinding -> AlignmentFeatures -> ReferenceAutoAlign request/patch
+ *   - ReferenceBinding -> ReferenceFeatureSet -> ReferenceAutoAlign request/patch
  *   - Processor/domain transactional apply into notes, corrected segments, TimeGrid
  *   - One composite undo/redo restoring pitch and time edits together
+ *   - Processor-owned preheat / TimeTool seed feature paths
  */
 
 #include "TestSupport.h"
 #include "Utils/TimeCoordinate.h"
 
 #include <algorithm>
-#include <cmath>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -49,6 +50,7 @@ Note makeNote(double startSeconds, double endSeconds, float pitchHz)
     note.endTime = endSeconds;
     note.pitch = pitchHz;
     note.originalPitch = pitchHz;
+    note.isVoiced = true;
     return note;
 }
 
@@ -79,9 +81,39 @@ bool seedMaterializationFeatures(OpenTuneAudioProcessor& processor,
         && processor.setMaterializationNotesById(materializationId, notes);
 }
 
-bool seedReadyTimeToolAnalysis(OpenTuneAudioProcessor& processor,
-                               uint64_t materializationId,
-                               std::initializer_list<double> eventTimesSeconds)
+ReferenceFeatureSet makeReadyReferenceFeatures(const std::vector<Note>& notes,
+                                               std::initializer_list<double> anchorTimesSeconds,
+                                               int64_t inputFingerprint,
+                                               double sourceDurationSeconds,
+                                               ReferenceFeatureProducer producer = ReferenceFeatureProducer::Game)
+{
+    ReferenceFeatureSet features;
+    features.status = ReferenceFeatureStatus::Ready;
+    features.producer = producer;
+    features.analysisRevision = 1;
+    features.inputFingerprint = inputFingerprint;
+    features.sourceDurationSeconds = sourceDurationSeconds;
+    features.pitch.notes = notes;
+
+    uint64_t nextAnchorId = 1;
+    for (double anchorTime : anchorTimesSeconds) {
+        ReferenceTimingAnchor anchor;
+        anchor.anchorId = nextAnchorId++;
+        anchor.sourceSeconds = anchorTime;
+        anchor.strength = 1.0f;
+        anchor.kind = ReferenceTimingAnchorKind::Onset;
+        anchor.confidence = 1.0f;
+        features.timing.anchors.push_back(anchor);
+    }
+
+    return features;
+}
+
+bool seedReadyReferenceFeatures(OpenTuneAudioProcessor& processor,
+                                uint64_t materializationId,
+                                const std::vector<Note>& notes,
+                                std::initializer_list<double> anchorTimesSeconds,
+                                ReferenceFeatureProducer producer = ReferenceFeatureProducer::Game)
 {
     auto* store = processor.getMaterializationStore();
     if (store == nullptr) {
@@ -93,26 +125,22 @@ bool seedReadyTimeToolAnalysis(OpenTuneAudioProcessor& processor,
         return false;
     }
 
-    MaterializationStore::DerivedAnalysis analysis;
-    analysis.state = F0ExtractionState::Ready;
-    analysis.backendMode = 2;
-    analysis.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
-    analysis.sourceDurationSeconds = snapshot.audioBuffer != nullptr
-        ? static_cast<double>(snapshot.audioBuffer->getNumSamples()) / TimeCoordinate::kRenderSampleRate
+    const double durationSeconds = snapshot.audioBuffer != nullptr
+        ? TimeCoordinate::samplesToSeconds(snapshot.audioBuffer->getNumSamples(),
+                                           TimeCoordinate::kRenderSampleRate)
         : 0.0;
+    auto features = makeReadyReferenceFeatures(notes,
+                                               anchorTimesSeconds,
+                                               static_cast<int64_t>(snapshot.renderRevision),
+                                               durationSeconds,
+                                               producer);
+    return store->setReferenceFeatures(materializationId, features);
+}
 
-    uint64_t eventId = 1;
-    for (double eventSeconds : eventTimesSeconds) {
-        MaterializationStore::DerivedAnalysis::TemporalEvent event;
-        event.eventId = eventId++;
-        event.sourceSeconds = eventSeconds;
-        event.kind = MaterializationStore::DerivedAnalysis::TemporalEventKind::Onset;
-        event.strength = 1.0f;
-        event.confidence = 1.0f;
-        analysis.temporalEvents.push_back(event);
-    }
-
-    return store->setDerivedAnalysis(materializationId, analysis);
+bool isExpectedGamePreheatUnavailable(const juce::String& errorMessage)
+{
+    return errorMessage == "AUTO Ref GAME analysis requires GAME backend and cannot fall back to Basic"
+        || errorMessage == "AUTO Ref GAME analysis requires GAME note generator";
 }
 
 std::shared_ptr<const TimeGridSnapshot> makeWarpedReferenceGrid()
@@ -136,6 +164,21 @@ bool hasReferenceAutoHandle(const std::shared_ptr<const TimeGridSnapshot>& grid)
     });
 }
 
+bool hasIdentityInternalOnsetHandle(const std::shared_ptr<const TimeGridSnapshot>& grid)
+{
+    if (grid == nullptr) {
+        return false;
+    }
+
+    return std::any_of(grid->handles().begin(), grid->handles().end(), [](const TimeHandle& handle) {
+        return handle.kind == HandleKind::InternalOnset
+            && !handle.locked
+            && approxEqual(static_cast<float>(handle.source_seconds),
+                           static_cast<float>(handle.output_seconds),
+                           1.0e-6f);
+    });
+}
+
 bool readTargetState(OpenTuneAudioProcessor& processor,
                      uint64_t materializationId,
                      std::vector<Note>& notes,
@@ -155,6 +198,14 @@ bool readTargetState(OpenTuneAudioProcessor& processor,
 
     segments = curve->getSnapshot()->getCorrectedSegments();
     return store->getTimeGrid(materializationId, timeGrid) && timeGrid != nullptr;
+}
+
+bool readReferenceFeatures(OpenTuneAudioProcessor& processor,
+                           uint64_t materializationId,
+                           ReferenceFeatureSet& out)
+{
+    auto* store = processor.getMaterializationStore();
+    return store != nullptr && store->getReferenceFeatures(materializationId, out);
 }
 
 bool approxNotePitch(const std::vector<Note>& notes, size_t index, float expectedPitchHz)
@@ -191,6 +242,21 @@ bool seedBoundReferencePair(OpenTuneAudioProcessor& processor,
                                      reference.materializationId,
                                      makeTwoPhraseF0(330.0f, 440.0f),
                                      referenceNotes)) {
+        return false;
+    }
+
+    if (!seedReadyReferenceFeatures(processor,
+                                    target.materializationId,
+                                    targetNotes,
+                                    { 0.20, 1.00 },
+                                    ReferenceFeatureProducer::Game)) {
+        return false;
+    }
+    if (!seedReadyReferenceFeatures(processor,
+                                    reference.materializationId,
+                                    referenceNotes,
+                                    { 0.20, 1.00 },
+                                    ReferenceFeatureProducer::Game)) {
         return false;
     }
 
@@ -377,6 +443,19 @@ void runAutoRefIntegrationProcessorOwnsReferenceAnalysisPreheatTest()
         return;
     }
 
+    auto* store = processor.getMaterializationStore();
+    if (store == nullptr) {
+        logFail(testName, "materialization store unavailable");
+        return;
+    }
+
+    MaterializationStore::MaterializationSnapshot snapshot;
+    if (!store->getSnapshot(placement.materializationId, snapshot)) {
+        logFail(testName, "failed to read materialization snapshot");
+        return;
+    }
+    const auto expectedFingerprint = static_cast<int64_t>(snapshot.renderRevision);
+
     processor.setReferenceAnalysisNotificationDispatcherForTests([](std::function<void()> task) {
         task();
     });
@@ -388,31 +467,42 @@ void runAutoRefIntegrationProcessorOwnsReferenceAnalysisPreheatTest()
         return;
     }
 
-    auto* store = processor.getMaterializationStore();
-    if (store == nullptr) {
-        logFail(testName, "materialization store unavailable");
-        return;
-    }
-
     for (int attempt = 0; attempt < 40; ++attempt) {
-        MaterializationStore::DerivedAnalysis analysis;
-        if (store->getDerivedAnalysis(placement.materializationId, analysis)
-            && analysis.state == F0ExtractionState::Ready
-            && !analysis.basicDerivedNotes.empty()
-            && analysis.temporalEvents.size() >= 2) {
-            logPass(testName);
-            return;
+        ReferenceFeatureSet features;
+        if (store->getReferenceFeatures(placement.materializationId, features)) {
+            if (features.status == ReferenceFeatureStatus::Failed
+                && features.producer == ReferenceFeatureProducer::Game
+                && features.inputFingerprint == expectedFingerprint) {
+                if (isExpectedGamePreheatUnavailable(features.errorMessage)) {
+                    logPass(testName);
+                    return;
+                }
+                logFail(testName, features.errorMessage.isNotEmpty()
+                    ? features.errorMessage.toRawUTF8()
+                    : "processor-owned preheat published Failed Game features");
+                return;
+            }
+
+            if (features.isReady()
+                && features.producer == ReferenceFeatureProducer::Game
+                && features.inputFingerprint == expectedFingerprint
+                && !features.pitch.notes.empty()
+                && features.timing.anchors.size() >= 2) {
+                logPass(testName);
+                return;
+            }
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(15));
     }
 
-    logFail(testName, "processor-owned ReferenceAnalysisService did not publish Ready features");
+    logFail(testName, "processor-owned ReferenceAnalysisService did not publish a terminal Game-owned result");
 }
 
 void runAutoRefIntegrationEnsureTimeToolAnchorSeedBuildsIdentityInternalHandlesTest()
 {
-    constexpr const char* testName = "AutoRefIntegration_EnsureTimeToolAnchorSeed_BuildsIdentityInternalHandles";
+    constexpr const char* testName =
+        "AutoRefIntegration_EnsureTimeToolAnchorSeed_BuildsIdentityInternalHandles";
 
     OpenTuneAudioProcessor processor;
     const auto placement = addPlacement(processor, "TimeTool Seed", 0.0);
@@ -433,8 +523,15 @@ void runAutoRefIntegrationEnsureTimeToolAnchorSeedBuildsIdentityInternalHandlesT
         return;
     }
 
-    if (!seedReadyTimeToolAnalysis(processor, placement.materializationId, { 0.45, 1.20, 1.55 })) {
-        logFail(testName, "failed to seed ready derived analysis");
+    auto* store = processor.getMaterializationStore();
+    if (store == nullptr) {
+        logFail(testName, "materialization store unavailable");
+        return;
+    }
+
+    MaterializationStore::MaterializationSnapshot snapshot;
+    if (!store->getSnapshot(placement.materializationId, snapshot)) {
+        logFail(testName, "failed to read materialization snapshot");
         return;
     }
 
@@ -448,9 +545,7 @@ void runAutoRefIntegrationEnsureTimeToolAnchorSeedBuildsIdentityInternalHandlesT
         logFail(testName, "seed did not publish a TimeGrid");
         return;
     }
-
-    const auto& handles = grid->handles();
-    if (handles.size() < 3) {
+    if (grid->handles().size() < 3) {
         logFail(testName, "seeded TimeGrid must contain internal anchors");
         return;
     }
@@ -458,16 +553,17 @@ void runAutoRefIntegrationEnsureTimeToolAnchorSeedBuildsIdentityInternalHandlesT
         logFail(testName, "seeded TimeGrid must remain identity");
         return;
     }
-
-    const bool hasInternalOnset = std::any_of(handles.begin(), handles.end(), [](const TimeHandle& handle) {
-        return handle.kind == HandleKind::InternalOnset
-            && !handle.locked
-            && approxEqual(static_cast<float>(handle.source_seconds),
-                           static_cast<float>(handle.output_seconds),
-                           1.0e-6f);
-    });
-    if (!hasInternalOnset) {
+    if (!hasIdentityInternalOnsetHandle(grid)) {
         logFail(testName, "seeded TimeGrid must contain unlocked InternalOnset handles");
+        return;
+    }
+
+    ReferenceFeatureSet features;
+    if (!store->getReferenceFeatures(placement.materializationId, features)
+        || !features.isReady()
+        || features.inputFingerprint != static_cast<int64_t>(snapshot.renderRevision)
+        || !features.hasTimingAnchors()) {
+        logFail(testName, "ensureTimeToolAnchorSeed should preheat fallback ReferenceFeatureSet facts");
         return;
     }
 
@@ -542,10 +638,6 @@ void runAutoRefIntegrationEnsureTimeToolAnchorSeedPreservesExistingWarpTest()
 }
 
 } // namespace
-
-// ============================================================================
-// Suite aggregator
-// ============================================================================
 
 void runAutoRefIntegrationSuite()
 {

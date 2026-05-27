@@ -3028,17 +3028,16 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
         return;
     }
 
-    // If derived analysis is ready, set up piano roll overlay
+    // If reference features are ready, set up piano roll overlay
     if (refPlacement.materializationId != 0) {
         auto* matStore = processorRef_.getMaterializationStore();
-        MaterializationStore::DerivedAnalysis refAnalysis;
-        if (matStore->getDerivedAnalysis(refPlacement.materializationId, refAnalysis)
-            && refAnalysis.state == F0ExtractionState::Ready)
+        ReferenceFeatureSet refFeatures;
+        if (matStore->getReferenceFeatures(refPlacement.materializationId, refFeatures)
+            && refFeatures.isReady())
         {
             PianoRollRenderer::ReferenceOverlay overlay;
-            overlay.ghostNotes = refAnalysis.basicDerivedNotes;
-            // Convert temporal events for overlay.
-            for (const auto& event : refAnalysis.temporalEvents) {
+            overlay.ghostNotes = refFeatures.pitch.notes;
+            for (const auto& event : refFeatures.timing.anchors) {
                 PianoRollRenderer::ReferenceOverlay::GhostAnchor ga;
                 ga.sourceSeconds = event.sourceSeconds;
                 ga.strength = event.strength;

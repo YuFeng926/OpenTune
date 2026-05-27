@@ -1,11 +1,5 @@
 /**
- * Tests/TestAutoRefFailure.cpp — Failure-mode tests for Source/DSP/ReferenceAutoAlign.h
- *
- * Covers:
- *   - NoOverlap error when placements don't overlap in time
- *   - Reference/target analysis not ready errors
- *   - InsufficientFeatures error
- *   - Target analysis is not modified on failure
+ * Tests/TestAutoRefFailure.cpp - failure and edge-case tests for ReferenceAutoAlign.
  */
 
 #include "TestSupport.h"
@@ -13,56 +7,73 @@
 #include "Utils/TimeGrid.h"
 
 #include <utility>
+#include <vector>
 
 namespace {
 
-MaterializationStore::DerivedAnalysis makeReadyAnalysis()
+Note makeNote(double startSeconds, double endSeconds, float pitchHz)
 {
-    MaterializationStore::DerivedAnalysis da;
-    da.state = F0ExtractionState::Ready;
-    da.analysisRevision = 1;
     Note note;
-    note.startTime = 0.1; note.endTime = 0.3; note.pitch = 440.0f;
-    note.originalPitch = 440.0f; note.isVoiced = true;
-    da.basicDerivedNotes.push_back(note);
-    return da;
+    note.startTime = startSeconds;
+    note.endTime = endSeconds;
+    note.pitch = pitchHz;
+    note.originalPitch = pitchHz;
+    note.isVoiced = true;
+    return note;
 }
 
-MaterializationStore::DerivedAnalysis makeReadyAnalysisWithTemporalEvents(int numEvents)
+ReferenceTimingAnchor makeAnchor(uint64_t id, double sourceSeconds, float confidence = 0.8f)
 {
-    MaterializationStore::DerivedAnalysis da = makeReadyAnalysis();
-    for (int i = 0; i < numEvents; ++i) {
-        MaterializationStore::DerivedAnalysis::TemporalEvent event;
-        event.eventId = static_cast<uint64_t>(i + 1);
-        event.sourceSeconds = static_cast<double>(i + 1) * TimeGridSnapshot::kMinSourceSpacingSeconds;
-        event.strength = 0.8f;
-        event.kind = MaterializationStore::DerivedAnalysis::TemporalEventKind::Onset;
-        event.confidence = 0.8f;
-        da.temporalEvents.push_back(event);
-    }
-    return da;
+    ReferenceTimingAnchor anchor;
+    anchor.anchorId = id;
+    anchor.sourceSeconds = sourceSeconds;
+    anchor.strength = confidence;
+    anchor.kind = ReferenceTimingAnchorKind::Onset;
+    anchor.confidence = confidence;
+    return anchor;
 }
 
-ReferenceAlignmentRequest makeRequest(MaterializationStore::DerivedAnalysis target,
-                                      MaterializationStore::DerivedAnalysis reference,
+ReferenceFeatureSet makeFeatures(std::vector<Note> notes,
+                                 std::vector<ReferenceTimingAnchor> anchors,
+                                 ReferenceFeatureStatus status = ReferenceFeatureStatus::Ready)
+{
+    ReferenceFeatureSet features;
+    features.status = status;
+    features.producer = ReferenceFeatureProducer::Game;
+    features.analysisRevision = 1;
+    features.inputFingerprint = 1;
+    features.sourceDurationSeconds = 2.0;
+    features.pitch.notes = std::move(notes);
+    features.timing.anchors = std::move(anchors);
+    return features;
+}
+
+ReferenceAlignmentRequest makeRequest(ReferenceFeatureSet target,
+                                      ReferenceFeatureSet reference,
                                       double overlapStartTimelineSeconds,
                                       double overlapEndTimelineSeconds,
                                       double targetTimelineStartSeconds,
                                       double referenceTimelineStartSeconds,
-                                      double targetTotalDurationSeconds)
+                                      double targetDurationSeconds,
+                                      double referenceDurationSeconds = 0.0)
 {
+    const double referenceDuration = referenceDurationSeconds > 0.0
+        ? referenceDurationSeconds
+        : targetDurationSeconds;
+
     ReferenceAlignmentRequest request;
     request.target.materializationId = 1001;
     request.reference.materializationId = 2001;
     request.target.timelineStartSeconds = targetTimelineStartSeconds;
-    request.target.timelineEndSeconds = targetTimelineStartSeconds + targetTotalDurationSeconds;
+    request.target.timelineEndSeconds = targetTimelineStartSeconds + targetDurationSeconds;
     request.reference.timelineStartSeconds = referenceTimelineStartSeconds;
-    request.reference.timelineEndSeconds = referenceTimelineStartSeconds + targetTotalDurationSeconds;
-    request.target.timeGrid = TimeGridSnapshot::makeIdentity(targetTotalDurationSeconds);
-    request.reference.timeGrid = TimeGridSnapshot::makeIdentity(targetTotalDurationSeconds);
+    request.reference.timelineEndSeconds = referenceTimelineStartSeconds + referenceDuration;
+    request.targetTimeMap = EffectiveTimeMap::identity(targetDurationSeconds);
+    request.referenceTimeMap = EffectiveTimeMap::identity(referenceDuration);
     request.targetFeatures = std::move(target);
     request.referenceFeatures = std::move(reference);
-    request.targetNotesBefore = request.targetFeatures.basicDerivedNotes;
+    request.targetNotesBefore = request.targetFeatures.pitch.notes;
+    request.targetTimeGridBefore = TimeGridSnapshot::makeIdentity(targetDurationSeconds);
     request.overlapStartTimelineSeconds = overlapStartTimelineSeconds;
     request.overlapEndTimelineSeconds = overlapEndTimelineSeconds;
     return request;
@@ -70,25 +81,22 @@ ReferenceAlignmentRequest makeRequest(MaterializationStore::DerivedAnalysis targ
 
 } // namespace
 
-// ============================================================================
-// Test 1: No overlap → NoOverlap error
-// ============================================================================
-
 void runAutoRefFailureNoOverlapTest()
 {
     constexpr const char* testName = "AutoRefFailure_NoOverlapReturnsError";
 
-    auto target = makeReadyAnalysisWithTemporalEvents(3);
-    auto reference = makeReadyAnalysisWithTemporalEvents(3);
+    auto target = makeFeatures({ makeNote(0.1, 0.3, 440.0f) },
+                               { makeAnchor(1, 0.2), makeAnchor(2, 0.8), makeAnchor(3, 1.4) });
+    auto reference = makeFeatures({ makeNote(0.1, 0.3, 440.0f) },
+                                  { makeAnchor(11, 0.2), makeAnchor(12, 0.8), makeAnchor(13, 1.4) });
 
-    // overlapEndSeconds <= overlapStartSeconds → NoOverlap
     const auto request = makeRequest(
         std::move(target), std::move(reference),
-        /*overlapStartSeconds=*/1.0,
-        /*overlapEndSeconds=*/0.5,
+        /*overlapStartTimelineSeconds=*/1.0,
+        /*overlapEndTimelineSeconds=*/0.5,
         /*targetTimelineStartSeconds=*/0.0,
         /*referenceTimelineStartSeconds=*/2.0,
-        /*targetTotalDurationSeconds=*/2.0);
+        /*targetDurationSeconds=*/2.0);
     const auto result = ReferenceAutoAlign::align(request);
 
     if (result.success) {
@@ -103,68 +111,21 @@ void runAutoRefFailureNoOverlapTest()
     logPass(testName);
 }
 
-// ============================================================================
-// Test 2: Reference not ready → ReferenceAnalysisNotReady
-//
-// align() checks reference state BEFORE target state (see
-// ReferenceAutoAlign.cpp precondition order). When target is Ready
-// but reference is not, the correct error is ReferenceAnalysisNotReady.
-// ============================================================================
-
-void runAutoRefFailureNoReferenceTest()
-{
-    constexpr const char* testName = "AutoRefFailure_NoReferenceReturnsError";
-
-    auto target = makeReadyAnalysisWithTemporalEvents(3);
-    // target has notes + 3 temporal events, state=Ready
-
-    // reference: has notes + 3 temporal events but state=NotRequested
-    auto referenceNotReady = makeReadyAnalysisWithTemporalEvents(3);
-    referenceNotReady.state = F0ExtractionState::NotRequested;
-
-    const auto request = makeRequest(
-        std::move(target), std::move(referenceNotReady),
-        0.0, 1.0,
-        0.0, 0.0,
-        1.0);
-    const auto result = ReferenceAutoAlign::align(request);
-
-    if (result.success) {
-        logFail(testName, "align should fail when reference analysis is not ready");
-        return;
-    }
-    // align() checks reference state first → precise assertion
-    if (result.error != AlignmentPatch::ErrorCode::ReferenceAnalysisNotReady) {
-        logFail(testName, "error code should be ReferenceAnalysisNotReady (checked before target)");
-        return;
-    }
-
-    logPass(testName);
-}
-
-// ============================================================================
-// Test 2b: Target not ready → TargetAnalysisNotReady
-// ============================================================================
-
 void runAutoRefFailureTargetNotReadyTest()
 {
     constexpr const char* testName = "AutoRefFailure_TargetNotReadyReturnsError";
 
-    // target has notes + 3 temporal events but state=NotRequested
-    auto targetNotReady = makeReadyAnalysisWithTemporalEvents(3);
-    targetNotReady.state = F0ExtractionState::NotRequested;
-    
-    auto reference = makeReadyAnalysisWithTemporalEvents(3);
+    auto target = makeFeatures({ makeNote(0.1, 0.3, 440.0f) },
+                               { makeAnchor(1, 0.2), makeAnchor(2, 0.8) },
+                               ReferenceFeatureStatus::NotRequested);
+    auto reference = makeFeatures({ makeNote(0.1, 0.3, 440.0f) },
+                                  { makeAnchor(11, 0.2), makeAnchor(12, 0.8) });
 
-    const auto request = makeRequest(
-        std::move(targetNotReady), std::move(reference),
-        0.0, 1.0,
-        0.0, 0.0,
-        1.0);
-    const auto result = ReferenceAutoAlign::align(request);
+    const auto result = ReferenceAutoAlign::align(
+        makeRequest(std::move(target), std::move(reference), 0.0, 1.0, 0.0, 0.0, 1.0));
 
     if (result.success) {
-        logFail(testName, "align should fail when target analysis is not ready");
+        logFail(testName, "align should fail when target features are not ready");
         return;
     }
     if (result.error != AlignmentPatch::ErrorCode::TargetAnalysisNotReady) {
@@ -175,25 +136,40 @@ void runAutoRefFailureTargetNotReadyTest()
     logPass(testName);
 }
 
-// ============================================================================
-// Test 3: Insufficient features.
-// ============================================================================
+void runAutoRefFailureReferenceNotReadyTest()
+{
+    constexpr const char* testName = "AutoRefFailure_ReferenceNotReadyReturnsError";
+
+    auto target = makeFeatures({ makeNote(0.1, 0.3, 440.0f) },
+                               { makeAnchor(1, 0.2), makeAnchor(2, 0.8) });
+    auto reference = makeFeatures({ makeNote(0.1, 0.3, 440.0f) },
+                                  { makeAnchor(11, 0.2), makeAnchor(12, 0.8) },
+                                  ReferenceFeatureStatus::NotRequested);
+
+    const auto result = ReferenceAutoAlign::align(
+        makeRequest(std::move(target), std::move(reference), 0.0, 1.0, 0.0, 0.0, 1.0));
+
+    if (result.success) {
+        logFail(testName, "align should fail when reference features are not ready");
+        return;
+    }
+    if (result.error != AlignmentPatch::ErrorCode::ReferenceAnalysisNotReady) {
+        logFail(testName, "error code should be ReferenceAnalysisNotReady");
+        return;
+    }
+
+    logPass(testName);
+}
 
 void runAutoRefFailureInsufficientFeaturesTest()
 {
     constexpr const char* testName = "AutoRefFailure_InsufficientFeatures";
 
-    auto target = makeReadyAnalysisWithTemporalEvents(3);
-    target.basicDerivedNotes.clear();
-    auto reference = makeReadyAnalysisWithTemporalEvents(1);
-    reference.basicDerivedNotes.clear();
+    auto target = makeFeatures({}, {});
+    auto reference = makeFeatures({}, {});
 
-    const auto request = makeRequest(
-        std::move(target), std::move(reference),
-        0.0, 2.0,
-        0.0, 0.0,
-        2.0);
-    const auto result = ReferenceAutoAlign::align(request);
+    const auto result = ReferenceAutoAlign::align(
+        makeRequest(std::move(target), std::move(reference), 0.0, 2.0, 0.0, 0.0, 2.0));
 
     if (result.success) {
         logFail(testName, "align should fail with insufficient features");
@@ -207,24 +183,20 @@ void runAutoRefFailureInsufficientFeaturesTest()
     logPass(testName);
 }
 
-void runAutoRefFailureMissingTimeGridTest()
+void runAutoRefFailureMissingTargetTimeGridTest()
 {
-    constexpr const char* testName = "AutoRefFailure_MissingTimeGridReturnsInvalidTimeGrid";
+    constexpr const char* testName = "AutoRefFailure_MissingTargetTimeGridReturnsInvalidTimeGrid";
 
-    auto target = makeReadyAnalysisWithTemporalEvents(3);
-    auto reference = makeReadyAnalysisWithTemporalEvents(3);
+    auto target = makeFeatures({}, { makeAnchor(1, 0.4), makeAnchor(2, 1.0), makeAnchor(3, 1.6) });
+    auto reference = makeFeatures({}, { makeAnchor(11, 0.4), makeAnchor(12, 1.2), makeAnchor(13, 1.6) });
 
-    auto request = makeRequest(
-        std::move(target), std::move(reference),
-        0.0, 1.0,
-        0.0, 0.0,
-        1.0);
-    request.target.timeGrid.reset();
+    auto request = makeRequest(std::move(target), std::move(reference), 0.0, 2.0, 0.0, 0.0, 2.0);
+    request.targetTimeGridBefore.reset();
 
     const auto result = ReferenceAutoAlign::align(request);
 
     if (result.success) {
-        logFail(testName, "align should fail when target TimeGrid is missing");
+        logFail(testName, "align should fail when timing features exist but target TimeGrid is missing");
         return;
     }
     if (result.error != AlignmentPatch::ErrorCode::TimeGridInvalid) {
@@ -232,79 +204,66 @@ void runAutoRefFailureMissingTimeGridTest()
         return;
     }
 
-    request.target.timeGrid = TimeGridSnapshot::makeIdentity(1.0);
-    request.reference.timeGrid.reset();
-    const auto referenceResult = ReferenceAutoAlign::align(request);
-    if (referenceResult.success) {
-        logFail(testName, "align should fail when reference TimeGrid is missing");
-        return;
-    }
-    if (referenceResult.error != AlignmentPatch::ErrorCode::TimeGridInvalid) {
-        logFail(testName, "reference-missing error code should be TimeGridInvalid");
-        return;
-    }
-
     logPass(testName);
 }
 
-// ============================================================================
-// Test 4: Target analysis is not modified on failure
-// ============================================================================
-
-void runAutoRefFailureDoesNotModifyOutputTest()
+void runAutoRefFailureReferenceIdentityTimeMapIsAllowedTest()
 {
-    constexpr const char* testName = "AutoRefFailure_DoesNotModifyOutputOnFailure";
+    constexpr const char* testName = "AutoRefFailure_ReferenceIdentityTimeMapIsAllowed";
 
-    auto target = makeReadyAnalysisWithTemporalEvents(2);
-    auto reference = makeReadyAnalysisWithTemporalEvents(2);
+    auto target = makeFeatures({}, { makeAnchor(1, 0.4), makeAnchor(2, 1.0), makeAnchor(3, 1.6) });
+    auto reference = makeFeatures({}, { makeAnchor(11, 0.4), makeAnchor(12, 1.2), makeAnchor(13, 1.6) });
 
-    // Save copies of key fields before calling align
-    const size_t notesBefore = target.basicDerivedNotes.size();
-    const size_t eventsBefore = target.temporalEvents.size();
-    const auto revBefore = target.analysisRevision;
+    auto request = makeRequest(std::move(target), std::move(reference), 0.0, 2.0, 0.0, 0.0, 2.0);
+    request.referenceTimeMap = EffectiveTimeMap::identity(2.0);
 
-    // Call with non-overlapping params to trigger failure
-    const auto request = makeRequest(
-        target, reference,
-        0.0, 1.0,
-        0.0, 2.0,
-        1.0);
     const auto result = ReferenceAutoAlign::align(request);
 
-    // Verify failure
-    if (result.success) {
-        logFail(testName, "align was expected to fail but succeeded");
-        return;
-    }
-
-    // Verify targetAnalysis was not mutated
-    if (target.basicDerivedNotes.size() != notesBefore) {
-        logFail(testName, "target basicDerivedNotes was modified on failure");
-        return;
-    }
-    if (target.temporalEvents.size() != eventsBefore) {
-        logFail(testName, "target temporalEvents was modified on failure");
-        return;
-    }
-    if (target.analysisRevision != revBefore) {
-        logFail(testName, "target analysisRevision was modified on failure");
+    if (!result.success || !result.timingChanged) {
+        logFail(testName, "reference clip without explicit TimeGrid should still allow timing alignment");
         return;
     }
 
     logPass(testName);
 }
 
-// ============================================================================
-// Suite aggregator
-// ============================================================================
+void runAutoRefFailureNoMutationWhenAlreadyAlignedTest()
+{
+    constexpr const char* testName = "AutoRefFailure_NoMutationWhenAlreadyAligned";
+
+    const std::vector<Note> alignedNotes = { makeNote(0.4, 0.8, 440.0f) };
+    auto target = makeFeatures(alignedNotes, {});
+    auto reference = makeFeatures(alignedNotes, {});
+    auto request = makeRequest(std::move(target), std::move(reference), 0.0, 1.5, 0.0, 0.0, 2.0);
+
+    CorrectedSegment existingSegment;
+    existingSegment.startFrame = 40;
+    existingSegment.endFrame = 80;
+    existingSegment.source = CorrectedSegment::Source::NoteBased;
+    request.targetSegmentsBefore.push_back(existingSegment);
+
+    const auto result = ReferenceAutoAlign::align(request);
+
+    if (result.success) {
+        logFail(testName, "align should report NoMutation when notes and note-based segments already match");
+        return;
+    }
+    if (result.error != AlignmentPatch::ErrorCode::NoMutation) {
+        logFail(testName, "error code should be NoMutation");
+        return;
+    }
+
+    logPass(testName);
+}
 
 void runAutoRefFailureSuite()
 {
     logSection("AutoRefFailure");
     runAutoRefFailureNoOverlapTest();
-    runAutoRefFailureNoReferenceTest();
     runAutoRefFailureTargetNotReadyTest();
+    runAutoRefFailureReferenceNotReadyTest();
     runAutoRefFailureInsufficientFeaturesTest();
-    runAutoRefFailureMissingTimeGridTest();
-    runAutoRefFailureDoesNotModifyOutputTest();
+    runAutoRefFailureMissingTargetTimeGridTest();
+    runAutoRefFailureReferenceIdentityTimeMapIsAllowedTest();
+    runAutoRefFailureNoMutationWhenAlreadyAlignedTest();
 }

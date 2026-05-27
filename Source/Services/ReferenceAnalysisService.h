@@ -36,7 +36,7 @@ public:
     // ==========================================================================
     // 分析函数类型（调用方注入，避免服务耦合具体算法）
     // ==========================================================================
-    using AnalysisFunc = std::function<MaterializationStore::DerivedAnalysis(
+    using AnalysisFunc = std::function<ReferenceFeatureSet(
         const AnalysisJobKey& jobKey)>;
     using NotificationDispatcher = std::function<void(std::function<void()> task)>;
 
@@ -47,7 +47,7 @@ public:
     public:
         virtual ~Listener() = default;
         virtual void analysisCompleted(uint64_t materializationId,
-                                       const MaterializationStore::DerivedAnalysis& result) = 0;
+                                       const ReferenceFeatureSet& result) = 0;
         virtual void analysisFailed(uint64_t materializationId,
                                     const juce::String& reason) = 0;
     };
@@ -74,7 +74,7 @@ public:
 
 private:
     void workerLoop();
-    void notifyListenersCompleted(uint64_t matId, const MaterializationStore::DerivedAnalysis& result);
+    void notifyListenersCompleted(uint64_t matId, const ReferenceFeatureSet& result);
     void notifyListenersFailed(uint64_t matId, const juce::String& reason);
 
     AnalysisFunc analysisFunc_;

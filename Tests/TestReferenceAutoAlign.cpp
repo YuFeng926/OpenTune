@@ -9,11 +9,9 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <vector>
 
 namespace {
-
-using DerivedAnalysis = MaterializationStore::DerivedAnalysis;
-using TemporalEvent = MaterializationStore::DerivedAnalysis::TemporalEvent;
 
 constexpr double kDurationSeconds = 3.0;
 
@@ -31,26 +29,32 @@ Note makeAlignNote(double startSeconds, double endSeconds, float pitchHz)
     return note;
 }
 
-TemporalEvent makeEvent(uint64_t id, double sourceSeconds, float confidence = 0.8f)
+ReferenceTimingAnchor makeAnchor(uint64_t id,
+                                 double sourceSeconds,
+                                 ReferenceTimingAnchorKind kind = ReferenceTimingAnchorKind::Onset,
+                                 float confidence = 0.8f)
 {
-    TemporalEvent event;
-    event.eventId = id;
-    event.sourceSeconds = sourceSeconds;
-    event.strength = confidence;
-    event.confidence = confidence;
-    event.kind = DerivedAnalysis::TemporalEventKind::Onset;
-    return event;
+    ReferenceTimingAnchor anchor;
+    anchor.anchorId = id;
+    anchor.sourceSeconds = sourceSeconds;
+    anchor.strength = confidence;
+    anchor.kind = kind;
+    anchor.confidence = confidence;
+    return anchor;
 }
 
-DerivedAnalysis makeFeatures(std::vector<Note> notes, std::vector<TemporalEvent> events)
+ReferenceFeatureSet makeReadyFeatures(std::vector<Note> notes,
+                                      std::vector<ReferenceTimingAnchor> anchors)
 {
-    DerivedAnalysis analysis;
-    analysis.state = F0ExtractionState::Ready;
-    analysis.analysisRevision = 1;
-    analysis.basicDerivedNotes = std::move(notes);
-    analysis.temporalEvents = std::move(events);
-    analysis.sourceDurationSeconds = kDurationSeconds;
-    return analysis;
+    ReferenceFeatureSet features;
+    features.status = ReferenceFeatureStatus::Ready;
+    features.producer = ReferenceFeatureProducer::Game;
+    features.analysisRevision = 1;
+    features.inputFingerprint = 1;
+    features.sourceDurationSeconds = kDurationSeconds;
+    features.pitch.notes = std::move(notes);
+    features.timing.anchors = std::move(anchors);
+    return features;
 }
 
 std::shared_ptr<const TimeGridSnapshot> makeIdentityGrid()
@@ -76,9 +80,10 @@ std::shared_ptr<const TimeGridSnapshot> makeTargetWarpGrid()
     return TimeGridSnapshot::makeFromHandles(std::move(handles), 1);
 }
 
-ReferenceAlignmentRequest makeRequest(DerivedAnalysis targetFeatures,
-                                      DerivedAnalysis referenceFeatures,
+ReferenceAlignmentRequest makeRequest(ReferenceFeatureSet targetFeatures,
+                                      ReferenceFeatureSet referenceFeatures,
                                       std::vector<Note> targetNotesBefore,
+                                      std::vector<CorrectedSegment> targetSegmentsBefore = {},
                                       std::shared_ptr<const TimeGridSnapshot> targetGrid = makeIdentityGrid(),
                                       std::shared_ptr<const TimeGridSnapshot> referenceGrid = makeIdentityGrid())
 {
@@ -87,15 +92,17 @@ ReferenceAlignmentRequest makeRequest(DerivedAnalysis targetFeatures,
     request.target.materializationId = 100;
     request.target.timelineStartSeconds = 0.0;
     request.target.timelineEndSeconds = kDurationSeconds;
-    request.target.timeGrid = std::move(targetGrid);
     request.reference.placementId = 20;
     request.reference.materializationId = 200;
     request.reference.timelineStartSeconds = 0.0;
     request.reference.timelineEndSeconds = kDurationSeconds;
-    request.reference.timeGrid = std::move(referenceGrid);
+    request.targetTimeMap = EffectiveTimeMap::fromTimeGrid(targetGrid, kDurationSeconds);
+    request.referenceTimeMap = EffectiveTimeMap::fromTimeGrid(referenceGrid, kDurationSeconds);
     request.targetFeatures = std::move(targetFeatures);
     request.referenceFeatures = std::move(referenceFeatures);
     request.targetNotesBefore = std::move(targetNotesBefore);
+    request.targetSegmentsBefore = std::move(targetSegmentsBefore);
+    request.targetTimeGridBefore = std::move(targetGrid);
     request.overlapStartTimelineSeconds = 0.0;
     request.overlapEndTimelineSeconds = kDurationSeconds;
     return request;
@@ -116,16 +123,17 @@ void runReferenceAutoAlignUsesReferenceTauForwardTest()
 {
     constexpr const char* testName = "ReferenceAutoAlign_UsesReferenceTauForward";
 
-    auto targetFeatures = makeFeatures(
-        { makeAlignNote(1.0, 1.2, 220.0f) },
-        { makeEvent(1, 0.4), makeEvent(2, 1.0), makeEvent(3, 2.0) });
-    auto referenceFeatures = makeFeatures(
-        { makeAlignNote(1.1, 1.3, 440.0f) },
-        { makeEvent(11, 0.4), makeEvent(12, 1.0), makeEvent(13, 2.0) });
+    auto targetFeatures = makeReadyFeatures(
+        {},
+        { makeAnchor(1, 0.4), makeAnchor(2, 1.0), makeAnchor(3, 2.0) });
+    auto referenceFeatures = makeReadyFeatures(
+        {},
+        { makeAnchor(11, 0.4), makeAnchor(12, 1.0), makeAnchor(13, 2.0) });
 
     const auto request = makeRequest(std::move(targetFeatures),
                                      std::move(referenceFeatures),
-                                     { makeAlignNote(1.0, 1.2, 220.0f) },
+                                     {},
+                                     {},
                                      makeIdentityGrid(),
                                      makeReferenceWarpGrid());
     const auto patch = ReferenceAutoAlign::align(request);
@@ -145,7 +153,7 @@ void runReferenceAutoAlignUsesReferenceTauForwardTest()
                                          return std::abs(candidate.targetSourceSeconds - 1.0) < 1.0e-9;
                                      });
     if (intent == patch.timingIntents.end()) {
-        logFail(testName, "expected target event at 1.0s to produce an intent");
+        logFail(testName, "expected target anchor at 1.0s to produce an intent");
         return;
     }
     if (!approxEqual(intent->desiredOutputSeconds, 1.2, 1.0e-9)) {
@@ -160,16 +168,14 @@ void runReferenceAutoAlignUsesTargetTauInverseTest()
 {
     constexpr const char* testName = "ReferenceAutoAlign_UsesTargetTauInverse";
 
-    auto targetFeatures = makeFeatures(
-        { makeAlignNote(1.0, 1.2, 220.0f) },
-        { makeEvent(1, 0.4), makeEvent(2, 1.0), makeEvent(3, 2.0) });
-    auto referenceFeatures = makeFeatures(
-        { makeAlignNote(0.75, 0.85, 440.0f) },
-        { makeEvent(11, 0.4), makeEvent(12, 1.0), makeEvent(13, 2.0) });
+    const std::vector<Note> targetNotes = { makeAlignNote(1.0, 1.2, 220.0f) };
+    auto targetFeatures = makeReadyFeatures(targetNotes, {});
+    auto referenceFeatures = makeReadyFeatures({ makeAlignNote(0.75, 0.85, 440.0f) }, {});
 
     const auto request = makeRequest(std::move(targetFeatures),
                                      std::move(referenceFeatures),
-                                     { makeAlignNote(1.0, 1.2, 220.0f) },
+                                     targetNotes,
+                                     {},
                                      makeTargetWarpGrid(),
                                      makeIdentityGrid());
     const auto patch = ReferenceAutoAlign::align(request);
@@ -190,16 +196,15 @@ void runReferenceAutoAlignReturnsTimingIntentsNotTimeHandlesTest()
 {
     constexpr const char* testName = "ReferenceAutoAlign_ReturnsTimingIntentsNotTimeHandles";
 
-    auto targetFeatures = makeFeatures(
-        { makeAlignNote(1.0, 1.2, 220.0f) },
-        { makeEvent(1, 0.4), makeEvent(2, 1.0), makeEvent(3, 2.0) });
-    auto referenceFeatures = makeFeatures(
-        { makeAlignNote(1.0, 1.2, 440.0f) },
-        { makeEvent(11, 0.4), makeEvent(12, 1.2), makeEvent(13, 2.0) });
+    auto targetFeatures = makeReadyFeatures(
+        {},
+        { makeAnchor(1, 0.4), makeAnchor(2, 1.0), makeAnchor(3, 2.0) });
+    auto referenceFeatures = makeReadyFeatures(
+        {},
+        { makeAnchor(11, 0.4), makeAnchor(12, 1.2), makeAnchor(13, 2.0) });
 
-    auto patch = ReferenceAutoAlign::align(makeRequest(std::move(targetFeatures),
-                                                       std::move(referenceFeatures),
-                                                       { makeAlignNote(1.0, 1.2, 220.0f) }));
+    auto patch = ReferenceAutoAlign::align(
+        makeRequest(std::move(targetFeatures), std::move(referenceFeatures), {}));
 
     if (!patch.success) {
         logFail(testName, patch.diagnostics.toRawUTF8());
@@ -227,10 +232,8 @@ void runReferenceAutoAlignPreservesNonOverlapAndUnmatchedNotesTest()
         makeAlignNote(1.00, 1.20, 220.0f),
         makeAlignNote(2.50, 2.70, 220.0f)
     };
-    auto targetFeatures = makeFeatures(targetNotes, { makeEvent(1, 0.4), makeEvent(2, 1.0), makeEvent(3, 2.0) });
-    auto referenceFeatures = makeFeatures(
-        { makeAlignNote(1.00, 1.20, 440.0f) },
-        { makeEvent(11, 0.4), makeEvent(12, 1.0), makeEvent(13, 2.0) });
+    auto targetFeatures = makeReadyFeatures(targetNotes, {});
+    auto referenceFeatures = makeReadyFeatures({ makeAlignNote(1.00, 1.20, 440.0f) }, {});
 
     auto request = makeRequest(std::move(targetFeatures), std::move(referenceFeatures), targetNotes);
     request.overlapStartTimelineSeconds = 0.80;
@@ -260,10 +263,8 @@ void runReferenceAutoAlignCorrectedSegmentsAreTargetLocalTest()
     constexpr const char* testName = "ReferenceAutoAlign_CorrectedSegmentsAreTargetLocal";
 
     const std::vector<Note> targetNotes = { makeAlignNote(1.00, 1.20, 220.0f) };
-    auto targetFeatures = makeFeatures(targetNotes, { makeEvent(1, 0.4), makeEvent(2, 1.0), makeEvent(3, 2.0) });
-    auto referenceFeatures = makeFeatures(
-        { makeAlignNote(1.00, 1.20, 440.0f) },
-        { makeEvent(11, 0.4), makeEvent(12, 1.0), makeEvent(13, 2.0) });
+    auto targetFeatures = makeReadyFeatures(targetNotes, {});
+    auto referenceFeatures = makeReadyFeatures({ makeAlignNote(1.00, 1.20, 440.0f) }, {});
 
     auto request = makeRequest(std::move(targetFeatures), std::move(referenceFeatures), targetNotes);
     request.target.timelineStartSeconds = 5.0;
@@ -292,14 +293,13 @@ void runReferenceAutoAlignBoundedOneToOneNoteMatchingTest()
     constexpr const char* testName = "ReferenceAutoAlign_BoundedOneToOneNoteMatching";
 
     const std::vector<Note> targetNotes = { makeAlignNote(1.00, 1.20, 220.0f) };
-    auto targetFeatures = makeFeatures(targetNotes, { makeEvent(1, 0.4), makeEvent(2, 1.0), makeEvent(3, 2.0) });
-    auto referenceFeatures = makeFeatures(
+    auto targetFeatures = makeReadyFeatures(targetNotes, {});
+    auto referenceFeatures = makeReadyFeatures(
         { makeAlignNote(0.95, 1.05, 330.0f), makeAlignNote(1.05, 1.15, 440.0f) },
-        { makeEvent(11, 0.4), makeEvent(12, 1.0), makeEvent(13, 2.0) });
+        {});
 
-    const auto patch = ReferenceAutoAlign::align(makeRequest(std::move(targetFeatures),
-                                                            std::move(referenceFeatures),
-                                                            targetNotes));
+    const auto patch = ReferenceAutoAlign::align(
+        makeRequest(std::move(targetFeatures), std::move(referenceFeatures), targetNotes));
 
     if (!patch.success) {
         logFail(testName, patch.diagnostics.toRawUTF8());
@@ -322,14 +322,17 @@ void runReferenceAutoAlignTimeOnlyWhenReferenceNotesMissingTest()
 {
     constexpr const char* testName = "ReferenceAutoAlign_TimeOnlyWhenReferenceNotesMissing";
 
-    auto targetFeatures = makeFeatures(
+    auto targetFeatures = makeReadyFeatures(
         { makeAlignNote(1.0, 1.2, 220.0f) },
-        { makeEvent(1, 0.4), makeEvent(2, 1.0), makeEvent(3, 2.0) });
-    auto referenceFeatures = makeFeatures({}, { makeEvent(11, 0.4), makeEvent(12, 1.2), makeEvent(13, 2.0) });
+        { makeAnchor(1, 0.4), makeAnchor(2, 1.0), makeAnchor(3, 2.0) });
+    auto referenceFeatures = makeReadyFeatures(
+        {},
+        { makeAnchor(11, 0.4), makeAnchor(12, 1.2), makeAnchor(13, 2.0) });
 
-    const auto patch = ReferenceAutoAlign::align(makeRequest(std::move(targetFeatures),
-                                                            std::move(referenceFeatures),
-                                                            { makeAlignNote(1.0, 1.2, 220.0f) }));
+    const auto patch = ReferenceAutoAlign::align(
+        makeRequest(std::move(targetFeatures),
+                    std::move(referenceFeatures),
+                    { makeAlignNote(1.0, 1.2, 220.0f) }));
 
     if (!patch.success || patch.pitchChanged || !patch.timingChanged) {
         logFail(testName, "missing reference notes should still allow a time-only patch");
@@ -339,37 +342,35 @@ void runReferenceAutoAlignTimeOnlyWhenReferenceNotesMissingTest()
     logPass(testName);
 }
 
-void runReferenceAutoAlignPitchOnlyWhenReferenceEventsMissingTest()
+void runReferenceAutoAlignPitchOnlyWhenReferenceAnchorsMissingTest()
 {
-    constexpr const char* testName = "ReferenceAutoAlign_PitchOnlyWhenReferenceEventsMissing";
+    constexpr const char* testName = "ReferenceAutoAlign_PitchOnlyWhenReferenceAnchorsMissing";
 
-    auto targetFeatures = makeFeatures(
-        { makeAlignNote(1.0, 1.2, 220.0f) },
-        { makeEvent(1, 0.4), makeEvent(2, 1.0), makeEvent(3, 2.0) });
-    auto referenceFeatures = makeFeatures({ makeAlignNote(1.0, 1.2, 440.0f) }, {});
+    auto targetFeatures = makeReadyFeatures({ makeAlignNote(1.0, 1.2, 220.0f) }, {});
+    auto referenceFeatures = makeReadyFeatures({ makeAlignNote(1.0, 1.2, 440.0f) }, {});
 
-    const auto patch = ReferenceAutoAlign::align(makeRequest(std::move(targetFeatures),
-                                                            std::move(referenceFeatures),
-                                                            { makeAlignNote(1.0, 1.2, 220.0f) }));
+    const auto patch = ReferenceAutoAlign::align(
+        makeRequest(std::move(targetFeatures),
+                    std::move(referenceFeatures),
+                    { makeAlignNote(1.0, 1.2, 220.0f) }));
 
     if (!patch.success || !patch.pitchChanged || patch.timingChanged) {
-        logFail(testName, "missing reference events should still allow a pitch-only patch");
+        logFail(testName, "missing reference anchors should still allow a pitch-only patch");
         return;
     }
 
     logPass(testName);
 }
 
-void runReferenceAutoAlignFailsWhenBothNotesAndEventsMissingTest()
+void runReferenceAutoAlignFailsWhenBothNotesAndAnchorsMissingTest()
 {
-    constexpr const char* testName = "ReferenceAutoAlign_FailsWhenBothNotesAndEventsMissing";
+    constexpr const char* testName = "ReferenceAutoAlign_FailsWhenBothNotesAndAnchorsMissing";
 
-    auto targetFeatures = makeFeatures({}, {});
-    auto referenceFeatures = makeFeatures({}, {});
+    auto targetFeatures = makeReadyFeatures({}, {});
+    auto referenceFeatures = makeReadyFeatures({}, {});
 
-    const auto patch = ReferenceAutoAlign::align(makeRequest(std::move(targetFeatures),
-                                                            std::move(referenceFeatures),
-                                                            {}));
+    const auto patch = ReferenceAutoAlign::align(
+        makeRequest(std::move(targetFeatures), std::move(referenceFeatures), {}));
 
     if (patch.success || patch.error != AlignmentPatch::ErrorCode::InsufficientFeatures) {
         logFail(testName, "align should fail when both pitch and timing features are absent");
@@ -389,6 +390,6 @@ void runReferenceAutoAlignSuite()
     runReferenceAutoAlignCorrectedSegmentsAreTargetLocalTest();
     runReferenceAutoAlignBoundedOneToOneNoteMatchingTest();
     runReferenceAutoAlignTimeOnlyWhenReferenceNotesMissingTest();
-    runReferenceAutoAlignPitchOnlyWhenReferenceEventsMissingTest();
-    runReferenceAutoAlignFailsWhenBothNotesAndEventsMissingTest();
+    runReferenceAutoAlignPitchOnlyWhenReferenceAnchorsMissingTest();
+    runReferenceAutoAlignFailsWhenBothNotesAndAnchorsMissingTest();
 }

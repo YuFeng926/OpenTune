@@ -76,21 +76,6 @@ struct ProjectSourceEntry {
 // Materialization 持久化条目
 // ============================================================================
 
-struct ProjectDerivedAnalysisEntry {
-    int analysisRevision{0};
-    juce::String inputFingerprint;
-    juce::String status{"NotRequested"};
-    juce::String backend{"CPU"};
-    std::vector<Note> notes;
-    // Anchor handles: id, sourceSeconds, strength
-    struct AnchorEntry {
-        int id{0};
-        double sourceSeconds{0.0};
-        float strength{0.0f};
-    };
-    std::vector<AnchorEntry> anchors;
-};
-
 struct ProjectMaterializationEntry {
     uint64_t materializationId{0};
     uint64_t sourceId{0};
@@ -134,9 +119,6 @@ struct ProjectMaterializationEntry {
     };
     TimeGridEntry timeGrid;
 
-    // Derived analysis
-    ProjectDerivedAnalysisEntry basicAnalysis;
-    ProjectDerivedAnalysisEntry enhancedAnalysis;
 };
 
 // ============================================================================
@@ -147,7 +129,6 @@ struct ProjectReferenceBinding {
     uint64_t targetPlacementId{0};
     uint64_t referencePlacementId{0};
     uint64_t bindingRevision{0};
-    juce::String analysisMode{"Basic"};
 };
 
 // ============================================================================

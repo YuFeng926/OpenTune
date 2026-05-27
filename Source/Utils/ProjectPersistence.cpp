@@ -309,14 +309,6 @@ juce::ValueTree ProjectPersistence::materializationToValueTree(const ProjectMate
     // TimeGrid
     tree.addChild(timeGridToValueTree(mat.timeGrid), -1, nullptr);
 
-    // DerivedAnalysis (wrapped in a parent node per spec)
-    {
-        juce::ValueTree daTree("DerivedAnalysis");
-        daTree.addChild(derivedAnalysisToValueTree(mat.basicAnalysis, "Basic"), -1, nullptr);
-        daTree.addChild(derivedAnalysisToValueTree(mat.enhancedAnalysis, "Enhanced"), -1, nullptr);
-        tree.addChild(daTree, -1, nullptr);
-    }
-
     return tree;
 }
 
@@ -355,19 +347,6 @@ ProjectMaterializationEntry ProjectPersistence::materializationFromValueTree(con
     auto tgTree = tree.getChildWithName("TimeGrid");
     if (tgTree.isValid()) {
         m.timeGrid = timeGridFromValueTree(tgTree);
-    }
-
-    // DerivedAnalysis
-    auto basicTree = tree.getChildWithName("DerivedAnalysis");
-    if (basicTree.isValid()) {
-        auto basicNode = basicTree.getChildWithName("Basic");
-        if (basicNode.isValid()) {
-            m.basicAnalysis = derivedAnalysisFromValueTree(basicNode);
-        }
-        auto enhancedNode = basicTree.getChildWithName("Enhanced");
-        if (enhancedNode.isValid()) {
-            m.enhancedAnalysis = derivedAnalysisFromValueTree(enhancedNode);
-        }
     }
 
     return m;
@@ -475,68 +454,6 @@ std::vector<ProjectMaterializationEntry::SegmentEntry> ProjectPersistence::segme
         segments.push_back(seg);
     }
     return segments;
-}
-
-// ============================================================================
-// DerivedAnalysis 序列化
-// ============================================================================
-
-juce::ValueTree ProjectPersistence::derivedAnalysisToValueTree(
-    const ProjectDerivedAnalysisEntry& analysis, const juce::String& nodeName)
-{
-    juce::ValueTree tree(nodeName);
-    tree.setProperty("analysisRevision", analysis.analysisRevision, nullptr);
-    setOptionalProperty(tree, "inputFingerprint", analysis.inputFingerprint);
-    setOptionalProperty(tree, "status", analysis.status);
-    setOptionalProperty(tree, "backend", analysis.backend);
-
-    if (!analysis.notes.empty()) {
-        tree.addChild(notesToValueTree(analysis.notes, "Notes"), -1, nullptr);
-    }
-
-    if (!analysis.anchors.empty()) {
-        juce::ValueTree anchorsNode("Anchors");
-        for (const auto& anchor : analysis.anchors) {
-            juce::ValueTree at("Anchor");
-            at.setProperty("id", anchor.id, nullptr);
-            at.setProperty("sourceSeconds", anchor.sourceSeconds, nullptr);
-            at.setProperty("strength", anchor.strength, nullptr);
-            anchorsNode.addChild(at, -1, nullptr);
-        }
-        tree.addChild(anchorsNode, -1, nullptr);
-    }
-
-    return tree;
-}
-
-ProjectDerivedAnalysisEntry ProjectPersistence::derivedAnalysisFromValueTree(const juce::ValueTree& tree)
-{
-    ProjectDerivedAnalysisEntry da;
-    if (!tree.isValid()) { return da; }
-    da.analysisRevision = static_cast<int>(tree.getProperty("analysisRevision", 0));
-    da.inputFingerprint = getOptionalProperty(tree, "inputFingerprint", "");
-    da.status = getOptionalProperty(tree, "status", "NotRequested");
-    da.backend = getOptionalProperty(tree, "backend", "CPU");
-    da.notes = notesFromValueTree(tree.getChildWithName("Notes"));
-    da.anchors = anchorsFromValueTree(tree.getChildWithName("Anchors"));
-    return da;
-}
-
-std::vector<ProjectDerivedAnalysisEntry::AnchorEntry> ProjectPersistence::anchorsFromValueTree(
-    const juce::ValueTree& tree)
-{
-    std::vector<ProjectDerivedAnalysisEntry::AnchorEntry> anchors;
-    if (!tree.isValid()) { return anchors; }
-    for (int i = 0; i < tree.getNumChildren(); ++i) {
-        auto child = tree.getChild(i);
-        if (!child.hasType("Anchor")) { continue; }
-        ProjectDerivedAnalysisEntry::AnchorEntry a;
-        a.id = static_cast<int>(child.getProperty("id", 0));
-        a.sourceSeconds = child.getProperty("sourceSeconds", 0.0);
-        a.strength = child.getProperty("strength", 0.0f);
-        anchors.push_back(a);
-    }
-    return anchors;
 }
 
 // ============================================================================
@@ -672,7 +589,6 @@ juce::ValueTree ProjectPersistence::referenceBindingToValueTree(const ProjectRef
     tree.setProperty("targetPlacementId", static_cast<int64_t>(binding.targetPlacementId), nullptr);
     tree.setProperty("referencePlacementId", static_cast<int64_t>(binding.referencePlacementId), nullptr);
     tree.setProperty("bindingRevision", static_cast<int64_t>(binding.bindingRevision), nullptr);
-    setOptionalProperty(tree, "analysisMode", binding.analysisMode);
     return tree;
 }
 
@@ -682,7 +598,6 @@ ProjectReferenceBinding ProjectPersistence::referenceBindingFromValueTree(const 
     rb.targetPlacementId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("targetPlacementId", 0)));
     rb.referencePlacementId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("referencePlacementId", 0)));
     rb.bindingRevision = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("bindingRevision", 0)));
-    rb.analysisMode = getOptionalProperty(tree, "analysisMode", "Basic");
     return rb;
 }
 

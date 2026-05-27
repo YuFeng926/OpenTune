@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "DSP/ChromaKeyDetector.h"
+#include "DSP/ReferenceFeatures.h"
 #include "Inference/RenderCache.h"
 #include "Inference/TimeStretchCache.h"  // ⚡️ vocal-time-stretch §6.2 — store-wide Stage 2 cache
 #include "Utils/MaterializationState.h"
@@ -128,54 +129,13 @@ public:
     };
 
     // ============================================================
-    // Derived Analysis Slot (reference auto-align cache)
+    // Reference feature cache
     //
-    // Each materialization holds one DerivedAnalysis that captures
-    // basic backend analysis results.  Invalidated whenever audio
-    // or F0 data changes (e.g. setPitchCurve, replaceAudio).
+    // Each materialization holds one ReferenceFeatureSet that caches
+    // source-local pitch/timing facts for AUTO(REF) and TimeTool seed.
+    // Invalidated when source audio or original F0 changes.
     // setNotes does NOT invalidate — user note edits are independent.
     // ============================================================
-    struct DerivedAnalysis {
-        int analysisRevision{0};                    // bumped each time analysis is generated
-        F0ExtractionState state{F0ExtractionState::NotRequested};
-
-        // Basic-mode output
-        std::vector<Note> basicDerivedNotes;
-
-        enum class TemporalEventKind : uint8_t {
-            Onset = 0,
-            PitchTransition = 1
-        };
-
-        struct TemporalEvent {
-            uint64_t eventId{0};
-            double sourceSeconds{0.0};
-            float strength{0.0f};
-            TemporalEventKind kind{TemporalEventKind::Onset};
-            float confidence{0.0f};
-        };
-        std::vector<TemporalEvent> temporalEvents;
-
-        // Fingerprint for staleness detection
-        int64_t inputFingerprint{0};                // snapshot of renderRevision at analysis time
-
-        // Backend mode (0 = Basic, 2 = GAME)
-        int backendMode{0};
-        double sourceDurationSeconds{0.0};
-        juce::String errorMessage;
-
-        void reset() {
-            analysisRevision = 0;
-            state = F0ExtractionState::NotRequested;
-            basicDerivedNotes.clear();
-            temporalEvents.clear();
-            inputFingerprint = 0;
-            backendMode = 0;
-            sourceDurationSeconds = 0.0;
-            errorMessage.clear();
-        }
-    };
-
     MaterializationStore();
     ~MaterializationStore();
 
@@ -294,10 +254,10 @@ public:
                                                                      int hopSize);
 
     // ============================================================
-    // Derived Analysis API
+    // Reference feature cache API
     // ============================================================
-    bool setDerivedAnalysis(uint64_t materializationId, const DerivedAnalysis& analysis);
-    bool getDerivedAnalysis(uint64_t materializationId, DerivedAnalysis& out) const;
+    bool setReferenceFeatures(uint64_t materializationId, const ReferenceFeatureSet& features);
+    bool getReferenceFeatures(uint64_t materializationId, ReferenceFeatureSet& out) const;
 
 private:
     // 内部存储条目
@@ -318,7 +278,7 @@ private:
         std::shared_ptr<const TimeGridSnapshot> timeGrid;   // §3.6
         uint64_t timeGridRevision{0};                        // §3.6
         std::unique_ptr<SoundTouchStretcher> stretcher;     // §5.5 — lazy-constructed
-        DerivedAnalysis derivedAnalysis;                 // reference auto-align cache
+        ReferenceFeatureSet referenceFeatures;            // reference auto-align cache
         bool isRetired_{false};
     };
 

@@ -2,7 +2,7 @@
 module: ui-main
 type: api
 generated: true
-date: 2026-05-05
+date: 2026-05-27
 warning: "⚠️ 基于源码扫描生成，可能存在遗漏或过时信息"
 ---
 
@@ -26,7 +26,33 @@ warning: "⚠️ 基于源码扫描生成，可能存在遗漏或过时信息"
 ### 1.2 拖放（`juce::FileDragAndDropTarget`）
 
 - `bool isInterestedInFileDrag(const juce::StringArray& files)`：返回 true 当存在受支持的音频后缀
-- `void filesDropped(const juce::StringArray& files, int x, int y)`：命中 Track 区域则导入该轨；否则弹出 `promptTrackSelectionForDroppedFile`
+- `void fileDragEnter(const juce::StringArray& files, int x, int y)`：进入时计算 `resolveImportDropTarget(x,y)` → 高亮目标轨道 / 显示 hover preview
+- `void fileDragMove(const juce::StringArray& files, int x, int y)`：拖动中更新 `resolveImportDropTarget` → 更新 hover preview 位置
+- `void fileDragExit(const juce::StringArray& files)`：退出时清除 hover preview
+- `void filesDropped(const juce::StringArray& files, int x, int y)`：调用 `resolveImportDropTarget(x,y)` 获得 `ImportDropTarget`（几何解析），然后 `applyImportDropTarget` 执行导入；不再弹出 `promptTrackSelectionForDroppedFile` 模态框
+
+### 1.2a ImportDropTarget 几何解析
+
+```cpp
+struct ImportDropTarget {
+    enum class Kind { ExistingTrack, NewTrack, FallbackActiveTrack, Reject };
+    Kind kind = Kind::FallbackActiveTrack;
+    int trackId = 0;
+    double timelineStartSeconds = 0.0;
+    juce::String rejectReason;  // Only for Kind::Reject
+    bool isActionable() const { return kind != Kind::Reject; }
+};
+```
+
+`resolveImportDropTarget(globalX, globalY)` 根据鼠标坐标判断：
+- 落在现有轨道区域 → `ExistingTrack`（trackId = 命中轨道）
+- 落在轨道下方空白区域 → `NewTrack`（新建轨道）
+- 回退：`FallbackActiveTrack`（当前激活轨道）
+- 格式不支持/路径无效 → `Reject`（携带 rejectReason）
+
+`applyImportDropTarget(target, file)` 根据 target.kind 分派：
+- ExistingTrack/NewTrack/FallbackActiveTrack → 调用 `importAudioFileToTrack(trackId, file, timelineStartSeconds)`
+- Reject → 静默忽略或状态栏提示
 
 ### 1.3 心跳（私有 `Timer`）
 
@@ -52,7 +78,8 @@ warning: "⚠️ 基于源码扫描生成，可能存在遗漏或过时信息"
 
 ### 1.5 键盘与语言
 
-- `bool keyPressed(const juce::KeyPress& key)`：处理 Undo/Redo/播放控制快捷键（依据 `shortcutSettings_`）
+- `bool keyPressed(const juce::KeyPress& key)`：处理 Undo/Redo/播放控制快捷键（依据 `shortcutSettings_`）以及工具切换快捷键（1-6）
+- 工具切换快捷键：1=Select, 2=DrawNote, 3=LineAnchor, 4=HandDraw, 5=AutoTune, 6=TimeTool；T/t=TimeTool 切换；Escape=取消选择
 - `void languageChanged(Language)`：递归调 `refreshLocalizedText()` 于各子组件
 
 ### 1.6 私有辅助（节选）
@@ -453,7 +480,7 @@ struct SharedPreferencePages {
 };
 ```
 
-页面包括：通用（主题 / 语言）、钢琴卷帘（NoteNameMode / 波形显示 / Chunk 边界 / 无声帧）、缩放（horizontalFactor / verticalFactor / scrollSpeed）、音频编辑方案（CorrectedF0Primary / NotesPrimary）。
+页面包括：通用（主题 / 语言）、钢琴卷帘（NoteNameMode / 波形显示 / Chunk 边界 / 无声帧）、缩放（horizontalFactor / verticalFactor / scrollSpeed）、音频编辑方案（CorrectedF0Primary / NotesPrimary）、**快捷键**（v1.5.0 从 Standalone 提升到 Shared，~22 个可捕获 KeyPress 的绑定行）、**实验性功能**（`experimentalFeaturesEnabled` 布尔开关）、**吸附设置**（SnapSettings：enabled + Off/Beat/Bar/Second/Count 模式）。
 
 ### `StandalonePreferencePages`（`StandalonePreferencePages.h`）
 
@@ -470,7 +497,8 @@ struct StandalonePreferencePages {
 };
 ```
 
-页面包括：音频设备（`AudioDeviceSelectorComponent` + RenderingPriority）、快捷键（10 个可捕获 `KeyPress` 的绑定行，调 `tryBuildCapturedBinding`）、鼠标轨迹（8 主题预览）。
+页面包括：音频设备（`AudioDeviceSelectorComponent` + RenderingPriority）、鼠标轨迹（8 主题预览）。
+> **v1.5.0**：快捷键页面已迁移到 `SharedPreferencePages`，`StandalonePreferencePages` 不再包含快捷键设置。
 
 ## 19. `AppPreferences`（`Utils/AppPreferences.h/cpp`）
 
@@ -484,9 +512,14 @@ struct SharedPreferencesState {
     PianoRollVisualPreferences pianoRollVisualPreferences;
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity;
     RenderingPriority renderingPriority = GpuFirst;
+    // v1.5.0 新增 / 迁移字段：
+    KeyShortcutConfig::KeyShortcutSettings shortcuts;    // 从 Standalone 提升到 Shared
+    TrackColorMode trackColorMode = Random;               // 轨道颜色模式
+    bool experimentalFeaturesEnabled = false;             // 实验性功能门控
+    SnapSettings snap;                                    // 吸附设置
 };
 struct StandalonePreferencesState {
-    KeyShortcutConfig::KeyShortcutSettings shortcuts;
+    // v1.5.0: shortcuts 已迁移至 SharedPreferencesState
     MouseTrailConfig::TrailTheme mouseTrailTheme = Classic;
 };
 struct AppPreferencesState {
@@ -494,6 +527,12 @@ struct AppPreferencesState {
     StandalonePreferencesState standalone;
 };
 enum class RenderingPriority { GpuFirst = 0, CpuFirst };
+enum class TrackColorMode { Random, Custom };
+struct SnapSettings {
+    bool enabled = false;
+    enum class Mode { Off, Beat, Bar, Second, Count };
+    Mode mode = Mode::Off;
+};
 ```
 
 ### StorageOptions
@@ -520,9 +559,12 @@ struct StorageOptions {
 | `void setPianoRollVisualPreferences(const PianoRollVisualPreferences&)` | |
 | `void setNoteNameMode(NoteNameMode)` / `setShowChunkBoundaries(bool)` / `setShowUnvoicedFrames(bool)` | |
 | `void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings&)` | |
-| `void setStandaloneShortcuts(const KeyShortcutConfig::KeyShortcutSettings&)` | |
+| `void setShortcuts(const KeyShortcutConfig::KeyShortcutSettings&)` | v1.5.0: 重命名自 `setStandaloneShortcuts`，现在写入 Shared 层 |
 | `void setRenderingPriority(RenderingPriority)` | |
 | `void setMouseTrailTheme(MouseTrailConfig::TrailTheme)` | |
+| `void setTrackColorMode(TrackColorMode)` | v1.5.0 新增 |
+| `void setExperimentalFeaturesEnabled(bool)` | v1.5.0 新增 |
+| `void setSnapSettings(const SnapSettings&)` | v1.5.0 新增 |
 
 每个 setter 写入后立即 `saveLocked()`（`millisecondsBeforeSaving = 0`）。
 
@@ -559,7 +601,7 @@ inline ParameterPanelSyncDecision resolveParameterPanelSyncDecision(
 
 1. `ArrangementViewComponent::buildWaveformCaches(timeBudgetMs)` 的具体预算值（每帧）未在头文件显式，需翻 cpp 确认是否固定 2–4ms 或自适应
 2. `FrameScheduler` 在多组件同时 repaint（例如 AutoRenderOverlay 可见时是否会短路 Normal 优先级的波形层）的实际时序未验证
-3. `AppPreferences` 对 `KeyShortcutSettings` 的序列化仅硬编码 10 个 `kShortcutStorageKeys`；新增 ShortcutId 需同步更新数组（存在维护陷阱）
+3. `AppPreferences` 对 `KeyShortcutSettings` 的序列化已覆盖 22 个 `ShortcutId`（`kShortcutStorageKeys` 已同步扩展至 22 项）
 4. `TransportBarComponent::LayoutProfile::VST3AraSingleClip` 的具体隐藏/显示差异仅在 cpp 内，未在头文件接口中明确
 5. `RippleOverlayComponent::shouldIgnoreComponent` 依赖 `"minimalKnob"` 组件属性字符串，PianoRoll / ParameterPanel 是否一致设置该属性未全面审阅
 6. `PlayheadOverlayComponent`（本模块声明简单）与 `PianoRollComponent` 内独立 VBlank 绑定、`ArrangementViewComponent::scrollVBlankAttachment_` 的耦合关系未穷尽分析

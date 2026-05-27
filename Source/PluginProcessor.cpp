@@ -958,71 +958,70 @@ void OpenTuneAudioProcessor::configureReferenceAnalysisService()
 {
     referenceAnalysisService_.setAnalysisFunc(
         [this](const ReferenceAnalysisService::AnalysisJobKey& jobKey) {
+            ReferenceFeatureSet failed;
+            failed.producer = ReferenceFeatureProducer::Game;
+            failed.inputFingerprint = jobKey.renderRevision;
+
             MaterializationStore::MaterializationSnapshot snapshot;
             if (materializationStore_ == nullptr
                 || !materializationStore_->getSnapshot(jobKey.materializationId, snapshot)) {
-                MaterializationStore::DerivedAnalysis failed;
-                failed.inputFingerprint = jobKey.renderRevision;
-                failed.backendMode = 0;
-                failed.state = F0ExtractionState::Failed;
+                failed.status = ReferenceFeatureStatus::Failed;
                 failed.errorMessage = "AUTO Ref analysis could not read materialization";
                 return failed;
             }
             if (static_cast<int64_t>(snapshot.renderRevision) != jobKey.renderRevision) {
-                MaterializationStore::DerivedAnalysis failed;
-                failed.inputFingerprint = jobKey.renderRevision;
-                failed.backendMode = 0;
-                failed.state = F0ExtractionState::Failed;
+                failed.status = ReferenceFeatureStatus::Failed;
                 failed.errorMessage = "AUTO Ref analysis job is stale";
                 return failed;
             }
-            return buildReferenceDerivedAnalysis(snapshot, experimentalReferenceAlignMode_);
+            return buildReferenceFeatureSet(snapshot);
         });
     referenceAnalysisService_.addListener(this);
 }
 
-MaterializationStore::DerivedAnalysis OpenTuneAudioProcessor::buildReferenceDerivedAnalysis(
-    const MaterializationStore::MaterializationSnapshot& snapshot,
-    ExperimentalReferenceAlignMode mode)
+ReferenceFeatureSet OpenTuneAudioProcessor::buildReferenceFeatureSet(
+    const MaterializationStore::MaterializationSnapshot& snapshot)
 {
-    if (mode == ExperimentalReferenceAlignMode::Aggressive) {
-        return buildGameReferenceDerivedAnalysis(snapshot);
-    }
-    return buildBasicReferenceDerivedAnalysis(snapshot);
+    juce::ignoreUnused(experimentalReferenceAlignMode_);
+    return buildGameReferenceFeatureSet(snapshot);
 }
 
-MaterializationStore::DerivedAnalysis OpenTuneAudioProcessor::buildBasicReferenceDerivedAnalysis(
+ReferenceFeatureSet OpenTuneAudioProcessor::buildBasicReferenceFeatureSet(
     const MaterializationStore::MaterializationSnapshot& snapshot) const
 {
     return BasicReferenceFeatureBuilder::build(snapshot);
 }
 
-MaterializationStore::DerivedAnalysis OpenTuneAudioProcessor::buildGameReferenceDerivedAnalysis(
+ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
     const MaterializationStore::MaterializationSnapshot& snapshot)
 {
-    auto result = BasicReferenceFeatureBuilder::build(snapshot);
-    result.backendMode = 2; // GAME
+    ReferenceFeatureSet result;
+    result.producer = ReferenceFeatureProducer::Game;
+    result.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
+    result.sourceDurationSeconds = snapshot.audioBuffer != nullptr
+        ? TimeCoordinate::samplesToSeconds(snapshot.audioBuffer->getNumSamples(),
+                                           TimeCoordinate::kRenderSampleRate)
+        : 0.0;
 
-    auto failAggressive = [&](const juce::String& reason) {
-        result.state = F0ExtractionState::Failed;
-        result.basicDerivedNotes.clear();
-        result.temporalEvents.clear();
+    auto failGame = [&](const juce::String& reason) {
+        result.status = ReferenceFeatureStatus::Failed;
+        result.pitch.clear();
+        result.timing.clear();
         result.errorMessage = reason;
         return result;
     };
 
+    if (snapshot.audioBuffer == nullptr || snapshot.audioBuffer->getNumSamples() <= 0) {
+        return failGame("AUTO Ref GAME analysis requires materialization audio");
+    }
+
     if (!ensureNoteGeneratorReady() || noteGenerator_ == nullptr) {
-        return failAggressive("AUTO Ref Aggressive requires GAME note generator");
+        return failGame("AUTO Ref GAME analysis requires GAME note generator");
     }
 
     auto* const gameGenerator = dynamic_cast<GameNoteGenerator*>(noteGenerator_.get());
     if (gameGenerator == nullptr) {
-        return failAggressive("AUTO Ref Aggressive requires GAME backend and cannot fall back to Basic");
-    }
-
-    // 构建 GAME 输入
-    if (snapshot.audioBuffer == nullptr || snapshot.audioBuffer->getNumSamples() <= 0) {
-        return result;
+        return failGame("AUTO Ref GAME analysis requires GAME backend and cannot fall back to Basic");
     }
 
     NoteGeneratorInput input;
@@ -1036,43 +1035,60 @@ MaterializationStore::DerivedAnalysis OpenTuneAudioProcessor::buildGameReference
         std::lock_guard<std::mutex> lk(noteGeneratorInferenceMutex_);
         gameNotes = gameGenerator->generate(input);
     } catch (const std::exception& e) {
-        return failAggressive("AUTO Ref Aggressive GAME note generation failed: " + juce::String(e.what()));
+        return failGame("AUTO Ref GAME note generation failed: " + juce::String(e.what()));
     } catch (...) {
-        return failAggressive("AUTO Ref Aggressive GAME note generation failed");
+        return failGame("AUTO Ref GAME note generation failed");
     }
 
-    // 替换 notes 为 GAME 输出
-    result.basicDerivedNotes = std::move(gameNotes);
+    result.pitch.notes = std::move(gameNotes);
 
-    // 从 GAME notes 的 startTime 派生 temporal events
-    // GAME notes 的 startTime 是 bd2dur 从 segmenter boundaries 编码后的边界点
-    // 每个 voiced segment (presence=true) 对应一个 note
-    result.temporalEvents.clear();
-    for (const auto& note : result.basicDerivedNotes) {
-        MaterializationStore::DerivedAnalysis::TemporalEvent event;
-        event.sourceSeconds = note.startTime;
-        event.strength = 1.0f;
-        result.temporalEvents.push_back(event);
+    uint64_t nextAnchorId = 1;
+    double lastAcceptedSourceSeconds = 0.0;
+    for (const auto& note : result.pitch.notes) {
+        const double sourceSeconds = juce::jlimit(0.0, result.sourceDurationSeconds, note.startTime);
+        if (sourceSeconds <= 0.0 || sourceSeconds >= result.sourceDurationSeconds) {
+            continue;
+        }
+        if (!result.timing.anchors.empty()
+            && !TimeGridSnapshot::hasMinimumSourceSpacing(lastAcceptedSourceSeconds, sourceSeconds)) {
+            continue;
+        }
+
+        ReferenceTimingAnchor anchor;
+        anchor.anchorId = nextAnchorId++;
+        anchor.sourceSeconds = sourceSeconds;
+        anchor.strength = 1.0f;
+        anchor.kind = ReferenceTimingAnchorKind::Onset;
+        anchor.confidence = 1.0f;
+        result.timing.anchors.push_back(anchor);
+        lastAcceptedSourceSeconds = sourceSeconds;
     }
 
-    // 按 sourceSeconds 排序去重
-    std::sort(result.temporalEvents.begin(), result.temporalEvents.end(),
+    std::sort(result.timing.anchors.begin(), result.timing.anchors.end(),
               [](const auto& a, const auto& b) { return a.sourceSeconds < b.sourceSeconds; });
-    result.temporalEvents.erase(
-        std::unique(result.temporalEvents.begin(), result.temporalEvents.end(),
+    result.timing.anchors.erase(
+        std::unique(result.timing.anchors.begin(), result.timing.anchors.end(),
                     [](const auto& a, const auto& b) {
                         return std::abs(a.sourceSeconds - b.sourceSeconds) < 0.005;
                     }),
-        result.temporalEvents.end());
+        result.timing.anchors.end());
 
+    if (result.pitch.notes.empty() && result.timing.anchors.empty()) {
+        return failGame("AUTO Ref GAME analysis found no notes or timing anchors");
+    }
+
+    result.status = ReferenceFeatureStatus::Ready;
+    result.analysisRevision = 1;
     return result;
 }
 
 void OpenTuneAudioProcessor::analysisCompleted(
     uint64_t materializationId,
-    const MaterializationStore::DerivedAnalysis& result)
+    const ReferenceFeatureSet& result)
 {
-    if (materializationStore_ == nullptr || result.state != F0ExtractionState::Ready) {
+    if (materializationStore_ == nullptr
+        || !result.isReady()
+        || result.producer != ReferenceFeatureProducer::Game) {
         return;
     }
 
@@ -1084,7 +1100,7 @@ void OpenTuneAudioProcessor::analysisCompleted(
         return;
     }
 
-    materializationStore_->setDerivedAnalysis(materializationId, result);
+    materializationStore_->setReferenceFeatures(materializationId, result);
 }
 
 void OpenTuneAudioProcessor::analysisFailed(uint64_t materializationId, const juce::String& reason)
@@ -1098,15 +1114,16 @@ void OpenTuneAudioProcessor::analysisFailed(uint64_t materializationId, const ju
         return;
     }
 
-    MaterializationStore::DerivedAnalysis failed;
-    failed.state = F0ExtractionState::Failed;
+    ReferenceFeatureSet failed;
+    failed.producer = ReferenceFeatureProducer::Game;
+    failed.status = ReferenceFeatureStatus::Failed;
     failed.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
     failed.sourceDurationSeconds = snapshot.audioBuffer != nullptr
         ? TimeCoordinate::samplesToSeconds(snapshot.audioBuffer->getNumSamples(),
                                            TimeCoordinate::kRenderSampleRate)
         : 0.0;
     failed.errorMessage = reason;
-    materializationStore_->setDerivedAnalysis(materializationId, failed);
+    materializationStore_->setReferenceFeatures(materializationId, failed);
 }
 
 // ============================================================================
@@ -4586,19 +4603,21 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(uint64_t materializationId
         }
     }
 
-    MaterializationStore::DerivedAnalysis analysis;
-    const bool analysisReady = materializationStore_->getDerivedAnalysis(materializationId, analysis)
-        && analysis.state == F0ExtractionState::Ready
-        && analysis.backendMode == 2
-        && analysis.inputFingerprint == static_cast<int64_t>(snapshot.renderRevision);
+    ReferenceFeatureSet features;
+    const bool featuresReady = materializationStore_->getReferenceFeatures(materializationId, features)
+        && features.isReady()
+        && features.inputFingerprint == static_cast<int64_t>(snapshot.renderRevision)
+        && features.hasTimingAnchors();
 
-    if (!analysisReady) {
-        analysis = buildGameReferenceDerivedAnalysis(snapshot);
-        analysis.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
-        materializationStore_->setDerivedAnalysis(materializationId, analysis);
+    if (!featuresReady) {
+        features = buildBasicReferenceFeatureSet(snapshot);
+        features.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
+        if (features.isReady() && features.hasTimingAnchors()) {
+            materializationStore_->setReferenceFeatures(materializationId, features);
+        }
     }
 
-    if (analysis.state != F0ExtractionState::Ready) {
+    if (!features.isReady() || !features.hasTimingAnchors()) {
         return false;
     }
 
@@ -4611,7 +4630,7 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(uint64_t materializationId
     }
 
     std::vector<TimeHandle> handles;
-    handles.reserve(analysis.temporalEvents.size() + 2);
+    handles.reserve(features.timing.anchors.size() + 2);
 
     uint64_t nextHandleId = 1;
     auto pushHandle = [&](double sourceSeconds,
@@ -4632,8 +4651,8 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(uint64_t materializationId
     pushHandle(0.0, 0.0, HandleKind::ClipStart, true);
 
     std::vector<double> eventTimes;
-    eventTimes.reserve(analysis.temporalEvents.size());
-    for (const auto& event : analysis.temporalEvents) {
+    eventTimes.reserve(features.timing.anchors.size());
+    for (const auto& event : features.timing.anchors) {
         const double eventTime = juce::jlimit(0.0, durationSeconds, event.sourceSeconds);
         if (eventTime <= 0.0 || eventTime >= durationSeconds) {
             continue;
@@ -4799,16 +4818,32 @@ OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(uint64_t materializati
         return ReferenceAnalysisPreheatStatus::InvalidMaterialization;
     }
 
-    MaterializationStore::DerivedAnalysis analysis;
-    if (materializationStore_->getDerivedAnalysis(materializationId, analysis)
-        && analysis.state == F0ExtractionState::Ready
-        && analysis.inputFingerprint == static_cast<int64_t>(snapshot.renderRevision)) {
+    ReferenceFeatureSet features;
+    if (materializationStore_->getReferenceFeatures(materializationId, features)
+        && features.isReady()
+        && features.producer == ReferenceFeatureProducer::Game
+        && features.inputFingerprint == static_cast<int64_t>(snapshot.renderRevision)) {
         return ReferenceAnalysisPreheatStatus::AlreadyReady;
     }
 
-    if (analysis.state == F0ExtractionState::Failed
-        && analysis.inputFingerprint == static_cast<int64_t>(snapshot.renderRevision)) {
+    if (features.status == ReferenceFeatureStatus::Failed
+        && features.producer == ReferenceFeatureProducer::Game
+        && features.inputFingerprint == static_cast<int64_t>(snapshot.renderRevision)) {
         return ReferenceAnalysisPreheatStatus::AnalysisFailed;
+    }
+
+    if (features.status != ReferenceFeatureStatus::Extracting
+        || features.producer != ReferenceFeatureProducer::Game
+        || features.inputFingerprint != static_cast<int64_t>(snapshot.renderRevision)) {
+        ReferenceFeatureSet extracting;
+        extracting.producer = ReferenceFeatureProducer::Game;
+        extracting.status = ReferenceFeatureStatus::Extracting;
+        extracting.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
+        extracting.sourceDurationSeconds = snapshot.audioBuffer != nullptr
+            ? TimeCoordinate::samplesToSeconds(snapshot.audioBuffer->getNumSamples(),
+                                               TimeCoordinate::kRenderSampleRate)
+            : 0.0;
+        materializationStore_->setReferenceFeatures(materializationId, extracting);
     }
 
     referenceAnalysisService_.submitAnalysis(materializationId,
@@ -4881,14 +4916,15 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         return result;
     }
 
-    MaterializationStore::DerivedAnalysis targetFeatures;
-    if (!materializationStore_->getDerivedAnalysis(targetPlacement.materializationId, targetFeatures)
-        || targetFeatures.state != F0ExtractionState::Ready
+    ReferenceFeatureSet targetFeatures;
+    if (!materializationStore_->getReferenceFeatures(targetPlacement.materializationId, targetFeatures)
+        || !targetFeatures.isReady()
+        || targetFeatures.producer != ReferenceFeatureProducer::Game
         || targetFeatures.inputFingerprint != static_cast<int64_t>(targetSnapshot.renderRevision)) {
-        targetFeatures = buildReferenceDerivedAnalysis(targetSnapshot, experimentalReferenceAlignMode_);
-        materializationStore_->setDerivedAnalysis(targetPlacement.materializationId, targetFeatures);
+        targetFeatures = buildReferenceFeatureSet(targetSnapshot);
+        materializationStore_->setReferenceFeatures(targetPlacement.materializationId, targetFeatures);
     }
-    if (targetFeatures.state != F0ExtractionState::Ready) {
+    if (!targetFeatures.isReady()) {
         result.status = ReferenceAlignmentResult::Status::TargetAnalysisNotReady;
         result.message = targetFeatures.errorMessage.isNotEmpty()
             ? targetFeatures.errorMessage
@@ -4896,14 +4932,15 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         return result;
     }
 
-    MaterializationStore::DerivedAnalysis referenceFeatures;
-    if (!materializationStore_->getDerivedAnalysis(referencePlacement.materializationId, referenceFeatures)
-        || referenceFeatures.state != F0ExtractionState::Ready
+    ReferenceFeatureSet referenceFeatures;
+    if (!materializationStore_->getReferenceFeatures(referencePlacement.materializationId, referenceFeatures)
+        || !referenceFeatures.isReady()
+        || referenceFeatures.producer != ReferenceFeatureProducer::Game
         || referenceFeatures.inputFingerprint != static_cast<int64_t>(referenceSnapshot.renderRevision)) {
-        referenceFeatures = buildReferenceDerivedAnalysis(referenceSnapshot, experimentalReferenceAlignMode_);
-        materializationStore_->setDerivedAnalysis(referencePlacement.materializationId, referenceFeatures);
+        referenceFeatures = buildReferenceFeatureSet(referenceSnapshot);
+        materializationStore_->setReferenceFeatures(referencePlacement.materializationId, referenceFeatures);
     }
-    if (referenceFeatures.state != F0ExtractionState::Ready) {
+    if (!referenceFeatures.isReady()) {
         result.status = ReferenceAlignmentResult::Status::ReferenceAnalysisNotReady;
         result.message = referenceFeatures.errorMessage.isNotEmpty()
             ? referenceFeatures.errorMessage
@@ -4920,11 +4957,27 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     }
 
     const auto oldSegments = copyCorrectedSegments(oldCurve);
-    const auto oldTimeGrid = targetSnapshot.timeGrid;
-    const auto referenceTimeGrid = referenceSnapshot.timeGrid;
-    if (oldTimeGrid == nullptr || referenceTimeGrid == nullptr) {
+    const double targetDurationSeconds = targetSnapshot.audioBuffer != nullptr
+        ? TimeCoordinate::samplesToSeconds(targetSnapshot.audioBuffer->getNumSamples(),
+                                           TimeCoordinate::kRenderSampleRate)
+        : targetFeatures.sourceDurationSeconds;
+    const double referenceDurationSeconds = referenceSnapshot.audioBuffer != nullptr
+        ? TimeCoordinate::samplesToSeconds(referenceSnapshot.audioBuffer->getNumSamples(),
+                                           TimeCoordinate::kRenderSampleRate)
+        : referenceFeatures.sourceDurationSeconds;
+    if (!(targetDurationSeconds > 0.0) || !(referenceDurationSeconds > 0.0)) {
         result.status = ReferenceAlignmentResult::Status::InvalidTimeGrid;
-        result.message = "AUTO Ref requires target and reference TimeGrid";
+        result.message = "AUTO Ref requires positive target and reference durations";
+        return result;
+    }
+
+    auto oldTimeGrid = targetSnapshot.timeGrid;
+    if (oldTimeGrid == nullptr) {
+        oldTimeGrid = TimeGridSnapshot::makeIdentity(targetDurationSeconds);
+    }
+    if (oldTimeGrid == nullptr) {
+        result.status = ReferenceAlignmentResult::Status::InvalidTimeGrid;
+        result.message = "AUTO Ref could not bootstrap target TimeGrid";
         return result;
     }
 
@@ -4933,16 +4986,17 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     request.target.materializationId = targetPlacement.materializationId;
     request.target.timelineStartSeconds = targetPlacement.timelineStartSeconds;
     request.target.timelineEndSeconds = targetPlacement.timelineEndSeconds();
-    request.target.timeGrid = oldTimeGrid;
     request.reference.placementId = referencePlacement.placementId;
     request.reference.materializationId = referencePlacement.materializationId;
     request.reference.timelineStartSeconds = referencePlacement.timelineStartSeconds;
     request.reference.timelineEndSeconds = referencePlacement.timelineEndSeconds();
-    request.reference.timeGrid = referenceTimeGrid;
+    request.targetTimeMap = EffectiveTimeMap::fromTimeGrid(targetSnapshot.timeGrid, targetDurationSeconds);
+    request.referenceTimeMap = EffectiveTimeMap::fromTimeGrid(referenceSnapshot.timeGrid, referenceDurationSeconds);
     request.targetFeatures = targetFeatures;
     request.referenceFeatures = referenceFeatures;
     request.targetNotesBefore = oldNotes;
     request.targetSegmentsBefore = oldSegments;
+    request.targetTimeGridBefore = oldTimeGrid;
     request.overlapStartTimelineSeconds = overlapStart;
     request.overlapEndTimelineSeconds = overlapEnd;
 

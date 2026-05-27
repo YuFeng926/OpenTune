@@ -104,7 +104,7 @@ void ReferenceAnalysisService::workerLoop()
         }
 
         const uint64_t matId = job.materializationId;
-        MaterializationStore::DerivedAnalysis result;
+        ReferenceFeatureSet result;
         bool success = false;
         juce::String errorReason;
 
@@ -114,7 +114,7 @@ void ReferenceAnalysisService::workerLoop()
             } else {
                 result = analysisFunc(job);
             }
-            success = result.state == F0ExtractionState::Ready;
+            success = result.status == ReferenceFeatureStatus::Ready;
             if (!success) {
                 errorReason = result.errorMessage.isNotEmpty()
                     ? result.errorMessage
@@ -157,7 +157,7 @@ void ReferenceAnalysisService::workerLoop()
 }
 
 void ReferenceAnalysisService::notifyListenersCompleted(
-    uint64_t matId, const MaterializationStore::DerivedAnalysis& result)
+    uint64_t matId, const ReferenceFeatureSet& result)
 {
     auto notify = [this, alive = aliveToken_, matId, result]() {
         if (!alive->load(std::memory_order_acquire)) {

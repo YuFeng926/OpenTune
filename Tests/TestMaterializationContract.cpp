@@ -1,10 +1,10 @@
 /**
- * Tests/TestMaterializationContract.cpp — L4 contract tests for
- * MaterializationStore Derived Analysis invariants.
+ * Tests/TestMaterializationContract.cpp - L4 contract tests for
+ * MaterializationStore ReferenceFeatureSet invariants.
  *
- * Verifies that derived analysis is NOT exposed via the general-purpose
- * snapshot API (separation of concerns), and that setNotes does NOT
- * invalidate derived analysis (they are independent data streams).
+ * Verifies that reference features are NOT exposed through the general-purpose
+ * MaterializationSnapshot API, and that setNotes does NOT invalidate the
+ * reference feature cache.
  *
  * Suite aggregator: runMaterializationContractSuite()
  */
@@ -14,39 +14,38 @@
 
 namespace {
 
-// Helper: build a minimal DerivedAnalysis in Ready state
-MaterializationStore::DerivedAnalysis makeReadyAnalysis()
+ReferenceFeatureSet makeReadyFeatures()
 {
-    MaterializationStore::DerivedAnalysis da;
-    da.state = F0ExtractionState::Ready;
-    da.analysisRevision = 1;
-    da.backendMode = 0;
+    ReferenceFeatureSet features;
+    features.status = ReferenceFeatureStatus::Ready;
+    features.producer = ReferenceFeatureProducer::Game;
+    features.analysisRevision = 1;
+    features.inputFingerprint = 7;
+    features.sourceDurationSeconds = 3.0;
 
     Note note;
-    note.startTime = 0.1;
-    note.endTime = 0.4;
+    note.startTime = 0.10;
+    note.endTime = 0.45;
     note.pitch = 440.0f;
-    note.originalPitch = 439.0f;
+    note.originalPitch = 438.0f;
     note.isVoiced = true;
-    da.basicDerivedNotes.push_back(note);
+    features.pitch.notes.push_back(note);
 
-    da.inputFingerprint = 1;
-    return da;
+    ReferenceTimingAnchor anchor;
+    anchor.anchorId = 11;
+    anchor.sourceSeconds = 0.30;
+    anchor.strength = 0.90f;
+    anchor.kind = ReferenceTimingAnchorKind::Onset;
+    anchor.confidence = 0.95f;
+    features.timing.anchors.push_back(anchor);
+    return features;
 }
 
 } // namespace
 
-// ============================================================================
-// Test 1: DerivedAnalysisNotInSnapshot
-//
-// The MaterializationSnapshot struct does NOT have a derivedAnalysis field.
-// This test verifies the snapshot API compiles and returns correctly without
-// derived analysis (just verify getSnapshot succeeds and materializationId
-// matches).
-// ============================================================================
-void runMaterializationContract_DerivedAnalysisNotInSnapshot()
+void runMaterializationContract_ReferenceFeaturesNotInSnapshot()
 {
-    constexpr const char* testName = "MaterializationContract_DerivedAnalysisNotInSnapshot";
+    constexpr const char* testName = "MaterializationContract_ReferenceFeaturesNotInSnapshot";
 
     MaterializationStore store;
     const uint64_t matId = store.createMaterialization(makeTestClipRequest());
@@ -55,41 +54,29 @@ void runMaterializationContract_DerivedAnalysisNotInSnapshot()
         return;
     }
 
-    // Seed a derived analysis
-    const auto da = makeReadyAnalysis();
-    if (!store.setDerivedAnalysis(matId, da)) {
-        logFail(testName, "setDerivedAnalysis returned false");
+    if (!store.setReferenceFeatures(matId, makeReadyFeatures())) {
+        logFail(testName, "setReferenceFeatures returned false");
         return;
     }
 
-    // getSnapshot should succeed — derived analysis is NOT in the snapshot struct
     MaterializationStore::MaterializationSnapshot snap;
     if (!store.getSnapshot(matId, snap)) {
         logFail(testName, "getSnapshot returned false");
         return;
     }
-
     if (snap.materializationId != matId) {
         logFail(testName, "snapshot materializationId mismatch");
         return;
     }
 
-    // The snapshot struct has no derivedAnalysis field — the fact that this
-    // test compiles proves the contract (derived analysis is separate from
-    // the general-purpose snapshot).
+    // The snapshot struct intentionally has no ReferenceFeatureSet field.
+    // Compilation plus successful snapshot retrieval is the contract.
     logPass(testName);
 }
 
-// ============================================================================
-// Test 2: DerivedAnalysisPersistsAcrossSetNotes
-//
-// setNotes should NOT invalidate derived analysis. User note edits and
-// derived analysis are independent data streams. The contract says:
-// "setNotes does NOT invalidate — user note edits are independent."
-// ============================================================================
-void runMaterializationContract_DerivedAnalysisPersistsAcrossSetNotes()
+void runMaterializationContract_ReferenceFeaturesPersistAcrossSetNotes()
 {
-    constexpr const char* testName = "MaterializationContract_DerivedAnalysisPersistsAcrossSetNotes";
+    constexpr const char* testName = "MaterializationContract_ReferenceFeaturesPersistAcrossSetNotes";
 
     MaterializationStore store;
     const uint64_t matId = store.createMaterialization(makeTestClipRequest());
@@ -98,27 +85,22 @@ void runMaterializationContract_DerivedAnalysisPersistsAcrossSetNotes()
         return;
     }
 
-    // Seed a valid derived analysis
-    const auto da = makeReadyAnalysis();
-    if (!store.setDerivedAnalysis(matId, da)) {
-        logFail(testName, "setDerivedAnalysis returned false");
+    if (!store.setReferenceFeatures(matId, makeReadyFeatures())) {
+        logFail(testName, "setReferenceFeatures returned false");
         return;
     }
-    {
-        MaterializationStore::DerivedAnalysis check;
-        if (!store.getDerivedAnalysis(matId, check)
-            || check.state != F0ExtractionState::Ready || check.analysisRevision <= 0) {
-            logFail(testName, "precondition: should have valid derived analysis");
-            return;
-        }
+
+    ReferenceFeatureSet before;
+    if (!store.getReferenceFeatures(matId, before) || !before.isReady()) {
+        logFail(testName, "precondition: should have ready reference features");
+        return;
     }
 
-    // Now set notes — this should NOT invalidate derived analysis
     std::vector<Note> notes;
     Note userNote;
-    userNote.startTime = 0.2;
-    userNote.endTime = 0.8;
-    userNote.pitch = 523.25f; // C5
+    userNote.startTime = 0.20;
+    userNote.endTime = 0.80;
+    userNote.pitch = 523.25f;
     userNote.originalPitch = 520.0f;
     userNote.isVoiced = true;
     notes.push_back(userNote);
@@ -128,36 +110,31 @@ void runMaterializationContract_DerivedAnalysisPersistsAcrossSetNotes()
         return;
     }
 
-    // Derived analysis MUST still be valid after setNotes
-    {
-        MaterializationStore::DerivedAnalysis check;
-        if (!store.getDerivedAnalysis(matId, check)
-            || check.state != F0ExtractionState::Ready || check.analysisRevision <= 0) {
-            logFail(testName, "derived analysis should NOT be invalidated by setNotes");
-            return;
-        }
-    }
-
-    // Also verify the derived analysis data is intact
-    MaterializationStore::DerivedAnalysis out;
-    if (!store.getDerivedAnalysis(matId, out)) {
-        logFail(testName, "getDerivedAnalysis returned false after setNotes");
+    ReferenceFeatureSet after;
+    if (!store.getReferenceFeatures(matId, after) || !after.isReady()) {
+        logFail(testName, "reference feature cache should survive setNotes");
         return;
     }
-    if (out.state != F0ExtractionState::Ready || out.analysisRevision <= 0) {
-        logFail(testName, "derived analysis data should be unchanged after setNotes (store auto-bumps revision)");
+    if (after.analysisRevision != before.analysisRevision) {
+        logFail(testName, "setNotes should not bump reference feature cache revision");
+        return;
+    }
+    if (after.producer != ReferenceFeatureProducer::Game) {
+        logFail(testName, "setNotes should not alter reference feature producer");
+        return;
+    }
+    if (after.pitch.notes.size() != before.pitch.notes.size()
+        || after.timing.anchors.size() != before.timing.anchors.size()) {
+        logFail(testName, "setNotes should not change cached reference features");
         return;
     }
 
     logPass(testName);
 }
 
-// ============================================================================
-// Suite entry point
-// ============================================================================
 void runMaterializationContractSuite()
 {
     logSection("MaterializationContract");
-    runMaterializationContract_DerivedAnalysisNotInSnapshot();
-    runMaterializationContract_DerivedAnalysisPersistsAcrossSetNotes();
+    runMaterializationContract_ReferenceFeaturesNotInSnapshot();
+    runMaterializationContract_ReferenceFeaturesPersistAcrossSetNotes();
 }

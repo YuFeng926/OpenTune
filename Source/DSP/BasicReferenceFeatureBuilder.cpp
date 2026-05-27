@@ -1,6 +1,5 @@
 #include "BasicReferenceFeatureBuilder.h"
 
-#include "../Utils/MaterializationState.h"
 #include "../Utils/TimeCoordinate.h"
 #include "../Utils/TimeGrid.h"
 
@@ -19,33 +18,33 @@ bool isVoiced(float f0) noexcept
     return std::isfinite(f0) && f0 > 0.0f;
 }
 
-bool appendTemporalEvent(std::vector<MaterializationStore::DerivedAnalysis::TemporalEvent>& events,
-                         double sourceSeconds,
-                         float strength,
-                         MaterializationStore::DerivedAnalysis::TemporalEventKind kind,
-                         uint64_t& nextId)
+bool appendTimingAnchor(std::vector<ReferenceTimingAnchor>& anchors,
+                        double sourceSeconds,
+                        float strength,
+                        ReferenceTimingAnchorKind kind,
+                        uint64_t& nextId)
 {
     if (sourceSeconds <= 0.0) {
         return false;
     }
-    if (!events.empty()
-        && !TimeGridSnapshot::hasMinimumSourceSpacing(events.back().sourceSeconds, sourceSeconds)) {
+    if (!anchors.empty()
+        && !TimeGridSnapshot::hasMinimumSourceSpacing(anchors.back().sourceSeconds, sourceSeconds)) {
         return false;
     }
 
-    MaterializationStore::DerivedAnalysis::TemporalEvent event;
-    event.eventId = nextId++;
-    event.sourceSeconds = sourceSeconds;
-    event.strength = strength;
-    event.kind = kind;
-    event.confidence = strength;
-    events.push_back(event);
+    ReferenceTimingAnchor anchor;
+    anchor.anchorId = nextId++;
+    anchor.sourceSeconds = sourceSeconds;
+    anchor.strength = strength;
+    anchor.kind = kind;
+    anchor.confidence = strength;
+    anchors.push_back(anchor);
     return true;
 }
 
 void buildTemporalEventsFromF0(const std::vector<float>& f0,
                                double secondsPerFrame,
-                               std::vector<MaterializationStore::DerivedAnalysis::TemporalEvent>& events)
+                               std::vector<ReferenceTimingAnchor>& anchors)
 {
     uint64_t nextId = 1;
     bool wasVoiced = false;
@@ -61,19 +60,19 @@ void buildTemporalEventsFromF0(const std::vector<float>& f0,
 
         const double sourceSeconds = static_cast<double>(i) * secondsPerFrame;
         if (!wasVoiced) {
-            appendTemporalEvent(events,
-                                sourceSeconds,
-                                1.0f,
-                                MaterializationStore::DerivedAnalysis::TemporalEventKind::Onset,
-                                nextId);
+            appendTimingAnchor(anchors,
+                               sourceSeconds,
+                               1.0f,
+                               ReferenceTimingAnchorKind::Onset,
+                               nextId);
         } else if (previousVoiced > 0.0f) {
             const float cents = std::abs(1200.0f * std::log2(value / previousVoiced));
             if (cents >= kPitchTransitionCents) {
-                appendTemporalEvent(events,
-                                    sourceSeconds,
-                                    0.85f,
-                                    MaterializationStore::DerivedAnalysis::TemporalEventKind::PitchTransition,
-                                    nextId);
+                appendTimingAnchor(anchors,
+                                   sourceSeconds,
+                                   0.85f,
+                                   ReferenceTimingAnchorKind::PitchTransition,
+                                   nextId);
             }
         }
 
@@ -167,21 +166,21 @@ std::vector<Note> buildNotesFromF0(const std::vector<float>& f0, double secondsP
 
 } // namespace
 
-MaterializationStore::DerivedAnalysis BasicReferenceFeatureBuilder::build(
+ReferenceFeatureSet BasicReferenceFeatureBuilder::build(
     const MaterializationStore::MaterializationSnapshot& snapshot)
 {
-    MaterializationStore::DerivedAnalysis result;
+    ReferenceFeatureSet result;
+    result.producer = ReferenceFeatureProducer::Basic;
     result.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
-    result.backendMode = 0;
 
     if (snapshot.audioBuffer == nullptr || snapshot.audioBuffer->getNumSamples() <= 0) {
-        result.state = F0ExtractionState::Failed;
+        result.status = ReferenceFeatureStatus::Failed;
         result.errorMessage = "AUTO Ref analysis requires materialization audio";
         return result;
     }
 
     if (snapshot.pitchCurve == nullptr) {
-        result.state = F0ExtractionState::Failed;
+        result.status = ReferenceFeatureStatus::Failed;
         result.errorMessage = "AUTO Ref analysis requires original F0";
         return result;
     }
@@ -191,7 +190,7 @@ MaterializationStore::DerivedAnalysis BasicReferenceFeatureBuilder::build(
         || pitchSnapshot->getOriginalF0().empty()
         || pitchSnapshot->getHopSize() <= 0
         || pitchSnapshot->getSampleRate() <= 0.0) {
-        result.state = F0ExtractionState::Failed;
+        result.status = ReferenceFeatureStatus::Failed;
         result.errorMessage = "AUTO Ref analysis requires original F0";
         return result;
     }
@@ -203,27 +202,27 @@ MaterializationStore::DerivedAnalysis BasicReferenceFeatureBuilder::build(
     const auto& originalF0 = pitchSnapshot->getOriginalF0();
     const double secondsPerFrame =
         static_cast<double>(pitchSnapshot->getHopSize()) / pitchSnapshot->getSampleRate();
-    result.basicDerivedNotes = buildNotesFromF0(originalF0, secondsPerFrame);
-    buildTemporalEventsFromF0(originalF0, secondsPerFrame, result.temporalEvents);
+    result.pitch.notes = buildNotesFromF0(originalF0, secondsPerFrame);
+    buildTemporalEventsFromF0(originalF0, secondsPerFrame, result.timing.anchors);
 
-    std::sort(result.temporalEvents.begin(), result.temporalEvents.end(),
+    std::sort(result.timing.anchors.begin(), result.timing.anchors.end(),
               [](const auto& a, const auto& b) {
                   return a.sourceSeconds < b.sourceSeconds;
               });
-    result.temporalEvents.erase(
-        std::unique(result.temporalEvents.begin(), result.temporalEvents.end(),
+    result.timing.anchors.erase(
+        std::unique(result.timing.anchors.begin(), result.timing.anchors.end(),
                     [](const auto& a, const auto& b) {
                         return std::abs(a.sourceSeconds - b.sourceSeconds) < 1.0e-9;
                     }),
-        result.temporalEvents.end());
+        result.timing.anchors.end());
 
-    if (result.basicDerivedNotes.empty() && result.temporalEvents.size() < 2) {
-        result.state = F0ExtractionState::Failed;
+    if (result.pitch.notes.empty() && result.timing.anchors.size() < 2) {
+        result.status = ReferenceFeatureStatus::Failed;
         result.errorMessage = "AUTO Ref analysis found no source-derived notes or temporal events";
         return result;
     }
 
-    result.state = F0ExtractionState::Ready;
+    result.status = ReferenceFeatureStatus::Ready;
     result.analysisRevision = 1;
     return result;
 }

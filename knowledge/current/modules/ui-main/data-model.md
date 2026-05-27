@@ -2,7 +2,7 @@
 module: ui-main
 type: data-model
 generated: true
-date: 2026-05-05
+date: 2026-05-27
 warning: "⚠️ 基于源码扫描生成，可能存在遗漏或过时信息"
 ---
 
@@ -28,11 +28,21 @@ AppPreferencesState
 │   │   ├─ float horizontalZoomFactor
 │   │   ├─ float verticalZoomFactor
 │   │   └─ float scrollSpeed
-│   └─ RenderingPriority renderingPriority                # GpuFirst / CpuFirst（默认 GpuFirst）
+│   ├─ RenderingPriority renderingPriority                # GpuFirst / CpuFirst（默认 GpuFirst）
+│   ├─ VocoderModelWeight vocoderModelWeight              # Community / Coulin9 V4
+│   ├─ bool experimentalFeaturesEnabled                   # 实验性功能开关（默认 false）
+│   ├─ ExperimentalReferenceAlignMode experimentalReferenceAlignMode # Off / Basic / Aggressive
+│   ├─ SnapSettings snap
+│   │   ├─ bool enabled
+│   │   └─ Mode mode                                      # Off / Beat / Bar / Second / Count
+│   ├─ TrackColorMode trackColorMode                     # Random / Custom（默认 Random）
+│   └─ KeyShortcutSettings shortcuts                     # 22 个快捷键绑定（从 Standalone-only 提升到 Shared）
+│       └─ std::array<ShortcutBinding, ShortcutId::Count> bindings
+│           # 原有 10 项: PlayPause, Stop, PlayFromStart, Undo, Redo, Cut, Copy, Paste, SelectAll, Delete
+│           # 新增 6 项编曲: SplitClip, MergeClips, DuplicateClip, NudgeLeft, NudgeRight, ToggleSnap
+│           # 新增 6 项工具: ToolDrawNote, ToolSelect, ToolLineAnchor, ToolHandDraw, ToolAutoTune, ToolTimeTool
+│           # 新增 1 项: CancelSelection
 └─ StandalonePreferencesState standalone
-    ├─ KeyShortcutSettings shortcuts
-    │   └─ std::array<ShortcutBinding, ShortcutId::Count> bindings
-    │       # 10 个条目: PlayPause, Stop, PlayFromStart, Undo, Redo, Cut, Copy, Paste, SelectAll, Delete
     └─ MouseTrailConfig::TrailTheme mouseTrailTheme       # None/Classic/Neon/Fire/Ocean/Galaxy/CherryBlossom/Matrix
 ```
 
@@ -50,17 +60,36 @@ AppPreferencesState
 | `shared.zoom.verticalFactor` | double | ZoomSensitivity 默认 |
 | `shared.scroll.speed` | double | ZoomSensitivity 默认 |
 | `shared.rendering.priority` | string token | `gpu-first` |
+| `shared.shortcuts.playPause` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.stop` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.playFromStart` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.undo` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.redo` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.cut` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.copy` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.paste` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.selectAll` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.delete` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.splitClip` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.mergeClips` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.duplicateClip` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.nudgeLeft` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.nudgeRight` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.toggleSnap` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.toolDrawNote` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.toolSelect` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.toolLineAnchor` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.toolHandDraw` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.toolAutoTune` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.toolTimeTool` | canonical shortcut string | 默认绑定 |
+| `shared.shortcuts.cancelSelection` | canonical shortcut string | 默认绑定 |
+| `shared.trackColor.mode` | string token | `random` |
+| `shared.experimentalFeatures.enabled` | bool | false |
+| `shared.experimental.referenceAlignMode` | string token | `off` |
+| `shared.vocoderModelWeight` | string token | `community` |
+| `shared.snap.enabled` | bool | false |
+| `shared.snap.mode` | string token | `off` |
 | `standalone.mouseTrail.theme` | string token | `classic` |
-| `standalone.shortcuts.playPause` | canonical shortcut string | 默认绑定 |
-| `standalone.shortcuts.stop` | canonical shortcut string | 默认绑定 |
-| `standalone.shortcuts.playFromStart` | canonical shortcut string | 默认绑定 |
-| `standalone.shortcuts.undo` | canonical shortcut string | 默认绑定 |
-| `standalone.shortcuts.redo` | canonical shortcut string | 默认绑定 |
-| `standalone.shortcuts.cut` | canonical shortcut string | 默认绑定 |
-| `standalone.shortcuts.copy` | canonical shortcut string | 默认绑定 |
-| `standalone.shortcuts.paste` | canonical shortcut string | 默认绑定 |
-| `standalone.shortcuts.selectAll` | canonical shortcut string | 默认绑定 |
-| `standalone.shortcuts.delete` | canonical shortcut string | 默认绑定 |
 
 **存储格式**：`juce::PropertiesFile::storeAsXML`
 **路径**：`userApplicationDataDirectory/OpenTune/app-preferences.settings`

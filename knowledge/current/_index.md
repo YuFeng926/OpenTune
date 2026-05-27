@@ -1,19 +1,20 @@
 ---
 spec_version: 1.0.0
 generated_by: orchestrator-agent
-last_updated: 2026-05-05
+last_updated: 2026-05-27
 ---
 
 # Spec 文档索引
 
-## 最新版本：2026-05-05_v1.0
+## 最新版本：2026-05-27_v1.5
 
-> 跨日期规则：因 2026-05-05 ≠ 上次运行日期 2026-04-10，版本号重置为 v1.0；旧 2026-04-10 版本作为快照归档。
+> 跨日期规则：因 2026-05-27 ≠ 上次运行日期 2026-05-05，版本号重置为 v1.0；旧 2026-05-05 版本作为快照归档。
 
 ## 版本历史
 
 | 版本 | 日期 | 模块数 | 文档数 | 说明 |
 |------|------|--------|--------|------|
+| 2026-05-27_v1.5 | 2026-05-27 | 9 | 43 | Track-level color system, ImportDropTarget, shortcuts migrated to Shared, experimental features gate, SnapSettings, ARA revision-based PendingBirth |
 | 2026-05-05_v1.0 | 2026-05-05 | 9 | 43 | 全量重建：新增 ara-vst3 模块；同步 v1.3+ ARA/VST3 双格式、Materialization Pipeline、UndoManager、ChromaKeyDetector、CrossoverMixer、OnnxVocoderBase、Editor/Preferences 等结构变更 |
 | 2026-04-10_v1.0 | 2026-04-10 | 8 | 38 | 初次生成 |
 
@@ -49,15 +50,23 @@ last_updated: 2026-05-05
 
 ## 本次运行摘要
 
-- 运行时间：2026-05-05
-- 运行 ID：2026-05-05_v1.0
-- 新增/更新文档：43 份（9 模块 × 4 文档 + 7 全局）
-- 模块结果：9 success / 0 partial / 0 failed
-- 术语冲突：16 条（见 `.knowledge-work/conflicts.json`）
-- HyperWiki 模式：跳过（MCP 不可用）
+- 运行时间：2026-05-27
+- 运行 ID：2026-05-27_v1.5
+- 更新文档：10 份（部分模块 data-model / api / business 增量更新）
+- 模块结果：10 success / 0 partial / 0 failed
 - 主路径：源码扫描（Glob + Grep + Read）
 
-## v1.3+ 关键架构变更（本次同步）
+## v1.5.0 架构变更
+
+- **Track-Level Color System**：Placement::colour 移除 → TrackState::colour 轨道级颜色；新增 TrackColorMode (Random/Custom) 枚举
+- **Import Drop UX**：filesDropped 从弹出模态框改为 ImportDropTarget 几何解析（ExistingTrack/NewTrack/FallbackActiveTrack/Reject）+ 拖拽悬停预览
+- **Shortcuts 提升到 Shared**：KeyShortcutSettings 从 StandalonePreferencesState 提升到 SharedPreferencesState；storage key 从 standalone.shortcuts.* 改为 shared.shortcuts.*；新增工具切换快捷键（6 项）+ 编曲快捷键（6 项）+ 取消选择，从 10 项扩展至 22 项
+- **Experimental Features Gate**：新增 experimentalFeaturesEnabled 布尔开关；新增 ExperimentalReferenceAlignMode 枚举（Off/Basic/Aggressive）控制参考对齐行为
+- **Snap Settings**：新增 SnapSettings 结构体（Off/Beat/Bar/Second/Count）+ 吸附设置页面
+- **ARA Birth Lifecycle Revision-based**：从 single-queue 改为 per-persistentId PendingBirth + revision-based stale rejection，确保 stale worker 在 commit 前丢弃
+- **Arrangement Shortcut Undo/Redo**：新增编曲级撤销（clip split/merge/duplicate/nudge）；ArrangementRenderModelCache 重构；WaveformTileCache key 化；cross-track drag preview；vertical geometry caching；non-ARA 编译守卫
+
+## v1.3+ 关键架构变更（2026-05-05 同步）
 
 1. **双格式发布**：Standalone + VST3/ARA，通过 `EditorFactory` seam 共享 `PluginProcessor` 内核
 2. **Materialization Pipeline**：`MaterializationStore` + `SourceStore` + `StandaloneArrangement` 三件套，编辑/渲染/播放分离

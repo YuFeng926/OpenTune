@@ -1,9 +1,9 @@
 /**
- * Tests/TestMaterializationDerivedAnalysis.cpp — L3 tests for
- * MaterializationStore DerivedAnalysis slot lifecycle.
+ * Tests/TestMaterializationDerivedAnalysis.cpp - L3 tests for the
+ * MaterializationStore ReferenceFeatureSet cache lifecycle.
  *
  * Covers set/get, invalidation on pitch-curve change, and invalidation
- * on audio replacement per the Derived Analysis API contract.
+ * on audio replacement per the reference feature cache contract.
  *
  * Suite aggregator: runMaterializationDerivedAnalysisSuite()
  */
@@ -13,42 +13,47 @@
 
 namespace {
 
-// Helper: build a minimal DerivedAnalysis for a single "Ready" state
-MaterializationStore::DerivedAnalysis makeReadyAnalysis()
+ReferenceFeatureSet makeReadyFeatures()
 {
-    MaterializationStore::DerivedAnalysis da;
-    da.state = F0ExtractionState::Ready;
-    da.analysisRevision = 1;
-    da.backendMode = 0;
+    ReferenceFeatureSet features;
+    features.status = ReferenceFeatureStatus::Ready;
+    features.producer = ReferenceFeatureProducer::Basic;
+    features.analysisRevision = 1;
+    features.inputFingerprint = 42;
+    features.sourceDurationSeconds = 2.0;
 
     Note note;
-    note.startTime = 0.1;
-    note.endTime = 0.4;
+    note.startTime = 0.10;
+    note.endTime = 0.40;
     note.pitch = 440.0f;
     note.originalPitch = 439.0f;
     note.isVoiced = true;
-    da.basicDerivedNotes.push_back(note);
+    features.pitch.notes.push_back(note);
 
-    MaterializationStore::DerivedAnalysis::TemporalEvent event;
-    event.eventId = 1;
-    event.sourceSeconds = 0.25;
-    event.strength = 0.85f;
-    event.kind = MaterializationStore::DerivedAnalysis::TemporalEventKind::PitchTransition;
-    event.confidence = 0.85f;
-    da.temporalEvents.push_back(event);
+    ReferenceTimingAnchor anchor;
+    anchor.anchorId = 1;
+    anchor.sourceSeconds = 0.25;
+    anchor.strength = 0.85f;
+    anchor.kind = ReferenceTimingAnchorKind::PitchTransition;
+    anchor.confidence = 0.85f;
+    features.timing.anchors.push_back(anchor);
+    return features;
+}
 
-    da.inputFingerprint = 42;
-    return da;
+bool isReferenceCacheCleared(const ReferenceFeatureSet& features)
+{
+    return features.status == ReferenceFeatureStatus::NotRequested
+        && features.analysisRevision == 0
+        && features.pitch.notes.empty()
+        && features.timing.anchors.empty()
+        && features.inputFingerprint == 0;
 }
 
 } // namespace
 
-// ============================================================================
-// Test 1: SetAndGetDerivedAnalysis
-// ============================================================================
-void runDerivedAnalysis_SetAndGet()
+void runReferenceFeatures_SetAndGet()
 {
-    constexpr const char* testName = "DerivedAnalysis_SetAndGet";
+    constexpr const char* testName = "ReferenceFeatures_SetAndGet";
 
     MaterializationStore store;
     const uint64_t matId = store.createMaterialization(makeTestClipRequest());
@@ -57,83 +62,60 @@ void runDerivedAnalysis_SetAndGet()
         return;
     }
 
-    const auto da = makeReadyAnalysis();
-
-    // Precondition: no valid derived analysis initially
-    {
-        MaterializationStore::DerivedAnalysis check;
-        if (store.getDerivedAnalysis(matId, check)
-            && check.state == F0ExtractionState::Ready && check.analysisRevision > 0) {
-            logFail(testName, "precondition: should NOT have valid derived analysis after import");
-            return;
-        }
+    ReferenceFeatureSet initial;
+    if (store.getReferenceFeatures(matId, initial)) {
+        logFail(testName, "fresh materialization should not report ready reference features");
+        return;
     }
-
-    if (!store.setDerivedAnalysis(matId, da)) {
-        logFail(testName, "setDerivedAnalysis returned false");
+    if (!isReferenceCacheCleared(initial)) {
+        logFail(testName, "fresh reference feature cache should reset to NotRequested");
         return;
     }
 
-    {
-        MaterializationStore::DerivedAnalysis check;
-        if (!store.getDerivedAnalysis(matId, check)
-            || check.state != F0ExtractionState::Ready || check.analysisRevision <= 0) {
-            logFail(testName, "hasValidDerivedAnalysis should return true after set");
-            return;
-        }
-    }
-
-    MaterializationStore::DerivedAnalysis out;
-    if (!store.getDerivedAnalysis(matId, out)) {
-        logFail(testName, "getDerivedAnalysis returned false after set");
+    const auto seeded = makeReadyFeatures();
+    if (!store.setReferenceFeatures(matId, seeded)) {
+        logFail(testName, "setReferenceFeatures returned false");
         return;
     }
 
-    if (out.state != F0ExtractionState::Ready) {
-        logFail(testName, "round-trip: state mismatch");
+    ReferenceFeatureSet out;
+    if (!store.getReferenceFeatures(matId, out)) {
+        logFail(testName, "getReferenceFeatures returned false after set");
+        return;
+    }
+    if (!out.isReady()) {
+        logFail(testName, "reference feature cache should be Ready after set");
+        return;
+    }
+    if (out.producer != ReferenceFeatureProducer::Basic) {
+        logFail(testName, "reference feature cache producer mismatch");
         return;
     }
     if (out.analysisRevision < 1 || out.analysisRevision > 2) {
-        logFail(testName, "round-trip: analysisRevision mismatch (store auto-bumps by 1)");
+        logFail(testName, "reference feature cache revision mismatch");
         return;
     }
-    if (out.backendMode != 0) {
-        logFail(testName, "round-trip: backendMode mismatch");
+    if (out.pitch.notes.size() != 1 || out.pitch.notes.front().pitch != 440.0f) {
+        logFail(testName, "reference feature pitch notes failed to round-trip");
         return;
     }
-    if (out.basicDerivedNotes.size() != 1) {
-        logFail(testName, "round-trip: basicDerivedNotes count mismatch");
-        return;
-    }
-    if (out.basicDerivedNotes.front().pitch != 440.0f) {
-        logFail(testName, "round-trip: basicDerivedNotes pitch mismatch");
-        return;
-    }
-    if (out.temporalEvents.size() != 1) {
-        logFail(testName, "round-trip: temporalEvents count mismatch");
-        return;
-    }
-    if (out.temporalEvents.front().eventId != 1
-        || out.temporalEvents.front().strength != 0.85f
-        || out.temporalEvents.front().kind
-            != MaterializationStore::DerivedAnalysis::TemporalEventKind::PitchTransition) {
-        logFail(testName, "round-trip: temporalEvents data mismatch");
+    if (out.timing.anchors.size() != 1
+        || out.timing.anchors.front().anchorId != 1
+        || out.timing.anchors.front().kind != ReferenceTimingAnchorKind::PitchTransition) {
+        logFail(testName, "reference feature timing anchors failed to round-trip");
         return;
     }
     if (out.inputFingerprint != 42) {
-        logFail(testName, "round-trip: inputFingerprint mismatch");
+        logFail(testName, "reference feature input fingerprint mismatch");
         return;
     }
 
     logPass(testName);
 }
 
-// ============================================================================
-// Test 2: InvalidateOnPitchCurveSet
-// ============================================================================
-void runDerivedAnalysis_InvalidateOnPitchCurveSet()
+void runReferenceFeatures_InvalidateOnPitchCurveSet()
 {
-    constexpr const char* testName = "DerivedAnalysis_InvalidateOnPitchCurveSet";
+    constexpr const char* testName = "ReferenceFeatures_InvalidateOnPitchCurveSet";
 
     MaterializationStore store;
     const uint64_t matId = store.createMaterialization(makeTestClipRequest());
@@ -142,46 +124,33 @@ void runDerivedAnalysis_InvalidateOnPitchCurveSet()
         return;
     }
 
-    // Seed a valid derived analysis
-    const auto da = makeReadyAnalysis();
-    if (!store.setDerivedAnalysis(matId, da)) {
-        logFail(testName, "setDerivedAnalysis returned false");
+    if (!store.setReferenceFeatures(matId, makeReadyFeatures())) {
+        logFail(testName, "setReferenceFeatures returned false");
         return;
     }
-    {
-        MaterializationStore::DerivedAnalysis check;
-        if (!store.getDerivedAnalysis(matId, check)
-            || check.state != F0ExtractionState::Ready || check.analysisRevision <= 0) {
-            logFail(testName, "precondition: should have valid derived analysis");
-            return;
-        }
-    }
 
-    // Now set a new PitchCurve — should invalidate derived analysis
     auto newCurve = std::make_shared<PitchCurve>();
     if (!store.setPitchCurve(matId, newCurve)) {
         logFail(testName, "setPitchCurve returned false");
         return;
     }
 
-    {
-        MaterializationStore::DerivedAnalysis check;
-        if (store.getDerivedAnalysis(matId, check)
-            && check.state == F0ExtractionState::Ready && check.analysisRevision > 0) {
-            logFail(testName, "derived analysis should be invalid after setPitchCurve");
-            return;
-        }
+    ReferenceFeatureSet out;
+    if (store.getReferenceFeatures(matId, out)) {
+        logFail(testName, "reference feature cache should be invalid after setPitchCurve");
+        return;
+    }
+    if (!isReferenceCacheCleared(out)) {
+        logFail(testName, "reference feature cache should reset after setPitchCurve");
+        return;
     }
 
     logPass(testName);
 }
 
-// ============================================================================
-// Test 3: InvalidateOnReplaceAudio
-// ============================================================================
-void runDerivedAnalysis_InvalidateOnReplaceAudio()
+void runReferenceFeatures_InvalidateOnReplaceAudio()
 {
-    constexpr const char* testName = "DerivedAnalysis_InvalidateOnReplaceAudio";
+    constexpr const char* testName = "ReferenceFeatures_InvalidateOnReplaceAudio";
 
     MaterializationStore store;
     const uint64_t matId = store.createMaterialization(makeTestClipRequest());
@@ -190,50 +159,36 @@ void runDerivedAnalysis_InvalidateOnReplaceAudio()
         return;
     }
 
-    // Seed a valid derived analysis
-    const auto da = makeReadyAnalysis();
-    if (!store.setDerivedAnalysis(matId, da)) {
-        logFail(testName, "setDerivedAnalysis returned false");
+    if (!store.setReferenceFeatures(matId, makeReadyFeatures())) {
+        logFail(testName, "setReferenceFeatures returned false");
         return;
     }
-    {
-        MaterializationStore::DerivedAnalysis check;
-        if (!store.getDerivedAnalysis(matId, check)
-            || check.state != F0ExtractionState::Ready || check.analysisRevision <= 0) {
-            logFail(testName, "precondition: should have valid derived analysis");
-            return;
-        }
-    }
 
-    // Replace audio — should invalidate derived analysis
     auto newBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 256);
     newBuffer->clear();
     std::vector<SilentGap> gaps;
-
     if (!store.replaceAudio(matId, newBuffer, gaps)) {
         logFail(testName, "replaceAudio returned false");
         return;
     }
 
-    {
-        MaterializationStore::DerivedAnalysis check;
-        if (store.getDerivedAnalysis(matId, check)
-            && check.state == F0ExtractionState::Ready && check.analysisRevision > 0) {
-            logFail(testName, "derived analysis should be invalid after replaceAudio");
-            return;
-        }
+    ReferenceFeatureSet out;
+    if (store.getReferenceFeatures(matId, out)) {
+        logFail(testName, "reference feature cache should be invalid after replaceAudio");
+        return;
+    }
+    if (!isReferenceCacheCleared(out)) {
+        logFail(testName, "reference feature cache should reset after replaceAudio");
+        return;
     }
 
     logPass(testName);
 }
 
-// ============================================================================
-// Suite entry point
-// ============================================================================
 void runMaterializationDerivedAnalysisSuite()
 {
     logSection("MaterializationDerivedAnalysis");
-    runDerivedAnalysis_SetAndGet();
-    runDerivedAnalysis_InvalidateOnPitchCurveSet();
-    runDerivedAnalysis_InvalidateOnReplaceAudio();
+    runReferenceFeatures_SetAndGet();
+    runReferenceFeatures_InvalidateOnPitchCurveSet();
+    runReferenceFeatures_InvalidateOnReplaceAudio();
 }

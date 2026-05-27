@@ -265,7 +265,6 @@ void runProjectSessionCorruptBindingMarksDirty()
     corrupt.targetPlacementId = placementIdA;
     corrupt.referencePlacementId = 99999;  // non-existent placement
     corrupt.bindingRevision = 1;
-    corrupt.analysisMode = "Basic";
     snap.referenceBindings.clear();
     snap.referenceBindings.push_back(corrupt);
 
@@ -317,13 +316,11 @@ void runProjectSessionCyclicBindingRejectedMarksDirty()
     aToB.targetPlacementId = placementIdA;
     aToB.referencePlacementId = placementIdB;
     aToB.bindingRevision = 1;
-    aToB.analysisMode = "Basic";
 
     ProjectReferenceBinding bToA;
     bToA.targetPlacementId = placementIdB;
     bToA.referencePlacementId = placementIdA;
     bToA.bindingRevision = 1;
-    bToA.analysisMode = "Basic";
 
     snap.referenceBindings.clear();
     snap.referenceBindings.push_back(aToB);
