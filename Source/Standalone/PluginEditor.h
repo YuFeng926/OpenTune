@@ -108,6 +108,7 @@ public:
     void undoRequested() override;
     void redoRequested() override;
     void mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme) override;
+    void trackColorModeChanged(TrackColorMode mode) override;
 
     // TransportBarComponent::Listener
     void playRequested() override;
@@ -124,6 +125,7 @@ public:
     void trackSoloToggled(int trackId, bool solo) override;
     void trackVolumeChanged(int trackId, float volume) override;
     void trackHeightChanged(int newHeight) override;  // 与 ArrangementView 的 trackHeight 同步
+    void trackColorChangeRequested(int trackId) override;
 
     // ArrangementViewComponent::Listener
     void placementSelectionChanged(int trackId, uint64_t placementId) override;
@@ -172,6 +174,7 @@ private:
     void timerCallback() override;
     void showPreferencesDialog();
     void syncSharedAppPreferences();
+    void syncTrackColorsToPanel();
     void applyThemeToEditor(ThemeId themeId);
     RenderStatusSnapshot getRenderStatusSnapshot() const;
     void setInferenceActive(bool active);

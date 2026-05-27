@@ -162,6 +162,11 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
                 mouseTrailMenu.addItem(MouseTrailCherryBlossom, LOC(kCherryBlossom), true, currentTrailTheme == MouseTrailConfig::TrailTheme::CherryBlossom);
                 mouseTrailMenu.addItem(MouseTrailMatrix, LOC(kMatrix), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Matrix);
                 menu.addSubMenu(LOC(kMouseTrail), mouseTrailMenu);
+
+                juce::PopupMenu trackColorMenu;
+                trackColorMenu.addItem(TrackColorsRandom, LOC(kTrackColorsRandom), true, trackColorMode_ == TrackColorMode::Random);
+                trackColorMenu.addItem(TrackColorsCustom, LOC(kTrackColorsCustom), true, trackColorMode_ == TrackColorMode::Custom);
+                menu.addSubMenu(LOC(kTrackColors), trackColorMenu);
             }
             break;
         }
@@ -307,6 +312,15 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             menuItemsChanged();
             break;
 
+        case TrackColorsRandom:
+            listeners_.call([](Listener& l) { l.trackColorModeChanged(TrackColorMode::Random); });
+            menuItemsChanged();
+            break;
+        case TrackColorsCustom:
+            listeners_.call([](Listener& l) { l.trackColorModeChanged(TrackColorMode::Custom); });
+            menuItemsChanged();
+            break;
+
         case EditUndo:
             listeners_.call([](Listener& l) { l.undoRequested(); });
             break;
@@ -329,6 +343,13 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             break;
         }
     }
+}
+
+void MenuBarComponent::setTrackColorMode(TrackColorMode mode)
+{
+    if (trackColorMode_ == mode) return;
+    trackColorMode_ = mode;
+    menuItemsChanged();
 }
 
 void MenuBarComponent::setRecentProjects(const std::vector<juce::File>& recentFiles)

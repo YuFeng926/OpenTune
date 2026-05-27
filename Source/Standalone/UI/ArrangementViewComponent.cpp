@@ -884,17 +884,7 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
         }
         else if (themeId == ThemeId::Aurora)
         {
-            // For Aurora, derive track color from placement (cycle available)
-            juce::Colour trackColor;
-            int colorIdx = static_cast<int>(vp.placementId % 6);
-            switch(colorIdx) {
-                case 0: trackColor = juce::Colour(Aurora::Colors::Cyan); break;
-                case 1: trackColor = juce::Colour(Aurora::Colors::Violet); break;
-                case 2: trackColor = juce::Colour(Aurora::Colors::NeonGreen); break;
-                case 3: trackColor = juce::Colour(Aurora::Colors::Magenta); break;
-                case 4: trackColor = juce::Colour(Aurora::Colors::ElectricBlue); break;
-                case 5: trackColor = juce::Colour(Aurora::Colors::Warning); break;
-            }
+            auto trackColor = vp.colour;
 
             if (vp.isSelected)
             {
@@ -2234,8 +2224,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                         placement.gain,
                         placement.fadeInDuration,
                         placement.fadeOutDuration,
-                        placement.name,
-                        placement.colour
+                        placement.name
                     });
                 }
             }
@@ -2273,7 +2262,6 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                 newPlacement.fadeInDuration = entry.fadeInDuration;
                 newPlacement.fadeOutDuration = entry.fadeOutDuration;
                 newPlacement.name = entry.name;
-                newPlacement.colour = entry.colour;
                 newPlacement.clipInSeconds = 0.0; // copy starts from beginning of new materialization
 
                 if (!arr->insertPlacement(selectedTrack_, newPlacement)) {

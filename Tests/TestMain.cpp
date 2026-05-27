@@ -6031,7 +6031,6 @@ void runArrangementDuplicateClipKeepsInPlaceDuplicateInvariantsTest()
     }
 
     originalPlacement.name = "Lead Vox";
-    originalPlacement.colour = juce::Colour::fromRGB(0x44, 0x88, 0xCC);
 
     if (!arrangement->deletePlacementById(0, committed.placementId)
         || !arrangement->insertPlacement(0, originalPlacement)) {
@@ -6094,8 +6093,7 @@ void runArrangementDuplicateClipKeepsInPlaceDuplicateInvariantsTest()
         || !approxEqual(duplicatePlacement.fadeInDuration, rewrittenOriginal.fadeInDuration, 1.0e-6)
         || !approxEqual(duplicatePlacement.fadeOutDuration, rewrittenOriginal.fadeOutDuration, 1.0e-6)
         || !approxEqual(duplicatePlacement.gain, rewrittenOriginal.gain, 1.0e-6f)
-        || duplicatePlacement.name != rewrittenOriginal.name
-        || duplicatePlacement.colour != rewrittenOriginal.colour) {
+        || duplicatePlacement.name != rewrittenOriginal.name) {
         logFail(testName, "duplicate shortcut no longer preserves the in-place clip window and presentation invariants");
         return;
     }

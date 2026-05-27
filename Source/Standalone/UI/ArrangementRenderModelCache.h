@@ -49,6 +49,7 @@ public:
         double fadeInDuration = 0.0;
         double fadeOutDuration = 0.0;
         bool isPreview = false;
+        juce::Colour colour{};
     };
 
     struct RenderModel {

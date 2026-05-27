@@ -169,6 +169,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         trackEntry.gain = arrangement->getTrackVolume(trackId);
         trackEntry.mute = arrangement->isTrackMuted(trackId);
         trackEntry.solo = arrangement->isTrackSolo(trackId);
+        trackEntry.colour = arrangement->getTrackColour(trackId);
 
         const int numPlacements = arrangement->getNumPlacements(trackId);
         for (int pi = 0; pi < numPlacements; ++pi) {
@@ -187,7 +188,6 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
             pEntry.fadeOutDurationSeconds = placement.fadeOutDuration;
             pEntry.clipInSeconds = placement.clipInSeconds;
             pEntry.name = placement.name;
-            pEntry.colour = placement.colour;
             trackEntry.placements.push_back(pEntry);
         }
 
@@ -361,6 +361,7 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         arrangement->setTrackVolume(trackId, trackEntry.gain);
         arrangement->setTrackMuted(trackId, trackEntry.mute);
         arrangement->setTrackSolo(trackId, trackEntry.solo);
+        arrangement->setTrackColour(trackId, trackEntry.colour);
 
         for (const auto& pEntry : trackEntry.placements) {
             // Verify materialization exists
@@ -382,7 +383,6 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
             placement.fadeOutDuration = pEntry.fadeOutDurationSeconds;
             placement.clipInSeconds = pEntry.clipInSeconds;
             placement.name = pEntry.name;
-            placement.colour = pEntry.colour;
 
             arrangement->insertPlacement(trackId, placement);
         }

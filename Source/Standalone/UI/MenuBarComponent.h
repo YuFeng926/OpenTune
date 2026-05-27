@@ -15,6 +15,7 @@
 #include "Utils/PianoRollVisualPreferences.h"
 #include "ThemeTokens.h"
 #include "../Utils/MouseTrailConfig.h"
+#include "../../Utils/AppPreferences.h"
 
 namespace OpenTune {
 
@@ -59,6 +60,7 @@ public:
         virtual void undoRequested() = 0;
         virtual void redoRequested() = 0;
         virtual void mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme) = 0;
+        virtual void trackColorModeChanged(TrackColorMode mode) { juce::ignoreUnused(mode); }
     };
 
     explicit MenuBarComponent(OpenTuneAudioProcessor& processor, Profile profile = Profile::Standalone);
@@ -76,6 +78,7 @@ public:
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowChunkBoundaries(bool shouldShow);
     void setShowUnvoicedFrames(bool shouldShow);
+    void setTrackColorMode(TrackColorMode mode);
 
     juce::StringArray getMenuBarNames() override;
     juce::PopupMenu getMenuForIndex(int topLevelMenuIndex, const juce::String& menuName) override;
@@ -91,6 +94,7 @@ private:
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
     bool showChunkBoundaries_ = false;
     bool showUnvoicedFrames_ = false;
+    TrackColorMode trackColorMode_ = TrackColorMode::Random;
 
     enum MenuItemIDs
     {
@@ -127,6 +131,9 @@ private:
         MouseTrailGalaxy,
         MouseTrailCherryBlossom,
         MouseTrailMatrix,
+
+        TrackColorsRandom = 160,
+        TrackColorsCustom,
 
         OpenPreferences = 200,
         OpenHelp

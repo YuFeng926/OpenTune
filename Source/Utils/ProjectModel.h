@@ -165,7 +165,6 @@ struct ProjectPlacementEntry {
     double fadeOutDurationSeconds{0.0};
     double clipInSeconds{0.0};
     juce::String name;
-    juce::Colour colour;
 };
 
 struct ProjectTrackEntry {

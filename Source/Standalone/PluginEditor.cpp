@@ -128,6 +128,19 @@ void setStandaloneTrackVolume(OpenTuneAudioProcessor& processor, int trackId, fl
     }
 }
 
+juce::Colour getStandaloneTrackColour(OpenTuneAudioProcessor& processor, int trackId)
+{
+    if (auto* arrangement = processor.getStandaloneArrangement())
+        return arrangement->getTrackColour(trackId);
+    return juce::Colours::grey;
+}
+
+void setStandaloneTrackColour(OpenTuneAudioProcessor& processor, int trackId, juce::Colour colour)
+{
+    if (auto* arrangement = processor.getStandaloneArrangement())
+        arrangement->setTrackColour(trackId, colour);
+}
+
 void setStandaloneSelectedPlacementIndex(OpenTuneAudioProcessor& processor, int trackId, int placementIndex)
 {
     if (auto* arrangement = processor.getStandaloneArrangement()) {
@@ -497,6 +510,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         trackPanel_.setTrackSolo(i, getStandaloneTrackSolo(processorRef_, i));
         trackPanel_.setTrackVolume(i, getStandaloneTrackVolume(processorRef_, i));
     }
+    // Initialize track colors
+    syncTrackColorsToPanel();
+    trackPanel_.setTrackColorMode(appPreferences_.getTrackColorMode());
+    menuBar_.setTrackColorMode(appPreferences_.getTrackColorMode());
     addAndMakeVisible(trackPanel_);
 
     // Setup Parameter Panel
@@ -1318,6 +1335,14 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     arrangementView_.setShortcutSettings(shortcutSettings_);
     menuBar_.setMouseTrailTheme(preferencesState.standalone.mouseTrailTheme);
     rippleOverlay_.setTrailTheme(preferencesState.standalone.mouseTrailTheme);
+    menuBar_.setTrackColorMode(sharedPreferences.trackColorMode);
+    trackPanel_.setTrackColorMode(sharedPreferences.trackColorMode);
+}
+
+void OpenTuneAudioProcessorEditor::syncTrackColorsToPanel()
+{
+    for (int i = 0; i < MAX_TRACKS; ++i)
+        trackPanel_.setTrackColour(i, getStandaloneTrackColour(processorRef_, i));
 }
 
 RenderStatusSnapshot OpenTuneAudioProcessorEditor::getRenderStatusSnapshot() const
@@ -2347,6 +2372,13 @@ void OpenTuneAudioProcessorEditor::mouseTrailThemeChanged(MouseTrailConfig::Trai
     rippleOverlay_.repaint();
 }
 
+void OpenTuneAudioProcessorEditor::trackColorModeChanged(TrackColorMode mode)
+{
+    appPreferences_.setTrackColorMode(mode);
+    trackPanel_.setTrackColorMode(mode);
+    menuBar_.setTrackColorMode(mode);
+}
+
 void OpenTuneAudioProcessorEditor::performUndoRedoAction(bool isUndo)
 {
     auto* action = isUndo ? processorRef_.getUndoManager().undo()
@@ -2559,6 +2591,61 @@ void OpenTuneAudioProcessorEditor::trackHeightChanged(int newHeight)
     
     // 刷新ArrangementView
     arrangementView_.repaint();
+}
+
+void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
+{
+    // Wrapper component: holds ColourSelector, applies result when dialog closes via destructor
+    struct ColourPickerContent : public juce::Component
+    {
+        ColourPickerContent(OpenTuneAudioProcessorEditor& owner, int tid, juce::Colour current)
+            : owner_(owner), trackId_(tid)
+        {
+            selector_ = std::make_unique<juce::ColourSelector>(
+                juce::ColourSelector::showColourAtTop |
+                juce::ColourSelector::showSliders |
+                juce::ColourSelector::showColourspace);
+            selector_->setCurrentColour(current);
+            selector_->setSize(380, 300);
+            addAndMakeVisible(selector_.get());
+        }
+
+        ~ColourPickerContent() override
+        {
+            if (selector_)
+            {
+                juce::Colour selected = selector_->getCurrentColour();
+                setStandaloneTrackColour(owner_.processorRef_, trackId_, selected);
+                owner_.trackPanel_.setTrackColour(trackId_, selected);
+                owner_.trackPanel_.repaint();
+                owner_.arrangementView_.repaint();
+                owner_.projectSession_.markDirty();
+            }
+        }
+
+        void resized() override
+        {
+            if (selector_)
+                selector_->setBounds(getLocalBounds());
+        }
+
+    private:
+        OpenTuneAudioProcessorEditor& owner_;
+        int trackId_;
+        std::unique_ptr<juce::ColourSelector> selector_;
+    };
+
+    juce::Colour current = getStandaloneTrackColour(processorRef_, trackId);
+    auto* content = new ColourPickerContent(*this, trackId, current);
+    content->setSize(380, 300);
+
+    juce::DialogWindow::LaunchOptions opts;
+    opts.dialogTitle = "Track " + juce::String(trackId + 1) + " Color";
+    opts.content.setOwned(content);
+    opts.dialogBackgroundColour = UIColors::backgroundDark;
+    opts.componentToCentreAround = this;
+    opts.escapeKeyTriggersCloseButton = true;
+    opts.launchAsync();
 }
 
 void OpenTuneAudioProcessorEditor::placementSelectionChanged(int trackId, uint64_t placementId)

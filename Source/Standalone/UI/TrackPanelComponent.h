@@ -14,6 +14,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <cmath>
+#include "../../Utils/AppPreferences.h"
 #include "UIColors.h"
 #include "UiAssets.h"
 
@@ -535,6 +536,8 @@ public:
         virtual void trackHeightChanged(int newHeight) { juce::ignoreUnused(newHeight); }
         // 垂直滚动回调 - 通知外部滚动偏移变化（用于同步ArrangementView）
         virtual void verticalScrollChanged(int offset) { juce::ignoreUnused(offset); }
+        // 轨道颜色变更请求（Custom模式下右键点击轨道时触发）
+        virtual void trackColorChangeRequested(int trackId) { juce::ignoreUnused(trackId); }
     };
 
     // 构造函数，高度由外部传入
@@ -544,6 +547,7 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent& event) override;
+    void mouseUp(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
 
     void applyTheme();
@@ -584,6 +588,12 @@ public:
     void setTrackStartYOffset(int offset);
     int getTrackStartYOffset() const { return trackStartYOffset_; }
     
+    // 轨道颜色控制
+    void setTrackColour(int trackId, juce::Colour colour);
+    void setTrackColorMode(TrackColorMode mode);
+    TrackColorMode getTrackColorMode() const { return trackColorMode_; }
+    juce::Colour getTrackColour(int trackId) const;
+    
     // 轨道高度限制常量
     static constexpr int MIN_TRACK_HEIGHT = 70;   // 最小高度：控件不重叠
     static constexpr int DEFAULT_TRACK_HEIGHT = 100;  // 默认高度
@@ -608,6 +618,8 @@ private:
     int trackStartYOffset_{30};    // 轨道起始Y偏移（默认30，与ArrangementView的rulerHeight_对齐）
     AddTrackButton addTrackButton_;  // +号按钮
     VolumeKnobLookAndFeel knobLnF_;  // Custom LookAndFeel for knobs
+    std::array<juce::Colour, MAX_TRACKS> trackColors_;
+    TrackColorMode trackColorMode_ = TrackColorMode::Random;
 
     juce::ListenerList<Listener> listeners_;
 

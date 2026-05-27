@@ -11,7 +11,13 @@ namespace {
 
 juce::Colour makeDefaultTrackColour(int trackId)
 {
-    return juce::Colour::fromHSV(static_cast<float>(trackId) * 0.3f, 0.6f, 0.8f, 1.0f);
+    juce::ignoreUnused(trackId);
+    auto& random = juce::Random::getSystemRandom();
+    // Generate a vibrant pastel color: random hue, moderate saturation, bright
+    float hue = random.nextFloat();
+    float saturation = 0.5f + random.nextFloat() * 0.3f;  // 0.5-0.8
+    float brightness = 0.7f + random.nextFloat() * 0.3f;  // 0.7-1.0
+    return juce::Colour::fromHSV(hue, saturation, brightness, 1.0f);
 }
 
 } // namespace
@@ -425,7 +431,6 @@ bool StandaloneArrangement::movePlacementToTrack(int sourceTrackId,
 
     Placement movedPlacement = sourceTrack.placements[static_cast<size_t>(sourceIndex)];
     movedPlacement.timelineStartSeconds = std::max(0.0, newTimelineStartSeconds);
-    movedPlacement.colour = targetTrack.colour;
     ++movedPlacement.mappingRevision;
 
     sourceTrack.placements.erase(sourceTrack.placements.begin() + sourceIndex);
@@ -961,6 +966,21 @@ bool StandaloneArrangement::isCyclicReference(int trackId,
 {
     const juce::ScopedReadLock lock(stateLock_);
     return isCyclicReferenceUnlocked(trackId, targetPlacementId, candidateReferenceId);
+}
+
+bool StandaloneArrangement::setTrackColour(int trackId, juce::Colour colour)
+{
+    if (!isValidTrackId(trackId)) return false;
+    const juce::ScopedWriteLock lock(stateLock_);
+    tracks_[static_cast<size_t>(trackId)].colour = colour;
+    return true;
+}
+
+juce::Colour StandaloneArrangement::getTrackColour(int trackId) const
+{
+    const juce::ScopedReadLock lock(stateLock_);
+    if (!isValidTrackId(trackId)) return juce::Colours::grey;
+    return tracks_[static_cast<size_t>(trackId)].colour;
 }
 
 } // namespace OpenTune

@@ -29,6 +29,12 @@ enum class ExperimentalReferenceAlignMode
     Aggressive = 2  // 自动对齐参考源（激进）— GAME note generator
 };
 
+/// Track color assignment mode
+enum class TrackColorMode {
+    Random = 0,   ///< New tracks get random colors (default)
+    Custom = 1    ///< User picks custom colors per track
+};
+
 /// Snap-to-grid settings for arrangement clip editing.
 struct SnapSettings {
     enum class Mode { Off = 0, Beat, Bar, Second, Count };
@@ -51,6 +57,7 @@ struct SharedPreferencesState {
     ExperimentalReferenceAlignMode experimentalReferenceAlignMode = ExperimentalReferenceAlignMode::Off;
     std::vector<juce::String> recentProjects;   // Most recently used project paths (MRU, max 10)
     SnapSettings snap;
+    TrackColorMode trackColorMode = TrackColorMode::Random;
     KeyShortcutConfig::KeyShortcutSettings shortcuts = KeyShortcutConfig::KeyShortcutSettings::getDefault();
 };
 
@@ -96,6 +103,9 @@ public:
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme);
     void setSnapSettings(const SnapSettings& snap);
     SnapSettings getSnapSettings() const;
+
+    void setTrackColorMode(TrackColorMode mode);
+    TrackColorMode getTrackColorMode() const;
 
     std::vector<juce::String> getRecentProjects() const;
     void pushRecentProject(const juce::String& projectPath);
