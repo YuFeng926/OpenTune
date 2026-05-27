@@ -3827,6 +3827,13 @@ SnapSettings OpenTuneAudioProcessor::getSnapSettings() const {
     return SnapSettings{};
 }
 
+void OpenTuneAudioProcessor::setSnapSettings(const SnapSettings& snap)
+{
+    if (appPreferences_ != nullptr) {
+        appPreferences_->setSnapSettings(snap);
+    }
+}
+
 // ============================================================================
 // Two-phase Import Implementation
 // ============================================================================
@@ -5619,6 +5626,39 @@ uint64_t OpenTuneAudioProcessor::copyMaterializationRange(uint64_t sourceMateria
     }
 
     return materializationStore_->createMaterialization(std::move(req));
+}
+
+uint64_t OpenTuneAudioProcessor::cloneMaterialization(uint64_t sourceMaterializationId,
+                                                      const juce::String& newName)
+{
+    juce::ignoreUnused(newName);
+    if (materializationStore_ == nullptr) {
+        return 0;
+    }
+
+    MaterializationStore::MaterializationSnapshot sourceSnap;
+    if (!materializationStore_->getSnapshot(sourceMaterializationId, sourceSnap)) {
+        return 0;
+    }
+
+    if (sourceSnap.audioBuffer == nullptr || sourceSnap.audioBuffer->getNumSamples() == 0) {
+        return 0;
+    }
+
+    MaterializationStore::CreateMaterializationRequest request;
+    request.sourceId = sourceSnap.sourceId;
+    request.lineageParentMaterializationId = sourceMaterializationId;
+    request.sourceWindow = sourceSnap.sourceWindow;
+    request.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(*sourceSnap.audioBuffer);
+    request.pitchCurve = sourceSnap.pitchCurve != nullptr ? sourceSnap.pitchCurve->clone() : nullptr;
+    request.originalF0State = sourceSnap.originalF0State;
+    request.detectedKey = sourceSnap.detectedKey;
+    request.renderCache = std::make_shared<RenderCache>();
+    request.notes = sourceSnap.notes;
+    request.silentGaps = sourceSnap.silentGaps;
+    request.renderRevision = sourceSnap.renderRevision;
+    request.timeGrid = sourceSnap.timeGrid;
+    return materializationStore_->createMaterialization(std::move(request));
 }
 
 } // namespace OpenTune

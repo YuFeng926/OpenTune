@@ -30,6 +30,10 @@ public:
         int zoomBucket;
         int64_t visibleStartBucket;
         int64_t visibleEndBucket;
+        int xBucket;
+        int yBucket;
+        int widthBucket;
+        int heightBucket;
         uint64_t styleHash;
         uint64_t timeGridRevision;
 
@@ -39,6 +43,10 @@ public:
                 && zoomBucket == other.zoomBucket
                 && visibleStartBucket == other.visibleStartBucket
                 && visibleEndBucket == other.visibleEndBucket
+                && xBucket == other.xBucket
+                && yBucket == other.yBucket
+                && widthBucket == other.widthBucket
+                && heightBucket == other.heightBucket
                 && styleHash == other.styleHash
                 && timeGridRevision == other.timeGridRevision;
         }
@@ -51,6 +59,10 @@ public:
             hash ^= std::hash<int>{}(key.zoomBucket) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
             hash ^= std::hash<int64_t>{}(key.visibleStartBucket) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
             hash ^= std::hash<int64_t>{}(key.visibleEndBucket) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+            hash ^= std::hash<int>{}(key.xBucket) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+            hash ^= std::hash<int>{}(key.yBucket) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+            hash ^= std::hash<int>{}(key.widthBucket) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+            hash ^= std::hash<int>{}(key.heightBucket) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
             hash ^= std::hash<uint64_t>{}(key.styleHash) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
             hash ^= std::hash<uint64_t>{}(key.timeGridRevision) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
             return hash;
@@ -75,6 +87,7 @@ public:
     const Tile* get(uint64_t materializationId,
                     uint64_t sourceId,
                     int zoomBucket,
+                    const juce::Rectangle<int>& waveformBounds,
                     double visibleStartSeconds,
                     double visibleEndSeconds,
                     uint64_t styleHash,
@@ -82,6 +95,7 @@ public:
         const TileKey key = makeKey(materializationId,
                                     sourceId,
                                     zoomBucket,
+                                    waveformBounds,
                                     visibleStartSeconds,
                                     visibleEndSeconds,
                                     styleHash,
@@ -107,6 +121,7 @@ public:
         const TileKey key = makeKey(materializationId,
                                     sourceId,
                                     zoomBucket,
+                                    waveformBounds,
                                     visibleStartSeconds,
                                     visibleEndSeconds,
                                     styleHash,
@@ -176,6 +191,7 @@ private:
     static TileKey makeKey(uint64_t materializationId,
                            uint64_t sourceId,
                            int zoomBucket,
+                           const juce::Rectangle<int>& waveformBounds,
                            double visibleStartSeconds,
                            double visibleEndSeconds,
                            uint64_t styleHash,
@@ -187,6 +203,10 @@ private:
             zoomBucket,
             bucketTime(visibleStartSeconds),
             bucketTime(visibleEndSeconds),
+            waveformBounds.getX(),
+            waveformBounds.getY(),
+            waveformBounds.getWidth(),
+            waveformBounds.getHeight(),
             styleHash,
             timeGridRevision
         };

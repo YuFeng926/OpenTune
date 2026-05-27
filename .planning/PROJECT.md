@@ -237,3 +237,32 @@ real placement time/track truth remains committed only on `mouseUp()`.
 
 ---
 *Last updated: 2026-05-27 after adding Arrangement min-zoom waveform and cross-track drag preview plan*
+---
+## 2026-05-27 Update: Experimental Features Gate And TimeTool Anchor Seed Planned
+
+当前 Standalone 对“实验性功能”的产品暴露存在一处合同混淆：
+
+1. 现有 `ExperimentalReferenceAlignMode` 实际只表达 AUTO Ref 后端模式
+2. 但 TimeTool 与 Arrangement 参考源入口却已经无条件暴露
+3. 这不等价于一个真正的“实验性功能总开关”
+
+因此已新增一份专门执行方案，明确把这两件事拆开：
+
+1. 新增 shared app-level boolean：控制实验性入口是否向用户可见
+2. 保留 `ExperimentalReferenceAlignMode` 只描述 AUTO Ref `Off / Basic / Aggressive`
+3. 只有当实验开关开启时，TimeTool 才显示在工具栏/菜单
+4. 只有当实验开关开启时，Arrangement clip 右下角参考源按钮/菜单才可见且可点击
+5. 对每个 clip，第一次进入 TimeTool 时触发一次正式锚点来源准备，但这次准备只能播种 identity stretch handles，不能自动改时间映射
+
+本轮计划还明确修正一个当前回退：
+
+1. `setCurrentTool(TimeTool)` 当前只切工具，不再触发任何 GAME / DerivedAnalysis / TimeGrid 预热
+2. 正式修复应下沉到 processor 单一入口，复用既有 `DerivedAnalysis` 主链
+3. UI 不得自己生成 `TimeGridSnapshot`，也不得为 stretch 再长出一条专用 GAME 旁路
+
+Plan source:
+
+- `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed.md`
+- `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed-test-verification.md`
+
+当前状态：**已规划，未实现。**

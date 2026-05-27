@@ -364,14 +364,46 @@ juce::Font AuroraLookAndFeel::getLabelFont(juce::Label&)
     return UIColors::getLabelFont(14.0f);
 }
 
-juce::Font AuroraLookAndFeel::getComboBoxFont(juce::ComboBox&)
+juce::Font AuroraLookAndFeel::getComboBoxFont(juce::ComboBox& box)
 {
-    return UIColors::getUIFont(14.0f);
+    if (box.getProperties().contains("fontHeight"))
+        return UIColors::getUIFont(static_cast<float>(static_cast<double>(box.getProperties()["fontHeight"])));
+
+    return UIColors::getUIFont(16.0f);
 }
 
 juce::Font AuroraLookAndFeel::getPopupMenuFont()
 {
     return UIColors::getUIFont(14.0f);
+}
+
+juce::Label* AuroraLookAndFeel::createComboBoxTextBox(juce::ComboBox& box)
+{
+    auto* label = new juce::Label();
+    label->setFont(getComboBoxFont(box));
+    label->setMinimumHorizontalScale(1.0f);
+
+    if (box.getProperties().contains("noArrow"))
+        label->setJustificationType(juce::Justification::centred);
+    else
+        label->setJustificationType(juce::Justification::centredLeft);
+
+    return label;
+}
+
+void AuroraLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label)
+{
+    label.setFont(getComboBoxFont(box));
+    label.setMinimumHorizontalScale(1.0f);
+
+    if (box.getProperties().contains("noArrow"))
+    {
+        label.setBounds(0, 0, box.getWidth(), box.getHeight());
+    }
+    else
+    {
+        label.setBounds(6, 1, box.getWidth() - 36, box.getHeight() - 2);
+    }
 }
 
 juce::Font AuroraLookAndFeel::getAlertWindowTitleFont()

@@ -141,3 +141,24 @@
 
 ---
 *Last updated: 2026-05-27 after adding MAIN-40..MAIN-41 Arrangement visual contracts*
+---
+## 2026-05-27 Requirement Addendum: Experimental Features Gate And TimeTool Anchor Seed
+
+### Active
+
+- [ ] **MAIN-42**: Standalone 必须把“实验性功能入口可见性”与 `ExperimentalReferenceAlignMode` 解耦。前者是 shared app-level boolean，用于控制参考轨/TimeTool 入口是否对用户暴露；后者继续只表达 AUTO Ref 后端模式（`Off / Basic / Aggressive`），不得兼任入口开关。
+- [ ] **MAIN-43**: TimeTool 的所有 Standalone 入口必须统一受实验性功能总开关控制，包括 ParameterPanel toolbar、PianoRoll 工具菜单、快捷切换后的 current-tool 收口。关闭开关时，不得仍能通过隐藏旁路停留在 TimeTool。
+- [ ] **MAIN-44**: Arrangement clip 右下角参考源入口必须统一受实验性功能总开关控制。draw、hover hit-test、cursor、click/menu 四条路径都必须同时关闭；只藏绘制而保留交互命中不算完成。
+- [ ] **MAIN-45**: 每个 materialization 第一次进入 TimeTool 时，processor 必须负责一次性准备 stretch 锚点来源；若当前仅有默认 identity `TimeGridSnapshot` 且无内部 handles，则应复用正式 `DerivedAnalysis` producer 生成内部时间锚点并提交新的 identity `TimeGridSnapshot`。这一步只允许播种 handles，不允许自动生成非 identity 时间映射、自动改 clip 时长或自动执行 stretch。
+- [ ] **MAIN-46**: TimeTool stretch anchors 的生产必须只有 processor 单一入口。UI、ToolHandler、菜单点击、鼠标事件都不得自行拼 `TimeGridSnapshot`，也不得再造独立 `GAME` 旁路。若 Aggressive 模式代表 GAME producer，则也必须通过既有 `DerivedAnalysis` 正式主链表达，而不是新增第二生产者。
+- [ ] **MAIN-47**: 已经存在内部 handles 或已有非 identity stretch 编辑的 materialization，再次进入 TimeTool 时不得重新 seed，不得覆盖用户已有时间拉伸编辑。
+
+### Traceability Addendum
+
+| Source | Responsibility |
+|--------|----------------|
+| `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed.md` | Standalone 实验性功能总开关、参考源入口门控与 TimeTool 首次 identity 锚点播种执行方案 |
+| `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed-test-verification.md` | 上述功能的验证合同，覆盖偏好解耦、入口门控、identity seed、不覆盖既有 stretch 编辑 |
+
+---
+*Last updated: 2026-05-27 after adding MAIN-42..MAIN-47 experimental feature gate and TimeTool anchor-seed contracts*

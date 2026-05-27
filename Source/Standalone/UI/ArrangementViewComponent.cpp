@@ -859,6 +859,7 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
             const auto* tile = waveformTileCache_.get(vp.materializationId,
                                                        vp.waveformSourceId,
                                                        vp.waveformZoomBucket,
+                                                       ArrangementRenderModelCache::computeWaveformDrawableBounds(vp.pixelBounds),
                                                        vp.waveformVisibleStartSeconds,
                                                        vp.waveformVisibleEndSeconds,
                                                        vp.waveformStyleHash,
@@ -2215,25 +2216,17 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             StandaloneArrangement::Placement placement;
             if (getStandalonePlacementById(processor_, selectedTrack_, selectedPlacementId_, placement))
             {
-                uint64_t newMatId = processor_.copyMaterializationRange(
-                    placement.materializationId, placement.clipInSeconds, placement.durationSeconds);
+                uint64_t newMatId = processor_.cloneMaterialization(
+                    placement.materializationId, placement.name + " Copy");
                 if (newMatId != 0)
                 {
                     auto* arr = processor_.getStandaloneArrangement();
                     if (arr)
                     {
-                        StandaloneArrangement::Placement dup;
+                        StandaloneArrangement::Placement dup = placement;
                         dup.placementId = 0;
                         dup.materializationId = newMatId;
                         dup.mappingRevision = 1;
-                        dup.timelineStartSeconds = placement.timelineEndSeconds() + 0.1;
-                        dup.durationSeconds = placement.durationSeconds;
-                        dup.gain = placement.gain;
-                        dup.fadeInDuration = placement.fadeInDuration;
-                        dup.fadeOutDuration = placement.fadeOutDuration;
-                        dup.name = placement.name;
-                        dup.colour = placement.colour;
-                        dup.clipInSeconds = 0.0;
 
                         const int count = arr->getNumPlacements(selectedTrack_);
                         if (!arr->insertPlacement(selectedTrack_, count, dup)) {
@@ -2242,6 +2235,19 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                             return true;
                         }
 
+                        arr->selectPlacement(selectedTrack_, dup.placementId);
+                        selectedTrack_ = arr->getActiveTrackId();
+                        selectedPlacementIndex_ = processor_.findPlacementIndexById(selectedTrack_, dup.placementId);
+                        selectedPlacementId_ = dup.placementId;
+                        clearPlacementSelection();
+                        selectedPlacements_.insert(PlacementSelectionKey{selectedTrack_, selectedPlacementId_});
+                        hasShiftAnchor_ = true;
+                        shiftAnchor_ = PlacementSelectionKey{selectedTrack_, selectedPlacementId_};
+
+                        listeners_.call([this](Listener& l) {
+                            l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
+                            l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+                        });
                         refreshRenderModel();
                         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
                     }
@@ -2387,44 +2393,72 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
     // Nudge Left — move selected placements earlier by 10ms
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::NudgeLeft, key))
     {
-        const double nudgeAmount = -0.01;
         auto* arr = processor_.getStandaloneArrangement();
         if (!arr) return true;
 
+        std::vector<MultiMovePlacementAction::Entry> movedEntries;
+        movedEntries.reserve(selectedPlacements_.size());
         for (const auto& sel : selectedPlacements_)
         {
             StandaloneArrangement::Placement placement;
             if (arr->getPlacementById(sel.trackId, sel.placementId, placement))
             {
-                double newStart = placement.timelineStartSeconds + nudgeAmount;
-                if (newStart < 0.0) newStart = 0.0;
-                arr->setPlacementTimelineStartSeconds(sel.trackId, sel.placementId, newStart);
+                const double oldStart = placement.timelineStartSeconds;
+                const double newStart = std::max(0.0, oldStart - 0.01);
+                if (std::abs(newStart - oldStart) <= 1.0e-9)
+                    continue;
+                if (!arr->setPlacementTimelineStartSeconds(sel.trackId, sel.placementId, newStart))
+                    continue;
+                movedEntries.push_back({sel.trackId, sel.placementId, oldStart, newStart});
             }
         }
-        refreshRenderModel();
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+
+        if (!movedEntries.empty())
+        {
+            processor_.getUndoManager().addAction(
+                std::make_unique<MultiMovePlacementAction>(processor_, std::move(movedEntries)));
+            listeners_.call([this](Listener& l) {
+                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+            });
+            refreshRenderModel();
+            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        }
         return true;
     }
 
     // Nudge Right — move selected placements later by 10ms
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::NudgeRight, key))
     {
-        const double nudgeAmount = 0.01;
         auto* arr = processor_.getStandaloneArrangement();
         if (!arr) return true;
 
+        std::vector<MultiMovePlacementAction::Entry> movedEntries;
+        movedEntries.reserve(selectedPlacements_.size());
         for (const auto& sel : selectedPlacements_)
         {
             StandaloneArrangement::Placement placement;
             if (arr->getPlacementById(sel.trackId, sel.placementId, placement))
             {
-                double newStart = placement.timelineStartSeconds + nudgeAmount;
-                if (newStart < 0.0) newStart = 0.0;
-                arr->setPlacementTimelineStartSeconds(sel.trackId, sel.placementId, newStart);
+                const double oldStart = placement.timelineStartSeconds;
+                const double newStart = std::max(0.0, oldStart + 0.01);
+                if (std::abs(newStart - oldStart) <= 1.0e-9)
+                    continue;
+                if (!arr->setPlacementTimelineStartSeconds(sel.trackId, sel.placementId, newStart))
+                    continue;
+                movedEntries.push_back({sel.trackId, sel.placementId, oldStart, newStart});
             }
         }
-        refreshRenderModel();
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+
+        if (!movedEntries.empty())
+        {
+            processor_.getUndoManager().addAction(
+                std::make_unique<MultiMovePlacementAction>(processor_, std::move(movedEntries)));
+            listeners_.call([this](Listener& l) {
+                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+            });
+            refreshRenderModel();
+            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        }
         return true;
     }
 
@@ -2433,9 +2467,12 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
     {
         auto snap = processor_.getSnapSettings();
         snap.enabled = !snap.enabled;
-        if (!snap.enabled) snap.mode = SnapSettings::Mode::Off;
-        // Note: full snap settings write-back needs AppPreferences wire-up (Fix 3 in other task)
-        // Without it, the toggle only affects the local copy within this handler.
+        if (!snap.enabled) {
+            snap.mode = SnapSettings::Mode::Off;
+        } else if (snap.mode == SnapSettings::Mode::Off) {
+            snap.mode = SnapSettings::Mode::Beat;
+        }
+        processor_.setSnapSettings(snap);
         return true;
     }
 

@@ -6,6 +6,7 @@
 #include "Plugin/Capture/CaptureSegment.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Standalone/UI/MenuBarComponent.h"
+#include "Standalone/UI/ArrangementViewComponent.h"
 #include "Standalone/UI/FrameScheduler.h"
 #include "Standalone/UI/PianoRoll/PianoRollRenderer.h"
 #include "Standalone/UI/PianoRoll/PianoRollVisualInvalidation.h"
@@ -443,6 +444,78 @@ juce::MouseEvent makeMouseEvent(juce::Component& component,
                             mouseWasDragged);
 }
 
+struct ArrangementViewHarness {
+    OpenTuneAudioProcessor processor;
+    AppPreferences::StorageOptions storageOptions;
+    AppPreferences preferences;
+    ArrangementViewComponent view;
+
+    ArrangementViewHarness(const juce::String& storageLeafName,
+                           int width = 1200,
+                           int height = 520)
+        : storageOptions(makeAppPreferencesStorageOptions(storageLeafName)),
+          preferences(storageOptions),
+          view(processor)
+    {
+        processor.setAppPreferences(&preferences);
+        view.setBounds(0, 0, width, height);
+        view.resized();
+        view.setShortcutSettings(preferences.getState().shared.shortcuts);
+    }
+};
+
+juce::Point<float> arrangementClipCenter(int trackId,
+                                         double timelineStartSeconds,
+                                         double durationSeconds,
+                                         int trackHeight)
+{
+    constexpr float contentStartX = 8.0f;
+    constexpr float pixelsPerSecond = 100.0f;
+    constexpr float rulerHeight = 30.0f;
+    const float clipCenterX = contentStartX
+        + static_cast<float>((timelineStartSeconds + (durationSeconds * 0.5)) * pixelsPerSecond);
+    const float laneTop = rulerHeight + static_cast<float>(trackId * trackHeight);
+    const float clipCenterY = laneTop + static_cast<float>(trackHeight) * 0.5f;
+    return { clipCenterX, clipCenterY };
+}
+
+bool selectArrangementPlacement(ArrangementViewHarness& harness,
+                                int trackId,
+                                double timelineStartSeconds,
+                                double durationSeconds)
+{
+    const auto down = arrangementClipCenter(trackId,
+                                            timelineStartSeconds,
+                                            durationSeconds,
+                                            harness.processor.getTrackHeight());
+    harness.view.mouseDown(makeMouseEvent(harness.view, down, down, false));
+    harness.view.mouseUp(makeMouseEvent(harness.view, down, down, false));
+
+    auto* arrangement = harness.processor.getStandaloneArrangement();
+    return arrangement != nullptr
+        && arrangement->getSelectedPlacementId(trackId) != 0;
+}
+
+std::vector<StandaloneArrangement::Placement> getTrackPlacements(OpenTuneAudioProcessor& processor, int trackId)
+{
+    std::vector<StandaloneArrangement::Placement> placements;
+    auto* arrangement = processor.getStandaloneArrangement();
+    if (arrangement == nullptr) {
+        return placements;
+    }
+
+    const int count = arrangement->getNumPlacements(trackId);
+    placements.reserve(static_cast<size_t>(count));
+    for (int index = 0; index < count; ++index) {
+        StandaloneArrangement::Placement placement;
+        if (arrangement->getPlacementByIndex(trackId, index, placement)) {
+            placements.push_back(placement);
+        }
+    }
+
+    return placements;
+}
+
 struct PianoRollToolHandlerHarness {
     juce::Component component;
     InteractionState state;
@@ -690,7 +763,7 @@ void runAppPreferencesRoundTripsStandalonePreferencesTest()
 
     {
         AppPreferences preferences(storage);
-        preferences.setStandaloneShortcuts(shortcutSettings);
+        preferences.setShortcuts(shortcutSettings);
         preferences.setMouseTrailTheme(MouseTrailConfig::TrailTheme::Galaxy);
         preferences.flush();
     }
@@ -698,7 +771,7 @@ void runAppPreferencesRoundTripsStandalonePreferencesTest()
     {
         AppPreferences preferences(storage);
         const auto state = preferences.getState();
-        const auto& restoredPlayPause = state.standalone.shortcuts.bindings[playPauseIndex];
+        const auto& restoredPlayPause = state.shared.shortcuts.bindings[playPauseIndex];
 
         if (!restoredPlayPause.hasBinding(
                 KeyShortcutConfig::KeyBinding('P', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier))) {
@@ -4273,6 +4346,7 @@ void runAraBirthDidAddOnPreexistingRegionWithNewPersistentIdEnqueuesBirth();
 void runAraBirthUpsertWithUnreadySourceStillRecordsPending();
 void runAraBirthReadySourceTriggersQueueForExistingPending();
 void runAraBirthSamePidNewWindowBumpsRevisionAndReplacesWindow();
+void runAraEditorBuildsPlacementsFromAllPublishedRegions();
 void runAraEditorMissingPayloadDoesNotClearBinding();
 void runAraEditorDestroyRecreateReattachesExistingBinding();
 void runAraStateRestorePreBindSetStateStillRestoresIntoFinalSharedStores();
@@ -5880,6 +5954,296 @@ void runTimelinePlayheadPositionDoesNotEnterRenderModelKeyTest()
     logPass(testName);
 }
 
+void runArrangementToggleSnapWritesBackAndCanToggleAgainTest()
+{
+    constexpr const char* testName = "ArrangementShortcut_ToggleSnapWritesBackAndCanToggleAgain";
+
+    ArrangementViewHarness harness("arrangement-toggle-snap");
+
+    SnapSettings initialSnap;
+    initialSnap.enabled = true;
+    initialSnap.mode = SnapSettings::Mode::Beat;
+    harness.preferences.setSnapSettings(initialSnap);
+
+    const auto toggleSnapKey = juce::KeyPress('S',
+                                              juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier,
+                                              0);
+    if (!harness.view.keyPressed(toggleSnapKey)) {
+        logFail(testName, "toggle snap shortcut was not handled by ArrangementViewComponent");
+        return;
+    }
+
+    const auto afterDisable = harness.preferences.getSnapSettings();
+    if (afterDisable.enabled
+        || afterDisable.mode != SnapSettings::Mode::Off
+        || harness.processor.getSnapSettings().enabled
+        || harness.processor.getSnapSettings().mode != SnapSettings::Mode::Off) {
+        logFail(testName, "ToggleSnap did not write the disabled Off state back into AppPreferences/processor");
+        return;
+    }
+
+    if (!harness.view.keyPressed(toggleSnapKey)) {
+        logFail(testName, "toggle snap shortcut was not handled on the second press");
+        return;
+    }
+
+    const auto afterReenable = harness.preferences.getSnapSettings();
+    if (!afterReenable.enabled
+        || afterReenable.mode == SnapSettings::Mode::Off
+        || !harness.processor.getSnapSettings().enabled
+        || harness.processor.getSnapSettings().mode == SnapSettings::Mode::Off) {
+        logFail(testName, "ToggleSnap did not write back a usable enabled snap mode on the second toggle");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runArrangementDuplicateClipKeepsInPlaceDuplicateInvariantsTest()
+{
+    constexpr const char* testName = "ArrangementShortcut_DuplicateClipKeepsInPlaceDuplicateInvariants";
+
+    ArrangementViewHarness harness("arrangement-duplicate-clip");
+    auto* arrangement = harness.processor.getStandaloneArrangement();
+    if (arrangement == nullptr) {
+        logFail(testName, "failed to create standalone arrangement for duplicate shortcut test");
+        return;
+    }
+
+    const auto committed = harness.processor.commitPreparedImportAsPlacement(makePreparedImport("duplicate-clip", 44100),
+                                                                            { 0, 1.25 });
+    if (!committed.isValid()) {
+        logFail(testName, "failed to seed duplicate shortcut placement");
+        return;
+    }
+
+    if (!arrangement->setPlacementTrim(0, committed.placementId, 0.20, 0.50)
+        || !arrangement->setPlacementGain(0, committed.placementId, 0.72f)
+        || !arrangement->setPlacementFade(0, committed.placementId, 0.08, 0.11)) {
+        logFail(testName, "failed to seed trim/gain/fade invariants before duplicate");
+        return;
+    }
+
+    StandaloneArrangement::Placement originalPlacement;
+    if (!arrangement->getPlacementById(0, committed.placementId, originalPlacement)) {
+        logFail(testName, "failed to resolve original placement before duplicate");
+        return;
+    }
+
+    originalPlacement.name = "Lead Vox";
+    originalPlacement.colour = juce::Colour::fromRGB(0x44, 0x88, 0xCC);
+
+    if (!arrangement->deletePlacementById(0, committed.placementId)
+        || !arrangement->insertPlacement(0, originalPlacement)) {
+        logFail(testName, "failed to rewrite placement metadata for duplicate test setup");
+        return;
+    }
+
+    StandaloneArrangement::Placement rewrittenOriginal;
+    if (!arrangement->getPlacementById(0, originalPlacement.placementId, rewrittenOriginal)) {
+        logFail(testName, "failed to restore original placement after metadata rewrite");
+        return;
+    }
+
+    if (!selectArrangementPlacement(harness,
+                                    0,
+                                    rewrittenOriginal.timelineStartSeconds,
+                                    rewrittenOriginal.durationSeconds)) {
+        logFail(testName, "failed to select placement before duplicate shortcut");
+        return;
+    }
+
+    const auto beforePlacements = getTrackPlacements(harness.processor, 0);
+    if (beforePlacements.size() != 1) {
+        logFail(testName, "duplicate test precondition expected exactly one placement");
+        return;
+    }
+
+    const auto duplicateKey = juce::KeyPress('D', juce::ModifierKeys::commandModifier, 0);
+    if (!harness.view.keyPressed(duplicateKey)) {
+        logFail(testName, "duplicate shortcut was not handled by ArrangementViewComponent");
+        return;
+    }
+
+    const auto afterPlacements = getTrackPlacements(harness.processor, 0);
+    if (afterPlacements.size() != 2) {
+        logFail(testName, "duplicate shortcut did not create exactly one additional placement");
+        return;
+    }
+
+    const auto duplicatedIt = std::find_if(afterPlacements.begin(),
+                                           afterPlacements.end(),
+                                           [originalId = rewrittenOriginal.placementId](const auto& placement) {
+                                               return placement.placementId != originalId;
+                                           });
+    if (duplicatedIt == afterPlacements.end()) {
+        logFail(testName, "duplicate shortcut did not produce a second placement identity");
+        return;
+    }
+
+    const auto& duplicatePlacement = *duplicatedIt;
+    if (duplicatePlacement.placementId == rewrittenOriginal.placementId
+        || duplicatePlacement.materializationId == rewrittenOriginal.materializationId) {
+        logFail(testName, "duplicate shortcut reused the original placement/materialization identity");
+        return;
+    }
+
+    if (!approxEqual(duplicatePlacement.timelineStartSeconds, rewrittenOriginal.timelineStartSeconds, 1.0e-6)
+        || !approxEqual(duplicatePlacement.durationSeconds, rewrittenOriginal.durationSeconds, 1.0e-6)
+        || !approxEqual(duplicatePlacement.clipInSeconds, rewrittenOriginal.clipInSeconds, 1.0e-6)
+        || !approxEqual(duplicatePlacement.fadeInDuration, rewrittenOriginal.fadeInDuration, 1.0e-6)
+        || !approxEqual(duplicatePlacement.fadeOutDuration, rewrittenOriginal.fadeOutDuration, 1.0e-6)
+        || !approxEqual(duplicatePlacement.gain, rewrittenOriginal.gain, 1.0e-6f)
+        || duplicatePlacement.name != rewrittenOriginal.name
+        || duplicatePlacement.colour != rewrittenOriginal.colour) {
+        logFail(testName, "duplicate shortcut no longer preserves the in-place clip window and presentation invariants");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runArrangementNudgeShortcutsParticipateInUndoRedoTest()
+{
+    constexpr const char* testName = "ArrangementShortcut_NudgeShortcutsParticipateInUndoRedo";
+
+    ArrangementViewHarness harness("arrangement-nudge-undo");
+    auto* arrangement = harness.processor.getStandaloneArrangement();
+    if (arrangement == nullptr) {
+        logFail(testName, "failed to create standalone arrangement for nudge shortcut test");
+        return;
+    }
+
+    const auto committed = harness.processor.commitPreparedImportAsPlacement(makePreparedImport("nudge-clip", 44100),
+                                                                            { 0, 1.00 });
+    if (!committed.isValid()) {
+        logFail(testName, "failed to seed nudge shortcut placement");
+        return;
+    }
+
+    StandaloneArrangement::Placement before;
+    if (!arrangement->getPlacementById(0, committed.placementId, before)) {
+        logFail(testName, "failed to resolve placement before nudge");
+        return;
+    }
+
+    if (!selectArrangementPlacement(harness, 0, before.timelineStartSeconds, before.durationSeconds)) {
+        logFail(testName, "failed to select placement before nudge shortcut");
+        return;
+    }
+
+    auto& undoManager = harness.processor.getUndoManager();
+    const auto nudgeLeftKey = juce::KeyPress(juce::KeyPress::leftKey, {}, 0);
+    if (!harness.view.keyPressed(nudgeLeftKey)) {
+        logFail(testName, "NudgeLeft shortcut was not handled by ArrangementViewComponent");
+        return;
+    }
+
+    StandaloneArrangement::Placement afterLeft;
+    if (!arrangement->getPlacementById(0, committed.placementId, afterLeft)) {
+        logFail(testName, "failed to resolve placement after NudgeLeft");
+        return;
+    }
+
+    if (!undoManager.canUndo()) {
+        logFail(testName, "NudgeLeft did not register an undo action");
+        return;
+    }
+
+    if (!approxEqual(afterLeft.timelineStartSeconds, before.timelineStartSeconds - 0.01, 1.0e-6)) {
+        logFail(testName, "NudgeLeft did not move the placement by the expected 10ms");
+        return;
+    }
+
+    if (!undoManager.undo()) {
+        logFail(testName, "UndoManager rejected undo after NudgeLeft");
+        return;
+    }
+
+    StandaloneArrangement::Placement restoredAfterUndo;
+    if (!arrangement->getPlacementById(0, committed.placementId, restoredAfterUndo)) {
+        logFail(testName, "failed to resolve placement after undoing NudgeLeft");
+        return;
+    }
+
+    if (!approxEqual(restoredAfterUndo.timelineStartSeconds, before.timelineStartSeconds, 1.0e-6)) {
+        logFail(testName, "undo did not restore the pre-nudge placement position");
+        return;
+    }
+
+    if (!undoManager.redo()) {
+        logFail(testName, "UndoManager rejected redo after NudgeLeft");
+        return;
+    }
+
+    StandaloneArrangement::Placement restoredAfterRedo;
+    if (!arrangement->getPlacementById(0, committed.placementId, restoredAfterRedo)) {
+        logFail(testName, "failed to resolve placement after redoing NudgeLeft");
+        return;
+    }
+
+    if (!approxEqual(restoredAfterRedo.timelineStartSeconds, afterLeft.timelineStartSeconds, 1.0e-6)) {
+        logFail(testName, "redo did not restore the nudged-left position");
+        return;
+    }
+
+    const auto nudgeRightKey = juce::KeyPress(juce::KeyPress::rightKey, {}, 0);
+    if (!harness.view.keyPressed(nudgeRightKey)) {
+        logFail(testName, "NudgeRight shortcut was not handled by ArrangementViewComponent");
+        return;
+    }
+
+    StandaloneArrangement::Placement afterRight;
+    if (!arrangement->getPlacementById(0, committed.placementId, afterRight)) {
+        logFail(testName, "failed to resolve placement after NudgeRight");
+        return;
+    }
+
+    if (!undoManager.canUndo()) {
+        logFail(testName, "NudgeRight did not keep undo history available");
+        return;
+    }
+
+    if (!approxEqual(afterRight.timelineStartSeconds, before.timelineStartSeconds, 1.0e-6)) {
+        logFail(testName, "NudgeRight did not return the placement to its original position");
+        return;
+    }
+
+    if (!undoManager.undo()) {
+        logFail(testName, "UndoManager rejected undo after NudgeRight");
+        return;
+    }
+
+    StandaloneArrangement::Placement afterRightUndo;
+    if (!arrangement->getPlacementById(0, committed.placementId, afterRightUndo)) {
+        logFail(testName, "failed to resolve placement after undoing NudgeRight");
+        return;
+    }
+
+    if (!approxEqual(afterRightUndo.timelineStartSeconds, afterLeft.timelineStartSeconds, 1.0e-6)) {
+        logFail(testName, "undo after NudgeRight did not restore the prior nudged-left position");
+        return;
+    }
+
+    if (!undoManager.redo()) {
+        logFail(testName, "UndoManager rejected redo after NudgeRight");
+        return;
+    }
+
+    StandaloneArrangement::Placement afterRightRedo;
+    if (!arrangement->getPlacementById(0, committed.placementId, afterRightRedo)) {
+        logFail(testName, "failed to resolve placement after redoing NudgeRight");
+        return;
+    }
+
+    if (!approxEqual(afterRightRedo.timelineStartSeconds, before.timelineStartSeconds, 1.0e-6)) {
+        logFail(testName, "redo after NudgeRight did not restore the returned position");
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runTimelineInvalidationViewportShiftExposesOnlyNewStripTest()
 {
     constexpr const char* testName = "TimelineInvalidation_ViewportShiftExposesOnlyNewStrip";
@@ -6406,7 +6770,7 @@ void runWaveformTileCacheHasBoundedMemoryAndEvictionTest()
         return;
     }
 
-    if (cache.get(1, 1, 0, 0.0, 1.0, 0, 0) != nullptr) {
+    if (cache.get(1, 1, 0, bounds, 0.0, 1.0, 0, 0) != nullptr) {
         logFail(testName, "WaveformTileCache did not evict the oldest tile after capacity pressure");
         return;
     }
@@ -7934,6 +8298,43 @@ void runAraEditorAttachesRenderableBindingWithoutReadAudioArmTest()
     if (editorHeader.contains("araClipImportArmed_")
         || projectionSection.contains("araClipImportArmed_")) {
         logFail(testName, "ARA renderable binding is still gated by Read Audio arm state");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAraEditorBuildsPlacementsFromAllPublishedRegions()
+{
+    constexpr const char* testName = "AraEditor_BuildsPlacementsFromAllPublishedRegions";
+
+    const auto resolveSyncSection = extractWorkspaceFileSection(
+        "Source/Plugin/PluginEditor.cpp",
+        "OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()",
+        "void OpenTuneAudioProcessorEditor::updateRegularCaptureSessionCallback()");
+    if (resolveSyncSection.isEmpty()) {
+        logFail(testName, "failed to locate materialization sync helper");
+        return;
+    }
+
+    if (!resolveSyncSection.contains("snapshot->publishedRegions")
+        || !resolveSyncSection.contains("for (const auto& region")
+        || !resolveSyncSection.contains("sync.placements.push_back")) {
+        logFail(testName, "ARA editor sync must build display placements from all published regions");
+        return;
+    }
+
+    const auto preferredOnlyPattern =
+        "sync.placements.push_back(makePlacement(sync.activeMaterializationId,\n"
+        "                                                            makePianoRollLocalProjection(*preferredRegion)));\n"
+        "                    return sync;";
+    if (resolveSyncSection.contains(preferredOnlyPattern)) {
+        logFail(testName, "ARA editor sync still collapses display to the preferred region only");
+        return;
+    }
+
+    if (!resolveSyncSection.contains("resolvePreferredAraRegionView(*snapshot)")) {
+        logFail(testName, "ARA editor sync should keep preferred region only as the active edit target");
         return;
     }
 
@@ -9968,6 +10369,7 @@ void runArchitectureBehaviorSuite()
     runAraBindingArchiveHooksPersistPersistentIdMaterializationBindingsTest();
     runAraBindingRestoredPersistentIdRebindsNewPlaybackRegionTest();
     runAraEditorAttachesRenderableBindingWithoutReadAudioArmTest();
+    runAraEditorBuildsPlacementsFromAllPublishedRegions();
     runAraSnapshotBindingStateIsSetTest();
 #endif
 
@@ -10029,6 +10431,9 @@ void runArchitectureBehaviorSuite()
     runSplitPlacementBirthsIndependentMaterializationsTest();
     runMergePlacementRewritesPlacementOnlyOrFailsExplicitlyTest();
     runMergePlacementRejectsNonContiguousSourceWindowsTest();
+    runArrangementToggleSnapWritesBackAndCanToggleAgainTest();
+    runArrangementDuplicateClipKeepsInPlaceDuplicateInvariantsTest();
+    runArrangementNudgeShortcutsParticipateInUndoRedoTest();
 
     runProcessorStateFreshProcessorRoundTripsMaterializationAndPlacementTest();
     runProcessorStateBinarySerializationAvoidsXmlBase64Test();
