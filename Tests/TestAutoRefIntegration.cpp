@@ -79,6 +79,42 @@ bool seedMaterializationFeatures(OpenTuneAudioProcessor& processor,
         && processor.setMaterializationNotesById(materializationId, notes);
 }
 
+bool seedReadyTimeToolAnalysis(OpenTuneAudioProcessor& processor,
+                               uint64_t materializationId,
+                               std::initializer_list<double> eventTimesSeconds)
+{
+    auto* store = processor.getMaterializationStore();
+    if (store == nullptr) {
+        return false;
+    }
+
+    MaterializationStore::MaterializationSnapshot snapshot;
+    if (!store->getSnapshot(materializationId, snapshot)) {
+        return false;
+    }
+
+    MaterializationStore::DerivedAnalysis analysis;
+    analysis.state = F0ExtractionState::Ready;
+    analysis.backendMode = 2;
+    analysis.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
+    analysis.sourceDurationSeconds = snapshot.audioBuffer != nullptr
+        ? static_cast<double>(snapshot.audioBuffer->getNumSamples()) / TimeCoordinate::kRenderSampleRate
+        : 0.0;
+
+    uint64_t eventId = 1;
+    for (double eventSeconds : eventTimesSeconds) {
+        MaterializationStore::DerivedAnalysis::TemporalEvent event;
+        event.eventId = eventId++;
+        event.sourceSeconds = eventSeconds;
+        event.kind = MaterializationStore::DerivedAnalysis::TemporalEventKind::Onset;
+        event.strength = 1.0f;
+        event.confidence = 1.0f;
+        analysis.temporalEvents.push_back(event);
+    }
+
+    return store->setDerivedAnalysis(materializationId, analysis);
+}
+
 std::shared_ptr<const TimeGridSnapshot> makeWarpedReferenceGrid()
 {
     std::vector<TimeHandle> handles;
@@ -374,6 +410,137 @@ void runAutoRefIntegrationProcessorOwnsReferenceAnalysisPreheatTest()
     logFail(testName, "processor-owned ReferenceAnalysisService did not publish Ready features");
 }
 
+void runAutoRefIntegrationEnsureTimeToolAnchorSeedBuildsIdentityInternalHandlesTest()
+{
+    constexpr const char* testName = "AutoRefIntegration_EnsureTimeToolAnchorSeed_BuildsIdentityInternalHandles";
+
+    OpenTuneAudioProcessor processor;
+    const auto placement = addPlacement(processor, "TimeTool Seed", 0.0);
+    if (!placement.isValid()) {
+        logFail(testName, "failed to seed placement");
+        return;
+    }
+
+    const std::vector<Note> notes = {
+        makeNote(0.20, 0.70, 220.0f),
+        makeNote(1.00, 1.50, 330.0f)
+    };
+    if (!seedMaterializationFeatures(processor,
+                                     placement.materializationId,
+                                     makeTwoPhraseF0(220.0f, 330.0f),
+                                     notes)) {
+        logFail(testName, "failed to seed source-derived inputs");
+        return;
+    }
+
+    if (!seedReadyTimeToolAnalysis(processor, placement.materializationId, { 0.45, 1.20, 1.55 })) {
+        logFail(testName, "failed to seed ready derived analysis");
+        return;
+    }
+
+    if (!processor.ensureTimeToolAnchorSeed(placement.materializationId)) {
+        logFail(testName, "ensureTimeToolAnchorSeed returned false");
+        return;
+    }
+
+    const auto grid = processor.getMaterializationTimeGridById(placement.materializationId);
+    if (grid == nullptr) {
+        logFail(testName, "seed did not publish a TimeGrid");
+        return;
+    }
+
+    const auto& handles = grid->handles();
+    if (handles.size() < 3) {
+        logFail(testName, "seeded TimeGrid must contain internal anchors");
+        return;
+    }
+    if (!grid->isIdentity()) {
+        logFail(testName, "seeded TimeGrid must remain identity");
+        return;
+    }
+
+    const bool hasInternalOnset = std::any_of(handles.begin(), handles.end(), [](const TimeHandle& handle) {
+        return handle.kind == HandleKind::InternalOnset
+            && !handle.locked
+            && approxEqual(static_cast<float>(handle.source_seconds),
+                           static_cast<float>(handle.output_seconds),
+                           1.0e-6f);
+    });
+    if (!hasInternalOnset) {
+        logFail(testName, "seeded TimeGrid must contain unlocked InternalOnset handles");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefIntegrationEnsureTimeToolAnchorSeedPreservesExistingWarpTest()
+{
+    constexpr const char* testName = "AutoRefIntegration_EnsureTimeToolAnchorSeed_PreservesExistingWarp";
+
+    OpenTuneAudioProcessor processor;
+    const auto placement = addPlacement(processor, "TimeTool Existing Warp", 0.0);
+    if (!placement.isValid()) {
+        logFail(testName, "failed to seed placement");
+        return;
+    }
+
+    const std::vector<Note> notes = {
+        makeNote(0.20, 0.70, 220.0f),
+        makeNote(1.00, 1.50, 330.0f)
+    };
+    if (!seedMaterializationFeatures(processor,
+                                     placement.materializationId,
+                                     makeTwoPhraseF0(220.0f, 330.0f),
+                                     notes)) {
+        logFail(testName, "failed to seed source-derived inputs");
+        return;
+    }
+
+    const auto warpedGrid = makeWarpedReferenceGrid();
+    if (warpedGrid == nullptr
+        || !processor.setMaterializationTimeGridById(placement.materializationId,
+                                                     warpedGrid,
+                                                     0,
+                                                     static_cast<int64_t>(kF0Frames))) {
+        logFail(testName, "failed to seed warped TimeGrid");
+        return;
+    }
+
+    const auto before = processor.getMaterializationTimeGridById(placement.materializationId);
+    if (before == nullptr || before->isIdentity()) {
+        logFail(testName, "expected non-identity TimeGrid before seed");
+        return;
+    }
+
+    if (!processor.ensureTimeToolAnchorSeed(placement.materializationId)) {
+        logFail(testName, "ensureTimeToolAnchorSeed should no-op but still succeed");
+        return;
+    }
+
+    const auto after = processor.getMaterializationTimeGridById(placement.materializationId);
+    if (after == nullptr || after->isIdentity()) {
+        logFail(testName, "existing warped TimeGrid must be preserved");
+        return;
+    }
+    if (after->handles().size() != before->handles().size()) {
+        logFail(testName, "existing warped TimeGrid handle count changed");
+        return;
+    }
+    if (!approxEqual(static_cast<float>(after->handles()[1].output_seconds),
+                     static_cast<float>(before->handles()[1].output_seconds),
+                     1.0e-6f)) {
+        logFail(testName, "existing warped TimeGrid handle positions changed");
+        return;
+    }
+    if (after->revision() != before->revision()) {
+        logFail(testName, "existing warped TimeGrid should not be rewritten by seed");
+        return;
+    }
+
+    logPass(testName);
+}
+
 } // namespace
 
 // ============================================================================
@@ -386,4 +553,6 @@ void runAutoRefIntegrationSuite()
     runAutoRefIntegrationTransactionalApplyAndCompositeUndoTest();
     runAutoRefIntegrationMissingBindingLeavesTargetUnchangedTest();
     runAutoRefIntegrationProcessorOwnsReferenceAnalysisPreheatTest();
+    runAutoRefIntegrationEnsureTimeToolAnchorSeedBuildsIdentityInternalHandlesTest();
+    runAutoRefIntegrationEnsureTimeToolAnchorSeedPreservesExistingWarpTest();
 }

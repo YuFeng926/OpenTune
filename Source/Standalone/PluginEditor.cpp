@@ -752,8 +752,6 @@ bool OpenTuneAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArra
 
 void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, int x, int y)
 {
-    juce::ignoreUnused(x, y);
-
     if (isImportInProgress_)
     {
             juce::AlertWindow::showMessageBoxAsync(
@@ -763,6 +761,8 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
             );
         return;
     }
+
+    clearImportDropPreview();
 
     if (files.isEmpty())
         return;
@@ -792,7 +792,161 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
             );
     }
 
-    promptTrackSelectionForDroppedFile(file);
+    // Resolve import target from drop position (x,y)
+    const ImportDropTarget target = resolveImportDropTarget(x, y);
+    applyImportDropTarget(target, file);
+}
+
+// ============================================================================
+// File Drag Hover Preview (fileDragEnter / fileDragMove / fileDragExit)
+// ============================================================================
+
+void OpenTuneAudioProcessorEditor::fileDragEnter(const juce::StringArray& files, int x, int y)
+{
+    juce::ignoreUnused(files);
+    updateImportDropPreview(resolveImportDropTarget(x, y));
+}
+
+void OpenTuneAudioProcessorEditor::fileDragMove(const juce::StringArray& files, int x, int y)
+{
+    juce::ignoreUnused(files);
+    updateImportDropPreview(resolveImportDropTarget(x, y));
+}
+
+void OpenTuneAudioProcessorEditor::fileDragExit(const juce::StringArray& files)
+{
+    juce::ignoreUnused(files);
+    clearImportDropPreview();
+}
+
+void OpenTuneAudioProcessorEditor::updateImportDropPreview(ImportDropTarget target)
+{
+    ImportDropPreview preview;
+    preview.active = true;
+    preview.visibleTrackCount = trackPanel_.getVisibleTrackCount();
+    preview.trackHeight = processorRef_.getTrackHeight();
+
+    switch (target.kind)
+    {
+    case ImportDropTarget::Kind::ExistingTrack:
+        preview.targetTrackId = target.trackId;
+        break;
+
+    case ImportDropTarget::Kind::NewTrack:
+        preview.isNewTrack = true;
+        break;
+
+    case ImportDropTarget::Kind::FallbackActiveTrack:
+    case ImportDropTarget::Kind::Reject:
+        preview.active = false;
+        break;
+    }
+
+    arrangementView_.setImportDropPreview(preview);
+}
+
+void OpenTuneAudioProcessorEditor::clearImportDropPreview()
+{
+    arrangementView_.clearImportDropPreview();
+}
+
+// ============================================================================
+// Import Drop Target Resolver
+// ============================================================================
+
+ImportDropTarget OpenTuneAudioProcessorEditor::resolveImportDropTarget(int globalX, int globalY) const
+{
+    ImportDropTarget result;
+
+    // Convert global (PluginEditor) coordinates to ArrangementViewComponent local coordinates
+    const juce::Point<int> localPt = arrangementView_.getLocalPoint(this, juce::Point<int>(globalX, globalY));
+
+    // Check if the drop point falls within the ArrangementView bounds
+    const bool isInsideArrangement = arrangementView_.getLocalBounds().contains(localPt);
+
+    if (!isInsideArrangement)
+    {
+        // Non-Arrangement drop → fallback to active track
+        result.kind = ImportDropTarget::Kind::FallbackActiveTrack;
+        result.trackId = getStandaloneActiveTrack(processorRef_);
+        result.timelineStartSeconds = computeTrackAppendStartSeconds(result.trackId);
+        return result;
+    }
+
+    if (localPt.y < arrangementView_.getRulerHeight())
+    {
+        result.kind = ImportDropTarget::Kind::FallbackActiveTrack;
+        result.trackId = getStandaloneActiveTrack(processorRef_);
+        result.timelineStartSeconds = computeTrackAppendStartSeconds(result.trackId);
+        return result;
+    }
+
+    // Resolve the track from Y coordinate
+    const int resolvedTrackId = arrangementView_.trackIdForViewportY(localPt.y);
+    const int visibleTracks = trackPanel_.getVisibleTrackCount();
+
+    if (resolvedTrackId < visibleTracks)
+    {
+        // Drop landed on a visible track lane
+        result.kind = ImportDropTarget::Kind::ExistingTrack;
+        result.trackId = resolvedTrackId;
+        result.timelineStartSeconds = arrangementView_.viewportXToAbsoluteTime(localPt.x);
+        if (result.timelineStartSeconds < 0.0)
+            result.timelineStartSeconds = 0.0;
+        return result;
+    }
+
+    // Drop landed below the last visible track → blank area
+    if (visibleTracks >= OpenTuneAudioProcessor::MAX_TRACKS)
+    {
+        // Already at MAX_TRACKS — reject with a direct message
+        result.kind = ImportDropTarget::Kind::Reject;
+        result.rejectReason = juce::String::fromUTF8(u8"已达到最大轨道数量（")
+                              + juce::String(OpenTuneAudioProcessor::MAX_TRACKS)
+                              + juce::String::fromUTF8(u8"条），无法创建更多轨道。");
+        return result;
+    }
+
+    // Blank area → create a new visible track
+    result.kind = ImportDropTarget::Kind::NewTrack;
+    result.trackId = visibleTracks;  // new track will be at this index (0-based)
+    result.timelineStartSeconds = juce::jmax(0.0, arrangementView_.viewportXToAbsoluteTime(localPt.x));
+    return result;
+}
+
+// ============================================================================
+// Apply Import Drop Target
+// ============================================================================
+
+void OpenTuneAudioProcessorEditor::applyImportDropTarget(ImportDropTarget target, const juce::File& file)
+{
+    switch (target.kind)
+    {
+    case ImportDropTarget::Kind::ExistingTrack:
+        importAudioFileToTrack(target.trackId, file, target.timelineStartSeconds);
+        break;
+
+    case ImportDropTarget::Kind::NewTrack:
+    {
+        // Create one new visible track and import there
+        trackPanel_.showMoreTracks();
+        const int newTrackId = trackPanel_.getVisibleTrackCount() - 1;
+        importAudioFileToTrack(newTrackId, file, target.timelineStartSeconds);
+        break;
+    }
+
+    case ImportDropTarget::Kind::FallbackActiveTrack:
+        importAudioFileToTrack(target.trackId, file, target.timelineStartSeconds);
+        break;
+
+    case ImportDropTarget::Kind::Reject:
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::WarningIcon,
+            juce::String::fromUTF8(u8"导入音频"),
+            target.rejectReason
+        );
+        break;
+    }
 }
 
 void OpenTuneAudioProcessorEditor::paint(juce::Graphics& g)
@@ -1476,42 +1630,14 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
     });
 }
 
-void OpenTuneAudioProcessorEditor::promptTrackSelectionForDroppedFile(const juce::File& file)
-{
-    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
-
-    auto* alert = new juce::AlertWindow(
-        juce::String::fromUTF8(u8"导入音频"),
-        juce::String::fromUTF8(u8"您希望将音频文件添加到："),
-        juce::AlertWindow::NoIcon
-    );
-
-    int visibleTracks = trackPanel_.getVisibleTrackCount();
-    for (int i = 0; i < visibleTracks; ++i)
-    {
-        alert->addButton(juce::String::fromUTF8(u8"轨道") + juce::String(i + 1), i + 1);
-    }
-    alert->addButton(juce::String::fromUTF8(u8"取消"), 0);
-
-    alert->enterModalState(
-        true,
-        juce::ModalCallbackFunction::create([safeThis, file, visibleTracks](int result)
-        {
-            if (safeThis == nullptr)
-                return;
-
-            if (result >= 1 && result <= visibleTracks)
-                safeThis->importAudioFileToTrack(result - 1, file);
-        }),
-        true
-    );
-}
-
-void OpenTuneAudioProcessorEditor::importAudioFileToTrack(int trackId, const juce::File& file)
+void OpenTuneAudioProcessorEditor::importAudioFileToTrack(int trackId, const juce::File& file,
+                                                            double timelineStartSeconds)
 {
     OpenTuneAudioProcessor::ImportPlacement placement;
     placement.trackId = trackId;
-    placement.timelineStartSeconds = computeTrackAppendStartSeconds(trackId);
+    placement.timelineStartSeconds = (timelineStartSeconds >= 0.0)
+        ? timelineStartSeconds
+        : computeTrackAppendStartSeconds(trackId);
 
     PendingImport pendingImport;
     pendingImport.placement = placement;

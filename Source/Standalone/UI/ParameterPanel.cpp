@@ -524,6 +524,16 @@ void ParameterPanel::resized()
     if (autoTuneToolButton_) buttons.push_back(autoTuneToolButton_.get());    // 第3行第2列
 
     // 2列×3行网格布局
+    if (!experimentalFeaturesEnabled_ && timeToolButton_) {
+        for (auto it = buttons.begin(); it != buttons.end();) {
+            if (*it == timeToolButton_.get()) {
+                it = buttons.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     for (int i = 0; i < static_cast<int>(buttons.size()); ++i) {
         int row = i / 2;
         int col = i % 2;

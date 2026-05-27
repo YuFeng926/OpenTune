@@ -558,6 +558,104 @@ void runReferenceAutoAlign_AggressiveModeContractMatchesImplementationTest()
     logPass(testName);
 }
 
+void runAutoRefArchitectureExperimentalFeaturesGateSplitTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_ExperimentalFeaturesGateSplit";
+
+    const auto prefsHeader = readWorkspaceFile("Source/Utils/AppPreferences.h");
+    const auto prefsCpp = readWorkspaceFile("Source/Utils/AppPreferences.cpp");
+    const auto sharedPrefs = readWorkspaceFile("Source/Editor/Preferences/SharedPreferencePages.cpp");
+
+    if (prefsHeader.isEmpty() || prefsCpp.isEmpty() || sharedPrefs.isEmpty()) {
+        logFail(testName, "could not read preference source files");
+        return;
+    }
+
+    if (!prefsHeader.contains("bool experimentalFeaturesEnabled = false;")
+        || !prefsHeader.contains("setExperimentalFeaturesEnabled")) {
+        logFail(testName, "AppPreferences must expose an independent experimental feature gate");
+        return;
+    }
+
+    if (!prefsCpp.contains("shared.features.experimentalEnabled")) {
+        logFail(testName, "experimental feature gate must persist under its own storage key");
+        return;
+    }
+
+    if (!sharedPrefs.contains("启用实验性功能（参考轨、伸缩工具）")
+        || !sharedPrefs.contains("AUTO Ref 模式")) {
+        logFail(testName, "preferences UI must split gate toggle from AUTO Ref mode selector");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefArchitectureTimeToolEntryUsesProcessorSeedTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_TimeToolEntryUsesProcessorSeed";
+
+    const auto pianoRoll = readWorkspaceFile("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto processorHeader = readWorkspaceFile("Source/PluginProcessor.h");
+    const auto processorCpp = readWorkspaceFile("Source/PluginProcessor.cpp");
+
+    if (pianoRoll.isEmpty() || processorHeader.isEmpty() || processorCpp.isEmpty()) {
+        logFail(testName, "could not read TimeTool source files");
+        return;
+    }
+
+    if (!pianoRoll.contains("ensureTimeToolAnchorSeed")
+        || !processorHeader.contains("bool ensureTimeToolAnchorSeed(uint64_t materializationId);")
+        || !processorCpp.contains("OpenTuneAudioProcessor::ensureTimeToolAnchorSeed")) {
+        logFail(testName, "TimeTool first entry must route through processor-owned seed API");
+        return;
+    }
+
+    if (!processorCpp.contains("HandleKind::InternalOnset")
+        || !processorCpp.contains("buildGameReferenceDerivedAnalysis(snapshot)")) {
+        logFail(testName, "processor seed API must build GAME anchors and write InternalOnset handles");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefArchitectureArrangementReferenceControlsFullyGatedTest()
+{
+    constexpr const char* testName = "AutoRefArchitecture_ArrangementReferenceControlsFullyGated";
+
+    const auto arrangementHeader = readWorkspaceFile("Source/Standalone/UI/ArrangementViewComponent.h");
+    const auto arrangementCpp = readWorkspaceFile("Source/Standalone/UI/ArrangementViewComponent.cpp");
+    const auto editorCpp = readWorkspaceFile("Source/Standalone/PluginEditor.cpp");
+
+    if (arrangementHeader.isEmpty() || arrangementCpp.isEmpty() || editorCpp.isEmpty()) {
+        logFail(testName, "could not read arrangement reference control sources");
+        return;
+    }
+
+    if (!arrangementHeader.contains("setExperimentalReferenceControlsEnabled")
+        || !arrangementHeader.contains("experimentalReferenceControlsEnabled_")) {
+        logFail(testName, "ArrangementView must own an explicit experimental reference control gate");
+        return;
+    }
+
+    if (!arrangementCpp.contains("experimentalReferenceControlsEnabled_ && placementBounds.getWidth() > 30")
+        || !arrangementCpp.contains("experimentalReferenceControlsEnabled_ && moveHit.placementBounds.getWidth() > 30")
+        || !arrangementCpp.contains("experimentalReferenceControlsEnabled_ && hit.trackId >= 0 && hit.placementBounds.getWidth() > 30")) {
+        logFail(testName, "ArrangementView must gate draw, hover, and click reference control paths");
+        return;
+    }
+
+    if (!editorCpp.contains("setExperimentalReferenceControlsEnabled")
+        || !editorCpp.contains("!experimentalFeaturesEnabled || !hasRef")
+        || !editorCpp.contains("if (!appPreferences_.getState().shared.experimentalFeaturesEnabled)")) {
+        logFail(testName, "Standalone editor must propagate the gate and block menu/overlay side paths");
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runAutoRefArchitectureSuite()
 {
     logSection("AutoRefArchitecture");
@@ -571,6 +669,9 @@ void runAutoRefArchitectureSuite()
     runAutoRefArchitectureNoPrivateAutoRefSpacingConstantsTest();
     runAutoRefArchitectureFailedAnalysisIsNotForcedReadyTest();
     runAutoRefArchitectureReferenceAnalysisServiceIsProcessorDomainTest();
+    runAutoRefArchitectureExperimentalFeaturesGateSplitTest();
+    runAutoRefArchitectureTimeToolEntryUsesProcessorSeedTest();
+    runAutoRefArchitectureArrangementReferenceControlsFullyGatedTest();
 
     // Gate 3 — Aggressive mode blocked contract
     runReferenceAutoAlign_AggressiveModeContractMatchesImplementationTest();
