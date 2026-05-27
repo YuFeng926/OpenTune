@@ -577,41 +577,37 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    if (!key.getModifiers().isAnyModifierKeyDown()) {
-        if (key.getTextCharacter() == '2') {
-            ctx_.setCurrentTool(ToolId::DrawNote);
-            return true;
-        }
-
-        if (key.getTextCharacter() == '3') {
-            ctx_.setCurrentTool(ToolId::Select);
-            return true;
-        }
-
-        if (key.getTextCharacter() == '4') {
-            ctx_.setCurrentTool(ToolId::LineAnchor);
-            return true;
-        }
-
-        if (key.getTextCharacter() == '5') {
-            ctx_.setCurrentTool(ToolId::HandDraw);
-            return true;
-        }
-
-        // ⚡️ vocal-time-stretch §8.1 (Phase E scaffolding):
-        // Time tool key shortcut. Phase F adds the full ToolHandler / Renderer
-        // wiring + UI cursor / handle dragging behavior; this commit lands the
-        // tool selection plumbing only.
-        if (key.getTextCharacter() == 't' || key.getTextCharacter() == 'T') {
-            ctx_.setCurrentTool(ToolId::TimeTool);
-            return true;
-        }
-
-        if (key.getTextCharacter() == '6') {
-            ctx_.notifyAutoTuneRequested();
-            return true;
-        }
+    // ==== Tool switching (via configurable shortcuts) ====
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolDrawNote, key)) {
+        ctx_.setCurrentTool(ToolId::DrawNote);
+        return true;
     }
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolSelect, key)) {
+        ctx_.setCurrentTool(ToolId::Select);
+        return true;
+    }
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolLineAnchor, key)) {
+        ctx_.setCurrentTool(ToolId::LineAnchor);
+        return true;
+    }
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolHandDraw, key)) {
+        ctx_.setCurrentTool(ToolId::HandDraw);
+        return true;
+    }
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolTimeTool, key)) {
+        ctx_.setCurrentTool(ToolId::TimeTool);
+        return true;
+    }
+
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::ToolAutoTune, key)) {
+        ctx_.notifyAutoTuneRequested();
+        return true;
+    }
+    // ==== End tool switching ====
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::PlayPause, key)) {
         ctx_.notifyPlayPauseToggle();
@@ -623,11 +619,9 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Delete, key) ||
-        key.getTextCharacter() == '1') {
-        // ⚡️ vocal-time-stretch §8.4 (Phase G): Time tool always consumes
-        // Delete to avoid accidentally deleting notes when a handle isn't
-        // selected.  No-op when nothing's selected.
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Delete, key)) {
+        // Time tool always consumes Delete to avoid accidentally deleting notes
+        // when a handle isn't selected. No-op when nothing's selected.
         if (currentTool_ == ToolId::TimeTool) {
             handleTimeToolDeleteSelected();
             return true;
@@ -636,7 +630,7 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    if (key == juce::KeyPress::escapeKey) {
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::CancelSelection, key)) {
         ctx_.notifyEscapeKey();
         return true;
     }

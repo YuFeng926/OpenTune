@@ -436,6 +436,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
     menuBar_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+    pianoRoll_.setShortcutSettings(appPreferences_.getState().shared.shortcuts);
 }
 
 void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
@@ -536,7 +537,7 @@ bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 
 bool OpenTuneAudioProcessorEditor::handleEditorShortcut(const juce::KeyPress& key)
 {
-    const auto& shortcutSettings = appPreferences_.getState().standalone.shortcuts;
+    const auto& shortcutSettings = appPreferences_.getState().shared.shortcuts;
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::PlayPause, key)) {
         playPauseToggleRequested();
