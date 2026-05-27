@@ -62,6 +62,9 @@ ArrangementRenderModelCache::makeKey(OpenTuneAudioProcessor& processor,
                 revision = hashCombine(revision, static_cast<uint64_t>(timeToMs(placement.durationSeconds)));
                 revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.gain * 1000.0f)));
             }
+
+            // Include track colour so colour changes invalidate the cache
+            revision = hashCombine(revision, static_cast<uint64_t>(arrangement->getTrackColour(trackId).getARGB()));
         }
 
         key.arrangementRevision = revision;
@@ -202,6 +205,7 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         vp.fadeInDuration = placement.fadeInDuration;
         vp.fadeOutDuration = placement.fadeOutDuration;
         vp.isPreview = isPreview;
+        vp.colour = arrangement->getTrackColour(displayTrackId);
 
         if (getAnalysisState)
             vp.analysisInProgress = getAnalysisState(placementId);

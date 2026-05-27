@@ -100,6 +100,18 @@ TrackPanelComponent::TrackPanelComponent()
     addTrackButton_.onClick = [this]() { showMoreTracks(); };
     addAndMakeVisible(addTrackButton_);
 
+    // Initialize track colors with default palette
+    {
+        auto& random = juce::Random::getSystemRandom();
+        for (int i = 0; i < MAX_TRACKS; ++i)
+        {
+            float hue = static_cast<float>(i) * 0.3f + random.nextFloat() * 0.15f;
+            float saturation = 0.5f + random.nextFloat() * 0.3f;
+            float brightness = 0.7f + random.nextFloat() * 0.3f;
+            trackColors_[i] = juce::Colour::fromHSV(hue, saturation, brightness, 1.0f);
+        }
+    }
+
     // Set track 0 as active by default
     setActiveTrack(0);
     applyTheme();
@@ -192,7 +204,7 @@ void TrackPanelComponent::paint(juce::Graphics& g)
         
         if (themeId == ThemeId::Aurora)
         {
-            const auto trackColor = UIColors::auroraTrackAccent(i);
+            const auto trackColor = trackColors_[i];
             const auto laneBounds = trackBounds.reduced(2.0f, 1.0f);
             const auto tintBounds = laneBounds.withX(bounds.getX()).withRight(bounds.getRight());
             const auto active = tracks_[i].isActive;
@@ -247,7 +259,7 @@ void TrackPanelComponent::paint(juce::Graphics& g)
 
         if (themeId == ThemeId::BlueBreeze)
         {
-            const auto trackTint = juce::Colour(trackPastelColors[i % 12]);
+            const auto trackTint = trackColors_[i].withAlpha(0.10f);
             const auto active = tracks_[i].isActive;
             UIColors::fillBlueBreezeTrackCard(g, cardBounds, style.controlRadius, active, trackTint);
 
@@ -268,6 +280,10 @@ void TrackPanelComponent::paint(juce::Graphics& g)
             const auto active = tracks_[i].isActive;
             UiAssets::drawAssetStretch(g, UiAssetId::PanelTrackCard, cardBounds);
 
+            // Track color accent overlay
+            g.setColour(trackColors_[i].withAlpha(active ? 0.08f : 0.04f));
+            g.fillRoundedRectangle(cardBounds.reduced(1.0f), style.controlRadius);
+
             if (active)
             {
                 g.setColour(juce::Colour(Overdose::Colors::PinkGlowSoft).withAlpha(0.36f));
@@ -287,6 +303,13 @@ void TrackPanelComponent::paint(juce::Graphics& g)
             auto inactiveBg = UIColors::backgroundLight.darker(0.04f);
             g.setColour(tracks_[i].isActive ? activeBg : inactiveBg);
             g.fillRoundedRectangle(cardBounds, style.controlRadius);
+
+            // Track color accent overlay
+            if (tracks_[i].isActive || trackColorMode_ != TrackColorMode::Random)
+            {
+                g.setColour(trackColors_[i].withAlpha(tracks_[i].isActive ? 0.08f : 0.04f));
+                g.fillRoundedRectangle(cardBounds, style.controlRadius);
+            }
 
             if (tracks_[i].isActive)
             {
@@ -386,6 +409,10 @@ void TrackPanelComponent::resized()
 
 void TrackPanelComponent::mouseDown(const juce::MouseEvent& event)
 {
+    // Right-click is handled in mouseUp; don't select track on right-click
+    if (event.mods.isRightButtonDown())
+        return;
+
     // 使用动态轨道高度和滚动偏移计算点击的轨道
     // 坐标转换：(event.y - trackStartYOffset_ + verticalScrollOffset_) / trackHeight_
     const int dynamicTrackHeight = trackHeight_;
@@ -396,6 +423,24 @@ void TrackPanelComponent::mouseDown(const juce::MouseEvent& event)
     {
         onTrackSelected(clickedTrack);
     }
+}
+
+void TrackPanelComponent::mouseUp(const juce::MouseEvent& event)
+{
+    // Right-click in Custom mode: open color picker for this track
+    if (event.mods.isPopupMenu() && trackColorMode_ == TrackColorMode::Custom)
+    {
+        const int dynamicTrackHeight = trackHeight_;
+        int trackIndex = (event.y - trackStartYOffset_ + verticalScrollOffset_) / dynamicTrackHeight;
+
+        if (trackIndex >= 0 && trackIndex < visibleTrackCount_)
+        {
+            listeners_.call([trackIndex](Listener& l) { l.trackColorChangeRequested(trackIndex); });
+        }
+        return;
+    }
+
+    juce::Component::mouseUp(event);
 }
 
 // Shift + 鼠标滚轮：Y轴缩放（与ArrangementView同步）
@@ -496,6 +541,31 @@ void TrackPanelComponent::setTrackStartYOffset(int offset)
     {
         trackStartYOffset_ = offset;
         resized();
+        repaint();
+    }
+}
+
+void TrackPanelComponent::setTrackColour(int trackId, juce::Colour colour)
+{
+    if (trackId >= 0 && trackId < MAX_TRACKS)
+    {
+        trackColors_[trackId] = colour;
+        repaint();
+    }
+}
+
+juce::Colour TrackPanelComponent::getTrackColour(int trackId) const
+{
+    if (trackId >= 0 && trackId < MAX_TRACKS)
+        return trackColors_[trackId];
+    return juce::Colours::transparentBlack;
+}
+
+void TrackPanelComponent::setTrackColorMode(TrackColorMode mode)
+{
+    if (trackColorMode_ != mode)
+    {
+        trackColorMode_ = mode;
         repaint();
     }
 }

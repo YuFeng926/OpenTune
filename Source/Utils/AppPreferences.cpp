@@ -26,6 +26,7 @@ constexpr const char* kSharedExperimentalReferenceAlignKey = "shared.align.exper
 constexpr const char* kSharedRecentProjectsKey = "shared.recentProjects";
 constexpr const char* kSharedSnapEnabledKey = "shared.snap.enabled";
 constexpr const char* kSharedSnapModeKey = "shared.snap.mode";
+constexpr const char* kSharedTrackColorModeKey = "shared.trackColor.mode";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
     "shared.shortcuts.playPause",
@@ -255,6 +256,21 @@ static ExperimentalReferenceAlignMode fromExperimentalRefAlignModeToken(const ju
     return ExperimentalReferenceAlignMode::Off;
 }
 
+const char* toTrackColorModeToken(TrackColorMode mode)
+{
+    switch (mode) {
+        case TrackColorMode::Random: return "random";
+        case TrackColorMode::Custom: return "custom";
+    }
+    return "random";
+}
+
+TrackColorMode trackColorModeFromToken(const juce::String& token)
+{
+    if (token == "custom") return TrackColorMode::Custom;
+    return TrackColorMode::Random;
+}
+
 KeyShortcutConfig::KeyShortcutSettings decodeShortcutSettings(const juce::PropertiesFile& properties)
 {
     auto settings = KeyShortcutConfig::KeyShortcutSettings::getDefault();
@@ -311,6 +327,8 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.snap.enabled = properties.getBoolValue(kSharedSnapEnabledKey, false);
     state.shared.snap.mode = static_cast<SnapSettings::Mode>(
         properties.getIntValue(kSharedSnapModeKey, static_cast<int>(SnapSettings::Mode::Off)));
+    state.shared.trackColorMode = trackColorModeFromToken(
+        properties.getValue(kSharedTrackColorModeKey, toTrackColorModeToken(state.shared.trackColorMode)));
 
     state.shared.shortcuts = decodeShortcutSettings(properties);
     state.standalone.mouseTrailTheme = mouseTrailThemeFromToken(
@@ -353,6 +371,7 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode));
     properties.setValue(kSharedSnapEnabledKey, state.shared.snap.enabled);
     properties.setValue(kSharedSnapModeKey, static_cast<int>(state.shared.snap.mode));
+    properties.setValue(kSharedTrackColorModeKey, toTrackColorModeToken(state.shared.trackColorMode));
     properties.setValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme));
 
     juce::StringArray recentPaths;
@@ -569,6 +588,19 @@ void AppPreferences::clearRecentProjects()
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.recentProjects.clear();
     saveLocked();
+}
+
+void AppPreferences::setTrackColorMode(TrackColorMode mode)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.trackColorMode = mode;
+    saveLocked();
+}
+
+TrackColorMode AppPreferences::getTrackColorMode() const
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return state_.shared.trackColorMode;
 }
 
 } // namespace OpenTune

@@ -2752,7 +2752,7 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
             output.writeDouble(placement.fadeOutDuration);
             output.writeDouble(placement.clipInSeconds);
             output.writeString(placement.name);
-            output.writeInt(static_cast<int>(placement.colour.getARGB()));
+            output.writeInt(0);  // was placement.colour; kept for binary stream compat
         }
     }
 
@@ -2972,7 +2972,7 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
                 placement.clipInSeconds = input.readDouble();
             }
             placement.name = input.readString();
-            placement.colour = juce::Colour(static_cast<juce::uint32>(input.readInt()));
+            input.readInt();  // skip legacy placement colour field
 
             if (placement.materializationId == 0 || !materializationStore_->containsMaterialization(placement.materializationId)) {
                 continue;
@@ -3211,8 +3211,7 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     }
 
     if (std::abs(leadingPlacement.gain - trailingPlacement.gain) > 1.0e-6f
-        || leadingPlacement.name != trailingPlacement.name
-        || leadingPlacement.colour != trailingPlacement.colour) {
+        || leadingPlacement.name != trailingPlacement.name) {
         AppLogger::log("Merge rejected: placement metadata diverged");
         return std::nullopt;
     }
@@ -3970,7 +3969,7 @@ OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPrepare
     importedPlacement.durationSeconds = materializationDurationSeconds;
     importedPlacement.gain = 1.0f;
     importedPlacement.name = displayName;
-    importedPlacement.colour = juce::Colour::fromHSV(placement.trackId * 0.3f, 0.6f, 0.8f, 1.0f);
+    // importedPlacement.colour removed — no longer a field on Placement
 
     if (!standaloneArrangement_->insertPlacement(placement.trackId, importedPlacement)) {
         materializationStore_->deleteMaterialization(materializationId);

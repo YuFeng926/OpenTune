@@ -38,7 +38,6 @@ public:
         double fadeOutDuration{0.0};
         double clipInSeconds{0.0};          // Trim start offset in source materialization (0 = start from beginning)
         juce::String name;
-        juce::Colour colour;
         bool isRetired{false};
 
         uint64_t referencePlacementId{0};        // 0 = 无参考
@@ -104,6 +103,8 @@ public:
     bool isTrackSolo(int trackId) const;
     bool setTrackVolume(int trackId, float volume);
     float getTrackVolume(int trackId) const;
+    bool setTrackColour(int trackId, juce::Colour colour);
+    juce::Colour getTrackColour(int trackId) const;
     float getTrackRmsDb(int trackId) const;
     bool setTrackRmsDb(int trackId, float rmsDb);
 

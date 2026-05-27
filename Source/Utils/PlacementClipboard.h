@@ -15,7 +15,6 @@ struct PlacementClipEntry {
     double fadeInDuration{0.0};
     double fadeOutDuration{0.0};
     juce::String name;
-    juce::Colour colour;
 };
 
 class PlacementClipboard {
