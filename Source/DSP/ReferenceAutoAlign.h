@@ -1,10 +1,10 @@
 #pragma once
 
-#include "../MaterializationStore.h"
+#include "ReferenceFeatures.h"
+#include "TimeGridPatchBuilder.h"
 #include "../Utils/Note.h"
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"
-#include "TimeGridPatchBuilder.h"
 
 #include <cstdint>
 #include <memory>
@@ -12,14 +12,11 @@
 
 namespace OpenTune {
 
-using AlignmentFeatures = MaterializationStore::DerivedAnalysis;
-
 struct ReferenceClipProjection {
     uint64_t placementId{0};
     uint64_t materializationId{0};
     double timelineStartSeconds{0.0};
     double timelineEndSeconds{0.0};
-    std::shared_ptr<const TimeGridSnapshot> timeGrid;
 
     double durationSeconds() const noexcept
     {
@@ -30,10 +27,13 @@ struct ReferenceClipProjection {
 struct ReferenceAlignmentRequest {
     ReferenceClipProjection target;
     ReferenceClipProjection reference;
-    AlignmentFeatures targetFeatures;
-    AlignmentFeatures referenceFeatures;
+    EffectiveTimeMap targetTimeMap;
+    EffectiveTimeMap referenceTimeMap;
+    ReferenceFeatureSet targetFeatures;
+    ReferenceFeatureSet referenceFeatures;
     std::vector<Note> targetNotesBefore;
     std::vector<CorrectedSegment> targetSegmentsBefore;
+    std::shared_ptr<const TimeGridSnapshot> targetTimeGridBefore;
     double overlapStartTimelineSeconds{0.0};
     double overlapEndTimelineSeconds{0.0};
 };

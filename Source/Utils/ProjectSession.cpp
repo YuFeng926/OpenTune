@@ -210,7 +210,6 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
             binding.targetPlacementId = placement.placementId;
             binding.referencePlacementId = placement.referencePlacementId;
             binding.bindingRevision = static_cast<uint64_t>(placement.referenceBindingRevision);
-            binding.analysisMode = "Basic";
             snap.referenceBindings.push_back(binding);
         }
     }

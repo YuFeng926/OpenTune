@@ -97,9 +97,6 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
                 menu.addSubMenu(LOC(kExportAudio), exportMenu);
 
                 menu.addSeparator();
-                menu.addItem(SaveProject, LOC(kSaveProject));
-                menu.addItem(SaveProjectAs, LOC(kSaveProjectAs));
-                menu.addSeparator();
                 menu.addItem(OpenProject, LOC(kOpenProject));
                 if (!recentProjects_.empty()) {
                     juce::PopupMenu recentMenu;
@@ -112,6 +109,9 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
                     recentMenu.addItem(ClearRecentProjects, LOC(kClearRecentProjects));
                     menu.addSubMenu(LOC(kRecentProjects), recentMenu);
                 }
+                menu.addSeparator();
+                menu.addItem(SaveProject, LOC(kSaveProject));
+                menu.addItem(SaveProjectAs, LOC(kSaveProjectAs));
                 menu.addSeparator();
             }
 

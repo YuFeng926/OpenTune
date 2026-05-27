@@ -212,6 +212,18 @@ if pendingSnapshotPublication_ && editingDepth_==0:
 2. 重新加锁后必须用 `findRegionSlot(item.regionIdentity.playbackRegion)` 重新定位（region 可能在此期间被移除）。
 3. 重新定位后**二次校验** "未绑定"：若另一路径（例如 Editor `bindPlaybackRegionToMaterialization`）已经绑定，则 worker 让步不覆盖。
 
+### 3.1 Revision-based Stale Rejection
+
+从 v1.5 起，birth 队列从 single-queue 改为每个 `AudioModification persistentId` 维护一个 `PendingBirth` 条目。每个 `PendingBirth` 存储：
+- `revision`：触发 birth 时的 revision 编号
+- `desiredWindow`：期望的 source window
+
+当 worker 完成 hydration 后提交 birth 时，锁内比较 `currentRevision` 与 `PendingBirth.revision`：
+- 匹配 → 继续正常 birth
+- 不匹配（有更新的 revision 入队）→ 丢弃当前结果，后续由新 revision 的工作结果覆盖
+
+这确保了 stale worker 不会覆盖用户在 DAW 中调整 region 边界后的最新状态。
+
 ---
 
 ## 4. 实时渲染（Renderer processBlock）
@@ -401,6 +413,7 @@ User → transportBar → playRequested/pauseRequested/stopRequested
 | BPM / 拍号 | UI 改 → processor 同步 | host 改 → `didUpdateMusicalContextProperties`（当前未回写；Editor 单向读 processor BPM） |
 | 工程保存 | OpenTune 自己的工程文件 | host DAW 的 session file + OpenTune processor state；binding/pre-bind restore 自动化覆盖，宿主手工 reload 需单独执行才可宣称 PASS |
 | 多轨 | `StandaloneArrangement` 多 clip | session preferred region 一次只聚焦一条；UI 不显示 arrangement |
+| 多 region 投影同步 | N/A | Editor `syncImportedAraClipIfNeeded` 在 30Hz 心跳中比较三级 revision（materialization/projection/sourceRange），preferred region 焦点变化时自动切换 PianoRoll 视图 |
 
 ---
 

@@ -2,7 +2,7 @@
 module: ui-main
 type: business
 generated: true
-date: 2026-05-05
+date: 2026-05-27
 warning: "⚠️ 基于源码扫描生成，可能存在遗漏或过时信息"
 ---
 
@@ -211,9 +211,10 @@ Application::initialise()
 StandalonePreferencePages::createAudioPages(deviceManager, prefs, onChanged, onRenderingChanged)
   → 返回 [音频设备页, ...]
 SharedPreferencePages::create(prefs, onChanged)
-  → 返回 [通用, 钢琴卷帘, 缩放, 音频方案, ...]
+  → 返回 [通用, 钢琴卷帘, 缩放, 音频方案, 快捷键, 吸附设置, ...]
+  → 实验性功能页面仅当 `experimentalFeaturesEnabled` 为 true 时追加
 StandalonePreferencePages::createStandaloneOnlyPages(prefs, onChanged)
-  → 返回 [快捷键, 鼠标轨迹]
+  → 返回 [鼠标轨迹]  (快捷键已提升至 Shared)
 
 合并 pages → new TabbedPreferencesDialog(pages)
   → juce::TabbedComponent 装载
@@ -253,8 +254,10 @@ sequenceDiagram
     E->>E: applyThemeToEditor(theme)     # if diff
     E->>PR: setNoteNameMode / setShowChunk / setShowUnvoiced
     E->>AV: setZoomSensitivity / setShortcutSettings
+    E->>AV: setSnapSettings
+    E->>TP: setTrackColorMode
     E->>Ripple: setTrailTheme
-    E->>E: shortcutSettings_ = state.standalone.shortcuts
+    E->>E: shortcutSettings_ = state.shared.shortcuts
 ```
 
 ### 5.5 关闭对话框
@@ -282,6 +285,25 @@ sequenceDiagram
    - 若 `appendSequentially == true`，计算下一起始时间 `importBatchNextStartSeconds_[batchId] = currentEnd`
    - 递减 `importBatchRemainingItems_[batchId]`，为 0 时释放 batch 槽位 `releaseImportBatchSlot(batchId)`
 4. `processNextImportInQueue()` 若队列非空则继续下一项
+
+## 8. 导入拖放目标解析流程
+
+```
+User drags file over main editor window
+  → fileDragEnter → resolveImportDropTarget(x, y)
+    → hitTestArrangementView(x, y):
+      - Over existing track → ExistingTrack with trackId
+      - Below last track → NewTrack
+      - Fallback → FallbackActiveTrack
+  → fileDragMove → updateImportDropPreview(target)
+    → highlight target track in TimelineView
+  → filesDropped(file, x, y):
+    → resolveImportDropTarget(x, y) (final)
+    → applyImportDropTarget(target, file)
+      → importAudioFileToTrack(trackId, file, timelineStartSeconds)
+      → queue import pipeline
+  → fileDragExit → clearImportDropPreview()
+```
 
 ## ⚠️ 待确认
 

@@ -368,8 +368,8 @@ bool MaterializationStore::setPitchCurve(uint64_t materializationId, std::shared
     // (PitchCache invalidation handled by RenderCache itself via revision protocol;
     // here we explicitly drop the downstream Stage 2 entry).
     timeStretchCache_.invalidate(materializationId);
-    // Derived analysis is stale when pitch curve changes
-    it->second.derivedAnalysis.reset();
+    // Reference AUTO feature cache is derived from source audio + original F0.
+    it->second.referenceFeatures.reset();
     return true;
 }
 
@@ -395,9 +395,9 @@ bool MaterializationStore::commitNotesAndPitchCurve(uint64_t materializationId,
         : OriginalF0State::NotRequested;
     // §6.5: pitch edit invalidates Stage 2 cache (downstream)
     timeStretchCache_.invalidate(materializationId);
-    // Derived analysis is stale when pitch curve changes (notes alone wouldn't invalidate,
-    // but pitch curve change means F0 data changed)
-    it->second.derivedAnalysis.reset();
+    // Notes alone do not invalidate reference features, but pitch-curve/original-F0
+    // changes do.
+    it->second.referenceFeatures.reset();
     return true;
 }
 
@@ -630,7 +630,7 @@ bool MaterializationStore::replaceAudio(uint64_t materializationId,
     it->second.silentGaps = std::move(silentGaps);
     it->second.detectedKey = DetectedKey{};
     it->second.originalF0State = OriginalF0State::NotRequested;
-    it->second.derivedAnalysis.reset();  // audio buffer changed — derived analysis stale
+    it->second.referenceFeatures.reset();  // audio buffer changed -> feature cache stale
     // sourceWindow 不改变：replaceAudio 语义 = 换 audio buffer，lineage 不变
     return true;
 }
@@ -892,10 +892,10 @@ int MaterializationStore::getTotalCount() const
 }
 
 // ============================================================================
-// Derived Analysis API
+// Reference feature cache API
 // ============================================================================
 
-bool MaterializationStore::setDerivedAnalysis(uint64_t materializationId, const DerivedAnalysis& analysis)
+bool MaterializationStore::setReferenceFeatures(uint64_t materializationId, const ReferenceFeatureSet& features)
 {
     if (materializationId == 0) {
         return false;
@@ -907,14 +907,17 @@ bool MaterializationStore::setDerivedAnalysis(uint64_t materializationId, const 
         return false;
     }
 
-    it->second.derivedAnalysis = analysis;
-    ++it->second.derivedAnalysis.analysisRevision;
+    const int previousRevision = it->second.referenceFeatures.analysisRevision;
+    const int nextRevision = juce::jmax(previousRevision + 1,
+                                        features.analysisRevision > 0 ? features.analysisRevision : 1);
+    it->second.referenceFeatures = features;
+    it->second.referenceFeatures.analysisRevision = nextRevision;
     return true;
 }
 
-bool MaterializationStore::getDerivedAnalysis(uint64_t materializationId, DerivedAnalysis& out) const
+bool MaterializationStore::getReferenceFeatures(uint64_t materializationId, ReferenceFeatureSet& out) const
 {
-    out = DerivedAnalysis{};
+    out = ReferenceFeatureSet{};
     if (materializationId == 0) {
         return false;
     }
@@ -925,8 +928,8 @@ bool MaterializationStore::getDerivedAnalysis(uint64_t materializationId, Derive
         return false;
     }
 
-    out = it->second.derivedAnalysis;
-    return out.state != F0ExtractionState::NotRequested || out.analysisRevision > 0;
+    out = it->second.referenceFeatures;
+    return out.status != ReferenceFeatureStatus::NotRequested || out.analysisRevision > 0;
 }
 
 } // namespace OpenTune

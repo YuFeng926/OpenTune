@@ -2,7 +2,7 @@
 module: ui-main
 type: overview
 generated: true
-date: 2026-05-05
+date: 2026-05-27
 warning: "⚠️ 基于源码扫描生成，可能存在遗漏或过时信息"
 ---
 
@@ -98,7 +98,13 @@ warning: "⚠️ 基于源码扫描生成，可能存在遗漏或过时信息"
 - `evaluateAutoRenderOverlay`（`AutoRenderOverlayComponent.h`）：根据 `RenderStatusSnapshot` + `hasAutoTargetClip` + `autoTuneProcessing` 决定遮罩显隐和目标清理
 
 ### D-6: 偏好双层结构
-`AppPreferencesState = { SharedPreferencesState, StandalonePreferencesState }`。Shared 层（语言/主题/编辑方案/钢琴卷帘视觉/缩放/渲染优先级）可被未来的 VST 宿主复用；Standalone 层（快捷键 10 项 / 鼠标轨迹）仅 Standalone 使用。
+`AppPreferencesState = { SharedPreferencesState, StandalonePreferencesState }`。Shared 层（语言/主题/编辑方案/钢琴卷帘视觉/缩放/渲染优先级/声码器权重/实验性功能/吸附设置/轨道颜色模式/快捷键 22 项）可被 VST 宿主复用；Standalone 层（鼠标轨迹）仅 Standalone 使用。
 
 ### D-7: 多文件导入队列 + batch
 `importQueue_` 串行化多文件导入；`importBatchNextStartSeconds_` 按批次计算下一文件的顺序 append 起点；`importBatchRemainingItems_` 跟踪完成释放。
+
+### D-8: ImportDropTarget 几何解析 (v1.5.0)
+拖放导入不再使用弹窗选择轨道，改为通过 `resolveImportDropTarget(x, y)` 解析鼠标位置对应的目标区域。返回 `ImportDropTarget` 结构体（Kind: ExistingTrack/NewTrack/FallbackActiveTrack/Reject），支持 hover preview 高亮目标轨道。覆盖 `fileDragEnter`/`fileDragMove`/`fileDragExit` 实现实时预览。
+
+### D-9: ImportDropTarget 几何解析 + Hover Preview
+拖放导入从旧的 `promptTrackSelectionForDroppedFile` 模态框改为几何解析：`resolveImportDropTarget(globalX, globalY)` 根据鼠标坐标在 ArrangementView 中的位置自动识别目标轨道（ExistingTrack/NewTrack/FallbackActiveTrack），并实时绘制 hover preview 高亮。`fileDragMove` 持续更新 preview。替代了旧的多文件导入队列中需要用户手动选择目标的步骤。

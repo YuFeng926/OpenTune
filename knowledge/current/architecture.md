@@ -4,7 +4,7 @@ status: draft
 doc_type: architecture
 generated_by: synthesis-agent
 generated_at: 2026-05-05
-last_updated: 2026-05-05
+last_updated: 2026-05-27
 ---
 
 # OpenTune 系统架构
@@ -57,7 +57,7 @@ graph TD
         INF_BASE["OnnxVocoderBase (v1.3)<br/>⬇ PCNSFHifiGANVocoder / DmlVocoder"]
         INF_FACT["ModelFactory / VocoderFactory"]
         INF_CACHE["RenderCache<br/>(LRU 256 MB / chunk 状态机)"]
-        ONNX["ONNX Runtime 1.17.3<br/>CPU / CoreML / DirectML"]
+        ONNX["ONNX Runtime 1.24.4<br/>CPU / CoreML / DirectML"]
     end
 
     subgraph INFRA_L["基础设施层"]
@@ -255,7 +255,7 @@ sequenceDiagram
 | 决策点 | 选型 | 原因 / 权衡 |
 |---|---|---|
 | UI / 应用框架 | **JUCE (C++17)** | 提供 AudioProcessor 抽象、跨平台 DSP/UI/Plugin 封装、内置 VST3 + ARA 接入；相比 Qt，对音频插件生态的一等公民支持。Qt 的 Plugin Host 集成成本高。 |
-| AI 推理 | **ONNX Runtime 1.17.3 + 多后端** | CPU 兜底 + macOS CoreML + Windows DirectML。通过 `ModelFactory` / `VocoderFactory` 按平台 + 用户偏好选择后端；`AccelerationDetector` 负责 GPU 枚举与 DML 适配器打分；`resetInferenceBackend(forceCpu)` 允许运行时切换。 |
+| AI 推理 | **ONNX Runtime 1.24.4 + 多后端** | CPU 兜底 + macOS CoreML + Windows DirectML。通过 `ModelFactory` / `VocoderFactory` 按平台 + 用户偏好选择后端；`AccelerationDetector` 负责 GPU 枚举与 DML 适配器打分；`resetInferenceBackend(forceCpu)` 允许运行时切换。 |
 | F0 / 声码器模型 | **RMVPE（F0, 16 kHz 100fps）+ PC-NSF-HiFiGAN（声码器, 44.1 kHz）** | RMVPE 对嘈杂人声鲁棒；PC-NSF-HiFiGAN 通过 F0 驱动的 Source-Filter 结构保持原始音色，改变音高。 |
 | 双格式统一 | **Dual-Format Seam（共享 AudioProcessor）** | Standalone 与 VST3+ARA 共享 `OpenTuneAudioProcessor` + `SourceStore` + `MaterializationStore` + `ResamplingManager`；只在 Editor 工厂、多轨时间轴模型（`StandaloneArrangement` vs ARA Host）处分流。避免双码库维护。 |
 | 编辑态 ↔ 渲染态分离 | **Materialization Pipeline** | 用户编辑只改 editable 载荷（notes / correctedSegments / detectedKey），后台按 `renderRevision` 增量生成 PCM 进 `RenderCache`。编辑响应性与渲染吞吐解耦。 |
@@ -284,6 +284,8 @@ sequenceDiagram
 | **Placement / Mix 真值** | Standalone：`StandaloneArrangement`；ARA：`VST3AraSession + ARAPlaybackRegion` | 时间轴上的摆放、增益、区域绑定 | 随用户摆放演化；Undo 覆盖 |
 
 三条真值线通过 `PlaybackSnapshot` + `PlaybackReadSource` + `PlaybackReadRequest` 组合后被 `processBlock` 在音频线程消费。
+
+> **v1.5.0**：`TrackState::colour` 作为轨道级颜色属性（目前仅 Standalone 使用，未来 ARA 扩展）。`Placement::colour` 已移除，颜色下沉到 Track 层并通过 `TrackColorMode` (Random/Custom) 控制。
 
 ## 相关文档
 

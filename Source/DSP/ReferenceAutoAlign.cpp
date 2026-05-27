@@ -1,7 +1,5 @@
 #include "ReferenceAutoAlign.h"
 
-#include "../Utils/MaterializationState.h"
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -23,9 +21,9 @@ double frameToTime(int frame)
     return static_cast<double>(frame) / kF0FramesPerSecond;
 }
 
-bool isReady(const AlignmentFeatures& features) noexcept
+bool isReady(const ReferenceFeatureSet& features) noexcept
 {
-    return features.state == F0ExtractionState::Ready;
+    return features.isReady();
 }
 
 double clampToDuration(double value, double duration) noexcept
@@ -33,14 +31,18 @@ double clampToDuration(double value, double duration) noexcept
     return juce::jlimit(0.0, duration, value);
 }
 
-double sourceToTimeline(const ReferenceClipProjection& clip, double sourceSeconds)
+double sourceToTimeline(const ReferenceClipProjection& clip,
+                        const EffectiveTimeMap& timeMap,
+                        double sourceSeconds)
 {
-    return clip.timelineStartSeconds + clip.timeGrid->tauForward(sourceSeconds);
+    return clip.timelineStartSeconds + timeMap.tau(sourceSeconds);
 }
 
-double timelineToSource(const ReferenceClipProjection& clip, double timelineSeconds)
+double timelineToSource(const ReferenceClipProjection& clip,
+                        const EffectiveTimeMap& timeMap,
+                        double timelineSeconds)
 {
-    return clip.timeGrid->tauInverse(timelineSeconds - clip.timelineStartSeconds);
+    return timeMap.tauInverse(timelineSeconds - clip.timelineStartSeconds);
 }
 
 size_t findNearestUnmatchedNote(const std::vector<Note>& notes,
@@ -73,22 +75,29 @@ size_t findNearestUnmatchedNote(const std::vector<Note>& notes,
     return bestIndex;
 }
 
-const MaterializationStore::DerivedAnalysis::TemporalEvent* findNearestTemporalEvent(
-    const std::vector<MaterializationStore::DerivedAnalysis::TemporalEvent>& events,
-    double sourceSeconds)
+const ReferenceTimingAnchor* findNearestTimingAnchor(
+    const std::vector<ReferenceTimingAnchor>& anchors,
+    double sourceSeconds,
+    ReferenceTimingAnchorKind preferredKind)
 {
-    const MaterializationStore::DerivedAnalysis::TemporalEvent* best = nullptr;
-    double bestDistance = std::numeric_limits<double>::max();
+    const ReferenceTimingAnchor* bestAny = nullptr;
+    const ReferenceTimingAnchor* bestKindMatch = nullptr;
+    double bestAnyDistance = std::numeric_limits<double>::max();
+    double bestKindDistance = std::numeric_limits<double>::max();
 
-    for (const auto& event : events) {
-        const double distance = std::abs(event.sourceSeconds - sourceSeconds);
-        if (distance < bestDistance) {
-            bestDistance = distance;
-            best = &event;
+    for (const auto& anchor : anchors) {
+        const double distance = std::abs(anchor.sourceSeconds - sourceSeconds);
+        if (distance < bestAnyDistance) {
+            bestAnyDistance = distance;
+            bestAny = &anchor;
+        }
+        if (anchor.kind == preferredKind && distance < bestKindDistance) {
+            bestKindDistance = distance;
+            bestKindMatch = &anchor;
         }
     }
 
-    return best;
+    return bestKindMatch != nullptr ? bestKindMatch : bestAny;
 }
 
 bool noteEqualsForPatch(const Note& a, const Note& b)
@@ -142,19 +151,19 @@ void fail(AlignmentPatch& patch, AlignmentPatch::ErrorCode error, const juce::St
 }
 
 bool buildPitchPatch(const ReferenceAlignmentRequest& request,
+                     const std::vector<Note>& pitchSeedNotes,
                      double affectedStartSeconds,
                      double affectedEndSeconds,
                      AlignmentPatch& patch)
 {
-    if (request.referenceFeatures.basicDerivedNotes.empty()
-        || request.targetNotesBefore.empty()) {
+    if (request.referenceFeatures.pitch.notes.empty() || pitchSeedNotes.empty()) {
         return false;
     }
 
-    patch.notesAfter = request.targetNotesBefore;
+    patch.notesAfter = pitchSeedNotes;
 
     std::vector<CorrectedSegment> segmentsAfter;
-    segmentsAfter.reserve(request.targetSegmentsBefore.size() + request.referenceFeatures.basicDerivedNotes.size());
+    segmentsAfter.reserve(request.targetSegmentsBefore.size() + request.referenceFeatures.pitch.notes.size());
     for (const auto& segment : request.targetSegmentsBefore) {
         const bool overlaps = segment.endFrame > patch.affectedStartFrame
                            && segment.startFrame < patch.affectedEndFrame;
@@ -166,15 +175,19 @@ bool buildPitchPatch(const ReferenceAlignmentRequest& request,
     std::set<size_t> usedTargetNotes;
     bool changed = false;
 
-    for (const auto& refNote : request.referenceFeatures.basicDerivedNotes) {
+    for (const auto& refNote : request.referenceFeatures.pitch.notes) {
         const double refCenterSource = (refNote.startTime + refNote.endTime) * 0.5;
-        const double refCenterTimeline = sourceToTimeline(request.reference, refCenterSource);
+        const double refCenterTimeline = sourceToTimeline(request.reference,
+                                                          request.referenceTimeMap,
+                                                          refCenterSource);
         if (refCenterTimeline < request.overlapStartTimelineSeconds
             || refCenterTimeline > request.overlapEndTimelineSeconds) {
             continue;
         }
 
-        const double targetCenterSource = timelineToSource(request.target, refCenterTimeline);
+        const double targetCenterSource = timelineToSource(request.target,
+                                                           request.targetTimeMap,
+                                                           refCenterTimeline);
         const size_t targetIndex = findNearestUnmatchedNote(patch.notesAfter,
                                                             targetCenterSource,
                                                             affectedStartSeconds,
@@ -231,51 +244,60 @@ bool buildTimingIntents(const ReferenceAlignmentRequest& request,
                         AlignmentPatch& patch,
                         juce::String& outError)
 {
-    const auto& targetEvents = request.targetFeatures.temporalEvents;
-    const auto& referenceEvents = request.referenceFeatures.temporalEvents;
-    if (targetEvents.size() < 2 || referenceEvents.size() < 2) {
+    const auto& targetAnchors = request.targetFeatures.timing.anchors;
+    const auto& referenceAnchors = request.referenceFeatures.timing.anchors;
+    if (targetAnchors.empty() || referenceAnchors.empty()) {
         return false;
     }
 
-    const double duration = request.target.timeGrid->totalDurationSeconds();
+    const double duration = request.targetTimeMap.totalDurationSeconds();
     bool changed = false;
 
-    for (const auto& targetEvent : targetEvents) {
-        if (targetEvent.sourceSeconds <= 0.0 || targetEvent.sourceSeconds >= duration) {
+    for (const auto& targetAnchor : targetAnchors) {
+        if (targetAnchor.sourceSeconds <= 0.0 || targetAnchor.sourceSeconds >= duration) {
             continue;
         }
-        if (targetEvent.sourceSeconds < affectedStartSeconds
-            || targetEvent.sourceSeconds > affectedEndSeconds) {
+        if (targetAnchor.sourceSeconds < affectedStartSeconds
+            || targetAnchor.sourceSeconds > affectedEndSeconds) {
             continue;
         }
 
-        const double targetTimeline = sourceToTimeline(request.target, targetEvent.sourceSeconds);
+        const double targetTimeline = sourceToTimeline(request.target,
+                                                       request.targetTimeMap,
+                                                       targetAnchor.sourceSeconds);
         if (targetTimeline < request.overlapStartTimelineSeconds
             || targetTimeline > request.overlapEndTimelineSeconds) {
             continue;
         }
 
-        const double referenceGuessSource = timelineToSource(request.reference, targetTimeline);
-        const auto* referenceEvent = findNearestTemporalEvent(referenceEvents, referenceGuessSource);
-        if (referenceEvent == nullptr) {
+        const double referenceGuessSource = timelineToSource(request.reference,
+                                                             request.referenceTimeMap,
+                                                             targetTimeline);
+        const auto* referenceAnchor = findNearestTimingAnchor(referenceAnchors,
+                                                              referenceGuessSource,
+                                                              targetAnchor.kind);
+        if (referenceAnchor == nullptr) {
             continue;
         }
 
-        const double referenceTimeline = sourceToTimeline(request.reference, referenceEvent->sourceSeconds);
+        const double referenceTimeline = sourceToTimeline(request.reference,
+                                                          request.referenceTimeMap,
+                                                          referenceAnchor->sourceSeconds);
         const double desiredOutput = referenceTimeline - request.target.timelineStartSeconds;
         if (desiredOutput <= 0.0 || desiredOutput >= duration) {
             outError = "AUTO Ref produced a timing intent outside target duration";
             return false;
         }
-        const double currentOutput = request.target.timeGrid->tauForward(targetEvent.sourceSeconds);
+
+        const double currentOutput = request.targetTimeMap.tau(targetAnchor.sourceSeconds);
         if (std::abs(desiredOutput - currentOutput) < 1.0e-9) {
             continue;
         }
 
         TimeGridIntent intent;
-        intent.targetSourceSeconds = targetEvent.sourceSeconds;
+        intent.targetSourceSeconds = targetAnchor.sourceSeconds;
         intent.desiredOutputSeconds = desiredOutput;
-        intent.confidence = std::max(targetEvent.confidence, referenceEvent->confidence);
+        intent.confidence = std::max(targetAnchor.confidence, referenceAnchor->confidence);
         patch.timingIntents.push_back(intent);
         changed = true;
     }
@@ -316,24 +338,22 @@ AlignmentPatch ReferenceAutoAlign::align(const ReferenceAlignmentRequest& reques
 
     const double targetDuration = request.target.durationSeconds();
     const double referenceDuration = request.reference.durationSeconds();
-    if (targetDuration <= 0.0 || referenceDuration <= 0.0) {
+    const double targetOutputDuration = request.targetTimeMap.totalDurationSeconds();
+    const double referenceOutputDuration = request.referenceTimeMap.totalDurationSeconds();
+    if (targetDuration <= 0.0 || referenceDuration <= 0.0
+        || targetOutputDuration <= 0.0 || referenceOutputDuration <= 0.0) {
         fail(patch, AlignmentPatch::ErrorCode::InvalidRequest, "AUTO Ref requires positive clip durations");
-        return patch;
-    }
-
-    if (request.target.timeGrid == nullptr || request.reference.timeGrid == nullptr) {
-        fail(patch, AlignmentPatch::ErrorCode::TimeGridInvalid, "AUTO Ref requires target and reference TimeGrid");
         return patch;
     }
 
     const double overlapTargetOutputStart = clampToDuration(
         request.overlapStartTimelineSeconds - request.target.timelineStartSeconds,
-        request.target.timeGrid->totalDurationSeconds());
+        targetOutputDuration);
     const double overlapTargetOutputEnd = clampToDuration(
         request.overlapEndTimelineSeconds - request.target.timelineStartSeconds,
-        request.target.timeGrid->totalDurationSeconds());
-    const double affectedStartSeconds = request.target.timeGrid->tauInverse(overlapTargetOutputStart);
-    const double affectedEndSeconds = request.target.timeGrid->tauInverse(overlapTargetOutputEnd);
+        targetOutputDuration);
+    const double affectedStartSeconds = request.targetTimeMap.tauInverse(overlapTargetOutputStart);
+    const double affectedEndSeconds = request.targetTimeMap.tauInverse(overlapTargetOutputEnd);
 
     patch.affectedStartFrame = timeToFrame(std::min(affectedStartSeconds, affectedEndSeconds));
     patch.affectedEndFrame = timeToFrame(std::max(affectedStartSeconds, affectedEndSeconds));
@@ -342,20 +362,27 @@ AlignmentPatch ReferenceAutoAlign::align(const ReferenceAlignmentRequest& reques
         return patch;
     }
 
-    patch.notesAfter = request.targetNotesBefore;
+    const auto& pitchSeedNotes = request.targetNotesBefore.empty()
+        ? request.targetFeatures.pitch.notes
+        : request.targetNotesBefore;
+    patch.notesAfter = pitchSeedNotes;
     patch.correctedSegmentsAfter = request.targetSegmentsBefore;
 
-    const bool hasPitchFeatures = !request.referenceFeatures.basicDerivedNotes.empty()
-                               && !request.targetNotesBefore.empty();
-    const bool hasTimeFeatures = request.referenceFeatures.temporalEvents.size() >= 2
-                              && request.targetFeatures.temporalEvents.size() >= 2;
+    const bool hasPitchFeatures = request.referenceFeatures.hasPitchNotes() && !pitchSeedNotes.empty();
+    const bool hasTimeFeatures = request.referenceFeatures.hasTimingAnchors()
+                              && request.targetFeatures.hasTimingAnchors();
     if (!hasPitchFeatures && !hasTimeFeatures) {
         fail(patch, AlignmentPatch::ErrorCode::InsufficientFeatures, "AUTO Ref has neither pitch nor time features");
+        return patch;
+    }
+    if (hasTimeFeatures && request.targetTimeGridBefore == nullptr) {
+        fail(patch, AlignmentPatch::ErrorCode::TimeGridInvalid, "AUTO Ref timing path requires a target TimeGrid");
         return patch;
     }
 
     const bool pitchAttempted = hasPitchFeatures
                              && buildPitchPatch(request,
+                                                pitchSeedNotes,
                                                 frameToTime(patch.affectedStartFrame),
                                                 frameToTime(patch.affectedEndFrame),
                                                 patch);

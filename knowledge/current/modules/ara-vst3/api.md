@@ -206,7 +206,7 @@ const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory();
 | `sources_ / regions_ / preferredRegion_ / editingDepth_ / pendingSnapshotPublication_ / nextXxxRevision` | `stateMutex_` (`std::mutex`) |
 | `publishedSnapshot_` | `std::atomic_load / std::atomic_store` 配合 `shared_ptr<const PublishedSnapshot>` |
 | `processor_` | `std::atomic<OpenTuneAudioProcessor*>` (acquire / release) |
-| `readyBirthWorkQueue_ / pendingBirths_` | `stateMutex_` + `birthCv_` (`std::condition_variable`)；birth truth keyed by `AudioModification persistentId + SourceWindow + revision` |
+| `readyBirthWorkQueue_ / pendingBirths_` | `stateMutex_` + `birthCv_` (`std::condition_variable`)；birth truth keyed by `AudioModification persistentId`；每个 persistentId 对应单条目 `PendingBirth`（revision + desiredWindow），stale worker result 在 commit 时通过 `pendingRevision` vs `currentRevision` 比对丢弃 |
 | `birthWorkerThread_` | 独占成员，析构时 join |
 
 ---

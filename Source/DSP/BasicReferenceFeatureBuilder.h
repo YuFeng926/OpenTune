@@ -8,7 +8,7 @@ class BasicReferenceFeatureBuilder {
 public:
     BasicReferenceFeatureBuilder() = delete;
 
-    static MaterializationStore::DerivedAnalysis build(
+    static ReferenceFeatureSet build(
         const MaterializationStore::MaterializationSnapshot& snapshot);
 };
 

@@ -281,6 +281,21 @@ bool popupMenuContainsItemText(const juce::PopupMenu& menu, const juce::String& 
     return false;
 }
 
+int popupMenuItemTextIndex(const juce::PopupMenu& menu, const juce::String& itemText)
+{
+    juce::PopupMenu::MenuItemIterator iterator(menu, true);
+    int index = 0;
+    while (iterator.next()) {
+        if (iterator.getItem().text == itemText) {
+            return index;
+        }
+
+        ++index;
+    }
+
+    return -1;
+}
+
 juce::File makeCleanTemporaryDirectory(const juce::String& leafName)
 {
     auto directory = juce::File::getSpecialLocation(juce::File::tempDirectory)
@@ -1033,6 +1048,39 @@ void runPluginViewMenuStillExcludesStandaloneOnlyMouseTrailOptionsTest()
 
     if (popupMenuContainsItemText(pluginViewMenu, mouseTrailText)) {
         logFail(testName, "plugin view menu still exposes standalone-only mouse trail options");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runStandaloneFileMenuOrdersOpenBeforeSaveActionsTest()
+{
+    constexpr const char* testName = "StandaloneFileMenu_OrdersOpenBeforeSaveActions";
+
+    auto languageState = std::make_shared<LocalizationManager::LanguageState>();
+    languageState->language = Language::English;
+    LocalizationManager::getInstance().bindLanguageState(languageState);
+
+    OpenTuneAudioProcessor processor;
+    MenuBarComponent standaloneMenu(processor, MenuBarComponent::Profile::Standalone);
+
+    const auto fileMenu = standaloneMenu.getMenuForIndex(0, {});
+    const auto openProjectText = Loc::get(Language::English, Loc::Keys::kOpenProject);
+    const auto saveProjectText = Loc::get(Language::English, Loc::Keys::kSaveProject);
+    const auto saveProjectAsText = Loc::get(Language::English, Loc::Keys::kSaveProjectAs);
+
+    const int openProjectIndex = popupMenuItemTextIndex(fileMenu, openProjectText);
+    const int saveProjectIndex = popupMenuItemTextIndex(fileMenu, saveProjectText);
+    const int saveProjectAsIndex = popupMenuItemTextIndex(fileMenu, saveProjectAsText);
+
+    if (openProjectIndex < 0 || saveProjectIndex < 0 || saveProjectAsIndex < 0) {
+        logFail(testName, "file menu is missing one or more project actions");
+        return;
+    }
+
+    if (!(openProjectIndex < saveProjectIndex && saveProjectIndex < saveProjectAsIndex)) {
+        logFail(testName, "standalone file menu should list Open Project before Save Project and Save Project As");
         return;
     }
 
@@ -7586,6 +7634,7 @@ void runUiBehaviorSuite()
     runStandalonePreferencesOwnAudioSettingsUiTest();
     runViewMenuExposesSharedVisualOptionsAcrossProfilesTest();
     runPluginViewMenuStillExcludesStandaloneOnlyMouseTrailOptionsTest();
+    runStandaloneFileMenuOrdersOpenBeforeSaveActionsTest();
     runPreferencesDialogUsesExplicitPageCompositionNotBooleanFlagsTest();
     runAudioEditingSchemeRulesUseExplicitSchemeInputTest();
     runAudioEditingSchemeUsesSchemeManagedVoicedOnlyPolicyTest();

@@ -5,7 +5,7 @@ module: core-processor
 doc_type: overview
 generated_by: module-agent
 generated_at: 2026-05-05
-last_updated: 2026-05-05
+last_updated: 2026-05-27
 ---
 
 # Core-Processor 模块概览
@@ -16,6 +16,8 @@ last_updated: 2026-05-05
 - **Source 真值**：原始导入音频的不可变身份（`SourceStore`）
 - **Editable 真值**：可编辑载荷（notes / corrected F0 / detectedKey / RenderCache）按 Materialization 粒度管理（`MaterializationStore`）
 - **Placement/Mix 真值**：Standalone 模式下多轨时间轴上的摆放（`StandaloneArrangement`）
+
+> **v1.5.0**：Placement::colour 已移除；轨道颜色现在由 TrackState::colour 管理，支持 TrackColorMode (Random/Custom)。新增 clipInSeconds 字段支持 clip trim，referencePlacementId/referenceBindingRevision 支持 reference binding（用于参考对齐）。
 
 模块负责：音频导入 pipeline（两阶段：worker prepare + main thread commit）、F0 提取服务调度、Chunk 级声码器渲染调度、`processBlock` 实时混音、项目状态序列化、双格式（Standalone / VST3+ARA）seam 分流，以及 Undo 支持的 retire/revive 垃圾回收。
 
@@ -149,6 +151,11 @@ last_updated: 2026-05-05
 5. **双格式 seam**：`EditorFactory.h` 仅声明工厂函数；`JucePlugin_Build_Standalone` 宏在构建时选择一个 `.cpp` 提供实现，Processor 本身无分支。
 6. **ARA 绑定后共享 Store**：`didBindToARA` 将 `sourceStore_`/`materializationStore_`/`resamplingManager_` 替换为 DocumentController 的共享实例，实现跨 plugin 实例一致。
 7. **Chunk 边界对齐 hopSize**：`MaterializationStore::buildChunkBoundariesFromSilentGaps` 让 chunk 边界落在 hopSize 倍数，最后一 chunk 除外（`freezeRenderBoundaries` 处理 partial）。
+
+## v1.5.0 数据模型变更
+
+- **Placement 新增字段**：`clipInSeconds`（裁剪起点偏移）、`referencePlacementId`（参考对齐 placement）、`referenceBindingRevision`（对齐修订号）
+- **颜色下沉到 Track**：`Placement::colour` 移除 → `TrackState::colour`（轨道级颜色，通过 `TrackColorMode` 控制 Random/Custom）
 
 ## Spec 文件
 

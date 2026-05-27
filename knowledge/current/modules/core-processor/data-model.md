@@ -5,7 +5,7 @@ module: core-processor
 doc_type: data-model
 generated_by: arch-doc-agent
 generated_at: 2026-05-05
-last_updated: 2026-05-05
+last_updated: 2026-05-27
 ---
 
 # Core-Processor 模块 — 数据模型
@@ -98,10 +98,17 @@ graph LR
 | `mappingRevision` | `uint64_t` | ARA 映射修订 |
 | `timelineStartSeconds` | `double` | 在 timeline 上的起点 |
 | `durationSeconds` | `double` | 播放时长（可与 materialization 时长不同？⚠️ 待补充是否支持 stretch） |
+| `clipInSeconds` | `double` | Trim start offset in source materialization (0 = start from beginning) |
+| `referencePlacementId` | `uint64_t` | 0 = 无参考放置绑定 |
+| `referenceBindingRevision` | `int64_t` | 每次 reference binding 变更 +1 |
 | `gain` | `float` | 线性增益，默认 1.0 |
 | `fadeInDuration` / `fadeOutDuration` | `double` | 秒 |
-| `name` / `colour` | juce | 显示元信息 |
+| `name` | juce::String | 显示名称 |
 | `isRetired` | `bool` | 软删除 |
+
+> **v1.5.0**：`colour` 字段已从 Placement 移除，颜色下沉到 Track 层（`TrackState::colour`）。
+
+`colour` 字段已从 Placement 移除，移至 Track 级别（见 StandaloneArrangement::Track::colour）。
 
 `isValid()` = `placementId!=0 && materializationId!=0 && durationSeconds>0`。
 
@@ -114,12 +121,21 @@ graph TD
     Snap --> T1[tracks[1]: PlaybackTrack]
     Snap --> T11[...tracks[11]]
     T0 --> PL0[placements: vector<Placement>]
-    T0 --> MB0[isMuted/isSolo/volume]
+    T0 --> MB0[isMuted/isSolo/volume/Colour]
 ```
 
 `PlaybackSnapshot` 是 `shared_ptr<const>`，音频线程 SpinLock 取指针副本后无锁读整个快照。每次状态变更由 `publishPlaybackSnapshotLocked()` 递增 `epoch` 并发布新实例（旧实例自然引用计数回收）。
 
+`Track::colour` (juce::Colour) — 轨道级颜色，取代已被移除的 Placement::colour。由 TrackColorMode 模式控制：Random（新建轨道随机配色，默认）、Custom（用户自定义）。
+
 `anySoloed` 为预计算字段（简化 processBlock 逻辑）。
+
+**TrackState 颜色**（v1.5.0）：`TrackState::colour` 存储轨道级颜色（`juce::Colour`），由 `TrackColorMode` 枚举控制分配策略：
+
+| 模式 | 行为 |
+|------|------|
+| `TrackColorMode::Random` | 每次新增轨道时随机分配颜色 |
+| `TrackColorMode::Custom` | 用户手动指定颜色（偏好页面） |
 
 ### 2.5 SourceWindow
 
@@ -269,7 +285,8 @@ Undo/Redo 通过 retire/revive 实现可逆切换，**不**破坏数据。
   - Notes 列表（每条 note 字段，见 `writeNotes`）
   - SilentGaps（每段 start/end sample）
   - AudioBuffer
-- **Arrangement**：每个 track → mute/solo/volume/name/colour → placements (placementId, materializationId, mappingRevision, timelineStart, duration, gain, fadeIn/Out, name, colour)
+- **Arrangement**：每个 track → mute/solo/volume/name → placements (placementId, materializationId, mappingRevision, timelineStart, duration, gain, fadeIn/Out, name, clipInSeconds)
+  > `Track::colour` 单独写入 per-track（轨道级别），取代 placement 级别 colour。
 - **UI 状态**：zoomLevel、trackHeight、showWaveform、showLanes、activeTrackId 等
 
 ### 序列化 Helper（定义于 .cpp 匿名命名空间）
