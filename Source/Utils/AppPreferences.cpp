@@ -27,22 +27,29 @@ constexpr const char* kSharedSnapEnabledKey = "shared.snap.enabled";
 constexpr const char* kSharedSnapModeKey = "shared.snap.mode";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
-    "standalone.shortcuts.playPause",
-    "standalone.shortcuts.stop",
-    "standalone.shortcuts.playFromStart",
-    "standalone.shortcuts.undo",
-    "standalone.shortcuts.redo",
-    "standalone.shortcuts.cut",
-    "standalone.shortcuts.copy",
-    "standalone.shortcuts.paste",
-    "standalone.shortcuts.selectAll",
-    "standalone.shortcuts.delete",
-    "standalone.shortcuts.splitClip",
-    "standalone.shortcuts.mergeClips",
-    "standalone.shortcuts.duplicateClip",
-    "standalone.shortcuts.nudgeLeft",
-    "standalone.shortcuts.nudgeRight",
-    "standalone.shortcuts.toggleSnap",
+    "shared.shortcuts.playPause",
+    "shared.shortcuts.stop",
+    "shared.shortcuts.playFromStart",
+    "shared.shortcuts.undo",
+    "shared.shortcuts.redo",
+    "shared.shortcuts.cut",
+    "shared.shortcuts.copy",
+    "shared.shortcuts.paste",
+    "shared.shortcuts.selectAll",
+    "shared.shortcuts.delete",
+    "shared.shortcuts.splitClip",
+    "shared.shortcuts.mergeClips",
+    "shared.shortcuts.duplicateClip",
+    "shared.shortcuts.nudgeLeft",
+    "shared.shortcuts.nudgeRight",
+    "shared.shortcuts.toggleSnap",
+    "shared.shortcuts.toolDrawNote",
+    "shared.shortcuts.toolSelect",
+    "shared.shortcuts.toolLineAnchor",
+    "shared.shortcuts.toolHandDraw",
+    "shared.shortcuts.toolAutoTune",
+    "shared.shortcuts.toolTimeTool",
+    "shared.shortcuts.cancelSelection",
 }};
 
 juce::File resolveSettingsDirectory(const AppPreferences::StorageOptions& storageOptions)
@@ -301,7 +308,7 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.snap.mode = static_cast<SnapSettings::Mode>(
         properties.getIntValue(kSharedSnapModeKey, static_cast<int>(SnapSettings::Mode::Off)));
 
-    state.standalone.shortcuts = decodeShortcutSettings(properties);
+    state.shared.shortcuts = decodeShortcutSettings(properties);
     state.standalone.mouseTrailTheme = mouseTrailThemeFromToken(
         properties.getValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme)));
 
@@ -349,7 +356,7 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedRecentProjectsKey, recentPaths.joinIntoString("|"));
 
     for (size_t index = 0; index < kShortcutStorageKeys.size(); ++index) {
-        properties.setValue(kShortcutStorageKeys[index], KeyShortcutConfig::toCanonicalString(state.standalone.shortcuts.bindings[index]));
+        properties.setValue(kShortcutStorageKeys[index], KeyShortcutConfig::toCanonicalString(state.shared.shortcuts.bindings[index]));
     }
 }
 
@@ -452,10 +459,10 @@ void AppPreferences::setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensiti
     saveLocked();
 }
 
-void AppPreferences::setStandaloneShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts)
+void AppPreferences::setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
-    state_.standalone.shortcuts = shortcuts;
+    state_.shared.shortcuts = shortcuts;
     saveLocked();
 }
 

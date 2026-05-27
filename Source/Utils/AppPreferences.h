@@ -50,10 +50,10 @@ struct SharedPreferencesState {
     ExperimentalReferenceAlignMode experimentalReferenceAlignMode = ExperimentalReferenceAlignMode::Off;
     std::vector<juce::String> recentProjects;   // Most recently used project paths (MRU, max 10)
     SnapSettings snap;
+    KeyShortcutConfig::KeyShortcutSettings shortcuts = KeyShortcutConfig::KeyShortcutSettings::getDefault();
 };
 
 struct StandalonePreferencesState {
-    KeyShortcutConfig::KeyShortcutSettings shortcuts = KeyShortcutConfig::KeyShortcutSettings::getDefault();
     MouseTrailConfig::TrailTheme mouseTrailTheme = MouseTrailConfig::TrailTheme::Classic;
 };
 
@@ -87,7 +87,7 @@ public:
     void setShowChunkBoundaries(bool shouldShow);
     void setShowUnvoicedFrames(bool shouldShow);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity);
-    void setStandaloneShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
+    void setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
     void setRenderingPriority(RenderingPriority priority);
     void setVocoderModelWeight(VocoderModelWeight weight);
     void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode);

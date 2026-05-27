@@ -261,6 +261,14 @@ constexpr const char* kNudgeLeft = "Nudge Left";
 constexpr const char* kNudgeRight = "Nudge Right";
 constexpr const char* kToggleSnap = "Toggle Snap";
 
+constexpr const char* kToolDrawNote = "Tool: Draw Note";
+constexpr const char* kToolSelect = "Tool: Select";
+constexpr const char* kToolLineAnchor = "Tool: Line Anchor";
+constexpr const char* kToolHandDraw = "Tool: Hand Draw";
+constexpr const char* kToolAutoTune = "Tool: AutoTune";
+constexpr const char* kToolTimeTool = "Tool: Time";
+constexpr const char* kCancelSelection = "Cancel Selection";
+
 constexpr const char* kPitchCorrection = "Pitch correction";
 constexpr const char* kRetuneSpeed = "Retune Speed";
 constexpr const char* kVibratoDepth = "Vib. Depth";
@@ -421,6 +429,13 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kNudgeLeft, "Nudge Left", "左移", "左に微調整", "Сдвинуть влево", "Desplazar izq." },
         { Keys::kNudgeRight, "Nudge Right", "右移", "右に微調整", "Сдвинуть вправо", "Desplazar der." },
         { Keys::kToggleSnap, "Toggle Snap", "切换吸附", "スナップ切替", "Перекл. привязку", "Activar ajuste" },
+        { Keys::kToolDrawNote, "Tool: Draw Note", "工具：绘制音符", "ツール：ノート描画", "Инструмент: рисование нот", "Herram: dibujar nota" },
+        { Keys::kToolSelect, "Tool: Select", "工具：选择", "ツール：選択", "Инструмент: выбор", "Herram: seleccionar" },
+        { Keys::kToolLineAnchor, "Tool: Line Anchor", "工具：锚点", "ツール：ラインアンカー", "Инструмент: якорь", "Herram: ancla línea" },
+        { Keys::kToolHandDraw, "Tool: Hand Draw", "工具：手绘", "ツール：手描き", "Инструмент: рисование", "Herram: mano alzada" },
+        { Keys::kToolAutoTune, "Tool: AutoTune", "工具：自动校正", "ツール：オートチューン", "Инструмент: автотюн", "Herram: autoajuste" },
+        { Keys::kToolTimeTool, "Tool: Time", "工具：时间", "ツール：タイム", "Инструмент: время", "Herram: tiempo" },
+        { Keys::kCancelSelection, "Cancel Selection", "取消选择", "選択解除", "Отменить выбор", "Cancelar selección" },
         
         { Keys::kPitchCorrection, "Pitch correction", "音高校正", "ピッチ補正", "Коррекция тона", "Corrección de tono" },
         { Keys::kRetuneSpeed, "Retune Speed", "校正速度", "チューン速度", "Скорость коррекции", "Vel. afinación" },

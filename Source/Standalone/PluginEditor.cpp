@@ -1155,7 +1155,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     menuBar_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
 
-    shortcutSettings_ = preferencesState.standalone.shortcuts;
+    shortcutSettings_ = preferencesState.shared.shortcuts;
     pianoRoll_.setShortcutSettings(shortcutSettings_);
     arrangementView_.setShortcutSettings(shortcutSettings_);
     menuBar_.setMouseTrailTheme(preferencesState.standalone.mouseTrailTheme);

@@ -24,6 +24,15 @@ enum class ShortcutId {
     NudgeLeft,
     NudgeRight,
     ToggleSnap,
+    // Tool switching
+    ToolDrawNote,
+    ToolSelect,
+    ToolLineAnchor,
+    ToolHandDraw,
+    ToolAutoTune,
+    ToolTimeTool,
+    // Cancel / Deselect
+    CancelSelection,
     Count
 };
 
@@ -178,7 +187,14 @@ inline const ShortcutInfo kShortcutInfos[] = {
     { ShortcutId::DuplicateClip, Loc::Keys::kDuplicateClip, { KeyBinding('D', juce::ModifierKeys::commandModifier) } },
     { ShortcutId::NudgeLeft, Loc::Keys::kNudgeLeft, { KeyBinding(juce::KeyPress::leftKey, {}) } },
     { ShortcutId::NudgeRight, Loc::Keys::kNudgeRight, { KeyBinding(juce::KeyPress::rightKey, {}) } },
-    { ShortcutId::ToggleSnap, Loc::Keys::kToggleSnap, { KeyBinding('S', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier) } }
+    { ShortcutId::ToggleSnap, Loc::Keys::kToggleSnap, { KeyBinding('S', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier) } },
+    { ShortcutId::ToolDrawNote, Loc::Keys::kToolDrawNote, { KeyBinding('2', {}) } },
+    { ShortcutId::ToolSelect, Loc::Keys::kToolSelect, { KeyBinding('3', {}) } },
+    { ShortcutId::ToolLineAnchor, Loc::Keys::kToolLineAnchor, { KeyBinding('4', {}) } },
+    { ShortcutId::ToolHandDraw, Loc::Keys::kToolHandDraw, { KeyBinding('5', {}) } },
+    { ShortcutId::ToolAutoTune, Loc::Keys::kToolAutoTune, { KeyBinding('6', {}) } },
+    { ShortcutId::ToolTimeTool, Loc::Keys::kToolTimeTool, { KeyBinding('t', {}) } },
+    { ShortcutId::CancelSelection, Loc::Keys::kCancelSelection, { KeyBinding(juce::KeyPress::escapeKey, {}) } },
 };
 
 inline const size_t kShortcutCount = sizeof(kShortcutInfos) / sizeof(kShortcutInfos[0]);

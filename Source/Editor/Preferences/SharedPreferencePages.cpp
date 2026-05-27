@@ -1,6 +1,12 @@
 #include "SharedPreferencePages.h"
 
+#include <optional>
+
+#include <juce_audio_utils/juce_audio_utils.h>
+
 #include "Standalone/UI/UIColors.h"
+#include "Utils/KeyShortcutConfig.h"
+#include "Utils/LocalizationManager.h"
 
 namespace OpenTune {
 
@@ -28,6 +34,33 @@ void initialiseSlider(juce::Slider& slider)
     slider.setColour(juce::Slider::backgroundColourId, UIColors::backgroundMedium);
     slider.setColour(juce::Slider::trackColourId, UIColors::accent);
     slider.setColour(juce::Slider::thumbColourId, UIColors::textPrimary);
+}
+
+bool tryBuildCapturedBinding(const juce::KeyPress& key, KeyShortcutConfig::KeyBinding& outBinding)
+{
+    int keyCode = key.getKeyCode();
+    if (keyCode <= 0) {
+        return false;
+    }
+
+    if (keyCode >= 'a' && keyCode <= 'z') {
+        keyCode = keyCode - ('a' - 'A');
+    }
+
+    juce::ModifierKeys modifiers;
+    const auto keyModifiers = key.getModifiers();
+    if (keyModifiers.isCtrlDown() || keyModifiers.isCommandDown()) {
+        modifiers = modifiers.withFlags(juce::ModifierKeys::commandModifier);
+    }
+    if (keyModifiers.isShiftDown()) {
+        modifiers = modifiers.withFlags(juce::ModifierKeys::shiftModifier);
+    }
+    if (keyModifiers.isAltDown()) {
+        modifiers = modifiers.withFlags(juce::ModifierKeys::altModifier);
+    }
+
+    outBinding = KeyShortcutConfig::KeyBinding(keyCode, modifiers);
+    return true;
 }
 
 void initialiseToggleButton(juce::ToggleButton& toggleButton)
@@ -476,6 +509,228 @@ private:
     juce::ToggleButton showUnvoicedFramesToggle_;
 };
 
+class ShortcutSettingsPage final : public juce::Component
+{
+public:
+    class CaptureWindow final : public juce::AlertWindow
+    {
+    public:
+        CaptureWindow(KeyShortcutConfig::ShortcutId id,
+                      const KeyShortcutConfig::ShortcutBinding& currentBinding,
+                      juce::Component* associatedComponent)
+            : juce::AlertWindow(LOC(kSetShortcut),
+                                buildMessage(id, currentBinding),
+                                juce::AlertWindow::NoIcon,
+                                associatedComponent)
+        {
+            addButton(LOC(kCancel), 0);
+
+            for (auto* child : getChildren()) {
+                child->setWantsKeyboardFocus(false);
+            }
+
+            setWantsKeyboardFocus(true);
+            grabKeyboardFocus();
+        }
+
+        bool keyPressed(const juce::KeyPress& key) override
+        {
+            KeyShortcutConfig::KeyBinding binding;
+            if (!tryBuildCapturedBinding(key, binding)) {
+                return true;
+            }
+
+            capturedBinding_ = binding;
+            exitModalState(1);
+            return true;
+        }
+
+        std::optional<KeyShortcutConfig::KeyBinding> takeCapturedBinding()
+        {
+            auto captured = capturedBinding_;
+            capturedBinding_.reset();
+            return captured;
+        }
+
+    private:
+        static juce::String buildMessage(KeyShortcutConfig::ShortcutId id,
+                                         const KeyShortcutConfig::ShortcutBinding& currentBinding)
+        {
+            juce::String message = KeyShortcutConfig::getShortcutDisplayName(id);
+            message << "\n" << LOC(kPressNewKeyCombination);
+
+            const auto currentBindingText = currentBinding.getDisplayNames();
+            if (currentBindingText.isNotEmpty()) {
+                message << "\n\n" << LOC(kCurrent) << ": " << currentBindingText;
+            }
+
+            return message;
+        }
+
+        std::optional<KeyShortcutConfig::KeyBinding> capturedBinding_;
+    };
+
+    ShortcutSettingsPage(AppPreferences& appPreferences, std::function<void()> onPreferencesChanged)
+        : appPreferences_(appPreferences)
+        , onPreferencesChanged_(std::move(onPreferencesChanged))
+        , settings_(appPreferences_.getState().shared.shortcuts)
+    {
+        for (size_t index = 0; index < KeyShortcutConfig::kShortcutCount; ++index) {
+            auto id = static_cast<KeyShortcutConfig::ShortcutId>(index);
+
+            auto* label = new juce::Label();
+            initialiseLabel(*label, KeyShortcutConfig::getShortcutDisplayName(id));
+            shortcutLabels_.add(label);
+            addAndMakeVisible(label);
+
+            auto* button = new juce::TextButton(KeyShortcutConfig::getShortcutBinding(settings_, id).getDisplayNames());
+            button->setColour(juce::TextButton::buttonColourId, UIColors::backgroundMedium);
+            button->setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
+            button->onClick = [this, id] {
+                beginCapture(id);
+            };
+            shortcutButtons_.add(button);
+            addAndMakeVisible(button);
+        }
+
+        resetAllButton_.setButtonText(LOC(kResetAllToDefaults));
+        resetAllButton_.setColour(juce::TextButton::buttonColourId, UIColors::buttonNormal);
+        resetAllButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
+        resetAllButton_.onClick = [this] {
+            KeyShortcutConfig::resetAllShortcutBindings(settings_);
+            persist();
+            refreshButtons();
+        };
+        addAndMakeVisible(resetAllButton_);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(UIColors::backgroundDark);
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().reduced(20);
+        const int rowHeight = 32;
+        const int labelWidth = 180;
+        const int buttonWidth = 220;
+
+        for (size_t index = 0; index < KeyShortcutConfig::kShortcutCount; ++index) {
+            auto row = bounds.removeFromTop(rowHeight);
+            shortcutLabels_[static_cast<int>(index)]->setBounds(row.removeFromLeft(labelWidth));
+            shortcutButtons_[static_cast<int>(index)]->setBounds(row.removeFromLeft(buttonWidth).reduced(0, 3));
+            bounds.removeFromTop(6);
+        }
+
+        bounds.removeFromTop(12);
+        resetAllButton_.setBounds(bounds.removeFromTop(28).removeFromLeft(180));
+    }
+
+private:
+    void beginCapture(KeyShortcutConfig::ShortcutId id)
+    {
+        currentEditingId_ = id;
+        captureWindow_ = std::make_unique<CaptureWindow>(id, KeyShortcutConfig::getShortcutBinding(settings_, id), this);
+
+        juce::Component::SafePointer<ShortcutSettingsPage> safeThis(this);
+        captureWindow_->enterModalState(true, juce::ModalCallbackFunction::create([safeThis](int result) {
+                                           if (safeThis == nullptr) {
+                                               return;
+                                           }
+
+                                           const auto capturedBinding = safeThis->captureWindow_ != nullptr
+                                               ? safeThis->captureWindow_->takeCapturedBinding()
+                                               : std::optional<KeyShortcutConfig::KeyBinding>{};
+                                           safeThis->captureWindow_.reset();
+
+                                           if (result == 1 && capturedBinding.has_value()) {
+                                               safeThis->handleCapturedBinding(*capturedBinding);
+                                               return;
+                                           }
+
+                                           safeThis->cancelCapture();
+                                       }),
+                                        false);
+    }
+
+    void handleCapturedBinding(const KeyShortcutConfig::KeyBinding& binding)
+    {
+        if (currentEditingId_ == KeyShortcutConfig::ShortcutId::Count) {
+            return;
+        }
+
+        const auto conflict = KeyShortcutConfig::findConflictingShortcut(settings_, currentEditingId_, binding);
+        if (conflict == KeyShortcutConfig::ShortcutId::Count) {
+            applyBinding(binding);
+            return;
+        }
+
+        auto options = juce::MessageBoxOptions::makeOptionsYesNo(juce::MessageBoxIconType::WarningIcon,
+                                                                 LOC(kShortcutConflict),
+                                                                 Loc::format(LOC_RAW(Loc::Keys::kShortcutConflictMessage),
+                                                                             KeyShortcutConfig::getShortcutDisplayName(conflict)),
+                                                                 LOC(kYes),
+                                                                 LOC(kNo),
+                                                                 this);
+        juce::Component::SafePointer<ShortcutSettingsPage> safeThis(this);
+        juce::AlertWindow::showAsync(options, [safeThis, binding, conflict](int result) {
+            if (safeThis == nullptr) {
+                return;
+            }
+
+            if (result == 1) {
+                safeThis->settings_.bindings[static_cast<size_t>(conflict)].removeBinding(binding);
+                safeThis->applyBinding(binding);
+                return;
+            }
+
+            safeThis->cancelCapture();
+        });
+    }
+
+    void applyBinding(const KeyShortcutConfig::KeyBinding& binding)
+    {
+        KeyShortcutConfig::setShortcutBinding(settings_, currentEditingId_, binding);
+        persist();
+        refreshButtons();
+        cancelCapture();
+    }
+
+    void cancelCapture()
+    {
+        captureWindow_.reset();
+        currentEditingId_ = KeyShortcutConfig::ShortcutId::Count;
+    }
+
+    void persist()
+    {
+        appPreferences_.setShortcuts(settings_);
+        if (onPreferencesChanged_) {
+            onPreferencesChanged_();
+        }
+    }
+
+    void refreshButtons()
+    {
+        for (size_t index = 0; index < KeyShortcutConfig::kShortcutCount; ++index) {
+            auto id = static_cast<KeyShortcutConfig::ShortcutId>(index);
+            if (auto* button = shortcutButtons_[static_cast<int>(index)]) {
+                button->setButtonText(KeyShortcutConfig::getShortcutBinding(settings_, id).getDisplayNames());
+            }
+        }
+    }
+
+    AppPreferences& appPreferences_;
+    std::function<void()> onPreferencesChanged_;
+    KeyShortcutConfig::KeyShortcutSettings settings_;
+    juce::OwnedArray<juce::Label> shortcutLabels_;
+    juce::OwnedArray<juce::TextButton> shortcutButtons_;
+    juce::TextButton resetAllButton_;
+    std::unique_ptr<CaptureWindow> captureWindow_;
+    KeyShortcutConfig::ShortcutId currentEditingId_ = KeyShortcutConfig::ShortcutId::Count;
+};
+
 } // namespace
 
 std::vector<TabbedPreferencesDialog::PageSpec> SharedPreferencePages::create(
@@ -486,6 +741,7 @@ std::vector<TabbedPreferencesDialog::PageSpec> SharedPreferencePages::create(
     pages.push_back({ LOC(kTheme), std::make_unique<SharedGeneralPage>(appPreferences, onPreferencesChanged) });
     pages.push_back({ LOC(kEditing), std::make_unique<SharedEditingPage>(appPreferences, onPreferencesChanged) });
     pages.push_back({ LOC(kView), std::make_unique<SharedVisualPage>(appPreferences, onPreferencesChanged) });
+    pages.push_back({ LOC(kKeyswitch), std::make_unique<ShortcutSettingsPage>(appPreferences, onPreferencesChanged) });
     return pages;
 }
 

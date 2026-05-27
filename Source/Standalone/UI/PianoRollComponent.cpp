@@ -2511,11 +2511,11 @@ bool PianoRollComponent::keyPressed(const juce::KeyPress& key) {
     if (isAutoTuneProcessing()) {
         return false;
     }
-    if (key == juce::KeyPress('z', juce::ModifierKeys::ctrlModifier, 0)) {
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Undo, key)) {
         listeners_.call([](Listener& l) { l.undoRequested(); });
         return true;
     }
-    if (key == juce::KeyPress('y', juce::ModifierKeys::ctrlModifier, 0)) {
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Redo, key)) {
         listeners_.call([](Listener& l) { l.redoRequested(); });
         return true;
     }
