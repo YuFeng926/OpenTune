@@ -5,7 +5,7 @@ milestone_name: PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 status: active
 stopped_at: v1.5 active development + PianoRoll empty-space seek intent + regular VST3 capture UX refinement (display selection, timeline view domain, transport shortcuts)
 last_updated: "2026-05-27"
-last_activity: 2026-05-27 -- Standalone experimental-features gate and TimeTool first-entry anchor-seed repair planned; plan + verification docs added, project state synchronized; implementation and tests pending.
+last_activity: 2026-05-27 -- Standalone import track-target drop UX planned; plan + verification docs added, top-level project state synchronized; implementation and tests pending.
 progress:
   total_phases: 0
   completed_phases: 0
@@ -155,6 +155,27 @@ Plan source:
 ### Blockers/Concerns
 
 - 当前无硬阻塞。v1.4 manual verification gaps 已降级为非阻塞 deferred items。2026-05-18 四组计划自动化验证全部 PASS，L5 所有项待用户确认。
+
+## 2026-05-27 State Addendum: Standalone Import Track-Target Drop UX
+
+Status: planned, implementation pending.
+
+What changed:
+
+- Current Standalone import UX root cause is now explicitly recorded: `PluginEditor::filesDropped(...)` receives the drop point but currently ignores `x,y`, so drag-drop cannot resolve a target track from Arrangement geometry.
+- The legacy modal `promptTrackSelectionForDroppedFile(...)` flow is now classified as the wrong default for drag-drop.
+- Blank-area drop behavior is now fixed as a contract item: below the last visible Arrangement lane, one new visible track is created and used as the import target unless `MAX_TRACKS` is already reached.
+- The processor boundary remains unchanged: real imports still require explicit editor-owned `ImportPlacement`.
+
+Plan source:
+
+- `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux.md`
+- `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux-test-verification.md`
+
+Suggested next-step options:
+
+- Implement the Standalone drop target resolver + hover preview + blank-area create-track import path.
+- Or continue with the separately planned experimental-features gate / TimeTool anchor-seed work first.
 
 ## Session Continuity
 

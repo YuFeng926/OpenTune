@@ -21,6 +21,7 @@ constexpr const char* kSharedScrollSpeedKey = "shared.scroll.speed";
 constexpr const char* kStandaloneMouseTrailThemeKey = "standalone.mouseTrail.theme";
 constexpr const char* kSharedRenderingPriorityKey = "shared.rendering.priority";
 constexpr const char* kSharedVocoderWeightKey = "shared.rendering.vocoderWeight";
+constexpr const char* kSharedExperimentalFeaturesEnabledKey = "shared.features.experimentalEnabled";
 constexpr const char* kSharedExperimentalReferenceAlignKey = "shared.align.experimental";
 constexpr const char* kSharedRecentProjectsKey = "shared.recentProjects";
 constexpr const char* kSharedSnapEnabledKey = "shared.snap.enabled";
@@ -301,6 +302,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.vocoderModelWeight = fromVocoderWeightToken(
         properties.getValue(kSharedVocoderWeightKey,
                             toVocoderWeightToken(state.shared.vocoderModelWeight)));
+    state.shared.experimentalFeaturesEnabled = properties.getBoolValue(
+        kSharedExperimentalFeaturesEnabledKey,
+        state.shared.experimentalFeaturesEnabled);
     state.shared.experimentalReferenceAlignMode = fromExperimentalRefAlignModeToken(
         properties.getValue(kSharedExperimentalReferenceAlignKey,
                             toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode)));
@@ -343,6 +347,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         toRenderingPriorityToken(state.shared.renderingPriority));
     properties.setValue(kSharedVocoderWeightKey,
                         toVocoderWeightToken(state.shared.vocoderModelWeight));
+    properties.setValue(kSharedExperimentalFeaturesEnabledKey,
+                        state.shared.experimentalFeaturesEnabled);
     properties.setValue(kSharedExperimentalReferenceAlignKey,
                         toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode));
     properties.setValue(kSharedSnapEnabledKey, state.shared.snap.enabled);
@@ -477,6 +483,13 @@ void AppPreferences::setVocoderModelWeight(VocoderModelWeight weight)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.vocoderModelWeight = weight;
+    saveLocked();
+}
+
+void AppPreferences::setExperimentalFeaturesEnabled(bool enabled)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.experimentalFeaturesEnabled = enabled;
     saveLocked();
 }
 

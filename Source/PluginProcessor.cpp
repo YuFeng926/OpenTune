@@ -4564,6 +4564,125 @@ uint64_t OpenTuneAudioProcessor::getMaterializationTimeGridRevisionById(uint64_t
     return materializationStore_->getTimeGridRevision(materializationId);
 }
 
+bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(uint64_t materializationId)
+{
+    if (materializationId == 0 || materializationStore_ == nullptr) {
+        return false;
+    }
+
+    MaterializationStore::MaterializationSnapshot snapshot;
+    if (!materializationStore_->getSnapshot(materializationId, snapshot)) {
+        return false;
+    }
+
+    const auto existingGrid = snapshot.timeGrid;
+    if (existingGrid != nullptr) {
+        const auto& existingHandles = existingGrid->handles();
+        const bool hasInternalOnset = std::any_of(existingHandles.begin(), existingHandles.end(),
+                                                  [](const TimeHandle& handle) {
+                                                      return handle.kind == HandleKind::InternalOnset;
+                                                  });
+        if (hasInternalOnset || !existingGrid->isIdentity()) {
+            return true;
+        }
+    }
+
+    MaterializationStore::DerivedAnalysis analysis;
+    const bool analysisReady = materializationStore_->getDerivedAnalysis(materializationId, analysis)
+        && analysis.state == F0ExtractionState::Ready
+        && analysis.backendMode == 2
+        && analysis.inputFingerprint == static_cast<int64_t>(snapshot.renderRevision);
+
+    if (!analysisReady) {
+        analysis = buildGameReferenceDerivedAnalysis(snapshot);
+        analysis.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
+        materializationStore_->setDerivedAnalysis(materializationId, analysis);
+    }
+
+    if (analysis.state != F0ExtractionState::Ready) {
+        return false;
+    }
+
+    const double durationSeconds = snapshot.timeGrid != nullptr
+        ? snapshot.timeGrid->totalDurationSeconds()
+        : TimeCoordinate::samplesToSeconds(snapshot.audioBuffer != nullptr ? snapshot.audioBuffer->getNumSamples() : 0,
+                                           TimeCoordinate::kRenderSampleRate);
+    if (!(durationSeconds > 0.0)) {
+        return false;
+    }
+
+    std::vector<TimeHandle> handles;
+    handles.reserve(analysis.temporalEvents.size() + 2);
+
+    uint64_t nextHandleId = 1;
+    auto pushHandle = [&](double sourceSeconds,
+                          double outputSeconds,
+                          HandleKind kind,
+                          bool locked,
+                          Confidence confidence = Confidence::Default) {
+        TimeHandle handle;
+        handle.id = nextHandleId++;
+        handle.source_seconds = sourceSeconds;
+        handle.output_seconds = outputSeconds;
+        handle.kind = kind;
+        handle.locked = locked;
+        handle.confidence = confidence;
+        handles.push_back(handle);
+    };
+
+    pushHandle(0.0, 0.0, HandleKind::ClipStart, true);
+
+    std::vector<double> eventTimes;
+    eventTimes.reserve(analysis.temporalEvents.size());
+    for (const auto& event : analysis.temporalEvents) {
+        const double eventTime = juce::jlimit(0.0, durationSeconds, event.sourceSeconds);
+        if (eventTime <= 0.0 || eventTime >= durationSeconds) {
+            continue;
+        }
+
+        eventTimes.push_back(eventTime);
+    }
+
+    std::sort(eventTimes.begin(), eventTimes.end());
+    eventTimes.erase(std::unique(eventTimes.begin(), eventTimes.end(),
+                                 [](double a, double b) { return std::abs(a - b) < 0.005; }),
+                     eventTimes.end());
+
+    double lastAcceptedSource = 0.0;
+    for (const double eventTime : eventTimes) {
+        if (!TimeGridSnapshot::hasMinimumSourceSpacing(lastAcceptedSource, eventTime)) {
+            continue;
+        }
+        if (!TimeGridSnapshot::hasMinimumSourceSpacing(eventTime, durationSeconds)) {
+            continue;
+        }
+
+        pushHandle(eventTime,
+                   eventTime,
+                   HandleKind::InternalOnset,
+                   false);
+        lastAcceptedSource = eventTime;
+    }
+
+    pushHandle(durationSeconds,
+               durationSeconds,
+               HandleKind::ClipEnd,
+               true);
+
+    auto seededGrid = TimeGridSnapshot::makeFromHandles(std::move(handles),
+                                                        existingGrid != nullptr ? existingGrid->revision() + 1 : 1);
+    if (seededGrid == nullptr) {
+        return false;
+    }
+
+    const int64_t affectedEndFrame = static_cast<int64_t>(
+        std::ceil(durationSeconds * TimeGridSnapshot::kSourceSpacingFrameRate));
+    return setMaterializationTimeGridById(materializationId,
+                                          std::move(seededGrid),
+                                          0,
+                                          affectedEndFrame);
+}
+
 bool OpenTuneAudioProcessor::setMaterializationTimeGridById(uint64_t materializationId,
                                                               std::shared_ptr<const TimeGridSnapshot> snapshot,
                                                               int64_t affectedSrcStartFrame,

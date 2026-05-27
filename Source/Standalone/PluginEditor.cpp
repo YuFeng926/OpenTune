@@ -1132,6 +1132,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     const auto preferencesState = appPreferences_.getState();
     const auto& sharedPreferences = preferencesState.shared;
     const auto& visualPreferences = sharedPreferences.pianoRollVisualPreferences;
+    const bool experimentalFeaturesEnabled = sharedPreferences.experimentalFeaturesEnabled;
 
     if (languageState_ != nullptr) {
         languageState_->language = sharedPreferences.language;
@@ -1146,11 +1147,14 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
         applyThemeToEditor(sharedPreferences.theme);
 
     pianoRoll_.setAudioEditingScheme(sharedPreferences.audioEditingScheme);
+    pianoRoll_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
     pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
     pianoRoll_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+    parameterPanel_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
     arrangementView_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
+    arrangementView_.setExperimentalReferenceControlsEnabled(experimentalFeaturesEnabled);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
     menuBar_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
@@ -2792,12 +2796,14 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
         ? arrangement->getPlacementReferencePlacement(trackId, targetPlacementId)
         : 0;
     const bool hasRef = referencePlacementId != 0;
-    const auto expMode = appPreferences_.getState().shared.experimentalReferenceAlignMode;
+    const auto preferencesState = appPreferences_.getState();
+    const bool experimentalFeaturesEnabled = preferencesState.shared.experimentalFeaturesEnabled;
+    const auto expMode = preferencesState.shared.experimentalReferenceAlignMode;
     processorRef_.setExperimentalReferenceAlignMode(expMode);
-    const bool hasEnabledRef = hasRef && expMode != ExperimentalReferenceAlignMode::Off;
+    const bool hasEnabledRef = experimentalFeaturesEnabled && hasRef && expMode != ExperimentalReferenceAlignMode::Off;
     parameterPanel_.setAutoButtonMode(hasEnabledRef);
 
-    if (!hasRef) {
+    if (!experimentalFeaturesEnabled || !hasRef) {
         pianoRoll_.setReferenceOverlay(std::nullopt);
         return;
     }
@@ -2845,12 +2851,20 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
 void OpenTuneAudioProcessorEditor::referenceButtonClicked(int trackId, uint64_t placementId,
                                                            juce::Rectangle<int> buttonScreenArea)
 {
+    if (!appPreferences_.getState().shared.experimentalFeaturesEnabled) {
+        return;
+    }
+
     resolveReferenceBindingMenu(trackId, placementId, buttonScreenArea);
 }
 
 void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint64_t targetPlacementId,
                                                                 juce::Rectangle<int> buttonScreenArea)
 {
+    if (!appPreferences_.getState().shared.experimentalFeaturesEnabled) {
+        return;
+    }
+
     auto* arrangement = processorRef_.getStandaloneArrangement();
     juce::PopupMenu menu;
 

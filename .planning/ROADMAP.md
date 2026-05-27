@@ -163,3 +163,28 @@ This plan is intentionally contract-first:
 3. processor/store remain the only place allowed to publish seeded `TimeGridSnapshot` truth.
 
 Status: planned, implementation pending.
+
+---
+## 2026-05-27 Roadmap Addendum: Standalone Import Track-Target Drop UX Plan
+
+The next Standalone Arrangement/editor UX task is planned but not implemented:
+
+1. drag-drop onto an existing track should import into that track;
+2. drag-drop into Arrangement blank space below visible tracks should create one new visible track and import there;
+3. drop outside Arrangement should keep a deterministic active-track fallback;
+4. single-file chooser import should remain popup-free;
+5. explicit `ImportPlacement` stays editor-owned and must not be inferred inside the processor.
+
+Plan source:
+
+- `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux.md`
+- `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux-test-verification.md`
+
+This plan is intentionally contract-first:
+
+1. spatial drop intent belongs to Standalone UI geometry, not shared-core placement commit;
+2. blank-area drop may grow visible track count, but only at accepted drop time;
+3. hover/preview state must remain transient UI-only data;
+4. focused proof gate is `arrangement-contract` / `timeline-rendering`, not the broad `ui` runner.
+
+Status: planned, implementation pending.

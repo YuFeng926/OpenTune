@@ -168,7 +168,9 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         menu.addItem("Draw Note (2)", [this]() { setCurrentTool(ToolId::DrawNote); });
         menu.addItem("Line Anchor (4)", [this]() { setCurrentTool(ToolId::LineAnchor); });
         menu.addItem("Hand Draw (5)", [this]() { setCurrentTool(ToolId::HandDraw); });
-        menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
+        if (experimentalFeaturesEnabled_) {
+            menu.addItem("Time Tool (T)", [this]() { setCurrentTool(ToolId::TimeTool); });
+        }
         menu.showMenuAsync(juce::PopupMenu::Options());
     };
     toolCtx.notifyAutoTuneRequested = [this]() { listeners_.call([](Listener& l) { l.autoTuneRequested(); }); };
@@ -2144,6 +2146,17 @@ void PianoRollComponent::setZoomLevel(double zoom) {
 }
 
 void PianoRollComponent::setCurrentTool(ToolId tool) {
+    if (tool == ToolId::TimeTool && !experimentalFeaturesEnabled_) {
+        tool = ToolId::Select;
+    }
+
+    if (tool == ToolId::TimeTool
+        && currentTool_ != ToolId::TimeTool
+        && processor_ != nullptr
+        && editedMaterializationId_ != 0) {
+        processor_->ensureTimeToolAnchorSeed(editedMaterializationId_);
+    }
+
     const bool toolChanged = currentTool_ != tool;
     bool clearedAnchorPreview = false;
     if (interactionState_.drawing.isPlacingAnchors && tool != ToolId::LineAnchor) {
@@ -2206,6 +2219,23 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
                          getLocalBounds(),
                          PianoRollVisualInvalidationPriority::Interactive);
     }
+}
+
+void PianoRollComponent::setExperimentalFeaturesEnabled(bool enabled)
+{
+    if (experimentalFeaturesEnabled_ == enabled) {
+        return;
+    }
+
+    experimentalFeaturesEnabled_ = enabled;
+    if (!enabled && currentTool_ == ToolId::TimeTool) {
+        setCurrentTool(ToolId::Select);
+        return;
+    }
+
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Interaction),
+                     getLocalBounds(),
+                     PianoRollVisualInvalidationPriority::Interactive);
 }
 
 void PianoRollComponent::setShowWaveform(bool shouldShow) {

@@ -71,6 +71,7 @@ public:
     void removeListener(Listener* listener);
 
     void setActiveTool(int toolId);
+    void setExperimentalFeaturesEnabled(bool enabled);
 
     /** 设置 AUTO 按钮的模式显示。
      *  @param hasReference  true: 主文本 "AUTO" + 副标题 "(Ref)"（小字在下方）, false: 仅 "AUTO" 居中
@@ -168,6 +169,7 @@ private:
     static constexpr int kParamVibratoDepth = 1;
     static constexpr int kParamVibratoRate = 2;
     static constexpr int kParamNoteSplit = 3;
+    bool experimentalFeaturesEnabled_ = false;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ParameterPanel)
 };

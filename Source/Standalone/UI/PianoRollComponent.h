@@ -116,6 +116,7 @@ public:
     }
     void setZoomLevel(double zoom);
     void setCurrentTool(ToolId tool);
+    void setExperimentalFeaturesEnabled(bool enabled);
     ToolId getCurrentTool() const { return currentTool_; }
     void setShowWaveform(bool shouldShow);
     void setShowLanes(bool shouldShow);
@@ -468,6 +469,7 @@ private:
     OpenTuneAudioProcessor* processor_ = nullptr;
 
     uint64_t editedMaterializationId_ = 0;
+    bool experimentalFeaturesEnabled_ = false;
     std::vector<Note> cachedNotes_;
 
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
