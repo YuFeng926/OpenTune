@@ -222,6 +222,53 @@ void runVocoderConfig_VocoderWeightRoundtripTest()
     logPass(testName);
 }
 
+void runVocoderConfig_ExperimentalFeaturesDefaultDisabledTest()
+{
+    constexpr const char* testName = "VocoderConfig_ExperimentalFeatures_DefaultDisabled";
+
+    AppPreferences prefs;
+    const auto state = prefs.getState();
+    if (state.shared.experimentalFeaturesEnabled) {
+        logFail(testName, "experimental features must default to disabled");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runVocoderConfig_ExperimentalFeaturesRoundtripTest()
+{
+    constexpr const char* testName = "VocoderConfig_ExperimentalFeatures_Roundtrip";
+
+    auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile("OpenTuneTests")
+        .getChildFile("experimental-features-roundtrip");
+    dir.deleteRecursively();
+    dir.createDirectory();
+
+    AppPreferences::StorageOptions storageOpts;
+    storageOpts.applicationName = "OpenTuneTests";
+    storageOpts.settingsDirectory = dir;
+    storageOpts.fileName = "app-preferences.settings";
+
+    {
+        AppPreferences prefs(storageOpts);
+        prefs.setExperimentalFeaturesEnabled(true);
+        prefs.flush();
+    }
+
+    {
+        AppPreferences prefs(storageOpts);
+        const auto state = prefs.getState();
+        if (!state.shared.experimentalFeaturesEnabled) {
+            logFail(testName, "experimental features roundtrip failed");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
 // NOTE: ONNX input schema verification (mel name + shape [1, T, 128]) is
 // already performed by OnnxVocoderBase::detectInputOutputNames() at vocoder
 // load time. Adding a redundant unit test here would require Ort::Session
@@ -243,4 +290,6 @@ void runVocoderConfigSuite()
     runVocoderConfig_DualBundledOnnxConsistencyTest();
     runVocoderConfig_VocoderWeightDefaultTest();
     runVocoderConfig_VocoderWeightRoundtripTest();
+    runVocoderConfig_ExperimentalFeaturesDefaultDisabledTest();
+    runVocoderConfig_ExperimentalFeaturesRoundtripTest();
 }
