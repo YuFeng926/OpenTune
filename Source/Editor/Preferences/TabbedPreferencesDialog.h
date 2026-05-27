@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "Utils/LocalizationManager.h"
+#include "Standalone/UI/AuroraLookAndFeel.h"
+#include "Standalone/UI/OpenTuneLookAndFeel.h"
 #include "Standalone/UI/UIColors.h"
 
 namespace OpenTune {
@@ -21,6 +23,8 @@ public:
 
     explicit TabbedPreferencesDialog(std::vector<PageSpec> pages)
     {
+        applyCurrentLookAndFeel();
+
         addAndMakeVisible(tabbedComponent_);
         tabbedComponent_.setColour(juce::TabbedComponent::backgroundColourId, UIColors::backgroundDark);
         tabbedComponent_.setColour(juce::TabbedButtonBar::tabOutlineColourId, UIColors::panelBorder);
@@ -46,6 +50,11 @@ public:
         addAndMakeVisible(closeButton_);
     }
 
+    ~TabbedPreferencesDialog() override
+    {
+        setLookAndFeel(nullptr);
+    }
+
     void paint(juce::Graphics& g) override
     {
         g.fillAll(UIColors::backgroundDark);
@@ -59,8 +68,20 @@ public:
     }
 
 private:
+    void applyCurrentLookAndFeel()
+    {
+        if (UIColors::currentThemeId() == ThemeId::Aurora) {
+            setLookAndFeel(&auroraLookAndFeel_);
+            return;
+        }
+
+        setLookAndFeel(&openTuneLookAndFeel_);
+    }
+
     juce::TabbedComponent tabbedComponent_{juce::TabbedButtonBar::TabsAtTop};
     juce::TextButton closeButton_;
+    OpenTuneLookAndFeel openTuneLookAndFeel_;
+    AuroraLookAndFeel auroraLookAndFeel_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TabbedPreferencesDialog)
 };

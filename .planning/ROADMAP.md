@@ -140,3 +140,26 @@ Plan source:
 ---
 *Roadmap updated: 2026-05-27 after adding Arrangement visual contract plan*
 *Current state: `v1.4` shipped/frozen; `v1.5` is active milestone*
+---
+## 2026-05-27 Roadmap Addendum: Experimental Features Gate And TimeTool Anchor Seed Plan
+
+The next Standalone editor-facing task is planned but not implemented:
+
+1. add a real experimental-features visibility gate below the vocoder model selector, with warning text that reference-track and stretch tooling are incomplete and may still contain bugs;
+2. show TimeTool in Standalone only when that gate is enabled;
+3. show Arrangement clip reference-source button/menu only when that gate is enabled;
+4. restore the lost first-entry stretch-anchor preparation path by making the first entry into TimeTool for a clip trigger one processor-owned anchor-seed flow;
+5. that seed flow must create identity internal handles only, not automatic stretch output.
+
+Plan source:
+
+- `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed.md`
+- `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed-test-verification.md`
+
+This plan is intentionally contract-first:
+
+1. experimental-feature visibility must be a separate boolean from AUTO Ref mode;
+2. UI may only expose or trigger the flow, not own anchor generation;
+3. processor/store remain the only place allowed to publish seeded `TimeGridSnapshot` truth.
+
+Status: planned, implementation pending.

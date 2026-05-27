@@ -465,12 +465,28 @@ OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()
         if (const auto* session = dc->getSession()) {
             const auto snapshot = session->loadSnapshot();
             if (snapshot != nullptr) {
+                for (const auto& region : snapshot->publishedRegions) {
+                    const auto materializationId = region.appliedProjection.materializationId;
+                    if (materializationId == 0)
+                        continue;
+
+                    sync.placements.push_back(makePlacement(materializationId,
+                                                            makePianoRollLocalProjection(region)));
+                }
+
                 if (const auto* preferredRegion = resolvePreferredAraRegionView(*snapshot)) {
                     sync.activeMaterializationId = preferredRegion->appliedProjection.materializationId;
-                    sync.placements.push_back(makePlacement(sync.activeMaterializationId,
-                                                            makePianoRollLocalProjection(*preferredRegion)));
-                    return sync;
                 }
+
+                const bool activeBelongsToPlacements = std::any_of(sync.placements.begin(),
+                                                                   sync.placements.end(),
+                                                                   [&sync](const auto& placement) {
+                                                                       return placement.materializationId == sync.activeMaterializationId;
+                                                                   });
+                if (!activeBelongsToPlacements)
+                    sync.activeMaterializationId = 0;
+
+                return sync;
             }
         }
     }

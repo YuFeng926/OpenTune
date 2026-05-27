@@ -156,6 +156,45 @@ void MovePlacementAction::redo()
 }
 
 // ============================================================================
+// MultiMovePlacementAction
+// ============================================================================
+
+MultiMovePlacementAction::MultiMovePlacementAction(OpenTuneAudioProcessor& processor,
+                                                   std::vector<Entry> entries)
+    : processor_(processor)
+    , entries_(std::move(entries))
+{
+}
+
+void MultiMovePlacementAction::undo()
+{
+    auto* arrangement = processor_.getStandaloneArrangement();
+    if (arrangement == nullptr) {
+        return;
+    }
+
+    for (const auto& entry : entries_) {
+        arrangement->setPlacementTimelineStartSeconds(entry.trackId,
+                                                      entry.placementId,
+                                                      entry.oldStartSeconds);
+    }
+}
+
+void MultiMovePlacementAction::redo()
+{
+    auto* arrangement = processor_.getStandaloneArrangement();
+    if (arrangement == nullptr) {
+        return;
+    }
+
+    for (const auto& entry : entries_) {
+        arrangement->setPlacementTimelineStartSeconds(entry.trackId,
+                                                      entry.placementId,
+                                                      entry.newStartSeconds);
+    }
+}
+
+// ============================================================================
 // GainChangeAction
 // ============================================================================
 

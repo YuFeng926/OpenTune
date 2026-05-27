@@ -337,6 +337,9 @@ public:
     // Clipboard for arrangement clip copy/paste
     PlacementClipboard& getClipClipboard() { return clipClipboard_; }
 
+    uint64_t cloneMaterialization(uint64_t sourceMaterializationId,
+                                  const juce::String& newName = {});
+
     // Deep copy materialization audio data for paste/duplicate operations.
     // Creates a new materialization from a range of an existing one.
     uint64_t copyMaterializationRange(uint64_t sourceMaterializationId,
@@ -833,6 +836,7 @@ public:
     double getZoomLevel() const { return zoomLevel_; }
 
     SnapSettings getSnapSettings() const;
+    void setSnapSettings(const SnapSettings& snap);
 
     /** Wire AppPreferences pointer so getSnapSettings() returns live data. */
     void setAppPreferences(AppPreferences* prefs) { appPreferences_ = prefs; }

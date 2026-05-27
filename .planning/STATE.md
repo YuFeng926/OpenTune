@@ -5,7 +5,7 @@ milestone_name: PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 status: active
 stopped_at: v1.5 active development + PianoRoll empty-space seek intent + regular VST3 capture UX refinement (display selection, timeline view domain, transport shortcuts)
 last_updated: "2026-05-27"
-last_activity: 2026-05-27 -- Standalone Arrangement min-zoom waveform visibility and cross-track drag preview repair planned; plan + verification docs added, project state synchronized; implementation and tests pending.
+last_activity: 2026-05-27 -- Standalone experimental-features gate and TimeTool first-entry anchor-seed repair planned; plan + verification docs added, project state synchronized; implementation and tests pending.
 progress:
   total_phases: 0
   completed_phases: 0
@@ -40,7 +40,7 @@ Plan sources:
 - 2026-05-26/27 VST3 ARA multi-item birth + editor reopen structural fix（自动化闭环；REAPER 手工测试用户明确不要求本次执行）
 
 Status: Active development
-Last activity: 2026-05-27 -- ARA multi-item birth 与 editor reopen 结构性缺口已按计划修复并通过自动化门禁；用户明确表示 REAPER 手工测试不用本次执行，因此不得把 L5 写成 PASS，但也不作为本次闭环阻塞项。
+Last activity: 2026-05-27 -- Standalone experimental-features gate 与 TimeTool 首次入场 identity 锚点播种已完成规划建档；当前仅完成代码现状审计与合同收口，尚未进入实现与验证。
 
 ## Performance Metrics
 
@@ -78,6 +78,7 @@ Last activity: 2026-05-27 -- ARA multi-item birth 与 editor reopen 结构性缺
 - 2026-05-27（ARA multi-item / reopen fix）：birth pending truth 已迁到 `audioModificationPersistentId + SourceWindow + revision`；worker-ready 队列只表达“哪些 persistentId 当前可执行”，不再承担 source 级 birth 真相。旧 worker result 必须在 commit 前按 revision/window 丢弃。
 - 2026-05-27（ARA multi-item / reopen fix）：`PluginEditor` 是只读消费者；payload/buffer 暂缺不再触发 destructive clear。`clearPlaybackRegionMaterialization()` 已从 production session API 删除，缺 payload 只能表现为 pending/restoring UI 状态。
 - 2026-05-27（ARA pre-bind restore fix）：metadata-only ARA VST3 state 在 `didBindToARA()` 前只缓存，绑定后 replay 到最终 shared stores；regular unbound VST3 state 不走 ARA 缓存路径，仍立即恢复本地 capture/project 状态。
+- 2026-05-27（Experimental features gate / TimeTool seed plan）：现有 `ExperimentalReferenceAlignMode` 已被明确界定为 AUTO Ref 模式，不再允许兼任实验功能总开关。下一轮 Standalone 计划将新增独立 `experimentalFeaturesEnabled` shared preference，用于统一门控 TimeTool 与 Arrangement 参考源入口；同时 `PianoRollComponent::setCurrentTool(TimeTool)` 将恢复为“首次进入当前 materialization 时请求 processor 播种 identity stretch anchors”的正式语义点，seed 逻辑只能复用 `DerivedAnalysis` 主链，UI 不得自行造 `TimeGridSnapshot`。
 
 - 2026-04-24 (Task 12 F6)：VST3 PluginEditor.cpp 4 处 command-path silent-return 改为 `AppLogger::log("InvariantViolation: ...")` + `jassertfalse`。涉及 `syncImportedAraClipIfNeeded` 的 prepareImport 失败和 null buffer，以及 `pitchCurveEdited` 的 no-materialization 和 null-curve。新增 architecture guard 测试。
 - 2026-04-24 (Task 12 scope)：F3 (SourceStore hydration 迁移) 经评估为高风险（hydration worker 跨 store 锁序问题），标记为后续独立 Task 需专门锁序设计。F5 (reclaim registry 统一) 评估为低价值（sweep 里只有 15 行 `#if`），标记为可选后续 Task。
@@ -140,6 +141,8 @@ Plan source:
 ### Pending Todos
 
 - 持续把 `.planning` 与 live tree 保持同步。
+- 实现并验证 experimental-features gate：独立 boolean、提示文案、TimeTool/Arrangement 入口统一门控。
+- 实现并验证 TimeTool 首次入场 identity 锚点播种：processor 单入口、复用 `DerivedAnalysis`、不覆盖既有 stretch 编辑。
 - Request user confirmation for Studio One / REAPER / Cubase / Live L5 journeys after installing the rebuilt VST3 (regular-vst3 capture display, timeline view domain, transport shortcuts).
 - Request user confirmation for PianoRoll empty-space seek intent L5 manual visual behavior.
 - REAPER ARA multi-item/project reload L5 不由 Codex 本次执行；用户明确说手工测试不用做。若之后有人手工执行，可补记录，但不得倒填为本次 PASS。
@@ -158,4 +161,4 @@ Plan source:
 Last session: 2026-05-27
 Stopped at: ARA multi-item birth / editor reopen structural fix 已完成自动化闭环；REAPER 手工测试用户明确不要求 Codex 执行
 Resume file: N/A
-Next step: 继续 v1.5 其它 open 项（UI suite exit-code、Undo 边界、CorrectionWorker 并发、其它宿主 L5），不要把已关闭的 ARA multi-item/reopen 自动化合同重新列为待实现。
+Next step: 先按 2026-05-27 规划落地 experimental-features gate 与 TimeTool 首次 anchor-seed，再继续 v1.5 其它 open 项（UI suite exit-code、Undo 边界、CorrectionWorker 并发、其它宿主 L5）。

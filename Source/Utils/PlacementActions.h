@@ -3,6 +3,7 @@
 #include "UndoManager.h"
 #include "../PluginProcessor.h"
 #include <cstdint>
+#include <vector>
 
 namespace OpenTune {
 
@@ -85,6 +86,25 @@ private:
     uint64_t placementId_;
     double oldStartSeconds_;
     double newStartSeconds_;
+};
+
+class MultiMovePlacementAction : public UndoAction {
+public:
+    struct Entry {
+        int trackId;
+        uint64_t placementId;
+        double oldStartSeconds;
+        double newStartSeconds;
+    };
+
+    MultiMovePlacementAction(OpenTuneAudioProcessor& processor, std::vector<Entry> entries);
+    void undo() override;
+    void redo() override;
+    juce::String getDescription() const override { return TRANS("微移片段"); }
+
+private:
+    OpenTuneAudioProcessor& processor_;
+    std::vector<Entry> entries_;
 };
 
 // Gain undo: 恢复原始增益

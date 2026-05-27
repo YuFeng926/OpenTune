@@ -291,6 +291,7 @@ void runWaveformTileCacheBoundedLruTest()
         const auto* tile = cache.get(static_cast<uint64_t>(i + 1),
                                      static_cast<uint64_t>(i + 1),
                                      10,
+                                     bounds,
                                      0.0,
                                      1.0,
                                      0,
@@ -314,17 +315,17 @@ void runWaveformTileCacheBoundedLruTest()
     }
 
     // Verify kept vs pruned
-    if (cache.get(1, 1, 10, 0.0, 1.0, 0, 0) == nullptr) {
+    if (cache.get(1, 1, 10, bounds, 0.0, 1.0, 0, 0) == nullptr) {
         logFail(testName, "tile 1 should survive prune");
         return;
     }
-    if (cache.get(2, 2, 10, 0.0, 1.0, 0, 0) != nullptr) {
+    if (cache.get(2, 2, 10, bounds, 0.0, 1.0, 0, 0) != nullptr) {
         logFail(testName, "tile 2 should be pruned");
         return;
     }
 
     // Different zoom bucket — should not find
-    if (cache.get(1, 1, 20, 0.0, 1.0, 0, 0) != nullptr) {
+    if (cache.get(1, 1, 20, bounds, 0.0, 1.0, 0, 0) != nullptr) {
         logFail(testName, "tile 1 zoom=20 should not be found (inserted as zoom=10)");
         return;
     }
@@ -368,7 +369,7 @@ void runWaveformTileCachePruneByMaterializationTest()
         logFail(testName, "should have 1 tile after removing materialization 1");
         return;
     }
-    if (cache.get(2, 2, 5, 0.0, 1.0, 0, 0) == nullptr) {
+    if (cache.get(2, 2, 5, bounds, 0.0, 1.0, 0, 0) == nullptr) {
         logFail(testName, "materialization 2 zoom=5 should survive remove(1)");
         return;
     }
@@ -412,6 +413,53 @@ void runWaveformTileCacheNarrowDrawableBoundsBuildsNonEmptyPathTest()
 
     if (tile.widthPx != 1 || tile.path.isEmpty()) {
         logFail(testName, "positive narrow drawable bounds should build a non-empty waveform path");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runWaveformTileCacheDifferentBoundsDoNotReuseAbsolutePathTest()
+{
+    constexpr const char* testName = "WaveformTileCache_DifferentBoundsDoNotReuseAbsolutePath";
+
+    auto mipmap = makeCompleteTestMipmap(4096);
+    if (!mipmap.isComplete()) {
+        logFail(testName, "failed to build complete synthetic waveform mipmap");
+        return;
+    }
+
+    WaveformTileCache cache;
+    const juce::Rectangle<int> originalBounds(12, 24, 48, 28);
+    const juce::Rectangle<int> previewBounds(12, 104, 48, 28);
+
+    const auto& originalTile = cache.getOrCreate(21, 21, 1, mipmap, 1.0f, originalBounds, 0.0, 0.48, 0, 0);
+    const auto originalPathBounds = originalTile.path.getBounds();
+
+    if (originalTile.path.isEmpty()) {
+        logFail(testName, "original waveform tile should produce a non-empty path");
+        return;
+    }
+
+    const auto& previewTile = cache.getOrCreate(21, 21, 1, mipmap, 1.0f, previewBounds, 0.0, 0.48, 0, 0);
+    const auto previewPathBounds = previewTile.path.getBounds();
+
+    if (previewTile.path.isEmpty()) {
+        logFail(testName, "preview waveform tile should produce a non-empty path");
+        return;
+    }
+
+    if (cache.size() != 2) {
+        logFail(testName, "different preview bounds should build a distinct tile when cached paths embed absolute coordinates");
+        return;
+    }
+
+    const float expectedDeltaY = static_cast<float>(previewBounds.getY() - originalBounds.getY());
+    const float actualDeltaY = previewPathBounds.getCentreY() - originalPathBounds.getCentreY();
+    const float actualDeltaX = previewPathBounds.getX() - originalPathBounds.getX();
+
+    if (std::abs(actualDeltaY - expectedDeltaY) > 1.0f || std::abs(actualDeltaX) > 1.0f) {
+        logFail(testName, "waveform tile path should translate with preview bounds instead of reusing stale track geometry");
         return;
     }
 
@@ -512,6 +560,7 @@ void runTimelineRenderingPipelineCacheTests()
     runWaveformTileCachePruneByMaterializationTest();
     runArrangementWaveformMinZoomNarrowClipKeepsPositiveDrawableBoundsTest();
     runWaveformTileCacheNarrowDrawableBoundsBuildsNonEmptyPathTest();
+    runWaveformTileCacheDifferentBoundsDoNotReuseAbsolutePathTest();
     runArrangementDragPreviewMouseDragDoesNotCommitMoveTest();
     runArrangementDragPreviewTargetTrackVisibleBeforeMouseUpTest();
     runArrangementDragPreviewMouseUpCommitsOnceAndClearsPreviewTest();
