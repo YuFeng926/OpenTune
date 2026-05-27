@@ -162,3 +162,33 @@
 
 ---
 *Last updated: 2026-05-27 after adding MAIN-42..MAIN-47 experimental feature gate and TimeTool anchor-seed contracts*
+
+---
+## 2026-05-27 Requirement Addendum: Standalone Import Track-Target Drop UX
+
+### Active
+
+- [ ] **MAIN-48**: Standalone drag-drop import must resolve target track from the actual drop location when the drop lands
+  on Arrangement track lanes. `PluginEditor::filesDropped(...)` receiving `x,y` but ignoring them is no longer acceptable as
+  product behavior.
+- [ ] **MAIN-49**: Drag-drop onto Arrangement blank space below the last visible track must create one new visible track and
+  import there, unless the editor is already at `MAX_TRACKS`. At the limit, the app must surface a direct limit failure and
+  must not reopen the legacy per-drop track picker.
+- [ ] **MAIN-50**: Drag-drop outside the Arrangement drop surface must keep a deterministic fallback path: import to the
+  current active track using explicit editor-owned placement, rather than guessing from unrelated widget geometry.
+- [ ] **MAIN-51**: Single-file chooser import must remain the fast path: current active track, explicit `ImportPlacement`,
+  no track-choice popup. Multi-file chooser import may stay explicit only at the import-mode level, not via per-file or
+  per-drop track-choice prompts.
+- [ ] **MAIN-52**: Import target hover/preview for drag-drop must remain transient Standalone UI state only. It must not
+  enter `StandaloneArrangement`, `OpenTuneAudioProcessor`, undo history, playback snapshots, project serialization, or
+  VST3/ARA state.
+- [ ] **MAIN-53**: All real import commits must continue to pass an explicit `ImportPlacement` from Standalone editor code
+  into `commitPreparedImportAsPlacement()`. The processor must not infer `trackId` or `startSeconds` from pointer location,
+  hover state, Arrangement geometry, or drag-preview state.
+
+### Traceability Addendum
+
+| Source | Responsibility |
+|--------|----------------|
+| `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux.md` | Standalone import UX contract for track-target drag-drop, blank-area create-track behavior, chooser alignment, and explicit placement ownership |
+| `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux-test-verification.md` | Verification contract for import target resolution, transient preview state, focused suites, and manual Standalone smoke |

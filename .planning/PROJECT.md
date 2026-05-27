@@ -265,4 +265,28 @@ Plan source:
 - `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed.md`
 - `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed-test-verification.md`
 
+---
+## 2026-05-27 Update: Standalone Import Track-Target Drop UX Planned
+
+The current Standalone audio import UX now has a dedicated execution plan because drag-drop behavior has fallen behind normal DAW expectations:
+
+1. `PluginEditor::filesDropped(...)` receives `x,y` but currently ignores them, so drop location cannot resolve a target track.
+2. Drag-drop still routes through `promptTrackSelectionForDroppedFile(...)`, which forces a modal track-choice flow even when the user already dropped onto a visible track lane.
+3. Single-file chooser import already has a faster active-track path, so the product is internally inconsistent.
+
+The new plan fixes this at the Standalone editor/UI layer:
+
+1. drop onto an existing track -> import into that track;
+2. drop into Arrangement blank space below visible tracks -> create one new visible track and import there;
+3. drop outside Arrangement -> deterministic active-track fallback;
+4. single-file chooser import stays popup-free;
+5. all real commits still go through explicit editor-owned `ImportPlacement`.
+
+Plan source:
+
+- `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux.md`
+- `.planning/plans/2026-05-27-standalone-import-track-target-drop-ux-test-verification.md`
+
+The planned fix must not move track inference into `OpenTuneAudioProcessor`, must not persist preview state, and must not resurrect modal per-drop track picking as the default path.
+
 当前状态：**已规划，未实现。**

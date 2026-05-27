@@ -91,6 +91,7 @@ public:
     void setVerticalScrollOffset(int offset);
     void setInferenceActive(bool active) { inferenceActive_ = active; }
     void fitToContent();
+    void setExperimentalReferenceControlsEnabled(bool enabled);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& settings) { zoomSensitivity_ = settings; }
     void setShortcutSettings(const KeyShortcutConfig::KeyShortcutSettings& settings) { shortcutSettings_ = settings; }
     bool isWaveformCacheCompleteForMaterialization(int trackId, uint64_t materializationId) const;
@@ -208,6 +209,7 @@ private:
     int selectedTrack_{0};
     int selectedPlacementIndex_{0};
     uint64_t selectedPlacementId_{0};
+    bool experimentalReferenceControlsEnabled_{false};
 
     // reference binding 状态（placementId → state）
     std::map<uint64_t, ClipAnalysisState> clipAnalysisStates_;

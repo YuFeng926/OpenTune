@@ -47,6 +47,7 @@ struct SharedPreferencesState {
         ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
     RenderingPriority renderingPriority = RenderingPriority::GpuFirst;
     VocoderModelWeight vocoderModelWeight = VocoderModelWeight::Community;
+    bool experimentalFeaturesEnabled = false;
     ExperimentalReferenceAlignMode experimentalReferenceAlignMode = ExperimentalReferenceAlignMode::Off;
     std::vector<juce::String> recentProjects;   // Most recently used project paths (MRU, max 10)
     SnapSettings snap;
@@ -90,6 +91,7 @@ public:
     void setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
     void setRenderingPriority(RenderingPriority priority);
     void setVocoderModelWeight(VocoderModelWeight weight);
+    void setExperimentalFeaturesEnabled(bool enabled);
     void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode);
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme);
     void setSnapSettings(const SnapSettings& snap);

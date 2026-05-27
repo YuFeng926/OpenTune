@@ -314,6 +314,22 @@ void ArrangementViewComponent::fitToContent()
     setScrollOffset(0);
 }
 
+void ArrangementViewComponent::setExperimentalReferenceControlsEnabled(bool enabled)
+{
+    if (experimentalReferenceControlsEnabled_ == enabled) {
+        return;
+    }
+
+    experimentalReferenceControlsEnabled_ = enabled;
+    if (!experimentalReferenceControlsEnabled_) {
+        hoveredPlacementId_ = 0;
+        mouseOverReferenceButton_ = false;
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
+    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+}
+
 bool ArrangementViewComponent::isWaveformCacheCompleteForMaterialization(int trackId, uint64_t materializationId) const
 {
     juce::ignoreUnused(trackId);
@@ -1001,7 +1017,7 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
         }
 
         // Reference button icon
-        if (placementBounds.getWidth() > 30)
+        if (experimentalReferenceControlsEnabled_ && placementBounds.getWidth() > 30)
         {
             const bool hasRef = (vp.referencePlacementId != 0);
             const bool isHovering = vp.isHovered && vp.mouseOverReferenceButton;
@@ -1431,7 +1447,7 @@ void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
         hoveredPlacementId_ = movePlacementId;
 
         // Reference button area — match paint gate (width > 30)
-        if (moveHit.placementBounds.getWidth() > 30)
+        if (experimentalReferenceControlsEnabled_ && moveHit.placementBounds.getWidth() > 30)
         {
             juce::Rectangle<int> refBtnArea(moveHit.placementBounds.getRight() - 20,
                                              moveHit.placementBounds.getBottom() - 20, 20, 20);
@@ -1515,7 +1531,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     auto hit = hitTestPlacement(e.getPosition());
 
     // Check reference button click (bottom-right corner) — always active, before seek
-    if (hit.trackId >= 0 && hit.placementBounds.getWidth() > 30)
+    if (experimentalReferenceControlsEnabled_ && hit.trackId >= 0 && hit.placementBounds.getWidth() > 30)
     {
         juce::Rectangle<int> refBtnArea(hit.placementBounds.getRight() - 20,
                                          hit.placementBounds.getBottom() - 20, 20, 20);

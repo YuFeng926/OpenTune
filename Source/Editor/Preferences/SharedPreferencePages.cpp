@@ -201,23 +201,39 @@ public:
                 onPreferencesChanged_();
         };
 
-        initialiseLabel(experimentalFeatureLabel_, juce::String::fromUTF8(u8"实验性功能"));
-        addAndMakeVisible(experimentalFeatureLabel_);
+        initialiseToggleButton(experimentalFeaturesToggle_);
+        experimentalFeaturesToggle_.setButtonText(juce::String::fromUTF8(u8"启用实验性功能（参考轨、伸缩工具）"));
+        experimentalFeaturesToggle_.setToggleState(state.shared.experimentalFeaturesEnabled,
+                                                   juce::dontSendNotification);
+        experimentalFeaturesToggle_.onClick = [this] {
+            appPreferences_.setExperimentalFeaturesEnabled(experimentalFeaturesToggle_.getToggleState());
+            notifyChanged();
+        };
+        addAndMakeVisible(experimentalFeaturesToggle_);
 
-        experimentalFeatureSelector_.addItem(juce::String::fromUTF8(u8"关闭"), 1);
-        experimentalFeatureSelector_.addItem(juce::String::fromUTF8(u8"自动对齐参考源（基础）"), 2);
-        experimentalFeatureSelector_.addItem(juce::String::fromUTF8(u8"自动对齐参考源（激进）"), 3);
-        experimentalFeatureSelector_.setSelectedId(
+        initialiseLabel(experimentalFeaturesHintLabel_,
+                        juce::String::fromUTF8(u8"提示：参考轨与伸缩工具目前仍不完善，属于实验性功能，可能存在 Bug。"));
+        experimentalFeaturesHintLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
+        experimentalFeaturesHintLabel_.setJustificationType(juce::Justification::topLeft);
+        addAndMakeVisible(experimentalFeaturesHintLabel_);
+
+        initialiseLabel(experimentalReferenceAlignModeLabel_, juce::String::fromUTF8(u8"AUTO Ref 模式"));
+        addAndMakeVisible(experimentalReferenceAlignModeLabel_);
+
+        experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"关闭"), 1);
+        experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"自动对齐参考源（基础）"), 2);
+        experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"自动对齐参考源（激进）"), 3);
+        experimentalReferenceAlignModeSelector_.setSelectedId(
             static_cast<int>(state.shared.experimentalReferenceAlignMode) + 1,
             juce::dontSendNotification);
-        experimentalFeatureSelector_.onChange = [this] {
+        experimentalReferenceAlignModeSelector_.onChange = [this] {
             const auto mode = static_cast<ExperimentalReferenceAlignMode>(
-                experimentalFeatureSelector_.getSelectedId() - 1);
+                experimentalReferenceAlignModeSelector_.getSelectedId() - 1);
             appPreferences_.setExperimentalReferenceAlignMode(mode);
             notifyChanged();
         };
-        initialiseComboBox(experimentalFeatureSelector_);
-        addAndMakeVisible(experimentalFeatureSelector_);
+        initialiseComboBox(experimentalReferenceAlignModeSelector_);
+        addAndMakeVisible(experimentalReferenceAlignModeSelector_);
     }
 
     void paint(juce::Graphics& g) override
@@ -243,8 +259,15 @@ public:
 
         bounds.removeFromTop(8);
         row = bounds.removeFromTop(rowHeight);
-        experimentalFeatureLabel_.setBounds(row.removeFromLeft(labelWidth));
-        experimentalFeatureSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
+        experimentalFeaturesToggle_.setBounds(row.removeFromLeft(labelWidth + selectorWidth + 80));
+
+        bounds.removeFromTop(4);
+        experimentalFeaturesHintLabel_.setBounds(bounds.removeFromTop(42));
+
+        bounds.removeFromTop(8);
+        row = bounds.removeFromTop(rowHeight);
+        experimentalReferenceAlignModeLabel_.setBounds(row.removeFromLeft(labelWidth));
+        experimentalReferenceAlignModeSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
     }
 
 private:
@@ -263,8 +286,10 @@ private:
     juce::ComboBox renderingPrioritySelector_;
     juce::Label vocoderWeightLabel_;
     juce::ComboBox vocoderWeightSelector_;
-    juce::Label experimentalFeatureLabel_;
-    juce::ComboBox experimentalFeatureSelector_;
+    juce::ToggleButton experimentalFeaturesToggle_;
+    juce::Label experimentalFeaturesHintLabel_;
+    juce::Label experimentalReferenceAlignModeLabel_;
+    juce::ComboBox experimentalReferenceAlignModeSelector_;
 };
 
 class SharedEditingPage final : public juce::Component

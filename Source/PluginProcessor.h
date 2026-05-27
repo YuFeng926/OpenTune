@@ -700,6 +700,7 @@ public:
     // knowledge/current/cross-cutting/undo-affected-range-invariant.md).
     std::shared_ptr<const TimeGridSnapshot> getMaterializationTimeGridById(uint64_t materializationId) const;
     uint64_t getMaterializationTimeGridRevisionById(uint64_t materializationId) const;
+    bool ensureTimeToolAnchorSeed(uint64_t materializationId);
     bool setMaterializationTimeGridById(uint64_t materializationId,
                                          std::shared_ptr<const TimeGridSnapshot> snapshot,
                                          int64_t affectedSrcStartFrame,

@@ -376,6 +376,7 @@ ParameterPanel::ParameterPanel()
     timeToolButton_->setIcon(ToolbarIcons::getTimeToolIcon(), false);
     timeToolButton_->onClick = [this] { onToolClicked(5); };
     addAndMakeVisible(*timeToolButton_);
+    timeToolButton_->setVisible(experimentalFeaturesEnabled_);
 }
 
 ParameterPanel::~ParameterPanel()
@@ -626,7 +627,26 @@ void ParameterPanel::setActiveTool(int toolId)
     if (drawNoteToolButton_) drawNoteToolButton_->setToggleState(toolId == 2, juce::dontSendNotification);
     if (lineAnchorToolButton_) lineAnchorToolButton_->setToggleState(toolId == 3, juce::dontSendNotification);
     if (handDrawToolButton_) handDrawToolButton_->setToggleState(toolId == 4, juce::dontSendNotification);
-    if (timeToolButton_) timeToolButton_->setToggleState(toolId == 5, juce::dontSendNotification);
+    if (timeToolButton_) timeToolButton_->setToggleState(experimentalFeaturesEnabled_ && toolId == 5,
+                                                         juce::dontSendNotification);
+}
+
+void ParameterPanel::setExperimentalFeaturesEnabled(bool enabled)
+{
+    if (experimentalFeaturesEnabled_ == enabled) {
+        return;
+    }
+
+    experimentalFeaturesEnabled_ = enabled;
+    if (timeToolButton_ != nullptr) {
+        if (!enabled) {
+            timeToolButton_->setToggleState(false, juce::dontSendNotification);
+            timeToolButton_->setBounds({});
+        }
+        timeToolButton_->setVisible(enabled);
+    }
+    resized();
+    repaint();
 }
 
 void ParameterPanel::setAutoButtonMode(bool hasReference)
