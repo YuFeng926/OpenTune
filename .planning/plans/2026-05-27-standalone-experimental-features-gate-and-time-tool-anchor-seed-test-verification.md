@@ -4,6 +4,12 @@
 **状态:** Proposed  
 **关联执行方案:** `.planning/plans/2026-05-27-standalone-experimental-features-gate-and-time-tool-anchor-seed.md`
 
+> **2026-05-27 supersede note:** This verification document now covers only the experimental-features
+> gate and `TimeTool` first-entry identity seed contract. Formal `AUTO(REF)` main-chain verification has
+> moved to `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment-test-verification.md`.
+> Any wording below that still treats `DerivedAnalysis`, `Aggressive`, or seed itself as the formal
+> `AUTO(REF)` backbone must be read as superseded.
+
 ## 1. 验证目标
 
 本轮验证只服务一个目的：证明 Standalone 实验功能曝光与 TimeTool 首次锚点播种已经收敛为单一合同，而不是“按钮藏了一半、内部仍然并行”。
