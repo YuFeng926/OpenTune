@@ -5,7 +5,7 @@
  * 
  * 显示多轨道的音频片段排列视图，支持：
  * - 片段显示与拖拽
- * - 波形可视化（通过 WaveformTileCache 和 ArrangementRenderModelCache）
+ * - 波形可视化（通过 WaveformMipmapCache 和 ArrangementRenderModelCache）
  * - 时间标尺和网格
  * - 播放头位置显示（通过 PlayheadOverlayComponent）
  */
@@ -23,7 +23,6 @@
 #include "SmallButton.h"
 #include "PlayheadOverlayComponent.h"
 #include "WaveformMipmap.h"
-#include "WaveformTileCache.h"
 #include "ArrangementRenderModelCache.h"
 #include "TimelineViewportState.h"
 #include "../Utils/ZoomSensitivityConfig.h"
@@ -188,7 +187,6 @@ private:
     // ---- Timeline rendering pipeline ----
     TimelineViewportState viewportState_;
     ArrangementRenderModelCache renderModelCache_;
-    WaveformTileCache waveformTileCache_;
     WaveformMipmapCache waveformMipmapCache_;
 
     double lastContextBpm_{ 0.0 };

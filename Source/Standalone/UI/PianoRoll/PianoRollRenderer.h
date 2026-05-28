@@ -158,8 +158,6 @@ public:
         int endFrameExclusive = 0;
         int viewportStartX = 0;
         int viewportEndX = 0;
-        double pixelsPerSecond = 100.0;
-        double secondsPerFrame = 0.01;
     };
 
     using F0FrameToX = std::function<float(int)>;

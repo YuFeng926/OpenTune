@@ -595,7 +595,6 @@ target_sources(OpenTune
         Source/Standalone/UI/TimelineRenderingDiagnostics.cpp
         Source/Standalone/UI/TimelineRenderingDiagnostics.h
         Source/Standalone/UI/TimelineViewportState.h
-        Source/Standalone/UI/WaveformTileCache.h
         Source/Standalone/UI/WaveformMipmap.cpp
         Source/Standalone/UI/WaveformMipmap.h
         Source/Standalone/UI/RippleOverlayComponent.h

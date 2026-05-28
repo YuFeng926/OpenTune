@@ -213,7 +213,25 @@ void TrackPanelComponent::paint(juce::Graphics& g)
             g.fillRect(tintBounds);
 
             if (active)
-                UIColors::drawAuroraGlow(g, tintBounds.reduced(4.0f, 7.0f), trackColor, 0.28f, 0.42f);
+            {
+                juce::ColourGradient rowGlow(trackColor.withAlpha(0.16f),
+                                             tintBounds.getX(), tintBounds.getCentreY(),
+                                             juce::Colours::transparentBlack,
+                                             tintBounds.getRight(), tintBounds.getCentreY(), false);
+                rowGlow.addColour(0.24, trackColor.withAlpha(0.10f));
+                rowGlow.addColour(1.0, juce::Colours::transparentBlack);
+                g.setGradientFill(rowGlow);
+                g.fillRect(tintBounds);
+
+                juce::ColourGradient edgeGlow(trackColor.withAlpha(0.12f),
+                                              tintBounds.getX(), tintBounds.getY(),
+                                              juce::Colours::transparentBlack,
+                                              tintBounds.getX(), tintBounds.getBottom(), false);
+                edgeGlow.addColour(0.50, trackColor.withAlpha(0.07f));
+                edgeGlow.addColour(1.0, juce::Colours::transparentBlack);
+                g.setGradientFill(edgeGlow);
+                g.fillRect(tintBounds);
+            }
 
             juce::ColourGradient tint(trackColor.withAlpha(active ? 0.34f : 0.20f),
                                       tintBounds.getX(), tintBounds.getCentreY(),

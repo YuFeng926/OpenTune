@@ -235,7 +235,6 @@ void ArrangementViewComponent::setZoomLevel(double zoom)
 
 void ArrangementViewComponent::setScrollOffset(int pixels)
 {
-    const int oldOffset = scrollOffset_;
     const int visibleWidth = juce::jmax(1, getWidth() - UIColors::scrollBarThickness);
     const int maxScrollOffset = juce::jmax(0, getTotalContentWidth() - visibleWidth);
     const int newOffset = juce::jlimit(0, maxScrollOffset, pixels);
@@ -251,13 +250,8 @@ void ArrangementViewComponent::setScrollOffset(int pixels)
     playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
     syncPlayheadOverlay();
 
-    // Use exposed-strip repaint when possible, full invalidate only for large scrolls
-    const auto exposedStrip = viewportState_.exposedStripForScrollDelta(oldOffset, newOffset);
     requestRenderModelUpdate();
-    if (!exposedStrip.isEmpty())
-        FrameScheduler::instance().requestViewportShift(*this, exposedStrip);
-    else
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
+    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
 }
 
 void ArrangementViewComponent::setVerticalScrollOffset(int offset)
@@ -576,7 +570,6 @@ void ArrangementViewComponent::requestRenderModelUpdate()
                              },
                              hoveredPlacementId_,
                              mouseOverReferenceButton_,
-                             waveformTileCache_,
                              waveformMipmapCache_,
                              processor_.getTrackHeight(),
                              moveDragPreview_);
@@ -918,8 +911,8 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
             g.drawRoundedRectangle(placementArea.reduced(0.5f), 6.0f, 1.6f);
         }
 
-        // Waveform from tile cache
-        if (vp.hasAudioBuffer)
+        // Waveform prepared by ArrangementRenderModelCache.
+        if (vp.hasAudioBuffer && !vp.waveformPath.isEmpty())
         {
             if (themeId == ThemeId::Aurora)
                 g.setColour(juce::Colours::white.withAlpha(0.85f));
@@ -928,16 +921,7 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
             else
                 g.setColour(juce::Colour(0xFF3E4652).withAlpha(0.85f));
 
-            const auto* tile = waveformTileCache_.get(vp.materializationId,
-                                                       vp.waveformSourceId,
-                                                       vp.waveformZoomBucket,
-                                                       ArrangementRenderModelCache::computeWaveformDrawableBounds(vp.pixelBounds),
-                                                       vp.waveformVisibleStartSeconds,
-                                                       vp.waveformVisibleEndSeconds,
-                                                       vp.waveformStyleHash,
-                                                       vp.waveformTimeGridRevision);
-            if (tile != nullptr && !tile->path.isEmpty())
-                g.strokePath(tile->path, juce::PathStrokeType(1.0f));
+            g.strokePath(vp.waveformPath, juce::PathStrokeType(1.0f));
         }
 
         // Draw fade curves
@@ -1386,14 +1370,16 @@ void ArrangementViewComponent::onHeartbeatTick()
         progressed = buildWaveformCaches(0.75);
     }
 
-    if (!playingNow)
-    {
-        if (progressed)
-            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Background);
-        return;
+    if (progressed) {
+        renderModelCache_.invalidate();
+        requestRenderModelUpdate();
+        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Background);
     }
 
-    // Heartbeat does NOT drive content-level rebuilds. Playhead is overlay only.
+    if (!playingNow)
+        return;
+
+    // Playback follow remains overlay-only unless waveform mipmaps advanced above.
 }
 
 void ArrangementViewComponent::performPageScroll(double playheadTime)
