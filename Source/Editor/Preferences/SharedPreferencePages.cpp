@@ -221,8 +221,8 @@ public:
         addAndMakeVisible(experimentalReferenceAlignModeLabel_);
 
         experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"关闭"), 1);
-        experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"自动对齐参考源（基础）"), 2);
-        experimentalReferenceAlignModeSelector_.addItem(juce::String::fromUTF8(u8"自动对齐参考源（激进）"), 3);
+        experimentalReferenceAlignModeSelector_.addItem(
+            juce::String::fromUTF8(u8"GAME（不可用时降级为普通 AUTO）"), 2);
         experimentalReferenceAlignModeSelector_.setSelectedId(
             static_cast<int>(state.shared.experimentalReferenceAlignMode) + 1,
             juce::dontSendNotification);

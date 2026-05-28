@@ -71,10 +71,10 @@ constexpr std::array<SuiteEntry, 35> kSuites{{
     { "reference-auto-align", "ReferenceAutoAlign pure request/patch contract", &runReferenceAutoAlignSuite },
     { "auto-ref-failure", "ReferenceAutoAlign failure modes: NoOverlap, NotReady, InsufficientFeatures", &runAutoRefFailureSuite },
     { "auto-ref-architecture", "AUTO Ref UI architecture source-scan guards", &runAutoRefArchitectureSuite },
-    { "basic-derived-analysis", "DerivedAnalysis slot smoke test", &runBasicDerivedAnalysisSuite },
+    { "reference-features-cache-smoke", "ReferenceFeatureSet cache slot smoke test", &runReferenceFeaturesCacheSmokeSuite },
     { "auto-ref-integration", "AUTO Ref domain applier transaction and composite undo", &runAutoRefIntegrationSuite },
-    { "derived-analysis", "MaterializationStore DerivedAnalysis slot set/get/invalidate lifecycle", &runMaterializationDerivedAnalysisSuite },
-    { "mat-contract", "MaterializationStore contract: derived analysis isolation from snapshot/notes", &runMaterializationContractSuite },
+    { "reference-features-cache", "MaterializationStore ReferenceFeatureSet cache set/get/invalidate lifecycle", &runReferenceFeaturesCacheLifecycleSuite },
+    { "mat-contract", "MaterializationStore contract: reference feature cache isolation from snapshot/notes", &runMaterializationContractSuite },
     { "ref-analysis-svc", "ReferenceAnalysisService lifecycle and submit/cancel safety", &runReferenceAnalysisServiceSuite },
     { "ref-binding", "StandaloneArrangement reference binding lifecycle (set/get/clear/delete/move)", &runReferenceBindingSuite },
     { "ref-binding-cascade", "StandaloneArrangement reference binding cascade (delete/move cross-track/split)", &runPlacementReferenceCascadeSuite },
@@ -759,6 +759,77 @@ void runAppPreferencesRoundTripsSharedPreferencesTest()
             logFail(testName, "shared zoom settings did not persist");
             return;
         }
+    }
+
+    logPass(testName);
+}
+
+void runAppPreferencesExperimentalReferenceAlignModeMigratesLegacyTokensToGameTest()
+{
+    constexpr const char* testName =
+        "AppPreferences_ExperimentalReferenceAlignModeMigratesLegacyTokensToGame";
+
+    const auto storage = makeAppPreferencesStorageOptions("experimental-reference-align-mode-migration");
+    const auto settingsFile = resolveAppPreferencesSettingsFile(storage);
+
+    auto writeLegacyToken = [&](const juce::String& legacyToken) -> bool {
+        {
+            AppPreferences preferences(storage);
+            preferences.setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode::Game);
+            preferences.flush();
+        }
+
+        if (!settingsFile.existsAsFile()) {
+            return false;
+        }
+
+        auto settingsXml = settingsFile.loadFileAsString();
+        if (!settingsXml.contains("shared.align.experimental") || !settingsXml.contains("game")) {
+            return false;
+        }
+
+        settingsXml = settingsXml.replaceFirstOccurrenceOf("game", legacyToken, false);
+        return settingsFile.replaceWithText(settingsXml);
+    };
+
+    if (!writeLegacyToken("basic")) {
+        logFail(testName, "failed to prepare legacy basic token fixture");
+        return;
+    }
+    {
+        AppPreferences preferences(storage);
+        if (preferences.getState().shared.experimentalReferenceAlignMode != ExperimentalReferenceAlignMode::Game) {
+            logFail(testName, "legacy basic token did not migrate to Game");
+            return;
+        }
+    }
+
+    if (!writeLegacyToken("aggressive")) {
+        logFail(testName, "failed to prepare legacy aggressive token fixture");
+        return;
+    }
+    {
+        AppPreferences preferences(storage);
+        if (preferences.getState().shared.experimentalReferenceAlignMode != ExperimentalReferenceAlignMode::Game) {
+            logFail(testName, "legacy aggressive token did not migrate to Game");
+            return;
+        }
+    }
+
+    {
+        AppPreferences preferences(storage);
+        preferences.setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode::Game);
+        preferences.flush();
+    }
+
+    const auto finalXml = settingsFile.loadFileAsString();
+    if (!finalXml.contains("game")) {
+        logFail(testName, "Game token was not written back to AppPreferences storage");
+        return;
+    }
+    if (finalXml.contains("basic") || finalXml.contains("aggressive")) {
+        logFail(testName, "legacy experimental reference align tokens should not be written by new preferences");
+        return;
     }
 
     logPass(testName);
@@ -7623,6 +7694,7 @@ void runUiBehaviorSuite()
 {
     logSection("UI");
     runAppPreferencesRoundTripsSharedPreferencesTest();
+    runAppPreferencesExperimentalReferenceAlignModeMigratesLegacyTokensToGameTest();
     runAppPreferencesRoundTripsStandalonePreferencesTest();
     runAppPreferencesRoundTripsSharedVisualPreferencesTest();
     runProcessorStateDoesNotSerializeAppPreferencesTest();

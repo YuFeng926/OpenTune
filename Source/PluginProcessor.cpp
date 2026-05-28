@@ -12,7 +12,6 @@
 #include "Utils/ChannelLayoutLogger.h"
 #include "Plugin/Capture/CaptureSession.h"
 #include "Inference/SoundTouchStretcher.h"   // §7 Phase D — Stage 2 worker (WSOLA, replaces RB)
-#include "DSP/BasicReferenceFeatureBuilder.h"
 #include "DSP/ReferenceAutoAlign.h"
 #include "DSP/TimeGridPatchBuilder.h"
 #include <onnxruntime_cxx_api.h>
@@ -46,6 +45,45 @@ constexpr double kExportSampleRateHz = 44100.0;
 constexpr int kExportNumChannels = 1;
 constexpr int kExportMasterNumChannels = 2;
 constexpr int kExportBitsPerSample = static_cast<int>(sizeof(float) * 8);
+
+struct AutoRefGameBackendProbe {
+    bool forceLegacy = false;
+    bool gameBundlePresent = false;
+    bool currentBackendIsGame = false;
+    bool currentBackendIsLegacy = false;
+};
+
+AutoRefGameBackendProbe probeAutoRefGameBackendLocked(INoteGenerator* generator, const juce::String& modelsDir)
+{
+    AutoRefGameBackendProbe probe;
+    const auto envBackend = juce::SystemStats::getEnvironmentVariable("OPENTUNE_NOTE_BACKEND", {})
+                                .trim()
+                                .toLowerCase();
+    probe.forceLegacy = (envBackend == "legacy");
+
+    const auto gameDir = juce::File(modelsDir).getChildFile("GAME");
+    probe.gameBundlePresent = gameDir.getChildFile("encoder.onnx").existsAsFile();
+    probe.currentBackendIsGame = dynamic_cast<GameNoteGenerator*>(generator) != nullptr;
+    probe.currentBackendIsLegacy = generator != nullptr && !probe.currentBackendIsGame;
+    return probe;
+}
+
+juce::String makeAutoRefGameUnavailableMessage(const AutoRefGameBackendProbe& probe)
+{
+    if (probe.forceLegacy) {
+        return juce::String::fromUTF8(u8"已绑定参考源，但当前强制使用 Legacy backend，本次执行普通 AUTO。");
+    }
+
+    if (probe.currentBackendIsLegacy && !probe.gameBundlePresent) {
+        return juce::String::fromUTF8(u8"已绑定参考源，但当前缺少 GAME backend / models，本次执行普通 AUTO。");
+    }
+
+    if (!probe.gameBundlePresent) {
+        return juce::String::fromUTF8(u8"已绑定参考源，但当前缺少 GAME backend / models，本次执行普通 AUTO。");
+    }
+
+    return juce::String::fromUTF8(u8"已绑定参考源，但当前 GAME backend 未就绪，本次执行普通 AUTO。");
+}
 
 std::vector<Note> normalizeStoredNotes(const std::vector<Note>& notes)
 {
@@ -986,12 +1024,6 @@ ReferenceFeatureSet OpenTuneAudioProcessor::buildReferenceFeatureSet(
     return buildGameReferenceFeatureSet(snapshot);
 }
 
-ReferenceFeatureSet OpenTuneAudioProcessor::buildBasicReferenceFeatureSet(
-    const MaterializationStore::MaterializationSnapshot& snapshot) const
-{
-    return BasicReferenceFeatureBuilder::build(snapshot);
-}
-
 ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
     const MaterializationStore::MaterializationSnapshot& snapshot)
 {
@@ -1021,7 +1053,7 @@ ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
 
     auto* const gameGenerator = dynamic_cast<GameNoteGenerator*>(noteGenerator_.get());
     if (gameGenerator == nullptr) {
-        return failGame("AUTO Ref GAME analysis requires GAME backend and cannot fall back to Basic");
+        return failGame("AUTO Ref GAME analysis requires GAME backend");
     }
 
     NoteGeneratorInput input;
@@ -1692,6 +1724,82 @@ bool OpenTuneAudioProcessor::isNoteGenInFlightForMaterialization(uint64_t materi
     if (materializationId == 0) return false;
     std::lock_guard<std::mutex> lk(noteGenInFlightMutex_);
     return noteGenInFlightMatIds_.count(materializationId) > 0;
+}
+
+OpenTuneAudioProcessor::AutoRefAvailability
+OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) const
+{
+    AutoRefAvailability availability;
+    availability.targetPlacementId = targetPlacementId;
+
+    if (targetPlacementId == 0 || standaloneArrangement_ == nullptr) {
+        availability.status = AutoRefAvailability::Status::InvalidSelection;
+        availability.message = juce::String::fromUTF8(u8"当前未选中可用 Clip，本次执行普通 AUTO。");
+        return availability;
+    }
+
+    StandaloneArrangement::Placement targetPlacement;
+    int targetTrackId = -1;
+    for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
+        if (getPlacementById(trackId, targetPlacementId, targetPlacement)) {
+            targetTrackId = trackId;
+            break;
+        }
+    }
+
+    if (targetTrackId < 0) {
+        availability.status = AutoRefAvailability::Status::InvalidSelection;
+        availability.message = juce::String::fromUTF8(u8"当前未选中可用 Clip，本次执行普通 AUTO。");
+        return availability;
+    }
+
+    availability.referencePlacementId =
+        standaloneArrangement_->getPlacementReferencePlacement(targetTrackId, targetPlacementId);
+    if (availability.referencePlacementId == 0) {
+        availability.status = AutoRefAvailability::Status::NoReference;
+        availability.message = juce::String::fromUTF8(u8"当前 Clip 未绑定参考源，本次执行普通 AUTO。");
+        return availability;
+    }
+
+    if (availability.referencePlacementId == targetPlacementId) {
+        availability.status = AutoRefAvailability::Status::InvalidSelection;
+        availability.message = juce::String::fromUTF8(u8"参考源绑定无效，本次执行普通 AUTO。");
+        return availability;
+    }
+
+    StandaloneArrangement::Placement referencePlacement;
+    bool referenceFound = false;
+    for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
+        if (getPlacementById(trackId, availability.referencePlacementId, referencePlacement)) {
+            referenceFound = true;
+            break;
+        }
+    }
+    if (!referenceFound) {
+        availability.status = AutoRefAvailability::Status::InvalidSelection;
+        availability.message = juce::String::fromUTF8(u8"参考源 Clip 不可用，本次执行普通 AUTO。");
+        return availability;
+    }
+
+    const auto modelsDir = juce::String(ModelPathResolver::getModelsDirectory());
+    std::lock_guard<std::mutex> lock(noteGenInitMutex_);
+    const auto backendProbe = probeAutoRefGameBackendLocked(noteGenerator_.get(), modelsDir);
+
+    if (backendProbe.currentBackendIsGame) {
+        availability.status = AutoRefAvailability::Status::Ready;
+        availability.message = juce::String::fromUTF8(u8"AUTO(Ref) 将使用 GAME 对参考源进行分析。");
+        return availability;
+    }
+
+    if (backendProbe.forceLegacy || backendProbe.currentBackendIsLegacy || !backendProbe.gameBundlePresent) {
+        availability.status = AutoRefAvailability::Status::GameUnavailable;
+        availability.message = makeAutoRefGameUnavailableMessage(backendProbe);
+        return availability;
+    }
+
+    availability.status = AutoRefAvailability::Status::Ready;
+    availability.message = juce::String::fromUTF8(u8"AUTO(Ref) 将使用 GAME 对参考源进行分析。");
+    return availability;
 }
 
 bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
@@ -4606,18 +4714,22 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(uint64_t materializationId
     ReferenceFeatureSet features;
     const bool featuresReady = materializationStore_->getReferenceFeatures(materializationId, features)
         && features.isReady()
+        && features.producer == ReferenceFeatureProducer::Game
         && features.inputFingerprint == static_cast<int64_t>(snapshot.renderRevision)
         && features.hasTimingAnchors();
 
     if (!featuresReady) {
-        features = buildBasicReferenceFeatureSet(snapshot);
-        features.inputFingerprint = static_cast<int64_t>(snapshot.renderRevision);
-        if (features.isReady() && features.hasTimingAnchors()) {
+        features = buildReferenceFeatureSet(snapshot);
+        if (features.isReady()
+            && features.producer == ReferenceFeatureProducer::Game
+            && features.hasTimingAnchors()) {
             materializationStore_->setReferenceFeatures(materializationId, features);
         }
     }
 
-    if (!features.isReady() || !features.hasTimingAnchors()) {
+    if (!features.isReady()
+        || features.producer != ReferenceFeatureProducer::Game
+        || !features.hasTimingAnchors()) {
         return false;
     }
 

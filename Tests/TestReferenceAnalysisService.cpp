@@ -27,7 +27,7 @@ ReferenceFeatureSet makeReadyFeatures(int64_t fingerprint = 0)
 {
     ReferenceFeatureSet result;
     result.status = ReferenceFeatureStatus::Ready;
-    result.producer = ReferenceFeatureProducer::Basic;
+    result.producer = ReferenceFeatureProducer::Game;
     result.analysisRevision = 1;
     result.inputFingerprint = fingerprint;
     result.sourceDurationSeconds = 1.0;

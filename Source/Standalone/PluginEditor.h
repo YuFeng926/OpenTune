@@ -152,6 +152,16 @@ public:
 
 private:
     struct PendingImport;
+    struct AutoRefUiState
+    {
+        OpenTuneAudioProcessor::AutoRefAvailability availability;
+        ParameterPanel::AutoButtonPresentation presentation;
+
+        bool shouldRunReferenceAuto() const noexcept
+        {
+            return availability.canRunAutoRef();
+        }
+    };
 
     bool shouldAcceptUndoRedoShortcut();
     void performUndoRedoAction(bool isUndo);
@@ -167,6 +177,7 @@ private:
     void applyPlacementSelectionContext(int trackId, uint64_t placementId);
 
     // Reference auto-align methods
+    AutoRefUiState evaluateAutoRefUiState() const;
     void refreshReferenceContext();
     void resolveReferenceBindingMenu(int trackId, uint64_t placementId, juce::Rectangle<int> buttonScreenArea = {});
     bool handleAutoRefExecute();

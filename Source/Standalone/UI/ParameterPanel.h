@@ -47,6 +47,17 @@ public:
 class ParameterPanel : public juce::Component
 {
 public:
+    struct AutoButtonPresentation {
+        enum class Mode : uint8_t {
+            StandardAuto = 0,
+            ReferenceAuto,
+            ReferenceBoundButFallbackToAuto
+        };
+
+        Mode mode{Mode::StandardAuto};
+        juce::String tooltip;
+    };
+
     class Listener
     {
     public:
@@ -76,7 +87,7 @@ public:
     /** 设置 AUTO 按钮的模式显示。
      *  @param hasReference  true: 主文本 "AUTO" + 副标题 "(Ref)"（小字在下方）, false: 仅 "AUTO" 居中
      */
-    void setAutoButtonMode(bool hasReference);
+    void setAutoButtonPresentation(const AutoButtonPresentation& presentation);
     
     // Setters for UI state
     void setRetuneSpeed(float speed);
@@ -155,6 +166,7 @@ private:
     std::unique_ptr<ToolIconButton> handDrawToolButton_;
     // ⚡️ vocal-time-stretch §8.4 — Time tool palette button (toolId=5)
     std::unique_ptr<ToolIconButton> timeToolButton_;
+    AutoButtonPresentation autoButtonPresentation_;
 
     LargeKnobLookAndFeel largeKnobLookAndFeel_;
 

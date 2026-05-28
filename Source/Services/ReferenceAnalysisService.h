@@ -15,7 +15,7 @@
 namespace OpenTune {
 
 /**
- * @brief 后台分析服务，负责 per-materialization 的 derived analysis 生成。
+ * @brief 后台分析服务，负责 per-materialization 的 ReferenceFeatureSet 生成。
  *
  * 去重：同一 materializationId 的分析任务只保留一个（已在队列中则丢弃新请求）。
  * stale 丢弃：提交前验证 materialization renderRevision 与 job 创建时一致。

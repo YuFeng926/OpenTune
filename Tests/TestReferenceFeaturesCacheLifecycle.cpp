@@ -1,11 +1,11 @@
 /**
- * Tests/TestMaterializationDerivedAnalysis.cpp - L3 tests for the
+ * Tests/TestReferenceFeaturesCacheLifecycle.cpp - L3 tests for the
  * MaterializationStore ReferenceFeatureSet cache lifecycle.
  *
  * Covers set/get, invalidation on pitch-curve change, and invalidation
  * on audio replacement per the reference feature cache contract.
  *
- * Suite aggregator: runMaterializationDerivedAnalysisSuite()
+ * Suite aggregator: runReferenceFeaturesCacheLifecycleSuite()
  */
 #include "TestSupport.h"
 
@@ -17,7 +17,7 @@ ReferenceFeatureSet makeReadyFeatures()
 {
     ReferenceFeatureSet features;
     features.status = ReferenceFeatureStatus::Ready;
-    features.producer = ReferenceFeatureProducer::Basic;
+    features.producer = ReferenceFeatureProducer::Game;
     features.analysisRevision = 1;
     features.inputFingerprint = 42;
     features.sourceDurationSeconds = 2.0;
@@ -87,7 +87,7 @@ void runReferenceFeatures_SetAndGet()
         logFail(testName, "reference feature cache should be Ready after set");
         return;
     }
-    if (out.producer != ReferenceFeatureProducer::Basic) {
+    if (out.producer != ReferenceFeatureProducer::Game) {
         logFail(testName, "reference feature cache producer mismatch");
         return;
     }
@@ -185,9 +185,9 @@ void runReferenceFeatures_InvalidateOnReplaceAudio()
     logPass(testName);
 }
 
-void runMaterializationDerivedAnalysisSuite()
+void runReferenceFeaturesCacheLifecycleSuite()
 {
-    logSection("MaterializationDerivedAnalysis");
+    logSection("ReferenceFeaturesCacheLifecycle");
     runReferenceFeatures_SetAndGet();
     runReferenceFeatures_InvalidateOnPitchCurveSet();
     runReferenceFeatures_InvalidateOnReplaceAudio();
