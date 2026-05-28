@@ -16,7 +16,6 @@
 #include <vector>
 #include <map>
 #include <functional>
-#include "WaveformTileCache.h"
 #include "WaveformMipmap.h"
 #include "TimelineViewportState.h"
 #include "../PluginProcessor.h"
@@ -39,12 +38,7 @@ public:
         bool analysisInProgress = false;
         bool isHovered = false;
         bool mouseOverReferenceButton = false;
-        uint64_t waveformSourceId = 0;
-        int waveformZoomBucket = 0;
-        double waveformVisibleStartSeconds = 0.0;
-        double waveformVisibleEndSeconds = 0.0;
-        uint64_t waveformStyleHash = 0;
-        uint64_t waveformTimeGridRevision = 0;
+        juce::Path waveformPath;
         int trackId = 0;
         double fadeInDuration = 0.0;
         double fadeOutDuration = 0.0;
@@ -139,7 +133,6 @@ public:
                               std::function<bool(uint64_t)> getAnalysisState,
                               uint64_t hoveredPlacementId,
                               bool mouseOverReferenceButton,
-                              WaveformTileCache& tileCache,
                               WaveformMipmapCache& mipmapCache,
                               int trackHeight,
                               const MoveDragPreviewState& movePreview = {},
@@ -148,6 +141,13 @@ public:
     const RenderModel& getModel() const noexcept { return model_; }
 
     static juce::Rectangle<int> computeWaveformDrawableBounds(juce::Rectangle<int> placementBounds) noexcept;
+    static juce::Path buildWaveformPathForPlacement(const WaveformMipmap& mipmap,
+                                                    const TimelineViewportState& viewport,
+                                                    juce::Rectangle<int> placementBounds,
+                                                    double timelineStartSeconds,
+                                                    double durationSeconds,
+                                                    double clipInSeconds,
+                                                    float gain);
 
     void invalidate() { needsRebuild_ = true; }
     void clear() { model_.placements.clear(); needsRebuild_ = true; }

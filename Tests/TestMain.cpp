@@ -12,7 +12,6 @@
 #include "Standalone/UI/PianoRoll/PianoRollVisualInvalidation.h"
 #include "Standalone/UI/TimelineViewportState.h"
 #include "Standalone/UI/WaveformMipmap.h"
-#include "Standalone/UI/WaveformTileCache.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/AudioEditingScheme.h"
 #include "Utils/ParameterPanelSync.h"
@@ -4452,7 +4451,7 @@ void runAraFinalBirthPathOwnsOriginalF0Release();
 void runAraBirthPathDetectsSilentGapsBeforeCommit();
 void runAuroraRightSidebarBackgroundReferenceRestyleSourceGuardTest();
 void runAuroraScrollbarOutlineSourceGuardTest();
-void runDmlVocoderUsesDeviceOutputBinding();
+void runDmlVocoderUsesCpuBoundOutputTensor();
 void runRenderingPriorityRemainsGpuFirstAndCpuFirstOnly();
 void runStage2WorkerStreamsStage1InputDirectly();
 
@@ -4895,8 +4894,6 @@ std::vector<PianoRollRenderer::F0VisualSegment> buildTestF0VisualSegments(
     options.endFrameExclusive = static_cast<int>(f0.size());
     options.viewportStartX = -100000;
     options.viewportEndX = 100000;
-    options.pixelsPerSecond = pixelsPerSecond;
-    options.secondsPerFrame = 0.01;
 
     const auto* energyPtr = energy.empty() ? nullptr : &energy;
     return PianoRollRenderer::buildF0VisualSegments(
@@ -4982,15 +4979,82 @@ void runPianoRollF0VisualHotLevelAddsGoldTintTest()
     logPass(testName);
 }
 
-void runPianoRollF0VisualZoomedOutBucketsAreBoundedByPixelDensityTest()
+void runPianoRollF0VisualVerticalShapeIsZoomInvariantTest()
 {
-    constexpr const char* testName = "PianoRollF0Visual_ZoomedOutBucketsAreBoundedByPixelDensity";
+    constexpr const char* testName = "PianoRollF0Visual_VerticalShapeIsZoomInvariant";
 
-    std::vector<float> f0(1000, 220.0f);
-    const auto segments = buildTestF0VisualSegments(f0, {}, 10.0);
+    std::vector<float> f0;
+    f0.reserve(240);
+    for (int frame = 0; frame < 240; ++frame) {
+        const float phase = static_cast<float>(frame) * 0.18f;
+        const float slowContour = 42.0f * std::sin(phase);
+        const float fastDetail = (frame % 5 == 0) ? 18.0f : ((frame % 5 == 2) ? -14.0f : 0.0f);
+        f0.push_back(260.0f + slowContour + fastDetail);
+    }
 
-    if (segments.size() != 1 || segments.front().points.size() >= 120) {
-        logFail(testName, "zoomed-out F0 curve should be smoothed into screen-density visual buckets");
+    const auto lowZoomSegments = buildTestF0VisualSegments(f0, {}, 10.0);
+    const auto highZoomSegments = buildTestF0VisualSegments(f0, {}, 220.0);
+
+    if (lowZoomSegments.size() != 1
+        || highZoomSegments.size() != 1
+        || lowZoomSegments.front().points.size() != f0.size()
+        || highZoomSegments.front().points.size() != f0.size()) {
+        logFail(testName, "F0 visual builder should keep the same frame points at every horizontal zoom");
+        return;
+    }
+
+    const auto& lowPoints = lowZoomSegments.front().points;
+    const auto& highPoints = highZoomSegments.front().points;
+    for (std::size_t i = 0; i < f0.size(); ++i) {
+        if (lowPoints[i].frame != highPoints[i].frame
+            || !approxEqual(lowPoints[i].y, highPoints[i].y, 1.0e-4f)) {
+            logFail(testName, "vertical F0 shape changed with horizontal zoom");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollF0VisualZoomedOutDensityUsesSourceShapePointsTest()
+{
+    constexpr const char* testName = "PianoRollF0Visual_ZoomedOutDensityUsesSourceShapePoints";
+
+    std::vector<float> f0;
+    f0.reserve(20000);
+    for (int frame = 0; frame < 20000; ++frame) {
+        const float contour = 75.0f * std::sin(static_cast<float>(frame) * 0.031f);
+        const float transient = (frame % 37 == 0) ? 95.0f : ((frame % 41 == 0) ? -82.0f : 0.0f);
+        f0.push_back(260.0f + contour + transient);
+    }
+
+    const auto segments = buildTestF0VisualSegments(f0, {}, 4.0);
+    if (segments.size() != 1 || segments.front().points.empty() || segments.front().points.size() > 4096) {
+        logFail(testName, "zoomed-out F0 curve should remain bounded without drawing every source frame");
+        return;
+    }
+
+    const auto& points = segments.front().points;
+    int previousFrame = -1;
+    for (const auto& point : points) {
+        if (point.frame <= previousFrame
+            || point.frame < 0
+            || point.frame >= static_cast<int>(f0.size())
+            || !approxEqual(point.y, f0[static_cast<std::size_t>(point.frame)], 1.0e-4f)) {
+            logFail(testName, "density reduction must keep source frame y values instead of averaging vertical shape");
+            return;
+        }
+        previousFrame = point.frame;
+    }
+
+    bool keptLargePeak = false;
+    bool keptLargeDip = false;
+    for (const auto& point : points) {
+        keptLargePeak = keptLargePeak || point.y > 420.0f;
+        keptLargeDip = keptLargeDip || point.y < 105.0f;
+    }
+    if (!keptLargePeak || !keptLargeDip) {
+        logFail(testName, "density reduction should preserve source extrema so zoom-out does not flatten the contour");
         return;
     }
 
@@ -5045,9 +5109,9 @@ void runPianoRollF0VisualStyleTokensAndLayeringTest()
 
     const auto& componentSource = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
     const int originalDrawIndex = componentSource.indexOf(
-        "renderer_->drawPreparedF0Curve(g, item.originalF0VisualSegments, UIColors::originalF0, 0.62f, true");
+        "renderer_->drawPreparedF0Curve(g, item.originalF0VisualSegments, UIColors::originalF0, 0.78f, true");
     const int correctedDrawIndex = componentSource.indexOf(
-        "renderer_->drawPreparedF0Curve(g, item.correctedF0VisualSegments, UIColors::correctedF0, 0.94f, false");
+        "renderer_->drawPreparedF0Curve(g, item.correctedF0VisualSegments, UIColors::correctedF0, 1.0f, false");
     // selected OriginalF0 emphasis is now unified inside drawPreparedF0Curve via
     // the note.selected alpha ramp, so only the two-level z-order matters.
     if (originalDrawIndex < 0
@@ -6361,14 +6425,14 @@ void runArrangementNudgeShortcutsParticipateInUndoRedoTest()
     logPass(testName);
 }
 
-void runTimelineInvalidationViewportShiftExposesOnlyNewStripTest()
+void runTimelineInvalidationScrollOffsetRequestsFullContentRepaintTest()
 {
-    constexpr const char* testName = "TimelineInvalidation_ViewportShiftExposesOnlyNewStrip";
+    constexpr const char* testName = "TimelineInvalidation_ScrollOffsetRequestsFullContentRepaint";
 
     const auto pianoScrollSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/PianoRollComponent.cpp",
         "void PianoRollComponent::setScrollOffset",
-        "void PianoRollComponent::onHeartbeatTick");
+        "double PianoRollComponent::readPlayheadTime");
 
     const auto arrScrollSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/ArrangementViewComponent.cpp",
@@ -6380,15 +6444,22 @@ void runTimelineInvalidationViewportShiftExposesOnlyNewStripTest()
         return;
     }
 
-    bool pianoFull = pianoScrollSection.contains("repaint()") && !pianoScrollSection.contains("FrameScheduler");
-    bool arrFull = arrScrollSection.contains("repaint()") && !arrScrollSection.contains("FrameScheduler");
+    if (pianoScrollSection.contains("exposed strip")
+        || pianoScrollSection.contains("dirtyArea")
+        || pianoScrollSection.contains("getTimelineViewportBounds")) {
+        logFail(testName, "PianoRoll scroll still uses an exposed-strip repaint contract");
+        return;
+    }
 
-    if (pianoFull || arrFull) {
-        logFail(testName,
-            (juce::String("scroll still triggers whole-component repaint: PianoRoll=")
-             + juce::String(pianoFull ? "yes" : "no")
-             + juce::String(", Arrangement=")
-             + juce::String(arrFull ? "yes" : "no")).toRawUTF8());
+    if (arrScrollSection.contains("exposedStripForScrollDelta")
+        || arrScrollSection.contains("requestViewportShift")) {
+        logFail(testName, "Arrangement scroll still uses an exposed-strip repaint contract");
+        return;
+    }
+
+    if (!pianoScrollSection.contains("PianoRollVisualInvalidationReason::Viewport")
+        || !arrScrollSection.contains("FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive)")) {
+        logFail(testName, "scroll offset changes do not request full content repaint");
         return;
     }
 
@@ -6397,7 +6468,7 @@ void runTimelineInvalidationViewportShiftExposesOnlyNewStripTest()
 
 void runTimelineInvalidationBigJumpPromotesToSingleFullRedrawTest()
 {
-    constexpr const char* testName = "TimelineInvalidation_BigJumpPromotesToSingleFullRedraw";
+    constexpr const char* testName = "TimelineInvalidation_ExposedStripHelperIsNotScrollContract";
 
     TimelineViewportState viewport;
     viewport.viewportWidthPx = 800;
@@ -6405,19 +6476,24 @@ void runTimelineInvalidationBigJumpPromotesToSingleFullRedrawTest()
 
     const auto smallStrip = viewport.exposedStripForScrollDelta(0, 120);
     if (smallStrip.isEmpty() || viewport.requiresFullRedrawForDelta(0, 120)) {
-        logFail(testName, "small scroll should expose a dirty strip instead of requiring full redraw");
+        logFail(testName, "exposed-strip helper no longer computes small-scroll geometry");
         return;
     }
 
     const auto bigStrip = viewport.exposedStripForScrollDelta(0, 801);
     if (!bigStrip.isEmpty() || !viewport.requiresFullRedrawForDelta(0, 801)) {
-        logFail(testName, "big scroll should promote to one full redraw decision");
+        logFail(testName, "exposed-strip helper no longer promotes big-scroll geometry to full redraw");
         return;
     }
 
-    const auto& frameScheduler = getFileCache().get("Source/Standalone/UI/FrameScheduler.h");
-    if (!frameScheduler.contains("full repaint promotion") && !frameScheduler.contains("recordFullRepaintPromotion")) {
-        logFail(testName, "FrameScheduler does not record full repaint promotions for large viewport jumps");
+    const auto arrScrollSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::setScrollOffset",
+        "void ArrangementViewComponent::setVerticalScrollOffset");
+
+    if (arrScrollSection.contains("exposedStripForScrollDelta")
+        || arrScrollSection.contains("requestViewportShift")) {
+        logFail(testName, "Arrangement scroll still treats exposed-strip geometry as a repaint contract");
         return;
     }
 
@@ -6770,17 +6846,29 @@ void runPianoRollRenderContextUsesSnapshotVerticalCoordinatesTest()
     logPass(testName);
 }
 
-void runArrangementScrollOffsetDoesNotInvalidateWholeComponentTest()
+void runArrangementScrollOffsetInvalidatesFullContentWithoutPaintWorkTest()
 {
-    constexpr const char* testName = "Arrangement_ScrollOffsetDoesNotInvalidateWholeComponent";
+    constexpr const char* testName = "Arrangement_ScrollOffsetInvalidatesFullContentWithoutPaintWork";
 
     const auto paintSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/ArrangementViewComponent.cpp",
         "void ArrangementViewComponent::paint",
         "void ArrangementViewComponent::drawTimeRuler");
+    const auto scrollSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::setScrollOffset",
+        "void ArrangementViewComponent::setVerticalScrollOffset");
 
-    if (paintSection.isEmpty()) {
-        logFail(testName, "failed to locate Arrangement paint() — check section boundaries");
+    if (paintSection.isEmpty() || scrollSection.isEmpty()) {
+        logFail(testName, "failed to locate Arrangement paint()/scroll methods — check section boundaries");
+        return;
+    }
+
+    if (!scrollSection.contains("requestRenderModelUpdate()")
+        || !scrollSection.contains("FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive)")
+        || scrollSection.contains("requestViewportShift")
+        || scrollSection.contains("exposedStripForScrollDelta")) {
+        logFail(testName, "Arrangement scroll offset changes are not full-content invalidations");
         return;
     }
 
@@ -6840,55 +6928,9 @@ void runArrangementVisibleRangeCullsOffscreenPlacementsTest()
         return;
     }
 
-    if (!cacheSource.contains("timelineEndSeconds() < visibleTimeStart")
-        || !cacheSource.contains("timelineStartSeconds > visibleTimeEnd")) {
+    if (!cacheSource.contains("timelineEndSeconds() <= visibleTimeStart")
+        || !cacheSource.contains("timelineStartSeconds >= visibleTimeEnd")) {
         logFail(testName, "Arrangement render-model update does not cull offscreen placements by visible range");
-        return;
-    }
-
-    logPass(testName);
-}
-
-void runWaveformTileCacheHasBoundedMemoryAndEvictionTest()
-{
-    constexpr const char* testName = "WaveformTileCache_HasBoundedMemoryAndEviction";
-
-    WaveformTileCache cache;
-    WaveformMipmap mipmap;
-    auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 4096);
-    audio->clear();
-    for (int i = 0; i < audio->getNumSamples(); ++i)
-        audio->setSample(0, i, std::sin(static_cast<float>(i) * 0.03f));
-    mipmap.setAudioSource(audio);
-
-    int guard = 0;
-    while (!mipmap.isComplete() && guard < 1000) {
-        mipmap.buildIncremental(1.0);
-        ++guard;
-    }
-
-    juce::Rectangle<int> bounds(0, 0, 80, 32);
-    const auto maxTiles = WaveformTileCache::kMaxTiles;
-    for (std::size_t i = 0; i < maxTiles + 24; ++i) {
-        cache.getOrCreate(static_cast<uint64_t>(i + 1),
-                          static_cast<uint64_t>(i + 1),
-                          static_cast<int>(i % 9),
-                          mipmap,
-                          1.0f,
-                          bounds,
-                          static_cast<double>(i),
-                          static_cast<double>(i) + 1.0,
-                          0,
-                          0);
-    }
-
-    if (cache.size() > maxTiles) {
-        logFail(testName, "WaveformTileCache exceeded its configured max tile count");
-        return;
-    }
-
-    if (cache.get(1, 1, 0, bounds, 0.0, 1.0, 0, 0) != nullptr) {
-        logFail(testName, "WaveformTileCache did not evict the oldest tile after capacity pressure");
         return;
     }
 
@@ -7032,30 +7074,35 @@ void runTimelineKillListNoPaintTimeRenderContextBuildTest()
     logPass(testName);
 }
 
-void runTimelineKillListNoScrollTimeWholeInvalidationTest()
+void runTimelineKillListScrollTimeFullContentInvalidationTest()
 {
-    constexpr const char* testName = "TimelineKillList_NoScrollTimeWholeInvalidation";
+    constexpr const char* testName = "TimelineKillList_ScrollTimeFullContentInvalidation";
 
     const auto pianoScrollSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/PianoRollComponent.cpp",
         "void PianoRollComponent::setScrollOffset",
-        "void PianoRollComponent::onHeartbeatTick");
+        "double PianoRollComponent::readPlayheadTime");
     const auto arrScrollSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/ArrangementViewComponent.cpp",
         "void ArrangementViewComponent::setScrollOffset",
         "void ArrangementViewComponent::mouseDown");
 
-    bool pianoFull = !pianoScrollSection.isEmpty() && pianoScrollSection.contains("repaint()")
-        && !pianoScrollSection.contains("FrameScheduler");
-    bool arrFull = !arrScrollSection.isEmpty() && arrScrollSection.contains("repaint()")
-        && !arrScrollSection.contains("FrameScheduler");
+    if (pianoScrollSection.isEmpty() || arrScrollSection.isEmpty()) {
+        logFail(testName, "failed to locate scroll methods");
+        return;
+    }
 
-    if (pianoFull || arrFull) {
-        logFail(testName,
-            (juce::String("scroll still triggers whole-component invalidation: PianoRoll=")
-             + juce::String(pianoFull ? "yes" : "no")
-             + juce::String(", Arrangement=")
-             + juce::String(arrFull ? "yes" : "no")).toRawUTF8());
+    if (pianoScrollSection.contains("dirtyArea")
+        || pianoScrollSection.contains("getTimelineViewportBounds")
+        || arrScrollSection.contains("exposedStripForScrollDelta")
+        || arrScrollSection.contains("requestViewportShift")) {
+        logFail(testName, "scroll offset changes still preserve the stale exposed-strip repaint path");
+        return;
+    }
+
+    if (!pianoScrollSection.contains("PianoRollVisualInvalidationReason::Viewport")
+        || !arrScrollSection.contains("requestInvalidate(*this, FrameScheduler::Priority::Interactive)")) {
+        logFail(testName, "scroll offset changes are not wired to full content invalidation");
         return;
     }
 
@@ -7066,7 +7113,6 @@ void runTimelineKillListNoUnboundedUiCachesTest()
 {
     constexpr const char* testName = "TimelineKillList_NoUnboundedUiCaches";
 
-    bool tileCacheExists = workspaceFileExists("Source/Standalone/UI/WaveformTileCache.h");
     bool pianoCacheExists = workspaceFileExists("Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h");
     bool arrCacheExists = workspaceFileExists("Source/Standalone/UI/ArrangementRenderModelCache.h");
 
@@ -7079,10 +7125,6 @@ void runTimelineKillListNoUnboundedUiCachesTest()
             || source.contains("evict");
     };
 
-    if (tileCacheExists && !checkBounded("Source/Standalone/UI/WaveformTileCache.h", "WaveformTileCache")) {
-        logFail(testName, "WaveformTileCache missing bounded memory guard");
-        return;
-    }
     if (pianoCacheExists && !checkBounded("Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h", "PianoCache")) {
         logFail(testName, "PianoRollRenderModelCache missing bounded memory guard");
         return;
@@ -7103,7 +7145,7 @@ void runTimelineKillListNoProcessorOwnedUiCacheTest()
     const auto& processorSource = getFileCache().get("Source/PluginProcessor.cpp");
 
     std::initializer_list<const char*> forbiddenInProcessor = {
-        "RenderModelCache", "WaveformTileCache", "ArrangementRenderModel",
+        "RenderModelCache", "ArrangementRenderModel",
         "TimelineViewportState", "PianoRollRenderModel", "TimelineFrameCoordinator"
     };
 
@@ -7720,7 +7762,8 @@ void runUiBehaviorSuite()
     runCorrectedF0PrimaryAutoTunePrefersSelectionAreaTest();
     runPianoRollF0VisualUsesEnergyAlphaWithinBoundsTest();
     runPianoRollF0VisualHotLevelAddsGoldTintTest();
-    runPianoRollF0VisualZoomedOutBucketsAreBoundedByPixelDensityTest();
+    runPianoRollF0VisualVerticalShapeIsZoomInvariantTest();
+    runPianoRollF0VisualZoomedOutDensityUsesSourceShapePointsTest();
     runPianoRollF0VisualZoomedInRestoresFrameDetailTest();
     runPianoRollF0VisualVoicelessGapsDoNotConnectAcrossSegmentsTest();
     runPianoRollF0VisualStyleTokensAndLayeringTest();
@@ -7771,7 +7814,8 @@ void runPianoRollF0VisualSuite()
     logSection("Piano Roll F0 Visual");
     runPianoRollF0VisualUsesEnergyAlphaWithinBoundsTest();
     runPianoRollF0VisualHotLevelAddsGoldTintTest();
-    runPianoRollF0VisualZoomedOutBucketsAreBoundedByPixelDensityTest();
+    runPianoRollF0VisualVerticalShapeIsZoomInvariantTest();
+    runPianoRollF0VisualZoomedOutDensityUsesSourceShapePointsTest();
     runPianoRollF0VisualZoomedInRestoresFrameDetailTest();
     runPianoRollF0VisualVoicelessGapsDoNotConnectAcrossSegmentsTest();
     runPianoRollF0VisualStyleTokensAndLayeringTest();
@@ -9773,28 +9817,35 @@ void runVocoderScheduler_QueueDepthLimit50Test()
     logPass(testName);
 }
 
-void runDmlVocoderUsesDeviceOutputBinding()
+void runDmlVocoderUsesCpuBoundOutputTensor()
 {
-    constexpr const char* testName = "DmlVocoder_UsesDeviceOutputBinding";
+    constexpr const char* testName = "DmlVocoder_UsesCpuBoundOutputTensor";
 
     const auto& header = getFileCache().get("Source/Inference/DmlVocoder.h");
     const auto& source = getFileCache().get("Source/Inference/DmlVocoder.cpp");
 
-    if (!source.contains("outputMemoryInfos_ = session_->GetMemoryInfoForOutputs()")
-        || !source.contains("ioBinding_->BindOutput(outputName.c_str(), outputMemoryInfos_.front())")
-        || !source.contains("ioBinding_->GetOutputValues()")
-        || !source.contains("env_->CopyTensors(")) {
-        logFail(testName, "DmlVocoder does not use device output binding plus explicit copy-back");
+    if (!header.contains("cpuMemoryInfo_")
+        || !header.contains("preallocatedOutput_")
+        || !header.contains("outputBuffer_")
+        || !header.contains("preallocatedFrames_")) {
+        logFail(testName, "DmlVocoder no longer owns an explicit CPU output tensor buffer");
         return;
     }
 
-    if (header.contains("cpuMemoryInfo_")
-        || header.contains("preallocatedOutput_")
-        || header.contains("outputBuffer_")
-        || header.contains("preallocatedFrames_")
-        || source.contains("Ort::Value::CreateTensor<float>(\n                cpuMemoryInfo_")
-        || source.contains("ioBinding_->BindOutput(outputName.c_str(), *preallocatedOutput_)")) {
-        logFail(testName, "DmlVocoder still retains the old CPU preallocated output path");
+    if (!source.contains("Ort::Value::CreateTensor<float>(")
+        || !source.contains("cpuMemoryInfo_")
+        || !source.contains("ioBinding_->BindOutput(outputName.c_str(), *preallocatedOutput_)")
+        || !source.contains("return outputBuffer_")) {
+        logFail(testName, "DmlVocoder does not bind the explicit CPU output tensor");
+        return;
+    }
+
+    if (source.contains("GetMemoryInfoForOutputs()")
+        || source.contains("ioBinding_->GetOutputValues()")
+        || source.contains("CopyTensors(")
+        || header.contains("outputMemoryInfos_")
+        || header.contains("env_ = nullptr")) {
+        logFail(testName, "DmlVocoder still uses the broken device-output copy-back path");
         return;
     }
 
@@ -10506,7 +10557,7 @@ void runArchitectureBehaviorSuite()
     runKeyDetectionAraBirthPathRunsUnifiedDetectionContractTest();
     runScaleSyncStandaloneTimerPullsDetectedKeyForActivePlacementTest();
     runF0ServiceDoesNotRetainIdleReleaseLoopTest();
-    runDmlVocoderUsesDeviceOutputBinding();
+    runDmlVocoderUsesCpuBoundOutputTensor();
     runRenderingPriorityRemainsGpuFirstAndCpuFirstOnly();
     runAraStateRestorePreBindSetStateStillRestoresIntoFinalSharedStores();
 
@@ -10595,7 +10646,7 @@ void runTimelineRenderingSuite()
     // L1: Static Contract Gate (source guards)
     runTimelinePlayheadOverlayDirtyRectOnlyTest();
     runTimelinePlayheadPositionDoesNotEnterRenderModelKeyTest();
-    runTimelineInvalidationViewportShiftExposesOnlyNewStripTest();
+    runTimelineInvalidationScrollOffsetRequestsFullContentRepaintTest();
     runTimelineInvalidationBigJumpPromotesToSingleFullRedrawTest();
     runPianoRollPlayheadOnlyTicksDoNotRebuildRenderModelTest();
     runPianoRollStoppedSeekKeepsPresentationIntentTest();
@@ -10604,11 +10655,10 @@ void runTimelineRenderingSuite()
     runPianoRollVisibleRangeCullsNotesF0AndWaveformTilesTest();
     runPianoRollVerticalGeometryInvalidatesRenderModelKeyTest();
     runPianoRollRenderContextUsesSnapshotVerticalCoordinatesTest();
-    runArrangementScrollOffsetDoesNotInvalidateWholeComponentTest();
+    runArrangementScrollOffsetInvalidatesFullContentWithoutPaintWorkTest();
     runArrangementScrollBarsUseSharedTimeMathAndBoundedOffsetsTest();
     runArrangementPaintConsumesVisibleRenderModelOnlyTest();
     runArrangementVisibleRangeCullsOffscreenPlacementsTest();
-    runWaveformTileCacheHasBoundedMemoryAndEvictionTest();
     runTimelineFrameDriverCoalescesRequestsByPriorityTest();
     runTimelineFrameDriverDropsNonCriticalAnimationRateDuringPlaybackTest();
     runTimelineEditorHeartbeatNoDirectRepaintTest();
@@ -10621,7 +10671,7 @@ void runTimelineRenderingSuite()
     // Kill list guards
     runTimelineKillListNoFullOverlayRepaintForPositionTest();
     runTimelineKillListNoPaintTimeRenderContextBuildTest();
-    runTimelineKillListNoScrollTimeWholeInvalidationTest();
+    runTimelineKillListScrollTimeFullContentInvalidationTest();
     runTimelineKillListNoUnboundedUiCachesTest();
     runTimelineKillListNoProcessorOwnedUiCacheTest();
 }
@@ -10642,7 +10692,7 @@ void runTimelineRenderingPerfSuite()
         FrameScheduler::instance().requestPlayheadOverlay(overlayComponent, {i % 1200, 0, 4, 720});
 
     for (int i = 0; i < 180; ++i)
-        FrameScheduler::instance().requestViewportShift(contentComponent, {1200, 0, 80, 720});
+        FrameScheduler::instance().requestInvalidate(contentComponent, FrameScheduler::Priority::Interactive);
 
     for (int i = 0; i < 16; ++i)
         FrameScheduler::instance().requestLowPriorityAnimation(contentComponent, {0, 0, 200, 80});
@@ -10656,7 +10706,7 @@ void runTimelineRenderingPerfSuite()
 
     constexpr const char* diagnosticsTest = "TimelineRenderingDiagnostics_RecordsRuntimeCounters";
     if (snapshot.playheadOverlayRequests < 120
-        || snapshot.viewportShiftRequests < 180
+        || snapshot.contentInvalidationRequests < 180
         || snapshot.lowPriorityAnimationDropped == 0
         || snapshot.renderModelRebuilds != 1
         || snapshot.waveformTileHits != 1
@@ -10666,16 +10716,30 @@ void runTimelineRenderingPerfSuite()
     }
     logPass(diagnosticsTest);
 
-    constexpr const char* playheadPerfTest = "TimelinePerf_PlayheadOnlyTicksRebuildZeroContentModels";
-    if (snapshot.contentInvalidationRequests != 0 || snapshot.fullRepaintPromotions != 0) {
-        logFail(playheadPerfTest, "playhead-only runtime simulation promoted content invalidation/full repaint");
+    FrameScheduler::instance().resetDiagnosticsForTests();
+    for (int i = 0; i < 120; ++i)
+        FrameScheduler::instance().requestPlayheadOverlay(overlayComponent, {i % 1200, 0, 4, 720});
+    const auto playheadSnapshot = FrameScheduler::instance().diagnosticsSnapshot();
+
+    constexpr const char* playheadPerfTest = "TimelinePerf_PlayheadOverlayTicksStayOverlayOnly";
+    if (playheadSnapshot.playheadOverlayRequests < 120
+        || playheadSnapshot.contentInvalidationRequests != 0
+        || playheadSnapshot.viewportShiftRequests != 0
+        || playheadSnapshot.renderModelRebuilds != 0) {
+        logFail(playheadPerfTest, "playhead-only runtime simulation promoted content work");
         return;
     }
     logPass(playheadPerfTest);
 
-    constexpr const char* scrollPerfTest = "TimelinePerf_ContinuousScrollAvoidsFullRepaintStorm";
-    if (snapshot.viewportShiftRequests == 0 || snapshot.fullRepaintPromotions > 1) {
-        logFail(scrollPerfTest, "continuous scroll simulation did not stay on exposed-strip requests");
+    FrameScheduler::instance().resetDiagnosticsForTests();
+    for (int i = 0; i < 180; ++i)
+        FrameScheduler::instance().requestInvalidate(contentComponent, FrameScheduler::Priority::Interactive);
+    const auto scrollSnapshot = FrameScheduler::instance().diagnosticsSnapshot();
+
+    constexpr const char* scrollPerfTest = "TimelinePerf_ContinuousScrollUsesFullContentInvalidation";
+    if (scrollSnapshot.contentInvalidationRequests < 180
+        || scrollSnapshot.viewportShiftRequests != 0) {
+        logFail(scrollPerfTest, "continuous scroll simulation did not use full content invalidation");
         return;
     }
     logPass(scrollPerfTest);

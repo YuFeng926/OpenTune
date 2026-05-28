@@ -24,12 +24,12 @@ private:
                            Ort::Env& env,
                            int adapterIndex);
     void initializeIOBinding();
-    std::vector<float> copyBoundOutputToCpu(Ort::Value deviceOutput,
-                                            size_t expectedAudioLength);
 
-    Ort::Env* env_ = nullptr;
+    Ort::MemoryInfo cpuMemoryInfo_;
     std::unique_ptr<Ort::IoBinding> ioBinding_;
-    std::vector<Ort::ConstMemoryInfo> outputMemoryInfos_;
+    std::unique_ptr<Ort::Value> preallocatedOutput_;
+    std::vector<float> outputBuffer_;
+    size_t preallocatedFrames_ = 0;
     bool ioBindingInitialized_ = false;
 };
 

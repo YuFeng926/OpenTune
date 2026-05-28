@@ -144,6 +144,8 @@ struct F0VisualLevelStyle {
     float levelHotMix = 0.0f;
 };
 
+static constexpr std::size_t kMaxF0VisualPointsPerSegment = 4096;
+
 float smootherStep(float value) noexcept
 {
     const float t = juce::jlimit(0.0f, 1.0f, value);
@@ -182,19 +184,6 @@ F0VisualLevelStyle calculateF0VisualLevelStyle(float linearRms,
         clampF0VisualAlpha(levelAlpha),
         juce::jlimit(0.0f, kMaxHotMix, hotMix)
     };
-}
-
-float f0VisualTargetPointSpacing(double framePixelSpacing) noexcept
-{
-    if (framePixelSpacing >= 1.05) {
-        return 0.0f;
-    }
-
-    if (framePixelSpacing >= 0.50) {
-        return 1.0f;
-    }
-
-    return 1.5f;
 }
 
 void appendSmoothedF0Path(juce::Path& path,
@@ -260,6 +249,61 @@ std::vector<PianoRollRenderer::F0VisualPoint> buildDisplaySmoothedF0Points(
     return smoothed;
 }
 
+void appendUniqueF0VisualPoint(std::vector<PianoRollRenderer::F0VisualPoint>& out,
+                               const PianoRollRenderer::F0VisualPoint& point)
+{
+    if (out.empty() || out.back().frame != point.frame) {
+        out.push_back(point);
+    }
+}
+
+void reduceF0VisualSegmentDensity(PianoRollRenderer::F0VisualSegment& segment)
+{
+    auto& points = segment.points;
+    if (points.size() <= kMaxF0VisualPointsPerSegment) {
+        return;
+    }
+
+    static constexpr std::size_t kPointsPerBucket = 4;
+    const std::size_t bucketCount = std::max<std::size_t>(1, kMaxF0VisualPointsPerSegment / kPointsPerBucket);
+    const double bucketSize = static_cast<double>(points.size()) / static_cast<double>(bucketCount);
+
+    std::vector<PianoRollRenderer::F0VisualPoint> reduced;
+    reduced.reserve(kMaxF0VisualPointsPerSegment);
+
+    for (std::size_t bucketIndex = 0; bucketIndex < bucketCount; ++bucketIndex) {
+        const std::size_t start = static_cast<std::size_t>(std::floor(static_cast<double>(bucketIndex) * bucketSize));
+        const std::size_t endExclusive = std::min(points.size(),
+            static_cast<std::size_t>(std::floor(static_cast<double>(bucketIndex + 1) * bucketSize)));
+        if (start >= endExclusive) {
+            continue;
+        }
+
+        std::array<std::size_t, kPointsPerBucket> candidates {
+            start,
+            start,
+            start,
+            endExclusive - 1
+        };
+
+        for (std::size_t i = start + 1; i < endExclusive; ++i) {
+            if (points[i].y < points[candidates[1]].y) {
+                candidates[1] = i;
+            }
+            if (points[i].y > points[candidates[2]].y) {
+                candidates[2] = i;
+            }
+        }
+
+        std::sort(candidates.begin(), candidates.end());
+        for (const auto candidate : candidates) {
+            appendUniqueF0VisualPoint(reduced, points[candidate]);
+        }
+    }
+
+    points = std::move(reduced);
+}
+
 } // namespace
 
 std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0VisualSegments(
@@ -315,52 +359,11 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
     }
     const bool hasAbsoluteEnergy = hasEnergy && validEnergyCount > 0 && !allEnergyIsLegacyUnit && !allEnergyIsZero;
 
-    const float targetPointSpacing = f0VisualTargetPointSpacing(options.pixelsPerSecond * options.secondsPerFrame);
-
-    struct BucketAccumulator {
-        bool active = false;
-        int frame = 0;
-        float xSum = 0.0f;
-        float ySum = 0.0f;
-        float alphaSum = 0.0f;
-        float hotMixSum = 0.0f;
-        float weightSum = 0.0f;
-
-        void clear() noexcept
-        {
-            active = false;
-            frame = 0;
-            xSum = 0.0f;
-            ySum = 0.0f;
-            alphaSum = 0.0f;
-            hotMixSum = 0.0f;
-            weightSum = 0.0f;
-        }
-    };
-
     F0VisualSegment currentSegment;
-    BucketAccumulator bucket;
-    float bucketAnchorX = 0.0f;
-
-    auto flushBucket = [&]() {
-        if (!bucket.active || bucket.weightSum <= 0.0f) {
-            bucket.clear();
-            return;
-        }
-
-        currentSegment.points.push_back({
-            bucket.frame,
-            bucket.xSum / bucket.weightSum,
-            bucket.ySum / bucket.weightSum,
-            clampF0VisualAlpha(bucket.alphaSum / bucket.weightSum),
-            juce::jlimit(0.0f, 1.0f, bucket.hotMixSum / bucket.weightSum)
-        });
-        bucket.clear();
-    };
 
     auto flushSegment = [&]() {
-        flushBucket();
         if (!currentSegment.points.empty()) {
+            reduceF0VisualSegmentDensity(currentSegment);
             segments.push_back(std::move(currentSegment));
             currentSegment = {};
         }
@@ -388,32 +391,13 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
         const auto levelStyle = hasEnergy
             ? calculateF0VisualLevelStyle((*originalEnergy)[static_cast<std::size_t>(frame)], hasAbsoluteEnergy)
             : F0VisualLevelStyle {};
-        const float energyAlpha = levelStyle.energyAlpha;
-        const float weight = juce::jmax(0.001f, energyAlpha);
-
-        if (targetPointSpacing <= 0.0f) {
-            flushBucket();
-            currentSegment.points.push_back({ frame, x, y, energyAlpha, levelStyle.levelHotMix });
-            continue;
-        }
-
-        if (!bucket.active) {
-            bucket.active = true;
-            bucketAnchorX = x;
-            bucket.frame = frame;
-        } else if (std::abs(x - bucketAnchorX) >= targetPointSpacing) {
-            flushBucket();
-            bucket.active = true;
-            bucketAnchorX = x;
-            bucket.frame = frame;
-        }
-
-        bucket.xSum += x * weight;
-        bucket.ySum += y * weight;
-        bucket.alphaSum += energyAlpha * weight;
-        bucket.hotMixSum += levelStyle.levelHotMix * weight;
-        bucket.weightSum += weight;
-        bucket.frame = frame;
+        currentSegment.points.push_back({
+            frame,
+            x,
+            y,
+            levelStyle.energyAlpha,
+            levelStyle.levelHotMix
+        });
     }
 
     flushSegment();

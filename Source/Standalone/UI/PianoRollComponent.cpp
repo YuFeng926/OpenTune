@@ -1972,31 +1972,13 @@ void PianoRollComponent::setScrollOffset(int offset) {
     const int newOffset = juce::jmax(0, offset);
     if (newOffset == scrollOffset_) return;
     
-    const int oldOffset = scrollOffset_;
-    const int scrollDelta = newOffset - oldOffset;
     scrollOffset_ = newOffset;
     timeConverter_.setScrollOffset(scrollOffset_);
     playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
     horizontalScrollBar_.setCurrentRangeStart(scrollOffset_, juce::dontSendNotification);
-    const auto timelineViewportBounds = getTimelineViewportBounds();
     prepareVisibleRenderModel();
-
-    // Only invalidate the exposed strip on ordinary scroll deltas.
-    const int contentWidth = timelineViewportBounds.getWidth() - pianoKeyWidth_;
-    if (contentWidth > 0 && std::abs(scrollDelta) < contentWidth) {
-        // Exposed strip: the newly revealed band due to scroll delta.
-        const int stripWidth = std::abs(scrollDelta);
-        const int stripX = (scrollDelta > 0)
-            ? (timelineViewportBounds.getWidth() - stripWidth)
-            : pianoKeyWidth_;
-        const juce::Rectangle<int> dirtyArea(stripX, 0, stripWidth, timelineViewportBounds.getHeight());
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                         dirtyArea,
-                         PianoRollVisualInvalidationPriority::Interactive);
-    } else {
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                         PianoRollVisualInvalidationPriority::Interactive);
-    }
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
+                     PianoRollVisualInvalidationPriority::Interactive);
 }
 
 double PianoRollComponent::readPlayheadTime() const
@@ -2599,17 +2581,11 @@ PianoRollRenderer::MaterializationRenderItem PianoRollComponent::buildMaterializ
                                               static_cast<int>(item.pitchSnapshot->size()),
                                               visibleFrames.endFrameExclusive);
 
-            double secondsPerFrame = 0.01;
-            if (item.f0Timeline.endFrameExclusive() > 1)
-                secondsPerFrame = item.f0Timeline.timeAtFrame(1) - item.f0Timeline.timeAtFrame(0);
-
             PianoRollRenderer::F0VisualBuildOptions visualOptions;
             visualOptions.startFrame = startFrame;
             visualOptions.endFrameExclusive = endFrame;
             visualOptions.viewportStartX = viewportStartX;
             visualOptions.viewportEndX = viewportEndX;
-            visualOptions.pixelsPerSecond = getTimelinePixelsPerSecond();
-            visualOptions.secondsPerFrame = secondsPerFrame;
 
             const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
             const auto& originalEnergy = item.pitchSnapshot->getOriginalEnergy();

@@ -60,6 +60,7 @@ ArrangementRenderModelCache::makeKey(OpenTuneAudioProcessor& processor,
                 revision = hashCombine(revision, placement.referencePlacementId);
                 revision = hashCombine(revision, static_cast<uint64_t>(timeToMs(placement.timelineStartSeconds)));
                 revision = hashCombine(revision, static_cast<uint64_t>(timeToMs(placement.durationSeconds)));
+                revision = hashCombine(revision, static_cast<uint64_t>(timeToMs(placement.clipInSeconds)));
                 revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.gain * 1000.0f)));
             }
 
@@ -92,6 +93,73 @@ ArrangementRenderModelCache::computeWaveformDrawableBounds(juce::Rectangle<int> 
     return bounds;
 }
 
+juce::Path ArrangementRenderModelCache::buildWaveformPathForPlacement(const WaveformMipmap& mipmap,
+                                                                      const TimelineViewportState& viewport,
+                                                                      juce::Rectangle<int> placementBounds,
+                                                                      double timelineStartSeconds,
+                                                                      double durationSeconds,
+                                                                      double clipInSeconds,
+                                                                      float gain)
+{
+    juce::Path path;
+    if (placementBounds.isEmpty() || durationSeconds <= 0.0)
+        return path;
+
+    const auto waveformBounds = computeWaveformDrawableBounds(placementBounds)
+        .getIntersection({ 0, 0, viewport.viewportWidthPx, viewport.viewportHeightPx });
+    if (waveformBounds.isEmpty())
+        return path;
+
+    const int levelIndex = mipmap.selectBestLevelIndex(viewport.pixelsPerSecond());
+    const auto& level = mipmap.getLevel(levelIndex);
+    if (level.peaks.empty())
+        return path;
+
+    const int64_t numPeaks = static_cast<int64_t>(level.peaks.size());
+    const int64_t builtPeaks = level.complete ? numPeaks : level.buildProgress;
+    if (builtPeaks <= 0)
+        return path;
+
+    const float midY = static_cast<float>(waveformBounds.getCentreY());
+    const float halfH = waveformBounds.getHeight() * 0.45f;
+    const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[levelIndex];
+    const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
+    const double timelineEndSeconds = timelineStartSeconds + durationSeconds;
+    const double sourceEndSeconds = clipInSeconds + durationSeconds;
+
+    for (int x = waveformBounds.getX(); x < waveformBounds.getRight(); ++x) {
+        const double timelineTime = viewport.viewportXToTime(x);
+        if (timelineTime < timelineStartSeconds || timelineTime >= timelineEndSeconds)
+            continue;
+
+        const double materializationTime = clipInSeconds + (timelineTime - timelineStartSeconds);
+        if (materializationTime < clipInSeconds || materializationTime >= sourceEndSeconds)
+            continue;
+
+        const int64_t peakIndex = static_cast<int64_t>(materializationTime / timePerPeak);
+        if (peakIndex < 0 || peakIndex >= builtPeaks)
+            continue;
+
+        const auto& peak = level.peaks[static_cast<std::size_t>(peakIndex)];
+        if (peak.isZero())
+            continue;
+
+        const float magnitude = peak.getMagnitude() * gain;
+        float displayHeight = magnitude * halfH * 2.0f;
+
+        if (magnitude > 0.0001f)
+            displayHeight = juce::jmax(displayHeight, 2.0f);
+
+        const float y1 = midY - displayHeight * 0.5f;
+        const float y2 = midY + displayHeight * 0.5f;
+
+        path.startNewSubPath(static_cast<float>(x), y1);
+        path.lineTo(static_cast<float>(x), y2);
+    }
+
+    return path;
+}
+
 const ArrangementRenderModelCache::RenderModel&
 ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
                                     const TimelineViewportState& viewport,
@@ -101,7 +169,6 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
                                     std::function<bool(uint64_t)> getAnalysisState,
                                     uint64_t hoveredPlacementId,
                                     bool mouseOverReferenceButton,
-                                    WaveformTileCache& tileCache,
                                     WaveformMipmapCache& mipmapCache,
                                     int trackHeight,
                                     const MoveDragPreviewState& movePreview,
@@ -162,7 +229,7 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
                                       bool isPreview)
     {
         const double timelineEndSeconds = timelineStartSeconds + placement.durationSeconds;
-        if (timelineEndSeconds < visibleTimeStart || timelineStartSeconds > visibleTimeEnd)
+        if (timelineEndSeconds <= visibleTimeStart || timelineStartSeconds >= visibleTimeEnd)
             return;
 
         if (placement.durationSeconds <= 0.0)
@@ -213,35 +280,16 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         auto audioBuffer = processor.getMaterializationAudioBufferById(materializationId);
         vp.hasAudioBuffer = (audioBuffer != nullptr);
 
-        if (audioBuffer != nullptr)
-        {
+        if (audioBuffer != nullptr) {
             auto& mipmap = mipmapCache.getOrCreate(materializationId);
             mipmap.setAudioSource(audioBuffer);
-
-            const double visibleMaterializationStart = juce::jmax(0.0,
-                visibleTimeStart - timelineStartSeconds);
-            const double visibleMaterializationEnd = juce::jmin(placement.durationSeconds,
-                visibleTimeEnd - timelineStartSeconds);
-            auto waveformBounds = computeWaveformDrawableBounds(placementBounds);
-            const int zoomBucket = static_cast<int>(viewport.zoomLevel * 10.0 + 0.5);
-            const uint64_t waveformSourceId = materializationId;
-            const uint64_t waveformStyleHash = static_cast<uint64_t>(placement.gain * 1000.0f);
-            tileCache.getOrCreate(materializationId,
-                                  waveformSourceId,
-                                  zoomBucket,
-                                  mipmap,
-                                  placement.gain,
-                                  waveformBounds,
-                                  visibleMaterializationStart,
-                                  visibleMaterializationEnd,
-                                  waveformStyleHash,
-                                  0);
-            vp.waveformSourceId = waveformSourceId;
-            vp.waveformZoomBucket = zoomBucket;
-            vp.waveformVisibleStartSeconds = visibleMaterializationStart;
-            vp.waveformVisibleEndSeconds = visibleMaterializationEnd;
-            vp.waveformStyleHash = waveformStyleHash;
-            vp.waveformTimeGridRevision = 0;
+            vp.waveformPath = buildWaveformPathForPlacement(mipmap,
+                                                            viewport,
+                                                            placementBounds,
+                                                            timelineStartSeconds,
+                                                            placement.durationSeconds,
+                                                            placement.clipInSeconds,
+                                                            placement.gain);
         }
 
         model_.placements.push_back(std::move(vp));
@@ -278,8 +326,8 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
 
             const auto* preview = findPreviewForPlacement(trackId, placement.placementId);
             if (preview == nullptr
-                && (placement.timelineEndSeconds() < visibleTimeStart
-                    || placement.timelineStartSeconds > visibleTimeEnd))
+                && (placement.timelineEndSeconds() <= visibleTimeStart
+                    || placement.timelineStartSeconds >= visibleTimeEnd))
                 continue;
 
             if (preview == nullptr)

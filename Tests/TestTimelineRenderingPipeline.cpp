@@ -1,12 +1,11 @@
 /**
  * Timeline Rendering Pipeline tests for the new cache objects.
- * Tests: TimelineViewportState, WaveformTileCache, ArrangementRenderModelCache.
+ * Tests: TimelineViewportState, ArrangementRenderModelCache.
  */
 
 #include "TestSupport.h"
 #include "../Source/Standalone/UI/TimelineViewportState.h"
 #include "../Source/Standalone/UI/ArrangementRenderModelCache.h"
-#include "../Source/Standalone/UI/WaveformTileCache.h"
 #include "../Source/Standalone/UI/WaveformMipmap.h"
 
 namespace OpenTune {
@@ -72,6 +71,62 @@ WaveformMipmap makeCompleteTestMipmap(int numSamples)
     }
 
     return mipmap;
+}
+
+WaveformMipmap makeWindowedTestMipmap(double totalSeconds,
+                                      double signalStartSeconds,
+                                      double signalEndSeconds)
+{
+    const int numSamples = juce::roundToInt(totalSeconds * WaveformMipmap::kBaseSampleRate);
+    WaveformMipmap mipmap;
+    auto audio = std::make_shared<juce::AudioBuffer<float>>(1, numSamples);
+    audio->clear();
+
+    const int startSample = juce::jlimit(0, numSamples, juce::roundToInt(signalStartSeconds * WaveformMipmap::kBaseSampleRate));
+    const int endSample = juce::jlimit(startSample, numSamples, juce::roundToInt(signalEndSeconds * WaveformMipmap::kBaseSampleRate));
+    for (int i = startSample; i < endSample; ++i) {
+        const float polarity = (i % 2 == 0) ? 1.0f : -1.0f;
+        audio->setSample(0, i, polarity * 0.8f);
+    }
+
+    mipmap.setAudioSource(audio);
+    int guard = 0;
+    while (!mipmap.isComplete() && guard < 1000) {
+        mipmap.buildIncremental(1.0);
+        ++guard;
+    }
+
+    return mipmap;
+}
+
+juce::Rectangle<int> makePlacementBounds(const TimelineViewportState& viewport,
+                                         double timelineStartSeconds,
+                                         double durationSeconds,
+                                         int y = 40,
+                                         int height = 48)
+{
+    const int x1 = viewport.timeToViewportX(timelineStartSeconds);
+    const int x2 = viewport.timeToViewportX(timelineStartSeconds + durationSeconds);
+    return { x1, y, juce::jmax(8, x2 - x1), height };
+}
+
+bool pathTimeEnvelopeCovers(const juce::Path& path,
+                            const TimelineViewportState& viewport,
+                            double expectedStartSeconds,
+                            double expectedEndSeconds,
+                            double toleranceSeconds)
+{
+    if (path.isEmpty())
+        return false;
+
+    const auto bounds = path.getBounds();
+    const double observedStartSeconds = viewport.viewportXToTime(juce::roundToInt(bounds.getX()));
+    const double observedEndSeconds = viewport.viewportXToTime(juce::roundToInt(bounds.getRight()));
+
+    return observedStartSeconds <= expectedStartSeconds + toleranceSeconds
+        && observedStartSeconds >= expectedStartSeconds - toleranceSeconds
+        && observedEndSeconds >= expectedEndSeconds - toleranceSeconds
+        && observedEndSeconds <= expectedEndSeconds + toleranceSeconds;
 }
 
 } // namespace
@@ -232,150 +287,6 @@ void runTimelineViewportStateExposedStripTest()
     logPass(testName);
 }
 
-// ============================================================================
-// WaveformTileCache tests
-// ============================================================================
-
-void runWaveformTileCacheBoundedLruTest()
-{
-    constexpr const char* testName = "WaveformTileCache_BoundedLru";
-
-    WaveformTileCache cache;
-    if (cache.size() != 0) {
-        logFail(testName, "fresh cache should be empty");
-        return;
-    }
-
-    // Create a minimal mipmap with one level
-    WaveformMipmap mipmap;
-    auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 1024);
-    audio->clear();
-    // Fill with some signal
-    for (int i = 0; i < 1024; ++i)
-        audio->setSample(0, i, std::sin(static_cast<float>(i) * 0.1f) * 0.5f);
-    mipmap.setAudioSource(audio);
-
-    // Build mipmap completely
-    int guard = 0;
-    while (!mipmap.isComplete() && guard < 1000) {
-        mipmap.buildIncremental(1.0);
-        ++guard;
-    }
-    if (!mipmap.isComplete()) {
-        logFail(testName, "failed to build test mipmap");
-        return;
-    }
-
-    // Add tiles
-    juce::Rectangle<int> bounds(10, 20, 100, 50);
-    for (int i = 0; i < 10; ++i) {
-        cache.getOrCreate(static_cast<uint64_t>(i + 1),
-                          static_cast<uint64_t>(i + 1),
-                          10,
-                          mipmap,
-                          1.0f,
-                          bounds,
-                          0.0,
-                          1.0,
-                          0,
-                          0);
-    }
-
-    if (cache.size() != 10) {
-        logFail(testName, "cache should have 10 entries after adding 10 tiles");
-        return;
-    }
-
-    // Verify all tiles are accessible
-    for (int i = 0; i < 10; ++i) {
-        const auto* tile = cache.get(static_cast<uint64_t>(i + 1),
-                                     static_cast<uint64_t>(i + 1),
-                                     10,
-                                     bounds,
-                                     0.0,
-                                     1.0,
-                                     0,
-                                     0);
-        if (tile == nullptr) {
-            logFail(testName, "tile should be findable after insertion");
-            return;
-        }
-    }
-
-    // Prune: keep only some
-    std::unordered_set<uint64_t> alive;
-    alive.insert(1);
-    alive.insert(3);
-    alive.insert(5);
-    cache.prune(alive);
-
-    if (cache.size() != 3) {
-        logFail(testName, "cache should have 3 entries after pruning to {1,3,5}");
-        return;
-    }
-
-    // Verify kept vs pruned
-    if (cache.get(1, 1, 10, bounds, 0.0, 1.0, 0, 0) == nullptr) {
-        logFail(testName, "tile 1 should survive prune");
-        return;
-    }
-    if (cache.get(2, 2, 10, bounds, 0.0, 1.0, 0, 0) != nullptr) {
-        logFail(testName, "tile 2 should be pruned");
-        return;
-    }
-
-    // Different zoom bucket — should not find
-    if (cache.get(1, 1, 20, bounds, 0.0, 1.0, 0, 0) != nullptr) {
-        logFail(testName, "tile 1 zoom=20 should not be found (inserted as zoom=10)");
-        return;
-    }
-
-    cache.clear();
-    if (cache.size() != 0) {
-        logFail(testName, "cache should be empty after clear");
-        return;
-    }
-
-    logPass(testName);
-}
-
-void runWaveformTileCachePruneByMaterializationTest()
-{
-    constexpr const char* testName = "WaveformTileCache_PruneByMaterialization";
-
-    WaveformTileCache cache;
-    WaveformMipmap mipmap;
-    auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 256);
-    audio->clear();
-    mipmap.setAudioSource(audio);
-    int guard = 0;
-    while (!mipmap.isComplete() && guard < 100) { mipmap.buildIncremental(1.0); ++guard; }
-
-    juce::Rectangle<int> bounds(0, 0, 100, 50);
-
-    // Two materializations, two zoom buckets each
-    cache.getOrCreate(1, 1, 5, mipmap, 1.0f, bounds, 0.0, 1.0, 0, 0);
-    cache.getOrCreate(1, 1, 10, mipmap, 1.0f, bounds, 0.0, 1.0, 0, 0);
-    cache.getOrCreate(2, 2, 5, mipmap, 1.0f, bounds, 0.0, 1.0, 0, 0);
-
-    if (cache.size() != 3) {
-        logFail(testName, "should have 3 tiles after insertion");
-        return;
-    }
-
-    // Remove materialization 1
-    cache.remove(1);
-    if (cache.size() != 1) {
-        logFail(testName, "should have 1 tile after removing materialization 1");
-        return;
-    }
-    if (cache.get(2, 2, 5, bounds, 0.0, 1.0, 0, 0) == nullptr) {
-        logFail(testName, "materialization 2 zoom=5 should survive remove(1)");
-        return;
-    }
-
-    logPass(testName);
-}
 
 void runArrangementWaveformMinZoomNarrowClipKeepsPositiveDrawableBoundsTest()
 {
@@ -397,74 +308,181 @@ void runArrangementWaveformMinZoomNarrowClipKeepsPositiveDrawableBoundsTest()
     logPass(testName);
 }
 
-void runWaveformTileCacheNarrowDrawableBoundsBuildsNonEmptyPathTest()
+void runArrangementWaveformPathAnchorsToTimelineAcrossZoomAndScrollTest()
 {
-    constexpr const char* testName = "WaveformTileCache_NarrowDrawableBoundsBuildsNonEmptyPath";
+    constexpr const char* testName = "ArrangementWaveformPath_AnchorsToTimelineAcrossZoomAndScroll";
 
-    auto mipmap = makeCompleteTestMipmap(4096);
+    auto mipmap = makeWindowedTestMipmap(1.0, 0.30, 0.36);
     if (!mipmap.isComplete()) {
         logFail(testName, "failed to build complete synthetic waveform mipmap");
         return;
     }
 
-    WaveformTileCache cache;
-    const juce::Rectangle<int> narrowBounds(12, 8, 1, 32);
-    const auto& tile = cache.getOrCreate(11, 11, 1, mipmap, 1.0f, narrowBounds, 0.0, 0.08, 0, 0);
+    TimelineViewportState normalViewport;
+    normalViewport.zoomLevel = 1.0;
+    normalViewport.scrollOffsetPx = 0;
+    normalViewport.viewportWidthPx = 800;
+    normalViewport.viewportHeightPx = 160;
+    normalViewport.contentStartX = 8;
 
-    if (tile.widthPx != 1 || tile.path.isEmpty()) {
-        logFail(testName, "positive narrow drawable bounds should build a non-empty waveform path");
+    const double timelineStartSeconds = 2.0;
+    const double durationSeconds = 1.0;
+    const auto normalBounds = makePlacementBounds(normalViewport, timelineStartSeconds, durationSeconds);
+    const auto normalPath = ArrangementRenderModelCache::buildWaveformPathForPlacement(mipmap,
+                                                                                       normalViewport,
+                                                                                       normalBounds,
+                                                                                       timelineStartSeconds,
+                                                                                       durationSeconds,
+                                                                                       0.0,
+                                                                                       1.0f);
+
+    TimelineViewportState zoomedViewport = normalViewport;
+    zoomedViewport.zoomLevel = 2.0;
+    zoomedViewport.scrollOffsetPx = 140;
+    const auto zoomedBounds = makePlacementBounds(zoomedViewport, timelineStartSeconds, durationSeconds);
+    const auto zoomedPath = ArrangementRenderModelCache::buildWaveformPathForPlacement(mipmap,
+                                                                                       zoomedViewport,
+                                                                                       zoomedBounds,
+                                                                                       timelineStartSeconds,
+                                                                                       durationSeconds,
+                                                                                       0.0,
+                                                                                       1.0f);
+
+    const double expectedStartSeconds = timelineStartSeconds + 0.30;
+    const double expectedEndSeconds = timelineStartSeconds + 0.36;
+    const double toleranceSeconds = 0.02;
+
+    if (!pathTimeEnvelopeCovers(normalPath, normalViewport, expectedStartSeconds, expectedEndSeconds, toleranceSeconds)) {
+        logFail(testName, "normal zoom waveform path is not anchored to the expected timeline time range");
+        return;
+    }
+
+    if (!pathTimeEnvelopeCovers(zoomedPath, zoomedViewport, expectedStartSeconds, expectedEndSeconds, toleranceSeconds)) {
+        logFail(testName, "zoomed/scrolled waveform path drifted away from the expected timeline time range");
         return;
     }
 
     logPass(testName);
 }
 
-void runWaveformTileCacheDifferentBoundsDoNotReuseAbsolutePathTest()
+void runArrangementWaveformPathHonorsClipInSecondsTest()
 {
-    constexpr const char* testName = "WaveformTileCache_DifferentBoundsDoNotReuseAbsolutePath";
+    constexpr const char* testName = "ArrangementWaveformPath_HonorsClipInSeconds";
 
-    auto mipmap = makeCompleteTestMipmap(4096);
+    auto mipmap = makeWindowedTestMipmap(1.2, 0.50, 0.56);
     if (!mipmap.isComplete()) {
         logFail(testName, "failed to build complete synthetic waveform mipmap");
         return;
     }
 
-    WaveformTileCache cache;
-    const juce::Rectangle<int> originalBounds(12, 24, 48, 28);
-    const juce::Rectangle<int> previewBounds(12, 104, 48, 28);
+    TimelineViewportState viewport;
+    viewport.zoomLevel = 2.0;
+    viewport.scrollOffsetPx = 0;
+    viewport.viewportWidthPx = 800;
+    viewport.viewportHeightPx = 160;
+    viewport.contentStartX = 8;
 
-    const auto& originalTile = cache.getOrCreate(21, 21, 1, mipmap, 1.0f, originalBounds, 0.0, 0.48, 0, 0);
-    const auto originalPathBounds = originalTile.path.getBounds();
+    const double timelineStartSeconds = 1.0;
+    const double durationSeconds = 0.6;
+    const double clipInSeconds = 0.25;
+    const auto placementBounds = makePlacementBounds(viewport, timelineStartSeconds, durationSeconds);
+    const auto path = ArrangementRenderModelCache::buildWaveformPathForPlacement(mipmap,
+                                                                                 viewport,
+                                                                                 placementBounds,
+                                                                                 timelineStartSeconds,
+                                                                                 durationSeconds,
+                                                                                 clipInSeconds,
+                                                                                 1.0f);
 
-    if (originalTile.path.isEmpty()) {
-        logFail(testName, "original waveform tile should produce a non-empty path");
-        return;
-    }
+    const double expectedStartSeconds = timelineStartSeconds + (0.50 - clipInSeconds);
+    const double expectedEndSeconds = timelineStartSeconds + (0.56 - clipInSeconds);
+    const double toleranceSeconds = 0.02;
 
-    const auto& previewTile = cache.getOrCreate(21, 21, 1, mipmap, 1.0f, previewBounds, 0.0, 0.48, 0, 0);
-    const auto previewPathBounds = previewTile.path.getBounds();
-
-    if (previewTile.path.isEmpty()) {
-        logFail(testName, "preview waveform tile should produce a non-empty path");
-        return;
-    }
-
-    if (cache.size() != 2) {
-        logFail(testName, "different preview bounds should build a distinct tile when cached paths embed absolute coordinates");
-        return;
-    }
-
-    const float expectedDeltaY = static_cast<float>(previewBounds.getY() - originalBounds.getY());
-    const float actualDeltaY = previewPathBounds.getCentreY() - originalPathBounds.getCentreY();
-    const float actualDeltaX = previewPathBounds.getX() - originalPathBounds.getX();
-
-    if (std::abs(actualDeltaY - expectedDeltaY) > 1.0f || std::abs(actualDeltaX) > 1.0f) {
-        logFail(testName, "waveform tile path should translate with preview bounds instead of reusing stale track geometry");
+    if (!pathTimeEnvelopeCovers(path, viewport, expectedStartSeconds, expectedEndSeconds, toleranceSeconds)) {
+        logFail(testName, "trimmed waveform path did not project clipInSeconds into the timeline position");
         return;
     }
 
     logPass(testName);
 }
+
+void runArrangementWaveformPathUsesHalfOpenClipIntervalTest()
+{
+    constexpr const char* testName = "ArrangementWaveformPath_UsesHalfOpenClipInterval";
+
+    auto mipmap = makeWindowedTestMipmap(1.0, 0.0, 1.0);
+    if (!mipmap.isComplete()) {
+        logFail(testName, "failed to build complete synthetic waveform mipmap");
+        return;
+    }
+
+    TimelineViewportState viewport;
+    viewport.zoomLevel = 1.0;
+    viewport.scrollOffsetPx = 100;
+    viewport.viewportWidthPx = 800;
+    viewport.viewportHeightPx = 160;
+    viewport.contentStartX = 0;
+
+    const double timelineStartSeconds = 0.0;
+    const double durationSeconds = 1.0;
+    const juce::Rectangle<int> placementBounds(viewport.timeToViewportX(timelineStartSeconds),
+                                               40,
+                                               juce::jmax(8, viewport.timeToViewportX(timelineStartSeconds + durationSeconds)
+                                                           - viewport.timeToViewportX(timelineStartSeconds)),
+                                               48);
+
+    const auto path = ArrangementRenderModelCache::buildWaveformPathForPlacement(mipmap,
+                                                                                 viewport,
+                                                                                 placementBounds,
+                                                                                 timelineStartSeconds,
+                                                                                 durationSeconds,
+                                                                                 0.0,
+                                                                                 1.0f);
+
+    if (!path.isEmpty()) {
+        logFail(testName, "clip ending exactly at the viewport start must not draw an inclusive-end waveform pixel");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runArrangementWaveformRenderModelBuildsPreparedPathNotTileLookupTest()
+{
+    constexpr const char* testName = "ArrangementWaveformRenderModel_BuildsPreparedPathNotTileLookup";
+
+    const auto header = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementRenderModelCache.h");
+    const auto source = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementRenderModelCache.cpp");
+    const auto viewHeader = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementViewComponent.h");
+    const auto viewSource = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementViewComponent.cpp");
+
+    if (header.isEmpty() || source.isEmpty() || viewHeader.isEmpty() || viewSource.isEmpty()) {
+        logFail(testName, "failed to read Arrangement waveform rendering files");
+        return;
+    }
+
+    if (!header.contains("juce::Path waveformPath")
+        || !source.contains("viewport.viewportXToTime(x)")
+        || !source.contains("placement.clipInSeconds")
+        || !source.contains("timelineTime - timelineStartSeconds")
+        || !source.contains("timelineTime >= timelineEndSeconds")
+        || !source.contains("materializationTime >= sourceEndSeconds")) {
+        logFail(testName, "Arrangement render model does not build waveform paths from viewport-time reverse projection");
+        return;
+    }
+
+    if (header.contains("WaveformTileCache")
+        || viewHeader.contains("WaveformTileCache")
+        || viewHeader.contains("waveformTileCache_")
+        || viewSource.contains("waveformTileCache_.get(")
+        || viewSource.contains("waveformTileCache_.getOrCreate(")) {
+        logFail(testName, "Arrangement production path still depends on WaveformTileCache for clip waveform drawing");
+        return;
+    }
+
+    logPass(testName);
+}
+
 
 void runArrangementDragPreviewMouseDragDoesNotCommitMoveTest()
 {
@@ -556,11 +574,11 @@ void runTimelineRenderingPipelineCacheTests()
     runTimelineViewportStateVisibleRangeTest();
     runTimelineViewportStateExposedStripTest();
     runTimelineViewportStateTimeMathTest(); // (already called above — kept for suite completeness)
-    runWaveformTileCacheBoundedLruTest();
-    runWaveformTileCachePruneByMaterializationTest();
     runArrangementWaveformMinZoomNarrowClipKeepsPositiveDrawableBoundsTest();
-    runWaveformTileCacheNarrowDrawableBoundsBuildsNonEmptyPathTest();
-    runWaveformTileCacheDifferentBoundsDoNotReuseAbsolutePathTest();
+    runArrangementWaveformPathAnchorsToTimelineAcrossZoomAndScrollTest();
+    runArrangementWaveformPathHonorsClipInSecondsTest();
+    runArrangementWaveformPathUsesHalfOpenClipIntervalTest();
+    runArrangementWaveformRenderModelBuildsPreparedPathNotTileLookupTest();
     runArrangementDragPreviewMouseDragDoesNotCommitMoveTest();
     runArrangementDragPreviewTargetTrackVisibleBeforeMouseUpTest();
     runArrangementDragPreviewMouseUpCommitsOnceAndClearsPreviewTest();

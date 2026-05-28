@@ -5585,16 +5585,33 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
             if (success) {
                 std::vector<float> publishedAudio;
                 if (!preparePublishedAudioFromSynthesis(boundaries, audio, publishedAudio)) {
+                    AppLogger::error("ChunkRender: synthesis length mismatch for RenderCache publish matId="
+                        + juce::String(static_cast<juce::int64>(chunkMatId))
+                        + " start=" + juce::String(jobStartSeconds, 3)
+                        + " expectedSynthSamples=" + juce::String(static_cast<juce::int64>(boundaries.synthSampleCount))
+                        + " expectedPublishSamples=" + juce::String(static_cast<juce::int64>(boundaries.publishSampleCount))
+                        + " actualSamples=" + juce::String(static_cast<juce::int64>(audio.size())));
                     renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
                     schedulerCv_.notify_one();
                     return;
                 }
 
-                renderCache->addChunk(
+                const bool added = renderCache->addChunk(
                     boundaries.trueStartSample,
                     boundaries.trueEndSample,
                     std::move(publishedAudio),
                     targetRevision);
+                if (!added) {
+                    AppLogger::error("ChunkRender: RenderCache rejected published chunk matId="
+                        + juce::String(static_cast<juce::int64>(chunkMatId))
+                        + " start=" + juce::String(jobStartSeconds, 3)
+                        + " targetRevision=" + juce::String(static_cast<juce::int64>(targetRevision))
+                        + " startSample=" + juce::String(static_cast<juce::int64>(boundaries.trueStartSample))
+                        + " endSample=" + juce::String(static_cast<juce::int64>(boundaries.trueEndSample)));
+                    renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
+                    schedulerCv_.notify_one();
+                    return;
+                }
 
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::Succeeded);
 
@@ -5623,6 +5640,11 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                     requestStage2Rebuild(chunkMatId);
                 }
             } else {
+                AppLogger::error("ChunkRender: vocoder failed matId="
+                    + juce::String(static_cast<juce::int64>(chunkMatId))
+                    + " start=" + juce::String(jobStartSeconds, 3)
+                    + " targetRevision=" + juce::String(static_cast<juce::int64>(targetRevision))
+                    + " error=" + error);
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
             }
             schedulerCv_.notify_one();
