@@ -18,15 +18,14 @@
 namespace OpenTune {
 
 enum class RenderingPriority {
-    GpuFirst = 0,   // GPU 优先（默认）
-    CpuFirst         // CPU 优先
+    GpuFirst = 0,   // GPU first (default)
+    CpuFirst        // CPU first
 };
 
 enum class ExperimentalReferenceAlignMode
 {
-    Off = 0,        // 关闭（默认）
-    Basic = 1,      // 自动对齐参考源（基础）— LegacyNoteGenerator
-    Aggressive = 2  // 自动对齐参考源（激进）— GAME note generator
+    Off = 0,
+    Game = 1
 };
 
 /// Track color assignment mode

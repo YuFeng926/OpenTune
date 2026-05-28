@@ -483,8 +483,6 @@ target_sources(OpenTune
         Source/Services/F0ExtractionService.h
         Source/Services/ReferenceAnalysisService.cpp
         Source/Services/ReferenceAnalysisService.h
-        Source/DSP/BasicReferenceFeatureBuilder.cpp
-        Source/DSP/BasicReferenceFeatureBuilder.h
         Source/Audio/AudioFormatRegistry.cpp
         Source/Audio/AudioFormatRegistry.h
 
@@ -1227,13 +1225,13 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/TestUndoManagerContract.cpp
         Tests/TestAutoRefFailure.cpp
         Tests/TestAutoRefArchitecture.cpp
-        Tests/TestBasicDerivedAnalysis.cpp
+        Tests/TestReferenceFeaturesCacheSmoke.cpp
         Tests/TestAutoRefIntegration.cpp
         Tests/TestReferenceBinding.cpp
         Tests/TestPlacementReferenceCascade.cpp
         Tests/TestTimelineRenderingPipeline.cpp
         Tests/TestArrangementContract.cpp
-        Tests/TestMaterializationDerivedAnalysis.cpp
+        Tests/TestReferenceFeaturesCacheLifecycle.cpp
         Tests/TestMaterializationContract.cpp
         Tests/TestReferenceAnalysisService.cpp
         Tests/TestProjectSessionReference.cpp

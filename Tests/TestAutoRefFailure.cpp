@@ -183,9 +183,9 @@ void runAutoRefFailureInsufficientFeaturesTest()
     logPass(testName);
 }
 
-void runAutoRefFailureMissingTargetTimeGridTest()
+void runAutoRefFailureTimingIntentDoesNotRequireTargetTimeGridTest()
 {
-    constexpr const char* testName = "AutoRefFailure_MissingTargetTimeGridReturnsInvalidTimeGrid";
+    constexpr const char* testName = "AutoRefFailure_MissingTargetTimeGridStillAllowsTimingIntentBuild";
 
     auto target = makeFeatures({}, { makeAnchor(1, 0.4), makeAnchor(2, 1.0), makeAnchor(3, 1.6) });
     auto reference = makeFeatures({}, { makeAnchor(11, 0.4), makeAnchor(12, 1.2), makeAnchor(13, 1.6) });
@@ -195,12 +195,12 @@ void runAutoRefFailureMissingTargetTimeGridTest()
 
     const auto result = ReferenceAutoAlign::align(request);
 
-    if (result.success) {
-        logFail(testName, "align should fail when timing features exist but target TimeGrid is missing");
+    if (!result.success || !result.timingChanged) {
+        logFail(testName, "align should still build timing intents when targetTimeGridBefore is absent");
         return;
     }
-    if (result.error != AlignmentPatch::ErrorCode::TimeGridInvalid) {
-        logFail(testName, "error code should be TimeGridInvalid");
+    if (!result.timingIntents.empty() && result.error != AlignmentPatch::ErrorCode::None) {
+        logFail(testName, "align should not report TimeGridInvalid when only the current time map is required");
         return;
     }
 
@@ -263,7 +263,7 @@ void runAutoRefFailureSuite()
     runAutoRefFailureTargetNotReadyTest();
     runAutoRefFailureReferenceNotReadyTest();
     runAutoRefFailureInsufficientFeaturesTest();
-    runAutoRefFailureMissingTargetTimeGridTest();
+    runAutoRefFailureTimingIntentDoesNotRequireTargetTimeGridTest();
     runAutoRefFailureReferenceIdentityTimeMapIsAllowedTest();
     runAutoRefFailureNoMutationWhenAlreadyAlignedTest();
 }

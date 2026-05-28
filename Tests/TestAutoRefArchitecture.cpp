@@ -138,8 +138,8 @@ void runAutoRefArchitectureProcessorThreadsFeatureBuildersAndTimeMapsTest()
     }
     if (!requireContains(testName,
                          header,
-                         "ReferenceFeatureSet buildBasicReferenceFeatureSet(",
-                         "PluginProcessor.h must retain buildBasicReferenceFeatureSet fallback")) {
+                         "AutoRefAvailability queryAutoRefAvailability(",
+                         "PluginProcessor.h must expose the shared AUTO Ref availability query")) {
         return;
     }
     if (!requireContains(testName,
@@ -152,6 +152,10 @@ void runAutoRefArchitectureProcessorThreadsFeatureBuildersAndTimeMapsTest()
                          impl,
                          "ReferenceFeatureProducer::Game",
                          "PluginProcessor.cpp must tag AUTO(REF) formal path as GAME")) {
+        return;
+    }
+    if (impl.contains("cannot fall back to Basic")) {
+        logFail(testName, "PluginProcessor.cpp must not advertise Basic fallback on the AUTO Ref GAME path");
         return;
     }
     if (!requireContains(testName,
@@ -170,10 +174,96 @@ void runAutoRefArchitectureProcessorThreadsFeatureBuildersAndTimeMapsTest()
     logPass(testName);
 }
 
-void runAutoRefArchitectureEnsureTimeToolSeedReadsFeatureCacheAndFallbacksBasicTest()
+void runAutoRefArchitectureStandaloneSharesAvailabilityAcrossButtonAndDispatchTest()
 {
     constexpr const char* testName =
-        "AutoRefArchitecture_EnsureTimeToolSeedReadsFeatureCacheAndFallbacksBasic";
+        "AutoRefArchitecture_StandaloneSharesAvailabilityAcrossButtonAndDispatch";
+
+    const auto standaloneEditor = readWorkspaceFile("Source/Standalone/PluginEditor.cpp");
+    const auto parameterPanelHeader = readWorkspaceFile("Source/Standalone/UI/ParameterPanel.h");
+    const auto preferencesHeader = readWorkspaceFile("Source/Utils/AppPreferences.h");
+    const auto preferencesImpl = readWorkspaceFile("Source/Utils/AppPreferences.cpp");
+    const auto preferencesUi = readWorkspaceFile("Source/Editor/Preferences/SharedPreferencePages.cpp");
+
+    if (!assertReadable(testName, "Source/Standalone/PluginEditor.cpp", standaloneEditor)
+        || !assertReadable(testName, "Source/Standalone/UI/ParameterPanel.h", parameterPanelHeader)
+        || !assertReadable(testName, "Source/Utils/AppPreferences.h", preferencesHeader)
+        || !assertReadable(testName, "Source/Utils/AppPreferences.cpp", preferencesImpl)
+        || !assertReadable(testName, "Source/Editor/Preferences/SharedPreferencePages.cpp", preferencesUi)) {
+        return;
+    }
+
+    if (!requireContains(testName,
+                         standaloneEditor,
+                         "const auto autoRefUiState = evaluateAutoRefUiState();",
+                         "Standalone editor must reuse a shared AUTO Ref UI-state helper")) {
+        return;
+    }
+    if (!requireContains(testName,
+                         standaloneEditor,
+                         "if (autoRefUiState.shouldRunReferenceAuto())",
+                         "AUTO button click must dispatch through the shared availability contract")) {
+        return;
+    }
+    if (!requireContains(testName,
+                         standaloneEditor,
+                         "parameterPanel_.setAutoButtonPresentation(autoRefUiState.presentation);",
+                         "AUTO button presentation must come from the same shared availability contract")) {
+        return;
+    }
+    if (standaloneEditor.contains("parameterPanel_.setAutoButtonMode(")) {
+        logFail(testName, "Standalone editor must no longer compress AUTO button state into setAutoButtonMode(bool)");
+        return;
+    }
+
+    if (!requireContains(testName,
+                         parameterPanelHeader,
+                         "ReferenceBoundButFallbackToAuto",
+                         "ParameterPanel must expose a fallback AUTO presentation for bound references")) {
+        return;
+    }
+
+    if (!requireContains(testName,
+                         preferencesHeader,
+                         "Game = 1",
+                         "ExperimentalReferenceAlignMode must collapse to Off/Game")) {
+        return;
+    }
+    if (preferencesHeader.contains("Basic = 1") || preferencesHeader.contains("Aggressive = 2")) {
+        logFail(testName, "ExperimentalReferenceAlignMode must not expose Basic/Aggressive as formal modes");
+        return;
+    }
+
+    if (!requireContains(testName,
+                         preferencesImpl,
+                         "token == \"game\" || token == \"basic\" || token == \"aggressive\"",
+                         "AppPreferences must map legacy basic/aggressive tokens onto Game")) {
+        return;
+    }
+    if (!requireContains(testName,
+                         preferencesUi,
+                         "GAME",
+                         "Preferences UI must expose the GAME-only AUTO Ref option")) {
+        return;
+    }
+    if (!requireContains(testName,
+                         preferencesUi,
+                         "AUTO",
+                         "Preferences UI must describe the GAME-only AUTO Ref mode and normal AUTO fallback")) {
+        return;
+    }
+    if (preferencesUi.contains("基础") || preferencesUi.contains("激进")) {
+        logFail(testName, "Preferences UI must not present AUTO Ref basic/aggressive product wording");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefArchitectureEnsureTimeToolSeedUsesSharedGameFeaturePathTest()
+{
+    constexpr const char* testName =
+        "AutoRefArchitecture_EnsureTimeToolSeedUsesSharedGameFeaturePath";
     constexpr const char* relativePath = "Source/PluginProcessor.cpp";
 
     const auto source = readWorkspaceFile(relativePath);
@@ -189,8 +279,14 @@ void runAutoRefArchitectureEnsureTimeToolSeedReadsFeatureCacheAndFallbacksBasicT
     }
     if (!requireContains(testName,
                          source,
-                         "buildBasicReferenceFeatureSet(snapshot)",
-                         "ensureTimeToolAnchorSeed must fallback to Basic reference features when cache is missing")) {
+                         "buildReferenceFeatureSet(snapshot)",
+                         "ensureTimeToolAnchorSeed must reuse the shared formal feature builder when cache is missing")) {
+        return;
+    }
+    if (!requireContains(testName,
+                         source,
+                         "features.producer == ReferenceFeatureProducer::Game",
+                         "ensureTimeToolAnchorSeed must only accept GAME-owned timing features")) {
         return;
     }
     if (!requireContains(testName,
@@ -282,7 +378,8 @@ void runAutoRefArchitectureSuite()
     logSection("AutoRefArchitecture");
     runAutoRefArchitectureReferenceAutoAlignRequestUsesFeatureSetAndTimeMapsTest();
     runAutoRefArchitectureProcessorThreadsFeatureBuildersAndTimeMapsTest();
-    runAutoRefArchitectureEnsureTimeToolSeedReadsFeatureCacheAndFallbacksBasicTest();
+    runAutoRefArchitectureStandaloneSharesAvailabilityAcrossButtonAndDispatchTest();
+    runAutoRefArchitectureEnsureTimeToolSeedUsesSharedGameFeaturePathTest();
     runAutoRefArchitectureLegacyProjectPersistenceAnalysisFieldsRemovedTest();
     runAutoRefArchitectureTimeGridPatchBuilderCarriesSpeedWindowAndRollbackTest();
 }

@@ -8,6 +8,31 @@
 
 namespace OpenTune {
 
+namespace {
+
+juce::String buildAutoButtonTooltip(const ParameterPanel::AutoButtonPresentation& presentation)
+{
+    juce::String tooltip = presentation.tooltip;
+    if (tooltip.isEmpty()) {
+        switch (presentation.mode) {
+            case ParameterPanel::AutoButtonPresentation::Mode::ReferenceAuto:
+                tooltip = juce::String::fromUTF8(u8"按参考 Clip 自动修音并对齐节奏");
+                break;
+            case ParameterPanel::AutoButtonPresentation::Mode::ReferenceBoundButFallbackToAuto:
+                tooltip = juce::String::fromUTF8(u8"已绑定参考源，但当前缺少 GAME backend / models，本次执行普通 AUTO。");
+                break;
+            case ParameterPanel::AutoButtonPresentation::Mode::StandardAuto:
+            default:
+                tooltip = juce::String::fromUTF8(u8"自动修音（吸附到临近音阶）");
+                break;
+        }
+    }
+
+    return tooltip + "\n6";
+}
+
+} // namespace
+
 ParameterPanel::ToolIconButton::ToolIconButton(int toolId, const juce::String& name, const juce::String& tooltip)
     : juce::Button(name), toolId_(toolId)
 {
@@ -135,6 +160,7 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
 
         ToolbarIcons::drawIcon(g, iconPath_, iconArea, iconColor, 2.0f, fillIcon_);
     }
+
 }
 
 // ============================================================================
@@ -544,6 +570,7 @@ void ParameterPanel::resized()
         int y = startY + row * (toolButtonSize + toolButtonGap);
         buttons[i]->setBounds(x, y, toolButtonSize, toolButtonSize);
     }
+
 }
 
 void ParameterPanel::applyTheme()
@@ -577,8 +604,7 @@ void ParameterPanel::refreshLocalizedText()
     toolsHeader_.setText(LOC(kTools), juce::dontSendNotification);
     
     // 更新工具按钮 tooltip
-    if (autoTuneToolButton_)
-        autoTuneToolButton_->setTooltip(LOC(kTooltipAutoTune) + "\n6");
+    setAutoButtonPresentation(autoButtonPresentation_);
     if (selectToolButton_)
         selectToolButton_->setTooltip(LOC(kTooltipSelect) + "\n3");
     if (drawNoteToolButton_)
@@ -659,11 +685,17 @@ void ParameterPanel::setExperimentalFeaturesEnabled(bool enabled)
     repaint();
 }
 
-void ParameterPanel::setAutoButtonMode(bool hasReference)
+void ParameterPanel::setAutoButtonPresentation(const AutoButtonPresentation& presentation)
 {
-    if (autoTuneToolButton_)
+    autoButtonPresentation_ = presentation;
+    if (autoTuneToolButton_ == nullptr) {
+        return;
+    }
+
+    autoTuneToolButton_->setTextIcon("AUTO");
+    const bool hasReference = autoButtonPresentation_.mode == AutoButtonPresentation::Mode::ReferenceAuto;
+    const auto resolvedTooltip = buildAutoButtonTooltip(autoButtonPresentation_);
     {
-        autoTuneToolButton_->setTextIcon("AUTO");
         if (hasReference)
         {
             autoTuneToolButton_->setSubTextIcon("(Ref)");
@@ -673,6 +705,7 @@ void ParameterPanel::setAutoButtonMode(bool hasReference)
         {
             autoTuneToolButton_->setSubTextIcon({});
             autoTuneToolButton_->setTooltip(juce::String::fromUTF8(u8"自动修音（吸附到临近音阶）"));
+            autoTuneToolButton_->setTooltip(resolvedTooltip);
         }
     }
 }

@@ -2759,14 +2759,8 @@ void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
 
 void OpenTuneAudioProcessorEditor::autoTuneRequested()
 {
-    const int trackId = getStandaloneActiveTrack(processorRef_);
-    const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, trackId);
-    const uint64_t placementId = placementIndex >= 0 ? processorRef_.getPlacementId(trackId, placementIndex) : 0;
-    const auto* arrangement = processorRef_.getStandaloneArrangement();
-
-    if (arrangement != nullptr
-        && placementId != 0
-        && arrangement->getPlacementReferencePlacement(trackId, placementId) != 0) {
+    const auto autoRefUiState = evaluateAutoRefUiState();
+    if (autoRefUiState.shouldRunReferenceAuto()) {
         if (handleAutoRefExecute()) {
             projectSession_.markDirty();
         }
@@ -2999,31 +2993,65 @@ static bool findReferencePlacementInfo(OpenTuneAudioProcessor& processor,
     return false;
 }
 
-void OpenTuneAudioProcessorEditor::refreshReferenceContext()
+OpenTuneAudioProcessorEditor::AutoRefUiState OpenTuneAudioProcessorEditor::evaluateAutoRefUiState() const
 {
+    AutoRefUiState uiState;
+    uiState.presentation.mode = ParameterPanel::AutoButtonPresentation::Mode::StandardAuto;
+    uiState.presentation.tooltip = juce::String::fromUTF8(u8"自动修音（吸附到临近音阶）");
+
     const int trackId = getStandaloneActiveTrack(processorRef_);
     const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, trackId);
-    const uint64_t targetPlacementId = placementIndex >= 0 ? processorRef_.getPlacementId(trackId, placementIndex) : 0;
-    const auto* arrangement = processorRef_.getStandaloneArrangement();
-    const uint64_t referencePlacementId = (arrangement != nullptr && targetPlacementId != 0)
-        ? arrangement->getPlacementReferencePlacement(trackId, targetPlacementId)
+    const uint64_t targetPlacementId = placementIndex >= 0
+        ? processorRef_.getPlacementId(trackId, placementIndex)
         : 0;
-    const bool hasRef = referencePlacementId != 0;
+
     const auto preferencesState = appPreferences_.getState();
     const bool experimentalFeaturesEnabled = preferencesState.shared.experimentalFeaturesEnabled;
     const auto expMode = preferencesState.shared.experimentalReferenceAlignMode;
     processorRef_.setExperimentalReferenceAlignMode(expMode);
-    const bool hasEnabledRef = experimentalFeaturesEnabled && hasRef && expMode != ExperimentalReferenceAlignMode::Off;
-    parameterPanel_.setAutoButtonMode(hasEnabledRef);
 
-    if (!experimentalFeaturesEnabled || !hasRef) {
+    uiState.availability = processorRef_.queryAutoRefAvailability(targetPlacementId);
+    if (!experimentalFeaturesEnabled || expMode == ExperimentalReferenceAlignMode::Off) {
+        return uiState;
+    }
+
+    if (uiState.availability.status == OpenTuneAudioProcessor::AutoRefAvailability::Status::Ready) {
+        uiState.presentation.mode = ParameterPanel::AutoButtonPresentation::Mode::ReferenceAuto;
+        uiState.presentation.tooltip = juce::String::fromUTF8(u8"按参考 Clip 自动修音并对齐节奏");
+        return uiState;
+    }
+
+    if (uiState.availability.status == OpenTuneAudioProcessor::AutoRefAvailability::Status::GameUnavailable
+        && uiState.availability.hasReferenceBinding()) {
+        uiState.presentation.mode =
+            ParameterPanel::AutoButtonPresentation::Mode::ReferenceBoundButFallbackToAuto;
+        uiState.presentation.tooltip = uiState.availability.message;
+    }
+
+    return uiState;
+}
+
+void OpenTuneAudioProcessorEditor::refreshReferenceContext()
+{
+    const auto autoRefUiState = evaluateAutoRefUiState();
+    parameterPanel_.setAutoButtonPresentation(autoRefUiState.presentation);
+
+    if (!autoRefUiState.availability.hasReferenceBinding()) {
+        pianoRoll_.setReferenceOverlay(std::nullopt);
+        return;
+    }
+
+    const auto preferencesState = appPreferences_.getState();
+    const bool experimentalFeaturesEnabled = preferencesState.shared.experimentalFeaturesEnabled;
+    const auto expMode = preferencesState.shared.experimentalReferenceAlignMode;
+    if (!experimentalFeaturesEnabled || expMode == ExperimentalReferenceAlignMode::Off) {
         pianoRoll_.setReferenceOverlay(std::nullopt);
         return;
     }
 
     // Resolve reference materialization
     StandaloneArrangement::Placement refPlacement;
-    if (!findReferencePlacementInfo(processorRef_, referencePlacementId, refPlacement)) {
+    if (!findReferencePlacementInfo(processorRef_, autoRefUiState.availability.referencePlacementId, refPlacement)) {
         pianoRoll_.setReferenceOverlay(std::nullopt);
         return;
     }
@@ -3033,7 +3061,8 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
         auto* matStore = processorRef_.getMaterializationStore();
         ReferenceFeatureSet refFeatures;
         if (matStore->getReferenceFeatures(refPlacement.materializationId, refFeatures)
-            && refFeatures.isReady())
+            && refFeatures.isReady()
+            && refFeatures.producer == ReferenceFeatureProducer::Game)
         {
             PianoRollRenderer::ReferenceOverlay overlay;
             overlay.ghostNotes = refFeatures.pitch.notes;

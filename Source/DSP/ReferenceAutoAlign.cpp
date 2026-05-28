@@ -375,11 +375,6 @@ AlignmentPatch ReferenceAutoAlign::align(const ReferenceAlignmentRequest& reques
         fail(patch, AlignmentPatch::ErrorCode::InsufficientFeatures, "AUTO Ref has neither pitch nor time features");
         return patch;
     }
-    if (hasTimeFeatures && request.targetTimeGridBefore == nullptr) {
-        fail(patch, AlignmentPatch::ErrorCode::TimeGridInvalid, "AUTO Ref timing path requires a target TimeGrid");
-        return patch;
-    }
-
     const bool pitchAttempted = hasPitchFeatures
                              && buildPitchPatch(request,
                                                 pitchSeedNotes,

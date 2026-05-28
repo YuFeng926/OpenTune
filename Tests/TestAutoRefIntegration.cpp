@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <thread>
 #include <vector>
 
@@ -137,9 +138,51 @@ bool seedReadyReferenceFeatures(OpenTuneAudioProcessor& processor,
     return store->setReferenceFeatures(materializationId, features);
 }
 
+struct ScopedEnvironmentVariable {
+    juce::String name;
+    juce::String previousValue;
+    bool hadPreviousValue = false;
+
+    ScopedEnvironmentVariable(const juce::String& variableName, const juce::String& value)
+        : name(variableName)
+    {
+        previousValue = juce::SystemStats::getEnvironmentVariable(name, {});
+        hadPreviousValue = previousValue.isNotEmpty();
+        setValue(value);
+    }
+
+    ~ScopedEnvironmentVariable()
+    {
+        if (hadPreviousValue) {
+            setValue(previousValue);
+        } else {
+            clear();
+        }
+    }
+
+private:
+    void setValue(const juce::String& value) const
+    {
+#if JUCE_WINDOWS
+        _putenv_s(name.toRawUTF8(), value.toRawUTF8());
+#else
+        setenv(name.toRawUTF8(), value.toRawUTF8(), 1);
+#endif
+    }
+
+    void clear() const
+    {
+#if JUCE_WINDOWS
+        _putenv_s(name.toRawUTF8(), "");
+#else
+        unsetenv(name.toRawUTF8());
+#endif
+    }
+};
+
 bool isExpectedGamePreheatUnavailable(const juce::String& errorMessage)
 {
-    return errorMessage == "AUTO Ref GAME analysis requires GAME backend and cannot fall back to Basic"
+    return errorMessage == "AUTO Ref GAME analysis requires GAME backend"
         || errorMessage == "AUTO Ref GAME analysis requires GAME note generator";
 }
 
@@ -272,6 +315,83 @@ bool seedBoundReferencePair(OpenTuneAudioProcessor& processor,
     auto* arrangement = processor.getStandaloneArrangement();
     return arrangement != nullptr
         && arrangement->setPlacementReferencePlacement(0, target.placementId, reference.placementId);
+}
+
+void runAutoRefIntegrationAvailabilityWithoutReferenceFallsBackToStandardAutoTest()
+{
+    constexpr const char* testName =
+        "AutoRefIntegration_AvailabilityWithoutReferenceFallsBackToStandardAuto";
+
+    OpenTuneAudioProcessor processor;
+    const auto target = addPlacement(processor, "AUTO Ref Target", 0.0);
+    if (!target.isValid()) {
+        logFail(testName, "failed to seed target placement");
+        return;
+    }
+
+    const auto availability = processor.queryAutoRefAvailability(target.placementId);
+    if (availability.status != OpenTuneAudioProcessor::AutoRefAvailability::Status::NoReference
+        || availability.hasReferenceBinding()) {
+        logFail(testName, "target without reference binding should resolve to NoReference availability");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefIntegrationAvailabilityForcedLegacyFallsBackToStandardAutoTest()
+{
+    constexpr const char* testName =
+        "AutoRefIntegration_AvailabilityForcedLegacyFallsBackToStandardAuto";
+
+    ScopedEnvironmentVariable forceLegacy("OPENTUNE_NOTE_BACKEND", "legacy");
+
+    OpenTuneAudioProcessor processor;
+    OpenTuneAudioProcessor::CommittedPlacement target;
+    OpenTuneAudioProcessor::CommittedPlacement reference;
+    if (!seedBoundReferencePair(processor, target, reference)) {
+        logFail(testName, "failed to seed bound reference pair");
+        return;
+    }
+
+    const auto availability = processor.queryAutoRefAvailability(target.placementId);
+    if (availability.status != OpenTuneAudioProcessor::AutoRefAvailability::Status::GameUnavailable
+        || !availability.hasReferenceBinding()
+        || !availability.message.contains("普通 AUTO")) {
+        logFail(testName, "forced legacy backend should fall back to standard AUTO before AUTO Ref executes");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoRefIntegrationAvailabilityReadyUsesGameAutoRefTest()
+{
+    constexpr const char* testName =
+        "AutoRefIntegration_AvailabilityReadyUsesGameAutoRef";
+
+    ScopedEnvironmentVariable clearLegacy("OPENTUNE_NOTE_BACKEND", "");
+
+    OpenTuneAudioProcessor processor;
+    OpenTuneAudioProcessor::CommittedPlacement target;
+    OpenTuneAudioProcessor::CommittedPlacement reference;
+    if (!seedBoundReferencePair(processor, target, reference)) {
+        logFail(testName, "failed to seed bound reference pair");
+        return;
+    }
+
+    const auto availability = processor.queryAutoRefAvailability(target.placementId);
+    if (!availability.hasReferenceBinding()) {
+        logFail(testName, "reference-bound placement must preserve shared availability binding state");
+        return;
+    }
+    if (availability.status == OpenTuneAudioProcessor::AutoRefAvailability::Status::InvalidSelection
+        || availability.status == OpenTuneAudioProcessor::AutoRefAvailability::Status::NoReference) {
+        logFail(testName, "reference-bound placement must not collapse to invalid/no-reference AUTO availability");
+        return;
+    }
+
+    logPass(testName);
 }
 
 void runAutoRefIntegrationTransactionalApplyAndCompositeUndoTest()
@@ -535,6 +655,15 @@ void runAutoRefIntegrationEnsureTimeToolAnchorSeedBuildsIdentityInternalHandlesT
         return;
     }
 
+    if (!seedReadyReferenceFeatures(processor,
+                                    placement.materializationId,
+                                    notes,
+                                    { 0.20, 1.00 },
+                                    ReferenceFeatureProducer::Game)) {
+        logFail(testName, "failed to preheat shared GAME reference features");
+        return;
+    }
+
     if (!processor.ensureTimeToolAnchorSeed(placement.materializationId)) {
         logFail(testName, "ensureTimeToolAnchorSeed returned false");
         return;
@@ -563,7 +692,7 @@ void runAutoRefIntegrationEnsureTimeToolAnchorSeedBuildsIdentityInternalHandlesT
         || !features.isReady()
         || features.inputFingerprint != static_cast<int64_t>(snapshot.renderRevision)
         || !features.hasTimingAnchors()) {
-        logFail(testName, "ensureTimeToolAnchorSeed should preheat fallback ReferenceFeatureSet facts");
+        logFail(testName, "ensureTimeToolAnchorSeed should preheat shared GAME ReferenceFeatureSet facts");
         return;
     }
 
@@ -642,6 +771,9 @@ void runAutoRefIntegrationEnsureTimeToolAnchorSeedPreservesExistingWarpTest()
 void runAutoRefIntegrationSuite()
 {
     logSection("AutoRefIntegration");
+    runAutoRefIntegrationAvailabilityWithoutReferenceFallsBackToStandardAutoTest();
+    runAutoRefIntegrationAvailabilityForcedLegacyFallsBackToStandardAutoTest();
+    runAutoRefIntegrationAvailabilityReadyUsesGameAutoRefTest();
     runAutoRefIntegrationTransactionalApplyAndCompositeUndoTest();
     runAutoRefIntegrationMissingBindingLeavesTargetUnchangedTest();
     runAutoRefIntegrationProcessorOwnsReferenceAnalysisPreheatTest();

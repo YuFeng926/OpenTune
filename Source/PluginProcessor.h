@@ -164,6 +164,23 @@ public:
         bool succeeded() const noexcept { return status == Status::Succeeded; }
     };
 
+    struct AutoRefAvailability {
+        enum class Status : uint8_t {
+            InvalidSelection = 0,
+            NoReference,
+            GameUnavailable,
+            Ready
+        };
+
+        Status status{Status::InvalidSelection};
+        juce::String message;
+        uint64_t targetPlacementId{0};
+        uint64_t referencePlacementId{0};
+
+        bool hasReferenceBinding() const noexcept { return referencePlacementId != 0; }
+        bool canRunAutoRef() const noexcept { return status == Status::Ready; }
+    };
+
     enum class ReferenceAnalysisPreheatStatus : uint8_t {
         AlreadyReady = 0,
         Queued,
@@ -365,7 +382,7 @@ private:
     std::mutex f0InitMutex_;
     std::atomic<bool> noteGenReady_{false};
     std::atomic<bool> noteGenInitAttempted_{false};
-    std::mutex noteGenInitMutex_;
+    mutable std::mutex noteGenInitMutex_;
 
     std::atomic<bool> vocoderReady_{false};
     std::atomic<bool> vocoderInitAttempted_{false};
@@ -719,6 +736,7 @@ public:
                                           const std::vector<Note>& notes,
                                           const std::vector<CorrectedSegment>& segments);
     ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(uint64_t materializationId);
+    AutoRefAvailability queryAutoRefAvailability(uint64_t targetPlacementId) const;
 
     /** AUTO(REF) 正式特征生产入口。产品合同固定使用 GAME producer。 */
     ReferenceFeatureSet buildReferenceFeatureSet(
@@ -731,8 +749,6 @@ public:
     }
 
 private:
-    ReferenceFeatureSet buildBasicReferenceFeatureSet(
-        const MaterializationStore::MaterializationSnapshot& snapshot) const;
     ReferenceFeatureSet buildGameReferenceFeatureSet(
         const MaterializationStore::MaterializationSnapshot& snapshot);
 public:

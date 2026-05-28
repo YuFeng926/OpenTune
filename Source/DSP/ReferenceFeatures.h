@@ -18,7 +18,6 @@ enum class ReferenceFeatureStatus : uint8_t {
 
 enum class ReferenceFeatureProducer : uint8_t {
     Unknown = 0,
-    Basic = 1,
     Game = 2
 };
 
