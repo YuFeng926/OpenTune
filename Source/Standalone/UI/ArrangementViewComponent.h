@@ -42,10 +42,10 @@ struct ImportDropPreview {
     int trackHeight = 100;         // track lane height in pixels (for positioning; avoids paint() processor read)
 };
 
-class ArrangementContentSurface : public juce::Component
+class ArrangementCachedSurface : public juce::Component
 {
 public:
-    ArrangementContentSurface()
+    ArrangementCachedSurface()
     {
         setOpaque(false);
         setInterceptsMouseClicks(false, false);
@@ -57,21 +57,12 @@ public:
         repaint();
     }
 
-    void setImageOffsetX(int offsetX)
-    {
-        if (imageOffsetX_ == offsetX)
-            return;
-
-        imageOffsetX_ = offsetX;
-    }
-
     void clearSurfaceImage()
     {
         if (!surfaceImage_.isValid())
             return;
 
         surfaceImage_ = {};
-        imageOffsetX_ = 0;
         repaint();
     }
 
@@ -79,11 +70,10 @@ private:
     void paint(juce::Graphics& g) override
     {
         if (surfaceImage_.isValid())
-            g.drawImageAt(surfaceImage_, imageOffsetX_, 0);
+            g.drawImageAt(surfaceImage_, 0, 0);
     }
 
     juce::Image surfaceImage_;
-    int imageOffsetX_ = 0;
 };
 
 class ArrangementViewComponent : public juce::Component,
@@ -216,9 +206,12 @@ private:
     void resetPresentationClock(double authoritativeTime);
     void rebuildContentMetrics();
     bool renderBandNeedsRebuild() const;
-    void ensureRenderBandCoversCurrentViewport(bool forceRebuild = false);
+    bool ensureRenderBandCoversCurrentViewport(bool forceRebuild = false);
     void rebuildContentSurface();
     void updateContentSurfaceBounds();
+    void drawTimeRulerBackdrop(juce::Graphics& g);
+    void rebuildRulerSurface();
+    void updateRulerSurfaceBounds();
     void updateOverlayPresentation(double displayPlayheadTime);
     void updateAutoScroll();
     void performPageScroll(double playheadTime);
@@ -248,9 +241,12 @@ private:
     TimelineViewportState viewportState_;
     ArrangementRenderModelCache renderModelCache_;
     WaveformMipmapCache waveformMipmapCache_;
-    ArrangementContentSurface contentSurface_;
+    ArrangementCachedSurface contentSurface_;
+    ArrangementCachedSurface rulerSurface_;
     juce::Image contentSurfaceImage_;
+    juce::Image rulerSurfaceImage_;
     juce::Rectangle<int> contentSurfaceBounds_;
+    juce::Rectangle<int> rulerSurfaceBounds_;
 
     double lastContextBpm_{ 0.0 };
     int lastContextTimeSigNum_{ 0 };
@@ -294,8 +290,23 @@ private:
         bool valid = false;
     };
 
+    struct RulerSurfaceState {
+        double startSeconds = 0.0;
+        double endSeconds = 0.0;
+        double zoomLevel = 0.0;
+        double bpm = 0.0;
+        int startContentX = 0;
+        int widthPx = 0;
+        int timeSigNum = 0;
+        int timeSigDenom = 0;
+        TimeUnit timeUnit = TimeUnit::Seconds;
+        ThemeId themeId = ThemeId::DarkBlueGrey;
+        bool valid = false;
+    };
+
     ContentMetrics contentMetrics_;
     RenderBandState renderBand_;
+    RulerSurfaceState rulerSurfaceState_;
     
     // Smooth scrolling
     // 用户是否手动调整过缩放（用于避免自动缩放覆盖用户设置）
@@ -305,6 +316,7 @@ private:
 
     int waveformBuildTickCounter_{ 0 }; // 播放状态下的限频计数器
     bool inferenceActive_{ false };
+    bool waveformVisualRefreshPending_{ false };
 
     int selectedTrack_{0};
     int selectedPlacementIndex_{0};

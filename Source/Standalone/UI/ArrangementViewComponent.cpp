@@ -206,6 +206,7 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
 
     addAndMakeVisible(contentSurface_);
+    addAndMakeVisible(rulerSurface_);
     addAndMakeVisible(playheadOverlay_);
     playheadOverlay_.setPianoKeyWidth(kArrangementContentStartX);
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
@@ -259,18 +260,18 @@ void ArrangementViewComponent::setScrollOffset(int pixels)
 
     horizontalScrollBar_.setCurrentRangeStart(scrollOffset_, juce::dontSendNotification);
     updateContentSurfaceBounds();
+    updateRulerSurfaceBounds();
 
     const auto dirtyArea = viewportState_.exposedStripForScrollDelta(oldOffset, newOffset);
-    if (viewportState_.requiresFullRedrawForDelta(oldOffset, newOffset)) {
-        ensureRenderBandCoversCurrentViewport(true);
+    const bool requiresFullRedraw = viewportState_.requiresFullRedrawForDelta(oldOffset, newOffset);
+    const bool rebuiltRenderBand = ensureRenderBandCoversCurrentViewport(false);
+    const bool requiresFullRepaint = requiresFullRedraw || rebuiltRenderBand;
+
+    if (requiresFullRepaint) {
         FrameScheduler::instance().requestContentInvalidation(*this,
                                                               getLocalBounds(),
                                                               FrameScheduler::Priority::Interactive);
     } else {
-        ensureRenderBandCoversCurrentViewport(false);
-        FrameScheduler::instance().requestContentInvalidation(*this,
-                                                              { 0, 0, getWidth(), rulerHeight_ },
-                                                              FrameScheduler::Priority::Interactive);
         FrameScheduler::instance().requestViewportShift(*this, dirtyArea);
     }
 }
@@ -286,6 +287,7 @@ void ArrangementViewComponent::setVerticalScrollOffset(int offset)
     verticalScrollOffset_ = juce::jlimit(0, maxScrollOffset, offset);
     verticalScrollBar_.setCurrentRangeStart(verticalScrollOffset_);
     updateContentSurfaceBounds();
+    updateRulerSurfaceBounds();
     ensureRenderBandCoversCurrentViewport(true);
     FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
 }
@@ -381,6 +383,7 @@ void ArrangementViewComponent::resized()
 
     updateScrollBars();
     updateContentSurfaceBounds();
+    updateRulerSurfaceBounds();
     ensureRenderBandCoversCurrentViewport(true);
 
     // 播放头覆盖层覆盖整个组件区域
@@ -400,6 +403,7 @@ void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double
         // 通知监听器垂直滚动偏移变化（用于同步TrackPanel）
         listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
         updateContentSurfaceBounds();
+        updateRulerSurfaceBounds();
         ensureRenderBandCoversCurrentViewport(true);
         FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
     }
@@ -554,12 +558,13 @@ bool ArrangementViewComponent::renderBandNeedsRebuild() const
         || visibleEndContentX > bandEndContentX;
 }
 
-void ArrangementViewComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild)
+bool ArrangementViewComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild)
 {
     rebuildContentMetrics();
     if (!forceRebuild && !renderBandNeedsRebuild()) {
         updateContentSurfaceBounds();
-        return;
+        updateRulerSurfaceBounds();
+        return false;
     }
 
     const auto viewportBounds = getContentViewportBounds();
@@ -581,7 +586,10 @@ void ArrangementViewComponent::ensureRenderBandCoversCurrentViewport(bool forceR
 
     requestRenderModelUpdate();
     rebuildContentSurface();
+    rebuildRulerSurface();
     updateContentSurfaceBounds();
+    updateRulerSurfaceBounds();
+    return true;
 }
 
 void ArrangementViewComponent::rebuildContentSurface()
@@ -606,12 +614,115 @@ void ArrangementViewComponent::rebuildContentSurface()
 void ArrangementViewComponent::updateContentSurfaceBounds()
 {
     const auto viewportBounds = getContentViewportBounds();
-    contentSurfaceBounds_ = { viewportBounds.getX(),
+    const int width = renderBand_.valid ? renderBand_.widthPx : viewportBounds.getWidth();
+    contentSurfaceBounds_ = { viewportBounds.getX() + (renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0),
                               viewportBounds.getY(),
-                              renderBand_.valid ? renderBand_.widthPx : viewportBounds.getWidth(),
+                              width,
                               viewportBounds.getHeight() };
     contentSurface_.setBounds(contentSurfaceBounds_);
-    contentSurface_.setImageOffsetX(renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0);
+}
+
+void ArrangementViewComponent::drawTimeRulerBackdrop(juce::Graphics& g)
+{
+    const auto themeId = UIColors::currentThemeId();
+    const auto bounds = getLocalBounds();
+    const juce::Rectangle<int> rulerArea(0, 0, bounds.getWidth(), rulerHeight_);
+
+    if (themeId == ThemeId::Aurora)
+    {
+        UIColors::fillAuroraTimelineBackground(g, rulerArea.toFloat(), 0.0f);
+    }
+    else if (themeId == ThemeId::BlueBreeze)
+    {
+        UIColors::fillMistedTimelineField(g, rulerArea.toFloat(), 0.0f);
+    }
+    else if (themeId != ThemeId::Overdose)
+    {
+        g.setColour(UIColors::rollBackground);
+        g.fillRect(rulerArea);
+    }
+
+    g.setColour(themeId == ThemeId::DarkBlueGrey
+                    ? UIColors::panelBorder.withAlpha(0.18f)
+                    : (themeId == ThemeId::Aurora
+                           ? UIColors::gridLine.withAlpha(0.060f)
+                           : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+                                  ? UIColors::pianoRollGrid.withAlpha(0.040f)
+                                  : UIColors::panelBorder)));
+    g.drawLine(0.0f,
+               static_cast<float>(rulerHeight_),
+               static_cast<float>(getWidth()),
+               static_cast<float>(rulerHeight_),
+               (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.7f : 1.0f);
+}
+
+void ArrangementViewComponent::rebuildRulerSurface()
+{
+    const auto viewportBounds = getContentViewportBounds();
+    const auto themeId = UIColors::currentThemeId();
+    const double bpm = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
+    const int timeSigNum = lastContextTimeSigNum_ > 0 ? lastContextTimeSigNum_ : 4;
+    const int timeSigDenom = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
+    const int surfaceWidth = renderBand_.valid ? renderBand_.widthPx : viewportBounds.getWidth();
+    const double startSeconds = renderBand_.valid ? renderBand_.startSeconds
+                                                  : viewportState_.viewportXToTime(viewportState_.contentStartX, scrollOffset_);
+    const double endSeconds = renderBand_.valid ? renderBand_.endSeconds
+                                                : viewportState_.viewportXToTime(viewportState_.contentStartX + surfaceWidth, scrollOffset_);
+    const int startContentX = renderBand_.valid ? renderBand_.startContentX : scrollOffset_;
+
+    if (rulerSurfaceState_.valid
+        && rulerSurfaceState_.startContentX == startContentX
+        && rulerSurfaceState_.widthPx == surfaceWidth
+        && rulerSurfaceState_.zoomLevel == zoomLevel_
+        && rulerSurfaceState_.timeUnit == timeUnit_
+        && rulerSurfaceState_.themeId == themeId
+        && rulerSurfaceState_.bpm == bpm
+        && rulerSurfaceState_.timeSigNum == timeSigNum
+        && rulerSurfaceState_.timeSigDenom == timeSigDenom
+        && rulerSurfaceState_.startSeconds == startSeconds
+        && rulerSurfaceState_.endSeconds == endSeconds)
+    {
+        updateRulerSurfaceBounds();
+        return;
+    }
+
+    if (surfaceWidth <= 0)
+    {
+        rulerSurfaceImage_ = {};
+        rulerSurface_.clearSurfaceImage();
+        rulerSurfaceState_ = {};
+        return;
+    }
+
+    rulerSurfaceImage_ = juce::Image(juce::Image::ARGB, surfaceWidth, rulerHeight_, true);
+    juce::Graphics g(rulerSurfaceImage_);
+    drawTimeRuler(g);
+    rulerSurface_.setSurfaceImage(rulerSurfaceImage_);
+
+    rulerSurfaceState_.startSeconds = startSeconds;
+    rulerSurfaceState_.endSeconds = endSeconds;
+    rulerSurfaceState_.zoomLevel = zoomLevel_;
+    rulerSurfaceState_.bpm = bpm;
+    rulerSurfaceState_.startContentX = startContentX;
+    rulerSurfaceState_.widthPx = surfaceWidth;
+    rulerSurfaceState_.timeSigNum = timeSigNum;
+    rulerSurfaceState_.timeSigDenom = timeSigDenom;
+    rulerSurfaceState_.timeUnit = timeUnit_;
+    rulerSurfaceState_.themeId = themeId;
+    rulerSurfaceState_.valid = true;
+
+    updateRulerSurfaceBounds();
+}
+
+void ArrangementViewComponent::updateRulerSurfaceBounds()
+{
+    const auto viewportBounds = getContentViewportBounds();
+    const int width = renderBand_.valid ? renderBand_.widthPx : viewportBounds.getWidth();
+    rulerSurfaceBounds_ = { viewportBounds.getX() + (renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0),
+                            0,
+                            width,
+                            rulerHeight_ };
+    rulerSurface_.setBounds(rulerSurfaceBounds_);
 }
 
 void ArrangementViewComponent::updateOverlayPresentation(double displayPlayheadTime)
@@ -790,9 +901,14 @@ void ArrangementViewComponent::requestRenderModelUpdate()
                              moveDragPreview_);
 
     const auto& renderModel = renderModelCache_.getModel();
+    const bool rulerContextChanged = lastContextBpm_ != renderModel.bpm
+        || lastContextTimeSigNum_ != renderModel.timeSigNumerator
+        || lastContextTimeSigDenom_ != renderModel.timeSigDenominator;
     lastContextBpm_ = renderModel.bpm;
     lastContextTimeSigNum_ = renderModel.timeSigNumerator;
     lastContextTimeSigDenom_ = renderModel.timeSigDenominator;
+    if (rulerContextChanged)
+        rebuildRulerSurface();
 }
 
 void ArrangementViewComponent::refreshRenderModel()
@@ -986,7 +1102,7 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         }
     }
 
-    drawTimeRuler(g);
+    drawTimeRulerBackdrop(g);
 
 }
 
@@ -1324,33 +1440,18 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
 void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
 {
     const auto themeId = UIColors::currentThemeId();
-    auto bounds = getLocalBounds();
-    auto rulerArea = bounds.removeFromTop(rulerHeight_);
-    
-    if (themeId == ThemeId::Aurora)
-    {
-        UIColors::fillAuroraTimelineBackground(g, rulerArea.toFloat(), 0.0f);
-    }
-    else if (themeId == ThemeId::BlueBreeze)
-    {
-        UIColors::fillMistedTimelineField(g, rulerArea.toFloat(), 0.0f);
-    }
-    else if (themeId == ThemeId::Overdose)
-    {
-        // Overdose panel skin is drawn once by ArrangementViewComponent::paint().
-    }
-    else
-    {
-        g.setColour(UIColors::rollBackground);
-        g.fillRect(rulerArea);
-    }
-
-    g.setColour(themeId == ThemeId::DarkBlueGrey
-                    ? UIColors::panelBorder.withAlpha(0.18f)
-                    : (themeId == ThemeId::Aurora
-                           ? UIColors::gridLine.withAlpha(0.060f)
-                           : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? UIColors::pianoRollGrid.withAlpha(0.040f) : UIColors::panelBorder)));
-    g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.7f : 1.0f);
+    const int rulerWidth = g.getClipBounds().getWidth();
+    const double startTime = renderBand_.valid
+        ? renderBand_.startSeconds
+        : viewportState_.viewportXToTime(viewportState_.contentStartX, scrollOffset_);
+    const double endTime = renderBand_.valid
+        ? renderBand_.endSeconds
+        : viewportState_.viewportXToTime(viewportState_.contentStartX + rulerWidth, scrollOffset_);
+    const auto timeToRulerX = [this](double seconds) {
+        return renderBand_.valid
+            ? absoluteTimeToContentX(seconds) - renderBand_.startContentX
+            : absoluteTimeToViewportX(seconds) - viewportState_.contentStartX;
+    };
 
     // Switch between Seconds and Bars based on timeUnit_
     if (timeUnit_ == TimeUnit::Bars)
@@ -1368,9 +1469,6 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         double beatInterval = selectBeatInterval(pixelsPerBeat);
         
         // Convert visible range to beats
-        double startTime = viewportXToAbsoluteTime(0);
-        double endTime = viewportXToAbsoluteTime(getWidth());
-        
         int64_t startBeat = static_cast<int64_t>(startTime / secondsPerBeat);
         if (startBeat < 0) startBeat = 0;
         // Align to interval
@@ -1383,7 +1481,7 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         for (int64_t beat = startBeat; beat <= endBeat; beat += (int64_t)beatInterval)
         {
             double time = beat * secondsPerBeat;
-            int pixelX = absoluteTimeToViewportX(time);
+            int pixelX = timeToRulerX(time);
             
             // Draw tick
             g.setColour(themeId == ThemeId::DarkBlueGrey
@@ -1417,15 +1515,12 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         
         double markerInterval = selectMarkerInterval(pixelsPerSecond);
 
-        double startTime = viewportXToAbsoluteTime(0);
-        if (startTime < 0.0) startTime = 0.0;
-        startTime = std::floor(startTime / markerInterval) * markerInterval;
-
-        double endTime = viewportXToAbsoluteTime(getWidth());
+        double firstMarkerTime = juce::jmax(0.0, startTime);
+        firstMarkerTime = std::floor(firstMarkerTime / markerInterval) * markerInterval;
 
         g.setFont(UIColors::getUIFont(13.0f));
-        for (double time = startTime; time < endTime; time += markerInterval) {
-            int pixelX = absoluteTimeToViewportX(time);
+        for (double time = firstMarkerTime; time < endTime; time += markerInterval) {
+            int pixelX = timeToRulerX(time);
             
             g.setColour(themeId == ThemeId::DarkBlueGrey
                             ? UIColors::gridLine.withAlpha(0.10f)
@@ -1589,7 +1684,7 @@ void ArrangementViewComponent::onHeartbeatTick()
     }
     else if (playingNow)
     {
-        waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 3;
+        waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 6;
         if (waveformBuildTickCounter_ == 0)
             progressed = buildWaveformCaches(0.25);
     }
@@ -1600,6 +1695,18 @@ void ArrangementViewComponent::onHeartbeatTick()
     }
 
     if (progressed) {
+        if (playingNow) {
+            waveformVisualRefreshPending_ = true;
+        } else {
+            waveformVisualRefreshPending_ = false;
+            renderModelCache_.invalidate();
+            ensureRenderBandCoversCurrentViewport(true);
+            FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Background);
+        }
+    }
+
+    if (!playingNow && waveformVisualRefreshPending_) {
+        waveformVisualRefreshPending_ = false;
         renderModelCache_.invalidate();
         ensureRenderBandCoversCurrentViewport(true);
         FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Background);
