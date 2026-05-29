@@ -338,8 +338,10 @@ private:
     PianoRollRenderer::RenderContext makePresentationRenderContext() const;
     bool preparedRenderBandCoversViewport(int viewportStartX, int viewportEndX) const;
     bool renderBandNeedsRebuild(int contentViewportWidth, int viewportHeight) const;
-    void ensureRenderBandCoversCurrentViewport(bool forceRebuild) const;
+    bool ensureRenderBandCoversCurrentViewport(bool forceRebuild) const;
+    void rebuildRulerSurface() const;
     void rebuildContentSurface() const;
+    void updateRulerSurfaceBounds() const;
     void updateContentSurfaceBounds() const;
     void rebuildPreparedRenderModelForViewport(int viewportStartX,
                                                int viewportEndX,
@@ -543,6 +545,7 @@ private:
     double lastVisualFlushMs_ = 0.0;
     bool inferenceActive_ = false;
     int waveformBuildTickCounter_ = 0;
+    bool waveformVisualRefreshPending_ = false;
 
     OpenTuneAudioProcessor* processor_ = nullptr;
 
@@ -553,8 +556,11 @@ private:
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
 
     mutable PianoRollRenderModelCache renderModelCache_;
+    mutable PianoRollContentSurface rulerSurface_;
     mutable PianoRollContentSurface contentSurface_;
+    mutable juce::Image rulerSurfaceImage_;
     mutable juce::Image contentSurfaceImage_;
+    mutable juce::Rectangle<int> rulerSurfaceBounds_;
     mutable juce::Rectangle<int> contentSurfaceBounds_;
     mutable int64_t preparedBandStartMs_ = 0;
     mutable int64_t preparedBandEndMs_ = 0;

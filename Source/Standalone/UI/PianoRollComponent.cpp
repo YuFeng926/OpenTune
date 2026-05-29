@@ -99,17 +99,17 @@ void PianoRollComponent::initializeUIComponents() {
     timeUnitToggleButton_.setFontHeight(11.0f);
     timeUnitToggleButton_.onClick = [this] {
         if (timeUnit_ == TimeUnit::Seconds) {
-            timeUnit_ = TimeUnit::Bars;
+            setTimeUnit(TimeUnit::Bars);
             timeUnitToggleButton_.setButtonText("BPM");
         } else {
-            timeUnit_ = TimeUnit::Seconds;
+            setTimeUnit(TimeUnit::Seconds);
             timeUnitToggleButton_.setButtonText("Time");
         }
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport));
     };
     addAndMakeVisible(timeUnitToggleButton_);
     timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
 
+    addAndMakeVisible(rulerSurface_);
     addAndMakeVisible(contentSurface_);
     addAndMakeVisible(playheadOverlay_);
     playheadOverlay_.setPianoKeyWidth(pianoKeyWidth_);
@@ -1194,8 +1194,6 @@ void PianoRollComponent::paint(juce::Graphics& g) {
 
     if (themeId != ThemeId::DarkBlueGrey && themeId != ThemeId::Aurora && themeId != ThemeId::BlueBreeze && themeId != ThemeId::Overdose)
         g.fillPath(backgroundPath);
-
-    renderer_->drawTimeRuler(g, makePresentationRenderContext());
 }
 
 void PianoRollComponent::paintOverChildren(juce::Graphics& g)
@@ -1643,6 +1641,7 @@ void PianoRollComponent::resized() {
     currentX -= (btnW + spacing);
     timeUnitToggleButton_.setBounds(currentX, 5, btnW, btnH);
 
+    updateRulerSurfaceBounds();
     updateContentSurfaceBounds();
     ensureRenderBandCoversCurrentViewport(true);
     playheadOverlay_.setBounds(getLocalBounds());
@@ -1966,7 +1965,6 @@ void PianoRollComponent::setScrollOffset(int offset) {
 
     const int oldOffset = scrollOffset_;
     const auto viewportState = makeTimelineViewportState();
-    const auto timelineViewportBounds = getTimelineViewportBounds();
     const auto dirtyArea = viewportState.exposedStripForScrollDelta(oldOffset, newOffset);
     const float contentShiftPx = static_cast<float>(oldOffset - newOffset);
 
@@ -1975,26 +1973,22 @@ void PianoRollComponent::setScrollOffset(int offset) {
     playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
     horizontalScrollBar_.setCurrentRangeStart(scrollOffset_, juce::dontSendNotification);
     updatePlayheadPresentationPolicy();
+    updateRulerSurfaceBounds();
     updateContentSurfaceBounds();
 
     const bool requiresFullRedrawForDelta = viewportState.requiresFullRedrawForDelta(oldOffset, newOffset);
+    const bool rebuiltRenderBand = ensureRenderBandCoversCurrentViewport(false);
+    const bool requiresFullRepaint = requiresFullRedrawForDelta || rebuiltRenderBand;
 
-    if (requiresFullRedrawForDelta) {
-        ensureRenderBandCoversCurrentViewport(true);
+    if (requiresFullRepaint) {
         FrameScheduler::instance().requestContentInvalidation(*this,
                                                               getLocalBounds(),
                                                               FrameScheduler::Priority::Interactive);
         return;
     }
 
-    ensureRenderBandCoversCurrentViewport(false);
     renderModelCache_.shiftPreparedF0Segments(contentShiftPx);
-    FrameScheduler::instance().requestContentInvalidation(*this,
-                                                          { timelineViewportBounds.getX(),
-                                                            timelineViewportBounds.getY(),
-                                                            timelineViewportBounds.getWidth(),
-                                                            rulerHeight_ },
-                                                          FrameScheduler::Priority::Interactive);
+    rulerSurface_.repaint();
     FrameScheduler::instance().requestViewportShift(*this, dirtyArea);
 }
 
@@ -2035,16 +2029,38 @@ void PianoRollComponent::onHeartbeatTick()
 
     consumeCompletedCorrectionResults();
 
+    const bool playingNow = isPlaying_.load(std::memory_order_relaxed);
     if (showWaveform_) {
-        if (inferenceActive_)
+        bool progressed = false;
+        if (inferenceActive_) {
             waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 8;
-        else
+            if (waveformBuildTickCounter_ == 0)
+                progressed = waveformMipmapCache_.buildIncremental(0.15);
+        } else if (playingNow) {
+            waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 6;
+            if (waveformBuildTickCounter_ == 0)
+                progressed = waveformMipmapCache_.buildIncremental(0.25);
+        } else {
             waveformBuildTickCounter_ = 0;
+            progressed = waveformMipmapCache_.buildIncremental(0.75);
+        }
 
-        const bool shouldBuild = !inferenceActive_ || waveformBuildTickCounter_ == 0;
-        const double budgetMs = inferenceActive_ ? 1.0 : 5.0;
-        if (shouldBuild && waveformMipmapCache_.buildIncremental(budgetMs))
-            invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+        if (progressed) {
+            if (playingNow) {
+                waveformVisualRefreshPending_ = true;
+            } else {
+                waveformVisualRefreshPending_ = false;
+                invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+            }
+        }
+    } else {
+        waveformBuildTickCounter_ = 0;
+        waveformVisualRefreshPending_ = false;
+    }
+
+    if (!playingNow && waveformVisualRefreshPending_) {
+        waveformVisualRefreshPending_ = false;
+        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
     }
 
     flushPendingVisualInvalidation();
@@ -2074,8 +2090,8 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         // is intentionally skipped — when paused, the user controls the view.
         const double stoppedPresentationTime = pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : hostTime;
         resetPresentationClock(stoppedPresentationTime);
-        playheadOverlay_.setPlayheadSeconds(stoppedPresentationTime);
         updatePlayheadPresentationPolicy();
+        playheadOverlay_.setPlayheadSeconds(stoppedPresentationTime);
         return;
     }
 
@@ -2098,21 +2114,21 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     updatePresentationClock(playheadTime, timestampSec);
     const double displayPlayheadTime = getDisplayPlayheadTime(timestampSec);
 
-    playheadOverlay_.setPlayheadSeconds(displayPlayheadTime);
-    updatePlayheadPresentationPolicy();
-
-    const auto timelineViewportBounds = getTimelineViewportBounds();
     const int visibleWidth = getTimelineContentViewportWidth();
-    if (visibleWidth <= 0) return;
+    if (visibleWidth <= 0) {
+        updatePlayheadPresentationPolicy();
+        playheadOverlay_.setPlayheadSeconds(displayPlayheadTime);
+        return;
+    }
 
     if (scrollMode_ == ScrollMode::Continuous) {
-        if (userScrollHold_) return;
-
-        const int pinnedViewportX = getContinuousPinnedPlayheadViewportX();
-        const int playheadContentX = static_cast<int>(std::llround(getPlayheadAbsolutePixelX(displayPlayheadTime)));
-        const int targetScroll = std::max(0, playheadContentX - (pinnedViewportX - pianoKeyWidth_));
-        if (targetScroll != scrollOffset_)
-            setScrollOffset(targetScroll);
+        if (!userScrollHold_) {
+            const int pinnedViewportX = getContinuousPinnedPlayheadViewportX();
+            const int playheadContentX = static_cast<int>(std::llround(getPlayheadAbsolutePixelX(displayPlayheadTime)));
+            const int targetScroll = std::max(0, playheadContentX - (pinnedViewportX - pianoKeyWidth_));
+            if (targetScroll != scrollOffset_)
+                setScrollOffset(targetScroll);
+        }
     } else if (scrollMode_ == ScrollMode::Page) {
         const int absX = static_cast<int>(std::llround(getPlayheadAbsolutePixelX(displayPlayheadTime)));
         const int pageIndex = visibleWidth > 0 ? juce::jmax(0, absX / visibleWidth) : 0;
@@ -2120,6 +2136,9 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         if (newScroll != scrollOffset_)
             setScrollOffset(newScroll);
     }
+
+    updatePlayheadPresentationPolicy();
+    playheadOverlay_.setPlayheadSeconds(displayPlayheadTime);
 }
 
 void PianoRollComponent::setZoomLevel(double zoom) {
@@ -2899,15 +2918,16 @@ bool PianoRollComponent::renderBandNeedsRebuild(int contentViewportWidth, int vi
         || renderBand_.heightPx != viewportHeight;
 }
 
-void PianoRollComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild) const
+bool PianoRollComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild) const
 {
     const auto timelineViewportBounds = getTimelineViewportBounds();
     const int contentViewportWidth = juce::jmax(0, timelineViewportBounds.getWidth() - pianoKeyWidth_);
     const int viewportHeight = timelineViewportBounds.getHeight();
     if (contentViewportWidth <= 0 || viewportHeight <= 0) {
         renderBand_.valid = false;
+        rulerSurface_.clearSurfaceImage();
         contentSurface_.clearSurfaceImage();
-        return;
+        return false;
     }
 
     const int viewportStartX = pianoKeyWidth_;
@@ -2916,8 +2936,9 @@ void PianoRollComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild
     const bool coversViewport = preparedRenderBandCoversViewport(viewportStartX, viewportEndX);
 
     if (!forceRebuild && !needsGeometryRebuild && coversViewport) {
+        updateRulerSurfaceBounds();
         updateContentSurfaceBounds();
-        return;
+        return false;
     }
 
     const int overscanPx = juce::jmax(contentViewportWidth,
@@ -2974,8 +2995,31 @@ void PianoRollComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild
         FrameScheduler::instance().recordRenderModelRebuild(FrameScheduler::TimelineReason::ContentModelInvalid);
     }
 
+    rebuildRulerSurface();
     rebuildContentSurface();
+    updateRulerSurfaceBounds();
     updateContentSurfaceBounds();
+    return true;
+}
+
+void PianoRollComponent::rebuildRulerSurface() const
+{
+    if (!renderBand_.valid || !renderModelCache_.isValid()) {
+        rulerSurface_.clearSurfaceImage();
+        return;
+    }
+
+    rulerSurfaceImage_ = juce::Image(juce::Image::ARGB,
+                                     juce::jmax(1, renderBand_.widthPx),
+                                     juce::jmax(1, rulerHeight_),
+                                     true);
+
+    juce::Graphics g(rulerSurfaceImage_);
+    auto ctx = renderModelCache_.getRenderContext();
+    ctx.width = renderBand_.widthPx + pianoKeyWidth_;
+    ctx.height = rulerHeight_;
+    renderer_->drawTimeRuler(g, ctx);
+    rulerSurface_.setSurfaceImage(rulerSurfaceImage_);
 }
 
 void PianoRollComponent::rebuildContentSurface() const
@@ -3037,6 +3081,19 @@ void PianoRollComponent::rebuildContentSurface() const
     }
 
     contentSurface_.setSurfaceImage(contentSurfaceImage_);
+}
+
+void PianoRollComponent::updateRulerSurfaceBounds() const
+{
+    const auto timelineViewportBounds = getTimelineViewportBounds();
+    rulerSurfaceBounds_ = {
+        timelineViewportBounds.getX() + pianoKeyWidth_,
+        timelineViewportBounds.getY(),
+        juce::jmax(0, timelineViewportBounds.getWidth() - pianoKeyWidth_),
+        rulerHeight_
+    };
+    rulerSurface_.setBounds(rulerSurfaceBounds_);
+    rulerSurface_.setImageOffsetX(renderBand_.valid ? renderBand_.startContentX - scrollOffset_ - pianoKeyWidth_ : 0);
 }
 
 void PianoRollComponent::updateContentSurfaceBounds() const

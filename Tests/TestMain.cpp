@@ -7171,26 +7171,27 @@ void runTimelineKillListNoSteadyScrollFullContentInvalidationTest()
     logPass(testName);
 }
 
-void runTimelineContentSurfaceOffsetShiftStaysBlitOnlyTest()
+void runTimelinePianoRollContentSurfaceOffsetShiftStaysBlitOnlyTest()
 {
-    constexpr const char* testName = "TimelineContentSurface_OffsetShiftStaysBlitOnly";
+    constexpr const char* testName = "TimelinePianoRollContentSurface_OffsetShiftStaysBlitOnly";
 
     const auto pianoSurfaceSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/PianoRollComponent.h",
         "void setImageOffsetX(int offsetX)",
         "void clearSurfaceImage()");
-    const auto arrangementSurfaceSection = extractWorkspaceFileSection(
-        "Source/Standalone/UI/ArrangementViewComponent.h",
-        "void setImageOffsetX(int offsetX)",
-        "void clearSurfaceImage()");
 
-    if (pianoSurfaceSection.isEmpty() || arrangementSurfaceSection.isEmpty()) {
-        logFail(testName, "failed to locate content-surface offset helpers");
+    if (pianoSurfaceSection.isEmpty()) {
+        logFail(testName, "failed to locate PianoRoll content-surface offset helper");
         return;
     }
 
-    if (pianoSurfaceSection.contains("repaint();") || arrangementSurfaceSection.contains("repaint();")) {
-        logFail(testName, "content-surface offset helper still triggers full child repaint during steady scroll");
+    if (!pianoSurfaceSection.contains("imageOffsetX_ = offsetX;")) {
+        logFail(testName, "PianoRoll content surface no longer updates the cached-surface blit offset directly");
+        return;
+    }
+
+    if (pianoSurfaceSection.contains("repaint();")) {
+        logFail(testName, "PianoRoll content-surface offset helper still triggers child repaint during steady scroll");
         return;
     }
 
@@ -7241,6 +7242,13 @@ void runTimelinePageFollowUsesDeterministicPagePolicyTest()
         return;
     }
 
+    const auto pianoPageIndex = pianoVBlankSection.indexOf("const int pageIndex = visibleWidth > 0 ? juce::jmax(0, absX / visibleWidth) : 0;");
+    const auto pianoOverlayIndex = pianoVBlankSection.lastIndexOf("playheadOverlay_.setPlayheadSeconds(displayPlayheadTime);");
+    if (pianoPageIndex < 0 || pianoOverlayIndex < 0 || pianoOverlayIndex < pianoPageIndex) {
+        logFail(testName, "PianoRoll page follow no longer settles viewport before presenting the final playhead overlay");
+        return;
+    }
+
     logPass(testName);
 }
 
@@ -7287,37 +7295,158 @@ void runTimelinePresentationClockUsesTruePredictionTest()
     logPass(testName);
 }
 
-void runTimelinePianoRollRulerUsesPresentationContextTest()
+void runTimelinePianoRollRulerUsesCachedSurfacePresentationStateTest()
 {
-    constexpr const char* testName = "TimelinePianoRollRuler_UsesPresentationContext";
+    constexpr const char* testName = "TimelinePianoRollRuler_UsesCachedSurfacePresentationState";
 
     const auto paintSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/PianoRollComponent.cpp",
         "void PianoRollComponent::paint",
         "void PianoRollComponent::paintOverChildren");
-    const auto contextSection = extractWorkspaceFileSection(
+    const auto rebuildRulerSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/PianoRollComponent.cpp",
-        "PianoRollRenderer::RenderContext PianoRollComponent::makePresentationRenderContext() const",
-        "bool PianoRollComponent::preparedRenderBandCoversViewport");
+        "void PianoRollComponent::rebuildRulerSurface() const",
+        "void PianoRollComponent::rebuildContentSurface() const");
+    const auto updateRulerBoundsSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::updateRulerSurfaceBounds() const",
+        "void PianoRollComponent::updateContentSurfaceBounds() const");
+    const auto& pianoSource = getFileCache().get("Source/Standalone/UI/PianoRollComponent.cpp");
 
-    if (paintSection.isEmpty() || contextSection.isEmpty()) {
-        logFail(testName, "failed to locate PianoRoll paint/presentation-context sections");
+    if (paintSection.isEmpty() || rebuildRulerSection.isEmpty() || updateRulerBoundsSection.isEmpty()) {
+        logFail(testName, "failed to locate PianoRoll ruler cached-surface sections");
         return;
     }
 
-    if (!paintSection.contains("renderer_->drawTimeRuler(g, makePresentationRenderContext());")) {
-        logFail(testName, "PianoRoll ruler is not explicitly using the current presentation context");
+    if (paintSection.contains("drawTimeRuler(")) {
+        logFail(testName, "PianoRoll paint still draws the ruler directly instead of consuming the cached surface");
         return;
     }
 
-    if (paintSection.contains("renderer_->drawTimeRuler(g, ctx);")) {
-        logFail(testName, "PianoRoll ruler still uses the render-band cache context");
+    if (!rebuildRulerSection.contains("auto ctx = renderModelCache_.getRenderContext();")
+        || !rebuildRulerSection.contains("ctx.width = renderBand_.widthPx + pianoKeyWidth_;")
+        || !rebuildRulerSection.contains("ctx.height = rulerHeight_;")
+        || !rebuildRulerSection.contains("renderer_->drawTimeRuler(g, ctx);")) {
+        logFail(testName, "PianoRoll ruler cached surface no longer rebuilds from the render-band presentation state");
         return;
     }
 
-    if (!contextSection.contains("ctx.timeToX = [viewportState](double seconds) { return viewportState.timeToViewportX(seconds); };")
-        || !contextSection.contains("ctx.xToTime = [viewportState](int x) { return viewportState.viewportXToTime(x); };")) {
-        logFail(testName, "PianoRoll presentation context no longer remaps ruler time math to the live viewport");
+    if (!updateRulerBoundsSection.contains("rulerSurface_.setBounds(rulerSurfaceBounds_);")
+        || !updateRulerBoundsSection.contains("rulerSurface_.setImageOffsetX(renderBand_.valid ? renderBand_.startContentX - scrollOffset_ - pianoKeyWidth_ : 0);")) {
+        logFail(testName, "PianoRoll ruler cached surface no longer follows scroll via child bounds plus image offset");
+        return;
+    }
+
+    if (!pianoSource.contains("addAndMakeVisible(rulerSurface_);")) {
+        logFail(testName, "PianoRoll ruler cached surface is no longer part of the component tree");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineArrangementRulerCachedSurfaceAvoidsParentStripInvalidateTest()
+{
+    constexpr const char* testName = "TimelineArrangementRulerCachedSurface_AvoidsParentStripInvalidate";
+
+    const auto scrollSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::setScrollOffset(int pixels)",
+        "void ArrangementViewComponent::setVerticalScrollOffset(int offset)");
+    const auto rebuildRulerSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::rebuildRulerSurface()",
+        "void ArrangementViewComponent::updateRulerSurfaceBounds()");
+
+    if (scrollSection.isEmpty() || rebuildRulerSection.isEmpty()) {
+        logFail(testName, "failed to locate Arrangement ruler cached-surface sections");
+        return;
+    }
+
+    if (!scrollSection.contains("updateRulerSurfaceBounds();")
+        || !scrollSection.contains("FrameScheduler::instance().requestViewportShift(*this, dirtyArea);")) {
+        logFail(testName, "Arrangement steady scroll no longer routes ruler movement through the cached-surface viewport-shift path");
+        return;
+    }
+
+    if (scrollSection.contains("requestContentInvalidation(*this,\n                                                              { 0, 0, getWidth(), rulerHeight_ },")
+        || scrollSection.contains("requestContentInvalidation(*this,\r\n                                                              { 0, 0, getWidth(), rulerHeight_ },")
+        || scrollSection.contains("requestContentInvalidation(*this, { 0, 0, getWidth(), rulerHeight_ },")) {
+        logFail(testName, "Arrangement steady scroll still invalidates the parent ruler strip instead of relying on cached-surface motion");
+        return;
+    }
+
+    if (!rebuildRulerSection.contains("drawTimeRuler(g);")
+        || !rebuildRulerSection.contains("rulerSurface_.setSurfaceImage(rulerSurfaceImage_);")) {
+        logFail(testName, "Arrangement ruler cached surface no longer rebuilds its own backing image");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelinePianoRollWaveformBackgroundProgressIsDeferredDuringPlaybackTest()
+{
+    constexpr const char* testName = "TimelinePianoRollWaveform_BackgroundProgressIsDeferredDuringPlayback";
+
+    const auto heartbeatSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::onHeartbeatTick()",
+        "void PianoRollComponent::onScrollVBlankCallback");
+
+    if (heartbeatSection.isEmpty()) {
+        logFail(testName, "failed to locate PianoRoll waveform heartbeat section");
+        return;
+    }
+
+    if (!heartbeatSection.contains("const bool playingNow = isPlaying_.load(std::memory_order_relaxed);")
+        || !heartbeatSection.contains("if (inferenceActive_)")
+        || !heartbeatSection.contains("waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 8;")
+        || !heartbeatSection.contains("progressed = waveformMipmapCache_.buildIncremental(0.15);")
+        || !heartbeatSection.contains("else if (playingNow)")
+        || !heartbeatSection.contains("waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 6;")
+        || !heartbeatSection.contains("progressed = waveformMipmapCache_.buildIncremental(0.25);")
+        || !heartbeatSection.contains("progressed = waveformMipmapCache_.buildIncremental(0.75);")
+        || !heartbeatSection.contains("waveformVisualRefreshPending_ = true;")
+        || !heartbeatSection.contains("if (!playingNow && waveformVisualRefreshPending_)")) {
+        logFail(testName, "PianoRoll waveform background progress no longer uses the deferred playback/inference cadence");
+        return;
+    }
+
+    if (heartbeatSection.contains("const bool shouldBuild = !inferenceActive_ || waveformBuildTickCounter_ == 0;")
+        || heartbeatSection.contains("const double budgetMs = inferenceActive_ ? 1.0 : 5.0;")
+        || heartbeatSection.contains("if (shouldBuild && waveformMipmapCache_.buildIncremental(budgetMs))")) {
+        logFail(testName, "PianoRoll waveform heartbeat still uses the old immediate 1.0/5.0 budget path");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineArrangementWaveformBackgroundProgressIsDeferredDuringPlaybackTest()
+{
+    constexpr const char* testName = "TimelineArrangementWaveform_BackgroundProgressIsDeferredDuringPlayback";
+
+    const auto heartbeatSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::onHeartbeatTick()",
+        "void ArrangementViewComponent::performPageScroll");
+
+    if (heartbeatSection.isEmpty()) {
+        logFail(testName, "failed to locate Arrangement waveform heartbeat section");
+        return;
+    }
+
+    if (!heartbeatSection.contains("if (inferenceActive_)")
+        || !heartbeatSection.contains("waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 8;")
+        || !heartbeatSection.contains("progressed = buildWaveformCaches(0.15);")
+        || !heartbeatSection.contains("else if (playingNow)")
+        || !heartbeatSection.contains("waveformBuildTickCounter_ = (waveformBuildTickCounter_ + 1) % 6;")
+        || !heartbeatSection.contains("progressed = buildWaveformCaches(0.25);")
+        || !heartbeatSection.contains("progressed = buildWaveformCaches(0.75);")
+        || !heartbeatSection.contains("waveformVisualRefreshPending_ = true;")
+        || !heartbeatSection.contains("if (!playingNow && waveformVisualRefreshPending_)")) {
+        logFail(testName, "Arrangement waveform background progress no longer uses the deferred playback/inference cadence");
         return;
     }
 
@@ -10878,10 +11007,13 @@ void runTimelineRenderingSuite()
     runPianoRollVerticalGeometryInvalidatesRenderModelKeyTest();
     runPianoRollRenderContextUsesSnapshotVerticalCoordinatesTest();
     runArrangementScrollOffsetUsesViewportShiftWithoutImmediateRenderModelRebuildTest();
-    runTimelineContentSurfaceOffsetShiftStaysBlitOnlyTest();
+    runTimelinePianoRollContentSurfaceOffsetShiftStaysBlitOnlyTest();
     runTimelinePageFollowUsesDeterministicPagePolicyTest();
     runTimelinePresentationClockUsesTruePredictionTest();
-    runTimelinePianoRollRulerUsesPresentationContextTest();
+    runTimelinePianoRollRulerUsesCachedSurfacePresentationStateTest();
+    runTimelineArrangementRulerCachedSurfaceAvoidsParentStripInvalidateTest();
+    runTimelinePianoRollWaveformBackgroundProgressIsDeferredDuringPlaybackTest();
+    runTimelineArrangementWaveformBackgroundProgressIsDeferredDuringPlaybackTest();
     runArrangementScrollBarsUseSharedTimeMathAndBoundedOffsetsTest();
     runArrangementPaintConsumesVisibleRenderModelOnlyTest();
     runArrangementVisibleRangeCullsOffscreenPlacementsTest();
