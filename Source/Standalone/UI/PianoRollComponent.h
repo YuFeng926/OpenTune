@@ -42,6 +42,7 @@
 #include "PianoRoll/PianoRollVisualInvalidation.h"
 #include "PianoRoll/PianoRollCorrectionWorker.h"
 #include "PianoRoll/InteractionState.h"
+#include "TimelineViewportState.h"
 #include "WaveformMipmap.h"
 #include "../../Utils/UndoManager.h"
 
@@ -51,6 +52,50 @@ class OpenTuneAudioProcessor;
 class PianoKeyAudition;
 
 struct PianoRollComponentTestProbe;
+
+class PianoRollContentSurface : public juce::Component
+{
+public:
+    PianoRollContentSurface()
+    {
+        setOpaque(false);
+        setInterceptsMouseClicks(false, false);
+    }
+
+    void setSurfaceImage(juce::Image image)
+    {
+        surfaceImage_ = std::move(image);
+        repaint();
+    }
+
+    void setImageOffsetX(int offsetX)
+    {
+        if (imageOffsetX_ == offsetX)
+            return;
+
+        imageOffsetX_ = offsetX;
+    }
+
+    void clearSurfaceImage()
+    {
+        if (!surfaceImage_.isValid())
+            return;
+
+        surfaceImage_ = {};
+        imageOffsetX_ = 0;
+        repaint();
+    }
+
+private:
+    void paint(juce::Graphics& g) override
+    {
+        if (surfaceImage_.isValid())
+            g.drawImageAt(surfaceImage_, imageOffsetX_, 0);
+    }
+
+    juce::Image surfaceImage_;
+    int imageOffsetX_ = 0;
+};
 
 class PianoRollComponent : public juce::Component,
                            public juce::ScrollBar::Listener {
@@ -92,6 +137,7 @@ public:
     ~PianoRollComponent() override;
 
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
     void onHeartbeatTick();
 
@@ -111,7 +157,9 @@ public:
             pendingSeekTime_ = -1.0;
         if (stateChanged) {
             lastObservedRawPlayheadTime_ = readPlayheadTime();
+            resetPresentationClock(readProjectedPlayheadTime());
             userScrollHold_ = false;
+            updatePlayheadPresentationPolicy();
         }
     }
     void setZoomLevel(double zoom);
@@ -134,6 +182,7 @@ public:
         }
 
         scrollMode_ = mode;
+        updatePlayheadPresentationPolicy();
         prepareVisibleRenderModel();
         invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Viewport),
                          PianoRollVisualInvalidationPriority::Interactive);
@@ -279,6 +328,22 @@ private:
     double projectPlayheadTime(double rawPlayheadTime) const;
     double readProjectedPlayheadTime() const;
     juce::Rectangle<int> getTimelineViewportBounds() const;
+    TimelineViewportState makeTimelineViewportState() const;
+    int getTimelineContentViewportWidth() const;
+    int getContinuousPinnedPlayheadViewportX() const;
+    void updatePlayheadPresentationPolicy();
+    double getDisplayPlayheadTime(double timestampSec) const;
+    void updatePresentationClock(double authoritativeTime, double timestampSec);
+    void resetPresentationClock(double authoritativeTime);
+    PianoRollRenderer::RenderContext makePresentationRenderContext() const;
+    bool preparedRenderBandCoversViewport(int viewportStartX, int viewportEndX) const;
+    bool renderBandNeedsRebuild(int contentViewportWidth, int viewportHeight) const;
+    void ensureRenderBandCoversCurrentViewport(bool forceRebuild) const;
+    void rebuildContentSurface() const;
+    void updateContentSurfaceBounds() const;
+    void rebuildPreparedRenderModelForViewport(int viewportStartX,
+                                               int viewportEndX,
+                                               bool forceRebuild) const;
 
     void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
@@ -308,7 +373,9 @@ private:
         double visibleTimeStart,
         double visibleTimeEnd,
         int viewportStartX,
-        int viewportEndX) const;
+        int viewportEndX,
+        int renderScrollOffsetPx,
+        int renderPianoKeyWidth) const;
     const std::vector<Note>& getCommittedNotes() const;
     const std::vector<Note>& getDisplayedNotes() const;
     NoteInteractionDraft& getNoteDraft();
@@ -362,6 +429,12 @@ private:
     double projectMaterializationTimeToTimeline(double materializationSeconds) const;
     double getTimelinePixelsPerSecond() const;
     double getPlayheadAbsolutePixelX(double playheadTimeSeconds) const;
+    int timeToXForRenderScroll(double seconds,
+                               int renderScrollOffsetPx,
+                               int renderPianoKeyWidth) const;
+    double xToTimeForRenderScroll(int x,
+                                  int renderScrollOffsetPx,
+                                  int renderPianoKeyWidth) const;
 
     int timeToX(double seconds) const;
     double xToTime(int x) const;
@@ -374,13 +447,19 @@ private:
         return buildRenderContext(xToTime(viewportStartX),
                                   xToTime(viewportEndX),
                                   viewportStartX,
-                                  viewportEndX);
+                                  viewportEndX,
+                                  scrollOffset_,
+                                  viewport.getWidth(),
+                                  pianoKeyWidth_);
     }
 
     PianoRollRenderer::RenderContext buildRenderContext(double visibleTimeStart,
                                                         double visibleTimeEnd,
                                                         int viewportStartX,
-                                                        int viewportEndX) const;
+                                                        int viewportEndX,
+                                                        int renderScrollOffsetPx,
+                                                        int renderWidthPx,
+                                                        int renderPianoKeyWidth) const;
 
     /** Rebuild the prepared render model from current state if the cache key has changed.
      *  Called from every state-change path (scroll, zoom, visual prefs, materialization),
@@ -400,7 +479,6 @@ private:
 
     // Cont-mode scroll state
     bool userScrollHold_{false};         // user manually scrolled → pause auto-follow
-    float scrollSeekOffset_{0.0f};       // smooth seek: decays to 0 each frame
     double pendingSeekTime_{-1.0};       // pending playhead presentation intent; -1 = none
     double lastObservedRawPlayheadTime_{0.0}; // host raw playhead last seen by stopped-state presentation
 
@@ -475,8 +553,24 @@ private:
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
 
     mutable PianoRollRenderModelCache renderModelCache_;
+    mutable PianoRollContentSurface contentSurface_;
+    mutable juce::Image contentSurfaceImage_;
+    mutable juce::Rectangle<int> contentSurfaceBounds_;
+    mutable int64_t preparedBandStartMs_ = 0;
+    mutable int64_t preparedBandEndMs_ = 0;
+    mutable struct RenderBandState {
+        int startContentX = 0;
+        int widthPx = 0;
+        int heightPx = 0;
+        bool valid = false;
+    } renderBand_;
     uint64_t visualPrefsRevision_ = 0;
     uint64_t viewportSizeRevision_ = 0;
+    double lastAuthoritativePlayheadTime_ = 0.0;
+    double presentationClockAnchorTime_ = 0.0;
+    double presentationClockAnchorTimestampSec_ = 0.0;
+    double presentationClockLastObservationTimestampSec_ = 0.0;
+    bool presentationClockPrimed_ = false;
 
     // Undo support
     juce::String pendingUndoDescription_;

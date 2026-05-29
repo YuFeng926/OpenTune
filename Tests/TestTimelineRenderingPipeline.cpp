@@ -228,6 +228,7 @@ void runTimelineViewportStateExposedStripTest()
     vp.zoomLevel = 1.0;
     vp.viewportWidthPx = 800;
     vp.viewportHeightPx = 600;
+    vp.contentStartX = 60;
 
     // Small scroll right: exposed strip on the right
     auto strip = vp.exposedStripForScrollDelta(0, 50);
@@ -235,8 +236,8 @@ void runTimelineViewportStateExposedStripTest()
         logFail(testName, "50px right scroll should have non-empty exposed strip");
         return;
     }
-    if (strip.getWidth() != 50 || strip.getX() != 750) {
-        logFail(testName, "50px right scroll should expose 50px strip on right (x=750, w=50)");
+    if (strip.getWidth() != 50 || strip.getX() != 810 || strip.getY() != 0 || strip.getHeight() != 600) {
+        logFail(testName, "50px right scroll should expose a component-local strip that includes the ruler");
         return;
     }
 
@@ -246,8 +247,8 @@ void runTimelineViewportStateExposedStripTest()
         logFail(testName, "50px left scroll should have non-empty exposed strip");
         return;
     }
-    if (strip.getWidth() != 50 || strip.getX() != 0) {
-        logFail(testName, "50px left scroll should expose 50px strip on left (x=0, w=50)");
+    if (strip.getWidth() != 50 || strip.getX() != 60 || strip.getY() != 0 || strip.getHeight() != 600) {
+        logFail(testName, "50px left scroll should expose a component-local strip anchored at contentStartX");
         return;
     }
 
@@ -281,6 +282,30 @@ void runTimelineViewportStateExposedStripTest()
     }
     if (!vp.requiresFullRedrawForDelta(0, 800)) {
         logFail(testName, "800px delta should require full redraw");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineViewportStateExposedStripTracksContentStartXTest()
+{
+    constexpr const char* testName = "TimelineViewportState_ExposedStripTracksContentStartX";
+
+    TimelineViewportState vp;
+    vp.viewportWidthPx = 640;
+    vp.viewportHeightPx = 360;
+    vp.contentStartX = 48;
+
+    const auto rightStrip = vp.exposedStripForScrollDelta(120, 156);
+    if (rightStrip.getX() != 652 || rightStrip.getWidth() != 36) {
+        logFail(testName, "right exposed strip did not include contentStartX in component-local coordinates");
+        return;
+    }
+
+    const auto leftStrip = vp.exposedStripForScrollDelta(156, 120);
+    if (leftStrip.getX() != 48 || leftStrip.getWidth() != 36) {
+        logFail(testName, "left exposed strip did not stay anchored to contentStartX");
         return;
     }
 
@@ -447,16 +472,17 @@ void runArrangementWaveformPathUsesHalfOpenClipIntervalTest()
     logPass(testName);
 }
 
-void runArrangementWaveformRenderModelBuildsPreparedPathNotTileLookupTest()
+void runArrangementWaveformRenderModelBuildsPreparedPathAndAllowsBoundedCacheTest()
 {
-    constexpr const char* testName = "ArrangementWaveformRenderModel_BuildsPreparedPathNotTileLookup";
+    constexpr const char* testName = "ArrangementWaveformRenderModel_BuildsPreparedPathAndAllowsBoundedCache";
 
     const auto header = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementRenderModelCache.h");
     const auto source = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementRenderModelCache.cpp");
     const auto viewHeader = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementViewComponent.h");
     const auto viewSource = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/ArrangementViewComponent.cpp");
+    const auto waveformMipmapHeader = readTimelineRenderingWorkspaceFile("Source/Standalone/UI/WaveformMipmap.h");
 
-    if (header.isEmpty() || source.isEmpty() || viewHeader.isEmpty() || viewSource.isEmpty()) {
+    if (header.isEmpty() || source.isEmpty() || viewHeader.isEmpty() || viewSource.isEmpty() || waveformMipmapHeader.isEmpty()) {
         logFail(testName, "failed to read Arrangement waveform rendering files");
         return;
     }
@@ -471,12 +497,19 @@ void runArrangementWaveformRenderModelBuildsPreparedPathNotTileLookupTest()
         return;
     }
 
-    if (header.contains("WaveformTileCache")
-        || viewHeader.contains("WaveformTileCache")
-        || viewHeader.contains("waveformTileCache_")
-        || viewSource.contains("waveformTileCache_.get(")
-        || viewSource.contains("waveformTileCache_.getOrCreate(")) {
-        logFail(testName, "Arrangement production path still depends on WaveformTileCache for clip waveform drawing");
+    if (!viewHeader.contains("WaveformMipmapCache waveformMipmapCache_")
+        || !viewSource.contains("waveformMipmapCache_.get(")
+        || !viewSource.contains("waveformMipmapCache_.getOrCreate(")
+        || !viewSource.contains("waveformMipmapCache_.prune(alive)")) {
+        logFail(testName, "Arrangement view no longer exposes the expected bounded waveform mipmap cache path");
+        return;
+    }
+
+    if (!waveformMipmapHeader.contains("void prune(")
+        || !waveformMipmapHeader.contains("std::unordered_map<uint64_t")
+        || !header.contains("arrangementRevision")
+        || !header.contains("previewRevision")) {
+        logFail(testName, "Arrangement waveform cache contract is missing bounded-memory or complete-key ingredients");
         return;
     }
 
@@ -573,12 +606,13 @@ void runTimelineRenderingPipelineCacheTests()
     runTimelineViewportStateTimeMathTest();
     runTimelineViewportStateVisibleRangeTest();
     runTimelineViewportStateExposedStripTest();
+    runTimelineViewportStateExposedStripTracksContentStartXTest();
     runTimelineViewportStateTimeMathTest(); // (already called above — kept for suite completeness)
     runArrangementWaveformMinZoomNarrowClipKeepsPositiveDrawableBoundsTest();
     runArrangementWaveformPathAnchorsToTimelineAcrossZoomAndScrollTest();
     runArrangementWaveformPathHonorsClipInSecondsTest();
     runArrangementWaveformPathUsesHalfOpenClipIntervalTest();
-    runArrangementWaveformRenderModelBuildsPreparedPathNotTileLookupTest();
+    runArrangementWaveformRenderModelBuildsPreparedPathAndAllowsBoundedCacheTest();
     runArrangementDragPreviewMouseDragDoesNotCommitMoveTest();
     runArrangementDragPreviewTargetTrackVisibleBeforeMouseUpTest();
     runArrangementDragPreviewMouseUpCommitsOnceAndClearsPreviewTest();

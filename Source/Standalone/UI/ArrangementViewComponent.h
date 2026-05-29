@@ -42,6 +42,50 @@ struct ImportDropPreview {
     int trackHeight = 100;         // track lane height in pixels (for positioning; avoids paint() processor read)
 };
 
+class ArrangementContentSurface : public juce::Component
+{
+public:
+    ArrangementContentSurface()
+    {
+        setOpaque(false);
+        setInterceptsMouseClicks(false, false);
+    }
+
+    void setSurfaceImage(juce::Image image)
+    {
+        surfaceImage_ = std::move(image);
+        repaint();
+    }
+
+    void setImageOffsetX(int offsetX)
+    {
+        if (imageOffsetX_ == offsetX)
+            return;
+
+        imageOffsetX_ = offsetX;
+    }
+
+    void clearSurfaceImage()
+    {
+        if (!surfaceImage_.isValid())
+            return;
+
+        surfaceImage_ = {};
+        imageOffsetX_ = 0;
+        repaint();
+    }
+
+private:
+    void paint(juce::Graphics& g) override
+    {
+        if (surfaceImage_.isValid())
+            g.drawImageAt(surfaceImage_, imageOffsetX_, 0);
+    }
+
+    juce::Image surfaceImage_;
+    int imageOffsetX_ = 0;
+};
+
 class ArrangementViewComponent : public juce::Component,
                                  public juce::ScrollBar::Listener,
                                  public juce::Timer
@@ -85,6 +129,7 @@ public:
         isPlaying_.store(playing, std::memory_order_relaxed);
         playheadOverlay_.setPlaying(playing);
         if (stateChanged) {
+            resetPresentationClock(readPlayheadSeconds());
             syncPlayheadOverlayToAbsoluteTime(readPlayheadSeconds(), true);
         }
     }
@@ -160,6 +205,21 @@ private:
     int absoluteTimeToViewportX(double seconds) const;
     int absoluteTimeToViewportX(double seconds, double projectedScrollOffset) const;
     int getTotalContentWidth() const;
+    int getVisibleViewportWidth() const;
+    juce::Rectangle<int> getContentViewportBounds() const;
+    juce::Rectangle<int> getContentViewportBoundsInSurfaceSpace() const;
+    bool isPinnedContinuousFollowActive() const;
+    double getPinnedPlayheadViewportX() const;
+    double getContinuousFollowTargetScroll(double displayPlayheadTime) const;
+    double getDisplayPlayheadTime(double timestampSec) const;
+    void updatePresentationClock(double authoritativeTime, double timestampSec);
+    void resetPresentationClock(double authoritativeTime);
+    void rebuildContentMetrics();
+    bool renderBandNeedsRebuild() const;
+    void ensureRenderBandCoversCurrentViewport(bool forceRebuild = false);
+    void rebuildContentSurface();
+    void updateContentSurfaceBounds();
+    void updateOverlayPresentation(double displayPlayheadTime);
     void updateAutoScroll();
     void performPageScroll(double playheadTime);
     void onScrollVBlankCallback(double timestampSec);
@@ -188,6 +248,9 @@ private:
     TimelineViewportState viewportState_;
     ArrangementRenderModelCache renderModelCache_;
     WaveformMipmapCache waveformMipmapCache_;
+    ArrangementContentSurface contentSurface_;
+    juce::Image contentSurfaceImage_;
+    juce::Rectangle<int> contentSurfaceBounds_;
 
     double lastContextBpm_{ 0.0 };
     int lastContextTimeSigNum_{ 0 };
@@ -209,12 +272,32 @@ private:
     double zoomLevel_{1.0};
     int scrollOffset_{0};
     int verticalScrollOffset_{0};
+    double lastAuthoritativePlayheadTime_{0.0};
+    double presentationClockAnchorTime_{0.0};
+    double presentationClockAnchorTimestampSec_{0.0};
+    double presentationClockLastObservationTimestampSec_{0.0};
+    bool presentationClockPrimed_{false};
+
+    struct ContentMetrics {
+        uint64_t revision = 0;
+        double maxEndTimeSeconds = 60.0 * 5.0;
+        int totalContentWidthPx = 0;
+    };
+
+    struct RenderBandState {
+        double startSeconds = 0.0;
+        double endSeconds = 0.0;
+        int startContentX = 0;
+        int widthPx = 0;
+        int heightPx = 0;
+        uint64_t revision = 0;
+        bool valid = false;
+    };
+
+    ContentMetrics contentMetrics_;
+    RenderBandState renderBand_;
     
     // Smooth scrolling
-    float smoothScrollCurrent_{0.0f}; // To track sub-pixel position for smoothness
-    bool isSmoothScrolling_{false};
-    double lastPaintedPlayheadTime_{-1.0};
-
     // 用户是否手动调整过缩放（用于避免自动缩放覆盖用户设置）
     bool userHasManuallyZoomed_ = false;
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity_ = ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();

@@ -4,7 +4,7 @@
  * TimelineViewportState
  *
  * Shared horizontal time/pixel math for PianoRoll and Arrangement.
- * Value object — no mutable state beyond what is explicitly set.
+ * Value object - no mutable state beyond what is explicitly set.
  * Owns zoom, scroll offset, viewport bounds, and content start X.
  */
 
@@ -30,7 +30,7 @@ struct TimelineViewportState {
         return static_cast<int>(std::llround(seconds * pixelsPerSecond()));
     }
 
-    /** Viewport-space X for a timeline time (seconds) — uses current scroll offset. */
+    /** Viewport-space X for a timeline time (seconds) - uses current scroll offset. */
     int timeToViewportX(double seconds) const noexcept {
         return timeToViewportX(seconds, scrollOffsetPx);
     }
@@ -41,7 +41,7 @@ struct TimelineViewportState {
         return static_cast<int>(std::llround(contentX - projectedScrollOffset)) + contentStartX;
     }
 
-    /** Timeline time for a viewport-space X — uses current scroll offset. */
+    /** Timeline time for a viewport-space X - uses current scroll offset. */
     double viewportXToTime(int x) const noexcept {
         return (static_cast<double>(x - contentStartX + scrollOffsetPx)) / pixelsPerSecond();
     }
@@ -62,26 +62,22 @@ struct TimelineViewportState {
     }
 
     /**
-     * Computes the exposed strip rectangle when scrolling horizontally.
-     * Returns an empty rect if delta is zero or if the scroll would require
-     * a full redraw (e.g. zoom or viewport width changed).
+     * Computes the exposed strip rectangle in component-local coordinates.
+     * The strip covers the newly exposed timeline band, including the ruler.
      */
     juce::Rectangle<int> exposedStripForScrollDelta(int oldScrollOffset,
-                                                     int newScrollOffset) const noexcept {
+                                                    int newScrollOffset) const noexcept {
         if (oldScrollOffset == newScrollOffset)
             return {};
 
         const int delta = newScrollOffset - oldScrollOffset;
         if (std::abs(delta) >= viewportWidthPx)
-            return {}; // full redraw if scrolled more than viewport width
+            return {};
 
-        if (delta > 0) {
-            // Scrolled right — exposed strip on the right
-            return { viewportWidthPx - delta, 0, delta, viewportHeightPx };
-        } else {
-            // Scrolled left — exposed strip on the left
-            return { 0, 0, -delta, viewportHeightPx };
-        }
+        if (delta > 0)
+            return { contentStartX + viewportWidthPx - delta, 0, delta, viewportHeightPx };
+
+        return { contentStartX, 0, -delta, viewportHeightPx };
     }
 
     /** Returns true if delta is large enough to warrant a full redraw rather than exposed-strip. */
