@@ -18,6 +18,11 @@ namespace {
 
 constexpr int kArrangementContentStartX = 8;
 
+uint64_t hashCombine(uint64_t seed, uint64_t value) noexcept
+{
+    return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
+}
+
 int getStandaloneSelectedPlacementIndex(OpenTuneAudioProcessor& processor, int trackId)
 {
     const auto* arrangement = processor.getStandaloneArrangement();
@@ -145,6 +150,11 @@ static double selectMarkerInterval(double pixelsPerSecond) {
     return 1.0;
 }
 
+constexpr double kArrangementDefaultSpanSeconds = 60.0 * 5.0;
+constexpr double kArrangementTrailingPaddingSeconds = 10.0;
+constexpr double kArrangementPinnedViewportRatio = 0.5;
+constexpr double kArrangementRenderBandOverscanScreens = 1.0;
+
 ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& processor)
     : processor_(processor)
 {
@@ -195,6 +205,7 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     addAndMakeVisible(timeUnitToggleButton_);
     timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
 
+    addAndMakeVisible(contentSurface_);
     addAndMakeVisible(playheadOverlay_);
     playheadOverlay_.setPianoKeyWidth(kArrangementContentStartX);
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
@@ -227,31 +238,41 @@ void ArrangementViewComponent::setZoomLevel(double zoom)
     zoomLevel_ = juce::jlimit(0.02, 10.0, zoom);
     viewportState_.zoomLevel = zoomLevel_;
     playheadOverlay_.setZoomLevel(zoomLevel_);
-    syncPlayheadOverlay();
+    resetPresentationClock(readPlayheadSeconds());
     updateScrollBars();
-    refreshRenderModel();
-    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
+    ensureRenderBandCoversCurrentViewport(true);
+    updateOverlayPresentation(readPlayheadSeconds());
+    FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
 }
 
 void ArrangementViewComponent::setScrollOffset(int pixels)
 {
-    const int visibleWidth = juce::jmax(1, getWidth() - UIColors::scrollBarThickness);
+    const int visibleWidth = getVisibleViewportWidth();
     const int maxScrollOffset = juce::jmax(0, getTotalContentWidth() - visibleWidth);
     const int newOffset = juce::jlimit(0, maxScrollOffset, pixels);
     if (newOffset == scrollOffset_)
         return;
 
+    const int oldOffset = scrollOffset_;
     scrollOffset_ = newOffset;
-
-    // Update TimelineViewportState for shared time math
     viewportState_.scrollOffsetPx = scrollOffset_;
 
     horizontalScrollBar_.setCurrentRangeStart(scrollOffset_, juce::dontSendNotification);
-    playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
-    syncPlayheadOverlay();
+    updateContentSurfaceBounds();
 
-    requestRenderModelUpdate();
-    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+    const auto dirtyArea = viewportState_.exposedStripForScrollDelta(oldOffset, newOffset);
+    if (viewportState_.requiresFullRedrawForDelta(oldOffset, newOffset)) {
+        ensureRenderBandCoversCurrentViewport(true);
+        FrameScheduler::instance().requestContentInvalidation(*this,
+                                                              getLocalBounds(),
+                                                              FrameScheduler::Priority::Interactive);
+    } else {
+        ensureRenderBandCoversCurrentViewport(false);
+        FrameScheduler::instance().requestContentInvalidation(*this,
+                                                              { 0, 0, getWidth(), rulerHeight_ },
+                                                              FrameScheduler::Priority::Interactive);
+        FrameScheduler::instance().requestViewportShift(*this, dirtyArea);
+    }
 }
 
 void ArrangementViewComponent::setVerticalScrollOffset(int offset)
@@ -264,8 +285,9 @@ void ArrangementViewComponent::setVerticalScrollOffset(int offset)
     // 限制滚动范围 [0, maxScrollOffset]
     verticalScrollOffset_ = juce::jlimit(0, maxScrollOffset, offset);
     verticalScrollBar_.setCurrentRangeStart(verticalScrollOffset_);
-    refreshRenderModel();
-    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
+    updateContentSurfaceBounds();
+    ensureRenderBandCoversCurrentViewport(true);
+    FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
 }
 
 void ArrangementViewComponent::fitToContent()
@@ -358,10 +380,12 @@ void ArrangementViewComponent::resized()
     viewportState_.viewportHeightPx = getHeight();
 
     updateScrollBars();
+    updateContentSurfaceBounds();
+    ensureRenderBandCoversCurrentViewport(true);
 
     // 播放头覆盖层覆盖整个组件区域
     playheadOverlay_.setBounds(getLocalBounds());
-    refreshRenderModel();
+    updateOverlayPresentation(readPlayheadSeconds());
 }
 
 void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart)
@@ -369,42 +393,28 @@ void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double
     if (scrollBar == &horizontalScrollBar_)
     {
         setScrollOffset(static_cast<int>(newRangeStart));
-        smoothScrollCurrent_ = (float)newRangeStart; // Sync for manual scroll
     }
     else if (scrollBar == &verticalScrollBar_)
     {
         verticalScrollOffset_ = static_cast<int>(newRangeStart);
         // 通知监听器垂直滚动偏移变化（用于同步TrackPanel）
         listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
+        updateContentSurfaceBounds();
+        ensureRenderBandCoversCurrentViewport(true);
+        FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
     }
 }
 
 int ArrangementViewComponent::getTotalContentWidth() const
 {
-    double maxEndTime = 60.0 * 5.0; // Default 5 minutes
-
-    for (int t = 0; t < OpenTuneAudioProcessor::MAX_TRACKS; ++t)
-    {
-        const int placementCount = getStandalonePlacementCount(processor_, t);
-        for (int i = 0; i < placementCount; ++i)
-        {
-            StandaloneArrangement::Placement placement;
-            if (!getStandalonePlacementByIndex(processor_, t, i, placement)) {
-                continue;
-            }
-
-            maxEndTime = juce::jmax(maxEndTime, placement.timelineEndSeconds() + 10.0);
-        }
-    }
-
-    return viewportState_.timeToContentX(maxEndTime);
+    return juce::jmax(contentMetrics_.totalContentWidthPx,
+                      viewportState_.timeToContentX(kArrangementDefaultSpanSeconds));
 }
 
 void ArrangementViewComponent::updateScrollBars()
 {
     const int totalContentWidth = getTotalContentWidth();
-    const int visibleWidth = juce::jmax(1, getWidth() - UIColors::scrollBarThickness);
+    const int visibleWidth = getVisibleViewportWidth();
 
     horizontalScrollBar_.setRangeLimits(0.0, totalContentWidth + visibleWidth, juce::dontSendNotification);
     horizontalScrollBar_.setCurrentRange(scrollOffset_, visibleWidth, juce::dontSendNotification);
@@ -413,6 +423,207 @@ void ArrangementViewComponent::updateScrollBars()
     int visibleHeight = getHeight() - UIColors::scrollBarThickness;
     verticalScrollBar_.setRangeLimits(0.0, totalTrackHeight + visibleHeight);
     verticalScrollBar_.setCurrentRange(verticalScrollOffset_, visibleHeight);
+}
+
+int ArrangementViewComponent::getVisibleViewportWidth() const
+{
+    return juce::jmax(1,
+                      getWidth() - UIColors::scrollBarThickness - viewportState_.contentStartX);
+}
+
+juce::Rectangle<int> ArrangementViewComponent::getContentViewportBounds() const
+{
+    return { viewportState_.contentStartX,
+             rulerHeight_,
+             getVisibleViewportWidth(),
+             juce::jmax(0, getHeight() - rulerHeight_ - UIColors::scrollBarThickness) };
+}
+
+juce::Rectangle<int> ArrangementViewComponent::getContentViewportBoundsInSurfaceSpace() const
+{
+    auto bounds = getContentViewportBounds();
+    bounds.setX(bounds.getX() - contentSurfaceBounds_.getX());
+    bounds.setY(bounds.getY() - contentSurfaceBounds_.getY());
+    return bounds;
+}
+
+bool ArrangementViewComponent::isPinnedContinuousFollowActive() const
+{
+    return isPlaying_.load(std::memory_order_relaxed) && scrollMode_ == ScrollMode::Continuous;
+}
+
+double ArrangementViewComponent::getPinnedPlayheadViewportX() const
+{
+    const auto viewportBounds = getContentViewportBounds();
+    return viewportBounds.getX() + (static_cast<double>(viewportBounds.getWidth()) * kArrangementPinnedViewportRatio);
+}
+
+double ArrangementViewComponent::getContinuousFollowTargetScroll(double displayPlayheadTime) const
+{
+    const double contentX = static_cast<double>(absoluteTimeToContentX(displayPlayheadTime));
+    const double targetScroll = contentX - (getPinnedPlayheadViewportX() - viewportState_.contentStartX);
+    return juce::jmax(0.0, targetScroll);
+}
+
+double ArrangementViewComponent::getDisplayPlayheadTime(double timestampSec) const
+{
+    if (!presentationClockPrimed_)
+        return lastAuthoritativePlayheadTime_;
+
+    const double elapsed = juce::jmax(0.0, timestampSec - presentationClockAnchorTimestampSec_);
+    return juce::jmax(0.0, presentationClockAnchorTime_ + elapsed);
+}
+
+void ArrangementViewComponent::updatePresentationClock(double authoritativeTime, double timestampSec)
+{
+    if (!presentationClockPrimed_ || !isPlaying_.load(std::memory_order_relaxed)) {
+        resetPresentationClock(authoritativeTime);
+        presentationClockAnchorTimestampSec_ = timestampSec;
+        presentationClockLastObservationTimestampSec_ = timestampSec;
+        return;
+    }
+
+    const double predictedNow = getDisplayPlayheadTime(timestampSec);
+    const double predictionError = authoritativeTime - predictedNow;
+    const double authoritativeDelta = authoritativeTime - lastAuthoritativePlayheadTime_;
+    const double observationGap = juce::jmax(0.0, timestampSec - presentationClockLastObservationTimestampSec_);
+
+    const bool discontinuity = authoritativeDelta < -0.001
+        || authoritativeDelta > observationGap + 0.050
+        || std::abs(predictionError) > 0.050;
+
+    if (discontinuity) {
+        presentationClockAnchorTime_ = authoritativeTime;
+        presentationClockAnchorTimestampSec_ = timestampSec;
+    }
+
+    lastAuthoritativePlayheadTime_ = authoritativeTime;
+    presentationClockLastObservationTimestampSec_ = timestampSec;
+}
+
+void ArrangementViewComponent::resetPresentationClock(double authoritativeTime)
+{
+    presentationClockPrimed_ = true;
+    presentationClockAnchorTime_ = authoritativeTime;
+    presentationClockAnchorTimestampSec_ = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    presentationClockLastObservationTimestampSec_ = presentationClockAnchorTimestampSec_;
+    lastAuthoritativePlayheadTime_ = authoritativeTime;
+}
+
+void ArrangementViewComponent::rebuildContentMetrics()
+{
+    double maxEndTime = kArrangementDefaultSpanSeconds;
+    uint64_t revision = 1469598103934665603ull;
+
+    for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId) {
+        const int placementCount = getStandalonePlacementCount(processor_, trackId);
+        revision = hashCombine(revision, static_cast<uint64_t>(trackId + 1));
+        revision = hashCombine(revision, static_cast<uint64_t>(placementCount + 1));
+
+        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
+            StandaloneArrangement::Placement placement;
+            if (!getStandalonePlacementByIndex(processor_, trackId, placementIndex, placement))
+                continue;
+
+            maxEndTime = juce::jmax(maxEndTime,
+                                    placement.timelineEndSeconds() + kArrangementTrailingPaddingSeconds);
+            revision = hashCombine(revision, placement.placementId);
+            revision = hashCombine(revision, placement.materializationId);
+            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.timelineStartSeconds * 1000.0)));
+            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.durationSeconds * 1000.0)));
+        }
+    }
+
+    contentMetrics_.revision = revision;
+    contentMetrics_.maxEndTimeSeconds = maxEndTime;
+    contentMetrics_.totalContentWidthPx = viewportState_.timeToContentX(maxEndTime);
+}
+
+bool ArrangementViewComponent::renderBandNeedsRebuild() const
+{
+    if (!renderBand_.valid)
+        return true;
+
+    const auto viewportBounds = getContentViewportBounds();
+    const int visibleStartContentX = scrollOffset_;
+    const int visibleEndContentX = visibleStartContentX + viewportBounds.getWidth();
+    const int bandEndContentX = renderBand_.startContentX + renderBand_.widthPx;
+    return renderBand_.revision != contentMetrics_.revision
+        || renderBand_.heightPx != viewportBounds.getHeight()
+        || visibleStartContentX < renderBand_.startContentX
+        || visibleEndContentX > bandEndContentX;
+}
+
+void ArrangementViewComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild)
+{
+    rebuildContentMetrics();
+    if (!forceRebuild && !renderBandNeedsRebuild()) {
+        updateContentSurfaceBounds();
+        return;
+    }
+
+    const auto viewportBounds = getContentViewportBounds();
+    const int overscanPx = static_cast<int>(std::llround(viewportBounds.getWidth() * kArrangementRenderBandOverscanScreens));
+    const int totalContentWidth = getTotalContentWidth();
+    int bandStartContentX = juce::jmax(0, scrollOffset_ - overscanPx);
+    int bandWidthPx = viewportBounds.getWidth() + overscanPx * 2;
+    if (bandStartContentX + bandWidthPx > totalContentWidth)
+        bandStartContentX = juce::jmax(0, totalContentWidth - bandWidthPx);
+    bandWidthPx = juce::jmax(viewportBounds.getWidth(), juce::jmin(totalContentWidth - bandStartContentX, bandWidthPx));
+
+    renderBand_.startContentX = bandStartContentX;
+    renderBand_.widthPx = bandWidthPx;
+    renderBand_.heightPx = viewportBounds.getHeight();
+    renderBand_.startSeconds = viewportState_.viewportXToTime(viewportState_.contentStartX, bandStartContentX);
+    renderBand_.endSeconds = viewportState_.viewportXToTime(viewportState_.contentStartX + bandWidthPx, bandStartContentX);
+    renderBand_.revision = contentMetrics_.revision;
+    renderBand_.valid = true;
+
+    requestRenderModelUpdate();
+    rebuildContentSurface();
+    updateContentSurfaceBounds();
+}
+
+void ArrangementViewComponent::rebuildContentSurface()
+{
+    const auto viewportBounds = getContentViewportBounds();
+    if (!renderBand_.valid || renderBand_.widthPx <= 0 || viewportBounds.getHeight() <= 0) {
+        contentSurfaceImage_ = {};
+        contentSurface_.clearSurfaceImage();
+        return;
+    }
+
+    contentSurfaceImage_ = juce::Image(juce::Image::ARGB,
+                                       renderBand_.widthPx,
+                                       viewportBounds.getHeight(),
+                                       true);
+    juce::Graphics g(contentSurfaceImage_);
+    drawGridLines(g);
+    drawPlacementClips(g, renderModelCache_.getModel(), viewportState_);
+    contentSurface_.setSurfaceImage(contentSurfaceImage_);
+}
+
+void ArrangementViewComponent::updateContentSurfaceBounds()
+{
+    const auto viewportBounds = getContentViewportBounds();
+    contentSurfaceBounds_ = { viewportBounds.getX(),
+                              viewportBounds.getY(),
+                              renderBand_.valid ? renderBand_.widthPx : viewportBounds.getWidth(),
+                              viewportBounds.getHeight() };
+    contentSurface_.setBounds(contentSurfaceBounds_);
+    contentSurface_.setImageOffsetX(renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0);
+}
+
+void ArrangementViewComponent::updateOverlayPresentation(double displayPlayheadTime)
+{
+    if (isPinnedContinuousFollowActive()) {
+        playheadOverlay_.setPinnedViewportX(getPinnedPlayheadViewportX());
+    } else {
+        playheadOverlay_.clearPinnedViewportX();
+        playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
+    }
+
+    playheadOverlay_.setPlayheadSeconds(displayPlayheadTime);
 }
 
 int ArrangementViewComponent::absoluteTimeToContentX(double seconds) const
@@ -552,8 +763,8 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
 
 void ArrangementViewComponent::requestRenderModelUpdate()
 {
-    // Update viewport state geometry
-    viewportState_.viewportWidthPx = getWidth();
+    const auto viewportBounds = getContentViewportBounds();
+    viewportState_.viewportWidthPx = renderBand_.valid ? renderBand_.widthPx : viewportBounds.getWidth();
     viewportState_.viewportHeightPx = getHeight();
 
     // Invoke render model cache update with current state
@@ -571,6 +782,10 @@ void ArrangementViewComponent::requestRenderModelUpdate()
                              hoveredPlacementId_,
                              mouseOverReferenceButton_,
                              waveformMipmapCache_,
+                             renderBand_.startSeconds,
+                             renderBand_.endSeconds,
+                             renderBand_.startContentX,
+                             renderBand_.widthPx,
                              processor_.getTrackHeight(),
                              moveDragPreview_);
 
@@ -583,7 +798,7 @@ void ArrangementViewComponent::requestRenderModelUpdate()
 void ArrangementViewComponent::refreshRenderModel()
 {
     renderModelCache_.invalidate();
-    requestRenderModelUpdate();
+    ensureRenderBandCoversCurrentViewport(true);
 }
 
 int ArrangementViewComponent::trackIdForViewportY(int y) const noexcept
@@ -605,7 +820,8 @@ void ArrangementViewComponent::clearMoveDragPreview()
 
     moveDragPreview_ = {};
     moveDragPreview_.revision = nextMoveDragPreviewRevision_++;
-    refreshRenderModel();
+    ensureRenderBandCoversCurrentViewport(true);
+    FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Interactive);
 }
 
 // ============================================================================
@@ -660,14 +876,14 @@ void ArrangementViewComponent::updateMoveDragPreview(const juce::MouseEvent& e)
     }
 
     moveDragPreview_ = std::move(preview);
-    refreshRenderModel();
+    ensureRenderBandCoversCurrentViewport(true);
+    FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Interactive);
 }
 
 void ArrangementViewComponent::paint(juce::Graphics& g)
 {
-    const auto& renderModel = renderModelCache_.getModel();
-
     const auto themeId = UIColors::currentThemeId();
+    const auto& model = renderModelCache_.getModel();
     
     auto bounds = getLocalBounds().toFloat();
     
@@ -691,9 +907,10 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         g.fillAll(UIColors::rollBackground);
     }
 
-    if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+    if ((themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+        && !model.lanes.empty())
     {
-        for (const auto& laneModel : renderModel.lanes)
+        for (const auto& laneModel : model.lanes)
         {
             auto lane = laneModel.area;
             if (lane.getBottom() < static_cast<float>(rulerHeight_) || lane.getY() > bounds.getBottom())
@@ -715,8 +932,6 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
             g.drawHorizontalLine(juce::roundToInt(lane.getBottom()), lane.getX(), lane.getRight());
         }
     }
-
-    drawGridLines(g);
 
     // ---- Import drop preview highlight (transient, UI-only) ----
     if (importDropPreview_.active)
@@ -745,10 +960,15 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         }
         else if (importDropPreview_.targetTrackId >= 0)
         {
-            // Highlight the target existing track lane
-            const auto laneBounds = getTrackLaneBounds(importDropPreview_.targetTrackId);
-            if (!laneBounds.isEmpty())
-            {
+            // Highlight the target existing track lane from the prepared lane model.
+            for (const auto& laneModel : model.lanes) {
+                if (laneModel.trackId != importDropPreview_.targetTrackId)
+                    continue;
+
+                const auto laneBounds = laneModel.area.getSmallestIntegerContainer();
+                if (laneBounds.isEmpty())
+                    break;
+
                 const juce::Colour previewFill = themeId == ThemeId::Aurora
                     ? UIColors::panelGlow.withAlpha(0.10f)
                     : UIColors::panelGlow.withAlpha(0.12f);
@@ -761,12 +981,10 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
                 g.setColour(previewBorder);
                 g.drawRect(laneBounds.toFloat(), 1.5f);
+                break;
             }
         }
     }
-
-    // Draw placement clips from the prepared render model (no processor data access)
-    drawPlacementClips(g, renderModel, viewportState_);
 
     drawTimeRuler(g);
 
@@ -1231,6 +1449,17 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
 void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
 {
     const auto themeId = UIColors::currentThemeId();
+    const int gridWidth = g.getClipBounds().getWidth();
+    const int gridHeight = g.getClipBounds().getHeight();
+    const auto bandTimeToLocalX = [this](double seconds) {
+        return absoluteTimeToContentX(seconds) - renderBand_.startContentX;
+    };
+    const auto bandStartTime = renderBand_.valid
+        ? renderBand_.startSeconds
+        : viewportState_.viewportXToTime(viewportState_.contentStartX, scrollOffset_);
+    const auto bandEndTime = renderBand_.valid
+        ? renderBand_.endSeconds
+        : viewportState_.viewportXToTime(viewportState_.contentStartX + gridWidth, scrollOffset_);
 
     // Switch between Seconds and Bars based on timeUnit_ (match drawTimeRuler logic)
     if (timeUnit_ == TimeUnit::Bars)
@@ -1244,8 +1473,8 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
         
         double beatInterval = selectBeatInterval(pixelsPerBeat);
         
-        double startTime = viewportXToAbsoluteTime(0);
-        double endTime = viewportXToAbsoluteTime(getWidth());
+        double startTime = bandStartTime;
+        double endTime = bandEndTime;
         
         int64_t startBeat = static_cast<int64_t>(startTime / secondsPerBeat);
         if (startBeat < 0) startBeat = 0;
@@ -1259,11 +1488,11 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
         for (int64_t beat = startBeat; beat <= endBeat; beat += (int64_t)beatInterval)
         {
             double time = beat * secondsPerBeat;
-            int pixelX = absoluteTimeToViewportX(time);
+            const int pixelX = bandTimeToLocalX(time);
             
             // Only draw lines that are visible and within bounds
             // timeToX already handles scroll offset
-            if (pixelX < -2 || pixelX > getWidth() + 2) continue; // Allow slight margin
+            if (pixelX < -2 || pixelX > gridWidth + 2) continue; // Allow slight margin
             
             // Determine if this is a major measure line
             // If beatInterval >= 4 (measures), all are measure lines
@@ -1278,26 +1507,26 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
             if (themeId == ThemeId::DarkBlueGrey)
             {
                 g.setColour(UIColors::panelBorder.withAlpha(0.12f));
-                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
+                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(gridHeight));
             }
             else if (themeId == ThemeId::Aurora)
             {
                 g.setColour(UIColors::gridLine.withAlpha(isMeasure ? 0.060f : 0.022f));
-                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
+                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(gridHeight));
             }
             else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
             {
                 g.setColour(UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f));
-                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
+                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(gridHeight));
             }
             else
             {
                 if (isMeasure) {
                     g.setColour(UIColors::panelBorder.brighter(0.3f));
-                    g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
+                    g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(gridHeight));
                 } else {
                     g.setColour(UIColors::panelBorder.withAlpha(0.25f));
-                    g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
+                    g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(gridHeight));
                 }
             }
         }
@@ -1310,19 +1539,19 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
         
         double markerInterval = selectMarkerInterval(pixelsPerSecond);
 
-        double startTime = viewportXToAbsoluteTime(0);
+        double startTime = bandStartTime;
         if (startTime < 0.0) startTime = 0.0;
         startTime = std::floor(startTime / markerInterval) * markerInterval;
 
-        double endTime = viewportXToAbsoluteTime(getWidth());
+        double endTime = bandEndTime;
 
         // Safety limit: prevent infinite loop if markerInterval is somehow 0
         if (markerInterval < 0.001) markerInterval = 1.0;
 
         for (double time = startTime; time < endTime + markerInterval; time += markerInterval) {
-            int pixelX = absoluteTimeToViewportX(time);
+            const int pixelX = bandTimeToLocalX(time);
             
-            if (pixelX < -2 || pixelX > getWidth() + 2) continue;
+            if (pixelX < -2 || pixelX > gridWidth + 2) continue;
 
             if (themeId == ThemeId::Aurora)
                 g.setColour(UIColors::gridLine.withAlpha(0.022f));
@@ -1330,7 +1559,7 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
                 g.setColour(UIColors::pianoRollGrid.withAlpha(0.022f));
             else
                 g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::panelBorder.withAlpha(0.12f) : UIColors::panelBorder.withAlpha(0.25f));
-            g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(getHeight()));
+            g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(gridHeight));
         }
     }
 }
@@ -1372,8 +1601,8 @@ void ArrangementViewComponent::onHeartbeatTick()
 
     if (progressed) {
         renderModelCache_.invalidate();
-        requestRenderModelUpdate();
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Background);
+        ensureRenderBandCoversCurrentViewport(true);
+        FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Background);
     }
 
     if (!playingNow)
@@ -1384,20 +1613,12 @@ void ArrangementViewComponent::onHeartbeatTick()
 
 void ArrangementViewComponent::performPageScroll(double playheadTime)
 {
-    const int playheadVisualX = absoluteTimeToViewportX(playheadTime);
-
-    if (playheadVisualX >= getWidth()) {
-        int visibleW = getWidth() - kArrangementContentStartX;
-        setScrollOffset(scrollOffset_ + visibleW);
-        smoothScrollCurrent_ = static_cast<float>(scrollOffset_);
-    } else if (playheadVisualX < kArrangementContentStartX) {
-        const int absX = absoluteTimeToContentX(playheadTime);
-        int visibleW = getWidth() - kArrangementContentStartX;
-        int pageIndex = absX / visibleW;
-        int newScroll = pageIndex * visibleW;
+    const int visibleW = getVisibleViewportWidth();
+    const int absX = absoluteTimeToContentX(playheadTime);
+    const int pageIndex = visibleW > 0 ? juce::jmax(0, absX / visibleW) : 0;
+    const int newScroll = pageIndex * visibleW;
+    if (newScroll != scrollOffset_)
         setScrollOffset(newScroll);
-        smoothScrollCurrent_ = static_cast<float>(newScroll);
-    }
 }
 
 void ArrangementViewComponent::updateAutoScroll()
@@ -1413,45 +1634,24 @@ void ArrangementViewComponent::updateAutoScroll()
 
 void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
 {
-    juce::ignoreUnused(timestampSec);
-
     if (!isShowing() || !isPlaying_.load(std::memory_order_relaxed))
         return;
 
-    const double playheadTime = readPlayheadSeconds();
+    const double authoritativeTime = readPlayheadSeconds();
+    updatePresentationClock(authoritativeTime, timestampSec);
+    const double displayPlayheadTime = getDisplayPlayheadTime(timestampSec);
 
     if (scrollMode_ == ScrollMode::Continuous)
     {
-        const float playheadContentX = static_cast<float>(absoluteTimeToContentX(playheadTime));
-
-        float targetScroll = playheadContentX - ((getWidth() - kArrangementContentStartX) / 2.0f);
-        if (targetScroll < 0.0f)
-            targetScroll = 0.0f;
-
-        const float diff = targetScroll - smoothScrollCurrent_;
-        if (std::abs(diff) < 1.0f)
-        {
-            smoothScrollCurrent_ = targetScroll;
-        }
-        else
-        {
-            smoothScrollCurrent_ += diff * 0.1f;
-        }
-
-        const int newScrollInt = static_cast<int>(std::llround(smoothScrollCurrent_));
-        if (newScrollInt != scrollOffset_)
-        {
-            setScrollOffset(newScrollInt);
-        }
-
-        syncPlayheadOverlayToAbsoluteTime(playheadTime);
+        setScrollOffset(static_cast<int>(std::llround(getContinuousFollowTargetScroll(displayPlayheadTime))));
+        updateOverlayPresentation(displayPlayheadTime);
         return;
     }
 
     if (scrollMode_ == ScrollMode::Page)
-        performPageScroll(playheadTime);
+        performPageScroll(displayPlayheadTime);
 
-    syncPlayheadOverlayToAbsoluteTime(playheadTime);
+    updateOverlayPresentation(displayPlayheadTime);
 }
 
 double ArrangementViewComponent::readPlayheadSeconds() const
@@ -1464,13 +1664,13 @@ double ArrangementViewComponent::readPlayheadSeconds() const
 
 void ArrangementViewComponent::syncPlayheadOverlay()
 {
-    syncPlayheadOverlayToAbsoluteTime(readPlayheadSeconds(), !isPlaying_.load(std::memory_order_relaxed));
+    updateOverlayPresentation(readPlayheadSeconds());
 }
 
 void ArrangementViewComponent::syncPlayheadOverlayToAbsoluteTime(double absoluteSeconds, bool repaintOverlay)
 {
     juce::ignoreUnused(repaintOverlay);
-    playheadOverlay_.setPlayheadSeconds(absoluteSeconds);
+    updateOverlayPresentation(absoluteSeconds);
 }
 
 void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)

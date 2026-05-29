@@ -1288,6 +1288,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         transportBar_.setPlaying(processorRef_.isPlaying());
         pianoRoll_.setIsPlaying(processorRef_.isPlaying());
         arrangementView_.setIsPlaying(processorRef_.isPlaying());
+        FrameScheduler::instance().setTimelinePlaybackActive(processorRef_.isPlaying());
     }
 
     if (allowSecondaryRefresh) {
@@ -2441,6 +2442,7 @@ void OpenTuneAudioProcessorEditor::playRequested()
     transportBar_.setPlaying(true);
     pianoRoll_.setIsPlaying(true);  // Notify PianoRoll for auto-scroll
     arrangementView_.setIsPlaying(true);  // Notify ArrangementView for overlay sync
+    FrameScheduler::instance().setTimelinePlaybackActive(true);
 }
 
 void OpenTuneAudioProcessorEditor::pauseRequested()
@@ -2450,6 +2452,7 @@ void OpenTuneAudioProcessorEditor::pauseRequested()
     transportBar_.setPlaying(false);
     pianoRoll_.setIsPlaying(false);  // Notify PianoRoll to stop auto-scroll
     arrangementView_.setIsPlaying(false);  // Notify ArrangementView to stop overlay updates
+    FrameScheduler::instance().setTimelinePlaybackActive(false);
 }
 
 void OpenTuneAudioProcessorEditor::stopRequested()
@@ -2460,6 +2463,7 @@ void OpenTuneAudioProcessorEditor::stopRequested()
     transportBar_.setPlaying(false);
     pianoRoll_.setIsPlaying(false);  // Notify PianoRoll to stop auto-scroll
     arrangementView_.setIsPlaying(false);  // Notify ArrangementView to stop overlay updates
+    FrameScheduler::instance().setTimelinePlaybackActive(false);
 }
 
 void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
@@ -2746,6 +2750,7 @@ void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
         transportBar_.setPlaying(false);
         pianoRoll_.setIsPlaying(false);
         arrangementView_.setIsPlaying(false);
+        FrameScheduler::instance().setTimelinePlaybackActive(false);
     } else {
         double startPos = processorRef_.getPlayStartPosition();
         processorRef_.setPosition(startPos);
@@ -2754,6 +2759,7 @@ void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
         transportBar_.setPlaying(true);
         pianoRoll_.setIsPlaying(true);
         arrangementView_.setIsPlaying(true);
+        FrameScheduler::instance().setTimelinePlaybackActive(true);
     }
 }
 

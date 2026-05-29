@@ -2,8 +2,14 @@
 
 ## Overview
 
-路线图保留 milestone 级摘要。已发布 milestone 归档到 `.planning/milestones/`。当前 active line 是
-**v1.5** PianoRoll Undo/Redo + Async Correction + Playhead Isolation + 累积功能落地。
+路线图只保留 milestone 级摘要。当前活跃主线仍是 **v1.5**，但 2026-05-29 起，
+时间线相关工作的优先级被重新定性为：
+
+**DAW timeline follow rendering architecture 重做**
+
+这不是 `cont` 跟随参数微调，而是一次时间线渲染内核收敛：把播放时间、走带呈现、
+内容绘制三件事拆开，后续实现统一向 `presentation clock + viewport policy + prepared content + overlay`
+收口。
 
 ## Milestones
 
@@ -18,39 +24,51 @@
 | v1.4 Source/Materialization/Placement truth | - | Shipped/Frozen | `.planning/milestones/v1.4-ROADMAP.md` |
 | **v1.5 当前活跃** | - | **Active** | - |
 
-## Current State
+## Current Active Lines
 
-**已落地 v1.5 主要功能：**
+### v1.5 已落地主线
 
-- Custom UndoManager (cursor-based, 500-deep) + PianoRollEditAction。
-- PianoRollCorrectionWorker (async single-slot)。
-- PlayheadOverlayComponent（独立透明层）。
-- RenderBadgeComponent（浮动渲染状态徽章）。
-- F0Timeline 定型。
-- PianoRoll 增强：VBlankAttachment 滚动、Continuous scroll、Line Anchor、per-note Vibrato。
-- ONNX Runtime 内存优化：F0 用完释放、共享 Env、DisableCpuMemArena。
-- GPU/CPU 推理后端重构：删除 DmlRuntimeVerifier、DML1 API。
-- VST3 ARA: multi-region binding、Studio One stopped gate、regular VST3 分流、multi-item birth 闭环。
-- Standalone: ImportDropTarget、Track color system、Shortcuts Shared、Experimental Gate、Snap Settings、Arrangement cache。
-- AUTO(REF): reference-driven pitch + timing alignment 主合同已落地，focused verification 已完成。
-- TimeTool identity seed: processor 单入口播种 identity handles，focused verification 已完成。
+- Custom UndoManager + PianoRollEditAction
+- PianoRollCorrectionWorker
+- PlayheadOverlayComponent
+- RenderBadgeComponent
+- F0Timeline
+- ONNX Runtime 内存优化
+- GPU/CPU 推理后端重构
+- VST3 ARA multi-region / regular-VST3 分流 / multi-item birth
+- Standalone 累积功能
+- AUTO(REF) 主合同
+- TimeTool identity seed
 
-**仍 open：**
+### v1.5 当前最高优先级收口
 
-- Undo/Redo 边界测试。
-- CorrectionWorker 并发验证。
-- `ui` suite exit=1 待解释。
-- L5 手工旅程：Standalone/VST3 undo、宿主验证、macOS bundle inspection。
-- Arrangement min-zoom waveform + cross-track drag preview（planning 阶段）。
+- `DAW timeline follow rendering architecture`
+  - 先反转 focused tests / kill-list 契约
+  - 再做 live implementation
+  - 明确禁止把 steady scroll 继续做成 full repaint / full rebuild 路径
+
+## Open Work
+
+- DAW timeline follow rendering architecture 实装
+- Undo/Redo 边界测试
+- CorrectionWorker 并发验证
+- `ui` suite exit=1 待解释
+- L5 手工旅程：Standalone/VST3 undo、宿主验证、macOS bundle inspection
+- Arrangement min-zoom waveform + cross-track drag preview
+
+## Active Planning Docs
+
+- `.planning/plans/2026-05-29-daw-timeline-follow-rendering-architecture.md`
+- `.planning/plans/2026-05-29-daw-timeline-follow-rendering-architecture-test-verification.md`
 
 ## Next Planning Actions
 
-1. 继续 v1.5 剩余 open 项：Undo/Redo 边界、CorrectionWorker 并发、UI runner。
-2. 补齐 L5 手工旅程和 macOS bundle inspection。
-3. 决定 v1.5 release boundary。
-4. 后续新功能继续沿用“计划文档 + 验证文档 + 单真值 kill list”流程。
+1. 按 2026-05-29 timeline 架构合同开始 live code 重构，不再接受 cont 参数微调作为主方向。
+2. 优先删除 steady scroll 的 full-content invalidation / render-model rebuild 旧契约。
+3. 把 Continuous follow 改为 pinned playhead + viewport presentation policy。
+4. 之后再补 focused build/test、runtime diagnostics、visual smoke、L5 旅程。
 
 ---
 
-*Roadmap 大幅压缩已实现细节。完整 context 见 `.planning/STATE.md`、`.planning/PROJECT.md`。*
-*Last updated: 2026-05-28*
+*Roadmap 只保留当前主线与优先级。完整上下文见 `.planning/STATE.md` 与各计划文档。*
+*Last updated: 2026-05-29*

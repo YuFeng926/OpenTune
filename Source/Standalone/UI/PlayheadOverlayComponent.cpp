@@ -122,6 +122,29 @@ void PlayheadOverlayComponent::setPianoKeyWidth(int width)
     repaintPlayheadDirty(oldX, newX);
 }
 
+void PlayheadOverlayComponent::setPinnedViewportX(double x)
+{
+    if (usePinnedViewportX_ && pinnedViewportX_ == x)
+        return;
+
+    const double oldX = calculatePlayheadPixelX(playheadSeconds_);
+    pinnedViewportX_ = x;
+    usePinnedViewportX_ = true;
+    const double newX = calculatePlayheadPixelX(playheadSeconds_);
+    repaintPlayheadDirty(oldX, newX);
+}
+
+void PlayheadOverlayComponent::clearPinnedViewportX()
+{
+    if (!usePinnedViewportX_)
+        return;
+
+    const double oldX = calculatePlayheadPixelX(playheadSeconds_);
+    usePinnedViewportX_ = false;
+    const double newX = calculatePlayheadPixelX(playheadSeconds_);
+    repaintPlayheadDirty(oldX, newX);
+}
+
 void PlayheadOverlayComponent::setPlaying(bool playing)
 {
     if (isPlaying_ == playing)
@@ -142,6 +165,10 @@ void PlayheadOverlayComponent::setPlaying(bool playing)
 
 double PlayheadOverlayComponent::calculatePlayheadPixelX(double seconds) const
 {
+    if (usePinnedViewportX_) {
+        return pinnedViewportX_;
+    }
+
     const double visibleTime = seconds - timelineStartSeconds_;
     if (visibleTime < 0.0) return static_cast<double>(pianoKeyWidth_);
 

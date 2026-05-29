@@ -16,6 +16,7 @@
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/TimeCoordinate.h"
 #include "UI/UiAssets.h"
+#include "UI/FrameScheduler.h"
 
 #if JucePlugin_Enable_ARA
 #include "ARA/OpenTuneDocumentController.h"
@@ -331,6 +332,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     if (transportBar_.isPlaying() != playing) {
         transportBar_.setPlaying(playing);
         pianoRoll_.setIsPlaying(playing);
+        FrameScheduler::instance().setTimelinePlaybackActive(playing);
     }
 
     // Drive PianoRoll heartbeat first so autoTuneInFlight_ is up-to-date
@@ -846,6 +848,7 @@ void OpenTuneAudioProcessorEditor::playRequested()
         processorRef_.setPlayingStateOnly(true);
         transportBar_.setPlaying(true);
         pianoRoll_.setIsPlaying(true);
+        FrameScheduler::instance().setTimelinePlaybackActive(true);
         return;
     }
 #endif
@@ -860,6 +863,7 @@ void OpenTuneAudioProcessorEditor::pauseRequested()
         processorRef_.setPlayingStateOnly(false);
         transportBar_.setPlaying(false);
         pianoRoll_.setIsPlaying(false);
+        FrameScheduler::instance().setTimelinePlaybackActive(false);
         return;
     }
 #endif
@@ -875,6 +879,7 @@ void OpenTuneAudioProcessorEditor::stopRequested()
         processorRef_.setPosition(0.0);
         transportBar_.setPlaying(false);
         pianoRoll_.setIsPlaying(false);
+        FrameScheduler::instance().setTimelinePlaybackActive(false);
         return;
     }
 #endif

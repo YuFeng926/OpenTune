@@ -21,6 +21,8 @@ public:
     void setScrollOffset(double offset);
     void setTimelineStartSeconds(double seconds);
     void setPianoKeyWidth(int width);
+    void setPinnedViewportX(double x);
+    void clearPinnedViewportX();
     void setPlaying(bool playing);
 
     void setPlayheadColour(juce::Colour colour) { playheadColour_ = colour; }
@@ -43,6 +45,8 @@ private:
     double scrollOffset_{0.0};
     double timelineStartSeconds_{0.0};
     int pianoKeyWidth_{60};
+    double pinnedViewportX_{0.0};
+    bool usePinnedViewportX_{false};
     bool isPlaying_{false};
 
     juce::Colour playheadColour_{0xFFE74C3C};

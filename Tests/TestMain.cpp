@@ -1449,12 +1449,20 @@ void runPianoRollComponentSourceGuardPaintUsesCachedNotesInsteadOfProcessorReadT
         "Source/Standalone/UI/PianoRollComponent.cpp",
         "void PianoRollComponent::paint",
         "void PianoRollComponent::setInferenceActive");
+    const auto contentSurfaceSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::rebuildContentSurface() const",
+        "void PianoRollComponent::updateContentSurfaceBounds() const");
     const auto renderItemSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/PianoRollComponent.cpp",
         "PianoRollRenderer::MaterializationRenderItem PianoRollComponent::buildMaterializationRenderItem",
         "void PianoRollComponent::visibilityChanged");
     if (paintSection.isEmpty()) {
         logFail(testName, "failed to locate piano-roll paint source section");
+        return;
+    }
+    if (contentSurfaceSection.isEmpty()) {
+        logFail(testName, "failed to locate piano-roll content-surface rebuild section");
         return;
     }
     if (renderItemSection.isEmpty()) {
@@ -1469,8 +1477,8 @@ void runPianoRollComponentSourceGuardPaintUsesCachedNotesInsteadOfProcessorReadT
 
     if (!renderItemSection.contains("item.displayNotes = getDisplayedNotes()")
         || !renderItemSection.contains("item.displayNotes = processor_->getMaterializationNotesById(placement.materializationId)")
-        || !paintSection.contains("renderer_->drawNotes(g, ctx, item)")) {
-        logFail(testName, "paint path must keep draft/display notes scoped to note rendering");
+        || !contentSurfaceSection.contains("renderer_->drawNotes(g, ctx, item)")) {
+        logFail(testName, "content-surface rebuild must keep draft/display notes scoped to note rendering");
         return;
     }
 
@@ -6069,38 +6077,18 @@ void runChannelLayoutPrepareImportRejectsMultichannelTest()
 void runTimelinePlayheadOverlayDirtyRectOnlyTest()
 {
     constexpr const char* testName = "TimelinePlayhead_OverlayDirtyRectOnly";
+    const auto& source = getFileCache().get("Source/Standalone/UI/PlayheadOverlayComponent.cpp");
 
-    const auto setPlayheadSection = extractWorkspaceFileSection(
-        "Source/Standalone/UI/PlayheadOverlayComponent.h",
-        "void setPlayheadSeconds",
-        "void setZoomLevel");
-    const auto setZoomSection = extractWorkspaceFileSection(
-        "Source/Standalone/UI/PlayheadOverlayComponent.h",
-        "void setZoomLevel",
-        "void setScrollOffset");
-    const auto setScrollSection = extractWorkspaceFileSection(
-        "Source/Standalone/UI/PlayheadOverlayComponent.h",
-        "void setScrollOffset",
-        "void setTimelineStart");
-    const auto setTimelineSection = extractWorkspaceFileSection(
-        "Source/Standalone/UI/PlayheadOverlayComponent.h",
-        "void setTimelineStartSeconds",
-        "void setPianoKeyWidth");
-
-    if (setPlayheadSection.isEmpty() || setZoomSection.isEmpty()
-        || setScrollSection.isEmpty() || setTimelineSection.isEmpty()) {
-        logFail(testName, "failed to locate PlayheadOverlayComponent setter sections");
+    if (!source.contains("void PlayheadOverlayComponent::setPlayheadSeconds")
+        || !source.contains("void PlayheadOverlayComponent::setZoomLevel")
+        || !source.contains("void PlayheadOverlayComponent::setScrollOffset")
+        || !source.contains("void PlayheadOverlayComponent::setTimelineStartSeconds")
+        || !source.contains("void PlayheadOverlayComponent::setPianoKeyWidth")) {
+        logFail(testName, "failed to locate PlayheadOverlayComponent setters");
         return;
     }
 
-    // Each setter must NOT use unconditional repaint() — must use dirty-rect union of old+new
-    bool anyUnconditionalRepaint = false;
-    if (setPlayheadSection.contains("repaint()")) anyUnconditionalRepaint = true;
-    if (setZoomSection.contains("repaint()")) anyUnconditionalRepaint = true;
-    if (setScrollSection.contains("repaint()")) anyUnconditionalRepaint = true;
-    if (setTimelineSection.contains("repaint()")) anyUnconditionalRepaint = true;
-
-    if (anyUnconditionalRepaint) {
+    if (source.contains("repaint();")) {
         logFail(testName, "PlayheadOverlay setter(s) still use unconditional repaint() — must use dirty-rect union of old+new narrow rects");
         return;
     }
@@ -6425,41 +6413,64 @@ void runArrangementNudgeShortcutsParticipateInUndoRedoTest()
     logPass(testName);
 }
 
-void runTimelineInvalidationScrollOffsetRequestsFullContentRepaintTest()
+void runTimelineInvalidationScrollOffsetUsesViewportShiftOrEquivalentDirtyStripTest()
 {
-    constexpr const char* testName = "TimelineInvalidation_ScrollOffsetRequestsFullContentRepaint";
+    constexpr const char* testName = "TimelineInvalidation_ScrollOffsetUsesViewportShiftOrEquivalentDirtyStrip";
 
-    const auto pianoScrollSection = extractWorkspaceFileSection(
-        "Source/Standalone/UI/PianoRollComponent.cpp",
-        "void PianoRollComponent::setScrollOffset",
-        "double PianoRollComponent::readPlayheadTime");
+    auto extractSection = [](const juce::String& relativePath,
+                             const juce::String& startNeedle,
+                             const juce::String& endNeedle) {
+        const auto& source = getFileCache().get(relativePath);
+        const auto start = source.indexOf(startNeedle);
+        if (start < 0)
+            return juce::String{};
 
-    const auto arrScrollSection = extractWorkspaceFileSection(
-        "Source/Standalone/UI/ArrangementViewComponent.cpp",
-        "void ArrangementViewComponent::setScrollOffset",
-        "void ArrangementViewComponent::mouseDown");
+        const auto end = source.indexOf(start + startNeedle.length(), endNeedle);
+        if (end < 0 || end <= start)
+            return juce::String{};
+
+        return source.substring(start, end);
+    };
+
+    const auto pianoScrollSection = extractSection("Source/Standalone/UI/PianoRollComponent.cpp",
+                                                   "void PianoRollComponent::setScrollOffset",
+                                                   "double PianoRollComponent::readPlayheadTime");
+
+    const auto arrScrollSection = extractSection("Source/Standalone/UI/ArrangementViewComponent.cpp",
+                                                 "void ArrangementViewComponent::setScrollOffset",
+                                                 "void ArrangementViewComponent::setVerticalScrollOffset");
 
     if (pianoScrollSection.isEmpty() || arrScrollSection.isEmpty()) {
         logFail(testName, "failed to locate scroll methods");
         return;
     }
 
-    if (pianoScrollSection.contains("exposed strip")
+    const bool pianoUsesViewportShift = pianoScrollSection.contains("exposedStripForScrollDelta")
         || pianoScrollSection.contains("dirtyArea")
-        || pianoScrollSection.contains("getTimelineViewportBounds")) {
-        logFail(testName, "PianoRoll scroll still uses an exposed-strip repaint contract");
+        || pianoScrollSection.contains("getTimelineViewportBounds")
+        || pianoScrollSection.contains("requestViewportShift");
+    if (!pianoUsesViewportShift) {
+        logFail(testName, "PianoRoll scroll path is not wired to viewport-shift/exposed-strip presentation invalidation");
         return;
     }
 
-    if (arrScrollSection.contains("exposedStripForScrollDelta")
-        || arrScrollSection.contains("requestViewportShift")) {
-        logFail(testName, "Arrangement scroll still uses an exposed-strip repaint contract");
+    const bool arrangementUsesViewportShift = arrScrollSection.contains("exposedStripForScrollDelta")
+        || arrScrollSection.contains("requestViewportShift");
+    if (!arrangementUsesViewportShift) {
+        logFail(testName, "Arrangement scroll path is not wired to viewport-shift/exposed-strip presentation invalidation");
         return;
     }
 
-    if (!pianoScrollSection.contains("PianoRollVisualInvalidationReason::Viewport")
-        || !arrScrollSection.contains("FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive)")) {
-        logFail(testName, "scroll offset changes do not request full content repaint");
+    if (pianoScrollSection.contains("prepareVisibleRenderModel()")
+        || arrScrollSection.contains("requestRenderModelUpdate()")
+        || arrScrollSection.contains("FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive)")) {
+        logFail(testName, "steady follow-scroll still promotes scroll offset changes to content-model rebuild/full-content repaint");
+        return;
+    }
+
+    if (!pianoScrollSection.contains("const auto dirtyArea = viewportState.exposedStripForScrollDelta(oldOffset, newOffset);")
+        || !arrScrollSection.contains("const auto dirtyArea = viewportState_.exposedStripForScrollDelta(oldOffset, newOffset);")) {
+        logFail(testName, "scroll path no longer materializes a component-local dirty strip before dispatch");
         return;
     }
 
@@ -6468,7 +6479,7 @@ void runTimelineInvalidationScrollOffsetRequestsFullContentRepaintTest()
 
 void runTimelineInvalidationBigJumpPromotesToSingleFullRedrawTest()
 {
-    constexpr const char* testName = "TimelineInvalidation_ExposedStripHelperIsNotScrollContract";
+    constexpr const char* testName = "TimelineInvalidation_BigJumpPromotesToSingleFullRedraw";
 
     TimelineViewportState viewport;
     viewport.viewportWidthPx = 800;
@@ -6480,20 +6491,36 @@ void runTimelineInvalidationBigJumpPromotesToSingleFullRedrawTest()
         return;
     }
 
+    if (smallStrip.getX() != viewport.contentStartX + viewport.viewportWidthPx - 120
+        || smallStrip.getY() != 0
+        || smallStrip.getHeight() != viewport.viewportHeightPx) {
+        logFail(testName, "small-scroll dirty strip is no longer in component-local coordinates with ruler coverage");
+        return;
+    }
+
     const auto bigStrip = viewport.exposedStripForScrollDelta(0, 801);
     if (!bigStrip.isEmpty() || !viewport.requiresFullRedrawForDelta(0, 801)) {
         logFail(testName, "exposed-strip helper no longer promotes big-scroll geometry to full redraw");
         return;
     }
 
+    const auto pianoScrollSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::setScrollOffset",
+        "double PianoRollComponent::readPlayheadTime");
     const auto arrScrollSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/ArrangementViewComponent.cpp",
         "void ArrangementViewComponent::setScrollOffset",
         "void ArrangementViewComponent::setVerticalScrollOffset");
 
-    if (arrScrollSection.contains("exposedStripForScrollDelta")
-        || arrScrollSection.contains("requestViewportShift")) {
-        logFail(testName, "Arrangement scroll still treats exposed-strip geometry as a repaint contract");
+    if (pianoScrollSection.isEmpty() || arrScrollSection.isEmpty()) {
+        logFail(testName, "failed to locate scroll methods");
+        return;
+    }
+
+    if (!pianoScrollSection.contains("requiresFullRedrawForDelta")
+        && !arrScrollSection.contains("requiresFullRedrawForDelta")) {
+        logFail(testName, "scroll path is not prepared to promote large viewport jumps to full redraw");
         return;
     }
 
@@ -6772,7 +6799,8 @@ void runPianoRollVerticalGeometryInvalidatesRenderModelKeyTest()
 
     if (!componentHeader.contains("refreshVerticalViewportGeometry")
         || !refreshSection.contains("updateScrollBars();")
-        || !refreshSection.contains("prepareVisibleRenderModel();")
+        || (!refreshSection.contains("prepareVisibleRenderModel();")
+            && !refreshSection.contains("ensureRenderBandCoversCurrentViewport(true);"))
         || !refreshSection.contains("invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport)")) {
         logFail(testName, "vertical geometry helper must update scrollbars, prepare model, and invalidate viewport");
         return;
@@ -6846,9 +6874,9 @@ void runPianoRollRenderContextUsesSnapshotVerticalCoordinatesTest()
     logPass(testName);
 }
 
-void runArrangementScrollOffsetInvalidatesFullContentWithoutPaintWorkTest()
+void runArrangementScrollOffsetUsesViewportShiftWithoutImmediateRenderModelRebuildTest()
 {
-    constexpr const char* testName = "Arrangement_ScrollOffsetInvalidatesFullContentWithoutPaintWork";
+    constexpr const char* testName = "Arrangement_ScrollOffsetUsesViewportShiftWithoutImmediateRenderModelRebuild";
 
     const auto paintSection = extractWorkspaceFileSection(
         "Source/Standalone/UI/ArrangementViewComponent.cpp",
@@ -6864,11 +6892,20 @@ void runArrangementScrollOffsetInvalidatesFullContentWithoutPaintWorkTest()
         return;
     }
 
-    if (!scrollSection.contains("requestRenderModelUpdate()")
-        || !scrollSection.contains("FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive)")
-        || scrollSection.contains("requestViewportShift")
-        || scrollSection.contains("exposedStripForScrollDelta")) {
-        logFail(testName, "Arrangement scroll offset changes are not full-content invalidations");
+    if (!scrollSection.contains("requestViewportShift")
+        && !scrollSection.contains("exposedStripForScrollDelta")) {
+        logFail(testName, "Arrangement scroll offset changes are not routed through viewport-shift/exposed-strip invalidation");
+        return;
+    }
+
+    if (!scrollSection.contains("const auto dirtyArea = viewportState_.exposedStripForScrollDelta(oldOffset, newOffset);")) {
+        logFail(testName, "Arrangement steady scroll does not compute a component-local dirty strip before scheduling repaint");
+        return;
+    }
+
+    if (scrollSection.contains("requestRenderModelUpdate()")
+        || scrollSection.contains("FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive)")) {
+        logFail(testName, "Arrangement steady scroll still performs immediate render-model rebuild/full-content invalidation");
         return;
     }
 
@@ -6897,7 +6934,10 @@ void runArrangementPaintConsumesVisibleRenderModelOnlyTest()
         "void ArrangementViewComponent::paint",
         "void ArrangementViewComponent::drawTimeRuler");
 
-    if (paintSection.isEmpty()) return;
+    if (paintSection.isEmpty()) {
+        logFail(testName, "failed to locate ArrangementViewComponent::paint");
+        return;
+    }
 
     // paint() must NOT lock placements or refresh the model per-paint
     if (paintSection.contains("getPlacementByIndex")
@@ -6918,8 +6958,9 @@ void runArrangementVisibleRangeCullsOffscreenPlacementsTest()
     const auto& cacheHeader = getFileCache().get("Source/Standalone/UI/ArrangementRenderModelCache.h");
     const auto& cacheSource = getFileCache().get("Source/Standalone/UI/ArrangementRenderModelCache.cpp");
 
-    if (!cacheHeader.contains("visibleTimeStart") || !cacheHeader.contains("visibleTimeEnd")) {
-        logFail(testName, "Arrangement render-model key does not include visible time range");
+    if ((!cacheHeader.contains("visibleTimeStart") || !cacheHeader.contains("visibleTimeEnd"))
+        && (!cacheHeader.contains("bandStart") || !cacheHeader.contains("bandEnd"))) {
+        logFail(testName, "Arrangement render-model cache no longer records either visible-window or render-band bounds");
         return;
     }
 
@@ -7039,9 +7080,9 @@ void runTimelineKillListNoFullOverlayRepaintForPositionTest()
     constexpr const char* testName = "TimelineKillList_NoFullOverlayRepaintForPosition";
 
     const auto setPlayheadSection = extractWorkspaceFileSection(
-        "Source/Standalone/UI/PlayheadOverlayComponent.h",
-        "void setPlayheadSeconds",
-        "void setZoomLevel");
+        "Source/Standalone/UI/PlayheadOverlayComponent.cpp",
+        "void PlayheadOverlayComponent::setPlayheadSeconds",
+        "void PlayheadOverlayComponent::setZoomLevel");
 
     if (!setPlayheadSection.isEmpty()
         && setPlayheadSection.contains("repaint()")
@@ -7074,35 +7115,209 @@ void runTimelineKillListNoPaintTimeRenderContextBuildTest()
     logPass(testName);
 }
 
-void runTimelineKillListScrollTimeFullContentInvalidationTest()
+void runTimelineKillListNoSteadyScrollFullContentInvalidationTest()
 {
-    constexpr const char* testName = "TimelineKillList_ScrollTimeFullContentInvalidation";
+    constexpr const char* testName = "TimelineKillList_NoSteadyScrollFullContentInvalidation";
 
-    const auto pianoScrollSection = extractWorkspaceFileSection(
-        "Source/Standalone/UI/PianoRollComponent.cpp",
-        "void PianoRollComponent::setScrollOffset",
-        "double PianoRollComponent::readPlayheadTime");
-    const auto arrScrollSection = extractWorkspaceFileSection(
-        "Source/Standalone/UI/ArrangementViewComponent.cpp",
-        "void ArrangementViewComponent::setScrollOffset",
-        "void ArrangementViewComponent::mouseDown");
+    auto extractSection = [](const juce::String& relativePath,
+                             const juce::String& startNeedle,
+                             const juce::String& endNeedle) {
+        const auto& source = getFileCache().get(relativePath);
+        const auto start = source.indexOf(startNeedle);
+        if (start < 0)
+            return juce::String{};
+
+        const auto end = source.indexOf(start + startNeedle.length(), endNeedle);
+        if (end < 0 || end <= start)
+            return juce::String{};
+
+        return source.substring(start, end);
+    };
+
+    const auto pianoScrollSection = extractSection("Source/Standalone/UI/PianoRollComponent.cpp",
+                                                   "void PianoRollComponent::setScrollOffset",
+                                                   "double PianoRollComponent::readPlayheadTime");
+    const auto arrScrollSection = extractSection("Source/Standalone/UI/ArrangementViewComponent.cpp",
+                                                 "void ArrangementViewComponent::setScrollOffset",
+                                                 "void ArrangementViewComponent::setVerticalScrollOffset");
 
     if (pianoScrollSection.isEmpty() || arrScrollSection.isEmpty()) {
         logFail(testName, "failed to locate scroll methods");
         return;
     }
 
-    if (pianoScrollSection.contains("dirtyArea")
-        || pianoScrollSection.contains("getTimelineViewportBounds")
-        || arrScrollSection.contains("exposedStripForScrollDelta")
-        || arrScrollSection.contains("requestViewportShift")) {
-        logFail(testName, "scroll offset changes still preserve the stale exposed-strip repaint path");
+    if (pianoScrollSection.contains("prepareVisibleRenderModel()")
+        || arrScrollSection.contains("requestRenderModelUpdate()")
+        || arrScrollSection.contains("requestInvalidate(*this, FrameScheduler::Priority::Interactive)")) {
+        logFail(testName, "steady scroll still preserves the stale full-content invalidation path");
         return;
     }
 
-    if (!pianoScrollSection.contains("PianoRollVisualInvalidationReason::Viewport")
-        || !arrScrollSection.contains("requestInvalidate(*this, FrameScheduler::Priority::Interactive)")) {
-        logFail(testName, "scroll offset changes are not wired to full content invalidation");
+    if ((!pianoScrollSection.contains("dirtyArea")
+         && !pianoScrollSection.contains("getTimelineViewportBounds")
+         && !pianoScrollSection.contains("requestViewportShift"))
+        || (!arrScrollSection.contains("exposedStripForScrollDelta")
+            && !arrScrollSection.contains("requestViewportShift"))) {
+        logFail(testName, "steady scroll is not routed through the new viewport-shift presentation path");
+        return;
+    }
+
+    if (!pianoScrollSection.contains("const auto dirtyArea = viewportState.exposedStripForScrollDelta(oldOffset, newOffset);")
+        || !arrScrollSection.contains("const auto dirtyArea = viewportState_.exposedStripForScrollDelta(oldOffset, newOffset);")) {
+        logFail(testName, "steady scroll no longer computes an explicit presentation dirty strip before scheduling repaint");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelineContentSurfaceOffsetShiftStaysBlitOnlyTest()
+{
+    constexpr const char* testName = "TimelineContentSurface_OffsetShiftStaysBlitOnly";
+
+    const auto pianoSurfaceSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.h",
+        "void setImageOffsetX(int offsetX)",
+        "void clearSurfaceImage()");
+    const auto arrangementSurfaceSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.h",
+        "void setImageOffsetX(int offsetX)",
+        "void clearSurfaceImage()");
+
+    if (pianoSurfaceSection.isEmpty() || arrangementSurfaceSection.isEmpty()) {
+        logFail(testName, "failed to locate content-surface offset helpers");
+        return;
+    }
+
+    if (pianoSurfaceSection.contains("repaint();") || arrangementSurfaceSection.contains("repaint();")) {
+        logFail(testName, "content-surface offset helper still triggers full child repaint during steady scroll");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelinePageFollowUsesDeterministicPagePolicyTest()
+{
+    constexpr const char* testName = "TimelinePageFollow_UsesDeterministicPagePolicy";
+
+    const auto pianoVBlankSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::onScrollVBlankCallback",
+        "void PianoRollComponent::setZoomLevel");
+    const auto arrangementPageSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::performPageScroll",
+        "void ArrangementViewComponent::updateAutoScroll");
+
+    if (pianoVBlankSection.isEmpty() || arrangementPageSection.isEmpty()) {
+        logFail(testName, "failed to locate deterministic page-follow sections");
+        return;
+    }
+
+    if (!arrangementPageSection.contains("const int pageIndex = visibleW > 0 ? juce::jmax(0, absX / visibleW) : 0;")
+        || !arrangementPageSection.contains("const int newScroll = pageIndex * visibleW;")) {
+        logFail(testName, "Arrangement page follow no longer derives scroll from deterministic page index");
+        return;
+    }
+
+    if (arrangementPageSection.contains("scrollOffset_ + visibleW")
+        || arrangementPageSection.contains("playheadVisualX >=")
+        || arrangementPageSection.contains("playheadVisualX <")) {
+        logFail(testName, "Arrangement page follow still relies on boundary-chase logic");
+        return;
+    }
+
+    if (!pianoVBlankSection.contains("const int pageIndex = visibleWidth > 0 ? juce::jmax(0, absX / visibleWidth) : 0;")
+        || !pianoVBlankSection.contains("const int newScroll = pageIndex * visibleWidth;")) {
+        logFail(testName, "PianoRoll page follow no longer derives scroll from deterministic page index");
+        return;
+    }
+
+    if (pianoVBlankSection.contains("playheadVisualX >=")
+        || pianoVBlankSection.contains("playheadVisualX < pianoKeyWidth_")
+        || pianoVBlankSection.contains("setScrollOffset(scrollOffset_ + visibleWidth);")) {
+        logFail(testName, "PianoRoll page follow still relies on old chase/boundary logic");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelinePresentationClockUsesTruePredictionTest()
+{
+    constexpr const char* testName = "TimelinePresentationClock_UsesTruePrediction";
+
+    const auto pianoClockSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::updatePresentationClock",
+        "void PianoRollComponent::resetPresentationClock");
+    const auto arrangementClockSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "void ArrangementViewComponent::updatePresentationClock",
+        "void ArrangementViewComponent::resetPresentationClock");
+
+    if (pianoClockSection.isEmpty() || arrangementClockSection.isEmpty()) {
+        logFail(testName, "failed to locate presentation clock update sections");
+        return;
+    }
+
+    if (!pianoClockSection.contains("const double predictedNow = getDisplayPlayheadTime(timestampSec);")
+        || !pianoClockSection.contains("const double predictionError = authoritativeTime - predictedNow;")
+        || !pianoClockSection.contains("const double authoritativeDelta = authoritativeTime - lastAuthoritativePlayheadTime_;")
+        || !pianoClockSection.contains("const double observationGap = juce::jmax(0.0, timestampSec - presentationClockLastObservationTimestampSec_);")
+        || !pianoClockSection.contains("if (discontinuity)")
+        || !pianoClockSection.contains("authoritativeDelta > observationGap + 0.050")
+        || !pianoClockSection.contains("presentationClockLastObservationTimestampSec_ = timestampSec;")) {
+        logFail(testName, "PianoRoll presentation clock no longer computes prediction/drift against the prior observation");
+        return;
+    }
+
+    if (!arrangementClockSection.contains("const double predictedNow = getDisplayPlayheadTime(timestampSec);")
+        || !arrangementClockSection.contains("const double predictionError = authoritativeTime - predictedNow;")
+        || !arrangementClockSection.contains("const double authoritativeDelta = authoritativeTime - lastAuthoritativePlayheadTime_;")
+        || !arrangementClockSection.contains("const double observationGap = juce::jmax(0.0, timestampSec - presentationClockLastObservationTimestampSec_);")
+        || !arrangementClockSection.contains("if (discontinuity)")
+        || !arrangementClockSection.contains("authoritativeDelta > observationGap + 0.050")
+        || !arrangementClockSection.contains("presentationClockLastObservationTimestampSec_ = timestampSec;")) {
+        logFail(testName, "Arrangement presentation clock no longer computes prediction/drift against the prior observation");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runTimelinePianoRollRulerUsesPresentationContextTest()
+{
+    constexpr const char* testName = "TimelinePianoRollRuler_UsesPresentationContext";
+
+    const auto paintSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::paint",
+        "void PianoRollComponent::paintOverChildren");
+    const auto contextSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "PianoRollRenderer::RenderContext PianoRollComponent::makePresentationRenderContext() const",
+        "bool PianoRollComponent::preparedRenderBandCoversViewport");
+
+    if (paintSection.isEmpty() || contextSection.isEmpty()) {
+        logFail(testName, "failed to locate PianoRoll paint/presentation-context sections");
+        return;
+    }
+
+    if (!paintSection.contains("renderer_->drawTimeRuler(g, makePresentationRenderContext());")) {
+        logFail(testName, "PianoRoll ruler is not explicitly using the current presentation context");
+        return;
+    }
+
+    if (paintSection.contains("renderer_->drawTimeRuler(g, ctx);")) {
+        logFail(testName, "PianoRoll ruler still uses the render-band cache context");
+        return;
+    }
+
+    if (!contextSection.contains("ctx.timeToX = [viewportState](double seconds) { return viewportState.timeToViewportX(seconds); };")
+        || !contextSection.contains("ctx.xToTime = [viewportState](int x) { return viewportState.viewportXToTime(x); };")) {
+        logFail(testName, "PianoRoll presentation context no longer remaps ruler time math to the live viewport");
         return;
     }
 
@@ -7115,6 +7330,7 @@ void runTimelineKillListNoUnboundedUiCachesTest()
 
     bool pianoCacheExists = workspaceFileExists("Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h");
     bool arrCacheExists = workspaceFileExists("Source/Standalone/UI/ArrangementRenderModelCache.h");
+    bool waveformMipmapExists = workspaceFileExists("Source/Standalone/UI/WaveformMipmap.h");
 
     // If any cache already exists, verify bounded memory
     auto checkBounded = [](const juce::String& relativePath, const char* label) -> bool {
@@ -7122,7 +7338,8 @@ void runTimelineKillListNoUnboundedUiCachesTest()
         juce::ignoreUnused(label);
         return source.contains("kMaxEntries")
             || source.contains("kMaxTiles")
-            || source.contains("evict");
+            || source.contains("evict")
+            || source.contains("prune");
     };
 
     if (pianoCacheExists && !checkBounded("Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h", "PianoCache")) {
@@ -7131,6 +7348,10 @@ void runTimelineKillListNoUnboundedUiCachesTest()
     }
     if (arrCacheExists && !checkBounded("Source/Standalone/UI/ArrangementRenderModelCache.h", "ArrangementCache")) {
         logFail(testName, "ArrangementRenderModelCache missing bounded memory guard");
+        return;
+    }
+    if (waveformMipmapExists && !checkBounded("Source/Standalone/UI/WaveformMipmap.h", "WaveformMipmapCache")) {
+        logFail(testName, "WaveformMipmapCache missing prune/eviction-style bounded memory guard");
         return;
     }
 
@@ -8746,7 +8967,7 @@ void runArrangementScrollBarsUseSharedTimeMathAndBoundedOffsetsTest()
     }
 
     if (!source.contains("int ArrangementViewComponent::getTotalContentWidth() const")
-        || !source.contains("return viewportState_.timeToContentX(maxEndTime);")) {
+        || !source.contains("viewportState_.timeToContentX(maxEndTime)")) {
         logFail(testName, "Arrangement content width must come from shared TimelineViewportState time math");
         return;
     }
@@ -8756,7 +8977,8 @@ void runArrangementScrollBarsUseSharedTimeMathAndBoundedOffsetsTest()
         return;
     }
 
-    if (!scrollBarSection.contains("const int visibleWidth = juce::jmax(1, getWidth() - UIColors::scrollBarThickness);")
+    if ((!scrollBarSection.contains("const int visibleWidth = juce::jmax(1, getWidth() - UIColors::scrollBarThickness);")
+         && !scrollBarSection.contains("const int visibleWidth = getVisibleViewportWidth();"))
         || !scrollBarSection.contains("horizontalScrollBar_.setRangeLimits(0.0, totalContentWidth + visibleWidth, juce::dontSendNotification);")
         || !scrollBarSection.contains("horizontalScrollBar_.setCurrentRange(scrollOffset_, visibleWidth, juce::dontSendNotification);")) {
         logFail(testName, "Arrangement scroll bar contract must guard visible width and suppress self-feedback notifications");
@@ -10646,7 +10868,7 @@ void runTimelineRenderingSuite()
     // L1: Static Contract Gate (source guards)
     runTimelinePlayheadOverlayDirtyRectOnlyTest();
     runTimelinePlayheadPositionDoesNotEnterRenderModelKeyTest();
-    runTimelineInvalidationScrollOffsetRequestsFullContentRepaintTest();
+    runTimelineInvalidationScrollOffsetUsesViewportShiftOrEquivalentDirtyStripTest();
     runTimelineInvalidationBigJumpPromotesToSingleFullRedrawTest();
     runPianoRollPlayheadOnlyTicksDoNotRebuildRenderModelTest();
     runPianoRollStoppedSeekKeepsPresentationIntentTest();
@@ -10655,7 +10877,11 @@ void runTimelineRenderingSuite()
     runPianoRollVisibleRangeCullsNotesF0AndWaveformTilesTest();
     runPianoRollVerticalGeometryInvalidatesRenderModelKeyTest();
     runPianoRollRenderContextUsesSnapshotVerticalCoordinatesTest();
-    runArrangementScrollOffsetInvalidatesFullContentWithoutPaintWorkTest();
+    runArrangementScrollOffsetUsesViewportShiftWithoutImmediateRenderModelRebuildTest();
+    runTimelineContentSurfaceOffsetShiftStaysBlitOnlyTest();
+    runTimelinePageFollowUsesDeterministicPagePolicyTest();
+    runTimelinePresentationClockUsesTruePredictionTest();
+    runTimelinePianoRollRulerUsesPresentationContextTest();
     runArrangementScrollBarsUseSharedTimeMathAndBoundedOffsetsTest();
     runArrangementPaintConsumesVisibleRenderModelOnlyTest();
     runArrangementVisibleRangeCullsOffscreenPlacementsTest();
@@ -10671,7 +10897,7 @@ void runTimelineRenderingSuite()
     // Kill list guards
     runTimelineKillListNoFullOverlayRepaintForPositionTest();
     runTimelineKillListNoPaintTimeRenderContextBuildTest();
-    runTimelineKillListScrollTimeFullContentInvalidationTest();
+    runTimelineKillListNoSteadyScrollFullContentInvalidationTest();
     runTimelineKillListNoUnboundedUiCachesTest();
     runTimelineKillListNoProcessorOwnedUiCacheTest();
 }
@@ -10733,13 +10959,14 @@ void runTimelineRenderingPerfSuite()
 
     FrameScheduler::instance().resetDiagnosticsForTests();
     for (int i = 0; i < 180; ++i)
-        FrameScheduler::instance().requestInvalidate(contentComponent, FrameScheduler::Priority::Interactive);
+        FrameScheduler::instance().requestViewportShift(contentComponent, {i % 100, 0, 12, 720});
     const auto scrollSnapshot = FrameScheduler::instance().diagnosticsSnapshot();
 
-    constexpr const char* scrollPerfTest = "TimelinePerf_ContinuousScrollUsesFullContentInvalidation";
-    if (scrollSnapshot.contentInvalidationRequests < 180
-        || scrollSnapshot.viewportShiftRequests != 0) {
-        logFail(scrollPerfTest, "continuous scroll simulation did not use full content invalidation");
+    constexpr const char* scrollPerfTest = "TimelinePerf_ContinuousScrollDoesNotPromoteEveryFrameToFullContent";
+    if (scrollSnapshot.viewportShiftRequests < 180
+        || scrollSnapshot.contentInvalidationRequests != 0
+        || scrollSnapshot.fullRepaintPromotions != 0) {
+        logFail(scrollPerfTest, "continuous scroll simulation did not stay on the viewport-shift path");
         return;
     }
     logPass(scrollPerfTest);

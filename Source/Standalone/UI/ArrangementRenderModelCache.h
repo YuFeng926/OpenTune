@@ -31,6 +31,7 @@ public:
         uint64_t referencePlacementId = 0;
         juce::Rectangle<int> pixelBounds;
         juce::Rectangle<float> pixelArea;
+        juce::Rectangle<int> contentBounds;
         bool isSelected = false;
         float gain = 1.0f;
         juce::String name;
@@ -44,6 +45,9 @@ public:
         double fadeOutDuration = 0.0;
         bool isPreview = false;
         juce::Colour colour{};
+        double timelineStartSeconds = 0.0;
+        double durationSeconds = 0.0;
+        double clipInSeconds = 0.0;
     };
 
     struct RenderModel {
@@ -58,6 +62,9 @@ public:
         int firstVisibleTrack = 0;
         int lastVisibleTrack = 0;
         int totalTrackCount = 0;
+        int bandStartContentX = 0;
+        int bandWidthPx = 0;
+        int viewportHeightPx = 0;
         double bpm = 120.0;
         int timeSigNumerator = 4;
         int timeSigDenominator = 4;
@@ -81,9 +88,10 @@ public:
     static constexpr std::size_t kMaxEntries = 1;
 
     struct Key {
-        int64_t visibleTimeStartMs = 0;
-        int64_t visibleTimeEndMs = 0;
-        int scrollOffsetPx = 0;
+        int64_t bandTimeStartMs = 0;
+        int64_t bandTimeEndMs = 0;
+        int bandStartContentX = 0;
+        int bandWidthPx = 0;
         int viewportWidthPx = 0;
         int viewportHeightPx = 0;
         int zoomBucket = 0;
@@ -98,9 +106,10 @@ public:
 
         bool operator==(const Key& other) const noexcept
         {
-            return visibleTimeStartMs == other.visibleTimeStartMs
-                && visibleTimeEndMs == other.visibleTimeEndMs
-                && scrollOffsetPx == other.scrollOffsetPx
+            return bandTimeStartMs == other.bandTimeStartMs
+                && bandTimeEndMs == other.bandTimeEndMs
+                && bandStartContentX == other.bandStartContentX
+                && bandWidthPx == other.bandWidthPx
                 && viewportWidthPx == other.viewportWidthPx
                 && viewportHeightPx == other.viewportHeightPx
                 && zoomBucket == other.zoomBucket
@@ -134,6 +143,10 @@ public:
                               uint64_t hoveredPlacementId,
                               bool mouseOverReferenceButton,
                               WaveformMipmapCache& mipmapCache,
+                              double bandStartSeconds,
+                              double bandEndSeconds,
+                              int bandStartContentX,
+                              int bandWidthPx,
                               int trackHeight,
                               const MoveDragPreviewState& movePreview = {},
                               bool forceRebuild = false);
@@ -159,6 +172,10 @@ private:
                        int selectedPlacementIndex,
                        uint64_t hoveredPlacementId,
                        bool mouseOverReferenceButton,
+                       double bandStartSeconds,
+                       double bandEndSeconds,
+                       int bandStartContentX,
+                       int bandWidthPx,
                        int trackHeight,
                        const MoveDragPreviewState& movePreview);
 

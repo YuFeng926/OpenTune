@@ -25,13 +25,18 @@ ArrangementRenderModelCache::makeKey(OpenTuneAudioProcessor& processor,
                                       int selectedPlacementIndex,
                                       uint64_t hoveredPlacementId,
                                       bool mouseOverReferenceButton,
+                                      double bandStartSeconds,
+                                      double bandEndSeconds,
+                                      int bandStartContentX,
+                                      int bandWidthPx,
                                       int trackHeight,
                                       const MoveDragPreviewState& movePreview)
 {
     Key key;
-    key.visibleTimeStartMs = timeToMs(viewport.visibleTimeStart());
-    key.visibleTimeEndMs = timeToMs(viewport.visibleTimeEnd());
-    key.scrollOffsetPx = viewport.scrollOffsetPx;
+    key.bandTimeStartMs = timeToMs(bandStartSeconds);
+    key.bandTimeEndMs = timeToMs(bandEndSeconds);
+    key.bandStartContentX = bandStartContentX;
+    key.bandWidthPx = bandWidthPx;
     key.viewportWidthPx = viewport.viewportWidthPx;
     key.viewportHeightPx = viewport.viewportHeightPx;
     key.zoomBucket = static_cast<int>(std::llround(viewport.zoomLevel * 100.0));
@@ -105,8 +110,7 @@ juce::Path ArrangementRenderModelCache::buildWaveformPathForPlacement(const Wave
     if (placementBounds.isEmpty() || durationSeconds <= 0.0)
         return path;
 
-    const auto waveformBounds = computeWaveformDrawableBounds(placementBounds)
-        .getIntersection({ 0, 0, viewport.viewportWidthPx, viewport.viewportHeightPx });
+    const auto waveformBounds = computeWaveformDrawableBounds(placementBounds);
     if (waveformBounds.isEmpty())
         return path;
 
@@ -124,11 +128,18 @@ juce::Path ArrangementRenderModelCache::buildWaveformPathForPlacement(const Wave
     const float halfH = waveformBounds.getHeight() * 0.45f;
     const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[levelIndex];
     const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
+    const double visibleTimeStart = viewport.visibleTimeStart();
+    const double visibleTimeEnd = viewport.visibleTimeEnd();
     const double timelineEndSeconds = timelineStartSeconds + durationSeconds;
     const double sourceEndSeconds = clipInSeconds + durationSeconds;
+    if (timelineEndSeconds <= visibleTimeStart || timelineStartSeconds >= visibleTimeEnd)
+        return path;
 
     for (int x = waveformBounds.getX(); x < waveformBounds.getRight(); ++x) {
         const double timelineTime = viewport.viewportXToTime(x);
+        if (timelineTime < visibleTimeStart || timelineTime >= visibleTimeEnd)
+            continue;
+
         if (timelineTime < timelineStartSeconds || timelineTime >= timelineEndSeconds)
             continue;
 
@@ -170,6 +181,10 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
                                     uint64_t hoveredPlacementId,
                                     bool mouseOverReferenceButton,
                                     WaveformMipmapCache& mipmapCache,
+                                    double bandStartSeconds,
+                                    double bandEndSeconds,
+                                    int bandStartContentX,
+                                    int bandWidthPx,
                                     int trackHeight,
                                     const MoveDragPreviewState& movePreview,
                                     bool forceRebuild)
@@ -180,6 +195,10 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
                                  selectedPlacementIndex,
                                  hoveredPlacementId,
                                  mouseOverReferenceButton,
+                                 bandStartSeconds,
+                                 bandEndSeconds,
+                                 bandStartContentX,
+                                 bandWidthPx,
                                  trackHeight,
                                  movePreview);
 
@@ -193,6 +212,9 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
     model_.bpm = processor.getBpm();
     model_.timeSigNumerator = processor.getTimeSigNumerator();
     model_.timeSigDenominator = processor.getTimeSigDenominator();
+    model_.bandStartContentX = bandStartContentX;
+    model_.bandWidthPx = bandWidthPx;
+    model_.viewportHeightPx = viewport.viewportHeightPx;
 
     const auto* arrangement = processor.getStandaloneArrangement();
     if (arrangement == nullptr) {
@@ -204,8 +226,8 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
     constexpr int kMaxTracks = OpenTuneAudioProcessor::MAX_TRACKS;
     constexpr int kRulerHeight = 30;
 
-    const double visibleTimeStart = viewport.visibleTimeStart();
-    const double visibleTimeEnd = viewport.visibleTimeEnd();
+    const double visibleTimeStart = bandStartSeconds;
+    const double visibleTimeEnd = bandEndSeconds;
 
     auto findPreviewForPlacement = [&movePreview](int trackId, uint64_t placementId)
         -> const MoveDragPreviewPlacement*
@@ -236,15 +258,15 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
             return;
 
         auto laneBounds = [&]() -> juce::Rectangle<int> {
-            auto bounds = juce::Rectangle<int>(0, 0, viewport.viewportWidthPx, viewport.viewportHeightPx)
+            auto bounds = juce::Rectangle<int>(0, 0, bandWidthPx, viewport.viewportHeightPx)
                               .withTrimmedTop(kRulerHeight);
             int h = trackHeight;
             return bounds.withY(kRulerHeight + displayTrackId * h).withHeight(h);
         }();
 
         auto lane = laneBounds.reduced(6, 8);
-        const int x1 = viewport.timeToViewportX(timelineStartSeconds);
-        const int x2 = viewport.timeToViewportX(timelineEndSeconds);
+        const int x1 = viewport.timeToContentX(timelineStartSeconds) - bandStartContentX;
+        const int x2 = viewport.timeToContentX(timelineEndSeconds) - bandStartContentX;
         const int width = juce::jmax(8, x2 - x1);
         juce::Rectangle<int> placementBounds{x1, lane.getY(), width, lane.getHeight()};
 
@@ -263,6 +285,10 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         vp.referencePlacementId = placement.referencePlacementId;
         vp.pixelBounds = placementBounds;
         vp.pixelArea = placementBounds.toFloat();
+        vp.contentBounds = juce::Rectangle<int>(viewport.timeToContentX(timelineStartSeconds),
+                                                placementBounds.getY(),
+                                                width,
+                                                placementBounds.getHeight());
         vp.isSelected = isSelected;
         vp.gain = placement.gain;
         vp.name = placement.name;
@@ -273,6 +299,9 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         vp.fadeOutDuration = placement.fadeOutDuration;
         vp.isPreview = isPreview;
         vp.colour = arrangement->getTrackColour(displayTrackId);
+        vp.timelineStartSeconds = timelineStartSeconds;
+        vp.durationSeconds = placement.durationSeconds;
+        vp.clipInSeconds = placement.clipInSeconds;
 
         if (getAnalysisState)
             vp.analysisInProgress = getAnalysisState(placementId);
@@ -283,8 +312,12 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         if (audioBuffer != nullptr) {
             auto& mipmap = mipmapCache.getOrCreate(materializationId);
             mipmap.setAudioSource(audioBuffer);
+            auto bandViewport = viewport;
+            bandViewport.scrollOffsetPx = bandStartContentX;
+            bandViewport.viewportWidthPx = bandWidthPx;
+            bandViewport.contentStartX = 0;
             vp.waveformPath = buildWaveformPathForPlacement(mipmap,
-                                                            viewport,
+                                                            bandViewport,
                                                             placementBounds,
                                                             timelineStartSeconds,
                                                             placement.durationSeconds,
@@ -298,7 +331,7 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
     for (int trackId = 0; trackId < kMaxTracks; ++trackId)
     {
         auto laneBounds = [&]() -> juce::Rectangle<int> {
-            auto bounds = juce::Rectangle<int>(0, 0, viewport.viewportWidthPx, viewport.viewportHeightPx)
+            auto bounds = juce::Rectangle<int>(0, 0, bandWidthPx, viewport.viewportHeightPx)
                               .withTrimmedTop(kRulerHeight);
             int h = trackHeight;
             return bounds.withY(kRulerHeight + trackId * h).withHeight(h);
