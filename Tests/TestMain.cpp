@@ -6797,10 +6797,14 @@ void runPianoRollVerticalGeometryInvalidatesRenderModelKeyTest()
         return;
     }
 
+    const bool refreshForcesPreparedModel =
+        refreshSection.contains("prepareVisibleRenderModel();")
+        || refreshSection.contains("ensureRenderBandCoversCurrentViewport(true);")
+        || refreshSection.contains("refreshPreparedRenderModel(true);");
+
     if (!componentHeader.contains("refreshVerticalViewportGeometry")
         || !refreshSection.contains("updateScrollBars();")
-        || (!refreshSection.contains("prepareVisibleRenderModel();")
-            && !refreshSection.contains("ensureRenderBandCoversCurrentViewport(true);"))
+        || !refreshForcesPreparedModel
         || !refreshSection.contains("invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport)")) {
         logFail(testName, "vertical geometry helper must update scrollbars, prepare model, and invalidate viewport");
         return;
@@ -7510,6 +7514,40 @@ void runTimelineKillListNoProcessorOwnedUiCacheTest()
                 (juce::String("processor source contains UI cache: ") + juce::String(needle)).toRawUTF8());
             return;
         }
+    }
+
+    logPass(testName);
+}
+
+void runPianoRollContentRedrawAndReferenceOverlayStayOnRenderModelContractTest()
+{
+    constexpr const char* testName = "PianoRoll_ContentRedrawAndReferenceOverlayStayOnRenderModelContract";
+
+    const auto redrawSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::requestContentRedraw()",
+        "void PianoRollComponent::setScrollOffset");
+    const auto overlaySection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::setReferenceOverlay(std::optional<PianoRollRenderer::ReferenceOverlay> overlay)",
+        "PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext");
+
+    if (redrawSection.isEmpty() || overlaySection.isEmpty()) {
+        logFail(testName, "failed to locate PianoRoll content redraw/reference overlay sections");
+        return;
+    }
+
+    if (redrawSection.contains("prepareVisibleRenderModel();")
+        || !redrawSection.contains("invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),")
+        || !redrawSection.contains("PianoRollVisualInvalidationPriority::Normal")) {
+        logFail(testName, "requestContentRedraw must invalidate content without forcing an immediate prepared-model rebuild");
+        return;
+    }
+
+    if (!overlaySection.contains("++visualPrefsRevision_;")
+        || !overlaySection.contains("invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),")) {
+        logFail(testName, "reference overlay updates must participate in the visual revision contract before invalidation");
+        return;
     }
 
     logPass(testName);
@@ -11032,6 +11070,7 @@ void runTimelineRenderingSuite()
     runTimelineKillListNoSteadyScrollFullContentInvalidationTest();
     runTimelineKillListNoUnboundedUiCachesTest();
     runTimelineKillListNoProcessorOwnedUiCacheTest();
+    runPianoRollContentRedrawAndReferenceOverlayStayOnRenderModelContractTest();
 }
 
 void runTimelineRenderingPerfSuite()

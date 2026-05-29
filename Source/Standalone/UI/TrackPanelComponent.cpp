@@ -484,8 +484,8 @@ void TrackPanelComponent::mouseWheelMove(const juce::MouseEvent& event, const ju
     // 普通滚轮 = 垂直滚动（与ArrangementView同步）
     if (wheel.deltaY != 0.0f)
     {
-        // 计算总内容高度（12轨道）
-        const int totalContentHeight = MAX_TRACKS * trackHeight_ + trackStartYOffset_;
+        // 计算总内容高度（可见轨道数量）
+        const int totalContentHeight = visibleTrackCount_ * trackHeight_ + trackStartYOffset_;
         // 可见区域高度
         const int visibleHeight = getHeight();
         
@@ -536,8 +536,8 @@ void TrackPanelComponent::setTrackHeight(int height)
 // 设置垂直滚动偏移（与ArrangementView同步）
 void TrackPanelComponent::setVerticalScrollOffset(int offset)
 {
-    // 计算最大滚动偏移
-    const int totalContentHeight = MAX_TRACKS * trackHeight_ + trackStartYOffset_;
+    // 计算最大滚动偏移（可见轨道数量）
+    const int totalContentHeight = visibleTrackCount_ * trackHeight_ + trackStartYOffset_;
     const int visibleHeight = getHeight();
     const int maxScrollOffset = juce::jmax(0, totalContentHeight - visibleHeight);
     
@@ -722,6 +722,8 @@ void TrackPanelComponent::setInferenceActive(bool active)
 void TrackPanelComponent::setVisibleTrackCount(int count)
 {
     visibleTrackCount_ = juce::jlimit(1, MAX_TRACKS, count);
+    // Re-clamp scroll offset for new track count
+    setVerticalScrollOffset(verticalScrollOffset_);
     resized();
     repaint();
 }

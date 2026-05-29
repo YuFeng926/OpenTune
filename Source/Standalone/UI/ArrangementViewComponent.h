@@ -135,6 +135,7 @@ public:
     void setZoomLevel(double zoom);
     void setScrollOffset(int pixels);
     void setVerticalScrollOffset(int offset);
+    void setVisibleTrackCount(int count);
     void setInferenceActive(bool active) { inferenceActive_ = active; }
     void fitToContent();
     void setExperimentalReferenceControlsEnabled(bool enabled);
@@ -268,6 +269,7 @@ private:
     double zoomLevel_{1.0};
     int scrollOffset_{0};
     int verticalScrollOffset_{0};
+    int visibleTrackCount_{2};  // synced from TrackPanel via PluginEditor
     double lastAuthoritativePlayheadTime_{0.0};
     double presentationClockAnchorTime_{0.0};
     double presentationClockAnchorTimestampSec_{0.0};

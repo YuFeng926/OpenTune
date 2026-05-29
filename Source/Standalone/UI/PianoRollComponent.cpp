@@ -112,6 +112,8 @@ void PianoRollComponent::initializeUIComponents() {
     addAndMakeVisible(rulerSurface_);
     addAndMakeVisible(contentSurface_);
     addAndMakeVisible(playheadOverlay_);
+    timeUnitToggleButton_.toFront(false);
+    scrollModeToggleButton_.toFront(false);
     playheadOverlay_.setPianoKeyWidth(pianoKeyWidth_);
     playheadOverlay_.setPlayheadColour(UIColors::playhead);
 
@@ -503,14 +505,15 @@ void PianoRollComponent::setProcessor(OpenTuneAudioProcessor* processor)
 
 void PianoRollComponent::refreshEditedMaterializationNotes()
 {
-    prepareVisibleRenderModel();
     cachedNotes_.clear();
+    cachedNotesRevision_ = 0;
     if (processor_ == nullptr || editedMaterializationId_ == 0) {
         return;
     }
 
     auto snapshot = processor_->getMaterializationNotesSnapshotById(editedMaterializationId_);
     cachedNotes_ = std::move(snapshot.notes);
+    cachedNotesRevision_ = snapshot.notesRevision;
 }
 
 const std::vector<Note>& PianoRollComponent::getCommittedNotes() const
@@ -1640,6 +1643,8 @@ void PianoRollComponent::resized() {
     scrollModeToggleButton_.setBounds(currentX, 5, btnW, btnH);
     currentX -= (btnW + spacing);
     timeUnitToggleButton_.setBounds(currentX, 5, btnW, btnH);
+    timeUnitToggleButton_.toFront(false);
+    scrollModeToggleButton_.toFront(false);
 
     updateRulerSurfaceBounds();
     updateContentSurfaceBounds();
@@ -1933,7 +1938,18 @@ void PianoRollComponent::invalidateVisual(uint32_t reasonsMask,
 
 void PianoRollComponent::flushPendingVisualInvalidation()
 {
-    prepareVisibleRenderModel();
+    if (pendingVisualInvalidation_.hasWork()) {
+        const uint32_t modelReasons =
+            toInvalidationMask(PianoRollVisualInvalidationReason::Viewport)
+            | toInvalidationMask(PianoRollVisualInvalidationReason::Content)
+            | toInvalidationMask(PianoRollVisualInvalidationReason::Interaction)
+            | toInvalidationMask(PianoRollVisualInvalidationReason::Decoration)
+            | toInvalidationMask(PianoRollVisualInvalidationReason::TimeGrid);
+        if ((pendingVisualInvalidation_.reasonsMask & modelReasons) != 0) {
+            prepareVisibleRenderModel();
+        }
+    }
+
     const auto decision = makeVisualFlushDecision(pendingVisualInvalidation_, getLocalBounds());
     pendingVisualInvalidation_.clear();
     if (!decision.shouldRepaint) {
@@ -1956,7 +1972,8 @@ void PianoRollComponent::flushPendingVisualInvalidation()
 }
 
 void PianoRollComponent::requestContentRedraw() {
-    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
+                     PianoRollVisualInvalidationPriority::Normal);
 }
 
 void PianoRollComponent::setScrollOffset(int offset) {
@@ -2692,6 +2709,7 @@ void PianoRollComponent::visibilityChanged()
 void PianoRollComponent::setReferenceOverlay(std::optional<PianoRollRenderer::ReferenceOverlay> overlay)
 {
     referenceOverlay_ = std::move(overlay);
+    ++visualPrefsRevision_;
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
                      PianoRollVisualInvalidationPriority::Interactive);
 }
@@ -2794,10 +2812,15 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext(double v
 }
 
 void PianoRollComponent::prepareVisibleRenderModel() const {
+    refreshPreparedRenderModel(false);
+}
+
+void PianoRollComponent::refreshPreparedRenderModel(bool forceRebuild) const
+{
     const auto timelineViewportBounds = getTimelineViewportBounds();
     const int viewportStartX = pianoKeyWidth_;
     const int viewportEndX = timelineViewportBounds.getRight();
-    rebuildPreparedRenderModelForViewport(viewportStartX, viewportEndX, true);
+    rebuildPreparedRenderModelForViewport(viewportStartX, viewportEndX, forceRebuild);
 }
 
 TimelineViewportState PianoRollComponent::makeTimelineViewportState() const
@@ -2935,18 +2958,14 @@ bool PianoRollComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild
     const bool needsGeometryRebuild = renderBandNeedsRebuild(contentViewportWidth, viewportHeight);
     const bool coversViewport = preparedRenderBandCoversViewport(viewportStartX, viewportEndX);
 
-    if (!forceRebuild && !needsGeometryRebuild && coversViewport) {
-        updateRulerSurfaceBounds();
-        updateContentSurfaceBounds();
-        return false;
+    if (forceRebuild || needsGeometryRebuild || !coversViewport) {
+        const int overscanPx = juce::jmax(contentViewportWidth,
+                                          static_cast<int>(std::lround(contentViewportWidth * kPianoRollRenderBandOverscanScreens)));
+        renderBand_.startContentX = juce::jmax(0, scrollOffset_ - overscanPx);
+        renderBand_.widthPx = juce::jmax(contentViewportWidth, contentViewportWidth + overscanPx * 2);
+        renderBand_.heightPx = viewportHeight;
+        renderBand_.valid = true;
     }
-
-    const int overscanPx = juce::jmax(contentViewportWidth,
-                                      static_cast<int>(std::lround(contentViewportWidth * kPianoRollRenderBandOverscanScreens)));
-    renderBand_.startContentX = juce::jmax(0, scrollOffset_ - overscanPx);
-    renderBand_.widthPx = juce::jmax(contentViewportWidth, contentViewportWidth + overscanPx * 2);
-    renderBand_.heightPx = viewportHeight;
-    renderBand_.valid = true;
 
     const int bandScrollOffsetPx = juce::jmax(0, renderBand_.startContentX);
     const int bandViewportStartX = pianoKeyWidth_;
@@ -2965,7 +2984,7 @@ bool PianoRollComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild
     PianoRollRenderModelCache::Key cacheKey;
     cacheKey.materializationId = editedMaterializationId_;
     cacheKey.pitchEpoch = editedMaterializationEpoch_.load(std::memory_order_relaxed);
-    cacheKey.notesEpoch = editedMaterializationEpoch_.load(std::memory_order_relaxed);
+    cacheKey.notesEpoch = cachedNotesRevision_;
     cacheKey.visualPrefsRevision = visualPrefsRevision_;
     cacheKey.timeGridRevision = (processor_ != nullptr && editedMaterializationId_ != 0)
         ? processor_->getMaterializationTimeGridRevisionById(editedMaterializationId_)
@@ -2981,6 +3000,7 @@ bool PianoRollComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild
     cacheKey.verticalScrollBucket = quantizeGeometryPx(verticalScrollOffset_);
     cacheKey.viewportSizeRevision = viewportSizeRevision_;
 
+    bool rebuiltModel = false;
     if (forceRebuild || !renderModelCache_.isValid() || renderModelCache_.getCurrentKey() != cacheKey) {
         auto ctx = buildRenderContext(visibleTimeStart,
                                       visibleTimeEnd,
@@ -2993,13 +3013,17 @@ bool PianoRollComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild
         preparedBandStartMs_ = cacheKey.visibleStartBandMs;
         preparedBandEndMs_ = cacheKey.visibleEndBandMs;
         FrameScheduler::instance().recordRenderModelRebuild(FrameScheduler::TimelineReason::ContentModelInvalid);
+        rebuiltModel = true;
     }
 
-    rebuildRulerSurface();
-    rebuildContentSurface();
+    if (rebuiltModel || forceRebuild || needsGeometryRebuild || !coversViewport) {
+        rebuildRulerSurface();
+        rebuildContentSurface();
+    }
+
     updateRulerSurfaceBounds();
     updateContentSurfaceBounds();
-    return true;
+    return rebuiltModel || needsGeometryRebuild || !coversViewport;
 }
 
 void PianoRollComponent::rebuildRulerSurface() const
@@ -3115,7 +3139,7 @@ void PianoRollComponent::rebuildPreparedRenderModelForViewport(int viewportStart
 void PianoRollComponent::refreshVerticalViewportGeometry(PianoRollVisualInvalidationPriority priority)
 {
     updateScrollBars();
-    prepareVisibleRenderModel();
+    refreshPreparedRenderModel(true);
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport), priority);
 }
 

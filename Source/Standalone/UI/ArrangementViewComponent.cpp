@@ -208,6 +208,8 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     addAndMakeVisible(contentSurface_);
     addAndMakeVisible(rulerSurface_);
     addAndMakeVisible(playheadOverlay_);
+    timeUnitToggleButton_.toFront(false);
+    scrollModeToggleButton_.toFront(false);
     playheadOverlay_.setPianoKeyWidth(kArrangementContentStartX);
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
         this, [this](double timestampSec) { onScrollVBlankCallback(timestampSec); });
@@ -278,8 +280,8 @@ void ArrangementViewComponent::setScrollOffset(int pixels)
 
 void ArrangementViewComponent::setVerticalScrollOffset(int offset)
 {
-    // 计算最大滚动偏移（12轨道高度 + ruler高度 - 可见高度）
-    const int totalContentHeight = rulerHeight_ + OpenTuneAudioProcessor::MAX_TRACKS * processor_.getTrackHeight();
+    // 计算最大滚动偏移（可见轨道高度 + ruler高度 - 可见高度）
+    const int totalContentHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
     const int visibleHeight = getHeight();
     const int maxScrollOffset = juce::jmax(0, totalContentHeight - visibleHeight);
     
@@ -290,6 +292,14 @@ void ArrangementViewComponent::setVerticalScrollOffset(int offset)
     updateRulerSurfaceBounds();
     ensureRenderBandCoversCurrentViewport(true);
     FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
+}
+
+void ArrangementViewComponent::setVisibleTrackCount(int count)
+{
+    visibleTrackCount_ = juce::jlimit(1, OpenTuneAudioProcessor::MAX_TRACKS, count);
+    // Re-clamp scroll offset for new track count
+    setVerticalScrollOffset(verticalScrollOffset_);
+    updateScrollBars();
 }
 
 void ArrangementViewComponent::fitToContent()
@@ -388,6 +398,8 @@ void ArrangementViewComponent::resized()
 
     // 播放头覆盖层覆盖整个组件区域
     playheadOverlay_.setBounds(getLocalBounds());
+    timeUnitToggleButton_.toFront(false);
+    scrollModeToggleButton_.toFront(false);
     updateOverlayPresentation(readPlayheadSeconds());
 }
 
@@ -423,7 +435,7 @@ void ArrangementViewComponent::updateScrollBars()
     horizontalScrollBar_.setRangeLimits(0.0, totalContentWidth + visibleWidth, juce::dontSendNotification);
     horizontalScrollBar_.setCurrentRange(scrollOffset_, visibleWidth, juce::dontSendNotification);
 
-    int totalTrackHeight = rulerHeight_ + OpenTuneAudioProcessor::MAX_TRACKS * processor_.getTrackHeight();
+    int totalTrackHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
     int visibleHeight = getHeight() - UIColors::scrollBarThickness;
     verticalScrollBar_.setRangeLimits(0.0, totalTrackHeight + visibleHeight);
     verticalScrollBar_.setCurrentRange(verticalScrollOffset_, visibleHeight);
@@ -1441,6 +1453,12 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
 {
     const auto themeId = UIColors::currentThemeId();
     const int rulerWidth = g.getClipBounds().getWidth();
+    const auto viewportBounds = getContentViewportBounds();
+    const int rulerSurfaceParentX = viewportBounds.getX() + (renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0);
+    const auto buttonCoverBounds = timeUnitToggleButton_.getBounds()
+        .getUnion(scrollModeToggleButton_.getBounds())
+        .expanded(6, 2);
+    const auto rulerButtonExclusion = buttonCoverBounds.translated(-rulerSurfaceParentX, 0);
     const double startTime = renderBand_.valid
         ? renderBand_.startSeconds
         : viewportState_.viewportXToTime(viewportState_.contentStartX, scrollOffset_);
@@ -1451,6 +1469,14 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         return renderBand_.valid
             ? absoluteTimeToContentX(seconds) - renderBand_.startContentX
             : absoluteTimeToViewportX(seconds) - viewportState_.contentStartX;
+    };
+    const auto overlapsButtonCover = [&](int centreX, int width) {
+        if (rulerButtonExclusion.isEmpty()) {
+            return false;
+        }
+
+        const juce::Rectangle<int> itemBounds(centreX - (width / 2), 0, juce::jmax(1, width), rulerHeight_);
+        return itemBounds.intersects(rulerButtonExclusion);
     };
 
     // Switch between Seconds and Bars based on timeUnit_
@@ -1482,6 +1508,9 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         {
             double time = beat * secondsPerBeat;
             int pixelX = timeToRulerX(time);
+            if (overlapsButtonCover(pixelX, 40)) {
+                continue;
+            }
             
             // Draw tick
             g.setColour(themeId == ThemeId::DarkBlueGrey
@@ -1521,6 +1550,9 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         g.setFont(UIColors::getUIFont(13.0f));
         for (double time = firstMarkerTime; time < endTime; time += markerInterval) {
             int pixelX = timeToRulerX(time);
+            if (overlapsButtonCover(pixelX, 40)) {
+                continue;
+            }
             
             g.setColour(themeId == ThemeId::DarkBlueGrey
                             ? UIColors::gridLine.withAlpha(0.10f)

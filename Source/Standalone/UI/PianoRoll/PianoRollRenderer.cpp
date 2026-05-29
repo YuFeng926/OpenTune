@@ -635,9 +635,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
 
 void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ctx)
 {
-    constexpr int inset = 12;
-    auto bounds = juce::Rectangle<int>(0, 0, ctx.width, ctx.height).reduced(inset);
-    auto rulerArea = bounds.removeFromTop(ctx.rulerHeight);
+    auto rulerArea = juce::Rectangle<int>(0, 0, ctx.width, ctx.rulerHeight);
 
     const int rulerTop = rulerArea.getY();
     const int rulerBottom = rulerArea.getBottom();
@@ -645,24 +643,6 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
     const bool isOverdose = themeId == ThemeId::Overdose;
-
-    if (isAurora)
-    {
-        UIColors::fillAuroraTimelineBackground(g, rulerArea.toFloat(), 0.0f);
-    }
-    else if (isBlueBreeze)
-    {
-        UIColors::fillMistedTimelineField(g, rulerArea.toFloat(), 0.0f);
-    }
-    else if (isOverdose)
-    {
-        // Overdose panel skin is drawn once by PianoRollComponent::paint().
-    }
-    else
-    {
-        g.setColour(UIColors::backgroundMedium);
-        g.fillRect(rulerArea);
-    }
 
     g.setColour(isAurora
         ? UIColors::gridLine.withAlpha(0.060f)
