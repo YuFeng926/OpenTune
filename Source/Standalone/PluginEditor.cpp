@@ -532,6 +532,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     arrangementView_.addListener(this);
     arrangementView_.setZoomLevel(processorRef_.getZoomLevel());
     addAndMakeVisible(arrangementView_);
+    // Initial sync: track panel visible track count → arrangement view
+    arrangementView_.setVisibleTrackCount(trackPanel_.getVisibleTrackCount());
 
     // Setup Piano Roll (main editor area)
     pianoRoll_.addListener(this);
@@ -947,6 +949,7 @@ void OpenTuneAudioProcessorEditor::applyImportDropTarget(ImportDropTarget target
     {
         // Create one new visible track and import there
         trackPanel_.showMoreTracks();
+        arrangementView_.setVisibleTrackCount(trackPanel_.getVisibleTrackCount());
         const int newTrackId = trackPanel_.getVisibleTrackCount() - 1;
         importAudioFileToTrack(newTrackId, file, target.timelineStartSeconds);
         break;
@@ -1626,6 +1629,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                         {
                             int newVisibleTracks = std::min(requiredTracks, OpenTuneAudioProcessor::MAX_TRACKS);
                             safeThis->trackPanel_.setVisibleTrackCount(newVisibleTracks);
+                            safeThis->arrangementView_.setVisibleTrackCount(newVisibleTracks);
                         }
 
                         // 从当前轨道开始，依次导入到后续轨道

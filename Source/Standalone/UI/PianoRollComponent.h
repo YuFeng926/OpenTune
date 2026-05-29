@@ -339,6 +339,7 @@ private:
     bool preparedRenderBandCoversViewport(int viewportStartX, int viewportEndX) const;
     bool renderBandNeedsRebuild(int contentViewportWidth, int viewportHeight) const;
     bool ensureRenderBandCoversCurrentViewport(bool forceRebuild) const;
+    void refreshPreparedRenderModel(bool forceRebuild) const;
     void rebuildRulerSurface() const;
     void rebuildContentSurface() const;
     void updateRulerSurfaceBounds() const;
@@ -552,6 +553,7 @@ private:
     uint64_t editedMaterializationId_ = 0;
     bool experimentalFeaturesEnabled_ = false;
     std::vector<Note> cachedNotes_;
+    uint64_t cachedNotesRevision_ = 0;
 
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
 
