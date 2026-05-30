@@ -234,6 +234,17 @@ public:
         };
         initialiseComboBox(experimentalReferenceAlignModeSelector_);
         addAndMakeVisible(experimentalReferenceAlignModeSelector_);
+
+        initialiseToggleButton(rubberBandLightPitchToggle_);
+        rubberBandLightPitchToggle_.setButtonText(
+            juce::String::fromUTF8(u8"轻量修音模式（小幅修正使用 RubberBand，减少谐波伪影）"));
+        rubberBandLightPitchToggle_.setToggleState(state.shared.rubberBandLightPitchEnabled,
+                                                   juce::dontSendNotification);
+        rubberBandLightPitchToggle_.onClick = [this] {
+            appPreferences_.setRubberBandLightPitchEnabled(rubberBandLightPitchToggle_.getToggleState());
+            notifyChanged();
+        };
+        addAndMakeVisible(rubberBandLightPitchToggle_);
     }
 
     void paint(juce::Graphics& g) override
@@ -268,6 +279,10 @@ public:
         row = bounds.removeFromTop(rowHeight);
         experimentalReferenceAlignModeLabel_.setBounds(row.removeFromLeft(labelWidth));
         experimentalReferenceAlignModeSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
+
+        bounds.removeFromTop(8);
+        row = bounds.removeFromTop(rowHeight);
+        rubberBandLightPitchToggle_.setBounds(row.removeFromLeft(labelWidth + selectorWidth + 80));
     }
 
 private:
@@ -290,6 +305,7 @@ private:
     juce::Label experimentalFeaturesHintLabel_;
     juce::Label experimentalReferenceAlignModeLabel_;
     juce::ComboBox experimentalReferenceAlignModeSelector_;
+    juce::ToggleButton rubberBandLightPitchToggle_;
 };
 
 class SharedEditingPage final : public juce::Component

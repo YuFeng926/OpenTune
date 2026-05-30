@@ -45,7 +45,7 @@ struct SuiteEntry {
     void (*run)();
 };
 
-constexpr std::array<SuiteEntry, 35> kSuites{{
+constexpr std::array<SuiteEntry, 36> kSuites{{
     { "core", "leaf utilities and render primitives", &runCoreBehaviorSuite },
     { "processor", "shared processor and render contracts", &runProcessorBehaviorSuite },
     { "ui", "piano-roll and visual loop behavior", &runUiBehaviorSuite },
@@ -81,6 +81,7 @@ constexpr std::array<SuiteEntry, 35> kSuites{{
     { "project-session-reference", "ProjectSession reference binding roundtrip and corruption", &runProjectSessionReferenceSuite },
     { "timeline-rendering", "DAW timeline rendering pipeline contracts", &runTimelineRenderingSuite },
     { "timeline-rendering-perf", "DAW timeline rendering runtime diagnostics contracts", &runTimelineRenderingPerfSuite },
+    { "rubberband-pitch", "hybrid RubberBand/NSF-HiFiGAN chunk render strategy + pitch shifter", &runRubberBandPitchShifterSuite },
 }};
 
 void printHeader()

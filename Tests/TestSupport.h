@@ -510,3 +510,4 @@ void runArrangementContractSuite();
 void runProjectSessionReferenceSuite();
 void runTimelineRenderingSuite();
 void runTimelineRenderingPerfSuite();
+void runRubberBandPitchShifterSuite();
