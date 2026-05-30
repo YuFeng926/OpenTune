@@ -13,6 +13,7 @@
 #include "Editor/Preferences/TabbedPreferencesDialog.h"
 #include "Audio/AudioFormatRegistry.h"
 #include "Audio/AsyncAudioLoader.h"
+#include "StandaloneArrangementHelpers.h"
 #include "Utils/ProjectSession.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/LegacyNoteGenerator.h"
@@ -51,102 +52,6 @@ juce::String buildRenderingOverlayTitle(int completedTasks, int totalTasks, floa
         + juce::String(totalTasks) + ")";
 }
 
-int getStandaloneActiveTrack(OpenTuneAudioProcessor& processor)
-{
-    auto* arrangement = processor.getStandaloneArrangement();
-    jassert(arrangement != nullptr);
-    return arrangement->getActiveTrackId();
-}
-
-bool setStandaloneActiveTrack(OpenTuneAudioProcessor& processor, int trackId)
-{
-    auto* arrangement = processor.getStandaloneArrangement();
-    jassert(arrangement != nullptr);
-    return arrangement->setActiveTrack(trackId);
-}
-
-int getStandaloneSelectedPlacementIndex(OpenTuneAudioProcessor& processor, int trackId)
-{
-    auto* arrangement = processor.getStandaloneArrangement();
-    jassert(arrangement != nullptr);
-    return arrangement->getSelectedPlacementIndex(trackId);
-}
-
-int getStandalonePlacementCount(OpenTuneAudioProcessor& processor, int trackId)
-{
-    auto* arrangement = processor.getStandaloneArrangement();
-    jassert(arrangement != nullptr);
-    return arrangement->getNumPlacements(trackId);
-}
-
-bool getStandaloneTrackMuted(OpenTuneAudioProcessor& processor, int trackId)
-{
-    auto* arrangement = processor.getStandaloneArrangement();
-    jassert(arrangement != nullptr);
-    return arrangement->isTrackMuted(trackId);
-}
-
-bool getStandaloneTrackSolo(OpenTuneAudioProcessor& processor, int trackId)
-{
-    auto* arrangement = processor.getStandaloneArrangement();
-    jassert(arrangement != nullptr);
-    return arrangement->isTrackSolo(trackId);
-}
-
-float getStandaloneTrackVolume(OpenTuneAudioProcessor& processor, int trackId)
-{
-    auto* arrangement = processor.getStandaloneArrangement();
-    jassert(arrangement != nullptr);
-    return arrangement->getTrackVolume(trackId);
-}
-
-float getStandaloneTrackRms(OpenTuneAudioProcessor& processor, int trackId)
-{
-    auto* arrangement = processor.getStandaloneArrangement();
-    jassert(arrangement != nullptr);
-    return arrangement->getTrackRmsDb(trackId);
-}
-
-void setStandaloneTrackMuted(OpenTuneAudioProcessor& processor, int trackId, bool muted)
-{
-    if (auto* arrangement = processor.getStandaloneArrangement()) {
-        arrangement->setTrackMuted(trackId, muted);
-    }
-}
-
-void setStandaloneTrackSolo(OpenTuneAudioProcessor& processor, int trackId, bool solo)
-{
-    if (auto* arrangement = processor.getStandaloneArrangement()) {
-        arrangement->setTrackSolo(trackId, solo);
-    }
-}
-
-void setStandaloneTrackVolume(OpenTuneAudioProcessor& processor, int trackId, float volume)
-{
-    if (auto* arrangement = processor.getStandaloneArrangement()) {
-        arrangement->setTrackVolume(trackId, volume);
-    }
-}
-
-juce::Colour getStandaloneTrackColour(OpenTuneAudioProcessor& processor, int trackId)
-{
-    if (auto* arrangement = processor.getStandaloneArrangement())
-        return arrangement->getTrackColour(trackId);
-    return juce::Colours::grey;
-}
-
-void setStandaloneTrackColour(OpenTuneAudioProcessor& processor, int trackId, juce::Colour colour)
-{
-    if (auto* arrangement = processor.getStandaloneArrangement())
-        arrangement->setTrackColour(trackId, colour);
-}
-
-void setStandaloneSelectedPlacementIndex(OpenTuneAudioProcessor& processor, int trackId, int placementIndex)
-{
-    if (auto* arrangement = processor.getStandaloneArrangement()) {
-        arrangement->setSelectedPlacementIndex(trackId, placementIndex);
-    }
-}
 
 MaterializationTimelineProjection makePianoRollProjection(const StandaloneArrangement::Placement& placement,
                                                          OpenTuneAudioProcessor& processor)
@@ -157,24 +62,6 @@ MaterializationTimelineProjection makePianoRollProjection(const StandaloneArrang
     projection.materializationDurationSeconds =
         processor.getMaterializationAudioDurationById(placement.materializationId);
     return projection;
-}
-
-bool getStandalonePlacementByIndex(OpenTuneAudioProcessor& processor,
-                                   int trackId,
-                                   int placementIndex,
-                                   StandaloneArrangement::Placement& out)
-{
-    return processor.getPlacementByIndex(trackId, placementIndex, out);
-}
-
-uint64_t getStandaloneMaterializationId(OpenTuneAudioProcessor& processor,
-                                        int trackId,
-                                        int placementIndex)
-{
-    StandaloneArrangement::Placement placement;
-    return getStandalonePlacementByIndex(processor, trackId, placementIndex, placement)
-        ? placement.materializationId
-        : 0;
 }
 
 static juce::String getImportWildcardFilter()
@@ -2528,10 +2415,12 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
     pianoRoll_.setVisible(!isWorkspaceView_);
     
     // Explicitly grab focus for the active view to ensure keyboard shortcuts work immediately
-    if (isWorkspaceView_)
+    if (isWorkspaceView_) {
         arrangementView_.grabKeyboardFocus();
-    else
+        arrangementView_.syncPlayheadOverlay();
+    } else {
         pianoRoll_.grabKeyboardFocus();
+    }
 
     resized();
     repaint();
@@ -2599,6 +2488,11 @@ void OpenTuneAudioProcessorEditor::trackHeightChanged(int newHeight)
     
     // 刷新ArrangementView
     arrangementView_.repaint();
+}
+
+void OpenTuneAudioProcessorEditor::visibleTrackCountChanged(int newCount)
+{
+    arrangementView_.setVisibleTrackCount(newCount);
 }
 
 void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
@@ -2692,6 +2586,23 @@ void OpenTuneAudioProcessorEditor::verticalScrollChanged(int newOffset)
     trackPanel_.setVerticalScrollOffset(newOffset);
     // 同步ArrangementView
     arrangementView_.setVerticalScrollOffset(newOffset);
+}
+
+void OpenTuneAudioProcessorEditor::horizontalScrollChanged(int newOffset)
+{
+    pianoRoll_.setScrollOffset(newOffset);
+}
+
+void OpenTuneAudioProcessorEditor::zoomLevelChanged(double newZoom)
+{
+    pianoRoll_.setZoomLevel(newZoom);
+}
+
+void OpenTuneAudioProcessorEditor::scrollModeChanged(bool isContinuous)
+{
+    pianoRoll_.setScrollMode(isContinuous
+        ? PianoRollComponent::ScrollMode::Continuous
+        : PianoRollComponent::ScrollMode::Page);
 }
 
 void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int placementIndex)

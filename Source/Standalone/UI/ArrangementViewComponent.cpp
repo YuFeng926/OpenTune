@@ -8,6 +8,7 @@
 #include "../../Utils/PlacementClipboard.h"
 #include "../../Utils/LocalizationManager.h"
 #include "../../Utils/SnapUtils.h"
+#include "../StandaloneArrangementHelpers.h"
 
 #include <algorithm>
 #include <cmath>
@@ -21,89 +22,6 @@ constexpr int kArrangementContentStartX = 8;
 uint64_t hashCombine(uint64_t seed, uint64_t value) noexcept
 {
     return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2));
-}
-
-int getStandaloneSelectedPlacementIndex(OpenTuneAudioProcessor& processor, int trackId)
-{
-    const auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr ? arrangement->getSelectedPlacementIndex(trackId) : -1;
-}
-
-int getStandaloneActiveTrack(OpenTuneAudioProcessor& processor)
-{
-    const auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr ? arrangement->getActiveTrackId() : 0;
-}
-
-int getStandalonePlacementCount(OpenTuneAudioProcessor& processor, int trackId)
-{
-    const auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr ? arrangement->getNumPlacements(trackId) : 0;
-}
-
-bool moveStandalonePlacement(OpenTuneAudioProcessor& processor,
-                             int sourceTrackId,
-                             int targetTrackId,
-                             uint64_t placementId,
-                             double newStartSeconds)
-{
-    return processor.movePlacementToTrack(sourceTrackId, targetTrackId, placementId, newStartSeconds);
-}
-
-bool getStandalonePlacementById(OpenTuneAudioProcessor& processor,
-                                int trackId,
-                                uint64_t placementId,
-                                StandaloneArrangement::Placement& out)
-{
-    const auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr
-        && trackId >= 0
-        && trackId < OpenTuneAudioProcessor::MAX_TRACKS
-        && placementId != 0
-        && arrangement->getPlacementById(trackId, placementId, out);
-}
-
-bool getStandalonePlacementByIndex(OpenTuneAudioProcessor& processor,
-                                   int trackId,
-                                   int placementIndex,
-                                   StandaloneArrangement::Placement& out)
-{
-    const auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr
-        && trackId >= 0
-        && trackId < OpenTuneAudioProcessor::MAX_TRACKS
-        && placementIndex >= 0
-        && arrangement->getPlacementByIndex(trackId, placementIndex, out);
-}
-
-bool getStandalonePlacementStartSeconds(OpenTuneAudioProcessor& processor,
-                                        int trackId,
-                                        uint64_t placementId,
-                                        double& outStartSeconds)
-{
-    StandaloneArrangement::Placement placement;
-    if (!getStandalonePlacementById(processor, trackId, placementId, placement)) {
-        outStartSeconds = 0.0;
-        return false;
-    }
-
-    outStartSeconds = placement.timelineStartSeconds;
-    return true;
-}
-
-bool getStandalonePlacementGain(OpenTuneAudioProcessor& processor,
-                                int trackId,
-                                uint64_t placementId,
-                                float& outGain)
-{
-    StandaloneArrangement::Placement placement;
-    if (!getStandalonePlacementById(processor, trackId, placementId, placement)) {
-        outGain = 1.0f;
-        return false;
-    }
-
-    outGain = placement.gain;
-    return true;
 }
 
 bool setStandalonePlacementStartSeconds(OpenTuneAudioProcessor& processor,
@@ -181,6 +99,9 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
             scrollModeToggleButton_.setButtonText("Page");
         }
         updateAutoScroll();
+        listeners_.call([isCont = (scrollMode_ == ScrollMode::Continuous)](Listener& l) {
+            l.scrollModeChanged(isCont);
+        });
     };
     scrollModeToggleButton_.setColour(juce::TextButton::buttonColourId, UIColors::backgroundLight);
     scrollModeToggleButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
@@ -246,6 +167,7 @@ void ArrangementViewComponent::setZoomLevel(double zoom)
     ensureRenderBandCoversCurrentViewport(true);
     updateOverlayPresentation(readPlayheadSeconds());
     FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
+    listeners_.call([zoom = zoomLevel_](Listener& l) { l.zoomLevelChanged(zoom); });
 }
 
 void ArrangementViewComponent::setScrollOffset(int pixels)
@@ -274,8 +196,12 @@ void ArrangementViewComponent::setScrollOffset(int pixels)
                                                               getLocalBounds(),
                                                               FrameScheduler::Priority::Interactive);
     } else {
+        rulerSurface_.repaint();
+        contentSurface_.repaint();
         FrameScheduler::instance().requestViewportShift(*this, dirtyArea);
     }
+
+    listeners_.call([newOffset](Listener& l) { l.horizontalScrollChanged(newOffset); });
 }
 
 void ArrangementViewComponent::setVerticalScrollOffset(int offset)
@@ -388,7 +314,7 @@ void ArrangementViewComponent::resized()
     timeUnitToggleButton_.setBounds(currentX, 5, btnW, btnH);
 
     // Sync viewport state dimensions
-    viewportState_.viewportWidthPx = getWidth();
+    viewportState_.viewportWidthPx = getVisibleViewportWidth();
     viewportState_.viewportHeightPx = getHeight();
 
     updateScrollBars();
@@ -453,14 +379,6 @@ juce::Rectangle<int> ArrangementViewComponent::getContentViewportBounds() const
              rulerHeight_,
              getVisibleViewportWidth(),
              juce::jmax(0, getHeight() - rulerHeight_ - UIColors::scrollBarThickness) };
-}
-
-juce::Rectangle<int> ArrangementViewComponent::getContentViewportBoundsInSurfaceSpace() const
-{
-    auto bounds = getContentViewportBounds();
-    bounds.setX(bounds.getX() - contentSurfaceBounds_.getX());
-    bounds.setY(bounds.getY() - contentSurfaceBounds_.getY());
-    return bounds;
 }
 
 bool ArrangementViewComponent::isPinnedContinuousFollowActive() const
@@ -626,12 +544,11 @@ void ArrangementViewComponent::rebuildContentSurface()
 void ArrangementViewComponent::updateContentSurfaceBounds()
 {
     const auto viewportBounds = getContentViewportBounds();
-    const int width = renderBand_.valid ? renderBand_.widthPx : viewportBounds.getWidth();
-    contentSurfaceBounds_ = { viewportBounds.getX() + (renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0),
-                              viewportBounds.getY(),
-                              width,
-                              viewportBounds.getHeight() };
+    // Fixed bounds at viewport position — never moves during scroll
+    contentSurfaceBounds_ = viewportBounds;
     contentSurface_.setBounds(contentSurfaceBounds_);
+    // Offset the pre-rendered image to compensate for scroll within the render band
+    contentSurface_.setImageOffsetX(renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0);
 }
 
 void ArrangementViewComponent::drawTimeRulerBackdrop(juce::Graphics& g)
@@ -639,6 +556,12 @@ void ArrangementViewComponent::drawTimeRulerBackdrop(juce::Graphics& g)
     const auto themeId = UIColors::currentThemeId();
     const auto bounds = getLocalBounds();
     const juce::Rectangle<int> rulerArea(0, 0, bounds.getWidth(), rulerHeight_);
+
+    // Exclude button area so the backdrop doesn't paint over the toggle buttons
+    const auto buttonCoverBounds = timeUnitToggleButton_.getBounds()
+        .getUnion(scrollModeToggleButton_.getBounds())
+        .expanded(6, 2);
+    g.excludeClipRegion(buttonCoverBounds);
 
     if (themeId == ThemeId::Aurora)
     {
@@ -729,18 +652,28 @@ void ArrangementViewComponent::rebuildRulerSurface()
 void ArrangementViewComponent::updateRulerSurfaceBounds()
 {
     const auto viewportBounds = getContentViewportBounds();
-    const int width = renderBand_.valid ? renderBand_.widthPx : viewportBounds.getWidth();
-    rulerSurfaceBounds_ = { viewportBounds.getX() + (renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0),
-                            0,
-                            width,
-                            rulerHeight_ };
+    // Fixed bounds at viewport position — never moves during scroll
+    rulerSurfaceBounds_ = { viewportBounds.getX(), 0,
+                            viewportBounds.getWidth(), rulerHeight_ };
     rulerSurface_.setBounds(rulerSurfaceBounds_);
+    // Offset the pre-rendered image to compensate for scroll within the render band
+    rulerSurface_.setImageOffsetX(renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0);
 }
 
 void ArrangementViewComponent::updateOverlayPresentation(double displayPlayheadTime)
 {
     if (isPinnedContinuousFollowActive()) {
-        playheadOverlay_.setPinnedViewportX(getPinnedPlayheadViewportX());
+        const double contentX = static_cast<double>(absoluteTimeToContentX(displayPlayheadTime));
+        const double pinnedOffset = getPinnedPlayheadViewportX() - viewportState_.contentStartX;
+        const double desiredScroll = contentX - pinnedOffset;
+        const int maxScroll = juce::jmax(0, getTotalContentWidth() - getVisibleViewportWidth());
+
+        if (desiredScroll >= 0.0 && desiredScroll <= static_cast<double>(maxScroll)) {
+            playheadOverlay_.setPinnedViewportX(getPinnedPlayheadViewportX());
+        } else {
+            playheadOverlay_.clearPinnedViewportX();
+            playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
+        }
     } else {
         playheadOverlay_.clearPinnedViewportX();
         playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
@@ -887,7 +820,7 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
 void ArrangementViewComponent::requestRenderModelUpdate()
 {
     const auto viewportBounds = getContentViewportBounds();
-    viewportState_.viewportWidthPx = renderBand_.valid ? renderBand_.widthPx : viewportBounds.getWidth();
+    viewportState_.viewportWidthPx = viewportBounds.getWidth();
     viewportState_.viewportHeightPx = getHeight();
 
     // Invoke render model cache update with current state
@@ -1453,12 +1386,6 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
 {
     const auto themeId = UIColors::currentThemeId();
     const int rulerWidth = g.getClipBounds().getWidth();
-    const auto viewportBounds = getContentViewportBounds();
-    const int rulerSurfaceParentX = viewportBounds.getX() + (renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0);
-    const auto buttonCoverBounds = timeUnitToggleButton_.getBounds()
-        .getUnion(scrollModeToggleButton_.getBounds())
-        .expanded(6, 2);
-    const auto rulerButtonExclusion = buttonCoverBounds.translated(-rulerSurfaceParentX, 0);
     const double startTime = renderBand_.valid
         ? renderBand_.startSeconds
         : viewportState_.viewportXToTime(viewportState_.contentStartX, scrollOffset_);
@@ -1469,14 +1396,6 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         return renderBand_.valid
             ? absoluteTimeToContentX(seconds) - renderBand_.startContentX
             : absoluteTimeToViewportX(seconds) - viewportState_.contentStartX;
-    };
-    const auto overlapsButtonCover = [&](int centreX, int width) {
-        if (rulerButtonExclusion.isEmpty()) {
-            return false;
-        }
-
-        const juce::Rectangle<int> itemBounds(centreX - (width / 2), 0, juce::jmax(1, width), rulerHeight_);
-        return itemBounds.intersects(rulerButtonExclusion);
     };
 
     // Switch between Seconds and Bars based on timeUnit_
@@ -1508,9 +1427,6 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         {
             double time = beat * secondsPerBeat;
             int pixelX = timeToRulerX(time);
-            if (overlapsButtonCover(pixelX, 40)) {
-                continue;
-            }
             
             // Draw tick
             g.setColour(themeId == ThemeId::DarkBlueGrey
@@ -1550,9 +1466,6 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         g.setFont(UIColors::getUIFont(13.0f));
         for (double time = firstMarkerTime; time < endTime; time += markerInterval) {
             int pixelX = timeToRulerX(time);
-            if (overlapsButtonCover(pixelX, 40)) {
-                continue;
-            }
             
             g.setColour(themeId == ThemeId::DarkBlueGrey
                             ? UIColors::gridLine.withAlpha(0.10f)
@@ -1939,7 +1852,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     }
 
     // Seek playhead (for clicks outside reference button area)
-    double newPosSeconds = viewportXToAbsoluteTime(e.x);
+    double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
     processor_.setPosition(newPosSeconds);
     syncPlayheadOverlayToAbsoluteTime(newPosSeconds, true);
 
@@ -2138,7 +2051,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
 
     if (isDraggingPlayhead_)
     {
-        double newPosSeconds = viewportXToAbsoluteTime(e.x);
+        double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         processor_.setPosition(newPosSeconds);
         syncPlayheadOverlayToAbsoluteTime(newPosSeconds, true);
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);

@@ -57,12 +57,21 @@ public:
         repaint();
     }
 
+    void setImageOffsetX(int offsetX)
+    {
+        if (imageOffsetX_ == offsetX)
+            return;
+
+        imageOffsetX_ = offsetX;
+    }
+
     void clearSurfaceImage()
     {
         if (!surfaceImage_.isValid())
             return;
 
         surfaceImage_ = {};
+        imageOffsetX_ = 0;
         repaint();
     }
 
@@ -70,10 +79,11 @@ private:
     void paint(juce::Graphics& g) override
     {
         if (surfaceImage_.isValid())
-            g.drawImageAt(surfaceImage_, 0, 0);
+            g.drawImageAt(surfaceImage_, imageOffsetX_, 0);
     }
 
     juce::Image surfaceImage_;
+    int imageOffsetX_ = 0;
 };
 
 class ArrangementViewComponent : public juce::Component,
@@ -94,6 +104,10 @@ public:
         virtual void trackHeightChanged(int newHeight) { juce::ignoreUnused(newHeight); }
         // Y轴滚动回调 - 通知外部垂直滚动偏移变化（用于同步TrackPanel）
         virtual void verticalScrollChanged(int newOffset) { juce::ignoreUnused(newOffset); }
+        // 水平时间轴同步回调 - 用于同步 PianoRoll
+        virtual void horizontalScrollChanged(int newOffset) { juce::ignoreUnused(newOffset); }
+        virtual void zoomLevelChanged(double newZoom) { juce::ignoreUnused(newZoom); }
+        virtual void scrollModeChanged(bool isContinuous) { juce::ignoreUnused(isContinuous); }
     };
 
     ArrangementViewComponent(OpenTuneAudioProcessor& processor);
@@ -198,7 +212,6 @@ private:
     int getTotalContentWidth() const;
     int getVisibleViewportWidth() const;
     juce::Rectangle<int> getContentViewportBounds() const;
-    juce::Rectangle<int> getContentViewportBoundsInSurfaceSpace() const;
     bool isPinnedContinuousFollowActive() const;
     double getPinnedPlayheadViewportX() const;
     double getContinuousFollowTargetScroll(double displayPlayheadTime) const;
@@ -218,8 +231,11 @@ private:
     void performPageScroll(double playheadTime);
     void onScrollVBlankCallback(double timestampSec);
     double readPlayheadSeconds() const;
+public:
     void syncPlayheadOverlay();
     void syncPlayheadOverlayToAbsoluteTime(double absoluteSeconds, bool repaintOverlay = false);
+
+private:
     void updateScrollBars();
     void drawTimeRuler(juce::Graphics& g);
     void drawGridLines(juce::Graphics& g);

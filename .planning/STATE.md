@@ -11,25 +11,45 @@ last_updated: "2026-05-29"
 ## Project Reference
 
 **Core value:** 双格式独立编译，零交叉影响  
-**Current focus:** v1.5 累积功能继续收口，但时间线方向已切到 `DAW timeline follow rendering architecture`  
+**Current focus:** v1.5 累积功能收口 + 代码质量清理  
 **Test strategy:** 先 focused contract，再 focused build/test，再 runtime diagnostics，再 visual/L5
 
 ## Current Position
 
-Milestone 仍为 `v1.5`，但时间线子系统的状态已重新定性：
+Milestone `v1.5`。时间线渲染架构已收敛到正确状态（2026-05-29 验证）。
 
-- 现在的主要问题不是 VBlank/timer 参数，而是 follow scroll 架构把播放时间、scroll 呈现、
-  content rebuild 绑在一起。
-- 2026-05-29 已先完成 **focused tests / kill-list 合同反转** 和 `.planning` 定锚。
-- 本轮没有声称构建、测试执行或视觉验证已经完成。
+### Timeline Architecture — 已完成 ✓
+
+经代码审计确认，当前 live tree 已实现正确的时间线渲染架构：
+
+- **超扫描渲染带**：`renderBand_` = 视口 + 左右各 1 屏超扫描。滚动在带内时只做
+  `setBounds` 移动子组件位置（O(1)），不重建内容。
+- **离屏内容表面**：`contentSurface_` / `rulerSurface_` 是 `ArrangementCachedSurface`
+  子组件，持有预渲染 `juce::Image`。
+- **PlayheadOverlay 独立**：自己的 VBlank 驱动，窄脏矩形重绘，不触发内容重绘。
+- **FrameScheduler 合并**：多次请求合并为一次 repaint，播放时丢弃低优先级动画。
+- **Continuous follow**：pinned playhead + `setScrollOffset` → 视口内只移动子组件。
+- **`smoothScrollCurrent_` 已不存在**：即时位置跳转，无追赶式平滑。
+- **render model key**：绑定 `revision + geometry`，不绑定 `scrollOffsetPx`。
+
+STATE.md 之前描述的"steady scroll 触发 full content repaint / render model rebuild"
+等问题已在之前的重构中解决。旧路径已删除，无并行兜底。
+
+### UI 外观修复 — 已完成 ✓（2026-05-29）
+
+- 编排视图：Time/Cont 按钮被标尺背景遮挡 → `drawTimeRulerBackdrop` 添加 `excludeClipRegion`
+- 钢琴卷帘：标尺顶部 12px 背景割裂 → `paint()` 预填充 `fillAll(rollBackground)`
+
+### 代码质量清理 — 已完成 ✓（2026-05-29）
+
+- Issue #2：结构性重复消除 → `StandaloneArrangementHelpers.h`（20 个共享 inline 辅助）
+- Issue #3：常量统一 → `TrackConstants.h`（`MaxTracks = 12` 单一真值）
 
 ## Landed Mainline Context
 
-已落地主线仍包括：
-
 - UndoManager + PianoRollEditAction
 - PianoRollCorrectionWorker
-- PlayheadOverlayComponent
+- PlayheadOverlayComponent（独立 VBlank overlay）
 - RenderBadgeComponent
 - F0Timeline
 - ONNX 内存优化
@@ -38,59 +58,30 @@ Milestone 仍为 `v1.5`，但时间线子系统的状态已重新定性：
 - Standalone 累积功能
 - AUTO(REF)
 - TimeTool identity seed
-
-这些既有落地项不构成“当前 timeline follow 已正确”的证明。
-
-## New Active Timeline Contract
-
-当前时间线 follow 的唯一正确方向：
-
-1. authoritative playback time
-2. presentation clock
-3. viewport policy
-4. prepared content / render band cache
-5. playhead overlay
-
-明确禁止继续把以下旧口径当成正确行为：
-
-- steady scroll 触发 full content repaint
-- steady scroll 触发 render model rebuild
-- `smoothScrollCurrent_ += diff * constant` 追赶式平滑
-- render model key 绑定 `scrollOffsetPx` / exact visible window
-- 新旧两套 scroll 路径并行保留
+- Timeline rendering architecture（超扫描渲染带 + 离屏表面 + FrameScheduler）
+- StandaloneArrangementHelpers.h + TrackConstants.h 代码质量清理
 
 ## Pending Todos
 
-- [ ] 按 2026-05-29 新合同做 live implementation。
-- [ ] 删除 steady scroll -> full invalidate / full rebuild 旧路径。
-- [ ] Continuous follow 改为 pinned playhead + viewport presentation policy。
-- [ ] render model key 收敛到 render band / revision / geometry 边界。
-- [ ] focused build/test 执行。
-- [ ] runtime diagnostics gate。
-- [ ] Standalone visual smoke。
-- [ ] L5 手工旅程。
-- [ ] Undo/Redo 边界测试。
+- [ ] Undo/Redo 边界测试（空栈、redo 裁剪、500 层溢出）。
 - [ ] CorrectionWorker 取消/覆盖验证。
 - [ ] `OpenTuneTests.exe ui` exit=1 解释修复。
+- [ ] Standalone visual smoke（含 UI 修复验证）。
+- [ ] L5 手工旅程。
 - [ ] Arrangement min-zoom waveform + cross-track drag preview。
 - [ ] macOS bundle inspection。
 
 ## Verification Notes
 
-- 本轮只完成合同与文档层收口：
-  - `Tests/TestMain.cpp`
-  - `Tests/TestTimelineRenderingPipeline.cpp`
-  - `2026-05-29` 两份计划文档
-  - `ROADMAP/STATE` 同步
-- 本轮**未执行** build / `OpenTuneTests.exe` / visual smoke / L5。
-- 因此任何“已经流畅”或“已验证高帧率低占用”的表述，在当前状态下都不成立。
+- 2026-05-29：OpenTune + OpenTuneTests 编译零错误（MSVC Release）。
+- Timeline 架构通过代码审计确认正确（非运行时验证）。
+- UI 修复需要 visual smoke 确认。
 
 ## Main Risks For Next Thread
 
-1. focused contracts 已翻面，live tree 仍大概率先 FAIL，这是预期而不是回退理由。
-2. Arrangement live code 里的追赶式 scroll 平滑会与新合同正面冲突。
-3. live render model key 仍可能含 visible-window / `scrollOffsetPx`，会继续触发 steady-scroll rebuild。
-4. 如果后续实现试图保留新旧路径并行，必须视为违约而不是过渡成功。
+1. UI 修复未经 visual smoke 验证，可能有边缘主题下的回归。
+2. `OpenTuneTests.exe ui` exit=1 仍未解释。
+3. Arrangement min-zoom waveform 功能尚未实现。
 
 ---
 

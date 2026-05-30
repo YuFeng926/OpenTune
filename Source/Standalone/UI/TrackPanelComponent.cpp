@@ -721,11 +721,15 @@ void TrackPanelComponent::setInferenceActive(bool active)
 // 设置可见轨道数量
 void TrackPanelComponent::setVisibleTrackCount(int count)
 {
-    visibleTrackCount_ = juce::jlimit(1, MAX_TRACKS, count);
+    int clamped = juce::jlimit(1, MAX_TRACKS, count);
+    if (clamped == visibleTrackCount_)
+        return;
+    visibleTrackCount_ = clamped;
     // Re-clamp scroll offset for new track count
     setVerticalScrollOffset(verticalScrollOffset_);
     resized();
     repaint();
+    listeners_.call([this](Listener& l) { l.visibleTrackCountChanged(visibleTrackCount_); });
 }
 
 // 增加可见轨道数量（点击+号按钮时调用）

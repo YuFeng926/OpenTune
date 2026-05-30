@@ -20,11 +20,13 @@
 #include <juce_core/juce_core.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "Utils/TrackConstants.h"
+
 namespace OpenTune {
 
 class StandaloneArrangement {
 public:
-    static constexpr int kTrackCount = 12;
+    static constexpr int kTrackCount = MaxTracks;
 
     // 时间轴上的一个片段摆放，引用 MaterializationStore 中的编辑结果
     struct Placement {

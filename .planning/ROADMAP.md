@@ -2,14 +2,11 @@
 
 ## Overview
 
-路线图只保留 milestone 级摘要。当前活跃主线仍是 **v1.5**，但 2026-05-29 起，
-时间线相关工作的优先级被重新定性为：
+路线图只保留 milestone 级摘要。当前活跃主线为 **v1.5**。
 
-**DAW timeline follow rendering architecture 重做**
-
-这不是 `cont` 跟随参数微调，而是一次时间线渲染内核收敛：把播放时间、走带呈现、
-内容绘制三件事拆开，后续实现统一向 `presentation clock + viewport policy + prepared content + overlay`
-收口。
+2026-05-29 代码审计确认：时间线渲染架构已收敛到正确状态（超扫描渲染带 + 离屏表面 +
+独立 PlayheadOverlay + FrameScheduler 合并）。之前 STATE.md 描述的"steady scroll
+触发 full repaint / rebuild"问题已在历史重构中解决，`smoothScrollCurrent_` 已不存在。
 
 ## Milestones
 
@@ -39,17 +36,19 @@
 - Standalone 累积功能
 - AUTO(REF) 主合同
 - TimeTool identity seed
+- Timeline rendering architecture（已收敛 ✓）
+- 代码质量清理：StandaloneArrangementHelpers.h + TrackConstants.h
 
-### v1.5 当前最高优先级收口
+### v1.5 当前优先级
 
-- `DAW timeline follow rendering architecture`
-  - 先反转 focused tests / kill-list 契约
-  - 再做 live implementation
-  - 明确禁止把 steady scroll 继续做成 full repaint / full rebuild 路径
+- Standalone visual smoke（含 UI 修复验证）
+- Undo/Redo 边界测试
+- CorrectionWorker 并发验证
+- `OpenTuneTests.exe ui` exit=1 修复
+- Arrangement min-zoom waveform + cross-track drag preview
 
 ## Open Work
 
-- DAW timeline follow rendering architecture 实装
 - Undo/Redo 边界测试
 - CorrectionWorker 并发验证
 - `ui` suite exit=1 待解释
@@ -58,15 +57,20 @@
 
 ## Active Planning Docs
 
-- `.planning/plans/2026-05-29-daw-timeline-follow-rendering-architecture.md`
-- `.planning/plans/2026-05-29-daw-timeline-follow-rendering-architecture-test-verification.md`
+- `.planning/plans/2026-05-27-arrangement-min-zoom-waveform-and-cross-track-drag-preview.md`
+- `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment.md`
+
+## Archived Planning Docs（已完成/过时）
+
+- `.planning/plans/2026-05-29-daw-timeline-follow-rendering-architecture.md` — 目标已达成，代码已收敛
+- `.planning/plans/2026-05-29-daw-timeline-follow-rendering-architecture-test-verification.md` — 同上
 
 ## Next Planning Actions
 
-1. 按 2026-05-29 timeline 架构合同开始 live code 重构，不再接受 cont 参数微调作为主方向。
-2. 优先删除 steady scroll 的 full-content invalidation / render-model rebuild 旧契约。
-3. 把 Continuous follow 改为 pinned playhead + viewport presentation policy。
-4. 之后再补 focused build/test、runtime diagnostics、visual smoke、L5 旅程。
+1. Visual smoke 验证 UI 修复（Time/Cont 按钮 + 钢琴卷帘标尺背景）。
+2. 补齐 Undo/Redo 边界测试。
+3. 解释 `OpenTuneTests.exe ui` exit=1。
+4. Arrangement min-zoom waveform 功能实现。
 
 ---
 

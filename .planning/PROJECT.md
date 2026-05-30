@@ -35,8 +35,10 @@ Roadmap 与 STATE 详见 `.planning/ROADMAP.md`、`.planning/STATE.md`。
 
 ## Current Mainline Goals
 
+- Timeline rendering architecture 已收敛（超扫描渲染带 + 离屏表面 + 独立 PlayheadOverlay + FrameScheduler）。
 - 继续完成 v1.5 剩余验证：Undo 边界测试、CorrectionWorker 并发验证、UI suite exit-code 修复。
 - 继续补齐 L5 手工旅程：Standalone/VST3 undo、宿主 DAW 行为验证、macOS bundle inspection。
+- 代码质量：StandaloneArrangementHelpers.h（共享辅助）、TrackConstants.h（常量统一）已落地。
 - 后续功能规划保持单真值路线，新增实验能力必须先写计划和验证文档。
 
 ## Requirements
@@ -115,4 +117,4 @@ App-level 结构由 `AppPreferences` 统一承载；PianoRoll 交互决策由 `A
 
 ---
 
-*Last updated: 2026-05-28 - AUTO Ref 文档 kill list 已完成，主合同已落地，focused verification 已完成。*
+*Last updated: 2026-05-29 - Timeline architecture 已收敛，代码质量清理已落地，UI 外观修复已完成。*

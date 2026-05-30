@@ -1142,6 +1142,10 @@ void PianoRollComponent::drawSelectionBox(juce::Graphics& g, ThemeId themeId) {
 
 void PianoRollComponent::paintBackgroundOnly(juce::Graphics& g)
 {
+    // Fill full component to cover ruler area above the 12px-inset rounded clip.
+    // The opaque gradient fill below fully covers this base color where applicable.
+    g.fillAll(UIColors::rollBackground);
+
     auto bounds = getLocalBounds().toFloat().reduced(12.0f);
     const auto themeId = UIColors::currentThemeId();
 
@@ -1175,6 +1179,10 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         paintBackgroundOnly(g);
         return;
     }
+    // Fill full component to cover ruler area above the 12px-inset rounded clip.
+    // The opaque gradient fill below fully covers this base color where applicable.
+    g.fillAll(UIColors::rollBackground);
+
     auto bounds = getLocalBounds().toFloat().reduced(12.0f);
     const auto themeId = UIColors::currentThemeId();
 
