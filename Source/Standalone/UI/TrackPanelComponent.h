@@ -17,12 +17,13 @@
 #include "../../Utils/AppPreferences.h"
 #include "UIColors.h"
 #include "UiAssets.h"
+#include "../../Utils/TrackConstants.h"
 
 namespace OpenTune {
 
 // 轨道面板常量
 static constexpr int TRACK_PANEL_WIDTH = 120; // 紧凑模式宽度
-static constexpr int MAX_TRACKS = 12;           // 最大轨道数量
+static constexpr int MAX_TRACKS = MaxTracks;    // 最大轨道数量
 static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
 
     // 12种轨道淡彩色（柔和不抢主题，BlueBreeze 主题专用）
@@ -538,6 +539,8 @@ public:
         virtual void verticalScrollChanged(int offset) { juce::ignoreUnused(offset); }
         // 轨道颜色变更请求（Custom模式下右键点击轨道时触发）
         virtual void trackColorChangeRequested(int trackId) { juce::ignoreUnused(trackId); }
+        // 可见轨道数量变化回调（用于同步ArrangementView滚动边界）
+        virtual void visibleTrackCountChanged(int newCount) { juce::ignoreUnused(newCount); }
     };
 
     // 构造函数，高度由外部传入

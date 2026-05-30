@@ -48,6 +48,7 @@
 #include "Inference/INoteGenerator.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/PlacementClipboard.h"
+#include "Utils/TrackConstants.h"
 #include <functional>
 
 namespace OpenTune {
@@ -188,7 +189,7 @@ public:
         AnalysisFailed
     };
 
-    static constexpr int MAX_TRACKS = 12;
+    static constexpr int MAX_TRACKS = MaxTracks;
 public:
     OpenTuneAudioProcessor();
     ~OpenTuneAudioProcessor() override;

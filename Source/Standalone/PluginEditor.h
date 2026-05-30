@@ -126,6 +126,7 @@ public:
     void trackVolumeChanged(int trackId, float volume) override;
     void trackHeightChanged(int newHeight) override;  // 与 ArrangementView 的 trackHeight 同步
     void trackColorChangeRequested(int trackId) override;
+    void visibleTrackCountChanged(int newCount) override;
 
     // ArrangementViewComponent::Listener
     void placementSelectionChanged(int trackId, uint64_t placementId) override;
@@ -133,6 +134,9 @@ public:
     void placementDoubleClicked(int trackId, int placementIndex) override;
     void verticalScrollChanged(int newOffset) override;
     void referenceButtonClicked(int trackId, uint64_t placementId, juce::Rectangle<int> buttonScreenArea) override;
+    void horizontalScrollChanged(int newOffset) override;
+    void zoomLevelChanged(double newZoom) override;
+    void scrollModeChanged(bool isContinuous) override;
     // trackHeightChanged已在TrackPanelComponent::Listener中声明
 
     // PianoRollComponent::Listener
