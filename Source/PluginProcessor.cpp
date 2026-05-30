@@ -5505,6 +5505,69 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
             continue;
         }
 
+        // ===== RubberBand 轻量修音分流 =====
+        const bool rubberBandEnabled = appPreferences_ != nullptr
+            && appPreferences_->getState().shared.rubberBandLightPitchEnabled;
+
+        if (rubberBandEnabled) {
+            const auto& originalF0Full = snap->getOriginalF0();
+            const int originalF0Size = static_cast<int>(originalF0Full.size());
+
+            // 安全检查：f0StartFrame 必须在原始 F0 范围内
+            if (f0StartFrame >= 0 && f0StartFrame < originalF0Size) {
+                const bool needsVocoder = chunkNeedsVocoder(
+                    sourceF0.data(), numF0Frames, originalF0Full, f0StartFrame);
+
+                if (!needsVocoder) {
+                    // === RubberBand 逐块 pitch-shift 路径 ===
+                    if (!rubberBandShifter_) {
+                        rubberBandShifter_ = std::make_unique<RubberBandPitchShifter>(
+                            RenderCache::kSampleRate);
+                    }
+
+                    const int safeNumF0Frames = std::min(numF0Frames, originalF0Size - f0StartFrame);
+                    auto shiftedAudio = rubberBandShifter_->shiftChunk(
+                        monoAudio.data(),
+                        static_cast<int>(boundaries.publishSampleCount),
+                        originalF0Full.data() + f0StartFrame,
+                        sourceF0.data(),
+                        safeNumF0Frames,
+                        f0FrameRate);
+
+                    // LiveShifter 保证输出长度 == 输入长度，防御性截断
+                    if (static_cast<int64_t>(shiftedAudio.size()) != boundaries.publishSampleCount) {
+                        shiftedAudio.resize(static_cast<size_t>(boundaries.publishSampleCount), 0.0f);
+                    }
+
+                    const bool added = coreJob.renderCache->addChunk(
+                        boundaries.trueStartSample, boundaries.trueEndSample,
+                        std::move(shiftedAudio), coreJob.targetRevision);
+
+                    if (added) {
+                        coreJob.renderCache->completeChunkRender(relChunkStartSec,
+                            coreJob.targetRevision, RenderCache::CompletionResult::Succeeded);
+                    } else {
+                        coreJob.renderCache->completeChunkRender(relChunkStartSec,
+                            coreJob.targetRevision, RenderCache::CompletionResult::TerminalFailure);
+                    }
+
+                    // Stage 2 失效（与声码器路径一致）
+                    const uint64_t rbMatId = coreJob.materializationId;
+                    if (rbMatId != 0 && materializationStore_ != nullptr) {
+                        materializationStore_->getTimeStretchCache().invalidate(rbMatId);
+                        requestStage2Rebuild(rbMatId);
+                    }
+
+                    AppLogger::debug("RenderWorker: RubberBand pitch-shift chunk matId="
+                        + juce::String(static_cast<juce::int64>(coreJob.materializationId))
+                        + " start=" + juce::String(relChunkStartSec, 3));
+
+                    schedulerCv_.notify_one();
+                    continue;  // 跳过声码器路径
+                }
+            }
+        }
+
         if (!ensureVocoderReady()) {
             AppLogger::log("RenderWorker: ensureVocoderReady FAILED");
             coreJob.renderCache->completeChunkRender(relChunkStartSec, coreJob.targetRevision,

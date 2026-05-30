@@ -513,6 +513,9 @@ target_sources(OpenTune
         Source/Inference/SoundTouchStretcher.h
         Source/Inference/TimeStretchCache.cpp
         Source/Inference/TimeStretchCache.h
+        Source/Inference/ChunkRenderStrategy.h
+        Source/Inference/RubberBandPitchShifter.cpp
+        Source/Inference/RubberBandPitchShifter.h
 
         # AI Model Interfaces
         Source/Inference/IF0Extractor.h
@@ -760,6 +763,46 @@ if(EXISTS ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp)
     message(STATUS "SoundTouch: vendored at ${SOUNDTOUCH_DIR}")
 else()
     message(FATAL_ERROR "SoundTouch source not found at ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp")
+endif()
+
+# ==============================================================================
+# Rubber Band Library v4.0.0 — lightweight per-block pitch-shift for small corrections.
+# Used by hybrid RubberBand/NSF-HiFiGAN rendering pipeline (opt-in via preferences).
+# License: GPL-2.0-or-later. See ThirdParty/rubberband-4.0.0/COPYING.
+# ==============================================================================
+set(RUBBERBAND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/rubberband-4.0.0")
+if(EXISTS "${RUBBERBAND_DIR}/single/RubberBandSingle.cpp")
+    target_sources(OpenTune PRIVATE
+        "${RUBBERBAND_DIR}/single/RubberBandSingle.cpp"
+    )
+    target_include_directories(OpenTune PRIVATE "${RUBBERBAND_DIR}")
+    target_compile_definitions(OpenTune PRIVATE
+        LACK_SINCOS=1
+    )
+    if(WIN32)
+        target_compile_definitions(OpenTune PRIVATE LACK_POSIXMEMALIGN=1)
+        # NOMINMAX must be defined for RubberBand to avoid Windows min/max macro conflicts
+        set_source_files_properties(
+            "${RUBBERBAND_DIR}/single/RubberBandSingle.cpp"
+            PROPERTIES
+                COMPILE_DEFINITIONS "NOMINMAX;WIN32_LEAN_AND_MEAN"
+        )
+    endif()
+    if(MSVC)
+        # Suppress benign MSVC warnings from vendored RubberBand code:
+        #   C4244 - conversion from double to float
+        #   C4267 - conversion from size_t to int
+        #   C4305 - truncation from double to float
+        set(RUBBERBAND_MSVC_WARN "/wd4244" "/wd4267" "/wd4305")
+        set_source_files_properties(
+            "${RUBBERBAND_DIR}/single/RubberBandSingle.cpp"
+            PROPERTIES
+                COMPILE_OPTIONS "${RUBBERBAND_MSVC_WARN}"
+        )
+    endif()
+    message(STATUS "RubberBand: vendored at ${RUBBERBAND_DIR} (single-file mode)")
+else()
+    message(FATAL_ERROR "RubberBand source not found at ${RUBBERBAND_DIR}/single/RubberBandSingle.cpp")
 endif()
 
 # ==============================================================================
@@ -1234,6 +1277,7 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/TestMaterializationContract.cpp
         Tests/TestReferenceAnalysisService.cpp
         Tests/TestProjectSessionReference.cpp
+        Tests/RubberBandPitchShifterTests.cpp
     )
 
     target_include_directories(OpenTuneTests
