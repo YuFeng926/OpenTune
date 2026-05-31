@@ -1,4 +1,5 @@
 #include "ArrangementRenderModelCache.h"
+#include "../../Utils/TrackConstants.h"
 
 #include <cmath>
 
@@ -224,7 +225,6 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
     }
 
     constexpr int kMaxTracks = OpenTuneAudioProcessor::MAX_TRACKS;
-    constexpr int kRulerHeight = 30;
 
     const double visibleTimeStart = bandStartSeconds;
     const double visibleTimeEnd = bandEndSeconds;
@@ -257,14 +257,8 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         if (placement.durationSeconds <= 0.0)
             return;
 
-        auto laneBounds = [&]() -> juce::Rectangle<int> {
-            auto bounds = juce::Rectangle<int>(0, 0, bandWidthPx, viewport.viewportHeightPx)
-                              .withTrimmedTop(kRulerHeight);
-            int h = trackHeight;
-            return bounds.withY(kRulerHeight + displayTrackId * h).withHeight(h);
-        }();
-
-        auto lane = laneBounds.reduced(6, 8);
+        auto laneBounds = juce::Rectangle<int>(0, displayTrackId * trackHeight, bandWidthPx, trackHeight);
+        auto lane = laneBounds.reduced(kClipShellInsetX, kClipShellInsetY);
         const int x1 = viewport.timeToContentX(timelineStartSeconds) - bandStartContentX;
         const int x2 = viewport.timeToContentX(timelineEndSeconds) - bandStartContentX;
         const int width = juce::jmax(8, x2 - x1);
@@ -330,17 +324,11 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
 
     for (int trackId = 0; trackId < kMaxTracks; ++trackId)
     {
-        auto laneBounds = [&]() -> juce::Rectangle<int> {
-            auto bounds = juce::Rectangle<int>(0, 0, bandWidthPx, viewport.viewportHeightPx)
-                              .withTrimmedTop(kRulerHeight);
-            int h = trackHeight;
-            return bounds.withY(kRulerHeight + trackId * h).withHeight(h);
-        }();
+        // Lanes use component-space Y (consumed in paint() directly)
+        auto laneBounds = juce::Rectangle<int>(0, kTrackLaneTopOffset + trackId * trackHeight,
+                                                   bandWidthPx, trackHeight);
 
-        if (laneBounds.getBottom() < kRulerHeight)
-            continue;
-
-        if (laneBounds.getY() <= viewport.viewportHeightPx) {
+        if (laneBounds.getY() <= viewport.viewportHeightPx + kTrackLaneTopOffset) {
             RenderModel::VisibleLane lane;
             lane.trackId = trackId;
             lane.area = laneBounds.toFloat();

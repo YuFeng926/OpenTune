@@ -2550,6 +2550,90 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
     opts.launchAsync();
 }
 
+void OpenTuneAudioProcessorEditor::trackAddRequested()
+{
+    const int current = trackPanel_.getVisibleTrackCount();
+    if (current >= OpenTuneAudioProcessor::MAX_TRACKS)
+        return;
+
+    trackPanel_.setVisibleTrackCount(current + 1);
+    arrangementView_.setVisibleTrackCount(current + 1);
+    arrangementView_.repaint();
+}
+
+void OpenTuneAudioProcessorEditor::trackDuplicateRequested(int trackId)
+{
+    auto* arrangement = processorRef_.getStandaloneArrangement();
+    if (arrangement == nullptr)
+        return;
+
+    const int visibleCount = trackPanel_.getVisibleTrackCount();
+    if (visibleCount >= OpenTuneAudioProcessor::MAX_TRACKS)
+        return;
+
+    const int targetSlot = visibleCount;
+
+    // Copy track mix state via public API
+    arrangement->setTrackMuted(targetSlot, arrangement->isTrackMuted(trackId));
+    arrangement->setTrackSolo(targetSlot, arrangement->isTrackSolo(trackId));
+    arrangement->setTrackVolume(targetSlot, arrangement->getTrackVolume(trackId));
+    arrangement->setTrackColour(targetSlot, arrangement->getTrackColour(trackId));
+
+    // Copy placements
+    const int numPlacements = arrangement->getNumPlacements(trackId);
+    for (int i = 0; i < numPlacements; ++i) {
+        StandaloneArrangement::Placement p;
+        if (arrangement->getPlacementByIndex(trackId, i, p)) {
+            p.placementId = 0;  // Let insertPlacement assign a new ID
+            arrangement->insertPlacement(targetSlot, p);
+        }
+    }
+
+    // Expand visible count to show the new track
+    trackPanel_.setVisibleTrackCount(visibleCount + 1);
+    arrangementView_.setVisibleTrackCount(visibleCount + 1);
+    trackPanel_.setTrackColour(targetSlot, arrangement->getTrackColour(trackId));
+    arrangementView_.repaint();
+}
+
+void OpenTuneAudioProcessorEditor::trackDeleteRequested(int trackId)
+{
+    auto* arrangement = processorRef_.getStandaloneArrangement();
+    if (arrangement == nullptr)
+        return;
+
+    // Clear all placements on this track
+    while (arrangement->getNumPlacements(trackId) > 0) {
+        const auto pid = arrangement->getPlacementId(trackId, 0);
+        arrangement->deletePlacementById(trackId, pid);
+    }
+
+    // Reset mix state
+    arrangement->setTrackMuted(trackId, false);
+    arrangement->setTrackSolo(trackId, false);
+    arrangement->setTrackVolume(trackId, 1.0f);
+
+    trackPanel_.setTrackMuted(trackId, false);
+    trackPanel_.setTrackSolo(trackId, false);
+    trackPanel_.setTrackVolume(trackId, 1.0f);
+    arrangementView_.repaint();
+}
+
+void OpenTuneAudioProcessorEditor::trackColorRandomizeRequested(int trackId)
+{
+    auto* arrangement = processorRef_.getStandaloneArrangement();
+    if (arrangement == nullptr)
+        return;
+
+    // Pick a random color from the pastel palette
+    const int colorIndex = juce::Random::getSystemRandom().nextInt(12);
+    const auto newColour = juce::Colour(OpenTune::trackPastelColors[colorIndex]);
+
+    arrangement->setTrackColour(trackId, newColour);
+    trackPanel_.setTrackColour(trackId, newColour);
+    arrangementView_.repaint();
+}
+
 void OpenTuneAudioProcessorEditor::placementSelectionChanged(int trackId, uint64_t placementId)
 {
     applyPlacementSelectionContext(trackId, placementId);

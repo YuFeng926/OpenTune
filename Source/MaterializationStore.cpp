@@ -501,7 +501,7 @@ bool MaterializationStore::setTimeGrid(uint64_t materializationId,
 
 // ============================================================================
 // vocal-time-stretch §5.5 — lazy SoundTouchStretcher accessor
-// (replaces RubberBandStretcher; see swap-time-stretch-to-soundtouch change)
+// (replaces the archived phase-vocoder stretcher; see swap-time-stretch-to-soundtouch change)
 // ============================================================================
 
 SoundTouchStretcher* MaterializationStore::getOpenTuneStretcher(uint64_t materializationId,

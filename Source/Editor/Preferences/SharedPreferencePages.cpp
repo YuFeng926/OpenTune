@@ -235,16 +235,16 @@ public:
         initialiseComboBox(experimentalReferenceAlignModeSelector_);
         addAndMakeVisible(experimentalReferenceAlignModeSelector_);
 
-        initialiseToggleButton(rubberBandLightPitchToggle_);
-        rubberBandLightPitchToggle_.setButtonText(
-            juce::String::fromUTF8(u8"轻量修音模式（小幅修正使用 RubberBand，减少谐波伪影）"));
-        rubberBandLightPitchToggle_.setToggleState(state.shared.rubberBandLightPitchEnabled,
+        initialiseToggleButton(lightPitchCorrectionToggle_);
+        lightPitchCorrectionToggle_.setButtonText(
+            juce::String::fromUTF8(u8"轻量修音模式（小幅修正使用周期重采样，超低延迟零相位伪影）"));
+        lightPitchCorrectionToggle_.setToggleState(state.shared.lightPitchCorrectionEnabled,
                                                    juce::dontSendNotification);
-        rubberBandLightPitchToggle_.onClick = [this] {
-            appPreferences_.setRubberBandLightPitchEnabled(rubberBandLightPitchToggle_.getToggleState());
+        lightPitchCorrectionToggle_.onClick = [this] {
+            appPreferences_.setLightPitchCorrectionEnabled(lightPitchCorrectionToggle_.getToggleState());
             notifyChanged();
         };
-        addAndMakeVisible(rubberBandLightPitchToggle_);
+        addAndMakeVisible(lightPitchCorrectionToggle_);
     }
 
     void paint(juce::Graphics& g) override
@@ -282,7 +282,7 @@ public:
 
         bounds.removeFromTop(8);
         row = bounds.removeFromTop(rowHeight);
-        rubberBandLightPitchToggle_.setBounds(row.removeFromLeft(labelWidth + selectorWidth + 80));
+        lightPitchCorrectionToggle_.setBounds(row.removeFromLeft(labelWidth + selectorWidth + 80));
     }
 
 private:
@@ -305,7 +305,7 @@ private:
     juce::Label experimentalFeaturesHintLabel_;
     juce::Label experimentalReferenceAlignModeLabel_;
     juce::ComboBox experimentalReferenceAlignModeSelector_;
-    juce::ToggleButton rubberBandLightPitchToggle_;
+    juce::ToggleButton lightPitchCorrectionToggle_;
 };
 
 class SharedEditingPage final : public juce::Component

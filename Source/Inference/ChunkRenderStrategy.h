@@ -5,16 +5,16 @@
 
 namespace OpenTune {
 
-/// 50 cents — 超过此阈值走声码器
-constexpr float kPitchShiftThresholdCents = 50.0f;
+/// 100 cents — 超过此阈值走声码器（AutoTune cycle resampling 在 100 cents 内质量优良）
+constexpr float kPitchShiftThresholdCents = 100.0f;
 
 /// 判断 chunk 是否需要声码器（任一有声帧偏差 >= 阈值）。
 /// @param correctedF0    修正后 F0 数组（chunk 局部，100fps）
 /// @param numF0Frames    correctedF0 帧数
 /// @param originalF0     原始 F0 全局数组
 /// @param f0StartFrame   chunk 在全局 F0 中的起始帧索引
-/// @param thresholdCents 偏差阈值（默认 50 cents）
-/// @return true = 需要声码器；false = 可用 RubberBand
+/// @param thresholdCents 偏差阈值（默认 100 cents）
+/// @return true = 需要声码器；false = 可用 AutoTune cycle resampling
 inline bool chunkNeedsVocoder(
     const float* correctedF0,
     int numF0Frames,

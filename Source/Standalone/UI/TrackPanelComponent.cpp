@@ -185,15 +185,15 @@ void TrackPanelComponent::paint(juce::Graphics& g)
     const int dynamicTrackHeight = trackHeight_;
     
     // 轨道卡片的内边距 - 确保圆角不被截断
-    const float trackCardMarginX = 8.0f;
-    const float trackCardMarginY = 6.0f;
+    const float trackCardMarginX = static_cast<float>(kTrackPanelCardInsetX);
+    const float trackCardMarginY = static_cast<float>(kTrackPanelCardInsetY);
 
     // Draw track backgrounds and separators
     for (int i = 0; i < visibleTrackCount_; ++i)
     {
-        // 使用trackStartYOffset_与ArrangementView对齐（默认30，匹配rulerHeight_）
-        // Y坐标计算：trackStartYOffset_ + trackId * h - verticalScrollOffset_
-        int y = trackStartYOffset_ + i * dynamicTrackHeight - verticalScrollOffset_;
+        // 使用kTrackLaneTopOffset与ArrangementView对齐（默认30，匹配rulerHeight_）
+        // Y坐标计算：kTrackLaneTopOffset + trackId * h - verticalScrollOffset_
+        int y = kTrackLaneTopOffset + i * dynamicTrackHeight - verticalScrollOffset_;
         
         // 跳过完全不可见的轨道（性能优化）
         if (y + dynamicTrackHeight < 0 || y > getHeight())
@@ -205,7 +205,7 @@ void TrackPanelComponent::paint(juce::Graphics& g)
         if (themeId == ThemeId::Aurora)
         {
             const auto trackColor = trackColors_[i];
-            const auto laneBounds = trackBounds.reduced(2.0f, 1.0f);
+            const auto laneBounds = trackBounds.reduced(static_cast<float>(kTrackPanelCardInsetX), static_cast<float>(kTrackPanelCardInsetY));
             const auto tintBounds = laneBounds.withX(bounds.getX()).withRight(bounds.getRight());
             const auto active = tracks_[i].isActive;
 
@@ -361,8 +361,8 @@ void TrackPanelComponent::resized()
     const int addButtonHeight = 60;
     
     // 轨道卡片内边距
-    const int trackCardMarginX = 8;
-    const int trackCardMarginY = 6;
+    const int trackCardMarginX = kTrackPanelCardInsetX;
+    const int trackCardMarginY = kTrackPanelCardInsetY;
 
     // 布局可见轨道
     for (int i = 0; i < MAX_TRACKS; ++i)
@@ -379,9 +379,9 @@ void TrackPanelComponent::resized()
         if (!visible)
             continue;
         
-        // 轨道区域 - 使用trackStartYOffset_与ArrangementView对齐
-        // Y坐标计算：trackStartYOffset_ + trackId * h - verticalScrollOffset_
-        int trackY = trackStartYOffset_ + i * dynamicTrackHeight - verticalScrollOffset_;
+        // 轨道区域 - 使用kTrackLaneTopOffset与ArrangementView对齐
+        // Y坐标计算：kTrackLaneTopOffset + trackId * h - verticalScrollOffset_
+        int trackY = kTrackLaneTopOffset + i * dynamicTrackHeight - verticalScrollOffset_;
         auto trackBounds = juce::Rectangle<int>(contentBounds.getX(), trackY, 
                                                  contentBounds.getWidth(), dynamicTrackHeight);
         
@@ -418,7 +418,7 @@ void TrackPanelComponent::resized()
     }
     
     // +号按钮布局 - 放在最后一个可见轨道下方
-    int addButtonY = trackStartYOffset_ + visibleTrackCount_ * dynamicTrackHeight - verticalScrollOffset_;
+    int addButtonY = kTrackLaneTopOffset + visibleTrackCount_ * dynamicTrackHeight - verticalScrollOffset_;
     auto addButtonBounds = juce::Rectangle<int>(contentBounds.getX(), addButtonY, 
                                                  contentBounds.getWidth(), addButtonHeight).reduced(4, 4);
     addTrackButton_.setBounds(addButtonBounds);
@@ -432,9 +432,9 @@ void TrackPanelComponent::mouseDown(const juce::MouseEvent& event)
         return;
 
     // 使用动态轨道高度和滚动偏移计算点击的轨道
-    // 坐标转换：(event.y - trackStartYOffset_ + verticalScrollOffset_) / trackHeight_
+    // 坐标转换：(event.y - kTrackLaneTopOffset + verticalScrollOffset_) / trackHeight_
     const int dynamicTrackHeight = trackHeight_;
-    int clickedTrack = (event.y - trackStartYOffset_ + verticalScrollOffset_) / dynamicTrackHeight;
+    int clickedTrack = (event.y - kTrackLaneTopOffset + verticalScrollOffset_) / dynamicTrackHeight;
 
     // 只响应可见轨道的点击
     if (clickedTrack >= 0 && clickedTrack < visibleTrackCount_)
@@ -445,20 +445,39 @@ void TrackPanelComponent::mouseDown(const juce::MouseEvent& event)
 
 void TrackPanelComponent::mouseUp(const juce::MouseEvent& event)
 {
-    // Right-click in Custom mode: open color picker for this track
-    if (event.mods.isPopupMenu() && trackColorMode_ == TrackColorMode::Custom)
-    {
-        const int dynamicTrackHeight = trackHeight_;
-        int trackIndex = (event.y - trackStartYOffset_ + verticalScrollOffset_) / dynamicTrackHeight;
-
-        if (trackIndex >= 0 && trackIndex < visibleTrackCount_)
-        {
-            listeners_.call([trackIndex](Listener& l) { l.trackColorChangeRequested(trackIndex); });
-        }
+    if (!event.mods.isPopupMenu()) {
+        juce::Component::mouseUp(event);
         return;
     }
 
-    juce::Component::mouseUp(event);
+    const int trackIndex = (event.y - kTrackLaneTopOffset + verticalScrollOffset_) / trackHeight_;
+    if (trackIndex < 0 || trackIndex >= visibleTrackCount_)
+        return;
+
+    juce::PopupMenu menu;
+    menu.addItem(1, TRANS("Add Track"));
+    menu.addItem(2, TRANS("Duplicate Track"));
+    menu.addSeparator();
+
+    juce::PopupMenu colorSub;
+    colorSub.addItem(3, TRANS("Custom Color..."));
+    colorSub.addItem(4, TRANS("Random Color"));
+    menu.addSubMenu(TRANS("Track Color"), colorSub);
+
+    menu.addSeparator();
+    menu.addItem(5, TRANS("Delete Track"));
+
+    menu.showMenuAsync(juce::PopupMenu::Options(),
+        [this, trackIndex](int result) {
+            switch (result) {
+                case 1: listeners_.call([](Listener& l) { l.trackAddRequested(); }); break;
+                case 2: listeners_.call([trackIndex](Listener& l) { l.trackDuplicateRequested(trackIndex); }); break;
+                case 3: listeners_.call([trackIndex](Listener& l) { l.trackColorChangeRequested(trackIndex); }); break;
+                case 4: listeners_.call([trackIndex](Listener& l) { l.trackColorRandomizeRequested(trackIndex); }); break;
+                case 5: listeners_.call([trackIndex](Listener& l) { l.trackDeleteRequested(trackIndex); }); break;
+                default: break;
+            }
+        });
 }
 
 // Shift + 鼠标滚轮：Y轴缩放（与ArrangementView同步）
@@ -485,7 +504,7 @@ void TrackPanelComponent::mouseWheelMove(const juce::MouseEvent& event, const ju
     if (wheel.deltaY != 0.0f)
     {
         // 计算总内容高度（可见轨道数量）
-        const int totalContentHeight = visibleTrackCount_ * trackHeight_ + trackStartYOffset_;
+        const int totalContentHeight = visibleTrackCount_ * trackHeight_ + kTrackLaneTopOffset;
         // 可见区域高度
         const int visibleHeight = getHeight();
         
@@ -537,7 +556,7 @@ void TrackPanelComponent::setTrackHeight(int height)
 void TrackPanelComponent::setVerticalScrollOffset(int offset)
 {
     // 计算最大滚动偏移（可见轨道数量）
-    const int totalContentHeight = visibleTrackCount_ * trackHeight_ + trackStartYOffset_;
+    const int totalContentHeight = visibleTrackCount_ * trackHeight_ + kTrackLaneTopOffset;
     const int visibleHeight = getHeight();
     const int maxScrollOffset = juce::jmax(0, totalContentHeight - visibleHeight);
     
@@ -547,17 +566,6 @@ void TrackPanelComponent::setVerticalScrollOffset(int offset)
     if (newOffset != verticalScrollOffset_)
     {
         verticalScrollOffset_ = newOffset;
-        resized();
-        repaint();
-    }
-}
-
-// 设置轨道起始Y偏移（与ArrangementView的rulerHeight对齐）
-void TrackPanelComponent::setTrackStartYOffset(int offset)
-{
-    if (offset != trackStartYOffset_)
-    {
-        trackStartYOffset_ = offset;
         resized();
         repaint();
     }

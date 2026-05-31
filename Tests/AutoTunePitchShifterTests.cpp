@@ -1,16 +1,16 @@
 /**
- * Tests/RubberBandPitchShifterTests.cpp — Unit tests for hybrid RubberBand/NSF-HiFiGAN
- * chunk rendering decision gate and RubberBandPitchShifter wrapper.
+ * Tests/AutoTunePitchShifterTests.cpp — Unit tests for hybrid AutoTune/NSF-HiFiGAN
+ * chunk rendering decision gate and AutoTunePitchShifter wrapper.
  *
- * Suite aggregator: runRubberBandPitchShifterSuite() — registered in TestMain.cpp.
+ * Suite aggregator: runAutoTunePitchShifterSuite() — registered in TestMain.cpp.
  *
  * Coverage:
  *   - ChunkRenderStrategy: threshold logic, edge cases (unvoiced, boundary)
- *   - RubberBandPitchShifter: construction, identity passthrough, pitch shift
+ *   - AutoTunePitchShifter: construction, identity passthrough, pitch shift
  */
 #include "TestSupport.h"
 #include "Inference/ChunkRenderStrategy.h"
-#include "Inference/RubberBandPitchShifter.h"
+#include "DSP/AutoTunePitchShifter.h"
 
 #include <cmath>
 #include <vector>
@@ -32,6 +32,18 @@ std::vector<float> makeTestSine(double freqHz, double durationSec, double amp = 
     return out;
 }
 
+/// Count zero crossings in a signal (positive-going only)
+int countZeroCrossings(const std::vector<float>& signal)
+{
+    int crossings = 0;
+    for (size_t i = 1; i < signal.size(); ++i) {
+        if (signal[i - 1] <= 0.0f && signal[i] > 0.0f) {
+            ++crossings;
+        }
+    }
+    return crossings;
+}
+
 } // namespace
 
 // ============================================================================
@@ -44,7 +56,7 @@ void runChunkRenderStrategy_AllUnvoicedTest()
 
     // All frames unvoiced (F0 = 0) → should NOT need vocoder
     std::vector<float> corrected(100, 0.0f);
-    std::vector<float> original(100, 0.0f);
+    std::vector<float> original(100, 0.0);
 
     const bool result = OpenTune::chunkNeedsVocoder(
         corrected.data(), 100, original, 0);
@@ -60,7 +72,7 @@ void runChunkRenderStrategy_SmallDeviationTest()
 {
     constexpr const char* testName = "ChunkRenderStrategy_SmallDeviation_NoVocoder";
 
-    // 30 cents deviation (< 50 threshold) → should NOT need vocoder
+    // 30 cents deviation (< 100 threshold) → should NOT need vocoder
     const float originalHz = 440.0f;
     const float correctedHz = originalHz * std::pow(2.0f, 30.0f / 1200.0f);  // +30 cents
 
@@ -77,11 +89,12 @@ void runChunkRenderStrategy_SmallDeviationTest()
     logPass(testName);
 }
 
-void runChunkRenderStrategy_ExactThresholdTest()
+void runChunkRenderStrategy_BelowNewThresholdTest()
 {
-    constexpr const char* testName = "ChunkRenderStrategy_ExactThreshold_NeedsVocoder";
+    constexpr const char* testName = "ChunkRenderStrategy_BelowNewThreshold_NoVocoder";
 
-    // Exactly 50 cents deviation (>= threshold) → NEEDS vocoder
+    // 50 cents deviation (< 100 threshold) → should NOT need vocoder
+    // (previously 50 was the threshold; now raised to 100)
     const float originalHz = 440.0f;
     const float correctedHz = originalHz * std::pow(2.0f, 50.0f / 1200.0f);  // +50 cents
 
@@ -91,8 +104,29 @@ void runChunkRenderStrategy_ExactThresholdTest()
     const bool result = OpenTune::chunkNeedsVocoder(
         corrected.data(), 100, original, 0);
 
+    if (result) {
+        logFail(testName, "50-cent deviation should no longer need vocoder after threshold raised to 100");
+        return;
+    }
+    logPass(testName);
+}
+
+void runChunkRenderStrategy_ExactThresholdTest()
+{
+    constexpr const char* testName = "ChunkRenderStrategy_ExactThreshold_NeedsVocoder";
+
+    // Exactly 100 cents deviation (>= threshold) → NEEDS vocoder
+    const float originalHz = 440.0f;
+    const float correctedHz = originalHz * std::pow(2.0f, 100.0f / 1200.0f);  // +100 cents
+
+    std::vector<float> corrected(100, correctedHz);
+    std::vector<float> original(100, originalHz);
+
+    const bool result = OpenTune::chunkNeedsVocoder(
+        corrected.data(), 100, original, 0);
+
     if (!result) {
-        logFail(testName, "50-cent deviation should need vocoder");
+        logFail(testName, "100-cent deviation should need vocoder");
         return;
     }
     logPass(testName);
@@ -123,10 +157,10 @@ void runChunkRenderStrategy_MixedFramesOneExceedsTest()
 {
     constexpr const char* testName = "ChunkRenderStrategy_MixedFrames_OneExceeds";
 
-    // 99 frames at 20 cents, 1 frame at 100 cents → needs vocoder
+    // 99 frames at 60 cents, 1 frame at 120 cents → needs vocoder
     const float originalHz = 440.0f;
-    const float smallShift = originalHz * std::pow(2.0f, 20.0f / 1200.0f);
-    const float largeShift = originalHz * std::pow(2.0f, 100.0f / 1200.0f);
+    const float smallShift = originalHz * std::pow(2.0f, 60.0f / 1200.0f);
+    const float largeShift = originalHz * std::pow(2.0f, 120.0f / 1200.0f);
 
     std::vector<float> corrected(100, smallShift);
     corrected[50] = largeShift;  // single frame exceeds
@@ -169,18 +203,18 @@ void runChunkRenderStrategy_OutOfBoundsFrameSkippedTest()
 
     // f0StartFrame + numF0Frames exceeds original size → out-of-bounds frames skipped
     const float originalHz = 440.0f;
-    const float correctedHz = originalHz * std::pow(2.0f, 100.0f / 1200.0f);  // 100 cents
+    const float correctedHz = originalHz * std::pow(2.0f, 120.0f / 1200.0f);  // 120 cents
 
     std::vector<float> corrected(100, correctedHz);
     std::vector<float> original(50, originalHz);  // only 50 frames available
 
     // Start at 0, but corrected has 100 frames while original only has 50
-    // Frames 50-99 should be skipped (out of bounds), frames 0-49 have 100 cents → needs vocoder
+    // Frames 50-99 should be skipped (out of bounds), frames 0-49 have 120 cents → needs vocoder
     const bool result = OpenTune::chunkNeedsVocoder(
         corrected.data(), 100, original, 0);
 
     if (!result) {
-        logFail(testName, "in-bounds frames with 100-cent deviation should need vocoder");
+        logFail(testName, "in-bounds frames with 120-cent deviation should need vocoder");
         return;
     }
     logPass(testName);
@@ -190,9 +224,9 @@ void runChunkRenderStrategy_NegativeDeviationTest()
 {
     constexpr const char* testName = "ChunkRenderStrategy_NegativeDeviation_NeedsVocoder";
 
-    // -80 cents (pitch DOWN) → abs(deviation) = 80 > 50 → needs vocoder
+    // -120 cents (pitch DOWN) → abs(deviation) = 120 > 100 → needs vocoder
     const float originalHz = 440.0f;
-    const float correctedHz = originalHz * std::pow(2.0f, -80.0f / 1200.0f);
+    const float correctedHz = originalHz * std::pow(2.0f, -120.0f / 1200.0f);
 
     std::vector<float> corrected(100, correctedHz);
     std::vector<float> original(100, originalHz);
@@ -201,42 +235,40 @@ void runChunkRenderStrategy_NegativeDeviationTest()
         corrected.data(), 100, original, 0);
 
     if (!result) {
-        logFail(testName, "80-cent downward deviation should need vocoder");
+        logFail(testName, "120-cent downward deviation should need vocoder");
         return;
     }
     logPass(testName);
 }
 
 // ============================================================================
-// RubberBandPitchShifter Tests
+// AutoTunePitchShifter Tests
 // ============================================================================
 
-void runRubberBandPitchShifter_ConstructTest()
+void runAutoTunePitchShifter_ConstructTest()
 {
-    constexpr const char* testName = "RubberBandPitchShifter_Construct";
+    constexpr const char* testName = "AutoTunePitchShifter_Construct";
 
-    OpenTune::RubberBandPitchShifter shifter(kSampleRate);
-    const size_t blockSize = shifter.getBlockSize();
+    OpenTune::AutoTunePitchShifter shifter(kSampleRate);
 
-    if (blockSize == 0) {
-        logFail(testName, "block size should be > 0");
-        return;
-    }
-    if (blockSize > 2048) {
-        logFail(testName, "block size unexpectedly large (> 2048)");
+    // Verify construction succeeds and shiftChunk with empty input doesn't crash
+    std::vector<float> emptyF0;
+    auto output = shifter.shiftChunk(nullptr, 0, nullptr, nullptr, 0, kF0FrameRate);
+    if (!output.empty()) {
+        logFail(testName, "zero-length input should produce empty output");
         return;
     }
     logPass(testName);
 }
 
-void runRubberBandPitchShifter_IdentityPassthroughTest()
+void runAutoTunePitchShifter_IdentityPassthroughTest()
 {
-    constexpr const char* testName = "RubberBandPitchShifter_IdentityPassthrough";
+    constexpr const char* testName = "AutoTunePitchShifter_IdentityPassthrough";
 
     // When corrected F0 == original F0, output should closely match input
-    OpenTune::RubberBandPitchShifter shifter(kSampleRate);
+    OpenTune::AutoTunePitchShifter shifter(kSampleRate);
 
-    const double durationSec = 0.1;  // 100ms
+    const double durationSec = 0.1;  // 100ms — use 4410 samples (0.1s * 44100)
     auto input = makeTestSine(440.0, durationSec);
     const int numSamples = static_cast<int>(input.size());
 
@@ -267,15 +299,31 @@ void runRubberBandPitchShifter_IdentityPassthroughTest()
         return;
     }
 
+    // Skip first 200 samples for latency settling; compare with 5-sample delay
+    // compensation (outputAddr_ starts at -5.0, so output is inherently delayed by 5 samples)
+    constexpr int kAlgorithmDelay = 5;
+    constexpr int kSettlingSamples = 200;
+    if (numSamples > kSettlingSamples + kAlgorithmDelay) {
+        float maxError = 0.0f;
+        for (int i = kSettlingSamples + kAlgorithmDelay; i < numSamples; ++i) {
+            maxError = std::max(maxError, std::abs(output[static_cast<size_t>(i)]
+                                                   - input[static_cast<size_t>(i - kAlgorithmDelay)]));
+        }
+        if (maxError > 0.05f) {
+            logFail(testName, ("identity passthrough error too large after settling: " + std::to_string(maxError)).c_str());
+            return;
+        }
+    }
+
     logPass(testName);
 }
 
-void runRubberBandPitchShifter_OutputLengthPreservedTest()
+void runAutoTunePitchShifter_OutputLengthPreservedTest()
 {
-    constexpr const char* testName = "RubberBandPitchShifter_OutputLengthPreserved";
+    constexpr const char* testName = "AutoTunePitchShifter_OutputLengthPreserved";
 
     // Even with pitch shift, output length must equal input length
-    OpenTune::RubberBandPitchShifter shifter(kSampleRate);
+    OpenTune::AutoTunePitchShifter shifter(kSampleRate);
 
     const double durationSec = 0.2;
     auto input = makeTestSine(440.0, durationSec);
@@ -283,7 +331,7 @@ void runRubberBandPitchShifter_OutputLengthPreservedTest()
 
     const int numF0Frames = static_cast<int>(durationSec * kF0FrameRate);
     std::vector<float> originalF0(static_cast<size_t>(numF0Frames), 440.0f);
-    // Shift up by 40 cents (within RubberBand range)
+    // Shift up by 40 cents
     const float shiftedHz = 440.0f * std::pow(2.0f, 40.0f / 1200.0f);
     std::vector<float> correctedF0(static_cast<size_t>(numF0Frames), shiftedHz);
 
@@ -300,12 +348,12 @@ void runRubberBandPitchShifter_OutputLengthPreservedTest()
     logPass(testName);
 }
 
-void runRubberBandPitchShifter_UnvoicedFramesPassthroughTest()
+void runAutoTunePitchShifter_UnvoicedFramesPassthroughTest()
 {
-    constexpr const char* testName = "RubberBandPitchShifter_UnvoicedFramesPassthrough";
+    constexpr const char* testName = "AutoTunePitchShifter_UnvoicedFramesPassthrough";
 
-    // When F0 = 0 (unvoiced), pitchScale = 1.0 → passthrough
-    OpenTune::RubberBandPitchShifter shifter(kSampleRate);
+    // When F0 = 0 (unvoiced), resampleRate = 1.0 → passthrough
+    OpenTune::AutoTunePitchShifter shifter(kSampleRate);
 
     const double durationSec = 0.1;
     auto input = makeTestSine(440.0, durationSec);
@@ -337,12 +385,12 @@ void runRubberBandPitchShifter_UnvoicedFramesPassthroughTest()
     logPass(testName);
 }
 
-void runRubberBandPitchShifter_PitchShiftProducesSignalTest()
+void runAutoTunePitchShifter_PitchShiftProducesSignalTest()
 {
-    constexpr const char* testName = "RubberBandPitchShifter_PitchShiftProducesSignal";
+    constexpr const char* testName = "AutoTunePitchShifter_PitchShiftProducesSignal";
 
     // Shift up by 40 cents → output should have signal and differ from input
-    OpenTune::RubberBandPitchShifter shifter(kSampleRate);
+    OpenTune::AutoTunePitchShifter shifter(kSampleRate);
 
     const double durationSec = 0.2;
     auto input = makeTestSine(440.0, durationSec);
@@ -369,23 +417,26 @@ void runRubberBandPitchShifter_PitchShiftProducesSignalTest()
     }
 
     // Output should differ from input (not bit-exact passthrough)
-    float diffSum = 0.0f;
+    // RMS difference > 0.01
+    float sumSq = 0.0f;
     for (int i = 0; i < numSamples; ++i) {
-        diffSum += std::abs(output[static_cast<size_t>(i)] - input[static_cast<size_t>(i)]);
+        const float diff = output[static_cast<size_t>(i)] - input[static_cast<size_t>(i)];
+        sumSq += diff * diff;
     }
-    if (diffSum < 1.0f) {
-        logFail(testName, "pitch-shifted output should differ from input");
+    const float rmsDiff = std::sqrt(sumSq / static_cast<float>(numSamples));
+    if (rmsDiff <= 0.01f) {
+        logFail(testName, "pitch-shifted output should differ from input (RMS diff too small)");
         return;
     }
     logPass(testName);
 }
 
-void runRubberBandPitchShifter_ZeroLengthInputTest()
+void runAutoTunePitchShifter_ZeroLengthInputTest()
 {
-    constexpr const char* testName = "RubberBandPitchShifter_ZeroLengthInput";
+    constexpr const char* testName = "AutoTunePitchShifter_ZeroLengthInput";
 
     // Zero-length input should produce zero-length output without crash
-    OpenTune::RubberBandPitchShifter shifter(kSampleRate);
+    OpenTune::AutoTunePitchShifter shifter(kSampleRate);
 
     std::vector<float> originalF0;
     std::vector<float> correctedF0;
@@ -403,17 +454,105 @@ void runRubberBandPitchShifter_ZeroLengthInputTest()
     logPass(testName);
 }
 
+void runAutoTunePitchShifter_OctaveUpFrequencyTest()
+{
+    constexpr const char* testName = "AutoTunePitchShifter_OctaveUpFrequency";
+
+    // origF0=220Hz, corrF0=440Hz (octave up)
+    // Use 44100 samples (1 second) of 220Hz sine
+    // Expected output: ~440Hz → ~880 zero crossings per second (440Hz * 2 crossings/cycle)
+    OpenTune::AutoTunePitchShifter shifter(kSampleRate);
+
+    const double durationSec = 1.0;
+    auto input = makeTestSine(220.0, durationSec);
+    const int numSamples = static_cast<int>(input.size());
+
+    const int numF0Frames = static_cast<int>(durationSec * kF0FrameRate);
+    std::vector<float> originalF0(static_cast<size_t>(numF0Frames), 220.0f);
+    std::vector<float> correctedF0(static_cast<size_t>(numF0Frames), 440.0f);  // octave up
+
+    auto output = shifter.shiftChunk(
+        input.data(), numSamples,
+        originalF0.data(), correctedF0.data(),
+        numF0Frames, kF0FrameRate);
+
+    if (static_cast<int>(output.size()) != numSamples) {
+        logFail(testName, "output length mismatch");
+        return;
+    }
+
+    // Count zero crossings (skip first 200 samples for latency)
+    std::vector<float> settledOutput(output.begin() + 200, output.end());
+    const int zeroXings = countZeroCrossings(settledOutput);
+
+    // Expected: ~880 crossings (440Hz * 2 crossings/cycle), scaled to settled duration
+    const double settledDurationSec = static_cast<double>(settledOutput.size()) / kSampleRate;
+    const int expectedXings = static_cast<int>(440.0 * settledDurationSec);
+    const int tolerance = static_cast<int>(static_cast<double>(expectedXings) * 0.15);
+
+    if (zeroXings < expectedXings - tolerance || zeroXings > expectedXings + tolerance) {
+        logFail(testName, ("octave-up frequency not approximately doubled: expected ~"
+            + std::to_string(expectedXings) + " crossings, got " + std::to_string(zeroXings)
+            + " (tolerance +- " + std::to_string(tolerance) + ")").c_str());
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runAutoTunePitchShifter_SemitoneDownTest()
+{
+    constexpr const char* testName = "AutoTunePitchShifter_SemitoneDown";
+
+    // origF0=440Hz, corrF0=415.3Hz (1 semitone down)
+    // Verify output differs from input and length is preserved
+    OpenTune::AutoTunePitchShifter shifter(kSampleRate);
+
+    const double durationSec = 0.2;
+    auto input = makeTestSine(440.0, durationSec);
+    const int numSamples = static_cast<int>(input.size());
+
+    const int numF0Frames = static_cast<int>(durationSec * kF0FrameRate);
+    std::vector<float> originalF0(static_cast<size_t>(numF0Frames), 440.0f);
+    std::vector<float> correctedF0(static_cast<size_t>(numF0Frames), 415.3f);  // 1 semitone down
+
+    auto output = shifter.shiftChunk(
+        input.data(), numSamples,
+        originalF0.data(), correctedF0.data(),
+        numF0Frames, kF0FrameRate);
+
+    // Length must be preserved
+    if (static_cast<int>(output.size()) != numSamples) {
+        logFail(testName, ("output length mismatch: expected " + std::to_string(numSamples)
+            + " got " + std::to_string(output.size())).c_str());
+        return;
+    }
+
+    // Output should differ from input
+    float diffSum = 0.0f;
+    for (int i = 0; i < numSamples; ++i) {
+        diffSum += std::abs(output[static_cast<size_t>(i)] - input[static_cast<size_t>(i)]);
+    }
+    if (diffSum < 1.0f) {
+        logFail(testName, "semitone-down output should differ from input");
+        return;
+    }
+
+    logPass(testName);
+}
+
 // ============================================================================
 // Suite Aggregator
 // ============================================================================
 
-void runRubberBandPitchShifterSuite()
+void runAutoTunePitchShifterSuite()
 {
-    std::cout << "\n=== RubberBand PitchShifter ===" << std::endl;
+    std::cout << "\n=== AutoTune PitchShifter ===" << std::endl;
 
     // ChunkRenderStrategy tests
     runChunkRenderStrategy_AllUnvoicedTest();
     runChunkRenderStrategy_SmallDeviationTest();
+    runChunkRenderStrategy_BelowNewThresholdTest();
     runChunkRenderStrategy_ExactThresholdTest();
     runChunkRenderStrategy_LargeDeviationTest();
     runChunkRenderStrategy_MixedFramesOneExceedsTest();
@@ -421,11 +560,13 @@ void runRubberBandPitchShifterSuite()
     runChunkRenderStrategy_OutOfBoundsFrameSkippedTest();
     runChunkRenderStrategy_NegativeDeviationTest();
 
-    // RubberBandPitchShifter tests
-    runRubberBandPitchShifter_ConstructTest();
-    runRubberBandPitchShifter_IdentityPassthroughTest();
-    runRubberBandPitchShifter_OutputLengthPreservedTest();
-    runRubberBandPitchShifter_UnvoicedFramesPassthroughTest();
-    runRubberBandPitchShifter_PitchShiftProducesSignalTest();
-    runRubberBandPitchShifter_ZeroLengthInputTest();
+    // AutoTunePitchShifter tests
+    runAutoTunePitchShifter_ConstructTest();
+    runAutoTunePitchShifter_IdentityPassthroughTest();
+    runAutoTunePitchShifter_OutputLengthPreservedTest();
+    runAutoTunePitchShifter_UnvoicedFramesPassthroughTest();
+    runAutoTunePitchShifter_PitchShiftProducesSignalTest();
+    runAutoTunePitchShifter_ZeroLengthInputTest();
+    runAutoTunePitchShifter_OctaveUpFrequencyTest();
+    runAutoTunePitchShifter_SemitoneDownTest();
 }

@@ -5505,11 +5505,11 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
             continue;
         }
 
-        // ===== RubberBand 轻量修音分流 =====
-        const bool rubberBandEnabled = appPreferences_ != nullptr
-            && appPreferences_->getState().shared.rubberBandLightPitchEnabled;
+        // ===== AutoTune 轻量修音分流 =====
+        const bool lightPitchEnabled = appPreferences_ != nullptr
+            && appPreferences_->getState().shared.lightPitchCorrectionEnabled;
 
-        if (rubberBandEnabled) {
+        if (lightPitchEnabled) {
             const auto& originalF0Full = snap->getOriginalF0();
             const int originalF0Size = static_cast<int>(originalF0Full.size());
 
@@ -5519,14 +5519,16 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                     sourceF0.data(), numF0Frames, originalF0Full, f0StartFrame);
 
                 if (!needsVocoder) {
-                    // === RubberBand 逐块 pitch-shift 路径 ===
-                    if (!rubberBandShifter_) {
-                        rubberBandShifter_ = std::make_unique<RubberBandPitchShifter>(
+                    // === AutoTune cycle-resampling pitch-shift 路径 ===
+                    if (!autoTuneShifter_) {
+                        autoTuneShifter_ = std::make_unique<AutoTunePitchShifter>(
                             RenderCache::kSampleRate);
+                    } else {
+                        autoTuneShifter_->reset();
                     }
 
                     const int safeNumF0Frames = std::min(numF0Frames, originalF0Size - f0StartFrame);
-                    auto shiftedAudio = rubberBandShifter_->shiftChunk(
+                    auto shiftedAudio = autoTuneShifter_->shiftChunk(
                         monoAudio.data(),
                         static_cast<int>(boundaries.publishSampleCount),
                         originalF0Full.data() + f0StartFrame,
@@ -5534,7 +5536,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                         safeNumF0Frames,
                         f0FrameRate);
 
-                    // LiveShifter 保证输出长度 == 输入长度，防御性截断
+                    // AutoTune 保证输出长度 == 输入长度，防御性截断
                     if (static_cast<int64_t>(shiftedAudio.size()) != boundaries.publishSampleCount) {
                         shiftedAudio.resize(static_cast<size_t>(boundaries.publishSampleCount), 0.0f);
                     }
@@ -5558,7 +5560,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                         requestStage2Rebuild(rbMatId);
                     }
 
-                    AppLogger::debug("RenderWorker: RubberBand pitch-shift chunk matId="
+                    AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk matId="
                         + juce::String(static_cast<juce::int64>(coreJob.materializationId))
                         + " start=" + juce::String(relChunkStartSec, 3));
 

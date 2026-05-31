@@ -58,7 +58,7 @@ struct SharedPreferencesState {
     SnapSettings snap;
     TrackColorMode trackColorMode = TrackColorMode::Random;
     KeyShortcutConfig::KeyShortcutSettings shortcuts = KeyShortcutConfig::KeyShortcutSettings::getDefault();
-    bool rubberBandLightPitchEnabled = false;  ///< RubberBand 轻量修音开关（默认关）
+    bool lightPitchCorrectionEnabled = false;  ///< 轻量修音开关（AutoTune cycle resampling，默认关）
 };
 
 struct StandalonePreferencesState {
@@ -107,7 +107,7 @@ public:
     void setTrackColorMode(TrackColorMode mode);
     TrackColorMode getTrackColorMode() const;
 
-    void setRubberBandLightPitchEnabled(bool enabled);
+    void setLightPitchCorrectionEnabled(bool enabled);
 
     std::vector<juce::String> getRecentProjects() const;
     void pushRecentProject(const juce::String& projectPath);

@@ -539,6 +539,11 @@ public:
         virtual void verticalScrollChanged(int offset) { juce::ignoreUnused(offset); }
         // 轨道颜色变更请求（Custom模式下右键点击轨道时触发）
         virtual void trackColorChangeRequested(int trackId) { juce::ignoreUnused(trackId); }
+        // 轨道上下文菜单操作回调
+        virtual void trackAddRequested() {}
+        virtual void trackDuplicateRequested(int trackId) { juce::ignoreUnused(trackId); }
+        virtual void trackDeleteRequested(int trackId) { juce::ignoreUnused(trackId); }
+        virtual void trackColorRandomizeRequested(int trackId) { juce::ignoreUnused(trackId); }
         // 可见轨道数量变化回调（用于同步ArrangementView滚动边界）
         virtual void visibleTrackCountChanged(int newCount) { juce::ignoreUnused(newCount); }
     };
@@ -587,9 +592,6 @@ public:
     void setVerticalScrollOffset(int offset);
     int getVerticalScrollOffset() const { return verticalScrollOffset_; }
     
-    // 轨道起始Y偏移 - 与ArrangementView的rulerHeight对齐
-    void setTrackStartYOffset(int offset);
-    int getTrackStartYOffset() const { return trackStartYOffset_; }
     
     // 轨道颜色控制
     void setTrackColour(int trackId, juce::Colour colour);
@@ -618,7 +620,6 @@ private:
     int visibleTrackCount_{DEFAULT_VISIBLE_TRACKS};  // 当前可见轨道数量，默认2
     int trackHeight_{DEFAULT_TRACK_HEIGHT};  // 动态轨道高度
     int verticalScrollOffset_{0};  // 垂直滚动偏移（与ArrangementView同步）
-    int trackStartYOffset_{30};    // 轨道起始Y偏移（默认30，与ArrangementView的rulerHeight_对齐）
     AddTrackButton addTrackButton_;  // +号按钮
     VolumeKnobLookAndFeel knobLnF_;  // Custom LookAndFeel for knobs
     std::array<juce::Colour, MAX_TRACKS> trackColors_;

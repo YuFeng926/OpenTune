@@ -1,7 +1,7 @@
 /**
  * SoundTouchStretcher — Wrapper around soundtouch::SoundTouch (WSOLA time-stretch).
  *
- * Replaces RubberBandStretcher (phase vocoder, archived 2026-05-19).  WSOLA is a
+ * Replaces the archived phase-vocoder stretcher (2026-05-19).  WSOLA is a
  * time-domain algorithm: no STFT analysis-resynthesis, no phase reconstruction —
  * physically eliminates the chorus/phasing artifacts inherent to phase vocoder.
  *
@@ -19,7 +19,7 @@
  *
  * Spec: openspec/changes/swap-time-stretch-to-soundtouch/specs/soundtouch-time-stretcher/spec.md
  *
- * Compared to the archived RubberBandStretcher:
+ * Compared to the archived phase-vocoder stretcher:
  *   - single-pass push() replaces RB's two-pass study() + process()
  *   - TempoSchedule replaces KeyFrameMap (SoundTouch has no setKeyFrameMap; we
  *     drive setTempo() at segment boundaries instead)

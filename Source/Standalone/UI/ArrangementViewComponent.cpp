@@ -8,6 +8,7 @@
 #include "../../Utils/PlacementClipboard.h"
 #include "../../Utils/LocalizationManager.h"
 #include "../../Utils/SnapUtils.h"
+#include "../../Utils/TrackConstants.h"
 #include "../StandaloneArrangementHelpers.h"
 
 #include <algorithm>
@@ -315,7 +316,7 @@ void ArrangementViewComponent::resized()
 
     // Sync viewport state dimensions
     viewportState_.viewportWidthPx = getVisibleViewportWidth();
-    viewportState_.viewportHeightPx = getHeight();
+    viewportState_.viewportHeightPx = getContentViewportBounds().getHeight();
 
     updateScrollBars();
     updateContentSurfaceBounds();
@@ -728,7 +729,7 @@ juce::Rectangle<int> ArrangementViewComponent::buildProjectedPlacementBounds(int
 
     const double endSeconds = placement.timelineEndSeconds();
 
-    auto lane = getTrackLaneBounds(trackId).reduced(6, 8);
+    auto lane = getTrackLaneBounds(trackId).reduced(kClipShellInsetX, kClipShellInsetY);
     const int x1 = absoluteTimeToViewportX(placement.timelineStartSeconds);
     const int x2 = absoluteTimeToViewportX(endSeconds);
     const int width = juce::jmax(8, x2 - x1);
@@ -821,7 +822,7 @@ void ArrangementViewComponent::requestRenderModelUpdate()
 {
     const auto viewportBounds = getContentViewportBounds();
     viewportState_.viewportWidthPx = viewportBounds.getWidth();
-    viewportState_.viewportHeightPx = getHeight();
+    viewportState_.viewportHeightPx = viewportBounds.getHeight();
 
     // Invoke render model cache update with current state
     renderModelCache_.update(processor_,

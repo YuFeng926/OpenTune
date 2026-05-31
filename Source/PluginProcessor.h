@@ -46,7 +46,7 @@
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
 #include "Inference/INoteGenerator.h"
-#include "Inference/RubberBandPitchShifter.h"
+#include "DSP/AutoTunePitchShifter.h"
 #include "Inference/ChunkRenderStrategy.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/PlacementClipboard.h"
@@ -865,7 +865,7 @@ private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
     AppPreferences* appPreferences_{nullptr};
-    std::unique_ptr<RubberBandPitchShifter> rubberBandShifter_;  ///< 轻量修音 pitch-shift（懒初始化）
+    std::unique_ptr<AutoTunePitchShifter> autoTuneShifter_;  ///< 轻量修音 cycle-resampling pitch-shift（懒初始化）
 
 #if JucePlugin_Enable_ARA
     // Cached project state for pre-bind restore.

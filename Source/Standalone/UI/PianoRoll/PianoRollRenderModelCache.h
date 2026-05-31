@@ -60,6 +60,9 @@ public:
         /** Incremented when component is resized (viewport width/height change). */
         uint64_t viewportSizeRevision = 0;
 
+        /** Incremented when interaction draft is active to invalidate content surface. */
+        uint64_t interactionEpoch = 0;
+
         bool operator==(const Key& o) const noexcept {
             return materializationId == o.materializationId
                 && pitchEpoch == o.pitchEpoch
@@ -74,7 +77,8 @@ public:
                 && zoomBucket == o.zoomBucket
                 && verticalZoomBucket == o.verticalZoomBucket
                 && verticalScrollBucket == o.verticalScrollBucket
-                && viewportSizeRevision == o.viewportSizeRevision;
+                && viewportSizeRevision == o.viewportSizeRevision
+                && interactionEpoch == o.interactionEpoch;
         }
         bool operator!=(const Key& o) const noexcept { return !(*this == o); }
     };
