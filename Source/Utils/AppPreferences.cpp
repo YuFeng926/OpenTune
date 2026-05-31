@@ -27,7 +27,7 @@ constexpr const char* kSharedRecentProjectsKey = "shared.recentProjects";
 constexpr const char* kSharedSnapEnabledKey = "shared.snap.enabled";
 constexpr const char* kSharedSnapModeKey = "shared.snap.mode";
 constexpr const char* kSharedTrackColorModeKey = "shared.trackColor.mode";
-constexpr const char* kSharedRubberBandLightPitchEnabledKey = "shared.render.rubberBandLightPitch";
+constexpr const char* kSharedLightPitchCorrectionEnabledKey = "shared.render.lightPitchCorrection";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
     "shared.shortcuts.playPause",
@@ -322,9 +322,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.experimentalFeaturesEnabled = properties.getBoolValue(
         kSharedExperimentalFeaturesEnabledKey,
         state.shared.experimentalFeaturesEnabled);
-    state.shared.rubberBandLightPitchEnabled = properties.getBoolValue(
-        kSharedRubberBandLightPitchEnabledKey,
-        state.shared.rubberBandLightPitchEnabled);
+    state.shared.lightPitchCorrectionEnabled = properties.getBoolValue(
+        kSharedLightPitchCorrectionEnabledKey,
+        state.shared.lightPitchCorrectionEnabled);
     state.shared.experimentalReferenceAlignMode = fromExperimentalRefAlignModeToken(
         properties.getValue(kSharedExperimentalReferenceAlignKey,
                             toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode)));
@@ -371,8 +371,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         toVocoderWeightToken(state.shared.vocoderModelWeight));
     properties.setValue(kSharedExperimentalFeaturesEnabledKey,
                         state.shared.experimentalFeaturesEnabled);
-    properties.setValue(kSharedRubberBandLightPitchEnabledKey,
-                        state.shared.rubberBandLightPitchEnabled);
+    properties.setValue(kSharedLightPitchCorrectionEnabledKey,
+                        state.shared.lightPitchCorrectionEnabled);
     properties.setValue(kSharedExperimentalReferenceAlignKey,
                         toExperimentalRefAlignModeToken(state.shared.experimentalReferenceAlignMode));
     properties.setValue(kSharedSnapEnabledKey, state.shared.snap.enabled);
@@ -609,10 +609,10 @@ TrackColorMode AppPreferences::getTrackColorMode() const
     return state_.shared.trackColorMode;
 }
 
-void AppPreferences::setRubberBandLightPitchEnabled(bool enabled)
+void AppPreferences::setLightPitchCorrectionEnabled(bool enabled)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
-    state_.shared.rubberBandLightPitchEnabled = enabled;
+    state_.shared.lightPitchCorrectionEnabled = enabled;
     saveLocked();
 }
 

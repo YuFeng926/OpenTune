@@ -504,9 +504,7 @@ void runTimeTool_DeleteSelectedRemovesHandleTest()
         return;
     }
 
-    // Use '1' alias (project-wide alias for delete) instead of deleteKey,
-    // since the stub KeyShortcutSettings has no Delete binding registered.
-    juce::KeyPress oneKey('1', juce::ModifierKeys{}, '1');
+    juce::KeyPress oneKey(juce::KeyPress::deleteKey, juce::ModifierKeys{}, 0);
     handler.keyPressed(oneKey);
 
     if (cap.callCount != 1) {
@@ -546,7 +544,7 @@ void runTimeTool_DeleteEndpointRejectedTest()
     // Force-set selection to ClipStart (id=1, locked endpoint)
     state.timeTool.selectedHandleId = 1;
 
-    juce::KeyPress oneKey('1', juce::ModifierKeys{}, '1');
+    juce::KeyPress oneKey(juce::KeyPress::deleteKey, juce::ModifierKeys{}, 0);
     handler.keyPressed(oneKey);
 
     // Endpoint deletion should NOT trigger commit

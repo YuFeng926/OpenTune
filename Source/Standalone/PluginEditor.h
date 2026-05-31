@@ -126,6 +126,10 @@ public:
     void trackVolumeChanged(int trackId, float volume) override;
     void trackHeightChanged(int newHeight) override;  // 与 ArrangementView 的 trackHeight 同步
     void trackColorChangeRequested(int trackId) override;
+    void trackAddRequested() override;
+    void trackDuplicateRequested(int trackId) override;
+    void trackDeleteRequested(int trackId) override;
+    void trackColorRandomizeRequested(int trackId) override;
     void visibleTrackCountChanged(int newCount) override;
 
     // ArrangementViewComponent::Listener

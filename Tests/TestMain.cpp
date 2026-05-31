@@ -81,7 +81,7 @@ constexpr std::array<SuiteEntry, 36> kSuites{{
     { "project-session-reference", "ProjectSession reference binding roundtrip and corruption", &runProjectSessionReferenceSuite },
     { "timeline-rendering", "DAW timeline rendering pipeline contracts", &runTimelineRenderingSuite },
     { "timeline-rendering-perf", "DAW timeline rendering runtime diagnostics contracts", &runTimelineRenderingPerfSuite },
-    { "rubberband-pitch", "hybrid RubberBand/NSF-HiFiGAN chunk render strategy + pitch shifter", &runRubberBandPitchShifterSuite },
+    { "autotune-pitch", "hybrid AutoTune/NSF-HiFiGAN chunk render strategy + pitch shifter", &runAutoTunePitchShifterSuite },
 }};
 
 void printHeader()
@@ -1033,7 +1033,7 @@ void runStandaloneShortcutSettingsUseModalCaptureDialogTest()
 {
     constexpr const char* testName = "StandaloneShortcutSettings_UseModalCaptureDialog";
 
-    const auto& source = getFileCache().get("Source/Editor/Preferences/StandalonePreferencePages.cpp");
+    const auto& source = getFileCache().get("Source/Editor/Preferences/SharedPreferencePages.cpp");
     if (!source.contains("class CaptureWindow final : public juce::AlertWindow")
         || source.contains("class CaptureOverlay final : public juce::Component")
         || source.contains("captureOverlay_")) {
@@ -2408,7 +2408,7 @@ void runPianoRollPlayheadViewportStopsBeforeScrollbarsTest()
     const auto viewportBounds = PianoRollComponentTestProbe::getTimelineViewportBounds(pianoRoll);
     const auto ctx = PianoRollComponentTestProbe::buildRenderContext(pianoRoll);
 
-    if (viewportBounds.getWidth() != (640 - 12 - 15) || viewportBounds.getHeight() != (360 - 12 - 15)) {
+    if (viewportBounds.getWidth() != (640 - 12 - 20) || viewportBounds.getHeight() != (360 - 12 - 20)) {
         logFail(testName, "timeline viewport still includes scrollbar space");
         return;
     }

@@ -574,6 +574,7 @@ private:
     } renderBand_;
     uint64_t visualPrefsRevision_ = 0;
     uint64_t viewportSizeRevision_ = 0;
+    mutable uint64_t interactionRevision_ = 0;
     double lastAuthoritativePlayheadTime_ = 0.0;
     double presentationClockAnchorTime_ = 0.0;
     double presentationClockAnchorTimestampSec_ = 0.0;

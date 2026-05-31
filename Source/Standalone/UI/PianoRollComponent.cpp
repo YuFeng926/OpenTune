@@ -900,6 +900,10 @@ void PianoRollComponent::invalidateInteractionArea(const juce::Rectangle<int>& d
         return;
     }
 
+    if (interactionState_.noteDraft.active) {
+        ++interactionRevision_;
+    }
+
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Interaction),
                      dirtyArea,
                      PianoRollVisualInvalidationPriority::Interactive);
@@ -3007,6 +3011,7 @@ bool PianoRollComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild
     cacheKey.verticalZoomBucket = quantizeGeometryPx(pixelsPerSemitone_);
     cacheKey.verticalScrollBucket = quantizeGeometryPx(verticalScrollOffset_);
     cacheKey.viewportSizeRevision = viewportSizeRevision_;
+    cacheKey.interactionEpoch = interactionRevision_;
 
     bool rebuiltModel = false;
     if (forceRebuild || !renderModelCache_.isValid() || renderModelCache_.getCurrentKey() != cacheKey) {
@@ -3061,9 +3066,10 @@ void PianoRollComponent::rebuildContentSurface() const
         return;
     }
 
+    const int contentHeight = juce::jmax(1, renderBand_.heightPx - rulerHeight_);
     contentSurfaceImage_ = juce::Image(juce::Image::ARGB,
                                        juce::jmax(1, renderBand_.widthPx),
-                                       juce::jmax(1, renderBand_.heightPx),
+                                       contentHeight,
                                        true);
 
     juce::Graphics g(contentSurfaceImage_);
@@ -3072,9 +3078,11 @@ void PianoRollComponent::rebuildContentSurface() const
     {
         const juce::Graphics::ScopedSaveState ss(g);
         g.reduceClipRegion(juce::Rectangle<int>(ctx.pianoKeyWidth,
-                                                ctx.rulerHeight,
+                                                0,
                                                 juce::jmax(0, ctx.width - ctx.pianoKeyWidth),
-                                                juce::jmax(0, ctx.height - ctx.rulerHeight)));
+                                                contentHeight));
+        // Translate component-space coordinates into content-local (ruler excluded).
+        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(-rulerHeight_)));
 
         renderer_->drawGridLines(g, ctx);
         for (const auto& item : ctx.materializations)

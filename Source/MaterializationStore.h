@@ -33,7 +33,7 @@
 #include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §3.6 — per-materialization TimeGrid
 
 namespace OpenTune {
-class SoundTouchStretcher;   // forward-decl — §5.5 (replaces RubberBandStretcher)
+class SoundTouchStretcher;   // forward-decl — §5.5 (lazy time-stretch accessor)
 }
 
 namespace OpenTune {
