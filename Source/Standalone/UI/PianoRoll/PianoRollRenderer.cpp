@@ -1451,83 +1451,140 @@ void PianoRollRenderer::drawPreparedF0Curve(juce::Graphics& g,
             return;
         }
 
-        struct DrawRun {
-            std::size_t startSpan = 0;
-            std::size_t endSpanInclusive = 0;
-            float alphaSum = 0.0f;
-            float hotMixSum = 0.0f;
-            int spanTotal = 0;
-            int alphaBucket = 0;
-            int hotBucket = 0;
-            bool inSelection = false;
-
-            float effectiveAlpha() const noexcept
-            {
-                return spanTotal > 0 ? alphaSum / static_cast<float>(spanTotal) : 0.0f;
-            }
-
-            float levelHotMix() const noexcept
-            {
-                return spanTotal > 0 ? hotMixSum / static_cast<float>(spanTotal) : 0.0f;
-            }
-        };
-
         const std::size_t spanCount = displayPoints.size() - 1;
         const std::size_t fadeSpanCount = std::min<std::size_t>(6, std::max<std::size_t>(1, spanCount / 4));
-        static constexpr float kAlphaBucketStep = 0.12f;
-        static constexpr float kHotBucketStep = 0.07f;
 
-        auto makeRunForSpan = [&](std::size_t span) {
-            const auto& a = displayPoints[span];
-            const auto& b = displayPoints[span + 1];
-            const float startFade = juce::jmin(1.0f, static_cast<float>(span + 1) / static_cast<float>(fadeSpanCount + 1));
-            const float endFade = juce::jmin(1.0f, static_cast<float>(spanCount - span) / static_cast<float>(fadeSpanCount + 1));
-            const float taperAlpha = juce::jlimit(0.18f, 1.0f, juce::jmin(startFade, endFade));
-            const float energyAlpha = (a.energyAlpha + b.energyAlpha) * 0.5f;
-            const float levelHotMix = (a.levelHotMix + b.levelHotMix) * 0.5f;
-            const float effectiveAlpha = alpha * energyAlpha * taperAlpha;
+        // 2. Build the full path
+        juce::Path fullPath;
+        appendSmoothedF0Path(fullPath, displayPoints, 0, displayPoints.size() - 1);
 
-            DrawRun run;
-            run.startSpan = span;
-            run.endSpanInclusive = span;
-            run.alphaSum = effectiveAlpha;
-            run.hotMixSum = levelHotMix;
-            run.spanTotal = 1;
-            run.alphaBucket = static_cast<int>(std::round(effectiveAlpha / kAlphaBucketStep));
-            run.hotBucket = static_cast<int>(std::round(levelHotMix / kHotBucketStep));
-            run.inSelection = ctx.hasF0Selection
-                && a.frame >= ctx.f0SelectionStartFrame
-                && b.frame < ctx.f0SelectionEndFrameExclusive;
-            return run;
-        };
+        const float leftX = displayPoints.front().x;
+        const float rightX = displayPoints.back().x;
+        const float xRange = rightX - leftX;
 
-        auto drawRun = [&](const DrawRun& run) {
-            juce::Path runPath;
-            appendSmoothedF0Path(runPath, displayPoints, run.startSpan, run.endSpanInclusive + 1);
-            if (run.inSelection) {
-                drawSelectionCurve(runPath, run.effectiveAlpha(), run.levelHotMix());
-            } else {
-                drawNormalCurve(runPath, run.effectiveAlpha(), run.levelHotMix());
-            }
-        };
-
-        auto activeRun = makeRunForSpan(0);
-        for (std::size_t span = 1; span < spanCount; ++span) {
-            const auto nextRun = makeRunForSpan(span);
-            if (nextRun.alphaBucket == activeRun.alphaBucket
-                && nextRun.hotBucket == activeRun.hotBucket
-                && nextRun.inSelection == activeRun.inSelection) {
-                activeRun.endSpanInclusive = span;
-                activeRun.alphaSum += nextRun.alphaSum;
-                activeRun.hotMixSum += nextRun.hotMixSum;
-                activeRun.spanTotal += nextRun.spanTotal;
-                continue;
-            }
-
-            drawRun(activeRun);
-            activeRun = nextRun;
+        if (xRange <= 0.0f) {
+            // Degenerate — all points at same x
+            drawNormalCurve(fullPath, alpha * displayPoints.front().energyAlpha, displayPoints.front().levelHotMix);
+            return;
         }
-        drawRun(activeRun);
+
+        // 3. Build gradient with per-point colour stops
+        auto buildGradient = [&](auto colourFn, float alphaScale) {
+            juce::ColourGradient grad(juce::Colours::transparentBlack, leftX, 0.0f,
+                                      juce::Colours::transparentBlack, rightX, 0.0f, false);
+            grad.clearColours();
+            for (std::size_t i = 0; i < displayPoints.size(); ++i) {
+                const auto& pt = displayPoints[i];
+                const float position = (pt.x - leftX) / xRange;
+
+                // Taper calculation (same formula as before)
+                float taperAlpha = 1.0f;
+                if (i < spanCount) {
+                    const float startFade = juce::jmin(1.0f, static_cast<float>(i + 1) / static_cast<float>(fadeSpanCount + 1));
+                    const float endFade = juce::jmin(1.0f, static_cast<float>(spanCount - i) / static_cast<float>(fadeSpanCount + 1));
+                    taperAlpha = juce::jlimit(0.18f, 1.0f, juce::jmin(startFade, endFade));
+                } else {
+                    // Last point uses endFade = 1/(fadeSpanCount+1)
+                    const float endFade = 1.0f / static_cast<float>(fadeSpanCount + 1);
+                    taperAlpha = juce::jlimit(0.18f, 1.0f, endFade);
+                }
+
+                const float effectiveAlpha = alpha * pt.energyAlpha * taperAlpha * alphaScale;
+                const auto c = colourFn(pt.levelHotMix);
+                grad.addColour(juce::jlimit(0.0, 1.0, static_cast<double>(position)), c.withAlpha(effectiveAlpha));
+            }
+            return grad;
+        };
+
+        // 4. Stroke with gradient for each layer based on theme
+        if (isAurora) {
+            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
+                                             isThinLine ? 0.080f : 0.095f));
+            g.strokePath(fullPath, glowStrokeType);
+            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
+                                             isThinLine ? 0.22f : 0.20f));
+            g.strokePath(fullPath, innerGlowStrokeType);
+            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
+                                             isThinLine ? 0.96f : 0.98f));
+            g.strokePath(fullPath, strokeType);
+            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm).brighter(isThinLine ? 0.30f : 0.20f); },
+                                             isThinLine ? 0.18f : 0.15f));
+            g.strokePath(fullPath, highlightStrokeType);
+        } else if (isBlueBreeze || isOverdose) {
+            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
+                                             isThinLine ? 0.055f : 0.070f));
+            g.strokePath(fullPath, glowStrokeType);
+            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
+                                             isThinLine ? 0.14f : 0.15f));
+            g.strokePath(fullPath, innerGlowStrokeType);
+            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
+                                             isThinLine ? 0.96f : 0.92f));
+            g.strokePath(fullPath, strokeType);
+            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm).brighter(0.16f); },
+                                             0.12f));
+            g.strokePath(fullPath, highlightStrokeType);
+        } else {
+            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); }, 1.0f));
+            g.strokePath(fullPath, strokeType);
+        }
+
+        // 5. Selection overlay — build sub-path for selected frames and stroke with selection gradient
+        if (ctx.hasF0Selection) {
+            // Find selected point range
+            std::size_t selStart = displayPoints.size();
+            std::size_t selEnd = 0;
+            for (std::size_t i = 0; i < displayPoints.size(); ++i) {
+                if (displayPoints[i].frame >= ctx.f0SelectionStartFrame
+                    && displayPoints[i].frame < ctx.f0SelectionEndFrameExclusive) {
+                    if (i < selStart) selStart = i;
+                    selEnd = i;
+                }
+            }
+
+            if (selStart < displayPoints.size() && selEnd > selStart) {
+                juce::Path selPath;
+                appendSmoothedF0Path(selPath, displayPoints, selStart, selEnd);
+
+                const float selLeftX = displayPoints[selStart].x;
+                const float selRightX = displayPoints[selEnd].x;
+                const float selXRange = selRightX - selLeftX;
+
+                if (selXRange > 0.0f) {
+                    auto buildSelGradient = [&](float alphaScale) {
+                        juce::ColourGradient grad(juce::Colours::transparentBlack, selLeftX, 0.0f,
+                                                  juce::Colours::transparentBlack, selRightX, 0.0f, false);
+                        grad.clearColours();
+                        for (std::size_t i = selStart; i <= selEnd; ++i) {
+                            const auto& pt = displayPoints[i];
+                            const float position = (pt.x - selLeftX) / selXRange;
+                            float taperAlpha = 1.0f;
+                            if (i < spanCount) {
+                                const float startFade = juce::jmin(1.0f, static_cast<float>(i + 1) / static_cast<float>(fadeSpanCount + 1));
+                                const float endFade = juce::jmin(1.0f, static_cast<float>(spanCount - i) / static_cast<float>(fadeSpanCount + 1));
+                                taperAlpha = juce::jlimit(0.18f, 1.0f, juce::jmin(startFade, endFade));
+                            } else {
+                                const float endFade = 1.0f / static_cast<float>(fadeSpanCount + 1);
+                                taperAlpha = juce::jlimit(0.18f, 1.0f, endFade);
+                            }
+                            const float effectiveAlpha = alpha * pt.energyAlpha * taperAlpha * alphaScale;
+                            const auto c = blendLevelHotColour(selectionColour, pt.levelHotMix);
+                            grad.addColour(juce::jlimit(0.0, 1.0, static_cast<double>(position)), c.withAlpha(effectiveAlpha));
+                        }
+                        return grad;
+                    };
+
+                    if (isAurora) {
+                        g.setGradientFill(buildSelGradient(0.10f));
+                        g.strokePath(selPath, glowStrokeType);
+                    } else if (isBlueBreeze || isOverdose) {
+                        g.setGradientFill(buildSelGradient(0.075f));
+                        g.strokePath(selPath, glowStrokeType);
+                    }
+                    g.setGradientFill(buildSelGradient(0.96f));
+                    g.strokePath(selPath, selectionStrokeType);
+                }
+            }
+        }
     };
 
     for (const auto& segment : visualSegments) {

@@ -111,6 +111,7 @@ void PianoRollComponent::initializeUIComponents() {
 
     addAndMakeVisible(rulerSurface_);
     addAndMakeVisible(contentSurface_);
+    addAndMakeVisible(previewOverlay_);
     addAndMakeVisible(playheadOverlay_);
     timeUnitToggleButton_.toFront(false);
     scrollModeToggleButton_.toFront(false);
@@ -234,6 +235,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.invalidateVisual = [this](const juce::Rectangle<int>& dirtyArea) {
         invalidateInteractionArea(dirtyArea);
     };
+    toolCtx.repaintPreviewOverlay = [this]() { previewOverlay_.repaint(); };
     toolCtx.setMouseCursor = [this](const juce::MouseCursor& c) { setMouseCursor(c); };
     toolCtx.grabKeyboardFocus = [this]() { grabKeyboardFocus(); };
     toolCtx.getAudioEditingScheme = [this]() { return audioEditingScheme_; };
@@ -976,6 +978,64 @@ void PianoRollComponent::enqueueNoteBasedCorrectionAsync(const std::vector<Note>
     correctionWorker_->enqueue(request);
 }
 
+// ============================================================================
+// PianoRollPreviewOverlay — paint transient interaction previews
+// ============================================================================
+
+void PianoRollPreviewOverlay::paint(juce::Graphics& g)
+{
+    if (!owner_.renderModelCache_.isValid()) return;
+
+    const auto& ctx = owner_.renderModelCache_.getRenderContext();
+    const auto themeId = UIColors::currentThemeId();
+
+    if (!ctx.isTimeView()) {
+        bool hasActiveMat = false;
+        for (const auto& item : ctx.materializations) {
+            if (!item.active) continue;
+            hasActiveMat = true;
+            break;
+        }
+
+        if (hasActiveMat || owner_.currentCurve_ != nullptr) {
+            owner_.drawNoteDragCurvePreview(g);
+            owner_.drawHandDrawPreview(g);
+            owner_.drawLineAnchorPreview(g);
+        }
+    }
+
+    // Draw note preview rectangle during DrawNote drag (option B: no noteDraft active)
+    if (owner_.interactionState_.drawing.isDrawingNote
+        && owner_.currentTool_ == ToolId::DrawNote) {
+        double startTime = std::min(owner_.interactionState_.drawing.drawingNoteStartTime,
+                                    owner_.interactionState_.drawing.drawingNoteEndTime);
+        double endTime = std::max(owner_.interactionState_.drawing.drawingNoteStartTime,
+                                  owner_.interactionState_.drawing.drawingNoteEndTime);
+        float pitch = owner_.interactionState_.drawing.drawingNotePitch;
+
+        if (pitch > 0.0f && endTime > startTime) {
+            int x1 = owner_.timeToX(owner_.projectMaterializationTimeToTimeline(startTime));
+            int x2 = owner_.timeToX(owner_.projectMaterializationTimeToTimeline(endTime));
+            float midiNote = 69.0f + 12.0f * std::log2(pitch / 440.0f);
+            float y = owner_.midiToY(midiNote);
+            float noteHeight = owner_.pixelsPerSemitone_;
+
+            juce::Rectangle<float> noteRect(static_cast<float>(std::min(x1, x2)),
+                                            y,
+                                            static_cast<float>(std::abs(x2 - x1)),
+                                            noteHeight);
+
+            // Semi-transparent preview note
+            g.setColour(UIColors::noteBlockSelected.withAlpha(0.5f));
+            g.fillRoundedRectangle(noteRect, 3.0f);
+            g.setColour(UIColors::noteBlockSelected.withAlpha(0.8f));
+            g.drawRoundedRectangle(noteRect, 3.0f, 1.5f);
+        }
+    }
+
+    owner_.drawSelectionBox(g, themeId);
+}
+
 void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
     if (!interactionState_.drawing.isDrawingF0 || currentTool_ != ToolId::HandDraw || interactionState_.drawing.handDrawBuffer.empty() || !currentCurve_) return;
 
@@ -1221,36 +1281,6 @@ void PianoRollComponent::paintOverChildren(juce::Graphics& g)
     const auto themeId = UIColors::currentThemeId();
     juce::ignoreUnused(themeId);
 
-    if (!ctx.isTimeView()) {
-        bool drewActivePitch = false;
-
-
-        // Ghost notes & reference anchors overlay（参考 clip 半透明投影）
-
-
-        // ⚡️ vocal-time-stretch §8.5 (Phase J) — Time view hides Pitch
-        // furniture (note rows / staves / piano keys / F0 curves) so the user
-        // can focus on time anchors.  Lanes / notes / F0 are skipped; waveform
-        // + handles + chunk boundaries remain.
-        for (const auto& item : ctx.materializations) {
-            if (!item.active) {
-                continue;
-            }
-
-            drawNoteDragCurvePreview(g);
-            drawHandDrawPreview(g);
-            drawLineAnchorPreview(g);
-            drewActivePitch = true;
-            break;
-        }
-
-        if (!drewActivePitch && currentCurve_ != nullptr) {
-            drawHandDrawPreview(g);
-            drawLineAnchorPreview(g);
-        }
-
-    }
-
     // ⚡️ §8.5 — paint TimeGrid handles ABOVE chunk boundaries / waveform but
     // BELOW the piano keys (which sit on the left edge).  In Time view we
     // also force-render endpoint handles (even on identity grid) so the user
@@ -1262,8 +1292,6 @@ void PianoRollComponent::paintOverChildren(juce::Graphics& g)
     if (!ctx.isTimeView()) {
         renderer_->drawPianoKeys(g, ctx);
     }
-
-    drawSelectionBox(g, themeId);
 }
 
 void PianoRollComponent::setInferenceActive(bool active)
@@ -1661,6 +1689,7 @@ void PianoRollComponent::resized() {
     updateRulerSurfaceBounds();
     updateContentSurfaceBounds();
     ensureRenderBandCoversCurrentViewport(true);
+    previewOverlay_.setBounds(getLocalBounds());
     playheadOverlay_.setBounds(getLocalBounds());
     updatePlayheadPresentationPolicy();
 }
@@ -2463,9 +2492,9 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
     }
 
     toolHandler_->mouseDrag(e);
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Interaction),
-                     getLocalBounds(),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    // Note: individual tool handlers call invalidateVisual() with proper dirty
+    // rects when needed. The preview overlay handles transient visuals (draw-note
+    // preview, selection box) without triggering render-model rebuild.
 }
 
 void PianoRollComponent::mouseUp(const juce::MouseEvent& e) {

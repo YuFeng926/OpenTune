@@ -50,6 +50,13 @@ STATE.md 之前描述的"steady scroll 触发 full content repaint / render mode
 - Bug #1：恢复误删的 `'1'` 键快速删除绑定 → 在 `ShortcutId::Delete` 默认绑定中加回 `KeyBinding('1', {})`
 - Bug #2：修复 Ctrl+A 全选后 F0 曲线选中高亮丢失 → 改用 `committedNotes(ctx_)` 替代失效的 `workingDraftNotes` 引用
 
+### DrawNote 绘制预览覆盖层 — 已完成 ✓（2026-06-01）
+
+- 新增 `PianoRollPreviewOverlay` 轻量透明子组件，渲染瞬态交互预览（note-draw 矩形、hand-draw F0、选区框），避免触发昂贵的 render-model 重建
+- `PianoRollToolHandler::handleDrawNoteTool` 重构：首帧不立即可变 noteDraft，改为 `DrawingState` 暂存，mouseUp 时惰性提交
+- `handleDrawNoteMouseDown` 改用 `committedNotes()` 检测已有音符，仅在确认点击已有音符后才创建 noteDraft
+- 测试更新：`PianoRoll_DrawNotePreview_SurvivesMultiEventDrag` 新契约
+
 ## Landed Mainline Context
 
 - UndoManager + PianoRollEditAction
@@ -82,12 +89,14 @@ STATE.md 之前描述的"steady scroll 触发 full content repaint / render mode
 - 2026-05-29：OpenTune + OpenTuneTests 编译零错误（MSVC Release）。
 - Timeline 架构通过代码审计确认正确（非运行时验证）。
 - UI 修复需要 visual smoke 确认。
+- DrawNote overlay 重构需 visual smoke 确认预览渲染正常。
 
 ## Main Risks For Next Thread
 
 1. UI 修复未经 visual smoke 验证，可能有边缘主题下的回归。
 2. `OpenTuneTests.exe ui` exit=1 仍未解释。
 3. Arrangement min-zoom waveform 功能尚未实现。
+4. DrawNote overlay 重构改变了 note 创建时间点（从 mouseDown → mouseUp），可能影响用户操作手感。
 
 ---
 
