@@ -60,6 +60,7 @@
 - `.planning/plans/2026-05-27-arrangement-min-zoom-waveform-and-cross-track-drag-preview.md`
 - `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment.md`
 - `.planning/plans/2026-05-30-track-panel-context-menu-and-lane-alignment.md`
+- `.planning/plans/2026-06-01-track-panel-extra-gap-removal.md`
 
 ## Archived Planning Docs（已完成/过时）
 
@@ -72,6 +73,7 @@
 2. 补齐 Undo/Redo 边界测试。
 3. 解释 `OpenTuneTests.exe ui` exit=1。
 4. Arrangement min-zoom waveform 功能实现。
+5. 收掉 TrackPanel 误加的额外纵向留白，且不改变已修好的 lane/clip 视觉同步。
 
 ---
 

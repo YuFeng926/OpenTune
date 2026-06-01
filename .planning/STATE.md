@@ -69,6 +69,7 @@ STATE.md 之前描述的"steady scroll 触发 full content repaint / render mode
 - [ ] Standalone visual smoke（含 UI 修复验证）。
 - [ ] L5 手工旅程。
 - [ ] Arrangement min-zoom waveform + cross-track drag preview。
+- [ ] TrackPanel 多余纵向留白清理（保持当前 lane/clip 视觉同步不变）。
 - [ ] macOS bundle inspection。
 
 ## Verification Notes

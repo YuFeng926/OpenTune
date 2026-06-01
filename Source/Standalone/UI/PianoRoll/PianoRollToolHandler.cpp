@@ -556,6 +556,8 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
             ctx_.commitNoteDraft();
         }
         
+        const auto& committed = committedNotes(ctx_);
+        
         ctx_.getState().selection.hasSelectionArea = true;
         ctx_.getState().selection.selectionStartMidi = ctx_.getMinMidi();
         ctx_.getState().selection.selectionEndMidi = ctx_.getMaxMidi();
@@ -566,13 +568,13 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
             ctx_.getState().selection.selectionEndTime = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(f0tl.endFrameExclusive());
         } else {
             double maxEnd = 0.0;
-            for (const auto& n : notes) {
+            for (const auto& n : committed) {
                 maxEnd = std::max(maxEnd, n.endTime);
             }
             ctx_.getState().selection.selectionEndTime = maxEnd;
         }
         
-        updateF0SelectionFromNotes(notes);
+        updateF0SelectionFromNotes(committed);
         invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
         return true;
     }
