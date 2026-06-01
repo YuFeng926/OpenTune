@@ -302,7 +302,6 @@ void invalidateNoteChange(PianoRollToolHandler::Context& ctx,
 {
     auto dirty = ctx.getNotesBounds(before).getUnion(ctx.getNotesBounds(after));
     dirty = dirty.getUnion(ctx.getSelectionBounds());
-    dirty = dirty.getUnion(ctx.getNoteDragCurvePreviewBounds());
     invalidateIfNeeded(ctx, dirty);
 }
 
@@ -1201,21 +1200,20 @@ void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
 
     lastDrawPoint_ = juce::Point<float>(static_cast<float>(curveTime), targetF0);
     invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
+    if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
 }
 
 void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
 // 绘制音符工具鼠标按下处理：检测是否点击已有音符进行选择，设置待拖拽状态
 {
-    const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
-    ctx_.beginNoteDraft();
-    auto& notes = workingDraftNotes(ctx_);
-    
-    int existingNoteIndex = -1;
+    // Check if clicking an existing note for selection (needs noteDraft for selection state)
+    const auto& committedNotes = ctx_.getCommittedNotes();
     float clickedPitch = ctx_.yToFreq((float)e.y);
     float mouseMidi = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
     
-    for (int noteIndex = 0; noteIndex < static_cast<int>(notes.size()); ++noteIndex) {
-        const auto& note = notes[static_cast<size_t>(noteIndex)];
+    int existingNoteIndex = -1;
+    for (int noteIndex = 0; noteIndex < static_cast<int>(committedNotes.size()); ++noteIndex) {
+        const auto& note = committedNotes[static_cast<size_t>(noteIndex)];
         int x1 = ctx_.timeToX(ctx_.projectMaterializationTimeToTimeline(note.startTime));
         int x2 = ctx_.timeToX(ctx_.projectMaterializationTimeToTimeline(note.endTime));
         float noteMidi = 69.0f + 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) - 0.5f;
@@ -1227,6 +1225,10 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
     }
     
     if (existingNoteIndex >= 0) {
+        // Clicked existing note — use noteDraft for selection toggle
+        const auto beforeNotes = committedNotes;
+        ctx_.beginNoteDraft();
+        auto& notes = workingDraftNotes(ctx_);
         bool isCtrlDown = e.mods.isCtrlDown() || e.mods.isCommandDown();
         if (isCtrlDown) {
             notes[static_cast<size_t>(existingNoteIndex)].selected = !notes[static_cast<size_t>(existingNoteIndex)].selected;
@@ -1244,14 +1246,8 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
-// 绘制音符工具处理：创建新音符或更新正在绘制的音符，音高自动对齐到半音
+// 绘制音符工具处理：更新 DrawingState 预览状态（不创建 noteDraft），overlay 负责渲染
 {
-    const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
-    if (!ctx_.getNoteDraft().active) {
-        return;
-    }
-
-    auto& notes = workingDraftNotes(ctx_);
     const auto projection = ctx_.getMaterializationProjection();
     // §8.5 — Note drag writes startTime/endTime in SOURCE time.
     double currentTime = pixelXToSourceTime(e.x);
@@ -1268,42 +1264,21 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
     float snappedF0 = 440.0f * std::pow(2.0f, (roundedMidi - 69) / 12.0f);
 
     if (!ctx_.getState().drawing.isDrawingNote) {
+        // First drag frame: initialize drawing state
         ctx_.getState().drawing.isDrawingNote = true;
         ctx_.setDrawingNoteStartTime(currentTime);
         ctx_.setDrawingNoteEndTime(currentTime);
         ctx_.setDrawingNotePitch(snappedF0);
-
-        Note newNote;
-        newNote.startTime = currentTime;
-        newNote.endTime = currentTime;
-        newNote.pitch = snappedF0;
-        newNote.originalPitch = snappedF0;
-        newNote.pitchOffset = 0.0f;
-        newNote.selected = false;
-        newNote.dirty = true;
-
-        auto insertPos = std::lower_bound(notes.begin(), notes.end(), currentTime,
-            [](const Note& n, double t) { return n.startTime < t; });
-        int insertIdx = static_cast<int>(std::distance(notes.begin(), insertPos));
-        notes.insert(insertPos, newNote);
-        ctx_.setDrawingNoteIndex(insertIdx);
-        invalidateNoteChange(ctx_, beforeNotes, notes);
-        return;
-    }
-
-    if (ctx_.getDrawingNoteIndex() >= 0) {
+        ctx_.setDrawingNoteIndex(-1);
+    } else {
+        // Subsequent drag frames: update end time
         ctx_.setDrawingNoteEndTime(currentTime);
-        int idx = ctx_.getDrawingNoteIndex();
-        if (idx < static_cast<int>(notes.size())) {
-            double startTime = ctx_.getDrawingNoteStartTime();
-            double endTime = ctx_.getDrawingNoteEndTime();
-            notes[(size_t)idx].startTime = std::min(startTime, endTime);
-            notes[(size_t)idx].endTime = std::max(startTime, endTime);
-            notes[(size_t)idx].dirty = true;
-        }
     }
 
-    invalidateNoteChange(ctx_, beforeNotes, notes);
+    // Only repaint the lightweight preview overlay — no render model rebuild
+    if (ctx_.repaintPreviewOverlay) {
+        ctx_.repaintPreviewOverlay();
+    }
 }
 
 void PianoRollToolHandler::handleAutoTuneTool(const juce::MouseEvent& e)
@@ -1343,6 +1318,7 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
             note.selected = timeOverlap && pitchOverlap;
         }
         invalidateNoteChange(ctx_, beforeNotes, notes);
+        if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
         return;
     }
 
@@ -1418,6 +1394,7 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
 
         updateNoteDragPreview(ctx_, std::pow(2.0f, appliedDeltaSemitones / 12.0f));
         invalidateNoteChange(ctx_, beforeNotes, notes);
+        if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
         return;
     }
 
@@ -1665,17 +1642,21 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
 
 void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
 // 绘制音符工具鼠标释放处理：完成音符绘制，分割重叠音符，应用最小时长
+// Option B: noteDraft 仅在 mouseUp 时一次性创建并提交
 {
-    const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
+    const auto beforeNotes = std::vector<Note>(committedNotes(ctx_));
 
     if (ctx_.getDrawNoteToolPendingDrag()) {
         ctx_.setDrawNoteToolPendingDrag(false);
+        // Pending drag that didn't exceed threshold — commit selection if active
         if (ctx_.getNoteDraft().active) {
             ctx_.setUndoDescription(juce::String("绘制音符"));
             ctx_.commitNoteDraft();
             invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
             ctx_.clearNoteDraft();
         }
+        // Repaint overlay to clear any stale preview
+        if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
         return;
     }
     
@@ -1711,16 +1692,15 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
         }
     }
 
-    auto notes = ctx_.getNoteDraft().workingNotes;
+    // One-shot: begin noteDraft from committed notes, build final state, commit
+    ctx_.beginNoteDraft();
+    auto notes = ctx_.getNoteDraft().workingNotes;  // copy of committed notes
+
     if (ctx_.getDrawingNotePitch() > 0.0f) {
         std::vector<Note> updatedNotes;
         updatedNotes.reserve(notes.size() + 2);
 
         for (size_t i = 0; i < notes.size(); ++i) {
-            if (ctx_.getDrawingNoteIndex() >= 0 && static_cast<int>(i) == ctx_.getDrawingNoteIndex()) {
-                continue;
-            }
-
             const auto& note = notes[i];
             bool overlap = note.endTime > startTime && note.startTime < endTime;
             if (!overlap) {
@@ -1807,6 +1787,9 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
 
     ctx_.clearNoteDraft();
     invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
+
+    // Clear overlay preview
+    if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
 }
 
 void PianoRollToolHandler::showToolContextMenu(const juce::MouseEvent& e)
@@ -1944,6 +1927,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDrag(const juce::MouseEvent& e) 
     const auto dirtyBefore = ctx_.getLineAnchorPreviewBounds();
     ctx_.getState().drawing.currentMousePos = e.position;
     invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
+    if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
 }
 
 void PianoRollToolHandler::clearLineAnchorPreview()

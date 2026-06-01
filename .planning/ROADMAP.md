@@ -39,14 +39,16 @@
 - Timeline rendering architecture（已收敛 ✓）
 - 代码质量清理：StandaloneArrangementHelpers.h + TrackConstants.h
 - 快捷键修复：'1' 键快速删除 + Ctrl+A F0 曲线选中高亮（2026-06-01）
+- DrawNote 预览覆盖层重构：`PianoRollPreviewOverlay` + `DrawingState` 惰性提交（2026-06-01）
 
 ### v1.5 当前优先级
 
-- Standalone visual smoke（含 UI 修复验证）
+- Standalone visual smoke（含 UI 修复 + DrawNote overlay 验证）
 - Undo/Redo 边界测试
 - CorrectionWorker 并发验证
 - `OpenTuneTests.exe ui` exit=1 修复
 - Arrangement min-zoom waveform + cross-track drag preview
+- TrackPanel 多余纵向留白清理
 
 ## Open Work
 
@@ -60,13 +62,14 @@
 
 - `.planning/plans/2026-05-27-arrangement-min-zoom-waveform-and-cross-track-drag-preview.md`
 - `.planning/plans/2026-05-27-auto-ref-reference-driven-pitch-and-timing-alignment.md`
-- `.planning/plans/2026-05-30-track-panel-context-menu-and-lane-alignment.md`
 - `.planning/plans/2026-06-01-track-panel-extra-gap-removal.md`
 
-## Archived Planning Docs（已完成/过时）
+## Archived Planning Docs（已完成/过时 → `.planning/archive/plans/`）
 
-- `.planning/plans/2026-05-29-daw-timeline-follow-rendering-architecture.md` — 目标已达成，代码已收敛
-- `.planning/plans/2026-05-29-daw-timeline-follow-rendering-architecture-test-verification.md` — 同上
+- `2026-05-29-daw-timeline-follow-rendering-architecture*` — 目标已达成，代码已收敛
+- `2026-05-29-pitch-shift-render-modifier*` — PitchShift 已落地
+- `2026-05-30-rubberband-light-pitch-correction-hybrid-render*` — RubberBand 混合管线已落地
+- `2026-05-30-track-panel-context-menu-and-lane-alignment*` — 右键菜单已落地
 
 ## Next Planning Actions
 

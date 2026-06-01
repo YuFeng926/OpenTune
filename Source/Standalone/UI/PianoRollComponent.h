@@ -97,6 +97,28 @@ private:
     int imageOffsetX_ = 0;
 };
 
+// ============================================================================
+// Preview Overlay — lightweight child that draws transient interaction previews
+// (note-draw rectangle, hand-draw F0, line-anchor, selection box) without
+// triggering the expensive main render-model rebuild.
+// ============================================================================
+class PianoRollPreviewOverlay : public juce::Component
+{
+public:
+    explicit PianoRollPreviewOverlay(class PianoRollComponent& owner)
+        : owner_(owner)
+    {
+        setOpaque(false);
+        setInterceptsMouseClicks(false, false);
+    }
+
+    void paint(juce::Graphics& g) override;
+
+private:
+    PianoRollComponent& owner_;
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PianoRollPreviewOverlay)
+};
+
 class PianoRollComponent : public juce::Component,
                            public juce::ScrollBar::Listener {
 public:
@@ -280,6 +302,7 @@ public:
 
 private:
     friend struct PianoRollComponentTestProbe;
+    friend class PianoRollPreviewOverlay;
 
     bool enqueueManualCorrectionPatchAsync(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
                                            int dirtyStartFrame,
@@ -307,6 +330,7 @@ private:
     SmallButton scrollModeToggleButton_;
     SmallButton timeUnitToggleButton_;
     PlayheadOverlayComponent playheadOverlay_;
+    PianoRollPreviewOverlay previewOverlay_{*this};
 
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseMove(const juce::MouseEvent& e) override;

@@ -1502,9 +1502,9 @@ void runPianoRollComponentSourceGuardPaintUsesCachedNotesInsteadOfProcessorReadT
     logPass(testName);
 }
 
-void runPianoRollDrawNoteDraftSurvivesMultiEventDragTest()
+void runPianoRollDrawNotePreviewSurvivesMultiEventDragTest()
 {
-    constexpr const char* testName = "PianoRoll_DrawNoteDraft_SurvivesMultiEventDrag";
+    constexpr const char* testName = "PianoRoll_DrawNotePreview_SurvivesMultiEventDrag";
 
     PianoRollToolHandlerHarness harness;
     harness.handler.setTool(ToolId::DrawNote);
@@ -1516,24 +1516,24 @@ void runPianoRollDrawNoteDraftSurvivesMultiEventDragTest()
                                              mouseDownPos,
                                              true));
 
-    if (!harness.state.noteDraft.active || harness.state.noteDraft.workingNotes.size() != 1) {
-        logFail(testName, "first draw-note drag did not create a single working draft note");
+    if (!harness.state.drawing.isDrawingNote || harness.state.drawing.drawingNotePitch <= 0.0f) {
+        logFail(testName, "first draw-note drag did not activate the drawing state");
         return;
     }
 
-    const auto firstEndTime = harness.state.noteDraft.workingNotes.front().endTime;
+    const auto firstEndTime = harness.state.drawing.drawingNoteEndTime;
     harness.handler.mouseDrag(makeMouseEvent(harness.component,
                                              juce::Point<float>(40.0f, 100.0f),
                                              mouseDownPos,
                                              true));
 
-    if (!harness.state.noteDraft.active || harness.state.noteDraft.workingNotes.size() != 1) {
-        logFail(testName, "multi-event draw-note drag reset the draft back to committed notes");
+    if (!harness.state.drawing.isDrawingNote || harness.state.drawing.drawingNotePitch <= 0.0f) {
+        logFail(testName, "multi-event draw-note drag reset the drawing state");
         return;
     }
 
-    if (harness.state.noteDraft.workingNotes.front().endTime <= firstEndTime) {
-        logFail(testName, "second draw-note drag event did not advance the existing working draft note");
+    if (harness.state.drawing.drawingNoteEndTime <= firstEndTime) {
+        logFail(testName, "second draw-note drag event did not advance the drawing note end time");
         return;
     }
 
@@ -2172,8 +2172,8 @@ void runCorrectedF0PreviewOnlyActivatesInCorrectedF0PrimaryTest()
 
     const auto paintSection = extractWorkspaceFileSection(
         componentPath,
-        "void PianoRollComponent::paint",
-        "void PianoRollComponent::setInferenceActive");
+        "void PianoRollPreviewOverlay::paint",
+        "void PianoRollComponent::drawHandDrawPreview");
     const auto previewSection = extractWorkspaceFileSection(
         componentPath,
         "void PianoRollComponent::drawNoteDragCurvePreview",
@@ -8171,7 +8171,7 @@ void runUiBehaviorSuite()
     runPianoRollTimelineViewDomainDefaultProjectionWindowUnchangedTest();
     runEditingCommandDoesNotMutatePlacementTest();
     runPianoRollComponentSourceGuardPaintUsesCachedNotesInsteadOfProcessorReadTest();
-    runPianoRollDrawNoteDraftSurvivesMultiEventDragTest();
+    runPianoRollDrawNotePreviewSurvivesMultiEventDragTest();
     runPianoRollEmptySpaceSeekMouseDownOnlyArmsPendingTest();
     runPianoRollEmptySpaceSeekMouseUpWithinThresholdSeeksOnceTest();
     runPianoRollEmptySpaceSeekDrawNoteClickDoesNotCreateNoteTest();
