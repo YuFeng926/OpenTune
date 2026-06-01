@@ -1,19 +1,20 @@
 ---
 spec_version: 1.0.0
 generated_by: orchestrator-agent
-last_updated: 2026-05-27
+last_updated: 2026-06-02
 ---
 
 # Spec 文档索引
 
-## 最新版本：2026-05-27_v1.5
+## 最新版本：2026-06-02_v1.6
 
-> 跨日期规则：因 2026-05-27 ≠ 上次运行日期 2026-05-05，版本号重置为 v1.0；旧 2026-05-05 版本作为快照归档。
+> 跨日期规则：因 2026-06-02 ≠ 上次运行日期 2026-05-27，版本号重置为 v1.0；旧 2026-05-27 版本作为快照归档。
 
 ## 版本历史
 
 | 版本 | 日期 | 模块数 | 文档数 | 说明 |
 |------|------|--------|--------|------|
+| 2026-06-02_v1.6 | 2026-06-02 | 9 | 43 | F0 curve gradient optimization - pre-compute taper/alpha per point |
 | 2026-05-27_v1.5 | 2026-05-27 | 9 | 43 | Track-level color system, ImportDropTarget, shortcuts migrated to Shared, experimental features gate, SnapSettings, ARA revision-based PendingBirth |
 | 2026-05-05_v1.0 | 2026-05-05 | 9 | 43 | 全量重建：新增 ara-vst3 模块；同步 v1.3+ ARA/VST3 双格式、Materialization Pipeline、UndoManager、ChromaKeyDetector、CrossoverMixer、OnnxVocoderBase、Editor/Preferences 等结构变更 |
 | 2026-04-10_v1.0 | 2026-04-10 | 8 | 38 | 初次生成 |
