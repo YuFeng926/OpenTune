@@ -4029,8 +4029,8 @@ bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
         out.storedAudioBuffer = std::move(inBuffer);
     }
     
-    // 后处理数据延后到波形完全可见后再异步计算
-    out.silentGaps.clear();
+    // 计算静默段间隙（同步执行，避免异步竞态）
+    out.silentGaps = SilentGapDetector::detectAllGapsAdaptive(out.storedAudioBuffer);
     
     return true;
 }
@@ -4441,9 +4441,6 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
 
             result.sourceAudioBuffer = snapshot.audioBuffer;
 
-            result.silentGaps = SilentGapDetector::detectAllGapsAdaptive(*snapshot.audioBuffer);
-            snapshot.silentGaps = result.silentGaps;
-
             std::string errorMessage;
             if (!processor->extractImportedClipOriginalF0(snapshot, result, errorMessage)) {
                 result.errorMessage = errorMessage;
@@ -4468,7 +4465,7 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
                 return;
             }
 
-            processor->materializationStore_->setSilentGaps(result.materializationId, std::move(result.silentGaps));
+            // silentGaps computed at birth (prepareImport) — no async overwrite needed
 
             if (!result.success) {
                 AppLogger::log("MaterializationRefresh: extraction failed materializationId="
@@ -4833,6 +4830,25 @@ bool OpenTuneAudioProcessor::setMaterializationTimeGridById(uint64_t materializa
     juce::ignoreUnused(affectedSrcStartFrame, affectedSrcEndFrame);
     requestStage2Rebuild(materializationId);
     return true;
+}
+
+void OpenTuneAudioProcessor::setPitchShiftSettings(uint64_t materializationId, const PitchShiftSettings& settings)
+{
+    if (materializationId == 0) return;
+
+    materializationStore_->setPitchShiftSettings(materializationId, settings);
+
+    // Trigger full re-render for this materialization
+    MaterializationSnapshot snap;
+    if (getMaterializationSnapshotById(materializationId, snap) && snap.audioBuffer) {
+        const int numSamples = snap.audioBuffer->getNumSamples();
+        const double durationSec = static_cast<double>(numSamples) / 44100.0;
+        if (durationSec > 0.0) {
+            materializationStore_->enqueuePartialRender(materializationId, 0.0, durationSec, 512);
+            ensureChunkRenderWorkerStarted();
+            schedulerCv_.notify_one();
+        }
+    }
 }
 
 std::shared_ptr<RenderCache> OpenTuneAudioProcessor::getMaterializationRenderCacheById(uint64_t materializationId) const
@@ -5490,6 +5506,23 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                     std::copy(data, data + copyLen, sourceF0.begin() + offset);
                 }
             });
+
+        // ===== Pitch Shift render modifier: apply global F0 offset =====
+        // PitchShiftSettings is a clip-level modifier that shifts all F0 values
+        // by a constant ratio BEFORE the AutoTune/vocoder split decision.
+        // This ensures both paths (light pitch correction and vocoder) see the
+        // shifted F0 as their "corrected" target.
+        if (materializationStore_ != nullptr) {
+            const auto pitchShiftSettings = materializationStore_->getPitchShiftSettings(coreJob.materializationId);
+            if (!pitchShiftSettings.isIdentity()) {
+                const float pitchRatio = static_cast<float>(pitchShiftSettings.getPitchRatio());
+                for (auto& f0Val : sourceF0) {
+                    if (f0Val > 0.0f) {
+                        f0Val *= pitchRatio;
+                    }
+                }
+            }
+        }
 
         bool hasValidF0 = false;
         for (float f : sourceF0) {

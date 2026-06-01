@@ -96,32 +96,10 @@ public:
     /** True when the cache has been built at least once. */
     bool isValid() const noexcept { return valid_; }
 
-    /** Apply a cheap horizontal presentation shift to prebuilt F0 segments only. */
-    void shiftPreparedF0Segments(float deltaX) noexcept
-    {
-        if (!valid_ || deltaX == 0.0f) {
-            return;
-        }
-
-        for (auto& item : cachedCtx_.materializations) {
-            shiftSegments(item.originalF0VisualSegments, deltaX);
-            shiftSegments(item.correctedF0VisualSegments, deltaX);
-        }
-    }
-
     /** Invalidate (force next get to rebuild). */
     void invalidate() noexcept { valid_ = false; }
 
 private:
-    static void shiftSegments(std::vector<PianoRollRenderer::F0VisualSegment>& segments, float deltaX) noexcept
-    {
-        for (auto& segment : segments) {
-            for (auto& point : segment.points) {
-                point.x += deltaX;
-            }
-        }
-    }
-
     Key currentKey_;
     PianoRollRenderer::RenderContext cachedCtx_;
     bool valid_ = false;

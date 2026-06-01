@@ -237,7 +237,7 @@ public:
 
         initialiseToggleButton(lightPitchCorrectionToggle_);
         lightPitchCorrectionToggle_.setButtonText(
-            juce::String::fromUTF8(u8"轻量修音模式（小幅修正使用周期重采样，超低延迟零相位伪影）"));
+            juce::String::fromUTF8(u8"音质优化模式（小幅修正使用周期重采样，超低延迟零相位伪影）"));
         lightPitchCorrectionToggle_.setToggleState(state.shared.lightPitchCorrectionEnabled,
                                                    juce::dontSendNotification);
         lightPitchCorrectionToggle_.onClick = [this] {
@@ -245,6 +245,16 @@ public:
             notifyChanged();
         };
         addAndMakeVisible(lightPitchCorrectionToggle_);
+
+        // Publish preferred height for parent containers
+        {
+            const int vPad = 4 * 2; // reduced(10, 4) vertical
+            const int rows = 5;     // renderingPriority, vocoderWeight, experimentalToggle, refAlignMode, lightPitchToggle
+            const int rowH = 34;
+            const int gaps = 8 * 4 + 4; // four 8px gaps + one 4px gap
+            const int hintHeight = 42;
+            getProperties().set("preferredHeight", vPad + rows * rowH + gaps + hintHeight);
+        }
     }
 
     void paint(juce::Graphics& g) override

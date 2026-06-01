@@ -14,6 +14,9 @@
 #include "Utils/ParameterPanelSync.h"
 #include "Utils/Note.h"
 #include "Utils/PianoRollEditAction.h"
+#include "Utils/PitchShiftSettings.h"
+#include "Utils/PitchShiftEditAction.h"
+#include "Editor/PitchShiftDialogContent.h"
 #include "Utils/TimeCoordinate.h"
 #include "UI/UiAssets.h"
 #include "UI/FrameScheduler.h"
@@ -1089,6 +1092,82 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
         return;
     }
 
+}
+
+void OpenTuneAudioProcessorEditor::pitchShiftRequested()
+{
+    const uint64_t materializationId = resolveCurrentMaterializationId();
+    if (materializationId == 0) return;
+
+    const auto currentSettings = processorRef_.getMaterializationStore()->getPitchShiftSettings(materializationId);
+
+    auto* content = new OpenTune::PitchShiftDialogContent(currentSettings);
+
+    // Listener helper — applies settings and closes the dialog on confirm/reset
+    struct DialogHelper : public OpenTune::PitchShiftDialogContent::Listener
+    {
+        OpenTuneAudioProcessorEditor* owner;
+        uint64_t matId;
+        OpenTune::PitchShiftSettings oldSettings;
+        juce::Component::SafePointer<juce::Component> contentPtr;
+
+        DialogHelper(OpenTuneAudioProcessorEditor* o, uint64_t m,
+                     const OpenTune::PitchShiftSettings& s,
+                     juce::Component::SafePointer<juce::Component> c)
+            : owner(o), matId(m), oldSettings(s), contentPtr(std::move(c)) {}
+
+        void pitchShiftConfirmed(const OpenTune::PitchShiftSettings& newSettings) override
+        {
+            if (!owner) return;
+            if (newSettings != oldSettings) {
+                auto& proc = owner->processorRef_;
+                auto& um = proc.getUndoManager();
+                um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
+                    proc, matId, oldSettings, newSettings));
+                proc.setPitchShiftSettings(matId, newSettings);
+                owner->parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
+            }
+            closeDialog();
+        }
+
+        void pitchShiftReset() override
+        {
+            if (!owner) return;
+            const auto identity = OpenTune::PitchShiftSettings::identity();
+            if (identity != oldSettings) {
+                auto& proc = owner->processorRef_;
+                auto& um = proc.getUndoManager();
+                um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
+                    proc, matId, oldSettings, identity));
+                proc.setPitchShiftSettings(matId, identity);
+                owner->parameterPanel_.setPitchShiftIndicator(0, 0);
+            }
+            closeDialog();
+        }
+
+        void closeDialog()
+        {
+            if (contentPtr != nullptr) {
+                if (auto* dw = contentPtr->findParentComponentOfClass<juce::DialogWindow>()) {
+                    dw->exitModalState(0);
+                }
+            }
+        }
+    };
+
+    auto* helper = new DialogHelper{this, materializationId, currentSettings,
+                                    juce::Component::SafePointer<juce::Component>(content)};
+    content->addListener(helper);
+
+    auto options = juce::DialogWindow::LaunchOptions();
+    options.content.setOwned(content);
+    options.dialogTitle = "Pitch Shift";
+    options.dialogBackgroundColour = UIColors::backgroundDark;
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = false;
+    options.resizable = false;
+    options.componentToCentreAround = this;
+    options.launchAsync();
 }
 
 void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)

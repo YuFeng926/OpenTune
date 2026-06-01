@@ -11,6 +11,10 @@ namespace OpenTune {
 
 namespace {
 
+constexpr double kMaxRenderChunkDurationSeconds = 15.0;
+constexpr int64_t kMaxRenderChunkSamples = static_cast<int64_t>(
+    kMaxRenderChunkDurationSeconds * TimeCoordinate::kRenderSampleRate);
+
 bool findPreferredHopAlignedBoundarySample(const SilentGap& gap,
                                            int hopSize,
                                            int64_t& outSample)
@@ -278,6 +282,7 @@ bool MaterializationStore::getPlaybackReadSource(uint64_t materializationId, Pla
     // pitchRevision: derived from PitchCurve internals if available; for MVP
     // we use 0 (Stage 1 caching is not yet branched by this).
     out.pitchRevision = 0;
+    out.pitchShiftSettings = it->second.pitchShiftSettings;
     out.timeGridIsIdentity = (it->second.timeGrid == nullptr) || it->second.timeGrid->isIdentity();
 
     return out.canRead();
@@ -311,6 +316,8 @@ bool MaterializationStore::getSnapshot(uint64_t materializationId, Materializati
     out.renderRevision = it->second.renderRevision;
     out.timeGrid = it->second.timeGrid;
     out.timeGridRevision = it->second.timeGridRevision;
+    out.pitchShiftSettings = it->second.pitchShiftSettings;
+    out.pitchShiftRevision = it->second.pitchShiftRevision;
     return true;
 }
 
@@ -500,6 +507,52 @@ bool MaterializationStore::setTimeGrid(uint64_t materializationId,
 }
 
 // ============================================================================
+// Pitch Shift — clip-level render modifier
+// ============================================================================
+
+PitchShiftSettings MaterializationStore::getPitchShiftSettings(uint64_t materializationId) const
+{
+    if (materializationId == 0) return PitchShiftSettings::identity();
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) return PitchShiftSettings::identity();
+    return it->second.pitchShiftSettings;
+}
+
+uint64_t MaterializationStore::getPitchShiftRevision(uint64_t materializationId) const
+{
+    if (materializationId == 0) return 0;
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) return 0;
+    return it->second.pitchShiftRevision;
+}
+
+bool MaterializationStore::setPitchShiftSettings(uint64_t materializationId, const PitchShiftSettings& settings)
+{
+    if (materializationId == 0) return false;
+
+    const juce::ScopedWriteLock writeLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) return false;
+
+    if (it->second.pitchShiftSettings == settings) return true;  // no-op
+
+    it->second.pitchShiftSettings = settings;
+    ++it->second.pitchShiftRevision;
+
+    // Invalidate Stage 1 RenderCache — all chunks need re-render with new F0 offset
+    if (it->second.renderCache != nullptr) {
+        it->second.renderCache->clear();
+    }
+
+    // Invalidate Stage 2 TimeStretchCache
+    timeStretchCache_.invalidate(materializationId);
+
+    return true;
+}
+
+// ============================================================================
 // vocal-time-stretch §5.5 — lazy SoundTouchStretcher accessor
 // (replaces the archived phase-vocoder stretcher; see swap-time-stretch-to-soundtouch change)
 // ============================================================================
@@ -590,22 +643,6 @@ bool MaterializationStore::setNotes(uint64_t materializationId, std::vector<Note
 
     it->second.notes = std::move(notes);
     ++it->second.notesRevision;
-    return true;
-}
-
-bool MaterializationStore::setSilentGaps(uint64_t materializationId, std::vector<SilentGap> silentGaps)
-{
-    if (materializationId == 0) {
-        return false;
-    }
-
-    const juce::ScopedWriteLock writeLock(lock_);
-    const auto it = materializations_.find(materializationId);
-    if (it == materializations_.end()) {
-        return false;
-    }
-
-    it->second.silentGaps = std::move(silentGaps);
     return true;
 }
 
@@ -833,8 +870,9 @@ std::vector<int64_t> MaterializationStore::buildChunkBoundariesFromSilentGaps(in
         return boundaries;
     }
 
-    boundaries.reserve(silentGaps.size() + 2);
-    boundaries.push_back(0);
+    std::vector<int64_t> anchorBoundaries;
+    anchorBoundaries.reserve(silentGaps.size() + 2);
+    anchorBoundaries.push_back(0);
 
     for (const auto& gap : silentGaps) {
         int64_t splitSample = 0;
@@ -842,19 +880,47 @@ std::vector<int64_t> MaterializationStore::buildChunkBoundariesFromSilentGaps(in
             continue;
         }
 
-        if (splitSample <= boundaries.back() || splitSample >= materializationSampleCount) {
+        if (splitSample <= anchorBoundaries.back() || splitSample >= materializationSampleCount) {
             continue;
         }
 
-        boundaries.push_back(splitSample);
+        anchorBoundaries.push_back(splitSample);
     }
 
-    if (boundaries.back() != materializationSampleCount) {
-        boundaries.push_back(materializationSampleCount);
+    if (anchorBoundaries.back() != materializationSampleCount) {
+        anchorBoundaries.push_back(materializationSampleCount);
     }
 
-    std::sort(boundaries.begin(), boundaries.end());
-    boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
+    std::sort(anchorBoundaries.begin(), anchorBoundaries.end());
+    anchorBoundaries.erase(std::unique(anchorBoundaries.begin(), anchorBoundaries.end()), anchorBoundaries.end());
+
+    boundaries.reserve(anchorBoundaries.size() + static_cast<size_t>(materializationSampleCount / kMaxRenderChunkSamples) + 1);
+    boundaries.push_back(anchorBoundaries.front());
+
+    for (size_t i = 0; i + 1 < anchorBoundaries.size(); ++i) {
+        const int64_t anchorStart = anchorBoundaries[i];
+        const int64_t anchorEnd = anchorBoundaries[i + 1];
+
+        int64_t chunkStart = anchorStart;
+        while ((anchorEnd - chunkStart) > kMaxRenderChunkSamples) {
+            int64_t splitSample = ((chunkStart + kMaxRenderChunkSamples) / hopSize) * hopSize;
+            if (splitSample <= chunkStart) {
+                splitSample = ((chunkStart / hopSize) + 1) * static_cast<int64_t>(hopSize);
+            }
+
+            if (splitSample >= anchorEnd) {
+                break;
+            }
+
+            boundaries.push_back(splitSample);
+            chunkStart = splitSample;
+        }
+
+        if (boundaries.back() != anchorEnd) {
+            boundaries.push_back(anchorEnd);
+        }
+    }
+
     return boundaries;
 }
 

@@ -21,6 +21,10 @@
 #include "Utils/AppLogger.h"
 #include "Utils/ParameterPanelSync.h"
 #include "Utils/PianoRollEditAction.h"
+#include "Utils/PitchShiftSettings.h"
+#include "Utils/PitchShiftEditAction.h"
+#include "Editor/PitchShiftDialogContent.h"
+#include "Editor/ConfirmDialogContent.h"
 #include "Utils/TimeCoordinate.h"
 #include "Utils/KeyShortcutConfig.h"
 #include <cmath>
@@ -660,11 +664,11 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
 {
     if (isImportInProgress_)
     {
-            juce::AlertWindow::showMessageBoxAsync(
-                juce::AlertWindow::InfoIcon,
-                juce::String::fromUTF8(u8"导入音频"),
-                juce::String::fromUTF8(u8"当前正在导入音频，请稍后再试。")
-            );
+        ConfirmDialogContent::showMessage(
+            this,
+            juce::String::fromUTF8(u8"导入音频"),
+            juce::String::fromUTF8(u8"当前正在导入音频，请稍后再试。")
+        );
         return;
     }
 
@@ -680,22 +684,22 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
     static const juce::String kImportExtensionSpec = getImportExtensionSpec();
     if (!file.hasFileExtension(kImportExtensionSpec))
     {
-            const auto wildcard = getImportWildcardFilter().replaceCharacters("*", "");
-            juce::AlertWindow::showMessageBoxAsync(
-                juce::AlertWindow::WarningIcon,
-                juce::String::fromUTF8(u8"导入音频"),
-                juce::String::fromUTF8(u8"不支持的文件类型。\n当前版本支持：") + wildcard
-            );
+        const auto wildcard = getImportWildcardFilter().replaceCharacters("*", "");
+        ConfirmDialogContent::showMessage(
+            this,
+            juce::String::fromUTF8(u8"导入音频"),
+            juce::String::fromUTF8(u8"不支持的文件类型。\n当前版本支持：") + wildcard
+        );
         return;
     }
 
     if (files.size() > 1)
     {
-            juce::AlertWindow::showMessageBoxAsync(
-                juce::AlertWindow::InfoIcon,
-                juce::String::fromUTF8(u8"导入音频"),
-                juce::String::fromUTF8(u8"检测到多个文件，本次将仅导入第一个文件。")
-            );
+        ConfirmDialogContent::showMessage(
+            this,
+            juce::String::fromUTF8(u8"导入音频"),
+            juce::String::fromUTF8(u8"检测到多个文件，本次将仅导入第一个文件。")
+        );
     }
 
     // Resolve import target from drop position (x,y)
@@ -847,8 +851,8 @@ void OpenTuneAudioProcessorEditor::applyImportDropTarget(ImportDropTarget target
         break;
 
     case ImportDropTarget::Kind::Reject:
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon,
+        ConfirmDialogContent::showMessage(
+            this,
             juce::String::fromUTF8(u8"导入音频"),
             target.rejectReason
         );
@@ -1406,8 +1410,8 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
 
     if (isImportInProgress_)
     {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::InfoIcon,
+        ConfirmDialogContent::showMessage(
+            this,
             juce::String::fromUTF8(u8"导入音频"),
             juce::String::fromUTF8(u8"当前正在导入音频，请稍后再试。")
         );
@@ -1428,7 +1432,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
 
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
-    chooser->launchAsync(chooserFlags, [safeThis, chooser](const juce::FileChooser& fc)
+    chooser->launchAsync(chooserFlags, [safeThis, chooser, this](const juce::FileChooser& fc)
     {
         if (safeThis == nullptr)
             return;
@@ -1453,95 +1457,83 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
         else
         {
             // 多文件：弹窗询问导入模式
-            auto* alert = new juce::AlertWindow(
-        juce::String::fromUTF8(u8"选择导入模式"),
-        juce::String::fromUTF8(u8"您选择了 ") + juce::String(selectedFiles.size()) + juce::String::fromUTF8(u8" 个音频文件，请选择导入方式："),
-        juce::AlertWindow::QuestionIcon
-    );
-
-            alert->addButton(juce::String::fromUTF8(u8"顺序导入到当前轨道"), 1);
-            alert->addButton(juce::String::fromUTF8(u8"分别导入到多个轨道"), 2);
-            alert->addButton(juce::String::fromUTF8(u8"取消"), 0);
-
-            // 保存文件列表供回调使用
             auto filesPtr = std::make_shared<juce::Array<juce::File>>(selectedFiles);
 
-            alert->enterModalState(
-                true,
-                juce::ModalCallbackFunction::create([safeThis, filesPtr, currentTrack, visibleTracks](int result)
-                {
-                    if (safeThis == nullptr)
-                        return;
-
-                    if (result == 0)
+            ConfirmDialogContent::launch(
+                new ConfirmDialogContent(
+                    juce::String::fromUTF8(u8"选择导入模式"),
+                    juce::String::fromUTF8(u8"您选择了 ") + juce::String(selectedFiles.size()) + juce::String::fromUTF8(u8" 个音频文件，请选择导入方式："),
                     {
-                        // 用户取消
-                        return;
-                    }
-                    else if (result == 1)
-                    {
-                        // 顺序导入到同一轨道（当前选中轨道）
-                        const int batchId = safeThis->nextImportBatchId_++;
-                        safeThis->importBatchNextStartSeconds_[batchId] = safeThis->computeTrackAppendStartSeconds(currentTrack);
-                        safeThis->importBatchRemainingItems_[batchId] = filesPtr->size();
+                        { juce::String::fromUTF8(u8"顺序导入到当前轨道"), [=]() {
+                            if (safeThis == nullptr)
+                                return;
 
-                        for (int i = 0; i < filesPtr->size(); ++i)
-                        {
-                            OpenTuneAudioProcessorEditor::PendingImport pending;
-                            pending.placement.trackId = currentTrack;
-                            pending.file = (*filesPtr)[i];
-                            pending.batchId = batchId;
-                            pending.appendSequentially = true;
-                            safeThis->queuePendingImport(std::move(pending));
-                        }
-                    }
-                    else if (result == 2)
-                    {
-                        // 齐头导入多个轨道
-                        const int remainingTrackCapacity = juce::jmax(0, OpenTuneAudioProcessor::MAX_TRACKS - currentTrack);
-                        const int acceptedFileCount = juce::jmin(filesPtr->size(), remainingTrackCapacity);
-                        if (acceptedFileCount <= 0)
-                        {
-                            juce::AlertWindow::showMessageBoxAsync(
-                                juce::AlertWindow::WarningIcon,
-                                juce::String::fromUTF8(u8"导入失败"),
-                                juce::String::fromUTF8(u8"当前轨道之后没有剩余可用轨道。")
-                            );
-                            return;
-                        }
-                        
-                        // 自动扩展可见轨道数量
-                        int requiredTracks = currentTrack + acceptedFileCount;
-                        if (requiredTracks > visibleTracks)
-                        {
-                            int newVisibleTracks = std::min(requiredTracks, OpenTuneAudioProcessor::MAX_TRACKS);
-                            safeThis->trackPanel_.setVisibleTrackCount(newVisibleTracks);
-                            safeThis->arrangementView_.setVisibleTrackCount(newVisibleTracks);
-                        }
+                            // 顺序导入到同一轨道（当前选中轨道）
+                            const int batchId = safeThis->nextImportBatchId_++;
+                            safeThis->importBatchNextStartSeconds_[batchId] = safeThis->computeTrackAppendStartSeconds(currentTrack);
+                            safeThis->importBatchRemainingItems_[batchId] = filesPtr->size();
 
-                        // 从当前轨道开始，依次导入到后续轨道
-                        for (int i = 0; i < acceptedFileCount; ++i)
-                        {
-                            OpenTuneAudioProcessorEditor::PendingImport pending;
-                            pending.placement.trackId = currentTrack + i;
-                            pending.placement.timelineStartSeconds = 0.0;
-                            pending.file = (*filesPtr)[i];
-                            safeThis->queuePendingImport(std::move(pending));
-                        }
+                            for (int i = 0; i < filesPtr->size(); ++i)
+                            {
+                                OpenTuneAudioProcessorEditor::PendingImport pending;
+                                pending.placement.trackId = currentTrack;
+                                pending.file = (*filesPtr)[i];
+                                pending.batchId = batchId;
+                                pending.appendSequentially = true;
+                                safeThis->queuePendingImport(std::move(pending));
+                            }
+                        }, true },
+                        { juce::String::fromUTF8(u8"分别导入到多个轨道"), [=]() {
+                            if (safeThis == nullptr)
+                                return;
 
-                        if (acceptedFileCount < filesPtr->size())
-                        {
-                            juce::AlertWindow::showMessageBoxAsync(
-                                juce::AlertWindow::InfoIcon,
-                                juce::String::fromUTF8(u8"导入数量已裁剪"),
-                                juce::String::fromUTF8(u8"当前轨道之后只剩 ")
-                                    + juce::String(acceptedFileCount)
-                                    + juce::String::fromUTF8(u8" 条可用轨道，超出的文件未加入导入队列。")
-                            );
-                        }
+                            // 齐头导入多个轨道
+                            const int remainingTrackCapacity = juce::jmax(0, OpenTuneAudioProcessor::MAX_TRACKS - currentTrack);
+                            const int acceptedFileCount = juce::jmin(filesPtr->size(), remainingTrackCapacity);
+                            if (acceptedFileCount <= 0)
+                            {
+                                ConfirmDialogContent::showMessage(
+                                    safeThis,
+                                    juce::String::fromUTF8(u8"导入失败"),
+                                    juce::String::fromUTF8(u8"当前轨道之后没有剩余可用轨道。")
+                                );
+                                return;
+                            }
+
+                            // 自动扩展可见轨道数量
+                            int requiredTracks = currentTrack + acceptedFileCount;
+                            if (requiredTracks > visibleTracks)
+                            {
+                                int newVisibleTracks = std::min(requiredTracks, OpenTuneAudioProcessor::MAX_TRACKS);
+                                safeThis->trackPanel_.setVisibleTrackCount(newVisibleTracks);
+                                safeThis->arrangementView_.setVisibleTrackCount(newVisibleTracks);
+                            }
+
+                            // 从当前轨道开始，依次导入到后续轨道
+                            for (int i = 0; i < acceptedFileCount; ++i)
+                            {
+                                OpenTuneAudioProcessorEditor::PendingImport pending;
+                                pending.placement.trackId = currentTrack + i;
+                                pending.placement.timelineStartSeconds = 0.0;
+                                pending.file = (*filesPtr)[i];
+                                safeThis->queuePendingImport(std::move(pending));
+                            }
+
+                            if (acceptedFileCount < filesPtr->size())
+                            {
+                                ConfirmDialogContent::showMessage(
+                                    safeThis,
+                                    juce::String::fromUTF8(u8"导入数量已裁剪"),
+                                    juce::String::fromUTF8(u8"当前轨道之后只剩 ")
+                                        + juce::String(acceptedFileCount)
+                                        + juce::String::fromUTF8(u8" 条可用轨道，超出的文件未加入导入队列。")
+                                );
+                            }
+                        } },
+                        { juce::String::fromUTF8(u8"取消"), nullptr }
                     }
-                }),
-                true  // 自动删除AlertWindow
+                ),
+                this
             );
         }
     });
@@ -1601,8 +1593,8 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                 safeThis->isImportInProgress_ = false;
                 safeThis->releaseImportBatchSlot(pendingImport.batchId);
                 safeThis->processNextImportInQueue();
-                juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::WarningIcon,
+                ConfirmDialogContent::showMessage(
+                    safeThis.getComponent(),
                     juce::String::fromUTF8(u8"导入失败"),
                     result.errorMessage
                 );
@@ -1640,8 +1632,8 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                             safeThis->isImportInProgress_ = false;
                             safeThis->releaseImportBatchSlot(batchId);
                             safeThis->processNextImportInQueue();
-                            juce::AlertWindow::showMessageBoxAsync(
-                                juce::AlertWindow::WarningIcon,
+                            ConfirmDialogContent::showMessage(
+                                safeThis.getComponent(),
                                 juce::String::fromUTF8(u8"导入失败"),
                                 juce::String::fromUTF8(u8"导入预处理失败，请重试。")
                             );
@@ -1667,8 +1659,8 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                         safeThis->isImportInProgress_ = false;
                         safeThis->releaseImportBatchSlot(pendingImport.batchId);
                         safeThis->processNextImportInQueue();
-                        juce::AlertWindow::showMessageBoxAsync(
-                            juce::AlertWindow::WarningIcon,
+                        ConfirmDialogContent::showMessage(
+                            safeThis.getComponent(),
                             juce::String::fromUTF8(u8"导入失败"),
                             juce::String::fromUTF8(u8"导入提交失败，请重试。")
                         );
@@ -1791,8 +1783,8 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
     // Check if export is already in progress
     if (exportInProgress_.load())
     {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::InfoIcon,
+        ConfirmDialogContent::showMessage(
+            this,
             juce::String::fromUTF8("导出音频"),
             juce::String::fromUTF8("已有导出任务正在进行中，请稍后再试。"));
         return;
@@ -1851,8 +1843,8 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
 
                 if (request.placementIndex < 0)
                 {
-                    juce::AlertWindow::showMessageBoxAsync(
-                        juce::AlertWindow::WarningIcon,
+                    ConfirmDialogContent::showMessage(
+                        safeThis.getComponent(),
                         juce::String::fromUTF8("导出失败"),
                         juce::String::fromUTF8("没有选中的音频片段。请先在轨道上选择一个Clip。"));
                     return;
@@ -1928,8 +1920,8 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                     if (ok)
                     {
                         DBG("Successfully exported " + outRequest.targetName);
-                        juce::AlertWindow::showMessageBoxAsync(
-                            juce::AlertWindow::InfoIcon,
+                        ConfirmDialogContent::showMessage(
+                            uiSafe.getComponent(),
                             juce::String::fromUTF8("导出完成"),
                             outRequest.targetName + juce::String::fromUTF8(" 已导出到: ") + outFile.getFullPathName());
                         return;
@@ -1941,8 +1933,8 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                         failText += juce::String::fromUTF8("\n原因: ") + errorText;
                     }
 
-                    juce::AlertWindow::showMessageBoxAsync(
-                        juce::AlertWindow::WarningIcon,
+                    ConfirmDialogContent::showMessage(
+                        uiSafe.getComponent(),
                         juce::String::fromUTF8("导出失败"),
                         failText);
                 });
@@ -1958,8 +1950,12 @@ void OpenTuneAudioProcessorEditor::saveProjectRequested()
     }
     auto result = projectSession_.saveProject();
     if (!result.ok()) {
-        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-            "保存工程失败", result.error().fullMessage());
+        ConfirmDialogContent::launch(
+            new ConfirmDialogContent(
+                juce::String::fromUTF8(u8"保存工程失败"),
+                result.error().fullMessage(),
+                { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+            this);
         return;
     }
     projectSession_.clearDirty();
@@ -1975,42 +1971,42 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
     }
 
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
-    juce::AlertWindow::showAsync(
-        juce::MessageBoxOptions()
-            .withIconType(juce::MessageBoxIconType::QuestionIcon)
-            .withTitle("当前工程尚未保存")
-            .withMessage("打开其他工程前，是否保存当前工程的更改？")
-            .withButton("保存")    // result=1
-            .withButton("不保存")  // result=2
-            .withButton("取消"),   // result=3
-        [safeThis](int result) {
-            if (safeThis == nullptr) return;
-            if (result == 0 || result == 3) return; // Dismissed or Cancel
-            if (result == 1) {
-                // Save
-                if (!safeThis->projectSession_.hasProjectPath()) {
-                    safeThis->saveProjectAsThenOpenProject();
-                    return;
-                }
-                auto saveResult = safeThis->projectSession_.saveProject();
-                if (!saveResult.ok()) {
-                    juce::AlertWindow::showMessageBoxAsync(
-                        juce::MessageBoxIconType::WarningIcon,
-                        "保存工程失败", saveResult.error().fullMessage());
-                    return;
-                }
-                safeThis->projectSession_.clearDirty();
-                safeThis->updateTitleWithProjectPath();
-                safeThis->syncRecentProjectsToMenu();
-            }
-            // Don't save (result==2) or after successful save: continue to open
-            safeThis->launchOpenProjectChooser();
-        });
+    ConfirmDialogContent::launch(
+        new ConfirmDialogContent(
+            juce::String::fromUTF8(u8"当前工程尚未保存"),
+            juce::String::fromUTF8(u8"打开其他工程前，是否保存当前工程的更改？"),
+            { { juce::String::fromUTF8(u8"保存"), [safeThis] {
+                    if (safeThis == nullptr) return;
+                    if (!safeThis->projectSession_.hasProjectPath()) {
+                        safeThis->saveProjectAsThenOpenProject();
+                        return;
+                    }
+                    auto saveResult = safeThis->projectSession_.saveProject();
+                    if (!saveResult.ok()) {
+                        ConfirmDialogContent::launch(
+                            new ConfirmDialogContent(
+                                juce::String::fromUTF8(u8"保存工程失败"),
+                                saveResult.error().fullMessage(),
+                                { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                            safeThis.getComponent());
+                        return;
+                    }
+                    safeThis->projectSession_.clearDirty();
+                    safeThis->updateTitleWithProjectPath();
+                    safeThis->syncRecentProjectsToMenu();
+                    safeThis->launchOpenProjectChooser();
+                }, true },
+              { juce::String::fromUTF8(u8"不保存"), [safeThis] {
+                    if (safeThis == nullptr) return;
+                    safeThis->launchOpenProjectChooser();
+                }, false },
+              { juce::String::fromUTF8(u8"取消"), nullptr, false } }),
+        this);
 }
 
 void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
 {
-    auto chooser = std::make_shared<juce::FileChooser>("打开工程", juce::File(), "*.otproj");
+    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"打开工程"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
@@ -2021,8 +2017,12 @@ void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
 
         auto result = safeThis->projectSession_.openProject(file);
         if (!result.ok()) {
-            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-                "打开工程失败", result.error().fullMessage());
+            ConfirmDialogContent::launch(
+                new ConfirmDialogContent(
+                    juce::String::fromUTF8(u8"打开工程失败"),
+                    result.error().fullMessage(),
+                    { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                safeThis.getComponent());
             return;
         }
         safeThis->syncRecentProjectsToMenu();
@@ -2032,7 +2032,7 @@ void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
 
 void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
 {
-    auto chooser = std::make_shared<juce::FileChooser>("保存工程", juce::File(), "*.otproj");
+    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"保存工程"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
@@ -2044,34 +2044,39 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
             file = file.withFileExtension(".otproj");
 
         if (file.existsAsFile()) {
-            juce::AlertWindow::showAsync(
-                juce::MessageBoxOptions()
-                    .withIconType(juce::MessageBoxIconType::QuestionIcon)
-                    .withTitle("覆盖现有工程？")
-                    .withMessage("目标工程文件已存在，是否覆盖？")
-                    .withButton("覆盖")
-                    .withButton("取消"),
-                [safeThis, file](int r) {
-                    if (safeThis == nullptr) return;
-                    if (r != 1) return;
-                    auto result = safeThis->projectSession_.saveProjectAs(file);
-                    if (!result.ok()) {
-                        juce::AlertWindow::showMessageBoxAsync(
-                            juce::MessageBoxIconType::WarningIcon,
-                            "保存工程失败", result.error().fullMessage());
-                        return;
-                    }
-                    safeThis->syncRecentProjectsToMenu();
-                    safeThis->updateTitleWithProjectPath();
-                    safeThis->launchOpenProjectChooser();
-                });
+            ConfirmDialogContent::launch(
+                new ConfirmDialogContent(
+                    juce::String::fromUTF8(u8"覆盖现有工程？"),
+                    juce::String::fromUTF8(u8"目标工程文件已存在，是否覆盖？"),
+                    { { juce::String::fromUTF8(u8"覆盖"), [safeThis, file] {
+                            if (safeThis == nullptr) return;
+                            auto result = safeThis->projectSession_.saveProjectAs(file);
+                            if (!result.ok()) {
+                                ConfirmDialogContent::launch(
+                                    new ConfirmDialogContent(
+                                        juce::String::fromUTF8(u8"保存工程失败"),
+                                        result.error().fullMessage(),
+                                        { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                    safeThis.getComponent());
+                                return;
+                            }
+                            safeThis->syncRecentProjectsToMenu();
+                            safeThis->updateTitleWithProjectPath();
+                            safeThis->launchOpenProjectChooser();
+                        }, true },
+                      { juce::String::fromUTF8(u8"取消"), nullptr, false } }),
+                safeThis.getComponent());
             return;
         }
 
         auto result = safeThis->projectSession_.saveProjectAs(file);
         if (!result.ok()) {
-            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-                "保存工程失败", result.error().fullMessage());
+            ConfirmDialogContent::launch(
+                new ConfirmDialogContent(
+                    juce::String::fromUTF8(u8"保存工程失败"),
+                    result.error().fullMessage(),
+                    { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                safeThis.getComponent());
             return;
         }
         safeThis->syncRecentProjectsToMenu();
@@ -2145,8 +2150,8 @@ void OpenTuneAudioProcessorEditor::helpRequested()
     }
     else
     {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon,
+        ConfirmDialogContent::showMessage(
+            this,
             LOC(kClose),
             juce::String::fromUTF8(u8"无法找到帮助文档：") + helpFile.getFullPathName()
         );
@@ -2602,20 +2607,28 @@ void OpenTuneAudioProcessorEditor::trackDeleteRequested(int trackId)
     if (arrangement == nullptr)
         return;
 
-    // Clear all placements on this track
-    while (arrangement->getNumPlacements(trackId) > 0) {
-        const auto pid = arrangement->getPlacementId(trackId, 0);
-        arrangement->deletePlacementById(trackId, pid);
+    const int visibleCount = trackPanel_.getVisibleTrackCount();
+    if (visibleCount <= 1)
+        return; // 至少保留一条轨道
+
+    if (trackId < 0 || trackId >= visibleCount)
+        return;
+
+    // 原子地将后续轨道上移，清空最后一个槽位
+    arrangement->removeTrackAndShift(trackId, visibleCount);
+
+    // 同步 TrackPanel UI 状态（颜色、mute/solo/volume）
+    const int newVisibleCount = visibleCount - 1;
+    for (int i = 0; i < newVisibleCount; ++i) {
+        trackPanel_.setTrackMuted(i, arrangement->isTrackMuted(i));
+        trackPanel_.setTrackSolo(i, arrangement->isTrackSolo(i));
+        trackPanel_.setTrackVolume(i, arrangement->getTrackVolume(i));
+        trackPanel_.setTrackColour(i, arrangement->getTrackColour(i));
     }
 
-    // Reset mix state
-    arrangement->setTrackMuted(trackId, false);
-    arrangement->setTrackSolo(trackId, false);
-    arrangement->setTrackVolume(trackId, 1.0f);
-
-    trackPanel_.setTrackMuted(trackId, false);
-    trackPanel_.setTrackSolo(trackId, false);
-    trackPanel_.setTrackVolume(trackId, 1.0f);
+    // 减少可见轨道数（触发 resized + repaint + listener 通知）
+    trackPanel_.setVisibleTrackCount(newVisibleCount);
+    arrangementView_.setVisibleTrackCount(newVisibleCount);
     arrangementView_.repaint();
 }
 
@@ -2776,6 +2789,51 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     projectSession_.markDirty();
 }
 
+void OpenTuneAudioProcessorEditor::pitchShiftRequested()
+{
+    const int trackId = getStandaloneActiveTrack(processorRef_);
+    const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, trackId);
+    if (placementIndex < 0) return;
+
+    const uint64_t materializationId = getStandaloneMaterializationId(processorRef_, trackId, placementIndex);
+    if (materializationId == 0) return;
+
+    const auto currentSettings = processorRef_.getMaterializationStore()->getPitchShiftSettings(materializationId);
+
+    auto* content = new PitchShiftDialogContent(currentSettings);
+
+    content->setOnConfirm([this, materializationId, currentSettings](const PitchShiftSettings& newSettings) {
+        if (newSettings != currentSettings) {
+            processorRef_.getUndoManager().addAction(std::make_unique<PitchShiftEditAction>(
+                processorRef_, materializationId, currentSettings, newSettings));
+            processorRef_.setPitchShiftSettings(materializationId, newSettings);
+            parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
+            projectSession_.markDirty();
+        }
+    });
+
+    content->setOnReset([this, materializationId, currentSettings]() {
+        const auto identity = PitchShiftSettings::identity();
+        if (identity != currentSettings) {
+            processorRef_.getUndoManager().addAction(std::make_unique<PitchShiftEditAction>(
+                processorRef_, materializationId, currentSettings, identity));
+            processorRef_.setPitchShiftSettings(materializationId, identity);
+            parameterPanel_.setPitchShiftIndicator(0, 0);
+            projectSession_.markDirty();
+        }
+    });
+
+    auto options = juce::DialogWindow::LaunchOptions();
+    options.content.setOwned(content);
+    options.dialogTitle = "Pitch Shift";
+    options.dialogBackgroundColour = UIColors::backgroundDark;
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = false;
+    options.resizable = false;
+    options.componentToCentreAround = this;
+    options.launchAsync();
+}
+
 void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame)
 {
     DBG("Editor: Pitch curve edited frames " + juce::String(startFrame) + " to " + juce::String(endFrame));
@@ -2852,7 +2910,7 @@ void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
 
 void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
 {
-    auto chooser = std::make_shared<juce::FileChooser>("保存工程", juce::File(), "*.otproj");
+    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"保存工程"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
@@ -2864,33 +2922,38 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
             file = file.withFileExtension(".otproj");
 
         if (file.existsAsFile()) {
-            juce::AlertWindow::showAsync(
-                juce::MessageBoxOptions()
-                    .withIconType(juce::MessageBoxIconType::QuestionIcon)
-                    .withTitle("覆盖现有工程？")
-                    .withMessage("目标工程文件已存在，是否覆盖？")
-                    .withButton("覆盖")
-                    .withButton("取消"),
-                [safeThis, file](int r) {
-                    if (safeThis == nullptr) return;
-                    if (r != 1) return; // Cancel or dismissed
-                    auto result = safeThis->projectSession_.saveProjectAs(file);
-                    if (!result.ok()) {
-                        juce::AlertWindow::showMessageBoxAsync(
-                            juce::MessageBoxIconType::WarningIcon,
-                            "保存工程失败", result.error().fullMessage());
-                        return;
-                    }
-                    safeThis->syncRecentProjectsToMenu();
-                    safeThis->updateTitleWithProjectPath();
-                });
+            ConfirmDialogContent::launch(
+                new ConfirmDialogContent(
+                    juce::String::fromUTF8(u8"覆盖现有工程？"),
+                    juce::String::fromUTF8(u8"目标工程文件已存在，是否覆盖？"),
+                    { { juce::String::fromUTF8(u8"覆盖"), [safeThis, file] {
+                            if (safeThis == nullptr) return;
+                            auto result = safeThis->projectSession_.saveProjectAs(file);
+                            if (!result.ok()) {
+                                ConfirmDialogContent::launch(
+                                    new ConfirmDialogContent(
+                                        juce::String::fromUTF8(u8"保存工程失败"),
+                                        result.error().fullMessage(),
+                                        { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                    safeThis.getComponent());
+                                return;
+                            }
+                            safeThis->syncRecentProjectsToMenu();
+                            safeThis->updateTitleWithProjectPath();
+                        }, true },
+                      { juce::String::fromUTF8(u8"取消"), nullptr, false } }),
+                safeThis.getComponent());
             return; // Don't continue in outer callback — the inner callback handles save
         }
 
         auto result = safeThis->projectSession_.saveProjectAs(file);
         if (!result.ok()) {
-            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-                "保存工程失败", result.error().fullMessage());
+            ConfirmDialogContent::launch(
+                new ConfirmDialogContent(
+                    juce::String::fromUTF8(u8"保存工程失败"),
+                    result.error().fullMessage(),
+                    { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                safeThis.getComponent());
             return;
         }
         safeThis->syncRecentProjectsToMenu();
@@ -2903,9 +2966,12 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
     if (!projectSession_.isDirty()) {
         auto result = projectSession_.openProject(file);
         if (!result.ok()) {
-            juce::AlertWindow::showMessageBoxAsync(
-                juce::MessageBoxIconType::WarningIcon,
-                "打开工程失败", result.error().fullMessage());
+            ConfirmDialogContent::launch(
+                new ConfirmDialogContent(
+                    juce::String::fromUTF8(u8"打开工程失败"),
+                    result.error().fullMessage(),
+                    { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                this);
             projectSession_.clearRecentProjects();
             return;
         }
@@ -2915,46 +2981,61 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
     }
 
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
-    juce::AlertWindow::showAsync(
-        juce::MessageBoxOptions()
-            .withIconType(juce::MessageBoxIconType::QuestionIcon)
-            .withTitle("当前工程尚未保存")
-            .withMessage("打开其他工程前，是否保存当前工程的更改？")
-            .withButton("保存")
-            .withButton("不保存")
-            .withButton("取消"),
-        [safeThis, file](int result) {
-            if (safeThis == nullptr) return;
-            if (result == 0 || result == 3) return; // Dismissed or Cancel
-            if (result == 1) {
-                // Save
-                if (!safeThis->projectSession_.hasProjectPath()) {
-                    safeThis->saveProjectAsRequested(); // async, don't continue
-                    return;
-                }
-                auto saveResult = safeThis->projectSession_.saveProject();
-                if (!saveResult.ok()) {
-                    juce::AlertWindow::showMessageBoxAsync(
-                        juce::MessageBoxIconType::WarningIcon,
-                        "保存工程失败", saveResult.error().fullMessage());
-                    return;
-                }
-                safeThis->projectSession_.clearDirty();
-                safeThis->updateTitleWithProjectPath();
-                safeThis->syncRecentProjectsToMenu();
-            }
-            // Don't save (result==2) or after successful save: open the project
-            auto openResult = safeThis->projectSession_.openProject(file);
-            if (!openResult.ok()) {
-                juce::AlertWindow::showMessageBoxAsync(
-                    juce::MessageBoxIconType::WarningIcon,
-                    "打开工程失败", openResult.error().fullMessage());
-                safeThis->projectSession_.clearRecentProjects();
-                return;
-            }
-            safeThis->syncRecentProjectsToMenu();
-            safeThis->updateTitleWithProjectPath();
-        });
+    ConfirmDialogContent::launch(
+        new ConfirmDialogContent(
+            juce::String::fromUTF8(u8"当前工程尚未保存"),
+            juce::String::fromUTF8(u8"打开其他工程前，是否保存当前工程的更改？"),
+            { { juce::String::fromUTF8(u8"保存"), [safeThis, file] {
+                    if (safeThis == nullptr) return;
+                    if (!safeThis->projectSession_.hasProjectPath()) {
+                        safeThis->saveProjectAsRequested();
+                        return;
+                    }
+                    auto saveResult = safeThis->projectSession_.saveProject();
+                    if (!saveResult.ok()) {
+                        ConfirmDialogContent::launch(
+                            new ConfirmDialogContent(
+                                juce::String::fromUTF8(u8"保存工程失败"),
+                                saveResult.error().fullMessage(),
+                                { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                            safeThis.getComponent());
+                        return;
+                    }
+                    safeThis->projectSession_.clearDirty();
+                    safeThis->updateTitleWithProjectPath();
+                    safeThis->syncRecentProjectsToMenu();
+                    auto openResult = safeThis->projectSession_.openProject(file);
+                    if (!openResult.ok()) {
+                        ConfirmDialogContent::launch(
+                            new ConfirmDialogContent(
+                                juce::String::fromUTF8(u8"打开工程失败"),
+                                openResult.error().fullMessage(),
+                                { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                            safeThis.getComponent());
+                        safeThis->projectSession_.clearRecentProjects();
+                        return;
+                    }
+                    safeThis->syncRecentProjectsToMenu();
+                    safeThis->updateTitleWithProjectPath();
+                }, true },
+              { juce::String::fromUTF8(u8"不保存"), [safeThis, file] {
+                    if (safeThis == nullptr) return;
+                    auto openResult = safeThis->projectSession_.openProject(file);
+                    if (!openResult.ok()) {
+                        ConfirmDialogContent::launch(
+                            new ConfirmDialogContent(
+                                juce::String::fromUTF8(u8"打开工程失败"),
+                                openResult.error().fullMessage(),
+                                { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                            safeThis.getComponent());
+                        safeThis->projectSession_.clearRecentProjects();
+                        return;
+                    }
+                    safeThis->syncRecentProjectsToMenu();
+                    safeThis->updateTitleWithProjectPath();
+                }, false },
+              { juce::String::fromUTF8(u8"取消"), nullptr, false } }),
+        this);
 }
 
 void OpenTuneAudioProcessorEditor::clearRecentProjectsRequested()
@@ -3189,8 +3270,8 @@ bool OpenTuneAudioProcessorEditor::handleAutoRefExecute()
         const juce::String message = result.message.isNotEmpty()
             ? result.message
             : juce::String::fromUTF8(u8"AUTO Ref alignment failed.");
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::MessageBoxIconType::WarningIcon,
+        ConfirmDialogContent::showMessage(
+            this,
             juce::String::fromUTF8(u8"AUTO Ref"),
             message);
         refreshReferenceContext();

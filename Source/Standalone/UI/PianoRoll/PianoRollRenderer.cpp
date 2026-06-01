@@ -587,24 +587,51 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     {
         double matTime = item.projection.projectTimelineTimeToMaterialization(ctx.xToTime(x));
         if (useTauInverse) {
-            // §8.5 — output materialization time → source time (TimeGrid stretching).
             matTime = ctx.timeGridSnapshot->tauInverse(matTime);
         }
-        const int64_t peakIndex = static_cast<int64_t>(matTime / timePerPeak);
-        
-        if (peakIndex < 0 || peakIndex >= builtPeaks)
+
+        // Aggregate all peaks covered by this pixel's time span
+        double matTimeNext = item.projection.projectTimelineTimeToMaterialization(ctx.xToTime(x + 1));
+        if (useTauInverse) {
+            matTimeNext = ctx.timeGridSnapshot->tauInverse(matTimeNext);
+        }
+
+        int64_t idxStart = static_cast<int64_t>(matTime / timePerPeak);
+        int64_t idxEnd = static_cast<int64_t>(matTimeNext / timePerPeak);
+        if (idxEnd <= idxStart)
+            idxEnd = idxStart + 1;
+
+        if (idxStart >= builtPeaks || idxStart < 0)
             continue;
 
-        const auto& peak = level.peaks[static_cast<std::size_t>(peakIndex)];
-        
-        if (peak.isZero())
+        float aggMin = 0.0f;
+        float aggMax = 0.0f;
+        bool hasData = false;
+
+        for (int64_t i = idxStart; i < idxEnd && i < builtPeaks; ++i)
+        {
+            if (i < 0) continue;
+            const auto& peak = level.peaks[static_cast<std::size_t>(i)];
+            if (peak.isZero()) continue;
+            if (!hasData) {
+                aggMin = peak.getMin();
+                aggMax = peak.getMax();
+                hasData = true;
+            } else {
+                aggMin = std::min(aggMin, peak.getMin());
+                aggMax = std::max(aggMax, peak.getMax());
+            }
+        }
+
+        if (!hasData)
             continue;
 
-        const float yMin = centerY - peak.getMax() * amplitudeScale;
-        const float yMax = centerY - peak.getMin() * amplitudeScale;
-        
-        waveformPath.startNewSubPath(static_cast<float>(x), yMin);
-        waveformPath.lineTo(static_cast<float>(x), yMax);
+        const float yMin = centerY - aggMax * amplitudeScale;
+        const float yMax = centerY - aggMin * amplitudeScale;
+        const float fx = static_cast<float>(x) + 0.5f;
+
+        waveformPath.startNewSubPath(fx, yMin);
+        waveformPath.lineTo(fx, yMax);
     }
 
     if (!waveformPath.isEmpty())
@@ -613,22 +640,22 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
         {
             const auto waveformColour = UIColors::pianoRollWaveform.brighter(0.08f);
             g.setColour(waveformColour.withAlpha(0.24f));
-            g.strokePath(waveformPath, juce::PathStrokeType(3.2f));
+            g.strokePath(waveformPath, juce::PathStrokeType(3.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             g.setColour(waveformColour.withAlpha(0.52f));
-            g.strokePath(waveformPath, juce::PathStrokeType(1.25f));
+            g.strokePath(waveformPath, juce::PathStrokeType(1.25f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
         else if (isBlueBreeze || isOverdose)
         {
             const auto waveformColour = UIColors::pianoRollWaveform;
             g.setColour(waveformColour.withAlpha(0.13f));
-            g.strokePath(waveformPath, juce::PathStrokeType(2.0f));
+            g.strokePath(waveformPath, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             g.setColour(waveformColour.withAlpha(0.24f));
-            g.strokePath(waveformPath, juce::PathStrokeType(1.05f));
+            g.strokePath(waveformPath, juce::PathStrokeType(1.05f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
         else
         {
             g.setColour(UIColors::waveformFill.withAlpha(0.20f));
-            g.strokePath(waveformPath, juce::PathStrokeType(1.0f));
+            g.strokePath(waveformPath, juce::PathStrokeType(1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
     }
 }

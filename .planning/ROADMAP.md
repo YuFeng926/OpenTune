@@ -38,6 +38,7 @@
 - TimeTool identity seed
 - Timeline rendering architecture（已收敛 ✓）
 - 代码质量清理：StandaloneArrangementHelpers.h + TrackConstants.h
+- 快捷键修复：'1' 键快速删除 + Ctrl+A F0 曲线选中高亮（2026-06-01）
 
 ### v1.5 当前优先级
 

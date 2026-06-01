@@ -4463,6 +4463,8 @@ void runAuroraScrollbarOutlineSourceGuardTest();
 void runDmlVocoderUsesCpuBoundOutputTensor();
 void runRenderingPriorityRemainsGpuFirstAndCpuFirstOnly();
 void runStage2WorkerStreamsStage1InputDirectly();
+void runMaterializationStore_LongUngappedAudioGetsCappedChunkBoundariesTest();
+void runMaterializationStore_SilentGapBoundariesArePreservedWhenCappingLongChunksTest();
 
 // ARA birth lifecycle contract tests
 #if JucePlugin_Enable_ARA
@@ -10195,6 +10197,86 @@ void runPlaybackReadSource_HasAudioMethodTest()
     logPass(testName);
 }
 
+void runMaterializationStore_LongUngappedAudioGetsCappedChunkBoundariesTest()
+{
+    constexpr const char* testName = "MaterializationStore_LongUngappedAudioGetsCappedChunkBoundaries";
+
+    const int hopSize = 512;
+    const int64_t maxChunkSamples = TimeCoordinate::secondsToSamplesFloor(15.0, TimeCoordinate::kRenderSampleRate);
+    const int64_t totalSamples = maxChunkSamples * 3 + hopSize;
+    const auto boundaries = MaterializationStore::buildChunkBoundariesFromSilentGaps(totalSamples, {}, hopSize);
+
+    if (boundaries.size() != 5) {
+        logFail(testName, "long ungapped materialization should be split into capped sub-chunks");
+        return;
+    }
+
+    if (boundaries.front() != 0 || boundaries.back() != totalSamples) {
+        logFail(testName, "chunk boundaries must start at zero and end at the materialization sample count");
+        return;
+    }
+
+    for (size_t i = 1; i < boundaries.size(); ++i) {
+        if (boundaries[i] <= boundaries[i - 1]) {
+            logFail(testName, "chunk boundaries must remain strictly increasing");
+            return;
+        }
+
+        if (boundaries[i] - boundaries[i - 1] > maxChunkSamples) {
+            logFail(testName, "ungapped long materialization still produced an over-sized render chunk");
+            return;
+        }
+
+        if (i + 1 < boundaries.size() && (boundaries[i] % hopSize) != 0) {
+            logFail(testName, "inserted capped chunk boundaries must stay hop-aligned");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
+void runMaterializationStore_SilentGapBoundariesArePreservedWhenCappingLongChunksTest()
+{
+    constexpr const char* testName = "MaterializationStore_SilentGapBoundariesArePreservedWhenCappingLongChunks";
+
+    const int hopSize = 512;
+    const int64_t maxChunkSamples = TimeCoordinate::secondsToSamplesFloor(15.0, TimeCoordinate::kRenderSampleRate);
+    const int64_t alignedChunkCap = (maxChunkSamples / hopSize) * hopSize;
+    const int64_t totalSamples = maxChunkSamples * 3;
+    const std::vector<SilentGap> silentGaps{
+        SilentGap{ alignedChunkCap + hopSize, alignedChunkCap + 5 * static_cast<int64_t>(hopSize), -60.0f }
+    };
+
+    const auto boundaries = MaterializationStore::buildChunkBoundariesFromSilentGaps(totalSamples, silentGaps, hopSize);
+    const int64_t expectedInsertedBoundary = alignedChunkCap;
+    const int64_t expectedSilentGapBoundary = alignedChunkCap + 3 * static_cast<int64_t>(hopSize);
+
+    if (std::find(boundaries.begin(), boundaries.end(), expectedInsertedBoundary) == boundaries.end()) {
+        logFail(testName, "long span before silent gap should still receive a capped split boundary");
+        return;
+    }
+
+    if (std::find(boundaries.begin(), boundaries.end(), expectedSilentGapBoundary) == boundaries.end()) {
+        logFail(testName, "silent-gap midpoint boundary should be preserved after capped splitting");
+        return;
+    }
+
+    for (size_t i = 1; i < boundaries.size(); ++i) {
+        if (boundaries[i] <= boundaries[i - 1]) {
+            logFail(testName, "chunk boundaries must remain strictly increasing");
+            return;
+        }
+
+        if (boundaries[i] - boundaries[i - 1] > maxChunkSamples) {
+            logFail(testName, "capped splitting still left an over-sized span around the silent gap");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
 void runVocoderScheduler_QueueDepthLimit50Test()
 {
     constexpr const char* testName = "VocoderScheduler_QueueDepthLimit50";
@@ -10913,6 +10995,8 @@ void runMemoryOptimizationSuite()
     runRenderCache_OverlayReadsFromChunkAudioAtRenderSampleRateTest();
     runRenderCache_OverlayWithDifferentTargetSampleRateTest();
     runPlaybackReadSource_HasAudioMethodTest();
+    runMaterializationStore_LongUngappedAudioGetsCappedChunkBoundariesTest();
+    runMaterializationStore_SilentGapBoundariesArePreservedWhenCappingLongChunksTest();
     runVocoderScheduler_QueueDepthLimit50Test();
     runStage2WorkerStreamsStage1InputDirectly();
     runIntegration_RetireAndReviveRoundTripTest();

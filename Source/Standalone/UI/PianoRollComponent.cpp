@@ -1994,8 +1994,6 @@ void PianoRollComponent::setScrollOffset(int offset) {
 
     const int oldOffset = scrollOffset_;
     const auto viewportState = makeTimelineViewportState();
-    const auto dirtyArea = viewportState.exposedStripForScrollDelta(oldOffset, newOffset);
-    const float contentShiftPx = static_cast<float>(oldOffset - newOffset);
 
     scrollOffset_ = newOffset;
     timeConverter_.setScrollOffset(scrollOffset_);
@@ -2016,9 +2014,8 @@ void PianoRollComponent::setScrollOffset(int offset) {
         return;
     }
 
-    renderModelCache_.shiftPreparedF0Segments(contentShiftPx);
     rulerSurface_.repaint();
-    FrameScheduler::instance().requestViewportShift(*this, dirtyArea);
+    contentSurface_.repaint();
 }
 
 double PianoRollComponent::readPlayheadTime() const
@@ -2154,11 +2151,24 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         if (!userScrollHold_) {
             const int pinnedViewportX = getContinuousPinnedPlayheadViewportX();
             const int playheadContentX = static_cast<int>(std::llround(getPlayheadAbsolutePixelX(displayPlayheadTime)));
-            const int targetScroll = std::max(0, playheadContentX - (pinnedViewportX - pianoKeyWidth_));
-            if (targetScroll != scrollOffset_)
-                setScrollOffset(targetScroll);
+            const int desiredScroll = playheadContentX - (pinnedViewportX - pianoKeyWidth_);
+            const int maxScroll = getMaxHorizontalScroll();
+
+            if (desiredScroll >= 0 && desiredScroll <= maxScroll) {
+                // Scrollable range: pin playhead, scroll content
+                if (desiredScroll != scrollOffset_)
+                    setScrollOffset(desiredScroll);
+            } else {
+                // Boundary: unpin playhead, let it move freely across viewport
+                playheadOverlay_.clearPinnedViewportX();
+                playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
+                const int clampedScroll = juce::jlimit(0, maxScroll, desiredScroll);
+                if (clampedScroll != scrollOffset_)
+                    setScrollOffset(clampedScroll);
+            }
         }
-    } else if (scrollMode_ == ScrollMode::Page) {
+    }
+    else if (scrollMode_ == ScrollMode::Page) {
         const int absX = static_cast<int>(std::llround(getPlayheadAbsolutePixelX(displayPlayheadTime)));
         const int pageIndex = visibleWidth > 0 ? juce::jmax(0, absX / visibleWidth) : 0;
         const int newScroll = pageIndex * visibleWidth;
@@ -2857,6 +2867,13 @@ int PianoRollComponent::getContinuousPinnedPlayheadViewportX() const
     return pianoKeyWidth_ + (getTimelineContentViewportWidth() / 2);
 }
 
+int PianoRollComponent::getMaxHorizontalScroll() const
+{
+    const int visibleWidth = getTimelineContentViewportWidth();
+    const int totalContentWidth = static_cast<int>(horizontalScrollBar_.getRangeLimit().getEnd());
+    return juce::jmax(0, totalContentWidth - visibleWidth);
+}
+
 double PianoRollComponent::getDisplayPlayheadTime(double timestampSec) const
 {
     if (!presentationClockPrimed_)
@@ -2918,14 +2935,34 @@ PianoRollRenderer::RenderContext PianoRollComponent::makePresentationRenderConte
 
 void PianoRollComponent::updatePlayheadPresentationPolicy()
 {
-    const bool shouldPinPlayhead = scrollMode_ == ScrollMode::Continuous
+    const bool wantPin = scrollMode_ == ScrollMode::Continuous
         && isPlaying_.load(std::memory_order_relaxed)
         && !userScrollHold_;
 
-    if (shouldPinPlayhead) {
-        playheadOverlay_.setPinnedViewportX(static_cast<double>(getContinuousPinnedPlayheadViewportX()));
+    if (!wantPin) {
+        playheadOverlay_.clearPinnedViewportX();
+        return;
+    }
+
+    const int pinnedViewportX = getContinuousPinnedPlayheadViewportX();
+    const int maxScroll = getMaxHorizontalScroll();
+
+    if (maxScroll <= 0) {
+        // Content fits within viewport — no scrolling possible, let playhead move freely
+        playheadOverlay_.clearPinnedViewportX();
+        playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
+        return;
+    }
+
+    const double playheadTime = lastAuthoritativePlayheadTime_;
+    const int playheadContentX = static_cast<int>(std::llround(getPlayheadAbsolutePixelX(playheadTime)));
+    const int desiredScroll = playheadContentX - (pinnedViewportX - pianoKeyWidth_);
+
+    if (desiredScroll >= 0 && desiredScroll <= maxScroll) {
+        playheadOverlay_.setPinnedViewportX(static_cast<double>(pinnedViewportX));
     } else {
         playheadOverlay_.clearPinnedViewportX();
+        playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
     }
 }
 

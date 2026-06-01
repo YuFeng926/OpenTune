@@ -1194,14 +1194,30 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
         // Waveform prepared by ArrangementRenderModelCache.
         if (vp.hasAudioBuffer && !vp.waveformPath.isEmpty())
         {
-            if (themeId == ThemeId::Aurora)
-                g.setColour(juce::Colours::white.withAlpha(0.85f));
-            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-                g.setColour(UIColors::pianoRollWaveform.withAlpha(0.26f));
-            else
-                g.setColour(juce::Colour(0xFF3E4652).withAlpha(0.85f));
+            const juce::PathStrokeType mainStroke(1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+            const juce::PathStrokeType glowStroke(2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
 
-            g.strokePath(vp.waveformPath, juce::PathStrokeType(1.0f));
+            if (themeId == ThemeId::Aurora)
+            {
+                g.setColour(juce::Colours::white.withAlpha(0.22f));
+                g.strokePath(vp.waveformPath, glowStroke);
+                g.setColour(juce::Colours::white.withAlpha(0.78f));
+                g.strokePath(vp.waveformPath, mainStroke);
+            }
+            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+            {
+                g.setColour(UIColors::pianoRollWaveform.withAlpha(0.09f));
+                g.strokePath(vp.waveformPath, glowStroke);
+                g.setColour(UIColors::pianoRollWaveform.withAlpha(0.24f));
+                g.strokePath(vp.waveformPath, mainStroke);
+            }
+            else
+            {
+                g.setColour(juce::Colour(0xFF3E4652).withAlpha(0.22f));
+                g.strokePath(vp.waveformPath, glowStroke);
+                g.setColour(juce::Colour(0xFF3E4652).withAlpha(0.78f));
+                g.strokePath(vp.waveformPath, mainStroke);
+            }
         }
 
         // Draw fade curves
