@@ -2404,10 +2404,6 @@ void PianoRollComponent::removeListener(Listener* listener) {
 }
 
 void PianoRollComponent::mouseMove(const juce::MouseEvent& e) {
-    if (e.mods.isCtrlDown()) {
-        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
-        return;
-    }
     toolHandler_->mouseMove(e);
 }
 

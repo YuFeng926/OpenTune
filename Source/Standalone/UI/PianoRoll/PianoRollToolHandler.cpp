@@ -345,6 +345,11 @@ double PianoRollToolHandler::pixelXToSourceTime(int pixelX) const
 void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
 // 鼠标移动处理：更新光标形状（音符边缘调整、线锚点预览）
 {
+    if (e.mods.isCtrlDown()) {
+        ctx_.setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        return;
+    }
+
     if (currentTool_ == ToolId::LineAnchor && ctx_.getState().drawing.isPlacingAnchors) {
         const auto dirtyBefore = ctx_.getLineAnchorPreviewBounds();
         ctx_.getState().drawing.currentMousePos = e.position;
@@ -792,6 +797,8 @@ void PianoRollToolHandler::cancelActiveMouseGesture()
     state.noteDrag.clear();
     state.noteResize.clear();
     state.selection.isSelectingArea = false;
+    state.isPanning = false;
+    state.selectedLineAnchorSegmentIds.clear();
     state.drawing.isDrawingF0 = false;
     state.drawing.handDrawBuffer.clear();
     state.drawing.isDrawingNote = false;
