@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: PianoRoll Undo/Redo + Async Correction + Playhead Isolation
 status: active
-last_updated: "2026-05-29"
+last_updated: "2026-06-01"
 ---
 
 # Project State
@@ -44,6 +44,11 @@ STATE.md 之前描述的"steady scroll 触发 full content repaint / render mode
 
 - Issue #2：结构性重复消除 → `StandaloneArrangementHelpers.h`（20 个共享 inline 辅助）
 - Issue #3：常量统一 → `TrackConstants.h`（`MaxTracks = 12` 单一真值）
+
+### 快捷键修复 — 已完成 ✓（2026-06-01）
+
+- Bug #1：恢复误删的 `'1'` 键快速删除绑定 → 在 `ShortcutId::Delete` 默认绑定中加回 `KeyBinding('1', {})`
+- Bug #2：修复 Ctrl+A 全选后 F0 曲线选中高亮丢失 → 改用 `committedNotes(ctx_)` 替代失效的 `workingDraftNotes` 引用
 
 ## Landed Mainline Context
 

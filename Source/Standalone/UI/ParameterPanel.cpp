@@ -394,6 +394,14 @@ ParameterPanel::ParameterPanel()
     handDrawToolButton_->onClick = [this] { onToolClicked(4); };
     addAndMakeVisible(*handDrawToolButton_);
 
+    // Pitch Shift action button
+    pitchShiftButton_ = std::make_unique<juce::TextButton>("Pitch Shift...");
+    pitchShiftButton_->setTooltip(juce::String::fromUTF8(u8"整体移调"));
+    pitchShiftButton_->onClick = [this] {
+        listeners_.call(&Listener::pitchShiftRequested);
+    };
+    addAndMakeVisible(*pitchShiftButton_);
+
     // ⚡️ vocal-time-stretch §8.4 — Time tool palette button.
     // toolId=5 matches ToolId::TimeTool; tooltip uses 'T' shortcut to align
     // with PianoRollToolHandler::keyPressed binding.
@@ -532,6 +540,11 @@ void ParameterPanel::resized()
     layoutKnobCell(row2.removeFromLeft(colWidth), vibratoRateLabel_, vibratoRateSlider_);
     layoutKnobCell(row2, noteSplitLabel_, noteSplitSlider_);
 
+    // Pitch Shift button — between knobs and tools
+    const int pitchShiftButtonHeight = 28;
+    pitchShiftButton_->setBounds(mainArea.removeFromTop(pitchShiftButtonHeight).reduced(4, 0));
+    mainArea.removeFromTop(spacing);
+
     // Header
     toolsHeader_.setBounds(toolsArea.removeFromTop(headerHeight));
     toolsArea.removeFromTop(toolHeaderGap);
@@ -587,6 +600,11 @@ void ParameterPanel::applyTheme()
     largeKnobLookAndFeel_.setColour(juce::Slider::textBoxBackgroundColourId, UIColors::backgroundDark);
     largeKnobLookAndFeel_.setColour(juce::Slider::textBoxOutlineColourId, UIColors::panelBorder);
 
+    if (pitchShiftButton_) {
+        pitchShiftButton_->setColour(juce::TextButton::buttonColourId, UIColors::backgroundMedium);
+        pitchShiftButton_->setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
+    }
+
     resized();
     repaint();
 }
@@ -617,6 +635,22 @@ void ParameterPanel::refreshLocalizedText()
         timeToolButton_->setTooltip(LOC(kTooltipTimeTool) + "\nT");
 
     repaint();
+}
+
+void ParameterPanel::setPitchShiftIndicator(int semitone, int cents)
+{
+    if (pitchShiftButton_ == nullptr) return;
+    if (semitone == 0 && cents == 0) {
+        pitchShiftButton_->setButtonText("Pitch Shift...");
+    } else {
+        juce::String text = "Pitch Shift: ";
+        if (semitone != 0) text += juce::String(semitone > 0 ? "+" : "") + juce::String(semitone) + "st";
+        if (cents != 0) {
+            if (semitone != 0) text += " ";
+            text += juce::String(cents > 0 ? "+" : "") + juce::String(cents) + "c";
+        }
+        pitchShiftButton_->setButtonText(text);
+    }
 }
 
 void ParameterPanel::setupHeader(juce::Label& label, const juce::String& text)

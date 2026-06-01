@@ -968,6 +968,52 @@ bool StandaloneArrangement::isCyclicReference(int trackId,
     return isCyclicReferenceUnlocked(trackId, targetPlacementId, candidateReferenceId);
 }
 
+bool StandaloneArrangement::removeTrackAndShift(int trackId, int visibleCount)
+{
+    if (!isValidTrackId(trackId) || visibleCount <= 1 || trackId >= visibleCount)
+        return false;
+
+    const juce::ScopedWriteLock lock(stateLock_);
+
+    // Shift tracks [trackId+1, visibleCount) down by one
+    for (int i = trackId; i < visibleCount - 1; ++i) {
+        auto& dst = tracks_[static_cast<size_t>(i)];
+        auto& src = tracks_[static_cast<size_t>(i + 1)];
+
+        dst.placements = std::move(src.placements);
+        dst.selectedPlacementId = src.selectedPlacementId;
+        dst.isMuted = src.isMuted;
+        dst.isSolo = src.isSolo;
+        dst.volume = src.volume;
+        dst.name = std::move(src.name);
+        dst.colour = src.colour;
+        dst.currentRmsDb.store(src.currentRmsDb.load(std::memory_order_relaxed),
+                               std::memory_order_relaxed);
+    }
+
+    // Clear the last visible slot (now vacated)
+    const int lastSlot = visibleCount - 1;
+    auto& cleared = tracks_[static_cast<size_t>(lastSlot)];
+    cleared.placements.clear();
+    cleared.selectedPlacementId = 0;
+    cleared.isMuted = false;
+    cleared.isSolo = false;
+    cleared.volume = 1.0f;
+    cleared.name = "Track " + juce::String(lastSlot + 1);
+    cleared.colour = makeDefaultTrackColour(lastSlot);
+    cleared.currentRmsDb.store(-100.0f, std::memory_order_relaxed);
+
+    // Adjust active track if needed
+    if (activeTrackId_ == trackId) {
+        activeTrackId_ = juce::jlimit(0, visibleCount - 2, trackId);
+    } else if (activeTrackId_ > trackId && activeTrackId_ < visibleCount) {
+        --activeTrackId_;
+    }
+
+    publishPlaybackSnapshotLocked();
+    return true;
+}
+
 bool StandaloneArrangement::setTrackColour(int trackId, juce::Colour colour)
 {
     if (!isValidTrackId(trackId)) return false;

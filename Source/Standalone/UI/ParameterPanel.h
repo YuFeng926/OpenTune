@@ -70,6 +70,7 @@ public:
         virtual void autoTuneRequested() {}
         // 参数拖动完成回调（用于 Undo 记录，oldValue 是拖动开始前的值）
         virtual void parameterDragEnded(int paramId, float oldValue, float newValue) { juce::ignoreUnused(paramId, oldValue, newValue); }
+        virtual void pitchShiftRequested() {}
     };
 
     ParameterPanel();
@@ -96,6 +97,7 @@ public:
     void setNoteSplit(float value);
     void setF0Min(float value);
     void setF0Max(float value);
+    void setPitchShiftIndicator(int semitone, int cents);
 
     void applyTheme();
     void refreshLocalizedText();  // 刷新本地化文本
@@ -167,6 +169,7 @@ private:
     // ⚡️ vocal-time-stretch §8.4 — Time tool palette button (toolId=5)
     std::unique_ptr<ToolIconButton> timeToolButton_;
     AutoButtonPresentation autoButtonPresentation_;
+    std::unique_ptr<juce::TextButton> pitchShiftButton_;
 
     LargeKnobLookAndFeel largeKnobLookAndFeel_;
 

@@ -16,7 +16,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment ta
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.5.0 LANGUAGES CXX C)
+project(OpenTune VERSION 1.5.8 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -601,6 +601,8 @@ target_sources(OpenTune
         Source/Standalone/UI/WaveformMipmap.h
         Source/Standalone/UI/RippleOverlayComponent.h
         Source/Editor/AutoRenderOverlayComponent.h
+        Source/Editor/PitchShiftDialogContent.h
+        Source/Editor/ConfirmDialogContent.h
 
         # Utilities
         Source/Utils/PitchCurve.cpp
@@ -639,6 +641,9 @@ target_sources(OpenTune
         Source/Utils/UndoManager.h
         Source/Utils/PianoRollEditAction.cpp
         Source/Utils/PianoRollEditAction.h
+        Source/Utils/PitchShiftSettings.h
+        Source/Utils/PitchShiftEditAction.cpp
+        Source/Utils/PitchShiftEditAction.h
         Source/Utils/TimeGrid.cpp
         Source/Utils/TimeGrid.h
         Source/Utils/TimeGridEditAction.cpp

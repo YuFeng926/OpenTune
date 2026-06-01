@@ -152,21 +152,52 @@ juce::Path ArrangementRenderModelCache::buildWaveformPathForPlacement(const Wave
         if (peakIndex < 0 || peakIndex >= builtPeaks)
             continue;
 
-        const auto& peak = level.peaks[static_cast<std::size_t>(peakIndex)];
-        if (peak.isZero())
+        // Aggregate all peaks covered by this pixel
+        const double timelineTimeNext = viewport.viewportXToTime(x + 1);
+        const double matTimeNext = clipInSeconds + (timelineTimeNext - timelineStartSeconds);
+        int64_t idxStart = peakIndex;
+        int64_t idxEnd = static_cast<int64_t>(matTimeNext / timePerPeak);
+        if (idxEnd <= idxStart)
+            idxEnd = idxStart + 1;
+
+        float aggMin = 0.0f;
+        float aggMax = 0.0f;
+        bool hasData = false;
+
+        for (int64_t i = idxStart; i < idxEnd && i < builtPeaks; ++i)
+        {
+            if (i < 0) continue;
+            const auto& pk = level.peaks[static_cast<std::size_t>(i)];
+            if (pk.isZero()) continue;
+            if (!hasData) {
+                aggMin = pk.getMin();
+                aggMax = pk.getMax();
+                hasData = true;
+            } else {
+                aggMin = std::min(aggMin, pk.getMin());
+                aggMax = std::max(aggMax, pk.getMax());
+            }
+        }
+
+        if (!hasData)
             continue;
 
-        const float magnitude = peak.getMagnitude() * gain;
-        float displayHeight = magnitude * halfH * 2.0f;
+        const float displayTop = aggMax * gain * halfH;
+        const float displayBottom = aggMin * gain * halfH;
+        float y1 = midY - displayTop;
+        float y2 = midY - displayBottom;
 
-        if (magnitude > 0.0001f)
-            displayHeight = juce::jmax(displayHeight, 2.0f);
+        // Ensure minimum display height for non-silent peaks
+        if ((y2 - y1) < 2.0f)
+        {
+            const float expand = (2.0f - (y2 - y1)) * 0.5f;
+            y1 -= expand;
+            y2 += expand;
+        }
 
-        const float y1 = midY - displayHeight * 0.5f;
-        const float y2 = midY + displayHeight * 0.5f;
-
-        path.startNewSubPath(static_cast<float>(x), y1);
-        path.lineTo(static_cast<float>(x), y2);
+        const float fx = static_cast<float>(x) + 0.5f;
+        path.startNewSubPath(fx, y1);
+        path.lineTo(fx, y2);
     }
 
     return path;

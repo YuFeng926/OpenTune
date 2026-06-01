@@ -105,6 +105,10 @@ public:
     bool isTrackSolo(int trackId) const;
     bool setTrackVolume(int trackId, float volume);
     float getTrackVolume(int trackId) const;
+    // 删除轨道并将后续轨道上移填补空位，清空最后一个可见槽位
+    // visibleCount: 当前可见轨道数（调用方负责之后减少 visibleTrackCount）
+    bool removeTrackAndShift(int trackId, int visibleCount);
+
     bool setTrackColour(int trackId, juce::Colour colour);
     juce::Colour getTrackColour(int trackId) const;
     float getTrackRmsDb(int trackId) const;

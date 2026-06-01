@@ -102,6 +102,7 @@ public:
     void playPauseToggleRequested() override;
     void stopPlaybackRequested() override;
     void autoTuneRequested() override;
+    void pitchShiftRequested() override;
     void pitchCurveEdited(int startFrame, int endFrame) override;
     void escapeKeyPressed() override;
     void currentToolChanged(ToolId tool) override;

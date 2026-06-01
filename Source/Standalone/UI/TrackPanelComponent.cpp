@@ -188,6 +188,9 @@ void TrackPanelComponent::paint(juce::Graphics& g)
     const float trackCardMarginX = static_cast<float>(kTrackPanelCardInsetX);
     const float trackCardMarginY = static_cast<float>(kTrackPanelCardInsetY);
 
+    // 左侧彩色竖线/色条的上下内缩量（统一语义，小于 controlRadius 以更贴边）
+    constexpr float trackAccentVerticalInset = 3.0f;
+
     // Draw track backgrounds and separators
     for (int i = 0; i < visibleTrackCount_; ++i)
     {
@@ -255,7 +258,7 @@ void TrackPanelComponent::paint(juce::Graphics& g)
             g.fillRect(tintBounds);
 
             const auto stripWidth = active ? 5.0f : 3.0f;
-            auto stripBounds = tintBounds.withWidth(stripWidth).reduced(0.0f, 5.0f);
+            auto stripBounds = tintBounds.withWidth(stripWidth).reduced(0.0f, trackAccentVerticalInset);
             g.setColour(trackColor.withAlpha(active ? 0.95f : 0.62f));
             g.fillRoundedRectangle(stripBounds, stripWidth * 0.5f);
 
@@ -287,8 +290,8 @@ void TrackPanelComponent::paint(juce::Graphics& g)
                 g.fillRoundedRectangle(cardBounds.reduced(1.0f), juce::jmax(0.0f, style.controlRadius - 1.0f));
 
                 const float x = cardBounds.getX() + 2.0f;
-                const float y0 = cardBounds.getY() + style.controlRadius;
-                const float y1 = cardBounds.getBottom() - style.controlRadius;
+                const float y0 = cardBounds.getY() + trackAccentVerticalInset;
+                const float y1 = cardBounds.getBottom() - trackAccentVerticalInset;
                 g.setColour(UIColors::accent.withAlpha(0.66f));
                 g.drawLine(x, y0, x, y1, 2.5f);
             }
@@ -308,8 +311,8 @@ void TrackPanelComponent::paint(juce::Graphics& g)
                 g.fillRoundedRectangle(cardBounds.reduced(1.0f), juce::jmax(0.0f, style.controlRadius - 1.0f));
 
                 const float x = cardBounds.getX() + 2.0f;
-                const float y0 = cardBounds.getY() + style.controlRadius;
-                const float y1 = cardBounds.getBottom() - style.controlRadius;
+                const float y0 = cardBounds.getY() + trackAccentVerticalInset;
+                const float y1 = cardBounds.getBottom() - trackAccentVerticalInset;
                 g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.72f));
                 g.drawLine(x, y0, x, y1, 2.4f);
             }
@@ -337,8 +340,8 @@ void TrackPanelComponent::paint(juce::Graphics& g)
 
                 // 左侧亮线（现代软件常用的"激活"表达）
                 const float x = cardBounds.getX() + 2.0f;
-                const float y0 = cardBounds.getY() + style.controlRadius;
-                const float y1 = cardBounds.getBottom() - style.controlRadius;
+                const float y0 = cardBounds.getY() + trackAccentVerticalInset;
+                const float y1 = cardBounds.getBottom() - trackAccentVerticalInset;
                 g.setColour(UIColors::accent.withAlpha(0.90f));
                 g.drawLine(x, y0, x, y1, 2.0f);
             }

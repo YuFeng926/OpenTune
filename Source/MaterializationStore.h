@@ -31,6 +31,7 @@
 #include "Utils/SilentGapDetector.h"
 #include "Utils/SourceWindow.h"
 #include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §3.6 — per-materialization TimeGrid
+#include "Utils/PitchShiftSettings.h"  // clip-level pitch shift render modifier
 
 namespace OpenTune {
 class SoundTouchStretcher;   // forward-decl — §5.5 (lazy time-stretch accessor)
@@ -76,6 +77,7 @@ public:
         uint64_t materializationId{0};
         uint32_t pitchRevision{0};
         uint32_t timeGridRevision{0};
+        PitchShiftSettings pitchShiftSettings;
         bool timeGridIsIdentity{true};
 
         bool hasAudio() const
@@ -106,6 +108,8 @@ public:
         uint64_t renderRevision{0};
         std::shared_ptr<const TimeGridSnapshot> timeGrid;
         uint64_t timeGridRevision{0};
+        PitchShiftSettings pitchShiftSettings;
+        uint64_t pitchShiftRevision{0};
     };
 
     // 仅 notes 部分的轻量快照
@@ -197,6 +201,17 @@ public:
                      std::shared_ptr<const TimeGridSnapshot> snapshot);
 
     // ============================================================
+    // Pitch Shift — clip-level render modifier (per-materialization)
+    //
+    // PitchShiftSettings lives alongside PitchCurve/TimeGrid as a
+    // materialization-level render modifier. setPitchShiftSettings
+    // bumps pitchShiftRevision and invalidates RenderCache + TimeStretchCache.
+    // ============================================================
+    PitchShiftSettings getPitchShiftSettings(uint64_t materializationId) const;
+    uint64_t getPitchShiftRevision(uint64_t materializationId) const;
+    bool setPitchShiftSettings(uint64_t materializationId, const PitchShiftSettings& settings);
+
+    // ============================================================
     // vocal-time-stretch §5.5 — per-materialization SoundTouch stretcher
     //
     // The stretcher is constructed lazily when first needed (Stage 2 render
@@ -227,7 +242,6 @@ public:
     bool getNotesSnapshot(uint64_t materializationId, MaterializationNotesSnapshot& out) const;
     bool setNotes(uint64_t materializationId, std::vector<Note> notes);
 
-    bool setSilentGaps(uint64_t materializationId, std::vector<SilentGap> silentGaps);
     bool replaceAudio(uint64_t materializationId,
                        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
                        std::vector<SilentGap> silentGaps);
@@ -277,6 +291,8 @@ private:
         std::vector<SilentGap> silentGaps;
         std::shared_ptr<const TimeGridSnapshot> timeGrid;   // §3.6
         uint64_t timeGridRevision{0};                        // §3.6
+        PitchShiftSettings pitchShiftSettings;              // clip-level pitch shift modifier
+        uint64_t pitchShiftRevision{0};                     // independent revision for cache invalidation
         std::unique_ptr<SoundTouchStretcher> stretcher;     // §5.5 — lazy-constructed
         ReferenceFeatureSet referenceFeatures;            // reference auto-align cache
         bool isRetired_{false};

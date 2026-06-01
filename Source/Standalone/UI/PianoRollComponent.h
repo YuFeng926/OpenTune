@@ -332,6 +332,7 @@ private:
     int getTimelineContentViewportWidth() const;
     int getContinuousPinnedPlayheadViewportX() const;
     void updatePlayheadPresentationPolicy();
+    int getMaxHorizontalScroll() const;
     double getDisplayPlayheadTime(double timestampSec) const;
     void updatePresentationClock(double authoritativeTime, double timestampSec);
     void resetPresentationClock(double authoritativeTime);

@@ -62,7 +62,9 @@ public:
     void resized() override
     {
         auto bounds = getLocalBounds().reduced(20);
-        const int sharedAudioPageHeight = 215;
+        const int sharedAudioPageHeight = (renderingPriorityComponent_ != nullptr)
+            ? static_cast<int>(renderingPriorityComponent_->getProperties().getWithDefault("preferredHeight", 260))
+            : 260;
         if (renderingPriorityComponent_ != nullptr) {
             renderingPriorityComponent_->setBounds(bounds.removeFromTop(sharedAudioPageHeight));
             bounds.removeFromTop(8);

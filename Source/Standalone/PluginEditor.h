@@ -88,6 +88,7 @@ public:
     void noteSplitChanged(float value) override;
     void toolSelected(int toolId) override;
     void parameterDragEnded(int paramId, float oldValue, float newValue) override;
+    void pitchShiftRequested() override;
 
     // MenuBarComponent::Listener
     void importAudioRequested() override;  // 新版本：不再需要trackId参数

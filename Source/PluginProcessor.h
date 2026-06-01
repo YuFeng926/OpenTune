@@ -51,6 +51,7 @@
 #include "Utils/AppPreferences.h"
 #include "Utils/PlacementClipboard.h"
 #include "Utils/TrackConstants.h"
+#include "Utils/PitchShiftSettings.h"
 #include <functional>
 
 namespace OpenTune {
@@ -725,6 +726,10 @@ public:
                                          std::shared_ptr<const TimeGridSnapshot> snapshot,
                                          int64_t affectedSrcStartFrame,
                                          int64_t affectedSrcEndFrame);
+
+    /** Apply pitch shift settings to a materialization and trigger full re-render.
+     *  Called by PitchShiftEditAction (undo/redo) and PitchShiftDialogContent (confirm). */
+    void setPitchShiftSettings(uint64_t materializationId, const PitchShiftSettings& settings);
 
     std::shared_ptr<RenderCache> getMaterializationRenderCacheById(uint64_t materializationId) const;
     
