@@ -1463,35 +1463,42 @@ void PianoRollRenderer::drawPreparedF0Curve(juce::Graphics& g,
         const float xRange = rightX - leftX;
 
         if (xRange <= 0.0f) {
-            // Degenerate — all points at same x
             drawNormalCurve(fullPath, alpha * displayPoints.front().energyAlpha, displayPoints.front().levelHotMix);
             return;
         }
 
-        // 3. Build gradient with per-point colour stops
+        // Pre-compute per-point taper + base alpha (shared across all layers)
+        struct PointAlpha {
+            double position;
+            float baseAlpha;   // alpha * energyAlpha * taperAlpha
+            float levelHotMix;
+        };
+        std::vector<PointAlpha> pointAlphas(displayPoints.size());
+        for (std::size_t i = 0; i < displayPoints.size(); ++i) {
+            const auto& pt = displayPoints[i];
+            float taperAlpha = 1.0f;
+            if (i < spanCount) {
+                const float startFade = juce::jmin(1.0f, static_cast<float>(i + 1) / static_cast<float>(fadeSpanCount + 1));
+                const float endFade = juce::jmin(1.0f, static_cast<float>(spanCount - i) / static_cast<float>(fadeSpanCount + 1));
+                taperAlpha = juce::jlimit(0.18f, 1.0f, juce::jmin(startFade, endFade));
+            } else {
+                const float endFade = 1.0f / static_cast<float>(fadeSpanCount + 1);
+                taperAlpha = juce::jlimit(0.18f, 1.0f, endFade);
+            }
+            pointAlphas[i].position = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
+            pointAlphas[i].baseAlpha = alpha * pt.energyAlpha * taperAlpha;
+            pointAlphas[i].levelHotMix = pt.levelHotMix;
+        }
+
+        // 3. Build gradient from pre-computed data (one loop per layer, no redundant taper math)
         auto buildGradient = [&](auto colourFn, float alphaScale) {
-            juce::ColourGradient grad(juce::Colours::transparentBlack, leftX, 0.0f,
-                                      juce::Colours::transparentBlack, rightX, 0.0f, false);
-            grad.clearColours();
-            for (std::size_t i = 0; i < displayPoints.size(); ++i) {
-                const auto& pt = displayPoints[i];
-                const float position = (pt.x - leftX) / xRange;
-
-                // Taper calculation (same formula as before)
-                float taperAlpha = 1.0f;
-                if (i < spanCount) {
-                    const float startFade = juce::jmin(1.0f, static_cast<float>(i + 1) / static_cast<float>(fadeSpanCount + 1));
-                    const float endFade = juce::jmin(1.0f, static_cast<float>(spanCount - i) / static_cast<float>(fadeSpanCount + 1));
-                    taperAlpha = juce::jlimit(0.18f, 1.0f, juce::jmin(startFade, endFade));
-                } else {
-                    // Last point uses endFade = 1/(fadeSpanCount+1)
-                    const float endFade = 1.0f / static_cast<float>(fadeSpanCount + 1);
-                    taperAlpha = juce::jlimit(0.18f, 1.0f, endFade);
-                }
-
-                const float effectiveAlpha = alpha * pt.energyAlpha * taperAlpha * alphaScale;
-                const auto c = colourFn(pt.levelHotMix);
-                grad.addColour(juce::jlimit(0.0, 1.0, static_cast<double>(position)), c.withAlpha(effectiveAlpha));
+            juce::ColourGradient grad;
+            grad.isRadial = false;
+            grad.point1 = { leftX, 0.0f };
+            grad.point2 = { rightX, 0.0f };
+            for (const auto& pa : pointAlphas) {
+                const auto c = colourFn(pa.levelHotMix);
+                grad.addColour(pa.position, c.withAlpha(pa.baseAlpha * alphaScale));
             }
             return grad;
         };
@@ -1551,24 +1558,15 @@ void PianoRollRenderer::drawPreparedF0Curve(juce::Graphics& g,
 
                 if (selXRange > 0.0f) {
                     auto buildSelGradient = [&](float alphaScale) {
-                        juce::ColourGradient grad(juce::Colours::transparentBlack, selLeftX, 0.0f,
-                                                  juce::Colours::transparentBlack, selRightX, 0.0f, false);
-                        grad.clearColours();
+                        juce::ColourGradient grad;
+                        grad.isRadial = false;
+                        grad.point1 = { selLeftX, 0.0f };
+                        grad.point2 = { selRightX, 0.0f };
                         for (std::size_t i = selStart; i <= selEnd; ++i) {
-                            const auto& pt = displayPoints[i];
-                            const float position = (pt.x - selLeftX) / selXRange;
-                            float taperAlpha = 1.0f;
-                            if (i < spanCount) {
-                                const float startFade = juce::jmin(1.0f, static_cast<float>(i + 1) / static_cast<float>(fadeSpanCount + 1));
-                                const float endFade = juce::jmin(1.0f, static_cast<float>(spanCount - i) / static_cast<float>(fadeSpanCount + 1));
-                                taperAlpha = juce::jlimit(0.18f, 1.0f, juce::jmin(startFade, endFade));
-                            } else {
-                                const float endFade = 1.0f / static_cast<float>(fadeSpanCount + 1);
-                                taperAlpha = juce::jlimit(0.18f, 1.0f, endFade);
-                            }
-                            const float effectiveAlpha = alpha * pt.energyAlpha * taperAlpha * alphaScale;
-                            const auto c = blendLevelHotColour(selectionColour, pt.levelHotMix);
-                            grad.addColour(juce::jlimit(0.0, 1.0, static_cast<double>(position)), c.withAlpha(effectiveAlpha));
+                            const auto& pa = pointAlphas[i];
+                            const double position = (displayPoints[i].x - selLeftX) / selXRange;
+                            const auto c = blendLevelHotColour(selectionColour, pa.levelHotMix);
+                            grad.addColour(juce::jlimit(0.0, 1.0, position), c.withAlpha(pa.baseAlpha * alphaScale));
                         }
                         return grad;
                     };

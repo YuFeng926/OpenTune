@@ -1936,6 +1936,7 @@ void PianoRollToolHandler::clearLineAnchorPreview()
     ctx_.getState().drawing.isPlacingAnchors = false;
     ctx_.getState().drawing.pendingAnchors.clear();
     invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
+    if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
 }
 
 int PianoRollToolHandler::findNoteIndexAt(const std::vector<Note>& notes,
