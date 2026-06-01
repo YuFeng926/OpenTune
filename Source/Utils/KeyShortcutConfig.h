@@ -180,7 +180,8 @@ inline const ShortcutInfo kShortcutInfos[] = {
     { ShortcutId::SelectAll, Loc::Keys::kSelectAll, { KeyBinding('A', juce::ModifierKeys::commandModifier) } },
     { ShortcutId::Delete, Loc::Keys::kDelete, { 
         KeyBinding(juce::KeyPress::deleteKey, {}),
-        KeyBinding(juce::KeyPress::backspaceKey, {})
+        KeyBinding(juce::KeyPress::backspaceKey, {}),
+        KeyBinding('1', {})
     } },
     { ShortcutId::SplitClip, Loc::Keys::kSplitClip, { KeyBinding('S', {}) } },
     { ShortcutId::MergeClips, Loc::Keys::kMergeClips, { KeyBinding('M', {}) } },
