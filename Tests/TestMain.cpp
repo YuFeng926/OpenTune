@@ -7133,6 +7133,125 @@ void runTimelineNoParallelF0RenderPathsTest()
     logPass(testName);
 }
 
+void runPianoRollSetScaleIdempotencyTest()
+{
+    constexpr const char* testName = "PianoRoll_SetScale_Idempotency";
+
+    const auto setScaleSection = extractWorkspaceFileSection(
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "void PianoRollComponent::setScale(int rootNote, int scaleType)",
+        "void PianoRollComponent::fitToScreen()");
+
+    if (setScaleSection.isEmpty()) {
+        logFail(testName, "setScale() function not found");
+        return;
+    }
+
+    // Must have a same-value guard that compares clamped values with existing members
+    const auto guardIndex = setScaleSection.indexOf("if (scaleRootNote_ ==");
+    if (guardIndex < 0) {
+        logFail(testName, "setScale() must contain a same-value guard comparing scaleRootNote_");
+        return;
+    }
+
+    const auto revisionIndex = setScaleSection.indexOf("++visualPrefsRevision_");
+    if (revisionIndex < 0) {
+        logFail(testName, "setScale() must still increment visualPrefsRevision_ when values change");
+        return;
+    }
+
+    // Guard must come before the revision increment
+    if (revisionIndex <= guardIndex) {
+        logFail(testName, "setScale() same-value guard must precede ++visualPrefsRevision_");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runVst3EditorSyncMaterializationProjectionNoUnconditionalRedrawTest()
+{
+    constexpr const char* testName = "VST3Editor_SyncMaterializationProjection_NoUnconditionalRedraw";
+
+    const auto syncSection = extractWorkspaceFileSection(
+        "Source/Plugin/PluginEditor.cpp",
+        "void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()",
+        "} // namespace OpenTune::PluginUI");
+
+    if (syncSection.isEmpty()) {
+        logFail(testName, "syncMaterializationProjectionToPianoRoll() function not found");
+        return;
+    }
+
+    // The function must NOT contain unconditional requestContentRedraw() in
+    // the active-materialization path.  It may appear in other paths (e.g.
+    // notesRevision guard) but the steady-state active-materialization sync
+    // must not trigger an unconditional content redraw.
+    //
+    // The old contract comment (§8.8) and its following
+    // pianoRoll_.requestContentRedraw() must be gone.
+    if (syncSection.contains("repaint here ensures handles redraw")) {
+        logFail(testName, "stale defensive-repaint §8.8 comment must be removed");
+        return;
+    }
+
+    // Verify essential sync calls still exist (guard regression)
+    if (!syncSection.contains("pianoRoll_.setEditedMaterialization")
+        || !syncSection.contains("pianoRoll_.setTimelineMaterializationPlacements")
+        || (!syncSection.contains("pianoRoll_.setTimelineViewDomain")
+            && !syncSection.contains("pianoRoll_.clearTimelineViewDomain()"))
+        || !syncSection.contains("pianoRoll_.setScale")) {
+        logFail(testName, "syncMaterializationProjectionToPianoRoll() lost essential PianoRoll sync calls");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runVst3EditorTimerHasTimeGridRevisionGuardTest()
+{
+    constexpr const char* testName = "VST3Editor_TimerHasTimeGridRevisionGuard";
+
+    const auto timerSection = extractWorkspaceFileSection(
+        "Source/Plugin/PluginEditor.cpp",
+        "void OpenTuneAudioProcessorEditor::timerCallback()",
+        "} // namespace OpenTune::PluginUI");
+
+    if (timerSection.isEmpty()) {
+        logFail(testName, "timerCallback() function not found");
+        return;
+    }
+
+    // Must poll TimeGrid revision via getMaterializationTimeGridRevisionById
+    if (!timerSection.contains("getMaterializationTimeGridRevisionById")) {
+        logFail(testName, "timerCallback must poll getMaterializationTimeGridRevisionById");
+        return;
+    }
+
+    // Must reference the guard member variables
+    if (!timerSection.contains("lastPianoRollTimeGridRevisionMatId_")
+        || !timerSection.contains("lastPianoRollTimeGridRevision_")) {
+        logFail(testName, "timerCallback must use lastPianoRollTimeGridRevision/MatId_ guard variables");
+        return;
+    }
+
+    // Must have activeId=0 cleanup branch
+    if (!timerSection.contains("lastPianoRollTimeGridRevisionMatId_ = 0")
+        || !timerSection.contains("lastPianoRollTimeGridRevision_ = 0")) {
+        logFail(testName, "timerCallback must zero TimeGrid revision guards when activeMaterializationId is 0");
+        return;
+    }
+
+    // notesRevision guard must still exist (regression check)
+    if (!timerSection.contains("getMaterializationNotesSnapshotById")
+        || !timerSection.contains("lastPianoRollNotesRevision_")) {
+        logFail(testName, "notesRevision guard must still be present in timerCallback");
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runTimelineKillListNoFullOverlayRepaintForPositionTest()
 {
     constexpr const char* testName = "TimelineKillList_NoFullOverlayRepaintForPosition";
@@ -9496,7 +9615,7 @@ void runAraRenderGateRunsBeforeMappingAndReadTest()
 
     const auto gateIndex = processSection.indexOf("shouldRenderAraPlaybackBlock");
     const auto timeIndex = processSection.indexOf("getTimeInSeconds()");
-    const auto mappingIndex = processSection.indexOf("ARA Mapping:");
+    const auto mappingIndex = processSection.indexOf("projectTimelineTimeToMaterialization");
     const auto readIndex = processSection.indexOf("readPlaybackAudio");
 
     if (gateIndex < 0) {
@@ -11193,6 +11312,9 @@ void runArchitectureBehaviorSuite()
     runAraRuntimeRecordRequestedSplitsByRuntimeModeTest();
     runAraRuntimeProcessBlockAraFirstThenRegularCaptureTest();
     runAraRuntimeCapturePersistenceUsesRuntimeAccessorTest();
+    runPianoRollSetScaleIdempotencyTest();
+    runVst3EditorSyncMaterializationProjectionNoUnconditionalRedrawTest();
+    runVst3EditorTimerHasTimeGridRevisionGuardTest();
     runVst3KeyboardShortcutsRouteThroughUnifiedHelperTest();
     runVst3TransportButtonsDoNotForgeRegularPlaybackTruthTest();
     runVst3RegularTransportSurfacesHostControlledSemanticsTest();
