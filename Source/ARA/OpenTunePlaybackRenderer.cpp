@@ -42,7 +42,6 @@ bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
 
 namespace {
     std::atomic<bool> firstProcessCall{true};
-    std::atomic<int> mappingLogCounter{0};
     std::atomic<int> renderGateLogCounter{0};
 
     const VST3AraSession::PublishedRegionView* findRenderableRegionView(
@@ -209,18 +208,6 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
         };
         const double mappedLocalTime = projection.clampMaterializationTime(
             projection.projectTimelineTimeToMaterialization(overlap->overlapStartSeconds));
-        const int64_t mappedLocalSampleForLog = juce::jlimit<int64_t>(0,
-            publishedView->numSamples - 1,
-            TimeCoordinate::secondsToSamples(mappedLocalTime, sourceSampleRate));
-
-        if (mappingLogCounter.fetch_add(1) < 24)
-        {
-            AppLogger::log("ARA Mapping: playbackTime=" + juce::String(overlap->overlapStartSeconds, 6)
-                + " mappedLocalTime=" + juce::String(mappedLocalTime, 6)
-                + " mappedLocalSampleForLog=" + juce::String(static_cast<juce::int64>(mappedLocalSampleForLog))
-                + " hostSampleRate=" + juce::String(hostSampleRate_, 1)
-                + " sourceSampleRate=" + juce::String(sourceSampleRate, 1));
-        }
 
         MaterializationStore::PlaybackReadSource contentReadSource;
         if (!materializationStore->getPlaybackReadSource(appliedProjection.materializationId, contentReadSource))

@@ -370,6 +370,25 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         lastPianoRollNotesRevision_      = 0;
     }
 
+    // Pull fresh TimeGrid when external commits / undo-redo publish silently.
+    // Revision increments on every setMaterializationTimeGridById() call;
+    // tool-handler edits fire notifyTimeGridChanged with Interactive priority
+    // for sub-frame latency; this polling guard catches the non-interactive paths.
+    if (activeMaterializationId != 0) {
+        const uint64_t currentTimeGridRevision =
+            processorRef_.getMaterializationTimeGridRevisionById(activeMaterializationId);
+        if (activeMaterializationId == lastPianoRollTimeGridRevisionMatId_
+            && currentTimeGridRevision != lastPianoRollTimeGridRevision_
+            && pianoRoll_.isShowing()) {
+            pianoRoll_.requestContentRedraw();
+        }
+        lastPianoRollTimeGridRevisionMatId_ = activeMaterializationId;
+        lastPianoRollTimeGridRevision_      = currentTimeGridRevision;
+    } else {
+        lastPianoRollTimeGridRevisionMatId_ = 0;
+        lastPianoRollTimeGridRevision_      = 0;
+    }
+
     if (isAutoProcessing) {
         const int total = chunkStats.total();
         const int done = chunkStats.idle + chunkStats.blank;
@@ -1260,12 +1279,6 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
     } else {
         pianoRoll_.clearTimelineViewDomain();
     }
-    // vocal-time-stretch §8.8 — TimeGrid follows the same materializationId
-    // automatically (PianoRollComponent::buildToolHandlerContext queries
-    // processorRef_.getMaterializationTimeGridById(editedMaterializationId_)).
-    // repaint here ensures handles redraw with the new region's TimeGrid.
-    pianoRoll_.requestContentRedraw();
-
     const auto key = processorRef_.getMaterializationDetectedKeyById(sync.activeMaterializationId);
     const int rootNote = static_cast<int>(key.root);
     const int scaleType = (key.scale == Scale::Minor) ? 2 : ((key.scale == Scale::Chromatic) ? 3 : 1);

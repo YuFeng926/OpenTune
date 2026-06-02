@@ -3242,8 +3242,12 @@ void PianoRollComponent::refreshVerticalViewportGeometry(PianoRollVisualInvalida
 
 void PianoRollComponent::setScale(int rootNote, int scaleType)
 {
-    scaleRootNote_ = juce::jlimit(0, 11, rootNote);
-    scaleType_ = juce::jlimit(1, 8, scaleType);
+    const int clampedRoot = juce::jlimit(0, 11, rootNote);
+    const int clampedType = juce::jlimit(1, 8, scaleType);
+    if (scaleRootNote_ == clampedRoot && scaleType_ == clampedType)
+        return;
+    scaleRootNote_ = clampedRoot;
+    scaleType_ = clampedType;
     ++visualPrefsRevision_;
     prepareVisibleRenderModel();
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
