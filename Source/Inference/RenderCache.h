@@ -7,6 +7,7 @@
 #include <set>
 #include <atomic>
 #include <cstdint>
+#include <memory>
 
 #include "Utils/TimeCoordinate.h"
 
@@ -24,7 +25,7 @@ public:
         double endSeconds{0.0};
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
-        std::vector<float> audio;
+        std::shared_ptr<const std::vector<float>> audio;
 
         enum class Status : uint8_t {
             Idle,    // 无待处理渲染需求
@@ -104,11 +105,40 @@ public:
     void clear();
 
 private:
+    struct PublishedChunk {
+        int64_t startSample{0};
+        int64_t endSampleExclusive{0};
+        double startSeconds{0.0};
+        double endSeconds{0.0};
+        uint64_t publishedRevision{0};
+        std::shared_ptr<const std::vector<float>> audio;
+    };
+
+    struct PublishedRenderSnapshot {
+        std::vector<PublishedChunk> chunks;  // sorted by startSample ascending
+    };
+
     friend struct RenderCacheTestAccessor;
     mutable juce::SpinLock lock_;
     std::map<double, Chunk> chunks_;
     std::set<double> pendingChunks_;  // 待渲染 Chunk 的 startSeconds 索引
     size_t totalMemoryUsage_ = 0;
+
+    // Immutable read-side snapshot — atomic_load by audio thread, atomic_store
+    // by writer under lock_.  COW: old snapshots held by audio thread release
+    // naturally after the callback ends. Global byte counters track chunks_;
+    // a previous published generation can temporarily retain extra PCM.
+    std::shared_ptr<const PublishedRenderSnapshot> publishedSnapshot_;
+
+    // Writer-owned release pool for old published generations. This prevents
+    // the audio thread from becoming the final owner of evicted PCM.
+    mutable std::vector<std::shared_ptr<const PublishedRenderSnapshot>> retiredSnapshots_;
+
+    // Rebuild publishedSnapshot_ from chunks_ inside lock_ critical section.
+    // Call after any mutation that changes which PCM is visible (addChunk,
+    // markChunkAsBlank, clear, eviction).
+    void publishLocked();
+    void pruneRetiredSnapshotsLocked() const;
 
 public:
     // ⚡️ vocal-time-stretch §6.3 — shared global LRU pool accessors.

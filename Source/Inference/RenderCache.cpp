@@ -1,6 +1,8 @@
 #include "RenderCache.h"
 #include "Utils/AppLogger.h"
 #include <algorithm>
+#include <atomic>
+#include <memory>
 
 namespace OpenTune {
 
@@ -27,10 +29,52 @@ std::atomic<size_t>& RenderCache::globalCachePeakBytes() {
     return value;
 }
 
-RenderCache::RenderCache() = default;
+RenderCache::RenderCache() {
+    std::shared_ptr<const PublishedRenderSnapshot> emptySnapshot = std::make_shared<PublishedRenderSnapshot>();
+    std::atomic_store(&publishedSnapshot_, emptySnapshot);
+}
 
 RenderCache::~RenderCache() {
     clear();
+}
+
+void RenderCache::publishLocked() {
+    // Caller MUST hold lock_.
+    pruneRetiredSnapshotsLocked();
+
+    auto snapshot = std::make_shared<PublishedRenderSnapshot>();
+    snapshot->chunks.reserve(chunks_.size());
+    for (const auto& [key, chunk] : chunks_) {
+        juce::ignoreUnused(key);
+        if (chunk.publishedRevision == 0 || chunk.audio == nullptr || chunk.audio->empty())
+            continue;
+        PublishedChunk pc;
+        pc.startSample = chunk.startSample;
+        pc.endSampleExclusive = chunk.endSampleExclusive;
+        pc.startSeconds = chunk.startSeconds;
+        pc.endSeconds = chunk.endSeconds;
+        pc.publishedRevision = chunk.publishedRevision;
+        pc.audio = chunk.audio;  // shared_ptr copy, refcount++
+        snapshot->chunks.push_back(pc);
+    }
+    // chunks_ is keyed by project seconds derived from startSample, so map
+    // iteration preserves startSample order for published chunks.
+    auto oldSnapshot = std::atomic_load(&publishedSnapshot_);
+    std::atomic_store(&publishedSnapshot_, std::shared_ptr<const PublishedRenderSnapshot>(std::move(snapshot)));
+    if (oldSnapshot != nullptr) {
+        retiredSnapshots_.push_back(std::move(oldSnapshot));
+    }
+    pruneRetiredSnapshotsLocked();
+}
+
+void RenderCache::pruneRetiredSnapshotsLocked() const {
+    // Caller MUST hold lock_. If use_count()==1, only retiredSnapshots_ owns it,
+    // so destruction happens here on the writer thread, never in processBlock.
+    auto end = std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
+        [](const std::shared_ptr<const PublishedRenderSnapshot>& snapshot) {
+            return snapshot == nullptr || snapshot.use_count() == 1;
+        });
+    retiredSnapshots_.erase(end, retiredSnapshots_.end());
 }
 
 bool RenderCache::addChunk(int64_t startSample,
@@ -59,6 +103,8 @@ bool RenderCache::addChunk(int64_t startSample,
 
     const double startSeconds = projectRenderSeconds(startSample);
     const double endSeconds = projectRenderSeconds(endSampleExclusive);
+
+    auto immutableAudio = std::make_shared<const std::vector<float>>(std::move(audio));
 
     const juce::SpinLock::ScopedLockType guard(lock_);
     auto& chunk = chunks_[startSeconds];
@@ -93,16 +139,16 @@ bool RenderCache::addChunk(int64_t startSample,
         return false;
     }
 
-    const size_t oldBytes = chunk.audio.size() * sizeof(float);
+    const size_t oldBytes = (chunk.audio ? chunk.audio->size() : 0) * sizeof(float);
     if (oldBytes > 0) {
         totalMemoryUsage_ -= oldBytes;
         globalCacheCurrentBytes().fetch_sub(oldBytes, std::memory_order_relaxed);
     }
 
-    chunk.audio = std::move(audio);
+    chunk.audio = immutableAudio;
     chunk.publishedRevision = targetRevision;
 
-    const size_t chunkBytes = chunk.audio.size() * sizeof(float);
+    const size_t chunkBytes = chunk.audio->size() * sizeof(float);
     totalMemoryUsage_ += chunkBytes;
 
     const size_t newCurrent = globalCacheCurrentBytes().fetch_add(chunkBytes, std::memory_order_relaxed) + chunkBytes;
@@ -118,18 +164,19 @@ bool RenderCache::addChunk(int64_t startSample,
             if (&it->second == currentChunk) {
                 continue;
             }
-            const size_t evictBytes = it->second.audio.size() * sizeof(float);
+            const size_t evictBytes = (it->second.audio ? it->second.audio->size() : 0) * sizeof(float);
             if (evictBytes == 0) {
                 continue;
             }
             totalMemoryUsage_ -= evictBytes;
             globalCacheCurrentBytes().fetch_sub(evictBytes, std::memory_order_relaxed);
-            it->second.audio.clear();
+            it->second.audio.reset();
             it->second.publishedRevision = 0;
             break;
         }
     }
 
+    publishLocked();
     return true;
 }
 
@@ -138,105 +185,99 @@ void RenderCache::overlayPublishedAudioForRate(juce::AudioBuffer<float>& destina
                                                int numSamples,
                                                double timeSeconds,
                                                int targetSampleRate) const {
-    auto overlayWithLock = [&]() {
-        if (targetSampleRate <= 0 || numSamples <= 0) {
-            return;
-        }
+    if (targetSampleRate <= 0 || numSamples <= 0)
+        return;
 
-        const int destinationChannels = destination.getNumChannels();
-        const int destinationSamples = destination.getNumSamples();
-        if (destinationChannels <= 0 || destinationSamples <= 0) {
-            return;
-        }
+    const int destinationChannels = destination.getNumChannels();
+    const int destinationSamples = destination.getNumSamples();
+    if (destinationChannels <= 0 || destinationSamples <= 0)
+        return;
 
-        if (destStartSample < 0 || destStartSample >= destinationSamples) {
-            return;
-        }
+    if (destStartSample < 0 || destStartSample >= destinationSamples)
+        return;
 
-        const int writableSamples = std::min(numSamples, destinationSamples - destStartSample);
-        if (writableSamples <= 0) {
-            return;
-        }
+    const int writableSamples = std::min(numSamples, destinationSamples - destStartSample);
+    if (writableSamples <= 0)
+        return;
 
-        const double playbackSampleRate = static_cast<double>(targetSampleRate);
-        const double requestEndSeconds = timeSeconds + static_cast<double>(writableSamples) / playbackSampleRate;
+    auto snapshot = std::atomic_load(&publishedSnapshot_);
+    if (!snapshot || snapshot->chunks.empty())
+        return;
 
-        auto it = chunks_.upper_bound(timeSeconds);
-        if (it != chunks_.begin()) {
-            --it;
-        }
+    const double playbackSampleRate = static_cast<double>(targetSampleRate);
+    const double requestEndSeconds = timeSeconds + static_cast<double>(writableSamples) / playbackSampleRate;
+    const int64_t queryStartSample = TimeCoordinate::secondsToSamplesFloor(timeSeconds, kSampleRate);
 
-        for (; it != chunks_.end(); ++it) {
-            const auto& chunk = it->second;
-            const double chunkStartSeconds = projectRenderSeconds(chunk.startSample);
-            const double chunkEndSeconds = projectRenderSeconds(chunk.endSampleExclusive);
+    // Binary search for the first chunk with startSample > queryStartSample
+    auto it = std::upper_bound(snapshot->chunks.begin(), snapshot->chunks.end(), queryStartSample,
+        [](int64_t sample, const PublishedChunk& chunk) {
+            return sample < chunk.startSample;
+        });
 
-            if (chunkEndSeconds <= timeSeconds) {
+    // If we're past the first chunk, step back to include chunks that start before queryStartSample
+    if (it != snapshot->chunks.begin())
+        --it;
+
+    for (; it != snapshot->chunks.end(); ++it) {
+        const auto& chunk = *it;
+        const double chunkStartSeconds = chunk.startSeconds;
+        const double chunkEndSeconds = chunk.endSeconds;
+
+        if (chunkEndSeconds <= timeSeconds)
+            continue;
+        if (chunkStartSeconds >= requestEndSeconds)
+            break;
+        if (chunk.publishedRevision == 0)
+            continue;
+        if (chunk.audio == nullptr || chunk.audio->empty())
+            continue;
+
+        const int requestStartIndex = juce::jmax(
+            0,
+            static_cast<int>(std::floor(
+                TimeCoordinate::secondsToSamplesExact(chunkStartSeconds - timeSeconds,
+                                                      playbackSampleRate))));
+        const int requestEndIndex = juce::jmin(
+            writableSamples,
+            static_cast<int>(std::ceil(
+                TimeCoordinate::secondsToSamplesExact(chunkEndSeconds - timeSeconds,
+                                                      playbackSampleRate))));
+        if (requestEndIndex <= requestStartIndex)
+            continue;
+
+        const auto& audio = *chunk.audio;
+        const float* source = audio.data();
+        const int64_t sourceSize = static_cast<int64_t>(audio.size());
+        if (source == nullptr || sourceSize <= 0)
+            continue;
+
+        for (int sample = requestStartIndex; sample < requestEndIndex; ++sample) {
+            const double sampleTime = timeSeconds + static_cast<double>(sample) / playbackSampleRate;
+            const double readPos = (sampleTime - chunkStartSeconds) * kSampleRate;
+            if (readPos < 0.0 || readPos >= static_cast<double>(sourceSize))
                 continue;
-            }
-            if (chunkStartSeconds >= requestEndSeconds) {
-                break;
-            }
-            if (chunk.publishedRevision == 0) {
-                continue;
-            }
 
-            if (chunk.audio.empty()) {
-                continue;
-            }
+            const int64_t idx0 = static_cast<int64_t>(readPos);
+            const int64_t idx1 = std::min<int64_t>(idx0 + 1, sourceSize - 1);
+            const double fraction = readPos - static_cast<double>(idx0);
+            const float value = static_cast<float>(source[idx0] + (source[idx1] - source[idx0]) * fraction);
 
-            const int requestStartIndex = juce::jmax(
-                0,
-                static_cast<int>(std::floor(
-                    TimeCoordinate::secondsToSamplesExact(chunkStartSeconds - timeSeconds,
-                                                          playbackSampleRate))));
-            const int requestEndIndex = juce::jmin(
-                writableSamples,
-                static_cast<int>(std::ceil(
-                    TimeCoordinate::secondsToSamplesExact(chunkEndSeconds - timeSeconds,
-                                                          playbackSampleRate))));
-            if (requestEndIndex <= requestStartIndex) {
-                continue;
-            }
-
-            const float* source = chunk.audio.data();
-            const int64_t sourceSize = static_cast<int64_t>(chunk.audio.size());
-            if (source == nullptr || sourceSize <= 0) {
-                continue;
-            }
-
-            for (int sample = requestStartIndex; sample < requestEndIndex; ++sample) {
-                const double sampleTime = timeSeconds + static_cast<double>(sample) / playbackSampleRate;
-                const double readPos = (sampleTime - chunkStartSeconds) * kSampleRate;
-                if (readPos < 0.0 || readPos >= static_cast<double>(sourceSize)) {
-                    continue;
-                }
-
-                const int64_t idx0 = static_cast<int64_t>(readPos);
-                const int64_t idx1 = std::min<int64_t>(idx0 + 1, sourceSize - 1);
-                const double fraction = readPos - static_cast<double>(idx0);
-                const float value = static_cast<float>(source[idx0] + (source[idx1] - source[idx0]) * fraction);
-
-                for (int channel = 0; channel < destinationChannels; ++channel) {
-                    destination.setSample(channel, destStartSample + sample, value);
-                }
-            }
+            for (int channel = 0; channel < destinationChannels; ++channel)
+                destination.setSample(channel, destStartSample + sample, value);
         }
-    };
-
-    const juce::SpinLock::ScopedLockType guard(lock_);
-    overlayWithLock();
+    }
 }
 
 void RenderCache::clear() {
     const juce::SpinLock::ScopedLockType guard(lock_);
     for (const auto& [key, chunk] : chunks_) {
         juce::ignoreUnused(key);
-        const size_t chunkBytes = chunk.audio.size() * sizeof(float);
+        const size_t chunkBytes = (chunk.audio ? chunk.audio->size() : 0) * sizeof(float);
         globalCacheCurrentBytes().fetch_sub(chunkBytes, std::memory_order_relaxed);
     }
     chunks_.clear();
     totalMemoryUsage_ = 0;
+    publishLocked();
 }
 
 // ---------------------------------------------------------------------------
@@ -360,12 +401,14 @@ void RenderCache::completeChunkRender(double startSeconds, uint64_t revision, Re
 
 int RenderCache::getPendingCount() const {
     const juce::SpinLock::ScopedLockType guard(lock_);
+    pruneRetiredSnapshotsLocked();
     return static_cast<int>(pendingChunks_.size());
 }
 
 RenderCache::ChunkStats RenderCache::getChunkStats() const {
     ChunkStats stats;
     const juce::SpinLock::ScopedLockType guard(lock_);
+    pruneRetiredSnapshotsLocked();
     for (const auto& [key, chunk] : chunks_) {
         juce::ignoreUnused(key);
         switch (chunk.status) {
@@ -381,11 +424,12 @@ RenderCache::ChunkStats RenderCache::getChunkStats() const {
 RenderCache::StateSnapshot RenderCache::getStateSnapshot() const {
     StateSnapshot snapshot;
     const juce::SpinLock::ScopedLockType guard(lock_);
+    pruneRetiredSnapshotsLocked();
     for (const auto& [key, chunk] : chunks_) {
         juce::ignoreUnused(key);
 
         snapshot.hasPublishedAudio = snapshot.hasPublishedAudio
-            || (chunk.publishedRevision > 0 && !chunk.audio.empty());
+            || (chunk.publishedRevision > 0 && chunk.audio != nullptr && !chunk.audio->empty());
         snapshot.hasNonBlankChunks = snapshot.hasNonBlankChunks
             || chunk.status != Chunk::Status::Blank;
 
@@ -421,13 +465,14 @@ void RenderCache::markChunkAsBlank(double startSeconds) {
     chunk.status = Chunk::Status::Blank;
 
     // Blank = 无有效渲染结果，清理旧 published audio 防止 stale overlay
-    if (!chunk.audio.empty()) {
-        const size_t evictBytes = chunk.audio.size() * sizeof(float);
+    if (chunk.audio != nullptr && !chunk.audio->empty()) {
+        const size_t evictBytes = (chunk.audio ? chunk.audio->size() : 0) * sizeof(float);
         totalMemoryUsage_ -= evictBytes;
         globalCacheCurrentBytes().fetch_sub(evictBytes, std::memory_order_relaxed);
-        chunk.audio.clear();
+        chunk.audio.reset();
     }
     chunk.publishedRevision = 0;
+    publishLocked();
 
     AppLogger::log("RenderCache::markChunkAsBlank start=" + juce::String(startSeconds, 3)
         + " end=" + juce::String(chunk.endSeconds, 3)

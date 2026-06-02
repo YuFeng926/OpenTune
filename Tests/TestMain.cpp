@@ -10156,6 +10156,89 @@ void runRenderCache_OverlayWithDifferentTargetSampleRateTest()
     logPass(testName);
 }
 
+void runRenderCache_ClearPublishesEmptySnapshotTest()
+{
+    constexpr const char* testName = "RenderCache_ClearPublishesEmptySnapshot";
+
+    RenderCache cache;
+    std::vector<float> audio(441, 0.75f);
+
+    if (!seedPublishedIdleChunk(cache, 0.0, 0.01, audio)) {
+        logFail(testName, "failed to seed chunk");
+        return;
+    }
+
+    cache.clear();
+
+    juce::AudioBuffer<float> dest(1, 441);
+    dest.clear();
+    for (int i = 0; i < dest.getNumSamples(); ++i) {
+        dest.setSample(0, i, 0.125f);
+    }
+
+    cache.overlayPublishedAudioForRate(dest, 0, dest.getNumSamples(), 0.0, 44100);
+
+    const float* out = dest.getReadPointer(0);
+    for (int i = 0; i < dest.getNumSamples(); ++i) {
+        if (std::abs(out[i] - 0.125f) > 1e-6f) {
+            logFail(testName, "overlay still used published audio after clear()");
+            return;
+        }
+    }
+
+    if (cache.getStateSnapshot().hasPublishedAudio) {
+        logFail(testName, "state still reports published audio after clear()");
+        return;
+    }
+
+    logPass(testName);
+}
+
+void runRenderCache_MarkBlankPublishesEmptySnapshotTest()
+{
+    constexpr const char* testName = "RenderCache_MarkBlankPublishesEmptySnapshot";
+
+    RenderCache cache;
+    std::vector<float> audio(441, 0.65f);
+
+    if (!seedPublishedIdleChunk(cache, 0.0, 0.01, audio)) {
+        logFail(testName, "failed to seed chunk");
+        return;
+    }
+
+    cache.requestRenderPending(0.0, 0.01, 0, 441);
+    cache.markChunkAsBlank(0.0);
+
+    const auto state = cache.getStateSnapshot();
+    if (state.hasPublishedAudio || state.hasNonBlankChunks || state.chunkStats.blank != 1) {
+        logFail(testName, "blank chunk still exposes published audio or non-blank state");
+        return;
+    }
+
+    if (cache.getPendingCount() != 0) {
+        logFail(testName, "blank chunk remained in pending queue");
+        return;
+    }
+
+    juce::AudioBuffer<float> dest(1, 441);
+    dest.clear();
+    for (int i = 0; i < dest.getNumSamples(); ++i) {
+        dest.setSample(0, i, 0.125f);
+    }
+
+    cache.overlayPublishedAudioForRate(dest, 0, dest.getNumSamples(), 0.0, 44100);
+
+    const float* out = dest.getReadPointer(0);
+    for (int i = 0; i < dest.getNumSamples(); ++i) {
+        if (std::abs(out[i] - 0.125f) > 1e-6f) {
+            logFail(testName, "overlay still used published audio after markChunkAsBlank()");
+            return;
+        }
+    }
+
+    logPass(testName);
+}
+
 void runPlaybackReadSource_HasAudioMethodTest()
 {
     constexpr const char* testName = "PlaybackReadSource_HasAudioMethod";
@@ -10994,6 +11077,8 @@ void runMemoryOptimizationSuite()
     runRenderCache_CacheLimitIs256MBTest();
     runRenderCache_OverlayReadsFromChunkAudioAtRenderSampleRateTest();
     runRenderCache_OverlayWithDifferentTargetSampleRateTest();
+    runRenderCache_ClearPublishesEmptySnapshotTest();
+    runRenderCache_MarkBlankPublishesEmptySnapshotTest();
     runPlaybackReadSource_HasAudioMethodTest();
     runMaterializationStore_LongUngappedAudioGetsCappedChunkBoundariesTest();
     runMaterializationStore_SilentGapBoundariesArePreservedWhenCappingLongChunksTest();
