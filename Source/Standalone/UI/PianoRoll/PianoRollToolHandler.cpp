@@ -2076,10 +2076,14 @@ uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) 
     int closestDistance = std::numeric_limits<int>::max();
     for (const auto& h : snap->handles()) {
         if (h.locked) continue;   // endpoints not selectable
-        const double timelineTime = ctx_.projectMaterializationTimeToTimeline
-            ? ctx_.projectMaterializationTimeToTimeline(h.output_seconds)
-            : h.output_seconds;
-        const int handleX = ctx_.timeToX(timelineTime);
+
+        // Use the same coordinate chain as the renderer's outputTimeToScreenX:
+        // output_seconds -> timeline via projectMaterializationTimeToTimeline -> screen X via timeToX.
+        // This mirrors PianoRollRenderer::outputTimeToScreenX for consistent handle hit-testing.
+        const int handleX = ctx_.timeToX(
+            ctx_.projectMaterializationTimeToTimeline
+                ? ctx_.projectMaterializationTimeToTimeline(h.output_seconds)
+                : h.output_seconds);
         const int dx = std::abs(e.x - handleX);
         if (dx <= kHitToleranceX && dx < closestDistance) {
             closestId = h.id;

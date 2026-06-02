@@ -848,10 +848,6 @@ void OpenTuneAudioProcessorEditor::playRequested()
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
         docController->requestStartPlayback();
-        processorRef_.setPlayingStateOnly(true);
-        transportBar_.setPlaying(true);
-        pianoRoll_.setIsPlaying(true);
-        FrameScheduler::instance().setTimelinePlaybackActive(true);
         return;
     }
 #endif
@@ -863,10 +859,6 @@ void OpenTuneAudioProcessorEditor::pauseRequested()
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
         docController->requestStopPlayback();
-        processorRef_.setPlayingStateOnly(false);
-        transportBar_.setPlaying(false);
-        pianoRoll_.setIsPlaying(false);
-        FrameScheduler::instance().setTimelinePlaybackActive(false);
         return;
     }
 #endif
@@ -879,10 +871,6 @@ void OpenTuneAudioProcessorEditor::stopRequested()
     if (auto* docController = processorRef_.getDocumentController()) {
         docController->requestStopPlayback();
         docController->requestSetPlaybackPosition(0.0);
-        processorRef_.setPosition(0.0);
-        transportBar_.setPlaying(false);
-        pianoRoll_.setIsPlaying(false);
-        FrameScheduler::instance().setTimelinePlaybackActive(false);
         return;
     }
 #endif
@@ -1029,7 +1017,6 @@ void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
         docController->requestSetPlaybackPosition(timeSeconds);
-        processorRef_.setPosition(timeSeconds);
         return;
     }
 #endif
