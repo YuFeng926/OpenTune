@@ -170,6 +170,8 @@ private:
     // can pull fresh notes when an async note generator (GAME) commits late.
     uint64_t lastPianoRollNotesRevision_{0};
     uint64_t lastPianoRollNotesRevisionMatId_{0};
+    uint64_t lastPianoRollTimeGridRevision_{0};
+    uint64_t lastPianoRollTimeGridRevisionMatId_{0};
 
     // When true, the blocking overlay is shown until ARA materialization birth completes.
     bool waitingForAraMaterialization_ = false;
