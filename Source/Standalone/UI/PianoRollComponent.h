@@ -379,6 +379,7 @@ private:
     void drawSelectionBox(juce::Graphics& g, ThemeId themeId);
     /** Draw just the background/theme when the prepared render model is not ready. */
     void paintBackgroundOnly(juce::Graphics& g);
+    bool shouldShowPianoKeys() const noexcept;
 
 
     void handleVerticalZoomWheel(const juce::MouseEvent& e, float deltaY);

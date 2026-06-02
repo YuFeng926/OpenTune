@@ -1277,7 +1277,13 @@ void PianoRollComponent::paintOverChildren(juce::Graphics& g)
         return;
     }
 
-    const auto& ctx = renderModelCache_.getRenderContext();
+    // §8.5 — TimeGrid overlay uses live viewport coordinates (via
+    // makePresentationRenderContext), not the cached render-band context.
+    // The render-band timeToX carries a snapshot of scrollOffsetPx at
+    // model-build time; when the user scrolls within the overscan band
+    // without a model rebuild, the surface content moves via setBounds +
+    // setImageOffsetX but the overlay must follow via current scroll.
+    auto ctx = makePresentationRenderContext();
     const auto themeId = UIColors::currentThemeId();
     juce::ignoreUnused(themeId);
 
@@ -1289,9 +1295,14 @@ void PianoRollComponent::paintOverChildren(juce::Graphics& g)
 
     // §8.5 (Phase J) — Pitch view shows piano keys; Time view replaces the
     // left band with a dim spacer so the timeline aligns visually.
-    if (!ctx.isTimeView()) {
+    if (shouldShowPianoKeys()) {
         renderer_->drawPianoKeys(g, ctx);
     }
+}
+
+bool PianoRollComponent::shouldShowPianoKeys() const noexcept
+{
+    return currentTool_ != ToolId::TimeTool;
 }
 
 void PianoRollComponent::setInferenceActive(bool active)
@@ -2247,6 +2258,11 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
     // selection so a stale handle highlight doesn't persist into Note tools.
     if (toolChanged) {
         if (tool == ToolId::TimeTool) {
+            if (pressedPianoKey_ >= 0) {
+                if (pianoKeyAudition_ != nullptr)
+                    pianoKeyAudition_->noteOff(pressedPianoKey_);
+                pressedPianoKey_ = -1;
+            }
             interactionState_.noteDrag.clear();
             interactionState_.noteResize.clear();
             interactionState_.noteDraft.clear();
@@ -2439,8 +2455,8 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
         }
     }
 
-    // Piano key audition: click in piano key area triggers note preview
-    if (e.x < pianoKeyWidth_) {
+    // Piano key audition: click in piano key area triggers note preview.
+    if (shouldShowPianoKeys() && e.x < pianoKeyWidth_) {
         int midiNote = static_cast<int>(std::ceil(yToMidi(static_cast<float>(e.y))));
         midiNote = juce::jlimit(0, 127, midiNote);
         pressedPianoKey_ = midiNote;
@@ -2472,7 +2488,7 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
     }
 
     // Piano key glissando: dragging across keys changes the note
-    if (pressedPianoKey_ >= 0) {
+    if (shouldShowPianoKeys() && pressedPianoKey_ >= 0) {
         int midiNote = static_cast<int>(std::ceil(yToMidi(static_cast<float>(e.y))));
         midiNote = juce::jlimit(0, 127, midiNote);
         if (midiNote != pressedPianoKey_) {
@@ -2505,7 +2521,7 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent& e) {
         return;
     }
 
-    if (pressedPianoKey_ >= 0) {
+    if (shouldShowPianoKeys() && pressedPianoKey_ >= 0) {
         if (pianoKeyAudition_ != nullptr)
             pianoKeyAudition_->noteOff(pressedPianoKey_);
         pressedPianoKey_ = -1;
@@ -2947,14 +2963,17 @@ void PianoRollComponent::resetPresentationClock(double authoritativeTime)
 PianoRollRenderer::RenderContext PianoRollComponent::makePresentationRenderContext() const
 {
     auto ctx = renderModelCache_.getRenderContext();
-    const auto viewportState = makeTimelineViewportState();
-    ctx.timeToX = [viewportState](double seconds) { return viewportState.timeToViewportX(seconds); };
-    ctx.xToTime = [viewportState](int x) { return viewportState.viewportXToTime(x); };
-    ctx.width = getWidth();
-    ctx.height = getHeight();
+    // Use the component's canonical timeToX/xToTime which apply
+    // toVisibleTimelineSeconds() — essential when the active placement
+    // has a non-zero timeline origin.
+    ctx.timeToX = [this](double seconds) { return timeToX(seconds); };
+    ctx.xToTime = [this](int x) { return xToTime(x); };
+    const auto viewportBounds = getTimelineViewportBounds();
+    ctx.width = viewportBounds.getWidth();
+    ctx.height = viewportBounds.getHeight();
     ctx.pianoKeyWidth = pianoKeyWidth_;
     ctx.rulerHeight = rulerHeight_;
-    ctx.pixelsPerSecond = viewportState.pixelsPerSecond();
+    ctx.pixelsPerSecond = getTimelinePixelsPerSecond();
     return ctx;
 }
 
