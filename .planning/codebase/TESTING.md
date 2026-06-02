@@ -1,115 +1,336 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-05-15
+**Analysis Date:** 2026-06-02
 
 ## Test Framework
 
 **Runner:**
-- 唯一可执行自动化测试目标仍是 `OpenTuneTests`，由 `option(OPENTUNE_BUILD_TESTS "Build unit tests" ON)` 和 `add_executable(OpenTuneTests ...)` 声明于 `CMakeLists.txt:1072`。
-- CTest 只注册了一个入口 `OpenTuneCoreTests`，但命令实际运行整个 `OpenTuneTests` 可执行文件，而不是只跑 `core` suite，见 `CMakeLists.txt:1179`。
-- 断言方式仍是手写 `logFail(...)` / `logPass(...)` 加全局失败标记 `gHasTestFailure`。
+- Custom test runner (no external framework). Tests are compiled as a standalone executable `OpenTuneTests` defined in `CMakeLists.txt:1214`
+- Test discovery is manual — each suite function is registered in `Tests/TestMain.cpp` in the `kSuites` array
 
-## Executable Suites
+**Build System:**
+- CMake option: `OPENTUNE_BUILD_TESTS=ON` (default ON, `CMakeLists.txt:1211`)
+- Test executable links against `OpenTune` shared code, `juce::juce_core`, `juce::juce_audio_basics`
+- Built with `OPENTUNE_TEST_BUILD=1` preprocessor define — gates test-only API in production code (e.g., `setReferenceAnalysisNotificationDispatcherForTests` in `PluginProcessor.h:764`)
+- `JucePlugin_Build_Standalone=1` / `JucePlugin_Build_VST3=0` forced for test build to match `Standalone` ODR layout
 
-**Suite registry:**
-- 当前 suite 固定为 6 个：`core`, `processor`, `ui`, `architecture`, `undo`, `memory`，定义在 `Tests/TestMain.cpp:30`。
-- 子集运行与 suite 列表 CLI 仍可用：`--list-suites` 与单 suite 参数分发在 `Tests/TestMain.cpp` 的 `main()`。
+**Assertion Library:**
+- **Custom minimal assertions** via `logPass(testName)` / `logFail(testName, detail)` declared in `Tests/TestSupport.h`
+- `approxEqual(float, float, tol)` / `approxEqual(double, double, tol)` for floating-point comparisons
+- No external assertion library
 
-**What each suite currently does:**
-- `core`: 覆盖 lock-free queue、renderer block span、SIMD helper、channel layout/capture segment numeric guards。
-- `processor`: 覆盖 forced source owner、import source/materialization/placement 分离、derived refresh selection guard、channel layout import guard、capture persistence/state persistence、PianoRoll edit action affected-range。
-- `ui`: 覆盖 app preferences round-trip、shared/standalone preferences page 组合、editing scheme/parameter sync、PianoRoll source guards、visual invalidation、audio format registry、Standalone import、undo result-chain，以及新增的 `PianoRollProjection_ConsumesMaterializationIdAndPlacementProjectionOnly` / `EditingCommand_DoesNotMutatePlacement` owner guards，入口列表见 `Tests/TestMain.cpp:4131`。
-- `architecture`: 覆盖 placement/materialization owner 约束、Standalone playback placement window、ARA snapshot/render span、mac Standalone packaging 结构守护、undo architecture cleanup guard，以及 ARA persistentID binding guards：`AraBinding_NewPersistentIdSameSourceWindowCreatesIndependentMaterialization`、`AraBinding_MultiplePlaybackRegionsSameAudioModificationShareMaterialization`、`AraBinding_ArchiveHooksPersistPersistentIdMaterializationBindings`、`AraBinding_RestoredPersistentIdRebindsNewPlaybackRegion`、`AraEditor_AttachesRenderableBindingWithoutReadAudioArm`。
-- `undo`: 覆盖 undo/redo 边界测试，包括空栈、redo 裁剪、溢出等场景。
-- `memory`: 覆盖 ONNX 运行时内存生命周期测试。
+**Run Commands:**
+```bash
+# Build and run tests (via CMake/CTest)
+ctest --test-dir build-ara-overlay-vs18-clean -C Release
 
-## Commands In Use Now
-
-**Configure current Release build dirs:**
-```powershell
-cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --preset windows-ara-vs2022"
-cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --preset windows-nonara-vs2022"
+# Direct execution
+build-ara-overlay-vs18-clean/Tests/Release/OpenTuneTests.exe
 ```
 
-**Build the test binary in the current Release ARA build dir:**
-```powershell
-cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build build-ara-overlay-vs18-clean --config Release --target OpenTuneTests"
+**Preset:**
+```json
+"testPresets": [
+  {
+    "name": "windows-ara-release",
+    "configurePreset": "windows-ara-vs2022",
+    "configuration": "Release",
+    "output": { "outputOnFailure": true }
+  }
+]
 ```
-- `OpenTuneTests` 是显式 CMake target，见 `CMakeLists.txt:1072`。
-
-**Run targeted suites:**
-```powershell
-build-ara-overlay-vs18-clean\Release\OpenTuneTests.exe architecture
-build-ara-overlay-vs18-clean\Release\OpenTuneTests.exe processor
-```
-
-**Run one suite or list suites:**
-```powershell
-build-ara-overlay-vs18-clean\Release\OpenTuneTests.exe --list-suites
-build-ara-overlay-vs18-clean\Release\OpenTuneTests.exe ui
-build-ara-overlay-vs18-clean\Release\OpenTuneTests.exe architecture
-```
-
-**Run through CTest:**
-```powershell
-ctest --test-dir build-ara-overlay-vs18-clean -C Release --output-on-failure
-```
-
-**Format build verification also matters:**
-```powershell
-cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build build-ara-overlay-vs18-clean --config Release --target OpenTune_VST3"
-cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build build-nonara-overlay-vs18-clean --config Release --target OpenTune_VST3"
-```
-- Avoid parallel MSBuild invocations in the same build directory. A prior parallel run hit a `.tlog` permission lock and passed after serial rerun.
 
 ## Test File Organization
 
-- 测试仍集中在 `Tests/`，当前 live files 是 `Tests/TestMain.cpp`, `Tests/TestSupport.h`, `Tests/TestEditorFactoryStub.cpp`。
-- `Tests/TestMain.cpp` 仍是单文件主测试体和 suite registry，长度约 5.5k 行。
-- `Tests/TestSupport.h` / `Tests/TestSupport.cpp` 提供 probe、mock、共享 helper，例如 `VST3AraSessionTestProbe` 和 `MockVocoderService`。
-- `Tests/TestEditorFactoryStub.cpp` 继续用于阻断真实 editor 创建，这个角色在旧文档中存在，live tree 仍保留该文件。
+**Location:**
+- All tests in `Tests/` directory at project root — separate from source code (not co-located)
 
-## Test Patterns Present Now
+**Naming:**
+- Two patterns coexist:
+  1. `Tests/{Name}Tests.cpp` — e.g., `TimeGridTests.cpp`, `SoundTouchStretcherTests.cpp`, `IntegrationPipelineTests.cpp`
+  2. `Tests/Test{Name}.cpp` — e.g., `TestUndoManagerContract.cpp`, `TestCompositeUndoAction.cpp`, `TestAutoRefArchitecture.cpp`
+- No distinction in meaning — both are used for logical unit or contract tests
 
-**Direct state assertions:**
-- 测试更倾向直接实例化真实共享对象并断言状态，而不是经由 UI 黑盒观察，例如 `SourceStore`, `MaterializationStore`, `StandaloneArrangement`, `VST3AraSession`, `OpenTuneAudioProcessor` 均被 `Tests/TestSupport.h:10`-`Tests/TestSupport.h:24` 直接引入。
+**Structure:**
+```
+Tests/
+├── TestMain.cpp                  # Entry point, suite registry, shared helpers
+├── TestSupport.h                 # Shared test utilities, harnesses, probes
+├── TestEditorFactoryStub.cpp     # Stub to avoid linking real UI
+├── TimeGridTests.cpp             # Data model tests
+├── SoundTouchStretcherTests.cpp  # Wrapper tests
+├── TimeStretchCacheTests.cpp     # Cache tests
+├── MaterializationStoreTimeGridTests.cpp  # Integration tests
+├── Stage2WorkerTests.cpp         # Worker thread tests
+├── TimeToolHandlerTests.cpp      # UI tool handler tests
+├── IntegrationPipelineTests.cpp  # L3 integration tests
+├── InvariantContractTests.cpp    # L4 contract/invariant tests
+├── GameNoteGeneratorTests.cpp    # ONNX inference tests
+├── VocoderConfigTests.cpp        # Vocoder config tests
+├── TestTimeGridPatchBuilder.cpp  # AUTO Ref compiler tests
+├── TestReferenceAutoAlign.cpp    # Reference alignment tests
+├── TestAutoRefFailure.cpp        # Failure mode tests
+├── TestAutoRefArchitecture.cpp   # Architecture guards (source-scan tests)
+├── TestAutoRefIntegration.cpp    # Integration tests
+├── TestReferenceFeaturesCacheSmoke.cpp  # Cache smoke tests
+├── TestReferenceFeaturesCacheLifecycle.cpp  # Cache lifecycle tests
+├── TestReferenceBinding.cpp      # Reference binding tests
+├── TestPlacementReferenceCascade.cpp  # Cascade tests
+├── TestMaterializationContract.cpp    # Contract tests
+├── TestReferenceAnalysisService.cpp   # Service lifecycle tests
+├── TestArrangementContract.cpp        # Arrangement tests
+├── TestProjectSessionReference.cpp    # Session roundtrip tests
+├── TestTimelineRenderingPipeline.cpp  # Rendering tests
+├── TestCompositeUndoAction.cpp        # Undo composite tests
+├── TestUndoManagerContract.cpp        # Undo manager tests
+├── AutoTunePitchShifterTests.cpp      # Pitch shifter tests
+```
 
-**Source-inspection guards:**
-- 当前 repo 继续用 `readWorkspaceFile()`, `extractWorkspaceFileSection()`, `sourceContains()`, `workspaceFileExists()` 直接读 live 源码做结构守护。
-- 这类 guard 仍在验证 preferences 组合、scheme manager 清理、mac packaging owner 边界等，例如 `runMacStandalonePackagingPlistMergeBelongsToStandaloneTargetOnlyTest()` in `Tests/TestMain.cpp:2700` and `runAudioEditingSchemeRulesUseExplicitSchemeInputTest()` referenced from `Tests/TestMain.cpp:2793`。
+## Test Structure
 
-**Manual fake / probe, not external mocking library:**
-- `MockVocoderService` 仍用手写 fake 记录并发与失败路径。
-- 私有 seam probe 继续通过 `OPENTUNE_TEST_BUILD` 暴露，例如 `VST3AraSessionTestProbe`。
+**Suite Organization:**
+Each test file defines a `runXxxSuite()` aggregator function and one or more `run...Test()` test functions. Suite aggregators are linked into `kSuites` in `TestMain.cpp`.
 
-## Coverage Signals
+**Example from `Tests/TestCompositeUndoAction.cpp`:**
+```cpp
+// Anonymous namespace for test-local helpers
+namespace {
 
-- 仓库里仍没有 gcov/lcov/llvm-cov 之类覆盖率配置；当前 coverage signal 主要来自 smoke suites + architecture guards，而不是覆盖率百分比。
-- `ui` 和 `architecture` 仍是当前最高信号 suite；`core` 和 `processor` 已不再为空，但覆盖仍偏 smoke/contract 级。
-- 2026-05-15 ARA multi-region 自动化现实：`OpenTuneTests` Release build PASS，`architecture/core/processor/memory/undo` suites PASS，ARA VST3 build PASS，non-ARA VST3 build PASS。`ui` suite 当前 exit=1 且无 `[FAIL]` 文本，不得继续写成 full-suite PASS。
+struct MockAction : public UndoAction {
+    mutable int undoCount = 0;
+    mutable int redoCount = 0;
+    juce::String desc;
 
-## Manual Validation Expectations
+    explicit MockAction(juce::String d = "Mock") : desc(std::move(d)) {}
 
-- repo 当前仍把 manual DAW journey + `AppLogger` trace 当作 host-specific verification layer，见 `.planning/STATE.md:25` and `.planning/ROADMAP.md:54`。
-- 与 VST3/ARA 相关的问题，现行文档仍要求在真实 DAW 中复现并检查日志，REAPER 调试样例可见 `.planning/debug/reaper-vst3-record-originalf0-missing.md:10` and `.planning/debug/reaper-vst3-record-originalf0-missing.md:63`。
-- 生产代码里的 trace family 仍是手工验证的重要抓手，例如 `RecordTrace`, `MappingTrace`, `AutoTuneTrace`, `RenderTrace` 分别位于 `Source/Plugin/PluginEditor.cpp:999`, `Source/Plugin/PluginEditor.cpp:1106`, `Source/Plugin/PluginEditor.cpp:1258`, `Source/Standalone/PluginEditor.cpp:2597`。
+    void undo() override { ++undoCount; }
+    void redo() override { ++redoCount; }
+    juce::String getDescription() const override { return desc; }
+};
 
-## Explicit Gaps Verified From Repo Files
+} // namespace
 
-- `OpenTuneTests.exe ui` 当前在 `PianoRoll_DrawNoteDraft_SurvivesMultiEventDrag` PASS 后以 exit code 1 结束且没有 `[FAIL]` 文本；这是 runner/后续测试状态待查项。
-- Full `OpenTuneTests.exe` PASS 口径已过期，恢复前必须先解释 UI suite exit behavior。
-- 没有 repo-level CI pipeline：工作区下未检测到 `.github/`，根目录也未检测到仓库级 `*.yml` / `*.yaml` CI 配置；自动化门禁仍依赖本地 CMake/CTest 流程。
-- L5 Standalone / VST3 手工旅程仍是显式 deferred gap，不是 PASS，见 `.planning/ROADMAP.md:53`, `.planning/ROADMAP.md:56`, `.planning/STATE.md:71`。
-- macOS 真实 `.app` bundle inspection 仍待 macOS 环境执行，见 `.planning/REQUIREMENTS.md:25`, `.planning/STATE.md:80`。
-- 由于 CTest 名称仍叫 `OpenTuneCoreTests`，但实际跑的是整包 `OpenTuneTests`，自动化入口名称与真实范围不一致，见 `CMakeLists.txt:1179`。
+// Each test is a standalone free function
+void runCompositeUndoActionUndoReversesOrderTest()
+{
+    constexpr const char* testName = "CompositeUndoAction_UndoReversesOrder";
 
-## Practical Guidance For New Work
+    // Arrange
+    CompositeUndoAction composite("TestComposite");
+    auto a1 = std::make_unique<MockAction>("A");
+    auto a2 = std::make_unique<MockAction>("B");
+    MockAction* p1 = a1.get();
+    MockAction* p2 = a2.get();
+    composite.addAction(std::move(a1));
+    composite.addAction(std::move(a2));
 
-- 需要高信号回归守护时，优先往 `ui` 或 `architecture` 增加 focused smoke test；`core` / `processor` 可承载 leaf/runtime smoke，但不要把它们误当充分覆盖。
-- 需要守护结构清理时，继续使用 workspace source-inspection pattern，但优先补真实行为 test，例如 ARA binding archive restore 后重建 PlaybackRegion 的 rebind 测试。
-- 遇到 host-only 或 ARA-only 回归时，继续组合使用：`OpenTuneTests` 局部 smoke、格式 build、真实 DAW 手工旅程、`AppLogger` trace。
-- 写测试时继续优先断言显式 state carrier 和 published snapshot，不要引入新的隐藏 manager mock 层。
+    // Act
+    composite.redo();
+    // Assert
+    if (p1->redoCount != 1) { logFail(testName, "first sub-action redo not called"); return; }
+    if (p2->redoCount != 1) { logFail(testName, "second sub-action redo not called"); return; }
+
+    composite.undo();
+    if (p1->undoCount != 1) { logFail(testName, "first sub-action undo not called"); return; }
+    if (p2->undoCount != 1) { logFail(testName, "second sub-action undo not called"); return; }
+
+    logPass(testName);
+}
+
+// Suite aggregator — registered in TestMain.cpp
+void runCompositeUndoActionSuite()
+{
+    logSection("CompositeUndoAction");
+    runCompositeUndoActionUndoReversesOrderTest();
+    runCompositeUndoActionEmptyNoCrashTest();
+    runCompositeUndoActionCountsSingleStepTest();
+}
+```
+
+**Patterns:**
+- **Setup:** Inline in each test function or via helper factories (`makePreparedImport()`, `makeTestClipRequest()`)
+- **Teardown:** RAII — no explicit teardown needed (JUCE components, unique_ptr auto-destroy)
+- **Assertions:** `logFail(testName, message); return;` pattern — early return on first failure
+- **Skip pattern:** Self-skip when optional dependencies missing (e.g., `GameNoteGeneratorTests` skips if GAME ONNX models absent)
+
+## Mocking
+
+**Framework:** No external mocking framework. Manual mocks/subclasses used in tests.
+
+**Patterns:**
+```cpp
+// Manual mock via subclass — override virtual methods
+struct MockAction : public UndoAction {
+    mutable int undoCount = 0;
+    mutable int redoCount = 0;
+
+    void undo() override { ++undoCount; }
+    void redo() override { ++redoCount; }
+    juce::String getDescription() const override { return desc; }
+};
+```
+
+```cpp
+// Lambda-based mock — for tool handler / interaction testing
+PianoRollToolHandler::Context buildContext() {
+    PianoRollToolHandler::Context ctx;
+    ctx.getState = [this]() -> InteractionState& { return state; };
+    ctx.commitNoteDraft = [this]() {
+        ++commitNoteDraftCalls;
+        if (!commitNoteDraftResult) return false;
+        committedNotes = state.noteDraft.workingNotes;
+        state.noteDraft.clear();
+        return true;
+    };
+    // ... more lambdas
+    return ctx;
+}
+```
+
+```cpp
+// Probe pattern — static friend-like helper to access private members
+struct PianoRollComponentTestProbe {
+    static bool hasPendingVisualInvalidation(const PianoRollComponent& pianoRoll) {
+        return pianoRoll.pendingVisualInvalidation_.hasWork();
+    }
+    static juce::Rectangle<int> getTimelineViewportBounds(const PianoRollComponent& pianoRoll) {
+        return pianoRoll.getTimelineViewportBounds();
+    }
+};
+```
+
+**What to Mock:**
+- External services and inference (F0 extraction, vocoder, note generator)
+- UI callbacks and interaction feedback (tool handlers, visual invalidation)
+- File I/O (project serialization/deserialization)
+
+**What NOT to Mock:**
+- Core data structures (`TimeGrid`, `PitchCurve`, `MaterializationStore`, `StandaloneArrangement`) — tested directly
+- Pure computation functions (DSP math, `ReferenceAutoAlign` request/patch contract)
+- JUCE framework primitives
+
+## Fixtures and Factories
+
+**Test Data:**
+```cpp
+// Audio fixtures
+constexpr double kSampleRate = 44100.0;
+constexpr double kPi = 3.14159265358979323846264338327950288;
+
+std::vector<float> makeSineTone(double freqHz, double durationSec, double amp = 0.4) {
+    const int n = static_cast<int>(std::round(durationSec * kSampleRate));
+    std::vector<float> out(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        out[static_cast<size_t>(i)] = static_cast<float>(amp * std::sin(2.0 * kPi * freqHz * i / kSampleRate));
+    }
+    return out;
+}
+
+// Import fixture
+OpenTuneAudioProcessor::PreparedImport makePreparedImport(const juce::String& displayName, int numSamples = 128) {
+    OpenTuneAudioProcessor::PreparedImport preparedImport;
+    preparedImport.displayName = displayName;
+    preparedImport.storedAudioBuffer.setSize(1, numSamples);
+    preparedImport.storedAudioBuffer.clear();
+    if (numSamples > 0)
+        preparedImport.storedAudioBuffer.setSample(0, 0, 0.25f);
+    return preparedImport;
+}
+```
+
+**Location:**
+- Shared fixtures in `Tests/TestMain.cpp` (bottom, outside `main()`)
+- Test-specific fixtures in anonymous namespace of each test file
+
+## Coverage
+
+**Requirements:** No coverage enforcement detected. No coverage tooling configured.
+
+**View Coverage:** Not configured.
+
+## Test Types
+
+**Unit Tests (L0-L2):**
+- Data model invariants: `TimeGridTests.cpp` — handle creation, identity, tau mapping, sorting
+- Algorithm correctness: `SoundTouchStretcherTests.cpp` — phase transitions, push/pull streaming, endpoint conservation
+- Cache behavior: `TimeStretchCacheTests.cpp`, `TestReferenceFeaturesCacheSmoke.cpp`
+- Pure functions: `VocoderConfigTests.cpp` — hash invariants
+- Tool behavior: `TimeToolHandlerTests.cpp`, `AutoTunePitchShifterTests.cpp`
+
+**Integration Tests (L3):**
+- Pipeline integration: `IntegrationPipelineTests.cpp` — Pitch+Time order independence, Stage 2 interaction, undo across layers
+- Cache lifecycle: `TestReferenceFeaturesCacheLifecycle.cpp` — set/get/invalidate through MaterializationStore
+- Undo integration: `TestCompositeUndoAction.cpp`, `TestUndoManagerContract.cpp` — composite undo semantics
+
+**Contract / Invariant Tests (L4):**
+- `InvariantContractTests.cpp` — bypass bit-exactness, ARA region length, RB reset
+- `TestMaterializationContract.cpp` — reference feature cache isolation
+- `TestArrangementContract.cpp` — idempotent bindings, import UX flow
+
+**Architecture Guard Tests (static analysis via source scanning):**
+- `TestAutoRefArchitecture.cpp` — scans source files for patterns (no #include, no deprecated paths)
+- `TestTimelineRenderingPipeline.cpp` — timeline rendering pipeline contracts, source-scan checks
+- These tests use `WorkspaceFileCache` and `extractWorkspaceFileSection` helpers in `TestMain.cpp` to verify source code patterns at test runtime
+
+**E2E Tests:** Not used. No E2E or UI automation framework.
+
+**ONNX Inference Tests:**
+- `GameNoteGeneratorTests.cpp` — tests the GAME-small ONNX model (gracefully skips if models absent)
+- Test environment uses `Ort::InitApi()` call (required by `ORT_API_MANUAL_INIT`) and creates `Ort::Env` instance
+
+## Common Patterns
+
+**Async Testing:**
+Tests use the real `OpenTuneAudioProcessor` which manages worker threads internally. Some tests synchronously invoke operations:
+```cpp
+processor.runReclaimSweepOnMessageThread();  // public for test synchronous invocation
+```
+
+**Error Testing:**
+```cpp
+// Verify failure modes
+void runAutoRefFailure_NoOverlap() {
+    // Arrange: set up placements that don't overlap
+    // Act + Assert: alignment should fail with NoOverlap status
+    auto result = processor.executeReferenceAlignmentForPlacement(targetId);
+    if (result.status != ReferenceAlignmentResult::Status::NoOverlap) {
+        logFail(testName, "expected NoOverlap, got ...");
+    }
+    logPass(testName);
+}
+```
+
+**Floating Point Comparison:**
+```cpp
+if (!approxEqual(result, expected, 1e-6f)) {
+    logFail(testName, "values not approximately equal");
+    return;
+}
+
+// exact comparison for bit-exact tests
+constexpr double kEpsBitExact = 0.0;
+constexpr double kEpsLinear = 1e-9;
+```
+
+**Suite Registration Pattern:**
+```cpp
+// In TestMain.cpp:
+constexpr std::array<SuiteEntry, 36> kSuites{{
+    { "time-grid", "vocal-time-stretch TimeGrid data model + tau", &runTimeGridSuite },
+    { "soundtouch", "vocal-time-stretch SoundTouchStretcher wrapper (WSOLA)", &runSoundTouchStretcherSuite },
+    // ... 36 total suites
+}};
+```
+
+**Stub for Unwanted Dependencies:**
+```cpp
+// Tests/TestEditorFactoryStub.cpp — prevents linking real UI shells
+juce::AudioProcessorEditor* createOpenTuneEditor(OpenTuneAudioProcessor&) {
+    jassertfalse;
+    return nullptr;
+}
+```
 
 ---
 
-*Testing analysis: 2026-05-15*
+*Testing analysis: 2026-06-02*

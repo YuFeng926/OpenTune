@@ -1,300 +1,302 @@
+<!-- refreshed: 2026-06-02 -->
 # Architecture
 
-**Analysis Date:** 2026-05-15
+**Analysis Date:** 2026-06-02
+
+## System Overview
+
+OpenTune is an AI-powered pitch correction application (开源AI智能修音软件) built on the JUCE framework, supporting dual-format deployment: Standalone executable and VST3 plugin (with optional ARA2 extension). The core audio pipeline uses ONNX Runtime inference (RMVPE for F0 extraction + PC-NSF HiFiGAN neural vocoder) to resynthesize vocals while preserving formants.
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          Entry Points (2 formats)                             │
+├────────────────────────────────────┬─────────────────────────────────────────┤
+│   Standalone Editor               │   VST3 Plugin Editor                     │
+│   `Source/Standalone/EditorFactor│   `Source/Plugin/EditorFactoryPlugin.cpp` │
+│   yStandalone.cpp`                │                                          │
+│   `Source/Standalone/PluginEditor.│   `Source/Plugin/PluginEditor.{h,cpp}`   │
+│   {h,cpp}`                        │                                          │
+└───────────────┬───────────────────┴───────────────────┬──────────────────────┘
+                │                                       │
+                ▼                                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                     OpenTuneAudioProcessor (Shared Core)                      │
+│                     `Source/PluginProcessor.{h,cpp}`                          │
+│                                                                              │
+│  ┌─────────────────┐  ┌────────────────────┐  ┌────────────────────────────┐ │
+│  │   SourceStore    │  │ MaterializationStore│  │  StandaloneArrangement     │ │
+│  │  (source truth)  │  │  (editable truth)  │  │  (placement/mix truth)     │ │
+│  └────────┬────────┘  └─────────┬──────────┘  └─────────────┬──────────────┘ │
+│           │                      │                            │               │
+│           └──────────────────────┼────────────────────────────┘               │
+│                                  │                                            │
+│   ┌──────────────────────────────┼───────────────────────────────────┐       │
+│   │      Infrastructure Services │                                    │       │
+│   │  ┌──────────────┐ ┌──────────┴─────┐ ┌────────────────────────┐  │       │
+│   │  │F0Inference   │ │ VocoderDomain  │ │ RenderCache /          │  │       │
+│   │  │Service (RMVPE)│ │ (PC-NSF HiFiGAN)│ │ ChunkRenderStrategy   │  │       │
+│   │  └──────────────┘ └────────┬───────┘ └────────────────────────┘  │       │
+│   │                             │                                     │       │
+│   │                    ┌────────┴────────┐                           │       │
+│   │                    │ INoteGenerator  │ ← GAME (ONNX) or Legacy   │       │
+│   │                    └─────────────────┘                           │       │
+│   └──────────────────────────────────────────────────────────────────┘       │
+│                                  │                                            │
+│   ┌──────────────────────────────┼───────────────────────────────────┐       │
+│   │         Background Workers    │                                    │       │
+│   │  ┌──────────────────────┐ ┌──┴───────────────────────────────┐   │       │
+│   │  │ Chunk Render Worker  │ │ Stage 2 Time-Stretch Worker      │   │       │
+│   │  │ (incremental render) │ │ (SoundTouch WSOLA clip-wide)     │   │       │
+│   │  └──────────────────────┘ └──────────────────────────────────┘   │       │
+│   │  ┌──────────────────────┐ ┌──────────────────────────────────┐   │       │
+│   │  │ Note Generator Pool  │ │ Materialization Refresh Service  │   │       │
+│   │  │ (ThreadPool, 1)      │ │ (F0ExtractionService)             │   │       │
+│   │  └──────────────────────┘ └──────────────────────────────────┘   │       │
+│   └──────────────────────────────────────────────────────────────────┘       │
+└──────────────────────────────────────────────────────────────────────────────┘
+         │                                       │
+         ▼                                       ▼
+┌────────────────────┐              ┌──────────────────────────────────┐
+│   ARA Extension     │              │   Regular VST3 Capture            │
+│   `Source/ARA/`     │              │   `Source/Plugin/Capture/`        │
+│   DocumentController│              │   CaptureSession / RingBuffer     │
+│   + PlaybackRenderer │              │   (record→import pipeline)       │
+│   + VST3AraSession   │              └──────────────────────────────────┘
+└────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                               External / Output                                │
+│  ONNX Runtime (DirectML/CoreML) · SoundTouch (WSOLA) · r8brain (resampler)   │
+│  ARA SDK 2.2.0 (Celemony) · JUCE 8 framework                                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Component Responsibilities
+
+| Component | Responsibility | File |
+|-----------|----------------|------|
+| **OpenTuneAudioProcessor** | Central orchestrator: audio I/O, transport, AI inference, project state | `Source/PluginProcessor.{h,cpp}` |
+| **SourceStore** | Immutable source audio identity and lifecycle (retire/revive) | `Source/SourceStore.{h,cpp}` |
+| **MaterializationStore** | Editable audio payload truth: notes, pitch curves, keys, RenderCache, TimeGrid | `Source/MaterializationStore.{h,cpp}` |
+| **StandaloneArrangement** | Multi-track timeline: Placements, Track state, playback snapshots | `Source/StandaloneArrangement.{h,cpp}` |
+| **OpenTuneDocumentController** | ARA integration: bridges JUCE ARA callbacks to internal stores | `Source/ARA/OpenTuneDocumentController.{h,cpp}` |
+| **VST3AraSession** | ARA document model: manages AudioModification lifecycle, birth queue, content revisions | `Source/ARA/VST3AraSession.{h,cpp}` |
+| **OpenTunePlaybackRenderer** | ARA real-time playback: per-block RenderSnapshot consumption | `Source/ARA/OpenTunePlaybackRenderer.{h,cpp}` |
+| **F0InferenceService** | RMVPE-based fundamental frequency extraction (CPU only, ONNX) | `Source/Inference/F0InferenceService.{h,cpp}` |
+| **VocoderDomain** | Vocoder orchestration: submits inference jobs to scheduler | `Source/Inference/VocoderDomain.{h,cpp}` |
+| **RenderCache** | Per-materialization render chunk cache, chunk stats, partial invalidation | `Source/Inference/RenderCache.{h,cpp}` |
+| **INoteGenerator** | Polymorphic note generator: GAME (ONNX) or Legacy (DSP on F0) | `Source/Inference/INoteGenerator.h` |
+| **VocoderRenderScheduler** | Chunk-level vocoder job scheduling and dispatch | `Source/Inference/VocoderRenderScheduler.{h,cpp}` |
+| **ResamplingManager** | Audio sample rate conversion via r8brain | `Source/DSP/ResamplingManager.{h,cpp}` |
+| **ChromaKeyDetector** | Auto-key detection from pitch curve data | `Source/DSP/ChromaKeyDetector.{h,cpp}` |
+| **SoundTouchStretcher** | WSOLA time-stretch for vocal time manipulation (Stage 2) | `Source/Inference/SoundTouchStretcher.{h,cpp}` |
+| **AutoTunePitchShifter** | Lightweight cycle-resampling pitch shift for monitoring | `Source/DSP/AutoTunePitchShifter.{h,cpp}` |
+| **CaptureSession** | VST3 live recording: ring buffer, segment state machine, persistence | `Source/Plugin/Capture/CaptureSession.{h,cpp}` |
+| **UndoManager** | Undo/redo stack with CompositeUndoAction support | `Source/Utils/UndoManager.{h,cpp}` |
+| **ProjectSession** | Standalone project lifecycle: open/save/save-as, dirty tracking, media copying | `Source/Utils/ProjectSession.{h,cpp}` |
 
 ## Pattern Overview
 
-**Overall:** One shared JUCE processor runtime, four concrete runtime carriers, and two compile-time-isolated editor shells. `OpenTuneAudioProcessor` 组合 `SourceStore + MaterializationStore + StandaloneArrangement + VST3AraSession`；persisted truth 是 `Source + Materialization + Placement`，`Projection` 只是 derived contract。
+**Overall:** Layered Architecture with shared processor core, dual-format editors
 
 **Key Characteristics:**
-- `Source/PluginProcessor.h` and `Source/PluginProcessor.cpp` define `OpenTuneAudioProcessor` as the shared runtime shell for both products; the constructor instantiates `SourceStore`, `MaterializationStore`, `StandaloneArrangement`, `VST3AraSession`, `HostIntegration`, and `ResamplingManager`.
-- `Source/Standalone/PluginEditor.h` and `Source/Standalone/PluginEditor.cpp` remain the Standalone editor shell; `Source/Plugin/PluginEditor.h` and `Source/Plugin/PluginEditor.cpp` remain the VST3 editor shell; `Source/Standalone/EditorFactoryStandalone.cpp` and `Source/Editor/EditorFactoryPlugin.cpp` select the shell at compile time.
-- Shared playback reading is centralized in `OpenTuneAudioProcessor::readPlaybackAudio()` in `Source/PluginProcessor.cpp`; Standalone `processBlock()` and `Source/ARA/OpenTunePlaybackRenderer.cpp` both build read requests into that same function.
-- The live tree already exposes separate `sourceId` / `materializationId` / `placementId` in `OpenTuneAudioProcessor::CommittedPlacement` in `Source/PluginProcessor.h`; `StandaloneArrangement::Placement` in `Source/StandaloneArrangement.h` keeps placement-local timeline data plus a referenced `materializationId`.
-- VST3 ARA state is no longer described by `OpenTuneDocumentController` itself; `Source/ARA/OpenTuneDocumentController.cpp` mainly forwards host callbacks into `VST3AraSession` and creates `OpenTunePlaybackRenderer`.
-
-## Clarified Product Truth Model (2026-04-21)
-
-**Persisted owners:**
-
-- `Source`: 原始来源真相；回答“这些实例是否同源”。拥有原始音频 provenance / hydration 资产，不拥有 notes 或 corrected F0。
-- `Materialization`: 独立可编辑实例真相；拥有 local audio slice、notes、pitch curve、corrected segments、detected key、render state。`Note.startTime/endTime` 与 `CorrectedSegment.startFrame/endFrame` 都必须 materialization-local。
-- `Placement`: 时间轴摆放真相；拥有 `placementId`、track、timeline start、gain/fade、UI metadata，不拥有 editable payload。
-
-**Derived contract:**
-
-- `Projection`: 由一个 placement 与一个 materialization 生成的显式映射值对象；供 Piano Roll、playback、renderer 消费，不是 persisted truth owner。
-
-**Implications:**
-
-- 同一份 source 再次出现于新的 Standalone placement 或新的 ARA AudioModification 时，默认必须 birth 新 materialization，而不是共享 editable owner。
-- ARA binding unit is `AudioModification persistentID`: multiple PlaybackRegions under one AudioModification intentionally share the same materialization; different AudioModifications with the same source window remain independent.
-- split 默认必须 birth left/right materialization，而不是只改 placement window。
-- ARA PlaybackRegion is placement/projection truth, not persisted edit owner.
-
-## Current Object Mapping And Role Mismatch
-
-| Live-tree object | Current behavior | Clarified target role | Reading |
-|---|---|---|---|
-| `SourceStore` | provenance + hydrated source audio | `SourceStore` | Landed |
-| `MaterializationStore` | `audioBuffer + notes + pitchCurve + key + render cache` | `MaterializationStore` | Landed |
-| `StandaloneArrangement::Placement` | placement + `materializationId` | `Placement` | Landed |
-| `MaterializationTimelineProjection` | 显式 timeline/materialization window 映射 | `Projection` value object | Landed |
-| `VST3AraSession::SourceSlot` | source identity + copied host audio hydration | Source adapter carrier | Mostly right |
-| `VST3AraSession::RegionSlot` | region timing + `audioModificationPersistentId` + applied materialization projection | playback-region projection over AudioModification-bound materialization | Landed |
-| `VST3AraSession::AraMaterializationBinding` | `audioModificationPersistentId -> materializationId/sourceWindow/revision/duration` | ARA persistent edit binding | Landed |
-| `AppliedMaterializationProjection` | region-local applied owner + projection revision | `AppliedMaterializationProjection` | Landed |
-| `PublishedRegionView` | immutable ARA read model publishing `sourceId + appliedProjection + projection` | `PublishedRegionView` | Landed |
-| `PluginEditor::recordRequested()` / `syncImportedAraClipIfNeeded()` | current region birth + current region refresh | region-local materialization creation/refresh | Landed |
-| `OpenTuneAudioProcessor::CommittedPlacement` | `{sourceId, materializationId, placementId}` | `{sourceId, materializationId, placementId}` | Landed |
-| `reclaimUnreferencedMaterialization()` / `reclaimUnreferencedSource()` | three-layer reclaim (`placement -> materialization -> source`) | three-layer reclaim | Landed |
+- Single `OpenTuneAudioProcessor` shared between Standalone and VST3 builds
+- Editor is format-specific (Standalone has multi-track ArrangementView, VST3 has PianoRoll only)
+- ARA responsibility separation: `AudioModification` owns content, `PlaybackRegion` owns placement only, `RenderSnapshot` handles real-time safe publishing
+- Immutable playback snapshots consumed by audio thread (zero lock contention via SpinLock)
+- Retire/revive lifecycle for undo-safe deferred garbage collection
+- Background worker threads: chunk render worker, stage-2 time-stretch worker, note generator pool, materialization refresh service
 
 ## Layers
 
-**Build And Target Split:**
-- Purpose: Declare the dual-format JUCE target, list shared sources, and attach format-only files and post-build resources.
-- Location: `CMakeLists.txt`
-- Verified responsibilities:
-- `juce_add_plugin(OpenTune ...)` builds `Standalone` and `VST3` formats from one shared target.
-- `target_sources(OpenTune_Standalone ...)` adds `Source/Standalone/EditorFactoryStandalone.cpp` and `Source/Standalone/PluginEditor.cpp` only to the Standalone target.
-- `target_sources(OpenTune_VST3 ...)` adds `Source/Editor/EditorFactoryPlugin.cpp` and `Source/Plugin/PluginEditor.cpp` only to the VST3 target.
-- `target_sources(OpenTune PRIVATE ...)` always includes shared processor, UI, inference, utility, and ARA source files.
-- `OpenTuneTests` is declared as a separate native test executable in `CMakeLists.txt`.
+**Core Data Layer:**
+- Purpose: Source-of-truth storage for audio sources, editable materializations, and timeline arrangement
+- Location: `Source/SourceStore.{h,cpp}`, `Source/MaterializationStore.{h,cpp}`, `Source/StandaloneArrangement.{h,cpp}`
+- Contains: CRUD operations with ReadWriteLock, snapshot APIs, retirement lifecycle
+- Depends on: JUCE audio basics, Utils (PitchCurve, Note, TimeGrid, etc.)
+- Used by: OpenTuneAudioProcessor, Editors, ARA controller, Background workers
 
-**Shared Runtime Shell:**
-- Purpose: Coordinate transport, playback, import, derived refresh, render scheduling, undo/redo, and processor state persistence.
-- Location: `Source/PluginProcessor.h`, `Source/PluginProcessor.cpp`
-- Verified responsibilities:
-- `prepareToPlay()`, `processBlock()`, `createEditor()`, `getStateInformation()`, and `setStateInformation()` remain the JUCE entrypoints.
-- `prepareImport()`, `commitPreparedImportAsPlacement()`, and `commitPreparedImportAsMaterialization()` separate background preprocessing from main-thread `Source -> Materialization -> Placement` birth.
-- `requestMaterializationRefresh()` starts asynchronous derived refresh through `F0ExtractionService`.
-- `readPlaybackAudio()` is the shared dry-signal-plus-render-cache read kernel.
-- `performUndo()` and `performRedo()` return structured `UndoExecutionResult` values instead of void side effects.
-- `getUndoManager()` exposes the processor-owned custom `UndoManager` (cursor-based, 500-deep) for both editor shells.
+**Inference Layer:**
+- Purpose: AI model inference for F0 extraction, vocoder synthesis, and note generation
+- Location: `Source/Inference/`
+- Contains: F0InferenceService (RMVPE), VocoderDomain (PC-NSF HiFiGAN), GameNoteGenerator (ONNX), ModelFactory, VocoderInferenceService, VocoderRenderScheduler, RenderCache, TimeStretchCache, SoundTouchStretcher
+- Depends on: ONNX Runtime (Ort::Env), SoundTouch library
+- Used by: OpenTuneAudioProcessor (via VocoderDomain/F0InferenceService), Background workers
 
-**Source + Materialization Layers:**
-- Purpose: `SourceStore` owns source provenance / hydrated source audio identity; `MaterializationStore` owns editable local payload and playback/read truth independent of Standalone placement or VST3 region mapping.
-- Location: `Source/SourceStore.h`, `Source/SourceStore.cpp`, `Source/MaterializationStore.h`, `Source/MaterializationStore.cpp`
-- Verified responsibilities:
-- `SourceStore` owns `sourceId`, display/provenance metadata, source audio buffer, and source sample-rate metadata.
-- `MaterializationStore` owns `materializationId`, `sourceId`, source provenance window, lineage parent metadata, local audio buffer, `PitchCurve`, `DetectedKey`, `RenderCache`, notes, silent gaps, and render/note revisions.
-- `getPlaybackReadSource()` publishes the render cache and device-rate dry signal needed by playback readers.
-- `replaceAudio()`, `setPitchCurve()`, `setNotes()`, `setSilentGaps()`, and `setDetectedKey()` update materialization-local state.
-- `enqueuePartialRender()` and `pullNextPendingRenderJob()` make `MaterializationStore` the owner of pending render work segmentation.
+**DSP Layer:**
+- Purpose: Classical digital signal processing — resampling, mel spectrograms, key detection, auto-align, pitch shifting
+- Location: `Source/DSP/`
+- Contains: ResamplingManager, MelSpectrogram, ChromaKeyDetector, ReferenceAutoAlign, AutoTunePitchShifter, TimeGridPatchBuilder
+- Depends on: r8brain (resampler), JUCE DSP
+- Used by: OpenTuneAudioProcessor, MaterializationStore, F0ExtractionService
 
-**Standalone Placement Layer:**
-- Purpose: Own Standalone-only placement, track state, selection, and audio-thread playback snapshots.
-- Location: `Source/StandaloneArrangement.h`, `Source/StandaloneArrangement.cpp`
-- Verified responsibilities:
-- `Placement` carries `placementId`, `materializationId`, `mappingRevision`, `timelineStartSeconds`, `durationSeconds`, `gain`, fades, name, and colour.
-- `Track` stores placement lists, selected placement, mute/solo, gain, display metadata, and RMS.
-- `PlaybackSnapshot` publishes immutable playback state for 12 tracks.
-- `insertPlacement()`, `replacePlacement()`, `deletePlacementById()`, `movePlacementToTrack()`, and `setPlacementTimelineStartSeconds()` define placement-level mutations.
-- `loadPlaybackSnapshot()` is the audio-thread read seam for Standalone playback.
-- 2026-04-21 clarification: `contentStartSeconds` and `contentId` now read as leaked historical naming; target semantics should be `materializationId` and, by default, no placement-owned editable window.
+**Service Layer:**
+- Purpose: Asynchronous background operations bridging data and inference layers
+- Location: `Source/Services/`
+- Contains: F0ExtractionService (materialization refresh scheduling), ReferenceAnalysisService (reference alignment features)
+- Depends on: Inference, DSP, Data stores
+- Used by: OpenTuneAudioProcessor
 
-**VST3 ARA Session Layer:**
-- Purpose: Own VST3-only ARA source identity, region mapping, preferred-region selection, copied source audio hydration, and region-local source/materialization binding publication.
-- Location: `Source/ARA/VST3AraSession.h`, `Source/ARA/VST3AraSession.cpp`
-- Verified responsibilities:
-- `SourceSlot` stores `ARAAudioSource` identity, copied host audio, sample-access reader leases, and source content revisions.
-- `RegionSlot` stores `RegionIdentity`, `audioModificationPersistentId`, source/playback time ranges, `projectionRevision`, and `AppliedMaterializationProjection`.
-- `AraMaterializationBinding` stores the persistent ARA binding keyed by AudioModification persistent ID.
-- `materializationBindings_` is the session-owned binding table. It is not keyed by transient `ARAPlaybackRegion*` and does not infer aliasing from `sourceId + sourceWindow`.
-- `AppliedMaterializationProjection` stores `sourceId`, `materializationId`, applied materialization/projection revisions, source range, playback start, and the explicit `appliedRegionIdentity`.
-- `PublishedRegionView` and `PublishedSnapshot` are the immutable read models consumed by the VST3 editor and ARA renderer, and now publish `sourceId` explicitly.
-- `bindPlaybackRegionToMaterialization()` and `updatePlaybackRegionMaterializationRevisions()` define the visible source/materialization-plus-projection bridge toward the VST3 path. Destructive editor/session clear is not part of the current production API.
-- A dedicated birth worker thread is implemented inside `VST3AraSession.cpp`; pending birth truth is keyed by `AudioModification persistentId + SourceWindow + revision`, while the worker-ready queue only carries persistentIds that can currently run.
-- 2026-05-15 clarification: the source carrier itself is still useful, but editable-owner truth now lives at AudioModification/materialization binding level. Same AudioModification aliases share one materialization by design; sibling PlaybackRegions from different AudioModifications do not.
+**Editor Layer:**
+- Purpose: JUCE GUI for each build format
+- Location: `Source/Standalone/PluginEditor.{h,cpp}` (Standalone), `Source/Plugin/PluginEditor.{h,cpp}` (VST3), `Source/Editor/` (shared)
+- Contains: Editor factories, shared preference pages, dialog content
+- Depends on: Core processor, Shared UI components
+- Used by: JUCE createEditor() entry point
 
-**ARA Adapter Layer:**
-- Purpose: Bridge ARA host callbacks and host playback requests into `VST3AraSession` and the shared playback read path.
-- Location: `Source/ARA/OpenTuneDocumentController.h`, `Source/ARA/OpenTuneDocumentController.cpp`, `Source/ARA/OpenTunePlaybackRenderer.h`, `Source/ARA/OpenTunePlaybackRenderer.cpp`
-- Verified responsibilities:
-- `OpenTuneDocumentController::setProcessor()` stores the processor pointer and resolves the shared `VST3AraSession`.
-- Most document-controller lifecycle callbacks forward directly into the session.
-- `doStoreObjectsToStream()` and `doRestoreObjectsFromStream()` forward versioned ARA binding archive persistence into `VST3AraSession`.
-- `doCreatePlaybackRenderer()` returns `OpenTunePlaybackRenderer`.
-- `OpenTunePlaybackRenderer` maps overlap between host playback blocks and published ARA region spans, then calls `OpenTuneAudioProcessor::readPlaybackAudio()`.
+**UI Layer:**
+- Purpose: Reusable visual components shared across editor formats
+- Location: `Source/Standalone/UI/`
+- Contains: PianoRollComponent (shared between Standalone and VST3), ParameterPanel, ArrangementViewComponent (Standalone only), themes, tools, transport bar, menu bar, top bar, track panel, playhead overlay
+- Depends on: JUCE graphics/gui_basics/gui_extra
+- Used by: Both editor formats
 
-**Format-Specific Editor Shells:**
-- Purpose: Keep product workflow and UI orchestration isolated while reusing shared widgets.
-- Location: `Source/Standalone/PluginEditor.h`, `Source/Standalone/PluginEditor.cpp`, `Source/Plugin/PluginEditor.h`, `Source/Plugin/PluginEditor.cpp`
-- Verified Standalone responsibilities:
-- Owns arrangement view, track panel, drag-and-drop import, queued background import, preset handling, and placement selection to piano-roll sync.
-- Calls `commitPreparedImportAsPlacement()` with explicit `ImportPlacement` from editor-side workflow.
-- Verified VST3 responsibilities:
-- Owns single-workspace piano-roll focus flow, host transport requests, ARA Read Audio refresh command, and ARA snapshot consumption.
-- `recordRequested()` reads the focused/preferred ARA region, ensures the referenced `SourceStore` owner exists, asks processor/session to birth a materialization if the AudioModification is not already bound, and triggers derived refresh for the bound materialization.
-- Snapshot sync can attach an already-bound renderable materialization without a Read Audio arm/display gate.
+**ARA Layer:**
+- Purpose: ARA2 protocol integration for deep DAW integration
+- Location: `Source/ARA/`
+- Contains: OpenTuneDocumentController, OpenTunePlaybackRenderer, VST3AraSession
+- Depends on: ARA SDK 2.2.0, JUCE ARA extension, SourceStore, MaterializationStore
+- Used by: VST3 ARA build only (`OPENTUNE_ENABLE_ARA=ON`)
 
-**Shared UI Layer:**
-- Purpose: Provide reusable JUCE widgets used by both editor shells.
-- Location: `Source/Standalone/UI/`, `Source/Standalone/UI/PianoRoll/`
-- Verified responsibilities:
-- `ParameterPanel`, `MenuBarComponent`, `TransportBarComponent`, `TopBarComponent`, and `PianoRollComponent` are included by both editor headers.
-- `TrackPanelComponent` and `ArrangementViewComponent` are Standalone-only workflow widgets.
-- `AutoRenderOverlayComponent` is reused by both shells.
-- `RenderBadgeComponent` is a lightweight floating status badge (semi-transparent rounded rect + white text) held by both editor shells for render state display.
-- `PlayheadOverlayComponent` is an independent transparent overlay child handling playhead line drawing, extracted from PianoRoll paint.
-- `PianoRollRenderer`, `PianoRollToolHandler`, `PianoRollCorrectionWorker`, and `PianoRollVisualInvalidation` separate piano-roll sub-responsibilities under `Source/Standalone/UI/PianoRoll/`.
+**Capture Layer:**
+- Purpose: VST3 non-ARA live audio recording pipeline
+- Location: `Source/Plugin/Capture/`
+- Contains: CaptureSession (state machine), CaptureRingBuffer, CaptureSegment, CaptureCompactor, CapturePersistence
+- Depends on: JUCE audio, OpenTuneAudioProcessor
+- Used by: VST3 non-ARA workflow (instantiated conditionally at runtime)
 
-**Inference, DSP, And Utility Policy Layer:**
-- Purpose: Supply audio preprocessing, model inference, render publication, app preferences, editing rules, and logging.
-- Location: `Source/Inference/`, `Source/DSP/`, `Source/Services/`, `Source/Utils/`
-- Verified responsibilities:
-- `F0InferenceService`, `VocoderDomain`, `VocoderRenderScheduler`, `RenderCache`, `RMVPEExtractor`, and `PCNSFHifiGANVocoder` live under `Source/Inference/`.
-- `ResamplingManager`, `MelSpectrogram`, `ChromaKeyDetector`, and `CrossoverMixer` live under `Source/DSP/`.
-- `F0ExtractionService` lives under `Source/Services/` and is called by `requestMaterializationRefresh()`.
-- `AppPreferences`, `AudioEditingScheme`, `ParameterPanelSync`, `PitchCurve`, `PresetManager`, `TimeCoordinate`, and `AppLogger` live under `Source/Utils/`.
+**Audio Layer:**
+- Purpose: Audio format I/O and async loading
+- Location: `Source/Audio/`
+- Contains: AudioFormatRegistry, AsyncAudioLoader
+- Depends on: JUCE audio formats
+- Used by: Standalone editor (import pipeline)
 
 ## Data Flow
 
-**Standalone Import -> Source -> Materialization -> Placement -> Derived Refresh:**
-- `Source/Standalone/PluginEditor.cpp` resolves an explicit `OpenTuneAudioProcessor::ImportPlacement` before background work starts.
-- `OpenTuneAudioProcessor::prepareImport()` preprocesses the incoming buffer into stored local audio and leaves post-import analysis for later refresh.
-- `OpenTuneAudioProcessor::commitPreparedImportAsPlacement()` creates or resolves one `sourceId`, births a new `materializationId` with source provenance metadata, then inserts a `StandaloneArrangement::Placement` that references that materialization.
-- The Standalone editor updates the piano roll using the returned `materializationId` and asks `requestMaterializationRefresh()` to populate derived material.
+### Primary Request Path (Real-time Audio Playback)
 
-**Standalone Playback -> Snapshot -> Materialization Read -> Mix:**
-- `OpenTuneAudioProcessor::processBlock()` loads `StandaloneArrangement::PlaybackSnapshot`.
-- Each active placement resolves a `MaterializationStore::PlaybackReadSource` by `placement.materializationId`.
-- The processor computes the overlap between the current block and each placement's timeline span.
-- `readPlaybackAudio()` copies device-rate dry audio and overlays published render-cache audio into the clip scratch buffer.
-- Per-placement fades and per-track gain/mute/solo rules are applied before the track mix is accumulated into the output block.
+1. `processBlock()` — audio callback receives buffer from host/standalone (`Source/PluginProcessor.cpp`)
+2. For each track in `PlaybackSnapshot`, compute clip overlap window (`StandaloneArrangement::loadPlaybackSnapshot()`)
+3. `readPlaybackAudio()` — unified read: first read dry PCM from source buffer, then overlay rendered chunks from `RenderCache` (`Source/PluginProcessor.cpp:readPlaybackAudio`)
+4. Apply `AutoTunePitchShifter` monitoring pass, track gain, fade-in/out, and mix into output buffer
+5. Update `playStartPosition` atomically for UI position display
 
-**Materialization Refresh -> Render Queue -> Vocoder Publication:**
-- `requestMaterializationRefresh()` validates materialization existence and clears only the changed note/correction range when requested.
-- `F0ExtractionService` refreshes materialization-local derived state for the target `materializationId`.
-- `enqueueMaterializationPartialRenderById()` leads to `MaterializationStore::enqueuePartialRender()`, which stores hop-aligned pending jobs.
-- `chunkRenderWorkerLoop()` consumes pending jobs, submits vocoder work through `VocoderDomain`, and writes completion back into `RenderCache`.
+### Import Pipeline (Standalone/VST3 Import)
 
-**VST3 ARA Binding -> Focused Read Audio -> Piano Roll Sync:**
-- `PluginUI::OpenTuneAudioProcessorEditor::recordRequested()` loads the current `VST3AraSession::PublishedSnapshot`.
-- It resolves the focused/preferred `PublishedRegionView`, seeds the missing `SourceStore` owner if needed, and ensures that the region's parent AudioModification has a bound materialization.
-- `VST3AraSession` stores the binding by AudioModification persistent ID and projects it through each PlaybackRegion's current `RegionSlot`.
-- The editor then syncs the piano roll and requests derived refresh for the bound materialization. Existing renderable bindings can sync without re-running Read Audio.
+1. **Prepare** (background thread): `prepareImport()` — resample to 44.1kHz via `ResamplingManager`, detect silent gaps (`Source/PluginProcessor.cpp`)
+2. **Commit** (message thread): `commitPreparedImportAsPlacement()` — create `SourceStore` entry, create `MaterializationStore` entry, add `Placement` to `StandaloneArrangement`
+3. **Render**: `requestMaterializationRefresh()` — triggers F0 extraction → note generation (GAME/Legacy) → auto-tune correction → chunk-level vocoder render → publish to `RenderCache`
 
-**VST3 ARA Playback -> Published Region -> Shared Read Path:**
-- `OpenTuneDocumentController` forwards host edits and sample-access lifecycle into `VST3AraSession`.
-- `VST3AraSession` updates mutable source/region state, reconciles preferred region, and publishes immutable snapshots.
-- `OpenTunePlaybackRenderer` finds the renderable published region for the host block and maps playback time into source time.
-- The renderer converts that mapping into a shared `PlaybackReadRequest` and reuses `OpenTuneAudioProcessor::readPlaybackAudio()`.
+### ARA Audio Modification Birth Pipeline
 
-**Processor State Persistence:**
-- `getStateInformation()` writes a root `OpenTuneState` `ValueTree`.
-- It serializes `Contents` and `StandaloneArrangement` as separate child trees, rather than one mixed placement-content container.
-- Only content IDs referenced by current Standalone placements or current VST3 published bindings are added to `Contents`.
-- `setStateInformation()` restores content-local metadata into already-existing content entries, then restores Standalone arrangement state if placement records are valid.
+1. Host notifies `didUpdateAudioModificationProperties()` on `OpenTuneDocumentController` (`Source/ARA/OpenTuneDocumentController.cpp`)
+2. `VST3AraSession` state machine transitions from `WaitingForSource` → `PendingBirth` → `Rendering` → `Ready`
+3. `birthAraMaterializationWithOriginalF0()` reads ARA source via `HostAudioReader` lease, extracts F0 via RMVPE, creates materialization (`Source/PluginProcessor.cpp`)
+4. Audio source PCM is streamed chunk-by-chunk from host; source is registered as metadata-only (no PCM buffer duplication)
 
-**ARA Binding Archive Persistence:**
-- `OpenTuneDocumentController::doStoreObjectsToStream()` writes session-owned binding archive data.
-- `OpenTuneDocumentController::doRestoreObjectsFromStream()` restores binding records before the host recreates playback regions.
-- `VST3AraSession` remaps AudioModification persistent IDs through the ARA restore filter when provided, then later re-applies restored bindings to recreated `RegionSlot` projections.
+### VST3 Capture Pipeline
 
-## Ownership Boundaries
+1. `Capturing` → ring buffer accumulates audio in `CaptureRingBuffer`
+2. Segment transitions to `Processing` via `CaptureCompactor`
+3. `SubmitForRenderFn` callback feeds compacted buffer into `prepareImport()` → `commitPreparedImportAsMaterialization()` → `requestMaterializationRefresh()`
+4. `CapturePersistence` auto-saves session state across plugin reopens
 
-**`SourceStore`:**
-- Owns: `sourceId`, source provenance metadata, hydrated source audio, source sample-rate metadata.
-- Does not own: editable notes / pitch / render cache / placement timeline.
+### Render Scheduling (Two-Stage)
 
-**`MaterializationStore`:**
-- Owns: materialization-local audio, dry-signal playback copy, notes, pitch curve, silent gaps, detected key, render cache, render queue, source provenance window, lineage metadata.
-- Does not own: Standalone track placement, VST3 ARA region identity, editor selection state.
+**Stage 1 (Chunk Render Worker):** Background thread polls `MaterializationStore` for pending render jobs. For each materialization, runs note generation + auto-tune correction + vocoder synthesis per chunk. Publishes results to `RenderCache` with revision tracking.
 
-**`StandaloneArrangement`:**
-- Owns: Standalone track ordering, placement timeline spans, per-track mute/solo/volume, selected placement, playback snapshots.
-- Does not own: audio buffers, pitch data, ARA host objects.
-
-**`VST3AraSession`:**
-- Owns: ARA source slots, region slots, preferred region, copied host audio hydration, AudioModification persistentID -> materialization binding table, and immutable region snapshots.
-- Does not own: materialization-local edit payload or Standalone track arrangement.
-
-**`OpenTuneAudioProcessor`:**
-- Owns: orchestration, shared playback read API, render workers, undo manager, and processor state serialization.
-- Does not replace the three domain owners above.
+**Stage 2 (Time-Stretch Worker):** Separate thread owned by processor. When `TimeGrid` is non-identity, runs SoundTouch WSOLA full-pass rebuild on source PCM. Independent from Stage 1 to keep incremental chunks responsive. Output stored in `TimeStretchCache`.
 
 ## Key Abstractions
 
-**Materialization Snapshot:**
-- Files: `Source/MaterializationStore.h`, `Source/MaterializationStore.cpp`
-- Role: Immutable-style copy of materialization-local state keyed by `materializationId`, including source provenance window and lineage metadata.
+**Three-Store Truth Model:**
+- **SourceStore** — immutable source audio identity. A `Source` represents raw imported audio with buffer, sample rate, and display name. Never holds edit state. Supports soft-delete (retire/revive) for undo safety.
+- **MaterializationStore** — editable audio payload. A `Materialization` derives from a `Source` with a `SourceWindow` provenance. Holds: pitch curve, notes, corrected segments, detected key, `RenderCache`, `TimeGrid`, silent gaps, reference features. Each edit bumps a `renderRevision`.
+- **StandaloneArrangement** — timeline placement. A `Placement` references a `materializationId` and has timeline position/duration/gain/fades. The arrangement produces immutable `PlaybackSnapshot` for audio thread consumption.
 
-**Placement Snapshot:**
-- Files: `Source/StandaloneArrangement.h`, `Source/StandaloneArrangement.cpp`
-- Role: Timeline-facing placement data plus immutable `PlaybackSnapshot` publication for the audio thread.
+**Placement-Materialization Separation:**
+Editors never mutate placements for content edits. All edits (pitch curves, notes, time grids) go through `MaterializationStore`. The `StandaloneArrangement` only tracks which materialization is placed where and when. This aligns with the ARA model: `AudioModification` owns content, `PlaybackRegion` owns placement.
 
-**ARA Published Snapshot:**
-- Files: `Source/ARA/VST3AraSession.h`, `Source/ARA/VST3AraSession.cpp`
-- Role: Immutable VST3 read model containing preferred region and published region views.
+**RenderCache + RenderSnapshot Pattern:**
+- `RenderCache` holds per-materialization rendered audio chunks, each tagged with `renderRevision`
+- Audio thread reads only published chunks matching the current mapping revision
+- Chunk-level granularity enables partial re-render without full clip synthesis
+- `PlaybackSnapshot` is a lightweight immutable snapshot consumed by the audio thread under a `SpinLock`
 
-**Shared Playback Request:**
-- Files: `Source/PluginProcessor.h`, `Source/PluginProcessor.cpp`
-- Role: Product-agnostic playback read contract built from a render cache, dry signal, read start, target rate, and sample count.
+**INoteGenerator Polymorphism:**
+- `GameNoteGenerator` (`Source/Inference/GameNoteGenerator.{h,cpp}`) — ONNX GAME-small model, consumes raw audio + sample rate
+- `LegacyNoteGenerator` (`Source/Utils/LegacyNoteGenerator.{h,cpp}`) — DSP threshold-based on F0 + energy, consumes frame-domain fields
+- Selected at runtime via `ensureNoteGeneratorReady()`: prefers GAME if model bundle exists, falls back to legacy
 
-**Undo Result Chain:**
-- Files: `Source/Utils/UndoAction.h`, `Source/Utils/UndoAction.cpp`, `Source/PluginProcessor.cpp`
-- Role: Structured undo/redo deltas carrying domain, kind, `materializationId`, `placementId`, `trackId`, and optional affected frame range.
-
-**App Preference Carrier:**
-- Files: `Source/Utils/AppPreferences.h`, `Source/Utils/AppPreferences.cpp`
-- Role: Persist shared app state and standalone-only app state outside processor/project serialization.
-
-**Editing Scheme Rules:**
-- Files: `Source/Utils/AudioEditingScheme.h`
-- Role: Pure functions that derive voiced-only editing, parameter targets, and auto-tune targets from explicit scheme input.
+**Vocoder Pipeline (Domain → Service → Scheduler):**
+- `VocoderDomain` — public API: submit(Job), manages hop size and mel bins
+- `VocoderInferenceService` — owns ONNX inference session, thread-safe concurrent submits
+- `VocoderRenderScheduler` — job queue, chunk key deduplication, completion callbacks to `RenderCache`
 
 ## Entry Points
 
-**Build Entry:**
-- File: `CMakeLists.txt`
-- Role: Declares shared sources, format-specific editor sources, vendored dependencies, and `OpenTuneTests`.
+**Standalone Application:**
+- Location: `Source/Standalone/EditorFactoryStandalone.cpp` (JM_ENTRY via CMake)
+- Triggers: User launches `OpenTune.exe`
+- Responsibilities: Create `OpenTuneAudioProcessor`, `OpenTuneAudioProcessorEditor`, setup `AppPreferences` and `ProjectSession`, register drop targets
 
-**Runtime Entry:**
-- File: `Source/PluginProcessor.cpp`
-- Role: `createPluginFilter()` constructs `OpenTuneAudioProcessor`.
+**VST3 Plugin:**
+- Location: `Source/Plugin/EditorFactoryPlugin.cpp` (JM_ENTRY via CMake)
+- Triggers: Host loads `OpenTune.vst3`
+- Responsibilities: Create processor, detect wrapper type, conditionally instantiate `CaptureSession` or bind to ARA
 
-**Editor Creation Entry:**
-- Files: `Source/Editor/EditorFactoryPlugin.cpp`, `Source/Standalone/EditorFactoryStandalone.cpp`
-- Role: Return the format-specific editor shell selected by compile definitions.
+**ARA Document Controller:**
+- Location: `Source/ARA/OpenTuneDocumentController.{h,cpp}`
+- Triggers: Host creates ARA document (e.g., dragging audio to track in Studio One)
+- Responsibilities: Create shared stores, manage `VST3AraSession` lifecycle, route JUCE ARA callbacks
 
-**ARA Host Entry:**
-- File: `Source/ARA/OpenTuneDocumentController.cpp`
-- Role: Receives ARA lifecycle callbacks and creates `OpenTunePlaybackRenderer`.
+**ARAPlaybackRenderer:**
+- Location: `Source/ARA/OpenTunePlaybackRenderer.{h,cpp}`
+- Triggers: Host audio callback per ARA region
+- Responsibilities: Compute block-aligned render span, call `readPlaybackAudio()`, fill host buffer
 
-**Test Entry:**
-- File: `Tests/TestMain.cpp`
-- Role: Declares `core`, `processor`, `ui`, `architecture`, `undo`, and `memory` suites in one native test executable.
+## Architectural Constraints
 
-## Historical Direction Of `content + placement`
+- **Threading:** Audio thread reads immutable `PlaybackSnapshot` (SpinLock); edit mutations use `ReadWriteLock` on stores. Background workers: chunk render, stage-2 time-stretch, note generator pool (1 thread), materialization refresh service (1 thread).
+- **Global state:** `Ort::Env` shared across all inference services. `ResamplingManager`, `SourceStore`, `MaterializationStore` are `shared_ptr`-owned within the processor (or shared document controller for ARA).
+- **Circular imports:** Front-facing `PluginProcessor.h` is the aggregation point — includes all sub-modules. Sub-modules avoid including `PluginProcessor.h` (use forward declarations).
+- **Double-precision:** Processor supports `supportsDoublePrecisionProcessing()` — uses `doublePrecisionScratch_` buffer to convert double→float internally since inference works in float.
+- **Stored sample rate:** All audio data stored at fixed 44.1kHz (`TimeCoordinate::kRenderSampleRate`), independent of host/device sample rate. `ResamplingManager` handles conversion at boundaries.
 
-- `OpenTuneAudioProcessor::CommittedPlacement` in `Source/PluginProcessor.h` returns both `materializationId` and `placementId`.
-- `StandaloneArrangement::Placement` in `Source/StandaloneArrangement.h` stores its own `placementId` plus referenced `materializationId`, placement timeline start, content start, duration, and `mappingRevision`.
-- `getStateInformation()` in `Source/PluginProcessor.cpp` serializes `Contents` and `StandaloneArrangement` into separate trees.
-- `VST3AraSession::AppliedMaterializationProjection` in `Source/ARA/VST3AraSession.h` stores `materializationId`, applied materialization/projection revisions, source bounds, playback start, and the applied region identity.
-- `OpenTunePlaybackRenderer` reads ARA playback by mapping published region playback time back into source time, then into `materializationId`-backed playback reads.
+## Anti-Patterns
 
-These bullets now describe the updated target naming after the 2026-04-21 clarification; `contentId` has been fully replaced by `materializationId` in the live tree's public API, and `AppliedContentProjection` is now `AppliedMaterializationProjection`.
+### Editor Format Compile-Guard `#if`
+
+**What happens:** Editor implementation files are guarded by `#if JucePlugin_Build_Standalone` / `#if JucePlugin_Build_VST3` to compile different sources per format.
+**Why it's wrong:** Creates source files that exist only partially for some targets. Makes IDE navigation confusing.
+**Do this instead:** The editor factory pattern (`EditorFactory.h` + format-specific `.cpp` files) already isolates the format selection. Keep guards only where CMake `target_sources` can't cleanly separate (e.g., shared headers that include format-specific includes). New editors: use `EditorFactory.cpp` approach with CMake per-target source lists.
+
+### Large Header Aggregation in PluginProcessor.h
+
+**What happens:** `Source/PluginProcessor.h` includes 30+ internal headers, making it a de facto "god header" (885 lines). Every change to any utility triggers full rebuilds of all consumers.
+**Why it's wrong:** Slow incremental build times; tight coupling between core processor and utilities.
+**Do this instead:** Add new includes in `.cpp` when possible. Use forward declarations in headers. Consider extracting stable interfaces (e.g., `INoteGenerator.h`, `IF0Extractor.h`) as standalone headers.
+
+## Error Handling
+
+**Strategy:** `Result<T>` monad pattern via `Source/Utils/Error.h` for fallible operations. Callback-based error reporting for async services (e.g., `onComplete(bool, String&, vector<float>&)`).
+
+**Patterns:**
+- Inference services return `Result<std::vector<float>>` for extraction results
+- `ReferenceAnalysisService::Listener` interface for async analysis completion/failure
+- `ReferenceAlignmentResult::Status` enum for structured alignment outcomes
+- Export errors stored in `lastExportError_` String member
 
 ## Cross-Cutting Concerns
 
-**Logging:**
-- `Source/Utils/AppLogger.h` and `Source/Utils/AppLogger.cpp` are used by processor, ARA, and editor code.
-
-**Threading:**
-- `SourceStore` and `MaterializationStore` use `juce::ReadWriteLock`.
-- `StandaloneArrangement` uses `juce::ReadWriteLock` plus a snapshot spin lock.
-- `VST3AraSession` uses `std::mutex`, a condition variable, and a worker thread for source hydration.
-- Audio-thread reads consume immutable snapshot handles and read-source structs rather than mutable editor state.
-
-**Preferences Boundary:**
-- `AppPreferences` persists app-level settings separately from processor state.
-- Shared UI preferences and editing scheme live under `SharedPreferencesState`; shortcut and mouse-trail settings live under `StandalonePreferencesState`.
-
-**UI Isolation:**
-- VST3 and Standalone editors remain in different directories and are chosen by separate factory `.cpp` files.
-- Shared widgets stay under `Source/Standalone/UI/` instead of duplicating code across both shells.
+**Logging:** `AppLogger` (`Source/Utils/AppLogger.{h,cpp}`) — structured logging with file output. `ChannelLayoutLogger` for audio channel diagnostics.
+**Validation:** `SilentGapDetector` analyzes audio for silent regions during import. `SourceWindow` defines valid audio ranges.
+**Authentication:** Not applicable (offline application, no network auth).
+**Localization:** `LocalizationManager` (`Source/Utils/LocalizationManager.h`) — supports zh-CN, en, ja, ru, es. Language change listener pattern propagated to all UI components.
+**Preferences:** `AppPreferences` (`Source/Utils/AppPreferences.{h,cpp}`) — persisted via JUCE PropertiesFile, covers GPU/CPU toggle, theme, language, snap settings, vocoder model weight.
 
 ---
 
-*Architecture analysis: 2026-05-15*
+*Architecture analysis: 2026-06-02*
