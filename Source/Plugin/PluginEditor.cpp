@@ -991,12 +991,13 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         return;
     }
 
-    // Binding/display only — materialization birth worker handles content processing.
+    // ARA path: recordRequested is the explicit materialization birth boundary.
     uint64_t materializationId = preferredRegionView->appliedProjection.materializationId;
     if (materializationId == 0)
     {
-        // Show blocking overlay instead of modal popup — the timer callback
-        // auto-dismisses it once the materialization is ready.
+        // Explicit birth request — recordRequested is the sole entry point.
+        session->requestBirthForPreferredRegion();
+
         waitingForAraMaterialization_ = true;
         araWaitStartMs_ = juce::Time::getApproximateMillisecondCounter();
         autoRenderOverlay_.setMessageText(

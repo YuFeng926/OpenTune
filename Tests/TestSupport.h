@@ -224,7 +224,7 @@ struct VST3AraSessionTestProbe {
     }
 
     // ========================================================================
-    // ARA birth lifecycle contract probes
+    // ARA materialization birth request contract probes
     // ========================================================================
 
     /** Returns the number of worker-ready birth entries. */
@@ -347,16 +347,22 @@ struct VST3AraSessionTestProbe {
         sourceSlot.sampleAccessEnabled = false;
     }
 
-    /** Enables sample access on a source slot (without creating a real HostAudioReader,
-     *  which would crash on fake ARA pointers used in unit tests). */
+    /** Enables sample access on a source slot and continues any explicit pending birth request.
+     *  Does not create a real HostAudioReader, which would crash on fake ARA pointers used in unit tests. */
     static void setSourceReady(VST3AraSession& session,
-                               juce::ARAAudioSource* audioSource)
+                                juce::ARAAudioSource* audioSource)
     {
         const std::lock_guard<std::mutex> lock(session.stateMutex_);
         auto* sourceSlot = session.findSourceSlot(audioSource);
         if (sourceSlot != nullptr)
         {
             sourceSlot->sampleAccessEnabled = true;
+            for (auto& [persistentId, pending] : session.pendingBirths_)
+            {
+                juce::ignoreUnused(persistentId);
+                if (pending.audioSource == audioSource)
+                    session.queuePendingBirthIfSourceReadyLocked(pending);
+            }
         }
     }
 
@@ -443,6 +449,26 @@ struct PianoRollComponentTestProbe {
     static int getPianoKeyWidth(const PianoRollComponent&)
     {
         return PianoRollComponent::pianoKeyWidth_;
+    }
+
+    static bool shouldShowPianoKeys(const PianoRollComponent& pianoRoll)
+    {
+        return pianoRoll.shouldShowPianoKeys();
+    }
+
+    static void mouseDown(PianoRollComponent& pianoRoll, const juce::MouseEvent& event)
+    {
+        pianoRoll.mouseDown(event);
+    }
+
+    static void mouseDrag(PianoRollComponent& pianoRoll, const juce::MouseEvent& event)
+    {
+        pianoRoll.mouseDrag(event);
+    }
+
+    static void mouseUp(PianoRollComponent& pianoRoll, const juce::MouseEvent& event)
+    {
+        pianoRoll.mouseUp(event);
     }
 
     static juce::Rectangle<int> getNoteBounds(const PianoRollComponent& pianoRoll, const Note& note)
