@@ -1,98 +1,184 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-05-05
+**Analysis Date:** 2026-06-02
+
+## Languages
+
+- **C++17** — Primary language. C++ standard enforced via `CMAKE_CXX_STANDARD 17` with `CMAKE_CXX_EXTENSIONS OFF` in `CMakeLists.txt:30-32`
+- **Python 3** — Secondary (analysis scripts only, in `Python/`)
+- **CMake 3.22+** — Build system
 
 ## Naming Patterns
 
 **Files:**
-- 生产代码继续以 `PascalCase` 文件名为主，头源同名成对出现，例如 `Source/SourceStore.h`, `Source/SourceStore.cpp`, `Source/MaterializationStore.h`, `Source/MaterializationStore.cpp`, `Source/StandaloneArrangement.h`, `Source/StandaloneArrangement.cpp`。
-- 格式边界主要靠目录表达，而不是靠文件名后缀：Standalone UI 在 `Source/Standalone/...`，VST3 UI 在 `Source/Plugin/...`，ARA 适配在 `Source/ARA/...`，共享状态与 helper 在 `Source/Utils/...`。
-- UI 组件和 helper 常用语义后缀：`*Component`, `*Renderer`, `*Worker`, `*Support`, `*LookAndFeel`，例如 `Source/Standalone/UI/PianoRollComponent.h`, `Source/Standalone/UI/PianoRoll/PianoRollRenderer.h`, `Source/Standalone/UI/PianoRoll/PianoRollCorrectionWorker.h`。
+- `PascalCase` for headers and source files: `PluginProcessor.h`, `MaterializationStore.cpp`
+- Interface (pure abstract) files use `I` prefix: `IF0Extractor.h`, `INoteGenerator.h`
+- Test files use either `Tests/{Name}.cpp` or `Tests/Test{Name}.cpp` pattern: `TimeGridTests.cpp`, `TestUndoManagerContract.cpp`
 
-**Types and enums:**
-- 类、结构体、枚举使用 `PascalCase`，例如 `AppPreferencesState` in `Source/Utils/AppPreferences.h:32`, `CommittedPlacement` in `Source/PluginProcessor.h:164`, `UndoExecutionResult` in `Source/Utils/UndoAction.h:68`。
-- 2026-04-21 的 owner-model 澄清后，新的 persisted owner 命名目标应转向 `sourceId` / `materializationId` / `placementId`；当前 live tree 的 `contentId` 更接近“provisional materialization id”，不应再被当成最终共享内容 owner 名称。
-- live tree 里仍有少量局部变量沿用旧 `clipId` 或 `contentId` 命名，说明内部清理仍在进行中，例如 `clipId` in `Source/Plugin/PluginEditor.cpp:1056` 和 `selectedClipId_` in `Source/Standalone/UI/ArrangementViewComponent.h:180`。
+**Classes:**
+- `PascalCase` throughout: `OpenTuneAudioProcessor`, `MaterializationStore`, `StandaloneArrangement`
+- Interface classes use `I` prefix: `IF0Extractor`, `INoteGenerator`, `VocoderInterface`
+- Structs are `PascalCase`: `CorrectedSegment`, `PreparedImport`, `HostTransportSnapshot`
 
-**Functions and variables:**
-- 方法、自由函数、局部变量、成员函数统一用 `camelCase`，例如 `resolveCurrentContentProjection()` in `Source/Plugin/PluginEditor.h:98`, `publishPlaybackSnapshotLocked()` in `Source/StandaloneArrangement.h:121`, `trimFrameRangeToEditableBounds()` in `Source/Utils/AudioEditingScheme.h:106`。
-- 布尔辅助函数沿用 `is*` / `has*` / `can*` / `should*` 前缀，例如 `isValid()` in `Source/StandaloneArrangement.h:31`, `canEditFrame()` in `Source/Utils/AudioEditingScheme.h:97`, `shouldSelectNotesForEditedFrameRange()` in `Source/Utils/AudioEditingScheme.h:128`。
-- 长生命周期成员常用尾部下划线，例子包括 `storageOptions_` in `Source/Utils/AppPreferences.h:65`, `stateMutex_` in `Source/ARA/VST3AraSession.h:287`, `nextPlacementId_` in `Source/StandaloneArrangement.h:127`。
-- 常量命名混用 `k*` 与全大写 static constexpr：`kTrackCount` in `Source/StandaloneArrangement.h:16`, `kHeartbeatHz` in `Source/Plugin/PluginEditor.h:143`, `MAX_TRACKS` in `Source/PluginProcessor.h:100`。
+**Functions:**
+- `camelCase` member functions: `prepareToPlay()`, `getSampleRate()`, `commitPreparedImportAsPlacement()`
+- `camelCase` free functions in anonymous namespace or `OpenTune` namespace
+- JUCE override functions follow JUCE naming: `createEditor()`, `processBlock()`, `handleAsyncUpdate()`
+- Factory functions use `make` prefix: `makePreparedImport()`, `makeTestClipRequest()`, `makeHandle()`
+
+**Variables:**
+- `camelCase` for local and member variables: `currentSampleRate_`, `trackHeight_`, `showWaveform_`
+- Member variables have trailing underscore: `undoManager_`, `pianoKeyAudition_`, `materializationStore_`
+- Static constants use `k` prefix: `kSampleRate`, `kPi`, `kMaxPeriodSamples`
+- `constexpr` globals use `k` prefix: `kRenderSampleRate`, `kTrackPanelCardInsetX`, `kCurrentProjectFormatVersion`
+
+**Namespaces:**
+- All production code in `OpenTune` namespace declared via `namespace OpenTune { ... }`
+- Sub-namespaces for subsystems: `Capture`, `ARA::PlugIn`
+- JUCE library types accessed via `juce::` prefix (not using `using namespace juce` in headers)
+
+**Enums:**
+- `enum class` for scoped enums: `enum class HandleKind : uint8_t`, `enum class LogLevel`
+- Values are `PascalCase`: `HandleKind::ClipStart`, `ErrorCode::ModelNotFound`, `AutoRefAvailability::Status::NoReference`
 
 ## Code Style
 
 **Formatting:**
-- 仓库根目录未检测到 `.editorconfig`, `.clang-format`, ESLint, Prettier 或 Biome 配置；当前风格主要靠现有源码维持一致。
-- 头文件统一使用 `#pragma once`，例如 `Source/Utils/AppPreferences.h:1`, `Source/SourceStore.h:1`, `Tests/TestSupport.h:1`。
-- 当前 C++ 代码普遍使用四空格缩进、Allman 风格大括号和较宽松的空行分段，例子见 `Source/Utils/AudioEditingScheme.h:8`, `Source/Utils/UndoAction.h:19`, `Source/ARA/VST3AraSession.h:23`。
+- No `.clang-format` or `.editorconfig` detected — style enforced via manual review and `.clangd` diagnostics
+- 4-space indentation observed throughout
+- Opening brace on same line for classes/functions: `class Foo {`
+- `#pragma once` for all header guards (no `#ifndef` guards)
 
-**Includes:**
-- 常见顺序是：JUCE / 标准库 / 项目头；例如 `Source/PluginProcessor.h:19`, `Source/PluginProcessor.h:20`, `Source/PluginProcessor.h:30`。
-- 不使用路径别名或 barrel header；包含语句直接写相对 source-root 路径，例如 `#include "Utils/AppPreferences.h"` in `Source/Plugin/PluginEditor.h:15` 和 `#include "PluginProcessor.h"` in `Source/Standalone/PluginEditor.h:19`。
+**Clangd Configuration** (`.clangd`):
+- `UnusedIncludes: Strict` — includes must be justified
+- `modernize-use-trailing-return-type` and `readability-identifier-length` diagnostics suppressed
+- Inlay hints enabled for parameter names and deduced types
 
-## Architectural Idioms
+**MSVC Compiler Flags:**
+- `/utf-8` — source encoding is UTF-8
+- `/MP` — multi-processor compilation
+- `/wd4100` `/wd4127` — suppressed unreferenced parameter / conditional constant warnings
+- `/arch:AVX2` selectively on SIMD hot files: `SimdAccelerator.cpp`, `MelSpectrogram.cpp`
 
-**显式状态载体，而不是隐藏 manager：**
-- 当前 repo 用小型 state struct 和显式输入规则承载 UI / 编辑策略，例如 `SharedPreferencesState` in `Source/Utils/AppPreferences.h:18`, `ParameterPanelSyncContext` in `Source/Utils/ParameterPanelSync.h:7`, `AutoTuneTargetContext` in `Source/Utils/AudioEditingScheme.h:57`。
-- `AudioEditingScheme` 和 `ParameterPanelSync` 继续以纯 helper 决策为主，不依赖隐藏 scheme manager，相关入口在 `Source/Utils/AudioEditingScheme.h:72` 和 `Source/Utils/ParameterPanelSync.h:36`。
+**Language Idioms:**
+- Heavy use of `constexpr` for compile-time constants: `constexpr double kSampleRate = 44100.0`
+- Widespread `noexcept` on getters and helper functions: `double getSampleRate() const noexcept { ... }`
+- `override` keyword on all virtual function overrides
+- `default` keyword for default constructors/destructors: `virtual ~UndoAction() = default;`
+- Move semantics: `std::move()` used for transferring ownership
+- `= delete` used to suppress copy: `JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR`
+- `auto` for iterator types and complex template expressions
+- Forward declarations to minimize header coupling: `namespace Capture { class CaptureSession; }`
 
-**双格式边界靠目录和条件编译隔离：**
-- VST3 editor 明确包在 `#if JucePlugin_Build_VST3` 下，见 `Source/Plugin/PluginEditor.h:3`；Standalone editor 独立存在于 `Source/Standalone/PluginEditor.h:40`。
-- 共享 runtime 继续围绕 `SourceStore`, `MaterializationStore`, `StandaloneArrangement`, `VST3AraSession` 展开，入口可见 `Source/PluginProcessor.h:30`, `Source/PluginProcessor.h:31`, `Source/PluginProcessor.h:60`。
+## Import Organization
 
-**决策 helper 小而纯，UI 协调函数可大：**
-- 规则 helper 常直接写成 header inline 函数，例如 `resolveParameterTarget()` in `Source/Utils/AudioEditingScheme.h:138` 和 `resolveParameterPanelSyncDecision()` in `Source/Utils/ParameterPanelSync.h:36`。
-- UI 壳层函数允许承担较大的 orchestration 逻辑，例如导入流程与异步弹窗在 `Source/Standalone/PluginEditor.cpp:1334` 和 ARA 同步流程在 `Source/Plugin/PluginEditor.cpp:1014`。
+**Order** (observed in `PluginProcessor.h` and consistent across codebase):
+1. Standard library includes (`<memory>`, `<atomic>`, `<vector>`, etc.)
+2. Third-party/JUCE includes (`<juce_audio_processors/juce_audio_processors.h>`)
+3. Project includes (`"SourceStore.h"`, `"Utils/PitchCurve.h"`)
+4. Forward declarations at the end of the include block
+
+**Path Style:**
+- Project includes use relative paths from `Source/`: `"Utils/AppLogger.h"`, `"DSP/ResamplingManager.h"`
+- No path aliases — includes reference the directory structure directly
 
 ## Error Handling
 
-**Patterns present now:**
-- 领域失败继续使用 `OpenTune::Result<T>` / `OpenTune::Error`，定义在 `Source/Utils/Error.h:79` 和 `Source/Utils/Error.h:102`；测试 fake 也沿用同一抽象，见 `Tests/TestSupport.cpp:17`。
-- 许多 API 仍以 `bool` 返回成功与否，并配合 early return，而不是再套一层兼容结构，例如 `commitPreparedImportAsPlacement()` usage in `Source/Standalone/PluginEditor.cpp:1564` and `replaceMaterializationAudioById()` guard in `Source/Plugin/PluginEditor.cpp:1149`。
-- debug 期用 `jassert` / `jassertfalse` 抓程序员错误，例如 `jassertfalse` in `Source/Standalone/PluginEditor.cpp:448`, `jassert` in `Source/ARA/OpenTunePlaybackRenderer.cpp:207`, `jassertfalse` (e.g. in the piano-roll editing layer)。
-- 用户可恢复分支通常直接提示并返回，不走兜底链路，例如 `AlertWindow::showMessageBoxAsync(...)` + `return` in `Source/Plugin/PluginEditor.cpp:939` and `Source/Plugin/PluginEditor.cpp:963`。
+**Primary Pattern — Result<T>** (`Source/Utils/Error.h`):
+- Custom `Result<T>` class wrapping `std::variant<T, Error>` (a Rust-like Result type)
+- Error codes defined as `enum class ErrorCode` with ranges: 100s (model), 200s (init), 300s (audio), 400s (F0), 500s (mel), 600s (params)
+- `Result::success(value)` / `Result::failure(code, context)` factory methods
+- `valueOr(defaultValue)` for safe extraction with fallback
+
+**Secondary Pattern — `std::optional`:**
+- Used for operations that may not produce a result: `std::optional<SplitOutcome>`, `std::optional<MergeOutcome>`
+- Call sites check `.isValid()` or use `if (result.has_value())`
+
+**Tertiary Pattern — Inline Status Enums:**
+- Embedded status enums within struct types: `ReferenceAlignmentResult::Status`, `AutoRefAvailability::Status`
+- Caller checks `succeeded()` or `canRunAutoRef()` methods
+
+**Assertions:**
+- `jassertfalse` for unreachable paths
+- `jassert` in JUCE-compatible debug builds
+
+**Exception Safety:**
+- Minimal use of exceptions — the `Error`/`Result` pattern is preferred
+- `Result<void>::value()` throws on error access, but callers expected to check `ok()` first
 
 ## Logging
 
-**Framework:** `AppLogger`
+**Framework:** Custom `AppLogger` (`Source/Utils/AppLogger.h` / `.cpp`)
 
-- 仓库内仍有统一日志入口 `AppLogger`，接口在 `Source/Utils/AppLogger.h:21`。
-- 实际日志字符串习惯带语义前缀，便于手工验证时按 trace family 检索，例如 `RecordTrace` in `Source/Plugin/PluginEditor.cpp:999`, `MappingTrace` in `Source/Plugin/PluginEditor.cpp:1106`, `AutoTuneTrace` in `Source/Plugin/PluginEditor.cpp:1258`, `RenderTrace` in `Source/Standalone/PluginEditor.cpp:2597`。
-- 调试消息和结构检查失败也会直接记日志，例如 `AppLogger::log("Debug self-tests failed")` in `Source/Standalone/PluginEditor.cpp:447`。
-
-## Threading And Lifetime
-
-**Shared-state locking:**
-- ARA session 用 `std::mutex` + 短临界区保护可变状态，字段在 `Source/ARA/VST3AraSession.h:287`，调用点密集分布在 `Source/ARA/VST3AraSession.cpp:135`, `Source/ARA/VST3AraSession.cpp:236`, `Source/ARA/VST3AraSession.cpp:707`。
-- Standalone arrangement 用 `juce::ReadWriteLock` 保护轨道 / placement 状态，并用 `juce::SpinLock` 保护已发布 playback snapshot，见 `Source/StandaloneArrangement.h:123` and `Source/StandaloneArrangement.h:129`。
-
-**Atomic-first read paths:**
-- 音频与播放协调大量使用 `std::atomic`，例如 `currentSampleRate_`, `isPlaying_`, `hostBpm_` in `Source/PluginProcessor.h:216`, `Source/PluginProcessor.h:346`, `Source/PluginProcessor.h:364`。
-- UI 组件也直接持有原子读侧状态，例如 `isPlaying_` in `Source/Standalone/UI/ArrangementViewComponent.h:159` and `Source/Standalone/UI/PianoRollComponent.h:377`。
-- ARA published snapshot 通过原子 load/store 读写，见 `Source/ARA/VST3AraSession.cpp:231` and `Source/ARA/VST3AraSession.cpp:613`。
-
-**Async UI lifetime:**
-- 异步 UI 回调显式捕获 `juce::Component::SafePointer`，而不是裸 `this`，例如 `Source/Standalone/PluginEditor.cpp:568`, `Source/Standalone/PluginEditor.cpp:1429`, `Source/Standalone/PluginEditor.cpp:1491`, `Source/Standalone/UI/PianoRollComponent.cpp:2394`。
-
-**Worker ownership:**
-- 仓库中仍有显式后台线程/worker 成员，如 `hydrationWorkerThread_` in `Source/ARA/VST3AraSession.h:299`, `exportWorker_` in `Source/Standalone/PluginEditor.h:239`, `backgroundTasks_` in `Source/Standalone/PluginEditor.h:243`。
+**Patterns:**
+- Singleton with static methods: `AppLogger::info("message")`, `AppLogger::error("message")`
+- Four log levels: `Debug`, `Info`, `Warning`, `Error`
+- Log output to file in user app data directory
+- Structured log format: `[LEVEL] message`
+- Thread-safe via internal mutex (implied by singleton pattern)
 
 ## Comments
 
-**Observed style:**
-- 注释以中文为主，常用块注释说明类职责或线程/架构边界，例如 `Source/PluginProcessor.h:3`, `Source/Standalone/PluginEditor.h:3`, `Source/Standalone/UI/ArrangementViewComponent.h:3`。
-- 内联注释主要解释特定 UI 分支或状态字段语义，而不是逐行翻译代码，例如 `Source/Standalone/PluginEditor.cpp:1333`, `Source/Standalone/UI/ArrangementViewComponent.h:159`, `Source/PluginProcessor.h:137`。
-- 共享 helper 头通常少注释、更多依靠命名自解释；`Source/Utils/AudioEditingScheme.h` 和 `Source/Utils/ParameterPanelSync.h` 是当前典型。
+**Documentation Style:**
+- Top-level file comments in Chinese describing module purpose and responsibilities
+- Doxygen-style `@brief`, `@param`, `@return` on interfaces (`IF0Extractor.h`, `INoteGenerator.h`)
+- Block comments `/** ... */` for class/file-level documentation
+- Line comments `//` for inline explanations
 
-## Practical Rules For New Work
+**Thread Safety Documentation:**
+- Explicitly documented in class headers: "线程安全说明" blocks describing which thread owns which data
+- Atomic variables annotated with load/store memory orders: `.load(std::memory_order_relaxed)`
 
-- 新的 shared policy / state helper 放在 `Source/Utils/...`，优先延续显式输入 + 小型返回结构的写法，参考 `Source/Utils/AudioEditingScheme.h:41` 和 `Source/Utils/ParameterPanelSync.h:23`。
-- 涉及 persisted truth 的新公共接口优先使用 `sourceId` / `materializationId` / `placementId`；在源码彻底迁完之前，若暂时仍出现 `contentId`，也应把它视为待替换的 materialization-facing 过渡命名，而不是继续扩大 mixed `clipId` 语义。
-- 新的异步 UI 行为继续使用 `SafePointer`，不要捕获裸 editor/component 指针，参考 `Source/Standalone/PluginEditor.cpp:1349`。
-- 新的跨线程读路径优先走 snapshot / atomic 已发布状态，不要让音频线程直接碰可变 owner，参考 `Source/ARA/VST3AraSession.cpp:231` 和 `Source/StandaloneArrangement.h:71`。
-- 新的格式专属 UI 继续放在 `Source/Standalone/...` 或 `Source/Plugin/...`，不要在共享 UI 层引入运行时兜底分支。
+**Spec References:**
+- Test files reference the spec they implement: `"Covers spec: openspec/changes/vocal-time-stretch/specs/time-grid/spec.md"`
+
+**When to Comment:**
+- Class-level headers always have a descriptive comment block
+- Complex algorithms and state machines are documented
+- Design decisions and rationale ("为什么这样做") are inline-commented
+- Public API functions are documented with parameter descriptions
+
+## Function Design
+
+**Size:** Functions are generally concise — helper functions extracted for reuse. Complex classes (e.g., `OpenTuneAudioProcessor` at 885 lines in header) use private helpers.
+
+**Parameters:**
+- `const&` for non-primitive input parameters: `const juce::String& displayName`
+- Pointer for output/optional parameters: `PreparedImport& out`
+- `std::move` to transfer ownership: `std::unique_ptr<UndoAction>` parameters
+
+**Return Values:**
+- `bool` for success/failure: `bool prepareToPlay(...)`, `bool commitPreparedImportAsPlacement(...)`
+- `std::optional<T>` for nullable results
+- `Result<T>` in `Source/Utils/Error.h` (not widely adopted yet — mostly in Inference layer)
+- `const&` as return for member access: `const std::vector<TimeHandle>& handles() const noexcept { return handles_; }`
+
+## Module Design
+
+**Exports:** Each `.h` file declares its public interface. No barrel/index files.
+
+**Directory Organization:**
+- `Source/ARA/` — ARA (Audio Random Access) SDK integration for VST3
+- `Source/Audio/` — Audio format support
+- `Source/DSP/` — Signal processing (F0, pitch shift, mel spectrogram, chroma)
+- `Source/Editor/` — Shared editor components (preferences, dialogs)
+- `Source/Inference/` — AI/ONNX inference engine (vocoder, F0 extraction, note generation)
+- `Source/Plugin/` — Plugin-specific editor and capture pipeline
+- `Source/Services/` — Async services (F0 extraction, reference analysis)
+- `Source/Standalone/` — Standalone app UI (editor, piano roll, arrangement view)
+- `Source/Utils/` — Utilities (logging, preferences, undo, serialization, data structures)
+
+**Class Design:**
+- Single Responsibility: `SourceStore` owns sources, `MaterializationStore` owns materializations, `StandaloneArrangement` owns placements
+- Dependency injection via constructor or setter: `setAppPreferences(AppPreferences* prefs)`
+- COW (Copy-on-Write) snapshot pattern for thread-safe data: `TimeGridSnapshot` shared via `std::shared_ptr<const T>` and `atomic_store/load`
+- Listener/Observer pattern: `ReferenceAnalysisService::Listener` interface
+
+**Thread Safety:**
+- `std::atomic` for shared state between threads: `currentSampleRate_`, `isPlaying_`, `f0Ready_`
+- `std::mutex`/`std::SpinLock` for critical sections: `schedulerMutex_`, `stage2Mutex_`
+- Immutable snapshots (`shared_ptr<const T>`) for lock-free reads from audio thread
 
 ---
 
-*Convention analysis: 2026-05-05*
+*Convention analysis: 2026-06-02*

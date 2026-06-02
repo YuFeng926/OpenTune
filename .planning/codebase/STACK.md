@@ -1,95 +1,119 @@
 # Technology Stack
 
-**Analysis Date:** 2026-05-05
+**Analysis Date:** 2026-06-02
 
 ## Languages
 
 **Primary:**
-- C++17 - Application, plugin, ARA session, inference pipeline, UI, and tests live under `Source/**/*.cpp`, `Source/**/*.h`, and `Tests/TestMain.cpp`; enforced in `CMakeLists.txt:11`, `CMakeLists.txt:21`, `CMakeLists.txt:357`, `CMakeLists.txt:863`.
+- C++17 - Entire application core: DSP, inference, UI, plugin processor, ARA integration
+- C - ONNX Runtime C API bindings
 
 **Secondary:**
-- C - Vendored FFT/resampling code is compiled from `ThirdParty/r8brain-free-src-master/fft/pffft_double.c` and linked into the main target through `CMakeLists.txt:11`, `ThirdParty/r8brain-free-src-master/fft/pffft_double.c`. Note: `ThirdParty/r8brain-free-src-master/` auxiliary files (README, bench/, DLL/, example, other/) have been removed from the working tree; the core C source and headers remain in the build system.
-- CMake - Entire build, target split, runtime packaging, install step, and test registration live in `CMakeLists.txt:6`, `CMakeLists.txt:303`, `CMakeLists.txt:709`, `CMakeLists.txt:805`, `CMakeLists.txt:961`, `CMakeLists.txt:970`.
-- PowerShell - Local MSVC bootstrap helper exists at `.planning/scripts/invoke-msvc-cmake.ps1`.
+- Python 3 - Auxiliary tooling: pitch comparison benchmark (`Python/pitch_compare.py`) and installer wizard image generator (`Installer/gen_wizard_images.py`)
+- Bash - macOS code signing & DMG packaging (`scripts/sign-and-package.sh`), macOS installer script (`scripts/install.command`)
+- Pascal (Inno Setup) - Windows installer script (`Installer/OpenTune_Installer.iss`)
 
 ## Runtime
 
 **Environment:**
-- Native desktop audio runtime built on JUCE for Windows and macOS only; unsupported platforms fail at configure time in `CMakeLists.txt:49`, `CMakeLists.txt:227`.
-- Product formats are `Standalone` and `VST3` from one JUCE plugin definition in `CMakeLists.txt:303`, `CMakeLists.txt:324`.
-- VST3 ARA support is compiled through JUCE ARA integration plus `Source/ARA/*.cpp`; ARA enablement depends on a resolvable SDK path in `CMakeLists.txt:57`, `CMakeLists.txt:326`, `CMakeLists.txt:539`.
+- Native desktop application (Standalone `.exe` / `.app`)
+- VST3 audio plugin (`.vst3` bundle)
+- Windows 10 1903+ (x64) / macOS 14.0+ Sonoma (arm64 Apple Silicon)
 
-**Package Manager / Project Manifests:**
-- No app-level package manager manifest is present at the repo root: no root `package.json`, `pyproject.toml`, `requirements.txt`, `Cargo.toml`, or `go.mod` was found.
-- `.jucer` files exist only inside vendored JUCE extras, not for the OpenTune app itself, so Projucer is not the active build source.
+**Package Manager:**
+- No C++ package manager — all third-party dependencies are vendored via `ThirdParty/` directory
+- pip (Python): `Python/requirements.txt`
 
 ## Frameworks
 
 **Core:**
-- JUCE (vendored) - Base framework for app/plugin lifecycle, GUI, audio I/O, DSP, and plugin client integration via `JUCE-master/` and `CMakeLists.txt:49`, `CMakeLists.txt:573`.
-- ARA SDK 2.2.0 - Bundled ARA sources under `ThirdParty/ARA_SDK-releases-2.2.0/`; wired into JUCE and tests via `CMakeLists.txt:37`, `CMakeLists.txt:58`, `CMakeLists.txt:895`.
-- ONNX Runtime 1.24.4 - Local inference runtime for RMVPE and vocoder models; configured in `CMakeLists.txt:206`, `CMakeLists.txt:240`, `CMakeLists.txt:296` and consumed by `Source/Inference/ModelFactory.cpp:45`.
-
-**Application Structure:**
-- Shared processor runtime shell composes `SourceStore`, `MaterializationStore`, `StandaloneArrangement`, and `VST3AraSession` in `Source/PluginProcessor.h:6`, `Source/PluginProcessor.h:30`, `Source/PluginProcessor.h:31`, `Source/ARA/VST3AraSession.h:21`.
-- Standalone-only editor shell lives in `Source/Standalone/PluginEditor.cpp` and `Source/Standalone/PluginEditor.h`; VST3-only editor shell lives in `Source/Plugin/PluginEditor.cpp` and `Source/Plugin/PluginEditor.h`; target split is enforced by `CMakeLists.txt:504`, `CMakeLists.txt:518`.
-- Shared app preferences are centralized in `Source/Utils/AppPreferences.h:18` and `Source/Utils/AppPreferences.cpp:205`; shared UI pages live in `Source/Editor/Preferences/SharedPreferencePages.cpp:38`, and standalone-only pages in `Source/Editor/Preferences/StandalonePreferencePages.cpp:55`.
-- Editing behavior is driven by the explicit rule layer in `Source/Utils/AudioEditingScheme.h:8` rather than a runtime manager.
+- JUCE (vendored `JUCE-master/`) — Cross-platform audio application framework
+  - Modules linked: `juce_audio_utils`, `juce_audio_processors`, `juce_dsp`, `juce_opengl`, `juce_graphics`, `juce_gui_basics`, `juce_gui_extra`
+  - Plugin formats: Standalone, VST3 (with optional ARA2 extension)
+  - Audio format support: FLAC (`JUCE_USE_FLAC=1`), OGG/Vorbis (`JUCE_USE_OGGVORBIS=1`), MP3 (`JUCE_USE_MP3AUDIOFORMAT=1`)
+  - Windows: ASIO enabled (`JUCE_ASIO=1`), Windows Media Format (`JUCE_USE_WINDOWS_MEDIA_FORMAT=1`)
 
 **Testing:**
-- `OpenTuneTests` is a native CMake test executable defined in `CMakeLists.txt:863`.
-- Test suites are grouped into `core`, `processor`, `ui`, `architecture`, `undo`, and `memory` in `Tests/TestMain.cpp:30`.
-- CTest registration is present through `enable_testing()` and `add_test(NAME OpenTuneCoreTests COMMAND OpenTuneTests)` in `CMakeLists.txt:961`, `CMakeLists.txt:963`.
+- CTest (CMake's built-in test driver)
+  - Test executable: `OpenTuneTests`
+  - Test files in `Tests/` directory
+  - No external test framework (tests use JUCE's test infrastructure or custom assertions)
+
+**Build/Dev:**
+- CMake 3.22+ — Build system generator; config in `CMakeLists.txt` and `CMakePresets.json`
+- Visual Studio 2022 (MSVC 17+) — Windows compiler, MSBuild generator (Ninja unsupported for production builds)
+- Xcode 14+ / Apple Clang — macOS compiler
+- Ninja — Used only for LSP/clangd `compile_commands.json` generation (not production builds)
+- clangd — LSP configuration in `.clangd`
+- Inno Setup 6 — Windows installer compiler (`Installer/OpenTune_Installer.iss`)
+- Git LFS — For `.onnx` model files (`.gitattributes`)
 
 ## Key Dependencies
 
-**Critical:**
-- `JUCE-master/` - Supplies audio processor, standalone shell, GUI, and VST3 client code used by `CMakeLists.txt:49`, `CMakeLists.txt:575`.
-- `ThirdParty/ARA_SDK-releases-2.2.0/` - Supplies bundled ARA headers and helper sources referenced by `CMakeLists.txt:38`, `CMakeLists.txt:898`.
-- `ThirdParty/onnxruntime-win-x64-1.24.4/` - CPU ONNX Runtime headers/libs present in the live tree and referenced by `CMakeLists.txt:207`, `CMakeLists.txt:230`. Auxiliary files (LICENSE, README, ThirdPartyNotices, etc.) have been removed from the working tree; the core lib/include remain in the build system.
-- `ThirdParty/onnxruntime-dml-1.24.4/` - Windows DML ONNX Runtime package present in the live tree and referenced by `CMakeLists.txt:240`, `CMakeLists.txt:247`, `CMakeLists.txt:266`.
-- `ThirdParty/r8brain-free-src-master/` - Vendored DSP support library present in the live tree and included by `CMakeLists.txt:555`.
+**Critical (vendored in `ThirdParty/`):**
+- ONNX Runtime v1.24.4 — AI model inference engine
+  - Windows: two packages — CPU (`onnxruntime-win-x64-1.24.4/`) for headers/libs + DirectML (`onnxruntime-dml-1.24.4/`) for runtime DLL
+  - macOS: single package (`onnxruntime-osx-arm64-1.24.4/`) with built-in CoreML EP
+- Microsoft.AI.DirectML v1.15.4 — GPU-accelerated ML on Windows (DirectX 12 compute)
+- Microsoft.Direct3D.D3D12 v1.619.1 (Agility SDK) — Latest D3D12 runtime for DirectML compatibility
+- ARA SDK v2.2.0 — ARA2 extension for VST3 plugin (`ThirdParty/ARA_SDK-releases-2.2.0/`)
+  - Optional: controlled by `OPENTUNE_ENABLE_ARA` CMake option
+- SoundTouch v2.3.3 — WSOLA time-stretching for vocal Stage 2 processing
+  - License: LGPL-2.1 (see `LICENSES/soundtouch.LGPL-2.1.txt`)
+- r8brain-free-src (master) — High-quality sample rate conversion (`ThirdParty/r8brain-free-src-master/`)
 
-**Platform-Specific:**
-- `ThirdParty/microsoft.direct3d.d3d12.1.619.1/` is vendored and used for D3D12 Agility packaging on Windows in `CMakeLists.txt:137`, `CMakeLists.txt:170`, `CMakeLists.txt:741`, `CMakeLists.txt:831`.
-- `ThirdParty/microsoft.ai.directml.1.15.4/` is now vendored (DirectML 1.15.4 vendored package deployed per 2026-05-02 fix); the CMake fallback to Windows SDK headers plus `C:/Windows/System32/DirectML.dll` remains available if overrides are supplied, per `CMakeLists.txt:127`, `CMakeLists.txt:151`, `CMakeLists.txt:158`.
-- `ThirdParty/onnxruntime-osx-arm64-1.24.4/` auxiliary files (LICENSE, README, ThirdPartyNotices, etc.) have been removed from the working tree; the core lib/include remain in the build system, but the macOS configuration still expects that default path unless `ONNXRUNTIME_ROOT` is overridden in `CMakeLists.txt:215`, `CMakeLists.txt:217`.
+**Infrastructure:**
+- Windows Kits 10 — System headers/libs for D3D12, DXGI, DirectML (`d3d12.lib`, `dxgi.lib`)
+- macOS Accelerate framework — Apple's vector math library for macOS builds
+
+**AI Models (bundled at build time, not in git):**
+- RMVPE ONNX model — F0/pitch extraction (`models/rmvpe.onnx`)
+- PC-NSF HiFiGAN ONNX model — Neural vocoder (`pc_nsf_hifigan_44.1k_ONNX/*.onnx`)
+  - Community version: `pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx`
+  - Coulin9 fine-tuned: `pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx`
+- GAME model bundle — AI note generator (`models/GAME/`)
+  - Optional: falls back to legacy note generator if missing
+
+**Python Tooling Dependencies:**
+- torch>=1.13.0
+- onnxruntime>=1.14.0
+- librosa>=0.9.0
+- soundfile>=0.12.0
+- parselmouth>=0.4.0
+- numpy>=1.21.0
+- scipy>=1.7.0
+- Pillow (for installer image generation)
 
 ## Configuration
 
-**Build Configuration:**
-- Root build entry is `CMakeLists.txt`.
-- Important cache variables are `ARA_SDK_PATH`, `ONNXRUNTIME_ROOT`, `ONNXRUNTIME_DML_ROOT`, `OPENTUNE_DIRECTML_ROOT`, `OPENTUNE_D3D12_AGILITY_ROOT`, and `OPENTUNE_DIRECTML_DLL` in `CMakeLists.txt:39`, `CMakeLists.txt:208`, `CMakeLists.txt:241`, `CMakeLists.txt:129`, `CMakeLists.txt:138`, `CMakeLists.txt:162`.
-- Windows builds require Windows Kits include/lib roots through `OPENTUNE_WINDOWS_KITS_INCLUDE_ROOT` and `OPENTUNE_WINDOWS_KITS_LIB_ROOT` in `CMakeLists.txt:82`, `CMakeLists.txt:84`.
+**Build:**
+- `CMakePresets.json` — Three presets: `windows-ara-vs2022` (VS2022, ARA on), `windows-nonara-vs2022` (VS2022, ARA off), `windows-ara-lsp` (Ninja, clangd only)
+- `CMakeLists.txt` — All build logic, dependency discovery, platform branching (Windows/macOS)
 
-**Runtime / Diagnostics Knobs:**
-- `OPENTUNE_ORT_PROFILE` enables ONNX profiling in debug builds via `Source/Inference/ModelFactory.cpp:15`, `Source/Inference/ModelFactory.cpp:189`.
-- `OPENTUNE_SELFTEST` is read by the Standalone editor to trigger self-tests in `Source/Standalone/PluginEditor.cpp:450`.
+**IDE:**
+- `.clangd` — clangd/LSP configuration: strict unused includes, disabled trailing-return-type + identifier-length warnings, inlay hints enabled
 
-**Persistent App Configuration:**
-- App preferences are stored as XML `juce::PropertiesFile` data in `app-preferences.settings` under user app-data, with an inter-process lock, via `Source/Utils/AppPreferences.h:39`, `Source/Utils/AppPreferences.cpp:52`, `Source/Utils/AppPreferences.cpp:365`.
-- Shared persisted preference fields include language, theme, editing scheme, piano-roll visual options, and zoom sensitivity in `Source/Utils/AppPreferences.cpp:9`, `Source/Utils/AppPreferences.cpp:205`, `Source/Utils/AppPreferences.cpp:234`.
-- Standalone-only persisted preference fields include shortcut bindings and mouse-trail theme in `Source/Utils/AppPreferences.cpp:18`, `Source/Utils/AppPreferences.cpp:228`, `Source/Editor/Preferences/StandalonePreferencePages.cpp:93`, `Source/Editor/Preferences/StandalonePreferencePages.cpp:148`.
-
-## Resources
-
-**Bundled Assets:**
-- Binary data currently embeds `Resources/Fonts/HONORSansCN-Medium.ttf` through `CMakeLists.txt:349`, `CMakeLists.txt:351`.
-- App icon file is `Resources/AppIcon.png`, referenced by `CMakeLists.txt:339`, `CMakeLists.txt:340`.
-- Help document source is `docs/UserGuide.html`; it is packaged for Standalone on macOS and copied to `docs/` beside the Standalone executable on Windows via `CMakeLists.txt:693`, `CMakeLists.txt:697`, `CMakeLists.txt:788`.
-- AI model source files in the repo are `models/rmvpe.onnx` and `pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44k_hop512_128bin_opentune_fmax22050_v4_user_zh_female_step20000.onnx`, then copied into output `models/` as `rmvpe.onnx` and `hifigan.onnx` in `CMakeLists.txt:704`, `CMakeLists.txt:705`, `CMakeLists.txt:753`, `CMakeLists.txt:844`.
+**Installer:**
+- `Installer/OpenTune_Installer.iss` — Inno Setup 6 script for Windows installer
+  - Multi-language: en, zh, ja, ru, es
+  - Component-based: Standalone + VST3
+  - Admin privileges required
+  - LZMA2/ultra64 compression
 
 ## Platform Requirements
 
 **Development:**
-- Windows development expects MSVC static runtime, Windows Kits headers/libs, ONNX Runtime packages, and the vendored D3D12 Agility SDK in `CMakeLists.txt:28`, `CMakeLists.txt:82`, `CMakeLists.txt:184`, `CMakeLists.txt:196`, `CMakeLists.txt:203`.
-- macOS configuration expects arm64 ONNX Runtime plus Accelerate linkage, and injects Standalone-only bundle metadata in `CMakeLists.txt:216`, `CMakeLists.txt:596`, `CMakeLists.txt:656`.
+- **Windows:** Visual Studio 2022 (MSVC 17+), CMake 3.22+, Windows 10 1903+, Windows Kits 10
+- **macOS:** Xcode 14+, CMake 3.22+, macOS 14.0+ (Sonoma), Apple Silicon (arm64)
 
-**Runtime Packaging:**
-- Windows Standalone output copies `onnxruntime.dll`, optional shared providers, `DirectML.dll`, `D3D12` runtime files, models, and `docs/UserGuide.html` through `CMakeLists.txt:709`, `CMakeLists.txt:734`, `CMakeLists.txt:741`, `CMakeLists.txt:753`, `CMakeLists.txt:788`.
-- Windows VST3 output copies `onnxruntime.dll`, optional shared providers, `DirectML.dll`, `D3D12` runtime files, and models, but not the Standalone help file, through `CMakeLists.txt:805`, `CMakeLists.txt:823`, `CMakeLists.txt:831`, `CMakeLists.txt:844`.
-- macOS Standalone bundles `libonnxruntime.1.24.4.dylib`, models, and `docs/UserGuide.html` inside the app bundle in `CMakeLists.txt:686`, `CMakeLists.txt:690`, `CMakeLists.txt:693`, `CMakeLists.txt:766`, `CMakeLists.txt:775`.
+**Production (Runtime):**
+- **Windows:** Windows 10 1903+ x64
+  - Filesystem: `models/`, `D3D12/`, `docs/`, DLLs alongside executable
+  - VST3 path: `C:\Program Files\Common Files\VST3\OpenTune.vst3\`
+- **macOS:** macOS 14.0+ (Sonoma) arm64 (Apple Silicon)
+  - App bundle: `/Applications/OpenTune.app`
+  - VST3 path: `/Library/Audio/Plug-Ins/VST3/OpenTune.vst3`
 
 ---
 
-*Stack analysis: 2026-05-05*
+*Stack analysis: 2026-06-02*

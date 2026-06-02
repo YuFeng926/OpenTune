@@ -1,264 +1,291 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-05-15
+**Analysis Date:** 2026-06-02
 
 ## Directory Layout
 
-```text
-[project-root]/
-|-- .planning/                  # project context, state, and codebase memory docs
-|-- docs/                       # plan docs and bundled user guide source
-|-- JUCE-master/                # vendored JUCE source
-|-- models/                     # RMVPE model assets
-|-- pc_nsf_hifigan_44.1k_ONNX/  # HiFi-GAN ONNX model asset source
-|-- Resources/                  # embedded resources such as fonts and app icon
-|-- Source/                     # production C++ source tree
-|-- Tests/                      # native smoke and architecture tests
-|-- ThirdParty/                 # vendored ARA, ONNX, DirectML, and other dependencies
-|-- build-ara-overlay-vs18-clean/     # generated ARA VS/MSBuild build tree
-|-- build-nonara-overlay-vs18-clean/  # generated non-ARA VS/MSBuild build tree
-`-- CMakeLists.txt              # shared build definition for app, plugin, and tests
+```
+OpenTune/
+├── CMakeLists.txt              # Root build config (1378 lines): targets, dependencies, platform logic
+├── CMakePresets.json           # Pre-defined CMake configure/build presets (VS2022, Xcode)
+├── AGENTS.md                   # Agent workflow instructions (Chinese)
+├── README.md                   # Project overview, build guide, release notes
+├── .gitignore                  # Excludes JUCE-master/, ThirdParty/, build artifacts
+├── .gitattributes              # LFS tracking rules
+├── .planning/                  # Planning artifacts (codebase maps, phase plans)
+│   └── codebase/               # Auto-generated architecture docs
+├── Source/                     # ★ All application source code
+├── JUCE-master/                # ★ JUCE 8 framework (gitignored, cloned externally)
+├── ThirdParty/                 # ★ Third-party dependencies (gitignored)
+│   ├── ARA_SDK-releases-2.2.0/ # Celemony ARA SDK
+│   ├── r8brain-free-src-master/# Voxengo r8brain resampler
+│   ├── onnxruntime-win-x64-1.24.4/  # ONNX Runtime CPU (Windows)
+│   ├── onnxruntime-dml-1.24.4/      # ONNX Runtime DML (Windows)
+│   ├── onnxruntime-osx-arm64-1.24.4/# ONNX Runtime (macOS)
+│   ├── microsoft.ai.directml.1.15.4/     # DirectML SDK
+│   ├── microsoft.direct3d.d3d12.1.619.1/ # D3D12 Agility SDK
+│   └── soundtouch-2.3.3/          # SoundTouch time-stretch library
+├── Resources/                  # Binary resources compiled into JUCE BinaryData
+│   ├── Fonts/                  # HONORSansCN-Medium.ttf
+│   ├── PianoSamples-mp3/       # Piano key audition samples (88 files)
+│   ├── UI/assets/              # Theme images (PNGs)
+│   └── AppIcon.png             # Application icon
+├── models/                     # AI model files (gitignored, from releases)
+│   ├── rmvpe.onnx              # RMVPE F0 extraction model
+│   └── GAME/                   # GAME note generator ONNX bundle
+├── pc_nsf_hifigan_44.1k_ONNX/  # Vocoder model files (gitignored, from releases)
+├── docs/                       # User documentation
+│   └── UserGuide.html
+├── Tests/                      # Unit & integration test source files
+├── cmake/                      # Custom CMake modules
+│   └── OpenTuneJuceVST3ClientOverlay.cmake
+├── Installer/                  # Installer scripts/packaging
+├── dist/                       # Distribution output
+├── Python/                     # Python utility scripts
+├── build-ara-overlay-vs18-clean/# Build output directory (gitignored)
+└── LICENSES/                   # Third-party license files
 ```
 
-## Root-Level Roles
+## Directory Purposes
 
-**`CMakeLists.txt`:**
-- Declares one shared `OpenTune` JUCE target, then extends `OpenTune_Standalone`, `OpenTune_VST3`, and `OpenTuneTests`.
-- Lists source files explicitly; this repository does not rely on source globbing.
-- Copies runtime model files and platform runtime dependencies after build.
-- Adds Standalone-only docs packaging and macOS bundle plist/resource handling.
+**Source/ (root level):**
+- Purpose: Core data model files shared across all build targets
+- Contains: `PluginProcessor.{h,cpp}` (main orchestrator), `SourceStore.{h,cpp}`, `MaterializationStore.{h,cpp}`, `StandaloneArrangement.{h,cpp}`
+- Key files: `PluginProcessor.h` (885 lines, aggregation header), `MaterializationStore.h` (318 lines)
 
-**`.planning/`:**
-- Stores active project context and memory docs.
-- Core files: `.planning/PROJECT.md`, `.planning/REQUIREMENTS.md`, `.planning/ROADMAP.md`, `.planning/STATE.md`.
-- Codebase memory docs live in `.planning/codebase/`.
+**Source/ARA/:**
+- Purpose: ARA2 protocol integration for VST3 deep DAW embedding
+- Contains: `OpenTuneDocumentController.{h,cpp}` (document lifecycle), `OpenTunePlaybackRenderer.{h,cpp}` (per-block rendering), `VST3AraSession.{h,cpp}` (state machine, birth pipeline)
+- Only compiled when `OPENTUNE_ENABLE_ARA=ON` (default) in VST3 target
 
-**`docs/`:**
-- Contains `docs/plans/` and `docs/UserGuide.html`.
-- `docs/UserGuide.html` is copied into Standalone outputs by `CMakeLists.txt`.
+**Source/Audio/:**
+- Purpose: Audio format I/O and async loading abstractions
+- Contains: `AudioFormatRegistry.{h,cpp}`, `AsyncAudioLoader.h`
+- Key files: `AudioFormatRegistry.cpp` (WAV/FLAC/OGG/MP3 registration)
 
-**Build directories:**
-- Current local VS/MSBuild build trees are relative to the repository root.
-- ARA builds use `build-ara-overlay-vs18-clean/`.
-- Non-ARA builds use `build-nonara-overlay-vs18-clean/`.
-- These directories contain generated Visual Studio projects, test logs, and built artifacts for Standalone, VST3, and tests; they are not source-owned live state.
-- On Windows, use the MSBuild PATH workaround when invoking CMake builds from Codex/desktop shells:
-  `cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build <build-dir> --config Release --target <target>"`
+**Source/DSP/:**
+- Purpose: Classical digital signal processing algorithms
+- Contains: `ResamplingManager`, `MelSpectrogram`, `ChromaKeyDetector`, `ReferenceAutoAlign`, `AutoTunePitchShifter`, `TimeGridPatchBuilder`, `ReferenceFeatures.h`
+- Key files: `ResamplingManager.{h,cpp}` (r8brain wrapper), `AutoTunePitchShifter.{h,cpp}` (monitoring pitch shift)
 
-## Production Source Tree
+**Source/Inference/:**
+- Purpose: AI inference layer — ONNX model loading, F0 extraction, vocoder synthesis, note generation, render caching
+- Contains: 32 files including `F0InferenceService`, `VocoderDomain`, `VocoderRenderScheduler`, `VocoderInferenceService`, `RenderCache`, `RMVPEExtractor`, `PCNSFHifiGANVocoder`, `GameNoteGenerator`, `ModelFactory`, `INoteGenerator.h`, `IF0Extractor.h`, `SoundTouchStretcher`, `TimeStretchCache`, `ChunkRenderStrategy.h`
+- Key files: `F0InferenceService.{h,cpp}` (RMVPE extraction), `VocoderDomain.{h,cpp}` (vocoder orchestration)
 
-**`Source/`:**
-- Main production tree.
-- Top-level subdirectories are architecture boundaries: `ARA/`, `Audio/`, `DSP/`, `Editor/`, `Inference/`, `Plugin/`, `Services/`, `Standalone/`, `Utils/`.
-- Top-level shared owners also live directly under `Source/`: `SourceStore.*`, `MaterializationStore.*`, `StandaloneArrangement.*`, and `PluginProcessor.*`.
+**Source/Editor/:**
+- Purpose: Shared editor infrastructure across formats
+- Contains: `EditorFactory.h` (shared interface), `EditorFactoryPlugin.cpp` (VST3 entry), `Preferences/` (SharedPreferencePages, StandalonePreferencePages, TabbedPreferencesDialog), AutoRenderOverlayComponent, PitchShiftDialogContent, ConfirmDialogContent, RenderBadgeComponent
+- Key files: `EditorFactory.h` (single factory function `createOpenTuneEditor()`)
 
-**`Source/PluginProcessor.h`, `Source/PluginProcessor.cpp`:**
-- Shared runtime shell and JUCE processor entrypoint.
-- Main coordination point for playback, import, render scheduling, undo, and processor state serialization.
+**Source/Plugin/:**
+- Purpose: VST3 plugin-specific editor and capture module
+- Contains: `PluginEditor.{h,cpp}` (VST3 editor shell), `Capture/` (10 files: CaptureSession, CaptureRingBuffer, CaptureSegment, CaptureCompactor, CapturePersistence)
+- Compile-guard: `JucePlugin_Build_VST3`
 
-**`Source/SourceStore.h`, `Source/SourceStore.cpp`:**
-- Source identity and provenance owner.
-- Holds source identity, provenance windows, and lineage metadata.
+**Source/Standalone/:**
+- Purpose: Standalone application editor and UI components
+- Contains: `PluginEditor.{h,cpp}` (319 lines, full multi-track editor), `EditorFactoryStandalone.cpp`, `StandaloneArrangementHelpers.h`, `UI/` (43 files)
+- Compile-guard: `JucePlugin_Build_Standalone`
 
-**`Source/MaterializationStore.h`, `Source/MaterializationStore.cpp`:**
-- Materialization payload owner.
-- Holds audio buffers, dry-signal playback copies, notes, pitch curve, render cache, silent gaps, pending render jobs, source provenance window, and lineage metadata.
+**Source/Standalone/UI/:**
+- Purpose: Reusable UI components shared across both editor formats
+- Contains: `PianoRollComponent` (shared), `ParameterPanel`, `MenuBarComponent`, `TransportBarComponent`, `TopBarComponent`, `TrackPanelComponent` (Standalone only), `ArrangementViewComponent` (Standalone only), `PlayheadOverlayComponent`, themes (AuroraLookAndFeel, BlueBreeze, DarkBlueGrey, Overdose), `FrameScheduler`, `SmallButton`, `ToolbarIcons`, `WaveformMipmap`
+- Key files: `PianoRollComponent.{h,cpp}` (shared between Standalone and VST3 editors), `ArrangementViewComponent.{h,cpp}` (Standalone-only multi-track view)
 
-**`Source/StandaloneArrangement.h`, `Source/StandaloneArrangement.cpp`:**
-- Standalone placement and track-state owner.
-- Holds placements, selection, mute/solo/volume, RMS, and immutable playback snapshots.
+**Source/Standalone/UI/PianoRoll/:**
+- Purpose: Piano roll rendering substructure — renderers, tool handlers, interaction state, correction workers
+- Contains: `PianoRollRenderer`, `PianoRollRenderModelCache`, `PianoRollVisualInvalidation`, `PianoRollToolHandler`, `PianoRollCorrectionWorker`, `InteractionState`
+- Key files: `PianoRollToolHandler.{h,cpp}` (pen/note/anchor/time-grid tool logic with undo actions)
 
-## Source Subdirectories
+**Source/Services/:**
+- Purpose: Async background service operations
+- Contains: `F0ExtractionService.{h,cpp}` (materialization refresh scheduling with thread pool), `ReferenceAnalysisService.{h,cpp}` (async reference alignment feature extraction), `ImportedClipF0Extraction.h`
+- Key files: `F0ExtractionService.{h,cpp}` (queue-based materialization refresh, 1 worker thread, 64 capacity)
 
-**`Source/ARA/`:**
-- VST3 ARA adapter and session state.
-- Files: `OpenTuneDocumentController.*`, `OpenTunePlaybackRenderer.*`, `VST3AraSession.*`.
-- Boundary: host callbacks, published region snapshots, source hydration, AudioModification persistentID -> materialization bindings, ARA archive binding persistence, and ARA playback rendering.
+**Source/Utils/:**
+- Purpose: Shared utilities, data types, and cross-cutting helpers
+- Contains: 67 files including `ProjectSession`, `ProjectModel`, `ProjectPersistence`, `UndoManager`, `PitchCurve`, `TimeGrid`, `PitchUtils`, `Note.h`, `AppPreferences`, `AppLogger`, `CpuBudgetManager`, `AccelerationDetector`, `SimdAccelerator`, `PianoKeyAudition`, `PlacementActions`, `PianoRollEditAction`, `PitchShiftEditAction`, `TimeGridEditAction`, `CompositeUndoAction`, `SilentGapDetector`, `PlacementClipboard`, `LocalizationManager`, `Error.h`, `LockFreeQueue.h`, `ModelPathResolver`, `AudioEditingScheme`, `ParameterPanelSync`, `MouseTrailConfig`, `ZoomSensitivityConfig`, `WindowDllSearchPath`, `OnnxRuntimeDelayLoadHook`, `D3D12AgilityBootstrap`, `VocoderModelWeight`, `TrackConstants`, `SourceWindow`, `TimeCoordinate`, `SnapUtils`
+- Key files: `ProjectSession.{h,cpp}` (164 lines, project Open/Save/SaveAs lifecycle), `UndoManager.{h,cpp}` (undo/redo stack), `PitchCurve.{h,cpp}` (pitch curve data model), `TimeGrid.{h,cpp}` (vocal time-stretch grid)
 
-**`Source/Audio/`:**
-- Import-time audio helpers.
-- Files: `AsyncAudioLoader.h`, `AudioFormatRegistry.cpp`, `AudioFormatRegistry.h`.
-- Boundary: supported input formats and async file-loading support.
+**Source/Plugin/Capture/:**
+- Purpose: VST3 live audio recording and pipeline integration
+- Contains: `CaptureSession.{h,cpp}` (259 lines, state machine: Idle→Capturing→Processing), `CaptureRingBuffer.{h,cpp}`, `CaptureSegment.{h,cpp}`, `CaptureCompactor.{h,cpp}`, `CapturePersistence.{h,cpp}`
+- Key files: `CaptureSession.h` (session lifecycle, segment state machine, `SubmitForRenderFn` callback)
 
-**`Source/DSP/`:**
-- DSP-only helpers that do not own application workflow state.
-- Files: `ChromaKeyDetector.*`, `CrossoverMixer.*`, `MelSpectrogram.*`, `ResamplingManager.*`.
-
-**`Source/Editor/`:**
-- Small shared editor seams.
-- Files: `EditorFactory.h`, `EditorFactoryPlugin.cpp`, `AutoRenderOverlayComponent.h`, `RenderBadgeComponent.h`, `Preferences/`.
-- Boundary: cross-product editor creation seam and preference-page composition.
-
-**`Source/Editor/Preferences/`:**
-- Shared preferences dialog construction.
-- Files: `SharedPreferencePages.*`, `StandalonePreferencePages.*`, `TabbedPreferencesDialog.h`.
-- Boundary: shared pages vs standalone-only pages are split here, not inside the processor.
-
-**`Source/Inference/`:**
-- Model inference, render cache, and vocoder pipeline.
-- Files include `F0InferenceService.*`, `RenderCache.*`, `RMVPEExtractor.*`, `PCNSFHifiGANVocoder.*`, `VocoderDomain.*`, `VocoderRenderScheduler.*`, `ModelFactory.*`.
-
-**`Source/Plugin/`:**
-- VST3-only editor shell.
-- Files: `PluginEditor.h`, `PluginEditor.cpp`.
-- Boundary: single-workspace VST3 UI, ARA read-audio workflow, host transport UI coordination.
-
-**`Source/Services/`:**
-- Mid-level background services used by the processor.
-- Files: `F0ExtractionService.*`, `ImportedClipF0Extraction.h`.
-
-**`Source/Standalone/`:**
-- Standalone-only editor shell and standalone editor factory.
-- Files: `PluginEditor.h`, `PluginEditor.cpp`, `EditorFactoryStandalone.cpp`, `UI/`.
-- Boundary: multi-track arrangement workflow, import queueing, preset flow, and standalone-only editing shell.
-
-**`Source/Standalone/UI/`:**
-- Reusable JUCE UI components used heavily by Standalone and partly by VST3.
-- Key files: `MenuBarComponent.*`, `TransportBarComponent.*`, `TopBarComponent.*`, `ParameterPanel.*`, `PianoRollComponent.*`, `ArrangementViewComponent.*`, `TrackPanelComponent.*`, `PlayheadOverlayComponent.*`, `AutoRenderOverlayComponent.h`, `RenderBadgeComponent.h`.
-- Theme/look-and-feel files present in live tree: `AuroraLookAndFeel.*`, `AuroraTheme.h`, `BlueBreezeTheme.h`, `DarkBlueGreyTheme.h`, `OpenTuneLookAndFeel.h`, `ThemeTokens.h`.
-
-**`Source/Standalone/UI/PianoRoll/`:**
-- Piano-roll internal submodules.
-- Files: `InteractionState.*`, `PianoRollCorrectionWorker.*`, `PianoRollRenderer.*`, `PianoRollToolHandler.*`, `PianoRollVisualInvalidation.*`.
-
-**`Source/Utils/`:**
-- Shared low-level models, preference carriers, logging, and policy helpers.
-- Key files: `AppPreferences.*`, `AudioEditingScheme.h`, `ParameterPanelSync.h`, `PitchCurve.*`, `PresetManager.*`, `SilentGapDetector.*`, `TimeCoordinate.h`, `UndoManager.*`, `PianoRollEditAction.*`, `F0Timeline.h`, `MaterializationTimelineProjection.h`, `MaterializationState.h`, `SourceWindow.h`, `PlacementActions.*`, `AccelerationDetector.*`, `PianoRollVisualPreferences.h`, `LocalizationManager.h`.
-
-## Tests And Verification Assets
-
-**`Tests/`:**
-- Native test target sources.
-- Files: `TestMain.cpp`, `TestSupport.h`, `TestEditorFactoryStub.cpp`.
-- `TestMain.cpp` declares six suites: `core`, `processor`, `ui`, `architecture`, `undo`, `memory`.
-- Tests verify both source behavior and selected repository structure/contracts by reading workspace files directly.
-
-## Build-Vs-Source Ownership
-
-**Shared production sources:**
-- Declared under `target_sources(OpenTune ...)` in `CMakeLists.txt`.
-- Include processor, content store, standalone arrangement, shared UI, inference, utilities, and ARA source files.
-
-**Standalone-only sources:**
-- Declared under `target_sources(OpenTune_Standalone ...)`.
-- Current files: `Source/Standalone/EditorFactoryStandalone.cpp`, `Source/Standalone/PluginEditor.cpp`, `Source/Standalone/PluginEditor.h`, and `Source/Utils/D3D12AgilityBootstrap.cpp`.
-
-**VST3-only sources:**
-- Declared under `target_sources(OpenTune_VST3 ...)`.
-- Current files: `Source/Editor/EditorFactoryPlugin.cpp`, `Source/Plugin/PluginEditor.cpp`, `Source/Plugin/PluginEditor.h`, and `Source/Utils/D3D12AgilityBootstrap.cpp`.
-
-**Shared ARA sources still compiled from the shared target:**
-- `Source/ARA/OpenTuneDocumentController.*`, `Source/ARA/OpenTunePlaybackRenderer.*`, `Source/ARA/VST3AraSession.*` are attached via `target_sources(OpenTune PRIVATE ...)`.
-- Usage is still gated by build flags and source-level `#if` branches.
-- ARA materialization binding state lives under `Source/ARA/VST3AraSession.*`; VST3 editor may request focused refresh, but it must not own binding persistence or infer aliasing from source/window equality.
+**Tests/:**
+- Purpose: C++ unit and integration tests using JUCE UnitTest framework
+- Contains: 30 test files organized by module
+- Key files: `TestMain.cpp`, `TestSupport.h`, module-specific tests (GameNoteGenerator, AutoTunePitchShifter, MaterializationStoreTimeGrid, SoundTouchStretcher, Stage2Worker, UndoManager, ReferenceAutoAlign, etc.)
 
 ## Key File Locations
 
-**Runtime Entry Points:**
-- `Source/PluginProcessor.cpp`: `createPluginFilter()`, processor construction, shared playback loop.
-- `Source/PluginProcessor.h`: shared public runtime API and read/import request types.
+**Entry Points:**
+- `Source/Standalone/EditorFactoryStandalone.cpp`: Standalone application entry (creates editor via `createOpenTuneEditor()`)
+- `Source/Plugin/EditorFactoryPlugin.cpp`: VST3 plugin entry (creates editor via `createOpenTuneEditor()`)
+- `Source/Editor/EditorFactory.h`: Shared editor factory interface
+- `Source/PluginProcessor.cpp`: Main audio processor implementation (~2000+ lines)
 
-**Editor Entry Points:**
-- `Source/Editor/EditorFactory.h`: editor factory declaration.
-- `Source/Standalone/EditorFactoryStandalone.cpp`: Standalone editor creation.
-- `Source/Editor/EditorFactoryPlugin.cpp`: VST3 editor creation.
+**Configuration:**
+- `CMakeLists.txt`: All build configuration, dependencies, target definitions
+- `CMakePresets.json`: CMake preset definitions for VS2022/Xcode
+- `Source/Utils/AppPreferences.{h,cpp}`: Runtime user preferences persistence
+- `cmake/OpenTuneJuceVST3ClientOverlay.cmake`: JUCE VST3 client overlay patching
 
-**State Owners:**
-- `Source/SourceStore.cpp`: source identity and provenance truth.
-- `Source/MaterializationStore.cpp`: materialization payload truth.
-- `Source/StandaloneArrangement.cpp`: placement and track truth.
-- `Source/ARA/VST3AraSession.cpp`: ARA source/region/AudioModification persistentID binding truth.
+**Core Logic:**
+- `Source/PluginProcessor.h`: Central orchestrator header (all subsystems aggregated)
+- `Source/SourceStore.{h,cpp}`: Source audio data store (immutable truth)
+- `Source/MaterializationStore.{h,cpp}`: Editable audio payload store
+- `Source/StandaloneArrangement.{h,cpp}`: Multi-track timeline placement model
+- `Source/Inference/F0InferenceService.{h,cpp}`: RMVPE F0 extraction
+- `Source/Inference/VocoderDomain.{h,cpp}`: Vocoder orchestration
+- `Source/Inference/GameNoteGenerator.{h,cpp}`: GAME ONNX note generator
+- `Source/Inference/RenderCache.{h,cpp}`: Per-materialization render chunk cache
+- `Source/Inference/ChunkRenderStrategy.h`: Render scheduling strategy
+- `Source/DSP/ResamplingManager.{h,cpp}`: Sample rate conversion
 
-**ARA Bridge:**
-- `Source/ARA/OpenTuneDocumentController.cpp`: host callback bridge.
-- `Source/ARA/OpenTunePlaybackRenderer.cpp`: host playback rendering bridge.
+**UI - Shared Components:**
+- `Source/Standalone/UI/PianoRollComponent.{h,cpp}`: Piano roll editor (used by both formats)
+- `Source/Standalone/UI/ParameterPanel.{h,cpp}`: Retune speed, vibrato controls
+- `Source/Standalone/UI/MenuBarComponent.{h,cpp}`: Top menu bar
+- `Source/Standalone/UI/TransportBarComponent.{h,cpp}`: Play/stop/record transport
+- `Source/Standalone/UI/AuroraLookAndFeel.{h,cpp}`: Primary UI theme
+- `Source/Standalone/UI/UIColors.h`: Color palette definitions
+- `Source/Standalone/UI/ThemeTokens.h`: Design token aliases
+- `Source/Standalone/UI/ToolIds.h`: Tool type identifier constants
+- `Source/Standalone/UI/ToolbarIcons.h`: Toolbar icon definitions
 
-**Policy And Preferences:**
-- `Source/Utils/AppPreferences.h`: shared and standalone-only app preference schemas.
-- `Source/Utils/AudioEditingScheme.h`: explicit editing-scheme rules.
-- `Source/Utils/PianoRollEditAction.h`: undo result-chain types.
+**UI - Standalone Only:**
+- `Source/Standalone/UI/ArrangementViewComponent.{h,cpp}`: Multi-track timeline view
+- `Source/Standalone/UI/TrackPanelComponent.{h,cpp}`: Track list sidebar
 
-## Structure Of The Current UI Tree
+**ARA Integration:**
+- `Source/ARA/OpenTuneDocumentController.{h,cpp}`: ARA document lifecycle controller
+- `Source/ARA/OpenTunePlaybackRenderer.{h,cpp}`: ARA real-time renderer
+- `Source/ARA/VST3AraSession.{h,cpp}`: ARA document state machine and data model
 
-**Shared in both editor headers:**
-- `MenuBarComponent`
-- `TransportBarComponent`
-- `TopBarComponent`
-- `ParameterPanel`
-- `PianoRollComponent`
-- `AutoRenderOverlayComponent`
+**Testing:**
+- `Tests/TestMain.cpp`: Test runner entry point
+- `Tests/TestSupport.h`: Shared test utilities and fixtures
+- `Tests/GameNoteGeneratorTests.cpp`: GAME model inference tests
+- `Tests/MaterializationStoreTimeGridTests.cpp`: TimeGrid storage/identity tests
+- `Tests/IntegrationPipelineTests.cpp`: End-to-end import-render pipeline
+- `Tests/InvariantContractTests.cpp`: Core data model invariant verification
 
-**Only in Standalone editor header:**
-- `TrackPanelComponent`
-- `ArrangementViewComponent`
-- `RippleOverlayComponent`
-- `AsyncAudioLoader`
-- `PresetManager`
-
-**Only in VST3 editor header:**
-- direct dependency on `ARA/VST3AraSession.h`
-- no arrangement or track-panel widgets
-
-## Verified Persistence And Data-Shape Files
-
-- `Source/PluginProcessor.cpp` serializes processor state under `OpenTuneState`.
-- `Source/PluginProcessor.cpp` writes separate `Contents` and `StandaloneArrangement` child trees.
-- `Source/Utils/AppPreferences.cpp` persists app-level settings outside processor state.
-
-## Naming And Placement Conventions
+## Naming Conventions
 
 **Files:**
-- Most implementation pairs use `PascalCase`: `SourceStore.cpp`, `MaterializationStore.h`, `StandaloneArrangement.h`, `OpenTunePlaybackRenderer.cpp`.
-- Format boundaries are encoded by directory, so both products still use the generic file name `PluginEditor.cpp` in different directories.
-- UI widget files consistently end in `Component`, `LookAndFeel`, `Theme`, `Renderer`, `Worker`, or `Support`.
+- PascalCase for source files: `PluginProcessor.cpp`, `SourceStore.h`, `PianoRollComponent.h`
+- `.h` / `.cpp` pairing for classes with implementation
+- Some headers are `.h`-only (templates, inline utilities): `Note.h`, `Error.h`, `SnapUtils.h`, `TrackConstants.h`
+- Underscore prefix for "internal" headers in Capture module: (none observed — all public)
 
 **Directories:**
-- Product boundaries are top-level folders under `Source/`: `Standalone/`, `Plugin/`, `ARA/`.
-- Shared technical domains are separate peer folders: `Audio/`, `DSP/`, `Inference/`, `Services/`, `Utils/`, `Editor/`.
-- Piano-roll internals are the only deeper feature subtree under shared UI: `Source/Standalone/UI/PianoRoll/`.
+- PascalCase for module directories: `Source/ARA/`, `Source/Inference/`, `Source/DSP/`
+- Flat organization within modules (minimal sub-nesting)
+- UI has sub-directory `PianoRoll/` for renderer decomposition
 
-## Where Code Belongs
+**Classes:**
+- PascalCase, prefixed with `OpenTune` for major framework types: `OpenTuneAudioProcessor`, `OpenTuneAudioProcessorEditor`, `OpenTuneDocumentController`
+- Unprefixed PascalCase for domain types in `OpenTune` namespace: `SourceStore`, `MaterializationStore`, `RenderCache`, `VocoderDomain`
+- Interface prefix `I`: `INoteGenerator`, `IF0Extractor`, `VocoderInterface`
+- Nested types in owning class header: `OpenTuneAudioProcessor::PlaybackReadSource`, `StandaloneArrangement::Placement`
 
-**Shared runtime orchestration:**
-- Put only true cross-owner coordination in `Source/PluginProcessor.*`.
+**Functions:**
+- camelCase for methods: `prepareToPlay()`, `processBlock()`, `readPlaybackAudio()`
+- camelCase for free functions: `fillF0GapsForVocoder()`, `computeRegionBlockRenderSpan()`
+- `get`/`set` prefix for accessors: `getSampleRate()`, `setPlaying()`
 
-**Source identity / provenance ownership:**
-- Put it in `Source/SourceStore.*`.
+**Variables:**
+- camelCase with trailing underscore for member variables: `currentSampleRate_`, `sourceStore_`, `materializationStore_`
+- camelCase without underscore for locals and parameters: `sampleRate`, `inBuffer`, `out`
+- `k` prefix for constants within classes: `kTrackCount`, `kMediaDirectoryName` (constexpr char*)
+- UPPER_CASE for compile-time constants in namespaces: `AudioConstants::DefaultSampleRate`, `MAX_TRACKS`
 
-**Materialization payload or render-queue ownership:**
-- Put it in `Source/MaterializationStore.*`.
+**Namespaces:**
+- `OpenTune` — primary application namespace (most code)
+- `OpenTune::Capture` — VST3 capture module sub-namespace
+- `OpenTune::PluginUI` — VST3 plugin editor sub-namespace
 
-**Standalone timeline, selection, or track mix state:**
-- Put it in `Source/StandaloneArrangement.*`.
+**CMake Targets:**
+- `OpenTune` — shared library target (all common sources)
+- `OpenTune_Standalone` — standalone executable (inherits from `OpenTune`)
+- `OpenTune_VST3` — VST3 plugin target (inherits from `OpenTune`)
+- `OpenTuneResources` — JUCE BinaryData target (embedded resources)
 
-**VST3 ARA source, region, or binding state:**
-- Put it in `Source/ARA/VST3AraSession.*`.
-- Persisted ARA binding archive hooks belong in `Source/ARA/OpenTuneDocumentController.*` and must delegate to session-owned binding state.
+## Where to Add New Code
 
-**Reusable UI widget:**
-- Put it in `Source/Standalone/UI/` or `Source/Standalone/UI/PianoRoll/`.
+**New AI Model:**
+- Implementation: `Source/Inference/NewModel.{h,cpp}` (implementing `IF0Extractor` or `VocoderInterface`)
+- Registration: `Source/Inference/ModelFactory.{h,cpp}` (factory method)
+- Tests: `Tests/NewModelTests.cpp`
 
-**Standalone-only shell workflow:**
-- Put it in `Source/Standalone/PluginEditor.*`.
+**New DSP Algorithm:**
+- Implementation: `Source/DSP/NewAlgo.{h,cpp}`
+- Tests: `Tests/NewAlgoTests.cpp`
 
-**VST3-only shell workflow:**
-- Put it in `Source/Plugin/PluginEditor.*`.
+**New UI Component (shared between formats):**
+- Implementation: `Source/Standalone/UI/NewComponent.{h,cpp}`
+- Registration: Add to both `Source/Standalone/PluginEditor.cpp` and `Source/Plugin/PluginEditor.cpp`
+- CMake: Add to `target_sources(OpenTune ...)` in root `CMakeLists.txt` (lines 548-600 area)
 
-**Preference page composition:**
-- Put shared pages in `Source/Editor/Preferences/SharedPreferencePages.*`.
-- Put standalone-only pages in `Source/Editor/Preferences/StandalonePreferencePages.*`.
+**New Standalone-only UI Component:**
+- Implementation: `Source/Standalone/UI/NewComponent.{h,cpp}`
+- Consumer: Only referenced in `Source/Standalone/PluginEditor.{h,cpp}`
+- CMake: Add to shared `target_sources(OpenTune ...)` (shared UI is always compiled)
 
-**Tests:**
-- Put them under `Tests/` and add them to `OpenTuneTests` in `CMakeLists.txt`.
+**New Undoable Action:**
+- Implementation: `Source/Utils/NewEditAction.{h,cpp}`
+- Pattern: Follow `PianoRollEditAction`, `TimeGridEditAction`, `PitchShiftEditAction` — implement `perform()`/`undo()` returning `bool`
+- Registration: Call `undoManager_.record(std::make_unique<NewEditAction>(...))` from the action's caller
 
-## Practical Repo Rules From Current Structure
+**New Background Service:**
+- Implementation: `Source/Services/NewService.{h,cpp}`
+- Aggregation: Add as member to `OpenTuneAudioProcessor` in `Source/PluginProcessor.h`
+- Thread model: Use `juce::ThreadPool` or dedicated `std::thread` with `std::condition_variable`
 
-- Do not add new production source files without updating `CMakeLists.txt`.
-- Keep VST3 shell code under `Source/Plugin/` and Standalone shell code under `Source/Standalone/`; the current repository already relies on this compile-time split.
-- Keep app preferences in `Source/Utils/AppPreferences.*`, not in processor state files.
-- Reuse shared UI from `Source/Standalone/UI/` rather than copying widgets into `Source/Plugin/`.
-- Treat `SourceStore`, `MaterializationStore`, `StandaloneArrangement`, and `VST3AraSession` as separate owner files when adding or documenting state.
+**New Test File:**
+- Implementation: `Tests/NewTests.cpp`
+- Pattern: Inherit from `juce::UnitTest`, use `beginTest("name")` / `expect(...)` / `expectEquals(...)`
+- Registration: Instantiate static instance in file
+- CMake: Auto-discovered via `file(GLOB)` in test target
+
+**New Build Target:**
+- Add conditional `target_sources()` block in root `CMakeLists.txt` guarded by format defines
+- Add format-specific `target_compile_definitions` for `JucePlugin_Build_*` macros
+
+## Special Directories
+
+**JUCE-master/:**
+- Purpose: JUCE 8 framework source (vendored, not a git submodule)
+- Generated: No (cloned externally by developer)
+- Committed: No (`.gitignore` excludes it due to large binary size)
+
+**ThirdParty/:**
+- Purpose: All external C/C++ dependencies — ONNX Runtime, ARA SDK, r8brain, DirectML, D3D12, SoundTouch
+- Generated: No (downloaded/extracted externally by developer)
+- Committed: No (`.gitignore` excludes all of it — ~hundreds of MB of binaries)
+
+**models/ & pc_nsf_hifigan_44.1k_ONNX/:**
+- Purpose: AI model files (ONNX format) for inference
+- Generated: No (downloaded from GitHub Releases)
+- Committed: No (`.gitignore` excludes large binary model files)
+
+**.planning/:**
+- Purpose: Codebase analysis documents generated by `/gsd-map-codebase` and consumed by `/gsd-plan-phase` / `/gsd-execute-phase`
+- Generated: Yes (by planning tools)
+- Committed: Yes (lightweight markdown, enables phase continuity)
+
+**build-ara-overlay-vs18-clean/ (and similar):**
+- Purpose: CMake build output directories
+- Generated: Yes (by `cmake --preset` / `cmake --build`)
+- Committed: No (`.gitignore`)
+
+**dist/:**
+- Purpose: Distribution/packaging output
+- Generated: Yes (by installer scripts)
+- Committed: No (`.gitignore`)
 
 ---
 
-*Structure analysis: 2026-05-15*
+*Structure analysis: 2026-06-02*
