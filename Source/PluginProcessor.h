@@ -813,7 +813,6 @@ public:
 
     // Transport control API
     void setPlaying(bool playing);
-    void setPlayingStateOnly(bool playing) { isPlaying_.store(playing, std::memory_order_relaxed); }
     bool isPlaying() const { return isPlaying_; }
     void setLoopEnabled(bool enabled);
     bool isLoopEnabled() const { return loopEnabled_; }
