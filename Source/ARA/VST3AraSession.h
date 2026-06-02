@@ -268,6 +268,13 @@ public:
     void willRemovePlaybackRegionFromAudioModification(juce::ARAPlaybackRegion* playbackRegion);
     void willDestroyAudioSource(juce::ARAAudioSource* audioSource);
 
+    /**
+     * @brief Explicitly request birth of a materialization for the preferred ARA region.
+     * Call when user intent signals readiness (e.g. recordRequested).
+     * Lifecycle callbacks may only continue an existing request once source access is ready.
+     */
+    void requestBirthForPreferredRegion();
+
     void bindPlaybackRegionToMaterialization(juce::ARAPlaybackRegion* playbackRegion,
                                      uint64_t materializationId,
                                      uint64_t materializationRevision,
@@ -311,6 +318,7 @@ private:
     void upsertPendingBirthLocked(const juce::String& persistentId,
                                    const SourceWindow& desiredWindow,
                                    juce::ARAAudioSource* audioSource);
+    bool queuePendingBirthIfSourceReadyLocked(PendingBirth& pending);
     void invalidateSourceReaderLeaseLocked(SourceSlot& sourceSlot) noexcept;
     void drainDeferredSourceCleanupLocked();
     void birthWorkerLoop();

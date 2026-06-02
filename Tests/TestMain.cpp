@@ -1540,6 +1540,57 @@ void runPianoRollDrawNotePreviewSurvivesMultiEventDragTest()
     logPass(testName);
 }
 
+void runPianoRollTimeToolLeftBandDoesNotAuditionPianoKeysTest()
+{
+    constexpr const char* testName = "PianoRollTimeTool_LeftBandDoesNotAuditionPianoKeys";
+
+    PianoRollComponent pianoRoll;
+    pianoRoll.setSize(900, 420);
+
+    if (!PianoRollComponentTestProbe::shouldShowPianoKeys(pianoRoll)) {
+        logFail(testName, "default note-tool view must expose piano keys");
+        return;
+    }
+
+    const auto keyDown = juce::Point<float>(10.0f, 160.0f);
+    PianoRollComponentTestProbe::mouseDown(pianoRoll, makeMouseEvent(pianoRoll, keyDown, keyDown, false));
+    if (pianoRoll.getPressedPianoKey() < 0) {
+        logFail(testName, "note-tool left band should still support piano key audition");
+        return;
+    }
+
+    pianoRoll.setExperimentalFeaturesEnabled(true);
+    pianoRoll.setCurrentTool(ToolId::TimeTool);
+    if (PianoRollComponentTestProbe::shouldShowPianoKeys(pianoRoll)) {
+        logFail(testName, "TimeTool must not show piano keys");
+        return;
+    }
+
+    if (pianoRoll.getPressedPianoKey() != -1) {
+        logFail(testName, "entering TimeTool must release any existing piano key audition state");
+        return;
+    }
+
+    PianoRollComponentTestProbe::mouseDown(pianoRoll, makeMouseEvent(pianoRoll, keyDown, keyDown, false));
+    PianoRollComponentTestProbe::mouseDrag(pianoRoll,
+                                           makeMouseEvent(pianoRoll,
+                                                          juce::Point<float>(10.0f, 210.0f),
+                                                          keyDown,
+                                                          true));
+    PianoRollComponentTestProbe::mouseUp(pianoRoll,
+                                         makeMouseEvent(pianoRoll,
+                                                        juce::Point<float>(10.0f, 210.0f),
+                                                        keyDown,
+                                                        true));
+
+    if (pianoRoll.getPressedPianoKey() != -1) {
+        logFail(testName, "TimeTool left band must not start noteOn, glissando, or residual noteOff state");
+        return;
+    }
+
+    logPass(testName);
+}
+
 void runPianoRollEmptySpaceSeekMouseDownOnlyArmsPendingTest()
 {
     constexpr const char* testName = "PianoRollEmptySpaceSeek_MouseDownOnlyArmsPending";
@@ -4022,9 +4073,9 @@ void runAraBindingStateStaleRegionIdentityNeedsRenderTest()
 #endif // JucePlugin_Enable_ARA
 
 #if JucePlugin_Enable_ARA
-void runAraBindingStateStaleSourceWindowRequeuesBirthTest()
+void runAraBindingStateStaleSourceWindowAllowsExplicitBirthRequestTest()
 {
-    constexpr const char* testName = "AraBindingState_StaleSourceWindowRequeuesBirth";
+    constexpr const char* testName = "AraBindingState_StaleSourceWindowAllowsExplicitBirthRequest";
 
     VST3AraSession session;
     auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0xC7);
@@ -4049,7 +4100,7 @@ void runAraBindingStateStaleSourceWindowRequeuesBirthTest()
                                                                 currentWindow.durationSeconds());
 
     if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-stale-window-requeue")) {
-        logFail(testName, "stale binding on a hydrated source should be eligible for session-side auto-birth");
+        logFail(testName, "stale binding on a hydrated source should be eligible for explicit birth request");
         return;
     }
 
@@ -4471,9 +4522,9 @@ void runMaterializationStore_SilentGapBoundariesArePreservedWhenCappingLongChunk
 void runAraBirthSameSourceTwoDifferentPersistentIdsBothBirth();
 void runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlight_NotLost();
 void runAraBirthStaleResultForOldWindowDoesNotOverrideLatestDesiredWindow();
-void runAraBirthDidAddOnPreexistingRegionWithNewPersistentIdEnqueuesBirth();
+void runAraBirthNewPersistentIdAllowsExplicitBirthRequest();
 void runAraBirthUpsertWithUnreadySourceStillRecordsPending();
-void runAraBirthReadySourceTriggersQueueForExistingPending();
+void runAraBirthSourceReadyContinuesExistingPendingRequest();
 void runAraBirthSamePidNewWindowBumpsRevisionAndReplacesWindow();
 void runAraEditorBuildsPlacementsFromAllPublishedRegions();
 void runAraEditorMissingPayloadDoesNotClearBinding();
@@ -8172,6 +8223,7 @@ void runUiBehaviorSuite()
     runEditingCommandDoesNotMutatePlacementTest();
     runPianoRollComponentSourceGuardPaintUsesCachedNotesInsteadOfProcessorReadTest();
     runPianoRollDrawNotePreviewSurvivesMultiEventDragTest();
+    runPianoRollTimeToolLeftBandDoesNotAuditionPianoKeysTest();
     runPianoRollEmptySpaceSeekMouseDownOnlyArmsPendingTest();
     runPianoRollEmptySpaceSeekMouseUpWithinThresholdSeeksOnceTest();
     runPianoRollEmptySpaceSeekDrawNoteClickDoesNotCreateNoteTest();
@@ -8218,6 +8270,7 @@ void runPianoRollF0VisualSuite()
 void runPianoRollIntentBehaviorSuite()
 {
     logSection("Piano Roll Intent");
+    runPianoRollTimeToolLeftBandDoesNotAuditionPianoKeysTest();
     runPianoRollEmptySpaceSeekMouseDownOnlyArmsPendingTest();
     runPianoRollEmptySpaceSeekMouseUpWithinThresholdSeeksOnceTest();
     runPianoRollEmptySpaceSeekDrawNoteClickDoesNotCreateNoteTest();
@@ -8915,10 +8968,10 @@ void runAraFinalRecordRequestedDoesNotTriggerGame()
 
     const auto branch = extractWorkspaceFileSection(
         "Source/Plugin/PluginEditor.cpp",
-        "// Binding/display only",
+        "// ARA path:",
         "void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested");
     if (branch.isEmpty()) {
-        logFail(testName, "failed to locate ARA recordRequested binding-only branch");
+        logFail(testName, "failed to locate ARA recordRequested explicit birth branch");
         return;
     }
 
@@ -10710,12 +10763,11 @@ void runAraBirthStaleResultForOldWindowDoesNotOverrideLatestDesiredWindow()
     logPass(testName);
 }
 
-// 测试 4: Preexisting region with empty persistentId does not get birth — then
-//        persistentId is assigned, making it eligible — but the projectionChanged ||
-//        bindingChanged guard in didAddPlaybackRegionToAudioModification would skip enqueue.
-void runAraBirthDidAddOnPreexistingRegionWithNewPersistentIdEnqueuesBirth()
+// 测试 4: Preexisting region with empty persistentId does not get birth; once
+//        persistentId is assigned, explicit birth request can target it.
+void runAraBirthNewPersistentIdAllowsExplicitBirthRequest()
 {
-    constexpr const char* testName = "AraBirth_DidAddOnPreexistingRegionWithNewPersistentIdEnqueuesBirth";
+    constexpr const char* testName = "AraBirth_NewPersistentIdAllowsExplicitBirthRequest";
 
     VST3AraSession session;
     auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x100);
@@ -10744,7 +10796,7 @@ void runAraBirthDidAddOnPreexistingRegionWithNewPersistentIdEnqueuesBirth()
     }
 
     if (!VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-new")) {
-        logFail(testName, "did-add persistentId attach did not record/queue PendingBirth");
+        logFail(testName, "explicit request for new persistentId did not record/queue PendingBirth");
         return;
     }
 
@@ -10787,7 +10839,7 @@ void runAraBirthUpsertWithUnreadySourceStillRecordsPending()
         return;
     }
 
-    // Enqueue — internally calls upsertPendingBirthLocked
+    // Explicit request: internally calls upsertPendingBirthLocked.
     VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-unready");
 
     // Verify: worker-ready queue is empty (source unready) but PendingBirth is recorded
@@ -10826,11 +10878,10 @@ void runAraBirthUpsertWithUnreadySourceStillRecordsPending()
     logPass(testName);
 }
 
-// 测试 4c (probe): Ready source triggers queue for existing pending birth.
-// Demonstrates that upsert pushes to queue when source becomes ready.
-void runAraBirthReadySourceTriggersQueueForExistingPending()
+// 测试 4c (probe): Source readiness continues an existing explicit pending birth request.
+void runAraBirthSourceReadyContinuesExistingPendingRequest()
 {
-    constexpr const char* testName = "AraBirth_ReadySourceTriggersQueueForExistingPending";
+    constexpr const char* testName = "AraBirth_SourceReadyContinuesExistingPendingRequest";
 
     VST3AraSession session;
     auto* audioSource = reinterpret_cast<juce::ARAAudioSource*>(0x100);
@@ -10843,7 +10894,7 @@ void runAraBirthReadySourceTriggersQueueForExistingPending()
     VST3AraSessionTestProbe::seedPlaybackRegionForModification(
         session, audioSource, region, "mod-ready-later", sourceWindow, 0.0, 1.0);
 
-    // Enqueue with unready source — pending recorded, queue empty
+    // Explicit request with unready source: pending recorded, queue empty.
     VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-ready-later");
     {
         const int before = VST3AraSessionTestProbe::readyBirthWorkQueueSize(session);
@@ -10857,16 +10908,12 @@ void runAraBirthReadySourceTriggersQueueForExistingPending()
         }
     }
 
-    // Now enable sample access AND set up readerLease → source becomes ready
+    // Now enable sample access: this may only continue the existing explicit request.
     VST3AraSessionTestProbe::setSourceReady(session, audioSource);
 
-    // Re-upsert: source ready → should now push to queue
-    VST3AraSessionTestProbe::upsertPendingBirthIfNeededForPersistentId(session, "mod-ready-later");
-
-    // Verify using the stable pending record; ready queue itself is a transient worker signal.
-    if (!VST3AraSessionTestProbe::hasPendingBirth(session, "mod-ready-later"))
+    if (!VST3AraSessionTestProbe::isPersistentIdQueuedForReadyBirthWork(session, "mod-ready-later"))
     {
-        logFail(testName, "ready source upsert lost the PendingBirth record before worker completion");
+        logFail(testName, "source readiness did not queue the existing explicit PendingBirth");
         return;
     }
 
@@ -11125,9 +11172,9 @@ void runArchitectureBehaviorSuite()
     runAraBirthSameSourceTwoDifferentPersistentIdsBothBirth();
     runAraBirthNewPersistentIdArrivesWhileWorkAlreadyInFlight_NotLost();
     runAraBirthStaleResultForOldWindowDoesNotOverrideLatestDesiredWindow();
-    runAraBirthDidAddOnPreexistingRegionWithNewPersistentIdEnqueuesBirth();
+    runAraBirthNewPersistentIdAllowsExplicitBirthRequest();
     runAraBirthUpsertWithUnreadySourceStillRecordsPending();
-    runAraBirthReadySourceTriggersQueueForExistingPending();
+    runAraBirthSourceReadyContinuesExistingPendingRequest();
     runAraBirthSamePidNewWindowBumpsRevisionAndReplacesWindow();
     runAraEditorMissingPayloadDoesNotClearBinding();
     runAraEditorDestroyRecreateReattachesExistingBinding();
@@ -11181,7 +11228,7 @@ void runArchitectureBehaviorSuite()
     runAraBindingStateRenderableRequiresMatchingSourceWindowTest();
     runAraBindingStateStaleSourceWindowNeedsRenderTest();
     runAraBindingStateStaleRegionIdentityNeedsRenderTest();
-    runAraBindingStateStaleSourceWindowRequeuesBirthTest();
+    runAraBindingStateStaleSourceWindowAllowsExplicitBirthRequestTest();
     runVst3AraSessionDefersRegionRemovalUntilDidEndEditingTest();
     runVst3AraSessionDefersSourceDestroyUntilDidEndEditingTest();
 #endif
