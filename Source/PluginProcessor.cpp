@@ -1133,6 +1133,12 @@ void OpenTuneAudioProcessor::analysisCompleted(
     }
 
     materializationStore_->setReferenceFeatures(materializationId, result);
+
+    // Async GAME analysis completed — seed TimeGrid handles from the extracted timing anchors.
+    // ensureTimeToolAnchorSeed is idempotent: if handles already exist or features aren't Game-produced,
+    // it returns early. Called here (not in the caller) because this is the single completion point
+    // that guarantees ReferenceFeatureStatus::Ready is visible before handle seeding.
+    ensureTimeToolAnchorSeed(materializationId);
 }
 
 void OpenTuneAudioProcessor::analysisFailed(uint64_t materializationId, const juce::String& reason)
@@ -4716,12 +4722,16 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(uint64_t materializationId
         && features.hasTimingAnchors();
 
     if (!featuresReady) {
-        features = buildReferenceFeatureSet(snapshot);
-        if (features.isReady()
-            && features.producer == ReferenceFeatureProducer::Game
-            && features.hasTimingAnchors()) {
-            materializationStore_->setReferenceFeatures(materializationId, features);
+        // Dispatch async GAME analysis via the already-existing async path.
+        // This posts to ReferenceAnalysisService worker thread and returns immediately.
+        // The UI will show overlay/badge during extraction (via PluginEditor busy aggregation).
+        const auto preheatStatus = preheatReferenceAlignmentFeatures(materializationId);
+        if (preheatStatus == ReferenceAnalysisPreheatStatus::InvalidMaterialization
+            || preheatStatus == ReferenceAnalysisPreheatStatus::AnalysisFailed) {
+            return false;
         }
+        // Queued or AlreadyReady: return false now, anchors will appear via async listener.
+        return false;
     }
 
     if (!features.isReady()

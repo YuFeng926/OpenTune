@@ -27,6 +27,7 @@
 #include "Editor/ConfirmDialogContent.h"
 #include "Utils/TimeCoordinate.h"
 #include "Utils/KeyShortcutConfig.h"
+#include "DSP/ReferenceFeatures.h"
 #include <cmath>
 #include <atomic>
 #include <cstdlib>
@@ -1094,6 +1095,27 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     if (rmvpeOverlayLatched_ && !isWorkspaceView_) {
         autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在处理音频"));
         shouldShowOverlay = true;
+    }
+
+    // Reference feature (timing anchor) extraction overlay —
+    // shares the same overlay system as RMVPE extraction.
+    if (!shouldShowOverlay && !isWorkspaceView_) {
+        const int activeTrack = getStandaloneActiveTrack(processorRef_);
+        const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
+        const uint64_t activeMaterializationId = (activeTrack >= 0 && activePlacementIndex >= 0)
+            ? getStandaloneMaterializationId(processorRef_, activeTrack, activePlacementIndex)
+            : 0;
+        if (activeMaterializationId != 0) {
+            // Check if GAME timing anchor extraction is in flight
+            ReferenceFeatureSet refFeatures;
+            auto* matStore = processorRef_.getMaterializationStore();
+            if (matStore != nullptr
+                && matStore->getReferenceFeatures(activeMaterializationId, refFeatures)
+                && refFeatures.status == ReferenceFeatureStatus::Extracting) {
+                autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在提取节奏锚点"));
+                shouldShowOverlay = true;
+            }
+        }
     }
 
     // ============================================================================
