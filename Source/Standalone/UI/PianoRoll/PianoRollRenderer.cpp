@@ -129,17 +129,6 @@ inline int sourceTimeToScreenX(double sourceTime,
     return ctx.timeToX(timelineTime);
 }
 
-// vocal-time-stretch §8.5 — convert a handle's output_seconds directly
-// to screen X, using the same projection chain as sourceTimeToScreenX.
-// TimeGrid handles are already in output/display time (unlike notes which
-// are in source time), so no tauForward is needed here.
-inline int outputTimeToScreenX(double outputSeconds,
-                                const PianoRollRenderer::RenderContext& ctx,
-                                const PianoRollRenderer::MaterializationRenderItem& item)
-{
-    const double timelineTime = item.projection.projectMaterializationTimeToTimeline(outputSeconds);
-    return ctx.timeToX(timelineTime);
-}
 
 bool isVoicedFrame(float frequencyHz) noexcept
 {
@@ -1650,22 +1639,16 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
     // this overlay.
     const juce::Colour kHighConfidenceColour = juce::Colour::fromRGB(0xE0, 0xB0, 0x40); // #E0B040 金色
 
-    // Find the matching render item for the TimeGrid snapshot's materialization.
-    // In current architecture there's exactly one item that matches.
-    const MaterializationRenderItem* timeGridItem = nullptr;
-    for (const auto& item : ctx.materializations) {
-        if (item.materializationId != 0) {
-            timeGridItem = &item;
-            break;  // use first valid item — handles are independent of per-item fields
-        }
-    }
+    // §8.5 — TimeGrid handles belong to the active edited materialization.
+    // The projection is supplied by buildRenderContext via materializationTimeToTimeline,
+    // which delegates to activeMaterializationProjection().  The renderer MUST NOT
+    // select an owner from ctx.materializations — that would risk using a wrong
+    // placement's timeline offset.
+    if (!ctx.materializationTimeToTimeline) return;
 
     for (const auto& h : ctx.timeGridSnapshot->handles()) {
-        const int x = timeGridItem != nullptr
-            ? outputTimeToScreenX(h.output_seconds, ctx, *timeGridItem)
-            : (ctx.materializationTimeToTimeline
-                ? ctx.timeToX(ctx.materializationTimeToTimeline(h.output_seconds))
-                : ctx.timeToX(h.output_seconds));
+        const double timelineTime = ctx.materializationTimeToTimeline(h.output_seconds);
+        const int x = ctx.timeToX(timelineTime);
         if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
 
         juce::Colour col = colorForKind(h.kind);

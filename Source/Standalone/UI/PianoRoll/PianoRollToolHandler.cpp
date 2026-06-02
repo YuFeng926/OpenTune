@@ -2077,9 +2077,8 @@ uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) 
     for (const auto& h : snap->handles()) {
         if (h.locked) continue;   // endpoints not selectable
 
-        // Use the same coordinate chain as the renderer's outputTimeToScreenX:
-        // output_seconds -> timeline via projectMaterializationTimeToTimeline -> screen X via timeToX.
-        // This mirrors PianoRollRenderer::outputTimeToScreenX for consistent handle hit-testing.
+        // output_seconds → timeline via projectMaterializationTimeToTimeline → screen X via timeToX.
+        // Uses the same active projection as drawTimeGridHandles for consistent hit-testing.
         const int handleX = ctx_.timeToX(
             ctx_.projectMaterializationTimeToTimeline
                 ? ctx_.projectMaterializationTimeToTimeline(h.output_seconds)
