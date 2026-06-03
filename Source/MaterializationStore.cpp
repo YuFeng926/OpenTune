@@ -281,7 +281,7 @@ void MaterializationStore::rebuildPlaybackSourceCache()
         src.timeStretchCache = &timeStretchCache_;
         src.materializationId = id;
         src.timeGridRevision = static_cast<uint32_t>(entry.timeGridRevision);
-        src.pitchRevision = 0;
+        src.pitchRevision = static_cast<uint32_t>(entry.pitchShiftRevision);
         src.pitchShiftSettings = entry.pitchShiftSettings;
         src.timeGridIsIdentity = (entry.timeGrid == nullptr) || entry.timeGrid->isIdentity();
         cache->emplace(id, std::move(src));

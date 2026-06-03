@@ -6,8 +6,9 @@
  * 本类不持有音频数据本身——音频编辑内容由 MaterializationStore 管理。
  *
  * 线程安全：stateLock_ (ReadWriteLock) 保护所有 Track/Placement 状态；
- *          snapshotLock_ (SpinLock) 保护音频线程消费的 PlaybackSnapshot。
- * 设计：音频线程只通过 loadPlaybackSnapshot() 读取不可变快照，零锁竞争。
+ *          PlaybackSnapshot 通过 std::atomic_load/exchange(shared_ptr) 无锁发布。
+ * 设计：音频线程只通过 loadPlaybackSnapshot() atomic_load 读取不可变快照，零锁竞争。
+ *         旧快照推入 retiredSnapshots_ 列表，写入方按 use_count()==1 sweep 回收。
  */
 #pragma once
 
@@ -69,12 +70,23 @@ public:
         std::atomic<float> currentRmsDb{-100.0f};
     };
 
+    // 音频线程消费的轻量放置投影 — 仅含播放必需的数字字段，不含 String/UI/业务字段
+    struct PlaybackPlacement {
+        uint64_t materializationId{0};
+        double timelineStartSeconds{0.0};
+        double durationSeconds{0.0};
+        double clipInSeconds{0.0};
+        float gain{1.0f};
+        double fadeInDuration{0.0};
+        double fadeOutDuration{0.0};
+    };
+
     // 音频线程消费的轨道快照（不可变）
     struct PlaybackTrack {
         bool isMuted{false};
         bool isSolo{false};
         float volume{1.0f};
-        std::vector<Placement> placements;
+        std::vector<PlaybackPlacement> placements;
     };
 
     // 完整的播放快照，由音频线程通过 loadPlaybackSnapshot() 获取
@@ -133,6 +145,10 @@ public:
     bool setPlacementGain(int trackId, uint64_t placementId, float gain);
     bool setPlacementTrim(int trackId, uint64_t placementId, double clipInSeconds, double durationSeconds);
     bool setPlacementFade(int trackId, uint64_t placementId, double fadeInDuration, double fadeOutDuration);
+    // 一次写锁内完成 trim + timelineStart 更新，只发布一次快照
+    bool setPlacementTrimAndTimelineStart(int trackId, uint64_t placementId,
+                                          double clipInSeconds, double durationSeconds,
+                                          double timelineStartSeconds);
 
     // 软删除/恢复接口，供 UndoAction 和垃圾回收使用
     bool retirePlacement(int trackId, uint64_t placementId);
@@ -174,8 +190,12 @@ private:
     uint64_t nextPlaybackEpoch_{1};
     uint64_t nextPlacementId_{1};
 
-    mutable juce::SpinLock snapshotLock_;
     PlaybackSnapshotHandle playbackSnapshot_;
+
+    // Writer-side delayed destruction: retired snapshots are held until
+    // use_count()==1 (no audio-thread references remain), then swept on the
+    // writer thread. This guarantees free/malloc never hits the RT path.
+    mutable std::vector<PlaybackSnapshotHandle> retiredSnapshots_;
 };
 
 } // namespace OpenTune

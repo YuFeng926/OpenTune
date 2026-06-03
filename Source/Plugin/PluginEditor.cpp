@@ -189,10 +189,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     startTimerHz(kHeartbeatHz);
 
-    // 启动时应用持久化声码器权重偏�?
+    // 启动时应用持久化声码器权重偏�?
     const auto weight = appPreferences_.getState().shared.vocoderModelWeight;
     processorRef_.setVocoderModelWeight(weight);
-    // 幂等：weight==Community �?setVocoderModelWeight �?return early
+    // 幂等：weight==Community �?setVocoderModelWeight �?return early
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
@@ -220,7 +220,7 @@ void OpenTuneAudioProcessorEditor::paint(juce::Graphics& g)
 
 void OpenTuneAudioProcessorEditor::mouseDown(const juce::MouseEvent& e)
 {
-    // 确保点击 Editor 背景时焦点转�?PianoRoll（按键可达）
+    // 确保点击 Editor 背景时焦点转�?PianoRoll（按键可达）
     if (!pianoRoll_.hasKeyboardFocus(true))
         pianoRoll_.grabKeyboardFocus();
     juce::AudioProcessorEditor::mouseDown(e);
@@ -275,7 +275,7 @@ void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection()
 
 void OpenTuneAudioProcessorEditor::timerCallback()
 {
-    // 首次 timer 回调时确�?PianoRoll 获取焦点（VST3 嵌入时序可能导致 visibilityChanged 中的 grab 失败�?
+    // 首次 timer 回调时确�?PianoRoll 获取焦点（VST3 嵌入时序可能导致 visibilityChanged 中的 grab 失败�?
     if (!initialFocusGrabbed_ && isShowing()) {
         initialFocusGrabbed_ = true;
         pianoRoll_.grabKeyboardFocus();
@@ -289,9 +289,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     if (auto* session = processorRef_.getCaptureSession()) {
         session->tick();
         // Drive record button visual state from capture session state:
-        //   HasCapturing �?Capturing (toggled + enabled)
-        //   HasProcessing �?Processing (disabled to prevent re-trigger)
-        //   Idle �?Idle (normal appearance)
+        //   HasCapturing �?Capturing (toggled + enabled)
+        //   HasProcessing �?Processing (disabled to prevent re-trigger)
+        //   Idle �?Idle (normal appearance)
         using OpenTune::Capture::SessionState;
         const auto captureState = session->getGlobalState();
         if (captureState == SessionState::HasCapturing)
@@ -345,9 +345,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     const bool hasActiveRender = chunkStats.hasActiveWork();
 
     // Pull fresh notes when an async generator (GAME) commits late.  Only
-    // refresh when the same materialization advances its notesRevision �?
+    // refresh when the same materialization advances its notesRevision �?
     // changing materializationId already triggers a refresh via
-    // syncMaterializationProjectionToPianoRoll �?setEditedMaterialization.
+    // syncMaterializationProjectionToPianoRoll �?setEditedMaterialization.
     if (activeMaterializationId != 0) {
         const uint64_t currentNotesRevision =
             processorRef_.getMaterializationNotesSnapshotById(activeMaterializationId).notesRevision;
@@ -391,7 +391,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         shouldShowOverlay = true;
     }
 
-    // Waiting for ARA materialization birth (Read Audio) �?blocking overlay with spinner.
+    // Waiting for ARA materialization birth (Read Audio) �?blocking overlay with spinner.
     // Auto-dismissed when the materialization is ready (detected via resolveCurrentMaterializationId).
     if (waitingForAraMaterialization_) {
         if (activeMaterializationId != 0) {
@@ -424,9 +424,11 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         renderBadge_.setVisible(shouldShowBadge);
     }
 
-    // Unified materialization �?PianoRoll sync (projection + curve + buffer + scale)
+    // Unified materialization �?PianoRoll sync (projection + curve + buffer + scale)
     syncMaterializationProjectionToPianoRoll();
 
+    // Consume audio-thread log events on message thread (see AudioThreadLogEvent).
+    processorRef_.consumeAudioThreadLogs();
 }
 
 void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
@@ -1014,7 +1016,7 @@ void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
         return;
     }
 #endif
-    // Non-ARA VST3: playhead is host-controlled only. Do NOT call setPosition() �?
+    // Non-ARA VST3: playhead is host-controlled only. Do NOT call setPosition() �?
     // the host would ignore it and the next processBlock would overwrite the value.
     // PianoRoll click/drag on timeline should not change plugin-internal position.
     juce::ignoreUnused(timeSeconds);
@@ -1084,7 +1086,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
 
     auto* content = new OpenTune::PitchShiftDialogContent(currentSettings);
 
-    // Listener helper �?applies settings and closes the dialog on confirm/reset
+    // Listener helper �?applies settings and closes the dialog on confirm/reset
     struct DialogHelper : public OpenTune::PitchShiftDialogContent::Listener
     {
         OpenTuneAudioProcessorEditor* owner;

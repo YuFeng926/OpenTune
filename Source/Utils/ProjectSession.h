@@ -74,6 +74,9 @@ public:
     /** 清除脏标记（保存成功后调用） */
     void clearDirty();
 
+    /** 获取当前脏标记的 generation（用于后台保存后判断是否仍可安全清除脏标记） */
+    uint64_t getDirtyGeneration() const noexcept;
+
     // ============================================================================
     // 工程操作
     // ============================================================================
@@ -103,6 +106,33 @@ public:
      * @return Result<void> 成功或失败原因
      */
     Result<void> saveProjectAs(const juce::File& file);
+
+    // ============================================================================
+    // 分步保存（分离 UI 线程和文件 I/O 线程）
+    // ============================================================================
+
+    /**
+     * 保存工作单元。
+     * prepareSave() 在消息线程构造此结构（captureSnapshot + 路径捕获）；
+     * executeSaveToFile() 在后台线程消费此结构（纯文件 I/O）。
+     */
+    struct SaveTask {
+        ProjectSnapshot snapshot;
+        juce::File targetFile;
+        juce::File mediaDirectory;
+    };
+
+    /** 在消息线程调用：捕获快照 + 路径。返回的 SaveTask 供后台线程使用。 */
+    SaveTask prepareSave();
+
+    /**
+     * 在后台线程调用：纯文件 I/O。
+     * 复制媒体文件并写入 .otproj。不碰任何 ProjectSession 内部状态。
+     */
+    static Result<void> executeSaveToFile(SaveTask& task);
+
+    /** 设置当前工程文件路径（用于 saveProjectAs 的场景） */
+    void setCurrentProjectFile(const juce::File& file);
 
     /**
      * 清空当前工程状态（新建工程）。
@@ -141,11 +171,11 @@ private:
     /** 获取工程文件所在目录的媒体子目录 */
     juce::File getProjectMediaDirectory() const;
 
-    /** 复制所有引用媒体到工程目录下的 Project_Media/ 子目录 */
-    Result<void> copyMediaToProjectDirectory(ProjectSnapshot& snapshot);
+    /** 复制所有引用媒体到指定媒体目录（静态，纯文件 I/O） */
+    static Result<void> copyMediaToProjectDirectory(ProjectSnapshot& snapshot, const juce::File& mediaDir);
 
-    /** 生成媒体文件的稳定目标文件名（基于内容哈希 + 原始扩展名） */
-    juce::String generateMediaFileName(const ProjectSourceEntry& source) const;
+    /** 生成媒体文件的稳定目标文件名 */
+    static juce::String generateMediaFileName(const ProjectSourceEntry& source);
 
     // ============================================================================
     // 成员
@@ -155,6 +185,7 @@ private:
     AppPreferences& appPreferencesRef_;
     juce::File currentProjectFile_;
     bool dirty_{false};
+    uint64_t dirtyGeneration_{0};
 
     // 固化工程身份（首次保存生成，后续复用）
     mutable juce::String cachedProjectId_;

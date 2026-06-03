@@ -57,13 +57,22 @@ public:
 
     /**
      * Store the full-clip stretched PCM for a materialization at a specific
-     * (pitchRevision, timeGridRevision) tuple.  Replaces any prior entry.
+     * (pitchRevision, timeGridRevision) tuple with build-generation token
+     * for stale-output rejection.  Replaces any prior entry.
      */
     void store(uint64_t materializationId,
                std::vector<float> audio,
                uint32_t pitchRevision,
                uint32_t timeGridRevision,
-               double sampleRate);
+               double sampleRate,
+               uint32_t buildGeneration);
+
+    /**
+     * Capture the current invalidation generation for this materialization.
+     * Caller (worker) holds this and passes it to store(); if the generation
+     * has changed by the time store() runs, the build output is discarded.
+     */
+    uint32_t beginBuild(uint64_t materializationId) const;
 
     /**
      * Check if entry for `materializationId` matches the current revisions.
@@ -108,6 +117,18 @@ public:
 private:
     mutable juce::SpinLock lock_;
     std::map<uint64_t, std::shared_ptr<Entry>> entries_;
+
+    // Atomic snapshot for lock-free readers.  Published atomically after each
+    // write to entries_ so that sliceForOutputRange never needs a lock.
+    mutable std::shared_ptr<const std::map<uint64_t, std::shared_ptr<Entry>>> readerMap_;
+
+    // Retired snapshots for writer-side delayed destruction.
+    // Swept when use_count()==1 — guarantees free/malloc never hits audio thread.
+    mutable std::vector<std::shared_ptr<const std::map<uint64_t, std::shared_ptr<Entry>>>> retiredSnapshots_;
+
+    // Per-materialization invalidation generation counter.
+    // Bumped by invalidate(), checked by store() to reject stale worker output.
+    mutable std::map<uint64_t, uint32_t> invalidationGen_;
 };
 
 } // namespace OpenTune

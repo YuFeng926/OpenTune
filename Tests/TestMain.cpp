@@ -464,6 +464,34 @@ CheckResult araHostTransportMirrorIsLockFree()
     return pass("ARA host transport UI mirror is lock-free");
 }
 
+CheckResult standaloneArrangementSnapshotIsLockFree()
+{
+    const std::string text = readText("Source/StandaloneArrangement.h")
+                           + readText("Source/StandaloneArrangement.cpp");
+
+    // --- Required: lock-free atomic pattern ---
+    const std::vector<std::string> required{
+        "std::atomic_load",
+        "std::atomic_exchange",
+        "retiredSnapshots_",
+    };
+    if (!containsAll(text, required))
+        return fail("StandaloneArrangement snapshot is lock-free",
+                    "missing atomic_load/exchange or retiredSnapshots_");
+
+    // --- Forbidden: SpinLock or single-slot retirement workaround ---
+    const std::vector<std::string> forbidden{
+        "snapshotLock_",
+        "juce::SpinLock",
+        "previousSnapshot_",
+    };
+    if (!lacksAll(text, forbidden))
+        return fail("StandaloneArrangement snapshot is lock-free",
+                    "snapshotLock_/SpinLock/previousSnapshot_ found — must use atomic exchange + retire list");
+
+    return pass("StandaloneArrangement snapshot is lock-free");
+}
+
 } // namespace
 
 int main()
@@ -480,6 +508,7 @@ int main()
         editorViewFollowsViewSelectionRole(),
         playbackRendererFollowsAssignedRegionRole(),
         araHostTransportMirrorIsLockFree(),
+        standaloneArrangementSnapshotIsLockFree(),
     };
 
     bool allPassed = true;

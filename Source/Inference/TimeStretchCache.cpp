@@ -9,13 +9,31 @@ namespace OpenTune {
 TimeStretchCache::TimeStretchCache() = default;
 TimeStretchCache::~TimeStretchCache() = default;
 
+uint32_t TimeStretchCache::beginBuild(uint64_t materializationId) const
+{
+    juce::SpinLock::ScopedLockType sl(lock_);
+    auto it = invalidationGen_.find(materializationId);
+    return (it != invalidationGen_.end()) ? it->second : 0;
+}
+
 void TimeStretchCache::store(uint64_t materializationId,
                               std::vector<float> audio,
                               uint32_t pitchRevision,
                               uint32_t timeGridRevision,
-                              double sampleRate)
+                              double sampleRate,
+                              uint32_t buildGeneration)
 {
     if (materializationId == 0 || sampleRate <= 0.0) return;
+
+    // ⚡️ Acquire lock before generation check.
+    juce::SpinLock::ScopedLockType sl(lock_);
+
+    // Reject stale build output if invalidation occurred during build,
+    // or if the materialization is unknown (e.g. after clear()).
+    auto genIt = invalidationGen_.find(materializationId);
+    if (genIt == invalidationGen_.end() || genIt->second != buildGeneration) {
+        return; // Stale output — unknown or mismatched generation.
+    }
 
     auto entry = std::make_shared<Entry>();
     entry->audio = std::move(audio);
@@ -25,16 +43,6 @@ void TimeStretchCache::store(uint64_t materializationId,
     entry->published = true;
 
     const size_t newBytes = entry->audio.size() * sizeof(float);
-
-    // ⚡️ §6.3 (Phase H) — shared LRU pool with RenderCache.
-    // Both caches feed the same `RenderCache::globalCacheCurrentBytes()`
-    // counter against `globalCacheLimitBytes()` (256 MB default).  When
-    // TimeStretchCache pushes total over the limit, RenderCache's per-cache
-    // eviction loop will reclaim Stage 1 chunks on its next store call.
-    // We don't proactively evict OTHER TimeStretchCache entries here because
-    // each materialization holds at most one entry (clip-wide), and replacing
-    // is handled below.
-    juce::SpinLock::ScopedLockType sl(lock_);
 
     // Subtract any prior entry's bytes for this materialization.
     auto it = entries_.find(materializationId);
@@ -54,15 +62,26 @@ void TimeStretchCache::store(uint64_t materializationId,
     while (newCurrent > peak
            && !RenderCache::globalCachePeakBytes()
                   .compare_exchange_weak(peak, newCurrent, std::memory_order_relaxed)) {}
+
+    // Publish atomic snapshot for lock-free readers.
+    auto snapshot = std::make_shared<const std::map<uint64_t, std::shared_ptr<Entry>>>(entries_);
+    auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
+    if (old)
+        retiredSnapshots_.push_back(std::move(old));
+    retiredSnapshots_.erase(
+        std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
+            [](const auto& p) { return p.use_count() <= 1; }),
+        retiredSnapshots_.end());
 }
 
 bool TimeStretchCache::hit(uint64_t materializationId,
                             uint32_t pitchRevision,
                             uint32_t timeGridRevision) const
 {
-    juce::SpinLock::ScopedLockType sl(lock_);
-    auto it = entries_.find(materializationId);
-    if (it == entries_.end() || !it->second) return false;
+    auto snap = std::atomic_load(&readerMap_);
+    if (!snap) return false;
+    auto it = snap->find(materializationId);
+    if (it == snap->end() || !it->second) return false;
     const auto& e = *it->second;
     return e.published
         && e.pitchRevision == pitchRevision
@@ -86,11 +105,10 @@ int TimeStretchCache::sliceForOutputRange(uint64_t materializationId,
     const int writableSamples = std::min(numSamples, destinationSamples - destinationStartSample);
     if (writableSamples <= 0) return 0;
 
-    juce::SpinLock::ScopedTryLockType sl(lock_);
-    if (!sl.isLocked()) return 0;
-
-    auto it = entries_.find(materializationId);
-    if (it == entries_.end() || !it->second || !it->second->published) return 0;
+    auto snap = std::atomic_load(&readerMap_);
+    if (!snap) return 0;
+    auto it = snap->find(materializationId);
+    if (it == snap->end() || !it->second || !it->second->published) return 0;
 
     const auto& e = *it->second;
     if (e.audio.empty()) return 0;
@@ -140,10 +158,21 @@ void TimeStretchCache::invalidate(uint64_t materializationId)
         if (oldBytes > 0 && it->second->published) {
             RenderCache::globalCacheCurrentBytes().fetch_sub(oldBytes, std::memory_order_relaxed);
         }
-        it->second->published = false;
-        it->second->audio.clear();
-        it->second->audio.shrink_to_fit();
+        // Replace with fresh empty entry instead of modifying in-place,
+        // so that any old atomic snapshot remains undisturbed.
+        it->second = std::make_shared<Entry>();
     }
+    ++invalidationGen_[materializationId];
+
+    // Publish atomic snapshot for lock-free readers.
+    auto snapshot = std::make_shared<const std::map<uint64_t, std::shared_ptr<Entry>>>(entries_);
+    auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
+    if (old)
+        retiredSnapshots_.push_back(std::move(old));
+    retiredSnapshots_.erase(
+        std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
+            [](const auto& p) { return p.use_count() <= 1; }),
+        retiredSnapshots_.end());
 }
 
 void TimeStretchCache::clear()
@@ -159,6 +188,17 @@ void TimeStretchCache::clear()
         }
     }
     entries_.clear();
+    invalidationGen_.clear();
+
+    // Publish empty atomic snapshot for lock-free readers.
+    auto snapshot = std::make_shared<const std::map<uint64_t, std::shared_ptr<Entry>>>();
+    auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
+    if (old)
+        retiredSnapshots_.push_back(std::move(old));
+    retiredSnapshots_.erase(
+        std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
+            [](const auto& p) { return p.use_count() <= 1; }),
+        retiredSnapshots_.end());
 }
 
 TimeStretchCache::Stats TimeStretchCache::getStats() const

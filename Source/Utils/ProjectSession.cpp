@@ -49,9 +49,11 @@ juce::String ProjectSession::getProjectName() const
 
 bool ProjectSession::isDirty() const noexcept { return dirty_; }
 
-void ProjectSession::markDirty() { dirty_ = true; }
+void ProjectSession::markDirty() { dirty_ = true; ++dirtyGeneration_; }
 
 void ProjectSession::clearDirty() { dirty_ = false; }
+
+uint64_t ProjectSession::getDirtyGeneration() const noexcept { return dirtyGeneration_; }
 
 // ============================================================================
 // 快照抓取
@@ -473,17 +475,10 @@ Result<void> ProjectSession::saveProject()
                 "No project path set; use Save Project As... first"));
     }
 
-    auto snapshot = captureSnapshot();
-    auto mediaResult = copyMediaToProjectDirectory(snapshot);
-    if (!mediaResult.ok()) {
-        return mediaResult;
-    }
-
-    ProjectPersistence persistence;
-    if (!persistence.writeProjectFile(snapshot, currentProjectFile_)) {
-        return Result<void>::failure(
-            Error::fromCode(ErrorCode::UnknownError,
-                ("Failed to write project file: " + currentProjectFile_.getFullPathName()).toStdString()));
+    auto task = prepareSave();
+    auto result = executeSaveToFile(task);
+    if (!result.ok()) {
+        return result;
     }
 
     clearDirty();
@@ -500,6 +495,45 @@ Result<void> ProjectSession::saveProjectAs(const juce::File& file)
         currentProjectFile_ = oldFile;
     }
     return result;
+}
+
+void ProjectSession::setCurrentProjectFile(const juce::File& file)
+{
+    currentProjectFile_ = file;
+}
+
+// ============================================================================
+// 分步保存
+// ============================================================================
+
+ProjectSession::SaveTask ProjectSession::prepareSave()
+{
+    SaveTask task;
+    task.snapshot = captureSnapshot();
+    task.targetFile = currentProjectFile_;
+    task.mediaDirectory = getProjectMediaDirectory();
+    return task;
+}
+
+Result<void> ProjectSession::executeSaveToFile(SaveTask& task)
+{
+    // 1. Copy media files (pure file I/O)
+    if (task.targetFile != juce::File{} && task.mediaDirectory != juce::File{}) {
+        auto mediaResult = copyMediaToProjectDirectory(task.snapshot, task.mediaDirectory);
+        if (!mediaResult.ok()) {
+            return mediaResult;
+        }
+    }
+
+    // 2. Write .otproj (pure file I/O)
+    ProjectPersistence persistence;
+    if (!persistence.writeProjectFile(task.snapshot, task.targetFile)) {
+        return Result<void>::failure(
+            Error::fromCode(ErrorCode::UnknownError,
+                ("Failed to write project file: " + task.targetFile.getFullPathName()).toStdString()));
+    }
+
+    return Result<void>::success();
 }
 
 void ProjectSession::newProject()
@@ -530,7 +564,7 @@ juce::File ProjectSession::getProjectMediaDirectory() const
     return currentProjectFile_.getParentDirectory().getChildFile(kMediaDirectoryName);
 }
 
-juce::String ProjectSession::generateMediaFileName(const ProjectSourceEntry& source) const
+juce::String ProjectSession::generateMediaFileName(const ProjectSourceEntry& source)
 {
     // Stable naming: sourceId + sanitized display name extension
     juce::String base = juce::String(source.sourceId);
@@ -544,14 +578,14 @@ juce::String ProjectSession::generateMediaFileName(const ProjectSourceEntry& sou
     return base + extension;
 }
 
-Result<void> ProjectSession::copyMediaToProjectDirectory(ProjectSnapshot& snapshot)
+Result<void> ProjectSession::copyMediaToProjectDirectory(ProjectSnapshot& snapshot,
+                                                         const juce::File& mediaDir)
 {
-    if (!hasProjectPath()) {
+    if (mediaDir == juce::File{}) {
         return Result<void>::failure(
-            Error::fromCode(ErrorCode::InvalidParameter, "Cannot copy media: no project path set"));
+            Error::fromCode(ErrorCode::InvalidParameter, "Cannot copy media: no media directory"));
     }
 
-    const auto mediaDir = getProjectMediaDirectory();
     if (!mediaDir.createDirectory().wasOk()) {
         return Result<void>::failure(
             Error::fromCode(ErrorCode::UnknownError,
