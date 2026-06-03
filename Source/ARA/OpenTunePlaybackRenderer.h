@@ -1,10 +1,11 @@
 #pragma once
 
+#include "../Utils/SourceWindow.h"
 #include "../Utils/TimeCoordinate.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <memory>
 #include <optional>
+#include <vector>
 
 namespace OpenTune {
 
@@ -52,13 +53,30 @@ bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
                                   const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept;
 
 class OpenTuneDocumentController;
+class OpenTuneAudioProcessor;
 
 class OpenTunePlaybackRenderer : public juce::ARAPlaybackRenderer
 {
 public:
     using juce::ARAPlaybackRenderer::ARAPlaybackRenderer;
+
+    struct PlaybackRegionRenderItem
+    {
+        juce::ARAPlaybackRegion* playbackRegion{nullptr};
+        SourceWindow contentWindow;
+        uint64_t materializationId{0};
+        double startInPlaybackTime{0.0};
+        double startInModificationTime{0.0};
+        double durationInPlaybackTime{0.0};
+        double durationInModificationTime{0.0};
+        double materializationDurationSeconds{0.0};
+
+        double endInPlaybackTime() const noexcept { return startInPlaybackTime + durationInPlaybackTime; }
+    };
     
     ~OpenTunePlaybackRenderer() override;
+
+    void refreshRenderPlanFromDocument();
     
     void prepareToPlay(double sampleRate,
                        int maximumSamplesPerBlock,
@@ -71,12 +89,19 @@ public:
     bool processBlock(juce::AudioBuffer<float>& buffer,
                       juce::AudioProcessor::Realtime realtime,
                       const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept override;
+
+protected:
+    void didAddPlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept override;
+    void willRemovePlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept override;
     
 private:
     double hostSampleRate_ = 44100.0;
     int numChannels_ = 2;
     int maximumSamplesPerBlock_ = 512;
     juce::AudioBuffer<float> playbackScratch_;
+    OpenTuneAudioProcessor* processor_ = nullptr;
+    std::vector<juce::ARAPlaybackRegion*> assignedPlaybackRegions_;
+    std::vector<PlaybackRegionRenderItem> renderItems_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTunePlaybackRenderer)
 };

@@ -54,3 +54,9 @@ Resources/PianoSamples-mp3/temp_A0.aiff
 /bug1.png
 /bug2.png
 /*.png
+
+# Python scripting workspace
+Python/
+
+# Project knowledge base
+knowledge/

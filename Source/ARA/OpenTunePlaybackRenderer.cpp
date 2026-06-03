@@ -1,74 +1,145 @@
 #include "OpenTunePlaybackRenderer.h"
+
 #include "OpenTuneDocumentController.h"
 #include "PluginProcessor.h"
-#include "Utils/AppLogger.h"
-#include "Utils/TimeCoordinate.h"
-#include "Utils/MaterializationTimelineProjection.h"
 
-#include <atomic>
-#include <cmath>
+#include <algorithm>
 
 namespace OpenTune {
-
-bool canRenderPublishedRegionView(const VST3AraSession::PublishedRegionView& view) noexcept
-{
-    return view.bindingState == VST3AraSession::BindingState::Renderable;
-}
-
-int computeSourceSamplesForHostBlock(int hostSamples,
-                                     double hostSampleRate,
-                                     double sourceSampleRate)
-{
-    if (hostSamples <= 0)
-        return 0;
-
-    if (hostSampleRate <= 0.0 || sourceSampleRate <= 0.0)
-        return hostSamples;
-
-    const double hostDurationSeconds = static_cast<double>(hostSamples) / hostSampleRate;
-    const double sourceSamplesExact = hostDurationSeconds * sourceSampleRate;
-    const int sourceSamples = static_cast<int>(std::ceil(sourceSamplesExact));
-    return juce::jmax(1, sourceSamples);
-}
 
 bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
                                   const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
 {
-    if (realtime == juce::AudioProcessor::Realtime::yes && !positionInfo.getIsPlaying())
-        return false;
-
-    return true;
+    return realtime != juce::AudioProcessor::Realtime::yes || positionInfo.getIsPlaying();
 }
 
 namespace {
-    std::atomic<bool> firstProcessCall{true};
-    std::atomic<int> renderGateLogCounter{0};
-
-    const VST3AraSession::PublishedRegionView* findRenderableRegionView(
-        const VST3AraSession::PublishedSnapshot& snapshot,
-        juce::ARAPlaybackRegion* region)
+    double mapPlaybackTimeToMaterializationTime(const OpenTunePlaybackRenderer::PlaybackRegionRenderItem& region,
+                                                double playbackTimeSeconds) noexcept
     {
-        const auto* publishedView = snapshot.findRegion(region);
-        if (publishedView == nullptr)
-            return nullptr;
+        if (region.durationInPlaybackTime <= 0.0 || region.durationInModificationTime <= 0.0)
+            return 0.0;
 
-        if (!canRenderPublishedRegionView(*publishedView))
-            return nullptr;
+        const double playbackOffset = playbackTimeSeconds - region.startInPlaybackTime;
+        const double modificationOffset = playbackOffset
+            * (region.durationInModificationTime / region.durationInPlaybackTime);
+        const double modificationTime = region.startInModificationTime + modificationOffset;
+        const double contentOffset = modificationTime - region.contentWindow.sourceStartSeconds;
 
-        return publishedView;
+        return juce::jlimit(0.0,
+                            juce::jmax(0.0, region.materializationDurationSeconds),
+                            contentOffset);
+    }
+
+    void mixScratchInto(juce::AudioBuffer<float>& destination,
+                        const juce::AudioBuffer<float>& source,
+                        int destinationStartSample,
+                        int samplesToMix) noexcept
+    {
+        const int channels = juce::jmin(destination.getNumChannels(), source.getNumChannels());
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            auto* dest = destination.getWritePointer(ch, destinationStartSample);
+            const auto* src = source.getReadPointer(ch);
+            for (int sample = 0; sample < samplesToMix; ++sample)
+                dest[sample] += src[sample];
+        }
+    }
+
+    juce::ARAPlaybackRegion* toJucePlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
+    {
+        return static_cast<juce::ARAPlaybackRegion*>(playbackRegion);
     }
 }
 
-OpenTunePlaybackRenderer::~OpenTunePlaybackRenderer() = default;
+OpenTunePlaybackRenderer::~OpenTunePlaybackRenderer()
+{
+    if (auto* dc = getDocumentController())
+        if (auto* docController =
+                juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<OpenTuneDocumentController>(dc))
+            docController->unregisterPlaybackRenderer(*this);
+}
+
+void OpenTunePlaybackRenderer::didAddPlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
+{
+    auto* jucePlaybackRegion = toJucePlaybackRegion(playbackRegion);
+    if (jucePlaybackRegion != nullptr
+        && std::find(assignedPlaybackRegions_.begin(), assignedPlaybackRegions_.end(), jucePlaybackRegion)
+            == assignedPlaybackRegions_.end())
+    {
+        assignedPlaybackRegions_.push_back(jucePlaybackRegion);
+    }
+
+    refreshRenderPlanFromDocument();
+}
+
+void OpenTunePlaybackRenderer::willRemovePlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
+{
+    auto* jucePlaybackRegion = toJucePlaybackRegion(playbackRegion);
+    assignedPlaybackRegions_.erase(std::remove(assignedPlaybackRegions_.begin(),
+                                               assignedPlaybackRegions_.end(),
+                                               jucePlaybackRegion),
+                                   assignedPlaybackRegions_.end());
+    renderItems_.erase(std::remove_if(renderItems_.begin(), renderItems_.end(),
+                                      [jucePlaybackRegion](const PlaybackRegionRenderItem& item)
+                                      {
+                                          return item.playbackRegion == jucePlaybackRegion;
+                                      }),
+                       renderItems_.end());
+}
+
+void OpenTunePlaybackRenderer::refreshRenderPlanFromDocument()
+{
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+    {
+        processor_ = nullptr;
+        renderItems_.clear();
+        return;
+    }
+
+    auto* docController =
+        juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<OpenTuneDocumentController>(dc);
+    if (docController == nullptr)
+    {
+        processor_ = nullptr;
+        renderItems_.clear();
+        return;
+    }
+
+    processor_ = docController->getProcessor();
+    const auto projections = docController->getPlaybackRegionProjectionsFor(assignedPlaybackRegions_);
+    std::vector<PlaybackRegionRenderItem> nextItems;
+    nextItems.reserve(projections.size());
+
+    for (const auto& projection : projections)
+    {
+        if (!projection.isRenderable())
+            continue;
+
+        PlaybackRegionRenderItem item;
+        item.playbackRegion = projection.playbackRegion;
+        item.contentWindow = projection.contentWindow;
+        item.materializationId = projection.materializationId;
+        item.startInPlaybackTime = projection.startInPlaybackTime;
+        item.startInModificationTime = projection.startInModificationTime;
+        item.durationInPlaybackTime = projection.durationInPlaybackTime;
+        item.durationInModificationTime = projection.durationInModificationTime;
+        item.materializationDurationSeconds = projection.materializationDurationSeconds;
+        nextItems.push_back(item);
+    }
+
+    renderItems_ = std::move(nextItems);
+}
 
 void OpenTunePlaybackRenderer::prepareToPlay(double sampleRate,
-                                              int maximumSamplesPerBlock,
-                                              int numChannels,
-                                              juce::AudioProcessor::ProcessingPrecision precision,
-                                              AlwaysNonRealtime alwaysNonRealtime)
+                                             int maximumSamplesPerBlock,
+                                             int numChannels,
+                                             juce::AudioProcessor::ProcessingPrecision precision,
+                                             AlwaysNonRealtime alwaysNonRealtime)
 {
     juce::ignoreUnused(precision, alwaysNonRealtime);
-    
+
     hostSampleRate_ = sampleRate;
     numChannels_ = numChannels;
     maximumSamplesPerBlock_ = maximumSamplesPerBlock;
@@ -77,188 +148,63 @@ void OpenTunePlaybackRenderer::prepareToPlay(double sampleRate,
                              false,
                              true,
                              true);
-    
-    AppLogger::log("ARA PlaybackRenderer: prepareToPlay sampleRate=" + juce::String(sampleRate, 0)
-        + " maxBlock=" + juce::String(maximumSamplesPerBlock)
-        + " channels=" + juce::String(numChannels));
+
 }
 
 void OpenTunePlaybackRenderer::releaseResources()
 {
+    playbackScratch_.setSize(0, 0);
 }
 
 bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
-                                              juce::AudioProcessor::Realtime realtime,
-                                              const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
+                                            juce::AudioProcessor::Realtime realtime,
+                                            const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
 {
     if (!shouldRenderAraPlaybackBlock(realtime, positionInfo))
     {
         buffer.clear();
-        if (renderGateLogCounter.fetch_add(1) < 8)
-        {
-            AppLogger::log("ARA RenderGate: playing=false realtime=yes");
-        }
         return true;
     }
 
-    const auto& regions = getPlaybackRegions();
-    
-    if (firstProcessCall.exchange(false))
-    {
-        AppLogger::log("ARA PlaybackRenderer: First processBlock call, regions count = " 
-            + juce::String(regions.size())
-            + " hostSampleRate=" + juce::String(hostSampleRate_, 0));
-    }
-    
-    if (regions.empty())
-    {
-        buffer.clear();
-        return false;
-    }
-    
-    auto* dc = getDocumentController();
-    if (!dc)
-    {
-        buffer.clear();
-        return false;
-    }
-    
-    auto* docController = juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<OpenTuneDocumentController>(dc);
-    if (!docController)
-    {
-        buffer.clear();
-        return false;
-    }
-    
-    // Renderer stays read-only: session owns region truth, clip core owns audio truth.
-    // Session is owned by DocumentController (document-scoped), not by the processor.
-    auto* session = docController->getSession();
-    auto* processor = docController->getProcessor();
-    if (session == nullptr || processor == nullptr)
-    {
-        buffer.clear();
-        return false;
-    }
-    auto* materializationStore = processor->getMaterializationStore();
-    if (materializationStore == nullptr)
-    {
-        buffer.clear();
-        return false;
-    }
-
-    // Phase 25 contract: each audio block consumes one immutable snapshot.
-    const auto snapshot = session->loadSnapshot();
-    if (!snapshot || snapshot->publishedRegions.empty())
-    {
-        buffer.clear();
-        return false;
-    }
-
-    bool processedAny = false;
     buffer.clear();
 
-    jassert(playbackScratch_.getNumChannels() >= buffer.getNumChannels());
-    jassert(playbackScratch_.getNumSamples() >= buffer.getNumSamples());
+    auto* processor = processor_;
+    if (processor == nullptr || renderItems_.empty())
+        return true;
 
     const double blockStartSeconds = positionInfo.getTimeInSeconds().orFallback(0.0);
-    
-    for (auto* region : regions)
+
+    for (const auto& region : renderItems_)
     {
-        const auto* const publishedView = findRenderableRegionView(*snapshot, region);
-        if (publishedView == nullptr)
-            continue;
-
-        const auto appliedProjection = publishedView->appliedProjection;
-
-        const double playbackStartSeconds = publishedView->playbackStartSeconds;
-        const double playbackEndSeconds = publishedView->playbackEndSeconds;
-        const double playbackDurationSeconds = playbackEndSeconds - playbackStartSeconds;
-        const double materializationDurationSeconds = publishedView->materializationDurationSeconds;
-
-        // Invariant: projection must be isometric (1:1 time mapping)
-        if (std::abs(playbackDurationSeconds - materializationDurationSeconds) > 0.001)
-        {
-            AppLogger::log("InvariantViolation: ARA renderer projection duration mismatch"
-                " playbackDuration=" + juce::String(playbackDurationSeconds, 6)
-                + " materializationDuration=" + juce::String(materializationDurationSeconds, 6));
-            jassertfalse;
-            continue;
-        }
-
         const auto overlap = computeRegionBlockRenderSpan(blockStartSeconds,
                                                           buffer.getNumSamples(),
                                                           hostSampleRate_,
-                                                          playbackStartSeconds,
-                                                          playbackEndSeconds);
+                                                          region.startInPlaybackTime,
+                                                          region.endInPlaybackTime());
         if (!overlap.has_value())
             continue;
 
-        const int destinationStartSample = overlap->destinationStartSample;
-        const int requestedSamples = overlap->samplesToCopy;
-        if (requestedSamples <= 0)
-            continue;
-
-        const double sourceSampleRate = publishedView->sampleRate;
-
-        // Map overlap start to materialization-local time using shared projection
-        const MaterializationTimelineProjection projection{
-            playbackStartSeconds,
-            playbackDurationSeconds,
-            materializationDurationSeconds
-        };
-        const double mappedLocalTime = projection.clampMaterializationTime(
-            projection.projectTimelineTimeToMaterialization(overlap->overlapStartSeconds));
-
-        MaterializationStore::PlaybackReadSource contentReadSource;
-        if (!materializationStore->getPlaybackReadSource(appliedProjection.materializationId, contentReadSource))
-        {
-            continue;
-        }
-
         OpenTuneAudioProcessor::PlaybackReadSource readSource;
-        readSource.renderCache = contentReadSource.renderCache;
-        readSource.audioBuffer = contentReadSource.audioBuffer;
-        // vocal-time-stretch §7 — propagate Stage 2 fast-path fields so the
-        // ARA playback path consumes TimeStretchCache (RB stretched) when the
-        // user has placed non-identity handles.  Without these fields, ARA
-        // playback silently degrades to the dry+vocoder piecewise overlay path
-        // (no time-stretch applied), bypassing the RB v5 phase-purity tuning.
-        readSource.timeStretchCache    = contentReadSource.timeStretchCache;
-        readSource.materializationId   = contentReadSource.materializationId;
-        readSource.pitchRevision       = contentReadSource.pitchRevision;
-        readSource.timeGridRevision    = contentReadSource.timeGridRevision;
-        readSource.timeGridIsIdentity  = contentReadSource.timeGridIsIdentity;
+        if (!processor->getPlaybackReadSourceByMaterializationId(region.materializationId, readSource))
+            continue;
 
-        const double clipReadStartSeconds = mappedLocalTime;
-
-        const OpenTuneAudioProcessor::PlaybackReadRequest request(
-            readSource,
-            clipReadStartSeconds,
-            hostSampleRate_,
-            requestedSamples);
+        const double readStartSeconds = mapPlaybackTimeToMaterializationTime(region,
+                                                                             overlap->overlapStartSeconds);
+        const OpenTuneAudioProcessor::PlaybackReadRequest request(readSource,
+                                                                  readStartSeconds,
+                                                                  hostSampleRate_,
+                                                                  overlap->samplesToCopy);
 
         playbackScratch_.clear();
-        const int samplesToCopy = processor->readPlaybackAudio(request, playbackScratch_, 0);
-        if (samplesToCopy <= 0)
-        {
+        const int copied = processor->readPlaybackAudio(request, playbackScratch_, 0);
+        if (copied <= 0)
             continue;
-        }
 
-        const int samplesToMix = juce::jmin(samplesToCopy, requestedSamples);
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        {
-            auto* dest = buffer.getWritePointer(ch);
-            const float* src = playbackScratch_.getReadPointer(ch);
-            for (int sample = 0; sample < samplesToMix; ++sample)
-            {
-                dest[destinationStartSample + sample] += src[sample];
-            }
-        }
-
-        processedAny = true;
+        const int samplesToMix = juce::jmin(copied, overlap->samplesToCopy);
+        mixScratchInto(buffer, playbackScratch_, overlap->destinationStartSample, samplesToMix);
     }
-    
-    return processedAny;
+
+    return true;
 }
 
-}
+} // namespace OpenTune

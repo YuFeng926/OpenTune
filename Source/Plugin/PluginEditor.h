@@ -4,7 +4,7 @@
  * VST3 插件编辑器（Plugin Editor）
  *
  * VST3/ARA 格式专属的 UI 壳层。通过 Timer 心跳轮询 Processor 状态，
- * 将 ARA preferred region 的 Materialization 投射到 PianoRoll 进行编辑。
+ * 将 ARA EditorView selection 的 Materialization 投射到 PianoRoll 进行编辑。
  * 与 Standalone Editor 共享 PianoRollComponent 和 ParameterPanel，
  * 但不包含多轨 Arrangement 视图。
  *
@@ -17,10 +17,6 @@
 
 #include <memory>
 #include <vector>
-
-#if JucePlugin_Enable_ARA
-#include "ARA/VST3AraSession.h"
-#endif
 
 #include "PluginProcessor.h"
 #include "Utils/AppPreferences.h"
@@ -47,6 +43,9 @@ struct SegmentInfo;
 namespace OpenTune::PluginUI {
 
 class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
+#if JucePlugin_Enable_ARA
+                                     public juce::AudioProcessorEditorARAExtension,
+#endif
                                      public ParameterPanel::Listener,
                                      public MenuBarComponent::Listener,
                                      public TransportBarComponent::Listener,

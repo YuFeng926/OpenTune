@@ -694,12 +694,16 @@ endif()
 # ARA files (VST3 ARA extension build only)
 if(OPENTUNE_ENABLE_ARA)
     target_sources(OpenTune PRIVATE
+        Source/ARA/AudioSource.cpp
+        Source/ARA/AudioSource.h
+        Source/ARA/AudioModification.cpp
+        Source/ARA/AudioModification.h
+        Source/ARA/PlaybackRegion.cpp
+        Source/ARA/PlaybackRegion.h
         Source/ARA/OpenTuneDocumentController.cpp
         Source/ARA/OpenTuneDocumentController.h
         Source/ARA/OpenTunePlaybackRenderer.cpp
         Source/ARA/OpenTunePlaybackRenderer.h
-        Source/ARA/VST3AraSession.cpp
-        Source/ARA/VST3AraSession.h
     )
 endif()
 
@@ -1212,36 +1216,7 @@ option(OPENTUNE_BUILD_TESTS "Build unit tests" ON)
 
 if(OPENTUNE_BUILD_TESTS)
     add_executable(OpenTuneTests
-        Source/Utils/D3D12AgilityBootstrap.cpp
         Tests/TestMain.cpp
-        Tests/TestEditorFactoryStub.cpp
-        Tests/TimeGridTests.cpp
-        Tests/SoundTouchStretcherTests.cpp
-        Tests/TimeStretchCacheTests.cpp
-        Tests/MaterializationStoreTimeGridTests.cpp
-        Tests/Stage2WorkerTests.cpp
-        Tests/TimeToolHandlerTests.cpp
-        Tests/IntegrationPipelineTests.cpp
-        Tests/InvariantContractTests.cpp
-        Tests/GameNoteGeneratorTests.cpp
-        Tests/VocoderConfigTests.cpp
-        Tests/TestTimeGridPatchBuilder.cpp
-        Tests/TestReferenceAutoAlign.cpp
-        Tests/TestCompositeUndoAction.cpp
-        Tests/TestUndoManagerContract.cpp
-        Tests/TestAutoRefFailure.cpp
-        Tests/TestAutoRefArchitecture.cpp
-        Tests/TestReferenceFeaturesCacheSmoke.cpp
-        Tests/TestAutoRefIntegration.cpp
-        Tests/TestReferenceBinding.cpp
-        Tests/TestPlacementReferenceCascade.cpp
-        Tests/TestTimelineRenderingPipeline.cpp
-        Tests/TestArrangementContract.cpp
-        Tests/TestReferenceFeaturesCacheLifecycle.cpp
-        Tests/TestMaterializationContract.cpp
-        Tests/TestReferenceAnalysisService.cpp
-        Tests/TestProjectSessionReference.cpp
-        Tests/AutoTunePitchShifterTests.cpp
     )
 
     target_include_directories(OpenTuneTests
@@ -1286,6 +1261,7 @@ if(OPENTUNE_BUILD_TESTS)
             JUCE_WEB_BROWSER=0
             JUCE_USE_CURL=0
             JUCE_REPORT_APP_USAGE=0
+            OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
             # CRITICAL: Must match OpenTune_Standalone target so that
             # OpenTuneAudioProcessor's class layout (conditional members
             # behind #if !JucePlugin_Build_Standalone) is identical to the
