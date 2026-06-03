@@ -143,6 +143,22 @@ public:
         int timeSignatureDenominator{4};
     };
 
+    // Audio-thread → message-thread log event dispatch.
+    // Audio thread writes to logEventData_ then bumps logEventGeneration_;
+    // message thread reads via consumeAudioThreadLogs().
+    struct AudioThreadLogEvent {
+        enum class Type : uint8_t { None, FadeOutComplete, CaptureDiag };
+        Type type = Type::None;
+        int diagNumChannels = 0;
+        int diagNumSamples = 0;
+        float diagMag = 0.0f;
+        float diagS0 = 0.0f;
+        float diagS1 = 0.0f;
+        float diagS2 = 0.0f;
+        float diagS3 = 0.0f;
+        float diagS64 = 0.0f;
+    };
+
     struct ReferenceAlignmentResult {
         enum class Status : uint8_t {
             Succeeded = 0,
@@ -396,53 +412,19 @@ private:
 public:
     // ========================================================================
     // Playback Read API Types (Unified read path for Standalone/VST3)
-    // ========================================================================
-
-    /**
-     * PlaybackReadSource - 统一读取源描述
-     *
-     * 读取核只依赖当前播放采样率的 dry signal 与已发布 render cache，
-     * 不依赖 clip 或 ARA source 的宿主容器。
-     */
-    struct PlaybackReadSource {
-        std::shared_ptr<RenderCache> renderCache;
-        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
-
-        // vocal-time-stretch §7 (Phase D MVP):
-        //   When `timeGridIsIdentity` is false and `timeStretchCache` is non-null,
-        //   readPlaybackAudio prefers Stage 2 output (TimeStretchCache::sliceForOutputRange).
-        //   On miss, falls back to the dry path (existing behavior).  When identity
-        //   (default after import), behavior is unchanged.
-        TimeStretchCache* timeStretchCache{nullptr};
-        uint64_t materializationId{0};
-        uint32_t pitchRevision{0};
-        uint32_t timeGridRevision{0};
-        bool timeGridIsIdentity{true};
-
-        bool hasAudio() const
-        {
-            return audioBuffer != nullptr && audioBuffer->getNumSamples() > 0;
-        }
-
-        bool canRead() const
-        {
-            return hasAudio();
-        }
-    };
-
     /**
      * PlaybackReadRequest - 统一读取请求结构
      *
      * readStartSeconds 必须与 source 中 renderCache / dry buffer 的时间基保持一致。
      */
     struct PlaybackReadRequest {
-        PlaybackReadSource source;
+        MaterializationStore::PlaybackReadSource source;
         double readStartSeconds{0.0};
         double targetSampleRate{44100.0};
         int numSamples{0};
 
         PlaybackReadRequest() = default;
-        PlaybackReadRequest(PlaybackReadSource src, double start, double rate, int samples)
+        PlaybackReadRequest(MaterializationStore::PlaybackReadSource src, double start, double rate, int samples)
             : source(src), readStartSeconds(start), targetSampleRate(rate), numSamples(samples) {}
     };
 
@@ -707,7 +689,7 @@ public:
     
     // Materialization and placement access
     std::shared_ptr<const juce::AudioBuffer<float>> getMaterializationAudioBufferById(uint64_t materializationId) const;
-    bool getPlaybackReadSourceByMaterializationId(uint64_t materializationId, PlaybackReadSource& out) const;
+    bool getPlaybackReadSourceByMaterializationId(uint64_t materializationId, MaterializationStore::PlaybackReadSource& out) const;
     uint64_t getPlacementId(int trackId, int placementIndex) const;
     int findPlacementIndexById(int trackId, uint64_t placementId) const;
     bool getPlacementByIndex(int trackId, int placementIndex, StandaloneArrangement::Placement& out) const;
@@ -834,6 +816,9 @@ public:
     void setPosition(double seconds);
     double getPosition() const;
     HostTransportSnapshot getHostTransportSnapshot() const;
+
+    /// Consume audio-thread log events on message thread. Called from PluginEditor::timerCallback().
+    void consumeAudioThreadLogs();
     
     double getPlayStartPosition() const { return playStartPosition_.load(); }
     void setPlayStartPosition(double seconds) { playStartPosition_.store(seconds); }
@@ -883,6 +868,14 @@ public:
 private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
+
+    // Audio-thread → message-thread log event dispatch (SPSC).
+    // Audio thread writes logEventData_ and bumps logEventGeneration_;
+    // message thread reads via consumeAudioThreadLogs(), using logEventReadGeneration_ to dedup.
+    AudioThreadLogEvent              logEventData_;
+    std::atomic<uint64_t>           logEventGeneration_{0};
+    uint64_t                        logEventReadGeneration_{0}; // message-thread only
+
     AppPreferences* appPreferences_{nullptr};
     std::unique_ptr<AutoTunePitchShifter> autoTuneShifter_;  ///< 轻量修音 cycle-resampling pitch-shift（懒初始化）
 

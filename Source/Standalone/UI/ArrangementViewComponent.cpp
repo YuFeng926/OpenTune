@@ -2098,8 +2098,8 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
             // Shift timelineStart to keep right edge static
             double newStart = dragStartPlacementSeconds_ + snappedDelta;
             if (newStart < 0.0) newStart = 0.0;
-            arr->setPlacementTrim(dragStartTrackId_, dragOperationPlacementId_, newClipIn, newDuration);
-            arr->setPlacementTimelineStartSeconds(dragStartTrackId_, dragOperationPlacementId_, newStart);
+            arr->setPlacementTrimAndTimelineStart(dragStartTrackId_, dragOperationPlacementId_,
+                                                   newClipIn, newDuration, newStart);
         } else { // TrimRight
             double newDuration = trimStartDurationSeconds_ + snappedDelta;
             constexpr double minDur = 0.01;

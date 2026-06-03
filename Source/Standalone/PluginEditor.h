@@ -301,6 +301,8 @@ private:
 
     // Export worker thread management
     std::thread exportWorker_;
+    // Save worker thread (joinable, same pattern as exportWorker_)
+    std::thread saveWorker_;
     std::atomic<bool> exportInProgress_{false};
 
     // Detached-safe background tasks (import/deferred post-process)

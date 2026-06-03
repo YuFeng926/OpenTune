@@ -184,7 +184,7 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
         if (!overlap.has_value())
             continue;
 
-        OpenTuneAudioProcessor::PlaybackReadSource readSource;
+        MaterializationStore::PlaybackReadSource readSource;
         if (!processor->getPlaybackReadSourceByMaterializationId(region.materializationId, readSource))
             continue;
 

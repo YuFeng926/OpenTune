@@ -552,6 +552,12 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
         exportWorker_.join();
     }
 
+    // Safely join save worker thread if it exists
+    if (saveWorker_.joinable())
+    {
+        saveWorker_.join();
+    }
+
     // Remove custom LookAndFeel
     setLookAndFeel(nullptr);
 
@@ -1970,19 +1976,36 @@ void OpenTuneAudioProcessorEditor::saveProjectRequested()
         saveProjectAsRequested();
         return;
     }
-    auto result = projectSession_.saveProject();
-    if (!result.ok()) {
-        ConfirmDialogContent::launch(
-            new ConfirmDialogContent(
-                juce::String::fromUTF8(u8"保存工程失败"),
-                result.error().fullMessage(),
-                { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
-            this);
-        return;
-    }
-    projectSession_.clearDirty();
-    syncRecentProjectsToMenu();
-    updateTitleWithProjectPath();
+    if (saveWorker_.joinable()) saveWorker_.join();
+
+    // Capture snapshot and paths on message thread — ProjectSession only accessed here
+    auto task = projectSession_.prepareSave();
+    const uint64_t gen = projectSession_.getDirtyGeneration();
+    const auto path = task.targetFile;
+
+    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+    saveWorker_ = std::thread([safeThis, task = std::move(task), gen, path]() mutable {
+        // Background thread: pure file I/O only
+        auto result = ProjectSession::executeSaveToFile(task);
+        juce::MessageManager::callAsync([safeThis, result, gen, path]() {
+            if (safeThis == nullptr) return;
+            if (!result.ok()) {
+                ConfirmDialogContent::launch(
+                    new ConfirmDialogContent(
+                        juce::String::fromUTF8(u8"保存工程失败"),
+                        result.error().fullMessage(),
+                        { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                    safeThis.getComponent());
+                return;
+            }
+            // State changes back on message thread
+            if (safeThis->projectSession_.getDirtyGeneration() == gen)
+                safeThis->projectSession_.clearDirty();
+            safeThis->projectSession_.pushRecentProject(path);
+            safeThis->syncRecentProjectsToMenu();
+            safeThis->updateTitleWithProjectPath();
+        });
+    });
 }
 
 void OpenTuneAudioProcessorEditor::openProjectRequested()
@@ -1997,26 +2020,40 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
         new ConfirmDialogContent(
             juce::String::fromUTF8(u8"当前工程尚未保存"),
             juce::String::fromUTF8(u8"打开其他工程前，是否保存当前工程的更改？"),
-            { { juce::String::fromUTF8(u8"保存"), [safeThis] {
+            {               { juce::String::fromUTF8(u8"保存"), [safeThis] {
                     if (safeThis == nullptr) return;
                     if (!safeThis->projectSession_.hasProjectPath()) {
                         safeThis->saveProjectAsThenOpenProject();
                         return;
                     }
-                    auto saveResult = safeThis->projectSession_.saveProject();
-                    if (!saveResult.ok()) {
-                        ConfirmDialogContent::launch(
-                            new ConfirmDialogContent(
-                                juce::String::fromUTF8(u8"保存工程失败"),
-                                saveResult.error().fullMessage(),
-                                { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
-                            safeThis.getComponent());
-                        return;
+                    if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
+                    {
+                        // Capture on message thread
+                        auto task = safeThis->projectSession_.prepareSave();
+                        const uint64_t gen = safeThis->projectSession_.getDirtyGeneration();
+                        const auto path = task.targetFile;
+                        safeThis->saveWorker_ = std::thread([safeThis, task = std::move(task), gen, path]() mutable {
+                            auto saveResult = ProjectSession::executeSaveToFile(task);
+                            juce::MessageManager::callAsync([safeThis, saveResult, gen, path]() {
+                                if (safeThis == nullptr) return;
+                                if (!saveResult.ok()) {
+                                    ConfirmDialogContent::launch(
+                                        new ConfirmDialogContent(
+                                            juce::String::fromUTF8(u8"保存工程失败"),
+                                            saveResult.error().fullMessage(),
+                                            { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                        safeThis.getComponent());
+                                    return;
+                                }
+                                if (safeThis->projectSession_.getDirtyGeneration() == gen)
+                                    safeThis->projectSession_.clearDirty();
+                                safeThis->projectSession_.pushRecentProject(path);
+                                safeThis->updateTitleWithProjectPath();
+                                safeThis->syncRecentProjectsToMenu();
+                                safeThis->launchOpenProjectChooser();
+                            });
+                        });
                     }
-                    safeThis->projectSession_.clearDirty();
-                    safeThis->updateTitleWithProjectPath();
-                    safeThis->syncRecentProjectsToMenu();
-                    safeThis->launchOpenProjectChooser();
                 }, true },
               { juce::String::fromUTF8(u8"不保存"), [safeThis] {
                     if (safeThis == nullptr) return;
@@ -2037,6 +2074,7 @@ void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
         auto file = fc.getResult();
         if (file == juce::File{}) return;
 
+        if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
         auto result = safeThis->projectSession_.openProject(file);
         if (!result.ok()) {
             ConfirmDialogContent::launch(
@@ -2072,6 +2110,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
                     juce::String::fromUTF8(u8"目标工程文件已存在，是否覆盖？"),
                     { { juce::String::fromUTF8(u8"覆盖"), [safeThis, file] {
                             if (safeThis == nullptr) return;
+                            if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
                             auto result = safeThis->projectSession_.saveProjectAs(file);
                             if (!result.ok()) {
                                 ConfirmDialogContent::launch(
@@ -2091,6 +2130,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
             return;
         }
 
+        if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
         auto result = safeThis->projectSession_.saveProjectAs(file);
         if (!result.ok()) {
             ConfirmDialogContent::launch(
@@ -2950,6 +2990,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
                     juce::String::fromUTF8(u8"目标工程文件已存在，是否覆盖？"),
                     { { juce::String::fromUTF8(u8"覆盖"), [safeThis, file] {
                             if (safeThis == nullptr) return;
+                            if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
                             auto result = safeThis->projectSession_.saveProjectAs(file);
                             if (!result.ok()) {
                                 ConfirmDialogContent::launch(
@@ -2968,6 +3009,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
             return; // Don't continue in outer callback — the inner callback handles save
         }
 
+        if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
         auto result = safeThis->projectSession_.saveProjectAs(file);
         if (!result.ok()) {
             ConfirmDialogContent::launch(
@@ -2985,6 +3027,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
 
 void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& file)
 {
+    if (saveWorker_.joinable()) saveWorker_.join();
     if (!projectSession_.isDirty()) {
         auto result = projectSession_.openProject(file);
         if (!result.ok()) {
@@ -3007,41 +3050,56 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
         new ConfirmDialogContent(
             juce::String::fromUTF8(u8"当前工程尚未保存"),
             juce::String::fromUTF8(u8"打开其他工程前，是否保存当前工程的更改？"),
-            { { juce::String::fromUTF8(u8"保存"), [safeThis, file] {
+            {               { juce::String::fromUTF8(u8"保存"), [safeThis, file] {
                     if (safeThis == nullptr) return;
                     if (!safeThis->projectSession_.hasProjectPath()) {
                         safeThis->saveProjectAsRequested();
                         return;
                     }
-                    auto saveResult = safeThis->projectSession_.saveProject();
-                    if (!saveResult.ok()) {
-                        ConfirmDialogContent::launch(
-                            new ConfirmDialogContent(
-                                juce::String::fromUTF8(u8"保存工程失败"),
-                                saveResult.error().fullMessage(),
-                                { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
-                            safeThis.getComponent());
-                        return;
+                    if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
+                    {
+                        // Capture on message thread
+                        auto task = safeThis->projectSession_.prepareSave();
+                        const uint64_t gen = safeThis->projectSession_.getDirtyGeneration();
+                        const auto path = task.targetFile;
+                        safeThis->saveWorker_ = std::thread([safeThis, task = std::move(task), gen, path, file]() mutable {
+                            auto saveResult = ProjectSession::executeSaveToFile(task);
+                            juce::MessageManager::callAsync([safeThis, saveResult, gen, path, file]() {
+                                if (safeThis == nullptr) return;
+                                if (!saveResult.ok()) {
+                                    ConfirmDialogContent::launch(
+                                        new ConfirmDialogContent(
+                                            juce::String::fromUTF8(u8"保存工程失败"),
+                                            saveResult.error().fullMessage(),
+                                            { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                        safeThis.getComponent());
+                                    return;
+                                }
+                                if (safeThis->projectSession_.getDirtyGeneration() == gen)
+                                    safeThis->projectSession_.clearDirty();
+                                safeThis->projectSession_.pushRecentProject(path);
+                                safeThis->updateTitleWithProjectPath();
+                                safeThis->syncRecentProjectsToMenu();
+                                auto openResult = safeThis->projectSession_.openProject(file);
+                                if (!openResult.ok()) {
+                                    ConfirmDialogContent::launch(
+                                        new ConfirmDialogContent(
+                                            juce::String::fromUTF8(u8"打开工程失败"),
+                                            openResult.error().fullMessage(),
+                                            { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                        safeThis.getComponent());
+                                    safeThis->projectSession_.clearRecentProjects();
+                                    return;
+                                }
+                                safeThis->syncRecentProjectsToMenu();
+                                safeThis->updateTitleWithProjectPath();
+                            });
+                        });
                     }
-                    safeThis->projectSession_.clearDirty();
-                    safeThis->updateTitleWithProjectPath();
-                    safeThis->syncRecentProjectsToMenu();
-                    auto openResult = safeThis->projectSession_.openProject(file);
-                    if (!openResult.ok()) {
-                        ConfirmDialogContent::launch(
-                            new ConfirmDialogContent(
-                                juce::String::fromUTF8(u8"打开工程失败"),
-                                openResult.error().fullMessage(),
-                                { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
-                            safeThis.getComponent());
-                        safeThis->projectSession_.clearRecentProjects();
-                        return;
-                    }
-                    safeThis->syncRecentProjectsToMenu();
-                    safeThis->updateTitleWithProjectPath();
                 }, true },
               { juce::String::fromUTF8(u8"不保存"), [safeThis, file] {
                     if (safeThis == nullptr) return;
+                    if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
                     auto openResult = safeThis->projectSession_.openProject(file);
                     if (!openResult.ok()) {
                         ConfirmDialogContent::launch(

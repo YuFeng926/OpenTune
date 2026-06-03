@@ -37,8 +37,7 @@ StandaloneArrangement::~StandaloneArrangement() = default;
 
 StandaloneArrangement::PlaybackSnapshotHandle StandaloneArrangement::loadPlaybackSnapshot() const
 {
-    const juce::SpinLock::ScopedLockType lock(snapshotLock_);
-    return playbackSnapshot_;
+    return std::atomic_load(&playbackSnapshot_);
 }
 
 int StandaloneArrangement::getActiveTrackId() const
@@ -544,6 +543,56 @@ bool StandaloneArrangement::setPlacementFade(int trackId, uint64_t placementId, 
     return true;
 }
 
+bool StandaloneArrangement::setPlacementTrimAndTimelineStart(int trackId,
+                                                             uint64_t placementId,
+                                                             double clipInSeconds,
+                                                             double durationSeconds,
+                                                             double timelineStartSeconds)
+{
+    if (!isValidTrackId(trackId) || placementId == 0) {
+        return false;
+    }
+
+    const juce::ScopedWriteLock lock(stateLock_);
+    const int index = findPlacementIndexUnlocked(trackId, placementId);
+    if (index < 0) {
+        return false;
+    }
+
+    auto& placement = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)];
+
+    // Clamp trim values
+    if (clipInSeconds < 0.0) clipInSeconds = 0.0;
+    if (durationSeconds < 0.01) durationSeconds = 0.01;
+
+    const double clampedTimelineStartSeconds = std::max(0.0, timelineStartSeconds);
+
+    // No-op gate: skip publish if all three values are unchanged (common with snap grid drag)
+    if (placement.clipInSeconds == clipInSeconds
+        && placement.durationSeconds == durationSeconds
+        && placement.timelineStartSeconds == clampedTimelineStartSeconds) {
+        return true;
+    }
+
+    placement.clipInSeconds = clipInSeconds;
+    placement.durationSeconds = durationSeconds;
+
+    // Re-clamp fades if they exceed 90% of new duration
+    {
+        const double maxFade = placement.durationSeconds * 0.9;
+        if (placement.fadeInDuration > maxFade) placement.fadeInDuration = maxFade;
+        if (placement.fadeOutDuration > maxFade) placement.fadeOutDuration = maxFade;
+    }
+
+    placement.timelineStartSeconds = clampedTimelineStartSeconds;
+
+    ++placement.mappingRevision;
+    checkOverlapAndClearReferenceUnlocked(trackId, placementId);
+    clearInvalidInboundReferencesToPlacementUnlocked(placementId);
+    publishPlaybackSnapshotLocked();
+    return true;
+}
+
 bool StandaloneArrangement::isValidTrackId(int trackId) noexcept
 {
     return trackId >= 0 && trackId < kTrackCount;
@@ -615,16 +664,32 @@ void StandaloneArrangement::publishPlaybackSnapshotLocked()
         publishedTrack.isMuted = sourceTrack.isMuted;
         publishedTrack.isSolo = sourceTrack.isSolo;
         publishedTrack.volume = sourceTrack.volume;
+        publishedTrack.placements.reserve(sourceTrack.placements.size());
         for (const auto& p : sourceTrack.placements) {
             if (!p.isRetired) {
-                publishedTrack.placements.push_back(p);
+                publishedTrack.placements.push_back(PlaybackPlacement{
+                    p.materializationId, p.timelineStartSeconds, p.durationSeconds,
+                    p.clipInSeconds, p.gain, p.fadeInDuration, p.fadeOutDuration
+                });
             }
         }
         snapshot->anySoloed = snapshot->anySoloed || sourceTrack.isSolo;
     }
 
-    const juce::SpinLock::ScopedLockType lock(snapshotLock_);
-    playbackSnapshot_ = std::move(snapshot);
+    // Publish lock-free via atomic exchange.
+    // Audio thread reads via atomic_load, never blocks.
+    // Retire old snapshot into the writer-side list; sweep entries
+    // whose use_count()==1 (only the list holds a reference) —
+    // guaranteeing free/malloc never hits the RT path.
+    auto old = std::atomic_exchange(&playbackSnapshot_,
+                                    std::shared_ptr<const PlaybackSnapshot>(snapshot));
+    if (old) {
+        retiredSnapshots_.push_back(std::move(old));
+    }
+    retiredSnapshots_.erase(
+        std::remove_if(retiredSnapshots_.begin(), retiredSnapshots_.end(),
+            [](const auto& p) { return p.use_count() <= 1; }),
+        retiredSnapshots_.end());
 }
 
 bool StandaloneArrangement::retirePlacement(int trackId, uint64_t placementId)
