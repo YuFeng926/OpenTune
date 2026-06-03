@@ -11,7 +11,7 @@
 #include "Utils/AppLogger.h"
 #include "Utils/ChannelLayoutLogger.h"
 #include "Plugin/Capture/CaptureSession.h"
-#include "Inference/SoundTouchStretcher.h"   // §7 Phase D — Stage 2 worker (WSOLA, replaces RB)
+#include "Inference/SoundTouchStretcher.h"   // §7 Phase D �?Stage 2 worker (WSOLA, replaces RB)
 #include "DSP/ReferenceAutoAlign.h"
 #include "DSP/TimeGridPatchBuilder.h"
 #include <onnxruntime_cxx_api.h>
@@ -71,18 +71,18 @@ AutoRefGameBackendProbe probeAutoRefGameBackendLocked(INoteGenerator* generator,
 juce::String makeAutoRefGameUnavailableMessage(const AutoRefGameBackendProbe& probe)
 {
     if (probe.forceLegacy) {
-        return juce::String::fromUTF8(u8"已绑定参考源，但当前强制使用 Legacy backend，本次执行普通 AUTO。");
+        return juce::String("Reference clip is bound, but Legacy backend is forced; using regular AUTO.");
     }
 
     if (probe.currentBackendIsLegacy && !probe.gameBundlePresent) {
-        return juce::String::fromUTF8(u8"已绑定参考源，但当前缺少 GAME backend / models，本次执行普通 AUTO。");
+        return juce::String("Reference clip is bound, but GAME backend/models are missing; using regular AUTO.");
     }
 
     if (!probe.gameBundlePresent) {
-        return juce::String::fromUTF8(u8"已绑定参考源，但当前缺少 GAME backend / models，本次执行普通 AUTO。");
+        return juce::String("Reference clip is bound, but GAME backend/models are missing; using regular AUTO.");
     }
 
-    return juce::String::fromUTF8(u8"已绑定参考源，但当前 GAME backend 未就绪，本次执行普通 AUTO。");
+    return juce::String("Reference clip is bound, but GAME backend is not ready; using regular AUTO.");
 }
 
 std::vector<Note> normalizeStoredNotes(const std::vector<Note>& notes)
@@ -401,11 +401,11 @@ std::shared_ptr<PitchCurve> mergePitchCurves(const std::shared_ptr<PitchCurve>& 
 // F0 Gap Filling for Vocoder (Mel Frame Space)
 // ==============================================================================
 // 在渲染提交前填补 correctedF0 中的零值间隙：
-//   1. 内部间隙：≤10帧用 log-domain 线性插值填补
-//   2. 边界延伸：起点/终点若为零，向边界外查询并延伸填充
-//      - 检测延伸方向是否有 voiced 段，有则延伸到该段起点为止
+//   1. 内部间隙：≤10帧用 log-domain 线性插值填�?
+//   2. 边界延伸：起�?终点若为零，向边界外查询并延伸填�?
+//      - 检测延伸方向是否有 voiced 段，有则延伸到该段起点为�?
 //
-// 目的：消除 PC-NSF-HiFiGAN 在 F0 不连续处的相位震荡（低频砰砰声）
+// 目的：消�?PC-NSF-HiFiGAN �?F0 不连续处的相位震荡（低频砰砰声）
 void fillF0GapsForVocoder(
     std::vector<float>& f0,
     const std::shared_ptr<const PitchCurveSnapshot>& snap,
@@ -598,7 +598,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 
     OpenTuneAudioProcessor::PlaybackReadRequest readRequest;
     readRequest.source = source;
-    readRequest.readStartSeconds = placement.clipInSeconds; // was 0.0 — respect trim offset
+    readRequest.readStartSeconds = placement.clipInSeconds; // was 0.0 �?respect trim offset
     readRequest.targetSampleRate = kExportSr;
     readRequest.numSamples = samplesToRender;
 
@@ -637,7 +637,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 
 constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
 constexpr int kProcessorStateVersion = 8; // v8 adds Placement::clipInSeconds
-// vocal-time-stretch §3.8: bumped 5 → 6 to add per-materialization TimeGrid section.
+// vocal-time-stretch §3.8: bumped 5 �?6 to add per-materialization TimeGrid section.
 // v5 projects load with auto-seeded identity TimeGrid (output==source).
 // Processor state v7 adds per-handle confidence. v6 reads default confidence=Default.
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
@@ -1134,7 +1134,7 @@ void OpenTuneAudioProcessor::analysisCompleted(
 
     materializationStore_->setReferenceFeatures(materializationId, result);
 
-    // Async GAME analysis completed — seed TimeGrid handles from the extracted timing anchors.
+    // Async GAME analysis completed �?seed TimeGrid handles from the extracted timing anchors.
     // ensureTimeToolAnchorSeed is idempotent: if handles already exist or features aren't Game-produced,
     // it returns early. Called here (not in the caller) because this is the single completion point
     // that guarantees ReferenceFeatureStatus::Ready is visible before handle seeding.
@@ -1165,7 +1165,7 @@ void OpenTuneAudioProcessor::analysisFailed(uint64_t materializationId, const ju
 }
 
 // ============================================================================
-// vocal-time-stretch §3.8 — TimeGrid serialization (state version ≥ 6)
+// vocal-time-stretch §3.8 �?TimeGrid serialization (state version �?6)
 // State version 7 adds the per-handle confidence field.
 //
 // Layout per materialization (v6+ writes; v7+ writes confidence):
@@ -1300,7 +1300,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             PlaybackReadRequest req;
             req.source.renderCache = readSource.renderCache;
             req.source.audioBuffer = readSource.audioBuffer;
-            // §7 — propagate Stage 2 fast-path fields (vocal-time-stretch).
+            // §7 �?propagate Stage 2 fast-path fields (vocal-time-stretch).
             req.source.timeStretchCache    = readSource.timeStretchCache;
             req.source.materializationId   = readSource.materializationId;
             req.source.pitchRevision       = readSource.pitchRevision;
@@ -1335,7 +1335,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             // Trigger vocoder-only re-render against the existing materialization. Used
             // by CapturePersistence::deserialize to repopulate RenderCache after restore.
             //
-            // CRITICAL: must NOT call requestMaterializationRefresh — that path re-runs
+            // CRITICAL: must NOT call requestMaterializationRefresh �?that path re-runs
             // F0 extraction and overwrites the user's restored PitchCurve / Notes. We
             // need the same vocoder-chunk-render path PianoRoll edits already use:
             // it skips F0, reads the existing pitchCurve, runs vocoder, publishes to
@@ -1389,7 +1389,7 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
         chunkRenderWorkerThread_.join();
     }
 
-    // §7 (Phase D) — stop Stage 2 worker before destroying stores
+    // §7 (Phase D) �?stop Stage 2 worker before destroying stores
     {
         std::lock_guard<std::mutex> lock(stage2Mutex_);
         stage2WorkerRunning_.store(false, std::memory_order_release);
@@ -1427,7 +1427,7 @@ void OpenTuneAudioProcessor::ensureChunkRenderWorkerStarted()
 }
 
 // ============================================================================
-// vocal-time-stretch §7 (Phase D MVP) — Stage 2 worker lifecycle + processing
+// vocal-time-stretch §7 (Phase D MVP) �?Stage 2 worker lifecycle + processing
 // ============================================================================
 
 void OpenTuneAudioProcessor::ensureStage2WorkerStarted()
@@ -1483,7 +1483,7 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
                                      std::memory_order_release);
         }
 
-        // §7 (Journey-1 fix) — publish "in-flight" status for UI badge.
+        // §7 (Journey-1 fix) �?publish "in-flight" status for UI badge.
         stage2InFlight_.store(true, std::memory_order_release);
         stage2InFlightMatId_.store(materializationId, std::memory_order_release);
 
@@ -1509,7 +1509,7 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
     if (snap.audioBuffer == nullptr) return false;
     if (snap.audioBuffer->getNumChannels() <= 0 || snap.audioBuffer->getNumSamples() <= 0) return false;
 
-    // If TimeGrid is identity, nothing to do — invalidate any stale entry.
+    // If TimeGrid is identity, nothing to do �?invalidate any stale entry.
     if (snap.timeGrid == nullptr || snap.timeGrid->isIdentity()) {
         materializationStore_->getTimeStretchCache().invalidate(materializationId);
         return true;
@@ -1528,7 +1528,7 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
     stretcher->beginRebuild(schedule);
 
     // ============================================================
-    // §7 (Phase E) — Stage 2 input = Stage 1 (NSF vocoder) output
+    // §7 (Phase E) �?Stage 2 input = Stage 1 (NSF vocoder) output
     //
     // We stream the materialization's playback signal *as if TimeGrid were
     // identity* (i.e., pre-stretch) by calling readPlaybackAudio in chunks
@@ -1539,9 +1539,9 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
     // pure vocoder; gaps fall back to dry source.
     //
     // Edge cases:
-    //   - PitchCurve untouched / RenderCache empty → buffer == dry source
+    //   - PitchCurve untouched / RenderCache empty �?buffer == dry source
     //     (graceful degradation; result equals Phase D MVP behavior).
-    //   - RenderCache partially populated (mid-edit) → vocoder for rendered
+    //   - RenderCache partially populated (mid-edit) �?vocoder for rendered
     //     chunks, dry for the rest; Phase F may add a "wait for Stage 1
     //     complete" gate.
     // ============================================================
@@ -1604,7 +1604,7 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
         stretcher->push(readBuf.getReadPointer(0), static_cast<size_t>(n), isLast);
         drainAvailable();
     }
-    // After push(isLast=true), SoundTouch::flush() has been called — drain any
+    // After push(isLast=true), SoundTouch::flush() has been called �?drain any
     // remaining buffered output (typically a few WSOLA hops worth).
     drainAvailable();
 
@@ -1740,7 +1740,7 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
 
     if (targetPlacementId == 0 || standaloneArrangement_ == nullptr) {
         availability.status = AutoRefAvailability::Status::InvalidSelection;
-        availability.message = juce::String::fromUTF8(u8"当前未选中可用 Clip，本次执行普通 AUTO。");
+        availability.message = juce::String("No usable clip is selected; using regular AUTO.");
         return availability;
     }
 
@@ -1755,7 +1755,7 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
 
     if (targetTrackId < 0) {
         availability.status = AutoRefAvailability::Status::InvalidSelection;
-        availability.message = juce::String::fromUTF8(u8"当前未选中可用 Clip，本次执行普通 AUTO。");
+        availability.message = juce::String("No usable clip is selected; using regular AUTO.");
         return availability;
     }
 
@@ -1763,13 +1763,13 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
         standaloneArrangement_->getPlacementReferencePlacement(targetTrackId, targetPlacementId);
     if (availability.referencePlacementId == 0) {
         availability.status = AutoRefAvailability::Status::NoReference;
-        availability.message = juce::String::fromUTF8(u8"当前 Clip 未绑定参考源，本次执行普通 AUTO。");
+        availability.message = juce::String("The selected clip has no reference clip bound; using regular AUTO.");
         return availability;
     }
 
     if (availability.referencePlacementId == targetPlacementId) {
         availability.status = AutoRefAvailability::Status::InvalidSelection;
-        availability.message = juce::String::fromUTF8(u8"参考源绑定无效，本次执行普通 AUTO。");
+        availability.message = juce::String("The reference clip binding is invalid; using regular AUTO.");
         return availability;
     }
 
@@ -1783,7 +1783,7 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
     }
     if (!referenceFound) {
         availability.status = AutoRefAvailability::Status::InvalidSelection;
-        availability.message = juce::String::fromUTF8(u8"参考源 Clip 不可用，本次执行普通 AUTO。");
+        availability.message = juce::String("The reference clip is unavailable; using regular AUTO.");
         return availability;
     }
 
@@ -1793,7 +1793,7 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
 
     if (backendProbe.currentBackendIsGame) {
         availability.status = AutoRefAvailability::Status::Ready;
-        availability.message = juce::String::fromUTF8(u8"AUTO(Ref) 将使用 GAME 对参考源进行分析。");
+        availability.message = juce::String("AUTO(Ref) will analyze the reference clip with GAME.");
         return availability;
     }
 
@@ -1804,15 +1804,15 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
     }
 
     availability.status = AutoRefAvailability::Status::Ready;
-    availability.message = juce::String::fromUTF8(u8"AUTO(Ref) 将使用 GAME 对参考源进行分析。");
+    availability.message = juce::String("AUTO(Ref) will analyze the reference clip with GAME.");
     return availability;
 }
 
 bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
 {
     // Backend selection (per design D7):
-    //   1. env OPENTUNE_NOTE_BACKEND=legacy  → LegacyNoteGenerator
-    //   2. else if GAME-small ONNX bundle present → GameNoteGenerator
+    //   1. env OPENTUNE_NOTE_BACKEND=legacy  �?LegacyNoteGenerator
+    //   2. else if GAME-small ONNX bundle present �?GameNoteGenerator
     //   3. else fallback to LegacyNoteGenerator
     // Logged once at first init so support can identify which path ran.
     return ensureServiceReady(noteGenReady_, noteGenInitAttempted_, noteGenInitMutex_, "NoteGen",
@@ -1825,7 +1825,7 @@ bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
             const bool forceLegacy = (envBackend == "legacy");
             AppLogger::info(juce::String("[NoteGen] env OPENTUNE_NOTE_BACKEND=")
                             + (envBackendRaw.isEmpty() ? "<unset>" : envBackendRaw)
-                            + " → forceLegacy=" + (forceLegacy ? "true" : "false"));
+                            + " �?forceLegacy=" + (forceLegacy ? "true" : "false"));
 
             if (!forceLegacy) {
                 if (!ortEnv_) {
@@ -1844,7 +1844,7 @@ bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
                     }
                 } else {
                     AppLogger::info("[NoteGen] GAME bundle missing at " + juce::String(gameDir)
-                                    + " — falling back to Legacy");
+                                    + " �?falling back to Legacy");
                 }
             }
 
@@ -1860,7 +1860,7 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     AppLogger::info("[Processor] Resetting inference backend, forceCpu=" 
         + juce::String(forceCpu ? "true" : "false"));
     
-    // 1. 停止 chunk render worker（确保无线程在使用 f0Service_/vocoderDomain_）
+    // 1. 停止 chunk render worker（确保无线程在使�?f0Service_/vocoderDomain_�?
     {
         std::lock_guard<std::mutex> lock(schedulerMutex_);
         chunkRenderWorkerRunning_.store(false, std::memory_order_release);
@@ -1870,7 +1870,7 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
         chunkRenderWorkerThread_.join();
     }
     
-    // 2. worker 已停，安全释放推理服务
+    // 2. worker 已停，安全释放推理服�?
     if (vocoderDomain_) {
         vocoderDomain_->shutdown();
         vocoderDomain_.reset();
@@ -1885,7 +1885,7 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     f0Ready_.store(false);
     f0InitAttempted_.store(false);
     
-    // 3. 重置加速检测器并重新检测
+    // 3. 重置加速检测器并重新检�?
     auto& detector = AccelerationDetector::getInstance();
     detector.reset();
     detector.detect(forceCpu);
@@ -1898,7 +1898,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
 {
     if (currentVocoderModelWeight_ == weight) return;  // 幂等
 
-    // 1. 停 chunk render worker（对齐 resetInferenceBackend 模式）
+    // 1. �?chunk render worker（对�?resetInferenceBackend 模式�?
     {
         std::lock_guard<std::mutex> lock(schedulerMutex_);
         chunkRenderWorkerRunning_.store(false, std::memory_order_release);
@@ -1908,7 +1908,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
         chunkRenderWorkerThread_.join();
     }
 
-    // 2. Shutdown + 销毁 vocoder domain（释放旧 ONNX session）
+    // 2. Shutdown + 销�?vocoder domain（释放旧 ONNX session�?
     if (vocoderDomain_) {
         vocoderDomain_->shutdown();
         vocoderDomain_.reset();
@@ -1919,7 +1919,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
     // 3. 更新 runtime 权重（worker 已停，线程安全）
     currentVocoderModelWeight_ = weight;
 
-    // 4. 清所有 materialization 的 RenderCache + TimeStretchCache
+    // 4. 清所�?materialization �?RenderCache + TimeStretchCache
     if (materializationStore_) {
         const auto ids = materializationStore_->getAllActiveMaterializationIds();
         bool hasJobs = false;
@@ -1938,17 +1938,17 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
                 }
             }
         }
-        // 清 TimeStretchCache
+        // �?TimeStretchCache
         materializationStore_->getTimeStretchCache().clear();
 
-        // 5. 重启 chunk worker（最后执行，避免 worker 与 vocoderDomain_ 重建竞态）
-        //    vocoderDomain_ 保持 nullptr，由 worker 内 ensureVocoderReady() 懒创建（vocoderInitMutex_ 保护）
+        // 5. 重启 chunk worker（最后执行，避免 worker �?vocoderDomain_ 重建竞态）
+        //    vocoderDomain_ 保持 nullptr，由 worker �?ensureVocoderReady() 懒创建（vocoderInitMutex_ 保护�?
         if (hasJobs) {
             ensureChunkRenderWorkerStarted();
             schedulerCv_.notify_one();
         }
     }
-    // 不重置 F0 / AccelerationDetector / GAME
+    // 不重�?F0 / AccelerationDetector / GAME
 }
 
 bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const MaterializationSnapshot& snap,
@@ -2127,31 +2127,20 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
 
     if (auto* dc = getDocumentController())
     {
-        auto sharedSS = dc->getSharedSourceStore();
-        auto sharedMS = dc->getSharedMaterializationStore();
-        auto sharedRM = dc->getSharedResamplingManager();
-
-        if (sharedSS && sharedMS && sharedRM)
-        {
-            sourceStore_ = sharedSS;
-            materializationStore_ = sharedMS;
-            resamplingManager_ = sharedRM;
-        }
-
         dc->setProcessor(this);
-        AppLogger::log("ARA: didBindToARA - attached shared stores"
+        AppLogger::log("ARA: didBindToARA - attached processor stores"
             " processor=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
             + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc))
             + " sourceStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(sourceStore_.get()))
             + " materializationStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(materializationStore_.get())));
 
         // Replay any pre-bind state that was cached by setStateInformation.
-        // After shared-store attach, isBoundToARA() returns true, so the
-        // replay will restore directly into the final shared stores.
+        // After processor attach, isBoundToARA() returns true, so the replay
+        // restores directly into the processor-owned stores.
         if (pendingAraState_.getSize() > 0) {
             AppLogger::log("ARA: didBindToARA - replaying cached state ("
                            + juce::String(static_cast<int>(pendingAraState_.getSize()))
-                           + " bytes) into shared stores");
+                           + " bytes) into processor stores");
             setStateInformation(pendingAraState_.getData(),
                               static_cast<int>(pendingAraState_.getSize()));
             pendingAraState_.reset();
@@ -2180,7 +2169,7 @@ bool OpenTuneAudioProcessor::supportsDoublePrecisionProcessing() const {
 }
 
 // ============================================================================
-// 音频处理（processBlock）
+// 音频处理（processBlock�?
 // ============================================================================
 
 void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<double>& buffer,
@@ -2262,7 +2251,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         // Host transport mirror: in non-ARA VST3 mode the plugin is a passive observer.
         // Forcing positionAtomic_ and isPlaying_ to host values every block ensures any
         // local transport change (spacebar / setPlaying) is overridden by host within
-        // one audio block — there is no plugin-side play/pause illusion to maintain.
+        // one audio block �?there is no plugin-side play/pause illusion to maintain.
         positionAtomic_->store(host_t, std::memory_order_relaxed);
         isPlaying_.store(isPlayingNow, std::memory_order_relaxed);
 
@@ -2303,7 +2292,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     bool isPlaying = isPlaying_.load();
     
     if (!isPlaying && !isFading) {
-        // Fully stopped — still mix piano key audition so preview works without transport
+        // Fully stopped �?still mix piano key audition so preview works without transport
         pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, currentSampleRate_.load());
         jassert(standaloneArrangement_ != nullptr);
         for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
@@ -2400,7 +2389,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             PlaybackReadRequest readRequest;
             readRequest.source.renderCache = materializationReadSource.renderCache;
             readRequest.source.audioBuffer = materializationReadSource.audioBuffer;
-            // ⚡️ vocal-time-stretch §7 — propagate Stage 2 fast-path fields so
+            // ⚡️ vocal-time-stretch §7 �?propagate Stage 2 fast-path fields so
             // readPlaybackAudio can consume the TimeStretchCache when the user
             // has placed non-identity TimeGrid handles.  Forgetting these fields
             // makes the audio path silently degrade to dry passthrough (the bug
@@ -2735,7 +2724,7 @@ bool OpenTuneAudioProcessor::hasEditor() const {
 // ============================================================================
 
 void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
-    // Dispatch by runtime wrapperType — same compiled object serves both
+    // Dispatch by runtime wrapperType �?same compiled object serves both
     // Standalone and VST3 binaries (shared `OpenTune` lib), so a build-time
     // guard cannot differentiate. Standalone owns its own project save format
     // and only needs settings here; VST3 needs full state for host round-trip.
@@ -2765,7 +2754,7 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
     }
 
     // Capture-flow materializations live only inside captureSession_ (no placement),
-    // but their full snapshot — audio + pitchCurve + notes + detectedKey — must
+    // but their full snapshot �?audio + pitchCurve + notes + detectedKey �?must
     // round-trip. Union them into the standard state set.
     if (const auto* captureSession = getCaptureSession()) {
         for (const auto& info : captureSession->listSegments()) {
@@ -2777,13 +2766,8 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
 
 #if JucePlugin_Enable_ARA
     if (const auto* dc = getDocumentController()) {
-        if (const auto* session = dc->getSession()) {
-            const auto snapshot = session->loadSnapshot();
-            if (snapshot != nullptr) {
-                for (const auto& regionView : snapshot->publishedRegions) {
-                    appendUniqueMaterializationId(serializedMaterializationIds, regionView.appliedProjection.materializationId);
-                }
-            }
+        for (const auto& region : dc->getPlaybackRegionProjections()) {
+            appendUniqueMaterializationId(serializedMaterializationIds, region.materializationId);
         }
     }
 #endif
@@ -2867,7 +2851,7 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
         for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
             StandaloneArrangement::Placement placement;
             if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-                jassertfalse; // Placement index/track mismatch — data integrity error
+                jassertfalse; // Placement index/track mismatch �?data integrity error
                 AppLogger::error("SerializationCorruption: getPlacementByIndex failed for track="
                                  + juce::String(trackId) + " index=" + juce::String(placementIndex));
                 return; // Don't serialize known-corrupt data
@@ -2950,12 +2934,12 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
 
     // Standalone instance receiving a full-state payload: settings are not in
     // this format anymore (BPM/zoom/trackHeight live in OTSS), so there is
-    // nothing meaningful to restore — return without touching stores.
+    // nothing meaningful to restore �?return without touching stores.
     if (wrapperType == juce::AudioProcessor::wrapperType_Standalone) {
         return;
     }
 
-    // Note: BPM is not in OTST v5 — host owns transport tempo in plugin mode.
+    // Note: BPM is not in OTST v5 �?host owns transport tempo in plugin mode.
     zoomLevel_ = input.readDouble();
     trackHeight_ = input.readInt();
 
@@ -3058,7 +3042,7 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
         request.notes = normalizeStoredNotes(notes);
         request.silentGaps = std::move(silentGaps);
         request.renderRevision = renderRevision;
-        request.timeGrid = std::move(timeGridSnapshot);   // null → createMaterialization auto-seeds identity
+        request.timeGrid = std::move(timeGridSnapshot);   // null �?createMaterialization auto-seeds identity
 
         if (materializationStore_->createMaterialization(std::move(request),
                                                          materializationId) != materializationId) {
@@ -3501,7 +3485,7 @@ std::optional<DeleteOutcome> OpenTuneAudioProcessor::deletePlacement(int trackId
 
 
 // ============================================================================
-// 垃圾回收（Reclaim Sweep）
+// 垃圾回收（Reclaim Sweep�?
 // ============================================================================
 
 void OpenTuneAudioProcessor::scheduleReclaimSweep()
@@ -3545,25 +3529,13 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
         }
 
 #if JucePlugin_Enable_ARA
-        // (b) ARA published-region reference (only meaningful when ARA is compiled in)
+        // (b) ARA playback-region reference (only meaningful when ARA is compiled in)
         if (const auto* dc = getDocumentController()) {
-            if (const auto* session = dc->getSession()) {
-                const auto snapshot = session->loadSnapshot();
-                if (snapshot != nullptr) {
-                    bool araRefs = false;
-                    for (const auto& regionView : snapshot->publishedRegions) {
-                        if (regionView.appliedProjection.materializationId == id) {
-                            araRefs = true;
-                            break;
-                        }
-                    }
-                    if (araRefs) continue;
-                }
-            }
+            if (dc->referencesMaterialization(id)) continue;
         }
 #endif
 
-        // All references zero — physically reclaim the materialization, then cascade-retire the
+        // All references zero �?physically reclaim the materialization, then cascade-retire the
         // source if it has lost its last active materialization.
         const uint64_t sourceId = materializationStore_->getSourceIdAnyState(id);
         if (materializationStore_->physicallyDeleteIfReclaimable(id)) {
@@ -3754,14 +3726,14 @@ static bool writeAudioBufferToWavFile(const juce::AudioBuffer<float>& buffer,
 
     auto writer = wav.createWriterFor(outStream, options);
     if (!writer) {
-        if (errorOut) *errorOut = "无法创建WAV写入器";
+        if (errorOut) *errorOut = "Unable to create WAV writer";
         return false;
     }
 
     return writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
 }
 
-// 导出单个 placement 的音频
+// 导出单个 placement 的音�?
 // ============================================================================
 // 音频导出
 // ============================================================================
@@ -3778,12 +3750,12 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
 
     StandaloneArrangement::Placement placement;
     if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-        lastExportError_ = "无效的片段索引: " + juce::String(placementIndex);
+        lastExportError_ = "无效的片段索�? " + juce::String(placementIndex);
         return false;
     }
 
     if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
-        lastExportError_ = "片段音频不可用";
+        lastExportError_ = "Placement audio is unavailable";
         return false;
     }
 
@@ -4003,13 +3975,13 @@ bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
         return false;
     }
 
-    // Storage layout exactly matches the declaration (1 → mono, 2 → stereo).
+    // Storage layout exactly matches the declaration (1 �?mono, 2 �?stereo).
     ChannelLayoutLog::logEntry(entrySourceTag, declaredChannels, declaredChannels, displayName);
 
     out.displayName = displayName;
     out.sourceFilePath = sourceFilePath;
 
-    // 导入后的 materialization 在 shared runtime 内统一落到固定 44.1kHz 的 materialization-local 存储采样率。
+    // 导入后的 materialization �?shared runtime 内统一落到固定 44.1kHz �?materialization-local 存储采样率�?
     const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
     if (std::abs(inSampleRate - targetSampleRate) > 1.0) {
         const int numChannels = inBuffer.getNumChannels();
@@ -4100,7 +4072,7 @@ OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPrepare
     importedPlacement.durationSeconds = materializationDurationSeconds;
     importedPlacement.gain = 1.0f;
     importedPlacement.name = displayName;
-    // importedPlacement.colour removed — no longer a field on Placement
+    // importedPlacement.colour removed �?no longer a field on Placement
 
     if (!standaloneArrangement_->insertPlacement(placement.trackId, importedPlacement)) {
         materializationStore_->deleteMaterialization(materializationId);
@@ -4127,7 +4099,7 @@ std::optional<OpenTuneAudioProcessor::AraRegionMaterializationBirthResult>
 OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(AraOriginalF0BirthRequest request)
 {
     // ================================================================
-    // 1. Validation — immediately take ownership of the reader lease
+    // 1. Validation �?immediately take ownership of the reader lease
     // ================================================================
     auto readerLease = std::move(request.readerLease);
     if (readerLease == nullptr || request.audioSource == nullptr || request.sourceId == 0
@@ -4164,7 +4136,7 @@ OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(AraOriginalF0Birth
     playableAccum.clear();
 
     // ================================================================
-    // 4. Chunked ARA read — fail fast on read failure (no silence fill)
+    // 4. Chunked ARA read �?fail fast on read failure (no silence fill)
     // ================================================================
     constexpr int64_t kChunkSamples = 32768;
     {
@@ -4200,7 +4172,7 @@ OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(AraOriginalF0Birth
         + juce::String(playableAccum.getNumSamples()));
 
     // ================================================================
-    // 5. Extract ch0 for RMVPE (source sample rate — RMVPE internally
+    // 5. Extract ch0 for RMVPE (source sample rate �?RMVPE internally
     //    handles 16kHz downsampling via ResamplingManager)
     // ================================================================
     std::vector<float> channel0Data(static_cast<size_t>(playableAccum.getNumSamples()));
@@ -4368,8 +4340,8 @@ OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(AraOriginalF0Birth
 #endif // JucePlugin_Enable_ARA
 
 // ============================================================================
-// requestMaterializationRefresh — Standalone / regular VST3 F0 refresh.
-// F0 only — does NOT run GAME note generation.
+// requestMaterializationRefresh �?Standalone / regular VST3 F0 refresh.
+// F0 only �?does NOT run GAME note generation.
 // ============================================================================
 
 bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioProcessor::MaterializationRefreshRequest& request)
@@ -4471,7 +4443,7 @@ bool OpenTuneAudioProcessor::requestMaterializationRefresh(const OpenTuneAudioPr
                 return;
             }
 
-            // silentGaps computed at birth (prepareImport) — no async overwrite needed
+            // silentGaps computed at birth (prepareImport) �?no async overwrite needed
 
             if (!result.success) {
                 AppLogger::log("MaterializationRefresh: extraction failed materializationId="
@@ -4614,7 +4586,7 @@ bool OpenTuneAudioProcessor::setMaterializationPitchCurveById(uint64_t materiali
     // §7 (Phase E): pitch edit invalidates Stage 2 (handled inside
     // setPitchCurve via TimeStretchCache::invalidate).  If the materialization
     // currently has a non-identity TimeGrid, the user is hearing stretched
-    // audio — we must enqueue a Stage 2 rebuild so the new pitch is reflected.
+    // audio �?we must enqueue a Stage 2 rebuild so the new pitch is reflected.
     // For identity grids, Stage 2 is unused; skip the rebuild.
     {
         std::shared_ptr<const TimeGridSnapshot> tg;
@@ -4672,7 +4644,7 @@ bool OpenTuneAudioProcessor::setMaterializationDetectedKeyById(uint64_t material
 }
 
 // ============================================================================
-// vocal-time-stretch §3.6 — TimeGrid processor accessors
+// vocal-time-stretch §3.6 �?TimeGrid processor accessors
 // ============================================================================
 
 std::shared_ptr<const TimeGridSnapshot>
@@ -4833,7 +4805,7 @@ bool OpenTuneAudioProcessor::setMaterializationTimeGridById(uint64_t materializa
 
     // §7 (Phase D MVP): TimeStretchCache invalidation is performed inside
     // setTimeGrid (§6.5).  Here we additionally enqueue a Stage 2 rebuild on
-    // the dedicated worker thread — it will read the freshest snapshot and
+    // the dedicated worker thread �?it will read the freshest snapshot and
     // produce a new TimeStretchCache entry asynchronously.  affectedSrcStart/End
     // bounds are reserved for future region-scoped re-stretch optimization
     // (current Offline mode is clip-wide).
@@ -4934,7 +4906,7 @@ bool OpenTuneAudioProcessor::commitMaterializationNotesAndSegmentsById(uint64_t 
                                                            normalizedNotes,
                                                            std::move(committedCurve));
     if (committed) {
-        // §7 (Phase E): pitch edit → Stage 2 rebuild if non-identity grid
+        // §7 (Phase E): pitch edit �?Stage 2 rebuild if non-identity grid
         std::shared_ptr<const TimeGridSnapshot> tg;
         if (materializationStore_->getTimeGrid(materializationId, tg)
             && tg != nullptr && !tg->isIdentity()) {
@@ -5328,7 +5300,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByMaterializationId(uin
                                                                     std::move(derivedCurve));
     AppLogger::log("AutoTune: commitNotesAndPitchCurve result=" + juce::String(result ? "true" : "false"));
     if (result) {
-        // §7 (Phase E): pitch edit → Stage 2 rebuild if non-identity grid
+        // §7 (Phase E): pitch edit �?Stage 2 rebuild if non-identity grid
         std::shared_ptr<const TimeGridSnapshot> tg;
         if (materializationStore_->getTimeGrid(materializationId, tg)
             && tg != nullptr && !tg->isIdentity()) {
@@ -5382,13 +5354,13 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
         FrozenRenderBoundaries boundaries;
     };
 
-    // 复用 scratch buffer，避免每 chunk 重新堆分配
+    // 复用 scratch buffer，避免每 chunk 重新堆分�?
     std::vector<float> monoAudio;
     std::vector<float> sourceF0;
     std::vector<float> correctedF0;
 
     while (true) {
-        // 1. 找 Pending Chunk
+        // 1. �?Pending Chunk
         std::shared_ptr<WorkerRenderJob> job;
 
         {
@@ -5403,7 +5375,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                 return;
             }
 
-            // 从 materialization store render queue 拉取下一个 pending chunk
+            // �?materialization store render queue 拉取下一�?pending chunk
             if (materializationStore_ != nullptr) {
                 MaterializationStore::PendingRenderJob pendingJob;
                 if (materializationStore_->pullNextPendingRenderJob(pendingJob)) {
@@ -5415,14 +5387,14 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
         }
 
         if (!job) {
-            // 无 Pending 任务，等待唤醒
+            // �?Pending 任务，等待唤�?
             continue;
         }
 
         const double relChunkStartSec = job->coreJob.startSeconds;
         auto& boundaries = job->boundaries;
 
-        // 2. 准备渲染数据（读取 Clip 中的音频和 PitchCurve）
+        // 2. 准备渲染数据（读�?Clip 中的音频�?PitchCurve�?
         const auto& coreJob = job->coreJob;
         std::shared_ptr<PitchCurve> pitchCurve = coreJob.pitchCurve;
         int numFrames = 0;
@@ -5455,7 +5427,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                     // Per channel-layout-policy spec: vocoder mel input is unconditionally
                     // sourced from channel 0 (L) of the stored audio. No averaging, no
                     // active-channel detection. Storage is guaranteed 1 or 2 channels, and
-                    // ch 0 is "L" in stereo or "the mono channel" in mono — either way the
+                    // ch 0 is "L" in stereo or "the mono channel" in mono �?either way the
                     // canonical mono input.
                     const float* ch0 = coreJob.audioBuffer->getReadPointer(0);
                     for (int64_t i = 0; i < boundaries.publishSampleCount; ++i) {
@@ -5500,7 +5472,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
 
         const double f0FrameRate = f0SampleRate / static_cast<double>(f0HopSize);
 
-        // 3. 构造 F0 数据
+        // 3. 构�?F0 数据
         const int f0StartFrame = static_cast<int>(std::floor(trueStartSeconds * f0FrameRate));
         const int f0EndFrame = static_cast<int>(std::ceil(trueEndSeconds * f0FrameRate)) + 1;
         const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
@@ -5556,7 +5528,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
             const auto& originalF0Full = snap->getOriginalF0();
             const int originalF0Size = static_cast<int>(originalF0Full.size());
 
-            // 安全检查：f0StartFrame 必须在原始 F0 范围内
+            // 安全检查：f0StartFrame 必须在原�?F0 范围�?
             if (f0StartFrame >= 0 && f0StartFrame < originalF0Size) {
                 const bool needsVocoder = chunkNeedsVocoder(
                     sourceF0.data(), numF0Frames, originalF0Full, f0StartFrame);
@@ -5579,7 +5551,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                         safeNumF0Frames,
                         f0FrameRate);
 
-                    // AutoTune 保证输出长度 == 输入长度，防御性截断
+                    // AutoTune 保证输出长度 == 输入长度，防御性截�?
                     if (static_cast<int64_t>(shiftedAudio.size()) != boundaries.publishSampleCount) {
                         shiftedAudio.resize(static_cast<size_t>(boundaries.publishSampleCount), 0.0f);
                     }
@@ -5608,7 +5580,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                         + " start=" + juce::String(relChunkStartSec, 3));
 
                     schedulerCv_.notify_one();
-                    continue;  // 跳过声码器路径
+                    continue;  // 跳过声码器路�?
                 }
             }
         }
@@ -5621,7 +5593,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
             continue;
         }
 
-        // 4. 构造 Mel Spectrogram
+        // 4. 构�?Mel Spectrogram
         MelSpectrogramConfig melConfig;
         melConfig.sampleRate = static_cast<int>(RenderCache::kSampleRate);
         melConfig.nMels = vocoderDomain_->getMelBins();
@@ -5638,7 +5610,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
         auto mel = std::move(melResult).value();
         const int actualFrames = static_cast<int>(mel.size() / melConfig.nMels);
 
-        // 5. F0-to-Mel 插值
+        // 5. F0-to-Mel 插�?
         correctedF0.assign(static_cast<size_t>(actualFrames), 0.0f);
         for (int i = 0; i < actualFrames; ++i) {
             const double melTimeSec = trueStartSeconds + i * hopDuration;
@@ -5723,7 +5695,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
 
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::Succeeded);
 
-                // ⚡️ vocal-time-stretch §7 (Journey-1 fix 2026-05-12) — Stage 2
+                // ⚡️ vocal-time-stretch §7 (Journey-1 fix 2026-05-12) �?Stage 2
                 // depends on Stage 1's RenderCache via readPlaybackAudio.  When
                 // a chunk is freshly published, any prior Stage 2 cache entry
                 // captured before this chunk landed is now stale: the worker
@@ -5741,7 +5713,7 @@ void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
                 // requestStage2Rebuild dedups on matId, so multiple chunk
                 // completions in quick succession collapse to a single rebuild.
                 // For identity-TimeGrid clips, runStage2RebuildForMaterialization
-                // bails out early after invalidating — net cost is a worker
+                // bails out early after invalidating �?net cost is a worker
                 // wakeup + early return.
                 if (chunkMatId != 0 && materializationStore_ != nullptr) {
                     materializationStore_->getTimeStretchCache().invalidate(chunkMatId);
@@ -5792,7 +5764,7 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     }
 
     // ============================================================
-    // vocal-time-stretch §7 (Phase D MVP) — TimeStretchCache fast-path
+    // vocal-time-stretch §7 (Phase D MVP) �?TimeStretchCache fast-path
     //
     // When a non-identity TimeGrid is published AND the Stage 2 worker has
     // populated the TimeStretchCache for this (materializationId, pitchRev,
@@ -5800,7 +5772,7 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     // dry-source resample + RenderCache piecewise-replace overlay path entirely.
     //
     // On any miss (cache not yet populated, locked, or revision mismatch),
-    // fall through to the existing dry-path — perceptually the user hears
+    // fall through to the existing dry-path �?perceptually the user hears
     // unstretched audio for the brief moment until Stage 2 finishes.
     // ============================================================
     if (!request.source.timeGridIsIdentity
@@ -5816,7 +5788,7 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
         if (wrote > 0) {
             return wrote;
         }
-        // Cache miss → fall through to the dry-path (silent-stretch fallback)
+        // Cache miss �?fall through to the dry-path (silent-stretch fallback)
         // until Stage 2 finishes populating the cache for this revision.
     }
 
@@ -5847,11 +5819,11 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
 
     // Write dry signal with linear interpolation (single pass, pointer-based).
     //
-    // Per channel-layout-policy spec: srcChannels is guaranteed ∈ {1, 2} (enforced
+    // Per channel-layout-policy spec: srcChannels is guaranteed �?{1, 2} (enforced
     // at `MaterializationStore::createMaterialization`). The `srcCh = ch % srcChannels`
     // mapping below covers both layouts naturally:
-    //   - srcChannels=1 (mono storage): every dest ch maps to src 0 → broadcast.
-    //   - srcChannels=2 (stereo storage): dest ch 0 → src 0, ch 1 → src 1 → 1:1 map.
+    //   - srcChannels=1 (mono storage): every dest ch maps to src 0 �?broadcast.
+    //   - srcChannels=2 (stereo storage): dest ch 0 �?src 0, ch 1 �?src 1 �?1:1 map.
     // No extra channel-count guards or general-N-channel handling needed.
     for (int channel = 0; channel < destinationChannels; ++channel) {
         const int srcCh = channel % srcChannels;
@@ -5880,7 +5852,7 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
 }
 
 // ============================================================================
-// Clipboard — materialization range copy for paste/duplicate
+// Clipboard �?materialization range copy for paste/duplicate
 // ============================================================================
 
 uint64_t OpenTuneAudioProcessor::copyMaterializationRange(uint64_t sourceMaterializationId,
@@ -6020,7 +5992,7 @@ uint64_t OpenTuneAudioProcessor::copyMaterializationRange(uint64_t sourceMateria
         }
     }
 
-    // Copy time grid (v7 vocal-time-stretch data) — offset handles to new origin
+    // Copy time grid (v7 vocal-time-stretch data) �?offset handles to new origin
     if (sourceSnap.timeGrid && !sourceSnap.timeGrid->empty())
     {
         const auto& srcHandles = sourceSnap.timeGrid->handles();

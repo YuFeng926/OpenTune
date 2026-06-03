@@ -3,26 +3,47 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <memory>
+#include <optional>
+#include <vector>
 
-#include "VST3AraSession.h"
+#include "AudioModification.h"
+#include "AudioSource.h"
+#include "PlaybackRegion.h"
 
 namespace OpenTune {
 
 class OpenTuneAudioProcessor;
-class SourceStore;
-class MaterializationStore;
-class ResamplingManager;
+class OpenTuneEditorView;
+class OpenTunePlaybackRenderer;
 
 class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
 public:
-    using RegionIdentity = VST3AraSession::RegionIdentity;
-    using AppliedMaterializationProjection = VST3AraSession::AppliedMaterializationProjection;
-    using SourceSlot = VST3AraSession::SourceSlot;
-    using RegionSlot = VST3AraSession::RegionSlot;
-    using PublishedRegionView = VST3AraSession::PublishedRegionView;
-    using PublishedSnapshot = VST3AraSession::PublishedSnapshot;
-    using SnapshotHandle = VST3AraSession::SnapshotHandle;
+    struct PlaybackRegionProjection
+    {
+        juce::ARAPlaybackRegion* playbackRegion{nullptr};
+        juce::String audioModificationPersistentId;
+        SourceWindow contentWindow;
+        uint64_t sourceId{0};
+        uint64_t materializationId{0};
+        uint64_t materializationRevision{0};
+        uint64_t contentRevision{0};
+        uint64_t placementRevision{0};
+        double startInPlaybackTime{0.0};
+        double startInModificationTime{0.0};
+        double durationInPlaybackTime{0.0};
+        double durationInModificationTime{0.0};
+        double materializationDurationSeconds{0.0};
+        double sampleRate{44100.0};
+        int numChannels{0};
+        bool timestretchEnabled{false};
+        bool timestretchReflectingTempo{false};
+        bool contentBasedFadeAtHead{false};
+        bool contentBasedFadeAtTail{false};
+
+        double endInPlaybackTime() const noexcept { return startInPlaybackTime + durationInPlaybackTime; }
+        bool isRenderable() const noexcept;
+    };
 
     OpenTuneDocumentController(const ARA::PlugIn::PlugInEntry* entry,
                                const ARA::ARADocumentControllerHostInstance* instance);
@@ -32,18 +53,24 @@ public:
     void setProcessor(OpenTuneAudioProcessor* processor);
     OpenTuneAudioProcessor* getProcessor() const { return processor_; }
 
-    VST3AraSession* getSession() noexcept { return session_.get(); }
-    const VST3AraSession* getSession() const noexcept { return session_.get(); }
-
-    std::shared_ptr<SourceStore> getSharedSourceStore() const { return sharedSourceStore_; }
-    std::shared_ptr<MaterializationStore> getSharedMaterializationStore() const { return sharedMaterializationStore_; }
-    std::shared_ptr<ResamplingManager> getSharedResamplingManager() const { return sharedResamplingManager_; }
-
-    SnapshotHandle loadSnapshot() const;
+    std::vector<PlaybackRegionProjection> getPlaybackRegionProjections() const;
+    std::vector<PlaybackRegionProjection> getPlaybackRegionProjectionsFor(
+        const std::vector<juce::ARAPlaybackRegion*>& playbackRegions) const;
+    std::vector<PlaybackRegionProjection> getEditorSelectionPlaybackRegionProjections() const;
+    std::optional<PlaybackRegionProjection> getFocusedEditorPlaybackRegionProjection() const;
+    bool referencesMaterialization(uint64_t materializationId) const;
+    bool requestBirthForPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
+    bool requestBirthForFocusedEditorPlaybackRegion();
+    void setEditorViewSelectionPlaybackRegions(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
+    void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
+    void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
 
     void didUpdateMusicalContextProperties(juce::ARAMusicalContext* musicalContext) override;
     void willBeginEditing(juce::ARADocument* document) override;
     void didEndEditing(juce::ARADocument* document) override;
+
+    void didUpdateAudioModificationProperties(juce::ARAAudioModification* audioModification) override;
+    void willDestroyAudioModification(juce::ARAAudioModification* audioModification) override;
 
     void didUpdatePlaybackRegionProperties(juce::ARAPlaybackRegion* playbackRegion) override;
     void willDestroyPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion) override;
@@ -73,14 +100,49 @@ protected:
                                 const juce::ARAStoreObjectsFilter* filter) override;
 
     juce::ARAPlaybackRenderer* doCreatePlaybackRenderer() override;
+    juce::ARAEditorView* doCreateEditorView() override;
 
 private:
-    std::shared_ptr<SourceStore> sharedSourceStore_;
-    std::shared_ptr<MaterializationStore> sharedMaterializationStore_;
-    std::shared_ptr<ResamplingManager> sharedResamplingManager_;
+    struct RestoredMaterializationBinding
+    {
+        juce::String audioModificationPersistentId;
+        SourceWindow sourceWindow;
+        uint64_t sourceId{0};
+        uint64_t materializationId{0};
+        uint64_t materializationRevision{0};
+        double materializationDurationSeconds{0.0};
+    };
 
-    std::unique_ptr<VST3AraSession> session_;
+    std::vector<AudioSource> audioSources_;
+    std::vector<AudioModification> audioModifications_;
+    std::vector<PlaybackRegion> playbackRegions_;
+    std::vector<juce::ARAPlaybackRegion*> editorSelectionPlaybackRegions_;
+    std::vector<OpenTunePlaybackRenderer*> playbackRenderers_;
+    std::vector<RestoredMaterializationBinding> pendingRestoredBindings_;
+
     OpenTuneAudioProcessor* processor_ = nullptr;
+
+    AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
+    const AudioSource* findAudioSource(const juce::String& persistentId) const;
+    AudioSource& ensureAudioSource(juce::ARAAudioSource* audioSource);
+    AudioModification* findAudioModification(const juce::String& persistentId);
+    const AudioModification* findAudioModification(const juce::String& persistentId) const;
+    AudioModification* findAudioModification(juce::ARAAudioModification* audioModification);
+    AudioModification& ensureAudioModification(juce::ARAAudioModification* audioModification);
+    PlaybackRegion* findPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
+    const PlaybackRegion* findPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion) const;
+    PlaybackRegion& ensurePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
+    PlaybackRegionProjection makeProjection(const PlaybackRegion& region) const;
+    std::vector<PlaybackRegionProjection> buildProjections() const;
+    std::vector<OpenTunePlaybackRenderer*> publishModelChange();
+    static void refreshRegisteredRenderers(const std::vector<OpenTunePlaybackRenderer*>& renderers);
+    void reconcileEditorSelectionPlaybackRegions();
+    bool birthMaterializationForRegion(PlaybackRegion& region);
+    bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
+    void applyRestoredBinding(AudioModification& modification,
+                              const RestoredMaterializationBinding& binding) noexcept;
+    bool applyPendingRestoredBinding(AudioModification& modification);
+    void rememberPendingRestoredBinding(RestoredMaterializationBinding binding);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)
 };
