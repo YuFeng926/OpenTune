@@ -103,6 +103,8 @@ std::string allAraText()
         "Source/ARA/PlaybackRegion.cpp",
         "Source/ARA/OpenTuneDocumentController.h",
         "Source/ARA/OpenTuneDocumentController.cpp",
+        "Source/ARA/OpenTuneEditorView.h",
+        "Source/ARA/OpenTuneEditorView.cpp",
         "Source/ARA/OpenTunePlaybackRenderer.h",
         "Source/ARA/OpenTunePlaybackRenderer.cpp",
     };
@@ -130,6 +132,8 @@ CheckResult araModelFilesUseOfficialNames()
         "Source/ARA/PlaybackRegion.cpp",
         "Source/ARA/OpenTuneDocumentController.h",
         "Source/ARA/OpenTuneDocumentController.cpp",
+        "Source/ARA/OpenTuneEditorView.h",
+        "Source/ARA/OpenTuneEditorView.cpp",
         "Source/ARA/OpenTunePlaybackRenderer.h",
         "Source/ARA/OpenTunePlaybackRenderer.cpp",
     };
@@ -154,6 +158,7 @@ CheckResult cmakeMountsOnlyNewAraModel()
         "Source/ARA/AudioModification.cpp",
         "Source/ARA/PlaybackRegion.cpp",
         "Source/ARA/OpenTuneDocumentController.cpp",
+        "Source/ARA/OpenTuneEditorView.cpp",
         "Source/ARA/OpenTunePlaybackRenderer.cpp",
         "Tests/TestMain.cpp",
         "OPENTUNE_SOURCE_DIR",
@@ -271,7 +276,10 @@ CheckResult documentControllerOwnsTopLevelAraModel()
         "std::vector<PlaybackRegion>",
         "PlaybackRegionProjection",
         "getPlaybackRegionProjectionsFor",
-        "requestBirthForPlaybackRegion",
+        "getEditorSelectionPlaybackRegionProjections",
+        "getFocusedEditorPlaybackRegionProjection",
+        "setEditorViewSelectionPlaybackRegions",
+        "requestBirthForFocusedEditorPlaybackRegion",
         "referencesMaterialization",
         "birthMaterializationForRegion",
     };
@@ -282,6 +290,10 @@ CheckResult documentControllerOwnsTopLevelAraModel()
     const std::vector<std::string> forbidden{
         std::string("load") + "Snapshot",
         std::string("requestBirthForPreferred") + "Region",
+        std::string("requestBirthFor") + "PlaybackRegion",
+        "preferredPlaybackRegion_",
+        "getPreferredPlaybackRegionProjection",
+        "selectPlaybackRegion",
         "prepareModificationContentFromSelectedRegionLocked",
         std::string("getSharedSource") + "Store",
         std::string("getSharedMaterialization") + "Store",
@@ -317,6 +329,46 @@ CheckResult documentControllerOwnsMaterializationBindingPersistence()
                     "missing store/restore helper or pending binding token");
 
     return pass("DocumentController owns materialization binding persistence");
+}
+
+CheckResult editorViewFollowsViewSelectionRole()
+{
+    const auto araText = readText("Source/ARA/OpenTuneEditorView.h")
+        + readText("Source/ARA/OpenTuneEditorView.cpp")
+        + readText("Source/ARA/OpenTuneDocumentController.h")
+        + readText("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto pluginEditorText = readText("Source/Plugin/PluginEditor.h")
+        + readText("Source/Plugin/PluginEditor.cpp");
+    const auto text = araText + pluginEditorText;
+
+    const std::vector<std::string> required{
+        "OpenTuneEditorView",
+        "ARAEditorView",
+        "doCreateEditorView",
+        "doNotifySelection",
+        "getEffectivePlaybackRegions",
+        "setEditorViewSelectionPlaybackRegions",
+        "getEditorSelectionPlaybackRegionProjections",
+        "getFocusedEditorPlaybackRegionProjection",
+        "requestBirthForFocusedEditorPlaybackRegion",
+        "AudioProcessorEditorARAExtension",
+    };
+
+    if (!containsAll(text, required))
+        return fail("EditorView follows ARA ViewSelection role", "missing EditorView/ViewSelection token");
+
+    const std::vector<std::string> forbidden{
+        "preferredPlaybackRegion_",
+        "getPreferredPlaybackRegionProjection",
+        "selectPlaybackRegion",
+        std::string("requestBirthForPreferred") + "Region",
+        std::string("requestBirthFor") + "PlaybackRegion",
+    };
+
+    if (!lacksAll(text, forbidden))
+        return fail("EditorView follows ARA ViewSelection role", "old preferred-region UI path remains");
+
+    return pass("EditorView follows ARA ViewSelection role");
 }
 
 CheckResult playbackRendererFollowsAssignedRegionRole()
@@ -372,6 +424,46 @@ CheckResult playbackRendererFollowsAssignedRegionRole()
     return pass("PlaybackRenderer follows assigned playback-region role");
 }
 
+CheckResult araHostTransportMirrorIsLockFree()
+{
+    const auto headerText = readText("Source/PluginProcessor.h");
+    const auto processorText = readText("Source/PluginProcessor.cpp");
+    const auto pluginEditorText = readText("Source/Plugin/PluginEditor.cpp");
+    const auto text = headerText + processorText + pluginEditorText;
+
+    const std::vector<std::string> required{
+        "updateHostTransportSnapshot",
+        "getHostTransportSnapshot",
+        "PositionInfo",
+        "getIsLooping",
+        "loopEnabled",
+        "setLoopEnabled",
+        "isLoopEnabled",
+        "const bool loopEnabled = processorRef_.isLoopEnabled();",
+        "transportBar_.setLoopEnabled(loopEnabled);",
+    };
+
+    if (!containsAll(text, required))
+        return fail("ARA host transport UI mirror is lock-free",
+                    "missing host transport mirror API or PositionInfo source");
+
+    const std::vector<std::string> forbidden{
+        "hostTransportSnapshotLock_",
+        "juce::SpinLock hostTransportSnapshotLock_",
+        "HostTransportSnapshot:",
+        "AppLogger::log(\"HostTransportSnapshot",
+        "AppLogger::info(\"HostTransportSnapshot",
+        "AppLogger::warn(\"HostTransportSnapshot",
+        "AppLogger::debug(\"HostTransportSnapshot",
+    };
+
+    if (!lacksAll(text, forbidden))
+        return fail("ARA host transport UI mirror is lock-free",
+                    "explicit lock or realtime HostTransportSnapshot logging remains");
+
+    return pass("ARA host transport UI mirror is lock-free");
+}
+
 } // namespace
 
 int main()
@@ -385,7 +477,9 @@ int main()
         audioModificationOwnsContent(),
         documentControllerOwnsTopLevelAraModel(),
         documentControllerOwnsMaterializationBindingPersistence(),
+        editorViewFollowsViewSelectionRole(),
         playbackRendererFollowsAssignedRegionRole(),
+        araHostTransportMirrorIsLockFree(),
     };
 
     bool allPassed = true;

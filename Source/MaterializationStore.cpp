@@ -104,6 +104,7 @@ uint64_t MaterializationStore::createMaterialization(CreateMaterializationReques
                                      std::memory_order_relaxed);
     }
     materializations_.emplace(materializationId, std::move(materialization));
+    rebuildPlaybackSourceCache();
     ChannelLayoutLog::logMaterializationCreate(static_cast<juce::int64>(materializationId),
                                                 requestChannels);
     return materializationId;
@@ -115,6 +116,7 @@ void MaterializationStore::clear()
         const juce::ScopedWriteLock writeLock(lock_);
         materializations_.clear();
         nextMaterializationId_.store(1, std::memory_order_relaxed);
+        rebuildPlaybackSourceCache();
     }
     {
         std::lock_guard<std::mutex> qLock(renderQueueMutex_);
@@ -131,7 +133,10 @@ bool MaterializationStore::deleteMaterialization(uint64_t materializationId)
 
     const juce::ScopedWriteLock writeLock(lock_);
     const bool erased = materializations_.erase(materializationId) > 0;
-    if (erased) timeStretchCache_.invalidate(materializationId);
+    if (erased) {
+        timeStretchCache_.invalidate(materializationId);
+        rebuildPlaybackSourceCache();
+    }
     return erased;
 }
 
@@ -188,6 +193,7 @@ bool MaterializationStore::retireMaterialization(uint64_t id)
     if (it->second.renderCache) {
         it->second.renderCache->clear();
     }
+    rebuildPlaybackSourceCache();
     return true;
 }
 
@@ -198,6 +204,7 @@ bool MaterializationStore::reviveMaterialization(uint64_t id)
     const auto it = materializations_.find(id);
     if (it == materializations_.end() || !it->second.isRetired_) return false;
     it->second.isRetired_ = false;
+    rebuildPlaybackSourceCache();
     return true;
 }
 
@@ -217,6 +224,7 @@ bool MaterializationStore::physicallyDeleteIfReclaimable(uint64_t id)
     if (it == materializations_.end() || !it->second.isRetired_) return false;
     materializations_.erase(it);
     timeStretchCache_.invalidate(id);   // §6.2
+    rebuildPlaybackSourceCache();
     return true;
 }
 
@@ -258,33 +266,46 @@ bool MaterializationStore::getAudioBuffer(uint64_t materializationId,
     return out != nullptr;
 }
 
+void MaterializationStore::rebuildPlaybackSourceCache()
+{
+    // Caller MUST hold write lock on lock_.
+    auto cache = std::make_shared<std::map<uint64_t, PlaybackReadSource>>();
+    for (auto& [id, entry] : materializations_)
+    {
+        if (entry.isRetired_)
+            continue;
+
+        PlaybackReadSource src;
+        src.renderCache = entry.renderCache;
+        src.audioBuffer = entry.audioBuffer;
+        src.timeStretchCache = &timeStretchCache_;
+        src.materializationId = id;
+        src.timeGridRevision = static_cast<uint32_t>(entry.timeGridRevision);
+        src.pitchRevision = 0;
+        src.pitchShiftSettings = entry.pitchShiftSettings;
+        src.timeGridIsIdentity = (entry.timeGrid == nullptr) || entry.timeGrid->isIdentity();
+        cache->emplace(id, std::move(src));
+    }
+    std::atomic_store(&playbackSourceCache_,
+                      std::shared_ptr<const std::map<uint64_t, PlaybackReadSource>>(std::move(cache)));
+}
+
 bool MaterializationStore::getPlaybackReadSource(uint64_t materializationId, PlaybackReadSource& out) const
 {
     out = PlaybackReadSource{};
-    if (materializationId == 0) {
+    if (materializationId == 0)
         return false;
-    }
 
-    const juce::ScopedReadLock readLock(lock_);
-    const auto it = materializations_.find(materializationId);
-    if (it == materializations_.end() || it->second.isRetired_) {
+    // Lock-free read: atomic_load immutable snapshot, zero blocking on audio thread.
+    auto snap = std::atomic_load(&playbackSourceCache_);
+    if (!snap)
         return false;
-    }
 
-    out.renderCache = it->second.renderCache;
-    out.audioBuffer = it->second.audioBuffer;
+    auto it = snap->find(materializationId);
+    if (it == snap->end())
+        return false;
 
-    // §7 (Phase D MVP): publish TimeStretchCache + revisions snapshot for the
-    // audio thread to fast-path against when TimeGrid is non-identity.
-    out.timeStretchCache = const_cast<TimeStretchCache*>(&timeStretchCache_);
-    out.materializationId = materializationId;
-    out.timeGridRevision  = static_cast<uint32_t>(it->second.timeGridRevision);
-    // pitchRevision: derived from PitchCurve internals if available; for MVP
-    // we use 0 (Stage 1 caching is not yet branched by this).
-    out.pitchRevision = 0;
-    out.pitchShiftSettings = it->second.pitchShiftSettings;
-    out.timeGridIsIdentity = (it->second.timeGrid == nullptr) || it->second.timeGrid->isIdentity();
-
+    out = it->second;
     return out.canRead();
 }
 
@@ -434,6 +455,7 @@ bool MaterializationStore::commitReferenceAlignmentPatch(
     ++it->second.timeGridRevision;
 
     timeStretchCache_.invalidate(materializationId);
+    rebuildPlaybackSourceCache();
     return true;
 }
 
@@ -503,6 +525,7 @@ bool MaterializationStore::setTimeGrid(uint64_t materializationId,
     // PitchCache is NOT invalidated — the core latency win of v7 (handle drag
     // doesn't re-run NSF) lives here.
     timeStretchCache_.invalidate(materializationId);
+    rebuildPlaybackSourceCache();
     return true;
 }
 
@@ -548,7 +571,7 @@ bool MaterializationStore::setPitchShiftSettings(uint64_t materializationId, con
 
     // Invalidate Stage 2 TimeStretchCache
     timeStretchCache_.invalidate(materializationId);
-
+    rebuildPlaybackSourceCache();
     return true;
 }
 
@@ -669,6 +692,7 @@ bool MaterializationStore::replaceAudio(uint64_t materializationId,
     it->second.originalF0State = OriginalF0State::NotRequested;
     it->second.referenceFeatures.reset();  // audio buffer changed -> feature cache stale
     // sourceWindow 不改变：replaceAudio 语义 = 换 audio buffer，lineage 不变
+    rebuildPlaybackSourceCache();
     return true;
 }
 
@@ -725,6 +749,7 @@ uint64_t MaterializationStore::replaceMaterializationWithNewLineage(uint64_t old
     const uint64_t newId = newEntry.materializationId;
     materializations_.erase(oldId);
     materializations_.emplace(newId, std::move(newEntry));
+    rebuildPlaybackSourceCache();
     return newId;
 }
 

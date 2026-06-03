@@ -59,7 +59,6 @@ public:
     std::vector<PlaybackRegionProjection> getEditorSelectionPlaybackRegionProjections() const;
     std::optional<PlaybackRegionProjection> getFocusedEditorPlaybackRegionProjection() const;
     bool referencesMaterialization(uint64_t materializationId) const;
-    bool requestBirthForPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
     bool requestBirthForFocusedEditorPlaybackRegion();
     void setEditorViewSelectionPlaybackRegions(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);

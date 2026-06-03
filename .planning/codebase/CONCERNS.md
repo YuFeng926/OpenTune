@@ -1,6 +1,6 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-06-02
+**Analysis Date:** 2026-06-03
 
 ## Tech Debt
 
@@ -62,12 +62,12 @@
 - Trigger: This is a diagnostic probe function that creates a reader solely to check if the format can decode the file, then immediately deletes it. The `delete` is not guarded by a unique_ptr.
 - Workaround: Replace with `std::unique_ptr<juce::AudioFormatReader>(reader)` or use a scoped wrapper.
 
-### `const_cast` in ARA Session
+### ARA Host Selection Semantics Vary by DAW
 
-- Symptoms: `VST3AraSession.cpp` line 690 uses `const_cast<juce::ARAPlaybackRegion*>(playbackRegion)` to strip const from a region pointer passed by the ARA host.
-- Files: `Source/ARA/VST3AraSession.cpp` (line 690)
-- Trigger: The ARA host provides a `const` playback region, but code needs to register a non-const reference for internal bookkeeping. This is undefined behavior if the host's region is truly immutable.
-- Workaround: None. The code assumes the ARA host's const pointer points to a mutable object. This is a latent crash risk with strict ARA hosts or future host versions.
+- Symptoms: Studio One, Logic Pro, Cubase/Nuendo, and other ARA2 hosts may send different combinations of explicit playback regions, region sequences, and time ranges through `ARAViewSelection`.
+- Files: `Source/ARA/OpenTuneEditorView.cpp`, `Source/ARA/OpenTuneDocumentController.cpp`, `Source/Plugin/PluginEditor.cpp`
+- Trigger: OpenTune follows the official EditorView path: the host selection arrives through `doNotifySelection()`, effective playback regions are copied immediately, and the first effective region is treated as the focused editor target. No local `preferredPlaybackRegion_` fallback or global selection state exists inside `Source/ARA/`. This matches the SDK contract but still needs host-specific verification for UI focus behavior.
+- Workaround: Keep the implementation on the official `ViewSelection::getEffectivePlaybackRegions()` path and verify in supported DAWs instead of adding any local selection state.
 
 ## Security Considerations
 
@@ -131,12 +131,12 @@
 
 ## Fragile Areas
 
-### ARA Session State Management
+### ARA Role Sequencing in Real Hosts
 
-- Files: `Source/ARA/VST3AraSession.cpp` (800 lines), `Source/ARA/OpenTuneDocumentController.cpp`, `Source/ARA/OpenTunePlaybackRenderer.cpp`
-- Why fragile: The ARA protocol requires careful sequencing of callbacks from the DAW host. The session manages a complex state machine with `stateMutex_` guarding transitions between idle, loading, playing states. The ARA DocumentController must coordinate with the processor's SourceStore and MaterializationStore outside of the ARA callback thread. Improper sequencing can lead to deadlocks or inconsistent state where the processor's view of a region differs from the host's.
-- Safe modification: Any change to ARA session code must preserve the existing `lock_guard<mutex>` discipline (87 lock acquisitions in VST3AraSession.cpp alone). Thread-safety annotations in comments describe which thread owns which state — read these before touching state fields.
-- Test coverage: No dedicated ARA integration tests (the 30 test files focus on standalone paths). ARA testing requires a DAW host, making automated verification difficult. Manual testing is required for ARA changes.
+- Files: `Source/ARA/OpenTuneDocumentController.cpp`, `Source/ARA/OpenTuneEditorView.cpp`, `Source/ARA/OpenTunePlaybackRenderer.cpp`
+- Why fragile: The local contract tests can prove the implementation uses official roles and remains lock-free, but they cannot emulate every host timing for document graph edits, editor opening/closing, selection notification, playback-region assignment, real-time process callbacks, and ARA archive persistency.
+- Safe modification: Keep ARA responsibilities separated by role: DocumentController owns projections and persistence (full-document + sub-graph via `ARAStoreObjectsFilter`/`ARARestoreObjectsFilter`), EditorView owns UI selection projection, and PlaybackRenderer renders only the host-assigned playback-region set. No local preferred-region state, no regular VST3 capture/session state inside `Source/ARA/`.
+- Test coverage: `OpenTuneTests.exe architecture` guards the static contract; ARA VST3 compilation validates JUCE/SDK hook signatures. Real DAW smoke tests are still required for host behavior.
 
 ### Cross-Thread Materialization State Transitions
 
@@ -227,12 +227,12 @@
 
 ## Test Coverage Gaps
 
-### No ARA Protocol Integration Tests
+### No DAW-Driven ARA Protocol Integration Tests
 
-- What's not tested: ARA session lifecycle (bind/unbind, region creation/deletion), ARA playback rendering correctness, ARA state serialization round-trip through real DAW hosts.
-- Files: `Source/ARA/VST3AraSession.cpp`, `Source/ARA/OpenTuneDocumentController.cpp`, `Source/ARA/OpenTunePlaybackRenderer.cpp`
-- Risk: ARA protocol violations that only manifest in specific DAW hosts (Studio One vs. Logic Pro vs. Cubase) could go undetected. ARA API misuse that causes silent corruption of audio regions.
-- Priority: Medium — mitigated by manual testing with supported DAWs but lacks regression protection.
+- What is not tested: Real host bind/unbind timing, `EditorView` selection focus, assigned playback-region set updates, overlapping region playback in host context, transport/playhead behavior, and ARA archive round-trip (save/reopen/restore bindings) through DAW projects.
+- Files: `Source/ARA/OpenTuneDocumentController.cpp`, `Source/ARA/OpenTuneEditorView.cpp`, `Source/ARA/OpenTunePlaybackRenderer.cpp`, `Source/Plugin/PluginEditor.cpp`
+- Risk: ARA protocol behavior that depends on a specific DAW host may pass local static contracts but still need host smoke validation.
+- Priority: Medium — mitigated by ARA/non-ARA/Standalone build isolation and architecture contracts, `ARAStoreObjectsFilter`/`ARARestoreObjectsFilter` support, and the removal of any local fallback state. Real DAW regression coverage is still missing.
 
 ### No GPU Inference Path Tests
 
@@ -257,4 +257,4 @@
 
 ---
 
-*Concerns audit: 2026-06-02*
+*Concerns audit: 2026-06-03*

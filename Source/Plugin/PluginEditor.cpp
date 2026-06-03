@@ -98,6 +98,9 @@ MaterializationTimelineProjection makePianoRollLocalProjection(
 
 OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& processor)
     : AudioProcessorEditor(&processor)
+#if JucePlugin_Enable_ARA
+    , juce::AudioProcessorEditorARAExtension(&processor)
+#endif
     , processorRef_(processor)
     , languageState_(std::make_shared<LocalizationManager::LanguageState>(
           LocalizationManager::LanguageState{ appPreferences_.getState().shared.language }))
@@ -301,6 +304,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     const double currentPositionSeconds = processorRef_.getPosition();
     const bool playing = processorRef_.isPlaying();
+    const bool loopEnabled = processorRef_.isLoopEnabled();
     transportBar_.setPositionSeconds(currentPositionSeconds);
 
     syncParameterPanelFromSelection();
@@ -326,6 +330,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         pianoRoll_.setIsPlaying(playing);
         FrameScheduler::instance().setTimelinePlaybackActive(playing);
     }
+    transportBar_.setLoopEnabled(loopEnabled);
 
     // Drive PianoRoll heartbeat first so autoTuneInFlight_ is up-to-date
     if (pianoRoll_.isShowing()) {
@@ -485,8 +490,8 @@ OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()
                                                     makePianoRollLocalProjection(region)));
         }
 
-        if (const auto preferredRegion = dc->getPreferredPlaybackRegionProjection()) {
-            sync.activeMaterializationId = preferredRegion->materializationId;
+        if (const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection()) {
+            sync.activeMaterializationId = focusedRegion->materializationId;
         }
 
         const bool activeBelongsToPlacements = std::any_of(sync.placements.begin(),
@@ -971,20 +976,20 @@ void OpenTuneAudioProcessorEditor::recordRequested()
     AppLogger::log("VST3 recordRequested mode=ara-bound processor="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(&processorRef_))
         + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc)));
-    const auto preferredRegion = dc->getPreferredPlaybackRegionProjection();
-    if (!preferredRegion.has_value() || preferredRegion->audioModificationPersistentId.isEmpty()) {
+    const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection();
+    if (!focusedRegion.has_value() || focusedRegion->audioModificationPersistentId.isEmpty()) {
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                "Read Audio",
-                                               "No preferred ARA playback region is available.");
+                                               "No ARA editor selection playback region is available.");
         return;
     }
 
     // ARA path: recordRequested is the explicit materialization birth boundary.
-    uint64_t materializationId = preferredRegion->materializationId;
+    uint64_t materializationId = focusedRegion->materializationId;
     if (materializationId == 0)
     {
         // Explicit birth request: recordRequested is the sole entry point.
-        dc->requestBirthForPlaybackRegion(preferredRegion->playbackRegion);
+        dc->requestBirthForFocusedEditorPlaybackRegion();
 
         waitingForAraMaterialization_ = true;
         araWaitStartMs_ = juce::Time::getApproximateMillisecondCounter();

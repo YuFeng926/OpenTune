@@ -1,6 +1,6 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-06-02
+**Analysis Date:** 2026-06-03
 
 ## Test Framework
 
@@ -21,11 +21,21 @@
 
 **Run Commands:**
 ```bash
-# Build and run tests (via CMake/CTest)
-ctest --test-dir build-ara-overlay-vs18-clean -C Release
+# Build architecture/static-contract tests with the Windows Path de-dup wrapper
+cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build build-ara-overlay-vs18-clean --config Release --target OpenTuneTests"
 
-# Direct execution
-build-ara-overlay-vs18-clean/Tests/Release/OpenTuneTests.exe
+# Run only the architecture contract suite
+cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& build-ara-overlay-vs18-clean\Release\OpenTuneTests.exe architecture"
+
+# Build the ARA VST3 target
+cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build build-ara-overlay-vs18-clean --config Release --target OpenTune_VST3"
+
+# Configure and build the non-ARA VST3 target
+cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --preset windows-nonara-vs2022"
+cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build build-nonara-overlay-vs18-clean --config Release --target OpenTune_VST3"
+
+# Build the non-ARA Standalone target
+cmd /v:on /c "set CLEAN_PATH=%Path%& set PATH=& set Path=!CLEAN_PATH!& cmake --build build-nonara-overlay-vs18-clean --config Release --target OpenTune_Standalone"
 ```
 
 **Preset:**
@@ -248,6 +258,24 @@ OpenTuneAudioProcessor::PreparedImport makePreparedImport(const juce::String& di
 
 **View Coverage:** Not configured.
 
+## ARA2 Contract Verification
+
+`Tests/TestMain.cpp` contains the architecture contract suite for the current ARA2 implementation. It is a source-scan contract rather than a DAW-host integration test, and it blocks regressions in the parts that can be proven locally:
+
+- Official object model: `AudioSource`, `AudioModification`, and `PlaybackRegion` use ARA names and ownership boundaries.
+- Lock-free ARA layer: `Source/ARA/` is scanned for mutex/thread primitives, JUCE locks, atomics, and `AppLogger`.
+- DocumentController projection: `OpenTuneDocumentController` owns `PlaybackRegionProjection`, materialization binding persistence with `ARAStoreObjectsFilter`/`ARARestoreObjectsFilter` support for full-document and partial sub-graph archives, editor selection projection, and focused-region materialization birth.
+- EditorView UI hook: `OpenTuneEditorView` implements JUCE `ARAEditorView::doNotifySelection`, consumes `ViewSelection::getEffectivePlaybackRegions`, and the VST3 editor derives from `AudioProcessorEditorARAExtension`.
+- PlaybackRenderer role: `OpenTunePlaybackRenderer` maintains the host assigned playback-region set, mixes overlaps, clears empty blocks, returns handled ARA silence, and does not use a regular VST3 fallback path while ARA-bound.
+- Runtime isolation: the contract rejects old ARA session/state-machine tokens, regular VST3 capture/Standalone arrangement dependencies, and any local preferred-region/fallback-selection state inside `Source/ARA/`.
+
+The build matrix for this change is:
+
+- ARA tests: `OpenTuneTests.exe architecture`
+- ARA VST3: `OpenTune_VST3` in `build-ara-overlay-vs18-clean`
+- non-ARA VST3: configure `windows-nonara-vs2022`, then build `OpenTune_VST3` in `build-nonara-overlay-vs18-clean`
+- non-ARA Standalone: build `OpenTune_Standalone` in `build-nonara-overlay-vs18-clean`
+
 ## Test Types
 
 **Unit Tests (L0-L2):**
@@ -333,4 +361,4 @@ juce::AudioProcessorEditor* createOpenTuneEditor(OpenTuneAudioProcessor&) {
 
 ---
 
-*Testing analysis: 2026-06-02*
+*Testing analysis: 2026-06-03*

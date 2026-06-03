@@ -1,7 +1,7 @@
-<!-- refreshed: 2026-06-02 -->
+<!-- refreshed: 2026-06-03 -->
 # Architecture
 
-**Analysis Date:** 2026-06-02
+**Analysis Date:** 2026-06-03
 
 ## System Overview
 
@@ -61,7 +61,7 @@ OpenTune is an AI-powered pitch correction application (开源AI智能修音软�
 │   `Source/ARA/`     │              │   `Source/Plugin/Capture/`        │
 │   DocumentController│              │   CaptureSession / RingBuffer     │
 │   + PlaybackRenderer │              │   (record→import pipeline)       │
-│   + VST3AraSession   │              └──────────────────────────────────┘
+│   + EditorView       │              └──────────────────────────────────┘
 └────────────────────┘
          │
          ▼
@@ -80,9 +80,10 @@ OpenTune is an AI-powered pitch correction application (开源AI智能修音软�
 | **SourceStore** | Immutable source audio identity and lifecycle (retire/revive) | `Source/SourceStore.{h,cpp}` |
 | **MaterializationStore** | Editable audio payload truth: notes, pitch curves, keys, RenderCache, TimeGrid | `Source/MaterializationStore.{h,cpp}` |
 | **StandaloneArrangement** | Multi-track timeline: Placements, Track state, playback snapshots | `Source/StandaloneArrangement.{h,cpp}` |
-| **OpenTuneDocumentController** | ARA integration: bridges JUCE ARA callbacks to internal stores | `Source/ARA/OpenTuneDocumentController.{h,cpp}` |
-| **VST3AraSession** | ARA document model: manages AudioModification lifecycle, birth queue, content revisions | `Source/ARA/VST3AraSession.{h,cpp}` |
-| **OpenTunePlaybackRenderer** | ARA real-time playback: per-block RenderSnapshot consumption | `Source/ARA/OpenTunePlaybackRenderer.{h,cpp}` |
+| **AudioSource / AudioModification / PlaybackRegion** | ARA document model using official object ownership: source identity/sample access, editable content/materialization, and placement | `Source/ARA/AudioSource.*`, `AudioModification.*`, `PlaybackRegion.*` |
+| **OpenTuneDocumentController** | ARA projection and persistence owner: maps host objects into playback/materialization projections, stores materialization bindings, and respects `ARAStoreObjectsFilter`/`ARARestoreObjectsFilter` for partial persistency (full-document + sub-graph archive) | `Source/ARA/OpenTuneDocumentController.{h,cpp}` |
+| **OpenTuneEditorView** | ARA editor role: consumes host `ViewSelection` / `notifySelection` and exposes focused selection to the VST3 UI | `Source/ARA/OpenTuneEditorView.{h,cpp}` |
+| **OpenTunePlaybackRenderer** | ARA playback role: renders the playback-region set assigned by the host to this renderer and returns handled silence for empty/non-overlap blocks | `Source/ARA/OpenTunePlaybackRenderer.{h,cpp}` |
 | **F0InferenceService** | RMVPE-based fundamental frequency extraction (CPU only, ONNX) | `Source/Inference/F0InferenceService.{h,cpp}` |
 | **VocoderDomain** | Vocoder orchestration: submits inference jobs to scheduler | `Source/Inference/VocoderDomain.{h,cpp}` |
 | **RenderCache** | Per-materialization render chunk cache, chunk stats, partial invalidation | `Source/Inference/RenderCache.{h,cpp}` |
@@ -103,8 +104,8 @@ OpenTune is an AI-powered pitch correction application (开源AI智能修音软�
 **Key Characteristics:**
 - Single `OpenTuneAudioProcessor` shared between Standalone and VST3 builds
 - Editor is format-specific (Standalone has multi-track ArrangementView, VST3 has PianoRoll only)
-- ARA responsibility separation: `AudioModification` owns content, `PlaybackRegion` owns placement only, `RenderSnapshot` handles real-time safe publishing
-- Immutable playback snapshots consumed by audio thread (zero lock contention via SpinLock)
+- ARA responsibility separation follows the official SDK model: `AudioSource` owns source identity/sample access, `AudioModification` owns editable content/materialization, `PlaybackRegion` owns placement only, `EditorView` owns UI selection projection, and `PlaybackRenderer` renders only the host-assigned playback-region set.
+- Source/ARA 层内部设计底线：无锁、无 mutex、无 atomic、无 JUCE lock、无 AppLogger。这不是 ARA2 SDK 规范要求，而是项目层面对 ARA 回调线程模型的内部约束。VST3/ARA editor 通过 processor 侧的 relaxed atomic 镜像读取 host position/play/BPM/time signature/loop。
 - Retire/revive lifecycle for undo-safe deferred garbage collection
 - Background worker threads: chunk render worker, stage-2 time-stretch worker, note generator pool, materialization refresh service
 
@@ -155,8 +156,8 @@ OpenTune is an AI-powered pitch correction application (开源AI智能修音软�
 **ARA Layer:**
 - Purpose: ARA2 protocol integration for deep DAW integration
 - Location: `Source/ARA/`
-- Contains: OpenTuneDocumentController, OpenTunePlaybackRenderer, VST3AraSession
-- Depends on: ARA SDK 2.2.0, JUCE ARA extension, SourceStore, MaterializationStore
+- Contains: AudioSource, AudioModification, PlaybackRegion, OpenTuneDocumentController, OpenTuneEditorView, OpenTunePlaybackRenderer
+- Depends on: ARA SDK 2.2.0, JUCE ARA extension, OpenTuneAudioProcessor playback/materialization APIs
 - Used by: VST3 ARA build only (`OPENTUNE_ENABLE_ARA=ON`)
 
 **Capture Layer:**
@@ -189,12 +190,14 @@ OpenTune is an AI-powered pitch correction application (开源AI智能修音软�
 2. **Commit** (message thread): `commitPreparedImportAsPlacement()` — create `SourceStore` entry, create `MaterializationStore` entry, add `Placement` to `StandaloneArrangement`
 3. **Render**: `requestMaterializationRefresh()` — triggers F0 extraction → note generation (GAME/Legacy) → auto-tune correction → chunk-level vocoder render → publish to `RenderCache`
 
-### ARA Audio Modification Birth Pipeline
+### ARA Audio Modification Birth & Persistence Pipeline
 
-1. Host notifies `didUpdateAudioModificationProperties()` on `OpenTuneDocumentController` (`Source/ARA/OpenTuneDocumentController.cpp`)
-2. `VST3AraSession` state machine transitions from `WaitingForSource` → `PendingBirth` → `Rendering` → `Ready`
-3. `birthAraMaterializationWithOriginalF0()` reads ARA source via `HostAudioReader` lease, extracts F0 via RMVPE, creates materialization (`Source/PluginProcessor.cpp`)
-4. Audio source PCM is streamed chunk-by-chunk from host; source is registered as metadata-only (no PCM buffer duplication)
+1. Host creates/updates `AudioSource`, `AudioModification`, and `PlaybackRegion` objects through JUCE ARA callbacks on `OpenTuneDocumentController`.
+2. `OpenTuneDocumentController` projects the official ARA graph into `PlaybackRegionProjection`: modification content/materialization plus playback placement.
+3. Host selection arrives through `OpenTuneEditorView::doNotifySelection()` as an ARA `ViewSelection`; the focused effective playback region becomes the UI/materialization birth target.
+4. `requestBirthForFocusedEditorPlaybackRegion()` calls `birthAraMaterializationWithOriginalF0()`, which reads ARA source samples via the host reader lease, extracts F0 via RMVPE, and creates the materialization.
+5. Audio source PCM remains host-owned and is streamed from ARA sample access; the plugin stores binding identity/revision metadata and does not duplicate the full source buffer.
+6. ARA persistency: `doStoreObjectsToStream()` respects `ARAStoreObjectsFilter` — when non-null, only writes bindings for filter-specified AudioModifications; when null, writes all renderable modifications. `doRestoreObjectsFromStream()` maps archived persistent IDs through `ARARestoreObjectsFilter` and applies pending bindings when modification objects arrive.
 
 ### VST3 Capture Pipeline
 
@@ -219,11 +222,11 @@ OpenTune is an AI-powered pitch correction application (开源AI智能修音软�
 **Placement-Materialization Separation:**
 Editors never mutate placements for content edits. All edits (pitch curves, notes, time grids) go through `MaterializationStore`. The `StandaloneArrangement` only tracks which materialization is placed where and when. This aligns with the ARA model: `AudioModification` owns content, `PlaybackRegion` owns placement.
 
-**RenderCache + RenderSnapshot Pattern:**
+**RenderCache + Playback Projection Pattern:**
 - `RenderCache` holds per-materialization rendered audio chunks, each tagged with `renderRevision`
-- Audio thread reads only published chunks matching the current mapping revision
+- Standalone playback continues to consume arrangement snapshots produced by `StandaloneArrangement`
+- ARA playback does not use the standalone arrangement snapshot path; `OpenTunePlaybackRenderer` pulls fresh projections for the playback regions assigned to that renderer by the host
 - Chunk-level granularity enables partial re-render without full clip synthesis
-- `PlaybackSnapshot` is a lightweight immutable snapshot consumed by the audio thread under a `SpinLock`
 
 **INoteGenerator Polymorphism:**
 - `GameNoteGenerator` (`Source/Inference/GameNoteGenerator.{h,cpp}`) — ONNX GAME-small model, consumes raw audio + sample rate
@@ -250,16 +253,21 @@ Editors never mutate placements for content edits. All edits (pitch curves, note
 **ARA Document Controller:**
 - Location: `Source/ARA/OpenTuneDocumentController.{h,cpp}`
 - Triggers: Host creates ARA document (e.g., dragging audio to track in Studio One)
-- Responsibilities: Create shared stores, manage `VST3AraSession` lifecycle, route JUCE ARA callbacks
+- Responsibilities: Own ARA object projections, persist materialization bindings, create `OpenTuneEditorView` and `OpenTunePlaybackRenderer`
+
+**ARA Editor View:**
+- Location: `Source/ARA/OpenTuneEditorView.{h,cpp}`
+- Triggers: Host sends `ARAEditorViewInterface::notifySelection`
+- Responsibilities: Call the JUCE base `ARAEditorView` hook, copy effective playback-region selection, expose focused region selection to the VST3 plugin UI
 
 **ARAPlaybackRenderer:**
 - Location: `Source/ARA/OpenTunePlaybackRenderer.{h,cpp}`
 - Triggers: Host audio callback per ARA region
-- Responsibilities: Compute block-aligned render span, call `readPlaybackAudio()`, fill host buffer
+- Responsibilities: Maintain the host-assigned playback-region set, compute block-aligned overlap for every assigned region, mix overlaps, call `readPlaybackAudio()`, clear buffers and return handled silence when no region renders
 
 ## Architectural Constraints
 
-- **Threading:** Audio thread reads immutable `PlaybackSnapshot` (SpinLock); edit mutations use `ReadWriteLock` on stores. Background workers: chunk render, stage-2 time-stretch, note generator pool (1 thread), materialization refresh service (1 thread).
+- **Threading:** Standalone audio reads immutable arrangement snapshots; ARA code is intentionally lock-free and contains no mutex, atomic, JUCE lock, AppLogger, or fallback state machine. Edit mutations use the existing store locks outside `Source/ARA`. Background workers: chunk render, stage-2 time-stretch, note generator pool (1 thread), materialization refresh service (1 thread).
 - **Global state:** `Ort::Env` shared across all inference services. `ResamplingManager`, `SourceStore`, `MaterializationStore` are `shared_ptr`-owned within the processor (or shared document controller for ARA).
 - **Circular imports:** Front-facing `PluginProcessor.h` is the aggregation point — includes all sub-modules. Sub-modules avoid including `PluginProcessor.h` (use forward declarations).
 - **Double-precision:** Processor supports `supportsDoublePrecisionProcessing()` — uses `doublePrecisionScratch_` buffer to convert double→float internally since inference works in float.
@@ -299,4 +307,4 @@ Editors never mutate placements for content edits. All edits (pitch curves, note
 
 ---
 
-*Architecture analysis: 2026-06-02*
+*Architecture analysis: 2026-06-03*

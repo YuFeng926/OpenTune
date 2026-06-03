@@ -136,7 +136,7 @@ OpenTuneDocumentController::getPlaybackRegionProjectionsFor(
     return projections;
 }
 
-std::optional<OpenTuneDocumentController::PlaybackRegionProjection>
+std::vector<OpenTuneDocumentController::PlaybackRegionProjection>
 OpenTuneDocumentController::getEditorSelectionPlaybackRegionProjections() const
 {
     return getPlaybackRegionProjectionsFor(editorSelectionPlaybackRegions_);
@@ -170,24 +170,19 @@ bool OpenTuneDocumentController::referencesMaterialization(uint64_t materializat
     return false;
 }
 
-bool OpenTuneDocumentController::requestBirthForPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion)
+bool OpenTuneDocumentController::requestBirthForFocusedEditorPlaybackRegion()
 {
-    auto* region = findPlaybackRegion(playbackRegion);
-    if (region == nullptr || region->audioModificationPersistentId.isEmpty())
+    const auto focusedRegion = getFocusedEditorPlaybackRegionProjection();
+    if (!focusedRegion.has_value() || focusedRegion->audioModificationPersistentId.isEmpty())
+        return false;
+
+    auto* region = findPlaybackRegion(focusedRegion->playbackRegion);
+    if (region == nullptr)
         return false;
 
     const bool born = birthMaterializationForRegion(*region);
     refreshRegisteredRenderers(publishModelChange());
     return born;
-}
-
-bool OpenTuneDocumentController::requestBirthForFocusedEditorPlaybackRegion()
-{
-    const auto focusedRegion = getFocusedEditorPlaybackRegionProjection();
-    if (!focusedRegion.has_value())
-        return false;
-
-    return requestBirthForPlaybackRegion(focusedRegion->playbackRegion);
 }
 
 void OpenTuneDocumentController::setEditorViewSelectionPlaybackRegions(
@@ -422,13 +417,35 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
 bool OpenTuneDocumentController::doStoreObjectsToStream(juce::ARAOutputStream& output,
                                                         const juce::ARAStoreObjectsFilter* filter)
 {
-    juce::ignoreUnused(filter);
-
     std::vector<const AudioModification*> bindings;
     bindings.reserve(audioModifications_.size());
-    for (const auto& modification : audioModifications_)
-        if (modification.persistentId.isNotEmpty() && modification.isRenderable())
-            bindings.push_back(&modification);
+
+    if (filter == nullptr)
+    {
+        for (const auto& modification : audioModifications_)
+            if (modification.persistentId.isNotEmpty() && modification.isRenderable())
+                bindings.push_back(&modification);
+    }
+    else
+    {
+        const auto& modsToStore = filter->getAudioModificationsToStore();
+        for (const auto& modification : audioModifications_)
+        {
+            if (modification.persistentId.isEmpty() || !modification.isRenderable())
+                continue;
+
+            const auto* araMod = modification.audioModification;
+            if (araMod == nullptr)
+                continue;
+
+            const auto* basePtr = static_cast<const ARA::PlugIn::AudioModification*>(araMod);
+            if (std::find(modsToStore.begin(), modsToStore.end(), basePtr) != modsToStore.end())
+                bindings.push_back(&modification);
+        }
+    }
+
+    if (bindings.size() > static_cast<size_t>(kMaxMaterializationBindingRecords))
+        return false;
 
     bool ok = output.writeInt(kMaterializationBindingArchiveMagic);
     ok = output.writeInt(kMaterializationBindingArchiveVersion) && ok;

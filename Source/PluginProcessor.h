@@ -525,9 +525,17 @@ private:
     std::atomic<int> fadeOutSampleCount_{0};
     int fadeOutTotalSamples_{0};  // Set in prepareToPlay based on sample rate
 
-    mutable juce::SpinLock hostTransportSnapshotLock_;
-    HostTransportSnapshot hostTransportSnapshot_;
-    void updateHostTransportSnapshot(const juce::AudioPlayHead::PositionInfo& positionInfo);
+    std::atomic<bool> hostTransportIsPlaying_{false};
+    std::atomic<double> hostTransportTimeSeconds_{0.0};
+    std::atomic<double> hostTransportBpm_{120.0};
+    std::atomic<double> hostTransportPpqPosition_{0.0};
+    std::atomic<bool> hostTransportLoopEnabled_{false};
+    std::atomic<double> hostTransportLoopPpqStart_{0.0};
+    std::atomic<double> hostTransportLoopPpqEnd_{0.0};
+    std::atomic<bool> hostTransportIsRecording_{false};
+    std::atomic<int> hostTransportTimeSignatureNumerator_{4};
+    std::atomic<int> hostTransportTimeSignatureDenominator_{4};
+    HostTransportSnapshot updateHostTransportSnapshot(const juce::AudioPlayHead::PositionInfo& positionInfo);
     
     std::shared_ptr<Ort::Env> ortEnv_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
@@ -815,7 +823,14 @@ public:
     void setPlaying(bool playing);
     bool isPlaying() const { return isPlaying_; }
     void setLoopEnabled(bool enabled);
-    bool isLoopEnabled() const { return loopEnabled_; }
+    bool isLoopEnabled() const
+    {
+       #if !JucePlugin_Build_Standalone
+        return getHostTransportSnapshot().loopEnabled;
+       #else
+        return loopEnabled_.load(std::memory_order_relaxed);
+       #endif
+    }
     void setPosition(double seconds);
     double getPosition() const;
     HostTransportSnapshot getHostTransportSnapshot() const;

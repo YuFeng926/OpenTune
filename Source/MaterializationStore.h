@@ -310,6 +310,14 @@ private:
     std::deque<PendingRenderEntry> pendingRenderQueue_;
 
     juce::ReadWriteLock lock_;
+
+    // Lock-free snapshot cache for audio-thread getPlaybackReadSource().
+    // Rebuilt under write lock after every mutation that affects playback data.
+    // Pattern: std::atomic_load/store(shared_ptr<const Map>) — same as CaptureSession.
+    mutable std::shared_ptr<const std::map<uint64_t, PlaybackReadSource>> playbackSourceCache_;
+
+    void rebuildPlaybackSourceCache();
+
     std::map<uint64_t, MaterializationEntry> materializations_;
     std::atomic<uint64_t> nextMaterializationId_{1};
     TimeStretchCache timeStretchCache_;   // §6.2 — store-wide Stage 2 cache
