@@ -47,7 +47,16 @@ No network calls, REST APIs, webhooks, or cloud services are used anywhere in th
 - **Standard:** Steinberg VST3 (Audio Unit / VST3 SDK via JUCE)
 - **ARA2 Extension:** Celemony ARA SDK v2.2.0 (optional, `OPENTUNE_ENABLE_ARA=ON`)
   - Supported DAWs: Studio One (native), Logic Pro (native), and other ARA2-compatible hosts
-  - Implementation: `Source/ARA/` — Document controller, playback renderer, session management
+  - Implementation: `Source/ARA/` — official ARA object/role split:
+    - `AudioSource`: source identity and host sample access
+    - `AudioModification`: editable content, materialization binding, revision state
+    - `PlaybackRegion`: placement only
+    - `OpenTuneDocumentController`: projection and persistence boundary
+    - `OpenTuneEditorView`: `kARAEditorViewRole` / `notifySelection` bridge for host UI selection
+    - `OpenTunePlaybackRenderer`: `kARAPlaybackRendererRole` renderer for the host-assigned playback-region set
+  - UI selection: ARA `ViewSelection` is consumed through JUCE `ARAEditorView::doNotifySelection`; effective playback regions are copied during the callback and the first region is treated as the focused editor target.
+  - Playback rendering: the renderer uses `didAddPlaybackRegion` / `willRemovePlaybackRegion` to maintain the assigned-region set, mixes overlapping regions, clears buffers for empty/non-overlap blocks, and does not return `false` to enter regular VST3 fallback while ARA-bound.
+  - Isolation: the ARA build is enabled only through `OPENTUNE_ENABLE_ARA=ON`; non-ARA VST3 and Standalone builds do not compile `Source/ARA/`.
   - Non-ARA VST3 capture workflow: `Source/Plugin/Capture/` — ring buffer, segment, compactor, session, persistence
 
 **Audio I/O (Standalone):**

@@ -1,6 +1,6 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-06-02
+**Analysis Date:** 2026-06-03
 
 ## Directory Layout
 
@@ -55,7 +55,7 @@ OpenTune/
 
 **Source/ARA/:**
 - Purpose: ARA2 protocol integration for VST3 deep DAW embedding
-- Contains: `OpenTuneDocumentController.{h,cpp}` (document lifecycle), `OpenTunePlaybackRenderer.{h,cpp}` (per-block rendering), `VST3AraSession.{h,cpp}` (state machine, birth pipeline)
+- Contains: `AudioSource.{h,cpp}` (source identity/sample access), `AudioModification.{h,cpp}` (content/materialization binding), `PlaybackRegion.{h,cpp}` (placement), `OpenTuneDocumentController.{h,cpp}` (projection/persistence with partial archive `ARAStoreObjectsFilter`/`ARARestoreObjectsFilter` support), `OpenTuneEditorView.{h,cpp}` (host selection UI role), `OpenTunePlaybackRenderer.{h,cpp}` (assigned-region rendering)
 - Only compiled when `OPENTUNE_ENABLE_ARA=ON` (default) in VST3 target
 
 **Source/Audio/:**
@@ -161,8 +161,9 @@ OpenTune/
 
 **ARA Integration:**
 - `Source/ARA/OpenTuneDocumentController.{h,cpp}`: ARA document lifecycle controller
+- `Source/ARA/OpenTuneEditorView.{h,cpp}`: ARA editor-view role and host `ViewSelection` bridge
 - `Source/ARA/OpenTunePlaybackRenderer.{h,cpp}`: ARA real-time renderer
-- `Source/ARA/VST3AraSession.{h,cpp}`: ARA document state machine and data model
+- `Source/ARA/AudioSource.{h,cpp}` / `AudioModification.{h,cpp}` / `PlaybackRegion.{h,cpp}`: official ARA object-model projections
 
 **Testing:**
 - `Tests/TestMain.cpp`: Test runner entry point
@@ -288,4 +289,4 @@ OpenTune/
 
 ---
 
-*Structure analysis: 2026-06-02*
+*Structure analysis: 2026-06-03*

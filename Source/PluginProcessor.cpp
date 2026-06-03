@@ -2218,13 +2218,9 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     if (isBoundToARA()) {
         if (auto* hostPlayHead = getPlayHead()) {
             const auto pos = hostPlayHead->getPosition().orFallback(juce::AudioPlayHead::PositionInfo{});
-            updateHostTransportSnapshot(pos);
-
-            {
-                const auto hostSnapshot = getHostTransportSnapshot();
-                positionAtomic_->store(hostSnapshot.timeSeconds, std::memory_order_relaxed);
-                isPlaying_.store(hostSnapshot.isPlaying, std::memory_order_relaxed);
-            }
+            const auto hostSnapshot = updateHostTransportSnapshot(pos);
+            positionAtomic_->store(hostSnapshot.timeSeconds, std::memory_order_relaxed);
+            isPlaying_.store(hostSnapshot.isPlaying, std::memory_order_relaxed);
         }
     }
 
@@ -2500,19 +2496,24 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
 OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::getHostTransportSnapshot() const
 {
-    const juce::SpinLock::ScopedLockType lock(hostTransportSnapshotLock_);
-    return hostTransportSnapshot_;
+    HostTransportSnapshot snapshot;
+    snapshot.isPlaying = hostTransportIsPlaying_.load(std::memory_order_relaxed);
+    snapshot.timeSeconds = hostTransportTimeSeconds_.load(std::memory_order_relaxed);
+    snapshot.bpm = hostTransportBpm_.load(std::memory_order_relaxed);
+    snapshot.ppqPosition = hostTransportPpqPosition_.load(std::memory_order_relaxed);
+    snapshot.loopEnabled = hostTransportLoopEnabled_.load(std::memory_order_relaxed);
+    snapshot.loopPpqStart = hostTransportLoopPpqStart_.load(std::memory_order_relaxed);
+    snapshot.loopPpqEnd = hostTransportLoopPpqEnd_.load(std::memory_order_relaxed);
+    snapshot.isRecording = hostTransportIsRecording_.load(std::memory_order_relaxed);
+    snapshot.timeSignatureNumerator = hostTransportTimeSignatureNumerator_.load(std::memory_order_relaxed);
+    snapshot.timeSignatureDenominator = hostTransportTimeSignatureDenominator_.load(std::memory_order_relaxed);
+    return snapshot;
 }
 
-void OpenTuneAudioProcessor::updateHostTransportSnapshot(const juce::AudioPlayHead::PositionInfo& positionInfo)
+OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHostTransportSnapshot(
+    const juce::AudioPlayHead::PositionInfo& positionInfo)
 {
-    HostTransportSnapshot previousSnapshot;
-    {
-        const juce::SpinLock::ScopedLockType lock(hostTransportSnapshotLock_);
-        previousSnapshot = hostTransportSnapshot_;
-    }
-
-    HostTransportSnapshot snapshot = previousSnapshot;
+    HostTransportSnapshot snapshot = getHostTransportSnapshot();
 
     snapshot.isPlaying = positionInfo.getIsPlaying();
     snapshot.isRecording = positionInfo.getIsRecording();
@@ -2540,23 +2541,17 @@ void OpenTuneAudioProcessor::updateHostTransportSnapshot(const juce::AudioPlayHe
         snapshot.loopPpqEnd = loopPoints->ppqEnd;
     }
 
-    const bool playbackStateChanged = snapshot.isPlaying != previousSnapshot.isPlaying;
-    const bool loopStateChanged = snapshot.loopEnabled != previousSnapshot.loopEnabled;
-    const bool timelineJumped = std::abs(snapshot.timeSeconds - previousSnapshot.timeSeconds) > 0.050;
-    const bool bpmChanged = std::abs(snapshot.bpm - previousSnapshot.bpm) > 0.001;
-
-    if (playbackStateChanged || loopStateChanged || timelineJumped || bpmChanged) {
-        AppLogger::log("HostTransportSnapshot: playing=" + juce::String(snapshot.isPlaying ? "true" : "false")
-            + " time=" + juce::String(snapshot.timeSeconds, 6)
-            + " ppq=" + juce::String(snapshot.ppqPosition, 6)
-            + " bpm=" + juce::String(snapshot.bpm, 3)
-            + " loop=" + juce::String(snapshot.loopEnabled ? "true" : "false")
-            + " loopRange=[" + juce::String(snapshot.loopPpqStart, 6)
-            + "," + juce::String(snapshot.loopPpqEnd, 6) + "]");
-    }
-
-    const juce::SpinLock::ScopedLockType lock(hostTransportSnapshotLock_);
-    hostTransportSnapshot_ = snapshot;
+    hostTransportIsPlaying_.store(snapshot.isPlaying, std::memory_order_relaxed);
+    hostTransportTimeSeconds_.store(snapshot.timeSeconds, std::memory_order_relaxed);
+    hostTransportBpm_.store(snapshot.bpm, std::memory_order_relaxed);
+    hostTransportPpqPosition_.store(snapshot.ppqPosition, std::memory_order_relaxed);
+    hostTransportLoopEnabled_.store(snapshot.loopEnabled, std::memory_order_relaxed);
+    hostTransportLoopPpqStart_.store(snapshot.loopPpqStart, std::memory_order_relaxed);
+    hostTransportLoopPpqEnd_.store(snapshot.loopPpqEnd, std::memory_order_relaxed);
+    hostTransportIsRecording_.store(snapshot.isRecording, std::memory_order_relaxed);
+    hostTransportTimeSignatureNumerator_.store(snapshot.timeSignatureNumerator, std::memory_order_relaxed);
+    hostTransportTimeSignatureDenominator_.store(snapshot.timeSignatureDenominator, std::memory_order_relaxed);
+    return snapshot;
 }
 
 RenderCache::ChunkStats OpenTuneAudioProcessor::getMaterializationChunkStatsById(uint64_t materializationId) const
@@ -3914,9 +3909,7 @@ double OpenTuneAudioProcessor::getPosition() const {
 
 void OpenTuneAudioProcessor::setBpm(double bpm) {
     bpm_ = bpm;
-
-    const juce::SpinLock::ScopedLockType lock(hostTransportSnapshotLock_);
-    hostTransportSnapshot_.bpm = bpm;
+    hostTransportBpm_.store(bpm, std::memory_order_relaxed);
 }
 
 void OpenTuneAudioProcessor::setZoomLevel(double zoom) {

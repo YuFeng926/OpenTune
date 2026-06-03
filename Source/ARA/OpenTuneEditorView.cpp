@@ -2,6 +2,9 @@
 
 #include "OpenTuneDocumentController.h"
 
+#include <utility>
+#include <vector>
+
 namespace OpenTune {
 
 OpenTuneEditorView::OpenTuneEditorView(ARA::PlugIn::DocumentController* araDocumentController,
@@ -15,10 +18,7 @@ void OpenTuneEditorView::doNotifySelection(const ARA::PlugIn::ViewSelection* sel
 {
     juce::ARAEditorView::doNotifySelection(selection);
 
-    std::vector<juce::ARAPlaybackRegion*> playbackRegions;
-    if (selection != nullptr)
-        playbackRegions = selection->getEffectivePlaybackRegions<juce::ARAPlaybackRegion>();
-
+    auto playbackRegions = selection->getEffectivePlaybackRegions<juce::ARAPlaybackRegion>();
     openTuneDocumentController_.setEditorViewSelectionPlaybackRegions(std::move(playbackRegions));
 }
 
