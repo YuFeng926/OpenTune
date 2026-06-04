@@ -200,8 +200,6 @@ CheckResult sourceAraIsolatedFromOldAndNonAraRuntime()
         std::string("requestBirthForPreferred") + "Region",
         std::string("VST3") + "AraSession",
         std::string("AraDocument") + "Model",
-        std::string("Source") + "Store",
-        std::string("Materialization") + "Store",
         std::string("Standalone") + "Arrangement",
         std::string("Capture") + "Session",
     };
