@@ -581,7 +581,8 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     }
 
     MaterializationStore::PlaybackReadSource source;
-    if (!processor.getPlaybackReadSourceByMaterializationId(placement.materializationId, source) || !source.canRead()) {
+    const auto* matStore = processor.getMaterializationStore();
+    if (matStore == nullptr || !matStore->getPlaybackReadSource(placement.materializationId, source) || !source.canRead()) {
         return;
     }
 
@@ -1367,8 +1368,8 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     // Detach ARA back-pointer so DocumentController no longer calls into this processor.
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
-        if (dc->getProcessor() == this)
-            dc->setProcessor(nullptr);
+        if (dc->getMaterializationStore() == materializationStore_.get())
+            dc->connectToStores(nullptr, nullptr, nullptr, nullptr, {});
     }
 #endif
 
@@ -1699,7 +1700,7 @@ bool OpenTuneAudioProcessor::ensureF0Ready()
                     Ort::InitApi();
                     ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
                 }
-                f0Service_ = std::make_unique<F0InferenceService>(ortEnv_);
+                f0Service_ = std::make_shared<F0InferenceService>(ortEnv_);
             }
             return f0Service_->initialize(modelsDir);
         });
@@ -1968,10 +1969,10 @@ bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const Materialization
         return false;
     }
 
-    F0InferenceService* f0Service = nullptr;
+    std::shared_ptr<F0InferenceService> f0Service;
     {
         std::lock_guard<std::mutex> lock(f0InitMutex_);
-        f0Service = f0Service_.get();
+        f0Service = f0Service_;
     }
 
     if (f0Service == nullptr) {
@@ -2132,7 +2133,10 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
 
     if (auto* dc = getDocumentController())
     {
-        dc->setProcessor(this);
+        ensureF0Ready();
+        dc->connectToStores(materializationStore_, sourceStore_,
+                            resamplingManager_.get(), f0Service_,
+                            [this] { scheduleReclaimSweep(); });
         AppLogger::log("ARA: didBindToARA - attached processor stores"
             " processor=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
             + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc))
@@ -2621,14 +2625,6 @@ OpenTuneAudioProcessor::DiagnosticInfo OpenTuneAudioProcessor::getDiagnosticInfo
     }
 
     return info;
-}
-
-bool OpenTuneAudioProcessor::getPlaybackReadSourceByMaterializationId(uint64_t materializationId, MaterializationStore::PlaybackReadSource& out) const
-{
-    out = MaterializationStore::PlaybackReadSource{};
-    if (materializationId == 0 || materializationStore_ == nullptr)
-        return false;
-    return materializationStore_->getPlaybackReadSource(materializationId, out);
 }
 
 bool OpenTuneAudioProcessor::freezeRenderBoundaries(const MaterializationSampleRange& materializationRange,
@@ -4091,254 +4087,7 @@ uint64_t OpenTuneAudioProcessor::commitPreparedImportAsMaterialization(PreparedI
     return ensureSourceAndCreateMaterialization(std::move(prepared), sourceId, createdSource);
 }
 
-#if JucePlugin_Enable_ARA
 
-
-
-
-std::optional<OpenTuneAudioProcessor::AraRegionMaterializationBirthResult>
-OpenTuneAudioProcessor::birthAraMaterializationWithOriginalF0(AraOriginalF0BirthRequest request)
-{
-    // ================================================================
-    // 1. Validation �?immediately take ownership of the reader lease
-    // ================================================================
-    auto readerLease = std::move(request.readerLease);
-    if (readerLease == nullptr || request.audioSource == nullptr || request.sourceId == 0
-        || request.numChannels <= 0 || request.numSamples <= 0 || request.sourceSampleRate <= 0.0)
-        return std::nullopt;
-
-    const juce::String sourceName = request.audioSource->getName() != nullptr
-        ? juce::String::fromUTF8(request.audioSource->getName())
-        : juce::String("ARA Source");
-
-    AppLogger::info("ARA OriginalF0 pipeline: start sourceId="
-        + juce::String(static_cast<juce::int64>(request.sourceId))
-        + " window=[" + juce::String(request.sourceWindow.sourceStartSeconds, 3)
-        + ", " + juce::String(request.sourceWindow.sourceEndSeconds, 3) + "]");
-
-    // ================================================================
-    // 2. Source window bounds
-    // ================================================================
-    const int64_t sourceStartSample = static_cast<int64_t>(
-        std::round(request.sourceWindow.sourceStartSeconds * request.sourceSampleRate));
-    const int64_t sourceEndSample = static_cast<int64_t>(
-        std::round(request.sourceWindow.sourceEndSeconds * request.sourceSampleRate));
-    const int64_t windowSamples = std::max<int64_t>(0,
-        std::min<int64_t>(sourceEndSample, request.numSamples)
-        - std::max<int64_t>(0, sourceStartSample));
-
-    if (windowSamples <= 0)
-        return std::nullopt;
-
-    // ================================================================
-    // 3. Allocate playable accum buffer (multi-channel)
-    // ================================================================
-    juce::AudioBuffer<float> playableAccum(request.numChannels, static_cast<int>(windowSamples));
-    playableAccum.clear();
-
-    // ================================================================
-    // 4. Chunked ARA read �?fail fast on read failure (no silence fill)
-    // ================================================================
-    constexpr int64_t kChunkSamples = 32768;
-    {
-        int64_t readOffset = sourceStartSample;
-        int64_t accumWriteOffset = 0;
-        int64_t remaining = windowSamples;
-
-        while (remaining > 0)
-        {
-            const int64_t chunkSamples = std::min(kChunkSamples, remaining);
-            const int accumOffset = static_cast<int>(accumWriteOffset);
-
-            std::vector<void*> channelPointers(static_cast<size_t>(request.numChannels));
-            for (int ch = 0; ch < request.numChannels; ++ch)
-                channelPointers[static_cast<size_t>(ch)] = playableAccum.getWritePointer(ch, accumOffset);
-
-            if (!readerLease->readAudioSamples(readOffset,
-                                               static_cast<int>(chunkSamples),
-                                               channelPointers.data()))
-            {
-                AppLogger::error("ARA OriginalF0 pipeline: readAudioSamples failed at offset="
-                    + juce::String(readOffset) + " chunkSamples=" + juce::String(chunkSamples));
-                return std::nullopt;
-            }
-
-            readOffset += chunkSamples;
-            accumWriteOffset += chunkSamples;
-            remaining -= chunkSamples;
-        }
-    }
-
-    AppLogger::info("ARA OriginalF0 pipeline: playableBuffer44k built samples="
-        + juce::String(playableAccum.getNumSamples()));
-
-    // ================================================================
-    // 5. Extract ch0 for RMVPE (source sample rate �?RMVPE internally
-    //    handles 16kHz downsampling via ResamplingManager)
-    // ================================================================
-    std::vector<float> channel0Data(static_cast<size_t>(playableAccum.getNumSamples()));
-    {
-        const float* ch0Read = playableAccum.getReadPointer(0);
-        std::copy(ch0Read, ch0Read + playableAccum.getNumSamples(), channel0Data.begin());
-    }
-
-    // ================================================================
-    // 6. Ensure source exists in SourceStore (metadata-only, no full PCM)
-    // ================================================================
-    if (!sourceStore_->containsSource(request.sourceId))
-    {
-        SourceStore::CreateSourceRequest sourceRequest;
-        sourceRequest.displayName = sourceName;
-        sourceRequest.numChannels = request.numChannels;
-        sourceRequest.numSamples = request.numSamples;
-        sourceRequest.sampleRate = request.sourceSampleRate > 0.0
-            ? request.sourceSampleRate
-            : TimeCoordinate::kRenderSampleRate;
-        if (sourceStore_->createSource(std::move(sourceRequest), request.sourceId) != request.sourceId)
-            return std::nullopt;
-    }
-
-    // ================================================================
-    // 7. prepareImport (internally resamples to 44.1kHz) then birth
-    // ================================================================
-    PreparedImport preparedImport;
-    if (!prepareImport(std::move(playableAccum), request.sourceSampleRate, sourceName, {}, preparedImport,
-                       "ara-hydrate"))
-    {
-        channel0Data.clear();
-        channel0Data.shrink_to_fit();
-        return std::nullopt;
-    }
-
-    preparedImport.silentGaps = SilentGapDetector::detectAllGapsAdaptive(preparedImport.storedAudioBuffer);
-
-    preparedImport.sourceWindow = SourceWindow{request.sourceId,
-                                               request.sourceWindow.sourceStartSeconds,
-                                               request.sourceWindow.sourceEndSeconds};
-
-    const uint64_t materializationId = commitPreparedImportAsMaterialization(std::move(preparedImport), request.sourceId);
-    if (materializationId == 0)
-    {
-        channel0Data.clear();
-        channel0Data.shrink_to_fit();
-        return std::nullopt;
-    }
-
-    AppLogger::info("ARA OriginalF0 pipeline: materialization born materializationId="
-        + juce::String(static_cast<juce::int64>(materializationId)));
-
-    // Helper: build birth result from the born materialization (revision=0 at birth).
-    auto buildBirthResult = [&]() -> AraRegionMaterializationBirthResult
-    {
-        AraRegionMaterializationBirthResult r;
-        r.sourceId = request.sourceId;
-        r.materializationId = materializationId;
-        r.materializationRevision = 0;
-        r.materializationDurationSeconds = getMaterializationAudioDurationById(materializationId);
-        return r;
-    };
-
-    // ================================================================
-    // 8. F0 extraction via RMVPE (source-rate input; internal 16kHz resampling)
-    // ================================================================
-    if (!ensureF0Ready())
-    {
-        AppLogger::warn("ARA OriginalF0 pipeline: F0 service not ready");
-        setMaterializationOriginalF0StateById(materializationId, OriginalF0State::Failed);
-        channel0Data.clear();
-        channel0Data.shrink_to_fit();
-        return buildBirthResult();
-    }
-
-    F0InferenceService* f0Service = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(f0InitMutex_);
-        f0Service = f0Service_.get();
-    }
-    if (f0Service == nullptr)
-    {
-        AppLogger::warn("ARA OriginalF0 pipeline: F0 service missing");
-        setMaterializationOriginalF0StateById(materializationId, OriginalF0State::Failed);
-        channel0Data.clear();
-        channel0Data.shrink_to_fit();
-        return buildBirthResult();
-    }
-
-    auto extraction = f0Service->extractF0(
-        channel0Data.data(), channel0Data.size(),
-        static_cast<int>(request.sourceSampleRate));
-
-    if (!extraction.ok() || extraction.value().empty())
-    {
-        AppLogger::error("ARA OriginalF0 pipeline: RMVPE extraction failed");
-        setMaterializationOriginalF0StateById(materializationId, OriginalF0State::Failed);
-        f0Service->releaseImmediately();
-        channel0Data.clear();
-        channel0Data.shrink_to_fit();
-        return buildBirthResult();
-    }
-
-    // ================================================================
-    // 9. Commit F0 and energy to materialization
-    // ================================================================
-    const int hopSize = f0Service->getF0HopSize();
-    const int f0SampleRate = f0Service->getF0SampleRate();
-
-    auto pitchCurve = std::make_shared<PitchCurve>();
-    pitchCurve->setHopSize(hopSize);
-    pitchCurve->setSampleRate(static_cast<double>(f0SampleRate));
-    pitchCurve->setOriginalF0(extraction.value());
-
-    // Compute energy from channel0Data at source sample rate
-    {
-        std::vector<float> energy(extraction.value().size(), 0.0f);
-        const double f0SecondsPerFrame = static_cast<double>(hopSize)
-            / static_cast<double>(juce::jmax(1, f0SampleRate));
-        const int halfRmsWindowSamples = juce::jmax(1,
-            static_cast<int>(std::round(request.sourceSampleRate * 0.010)));
-        for (size_t i = 0; i < extraction.value().size(); ++i)
-        {
-            if (!std::isfinite(extraction.value()[i]) || extraction.value()[i] <= 0.0f)
-                continue;
-            const int centerSample = juce::jlimit(0, static_cast<int>(channel0Data.size()) - 1,
-                static_cast<int>(std::round(static_cast<double>(i) * f0SecondsPerFrame * request.sourceSampleRate)));
-            const int startSample = juce::jmax(0, centerSample - halfRmsWindowSamples);
-            const int endSampleExclusive = juce::jmin(static_cast<int>(channel0Data.size()),
-                centerSample + halfRmsWindowSamples);
-            if (endSampleExclusive <= startSample) continue;
-            double squareSum = 0.0;
-            for (int s = startSample; s < endSampleExclusive; ++s)
-            {
-                const float v = channel0Data[static_cast<size_t>(s)];
-                squareSum += static_cast<double>(v) * static_cast<double>(v);
-            }
-            const double meanSquare = squareSum / static_cast<double>(endSampleExclusive - startSample);
-            energy[i] = juce::jlimit(0.0f, 1.0f, static_cast<float>(std::sqrt(meanSquare)));
-        }
-        pitchCurve->setOriginalEnergy(energy);
-    }
-
-    setMaterializationPitchCurveById(materializationId, std::move(pitchCurve));
-    detectAndCommitMaterializationKeyIfUnset(materializationId);
-    setMaterializationOriginalF0StateById(materializationId, OriginalF0State::Ready);
-
-    AppLogger::info("ARA OriginalF0 pipeline: F0 committed frames="
-        + juce::String(static_cast<juce::int64>(extraction.value().size())));
-
-    // ================================================================
-    // 10. Release RMVPE immediately, clean temp buffers
-    // ================================================================
-    f0Service->releaseImmediately();
-    channel0Data.clear();
-    channel0Data.shrink_to_fit();
-
-    AppLogger::info("ARA OriginalF0 pipeline: complete materializationId="
-        + juce::String(static_cast<juce::int64>(materializationId)));
-
-    return buildBirthResult();
-}
-
-#endif // JucePlugin_Enable_ARA
 
 // ============================================================================
 // requestMaterializationRefresh �?Standalone / regular VST3 F0 refresh.

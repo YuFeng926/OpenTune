@@ -385,7 +385,7 @@ CheckResult playbackRendererFollowsAssignedRegionRole()
         "didAddPlaybackRegion",
         "willRemovePlaybackRegion",
         "getPlaybackRegionProjectionsFor(assignedPlaybackRegions_)",
-        "getPlaybackReadSourceByMaterializationId",
+        "getPlaybackReadSource",
         "readPlaybackAudio",
     };
 
@@ -396,7 +396,6 @@ CheckResult playbackRendererFollowsAssignedRegionRole()
         std::string("load") + "Snapshot",
         std::string("VST3") + "AraSession",
         std::string("Source") + "Store",
-        std::string("Materialization") + "Store",
         std::string("Capture") + "Session",
     };
 

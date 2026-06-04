@@ -2,10 +2,21 @@
 
 #include "OpenTuneEditorView.h"
 #include "OpenTunePlaybackRenderer.h"
-#include "PluginProcessor.h"
+
+#include "../MaterializationStore.h"
+#include "../SourceStore.h"
+#include "../Inference/F0InferenceService.h"
+#include "../DSP/ResamplingManager.h"
+#include "../Utils/TimeCoordinate.h"
+#include "../Utils/SilentGapDetector.h"
+#include "../Utils/PitchCurve.h"
+#include "../Inference/RenderCache.h"
+#include "../Utils/SourceWindow.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
+#include <thread>
 #include <utility>
 
 namespace OpenTune {
@@ -95,14 +106,31 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
 
 OpenTuneDocumentController::~OpenTuneDocumentController()
 {
-    processor_ = nullptr;
     playbackRenderers_.clear();
 }
 
-void OpenTuneDocumentController::setProcessor(OpenTuneAudioProcessor* processor)
+void OpenTuneDocumentController::connectToStores(
+    std::shared_ptr<MaterializationStore> materializationStore,
+    std::shared_ptr<SourceStore> sourceStore,
+    ResamplingManager* resamplingManager,
+    std::shared_ptr<F0InferenceService> f0Service,
+    std::function<void()> reclaimCallback)
 {
-    processor_ = processor;
-    refreshRegisteredRenderers(publishModelChange());
+    materializationStore_ = std::move(materializationStore);
+    sourceStore_ = std::move(sourceStore);
+    resamplingManager_ = resamplingManager;
+    f0Service_ = std::move(f0Service);
+    onReclaimNeeded_ = std::move(reclaimCallback);
+}
+
+MaterializationStore* OpenTuneDocumentController::getMaterializationStore() const noexcept
+{
+    return materializationStore_.get();
+}
+
+SourceStore* OpenTuneDocumentController::getSourceStore() const noexcept
+{
+    return sourceStore_.get();
 }
 
 bool OpenTuneDocumentController::PlaybackRegionProjection::isRenderable() const noexcept
@@ -251,8 +279,8 @@ void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModi
     reconcileEditorSelectionPlaybackRegions();
     refreshRegisteredRenderers(publishModelChange());
 
-    if (processor_ != nullptr)
-        processor_->scheduleReclaimSweep();
+    if (onReclaimNeeded_)
+        onReclaimNeeded_();
 }
 
 void OpenTuneDocumentController::didUpdatePlaybackRegionProperties(juce::ARAPlaybackRegion* playbackRegion)
@@ -268,8 +296,8 @@ void OpenTuneDocumentController::willDestroyPlaybackRegion(juce::ARAPlaybackRegi
     reconcileEditorSelectionPlaybackRegions();
     refreshRegisteredRenderers(publishModelChange());
 
-    if (processor_ != nullptr)
-        processor_->scheduleReclaimSweep();
+    if (onReclaimNeeded_)
+        onReclaimNeeded_();
 }
 
 void OpenTuneDocumentController::didAddPlaybackRegionToAudioModification(
@@ -338,8 +366,8 @@ void OpenTuneDocumentController::willRemovePlaybackRegionFromAudioModification(
     reconcileEditorSelectionPlaybackRegions();
     refreshRegisteredRenderers(publishModelChange());
 
-    if (processor_ != nullptr)
-        processor_->scheduleReclaimSweep();
+    if (onReclaimNeeded_)
+        onReclaimNeeded_();
 }
 
 void OpenTuneDocumentController::willDestroyAudioSource(juce::ARAAudioSource* audioSource)
@@ -363,8 +391,8 @@ void OpenTuneDocumentController::willDestroyAudioSource(juce::ARAAudioSource* au
 
     refreshRegisteredRenderers(publishModelChange());
 
-    if (processor_ != nullptr)
-        processor_->scheduleReclaimSweep();
+    if (onReclaimNeeded_)
+        onReclaimNeeded_();
 }
 
 bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream& input,
@@ -678,7 +706,7 @@ bool OpenTuneDocumentController::birthMaterializationForRegion(PlaybackRegion& r
         return false;
     }
 
-    if (processor_ == nullptr)
+    if (materializationStore_ == nullptr || sourceStore_ == nullptr)
     {
         modification->birthState = AudioModificationBirthState::Failed;
         return false;
@@ -687,38 +715,253 @@ bool OpenTuneDocumentController::birthMaterializationForRegion(PlaybackRegion& r
     modification->birthState = AudioModificationBirthState::Rendering;
     ++modification->birthRevision;
 
-    OpenTuneAudioProcessor::AraOriginalF0BirthRequest request;
-    request.audioSource = source->getAraAudioSource();
-    request.sourceId = modification->sourceId != 0
+    // 1. Determine source ID and window
+    const auto sourceId = modification->sourceId != 0
         ? modification->sourceId
         : static_cast<uint64_t>(std::hash<std::string>{}(source->getIdentity().persistentId.toStdString()));
-    request.readerLease = source->shareReaderLease();
-    request.numChannels = source->getShape().numChannels;
-    request.numSamples = source->getShape().numSamples;
-    request.sourceSampleRate = source->getShape().sourceSampleRate;
-    request.sourceWindow = modification->contentWindow.sourceId != 0
-        ? modification->contentWindow
-        : SourceWindow{request.sourceId, 0.0, source->getShape().durationSeconds()};
-    request.sourceWindow.sourceId = request.sourceId;
-    request.playbackStartSeconds = region.startInPlaybackTime;
 
-    const auto result = processor_->birthAraMaterializationWithOriginalF0(std::move(request));
-    if (!result.has_value())
+    auto readerLease = source->shareReaderLease();
+    if (readerLease == nullptr || source->getShape().numChannels <= 0
+        || source->getShape().numSamples <= 0 || source->getShape().sourceSampleRate <= 0.0)
     {
         modification->birthState = AudioModificationBirthState::Failed;
         return false;
     }
 
-    modification->sourceId = result->sourceId;
-    modification->contentWindow.sourceId = result->sourceId;
-    modification->materializationId = result->materializationId;
-    modification->materializationRevision = result->materializationRevision;
-    modification->materializationDurationSeconds = result->materializationDurationSeconds;
+    const auto sourceWindow = modification->contentWindow.sourceId != 0
+        ? modification->contentWindow
+        : SourceWindow{sourceId, 0.0, source->getShape().durationSeconds()};
+
+    const double sourceSampleRate = source->getShape().sourceSampleRate;
+    const int64_t numSamples = source->getShape().numSamples;
+    const int numChannels = source->getShape().numChannels;
+    const juce::String sourceName = source->getAraAudioSource()->getName() != nullptr
+        ? juce::String::fromUTF8(source->getAraAudioSource()->getName())
+        : juce::String("ARA Source");
+
+    // 2. Read ARA source window
+    const int64_t sourceStartSample = static_cast<int64_t>(
+        std::round(sourceWindow.sourceStartSeconds * sourceSampleRate));
+    const int64_t sourceEndSample = static_cast<int64_t>(
+        std::round(sourceWindow.sourceEndSeconds * sourceSampleRate));
+    const int64_t windowSamples = std::max<int64_t>(0,
+        std::min<int64_t>(sourceEndSample, numSamples)
+        - std::max<int64_t>(0, sourceStartSample));
+
+    if (windowSamples <= 0)
+    {
+        modification->birthState = AudioModificationBirthState::Failed;
+        return false;
+    }
+
+    juce::AudioBuffer<float> playableAccum(numChannels, static_cast<int>(windowSamples));
+    playableAccum.clear();
+
+    constexpr int64_t kChunkSamples = 32768;
+    {
+        int64_t readOffset = sourceStartSample;
+        int64_t accumWriteOffset = 0;
+        int64_t remaining = windowSamples;
+
+        while (remaining > 0)
+        {
+            const int64_t chunkSamples = std::min(kChunkSamples, remaining);
+            const int accumOffset = static_cast<int>(accumWriteOffset);
+
+            std::vector<void*> channelPointers(static_cast<size_t>(numChannels));
+            for (int ch = 0; ch < numChannels; ++ch)
+                channelPointers[static_cast<size_t>(ch)] = playableAccum.getWritePointer(ch, accumOffset);
+
+            if (!readerLease->readAudioSamples(readOffset,
+                                                static_cast<int>(chunkSamples),
+                                                channelPointers.data()))
+            {
+                modification->birthState = AudioModificationBirthState::Failed;
+                return false;
+            }
+
+            readOffset += chunkSamples;
+            accumWriteOffset += chunkSamples;
+            remaining -= chunkSamples;
+        }
+    }
+
+    // 3. Extract ch0 for async F0
+    std::vector<float> channel0Data(static_cast<size_t>(playableAccum.getNumSamples()));
+    {
+        const float* ch0Read = playableAccum.getReadPointer(0);
+        std::copy(ch0Read, ch0Read + playableAccum.getNumSamples(), channel0Data.begin());
+    }
+
+    // 4. Ensure source in SourceStore (metadata-only)
+    if (!sourceStore_->containsSource(sourceId))
+    {
+        SourceStore::CreateSourceRequest sourceRequest;
+        sourceRequest.displayName = sourceName;
+        sourceRequest.numChannels = numChannels;
+        sourceRequest.numSamples = numSamples;
+        sourceRequest.sampleRate = sourceSampleRate > 0.0
+            ? sourceSampleRate
+            : TimeCoordinate::kRenderSampleRate;
+        if (sourceStore_->createSource(std::move(sourceRequest), sourceId) != sourceId)
+        {
+            modification->birthState = AudioModificationBirthState::Failed;
+            return false;
+        }
+    }
+
+    // 5. Resample audio to 44.1kHz
+    juce::AudioBuffer<float> storedBuffer;
+    const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
+    if (std::abs(sourceSampleRate - targetSampleRate) > 1.0)
+    {
+        const int storedLen = juce::jmax(1,
+            static_cast<int>(TimeCoordinate::secondsToSamples(
+                TimeCoordinate::samplesToSeconds(playableAccum.getNumSamples(), sourceSampleRate),
+                targetSampleRate)));
+
+        storedBuffer.setSize(numChannels, storedLen);
+
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            auto resampledData = resamplingManager_->upsampleForHost(
+                playableAccum.getReadPointer(ch),
+                playableAccum.getNumSamples(),
+                static_cast<int>(sourceSampleRate),
+                static_cast<int>(targetSampleRate));
+            const int toCopy = juce::jmin(storedLen, static_cast<int>(resampledData.size()));
+            storedBuffer.copyFrom(ch, 0, resampledData.data(), toCopy);
+        }
+    }
+    else
+    {
+        storedBuffer = std::move(playableAccum);
+    }
+
+    // 6. Detect silent gaps
+    auto silentGaps = SilentGapDetector::detectAllGapsAdaptive(storedBuffer);
+
+    // 7. Create materialization
+    auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(storedBuffer));
+
+    MaterializationStore::CreateMaterializationRequest matRequest;
+    matRequest.sourceId = sourceId;
+    matRequest.audioBuffer = storedAudioBuffer;
+    matRequest.sourceWindow = SourceWindow{sourceId,
+                                           sourceWindow.sourceStartSeconds,
+                                           sourceWindow.sourceEndSeconds};
+    matRequest.originalF0State = OriginalF0State::NotRequested;
+    matRequest.silentGaps = std::move(silentGaps);
+    matRequest.renderCache = std::make_shared<RenderCache>();
+
+    const uint64_t materializationId = materializationStore_->createMaterialization(std::move(matRequest));
+    if (materializationId == 0)
+    {
+        modification->birthState = AudioModificationBirthState::Failed;
+        return false;
+    }
+
+    const double materializationDurationSeconds =
+        materializationStore_->getMaterializationAudioDurationById(materializationId);
+
+    // 8. Set modification fields and notify ARA host
+    modification->sourceId = sourceId;
+    modification->contentWindow = SourceWindow{sourceId,
+                                               sourceWindow.sourceStartSeconds,
+                                               sourceWindow.sourceEndSeconds};
+    modification->materializationId = materializationId;
+    modification->materializationRevision = 0;
+    modification->materializationDurationSeconds = materializationDurationSeconds;
     modification->birthState = AudioModificationBirthState::Ready;
     ++modification->contentRevision;
     if (modification->audioModification != nullptr)
         modification->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+    // 9. Schedule async F0 extraction
+    scheduleAsyncF0Extraction(materializationId, std::move(channel0Data), sourceSampleRate);
+
     return true;
+}
+
+void OpenTuneDocumentController::scheduleAsyncF0Extraction(
+    uint64_t materializationId,
+    std::vector<float> channel0Data,
+    double sourceSampleRate)
+{
+    // Capture owned references — extracted on background thread,
+    // result commit on message thread.
+    auto store = materializationStore_;
+    auto f0Svc = f0Service_;
+
+    std::thread([store, f0Svc, materializationId,
+                 data = std::move(channel0Data),
+                 sourceSampleRate]()
+    {
+        store->setOriginalF0State(materializationId, OriginalF0State::Extracting);
+
+        if (f0Svc == nullptr || data.empty())
+        {
+            store->setOriginalF0State(materializationId, OriginalF0State::Failed);
+            return;
+        }
+
+        auto extraction = f0Svc->extractF0(data.data(), data.size(),
+                                            static_cast<int>(sourceSampleRate));
+
+        if (!extraction.ok() || extraction.value().empty())
+        {
+            store->setOriginalF0State(materializationId, OriginalF0State::Failed);
+            f0Svc->releaseImmediately();
+            return;
+        }
+
+        const int hopSize = f0Svc->getF0HopSize();
+        const int f0SampleRate = f0Svc->getF0SampleRate();
+
+        auto pitchCurve = std::make_shared<PitchCurve>();
+        pitchCurve->setHopSize(hopSize);
+        pitchCurve->setSampleRate(static_cast<double>(f0SampleRate));
+        pitchCurve->setOriginalF0(extraction.value());
+
+        // Compute energy from channel0Data
+        {
+            std::vector<float> energy(extraction.value().size(), 0.0f);
+            const double f0SecondsPerFrame = static_cast<double>(hopSize)
+                / static_cast<double>(juce::jmax(1, f0SampleRate));
+            const int halfRmsWindowSamples = juce::jmax(1,
+                static_cast<int>(std::round(sourceSampleRate * 0.010)));
+            for (size_t i = 0; i < extraction.value().size(); ++i)
+            {
+                if (!std::isfinite(extraction.value()[i]) || extraction.value()[i] <= 0.0f)
+                    continue;
+                const int centerSample = juce::jlimit(0, static_cast<int>(data.size()) - 1,
+                    static_cast<int>(std::round(static_cast<double>(i) * f0SecondsPerFrame * sourceSampleRate)));
+                const int startSample = juce::jmax(0, centerSample - halfRmsWindowSamples);
+                const int endSampleExclusive = juce::jmin(static_cast<int>(data.size()),
+                    centerSample + halfRmsWindowSamples);
+                if (endSampleExclusive <= startSample) continue;
+                double squareSum = 0.0;
+                for (int s = startSample; s < endSampleExclusive; ++s)
+                {
+                    const float v = data[static_cast<size_t>(s)];
+                    squareSum += static_cast<double>(v) * static_cast<double>(v);
+                }
+                const double meanSquare = squareSum / static_cast<double>(endSampleExclusive - startSample);
+                energy[i] = juce::jlimit(0.0f, 1.0f, static_cast<float>(std::sqrt(meanSquare)));
+            }
+            pitchCurve->setOriginalEnergy(energy);
+        }
+
+        f0Svc->releaseImmediately();
+
+        // Commit results on the message thread
+        juce::MessageManager::callAsync([store, materializationId,
+                                          pc = std::move(pitchCurve)]() mutable
+        {
+            store->setPitchCurve(materializationId, std::move(pc));
+            store->setOriginalF0State(materializationId, OriginalF0State::Ready);
+        });
+    }).detach();
 }
 
 bool OpenTuneDocumentController::removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion)

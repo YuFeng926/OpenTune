@@ -1,7 +1,7 @@
 #include "OpenTunePlaybackRenderer.h"
 
 #include "OpenTuneDocumentController.h"
-#include "PluginProcessor.h"
+#include "../Utils/PlaybackAudioReader.h"
 
 #include <algorithm>
 
@@ -93,7 +93,7 @@ void OpenTunePlaybackRenderer::refreshRenderPlanFromDocument()
     auto* dc = getDocumentController();
     if (dc == nullptr)
     {
-        processor_ = nullptr;
+        materializationStore_ = nullptr;
         renderItems_.clear();
         return;
     }
@@ -102,12 +102,12 @@ void OpenTunePlaybackRenderer::refreshRenderPlanFromDocument()
         juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<OpenTuneDocumentController>(dc);
     if (docController == nullptr)
     {
-        processor_ = nullptr;
+        materializationStore_ = nullptr;
         renderItems_.clear();
         return;
     }
 
-    processor_ = docController->getProcessor();
+    materializationStore_ = docController->getMaterializationStore();
     const auto projections = docController->getPlaybackRegionProjectionsFor(assignedPlaybackRegions_);
     std::vector<PlaybackRegionRenderItem> nextItems;
     nextItems.reserve(projections.size());
@@ -168,8 +168,8 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
 
     buffer.clear();
 
-    auto* processor = processor_;
-    if (processor == nullptr || renderItems_.empty())
+    auto* store = materializationStore_;
+    if (store == nullptr || renderItems_.empty())
         return true;
 
     const double blockStartSeconds = positionInfo.getTimeInSeconds().orFallback(0.0);
@@ -185,18 +185,18 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
             continue;
 
         MaterializationStore::PlaybackReadSource readSource;
-        if (!processor->getPlaybackReadSourceByMaterializationId(region.materializationId, readSource))
+        if (!store->getPlaybackReadSource(region.materializationId, readSource))
             continue;
 
         const double readStartSeconds = mapPlaybackTimeToMaterializationTime(region,
                                                                              overlap->overlapStartSeconds);
-        const OpenTuneAudioProcessor::PlaybackReadRequest request(readSource,
-                                                                  readStartSeconds,
-                                                                  hostSampleRate_,
-                                                                  overlap->samplesToCopy);
+        const PlaybackReadRequest request(readSource,
+                                          readStartSeconds,
+                                          hostSampleRate_,
+                                          overlap->samplesToCopy);
 
         playbackScratch_.clear();
-        const int copied = processor->readPlaybackAudio(request, playbackScratch_, 0);
+        const int copied = readPlaybackAudio(request, playbackScratch_, 0);
         if (copied <= 0)
             continue;
 

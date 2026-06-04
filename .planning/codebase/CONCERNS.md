@@ -18,6 +18,17 @@
 - Impact: Adding a new store operation requires threading it through the processor's already-overloaded public interface. Testing store interactions is only possible by going through the processor.
 - Fix approach: Introduce a `Session` or `Project` class that holds the stores and arrangement as an aggregate. Let the processor delegate to this session object. Consider an event/command pattern for operations that span multiple stores.
 
+### DC::processor_ Parallel Structure (Kill List #5)
+
+- Issue: `OpenTuneDocumentController` holds a raw `OpenTuneAudioProcessor* processor_` and routes ARA content birth and resource reclaim through it. This creates a parallel old/new signal chain: the ARA2-idiomatic path (AudioModification owns content ID → makeProjection → Renderer consumes) coexists with the old bridge (DC → processor_ → birthAraMaterializationWithOriginalF0). The Renderer also holds its own `processor_` to call `getPlaybackReadSourceByMaterializationId()` and `readPlaybackAudio()`.
+- Files: `Source/ARA/OpenTuneDocumentController.h:122`, `Source/ARA/OpenTuneDocumentController.cpp:705`, `Source/ARA/OpenTunePlaybackRenderer.h:102`, `Source/ARA/OpenTunePlaybackRenderer.cpp:110,188,199`, `Source/PluginProcessor.cpp:4100` (birthAraMaterializationWithOriginalF0, 690 lines)
+- Status (2026-06-04): Bug2 ARA content notification chain is complete (`e0de819`). The `notifyContentChanged(juce::ARAContentUpdateScopes(), true)` call passes correct scope — ARA spec confirms `ARAContentUpdateFlags=0` = `EverythingChanged`. The old bridge path still exists but does not block current correctness.
+- Fix approach (phased):
+  1. **Phase A (next):** F0 extraction async separation — birth returns immediately after audio storage; F0 transitions `Extracting→Ready/Failed` independent of birth. This gives users faster waveform display.
+  2. **Phase B:** Extract a non-Processor birth layer. Move ARA audio reading + MaterializationStore creation out of `birthAraMaterializationWithOriginalF0` into a shared component accessible by both DC and standalone import paths.
+  3. **Phase C:** Remove `DC::processor_` and `Renderer::processor_`. DC directly holds MaterializationStore/SourceStore refs; Renderer reads MaterializationStore directly. `readPlaybackAudio` becomes a free function (already const/no-state).
+  4. **Phase D:** Reclaim sweep stays on Processor or moves to a shared session-level component — NOT into DC, which is an ARA object-model bridge, not a garbage collector.
+
 ### GUI-Processor Direct Coupling in Standalone Editor
 
 - Issue: `Source/Standalone/PluginEditor.cpp` (2857 lines) and `Source/Standalone/UI/PianoRollComponent.cpp` (3151 lines) directly call into the processor for data manipulation. There is no intermediate model or view-model layer — UI components own interaction state, rendering state, and business logic together.
