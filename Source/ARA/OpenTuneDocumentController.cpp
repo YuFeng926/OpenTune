@@ -715,6 +715,9 @@ bool OpenTuneDocumentController::birthMaterializationForRegion(PlaybackRegion& r
     modification->materializationRevision = result->materializationRevision;
     modification->materializationDurationSeconds = result->materializationDurationSeconds;
     modification->birthState = AudioModificationBirthState::Ready;
+    ++modification->contentRevision;
+    if (modification->audioModification != nullptr)
+        modification->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
     return true;
 }
 
