@@ -53,8 +53,6 @@ bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
                                   const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept;
 
 class OpenTuneDocumentController;
-class OpenTuneAudioProcessor;
-
 class OpenTunePlaybackRenderer : public juce::ARAPlaybackRenderer
 {
 public:
@@ -99,7 +97,7 @@ private:
     int numChannels_ = 2;
     int maximumSamplesPerBlock_ = 512;
     juce::AudioBuffer<float> playbackScratch_;
-    OpenTuneAudioProcessor* processor_ = nullptr;
+    MaterializationStore* materializationStore_ = nullptr;
     std::vector<juce::ARAPlaybackRegion*> assignedPlaybackRegions_;
     std::vector<PlaybackRegionRenderItem> renderItems_;
 

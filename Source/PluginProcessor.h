@@ -52,6 +52,7 @@
 #include "Utils/PlacementClipboard.h"
 #include "Utils/TrackConstants.h"
 #include "Utils/PitchShiftSettings.h"
+#include "Utils/PlaybackAudioReader.h"
 #include <functional>
 
 namespace OpenTune {
@@ -328,44 +329,6 @@ public:
                           std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
                           double sampleRate);
 
-#if JucePlugin_Enable_ARA
-    struct AraRegionMaterializationBirthResult {
-        uint64_t sourceId{0};
-        uint64_t materializationId{0};
-        uint64_t materializationRevision{0};
-        double materializationDurationSeconds{0.0};
-    };
-
-    /**
-     * Self-contained ARA OriginalF0 birth request.
-     * Caller must provide a shared HostAudioReader lease — the processor
-     * immediately moves it to a local shared_ptr to guarantee lifetime.
-     */
-    struct AraOriginalF0BirthRequest {
-        juce::ARAAudioSource* audioSource = nullptr;
-        uint64_t sourceId = 0;
-        std::shared_ptr<ARA::PlugIn::HostAudioReader> readerLease;
-        int numChannels = 0;
-        int64_t numSamples = 0;
-        double sourceSampleRate = 0.0;
-        SourceWindow sourceWindow;
-        double playbackStartSeconds = 0.0;
-    };
-
-    /**
-     * ARA OriginalF0 birth 唯一入口（reader-based）。
-     * 从 AraOriginalF0BirthRequest 按 chunk 读取 ARA source window，
-     * 构建 playable buffer + 提取 ch0 喂给 RMVPE。
-     * RMVPE 内部通过 ResamplingManager 处理 16kHz 降采样。
-     * F0 可见后立即释放 RMVPE 模型资源。
-     * 不走 requestMaterializationRefresh 通用链，不进入 GAME。
-     * Source 注册为 metadata-only（无 PCM buffer），全量音频在
-     * prepareImport 阶段写入 MaterializationStore。
-     */
-    std::optional<AraRegionMaterializationBirthResult>
-    birthAraMaterializationWithOriginalF0(AraOriginalF0BirthRequest request);
-#endif
-
     bool movePlacementToTrack(int sourceTrackId,
                               int targetTrackId,
                               uint64_t placementId,
@@ -412,21 +375,8 @@ private:
 public:
     // ========================================================================
     // Playback Read API Types (Unified read path for Standalone/VST3)
-    /**
-     * PlaybackReadRequest - 统一读取请求结构
-     *
-     * readStartSeconds 必须与 source 中 renderCache / dry buffer 的时间基保持一致。
-     */
-    struct PlaybackReadRequest {
-        MaterializationStore::PlaybackReadSource source;
-        double readStartSeconds{0.0};
-        double targetSampleRate{44100.0};
-        int numSamples{0};
-
-        PlaybackReadRequest() = default;
-        PlaybackReadRequest(MaterializationStore::PlaybackReadSource src, double start, double rate, int samples)
-            : source(src), readStartSeconds(start), targetSampleRate(rate), numSamples(samples) {}
-    };
+    // PlaybackReadRequest is defined in Utils/PlaybackAudioReader.h — kept as alias for backward compat.
+    using PlaybackReadRequest = ::OpenTune::PlaybackReadRequest;
 
     enum class DiagnosticControlCall : uint8_t {
         None = 0,
@@ -521,7 +471,7 @@ private:
     
     std::shared_ptr<Ort::Env> ortEnv_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
-    std::unique_ptr<F0InferenceService> f0Service_;
+    std::shared_ptr<F0InferenceService> f0Service_;
     std::unique_ptr<VocoderDomain> vocoderDomain_;
 
     // Note generator (GAME-small by default; LegacyNoteGenerator
@@ -689,7 +639,7 @@ public:
     
     // Materialization and placement access
     std::shared_ptr<const juce::AudioBuffer<float>> getMaterializationAudioBufferById(uint64_t materializationId) const;
-    bool getPlaybackReadSourceByMaterializationId(uint64_t materializationId, MaterializationStore::PlaybackReadSource& out) const;
+
     uint64_t getPlacementId(int trackId, int placementIndex) const;
     int findPlacementIndexById(int trackId, uint64_t placementId) const;
     bool getPlacementByIndex(int trackId, int placementIndex, StandaloneArrangement::Placement& out) const;

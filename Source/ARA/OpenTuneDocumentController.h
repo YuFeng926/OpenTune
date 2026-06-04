@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <vector>
+#include <functional>
 
 #include "AudioModification.h"
 #include "AudioSource.h"
@@ -12,9 +13,12 @@
 
 namespace OpenTune {
 
-class OpenTuneAudioProcessor;
 class OpenTuneEditorView;
 class OpenTunePlaybackRenderer;
+class F0InferenceService;
+class ResamplingManager;
+class MaterializationStore;
+class SourceStore;
 
 class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
@@ -50,8 +54,13 @@ public:
 
     ~OpenTuneDocumentController() override;
 
-    void setProcessor(OpenTuneAudioProcessor* processor);
-    OpenTuneAudioProcessor* getProcessor() const { return processor_; }
+    void connectToStores(std::shared_ptr<MaterializationStore> materializationStore,
+                         std::shared_ptr<SourceStore> sourceStore,
+                         class ResamplingManager* resamplingManager,
+                         std::shared_ptr<F0InferenceService> f0Service,
+                         std::function<void()> reclaimCallback);
+    MaterializationStore* getMaterializationStore() const noexcept;
+    SourceStore* getSourceStore() const noexcept;
 
     std::vector<PlaybackRegionProjection> getPlaybackRegionProjections() const;
     std::vector<PlaybackRegionProjection> getPlaybackRegionProjectionsFor(
@@ -119,7 +128,11 @@ private:
     std::vector<OpenTunePlaybackRenderer*> playbackRenderers_;
     std::vector<RestoredMaterializationBinding> pendingRestoredBindings_;
 
-    OpenTuneAudioProcessor* processor_ = nullptr;
+    std::shared_ptr<MaterializationStore> materializationStore_;
+    std::shared_ptr<SourceStore> sourceStore_;
+    class ResamplingManager* resamplingManager_ = nullptr;
+    std::shared_ptr<F0InferenceService> f0Service_;
+    std::function<void()> onReclaimNeeded_;
 
     AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
     const AudioSource* findAudioSource(const juce::String& persistentId) const;
@@ -137,6 +150,9 @@ private:
     static void refreshRegisteredRenderers(const std::vector<OpenTunePlaybackRenderer*>& renderers);
     void reconcileEditorSelectionPlaybackRegions();
     bool birthMaterializationForRegion(PlaybackRegion& region);
+    void scheduleAsyncF0Extraction(uint64_t materializationId,
+                                   std::vector<float> channel0Data,
+                                   double sourceSampleRate);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
     void applyRestoredBinding(AudioModification& modification,
                               const RestoredMaterializationBinding& binding) noexcept;
