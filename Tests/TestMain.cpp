@@ -395,7 +395,7 @@ CheckResult playbackRendererFollowsAssignedRegionRole()
     const std::vector<std::string> forbidden{
         std::string("load") + "Snapshot",
         std::string("VST3") + "AraSession",
-        std::string("Source") + "Store",
+        std::string("Standalone") + "Arrangement",
         std::string("Capture") + "Session",
     };
 

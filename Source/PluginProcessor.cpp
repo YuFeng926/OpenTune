@@ -1369,7 +1369,7 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
         if (dc->getMaterializationStore() == materializationStore_.get())
-            dc->connectToStores(nullptr, nullptr, nullptr, nullptr, {});
+            dc->connectToStores(nullptr, nullptr, nullptr, nullptr, {}, {});
     }
 #endif
 
@@ -1985,10 +1985,10 @@ bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const Materialization
     }
 
     struct ReleaseGuard {
-        F0InferenceService* service = nullptr;
+        std::shared_ptr<F0InferenceService> service;
         ~ReleaseGuard()
         {
-            if (service != nullptr)
+            if (service)
                 service->releaseImmediately();
         }
     } releaseGuard{f0Service};
@@ -2136,6 +2136,16 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         ensureF0Ready();
         dc->connectToStores(materializationStore_, sourceStore_,
                             resamplingManager_.get(), f0Service_,
+                            [this](std::function<void()> work) {
+                                static std::atomic<uint64_t> s_key{0};
+                                materializationRefreshService_.submit(
+                                    F0ExtractionService::makeRequestKey(s_key.fetch_add(1), 0, -1),
+                                    [w = std::move(work)]() mutable {
+                                        w();
+                                        return F0ExtractionService::Result{};
+                                    },
+                                    [](F0ExtractionService::Result&&) {});
+                            },
                             [this] { scheduleReclaimSweep(); });
         AppLogger::log("ARA: didBindToARA - attached processor stores"
             " processor=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
