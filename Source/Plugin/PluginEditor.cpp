@@ -858,7 +858,8 @@ void OpenTuneAudioProcessorEditor::playRequested()
 {
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
-        docController->requestStartPlayback();
+        if (!docController->requestStartPlayback())
+            AppLogger::log("ARA: requestStartPlayback failed — host playback controller unavailable");
         return;
     }
 #endif
@@ -869,7 +870,8 @@ void OpenTuneAudioProcessorEditor::pauseRequested()
 {
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
-        docController->requestStopPlayback();
+        if (!docController->requestStopPlayback())
+            AppLogger::log("ARA: requestStopPlayback failed — host playback controller unavailable");
         return;
     }
 #endif
@@ -880,8 +882,10 @@ void OpenTuneAudioProcessorEditor::stopRequested()
 {
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
-        docController->requestStopPlayback();
-        docController->requestSetPlaybackPosition(0.0);
+        bool ok = docController->requestStopPlayback();
+        ok = docController->requestSetPlaybackPosition(0.0) && ok;
+        if (!ok)
+            AppLogger::log("ARA: stop/seek request failed — host playback controller unavailable");
         return;
     }
 #endif
@@ -1210,7 +1214,8 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
 
 void OpenTuneAudioProcessorEditor::escapeKeyPressed()
 {
-    playPauseToggleRequested();
+    // Escape cancels selection/tool mode; not a transport command.
+    // Originally called playPauseToggleRequested() here — removed.
 }
 
 void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
