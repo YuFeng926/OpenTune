@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
-#include <thread>
 #include <utility>
 
 namespace OpenTune {
@@ -114,12 +113,14 @@ void OpenTuneDocumentController::connectToStores(
     std::shared_ptr<SourceStore> sourceStore,
     ResamplingManager* resamplingManager,
     std::shared_ptr<F0InferenceService> f0Service,
+    std::function<void(std::function<void()>&&)> scheduleAsyncWork,
     std::function<void()> reclaimCallback)
 {
     materializationStore_ = std::move(materializationStore);
     sourceStore_ = std::move(sourceStore);
     resamplingManager_ = resamplingManager;
     f0Service_ = std::move(f0Service);
+    scheduleAsyncWork_ = std::move(scheduleAsyncWork);
     onReclaimNeeded_ = std::move(reclaimCallback);
 }
 
@@ -888,14 +889,15 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
     std::vector<float> channel0Data,
     double sourceSampleRate)
 {
-    // Capture owned references — extracted on background thread,
-    // result commit on message thread.
+    if (!scheduleAsyncWork_)
+        return;
+
     auto store = materializationStore_;
     auto f0Svc = f0Service_;
 
-    std::thread([store, f0Svc, materializationId,
-                 data = std::move(channel0Data),
-                 sourceSampleRate]()
+    scheduleAsyncWork_([store, f0Svc, materializationId,
+                        data = std::move(channel0Data),
+                        sourceSampleRate]()
     {
         store->setOriginalF0State(materializationId, OriginalF0State::Extracting);
 
@@ -961,7 +963,7 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
             store->setPitchCurve(materializationId, std::move(pc));
             store->setOriginalF0State(materializationId, OriginalF0State::Ready);
         });
-    }).detach();
+    });
 }
 
 bool OpenTuneDocumentController::removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion)

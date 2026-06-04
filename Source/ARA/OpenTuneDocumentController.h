@@ -58,6 +58,7 @@ public:
                          std::shared_ptr<SourceStore> sourceStore,
                          class ResamplingManager* resamplingManager,
                          std::shared_ptr<F0InferenceService> f0Service,
+                         std::function<void(std::function<void()>&&)> scheduleAsyncWork,
                          std::function<void()> reclaimCallback);
     MaterializationStore* getMaterializationStore() const noexcept;
     SourceStore* getSourceStore() const noexcept;
@@ -132,6 +133,7 @@ private:
     std::shared_ptr<SourceStore> sourceStore_;
     class ResamplingManager* resamplingManager_ = nullptr;
     std::shared_ptr<F0InferenceService> f0Service_;
+    std::function<void(std::function<void()>&&)> scheduleAsyncWork_;
     std::function<void()> onReclaimNeeded_;
 
     AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
