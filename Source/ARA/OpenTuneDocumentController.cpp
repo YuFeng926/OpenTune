@@ -121,6 +121,9 @@ void OpenTuneDocumentController::attachProcessorServices(ProcessorServices servi
     f0Service_ = std::move(services.f0Service);
     scheduleAsyncWork_ = std::move(services.scheduleAsyncWork);
     onReclaimNeeded_ = std::move(services.requestReclaimSweep);
+
+    if (services.renderJobCallback && materializationStore_)
+        materializationStore_->setRenderJobCallback(std::move(services.renderJobCallback));
 }
 
 void OpenTuneDocumentController::detachProcessorServices(const OpenTuneAudioProcessor* owner)
@@ -134,6 +137,32 @@ void OpenTuneDocumentController::detachProcessorServices(const OpenTuneAudioProc
 
 void OpenTuneDocumentController::runContentReclaimSweep()
 {
+    if (materializationStore_ == nullptr || sourceStore_ == nullptr)
+        return;
+
+    // 回收 retired materializations
+    const auto retiredIds = materializationStore_->getRetiredIds();
+    for (uint64_t id : retiredIds)
+    {
+        const uint64_t sourceId = materializationStore_->getSourceIdAnyState(id);
+        if (materializationStore_->physicallyDeleteIfReclaimable(id))
+        {
+            if (sourceId != 0 && !materializationStore_->hasMaterializationForSource(sourceId)
+                && sourceStore_->containsSource(sourceId))
+                sourceStore_->retireSource(sourceId);
+        }
+    }
+
+    // 回收 retired sources
+    const auto retiredSourceIds = sourceStore_->getRetiredSourceIds();
+    for (uint64_t sourceId : retiredSourceIds)
+    {
+        if (materializationStore_->hasMaterializationForSourceAnyState(sourceId))
+            continue;
+        sourceStore_->physicallyDeleteIfReclaimable(sourceId);
+    }
+
+    // 仍触发 onReclaimNeeded_ 通知 processor（processor 扫自己的 standalone arrangement）
     if (onReclaimNeeded_)
         onReclaimNeeded_();
 }
@@ -143,16 +172,501 @@ void OpenTuneDocumentController::scheduleContentReclaim()
     reclaimAsyncUpdater_.triggerAsyncUpdate();
 }
 
+// -----------------------------------------------------------------------
+// XML persistence helpers (DC-owned store serialization)
+// -----------------------------------------------------------------------
+namespace {
+
+juce::String audioBufferToBase64(const std::shared_ptr<const juce::AudioBuffer<float>>& buffer)
+{
+    if (buffer == nullptr || buffer->getNumSamples() <= 0)
+        return {};
+
+    juce::MemoryBlock block;
+    juce::MemoryOutputStream mos(block, false);
+    const int numChannels = buffer->getNumChannels();
+    const int numSamples  = buffer->getNumSamples();
+    mos.writeInt(numChannels);
+    mos.writeInt(numSamples);
+    for (int ch = 0; ch < numChannels; ++ch)
+        mos.write(buffer->getReadPointer(ch), static_cast<size_t>(numSamples) * sizeof(float));
+    return juce::Base64::toBase64(block.getData(), block.getSize());
+}
+
+std::shared_ptr<const juce::AudioBuffer<float>> audioBufferFromBase64(const juce::String& str)
+{
+    if (str.isEmpty())
+        return nullptr;
+
+    juce::MemoryBlock block;
+    {
+        juce::MemoryOutputStream mos(block, false);
+        if (!juce::Base64::convertFromBase64(mos, str))
+            return nullptr;
+    }
+
+    juce::MemoryInputStream mis(block, false);
+    const int numChannels = mis.readInt();
+    const int numSamples  = mis.readInt();
+    if (numChannels <= 0 || numSamples <= 0)
+        return nullptr;
+
+    auto buffer = std::make_shared<juce::AudioBuffer<float>>(numChannels, numSamples);
+    buffer->clear();
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        const auto bytesToRead = static_cast<size_t>(numSamples) * sizeof(float);
+        if (mis.getNumBytesRemaining() < static_cast<std::int64_t>(bytesToRead))
+            return nullptr;
+        mis.read(buffer->getWritePointer(ch), bytesToRead);
+    }
+    return buffer;
+}
+
+juce::String floatVectorToBase64(const std::vector<float>& vec)
+{
+    if (vec.empty())
+        return {};
+    juce::MemoryBlock block(vec.data(), vec.size() * sizeof(float));
+    return juce::Base64::toBase64(block.getData(), block.getSize());
+}
+
+std::vector<float> floatVectorFromBase64(const juce::String& str)
+{
+    if (str.isEmpty())
+        return {};
+
+    juce::MemoryBlock block;
+    juce::MemoryOutputStream out(block, false);
+    if (!juce::Base64::convertFromBase64(out, str))
+        return {};
+
+    const auto numBytes = block.getSize();
+    if (numBytes == 0 || numBytes % sizeof(float) != 0)
+        return {};
+
+    std::vector<float> vec(numBytes / sizeof(float));
+    std::memcpy(vec.data(), block.getData(), numBytes);
+    return vec;
+}
+
+void serializeSourceToXml(const SourceStore::SourceSnapshot& snap, juce::XmlElement& parent)
+{
+    auto* el = parent.createNewChildElement("source");
+    el->setAttribute("id",                juce::String::toHexString(snap.sourceId));
+    el->setAttribute("sampleRate",        snap.sampleRate);
+    el->setAttribute("numChannels",       snap.numChannels);
+    el->setAttribute("numSamples",        static_cast<int>(snap.numSamples));
+    el->createNewChildElement("displayName")->addTextElement(snap.displayName);
+
+    const auto audioB64 = audioBufferToBase64(snap.audioBuffer);
+    if (audioB64.isNotEmpty())
+        el->createNewChildElement("audio")->addTextElement(audioB64);
+}
+
+void serializeMaterializationToXml(const MaterializationStore::MaterializationSnapshot& snap,
+                                   juce::XmlElement& parent)
+{
+    auto* el = parent.createNewChildElement("mat");
+    el->setAttribute("id",          juce::String::toHexString(snap.materializationId));
+    el->setAttribute("sourceId",    juce::String::toHexString(snap.sourceId));
+    el->setAttribute("lineageParent",
+                     juce::String::toHexString(snap.lineageParentMaterializationId));
+    el->setAttribute("f0State",     static_cast<int>(snap.originalF0State));
+    el->setAttribute("renderRev",   static_cast<int>(snap.renderRevision));
+
+    // sourceWindow
+    auto* sw = el->createNewChildElement("sourceWindow");
+    sw->setAttribute("sourceId",    juce::String::toHexString(snap.sourceWindow.sourceId));
+    sw->setAttribute("startSec",    snap.sourceWindow.sourceStartSeconds);
+    sw->setAttribute("endSec",      snap.sourceWindow.sourceEndSeconds);
+
+    // audio
+    const auto audioB64 = audioBufferToBase64(snap.audioBuffer);
+    if (audioB64.isNotEmpty())
+        el->createNewChildElement("audio")->addTextElement(audioB64);
+
+    // pitchCurve
+    {
+        auto* pcEl = el->createNewChildElement("pitchCurve");
+        if (snap.pitchCurve)
+        {
+            auto snapshot = snap.pitchCurve->getSnapshot();
+            pcEl->setAttribute("hopSize",    snapshot->getHopSize());
+            pcEl->setAttribute("sampleRate", snapshot->getSampleRate());
+
+            const auto origF0    = floatVectorToBase64(snapshot->getOriginalF0());
+            const auto origEnergy = floatVectorToBase64(snapshot->getOriginalEnergy());
+            if (origF0.isNotEmpty())
+                pcEl->createNewChildElement("originalF0")->addTextElement(origF0);
+            if (origEnergy.isNotEmpty())
+                pcEl->createNewChildElement("originalEnergy")->addTextElement(origEnergy);
+
+            const auto& segments = snapshot->getCorrectedSegments();
+            if (!segments.empty())
+            {
+                auto* segsEl = pcEl->createNewChildElement("segments");
+                for (const auto& seg : segments)
+                {
+                    auto* segEl = segsEl->createNewChildElement("seg");
+                    segEl->setAttribute("start",       seg.startFrame);
+                    segEl->setAttribute("end",         seg.endFrame);
+                    segEl->setAttribute("source",      static_cast<int>(seg.source));
+                    segEl->setAttribute("retuneSpeed", seg.retuneSpeed);
+                    segEl->setAttribute("vibDepth",    seg.vibratoDepth);
+                    segEl->setAttribute("vibRate",     seg.vibratoRate);
+                    const auto f0B64 = floatVectorToBase64(seg.f0Data);
+                    if (f0B64.isNotEmpty())
+                        segEl->createNewChildElement("f0")->addTextElement(f0B64);
+                }
+            }
+        }
+    }
+
+    // notes
+    if (!snap.notes.empty())
+    {
+        auto* notesEl = el->createNewChildElement("notes");
+        for (const auto& note : snap.notes)
+        {
+            auto* nEl = notesEl->createNewChildElement("n");
+            nEl->setAttribute("start",   note.startTime);
+            nEl->setAttribute("end",     note.endTime);
+            nEl->setAttribute("pitch",   note.pitch);
+            nEl->setAttribute("origPitch", note.originalPitch);
+            nEl->setAttribute("pitchOff",  note.pitchOffset);
+            nEl->setAttribute("retune",    note.retuneSpeed);
+            nEl->setAttribute("vibDep",    note.vibratoDepth);
+            nEl->setAttribute("vibRate",   note.vibratoRate);
+            nEl->setAttribute("vel",       note.velocity);
+            nEl->setAttribute("voiced",    note.isVoiced ? 1 : 0);
+            nEl->setAttribute("sel",       note.selected ? 1 : 0);
+            nEl->setAttribute("dirty",     note.dirty ? 1 : 0);
+        }
+    }
+
+    // silentGaps
+    if (!snap.silentGaps.empty())
+    {
+        auto* gapsEl = el->createNewChildElement("silentGaps");
+        for (const auto& gap : snap.silentGaps)
+        {
+            auto* gEl = gapsEl->createNewChildElement("gap");
+            gEl->setAttribute("start",    static_cast<double>(gap.startSample));
+            gEl->setAttribute("end",      static_cast<double>(gap.endSampleExclusive));
+            gEl->setAttribute("minLevel", gap.minLevel_dB);
+        }
+    }
+
+    // detectedKey
+    auto* dkEl = el->createNewChildElement("detectedKey");
+    dkEl->setAttribute("root",       static_cast<int>(snap.detectedKey.root));
+    dkEl->setAttribute("scale",      static_cast<int>(snap.detectedKey.scale));
+    dkEl->setAttribute("confidence", snap.detectedKey.confidence);
+
+    // pitchShiftSettings
+    auto* psEl = el->createNewChildElement("pitchShift");
+    psEl->setAttribute("semitone", snap.pitchShiftSettings.semitone);
+    psEl->setAttribute("cents",    snap.pitchShiftSettings.cents);
+
+    // timeGrid
+    if (snap.timeGrid)
+    {
+        auto* tgEl = el->createNewChildElement("timeGrid");
+        tgEl->setAttribute("revision", static_cast<int>(snap.timeGridRevision));
+        const auto& handles = snap.timeGrid->handles();
+        if (!handles.empty())
+        {
+            auto* hElParent = tgEl->createNewChildElement("handles");
+            for (const auto& handle : handles)
+            {
+                auto* hEl = hElParent->createNewChildElement("handle");
+                hEl->setAttribute("id",         static_cast<double>(handle.id));
+                hEl->setAttribute("sourceSec",  handle.source_seconds);
+                hEl->setAttribute("outputSec",  handle.output_seconds);
+                hEl->setAttribute("kind",       static_cast<int>(handle.kind));
+                hEl->setAttribute("locked",     handle.locked ? 1 : 0);
+                hEl->setAttribute("confidence", static_cast<int>(handle.confidence));
+            }
+        }
+    }
+}
+
+// Deserialization helpers
+
+bool deserializeSourceFromXml(const juce::XmlElement& el, SourceStore& store)
+{
+    const auto sourceIdStr = el.getStringAttribute("id");
+    if (sourceIdStr.isEmpty())
+        return false;
+    const uint64_t sourceId = sourceIdStr.getHexValue64();
+
+    const double sampleRate = el.getDoubleAttribute("sampleRate", 44100.0);
+    const int numChannels   = el.getIntAttribute("numChannels", 1);
+    const int64_t numSamples = static_cast<int64_t>(el.getIntAttribute("numSamples", 0));
+
+    juce::String displayName;
+    if (auto* nameEl = el.getChildByName("displayName"))
+        displayName = nameEl->getAllSubText().trim();
+
+    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+    if (auto* audioEl = el.getChildByName("audio"))
+        audioBuffer = audioBufferFromBase64(audioEl->getAllSubText().trim());
+
+    SourceStore::CreateSourceRequest req;
+    req.displayName = displayName;
+    req.audioBuffer = std::move(audioBuffer);
+    req.sampleRate = sampleRate > 0.0 ? sampleRate : TimeCoordinate::kRenderSampleRate;
+    req.numChannels = numChannels;
+    req.numSamples = numSamples;
+    return store.createSource(std::move(req), sourceId) == sourceId;
+}
+
+std::shared_ptr<PitchCurve> deserializePitchCurve(const juce::XmlElement* pcEl)
+{
+    if (pcEl == nullptr)
+        return nullptr;
+
+    const int hopSize    = pcEl->getIntAttribute("hopSize", 512);
+    const double sampleRate = pcEl->getDoubleAttribute("sampleRate", 16000.0);
+    if (hopSize <= 0 || sampleRate <= 0.0)
+        return nullptr;
+
+    auto curve = std::make_shared<PitchCurve>();
+    curve->setHopSize(hopSize);
+    curve->setSampleRate(sampleRate);
+
+    if (auto* f0El = pcEl->getChildByName("originalF0"))
+    {
+        auto f0Data = floatVectorFromBase64(f0El->getAllSubText().trim());
+        if (!f0Data.empty())
+            curve->setOriginalF0(f0Data);
+    }
+
+    if (auto* energyEl = pcEl->getChildByName("originalEnergy"))
+    {
+        auto energyData = floatVectorFromBase64(energyEl->getAllSubText().trim());
+        if (!energyData.empty())
+            curve->setOriginalEnergy(energyData);
+    }
+
+    if (auto* segsEl = pcEl->getChildByName("segments"))
+    {
+        for (auto* segEl : segsEl->getChildWithTagNameIterator("seg"))
+        {
+            CorrectedSegment seg;
+            seg.startFrame    = segEl->getIntAttribute("start");
+            seg.endFrame      = segEl->getIntAttribute("end");
+            seg.source        = static_cast<CorrectedSegment::Source>(
+                segEl->getIntAttribute("source", 0));
+            seg.retuneSpeed   = segEl->getDoubleAttribute("retuneSpeed", -1.0f);
+            seg.vibratoDepth  = segEl->getDoubleAttribute("vibDepth", -1.0f);
+            seg.vibratoRate   = segEl->getDoubleAttribute("vibRate", -1.0f);
+
+            if (auto* f0El = segEl->getChildByName("f0"))
+                seg.f0Data = floatVectorFromBase64(f0El->getAllSubText().trim());
+
+            if (seg.startFrame < seg.endFrame && !seg.f0Data.empty())
+                curve->restoreCorrectedSegment(seg);
+        }
+    }
+
+    return curve;
+}
+
+bool deserializeMaterializationFromXml(const juce::XmlElement& el,
+                                       MaterializationStore& store,
+                                       SourceStore& sourceStore)
+{
+    const auto idStr = el.getStringAttribute("id");
+    const auto srcIdStr = el.getStringAttribute("sourceId");
+    if (idStr.isEmpty() || srcIdStr.isEmpty())
+        return false;
+
+    const uint64_t matId   = idStr.getHexValue64();
+    const uint64_t sourceId = srcIdStr.getHexValue64();
+
+    if (matId == 0 || sourceId == 0)
+        return false;
+
+    // Build createMaterialization request
+    MaterializationStore::CreateMaterializationRequest req;
+    req.sourceId = sourceId;
+    req.lineageParentMaterializationId = juce::String(el.getStringAttribute("lineageParent", "0")).getHexValue64();
+    req.originalF0State = static_cast<OriginalF0State>(
+        el.getIntAttribute("f0State", static_cast<int>(OriginalF0State::NotRequested)));
+    req.renderRevision = static_cast<uint64_t>(el.getIntAttribute("renderRev", 0));
+
+    // sourceWindow
+    if (auto* swEl = el.getChildByName("sourceWindow"))
+    {
+        req.sourceWindow.sourceId = juce::String(swEl->getStringAttribute("sourceId", "0")).getHexValue64();
+        req.sourceWindow.sourceStartSeconds = swEl->getDoubleAttribute("startSec", 0.0);
+        req.sourceWindow.sourceEndSeconds   = swEl->getDoubleAttribute("endSec", 0.0);
+    }
+
+    // audio
+    if (auto* audioEl = el.getChildByName("audio"))
+        req.audioBuffer = audioBufferFromBase64(audioEl->getAllSubText().trim());
+
+    // pitchCurve
+    req.pitchCurve = deserializePitchCurve(el.getChildByName("pitchCurve"));
+
+    // notes
+    if (auto* notesEl = el.getChildByName("notes"))
+    {
+        std::vector<Note> notes;
+        for (auto* nEl : notesEl->getChildWithTagNameIterator("n"))
+        {
+            Note note;
+            note.startTime    = nEl->getDoubleAttribute("start");
+            note.endTime      = nEl->getDoubleAttribute("end");
+            note.pitch        = static_cast<float>(nEl->getDoubleAttribute("pitch"));
+            note.originalPitch = static_cast<float>(nEl->getDoubleAttribute("origPitch"));
+            note.pitchOffset  = static_cast<float>(nEl->getDoubleAttribute("pitchOff"));
+            note.retuneSpeed  = static_cast<float>(nEl->getDoubleAttribute("retune", -1.0));
+            note.vibratoDepth = static_cast<float>(nEl->getDoubleAttribute("vibDep", -1.0));
+            note.vibratoRate  = static_cast<float>(nEl->getDoubleAttribute("vibRate", -1.0));
+            note.velocity     = static_cast<float>(nEl->getDoubleAttribute("vel", 1.0));
+            note.isVoiced     = nEl->getIntAttribute("voiced", 1) != 0;
+            note.selected     = nEl->getIntAttribute("sel", 0) != 0;
+            note.dirty        = nEl->getIntAttribute("dirty", 0) != 0;
+            notes.push_back(note);
+        }
+        req.notes = std::move(notes);
+    }
+
+    // silentGaps
+    if (auto* gapsEl = el.getChildByName("silentGaps"))
+    {
+        std::vector<SilentGap> gaps;
+        for (auto* gEl : gapsEl->getChildWithTagNameIterator("gap"))
+        {
+            SilentGap gap;
+            gap.startSample      = static_cast<int64_t>(gEl->getDoubleAttribute("start"));
+            gap.endSampleExclusive = static_cast<int64_t>(gEl->getDoubleAttribute("end"));
+            gap.minLevel_dB      = static_cast<float>(gEl->getDoubleAttribute("minLevel", 0.0));
+            gaps.push_back(gap);
+        }
+        req.silentGaps = std::move(gaps);
+    }
+
+    // detectedKey
+    if (auto* dkEl = el.getChildByName("detectedKey"))
+    {
+        DetectedKey dk;
+        dk.root       = static_cast<Key>(dkEl->getIntAttribute("root", 0));
+        dk.scale      = static_cast<Scale>(dkEl->getIntAttribute("scale", 0));
+        dk.confidence = static_cast<float>(dkEl->getDoubleAttribute("confidence", 0.0));
+        req.detectedKey = dk;
+    }
+
+    // pitchShiftSettings (captured separately — not in CreateMaterializationRequest)
+    PitchShiftSettings pitchShift;
+    bool hasPitchShift = false;
+    if (auto* psEl = el.getChildByName("pitchShift"))
+    {
+        pitchShift.semitone = psEl->getIntAttribute("semitone", 0);
+        pitchShift.cents    = psEl->getIntAttribute("cents", 0);
+        hasPitchShift = true;
+    }
+
+    // timeGrid
+    if (auto* tgEl = el.getChildByName("timeGrid"))
+    {
+        if (auto* handlesEl = tgEl->getChildByName("handles"))
+        {
+            std::vector<TimeHandle> handles;
+            for (auto* hEl : handlesEl->getChildWithTagNameIterator("handle"))
+            {
+                TimeHandle handle;
+                handle.id              = static_cast<uint64_t>(hEl->getIntAttribute("id"));
+                handle.source_seconds  = hEl->getDoubleAttribute("sourceSec");
+                handle.output_seconds  = hEl->getDoubleAttribute("outputSec");
+                handle.kind            = static_cast<HandleKind>(hEl->getIntAttribute("kind", 0));
+                handle.locked          = hEl->getIntAttribute("locked", 0) != 0;
+                handle.confidence      = static_cast<Confidence>(hEl->getIntAttribute("confidence", 0));
+                handles.push_back(handle);
+            }
+            if (!handles.empty())
+                req.timeGrid = TimeGridSnapshot::makeFromHandles(std::move(handles),
+                    static_cast<uint64_t>(tgEl->getIntAttribute("revision", 0)));
+        }
+    }
+
+    req.renderCache = std::make_shared<RenderCache>();
+
+    const uint64_t createdId = store.createMaterialization(std::move(req), matId);
+    if (createdId != matId)
+        return false;
+
+    if (hasPitchShift)
+        store.setPitchShiftSettings(matId, pitchShift);
+
+    return true;
+}
+
+} // namespace
+
 void OpenTuneDocumentController::getContentSnapshot(juce::XmlElement& dest) const
 {
-    // Phase 8: full DC-based persistence. Stub for now.
-    juce::ignoreUnused(dest);
+    dest.setAttribute("version", 1);
+
+    // Serialize sources
+    if (sourceStore_)
+    {
+        const auto sourceIds = sourceStore_->getAllActiveSourceIds();
+        if (!sourceIds.empty())
+        {
+            auto* sourcesEl = dest.createNewChildElement("sources");
+            for (uint64_t sid : sourceIds)
+            {
+                SourceStore::SourceSnapshot snap;
+                if (sourceStore_->getSnapshot(sid, snap))
+                    serializeSourceToXml(snap, *sourcesEl);
+            }
+        }
+    }
+
+    // Serialize materializations
+    if (materializationStore_)
+    {
+        const auto matIds = materializationStore_->getAllActiveMaterializationIds();
+        if (!matIds.empty())
+        {
+            auto* matsEl = dest.createNewChildElement("materializations");
+            for (uint64_t mid : matIds)
+            {
+                MaterializationStore::MaterializationSnapshot snap;
+                if (materializationStore_->getSnapshot(mid, snap))
+                    serializeMaterializationToXml(snap, *matsEl);
+            }
+        }
+    }
 }
 
 void OpenTuneDocumentController::restoreContentPayloadInto(const juce::XmlElement& src)
 {
-    // Phase 8: full DC-based persistence. Stub for now.
-    juce::ignoreUnused(src);
+    const int version = src.getIntAttribute("version", 0);
+    if (version != 1)
+        return;
+
+    if (materializationStore_ == nullptr || sourceStore_ == nullptr)
+        return;
+
+    // 1. Restore sources first
+    if (auto* sourcesEl = src.getChildByName("sources"))
+    {
+        for (auto* sourceEl : sourcesEl->getChildWithTagNameIterator("source"))
+            deserializeSourceFromXml(*sourceEl, *sourceStore_);
+    }
+
+    // 2. Restore materializations (must come after sources)
+    if (auto* matsEl = src.getChildByName("materializations"))
+    {
+        for (auto* matEl : matsEl->getChildWithTagNameIterator("mat"))
+            deserializeMaterializationFromXml(*matEl, *materializationStore_, *sourceStore_);
+    }
 }
 
 MaterializationStore* OpenTuneDocumentController::getMaterializationStore() const noexcept

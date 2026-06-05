@@ -105,6 +105,8 @@ namespace AudioConstants {
 class OpenTuneDocumentController;
 #endif
 
+class MaterializationContentCommands;
+
 namespace Capture {
     class CaptureSession;  // forward decl; full type in Source/Plugin/Capture/CaptureSession.h
 }
@@ -437,6 +439,7 @@ public:
 private:
     std::shared_ptr<SourceStore> sourceStore_;
     std::shared_ptr<MaterializationStore> materializationStore_;
+    std::unique_ptr<MaterializationContentCommands> contentCommands_;
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
     PlacementClipboard clipClipboard_;
     ReferenceAnalysisService referenceAnalysisService_;
