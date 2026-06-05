@@ -439,7 +439,7 @@ public:
 private:
     std::shared_ptr<SourceStore> sourceStore_;
     std::shared_ptr<MaterializationStore> materializationStore_;
-    std::unique_ptr<MaterializationContentCommands> contentCommands_;
+    std::shared_ptr<MaterializationContentCommands> contentCommands_;
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
     PlacementClipboard clipClipboard_;
     ReferenceAnalysisService referenceAnalysisService_;
@@ -740,7 +740,8 @@ public:
 
     // Rendering & Buffering
     bool enqueueMaterializationPartialRenderById(uint64_t materializationId, double relStartSeconds, double relEndSeconds);
-    void processChunkRenderJob(MaterializationStore::PendingRenderJob& job);
+    void processChunkRenderJob(MaterializationStore::PendingRenderJob& job,
+                               MaterializationStore* owningStore = nullptr);
 
     // Transport control API
     void setPlaying(bool playing);

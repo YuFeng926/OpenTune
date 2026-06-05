@@ -181,4 +181,12 @@ struct LineAnchor {
     bool selected = false;  // 选中状态
 };
 
+// 标准化存储的 notes：去重叠、排序、去零时长 note
+inline std::vector<Note> normalizeStoredNotes(const std::vector<Note>& notes)
+{
+    NoteSequence sequence;
+    sequence.setNotesSorted(notes);
+    return sequence.getNotes();
+}
+
 } // namespace OpenTune

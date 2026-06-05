@@ -517,7 +517,9 @@ uint64_t MaterializationStore::getTimeGridRevision(uint64_t materializationId) c
 }
 
 bool MaterializationStore::setTimeGrid(uint64_t materializationId,
-                                       std::shared_ptr<const TimeGridSnapshot> snapshot)
+                                       std::shared_ptr<const TimeGridSnapshot> snapshot,
+                                       int64_t /*affectedSrcStartFrame*/,
+                                       int64_t /*affectedSrcEndFrame*/)
 {
     if (materializationId == 0 || snapshot == nullptr) return false;
 

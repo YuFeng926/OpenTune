@@ -133,6 +133,7 @@ void OpenTuneDocumentController::detachProcessorServices(const OpenTuneAudioProc
     f0Service_.reset();
     scheduleAsyncWork_ = nullptr;
     onReclaimNeeded_ = nullptr;
+    materializationStore_->setRenderJobCallback({});
 }
 
 void OpenTuneDocumentController::runContentReclaimSweep()

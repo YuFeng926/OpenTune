@@ -175,12 +175,72 @@ public:
                                        float retuneSpeed, float vibratoDepth,
                                        float vibratoRate, double audioSampleRate) override
     {
-        juce::ignoreUnused(materializationId, generatedNotes, startFrame, endFrameExclusive,
+        juce::ignoreUnused(startFrame, endFrameExclusive,
                            retuneSpeed, vibratoDepth, vibratoRate, audioSampleRate);
         // DC-backed: store-level write only; full AutoTune pipeline is processor-level
         if (dc_ == nullptr || dc_->getMaterializationStore() == nullptr) return false;
+        // Read existing pitchCurve; commitNotesAndPitchCurve requires non-null curve
+        std::shared_ptr<PitchCurve> existingCurve;
+        if (!dc_->getMaterializationStore()->getPitchCurve(materializationId, existingCurve)
+            || existingCurve == nullptr)
+            return dc_->getMaterializationStore()->setNotes(materializationId, generatedNotes);
         return dc_->getMaterializationStore()->commitNotesAndPitchCurve(
-            materializationId, generatedNotes, nullptr);
+            materializationId, generatedNotes, std::move(existingCurve));
+    }
+
+    // ---- V2.1 command boundary extension ----
+    bool setNotes(uint64_t materializationId, const std::vector<Note>& notes) override
+    {
+        if (dc_ == nullptr || dc_->getMaterializationStore() == nullptr) return false;
+        return dc_->getMaterializationStore()->setNotes(materializationId,
+                                                        normalizeStoredNotes(notes));
+    }
+
+    bool commitNotesAndSegments(uint64_t materializationId,
+                                const std::vector<Note>& notes,
+                                const std::vector<CorrectedSegment>& segments) override
+    {
+        if (dc_ == nullptr || dc_->getMaterializationStore() == nullptr) return false;
+        std::shared_ptr<PitchCurve> pitchCurve;
+        if (!dc_->getMaterializationStore()->getPitchCurve(materializationId, pitchCurve)
+            || pitchCurve == nullptr)
+            return false;
+        auto committedCurve = pitchCurve->clone();
+        committedCurve->replaceCorrectedSegments(segments);
+        return committedCurve != nullptr
+            && dc_->getMaterializationStore()->commitNotesAndPitchCurve(
+                materializationId, normalizeStoredNotes(notes), std::move(committedCurve));
+    }
+
+    bool setCorrectedSegments(uint64_t materializationId,
+                              const std::vector<CorrectedSegment>& segments) override
+    {
+        if (dc_ == nullptr || dc_->getMaterializationStore() == nullptr) return false;
+        std::shared_ptr<PitchCurve> pitchCurve;
+        if (!dc_->getMaterializationStore()->getPitchCurve(materializationId, pitchCurve)
+            || pitchCurve == nullptr)
+            return false;
+        auto committedCurve = pitchCurve->clone();
+        committedCurve->replaceCorrectedSegments(segments);
+        return committedCurve != nullptr
+            && dc_->getMaterializationStore()->setPitchCurve(
+                materializationId, std::move(committedCurve));
+    }
+
+    bool setPitchCurve(uint64_t materializationId, std::shared_ptr<PitchCurve> curve) override
+    {
+        if (dc_ == nullptr || dc_->getMaterializationStore() == nullptr) return false;
+        return dc_->getMaterializationStore()->setPitchCurve(materializationId, std::move(curve));
+    }
+
+    bool setTimeGrid(uint64_t materializationId,
+                     std::shared_ptr<const TimeGridSnapshot> grid,
+                     int64_t srcStartFrame,
+                     int64_t srcEndFrame) override
+    {
+        if (dc_ == nullptr || dc_->getMaterializationStore() == nullptr) return false;
+        return dc_->getMaterializationStore()->setTimeGrid(materializationId, std::move(grid),
+                                                           srcStartFrame, srcEndFrame);
     }
 
 private:
@@ -363,6 +423,44 @@ public:
             retuneSpeed, vibratoDepth, vibratoRate, audioSampleRate);
     }
 
+    // ---- V2.1 command boundary extension ----
+    bool setNotes(uint64_t materializationId, const std::vector<Note>& notes) override
+    {
+        if (proc_ == nullptr) return false;
+        return proc_->setMaterializationNotesById(materializationId, notes);
+    }
+
+    bool commitNotesAndSegments(uint64_t materializationId,
+                                const std::vector<Note>& notes,
+                                const std::vector<CorrectedSegment>& segments) override
+    {
+        if (proc_ == nullptr) return false;
+        return proc_->commitMaterializationNotesAndSegmentsById(materializationId, notes, segments);
+    }
+
+    bool setCorrectedSegments(uint64_t materializationId,
+                              const std::vector<CorrectedSegment>& segments) override
+    {
+        if (proc_ == nullptr) return false;
+        return proc_->setMaterializationCorrectedSegmentsById(materializationId, segments);
+    }
+
+    bool setPitchCurve(uint64_t materializationId, std::shared_ptr<PitchCurve> curve) override
+    {
+        if (proc_ == nullptr) return false;
+        return proc_->setMaterializationPitchCurveById(materializationId, std::move(curve));
+    }
+
+    bool setTimeGrid(uint64_t materializationId,
+                     std::shared_ptr<const TimeGridSnapshot> grid,
+                     int64_t srcStartFrame,
+                     int64_t srcEndFrame) override
+    {
+        if (proc_ == nullptr) return false;
+        return proc_->setMaterializationTimeGridById(materializationId, std::move(grid),
+                                                     srcStartFrame, srcEndFrame);
+    }
+
 private:
     OpenTuneAudioProcessor* proc_;
 };
@@ -372,24 +470,24 @@ private:
 // ============================================================================
 // Factory functions
 // ============================================================================
-std::unique_ptr<MaterializationContentAccess> makeDocumentControllerAccess(OpenTuneDocumentController* dc)
+std::shared_ptr<MaterializationContentAccess> makeDocumentControllerAccess(OpenTuneDocumentController* dc)
 {
-    return std::make_unique<DcContentAccess>(dc);
+    return std::make_shared<DcContentAccess>(dc);
 }
 
-std::unique_ptr<MaterializationContentCommands> makeDocumentControllerCommands(OpenTuneDocumentController* dc)
+std::shared_ptr<MaterializationContentCommands> makeDocumentControllerCommands(OpenTuneDocumentController* dc)
 {
-    return std::make_unique<DcContentCommands>(dc);
+    return std::make_shared<DcContentCommands>(dc);
 }
 
-std::unique_ptr<MaterializationContentAccess> makeProcessorAccess(OpenTuneAudioProcessor* processor)
+std::shared_ptr<MaterializationContentAccess> makeProcessorAccess(OpenTuneAudioProcessor* processor)
 {
-    return std::make_unique<ProcessorContentAccess>(processor);
+    return std::make_shared<ProcessorContentAccess>(processor);
 }
 
-std::unique_ptr<MaterializationContentCommands> makeProcessorCommands(OpenTuneAudioProcessor* processor)
+std::shared_ptr<MaterializationContentCommands> makeProcessorCommands(OpenTuneAudioProcessor* processor)
 {
-    return std::make_unique<ProcessorContentCommands>(processor);
+    return std::make_shared<ProcessorContentCommands>(processor);
 }
 
 } // namespace OpenTune
