@@ -54,8 +54,9 @@ public:
         juce::Font msgFont = UIColors::getUIFont(14.0f);
         const int messageWidth = dialogWidth - margin * 2;
         const int lineHeight = static_cast<int>(std::ceil(msgFont.getHeight()));
-        const int requiredHeight = msgFont.getStringWidth(message_) > 0
-            ? juce::jmax(lineHeight, (msgFont.getStringWidth(message_) / messageWidth + 1) * lineHeight)
+        const float textWidth = juce::TextLayout::getStringWidth(msgFont, message_);
+        const int requiredHeight = textWidth > 0.0f
+            ? juce::jmax(lineHeight, (static_cast<int>(textWidth / messageWidth) + 1) * lineHeight)
             : lineHeight;
         const int messageAreaHeight = juce::jmin(juce::jmax(lineHeight, requiredHeight), maxMessageHeight);
 

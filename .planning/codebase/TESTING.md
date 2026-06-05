@@ -264,7 +264,7 @@ OpenTuneAudioProcessor::PreparedImport makePreparedImport(const juce::String& di
 
 - Official object model: `AudioSource`, `AudioModification`, and `PlaybackRegion` use ARA names and ownership boundaries.
 - Lock-free ARA layer: `Source/ARA/` is scanned for mutex/thread primitives, JUCE locks, atomics, and `AppLogger`.
-- DocumentController projection: `OpenTuneDocumentController` owns `PlaybackRegionProjection`, materialization binding persistence with `ARAStoreObjectsFilter`/`ARARestoreObjectsFilter` support for full-document and partial sub-graph archives, editor selection projection, and focused-region materialization birth.
+- DocumentController projection: `OpenTuneDocumentController` owns `PlaybackRegionProjection`, materialization binding persistence with `ARAStoreObjectsFilter`/`ARARestoreObjectsFilter` support for full-document and partial sub-graph archives, and editor selection projection; Read Audio/materialization birth is driven by batch `AudioModification` refresh, with `PlaybackRegion` used only as placement.
 - EditorView UI hook: `OpenTuneEditorView` implements JUCE `ARAEditorView::doNotifySelection`, consumes `ViewSelection::getEffectivePlaybackRegions`, and the VST3 editor derives from `AudioProcessorEditorARAExtension`.
 - PlaybackRenderer role: `OpenTunePlaybackRenderer` maintains the host assigned playback-region set, mixes overlaps, clears empty blocks, returns handled ARA silence, and does not use a regular VST3 fallback path while ARA-bound.
 - Runtime isolation: the contract rejects old ARA session/state-machine tokens, regular VST3 capture/Standalone arrangement dependencies, and any local preferred-region/fallback-selection state inside `Source/ARA/`.

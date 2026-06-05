@@ -277,9 +277,9 @@ CheckResult documentControllerOwnsTopLevelAraModel()
         "getEditorSelectionPlaybackRegionProjections",
         "getFocusedEditorPlaybackRegionProjection",
         "setEditorViewSelectionPlaybackRegions",
-        "requestBirthForFocusedEditorPlaybackRegion",
         "referencesMaterialization",
-        "birthMaterializationForRegion",
+        "birthMaterializationForModification",
+        "refreshAllAudioModifications",
     };
 
     if (!containsAll(text, required))
@@ -348,8 +348,8 @@ CheckResult editorViewFollowsViewSelectionRole()
         "setEditorViewSelectionPlaybackRegions",
         "getEditorSelectionPlaybackRegionProjections",
         "getFocusedEditorPlaybackRegionProjection",
-        "requestBirthForFocusedEditorPlaybackRegion",
         "AudioProcessorEditorARAExtension",
+        "startInPlaybackTime",
     };
 
     if (!containsAll(text, required))
@@ -489,6 +489,70 @@ CheckResult standaloneArrangementSnapshotIsLockFree()
     return pass("StandaloneArrangement snapshot is lock-free");
 }
 
+CheckResult readAudioUsesBatchRefreshNotViewSelection()
+{
+    const auto text = readText("Source/Plugin/PluginEditor.h")
+        + readText("Source/Plugin/PluginEditor.cpp");
+
+    const std::vector<std::string> forbidden{
+        std::string("No ARA editor selection ") + "playback region is available",
+    };
+
+    if (!lacksAll(text, forbidden))
+        return fail("Read Audio batch refresh semantics",
+                    "old ViewSelection error text still present");
+
+    const std::vector<std::string> required{
+        "refreshAllAudioModifications",
+        "getPlaybackRegionProjections",
+    };
+
+    if (!containsAll(text, required))
+        return fail("Read Audio batch refresh semantics",
+                    "recordRequested() is not using batch AudioModification refresh path");
+
+    return pass("Read Audio batch refresh semantics");
+}
+
+CheckResult dcBatchRefreshDeduplicatesByAudioModification()
+{
+    const auto header = readText("Source/ARA/OpenTuneDocumentController.h");
+    const auto source = readText("Source/ARA/OpenTuneDocumentController.cpp");
+
+    const std::vector<std::string> required{
+        "uniqueModIds",
+        "audioModificationPersistentId",
+        "findAudioModification",
+        "birthMaterializationForModification(*modification)",
+        "retireMaterialization",
+        "retiredAnyOldMaterialization && onReclaimNeeded_",
+    };
+
+    if (!containsAll(source, required))
+        return fail("DC batch refresh deduplicates by AudioModification",
+                    "missing AudioModification dedup or retire logic");
+
+    const std::vector<std::string> dependencyRequired{
+        "std::shared_ptr<ResamplingManager> resamplingManager",
+        "std::shared_ptr<ResamplingManager> resamplingManager_",
+    };
+
+    if (!containsAll(header, dependencyRequired))
+        return fail("DC batch refresh deduplicates by AudioModification",
+                    "ResamplingManager dependency is not shared_ptr-owned in DocumentController");
+
+    const std::vector<std::string> dependencyForbidden{
+        std::string("Resampling") + "Manager* resamplingManager",
+        std::string("Resampling") + "Manager* resamplingManager_",
+    };
+
+    if (!lacksAll(header, dependencyForbidden))
+        return fail("DC batch refresh deduplicates by AudioModification",
+                    "bare ResamplingManager pointer remains in DocumentController contract");
+
+    return pass("DC batch refresh deduplicates by AudioModification");
+}
+
 } // namespace
 
 int main()
@@ -506,6 +570,8 @@ int main()
         playbackRendererFollowsAssignedRegionRole(),
         araHostTransportMirrorIsLockFree(),
         standaloneArrangementSnapshotIsLockFree(),
+        readAudioUsesBatchRefreshNotViewSelection(),
+        dcBatchRefreshDeduplicatesByAudioModification(),
     };
 
     bool allPassed = true;
