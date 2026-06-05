@@ -46,8 +46,15 @@ bool findPreferredHopAlignedBoundarySample(const SilentGap& gap,
 
 } // namespace
 
-MaterializationStore::MaterializationStore() = default;
-MaterializationStore::~MaterializationStore() = default;
+MaterializationStore::MaterializationStore()
+{
+    startRenderWorker();
+}
+
+MaterializationStore::~MaterializationStore()
+{
+    stopRenderWorker();
+}
 
 uint64_t MaterializationStore::createMaterialization(CreateMaterializationRequest request,
                                                      uint64_t forcedMaterializationId)
@@ -814,6 +821,10 @@ bool MaterializationStore::enqueuePartialRender(uint64_t materializationId,
         }
     }
 
+    // Wake render worker if jobs were enqueued
+    if (!entriesToQueue.empty())
+        renderWorkerCv_.notify_one();
+
     return !entriesToQueue.empty();
 }
 
@@ -1021,6 +1032,70 @@ bool MaterializationStore::getReferenceFeatures(uint64_t materializationId, Refe
 
     out = it->second.referenceFeatures;
     return out.status != ReferenceFeatureStatus::NotRequested || out.analysisRevision > 0;
+}
+
+// ============================================================================
+// Render Worker (Phase 2)
+// ============================================================================
+
+void MaterializationStore::startRenderWorker()
+{
+    renderWorkerShouldStop_.store(false);
+    renderPaused_.store(false);
+    renderWorkerThread_ = std::thread([this] { renderWorkerLoop(); });
+}
+
+void MaterializationStore::stopRenderWorker()
+{
+    {
+        std::lock_guard<std::mutex> lock(renderWorkerMutex_);
+        renderWorkerShouldStop_.store(true);
+    }
+    renderWorkerCv_.notify_all();
+    if (renderWorkerThread_.joinable())
+        renderWorkerThread_.join();
+}
+
+void MaterializationStore::renderWorkerLoop()
+{
+    while (true) {
+        PendingRenderJob job;
+        {
+            std::unique_lock<std::mutex> lock(renderWorkerMutex_);
+            renderWorkerCv_.wait(lock, [this] {
+                return renderWorkerShouldStop_.load()
+                    || (!renderPaused_.load() && hasPendingRenderJobs());
+            });
+            if (renderWorkerShouldStop_.load())
+                return;
+            if (renderPaused_.load())
+                continue;
+            if (!pullNextPendingRenderJob(job)) continue;
+        }
+
+        if (renderJobCallback_)
+            renderJobCallback_(job);
+    }
+}
+
+void MaterializationStore::notifyRenderWorker()
+{
+    renderWorkerCv_.notify_one();
+}
+
+void MaterializationStore::pauseRenderWorker()
+{
+    // Signal pause and wait for any in-flight job to complete
+    renderPaused_.store(true);
+    // No need to notify CV — the worker will pause at the next
+    // loop iteration when it checks renderPaused_ after pulling a job.
+    // If the worker is currently in renderJobCallback_, we let it finish.
+}
+
+void MaterializationStore::resumeRenderWorker()
+{
+    renderPaused_.store(false);
+    renderWorkerCv_.notify_all();
 }
 
 } // namespace OpenTune

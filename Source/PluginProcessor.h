@@ -526,19 +526,6 @@ private:
                         const juce::String& reason) override;
 
     // ========================================================================
-    // Chunk-Level Render Queue (重构：状态驱动，无任务快照队列)
-    // ========================================================================
-
-    void ensureChunkRenderWorkerStarted();
-    void chunkRenderWorkerLoop();
-
-    std::thread chunkRenderWorkerThread_;
-    mutable std::mutex schedulerMutex_;
-    std::condition_variable schedulerCv_;
-    std::atomic<bool> chunkRenderWorkerRunning_{false};
-    std::atomic<int> chunkRenderJobsInFlight_{0};
-
-    // ========================================================================
     // ⚡️ vocal-time-stretch §7 (Phase D MVP) — Stage 2 (Time-Stretch) Worker
     //
     // A SECOND, dedicated worker thread that owns SoundTouch re-build cycles.
@@ -750,6 +737,7 @@ public:
 
     // Rendering & Buffering
     bool enqueueMaterializationPartialRenderById(uint64_t materializationId, double relStartSeconds, double relEndSeconds);
+    void processChunkRenderJob(MaterializationStore::PendingRenderJob& job);
 
     // Transport control API
     void setPlaying(bool playing);

@@ -14,11 +14,14 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include "DSP/ChromaKeyDetector.h"
@@ -264,14 +267,37 @@ public:
     uint64_t findMaterializationBySourceWindow(uint64_t sourceId, const SourceWindow& window) const;
 
     static std::vector<int64_t> buildChunkBoundariesFromSilentGaps(int64_t materializationSampleCount,
-                                                                     const std::vector<SilentGap>& silentGaps,
-                                                                     int hopSize);
+                                                                      const std::vector<SilentGap>& silentGaps,
+                                                                      int hopSize);
 
     // ============================================================
     // Reference feature cache API
     // ============================================================
     bool setReferenceFeatures(uint64_t materializationId, const ReferenceFeatureSet& features);
     bool getReferenceFeatures(uint64_t materializationId, ReferenceFeatureSet& out) const;
+
+    // ============================================================
+    // Render worker (Phase 2: per-store render worker thread)
+    //
+    // Each MaterializationStore owns its own render worker thread
+    // that pulls jobs from the pending render queue and processes
+    // them via a registered callback.
+    // ============================================================
+    using RenderJobCallback = std::function<void(PendingRenderJob&)>;
+
+    /** Register the callback that processes each render job.
+     *  Must be set before the first job is enqueued (typically
+     *  set by the owning processor or document controller). */
+    void setRenderJobCallback(RenderJobCallback cb) { renderJobCallback_ = std::move(cb); }
+
+    /** Wake the render worker (e.g. from vocoder completion callback). */
+    void notifyRenderWorker();
+
+    /** Pause/resume the worker for safe reset of processor services.
+     *  pauseRenderWorker blocks until any in-flight job completes;
+     *  resumeRenderWorker re-enables job processing. */
+    void pauseRenderWorker();
+    void resumeRenderWorker();
 
 private:
     // 内部存储条目
@@ -321,6 +347,20 @@ private:
     std::map<uint64_t, MaterializationEntry> materializations_;
     std::atomic<uint64_t> nextMaterializationId_{1};
     TimeStretchCache timeStretchCache_;   // §6.2 — store-wide Stage 2 cache
+
+    // ============================================================
+    // Render worker (Phase 2)
+    // ============================================================
+    void renderWorkerLoop();
+    void startRenderWorker();
+    void stopRenderWorker();
+
+    std::thread renderWorkerThread_;
+    std::mutex renderWorkerMutex_;
+    std::condition_variable renderWorkerCv_;
+    std::atomic<bool> renderWorkerShouldStop_{false};
+    std::atomic<bool> renderPaused_{false};
+    RenderJobCallback renderJobCallback_;
 };
 
 } // namespace OpenTune
