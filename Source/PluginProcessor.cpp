@@ -2117,7 +2117,7 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
                 },
                 [](F0ExtractionService::Result&&) {});
         };
-        services.requestReclaimSweep = [this] { scheduleReclaimSweep(); };
+        services.requestReclaimSweep = [this] { triggerAsyncUpdate(); };
 
         dc->attachProcessorServices(std::move(services));
 
@@ -2547,6 +2547,16 @@ RenderCache::ChunkStats OpenTuneAudioProcessor::getMaterializationChunkStatsById
     if (materializationId == 0) {
         return {};
     }
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController()) {
+        std::shared_ptr<RenderCache> renderCache;
+        if (!dc->getMaterializationStore()->getRenderCache(materializationId, renderCache) || renderCache == nullptr)
+            return {};
+        return renderCache->getChunkStats();
+    }
+#endif
+
     jassert(materializationStore_ != nullptr);
 
     std::shared_ptr<RenderCache> renderCache;
@@ -2697,6 +2707,16 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
         return;
     }
 
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+    {
+        auto xml = std::make_unique<juce::XmlElement>("OPENTUNE");
+        dc->getContentSnapshot(*xml);
+        copyXmlToBinary(*xml, destData);
+        return;
+    }
+#endif
+
     std::vector<uint64_t> serializedMaterializationIds;
     jassert(standaloneArrangement_ != nullptr);
     for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
@@ -2843,6 +2863,17 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     if (data == nullptr || sizeInBytes <= 0) {
         return;
     }
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+    {
+        auto xml = getXmlFromBinary(data, sizeInBytes);
+        if (xml != nullptr) {
+            dc->restoreContentPayloadInto(*xml);
+            return;
+        }
+    }
+#endif
 
     juce::MemoryInputStream input(data, static_cast<size_t>(sizeInBytes), false);
     const int magic = input.readInt();
@@ -3088,6 +3119,14 @@ std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneAudioProcessor::getMater
     if (materializationId == 0) {
         return nullptr;
     }
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController()) {
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+        return dc->getMaterializationStore()->getAudioBuffer(materializationId, audioBuffer) ? audioBuffer : nullptr;
+    }
+#endif
+
     jassert(materializationStore_ != nullptr);
 
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
@@ -3449,6 +3488,12 @@ std::optional<DeleteOutcome> OpenTuneAudioProcessor::deletePlacement(int trackId
 void OpenTuneAudioProcessor::scheduleReclaimSweep()
 {
     jassert(juce::MessageManager::getInstanceWithoutCreating() != nullptr);
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController()) {
+        dc->scheduleContentReclaim();
+        return;
+    }
+#endif
     triggerAsyncUpdate();
 }
 
@@ -3486,13 +3531,6 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
             continue;
         }
 
-#if JucePlugin_Enable_ARA
-        // (b) ARA playback-region reference (only meaningful when ARA is compiled in)
-        if (const auto* dc = getDocumentController()) {
-            if (dc->referencesMaterialization(id)) continue;
-        }
-#endif
-
         // All references zero �?physically reclaim the materialization, then cascade-retire the
         // source if it has lost its last active materialization.
         const uint64_t sourceId = materializationStore_->getSourceIdAnyState(id);
@@ -3528,6 +3566,12 @@ bool OpenTuneAudioProcessor::getMaterializationSnapshotById(uint64_t materializa
     if (materializationId == 0) {
         return false;
     }
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        return dc->getMaterializationStore()->getSnapshot(materializationId, out);
+#endif
+
     jassert(materializationStore_ != nullptr);
 
     MaterializationStore::MaterializationSnapshot coreSnapshot;
@@ -3555,6 +3599,12 @@ double OpenTuneAudioProcessor::getMaterializationAudioDurationById(uint64_t mate
 {
     if (materializationId == 0)
         return 0.0;
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        return dc->getMaterializationStore()->getMaterializationAudioDurationById(materializationId);
+#endif
+
     jassert(materializationStore_ != nullptr);
     return materializationStore_->getMaterializationAudioDurationById(materializationId);
 }
@@ -3562,9 +3612,15 @@ double OpenTuneAudioProcessor::getMaterializationAudioDurationById(uint64_t mate
 bool OpenTuneAudioProcessor::getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const
 {
     out = SourceStore::SourceSnapshot{};
-    return sourceId != 0
-        && sourceStore_ != nullptr
-        && sourceStore_->getSnapshot(sourceId, out);
+    if (sourceId == 0)
+        return false;
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        return dc->getSourceStore() != nullptr && dc->getSourceStore()->getSnapshot(sourceId, out);
+#endif
+
+    return sourceStore_ != nullptr && sourceStore_->getSnapshot(sourceId, out);
 }
 
 bool OpenTuneAudioProcessor::ensureSourceById(uint64_t sourceId,
@@ -4294,6 +4350,13 @@ std::shared_ptr<PitchCurve> OpenTuneAudioProcessor::getMaterializationPitchCurve
         return nullptr;
     }
 
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController()) {
+        std::shared_ptr<PitchCurve> curve;
+        return dc->getMaterializationStore()->getPitchCurve(materializationId, curve) ? curve : nullptr;
+    }
+#endif
+
     std::shared_ptr<PitchCurve> curve;
     jassert(materializationStore_ != nullptr);
     return materializationStore_->getPitchCurve(materializationId, curve) ? curve : nullptr;
@@ -4327,10 +4390,16 @@ bool OpenTuneAudioProcessor::setMaterializationPitchCurveById(uint64_t materiali
 
 OriginalF0State OpenTuneAudioProcessor::getMaterializationOriginalF0StateById(uint64_t materializationId) const
 {
+    if (materializationId == 0)
+        return OriginalF0State::NotRequested;
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        return dc->getMaterializationStore()->getOriginalF0State(materializationId);
+#endif
+
     jassert(materializationStore_ != nullptr);
-    return materializationId != 0
-        ? materializationStore_->getOriginalF0State(materializationId)
-        : OriginalF0State::NotRequested;
+    return materializationStore_->getOriginalF0State(materializationId);
 }
 
 bool OpenTuneAudioProcessor::setMaterializationOriginalF0StateById(uint64_t materializationId, OriginalF0State state)
@@ -4360,8 +4429,16 @@ void OpenTuneAudioProcessor::detectAndCommitMaterializationKeyIfUnset(uint64_t m
 
 DetectedKey OpenTuneAudioProcessor::getMaterializationDetectedKeyById(uint64_t materializationId) const
 {
+    if (materializationId == 0)
+        return DetectedKey{};
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        return dc->getMaterializationStore()->getDetectedKey(materializationId);
+#endif
+
     jassert(materializationStore_ != nullptr);
-    return materializationId != 0 ? materializationStore_->getDetectedKey(materializationId) : DetectedKey{};
+    return materializationStore_->getDetectedKey(materializationId);
 }
 
 bool OpenTuneAudioProcessor::setMaterializationDetectedKeyById(uint64_t materializationId, const DetectedKey& key)
@@ -4378,6 +4455,14 @@ std::shared_ptr<const TimeGridSnapshot>
 OpenTuneAudioProcessor::getMaterializationTimeGridById(uint64_t materializationId) const
 {
     if (materializationId == 0) return nullptr;
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController()) {
+        std::shared_ptr<const TimeGridSnapshot> snapshot;
+        return dc->getMaterializationStore()->getTimeGrid(materializationId, snapshot) ? snapshot : nullptr;
+    }
+#endif
+
     jassert(materializationStore_ != nullptr);
     std::shared_ptr<const TimeGridSnapshot> snapshot;
     return materializationStore_->getTimeGrid(materializationId, snapshot) ? snapshot : nullptr;
@@ -4386,6 +4471,12 @@ OpenTuneAudioProcessor::getMaterializationTimeGridById(uint64_t materializationI
 uint64_t OpenTuneAudioProcessor::getMaterializationTimeGridRevisionById(uint64_t materializationId) const
 {
     if (materializationId == 0) return 0;
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        return dc->getMaterializationStore()->getTimeGridRevision(materializationId);
+#endif
+
     jassert(materializationStore_ != nullptr);
     return materializationStore_->getTimeGridRevision(materializationId);
 }
@@ -4564,6 +4655,13 @@ std::shared_ptr<RenderCache> OpenTuneAudioProcessor::getMaterializationRenderCac
         return nullptr;
     }
 
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController()) {
+        std::shared_ptr<RenderCache> renderCache;
+        return dc->getMaterializationStore()->getRenderCache(materializationId, renderCache) ? renderCache : nullptr;
+    }
+#endif
+
     std::shared_ptr<RenderCache> renderCache;
     jassert(materializationStore_ != nullptr);
     return materializationStore_->getRenderCache(materializationId, renderCache) ? renderCache : nullptr;
@@ -4571,18 +4669,33 @@ std::shared_ptr<RenderCache> OpenTuneAudioProcessor::getMaterializationRenderCac
 
 std::vector<Note> OpenTuneAudioProcessor::getMaterializationNotesById(uint64_t materializationId) const
 {
+    if (materializationId == 0)
+        return std::vector<Note>{};
+
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        return dc->getMaterializationStore()->getNotes(materializationId);
+#endif
+
     jassert(materializationStore_ != nullptr);
-    return materializationId != 0 ? materializationStore_->getNotes(materializationId) : std::vector<Note>{};
+    return materializationStore_->getNotes(materializationId);
 }
 
 OpenTuneAudioProcessor::MaterializationNotesSnapshot OpenTuneAudioProcessor::getMaterializationNotesSnapshotById(uint64_t materializationId) const
 {
     MaterializationNotesSnapshot snapshot;
-    jassert(materializationStore_ != nullptr);
     if (materializationId == 0) {
         return snapshot;
     }
 
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController()) {
+        dc->getMaterializationStore()->getNotesSnapshot(materializationId, snapshot);
+        return snapshot;
+    }
+#endif
+
+    jassert(materializationStore_ != nullptr);
     materializationStore_->getNotesSnapshot(materializationId, snapshot);
     return snapshot;
 }
