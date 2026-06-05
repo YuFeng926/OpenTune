@@ -301,6 +301,11 @@ public:
     void pauseRenderWorker();
     void resumeRenderWorker();
 
+    /** Drain any in-flight render job and pause the worker.
+     *  Blocks until all in-flight jobs complete, then sets renderPaused_.
+     *  Used before clearing the render callback to avoid dangling lambda captures. */
+    void drainRenderWorker();
+
 private:
     // 内部存储条目
     struct MaterializationEntry {
@@ -362,6 +367,7 @@ private:
     std::condition_variable renderWorkerCv_;
     std::atomic<bool> renderWorkerShouldStop_{false};
     std::atomic<bool> renderPaused_{false};
+    std::atomic<int> renderJobsInFlight_{0};
     RenderJobCallback renderJobCallback_;
 };
 

@@ -1,13 +1,13 @@
 #include "PitchShiftEditAction.h"
-#include "../PluginProcessor.h"
+#include "../ARA/MaterializationContentProvider.h"
 
 namespace OpenTune {
 
-PitchShiftEditAction::PitchShiftEditAction(OpenTuneAudioProcessor& processor,
+PitchShiftEditAction::PitchShiftEditAction(std::shared_ptr<MaterializationContentCommands> commands,
                                            uint64_t materializationId,
                                            PitchShiftSettings oldSettings,
                                            PitchShiftSettings newSettings)
-    : processor_(processor)
+    : commands_(std::move(commands))
     , materializationId_(materializationId)
     , oldSettings_(oldSettings)
     , newSettings_(newSettings)
@@ -34,7 +34,8 @@ void PitchShiftEditAction::redo()
 
 void PitchShiftEditAction::applySettings(const PitchShiftSettings& settings)
 {
-    processor_.setPitchShiftSettings(materializationId_, settings);
+    if (commands_ != nullptr)
+        commands_->setPitchShiftSettings(materializationId_, settings);
 }
 
 } // namespace OpenTune

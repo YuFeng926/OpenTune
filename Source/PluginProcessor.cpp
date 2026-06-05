@@ -1419,7 +1419,8 @@ void OpenTuneAudioProcessor::ensureStage2WorkerStarted()
     stage2WorkerThread_ = std::thread([this]() { stage2WorkerLoop(); });
 }
 
-void OpenTuneAudioProcessor::requestStage2Rebuild(uint64_t materializationId)
+void OpenTuneAudioProcessor::requestStage2Rebuild(uint64_t materializationId,
+                                                   MaterializationStore* store)
 {
     if (materializationId == 0) return;
     ensureStage2WorkerStarted();
@@ -1427,10 +1428,10 @@ void OpenTuneAudioProcessor::requestStage2Rebuild(uint64_t materializationId)
         std::lock_guard<std::mutex> lock(stage2Mutex_);
         // Coalesce: don't enqueue duplicate matIds; the worker always pulls the
         // most recent revision from the store anyway.
-        for (uint64_t pending : stage2RebuildQueue_) {
-            if (pending == materializationId) return;
+        for (const auto& pending : stage2RebuildQueue_) {
+            if (pending.first == materializationId) return;
         }
-        stage2RebuildQueue_.push_back(materializationId);
+        stage2RebuildQueue_.emplace_back(materializationId, store);
         stage2QueueDepth_.store(static_cast<int>(stage2RebuildQueue_.size()),
                                  std::memory_order_release);
     }
@@ -1442,6 +1443,7 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
     AppLogger::log("Stage2Worker: started");
     while (true) {
         uint64_t materializationId = 0;
+        MaterializationStore* storePtr = nullptr;
         {
             std::unique_lock<std::mutex> lock(stage2Mutex_);
             stage2Cv_.wait_for(lock, std::chrono::seconds(10), [this]() {
@@ -1454,17 +1456,18 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
             }
 
             if (stage2RebuildQueue_.empty()) continue;
-            materializationId = stage2RebuildQueue_.front();
+            materializationId = stage2RebuildQueue_.front().first;
+            storePtr = stage2RebuildQueue_.front().second;
             stage2RebuildQueue_.pop_front();
             stage2QueueDepth_.store(static_cast<int>(stage2RebuildQueue_.size()),
                                      std::memory_order_release);
         }
 
-        // §7 (Journey-1 fix) �?publish "in-flight" status for UI badge.
+        // §7 (Journey-1 fix) — publish "in-flight" status for UI badge.
         stage2InFlight_.store(true, std::memory_order_release);
         stage2InFlightMatId_.store(materializationId, std::memory_order_release);
 
-        const bool ok = runStage2RebuildForMaterialization(materializationId);
+        const bool ok = runStage2RebuildForMaterialization(materializationId, storePtr);
 
         stage2InFlight_.store(false, std::memory_order_release);
         stage2InFlightMatId_.store(0, std::memory_order_release);
@@ -1476,25 +1479,28 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
     }
 }
 
-bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materializationId)
+bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materializationId,
+                                                                MaterializationStore* store)
 {
-    if (materializationId == 0 || materializationStore_ == nullptr) return false;
+    // Use provided store or fall back to processor-local store
+    auto& activeStore = store ? *store : *materializationStore_;
+    if (materializationId == 0) return false;
 
     // Pull the freshest snapshot the message thread has published.
     MaterializationStore::MaterializationSnapshot snap;
-    if (!materializationStore_->getSnapshot(materializationId, snap)) return false;
+    if (!activeStore.getSnapshot(materializationId, snap)) return false;
     if (snap.audioBuffer == nullptr) return false;
     if (snap.audioBuffer->getNumChannels() <= 0 || snap.audioBuffer->getNumSamples() <= 0) return false;
 
     // If TimeGrid is identity, nothing to do �?invalidate any stale entry.
     if (snap.timeGrid == nullptr || snap.timeGrid->isIdentity()) {
-        materializationStore_->getTimeStretchCache().invalidate(materializationId);
+        activeStore.getTimeStretchCache().invalidate(materializationId);
         return true;
     }
 
     // Lazy-construct (or fetch) the per-materialization stretcher.
     constexpr double sampleRate = TimeCoordinate::kRenderSampleRate;
-    auto* stretcher = materializationStore_->getOpenTuneStretcher(materializationId, sampleRate, /*channels=*/1);
+    auto* stretcher = activeStore.getOpenTuneStretcher(materializationId, sampleRate, /*channels=*/1);
     if (stretcher == nullptr) return false;
 
     // SoundTouch (WSOLA) drives time-stretch via a TempoSchedule derived from the
@@ -1600,9 +1606,9 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
     }
 
     // Re-fetch revisions just before publish (they may have advanced again).
-    const uint64_t timeGridRev = materializationStore_->getTimeGridRevision(materializationId);
+    const uint64_t timeGridRev = activeStore.getTimeGridRevision(materializationId);
 
-    materializationStore_->getTimeStretchCache().store(materializationId,
+    activeStore.getTimeStretchCache().store(materializationId,
                                                         std::move(output),
                                                         /*pitchRev=*/0,
                                                         static_cast<uint32_t>(timeGridRev),
@@ -5396,7 +5402,7 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
                 const uint64_t rbMatId = job.coreJob.materializationId;
                 if (rbMatId != 0) {
                     store.getTimeStretchCache().invalidate(rbMatId);
-                    requestStage2Rebuild(rbMatId);
+                    requestStage2Rebuild(rbMatId, &store);
                 }
 
                 AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk matId="
@@ -5497,7 +5503,7 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
 
             if (chunkMatId != 0 && storePtr != nullptr) {
                 storePtr->getTimeStretchCache().invalidate(chunkMatId);
-                requestStage2Rebuild(chunkMatId);
+                requestStage2Rebuild(chunkMatId, storePtr);
             }
         } else {
             AppLogger::error("ChunkRender: vocoder failed matId="

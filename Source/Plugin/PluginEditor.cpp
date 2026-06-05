@@ -1129,28 +1129,31 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
 
     auto* content = new OpenTune::PitchShiftDialogContent(currentSettings);
 
+    auto commands = getContentCommandsShared();
     // Listener helper �?applies settings and closes the dialog on confirm/reset
     struct DialogHelper : public OpenTune::PitchShiftDialogContent::Listener
     {
         OpenTuneAudioProcessorEditor* owner;
         uint64_t matId;
         OpenTune::PitchShiftSettings oldSettings;
+        std::shared_ptr<MaterializationContentCommands> commands;
         juce::Component::SafePointer<juce::Component> contentPtr;
 
         DialogHelper(OpenTuneAudioProcessorEditor* o, uint64_t m,
                      const OpenTune::PitchShiftSettings& s,
+                     std::shared_ptr<MaterializationContentCommands> cmds,
                      juce::Component::SafePointer<juce::Component> c)
-            : owner(o), matId(m), oldSettings(s), contentPtr(std::move(c)) {}
+            : owner(o), matId(m), oldSettings(s), commands(std::move(cmds)), contentPtr(std::move(c)) {}
 
         void pitchShiftConfirmed(const OpenTune::PitchShiftSettings& newSettings) override
         {
             if (!owner) return;
             if (newSettings != oldSettings) {
-                auto& proc = owner->processorRef_;
-                auto& um = proc.getUndoManager();
+                auto& um = owner->processorRef_.getUndoManager();
                 um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
-                    proc, matId, oldSettings, newSettings));
-                owner->getContentCommands().setPitchShiftSettings(matId, newSettings);
+                    commands, matId, oldSettings, newSettings));
+                if (commands)
+                    commands->setPitchShiftSettings(matId, newSettings);
                 owner->parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
             }
             closeDialog();
@@ -1161,11 +1164,11 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
             if (!owner) return;
             const auto identity = OpenTune::PitchShiftSettings::identity();
             if (identity != oldSettings) {
-                auto& proc = owner->processorRef_;
-                auto& um = proc.getUndoManager();
+                auto& um = owner->processorRef_.getUndoManager();
                 um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
-                    proc, matId, oldSettings, identity));
-                owner->getContentCommands().setPitchShiftSettings(matId, identity);
+                    commands, matId, oldSettings, identity));
+                if (commands)
+                    commands->setPitchShiftSettings(matId, identity);
                 owner->parameterPanel_.setPitchShiftIndicator(0, 0);
             }
             closeDialog();
@@ -1182,6 +1185,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     };
 
     auto* helper = new DialogHelper{this, materializationId, currentSettings,
+                                    commands,
                                     juce::Component::SafePointer<juce::Component>(content)};
     content->addListener(helper);
 

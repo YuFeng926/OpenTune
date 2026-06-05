@@ -130,10 +130,15 @@ void OpenTuneDocumentController::detachProcessorServices(const OpenTuneAudioProc
 {
     if (serviceOwner_ != owner) return;
     serviceOwner_ = nullptr;
+
+    // Drain any in-flight render jobs before clearing the callback to
+    // prevent dangling lambda captures (processor may be destroyed).
+    materializationStore_->drainRenderWorker();
+    materializationStore_->setRenderJobCallback({});
+
     f0Service_.reset();
     scheduleAsyncWork_ = nullptr;
     onReclaimNeeded_ = nullptr;
-    materializationStore_->setRenderJobCallback({});
 }
 
 void OpenTuneDocumentController::runContentReclaimSweep()

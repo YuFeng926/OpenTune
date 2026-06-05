@@ -544,13 +544,14 @@ private:
     // ========================================================================
     void ensureStage2WorkerStarted();
     void stage2WorkerLoop();
-    bool runStage2RebuildForMaterialization(uint64_t materializationId);
+    bool runStage2RebuildForMaterialization(uint64_t materializationId,
+                                             MaterializationStore* store = nullptr);
 
     std::thread stage2WorkerThread_;
     mutable std::mutex stage2Mutex_;
     std::condition_variable stage2Cv_;
     std::atomic<bool> stage2WorkerRunning_{false};
-    std::deque<uint64_t> stage2RebuildQueue_;
+    std::deque<std::pair<uint64_t, MaterializationStore*>> stage2RebuildQueue_;
 
     // ⚡️ vocal-time-stretch §7 (Journey-1 fix 2026-05-12) — Stage 2 in-flight
     // status for UI progress badge.  Set when worker enters
@@ -565,7 +566,10 @@ private:
 public:
     // Public API for triggering Stage 2 rebuilds (called from
     // setMaterializationTimeGridById and from tests).
-    void requestStage2Rebuild(uint64_t materializationId);
+    // @param store  Optional store override; when null (default) uses
+    //               materializationStore_.  DC-backed paths pass the DC store.
+    void requestStage2Rebuild(uint64_t materializationId,
+                              MaterializationStore* store = nullptr);
 
     // §7 — Stage 2 worker progress query for UI feedback.
     bool     isStage2InFlight() const noexcept { return stage2InFlight_.load(std::memory_order_acquire); }
@@ -690,6 +694,8 @@ private:
     ReferenceFeatureSet buildGameReferenceFeatureSet(
         const MaterializationStore::MaterializationSnapshot& snapshot);
 public:
+
+    std::shared_ptr<MaterializationContentCommands> getContentCommands() const { return contentCommands_; }
 
 #if defined(OPENTUNE_TEST_BUILD)
     void setReferenceAnalysisNotificationDispatcherForTests(

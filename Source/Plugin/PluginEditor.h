@@ -148,6 +148,7 @@ private:
 
     const MaterializationContentAccess& getContentAccess() const { return *contentAccess_; }
     MaterializationContentCommands& getContentCommands() const { return *contentCommands_; }
+    std::shared_ptr<MaterializationContentCommands> getContentCommandsShared() const { return contentCommands_; }
 
     AppPreferences appPreferences_;
     std::shared_ptr<LocalizationManager::LanguageState> languageState_;
