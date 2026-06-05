@@ -26,6 +26,7 @@
 #include "Editor/PitchShiftDialogContent.h"
 #include "Editor/ConfirmDialogContent.h"
 #include "Utils/TimeCoordinate.h"
+#include "ARA/MaterializationContentProvider.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "DSP/ReferenceFeatures.h"
 #include <cmath>
@@ -430,6 +431,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Setup Piano Roll (main editor area)
     pianoRoll_.addListener(this);
     pianoRoll_.setProcessor(&processorRef_);
+    pianoRoll_.setContentProviders(makeProcessorAccess(&processorRef_), makeProcessorCommands(&processorRef_));
     pianoRoll_.setPianoKeyAudition(&processorRef_.getPianoKeyAudition());
     {
         const int activeTrack = getStandaloneActiveTrack(processorRef_);

@@ -45,6 +45,7 @@
 #include "TimelineViewportState.h"
 #include "WaveformMipmap.h"
 #include "../../Utils/UndoManager.h"
+#include "../../ARA/MaterializationContentProvider.h"
 
 namespace OpenTune {
 
@@ -171,6 +172,11 @@ public:
     int getPressedPianoKey() const { return pressedPianoKey_; }
 
     void setProcessor(OpenTuneAudioProcessor* processor);
+
+    /** Inject content providers (Phase 3-6: ARA or processor-backed). */
+    void setContentProviders(std::unique_ptr<MaterializationContentAccess> access,
+                             std::unique_ptr<MaterializationContentCommands> commands);
+
     void setIsPlaying(bool playing) {
         bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
         isPlaying_.store(playing, std::memory_order_relaxed);
@@ -575,6 +581,10 @@ private:
     bool waveformVisualRefreshPending_ = false;
 
     OpenTuneAudioProcessor* processor_ = nullptr;
+
+    // Content provider (Phase 3-6: routes materialization reads/writes)
+    std::unique_ptr<MaterializationContentAccess> contentAccess_;
+    std::unique_ptr<MaterializationContentCommands> contentCommands_;
 
     uint64_t editedMaterializationId_ = 0;
     bool experimentalFeaturesEnabled_ = false;

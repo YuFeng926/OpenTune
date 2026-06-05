@@ -34,6 +34,7 @@
 #include "UI/UIColors.h"
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
+#include "../ARA/MaterializationContentProvider.h"
 
 namespace OpenTune::Capture {
 class CaptureSession;
@@ -140,6 +141,14 @@ private:
     void surfaceRegularVst3HostControlledTransport(const char* actionName);
 
     OpenTuneAudioProcessor& processorRef_;
+
+    // Content provider (Phase 3-6: ARA-based or processor-based)
+    std::unique_ptr<MaterializationContentAccess> contentAccess_;
+    std::unique_ptr<MaterializationContentCommands> contentCommands_;
+
+    const MaterializationContentAccess& getContentAccess() const { return *contentAccess_; }
+    MaterializationContentCommands& getContentCommands() const { return *contentCommands_; }
+
     AppPreferences appPreferences_;
     std::shared_ptr<LocalizationManager::LanguageState> languageState_;
     LocalizationManager::ScopedLanguageBinding languageBinding_;

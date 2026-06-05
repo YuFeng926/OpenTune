@@ -108,7 +108,35 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , menuBar_(processor, MenuBarComponent::Profile::Plugin)
     , topBar_(menuBar_, transportBar_)
 {
+    // Select content provider backend based on ARA availability
+#if JucePlugin_Enable_ARA
+    if (auto* dc = processorRef_.getDocumentController())
+    {
+        contentAccess_ = makeDocumentControllerAccess(dc);
+        contentCommands_ = makeDocumentControllerCommands(dc);
+    }
+    else
+#endif
+    {
+        contentAccess_ = makeProcessorAccess(&processorRef_);
+        contentCommands_ = makeProcessorCommands(&processorRef_);
+    }
+
     menuBar_.setVisible(false);
+
+    // Inject content providers into pianoRoll (same backend as the editor itself)
+#if JucePlugin_Enable_ARA
+    if (auto* dc = processorRef_.getDocumentController())
+    {
+        pianoRoll_.setContentProviders(makeDocumentControllerAccess(dc),
+                                       makeDocumentControllerCommands(dc));
+    }
+    else
+#endif
+    {
+        pianoRoll_.setContentProviders(makeProcessorAccess(&processorRef_),
+                                       makeProcessorCommands(&processorRef_));
+    }
 
     addAndMakeVisible(topBar_);
     addAndMakeVisible(parameterPanel_);
@@ -340,7 +368,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     bool shouldShowOverlay = false;
 
     const uint64_t activeMaterializationId = resolveCurrentMaterializationId();
-    const auto chunkStats = processorRef_.getMaterializationChunkStatsById(activeMaterializationId);
+    const auto chunkStats = contentAccess_->getChunkStats(activeMaterializationId);
     const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
     const bool hasActiveRender = chunkStats.hasActiveWork();
 
@@ -350,7 +378,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // syncMaterializationProjectionToPianoRoll �?setEditedMaterialization.
     if (activeMaterializationId != 0) {
         const uint64_t currentNotesRevision =
-            processorRef_.getMaterializationNotesSnapshotById(activeMaterializationId).notesRevision;
+            contentAccess_->getNotesRevision(activeMaterializationId);
         if (activeMaterializationId == lastPianoRollNotesRevisionMatId_
             && currentNotesRevision != lastPianoRollNotesRevision_
             && pianoRoll_.isShowing()) {
@@ -370,7 +398,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // for sub-frame latency; this polling guard catches the non-interactive paths.
     if (activeMaterializationId != 0) {
         const uint64_t currentTimeGridRevision =
-            processorRef_.getMaterializationTimeGridRevisionById(activeMaterializationId);
+            contentAccess_->getTimeGridRevision(activeMaterializationId);
         if (activeMaterializationId == lastPianoRollTimeGridRevisionMatId_
             && currentTimeGridRevision != lastPianoRollTimeGridRevision_
             && pianoRoll_.isShowing()) {
@@ -823,7 +851,7 @@ void OpenTuneAudioProcessorEditor::undoRequested()
     const uint64_t matId = resolveCurrentMaterializationId();
     if (matId == 0) return;
 
-    auto curve = processorRef_.getMaterializationPitchCurveById(matId);
+    auto curve = contentAccess_->getPitchCurve(matId);
     if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
 
     double startSec = 0.0;
@@ -834,7 +862,7 @@ void OpenTuneAudioProcessorEditor::undoRequested()
         startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
         endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
     }
-    processorRef_.enqueueMaterializationPartialRenderById(matId, startSec, endSec);
+    contentCommands_->enqueuePartialRender(matId, startSec, endSec);
 }
 
 void OpenTuneAudioProcessorEditor::redoRequested()
@@ -845,7 +873,7 @@ void OpenTuneAudioProcessorEditor::redoRequested()
     const uint64_t matId = resolveCurrentMaterializationId();
     if (matId == 0) return;
 
-    auto curve = processorRef_.getMaterializationPitchCurveById(matId);
+    auto curve = contentAccess_->getPitchCurve(matId);
     if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
 
     double startSec = 0.0;
@@ -856,7 +884,7 @@ void OpenTuneAudioProcessorEditor::redoRequested()
         startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
         endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
     }
-    processorRef_.enqueueMaterializationPartialRenderById(matId, startSec, endSec);
+    contentCommands_->enqueuePartialRender(matId, startSec, endSec);
 }
 
 void OpenTuneAudioProcessorEditor::mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme)
@@ -937,7 +965,7 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
         key.root = static_cast<Key>(clampedRoot);
         key.scale = (clampedType == 2) ? Scale::Minor : ((clampedType == 3) ? Scale::Chromatic : Scale::Major);
         key.confidence = 1.0f;
-        processorRef_.setMaterializationDetectedKeyById(materializationId, key);
+        contentCommands_->setDetectedKey(materializationId, key);
     }
 }
 
@@ -1059,7 +1087,7 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
         return;
     }
 
-    const auto f0State = processorRef_.getMaterializationOriginalF0StateById(materializationId);
+    const auto f0State = contentAccess_->getOriginalF0State(materializationId);
     if (f0State == OriginalF0State::Extracting) {
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::InfoIcon,
@@ -1097,7 +1125,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     const uint64_t materializationId = resolveCurrentMaterializationId();
     if (materializationId == 0) return;
 
-    const auto currentSettings = processorRef_.getMaterializationStore()->getPitchShiftSettings(materializationId);
+    const auto currentSettings = contentAccess_->getPitchShift(materializationId);
 
     auto* content = new OpenTune::PitchShiftDialogContent(currentSettings);
 
@@ -1122,7 +1150,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
                 auto& um = proc.getUndoManager();
                 um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
                     proc, matId, oldSettings, newSettings));
-                proc.setPitchShiftSettings(matId, newSettings);
+                owner->getContentCommands().setPitchShiftSettings(matId, newSettings);
                 owner->parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
             }
             closeDialog();
@@ -1137,7 +1165,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
                 auto& um = proc.getUndoManager();
                 um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
                     proc, matId, oldSettings, identity));
-                proc.setPitchShiftSettings(matId, identity);
+                owner->getContentCommands().setPitchShiftSettings(matId, identity);
                 owner->parameterPanel_.setPitchShiftIndicator(0, 0);
             }
             closeDialog();
@@ -1183,7 +1211,7 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
         return;
     }
 
-    auto curve = processorRef_.getMaterializationPitchCurveById(materializationId);
+    auto curve = contentAccess_->getPitchCurve(materializationId);
     if (curve == nullptr) {
         AppLogger::log("InvariantViolation: pitchCurveEdited - materialization " + juce::String(static_cast<juce::int64>(materializationId)) + " has no pitch curve");
         jassertfalse;
@@ -1220,7 +1248,7 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
     const double secondsPerFrame = static_cast<double>(hopSize) / f0SampleRate;
     const double editStartSec = static_cast<double>(startFrame) * secondsPerFrame;
     const double editEndSec = static_cast<double>(endFrame + 1) * secondsPerFrame;
-    processorRef_.enqueueMaterializationPartialRenderById(materializationId, editStartSec, editEndSec);
+    contentCommands_->enqueuePartialRender(materializationId, editStartSec, editEndSec);
 }
 
 void OpenTuneAudioProcessorEditor::escapeKeyPressed()
@@ -1244,7 +1272,7 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
     }
 
     if (!sync.hasActiveMaterialization()
-        || processorRef_.getMaterializationAudioBufferById(sync.activeMaterializationId) == nullptr) {
+        || contentAccess_->getAudioBuffer(sync.activeMaterializationId) == nullptr) {
         pianoRoll_.setEditedMaterialization(0,
                                     nullptr,
                                     nullptr,
@@ -1258,8 +1286,8 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
         return;
     }
 
-    auto curve = processorRef_.getMaterializationPitchCurveById(sync.activeMaterializationId);
-    auto buffer = processorRef_.getMaterializationAudioBufferById(sync.activeMaterializationId);
+    auto curve = contentAccess_->getPitchCurve(sync.activeMaterializationId);
+    auto buffer = contentAccess_->getAudioBuffer(sync.activeMaterializationId);
 
     pianoRoll_.setEditedMaterialization(sync.activeMaterializationId,
                                 curve,
@@ -1271,7 +1299,7 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
     } else {
         pianoRoll_.clearTimelineViewDomain();
     }
-    const auto key = processorRef_.getMaterializationDetectedKeyById(sync.activeMaterializationId);
+    const auto key = contentAccess_->getDetectedKey(sync.activeMaterializationId);
     const int rootNote = static_cast<int>(key.root);
     const int scaleType = (key.scale == Scale::Minor) ? 2 : ((key.scale == Scale::Chromatic) ? 3 : 1);
 
