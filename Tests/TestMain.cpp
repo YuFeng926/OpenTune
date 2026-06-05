@@ -518,6 +518,7 @@ CheckResult dcBatchRefreshDeduplicatesByAudioModification()
 {
     const auto header = readText("Source/ARA/OpenTuneDocumentController.h");
     const auto source = readText("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto combined = header + source;
 
     const std::vector<std::string> required{
         "uniqueModIds",
@@ -535,22 +536,284 @@ CheckResult dcBatchRefreshDeduplicatesByAudioModification()
     const std::vector<std::string> dependencyRequired{
         "std::shared_ptr<ResamplingManager> resamplingManager",
         "std::shared_ptr<ResamplingManager> resamplingManager_",
+        "materializationStore_(std::make_shared<MaterializationStore>",
+        "sourceStore_(std::make_shared<SourceStore>",
     };
 
-    if (!containsAll(header, dependencyRequired))
+    if (!containsAll(combined, dependencyRequired))
         return fail("DC batch refresh deduplicates by AudioModification",
-                    "ResamplingManager dependency is not shared_ptr-owned in DocumentController");
+                    "ResamplingManager/store dependencies are not shared_ptr-owned by DC ctor");
 
     const std::vector<std::string> dependencyForbidden{
         std::string("Resampling") + "Manager* resamplingManager",
         std::string("Resampling") + "Manager* resamplingManager_",
+        "connectToStores(std::shared_ptr<MaterializationStore>",
+        "connectToStores(std::shared_ptr<SourceStore>",
     };
 
-    if (!lacksAll(header, dependencyForbidden))
+    if (!lacksAll(combined, dependencyForbidden))
         return fail("DC batch refresh deduplicates by AudioModification",
-                    "bare ResamplingManager pointer remains in DocumentController contract");
+                    "bare ResamplingManager pointer or legacy connectToStores content-store overload remains");
 
     return pass("DC batch refresh deduplicates by AudioModification");
+}
+
+CheckResult araDocumentControllerOwnsContentStores()
+{
+    const auto header = readText("Source/ARA/OpenTuneDocumentController.h");
+    const auto source = readText("Source/ARA/OpenTuneDocumentController.cpp");
+
+    const std::vector<std::string> required{
+        "materializationStore_(std::make_shared<MaterializationStore>",
+        "sourceStore_(std::make_shared<SourceStore>",
+        "resamplingManager_(std::make_shared<ResamplingManager>",
+    };
+
+    if (!containsAll(source, required))
+        return fail("ARA: DC owns content stores",
+                    "OpenTuneDocumentController ctor must self-create stores");
+
+    const std::vector<std::string> forbidden{
+        "connectToStores(std::shared_ptr<MaterializationStore>",
+        "connectToStores(std::shared_ptr<SourceStore>",
+        "connectToStores(nullptr, nullptr",
+    };
+
+    if (!lacksAll(header, forbidden))
+        return fail("ARA: DC owns content stores",
+                    "connectToStores signature must not accept content stores");
+    if (!lacksAll(source, forbidden))
+        return fail("ARA: DC owns content stores",
+                    "connectToStores call sites must not pass content stores");
+
+    return pass("ARA: DC owns content stores");
+}
+
+CheckResult araProcessorBindDoesNotInjectContentStores()
+{
+    const auto source = readText("Source/PluginProcessor.cpp");
+
+    const std::vector<std::string> forbidden{
+        "dc->connectToStores(materializationStore_",
+        "dc->connectToStores(sourceStore_",
+        "dc->connectToStores(resamplingManager_",
+    };
+
+    if (!lacksAll(source, forbidden))
+        return fail("ARA: bind injects no content stores",
+                    "didBindToARA must use service-only attach API");
+
+    const std::vector<std::string> required{
+        "attachProcessorServices",
+    };
+
+    if (!containsAll(source, required))
+        return fail("ARA: bind injects no content stores",
+                    "didBindToARA must call attachProcessorServices");
+
+    return pass("ARA: bind injects no content stores");
+}
+
+CheckResult araPluginEditorReadsContentFromDocumentController()
+{
+    const auto editor = readText("Source/Plugin/PluginEditor.cpp");
+    const auto header = readText("Source/Plugin/PluginEditor.h");
+
+    const std::vector<std::string> forbidden{
+        "processorRef_.getMaterializationAudioBufferById(",
+        "processorRef_.getMaterializationPitchCurveById(",
+        "processorRef_.getMaterializationDetectedKeyById(",
+        "processorRef_.getMaterializationChunkStatsById(",
+        "processorRef_.getMaterializationNotesSnapshotById(",
+        "processorRef_.getMaterializationTimeGridRevisionById(",
+        "processorRef_.getMaterializationOriginalF0StateById(",
+        "processorRef_.getMaterializationStore()->getPitchShiftSettings(",
+    };
+
+    if (!lacksAll(editor, forbidden))
+        return fail("ARA: PluginEditor reads via ContentAccess",
+                    "PluginEditor must not call processor-local materialization accessors");
+
+    const std::vector<std::string> required{
+        "getContentAccess",
+    };
+
+    if (!containsAll(header, required))
+        return fail("ARA: PluginEditor reads via ContentAccess",
+                    "PluginEditor must declare a content access helper");
+
+    return pass("ARA: PluginEditor reads via ContentAccess");
+}
+
+CheckResult araPluginEditorWritesViaContentCommands()
+{
+    const auto editor = readText("Source/Plugin/PluginEditor.cpp");
+    const auto header = readText("Source/Plugin/PluginEditor.h");
+
+    const std::vector<std::string> forbidden{
+        "processorRef_.setMaterializationDetectedKeyById(",
+        "processorRef_.setPitchShiftSettings(",
+        "processorRef_.enqueueMaterializationPartialRenderById(",
+        "processorRef_.getMaterializationStore()->getPitchShiftSettings(",
+    };
+
+    if (!lacksAll(editor, forbidden))
+        return fail("ARA: PluginEditor writes via ContentCommands",
+                    "PluginEditor must not call processor-local write/command methods");
+
+    const std::vector<std::string> required{
+        "getContentAccess",
+    };
+
+    if (!containsAll(header, required))
+        return fail("ARA: PluginEditor writes via ContentCommands",
+                    "PluginEditor must declare a content access helper that exposes commands");
+
+    return pass("ARA: PluginEditor writes via ContentCommands");
+}
+
+CheckResult araPianoRollUsesInjectedContentProvider()
+{
+    const auto header = readText("Source/Standalone/UI/PianoRollComponent.h");
+    const auto source = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const std::vector<std::string> required{
+        "setContentProvider",
+        "MaterializationContentProvider",
+    };
+
+    if (!containsAll(header, required) || !containsAll(source, required))
+        return fail("ARA: PianoRoll uses injected content provider",
+                    "PianoRollComponent must accept an injected content provider");
+
+    const std::vector<std::string> forbidden{
+        "processor_->commitAutoTuneGeneratedNotesByMaterializationId(",
+        "processor_->getMaterializationNotesSnapshotById(",
+        "processor_->getMaterializationPitchCurveById(",
+        "processor_->getMaterializationTimeGridRevisionById(",
+        "processor_->getMaterializationOriginalF0StateById(",
+    };
+
+    if (!lacksAll(source, forbidden))
+        return fail("ARA: PianoRoll uses injected content provider",
+                    "PianoRollComponent must not access processor_ directly for content");
+
+    return pass("ARA: PianoRoll uses injected content provider");
+}
+
+CheckResult araChunkRenderWorkerLivesInStore()
+{
+    const auto proc = readText("Source/PluginProcessor.cpp");
+    const auto store = readText("Source/MaterializationStore.h");
+
+    const std::vector<std::string> procForbidden{
+        "chunkRenderWorkerThread_",
+        "chunkRenderWorkerLoop",
+    };
+
+    if (!lacksAll(proc, procForbidden))
+        return fail("ARA: chunk render worker lives in store",
+                    "PluginProcessor must not own chunkRenderWorkerThread_");
+
+    const std::vector<std::string> storeRequired{
+        "renderWorkerThread_",
+    };
+
+    if (!containsAll(store, storeRequired))
+        return fail("ARA: chunk render worker lives in store",
+                    "MaterializationStore must own its renderWorkerThread_");
+
+    return pass("ARA: chunk render worker lives in store");
+}
+
+CheckResult araPersistenceUsesDocumentContentStore()
+{
+    const auto proc = readText("Source/PluginProcessor.cpp");
+    const auto dcHeader = readText("Source/ARA/OpenTuneDocumentController.h");
+    const auto dcSource = readText("Source/ARA/OpenTuneDocumentController.cpp");
+
+    const std::vector<std::string> procRequired{
+        "dc->getMaterializationStore()",
+        "dc->getSourceStore()",
+    };
+
+    if (!containsAll(proc, procRequired))
+        return fail("ARA: persistence uses DC content stores",
+                    "getStateInformation/setStateInformation ARA branch must "
+                    "round-trip through DC's MaterializationStore and SourceStore");
+
+    const std::vector<std::string> dcRequired{
+        "getContentSnapshot",
+        "restoreContentPayloadInto",
+    };
+
+    if (!containsAll(dcHeader, dcRequired) || !containsAll(dcSource, dcRequired))
+        return fail("ARA: persistence uses DC content stores",
+                    "DC must expose getContentSnapshot / restoreContentPayloadInto");
+
+    const std::vector<std::string> forbidden{
+        "restoreMaterialization",
+    };
+
+    if (!lacksAll(proc, forbidden))
+        return fail("ARA: persistence uses DC content stores",
+                    "Test contract must not invent restoreMaterialization API");
+
+    return pass("ARA: persistence uses DC content stores");
+}
+
+CheckResult araReclaimRunsOnDocumentContentStore()
+{
+    const auto dcHeader = readText("Source/ARA/OpenTuneDocumentController.h");
+    const auto dcSource = readText("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto proc = readText("Source/PluginProcessor.cpp");
+
+    const std::vector<std::string> dcRequired{
+        "runContentReclaimSweep",
+        "reclaimAsyncUpdater",
+    };
+
+    if (!containsAll(dcHeader, dcRequired) || !containsAll(dcSource, dcRequired))
+        return fail("ARA: reclaim on DC with safe lifetime",
+                    "DC must expose runContentReclaimSweep and own AsyncUpdater");
+
+    const std::vector<std::string> procForbidden{
+        "dc->referencesMaterialization(id)",
+        "getDocumentController()",
+    };
+
+    if (!lacksAll(proc, procForbidden))
+        return fail("ARA: reclaim on DC with safe lifetime",
+                    "Processor's runReclaimSweepOnMessageThread must not query ARA DC");
+
+    return pass("ARA: reclaim on DC with safe lifetime");
+}
+
+CheckResult araSourceCodeHasNoLegacyAttachAPI()
+{
+    namespace fs = std::filesystem;
+    int hitCount = 0;
+    if (!fs::exists("Source"))
+        return fail("ARA: legacy attach API gone", "Source/ directory not found");
+
+    for (const auto& entry : fs::recursive_directory_iterator("Source")) {
+        if (!entry.is_regular_file()) continue;
+        const auto ext = entry.path().extension();
+        if (ext != ".cpp" && ext != ".h")
+            continue;
+        std::ifstream f(entry.path());
+        std::string content((std::istreambuf_iterator<char>(f)),
+                             std::istreambuf_iterator<char>());
+        if (content.find("connectToStores") != std::string::npos)
+            ++hitCount;
+    }
+
+    if (hitCount > 0)
+        return fail("ARA: legacy attach API gone",
+                    "Source/ must have 0 connectToStores references (got "
+                    + std::to_string(hitCount) + ")");
+
+    return pass("ARA: legacy attach API gone");
 }
 
 } // namespace
@@ -572,6 +835,15 @@ int main()
         standaloneArrangementSnapshotIsLockFree(),
         readAudioUsesBatchRefreshNotViewSelection(),
         dcBatchRefreshDeduplicatesByAudioModification(),
+        araDocumentControllerOwnsContentStores(),
+        araProcessorBindDoesNotInjectContentStores(),
+        araPluginEditorReadsContentFromDocumentController(),
+        araPluginEditorWritesViaContentCommands(),
+        araPianoRollUsesInjectedContentProvider(),
+        araChunkRenderWorkerLivesInStore(),
+        araPersistenceUsesDocumentContentStore(),
+        araReclaimRunsOnDocumentContentStore(),
+        araSourceCodeHasNoLegacyAttachAPI(),
     };
 
     bool allPassed = true;

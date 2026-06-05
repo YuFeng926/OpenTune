@@ -1256,6 +1256,10 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 
     sourceStore_ = std::make_shared<SourceStore>();
     materializationStore_ = std::make_shared<MaterializationStore>();
+    materializationStore_->setRenderJobCallback(
+        [this](MaterializationStore::PendingRenderJob& job) {
+            processChunkRenderJob(job);
+        });
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
     configureReferenceAnalysisService();
 
@@ -1380,16 +1384,7 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     isPlaying_.store(false);
     materializationRefreshAliveFlag_->store(false, std::memory_order_release);
 
-    {
-        std::lock_guard<std::mutex> lock(schedulerMutex_);
-        chunkRenderWorkerRunning_.store(false, std::memory_order_release);
-    }
-    schedulerCv_.notify_all();
-    if (chunkRenderWorkerThread_.joinable()) {
-        chunkRenderWorkerThread_.join();
-    }
-
-    // §7 (Phase D) �?stop Stage 2 worker before destroying stores
+    // §7 (Phase D) — stop Stage 2 worker before destroying stores
     {
         std::lock_guard<std::mutex> lock(stage2Mutex_);
         stage2WorkerRunning_.store(false, std::memory_order_release);
@@ -1413,21 +1408,8 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 // 推理引擎初始化与生命周期
 // ============================================================================
 
-void OpenTuneAudioProcessor::ensureChunkRenderWorkerStarted()
-{
-    bool expected = false;
-    if (!chunkRenderWorkerRunning_.compare_exchange_strong(expected,
-                                                           true,
-                                                           std::memory_order_acq_rel,
-                                                           std::memory_order_acquire)) {
-        return;
-    }
-
-    chunkRenderWorkerThread_ = std::thread([this]() { chunkRenderWorkerLoop(); });
-}
-
 // ============================================================================
-// vocal-time-stretch §7 (Phase D MVP) �?Stage 2 worker lifecycle + processing
+// vocal-time-stretch §7 (Phase D MVP) — Stage 2 worker lifecycle + processing
 // ============================================================================
 
 void OpenTuneAudioProcessor::ensureStage2WorkerStarted()
@@ -1865,17 +1847,11 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     AppLogger::info("[Processor] Resetting inference backend, forceCpu=" 
         + juce::String(forceCpu ? "true" : "false"));
     
-    // 1. 停止 chunk render worker（确保无线程在使�?f0Service_/vocoderDomain_�?
-    {
-        std::lock_guard<std::mutex> lock(schedulerMutex_);
-        chunkRenderWorkerRunning_.store(false, std::memory_order_release);
-    }
-    schedulerCv_.notify_all();
-    if (chunkRenderWorkerThread_.joinable()) {
-        chunkRenderWorkerThread_.join();
-    }
+    // 1. Pause render worker before releasing services
+    if (materializationStore_)
+        materializationStore_->pauseRenderWorker();
     
-    // 2. worker 已停，安全释放推理服�?
+    // 2. �?worker 已暂停，安全释放推理服�?
     if (vocoderDomain_) {
         vocoderDomain_->shutdown();
         vocoderDomain_.reset();
@@ -1895,6 +1871,10 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     detector.reset();
     detector.detect(forceCpu);
     
+    // 4. Resume render worker (services will be lazily re-initialized by ensureVocoderReady)
+    if (materializationStore_)
+        materializationStore_->resumeRenderWorker();
+    
     AppLogger::info("[Processor] Inference backend reset to: " 
         + juce::String(detector.getBackendName()));
 }
@@ -1903,15 +1883,9 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
 {
     if (currentVocoderModelWeight_ == weight) return;  // 幂等
 
-    // 1. �?chunk render worker（对�?resetInferenceBackend 模式�?
-    {
-        std::lock_guard<std::mutex> lock(schedulerMutex_);
-        chunkRenderWorkerRunning_.store(false, std::memory_order_release);
-    }
-    schedulerCv_.notify_all();
-    if (chunkRenderWorkerThread_.joinable()) {
-        chunkRenderWorkerThread_.join();
-    }
+    // 1. Pause render worker before releasing vocoder services
+    if (materializationStore_)
+        materializationStore_->pauseRenderWorker();
 
     // 2. Shutdown + 销�?vocoder domain（释放旧 ONNX session�?
     if (vocoderDomain_) {
@@ -1921,13 +1895,12 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
     vocoderReady_.store(false);
     vocoderInitAttempted_.store(false);
 
-    // 3. 更新 runtime 权重（worker 已停，线程安全）
+    // 3. 更新 runtime 权重（worker 已暂停，线程安全）
     currentVocoderModelWeight_ = weight;
 
     // 4. 清所�?materialization �?RenderCache + TimeStretchCache
     if (materializationStore_) {
         const auto ids = materializationStore_->getAllActiveMaterializationIds();
-        bool hasJobs = false;
         for (const auto matId : ids) {
             std::shared_ptr<RenderCache> cache;
             if (materializationStore_->getRenderCache(matId, cache) && cache) {
@@ -1939,20 +1912,17 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
                 const double durationSec = static_cast<double>(numSamples) / 44100.0;
                 if (durationSec > 0.0) {
                     materializationStore_->enqueuePartialRender(matId, 0.0, durationSec, 512);
-                    hasJobs = true;
                 }
             }
         }
         // �?TimeStretchCache
         materializationStore_->getTimeStretchCache().clear();
-
-        // 5. 重启 chunk worker（最后执行，避免 worker �?vocoderDomain_ 重建竞态）
-        //    vocoderDomain_ 保持 nullptr，由 worker �?ensureVocoderReady() 懒创建（vocoderInitMutex_ 保护�?
-        if (hasJobs) {
-            ensureChunkRenderWorkerStarted();
-            schedulerCv_.notify_one();
-        }
     }
+
+    // 5. Resume render worker
+    if (materializationStore_)
+        materializationStore_->resumeRenderWorker();
+
     // 不重�?F0 / AccelerationDetector / GAME
 }
 
@@ -4584,8 +4554,6 @@ void OpenTuneAudioProcessor::setPitchShiftSettings(uint64_t materializationId, c
         const double durationSec = static_cast<double>(numSamples) / 44100.0;
         if (durationSec > 0.0) {
             materializationStore_->enqueuePartialRender(materializationId, 0.0, durationSec, 512);
-            ensureChunkRenderWorkerStarted();
-            schedulerCv_.notify_one();
         }
     }
 }
@@ -5074,421 +5042,304 @@ bool OpenTuneAudioProcessor::enqueueMaterializationPartialRenderById(uint64_t ma
     AppLogger::log("AutoTune: enqueueMaterializationPartialRender matId=" + juce::String(static_cast<juce::int64>(materializationId))
         + " range=[" + juce::String(relStartSeconds, 3) + "s," + juce::String(relEndSeconds, 3) + "s]");
 
-    if (materializationId == 0 || relEndSeconds <= relStartSeconds) {
+    if (materializationId == 0 || relEndSeconds <= relStartSeconds)
         return false;
-    }
-    jassert(materializationStore_ != nullptr);
+
+    // Route to the correct store (DC-owned vs processor-local)
+    MaterializationStore* store = nullptr;
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        store = dc->getMaterializationStore();
+#endif
+    if (store == nullptr)
+        store = materializationStore_.get();
 
     int hopSize = 512;
     if (vocoderDomain_) {
         const int currentHopSize = vocoderDomain_->getVocoderHopSize();
-        if (currentHopSize > 0) {
+        if (currentHopSize > 0)
             hopSize = currentHopSize;
-        }
     }
 
-    const bool requested = materializationStore_->enqueuePartialRender(materializationId, relStartSeconds, relEndSeconds, hopSize);
-    if (!requested) {
-        return false;
-    }
-
-    ensureChunkRenderWorkerStarted();
-    schedulerCv_.notify_one();
-    return true;
+    return store->enqueuePartialRender(materializationId, relStartSeconds, relEndSeconds, hopSize);
 }
 
-
 // ============================================================================
-// 分块渲染工作线程
+// 分块渲染工作线程 (moved to MaterializationStore::renderWorkerLoop)
+// processChunkRenderJob is called by the store's worker for each job.
 // ============================================================================
 
-void OpenTuneAudioProcessor::chunkRenderWorkerLoop()
+void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::PendingRenderJob& coreJob)
 {
-    AppLogger::log("RenderWorker: chunkRenderWorkerLoop started");
-
     struct WorkerRenderJob {
         MaterializationStore::PendingRenderJob coreJob;
         FrozenRenderBoundaries boundaries;
     };
 
-    // 复用 scratch buffer，避免每 chunk 重新堆分�?
+    // 复用 scratch buffer，避免每 chunk 重新堆分配
     std::vector<float> monoAudio;
     std::vector<float> sourceF0;
     std::vector<float> correctedF0;
 
-    while (true) {
-        // 1. �?Pending Chunk
-        std::shared_ptr<WorkerRenderJob> job;
+    const double relChunkStartSec = coreJob.startSeconds;
+    WorkerRenderJob job;
+    job.coreJob = std::move(coreJob);
+    auto& boundaries = job.boundaries;
 
-        {
-            std::unique_lock<std::mutex> lock(schedulerMutex_);
-            schedulerCv_.wait_for(lock, std::chrono::seconds(10), [this]() {
-                return !chunkRenderWorkerRunning_.load(std::memory_order_acquire)
-                    || (chunkRenderJobsInFlight_.load(std::memory_order_acquire) == 0
-                        && materializationStore_ != nullptr && materializationStore_->hasPendingRenderJobs());
-            });
+    // 2. 准备渲染数据（读取 Clip 中的音频和 PitchCurve）
+    std::shared_ptr<PitchCurve> pitchCurve = job.coreJob.pitchCurve;
+    int numFrames = 0;
+    bool clipFound = false;
+    bool boundariesFrozen = false;
 
-            if (!chunkRenderWorkerRunning_) {
+    if (job.coreJob.audioBuffer != nullptr) {
+        const int audioNumSamples = job.coreJob.audioBuffer->getNumSamples();
+        const int audioNumChannels = job.coreJob.audioBuffer->getNumChannels();
+        int workerHopSize = 512;
+        if (vocoderDomain_) {
+            const int currentHopSize = vocoderDomain_->getVocoderHopSize();
+            if (currentHopSize > 0)
+                workerHopSize = currentHopSize;
+        }
+
+        MaterializationSampleRange materializationRange{0, audioNumSamples};
+        if (freezeRenderBoundaries(materializationRange,
+                                   job.coreJob.startSample,
+                                   job.coreJob.endSampleExclusive,
+                                   workerHopSize,
+                                   boundaries)) {
+            boundariesFrozen = true;
+            if (audioNumChannels > 0) {
+                numFrames = boundaries.frameCount;
+                monoAudio.resize(static_cast<size_t>(boundaries.synthSampleCount), 0.0f);
+                const float* ch0 = job.coreJob.audioBuffer->getReadPointer(0);
+                for (int64_t i = 0; i < boundaries.publishSampleCount; ++i)
+                    monoAudio[static_cast<size_t>(i)] = ch0[static_cast<int>(boundaries.trueStartSample + i)];
+                ChannelLayoutLog::logChunkRender(
+                    static_cast<juce::int64>(job.coreJob.materializationId),
+                    audioNumChannels);
+                clipFound = true;
+            }
+        }
+    }
+
+    if (!clipFound || !pitchCurve || monoAudio.empty() || numFrames <= 0 || !boundariesFrozen) {
+        job.coreJob.renderCache->completeChunkRender(relChunkStartSec, job.coreJob.targetRevision,
+            RenderCache::CompletionResult::TerminalFailure);
+        return;
+    }
+
+    const double trueStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
+                                                                     TimeCoordinate::kRenderSampleRate);
+    const double trueEndSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueEndSample,
+                                                                    TimeCoordinate::kRenderSampleRate);
+    const double hopDuration = static_cast<double>(boundaries.hopSize) / RenderCache::kSampleRate;
+
+    auto snap = pitchCurve->getSnapshot();
+    if (!snap->hasRenderableCorrectedF0()) {
+        job.coreJob.renderCache->markChunkAsBlank(relChunkStartSec);
+        return;
+    }
+
+    const int f0HopSize = snap->getHopSize();
+    const double f0SampleRate = snap->getSampleRate();
+    if (f0HopSize <= 0 || f0SampleRate <= 0.0) {
+        job.coreJob.renderCache->completeChunkRender(relChunkStartSec, job.coreJob.targetRevision,
+            RenderCache::CompletionResult::TerminalFailure);
+        return;
+    }
+
+    const double f0FrameRate = f0SampleRate / static_cast<double>(f0HopSize);
+
+    // 3. 构建 F0 数据
+    const int f0StartFrame = static_cast<int>(std::floor(trueStartSeconds * f0FrameRate));
+    const int f0EndFrame = static_cast<int>(std::ceil(trueEndSeconds * f0FrameRate)) + 1;
+    const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
+
+    sourceF0.assign(static_cast<size_t>(numF0Frames), 0.0f);
+    snap->renderF0Range(f0StartFrame, f0EndFrame,
+        [&sourceF0, f0StartFrame](int frameIndex, const float* data, int length) {
+            if (!data || length <= 0) return;
+            const int offset = frameIndex - f0StartFrame;
+            if (offset < 0) return;
+            const int copyLen = std::min(length, static_cast<int>(sourceF0.size()) - offset);
+            if (copyLen > 0)
+                std::copy(data, data + copyLen, sourceF0.begin() + offset);
+        });
+
+    // ===== Pitch Shift render modifier: apply global F0 offset =====
+    if (materializationStore_ != nullptr) {
+        const auto pitchShiftSettings = materializationStore_->getPitchShiftSettings(job.coreJob.materializationId);
+        if (!pitchShiftSettings.isIdentity()) {
+            const float pitchRatio = static_cast<float>(pitchShiftSettings.getPitchRatio());
+            for (auto& f0Val : sourceF0) {
+                if (f0Val > 0.0f)
+                    f0Val *= pitchRatio;
+            }
+        }
+    }
+
+    bool hasValidF0 = false;
+    for (float f : sourceF0) {
+        if (f > 0.0f) { hasValidF0 = true; break; }
+    }
+    if (!hasValidF0) {
+        job.coreJob.renderCache->markChunkAsBlank(relChunkStartSec);
+        return;
+    }
+
+    // ===== AutoTune 轻量修音分流 =====
+    const bool lightPitchEnabled = appPreferences_ != nullptr
+        && appPreferences_->getState().shared.lightPitchCorrectionEnabled;
+
+    if (lightPitchEnabled) {
+        const auto& originalF0Full = snap->getOriginalF0();
+        const int originalF0Size = static_cast<int>(originalF0Full.size());
+        if (f0StartFrame >= 0 && f0StartFrame < originalF0Size) {
+            const bool needsVocoder = chunkNeedsVocoder(
+                sourceF0.data(), numF0Frames, originalF0Full, f0StartFrame);
+            if (!needsVocoder) {
+                if (!autoTuneShifter_)
+                    autoTuneShifter_ = std::make_unique<AutoTunePitchShifter>(RenderCache::kSampleRate);
+                else
+                    autoTuneShifter_->reset();
+
+                const int safeNumF0Frames = std::min(numF0Frames, originalF0Size - f0StartFrame);
+                auto shiftedAudio = autoTuneShifter_->shiftChunk(
+                    monoAudio.data(),
+                    static_cast<int>(boundaries.publishSampleCount),
+                    originalF0Full.data() + f0StartFrame,
+                    sourceF0.data(), safeNumF0Frames, f0FrameRate);
+
+                if (static_cast<int64_t>(shiftedAudio.size()) != boundaries.publishSampleCount)
+                    shiftedAudio.resize(static_cast<size_t>(boundaries.publishSampleCount), 0.0f);
+
+                const bool added = job.coreJob.renderCache->addChunk(
+                    boundaries.trueStartSample, boundaries.trueEndSample,
+                    std::move(shiftedAudio), job.coreJob.targetRevision);
+                if (added)
+                    job.coreJob.renderCache->completeChunkRender(relChunkStartSec,
+                        job.coreJob.targetRevision, RenderCache::CompletionResult::Succeeded);
+                else
+                    job.coreJob.renderCache->completeChunkRender(relChunkStartSec,
+                        job.coreJob.targetRevision, RenderCache::CompletionResult::TerminalFailure);
+
+                const uint64_t rbMatId = job.coreJob.materializationId;
+                if (rbMatId != 0 && materializationStore_ != nullptr) {
+                    materializationStore_->getTimeStretchCache().invalidate(rbMatId);
+                    requestStage2Rebuild(rbMatId);
+                }
+
+                AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk matId="
+                    + juce::String(static_cast<juce::int64>(job.coreJob.materializationId))
+                    + " start=" + juce::String(relChunkStartSec, 3));
+                return;
+            }
+        }
+    }
+
+    if (!ensureVocoderReady()) {
+        AppLogger::log("RenderWorker: ensureVocoderReady FAILED");
+        job.coreJob.renderCache->completeChunkRender(relChunkStartSec, job.coreJob.targetRevision,
+            RenderCache::CompletionResult::TerminalFailure);
+        return;
+    }
+
+    // 4. 构建 Mel Spectrogram
+    MelSpectrogramConfig melConfig;
+    melConfig.sampleRate = static_cast<int>(RenderCache::kSampleRate);
+    melConfig.nMels = vocoderDomain_->getMelBins();
+    melConfig.fMax = vocoderDomain_->getFMax();
+
+    auto melResult = computeLogMelSpectrogram(monoAudio.data(), static_cast<int>(monoAudio.size()), numFrames, melConfig);
+    if (!melResult.ok() || melResult.value().empty()) {
+        job.coreJob.renderCache->completeChunkRender(relChunkStartSec, job.coreJob.targetRevision,
+            RenderCache::CompletionResult::TerminalFailure);
+        return;
+    }
+
+    auto mel = std::move(melResult).value();
+    const int actualFrames = static_cast<int>(mel.size() / melConfig.nMels);
+
+    // 5. F0-to-Mel 插值
+    correctedF0.assign(static_cast<size_t>(actualFrames), 0.0f);
+    for (int i = 0; i < actualFrames; ++i) {
+        const double melTimeSec = trueStartSeconds + i * hopDuration;
+        const double srcPos = melTimeSec * f0FrameRate - static_cast<double>(f0StartFrame);
+        if (srcPos < 0.0) continue;
+        const int srcIdx0 = static_cast<int>(srcPos);
+        if (srcIdx0 >= numF0Frames) continue;
+        const int srcIdx1 = std::min(srcIdx0 + 1, numF0Frames - 1);
+        const double frac = srcPos - static_cast<double>(srcIdx0);
+        const float f0_0 = sourceF0[static_cast<size_t>(srcIdx0)];
+        const float f0_1 = sourceF0[static_cast<size_t>(srcIdx1)];
+        if (f0_0 > 0.0f && f0_1 > 0.0f)
+            correctedF0[static_cast<size_t>(i)] = static_cast<float>(std::exp(std::log(f0_0) * (1.0 - frac) + std::log(f0_1) * frac));
+        else if (f0_0 > 0.0f)
+            correctedF0[static_cast<size_t>(i)] = f0_0;
+        else if (f0_1 > 0.0f)
+            correctedF0[static_cast<size_t>(i)] = f0_1;
+    }
+
+    const bool allowTrailingExtension = !(boundaries.synthSampleCount > boundaries.publishSampleCount);
+    OpenTune::fillF0GapsForVocoder(correctedF0, snap, trueStartSeconds, trueEndSeconds,
+                                   hopDuration, f0FrameRate, allowTrailingExtension);
+
+    // 6. 提交执行
+    VocoderDomain::Job vocoderJob;
+    vocoderJob.chunkKey = (job.coreJob.materializationId << 32) | static_cast<uint64_t>(static_cast<uint32_t>(job.coreJob.startSample));
+    vocoderJob.f0 = std::move(correctedF0);
+    vocoderJob.mel = std::move(mel);
+
+    auto renderCache = job.coreJob.renderCache;
+    auto targetRevision = job.coreJob.targetRevision;
+    const uint64_t chunkMatId = job.coreJob.materializationId;
+    double jobStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
+                                                              TimeCoordinate::kRenderSampleRate);
+    const FrozenRenderBoundaries frozenBoundaries = boundaries;
+
+    vocoderJob.onComplete = [this, renderCache, targetRevision, chunkMatId, jobStartSeconds, frozenBoundaries](bool success, const juce::String& error, const std::vector<float>& audio) {
+        const auto& boundaries = frozenBoundaries;
+
+        if (success) {
+            std::vector<float> publishedAudio;
+            if (!preparePublishedAudioFromSynthesis(boundaries, audio, publishedAudio)) {
+                AppLogger::error("ChunkRender: synthesis length mismatch for RenderCache publish matId="
+                    + juce::String(static_cast<juce::int64>(chunkMatId)));
+                renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
+                if (materializationStore_)
+                    materializationStore_->notifyRenderWorker();
                 return;
             }
 
-            // �?materialization store render queue 拉取下一�?pending chunk
-            if (materializationStore_ != nullptr) {
-                MaterializationStore::PendingRenderJob pendingJob;
-                if (materializationStore_->pullNextPendingRenderJob(pendingJob)) {
-                    job = std::make_shared<WorkerRenderJob>();
-                    job->coreJob = std::move(pendingJob);
-                }
-            }
-
-        }
-
-        if (!job) {
-            // �?Pending 任务，等待唤�?
-            continue;
-        }
-
-        const double relChunkStartSec = job->coreJob.startSeconds;
-        auto& boundaries = job->boundaries;
-
-        // 2. 准备渲染数据（读�?Clip 中的音频�?PitchCurve�?
-        const auto& coreJob = job->coreJob;
-        std::shared_ptr<PitchCurve> pitchCurve = coreJob.pitchCurve;
-        int numFrames = 0;
-        bool clipFound = false;
-        bool boundariesFrozen = false;
-
-        if (coreJob.audioBuffer != nullptr) {
-            const int audioNumSamples = coreJob.audioBuffer->getNumSamples();
-            const int audioNumChannels = coreJob.audioBuffer->getNumChannels();
-            int workerHopSize = 512;
-            if (vocoderDomain_) {
-                const int currentHopSize = vocoderDomain_->getVocoderHopSize();
-                if (currentHopSize > 0) {
-                    workerHopSize = currentHopSize;
-                }
-            }
-
-            MaterializationSampleRange materializationRange{0, audioNumSamples};
-            if (freezeRenderBoundaries(materializationRange,
-                                       coreJob.startSample,
-                                       coreJob.endSampleExclusive,
-                                       workerHopSize,
-                                       boundaries)) {
-                boundariesFrozen = true;
-
-                if (audioNumChannels > 0) {
-                    numFrames = boundaries.frameCount;
-                    monoAudio.resize(static_cast<size_t>(boundaries.synthSampleCount), 0.0f);
-
-                    // Per channel-layout-policy spec: vocoder mel input is unconditionally
-                    // sourced from channel 0 (L) of the stored audio. No averaging, no
-                    // active-channel detection. Storage is guaranteed 1 or 2 channels, and
-                    // ch 0 is "L" in stereo or "the mono channel" in mono �?either way the
-                    // canonical mono input.
-                    const float* ch0 = coreJob.audioBuffer->getReadPointer(0);
-                    for (int64_t i = 0; i < boundaries.publishSampleCount; ++i) {
-                        monoAudio[static_cast<size_t>(i)] = ch0[static_cast<int>(boundaries.trueStartSample + i)];
-                    }
-                    ChannelLayoutLog::logChunkRender(
-                        static_cast<juce::int64>(coreJob.materializationId),
-                        audioNumChannels);
-                    clipFound = true;
-                }
-            }
-        }
-
-        if (!clipFound || !pitchCurve || monoAudio.empty() || numFrames <= 0 || !boundariesFrozen) {
-            coreJob.renderCache->completeChunkRender(relChunkStartSec, coreJob.targetRevision,
-                RenderCache::CompletionResult::TerminalFailure);
-            schedulerCv_.notify_one();
-            continue;
-        }
-
-        const double trueStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
-                                                                         TimeCoordinate::kRenderSampleRate);
-        const double trueEndSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueEndSample,
-                                                                        TimeCoordinate::kRenderSampleRate);
-        const double hopDuration = static_cast<double>(boundaries.hopSize) / RenderCache::kSampleRate;
-
-        auto snap = pitchCurve->getSnapshot();
-        if (!snap->hasRenderableCorrectedF0()) {
-            coreJob.renderCache->markChunkAsBlank(relChunkStartSec);
-            schedulerCv_.notify_one();
-            continue;
-        }
-
-        const int f0HopSize = snap->getHopSize();
-        const double f0SampleRate = snap->getSampleRate();
-        if (f0HopSize <= 0 || f0SampleRate <= 0.0) {
-            coreJob.renderCache->completeChunkRender(relChunkStartSec, coreJob.targetRevision,
-                RenderCache::CompletionResult::TerminalFailure);
-            schedulerCv_.notify_one();
-            continue;
-        }
-
-        const double f0FrameRate = f0SampleRate / static_cast<double>(f0HopSize);
-
-        // 3. 构�?F0 数据
-        const int f0StartFrame = static_cast<int>(std::floor(trueStartSeconds * f0FrameRate));
-        const int f0EndFrame = static_cast<int>(std::ceil(trueEndSeconds * f0FrameRate)) + 1;
-        const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
-
-        sourceF0.assign(static_cast<size_t>(numF0Frames), 0.0f);
-        snap->renderF0Range(f0StartFrame, f0EndFrame,
-            [&sourceF0, f0StartFrame](int frameIndex, const float* data, int length) {
-                if (!data || length <= 0) return;
-                const int offset = frameIndex - f0StartFrame;
-                if (offset < 0) return;
-                const int copyLen = std::min(length, static_cast<int>(sourceF0.size()) - offset);
-                if (copyLen > 0) {
-                    std::copy(data, data + copyLen, sourceF0.begin() + offset);
-                }
-            });
-
-        // ===== Pitch Shift render modifier: apply global F0 offset =====
-        // PitchShiftSettings is a clip-level modifier that shifts all F0 values
-        // by a constant ratio BEFORE the AutoTune/vocoder split decision.
-        // This ensures both paths (light pitch correction and vocoder) see the
-        // shifted F0 as their "corrected" target.
-        if (materializationStore_ != nullptr) {
-            const auto pitchShiftSettings = materializationStore_->getPitchShiftSettings(coreJob.materializationId);
-            if (!pitchShiftSettings.isIdentity()) {
-                const float pitchRatio = static_cast<float>(pitchShiftSettings.getPitchRatio());
-                for (auto& f0Val : sourceF0) {
-                    if (f0Val > 0.0f) {
-                        f0Val *= pitchRatio;
-                    }
-                }
-            }
-        }
-
-        bool hasValidF0 = false;
-        for (float f : sourceF0) {
-            if (f > 0.0f) {
-                hasValidF0 = true;
-                break;
-            }
-        }
-
-        if (!hasValidF0) {
-            coreJob.renderCache->markChunkAsBlank(relChunkStartSec);
-            schedulerCv_.notify_one();
-            continue;
-        }
-
-        // ===== AutoTune 轻量修音分流 =====
-        const bool lightPitchEnabled = appPreferences_ != nullptr
-            && appPreferences_->getState().shared.lightPitchCorrectionEnabled;
-
-        if (lightPitchEnabled) {
-            const auto& originalF0Full = snap->getOriginalF0();
-            const int originalF0Size = static_cast<int>(originalF0Full.size());
-
-            // 安全检查：f0StartFrame 必须在原�?F0 范围�?
-            if (f0StartFrame >= 0 && f0StartFrame < originalF0Size) {
-                const bool needsVocoder = chunkNeedsVocoder(
-                    sourceF0.data(), numF0Frames, originalF0Full, f0StartFrame);
-
-                if (!needsVocoder) {
-                    // === AutoTune cycle-resampling pitch-shift 路径 ===
-                    if (!autoTuneShifter_) {
-                        autoTuneShifter_ = std::make_unique<AutoTunePitchShifter>(
-                            RenderCache::kSampleRate);
-                    } else {
-                        autoTuneShifter_->reset();
-                    }
-
-                    const int safeNumF0Frames = std::min(numF0Frames, originalF0Size - f0StartFrame);
-                    auto shiftedAudio = autoTuneShifter_->shiftChunk(
-                        monoAudio.data(),
-                        static_cast<int>(boundaries.publishSampleCount),
-                        originalF0Full.data() + f0StartFrame,
-                        sourceF0.data(),
-                        safeNumF0Frames,
-                        f0FrameRate);
-
-                    // AutoTune 保证输出长度 == 输入长度，防御性截�?
-                    if (static_cast<int64_t>(shiftedAudio.size()) != boundaries.publishSampleCount) {
-                        shiftedAudio.resize(static_cast<size_t>(boundaries.publishSampleCount), 0.0f);
-                    }
-
-                    const bool added = coreJob.renderCache->addChunk(
-                        boundaries.trueStartSample, boundaries.trueEndSample,
-                        std::move(shiftedAudio), coreJob.targetRevision);
-
-                    if (added) {
-                        coreJob.renderCache->completeChunkRender(relChunkStartSec,
-                            coreJob.targetRevision, RenderCache::CompletionResult::Succeeded);
-                    } else {
-                        coreJob.renderCache->completeChunkRender(relChunkStartSec,
-                            coreJob.targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                    }
-
-                    // Stage 2 失效（与声码器路径一致）
-                    const uint64_t rbMatId = coreJob.materializationId;
-                    if (rbMatId != 0 && materializationStore_ != nullptr) {
-                        materializationStore_->getTimeStretchCache().invalidate(rbMatId);
-                        requestStage2Rebuild(rbMatId);
-                    }
-
-                    AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk matId="
-                        + juce::String(static_cast<juce::int64>(coreJob.materializationId))
-                        + " start=" + juce::String(relChunkStartSec, 3));
-
-                    schedulerCv_.notify_one();
-                    continue;  // 跳过声码器路�?
-                }
-            }
-        }
-
-        if (!ensureVocoderReady()) {
-            AppLogger::log("RenderWorker: ensureVocoderReady FAILED");
-            coreJob.renderCache->completeChunkRender(relChunkStartSec, coreJob.targetRevision,
-                RenderCache::CompletionResult::TerminalFailure);
-            schedulerCv_.notify_one();
-            continue;
-        }
-
-        // 4. 构�?Mel Spectrogram
-        MelSpectrogramConfig melConfig;
-        melConfig.sampleRate = static_cast<int>(RenderCache::kSampleRate);
-        melConfig.nMels = vocoderDomain_->getMelBins();
-        melConfig.fMax = vocoderDomain_->getFMax();
-
-        auto melResult = computeLogMelSpectrogram(monoAudio.data(), static_cast<int>(monoAudio.size()), numFrames, melConfig);
-        if (!melResult.ok() || melResult.value().empty()) {
-            coreJob.renderCache->completeChunkRender(relChunkStartSec, coreJob.targetRevision,
-                RenderCache::CompletionResult::TerminalFailure);
-            schedulerCv_.notify_one();
-            continue;
-        }
-
-        auto mel = std::move(melResult).value();
-        const int actualFrames = static_cast<int>(mel.size() / melConfig.nMels);
-
-        // 5. F0-to-Mel 插�?
-        correctedF0.assign(static_cast<size_t>(actualFrames), 0.0f);
-        for (int i = 0; i < actualFrames; ++i) {
-            const double melTimeSec = trueStartSeconds + i * hopDuration;
-            const double srcPos = melTimeSec * f0FrameRate - static_cast<double>(f0StartFrame);
-            if (srcPos < 0.0) continue;
-
-            const int srcIdx0 = static_cast<int>(srcPos);
-            if (srcIdx0 >= numF0Frames) continue;
-            const int srcIdx1 = std::min(srcIdx0 + 1, numF0Frames - 1);
-            const double frac = srcPos - static_cast<double>(srcIdx0);
-
-            const float f0_0 = sourceF0[static_cast<size_t>(srcIdx0)];
-            const float f0_1 = sourceF0[static_cast<size_t>(srcIdx1)];
-
-            if (f0_0 > 0.0f && f0_1 > 0.0f) {
-                correctedF0[static_cast<size_t>(i)] = static_cast<float>(std::exp(std::log(f0_0) * (1.0 - frac) + std::log(f0_1) * frac));
-            } else if (f0_0 > 0.0f) {
-                correctedF0[static_cast<size_t>(i)] = f0_0;
-            } else if (f0_1 > 0.0f) {
-                correctedF0[static_cast<size_t>(i)] = f0_1;
-            }
-        }
-
-        const bool allowTrailingExtension = !(boundaries.synthSampleCount > boundaries.publishSampleCount);
-        OpenTune::fillF0GapsForVocoder(correctedF0,
-                                       snap,
-                                       trueStartSeconds,
-                                       trueEndSeconds,
-                                       hopDuration,
-                                       f0FrameRate,
-                                       allowTrailingExtension);
-
-        // 6. 提交执行
-        VocoderDomain::Job vocoderJob;
-        vocoderJob.chunkKey = (coreJob.materializationId << 32) | static_cast<uint64_t>(static_cast<uint32_t>(coreJob.startSample));
-        vocoderJob.f0 = std::move(correctedF0);
-        vocoderJob.mel = std::move(mel);
-
-        auto renderCache = coreJob.renderCache;
-        auto targetRevision = coreJob.targetRevision;
-        const uint64_t chunkMatId = coreJob.materializationId;
-        double jobStartSeconds = TimeCoordinate::samplesToSeconds(job->boundaries.trueStartSample,
-                                                                  TimeCoordinate::kRenderSampleRate);
-        const FrozenRenderBoundaries frozenBoundaries = job->boundaries;
-
-        chunkRenderJobsInFlight_.fetch_add(1, std::memory_order_acq_rel);
-
-        vocoderJob.onComplete = [this, renderCache, targetRevision, chunkMatId, jobStartSeconds, frozenBoundaries](bool success, const juce::String& error, const std::vector<float>& audio) {
-            chunkRenderJobsInFlight_.fetch_sub(1, std::memory_order_acq_rel);
-            const auto& boundaries = frozenBoundaries;
-
-            if (success) {
-                std::vector<float> publishedAudio;
-                if (!preparePublishedAudioFromSynthesis(boundaries, audio, publishedAudio)) {
-                    AppLogger::error("ChunkRender: synthesis length mismatch for RenderCache publish matId="
-                        + juce::String(static_cast<juce::int64>(chunkMatId))
-                        + " start=" + juce::String(jobStartSeconds, 3)
-                        + " expectedSynthSamples=" + juce::String(static_cast<juce::int64>(boundaries.synthSampleCount))
-                        + " expectedPublishSamples=" + juce::String(static_cast<juce::int64>(boundaries.publishSampleCount))
-                        + " actualSamples=" + juce::String(static_cast<juce::int64>(audio.size())));
-                    renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                    schedulerCv_.notify_one();
-                    return;
-                }
-
-                const bool added = renderCache->addChunk(
-                    boundaries.trueStartSample,
-                    boundaries.trueEndSample,
-                    std::move(publishedAudio),
-                    targetRevision);
-                if (!added) {
-                    AppLogger::error("ChunkRender: RenderCache rejected published chunk matId="
-                        + juce::String(static_cast<juce::int64>(chunkMatId))
-                        + " start=" + juce::String(jobStartSeconds, 3)
-                        + " targetRevision=" + juce::String(static_cast<juce::int64>(targetRevision))
-                        + " startSample=" + juce::String(static_cast<juce::int64>(boundaries.trueStartSample))
-                        + " endSample=" + juce::String(static_cast<juce::int64>(boundaries.trueEndSample)));
-                    renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                    schedulerCv_.notify_one();
-                    return;
-                }
-
-                renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::Succeeded);
-
-                // ⚡️ vocal-time-stretch §7 (Journey-1 fix 2026-05-12) �?Stage 2
-                // depends on Stage 1's RenderCache via readPlaybackAudio.  When
-                // a chunk is freshly published, any prior Stage 2 cache entry
-                // captured before this chunk landed is now stale: the worker
-                // had read the OLD RenderCache (or an empty slot for that chunk)
-                // and produced stretched output that doesn't include the new
-                // pitch correction.
-                //
-                // Without this trigger, the user-visible symptom (per Journey 1
-                // testing): "edit pitch then time-stretched, can't hear pitch
-                // change until I edit again to bump revisions and retrigger
-                // Stage 2".
-                //
-                // Fix: invalidate Stage 2 cache + enqueue a rebuild so the
-                // freshly rendered chunk gets composed into a new Stage 2 PCM.
-                // requestStage2Rebuild dedups on matId, so multiple chunk
-                // completions in quick succession collapse to a single rebuild.
-                // For identity-TimeGrid clips, runStage2RebuildForMaterialization
-                // bails out early after invalidating �?net cost is a worker
-                // wakeup + early return.
-                if (chunkMatId != 0 && materializationStore_ != nullptr) {
-                    materializationStore_->getTimeStretchCache().invalidate(chunkMatId);
-                    requestStage2Rebuild(chunkMatId);
-                }
-            } else {
-                AppLogger::error("ChunkRender: vocoder failed matId="
-                    + juce::String(static_cast<juce::int64>(chunkMatId))
-                    + " start=" + juce::String(jobStartSeconds, 3)
-                    + " targetRevision=" + juce::String(static_cast<juce::int64>(targetRevision))
-                    + " error=" + error);
+            const bool added = renderCache->addChunk(boundaries.trueStartSample, boundaries.trueEndSample,
+                                                     std::move(publishedAudio), targetRevision);
+            if (!added) {
+                AppLogger::error("ChunkRender: RenderCache rejected published chunk matId="
+                    + juce::String(static_cast<juce::int64>(chunkMatId)));
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
+                if (materializationStore_)
+                    materializationStore_->notifyRenderWorker();
+                return;
             }
-            schedulerCv_.notify_one();
-        };
 
-        vocoderDomain_->submit(std::move(vocoderJob));
-    }
+            renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::Succeeded);
+
+            if (chunkMatId != 0 && materializationStore_ != nullptr) {
+                materializationStore_->getTimeStretchCache().invalidate(chunkMatId);
+                requestStage2Rebuild(chunkMatId);
+            }
+        } else {
+            AppLogger::error("ChunkRender: vocoder failed matId="
+                + juce::String(static_cast<juce::int64>(chunkMatId))
+                + " error=" + error);
+            renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
+        }
+        if (materializationStore_)
+            materializationStore_->notifyRenderWorker();
+    };
+
+    vocoderDomain_->submit(std::move(vocoderJob));
 }
 
 // ============================================================================
