@@ -2135,7 +2135,7 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
     {
         ensureF0Ready();
         dc->connectToStores(materializationStore_, sourceStore_,
-                            resamplingManager_.get(), f0Service_,
+                            resamplingManager_, f0Service_,
                             [this](std::function<void()> work) {
                                 static std::atomic<uint64_t> s_key{0};
                                 materializationRefreshService_.submit(

@@ -56,7 +56,7 @@ public:
 
     void connectToStores(std::shared_ptr<MaterializationStore> materializationStore,
                          std::shared_ptr<SourceStore> sourceStore,
-                         class ResamplingManager* resamplingManager,
+                         std::shared_ptr<ResamplingManager> resamplingManager,
                          std::shared_ptr<F0InferenceService> f0Service,
                          std::function<void(std::function<void()>&&)> scheduleAsyncWork,
                          std::function<void()> reclaimCallback);
@@ -69,7 +69,7 @@ public:
     std::vector<PlaybackRegionProjection> getEditorSelectionPlaybackRegionProjections() const;
     std::optional<PlaybackRegionProjection> getFocusedEditorPlaybackRegionProjection() const;
     bool referencesMaterialization(uint64_t materializationId) const;
-    bool requestBirthForFocusedEditorPlaybackRegion();
+    int refreshAllAudioModifications();
     void setEditorViewSelectionPlaybackRegions(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
     void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
@@ -131,7 +131,7 @@ private:
 
     std::shared_ptr<MaterializationStore> materializationStore_;
     std::shared_ptr<SourceStore> sourceStore_;
-    class ResamplingManager* resamplingManager_ = nullptr;
+    std::shared_ptr<ResamplingManager> resamplingManager_;
     std::shared_ptr<F0InferenceService> f0Service_;
     std::function<void(std::function<void()>&&)> scheduleAsyncWork_;
     std::function<void()> onReclaimNeeded_;
@@ -151,7 +151,7 @@ private:
     std::vector<OpenTunePlaybackRenderer*> publishModelChange();
     static void refreshRegisteredRenderers(const std::vector<OpenTunePlaybackRenderer*>& renderers);
     void reconcileEditorSelectionPlaybackRegions();
-    bool birthMaterializationForRegion(PlaybackRegion& region);
+    bool birthMaterializationForModification(AudioModification& modification);
     void scheduleAsyncF0Extraction(uint64_t materializationId,
                                    std::vector<float> channel0Data,
                                    double sourceSampleRate);

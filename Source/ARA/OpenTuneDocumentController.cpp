@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <set>
 #include <utility>
 
 namespace OpenTune {
@@ -111,14 +112,14 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
 void OpenTuneDocumentController::connectToStores(
     std::shared_ptr<MaterializationStore> materializationStore,
     std::shared_ptr<SourceStore> sourceStore,
-    ResamplingManager* resamplingManager,
+    std::shared_ptr<ResamplingManager> resamplingManager,
     std::shared_ptr<F0InferenceService> f0Service,
     std::function<void(std::function<void()>&&)> scheduleAsyncWork,
     std::function<void()> reclaimCallback)
 {
     materializationStore_ = std::move(materializationStore);
     sourceStore_ = std::move(sourceStore);
-    resamplingManager_ = resamplingManager;
+    resamplingManager_ = std::move(resamplingManager);
     f0Service_ = std::move(f0Service);
     scheduleAsyncWork_ = std::move(scheduleAsyncWork);
     onReclaimNeeded_ = std::move(reclaimCallback);
@@ -199,19 +200,48 @@ bool OpenTuneDocumentController::referencesMaterialization(uint64_t materializat
     return false;
 }
 
-bool OpenTuneDocumentController::requestBirthForFocusedEditorPlaybackRegion()
+int OpenTuneDocumentController::refreshAllAudioModifications()
 {
-    const auto focusedRegion = getFocusedEditorPlaybackRegionProjection();
-    if (!focusedRegion.has_value() || focusedRegion->audioModificationPersistentId.isEmpty())
-        return false;
+    std::set<juce::String> uniqueModIds;
+    for (const auto& region : playbackRegions_)
+    {
+        if (region.hasValidPlacement())
+            uniqueModIds.insert(region.audioModificationPersistentId);
+    }
 
-    auto* region = findPlaybackRegion(focusedRegion->playbackRegion);
-    if (region == nullptr)
-        return false;
+    if (uniqueModIds.empty())
+        return 0;
 
-    const bool born = birthMaterializationForRegion(*region);
-    refreshRegisteredRenderers(publishModelChange());
-    return born;
+    int refreshedCount = 0;
+    bool retiredAnyOldMaterialization = false;
+
+    for (const auto& modId : uniqueModIds)
+    {
+        auto* modification = findAudioModification(modId);
+        if (modification == nullptr)
+            continue;
+
+        const uint64_t oldMaterializationId = modification->materializationId;
+
+        if (birthMaterializationForModification(*modification))
+        {
+            ++refreshedCount;
+
+            if (oldMaterializationId != 0 && oldMaterializationId != modification->materializationId)
+            {
+                materializationStore_->retireMaterialization(oldMaterializationId);
+                retiredAnyOldMaterialization = true;
+            }
+        }
+    }
+
+    if (refreshedCount > 0)
+        refreshRegisteredRenderers(publishModelChange());
+
+    if (retiredAnyOldMaterialization && onReclaimNeeded_)
+        onReclaimNeeded_();
+
+    return refreshedCount;
 }
 
 void OpenTuneDocumentController::setEditorViewSelectionPlaybackRegions(
@@ -694,43 +724,42 @@ void OpenTuneDocumentController::reconcileEditorSelectionPlaybackRegions()
         editorSelectionPlaybackRegions_.end());
 }
 
-bool OpenTuneDocumentController::birthMaterializationForRegion(PlaybackRegion& region)
+bool OpenTuneDocumentController::birthMaterializationForModification(AudioModification& modification)
 {
-    auto* modification = findAudioModification(region.audioModificationPersistentId);
-    if (modification == nullptr || modification->persistentId.isEmpty() || modification->sourcePersistentId.isEmpty())
+    if (modification.persistentId.isEmpty() || modification.sourcePersistentId.isEmpty())
         return false;
 
-    auto* source = findAudioSource(modification->sourcePersistentId);
+    auto* source = findAudioSource(modification.sourcePersistentId);
     if (source == nullptr || !source->canReadSamples())
     {
-        modification->birthState = AudioModificationBirthState::WaitingForSource;
+        modification.birthState = AudioModificationBirthState::WaitingForSource;
         return false;
     }
 
     if (materializationStore_ == nullptr || sourceStore_ == nullptr)
     {
-        modification->birthState = AudioModificationBirthState::Failed;
+        modification.birthState = AudioModificationBirthState::Failed;
         return false;
     }
 
-    modification->birthState = AudioModificationBirthState::Rendering;
-    ++modification->birthRevision;
+    modification.birthState = AudioModificationBirthState::Rendering;
+    ++modification.birthRevision;
 
     // 1. Determine source ID and window
-    const auto sourceId = modification->sourceId != 0
-        ? modification->sourceId
+    const auto sourceId = modification.sourceId != 0
+        ? modification.sourceId
         : static_cast<uint64_t>(std::hash<std::string>{}(source->getIdentity().persistentId.toStdString()));
 
     auto readerLease = source->shareReaderLease();
     if (readerLease == nullptr || source->getShape().numChannels <= 0
         || source->getShape().numSamples <= 0 || source->getShape().sourceSampleRate <= 0.0)
     {
-        modification->birthState = AudioModificationBirthState::Failed;
+        modification.birthState = AudioModificationBirthState::Failed;
         return false;
     }
 
-    const auto sourceWindow = modification->contentWindow.sourceId != 0
-        ? modification->contentWindow
+    const auto sourceWindow = modification.contentWindow.sourceId != 0
+        ? modification.contentWindow
         : SourceWindow{sourceId, 0.0, source->getShape().durationSeconds()};
 
     const double sourceSampleRate = source->getShape().sourceSampleRate;
@@ -751,7 +780,7 @@ bool OpenTuneDocumentController::birthMaterializationForRegion(PlaybackRegion& r
 
     if (windowSamples <= 0)
     {
-        modification->birthState = AudioModificationBirthState::Failed;
+        modification.birthState = AudioModificationBirthState::Failed;
         return false;
     }
 
@@ -777,7 +806,7 @@ bool OpenTuneDocumentController::birthMaterializationForRegion(PlaybackRegion& r
                                                 static_cast<int>(chunkSamples),
                                                 channelPointers.data()))
             {
-                modification->birthState = AudioModificationBirthState::Failed;
+                modification.birthState = AudioModificationBirthState::Failed;
                 return false;
             }
 
@@ -806,7 +835,7 @@ bool OpenTuneDocumentController::birthMaterializationForRegion(PlaybackRegion& r
             : TimeCoordinate::kRenderSampleRate;
         if (sourceStore_->createSource(std::move(sourceRequest), sourceId) != sourceId)
         {
-            modification->birthState = AudioModificationBirthState::Failed;
+            modification.birthState = AudioModificationBirthState::Failed;
             return false;
         }
     }
@@ -858,7 +887,7 @@ bool OpenTuneDocumentController::birthMaterializationForRegion(PlaybackRegion& r
     const uint64_t materializationId = materializationStore_->createMaterialization(std::move(matRequest));
     if (materializationId == 0)
     {
-        modification->birthState = AudioModificationBirthState::Failed;
+        modification.birthState = AudioModificationBirthState::Failed;
         return false;
     }
 
@@ -866,17 +895,17 @@ bool OpenTuneDocumentController::birthMaterializationForRegion(PlaybackRegion& r
         materializationStore_->getMaterializationAudioDurationById(materializationId);
 
     // 8. Set modification fields and notify ARA host
-    modification->sourceId = sourceId;
-    modification->contentWindow = SourceWindow{sourceId,
+    modification.sourceId = sourceId;
+    modification.contentWindow = SourceWindow{sourceId,
                                                sourceWindow.sourceStartSeconds,
                                                sourceWindow.sourceEndSeconds};
-    modification->materializationId = materializationId;
-    modification->materializationRevision = 0;
-    modification->materializationDurationSeconds = materializationDurationSeconds;
-    modification->birthState = AudioModificationBirthState::Ready;
-    ++modification->contentRevision;
-    if (modification->audioModification != nullptr)
-        modification->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+    modification.materializationId = materializationId;
+    modification.materializationRevision = 0;
+    modification.materializationDurationSeconds = materializationDurationSeconds;
+    modification.birthState = AudioModificationBirthState::Ready;
+    ++modification.contentRevision;
+    if (modification.audioModification != nullptr)
+        modification.audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
 
     // 9. Schedule async F0 extraction
     scheduleAsyncF0Extraction(materializationId, std::move(channel0Data), sourceSampleRate);

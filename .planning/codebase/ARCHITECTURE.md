@@ -194,10 +194,11 @@ OpenTune is an AI-powered pitch correction application (开源AI智能修音软�
 
 1. Host creates/updates `AudioSource`, `AudioModification`, and `PlaybackRegion` objects through JUCE ARA callbacks on `OpenTuneDocumentController`.
 2. `OpenTuneDocumentController` projects the official ARA graph into `PlaybackRegionProjection`: modification content/materialization plus playback placement.
-3. Host selection arrives through `OpenTuneEditorView::doNotifySelection()` as an ARA `ViewSelection`; the focused effective playback region becomes the UI/materialization birth target.
-4. `requestBirthForFocusedEditorPlaybackRegion()` calls `birthAraMaterializationWithOriginalF0()`, which reads ARA source samples via the host reader lease, extracts F0 via RMVPE, and creates the materialization.
-5. Audio source PCM remains host-owned and is streamed from ARA sample access; the plugin stores binding identity/revision metadata and does not duplicate the full source buffer.
-6. ARA persistency: `doStoreObjectsToStream()` respects `ARAStoreObjectsFilter` — when non-null, only writes bindings for filter-specified AudioModifications; when null, writes all renderable modifications. `doRestoreObjectsFromStream()` maps archived persistent IDs through `ARARestoreObjectsFilter` and applies pending bindings when modification objects arrive.
+3. Read Audio triggers `OpenTuneDocumentController::refreshAllAudioModifications()`, which deduplicates currently placed regions by unique `AudioModification`.
+4. `birthMaterializationForModification()` reads ARA source samples via the host reader lease, writes SourceStore metadata, creates one MaterializationStore entry per AudioModification, notifies content changed, and schedules F0 extraction.
+5. `PlaybackRegion` remains placement only: start, offset, duration, and the AudioModification identity it places. Multiple PlaybackRegions can place the same materialized content, including overlaps.
+6. Audio source PCM remains host-owned and is streamed from ARA sample access; the plugin stores binding identity/revision metadata and does not duplicate the full source buffer.
+7. ARA persistency: `doStoreObjectsToStream()` respects `ARAStoreObjectsFilter` — when non-null, only writes bindings for filter-specified AudioModifications; when null, writes all renderable modifications. `doRestoreObjectsFromStream()` maps archived persistent IDs through `ARARestoreObjectsFilter` and applies pending bindings when modification objects arrive.
 
 ### VST3 Capture Pipeline
 

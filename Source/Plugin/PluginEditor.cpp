@@ -492,8 +492,18 @@ OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()
                                                     makePianoRollLocalProjection(region)));
         }
 
+        // ViewSelection 优先；否则选 timeline 最早的已 materialized placement
         if (const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection()) {
             sync.activeMaterializationId = focusedRegion->materializationId;
+        }
+
+        if (sync.activeMaterializationId == 0 && !sync.placements.empty()) {
+            const auto earliest = std::min_element(sync.placements.begin(),
+                                                   sync.placements.end(),
+                                                   [](const auto& a, const auto& b) {
+                                                       return a.projection.timelineStartSeconds < b.projection.timelineStartSeconds;
+                                                   });
+            sync.activeMaterializationId = earliest->materializationId;
         }
 
         const bool activeBelongsToPlacements = std::any_of(sync.placements.begin(),
@@ -979,36 +989,37 @@ void OpenTuneAudioProcessorEditor::recordRequested()
                                                "This VST3 instance is not ready for audio capture or ARA reading.");
         return;
     }
+
     AppLogger::log("VST3 recordRequested mode=ara-bound processor="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(&processorRef_))
         + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc)));
-    const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection();
-    if (!focusedRegion.has_value() || focusedRegion->audioModificationPersistentId.isEmpty()) {
+
+    const auto allRegions = dc->getPlaybackRegionProjections();
+    if (allRegions.empty()) {
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
                                                "Read Audio",
-                                               "No ARA editor selection playback region is available.");
+                                               "No audio region is available on this track.");
         return;
     }
 
-    // ARA path: recordRequested is the explicit materialization birth boundary.
-    uint64_t materializationId = focusedRegion->materializationId;
-    if (materializationId == 0)
-    {
-        // Explicit birth request: recordRequested is the sole entry point.
-        dc->requestBirthForFocusedEditorPlaybackRegion();
-
-        waitingForAraMaterialization_ = true;
-        araWaitStartMs_ = juce::Time::getApproximateMillisecondCounter();
-        autoRenderOverlay_.setMessageText(
-            juce::String::fromUTF8("\xe9\x9f\xb3\xe9\xa2\x91\xe5\xa4\x84\xe7\x90\x86\xe4\xb8\xad"),
-            "Audio data is being processed. The region will appear shortly.");
-        autoRenderOverlay_.setVisible(true);
+    const int refreshed = dc->refreshAllAudioModifications();
+    if (refreshed == 0) {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "Read Audio",
+                                               "Audio regions could not be processed.");
         return;
     }
 
-    syncMaterializationProjectionToPianoRoll();
-    AppLogger::log("RecordTrace: VST3 recordRequested materializationId="
-        + juce::String(static_cast<juce::int64>(materializationId)));
+    AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
+        + " AudioModification(s) from " + juce::String(static_cast<int>(allRegions.size()))
+        + " playback region(s)");
+
+    waitingForAraMaterialization_ = true;
+    araWaitStartMs_ = juce::Time::getApproximateMillisecondCounter();
+    autoRenderOverlay_.setMessageText(
+        juce::String::fromUTF8("\xe9\x9f\xb3\xe9\xa2\x91\xe5\xa4\x84\xe7\x90\x86\xe4\xb8\xad"),
+        "Audio data is being processed. The region will appear shortly.");
+    autoRenderOverlay_.setVisible(true);
 #endif
 }
 
