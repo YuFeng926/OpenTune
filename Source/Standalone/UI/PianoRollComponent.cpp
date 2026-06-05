@@ -281,8 +281,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         return editedMaterializationId_;
     };
     toolCtx.getTimeGridSnapshot = [this]() -> std::shared_ptr<const TimeGridSnapshot> {
-        if (processor_ == nullptr || editedMaterializationId_ == 0) return nullptr;
-        return processor_->getMaterializationTimeGridById(editedMaterializationId_);
+        if (!contentAccess_ || editedMaterializationId_ == 0) return nullptr;
+        return contentAccess_->getTimeGrid(editedMaterializationId_);
     };
     toolCtx.commitTimeGrid = [this](std::shared_ptr<const TimeGridSnapshot> newSnap,
                                      std::shared_ptr<const TimeGridSnapshot> oldSnap,
@@ -436,14 +436,15 @@ bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrection
     AppLogger::log("AutoTune: commitCompleted calling commitAutoTuneGeneratedNotes noteCount="
         + juce::String(static_cast<int>(completed.notes.size())));
 
-    if (!processor_->commitAutoTuneGeneratedNotesByMaterializationId(completed.materializationIdSnapshot,
-                                                             completed.notes,
-                                                             completed.autoStartFrame,
-                                                             completed.autoEndFrame + 1,
-                                                             completed.retuneSpeed,
-                                                             completed.vibratoDepth,
-                                                             completed.vibratoRate,
-                                                             completed.audioSampleRate)) {
+    if (!contentCommands_->commitAutoTuneGeneratedNotes(
+            completed.materializationIdSnapshot,
+            completed.notes,
+            completed.autoStartFrame,
+            completed.autoEndFrame + 1,
+            completed.retuneSpeed,
+            completed.vibratoDepth,
+            completed.vibratoRate,
+            completed.audioSampleRate)) {
         AppLogger::log("AutoTune: commitAutoTuneGeneratedNotes returned false");
         return false;
     }
@@ -451,7 +452,7 @@ bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrection
     AppLogger::log("AutoTune: commitAutoTuneGeneratedNotes succeeded, refreshing notes");
     refreshEditedMaterializationNotes();
 
-    auto committedCurve = processor_->getMaterializationPitchCurveById(completed.materializationIdSnapshot);
+    auto committedCurve = contentAccess_->getPitchCurve(completed.materializationIdSnapshot);
     if (committedCurve == nullptr) {
         AppLogger::log("AutoTune: commitCompleted abort - committedCurve null after commit");
         return false;
@@ -505,6 +506,13 @@ void PianoRollComponent::setProcessor(OpenTuneAudioProcessor* processor)
     refreshEditedMaterializationNotes();
 }
 
+void PianoRollComponent::setContentProviders(std::unique_ptr<MaterializationContentAccess> access,
+                                              std::unique_ptr<MaterializationContentCommands> commands)
+{
+    contentAccess_ = std::move(access);
+    contentCommands_ = std::move(commands);
+}
+
 void PianoRollComponent::refreshEditedMaterializationNotes()
 {
     cachedNotes_.clear();
@@ -513,9 +521,11 @@ void PianoRollComponent::refreshEditedMaterializationNotes()
         return;
     }
 
-    auto snapshot = processor_->getMaterializationNotesSnapshotById(editedMaterializationId_);
-    cachedNotes_ = std::move(snapshot.notes);
-    cachedNotesRevision_ = snapshot.notesRevision;
+    if (contentAccess_) {
+        auto snapshot = contentAccess_->getNotesSnapshot(editedMaterializationId_);
+        cachedNotes_ = std::move(snapshot.notes);
+        cachedNotesRevision_ = snapshot.notesRevision;
+    }
 }
 
 const std::vector<Note>& PianoRollComponent::getCommittedNotes() const
@@ -601,7 +611,7 @@ bool PianoRollComponent::commitEditedMaterializationNotesAndSegments(const std::
 
     refreshEditedMaterializationNotes();
 
-    auto committedCurve = processor_->getMaterializationPitchCurveById(editedMaterializationId_);
+    auto committedCurve = contentAccess_->getPitchCurve(editedMaterializationId_);
     if (committedCurve != nullptr) {
         setEditedMaterialization(editedMaterializationId_, committedCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
     }
@@ -611,7 +621,7 @@ bool PianoRollComponent::commitEditedMaterializationNotesAndSegments(const std::
 }
 
 bool PianoRollComponent::commitEditedMaterializationCorrectedSegments(const std::vector<CorrectedSegment>& segments,
-                                                                       F0FrameRange affectedRange)
+                                                                        F0FrameRange affectedRange)
 {
     if (processor_ == nullptr || editedMaterializationId_ == 0) {
         return false;
@@ -624,7 +634,7 @@ bool PianoRollComponent::commitEditedMaterializationCorrectedSegments(const std:
         return false;
     }
 
-    auto committedCurve = processor_->getMaterializationPitchCurveById(editedMaterializationId_);
+    auto committedCurve = contentAccess_->getPitchCurve(editedMaterializationId_);
     if (committedCurve != nullptr) {
         setEditedMaterialization(editedMaterializationId_, committedCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
     }
@@ -2240,6 +2250,7 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
         && currentTool_ != ToolId::TimeTool
         && processor_ != nullptr
         && editedMaterializationId_ != 0) {
+        // This is a processor-specific operation, not content
         processor_->ensureTimeToolAnchorSeed(editedMaterializationId_);
     }
 
@@ -2658,10 +2669,10 @@ PianoRollRenderer::MaterializationRenderItem PianoRollComponent::buildMaterializ
         curve = currentCurve_;
         item.audioBuffer = audioBuffer_;
         item.displayNotes = getDisplayedNotes();
-    } else if (processor_ != nullptr) {
-        curve = processor_->getMaterializationPitchCurveById(placement.materializationId);
-        item.audioBuffer = processor_->getMaterializationAudioBufferById(placement.materializationId);
-        item.displayNotes = processor_->getMaterializationNotesById(placement.materializationId);
+    } else if (contentAccess_) {
+        curve = contentAccess_->getPitchCurve(placement.materializationId);
+        item.audioBuffer = contentAccess_->getAudioBuffer(placement.materializationId);
+        item.displayNotes = contentAccess_->getNotes(placement.materializationId);
     }
 
     if (curve != nullptr) {
@@ -2745,8 +2756,8 @@ PianoRollRenderer::MaterializationRenderItem PianoRollComponent::buildMaterializ
         item.waveformMipmap = &mipmap;
     }
 
-    if (showChunkBoundaries_ && processor_ != nullptr)
-        processor_->getMaterializationChunkBoundariesById(placement.materializationId, item.chunkBoundaries);
+    if (showChunkBoundaries_ && contentAccess_)
+        contentAccess_->getChunkBoundaries(placement.materializationId, item.chunkBoundaries);
 
     return item;
 }
@@ -2855,8 +2866,8 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext(double v
     if (interactionState_.timeTool.isDraggingHandle
         && interactionState_.timeTool.dragWorkingSnapshot != nullptr) {
         ctx.timeGridSnapshot = interactionState_.timeTool.dragWorkingSnapshot;
-    } else if (processor_ != nullptr && editedMaterializationId_ != 0) {
-        ctx.timeGridSnapshot = processor_->getMaterializationTimeGridById(editedMaterializationId_);
+    } else if (contentAccess_ && editedMaterializationId_ != 0) {
+        ctx.timeGridSnapshot = contentAccess_->getTimeGrid(editedMaterializationId_);
     }
     ctx.timeGridHoveredHandleId  = interactionState_.timeTool.hoveredHandleId;
     ctx.timeGridSelectedHandleId = interactionState_.timeTool.selectedHandleId;
@@ -3079,8 +3090,8 @@ bool PianoRollComponent::ensureRenderBandCoversCurrentViewport(bool forceRebuild
     cacheKey.pitchEpoch = editedMaterializationEpoch_.load(std::memory_order_relaxed);
     cacheKey.notesEpoch = cachedNotesRevision_;
     cacheKey.visualPrefsRevision = visualPrefsRevision_;
-    cacheKey.timeGridRevision = (processor_ != nullptr && editedMaterializationId_ != 0)
-        ? processor_->getMaterializationTimeGridRevisionById(editedMaterializationId_)
+    cacheKey.timeGridRevision = (contentAccess_ && editedMaterializationId_ != 0)
+        ? contentAccess_->getTimeGridRevision(editedMaterializationId_)
         : 0;
     cacheKey.visibleStartBandMs = secondsToMs(visibleTimeStart);
     cacheKey.visibleEndBandMs = secondsToMs(visibleTimeEnd);
@@ -3476,7 +3487,7 @@ bool PianoRollComponent::applyAutoTuneToSelection()
         return false;
     }
 
-    const auto originalF0State = processor_->getMaterializationOriginalF0StateById(editedMaterializationId_);
+    const auto originalF0State = contentAccess_->getOriginalF0State(editedMaterializationId_);
     if (originalF0State != OriginalF0State::Ready) {
         return false;
     }
