@@ -1075,8 +1075,11 @@ void MaterializationStore::renderWorkerLoop()
             if (!pullNextPendingRenderJob(job)) continue;
         }
 
-        if (renderJobCallback_)
+        if (renderJobCallback_) {
+            renderJobsInFlight_.fetch_add(1, std::memory_order_release);
             renderJobCallback_(job);
+            renderJobsInFlight_.fetch_sub(1, std::memory_order_release);
+        }
     }
 }
 
@@ -1098,6 +1101,16 @@ void MaterializationStore::resumeRenderWorker()
 {
     renderPaused_.store(false);
     renderWorkerCv_.notify_all();
+}
+
+void MaterializationStore::drainRenderWorker()
+{
+    // Pause pulling new jobs
+    renderPaused_.store(true);
+    renderWorkerCv_.notify_all();
+    // Wait for any in-flight job to complete
+    while (renderJobsInFlight_.load(std::memory_order_acquire) > 0)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
 }
 
 } // namespace OpenTune

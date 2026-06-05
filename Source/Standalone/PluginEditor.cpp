@@ -2866,22 +2866,25 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
 
     auto* content = new PitchShiftDialogContent(currentSettings);
 
-    content->setOnConfirm([this, materializationId, currentSettings](const PitchShiftSettings& newSettings) {
+    auto commands = processorRef_.getContentCommands();
+    content->setOnConfirm([this, materializationId, currentSettings, commands](const PitchShiftSettings& newSettings) {
         if (newSettings != currentSettings) {
             processorRef_.getUndoManager().addAction(std::make_unique<PitchShiftEditAction>(
-                processorRef_, materializationId, currentSettings, newSettings));
-            processorRef_.setPitchShiftSettings(materializationId, newSettings);
+                commands, materializationId, currentSettings, newSettings));
+            if (commands)
+                commands->setPitchShiftSettings(materializationId, newSettings);
             parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
             projectSession_.markDirty();
         }
     });
 
-    content->setOnReset([this, materializationId, currentSettings]() {
+    content->setOnReset([this, materializationId, currentSettings, commands]() {
         const auto identity = PitchShiftSettings::identity();
         if (identity != currentSettings) {
             processorRef_.getUndoManager().addAction(std::make_unique<PitchShiftEditAction>(
-                processorRef_, materializationId, currentSettings, identity));
-            processorRef_.setPitchShiftSettings(materializationId, identity);
+                commands, materializationId, currentSettings, identity));
+            if (commands)
+                commands->setPitchShiftSettings(materializationId, identity);
             parameterPanel_.setPitchShiftIndicator(0, 0);
             projectSession_.markDirty();
         }
