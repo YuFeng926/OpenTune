@@ -9,6 +9,7 @@
 
 #include "AudioModification.h"
 #include "AudioSource.h"
+#include "../MaterializationStore.h"
 #include "PlaybackRegion.h"
 
 namespace OpenTune {
@@ -61,6 +62,7 @@ public:
         std::shared_ptr<F0InferenceService> f0Service;
         std::function<void(std::function<void()>&&)> scheduleAsyncWork;
         std::function<void()> requestReclaimSweep;
+        std::function<void(MaterializationStore::PendingRenderJob&)> renderJobCallback;
     };
 
     void attachProcessorServices(ProcessorServices services);

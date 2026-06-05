@@ -63,14 +63,27 @@ public:
                                                float vibratoDepth,
                                                float vibratoRate,
                                                double audioSampleRate) = 0;
+
+    // V2.1 command boundary extension — PianoRoll write operations
+    virtual bool setNotes(uint64_t materializationId, const std::vector<Note>& notes) = 0;
+    virtual bool commitNotesAndSegments(uint64_t materializationId,
+                                        const std::vector<Note>& notes,
+                                        const std::vector<CorrectedSegment>& segments) = 0;
+    virtual bool setCorrectedSegments(uint64_t materializationId,
+                                      const std::vector<CorrectedSegment>& segments) = 0;
+    virtual bool setPitchCurve(uint64_t materializationId, std::shared_ptr<PitchCurve> curve) = 0;
+    virtual bool setTimeGrid(uint64_t materializationId,
+                             std::shared_ptr<const TimeGridSnapshot> grid,
+                             int64_t srcStartFrame,
+                             int64_t srcEndFrame) = 0;
 };
 
 // ============================================================================
 // Factory functions
 // ============================================================================
-std::unique_ptr<MaterializationContentAccess> makeDocumentControllerAccess(OpenTuneDocumentController* dc);
-std::unique_ptr<MaterializationContentCommands> makeDocumentControllerCommands(OpenTuneDocumentController* dc);
-std::unique_ptr<MaterializationContentAccess> makeProcessorAccess(OpenTuneAudioProcessor* processor);
-std::unique_ptr<MaterializationContentCommands> makeProcessorCommands(OpenTuneAudioProcessor* processor);
+std::shared_ptr<MaterializationContentAccess> makeDocumentControllerAccess(OpenTuneDocumentController* dc);
+std::shared_ptr<MaterializationContentCommands> makeDocumentControllerCommands(OpenTuneDocumentController* dc);
+std::shared_ptr<MaterializationContentAccess> makeProcessorAccess(OpenTuneAudioProcessor* processor);
+std::shared_ptr<MaterializationContentCommands> makeProcessorCommands(OpenTuneAudioProcessor* processor);
 
 } // namespace OpenTune

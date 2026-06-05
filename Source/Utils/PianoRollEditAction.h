@@ -3,16 +3,17 @@
 #include "UndoManager.h"
 #include "Note.h"
 #include "PitchCurve.h"
+#include <memory>
 #include <vector>
 #include <cstdint>
 
 namespace OpenTune {
 
-class OpenTuneAudioProcessor;
+class MaterializationContentCommands;
 
 class PianoRollEditAction : public UndoAction {
 public:
-    PianoRollEditAction(OpenTuneAudioProcessor& processor,
+    PianoRollEditAction(std::shared_ptr<MaterializationContentCommands> commands,
                         uint64_t materializationId,
                         juce::String description,
                         std::vector<Note> oldNotes,
@@ -31,7 +32,7 @@ public:
     int getAffectedEndFrame() const { return affectedEndFrame_; }
 
 private:
-    OpenTuneAudioProcessor& processor_;
+    std::shared_ptr<MaterializationContentCommands> commands_;
     uint64_t materializationId_;
     juce::String description_;
     std::vector<Note> oldNotes_, newNotes_;

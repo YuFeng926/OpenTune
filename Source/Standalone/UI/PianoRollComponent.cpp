@@ -293,16 +293,16 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         if (newSnap == nullptr) return false;
 
         auto action = std::make_unique<TimeGridEditAction>(
-            *processor_,
+            contentCommands_,
             editedMaterializationId_,
             description.isNotEmpty() ? description : juce::String("编辑时间网格"),
             std::move(oldSnap),
             newSnap,
             affectedSrcStart,
             affectedSrcEnd);
-        // First publish the new snapshot to the processor (the action's redo()
+        // First publish the new snapshot to the content (the action's redo()
         // will replay this); then push the action so undo() reverts.
-        const bool published = processor_->setMaterializationTimeGridById(
+        const bool published = contentCommands_->setTimeGrid(
             editedMaterializationId_, newSnap, affectedSrcStart, affectedSrcEnd);
         if (!published) return false;
         processor_->getUndoManager().addAction(std::move(action));
@@ -506,8 +506,8 @@ void PianoRollComponent::setProcessor(OpenTuneAudioProcessor* processor)
     refreshEditedMaterializationNotes();
 }
 
-void PianoRollComponent::setContentProviders(std::unique_ptr<MaterializationContentAccess> access,
-                                              std::unique_ptr<MaterializationContentCommands> commands)
+void PianoRollComponent::setContentProviders(std::shared_ptr<MaterializationContentAccess> access,
+                                              std::shared_ptr<MaterializationContentCommands> commands)
 {
     contentAccess_ = std::move(access);
     contentCommands_ = std::move(commands);
@@ -585,7 +585,7 @@ bool PianoRollComponent::commitEditedMaterializationNotes(const std::vector<Note
     if (!undoSnapshotCaptured_)
         captureBeforeUndoSnapshot();
 
-    if (!processor_->setMaterializationNotesById(editedMaterializationId_, notes)) {
+    if (!contentCommands_->setNotes(editedMaterializationId_, notes)) {
         return false;
     }
 
@@ -605,7 +605,7 @@ bool PianoRollComponent::commitEditedMaterializationNotesAndSegments(const std::
     if (!undoSnapshotCaptured_)
         captureBeforeUndoSnapshot();
 
-    if (!processor_->commitMaterializationNotesAndSegmentsById(editedMaterializationId_, notes, segments)) {
+    if (!contentCommands_->commitNotesAndSegments(editedMaterializationId_, notes, segments)) {
         return false;
     }
 
@@ -630,7 +630,7 @@ bool PianoRollComponent::commitEditedMaterializationCorrectedSegments(const std:
     if (!undoSnapshotCaptured_)
         captureBeforeUndoSnapshot();
 
-    if (!processor_->setMaterializationCorrectedSegmentsById(editedMaterializationId_, segments)) {
+    if (!contentCommands_->setCorrectedSegments(editedMaterializationId_, segments)) {
         return false;
     }
 
@@ -693,7 +693,7 @@ void PianoRollComponent::recordUndoAction(const juce::String& description, F0Fra
                                           : 0);
 
     auto action = std::make_unique<PianoRollEditAction>(
-        *processor_,
+        contentCommands_,
         editedMaterializationId_,
         description.isNotEmpty() ? description : TRANS("编辑"),
         std::move(beforeUndoNotes_),

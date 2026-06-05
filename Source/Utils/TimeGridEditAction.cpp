@@ -1,21 +1,17 @@
 #include "TimeGridEditAction.h"
-// NOTE: We forward-declare OpenTuneAudioProcessor in the header to break the
-// utils → core-processor circular include risk; the actual `setMaterializationTimeGridById`
-// API is implemented in PluginProcessor.{h,cpp}. This .cpp can include the full
-// processor header because it is itself a leaf compilation unit.
-#include "../PluginProcessor.h"
+#include "../ARA/MaterializationContentProvider.h"
 #include "AppLogger.h"
 
 namespace OpenTune {
 
-TimeGridEditAction::TimeGridEditAction(OpenTuneAudioProcessor& processor,
+TimeGridEditAction::TimeGridEditAction(std::shared_ptr<MaterializationContentCommands> commands,
                                        uint64_t materializationId,
                                        juce::String description,
                                        std::shared_ptr<const TimeGridSnapshot> oldSnapshot,
                                        std::shared_ptr<const TimeGridSnapshot> newSnapshot,
                                        int64_t affectedSrcStartFrame,
                                        int64_t affectedSrcEndFrame)
-    : processor_(processor)
+    : commands_(commands)
     , materializationId_(materializationId)
     , description_(std::move(description))
     , oldSnapshot_(std::move(oldSnapshot))
@@ -43,10 +39,11 @@ void TimeGridEditAction::undo()
         AppLogger::warn("[TimeGridEditAction] undo skipped: oldSnapshot_ is null");
         return;
     }
-    processor_.setMaterializationTimeGridById(materializationId_,
-                                              oldSnapshot_,
-                                              affectedSrcStartFrame_,
-                                              affectedSrcEndFrame_);
+    if (commands_ != nullptr)
+        commands_->setTimeGrid(materializationId_,
+                               oldSnapshot_,
+                               affectedSrcStartFrame_,
+                               affectedSrcEndFrame_);
 }
 
 void TimeGridEditAction::redo()
@@ -55,10 +52,11 @@ void TimeGridEditAction::redo()
         AppLogger::warn("[TimeGridEditAction] redo skipped: newSnapshot_ is null");
         return;
     }
-    processor_.setMaterializationTimeGridById(materializationId_,
-                                              newSnapshot_,
-                                              affectedSrcStartFrame_,
-                                              affectedSrcEndFrame_);
+    if (commands_ != nullptr)
+        commands_->setTimeGrid(materializationId_,
+                               newSnapshot_,
+                               affectedSrcStartFrame_,
+                               affectedSrcEndFrame_);
 }
 
 } // namespace OpenTune

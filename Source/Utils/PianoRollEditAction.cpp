@@ -1,10 +1,10 @@
 #include "PianoRollEditAction.h"
-#include "../PluginProcessor.h"
+#include "../ARA/MaterializationContentProvider.h"
 #include <limits>
 
 namespace OpenTune {
 
-PianoRollEditAction::PianoRollEditAction(OpenTuneAudioProcessor& processor,
+PianoRollEditAction::PianoRollEditAction(std::shared_ptr<MaterializationContentCommands> commands,
                                          uint64_t materializationId,
                                          juce::String description,
                                          std::vector<Note> oldNotes,
@@ -13,7 +13,7 @@ PianoRollEditAction::PianoRollEditAction(OpenTuneAudioProcessor& processor,
                                          std::vector<CorrectedSegment> newSegments,
                                          int affectedStartFrame,
                                          int affectedEndFrame)
-    : processor_(processor)
+    : commands_(commands)
     , materializationId_(materializationId)
     , description_(std::move(description))
     , oldNotes_(std::move(oldNotes))
@@ -33,12 +33,14 @@ PianoRollEditAction::PianoRollEditAction(OpenTuneAudioProcessor& processor,
 
 void PianoRollEditAction::undo()
 {
-    processor_.commitMaterializationNotesAndSegmentsById(materializationId_, oldNotes_, oldSegments_);
+    if (commands_ != nullptr)
+        commands_->commitNotesAndSegments(materializationId_, oldNotes_, oldSegments_);
 }
 
 void PianoRollEditAction::redo()
 {
-    processor_.commitMaterializationNotesAndSegmentsById(materializationId_, newNotes_, newSegments_);
+    if (commands_ != nullptr)
+        commands_->commitNotesAndSegments(materializationId_, newNotes_, newSegments_);
 }
 
 } // namespace OpenTune

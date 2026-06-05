@@ -201,7 +201,9 @@ public:
                      std::shared_ptr<const TimeGridSnapshot>& outSnapshot) const;
     uint64_t getTimeGridRevision(uint64_t materializationId) const;
     bool setTimeGrid(uint64_t materializationId,
-                     std::shared_ptr<const TimeGridSnapshot> snapshot);
+                     std::shared_ptr<const TimeGridSnapshot> snapshot,
+                     int64_t affectedSrcStartFrame = 0,
+                     int64_t affectedSrcEndFrame = 0);
 
     // ============================================================
     // Pitch Shift — clip-level render modifier (per-materialization)

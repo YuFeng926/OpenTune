@@ -17,12 +17,12 @@
 
 namespace OpenTune {
 
-class OpenTuneAudioProcessor;
+class MaterializationContentCommands;
 
 class TimeGridEditAction : public UndoAction {
 public:
     /**
-     * @param processor                 Processor 引用; undo/redo 通过它切换 TimeGridSnapshot
+     * @param commands                  Content commands; undo/redo 通过它切换 TimeGridSnapshot
      * @param materializationId         目标 materialization
      * @param description               用户可见的 undo 描述 ("Drag handle"/"Insert handle"/...)
      * @param oldSnapshot               编辑前 snapshot (undo 时切回这个)
@@ -30,7 +30,7 @@ public:
      * @param affectedSrcStartFrame     受影响源帧范围起 (UI 计算, 不得反推)
      * @param affectedSrcEndFrame       受影响源帧范围终 (inclusive)
      */
-    TimeGridEditAction(OpenTuneAudioProcessor& processor,
+    TimeGridEditAction(std::shared_ptr<MaterializationContentCommands> commands,
                        uint64_t materializationId,
                        juce::String description,
                        std::shared_ptr<const TimeGridSnapshot> oldSnapshot,
@@ -47,13 +47,13 @@ public:
     int64_t  getAffectedSrcEndFrame() const noexcept { return affectedSrcEndFrame_; }
 
 private:
-    OpenTuneAudioProcessor& processor_;
-    uint64_t                materializationId_;
-    juce::String            description_;
+    std::shared_ptr<MaterializationContentCommands> commands_;
+    uint64_t                        materializationId_;
+    juce::String                    description_;
     std::shared_ptr<const TimeGridSnapshot> oldSnapshot_;
     std::shared_ptr<const TimeGridSnapshot> newSnapshot_;
-    int64_t                 affectedSrcStartFrame_{0};
-    int64_t                 affectedSrcEndFrame_{0};
+    int64_t                         affectedSrcStartFrame_{0};
+    int64_t                         affectedSrcEndFrame_{0};
 };
 
 } // namespace OpenTune
