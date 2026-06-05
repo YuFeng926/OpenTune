@@ -101,28 +101,58 @@ void skipRestoredMaterializationBindingRecord(juce::ARAInputStream& input)
 OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugInEntry* entry,
                                                        const ARA::ARADocumentControllerHostInstance* instance)
     : ARADocumentControllerSpecialisation(entry, instance)
+    , materializationStore_(std::make_shared<MaterializationStore>())
+    , sourceStore_(std::make_shared<SourceStore>())
+    , resamplingManager_(std::make_shared<ResamplingManager>())
+    , reclaimAsyncUpdater_([this] { runContentReclaimSweep(); })
 {
 }
 
 OpenTuneDocumentController::~OpenTuneDocumentController()
 {
     playbackRenderers_.clear();
+    // juce::AsyncUpdater in ReclaimAsyncUpdater auto-cancels pending updates on destruction.
 }
 
-void OpenTuneDocumentController::connectToStores(
-    std::shared_ptr<MaterializationStore> materializationStore,
-    std::shared_ptr<SourceStore> sourceStore,
-    std::shared_ptr<ResamplingManager> resamplingManager,
-    std::shared_ptr<F0InferenceService> f0Service,
-    std::function<void(std::function<void()>&&)> scheduleAsyncWork,
-    std::function<void()> reclaimCallback)
+void OpenTuneDocumentController::attachProcessorServices(ProcessorServices services)
 {
-    materializationStore_ = std::move(materializationStore);
-    sourceStore_ = std::move(sourceStore);
-    resamplingManager_ = std::move(resamplingManager);
-    f0Service_ = std::move(f0Service);
-    scheduleAsyncWork_ = std::move(scheduleAsyncWork);
-    onReclaimNeeded_ = std::move(reclaimCallback);
+    jassert(services.owner != nullptr);
+    serviceOwner_ = services.owner;
+    f0Service_ = std::move(services.f0Service);
+    scheduleAsyncWork_ = std::move(services.scheduleAsyncWork);
+    onReclaimNeeded_ = std::move(services.requestReclaimSweep);
+}
+
+void OpenTuneDocumentController::detachProcessorServices(const OpenTuneAudioProcessor* owner)
+{
+    if (serviceOwner_ != owner) return;
+    serviceOwner_ = nullptr;
+    f0Service_.reset();
+    scheduleAsyncWork_ = nullptr;
+    onReclaimNeeded_ = nullptr;
+}
+
+void OpenTuneDocumentController::runContentReclaimSweep()
+{
+    if (onReclaimNeeded_)
+        onReclaimNeeded_();
+}
+
+void OpenTuneDocumentController::scheduleContentReclaim()
+{
+    reclaimAsyncUpdater_.triggerAsyncUpdate();
+}
+
+void OpenTuneDocumentController::getContentSnapshot(juce::XmlElement& dest) const
+{
+    // Phase 8: full DC-based persistence. Stub for now.
+    juce::ignoreUnused(dest);
+}
+
+void OpenTuneDocumentController::restoreContentPayloadInto(const juce::XmlElement& src)
+{
+    // Phase 8: full DC-based persistence. Stub for now.
+    juce::ignoreUnused(src);
 }
 
 MaterializationStore* OpenTuneDocumentController::getMaterializationStore() const noexcept

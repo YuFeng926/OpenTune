@@ -1365,11 +1365,10 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 #endif
     );
 
-    // Detach ARA back-pointer so DocumentController no longer calls into this processor.
+    // Detach ARA processor services — DC no longer holds back-pointers to this processor.
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
-        if (dc->getMaterializationStore() == materializationStore_.get())
-            dc->connectToStores(nullptr, nullptr, nullptr, nullptr, {}, {});
+        dc->detachProcessorServices(this);
     }
 #endif
 
@@ -2134,34 +2133,32 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
     if (auto* dc = getDocumentController())
     {
         ensureF0Ready();
-        dc->connectToStores(materializationStore_, sourceStore_,
-                            resamplingManager_, f0Service_,
-                            [this](std::function<void()> work) {
-                                static std::atomic<uint64_t> s_key{0};
-                                materializationRefreshService_.submit(
-                                    F0ExtractionService::makeRequestKey(s_key.fetch_add(1), 0, -1),
-                                    [w = std::move(work)]() mutable {
-                                        w();
-                                        return F0ExtractionService::Result{};
-                                    },
-                                    [](F0ExtractionService::Result&&) {});
-                            },
-                            [this] { scheduleReclaimSweep(); });
-        AppLogger::log("ARA: didBindToARA - attached processor stores"
+
+        OpenTuneDocumentController::ProcessorServices services;
+        services.owner = this;
+        services.f0Service = f0Service_;
+        services.scheduleAsyncWork = [this](std::function<void()> work) {
+            static std::atomic<uint64_t> s_key{0};
+            materializationRefreshService_.submit(
+                F0ExtractionService::makeRequestKey(s_key.fetch_add(1), 0, -1),
+                [w = std::move(work)]() mutable {
+                    w();
+                    return F0ExtractionService::Result{};
+                },
+                [](F0ExtractionService::Result&&) {});
+        };
+        services.requestReclaimSweep = [this] { scheduleReclaimSweep(); };
+
+        dc->attachProcessorServices(std::move(services));
+
+        AppLogger::log("ARA: didBindToARA - attached processor services"
             " processor=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
-            + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc))
-            + " sourceStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(sourceStore_.get()))
-            + " materializationStore=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(materializationStore_.get())));
+            + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc)));
 
         // Replay any pre-bind state that was cached by setStateInformation.
-        // After processor attach, isBoundToARA() returns true, so the replay
-        // restores directly into the processor-owned stores.
         if (pendingAraState_.getSize() > 0) {
-            AppLogger::log("ARA: didBindToARA - replaying cached state ("
-                           + juce::String(static_cast<int>(pendingAraState_.getSize()))
-                           + " bytes) into processor stores");
             setStateInformation(pendingAraState_.getData(),
-                              static_cast<int>(pendingAraState_.getSize()));
+                                static_cast<int>(pendingAraState_.getSize()));
             pendingAraState_.reset();
         }
     }

@@ -15,6 +15,7 @@ namespace OpenTune {
 
 class OpenTuneEditorView;
 class OpenTunePlaybackRenderer;
+class OpenTuneAudioProcessor;
 class F0InferenceService;
 class ResamplingManager;
 class MaterializationStore;
@@ -54,12 +55,22 @@ public:
 
     ~OpenTuneDocumentController() override;
 
-    void connectToStores(std::shared_ptr<MaterializationStore> materializationStore,
-                         std::shared_ptr<SourceStore> sourceStore,
-                         std::shared_ptr<ResamplingManager> resamplingManager,
-                         std::shared_ptr<F0InferenceService> f0Service,
-                         std::function<void(std::function<void()>&&)> scheduleAsyncWork,
-                         std::function<void()> reclaimCallback);
+    struct ProcessorServices
+    {
+        const OpenTuneAudioProcessor* owner = nullptr;
+        std::shared_ptr<F0InferenceService> f0Service;
+        std::function<void(std::function<void()>&&)> scheduleAsyncWork;
+        std::function<void()> requestReclaimSweep;
+    };
+
+    void attachProcessorServices(ProcessorServices services);
+    void detachProcessorServices(const OpenTuneAudioProcessor* owner);
+
+    void runContentReclaimSweep();
+    void scheduleContentReclaim();
+    void getContentSnapshot(juce::XmlElement& dest) const;
+    void restoreContentPayloadInto(const juce::XmlElement& src);
+
     MaterializationStore* getMaterializationStore() const noexcept;
     SourceStore* getSourceStore() const noexcept;
 
@@ -135,6 +146,17 @@ private:
     std::shared_ptr<F0InferenceService> f0Service_;
     std::function<void(std::function<void()>&&)> scheduleAsyncWork_;
     std::function<void()> onReclaimNeeded_;
+    const OpenTuneAudioProcessor* serviceOwner_ = nullptr;
+
+    struct ReclaimAsyncUpdater : juce::AsyncUpdater
+    {
+        using Callback = std::function<void()>;
+        explicit ReclaimAsyncUpdater(Callback cb) : callback(std::move(cb)) {}
+        void handleAsyncUpdate() override { if (callback) callback(); }
+        Callback callback;
+    };
+
+    mutable ReclaimAsyncUpdater reclaimAsyncUpdater_;
 
     AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
     const AudioSource* findAudioSource(const juce::String& persistentId) const;
