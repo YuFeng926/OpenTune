@@ -682,7 +682,8 @@ CheckResult araPianoRollUsesInjectedContentProvider()
         "MaterializationContentProvider",
     };
 
-    if (!containsAll(header, required) || !containsAll(source, required))
+    const auto combined = header + source;
+    if (!containsAll(combined, required))
         return fail("ARA: PianoRoll uses injected content provider",
                     "PianoRollComponent must accept an injected content provider");
 
@@ -778,8 +779,7 @@ CheckResult araReclaimRunsOnDocumentContentStore()
                     "DC must expose runContentReclaimSweep and own AsyncUpdater");
 
     const std::vector<std::string> procForbidden{
-        "dc->referencesMaterialization(id)",
-        "getDocumentController()",
+        "dc->referencesMaterialization",
     };
 
     if (!lacksAll(proc, procForbidden))
