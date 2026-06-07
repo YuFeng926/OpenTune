@@ -790,35 +790,6 @@ bool MaterializationStore::enqueuePartialRender(uint64_t materializationId,
     return true;
 }
 
-bool MaterializationStore::hasPendingRenderJobs() const
-{
-    if (contentRenderService_ != nullptr)
-        return contentRenderService_->hasPendingJobs();
-    return false;
-}
-
-bool MaterializationStore::pullNextPendingRenderJob(PendingRenderJob& out)
-{
-    out = PendingRenderJob{};
-    if (contentRenderService_ == nullptr)
-        return false;
-
-    ContentRenderService::PendingRenderJob crsJob;
-    if (!contentRenderService_->pullNextPendingRenderJob(crsJob))
-        return false;
-
-    out.materializationId = crsJob.contentKey.objectId;
-    out.renderCache = crsJob.renderCache;
-    out.audioBuffer = crsJob.audioBuffer;
-    out.pitchCurve = crsJob.pitchCurve;
-    out.silentGaps = crsJob.silentGaps;
-    out.startSeconds = crsJob.startSeconds;
-    out.endSeconds = crsJob.endSeconds;
-    out.startSample = crsJob.startSample;
-    out.endSampleExclusive = crsJob.endSampleExclusive;
-    out.targetRevision = crsJob.targetRevision;
-    return true;
-}
 
 double MaterializationStore::getMaterializationAudioDurationById(uint64_t materializationId) const noexcept
 {
@@ -987,37 +958,6 @@ bool MaterializationStore::getReferenceFeatures(uint64_t materializationId, Refe
 // Render Worker — delegated to ContentRenderService
 // ============================================================================
 
-void MaterializationStore::setRenderJobCallback(std::function<void(PendingRenderJob&)> cb)
-{
-    if (contentRenderService_ == nullptr)
-        return;
-
-    ContentRenderService::ExecutionLease lease;
-    lease.renderJobCallback = [cb = std::move(cb)](ContentRenderService::PendingRenderJob& crsJob)
-    {
-        MaterializationStore::PendingRenderJob oldJob;
-        oldJob.materializationId = crsJob.contentKey.objectId;
-        oldJob.renderCache = crsJob.renderCache;
-        oldJob.audioBuffer = crsJob.audioBuffer;
-        oldJob.pitchCurve = crsJob.pitchCurve;
-        oldJob.silentGaps = crsJob.silentGaps;
-        oldJob.startSeconds = crsJob.startSeconds;
-        oldJob.endSeconds = crsJob.endSeconds;
-        oldJob.startSample = crsJob.startSample;
-        oldJob.endSampleExclusive = crsJob.endSampleExclusive;
-        oldJob.targetRevision = crsJob.targetRevision;
-        cb(oldJob);
-    };
-    lease.leaseOwner = this;
-    contentRenderService_->attachExecutionLease(std::move(lease));
-}
-
-void MaterializationStore::notifyRenderWorker()
-{
-    if (contentRenderService_ != nullptr)
-        contentRenderService_->notifyRenderWorker();
-}
-
 void MaterializationStore::pauseRenderWorker()
 {
     if (contentRenderService_ != nullptr)
@@ -1030,26 +970,16 @@ void MaterializationStore::resumeRenderWorker()
         contentRenderService_->resumeRenderWorker();
 }
 
-void MaterializationStore::drainRenderWorker()
-{
-    if (contentRenderService_ != nullptr)
-        contentRenderService_->drainRenderWorker();
-}
-
 TimeStretchCache& MaterializationStore::getTimeStretchCache() noexcept
 {
-    if (contentRenderService_ != nullptr)
-        return contentRenderService_->getTimeStretchCache();
-    static TimeStretchCache fallback;
-    return fallback;
+    jassert(contentRenderService_ != nullptr); // CRS must be attached before any TSC access
+    return contentRenderService_->getTimeStretchCache();
 }
 
 const TimeStretchCache& MaterializationStore::getTimeStretchCache() const noexcept
 {
-    if (contentRenderService_ != nullptr)
-        return contentRenderService_->getTimeStretchCache();
-    static TimeStretchCache fallback;
-    return fallback;
+    jassert(contentRenderService_ != nullptr); // CRS must be attached before any TSC access
+    return contentRenderService_->getTimeStretchCache();
 }
 
 } // namespace OpenTune

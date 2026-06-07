@@ -719,8 +719,6 @@ if(OPENTUNE_ENABLE_ARA)
         Source/ARA/OpenTuneEditorView.h
         Source/ARA/OpenTunePlaybackRenderer.cpp
         Source/ARA/OpenTunePlaybackRenderer.h
-        Source/ARA/MaterializationContentProvider.cpp
-        Source/ARA/MaterializationContentProvider.h
     )
 endif()
 
