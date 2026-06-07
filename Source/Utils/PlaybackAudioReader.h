@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../MaterializationStore.h"
+#include "../Render/ContentRenderService.h"
 #include "TimeCoordinate.h"
 #include "../Inference/TimeStretchCache.h"
 #include "../Inference/RenderCache.h"
@@ -15,13 +15,13 @@ namespace OpenTune {
  * readStartSeconds 必须与 source 中 renderCache / dry buffer 的时间基保持一致。
  */
 struct PlaybackReadRequest {
-    MaterializationStore::PlaybackReadSource source;
+    ContentRenderService::PlaybackReadSource source;
     double readStartSeconds{0.0};
     double targetSampleRate{44100.0};
     int numSamples{0};
 
     PlaybackReadRequest() = default;
-    PlaybackReadRequest(MaterializationStore::PlaybackReadSource src, double start, double rate, int samples)
+    PlaybackReadRequest(ContentRenderService::PlaybackReadSource src, double start, double rate, int samples)
         : source(src), readStartSeconds(start), targetSampleRate(rate), numSamples(samples) {}
 };
 
@@ -57,11 +57,12 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
     }
 
     // TimeStretchCache fast-path
+    const uint64_t objectId = request.source.contentKey.objectId;
     if (!request.source.timeGridIsIdentity
         && request.source.timeStretchCache != nullptr
-        && request.source.materializationId != 0) {
+        && objectId != 0) {
         const int wrote = request.source.timeStretchCache->sliceForOutputRange(
-            request.source.materializationId,
+            objectId,
             request.readStartSeconds,
             destination,
             destinationStartSample,

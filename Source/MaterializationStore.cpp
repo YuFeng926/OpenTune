@@ -46,15 +46,9 @@ bool findPreferredHopAlignedBoundarySample(const SilentGap& gap,
 
 } // namespace
 
-MaterializationStore::MaterializationStore()
-{
-    startRenderWorker();
-}
+MaterializationStore::MaterializationStore() = default;
 
-MaterializationStore::~MaterializationStore()
-{
-    stopRenderWorker();
-}
+MaterializationStore::~MaterializationStore() = default;
 
 uint64_t MaterializationStore::createMaterialization(CreateMaterializationRequest request,
                                                      uint64_t forcedMaterializationId)
@@ -125,11 +119,8 @@ void MaterializationStore::clear()
         nextMaterializationId_.store(1, std::memory_order_relaxed);
         rebuildPlaybackSourceCache();
     }
-    {
-        std::lock_guard<std::mutex> qLock(renderQueueMutex_);
-        pendingRenderQueue_.clear();
-    }
-    timeStretchCache_.clear();   // §6.2: clear store-wide Stage 2 cache
+    if (contentRenderService_ != nullptr)
+        contentRenderService_->drainRenderWorker();
 }
 
 bool MaterializationStore::deleteMaterialization(uint64_t materializationId)
@@ -141,7 +132,6 @@ bool MaterializationStore::deleteMaterialization(uint64_t materializationId)
     const juce::ScopedWriteLock writeLock(lock_);
     const bool erased = materializations_.erase(materializationId) > 0;
     if (erased) {
-        timeStretchCache_.invalidate(materializationId);
         rebuildPlaybackSourceCache();
     }
     return erased;
@@ -230,7 +220,6 @@ bool MaterializationStore::physicallyDeleteIfReclaimable(uint64_t id)
     const auto it = materializations_.find(id);
     if (it == materializations_.end() || !it->second.isRetired_) return false;
     materializations_.erase(it);
-    timeStretchCache_.invalidate(id);   // §6.2
     rebuildPlaybackSourceCache();
     return true;
 }
@@ -285,7 +274,6 @@ void MaterializationStore::rebuildPlaybackSourceCache()
         PlaybackReadSource src;
         src.renderCache = entry.renderCache;
         src.audioBuffer = entry.audioBuffer;
-        src.timeStretchCache = &timeStretchCache_;
         src.materializationId = id;
         src.timeGridRevision = static_cast<uint32_t>(entry.timeGridRevision);
         src.pitchRevision = static_cast<uint32_t>(entry.pitchShiftRevision);
@@ -302,6 +290,29 @@ bool MaterializationStore::getPlaybackReadSource(uint64_t materializationId, Pla
     out = PlaybackReadSource{};
     if (materializationId == 0)
         return false;
+
+    // When CRS is attached, delegate to ContentRenderService
+    // using a ContentKey built from the materializationId.
+    if (contentRenderService_ != nullptr)
+    {
+        ContentRenderService::PlaybackReadSource crsSource;
+        ContentKey ck;
+        ck.objectId = materializationId;
+        if (contentRenderService_->getPlaybackReadSource(ck, crsSource))
+        {
+            // Map back to MaterializationStore::PlaybackReadSource for compat
+            out.renderCache = crsSource.renderCache;
+            out.audioBuffer = crsSource.audioBuffer;
+            out.timeStretchCache = crsSource.timeStretchCache;
+            out.materializationId = materializationId;
+            out.pitchRevision = crsSource.pitchRevision;
+            out.timeGridRevision = crsSource.timeGridRevision;
+            out.pitchShiftSettings = crsSource.pitchShiftSettings;
+            out.timeGridIsIdentity = crsSource.timeGridIsIdentity;
+            return out.canRead();
+        }
+        return false;
+    }
 
     // Lock-free read: atomic_load immutable snapshot, zero blocking on audio thread.
     auto snap = std::atomic_load(&playbackSourceCache_);
@@ -399,10 +410,6 @@ bool MaterializationStore::setPitchCurve(uint64_t materializationId, std::shared
     it->second.originalF0State = (it->second.pitchCurve != nullptr && !it->second.pitchCurve->getSnapshot()->getOriginalF0().empty())
         ? OriginalF0State::Ready
         : OriginalF0State::NotRequested;
-    // §6.5 (Phase C.4): pitch edit invalidates Stage 2 cache
-    // (PitchCache invalidation handled by RenderCache itself via revision protocol;
-    // here we explicitly drop the downstream Stage 2 entry).
-    timeStretchCache_.invalidate(materializationId);
     // Reference AUTO feature cache is derived from source audio + original F0.
     it->second.referenceFeatures.reset();
     return true;
@@ -428,8 +435,6 @@ bool MaterializationStore::commitNotesAndPitchCurve(uint64_t materializationId,
     it->second.originalF0State = !it->second.pitchCurve->getSnapshot()->getOriginalF0().empty()
         ? OriginalF0State::Ready
         : OriginalF0State::NotRequested;
-    // §6.5: pitch edit invalidates Stage 2 cache (downstream)
-    timeStretchCache_.invalidate(materializationId);
     // Notes alone do not invalidate reference features, but pitch-curve/original-F0
     // changes do.
     it->second.referenceFeatures.reset();
@@ -461,7 +466,6 @@ bool MaterializationStore::commitReferenceAlignmentPatch(
     it->second.timeGrid = std::move(timeGridAfter);
     ++it->second.timeGridRevision;
 
-    timeStretchCache_.invalidate(materializationId);
     rebuildPlaybackSourceCache();
     return true;
 }
@@ -530,11 +534,8 @@ bool MaterializationStore::setTimeGrid(uint64_t materializationId,
     it->second.timeGrid = std::move(snapshot);
     ++it->second.timeGridRevision;
 
-    // §6.5 (Phase C.4): TimeGrid edit invalidates Stage 2 only.
-    // PitchCache is NOT invalidated — the core latency win of v7 (handle drag
-    // doesn't re-run NSF) lives here.
-    timeStretchCache_.invalidate(materializationId);
     rebuildPlaybackSourceCache();
+    getTimeStretchCache().invalidate(materializationId);
     return true;
 }
 
@@ -578,8 +579,6 @@ bool MaterializationStore::setPitchShiftSettings(uint64_t materializationId, con
         it->second.renderCache->clear();
     }
 
-    // Invalidate Stage 2 TimeStretchCache
-    timeStretchCache_.invalidate(materializationId);
     rebuildPlaybackSourceCache();
     return true;
 }
@@ -766,110 +765,58 @@ uint64_t MaterializationStore::replaceMaterializationWithNewLineage(uint64_t old
 bool MaterializationStore::enqueuePartialRender(uint64_t materializationId,
                                                 double relStartSeconds,
                                                 double relEndSeconds,
-                                                int hopSize)
+                                                int /*hopSize*/)
 {
-    if (materializationId == 0 || relEndSeconds <= relStartSeconds || hopSize <= 0) {
-        return false;
-    }
+    if (contentRenderService_ == nullptr) return false;
+    if (materializationId == 0 || relEndSeconds <= relStartSeconds) return false;
 
-    // 第一步：在 ReadLock 内完成 RenderCache 操作，收集待入队 entry
-    std::vector<PendingRenderEntry> entriesToQueue;
+    ContentRenderService::PendingRenderJob job;
+    job.contentKey = ContentKey{DomainKind::StandaloneClip, materializationId, 0};
+    job.startSeconds = relStartSeconds;
+    job.endSeconds = relEndSeconds;
 
+    // 从 store snapshot 提取 pitchCurve，确保 processChunkRenderJob 非空
     {
         const juce::ScopedReadLock readLock(lock_);
         const auto it = materializations_.find(materializationId);
-        if (it == materializations_.end() || it->second.audioBuffer == nullptr || it->second.renderCache == nullptr) {
-            return false;
-        }
-
-        const auto chunkBoundaries = buildChunkBoundariesFromSilentGaps(it->second.audioBuffer->getNumSamples(),
-                                                                         it->second.silentGaps,
-                                                                         hopSize);
-        const int64_t requestStartSample = TimeCoordinate::secondsToSamplesFloor(relStartSeconds, TimeCoordinate::kRenderSampleRate);
-        const int64_t requestEndSampleExclusive = TimeCoordinate::secondsToSamplesCeil(relEndSeconds, TimeCoordinate::kRenderSampleRate);
-
-        if (chunkBoundaries.size() < 2) {
-            it->second.renderCache->requestRenderPending(relStartSeconds,
-                                                          relEndSeconds,
-                                                          requestStartSample,
-                                                          requestEndSampleExclusive);
-            entriesToQueue.push_back({materializationId, relStartSeconds, relEndSeconds, requestStartSample, requestEndSampleExclusive});
-        } else {
-            for (size_t i = 0; i + 1 < chunkBoundaries.size(); ++i) {
-                const int64_t chunkStartSample = chunkBoundaries[i];
-                const int64_t chunkEndSampleExclusive = chunkBoundaries[i + 1];
-                const int64_t overlapStart = std::max(requestStartSample, chunkStartSample);
-                const int64_t overlapEnd = std::min(requestEndSampleExclusive, chunkEndSampleExclusive);
-                if (overlapEnd <= overlapStart) {
-                    continue;
-                }
-
-                const double chunkStartSeconds = TimeCoordinate::samplesToSeconds(chunkStartSample, TimeCoordinate::kRenderSampleRate);
-                const double chunkEndSeconds = TimeCoordinate::samplesToSeconds(chunkEndSampleExclusive, TimeCoordinate::kRenderSampleRate);
-                it->second.renderCache->requestRenderPending(chunkStartSeconds,
-                                                              chunkEndSeconds,
-                                                              chunkStartSample,
-                                                              chunkEndSampleExclusive);
-                entriesToQueue.push_back({materializationId, chunkStartSeconds, chunkEndSeconds, chunkStartSample, chunkEndSampleExclusive});
-            }
+        if (it != materializations_.end() && !it->second.isRetired_) {
+            job.pitchCurve = it->second.pitchCurve;
+            job.renderCache = it->second.renderCache;
+            job.audioBuffer = it->second.audioBuffer;
         }
     }
 
-    // 第二步：锁外批量入队（renderQueueMutex_ 不嵌套在 ReadLock 内）
-    if (!entriesToQueue.empty()) {
-        std::lock_guard<std::mutex> qLock(renderQueueMutex_);
-        for (auto& e : entriesToQueue) {
-            pendingRenderQueue_.push_back(std::move(e));
-        }
-    }
-
-    // Wake render worker if jobs were enqueued
-    if (!entriesToQueue.empty())
-        renderWorkerCv_.notify_one();
-
-    return !entriesToQueue.empty();
+    contentRenderService_->enqueueRender(std::move(job));
+    return true;
 }
 
 bool MaterializationStore::hasPendingRenderJobs() const
 {
-    std::lock_guard<std::mutex> qLock(renderQueueMutex_);
-    return !pendingRenderQueue_.empty();
+    if (contentRenderService_ != nullptr)
+        return contentRenderService_->hasPendingJobs();
+    return false;
 }
 
 bool MaterializationStore::pullNextPendingRenderJob(PendingRenderJob& out)
 {
     out = PendingRenderJob{};
+    if (contentRenderService_ == nullptr)
+        return false;
 
-    // 第一步：从 queue 取出 entry
-    PendingRenderEntry entry;
-    {
-        std::lock_guard<std::mutex> qLock(renderQueueMutex_);
-        if (pendingRenderQueue_.empty()) return false;
-        entry = pendingRenderQueue_.front();
-        pendingRenderQueue_.pop_front();
-    }
+    ContentRenderService::PendingRenderJob crsJob;
+    if (!contentRenderService_->pullNextPendingRenderJob(crsJob))
+        return false;
 
-    // 第二步：ReadLock 查找 materialization 并拉取 RenderCache pending job
-    const juce::ScopedReadLock readLock(lock_);
-    const auto it = materializations_.find(entry.materializationId);
-    if (it == materializations_.end() || it->second.isRetired_) return false;
-
-    auto& mat = it->second;
-    if (!mat.renderCache) return false;
-
-    RenderCache::PendingJob pendingJob;
-    if (!mat.renderCache->getNextPendingJob(pendingJob)) return false;
-
-    out.materializationId = mat.materializationId;
-    out.renderCache = mat.renderCache;
-    out.audioBuffer = mat.audioBuffer;
-    out.pitchCurve = mat.pitchCurve;
-    out.silentGaps = mat.silentGaps;
-    out.startSeconds = pendingJob.startSeconds;
-    out.endSeconds = pendingJob.endSeconds;
-    out.startSample = pendingJob.startSample;
-    out.endSampleExclusive = pendingJob.endSampleExclusive;
-    out.targetRevision = pendingJob.targetRevision;
+    out.materializationId = crsJob.contentKey.objectId;
+    out.renderCache = crsJob.renderCache;
+    out.audioBuffer = crsJob.audioBuffer;
+    out.pitchCurve = crsJob.pitchCurve;
+    out.silentGaps = crsJob.silentGaps;
+    out.startSeconds = crsJob.startSeconds;
+    out.endSeconds = crsJob.endSeconds;
+    out.startSample = crsJob.startSample;
+    out.endSampleExclusive = crsJob.endSampleExclusive;
+    out.targetRevision = crsJob.targetRevision;
     return true;
 }
 
@@ -1037,80 +984,72 @@ bool MaterializationStore::getReferenceFeatures(uint64_t materializationId, Refe
 }
 
 // ============================================================================
-// Render Worker (Phase 2)
+// Render Worker — delegated to ContentRenderService
 // ============================================================================
 
-void MaterializationStore::startRenderWorker()
+void MaterializationStore::setRenderJobCallback(std::function<void(PendingRenderJob&)> cb)
 {
-    renderWorkerShouldStop_.store(false);
-    renderPaused_.store(false);
-    renderWorkerThread_ = std::thread([this] { renderWorkerLoop(); });
-}
+    if (contentRenderService_ == nullptr)
+        return;
 
-void MaterializationStore::stopRenderWorker()
-{
+    ContentRenderService::ExecutionLease lease;
+    lease.renderJobCallback = [cb = std::move(cb)](ContentRenderService::PendingRenderJob& crsJob)
     {
-        std::lock_guard<std::mutex> lock(renderWorkerMutex_);
-        renderWorkerShouldStop_.store(true);
-    }
-    renderWorkerCv_.notify_all();
-    if (renderWorkerThread_.joinable())
-        renderWorkerThread_.join();
-}
-
-void MaterializationStore::renderWorkerLoop()
-{
-    while (true) {
-        PendingRenderJob job;
-        {
-            std::unique_lock<std::mutex> lock(renderWorkerMutex_);
-            renderWorkerCv_.wait(lock, [this] {
-                return renderWorkerShouldStop_.load()
-                    || (!renderPaused_.load() && hasPendingRenderJobs());
-            });
-            if (renderWorkerShouldStop_.load())
-                return;
-            if (renderPaused_.load())
-                continue;
-            if (!pullNextPendingRenderJob(job)) continue;
-        }
-
-        if (renderJobCallback_) {
-            renderJobsInFlight_.fetch_add(1, std::memory_order_release);
-            renderJobCallback_(job);
-            renderJobsInFlight_.fetch_sub(1, std::memory_order_release);
-        }
-    }
+        MaterializationStore::PendingRenderJob oldJob;
+        oldJob.materializationId = crsJob.contentKey.objectId;
+        oldJob.renderCache = crsJob.renderCache;
+        oldJob.audioBuffer = crsJob.audioBuffer;
+        oldJob.pitchCurve = crsJob.pitchCurve;
+        oldJob.silentGaps = crsJob.silentGaps;
+        oldJob.startSeconds = crsJob.startSeconds;
+        oldJob.endSeconds = crsJob.endSeconds;
+        oldJob.startSample = crsJob.startSample;
+        oldJob.endSampleExclusive = crsJob.endSampleExclusive;
+        oldJob.targetRevision = crsJob.targetRevision;
+        cb(oldJob);
+    };
+    lease.leaseOwner = this;
+    contentRenderService_->attachExecutionLease(std::move(lease));
 }
 
 void MaterializationStore::notifyRenderWorker()
 {
-    renderWorkerCv_.notify_one();
+    if (contentRenderService_ != nullptr)
+        contentRenderService_->notifyRenderWorker();
 }
 
 void MaterializationStore::pauseRenderWorker()
 {
-    // Signal pause and wait for any in-flight job to complete
-    renderPaused_.store(true);
-    // No need to notify CV — the worker will pause at the next
-    // loop iteration when it checks renderPaused_ after pulling a job.
-    // If the worker is currently in renderJobCallback_, we let it finish.
+    if (contentRenderService_ != nullptr)
+        contentRenderService_->pauseRenderWorker();
 }
 
 void MaterializationStore::resumeRenderWorker()
 {
-    renderPaused_.store(false);
-    renderWorkerCv_.notify_all();
+    if (contentRenderService_ != nullptr)
+        contentRenderService_->resumeRenderWorker();
 }
 
 void MaterializationStore::drainRenderWorker()
 {
-    // Pause pulling new jobs
-    renderPaused_.store(true);
-    renderWorkerCv_.notify_all();
-    // Wait for any in-flight job to complete
-    while (renderJobsInFlight_.load(std::memory_order_acquire) > 0)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (contentRenderService_ != nullptr)
+        contentRenderService_->drainRenderWorker();
+}
+
+TimeStretchCache& MaterializationStore::getTimeStretchCache() noexcept
+{
+    if (contentRenderService_ != nullptr)
+        return contentRenderService_->getTimeStretchCache();
+    static TimeStretchCache fallback;
+    return fallback;
+}
+
+const TimeStretchCache& MaterializationStore::getTimeStretchCache() const noexcept
+{
+    if (contentRenderService_ != nullptr)
+        return contentRenderService_->getTimeStretchCache();
+    static TimeStretchCache fallback;
+    return fallback;
 }
 
 } // namespace OpenTune

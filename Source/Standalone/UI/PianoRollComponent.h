@@ -46,6 +46,7 @@
 #include "WaveformMipmap.h"
 #include "../../Utils/UndoManager.h"
 #include "../../ARA/MaterializationContentProvider.h"
+#include "../../Content/DomainContentOwner.h"
 
 namespace OpenTune {
 
@@ -176,6 +177,10 @@ public:
     /** Inject content providers (Phase 3-6: ARA or processor-backed). */
     void setContentProviders(std::shared_ptr<MaterializationContentAccess> access,
                              std::shared_ptr<MaterializationContentCommands> commands);
+
+    /** [ARA 重构] 注入域内容所有者（替代 setContentProviders）。统一 ARA/Standalone/Capture 路径。 */
+    void setContentOwner(DomainContentOwner* owner);
+    DomainContentOwner* contentOwner() const { return contentOwner_; }
 
     void setIsPlaying(bool playing) {
         bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
@@ -585,6 +590,9 @@ private:
     // Content provider (Phase 3-6: routes materialization reads/writes)
     std::shared_ptr<MaterializationContentAccess> contentAccess_;
     std::shared_ptr<MaterializationContentCommands> contentCommands_;
+
+    // [ARA 重构] 域内容所有者（替代 contentAccess_/contentCommands_ 的旧路由）
+    DomainContentOwner* contentOwner_ = nullptr;
 
     uint64_t editedMaterializationId_ = 0;
     bool experimentalFeaturesEnabled_ = false;

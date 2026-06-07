@@ -23,78 +23,9 @@ namespace OpenTune {
 
 namespace {
 
-struct ArchivedMaterializationBindingRecord
-{
-    juce::String audioModificationPersistentId;
-    SourceWindow contentWindow;
-    uint64_t sourceId{0};
-    uint64_t materializationId{0};
-    uint64_t materializationRevision{0};
-    double materializationDurationSeconds{0.0};
-
-    bool isValid() const noexcept
-    {
-        return audioModificationPersistentId.isNotEmpty()
-            && sourceId != 0
-            && materializationId != 0
-            && contentWindow.isValid()
-            && materializationDurationSeconds > 0.0;
-    }
-};
-
-constexpr int kMaterializationBindingArchiveMagic = 0x4F544142;
-constexpr int kMaterializationBindingArchiveVersion = 1;
-constexpr int kMaxMaterializationBindingRecords = 4096;
-
-juce::String mapRestoredAudioModificationPersistentId(const juce::String& archivedPersistentId,
-                                                      const juce::ARARestoreObjectsFilter* filter)
-{
-    if (archivedPersistentId.isEmpty())
-        return {};
-
-    if (filter == nullptr)
-        return archivedPersistentId;
-
-    auto* audioModification = filter->getAudioModificationToRestoreStateWithID(archivedPersistentId.toRawUTF8());
-    if (audioModification == nullptr)
-        return {};
-
-    const auto& restoredPersistentId = audioModification->getPersistentID();
-    return restoredPersistentId.empty() ? juce::String() : juce::String::fromUTF8(restoredPersistentId.c_str());
-}
-
-ArchivedMaterializationBindingRecord readRestoredMaterializationBindingRecord(juce::ARAInputStream& input,
-                                                                              juce::String persistentId)
-{
-    ArchivedMaterializationBindingRecord record;
-    record.audioModificationPersistentId = std::move(persistentId);
-    record.sourceId = static_cast<uint64_t>(input.readInt64());
-    record.materializationId = static_cast<uint64_t>(input.readInt64());
-    record.contentWindow.sourceId = static_cast<uint64_t>(input.readInt64());
-    record.contentWindow.sourceStartSeconds = input.readDouble();
-    record.contentWindow.sourceEndSeconds = input.readDouble();
-    record.materializationRevision = static_cast<uint64_t>(input.readInt64());
-    record.materializationDurationSeconds = input.readDouble();
-    return record;
-}
-
-void skipRestoredMaterializationBindingRecord(juce::ARAInputStream& input)
-{
-    const auto ignoredSourceId = input.readInt64();
-    const auto ignoredMaterializationId = input.readInt64();
-    const auto ignoredWindowSourceId = input.readInt64();
-    const auto ignoredWindowStart = input.readDouble();
-    const auto ignoredWindowEnd = input.readDouble();
-    const auto ignoredRevision = input.readInt64();
-    const auto ignoredDuration = input.readDouble();
-    juce::ignoreUnused(ignoredSourceId,
-                       ignoredMaterializationId,
-                       ignoredWindowSourceId,
-                       ignoredWindowStart,
-                       ignoredWindowEnd,
-                       ignoredRevision,
-                       ignoredDuration);
-}
+constexpr int kContentPayloadArchiveMagic = 0x4F544143;
+constexpr int kContentPayloadArchiveVersion = 1;
+constexpr int kMaxContentPayloadRecords = 4096;
 
 } // namespace
 
@@ -121,9 +52,7 @@ void OpenTuneDocumentController::attachProcessorServices(ProcessorServices servi
     f0Service_ = std::move(services.f0Service);
     scheduleAsyncWork_ = std::move(services.scheduleAsyncWork);
     onReclaimNeeded_ = std::move(services.requestReclaimSweep);
-
-    if (services.renderJobCallback && materializationStore_)
-        materializationStore_->setRenderJobCallback(std::move(services.renderJobCallback));
+    contentRenderService_ = services.contentRenderService;
 }
 
 void OpenTuneDocumentController::detachProcessorServices(const OpenTuneAudioProcessor* owner)
@@ -131,11 +60,7 @@ void OpenTuneDocumentController::detachProcessorServices(const OpenTuneAudioProc
     if (serviceOwner_ != owner) return;
     serviceOwner_ = nullptr;
 
-    // Drain any in-flight render jobs before clearing the callback to
-    // prevent dangling lambda captures (processor may be destroyed).
-    materializationStore_->drainRenderWorker();
-    materializationStore_->setRenderJobCallback({});
-
+    contentRenderService_ = nullptr;
     f0Service_.reset();
     scheduleAsyncWork_ = nullptr;
     onReclaimNeeded_ = nullptr;
@@ -168,6 +93,11 @@ void OpenTuneDocumentController::runContentReclaimSweep()
         sourceStore_->physicallyDeleteIfReclaimable(sourceId);
     }
 
+    // 清理 retiredContents_ 中已被重新生成内容的 modification 的旧记录
+    for (const auto& mod : audioModifications_)
+        if (mod.isRenderable())
+            releaseRetiredContent(mod.contentKey());
+
     // 仍触发 onReclaimNeeded_ 通知 processor（processor 扫自己的 standalone arrangement）
     if (onReclaimNeeded_)
         onReclaimNeeded_();
@@ -176,6 +106,33 @@ void OpenTuneDocumentController::runContentReclaimSweep()
 void OpenTuneDocumentController::scheduleContentReclaim()
 {
     reclaimAsyncUpdater_.triggerAsyncUpdate();
+}
+
+// -----------------------------------------------------------------------
+// DC-level retired content pool
+// -----------------------------------------------------------------------
+
+bool OpenTuneDocumentController::reviveRetiredContentByKey(const ContentKey& key, AudioModification& target)
+{
+    auto it = std::find_if(retiredContents_.begin(), retiredContents_.end(),
+                           [&](const RetiredContentRecord& rec) { return rec.key == key; });
+    if (it == retiredContents_.end())
+        return false;
+
+    target.content = it->content;
+    target.content.lifecycle = ContentLifecycle::Ready;
+    ++target.contentRevision;
+    target.birthState = AudioModificationBirthState::Ready;
+    retiredContents_.erase(it);
+    return true;
+}
+
+void OpenTuneDocumentController::releaseRetiredContent(const ContentKey& key)
+{
+    auto it = std::find_if(retiredContents_.begin(), retiredContents_.end(),
+                           [&](const RetiredContentRecord& rec) { return rec.key == key; });
+    if (it != retiredContents_.end())
+        retiredContents_.erase(it);
 }
 
 // -----------------------------------------------------------------------
@@ -675,9 +632,9 @@ void OpenTuneDocumentController::restoreContentPayloadInto(const juce::XmlElemen
     }
 }
 
-MaterializationStore* OpenTuneDocumentController::getMaterializationStore() const noexcept
+ContentRenderService* OpenTuneDocumentController::getContentRenderService() const noexcept
 {
-    return materializationStore_.get();
+    return contentRenderService_;
 }
 
 SourceStore* OpenTuneDocumentController::getSourceStore() const noexcept
@@ -687,7 +644,7 @@ SourceStore* OpenTuneDocumentController::getSourceStore() const noexcept
 
 bool OpenTuneDocumentController::PlaybackRegionProjection::isRenderable() const noexcept
 {
-    return materializationId != 0
+    return contentKey.isValid()
         && materializationDurationSeconds > 0.0
         && durationInPlaybackTime > 0.0
         && durationInModificationTime > 0.0;
@@ -732,24 +689,6 @@ OpenTuneDocumentController::getFocusedEditorPlaybackRegionProjection() const
     return projections.front();
 }
 
-bool OpenTuneDocumentController::referencesMaterialization(uint64_t materializationId) const
-{
-    if (materializationId == 0)
-        return false;
-
-    for (const auto& region : playbackRegions_)
-    {
-        if (!region.hasValidPlacement())
-            continue;
-
-        const auto* modification = findAudioModification(region.audioModificationPersistentId);
-        if (modification != nullptr && modification->materializationId == materializationId)
-            return true;
-    }
-
-    return false;
-}
-
 int OpenTuneDocumentController::refreshAllAudioModifications()
 {
     std::set<juce::String> uniqueModIds;
@@ -763,7 +702,6 @@ int OpenTuneDocumentController::refreshAllAudioModifications()
         return 0;
 
     int refreshedCount = 0;
-    bool retiredAnyOldMaterialization = false;
 
     for (const auto& modId : uniqueModIds)
     {
@@ -771,25 +709,12 @@ int OpenTuneDocumentController::refreshAllAudioModifications()
         if (modification == nullptr)
             continue;
 
-        const uint64_t oldMaterializationId = modification->materializationId;
-
         if (birthMaterializationForModification(*modification))
-        {
             ++refreshedCount;
-
-            if (oldMaterializationId != 0 && oldMaterializationId != modification->materializationId)
-            {
-                materializationStore_->retireMaterialization(oldMaterializationId);
-                retiredAnyOldMaterialization = true;
-            }
-        }
     }
 
     if (refreshedCount > 0)
         refreshRegisteredRenderers(publishModelChange());
-
-    if (retiredAnyOldMaterialization && onReclaimNeeded_)
-        onReclaimNeeded_();
 
     return refreshedCount;
 }
@@ -835,15 +760,37 @@ void OpenTuneDocumentController::didUpdateAudioModificationProperties(juce::ARAA
     modification.updateIdentity(audioModification);
     if (auto* source = findAudioSource(audioModification != nullptr ? audioModification->getAudioSource() : nullptr))
         modification.attachSource(*source);
-    applyPendingRestoredBinding(modification);
+
+    // 如果 modification 被 host 重新激活（undo 删除），检查 retiredContents_ 并恢复
+    const auto key = modification.contentKey();
+    if (key.isValid() && modification.content.lifecycle <= ContentLifecycle::Empty)
+    {
+        if (reviveRetiredContentByKey(key, modification))
+        {
+            if (modification.audioModification != nullptr)
+                modification.audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+        }
+    }
 
     refreshRegisteredRenderers(publishModelChange());
 }
 
 void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModification* audioModification)
 {
-    const auto* record = findAudioModification(audioModification);
-    const auto persistentId = record != nullptr ? record->persistentId : juce::String();
+    auto* mod = findAudioModification(audioModification);
+    if (mod)
+    {
+        // Retire active content into DC-level pool before destruction
+        if (mod->content.lifecycle >= ContentLifecycle::Loading)
+            mod->retireCurrentContent();
+
+        // Transfer all retired records to DC-level pool
+        for (auto& rec : mod->retiredContentRecords)
+            retiredContents_.push_back(std::move(rec));
+        mod->retiredContentRecords.clear();
+    }
+
+    const auto persistentId = mod != nullptr ? mod->persistentId : juce::String();
     audioModifications_.erase(std::remove_if(audioModifications_.begin(), audioModifications_.end(),
                                              [audioModification](const AudioModification& record)
                                              {
@@ -976,47 +923,70 @@ void OpenTuneDocumentController::willDestroyAudioSource(juce::ARAAudioSource* au
         onReclaimNeeded_();
 }
 
+namespace {
+juce::String mapRestoredPersistentId(const juce::String& archivedPersistentId,
+                                     const juce::ARARestoreObjectsFilter* filter)
+{
+    if (archivedPersistentId.isEmpty())
+        return {};
+
+    if (filter == nullptr)
+        return archivedPersistentId;
+
+    auto* audioModification = filter->getAudioModificationToRestoreStateWithID(
+        archivedPersistentId.toRawUTF8());
+    if (audioModification == nullptr)
+        return {};
+
+    const auto& restoredPersistentId = audioModification->getPersistentID();
+    return restoredPersistentId.empty() ? juce::String() : juce::String::fromUTF8(restoredPersistentId.c_str());
+}
+} // namespace
+
 bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream& input,
-                                                            const juce::ARARestoreObjectsFilter* filter)
+                                                             const juce::ARARestoreObjectsFilter* filter)
 {
     const int magic = input.readInt();
-    if (magic != kMaterializationBindingArchiveMagic)
+    if (magic != kContentPayloadArchiveMagic)
         return false;
 
     const int version = input.readInt();
-    if (version != kMaterializationBindingArchiveVersion)
+    if (version != kContentPayloadArchiveVersion)
         return false;
 
     const int bindingCount = input.readInt();
-    if (bindingCount < 0 || bindingCount > kMaxMaterializationBindingRecords)
+    if (bindingCount < 0 || bindingCount > kMaxContentPayloadRecords)
         return false;
 
+    // Restore retired content records into DC-level pool.
     for (int i = 0; i < bindingCount; ++i)
     {
         const auto archivedPersistentId = input.readString();
-        const auto restoredPersistentId = mapRestoredAudioModificationPersistentId(archivedPersistentId, filter);
-        if (restoredPersistentId.isEmpty())
+        juce::ignoreUnused(archivedPersistentId);
+        const auto restoredPersistentId = mapRestoredPersistentId(archivedPersistentId, filter);
+        juce::ignoreUnused(restoredPersistentId);
+
+        // Read retired content record count
+        const int retiredCount = input.readInt();
+
+        for (int r = 0; r < retiredCount; ++r)
         {
-            skipRestoredMaterializationBindingRecord(input);
-            continue;
+            RetiredContentRecord record;
+            record.key.domainKind = static_cast<DomainKind>(input.readInt());
+            record.key.objectId = static_cast<uint64_t>(input.readInt64());
+            record.content.lifecycle = ContentLifecycle::Retired;
+            retiredContents_.push_back(std::move(record));
         }
+    }
 
-        const auto record = readRestoredMaterializationBindingRecord(input, restoredPersistentId);
-        if (!record.isValid())
-            return false;
-
-        RestoredMaterializationBinding binding;
-        binding.audioModificationPersistentId = record.audioModificationPersistentId;
-        binding.sourceWindow = record.contentWindow;
-        binding.sourceId = record.sourceId;
-        binding.materializationId = record.materializationId;
-        binding.materializationRevision = record.materializationRevision;
-        binding.materializationDurationSeconds = record.materializationDurationSeconds;
-
-        if (auto* modification = findAudioModification(binding.audioModificationPersistentId))
-            applyRestoredBinding(*modification, binding);
-        else
-            rememberPendingRestoredBinding(std::move(binding));
+    // 将已恢复的退休记录匹配到现存 modification 上
+    for (auto& mod : audioModifications_)
+    {
+        const auto key = mod.contentKey();
+        if (!key.isValid() || mod.audioModification == nullptr)
+            continue;
+        if (reviveRetiredContentByKey(key, mod))
+            mod.audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
     }
 
     refreshRegisteredRenderers(publishModelChange());
@@ -1024,7 +994,7 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
 }
 
 bool OpenTuneDocumentController::doStoreObjectsToStream(juce::ARAOutputStream& output,
-                                                        const juce::ARAStoreObjectsFilter* filter)
+                                                         const juce::ARAStoreObjectsFilter* filter)
 {
     std::vector<const AudioModification*> bindings;
     bindings.reserve(audioModifications_.size());
@@ -1053,23 +1023,25 @@ bool OpenTuneDocumentController::doStoreObjectsToStream(juce::ARAOutputStream& o
         }
     }
 
-    if (bindings.size() > static_cast<size_t>(kMaxMaterializationBindingRecords))
+    if (bindings.size() > static_cast<size_t>(kMaxContentPayloadRecords))
         return false;
 
-    bool ok = output.writeInt(kMaterializationBindingArchiveMagic);
-    ok = output.writeInt(kMaterializationBindingArchiveVersion) && ok;
+    bool ok = output.writeInt(kContentPayloadArchiveMagic);
+    ok = output.writeInt(kContentPayloadArchiveVersion) && ok;
     ok = output.writeInt(static_cast<int>(bindings.size())) && ok;
 
     for (const auto* modification : bindings)
     {
         ok = output.writeString(modification->persistentId) && ok;
-        ok = output.writeInt64(static_cast<juce::int64>(modification->sourceId)) && ok;
-        ok = output.writeInt64(static_cast<juce::int64>(modification->materializationId)) && ok;
-        ok = output.writeInt64(static_cast<juce::int64>(modification->contentWindow.sourceId)) && ok;
-        ok = output.writeDouble(modification->contentWindow.sourceStartSeconds) && ok;
-        ok = output.writeDouble(modification->contentWindow.sourceEndSeconds) && ok;
-        ok = output.writeInt64(static_cast<juce::int64>(modification->materializationRevision)) && ok;
-        ok = output.writeDouble(modification->materializationDurationSeconds) && ok;
+
+        // Write retired content records count + payload
+        const auto retiredCount = static_cast<int>(modification->retiredContentRecords.size());
+        ok = output.writeInt(retiredCount) && ok;
+        for (const auto& record : modification->retiredContentRecords)
+        {
+            ok = output.writeInt(static_cast<int>(record.key.domainKind)) && ok;
+            ok = output.writeInt64(static_cast<juce::int64>(record.key.objectId)) && ok;
+        }
     }
 
     return ok;
@@ -1077,7 +1049,7 @@ bool OpenTuneDocumentController::doStoreObjectsToStream(juce::ARAOutputStream& o
 
 juce::ARAPlaybackRenderer* OpenTuneDocumentController::doCreatePlaybackRenderer()
 {
-    auto* renderer = new OpenTunePlaybackRenderer(getDocumentController());
+    auto* renderer = new OpenTunePlaybackRenderer(getDocumentController(), this);
     registerPlaybackRenderer(*renderer);
     renderer->refreshRenderPlanFromDocument();
     return renderer;
@@ -1149,11 +1121,18 @@ AudioModification* OpenTuneDocumentController::findAudioModification(juce::ARAAu
     return it != audioModifications_.end() ? &*it : nullptr;
 }
 
+AudioModification* OpenTuneDocumentController::findAudioModificationByContentKey(const ContentKey& key)
+{
+    for (auto& mod : audioModifications_)
+        if (mod.contentKey() == key)
+            return &mod;
+    return nullptr;
+}
+
 AudioModification& OpenTuneDocumentController::ensureAudioModification(juce::ARAAudioModification* audioModification)
 {
     if (auto* existing = findAudioModification(audioModification))
     {
-        applyPendingRestoredBinding(*existing);
         return *existing;
     }
 
@@ -1163,7 +1142,6 @@ AudioModification& OpenTuneDocumentController::ensureAudioModification(juce::ARA
         if (auto* source = findAudioSource(audioModification->getAudioSource()))
             modification.attachSource(*source);
     audioModifications_.push_back(std::move(modification));
-    applyPendingRestoredBinding(audioModifications_.back());
     return audioModifications_.back();
 }
 
@@ -1220,10 +1198,9 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
 
     projection.contentWindow = modification->contentWindow;
     projection.sourceId = modification->sourceId;
-    projection.materializationId = modification->materializationId;
-    projection.materializationRevision = modification->materializationRevision;
     projection.contentRevision = modification->contentRevision;
     projection.materializationDurationSeconds = modification->materializationDurationSeconds;
+    projection.contentKey = modification->contentKey();
 
     const auto* source = findAudioSource(modification->sourcePersistentId);
     if (source != nullptr)
@@ -1286,7 +1263,7 @@ bool OpenTuneDocumentController::birthMaterializationForModification(AudioModifi
         return false;
     }
 
-    if (materializationStore_ == nullptr || sourceStore_ == nullptr)
+    if (sourceStore_ == nullptr)
     {
         modification.birthState = AudioModificationBirthState::Failed;
         return false;
@@ -1353,8 +1330,8 @@ bool OpenTuneDocumentController::birthMaterializationForModification(AudioModifi
                 channelPointers[static_cast<size_t>(ch)] = playableAccum.getWritePointer(ch, accumOffset);
 
             if (!readerLease->readAudioSamples(readOffset,
-                                                static_cast<int>(chunkSamples),
-                                                channelPointers.data()))
+                                                 static_cast<int>(chunkSamples),
+                                                 channelPointers.data()))
             {
                 modification.birthState = AudioModificationBirthState::Failed;
                 return false;
@@ -1390,7 +1367,7 @@ bool OpenTuneDocumentController::birthMaterializationForModification(AudioModifi
         }
     }
 
-    // 5. Resample audio to 44.1kHz
+    // 5. Resample audio to 44.1kHz and populate AudioModification.content
     juce::AudioBuffer<float> storedBuffer;
     const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
     if (std::abs(sourceSampleRate - targetSampleRate) > 1.0)
@@ -1418,80 +1395,75 @@ bool OpenTuneDocumentController::birthMaterializationForModification(AudioModifi
         storedBuffer = std::move(playableAccum);
     }
 
-    // 6. Detect silent gaps
+    // 6. Detect silent gaps and build content state
     auto silentGaps = SilentGapDetector::detectAllGapsAdaptive(storedBuffer);
-
-    // 7. Create materialization
     auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(storedBuffer));
 
-    MaterializationStore::CreateMaterializationRequest matRequest;
-    matRequest.sourceId = sourceId;
-    matRequest.audioBuffer = storedAudioBuffer;
-    matRequest.sourceWindow = SourceWindow{sourceId,
-                                           sourceWindow.sourceStartSeconds,
-                                           sourceWindow.sourceEndSeconds};
-    matRequest.originalF0State = OriginalF0State::NotRequested;
-    matRequest.silentGaps = std::move(silentGaps);
-    matRequest.renderCache = std::make_shared<RenderCache>();
-
-    const uint64_t materializationId = materializationStore_->createMaterialization(std::move(matRequest));
-    if (materializationId == 0)
-    {
-        modification.birthState = AudioModificationBirthState::Failed;
-        return false;
-    }
+    // Fill AudioModification.content (new content root)
+    modification.content.sourceWindow = SourceWindow{sourceId,
+                                                      sourceWindow.sourceStartSeconds,
+                                                      sourceWindow.sourceEndSeconds};
+    modification.content.lifecycle = ContentLifecycle::Loading;
+    modification.content.analysis.silentGaps = std::move(silentGaps);
+    modification.content.analysis.originalF0State = OriginalF0State::NotRequested;
+    modification.content.contentRevision = modification.contentRevision;
 
     const double materializationDurationSeconds =
-        materializationStore_->getMaterializationAudioDurationById(materializationId);
+        TimeCoordinate::samplesToSeconds(storedAudioBuffer->getNumSamples(), targetSampleRate);
+
+    // 7. Publish to CRS if available (owns render cache + audio buffer)
+    if (contentRenderService_ != nullptr)
+    {
+        auto renderCache = contentRenderService_->getOrCreateRenderCache(modification.contentKey());
+        ContentRenderService::PlaybackReadSource readSource;
+        readSource.renderCache = renderCache;
+        readSource.audioBuffer = storedAudioBuffer;
+        contentRenderService_->publishPlaybackSource(modification.contentKey(), readSource);
+    }
 
     // 8. Set modification fields and notify ARA host
     modification.sourceId = sourceId;
     modification.contentWindow = SourceWindow{sourceId,
                                                sourceWindow.sourceStartSeconds,
                                                sourceWindow.sourceEndSeconds};
-    modification.materializationId = materializationId;
-    modification.materializationRevision = 0;
     modification.materializationDurationSeconds = materializationDurationSeconds;
     modification.birthState = AudioModificationBirthState::Ready;
     ++modification.contentRevision;
+    modification.content.contentRevision = modification.contentRevision;
     if (modification.audioModification != nullptr)
         modification.audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
 
-    // 9. Schedule async F0 extraction
-    scheduleAsyncF0Extraction(materializationId, std::move(channel0Data), sourceSampleRate);
+    // 9. Schedule async F0 extraction via CRS
+    if (contentRenderService_ != nullptr)
+        scheduleAsyncF0Extraction(modification.contentKey().objectId, std::move(channel0Data), sourceSampleRate);
 
     return true;
 }
 
 void OpenTuneDocumentController::scheduleAsyncF0Extraction(
-    uint64_t materializationId,
+    uint64_t contentObjectId,
     std::vector<float> channel0Data,
     double sourceSampleRate)
 {
     if (!scheduleAsyncWork_)
         return;
 
-    auto store = materializationStore_;
+    auto crs = contentRenderService_;
     auto f0Svc = f0Service_;
+    const ContentKey key{DomainKind::ARAAudioModification, contentObjectId, 0};
 
-    scheduleAsyncWork_([store, f0Svc, materializationId,
+    scheduleAsyncWork_([this, crs, f0Svc, key,
                         data = std::move(channel0Data),
                         sourceSampleRate]()
     {
-        store->setOriginalF0State(materializationId, OriginalF0State::Extracting);
-
         if (f0Svc == nullptr || data.empty())
-        {
-            store->setOriginalF0State(materializationId, OriginalF0State::Failed);
             return;
-        }
 
         auto extraction = f0Svc->extractF0(data.data(), data.size(),
                                             static_cast<int>(sourceSampleRate));
 
         if (!extraction.ok() || extraction.value().empty())
         {
-            store->setOriginalF0State(materializationId, OriginalF0State::Failed);
             f0Svc->releaseImmediately();
             return;
         }
@@ -1535,12 +1507,23 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
 
         f0Svc->releaseImmediately();
 
-        // Commit results on the message thread
-        juce::MessageManager::callAsync([store, materializationId,
+        // Commit results to AudioModification content on the message thread
+        juce::MessageManager::callAsync([this, crs, key,
                                           pc = std::move(pitchCurve)]() mutable
         {
-            store->setPitchCurve(materializationId, std::move(pc));
-            store->setOriginalF0State(materializationId, OriginalF0State::Ready);
+            if (crs == nullptr)
+                return;
+
+            // Wire F0 analysis into AudioModification content state
+            if (auto* mod = findAudioModificationByContentKey(key))
+            {
+                mod->content.analysis.pitchCurve = std::move(pc);
+                mod->content.analysis.originalF0State = OriginalF0State::Ready;
+                mod->content.analysis.f0Lifecycle = AnalysisLifecycle::Ready;
+                ++mod->content.contentRevision;
+                if (mod->audioModification != nullptr)
+                    mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+            }
         });
     });
 }
@@ -1557,60 +1540,8 @@ bool OpenTuneDocumentController::removePlaybackRegion(juce::ARAPlaybackRegion* p
     return playbackRegions_.size() != oldSize;
 }
 
-void OpenTuneDocumentController::applyRestoredBinding(AudioModification& modification,
-                                                      const RestoredMaterializationBinding& binding) noexcept
-{
-    modification.sourceId = binding.sourceId;
-    modification.contentWindow = binding.sourceWindow;
-    modification.contentWindow.sourceId = binding.sourceWindow.sourceId != 0
-        ? binding.sourceWindow.sourceId
-        : binding.sourceId;
-    modification.materializationId = binding.materializationId;
-    modification.materializationRevision = binding.materializationRevision;
-    modification.materializationDurationSeconds = binding.materializationDurationSeconds;
-    modification.birthState = AudioModificationBirthState::Ready;
-    ++modification.contentRevision;
-}
-
-bool OpenTuneDocumentController::applyPendingRestoredBinding(AudioModification& modification)
-{
-    if (modification.persistentId.isEmpty())
-        return false;
-
-    const auto it = std::find_if(pendingRestoredBindings_.begin(),
-                                 pendingRestoredBindings_.end(),
-                                 [&modification](const RestoredMaterializationBinding& binding)
-                                 {
-                                     return binding.audioModificationPersistentId == modification.persistentId;
-                                 });
-    if (it == pendingRestoredBindings_.end())
-        return false;
-
-    applyRestoredBinding(modification, *it);
-    pendingRestoredBindings_.erase(it);
-    return true;
-}
-
-void OpenTuneDocumentController::rememberPendingRestoredBinding(RestoredMaterializationBinding binding)
-{
-    if (binding.audioModificationPersistentId.isEmpty())
-        return;
-
-    const auto it = std::find_if(pendingRestoredBindings_.begin(),
-                                 pendingRestoredBindings_.end(),
-                                 [&binding](const RestoredMaterializationBinding& pending)
-                                 {
-                                     return pending.audioModificationPersistentId
-                                         == binding.audioModificationPersistentId;
-                                 });
-    if (it != pendingRestoredBindings_.end())
-    {
-        *it = std::move(binding);
-        return;
-    }
-
-    pendingRestoredBindings_.push_back(std::move(binding));
-}
+// RestoredMaterializationBinding removed — ARA archive now uses ContentKey + content payload.
+// Legacy archive records are skipped during doRestoreObjectsFromStream.
 
 bool OpenTuneDocumentController::requestSetPlaybackPosition(double timeInSeconds)
 {

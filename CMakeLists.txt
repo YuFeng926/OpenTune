@@ -653,6 +653,19 @@ target_sources(OpenTune
         Source/Utils/SilentGapDetector.cpp
         Source/Utils/SilentGapDetector.h
         Source/Utils/TimeCoordinate.h
+
+        # Content Layer
+        Source/Content/ContentKey.h
+        Source/Content/DomainContentOwner.h
+        Source/Content/AnalysisState.h
+        Source/Content/EditableContentState.h
+        Source/Content/AudioModificationContentState.h
+        Source/Content/RetiredContentRecord.h
+        Source/Content/EditableContentSnapshot.h
+
+        # Render Layer
+        Source/Render/ContentRenderService.h
+        Source/Render/ContentRenderService.cpp
 )
 
 # ==============================================================================

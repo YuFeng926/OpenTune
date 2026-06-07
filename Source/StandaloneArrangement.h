@@ -15,12 +15,15 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <vector>
 
 #include <juce_core/juce_core.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "Content/ContentKey.h"
+#include "Content/StandaloneClipContent.h"
 #include "Utils/TrackConstants.h"
 
 namespace OpenTune {
@@ -29,17 +32,18 @@ class StandaloneArrangement {
 public:
     static constexpr int kTrackCount = MaxTracks;
 
-    // 时间轴上的一个片段摆放，引用 MaterializationStore 中的编辑结果
+    // 时间轴上的一个片段摆放，引用 ContentKey 标识的内容域
     struct Placement {
         uint64_t placementId{0};
         uint64_t materializationId{0};
+        ContentKey contentKey;                  // 域内容标识（StandaloneClip 路径）
         uint64_t mappingRevision{0};
         double timelineStartSeconds{0.0};
         double durationSeconds{0.0};
         float gain{1.0f};
         double fadeInDuration{0.0};
         double fadeOutDuration{0.0};
-        double clipInSeconds{0.0};          // Trim start offset in source materialization (0 = start from beginning)
+        double clipInSeconds{0.0};          // Trim start offset in source content (0 = start from beginning)
         juce::String name;
         bool isRetired{false};
 
@@ -48,7 +52,7 @@ public:
 
         bool isValid() const noexcept
         {
-            return placementId != 0 && materializationId != 0 && durationSeconds > 0.0;
+            return placementId != 0 && durationSeconds > 0.0;
         }
 
         double timelineEndSeconds() const noexcept
@@ -196,6 +200,44 @@ private:
     // use_count()==1 (no audio-thread references remain), then swept on the
     // writer thread. This guarantees free/malloc never hits the RT path.
     mutable std::vector<PlaybackSnapshotHandle> retiredSnapshots_;
+
+    // ============================================================================
+    // Content Owner Registry — maps ContentKey.objectId → StandaloneClipContent
+    // ============================================================================
+public:
+    StandaloneClipContent* findContentOwner(uint64_t objectId) const
+    {
+        auto it = contentOwners_.find(objectId);
+        return it != contentOwners_.end() ? it->second.get() : nullptr;
+    }
+
+    StandaloneClipContent* findContentOwnerByPlacementId(uint64_t placementId) const
+    {
+        for (int t = 0; t < kTrackCount; ++t) {
+            for (const auto& p : tracks_[static_cast<size_t>(t)].placements) {
+                if (p.placementId == placementId && p.contentKey.objectId != 0) {
+                    return findContentOwner(p.contentKey.objectId);
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    StandaloneClipContent* getOrCreateContentOwner(uint64_t objectId)
+    {
+        auto it = contentOwners_.find(objectId);
+        if (it != contentOwners_.end())
+            return it->second.get();
+        auto owner = std::make_unique<StandaloneClipContent>(objectId);
+        auto* ptr = owner.get();
+        contentOwners_.emplace(objectId, std::move(owner));
+        return ptr;
+    }
+
+    void removeContentOwner(uint64_t objectId) { contentOwners_.erase(objectId); }
+
+private:
+    std::map<uint64_t, std::unique_ptr<StandaloneClipContent>> contentOwners_;
 };
 
 } // namespace OpenTune

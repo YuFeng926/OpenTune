@@ -26,7 +26,8 @@
 #include "Editor/PitchShiftDialogContent.h"
 #include "Editor/ConfirmDialogContent.h"
 #include "Utils/TimeCoordinate.h"
-#include "ARA/MaterializationContentProvider.h"
+#include "Content/DomainContentOwner.h"
+#include "Content/StandaloneClipContent.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "DSP/ReferenceFeatures.h"
 #include <cmath>
@@ -431,7 +432,56 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Setup Piano Roll (main editor area)
     pianoRoll_.addListener(this);
     pianoRoll_.setProcessor(&processorRef_);
-    pianoRoll_.setContentProviders(makeProcessorAccess(&processorRef_), makeProcessorCommands(&processorRef_));
+    {
+        // [ARA 重构] 注入 StandaloneClipContent 作为域内容所有者
+        auto* arrangement = processorRef_.getStandaloneArrangement();
+        if (arrangement != nullptr) {
+            const int activeTrack = getStandaloneActiveTrack(processorRef_);
+            StandaloneArrangement::Placement activePlacement;
+            if (activeTrack >= 0 && arrangement->getPlacementByIndex(activeTrack,
+                    arrangement->getSelectedPlacementIndex(activeTrack), activePlacement)) {
+                auto* contentOwner = arrangement->getOrCreateContentOwner(activePlacement.placementId);
+                pianoRoll_.setContentOwner(contentOwner);
+            }
+        }
+    }
+    // [ARA 重构] 过渡：提供内联 contentCommands 实现，factory 函数已删除
+    class StandaloneContentCommandsInline final : public MaterializationContentCommands
+    {
+    public:
+        explicit StandaloneContentCommandsInline(OpenTuneAudioProcessor* proc) noexcept : proc_(proc) {}
+        void setDetectedKey(uint64_t id, const DetectedKey& key) override
+            { if (proc_) proc_->setMaterializationDetectedKeyById(id, key); }
+        void setPitchShiftSettings(uint64_t id, const PitchShiftSettings& s) override
+            { if (proc_) proc_->setPitchShiftSettings(id, s); }
+        void enqueuePartialRender(uint64_t id, double start, double end) override
+            { if (proc_) proc_->enqueueMaterializationPartialRenderById(id, start, end); }
+        uint64_t createMaterialization(uint64_t src, double sr, int ch,
+                                        const juce::AudioBuffer<float>& buf,
+                                        const juce::String& name) override
+        {
+            juce::ignoreUnused(src, sr, ch, buf, name);
+            return 0;
+        }
+        bool commitAutoTuneGeneratedNotes(uint64_t id, const std::vector<Note>& notes,
+                                           int sf, int ef, float rs, float vd, float vr, double asr) override
+            { return proc_ && proc_->commitAutoTuneGeneratedNotesByMaterializationId(id, notes, sf, ef, rs, vd, vr, asr); }
+        bool setNotes(uint64_t id, const std::vector<Note>& notes) override
+            { return proc_ && proc_->setMaterializationNotesById(id, notes); }
+        bool commitNotesAndSegments(uint64_t id, const std::vector<Note>& notes,
+                                     const std::vector<CorrectedSegment>& segs) override
+            { return proc_ && proc_->commitMaterializationNotesAndSegmentsById(id, notes, segs); }
+        bool setCorrectedSegments(uint64_t id, const std::vector<CorrectedSegment>& segs) override
+            { return proc_ && proc_->setMaterializationCorrectedSegmentsById(id, segs); }
+        bool setPitchCurve(uint64_t id, std::shared_ptr<PitchCurve> curve) override
+            { return proc_ && proc_->setMaterializationPitchCurveById(id, std::move(curve)); }
+        bool setTimeGrid(uint64_t id, std::shared_ptr<const TimeGridSnapshot> g, int64_t s, int64_t e) override
+            { return proc_ && proc_->setMaterializationTimeGridById(id, std::move(g), s, e); }
+    private:
+        OpenTuneAudioProcessor* proc_;
+    };
+    pianoRoll_.setContentProviders(nullptr,
+        std::make_shared<StandaloneContentCommandsInline>(&processorRef_));
     pianoRoll_.setPianoKeyAudition(&processorRef_.getPianoKeyAudition());
     {
         const int activeTrack = getStandaloneActiveTrack(processorRef_);

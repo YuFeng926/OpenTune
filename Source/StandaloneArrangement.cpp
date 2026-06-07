@@ -340,8 +340,13 @@ bool StandaloneArrangement::insertPlacement(int trackId, Placement& placement)
 
 bool StandaloneArrangement::insertPlacement(int trackId, int insertIndex, Placement& placement)
 {
-    if (!isValidTrackId(trackId) || placement.materializationId == 0 || placement.durationSeconds <= 0.0) {
+    if (!isValidTrackId(trackId) || placement.durationSeconds <= 0.0) {
         return false;
+    }
+
+    // Ensure a content owner exists for standalone clip placements
+    if (placement.contentKey.domainKind == DomainKind::StandaloneClip && placement.contentKey.objectId != 0) {
+        getOrCreateContentOwner(placement.contentKey.objectId);
     }
 
     const juce::ScopedWriteLock lock(stateLock_);

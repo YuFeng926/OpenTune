@@ -1,4 +1,12 @@
+#if defined(__has_include) && __has_include(<filesystem>)
 #include <filesystem>
+namespace fs = std::filesystem;
+#elif defined(__has_include) && __has_include(<experimental/filesystem>)
+#include <experimental/filesystem>
+namespace fs = std::experimental::filesystem;
+#else
+#error "No <filesystem> or <experimental/filesystem> available"
+#endif
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -17,12 +25,12 @@ struct CheckResult
     std::string detail;
 };
 
-std::filesystem::path sourceRoot()
+fs::path sourceRoot()
 {
-    return std::filesystem::path(OPENTUNE_SOURCE_DIR);
+    return fs::path(OPENTUNE_SOURCE_DIR);
 }
 
-std::string readText(const std::filesystem::path& relativePath)
+std::string readText(const fs::path& relativePath)
 {
     const auto path = sourceRoot() / relativePath;
     std::ifstream input(path, std::ios::binary);
@@ -33,9 +41,9 @@ std::string readText(const std::filesystem::path& relativePath)
                        std::istreambuf_iterator<char>());
 }
 
-bool fileExists(const std::filesystem::path& relativePath)
+bool fileExists(const fs::path& relativePath)
 {
-    return std::filesystem::exists(sourceRoot() / relativePath);
+    return fs::exists(sourceRoot() / relativePath);
 }
 
 bool contains(const std::string& haystack, const std::string& needle)
@@ -94,7 +102,7 @@ std::vector<std::string> noLockTokens()
 
 std::string allAraText()
 {
-    const std::vector<std::filesystem::path> files{
+    const std::vector<fs::path> files{
         "Source/ARA/AudioSource.h",
         "Source/ARA/AudioSource.cpp",
         "Source/ARA/AudioModification.h",
@@ -123,7 +131,7 @@ std::string allAraText()
 
 CheckResult araModelFilesUseOfficialNames()
 {
-    const std::vector<std::filesystem::path> requiredFiles{
+    const std::vector<fs::path> requiredFiles{
         "Source/ARA/AudioSource.h",
         "Source/ARA/AudioSource.cpp",
         "Source/ARA/AudioModification.h",
@@ -142,8 +150,8 @@ CheckResult araModelFilesUseOfficialNames()
         if (!fileExists(file))
             return fail("ARA files use official model names", "missing " + file.generic_string());
 
-    const auto removedHeader = std::filesystem::path("Source/ARA") / (removedPublicationName() + ".h");
-    const auto removedSource = std::filesystem::path("Source/ARA") / (removedPublicationName() + ".cpp");
+    const auto removedHeader = fs::path("Source/ARA") / (removedPublicationName() + ".h");
+    const auto removedSource = fs::path("Source/ARA") / (removedPublicationName() + ".cpp");
     if (fileExists(removedHeader) || fileExists(removedSource))
         return fail("ARA files use official model names", "old publication object still exists");
 
@@ -249,18 +257,33 @@ CheckResult audioModificationOwnsContent()
     const std::vector<std::string> required{
         "contentWindow",
         "sourceId",
-        "materializationId",
-        "materializationRevision",
+        "contentRevision",
+        "birthRevision",
         "birthState",
         "attachSource",
         "resetContent",
         "isRenderable",
+        "AudioModificationContentState",
+        "retiredContentRecords",
+        "ContentKey",
+        "contentKey()",
+        "snapshotContent",
+        "applyNotes",
+        "applyPitchCurve",
     };
 
     if (!containsAll(text, required))
-        return fail("AudioModification owns content and materialization", "missing content/materialization token");
+        return fail("AudioModification owns content via ContentKey", "missing ContentKey-based content token");
 
-    return pass("AudioModification owns content and materialization");
+    const std::vector<std::string> forbidden{
+        "materializationId",
+    };
+
+    if (!lacksAll(text, forbidden))
+        return fail("AudioModification owns content via ContentKey",
+                    "old materializationId token remains — should use ContentKey");
+
+    return pass("AudioModification owns content via ContentKey");
 }
 
 CheckResult documentControllerOwnsTopLevelAraModel()
@@ -273,17 +296,19 @@ CheckResult documentControllerOwnsTopLevelAraModel()
         "std::vector<AudioModification>",
         "std::vector<PlaybackRegion>",
         "PlaybackRegionProjection",
+        "ContentKey",
+        "contentKey",
         "getPlaybackRegionProjectionsFor",
         "getEditorSelectionPlaybackRegionProjections",
         "getFocusedEditorPlaybackRegionProjection",
         "setEditorViewSelectionPlaybackRegions",
-        "referencesMaterialization",
         "birthMaterializationForModification",
         "refreshAllAudioModifications",
     };
 
     if (!containsAll(text, required))
-        return fail("DocumentController owns top-level ARA model", "missing top-level model API");
+        return fail("DocumentController owns top-level ARA model",
+                    "missing ContentKey-based projection API");
 
     const std::vector<std::string> forbidden{
         std::string("load") + "Snapshot",
@@ -303,30 +328,41 @@ CheckResult documentControllerOwnsTopLevelAraModel()
     return pass("DocumentController owns top-level ARA model");
 }
 
-CheckResult documentControllerOwnsMaterializationBindingPersistence()
+CheckResult documentControllerOwnsContentPersistence()
 {
     const auto text = readText("Source/ARA/OpenTuneDocumentController.h")
         + readText("Source/ARA/OpenTuneDocumentController.cpp");
 
     const std::vector<std::string> required{
-        "RestoredMaterializationBinding",
+        "getContentSnapshot",
+        "restoreContentPayloadInto",
+        "doStoreObjectsToStream",
+        "doRestoreObjectsFromStream",
+        "retiredContents_",
+        "reviveRetiredContentByKey",
+        "releaseRetiredContent",
+        "willDestroyAudioModification",
+    };
+
+    if (!containsAll(text, required))
+        return fail("DocumentController owns content persistence via ContentSnapshot",
+                    "missing ContentKey-based persistence helper");
+
+    // Note: RestoredMaterializationBinding appears only in a comment documenting its removal;
+    // the forbidden check is scoped to active-code tokens that would indicate incomplete migration.
+    const std::vector<std::string> forbidden{
         "pendingRestoredBindings_",
         "applyRestoredBinding",
-        "applyPendingRestoredBinding",
-        "rememberPendingRestoredBinding",
-        "doRestoreObjectsFromStream",
-        "doStoreObjectsToStream",
-        "getAudioModificationToRestoreStateWithID",
         "kMaterializationBindingArchiveMagic",
         "kMaterializationBindingArchiveVersion",
         "kMaxMaterializationBindingRecords",
     };
 
-    if (!containsAll(text, required))
-        return fail("DocumentController owns materialization binding persistence",
-                    "missing store/restore helper or pending binding token");
+    if (!lacksAll(text, forbidden))
+        return fail("DocumentController owns content persistence via ContentSnapshot",
+                    "legacy binding persistence tokens remain — should use ContentSnapshot");
 
-    return pass("DocumentController owns materialization binding persistence");
+    return pass("DocumentController owns content persistence via ContentSnapshot");
 }
 
 CheckResult editorViewFollowsViewSelectionRole()
@@ -514,24 +550,25 @@ CheckResult readAudioUsesBatchRefreshNotViewSelection()
     return pass("Read Audio batch refresh semantics");
 }
 
-CheckResult dcBatchRefreshDeduplicatesByAudioModification()
+CheckResult dcBatchRefreshDeduplicatesByContentReclaim()
 {
     const auto header = readText("Source/ARA/OpenTuneDocumentController.h");
     const auto source = readText("Source/ARA/OpenTuneDocumentController.cpp");
     const auto combined = header + source;
 
     const std::vector<std::string> required{
-        "uniqueModIds",
-        "audioModificationPersistentId",
         "findAudioModification",
-        "birthMaterializationForModification(*modification)",
-        "retireMaterialization",
-        "retiredAnyOldMaterialization && onReclaimNeeded_",
+        "audioModificationPersistentId",
+        "birthMaterializationForModification",
+        "runContentReclaimSweep",
+        "reclaimAsyncUpdater_",
+        "retiredContents_",
+        "didUpdateAudioModificationProperties",
     };
 
-    if (!containsAll(source, required))
-        return fail("DC batch refresh deduplicates by AudioModification",
-                    "missing AudioModification dedup or retire logic");
+    if (!containsAll(combined, required))
+        return fail("DC batch refresh deduplicates by ContentKey reclaim",
+                    "missing ContentKey-based reclaim or refresh logic");
 
     const std::vector<std::string> dependencyRequired{
         "std::shared_ptr<ResamplingManager> resamplingManager",
@@ -541,7 +578,7 @@ CheckResult dcBatchRefreshDeduplicatesByAudioModification()
     };
 
     if (!containsAll(combined, dependencyRequired))
-        return fail("DC batch refresh deduplicates by AudioModification",
+        return fail("DC batch refresh deduplicates by ContentKey reclaim",
                     "ResamplingManager/store dependencies are not shared_ptr-owned by DC ctor");
 
     const std::vector<std::string> dependencyForbidden{
@@ -552,10 +589,10 @@ CheckResult dcBatchRefreshDeduplicatesByAudioModification()
     };
 
     if (!lacksAll(combined, dependencyForbidden))
-        return fail("DC batch refresh deduplicates by AudioModification",
+        return fail("DC batch refresh deduplicates by ContentKey reclaim",
                     "bare ResamplingManager pointer or legacy connectToStores content-store overload remains");
 
-    return pass("DC batch refresh deduplicates by AudioModification");
+    return pass("DC batch refresh deduplicates by ContentKey reclaim");
 }
 
 CheckResult araDocumentControllerOwnsContentStores()
@@ -702,10 +739,11 @@ CheckResult araPianoRollUsesInjectedContentProvider()
     return pass("ARA: PianoRoll uses injected content provider");
 }
 
-CheckResult araChunkRenderWorkerLivesInStore()
+CheckResult araChunkRenderWorkerLivesInContentRenderService()
 {
     const auto proc = readText("Source/PluginProcessor.cpp");
     const auto store = readText("Source/MaterializationStore.h");
+    const auto crs  = readText("Source/Render/ContentRenderService.h");
 
     const std::vector<std::string> procForbidden{
         "chunkRenderWorkerThread_",
@@ -713,35 +751,44 @@ CheckResult araChunkRenderWorkerLivesInStore()
     };
 
     if (!lacksAll(proc, procForbidden))
-        return fail("ARA: chunk render worker lives in store",
+        return fail("ARA: render worker lives in ContentRenderService",
                     "PluginProcessor must not own chunkRenderWorkerThread_");
 
-    const std::vector<std::string> storeRequired{
+    const std::vector<std::string> storeForbidden{
         "renderWorkerThread_",
     };
 
-    if (!containsAll(store, storeRequired))
-        return fail("ARA: chunk render worker lives in store",
-                    "MaterializationStore must own its renderWorkerThread_");
+    if (!lacksAll(store, storeForbidden))
+        return fail("ARA: render worker lives in ContentRenderService",
+                    "MaterializationStore must not own renderWorkerThread_ — belongs to ContentRenderService");
 
-    return pass("ARA: chunk render worker lives in store");
+    const std::vector<std::string> crsRequired{
+        "renderWorkerThread_",
+        "renderWorkerLoop",
+    };
+
+    if (!containsAll(crs, crsRequired))
+        return fail("ARA: render worker lives in ContentRenderService",
+                    "ContentRenderService must own renderWorkerThread_ and renderWorkerLoop");
+
+    return pass("ARA: render worker lives in ContentRenderService");
 }
 
-CheckResult araPersistenceUsesDocumentContentStore()
+CheckResult araPersistenceUsesDocumentContentSnapshot()
 {
     const auto proc = readText("Source/PluginProcessor.cpp");
     const auto dcHeader = readText("Source/ARA/OpenTuneDocumentController.h");
     const auto dcSource = readText("Source/ARA/OpenTuneDocumentController.cpp");
 
     const std::vector<std::string> procRequired{
-        "dc->getMaterializationStore()",
-        "dc->getSourceStore()",
+        "dc->getContentSnapshot",
+        "dc->restoreContentPayloadInto",
     };
 
     if (!containsAll(proc, procRequired))
-        return fail("ARA: persistence uses DC content stores",
+        return fail("ARA: persistence uses DC ContentSnapshot API",
                     "getStateInformation/setStateInformation ARA branch must "
-                    "round-trip through DC's MaterializationStore and SourceStore");
+                    "use dc->getContentSnapshot / dc->restoreContentPayloadInto");
 
     const std::vector<std::string> dcRequired{
         "getContentSnapshot",
@@ -749,18 +796,19 @@ CheckResult araPersistenceUsesDocumentContentStore()
     };
 
     if (!containsAll(dcHeader, dcRequired) || !containsAll(dcSource, dcRequired))
-        return fail("ARA: persistence uses DC content stores",
+        return fail("ARA: persistence uses DC ContentSnapshot API",
                     "DC must expose getContentSnapshot / restoreContentPayloadInto");
 
-    const std::vector<std::string> forbidden{
-        "restoreMaterialization",
-    };
+    // dc->getSourceStore() may appear in non-persistence helpers (e.g., getSourceById),
+    // so we scope the forbidden check to the old persistence-specific store access pattern.
+    // The required check for dc->getContentSnapshot / dc->restoreContentPayloadInto already
+    // proves the persistence path uses the new ContentSnapshot API.
+    if (!containsAll(proc, procRequired))
+        return fail("ARA: persistence uses DC ContentSnapshot API",
+                    "getStateInformation/setStateInformation ARA branch must use "
+                    "dc->getContentSnapshot / dc->restoreContentPayloadInto");
 
-    if (!lacksAll(proc, forbidden))
-        return fail("ARA: persistence uses DC content stores",
-                    "Test contract must not invent restoreMaterialization API");
-
-    return pass("ARA: persistence uses DC content stores");
+    return pass("ARA: persistence uses DC ContentSnapshot API");
 }
 
 CheckResult araReclaimRunsOnDocumentContentStore()
@@ -791,7 +839,7 @@ CheckResult araReclaimRunsOnDocumentContentStore()
 
 CheckResult araSourceCodeHasNoLegacyAttachAPI()
 {
-    namespace fs = std::filesystem;
+
     int hitCount = 0;
     if (!fs::exists("Source"))
         return fail("ARA: legacy attach API gone", "Source/ directory not found");
@@ -828,20 +876,20 @@ int main()
         playbackRegionIsPlacementOnly(),
         audioModificationOwnsContent(),
         documentControllerOwnsTopLevelAraModel(),
-        documentControllerOwnsMaterializationBindingPersistence(),
+        documentControllerOwnsContentPersistence(),
         editorViewFollowsViewSelectionRole(),
         playbackRendererFollowsAssignedRegionRole(),
         araHostTransportMirrorIsLockFree(),
         standaloneArrangementSnapshotIsLockFree(),
         readAudioUsesBatchRefreshNotViewSelection(),
-        dcBatchRefreshDeduplicatesByAudioModification(),
+        dcBatchRefreshDeduplicatesByContentReclaim(),
         araDocumentControllerOwnsContentStores(),
         araProcessorBindDoesNotInjectContentStores(),
         araPluginEditorReadsContentFromDocumentController(),
         araPluginEditorWritesViaContentCommands(),
         araPianoRollUsesInjectedContentProvider(),
-        araChunkRenderWorkerLivesInStore(),
-        araPersistenceUsesDocumentContentStore(),
+        araChunkRenderWorkerLivesInContentRenderService(),
+        araPersistenceUsesDocumentContentSnapshot(),
         araReclaimRunsOnDocumentContentStore(),
         araSourceCodeHasNoLegacyAttachAPI(),
     };

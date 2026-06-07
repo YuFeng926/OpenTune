@@ -574,11 +574,21 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
         return;
     }
 
-    MaterializationStore::PlaybackReadSource source;
+    ContentRenderService::PlaybackReadSource source;
     const auto* matStore = processor.getMaterializationStore();
-    if (matStore == nullptr || !matStore->getPlaybackReadSource(placement.materializationId, source) || !source.canRead()) {
+    MaterializationStore::PlaybackReadSource oldSource;
+    if (matStore == nullptr || !matStore->getPlaybackReadSource(placement.materializationId, oldSource) || !oldSource.canRead()) {
         return;
     }
+    // Convert old store source to new CRS source type
+    source.renderCache = oldSource.renderCache;
+    source.audioBuffer = oldSource.audioBuffer;
+    source.timeStretchCache = oldSource.timeStretchCache;
+    source.contentKey = ContentKey{DomainKind::StandaloneClip, oldSource.materializationId, 0};
+    source.pitchRevision = oldSource.pitchRevision;
+    source.timeGridRevision = oldSource.timeGridRevision;
+    source.pitchShiftSettings = oldSource.pitchShiftSettings;
+    source.timeGridIsIdentity = oldSource.timeGridIsIdentity;
 
     const int64_t requestedPlacementSamples = juce::jmax<int64_t>(1,
         TimeCoordinate::secondsToSamples(placement.durationSeconds, kExportSr));
@@ -1250,11 +1260,71 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 
     sourceStore_ = std::make_shared<SourceStore>();
     materializationStore_ = std::make_shared<MaterializationStore>();
-    materializationStore_->setRenderJobCallback(
-        [this](MaterializationStore::PendingRenderJob& job) {
+    contentRenderService_ = std::make_shared<ContentRenderService>();
+    materializationStore_->attachContentRenderService(contentRenderService_.get());
+    // Bind processor's render callback to CRS via ExecutionLease (ARA 重构路由改制)
+    {
+        ContentRenderService::ExecutionLease lease;
+        lease.leaseOwner = this;
+        lease.renderJobCallback = [this](ContentRenderService::PendingRenderJob& job) {
             processChunkRenderJob(job);
-        });
-    contentCommands_ = makeProcessorCommands(this);
+        };
+        contentRenderService_->attachExecutionLease(std::move(lease));
+    }
+    // [ARA 重构] 内联 ProcessorContentCommands 替代工厂函数
+    class ProcessorContentCommandsInline final : public MaterializationContentCommands
+    {
+    public:
+        explicit ProcessorContentCommandsInline(OpenTuneAudioProcessor* proc) noexcept : proc_(proc) {}
+
+        void setDetectedKey(uint64_t id, const DetectedKey& key) override
+            { if (proc_) proc_->setMaterializationDetectedKeyById(id, key); }
+        void setPitchShiftSettings(uint64_t id, const PitchShiftSettings& s) override
+            { if (proc_) proc_->setPitchShiftSettings(id, s); }
+        void enqueuePartialRender(uint64_t id, double start, double end) override
+            { if (proc_) proc_->enqueueMaterializationPartialRenderById(id, start, end); }
+        uint64_t createMaterialization(uint64_t sourceId, double sampleRate, int channels,
+                                        const juce::AudioBuffer<float>& buffer,
+                                        const juce::String& name) override
+        {
+            if (proc_ == nullptr) return 0;
+            MaterializationStore::CreateMaterializationRequest req;
+            req.sourceId = sourceId;
+            req.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(buffer);
+            juce::ignoreUnused(sampleRate, channels, name);
+            auto* store = proc_->getMaterializationStore();
+            return store ? store->createMaterialization(req) : 0;
+        }
+        bool commitAutoTuneGeneratedNotes(uint64_t id,
+                                           const std::vector<Note>& notes,
+                                           int startFrame, int endFrameExclusive,
+                                           float retuneSpeed, float vibratoDepth,
+                                           float vibratoRate, double audioSampleRate) override
+        {
+            if (proc_ == nullptr) return false;
+            return proc_->commitAutoTuneGeneratedNotesByMaterializationId(
+                id, notes, startFrame, endFrameExclusive,
+                retuneSpeed, vibratoDepth, vibratoRate, audioSampleRate);
+        }
+        bool setNotes(uint64_t id, const std::vector<Note>& notes) override
+            { return proc_ && proc_->setMaterializationNotesById(id, notes); }
+        bool commitNotesAndSegments(uint64_t id,
+                                     const std::vector<Note>& notes,
+                                     const std::vector<CorrectedSegment>& segments) override
+            { return proc_ && proc_->commitMaterializationNotesAndSegmentsById(id, notes, segments); }
+        bool setCorrectedSegments(uint64_t id,
+                                   const std::vector<CorrectedSegment>& segments) override
+            { return proc_ && proc_->setMaterializationCorrectedSegmentsById(id, segments); }
+        bool setPitchCurve(uint64_t id, std::shared_ptr<PitchCurve> curve) override
+            { return proc_ && proc_->setMaterializationPitchCurveById(id, std::move(curve)); }
+        bool setTimeGrid(uint64_t id,
+                          std::shared_ptr<const TimeGridSnapshot> grid,
+                          int64_t srcStartFrame, int64_t srcEndFrame) override
+            { return proc_ && proc_->setMaterializationTimeGridById(id, std::move(grid), srcStartFrame, srcEndFrame); }
+    private:
+        OpenTuneAudioProcessor* proc_;
+    };
+    contentCommands_ = std::make_shared<ProcessorContentCommandsInline>(this);
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
     configureReferenceAnalysisService();
 
@@ -1291,21 +1361,15 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                                                double readStartSeconds,
                                                double targetSampleRate) {
             if (materializationStore_ == nullptr) return;
-            MaterializationStore::PlaybackReadSource readSource;
-            if (!materializationStore_->getPlaybackReadSource(materializationId, readSource)
+            ContentRenderService::PlaybackReadSource readSource;
+            const ContentKey captureKey{DomainKind::RegularVST3Capture, materializationId, 0};
+            if (!contentRenderService_->getPlaybackReadSource(captureKey, readSource)
                 || !readSource.hasAudio()) {
                 buffer.clear(destStart, numSamples);
                 return;
             }
             PlaybackReadRequest req;
-            req.source.renderCache = readSource.renderCache;
-            req.source.audioBuffer = readSource.audioBuffer;
-            // §7 �?propagate Stage 2 fast-path fields (vocal-time-stretch).
-            req.source.timeStretchCache    = readSource.timeStretchCache;
-            req.source.materializationId   = readSource.materializationId;
-            req.source.pitchRevision       = readSource.pitchRevision;
-            req.source.timeGridRevision    = readSource.timeGridRevision;
-            req.source.timeGridIsIdentity  = readSource.timeGridIsIdentity;
+            req.source = readSource;
             req.readStartSeconds = readStartSeconds;
             req.targetSampleRate = targetSampleRate;
             req.numSamples = numSamples;
@@ -1419,19 +1483,23 @@ void OpenTuneAudioProcessor::ensureStage2WorkerStarted()
     stage2WorkerThread_ = std::thread([this]() { stage2WorkerLoop(); });
 }
 
-void OpenTuneAudioProcessor::requestStage2Rebuild(uint64_t materializationId,
-                                                   MaterializationStore* store)
+void OpenTuneAudioProcessor::requestStage2Rebuild(ContentKey contentKey,
+                                                   uint64_t pitchRevision,
+                                                   uint64_t timeGridRevision)
 {
-    if (materializationId == 0) return;
+    if (!contentKey.isValid()) return;
     ensureStage2WorkerStarted();
     {
         std::lock_guard<std::mutex> lock(stage2Mutex_);
-        // Coalesce: don't enqueue duplicate matIds; the worker always pulls the
-        // most recent revision from the store anyway.
-        for (const auto& pending : stage2RebuildQueue_) {
-            if (pending.first == materializationId) return;
+        // Replace stale entries for the same ContentKey so the queue always
+        // carries the freshest revision values.
+        for (auto it = stage2RebuildQueue_.begin(); it != stage2RebuildQueue_.end(); ++it) {
+            if (it->contentKey == contentKey) {
+                *it = {contentKey, pitchRevision, timeGridRevision};
+                return;
+            }
         }
-        stage2RebuildQueue_.emplace_back(materializationId, store);
+        stage2RebuildQueue_.push_back({contentKey, pitchRevision, timeGridRevision});
         stage2QueueDepth_.store(static_cast<int>(stage2RebuildQueue_.size()),
                                  std::memory_order_release);
     }
@@ -1442,8 +1510,7 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
 {
     AppLogger::log("Stage2Worker: started");
     while (true) {
-        uint64_t materializationId = 0;
-        MaterializationStore* storePtr = nullptr;
+        Stage2RebuildEntry entry;
         {
             std::unique_lock<std::mutex> lock(stage2Mutex_);
             stage2Cv_.wait_for(lock, std::chrono::seconds(10), [this]() {
@@ -1456,8 +1523,7 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
             }
 
             if (stage2RebuildQueue_.empty()) continue;
-            materializationId = stage2RebuildQueue_.front().first;
-            storePtr = stage2RebuildQueue_.front().second;
+            entry = stage2RebuildQueue_.front();
             stage2RebuildQueue_.pop_front();
             stage2QueueDepth_.store(static_cast<int>(stage2RebuildQueue_.size()),
                                      std::memory_order_release);
@@ -1465,42 +1531,50 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
 
         // §7 (Journey-1 fix) — publish "in-flight" status for UI badge.
         stage2InFlight_.store(true, std::memory_order_release);
-        stage2InFlightMatId_.store(materializationId, std::memory_order_release);
+        stage2InFlightMatId_.store(entry.contentKey.objectId, std::memory_order_release);
 
-        const bool ok = runStage2RebuildForMaterialization(materializationId, storePtr);
+        const bool ok = runStage2RebuildForContentKey(entry.contentKey,
+                                                      entry.pitchRevision,
+                                                      entry.timeGridRevision);
 
         stage2InFlight_.store(false, std::memory_order_release);
         stage2InFlightMatId_.store(0, std::memory_order_release);
 
         if (!ok) {
-            AppLogger::warn("Stage2Worker: rebuild failed for matId="
-                            + juce::String(static_cast<juce::int64>(materializationId)));
+            AppLogger::warn("Stage2Worker: rebuild failed for objectId="
+                            + juce::String(static_cast<juce::int64>(entry.contentKey.objectId)));
         }
     }
 }
 
-bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materializationId,
-                                                                MaterializationStore* store)
+bool OpenTuneAudioProcessor::runStage2RebuildForContentKey(ContentKey contentKey,
+                                                           uint64_t requestPitchRev,
+                                                           uint64_t requestTimeGridRev)
 {
-    // Use provided store or fall back to processor-local store
-    auto& activeStore = store ? *store : *materializationStore_;
-    if (materializationId == 0) return false;
+    const uint64_t objectId = contentKey.objectId;
+    if (objectId == 0) return false;
 
-    // Pull the freshest snapshot the message thread has published.
+    // Pull the freshest snapshot from the processor-local store.
     MaterializationStore::MaterializationSnapshot snap;
-    if (!activeStore.getSnapshot(materializationId, snap)) return false;
+    if (!materializationStore_->getSnapshot(objectId, snap)) return false;
     if (snap.audioBuffer == nullptr) return false;
     if (snap.audioBuffer->getNumChannels() <= 0 || snap.audioBuffer->getNumSamples() <= 0) return false;
 
-    // If TimeGrid is identity, nothing to do �?invalidate any stale entry.
+    // Stale-job check: if the store has already been updated past the revision
+    // this request was enqueued for, a newer rebuild supersedes us — skip.
+    if (requestPitchRev < snap.pitchShiftRevision || requestTimeGridRev < snap.timeGridRevision) {
+        return false;
+    }
+
+    // If TimeGrid is identity, nothing to do — invalidate any stale entry.
     if (snap.timeGrid == nullptr || snap.timeGrid->isIdentity()) {
-        activeStore.getTimeStretchCache().invalidate(materializationId);
+        materializationStore_->getTimeStretchCache().invalidate(objectId);
         return true;
     }
 
     // Lazy-construct (or fetch) the per-materialization stretcher.
     constexpr double sampleRate = TimeCoordinate::kRenderSampleRate;
-    auto* stretcher = activeStore.getOpenTuneStretcher(materializationId, sampleRate, /*channels=*/1);
+    auto* stretcher = materializationStore_->getOpenTuneStretcher(objectId, sampleRate, /*channels=*/1);
     if (stretcher == nullptr) return false;
 
     // SoundTouch (WSOLA) drives time-stretch via a TempoSchedule derived from the
@@ -1510,34 +1584,17 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
     auto schedule = stretcher->buildTempoScheduleFromTimeGrid(*snap.timeGrid);
     stretcher->beginRebuild(schedule);
 
-    // ============================================================
-    // §7 (Phase E) �?Stage 2 input = Stage 1 (NSF vocoder) output
-    //
-    // We stream the materialization's playback signal *as if TimeGrid were
-    // identity* (i.e., pre-stretch) by calling readPlaybackAudio in chunks
-    // with TimeStretchCache fast-path explicitly disabled.  readPlaybackAudio
-    // here writes dry source then has RenderCache overlay REPLACE
-    // (setSample, not additive) every sample inside published chunk ranges
-    // with NSF vocoder output.  When all chunks are published this yields
-    // pure vocoder; gaps fall back to dry source.
-    //
-    // Edge cases:
-    //   - PitchCurve untouched / RenderCache empty �?buffer == dry source
-    //     (graceful degradation; result equals Phase D MVP behavior).
-    //   - RenderCache partially populated (mid-edit) �?vocoder for rendered
-    //     chunks, dry for the rest; Phase F may add a "wait for Stage 1
-    //     complete" gate.
-    // ============================================================
+    // Stage 2 input = Stage 1 (NSF vocoder) output
     const int totalSamples = snap.audioBuffer->getNumSamples();
     constexpr int kBlock = 4096;
 
     // Build a PlaybackReadSource with TimeStretchCache fast-path DISABLED to
     // avoid recursion (Stage 2 reading its own output).
-    MaterializationStore::PlaybackReadSource stage1Source;
+    ContentRenderService::PlaybackReadSource stage1Source;
     stage1Source.renderCache         = snap.renderCache;
     stage1Source.audioBuffer         = snap.audioBuffer;
-    stage1Source.timeStretchCache    = nullptr;   // ⚠️ explicit disable
-    stage1Source.materializationId   = 0;          // ⚠️ explicit disable
+    stage1Source.timeStretchCache    = nullptr;   // explicit disable
+    stage1Source.contentKey          = contentKey;
     stage1Source.timeGridIsIdentity  = true;       // forces dry-path branch
 
     // Mono read buffer; we ignore stereo because storage is mono-channel-0
@@ -1546,7 +1603,7 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
 
     // Capture invalidation generation before starting the build
     // so that store() can reject output if invalidation occurred during the build.
-    const uint32_t buildGen = materializationStore_->getTimeStretchCache().beginBuild(materializationId);
+    const uint32_t buildGen = materializationStore_->getTimeStretchCache().beginBuild(objectId);
 
     // SoundTouch single-pass push + drain (replaces RB's study + process double pass).
     std::vector<float> output;
@@ -1591,7 +1648,7 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
         stretcher->push(readBuf.getReadPointer(0), static_cast<size_t>(n), isLast);
         drainAvailable();
     }
-    // After push(isLast=true), SoundTouch::flush() has been called �?drain any
+    // After push(isLast=true), SoundTouch::flush() has been called; drain any
     // remaining buffered output (typically a few WSOLA hops worth).
     drainAvailable();
 
@@ -1606,17 +1663,18 @@ bool OpenTuneAudioProcessor::runStage2RebuildForMaterialization(uint64_t materia
     }
 
     // Re-fetch revisions just before publish (they may have advanced again).
-    const uint64_t timeGridRev = activeStore.getTimeGridRevision(materializationId);
+    const uint64_t pitchShiftRev = materializationStore_->getPitchShiftRevision(objectId);
+    const uint64_t timeGridRev = materializationStore_->getTimeGridRevision(objectId);
 
-    activeStore.getTimeStretchCache().store(materializationId,
-                                                        std::move(output),
-                                                        /*pitchRev=*/0,
-                                                        static_cast<uint32_t>(timeGridRev),
-                                                        sampleRate,
-                                                        buildGen);
+    materializationStore_->getTimeStretchCache().store(objectId,
+                                                       std::move(output),
+                                                       static_cast<uint32_t>(pitchShiftRev),
+                                                       static_cast<uint32_t>(timeGridRev),
+                                                       sampleRate,
+                                                       buildGen);
 
-    AppLogger::log("Stage2Worker: rebuilt matId="
-                   + juce::String(static_cast<juce::int64>(materializationId))
+    AppLogger::log("Stage2Worker: rebuilt objectId="
+                   + juce::String(static_cast<juce::int64>(objectId))
                    + " timeGridRev=" + juce::String(static_cast<juce::int64>(timeGridRev))
                    + " stage1InputSamples=" + juce::String(totalSamples)
                    + " stage2OutputSamples=" + juce::String(static_cast<int>(stretcher->expectedOutputSamples()))
@@ -2118,11 +2176,16 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
                 [](F0ExtractionService::Result&&) {});
         };
         services.requestReclaimSweep = [this] { triggerAsyncUpdate(); };
+        services.contentRenderService = contentRenderService_.get();
+
+        if (contentRenderService_ != nullptr)
         {
-            auto* dcStore = dc->getMaterializationStore();
-            services.renderJobCallback = [this, dcStore](MaterializationStore::PendingRenderJob& job) {
-                processChunkRenderJob(job, dcStore);
+            ContentRenderService::ExecutionLease lease;
+            lease.leaseOwner = this;
+            lease.renderJobCallback = [this](ContentRenderService::PendingRenderJob& job) {
+                processChunkRenderJob(job);
             };
+            contentRenderService_->attachExecutionLease(std::move(lease));
         }
 
         dc->attachProcessorServices(std::move(services));
@@ -2382,7 +2445,10 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             // makes the audio path silently degrade to dry passthrough (the bug
             // observed in Journey 1 manual smoke test 2026-05-12).
             readRequest.source.timeStretchCache    = materializationReadSource.timeStretchCache;
-            readRequest.source.materializationId   = materializationReadSource.materializationId;
+            readRequest.source.contentKey = ContentKey{
+                DomainKind::StandaloneClip,
+                materializationReadSource.materializationId,
+                0};
             readRequest.source.pitchRevision       = materializationReadSource.pitchRevision;
             readRequest.source.timeGridRevision    = materializationReadSource.timeGridRevision;
             readRequest.source.timeGridIsIdentity  = materializationReadSource.timeGridIsIdentity;
@@ -2557,7 +2623,7 @@ RenderCache::ChunkStats OpenTuneAudioProcessor::getMaterializationChunkStatsById
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
         std::shared_ptr<RenderCache> renderCache;
-        if (!dc->getMaterializationStore()->getRenderCache(materializationId, renderCache) || renderCache == nullptr)
+        if (!materializationStore_->getRenderCache(materializationId, renderCache) || renderCache == nullptr)
             return {};
         return renderCache->getChunkStats();
     }
@@ -2751,7 +2817,7 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
 #if JucePlugin_Enable_ARA
     if (const auto* dc = getDocumentController()) {
         for (const auto& region : dc->getPlaybackRegionProjections()) {
-            appendUniqueMaterializationId(serializedMaterializationIds, region.materializationId);
+            appendUniqueMaterializationId(serializedMaterializationIds, region.contentKey.objectId);
         }
     }
 #endif
@@ -3129,7 +3195,7 @@ std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneAudioProcessor::getMater
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
-        return dc->getMaterializationStore()->getAudioBuffer(materializationId, audioBuffer) ? audioBuffer : nullptr;
+        return materializationStore_->getAudioBuffer(materializationId, audioBuffer) ? audioBuffer : nullptr;
     }
 #endif
 
@@ -3575,7 +3641,7 @@ bool OpenTuneAudioProcessor::getMaterializationSnapshotById(uint64_t materializa
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->getSnapshot(materializationId, out);
+        return materializationStore_->getSnapshot(materializationId, out);
 #endif
 
     jassert(materializationStore_ != nullptr);
@@ -3608,7 +3674,7 @@ double OpenTuneAudioProcessor::getMaterializationAudioDurationById(uint64_t mate
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->getMaterializationAudioDurationById(materializationId);
+        return materializationStore_->getMaterializationAudioDurationById(materializationId);
 #endif
 
     jassert(materializationStore_ != nullptr);
@@ -4359,7 +4425,7 @@ std::shared_ptr<PitchCurve> OpenTuneAudioProcessor::getMaterializationPitchCurve
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
         std::shared_ptr<PitchCurve> curve;
-        return dc->getMaterializationStore()->getPitchCurve(materializationId, curve) ? curve : nullptr;
+        return materializationStore_->getPitchCurve(materializationId, curve) ? curve : nullptr;
     }
 #endif
 
@@ -4376,7 +4442,7 @@ bool OpenTuneAudioProcessor::setMaterializationPitchCurveById(uint64_t materiali
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->setPitchCurve(materializationId, std::move(curve));
+        return materializationStore_->setPitchCurve(materializationId, std::move(curve));
 #endif
 
     jassert(materializationStore_ != nullptr);
@@ -4393,7 +4459,10 @@ bool OpenTuneAudioProcessor::setMaterializationPitchCurveById(uint64_t materiali
         std::shared_ptr<const TimeGridSnapshot> tg;
         if (materializationStore_->getTimeGrid(materializationId, tg)
             && tg != nullptr && !tg->isIdentity()) {
-            requestStage2Rebuild(materializationId);
+            const auto pitchRev = materializationStore_->getPitchShiftRevision(materializationId);
+            const auto tgRev = materializationStore_->getTimeGridRevision(materializationId);
+            requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, materializationId, 0},
+                                 pitchRev, tgRev);
         }
     }
     return true;
@@ -4406,7 +4475,7 @@ OriginalF0State OpenTuneAudioProcessor::getMaterializationOriginalF0StateById(ui
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->getOriginalF0State(materializationId);
+        return materializationStore_->getOriginalF0State(materializationId);
 #endif
 
     jassert(materializationStore_ != nullptr);
@@ -4417,7 +4486,7 @@ bool OpenTuneAudioProcessor::setMaterializationOriginalF0StateById(uint64_t mate
 {
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->setOriginalF0State(materializationId, state);
+        return materializationStore_->setOriginalF0State(materializationId, state);
 #endif
     jassert(materializationStore_ != nullptr);
     return materializationId != 0 && materializationStore_->setOriginalF0State(materializationId, state);
@@ -4449,7 +4518,7 @@ DetectedKey OpenTuneAudioProcessor::getMaterializationDetectedKeyById(uint64_t m
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->getDetectedKey(materializationId);
+        return materializationStore_->getDetectedKey(materializationId);
 #endif
 
     jassert(materializationStore_ != nullptr);
@@ -4460,7 +4529,7 @@ bool OpenTuneAudioProcessor::setMaterializationDetectedKeyById(uint64_t material
 {
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->setDetectedKey(materializationId, key);
+        return materializationStore_->setDetectedKey(materializationId, key);
 #endif
     jassert(materializationStore_ != nullptr);
     return materializationId != 0 && materializationStore_->setDetectedKey(materializationId, key);
@@ -4478,7 +4547,7 @@ OpenTuneAudioProcessor::getMaterializationTimeGridById(uint64_t materializationI
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
         std::shared_ptr<const TimeGridSnapshot> snapshot;
-        return dc->getMaterializationStore()->getTimeGrid(materializationId, snapshot) ? snapshot : nullptr;
+        return materializationStore_->getTimeGrid(materializationId, snapshot) ? snapshot : nullptr;
     }
 #endif
 
@@ -4493,7 +4562,7 @@ uint64_t OpenTuneAudioProcessor::getMaterializationTimeGridRevisionById(uint64_t
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->getTimeGridRevision(materializationId);
+        return materializationStore_->getTimeGridRevision(materializationId);
 #endif
 
     jassert(materializationStore_ != nullptr);
@@ -4638,7 +4707,7 @@ bool OpenTuneAudioProcessor::setMaterializationTimeGridById(uint64_t materializa
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->setTimeGrid(materializationId, std::move(snapshot));
+        return materializationStore_->setTimeGrid(materializationId, std::move(snapshot));
 #endif
 
     jassert(materializationStore_ != nullptr);
@@ -4653,7 +4722,12 @@ bool OpenTuneAudioProcessor::setMaterializationTimeGridById(uint64_t materializa
     // bounds are reserved for future region-scoped re-stretch optimization
     // (current Offline mode is clip-wide).
     juce::ignoreUnused(affectedSrcStartFrame, affectedSrcEndFrame);
-    requestStage2Rebuild(materializationId);
+    {
+        const auto pitchRev = materializationStore_->getPitchShiftRevision(materializationId);
+        const auto tgRev = materializationStore_->getTimeGridRevision(materializationId);
+        requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, materializationId, 0},
+                             pitchRev, tgRev);
+    }
     return true;
 }
 
@@ -4683,7 +4757,7 @@ std::shared_ptr<RenderCache> OpenTuneAudioProcessor::getMaterializationRenderCac
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
         std::shared_ptr<RenderCache> renderCache;
-        return dc->getMaterializationStore()->getRenderCache(materializationId, renderCache) ? renderCache : nullptr;
+        return materializationStore_->getRenderCache(materializationId, renderCache) ? renderCache : nullptr;
     }
 #endif
 
@@ -4699,7 +4773,7 @@ std::vector<Note> OpenTuneAudioProcessor::getMaterializationNotesById(uint64_t m
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->getNotes(materializationId);
+        return materializationStore_->getNotes(materializationId);
 #endif
 
     jassert(materializationStore_ != nullptr);
@@ -4715,7 +4789,7 @@ OpenTuneAudioProcessor::MaterializationNotesSnapshot OpenTuneAudioProcessor::get
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
-        dc->getMaterializationStore()->getNotesSnapshot(materializationId, snapshot);
+        materializationStore_->getNotesSnapshot(materializationId, snapshot);
         return snapshot;
     }
 #endif
@@ -4729,7 +4803,7 @@ bool OpenTuneAudioProcessor::setMaterializationNotesById(uint64_t materializatio
 {
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return dc->getMaterializationStore()->setNotes(materializationId, normalizeStoredNotes(notes));
+        return materializationStore_->setNotes(materializationId, normalizeStoredNotes(notes));
 #endif
     jassert(materializationStore_ != nullptr);
     return materializationId != 0 && materializationStore_->setNotes(materializationId, normalizeStoredNotes(notes));
@@ -4744,7 +4818,7 @@ bool OpenTuneAudioProcessor::setMaterializationCorrectedSegmentsById(uint64_t ma
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
-        auto* store = dc->getMaterializationStore();
+        auto* store = materializationStore_.get();
         std::shared_ptr<PitchCurve> pitchCurve;
         if (!store->getPitchCurve(materializationId, pitchCurve) || pitchCurve == nullptr)
             return false;
@@ -4775,7 +4849,7 @@ bool OpenTuneAudioProcessor::commitMaterializationNotesAndSegmentsById(uint64_t 
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
-        auto* store = dc->getMaterializationStore();
+        auto* store = materializationStore_.get();
         std::shared_ptr<PitchCurve> pitchCurve;
         if (!store->getPitchCurve(materializationId, pitchCurve) || pitchCurve == nullptr)
             return false;
@@ -4801,7 +4875,10 @@ bool OpenTuneAudioProcessor::commitMaterializationNotesAndSegmentsById(uint64_t 
         std::shared_ptr<const TimeGridSnapshot> tg;
         if (materializationStore_->getTimeGrid(materializationId, tg)
             && tg != nullptr && !tg->isIdentity()) {
-            requestStage2Rebuild(materializationId);
+            const auto pitchRev = materializationStore_->getPitchShiftRevision(materializationId);
+            const auto tgRev = materializationStore_->getTimeGridRevision(materializationId);
+            requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, materializationId, 0},
+                                 pitchRev, tgRev);
         }
     }
     return committed;
@@ -5106,7 +5183,11 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
                             / TimeGridSnapshot::kSourceSpacingFrameRate;
     enqueueMaterializationPartialRenderById(targetPlacement.materializationId, editStartSec, editEndSec);
     if (patch.timingChanged) {
-        requestStage2Rebuild(targetPlacement.materializationId);
+        const auto matId = targetPlacement.materializationId;
+        const auto pitchRev = materializationStore_->getPitchShiftRevision(matId);
+        const auto tgRev = materializationStore_->getTimeGridRevision(matId);
+        requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, matId, 0},
+                             pitchRev, tgRev);
     }
 
     result.status = ReferenceAlignmentResult::Status::Succeeded;
@@ -5138,7 +5219,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByMaterializationId(uin
     MaterializationStore* store = nullptr;
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        store = dc->getMaterializationStore();
+        store = materializationStore_.get();
 #endif
     if (store == nullptr)
         store = materializationStore_.get();
@@ -5219,7 +5300,7 @@ bool OpenTuneAudioProcessor::enqueueMaterializationPartialRenderById(uint64_t ma
     MaterializationStore* store = nullptr;
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        store = dc->getMaterializationStore();
+        store = materializationStore_.get();
 #endif
     if (store == nullptr)
         store = materializationStore_.get();
@@ -5236,14 +5317,13 @@ bool OpenTuneAudioProcessor::enqueueMaterializationPartialRenderById(uint64_t ma
 
 // ============================================================================
 // 分块渲染工作线程 (moved to MaterializationStore::renderWorkerLoop)
-// processChunkRenderJob is called by the store's worker for each job.
+// processChunkRenderJob is called by the CRS worker via ExecutionLease.
 // ============================================================================
 
-void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::PendingRenderJob& coreJob,
-                                                   MaterializationStore* owningStore)
+void OpenTuneAudioProcessor::processChunkRenderJob(ContentRenderService::PendingRenderJob& job)
 {
     struct WorkerRenderJob {
-        MaterializationStore::PendingRenderJob coreJob;
+        ContentRenderService::PendingRenderJob coreJob;
         FrozenRenderBoundaries boundaries;
     };
 
@@ -5252,24 +5332,20 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
     std::vector<float> sourceF0;
     std::vector<float> correctedF0;
 
-    // ⚡️ 所有 store 操作通过此引用路由：当 owningStore 非空（DC worker 调用），
-    // 使用 DC store；否则使用 processor 本地 store（保持向后兼容）。
-    auto& store = owningStore ? *owningStore : *materializationStore_;
+    const double relChunkStartSec = job.startSeconds;
+    WorkerRenderJob wj;
+    wj.coreJob = std::move(job);
+    auto& boundaries = wj.boundaries;
 
-    const double relChunkStartSec = coreJob.startSeconds;
-    WorkerRenderJob job;
-    job.coreJob = std::move(coreJob);
-    auto& boundaries = job.boundaries;
-
-    // 2. 准备渲染数据（读�?Clip 中的音频�?PitchCurve�?
-    std::shared_ptr<PitchCurve> pitchCurve = job.coreJob.pitchCurve;
+    // 2. 准备渲染数据（读 Clip 中的音频、PitchCurve�?
+    std::shared_ptr<PitchCurve> pitchCurve = wj.coreJob.pitchCurve;
     int numFrames = 0;
     bool clipFound = false;
     bool boundariesFrozen = false;
 
-    if (job.coreJob.audioBuffer != nullptr) {
-        const int audioNumSamples = job.coreJob.audioBuffer->getNumSamples();
-        const int audioNumChannels = job.coreJob.audioBuffer->getNumChannels();
+    if (wj.coreJob.audioBuffer != nullptr) {
+        const int audioNumSamples = wj.coreJob.audioBuffer->getNumSamples();
+        const int audioNumChannels = wj.coreJob.audioBuffer->getNumChannels();
         int workerHopSize = 512;
         if (vocoderDomain_) {
             const int currentHopSize = vocoderDomain_->getVocoderHopSize();
@@ -5279,19 +5355,19 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
 
         MaterializationSampleRange materializationRange{0, audioNumSamples};
         if (freezeRenderBoundaries(materializationRange,
-                                   job.coreJob.startSample,
-                                   job.coreJob.endSampleExclusive,
+                                   wj.coreJob.startSample,
+                                   wj.coreJob.endSampleExclusive,
                                    workerHopSize,
                                    boundaries)) {
             boundariesFrozen = true;
             if (audioNumChannels > 0) {
                 numFrames = boundaries.frameCount;
                 monoAudio.resize(static_cast<size_t>(boundaries.synthSampleCount), 0.0f);
-                const float* ch0 = job.coreJob.audioBuffer->getReadPointer(0);
+                const float* ch0 = wj.coreJob.audioBuffer->getReadPointer(0);
                 for (int64_t i = 0; i < boundaries.publishSampleCount; ++i)
                     monoAudio[static_cast<size_t>(i)] = ch0[static_cast<int>(boundaries.trueStartSample + i)];
                 ChannelLayoutLog::logChunkRender(
-                    static_cast<juce::int64>(job.coreJob.materializationId),
+                    static_cast<juce::int64>(wj.coreJob.contentKey.objectId),
                     audioNumChannels);
                 clipFound = true;
             }
@@ -5299,7 +5375,7 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
     }
 
     if (!clipFound || !pitchCurve || monoAudio.empty() || numFrames <= 0 || !boundariesFrozen) {
-        job.coreJob.renderCache->completeChunkRender(relChunkStartSec, job.coreJob.targetRevision,
+        wj.coreJob.renderCache->completeChunkRender(relChunkStartSec, wj.coreJob.targetRevision,
             RenderCache::CompletionResult::TerminalFailure);
         return;
     }
@@ -5312,14 +5388,14 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
 
     auto snap = pitchCurve->getSnapshot();
     if (!snap->hasRenderableCorrectedF0()) {
-        job.coreJob.renderCache->markChunkAsBlank(relChunkStartSec);
+        wj.coreJob.renderCache->markChunkAsBlank(relChunkStartSec);
         return;
     }
 
     const int f0HopSize = snap->getHopSize();
     const double f0SampleRate = snap->getSampleRate();
     if (f0HopSize <= 0 || f0SampleRate <= 0.0) {
-        job.coreJob.renderCache->completeChunkRender(relChunkStartSec, job.coreJob.targetRevision,
+        wj.coreJob.renderCache->completeChunkRender(relChunkStartSec, wj.coreJob.targetRevision,
             RenderCache::CompletionResult::TerminalFailure);
         return;
     }
@@ -5344,7 +5420,10 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
 
     // ===== Pitch Shift render modifier: apply global F0 offset =====
     {
-        const auto pitchShiftSettings = store.getPitchShiftSettings(job.coreJob.materializationId);
+        ContentRenderService::PlaybackReadSource psSrc;
+        PitchShiftSettings pitchShiftSettings;
+        if (contentRenderService_->getPlaybackReadSource(wj.coreJob.contentKey, psSrc))
+            pitchShiftSettings = psSrc.pitchShiftSettings;
         if (!pitchShiftSettings.isIdentity()) {
             const float pitchRatio = static_cast<float>(pitchShiftSettings.getPitchRatio());
             for (auto& f0Val : sourceF0) {
@@ -5359,7 +5438,7 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
         if (f > 0.0f) { hasValidF0 = true; break; }
     }
     if (!hasValidF0) {
-        job.coreJob.renderCache->markChunkAsBlank(relChunkStartSec);
+        wj.coreJob.renderCache->markChunkAsBlank(relChunkStartSec);
         return;
     }
 
@@ -5389,24 +5468,24 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
                 if (static_cast<int64_t>(shiftedAudio.size()) != boundaries.publishSampleCount)
                     shiftedAudio.resize(static_cast<size_t>(boundaries.publishSampleCount), 0.0f);
 
-                const bool added = job.coreJob.renderCache->addChunk(
+                const bool added = wj.coreJob.renderCache->addChunk(
                     boundaries.trueStartSample, boundaries.trueEndSample,
-                    std::move(shiftedAudio), job.coreJob.targetRevision);
+                    std::move(shiftedAudio), wj.coreJob.targetRevision);
                 if (added)
-                    job.coreJob.renderCache->completeChunkRender(relChunkStartSec,
-                        job.coreJob.targetRevision, RenderCache::CompletionResult::Succeeded);
+                    wj.coreJob.renderCache->completeChunkRender(relChunkStartSec,
+                        wj.coreJob.targetRevision, RenderCache::CompletionResult::Succeeded);
                 else
-                    job.coreJob.renderCache->completeChunkRender(relChunkStartSec,
-                        job.coreJob.targetRevision, RenderCache::CompletionResult::TerminalFailure);
+                    wj.coreJob.renderCache->completeChunkRender(relChunkStartSec,
+                        wj.coreJob.targetRevision, RenderCache::CompletionResult::TerminalFailure);
 
-                const uint64_t rbMatId = job.coreJob.materializationId;
-                if (rbMatId != 0) {
-                    store.getTimeStretchCache().invalidate(rbMatId);
-                    requestStage2Rebuild(rbMatId, &store);
+                const uint64_t objectId = wj.coreJob.contentKey.objectId;
+                if (objectId != 0) {
+                    contentRenderService_->getTimeStretchCache().invalidate(objectId);
+                    // Stage 2 rebuild now routed through CRS
                 }
 
-                AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk matId="
-                    + juce::String(static_cast<juce::int64>(job.coreJob.materializationId))
+                AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk objId="
+                    + juce::String(static_cast<juce::int64>(objectId))
                     + " start=" + juce::String(relChunkStartSec, 3));
                 return;
             }
@@ -5415,7 +5494,7 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
 
     if (!ensureVocoderReady()) {
         AppLogger::log("RenderWorker: ensureVocoderReady FAILED");
-        job.coreJob.renderCache->completeChunkRender(relChunkStartSec, job.coreJob.targetRevision,
+        wj.coreJob.renderCache->completeChunkRender(relChunkStartSec, wj.coreJob.targetRevision,
             RenderCache::CompletionResult::TerminalFailure);
         return;
     }
@@ -5428,7 +5507,7 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
 
     auto melResult = computeLogMelSpectrogram(monoAudio.data(), static_cast<int>(monoAudio.size()), numFrames, melConfig);
     if (!melResult.ok() || melResult.value().empty()) {
-        job.coreJob.renderCache->completeChunkRender(relChunkStartSec, job.coreJob.targetRevision,
+        wj.coreJob.renderCache->completeChunkRender(relChunkStartSec, wj.coreJob.targetRevision,
             RenderCache::CompletionResult::TerminalFailure);
         return;
     }
@@ -5462,57 +5541,58 @@ void OpenTuneAudioProcessor::processChunkRenderJob(MaterializationStore::Pending
 
     // 6. 提交执行
     VocoderDomain::Job vocoderJob;
-    vocoderJob.chunkKey = (job.coreJob.materializationId << 32) | static_cast<uint64_t>(static_cast<uint32_t>(job.coreJob.startSample));
+    vocoderJob.chunkKey = (wj.coreJob.contentKey.objectId << 32) | static_cast<uint64_t>(static_cast<uint32_t>(wj.coreJob.startSample));
     vocoderJob.f0 = std::move(correctedF0);
     vocoderJob.mel = std::move(mel);
 
-    auto renderCache = job.coreJob.renderCache;
-    auto targetRevision = job.coreJob.targetRevision;
-    const uint64_t chunkMatId = job.coreJob.materializationId;
+    auto renderCache = wj.coreJob.renderCache;
+    auto targetRevision = wj.coreJob.targetRevision;
+    const uint64_t chunkObjId = wj.coreJob.contentKey.objectId;
     double jobStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
-                                                              TimeCoordinate::kRenderSampleRate);
+                                                               TimeCoordinate::kRenderSampleRate);
     const FrozenRenderBoundaries frozenBoundaries = boundaries;
 
-    auto* storePtr = &store;
-    vocoderJob.onComplete = [this, renderCache, targetRevision, chunkMatId, jobStartSeconds, frozenBoundaries, storePtr](bool success, const juce::String& error, const std::vector<float>& audio) {
+    vocoderJob.onComplete = [this, renderCache, targetRevision, chunkObjId, jobStartSeconds, frozenBoundaries](bool success, const juce::String& error, const std::vector<float>& audio) {
         const auto& boundaries = frozenBoundaries;
 
         if (success) {
             std::vector<float> publishedAudio;
             if (!preparePublishedAudioFromSynthesis(boundaries, audio, publishedAudio)) {
-                AppLogger::error("ChunkRender: synthesis length mismatch for RenderCache publish matId="
-                    + juce::String(static_cast<juce::int64>(chunkMatId)));
+                AppLogger::error("ChunkRender: synthesis length mismatch for RenderCache publish objId="
+                    + juce::String(static_cast<juce::int64>(chunkObjId)));
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                if (storePtr)
-                    storePtr->notifyRenderWorker();
+                contentRenderService_->notifyRenderWorker();
                 return;
             }
 
             const bool added = renderCache->addChunk(boundaries.trueStartSample, boundaries.trueEndSample,
                                                      std::move(publishedAudio), targetRevision);
             if (!added) {
-                AppLogger::error("ChunkRender: RenderCache rejected published chunk matId="
-                    + juce::String(static_cast<juce::int64>(chunkMatId)));
+                AppLogger::error("ChunkRender: RenderCache rejected published chunk objId="
+                    + juce::String(static_cast<juce::int64>(chunkObjId)));
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                if (storePtr)
-                    storePtr->notifyRenderWorker();
+                contentRenderService_->notifyRenderWorker();
                 return;
             }
 
             renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::Succeeded);
 
-            if (chunkMatId != 0 && storePtr != nullptr) {
-                storePtr->getTimeStretchCache().invalidate(chunkMatId);
-                requestStage2Rebuild(chunkMatId, storePtr);
+            if (chunkObjId != 0) {
+                contentRenderService_->getTimeStretchCache().invalidate(chunkObjId);
+                if (materializationStore_ != nullptr) {
+                    const auto pitchRev = materializationStore_->getPitchShiftRevision(chunkObjId);
+                    const auto tgRev = materializationStore_->getTimeGridRevision(chunkObjId);
+                    requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, chunkObjId, 0},
+                                         pitchRev, tgRev);
+                }
             }
         } else {
-            AppLogger::error("ChunkRender: vocoder failed matId="
-                + juce::String(static_cast<juce::int64>(chunkMatId))
+            AppLogger::error("ChunkRender: vocoder failed objId="
+                + juce::String(static_cast<juce::int64>(chunkObjId))
                 + " error=" + error);
             renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
         }
-        if (storePtr)
-            storePtr->notifyRenderWorker();
+        contentRenderService_->notifyRenderWorker();
     };
 
     vocoderDomain_->submit(std::move(vocoderJob));
@@ -5559,11 +5639,12 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     // fall through to the existing dry-path �?perceptually the user hears
     // unstretched audio for the brief moment until Stage 2 finishes.
     // ============================================================
+    const uint64_t objectId = request.source.contentKey.objectId;
     if (!request.source.timeGridIsIdentity
         && request.source.timeStretchCache != nullptr
-        && request.source.materializationId != 0) {
+        && objectId != 0) {
         const int wrote = request.source.timeStretchCache->sliceForOutputRange(
-            request.source.materializationId,
+            objectId,
             request.readStartSeconds,
             destination,
             destinationStartSample,

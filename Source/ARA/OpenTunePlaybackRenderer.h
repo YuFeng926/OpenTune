@@ -2,6 +2,7 @@
 
 #include "../Utils/SourceWindow.h"
 #include "../Utils/TimeCoordinate.h"
+#include "../Content/ContentKey.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <optional>
@@ -53,17 +54,19 @@ bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
                                   const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept;
 
 class OpenTuneDocumentController;
-class MaterializationStore;
+class ContentRenderService;
 class OpenTunePlaybackRenderer : public juce::ARAPlaybackRenderer
 {
 public:
+    OpenTunePlaybackRenderer(ARA::PlugIn::DocumentController* araDc,
+                             OpenTuneDocumentController* docController);
     using juce::ARAPlaybackRenderer::ARAPlaybackRenderer;
 
     struct PlaybackRegionRenderItem
     {
         juce::ARAPlaybackRegion* playbackRegion{nullptr};
         SourceWindow contentWindow;
-        uint64_t materializationId{0};
+        ContentKey contentKey;
         double startInPlaybackTime{0.0};
         double startInModificationTime{0.0};
         double durationInPlaybackTime{0.0};
@@ -98,7 +101,7 @@ private:
     int numChannels_ = 2;
     int maximumSamplesPerBlock_ = 512;
     juce::AudioBuffer<float> playbackScratch_;
-    MaterializationStore* materializationStore_ = nullptr;
+    OpenTuneDocumentController* documentController_ = nullptr;
     std::vector<juce::ARAPlaybackRegion*> assignedPlaybackRegions_;
     std::vector<PlaybackRegionRenderItem> renderItems_;
 

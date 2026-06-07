@@ -52,12 +52,17 @@ namespace {
     }
 }
 
+OpenTunePlaybackRenderer::OpenTunePlaybackRenderer(ARA::PlugIn::DocumentController* araDc,
+                                                   OpenTuneDocumentController* docController)
+    : juce::ARAPlaybackRenderer(araDc)
+    , documentController_(docController)
+{
+}
+
 OpenTunePlaybackRenderer::~OpenTunePlaybackRenderer()
 {
-    if (auto* dc = getDocumentController())
-        if (auto* docController =
-                juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<OpenTuneDocumentController>(dc))
-            docController->unregisterPlaybackRenderer(*this);
+    if (documentController_ != nullptr)
+        documentController_->unregisterPlaybackRenderer(*this);
 }
 
 void OpenTunePlaybackRenderer::didAddPlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
@@ -90,25 +95,13 @@ void OpenTunePlaybackRenderer::willRemovePlaybackRegion(ARA::PlugIn::PlaybackReg
 
 void OpenTunePlaybackRenderer::refreshRenderPlanFromDocument()
 {
-    auto* dc = getDocumentController();
-    if (dc == nullptr)
+    if (documentController_ == nullptr)
     {
-        materializationStore_ = nullptr;
         renderItems_.clear();
         return;
     }
 
-    auto* docController =
-        juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<OpenTuneDocumentController>(dc);
-    if (docController == nullptr)
-    {
-        materializationStore_ = nullptr;
-        renderItems_.clear();
-        return;
-    }
-
-    materializationStore_ = docController->getMaterializationStore();
-    const auto projections = docController->getPlaybackRegionProjectionsFor(assignedPlaybackRegions_);
+    const auto projections = documentController_->getPlaybackRegionProjectionsFor(assignedPlaybackRegions_);
     std::vector<PlaybackRegionRenderItem> nextItems;
     nextItems.reserve(projections.size());
 
@@ -120,7 +113,7 @@ void OpenTunePlaybackRenderer::refreshRenderPlanFromDocument()
         PlaybackRegionRenderItem item;
         item.playbackRegion = projection.playbackRegion;
         item.contentWindow = projection.contentWindow;
-        item.materializationId = projection.materializationId;
+        item.contentKey = projection.contentKey;
         item.startInPlaybackTime = projection.startInPlaybackTime;
         item.startInModificationTime = projection.startInModificationTime;
         item.durationInPlaybackTime = projection.durationInPlaybackTime;
@@ -168,8 +161,11 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
 
     buffer.clear();
 
-    auto* store = materializationStore_;
-    if (store == nullptr || renderItems_.empty())
+    if (documentController_ == nullptr || renderItems_.empty())
+        return true;
+
+    auto* crs = documentController_->getContentRenderService();
+    if (crs == nullptr)
         return true;
 
     const double blockStartSeconds = positionInfo.getTimeInSeconds().orFallback(0.0);
@@ -177,23 +173,23 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
     for (const auto& region : renderItems_)
     {
         const auto overlap = computeRegionBlockRenderSpan(blockStartSeconds,
-                                                          buffer.getNumSamples(),
-                                                          hostSampleRate_,
-                                                          region.startInPlaybackTime,
-                                                          region.endInPlaybackTime());
+                                                           buffer.getNumSamples(),
+                                                           hostSampleRate_,
+                                                           region.startInPlaybackTime,
+                                                           region.endInPlaybackTime());
         if (!overlap.has_value())
             continue;
 
-        MaterializationStore::PlaybackReadSource readSource;
-        if (!store->getPlaybackReadSource(region.materializationId, readSource))
+        ContentRenderService::PlaybackReadSource readSource;
+        if (!crs->getPlaybackReadSource(region.contentKey, readSource))
             continue;
 
         const double readStartSeconds = mapPlaybackTimeToMaterializationTime(region,
-                                                                             overlap->overlapStartSeconds);
+                                                                              overlap->overlapStartSeconds);
         const PlaybackReadRequest request(readSource,
-                                          readStartSeconds,
-                                          hostSampleRate_,
-                                          overlap->samplesToCopy);
+                                           readStartSeconds,
+                                           hostSampleRate_,
+                                           overlap->samplesToCopy);
 
         playbackScratch_.clear();
         const int copied = readPlaybackAudio(request, playbackScratch_, 0);
