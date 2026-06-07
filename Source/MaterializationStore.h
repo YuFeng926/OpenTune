@@ -7,7 +7,7 @@
  *
  * 线程安全：内部使用 ReadWriteLock，读写均可跨线程调用。
  * 生命周期：支持 retire/revive 软删除，用于 Undo 系统的延迟回收。
- * 渲染调度：提供 enqueuePartialRender / pullNextPendingRenderJob 队列接口。
+ * 渲染调度：提供 enqueuePartialRender 队列接口，委托 ContentRenderService。
  */
 #pragma once
 
@@ -227,9 +227,8 @@ public:
     // ============================================================
     // TimeStretchCache accessor
     //
-    // Delegates to ContentRenderService when attached; otherwise
-    // returns a static local fallback.  No cache is owned directly
-    // by MaterializationStore.
+    // Delegates to ContentRenderService (which must be attached).
+    // No cache is owned directly by MaterializationStore.
     // ============================================================
     TimeStretchCache& getTimeStretchCache() noexcept;
     const TimeStretchCache& getTimeStretchCache() const noexcept;
@@ -258,8 +257,6 @@ public:
                               double relStartSeconds,
                               double relEndSeconds,
                               int hopSize);
-    bool hasPendingRenderJobs() const;
-    bool pullNextPendingRenderJob(PendingRenderJob& out);
 
     double getMaterializationAudioDurationById(uint64_t materializationId) const noexcept;
 
@@ -275,25 +272,10 @@ public:
     bool setReferenceFeatures(uint64_t materializationId, const ReferenceFeatureSet& features);
     bool getReferenceFeatures(uint64_t materializationId, ReferenceFeatureSet& out) const;
 
-    /** Register the callback that processes each render job.
-     *  Must be set before the first job is enqueued (typically
-     *  set by the owning processor or document controller).
-     *  Delegates to ContentRenderService::attachExecutionLease
-     *  when contentRenderService_ is non-null; otherwise no-op. */
-    void setRenderJobCallback(std::function<void(PendingRenderJob&)> cb);
-
-    /** Wake the render worker (e.g. from vocoder completion callback). */
-    void notifyRenderWorker();
-
     /** Pause/resume the render worker.
      *  Delegates to ContentRenderService when attached. */
     void pauseRenderWorker();
     void resumeRenderWorker();
-
-    /** Drain any in-flight render job and pause the render worker.
-     *  Blocks until all in-flight jobs complete.
-     *  Delegates to ContentRenderService when attached. */
-    void drainRenderWorker();
 
     // ============================================================
     // Delegation to ContentRenderService
