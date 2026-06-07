@@ -513,6 +513,19 @@ void PianoRollComponent::setContentProviders(std::shared_ptr<MaterializationCont
     contentCommands_ = std::move(commands);
 }
 
+void PianoRollComponent::setContentOwner(DomainContentOwner* owner)
+{
+    contentOwner_ = owner;
+    // 当 contentOwner 设置后，旧 access/commands 转为备用
+    if (owner != nullptr) {
+        // 通过 owner 的 snapshot 更新缓存
+        auto snap = owner->snapshotContent();
+        if (snap) {
+            cachedNotes_ = snap->notes;
+        }
+    }
+}
+
 void PianoRollComponent::refreshEditedMaterializationNotes()
 {
     cachedNotes_.clear();

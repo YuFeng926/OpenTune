@@ -9,11 +9,12 @@
 
 namespace OpenTune {
 
-class OpenTuneAudioProcessor;
-class OpenTuneDocumentController;
-
 // ============================================================================
-// MaterializationContentAccess — read-only content access interface
+// [DEPRECATED] MaterializationContentAccess — read-only content access interface
+//
+// 旧的 DC/Processor 内容访问路径已废弃。
+// 新的内容访问统一通过 DomainContentOwner::snapshotContent()。
+// 此接口保留仅为避免编译中断；新代码不应依赖此接口。
 // ============================================================================
 class MaterializationContentAccess
 {
@@ -42,7 +43,8 @@ public:
 };
 
 // ============================================================================
-// MaterializationContentCommands — state-change content interface
+// [DEPRECATED] MaterializationContentCommands — state-change content interface
+// 旧的内容写入路径。新代码应通过 DomainContentOwner::applyContentCommand()。
 // ============================================================================
 class MaterializationContentCommands
 {
@@ -64,7 +66,6 @@ public:
                                                float vibratoRate,
                                                double audioSampleRate) = 0;
 
-    // V2.1 command boundary extension — PianoRoll write operations
     virtual bool setNotes(uint64_t materializationId, const std::vector<Note>& notes) = 0;
     virtual bool commitNotesAndSegments(uint64_t materializationId,
                                         const std::vector<Note>& notes,
@@ -77,13 +78,5 @@ public:
                              int64_t srcStartFrame,
                              int64_t srcEndFrame) = 0;
 };
-
-// ============================================================================
-// Factory functions
-// ============================================================================
-std::shared_ptr<MaterializationContentAccess> makeDocumentControllerAccess(OpenTuneDocumentController* dc);
-std::shared_ptr<MaterializationContentCommands> makeDocumentControllerCommands(OpenTuneDocumentController* dc);
-std::shared_ptr<MaterializationContentAccess> makeProcessorAccess(OpenTuneAudioProcessor* processor);
-std::shared_ptr<MaterializationContentCommands> makeProcessorCommands(OpenTuneAudioProcessor* processor);
 
 } // namespace OpenTune

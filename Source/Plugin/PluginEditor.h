@@ -35,6 +35,7 @@
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
 #include "../ARA/MaterializationContentProvider.h"
+#include "../Content/DomainContentOwner.h"
 
 namespace OpenTune::Capture {
 class CaptureSession;
@@ -149,6 +150,9 @@ private:
     const MaterializationContentAccess& getContentAccess() const { return *contentAccess_; }
     MaterializationContentCommands& getContentCommands() const { return *contentCommands_; }
     std::shared_ptr<MaterializationContentCommands> getContentCommandsShared() const { return contentCommands_; }
+
+    // [ARA 重构] 域内容所有者（替代 contentAccess_/contentCommands_ 的旧路由）
+    DomainContentOwner* contentOwner_ = nullptr;
 
     AppPreferences appPreferences_;
     std::shared_ptr<LocalizationManager::LanguageState> languageState_;

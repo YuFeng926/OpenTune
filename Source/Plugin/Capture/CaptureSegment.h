@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <memory>
 
+#include "../../Content/ContentKey.h"
+
 namespace OpenTune::Capture {
 
 /**
@@ -95,6 +97,9 @@ struct CaptureSegment
 
     /** Set when transitioning Processing → Edited. */
     uint64_t materializationId = 0;
+
+    /** Domain content key for this capture segment. Set at creation time. */
+    ContentKey contentKey;
 
     /** Compute end time (only valid for Edited segments). */
     double endTime() const noexcept { return T_start.load(std::memory_order_acquire) + durationSeconds; }

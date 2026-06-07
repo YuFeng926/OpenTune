@@ -10,6 +10,8 @@
 #include "AudioModification.h"
 #include "AudioSource.h"
 #include "../MaterializationStore.h"
+#include "../Render/ContentRenderService.h"
+#include "../Content/ContentKey.h"
 #include "PlaybackRegion.h"
 
 namespace OpenTune {
@@ -31,8 +33,6 @@ public:
         juce::String audioModificationPersistentId;
         SourceWindow contentWindow;
         uint64_t sourceId{0};
-        uint64_t materializationId{0};
-        uint64_t materializationRevision{0};
         uint64_t contentRevision{0};
         uint64_t placementRevision{0};
         double startInPlaybackTime{0.0};
@@ -46,6 +46,8 @@ public:
         bool timestretchReflectingTempo{false};
         bool contentBasedFadeAtHead{false};
         bool contentBasedFadeAtTail{false};
+
+        ContentKey contentKey;
 
         double endInPlaybackTime() const noexcept { return startInPlaybackTime + durationInPlaybackTime; }
         bool isRenderable() const noexcept;
@@ -62,7 +64,7 @@ public:
         std::shared_ptr<F0InferenceService> f0Service;
         std::function<void(std::function<void()>&&)> scheduleAsyncWork;
         std::function<void()> requestReclaimSweep;
-        std::function<void(MaterializationStore::PendingRenderJob&)> renderJobCallback;
+        ContentRenderService* contentRenderService{nullptr};
     };
 
     void attachProcessorServices(ProcessorServices services);
@@ -73,7 +75,7 @@ public:
     void getContentSnapshot(juce::XmlElement& dest) const;
     void restoreContentPayloadInto(const juce::XmlElement& src);
 
-    MaterializationStore* getMaterializationStore() const noexcept;
+    ContentRenderService* getContentRenderService() const noexcept;
     SourceStore* getSourceStore() const noexcept;
 
     std::vector<PlaybackRegionProjection> getPlaybackRegionProjections() const;
@@ -81,11 +83,15 @@ public:
         const std::vector<juce::ARAPlaybackRegion*>& playbackRegions) const;
     std::vector<PlaybackRegionProjection> getEditorSelectionPlaybackRegionProjections() const;
     std::optional<PlaybackRegionProjection> getFocusedEditorPlaybackRegionProjection() const;
-    bool referencesMaterialization(uint64_t materializationId) const;
     int refreshAllAudioModifications();
     void setEditorViewSelectionPlaybackRegions(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
     void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
+
+    // 退休内容池查询（undo/revive 入口）
+    const std::vector<RetiredContentRecord>& getRetiredContents() const noexcept { return retiredContents_; }
+    bool reviveRetiredContentByKey(const ContentKey& key, AudioModification& target);
+    void releaseRetiredContent(const ContentKey& key);
 
     void didUpdateMusicalContextProperties(juce::ARAMusicalContext* musicalContext) override;
     void willBeginEditing(juce::ARADocument* document) override;
@@ -125,25 +131,17 @@ protected:
     juce::ARAEditorView* doCreateEditorView() override;
 
 private:
-    struct RestoredMaterializationBinding
-    {
-        juce::String audioModificationPersistentId;
-        SourceWindow sourceWindow;
-        uint64_t sourceId{0};
-        uint64_t materializationId{0};
-        uint64_t materializationRevision{0};
-        double materializationDurationSeconds{0.0};
-    };
-
     std::vector<AudioSource> audioSources_;
     std::vector<AudioModification> audioModifications_;
     std::vector<PlaybackRegion> playbackRegions_;
     std::vector<juce::ARAPlaybackRegion*> editorSelectionPlaybackRegions_;
     std::vector<OpenTunePlaybackRenderer*> playbackRenderers_;
-    std::vector<RestoredMaterializationBinding> pendingRestoredBindings_;
+    std::vector<RetiredContentRecord> retiredContents_;
 
+    // 保留 MaterializationStore 作为向后兼容（短期），不再做内容路由
     std::shared_ptr<MaterializationStore> materializationStore_;
     std::shared_ptr<SourceStore> sourceStore_;
+    ContentRenderService* contentRenderService_{nullptr};
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::shared_ptr<F0InferenceService> f0Service_;
     std::function<void(std::function<void()>&&)> scheduleAsyncWork_;
@@ -166,6 +164,7 @@ private:
     AudioModification* findAudioModification(const juce::String& persistentId);
     const AudioModification* findAudioModification(const juce::String& persistentId) const;
     AudioModification* findAudioModification(juce::ARAAudioModification* audioModification);
+    AudioModification* findAudioModificationByContentKey(const ContentKey& key);
     AudioModification& ensureAudioModification(juce::ARAAudioModification* audioModification);
     PlaybackRegion* findPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
     const PlaybackRegion* findPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion) const;
@@ -180,10 +179,6 @@ private:
                                    std::vector<float> channel0Data,
                                    double sourceSampleRate);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
-    void applyRestoredBinding(AudioModification& modification,
-                              const RestoredMaterializationBinding& binding) noexcept;
-    bool applyPendingRestoredBinding(AudioModification& modification);
-    void rememberPendingRestoredBinding(RestoredMaterializationBinding binding);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)
 };

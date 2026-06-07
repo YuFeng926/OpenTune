@@ -109,34 +109,63 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , topBar_(menuBar_, transportBar_)
 {
     // Select content provider backend based on ARA availability
-#if JucePlugin_Enable_ARA
-    if (auto* dc = processorRef_.getDocumentController())
+    // [ARA 重构] MaterializationContentProvider 工厂函数已删除，
+    // 内容访问通过 DomainContentOwner 接口路由。
+    class PluginContentAccessInline final : public MaterializationContentAccess
     {
-        contentAccess_ = makeDocumentControllerAccess(dc);
-        contentCommands_ = makeDocumentControllerCommands(dc);
-    }
-    else
-#endif
-    {
-        contentAccess_ = makeProcessorAccess(&processorRef_);
-        contentCommands_ = makeProcessorCommands(&processorRef_);
-    }
+    public:
+        explicit PluginContentAccessInline(OpenTuneAudioProcessor* proc) noexcept : proc_(proc) {}
+        MaterializationStore::MaterializationSnapshot getSnapshot(uint64_t id) const override
+        {
+            MaterializationStore::MaterializationSnapshot snap;
+            if (proc_ && proc_->getMaterializationStore())
+                proc_->getMaterializationStore()->getSnapshot(id, snap);
+            return snap;
+        }
+        double getMaterializationDuration(uint64_t id) const override
+            { return proc_ ? proc_->getMaterializationAudioDurationById(id) : 0.0; }
+        uint64_t getSourceId(uint64_t id) const override { return getSnapshot(id).sourceId; }
+        PitchShiftSettings getPitchShift(uint64_t id) const override
+        {
+            PitchShiftSettings s;
+            if (proc_ && proc_->getMaterializationStore())
+                s = proc_->getMaterializationStore()->getPitchShiftSettings(id);
+            return s;
+        }
+        bool hasMaterialization(uint64_t id) const override
+            { return proc_ && proc_->getMaterializationStore() && proc_->getMaterializationStore()->containsMaterialization(id); }
+        std::shared_ptr<const juce::AudioBuffer<float>> getAudioBuffer(uint64_t id) const override
+            { return proc_ ? proc_->getMaterializationAudioBufferById(id) : nullptr; }
+        std::shared_ptr<PitchCurve> getPitchCurve(uint64_t id) const override
+            { return proc_ ? proc_->getMaterializationPitchCurveById(id) : nullptr; }
+        OriginalF0State getOriginalF0State(uint64_t id) const override
+            { return proc_ ? proc_->getMaterializationOriginalF0StateById(id) : OriginalF0State::NotRequested; }
+        DetectedKey getDetectedKey(uint64_t id) const override
+            { return proc_ ? proc_->getMaterializationDetectedKeyById(id) : DetectedKey{}; }
+        std::vector<Note> getNotes(uint64_t id) const override
+            { return proc_ ? proc_->getMaterializationNotesById(id) : std::vector<Note>{}; }
+        MaterializationStore::MaterializationNotesSnapshot getNotesSnapshot(uint64_t id) const override
+            { return proc_ ? proc_->getMaterializationNotesSnapshotById(id) : MaterializationStore::MaterializationNotesSnapshot{}; }
+        uint64_t getNotesRevision(uint64_t id) const override
+            { return getNotesSnapshot(id).notesRevision; }
+        std::shared_ptr<const TimeGridSnapshot> getTimeGrid(uint64_t id) const override
+            { return proc_ ? proc_->getMaterializationTimeGridById(id) : nullptr; }
+        uint64_t getTimeGridRevision(uint64_t id) const override
+            { return proc_ ? proc_->getMaterializationTimeGridRevisionById(id) : 0; }
+        RenderCache::ChunkStats getChunkStats(uint64_t id) const override
+            { return proc_ ? proc_->getMaterializationChunkStatsById(id) : RenderCache::ChunkStats{}; }
+        bool getChunkBoundaries(uint64_t id, std::vector<double>& out) const override
+            { return proc_ && proc_->getMaterializationChunkBoundariesById(id, out); }
+    private:
+        OpenTuneAudioProcessor* proc_;
+    };
+    contentAccess_ = std::make_shared<PluginContentAccessInline>(&processorRef_);
+    contentCommands_ = processorRef_.getContentCommands();
 
     menuBar_.setVisible(false);
 
-    // Inject content providers into pianoRoll (same backend as the editor itself)
-#if JucePlugin_Enable_ARA
-    if (auto* dc = processorRef_.getDocumentController())
-    {
-        pianoRoll_.setContentProviders(makeDocumentControllerAccess(dc),
-                                       makeDocumentControllerCommands(dc));
-    }
-    else
-#endif
-    {
-        pianoRoll_.setContentProviders(makeProcessorAccess(&processorRef_),
-                                       makeProcessorCommands(&processorRef_));
-    }
+    // Inject content provider into pianoRoll via DomainContentOwner
+    // 初始化时不设置 contentOwner_（timer 中根据上下文动态解析）
 
     addAndMakeVisible(topBar_);
     addAndMakeVisible(parameterPanel_);

@@ -14,14 +14,10 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
-#include <mutex>
-#include <thread>
 #include <vector>
 
 #include "DSP/ChromaKeyDetector.h"
@@ -35,6 +31,7 @@
 #include "Utils/SourceWindow.h"
 #include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §3.6 — per-materialization TimeGrid
 #include "Utils/PitchShiftSettings.h"  // clip-level pitch shift render modifier
+#include "Render/ContentRenderService.h"
 
 namespace OpenTune {
 class SoundTouchStretcher;   // forward-decl — §5.5 (lazy time-stretch accessor)
@@ -228,14 +225,14 @@ public:
                                                 int channels);
 
     // ============================================================
-    // vocal-time-stretch §6.2 — store-wide TimeStretchCache
+    // TimeStretchCache accessor
     //
-    // Single Stage 2 cache shared across all materializations (each entry
-    // keyed by materializationId).  Owned by the store so its lifecycle
-    // matches materializations.
+    // Delegates to ContentRenderService when attached; otherwise
+    // returns a static local fallback.  No cache is owned directly
+    // by MaterializationStore.
     // ============================================================
-    TimeStretchCache& getTimeStretchCache() noexcept { return timeStretchCache_; }
-    const TimeStretchCache& getTimeStretchCache() const noexcept { return timeStretchCache_; }
+    TimeStretchCache& getTimeStretchCache() noexcept;
+    const TimeStretchCache& getTimeStretchCache() const noexcept;
 
     OriginalF0State getOriginalF0State(uint64_t materializationId) const;
     bool setOriginalF0State(uint64_t materializationId, OriginalF0State state);
@@ -278,33 +275,35 @@ public:
     bool setReferenceFeatures(uint64_t materializationId, const ReferenceFeatureSet& features);
     bool getReferenceFeatures(uint64_t materializationId, ReferenceFeatureSet& out) const;
 
-    // ============================================================
-    // Render worker (Phase 2: per-store render worker thread)
-    //
-    // Each MaterializationStore owns its own render worker thread
-    // that pulls jobs from the pending render queue and processes
-    // them via a registered callback.
-    // ============================================================
-    using RenderJobCallback = std::function<void(PendingRenderJob&)>;
-
     /** Register the callback that processes each render job.
      *  Must be set before the first job is enqueued (typically
-     *  set by the owning processor or document controller). */
-    void setRenderJobCallback(RenderJobCallback cb) { renderJobCallback_ = std::move(cb); }
+     *  set by the owning processor or document controller).
+     *  Delegates to ContentRenderService::attachExecutionLease
+     *  when contentRenderService_ is non-null; otherwise no-op. */
+    void setRenderJobCallback(std::function<void(PendingRenderJob&)> cb);
 
     /** Wake the render worker (e.g. from vocoder completion callback). */
     void notifyRenderWorker();
 
-    /** Pause/resume the worker for safe reset of processor services.
-     *  pauseRenderWorker blocks until any in-flight job completes;
-     *  resumeRenderWorker re-enables job processing. */
+    /** Pause/resume the render worker.
+     *  Delegates to ContentRenderService when attached. */
     void pauseRenderWorker();
     void resumeRenderWorker();
 
-    /** Drain any in-flight render job and pause the worker.
-     *  Blocks until all in-flight jobs complete, then sets renderPaused_.
-     *  Used before clearing the render callback to avoid dangling lambda captures. */
+    /** Drain any in-flight render job and pause the render worker.
+     *  Blocks until all in-flight jobs complete.
+     *  Delegates to ContentRenderService when attached. */
     void drainRenderWorker();
+
+    // ============================================================
+    // Delegation to ContentRenderService
+    //
+    // When contentRenderService_ is non-null, render worker and
+    // TimeStretchCache methods forward to it. No local cache or
+    // worker infrastructure remains in MaterializationStore.
+    // ============================================================
+    void attachContentRenderService(ContentRenderService* crs) { contentRenderService_ = crs; }
+    ContentRenderService* getContentRenderService() const noexcept { return contentRenderService_; }
 
 private:
     // 内部存储条目
@@ -331,17 +330,6 @@ private:
         bool isRetired_{false};
     };
 
-    // 独立渲染任务队列，pull 时不再遍历 materializations_ map
-    struct PendingRenderEntry {
-        uint64_t materializationId{0};
-        double startSeconds{0.0};
-        double endSeconds{0.0};
-        int64_t startSample{0};
-        int64_t endSampleExclusive{0};
-    };
-    mutable std::mutex renderQueueMutex_;
-    std::deque<PendingRenderEntry> pendingRenderQueue_;
-
     juce::ReadWriteLock lock_;
 
     // Lock-free snapshot cache for audio-thread getPlaybackReadSource().
@@ -353,22 +341,7 @@ private:
 
     std::map<uint64_t, MaterializationEntry> materializations_;
     std::atomic<uint64_t> nextMaterializationId_{1};
-    TimeStretchCache timeStretchCache_;   // §6.2 — store-wide Stage 2 cache
-
-    // ============================================================
-    // Render worker (Phase 2)
-    // ============================================================
-    void renderWorkerLoop();
-    void startRenderWorker();
-    void stopRenderWorker();
-
-    std::thread renderWorkerThread_;
-    std::mutex renderWorkerMutex_;
-    std::condition_variable renderWorkerCv_;
-    std::atomic<bool> renderWorkerShouldStop_{false};
-    std::atomic<bool> renderPaused_{false};
-    std::atomic<int> renderJobsInFlight_{0};
-    RenderJobCallback renderJobCallback_;
+    ContentRenderService* contentRenderService_{nullptr};
 };
 
 } // namespace OpenTune

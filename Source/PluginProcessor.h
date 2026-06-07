@@ -53,6 +53,7 @@
 #include "Utils/TrackConstants.h"
 #include "Utils/PitchShiftSettings.h"
 #include "Utils/PlaybackAudioReader.h"
+#include "Content/ContentKey.h"
 #include <functional>
 
 namespace OpenTune {
@@ -439,6 +440,7 @@ public:
 private:
     std::shared_ptr<SourceStore> sourceStore_;
     std::shared_ptr<MaterializationStore> materializationStore_;
+    std::shared_ptr<ContentRenderService> contentRenderService_;
     std::shared_ptr<MaterializationContentCommands> contentCommands_;
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
     PlacementClipboard clipClipboard_;
@@ -544,18 +546,27 @@ private:
     // ========================================================================
     void ensureStage2WorkerStarted();
     void stage2WorkerLoop();
-    bool runStage2RebuildForMaterialization(uint64_t materializationId,
-                                             MaterializationStore* store = nullptr);
+    bool runStage2RebuildForContentKey(ContentKey contentKey,
+                                       uint64_t requestPitchRev,
+                                       uint64_t requestTimeGridRev);
+
+    // Queue entry holding both the ContentKey and the revision values at
+    // enqueue-time, so the worker can detect "stale pending" from a later edit.
+    struct Stage2RebuildEntry {
+        ContentKey contentKey;
+        uint64_t pitchRevision{0};
+        uint64_t timeGridRevision{0};
+    };
 
     std::thread stage2WorkerThread_;
     mutable std::mutex stage2Mutex_;
     std::condition_variable stage2Cv_;
     std::atomic<bool> stage2WorkerRunning_{false};
-    std::deque<std::pair<uint64_t, MaterializationStore*>> stage2RebuildQueue_;
+    std::deque<Stage2RebuildEntry> stage2RebuildQueue_;
 
     // ⚡️ vocal-time-stretch §7 (Journey-1 fix 2026-05-12) — Stage 2 in-flight
     // status for UI progress badge.  Set when worker enters
-    // runStage2RebuildForMaterialization, cleared on exit (success or failure).
+    // runStage2RebuildForContentKey, cleared on exit (success or failure).
     // Editor's per-frame update reads via isStage2InFlight() and shows
     // "时间拉伸中..." badge so the user knows their handle drag is being
     // processed (RB R3 is ~5× realtime; ~6s for 30s clip).
@@ -566,10 +577,11 @@ private:
 public:
     // Public API for triggering Stage 2 rebuilds (called from
     // setMaterializationTimeGridById and from tests).
-    // @param store  Optional store override; when null (default) uses
-    //               materializationStore_.  DC-backed paths pass the DC store.
-    void requestStage2Rebuild(uint64_t materializationId,
-                              MaterializationStore* store = nullptr);
+    // Uses ContentKey (replaces old materializationId+store* pattern).
+    // Worker fetches current revisions from the store at runtime.
+    void requestStage2Rebuild(ContentKey contentKey,
+                              uint64_t pitchRevision,
+                              uint64_t timeGridRevision);
 
     // §7 — Stage 2 worker progress query for UI feedback.
     bool     isStage2InFlight() const noexcept { return stage2InFlight_.load(std::memory_order_acquire); }
@@ -610,6 +622,8 @@ public:
     const SourceStore* getSourceStore() const noexcept { return sourceStore_.get(); }
     MaterializationStore* getMaterializationStore() noexcept { return materializationStore_.get(); }
     const MaterializationStore* getMaterializationStore() const noexcept { return materializationStore_.get(); }
+    ContentRenderService* getContentRenderService() noexcept { return contentRenderService_.get(); }
+    const ContentRenderService* getContentRenderService() const noexcept { return contentRenderService_.get(); }
 
     /** Returns the regular VST3 capture session, or nullptr outside regular VST3 mode. */
     Capture::CaptureSession* getCaptureSession() noexcept;
@@ -746,8 +760,7 @@ public:
 
     // Rendering & Buffering
     bool enqueueMaterializationPartialRenderById(uint64_t materializationId, double relStartSeconds, double relEndSeconds);
-    void processChunkRenderJob(MaterializationStore::PendingRenderJob& job,
-                               MaterializationStore* owningStore = nullptr);
+    void processChunkRenderJob(ContentRenderService::PendingRenderJob& job);
 
     // Transport control API
     void setPlaying(bool playing);
