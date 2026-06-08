@@ -667,9 +667,15 @@ target_sources(OpenTune
 
         # Render Layer
         Source/Render/PlaybackReadSource.h
+        Source/Render/PlaybackSourcePublisher.h
+        Source/Render/PlaybackSourcePublisher.cpp
         Source/Render/RenderJob.h
         Source/Render/ContentRenderService.h
         Source/Render/ContentRenderService.cpp
+        Source/Render/StretcherPool.h
+        Source/Render/StretcherPool.cpp
+        Source/Render/RenderChunkPlanner.h
+        Source/Render/RenderChunkPlanner.cpp
 )
 
 # ==============================================================================

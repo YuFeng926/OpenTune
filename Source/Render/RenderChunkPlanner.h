@@ -1,0 +1,34 @@
+#pragma once
+
+#include "../Utils/SilentGapDetector.h"
+#include <vector>
+#include <cstdint>
+
+namespace OpenTune {
+
+/**
+ * RenderChunkPlanner — 根据 silent gaps 规划 render chunk boundary。
+ * 
+ * 纯函数工具类，不持有状态。
+ * 
+ * Phase 0: 提取自 MaterializationStore::buildChunkBoundariesFromSilentGaps
+ *          (MaterializationStore.cpp:820-880)
+ */
+class RenderChunkPlanner
+{
+public:
+    /**
+     * 根据 silent gaps 和 hop size 构建 chunk boundaries。
+     * 
+     * @param sampleCount 音频总样本数
+     * @param silentGaps 静音段列表
+     * @param hopSize 渲染 hop size（用于对齐边界）
+     * @return 按升序排列的 chunk boundary 位置（sample index）
+     */
+    static std::vector<int64_t> buildChunkBoundariesFromSilentGaps(
+        int64_t sampleCount,
+        const std::vector<SilentGap>& silentGaps,
+        int hopSize);
+};
+
+} // namespace OpenTune
