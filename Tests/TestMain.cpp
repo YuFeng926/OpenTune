@@ -251,6 +251,42 @@ static CheckResult araHasNoStoreSplit()
                     " — birth should fill AudioModification.content, not create store entries");
     }
 
+    // DC must not own retired content pool
+    {
+        const std::vector<std::string> dcContentForbidden = {
+            "retiredContents_"
+        };
+
+        for (const auto& t : dcContentForbidden)
+        {
+            if (contains(dcText, t))
+            {
+                auto loc = locateInText(dcText, t, "OpenTuneDocumentController.{h,cpp}");
+                return fail("araHasNoStoreSplit",
+                            "DC must not own retired content pool: '" + t + "' found in " + loc);
+            }
+        }
+    }
+
+    // DC must not contain old persistence functions or old XML schema
+    {
+        const std::vector<std::string> dcPersistenceForbidden = {
+            "serializeMaterializationToXml",
+            "deserializeMaterializationFromXml",
+            "<materializations>"
+        };
+
+        for (const auto& t : dcPersistenceForbidden)
+        {
+            if (contains(dcText, t))
+            {
+                auto loc = locateInText(dcText, t, "OpenTuneDocumentController.{h,cpp}");
+                return fail("araHasNoStoreSplit",
+                            "DC must not contain old persistence: '" + t + "' found in " + loc);
+            }
+        }
+    }
+
     // PluginProcessor: check for materializationStore_->set within ARA-guarded blocks.
     const auto ppText = readText("Source/PluginProcessor.cpp");
 
@@ -293,25 +329,40 @@ static CheckResult contentRenderServiceIsDerivedOnly()
                     + readText("Source/Render/ContentRenderService.cpp");
 
     const std::vector<std::string> required = {
-        "RenderCache", "TimeStretchCache", "PlaybackReadSource", "renderWorkerThread_"
+        "RenderWorker", "RenderCacheRegistry", "PlaybackSourcePublisher",
+        "StretcherPool", "TimeStretchCache", "ContentKey"
     };
 
     auto missing = requireAll(text, required);
     if (!missing.empty())
         return fail("contentRenderServiceIsDerivedOnly", missing);
 
-    // CRS must not OWN content fields (notes, pitchCurve, timeGrid, pitchShiftSettings).
-    // These are content-owner fields; CRS may reference them as pass-through but not own them.
-    // Heuristic: if these words appear as member variables (not in struct definition or parameters),
-    // that indicates ownership — but text-scan detection of ownership is imprecise.
-    //
-    // Per the current architecture:
-    //   - CRS.h has pitchCurve in PendingRenderJob (pass-through reference) — acceptable
-    //   - CRS.h has pitchShiftSettings in PlaybackReadSource (read-model copy) — acceptable
-    //   - CRS.h/cpp do not define notes or timeGrid as owned state — clean
-    //
-    // The test passes if the required derived tokens are present. Full ownership verification
-    // requires deeper semantic analysis; text-scan is an architecturally conservative check.
+    // CRS must compose extracted runtime services (RenderWorker, RenderCacheRegistry,
+    // PlaybackSourcePublisher, StretcherPool) and manage TimeStretchCache.
+    // It must NOT own authoritative content fields (notes, pitchCurve, timeGrid,
+    // pitchShiftSettings, detectedKey, lifecycle) — these belong to domain content owners.
+    // It must NOT own raw runtime mechanics (std::thread, raw queues, raw maps) —
+    // these belong to extracted services.
+
+    const std::vector<std::string> forbidden = {
+        "std::thread renderWorkerThread_",
+        "std::vector<Note> notes",
+        "std::shared_ptr<const TimeGridSnapshot> timeGrid",
+        "PitchShiftSettings pitchShiftSettings",
+        "DetectedKey detectedKey",
+        "ContentLifecycle lifecycle"
+    };
+
+    for (const auto& t : forbidden)
+    {
+        if (contains(text, t))
+        {
+            auto loc = locateInText(text, t, "ContentRenderService.{h,cpp}");
+            return fail("contentRenderServiceIsDerivedOnly",
+                        "found forbidden authoritative content field '" + t + "' in " + loc +
+                        " — CRS must not own content truth");
+        }
+    }
 
     return pass("contentRenderServiceIsDerivedOnly");
 }
@@ -594,9 +645,10 @@ static CheckResult singleRenderJobDefinition()
 // ============================================================================
 // Contract Test 11: contentRenderServiceHasNoOwnedRuntimeMechanics
 //
-// ContentRenderService must NOT own playback sources, render caches,
-// stretchers, render worker threads, or pending render queues.
-// These belong to dedicated components accessed through the service.
+// ContentRenderService may compose extracted services (PlaybackSourcePublisher,
+// RenderCacheRegistry, RenderWorker, StretcherPool) but must NOT own raw runtime
+// mechanics (std::thread, std::mutex, raw queues, raw maps) or authoritative
+// content fields (AudioModificationContentState, notes, pitchCurve, timeGrid).
 //
 // Scan: Source/Render/ContentRenderService.h
 // ============================================================================
@@ -604,24 +656,42 @@ static CheckResult contentRenderServiceHasNoOwnedRuntimeMechanics()
 {
     const auto text = readText("Source/Render/ContentRenderService.h");
 
-    const std::vector<std::string> forbidden = {
-        "playbackSources_",
-        "playbackSourceCache_",
-        "renderCaches_",
-        "stretchers_",
-        "renderWorkerThread_",
-        "pendingRenderQueue_"
+    // Forbidden: raw runtime mechanics that belong to extracted components
+    const std::vector<std::string> forbiddenRawMechanics = {
+        "std::thread", "std::mutex", "std::condition_variable",
+        "std::queue", "std::map<ContentKey, RenderCache>",
+        "MaterializationStore*"
     };
 
-    for (const auto& t : forbidden)
+    for (const auto& t : forbiddenRawMechanics)
     {
         if (contains(text, t))
         {
             auto loc = locateInText(text, t, "ContentRenderService.h");
             return fail("contentRenderServiceHasNoOwnedRuntimeMechanics",
-                        "forbidden private member '" + t + "' found in " + loc +
-                        " — CRS should not own runtime mechanics;"
-                        " these belong to dedicated components");
+                        "forbidden raw runtime mechanic '" + t + "' found in " + loc +
+                        " — CRS must not own raw mechanics;"
+                        " these belong to extracted services");
+        }
+    }
+
+    // Forbidden: authoritative content fields (type-prefixed to avoid matching
+    // struct field names like timeGridRevision or parameter pass-through)
+    const std::vector<std::string> forbiddenContent = {
+        "AudioModificationContentState",
+        "std::vector<Note> notes",
+        "std::shared_ptr<PitchCurve> pitchCurve",
+        "std::shared_ptr<const TimeGridSnapshot> timeGrid"
+    };
+
+    for (const auto& t : forbiddenContent)
+    {
+        if (contains(text, t))
+        {
+            auto loc = locateInText(text, t, "ContentRenderService.h");
+            return fail("contentRenderServiceHasNoOwnedRuntimeMechanics",
+                        "forbidden authoritative content field '" + t + "' found in " + loc +
+                        " — content truth belongs to domain content owners, not CRS");
         }
     }
 

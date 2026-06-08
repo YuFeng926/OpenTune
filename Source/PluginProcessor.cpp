@@ -3695,11 +3695,8 @@ bool OpenTuneAudioProcessor::getSourceSnapshotById(uint64_t sourceId, SourceStor
     if (sourceId == 0)
         return false;
 
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-        return dc->getSourceStore() != nullptr && dc->getSourceStore()->getSnapshot(sourceId, out);
-#endif
-
+    // ARA mode: source metadata is in AudioSource objects, not a separate store
+    // Non-ARA mode: use processor sourceStore_
     return sourceStore_ != nullptr && sourceStore_->getSnapshot(sourceId, out);
 }
 
