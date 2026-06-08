@@ -820,6 +820,205 @@ static CheckResult timeStretchCacheContractKeyCheck()
 }
 
 // ============================================================================
+// Contract Test 14: standaloneUsesContentKey (Phase 2)
+//
+// Standalone Placement and PlaybackPlacement must use ContentKey, not
+// materializationId. StandaloneClipContent must use clipContentId, not placementId.
+// ============================================================================
+static CheckResult standaloneUsesContentKey()
+{
+    const auto arrangementH = readText("Source/StandaloneArrangement.h");
+    const auto arrangementCpp = readText("Source/StandaloneArrangement.cpp");
+
+    // Placement must NOT have materializationId field
+    if (contains(arrangementH, "uint64_t materializationId"))
+    {
+        auto loc = locateInText(arrangementH, "uint64_t materializationId", "StandaloneArrangement.h");
+        return fail("standaloneUsesContentKey",
+                    "Placement.materializationId found in " + loc +
+                    " — Standalone must use ContentKey for content identity");
+    }
+
+    // PlaybackPlacement must NOT have materializationId field
+    if (contains(arrangementH, "struct PlaybackPlacement") &&
+        contains(arrangementH, "materializationId"))
+    {
+        size_t pos = arrangementH.find("struct PlaybackPlacement");
+        size_t endPos = arrangementH.find("};", pos);
+        if (endPos != std::string::npos)
+        {
+            std::string playbackPlacementBody = arrangementH.substr(pos, endPos - pos);
+            if (contains(playbackPlacementBody, "materializationId"))
+            {
+                return fail("standaloneUsesContentKey",
+                            "PlaybackPlacement.materializationId found — must use ContentKey");
+            }
+        }
+    }
+
+    // Placement must have ContentKey field
+    if (!contains(arrangementH, "ContentKey contentKey"))
+    {
+        return fail("standaloneUsesContentKey",
+                    "Placement must have 'ContentKey contentKey' field");
+    }
+
+    return pass("standaloneUsesContentKey");
+}
+
+// ============================================================================
+// Contract Test 15: standaloneHasNoMaterializationStoreDependency (Phase 2)
+//
+// Standalone import/edit/playback paths must NOT call materializationStore_.
+// Split/merge/delete must NOT call createMaterialization/retireMaterialization.
+// ============================================================================
+static CheckResult standaloneHasNoMaterializationStoreDependency()
+{
+    const auto ppText = readText("Source/PluginProcessor.cpp");
+
+    // Check commitPreparedImportAsPlacement does NOT call createMaterialization
+    {
+        size_t funcPos = ppText.find("commitPreparedImportAsPlacement");
+        if (funcPos != std::string::npos)
+        {
+            // Find function body (from { to matching })
+            size_t bracePos = ppText.find("{", funcPos);
+            if (bracePos != std::string::npos)
+            {
+                int depth = 0;
+                size_t closePos = bracePos;
+                for (size_t i = bracePos; i < ppText.size(); ++i)
+                {
+                    if (ppText[i] == '{') ++depth;
+                    if (ppText[i] == '}') { --depth; if (depth == 0) { closePos = i; break; } }
+                }
+                std::string funcBody = ppText.substr(bracePos, closePos - bracePos + 1);
+                
+                // Check if function body contains createMaterialization
+                if (contains(funcBody, "createMaterialization"))
+                {
+                    auto loc = locateInText(ppText, "createMaterialization", "PluginProcessor.cpp");
+                    return fail("standaloneHasNoMaterializationStoreDependency",
+                                "commitPreparedImportAsPlacement calls createMaterialization at " + loc +
+                                " — Standalone must create StandaloneClipContent instead");
+                }
+            }
+        }
+    }
+
+    // Check processBlock does NOT call materializationStore_->getPlaybackReadSource
+    {
+        size_t funcPos = ppText.find("void OpenTuneAudioProcessor::processBlock");
+        if (funcPos != std::string::npos)
+        {
+            size_t bracePos = ppText.find("{", funcPos);
+            if (bracePos != std::string::npos)
+            {
+                int depth = 0;
+                size_t closePos = bracePos;
+                for (size_t i = bracePos; i < ppText.size() && i < bracePos + 50000; ++i)
+                {
+                    if (ppText[i] == '{') ++depth;
+                    if (ppText[i] == '}') { --depth; if (depth == 0) { closePos = i; break; } }
+                }
+                std::string funcBody = ppText.substr(bracePos, closePos - bracePos + 1);
+                
+                // Check if processBlock contains materializationStore_->getPlaybackReadSource
+                if (contains(funcBody, "materializationStore_->getPlaybackReadSource"))
+                {
+                    return fail("standaloneHasNoMaterializationStoreDependency",
+                                "processBlock calls materializationStore_->getPlaybackReadSource — "
+                                "Standalone playback must use ContentKey + CRS");
+                }
+            }
+        }
+    }
+
+    return pass("standaloneHasNoMaterializationStoreDependency");
+}
+
+// ============================================================================
+// Contract Test 16: standaloneArrangementIsPlacementOnly (Phase 2)
+//
+// StandaloneArrangement must only manage Track/Placement graph and playback
+// snapshots. It must NOT own content truth (contentOwners_ map).
+// ============================================================================
+static CheckResult standaloneArrangementIsPlacementOnly()
+{
+    const auto arrangementH = readText("Source/StandaloneArrangement.h");
+
+    // StandaloneArrangement must NOT have contentOwners_ member
+    if (contains(arrangementH, "contentOwners_"))
+    {
+        auto loc = locateInText(arrangementH, "contentOwners_", "StandaloneArrangement.h");
+        return fail("standaloneArrangementIsPlacementOnly",
+                    "StandaloneArrangement.contentOwners_ found in " + loc +
+                    " — content ownership must be moved to StandaloneContentRepository");
+    }
+
+    // Must NOT have getOrCreateContentOwner method
+    if (contains(arrangementH, "getOrCreateContentOwner"))
+    {
+        auto loc = locateInText(arrangementH, "getOrCreateContentOwner", "StandaloneArrangement.h");
+        return fail("standaloneArrangementIsPlacementOnly",
+                    "getOrCreateContentOwner found in " + loc +
+                    " — Arrangement must not manage content lifecycle");
+    }
+
+    return pass("standaloneArrangementIsPlacementOnly");
+}
+
+// ============================================================================
+// Contract Test 17: processBlockHasNoStoreOrPublish (Phase 2)
+//
+// processBlock() must only read atomic playback snapshots and CRS published
+// sources. It must NOT call materializationStore_, publish sources, or
+// create caches. All publishing must happen on message/background threads.
+// ============================================================================
+static CheckResult processBlockHasNoStoreOrPublish()
+{
+    const auto ppText = readText("Source/PluginProcessor.cpp");
+
+    size_t funcPos = ppText.find("void OpenTuneAudioProcessor::processBlock");
+    if (funcPos == std::string::npos)
+        return fail("processBlockHasNoStoreOrPublish", "processBlock function not found");
+
+    size_t bracePos = ppText.find("{", funcPos);
+    if (bracePos == std::string::npos)
+        return fail("processBlockHasNoStoreOrPublish", "processBlock body not found");
+
+    int depth = 0;
+    size_t closePos = bracePos;
+    for (size_t i = bracePos; i < ppText.size() && i < bracePos + 50000; ++i)
+    {
+        if (ppText[i] == '{') ++depth;
+        if (ppText[i] == '}') { --depth; if (depth == 0) { closePos = i; break; } }
+    }
+    std::string funcBody = ppText.substr(bracePos, closePos - bracePos + 1);
+
+    // Forbidden operations in audio thread
+    const std::vector<std::string> forbidden = {
+        "->publish(",
+        ".publish(",
+        "snapshotContent()",
+        "PlaybackSourcePublisher",
+        "materializationStore_->set"
+    };
+
+    for (const auto& t : forbidden)
+    {
+        if (contains(funcBody, t))
+        {
+            return fail("processBlockHasNoStoreOrPublish",
+                        "processBlock contains forbidden RT operation '" + t + "' — "
+                        "publish/snapshot/store writes must happen on message thread");
+        }
+    }
+
+    return pass("processBlockHasNoStoreOrPublish");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 int main()
@@ -845,12 +1044,17 @@ int main()
         araRewriteIsLockFree(),
         araHasNoFallbackRouting(),
         timeStretchCacheUsesContentKey(),
-        // Phase 0 contract tests — all expected to FAIL with current code
+        // Phase 0 contract tests
         singlePlaybackReadSourceDefinition(),
         singleRenderJobDefinition(),
         contentRenderServiceHasNoOwnedRuntimeMechanics(),
         materializationStoreNoLongerOwnsRuntimeMechanics(),
         timeStretchCacheContractKeyCheck(),
+        // Phase 2 contract tests
+        standaloneUsesContentKey(),
+        standaloneHasNoMaterializationStoreDependency(),
+        standaloneArrangementIsPlacementOnly(),
+        processBlockHasNoStoreOrPublish(),
     };
 
     int passedCount = 0;
