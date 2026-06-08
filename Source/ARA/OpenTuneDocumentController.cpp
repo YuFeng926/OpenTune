@@ -41,6 +41,10 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
 
 OpenTuneDocumentController::~OpenTuneDocumentController()
 {
+    // 撤销服务租约，防止异步 F0 completion 写回已析构的 DC
+    if (asyncLeaseToken_)
+        asyncLeaseToken_->store(false, std::memory_order_release);
+
     playbackRenderers_.clear();
     // juce::AsyncUpdater in ReclaimAsyncUpdater auto-cancels pending updates on destruction.
 }
@@ -53,13 +57,18 @@ void OpenTuneDocumentController::attachProcessorServices(ProcessorServices servi
     scheduleAsyncWork_ = std::move(services.scheduleAsyncWork);
     onReclaimNeeded_ = std::move(services.requestReclaimSweep);
     contentRenderService_ = services.contentRenderService;
+    asyncLeaseToken_ = std::make_shared<std::atomic<bool>>(true);
 }
 
 void OpenTuneDocumentController::detachProcessorServices(const OpenTuneAudioProcessor* owner)
 {
     if (serviceOwner_ != owner) return;
-    serviceOwner_ = nullptr;
 
+    // 撤销服务租约 — 通知所有后台 F0 work 释放
+    if (asyncLeaseToken_)
+        asyncLeaseToken_->store(false, std::memory_order_release);
+
+    serviceOwner_ = nullptr;
     contentRenderService_ = nullptr;
     f0Service_.reset();
     scheduleAsyncWork_ = nullptr;
@@ -121,7 +130,7 @@ bool OpenTuneDocumentController::reviveRetiredContentByKey(const ContentKey& key
 
     target.content = it->content;
     target.content.lifecycle = ContentLifecycle::Ready;
-    ++target.contentRevision;
+    ++target.content.contentRevision;
     target.birthState = AudioModificationBirthState::Ready;
     retiredContents_.erase(it);
     return true;
@@ -1129,6 +1138,14 @@ AudioModification* OpenTuneDocumentController::findAudioModificationByContentKey
     return nullptr;
 }
 
+const AudioModification* OpenTuneDocumentController::findAudioModificationByContentKey(const ContentKey& key) const
+{
+    for (const auto& mod : audioModifications_)
+        if (mod.contentKey() == key)
+            return &mod;
+    return nullptr;
+}
+
 AudioModification& OpenTuneDocumentController::ensureAudioModification(juce::ARAAudioModification* audioModification)
 {
     if (auto* existing = findAudioModification(audioModification))
@@ -1198,7 +1215,7 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
 
     projection.contentWindow = modification->contentWindow;
     projection.sourceId = modification->sourceId;
-    projection.contentRevision = modification->contentRevision;
+    projection.contentRevision = modification->content.contentRevision;
     projection.materializationDurationSeconds = modification->materializationDurationSeconds;
     projection.contentKey = modification->contentKey();
 
@@ -1406,7 +1423,6 @@ bool OpenTuneDocumentController::birthMaterializationForModification(AudioModifi
     modification.content.lifecycle = ContentLifecycle::Loading;
     modification.content.analysis.silentGaps = std::move(silentGaps);
     modification.content.analysis.originalF0State = OriginalF0State::NotRequested;
-    modification.content.contentRevision = modification.contentRevision;
 
     const double materializationDurationSeconds =
         TimeCoordinate::samplesToSeconds(storedAudioBuffer->getNumSamples(), targetSampleRate);
@@ -1428,8 +1444,7 @@ bool OpenTuneDocumentController::birthMaterializationForModification(AudioModifi
                                                sourceWindow.sourceEndSeconds};
     modification.materializationDurationSeconds = materializationDurationSeconds;
     modification.birthState = AudioModificationBirthState::Ready;
-    ++modification.contentRevision;
-    modification.content.contentRevision = modification.contentRevision;
+    modification.content.lifecycle = ContentLifecycle::Ready;
     if (modification.audioModification != nullptr)
         modification.audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
 
@@ -1452,10 +1467,13 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
     auto f0Svc = f0Service_;
     const ContentKey key{DomainKind::ARAAudioModification, contentObjectId, 0};
 
-    scheduleAsyncWork_([this, crs, f0Svc, key,
+    scheduleAsyncWork_([this, crs, f0Svc, key, leaseToken = asyncLeaseToken_,
                         data = std::move(channel0Data),
                         sourceSampleRate]()
     {
+        if (leaseToken && !leaseToken->load(std::memory_order_acquire))
+            return;
+
         if (f0Svc == nullptr || data.empty())
             return;
 
@@ -1508,19 +1526,19 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
         f0Svc->releaseImmediately();
 
         // Commit results to AudioModification content on the message thread
-        juce::MessageManager::callAsync([this, crs, key,
+        juce::MessageManager::callAsync([this, crs, key, leaseToken,
                                           pc = std::move(pitchCurve)]() mutable
         {
+            if (leaseToken && !leaseToken->load(std::memory_order_acquire))
+                return;
+
             if (crs == nullptr)
                 return;
 
             // Wire F0 analysis into AudioModification content state
             if (auto* mod = findAudioModificationByContentKey(key))
             {
-                mod->content.analysis.pitchCurve = std::move(pc);
-                mod->content.analysis.originalF0State = OriginalF0State::Ready;
-                mod->content.analysis.f0Lifecycle = AnalysisLifecycle::Ready;
-                ++mod->content.contentRevision;
+                mod->applyF0Analysis(std::move(pc));
                 if (mod->audioModification != nullptr)
                     mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
             }
@@ -1583,6 +1601,186 @@ bool OpenTuneDocumentController::requestStopPlayback()
 
     playbackController->requestStopPlayback();
     return true;
+}
+
+// -----------------------------------------------------------------------
+// 编辑器只读内容访问器实现
+// -----------------------------------------------------------------------
+
+std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneDocumentController::readAudioBuffer(ContentKey key) const
+{
+    ContentRenderService::PlaybackReadSource crsSrc;
+    if (contentRenderService_ != nullptr && contentRenderService_->getPlaybackReadSource(key, crsSrc))
+        return crsSrc.audioBuffer;
+    return nullptr;
+}
+
+std::shared_ptr<PitchCurve> OpenTuneDocumentController::readPitchCurve(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return nullptr;
+    return mod->content.analysis.pitchCurve;
+}
+
+OriginalF0State OpenTuneDocumentController::readOriginalF0State(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return OriginalF0State::NotRequested;
+    return mod->content.analysis.originalF0State;
+}
+
+DetectedKey OpenTuneDocumentController::readDetectedKey(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return {};
+    return mod->content.analysis.detectedKey;
+}
+
+std::vector<Note> OpenTuneDocumentController::readNotes(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return {};
+    return mod->content.editable.notes;
+}
+
+MaterializationStore::MaterializationNotesSnapshot OpenTuneDocumentController::readNotesSnapshot(ContentKey key) const
+{
+    MaterializationStore::MaterializationNotesSnapshot snap;
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod != nullptr)
+    {
+        snap.notes = mod->content.editable.notes;
+        snap.notesRevision = mod->content.editable.notesRevision;
+    }
+    return snap;
+}
+
+uint64_t OpenTuneDocumentController::readNotesRevision(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return 0;
+    return mod->content.editable.notesRevision;
+}
+
+std::shared_ptr<const TimeGridSnapshot> OpenTuneDocumentController::readTimeGrid(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return nullptr;
+    return mod->content.editable.timeGrid;
+}
+
+uint64_t OpenTuneDocumentController::readTimeGridRevision(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return 0;
+    return mod->content.editable.timeGridRevision;
+}
+
+PitchShiftSettings OpenTuneDocumentController::readPitchShift(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return {};
+    return mod->content.editable.pitchShiftSettings;
+}
+
+RenderCache::ChunkStats OpenTuneDocumentController::readChunkStats(ContentKey key) const
+{
+    ContentRenderService::PlaybackReadSource crsSrc;
+    if (contentRenderService_ != nullptr
+        && contentRenderService_->getPlaybackReadSource(key, crsSrc)
+        && crsSrc.renderCache != nullptr)
+    {
+        return crsSrc.renderCache->getChunkStats();
+    }
+    return {};
+}
+
+bool OpenTuneDocumentController::readChunkBoundaries(ContentKey key, std::vector<double>& outSeconds) const
+{
+    outSeconds.clear();
+
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr)
+        return false;
+
+    ContentRenderService::PlaybackReadSource crsSrc;
+    if (contentRenderService_ == nullptr || !contentRenderService_->getPlaybackReadSource(key, crsSrc))
+        return false;
+    if (crsSrc.audioBuffer == nullptr)
+        return false;
+
+    const int64_t sampleCount = static_cast<int64_t>(crsSrc.audioBuffer->getNumSamples());
+    const auto& silentGaps = mod->content.analysis.silentGaps;
+    constexpr int hopSize = 512; // DC 没有 vocoderDomain_，使用默认值
+
+    auto boundaries = MaterializationStore::buildChunkBoundariesFromSilentGaps(
+        sampleCount, silentGaps, hopSize);
+
+    outSeconds.reserve(boundaries.size());
+    for (auto sample : boundaries)
+        outSeconds.push_back(static_cast<double>(sample) / TimeCoordinate::kRenderSampleRate);
+
+    return true;
+}
+
+uint64_t OpenTuneDocumentController::readContentRevision(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return 0;
+    return mod->content.contentRevision;
+}
+
+double OpenTuneDocumentController::readMaterializationDuration(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return 0.0;
+    return mod->materializationDurationSeconds;
+}
+
+uint64_t OpenTuneDocumentController::readSourceId(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return 0;
+    return mod->sourceId;
+}
+
+bool OpenTuneDocumentController::hasContent(ContentKey key) const
+{
+    const auto* mod = findAudioModificationByContentKey(key);
+    return mod != nullptr && mod->content.lifecycle == ContentLifecycle::Ready;
+}
+
+MaterializationStore::MaterializationSnapshot OpenTuneDocumentController::readSnapshot(ContentKey key) const
+{
+    MaterializationStore::MaterializationSnapshot snap;
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr) return snap;
+
+    auto editableSnap = mod->snapshotContent();
+
+    snap.sourceId = mod->sourceId;
+    snap.sourceWindow = editableSnap->sourceWindow;
+    snap.originalF0State = editableSnap->originalF0State;
+    snap.detectedKey = editableSnap->detectedKey;
+    snap.notes = editableSnap->notes;
+    snap.notesRevision = editableSnap->notesRevision;
+    snap.timeGrid = editableSnap->timeGrid;
+    snap.timeGridRevision = editableSnap->timeGridRevision;
+    snap.pitchShiftSettings = editableSnap->pitchShiftSettings;
+    snap.pitchShiftRevision = editableSnap->pitchShiftRevision;
+    snap.pitchCurve = editableSnap->pitchCurve;
+
+    // Materialization 层特有字段：snapshotContent() 不含这些
+    snap.silentGaps = mod->content.analysis.silentGaps;
+
+    ContentRenderService::PlaybackReadSource crsSrc;
+    if (contentRenderService_ != nullptr && contentRenderService_->getPlaybackReadSource(key, crsSrc))
+    {
+        snap.audioBuffer = crsSrc.audioBuffer;
+        snap.renderCache = crsSrc.renderCache;
+    }
+
+    return snap;
 }
 
 } // namespace OpenTune

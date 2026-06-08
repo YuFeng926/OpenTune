@@ -24,6 +24,7 @@
 #if JucePlugin_Enable_ARA
 #include "ARA/OpenTuneDocumentController.h"
 #endif
+#include "Content/ContentKey.h"
 
 namespace OpenTune::PluginUI {
 
@@ -115,47 +116,159 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     {
     public:
         explicit PluginContentAccessInline(OpenTuneAudioProcessor* proc) noexcept : proc_(proc) {}
+
         MaterializationStore::MaterializationSnapshot getSnapshot(uint64_t id) const override
         {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readSnapshot({DomainKind::ARAAudioModification, id, 0});
+#endif
             MaterializationStore::MaterializationSnapshot snap;
             if (proc_ && proc_->getMaterializationStore())
                 proc_->getMaterializationStore()->getSnapshot(id, snap);
             return snap;
         }
+
         double getMaterializationDuration(uint64_t id) const override
-            { return proc_ ? proc_->getMaterializationAudioDurationById(id) : 0.0; }
-        uint64_t getSourceId(uint64_t id) const override { return getSnapshot(id).sourceId; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readMaterializationDuration({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ ? proc_->getMaterializationAudioDurationById(id) : 0.0;
+        }
+
+        uint64_t getSourceId(uint64_t id) const override
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readSourceId({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return getSnapshot(id).sourceId;
+        }
+
         PitchShiftSettings getPitchShift(uint64_t id) const override
         {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readPitchShift({DomainKind::ARAAudioModification, id, 0});
+#endif
             PitchShiftSettings s;
             if (proc_ && proc_->getMaterializationStore())
                 s = proc_->getMaterializationStore()->getPitchShiftSettings(id);
             return s;
         }
+
         bool hasMaterialization(uint64_t id) const override
-            { return proc_ && proc_->getMaterializationStore() && proc_->getMaterializationStore()->containsMaterialization(id); }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->hasContent({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ && proc_->getMaterializationStore()
+                && proc_->getMaterializationStore()->containsMaterialization(id);
+        }
+
         std::shared_ptr<const juce::AudioBuffer<float>> getAudioBuffer(uint64_t id) const override
-            { return proc_ ? proc_->getMaterializationAudioBufferById(id) : nullptr; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readAudioBuffer({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ ? proc_->getMaterializationAudioBufferById(id) : nullptr;
+        }
+
         std::shared_ptr<PitchCurve> getPitchCurve(uint64_t id) const override
-            { return proc_ ? proc_->getMaterializationPitchCurveById(id) : nullptr; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readPitchCurve({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ ? proc_->getMaterializationPitchCurveById(id) : nullptr;
+        }
+
         OriginalF0State getOriginalF0State(uint64_t id) const override
-            { return proc_ ? proc_->getMaterializationOriginalF0StateById(id) : OriginalF0State::NotRequested; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readOriginalF0State({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ ? proc_->getMaterializationOriginalF0StateById(id) : OriginalF0State::NotRequested;
+        }
+
         DetectedKey getDetectedKey(uint64_t id) const override
-            { return proc_ ? proc_->getMaterializationDetectedKeyById(id) : DetectedKey{}; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readDetectedKey({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ ? proc_->getMaterializationDetectedKeyById(id) : DetectedKey{};
+        }
+
         std::vector<Note> getNotes(uint64_t id) const override
-            { return proc_ ? proc_->getMaterializationNotesById(id) : std::vector<Note>{}; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readNotes({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ ? proc_->getMaterializationNotesById(id) : std::vector<Note>{};
+        }
+
         MaterializationStore::MaterializationNotesSnapshot getNotesSnapshot(uint64_t id) const override
-            { return proc_ ? proc_->getMaterializationNotesSnapshotById(id) : MaterializationStore::MaterializationNotesSnapshot{}; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readNotesSnapshot({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ ? proc_->getMaterializationNotesSnapshotById(id)
+                : MaterializationStore::MaterializationNotesSnapshot{};
+        }
+
         uint64_t getNotesRevision(uint64_t id) const override
-            { return getNotesSnapshot(id).notesRevision; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readNotesRevision({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return getNotesSnapshot(id).notesRevision;
+        }
+
         std::shared_ptr<const TimeGridSnapshot> getTimeGrid(uint64_t id) const override
-            { return proc_ ? proc_->getMaterializationTimeGridById(id) : nullptr; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readTimeGrid({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ ? proc_->getMaterializationTimeGridById(id) : nullptr;
+        }
+
         uint64_t getTimeGridRevision(uint64_t id) const override
-            { return proc_ ? proc_->getMaterializationTimeGridRevisionById(id) : 0; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readTimeGridRevision({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ ? proc_->getMaterializationTimeGridRevisionById(id) : 0;
+        }
+
         RenderCache::ChunkStats getChunkStats(uint64_t id) const override
-            { return proc_ ? proc_->getMaterializationChunkStatsById(id) : RenderCache::ChunkStats{}; }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readChunkStats({DomainKind::ARAAudioModification, id, 0});
+#endif
+            return proc_ ? proc_->getMaterializationChunkStatsById(id) : RenderCache::ChunkStats{};
+        }
+
         bool getChunkBoundaries(uint64_t id, std::vector<double>& out) const override
-            { return proc_ && proc_->getMaterializationChunkBoundariesById(id, out); }
+        {
+#if JucePlugin_Enable_ARA
+            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
+                return dc->readChunkBoundaries({DomainKind::ARAAudioModification, id, 0}, out);
+#endif
+            return proc_ && proc_->getMaterializationChunkBoundariesById(id, out);
+        }
+
     private:
         OpenTuneAudioProcessor* proc_;
     };
@@ -541,7 +654,7 @@ OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()
     if (const auto* dc = processorRef_.getDocumentController()) {
         const auto regions = dc->getPlaybackRegionProjections();
         for (const auto& region : regions) {
-            const auto materializationId = region.materializationId;
+            const auto materializationId = region.contentKey.objectId;
             if (materializationId == 0)
                 continue;
 
@@ -551,7 +664,7 @@ OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()
 
         // ViewSelection 优先；否则选 timeline 最早的已 materialized placement
         if (const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection()) {
-            sync.activeMaterializationId = focusedRegion->materializationId;
+            sync.activeMaterializationId = focusedRegion->contentKey.objectId;
         }
 
         if (sync.activeMaterializationId == 0 && !sync.placements.empty()) {

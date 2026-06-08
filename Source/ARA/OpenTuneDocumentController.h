@@ -78,6 +78,62 @@ public:
     ContentRenderService* getContentRenderService() const noexcept;
     SourceStore* getSourceStore() const noexcept;
 
+    // ============================================================
+    // 编辑器只读内容访问器（通过 ContentKey 路由到 AudioModification + CRS）
+    // ARA 模式下编辑器不经过 MaterializationStore，直接读 AudioModification.content
+    // ============================================================
+
+    /** 从 CRS 读取音频 buffer */
+    std::shared_ptr<const juce::AudioBuffer<float>> readAudioBuffer(ContentKey key) const;
+
+    /** 从 AudioModification.content.analysis 读取 pitch curve */
+    std::shared_ptr<PitchCurve> readPitchCurve(ContentKey key) const;
+
+    /** 读取 OriginalF0 状态 */
+    OriginalF0State readOriginalF0State(ContentKey key) const;
+
+    /** 读取调性检测结果 */
+    DetectedKey readDetectedKey(ContentKey key) const;
+
+    /** 读取音符 */
+    std::vector<Note> readNotes(ContentKey key) const;
+
+    /** 读取音符快照 */
+    MaterializationStore::MaterializationNotesSnapshot readNotesSnapshot(ContentKey key) const;
+
+    /** 读取音符版本号 */
+    uint64_t readNotesRevision(ContentKey key) const;
+
+    /** 读取时间网格 */
+    std::shared_ptr<const TimeGridSnapshot> readTimeGrid(ContentKey key) const;
+
+    /** 读取时间网格版本号 */
+    uint64_t readTimeGridRevision(ContentKey key) const;
+
+    /** 读取音高移调设置 */
+    PitchShiftSettings readPitchShift(ContentKey key) const;
+
+    /** 从 CRS renderCache 读取渲染统计 */
+    RenderCache::ChunkStats readChunkStats(ContentKey key) const;
+
+    /** 从 CRS renderCache 读取 chunk 边界 */
+    bool readChunkBoundaries(ContentKey key, std::vector<double>& outSeconds) const;
+
+    /** 读取内容版本号 */
+    uint64_t readContentRevision(ContentKey key) const;
+
+    /** 读取材质化时长 */
+    double readMaterializationDuration(ContentKey key) const;
+
+    /** 读取 sourceId */
+    uint64_t readSourceId(ContentKey key) const;
+
+    /** 是否有内容 */
+    bool hasContent(ContentKey key) const;
+
+    /** 组合快照（兼容旧 MaterializationSnapshot 接口） */
+    MaterializationStore::MaterializationSnapshot readSnapshot(ContentKey key) const;
+
     std::vector<PlaybackRegionProjection> getPlaybackRegionProjections() const;
     std::vector<PlaybackRegionProjection> getPlaybackRegionProjectionsFor(
         const std::vector<juce::ARAPlaybackRegion*>& playbackRegions) const;
@@ -148,6 +204,9 @@ private:
     std::function<void()> onReclaimNeeded_;
     const OpenTuneAudioProcessor* serviceOwner_ = nullptr;
 
+    // 服务租约 token：detach 时置 false，后台 F0 work 持有 shared_ptr 可安全检查
+    std::shared_ptr<std::atomic<bool>> asyncLeaseToken_;
+
     struct ReclaimAsyncUpdater : juce::AsyncUpdater
     {
         using Callback = std::function<void()>;
@@ -165,6 +224,7 @@ private:
     const AudioModification* findAudioModification(const juce::String& persistentId) const;
     AudioModification* findAudioModification(juce::ARAAudioModification* audioModification);
     AudioModification* findAudioModificationByContentKey(const ContentKey& key);
+    const AudioModification* findAudioModificationByContentKey(const ContentKey& key) const;
     AudioModification& ensureAudioModification(juce::ARAAudioModification* audioModification);
     PlaybackRegion* findPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
     const PlaybackRegion* findPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion) const;

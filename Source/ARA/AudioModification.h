@@ -29,7 +29,6 @@ struct AudioModification
     juce::String sourcePersistentId;
     SourceWindow contentWindow;
     uint64_t sourceId{0};
-    uint64_t contentRevision{0};
     uint64_t birthRevision{0};
     double materializationDurationSeconds{0.0};
     AudioModificationBirthState birthState{AudioModificationBirthState::Empty};
