@@ -1,4 +1,5 @@
 #include "ContentRenderService.h"
+#include "../Inference/SoundTouchStretcher.h"
 
 namespace OpenTune {
 
