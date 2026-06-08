@@ -478,6 +478,278 @@ static CheckResult timeStretchCacheUsesContentKey()
 }
 
 // ============================================================================
+// Phase 0 Contract Tests — target architecture boundaries
+//
+// These tests define the desired architecture. They currently FAIL because
+// the codebase has duplicate definitions and misplaced ownership that need
+// to be resolved during the ARA migration.
+//
+// When all Phase 0 tests pass, the codebase is structurally ready for the
+// final ARA migration steps: removing old store-level mechanics and routing
+// all render data through ContentRenderService.
+// ============================================================================
+
+// ============================================================================
+// Contract Test 9: singlePlaybackReadSourceDefinition
+//
+// PlaybackReadSource must be defined in exactly ONE place:
+// Source/Render/PlaybackReadSource.h.
+//
+// Forbidden: MaterializationStore::PlaybackReadSource (line 65)
+// Forbidden: ContentRenderService::PlaybackReadSource  (line 48)
+// Required:  Source/Render/PlaybackReadSource.h exists and is the sole definition.
+// ============================================================================
+static CheckResult singlePlaybackReadSourceDefinition()
+{
+    // 1) MaterializationStore.h must NOT define struct PlaybackReadSource
+    {
+        const auto text = readText("Source/MaterializationStore.h");
+        if (contains(text, "struct PlaybackReadSource"))
+        {
+            auto loc = locateInText(text, "struct PlaybackReadSource", "MaterializationStore.h");
+            return fail("singlePlaybackReadSourceDefinition",
+                        "PlaybackReadSource defined in " + loc +
+                        " — must be defined ONLY in Source/Render/PlaybackReadSource.h");
+        }
+    }
+
+    // 2) ContentRenderService.h must NOT define struct PlaybackReadSource
+    {
+        const auto text = readText("Source/Render/ContentRenderService.h");
+        if (contains(text, "struct PlaybackReadSource"))
+        {
+            auto loc = locateInText(text, "struct PlaybackReadSource", "ContentRenderService.h");
+            return fail("singlePlaybackReadSourceDefinition",
+                        "PlaybackReadSource defined in " + loc +
+                        " — must be defined ONLY in Source/Render/PlaybackReadSource.h");
+        }
+    }
+
+    // 3) PlaybackReadSource.h must exist and contain the definition
+    {
+        const auto text = readText("Source/Render/PlaybackReadSource.h");
+        if (text.empty())
+            return fail("singlePlaybackReadSourceDefinition",
+                        "Source/Render/PlaybackReadSource.h not found or empty"
+                        " — PlaybackReadSource must live in its own header");
+        if (!contains(text, "PlaybackReadSource"))
+            return fail("singlePlaybackReadSourceDefinition",
+                        "PlaybackReadSource token not found in Source/Render/PlaybackReadSource.h");
+    }
+
+    return pass("singlePlaybackReadSourceDefinition");
+}
+
+// ============================================================================
+// Contract Test 10: singleRenderJobDefinition
+//
+// PendingRenderJob must be defined in exactly ONE place:
+// Source/Render/RenderJob.h.
+//
+// Forbidden: MaterializationStore::PendingRenderJob (line 122)
+// Forbidden: ContentRenderService::PendingRenderJob  (line 72)
+// Required:  Source/Render/RenderJob.h exists and is the sole definition.
+// ============================================================================
+static CheckResult singleRenderJobDefinition()
+{
+    // 1) MaterializationStore.h must NOT define struct PendingRenderJob
+    {
+        const auto text = readText("Source/MaterializationStore.h");
+        if (contains(text, "struct PendingRenderJob"))
+        {
+            auto loc = locateInText(text, "struct PendingRenderJob", "MaterializationStore.h");
+            return fail("singleRenderJobDefinition",
+                        "PendingRenderJob defined in " + loc +
+                        " — must be defined ONLY in Source/Render/RenderJob.h");
+        }
+    }
+
+    // 2) ContentRenderService.h must NOT define struct PendingRenderJob
+    {
+        const auto text = readText("Source/Render/ContentRenderService.h");
+        if (contains(text, "struct PendingRenderJob"))
+        {
+            auto loc = locateInText(text, "struct PendingRenderJob", "ContentRenderService.h");
+            return fail("singleRenderJobDefinition",
+                        "PendingRenderJob defined in " + loc +
+                        " — must be defined ONLY in Source/Render/RenderJob.h");
+        }
+    }
+
+    // 3) RenderJob.h must exist and contain the definition
+    {
+        const auto text = readText("Source/Render/RenderJob.h");
+        if (text.empty())
+            return fail("singleRenderJobDefinition",
+                        "Source/Render/RenderJob.h not found or empty"
+                        " — PendingRenderJob must live in its own header");
+        if (!contains(text, "PendingRenderJob"))
+            return fail("singleRenderJobDefinition",
+                        "PendingRenderJob token not found in Source/Render/RenderJob.h");
+    }
+
+    return pass("singleRenderJobDefinition");
+}
+
+// ============================================================================
+// Contract Test 11: contentRenderServiceHasNoOwnedRuntimeMechanics
+//
+// ContentRenderService must NOT own playback sources, render caches,
+// stretchers, render worker threads, or pending render queues.
+// These belong to dedicated components accessed through the service.
+//
+// Scan: Source/Render/ContentRenderService.h
+// ============================================================================
+static CheckResult contentRenderServiceHasNoOwnedRuntimeMechanics()
+{
+    const auto text = readText("Source/Render/ContentRenderService.h");
+
+    const std::vector<std::string> forbidden = {
+        "playbackSources_",
+        "playbackSourceCache_",
+        "renderCaches_",
+        "stretchers_",
+        "renderWorkerThread_",
+        "pendingRenderQueue_"
+    };
+
+    for (const auto& t : forbidden)
+    {
+        if (contains(text, t))
+        {
+            auto loc = locateInText(text, t, "ContentRenderService.h");
+            return fail("contentRenderServiceHasNoOwnedRuntimeMechanics",
+                        "forbidden private member '" + t + "' found in " + loc +
+                        " — CRS should not own runtime mechanics;"
+                        " these belong to dedicated components");
+        }
+    }
+
+    return pass("contentRenderServiceHasNoOwnedRuntimeMechanics");
+}
+
+// ============================================================================
+// Contract Test 12: materializationStoreNoLongerOwnsRuntimeMechanics
+//
+// MaterializationStore must NOT own playback source caches, per-entry render
+// caches, rebuildPlaybackSourceCache, or per-materialization
+// SoundTouch stretchers. These belong to ContentRenderService.
+//
+// Scan: Source/MaterializationStore.h, Source/MaterializationStore.cpp
+// ============================================================================
+static CheckResult materializationStoreNoLongerOwnsRuntimeMechanics()
+{
+    const auto hText   = readText("Source/MaterializationStore.h");
+    const auto cppText = readText("Source/MaterializationStore.cpp");
+    const auto combined = hText + cppText;
+
+    // 1) playbackSourceCache_ and rebuildPlaybackSourceCache at file scope
+    {
+        const std::vector<std::string> forbidden = {
+            "playbackSourceCache_", "rebuildPlaybackSourceCache"
+        };
+        for (const auto& t : forbidden)
+        {
+            if (contains(combined, t))
+            {
+                std::string file;
+                if (contains(hText, t))
+                    file = "MaterializationStore.h";
+                else if (contains(cppText, t))
+                    file = "MaterializationStore.cpp";
+                else
+                    file = "MaterializationStore.{h,cpp}";
+
+                auto src = (file == "MaterializationStore.h") ? hText : cppText;
+                auto loc = locateInText(src, t, file);
+                return fail("materializationStoreNoLongerOwnsRuntimeMechanics",
+                            "forbidden token '" + t + "' in " + loc +
+                            " — Store must not own playback source cache mechanics");
+            }
+        }
+    }
+
+    // 2) std::unique_ptr<SoundTouchStretcher> stretcher in MaterializationEntry
+    if (contains(hText, "std::unique_ptr<SoundTouchStretcher> stretcher"))
+    {
+        auto loc = locateInText(hText,
+                                "std::unique_ptr<SoundTouchStretcher> stretcher",
+                                "MaterializationStore.h");
+        return fail("materializationStoreNoLongerOwnsRuntimeMechanics",
+                    "per-entry std::unique_ptr<SoundTouchStretcher> stretcher in " + loc +
+                    " — stretcher ownership belongs to ContentRenderService, not Store");
+    }
+
+    // 3) Entry-owned renderCache inside MaterializationEntry struct
+    {
+        size_t entryPos = hText.find("struct MaterializationEntry");
+        if (entryPos != std::string::npos)
+        {
+            size_t bracePos = hText.find("{", entryPos);
+            if (bracePos != std::string::npos)
+            {
+                int depth = 0;
+                size_t closePos = bracePos;
+                for (size_t i = bracePos; i < hText.size(); ++i)
+                {
+                    if (hText[i] == '{') ++depth;
+                    if (hText[i] == '}') { --depth; if (depth == 0) { closePos = i; break; } }
+                }
+                std::string entryBody = hText.substr(
+                    bracePos, closePos - bracePos + 1);
+                if (contains(entryBody, "std::shared_ptr<RenderCache> renderCache"))
+                {
+                    auto loc = locateInText(hText,
+                                            "std::shared_ptr<RenderCache> renderCache",
+                                            "MaterializationStore.h");
+                    return fail("materializationStoreNoLongerOwnsRuntimeMechanics",
+                                "MaterializationEntry owns renderCache at " + loc +
+                                " — per-entry renderCache should not live in Store;"
+                                " ContentRenderService manages RenderCache lifecycle");
+                }
+            }
+        }
+    }
+
+    return pass("materializationStoreNoLongerOwnsRuntimeMechanics");
+}
+
+// ============================================================================
+// Contract Test 13: timeStretchCacheUsesContentKey (Phase 0 contract)
+//
+// TimeStretchCache key methods must use ContentKey, not uint64_t
+// materializationId. Scan TimeStretchCache.h for forbidden patterns.
+//
+// Forbidden: store(uint64_t materializationId,        (line 63)
+//            invalidate(uint64_t materializationId,    (line 105)
+//            sliceForOutputRange(uint64_t materializationId (line 95)
+// ============================================================================
+static CheckResult timeStretchCacheContractKeyCheck()
+{
+    const auto text = readText("Source/Inference/TimeStretchCache.h");
+
+    const std::vector<std::string> forbidden = {
+        "store(uint64_t materializationId",
+        "invalidate(uint64_t materializationId",
+        "sliceForOutputRange(uint64_t materializationId"
+    };
+
+    for (const auto& t : forbidden)
+    {
+        if (contains(text, t))
+        {
+            auto loc = locateInText(text, t, "TimeStretchCache.h");
+            return fail("timeStretchCacheUsesContentKey",
+                        "found '" + t + ")' in " + loc +
+                        " — must use ContentKey instead of uint64_t materializationId"
+                        " per ARA2 architecture contract");
+        }
+    }
+
+    return pass("timeStretchCacheUsesContentKey");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 int main()
@@ -503,6 +775,12 @@ int main()
         araRewriteIsLockFree(),
         araHasNoFallbackRouting(),
         timeStretchCacheUsesContentKey(),
+        // Phase 0 contract tests — all expected to FAIL with current code
+        singlePlaybackReadSourceDefinition(),
+        singleRenderJobDefinition(),
+        contentRenderServiceHasNoOwnedRuntimeMechanics(),
+        materializationStoreNoLongerOwnsRuntimeMechanics(),
+        timeStretchCacheContractKeyCheck(),
     };
 
     int passedCount = 0;
