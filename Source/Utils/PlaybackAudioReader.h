@@ -15,13 +15,13 @@ namespace OpenTune {
  * readStartSeconds 必须与 source 中 renderCache / dry buffer 的时间基保持一致。
  */
 struct PlaybackReadRequest {
-    ContentRenderService::PlaybackReadSource source;
+    PlaybackReadSource source;
     double readStartSeconds{0.0};
     double targetSampleRate{44100.0};
     int numSamples{0};
 
     PlaybackReadRequest() = default;
-    PlaybackReadRequest(ContentRenderService::PlaybackReadSource src, double start, double rate, int samples)
+    PlaybackReadRequest(PlaybackReadSource src, double start, double rate, int samples)
         : source(src), readStartSeconds(start), targetSampleRate(rate), numSamples(samples) {}
 };
 
@@ -62,7 +62,9 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
         && request.source.timeStretchCache != nullptr
         && objectId != 0) {
         const int wrote = request.source.timeStretchCache->sliceForOutputRange(
-            objectId,
+            request.source.contentKey,
+            request.source.pitchRevision,
+            request.source.timeGridRevision,
             request.readStartSeconds,
             destination,
             destinationStartSample,

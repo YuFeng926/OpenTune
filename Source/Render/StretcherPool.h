@@ -27,7 +27,7 @@ class StretcherPool
 {
 public:
     StretcherPool() = default;
-    ~StretcherPool() = default;
+    ~StretcherPool();
 
     StretcherPool(const StretcherPool&) = delete;
     StretcherPool& operator=(const StretcherPool&) = delete;
