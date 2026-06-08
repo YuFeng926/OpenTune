@@ -670,6 +670,8 @@ target_sources(OpenTune
         Source/Render/PlaybackSourcePublisher.h
         Source/Render/PlaybackSourcePublisher.cpp
         Source/Render/RenderJob.h
+        Source/Render/RenderWorker.h
+        Source/Render/RenderWorker.cpp
         Source/Render/ContentRenderService.h
         Source/Render/ContentRenderService.cpp
         Source/Render/StretcherPool.h
