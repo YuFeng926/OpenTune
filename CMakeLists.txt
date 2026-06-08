@@ -662,6 +662,8 @@ target_sources(OpenTune
         Source/Content/AudioModificationContentState.h
         Source/Content/RetiredContentRecord.h
         Source/Content/EditableContentSnapshot.h
+        Source/Content/StandaloneClipContent.h
+        Source/Content/StandaloneClipContent.cpp
 
         # Render Layer
         Source/Render/ContentRenderService.h

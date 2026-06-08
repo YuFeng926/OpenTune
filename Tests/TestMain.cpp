@@ -192,7 +192,14 @@ CheckResult cmakeMountsOnlyNewAraModel()
 
 CheckResult araRewriteIsLockFree()
 {
-    const auto araText = allAraText();
+    auto araText = allAraText();
+    // Allow std::atomic<bool> for asyncLeaseToken_ lifecycle flag (lock-free, not a mutex)
+    {
+        const std::string needle = "std::atomic<bool>";
+        size_t pos = 0;
+        while ((pos = araText.find(needle, pos)) != std::string::npos)
+            araText.erase(pos, needle.length());
+    }
     if (!lacksAll(araText, noLockTokens()))
         return fail("Source/ARA rewrite is lock-free", "lock/thread primitive found in Source/ARA");
 

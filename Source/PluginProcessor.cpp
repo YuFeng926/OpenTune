@@ -1428,22 +1428,28 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 #endif
     );
 
-    // Detach ARA processor services �?DC no longer holds back-pointers to this processor.
+    // Phase 1: 停止内部刷新标志（阻止新 work 提交）
+    materializationRefreshAliveFlag_->store(false, std::memory_order_release);
+
+    // Phase 2: 解除 CRS execution lease — 取消 pending render jobs
+    if (contentRenderService_) {
+        contentRenderService_->detachExecutionLease(this);
+    }
+
+    // Phase 3: 通知 DC 解除服务（撤销租约 token，取消 pending F0 completion）
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
         dc->detachProcessorServices(this);
     }
 #endif
 
-    // Cancel any pending async reclaim sweep to avoid JUCE jassert in AsyncUpdater destructor
+    // Phase 4: 内部清理
     cancelPendingUpdate();
     referenceAnalysisService_.removeListener(this);
     referenceAnalysisService_.cancelAll();
-
     isPlaying_.store(false);
-    materializationRefreshAliveFlag_->store(false, std::memory_order_release);
 
-    // §7 (Phase D) �?stop Stage 2 worker before destroying stores
+    // Phase 5: 停止 Stage2 worker 线程
     {
         std::lock_guard<std::mutex> lock(stage2Mutex_);
         stage2WorkerRunning_.store(false, std::memory_order_release);
@@ -1456,6 +1462,8 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     if (vocoderDomain_) {
         vocoderDomain_->shutdown();
     }
+
+    // Phase 6: F0 service shutdown（最后调用，此时所有 async F0 work 已被取消）
     if (f0Service_) {
         f0Service_->shutdown();
     }

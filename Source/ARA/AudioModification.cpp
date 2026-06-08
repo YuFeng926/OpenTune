@@ -24,7 +24,6 @@ void AudioModification::resetContent() noexcept
     materializationDurationSeconds = 0.0;
     contentWindow = {};
     content = AudioModificationContentState{};
-    contentRevision = 0;
     birthState = AudioModificationBirthState::Empty;
 }
 
@@ -69,7 +68,7 @@ void AudioModification::retireCurrentContent()
 
     content = AudioModificationContentState{};
     content.lifecycle = ContentLifecycle::Retired;
-    ++contentRevision;
+    ++content.contentRevision;
 }
 
 bool AudioModification::reviveContent(ContentKey key)
@@ -81,7 +80,7 @@ bool AudioModification::reviveContent(ContentKey key)
 
     content = it->content;
     content.lifecycle = ContentLifecycle::Ready;
-    ++contentRevision;
+    ++content.contentRevision;
     retiredContentRecords.erase(it);
     birthState = AudioModificationBirthState::Ready;
     return true;

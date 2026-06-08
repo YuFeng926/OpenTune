@@ -14,7 +14,15 @@ public:
     }
 
     ~Impl() {
-        shutdown();
+        // 先设置取消标志（双重保险）
+        cancelRequested_.store(true, std::memory_order_release);
+        initialized_.store(false, std::memory_order_release);
+
+        // 此时所有 shared_lock 已释放（后台线程已退出或检查到取消标志）
+        {
+            std::unique_lock<std::shared_mutex> lock(extractorMutex_);
+            currentExtractor_.reset();
+        }
     }
 
     bool initialize(const std::string& modelDir) {
@@ -55,11 +63,25 @@ public:
     }
 
     void shutdown() {
+        // 设置取消标志，通知正在进行的提取提前退出
+        cancelRequested_.store(true, std::memory_order_release);
         initialized_.store(false, std::memory_order_release);
-        {
-            std::unique_lock<std::shared_mutex> lock(extractorMutex_);
-            currentExtractor_.reset();
-        }
+
+        // 不获取 extractorMutex_！
+        // 原因：如果 RMVPE 提取正在进行（持有 shared_lock），
+        // unique_lock 会阻塞调用线程（通常是 message thread），导致 REAPER 卡死。
+        //
+        // currentExtractor_ 会在 ~Impl() 中释放：
+        //   当最后一个 F0InferenceService shared_ptr 析构时，
+        //   ~Impl() → shutdown() → extractorMutex_ 无竞争者 → 正常释放
+    }
+
+    void releaseImmediately() {
+        // 只释放模型资源，不改 cancelRequested_ 标志
+        // 与 shutdown() 不同：releaseImmediately 是常规释放，下次 extract 可正常重载
+        initialized_.store(false, std::memory_order_release);
+        std::unique_lock<std::shared_mutex> lock(extractorMutex_);
+        currentExtractor_.reset();
     }
 
     Result<std::vector<float>> extractF0(
@@ -69,6 +91,12 @@ public:
         std::function<void(float)> progressCallback,
         std::function<void(const std::vector<float>&, int)> partialCallback)
     {
+        // 检查取消标志
+        if (cancelRequested_.load(std::memory_order_acquire)) {
+            return Result<std::vector<float>>::failure(
+                ErrorCode::OperationCancelled, "F0InferenceService shutdown requested");
+        }
+
         if (!initialized_.load(std::memory_order_acquire)) {
             if (!initialize(modelDir_)) {
                 return Result<std::vector<float>>::failure(
@@ -191,6 +219,7 @@ public:
 private:
     std::shared_ptr<Ort::Env> env_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
+    std::atomic<bool> cancelRequested_{false};
     std::unique_ptr<IF0Extractor> currentExtractor_;
     F0ModelType currentModelType_{F0ModelType::RMVPE};
     std::string modelDir_;
@@ -270,7 +299,7 @@ bool F0InferenceService::isInitialized() const {
 }
 
 void F0InferenceService::releaseImmediately() {
-    if (pImpl_) pImpl_->shutdown();
+    if (pImpl_) pImpl_->releaseImmediately();
 }
 
 } // namespace OpenTune
