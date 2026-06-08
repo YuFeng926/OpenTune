@@ -85,11 +85,56 @@
 - ARA persistence 仍是旧 materialization archive
 - Kill list (Task 9) 远未通过
 
+### 重复建设问题（2026-06-08 Oracle 审查）
+
+🔴 **Critical - 不复用旧轮子，重新造轮子**
+
+当前迁移存在严重的重复建设反模式：MaterializationStore 已有成熟稳定的基础设施，但 ContentRenderService 重新实现了一套几乎相同的代码。
+
+**数据结构重复：**
+- `PlaybackReadSource`：MaterializationStore.h:64-92 vs ContentRenderService.h:48-67（**字段完全相同**，只差 key 类型）
+- `PendingRenderJob`：MaterializationStore.h:121-133 vs ContentRenderService.h:72-86（**字段完全相同**，只差 key 类型）
+
+**基础设施重复：**
+- playback source cache（atomic snapshot publisher）：Store L317-320 vs CRS L178-179
+- RenderCache 管理（getOrCreate、remove、lookup）：Store getRenderCache() vs CRS L127-129
+- SoundTouchStretcher pool：Store Entry.stretcher vs CRS stretchers_ vector
+- 渲染工作器（thread、queue、cv、pause/resume）：Store 已删除 vs CRS L189-199
+- TimeStretchCache：当前委托 CRS，但 key 仍是 materializationId
+
+**新实现的 bug：**
+- CRS `PendingRenderJob.targetRevision` 存在（L83），但 `enqueueRender()` 不复制到 `PendingRenderEntry`（ContentRenderService.cpp:111-128），revision 校验缺失
+- TimeStretchCache key 仍用 `uint64_t materializationId`，不同 domain 的 objectId 可能碰撞
+
+**AudioModificationContentState 缺失播放必需字段：**
+- `audioBuffer`：播放、波形、render 输入必需，但当前只在 CRS playback source 中，导致 CRS 变成实际 source owner
+- `renderRevision`：stale render 判断必需，当前只有 `contentRevision`
+
+**Oracle 推荐方案 A（最小改动）：**
+> MaterializationStore 原地改造成 ContentKey keyed 的统一 ContentStoreCore，删除 CRS 重复实现，复用所有成熟基础设施（cache、worker、snapshot publisher、stretcher pool）。只改 key 类型（materializationId → ContentKey），其他基础设施全部复用。
+
+**架构原则：**
+- 复用旧轮子的机械部件，不复用旧语义污染
+- ContentPayloadState 从 MaterializationSnapshot 抽取权威字段（notes/pitch/timeGrid/audioBuffer），不包含 derived runtime（renderCache/stretcher）
+- CRS 删除或退化为薄 facade，不再 own map/cache/worker
+- 接口形式可以变（key、命名），但底层实现必须复用
+
+**风险：**
+- 不采纳复用方案：两套基础设施持续分叉，每次 bug fix 修两遍，数据一致性风险
+- 采纳复用方案：必须守住 ARA2 边界（AudioModification 是 content root，不能让 Store 继续作为全局 owner）
+
 ### 下一步优先级（P0 必须先修）
 
-1. **修复 ARA 写路径** - 所有 ARA editor writes 必须落到 `AudioModification.content`，删除 ARA processor-store writes
-2. **修复 ARA persistence** - 保存/恢复 `AudioModificationContentState`，不保存旧 materialization store
-3. **删除 ARA DC materializationStore_** - DC 只协调 ARA graph，不拥有 content store
+**Phase 0（前置）：停止重复建设，复用成熟基础设施**
+1. **MaterializationStore key-generalize** - 把 `std::map<uint64_t, Entry>` 改成 `std::map<ContentKey, Entry>`，API 从 `getSnapshot(uint64_t)` 改成 `getSnapshot(ContentKey)`
+2. **统一 PlaybackReadSource / PendingRenderJob** - 删除 CRS 重复定义，改用 key-generalized Store 版本
+3. **删除 CRS 重复基础设施** - 删除 CRS playbackSources_/renderCaches_/stretchers_/worker，改为 Store core 复用
+4. **TimeStretchCache 改 ContentKey** - key 从 `materializationId` 改成 `ContentKey + pitchRevision + timeGridRevision`
+
+**Phase 1（数据安全/一致性）：**
+5. **修复 ARA 写路径** - 所有 ARA editor writes 必须落到 `AudioModification.content`，删除 ARA processor-store writes
+6. **修复 ARA persistence** - 保存/恢复 `AudioModificationContentState`，不保存旧 materialization store
+7. **删除 ARA DC materializationStore_** - DC 只协调 ARA graph，不拥有 content store
 
 ---
 
@@ -166,22 +211,44 @@ ARA uses `AudioModification` as the owner of `EditableContentState`.
 
 Standalone and regular VST3 must use their own domain owners before final migration is accepted. They reach render/cache/worker code through the same service interfaces. They must not reuse a generic `MaterializationStore` as the shared content owner.
 
-### ContentRenderService
-`ContentRenderService` is the concrete replacement for the render/cache/worker part of `MaterializationStore`, not a new content owner.
+### ContentRenderService（修订后定义）
 
-It owns derived state only:
-- `RenderCache` instances keyed by a neutral content key.
-- `TimeStretchCache` entries keyed by content key and relevant revisions.
-- Chunk render queue and worker lifecycle.
-- Chunk stats and render progress read models.
-- Immutable playback read snapshots for the audio thread.
+⚠️ **当前状态（2026-06-08）：CRS 重复实现了 MaterializationStore 的基础设施，违反复用原则。**
 
-It does not own notes, pitch curves, time grids, pitch-shift settings, detected key, source provenance, or content lifecycle truth.
+**应有架构（方案 A - 最小改动）：**
+- MaterializationStore 原地改造成 `ContentStoreCore`（key 从 `materializationId` 改 `ContentKey`）
+- CRS 删除重复实现，退化为薄 facade 或直接删除
+- 复用 Store 已有的：playback snapshot publisher、RenderCache 管理、Stretcher pool、worker 基础设施
 
-Forbidden writes:
-- Mutating `AudioModification.content` or any other domain content root.
-- Creating a second content truth when a render/cache miss occurs.
-- Falling back to processor-local or DC-local store lookup.
+**如果保留 CRS（作为薄 facade）：**
+```cpp
+class ContentRenderService {
+public:
+    explicit ContentRenderService(ContentStoreCore& core);
+    bool getPlaybackReadSource(ContentKey key, PlaybackReadSource& out) const;
+    void enqueueRender(PendingRenderJob job);
+    TimeStretchCache& getTimeStretchCache();
+private:
+    ContentStoreCore& core_;  // 不 own，只引用
+};
+```
+
+**CRS 应拥有的（derived state only）：**
+- ❌ ~~playbackSources_ map~~ → 复用 Store playback snapshot cache
+- ❌ ~~renderCaches_ map~~ → 复用 Store per-entry RenderCache
+- ❌ ~~stretchers_ vector~~ → 复用 Store per-entry Stretcher
+- ❌ ~~worker thread/queue/cv~~ → 复用 Store render worker
+- ✅ TimeStretchCache（但 key 必须改 ContentKey + revisions）
+
+**CRS 不能拥有的：**
+- notes、pitch curves、time grids、pitch-shift settings
+- detected key、source provenance、content lifecycle truth
+- audioBuffer（source audio payload 属于 content，不属于 derived cache）
+
+**禁止的操作：**
+- 重新实现 MaterializationStore 已有的稳定基础设施
+- 在 render/cache miss 时创建第二个 content truth
+- Fallback 到 processor-local 或 DC-local store lookup
 
 ### Migration Rules
 - Tests first. Contract tests must fail before implementation.
@@ -224,12 +291,45 @@ Renderer 从 host assigned regions → AudioModification content snapshots → C
 Editor 读写 AudioModification.content（ARA）或 domain owner（non-ARA），删除 dual backend / materializationId API。
 
 ### Task 9: Kill List Review
-最终审查：禁止 MaterializationStore content owner、materializationId、DC/processor store split、fallback routing、dual backend。
+最终审查：禁止 MaterializationStore content owner、materializationId、DC/processor store split、fallback routing、dual backend、重复建设。
+
+**必须删除的重复建设（2026-06-08 新增）：**
+- [ ] 删除 `ContentRenderService::PlaybackReadSource` 重复定义（ContentRenderService.h:48-67）
+- [ ] 删除 `ContentRenderService::PendingRenderJob` 重复定义（ContentRenderService.h:72-86）
+- [ ] 删除 CRS 重复 RenderCache 管理（ContentRenderService.h:127-129, .cpp:65-87）
+- [ ] 删除 CRS 重复 playback source cache（ContentRenderService.h:178-183, .cpp:21-59）
+- [ ] 删除 CRS 重复 SoundTouchStretcher pool（ContentRenderService.h:156-164, .cpp:263-280）
+- [ ] 删除 Store ↔ CRS PlaybackReadSource adapter（MaterializationStore.cpp:294-314）
+- [ ] 删除 processor oldSource → CRS source conversion（PluginProcessor.cpp:577-591）
+- [ ] 删除 `MaterializationContentAccess/MaterializationContentCommands` 兼容层（MaterializationContentProvider.h:13-80）
+- [ ] 删除 ARA birth 手写 content construction，改用统一 `CreateContentRequest`
+- [ ] 禁止新增"同字段、同语义、只换名字"的 DTO
+
+**必须删除的旧架构残留：**
+- [ ] 禁止 `materializationId` identity（改用 ContentKey）
+- [ ] 禁止 DC/Processor 各自拥有 `materializationStore_`
+- [ ] 禁止 `if (dc) -> X else processor -> Y` dual backend 路由
+- [ ] 禁止 ARA 写路径写 processor materializationStore_
+- [ ] 禁止 fallback content routing（content lookup 失败应报错，不能尝试另一个 store）
+- [ ] 禁止 `MaterializationStore` 作为 content owner（只能作为 key-generalized runtime core）
+- [ ] 禁止 PlaybackRegion 持有 content 字段（只能有 placement）
+- [ ] 禁止 Renderer 依赖 global preferred region（只能用 host assigned regions）
+- [ ] 禁止 Source/ARA 目录包含 mutex/lock_guard/thread（允许 atomic<bool>）
+- [ ] 禁止 TimeStretchCache key 用 `materializationId`（必须用 ContentKey + revisions）
 
 ---
 
 ## 参考文档
 
 - ARA2 SDK Documentation: https://github.com/Celemony/ARA_SDK
-- Oracle 架构审查报告（2026-06-08）：见 git commit `e0326f0`
+- Oracle 架构审查报告（2026-06-08 完成度审查）：见 git commit `e0326f0`
+- Oracle 架构审查报告（2026-06-08 重复建设审查）：见当前会话 ora-1 识别重复建设反模式
 - 读路径修复计划：`docs/plans/2026-06-08-ara-read-path-lifecycle-fix.md`
+
+## Oracle 审查关键结论
+
+1. **当前状态定性**：ARA 读路径迁移里程碑（部分完成），而非完整 AudioModification Content Root
+2. **关键架构风险**：3 个 Critical + 4 个 High 风险阻塞最终目标
+3. **重复建设反模式成立**：ContentRenderService 重新实现了 MaterializationStore 的成熟基础设施
+4. **推荐方案**：MaterializationStore 原地改造成 ContentKey keyed 的 ContentStoreCore，删除 CRS 重复实现
+5. **架构原则**：架构迁移 ≠ 功能重写，复用旧轮子的机械部件，不复用旧语义污染
