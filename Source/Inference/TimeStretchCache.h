@@ -28,6 +28,8 @@
 #include <memory>
 #include <vector>
 
+#include "../Content/ContentKey.h"
+
 namespace OpenTune {
 
 class TimeStretchCache {
@@ -37,8 +39,8 @@ public:
      */
     struct Entry {
         std::vector<float> audio;        // Stage 2 output, full clip, full-band PCM
-        uint32_t pitchRevision = 0;
-        uint32_t timeGridRevision = 0;
+        uint64_t pitchRevision = 0;
+        uint64_t timeGridRevision = 0;
         double sampleRate = 44100.0;     // typically TimeCoordinate::kRenderSampleRate
         bool published = false;          // false until first store
     };
@@ -60,10 +62,10 @@ public:
      * (pitchRevision, timeGridRevision) tuple with build-generation token
      * for stale-output rejection.  Replaces any prior entry.
      */
-    void store(uint64_t materializationId,
+    void store(ContentKey key,
                std::vector<float> audio,
-               uint32_t pitchRevision,
-               uint32_t timeGridRevision,
+               uint64_t pitchRevision,
+               uint64_t timeGridRevision,
                double sampleRate,
                uint32_t buildGeneration);
 
@@ -72,14 +74,14 @@ public:
      * Caller (worker) holds this and passes it to store(); if the generation
      * has changed by the time store() runs, the build output is discarded.
      */
-    uint32_t beginBuild(uint64_t materializationId) const;
+    uint32_t beginBuild(ContentKey key) const;
 
     /**
      * Check if entry for `materializationId` matches the current revisions.
      */
-    bool hit(uint64_t materializationId,
-             uint32_t pitchRevision,
-             uint32_t timeGridRevision) const;
+    bool hit(ContentKey key,
+             uint64_t pitchRevision,
+             uint64_t timeGridRevision) const;
 
     /**
      * Read a slice of the cached output by output time range.
@@ -92,7 +94,9 @@ public:
      * @param targetSampleRate         If different from cached SR, linear-interp resample
      * @return                         Number of samples written; 0 if cache miss / range out of bounds
      */
-    int sliceForOutputRange(uint64_t materializationId,
+    int sliceForOutputRange(ContentKey key,
+                            uint64_t pitchRevision,
+                            uint64_t timeGridRevision,
                             double outputStartSeconds,
                             juce::AudioBuffer<float>& destination,
                             int destinationStartSample,
@@ -102,7 +106,7 @@ public:
     /**
      * Mark entry as stale (revisions cleared, audio cleared).
      */
-    void invalidate(uint64_t materializationId);
+    void invalidate(ContentKey key);
 
     /**
      * Drop all entries.
@@ -116,19 +120,19 @@ public:
 
 private:
     mutable juce::SpinLock lock_;
-    std::map<uint64_t, std::shared_ptr<Entry>> entries_;
+    std::map<ContentKey, std::shared_ptr<Entry>> entries_;
 
     // Atomic snapshot for lock-free readers.  Published atomically after each
     // write to entries_ so that sliceForOutputRange never needs a lock.
-    mutable std::shared_ptr<const std::map<uint64_t, std::shared_ptr<Entry>>> readerMap_;
+    mutable std::shared_ptr<const std::map<ContentKey, std::shared_ptr<Entry>>> readerMap_;
 
     // Retired snapshots for writer-side delayed destruction.
     // Swept when use_count()==1 — guarantees free/malloc never hits audio thread.
-    mutable std::vector<std::shared_ptr<const std::map<uint64_t, std::shared_ptr<Entry>>>> retiredSnapshots_;
+    mutable std::vector<std::shared_ptr<const std::map<ContentKey, std::shared_ptr<Entry>>>> retiredSnapshots_;
 
     // Per-materialization invalidation generation counter.
     // Bumped by invalidate(), checked by store() to reject stale worker output.
-    mutable std::map<uint64_t, uint32_t> invalidationGen_;
+    mutable std::map<ContentKey, uint32_t> invalidationGen_;
 };
 
 } // namespace OpenTune
