@@ -1,5 +1,6 @@
 #pragma once
 #include "AudioModificationContentState.h"
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
 #include <cstdint>
 
@@ -20,6 +21,10 @@ struct EditableContentSnapshot
     uint64_t timeGridRevision{0};
     uint64_t pitchShiftRevision{0};
     uint64_t contentRevision{0};
+
+    // Standalone domain extended fields
+    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+    uint64_t audioRevision{0};
 };
 
 } // namespace OpenTune
