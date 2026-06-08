@@ -4447,7 +4447,28 @@ bool OpenTuneAudioProcessor::setMaterializationPitchCurveById(uint64_t materiali
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return materializationStore_->setPitchCurve(materializationId, std::move(curve));
+    {
+        auto* mod = dc->findAudioModificationByContentKey(
+            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
+        if (mod == nullptr || !mod->hasContentState())
+            return false;
+
+        mod->applyPitchCurve(std::move(curve));
+
+        // Invalidate CRS derived artifacts
+        if (auto* crs = dc->getContentRenderService())
+        {
+            auto key = mod->contentKey();
+            crs->removeRenderCache(key);
+            crs->removeStretcher(key);
+        }
+
+        // Notify host
+        if (mod->audioModification != nullptr)
+            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+        return true;
+    }
 #endif
 
     jassert(materializationStore_ != nullptr);
@@ -4491,7 +4512,21 @@ bool OpenTuneAudioProcessor::setMaterializationOriginalF0StateById(uint64_t mate
 {
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return materializationStore_->setOriginalF0State(materializationId, state);
+    {
+        auto* mod = dc->findAudioModificationByContentKey(
+            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
+        if (mod == nullptr || !mod->hasContentState())
+            return false;
+
+        mod->content.analysis.originalF0State = state;
+        ++mod->content.contentRevision;
+
+        // Notify host
+        if (mod->audioModification != nullptr)
+            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+        return true;
+    }
 #endif
     jassert(materializationStore_ != nullptr);
     return materializationId != 0 && materializationStore_->setOriginalF0State(materializationId, state);
@@ -4534,7 +4569,20 @@ bool OpenTuneAudioProcessor::setMaterializationDetectedKeyById(uint64_t material
 {
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return materializationStore_->setDetectedKey(materializationId, key);
+    {
+        auto* mod = dc->findAudioModificationByContentKey(
+            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
+        if (mod == nullptr || !mod->hasContentState())
+            return false;
+
+        mod->applyDetectedKey(key);
+
+        // Notify host
+        if (mod->audioModification != nullptr)
+            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+        return true;
+    }
 #endif
     jassert(materializationStore_ != nullptr);
     return materializationId != 0 && materializationStore_->setDetectedKey(materializationId, key);
@@ -4712,7 +4760,28 @@ bool OpenTuneAudioProcessor::setMaterializationTimeGridById(uint64_t materializa
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return materializationStore_->setTimeGrid(materializationId, std::move(snapshot));
+    {
+        auto* mod = dc->findAudioModificationByContentKey(
+            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
+        if (mod == nullptr || !mod->hasContentState())
+            return false;
+
+        mod->applyTimeGrid(std::move(snapshot));
+
+        // Invalidate CRS derived artifacts
+        if (auto* crs = dc->getContentRenderService())
+        {
+            auto key = mod->contentKey();
+            crs->removeStretcher(key);
+            crs->getTimeStretchCache().invalidate(key);
+        }
+
+        // Notify host
+        if (mod->audioModification != nullptr)
+            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+        return true;
+    }
 #endif
 
     jassert(materializationStore_ != nullptr);
@@ -4808,7 +4877,27 @@ bool OpenTuneAudioProcessor::setMaterializationNotesById(uint64_t materializatio
 {
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController())
-        return materializationStore_->setNotes(materializationId, normalizeStoredNotes(notes));
+    {
+        auto* mod = dc->findAudioModificationByContentKey(
+            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
+        if (mod == nullptr || !mod->hasContentState())
+            return false;
+
+        mod->applyNotes(normalizeStoredNotes(notes));
+
+        // Invalidate CRS derived artifacts
+        if (auto* crs = dc->getContentRenderService())
+        {
+            auto key = mod->contentKey();
+            crs->removeRenderCache(key);
+        }
+
+        // Notify host
+        if (mod->audioModification != nullptr)
+            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+        return true;
+    }
 #endif
     jassert(materializationStore_ != nullptr);
     return materializationId != 0 && materializationStore_->setNotes(materializationId, normalizeStoredNotes(notes));
@@ -4823,12 +4912,34 @@ bool OpenTuneAudioProcessor::setMaterializationCorrectedSegmentsById(uint64_t ma
 
 #if JucePlugin_Enable_ARA
     if (auto* dc = getDocumentController()) {
-        auto* store = materializationStore_.get();
-        std::shared_ptr<PitchCurve> pitchCurve;
-        if (!store->getPitchCurve(materializationId, pitchCurve) || pitchCurve == nullptr)
+        auto* mod = dc->findAudioModificationByContentKey(
+            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
+        if (mod == nullptr || !mod->hasContentState())
             return false;
+
+        auto pitchCurve = mod->content.analysis.pitchCurve;
+        if (pitchCurve == nullptr)
+            return false;
+
         auto committedCurve = clonePitchCurveWithCorrectedSegments(pitchCurve, segments);
-        return committedCurve != nullptr && store->setPitchCurve(materializationId, std::move(committedCurve));
+        if (committedCurve == nullptr)
+            return false;
+
+        mod->applyPitchCurve(std::move(committedCurve));
+
+        // Invalidate CRS derived artifacts
+        if (auto* crs = dc->getContentRenderService())
+        {
+            auto key = mod->contentKey();
+            crs->removeRenderCache(key);
+            crs->removeStretcher(key);
+        }
+
+        // Notify host
+        if (mod->audioModification != nullptr)
+            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+        return true;
     }
 #endif
 
