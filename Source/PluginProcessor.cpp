@@ -1576,7 +1576,7 @@ bool OpenTuneAudioProcessor::runStage2RebuildForContentKey(ContentKey contentKey
 
     // If TimeGrid is identity, nothing to do — invalidate any stale entry.
     if (snap.timeGrid == nullptr || snap.timeGrid->isIdentity()) {
-        materializationStore_->getTimeStretchCache().invalidate(objectId);
+        materializationStore_->getTimeStretchCache().invalidate(ContentKey{DomainKind::StandaloneClip, objectId, 0});
         return true;
     }
 
@@ -2190,7 +2190,7 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         {
             ContentRenderService::ExecutionLease lease;
             lease.leaseOwner = this;
-            lease.renderJobCallback = [this](ContentRenderService::PendingRenderJob& job) {
+            lease.renderJobCallback = [this](RenderJob& job) {
                 processChunkRenderJob(job);
             };
             contentRenderService_->attachExecutionLease(std::move(lease));
@@ -5328,10 +5328,10 @@ bool OpenTuneAudioProcessor::enqueueMaterializationPartialRenderById(uint64_t ma
 // processChunkRenderJob is called by the CRS worker via ExecutionLease.
 // ============================================================================
 
-void OpenTuneAudioProcessor::processChunkRenderJob(ContentRenderService::PendingRenderJob& job)
+void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
 {
     struct WorkerRenderJob {
-        ContentRenderService::PendingRenderJob coreJob;
+        RenderJob coreJob;
         FrozenRenderBoundaries boundaries;
     };
 
@@ -5488,7 +5488,7 @@ void OpenTuneAudioProcessor::processChunkRenderJob(ContentRenderService::Pending
 
                 const uint64_t objectId = wj.coreJob.contentKey.objectId;
                 if (objectId != 0) {
-                    contentRenderService_->getTimeStretchCache().invalidate(objectId);
+                    contentRenderService_->getTimeStretchCache().invalidate(ContentKey{DomainKind::StandaloneClip, objectId, 0});
                     // Stage 2 rebuild now routed through CRS
                 }
 
@@ -5586,7 +5586,7 @@ void OpenTuneAudioProcessor::processChunkRenderJob(ContentRenderService::Pending
             renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::Succeeded);
 
             if (chunkObjId != 0) {
-                contentRenderService_->getTimeStretchCache().invalidate(chunkObjId);
+                contentRenderService_->getTimeStretchCache().invalidate(ContentKey{DomainKind::StandaloneClip, chunkObjId, 0});
                 if (materializationStore_ != nullptr) {
                     const auto pitchRev = materializationStore_->getPitchShiftRevision(chunkObjId);
                     const auto tgRev = materializationStore_->getTimeGridRevision(chunkObjId);
@@ -5652,7 +5652,9 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
         && request.source.timeStretchCache != nullptr
         && objectId != 0) {
         const int wrote = request.source.timeStretchCache->sliceForOutputRange(
-            objectId,
+            request.source.contentKey,
+            request.source.pitchRevision,
+            request.source.timeGridRevision,
             request.readStartSeconds,
             destination,
             destinationStartSample,

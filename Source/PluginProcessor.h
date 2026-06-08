@@ -760,7 +760,7 @@ public:
 
     // Rendering & Buffering
     bool enqueueMaterializationPartialRenderById(uint64_t materializationId, double relStartSeconds, double relEndSeconds);
-    void processChunkRenderJob(ContentRenderService::PendingRenderJob& job);
+    void processChunkRenderJob(RenderJob& job);
 
     // Transport control API
     void setPlaying(bool playing);

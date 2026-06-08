@@ -1431,7 +1431,7 @@ bool OpenTuneDocumentController::birthMaterializationForModification(AudioModifi
     if (contentRenderService_ != nullptr)
     {
         auto renderCache = contentRenderService_->getOrCreateRenderCache(modification.contentKey());
-        ContentRenderService::PlaybackReadSource readSource;
+        PlaybackReadSource readSource;
         readSource.renderCache = renderCache;
         readSource.audioBuffer = storedAudioBuffer;
         contentRenderService_->publishPlaybackSource(modification.contentKey(), readSource);
@@ -1609,7 +1609,7 @@ bool OpenTuneDocumentController::requestStopPlayback()
 
 std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneDocumentController::readAudioBuffer(ContentKey key) const
 {
-    ContentRenderService::PlaybackReadSource crsSrc;
+    PlaybackReadSource crsSrc;
     if (contentRenderService_ != nullptr && contentRenderService_->getPlaybackReadSource(key, crsSrc))
         return crsSrc.audioBuffer;
     return nullptr;
@@ -1685,7 +1685,7 @@ PitchShiftSettings OpenTuneDocumentController::readPitchShift(ContentKey key) co
 
 RenderCache::ChunkStats OpenTuneDocumentController::readChunkStats(ContentKey key) const
 {
-    ContentRenderService::PlaybackReadSource crsSrc;
+    PlaybackReadSource crsSrc;
     if (contentRenderService_ != nullptr
         && contentRenderService_->getPlaybackReadSource(key, crsSrc)
         && crsSrc.renderCache != nullptr)
@@ -1703,7 +1703,7 @@ bool OpenTuneDocumentController::readChunkBoundaries(ContentKey key, std::vector
     if (mod == nullptr)
         return false;
 
-    ContentRenderService::PlaybackReadSource crsSrc;
+    PlaybackReadSource crsSrc;
     if (contentRenderService_ == nullptr || !contentRenderService_->getPlaybackReadSource(key, crsSrc))
         return false;
     if (crsSrc.audioBuffer == nullptr)
@@ -1773,7 +1773,7 @@ MaterializationStore::MaterializationSnapshot OpenTuneDocumentController::readSn
     // Materialization 层特有字段：snapshotContent() 不含这些
     snap.silentGaps = mod->content.analysis.silentGaps;
 
-    ContentRenderService::PlaybackReadSource crsSrc;
+    PlaybackReadSource crsSrc;
     if (contentRenderService_ != nullptr && contentRenderService_->getPlaybackReadSource(key, crsSrc))
     {
         snap.audioBuffer = crsSrc.audioBuffer;

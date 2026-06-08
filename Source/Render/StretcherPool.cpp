@@ -3,6 +3,8 @@
 
 namespace OpenTune {
 
+StretcherPool::~StretcherPool() = default;
+
 SoundTouchStretcher* StretcherPool::getOrCreate(ContentKey key, double sampleRate, int channels)
 {
     if (!key.isValid() || sampleRate <= 0.0 || channels <= 0)

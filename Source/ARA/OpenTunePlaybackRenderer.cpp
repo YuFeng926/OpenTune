@@ -180,7 +180,7 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
         if (!overlap.has_value())
             continue;
 
-        ContentRenderService::PlaybackReadSource readSource;
+        PlaybackReadSource readSource;
         if (!crs->getPlaybackReadSource(region.contentKey, readSource))
             continue;
 
