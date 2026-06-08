@@ -209,9 +209,14 @@ private:
     AudioModification* findAudioModification(const juce::String& persistentId);
     const AudioModification* findAudioModification(const juce::String& persistentId) const;
     AudioModification* findAudioModification(juce::ARAAudioModification* audioModification);
+    AudioModification& ensureAudioModification(juce::ARAAudioModification* audioModification);
+
+public:
+    // Exposed for PluginProcessor ARA write routing
     AudioModification* findAudioModificationByContentKey(const ContentKey& key);
     const AudioModification* findAudioModificationByContentKey(const ContentKey& key) const;
-    AudioModification& ensureAudioModification(juce::ARAAudioModification* audioModification);
+
+private:
     PlaybackRegion* findPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
     const PlaybackRegion* findPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion) const;
     PlaybackRegion& ensurePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
