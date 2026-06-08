@@ -666,6 +666,8 @@ target_sources(OpenTune
         Source/Content/StandaloneClipContent.cpp
 
         # Render Layer
+        Source/Render/PlaybackReadSource.h
+        Source/Render/RenderJob.h
         Source/Render/ContentRenderService.h
         Source/Render/ContentRenderService.cpp
 )
