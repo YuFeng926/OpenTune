@@ -21,9 +21,6 @@ class OpenTunePlaybackRenderer;
 class OpenTuneAudioProcessor;
 class F0InferenceService;
 class ResamplingManager;
-class MaterializationStore;
-class SourceStore;
-
 class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
 public:
@@ -76,8 +73,6 @@ public:
     void restoreContentPayloadInto(const juce::XmlElement& src);
 
     ContentRenderService* getContentRenderService() const noexcept;
-    SourceStore* getSourceStore() const noexcept;
-
     // ============================================================
     // 编辑器只读内容访问器（通过 ContentKey 路由到 AudioModification + CRS）
     // ARA 模式下编辑器不经过 MaterializationStore，直接读 AudioModification.content
@@ -144,11 +139,6 @@ public:
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
     void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
 
-    // 退休内容池查询（undo/revive 入口）
-    const std::vector<RetiredContentRecord>& getRetiredContents() const noexcept { return retiredContents_; }
-    bool reviveRetiredContentByKey(const ContentKey& key, AudioModification& target);
-    void releaseRetiredContent(const ContentKey& key);
-
     void didUpdateMusicalContextProperties(juce::ARAMusicalContext* musicalContext) override;
     void willBeginEditing(juce::ARADocument* document) override;
     void didEndEditing(juce::ARADocument* document) override;
@@ -192,11 +182,7 @@ private:
     std::vector<PlaybackRegion> playbackRegions_;
     std::vector<juce::ARAPlaybackRegion*> editorSelectionPlaybackRegions_;
     std::vector<OpenTunePlaybackRenderer*> playbackRenderers_;
-    std::vector<RetiredContentRecord> retiredContents_;
 
-    // 保留 MaterializationStore 作为向后兼容（短期），不再做内容路由
-    std::shared_ptr<MaterializationStore> materializationStore_;
-    std::shared_ptr<SourceStore> sourceStore_;
     ContentRenderService* contentRenderService_{nullptr};
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::shared_ptr<F0InferenceService> f0Service_;

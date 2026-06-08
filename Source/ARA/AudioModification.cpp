@@ -59,7 +59,7 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
     return snap;
 }
 
-void AudioModification::retireCurrentContent()
+void AudioModification::retireContent()
 {
     RetiredContentRecord record;
     record.key = contentKey();

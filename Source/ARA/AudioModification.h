@@ -49,7 +49,7 @@ struct AudioModification
 
     // 内容生命周期
     ContentKey contentKey() const noexcept;
-    void retireCurrentContent();
+    void retireContent();
     bool reviveContent(ContentKey key);
     void releaseRetiredContent(ContentKey key);
 
