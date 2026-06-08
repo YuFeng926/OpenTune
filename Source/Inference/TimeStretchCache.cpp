@@ -9,28 +9,28 @@ namespace OpenTune {
 TimeStretchCache::TimeStretchCache() = default;
 TimeStretchCache::~TimeStretchCache() = default;
 
-uint32_t TimeStretchCache::beginBuild(uint64_t materializationId) const
+uint32_t TimeStretchCache::beginBuild(ContentKey key) const
 {
     juce::SpinLock::ScopedLockType sl(lock_);
-    auto it = invalidationGen_.find(materializationId);
+    auto it = invalidationGen_.find(key);
     return (it != invalidationGen_.end()) ? it->second : 0;
 }
 
-void TimeStretchCache::store(uint64_t materializationId,
+void TimeStretchCache::store(ContentKey key,
                               std::vector<float> audio,
-                              uint32_t pitchRevision,
-                              uint32_t timeGridRevision,
+                              uint64_t pitchRevision,
+                              uint64_t timeGridRevision,
                               double sampleRate,
                               uint32_t buildGeneration)
 {
-    if (materializationId == 0 || sampleRate <= 0.0) return;
+    if (!key.isValid() || sampleRate <= 0.0) return;
 
     // ⚡️ Acquire lock before generation check.
     juce::SpinLock::ScopedLockType sl(lock_);
 
     // Reject stale build output if invalidation occurred during build,
     // or if the materialization is unknown (e.g. after clear()).
-    auto genIt = invalidationGen_.find(materializationId);
+    auto genIt = invalidationGen_.find(key);
     if (genIt == invalidationGen_.end() || genIt->second != buildGeneration) {
         return; // Stale output — unknown or mismatched generation.
     }
@@ -45,7 +45,7 @@ void TimeStretchCache::store(uint64_t materializationId,
     const size_t newBytes = entry->audio.size() * sizeof(float);
 
     // Subtract any prior entry's bytes for this materialization.
-    auto it = entries_.find(materializationId);
+    auto it = entries_.find(key);
     if (it != entries_.end() && it->second != nullptr && it->second->published) {
         const size_t oldBytes = it->second->audio.size() * sizeof(float);
         if (oldBytes > 0) {
@@ -53,7 +53,7 @@ void TimeStretchCache::store(uint64_t materializationId,
         }
     }
 
-    entries_[materializationId] = std::move(entry);
+    entries_[key] = std::move(entry);
 
     // Account new bytes into shared pool + bump peak.
     const size_t newCurrent = RenderCache::globalCacheCurrentBytes()
@@ -64,7 +64,7 @@ void TimeStretchCache::store(uint64_t materializationId,
                   .compare_exchange_weak(peak, newCurrent, std::memory_order_relaxed)) {}
 
     // Publish atomic snapshot for lock-free readers.
-    auto snapshot = std::make_shared<const std::map<uint64_t, std::shared_ptr<Entry>>>(entries_);
+    auto snapshot = std::make_shared<const std::map<ContentKey, std::shared_ptr<Entry>>>(entries_);
     auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
     if (old)
         retiredSnapshots_.push_back(std::move(old));
@@ -74,13 +74,13 @@ void TimeStretchCache::store(uint64_t materializationId,
         retiredSnapshots_.end());
 }
 
-bool TimeStretchCache::hit(uint64_t materializationId,
-                            uint32_t pitchRevision,
-                            uint32_t timeGridRevision) const
+bool TimeStretchCache::hit(ContentKey key,
+                            uint64_t pitchRevision,
+                            uint64_t timeGridRevision) const
 {
     auto snap = std::atomic_load(&readerMap_);
     if (!snap) return false;
-    auto it = snap->find(materializationId);
+    auto it = snap->find(key);
     if (it == snap->end() || !it->second) return false;
     const auto& e = *it->second;
     return e.published
@@ -88,7 +88,9 @@ bool TimeStretchCache::hit(uint64_t materializationId,
         && e.timeGridRevision == timeGridRevision;
 }
 
-int TimeStretchCache::sliceForOutputRange(uint64_t materializationId,
+int TimeStretchCache::sliceForOutputRange(ContentKey key,
+                                           uint64_t pitchRevision,
+                                           uint64_t timeGridRevision,
                                            double outputStartSeconds,
                                            juce::AudioBuffer<float>& destination,
                                            int destinationStartSample,
@@ -107,11 +109,16 @@ int TimeStretchCache::sliceForOutputRange(uint64_t materializationId,
 
     auto snap = std::atomic_load(&readerMap_);
     if (!snap) return 0;
-    auto it = snap->find(materializationId);
+    auto it = snap->find(key);
     if (it == snap->end() || !it->second || !it->second->published) return 0;
 
     const auto& e = *it->second;
     if (e.audio.empty()) return 0;
+
+    // Revision validation: reject stale cache entries.
+    if (e.pitchRevision != pitchRevision
+        || e.timeGridRevision != timeGridRevision)
+        return 0;
 
     const double cacheSampleRate = e.sampleRate;
 
@@ -149,10 +156,10 @@ int TimeStretchCache::sliceForOutputRange(uint64_t materializationId,
     return actuallyWritten;
 }
 
-void TimeStretchCache::invalidate(uint64_t materializationId)
+void TimeStretchCache::invalidate(ContentKey key)
 {
     juce::SpinLock::ScopedLockType sl(lock_);
-    auto it = entries_.find(materializationId);
+    auto it = entries_.find(key);
     if (it != entries_.end() && it->second != nullptr) {
         const size_t oldBytes = it->second->audio.size() * sizeof(float);
         if (oldBytes > 0 && it->second->published) {
@@ -162,10 +169,10 @@ void TimeStretchCache::invalidate(uint64_t materializationId)
         // so that any old atomic snapshot remains undisturbed.
         it->second = std::make_shared<Entry>();
     }
-    ++invalidationGen_[materializationId];
+    ++invalidationGen_[key];
 
     // Publish atomic snapshot for lock-free readers.
-    auto snapshot = std::make_shared<const std::map<uint64_t, std::shared_ptr<Entry>>>(entries_);
+    auto snapshot = std::make_shared<const std::map<ContentKey, std::shared_ptr<Entry>>>(entries_);
     auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
     if (old)
         retiredSnapshots_.push_back(std::move(old));
@@ -191,7 +198,7 @@ void TimeStretchCache::clear()
     invalidationGen_.clear();
 
     // Publish empty atomic snapshot for lock-free readers.
-    auto snapshot = std::make_shared<const std::map<uint64_t, std::shared_ptr<Entry>>>();
+    auto snapshot = std::make_shared<const std::map<ContentKey, std::shared_ptr<Entry>>>();
     auto old = std::atomic_exchange(&readerMap_, std::move(snapshot));
     if (old)
         retiredSnapshots_.push_back(std::move(old));
