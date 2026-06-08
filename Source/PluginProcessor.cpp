@@ -574,7 +574,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
         return;
     }
 
-    ContentRenderService::PlaybackReadSource source;
+    PlaybackReadSource source;
     const auto* matStore = processor.getMaterializationStore();
     MaterializationStore::PlaybackReadSource oldSource;
     if (matStore == nullptr || !matStore->getPlaybackReadSource(placement.materializationId, oldSource) || !oldSource.canRead()) {
@@ -584,7 +584,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     source.renderCache = oldSource.renderCache;
     source.audioBuffer = oldSource.audioBuffer;
     source.timeStretchCache = oldSource.timeStretchCache;
-    source.contentKey = ContentKey{DomainKind::StandaloneClip, oldSource.materializationId, 0};
+    source.contentKey = oldSource.contentKey;
     source.pitchRevision = oldSource.pitchRevision;
     source.timeGridRevision = oldSource.timeGridRevision;
     source.pitchShiftSettings = oldSource.pitchShiftSettings;
@@ -1265,8 +1265,8 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     // Bind processor's render callback to CRS via ExecutionLease (ARA 重构路由改制)
     {
         ContentRenderService::ExecutionLease lease;
-        lease.leaseOwner = this;
-        lease.renderJobCallback = [this](ContentRenderService::PendingRenderJob& job) {
+        lease.owner = this;
+        lease.renderJobCallback = [this](RenderJob& job) {
             processChunkRenderJob(job);
         };
         contentRenderService_->attachExecutionLease(std::move(lease));
@@ -1361,7 +1361,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                                                double readStartSeconds,
                                                double targetSampleRate) {
             if (materializationStore_ == nullptr) return;
-            ContentRenderService::PlaybackReadSource readSource;
+            PlaybackReadSource readSource;
             const ContentKey captureKey{DomainKind::RegularVST3Capture, materializationId, 0};
             if (!contentRenderService_->getPlaybackReadSource(captureKey, readSource)
                 || !readSource.hasAudio()) {
@@ -1598,7 +1598,7 @@ bool OpenTuneAudioProcessor::runStage2RebuildForContentKey(ContentKey contentKey
 
     // Build a PlaybackReadSource with TimeStretchCache fast-path DISABLED to
     // avoid recursion (Stage 2 reading its own output).
-    ContentRenderService::PlaybackReadSource stage1Source;
+    PlaybackReadSource stage1Source;
     stage1Source.renderCache         = snap.renderCache;
     stage1Source.audioBuffer         = snap.audioBuffer;
     stage1Source.timeStretchCache    = nullptr;   // explicit disable
@@ -1611,7 +1611,7 @@ bool OpenTuneAudioProcessor::runStage2RebuildForContentKey(ContentKey contentKey
 
     // Capture invalidation generation before starting the build
     // so that store() can reject output if invalidation occurred during the build.
-    const uint32_t buildGen = materializationStore_->getTimeStretchCache().beginBuild(objectId);
+    const uint32_t buildGen = materializationStore_->getTimeStretchCache().beginBuild(ContentKey{DomainKind::StandaloneClip, objectId, 0});
 
     // SoundTouch single-pass push + drain (replaces RB's study + process double pass).
     std::vector<float> output;
@@ -1674,10 +1674,10 @@ bool OpenTuneAudioProcessor::runStage2RebuildForContentKey(ContentKey contentKey
     const uint64_t pitchShiftRev = materializationStore_->getPitchShiftRevision(objectId);
     const uint64_t timeGridRev = materializationStore_->getTimeGridRevision(objectId);
 
-    materializationStore_->getTimeStretchCache().store(objectId,
+    materializationStore_->getTimeStretchCache().store(ContentKey{DomainKind::StandaloneClip, objectId, 0},
                                                        std::move(output),
-                                                       static_cast<uint32_t>(pitchShiftRev),
-                                                       static_cast<uint32_t>(timeGridRev),
+                                                       pitchShiftRev,
+                                                       timeGridRev,
                                                        sampleRate,
                                                        buildGen);
 
@@ -2189,7 +2189,7 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         if (contentRenderService_ != nullptr)
         {
             ContentRenderService::ExecutionLease lease;
-            lease.leaseOwner = this;
+            lease.owner = this;
             lease.renderJobCallback = [this](RenderJob& job) {
                 processChunkRenderJob(job);
             };
@@ -2455,7 +2455,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             readRequest.source.timeStretchCache    = materializationReadSource.timeStretchCache;
             readRequest.source.contentKey = ContentKey{
                 DomainKind::StandaloneClip,
-                materializationReadSource.materializationId,
+                materializationReadSource.contentKey.objectId,
                 0};
             readRequest.source.pitchRevision       = materializationReadSource.pitchRevision;
             readRequest.source.timeGridRevision    = materializationReadSource.timeGridRevision;
@@ -5428,7 +5428,7 @@ void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
 
     // ===== Pitch Shift render modifier: apply global F0 offset =====
     {
-        ContentRenderService::PlaybackReadSource psSrc;
+        PlaybackReadSource psSrc;
         PitchShiftSettings pitchShiftSettings;
         if (contentRenderService_->getPlaybackReadSource(wj.coreJob.contentKey, psSrc))
             pitchShiftSettings = psSrc.pitchShiftSettings;
