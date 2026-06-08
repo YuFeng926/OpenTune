@@ -323,13 +323,55 @@ Editor 读写 AudioModification.content（ARA）或 domain owner（non-ARA），
 
 - ARA2 SDK Documentation: https://github.com/Celemony/ARA_SDK
 - Oracle 架构审查报告（2026-06-08 完成度审查）：见 git commit `e0326f0`
-- Oracle 架构审查报告（2026-06-08 重复建设审查）：见当前会话 ora-1 识别重复建设反模式
+- Oracle 架构审查报告（2026-06-08 重复建设审查）：见 commit `8484362`
+- **Oracle 正确架构重构方案（2026-06-08）**：见当前会话 ora-1 完整设计
 - 读路径修复计划：`docs/plans/2026-06-08-ara-read-path-lifecycle-fix.md`
 
 ## Oracle 审查关键结论
 
+### 完成度审查（commit e0326f0）
 1. **当前状态定性**：ARA 读路径迁移里程碑（部分完成），而非完整 AudioModification Content Root
 2. **关键架构风险**：3 个 Critical + 4 个 High 风险阻塞最终目标
-3. **重复建设反模式成立**：ContentRenderService 重新实现了 MaterializationStore 的成熟基础设施
-4. **推荐方案**：MaterializationStore 原地改造成 ContentKey keyed 的 ContentStoreCore，删除 CRS 重复实现
-5. **架构原则**：架构迁移 ≠ 功能重写，复用旧轮子的机械部件，不复用旧语义污染
+3. **Task 完成度**：0-9 任务大部分未完成或部分完成
+
+### 重复建设审查（commit 8484362）
+1. **重复建设反模式成立**：ContentRenderService 重新实现了 MaterializationStore 的成熟基础设施
+2. **数据结构完全重复**：PlaybackReadSource、PendingRenderJob 只差 key 类型
+3. **基础设施全部重复**：playback cache、RenderCache 管理、Stretcher pool、worker
+4. **新实现的 bug**：CRS targetRevision 未传入 PendingRenderEntry
+
+### 正确架构重构方案（ora-1 完整设计）
+
+**核心判断：**
+> 拆掉 MaterializationStore 的全局 store 语义，把它里面稳定的机械部件提取成 domain-neutral runtime services；然后让 ARA 的 AudioModification、Standalone 的 StandaloneClipContent、VST3 Capture 的 CaptureSegmentContent 分别 by-value 拥有内容状态。
+
+**架构分层（三层）：**
+1. **Content Ownership Layer** - AudioModification / StandaloneClipContent / CaptureSegmentContent by-value 拥有 ContentPayloadState
+2. **Derived Runtime Services Layer** - PlaybackSourcePublisher、RenderCacheRegistry、RenderWorker、TimeStretchCache、StretcherPool、RenderChunkPlanner（从 MaterializationStore 提取）
+3. **Domain Coordination Layer** - ODC / StandaloneArrangement / CaptureSession 协调 graph，不拥有 content
+
+**MaterializationStore 拆解：**
+- ✅ 复用机械部件：PlaybackReadSource、RenderJob、playback snapshot publisher、RenderCache 管理、Stretcher pool、chunk planner
+- 🔄 改造：ContentPayloadState（抽取权威字段）、TimeStretchCache（改 ContentKey + revision）、get/set commands（改为 owner commands）
+- ❌ 删除：materializationId、global map、DC/processor store split、MaterializationContentProvider、fallback routing
+
+**迁移路线图（5 个 Phase）：**
+- **Phase 0**：架构准备 - 提取机械部件，CRS 改 thin facade
+- **Phase 1**：ARA 域迁移 - AudioModification 拥有 content，ODC 删除 store
+- **Phase 2**：Standalone 域迁移 - StandaloneClipContent 拥有 content
+- **Phase 3**：VST3 Capture 域迁移 - CaptureSegmentContent 拥有 content
+- **Phase 4**：删除 MaterializationStore
+- **Phase 5**：清理 ContentRenderService
+
+**ContentPayloadState 完整定义：**
+- 包含：ContentKey、persistentId、sourceWindow、audioBuffer、pitchCurve、notes、timeGrid、pitchShiftSettings、detectedKey、silentGaps、referenceFeatures、all revisions、lifecycle
+- 不包含：renderCache、stretcher、worker queue、PlaybackReadSource（这些是 derived runtime）
+
+**方案对比：**
+- 方案 A（最小改动，Store 改 key）：ARA2 符合性中，store 语义残留，容易保留 compatibility layer
+- **方案 B（正确架构，提取机械部件）**：ARA2 符合性高，分层清晰，可彻底删除旧架构，符合"最正确重构"
+
+**架构原则：**
+- 复用旧轮子的机械部件，不复用旧语义污染
+- 架构迁移 ≠ 功能重写，能复用必须复用
+- 一句话：**复用 MaterializationStore 的机械部件，删除 MaterializationStore 的架构语义**
