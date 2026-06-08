@@ -1,0 +1,149 @@
+#include "RenderWorker.h"
+#include <chrono>
+#include <thread>
+
+namespace OpenTune {
+
+RenderWorker::RenderWorker()
+{
+    thread_ = std::thread([this] { loop(); });
+}
+
+RenderWorker::~RenderWorker()
+{
+    stop();
+}
+
+void RenderWorker::stop()
+{
+    if (!thread_.joinable())
+        return;
+
+    stopping_.store(true);
+    cv_.notify_all();
+    thread_.join();
+}
+
+// ============================================================
+// 执行租约
+// ============================================================
+
+void RenderWorker::attachExecutionLease(RenderExecutionLease lease)
+{
+    drain();
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        lease_ = std::move(lease);
+    }
+    resume();
+}
+
+void RenderWorker::detachExecutionLease(void* owner)
+{
+    if (lease_.owner != owner)
+        return;
+
+    drain();
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        lease_ = RenderExecutionLease{};
+    }
+}
+
+// ============================================================
+// 渲染队列
+// ============================================================
+
+void RenderWorker::enqueue(RenderJob job)
+{
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        queue_.push_back(std::move(job));
+    }
+    cv_.notify_one();
+}
+
+bool RenderWorker::hasPendingJobs() const
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    return !queue_.empty();
+}
+
+// ============================================================
+// 暂停 / 恢复 / 排空
+// ============================================================
+
+void RenderWorker::pause()
+{
+    std::unique_lock<std::mutex> lk(mutex_);
+    paused_ = true;
+    // Wait for in-flight jobs to complete
+    while (inFlight_ > 0)
+    {
+        lk.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        lk.lock();
+    }
+}
+
+void RenderWorker::resume()
+{
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        paused_ = false;
+    }
+    cv_.notify_all();
+}
+
+void RenderWorker::drain()
+{
+    while (true)
+    {
+        std::unique_lock<std::mutex> lk(mutex_);
+        if (queue_.empty() && inFlight_ == 0)
+            break;
+        lk.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+// ============================================================
+// 工作循环
+// ============================================================
+
+void RenderWorker::loop()
+{
+    while (!stopping_.load())
+    {
+        RenderJob job;
+        bool hasJob = false;
+
+        {
+            std::unique_lock<std::mutex> lk(mutex_);
+            cv_.wait(lk, [this] {
+                return stopping_.load() || (!paused_ && !queue_.empty());
+            });
+
+            if (stopping_.load())
+                break;
+
+            if (!paused_ && !queue_.empty())
+            {
+                job = std::move(queue_.front());
+                queue_.pop_front();
+                hasJob = true;
+                ++inFlight_;
+            }
+        }
+
+        if (hasJob && lease_.isValid())
+        {
+            lease_.renderJobCallback(job);
+
+            std::lock_guard<std::mutex> lk(mutex_);
+            --inFlight_;
+        }
+    }
+}
+
+} // namespace OpenTune
