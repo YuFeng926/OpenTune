@@ -87,6 +87,7 @@ public:
         uint64_t timeGridRevision{0};
         PitchShiftSettings pitchShiftSettings;
         uint64_t pitchShiftRevision{0};
+        uint64_t pitchRevision{0};  // 独立于 pitchShiftRevision，用于 pitch curve 版本
     };
 
     // 仅 notes 部分的轻量快照
@@ -148,6 +149,7 @@ public:
                      int64_t affectedSrcEndFrame = 0);
 
     // Pitch Shift
+    uint64_t getPitchRevision(uint64_t materializationId) const;
     PitchShiftSettings getPitchShiftSettings(uint64_t materializationId) const;
     uint64_t getPitchShiftRevision(uint64_t materializationId) const;
     bool setPitchShiftSettings(uint64_t materializationId, const PitchShiftSettings& settings);
@@ -219,6 +221,7 @@ private:
         uint64_t timeGridRevision{0};
         PitchShiftSettings pitchShiftSettings;
         uint64_t pitchShiftRevision{0};
+        uint64_t pitchRevision{0};
         ReferenceFeatureSet referenceFeatures;
         bool isRetired_{false};
     };

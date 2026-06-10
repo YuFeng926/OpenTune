@@ -2,6 +2,7 @@
 #include "DomainContentOwner.h"
 #include "EditableContentState.h"
 #include "RetiredContentRecord.h"
+#include "../Utils/PitchCurve.h"
 #include <memory>
 #include <vector>
 
@@ -26,9 +27,17 @@ public:
     EditableContentState& editable() { return editable_; }
     const EditableContentState& editable() const { return editable_; }
 
+    // Apply methods for Capture segment content
+    void applyAudioBuffer(const juce::AudioBuffer<float>* buffer, double sampleRate);
+    void applyOriginalF0State(OriginalF0State state);
+    void applyDetectedKey(const DetectedKey& key);
+    void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
+    std::shared_ptr<PitchCurve> pitchCurve() const { return pitchCurve_; }
+
 private:
     uint64_t id_;
     EditableContentState editable_;
+    std::shared_ptr<PitchCurve> pitchCurve_;
     std::vector<RetiredContentRecord> retired_;
 };
 

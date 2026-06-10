@@ -309,6 +309,21 @@ juce::ValueTree ProjectPersistence::materializationToValueTree(const ProjectMate
     // TimeGrid
     tree.addChild(timeGridToValueTree(mat.timeGrid), -1, nullptr);
 
+    // PitchShiftSettings
+    tree.setProperty("pitchShiftSemitones", mat.pitchShiftSettings.semitone, nullptr);
+    tree.setProperty("pitchShiftCents", mat.pitchShiftSettings.cents, nullptr);
+
+    // OriginalF0State
+    tree.setProperty("originalF0State", static_cast<int>(mat.originalF0State), nullptr);
+
+    // SilentGaps
+    if (!mat.silentGaps.empty()) {
+        tree.addChild(silentGapsToValueTree(mat.silentGaps), -1, nullptr);
+    }
+
+    // ReferenceFeatures
+    tree.addChild(referenceFeaturesToValueTree(mat.referenceFeatures), -1, nullptr);
+
     return tree;
 }
 
@@ -347,6 +362,22 @@ ProjectMaterializationEntry ProjectPersistence::materializationFromValueTree(con
     auto tgTree = tree.getChildWithName("TimeGrid");
     if (tgTree.isValid()) {
         m.timeGrid = timeGridFromValueTree(tgTree);
+    }
+
+    // PitchShiftSettings
+    m.pitchShiftSettings.semitone = static_cast<int>(tree.getProperty("pitchShiftSemitones", 0));
+    m.pitchShiftSettings.cents = static_cast<int>(tree.getProperty("pitchShiftCents", 0));
+
+    // OriginalF0State
+    m.originalF0State = static_cast<uint8_t>(static_cast<int>(tree.getProperty("originalF0State", 0)));
+
+    // SilentGaps
+    m.silentGaps = silentGapsFromValueTree(tree.getChildWithName("SilentGaps"));
+
+    // ReferenceFeatures
+    auto rfTree = tree.getChildWithName("ReferenceFeatures");
+    if (rfTree.isValid()) {
+        m.referenceFeatures = referenceFeaturesFromValueTree(rfTree);
     }
 
     return m;
@@ -599,6 +630,110 @@ ProjectReferenceBinding ProjectPersistence::referenceBindingFromValueTree(const 
     rb.referencePlacementId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("referencePlacementId", 0)));
     rb.bindingRevision = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("bindingRevision", 0)));
     return rb;
+}
+
+// ============================================================================
+// SilentGaps 序列化
+// ============================================================================
+
+juce::ValueTree ProjectPersistence::silentGapsToValueTree(const std::vector<ProjectMaterializationEntry::SilentGapEntry>& gaps)
+{
+    juce::ValueTree tree("SilentGaps");
+    for (const auto& gap : gaps) {
+        juce::ValueTree gt("SilentGap");
+        gt.setProperty("startSample", static_cast<int64_t>(gap.startSample), nullptr);
+        gt.setProperty("endSampleExclusive", static_cast<int64_t>(gap.endSampleExclusive), nullptr);
+        gt.setProperty("minLevel_dB", gap.minLevel_dB, nullptr);
+        tree.addChild(gt, -1, nullptr);
+    }
+    return tree;
+}
+
+std::vector<ProjectMaterializationEntry::SilentGapEntry> ProjectPersistence::silentGapsFromValueTree(const juce::ValueTree& tree)
+{
+    std::vector<ProjectMaterializationEntry::SilentGapEntry> gaps;
+    if (!tree.isValid()) { return gaps; }
+    for (int i = 0; i < tree.getNumChildren(); ++i) {
+        auto child = tree.getChild(i);
+        if (!child.hasType("SilentGap")) { continue; }
+        ProjectMaterializationEntry::SilentGapEntry gap;
+        gap.startSample = static_cast<int64_t>(child.getProperty("startSample", 0));
+        gap.endSampleExclusive = static_cast<int64_t>(child.getProperty("endSampleExclusive", 0));
+        gap.minLevel_dB = child.getProperty("minLevel_dB", 0.0f);
+        gaps.push_back(gap);
+    }
+    return gaps;
+}
+
+// ============================================================================
+// ReferenceFeatures 序列化
+// ============================================================================
+
+juce::ValueTree ProjectPersistence::referenceFeaturesToValueTree(const ProjectMaterializationEntry::ReferenceFeatureEntry& rf)
+{
+    juce::ValueTree tree("ReferenceFeatures");
+    tree.setProperty("analysisRevision", rf.analysisRevision, nullptr);
+    tree.setProperty("status", static_cast<int>(rf.status), nullptr);
+    tree.setProperty("producer", static_cast<int>(rf.producer), nullptr);
+    tree.setProperty("inputFingerprint", static_cast<int64_t>(rf.inputFingerprint), nullptr);
+    tree.setProperty("sourceDurationSeconds", rf.sourceDurationSeconds, nullptr);
+    setOptionalProperty(tree, "errorMessage", rf.errorMessage);
+
+    // Pitch notes
+    if (!rf.pitchNotes.empty()) {
+        tree.addChild(notesToValueTree(rf.pitchNotes, "PitchNotes"), -1, nullptr);
+    }
+
+    // Timing anchors
+    if (!rf.timingAnchors.empty()) {
+        juce::ValueTree taTree("TimingAnchors");
+        for (const auto& anchor : rf.timingAnchors) {
+            juce::ValueTree at("TimingAnchor");
+            at.setProperty("anchorId", static_cast<int64_t>(anchor.anchorId), nullptr);
+            at.setProperty("sourceSeconds", anchor.sourceSeconds, nullptr);
+            at.setProperty("strength", anchor.strength, nullptr);
+            at.setProperty("kind", static_cast<int>(anchor.kind), nullptr);
+            at.setProperty("confidence", anchor.confidence, nullptr);
+            taTree.addChild(at, -1, nullptr);
+        }
+        tree.addChild(taTree, -1, nullptr);
+    }
+
+    return tree;
+}
+
+ProjectMaterializationEntry::ReferenceFeatureEntry ProjectPersistence::referenceFeaturesFromValueTree(const juce::ValueTree& tree)
+{
+    ProjectMaterializationEntry::ReferenceFeatureEntry rf;
+    if (!tree.isValid()) { return rf; }
+
+    rf.analysisRevision = static_cast<int>(tree.getProperty("analysisRevision", 0));
+    rf.status = static_cast<uint8_t>(static_cast<int>(tree.getProperty("status", 0)));
+    rf.producer = static_cast<uint8_t>(static_cast<int>(tree.getProperty("producer", 0)));
+    rf.inputFingerprint = static_cast<int64_t>(tree.getProperty("inputFingerprint", 0));
+    rf.sourceDurationSeconds = tree.getProperty("sourceDurationSeconds", 0.0);
+    rf.errorMessage = getOptionalProperty(tree, "errorMessage", "");
+
+    // Pitch notes
+    rf.pitchNotes = notesFromValueTree(tree.getChildWithName("PitchNotes"));
+
+    // Timing anchors
+    auto taTree = tree.getChildWithName("TimingAnchors");
+    if (taTree.isValid()) {
+        for (int i = 0; i < taTree.getNumChildren(); ++i) {
+            auto child = taTree.getChild(i);
+            if (!child.hasType("TimingAnchor")) { continue; }
+            ProjectMaterializationEntry::ReferenceFeatureEntry::TimingAnchorEntry anchor;
+            anchor.anchorId = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("anchorId", 0)));
+            anchor.sourceSeconds = child.getProperty("sourceSeconds", 0.0);
+            anchor.strength = child.getProperty("strength", 0.0f);
+            anchor.kind = static_cast<uint8_t>(static_cast<int>(child.getProperty("kind", 0)));
+            anchor.confidence = child.getProperty("confidence", 0.0f);
+            rf.timingAnchors.push_back(anchor);
+        }
+    }
+
+    return rf;
 }
 
 } // namespace OpenTune

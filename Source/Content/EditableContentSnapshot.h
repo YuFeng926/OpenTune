@@ -24,6 +24,7 @@ struct EditableContentSnapshot
 
     // Standalone domain extended fields
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+    double audioSampleRate{0.0};
     uint64_t audioRevision{0};
 };
 

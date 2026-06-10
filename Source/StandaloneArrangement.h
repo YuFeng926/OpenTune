@@ -35,8 +35,7 @@ public:
     // 时间轴上的一个片段摆放，引用 ContentKey 标识的内容域
     struct Placement {
         uint64_t placementId{0};
-        uint64_t materializationId{0};
-        ContentKey contentKey;                  // 域内容标识（StandaloneClip 路径）
+        ContentKey contentKey;                  // 域内容标识（StandaloneClip 路径），替代 materializationId
         uint64_t mappingRevision{0};
         double timelineStartSeconds{0.0};
         double durationSeconds{0.0};
@@ -52,7 +51,7 @@ public:
 
         bool isValid() const noexcept
         {
-            return placementId != 0 && durationSeconds > 0.0;
+            return placementId != 0 && contentKey.isValid() && durationSeconds > 0.0;
         }
 
         double timelineEndSeconds() const noexcept
@@ -76,7 +75,7 @@ public:
 
     // 音频线程消费的轻量放置投影 — 仅含播放必需的数字字段，不含 String/UI/业务字段
     struct PlaybackPlacement {
-        uint64_t materializationId{0};
+        ContentKey contentKey;
         double timelineStartSeconds{0.0};
         double durationSeconds{0.0};
         double clipInSeconds{0.0};
@@ -157,10 +156,10 @@ public:
     // 软删除/恢复接口，供 UndoAction 和垃圾回收使用
     bool retirePlacement(int trackId, uint64_t placementId);
     bool revivePlacement(int trackId, uint64_t placementId);
-    bool referencesMaterializationAnyState(uint64_t materializationId) const;
+    bool referencesContentAnyState(ContentKey contentKey) const;
 
     // 已 retire 的 Placement 信息，用于垃圾回收判断
-    struct RetiredPlacementEntry { int trackId; uint64_t placementId; uint64_t materializationId; };
+    struct RetiredPlacementEntry { int trackId; uint64_t placementId; ContentKey contentKey; };
     std::vector<RetiredPlacementEntry> getRetiredPlacements() const;
 
     // ============================================================================
@@ -200,44 +199,7 @@ private:
     // use_count()==1 (no audio-thread references remain), then swept on the
     // writer thread. This guarantees free/malloc never hits the RT path.
     mutable std::vector<PlaybackSnapshotHandle> retiredSnapshots_;
-
-    // ============================================================================
-    // Content Owner Registry — maps ContentKey.objectId → StandaloneClipContent
-    // ============================================================================
-public:
-    StandaloneClipContent* findContentOwner(uint64_t objectId) const
-    {
-        auto it = contentOwners_.find(objectId);
-        return it != contentOwners_.end() ? it->second.get() : nullptr;
-    }
-
-    StandaloneClipContent* findContentOwnerByPlacementId(uint64_t placementId) const
-    {
-        for (int t = 0; t < kTrackCount; ++t) {
-            for (const auto& p : tracks_[static_cast<size_t>(t)].placements) {
-                if (p.placementId == placementId && p.contentKey.objectId != 0) {
-                    return findContentOwner(p.contentKey.objectId);
-                }
-            }
-        }
-        return nullptr;
-    }
-
-    StandaloneClipContent* getOrCreateContentOwner(uint64_t objectId)
-    {
-        auto it = contentOwners_.find(objectId);
-        if (it != contentOwners_.end())
-            return it->second.get();
-        auto owner = std::make_unique<StandaloneClipContent>(objectId);
-        auto* ptr = owner.get();
-        contentOwners_.emplace(objectId, std::move(owner));
-        return ptr;
-    }
-
-    void removeContentOwner(uint64_t objectId) { contentOwners_.erase(objectId); }
-
-private:
-    std::map<uint64_t, std::unique_ptr<StandaloneClipContent>> contentOwners_;
 };
+
 
 } // namespace OpenTune

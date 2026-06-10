@@ -62,7 +62,7 @@ ArrangementRenderModelCache::makeKey(OpenTuneAudioProcessor& processor,
                     continue;
 
                 revision = hashCombine(revision, placement.placementId);
-                revision = hashCombine(revision, placement.materializationId);
+                revision = hashCombine(revision, placement.contentKey.objectId);
                 revision = hashCombine(revision, placement.referencePlacementId);
                 revision = hashCombine(revision, static_cast<uint64_t>(timeToMs(placement.timelineStartSeconds)));
                 revision = hashCombine(revision, static_cast<uint64_t>(timeToMs(placement.durationSeconds)));
@@ -299,7 +299,7 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
             return;
 
         const uint64_t placementId = placement.placementId;
-        const uint64_t materializationId = placement.materializationId;
+        const uint64_t materializationId = placement.contentKey.objectId;
 
         bool isSelected = (sourceTrackId == selectedTrack && placementIndex == selectedPlacementIndex)
                        || (isPlacementSelected && isPlacementSelected(sourceTrackId, placementId));

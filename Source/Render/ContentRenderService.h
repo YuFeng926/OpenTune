@@ -42,6 +42,7 @@ public:
     {
         ContentKey contentKey;
         uint64_t pitchRevision{0};
+        uint64_t pitchShiftRevision{0};
         uint64_t timeGridRevision{0};
         std::shared_ptr<const EditableContentSnapshot> snapshot;
     };

@@ -119,6 +119,48 @@ struct ProjectMaterializationEntry {
     };
     TimeGridEntry timeGrid;
 
+    // Original F0 extraction state
+    uint8_t originalF0State{0};         // OriginalF0State 枚举值
+
+    // Pitch shift settings (整体移调)
+    struct PitchShiftEntry {
+        int semitone{0};
+        int cents{0};
+    };
+    PitchShiftEntry pitchShiftSettings;
+
+    // Silent gaps (用于 render chunk boundaries)
+    struct SilentGapEntry {
+        int64_t startSample{0};
+        int64_t endSampleExclusive{0};
+        float minLevel_dB{0.0f};
+    };
+    std::vector<SilentGapEntry> silentGaps;
+
+    // Reference features (用于对齐参考)
+    struct ReferenceFeatureEntry {
+        int analysisRevision{0};
+        uint8_t status{0};              // ReferenceFeatureStatus 枚举值
+        uint8_t producer{0};            // ReferenceFeatureProducer 枚举值
+        int64_t inputFingerprint{0};
+        double sourceDurationSeconds{0.0};
+        juce::String errorMessage;
+
+        // Pitch features (notes)
+        std::vector<Note> pitchNotes;
+
+        // Timing features (anchors)
+        struct TimingAnchorEntry {
+            uint64_t anchorId{0};
+            double sourceSeconds{0.0};
+            float strength{0.0f};
+            uint8_t kind{0};            // ReferenceTimingAnchorKind 枚举值
+            float confidence{0.0f};
+        };
+        std::vector<TimingAnchorEntry> timingAnchors;
+    };
+    ReferenceFeatureEntry referenceFeatures;
+
 };
 
 // ============================================================================

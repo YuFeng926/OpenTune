@@ -128,9 +128,9 @@ inline float computePlacementFadeGain(int64_t sampleInPlacement,
     return fade;
 }
 
-bool hasRemainingPlacementForMaterialization(const StandaloneArrangement& arrangement, uint64_t materializationId)
+bool hasRemainingPlacementForContent(const StandaloneArrangement& arrangement, ContentKey contentKey)
 {
-    if (materializationId == 0) {
+    if (!contentKey.isValid()) {
         return false;
     }
 
@@ -139,7 +139,7 @@ bool hasRemainingPlacementForMaterialization(const StandaloneArrangement& arrang
         for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
             StandaloneArrangement::Placement placement;
             if (arrangement.getPlacementByIndex(trackId, placementIndex, placement)
-                && placement.materializationId == materializationId) {
+                && placement.contentKey == contentKey) {
                 return true;
             }
         }
@@ -566,29 +566,15 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
                               float trackGain,
                               int64_t placementStartInOutput,
                               juce::AudioBuffer<float>& out,
-                              int64_t totalLen)
+                              int64_t totalLen,
+                              const PlaybackReadSource& source)
 {
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
 
-    if (placement.materializationId == 0 || placement.durationSeconds <= 0.0 || placementStartInOutput >= totalLen) {
+    if (!placement.contentKey.isValid() || placement.durationSeconds <= 0.0 || placementStartInOutput >= totalLen
+        || !source.canRead()) {
         return;
     }
-
-    PlaybackReadSource source;
-    const auto* matStore = processor.getMaterializationStore();
-    MaterializationStore::PlaybackReadSource oldSource;
-    if (matStore == nullptr || !matStore->getPlaybackReadSource(placement.materializationId, oldSource) || !oldSource.canRead()) {
-        return;
-    }
-    // Convert old store source to new CRS source type
-    source.renderCache = oldSource.renderCache;
-    source.audioBuffer = oldSource.audioBuffer;
-    source.timeStretchCache = oldSource.timeStretchCache;
-    source.contentKey = oldSource.contentKey;
-    source.pitchRevision = oldSource.pitchRevision;
-    source.timeGridRevision = oldSource.timeGridRevision;
-    source.pitchShiftSettings = oldSource.pitchShiftSettings;
-    source.timeGridIsIdentity = oldSource.timeGridIsIdentity;
 
     const int64_t requestedPlacementSamples = juce::jmax<int64_t>(1,
         TimeCoordinate::secondsToSamples(placement.durationSeconds, kExportSr));
@@ -1261,6 +1247,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     sourceStore_ = std::make_shared<SourceStore>();
     materializationStore_ = std::make_shared<MaterializationStore>();
     contentRenderService_ = std::make_shared<ContentRenderService>();
+    standaloneContentRepository_ = std::make_unique<StandaloneContentRepository>();
     materializationStore_->attachContentRenderService(contentRenderService_.get());
     // Bind processor's render callback to CRS via ExecutionLease (ARA 重构路由改制)
     {
@@ -1335,34 +1322,17 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     if (wrapperType == juce::AudioProcessor::wrapperType_VST3) {
         Capture::ProcessorBindings bindings;
 
-        bindings.submitForRender = [this](std::shared_ptr<juce::AudioBuffer<float>> pcm,
-                                           double sampleRate,
-                                           juce::String displayName) -> uint64_t {
-            if (!pcm) return 0;
-            PreparedImport prepared;
-            // prepareImport takes the buffer by rvalue; copy out of shared_ptr
-            // into a local owning buffer.
-            juce::AudioBuffer<float> owningCopy;
-            owningCopy.makeCopyOf(*pcm);
-            if (!prepareImport(std::move(owningCopy), sampleRate, displayName, {}, prepared,
-                               "vst3-capture-submit"))
-                return 0;
-            const auto matId = commitPreparedImportAsMaterialization(std::move(prepared));
-            if (matId == 0) return 0;
-            MaterializationRefreshRequest req;
-            req.materializationId = matId;
-            requestMaterializationRefresh(req);
-            return matId;
-        };
-
         bindings.replaceWithRendered = [this](juce::AudioBuffer<float>& buffer,
                                                int destStart, int numSamples,
-                                               uint64_t materializationId,
+                                               uint64_t segmentId,
                                                double readStartSeconds,
                                                double targetSampleRate) {
-            if (materializationStore_ == nullptr) return;
+            // Capture segment id is the CRS content key.
+            jassert(contentRenderService_ != nullptr);
+            if (contentRenderService_ == nullptr) return;
+
             PlaybackReadSource readSource;
-            const ContentKey captureKey{DomainKind::RegularVST3Capture, materializationId, 0};
+            const ContentKey captureKey{DomainKind::RegularVST3Capture, segmentId, 0};
             if (!contentRenderService_->getPlaybackReadSource(captureKey, readSource)
                 || !readSource.hasAudio()) {
                 buffer.clear(destStart, numSamples);
@@ -1377,39 +1347,105 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             readPlaybackAudio(req, buffer, destStart);
         };
 
-        bindings.isRenderReady = [this](uint64_t materializationId) -> bool {
-            return getMaterializationOriginalF0StateById(materializationId) == OriginalF0State::Ready;
+        bindings.retireSegment = [this](uint64_t segmentId) {
+            // CaptureSegmentContent owns content; CRS cache is derived.
+            if (contentRenderService_) {
+                contentRenderService_->removeRenderCache(
+                    ContentKey{DomainKind::RegularVST3Capture, segmentId, 0});
+            }
         };
 
-        bindings.isRenderFailed = [this](uint64_t materializationId) -> bool {
-            return getMaterializationOriginalF0StateById(materializationId) == OriginalF0State::Failed;
+        bindings.refreshSegment = [this](uint64_t segmentId) {
+            if (auto* captureSession = getCaptureSession()) {
+                auto* segment = captureSession->findSegmentById(segmentId);
+                if (!segment || !segment->content)
+                    return;
+                const double duration = segment->durationSeconds;
+                if (duration <= 0.0)
+                    return;
+
+                const auto snap = segment->content->snapshotContent();
+                auto audio = snap->audioBuffer;
+                double sr = snap->audioSampleRate > 0.0
+                    ? snap->audioSampleRate : segment->captureSampleRate;
+                uint64_t segId = segmentId;
+                std::shared_ptr<std::atomic<bool>> lifetimeFlag = materializationRefreshAliveFlag_;
+                auto* f0Svc = getF0Service();
+
+                materializationRefreshService_.submit(
+                    segId,
+                    [lifetimeFlag, audio, sr, segId, f0Svc]() -> F0ExtractionService::Result {
+                        F0ExtractionService::Result result;
+                        result.requestKey = segId;
+                        if (!lifetimeFlag->load(std::memory_order_acquire)) {
+                            result.errorMessage = "processor_destroyed";
+                            return result;
+                        }
+                        if (!audio || audio->getNumSamples() == 0) {
+                            result.errorMessage = "no_audio_data";
+                            return result;
+                        }
+                        if (!f0Svc) {
+                            result.errorMessage = "no_f0_service";
+                            return result;
+                        }
+                        const float* src = audio->getReadPointer(0);
+                        const int numSamples = audio->getNumSamples();
+                        auto extraction = f0Svc->extractF0(
+                            src, static_cast<size_t>(numSamples),
+                            static_cast<int>(sr));
+                        if (!extraction.ok() || extraction.value().empty()) {
+                            result.errorMessage = "f0_empty_or_unvoiced";
+                            return result;
+                        }
+                        result.f0 = extraction.value();
+                        result.hopSize = f0Svc->getF0HopSize();
+                        result.f0SampleRate = f0Svc->getF0SampleRate();
+                        result.modelName = "RMVPE";
+                        result.success = true;
+                        return result;
+                    },
+                    [this, segId](F0ExtractionService::Result&& result) {
+                        if (auto* session = getCaptureSession()) {
+                            if (!result.success) {
+                                session->commitSegmentF0Result(
+                                    segId, nullptr,
+                                    OriginalF0State::Failed, DetectedKey{});
+                                return;
+                            }
+                            auto pitchCurve = std::make_shared<PitchCurve>();
+                            pitchCurve->setHopSize(result.hopSize);
+                            pitchCurve->setSampleRate(static_cast<double>(result.f0SampleRate));
+                            pitchCurve->setOriginalF0(result.f0);
+                            if (!result.energy.empty())
+                                pitchCurve->setOriginalEnergy(result.energy);
+                            session->commitSegmentF0Result(
+                                segId, std::move(pitchCurve),
+                                OriginalF0State::Ready, DetectedKey{});
+                        }
+                    }
+                );
+            }
         };
 
-        bindings.retireMaterialization = [this](uint64_t materializationId) {
-            if (materializationStore_ != nullptr)
-                materializationStore_->retireMaterialization(materializationId);
-        };
-
-        bindings.containsMaterialization = [this](uint64_t materializationId) -> bool {
-            return materializationStore_ != nullptr
-                   && materializationStore_->containsMaterialization(materializationId);
-        };
-
-        bindings.refreshMaterialization = [this](uint64_t materializationId) {
-            // Trigger vocoder-only re-render against the existing materialization. Used
-            // by CapturePersistence::deserialize to repopulate RenderCache after restore.
-            //
-            // CRITICAL: must NOT call requestMaterializationRefresh �?that path re-runs
-            // F0 extraction and overwrites the user's restored PitchCurve / Notes. We
-            // need the same vocoder-chunk-render path PianoRoll edits already use:
-            // it skips F0, reads the existing pitchCurve, runs vocoder, publishes to
-            // RenderCache. F0State stays Ready throughout.
-            if (materializationStore_ == nullptr)
+        bindings.publishPlaybackSource = [this](const ContentKey& key,
+                                                 std::shared_ptr<const juce::AudioBuffer<float>> audio,
+                                                 double sampleRate) {
+            jassert(contentRenderService_ != nullptr);
+            if (contentRenderService_ == nullptr || audio == nullptr || !key.isValid())
                 return;
-            const auto duration = getMaterializationAudioDurationById(materializationId);
-            if (duration <= 0.0)
-                return;
-            enqueueMaterializationPartialRenderById(materializationId, 0.0, duration);
+
+            auto renderCache = contentRenderService_->getOrCreateRenderCache(key);
+            PlaybackReadSource readSource;
+            readSource.contentKey = key;
+            readSource.renderCache = renderCache;
+            readSource.audioBuffer = std::move(audio);
+            readSource.timeStretchCache = &contentRenderService_->getTimeStretchCache();
+            readSource.pitchRevision = 0;
+            readSource.pitchShiftRevision = 0;
+            readSource.timeGridRevision = 0;
+            readSource.timeGridIsIdentity = true;
+            contentRenderService_->publishPlaybackSource(key, readSource);
         };
 
         captureSession_ = std::make_unique<Capture::CaptureSession>(std::move(bindings));
@@ -1493,6 +1529,7 @@ void OpenTuneAudioProcessor::ensureStage2WorkerStarted()
 
 void OpenTuneAudioProcessor::requestStage2Rebuild(ContentKey contentKey,
                                                    uint64_t pitchRevision,
+                                                   uint64_t pitchShiftRevision,
                                                    uint64_t timeGridRevision)
 {
     if (!contentKey.isValid()) return;
@@ -1503,11 +1540,11 @@ void OpenTuneAudioProcessor::requestStage2Rebuild(ContentKey contentKey,
         // carries the freshest revision values.
         for (auto it = stage2RebuildQueue_.begin(); it != stage2RebuildQueue_.end(); ++it) {
             if (it->contentKey == contentKey) {
-                *it = {contentKey, pitchRevision, timeGridRevision};
+                *it = {contentKey, pitchRevision, pitchShiftRevision, timeGridRevision};
                 return;
             }
         }
-        stage2RebuildQueue_.push_back({contentKey, pitchRevision, timeGridRevision});
+        stage2RebuildQueue_.push_back({contentKey, pitchRevision, pitchShiftRevision, timeGridRevision});
         stage2QueueDepth_.store(static_cast<int>(stage2RebuildQueue_.size()),
                                  std::memory_order_release);
     }
@@ -1543,6 +1580,7 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
 
         const bool ok = runStage2RebuildForContentKey(entry.contentKey,
                                                       entry.pitchRevision,
+                                                      entry.pitchShiftRevision,
                                                       entry.timeGridRevision);
 
         stage2InFlight_.store(false, std::memory_order_release);
@@ -1557,6 +1595,7 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
 
 bool OpenTuneAudioProcessor::runStage2RebuildForContentKey(ContentKey contentKey,
                                                            uint64_t requestPitchRev,
+                                                           uint64_t requestPitchShiftRev,
                                                            uint64_t requestTimeGridRev)
 {
     const uint64_t objectId = contentKey.objectId;
@@ -1570,7 +1609,9 @@ bool OpenTuneAudioProcessor::runStage2RebuildForContentKey(ContentKey contentKey
 
     // Stale-job check: if the store has already been updated past the revision
     // this request was enqueued for, a newer rebuild supersedes us — skip.
-    if (requestPitchRev < snap.pitchShiftRevision || requestTimeGridRev < snap.timeGridRevision) {
+    if (requestPitchRev < snap.pitchRevision
+        || requestPitchShiftRev < snap.pitchShiftRevision
+        || requestTimeGridRev < snap.timeGridRevision) {
         return false;
     }
 
@@ -1671,11 +1712,13 @@ bool OpenTuneAudioProcessor::runStage2RebuildForContentKey(ContentKey contentKey
     }
 
     // Re-fetch revisions just before publish (they may have advanced again).
+    const uint64_t pitchRev = materializationStore_->getPitchRevision(objectId);
     const uint64_t pitchShiftRev = materializationStore_->getPitchShiftRevision(objectId);
     const uint64_t timeGridRev = materializationStore_->getTimeGridRevision(objectId);
 
     materializationStore_->getTimeStretchCache().store(ContentKey{DomainKind::StandaloneClip, objectId, 0},
                                                        std::move(output),
+                                                       pitchRev,
                                                        pitchShiftRev,
                                                        timeGridRev,
                                                        sampleRate,
@@ -2402,11 +2445,9 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         bool trackHasOutput = false;
 
         for (const auto& placement : track.placements) {
-            jassert(materializationStore_ != nullptr);
-
-            MaterializationStore::PlaybackReadSource materializationReadSource;
-            if (!materializationStore_->getPlaybackReadSource(placement.materializationId, materializationReadSource)
-                || !materializationReadSource.hasAudio()) {
+            PlaybackReadSource readSource;
+            if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, readSource)
+                || !readSource.hasAudio()) {
                 continue;
             }
 
@@ -2445,21 +2486,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             // Unified Playback Read API call
             // ====================================================================
             PlaybackReadRequest readRequest;
-            readRequest.source.renderCache = materializationReadSource.renderCache;
-            readRequest.source.audioBuffer = materializationReadSource.audioBuffer;
-            // ⚡️ vocal-time-stretch §7 �?propagate Stage 2 fast-path fields so
-            // readPlaybackAudio can consume the TimeStretchCache when the user
-            // has placed non-identity TimeGrid handles.  Forgetting these fields
-            // makes the audio path silently degrade to dry passthrough (the bug
-            // observed in Journey 1 manual smoke test 2026-05-12).
-            readRequest.source.timeStretchCache    = materializationReadSource.timeStretchCache;
-            readRequest.source.contentKey = ContentKey{
-                DomainKind::StandaloneClip,
-                materializationReadSource.contentKey.objectId,
-                0};
-            readRequest.source.pitchRevision       = materializationReadSource.pitchRevision;
-            readRequest.source.timeGridRevision    = materializationReadSource.timeGridRevision;
-            readRequest.source.timeGridIsIdentity  = materializationReadSource.timeGridIsIdentity;
+            readRequest.source = readSource;
             readRequest.readStartSeconds = readStartSeconds;
             readRequest.targetSampleRate = deviceSampleRate;
             readRequest.numSamples = samplesToCopy;
@@ -2681,10 +2708,10 @@ OpenTuneAudioProcessor::DiagnosticInfo OpenTuneAudioProcessor::getDiagnosticInfo
     }
     jassert(materializationStore_ != nullptr);
 
-    info.materializationId = targetPlacement.materializationId;
+    info.materializationId = targetPlacement.contentKey.objectId;
     info.placementId = targetPlacement.placementId;
     std::shared_ptr<RenderCache> renderCache;
-    if (materializationStore_->getRenderCache(targetPlacement.materializationId, renderCache) && renderCache != nullptr) {
+    if (materializationStore_->getRenderCache(targetPlacement.contentKey.objectId, renderCache) && renderCache != nullptr) {
         const auto renderState = renderCache->getStateSnapshot();
         info.chunkStats = renderState.chunkStats;
         info.publishedRevision = 0;
@@ -2807,17 +2834,19 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
                 continue;
             }
 
-            appendUniqueMaterializationId(serializedMaterializationIds, placement.materializationId);
+            if (placement.contentKey.isValid()) {
+                appendUniqueMaterializationId(serializedMaterializationIds, placement.contentKey.objectId);
+            }
         }
     }
 
-    // Capture-flow materializations live only inside captureSession_ (no placement),
-    // but their full snapshot �?audio + pitchCurve + notes + detectedKey �?must
-    // round-trip. Union them into the standard state set.
+    // Phase 3: Capture segments use segment.id as their persistence key.
+    // Full content (audio + pitchCurve + notes + detectedKey) is stored in
+    // MaterializationStore under the segment's id for round-trip.
     if (const auto* captureSession = getCaptureSession()) {
         for (const auto& info : captureSession->listSegments()) {
-            if (info.materializationId != 0) {
-                appendUniqueMaterializationId(serializedMaterializationIds, info.materializationId);
+            if (info.id != 0) {
+                appendUniqueMaterializationId(serializedMaterializationIds, info.id);
             }
         }
     }
@@ -2916,7 +2945,9 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
             }
 
             output.writeInt64(static_cast<juce::int64>(placement.placementId));
-            output.writeInt64(static_cast<juce::int64>(placement.materializationId));
+            output.writeInt(static_cast<int>(placement.contentKey.domainKind));
+            output.writeInt64(static_cast<juce::int64>(placement.contentKey.objectId));
+            output.writeInt64(static_cast<juce::int64>(placement.contentKey.sourceWindowDiscriminator));
             output.writeInt64(static_cast<juce::int64>(placement.mappingRevision));
             output.writeDouble(placement.timelineStartSeconds);
             output.writeDouble(placement.durationSeconds);
@@ -3145,7 +3176,9 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
         for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
             StandaloneArrangement::Placement placement;
             placement.placementId = static_cast<uint64_t>(input.readInt64());
-            placement.materializationId = static_cast<uint64_t>(input.readInt64());
+            placement.contentKey.domainKind = static_cast<DomainKind>(input.readInt());
+            placement.contentKey.objectId = static_cast<uint64_t>(input.readInt64());
+            placement.contentKey.sourceWindowDiscriminator = static_cast<uint64_t>(input.readInt64());
             placement.mappingRevision = static_cast<uint64_t>(input.readInt64());
             placement.timelineStartSeconds = input.readDouble();
             placement.durationSeconds = input.readDouble();
@@ -3158,7 +3191,7 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
             placement.name = input.readString();
             input.readInt();  // skip legacy placement colour field
 
-            if (placement.materializationId == 0 || !materializationStore_->containsMaterialization(placement.materializationId)) {
+            if (!placement.contentKey.isValid()) {
                 continue;
             }
 
@@ -3265,7 +3298,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     }
 
     MaterializationSnapshot originalSnapshot;
-    if (!getMaterializationSnapshotById(originalPlacement.materializationId, originalSnapshot)
+    if (!getMaterializationSnapshotById(originalPlacement.contentKey.objectId, originalSnapshot)
         || originalSnapshot.audioBuffer == nullptr) {
         return std::nullopt;
     }
@@ -3278,7 +3311,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
 
     MaterializationStore::CreateMaterializationRequest leadingRequest;
     leadingRequest.sourceId = originalSnapshot.sourceId;
-    leadingRequest.lineageParentMaterializationId = originalPlacement.materializationId;
+    leadingRequest.lineageParentMaterializationId = originalPlacement.contentKey.objectId;
     leadingRequest.sourceWindow = SourceWindow{
         originalSnapshot.sourceWindow.sourceId,
         originalSnapshot.sourceWindow.sourceStartSeconds,
@@ -3294,7 +3327,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
 
     MaterializationStore::CreateMaterializationRequest trailingRequest;
     trailingRequest.sourceId = originalSnapshot.sourceId;
-    trailingRequest.lineageParentMaterializationId = originalPlacement.materializationId;
+    trailingRequest.lineageParentMaterializationId = originalPlacement.contentKey.objectId;
     trailingRequest.sourceWindow = SourceWindow{
         originalSnapshot.sourceWindow.sourceId,
         originalSnapshot.sourceWindow.sourceStartSeconds + splitOffsetSeconds,
@@ -3327,7 +3360,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
 
     StandaloneArrangement::Placement leadingPlacement = originalPlacement;
     leadingPlacement.placementId = 0;
-    leadingPlacement.materializationId = leadingMaterializationId;
+    leadingPlacement.contentKey = ContentKey{DomainKind::StandaloneClip, leadingMaterializationId, 0};
     leadingPlacement.durationSeconds = splitOffsetSeconds;
     leadingPlacement.fadeOutDuration = 0.0;
     // leading clipInSeconds stays the same as original (trim offset from original)
@@ -3336,7 +3369,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
 
     StandaloneArrangement::Placement trailingPlacement = originalPlacement;
     trailingPlacement.placementId = 0;
-    trailingPlacement.materializationId = trailingMaterializationId;
+    trailingPlacement.contentKey = ContentKey{DomainKind::StandaloneClip, trailingMaterializationId, 0};
     trailingPlacement.timelineStartSeconds = splitSeconds;
     trailingPlacement.durationSeconds = originalPlacement.durationSeconds - splitOffsetSeconds;
     trailingPlacement.fadeInDuration = 0.0;
@@ -3360,7 +3393,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
 
     // Retire original placement and materialization (do not physically delete; sweep will reclaim when safe)
     standaloneArrangement_->retirePlacement(trackId, originalPlacement.placementId);
-    materializationStore_->retireMaterialization(originalPlacement.materializationId);
+    materializationStore_->retireMaterialization(originalPlacement.contentKey.objectId);
 
     standaloneArrangement_->selectPlacement(trackId, trailingPlacement.placementId);
     scheduleReclaimSweep();
@@ -3369,7 +3402,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     outcome.trackId = trackId;
     outcome.sourceId = originalSnapshot.sourceId;
     outcome.originalPlacementId = originalPlacement.placementId;
-    outcome.originalMaterializationId = originalPlacement.materializationId;
+    outcome.originalMaterializationId = originalPlacement.contentKey.objectId;
     outcome.leadingPlacementId = leadingPlacement.placementId;
     outcome.trailingPlacementId = trailingPlacement.placementId;
     outcome.leadingMaterializationId = leadingMaterializationId;
@@ -3410,8 +3443,8 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
 
     MaterializationSnapshot leadingSnapshot;
     MaterializationSnapshot trailingSnapshot;
-    if (!getMaterializationSnapshotById(leadingPlacement.materializationId, leadingSnapshot)
-        || !getMaterializationSnapshotById(trailingPlacement.materializationId, trailingSnapshot)
+    if (!getMaterializationSnapshotById(leadingPlacement.contentKey.objectId, leadingSnapshot)
+        || !getMaterializationSnapshotById(trailingPlacement.contentKey.objectId, trailingSnapshot)
         || leadingSnapshot.audioBuffer == nullptr
         || trailingSnapshot.audioBuffer == nullptr
         || leadingSnapshot.sourceId == 0
@@ -3493,7 +3526,7 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
 
     StandaloneArrangement::Placement mergedPlacement = leadingPlacement;
     mergedPlacement.placementId = 0;
-    mergedPlacement.materializationId = mergedMaterializationId;
+    mergedPlacement.contentKey = ContentKey{DomainKind::StandaloneClip, mergedMaterializationId, 0};
     mergedPlacement.durationSeconds = leadingPlacement.durationSeconds + trailingPlacement.durationSeconds;
     mergedPlacement.fadeOutDuration = trailingPlacement.fadeOutDuration;
     mergedPlacement.clipInSeconds = leadingPlacement.clipInSeconds; // merge uses leading trim offset
@@ -3508,8 +3541,8 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     // Retire leading and trailing placements and materializations (sweep will reclaim when safe)
     standaloneArrangement_->retirePlacement(trackId, trailingPlacementId);
     standaloneArrangement_->retirePlacement(trackId, leadingPlacementId);
-    materializationStore_->retireMaterialization(leadingPlacement.materializationId);
-    materializationStore_->retireMaterialization(trailingPlacement.materializationId);
+    materializationStore_->retireMaterialization(leadingPlacement.contentKey.objectId);
+    materializationStore_->retireMaterialization(trailingPlacement.contentKey.objectId);
 
     if (targetPlacementIndex >= 0) {
         standaloneArrangement_->setSelectedPlacementIndex(trackId, targetPlacementIndex);
@@ -3524,8 +3557,8 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     outcome.sourceId = leadingSnapshot.sourceId;
     outcome.leadingPlacementId = leadingPlacementId;
     outcome.trailingPlacementId = trailingPlacementId;
-    outcome.leadingMaterializationId = leadingPlacement.materializationId;
-    outcome.trailingMaterializationId = trailingPlacement.materializationId;
+    outcome.leadingMaterializationId = leadingPlacement.contentKey.objectId;
+    outcome.trailingMaterializationId = trailingPlacement.contentKey.objectId;
     outcome.mergedPlacementId = mergedPlacement.placementId;
     outcome.mergedMaterializationId = mergedMaterializationId;
     return outcome;
@@ -3543,19 +3576,19 @@ std::optional<DeleteOutcome> OpenTuneAudioProcessor::deletePlacement(int trackId
 
     MaterializationSnapshot snapshot;
     uint64_t sourceId = 0;
-    if (getMaterializationSnapshotById(placement.materializationId, snapshot)) {
+    if (getMaterializationSnapshotById(placement.contentKey.objectId, snapshot)) {
         sourceId = snapshot.sourceId;
     }
 
     standaloneArrangement_->retirePlacement(trackId, placement.placementId);
-    materializationStore_->retireMaterialization(placement.materializationId);
+    materializationStore_->retireMaterialization(placement.contentKey.objectId);
     scheduleReclaimSweep();
 
     DeleteOutcome outcome;
     outcome.trackId = trackId;
     outcome.sourceId = sourceId;
     outcome.placementId = placement.placementId;
-    outcome.materializationId = placement.materializationId;
+    outcome.materializationId = placement.contentKey.objectId;
     return outcome;
 }
 
@@ -3588,9 +3621,6 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
     // Cancel any pending async reclaim sweep to avoid double-run on sync sweep.
     cancelPendingUpdate();
 
-    jassert(materializationStore_ != nullptr);
-    jassert(standaloneArrangement_ != nullptr);
-
     // Phase 1: physically erase retired placements.
     {
         const auto retiredPlacements = standaloneArrangement_->getRetiredPlacements();
@@ -3599,20 +3629,14 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
         }
     }
 
-    // Phase 2: reclaim retired materializations whose reference counters are all zero.
-    // Counters: (a) any-state placement refs in StandaloneArrangement, (b) ARA published-region refs.
-    // A retired materialization with both at zero is unreachable from any owner and is safe to
-    // physically delete. The cascade below switches its source to retired (not hard-delete) so
-    // that Phase 3 can apply the same protection to sources.
+    // Phase 2a: reclaim retired materializations from MaterializationStore.
+    // Counters: (a) placement refs in StandaloneArrangement, (b) ARA region refs.
+    jassert(materializationStore_ != nullptr);
     const auto retiredIds = materializationStore_->getRetiredIds();
     for (const uint64_t id : retiredIds) {
-        // (a) standalone arrangement reference (active OR retired placement)
-        if (standaloneArrangement_->referencesMaterializationAnyState(id)) {
+        if (standaloneArrangement_->referencesContentAnyState(ContentKey{DomainKind::StandaloneClip, id, 0}))
             continue;
-        }
 
-        // All references zero �?physically reclaim the materialization, then cascade-retire the
-        // source if it has lost its last active materialization.
         const uint64_t sourceId = materializationStore_->getSourceIdAnyState(id);
         if (materializationStore_->physicallyDeleteIfReclaimable(id)) {
             if (sourceId != 0 && sourceStore_ != nullptr
@@ -3623,14 +3647,32 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
         }
     }
 
+    // Phase 2b: reclaim retired clips from StandaloneContentRepository.
+    // During migration (Phase 3), clips retired via PlacementActions
+    // go through StandaloneContentRepository lifecycle. The reclaim
+    // sweep must cover both stores until migration is complete.
+    if (standaloneContentRepository_ != nullptr) {
+        const auto retiredClipIds = standaloneContentRepository_->getRetiredClipIds();
+        for (const uint64_t id : retiredClipIds) {
+            if (standaloneArrangement_->referencesContentAnyState(ContentKey{DomainKind::StandaloneClip, id, 0}))
+                continue;
+
+            standaloneContentRepository_->releaseClip(ContentKey{DomainKind::StandaloneClip, id, 0});
+
+            // During migration: also retire in MaterializationStore
+            // so Phase 3 source-reclaim can cascade correctly.
+            // Remove once all clip creation routes go through StandaloneContentRepository.
+            if (materializationStore_->containsMaterialization(id))
+                materializationStore_->retireMaterialization(id);
+        }
+    }
+
     // Phase 3: reclaim retired sources whose reference counter is zero.
-    // Counters: (a) any-state materialization refs in MaterializationStore.
     if (sourceStore_ != nullptr) {
         const auto retiredSourceIds = sourceStore_->getRetiredSourceIds();
         for (const uint64_t sourceId : retiredSourceIds) {
-            if (materializationStore_->hasMaterializationForSourceAnyState(sourceId)) {
+            if (materializationStore_->hasMaterializationForSourceAnyState(sourceId))
                 continue;
-            }
             sourceStore_->physicallyDeleteIfReclaimable(sourceId);
         }
     }
@@ -3655,24 +3697,43 @@ bool OpenTuneAudioProcessor::getMaterializationSnapshotById(uint64_t materializa
     jassert(materializationStore_ != nullptr);
 
     MaterializationStore::MaterializationSnapshot coreSnapshot;
-    if (!materializationStore_->getSnapshot(materializationId, coreSnapshot)) {
-        return false;
+    if (materializationStore_->getSnapshot(materializationId, coreSnapshot)) {
+        out.materializationId = coreSnapshot.materializationId;
+        out.sourceId = coreSnapshot.sourceId;
+        out.lineageParentMaterializationId = coreSnapshot.lineageParentMaterializationId;
+        out.sourceWindow = coreSnapshot.sourceWindow;
+        out.audioBuffer = coreSnapshot.audioBuffer;
+        out.renderRevision = coreSnapshot.renderRevision;
+        out.pitchCurve = coreSnapshot.pitchCurve;
+        out.originalF0State = coreSnapshot.originalF0State;
+        out.detectedKey = coreSnapshot.detectedKey;
+        out.renderCache = coreSnapshot.renderCache;
+        out.notes = coreSnapshot.notes;
+        out.notesRevision = coreSnapshot.notesRevision;
+        out.silentGaps = coreSnapshot.silentGaps;
+        return out.audioBuffer != nullptr;
     }
 
-    out.materializationId = coreSnapshot.materializationId;
-    out.sourceId = coreSnapshot.sourceId;
-    out.lineageParentMaterializationId = coreSnapshot.lineageParentMaterializationId;
-    out.sourceWindow = coreSnapshot.sourceWindow;
-    out.audioBuffer = coreSnapshot.audioBuffer;
-    out.renderRevision = coreSnapshot.renderRevision;
-    out.pitchCurve = coreSnapshot.pitchCurve;
-    out.originalF0State = coreSnapshot.originalF0State;
-    out.detectedKey = coreSnapshot.detectedKey;
-    out.renderCache = coreSnapshot.renderCache;
-    out.notes = coreSnapshot.notes;
-    out.notesRevision = coreSnapshot.notesRevision;
-    out.silentGaps = coreSnapshot.silentGaps;
-    return out.audioBuffer != nullptr;
+    // Fallback: StandaloneContentRepository (clips loaded from project files
+    // or created via CR API during Phase 3 migration).
+    if (auto* clip = standaloneContentRepository_->findClip(materializationId)) {
+        const auto& payload = clip->payload();
+        out.materializationId = materializationId;
+        out.sourceId = payload.sourceWindow.sourceId;
+        out.lineageParentMaterializationId = 0;
+        out.sourceWindow = payload.sourceWindow;
+        out.audioBuffer = payload.audioBuffer;
+        out.renderRevision = payload.contentRevision;
+        out.pitchCurve = payload.pitchCurve;
+        out.originalF0State = payload.originalF0State;
+        out.detectedKey = payload.detectedKey;
+        out.notes = payload.notes;
+        out.notesRevision = payload.notesRevision;
+        out.silentGaps = payload.silentGaps;
+        return out.audioBuffer != nullptr;
+    }
+
+    return false;
 }
 
 double OpenTuneAudioProcessor::getMaterializationAudioDurationById(uint64_t materializationId) const noexcept
@@ -3686,7 +3747,17 @@ double OpenTuneAudioProcessor::getMaterializationAudioDurationById(uint64_t mate
 #endif
 
     jassert(materializationStore_ != nullptr);
-    return materializationStore_->getMaterializationAudioDurationById(materializationId);
+    const auto msDuration = materializationStore_->getMaterializationAudioDurationById(materializationId);
+    if (msDuration > 0.0)
+        return msDuration;
+
+    if (auto* clip = standaloneContentRepository_->findClip(materializationId)) {
+        const auto& buf = clip->payload().audioBuffer;
+        if (buf != nullptr && buf->getNumSamples() > 0)
+            return static_cast<double>(buf->getNumSamples()) / clip->payload().sampleRate;
+    }
+
+    return 0.0;
 }
 
 bool OpenTuneAudioProcessor::getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const
@@ -3845,7 +3916,8 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
         return false;
     }
 
-    if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
+    PlaybackReadSource source;
+    if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.canRead()) {
         lastExportError_ = "Placement audio is unavailable";
         return false;
     }
@@ -3861,7 +3933,7 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
     
     renderPlacementForExport(*this,
                              StandaloneArrangement::PlaybackPlacement{
-                                 placement.materializationId,
+                                 placement.contentKey,
                                  placement.timelineStartSeconds,
                                  placement.durationSeconds,
                                  placement.clipInSeconds,
@@ -3872,7 +3944,8 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
                              standaloneArrangement_->getTrackVolume(trackId),
                              0,
                              out,
-                             placementLen);
+                             placementLen,
+                             source);
     
     return writeAudioBufferToWavFile(out, file, &lastExportError_);
 }
@@ -3900,7 +3973,8 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
             continue;
         }
-        if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
+        PlaybackReadSource checkSource;
+        if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, checkSource) || !checkSource.canRead()) {
             continue;
         }
         const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
@@ -3921,13 +3995,14 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
             continue;
         }
-        if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
+        PlaybackReadSource source;
+        if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.canRead()) {
             continue;
         }
         const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
         renderPlacementForExport(*this,
                                  StandaloneArrangement::PlaybackPlacement{
-                                     placement.materializationId,
+                                     placement.contentKey,
                                      placement.timelineStartSeconds,
                                      placement.durationSeconds,
                                      placement.clipInSeconds,
@@ -3935,7 +4010,8 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
                                      placement.fadeInDuration,
                                      placement.fadeOutDuration
                                  },
-                                 trackVolume, placementStart, out, totalLen);
+                                 trackVolume, placementStart, out, totalLen,
+                                 source);
     }
 
     return writeAudioBufferToWavFile(out, file, &lastExportError_);
@@ -3954,7 +4030,8 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
     for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
         const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
         for (const auto& placement : track.placements) {
-            if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
+            PlaybackReadSource checkSource;
+            if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, checkSource) || !checkSource.canRead()) {
                 continue;
             }
             const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
@@ -3979,11 +4056,12 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
         if (track.placements.empty()) continue;
 
         for (const auto& placement : track.placements) {
-            if (getMaterializationAudioBufferById(placement.materializationId) == nullptr) {
+            PlaybackReadSource source;
+            if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.canRead()) {
                 continue;
             }
             const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
-            renderPlacementForExport(*this, placement, track.volume, placementStart, mix, totalLen);
+            renderPlacementForExport(*this, placement, track.volume, placementStart, mix, totalLen, source);
         }
     }
 
@@ -4173,7 +4251,7 @@ OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPrepare
     const double materializationDurationSeconds = getMaterializationAudioDurationById(materializationId);
 
     StandaloneArrangement::Placement importedPlacement;
-    importedPlacement.materializationId = materializationId;
+    importedPlacement.contentKey = ContentKey{DomainKind::StandaloneClip, materializationId, 0};
     importedPlacement.mappingRevision = 0;
     importedPlacement.timelineStartSeconds = placement.timelineStartSeconds;
     importedPlacement.durationSeconds = materializationDurationSeconds;
@@ -4485,10 +4563,11 @@ bool OpenTuneAudioProcessor::setMaterializationPitchCurveById(uint64_t materiali
         std::shared_ptr<const TimeGridSnapshot> tg;
         if (materializationStore_->getTimeGrid(materializationId, tg)
             && tg != nullptr && !tg->isIdentity()) {
-            const auto pitchRev = materializationStore_->getPitchShiftRevision(materializationId);
+            const auto pitchRev = materializationStore_->getPitchRevision(materializationId);
+            const auto pitchShiftRev = materializationStore_->getPitchShiftRevision(materializationId);
             const auto tgRev = materializationStore_->getTimeGridRevision(materializationId);
             requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, materializationId, 0},
-                                 pitchRev, tgRev);
+                                 pitchRev, pitchShiftRev, tgRev);
         }
     }
     return true;
@@ -4503,6 +4582,15 @@ OriginalF0State OpenTuneAudioProcessor::getMaterializationOriginalF0StateById(ui
     if (auto* dc = getDocumentController())
         return materializationStore_->getOriginalF0State(materializationId);
 #endif
+
+    if (auto* captureSession = getCaptureSession()) {
+        auto* segment = captureSession->findSegmentById(materializationId);
+        if (segment && segment->content)
+            return segment->content->editable().originalF0State;
+    }
+
+    if (auto* clip = standaloneContentRepository_->findClip(materializationId))
+        return clip->payload().originalF0State;
 
     jassert(materializationStore_ != nullptr);
     return materializationStore_->getOriginalF0State(materializationId);
@@ -4528,6 +4616,22 @@ bool OpenTuneAudioProcessor::setMaterializationOriginalF0StateById(uint64_t mate
         return true;
     }
 #endif
+
+    if (auto* captureSession = getCaptureSession()) {
+        auto* segment = captureSession->findSegmentById(materializationId);
+        if (segment && segment->content) {
+            segment->content->applyOriginalF0State(state);
+            if (state == OriginalF0State::Ready)
+                segment->state.store(Capture::SegmentState::Edited, std::memory_order_release);
+            return true;
+        }
+    }
+
+    if (auto* clip = standaloneContentRepository_->findClip(materializationId)) {
+        clip->applyOriginalF0State(state);
+        return true;
+    }
+
     jassert(materializationStore_ != nullptr);
     return materializationId != 0 && materializationStore_->setOriginalF0State(materializationId, state);
 }
@@ -4561,6 +4665,15 @@ DetectedKey OpenTuneAudioProcessor::getMaterializationDetectedKeyById(uint64_t m
         return materializationStore_->getDetectedKey(materializationId);
 #endif
 
+    if (auto* captureSession = getCaptureSession()) {
+        auto* segment = captureSession->findSegmentById(materializationId);
+        if (segment && segment->content)
+            return segment->content->editable().detectedKey;
+    }
+
+    if (auto* clip = standaloneContentRepository_->findClip(materializationId))
+        return clip->payload().detectedKey;
+
     jassert(materializationStore_ != nullptr);
     return materializationStore_->getDetectedKey(materializationId);
 }
@@ -4584,12 +4697,44 @@ bool OpenTuneAudioProcessor::setMaterializationDetectedKeyById(uint64_t material
         return true;
     }
 #endif
+
+    if (auto* captureSession = getCaptureSession()) {
+        auto* segment = captureSession->findSegmentById(materializationId);
+        if (segment && segment->content) {
+            segment->content->applyDetectedKey(key);
+            return true;
+        }
+    }
+
+    if (auto* clip = standaloneContentRepository_->findClip(materializationId)) {
+        clip->applyDetectedKey(key);
+        return true;
+    }
+
     jassert(materializationStore_ != nullptr);
     return materializationId != 0 && materializationStore_->setDetectedKey(materializationId, key);
 }
 
+PitchShiftSettings OpenTuneAudioProcessor::getPitchShiftSettings(uint64_t materializationId) const
+{
+    if (materializationId == 0)
+        return {};
+    jassert(materializationStore_ != nullptr);
+    return materializationStore_->getPitchShiftSettings(materializationId);
+}
+
+ReferenceFeatureSet OpenTuneAudioProcessor::getReferenceFeatures(uint64_t materializationId) const
+{
+    ReferenceFeatureSet result;
+    if (materializationId == 0)
+        return result;
+    jassert(materializationStore_ != nullptr);
+    materializationStore_->getReferenceFeatures(materializationId, result);
+    return result;
+}
+
 // ============================================================================
-// vocal-time-stretch §3.6 �?TimeGrid processor accessors
+// vocal-time-stretch §3.6 — TimeGrid processor accessors
 // ============================================================================
 
 std::shared_ptr<const TimeGridSnapshot>
@@ -4797,10 +4942,11 @@ bool OpenTuneAudioProcessor::setMaterializationTimeGridById(uint64_t materializa
     // (current Offline mode is clip-wide).
     juce::ignoreUnused(affectedSrcStartFrame, affectedSrcEndFrame);
     {
-        const auto pitchRev = materializationStore_->getPitchShiftRevision(materializationId);
-        const auto tgRev = materializationStore_->getTimeGridRevision(materializationId);
-        requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, materializationId, 0},
-                             pitchRev, tgRev);
+            const auto pitchRev = materializationStore_->getPitchRevision(materializationId);
+            const auto pitchShiftRev = materializationStore_->getPitchShiftRevision(materializationId);
+            const auto tgRev = materializationStore_->getTimeGridRevision(materializationId);
+            requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, materializationId, 0},
+                                 pitchRev, pitchShiftRev, tgRev);
     }
     return true;
 }
@@ -4991,10 +5137,11 @@ bool OpenTuneAudioProcessor::commitMaterializationNotesAndSegmentsById(uint64_t 
         std::shared_ptr<const TimeGridSnapshot> tg;
         if (materializationStore_->getTimeGrid(materializationId, tg)
             && tg != nullptr && !tg->isIdentity()) {
-            const auto pitchRev = materializationStore_->getPitchShiftRevision(materializationId);
+            const auto pitchRev = materializationStore_->getPitchRevision(materializationId);
+            const auto pitchShiftRev = materializationStore_->getPitchShiftRevision(materializationId);
             const auto tgRev = materializationStore_->getTimeGridRevision(materializationId);
             requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, materializationId, 0},
-                                 pitchRev, tgRev);
+                                 pitchRev, pitchShiftRev, tgRev);
         }
     }
     return committed;
@@ -5099,24 +5246,24 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
 
     MaterializationStore::MaterializationSnapshot targetSnapshot;
     MaterializationStore::MaterializationSnapshot referenceSnapshot;
-    if (!materializationStore_->getSnapshot(targetPlacement.materializationId, targetSnapshot)) {
+    if (!materializationStore_->getSnapshot(targetPlacement.contentKey.objectId, targetSnapshot)) {
         result.status = ReferenceAlignmentResult::Status::TargetAnalysisNotReady;
         result.message = "AUTO Ref target analysis could not read materialization";
         return result;
     }
-    if (!materializationStore_->getSnapshot(referencePlacement.materializationId, referenceSnapshot)) {
+    if (!materializationStore_->getSnapshot(referencePlacement.contentKey.objectId, referenceSnapshot)) {
         result.status = ReferenceAlignmentResult::Status::ReferenceAnalysisNotReady;
         result.message = "AUTO Ref reference analysis could not read materialization";
         return result;
     }
 
     ReferenceFeatureSet targetFeatures;
-    if (!materializationStore_->getReferenceFeatures(targetPlacement.materializationId, targetFeatures)
+    if (!materializationStore_->getReferenceFeatures(targetPlacement.contentKey.objectId, targetFeatures)
         || !targetFeatures.isReady()
         || targetFeatures.producer != ReferenceFeatureProducer::Game
         || targetFeatures.inputFingerprint != static_cast<int64_t>(targetSnapshot.renderRevision)) {
         targetFeatures = buildReferenceFeatureSet(targetSnapshot);
-        materializationStore_->setReferenceFeatures(targetPlacement.materializationId, targetFeatures);
+        materializationStore_->setReferenceFeatures(targetPlacement.contentKey.objectId, targetFeatures);
     }
     if (!targetFeatures.isReady()) {
         result.status = ReferenceAlignmentResult::Status::TargetAnalysisNotReady;
@@ -5127,12 +5274,12 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     }
 
     ReferenceFeatureSet referenceFeatures;
-    if (!materializationStore_->getReferenceFeatures(referencePlacement.materializationId, referenceFeatures)
+    if (!materializationStore_->getReferenceFeatures(referencePlacement.contentKey.objectId, referenceFeatures)
         || !referenceFeatures.isReady()
         || referenceFeatures.producer != ReferenceFeatureProducer::Game
         || referenceFeatures.inputFingerprint != static_cast<int64_t>(referenceSnapshot.renderRevision)) {
         referenceFeatures = buildReferenceFeatureSet(referenceSnapshot);
-        materializationStore_->setReferenceFeatures(referencePlacement.materializationId, referenceFeatures);
+        materializationStore_->setReferenceFeatures(referencePlacement.contentKey.objectId, referenceFeatures);
     }
     if (!referenceFeatures.isReady()) {
         result.status = ReferenceAlignmentResult::Status::ReferenceAnalysisNotReady;
@@ -5142,9 +5289,9 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         return result;
     }
 
-    const auto oldNotes = materializationStore_->getNotes(targetPlacement.materializationId);
+    const auto oldNotes = materializationStore_->getNotes(targetPlacement.contentKey.objectId);
     std::shared_ptr<PitchCurve> oldCurve;
-    if (!materializationStore_->getPitchCurve(targetPlacement.materializationId, oldCurve) || oldCurve == nullptr) {
+    if (!materializationStore_->getPitchCurve(targetPlacement.contentKey.objectId, oldCurve) || oldCurve == nullptr) {
         result.status = ReferenceAlignmentResult::Status::TargetAnalysisNotReady;
         result.message = "AUTO Ref target pitch curve is not available";
         return result;
@@ -5177,11 +5324,11 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
 
     ReferenceAlignmentRequest request;
     request.target.placementId = targetPlacement.placementId;
-    request.target.materializationId = targetPlacement.materializationId;
+    request.target.materializationId = targetPlacement.contentKey.objectId;
     request.target.timelineStartSeconds = targetPlacement.timelineStartSeconds;
     request.target.timelineEndSeconds = targetPlacement.timelineEndSeconds();
     request.reference.placementId = referencePlacement.placementId;
-    request.reference.materializationId = referencePlacement.materializationId;
+    request.reference.materializationId = referencePlacement.contentKey.objectId;
     request.reference.timelineStartSeconds = referencePlacement.timelineStartSeconds;
     request.reference.timelineEndSeconds = referencePlacement.timelineEndSeconds();
     request.targetTimeMap = EffectiveTimeMap::fromTimeGrid(targetSnapshot.timeGrid, targetDurationSeconds);
@@ -5222,7 +5369,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
                 break;
         }
         result.message = patch.diagnostics;
-        result.targetMaterializationId = targetPlacement.materializationId;
+        result.targetMaterializationId = targetPlacement.contentKey.objectId;
         result.affectedStartFrame = patch.affectedStartFrame;
         result.affectedEndFrame = patch.affectedEndFrame;
         return result;
@@ -5257,12 +5404,15 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     }
 
     const auto normalizedNotes = normalizeStoredNotes(patch.notesAfter);
-    if (!materializationStore_->commitReferenceAlignmentPatch(targetPlacement.materializationId,
+    if (!materializationStore_->commitReferenceAlignmentPatch(targetPlacement.contentKey.objectId,
                                                              normalizedNotes,
                                                              std::move(newCurve),
                                                              timeGridAfter)) {
         result.status = ReferenceAlignmentResult::Status::CommitFailed;
-        result.message = "AUTO Ref could not commit patch";
+        result.message = patch.diagnostics;
+        result.targetMaterializationId = targetPlacement.contentKey.objectId;
+        result.affectedStartFrame = patch.affectedStartFrame;
+        result.affectedEndFrame = patch.affectedEndFrame;
         return result;
     }
 
@@ -5270,7 +5420,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     if (patch.pitchChanged) {
         composite->addAction(std::make_unique<PianoRollEditAction>(
             contentCommands_,
-            targetPlacement.materializationId,
+            targetPlacement.contentKey.objectId,
             "AUTO (Ref) Pitch",
             oldNotes,
             normalizedNotes,
@@ -5282,13 +5432,14 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     if (patch.timingChanged) {
         composite->addAction(std::make_unique<TimeGridEditAction>(
             contentCommands_,
-            targetPlacement.materializationId,
+            targetPlacement.contentKey.objectId,
             "AUTO (Ref) Time",
             oldTimeGrid,
             timeGridAfter,
             patch.affectedStartFrame,
             patch.affectedEndFrame));
     }
+
     if (composite->getNumActions() > 0) {
         undoManager_.addAction(std::move(composite));
     }
@@ -5297,18 +5448,19 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
                               / TimeGridSnapshot::kSourceSpacingFrameRate;
     const double editEndSec = static_cast<double>(patch.affectedEndFrame)
                             / TimeGridSnapshot::kSourceSpacingFrameRate;
-    enqueueMaterializationPartialRenderById(targetPlacement.materializationId, editStartSec, editEndSec);
+    enqueueMaterializationPartialRenderById(targetPlacement.contentKey.objectId, editStartSec, editEndSec);
     if (patch.timingChanged) {
-        const auto matId = targetPlacement.materializationId;
-        const auto pitchRev = materializationStore_->getPitchShiftRevision(matId);
+        const auto matId = targetPlacement.contentKey.objectId;
+        const auto pitchRev = materializationStore_->getPitchRevision(matId);
+        const auto pitchShiftRev = materializationStore_->getPitchShiftRevision(matId);
         const auto tgRev = materializationStore_->getTimeGridRevision(matId);
         requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, matId, 0},
-                             pitchRev, tgRev);
+                             pitchRev, pitchShiftRev, tgRev);
     }
 
     result.status = ReferenceAlignmentResult::Status::Succeeded;
     result.message = "AUTO Ref alignment applied";
-    result.targetMaterializationId = targetPlacement.materializationId;
+    result.targetMaterializationId = targetPlacement.contentKey.objectId;
     result.affectedStartFrame = patch.affectedStartFrame;
     result.affectedEndFrame = patch.affectedEndFrame;
     return result;
@@ -5696,10 +5848,11 @@ void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
             if (chunkObjId != 0) {
                 contentRenderService_->getTimeStretchCache().invalidate(ContentKey{DomainKind::StandaloneClip, chunkObjId, 0});
                 if (materializationStore_ != nullptr) {
-                    const auto pitchRev = materializationStore_->getPitchShiftRevision(chunkObjId);
+                    const auto pitchRev = materializationStore_->getPitchRevision(chunkObjId);
+                    const auto pitchShiftRev = materializationStore_->getPitchShiftRevision(chunkObjId);
                     const auto tgRev = materializationStore_->getTimeGridRevision(chunkObjId);
                     requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, chunkObjId, 0},
-                                         pitchRev, tgRev);
+                                         pitchRev, pitchShiftRev, tgRev);
                 }
             }
         } else {
@@ -5762,6 +5915,7 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
         const int wrote = request.source.timeStretchCache->sliceForOutputRange(
             request.source.contentKey,
             request.source.pitchRevision,
+            request.source.pitchShiftRevision,
             request.source.timeGridRevision,
             request.readStartSeconds,
             destination,

@@ -1,8 +1,11 @@
 #pragma once
+#include "../DSP/ChromaKeyDetector.h"
+#include "../Utils/MaterializationState.h"
 #include "../Utils/Note.h"
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"
 #include "../Utils/PitchShiftSettings.h"
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <vector>
 #include <memory>
 #include <cstdint>
@@ -12,6 +15,16 @@ namespace OpenTune {
 // 仅含可编辑字段。不含分析结果、store ID、placement、render queues、worker state、cache ownership。
 struct EditableContentState
 {
+    // Audio data
+    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+    double audioSampleRate = 0.0;
+    uint64_t audioRevision = 0;
+
+    // Analysis state
+    OriginalF0State originalF0State = OriginalF0State::NotRequested;
+    DetectedKey detectedKey;
+
+    // Musical content
     std::vector<Note> notes;
     std::vector<CorrectedSegment> correctedSegments;
     std::shared_ptr<const TimeGridSnapshot> timeGrid;

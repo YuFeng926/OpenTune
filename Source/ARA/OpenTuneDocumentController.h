@@ -73,6 +73,7 @@ public:
     void restoreContentPayloadInto(const juce::XmlElement& src);
 
     ContentRenderService* getContentRenderService() const noexcept;
+    bool refreshPlaybackReadSource(ContentKey key);
     // ============================================================
     // 编辑器只读内容访问器（通过 ContentKey 路由到 AudioModification + CRS）
     // ARA 模式下编辑器不经过 MaterializationStore，直接读 AudioModification.content
@@ -225,6 +226,9 @@ private:
     std::vector<OpenTunePlaybackRenderer*> publishModelChange();
     static void refreshRegisteredRenderers(const std::vector<OpenTunePlaybackRenderer*>& renderers);
     void reconcileEditorSelectionPlaybackRegions();
+    bool publishPlaybackReadSourceForModification(
+        AudioModification& modification,
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer = nullptr);
     bool birthMaterializationForModification(AudioModification& modification);
     void scheduleAsyncF0Extraction(uint64_t materializationId,
                                    std::vector<float> channel0Data,

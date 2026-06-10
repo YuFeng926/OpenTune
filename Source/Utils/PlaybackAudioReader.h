@@ -64,6 +64,7 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
         const int wrote = request.source.timeStretchCache->sliceForOutputRange(
             request.source.contentKey,
             request.source.pitchRevision,
+            request.source.pitchShiftRevision,
             request.source.timeGridRevision,
             request.readStartSeconds,
             destination,

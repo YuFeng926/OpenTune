@@ -35,7 +35,7 @@ MaterializationStore::PlaybackReadSource MaterializationStore::makePlaybackReadS
         ? &contentRenderService_->getTimeStretchCache()
         : nullptr;
     source.renderRevision = entry.renderRevision;
-    source.pitchRevision = entry.pitchShiftRevision;
+    source.pitchRevision = entry.pitchRevision;
     source.pitchShiftRevision = entry.pitchShiftRevision;
     source.timeGridRevision = entry.timeGridRevision;
     source.pitchShiftSettings = entry.pitchShiftSettings;
@@ -110,6 +110,7 @@ uint64_t MaterializationStore::createMaterialization(CreateMaterializationReques
             TimeCoordinate::kRenderSampleRate);
         materialization.timeGrid = TimeGridSnapshot::makeIdentity(durationSec);
     }
+    materialization.pitchRevision = 1;
     materialization.timeGridRevision = 1;
 
     const juce::ScopedWriteLock writeLock(lock_);
@@ -331,6 +332,7 @@ bool MaterializationStore::getSnapshot(uint64_t materializationId, Materializati
     out.timeGridRevision = it->second.timeGridRevision;
     out.pitchShiftSettings = it->second.pitchShiftSettings;
     out.pitchShiftRevision = it->second.pitchShiftRevision;
+    out.pitchRevision = it->second.pitchRevision;
 
     // Phase 0.7: RenderCache fetched from CRS, not entry
     out.renderCache = hasRuntimeServices()
@@ -389,10 +391,18 @@ bool MaterializationStore::setPitchCurve(uint64_t materializationId, std::shared
     }
 
     it->second.pitchCurve = std::move(curve);
+    ++it->second.pitchRevision;
     it->second.originalF0State = (it->second.pitchCurve != nullptr && !it->second.pitchCurve->getSnapshot()->getOriginalF0().empty())
         ? OriginalF0State::Ready
         : OriginalF0State::NotRequested;
     it->second.referenceFeatures.reset();
+    publishPlaybackSourceForEntry(materializationId, it->second);
+    if (hasRuntimeServices())
+    {
+        const auto key = contentKeyForMaterializationId(materializationId);
+        contentRenderService_->renderCaches().invalidate(key);
+        contentRenderService_->getTimeStretchCache().invalidate(key);
+    }
     return true;
 }
 
@@ -413,10 +423,18 @@ bool MaterializationStore::commitNotesAndPitchCurve(uint64_t materializationId,
     it->second.notes = std::move(notes);
     ++it->second.notesRevision;
     it->second.pitchCurve = std::move(curve);
+    ++it->second.pitchRevision;
     it->second.originalF0State = !it->second.pitchCurve->getSnapshot()->getOriginalF0().empty()
         ? OriginalF0State::Ready
         : OriginalF0State::NotRequested;
     it->second.referenceFeatures.reset();
+    publishPlaybackSourceForEntry(materializationId, it->second);
+    if (hasRuntimeServices())
+    {
+        const auto key = contentKeyForMaterializationId(materializationId);
+        contentRenderService_->renderCaches().invalidate(key);
+        contentRenderService_->getTimeStretchCache().invalidate(key);
+    }
     return true;
 }
 
@@ -436,12 +454,10 @@ bool MaterializationStore::commitReferenceAlignmentPatch(
         return false;
     }
 
-    const bool timeGridChanged = (it->second.timeGridRevision == 0
-                                  || it->second.timeGrid != timeGridAfter);
-
     it->second.notes = std::move(notesAfter);
     ++it->second.notesRevision;
     it->second.pitchCurve = std::move(pitchCurveAfter);
+    ++it->second.pitchRevision;
     it->second.originalF0State = !it->second.pitchCurve->getSnapshot()->getOriginalF0().empty()
         ? OriginalF0State::Ready
         : OriginalF0State::NotRequested;
@@ -450,9 +466,10 @@ bool MaterializationStore::commitReferenceAlignmentPatch(
 
     publishPlaybackSourceForEntry(materializationId, it->second);
 
-    if (timeGridChanged && hasRuntimeServices())
+    if (hasRuntimeServices())
     {
         const auto key = contentKeyForMaterializationId(materializationId);
+        contentRenderService_->renderCaches().invalidate(key);
         contentRenderService_->getTimeStretchCache().invalidate(key);
     }
 
@@ -545,6 +562,15 @@ PitchShiftSettings MaterializationStore::getPitchShiftSettings(uint64_t material
     const auto it = materializations_.find(materializationId);
     if (it == materializations_.end() || it->second.isRetired_) return PitchShiftSettings::identity();
     return it->second.pitchShiftSettings;
+}
+
+uint64_t MaterializationStore::getPitchRevision(uint64_t materializationId) const
+{
+    if (materializationId == 0) return 0;
+    const juce::ScopedReadLock readLock(lock_);
+    const auto it = materializations_.find(materializationId);
+    if (it == materializations_.end() || it->second.isRetired_) return 0;
+    return it->second.pitchRevision;
 }
 
 uint64_t MaterializationStore::getPitchShiftRevision(uint64_t materializationId) const
@@ -741,6 +767,7 @@ uint64_t MaterializationStore::replaceMaterializationWithNewLineage(uint64_t old
             TimeCoordinate::kRenderSampleRate);
         newEntry.timeGrid = TimeGridSnapshot::makeIdentity(durationSec);
     }
+    newEntry.pitchRevision = 1;
     newEntry.timeGridRevision = 1;
 
     const juce::ScopedWriteLock writeLock(lock_);
@@ -791,7 +818,7 @@ bool MaterializationStore::enqueuePartialRender(uint64_t materializationId,
             job.renderCache = contentRenderService_->getOrCreateRenderCache(job.contentKey);
             job.targetRevision = it->second.renderRevision;
             job.renderRevision = it->second.renderRevision;
-            job.pitchRevision = it->second.pitchShiftRevision;
+            job.pitchRevision = it->second.pitchRevision;
             job.pitchShiftRevision = it->second.pitchShiftRevision;
             job.timeGridRevision = it->second.timeGridRevision;
         }

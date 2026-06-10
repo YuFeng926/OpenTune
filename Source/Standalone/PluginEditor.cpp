@@ -67,7 +67,7 @@ MaterializationTimelineProjection makePianoRollProjection(const StandaloneArrang
     projection.timelineStartSeconds = placement.timelineStartSeconds;
     projection.timelineDurationSeconds = placement.durationSeconds;
     projection.materializationDurationSeconds =
-        processor.getMaterializationAudioDurationById(placement.materializationId);
+        processor.getMaterializationAudioDurationById(placement.contentKey.objectId);
     return projection;
 }
 
@@ -440,7 +440,9 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
             StandaloneArrangement::Placement activePlacement;
             if (activeTrack >= 0 && arrangement->getPlacementByIndex(activeTrack,
                     arrangement->getSelectedPlacementIndex(activeTrack), activePlacement)) {
-                auto* contentOwner = arrangement->getOrCreateContentOwner(activePlacement.placementId);
+                auto* contentOwner = processorRef_.getStandaloneContentRepository()
+                    ? processorRef_.getStandaloneContentRepository()->findClip(activePlacement.contentKey)
+                    : nullptr;
                 pianoRoll_.setContentOwner(contentOwner);
             }
         }
@@ -1165,11 +1167,8 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             : 0;
         if (activeMaterializationId != 0) {
             // Check if GAME timing anchor extraction is in flight
-            ReferenceFeatureSet refFeatures;
-            auto* matStore = processorRef_.getMaterializationStore();
-            if (matStore != nullptr
-                && matStore->getReferenceFeatures(activeMaterializationId, refFeatures)
-                && refFeatures.status == ReferenceFeatureStatus::Extracting) {
+            const ReferenceFeatureSet refFeatures = processorRef_.getReferenceFeatures(activeMaterializationId);
+            if (refFeatures.status == ReferenceFeatureStatus::Extracting) {
                 autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在提取节奏锚点"));
                 shouldShowOverlay = true;
             }
@@ -1349,18 +1348,18 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
     StandaloneArrangement::Placement placement;
     const bool hasPlacement = (placementIndex >= 0)
         && getStandalonePlacementByIndex(processorRef_, trackId, placementIndex, placement);
-    const uint64_t materializationId = hasPlacement ? placement.materializationId : 0;
+    const uint64_t clipId = hasPlacement ? placement.contentKey.objectId : 0;
 
     pianoRoll_.setMaterializationProjection(hasPlacement ? makePianoRollProjection(placement, processorRef_)
                                                   : MaterializationTimelineProjection{});
 
     const int sr = static_cast<int>(processorRef_.getSampleRate());
     std::shared_ptr<const juce::AudioBuffer<float>> materializationBuffer =
-        processorRef_.getMaterializationAudioBufferById(materializationId);
-    auto curve = processorRef_.getMaterializationPitchCurveById(materializationId);
-    pianoRoll_.setEditedMaterialization(materializationId, curve, materializationBuffer, sr);
+        processorRef_.getMaterializationAudioBufferById(clipId);
+    auto curve = processorRef_.getMaterializationPitchCurveById(clipId);
+    pianoRoll_.setEditedMaterialization(clipId, curve, materializationBuffer, sr);
 
-    lastPianoRollMaterializationId_ = materializationId;
+    lastPianoRollMaterializationId_ = clipId;
     lastPianoRollSampleRate_ = sr;
     lastPianoRollCurve_ = curve;
     lastPianoRollBuffer_ = materializationBuffer;
@@ -1820,11 +1819,13 @@ double OpenTuneAudioProcessorEditor::computeTrackAppendStartSeconds(int trackId)
     for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex)
     {
         StandaloneArrangement::Placement placement;
-        if (!arrangement->getPlacementByIndex(trackId, placementIndex, placement) || placement.materializationId == 0) {
+        if (!arrangement->getPlacementByIndex(trackId, placementIndex, placement) || !placement.contentKey.isValid()) {
             continue;
         }
 
-        const auto buffer = processorRef_.getMaterializationAudioBufferById(placement.materializationId);
+        auto* clip = processorRef_.getStandaloneContentRepository()
+            ? processorRef_.getStandaloneContentRepository()->findClip(placement.contentKey) : nullptr;
+        const auto buffer = clip ? clip->payload().audioBuffer : nullptr;
         if (buffer == nullptr) {
             continue;
         }
@@ -2912,7 +2913,7 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     const uint64_t materializationId = getStandaloneMaterializationId(processorRef_, trackId, placementIndex);
     if (materializationId == 0) return;
 
-    const auto currentSettings = processorRef_.getMaterializationStore()->getPitchShiftSettings(materializationId);
+    const auto currentSettings = processorRef_.getPitchShiftSettings(materializationId);
 
     auto* content = new PitchShiftDialogContent(currentSettings);
 
@@ -3278,11 +3279,9 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
     }
 
     // If reference features are ready, set up piano roll overlay
-    if (refPlacement.materializationId != 0) {
-        auto* matStore = processorRef_.getMaterializationStore();
-        ReferenceFeatureSet refFeatures;
-        if (matStore->getReferenceFeatures(refPlacement.materializationId, refFeatures)
-            && refFeatures.isReady()
+    if (refPlacement.contentKey.isValid()) {
+        const ReferenceFeatureSet refFeatures = processorRef_.getReferenceFeatures(refPlacement.contentKey.objectId);
+        if (refFeatures.isReady()
             && refFeatures.producer == ReferenceFeatureProducer::Game)
         {
             PianoRollRenderer::ReferenceOverlay overlay;
@@ -3297,7 +3296,9 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
             overlay.enabled = true;
             // Source time projection: reference's local source time → timeline time
             const double refTimelineStart = refPlacement.timelineStartSeconds;
-            const auto refGrid = processorRef_.getMaterializationTimeGridById(refPlacement.materializationId);
+            auto* refClip = processorRef_.getStandaloneContentRepository()
+                ? processorRef_.getStandaloneContentRepository()->findClip(refPlacement.contentKey) : nullptr;
+            const auto refGrid = refClip ? refClip->payload().timeGrid : nullptr;
             overlay.projectSourceTime = [refTimelineStart, refGrid](double srcSec) -> double {
                 return refTimelineStart + (refGrid != nullptr ? refGrid->tauForward(srcSec) : srcSec);
             };
@@ -3365,7 +3366,7 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
             hasCandidates = true;
             const juce::String label = juce::String("Track ") + juce::String(t + 1)
                 + " - " + (candidate.name.isNotEmpty() ? candidate.name : "Clip")
-                + juce::String(" (Mat#") + juce::String(static_cast<juce::int64>(candidate.materializationId)) + ")";
+                + juce::String(" (Mat#") + juce::String(static_cast<juce::int64>(candidate.contentKey.objectId)) + ")";
             refMenu.addItem(label, [this, arrangement, trackId, targetPlacementId, candidate]() {
                 arrangement->setPlacementReferencePlacement(trackId, targetPlacementId, candidate.placementId);
                 refreshReferenceContext();

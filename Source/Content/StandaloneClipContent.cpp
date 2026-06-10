@@ -91,6 +91,11 @@ void StandaloneClipContent::releaseRetiredContent(ContentKey key)
         retired_.end());
 }
 
+bool StandaloneClipContent::isRetired() const
+{
+    return content_.lifecycle == ContentLifecycle::Retired;
+}
+
 bool StandaloneClipContent::hasActiveContent() const
 {
     return content_.lifecycle != ContentLifecycle::Retired

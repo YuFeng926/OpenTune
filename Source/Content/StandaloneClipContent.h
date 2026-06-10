@@ -28,6 +28,9 @@ public:
     void reviveContent(ContentKey key) override;
     void releaseRetiredContent(ContentKey key) override;
 
+    /// 是否已退休
+    bool isRetired() const;
+
     /// 是否有活跃内容（lifecycle != Retired && content_ 非空）
     bool hasActiveContent() const;
 
