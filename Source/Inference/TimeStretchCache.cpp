@@ -11,14 +11,17 @@ TimeStretchCache::~TimeStretchCache() = default;
 
 uint32_t TimeStretchCache::beginBuild(ContentKey key) const
 {
+    if (!key.isValid()) return 0;
+
     juce::SpinLock::ScopedLockType sl(lock_);
-    auto it = invalidationGen_.find(key);
-    return (it != invalidationGen_.end()) ? it->second : 0;
+    auto [it, _] = invalidationGen_.try_emplace(key, 0);
+    return it->second;
 }
 
 void TimeStretchCache::store(ContentKey key,
                               std::vector<float> audio,
                               uint64_t pitchRevision,
+                              uint64_t pitchShiftRevision,
                               uint64_t timeGridRevision,
                               double sampleRate,
                               uint32_t buildGeneration)
@@ -38,6 +41,7 @@ void TimeStretchCache::store(ContentKey key,
     auto entry = std::make_shared<Entry>();
     entry->audio = std::move(audio);
     entry->pitchRevision = pitchRevision;
+    entry->pitchShiftRevision = pitchShiftRevision;
     entry->timeGridRevision = timeGridRevision;
     entry->sampleRate = sampleRate;
     entry->published = true;
@@ -76,6 +80,7 @@ void TimeStretchCache::store(ContentKey key,
 
 bool TimeStretchCache::hit(ContentKey key,
                             uint64_t pitchRevision,
+                            uint64_t pitchShiftRevision,
                             uint64_t timeGridRevision) const
 {
     auto snap = std::atomic_load(&readerMap_);
@@ -85,11 +90,13 @@ bool TimeStretchCache::hit(ContentKey key,
     const auto& e = *it->second;
     return e.published
         && e.pitchRevision == pitchRevision
+        && e.pitchShiftRevision == pitchShiftRevision
         && e.timeGridRevision == timeGridRevision;
 }
 
 int TimeStretchCache::sliceForOutputRange(ContentKey key,
                                            uint64_t pitchRevision,
+                                           uint64_t pitchShiftRevision,
                                            uint64_t timeGridRevision,
                                            double outputStartSeconds,
                                            juce::AudioBuffer<float>& destination,
@@ -117,6 +124,7 @@ int TimeStretchCache::sliceForOutputRange(ContentKey key,
 
     // Revision validation: reject stale cache entries.
     if (e.pitchRevision != pitchRevision
+        || e.pitchShiftRevision != pitchShiftRevision
         || e.timeGridRevision != timeGridRevision)
         return 0;
 

@@ -54,6 +54,7 @@
 #include "Utils/PitchShiftSettings.h"
 #include "Utils/PlaybackAudioReader.h"
 #include "Content/ContentKey.h"
+#include "Content/StandaloneContentRepository.h"
 #include <functional>
 
 namespace OpenTune {
@@ -441,6 +442,7 @@ private:
     std::shared_ptr<SourceStore> sourceStore_;
     std::shared_ptr<MaterializationStore> materializationStore_;
     std::shared_ptr<ContentRenderService> contentRenderService_;
+    std::unique_ptr<StandaloneContentRepository> standaloneContentRepository_;
     std::shared_ptr<MaterializationContentCommands> contentCommands_;
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
     PlacementClipboard clipClipboard_;
@@ -450,6 +452,8 @@ private:
     // unbound insert instances; access is suppressed after the instance binds to ARA.
     // nullptr in Standalone instances and in VST3 instances bound to ARA.
     std::unique_ptr<Capture::CaptureSession> captureSession_;
+
+
 
     // Transport control
     std::atomic<bool> isPlaying_{false};
@@ -548,6 +552,7 @@ private:
     void stage2WorkerLoop();
     bool runStage2RebuildForContentKey(ContentKey contentKey,
                                        uint64_t requestPitchRev,
+                                       uint64_t requestPitchShiftRev,
                                        uint64_t requestTimeGridRev);
 
     // Queue entry holding both the ContentKey and the revision values at
@@ -555,6 +560,7 @@ private:
     struct Stage2RebuildEntry {
         ContentKey contentKey;
         uint64_t pitchRevision{0};
+        uint64_t pitchShiftRevision{0};
         uint64_t timeGridRevision{0};
     };
 
@@ -581,6 +587,7 @@ public:
     // Worker fetches current revisions from the store at runtime.
     void requestStage2Rebuild(ContentKey contentKey,
                               uint64_t pitchRevision,
+                              uint64_t pitchShiftRevision,
                               uint64_t timeGridRevision);
 
     // §7 — Stage 2 worker progress query for UI feedback.
@@ -630,6 +637,8 @@ public:
     const Capture::CaptureSession* getCaptureSession() const noexcept;
     StandaloneArrangement* getStandaloneArrangement() noexcept { return standaloneArrangement_.get(); }
     const StandaloneArrangement* getStandaloneArrangement() const noexcept { return standaloneArrangement_.get(); }
+    StandaloneContentRepository* getStandaloneContentRepository() noexcept { return standaloneContentRepository_.get(); }
+    const StandaloneContentRepository* getStandaloneContentRepository() const noexcept { return standaloneContentRepository_.get(); }
 
 #if JucePlugin_Enable_ARA
     OpenTuneDocumentController* getDocumentController() const;
@@ -658,6 +667,8 @@ public:
     bool setMaterializationOriginalF0StateById(uint64_t materializationId, OriginalF0State state);
     DetectedKey getMaterializationDetectedKeyById(uint64_t materializationId) const;
     bool setMaterializationDetectedKeyById(uint64_t materializationId, const DetectedKey& key);
+    PitchShiftSettings getPitchShiftSettings(uint64_t materializationId) const;
+    ReferenceFeatureSet getReferenceFeatures(uint64_t materializationId) const;
 
     // ⚡️ vocal-time-stretch §3.6 — TimeGrid accessors per materialization
     //

@@ -75,7 +75,7 @@ inline uint64_t getStandaloneMaterializationId(OpenTuneAudioProcessor& processor
 {
     StandaloneArrangement::Placement placement;
     return getStandalonePlacementByIndex(processor, trackId, placementIndex, placement)
-        ? placement.materializationId
+        ? placement.contentKey.objectId
         : 0;
 }
 

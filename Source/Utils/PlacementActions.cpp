@@ -21,31 +21,31 @@ SplitPlacementAction::SplitPlacementAction(OpenTuneAudioProcessor& processor, co
 void SplitPlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    auto* store = processor_.getMaterializationStore();
+    auto* repo = processor_.getStandaloneContentRepository();
 
     // Retire the two new placements+materializations
     arrangement->retirePlacement(trackId_, leadingPlacementId_);
     arrangement->retirePlacement(trackId_, trailingPlacementId_);
-    store->retireMaterialization(leadingMaterializationId_);
-    store->retireMaterialization(trailingMaterializationId_);
+    repo->retireClip(ContentKey{DomainKind::StandaloneClip, leadingMaterializationId_, 0});
+    repo->retireClip(ContentKey{DomainKind::StandaloneClip, trailingMaterializationId_, 0});
 
     // Revive the original
-    store->reviveMaterialization(originalMaterializationId_);
+    repo->reviveClip(ContentKey{DomainKind::StandaloneClip, originalMaterializationId_, 0});
     arrangement->revivePlacement(trackId_, originalPlacementId_);
 }
 
 void SplitPlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    auto* store = processor_.getMaterializationStore();
+    auto* repo = processor_.getStandaloneContentRepository();
 
     // Retire the original
     arrangement->retirePlacement(trackId_, originalPlacementId_);
-    store->retireMaterialization(originalMaterializationId_);
+    repo->retireClip(ContentKey{DomainKind::StandaloneClip, originalMaterializationId_, 0});
 
     // Revive the two new ones
-    store->reviveMaterialization(leadingMaterializationId_);
-    store->reviveMaterialization(trailingMaterializationId_);
+    repo->reviveClip(ContentKey{DomainKind::StandaloneClip, leadingMaterializationId_, 0});
+    repo->reviveClip(ContentKey{DomainKind::StandaloneClip, trailingMaterializationId_, 0});
     arrangement->revivePlacement(trackId_, leadingPlacementId_);
     arrangement->revivePlacement(trackId_, trailingPlacementId_);
 }
@@ -69,15 +69,15 @@ MergePlacementAction::MergePlacementAction(OpenTuneAudioProcessor& processor, co
 void MergePlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    auto* store = processor_.getMaterializationStore();
+    auto* repo = processor_.getStandaloneContentRepository();
 
     // Retire merged
     arrangement->retirePlacement(trackId_, mergedPlacementId_);
-    store->retireMaterialization(mergedMaterializationId_);
+    repo->retireClip(ContentKey{DomainKind::StandaloneClip, mergedMaterializationId_, 0});
 
     // Revive originals
-    store->reviveMaterialization(leadingMaterializationId_);
-    store->reviveMaterialization(trailingMaterializationId_);
+    repo->reviveClip(ContentKey{DomainKind::StandaloneClip, leadingMaterializationId_, 0});
+    repo->reviveClip(ContentKey{DomainKind::StandaloneClip, trailingMaterializationId_, 0});
     arrangement->revivePlacement(trackId_, leadingPlacementId_);
     arrangement->revivePlacement(trackId_, trailingPlacementId_);
 }
@@ -85,16 +85,16 @@ void MergePlacementAction::undo()
 void MergePlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    auto* store = processor_.getMaterializationStore();
+    auto* repo = processor_.getStandaloneContentRepository();
 
     // Retire originals
     arrangement->retirePlacement(trackId_, leadingPlacementId_);
     arrangement->retirePlacement(trackId_, trailingPlacementId_);
-    store->retireMaterialization(leadingMaterializationId_);
-    store->retireMaterialization(trailingMaterializationId_);
+    repo->retireClip(ContentKey{DomainKind::StandaloneClip, leadingMaterializationId_, 0});
+    repo->retireClip(ContentKey{DomainKind::StandaloneClip, trailingMaterializationId_, 0});
 
     // Revive merged
-    store->reviveMaterialization(mergedMaterializationId_);
+    repo->reviveClip(ContentKey{DomainKind::StandaloneClip, mergedMaterializationId_, 0});
     arrangement->revivePlacement(trackId_, mergedPlacementId_);
 }
 
@@ -113,19 +113,19 @@ DeletePlacementAction::DeletePlacementAction(OpenTuneAudioProcessor& processor, 
 void DeletePlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    auto* store = processor_.getMaterializationStore();
+    auto* repo = processor_.getStandaloneContentRepository();
 
-    store->reviveMaterialization(materializationId_);
+    repo->reviveClip(ContentKey{DomainKind::StandaloneClip, materializationId_, 0});
     arrangement->revivePlacement(trackId_, placementId_);
 }
 
 void DeletePlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    auto* store = processor_.getMaterializationStore();
+    auto* repo = processor_.getStandaloneContentRepository();
 
     arrangement->retirePlacement(trackId_, placementId_);
-    store->retireMaterialization(materializationId_);
+    repo->retireClip(ContentKey{DomainKind::StandaloneClip, materializationId_, 0});
 }
 
 // ============================================================================

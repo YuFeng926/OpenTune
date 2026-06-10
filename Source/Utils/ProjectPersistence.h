@@ -79,12 +79,16 @@ private:
     static std::vector<ProjectMaterializationEntry::SegmentEntry> segmentsFromValueTree(const juce::ValueTree& tree);
     static ProjectMaterializationEntry::TimeGridEntry timeGridFromValueTree(const juce::ValueTree& tree);
     static std::vector<ProjectPlacementEntry> placementsFromValueTree(const juce::ValueTree& tree);
+    static std::vector<ProjectMaterializationEntry::SilentGapEntry> silentGapsFromValueTree(const juce::ValueTree& tree);
+    static ProjectMaterializationEntry::ReferenceFeatureEntry referenceFeaturesFromValueTree(const juce::ValueTree& tree);
 
     // 子节点序列化
     static juce::ValueTree notesToValueTree(const std::vector<Note>& notes, const juce::String& nodeName);
     static juce::ValueTree segmentsToValueTree(const std::vector<ProjectMaterializationEntry::SegmentEntry>& segments);
     static juce::ValueTree timeGridToValueTree(const ProjectMaterializationEntry::TimeGridEntry& tg);
     static juce::ValueTree placementsToValueTree(const std::vector<ProjectPlacementEntry>& placements);
+    static juce::ValueTree silentGapsToValueTree(const std::vector<ProjectMaterializationEntry::SilentGapEntry>& gaps);
+    static juce::ValueTree referenceFeaturesToValueTree(const ProjectMaterializationEntry::ReferenceFeatureEntry& rf);
 
     // 属性读写辅助
     static void setOptionalProperty(juce::ValueTree& tree, const juce::Identifier& name, const juce::String& value);

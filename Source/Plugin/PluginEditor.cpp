@@ -62,12 +62,12 @@ TimelineMaterializationPlacement makePlacement(uint64_t materializationId,
     return placement;
 }
 
-uint64_t chooseActiveCaptureMaterialization(Capture::CaptureSession& session,
-                                            double hostTimeSeconds)
+uint64_t chooseActiveCaptureContentId(Capture::CaptureSession& session,
+                                      double hostTimeSeconds)
 {
     Capture::SegmentInfo activeSegment;
     if (session.resolveDisplaySegment(hostTimeSeconds, activeSegment))
-        return activeSegment.materializationId;
+        return activeSegment.contentId;
 
     return 0;
 }
@@ -154,8 +154,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
                 return dc->readPitchShift({DomainKind::ARAAudioModification, id, 0});
 #endif
             PitchShiftSettings s;
-            if (proc_ && proc_->getMaterializationStore())
-                s = proc_->getMaterializationStore()->getPitchShiftSettings(id);
+            if (proc_)
+                s = proc_->getPitchShiftSettings(id);
             return s;
         }
 
@@ -692,12 +692,12 @@ OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()
         double viewEndSeconds = 0.0;
         for (const auto& segment : session->listEditedSegments()) {
             const auto projection = makeCaptureSegmentProjection(segment);
-            sync.placements.push_back(makePlacement(segment.materializationId, projection));
+            sync.placements.push_back(makePlacement(segment.contentId, projection));
             viewEndSeconds = std::max(viewEndSeconds, projection.timelineEndSeconds());
         }
 
         if (!sync.placements.empty()) {
-            sync.activeMaterializationId = chooseActiveCaptureMaterialization(*session, processorRef_.getPosition());
+            sync.activeMaterializationId = chooseActiveCaptureContentId(*session, processorRef_.getPosition());
             const bool activeBelongsToPlacements = std::any_of(sync.placements.begin(),
                                                                sync.placements.end(),
                                                                [&sync](const auto& placement) {
@@ -727,9 +727,9 @@ void OpenTuneAudioProcessorEditor::updateRegularCaptureSessionCallback()
         return;
 
     regularCaptureCallbackSession_ = session;
-    session->setActiveSegmentChangedCallback([this](uint64_t materializationId) {
-        AppLogger::log("VST3 Capture: completed materializationId="
-            + juce::String(static_cast<juce::int64>(materializationId)));
+    session->setActiveSegmentChangedCallback([this](uint64_t contentId) {
+        AppLogger::log("VST3 Capture: completed contentId="
+            + juce::String(static_cast<juce::int64>(contentId)));
         syncMaterializationProjectionToPianoRoll();
     });
 }

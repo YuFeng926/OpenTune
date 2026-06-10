@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "../../Content/ContentKey.h"
+#include "../../Content/CaptureSegmentContent.h"
 
 namespace OpenTune::Capture {
 
@@ -35,14 +36,13 @@ enum class SegmentState : int
  *
  * Audio thread reads:
  *   - state (atomic), T_start (atomic), durationSeconds, anchored (atomic)
- *   - materializationId (only valid in Edited state; treated as immutable once written)
  *
  * Audio thread writes:
  *   - fifo (via CaptureRingBuffer::write)
  *   - anchored.store(true) + T_start.store(host_t) on first isPlaying block after arm
  *   - stopRequested.store(true) when reaching duration cap or transport stop
  *
- * Message thread writes everything else (creation, state transitions, materializationId).
+ * Message thread writes everything else (creation, state transitions).
  *
  * Lifetime: segment object stays alive in CaptureSession until reclaim sweep
  * confirms no audio block can still see its pointer in published view.
@@ -92,14 +92,11 @@ struct CaptureSegment
     /** SPSC fifo: audio writes, message drains in stopCapture. */
     CaptureRingBuffer fifo;
 
-    /** Owned PCM after drainAll (message thread); stays valid through Edited and persistence. */
-    std::shared_ptr<juce::AudioBuffer<float>> capturedAudio;
-
-    /** Set when transitioning Processing → Edited. */
-    uint64_t materializationId = 0;
-
     /** Domain content key for this capture segment. Set at creation time. */
     ContentKey contentKey;
+
+    /** Content owner for this segment. */
+    std::unique_ptr<OpenTune::CaptureSegmentContent> content;
 
     /** Compute end time (only valid for Edited segments). */
     double endTime() const noexcept { return T_start.load(std::memory_order_acquire) + durationSeconds; }

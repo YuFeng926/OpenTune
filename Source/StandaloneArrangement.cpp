@@ -344,10 +344,7 @@ bool StandaloneArrangement::insertPlacement(int trackId, int insertIndex, Placem
         return false;
     }
 
-    // Ensure a content owner exists for standalone clip placements
-    if (placement.contentKey.domainKind == DomainKind::StandaloneClip && placement.contentKey.objectId != 0) {
-        getOrCreateContentOwner(placement.contentKey.objectId);
-    }
+    // Content owner lifecycle is now managed by StandaloneContentRepository
 
     const juce::ScopedWriteLock lock(stateLock_);
     auto& track = tracks_[static_cast<size_t>(trackId)];
@@ -673,7 +670,7 @@ void StandaloneArrangement::publishPlaybackSnapshotLocked()
         for (const auto& p : sourceTrack.placements) {
             if (!p.isRetired) {
                 publishedTrack.placements.push_back(PlaybackPlacement{
-                    p.materializationId, p.timelineStartSeconds, p.durationSeconds,
+                    p.contentKey, p.timelineStartSeconds, p.durationSeconds,
                     p.clipInSeconds, p.gain, p.fadeInDuration, p.fadeOutDuration
                 });
             }
@@ -724,13 +721,13 @@ bool StandaloneArrangement::revivePlacement(int trackId, uint64_t placementId)
     return true;
 }
 
-bool StandaloneArrangement::referencesMaterializationAnyState(uint64_t materializationId) const
+bool StandaloneArrangement::referencesContentAnyState(ContentKey contentKey) const
 {
-    if (materializationId == 0) return false;
+    if (!contentKey.isValid()) return false;
     const juce::ScopedReadLock lock(stateLock_);
     for (int trackId = 0; trackId < kTrackCount; ++trackId) {
         for (const auto& p : tracks_[static_cast<size_t>(trackId)].placements) {
-            if (p.materializationId == materializationId) {
+            if (p.contentKey == contentKey) {
                 return true;
             }
         }
@@ -745,7 +742,7 @@ std::vector<StandaloneArrangement::RetiredPlacementEntry> StandaloneArrangement:
     for (int trackId = 0; trackId < kTrackCount; ++trackId) {
         for (const auto& p : tracks_[static_cast<size_t>(trackId)].placements) {
             if (p.isRetired) {
-                result.push_back({trackId, p.placementId, p.materializationId});
+                result.push_back({trackId, p.placementId, p.contentKey});
             }
         }
     }

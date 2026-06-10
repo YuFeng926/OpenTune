@@ -759,6 +759,47 @@ void OpenTuneDocumentController::reconcileEditorSelectionPlaybackRegions()
         editorSelectionPlaybackRegions_.end());
 }
 
+bool OpenTuneDocumentController::refreshPlaybackReadSource(ContentKey key)
+{
+    auto* modification = findAudioModificationByContentKey(key);
+    return modification != nullptr && publishPlaybackReadSourceForModification(*modification);
+}
+
+bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
+    AudioModification& modification,
+    std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer)
+{
+    if (contentRenderService_ == nullptr)
+        return false;
+
+    const auto key = modification.contentKey();
+    PlaybackReadSource existingSource;
+    if (audioBuffer == nullptr
+        && contentRenderService_->getPlaybackReadSource(key, existingSource))
+    {
+        audioBuffer = existingSource.audioBuffer;
+    }
+
+    if (audioBuffer == nullptr)
+        return false;
+
+    PlaybackReadSource readSource;
+    readSource.contentKey = key;
+    readSource.renderCache = contentRenderService_->getOrCreateRenderCache(key);
+    readSource.audioBuffer = std::move(audioBuffer);
+    readSource.timeStretchCache = &contentRenderService_->getTimeStretchCache();
+    readSource.renderRevision = modification.content.contentRevision;
+    readSource.pitchRevision = modification.content.editable.pitchRevision;
+    readSource.pitchShiftRevision = modification.content.editable.pitchShiftRevision;
+    readSource.timeGridRevision = modification.content.editable.timeGridRevision;
+    readSource.pitchShiftSettings = modification.content.editable.pitchShiftSettings;
+    readSource.timeGridIsIdentity = modification.content.editable.timeGrid == nullptr
+        || modification.content.editable.timeGrid->isIdentity();
+
+    contentRenderService_->publishPlaybackSource(key, readSource);
+    return true;
+}
+
 bool OpenTuneDocumentController::birthMaterializationForModification(AudioModification& modification)
 {
     if (modification.persistentId.isEmpty() || modification.sourcePersistentId.isEmpty())
@@ -893,14 +934,7 @@ bool OpenTuneDocumentController::birthMaterializationForModification(AudioModifi
         TimeCoordinate::samplesToSeconds(storedAudioBuffer->getNumSamples(), targetSampleRate);
 
     // 7. Publish to CRS if available (owns render cache + audio buffer)
-    if (contentRenderService_ != nullptr)
-    {
-        auto renderCache = contentRenderService_->getOrCreateRenderCache(modification.contentKey());
-        PlaybackReadSource readSource;
-        readSource.renderCache = renderCache;
-        readSource.audioBuffer = storedAudioBuffer;
-        contentRenderService_->publishPlaybackSource(modification.contentKey(), readSource);
-    }
+    publishPlaybackReadSourceForModification(modification, storedAudioBuffer);
 
     // 8. Set modification fields and notify ARA host
     modification.sourceId = sourceId;
@@ -1232,6 +1266,7 @@ MaterializationStore::MaterializationSnapshot OpenTuneDocumentController::readSn
     snap.timeGrid = editableSnap->timeGrid;
     snap.timeGridRevision = editableSnap->timeGridRevision;
     snap.pitchShiftSettings = editableSnap->pitchShiftSettings;
+    snap.pitchRevision = editableSnap->pitchRevision;
     snap.pitchShiftRevision = editableSnap->pitchShiftRevision;
     snap.pitchCurve = editableSnap->pitchCurve;
 

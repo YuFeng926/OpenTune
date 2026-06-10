@@ -14,20 +14,25 @@ class CaptureSession;
  *   [u32 CAPTURE_MAGIC = 'CAPz' (0x4341507A)]
  *   [i32 metadata_xml_length]
  *   [UTF-8 metadata XML (ValueTree::toXmlString)]
- *   [for each segment with materializationId != 0:
+ *   [for each non-Capturing segment:
  *       [i64 id]
  *       [i64 creationOrder]
  *       [f64 T_start]
  *       [f64 durationSeconds]
  *       [f64 captureSampleRate]
  *       [i32 captureChannels]
- *       [i64 materializationId]
+ *       [i32 segmentState]
+ *       [PCM audio]
+ *       [i32 originalF0State]
+ *       [i32 detectedKeyRoot]
+ *       [i32 detectedKeyScale]
+ *       [f32 detectedKeyConfidence]
+ *       [pitch curve payload]
  *   ]
  *   [u32 CAPTURE_END_MAGIC = 'xCAP' (0x78434150)]
  *
- * Audio + edits are NOT in this block — they travel through standard processor
- * state under their materializationId. On deserialize, segments are bound back
- * to already-restored materializations (Edited state) without re-running render.
+ * CaptureSegmentContent is the persisted content owner. ContentRenderService is
+ * republished from the restored owner snapshot; it is not persistence state.
  *
  * Format incompatible with old 'CAPy' (FLAC-embedded) blocks: deserialize
  * rejects them via ChannelLayoutLog::logPersistenceDeserializeReject. Pre-fix

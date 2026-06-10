@@ -463,7 +463,7 @@ void ArrangementViewComponent::rebuildContentMetrics()
             maxEndTime = juce::jmax(maxEndTime,
                                     placement.timelineEndSeconds() + kArrangementTrailingPaddingSeconds);
             revision = hashCombine(revision, placement.placementId);
-            revision = hashCombine(revision, placement.materializationId);
+            revision = hashCombine(revision, placement.contentKey.objectId);
             revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.timelineStartSeconds * 1000.0)));
             revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.durationSeconds * 1000.0)));
         }
@@ -801,10 +801,10 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
                 continue;
             }
 
-            const uint64_t key = placement.materializationId;
+            const uint64_t key = placement.contentKey.objectId;
             alive.insert(key);
             
-            auto audioBuffer = processor_.getMaterializationAudioBufferById(placement.materializationId);
+            auto audioBuffer = processor_.getMaterializationAudioBufferById(placement.contentKey.objectId);
             if (audioBuffer)
             {
                 auto& mipmap = waveformMipmapCache_.getOrCreate(key);
@@ -2473,7 +2473,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                 {
                     entries.push_back({
                         sel.trackId,
-                        placement.materializationId,
+                        placement.contentKey.objectId,
                         placement.clipInSeconds,
                         placement.durationSeconds,
                         placement.gain,
@@ -2509,7 +2509,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
                 StandaloneArrangement::Placement newPlacement;
                 newPlacement.placementId = 0; // will be assigned by insertPlacement
-                newPlacement.materializationId = newMatId;
+                newPlacement.contentKey = ContentKey{DomainKind::StandaloneClip, newMatId, 0};
                 newPlacement.mappingRevision = 1;
                 newPlacement.timelineStartSeconds = pasteTime;
                 newPlacement.durationSeconds = entry.durationSeconds;
@@ -2521,7 +2521,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
                 if (!arr->insertPlacement(selectedTrack_, newPlacement)) {
                     // Rollback — delete the orphan materialization
-                    processor_.getMaterializationStore()->deleteMaterialization(newMatId);
+                    processor_.getStandaloneContentRepository()->retireClip(ContentKey{DomainKind::StandaloneClip, newMatId, 0});
                     continue;
                 }
                 pasteTime += entry.durationSeconds; // chain placements sequentially
@@ -2542,7 +2542,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             if (getStandalonePlacementById(processor_, selectedTrack_, selectedPlacementId_, placement))
             {
                 uint64_t newMatId = processor_.cloneMaterialization(
-                    placement.materializationId, placement.name + " Copy");
+                    placement.contentKey.objectId, placement.name + " Copy");
                 if (newMatId != 0)
                 {
                     auto* arr = processor_.getStandaloneArrangement();
@@ -2550,13 +2550,13 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                     {
                         StandaloneArrangement::Placement dup = placement;
                         dup.placementId = 0;
-                        dup.materializationId = newMatId;
+                        dup.contentKey = ContentKey{DomainKind::StandaloneClip, newMatId, 0};
                         dup.mappingRevision = 1;
 
                         const int count = arr->getNumPlacements(selectedTrack_);
                         if (!arr->insertPlacement(selectedTrack_, count, dup)) {
                             // Rollback — delete the orphan materialization
-                            processor_.getMaterializationStore()->deleteMaterialization(newMatId);
+                            processor_.getStandaloneContentRepository()->retireClip(ContentKey{DomainKind::StandaloneClip, newMatId, 0});
                             return true;
                         }
 

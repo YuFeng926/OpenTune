@@ -30,72 +30,49 @@ struct SegmentInfo
     double T_start = 0.0;
     double durationSeconds = 0.0;
     SegmentState state = SegmentState::Capturing;
-    uint64_t materializationId = 0;
+    uint64_t contentId = 0;
 };
 
 /**
- * Submit a captured take to the existing render pipeline.
- *
- * Implementation MUST:
- *   - call processor.prepareImport(std::move(buffer), sampleRate, name, prepared)
- *   - call processor.commitPreparedImportAsMaterialization(std::move(prepared))
- *   - call processor.requestMaterializationRefresh({materializationId})
- *
- * Returns the materializationId (non-zero on success, 0 on failure).
- */
-using SubmitForRenderFn = std::function<uint64_t(std::shared_ptr<juce::AudioBuffer<float>> pcm,
-                                                 double sampleRate,
-                                                 juce::String displayName)>;
-
-/**
  * Audio-thread-callable: replace [destStart, destStart+numSamples) of buffer with rendered audio
- * from the given materialization. Implementation MUST:
+ * from the given segment. Implementation:
  *   - clear destination range
- *   - call processor.readPlaybackAudio({materializationId, readStartSeconds, targetSampleRate}, ...)
+ *   - call contentRenderService->getPlaybackReadSource(ContentKey{RegularVST3Capture, segmentId, 0}, ...)
  *
+ * Uses segment.id directly as the Capture ContentKey.
  * Captures a small (one-pointer) lambda; no heap allocation expected when called.
  */
 using ReplaceWithRenderedFn = std::function<void(juce::AudioBuffer<float>& buffer,
                                                   int destStart,
                                                   int numSamples,
-                                                  uint64_t materializationId,
+                                                  uint64_t segmentId,
                                                   double readStartSeconds,
                                                   double targetSampleRate)>;
 
-/** Message-thread poll: returns true when the materialization is ready for playback. */
-using IsRenderReadyFn = std::function<bool(uint64_t materializationId)>;
-
-/** Message-thread poll: returns true when render pipeline has marked the materialization as failed
- *  (e.g. F0 extraction returned empty/unvoiced). Capture session uses this to drop dead segments
- *  so the user can record again rather than getting stuck in Processing. */
-using IsRenderFailedFn = std::function<bool(uint64_t materializationId)>;
-
-/** Message-thread compaction sink: tell the processor to retire a materialization. */
-using RetireMaterializationFn = std::function<void(uint64_t materializationId)>;
+/** Message-thread compaction sink: tell the processor to retire segment content. */
+using RetireSegmentFn = std::function<void(uint64_t segmentId)>;
 
 /** Notification sink for UI: a segment has reached Edited state. */
-using ActiveSegmentChangedFn = std::function<void(uint64_t materializationId)>;
+using ActiveSegmentChangedFn = std::function<void(uint64_t segmentId)>;
 
-/** Message-thread orphan check: returns true when MaterializationStore knows about a mat id.
- *  Used by CapturePersistence::deserialize to skip segments referencing missing mats. */
-using ContainsMaterializationFn = std::function<bool(uint64_t materializationId)>;
-
-/** Message-thread re-render trigger for an existing materialization (no new mat created).
+/** Message-thread re-render trigger for an existing segment content (no new clip created).
  *  Used by CapturePersistence::deserialize to repopulate RenderCache after restore — the
  *  vocoder output is not in standard state, so it must be re-synthesized from the restored
- *  audio + pitchCurve. tick() promotes Processing → Edited via isRenderReady. */
-using RefreshMaterializationFn = std::function<void(uint64_t materializationId)>;
+ *  audio + pitchCurve. tick() promotes Processing → Edited via F0 state check. */
+using RefreshSegmentFn = std::function<void(uint64_t segmentId)>;
+
+/** Publish PlaybackReadSource to ContentRenderService with segment.id as ContentKey. */
+using PublishPlaybackSourceFn = std::function<void(const ContentKey& key,
+                                                     std::shared_ptr<const juce::AudioBuffer<float>> audio,
+                                                     double sampleRate)>;
 
 /** Bundle of processor-side callbacks injected at CaptureSession construction. */
 struct ProcessorBindings
 {
-    SubmitForRenderFn submitForRender;
     ReplaceWithRenderedFn replaceWithRendered;
-    IsRenderReadyFn isRenderReady;
-    IsRenderFailedFn isRenderFailed;
-    RetireMaterializationFn retireMaterialization;
-    ContainsMaterializationFn containsMaterialization;
-    RefreshMaterializationFn refreshMaterialization;
+    RetireSegmentFn retireSegment;
+    RefreshSegmentFn refreshSegment;
+    PublishPlaybackSourceFn publishPlaybackSource;
 };
 
 /**
@@ -159,20 +136,32 @@ public:
                       double hostSampleRate,
                       bool isPlaying) noexcept;
 
-    /** Periodic message-thread tick (~30 Hz from PluginEditor timer). Promotes Pending → Processing
-     *  when audio thread has signaled stopRequested, and detects Processing → Edited via callback. */
+    /** Periodic message-thread tick (~30 Hz from PluginEditor timer). Promotes Pending -> Processing
+     *  after capture drain, and Processing -> Edited when CaptureSegmentContent F0 state is Ready. */
     void tick();
 
     // ─── Notification injection (message thread) ───────────────────────────
     void setActiveSegmentChangedCallback(ActiveSegmentChangedFn fn);
 
-    /** Called by render pipeline when a segment's materialization is ready. */
-    void onSegmentRenderingComplete(uint64_t segmentId, uint64_t materializationId);
+    /** Called by render pipeline when a segment's content is ready. */
+    void onSegmentRenderingComplete(uint64_t segmentId);
+
+    /** Commit F0 extraction result to segment content. Does not promote lifecycle. */
+    bool commitSegmentF0Result(uint64_t segmentId,
+                               std::shared_ptr<PitchCurve> pitchCurve,
+                               OriginalF0State state,
+                               const DetectedKey& detectedKey);
 
     // ─── Query (any thread) ────────────────────────────────────────────────
     SessionState getGlobalState() const noexcept;
     double getCurrentlyCapturedSeconds() const noexcept;
     size_t getTotalCapturedBytes() const noexcept;
+
+    /** Find segment by id. Returns nullptr if not found. Thread-safe. */
+    CaptureSegment* findSegmentById(uint64_t segmentId) const;
+
+    /** Find segment by ContentKey. Returns nullptr if not found. Thread-safe. */
+    CaptureSegment* findSegmentByContentKey(const ContentKey& key) const;
 
     /** GUI snapshot (message thread). */
     std::vector<SegmentInfo> listSegments() const;
@@ -187,8 +176,15 @@ public:
     /** Test only: inject a fully-formed Edited segment for unit tests. */
     uint64_t testInjectEditedSegment(double T_start,
                                      double durationSeconds,
-                                     uint64_t materializationId,
+                                     uint64_t segmentId,
                                      std::shared_ptr<juce::AudioBuffer<float>> pcm);
+
+    /** Test only: inject a Processing segment with owner audio for lifecycle tests. */
+    uint64_t testInjectProcessingSegment(double T_start,
+                                         double durationSeconds,
+                                         uint64_t segmentId,
+                                         std::shared_ptr<juce::AudioBuffer<float>> pcm,
+                                         double sampleRate);
 
     /** Test only: snapshot internal mutable segments (read-only). */
     const std::vector<std::unique_ptr<CaptureSegment>>& testSegments() const { return mutableSegments_; }

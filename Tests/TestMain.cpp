@@ -1,20 +1,27 @@
-// OpenTune ARA Architecture Contract Tests
-// Source-scan contract tests verifying architecture boundaries at compile time.
-// Oracle review: commit e0326f0 / docs/plans/2026-06-05-ara-audiomodification-content-root.md
+// OpenTune ARA Architecture Contract And Runtime Tests
+// Focused source-scan guards plus small runtime tests for ownership/lifecycle behavior.
+// Oracle review: commit e0326f0 / docs/plans/2026-06-10-ara2-content-ownership-phase3-capture-plan.md
 //
-// All tests use text scanning — no runtime object creation.
-// Each test checks that required tokens exist and forbidden tokens do not exist
-// in the specified source files.
+// Static guards prevent old architecture paths from returning. Runtime tests
+// prove the Capture lifecycle and owner persistence behavior that token scans
+// cannot verify.
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "Content/EditableContentSnapshot.h"
+#include "Plugin/Capture/CaptureSession.h"
+#include "Utils/PitchCurve.h"
 
 namespace fs = std::filesystem;
 
@@ -99,17 +106,6 @@ static std::string requireAll(const std::string& text,
     for (const auto& t : tokens)
         if (!contains(text, t))
             return "missing required token: '" + t + "'";
-    return {};
-}
-
-// Check that ALL forbidden tokens are absent. Returns empty string on success,
-// or a description of the first found forbidden token.
-static std::string forbidAll(const std::string& text,
-                             const std::vector<std::string>& tokens)
-{
-    for (const auto& t : tokens)
-        if (contains(text, t))
-            return "found forbidden token: '" + t + "'";
     return {};
 }
 
@@ -938,6 +934,269 @@ static CheckResult standaloneHasNoMaterializationStoreDependency()
 }
 
 // ============================================================================
+// Phase 3 Contract Tests — Capture domain content root
+//
+// P0 guards: captureBindingsHaveNoMaterializationStoreBridge (T1),
+//            capturePersistenceDoesNotReadMaterializationStore (T2),
+//            captureCrsUsesRegularVST3CaptureSegmentId (T3),
+//            captureRefreshDoesNotRequestMaterializationRefresh (T4)
+//
+// These tests MUST FAIL initially (the code still has MS dependencies in
+// the Capture domain). After P0-2 / P0-3 code fixes they must PASS.
+// ============================================================================
+
+// Helper: extract the VST3 Capture bindings block from PluginProcessor.cpp.
+// Returns the text between "Capture::ProcessorBindings bindings" and
+// "captureSession_ = std::make_unique<Capture::CaptureSession>".
+static std::string extractCaptureBindings()
+{
+    const auto ppText = readText("Source/PluginProcessor.cpp");
+    size_t captureSection = ppText.find("wrapperType == juce::AudioProcessor::wrapperType_VST3");
+    if (captureSection == std::string::npos)
+        return {};
+    size_t bindingsStart = ppText.find("Capture::ProcessorBindings bindings", captureSection);
+    size_t bindingsEnd = ppText.find("captureSession_ = std::make_unique<Capture::CaptureSession>", captureSection);
+    if (bindingsStart == std::string::npos || bindingsEnd == std::string::npos)
+        return {};
+    return ppText.substr(bindingsStart, bindingsEnd - bindingsStart);
+}
+
+// ============================================================================
+// T1: captureBindingsHaveNoMaterializationStoreBridge
+//
+// Capture bindings (isRenderReady, isRenderFailed) MUST be deleted.
+// Content state reads/writes go through CaptureSegmentContent; 
+// tick() reads F0 state directly.
+//
+// Forbidden: IsRenderReadyFn, IsRenderFailedFn, isRenderReady, isRenderFailed
+// ============================================================================
+static CheckResult captureBindingsHaveNoMaterializationStoreBridge()
+{
+    const auto captureBindings = extractCaptureBindings();
+    if (captureBindings.empty())
+        return fail("captureBindingsHaveNoMaterializationStoreBridge",
+                    "Cannot extract VST3 capture bindings from PluginProcessor.cpp");
+
+    // Forbidden: MS bridge calls in capture bindings
+    {
+        const std::vector<std::string> forbidden = {
+            "getMaterializationOriginalF0StateById",
+            "materializationStore_->createMaterialization",
+            "materializationStore_->containsMaterialization",
+            "requestMaterializationRefresh",
+            "materializationStore_->getSnapshot"
+        };
+        for (const auto& t : forbidden)
+        {
+            if (contains(captureBindings, t))
+            {
+                auto loc = locateInText(captureBindings, t, "PluginProcessor.cpp (capture bindings)");
+                return fail("captureBindingsHaveNoMaterializationStoreBridge",
+                            "Capture bindings contain forbidden MS bridge: '" + t + "' at " + loc);
+            }
+        }
+    }
+
+    return pass("captureBindingsHaveNoMaterializationStoreBridge");
+}
+
+// ============================================================================
+// T1b: captureHasNoIsRenderReadyOrIsRenderFailed
+//
+// Phase 3 removes readiness bindings. tick() reads F0 state directly.
+// Guard fails if CaptureSession.h still contains the old callback types.
+// ============================================================================
+static CheckResult captureHasNoIsRenderReadyOrIsRenderFailed()
+{
+    const auto sessionH = readText("Source/Plugin/Capture/CaptureSession.h");
+
+    if (containsWord(sessionH, "IsRenderReadyFn"))
+        return fail("captureHasNoIsRenderReadyOrIsRenderFailed",
+                    "IsRenderReadyFn still declared in CaptureSession.h");
+
+    if (containsWord(sessionH, "IsRenderFailedFn"))
+        return fail("captureHasNoIsRenderReadyOrIsRenderFailed",
+                    "IsRenderFailedFn still declared in CaptureSession.h");
+
+    if (containsWord(sessionH, "isRenderReady"))
+        return fail("captureHasNoIsRenderReadyOrIsRenderFailed",
+                    "isRenderReady still declared in CaptureSession.h");
+
+    if (containsWord(sessionH, "isRenderFailed"))
+        return fail("captureHasNoIsRenderReadyOrIsRenderFailed",
+                    "isRenderFailed still declared in CaptureSession.h");
+
+    return pass("captureHasNoIsRenderReadyOrIsRenderFailed");
+}
+
+// ============================================================================
+// T2: capturePersistenceDoesNotReadMaterializationStore
+//
+// CapturePersistence serialize/deserialize MUST NOT depend on MaterializationStore
+// or the getSegmentAudio binding (which reads MS). Content must be serialized
+// directly from CaptureSegmentContent.
+//
+// Forbidden: materializationStore_, getSegmentAudio, getSnapshot, MaterializationStore::
+// ============================================================================
+static CheckResult capturePersistenceDoesNotReadMaterializationStore()
+{
+    const auto text = readText("Source/Plugin/Capture/CapturePersistence.cpp")
+                    + readText("Source/Plugin/Capture/CapturePersistence.h");
+
+    if (text.empty())
+        return fail("capturePersistenceDoesNotReadMaterializationStore",
+                    "Cannot read CapturePersistence source files");
+
+    const std::vector<std::string> forbidden = {
+        "materializationStore_",
+        "getSegmentAudio",
+        "MaterializationStore::"
+    };
+
+    for (const auto& t : forbidden)
+    {
+        if (contains(text, t))
+        {
+            std::string file = "CapturePersistence.{h,cpp}";
+            if (contains(readText("Source/Plugin/Capture/CapturePersistence.h"), t))
+                file = "CapturePersistence.h";
+            else if (contains(readText("Source/Plugin/Capture/CapturePersistence.cpp"), t))
+                file = "CapturePersistence.cpp";
+            auto loc = locateInText(text, t, file);
+            return fail("capturePersistenceDoesNotReadMaterializationStore",
+                        "CapturePersistence contains forbidden token '" + t + "' at " + loc +
+                        " — persistence must use CaptureSegmentContent directly, not MS");
+        }
+    }
+
+    return pass("capturePersistenceDoesNotReadMaterializationStore");
+}
+
+// ============================================================================
+// T3: captureCrsUsesRegularVST3CaptureSegmentId
+//
+// All CRS operations in the Capture domain must use a consistent ContentKey:
+//   ContentKey{DomainKind::RegularVST3Capture, segment.id, 0}
+//
+// Forbidden: contentKeyForMaterializationId, materializationId as content identity
+// Required:  DomainKind::RegularVST3Capture in capture bindings
+// ============================================================================
+static CheckResult captureCrsUsesRegularVST3CaptureSegmentId()
+{
+    const auto captureBindings = extractCaptureBindings();
+    if (captureBindings.empty())
+        return fail("captureCrsUsesRegularVST3CaptureSegmentId",
+                    "Cannot extract VST3 capture bindings from PluginProcessor.cpp");
+
+    // Required: ContentKey with RegularVST3Capture domain
+    if (!contains(captureBindings, "DomainKind::RegularVST3Capture"))
+        return fail("captureCrsUsesRegularVST3CaptureSegmentId",
+                    "Capture bindings must use ContentKey with DomainKind::RegularVST3Capture");
+
+    // Forbidden: materializationId-based content identity functions
+    {
+        const std::vector<std::string> forbidden = {
+            "contentKeyForMaterializationId"
+        };
+        for (const auto& t : forbidden)
+        {
+            if (contains(captureBindings, t))
+            {
+                auto loc = locateInText(captureBindings, t, "PluginProcessor.cpp (capture bindings)");
+                return fail("captureCrsUsesRegularVST3CaptureSegmentId",
+                            "forbidden '" + t + "' at " + loc +
+                            " — use ContentKey{RegularVST3Capture, segmentId} instead");
+            }
+        }
+    }
+
+    // materializationId must not appear as content identity in capture bindings
+    // (the capture bindings may rename the callback param to segmentId — check)
+    if (containsWord(captureBindings, "materializationId"))
+    {
+        auto loc = locateInText(captureBindings, "materializationId", "PluginProcessor.cpp (capture bindings)");
+        return fail("captureCrsUsesRegularVST3CaptureSegmentId",
+                    "'materializationId' found in capture bindings at " + loc +
+                    " — capture callbacks must use segmentId, not materializationId");
+    }
+
+    return pass("captureCrsUsesRegularVST3CaptureSegmentId");
+}
+
+// ============================================================================
+// T4: captureRefreshDoesNotRequestMaterializationRefresh
+//
+// refreshSegment must use Capture-native F0 extraction path (new F0 request
+// interface + commit to CaptureSegmentContent). It MUST NOT create
+// MaterializationStore entries, SourceStore entries, or call 
+// requestMaterializationRefresh / onSegmentRenderingComplete from F0 completion.
+//
+// Forbidden: createMaterialization, requestMaterializationRefresh, SourceStore in refreshSegment
+// ============================================================================
+static CheckResult captureRefreshDoesNotRequestMaterializationRefresh()
+{
+    const auto captureBindings = extractCaptureBindings();
+    if (captureBindings.empty())
+        return fail("captureRefreshDoesNotRequestMaterializationRefresh",
+                    "Cannot extract VST3 capture bindings from PluginProcessor.cpp");
+
+    // Extract the refreshSegment lambda body
+    size_t refreshPos = captureBindings.find("bindings.refreshSegment");
+    if (refreshPos == std::string::npos)
+        return fail("captureRefreshDoesNotRequestMaterializationRefresh",
+                    "refreshSegment binding not found in capture bindings");
+    size_t bracePos = captureBindings.find("{", refreshPos);
+    if (bracePos == std::string::npos)
+        return fail("captureRefreshDoesNotRequestMaterializationRefresh",
+                    "refreshSegment lambda body not found");
+    int depth = 0;
+    size_t closePos = bracePos;
+    for (size_t i = bracePos; i < captureBindings.size(); ++i)
+    {
+        if (captureBindings[i] == '{') ++depth;
+        if (captureBindings[i] == '}') { --depth; if (depth == 0) { closePos = i; break; } }
+    }
+    std::string refreshBody = captureBindings.substr(bracePos, closePos - bracePos + 1);
+
+    const std::vector<std::string> forbidden = {
+        "createMaterialization",
+        "requestMaterializationRefresh",
+        "SourceStore::CreateSourceRequest",
+        "MaterializationStore::CreateMaterializationRequest",
+        "onSegmentRenderingComplete"
+    };
+
+    for (const auto& t : forbidden)
+    {
+        if (contains(refreshBody, t))
+        {
+            auto loc = locateInText(refreshBody, t, "PluginProcessor.cpp (refreshSegment lambda)");
+            return fail("captureRefreshDoesNotRequestMaterializationRefresh",
+                        "refreshSegment contains forbidden '" + t + "' at " + loc);
+        }
+    }
+
+    return pass("captureRefreshDoesNotRequestMaterializationRefresh");
+}
+
+// ============================================================================
+// T4b: captureSegmentHasNoCapturedAudio
+//
+// CaptureSegment must NOT have capturedAudio field. Content ownership 
+// is in CaptureSegmentContent.
+// ============================================================================
+static CheckResult captureSegmentHasNoCapturedAudio()
+{
+    const auto text = readText("Source/Plugin/Capture/CaptureSegment.h");
+
+    if (containsWord(text, "capturedAudio"))
+        return fail("captureSegmentHasNoCapturedAudio",
+                    "capturedAudio field still exists in CaptureSegment.h");
+
+    return pass("captureSegmentHasNoCapturedAudio");
+}
+
+// ============================================================================
 // Contract Test 16: standaloneArrangementIsPlacementOnly (Phase 2)
 //
 // StandaloneArrangement must only manage Track/Placement graph and playback
@@ -1019,6 +1278,341 @@ static CheckResult processBlockHasNoStoreOrPublish()
 }
 
 // ============================================================================
+// T5: captureSegmentContentSnapshotComplete (P1 verification)
+//
+// CaptureSegmentContent::snapshotContent() must forward ALL content fields,
+// including pitchCurve (post-F0 extraction result).
+//
+// Forbidden: pitchCurve = nullptr in snapshot
+// Required:  pitchCurve_, editable_.originalF0State, editable_.audioBuffer
+// ============================================================================
+static CheckResult captureSegmentContentSnapshotComplete()
+{
+    const auto text = readText("Source/Content/CaptureSegmentContent.cpp");
+
+    if (text.empty())
+        return fail("captureSegmentContentSnapshotComplete",
+                    "Cannot read CaptureSegmentContent.cpp");
+
+    // Must NOT hardcode pitchCurve to nullptr
+    if (contains(text, "pitchCurve = nullptr"))
+        return fail("captureSegmentContentSnapshotComplete",
+                    "snapshotContent still hardcodes pitchCurve = nullptr — "
+                    "must forward pitchCurve_ from content owner");
+
+    // Must use pitchCurve_ member
+    if (!contains(text, "pitchCurve_"))
+        return fail("captureSegmentContentSnapshotComplete",
+                    "snapshotContent missing pitchCurve_ member reference");
+
+    // Must include originalF0State
+    if (!contains(text, "originalF0State"))
+        return fail("captureSegmentContentSnapshotComplete",
+                    "snapshotContent missing originalF0State");
+
+    // Header must declare applyPitchCurve and pitchCurve accessor
+    const auto header = readText("Source/Content/CaptureSegmentContent.h");
+    if (!contains(header, "applyPitchCurve"))
+        return fail("captureSegmentContentSnapshotComplete",
+                    "CaptureSegmentContent.h missing applyPitchCurve declaration");
+    if (!contains(header, "pitchCurve()"))
+        return fail("captureSegmentContentSnapshotComplete",
+                    "CaptureSegmentContent.h missing pitchCurve() accessor");
+
+    return pass("captureSegmentContentSnapshotComplete");
+}
+
+// ============================================================================
+// T6: captureStaticLifecycleWiring
+//
+// Verify the full capture lifecycle code chain is wired:
+//   segment creation → ContentKey binding → refresh/F0 → playback via CRS
+// ============================================================================
+static CheckResult captureStaticLifecycleWiring()
+{
+    const auto sessionCpp = readText("Source/Plugin/Capture/CaptureSession.cpp");
+    const auto captureBindings = extractCaptureBindings();
+
+    if (sessionCpp.empty() || captureBindings.empty())
+        return fail("captureStaticLifecycleWiring",
+                    "Cannot read CaptureSession.cpp or capture bindings");
+
+    // CaptureSession creates segment with ContentKey {RegularVST3Capture, id, 0}
+    if (!contains(sessionCpp, "ContentKey{DomainKind::RegularVST3Capture"))
+        return fail("captureStaticLifecycleWiring",
+                    "CaptureSession does not create segments with ContentKey{DomainKind::RegularVST3Capture}");
+
+    // replaceWithRendered uses getPlaybackReadSource with ContentKey
+    if (!contains(captureBindings, "getPlaybackReadSource"))
+        return fail("captureStaticLifecycleWiring",
+                    "replaceWithRendered does not use getPlaybackReadSource");
+
+    // refreshSegment uses F0ExtractionService (Capture-native path)
+    if (!contains(captureBindings, "F0ExtractionService"))
+        return fail("captureStaticLifecycleWiring",
+                    "refreshSegment does not use F0ExtractionService (Capture-native F0 path)");
+
+    // publishPlaybackSource uses contentRenderService_
+    if (!contains(captureBindings, "contentRenderService_->publishPlaybackSource"))
+        return fail("captureStaticLifecycleWiring",
+                    "publishPlaybackSource does not publish to ContentRenderService");
+
+    return pass("captureStaticLifecycleWiring");
+}
+
+namespace {
+    struct CaptureRuntimeSpies
+    {
+        std::vector<uint64_t> retired;
+        std::vector<uint64_t> refreshed;
+        std::vector<uint64_t> active;
+        std::vector<OpenTune::ContentKey> publishedKeys;
+        std::vector<std::shared_ptr<const juce::AudioBuffer<float>>> publishedAudio;
+        std::vector<double> publishedSampleRates;
+    };
+
+    std::shared_ptr<juce::AudioBuffer<float>> makeCaptureTestAudio(int channels = 1, int samples = 64)
+    {
+        auto audio = std::make_shared<juce::AudioBuffer<float>>(channels, samples);
+        for (int ch = 0; ch < channels; ++ch) {
+            auto* dst = audio->getWritePointer(ch);
+            for (int i = 0; i < samples; ++i)
+                dst[i] = 0.1f * static_cast<float>(ch + 1) + 0.001f * static_cast<float>(i);
+        }
+        return audio;
+    }
+
+    std::shared_ptr<OpenTune::PitchCurve> makeCaptureTestPitchCurve()
+    {
+        auto curve = std::make_shared<OpenTune::PitchCurve>();
+        curve->setHopSize(160);
+        curve->setSampleRate(16000.0);
+        curve->setOriginalF0(std::vector<float>{110.0f, 120.0f, 130.0f});
+        curve->setOriginalEnergy(std::vector<float>{0.2f, 0.3f, 0.4f});
+        return curve;
+    }
+
+    OpenTune::DetectedKey makeCaptureTestKey()
+    {
+        OpenTune::DetectedKey key;
+        key.root = OpenTune::Key::D;
+        key.scale = OpenTune::Scale::Minor;
+        key.confidence = 0.75f;
+        return key;
+    }
+
+    bool sameDetectedKey(const OpenTune::DetectedKey& lhs, const OpenTune::DetectedKey& rhs)
+    {
+        return lhs.root == rhs.root
+            && lhs.scale == rhs.scale
+            && std::abs(lhs.confidence - rhs.confidence) <= 1.0e-6f;
+    }
+
+    bool sameCaptureKey(const OpenTune::ContentKey& key, uint64_t id)
+    {
+        return key.domainKind == OpenTune::DomainKind::RegularVST3Capture
+            && key.objectId == id
+            && key.sourceWindowDiscriminator == 0;
+    }
+
+    OpenTune::Capture::ProcessorBindings makeCaptureRuntimeBindings(
+        CaptureRuntimeSpies& spies,
+        OpenTune::Capture::CaptureSession** reentrantSession = nullptr)
+    {
+        OpenTune::Capture::ProcessorBindings bindings;
+        bindings.replaceWithRendered = [](juce::AudioBuffer<float>&,
+                                           int,
+                                           int,
+                                           uint64_t,
+                                           double,
+                                           double) {};
+        bindings.retireSegment = [&spies, reentrantSession](uint64_t id) {
+            spies.retired.push_back(id);
+            if (reentrantSession != nullptr && *reentrantSession != nullptr)
+                (void)(*reentrantSession)->findSegmentById(id);
+        };
+        bindings.refreshSegment = [&spies](uint64_t id) {
+            spies.refreshed.push_back(id);
+        };
+        bindings.publishPlaybackSource = [&spies](const OpenTune::ContentKey& key,
+                                                  std::shared_ptr<const juce::AudioBuffer<float>> audio,
+                                                  double sampleRate) {
+            spies.publishedKeys.push_back(key);
+            spies.publishedAudio.push_back(std::move(audio));
+            spies.publishedSampleRates.push_back(sampleRate);
+        };
+        return bindings;
+    }
+}
+
+static CheckResult captureTickPromotesReadyWithoutReadinessBinding()
+{
+    CaptureRuntimeSpies spies;
+    auto bindings = makeCaptureRuntimeBindings(spies);
+    OpenTune::Capture::CaptureSession session(std::move(bindings));
+    session.prepareToPlay(48000.0, 512, 1);
+    session.setActiveSegmentChangedCallback([&spies](uint64_t id) {
+        spies.active.push_back(id);
+    });
+
+    const uint64_t id = session.testInjectProcessingSegment(
+        1.0, 0.01, 101, makeCaptureTestAudio(), 48000.0);
+    if (!session.commitSegmentF0Result(
+            id, makeCaptureTestPitchCurve(),
+            OpenTune::OriginalF0State::Ready,
+            makeCaptureTestKey())) {
+        return fail("captureTickPromotesReadyWithoutReadinessBinding",
+                    "commitSegmentF0Result rejected the injected segment");
+    }
+
+    auto* before = session.findSegmentById(id);
+    if (before->state.load(std::memory_order_acquire) != OpenTune::Capture::SegmentState::Processing)
+        return fail("captureTickPromotesReadyWithoutReadinessBinding",
+                    "F0 commit promoted before tick()");
+
+    session.tick();
+
+    auto* after = session.findSegmentById(id);
+    if (after == nullptr || after->state.load(std::memory_order_acquire) != OpenTune::Capture::SegmentState::Edited)
+        return fail("captureTickPromotesReadyWithoutReadinessBinding",
+                    "tick() did not promote Ready content to Edited");
+    if (spies.active.size() != 1 || spies.active[0] != id)
+        return fail("captureTickPromotesReadyWithoutReadinessBinding",
+                    "active segment callback was not emitted exactly once");
+
+    return pass("captureTickPromotesReadyWithoutReadinessBinding");
+}
+
+static CheckResult captureTickDropsFailedWithoutReentrantBinding()
+{
+    CaptureRuntimeSpies spies;
+    OpenTune::Capture::CaptureSession* sessionPtr = nullptr;
+    auto bindings = makeCaptureRuntimeBindings(spies, &sessionPtr);
+    OpenTune::Capture::CaptureSession session(std::move(bindings));
+    sessionPtr = &session;
+    session.prepareToPlay(48000.0, 512, 1);
+    session.setActiveSegmentChangedCallback([&spies](uint64_t id) {
+        spies.active.push_back(id);
+    });
+
+    const uint64_t id = session.testInjectProcessingSegment(
+        2.0, 0.01, 202, makeCaptureTestAudio(), 48000.0);
+    session.commitSegmentF0Result(id, nullptr, OpenTune::OriginalF0State::Failed, OpenTune::DetectedKey{});
+
+    session.tick();
+
+    if (session.findSegmentById(id) != nullptr)
+        return fail("captureTickDropsFailedWithoutReentrantBinding",
+                    "Failed Processing segment was not removed");
+    if (spies.retired.size() != 1 || spies.retired[0] != id)
+        return fail("captureTickDropsFailedWithoutReentrantBinding",
+                    "retireSegment was not called after removing failed segment");
+    if (!spies.active.empty())
+        return fail("captureTickDropsFailedWithoutReentrantBinding",
+                    "failed segment emitted active callback");
+
+    return pass("captureTickDropsFailedWithoutReentrantBinding");
+}
+
+static CheckResult captureF0CommitDoesNotPromoteUntilTick()
+{
+    CaptureRuntimeSpies spies;
+    auto bindings = makeCaptureRuntimeBindings(spies);
+    OpenTune::Capture::CaptureSession session(std::move(bindings));
+    session.prepareToPlay(44100.0, 512, 1);
+
+    const uint64_t id = session.testInjectProcessingSegment(
+        3.0, 0.01, 303, makeCaptureTestAudio(), 44100.0);
+    session.commitSegmentF0Result(
+        id, makeCaptureTestPitchCurve(),
+        OpenTune::OriginalF0State::Ready,
+        makeCaptureTestKey());
+
+    auto* before = session.findSegmentById(id);
+    if (before->content->editable().originalF0State != OpenTune::OriginalF0State::Ready)
+        return fail("captureF0CommitDoesNotPromoteUntilTick",
+                    "F0 commit did not update owner state");
+    if (before->state.load(std::memory_order_acquire) != OpenTune::Capture::SegmentState::Processing)
+        return fail("captureF0CommitDoesNotPromoteUntilTick",
+                    "F0 commit changed lifecycle state before tick()");
+
+    session.tick();
+    auto* after = session.findSegmentById(id);
+    if (after == nullptr || after->state.load(std::memory_order_acquire) != OpenTune::Capture::SegmentState::Edited)
+        return fail("captureF0CommitDoesNotPromoteUntilTick",
+                    "tick() did not perform the single lifecycle promotion");
+
+    return pass("captureF0CommitDoesNotPromoteUntilTick");
+}
+
+static CheckResult capturePersistenceRoundtripRestoresOwnerContent()
+{
+    CaptureRuntimeSpies originalSpies;
+    auto originalBindings = makeCaptureRuntimeBindings(originalSpies);
+    OpenTune::Capture::CaptureSession original(std::move(originalBindings));
+    original.prepareToPlay(48000.0, 512, 2);
+
+    const auto audio = makeCaptureTestAudio(2, 96);
+    const uint64_t id = original.testInjectEditedSegment(
+        4.0, static_cast<double>(audio->getNumSamples()) / 48000.0, 404, audio);
+    const auto key = makeCaptureTestKey();
+    original.commitSegmentF0Result(
+        id, makeCaptureTestPitchCurve(),
+        OpenTune::OriginalF0State::Ready,
+        key);
+
+    const juce::MemoryBlock state = original.serialize();
+    if (state.getSize() == 0)
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "serialize() produced an empty state");
+
+    CaptureRuntimeSpies restoredSpies;
+    auto restoredBindings = makeCaptureRuntimeBindings(restoredSpies);
+    OpenTune::Capture::CaptureSession restored(std::move(restoredBindings));
+    if (!restored.deserialize(state))
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "deserialize() rejected owner-based CAPz state");
+
+    auto* seg = restored.findSegmentById(id);
+    if (seg == nullptr)
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "restored segment id not found");
+    if (!sameCaptureKey(seg->contentKey, id))
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "restored segment ContentKey does not use segment id");
+    if (seg->state.load(std::memory_order_acquire) != OpenTune::Capture::SegmentState::Edited)
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "Ready owner content did not restore as Edited");
+
+    const auto snap = seg->content->snapshotContent();
+    if (!snap->audioBuffer
+        || snap->audioBuffer->getNumChannels() != 2
+        || snap->audioBuffer->getNumSamples() != audio->getNumSamples())
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "restored owner audio does not match serialized audio");
+    if (std::abs(snap->audioSampleRate - 48000.0) > 1.0e-6)
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "restored owner audio sample rate is wrong");
+    if (snap->originalF0State != OpenTune::OriginalF0State::Ready)
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "restored originalF0State is not Ready");
+    if (!sameDetectedKey(snap->detectedKey, key))
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "restored DetectedKey does not match");
+    if (!snap->pitchCurve || snap->pitchCurve->getSnapshot()->getOriginalF0().size() != 3)
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "restored pitch curve is missing");
+    if (restoredSpies.publishedKeys.size() != 1 || !sameCaptureKey(restoredSpies.publishedKeys[0], id))
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "deserialize did not publish restored owner audio by ContentKey");
+    if (!restoredSpies.refreshed.empty())
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "Ready owner content should not be refreshed on deserialize");
+
+    return pass("capturePersistenceRoundtripRestoresOwnerContent");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 int main()
@@ -1055,6 +1649,20 @@ int main()
         standaloneHasNoMaterializationStoreDependency(),
         standaloneArrangementIsPlacementOnly(),
         processBlockHasNoStoreOrPublish(),
+        // Phase 3 capture contract tests (P0 guards)
+        captureBindingsHaveNoMaterializationStoreBridge(),
+        captureHasNoIsRenderReadyOrIsRenderFailed(),
+        capturePersistenceDoesNotReadMaterializationStore(),
+        captureCrsUsesRegularVST3CaptureSegmentId(),
+        captureRefreshDoesNotRequestMaterializationRefresh(),
+        captureSegmentHasNoCapturedAudio(),
+        // Phase 3 P1/P2 verification tests
+        captureSegmentContentSnapshotComplete(),
+        captureStaticLifecycleWiring(),
+        captureTickPromotesReadyWithoutReadinessBinding(),
+        captureTickDropsFailedWithoutReentrantBinding(),
+        captureF0CommitDoesNotPromoteUntilTick(),
+        capturePersistenceRoundtripRestoresOwnerContent(),
     };
 
     int passedCount = 0;

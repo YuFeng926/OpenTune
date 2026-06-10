@@ -3,8 +3,10 @@
 
 #include "CaptureCompactor.h"
 #include "CapturePersistence.h"
+#include "../../Content/EditableContentSnapshot.h"
 #include "../../Utils/AppLogger.h"
 #include "../../Utils/ChannelLayoutLogger.h"
+#include "../../Utils/PitchCurve.h"
 
 #include <algorithm>
 
@@ -26,7 +28,7 @@ namespace {
         info.T_start = segment.T_start.load(std::memory_order_acquire);
         info.durationSeconds = segment.durationSeconds;
         info.state = segment.state.load(std::memory_order_acquire);
-        info.materializationId = segment.materializationId;
+        info.contentId = segment.id;
         return info;
     }
 }
@@ -74,7 +76,7 @@ bool CaptureSession::armNewCapture()
     {
         std::lock_guard<std::mutex> lock(mutableMutex_);
 
-        // Cleanup of stale empty Pending segments left behind by interrupted legacy
+        // Cleanup of stale empty Pending segments left behind by interrupted
         // stop sequences. Pending normally lasts only a few timer ticks.
         auto it = mutableSegments_.begin();
         while (it != mutableSegments_.end()) {
@@ -110,6 +112,9 @@ bool CaptureSession::armNewCapture()
         seg->maxSamples = static_cast<int>(kMaxSegmentSeconds * currentSampleRate_);
         seg->fifo.reserve(seg->captureChannels, seg->maxSamples);
         seg->state.store(SegmentState::Capturing, std::memory_order_release);
+
+        seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, seg->id, 0};
+        seg->content = std::make_unique<OpenTune::CaptureSegmentContent>(seg->id);
 
         AppLogger::log("CaptureSession::armNewCapture id=" + juce::String(static_cast<juce::int64>(seg->id))
                        + " captureSampleRate=" + juce::String(seg->captureSampleRate, 1)
@@ -260,8 +265,9 @@ void CaptureSession::processBlock(juce::AudioBuffer<float>& buffer,
     // buffer holding the host's (silent) input.
     if (hit != nullptr && transportRunning && bindings_.replaceWithRendered) {
         const double readStartSeconds = hostTimeSeconds - hit->T_start.load(std::memory_order_acquire);
+        // Capture segment id is the CRS content key.
         bindings_.replaceWithRendered(buffer, /*destStart*/ 0, numSamples,
-                                       hit->materializationId, readStartSeconds, hostSampleRate);
+                                       hit->id, readStartSeconds, hostSampleRate);
     } else if (hit != nullptr && transportRunning) {
         // No binding wired: fail safe by silencing rather than emitting raw dry over the
         // edited time window (which would betray the user's intent).
@@ -369,46 +375,52 @@ void CaptureSession::tick()
         }
     }
 
-    // 3. Poll Processing segments: promote to Edited on success, drop on failure.
-    if (bindings_.isRenderReady || bindings_.isRenderFailed) {
-        std::vector<std::pair<uint64_t, uint64_t>> toEdited;  // (segmentId, materializationId)
-        std::vector<std::unique_ptr<CaptureSegment>> toDropFailed;
+    // 3. Read Processing segments' F0 state directly from content owner.
+    // No reentrant callback — tick() owns the lock while scanning.
+    {
+        std::vector<uint64_t> readyIds;
+        std::vector<uint64_t> failedIds;
+
         {
             std::lock_guard<std::mutex> lock(mutableMutex_);
+
             auto it = mutableSegments_.begin();
             while (it != mutableSegments_.end()) {
                 auto& seg = **it;
                 const auto state = seg.state.load(std::memory_order_acquire);
-                if (state != SegmentState::Processing || seg.materializationId == 0) {
+                if (state != SegmentState::Processing) {
                     ++it;
                     continue;
                 }
-                // Failure path takes precedence: F0 extraction returning empty/unvoiced
-                // means this take is unusable. Drop it so the user can re-record without
-                // getting stuck in Processing forever.
-                if (bindings_.isRenderFailed && bindings_.isRenderFailed(seg.materializationId)) {
+
+                const OriginalF0State f0State = seg.content->editable().originalF0State;
+
+                if (f0State == OriginalF0State::Failed) {
                     AppLogger::warn("CaptureSession: drop Processing segment id="
                                     + juce::String(static_cast<juce::int64>(seg.id))
-                                    + " (render failed)");
-                    if (bindings_.retireMaterialization)
-                        bindings_.retireMaterialization(seg.materializationId);
-                    toDropFailed.push_back(std::move(*it));
+                                    + " (F0 failed)");
+                    failedIds.push_back(seg.id);
+                    queueForReclaimLocked(std::move(*it));
                     it = mutableSegments_.erase(it);
+                    anyChange = true;
                     continue;
                 }
-                if (bindings_.isRenderReady && bindings_.isRenderReady(seg.materializationId)) {
-                    toEdited.emplace_back(seg.id, seg.materializationId);
+
+                if (f0State == OriginalF0State::Ready) {
+                    readyIds.push_back(seg.id);
                 }
+
                 ++it;
             }
-            if (!toDropFailed.empty()) {
-                for (auto& dropped : toDropFailed)
-                    queueForReclaimLocked(std::move(dropped));
-                anyChange = true;
-            }
         }
-        for (auto& [segId, matId] : toEdited) {
-            onSegmentRenderingComplete(segId, matId);
+
+        if (bindings_.retireSegment) {
+            for (uint64_t id : failedIds)
+                bindings_.retireSegment(id);
+        }
+
+        for (uint64_t id : readyIds) {
+            onSegmentRenderingComplete(id);
             anyChange = true;
         }
     }
@@ -430,11 +442,11 @@ void CaptureSession::tick()
             }
         }
         // toDestroy goes out of scope here, releasing the segments.
-        // If retire callback is wired, retire materializations of segments removed by compaction.
-        if (bindings_.retireMaterialization) {
+        // If retire callback is wired, retire segments removed by compaction.
+        if (bindings_.retireSegment) {
             for (auto& seg : toDestroy) {
-                if (seg && seg->materializationId != 0)
-                    bindings_.retireMaterialization(seg->materializationId);
+                if (seg)
+                    bindings_.retireSegment(seg->id);
             }
         }
     }
@@ -445,14 +457,13 @@ void CaptureSession::tick()
 
 // ─── Render pipeline callback ──────────────────────────────────────────────
 
-void CaptureSession::onSegmentRenderingComplete(uint64_t segmentId, uint64_t materializationId)
+void CaptureSession::onSegmentRenderingComplete(uint64_t segmentId)
 {
     CaptureSegment* edited = nullptr;
     {
         std::lock_guard<std::mutex> lock(mutableMutex_);
         for (auto& seg : mutableSegments_) {
             if (seg->id == segmentId) {
-                seg->materializationId = materializationId;
                 seg->state.store(SegmentState::Edited, std::memory_order_release);
                 activeDisplaySegmentId_ = seg->id;
                 edited = seg.get();
@@ -463,8 +474,7 @@ void CaptureSession::onSegmentRenderingComplete(uint64_t segmentId, uint64_t mat
     if (edited == nullptr)
         return;
 
-    AppLogger::log("CaptureSession: segment Edited id=" + juce::String(static_cast<juce::int64>(segmentId))
-                   + " materializationId=" + juce::String(static_cast<juce::int64>(materializationId)));
+    AppLogger::log("CaptureSession: segment Edited id=" + juce::String(static_cast<juce::int64>(segmentId)));
     ChannelLayoutLog::logSegmentFinalize(static_cast<juce::int64>(segmentId),
                                           edited->captureChannels,
                                           edited->durationSeconds);
@@ -473,7 +483,33 @@ void CaptureSession::onSegmentRenderingComplete(uint64_t segmentId, uint64_t mat
     publishSegmentsView();
 
     if (activeSegmentChanged_)
-        activeSegmentChanged_(materializationId);
+        activeSegmentChanged_(segmentId);
+}
+
+bool CaptureSession::commitSegmentF0Result(
+    uint64_t segmentId,
+    std::shared_ptr<PitchCurve> pitchCurve,
+    OriginalF0State state,
+    const DetectedKey& detectedKey)
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+
+    CaptureSegment* seg = nullptr;
+    for (auto& s : mutableSegments_) {
+        if (s->id == segmentId) {
+            seg = s.get();
+            break;
+        }
+    }
+    if (seg == nullptr || !seg->content)
+        return false;
+
+    if (pitchCurve)
+        seg->content->applyPitchCurve(std::move(pitchCurve));
+
+    seg->content->applyDetectedKey(detectedKey);
+    seg->content->applyOriginalF0State(state);
+    return true;
 }
 
 void CaptureSession::setActiveSegmentChangedCallback(ActiveSegmentChangedFn fn)
@@ -518,10 +554,13 @@ size_t CaptureSession::getTotalCapturedBytes() const noexcept
     auto view = std::atomic_load(&publishedSegments_);
     if (view == nullptr) return 0;
     for (auto* seg : view->snapshot) {
-        if (seg->capturedAudio) {
-            total += static_cast<size_t>(seg->capturedAudio->getNumChannels())
-                   * static_cast<size_t>(seg->capturedAudio->getNumSamples())
-                   * sizeof(float);
+        if (seg->content) {
+            const auto& editable = seg->content->editable();
+            if (editable.audioBuffer) {
+                total += static_cast<size_t>(editable.audioBuffer->getNumChannels())
+                       * static_cast<size_t>(editable.audioBuffer->getNumSamples())
+                       * sizeof(float);
+            }
         }
     }
     return total;
@@ -543,8 +582,7 @@ std::vector<SegmentInfo> CaptureSession::listEditedSegments() const
     std::lock_guard<std::mutex> lock(mutableMutex_);
     result.reserve(mutableSegments_.size());
     for (const auto& seg : mutableSegments_) {
-        if (seg->state.load(std::memory_order_acquire) == SegmentState::Edited
-            && seg->materializationId != 0) {
+        if (seg->state.load(std::memory_order_acquire) == SegmentState::Edited) {
             result.push_back(makeSegmentInfo(*seg));
         }
     }
@@ -557,7 +595,6 @@ bool CaptureSession::resolveDisplaySegment(double hostTimeSeconds, SegmentInfo& 
     for (auto it = mutableSegments_.rbegin(); it != mutableSegments_.rend(); ++it) {
         const auto& seg = **it;
         if (seg.state.load(std::memory_order_acquire) == SegmentState::Edited
-            && seg.materializationId != 0
             && seg.containsTime(hostTimeSeconds)) {
             out = makeSegmentInfo(seg);
             return true;
@@ -566,8 +603,7 @@ bool CaptureSession::resolveDisplaySegment(double hostTimeSeconds, SegmentInfo& 
 
     for (const auto& seg : mutableSegments_) {
         if (seg->id == activeDisplaySegmentId_
-            && seg->state.load(std::memory_order_acquire) == SegmentState::Edited
-            && seg->materializationId != 0) {
+            && seg->state.load(std::memory_order_acquire) == SegmentState::Edited) {
             out = makeSegmentInfo(*seg);
             return true;
         }
@@ -592,22 +628,24 @@ bool CaptureSession::deserialize(const juce::MemoryBlock& block)
 
 uint64_t CaptureSession::testInjectEditedSegment(double T_start,
                                                   double durationSeconds,
-                                                  uint64_t materializationId,
+                                                  uint64_t segmentId,
                                                   std::shared_ptr<juce::AudioBuffer<float>> pcm)
 {
     std::lock_guard<std::mutex> lock(mutableMutex_);
     auto seg = std::make_unique<CaptureSegment>();
-    seg->id = nextId();
-    seg->creationOrder = seg->id;
+    const uint64_t id = segmentId > 0 ? segmentId : nextId();
+    seg->id = id;
+    seg->creationOrder = id;
     seg->captureSampleRate = currentSampleRate_;
     seg->captureChannels = pcm ? pcm->getNumChannels() : 2;
     seg->T_start.store(T_start, std::memory_order_release);
     seg->anchored.store(true, std::memory_order_release);
     seg->durationSeconds = durationSeconds;
-    seg->capturedAudio = std::move(pcm);
-    seg->materializationId = materializationId;
+    seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, seg->id, 0};
+    seg->content = std::make_unique<CaptureSegmentContent>(seg->id);
+    if (pcm)
+        seg->content->applyAudioBuffer(pcm.get(), currentSampleRate_);
     seg->state.store(SegmentState::Edited, std::memory_order_release);
-    const auto id = seg->id;
     activeDisplaySegmentId_ = id;
     mutableSegments_.push_back(std::move(seg));
     publishSegmentsView();
@@ -615,6 +653,33 @@ uint64_t CaptureSession::testInjectEditedSegment(double T_start,
 }
 
 // ─── Private helpers ───────────────────────────────────────────────────────
+
+uint64_t CaptureSession::testInjectProcessingSegment(double T_start,
+                                                      double durationSeconds,
+                                                      uint64_t segmentId,
+                                                      std::shared_ptr<juce::AudioBuffer<float>> pcm,
+                                                      double sampleRate)
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    auto seg = std::make_unique<CaptureSegment>();
+    const uint64_t id = segmentId > 0 ? segmentId : nextId();
+    seg->id = id;
+    seg->creationOrder = id;
+    seg->captureSampleRate = sampleRate;
+    seg->captureChannels = pcm ? pcm->getNumChannels() : 1;
+    seg->T_start.store(T_start, std::memory_order_release);
+    seg->anchored.store(true, std::memory_order_release);
+    seg->durationSeconds = durationSeconds;
+    seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, id, 0};
+    seg->content = std::make_unique<CaptureSegmentContent>(id);
+    if (pcm)
+        seg->content->applyAudioBuffer(pcm.get(), sampleRate);
+    seg->content->applyOriginalF0State(OriginalF0State::Extracting);
+    seg->state.store(SegmentState::Processing, std::memory_order_release);
+    mutableSegments_.push_back(std::move(seg));
+    publishSegmentsView();
+    return id;
+}
 
 void CaptureSession::publishSegmentsView()
 {
@@ -680,21 +745,23 @@ bool CaptureSession::finalizePendingCapture(CaptureSegment& pending)
         return true;
     }
 
-    pending.capturedAudio = pcm;
     pending.durationSeconds = static_cast<double>(drained) / pending.captureSampleRate;
+
+    if (!pending.content || !bindings_.publishPlaybackSource) {
+        dropPending();
+        return true;
+    }
+
+    pending.content->applyAudioBuffer(pcm.get(), pending.captureSampleRate);
+    pending.content->applyOriginalF0State(OriginalF0State::Extracting);
+
+    const auto snap = pending.content->snapshotContent();
+    bindings_.publishPlaybackSource(pending.contentKey, snap->audioBuffer, snap->audioSampleRate);
+
     pending.state.store(SegmentState::Processing, std::memory_order_release);
 
-    if (bindings_.submitForRender) {
-        const auto segId = pending.id;
-        const auto matId = bindings_.submitForRender(pcm, pending.captureSampleRate,
-                                                     "VST3 Capture " + juce::String(segId));
-        if (matId != 0) {
-            pending.materializationId = matId;
-        } else {
-            dropPending();
-        }
-    } else {
-        dropPending();
+    if (bindings_.refreshSegment) {
+        bindings_.refreshSegment(pending.id);
     }
 
     return true;
@@ -729,6 +796,32 @@ void CaptureSession::applyNumericGuardForTest(juce::AudioBuffer<float>& buffer) 
                 p[s] = 0.0f;
         }
     }
+}
+
+CaptureSegment* CaptureSession::findSegmentById(uint64_t segmentId) const
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    for (const auto& seg : mutableSegments_) {
+        if (seg->id == segmentId) {
+            return seg.get();
+        }
+    }
+    return nullptr;
+}
+
+CaptureSegment* CaptureSession::findSegmentByContentKey(const ContentKey& key) const
+{
+    if (key.domainKind != DomainKind::RegularVST3Capture) {
+        return nullptr;
+    }
+
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    for (const auto& seg : mutableSegments_) {
+        if (seg->id == key.objectId) {
+            return seg.get();
+        }
+    }
+    return nullptr;
 }
 
 }  // namespace OpenTune::Capture

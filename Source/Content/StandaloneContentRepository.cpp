@@ -119,6 +119,30 @@ std::vector<ContentKey> StandaloneContentRepository::getRetiredClips() const
     return result;
 }
 
+std::vector<uint64_t> StandaloneContentRepository::getRetiredClipIds() const
+{
+    juce::ScopedReadLock rl(lock_);
+    std::vector<uint64_t> result;
+    for (const auto& [id, clip] : clips_) {
+        if (clip && clip->payload().lifecycle == ContentLifecycle::Retired) {
+            result.push_back(id);
+        }
+    }
+    return result;
+}
+
+std::vector<ContentKey> StandaloneContentRepository::getAllClips() const
+{
+    juce::ScopedReadLock rl(lock_);
+    std::vector<ContentKey> result;
+    for (const auto& [id, clip] : clips_) {
+        if (clip) {
+            result.push_back(clip->contentKey());
+        }
+    }
+    return result;
+}
+
 void StandaloneContentRepository::clear()
 {
     juce::ScopedWriteLock wl(lock_);
