@@ -66,8 +66,9 @@ MaterializationTimelineProjection makePianoRollProjection(const StandaloneArrang
     MaterializationTimelineProjection projection;
     projection.timelineStartSeconds = placement.timelineStartSeconds;
     projection.timelineDurationSeconds = placement.durationSeconds;
+    auto snap = processor.getContentSnapshot(placement.contentKey);
     projection.materializationDurationSeconds =
-        processor.getMaterializationAudioDurationById(placement.contentKey.objectId);
+        snap ? snap->sourceWindow.durationSeconds() : placement.durationSeconds;
     return projection;
 }
 
@@ -206,7 +207,8 @@ DetectedKey OpenTuneAudioProcessorEditor::resolveScaleForPlacementMaterializatio
 
     const uint64_t materializationId = hasPlacement ? getStandaloneMaterializationId(processorRef_, trackId, placementIndex) : 0;
     if (materializationId != 0) {
-        const DetectedKey materializationKey = processorRef_.getMaterializationDetectedKeyById(materializationId);
+        auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, materializationId, 0});
+        const DetectedKey materializationKey = snap ? snap->detectedKey : DetectedKey{};
         if (materializationKey.confidence > 0.0f) {
             if (sourceOut) *sourceOut = "materialization";
             return materializationKey;
@@ -447,43 +449,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
             }
         }
     }
-    // [ARA 重构] 过渡：提供内联 contentCommands 实现，factory 函数已删除
-    class StandaloneContentCommandsInline final : public MaterializationContentCommands
-    {
-    public:
-        explicit StandaloneContentCommandsInline(OpenTuneAudioProcessor* proc) noexcept : proc_(proc) {}
-        void setDetectedKey(uint64_t id, const DetectedKey& key) override
-            { if (proc_) proc_->setMaterializationDetectedKeyById(id, key); }
-        void setPitchShiftSettings(uint64_t id, const PitchShiftSettings& s) override
-            { if (proc_) proc_->setPitchShiftSettings(id, s); }
-        void enqueuePartialRender(uint64_t id, double start, double end) override
-            { if (proc_) proc_->enqueueMaterializationPartialRenderById(id, start, end); }
-        uint64_t createMaterialization(uint64_t src, double sr, int ch,
-                                        const juce::AudioBuffer<float>& buf,
-                                        const juce::String& name) override
-        {
-            juce::ignoreUnused(src, sr, ch, buf, name);
-            return 0;
-        }
-        bool commitAutoTuneGeneratedNotes(uint64_t id, const std::vector<Note>& notes,
-                                           int sf, int ef, float rs, float vd, float vr, double asr) override
-            { return proc_ && proc_->commitAutoTuneGeneratedNotesByMaterializationId(id, notes, sf, ef, rs, vd, vr, asr); }
-        bool setNotes(uint64_t id, const std::vector<Note>& notes) override
-            { return proc_ && proc_->setMaterializationNotesById(id, notes); }
-        bool commitNotesAndSegments(uint64_t id, const std::vector<Note>& notes,
-                                     const std::vector<CorrectedSegment>& segs) override
-            { return proc_ && proc_->commitMaterializationNotesAndSegmentsById(id, notes, segs); }
-        bool setCorrectedSegments(uint64_t id, const std::vector<CorrectedSegment>& segs) override
-            { return proc_ && proc_->setMaterializationCorrectedSegmentsById(id, segs); }
-        bool setPitchCurve(uint64_t id, std::shared_ptr<PitchCurve> curve) override
-            { return proc_ && proc_->setMaterializationPitchCurveById(id, std::move(curve)); }
-        bool setTimeGrid(uint64_t id, std::shared_ptr<const TimeGridSnapshot> g, int64_t s, int64_t e) override
-            { return proc_ && proc_->setMaterializationTimeGridById(id, std::move(g), s, e); }
-    private:
-        OpenTuneAudioProcessor* proc_;
-    };
-    pianoRoll_.setContentProviders(nullptr,
-        std::make_shared<StandaloneContentCommandsInline>(&processorRef_));
+    pianoRoll_.setContentCommands(processorRef_.getContentCommands());
     pianoRoll_.setPianoKeyAudition(&processorRef_.getPianoKeyAudition());
     {
         const int activeTrack = getStandaloneActiveTrack(processorRef_);
@@ -1081,15 +1047,13 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         const uint64_t activeMaterializationId = (activeTrack >= 0 && activePlacementIndex >= 0)
             ? getStandaloneMaterializationId(processorRef_, activeTrack, activePlacementIndex)
             : 0;
-        auto curve = processorRef_.getMaterializationPitchCurveById(activeMaterializationId);
+        auto ck = ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0};
+        auto snap = processorRef_.getContentSnapshot(ck);
+        auto curve = snap ? snap->pitchCurve : nullptr;
         std::shared_ptr<const juce::AudioBuffer<float>> materializationBuffer =
-            processorRef_.getMaterializationAudioBufferById(activeMaterializationId);
-        // notesRevision changes (without matId / curve / buffer changing) when
-        // an async note generator commits new notes to the active materialization.
-        // Without polling this we'd miss the GAME backend's late note commit and
-        // the user would have to switch tracks to see the notes appear.
-        const uint64_t currentNotesRevision = activeMaterializationId != 0
-            ? processorRef_.getMaterializationNotesSnapshotById(activeMaterializationId).notesRevision
+            snap ? snap->audioBuffer : nullptr;
+        const uint64_t currentNotesRevision = activeMaterializationId != 0 && snap
+            ? snap->notesRevision
             : 0;
         const bool materializationChanged =
             activeMaterializationId != lastPianoRollMaterializationId_
@@ -1097,7 +1061,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             || curve != lastPianoRollCurve_
             || materializationBuffer != lastPianoRollBuffer_;
         if (materializationChanged) {
-            pianoRoll_.setEditedMaterialization(activeMaterializationId, curve, materializationBuffer, sr);
+            pianoRoll_.setEditedMaterialization(ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0}, curve, materializationBuffer, sr);
             lastPianoRollMaterializationId_ = activeMaterializationId;
             lastPianoRollSampleRate_ = sr;
             lastPianoRollCurve_ = curve;
@@ -1133,7 +1097,8 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         if (targetMaterializationId == 0) {
             shouldUnlatch = true;
         } else {
-            const auto f0State = processorRef_.getMaterializationOriginalF0StateById(targetMaterializationId);
+            auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, targetMaterializationId, 0});
+            const auto f0State = snap ? snap->originalF0State : OriginalF0State::NotRequested;
             const bool f0Done = (f0State == OriginalF0State::Ready
                                   || f0State == OriginalF0State::Failed);
             const bool noteGenBusy = processorRef_.isNoteGenInFlightForMaterialization(targetMaterializationId);
@@ -1203,7 +1168,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         const uint64_t activeMaterializationId = (activeTrack >= 0 && activePlacementIndex >= 0)
             ? getStandaloneMaterializationId(processorRef_, activeTrack, activePlacementIndex)
             : 0;
-        const auto chunkStats = processorRef_.getMaterializationChunkStatsById(activeMaterializationId);
+        auto rc = processorRef_.getContentRenderService()->getRenderCache(
+            ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0});
+        const auto chunkStats = rc ? rc->getChunkStats() : RenderCache::ChunkStats{};
         stage1HasWork = chunkStats.hasActiveWork();
         stage1Done    = chunkStats.idle + chunkStats.blank;
         stage1Total   = chunkStats.total();
@@ -1333,7 +1300,8 @@ RenderStatusSnapshot OpenTuneAudioProcessorEditor::getRenderStatusSnapshot() con
         return snapshot;
     }
 
-    auto renderCache = processorRef_.getMaterializationRenderCacheById(materializationId);
+    auto renderCache = processorRef_.getContentRenderService()->getRenderCache(
+        ContentKey{DomainKind::StandaloneClip, materializationId, 0});
     if (renderCache == nullptr) {
         snapshot.materializationId = 0;
         snapshot.placementId = 0;
@@ -1354,10 +1322,11 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
                                                   : MaterializationTimelineProjection{});
 
     const int sr = static_cast<int>(processorRef_.getSampleRate());
+    auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, clipId, 0});
     std::shared_ptr<const juce::AudioBuffer<float>> materializationBuffer =
-        processorRef_.getMaterializationAudioBufferById(clipId);
-    auto curve = processorRef_.getMaterializationPitchCurveById(clipId);
-    pianoRoll_.setEditedMaterialization(clipId, curve, materializationBuffer, sr);
+        snap ? snap->audioBuffer : nullptr;
+    auto curve = snap ? snap->pitchCurve : nullptr;
+    pianoRoll_.setEditedMaterialization(ContentKey{DomainKind::StandaloneClip, clipId, 0}, curve, materializationBuffer, sr);
 
     lastPianoRollMaterializationId_ = clipId;
     lastPianoRollSampleRate_ = sr;
@@ -1373,7 +1342,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
     if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS)
     {
         pianoRoll_.setMaterializationProjection({});
-        pianoRoll_.setEditedMaterialization(0, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
+        pianoRoll_.setEditedMaterialization(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
         lastPianoRollMaterializationId_ = 0;
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
@@ -1387,7 +1356,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
     {
         setStandaloneSelectedPlacementIndex(processorRef_, trackId, -1);
         pianoRoll_.setMaterializationProjection({});
-        pianoRoll_.setEditedMaterialization(0, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
+        pianoRoll_.setEditedMaterialization(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
         lastPianoRollMaterializationId_ = 0;
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
@@ -1399,7 +1368,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
     {
         setStandaloneSelectedPlacementIndex(processorRef_, trackId, -1);
         pianoRoll_.setMaterializationProjection({});
-        pianoRoll_.setEditedMaterialization(0, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
+        pianoRoll_.setEditedMaterialization(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
         lastPianoRollMaterializationId_ = 0;
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
@@ -1756,17 +1725,20 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
 
                     safeThis->arrangementView_.grabKeyboardFocus();
                     safeThis->applyPlacementSelectionContext(placement.trackId, committedPlacement.placementId);
-                    safeThis->pianoRoll_.setEditedMaterialization(committedPlacement.materializationId,
+                    auto importSnap = safeThis->processorRef_.getContentSnapshot(
+                        ContentKey{DomainKind::StandaloneClip, committedPlacement.materializationId, 0});
+                    auto importBuf = importSnap ? importSnap->audioBuffer : nullptr;
+                    safeThis->pianoRoll_.setEditedMaterialization(ContentKey{DomainKind::StandaloneClip, committedPlacement.materializationId, 0},
                                                           nullptr,
-                                                            safeThis->processorRef_.getMaterializationAudioBufferById(committedPlacement.materializationId),
+                                                            importBuf,
                                                           static_cast<int>(safeThis->processorRef_.getSampleRate()));
                     safeThis->lastPianoRollMaterializationId_ = committedPlacement.materializationId;
                     safeThis->lastPianoRollCurve_.reset();
-                    safeThis->lastPianoRollBuffer_ = safeThis->processorRef_.getMaterializationAudioBufferById(committedPlacement.materializationId);
+                    safeThis->lastPianoRollBuffer_ = importBuf;
 
                     OpenTuneAudioProcessor::MaterializationRefreshRequest refreshRequest;
-                    refreshRequest.materializationId = committedPlacement.materializationId;
-                    if (!safeThis->processorRef_.requestMaterializationRefresh(refreshRequest)) {
+                    refreshRequest.contentKey = ContentKey{DomainKind::StandaloneClip, committedPlacement.materializationId, 0};
+                    if (!safeThis->processorRef_.requestContentRefresh(refreshRequest)) {
                         AppLogger::log("ClipDerivedRefresh: standalone request rejected materializationId="
                             + juce::String(static_cast<juce::int64>(committedPlacement.materializationId)));
                     } else {
@@ -2403,18 +2375,19 @@ void OpenTuneAudioProcessorEditor::performUndoRedoAction(bool isUndo)
         ? getStandaloneMaterializationId(processorRef_, activeTrack, activePlacementIndex) : 0;
     if (matId == 0) return;
 
-    auto curve = processorRef_.getMaterializationPitchCurveById(matId);
+    auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, matId, 0});
+    auto curve = snap ? snap->pitchCurve : nullptr;
     if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
 
     double startSec = 0.0;
     double endSec = pianoRoll_.getMaterializationDurationSeconds();
     auto* editAction = dynamic_cast<OpenTune::PianoRollEditAction*>(action);
-    if (editAction && editAction->getMaterializationId() == matId && editAction->getAffectedEndFrame() > 0) {
+    if (editAction && editAction->getContentKey().objectId == matId && editAction->getAffectedEndFrame() > 0) {
         const double spf = static_cast<double>(curve->getHopSize()) / curve->getSampleRate();
         startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
         endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
     }
-    processorRef_.enqueueMaterializationPartialRenderById(matId, startSec, endSec);
+    processorRef_.enqueueContentPartialRender(ContentKey{DomainKind::StandaloneClip, matId, 0}, startSec, endSec);
 
     projectSession_.markDirty();
 }
@@ -2515,7 +2488,7 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
     const DetectedKey newKey = makeDetectedKeyFromUi(newRoot, newScaleType, 1.0f);
 
     if (activeMaterializationId != 0) {
-        processorRef_.setMaterializationDetectedKeyById(activeMaterializationId, newKey);
+        processorRef_.setContentDetectedKey(ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0}, newKey);
     }
     applyScaleToUi(newRoot, newScaleType);
 
@@ -2920,10 +2893,11 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     auto commands = processorRef_.getContentCommands();
     content->setOnConfirm([this, materializationId, currentSettings, commands](const PitchShiftSettings& newSettings) {
         if (newSettings != currentSettings) {
+            ContentKey key{DomainKind::StandaloneClip, materializationId, 0};
             processorRef_.getUndoManager().addAction(std::make_unique<PitchShiftEditAction>(
-                commands, materializationId, currentSettings, newSettings));
+                commands, key, currentSettings, newSettings));
             if (commands)
-                commands->setPitchShiftSettings(materializationId, newSettings);
+                commands->setPitchShiftSettings(key, newSettings);
             parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
             projectSession_.markDirty();
         }
@@ -2932,10 +2906,11 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     content->setOnReset([this, materializationId, currentSettings, commands]() {
         const auto identity = PitchShiftSettings::identity();
         if (identity != currentSettings) {
+            ContentKey key{DomainKind::StandaloneClip, materializationId, 0};
             processorRef_.getUndoManager().addAction(std::make_unique<PitchShiftEditAction>(
-                commands, materializationId, currentSettings, identity));
+                commands, key, currentSettings, identity));
             if (commands)
-                commands->setPitchShiftSettings(materializationId, identity);
+                commands->setPitchShiftSettings(key, identity);
             parameterPanel_.setPitchShiftIndicator(0, 0);
             projectSession_.markDirty();
         }
@@ -2966,7 +2941,8 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
         return;
     }
 
-    auto curve = processorRef_.getMaterializationPitchCurveById(materializationId);
+    auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, materializationId, 0});
+    auto curve = snap ? snap->pitchCurve : nullptr;
     if (!curve) {
         return;
     }
@@ -3008,7 +2984,7 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
         + " frameRange=[" + juce::String(startFrame) + "," + juce::String(endFrame) + "]"
         + " secRange=[" + juce::String(editStartSec, 3) + "," + juce::String(editEndSec, 3) + "]");
 
-    processorRef_.enqueueMaterializationPartialRenderById(materializationId, editStartSec, editEndSec);
+    processorRef_.enqueueContentPartialRender(ContentKey{DomainKind::StandaloneClip, materializationId, 0}, editStartSec, editEndSec);
 
     projectSession_.markDirty();
 }

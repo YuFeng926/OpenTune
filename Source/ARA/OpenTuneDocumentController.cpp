@@ -77,8 +77,7 @@ void OpenTuneDocumentController::runContentReclaimSweep()
     // 清理每个 AudioModification 的 retired content records
     for (auto& mod : audioModifications_)
     {
-        // 如果 retired records 没有被 undo/revive 引用，可以释放
-        // 简化实现：暂时保留所有 retired records，后续可添加 reclaim 策略
+        (void)mod;
     }
 
     // 清理 CRS derived artifacts（如果有）
@@ -1142,18 +1141,6 @@ std::vector<Note> OpenTuneDocumentController::readNotes(ContentKey key) const
     return mod->content.editable.notes;
 }
 
-MaterializationStore::MaterializationNotesSnapshot OpenTuneDocumentController::readNotesSnapshot(ContentKey key) const
-{
-    MaterializationStore::MaterializationNotesSnapshot snap;
-    const auto* mod = findAudioModificationByContentKey(key);
-    if (mod != nullptr)
-    {
-        snap.notes = mod->content.editable.notes;
-        snap.notesRevision = mod->content.editable.notesRevision;
-    }
-    return snap;
-}
-
 uint64_t OpenTuneDocumentController::readNotesRevision(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);
@@ -1212,7 +1199,7 @@ bool OpenTuneDocumentController::readChunkBoundaries(ContentKey key, std::vector
     const auto& silentGaps = mod->content.analysis.silentGaps;
     constexpr int hopSize = 512; // DC 没有 vocoderDomain_，使用默认值
 
-    auto boundaries = MaterializationStore::buildChunkBoundariesFromSilentGaps(
+    auto boundaries = RenderChunkPlanner::buildChunkBoundariesFromSilentGaps(
         sampleCount, silentGaps, hopSize);
 
     outSeconds.reserve(boundaries.size());
@@ -1249,38 +1236,12 @@ bool OpenTuneDocumentController::hasContent(ContentKey key) const
     return mod != nullptr && mod->content.lifecycle == ContentLifecycle::Ready;
 }
 
-MaterializationStore::MaterializationSnapshot OpenTuneDocumentController::readSnapshot(ContentKey key) const
+std::shared_ptr<const EditableContentSnapshot>
+OpenTuneDocumentController::readContentSnapshot(ContentKey key) const
 {
-    MaterializationStore::MaterializationSnapshot snap;
     const auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr) return snap;
-
-    auto editableSnap = mod->snapshotContent();
-
-    snap.sourceId = mod->sourceId;
-    snap.sourceWindow = editableSnap->sourceWindow;
-    snap.originalF0State = editableSnap->originalF0State;
-    snap.detectedKey = editableSnap->detectedKey;
-    snap.notes = editableSnap->notes;
-    snap.notesRevision = editableSnap->notesRevision;
-    snap.timeGrid = editableSnap->timeGrid;
-    snap.timeGridRevision = editableSnap->timeGridRevision;
-    snap.pitchShiftSettings = editableSnap->pitchShiftSettings;
-    snap.pitchRevision = editableSnap->pitchRevision;
-    snap.pitchShiftRevision = editableSnap->pitchShiftRevision;
-    snap.pitchCurve = editableSnap->pitchCurve;
-
-    // Materialization 层特有字段：snapshotContent() 不含这些
-    snap.silentGaps = mod->content.analysis.silentGaps;
-
-    PlaybackReadSource crsSrc;
-    if (contentRenderService_ != nullptr && contentRenderService_->getPlaybackReadSource(key, crsSrc))
-    {
-        snap.audioBuffer = crsSrc.audioBuffer;
-        snap.renderCache = crsSrc.renderCache;
-    }
-
-    return snap;
+    if (!mod) return nullptr;
+    return mod->snapshotContent();
 }
 
 } // namespace OpenTune

@@ -5,6 +5,7 @@
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"
 #include "../Utils/PitchShiftSettings.h"
+#include "../DSP/ReferenceFeatures.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <vector>
 #include <memory>
@@ -29,6 +30,7 @@ struct EditableContentState
     std::vector<CorrectedSegment> correctedSegments;
     std::shared_ptr<const TimeGridSnapshot> timeGrid;
     PitchShiftSettings pitchShiftSettings;
+    ReferenceFeatureSet referenceFeatures;
     uint64_t notesRevision{0};
     uint64_t pitchRevision{0};
     uint64_t timeGridRevision{0};

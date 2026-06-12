@@ -1,7 +1,7 @@
 #pragma once
 
 #include "F0ExtractionService.h"
-#include "../MaterializationStore.h"
+#include "../Content/EditableContentSnapshot.h"
 #include "../Inference/F0InferenceService.h"
 #include "../Utils/TimeCoordinate.h"
 
@@ -11,9 +11,9 @@
 namespace OpenTune {
 
 inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
-                                             const MaterializationStore::MaterializationSnapshot& snap,
-                                             F0ExtractionService::Result& out,
-                                             std::string& errorMessage)
+                                              const EditableContentSnapshot& snap,
+                                              F0ExtractionService::Result& out,
+                                              std::string& errorMessage)
 {
     if (snap.audioBuffer == nullptr) {
         errorMessage = "clip_snapshot_failed";
@@ -27,11 +27,9 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
         return false;
     }
 
-    // F0Alignment: audio duration
     constexpr double internalSampleRate = TimeCoordinate::kRenderSampleRate;
     out.audioDurationSeconds = static_cast<double>(numSamples) / internalSampleRate;
 
-    // F0Alignment: first audible sample on channel 0 (matches the F0 input below).
     {
         int firstAudibleSample = -1;
         const float* probe = snap.audioBuffer->getReadPointer(0);
@@ -46,16 +44,11 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
             : -1.0;
     }
 
-    // Per channel-layout-policy spec: F0 extraction always sources from channel 0
-    // of the stored audio. Storage is guaranteed to be 1 or 2 channels (mono or
-    // stereo); ch 0 is the mono channel or the L of stereo, treated identically.
     const float* src = snap.audioBuffer->getReadPointer(0);
 
-    // Materialization audio is stored in the shared runtime's fixed local sample-rate domain.
     const int hopSize = f0Service.getF0HopSize();
     const int f0SampleRate = f0Service.getF0SampleRate();
 
-    // F0Alignment: expected inference frame count
     out.expectedInferenceFrameCount = static_cast<int>(std::ceil(out.audioDurationSeconds
         * static_cast<double>(f0SampleRate) / static_cast<double>(juce::jmax(1, hopSize))));
 
@@ -100,7 +93,6 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
     out.f0SampleRate = f0SampleRate;
     out.modelName = "RMVPE";
 
-    // F0Alignment: first voiced frame/time
     {
         out.firstVoicedFrame = -1;
         out.firstVoicedTimeSeconds = -1.0;

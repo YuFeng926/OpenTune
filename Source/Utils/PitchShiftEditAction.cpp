@@ -1,14 +1,14 @@
 #include "PitchShiftEditAction.h"
-#include "../ARA/MaterializationContentProvider.h"
+#include "Content/ContentEditCommands.h"
 
 namespace OpenTune {
 
-PitchShiftEditAction::PitchShiftEditAction(std::shared_ptr<MaterializationContentCommands> commands,
-                                           uint64_t materializationId,
+PitchShiftEditAction::PitchShiftEditAction(std::shared_ptr<ContentEditCommands> commands,
+                                           ContentKey key,
                                            PitchShiftSettings oldSettings,
                                            PitchShiftSettings newSettings)
     : commands_(std::move(commands))
-    , materializationId_(materializationId)
+    , contentKey_(key)
     , oldSettings_(oldSettings)
     , newSettings_(newSettings)
 {
@@ -35,7 +35,7 @@ void PitchShiftEditAction::redo()
 void PitchShiftEditAction::applySettings(const PitchShiftSettings& settings)
 {
     if (commands_ != nullptr)
-        commands_->setPitchShiftSettings(materializationId_, settings);
+        commands_->setPitchShiftSettings(contentKey_, settings);
 }
 
 } // namespace OpenTune

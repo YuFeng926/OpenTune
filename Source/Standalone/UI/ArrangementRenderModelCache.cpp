@@ -331,7 +331,8 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         if (getAnalysisState)
             vp.analysisInProgress = getAnalysisState(placementId);
 
-        auto audioBuffer = processor.getMaterializationAudioBufferById(materializationId);
+        auto snap = processor.getContentSnapshot(placement.contentKey);
+        auto audioBuffer = snap ? snap->audioBuffer : nullptr;
         vp.hasAudioBuffer = (audioBuffer != nullptr);
 
         if (audioBuffer != nullptr) {

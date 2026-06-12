@@ -611,20 +611,20 @@ bool MaterializationStore::setPitchShiftSettings(uint64_t materializationId, con
 // Stretcher (delegates to StretcherPool via CRS)
 // ============================================================================
 
-SoundTouchStretcher* MaterializationStore::getOpenTuneStretcher(uint64_t materializationId,
+SoundTouchStretcher* MaterializationStore::getOpenTuneStretcher(ContentKey key,
                                                                    double sampleRate,
                                                                    int channels)
 {
-    if (materializationId == 0 || sampleRate <= 0.0 || channels <= 0) return nullptr;
+    if (!key.isValid() || sampleRate <= 0.0 || channels <= 0) return nullptr;
 
     {
         const juce::ScopedReadLock readLock(lock_);
-        const auto it = materializations_.find(materializationId);
+        const auto it = materializations_.find(key.objectId);
         if (it == materializations_.end() || it->second.isRetired_) return nullptr;
     }
 
     return hasRuntimeServices()
-        ? contentRenderService_->getStretcher(contentKeyForMaterializationId(materializationId), sampleRate, channels)
+        ? contentRenderService_->getStretcher(key, sampleRate, channels)
         : nullptr;
 }
 
@@ -853,14 +853,6 @@ uint64_t MaterializationStore::findMaterializationBySourceWindow(uint64_t source
         }
     }
     return 0;
-}
-
-std::vector<int64_t> MaterializationStore::buildChunkBoundariesFromSilentGaps(
-    int64_t materializationSampleCount,
-    const std::vector<SilentGap>& silentGaps,
-    int hopSize)
-{
-    return RenderChunkPlanner::buildChunkBoundariesFromSilentGaps(materializationSampleCount, silentGaps, hopSize);
 }
 
 std::vector<uint64_t> MaterializationStore::getAllActiveMaterializationIds() const

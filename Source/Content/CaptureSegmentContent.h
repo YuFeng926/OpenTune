@@ -32,6 +32,7 @@ public:
     void applyOriginalF0State(OriginalF0State state);
     void applyDetectedKey(const DetectedKey& key);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
+    void applyReferenceFeatures(const ReferenceFeatureSet& features);
     std::shared_ptr<PitchCurve> pitchCurve() const { return pitchCurve_; }
 
 private:

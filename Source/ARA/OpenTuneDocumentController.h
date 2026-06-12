@@ -9,7 +9,6 @@
 
 #include "AudioModification.h"
 #include "AudioSource.h"
-#include "../MaterializationStore.h"
 #include "../Render/ContentRenderService.h"
 #include "../Content/ContentKey.h"
 #include "PlaybackRegion.h"
@@ -94,9 +93,6 @@ public:
     /** 读取音符 */
     std::vector<Note> readNotes(ContentKey key) const;
 
-    /** 读取音符快照 */
-    MaterializationStore::MaterializationNotesSnapshot readNotesSnapshot(ContentKey key) const;
-
     /** 读取音符版本号 */
     uint64_t readNotesRevision(ContentKey key) const;
 
@@ -127,8 +123,8 @@ public:
     /** 是否有内容 */
     bool hasContent(ContentKey key) const;
 
-    /** 组合快照（兼容旧 MaterializationSnapshot 接口） */
-    MaterializationStore::MaterializationSnapshot readSnapshot(ContentKey key) const;
+    /** Phase 4: 返回 EditableContentSnapshot — 唯一的跨域 snapshot 类型 */
+    std::shared_ptr<const EditableContentSnapshot> readContentSnapshot(ContentKey key) const;
 
     std::vector<PlaybackRegionProjection> getPlaybackRegionProjections() const;
     std::vector<PlaybackRegionProjection> getPlaybackRegionProjectionsFor(

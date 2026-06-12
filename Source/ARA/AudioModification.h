@@ -60,6 +60,8 @@ struct AudioModification
     void applyPitchShift(const PitchShiftSettings& settings);
     void applyDetectedKey(const DetectedKey& key);
     void applyF0Analysis(std::shared_ptr<PitchCurve> curve);
+    void applyOriginalF0State(OriginalF0State state);
+    void applyReferenceFeatures(const ReferenceFeatureSet& features);
 };
 
 } // namespace OpenTune

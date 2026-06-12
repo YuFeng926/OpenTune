@@ -109,170 +109,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , menuBar_(processor, MenuBarComponent::Profile::Plugin)
     , topBar_(menuBar_, transportBar_)
 {
-    // Select content provider backend based on ARA availability
-    // [ARA 重构] MaterializationContentProvider 工厂函数已删除，
-    // 内容访问通过 DomainContentOwner 接口路由。
-    class PluginContentAccessInline final : public MaterializationContentAccess
-    {
-    public:
-        explicit PluginContentAccessInline(OpenTuneAudioProcessor* proc) noexcept : proc_(proc) {}
-
-        MaterializationStore::MaterializationSnapshot getSnapshot(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readSnapshot({DomainKind::ARAAudioModification, id, 0});
-#endif
-            MaterializationStore::MaterializationSnapshot snap;
-            if (proc_ && proc_->getMaterializationStore())
-                proc_->getMaterializationStore()->getSnapshot(id, snap);
-            return snap;
-        }
-
-        double getMaterializationDuration(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readMaterializationDuration({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ ? proc_->getMaterializationAudioDurationById(id) : 0.0;
-        }
-
-        uint64_t getSourceId(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readSourceId({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return getSnapshot(id).sourceId;
-        }
-
-        PitchShiftSettings getPitchShift(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readPitchShift({DomainKind::ARAAudioModification, id, 0});
-#endif
-            PitchShiftSettings s;
-            if (proc_)
-                s = proc_->getPitchShiftSettings(id);
-            return s;
-        }
-
-        bool hasMaterialization(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->hasContent({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ && proc_->getMaterializationStore()
-                && proc_->getMaterializationStore()->containsMaterialization(id);
-        }
-
-        std::shared_ptr<const juce::AudioBuffer<float>> getAudioBuffer(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readAudioBuffer({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ ? proc_->getMaterializationAudioBufferById(id) : nullptr;
-        }
-
-        std::shared_ptr<PitchCurve> getPitchCurve(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readPitchCurve({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ ? proc_->getMaterializationPitchCurveById(id) : nullptr;
-        }
-
-        OriginalF0State getOriginalF0State(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readOriginalF0State({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ ? proc_->getMaterializationOriginalF0StateById(id) : OriginalF0State::NotRequested;
-        }
-
-        DetectedKey getDetectedKey(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readDetectedKey({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ ? proc_->getMaterializationDetectedKeyById(id) : DetectedKey{};
-        }
-
-        std::vector<Note> getNotes(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readNotes({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ ? proc_->getMaterializationNotesById(id) : std::vector<Note>{};
-        }
-
-        MaterializationStore::MaterializationNotesSnapshot getNotesSnapshot(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readNotesSnapshot({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ ? proc_->getMaterializationNotesSnapshotById(id)
-                : MaterializationStore::MaterializationNotesSnapshot{};
-        }
-
-        uint64_t getNotesRevision(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readNotesRevision({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return getNotesSnapshot(id).notesRevision;
-        }
-
-        std::shared_ptr<const TimeGridSnapshot> getTimeGrid(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readTimeGrid({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ ? proc_->getMaterializationTimeGridById(id) : nullptr;
-        }
-
-        uint64_t getTimeGridRevision(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readTimeGridRevision({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ ? proc_->getMaterializationTimeGridRevisionById(id) : 0;
-        }
-
-        RenderCache::ChunkStats getChunkStats(uint64_t id) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readChunkStats({DomainKind::ARAAudioModification, id, 0});
-#endif
-            return proc_ ? proc_->getMaterializationChunkStatsById(id) : RenderCache::ChunkStats{};
-        }
-
-        bool getChunkBoundaries(uint64_t id, std::vector<double>& out) const override
-        {
-#if JucePlugin_Enable_ARA
-            if (auto* dc = proc_ ? proc_->getDocumentController() : nullptr)
-                return dc->readChunkBoundaries({DomainKind::ARAAudioModification, id, 0}, out);
-#endif
-            return proc_ && proc_->getMaterializationChunkBoundariesById(id, out);
-        }
-
-    private:
-        OpenTuneAudioProcessor* proc_;
-    };
-    contentAccess_ = std::make_shared<PluginContentAccessInline>(&processorRef_);
     contentCommands_ = processorRef_.getContentCommands();
 
     menuBar_.setVisible(false);
@@ -510,7 +346,17 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     bool shouldShowOverlay = false;
 
     const uint64_t activeMaterializationId = resolveCurrentMaterializationId();
-    const auto chunkStats = contentAccess_->getChunkStats(activeMaterializationId);
+    RenderCache::ChunkStats chunkStats;
+#if JucePlugin_Enable_ARA
+    if (auto* dc = processorRef_.getDocumentController())
+        chunkStats = dc->readChunkStats({DomainKind::ARAAudioModification, activeMaterializationId, 0});
+    else
+#endif
+    {
+        auto key = ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0};
+        auto rc = processorRef_.getContentRenderService()->getRenderCache(key);
+        chunkStats = rc ? rc->getChunkStats() : RenderCache::ChunkStats{};
+    }
     const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
     const bool hasActiveRender = chunkStats.hasActiveWork();
 
@@ -519,8 +365,16 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // changing materializationId already triggers a refresh via
     // syncMaterializationProjectionToPianoRoll �?setEditedMaterialization.
     if (activeMaterializationId != 0) {
-        const uint64_t currentNotesRevision =
-            contentAccess_->getNotesRevision(activeMaterializationId);
+        uint64_t currentNotesRevision = 0;
+#if JucePlugin_Enable_ARA
+        if (auto* dc = processorRef_.getDocumentController())
+            currentNotesRevision = dc->readNotesRevision({DomainKind::ARAAudioModification, activeMaterializationId, 0});
+        else
+#endif
+        {
+            auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0});
+            currentNotesRevision = snap ? snap->notesRevision : 0;
+        }
         if (activeMaterializationId == lastPianoRollNotesRevisionMatId_
             && currentNotesRevision != lastPianoRollNotesRevision_
             && pianoRoll_.isShowing()) {
@@ -535,12 +389,19 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
     // Pull fresh TimeGrid when external commits / undo-redo publish silently.
-    // Revision increments on every setMaterializationTimeGridById() call;
     // tool-handler edits fire notifyTimeGridChanged with Interactive priority
     // for sub-frame latency; this polling guard catches the non-interactive paths.
     if (activeMaterializationId != 0) {
-        const uint64_t currentTimeGridRevision =
-            contentAccess_->getTimeGridRevision(activeMaterializationId);
+        uint64_t currentTimeGridRevision = 0;
+#if JucePlugin_Enable_ARA
+        if (auto* dc = processorRef_.getDocumentController())
+            currentTimeGridRevision = dc->readTimeGridRevision({DomainKind::ARAAudioModification, activeMaterializationId, 0});
+        else
+#endif
+        {
+            auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0});
+            currentTimeGridRevision = snap ? snap->timeGridRevision : 0;
+        }
         if (activeMaterializationId == lastPianoRollTimeGridRevisionMatId_
             && currentTimeGridRevision != lastPianoRollTimeGridRevision_
             && pianoRoll_.isShowing()) {
@@ -993,18 +854,27 @@ void OpenTuneAudioProcessorEditor::undoRequested()
     const uint64_t matId = resolveCurrentMaterializationId();
     if (matId == 0) return;
 
-    auto curve = contentAccess_->getPitchCurve(matId);
+    std::shared_ptr<PitchCurve> curve;
+#if JucePlugin_Enable_ARA
+    if (auto* dc = processorRef_.getDocumentController())
+        curve = dc->readPitchCurve({DomainKind::ARAAudioModification, matId, 0});
+    else
+#endif
+    {
+        auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, matId, 0});
+        curve = snap ? snap->pitchCurve : nullptr;
+    }
     if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
 
     double startSec = 0.0;
     double endSec = pianoRoll_.getMaterializationDurationSeconds();
     auto* editAction = dynamic_cast<OpenTune::PianoRollEditAction*>(action);
-    if (editAction && editAction->getMaterializationId() == matId && editAction->getAffectedEndFrame() > 0) {
+    if (editAction && editAction->getContentKey().objectId == matId && editAction->getAffectedEndFrame() > 0) {
         const double spf = static_cast<double>(curve->getHopSize()) / curve->getSampleRate();
         startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
         endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
     }
-    contentCommands_->enqueuePartialRender(matId, startSec, endSec);
+    contentCommands_->enqueuePartialRender(ContentKey{DomainKind::ARAAudioModification, matId, 0}, startSec, endSec);
 }
 
 void OpenTuneAudioProcessorEditor::redoRequested()
@@ -1015,18 +885,27 @@ void OpenTuneAudioProcessorEditor::redoRequested()
     const uint64_t matId = resolveCurrentMaterializationId();
     if (matId == 0) return;
 
-    auto curve = contentAccess_->getPitchCurve(matId);
+    std::shared_ptr<PitchCurve> curve;
+#if JucePlugin_Enable_ARA
+    if (auto* dc = processorRef_.getDocumentController())
+        curve = dc->readPitchCurve({DomainKind::ARAAudioModification, matId, 0});
+    else
+#endif
+    {
+        auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, matId, 0});
+        curve = snap ? snap->pitchCurve : nullptr;
+    }
     if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
 
     double startSec = 0.0;
     double endSec = pianoRoll_.getMaterializationDurationSeconds();
     auto* editAction = dynamic_cast<OpenTune::PianoRollEditAction*>(action);
-    if (editAction && editAction->getMaterializationId() == matId && editAction->getAffectedEndFrame() > 0) {
+    if (editAction && editAction->getContentKey().objectId == matId && editAction->getAffectedEndFrame() > 0) {
         const double spf = static_cast<double>(curve->getHopSize()) / curve->getSampleRate();
         startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
         endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
     }
-    contentCommands_->enqueuePartialRender(matId, startSec, endSec);
+    contentCommands_->enqueuePartialRender(ContentKey{DomainKind::ARAAudioModification, matId, 0}, startSec, endSec);
 }
 
 void OpenTuneAudioProcessorEditor::mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme)
@@ -1107,7 +986,7 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
         key.root = static_cast<Key>(clampedRoot);
         key.scale = (clampedType == 2) ? Scale::Minor : ((clampedType == 3) ? Scale::Chromatic : Scale::Major);
         key.confidence = 1.0f;
-        contentCommands_->setDetectedKey(materializationId, key);
+        contentCommands_->setDetectedKey(ContentKey{DomainKind::ARAAudioModification, materializationId, 0}, key);
     }
 }
 
@@ -1229,7 +1108,16 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
         return;
     }
 
-    const auto f0State = contentAccess_->getOriginalF0State(materializationId);
+    OriginalF0State f0State = OriginalF0State::NotRequested;
+#if JucePlugin_Enable_ARA
+    if (auto* dc = processorRef_.getDocumentController())
+        f0State = dc->readOriginalF0State({DomainKind::ARAAudioModification, materializationId, 0});
+    else
+#endif
+    {
+        auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, materializationId, 0});
+        f0State = snap ? snap->originalF0State : OriginalF0State::NotRequested;
+    }
     if (f0State == OriginalF0State::Extracting) {
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::InfoIcon,
@@ -1267,7 +1155,13 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     const uint64_t materializationId = resolveCurrentMaterializationId();
     if (materializationId == 0) return;
 
-    const auto currentSettings = contentAccess_->getPitchShift(materializationId);
+    PitchShiftSettings currentSettings = PitchShiftSettings::identity();
+#if JucePlugin_Enable_ARA
+    if (auto* dc = processorRef_.getDocumentController())
+        currentSettings = dc->readPitchShift({DomainKind::ARAAudioModification, materializationId, 0});
+    else
+#endif
+        currentSettings = processorRef_.getPitchShiftSettings(materializationId);
 
     auto* content = new OpenTune::PitchShiftDialogContent(currentSettings);
 
@@ -1278,12 +1172,12 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
         OpenTuneAudioProcessorEditor* owner;
         uint64_t matId;
         OpenTune::PitchShiftSettings oldSettings;
-        std::shared_ptr<MaterializationContentCommands> commands;
+        std::shared_ptr<ContentEditCommands> commands;
         juce::Component::SafePointer<juce::Component> contentPtr;
 
         DialogHelper(OpenTuneAudioProcessorEditor* o, uint64_t m,
                      const OpenTune::PitchShiftSettings& s,
-                     std::shared_ptr<MaterializationContentCommands> cmds,
+                     std::shared_ptr<ContentEditCommands> cmds,
                      juce::Component::SafePointer<juce::Component> c)
             : owner(o), matId(m), oldSettings(s), commands(std::move(cmds)), contentPtr(std::move(c)) {}
 
@@ -1293,9 +1187,9 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
             if (newSettings != oldSettings) {
                 auto& um = owner->processorRef_.getUndoManager();
                 um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
-                    commands, matId, oldSettings, newSettings));
+                    commands, ContentKey{DomainKind::ARAAudioModification, matId, 0}, oldSettings, newSettings));
                 if (commands)
-                    commands->setPitchShiftSettings(matId, newSettings);
+                    commands->setPitchShiftSettings(ContentKey{DomainKind::ARAAudioModification, matId, 0}, newSettings);
                 owner->parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
             }
             closeDialog();
@@ -1308,9 +1202,9 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
             if (identity != oldSettings) {
                 auto& um = owner->processorRef_.getUndoManager();
                 um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
-                    commands, matId, oldSettings, identity));
+                    commands, ContentKey{DomainKind::ARAAudioModification, matId, 0}, oldSettings, identity));
                 if (commands)
-                    commands->setPitchShiftSettings(matId, identity);
+                    commands->setPitchShiftSettings(ContentKey{DomainKind::ARAAudioModification, matId, 0}, identity);
                 owner->parameterPanel_.setPitchShiftIndicator(0, 0);
             }
             closeDialog();
@@ -1357,7 +1251,16 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
         return;
     }
 
-    auto curve = contentAccess_->getPitchCurve(materializationId);
+    std::shared_ptr<PitchCurve> curve;
+#if JucePlugin_Enable_ARA
+    if (auto* dc = processorRef_.getDocumentController())
+        curve = dc->readPitchCurve({DomainKind::ARAAudioModification, materializationId, 0});
+    else
+#endif
+    {
+        auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, materializationId, 0});
+        curve = snap ? snap->pitchCurve : nullptr;
+    }
     if (curve == nullptr) {
         AppLogger::log("InvariantViolation: pitchCurveEdited - materialization " + juce::String(static_cast<juce::int64>(materializationId)) + " has no pitch curve");
         jassertfalse;
@@ -1394,7 +1297,7 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
     const double secondsPerFrame = static_cast<double>(hopSize) / f0SampleRate;
     const double editStartSec = static_cast<double>(startFrame) * secondsPerFrame;
     const double editEndSec = static_cast<double>(endFrame + 1) * secondsPerFrame;
-    contentCommands_->enqueuePartialRender(materializationId, editStartSec, editEndSec);
+    contentCommands_->enqueuePartialRender(ContentKey{DomainKind::ARAAudioModification, materializationId, 0}, editStartSec, editEndSec);
 }
 
 void OpenTuneAudioProcessorEditor::escapeKeyPressed()
@@ -1410,16 +1313,35 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
     if (!sync.hasPlacements()) {
         pianoRoll_.clearTimelineViewDomain();
         pianoRoll_.setTimelineMaterializationPlacements({});
-        pianoRoll_.setEditedMaterialization(0,
+        pianoRoll_.setEditedMaterialization(ContentKey{},
                                     nullptr,
                                     nullptr,
                                     static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
         return;
     }
 
+    std::shared_ptr<const juce::AudioBuffer<float>> syncBuffer;
+    std::shared_ptr<PitchCurve> curve;
+    DetectedKey detectedKey;
+#if JucePlugin_Enable_ARA
+    if (auto* dc = processorRef_.getDocumentController()) {
+        ContentKey ck{DomainKind::ARAAudioModification, sync.activeMaterializationId, 0};
+        syncBuffer = dc->readAudioBuffer(ck);
+        curve = dc->readPitchCurve(ck);
+        detectedKey = dc->readDetectedKey(ck);
+    } else
+#endif
+    {
+        auto ck = ContentKey{DomainKind::StandaloneClip, sync.activeMaterializationId, 0};
+        auto snap = processorRef_.getContentSnapshot(ck);
+        syncBuffer = snap ? snap->audioBuffer : nullptr;
+        curve = snap ? snap->pitchCurve : nullptr;
+        detectedKey = snap ? snap->detectedKey : DetectedKey{};
+    }
+
     if (!sync.hasActiveMaterialization()
-        || contentAccess_->getAudioBuffer(sync.activeMaterializationId) == nullptr) {
-        pianoRoll_.setEditedMaterialization(0,
+        || syncBuffer == nullptr) {
+        pianoRoll_.setEditedMaterialization(ContentKey{},
                                     nullptr,
                                     nullptr,
                                     static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
@@ -1432,12 +1354,9 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
         return;
     }
 
-    auto curve = contentAccess_->getPitchCurve(sync.activeMaterializationId);
-    auto buffer = contentAccess_->getAudioBuffer(sync.activeMaterializationId);
-
-    pianoRoll_.setEditedMaterialization(sync.activeMaterializationId,
+    pianoRoll_.setEditedMaterialization(ContentKey{DomainKind::ARAAudioModification, sync.activeMaterializationId, 0},
                                 curve,
-                                buffer,
+                                syncBuffer,
                                 static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
     pianoRoll_.setTimelineMaterializationPlacements(sync.placements);
     if (sync.usesRegularCaptureTimelineDomain) {
@@ -1445,9 +1364,8 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
     } else {
         pianoRoll_.clearTimelineViewDomain();
     }
-    const auto key = contentAccess_->getDetectedKey(sync.activeMaterializationId);
-    const int rootNote = static_cast<int>(key.root);
-    const int scaleType = (key.scale == Scale::Minor) ? 2 : ((key.scale == Scale::Chromatic) ? 3 : 1);
+    const int rootNote = static_cast<int>(detectedKey.root);
+    const int scaleType = (detectedKey.scale == Scale::Minor) ? 2 : ((detectedKey.scale == Scale::Chromatic) ? 3 : 1);
 
     suppressScaleChangedCallback_ = true;
     transportBar_.setScale(rootNote, scaleType);

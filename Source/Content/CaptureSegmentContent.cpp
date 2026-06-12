@@ -22,6 +22,7 @@ std::shared_ptr<const EditableContentSnapshot> CaptureSegmentContent::snapshotCo
 {
     auto snap = std::make_shared<EditableContentSnapshot>();
     snap->notes = editable_.notes;
+    snap->correctedSegments = editable_.correctedSegments;
     snap->pitchCurve = pitchCurve_;
     snap->timeGrid = editable_.timeGrid;
     snap->pitchShiftSettings = editable_.pitchShiftSettings;
@@ -35,6 +36,7 @@ std::shared_ptr<const EditableContentSnapshot> CaptureSegmentContent::snapshotCo
     snap->timeGridRevision = editable_.timeGridRevision;
     snap->pitchShiftRevision = editable_.pitchShiftRevision;
     snap->contentRevision = editable_.contentRevision;
+    snap->referenceFeatures = editable_.referenceFeatures;
     return snap;
 }
 
@@ -114,6 +116,12 @@ void CaptureSegmentContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
 {
     pitchCurve_ = std::move(curve);
     ++editable_.pitchRevision;
+    ++editable_.contentRevision;
+}
+
+void CaptureSegmentContent::applyReferenceFeatures(const ReferenceFeatureSet& features)
+{
+    editable_.referenceFeatures = features;
     ++editable_.contentRevision;
 }
 

@@ -45,7 +45,7 @@
 #include "TimelineViewportState.h"
 #include "WaveformMipmap.h"
 #include "../../Utils/UndoManager.h"
-#include "../../ARA/MaterializationContentProvider.h"
+#include "../../Content/ContentEditCommands.h"
 #include "../../Content/DomainContentOwner.h"
 
 namespace OpenTune {
@@ -165,7 +165,7 @@ public:
     void resized() override;
     void onHeartbeatTick();
 
-    void setEditedMaterialization(uint64_t materializationId,
+    void setEditedMaterialization(ContentKey contentKey,
                            std::shared_ptr<PitchCurve> curve,
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
                            int sampleRate);
@@ -174,9 +174,15 @@ public:
 
     void setProcessor(OpenTuneAudioProcessor* processor);
 
-    /** Inject content providers (Phase 3-6: ARA or processor-backed). */
-    void setContentProviders(std::shared_ptr<MaterializationContentAccess> access,
-                             std::shared_ptr<MaterializationContentCommands> commands);
+    /** Phase 4: Inject read callback that takes ContentKey → EditableContentSnapshot. */
+    using ReadContentSnapshotFn = std::function<std::shared_ptr<const EditableContentSnapshot>(ContentKey)>;
+    void setReadContentSnapshot(ReadContentSnapshotFn fn) { readContentSnapshot_ = std::move(fn); }
+
+    /** Inject content commands (Phase 4: ContentEditCommands, write path with ContentKey). */
+    void setContentCommands(std::shared_ptr<ContentEditCommands> commands);
+
+    void setEditedContentKey(ContentKey key) { editedContentKey_ = key; }
+    ContentKey editedContentKey() const { return editedContentKey_; }
 
     /** [ARA 重构] 注入域内容所有者（替代 setContentProviders）。统一 ARA/Standalone/Capture 路径。 */
     void setContentOwner(DomainContentOwner* owner);
@@ -587,14 +593,22 @@ private:
 
     OpenTuneAudioProcessor* processor_ = nullptr;
 
-    // Content provider (Phase 3-6: routes materialization reads/writes)
-    std::shared_ptr<MaterializationContentAccess> contentAccess_;
-    std::shared_ptr<MaterializationContentCommands> contentCommands_;
+    // Phase 4: Read snapshot via callback, write via ContentEditCommands
+    ReadContentSnapshotFn readContentSnapshot_;
+    std::shared_ptr<ContentEditCommands> contentCommands_;
+
+    std::shared_ptr<const EditableContentSnapshot> readSnapshotFor(ContentKey key) const {
+        return readContentSnapshot_ ? readContentSnapshot_(key) : nullptr;
+    }
+    std::shared_ptr<const EditableContentSnapshot> readEditedSnapshot() const {
+        return readSnapshotFor(editedContentKey_);
+    }
 
     // [ARA 重构] 域内容所有者（替代 contentAccess_/contentCommands_ 的旧路由）
     DomainContentOwner* contentOwner_ = nullptr;
 
     uint64_t editedMaterializationId_ = 0;
+    ContentKey editedContentKey_;
     bool experimentalFeaturesEnabled_ = false;
     std::vector<Note> cachedNotes_;
     uint64_t cachedNotesRevision_ = 0;

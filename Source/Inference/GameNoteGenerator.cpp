@@ -149,7 +149,7 @@ std::vector<Note> GameNoteGenerator::generate(const NoteGeneratorInput& input)
     // hopSize for boundary placement: align cuts to GAME's frame grid.
     const int hopSize = static_cast<int>(std::round(input.sampleRate * timestep_));
 
-    const auto boundaries = MaterializationStore::buildChunkBoundariesFromSilentGaps(
+    const auto boundaries = RenderChunkPlanner::buildChunkBoundariesFromSilentGaps(
         static_cast<int64_t>(input.audio.size()), silentGaps, hopSize);
 
     if (boundaries.size() < 2) {
