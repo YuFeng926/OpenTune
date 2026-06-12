@@ -33,6 +33,7 @@ struct ContentPayloadState
 
     // ── Editable state ──────────────────────────────────────
     std::vector<Note> notes;
+    std::vector<CorrectedSegment> correctedSegments;
     std::shared_ptr<const TimeGridSnapshot> timeGrid;
     PitchShiftSettings pitchShiftSettings;
 

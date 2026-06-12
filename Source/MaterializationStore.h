@@ -155,7 +155,7 @@ public:
     bool setPitchShiftSettings(uint64_t materializationId, const PitchShiftSettings& settings);
 
     // Stretcher（委托到 StretcherPool）
-    SoundTouchStretcher* getOpenTuneStretcher(uint64_t materializationId,
+    SoundTouchStretcher* getOpenTuneStretcher(ContentKey key,
                                                 double sampleRate,
                                                 int channels);
 
@@ -187,10 +187,6 @@ public:
 
     double getMaterializationAudioDurationById(uint64_t materializationId) const noexcept;
     uint64_t findMaterializationBySourceWindow(uint64_t sourceId, const SourceWindow& window) const;
-
-    static std::vector<int64_t> buildChunkBoundariesFromSilentGaps(int64_t materializationSampleCount,
-                                                                      const std::vector<SilentGap>& silentGaps,
-                                                                      int hopSize);
 
     // Reference feature cache API
     bool setReferenceFeatures(uint64_t materializationId, const ReferenceFeatureSet& features);

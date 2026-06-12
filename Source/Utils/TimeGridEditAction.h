@@ -1,37 +1,18 @@
-/**
- * TimeGridEditAction — Undo/Redo 用的 TimeGrid 编辑事务。
- *
- * 与 PianoRollEditAction 严格平级实现，遵循 cross-cutting/undo-affected-range-invariant.md
- * 中描述的同一不变量: affected source range 由 ToolHandler 编辑时计算并显式传入,
- * **不得**从 before/after snapshot diff 反推.
- *
- * v2.0 a122bca 重构曾在 PianoRollEditAction 上无声丢失 affected-range 优化;
- * 此处需严格沿 ToolHandler 计算 → commit 透传 → action 构造的链路。
- */
 #pragma once
 
 #include "UndoManager.h"
 #include "TimeGrid.h"
+#include "Content/ContentKey.h"
+#include "Content/ContentEditCommands.h"
 #include <cstdint>
 #include <memory>
 
 namespace OpenTune {
 
-class MaterializationContentCommands;
-
 class TimeGridEditAction : public UndoAction {
 public:
-    /**
-     * @param commands                  Content commands; undo/redo 通过它切换 TimeGridSnapshot
-     * @param materializationId         目标 materialization
-     * @param description               用户可见的 undo 描述 ("Drag handle"/"Insert handle"/...)
-     * @param oldSnapshot               编辑前 snapshot (undo 时切回这个)
-     * @param newSnapshot               编辑后 snapshot (redo 时切回这个)
-     * @param affectedSrcStartFrame     受影响源帧范围起 (UI 计算, 不得反推)
-     * @param affectedSrcEndFrame       受影响源帧范围终 (inclusive)
-     */
-    TimeGridEditAction(std::shared_ptr<MaterializationContentCommands> commands,
-                       uint64_t materializationId,
+    TimeGridEditAction(std::shared_ptr<ContentEditCommands> commands,
+                       ContentKey key,
                        juce::String description,
                        std::shared_ptr<const TimeGridSnapshot> oldSnapshot,
                        std::shared_ptr<const TimeGridSnapshot> newSnapshot,
@@ -42,13 +23,13 @@ public:
     void redo() override;
     juce::String getDescription() const override { return description_; }
 
-    uint64_t getMaterializationId() const noexcept { return materializationId_; }
+    ContentKey getContentKey() const noexcept { return contentKey_; }
     int64_t  getAffectedSrcStartFrame() const noexcept { return affectedSrcStartFrame_; }
     int64_t  getAffectedSrcEndFrame() const noexcept { return affectedSrcEndFrame_; }
 
 private:
-    std::shared_ptr<MaterializationContentCommands> commands_;
-    uint64_t                        materializationId_;
+    std::shared_ptr<ContentEditCommands> commands_;
+    ContentKey contentKey_;
     juce::String                    description_;
     std::shared_ptr<const TimeGridSnapshot> oldSnapshot_;
     std::shared_ptr<const TimeGridSnapshot> newSnapshot_;

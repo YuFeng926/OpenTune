@@ -45,11 +45,11 @@ void ReferenceAnalysisService::removeListener(Listener* listener)
     listeners_.remove(listener);
 }
 
-void ReferenceAnalysisService::submitAnalysis(uint64_t materializationId,
-                                               int64_t renderRevision)
+void ReferenceAnalysisService::submitAnalysis(ContentKey key,
+                                               int64_t contentRevision)
 {
-    if (materializationId == 0) {
-        AppLogger::warn("[ReferenceAnalysisService] submitAnalysis rejected: materializationId is 0");
+    if (!key.isValid()) {
+        AppLogger::warn("[ReferenceAnalysisService] submitAnalysis rejected: invalid contentKey");
         return;
     }
 
@@ -59,16 +59,16 @@ void ReferenceAnalysisService::submitAnalysis(uint64_t materializationId,
         return;
     }
 
-    if (activeJob_.has_value() && activeJob_->materializationId == materializationId) {
-        AppLogger::debug("[ReferenceAnalysisService] submitAnalysis: materialization "
-            + juce::String(materializationId) + " already active, dropping");
+    if (activeJob_.has_value() && activeJob_->contentKey == key) {
+        AppLogger::debug("[ReferenceAnalysisService] submitAnalysis: contentKey "
+            + juce::String(static_cast<juce::int64>(key.objectId)) + " already active, dropping");
         return;
     }
 
-    AnalysisJobKey key;
-    key.materializationId = materializationId;
-    key.renderRevision = renderRevision;
-    pendingJobs_[materializationId] = key;
+    AnalysisJobKey jobKey;
+    jobKey.contentKey = key;
+    jobKey.contentRevision = contentRevision;
+    pendingJobs_[key] = jobKey;
     cv_.notify_one();
 }
 
@@ -77,7 +77,7 @@ void ReferenceAnalysisService::cancelAll()
     std::lock_guard<std::mutex> lock(mutex_);
     pendingJobs_.clear();
     if (activeJob_.has_value()) {
-        cancelledActiveJobs_.insert(activeJob_->materializationId);
+        cancelledActiveJobs_.insert(activeJob_->contentKey);
     }
 }
 
@@ -103,7 +103,7 @@ void ReferenceAnalysisService::workerLoop()
             analysisFunc = analysisFunc_;
         }
 
-        const uint64_t matId = job.materializationId;
+        const ContentKey key = job.contentKey;
         ReferenceFeatureSet result;
         bool success = false;
         juce::String errorReason;
@@ -121,23 +121,23 @@ void ReferenceAnalysisService::workerLoop()
                     : "Reference analysis did not produce Ready features";
             }
         } catch (const std::exception& e) {
-            AppLogger::error("[ReferenceAnalysisService] Exception during analysis for matId "
-                + juce::String(matId) + ": " + juce::String(e.what()));
+            AppLogger::error("[ReferenceAnalysisService] Exception during analysis for contentKey objId="
+                + juce::String(static_cast<juce::int64>(key.objectId)) + ": " + juce::String(e.what()));
             errorReason = e.what();
         } catch (...) {
-            AppLogger::error("[ReferenceAnalysisService] Unknown exception during analysis for matId "
-                + juce::String(matId));
+            AppLogger::error("[ReferenceAnalysisService] Unknown exception during analysis for contentKey objId="
+                + juce::String(static_cast<juce::int64>(key.objectId)));
             errorReason = "Unknown exception during analysis";
         }
 
         bool cancelled = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (activeJob_.has_value() && activeJob_->materializationId == matId) {
+            if (activeJob_.has_value() && activeJob_->contentKey == key) {
                 activeJob_.reset();
             }
 
-            const auto cancelledIt = cancelledActiveJobs_.find(matId);
+            const auto cancelledIt = cancelledActiveJobs_.find(key);
             if (cancelledIt != cancelledActiveJobs_.end()) {
                 cancelled = true;
                 cancelledActiveJobs_.erase(cancelledIt);
@@ -149,22 +149,22 @@ void ReferenceAnalysisService::workerLoop()
         }
 
         if (success) {
-            notifyListenersCompleted(matId, result);
+            notifyListenersCompleted(key, result);
         } else {
-            notifyListenersFailed(matId, errorReason);
+            notifyListenersFailed(key, errorReason);
         }
     }
 }
 
 void ReferenceAnalysisService::notifyListenersCompleted(
-    uint64_t matId, const ReferenceFeatureSet& result)
+    ContentKey key, const ReferenceFeatureSet& result)
 {
-    auto notify = [this, alive = aliveToken_, matId, result]() {
+    auto notify = [this, alive = aliveToken_, key, result]() {
         if (!alive->load(std::memory_order_acquire)) {
             return;
         }
-        listeners_.call([matId, &result](Listener& l) {
-            l.analysisCompleted(matId, result);
+        listeners_.call([key, &result](Listener& l) {
+            l.analysisCompleted(key, result);
         });
     };
 
@@ -182,14 +182,14 @@ void ReferenceAnalysisService::notifyListenersCompleted(
 }
 
 void ReferenceAnalysisService::notifyListenersFailed(
-    uint64_t matId, const juce::String& reason)
+    ContentKey key, const juce::String& reason)
 {
-    auto notify = [this, alive = aliveToken_, matId, reason]() {
+    auto notify = [this, alive = aliveToken_, key, reason]() {
         if (!alive->load(std::memory_order_acquire)) {
             return;
         }
-        listeners_.call([matId, &reason](Listener& l) {
-            l.analysisFailed(matId, reason);
+        listeners_.call([key, &reason](Listener& l) {
+            l.analysisFailed(key, reason);
         });
     };
 

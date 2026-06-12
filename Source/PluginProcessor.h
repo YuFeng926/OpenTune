@@ -107,7 +107,7 @@ namespace AudioConstants {
 class OpenTuneDocumentController;
 #endif
 
-class MaterializationContentCommands;
+class ContentEditCommands;
 
 namespace Capture {
     class CaptureSession;  // forward decl; full type in Source/Plugin/Capture/CaptureSession.h
@@ -293,40 +293,26 @@ public:
     };
 
     struct MaterializationRefreshRequest {
-        uint64_t materializationId{};
+        ContentKey contentKey;
         bool preserveCorrectionsOutsideChangedRange{false};
         double changedStartSeconds{0.0};
         double changedEndSeconds{0.0};
     };
-    
-    /**
-     * 预处理导入内容（后台线程调用，不持有排列状态锁）
-     * @param inBuffer 原始音频 buffer
-     * @param inSampleRate 原始采样率
-     * @param displayName 显示名称
-     * @param sourceFilePath 原始导入文件路径（空字符串表示无文件来源，如 ARA/Capture）
-     * @param out 输出预处理结果
-     * @return 成功返回 true
-     */
+
+    bool requestContentRefresh(const MaterializationRefreshRequest& request);
+
     bool prepareImport(juce::AudioBuffer<float>&& inBuffer,
                        double inSampleRate,
                        const juce::String& displayName,
                        const juce::String& sourceFilePath,
                        PreparedImport& out,
                        const char* entrySourceTag = "standalone-import");
-    
-    /**
-     * 提交预处理内容并创建 placement（主线程调用，写锁内只做轻量挂接）
-     * @param prepared 预处理结果（移动语义）
-     * @param placement 显式 placement 语义
-     * @return 成功返回 source/materialization/placement 三层 id，失败返回空结果
-     */
+
     CommittedPlacement commitPreparedImportAsPlacement(PreparedImport&& prepared,
                                                        const ImportPlacement& placement,
                                                        uint64_t sourceId = 0);
     uint64_t commitPreparedImportAsMaterialization(PreparedImport&& prepared,
-                                                   uint64_t sourceId = 0);
-    bool requestMaterializationRefresh(const MaterializationRefreshRequest& request);
+                                                    uint64_t sourceId = 0);
 
     bool ensureSourceById(uint64_t sourceId,
                           const juce::String& displayName,
@@ -443,7 +429,7 @@ private:
     std::shared_ptr<MaterializationStore> materializationStore_;
     std::shared_ptr<ContentRenderService> contentRenderService_;
     std::unique_ptr<StandaloneContentRepository> standaloneContentRepository_;
-    std::shared_ptr<MaterializationContentCommands> contentCommands_;
+    std::shared_ptr<ContentEditCommands> contentCommands_;
     std::unique_ptr<StandaloneArrangement> standaloneArrangement_;
     PlacementClipboard clipClipboard_;
     ReferenceAnalysisService referenceAnalysisService_;
@@ -527,11 +513,12 @@ private:
                             std::function<bool(const std::string&)> initFunc);
 
     void detectAndCommitMaterializationKeyIfUnset(uint64_t materializationId);
+    void detectContentKeyIfUnset(ContentKey key);
     uint64_t ensureSourceAndCreateMaterialization(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
     void configureReferenceAnalysisService();
-    void analysisCompleted(uint64_t materializationId,
+    void analysisCompleted(ContentKey key,
                            const ReferenceFeatureSet& result) override;
-    void analysisFailed(uint64_t materializationId,
+    void analysisFailed(ContentKey key,
                         const juce::String& reason) override;
 
     // ========================================================================
@@ -599,8 +586,6 @@ private:
 
 public:
     // Clip Chunk 状态查询（替代原 RenderQueueStatus）
-    RenderCache::ChunkStats getMaterializationChunkStatsById(uint64_t materializationId) const;
-    bool getMaterializationChunkBoundariesById(uint64_t materializationId, std::vector<double>& outSeconds) const;
 
     // Track State Management
     // Track height (shared state)
@@ -627,8 +612,6 @@ public:
     VocoderDomain* getVocoderDomain() const { return vocoderDomain_.get(); }
     SourceStore* getSourceStore() noexcept { return sourceStore_.get(); }
     const SourceStore* getSourceStore() const noexcept { return sourceStore_.get(); }
-    MaterializationStore* getMaterializationStore() noexcept { return materializationStore_.get(); }
-    const MaterializationStore* getMaterializationStore() const noexcept { return materializationStore_.get(); }
     ContentRenderService* getContentRenderService() noexcept { return contentRenderService_.get(); }
     const ContentRenderService* getContentRenderService() const noexcept { return contentRenderService_.get(); }
 
@@ -655,59 +638,20 @@ public:
                                                    std::vector<float>& publishedAudio);
     
     // Materialization and placement access
-    std::shared_ptr<const juce::AudioBuffer<float>> getMaterializationAudioBufferById(uint64_t materializationId) const;
-
     uint64_t getPlacementId(int trackId, int placementIndex) const;
     int findPlacementIndexById(int trackId, uint64_t placementId) const;
     bool getPlacementByIndex(int trackId, int placementIndex, StandaloneArrangement::Placement& out) const;
     bool getPlacementById(int trackId, uint64_t placementId, StandaloneArrangement::Placement& out) const;
-    std::shared_ptr<PitchCurve> getMaterializationPitchCurveById(uint64_t materializationId) const;
-    bool setMaterializationPitchCurveById(uint64_t materializationId, std::shared_ptr<PitchCurve> curve);
-    OriginalF0State getMaterializationOriginalF0StateById(uint64_t materializationId) const;
-    bool setMaterializationOriginalF0StateById(uint64_t materializationId, OriginalF0State state);
-    DetectedKey getMaterializationDetectedKeyById(uint64_t materializationId) const;
-    bool setMaterializationDetectedKeyById(uint64_t materializationId, const DetectedKey& key);
     PitchShiftSettings getPitchShiftSettings(uint64_t materializationId) const;
-    ReferenceFeatureSet getReferenceFeatures(uint64_t materializationId) const;
+    ReferenceFeatureSet getReferenceFeatures(ContentKey key) const;
 
     // ⚡️ vocal-time-stretch §3.6 — TimeGrid accessors per materialization
-    //
-    // setMaterializationTimeGridById publishes a new TimeGridSnapshot AND triggers
-    // any required cache invalidation in the affected source range.  TimeGrid
-    // edits do NOT invalidate PitchCache (Stage 1) — only TimeStretchCache (Stage 2).
-    // Caller (TimeGridEditAction::undo/redo, ToolHandler::commit) is responsible
-    // for providing affected-source-range bounds (see
-    // knowledge/current/cross-cutting/undo-affected-range-invariant.md).
-    std::shared_ptr<const TimeGridSnapshot> getMaterializationTimeGridById(uint64_t materializationId) const;
-    uint64_t getMaterializationTimeGridRevisionById(uint64_t materializationId) const;
-    bool ensureTimeToolAnchorSeed(uint64_t materializationId);
-    bool setMaterializationTimeGridById(uint64_t materializationId,
-                                         std::shared_ptr<const TimeGridSnapshot> snapshot,
-                                         int64_t affectedSrcStartFrame,
-                                         int64_t affectedSrcEndFrame);
-
-    /** Apply pitch shift settings to a materialization and trigger full re-render.
-     *  Called by PitchShiftEditAction (undo/redo) and PitchShiftDialogContent (confirm). */
-    void setPitchShiftSettings(uint64_t materializationId, const PitchShiftSettings& settings);
-
-    std::shared_ptr<RenderCache> getMaterializationRenderCacheById(uint64_t materializationId) const;
-    
-    // Note and Anchor management per materialization
-    using MaterializationNotesSnapshot = MaterializationStore::MaterializationNotesSnapshot;
-
-    std::vector<Note> getMaterializationNotesById(uint64_t materializationId) const;
-    MaterializationNotesSnapshot getMaterializationNotesSnapshotById(uint64_t materializationId) const;
-    bool setMaterializationNotesById(uint64_t materializationId, const std::vector<Note>& notes);
-    bool setMaterializationCorrectedSegmentsById(uint64_t materializationId, const std::vector<CorrectedSegment>& segments);
-    bool commitMaterializationNotesAndSegmentsById(uint64_t materializationId,
-                                          const std::vector<Note>& notes,
-                                          const std::vector<CorrectedSegment>& segments);
-    ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(uint64_t materializationId);
+    bool ensureTimeToolAnchorSeed(ContentKey key);
     AutoRefAvailability queryAutoRefAvailability(uint64_t targetPlacementId) const;
 
     /** AUTO(REF) 正式特征生产入口。产品合同固定使用 GAME producer。 */
     ReferenceFeatureSet buildReferenceFeatureSet(
-        const MaterializationStore::MaterializationSnapshot& snapshot);
+        const EditableContentSnapshot& snapshot);
 
     /** 设置当前实验性参考对齐模式。由 UI 首选项变更驱动。 */
     void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode)
@@ -717,10 +661,45 @@ public:
 
 private:
     ReferenceFeatureSet buildGameReferenceFeatureSet(
-        const MaterializationStore::MaterializationSnapshot& snapshot);
+        const EditableContentSnapshot& snapshot);
 public:
 
-    std::shared_ptr<MaterializationContentCommands> getContentCommands() const { return contentCommands_; }
+    std::shared_ptr<ContentEditCommands> getContentCommands() const { return contentCommands_; }
+
+    // ── ContentKey-based mutation and snapshot APIs (Phase 4.3) ─────────────────
+    std::shared_ptr<const EditableContentSnapshot> getContentSnapshot(ContentKey key) const;
+
+    bool setContentReferenceFeatures(ContentKey key, const ReferenceFeatureSet& features);
+
+    void enqueueContentPartialRender(ContentKey key,
+                                     double relStartSeconds,
+                                     double relEndSeconds);
+
+    bool setContentNotes(ContentKey key, std::vector<Note> notes);
+    bool setContentCorrectedSegments(ContentKey key, std::vector<CorrectedSegment> segments);
+    bool commitContentNotesAndSegments(ContentKey key,
+                                       std::vector<Note> notes,
+                                       std::vector<CorrectedSegment> segments);
+    bool setContentPitchCurve(ContentKey key, std::shared_ptr<PitchCurve> curve);
+    bool setContentTimeGrid(ContentKey key,
+                            std::shared_ptr<const TimeGridSnapshot> grid,
+                            int64_t affectedSrcStartFrame,
+                            int64_t affectedSrcEndFrame);
+    bool setContentDetectedKey(ContentKey key, const DetectedKey& detectedKey);
+    bool setContentOriginalF0State(ContentKey key, OriginalF0State state);
+    bool setContentPitchShiftSettings(ContentKey key, const PitchShiftSettings& settings);
+    bool commitAutoTuneGeneratedNotesByContentKey(ContentKey key,
+                                                   std::vector<Note> generatedNotes,
+                                                   int startFrame,
+                                                   int endFrameExclusive,
+                                                   float retuneSpeed,
+                                                   float vibratoDepth,
+                                                   float vibratoRate,
+                                                   double audioSampleRate);
+
+private:
+    void invalidateRenderFor(ContentKey key);
+public:
 
 #if defined(OPENTUNE_TEST_BUILD)
     void setReferenceAnalysisNotificationDispatcherForTests(
@@ -745,10 +724,11 @@ public:
     void runReclaimSweepOnMessageThread();   // public for test synchronous invocation
     void scheduleReclaimSweep();
 
+    // ── Internal: these APIs exist to serve remaining PluginProcessor.cpp callers
+    // ── (import, split, merge, clone, state save/load). Not for new code.
     using MaterializationSnapshot = MaterializationStore::MaterializationSnapshot;
     bool getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const;
-
-    bool extractImportedClipOriginalF0(const MaterializationSnapshot& snap,
+    bool extractImportedClipOriginalF0(const EditableContentSnapshot& snap,
                                        F0ExtractionService::Result& out,
                                        std::string& errorMessage);
     bool getMaterializationSnapshotById(uint64_t materializationId, MaterializationSnapshot& out) const;
@@ -758,8 +738,37 @@ public:
                                  std::vector<SilentGap> silentGaps);
     uint64_t replaceMaterializationWithNewLineage(uint64_t oldId,
                                  MaterializationStore::CreateMaterializationRequest request);
-    
-    // 导出单个 placement 的音频
+    RenderCache::ChunkStats getMaterializationChunkStatsById(uint64_t materializationId) const;
+    bool getMaterializationChunkBoundariesById(uint64_t materializationId, std::vector<double>& outSeconds) const;
+    std::shared_ptr<const juce::AudioBuffer<float>> getMaterializationAudioBufferById(uint64_t materializationId) const;
+    MaterializationStore* getMaterializationStore() noexcept { return materializationStore_.get(); }
+    const MaterializationStore* getMaterializationStore() const noexcept { return materializationStore_.get(); }
+    bool enqueueMaterializationPartialRenderById(uint64_t materializationId, double relStartSeconds, double relEndSeconds);
+    std::shared_ptr<PitchCurve> getMaterializationPitchCurveById(uint64_t materializationId) const;
+    bool setMaterializationPitchCurveById(uint64_t materializationId, std::shared_ptr<PitchCurve> curve);
+    OriginalF0State getMaterializationOriginalF0StateById(uint64_t materializationId) const;
+    bool setMaterializationOriginalF0StateById(uint64_t materializationId, OriginalF0State state);
+    DetectedKey getMaterializationDetectedKeyById(uint64_t materializationId) const;
+    bool setMaterializationDetectedKeyById(uint64_t materializationId, const DetectedKey& key);
+    std::shared_ptr<const TimeGridSnapshot> getMaterializationTimeGridById(uint64_t materializationId) const;
+    uint64_t getMaterializationTimeGridRevisionById(uint64_t materializationId) const;
+    bool setMaterializationTimeGridById(uint64_t materializationId,
+                                         std::shared_ptr<const TimeGridSnapshot> snapshot,
+                                         int64_t affectedSrcStartFrame,
+                                         int64_t affectedSrcEndFrame);
+    void setPitchShiftSettings(uint64_t materializationId, const PitchShiftSettings& settings);
+    std::shared_ptr<RenderCache> getMaterializationRenderCacheById(uint64_t materializationId) const;
+    using MaterializationNotesSnapshot = MaterializationStore::MaterializationNotesSnapshot;
+    std::vector<Note> getMaterializationNotesById(uint64_t materializationId) const;
+    MaterializationNotesSnapshot getMaterializationNotesSnapshotById(uint64_t materializationId) const;
+    bool setMaterializationNotesById(uint64_t materializationId, const std::vector<Note>& notes);
+    bool setMaterializationCorrectedSegmentsById(uint64_t materializationId, const std::vector<CorrectedSegment>& segments);
+    bool commitMaterializationNotesAndSegmentsById(uint64_t materializationId,
+                                          const std::vector<Note>& notes,
+                                          const std::vector<CorrectedSegment>& segments);
+    ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(ContentKey key);
+
+    // ⚡️ vocal-time-stretch §7 — Stage2 rebuild queue control
     bool exportPlacementAudio(int trackId, int placementIndex, const juce::File& file);
     // 导出整个轨道的音频（时长以最晚Clip结束为准）
     bool exportTrackAudio(int trackId, const juce::File& file);
@@ -770,7 +779,6 @@ public:
     juce::String getLastExportError() const { return lastExportError_; }
 
     // Rendering & Buffering
-    bool enqueueMaterializationPartialRenderById(uint64_t materializationId, double relStartSeconds, double relEndSeconds);
     void processChunkRenderJob(RenderJob& job);
 
     // Transport control API

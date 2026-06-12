@@ -23,19 +23,23 @@ std::shared_ptr<const EditableContentSnapshot> StandaloneClipContent::snapshotCo
 {
     auto snap = std::make_shared<EditableContentSnapshot>();
     snap->sourceWindow = content_.sourceWindow;
+    snap->audioBuffer = content_.audioBuffer;
+    snap->audioSampleRate = content_.sampleRate;
+    snap->audioRevision = content_.audioRevision;
     snap->notes = content_.notes;
+    snap->correctedSegments = content_.correctedSegments;
     snap->pitchCurve = content_.pitchCurve;
     snap->timeGrid = content_.timeGrid;
     snap->pitchShiftSettings = content_.pitchShiftSettings;
     snap->originalF0State = content_.originalF0State;
     snap->detectedKey = content_.detectedKey;
+    snap->silentGaps = content_.silentGaps;
+    snap->referenceFeatures = content_.referenceFeatures;
     snap->notesRevision = content_.notesRevision;
     snap->pitchRevision = content_.pitchRevision;
     snap->timeGridRevision = content_.timeGridRevision;
     snap->pitchShiftRevision = content_.pitchShiftRevision;
     snap->contentRevision = content_.contentRevision;
-    snap->audioBuffer = content_.audioBuffer;
-    snap->audioRevision = content_.audioRevision;
     return snap;
 }
 

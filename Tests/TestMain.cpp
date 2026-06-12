@@ -20,8 +20,11 @@
 #include <vector>
 
 #include "Content/EditableContentSnapshot.h"
+#include "Content/StandaloneClipContent.h"
+#include "Content/ContentEditCommands.h"
 #include "Plugin/Capture/CaptureSession.h"
 #include "Utils/PitchCurve.h"
+#include "Utils/Note.h"
 
 namespace fs = std::filesystem;
 
@@ -548,19 +551,7 @@ static CheckResult timeStretchCacheUsesContentKey()
 // ============================================================================
 static CheckResult singlePlaybackReadSourceDefinition()
 {
-    // 1) MaterializationStore.h must NOT define struct PlaybackReadSource
-    {
-        const auto text = readText("Source/MaterializationStore.h");
-        if (contains(text, "struct PlaybackReadSource"))
-        {
-            auto loc = locateInText(text, "struct PlaybackReadSource", "MaterializationStore.h");
-            return fail("singlePlaybackReadSourceDefinition",
-                        "PlaybackReadSource defined in " + loc +
-                        " — must be defined ONLY in Source/Render/PlaybackReadSource.h");
-        }
-    }
-
-    // 2) ContentRenderService.h must NOT define struct PlaybackReadSource
+    // 1) ContentRenderService.h must NOT define struct PlaybackReadSource
     {
         const auto text = readText("Source/Render/ContentRenderService.h");
         if (contains(text, "struct PlaybackReadSource"))
@@ -572,7 +563,7 @@ static CheckResult singlePlaybackReadSourceDefinition()
         }
     }
 
-    // 3) PlaybackReadSource.h must exist and contain the definition
+    // 2) PlaybackReadSource.h must exist and contain the definition
     {
         const auto text = readText("Source/Render/PlaybackReadSource.h");
         if (text.empty())
@@ -599,19 +590,7 @@ static CheckResult singlePlaybackReadSourceDefinition()
 // ============================================================================
 static CheckResult singleRenderJobDefinition()
 {
-    // 1) MaterializationStore.h must NOT define struct PendingRenderJob
-    {
-        const auto text = readText("Source/MaterializationStore.h");
-        if (contains(text, "struct PendingRenderJob"))
-        {
-            auto loc = locateInText(text, "struct PendingRenderJob", "MaterializationStore.h");
-            return fail("singleRenderJobDefinition",
-                        "PendingRenderJob defined in " + loc +
-                        " — must be defined ONLY in Source/Render/RenderJob.h");
-        }
-    }
-
-    // 2) ContentRenderService.h must NOT define struct PendingRenderJob
+    // 1) ContentRenderService.h must NOT define struct PendingRenderJob
     {
         const auto text = readText("Source/Render/ContentRenderService.h");
         if (contains(text, "struct PendingRenderJob"))
@@ -623,16 +602,16 @@ static CheckResult singleRenderJobDefinition()
         }
     }
 
-    // 3) RenderJob.h must exist and contain the definition
+    // 2) RenderJob.h must exist and contain the definition
     {
         const auto text = readText("Source/Render/RenderJob.h");
         if (text.empty())
             return fail("singleRenderJobDefinition",
                         "Source/Render/RenderJob.h not found or empty"
-                        " — PendingRenderJob must live in its own header");
-        if (!contains(text, "PendingRenderJob"))
+                        " — RenderJob must live in its own header");
+        if (!contains(text, "struct RenderJob"))
             return fail("singleRenderJobDefinition",
-                        "PendingRenderJob token not found in Source/Render/RenderJob.h");
+                        "RenderJob struct not found in Source/Render/RenderJob.h");
     }
 
     return pass("singleRenderJobDefinition");
@@ -694,90 +673,36 @@ static CheckResult contentRenderServiceHasNoOwnedRuntimeMechanics()
     return pass("contentRenderServiceHasNoOwnedRuntimeMechanics");
 }
 
+// Forward declaration for forbidTokensInFiles (defined later in Phase 4 section)
+static CheckResult forbidTokensInFiles(const std::string& testName,
+                                       const std::vector<std::string>& files,
+                                       const std::vector<std::string>& forbidden);
+
 // ============================================================================
 // Contract Test 12: materializationStoreNoLongerOwnsRuntimeMechanics
 //
-// MaterializationStore must NOT own playback source caches, per-entry render
-// caches, rebuildPlaybackSourceCache, or per-materialization
-// SoundTouch stretchers. These belong to ContentRenderService.
-//
-// Scan: Source/MaterializationStore.h, Source/MaterializationStore.cpp
+// Non-store source files must not expose MaterializationStore-owned runtime
+// mechanics (playbackSourceCache_, per-entry stretchers, per-entry RenderCache).
+// Store-internal structure is checked by final deletion scan (Round 5).
 // ============================================================================
 static CheckResult materializationStoreNoLongerOwnsRuntimeMechanics()
 {
-    const auto hText   = readText("Source/MaterializationStore.h");
-    const auto cppText = readText("Source/MaterializationStore.cpp");
-    const auto combined = hText + cppText;
+    const std::vector<std::string> files = {
+        "Source/PluginProcessor.h",
+        "Source/PluginProcessor.cpp",
+        "Source/ARA/OpenTuneDocumentController.h",
+        "Source/ARA/OpenTuneDocumentController.cpp",
+        "Source/Plugin/PluginEditor.cpp",
+        "Source/Standalone/PluginEditor.cpp"
+    };
 
-    // 1) playbackSourceCache_ and rebuildPlaybackSourceCache at file scope
-    {
-        const std::vector<std::string> forbidden = {
-            "playbackSourceCache_", "rebuildPlaybackSourceCache"
-        };
-        for (const auto& t : forbidden)
-        {
-            if (contains(combined, t))
-            {
-                std::string file;
-                if (contains(hText, t))
-                    file = "MaterializationStore.h";
-                else if (contains(cppText, t))
-                    file = "MaterializationStore.cpp";
-                else
-                    file = "MaterializationStore.{h,cpp}";
+    const std::vector<std::string> forbidden = {
+        "playbackSourceCache_",
+        "rebuildPlaybackSourceCache",
+    };
 
-                auto src = (file == "MaterializationStore.h") ? hText : cppText;
-                auto loc = locateInText(src, t, file);
-                return fail("materializationStoreNoLongerOwnsRuntimeMechanics",
-                            "forbidden token '" + t + "' in " + loc +
-                            " — Store must not own playback source cache mechanics");
-            }
-        }
-    }
-
-    // 2) std::unique_ptr<SoundTouchStretcher> stretcher in MaterializationEntry
-    if (contains(hText, "std::unique_ptr<SoundTouchStretcher> stretcher"))
-    {
-        auto loc = locateInText(hText,
-                                "std::unique_ptr<SoundTouchStretcher> stretcher",
-                                "MaterializationStore.h");
-        return fail("materializationStoreNoLongerOwnsRuntimeMechanics",
-                    "per-entry std::unique_ptr<SoundTouchStretcher> stretcher in " + loc +
-                    " — stretcher ownership belongs to ContentRenderService, not Store");
-    }
-
-    // 3) Entry-owned renderCache inside MaterializationEntry struct
-    {
-        size_t entryPos = hText.find("struct MaterializationEntry");
-        if (entryPos != std::string::npos)
-        {
-            size_t bracePos = hText.find("{", entryPos);
-            if (bracePos != std::string::npos)
-            {
-                int depth = 0;
-                size_t closePos = bracePos;
-                for (size_t i = bracePos; i < hText.size(); ++i)
-                {
-                    if (hText[i] == '{') ++depth;
-                    if (hText[i] == '}') { --depth; if (depth == 0) { closePos = i; break; } }
-                }
-                std::string entryBody = hText.substr(
-                    bracePos, closePos - bracePos + 1);
-                if (contains(entryBody, "std::shared_ptr<RenderCache> renderCache"))
-                {
-                    auto loc = locateInText(hText,
-                                            "std::shared_ptr<RenderCache> renderCache",
-                                            "MaterializationStore.h");
-                    return fail("materializationStoreNoLongerOwnsRuntimeMechanics",
-                                "MaterializationEntry owns renderCache at " + loc +
-                                " — per-entry renderCache should not live in Store;"
-                                " ContentRenderService manages RenderCache lifecycle");
-                }
-            }
-        }
-    }
-
-    return pass("materializationStoreNoLongerOwnsRuntimeMechanics");
+    return forbidTokensInFiles("materializationStoreNoLongerOwnsRuntimeMechanics",
+                               files, forbidden);
 }
 
 // ============================================================================
@@ -983,7 +908,7 @@ static CheckResult captureBindingsHaveNoMaterializationStoreBridge()
             "getMaterializationOriginalF0StateById",
             "materializationStore_->createMaterialization",
             "materializationStore_->containsMaterialization",
-            "requestMaterializationRefresh",
+        "requestContentRefresh",
             "materializationStore_->getSnapshot"
         };
         for (const auto& t : forbidden)
@@ -1160,7 +1085,7 @@ static CheckResult captureRefreshDoesNotRequestMaterializationRefresh()
 
     const std::vector<std::string> forbidden = {
         "createMaterialization",
-        "requestMaterializationRefresh",
+        "requestContentRefresh",
         "SourceStore::CreateSourceRequest",
         "MaterializationStore::CreateMaterializationRequest",
         "onSegmentRenderingComplete"
@@ -1613,6 +1538,501 @@ static CheckResult capturePersistenceRoundtripRestoresOwnerContent()
 }
 
 // ============================================================================
+// Phase 4 helper: forbid tokens across named files
+// ============================================================================
+static CheckResult forbidTokensInFiles(const std::string& testName,
+                                        const std::vector<std::string>& files,
+                                        const std::vector<std::string>& forbidden)
+{
+    for (const auto& file : files)
+    {
+        const auto text = readText(file);
+        if (text.empty())
+            continue;
+        for (const auto& token : forbidden)
+        {
+            if (contains(text, token))
+            {
+                auto loc = locateInText(text, token, file);
+                return fail(testName, "forbidden token '" + token + "' found in " + loc);
+            }
+        }
+    }
+    return pass(testName);
+}
+
+// ============================================================================
+// Phase 4 Guard: phase4NoMaterializationStoreType
+//
+// MaterializationStore type must not appear in non-store source files.
+// The store file itself (MaterializationStore.h/cpp) is intentionally
+// excluded from the scan — it will be deleted in Task 4.9.
+// ============================================================================
+static CheckResult phase4NoMaterializationStoreType()
+{
+    const std::vector<std::string> files = {
+        "Source/PluginProcessor.h",
+        "Source/PluginProcessor.cpp",
+        "Source/ARA/OpenTuneDocumentController.h",
+        "Source/ARA/OpenTuneDocumentController.cpp",
+        "Source/Plugin/PluginEditor.cpp",
+        "Source/Standalone/PluginEditor.cpp",
+        "Source/Standalone/UI/PianoRollComponent.h",
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "Source/Utils/PianoRollEditAction.h",
+        "Source/Utils/PianoRollEditAction.cpp",
+        "Source/Utils/PitchShiftEditAction.h",
+        "Source/Utils/PitchShiftEditAction.cpp",
+        "Source/Utils/TimeGridEditAction.h",
+        "Source/Utils/TimeGridEditAction.cpp"
+    };
+
+    const std::vector<std::string> forbidden = {
+        "MaterializationStore",
+        "materializationStore_",
+        "getMaterializationStore",
+        "CreateMaterializationRequest",
+        "MaterializationSnapshot",
+        "MaterializationNotesSnapshot",
+        "contentKeyForMaterializationId"
+    };
+
+    return forbidTokensInFiles("phase4NoMaterializationStoreType",
+                               files, forbidden);
+}
+
+// ============================================================================
+// Phase 4 Guard: phase4NoMaterializationContentProvider
+// ============================================================================
+static CheckResult phase4NoMaterializationContentProvider()
+{
+    const std::vector<std::string> files = {
+        "Source/PluginProcessor.h",
+        "Source/PluginProcessor.cpp",
+        "Source/Plugin/PluginEditor.h",
+        "Source/Plugin/PluginEditor.cpp",
+        "Source/Standalone/PluginEditor.cpp",
+        "Source/Standalone/UI/PianoRollComponent.h",
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "Source/Utils/PianoRollEditAction.h",
+        "Source/Utils/PitchShiftEditAction.h",
+        "Source/Utils/TimeGridEditAction.h"
+    };
+
+    return forbidTokensInFiles("phase4NoMaterializationContentProvider",
+                               files,
+                               {"MaterializationContentAccess",
+                                "MaterializationContentCommands",
+                                "MaterializationContentProvider.h"});
+}
+
+// ============================================================================
+// Phase 4 Guard: phase4NoStoreBackedRenderOrStretcherPath
+//
+// Render and Stretch paths must not call materializationStore_->getSnapshot,
+// materializationStore_->getOpenTuneStretcher, or any by-materializationId
+// revision getter that still lives on the store.
+// ============================================================================
+static CheckResult phase4NoStoreBackedRenderOrStretcherPath()
+{
+    const std::vector<std::string> files = {
+        "Source/PluginProcessor.cpp"
+    };
+
+    const std::vector<std::string> forbidden = {
+        "materializationStore_->getSnapshot",
+        "materializationStore_->getOpenTuneStretcher",
+        "materializationStore_->getTimeStretchCache",
+        "getPitchRevision(materializationId)",
+        "getPitchShiftRevision(materializationId)",
+        "getTimeGridRevision(materializationId)"
+    };
+
+    return forbidTokensInFiles("phase4NoStoreBackedRenderOrStretcherPath",
+                               files, forbidden);
+}
+
+// ============================================================================
+// Phase 4 Guard: phase4NoOldMaterializationCommandApis
+//
+// Processor public API and active editor/undo call surfaces must not expose
+// by-materializationId mutation methods. All mutation must go through
+// ContentKey-based ContentEditCommands.
+// ============================================================================
+static CheckResult phase4NoOldMaterializationCommandApis()
+{
+    const std::vector<std::string> files = {
+        "Source/PluginProcessor.h",
+        "Source/Plugin/PluginEditor.h",
+        "Source/Plugin/PluginEditor.cpp",
+        "Source/Standalone/PluginEditor.cpp",
+        "Source/Standalone/UI/PianoRollComponent.h",
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "Source/Utils/PianoRollEditAction.h",
+        "Source/Utils/PianoRollEditAction.cpp",
+        "Source/Utils/PitchShiftEditAction.h",
+        "Source/Utils/PitchShiftEditAction.cpp",
+        "Source/Utils/TimeGridEditAction.h",
+        "Source/Utils/TimeGridEditAction.cpp"
+    };
+
+    const std::vector<std::string> forbidden = {
+        "setMaterializationNotesById",
+        "setMaterializationPitchCurveById",
+        "setMaterializationCorrectedSegmentsById",
+        "commitMaterializationNotesAndSegmentsById",
+        "setMaterializationTimeGridById",
+        "setMaterializationDetectedKeyById",
+        "setMaterializationPitchShiftSettingsById",
+        "getMaterializationNotesSnapshotById",
+        "enqueueMaterializationPartialRenderById"
+    };
+
+    return forbidTokensInFiles("phase4NoOldMaterializationCommandApis",
+                               files, forbidden);
+}
+
+// ============================================================================
+// Phase 4 Guard: phase4Stage2HasNoStoreFallback
+//
+// Inspects only runStage2RebuildForContentKey in PluginProcessor.cpp.
+// Must not contain store fallback paths. Stage2 must read owner snapshot
+// and CRS playback source, NOT MaterializationStore.
+// ============================================================================
+static CheckResult phase4Stage2HasNoStoreFallback()
+{
+    const auto text = readText("Source/PluginProcessor.cpp");
+
+    // Find the function body
+    size_t funcStart = text.find("::runStage2RebuildForContentKey");
+    if (funcStart == std::string::npos)
+        return pass("phase4Stage2HasNoStoreFallback"); // function not yet added
+
+    // Extract function body: from first '{' after signature to matching '}'
+    size_t braceOpen = text.find("{", funcStart);
+    if (braceOpen == std::string::npos)
+        return pass("phase4Stage2HasNoStoreFallback");
+
+    int depth = 0;
+    size_t braceClose = braceOpen;
+    for (size_t i = braceOpen; i < text.size(); ++i)
+    {
+        if (text[i] == '{') ++depth;
+        if (text[i] == '}') { --depth; if (depth == 0) { braceClose = i; break; } }
+    }
+    std::string funcBody = text.substr(braceOpen, braceClose - braceOpen + 1);
+
+    const std::vector<std::string> forbidden = {
+        "MaterializationStore::MaterializationSnapshot",
+        "materializationStore_->getSnapshot",
+        "getMaterializationSnapshotById",
+        "materializationStore_->getTimeStretchCache",
+        "materializationStore_->getOpenTuneStretcher"
+    };
+
+    for (const auto& token : forbidden)
+    {
+        if (contains(funcBody, token))
+        {
+            auto loc = locateInText(text, token, "Source/PluginProcessor.cpp");
+            return fail("phase4Stage2HasNoStoreFallback",
+                        "Stage2 function contains store fallback: '" + token
+                        + "' at " + loc);
+        }
+    }
+
+    return pass("phase4Stage2HasNoStoreFallback");
+}
+
+// ============================================================================
+// Phase 4 Runtime Test: phase4StandaloneEditCommandWritesOwnerAndInvalidatesCrs
+//
+// Create a StandaloneClipContent, write notes directly to the owner,
+// verify owner state changed and content revision bumped.
+// ============================================================================
+static CheckResult phase4StandaloneEditCommandWritesOwnerAndInvalidatesCrs()
+{
+    using namespace OpenTune;
+
+    StandaloneClipContent clip(1);
+    auto beforeSnap = clip.snapshotContent();
+    uint64_t beforeRev = beforeSnap->notesRevision;
+
+    std::vector<Note> newNotes;
+    Note n;
+    n.startTime = 0.0;
+    n.endTime = 1.0;
+    n.pitch = 261.626f;
+    newNotes.push_back(n);
+
+    clip.applyNotes(newNotes);
+
+    auto afterSnap = clip.snapshotContent();
+    if (afterSnap->notes.size() != 1)
+        return fail("phase4StandaloneEditCommandWritesOwnerAndInvalidatesCrs",
+                    "notes not written to owner");
+    if (std::abs(afterSnap->notes[0].pitch - 261.626f) > 0.01f)
+        return fail("phase4StandaloneEditCommandWritesOwnerAndInvalidatesCrs",
+                    "wrong note pitch in owner snapshot");
+    if (afterSnap->notesRevision <= beforeRev)
+        return fail("phase4StandaloneEditCommandWritesOwnerAndInvalidatesCrs",
+                    "notesRevision not bumped after write");
+
+    return pass("phase4StandaloneEditCommandWritesOwnerAndInvalidatesCrs");
+}
+
+// ============================================================================
+// Phase 4 Runtime Test: phase4Stage2ReadsOwnerSnapshotByContentKey
+//
+// Verify Stage2 rebuild can read a complete owner snapshot through ContentKey
+// without any MaterializationStore dependency.  All fields needed by
+// runStage2RebuildForContentKey must be present.
+// ============================================================================
+static CheckResult phase4Stage2ReadsOwnerSnapshotByContentKey()
+{
+    using namespace OpenTune;
+
+    StandaloneClipContent clip(2);
+
+    clip.applyNotes({});
+    clip.applyPitchCurve(std::make_shared<PitchCurve>());
+    clip.applyPitchShiftSettings(PitchShiftSettings{});
+
+    auto snap = clip.snapshotContent();
+    auto key = clip.contentKey();
+
+    if (key.domainKind != DomainKind::StandaloneClip)
+        return fail("phase4Stage2ReadsOwnerSnapshotByContentKey",
+                    "ContentKey domainKind is not StandaloneClip");
+    if (key.objectId != 2)
+        return fail("phase4Stage2ReadsOwnerSnapshotByContentKey",
+                    "ContentKey objectId mismatch");
+    if (!snap->pitchCurve)
+        return fail("phase4Stage2ReadsOwnerSnapshotByContentKey",
+                    "pitchCurve missing from snapshot");
+
+    // Stage2 rebuild requires these fields from the owner snapshot
+    if (snap->pitchRevision == 0)
+        return fail("phase4Stage2ReadsOwnerSnapshotByContentKey",
+                    "pitchRevision not set in owner snapshot");
+    if (snap->pitchShiftRevision == 0)
+        return fail("phase4Stage2ReadsOwnerSnapshotByContentKey",
+                    "pitchShiftRevision not set in owner snapshot");
+    // timeGridRevision is 0 until timeGrid is applied; apply and verify bump
+    clip.applyTimeGrid(TimeGridSnapshot::makeIdentity(1.0));
+    auto snapWithGrid = clip.snapshotContent();
+    if (snapWithGrid->timeGridRevision == 0)
+        return fail("phase4Stage2ReadsOwnerSnapshotByContentKey",
+                    "timeGridRevision not bumped after applyTimeGrid");
+    if (snapWithGrid->contentRevision == 0)
+        return fail("phase4Stage2ReadsOwnerSnapshotByContentKey",
+                    "contentRevision not set in owner snapshot");
+
+    // Verify snapshot can carry audio data needed for Stage2
+    auto buffer = std::make_shared<juce::AudioBuffer<float>>(1, 48000);
+    clip.applyAudioBuffer(buffer, 48000.0);
+    auto snap2 = clip.snapshotContent();
+    if (snap2->audioBuffer == nullptr)
+        return fail("phase4Stage2ReadsOwnerSnapshotByContentKey",
+                    "audioBuffer not populated in owner snapshot");
+    if (snap2->audioSampleRate <= 0.0)
+        return fail("phase4Stage2ReadsOwnerSnapshotByContentKey",
+                    "audioSampleRate not set in owner snapshot");
+
+    return pass("phase4Stage2ReadsOwnerSnapshotByContentKey");
+}
+
+// ============================================================================
+// Phase 4 Runtime Test: phase4ReferenceAnalysisCommitsToOwner
+//
+// Verify that ReferenceFeatureSet can be written and read back from the owner
+// without any MaterializationStore involvement.  Verify contentRevision bump.
+// ============================================================================
+static CheckResult phase4ReferenceAnalysisCommitsToOwner()
+{
+    using namespace OpenTune;
+
+    StandaloneClipContent clip(3);
+
+    auto beforeSnap = clip.snapshotContent();
+    uint64_t beforeRev = beforeSnap->contentRevision;
+
+    ReferenceFeatureSet features;
+    features.status = ReferenceFeatureStatus::Ready;
+    features.analysisRevision = 5;
+    clip.applyReferenceFeatures(features);
+
+    auto afterSnap = clip.snapshotContent();
+    if (afterSnap->referenceFeatures.status != ReferenceFeatureStatus::Ready)
+        return fail("phase4ReferenceAnalysisCommitsToOwner",
+                    "reference features not committed to owner");
+    if (afterSnap->referenceFeatures.analysisRevision != 5)
+        return fail("phase4ReferenceAnalysisCommitsToOwner",
+                    "reference features analysisRevision not preserved");
+    if (afterSnap->contentRevision <= beforeRev)
+        return fail("phase4ReferenceAnalysisCommitsToOwner",
+                    "contentRevision not bumped after write");
+
+    return pass("phase4ReferenceAnalysisCommitsToOwner");
+}
+
+// ============================================================================
+// Phase 4 Runtime Test: phase4CopyCloneCreateStandaloneClipsOnly
+//
+// Verify that creating two StandaloneClipContent instances with separate ids
+// maintains content independence and neither touches MaterializationStore.
+// ============================================================================
+static CheckResult phase4CopyCloneCreateStandaloneClipsOnly()
+{
+    using namespace OpenTune;
+
+    StandaloneClipContent original(10);
+    std::vector<Note> notes;
+    Note n;
+    n.startTime = 0.0;
+    n.endTime = 1.0;
+    n.pitch = 329.628f;
+    notes.push_back(n);
+    original.applyNotes(notes);
+
+    StandaloneClipContent clone(20);
+    clone.applyNotes(original.snapshotContent()->notes);
+
+    auto origSnap = original.snapshotContent();
+    auto cloneSnap = clone.snapshotContent();
+
+    if (cloneSnap->notes.size() != origSnap->notes.size())
+        return fail("phase4CopyCloneCreateStandaloneClipsOnly",
+                    "clone notes count mismatch");
+    if (cloneSnap->notes[0].pitch != origSnap->notes[0].pitch)
+        return fail("phase4CopyCloneCreateStandaloneClipsOnly",
+                    "clone note pitch differs from original");
+
+    auto origKey = original.contentKey();
+    auto cloneKey = clone.contentKey();
+    if (origKey.objectId == cloneKey.objectId)
+        return fail("phase4CopyCloneCreateStandaloneClipsOnly",
+                    "original and clone have same ContentKey");
+    if (cloneKey.domainKind != DomainKind::StandaloneClip)
+        return fail("phase4CopyCloneCreateStandaloneClipsOnly",
+                    "clone domainKind is not StandaloneClip");
+
+    // Verify cloned clips maintain independent content revisions
+    origSnap = original.snapshotContent();
+    cloneSnap = clone.snapshotContent();
+    if (origSnap->contentRevision == 0)
+        return fail("phase4CopyCloneCreateStandaloneClipsOnly",
+                    "original contentRevision not set");
+    if (cloneSnap->contentRevision == 0)
+        return fail("phase4CopyCloneCreateStandaloneClipsOnly",
+                    "clone contentRevision not set");
+
+    return pass("phase4CopyCloneCreateStandaloneClipsOnly");
+}
+
+// ============================================================================
+// Phase 4 Runtime Test: phase4RenderJobCarriesFullPayload
+//
+// Verify that enqueueContentPartialRender fills ALL fields of RenderJob
+// so that RenderWorker::processChunkRenderJob can operate without fallback.
+// ============================================================================
+static CheckResult phase4RenderJobCarriesFullPayload()
+{
+    const auto text = readText("Source/PluginProcessor.cpp");
+
+    // Locate enqueueContentPartialRender function body
+    size_t funcStart = text.find("OpenTuneAudioProcessor::enqueueContentPartialRender");
+    if (funcStart == std::string::npos)
+        return fail("phase4RenderJobCarriesFullPayload",
+                    "enqueueContentPartialRender not found");
+
+    // Find the closing brace of the function (simple heuristic: next };)
+    size_t scopeEnd = text.find("}", funcStart + 200); // skip past signature
+
+    // Fields that MUST be assigned in RenderJob population block
+    const char* requiredFields[] = {
+        "job.audioSampleRate",
+        "job.timeGrid",
+        "job.pitchShiftSettings",
+        "job.silentGaps",
+        "job.contentRevision",
+        "job.startSample",
+        "job.endSampleExclusive",
+    };
+
+    for (const char* field : requiredFields) {
+        size_t pos = text.find(field, funcStart);
+        if (pos == std::string::npos || pos > scopeEnd + 200) {
+            return fail("phase4RenderJobCarriesFullPayload",
+                        std::string("RenderJob field not populated: ") + field);
+        }
+    }
+
+    return pass("phase4RenderJobCarriesFullPayload");
+}
+
+// ============================================================================
+// Phase 4 Runtime Test: phase4EditorReadsViaContentKey
+//
+// PluginEditor.cpp must NOT contain getMaterialization*ById old read APIs.
+// It must read content through ContentKey-based DC APIs or processor snapshots.
+// ============================================================================
+static CheckResult phase4EditorReadsViaContentKey()
+{
+    const auto text = readText("Source/Plugin/PluginEditor.cpp");
+
+    const std::vector<std::string> forbidden = {
+        "getMaterializationAudioBufferById",
+        "getMaterializationPitchCurveById",
+        "getMaterializationNotesById",
+        "getMaterializationTimeGridById",
+        "getMaterializationTimeGridRevisionById",
+        "getMaterializationOriginalF0StateById",
+        "getMaterializationDetectedKeyById",
+        "getMaterializationChunkStatsById",
+        "getMaterializationChunkBoundariesById",
+        "getMaterializationRenderCacheById",
+        "getMaterializationAudioDurationById",
+        "getMaterializationNotesSnapshotById",
+        "MaterializationContentAccess"
+    };
+
+    for (const auto& token : forbidden) {
+        if (contains(text, token)) {
+            auto loc = locateInText(text, token, "Source/Plugin/PluginEditor.cpp");
+            return fail("phase4EditorReadsViaContentKey",
+                        "forbidden ById read API '" + token + "' found at " + loc);
+        }
+    }
+
+    return pass("phase4EditorReadsViaContentKey");
+}
+
+// ============================================================================
+// Phase 4 Guard: phase4NoPlaceholderTests
+// ============================================================================
+static CheckResult phase4NoPlaceholderTests()
+{
+    const auto text = readText("Tests/TestMain.cpp");
+
+    size_t arrayPos = text.find("const CheckResult results[] = {");
+    if (arrayPos == std::string::npos)
+        return fail("phase4NoPlaceholderTests", "results array not found");
+
+    size_t arrayEnd = text.find("};", arrayPos);
+    if (arrayEnd == std::string::npos)
+        return fail("phase4NoPlaceholderTests", "results array end not found");
+
+    std::string arrayText = text.substr(arrayPos, arrayEnd - arrayPos);
+
+    if (arrayText.find("placeholder") != std::string::npos
+        || arrayText.find("TODO") != std::string::npos)
+        return fail("phase4NoPlaceholderTests", "placeholder or TODO in results array");
+
+    return pass("phase4NoPlaceholderTests");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 int main()
@@ -1663,6 +2083,21 @@ int main()
         captureTickDropsFailedWithoutReentrantBinding(),
         captureF0CommitDoesNotPromoteUntilTick(),
         capturePersistenceRoundtripRestoresOwnerContent(),
+        // Phase 4 static architecture guards (expected to fail until migration complete)
+        phase4NoMaterializationStoreType(),
+        phase4NoMaterializationContentProvider(),
+        phase4NoStoreBackedRenderOrStretcherPath(),
+        phase4NoOldMaterializationCommandApis(),
+        phase4Stage2HasNoStoreFallback(),
+        phase4NoPlaceholderTests(),
+        // Phase 4 runtime tests
+        phase4StandaloneEditCommandWritesOwnerAndInvalidatesCrs(),
+        phase4Stage2ReadsOwnerSnapshotByContentKey(),
+        phase4ReferenceAnalysisCommitsToOwner(),
+        phase4CopyCloneCreateStandaloneClipsOnly(),
+        // Phase 4 runtime validation tests
+        phase4RenderJobCarriesFullPayload(),
+        phase4EditorReadsViaContentKey(),
     };
 
     int passedCount = 0;

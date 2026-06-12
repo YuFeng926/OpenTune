@@ -46,11 +46,14 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
     auto snap = std::make_shared<EditableContentSnapshot>();
     snap->sourceWindow = content.sourceWindow;
     snap->notes = content.editable.notes;
+    snap->correctedSegments = content.editable.correctedSegments;
     snap->pitchCurve = content.analysis.pitchCurve;
     snap->timeGrid = content.editable.timeGrid;
     snap->pitchShiftSettings = content.editable.pitchShiftSettings;
     snap->originalF0State = content.analysis.originalF0State;
     snap->detectedKey = content.analysis.detectedKey;
+    snap->silentGaps = content.analysis.silentGaps;
+    snap->referenceFeatures = content.analysis.referenceFeatures;
     snap->notesRevision = content.editable.notesRevision;
     snap->pitchRevision = content.editable.pitchRevision;
     snap->timeGridRevision = content.editable.timeGridRevision;
@@ -138,6 +141,20 @@ void AudioModification::applyF0Analysis(std::shared_ptr<PitchCurve> curve)
     content.analysis.originalF0State = OriginalF0State::Ready;
     content.analysis.f0Lifecycle = AnalysisLifecycle::Ready;
     ++content.analysis.analysisRevision;
+    ++content.contentRevision;
+}
+
+void AudioModification::applyReferenceFeatures(const ReferenceFeatureSet& features)
+{
+    content.analysis.referenceFeatures = features;
+    ++content.contentRevision;
+}
+
+void AudioModification::applyOriginalF0State(OriginalF0State state)
+{
+    if (content.analysis.originalF0State == state)
+        return;
+    content.analysis.originalF0State = state;
     ++content.contentRevision;
 }
 

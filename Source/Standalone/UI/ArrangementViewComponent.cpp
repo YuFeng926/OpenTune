@@ -804,7 +804,8 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
             const uint64_t key = placement.contentKey.objectId;
             alive.insert(key);
             
-            auto audioBuffer = processor_.getMaterializationAudioBufferById(placement.contentKey.objectId);
+            auto snap = processor_.getContentSnapshot(placement.contentKey);
+            auto audioBuffer = snap ? snap->audioBuffer : nullptr;
             if (audioBuffer)
             {
                 auto& mipmap = waveformMipmapCache_.getOrCreate(key);

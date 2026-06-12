@@ -34,7 +34,6 @@
 #include "UI/UIColors.h"
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
-#include "../ARA/MaterializationContentProvider.h"
 #include "../Content/DomainContentOwner.h"
 
 namespace OpenTune::Capture {
@@ -143,13 +142,10 @@ private:
 
     OpenTuneAudioProcessor& processorRef_;
 
-    // Content provider (Phase 3-6: ARA-based or processor-based)
-    std::shared_ptr<MaterializationContentAccess> contentAccess_;
-    std::shared_ptr<MaterializationContentCommands> contentCommands_;
+    std::shared_ptr<ContentEditCommands> contentCommands_;
 
-    const MaterializationContentAccess& getContentAccess() const { return *contentAccess_; }
-    MaterializationContentCommands& getContentCommands() const { return *contentCommands_; }
-    std::shared_ptr<MaterializationContentCommands> getContentCommandsShared() const { return contentCommands_; }
+    ContentEditCommands& getContentCommands() const { return *contentCommands_; }
+    std::shared_ptr<ContentEditCommands> getContentCommandsShared() const { return contentCommands_; }
 
     // [ARA 重构] 域内容所有者（替代 contentAccess_/contentCommands_ 的旧路由）
     DomainContentOwner* contentOwner_ = nullptr;
