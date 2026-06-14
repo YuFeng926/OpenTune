@@ -32,7 +32,7 @@ void TimeStretchCache::store(ContentKey key,
     juce::SpinLock::ScopedLockType sl(lock_);
 
     // Reject stale build output if invalidation occurred during build,
-    // or if the materialization is unknown (e.g. after clear()).
+    // or if the content is unknown (e.g. after clear()).
     auto genIt = invalidationGen_.find(key);
     if (genIt == invalidationGen_.end() || genIt->second != buildGeneration) {
         return; // Stale output — unknown or mismatched generation.
@@ -48,7 +48,7 @@ void TimeStretchCache::store(ContentKey key,
 
     const size_t newBytes = entry->audio.size() * sizeof(float);
 
-    // Subtract any prior entry's bytes for this materialization.
+    // Subtract any prior entry's bytes for this content.
     auto it = entries_.find(key);
     if (it != entries_.end() && it->second != nullptr && it->second->published) {
         const size_t oldBytes = it->second->audio.size() * sizeof(float);
@@ -220,7 +220,7 @@ TimeStretchCache::Stats TimeStretchCache::getStats() const
 {
     Stats s;
     juce::SpinLock::ScopedLockType sl(lock_);
-    s.materializationCount = static_cast<int>(entries_.size());
+    s.contentCount = static_cast<int>(entries_.size());
     for (const auto& [_, e] : entries_) {
         if (!e) continue;
         if (e->published) ++s.publishedCount;

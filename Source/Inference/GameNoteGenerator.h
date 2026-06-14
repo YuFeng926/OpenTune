@@ -8,7 +8,7 @@
  * use 4 of them for transcription-from-scratch — dur2bd is for the alternate
  * path where the caller already has durations). Long clips are chunked at
  * silence midpoints via the existing
- * `MaterializationStore::buildChunkBoundariesFromSilentGaps` infrastructure;
+ * `RenderChunkPlanner::buildChunkBoundariesFromSilentGaps` infrastructure;
  * per-chunk notes are stitched together by `mergeChunkNotes`.
  *
  * Provider: CPU only.  ORT 1.21's CoreML EP silently swallows kernel errors

@@ -1,6 +1,6 @@
 #pragma once
 #include "../DSP/ChromaKeyDetector.h"
-#include "../Utils/MaterializationState.h"
+#include "../Utils/ContentAnalysisState.h"
 #include "../Utils/Note.h"
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"

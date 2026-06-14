@@ -1,5 +1,5 @@
 #pragma once
-#include "../Utils/MaterializationState.h"
+#include "../Utils/ContentAnalysisState.h"
 #include "../Utils/PitchCurve.h"
 #include "../DSP/ChromaKeyDetector.h"
 #include "../DSP/ReferenceFeatures.h"

@@ -145,7 +145,7 @@ public:
     // Promoted to public so TimeStretchCache (Stage 2 cache) can account its
     // bytes into the same 256 MB global limit.  Both caches feed the same
     // counter; eviction is per-cache (RenderCache evicts its oldest chunk
-    // when over limit; TimeStretchCache replaces by materializationId).
+    // when over limit; TimeStretchCache replaces by contentId).
     static std::atomic<size_t>& globalCacheLimitBytes();
     static std::atomic<size_t>& globalCacheCurrentBytes();
     static std::atomic<size_t>& globalCachePeakBytes();

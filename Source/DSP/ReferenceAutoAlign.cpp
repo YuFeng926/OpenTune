@@ -205,7 +205,6 @@ bool buildPitchPatch(const ReferenceAlignmentRequest& request,
         corrected.retuneSpeed = refNote.retuneSpeed;
         corrected.vibratoDepth = refNote.vibratoDepth;
         corrected.vibratoRate = refNote.vibratoRate;
-        corrected.selected = false;
         corrected.dirty = true;
 
         if (!noteEqualsForPatch(targetNote, corrected)) {
@@ -311,10 +310,10 @@ bool buildTimingIntents(const ReferenceAlignmentRequest& request,
 AlignmentPatch ReferenceAutoAlign::align(const ReferenceAlignmentRequest& request)
 {
     AlignmentPatch patch;
-    patch.targetMaterializationId = request.target.materializationId;
+    patch.targetContentKey = request.target.contentKey;
 
-    if (request.target.materializationId == 0
-        || request.reference.materializationId == 0
+    if (!request.target.contentKey.isValid()
+        || !request.reference.contentKey.isValid()
         || request.target.timelineEndSeconds <= request.target.timelineStartSeconds
         || request.reference.timelineEndSeconds <= request.reference.timelineStartSeconds) {
         fail(patch, AlignmentPatch::ErrorCode::InvalidRequest, "Invalid AUTO Ref request");
@@ -395,7 +394,7 @@ AlignmentPatch ReferenceAutoAlign::align(const ReferenceAlignmentRequest& reques
     }
 
     if (!pitchAttempted && !timeAttempted) {
-        fail(patch, AlignmentPatch::ErrorCode::NoMutation, "AUTO Ref produced no materialization changes");
+        fail(patch, AlignmentPatch::ErrorCode::NoMutation, "AUTO Ref produced no content changes");
         return patch;
     }
 

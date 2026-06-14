@@ -5,7 +5,10 @@
 #include "../Content/ContentKey.h"
 #include <juce_core/juce_core.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <atomic>
+#include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace OpenTune {
@@ -71,9 +74,15 @@ public:
         double startInModificationTime{0.0};
         double durationInPlaybackTime{0.0};
         double durationInModificationTime{0.0};
-        double materializationDurationSeconds{0.0};
+        double contentDurationSeconds{0.0};
 
         double endInPlaybackTime() const noexcept { return startInPlaybackTime + durationInPlaybackTime; }
+    };
+
+    struct RenderPlan
+    {
+        std::vector<juce::ARAPlaybackRegion*> playbackRegions;
+        std::vector<PlaybackRegionRenderItem> items;
     };
     
     ~OpenTunePlaybackRenderer() override;
@@ -102,8 +111,28 @@ private:
     int maximumSamplesPerBlock_ = 512;
     juce::AudioBuffer<float> playbackScratch_;
     OpenTuneDocumentController* documentController_ = nullptr;
-    std::vector<juce::ARAPlaybackRegion*> assignedPlaybackRegions_;
-    std::vector<PlaybackRegionRenderItem> renderItems_;
+
+    struct AtomicRenderPlan
+    {
+        std::shared_ptr<const RenderPlan> value{std::make_shared<RenderPlan>()};
+
+        std::shared_ptr<const RenderPlan> load(std::memory_order order = std::memory_order_acquire) const noexcept
+        {
+            return std::atomic_load_explicit(&value, order);
+        }
+
+        void store(std::shared_ptr<const RenderPlan> next,
+                   std::memory_order order = std::memory_order_release) noexcept
+        {
+            std::atomic_store_explicit(&value, std::move(next), order);
+        }
+    };
+
+    AtomicRenderPlan currentPlan_;
+
+    std::shared_ptr<const RenderPlan> buildRenderPlan(
+        std::vector<juce::ARAPlaybackRegion*> playbackRegions) const;
+    void publishRenderPlanFor(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTunePlaybackRenderer)
 };

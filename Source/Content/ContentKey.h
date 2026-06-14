@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <functional>
 
 namespace OpenTune {
 
@@ -11,7 +12,7 @@ enum class DomainKind : uint8_t
     RegularVST3Capture
 };
 
-// 标识一个域内容根，不包含 materializationId、store 指针、render-cache 指针。
+// 标识一个域内容根，不包含 contentId、store 指针、render-cache 指针。
 struct ContentKey
 {
     DomainKind domainKind{DomainKind::ARAAudioModification};
@@ -33,3 +34,23 @@ struct ContentKey
 };
 
 } // namespace OpenTune
+
+// std::hash specialization for ContentKey
+namespace std {
+    template<>
+    struct hash<OpenTune::ContentKey>
+    {
+        size_t operator()(const OpenTune::ContentKey& key) const noexcept
+        {
+            // Combine domain, objectId, and discriminator
+            size_t h1 = std::hash<uint8_t>{}(static_cast<uint8_t>(key.domainKind));
+            size_t h2 = std::hash<uint64_t>{}(key.objectId);
+            size_t h3 = std::hash<uint64_t>{}(key.sourceWindowDiscriminator);
+            
+            // Simple hash combine (boost-style)
+            h1 ^= h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2);
+            h1 ^= h3 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2);
+            return h1;
+        }
+    };
+}

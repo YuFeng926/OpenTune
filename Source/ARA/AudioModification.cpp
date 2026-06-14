@@ -13,16 +13,14 @@ void AudioModification::updateIdentity(juce::ARAAudioModification* modification)
 
 void AudioModification::attachSource(const AudioSource& source)
 {
-    sourcePersistentId = source.getIdentity().persistentId;
+    // Per ARA2 spec: AudioSource binding is part of content.sourceWindow,
+    // single source of truth for source identity.
     const auto& shape = source.getShape();
-    contentWindow = SourceWindow{sourceId, 0.0, shape.durationSeconds()};
-    content.sourceWindow = contentWindow;
+    content.sourceWindow = SourceWindow{0, source.getIdentity().persistentId, 0.0, shape.durationSeconds()};
 }
 
 void AudioModification::resetContent() noexcept
 {
-    materializationDurationSeconds = 0.0;
-    contentWindow = {};
     content = AudioModificationContentState{};
     birthState = AudioModificationBirthState::Empty;
 }
@@ -30,15 +28,12 @@ void AudioModification::resetContent() noexcept
 bool AudioModification::isRenderable() const noexcept
 {
     return content.lifecycle == ContentLifecycle::Ready
-        && materializationDurationSeconds > 0.0;
+        && content.sourceWindow.isValid();
 }
 
 ContentKey AudioModification::contentKey() const noexcept
 {
-    ContentKey key;
-    key.domainKind = DomainKind::ARAAudioModification;
-    key.objectId = persistentId.isEmpty() ? 0 : static_cast<uint64_t>(persistentId.hashCode64());
-    return key;
+    return contentIdentity;
 }
 
 std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotContent() const
@@ -60,41 +55,6 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
     snap->pitchShiftRevision = content.editable.pitchShiftRevision;
     snap->contentRevision = content.contentRevision;
     return snap;
-}
-
-void AudioModification::retireContent()
-{
-    RetiredContentRecord record;
-    record.key = contentKey();
-    record.content = content;
-    retiredContentRecords.push_back(std::move(record));
-
-    content = AudioModificationContentState{};
-    content.lifecycle = ContentLifecycle::Retired;
-    ++content.contentRevision;
-}
-
-bool AudioModification::reviveContent(ContentKey key)
-{
-    auto it = std::find_if(retiredContentRecords.begin(), retiredContentRecords.end(),
-        [&](const auto& r) { return r.key == key; });
-    if (it == retiredContentRecords.end())
-        return false;
-
-    content = it->content;
-    content.lifecycle = ContentLifecycle::Ready;
-    ++content.contentRevision;
-    retiredContentRecords.erase(it);
-    birthState = AudioModificationBirthState::Ready;
-    return true;
-}
-
-void AudioModification::releaseRetiredContent(ContentKey key)
-{
-    auto it = std::find_if(retiredContentRecords.begin(), retiredContentRecords.end(),
-        [&](const auto& r) { return r.key == key; });
-    if (it != retiredContentRecords.end())
-        retiredContentRecords.erase(it);
 }
 
 void AudioModification::applyNotes(const std::vector<Note>& notes)

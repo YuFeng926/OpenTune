@@ -44,506 +44,75 @@ bool nearlyEqualSeconds(double a, double b)
     return std::abs(a - b) <= (1.0 / TimeCoordinate::kRenderSampleRate);
 }
 
-MaterializationTimelineProjection makeCaptureSegmentProjection(const Capture::SegmentInfo& segment)
+ContentTimelineProjection makeCaptureSegmentProjection(const Capture::SegmentInfo& segment)
 {
-    MaterializationTimelineProjection projection;
+    ContentTimelineProjection projection;
     projection.timelineStartSeconds = segment.T_start;
     projection.timelineDurationSeconds = segment.durationSeconds;
-    projection.materializationDurationSeconds = segment.durationSeconds;
+    projection.contentDurationSeconds = segment.durationSeconds;
     return projection;
 }
 
-TimelineMaterializationPlacement makePlacement(uint64_t materializationId,
-                                               const MaterializationTimelineProjection& projection)
+TimelineContentPlacement makePlacement(ContentKey contentKey,
+                                                const ContentTimelineProjection& projection)
 {
-    TimelineMaterializationPlacement placement;
-    placement.materializationId = materializationId;
+    TimelineContentPlacement placement;
+    placement.contentKey = contentKey;
     placement.projection = projection;
     return placement;
 }
 
-uint64_t chooseActiveCaptureContentId(Capture::CaptureSession& session,
+ContentKey chooseActiveCaptureContentKey(Capture::CaptureSession& session,
                                       double hostTimeSeconds)
 {
     Capture::SegmentInfo activeSegment;
     if (session.resolveDisplaySegment(hostTimeSeconds, activeSegment))
-        return activeSegment.contentId;
-
-    return 0;
+        return activeSegment.contentKey;
+    return {};
 }
 
-juce::String buildRenderingOverlayTitle(int completedTasks, int totalTasks, float progress)
+ContentKey OpenTuneAudioProcessorEditor::resolveCurrentContentKey()
 {
-    if (totalTasks <= 0)
-        return juce::String::fromUTF8("\xe6\xad\xa3\xe5\x9c\xa8\xe6\xb8\xb2\xe6\x9f\x93\xe4\xb8\xad");
-    const int pct = static_cast<int>(std::round(progress * 100.0f));
-    return juce::String::fromUTF8("\xe6\xb8\xb2\xe6\x9f\x93\xe4\xb8\xad ")
-        + juce::String(pct) + "% ("
-        + juce::String(completedTasks) + "/"
-        + juce::String(totalTasks) + ")";
+    return resolveCurrentContentSync().activeContentKey;
 }
 
-#if JucePlugin_Enable_ARA
-MaterializationTimelineProjection makePianoRollLocalProjection(
-    const OpenTuneDocumentController::PlaybackRegionProjection& region)
+OpenTuneAudioProcessorEditor::PianoRollContentSync
+OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
 {
-    MaterializationTimelineProjection projection;
-    projection.timelineStartSeconds = region.startInPlaybackTime;
-    projection.timelineDurationSeconds = region.durationInPlaybackTime;
-    projection.materializationDurationSeconds = region.materializationDurationSeconds;
-    return projection;
-}
-#endif
-
-} // namespace
-
-OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& processor)
-    : AudioProcessorEditor(&processor)
-#if JucePlugin_Enable_ARA
-    , juce::AudioProcessorEditorARAExtension(&processor)
-#endif
-    , processorRef_(processor)
-    , languageState_(std::make_shared<LocalizationManager::LanguageState>(
-          LocalizationManager::LanguageState{ appPreferences_.getState().shared.language }))
-    , languageBinding_(languageState_)
-    , menuBar_(processor, MenuBarComponent::Profile::Plugin)
-    , topBar_(menuBar_, transportBar_)
-{
-    contentCommands_ = processorRef_.getContentCommands();
-
-    menuBar_.setVisible(false);
-
-    // Inject content provider into pianoRoll via DomainContentOwner
-    // 初始化时不设置 contentOwner_（timer 中根据上下文动态解析）
-
-    addAndMakeVisible(topBar_);
-    addAndMakeVisible(parameterPanel_);
-    addAndMakeVisible(pianoRoll_);
-    addAndMakeVisible(autoRenderOverlay_);
-    autoRenderOverlay_.setVisible(false);
-    addAndMakeVisible(renderBadge_);
-    renderBadge_.setVisible(false);
-
-    LocalizationManager::getInstance().addListener(this);
-    menuBar_.addListener(this);
-    transportBar_.addListener(this);
-    parameterPanel_.addListener(this);
-    pianoRoll_.addListener(this);
-    transportBar_.setLayoutProfile(TransportBarComponent::LayoutProfile::VST3AraSingleClip);
-
-    pianoRoll_.setProcessor(&processorRef_);
-    pianoRoll_.setPianoKeyAudition(&processorRef_.getPianoKeyAudition());
-    pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
-
-    transportBar_.setPlaying(processorRef_.isPlaying());
-    transportBar_.setLoopEnabled(processorRef_.isLoopEnabled());
-    transportBar_.setBpm(processorRef_.getBpm());
-    pianoRoll_.setBpm(processorRef_.getBpm());
-    pianoRoll_.setTimeSignature(processorRef_.getTimeSigNumerator(), processorRef_.getTimeSigDenominator());
-
-    transportBar_.onFileMenuRequested = [this]() {
-        auto menuNames = menuBar_.getMenuBarNames();
-        auto menu = menuBar_.getMenuForIndex(0, menuNames.isEmpty() ? juce::String() : menuNames[0]);
-        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&transportBar_.getFileButton()).withParentComponent(this),
-                           [this](int result) {
-                               if (result != 0) {
-                                   menuBar_.menuItemSelected(result, 0);
-                               }
-                           });
-    };
-
-    transportBar_.onEditMenuRequested = [this]() {
-        auto menuNames = menuBar_.getMenuBarNames();
-        auto menu = menuBar_.getMenuForIndex(1, menuNames.size() > 1 ? menuNames[1] : juce::String());
-        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&transportBar_.getEditButton()).withParentComponent(this),
-                           [this](int result) {
-                               if (result != 0) {
-                                   menuBar_.menuItemSelected(result, 1);
-                               }
-                           });
-    };
-
-    transportBar_.onViewMenuRequested = [this]() {
-        auto menuNames = menuBar_.getMenuBarNames();
-        auto menu = menuBar_.getMenuForIndex(2, menuNames.size() > 2 ? menuNames[2] : juce::String());
-        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&transportBar_.getViewButton()).withParentComponent(this),
-                           [this](int result) {
-                               if (result != 0) {
-                                   menuBar_.menuItemSelected(result, 2);
-                               }
-                           });
-    };
-
-    topBar_.onToggleTrackPanel = nullptr;
-    topBar_.setTrackPanelToggleVisible(false);
-    topBar_.onToggleParameterPanel = [this]() {
-        parameterPanel_.setVisible(!parameterPanel_.isVisible());
-        resized();
-    };
-    topBar_.setSidePanelsVisible(false, true);
-
-    applyThemeToEditor(appPreferences_.getState().shared.theme);
-
-    setWantsKeyboardFocus(true);
-    setResizable(true, true);
-    setResizeLimits(960, 640, 3000, 2000);
-    setSize(1280, 820);
-
-    syncMaterializationProjectionToPianoRoll();
-    syncSharedAppPreferences();
-    updateRegularCaptureSessionCallback();
-
-    startTimerHz(kHeartbeatHz);
-
-    // 启动时应用持久化声码器权重偏�?
-    const auto weight = appPreferences_.getState().shared.vocoderModelWeight;
-    processorRef_.setVocoderModelWeight(weight);
-    // 幂等：weight==Community �?setVocoderModelWeight �?return early
-}
-
-OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
-{
-    stopTimer();
-    clearRegularCaptureSessionCallback();
-    LocalizationManager::getInstance().removeListener(this);
-    pianoRoll_.removeListener(this);
-    parameterPanel_.removeListener(this);
-    transportBar_.removeListener(this);
-    menuBar_.removeListener(this);
-    setLookAndFeel(nullptr);
-}
-
-void OpenTuneAudioProcessorEditor::paint(juce::Graphics& g)
-{
-    if (UIColors::currentThemeId() == ThemeId::Overdose)
-    {
-        UiAssets::drawAssetCover(g, UiAssetId::BackgroundMain, getLocalBounds().toFloat());
-        return;
-    }
-
-    g.fillAll(UIColors::backgroundDark);
-}
-
-void OpenTuneAudioProcessorEditor::mouseDown(const juce::MouseEvent& e)
-{
-    // 确保点击 Editor 背景时焦点转�?PianoRoll（按键可达）
-    if (!pianoRoll_.hasKeyboardFocus(true))
-        pianoRoll_.grabKeyboardFocus();
-    juce::AudioProcessorEditor::mouseDown(e);
-}
-
-void OpenTuneAudioProcessorEditor::resized()
-{
-    auto bounds = getLocalBounds();
-
-    topBar_.setBounds(bounds.removeFromTop(TOP_BAR_HEIGHT));
-
-    if (parameterPanel_.isVisible()) {
-        parameterPanel_.setBounds(bounds.removeFromRight(PARAMETER_PANEL_WIDTH));
-    } else {
-        parameterPanel_.setBounds({});
-    }
-
-    pianoRoll_.setBounds(bounds);
-    autoRenderOverlay_.setBounds(bounds);
-    autoRenderOverlay_.toFront(false);
-    renderBadge_.setBounds(bounds.getRight() - 148, bounds.getY() + 8, 140, 28);
-    renderBadge_.toFront(false);
-}
-
-void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection()
-{
-    ParameterPanelSyncContext context;
-    context.clipRetuneSpeedPercent = pianoRoll_.getCurrentRetuneSpeed() * 100.0f;
-    context.clipVibratoDepth = pianoRoll_.getCurrentVibratoDepth();
-    context.clipVibratoRate = pianoRoll_.getCurrentVibratoRate();
-    context.wasShowingSelectionParameters = showingSingleNoteParams_;
-
-    context.hasSelectedNoteParameters = pianoRoll_.getSingleSelectedNoteParameters(
-        context.selectedNoteRetuneSpeedPercent,
-        context.selectedNoteVibratoDepth,
-        context.selectedNoteVibratoRate);
-
-    const auto scheme = appPreferences_.getState().shared.audioEditingScheme;
-    const auto decision = resolveParameterPanelSyncDecision(scheme, context);
-    if (decision.shouldSetRetuneSpeed) {
-        parameterPanel_.setRetuneSpeed(decision.retuneSpeedPercent);
-    }
-    if (decision.shouldSetVibratoDepth) {
-        parameterPanel_.setVibratoDepth(decision.vibratoDepth);
-    }
-    if (decision.shouldSetVibratoRate) {
-        parameterPanel_.setVibratoRate(decision.vibratoRate);
-    }
-
-    showingSingleNoteParams_ = decision.nextShowingSelectionParameters;
-}
-
-void OpenTuneAudioProcessorEditor::timerCallback()
-{
-    // 首次 timer 回调时确�?PianoRoll 获取焦点（VST3 嵌入时序可能导致 visibilityChanged 中的 grab 失败�?
-    if (!initialFocusGrabbed_ && isShowing()) {
-        initialFocusGrabbed_ = true;
-        pianoRoll_.grabKeyboardFocus();
-    }
-
-    syncSharedAppPreferences();
-    updateRegularCaptureSessionCallback();
-
-    // Drive capture session tick (poll Capturing→Pending and Processing→Edited transitions,
-    // run reclaim sweep). No-op when capture session is null (Standalone / VST3+ARA).
-    if (auto* session = processorRef_.getCaptureSession()) {
-        session->tick();
-        // Drive record button visual state from capture session state:
-        //   HasCapturing �?Capturing (toggled + enabled)
-        //   HasProcessing �?Processing (disabled to prevent re-trigger)
-        //   Idle �?Idle (normal appearance)
-        using OpenTune::Capture::SessionState;
-        const auto captureState = session->getGlobalState();
-        if (captureState == SessionState::HasCapturing)
-            transportBar_.setRecordButtonState(OpenTune::RecordButtonState::Capturing);
-        else if (captureState == SessionState::HasProcessing)
-            transportBar_.setRecordButtonState(OpenTune::RecordButtonState::Processing);
-        else
-            transportBar_.setRecordButtonState(OpenTune::RecordButtonState::Idle);
-    }
-
-    const double currentPositionSeconds = processorRef_.getPosition();
-    const bool playing = processorRef_.isPlaying();
-    const bool loopEnabled = processorRef_.isLoopEnabled();
-    transportBar_.setPositionSeconds(currentPositionSeconds);
-
-    syncParameterPanelFromSelection();
-
-    const double bpm = processorRef_.getBpm();
-    if (bpm > 0.0 && std::abs(bpm - lastSyncedBpm_) > 0.001) {
-        transportBar_.setBpm(bpm);
-        pianoRoll_.setBpm(bpm);
-        lastSyncedBpm_ = bpm;
-    }
-
-    const int timeSigNum = processorRef_.getTimeSigNumerator();
-    const int timeSigDenom = processorRef_.getTimeSigDenominator();
-    if (timeSigNum > 0 && timeSigDenom > 0
-        && (timeSigNum != lastSyncedTimeSigNum_ || timeSigDenom != lastSyncedTimeSigDenom_)) {
-        pianoRoll_.setTimeSignature(timeSigNum, timeSigDenom);
-        lastSyncedTimeSigNum_ = timeSigNum;
-        lastSyncedTimeSigDenom_ = timeSigDenom;
-    }
-
-    if (transportBar_.isPlaying() != playing) {
-        transportBar_.setPlaying(playing);
-        pianoRoll_.setIsPlaying(playing);
-        FrameScheduler::instance().setTimelinePlaybackActive(playing);
-    }
-    transportBar_.setLoopEnabled(loopEnabled);
-
-    // Drive PianoRoll heartbeat first so autoTuneInFlight_ is up-to-date
-    if (pianoRoll_.isShowing()) {
-        pianoRoll_.onHeartbeatTick();
-    }
-
-    bool shouldShowOverlay = false;
-
-    const uint64_t activeMaterializationId = resolveCurrentMaterializationId();
-    RenderCache::ChunkStats chunkStats;
-#if JucePlugin_Enable_ARA
-    if (auto* dc = processorRef_.getDocumentController())
-        chunkStats = dc->readChunkStats({DomainKind::ARAAudioModification, activeMaterializationId, 0});
-    else
-#endif
-    {
-        auto key = ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0};
-        auto rc = processorRef_.getContentRenderService()->getRenderCache(key);
-        chunkStats = rc ? rc->getChunkStats() : RenderCache::ChunkStats{};
-    }
-    const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
-    const bool hasActiveRender = chunkStats.hasActiveWork();
-
-    // Pull fresh notes when an async generator (GAME) commits late.  Only
-    // refresh when the same materialization advances its notesRevision �?
-    // changing materializationId already triggers a refresh via
-    // syncMaterializationProjectionToPianoRoll �?setEditedMaterialization.
-    if (activeMaterializationId != 0) {
-        uint64_t currentNotesRevision = 0;
-#if JucePlugin_Enable_ARA
-        if (auto* dc = processorRef_.getDocumentController())
-            currentNotesRevision = dc->readNotesRevision({DomainKind::ARAAudioModification, activeMaterializationId, 0});
-        else
-#endif
-        {
-            auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0});
-            currentNotesRevision = snap ? snap->notesRevision : 0;
-        }
-        if (activeMaterializationId == lastPianoRollNotesRevisionMatId_
-            && currentNotesRevision != lastPianoRollNotesRevision_
-            && pianoRoll_.isShowing()) {
-            pianoRoll_.refreshEditedMaterializationNotes();
-            pianoRoll_.requestContentRedraw();
-        }
-        lastPianoRollNotesRevisionMatId_ = activeMaterializationId;
-        lastPianoRollNotesRevision_      = currentNotesRevision;
-    } else {
-        lastPianoRollNotesRevisionMatId_ = 0;
-        lastPianoRollNotesRevision_      = 0;
-    }
-
-    // Pull fresh TimeGrid when external commits / undo-redo publish silently.
-    // tool-handler edits fire notifyTimeGridChanged with Interactive priority
-    // for sub-frame latency; this polling guard catches the non-interactive paths.
-    if (activeMaterializationId != 0) {
-        uint64_t currentTimeGridRevision = 0;
-#if JucePlugin_Enable_ARA
-        if (auto* dc = processorRef_.getDocumentController())
-            currentTimeGridRevision = dc->readTimeGridRevision({DomainKind::ARAAudioModification, activeMaterializationId, 0});
-        else
-#endif
-        {
-            auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0});
-            currentTimeGridRevision = snap ? snap->timeGridRevision : 0;
-        }
-        if (activeMaterializationId == lastPianoRollTimeGridRevisionMatId_
-            && currentTimeGridRevision != lastPianoRollTimeGridRevision_
-            && pianoRoll_.isShowing()) {
-            pianoRoll_.requestContentRedraw();
-        }
-        lastPianoRollTimeGridRevisionMatId_ = activeMaterializationId;
-        lastPianoRollTimeGridRevision_      = currentTimeGridRevision;
-    } else {
-        lastPianoRollTimeGridRevisionMatId_ = 0;
-        lastPianoRollTimeGridRevision_      = 0;
-    }
-
-    if (isAutoProcessing) {
-        const int total = chunkStats.total();
-        const int done = chunkStats.idle + chunkStats.blank;
-        const float progress = (total > 0) ? static_cast<float>(done) / static_cast<float>(total) : 0.0f;
-        autoRenderOverlay_.setMessageText(buildRenderingOverlayTitle(done, total, progress));
-        shouldShowOverlay = true;
-    }
-
-    // Waiting for ARA materialization birth (Read Audio) �?blocking overlay with spinner.
-    // Auto-dismissed when the materialization is ready (detected via resolveCurrentMaterializationId).
-    if (waitingForAraMaterialization_) {
-        if (activeMaterializationId != 0) {
-            waitingForAraMaterialization_ = false;
-        } else {
-            // Safety timeout: if birth takes > 60s, dismiss to avoid trapping user.
-            const auto nowMs = juce::Time::getApproximateMillisecondCounter();
-            if (nowMs - araWaitStartMs_ > 60000) {
-                AppLogger::log("ReadAudio: ARA materialization birth timed out after 60s");
-                waitingForAraMaterialization_ = false;
-            } else {
-                shouldShowOverlay = true;
-            }
-        }
-    }
-
-    if (autoRenderOverlay_.isVisible() != shouldShowOverlay) {
-        autoRenderOverlay_.setVisible(shouldShowOverlay);
-    }
-
-    // Lightweight badge for non-AUTO render
-    const bool shouldShowBadge = hasActiveRender && !shouldShowOverlay;
-    if (shouldShowBadge) {
-        const int total = chunkStats.total();
-        const int done = chunkStats.idle + chunkStats.blank;
-        renderBadge_.setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u4e2d (")
-            + juce::String(done) + "/" + juce::String(total) + ")");
-    }
-    if (renderBadge_.isVisible() != shouldShowBadge) {
-        renderBadge_.setVisible(shouldShowBadge);
-    }
-
-    // Unified materialization �?PianoRoll sync (projection + curve + buffer + scale)
-    syncMaterializationProjectionToPianoRoll();
-
-    // Consume audio-thread log events on message thread (see AudioThreadLogEvent).
-    processorRef_.consumeAudioThreadLogs();
-}
-
-void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
-{
-    const auto sharedPreferences = appPreferences_.getState().shared;
-    const auto& visualPreferences = sharedPreferences.pianoRollVisualPreferences;
-
-    if (languageState_ != nullptr) {
-        languageState_->language = sharedPreferences.language;
-    }
-
-    if (appliedLanguage_ != sharedPreferences.language) {
-        appliedLanguage_ = sharedPreferences.language;
-        LocalizationManager::getInstance().notifyLanguageChanged(sharedPreferences.language);
-    }
-
-    if (appliedThemeId_ != sharedPreferences.theme)
-        applyThemeToEditor(sharedPreferences.theme);
-
-    pianoRoll_.setAudioEditingScheme(sharedPreferences.audioEditingScheme);
-    pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
-    pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
-    pianoRoll_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
-    pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
-    menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
-    menuBar_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
-    menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
-    pianoRoll_.setShortcutSettings(appPreferences_.getState().shared.shortcuts);
-}
-
-void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
-{
-    juce::ignoreUnused(newLanguage);
-
-    menuBar_.menuItemsChanged();
-    menuBar_.repaint();
-    topBar_.refreshLocalizedText();
-    parameterPanel_.refreshLocalizedText();
-    repaint();
-}
-
-uint64_t OpenTuneAudioProcessorEditor::resolveCurrentMaterializationId()
-{
-    return resolveCurrentMaterializationSync().activeMaterializationId;
-}
-
-OpenTuneAudioProcessorEditor::PianoRollMaterializationSync
-OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()
-{
-    PianoRollMaterializationSync sync;
+    PianoRollContentSync sync;
 
 #if JucePlugin_Enable_ARA
     if (const auto* dc = processorRef_.getDocumentController()) {
         const auto regions = dc->getPlaybackRegionProjections();
         for (const auto& region : regions) {
-            const auto materializationId = region.contentKey.objectId;
-            if (materializationId == 0)
+            if (!region.contentKey.isValid())
                 continue;
 
-            sync.placements.push_back(makePlacement(materializationId,
-                                                    makePianoRollLocalProjection(region)));
+            sync.placements.push_back(makePlacement(region.contentKey,
+                                                     makePianoRollLocalProjection(region)));
         }
 
-        // ViewSelection 优先；否则选 timeline 最早的已 materialized placement
+        // ViewSelection 优先；否则选 timeline 最早的 content-backed placement
         if (const auto focusedRegion = dc->getFocusedEditorPlaybackRegionProjection()) {
-            sync.activeMaterializationId = focusedRegion->contentKey.objectId;
+            sync.activeContentKey = focusedRegion->contentKey;
         }
 
-        if (sync.activeMaterializationId == 0 && !sync.placements.empty()) {
+        if (!sync.activeContentKey.isValid() && !sync.placements.empty()) {
             const auto earliest = std::min_element(sync.placements.begin(),
-                                                   sync.placements.end(),
-                                                   [](const auto& a, const auto& b) {
-                                                       return a.projection.timelineStartSeconds < b.projection.timelineStartSeconds;
-                                                   });
-            sync.activeMaterializationId = earliest->materializationId;
+                                                    sync.placements.end(),
+                                                    [](const auto& a, const auto& b) {
+                                                        return a.projection.timelineStartSeconds < b.projection.timelineStartSeconds;
+                                                    });
+            sync.activeContentKey = earliest->contentKey;
         }
 
         const bool activeBelongsToPlacements = std::any_of(sync.placements.begin(),
-                                                           sync.placements.end(),
-                                                           [&sync](const auto& placement) {
-                                                               return placement.materializationId == sync.activeMaterializationId;
-                                                           });
+                                                            sync.placements.end(),
+                                                            [&sync](const auto& placement) {
+                                                                return placement.contentKey == sync.activeContentKey;
+                                                            });
         if (!activeBelongsToPlacements)
-            sync.activeMaterializationId = 0;
+            sync.activeContentKey = {};
 
         return sync;
     }
@@ -553,21 +122,20 @@ OpenTuneAudioProcessorEditor::resolveCurrentMaterializationSync()
         double viewEndSeconds = 0.0;
         for (const auto& segment : session->listEditedSegments()) {
             const auto projection = makeCaptureSegmentProjection(segment);
-            sync.placements.push_back(makePlacement(segment.contentId, projection));
+            sync.placements.push_back(makePlacement(segment.contentKey, projection));
             viewEndSeconds = std::max(viewEndSeconds, projection.timelineEndSeconds());
         }
 
         if (!sync.placements.empty()) {
-            sync.activeMaterializationId = chooseActiveCaptureContentId(*session, processorRef_.getPosition());
+            sync.activeContentKey = chooseActiveCaptureContentKey(*session, processorRef_.getPosition());
             const bool activeBelongsToPlacements = std::any_of(sync.placements.begin(),
                                                                sync.placements.end(),
                                                                [&sync](const auto& placement) {
-                                                                   return placement.materializationId == sync.activeMaterializationId;
+                                                                   return placement.contentKey == sync.activeContentKey;
                                                                });
             if (!activeBelongsToPlacements)
-                sync.activeMaterializationId = 0;
+                sync.activeContentKey = {};
 
-            sync.usesRegularCaptureTimelineDomain = true;
             sync.timelineViewStartSeconds = 0.0;
             sync.timelineViewEndSeconds = viewEndSeconds;
         }
@@ -588,10 +156,10 @@ void OpenTuneAudioProcessorEditor::updateRegularCaptureSessionCallback()
         return;
 
     regularCaptureCallbackSession_ = session;
-    session->setActiveSegmentChangedCallback([this](uint64_t contentId) {
-        AppLogger::log("VST3 Capture: completed contentId="
-            + juce::String(static_cast<juce::int64>(contentId)));
-        syncMaterializationProjectionToPianoRoll();
+    session->setActiveSegmentChangedCallback([this](ContentKey contentKey) {
+        AppLogger::log("VST3 Capture: completed contentKey="
+            + juce::String(static_cast<juce::int64>(contentKey.objectId)));
+        syncContentProjectionToPianoRoll();
     });
 }
 
@@ -850,62 +418,54 @@ void OpenTuneAudioProcessorEditor::undoRequested()
 {
     auto* action = processorRef_.getUndoManager().undo();
     if (!action) return;
-    syncMaterializationProjectionToPianoRoll();
-    const uint64_t matId = resolveCurrentMaterializationId();
-    if (matId == 0) return;
+    syncContentProjectionToPianoRoll();
+    const auto activeKey = resolveCurrentContentKey();
+    if (!activeKey.isValid()) return;
 
     std::shared_ptr<PitchCurve> curve;
 #if JucePlugin_Enable_ARA
     if (auto* dc = processorRef_.getDocumentController())
-        curve = dc->readPitchCurve({DomainKind::ARAAudioModification, matId, 0});
-    else
+        curve = dc->readPitchCurve(activeKey);
 #endif
-    {
-        auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, matId, 0});
-        curve = snap ? snap->pitchCurve : nullptr;
-    }
+
     if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
 
     double startSec = 0.0;
-    double endSec = pianoRoll_.getMaterializationDurationSeconds();
+    double endSec = pianoRoll_.getContentDurationSeconds();
     auto* editAction = dynamic_cast<OpenTune::PianoRollEditAction*>(action);
-    if (editAction && editAction->getContentKey().objectId == matId && editAction->getAffectedEndFrame() > 0) {
+    if (editAction && editAction->getContentKey() == activeKey && editAction->getAffectedEndFrame() > 0) {
         const double spf = static_cast<double>(curve->getHopSize()) / curve->getSampleRate();
         startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
         endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
     }
-    contentCommands_->enqueuePartialRender(ContentKey{DomainKind::ARAAudioModification, matId, 0}, startSec, endSec);
+    contentCommands_->enqueuePartialRender(activeKey, startSec, endSec);
 }
 
 void OpenTuneAudioProcessorEditor::redoRequested()
 {
     auto* action = processorRef_.getUndoManager().redo();
     if (!action) return;
-    syncMaterializationProjectionToPianoRoll();
-    const uint64_t matId = resolveCurrentMaterializationId();
-    if (matId == 0) return;
+    syncContentProjectionToPianoRoll();
+    const auto activeKey = resolveCurrentContentKey();
+    if (!activeKey.isValid()) return;
 
     std::shared_ptr<PitchCurve> curve;
 #if JucePlugin_Enable_ARA
     if (auto* dc = processorRef_.getDocumentController())
-        curve = dc->readPitchCurve({DomainKind::ARAAudioModification, matId, 0});
-    else
+        curve = dc->readPitchCurve(activeKey);
 #endif
-    {
-        auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, matId, 0});
-        curve = snap ? snap->pitchCurve : nullptr;
-    }
+
     if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
 
     double startSec = 0.0;
-    double endSec = pianoRoll_.getMaterializationDurationSeconds();
+    double endSec = pianoRoll_.getContentDurationSeconds();
     auto* editAction = dynamic_cast<OpenTune::PianoRollEditAction*>(action);
-    if (editAction && editAction->getContentKey().objectId == matId && editAction->getAffectedEndFrame() > 0) {
+    if (editAction && editAction->getContentKey() == activeKey && editAction->getAffectedEndFrame() > 0) {
         const double spf = static_cast<double>(curve->getHopSize()) / curve->getSampleRate();
         startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
         endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
     }
-    contentCommands_->enqueuePartialRender(ContentKey{DomainKind::ARAAudioModification, matId, 0}, startSec, endSec);
+    contentCommands_->enqueuePartialRender(activeKey, startSec, endSec);
 }
 
 void OpenTuneAudioProcessorEditor::mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme)
@@ -980,13 +540,13 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
     const int clampedType = juce::jlimit(1, 8, scaleType);
     pianoRoll_.setScale(clampedRoot, clampedType);
 
-    const uint64_t materializationId = resolveCurrentMaterializationId();
-    if (materializationId != 0) {
+    const auto activeKey = resolveCurrentContentKey();
+    if (activeKey.isValid()) {
         DetectedKey key;
         key.root = static_cast<Key>(clampedRoot);
         key.scale = (clampedType == 2) ? Scale::Minor : ((clampedType == 3) ? Scale::Chromatic : Scale::Major);
         key.confidence = 1.0f;
-        contentCommands_->setDetectedKey(ContentKey{DomainKind::ARAAudioModification, materializationId, 0}, key);
+        contentCommands_->setDetectedKey(activeKey, key);
     }
 }
 
@@ -1063,7 +623,7 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         + " AudioModification(s) from " + juce::String(static_cast<int>(allRegions.size()))
         + " playback region(s)");
 
-    waitingForAraMaterialization_ = true;
+    waitingForAraContent_ = true;
     araWaitStartMs_ = juce::Time::getApproximateMillisecondCounter();
     autoRenderOverlay_.setMessageText(
         juce::String::fromUTF8("\xe9\x9f\xb3\xe9\xa2\x91\xe5\xa4\x84\xe7\x90\x86\xe4\xb8\xad"),
@@ -1102,22 +662,22 @@ void OpenTuneAudioProcessorEditor::stopPlaybackRequested()
 
 void OpenTuneAudioProcessorEditor::autoTuneRequested()
 {
-    const uint64_t materializationId = resolveCurrentMaterializationId();
-    AppLogger::log("AutoTune: vst3 request materializationId=" + juce::String(static_cast<juce::int64>(materializationId)));
-    if (materializationId == 0) {
+    const auto activeKey = resolveCurrentContentKey();
+    AppLogger::log("AutoTune: vst3 request contentId=" + juce::String(static_cast<juce::int64>(activeKey.objectId)));
+    if (!activeKey.isValid()) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::WarningIcon,
+            "AUTO",
+            "AUTO needs an active ARA audio modification.");
         return;
     }
 
     OriginalF0State f0State = OriginalF0State::NotRequested;
 #if JucePlugin_Enable_ARA
     if (auto* dc = processorRef_.getDocumentController())
-        f0State = dc->readOriginalF0State({DomainKind::ARAAudioModification, materializationId, 0});
-    else
+        f0State = dc->readOriginalF0State(activeKey);
 #endif
-    {
-        auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, materializationId, 0});
-        f0State = snap ? snap->originalF0State : OriginalF0State::NotRequested;
-    }
+
     if (f0State == OriginalF0State::Extracting) {
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::InfoIcon,
@@ -1142,9 +702,14 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
         return;
     }
 
-    const bool success = pianoRoll_.applyAutoTuneToSelection();
-    AppLogger::log("AutoTune: vst3 apply result=" + juce::String(success ? "true" : "false"));
-    if (!success) {
+    const auto result = pianoRoll_.applyAutoTuneToSelection();
+    AppLogger::log("AutoTune: vst3 apply result=" + juce::String(result.applied() ? "true" : "false")
+        + " message=" + result.message());
+    if (!result.applied()) {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::WarningIcon,
+            "AUTO",
+            result.message());
         return;
     }
 
@@ -1152,34 +717,33 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
 
 void OpenTuneAudioProcessorEditor::pitchShiftRequested()
 {
-    const uint64_t materializationId = resolveCurrentMaterializationId();
-    if (materializationId == 0) return;
+    const auto activeKey = resolveCurrentContentKey();
+    if (!activeKey.isValid()) return;
 
     PitchShiftSettings currentSettings = PitchShiftSettings::identity();
 #if JucePlugin_Enable_ARA
     if (auto* dc = processorRef_.getDocumentController())
-        currentSettings = dc->readPitchShift({DomainKind::ARAAudioModification, materializationId, 0});
+        currentSettings = dc->readPitchShift(activeKey);
     else
 #endif
-        currentSettings = processorRef_.getPitchShiftSettings(materializationId);
+        currentSettings = processorRef_.getPitchShiftSettings(activeKey);
 
     auto* content = new OpenTune::PitchShiftDialogContent(currentSettings);
 
     auto commands = getContentCommandsShared();
-    // Listener helper �?applies settings and closes the dialog on confirm/reset
     struct DialogHelper : public OpenTune::PitchShiftDialogContent::Listener
     {
         OpenTuneAudioProcessorEditor* owner;
-        uint64_t matId;
+        ContentKey activeContentKey;
         OpenTune::PitchShiftSettings oldSettings;
         std::shared_ptr<ContentEditCommands> commands;
         juce::Component::SafePointer<juce::Component> contentPtr;
 
-        DialogHelper(OpenTuneAudioProcessorEditor* o, uint64_t m,
+        DialogHelper(OpenTuneAudioProcessorEditor* o, ContentKey k,
                      const OpenTune::PitchShiftSettings& s,
                      std::shared_ptr<ContentEditCommands> cmds,
                      juce::Component::SafePointer<juce::Component> c)
-            : owner(o), matId(m), oldSettings(s), commands(std::move(cmds)), contentPtr(std::move(c)) {}
+            : owner(o), activeContentKey(k), oldSettings(s), commands(std::move(cmds)), contentPtr(std::move(c)) {}
 
         void pitchShiftConfirmed(const OpenTune::PitchShiftSettings& newSettings) override
         {
@@ -1187,9 +751,9 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
             if (newSettings != oldSettings) {
                 auto& um = owner->processorRef_.getUndoManager();
                 um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
-                    commands, ContentKey{DomainKind::ARAAudioModification, matId, 0}, oldSettings, newSettings));
+                    commands, activeContentKey, oldSettings, newSettings));
                 if (commands)
-                    commands->setPitchShiftSettings(ContentKey{DomainKind::ARAAudioModification, matId, 0}, newSettings);
+                    commands->setPitchShiftSettings(activeContentKey, newSettings);
                 owner->parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
             }
             closeDialog();
@@ -1202,9 +766,9 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
             if (identity != oldSettings) {
                 auto& um = owner->processorRef_.getUndoManager();
                 um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
-                    commands, ContentKey{DomainKind::ARAAudioModification, matId, 0}, oldSettings, identity));
+                    commands, activeContentKey, oldSettings, identity));
                 if (commands)
-                    commands->setPitchShiftSettings(ContentKey{DomainKind::ARAAudioModification, matId, 0}, identity);
+                    commands->setPitchShiftSettings(activeContentKey, identity);
                 owner->parameterPanel_.setPitchShiftIndicator(0, 0);
             }
             closeDialog();
@@ -1220,8 +784,8 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
         }
     };
 
-    auto* helper = new DialogHelper{this, materializationId, currentSettings,
-                                    commands,
+    auto* helper = new DialogHelper{this, activeKey, currentSettings,
+                                    std::move(commands),
                                     juce::Component::SafePointer<juce::Component>(content)};
     content->addListener(helper);
 
@@ -1244,9 +808,9 @@ void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
 void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame)
 {
     AppLogger::log("AutoTune: pitchCurveEdited startFrame=" + juce::String(startFrame) + " endFrame=" + juce::String(endFrame));
-    const uint64_t materializationId = resolveCurrentMaterializationId();
-    if (materializationId == 0) {
-        AppLogger::log("InvariantViolation: pitchCurveEdited - no active materialization during curve edit callback");
+    const auto activeKey = resolveCurrentContentKey();
+    if (!activeKey.isValid()) {
+        AppLogger::log("InvariantViolation: pitchCurveEdited - no active content during curve edit callback");
         jassertfalse;
         return;
     }
@@ -1254,15 +818,11 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
     std::shared_ptr<PitchCurve> curve;
 #if JucePlugin_Enable_ARA
     if (auto* dc = processorRef_.getDocumentController())
-        curve = dc->readPitchCurve({DomainKind::ARAAudioModification, materializationId, 0});
-    else
+        curve = dc->readPitchCurve(activeKey);
 #endif
-    {
-        auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, materializationId, 0});
-        curve = snap ? snap->pitchCurve : nullptr;
-    }
+
     if (curve == nullptr) {
-        AppLogger::log("InvariantViolation: pitchCurveEdited - materialization " + juce::String(static_cast<juce::int64>(materializationId)) + " has no pitch curve");
+        AppLogger::log("InvariantViolation: pitchCurveEdited - content " + juce::String(static_cast<juce::int64>(activeKey.objectId)) + " has no pitch curve");
         jassertfalse;
         return;
     }
@@ -1297,7 +857,7 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
     const double secondsPerFrame = static_cast<double>(hopSize) / f0SampleRate;
     const double editStartSec = static_cast<double>(startFrame) * secondsPerFrame;
     const double editEndSec = static_cast<double>(endFrame + 1) * secondsPerFrame;
-    contentCommands_->enqueuePartialRender(ContentKey{DomainKind::ARAAudioModification, materializationId, 0}, editStartSec, editEndSec);
+    contentCommands_->enqueuePartialRender(activeKey, editStartSec, editEndSec);
 }
 
 void OpenTuneAudioProcessorEditor::escapeKeyPressed()
@@ -1306,14 +866,24 @@ void OpenTuneAudioProcessorEditor::escapeKeyPressed()
     // Originally called playPauseToggleRequested() here — removed.
 }
 
-void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
+void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
 {
-    const auto sync = resolveCurrentMaterializationSync();
+    if (!contentCommands_) {
+        contentCommands_ = processorRef_.getContentCommands();
+        pianoRoll_.addListener(this);
+        pianoRoll_.setProcessor(&processorRef_);
+        pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
+            return processorRef_.getContentSnapshot(key);
+        });
+        pianoRoll_.setContentCommands(contentCommands_);
+    }
+
+    const auto sync = resolveCurrentContentSync();
 
     if (!sync.hasPlacements()) {
         pianoRoll_.clearTimelineViewDomain();
-        pianoRoll_.setTimelineMaterializationPlacements({});
-        pianoRoll_.setEditedMaterialization(ContentKey{},
+        pianoRoll_.setTimelineContentPlacements({});
+        pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
                                     nullptr,
                                     static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
@@ -1325,28 +895,21 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
     DetectedKey detectedKey;
 #if JucePlugin_Enable_ARA
     if (auto* dc = processorRef_.getDocumentController()) {
-        ContentKey ck{DomainKind::ARAAudioModification, sync.activeMaterializationId, 0};
+        ContentKey ck = sync.activeContentKey;
         syncBuffer = dc->readAudioBuffer(ck);
         curve = dc->readPitchCurve(ck);
         detectedKey = dc->readDetectedKey(ck);
-    } else
-#endif
-    {
-        auto ck = ContentKey{DomainKind::StandaloneClip, sync.activeMaterializationId, 0};
-        auto snap = processorRef_.getContentSnapshot(ck);
-        syncBuffer = snap ? snap->audioBuffer : nullptr;
-        curve = snap ? snap->pitchCurve : nullptr;
-        detectedKey = snap ? snap->detectedKey : DetectedKey{};
     }
+#endif
 
-    if (!sync.hasActiveMaterialization()
+    if (!sync.hasActiveContent()
         || syncBuffer == nullptr) {
-        pianoRoll_.setEditedMaterialization(ContentKey{},
+        pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
                                     nullptr,
                                     static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
-        pianoRoll_.setTimelineMaterializationPlacements(sync.placements);
-        if (sync.usesRegularCaptureTimelineDomain) {
+        pianoRoll_.setTimelineContentPlacements(sync.placements);
+        if (sync.timelineViewEndSeconds > sync.timelineViewStartSeconds) {
             pianoRoll_.setTimelineViewDomain(sync.timelineViewStartSeconds, sync.timelineViewEndSeconds);
         } else {
             pianoRoll_.clearTimelineViewDomain();
@@ -1354,12 +917,12 @@ void OpenTuneAudioProcessorEditor::syncMaterializationProjectionToPianoRoll()
         return;
     }
 
-    pianoRoll_.setEditedMaterialization(ContentKey{DomainKind::ARAAudioModification, sync.activeMaterializationId, 0},
+    pianoRoll_.setEditedContent(sync.activeContentKey,
                                 curve,
                                 syncBuffer,
                                 static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
-    pianoRoll_.setTimelineMaterializationPlacements(sync.placements);
-    if (sync.usesRegularCaptureTimelineDomain) {
+    pianoRoll_.setTimelineContentPlacements(sync.placements);
+    if (sync.timelineViewEndSeconds > sync.timelineViewStartSeconds) {
         pianoRoll_.setTimelineViewDomain(sync.timelineViewStartSeconds, sync.timelineViewEndSeconds);
     } else {
         pianoRoll_.clearTimelineViewDomain();

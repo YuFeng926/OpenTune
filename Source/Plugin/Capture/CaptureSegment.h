@@ -49,10 +49,10 @@ enum class SegmentState : int
  */
 struct CaptureSegment
 {
-    /** Monotonic id, assigned at construction. */
-    uint64_t id = 0;
+    /** Domain content key for this capture segment. Set at creation time. Serves as unique identity. */
+    ContentKey contentKey;
 
-    /** Strict creation order; equals id but kept separate for clarity. Newer = larger. */
+    /** Strict creation order; equals contentKey.objectId. Newer = larger. */
     uint64_t creationOrder = 0;
 
     /** sampleRate at the time this segment was armed (used for fifo sizing + later resampling). */
@@ -91,9 +91,6 @@ struct CaptureSegment
 
     /** SPSC fifo: audio writes, message drains in stopCapture. */
     CaptureRingBuffer fifo;
-
-    /** Domain content key for this capture segment. Set at creation time. */
-    ContentKey contentKey;
 
     /** Content owner for this segment. */
     std::unique_ptr<OpenTune::CaptureSegmentContent> content;

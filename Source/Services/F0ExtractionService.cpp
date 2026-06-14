@@ -27,18 +27,17 @@ F0ExtractionService::~F0ExtractionService()
     }
 }
 
-uint64_t F0ExtractionService::makeRequestKey(uint64_t materializationId, int trackId, int placementIndex)
+F0RequestKey F0ExtractionService::makeRequestKey(ContentKey contentKey, int trackId, int placementIndex)
 {
-    if (materializationId != 0) {
-        return materializationId;
-    }
-    return (static_cast<uint64_t>(static_cast<uint32_t>(trackId)) << 32)
-        | static_cast<uint32_t>(placementIndex);
+    if (contentKey.isValid())
+        return {contentKey, 0, 0};
+    return {{}, trackId, placementIndex};
 }
 
-F0ExtractionService::SubmitResult F0ExtractionService::submit(uint64_t requestKey, ExecuteFn execute, CommitFn commit)
+F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit)
 {
-    if (requestKey == 0 || !execute || !commit) {
+    if (!requestKey.contentKey.isValid() && requestKey.trackId == 0 && requestKey.placementIndex < 0
+        || !execute || !commit) {
         return SubmitResult::InvalidTask;
     }
 
@@ -68,13 +67,13 @@ F0ExtractionService::SubmitResult F0ExtractionService::submit(uint64_t requestKe
     return SubmitResult::Accepted;
 }
 
-bool F0ExtractionService::isActive(uint64_t requestKey) const
+bool F0ExtractionService::isActive(F0RequestKey requestKey) const
 {
     std::lock_guard<std::mutex> lock(entriesMutex_);
     return activeEntries_.find(requestKey) != activeEntries_.end();
 }
 
-void F0ExtractionService::cancel(uint64_t requestKey)
+void F0ExtractionService::cancel(F0RequestKey requestKey)
 {
     std::lock_guard<std::mutex> lock(entriesMutex_);
     activeEntries_.erase(requestKey);
@@ -111,7 +110,7 @@ void F0ExtractionService::workerLoop()
             result.errorMessage = "execute_exception";
         }
 
-        if (result.requestKey == 0) {
+        if (result.requestKey.contentKey.objectId == 0 && result.requestKey.trackId == 0 && result.requestKey.placementIndex == -1) {
             result.requestKey = task.requestKey;
         }
 

@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <memory>
+#include <map>
 #include <optional>
 #include <vector>
 #include <functional>
@@ -19,6 +20,7 @@ class OpenTuneEditorView;
 class OpenTunePlaybackRenderer;
 class OpenTuneAudioProcessor;
 class F0InferenceService;
+class F0ExtractionService;
 class ResamplingManager;
 class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
@@ -35,7 +37,7 @@ public:
         double startInModificationTime{0.0};
         double durationInPlaybackTime{0.0};
         double durationInModificationTime{0.0};
-        double materializationDurationSeconds{0.0};
+        double contentDurationSeconds{0.0};
         double sampleRate{44100.0};
         int numChannels{0};
         bool timestretchEnabled{false};
@@ -58,24 +60,21 @@ public:
     {
         const OpenTuneAudioProcessor* owner = nullptr;
         std::shared_ptr<F0InferenceService> f0Service;
-        std::function<void(std::function<void()>&&)> scheduleAsyncWork;
-        std::function<void()> requestReclaimSweep;
+        F0ExtractionService* contentF0ExtractionService{nullptr};
         ContentRenderService* contentRenderService{nullptr};
     };
 
     void attachProcessorServices(ProcessorServices services);
     void detachProcessorServices(const OpenTuneAudioProcessor* owner);
 
-    void runContentReclaimSweep();
-    void scheduleContentReclaim();
-    void getContentSnapshot(juce::XmlElement& dest) const;
-    void restoreContentPayloadInto(const juce::XmlElement& src);
+    // Per ARA2 spec: ARA object persistence uses doStoreObjectsToStream/doRestoreObjectsFromStream,
+    // NOT VST3 processor state. Legacy getContentSnapshot/restoreContentPayloadInto removed.
 
     ContentRenderService* getContentRenderService() const noexcept;
     bool refreshPlaybackReadSource(ContentKey key);
     // ============================================================
     // 编辑器只读内容访问器（通过 ContentKey 路由到 AudioModification + CRS）
-    // ARA 模式下编辑器不经过 MaterializationStore，直接读 AudioModification.content
+    // ARA 模式下编辑器不经过 content owner，直接读 AudioModification.content
     // ============================================================
 
     /** 从 CRS 读取音频 buffer */
@@ -115,7 +114,7 @@ public:
     uint64_t readContentRevision(ContentKey key) const;
 
     /** 读取材质化时长 */
-    double readMaterializationDuration(ContentKey key) const;
+    double readContentDuration(ContentKey key) const;
 
     /** 读取 sourceId */
     uint64_t readSourceId(ContentKey key) const;
@@ -179,26 +178,17 @@ private:
     std::vector<PlaybackRegion> playbackRegions_;
     std::vector<juce::ARAPlaybackRegion*> editorSelectionPlaybackRegions_;
     std::vector<OpenTunePlaybackRenderer*> playbackRenderers_;
+    std::map<uint64_t, juce::String> araPersistentIdsByObjectId_;
+    std::map<juce::String, uint64_t> araObjectIdsByPersistentId_;
 
     ContentRenderService* contentRenderService_{nullptr};
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::shared_ptr<F0InferenceService> f0Service_;
-    std::function<void(std::function<void()>&&)> scheduleAsyncWork_;
-    std::function<void()> onReclaimNeeded_;
+    F0ExtractionService* contentF0ExtractionService_{nullptr};
     const OpenTuneAudioProcessor* serviceOwner_ = nullptr;
 
     // 服务租约 token：detach 时置 false，后台 F0 work 持有 shared_ptr 可安全检查
     std::shared_ptr<std::atomic<bool>> asyncLeaseToken_;
-
-    struct ReclaimAsyncUpdater : juce::AsyncUpdater
-    {
-        using Callback = std::function<void()>;
-        explicit ReclaimAsyncUpdater(Callback cb) : callback(std::move(cb)) {}
-        void handleAsyncUpdate() override { if (callback) callback(); }
-        Callback callback;
-    };
-
-    mutable ReclaimAsyncUpdater reclaimAsyncUpdater_;
 
     AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
     const AudioSource* findAudioSource(const juce::String& persistentId) const;
@@ -207,6 +197,9 @@ private:
     const AudioModification* findAudioModification(const juce::String& persistentId) const;
     AudioModification* findAudioModification(juce::ARAAudioModification* audioModification);
     AudioModification& ensureAudioModification(juce::ARAAudioModification* audioModification);
+    ContentKey bindAudioModificationIdentity(AudioModification& modification);
+    ContentKey makeAudioModificationContentKey(const juce::String& persistentId);
+    const juce::String* findPersistentIdForAudioModificationKey(ContentKey key) const;
 
 public:
     // Exposed for PluginProcessor ARA write routing
@@ -225,8 +218,9 @@ private:
     bool publishPlaybackReadSourceForModification(
         AudioModification& modification,
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer = nullptr);
-    bool birthMaterializationForModification(AudioModification& modification);
-    void scheduleAsyncF0Extraction(uint64_t materializationId,
+    bool birthContentForModification(AudioModification& modification);
+    bool rebuildCRSFromSource(AudioModification& modification);
+    void scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
                                    double sourceSampleRate);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);

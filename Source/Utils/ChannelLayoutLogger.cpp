@@ -74,25 +74,25 @@ void logSegmentFinalize(juce::int64 segmentId, int captureChannels,
     AppLogger::log(makeLine(line));
 }
 
-void logMaterializationCreate(juce::int64 materializationId, int channels)
+void logContentCreate(juce::int64 contentId, int channels)
 {
     juce::String line;
-    line << "event=materialization-create materializationId=" << materializationId
+    line << "event=content-create contentId=" << contentId
          << " channels=" << channels;
     AppLogger::log(makeLine(line));
 }
 
-void logMaterializationReject(int requestChannels)
+void logContentReject(int requestChannels)
 {
     juce::String line;
-    line << "event=materialization-create REJECT requestChannels=" << requestChannels;
+    line << "event=content-create REJECT requestChannels=" << requestChannels;
     AppLogger::log(makeLine(line));
 }
 
-void logChunkRender(juce::int64 materializationId, int stored)
+void logChunkRender(juce::int64 contentId, int stored)
 {
     juce::String line;
-    line << "event=chunk-render materializationId=" << materializationId
+    line << "event=chunk-render contentId=" << contentId
          << " stored=" << stored
          << " vocoderSource=ch0";
     AppLogger::log(makeLine(line));

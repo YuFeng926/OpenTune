@@ -1,6 +1,6 @@
 #pragma once
 #include "AnalysisState.h"
-#include "EditableContentState.h"
+#include "ARAEditableContentState.h"
 #include "../Utils/SourceWindow.h"
 #include <cstdint>
 
@@ -16,12 +16,13 @@ enum class ContentLifecycle : uint8_t
     Retired
 };
 
-// ARA AudioModification 持有的聚合内容状态
+// ARA AudioModification content state: modification-scoped plugin data only.
+// Per ARA2 spec: Does NOT contain source PCM (comes from AudioSource via sample access).
 struct AudioModificationContentState
 {
     SourceWindow sourceWindow;
     AnalysisState analysis;
-    EditableContentState editable;
+    ARAEditableContentState editable;  // ARA-specific editable state without audioBuffer
     ContentLifecycle lifecycle{ContentLifecycle::Empty};
     uint64_t contentRevision{0};
 

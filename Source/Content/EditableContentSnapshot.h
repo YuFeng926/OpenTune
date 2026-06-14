@@ -4,7 +4,7 @@
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"
 #include "../Utils/PitchShiftSettings.h"
-#include "../Utils/MaterializationState.h"
+#include "../Utils/ContentAnalysisState.h"
 #include "../Utils/SilentGapDetector.h"
 #include "../DSP/ChromaKeyDetector.h"
 #include "../DSP/ReferenceFeatures.h"

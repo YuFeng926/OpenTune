@@ -2,6 +2,7 @@
 
 
 #include "CaptureSegment.h"
+#include "../../Content/ContentKey.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
@@ -30,7 +31,7 @@ struct SegmentInfo
     double T_start = 0.0;
     double durationSeconds = 0.0;
     SegmentState state = SegmentState::Capturing;
-    uint64_t contentId = 0;
+    ContentKey contentKey;
 };
 
 /**
@@ -39,27 +40,27 @@ struct SegmentInfo
  *   - clear destination range
  *   - call contentRenderService->getPlaybackReadSource(ContentKey{RegularVST3Capture, segmentId, 0}, ...)
  *
- * Uses segment.id directly as the Capture ContentKey.
+ * Uses segment ContentKey directly.
  * Captures a small (one-pointer) lambda; no heap allocation expected when called.
  */
 using ReplaceWithRenderedFn = std::function<void(juce::AudioBuffer<float>& buffer,
                                                   int destStart,
                                                   int numSamples,
-                                                  uint64_t segmentId,
+                                                  ContentKey segmentContentKey,
                                                   double readStartSeconds,
                                                   double targetSampleRate)>;
 
 /** Message-thread compaction sink: tell the processor to retire segment content. */
-using RetireSegmentFn = std::function<void(uint64_t segmentId)>;
+using RetireSegmentFn = std::function<void(ContentKey segmentContentKey)>;
 
 /** Notification sink for UI: a segment has reached Edited state. */
-using ActiveSegmentChangedFn = std::function<void(uint64_t segmentId)>;
+using ActiveSegmentChangedFn = std::function<void(ContentKey segmentContentKey)>;
 
 /** Message-thread re-render trigger for an existing segment content (no new clip created).
  *  Used by CapturePersistence::deserialize to repopulate RenderCache after restore — the
  *  vocoder output is not in standard state, so it must be re-synthesized from the restored
  *  audio + pitchCurve. tick() promotes Processing → Edited via F0 state check. */
-using RefreshSegmentFn = std::function<void(uint64_t segmentId)>;
+using RefreshSegmentFn = std::function<void(ContentKey segmentContentKey)>;
 
 /** Publish PlaybackReadSource to ContentRenderService with segment.id as ContentKey. */
 using PublishPlaybackSourceFn = std::function<void(const ContentKey& key,
@@ -144,10 +145,10 @@ public:
     void setActiveSegmentChangedCallback(ActiveSegmentChangedFn fn);
 
     /** Called by render pipeline when a segment's content is ready. */
-    void onSegmentRenderingComplete(uint64_t segmentId);
+    void onSegmentRenderingComplete(ContentKey segmentContentKey);
 
     /** Commit F0 extraction result to segment content. Does not promote lifecycle. */
-    bool commitSegmentF0Result(uint64_t segmentId,
+    bool commitSegmentF0Result(ContentKey segmentContentKey,
                                std::shared_ptr<PitchCurve> pitchCurve,
                                OriginalF0State state,
                                const DetectedKey& detectedKey);

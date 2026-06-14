@@ -144,11 +144,11 @@ juce::Path ArrangementRenderModelCache::buildWaveformPathForPlacement(const Wave
         if (timelineTime < timelineStartSeconds || timelineTime >= timelineEndSeconds)
             continue;
 
-        const double materializationTime = clipInSeconds + (timelineTime - timelineStartSeconds);
-        if (materializationTime < clipInSeconds || materializationTime >= sourceEndSeconds)
+        const double contentTime = clipInSeconds + (timelineTime - timelineStartSeconds);
+        if (contentTime < clipInSeconds || contentTime >= sourceEndSeconds)
             continue;
 
-        const int64_t peakIndex = static_cast<int64_t>(materializationTime / timePerPeak);
+        const int64_t peakIndex = static_cast<int64_t>(contentTime / timePerPeak);
         if (peakIndex < 0 || peakIndex >= builtPeaks)
             continue;
 
@@ -299,14 +299,13 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
             return;
 
         const uint64_t placementId = placement.placementId;
-        const uint64_t materializationId = placement.contentKey.objectId;
 
         bool isSelected = (sourceTrackId == selectedTrack && placementIndex == selectedPlacementIndex)
                        || (isPlacementSelected && isPlacementSelected(sourceTrackId, placementId));
 
         VisiblePlacement vp;
         vp.placementId = placementId;
-        vp.materializationId = materializationId;
+        vp.contentKey = placement.contentKey;
         vp.referencePlacementId = placement.referencePlacementId;
         vp.pixelBounds = placementBounds;
         vp.pixelArea = placementBounds.toFloat();
@@ -336,7 +335,7 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         vp.hasAudioBuffer = (audioBuffer != nullptr);
 
         if (audioBuffer != nullptr) {
-            auto& mipmap = mipmapCache.getOrCreate(materializationId);
+            auto& mipmap = mipmapCache.getOrCreate(placement.contentKey);
             mipmap.setAudioSource(audioBuffer);
             auto bandViewport = viewport;
             bandViewport.scrollOffsetPx = bandStartContentX;

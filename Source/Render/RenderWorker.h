@@ -32,7 +32,7 @@ struct RenderExecutionLease
  * 
  * 管理 chunk render 队列、worker thread 生命周期、execution lease。
  * 
- * Phase 0: 提取自 MaterializationStore::enqueuePartialRender (cpp:765-790)
+ * Phase 0: 提取自 CRS partial-render queue (cpp:765-790)
  *          和 ContentRenderService worker (h:189-199, cpp:93-257)
  * 
  * 修正 CRS 的两个 bug：

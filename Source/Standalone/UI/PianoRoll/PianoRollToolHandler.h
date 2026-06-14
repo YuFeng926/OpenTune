@@ -11,7 +11,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include "Utils/AudioEditingScheme.h"
 #include "Utils/F0Timeline.h"
-#include "Utils/MaterializationTimelineProjection.h"
+#include "Utils/ContentTimelineProjection.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/Note.h"
 #include "Utils/PitchCurve.h"
@@ -60,9 +60,9 @@ public:
         std::function<std::shared_ptr<PitchCurve>()> getPitchCurve;
 
         std::function<int()> getPianoKeyWidth;
-        std::function<MaterializationTimelineProjection()> getMaterializationProjection;
-        std::function<double(double)> projectTimelineTimeToMaterialization;
-        std::function<double(double)> projectMaterializationTimeToTimeline;
+        std::function<ContentTimelineProjection()> getContentProjection;
+        std::function<double(double)> projectTimelineTimeToContent;
+        std::function<double(double)> projectContentTimeToTimeline;
         std::function<juce::Rectangle<int>(const std::vector<Note>&)> getNotesBounds;
         std::function<juce::Rectangle<int>()> getSelectionBounds;
         std::function<juce::Rectangle<int>()> getHandDrawPreviewBounds;
@@ -110,6 +110,7 @@ public:
         std::function<void(int)> setNoteDragPreviewEndFrameExclusive;
 
         std::function<void(const juce::Rectangle<int>&)> invalidateVisual;
+        std::function<void()> invalidateContentVisual;
         std::function<void()> repaintPreviewOverlay;
         std::function<void(const juce::MouseCursor&)> setMouseCursor;
         std::function<void()> grabKeyboardFocus;
@@ -139,11 +140,10 @@ public:
         // ⚡️ vocal-time-stretch §8.4/8.7 — Time tool / TimeGrid integration
         //
         // Component injects these for the Time tool to read/publish the
-        // current materialization's TimeGrid snapshot.  All four callbacks
-        // are optional: if the materialization has none (e.g., loose source
+        // current content's TimeGrid snapshot.  All four callbacks
+        // are optional: if the content has none (e.g., loose source
         // not yet bound), Time tool drag is suppressed by ToolHandler.
         // ============================================================
-        std::function<uint64_t()> getMaterializationIdForView;
         std::function<std::shared_ptr<const TimeGridSnapshot>()> getTimeGridSnapshot;
         // commitTimeGrid: publish (newSnapshot) and record undo with
         // (oldSnapshot, affectedSourceFrameRange) supplied by caller.  Returns
@@ -206,6 +206,9 @@ private:
 
     bool isEmptySpaceMouseDown(const juce::MouseEvent& e);
     bool hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e);
+    bool hitTestF0Curve(const juce::MouseEvent& e, int& frameIndex) const;
+    void beginF0SelectionAt(const juce::MouseEvent& e, int frameIndex);
+    void updateF0SelectionDrag(const juce::MouseEvent& e);
     void beginEmptySpaceIntent(const juce::MouseEvent& e);
     bool consumeEmptySpaceIntentDrag(const juce::MouseEvent& e);
     bool consumeEmptySpaceIntentUp(const juce::MouseEvent& e);
@@ -217,17 +220,17 @@ private:
 
     // === Note 选择辅助 ===
     static int findNoteIndexAt(const std::vector<Note>& notes, double time, float targetPitchHz, float pitchToleranceHz);
-    static std::vector<int> collectSelectedNoteIndices(const std::vector<Note>& notes);
-    static void deselectAllNotes(std::vector<Note>& notes);
-    static void selectAllNotes(std::vector<Note>& notes);
-    static int findLastSelectedNoteIndex(const std::vector<Note>& notes);
-    static void selectNotesBetween(std::vector<Note>& notes, int startIndex, int endIndex);
+    std::vector<int> collectSelectedNoteIndices(const std::vector<Note>& notes);
+    void deselectAllNotes();
+    void selectAllNotes(const std::vector<Note>& notes);
+    int findLastSelectedNoteIndex(const std::vector<Note>& notes);
+    void selectNotesBetween(const std::vector<Note>& notes, int startIndex, int endIndex);
     void updateF0SelectionFromNotes(const std::vector<Note>& notes);
 
     // ⚡️ vocal-time-stretch §8.5 — convert pixelX directly to SOURCE time.
-    // Pipeline: pixelX → output(timeline) → output(materialization) →
+    // Pipeline: pixelX → output(timeline) → output(content) →
     // tauInverse → source.  Identity TimeGrid degenerates to existing
-    // "xToTime + projectTimelineTimeToMaterialization" path.
+    // "xToTime + projectTimelineTimeToContent" path.
     //
     // All Note tool write-back paths (drag / draw / resize) MUST use this
     // helper instead of computing source time directly, otherwise non-identity

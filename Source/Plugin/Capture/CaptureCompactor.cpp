@@ -22,7 +22,7 @@ CaptureCompactor::removeFullyCovered(std::vector<std::unique_ptr<CaptureSegment>
     auto it = segments.begin();
     while (it != segments.end()) {
         auto& seg = **it;
-        const bool isCandidate = seg.id != newlyEdited.id
+        const bool isCandidate = seg.contentKey != newlyEdited.contentKey
                               && seg.creationOrder < newlyEdited.creationOrder
                               && seg.state.load(std::memory_order_acquire) == SegmentState::Edited
                               && fullyCovers(newlyEdited, seg);

@@ -19,6 +19,7 @@
 #include "WaveformMipmap.h"
 #include "TimelineViewportState.h"
 #include "../PluginProcessor.h"
+#include "../../Content/ContentKey.h"
 
 namespace OpenTune {
 
@@ -27,7 +28,7 @@ public:
     /** Prepared visible placement for paint(). */
     struct VisiblePlacement {
         uint64_t placementId = 0;
-        uint64_t materializationId = 0;
+        ContentKey contentKey;
         uint64_t referencePlacementId = 0;
         juce::Rectangle<int> pixelBounds;
         juce::Rectangle<float> pixelArea;

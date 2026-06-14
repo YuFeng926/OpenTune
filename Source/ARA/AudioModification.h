@@ -3,7 +3,6 @@
 #include "../Utils/SourceWindow.h"
 #include "../Content/ContentKey.h"
 #include "../Content/AudioModificationContentState.h"
-#include "../Content/RetiredContentRecord.h"
 #include "../Content/EditableContentSnapshot.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <cstdint>
@@ -26,16 +25,14 @@ struct AudioModification
 {
     juce::ARAAudioModification* audioModification{nullptr};
     juce::String persistentId;
-    juce::String sourcePersistentId;
-    SourceWindow contentWindow;
-    uint64_t sourceId{0};
+    // Per ARA2 spec: AudioSource identity binding is part of content.sourceWindow,
+    // not wrapper-level field. Single source of truth for ARA source association.
+    ContentKey contentIdentity;
     uint64_t birthRevision{0};
-    double materializationDurationSeconds{0.0};
     AudioModificationBirthState birthState{AudioModificationBirthState::Empty};
 
     // 内容所有权
     AudioModificationContentState content;
-    std::vector<RetiredContentRecord> retiredContentRecords;
 
     // 身份更新
     void updateIdentity(juce::ARAAudioModification* modification);
@@ -49,9 +46,6 @@ struct AudioModification
 
     // 内容生命周期
     ContentKey contentKey() const noexcept;
-    void retireContent();
-    bool reviveContent(ContentKey key);
-    void releaseRetiredContent(ContentKey key);
 
     // 编辑入口：应用命令并推高 revision
     void applyNotes(const std::vector<Note>& notes);

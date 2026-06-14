@@ -1,15 +1,5 @@
 #pragma once
 
-/**
- * F0 提取服务
- * 
- * 多线程异步 F0 提取任务管理器：
- * - 使用工作线程池处理 F0 提取请求
- * - 支持请求去重（同一 materialization 不会同时提取）
- * - 支持任务取消
- * - 线程安全的结果回调
- */
-
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -23,6 +13,36 @@
 
 #include "../Utils/LockFreeQueue.h"
 #include "../Utils/SilentGapDetector.h"
+#include "../Content/ContentKey.h"
+
+namespace OpenTune {
+
+struct F0RequestKey {
+    ContentKey contentKey;
+    int trackId{0};
+    int placementIndex{-1};
+
+    bool operator==(const F0RequestKey& o) const noexcept {
+        return contentKey == o.contentKey
+            && trackId == o.trackId
+            && placementIndex == o.placementIndex;
+    }
+    bool operator!=(const F0RequestKey& o) const noexcept { return !(*this == o); }
+};
+
+} // namespace OpenTune
+
+template <>
+struct std::hash<OpenTune::F0RequestKey> {
+    size_t operator()(const OpenTune::F0RequestKey& k) const noexcept {
+        size_t h = static_cast<size_t>(k.contentKey.domainKind);
+        h ^= static_cast<size_t>(k.contentKey.objectId * 1099511628211ULL);
+        h ^= static_cast<size_t>(k.contentKey.sourceWindowDiscriminator * 1099511628211ULL);
+        h ^= static_cast<size_t>(k.trackId) * 1099511628211ULL;
+        h ^= static_cast<size_t>(k.placementIndex) * 1099511628211ULL;
+        return h;
+    }
+};
 
 namespace OpenTune {
 
@@ -32,8 +52,8 @@ public:
         bool success{false};
         int trackId{0};
         int placementIndexHint{-1};
-        uint64_t materializationId{0};
-        uint64_t requestKey{0};
+        ContentKey contentKey;
+        F0RequestKey requestKey;
         uint64_t requestToken{0};
         std::shared_ptr<const juce::AudioBuffer<float>> sourceAudioBuffer;
         int hopSize{0};
@@ -44,7 +64,6 @@ public:
         const char* modelName{"Unknown"};
         std::string errorMessage;
 
-        // F0Alignment diagnostics (populated by extractOriginalF0ForImportedClip)
         double audioDurationSeconds{0.0};
         double firstAudibleTimeSeconds{-1.0};
         double firstVoicedTimeSeconds{-1.0};
@@ -65,16 +84,16 @@ public:
     explicit F0ExtractionService(int workerCount = 1, size_t maxQueueSize = 64);
     ~F0ExtractionService();
 
-    static uint64_t makeRequestKey(uint64_t materializationId, int trackId, int placementIndex);
+    static F0RequestKey makeRequestKey(ContentKey contentKey, int trackId, int placementIndex);
 
-    SubmitResult submit(uint64_t requestKey, ExecuteFn execute, CommitFn commit);
+    SubmitResult submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit);
 
-    bool isActive(uint64_t requestKey) const;
-    void cancel(uint64_t requestKey);
+    bool isActive(F0RequestKey requestKey) const;
+    void cancel(F0RequestKey requestKey);
 
 private:
     struct Task {
-        uint64_t requestKey{0};
+        F0RequestKey requestKey;
         uint64_t token{0};
         ExecuteFn execute;
         CommitFn commit;
@@ -87,7 +106,7 @@ private:
     void workerLoop();
 
     LockFreeQueue<Task> queue_;
-    std::unordered_map<uint64_t, std::unique_ptr<ActiveEntry>> activeEntries_;
+    std::unordered_map<F0RequestKey, std::unique_ptr<ActiveEntry>> activeEntries_;
     mutable std::mutex entriesMutex_;
     std::vector<std::thread> workers_;
     size_t maxQueueSize_{64};

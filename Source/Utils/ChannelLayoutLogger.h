@@ -32,11 +32,11 @@ void logSegmentArm(juce::int64 segmentId, int captureChannels);
 void logSegmentFinalize(juce::int64 segmentId, int captureChannels,
                         double durationSeconds);
 
-void logMaterializationCreate(juce::int64 materializationId, int channels);
+void logContentCreate(juce::int64 contentId, int channels);
 
-void logMaterializationReject(int requestChannels);
+void logContentReject(int requestChannels);
 
-void logChunkRender(juce::int64 materializationId, int stored);
+void logChunkRender(juce::int64 contentId, int stored);
 
 /** Throttled to ~1 Hz internally (caller MAY invoke per block; the helper
  *  drops calls that arrive faster than that). */

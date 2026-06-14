@@ -29,9 +29,28 @@ struct SelectionState
     int selectedF0StartFrame = -1;
     int selectedF0EndFrameExclusive = -1;
     bool hasF0Selection = false;
+    bool isSelectingF0 = false;
+    int f0SelectionAnchorFrame = -1;
     
     void setF0Range(int startFrame, int endFrameExclusive);
     void clearF0Selection();
+};
+
+struct NoteSelectionState
+{
+    std::vector<int> selectedIndices;
+    int anchorIndex = -1;
+
+    void clear();
+    void trimToNoteCount(int noteCount);
+    bool isSelected(int noteIndex) const;
+    void add(int noteIndex, int noteCount);
+    void setSingle(int noteIndex, int noteCount);
+    void toggle(int noteIndex, int noteCount);
+    void selectAll(int noteCount);
+    void selectRange(int startIndex, int endIndex, const std::vector<Note>& notes);
+    void setFromIndices(std::vector<int> indices, int noteCount);
+    bool empty() const noexcept { return selectedIndices.empty(); }
 };
 
 struct NoteDragState
@@ -65,6 +84,7 @@ struct NoteResizeState
 struct NoteInteractionDraft
 {
     bool active = false;
+    bool contentDirty = false;
     std::vector<Note> baselineNotes;
     std::vector<Note> workingNotes;
 
@@ -104,7 +124,7 @@ struct EmptySpaceMouseIntent
 // vocal-time-stretch §8.3 — Time tool transient interaction state.
 //
 // Holds drag-time data so the renderer can show a preview while the user
-// is mid-drag without committing to MaterializationStore until mouseUp.
+// is mid-drag without committing to content owner until mouseUp.
 //
 // Selection model:
 //   - Single click → selectedHandleId is the primary selection
@@ -177,6 +197,7 @@ class InteractionState
 {
 public:
     SelectionState selection;
+    NoteSelectionState noteSelection;
     NoteInteractionDraft noteDraft;
     NoteDragState noteDrag;
     NoteResizeState noteResize;

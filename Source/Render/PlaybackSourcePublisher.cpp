@@ -8,8 +8,8 @@ void PlaybackSourcePublisher::publish(ContentKey key, PlaybackReadSource source)
     {
         const juce::ScopedWriteLock wl(lock_);
         sources_[key] = std::move(source);
+        rebuildSnapshotLocked();
     }
-    rebuildSnapshot();
 }
 
 bool PlaybackSourcePublisher::get(ContentKey key, PlaybackReadSource& out) const noexcept
@@ -26,17 +26,17 @@ void PlaybackSourcePublisher::remove(ContentKey key)
 {
     const juce::ScopedWriteLock wl(lock_);
     sources_.erase(key);
-    rebuildSnapshot();
+    rebuildSnapshotLocked();
 }
 
 void PlaybackSourcePublisher::clear()
 {
     const juce::ScopedWriteLock wl(lock_);
     sources_.clear();
-    rebuildSnapshot();
+    rebuildSnapshotLocked();
 }
 
-void PlaybackSourcePublisher::rebuildSnapshot()
+void PlaybackSourcePublisher::rebuildSnapshotLocked()
 {
     auto snap = std::make_shared<const std::map<ContentKey, PlaybackReadSource>>(sources_);
     std::atomic_store(&snapshot_, snap);

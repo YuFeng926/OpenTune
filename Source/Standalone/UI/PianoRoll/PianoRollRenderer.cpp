@@ -70,19 +70,19 @@ struct VisibleTimeWindow {
     int viewportEndX = 0;
     double visibleStartTime = 0.0;
     double visibleEndTime = 0.0;
-    double visibleMaterializationStartTime = 0.0;
-    double visibleMaterializationEndTime = 0.0;
+    double visibleContentStartTime = 0.0;
+    double visibleContentEndTime = 0.0;
 
     bool isValid() const
     {
         return viewportEndX > viewportStartX
             && visibleEndTime > visibleStartTime
-            && visibleMaterializationEndTime > visibleMaterializationStartTime;
+            && visibleContentEndTime > visibleContentStartTime;
     }
 };
 
 VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContext& ctx,
-                                           const PianoRollRenderer::MaterializationRenderItem& item)
+                                           const PianoRollRenderer::ContentRenderItem& item)
 {
     VisibleTimeWindow window;
     if (!item.projection.isValid()) {
@@ -99,17 +99,17 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
     if (window.visibleEndTime <= window.visibleStartTime)
         return {};
 
-    window.visibleMaterializationStartTime = item.projection.projectTimelineTimeToMaterialization(window.visibleStartTime);
-    window.visibleMaterializationEndTime = item.projection.projectTimelineTimeToMaterialization(window.visibleEndTime);
+    window.visibleContentStartTime = item.projection.projectTimelineTimeToContent(window.visibleStartTime);
+    window.visibleContentEndTime = item.projection.projectTimelineTimeToContent(window.visibleEndTime);
 
     // vocal-time-stretch §8.5 — When a non-identity TimeGrid is published,
-    // projectTimelineTimeToMaterialization returns OUTPUT time inside the
-    // materialization, but Notes / PitchCurve / F0 timeline / WaveformMipmap
+    // projectTimelineTimeToContent returns OUTPUT time inside the
+    // content, but Notes / PitchCurve / F0 timeline / WaveformMipmap
     // are all indexed by SOURCE time. Convert to source time via tauInverse
     // so downstream filters work correctly. Identity grid → no-op.
     if (ctx.timeGridSnapshot != nullptr && !ctx.timeGridSnapshot->isIdentity()) {
-        window.visibleMaterializationStartTime = ctx.timeGridSnapshot->tauInverse(window.visibleMaterializationStartTime);
-        window.visibleMaterializationEndTime   = ctx.timeGridSnapshot->tauInverse(window.visibleMaterializationEndTime);
+        window.visibleContentStartTime = ctx.timeGridSnapshot->tauInverse(window.visibleContentStartTime);
+        window.visibleContentEndTime   = ctx.timeGridSnapshot->tauInverse(window.visibleContentEndTime);
     }
     return window;
 }
@@ -119,13 +119,13 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
 // item's projection. Identity TimeGrid → degenerates to existing pipeline.
 inline int sourceTimeToScreenX(double sourceTime,
                                 const PianoRollRenderer::RenderContext& ctx,
-                                const PianoRollRenderer::MaterializationRenderItem& item)
+                                const PianoRollRenderer::ContentRenderItem& item)
 {
     double outputTime = sourceTime;
     if (ctx.timeGridSnapshot != nullptr && !ctx.timeGridSnapshot->isIdentity()) {
         outputTime = ctx.timeGridSnapshot->tauForward(sourceTime);
     }
-    const double timelineTime = item.projection.projectMaterializationTimeToTimeline(outputTime);
+    const double timelineTime = item.projection.projectContentTimeToTimeline(outputTime);
     return ctx.timeToX(timelineTime);
 }
 
@@ -468,7 +468,7 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
 
 void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
                                                const RenderContext& ctx,
-                                               const MaterializationRenderItem& item)
+                                               const ContentRenderItem& item)
 {
     if (!ctx.showUnvoicedFrames || item.pitchSnapshot == nullptr || item.f0Timeline.isEmpty()) {
         return;
@@ -484,8 +484,8 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
         return;
     }
 
-    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleMaterializationStartTime,
-                                                                       visibleWindow.visibleMaterializationEndTime,
+    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleContentStartTime,
+                                                                       visibleWindow.visibleContentEndTime,
                                                                        1);
     const int visibleStartFrame = visibleFrames.startFrame;
     const int visibleEndFrame = visibleFrames.endFrameExclusive;
@@ -539,7 +539,7 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
 
 void PianoRollRenderer::drawWaveform(juce::Graphics& g,
                                      const RenderContext& ctx,
-                                     const MaterializationRenderItem& item)
+                                     const ContentRenderItem& item)
 {
     if (item.audioBuffer == nullptr || item.waveformMipmap == nullptr)
         return;
@@ -559,8 +559,8 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     if (level.peaks.empty())
         return;
 
-    const double materializationVisibleDuration = visibleWindow.visibleMaterializationEndTime - visibleWindow.visibleMaterializationStartTime;
-    if (materializationVisibleDuration <= 0.0) return;
+    const double contentVisibleDuration = visibleWindow.visibleContentEndTime - visibleWindow.visibleContentStartTime;
+    if (contentVisibleDuration <= 0.0) return;
 
     const float centerY = ctx.height / 2.0f;
     const float amplitudeScale = ctx.height / 2.0f;
@@ -586,13 +586,13 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
 
     for (int x = startX; x < endX; ++x)
     {
-        double matTime = item.projection.projectTimelineTimeToMaterialization(ctx.xToTime(x));
+        double matTime = item.projection.projectTimelineTimeToContent(ctx.xToTime(x));
         if (useTauInverse) {
             matTime = ctx.timeGridSnapshot->tauInverse(matTime);
         }
 
         // Aggregate all peaks covered by this pixel's time span
-        double matTimeNext = item.projection.projectTimelineTimeToMaterialization(ctx.xToTime(x + 1));
+        double matTimeNext = item.projection.projectTimelineTimeToContent(ctx.xToTime(x + 1));
         if (useTauInverse) {
             matTimeNext = ctx.timeGridSnapshot->tauInverse(matTimeNext);
         }
@@ -859,7 +859,7 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ct
 
 void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g,
                                             const RenderContext& ctx,
-                                            const MaterializationRenderItem& item)
+                                            const ContentRenderItem& item)
 {
     if (!ctx.showChunkBoundaries || item.chunkBoundaries.size() < 3) {
         return;
@@ -1213,7 +1213,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
 
 void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                   const RenderContext& ctx,
-                                  const MaterializationRenderItem& item)
+                                  const ContentRenderItem& item)
 {
     const auto& notes = item.displayNotes;
     if (notes.empty()) return;
@@ -1225,32 +1225,25 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
     auto firstVisibleNote = std::lower_bound(
         notes.begin(),
         notes.end(),
-        visibleWindow.visibleMaterializationStartTime,
-        [](const Note& note, double visibleMaterializationStartTime) {
-            return note.startTime < visibleMaterializationStartTime;
+        visibleWindow.visibleContentStartTime,
+        [](const Note& note, double visibleContentStartTime) {
+            return note.startTime < visibleContentStartTime;
         });
 
     if (firstVisibleNote != notes.begin())
     {
         const auto previousVisibleNote = std::prev(firstVisibleNote);
-        if (previousVisibleNote->endTime > visibleWindow.visibleMaterializationStartTime)
+        if (previousVisibleNote->endTime > visibleWindow.visibleContentStartTime)
             firstVisibleNote = previousVisibleNote;
     }
 
     const auto lastVisibleNote = std::lower_bound(
         firstVisibleNote,
         notes.end(),
-        visibleWindow.visibleMaterializationEndTime,
-        [](const Note& note, double visibleMaterializationEndTime) {
-            return note.startTime < visibleMaterializationEndTime;
+        visibleWindow.visibleContentEndTime,
+        [](const Note& note, double visibleContentEndTime) {
+            return note.startTime < visibleContentEndTime;
         });
-
-    int selectedCount = 0;
-    for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
-    {
-        if (noteIt->selected)
-            ++selectedCount;
-    }
 
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
@@ -1260,6 +1253,10 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
     for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
     {
         const auto& note = *noteIt;
+        const int noteIndex = static_cast<int>(std::distance(notes.begin(), noteIt));
+        const bool selected = std::find(item.selectedNoteIndices.begin(),
+                                        item.selectedNoteIndices.end(),
+                                        noteIndex) != item.selectedNoteIndices.end();
         float adjustedPitch = note.getAdjustedPitch();
         if (adjustedPitch <= 0.0f) continue;
 
@@ -1277,15 +1274,15 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         float w = std::max(1.0f, static_cast<float>(x2 - x1));
         auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
-        const auto noteColor = note.selected ? UIColors::noteBlockSelected : UIColors::noteBlock;
+        const auto noteColor = selected ? UIColors::noteBlockSelected : UIColors::noteBlock;
 
         if (isAurora)
         {
-            g.setColour(noteColor.withAlpha(note.selected ? 0.48f : 0.34f));
+            g.setColour(noteColor.withAlpha(selected ? 0.48f : 0.34f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 7.0f));
-            juce::ColourGradient topSheen(noteColor.brighter(0.58f).withAlpha(note.selected ? 0.18f : 0.12f),
+            juce::ColourGradient topSheen(noteColor.brighter(0.58f).withAlpha(selected ? 0.18f : 0.12f),
                                           topSheenBounds.getX(),
                                           topSheenBounds.getY(),
                                           juce::Colours::transparentWhite,
@@ -1295,13 +1292,13 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.setGradientFill(topSheen);
             g.fillRect(topSheenBounds);
 
-            const auto edgeColour = note.selected
+            const auto edgeColour = selected
                 ? noteColor.brighter(0.32f)
                 : UIColors::noteBlockBorder;
-            g.setColour(edgeColour.withAlpha(note.selected ? 0.72f : 0.56f));
-            g.drawRect(noteBounds, note.selected ? 1.35f : 1.0f);
+            g.setColour(edgeColour.withAlpha(selected ? 0.72f : 0.56f));
+            g.drawRect(noteBounds, selected ? 1.35f : 1.0f);
 
-            g.setColour(UIColors::glassHighlight.withAlpha(note.selected ? 0.22f : 0.14f));
+            g.setColour(UIColors::glassHighlight.withAlpha(selected ? 0.22f : 0.14f));
             g.drawLine(noteBounds.getX() + 1.0f,
                        noteBounds.getY() + 1.0f,
                        noteBounds.getRight() - 1.0f,
@@ -1310,11 +1307,11 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(noteColor.withAlpha(note.selected ? 0.42f : 0.28f));
+            g.setColour(noteColor.withAlpha(selected ? 0.42f : 0.28f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 6.0f));
-            juce::ColourGradient topSheen(noteColor.brighter(0.42f).withAlpha(note.selected ? 0.16f : 0.10f),
+            juce::ColourGradient topSheen(noteColor.brighter(0.42f).withAlpha(selected ? 0.16f : 0.10f),
                                           topSheenBounds.getX(),
                                           topSheenBounds.getY(),
                                           juce::Colours::transparentWhite,
@@ -1324,23 +1321,23 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.setGradientFill(topSheen);
             g.fillRect(topSheenBounds);
 
-            g.setColour(noteColor.withAlpha(note.selected ? 0.14f : 0.08f));
+            g.setColour(noteColor.withAlpha(selected ? 0.14f : 0.08f));
             g.drawRect(noteBounds.expanded(1.0f, 0.5f), 2.0f);
 
-            const auto edgeColour = note.selected
+            const auto edgeColour = selected
                 ? noteColor.brighter(0.28f)
                 : UIColors::noteBlockBorder;
-            g.setColour(edgeColour.withAlpha(note.selected ? 0.66f : 0.48f));
-            g.drawRect(noteBounds, note.selected ? 1.25f : 0.9f);
+            g.setColour(edgeColour.withAlpha(selected ? 0.66f : 0.48f));
+            g.drawRect(noteBounds, selected ? 1.25f : 0.9f);
         }
         else
         {
-            g.setColour(noteColor.withAlpha(note.selected ? 0.44f : 0.30f));
+            g.setColour(noteColor.withAlpha(selected ? 0.44f : 0.30f));
             g.fillRect(noteBounds);
 
-            const auto edgeColour = note.selected ? noteColor.brighter(0.3f) : UIColors::noteBlockBorder;
-            g.setColour(edgeColour.withAlpha(note.selected ? 0.66f : 0.50f));
-            g.drawRect(noteBounds, note.selected ? 1.25f : 1.0f);
+            const auto edgeColour = selected ? noteColor.brighter(0.3f) : UIColors::noteBlockBorder;
+            g.setColour(edgeColour.withAlpha(selected ? 0.66f : 0.50f));
+            g.drawRect(noteBounds, selected ? 1.25f : 1.0f);
         }
     }
 }
@@ -1639,15 +1636,15 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
     // this overlay.
     const juce::Colour kHighConfidenceColour = juce::Colour::fromRGB(0xE0, 0xB0, 0x40); // #E0B040 金色
 
-    // §8.5 — TimeGrid handles belong to the active edited materialization.
-    // The projection is supplied by buildRenderContext via materializationTimeToTimeline,
-    // which delegates to activeMaterializationProjection().  The renderer MUST NOT
-    // select an owner from ctx.materializations — that would risk using a wrong
+    // §8.5 — TimeGrid handles belong to the active edited content.
+    // The projection is supplied by buildRenderContext via contentTimeToTimeline,
+    // which delegates to activeContentProjection().  The renderer MUST NOT
+    // select an owner from ctx.contents — that would risk using a wrong
     // placement's timeline offset.
-    if (!ctx.materializationTimeToTimeline) return;
+    if (!ctx.contentTimeToTimeline) return;
 
     for (const auto& h : ctx.timeGridSnapshot->handles()) {
-        const double timelineTime = ctx.materializationTimeToTimeline(h.output_seconds);
+        const double timelineTime = ctx.contentTimeToTimeline(h.output_seconds);
         const int x = ctx.timeToX(timelineTime);
         if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
 
@@ -1710,11 +1707,11 @@ void PianoRollRenderer::drawGhostNotes(juce::Graphics& g, const RenderContext& c
         if (adjustedPitch <= 0.0f)
             continue;
 
-        const double timelineStart = ctx.materializationTimeToTimeline
-            ? ctx.materializationTimeToTimeline(note.startTime)
+        const double timelineStart = ctx.contentTimeToTimeline
+            ? ctx.contentTimeToTimeline(note.startTime)
             : note.startTime;
-        const double timelineEnd = ctx.materializationTimeToTimeline
-            ? ctx.materializationTimeToTimeline(note.endTime)
+        const double timelineEnd = ctx.contentTimeToTimeline
+            ? ctx.contentTimeToTimeline(note.endTime)
             : note.endTime;
 
         const int x1 = ctx.timeToX(timelineStart);

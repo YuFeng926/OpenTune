@@ -6,7 +6,7 @@
  * physically eliminates the chorus/phasing artifacts inherent to phase vocoder.
  *
  * Used for OpenTune Stage 2 time-stretch:
- *   - per-materialization persistent instance (lazy-constructed by MaterializationStore)
+ *   - per-content persistent instance (lazy-constructed by content owner)
  *   - re-built fully on every TimeGrid OR PitchCurve revision change
  *   - ratios always positive; pitch unchanged (Stage 1 vocoder handles pitch)
  *   - endpoint locked → ∫ ratio dt = totalSourceSeconds (output length == input length)

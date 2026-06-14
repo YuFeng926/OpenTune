@@ -274,7 +274,7 @@ TimeGrid::TimeGrid()
     : snapshot_(TimeGridSnapshot::makeIdentity(/*totalDurationSeconds=*/0.001))
 {
     // Bootstrap with a tiny identity grid; caller is expected to setSnapshot()
-    // with a real materialization duration.
+    // with a real content duration.
 }
 
 TimeGrid::TimeGrid(std::shared_ptr<const TimeGridSnapshot> initial)

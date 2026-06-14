@@ -136,7 +136,7 @@ public:
 
     /**
      * 清空当前工程状态（新建工程）。
-     * 会清除 tracks、placements、materializations、sources，重置路径和脏标记。
+     * 会清除 tracks、placements、contents、sources，重置路径和脏标记。
      */
     void newProject();
 

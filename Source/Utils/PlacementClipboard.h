@@ -3,12 +3,13 @@
 #include <cstdint>
 #include <vector>
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "../Content/ContentKey.h"
 
 namespace OpenTune {
 
 struct PlacementClipEntry {
     int sourceTrackId{0};
-    uint64_t sourceMaterializationId{0};
+    ContentKey sourceContentKey;
     double clipInSeconds{0.0};
     double durationSeconds{0.0};
     float gain{1.0f};
