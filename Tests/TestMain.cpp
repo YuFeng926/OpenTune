@@ -126,6 +126,33 @@ static std::string locateInText(const std::string& text,
     return filename + ":" + std::to_string(line);
 }
 
+static std::string extractBraceBlockAfterToken(const std::string& text,
+                                               const std::string& token)
+{
+    const size_t tokenPos = text.find(token);
+    if (tokenPos == std::string::npos)
+        return {};
+
+    const size_t bracePos = text.find('{', tokenPos);
+    if (bracePos == std::string::npos)
+        return {};
+
+    int depth = 0;
+    for (size_t pos = bracePos; pos < text.size(); ++pos)
+    {
+        if (text[pos] == '{')
+            ++depth;
+        else if (text[pos] == '}')
+        {
+            --depth;
+            if (depth == 0)
+                return text.substr(bracePos, pos - bracePos + 1);
+        }
+    }
+
+    return {};
+}
+
 // Concatenate all .h/.cpp files under a directory (project-relative).
 static std::string readAllFilesInDir(const std::string& relativeDir)
 {
@@ -153,11 +180,13 @@ static std::string allAraText()
 }
 
 // ============================================================================
-// Test 1: AudioModification content ownership
+// Test 1: AudioModification owns modification-scoped edit/analysis state
 // ============================================================================
-// AudioModification owns content state. Must have content identity and
-// content mutation APIs. Must NOT use materializationId as ARA content identity.
-static CheckResult audioModificationOwnsContent()
+// Per ARA2 spec: AudioModification owns modification-scoped plugin state
+// (notes, pitch edits, time grid, F0, detected key, etc.), NOT original PCM.
+// Original audio comes from AudioSource via host sample access.
+// Must NOT use materializationId as content identity.
+static CheckResult araAudioModificationOwnsEditAndAnalysisState()
 {
     const auto text = readText("Source/ARA/AudioModification.h")
                     + readText("Source/ARA/AudioModification.cpp");
@@ -165,20 +194,20 @@ static CheckResult audioModificationOwnsContent()
     const std::vector<std::string> required = {
         "AudioModificationContentState", "ContentKey", "contentKey()",
         "snapshotContent", "applyNotes", "applyPitchCurve",
-        "applyTimeGrid", "retireContent", "reviveContent"
+        "applyTimeGrid"
     };
 
     auto missing = requireAll(text, required);
     if (!missing.empty())
-        return fail("audioModificationOwnsContent", missing);
+        return fail("araAudioModificationOwnsEditAndAnalysisState", missing);
 
     // materializationId must NOT appear as a word (only materializationDurationSeconds is ok)
     if (containsWord(text, "materializationId"))
-        return fail("audioModificationOwnsContent",
+        return fail("araAudioModificationOwnsEditAndAnalysisState",
                     "forbidden token 'materializationId' found — "
                     "content identity must use ContentKey, not materializationId");
 
-    return pass("audioModificationOwnsContent");
+    return pass("araAudioModificationOwnsEditAndAnalysisState");
 }
 
 // ============================================================================
@@ -375,8 +404,9 @@ static CheckResult rendererUsesAssignedRegions()
                     + readText("Source/ARA/OpenTunePlaybackRenderer.cpp");
 
     const std::vector<std::string> required = {
-        "assignedPlaybackRegions_", "didAddPlaybackRegion",
-        "willRemovePlaybackRegion", "getPlaybackRegionProjectionsFor"
+        "struct RenderPlan", "playbackRegions", "currentPlan_",
+        "didAddPlaybackRegion", "willRemovePlaybackRegion",
+        "getPlaybackRegionProjectionsFor"
     };
 
     auto missing = requireAll(text, required);
@@ -1008,15 +1038,19 @@ static CheckResult capturePersistenceDoesNotReadMaterializationStore()
 // ============================================================================
 static CheckResult captureCrsUsesRegularVST3CaptureSegmentId()
 {
+    const auto sessionCpp = readText("Source/Plugin/Capture/CaptureSession.cpp");
     const auto captureBindings = extractCaptureBindings();
     if (captureBindings.empty())
         return fail("captureCrsUsesRegularVST3CaptureSegmentId",
                     "Cannot extract VST3 capture bindings from PluginProcessor.cpp");
 
-    // Required: ContentKey with RegularVST3Capture domain
-    if (!contains(captureBindings, "DomainKind::RegularVST3Capture"))
+    if (!contains(sessionCpp, "ContentKey{DomainKind::RegularVST3Capture"))
         return fail("captureCrsUsesRegularVST3CaptureSegmentId",
-                    "Capture bindings must use ContentKey with DomainKind::RegularVST3Capture");
+                    "CaptureSession must create segments with RegularVST3Capture ContentKey");
+    if (!contains(captureBindings, "ContentKey segmentContentKey")
+        || !contains(captureBindings, "getPlaybackReadSource(segmentContentKey"))
+        return fail("captureCrsUsesRegularVST3CaptureSegmentId",
+                    "Capture bindings must consume complete ContentKey directly");
 
     // Forbidden: materializationId-based content identity functions
     {
@@ -1288,9 +1322,9 @@ static CheckResult captureStaticLifecycleWiring()
 namespace {
     struct CaptureRuntimeSpies
     {
-        std::vector<uint64_t> retired;
-        std::vector<uint64_t> refreshed;
-        std::vector<uint64_t> active;
+        std::vector<OpenTune::ContentKey> retired;
+        std::vector<OpenTune::ContentKey> refreshed;
+        std::vector<OpenTune::ContentKey> active;
         std::vector<OpenTune::ContentKey> publishedKeys;
         std::vector<std::shared_ptr<const juce::AudioBuffer<float>>> publishedAudio;
         std::vector<double> publishedSampleRates;
@@ -1348,16 +1382,16 @@ namespace {
         bindings.replaceWithRendered = [](juce::AudioBuffer<float>&,
                                            int,
                                            int,
-                                           uint64_t,
+                                           OpenTune::ContentKey,
                                            double,
                                            double) {};
-        bindings.retireSegment = [&spies, reentrantSession](uint64_t id) {
-            spies.retired.push_back(id);
+        bindings.retireSegment = [&spies, reentrantSession](OpenTune::ContentKey key) {
+            spies.retired.push_back(key);
             if (reentrantSession != nullptr && *reentrantSession != nullptr)
-                (void)(*reentrantSession)->findSegmentById(id);
+                (void)(*reentrantSession)->findSegmentByContentKey(key);
         };
-        bindings.refreshSegment = [&spies](uint64_t id) {
-            spies.refreshed.push_back(id);
+        bindings.refreshSegment = [&spies](OpenTune::ContentKey key) {
+            spies.refreshed.push_back(key);
         };
         bindings.publishPlaybackSource = [&spies](const OpenTune::ContentKey& key,
                                                   std::shared_ptr<const juce::AudioBuffer<float>> audio,
@@ -1376,14 +1410,19 @@ static CheckResult captureTickPromotesReadyWithoutReadinessBinding()
     auto bindings = makeCaptureRuntimeBindings(spies);
     OpenTune::Capture::CaptureSession session(std::move(bindings));
     session.prepareToPlay(48000.0, 512, 1);
-    session.setActiveSegmentChangedCallback([&spies](uint64_t id) {
-        spies.active.push_back(id);
+    session.setActiveSegmentChangedCallback([&spies](OpenTune::ContentKey key) {
+        spies.active.push_back(key);
     });
 
     const uint64_t id = session.testInjectProcessingSegment(
         1.0, 0.01, 101, makeCaptureTestAudio(), 48000.0);
+    auto* injected = session.findSegmentById(id);
+    if (injected == nullptr)
+        return fail("captureTickPromotesReadyWithoutReadinessBinding",
+                    "injected segment was not found");
+    const auto segmentKey = injected->contentKey;
     if (!session.commitSegmentF0Result(
-            id, makeCaptureTestPitchCurve(),
+            segmentKey, makeCaptureTestPitchCurve(),
             OpenTune::OriginalF0State::Ready,
             makeCaptureTestKey())) {
         return fail("captureTickPromotesReadyWithoutReadinessBinding",
@@ -1401,7 +1440,7 @@ static CheckResult captureTickPromotesReadyWithoutReadinessBinding()
     if (after == nullptr || after->state.load(std::memory_order_acquire) != OpenTune::Capture::SegmentState::Edited)
         return fail("captureTickPromotesReadyWithoutReadinessBinding",
                     "tick() did not promote Ready content to Edited");
-    if (spies.active.size() != 1 || spies.active[0] != id)
+    if (spies.active.size() != 1 || spies.active[0] != segmentKey)
         return fail("captureTickPromotesReadyWithoutReadinessBinding",
                     "active segment callback was not emitted exactly once");
 
@@ -1416,20 +1455,25 @@ static CheckResult captureTickDropsFailedWithoutReentrantBinding()
     OpenTune::Capture::CaptureSession session(std::move(bindings));
     sessionPtr = &session;
     session.prepareToPlay(48000.0, 512, 1);
-    session.setActiveSegmentChangedCallback([&spies](uint64_t id) {
-        spies.active.push_back(id);
+    session.setActiveSegmentChangedCallback([&spies](OpenTune::ContentKey key) {
+        spies.active.push_back(key);
     });
 
     const uint64_t id = session.testInjectProcessingSegment(
         2.0, 0.01, 202, makeCaptureTestAudio(), 48000.0);
-    session.commitSegmentF0Result(id, nullptr, OpenTune::OriginalF0State::Failed, OpenTune::DetectedKey{});
+    auto* injected = session.findSegmentById(id);
+    if (injected == nullptr)
+        return fail("captureTickDropsFailedWithoutReentrantBinding",
+                    "injected segment was not found");
+    const auto segmentKey = injected->contentKey;
+    session.commitSegmentF0Result(segmentKey, nullptr, OpenTune::OriginalF0State::Failed, OpenTune::DetectedKey{});
 
     session.tick();
 
     if (session.findSegmentById(id) != nullptr)
         return fail("captureTickDropsFailedWithoutReentrantBinding",
                     "Failed Processing segment was not removed");
-    if (spies.retired.size() != 1 || spies.retired[0] != id)
+    if (spies.retired.size() != 1 || spies.retired[0] != segmentKey)
         return fail("captureTickDropsFailedWithoutReentrantBinding",
                     "retireSegment was not called after removing failed segment");
     if (!spies.active.empty())
@@ -1448,8 +1492,12 @@ static CheckResult captureF0CommitDoesNotPromoteUntilTick()
 
     const uint64_t id = session.testInjectProcessingSegment(
         3.0, 0.01, 303, makeCaptureTestAudio(), 44100.0);
+    auto* injected = session.findSegmentById(id);
+    if (injected == nullptr)
+        return fail("captureF0CommitDoesNotPromoteUntilTick",
+                    "injected segment was not found");
     session.commitSegmentF0Result(
-        id, makeCaptureTestPitchCurve(),
+        injected->contentKey, makeCaptureTestPitchCurve(),
         OpenTune::OriginalF0State::Ready,
         makeCaptureTestKey());
 
@@ -1481,8 +1529,12 @@ static CheckResult capturePersistenceRoundtripRestoresOwnerContent()
     const uint64_t id = original.testInjectEditedSegment(
         4.0, static_cast<double>(audio->getNumSamples()) / 48000.0, 404, audio);
     const auto key = makeCaptureTestKey();
+    auto* injected = original.findSegmentById(id);
+    if (injected == nullptr)
+        return fail("capturePersistenceRoundtripRestoresOwnerContent",
+                    "injected segment was not found");
     original.commitSegmentF0Result(
-        id, makeCaptureTestPitchCurve(),
+        injected->contentKey, makeCaptureTestPitchCurve(),
         OpenTune::OriginalF0State::Ready,
         key);
 
@@ -1706,28 +1758,52 @@ static CheckResult phase4Stage2HasNoStoreFallback()
     // Find the function body
     size_t funcStart = text.find("::runStage2RebuildForContentKey");
     if (funcStart == std::string::npos)
-        return pass("phase4Stage2HasNoStoreFallback"); // function not yet added
+        return fail("phase4Stage2HasNoStoreFallback",
+                    "runStage2RebuildForContentKey is missing");
 
     // Extract function body: from first '{' after signature to matching '}'
     size_t braceOpen = text.find("{", funcStart);
     if (braceOpen == std::string::npos)
-        return pass("phase4Stage2HasNoStoreFallback");
+        return fail("phase4Stage2HasNoStoreFallback",
+                    "runStage2RebuildForContentKey has no function body");
 
     int depth = 0;
     size_t braceClose = braceOpen;
+    bool foundClose = false;
     for (size_t i = braceOpen; i < text.size(); ++i)
     {
         if (text[i] == '{') ++depth;
-        if (text[i] == '}') { --depth; if (depth == 0) { braceClose = i; break; } }
+        if (text[i] == '}') { --depth; if (depth == 0) { braceClose = i; foundClose = true; break; } }
     }
+    if (!foundClose)
+        return fail("phase4Stage2HasNoStoreFallback",
+                    "runStage2RebuildForContentKey has an unterminated function body");
+
     std::string funcBody = text.substr(braceOpen, braceClose - braceOpen + 1);
+
+    const std::vector<std::string> required = {
+        "getContentSnapshot(",
+        "getPlaybackReadSource",
+        "readPlaybackAudio",
+        "getTimeStretchCache().store"
+    };
+
+    for (const auto& token : required)
+    {
+        if (!contains(funcBody, token))
+        {
+            return fail("phase4Stage2HasNoStoreFallback",
+                        "Stage2 function is missing required owner/CRS path token: '" + token + "'");
+        }
+    }
 
     const std::vector<std::string> forbidden = {
         "MaterializationStore::MaterializationSnapshot",
         "materializationStore_->getSnapshot",
         "getMaterializationSnapshotById",
         "materializationStore_->getTimeStretchCache",
-        "materializationStore_->getOpenTuneStretcher"
+        "materializationStore_->getOpenTuneStretcher",
+        "ownerSnap->audioBuffer"
     };
 
     for (const auto& token : forbidden)
@@ -2009,6 +2085,644 @@ static CheckResult phase4EditorReadsViaContentKey()
 }
 
 // ============================================================================
+// Phase 4 Guard: phase4NoPublicMaterializationVocabulary
+//
+// Product-facing source code should expose Content vocabulary. The old
+// materialization wording is kept only inside tests as negative guard tokens
+// and inside historical planning/audit documents.
+// ============================================================================
+static CheckResult phase4NoPublicMaterializationVocabulary()
+{
+    const std::vector<std::string> files = {
+        "Source/PluginProcessor.h",
+        "Source/PluginProcessor.cpp",
+        "Source/Plugin/PluginEditor.h",
+        "Source/Plugin/PluginEditor.cpp",
+        "Source/Standalone/PluginEditor.h",
+        "Source/Standalone/PluginEditor.cpp",
+        "Source/Standalone/UI/PianoRollComponent.h",
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "Source/Standalone/UI/PianoRoll/PianoRollRenderer.h",
+        "Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp",
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h",
+        "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "Source/Utils/ProjectModel.h",
+        "Source/Utils/ProjectPersistence.h",
+        "Source/Utils/ProjectPersistence.cpp",
+        "Source/Utils/ProjectSession.h",
+        "Source/Utils/ProjectSession.cpp",
+        "Source/Utils/ContentTimelineProjection.h",
+        "Source/Utils/ContentAnalysisState.h",
+        "Source/Editor/AutoRenderOverlayComponent.h",
+        "Source/Services/F0ExtractionService.h",
+        "Source/Services/F0ExtractionService.cpp",
+        "Source/ARA/OpenTuneDocumentController.h",
+        "Source/ARA/OpenTuneDocumentController.cpp",
+        "Source/ARA/OpenTunePlaybackRenderer.h",
+        "Source/ARA/OpenTunePlaybackRenderer.cpp"
+    };
+
+    return forbidTokensInFiles("phase4NoPublicMaterializationVocabulary",
+                               files,
+                               {"materialization",
+                                "Materialization",
+                                "materialized",
+                                "Materialized"});
+}
+
+// ============================================================================
+// ContentKey hard-cut guards: no domain-erased content identity in UI/editor paths
+// ============================================================================
+static CheckResult contentKeyMustBeCompleteInAllPaths()
+{
+    const auto rendererHeader = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+    const auto placementBody = extractBraceBlockAfterToken(rendererHeader, "struct TimelineContentPlacement");
+    const auto renderItemBody = extractBraceBlockAfterToken(rendererHeader, "struct ContentRenderItem");
+    if (placementBody.empty() || renderItemBody.empty())
+        return fail("contentKeyMustBeCompleteInAllPaths",
+                    "PianoRoll placement/render item bodies not found");
+    if (!contains(placementBody, "ContentKey contentKey") || contains(placementBody, "uint64_t contentId"))
+        return fail("contentKeyMustBeCompleteInAllPaths",
+                    "TimelineContentPlacement must carry ContentKey only");
+    if (!contains(renderItemBody, "ContentKey contentKey") || contains(renderItemBody, "uint64_t contentId"))
+        return fail("contentKeyMustBeCompleteInAllPaths",
+                    "ContentRenderItem must carry ContentKey only");
+
+    const auto pluginEditorHeader = readText("Source/Plugin/PluginEditor.h");
+    const auto syncBody = extractBraceBlockAfterToken(pluginEditorHeader, "struct PianoRollContentSync");
+    if (syncBody.empty())
+        return fail("contentKeyMustBeCompleteInAllPaths", "PianoRollContentSync body not found");
+    if (!contains(syncBody, "ContentKey activeContentKey")
+        || contains(syncBody, "activeContentId")
+        || contains(syncBody, "usesRegularCaptureTimelineDomain"))
+        return fail("contentKeyMustBeCompleteInAllPaths",
+                    "VST3 editor sync must use active ContentKey without domain-erased flags");
+
+    const auto componentHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
+    if (contains(componentHeader, "editedContentId_"))
+        return fail("contentKeyMustBeCompleteInAllPaths",
+                    "PianoRollComponent still stores editedContentId_ beside ContentKey");
+
+    const auto correctionHeader = readText("Source/Standalone/UI/PianoRoll/PianoRollCorrectionWorker.h");
+    if (contains(correctionHeader, "contentIdSnapshot")
+        || !contains(correctionHeader, "ContentKey contentKeySnapshot"))
+        return fail("contentKeyMustBeCompleteInAllPaths",
+                    "PianoRoll async correction request must snapshot ContentKey");
+
+    const auto cacheHeader = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h");
+    const auto cacheKeyBody = extractBraceBlockAfterToken(cacheHeader, "struct Key");
+    if (cacheKeyBody.empty())
+        return fail("contentKeyMustBeCompleteInAllPaths", "PianoRoll render cache key body not found");
+    if (!contains(cacheKeyBody, "ContentKey contentKey") || contains(cacheKeyBody, "uint64_t contentId"))
+        return fail("contentKeyMustBeCompleteInAllPaths",
+                    "PianoRoll render cache key must carry ContentKey only");
+
+    const auto pianoComponentCpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    if (contains(pianoComponentCpp, "DomainKind::StandaloneClip"))
+        return fail("contentKeyMustBeCompleteInAllPaths",
+                    "generic PianoRoll rendering must not guess StandaloneClip domain");
+
+    const auto pluginEditorCpp = readText("Source/Plugin/PluginEditor.cpp");
+    const std::vector<std::string> forbiddenAraHardcodes = {
+        "ContentKey{DomainKind::ARAAudioModification, sync.activeContentId",
+        "ContentKey{DomainKind::ARAAudioModification, contentId",
+        "{DomainKind::ARAAudioModification, activeContentId",
+        "{DomainKind::ARAAudioModification, contentId"
+    };
+    for (const auto& token : forbiddenAraHardcodes)
+        if (contains(pluginEditorCpp, token))
+            return fail("contentKeyMustBeCompleteInAllPaths",
+                        "VST3 editor still reconstructs ARA ContentKey from bare id: " + token);
+
+    const auto f0Header = readText("Source/Services/F0ExtractionService.h");
+    const auto f0Cpp = readText("Source/Services/F0ExtractionService.cpp");
+    if (contains(f0Header, "uint64_t requestKey")
+        || contains(f0Header, "makeRequestKey(uint64_t contentId")
+        || contains(f0Cpp, "return contentId;"))
+        return fail("contentKeyMustBeCompleteInAllPaths",
+                    "F0ExtractionService request identity must be a ContentKey strong type");
+
+    const auto processorCpp = readText("Source/PluginProcessor.cpp");
+    if (contains(processorCpp, "ContentKey{DomainKind::StandaloneClip, objectId")
+        || contains(processorCpp, "ContentKey{DomainKind::StandaloneClip, chunkObjId")
+        || contains(processorCpp, "DomainKind::StandaloneClip, chunkObjId"))
+        return fail("contentKeyMustBeCompleteInAllPaths",
+                    "render/vocoder completion still recreates StandaloneClip keys from objectId");
+
+    return pass("contentKeyMustBeCompleteInAllPaths");
+}
+
+// ============================================================================
+// ARA archive must NOT persist source PCM, only modification-scoped state
+// ============================================================================
+// Per ARA2 spec: AudioSource owns original PCM via host sample access.
+// AudioModification archive only saves modification-scoped edit/analysis state.
+// CRS audio buffer is derived cache, not archive payload.
+static CheckResult araArchiveMustNotPersistSourcePCM()
+{
+    const auto dcText = readText("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto modText = readText("Source/ARA/AudioModification.cpp");
+    
+    // Per ARA2 spec: Real archive entry points are doStoreObjectsToStream/doRestoreObjectsFromStream,
+    // NOT VST3 processor state. Legacy getContentSnapshot/restoreContentPayloadInto were removed.
+    const auto storeBody = extractBraceBlockAfterToken(dcText,
+                                                       "OpenTuneDocumentController::doStoreObjectsToStream");
+    const auto restoreBody = extractBraceBlockAfterToken(dcText,
+                                                         "OpenTuneDocumentController::doRestoreObjectsFromStream");
+    if (storeBody.empty() || restoreBody.empty())
+        return fail("araArchiveMustNotPersistSourcePCM",
+                    "ARA archive entry points doStoreObjectsToStream/doRestoreObjectsFromStream not found");
+
+    // Must call serialization helpers
+    if (!contains(storeBody, "serializeAudioModificationContent")
+        || !contains(restoreBody, "restoreAudioModificationContent"))
+        return fail("araArchiveMustNotPersistSourcePCM",
+                    "ARA archive must serialize and restore AudioModification content payloads");
+
+    // Must NOT serialize/restore audioBuffer (source PCM)
+    const auto serializeBody = extractBraceBlockAfterToken(dcText,
+                                                           "serializeAudioModificationContent");
+    const auto deserializeBody = extractBraceBlockAfterToken(dcText,
+                                                             "restoreAudioModificationContent");
+    if (contains(serializeBody, "audioBuffer") || contains(deserializeBody, "audioBuffer"))
+        return fail("araArchiveMustNotPersistSourcePCM",
+                    "ARA archive must NOT serialize audioBuffer — source PCM comes from AudioSource, not AudioModification");
+
+    // AudioModification::snapshotContent must NOT return audioBuffer
+    const auto snapshotContentBody = extractBraceBlockAfterToken(modText,
+                                                                 "AudioModification::snapshotContent");
+    if (contains(snapshotContentBody, "audioBuffer") 
+        || contains(snapshotContentBody, "snap.audioBuffer"))
+        return fail("araArchiveMustNotPersistSourcePCM",
+                    "AudioModification::snapshotContent must NOT return audioBuffer");
+
+    // Restore must call rebuildCRSFromSource, not birthContentForModification
+    if (!contains(restoreBody, "rebuildCRSFromSource"))
+        return fail("araArchiveMustNotPersistSourcePCM",
+                    "doRestoreObjectsFromStream must rebuild CRS from AudioSource after restoring modification state");
+
+    // Must NOT use legacy VST3 processor state path for ARA content
+    const auto processorText = readText("Source/PluginProcessor.cpp");
+    const auto getStateBody = extractBraceBlockAfterToken(processorText,
+                                                          "OpenTuneAudioProcessor::getStateInformation");
+    const auto setStateBody = extractBraceBlockAfterToken(processorText,
+                                                          "OpenTuneAudioProcessor::setStateInformation");
+    if (contains(getStateBody, "getContentSnapshot")
+        || contains(setStateBody, "restoreContentPayloadInto"))
+        return fail("araArchiveMustNotPersistSourcePCM",
+                    "VST3 processor state must NOT call getContentSnapshot/restoreContentPayloadInto for ARA content");
+
+    return pass("araArchiveMustNotPersistSourcePCM");
+}
+
+// ============================================================================
+// ARA archive round-trip must restore complete analysis state
+// ============================================================================
+// Static verification that serializeAudioModificationContent writes all analysis fields
+// and restoreAudioModificationContent reads them back correctly.
+// Note: This is a static code guard. Full behavioral round-trip testing would require
+// ARA host environment and is beyond the scope of static analysis tests.
+static CheckResult araArchiveRestoresCompleteAnalysisState()
+{
+    const auto dcText = readText("Source/ARA/OpenTuneDocumentController.cpp");
+    
+    const auto serializeBody = extractBraceBlockAfterToken(dcText,
+                                                           "serializeAudioModificationContent");
+    const auto restoreBody = extractBraceBlockAfterToken(dcText,
+                                                         "restoreAudioModificationContent");
+    if (serializeBody.empty() || restoreBody.empty())
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "serialize/restore functions not found");
+    
+    // analysisRevision must be serialized AND restored
+    if (!contains(serializeBody, "analysisRevision"))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "serializeAudioModificationContent must write analysisRevision");
+    if (!contains(restoreBody, "analysisRevision") 
+        || !contains(restoreBody, ".analysisRevision = "))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "restoreAudioModificationContent must restore analysisRevision");
+    
+    // pitchLifecycle must be serialized AND restored
+    if (!contains(serializeBody, "pitchLifecycle"))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "serializeAudioModificationContent must write pitchLifecycle");
+    if (!contains(restoreBody, "pitchLifecycle")
+        || !contains(restoreBody, ".pitchLifecycle = "))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "restoreAudioModificationContent must restore pitchLifecycle");
+    
+    // detectedKey must be serialized AND restored
+    if (!contains(serializeBody, "DetectedKey") 
+        || !contains(serializeBody, "detectedKey.root")
+        || !contains(serializeBody, "detectedKey.scale")
+        || !contains(serializeBody, "detectedKey.confidence"))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "serializeAudioModificationContent must write complete DetectedKey");
+    if (!contains(restoreBody, "DetectedKey")
+        || !contains(restoreBody, "detectedKey.root")
+        || !contains(restoreBody, "detectedKey.scale")
+        || !contains(restoreBody, "detectedKey.confidence"))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "restoreAudioModificationContent must restore complete DetectedKey");
+    
+    // silentGaps must be serialized AND restored
+    if (!contains(serializeBody, "silentGaps")
+        || !contains(serializeBody, "SilentGap")
+        || !contains(serializeBody, "startSample")
+        || !contains(serializeBody, "endSampleExclusive"))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "serializeAudioModificationContent must write silentGaps vector");
+    if (!contains(restoreBody, "silentGaps")
+        || !contains(restoreBody, "SilentGap")
+        || !contains(restoreBody, ".clear()")
+        || !contains(restoreBody, "getChildWithTagNameIterator"))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "restoreAudioModificationContent must restore silentGaps vector");
+    
+    // referenceFeatures must be serialized AND restored
+    if (!contains(serializeBody, "ReferenceFeatures")
+        || !contains(serializeBody, "referenceFeatures.status")
+        || !contains(serializeBody, "PitchNote")
+        || !contains(serializeBody, "TimingAnchor"))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "serializeAudioModificationContent must write referenceFeatures");
+    if (!contains(restoreBody, "ReferenceFeatures")
+        || !contains(restoreBody, "referenceFeatures.status")
+        || !contains(restoreBody, "PitchNote")
+        || !contains(restoreBody, "TimingAnchor"))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "restoreAudioModificationContent must restore referenceFeatures");
+    
+    // pitchCurve f0/energy must be preserved
+    if (!contains(serializeBody, "pitchCurve") 
+        || !contains(serializeBody, "PitchCurve")
+        || !contains(serializeBody, "f0Base64"))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "serializeAudioModificationContent must serialize pitchCurve f0 data");
+    if (!contains(restoreBody, "pitchCurve")
+        || !contains(restoreBody, "setOriginalF0"))
+        return fail("araArchiveRestoresCompleteAnalysisState",
+                    "restoreAudioModificationContent must restore pitchCurve f0 data");
+    
+    return pass("araArchiveRestoresCompleteAnalysisState");
+}
+
+// ============================================================================
+// ARA playback renderer must publish immutable render plans to the audio thread
+// ============================================================================
+static CheckResult araPlaybackRendererUsesImmutablePlan()
+{
+    const auto header = readText("Source/ARA/OpenTunePlaybackRenderer.h");
+    const auto cpp = readText("Source/ARA/OpenTunePlaybackRenderer.cpp");
+    if (!contains(header, "struct RenderPlan")
+        || !contains(header, "std::shared_ptr<const RenderPlan>")
+        || contains(header, "assignedPlaybackRegions_")
+        || contains(header, "renderItems_"))
+        return fail("araPlaybackRendererUsesImmutablePlan",
+                    "OpenTunePlaybackRenderer must replace mutable vectors with immutable RenderPlan snapshots");
+
+    const auto processBody = extractBraceBlockAfterToken(cpp,
+                                                         "OpenTunePlaybackRenderer::processBlock");
+    if (processBody.empty())
+        return fail("araPlaybackRendererUsesImmutablePlan",
+                    "OpenTunePlaybackRenderer::processBlock body not found");
+    if (!contains(processBody, "currentPlan_.load")
+        || contains(processBody, "renderItems_")
+        || contains(processBody, "assignedPlaybackRegions_"))
+        return fail("araPlaybackRendererUsesImmutablePlan",
+                    "audio processBlock must load one immutable plan and never touch mutable vectors");
+
+    return pass("araPlaybackRendererUsesImmutablePlan");
+}
+
+// ============================================================================
+// PianoRoll Selection/AUTO Guard: Note selection is editor-transient
+// ============================================================================
+static CheckResult pianoRollNoteSelectionIsTransient()
+{
+    const auto noteText = readText("Source/Utils/Note.h");
+    const auto noteBody = extractBraceBlockAfterToken(noteText, "struct Note");
+    if (noteBody.empty())
+        return fail("pianoRollNoteSelectionIsTransient", "struct Note body not found");
+    if (contains(noteBody, "selected"))
+        return fail("pianoRollNoteSelectionIsTransient",
+                    "struct Note still contains selection state");
+
+    const auto persistenceText = readText("Source/Utils/ProjectPersistence.cpp");
+    const auto notesToTreeBody = extractBraceBlockAfterToken(persistenceText,
+                                                             "ProjectPersistence::notesToValueTree");
+    const auto notesFromTreeBody = extractBraceBlockAfterToken(persistenceText,
+                                                               "ProjectPersistence::notesFromValueTree");
+    if (notesToTreeBody.empty() || notesFromTreeBody.empty())
+        return fail("pianoRollNoteSelectionIsTransient",
+                    "ProjectPersistence notes conversion body not found");
+    if (contains(notesToTreeBody, "\"selected\"") || contains(notesFromTreeBody, "\"selected\""))
+        return fail("pianoRollNoteSelectionIsTransient",
+                    "project persistence reads or writes note selected property");
+
+    return pass("pianoRollNoteSelectionIsTransient");
+}
+
+static CheckResult pianoRollSelectionOnlyDoesNotCommitContent()
+{
+    const auto componentText = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto selectOverlappingBody = extractBraceBlockAfterToken(
+        componentText,
+        "PianoRollComponent::selectNotesOverlappingFrames");
+    if (selectOverlappingBody.empty())
+        return fail("pianoRollSelectionOnlyDoesNotCommitContent",
+                    "selectNotesOverlappingFrames body not found");
+
+    const std::vector<std::string> forbiddenSelectionCommits = {
+        "commitEditedContentNotes",
+        "commitEditedContentNotesAndSegments",
+        "commitNoteDraft",
+        "setNotes("
+    };
+    for (const auto& token : forbiddenSelectionCommits)
+        if (contains(selectOverlappingBody, token))
+            return fail("pianoRollSelectionOnlyDoesNotCommitContent",
+                        "selection helper commits content via '" + token + "'");
+
+    const auto toolText = readText("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto selectToolBody = extractBraceBlockAfterToken(toolText,
+                                                            "PianoRollToolHandler::handleSelectTool");
+    const auto selectUpBody = extractBraceBlockAfterToken(toolText,
+                                                          "PianoRollToolHandler::handleSelectUp");
+    const auto drawNoteUpBody = extractBraceBlockAfterToken(toolText,
+                                                            "PianoRollToolHandler::handleDrawNoteUp");
+    if (selectToolBody.empty() || selectUpBody.empty() || drawNoteUpBody.empty())
+        return fail("pianoRollSelectionOnlyDoesNotCommitContent",
+                    "PianoRollToolHandler selection bodies not found");
+
+    if (contains(toolText, "note.selected")
+        || contains(toolText, "finalNote.selected")
+        || contains(toolText, "].selected"))
+        return fail("pianoRollSelectionOnlyDoesNotCommitContent",
+                    "PianoRollToolHandler still mutates Note selection fields");
+
+    if (contains(selectToolBody, "beginNoteDraft")
+        || contains(selectToolBody, "workingDraftNotes"))
+        return fail("pianoRollSelectionOnlyDoesNotCommitContent",
+                    "Select mouseDown still enters note draft state");
+
+    const size_t pendingDragPos = drawNoteUpBody.find("getDrawNoteToolPendingDrag");
+    const size_t realDrawCheckPos = drawNoteUpBody.find("drawing.isDrawingNote");
+    if (pendingDragPos != std::string::npos
+        && realDrawCheckPos != std::string::npos
+        && realDrawCheckPos > pendingDragPos)
+    {
+        const auto pendingBranch = drawNoteUpBody.substr(pendingDragPos,
+                                                        realDrawCheckPos - pendingDragPos);
+        if (contains(pendingBranch, "commitNoteDraft"))
+            return fail("pianoRollSelectionOnlyDoesNotCommitContent",
+                        "DrawNote pending click still commits selection-only draft");
+    }
+    else
+    {
+        return fail("pianoRollSelectionOnlyDoesNotCommitContent",
+                    "DrawNote pending-click boundary not found");
+    }
+
+    return pass("pianoRollSelectionOnlyDoesNotCommitContent");
+}
+
+static CheckResult pianoRollEditorsInjectSnapshotAndCommands()
+{
+    struct FileCheck { std::string path; std::string testName; };
+    const FileCheck files[] = {
+        { "Source/Standalone/PluginEditor.cpp", "Standalone editor" },
+        { "Source/Plugin/PluginEditor.cpp", "VST3 editor" },
+    };
+
+    for (const auto& file : files)
+    {
+        const auto text = readText(file.path);
+        if (!contains(text, "setReadContentSnapshot"))
+            return fail("pianoRollEditorsInjectSnapshotAndCommands",
+                        file.testName + " does not inject setReadContentSnapshot");
+        if (!contains(text, "setContentCommands"))
+            return fail("pianoRollEditorsInjectSnapshotAndCommands",
+                        file.testName + " does not inject setContentCommands");
+    }
+
+    return pass("pianoRollEditorsInjectSnapshotAndCommands");
+}
+
+static CheckResult pianoRollAutoTuneFailureIsVisible()
+{
+    const auto componentHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
+    const auto componentCpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    if (!contains(componentHeader, "enum class AutoTuneApplyStatus")
+        || !contains(componentHeader, "struct AutoTuneApplyResult")
+        || !contains(componentHeader, "AutoTuneApplyResult applyAutoTuneToSelection()"))
+        return fail("pianoRollAutoTuneFailureIsVisible",
+                    "PianoRoll AUTO API is not a structured result");
+    if (!contains(componentCpp, "AutoTuneApplyResult::message()"))
+        return fail("pianoRollAutoTuneFailureIsVisible",
+                    "PianoRoll AUTO result has no user-facing message");
+
+    const auto standaloneText = readText("Source/Standalone/PluginEditor.cpp");
+    const auto standaloneBody = extractBraceBlockAfterToken(standaloneText,
+                                                            "OpenTuneAudioProcessorEditor::autoTuneRequested");
+    if (standaloneBody.empty())
+        return fail("pianoRollAutoTuneFailureIsVisible",
+                    "Standalone autoTuneRequested body not found");
+    if (!contains(standaloneBody, "const auto result = pianoRoll_.applyAutoTuneToSelection();")
+        || !contains(standaloneBody, "result.applied()")
+        || !contains(standaloneBody, "ConfirmDialogContent::showMessage"))
+        return fail("pianoRollAutoTuneFailureIsVisible",
+                    "Standalone AUTO failure is not visibly reported");
+    if (contains(standaloneBody, "pianoRoll_.applyAutoTuneToSelection();\n    projectSession_.markDirty();"))
+        return fail("pianoRollAutoTuneFailureIsVisible",
+                    "Standalone AUTO still marks dirty unconditionally");
+
+    const auto vst3Text = readText("Source/Plugin/PluginEditor.cpp");
+    const auto vst3Body = extractBraceBlockAfterToken(vst3Text,
+                                                      "OpenTuneAudioProcessorEditor::autoTuneRequested");
+    if (vst3Body.empty())
+        return fail("pianoRollAutoTuneFailureIsVisible",
+                    "VST3 autoTuneRequested body not found");
+    if (!contains(vst3Body, "const auto result = pianoRoll_.applyAutoTuneToSelection();")
+        || !contains(vst3Body, "result.applied()")
+        || !contains(vst3Body, "juce::AlertWindow::showMessageBoxAsync"))
+        return fail("pianoRollAutoTuneFailureIsVisible",
+                    "VST3 AUTO failure is not visibly reported");
+
+    return pass("pianoRollAutoTuneFailureIsVisible");
+}
+
+// ============================================================================
+// P1 Contract Test: araModificationStateNeverOwnsSourcePcm
+// ============================================================================
+// ARAEditableContentState must NOT contain audioBuffer fields.
+// AudioModification::snapshotContent() must NOT return source PCM.
+// Per ARA2 spec: AudioSource owns PCM via sample access, AudioModification
+// owns modification-scoped edit/analysis state only.
+static CheckResult araModificationStateNeverOwnsSourcePcm()
+{
+    const auto editableStateText = readText("Source/Content/ARAEditableContentState.h");
+    const auto modStateText = readText("Source/Content/AudioModificationContentState.h");
+    const auto modCppText = readText("Source/ARA/AudioModification.cpp");
+
+    // ARAEditableContentState must NOT have audioBuffer/audioSampleRate/audioRevision fields
+    const std::vector<std::string> forbiddenFields = {
+        "audioBuffer", "audioSampleRate", "audioRevision"
+    };
+    for (const auto& field : forbiddenFields)
+    {
+        if (contains(editableStateText, field))
+            return fail("araModificationStateNeverOwnsSourcePcm",
+                        "ARAEditableContentState contains forbidden field: " + field +
+                        " — ARA AudioModification must not own source PCM");
+    }
+
+    // AudioModificationContentState.editable must be ARAEditableContentState, not EditableContentState
+    if (!contains(modStateText, "ARAEditableContentState editable"))
+        return fail("araModificationStateNeverOwnsSourcePcm",
+                    "AudioModificationContentState must use ARAEditableContentState for editable field");
+
+    // AudioModification::snapshotContent must NOT return audioBuffer
+    const auto snapshotBody = extractBraceBlockAfterToken(modCppText, "AudioModification::snapshotContent");
+    if (snapshotBody.empty())
+        return fail("araModificationStateNeverOwnsSourcePcm",
+                    "AudioModification::snapshotContent body not found");
+    if (contains(snapshotBody, "audioBuffer") || contains(snapshotBody, "snap.audioBuffer"))
+        return fail("araModificationStateNeverOwnsSourcePcm",
+                    "AudioModification::snapshotContent must NOT populate audioBuffer — PCM comes from AudioSource");
+
+    return pass("araModificationStateNeverOwnsSourcePcm");
+}
+
+// ============================================================================
+// P1 Contract Test: araF0SchedulingUsesRealContentKey
+// ============================================================================
+// ARA F0 extraction must use real AudioModification ContentKey, not fake async keys.
+// Must NOT have scheduleAsyncWork wrapping arbitrary lambdas with fake StandaloneClip keys.
+static CheckResult araF0SchedulingUsesRealContentKey()
+{
+    const auto dcHeader = readText("Source/ARA/OpenTuneDocumentController.h");
+    const auto processorCpp = readText("Source/PluginProcessor.cpp");
+
+    // Must NOT have scheduleAsyncWork API in ProcessorServices
+    if (contains(dcHeader, "scheduleAsyncWork"))
+        return fail("araF0SchedulingUsesRealContentKey",
+                    "ProcessorServices still has scheduleAsyncWork — "
+                    "ARA F0 extraction must use real ContentKey, not fake async work wrapper");
+
+    // didBindToARA must NOT construct fake StandaloneClip keys
+    const auto bindBody = extractBraceBlockAfterToken(processorCpp, "didBindToARA");
+    if (bindBody.empty())
+        return fail("araF0SchedulingUsesRealContentKey", "didBindToARA body not found");
+    
+    const std::vector<std::string> forbiddenPatterns = {
+        "ContentKey asyncKey",
+        "DomainKind::StandaloneClip, s_key",
+        "scheduleAsyncWork"
+    };
+    for (const auto& pattern : forbiddenPatterns)
+    {
+        if (contains(bindBody, pattern))
+            return fail("araF0SchedulingUsesRealContentKey",
+                        "didBindToARA still uses fake async ContentKey pattern: " + pattern);
+    }
+
+    return pass("araF0SchedulingUsesRealContentKey");
+}
+
+// ============================================================================
+// P1 Contract Test: projectPersistenceStoresCompleteContentKey
+// ============================================================================
+// .otproj persistence must store complete ContentKey (domain/objectId/discriminator),
+// not single uint64_t contentId. Must NOT have legacy "contentId" XML attributes.
+static CheckResult projectPersistenceStoresCompleteContentKey()
+{
+    const auto modelHeader = readText("Source/Utils/ProjectModel.h");
+    const auto persistenceCpp = readText("Source/Utils/ProjectPersistence.cpp");
+
+    // ProjectContentEntry must have ContentKey contentKey field, not uint64_t contentId
+    const auto contentEntryBody = extractBraceBlockAfterToken(modelHeader, "struct ProjectContentEntry");
+    if (contentEntryBody.empty())
+        return fail("projectPersistenceStoresCompleteContentKey",
+                    "ProjectContentEntry body not found");
+    if (contains(contentEntryBody, "uint64_t contentId"))
+        return fail("projectPersistenceStoresCompleteContentKey",
+                    "ProjectContentEntry still has uint64_t contentId — must use ContentKey contentKey");
+    if (!contains(contentEntryBody, "ContentKey contentKey"))
+        return fail("projectPersistenceStoresCompleteContentKey",
+                    "ProjectContentEntry missing ContentKey contentKey field");
+
+    // ProjectPlacementEntry must have ContentKey contentKey field
+    const auto placementEntryBody = extractBraceBlockAfterToken(modelHeader, "struct ProjectPlacementEntry");
+    if (placementEntryBody.empty())
+        return fail("projectPersistenceStoresCompleteContentKey",
+                    "ProjectPlacementEntry body not found");
+    if (contains(placementEntryBody, "uint64_t contentId"))
+        return fail("projectPersistenceStoresCompleteContentKey",
+                    "ProjectPlacementEntry still has uint64_t contentId — must use ContentKey contentKey");
+
+    // Persistence must NOT write/read "contentId" or "lineageParentContentId" attributes
+    const std::vector<std::string> forbiddenAttributes = {
+        "\"contentId\"", "\"lineageParentContentId\""
+    };
+    for (const auto& attr : forbiddenAttributes)
+    {
+        if (contains(persistenceCpp, attr))
+            return fail("projectPersistenceStoresCompleteContentKey",
+                        "ProjectPersistence still uses legacy attribute: " + attr +
+                        " — must serialize complete ContentKey (domain/objectId/discriminator)");
+    }
+
+    return pass("projectPersistenceStoresCompleteContentKey");
+}
+
+// ============================================================================
+// P1 Contract Test: vst3StateHasNoLegacyPayloadCompatibility
+// ============================================================================
+// VST3 processor state restore must only accept current version, no v5/v6/v7/v8 branches.
+// Must NOT have legacy placement colour compatibility code.
+static CheckResult vst3StateHasNoLegacyPayloadCompatibility()
+{
+    const auto processorCpp = readText("Source/PluginProcessor.cpp");
+
+    // Locate setStateInformation function
+    const auto restoreBody = extractBraceBlockAfterToken(processorCpp,
+                                                         "OpenTuneAudioProcessor::setStateInformation");
+    if (restoreBody.empty())
+        return fail("vst3StateHasNoLegacyPayloadCompatibility",
+                    "setStateInformation body not found");
+
+    // Must NOT have version compatibility branches
+    const std::vector<std::string> forbiddenVersionChecks = {
+        "version != 8", "version != 7", "version != 6", "version != 5",
+        "version == 8", "version == 7", "version == 6", "version == 5"
+    };
+    for (const auto& check : forbiddenVersionChecks)
+    {
+        if (contains(restoreBody, check))
+            return fail("vst3StateHasNoLegacyPayloadCompatibility",
+                        "VST3 state restore still has legacy version check: " + check +
+                        " — must only accept kProcessorStateVersion");
+    }
+
+    // Must NOT have legacy placement colour skip logic
+    const std::vector<std::string> forbiddenLegacyCode = {
+        "legacy placement colour",
+        "skip legacy placement colour",
+        "kept for binary stream compat"
+    };
+    for (const auto& pattern : forbiddenLegacyCode)
+    {
+        if (contains(restoreBody, pattern))
+            return fail("vst3StateHasNoLegacyPayloadCompatibility",
+                        "VST3 state restore still has legacy compatibility code: " + pattern);
+    }
+
+    return pass("vst3StateHasNoLegacyPayloadCompatibility");
+}
+
+// ============================================================================
 // Phase 4 Guard: phase4NoPlaceholderTests
 // ============================================================================
 static CheckResult phase4NoPlaceholderTests()
@@ -2049,62 +2763,76 @@ int main()
         return 1;
     }
 
-    const CheckResult results[] = {
-        audioModificationOwnsContent(),
-        playbackRegionIsPlacementOnly(),
-        araHasNoStoreSplit(),
-        contentRenderServiceIsDerivedOnly(),
-        rendererUsesAssignedRegions(),
-        araRewriteIsLockFree(),
-        araHasNoFallbackRouting(),
-        timeStretchCacheUsesContentKey(),
-        // Phase 0 contract tests
-        singlePlaybackReadSourceDefinition(),
-        singleRenderJobDefinition(),
-        contentRenderServiceHasNoOwnedRuntimeMechanics(),
-        materializationStoreNoLongerOwnsRuntimeMechanics(),
-        timeStretchCacheContractKeyCheck(),
-        // Phase 2 contract tests
-        standaloneUsesContentKey(),
-        standaloneHasNoMaterializationStoreDependency(),
-        standaloneArrangementIsPlacementOnly(),
-        processBlockHasNoStoreOrPublish(),
-        // Phase 3 capture contract tests (P0 guards)
-        captureBindingsHaveNoMaterializationStoreBridge(),
-        captureHasNoIsRenderReadyOrIsRenderFailed(),
-        capturePersistenceDoesNotReadMaterializationStore(),
-        captureCrsUsesRegularVST3CaptureSegmentId(),
-        captureRefreshDoesNotRequestMaterializationRefresh(),
-        captureSegmentHasNoCapturedAudio(),
-        // Phase 3 P1/P2 verification tests
-        captureSegmentContentSnapshotComplete(),
-        captureStaticLifecycleWiring(),
-        captureTickPromotesReadyWithoutReadinessBinding(),
-        captureTickDropsFailedWithoutReentrantBinding(),
-        captureF0CommitDoesNotPromoteUntilTick(),
-        capturePersistenceRoundtripRestoresOwnerContent(),
-        // Phase 4 static architecture guards (expected to fail until migration complete)
-        phase4NoMaterializationStoreType(),
-        phase4NoMaterializationContentProvider(),
-        phase4NoStoreBackedRenderOrStretcherPath(),
-        phase4NoOldMaterializationCommandApis(),
-        phase4Stage2HasNoStoreFallback(),
-        phase4NoPlaceholderTests(),
-        // Phase 4 runtime tests
-        phase4StandaloneEditCommandWritesOwnerAndInvalidatesCrs(),
-        phase4Stage2ReadsOwnerSnapshotByContentKey(),
-        phase4ReferenceAnalysisCommitsToOwner(),
-        phase4CopyCloneCreateStandaloneClipsOnly(),
-        // Phase 4 runtime validation tests
-        phase4RenderJobCarriesFullPayload(),
-        phase4EditorReadsViaContentKey(),
+    struct TestCase
+    {
+        const char* name;
+        CheckResult (*run)();
+    };
+
+    const TestCase tests[] = {
+        { "araAudioModificationOwnsEditAndAnalysisState", araAudioModificationOwnsEditAndAnalysisState },
+        { "playbackRegionIsPlacementOnly", playbackRegionIsPlacementOnly },
+        { "araHasNoStoreSplit", araHasNoStoreSplit },
+        { "contentRenderServiceIsDerivedOnly", contentRenderServiceIsDerivedOnly },
+        { "rendererUsesAssignedRegions", rendererUsesAssignedRegions },
+        { "araRewriteIsLockFree", araRewriteIsLockFree },
+        { "araHasNoFallbackRouting", araHasNoFallbackRouting },
+        { "timeStretchCacheUsesContentKey", timeStretchCacheUsesContentKey },
+        { "singlePlaybackReadSourceDefinition", singlePlaybackReadSourceDefinition },
+        { "singleRenderJobDefinition", singleRenderJobDefinition },
+        { "contentRenderServiceHasNoOwnedRuntimeMechanics", contentRenderServiceHasNoOwnedRuntimeMechanics },
+        { "materializationStoreNoLongerOwnsRuntimeMechanics", materializationStoreNoLongerOwnsRuntimeMechanics },
+        { "timeStretchCacheContractKeyCheck", timeStretchCacheContractKeyCheck },
+        { "standaloneUsesContentKey", standaloneUsesContentKey },
+        { "standaloneHasNoMaterializationStoreDependency", standaloneHasNoMaterializationStoreDependency },
+        { "standaloneArrangementIsPlacementOnly", standaloneArrangementIsPlacementOnly },
+        { "processBlockHasNoStoreOrPublish", processBlockHasNoStoreOrPublish },
+        { "captureBindingsHaveNoMaterializationStoreBridge", captureBindingsHaveNoMaterializationStoreBridge },
+        { "captureHasNoIsRenderReadyOrIsRenderFailed", captureHasNoIsRenderReadyOrIsRenderFailed },
+        { "capturePersistenceDoesNotReadMaterializationStore", capturePersistenceDoesNotReadMaterializationStore },
+        { "captureCrsUsesRegularVST3CaptureSegmentId", captureCrsUsesRegularVST3CaptureSegmentId },
+        { "captureRefreshDoesNotRequestMaterializationRefresh", captureRefreshDoesNotRequestMaterializationRefresh },
+        { "captureSegmentHasNoCapturedAudio", captureSegmentHasNoCapturedAudio },
+        { "captureSegmentContentSnapshotComplete", captureSegmentContentSnapshotComplete },
+        { "captureStaticLifecycleWiring", captureStaticLifecycleWiring },
+        { "captureTickPromotesReadyWithoutReadinessBinding", captureTickPromotesReadyWithoutReadinessBinding },
+        { "captureTickDropsFailedWithoutReentrantBinding", captureTickDropsFailedWithoutReentrantBinding },
+        { "captureF0CommitDoesNotPromoteUntilTick", captureF0CommitDoesNotPromoteUntilTick },
+        { "capturePersistenceRoundtripRestoresOwnerContent", capturePersistenceRoundtripRestoresOwnerContent },
+        { "phase4NoMaterializationStoreType", phase4NoMaterializationStoreType },
+        { "phase4NoMaterializationContentProvider", phase4NoMaterializationContentProvider },
+        { "phase4NoStoreBackedRenderOrStretcherPath", phase4NoStoreBackedRenderOrStretcherPath },
+        { "phase4NoOldMaterializationCommandApis", phase4NoOldMaterializationCommandApis },
+        { "phase4Stage2HasNoStoreFallback", phase4Stage2HasNoStoreFallback },
+        { "phase4NoPlaceholderTests", phase4NoPlaceholderTests },
+        { "phase4StandaloneEditCommandWritesOwnerAndInvalidatesCrs", phase4StandaloneEditCommandWritesOwnerAndInvalidatesCrs },
+        { "phase4Stage2ReadsOwnerSnapshotByContentKey", phase4Stage2ReadsOwnerSnapshotByContentKey },
+        { "phase4ReferenceAnalysisCommitsToOwner", phase4ReferenceAnalysisCommitsToOwner },
+        { "phase4CopyCloneCreateStandaloneClipsOnly", phase4CopyCloneCreateStandaloneClipsOnly },
+        { "phase4RenderJobCarriesFullPayload", phase4RenderJobCarriesFullPayload },
+        { "phase4EditorReadsViaContentKey", phase4EditorReadsViaContentKey },
+        { "phase4NoPublicMaterializationVocabulary", phase4NoPublicMaterializationVocabulary },
+        { "contentKeyMustBeCompleteInAllPaths", contentKeyMustBeCompleteInAllPaths },
+        { "araArchiveMustNotPersistSourcePCM", araArchiveMustNotPersistSourcePCM },
+        { "araArchiveRestoresCompleteAnalysisState", araArchiveRestoresCompleteAnalysisState },
+        { "araPlaybackRendererUsesImmutablePlan", araPlaybackRendererUsesImmutablePlan },
+        { "pianoRollNoteSelectionIsTransient", pianoRollNoteSelectionIsTransient },
+        { "pianoRollSelectionOnlyDoesNotCommitContent", pianoRollSelectionOnlyDoesNotCommitContent },
+        { "pianoRollEditorsInjectSnapshotAndCommands", pianoRollEditorsInjectSnapshotAndCommands },
+        { "pianoRollAutoTuneFailureIsVisible", pianoRollAutoTuneFailureIsVisible },
+        { "araModificationStateNeverOwnsSourcePcm", araModificationStateNeverOwnsSourcePcm },
+        { "araF0SchedulingUsesRealContentKey", araF0SchedulingUsesRealContentKey },
+        { "projectPersistenceStoresCompleteContentKey", projectPersistenceStoresCompleteContentKey },
+        { "vst3StateHasNoLegacyPayloadCompatibility", vst3StateHasNoLegacyPayloadCompatibility },
     };
 
     int passedCount = 0;
     int failedCount = 0;
 
-    for (const auto& r : results)
+    for (const auto& test : tests)
     {
+        std::cout << "[RUN] " << test.name << std::endl;
+        const auto r = test.run();
         if (r.passed)
         {
             std::cout << "[PASS] " << r.name << "\n";

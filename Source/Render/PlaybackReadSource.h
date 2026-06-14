@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "../Content/ContentKey.h"
 #include "../Inference/RenderCache.h"
@@ -16,9 +16,9 @@ namespace OpenTune {
  * 统一定义，使用 ContentKey 标识内容。
  * 优先使用 RenderCache（overlay），降级为原始 audioBuffer（dry）。
  *
- * Phase 0: 提取自 MaterializationStore::PlaybackReadSource 和
+ * Phase 0: 提取自 CRS PlaybackReadSource 和
  *          ContentRenderService::PlaybackReadSource
- * 关键改变：使用 ContentKey 替代 materializationId
+ * 关键改变：使用 ContentKey 替代 contentId
  */
 struct PlaybackReadSource
 {

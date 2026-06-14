@@ -4,7 +4,7 @@
  * VST3 插件编辑器（Plugin Editor）
  *
  * VST3/ARA 格式专属的 UI 壳层。通过 Timer 心跳轮询 Processor 状态，
- * 将 ARA EditorView selection 的 Materialization 投射到 PianoRoll 进行编辑。
+ * 将 ARA EditorView selection 的 Content 投射到 PianoRoll 进行编辑。
  * 与 Standalone Editor 共享 PianoRollComponent 和 ParameterPanel，
  * 但不包含多轨 Arrangement 视图。
  *
@@ -18,9 +18,10 @@
 #include <memory>
 #include <vector>
 
+#include "Content/ContentKey.h"
 #include "PluginProcessor.h"
 #include "Utils/AppPreferences.h"
-#include "Utils/MaterializationTimelineProjection.h"
+#include "Utils/ContentTimelineProjection.h"
 #include "Utils/LocalizationManager.h"
 #include "UI/ToolIds.h"
 #include "UI/ParameterPanel.h"
@@ -34,7 +35,6 @@
 #include "UI/UIColors.h"
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
-#include "../Content/DomainContentOwner.h"
 
 namespace OpenTune::Capture {
 class CaptureSession;
@@ -108,11 +108,10 @@ public:
     void currentToolChanged(ToolId tool) override;
 
 private:
-    struct PianoRollMaterializationSync
+    struct PianoRollContentSync
     {
-        std::vector<TimelineMaterializationPlacement> placements;
-        uint64_t activeMaterializationId = 0;
-        bool usesRegularCaptureTimelineDomain = false;
+        std::vector<TimelineContentPlacement> placements;
+        ContentKey activeContentKey;
         double timelineViewStartSeconds = 0.0;
         double timelineViewEndSeconds = 0.0;
 
@@ -121,19 +120,19 @@ private:
             return !placements.empty();
         }
 
-        bool hasActiveMaterialization() const noexcept
+        bool hasActiveContent() const noexcept
         {
-            return activeMaterializationId != 0;
+            return activeContentKey.isValid();
         }
     };
 
     void timerCallback() override;
     void syncSharedAppPreferences();
     void applyThemeToEditor(ThemeId themeId);
-    uint64_t resolveCurrentMaterializationId();
-    PianoRollMaterializationSync resolveCurrentMaterializationSync();
+    ContentKey resolveCurrentContentKey();
+    PianoRollContentSync resolveCurrentContentSync();
     void syncParameterPanelFromSelection();
-    void syncMaterializationProjectionToPianoRoll();
+    void syncContentProjectionToPianoRoll();
     void showPreferencesDialog();
     void updateRegularCaptureSessionCallback();
     void clearRegularCaptureSessionCallback();
@@ -146,9 +145,6 @@ private:
 
     ContentEditCommands& getContentCommands() const { return *contentCommands_; }
     std::shared_ptr<ContentEditCommands> getContentCommandsShared() const { return contentCommands_; }
-
-    // [ARA 重构] 域内容所有者（替代 contentAccess_/contentCommands_ 的旧路由）
-    DomainContentOwner* contentOwner_ = nullptr;
 
     AppPreferences appPreferences_;
     std::shared_ptr<LocalizationManager::LanguageState> languageState_;
@@ -175,15 +171,15 @@ private:
 
     bool showingSingleNoteParams_{false};
     bool initialFocusGrabbed_{false};
-    // Tracks last-seen notesRevision per active materialization so the timer
+    // Tracks last-seen notesRevision per active content so the timer
     // can pull fresh notes when an async note generator (GAME) commits late.
     uint64_t lastPianoRollNotesRevision_{0};
-    uint64_t lastPianoRollNotesRevisionMatId_{0};
+    ContentKey lastPianoRollNotesRevisionContentKey_;
     uint64_t lastPianoRollTimeGridRevision_{0};
-    uint64_t lastPianoRollTimeGridRevisionMatId_{0};
+    ContentKey lastPianoRollTimeGridRevisionContentKey_;
 
-    // When true, the blocking overlay is shown until ARA materialization birth completes.
-    bool waitingForAraMaterialization_ = false;
+    // When true, the blocking overlay is shown until ARA content birth completes.
+    bool waitingForAraContent_ = false;
     juce::uint32 araWaitStartMs_ = 0;
 
     Capture::CaptureSession* regularCaptureCallbackSession_ = nullptr;

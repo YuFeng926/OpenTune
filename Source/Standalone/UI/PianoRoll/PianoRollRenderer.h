@@ -7,7 +7,8 @@
 #include "UI/UIColors.h"
 #include "UI/WaveformMipmap.h"
 #include "Utils/F0Timeline.h"
-#include "Utils/MaterializationTimelineProjection.h"
+#include "Utils/ContentTimelineProjection.h"
+#include "Content/ContentKey.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/PianoRollVisualPreferences.h"
 #include "Utils/Note.h"
@@ -22,14 +23,14 @@
 
 namespace OpenTune {
 
-struct TimelineMaterializationPlacement
+struct TimelineContentPlacement
 {
-    uint64_t materializationId = 0;
-    MaterializationTimelineProjection projection;
+    ContentKey contentKey;
+    ContentTimelineProjection projection;
 
     bool isValid() const noexcept
     {
-        return materializationId != 0 && projection.isValid();
+        return contentKey.isValid() && projection.isValid();
     }
 };
 
@@ -60,10 +61,10 @@ public:
      * 渲染上下文结构体
      * 包含渲染所需的所有参数和回调函数
      */
-    struct MaterializationRenderItem
+    struct ContentRenderItem
     {
-        uint64_t materializationId = 0;
-        MaterializationTimelineProjection projection;
+        ContentKey contentKey;
+        ContentTimelineProjection projection;
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
         WaveformMipmap* waveformMipmap = nullptr;
         std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
@@ -72,18 +73,19 @@ public:
         std::vector<F0VisualSegment> correctedF0VisualSegments;
         F0Timeline f0Timeline;
         std::vector<Note> displayNotes;
+        std::vector<int> selectedNoteIndices;
         std::vector<double> chunkBoundaries;
         bool active = false;
 
         bool isValid() const noexcept
         {
-            return materializationId != 0 && projection.isValid();
+            return contentKey.isValid() && projection.isValid();
         }
     };
 
     struct ReferenceOverlay
     {
-        std::vector<Note> ghostNotes;               // reference materialization 的 derived notes（materialization-local source time）
+        std::vector<Note> ghostNotes;               // reference content 的 derived notes（content-local source time）
         struct GhostAnchor {
             double sourceSeconds{0.0};
             float strength{0.0f};
@@ -108,7 +110,7 @@ public:
         float minMidi = 24.0f;
         float maxMidi = 108.0f;
         double bpm = 120.0;
-        std::vector<MaterializationRenderItem> materializations;
+        std::vector<ContentRenderItem> contents;
         int scaleRootNote = 0;
         int scaleType = 1;
         NoteNameMode noteNameMode = NoteNameMode::COnly;
@@ -132,10 +134,10 @@ public:
         uint64_t timeGridHoveredHandleId = 0;
         uint64_t timeGridSelectedHandleId = 0;
 
-        // ⚡️ vocal-time-stretch §8.5 (Phase I) — 将 materialization-local 的
+        // ⚡️ vocal-time-stretch §8.5 (Phase I) — 将 content-local 的
         // handle output_seconds 转换为 timeline time，供 drawTimeGridHandles
         // 通过 timeToX 正确映射到屏幕坐标。在 Standalone 模式下此投影为恒等。
-        std::function<double(double)> materializationTimeToTimeline;
+        std::function<double(double)> contentTimeToTimeline;
 
         // ⚡️ vocal-time-stretch §8.5 (Phase J) — current tool drives view
         // mode: TimeTool → Time view (no piano keys, no notes/F0, full-height
@@ -171,13 +173,13 @@ public:
                                                               const F0FrameToY& frameToY);
 
     void drawLanes(juce::Graphics& g, const RenderContext& ctx);
-    void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
-    void drawWaveform(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
+    void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    void drawWaveform(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
     void drawTimeRuler(juce::Graphics& g, const RenderContext& ctx);
     void drawGridLines(juce::Graphics& g, const RenderContext& ctx);
-    void drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
+    void drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
-    void drawNotes(juce::Graphics& g, const RenderContext& ctx, const MaterializationRenderItem& item);
+    void drawNotes(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
 
     // ⚡️ §8.5 — paint TimeGrid handles as vertical guide lines.
     void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx);

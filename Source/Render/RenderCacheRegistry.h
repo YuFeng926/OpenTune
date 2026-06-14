@@ -13,12 +13,12 @@ namespace OpenTune {
  * 
  * 按 ContentKey 管理 RenderCache 实例的创建、查找、删除。
  * 
- * Phase 0: 提取自 MaterializationStore RenderCache 创建逻辑 (cpp:84-85)
+ * Phase 0: 提取自 content owner RenderCache 创建逻辑 (cpp:84-85)
  *          和 ContentRenderService renderCaches_ map (h:184)
  * 
  * 复用代码：
- * - MaterializationStore.cpp:84-85 (RenderCache 创建)
- * - MaterializationStore.cpp:363-378 (getRenderCache)
+ * - content owner.cpp:84-85 (RenderCache 创建)
+ * - content owner.cpp:363-378 (getRenderCache)
  * - ContentRenderService.cpp:65-87 (getOrCreateRenderCache)
  */
 class RenderCacheRegistry

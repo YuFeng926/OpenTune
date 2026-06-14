@@ -3,7 +3,7 @@
  *
  * 管理原始音频源的身份与生命周期。每个 Source 代表一段导入的原始音频数据，
  * 包含音频缓冲区、采样率等元信息。Source 不持有任何编辑状态——编辑后的
- * 结果由 MaterializationStore 管理。
+ * 结果由 content owner 管理。
  *
  * 线程安全：内部使用 ReadWriteLock，读写均可跨线程调用。
  * 生命周期：支持 retire/revive 软删除，用于 Undo 系统的延迟回收。

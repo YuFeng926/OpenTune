@@ -49,20 +49,21 @@ void CaptureSegmentContent::applyContentCommand(ContentCommand& cmd)
 void CaptureSegmentContent::retireContent(ContentKey key)
 {
     if (key != contentKey()) return;
-    RetiredContentRecord record;
+    // Capture uses lightweight EditableContentState, not full AudioModificationContentState
+    CaptureRetiredRecord record;
     record.key = key;
-    record.content.editable = std::move(editable_);
-    record.content.contentRevision = editable_.contentRevision;
-    retired_.push_back(std::move(record));
+    record.editable = std::move(editable_);
+    record.contentRevision = editable_.contentRevision;
+    captureRetired_.push_back(std::move(record));
 }
 
 void CaptureSegmentContent::reviveContent(ContentKey key)
 {
     if (key != contentKey()) return;
-    for (auto it = retired_.begin(); it != retired_.end(); ++it) {
+    for (auto it = captureRetired_.begin(); it != captureRetired_.end(); ++it) {
         if (it->key == key) {
-            editable_ = std::move(it->content.editable);
-            retired_.erase(it);
+            editable_ = std::move(it->editable);
+            captureRetired_.erase(it);
             return;
         }
     }
@@ -71,9 +72,9 @@ void CaptureSegmentContent::reviveContent(ContentKey key)
 void CaptureSegmentContent::releaseRetiredContent(ContentKey key)
 {
     if (key != contentKey()) return;
-    retired_.erase(std::remove_if(retired_.begin(), retired_.end(),
-        [&key](const RetiredContentRecord& r) { return r.key == key; }),
-        retired_.end());
+    captureRetired_.erase(std::remove_if(captureRetired_.begin(), captureRetired_.end(),
+        [&key](const CaptureRetiredRecord& r) { return r.key == key; }),
+        captureRetired_.end());
 }
 
 void CaptureSegmentContent::applyAudioBuffer(const juce::AudioBuffer<float>* buffer, double sampleRate)

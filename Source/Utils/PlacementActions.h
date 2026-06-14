@@ -2,6 +2,7 @@
 
 #include "UndoManager.h"
 #include "../PluginProcessor.h"
+#include "../Content/ContentKey.h"
 #include <cstdint>
 #include <vector>
 
@@ -23,11 +24,11 @@ private:
     OpenTuneAudioProcessor& processor_;
     int trackId_;
     uint64_t originalPlacementId_;
-    uint64_t originalMaterializationId_;
+    ContentKey originalContentKey_;
     uint64_t leadingPlacementId_;
-    uint64_t leadingMaterializationId_;
+    ContentKey leadingContentKey_;
     uint64_t trailingPlacementId_;
-    uint64_t trailingMaterializationId_;
+    ContentKey trailingContentKey_;
 };
 
 // Merge undo 使用 lineage retire/revive：
@@ -44,16 +45,16 @@ private:
     OpenTuneAudioProcessor& processor_;
     int trackId_;
     uint64_t leadingPlacementId_;
-    uint64_t leadingMaterializationId_;
+    ContentKey leadingContentKey_;
     uint64_t trailingPlacementId_;
-    uint64_t trailingMaterializationId_;
+    ContentKey trailingContentKey_;
     uint64_t mergedPlacementId_;
-    uint64_t mergedMaterializationId_;
+    ContentKey mergedContentKey_;
 };
 
 // Delete undo 使用 lineage retire/revive：
-// redo 状态 = placement+materialization retired
-// undo 状态 = placement+materialization active
+// redo 状态 = placement+content retired
+// undo 状态 = placement+content active
 class DeletePlacementAction : public UndoAction {
 public:
     DeletePlacementAction(OpenTuneAudioProcessor& processor, const DeleteOutcome& outcome);
@@ -65,7 +66,7 @@ private:
     OpenTuneAudioProcessor& processor_;
     int trackId_;
     uint64_t placementId_;
-    uint64_t materializationId_;
+    ContentKey contentKey_;
 };
 
 // Move undo: 恢复原始 timeline 位置（支持跨轨）

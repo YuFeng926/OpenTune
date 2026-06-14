@@ -35,11 +35,17 @@ public:
     void applyReferenceFeatures(const ReferenceFeatureSet& features);
     std::shared_ptr<PitchCurve> pitchCurve() const { return pitchCurve_; }
 
+    struct CaptureRetiredRecord {
+        ContentKey key;
+        EditableContentState editable;
+        uint64_t contentRevision;
+    };
+
 private:
     uint64_t id_;
     EditableContentState editable_;
     std::shared_ptr<PitchCurve> pitchCurve_;
-    std::vector<RetiredContentRecord> retired_;
+    std::vector<CaptureRetiredRecord> captureRetired_;
 };
 
 } // namespace OpenTune

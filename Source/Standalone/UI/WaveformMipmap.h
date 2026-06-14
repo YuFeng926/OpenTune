@@ -4,8 +4,9 @@
 #include <vector>
 #include <cstdint>
 #include <memory>
-#include <unordered_map>
-#include <unordered_set>
+#include <map>
+#include <set>
+#include "Content/ContentKey.h"
 
 namespace OpenTune {
 
@@ -85,21 +86,21 @@ private:
 class WaveformMipmapCache
 {
 public:
-    WaveformMipmap& getOrCreate(uint64_t materializationId);
-    void remove(uint64_t materializationId);
-    void prune(const std::unordered_set<uint64_t>& alive);
+    WaveformMipmap& getOrCreate(ContentKey contentKey);
+    void remove(ContentKey contentKey);
+    void prune(const std::set<ContentKey>& alive);
     void clear();
     
     bool buildIncremental(double timeBudgetMs);
     
-    const WaveformMipmap* get(uint64_t materializationId) const
+    const WaveformMipmap* get(ContentKey contentKey) const
     {
-        auto it = caches_.find(materializationId);
+        auto it = caches_.find(contentKey);
         return it != caches_.end() ? it->second.get() : nullptr;
     }
     
 private:
-    std::unordered_map<uint64_t, std::unique_ptr<WaveformMipmap>> caches_;
+    std::map<ContentKey, std::unique_ptr<WaveformMipmap>> caches_;
 };
 
 } // namespace OpenTune

@@ -49,7 +49,7 @@ public:
      * Stats snapshot for diagnostics.
      */
     struct Stats {
-        int materializationCount = 0;
+        int contentCount = 0;
         size_t totalBytes = 0;
         int publishedCount = 0;
     };

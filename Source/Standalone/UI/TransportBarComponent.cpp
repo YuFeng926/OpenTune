@@ -1,4 +1,4 @@
-﻿#include "TransportBarComponent.h"
+#include "TransportBarComponent.h"
 #include "OpenTuneLookAndFeel.h"
 #include "UIColors.h"
 #include "ToolbarIcons.h"

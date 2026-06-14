@@ -11,8 +11,8 @@ namespace OpenTune {
  * 
  * 纯函数工具类，不持有状态。
  * 
- * Phase 0: 提取自 MaterializationStore::buildChunkBoundariesFromSilentGaps
- *          (MaterializationStore.cpp:820-880)
+ * Phase 0: 提取自 RenderChunkPlanner::buildChunkBoundariesFromSilentGaps
+ *          (content owner.cpp:820-880)
  */
 class RenderChunkPlanner
 {

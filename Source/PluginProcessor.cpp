@@ -1,5 +1,4 @@
 #include "PluginProcessor.h"
-#include "MaterializationStore.h"
 #include "SourceStore.h"
 #include "StandaloneArrangement.h"
 #include "Editor/EditorFactory.h"
@@ -99,6 +98,87 @@ std::vector<CorrectedSegment> copyCorrectedSegments(const std::shared_ptr<PitchC
         copiedSegments.push_back(segment);
     }
     return copiedSegments;
+}
+
+std::vector<CorrectedSegment> correctedSegmentsFromCurve(const std::shared_ptr<PitchCurve>& curve)
+{
+    return copyCorrectedSegments(curve);
+}
+
+ContentPayloadState payloadFromSnapshot(const EditableContentSnapshot& snap)
+{
+    ContentPayloadState payload;
+    payload.sourceWindow = snap.sourceWindow;
+    payload.audioBuffer = snap.audioBuffer;
+    payload.sampleRate = snap.audioSampleRate > 0.0 ? snap.audioSampleRate : TimeCoordinate::kRenderSampleRate;
+    payload.pitchCurve = snap.pitchCurve;
+    payload.originalF0State = snap.originalF0State;
+    payload.detectedKey = snap.detectedKey;
+    payload.silentGaps = snap.silentGaps;
+    payload.referenceFeatures = snap.referenceFeatures;
+    payload.notes = snap.notes;
+    payload.correctedSegments = snap.correctedSegments;
+    payload.timeGrid = snap.timeGrid;
+    payload.pitchShiftSettings = snap.pitchShiftSettings;
+    payload.notesRevision = snap.notesRevision;
+    payload.pitchRevision = snap.pitchRevision;
+    payload.timeGridRevision = snap.timeGridRevision;
+    payload.pitchShiftRevision = snap.pitchShiftRevision;
+    payload.contentRevision = snap.contentRevision;
+    payload.audioRevision = snap.audioRevision;
+    payload.lifecycle = ContentLifecycle::Ready;
+    return payload;
+}
+
+void publishStandalonePlaybackSource(ContentRenderService& crs,
+                                     ContentKey key,
+                                     const ContentPayloadState& payload)
+{
+    PlaybackReadSource readSource;
+    readSource.contentKey = key;
+    readSource.audioBuffer = payload.audioBuffer;
+    readSource.renderCache = crs.getOrCreateRenderCache(key);
+    readSource.timeStretchCache = &crs.getTimeStretchCache();
+    readSource.pitchRevision = payload.pitchRevision;
+    readSource.timeGridRevision = payload.timeGridRevision;
+    readSource.pitchShiftRevision = payload.pitchShiftRevision;
+    readSource.pitchShiftSettings = payload.pitchShiftSettings;
+    readSource.timeGridIsIdentity = payload.timeGrid == nullptr || payload.timeGrid->isIdentity();
+    crs.publishPlaybackSource(key, std::move(readSource));
+}
+
+ContentKey createStandaloneClipOwner(StandaloneContentRepository& repository,
+                                     ContentRenderService& crs,
+                                     ContentPayloadState payload,
+                                     uint64_t forcedId = 0)
+{
+    const ContentKey key = repository.createClip(forcedId);
+    auto* clip = key.isValid() ? repository.findClip(key) : nullptr;
+    if (clip == nullptr) {
+        return {};
+    }
+
+    payload.lifecycle = ContentLifecycle::Ready;
+    clip->payload() = std::move(payload);
+    publishStandalonePlaybackSource(crs, key, clip->payload());
+    return key;
+}
+
+bool standaloneRepositoryReferencesSource(const StandaloneContentRepository& repository,
+                                          uint64_t sourceId)
+{
+    if (sourceId == 0) {
+        return false;
+    }
+
+    for (const auto key : repository.getAllClips()) {
+        const auto* clip = repository.findClip(key);
+        if (clip != nullptr && clip->payload().sourceWindow.sourceId == sourceId) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 juce::String diagnosticControlCallToString(OpenTuneAudioProcessor::DiagnosticControlCall controlCall)
@@ -627,8 +707,8 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 } // anonymous namespace
 
 constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
-constexpr int kProcessorStateVersion = 8; // v8 adds Placement::clipInSeconds
-// vocal-time-stretch §3.8: bumped 5 �?6 to add per-materialization TimeGrid section.
+constexpr int kProcessorStateVersion = 9; // v9 removes persisted Note selection
+// vocal-time-stretch §3.8: bumped 5 �?6 to add per-content TimeGrid section.
 // v5 projects load with auto-seeded identity TimeGrid (output==source).
 // Processor state v7 adds per-handle confidence. v6 reads default confidence=Default.
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
@@ -638,350 +718,6 @@ constexpr int kStandaloneSettingsVersion = 1;
 // Compiled unconditionally into the shared OpenTune lib; getStateInformation /
 // setStateInformation dispatch by runtime wrapperType, so both Standalone and
 // VST3 binaries link the same compiled object and need these symbols available.
-
-static bool readBytesExact(juce::InputStream& input, void* destination, size_t numBytes)
-{
-    return numBytes == 0 || input.read(destination, static_cast<int>(numBytes)) == static_cast<int>(numBytes);
-}
-
-static void writeFloatVector(juce::OutputStream& output, const std::vector<float>& values)
-{
-    output.writeInt(static_cast<int>(values.size()));
-    if (!values.empty()) {
-        output.write(values.data(), values.size() * sizeof(float));
-    }
-}
-
-static bool readFloatVector(juce::InputStream& input, std::vector<float>& out)
-{
-    out.clear();
-    const int valueCount = input.readInt();
-    if (valueCount < 0) {
-        return false;
-    }
-
-    out.resize(static_cast<size_t>(valueCount));
-    return readBytesExact(input, out.data(), out.size() * sizeof(float));
-}
-
-static void appendUniqueMaterializationId(std::vector<uint64_t>& materializationIds, uint64_t materializationId)
-{
-    if (materializationId == 0) {
-        return;
-    }
-
-    if (std::find(materializationIds.begin(), materializationIds.end(), materializationId) == materializationIds.end()) {
-        materializationIds.push_back(materializationId);
-    }
-}
-
-static void writePitchCurve(juce::OutputStream& output,
-                            const std::shared_ptr<PitchCurve>& pitchCurve)
-{
-    output.writeBool(pitchCurve != nullptr);
-    if (pitchCurve == nullptr) {
-        return;
-    }
-
-    const auto snapshot = pitchCurve->getSnapshot();
-    output.writeInt(snapshot->getHopSize());
-    output.writeDouble(snapshot->getSampleRate());
-    writeFloatVector(output, snapshot->getOriginalF0());
-    writeFloatVector(output, snapshot->getOriginalEnergy());
-
-    const auto& segments = snapshot->getCorrectedSegments();
-    output.writeInt(static_cast<int>(segments.size()));
-    for (const auto& segment : segments) {
-        output.writeInt(segment.startFrame);
-        output.writeInt(segment.endFrame);
-        output.writeInt(static_cast<int>(segment.source));
-        output.writeFloat(segment.retuneSpeed);
-        output.writeFloat(segment.vibratoDepth);
-        output.writeFloat(segment.vibratoRate);
-        writeFloatVector(output, segment.f0Data);
-    }
-}
-
-static std::shared_ptr<PitchCurve> readPitchCurve(juce::InputStream& input)
-{
-    if (!input.readBool()) {
-        return nullptr;
-    }
-
-    const int hopSize = input.readInt();
-    const double sampleRate = input.readDouble();
-    if (hopSize <= 0 || sampleRate <= 0.0) {
-        return nullptr;
-    }
-
-    std::vector<float> originalF0;
-    std::vector<float> originalEnergy;
-    if (!readFloatVector(input, originalF0) || !readFloatVector(input, originalEnergy)) {
-        return nullptr;
-    }
-
-    auto pitchCurve = std::make_shared<PitchCurve>();
-    pitchCurve->setHopSize(hopSize);
-    pitchCurve->setSampleRate(sampleRate);
-    pitchCurve->setOriginalF0(originalF0);
-    pitchCurve->setOriginalEnergy(originalEnergy);
-    pitchCurve->clearAllCorrections();
-
-    const int segmentCount = input.readInt();
-    if (segmentCount < 0) {
-        return nullptr;
-    }
-
-    for (int segmentIndex = 0; segmentIndex < segmentCount; ++segmentIndex) {
-        CorrectedSegment segment;
-        segment.startFrame = input.readInt();
-        segment.endFrame = input.readInt();
-        segment.source = static_cast<CorrectedSegment::Source>(input.readInt());
-        segment.retuneSpeed = input.readFloat();
-        segment.vibratoDepth = input.readFloat();
-        segment.vibratoRate = input.readFloat();
-        if (!readFloatVector(input, segment.f0Data)) {
-            return nullptr;
-        }
-
-        if (segment.startFrame < segment.endFrame && !segment.f0Data.empty()) {
-            pitchCurve->restoreCorrectedSegment(segment);
-        }
-    }
-
-    return pitchCurve;
-}
-
-static void writeDetectedKey(juce::OutputStream& output, const DetectedKey& detectedKey)
-{
-    output.writeInt(static_cast<int>(detectedKey.root));
-    output.writeInt(static_cast<int>(detectedKey.scale));
-    output.writeFloat(detectedKey.confidence);
-}
-
-static DetectedKey readDetectedKey(juce::InputStream& input)
-{
-    DetectedKey detectedKey;
-    detectedKey.root = static_cast<Key>(input.readInt());
-    detectedKey.scale = static_cast<Scale>(input.readInt());
-    detectedKey.confidence = input.readFloat();
-    return detectedKey;
-}
-
-static void writeNotes(juce::OutputStream& output, const std::vector<Note>& notes)
-{
-    output.writeInt(static_cast<int>(notes.size()));
-    for (const auto& note : notes) {
-        output.writeDouble(note.startTime);
-        output.writeDouble(note.endTime);
-        output.writeFloat(note.pitch);
-        output.writeFloat(note.originalPitch);
-        output.writeFloat(note.pitchOffset);
-        output.writeFloat(note.retuneSpeed);
-        output.writeFloat(note.vibratoDepth);
-        output.writeFloat(note.vibratoRate);
-        output.writeFloat(note.velocity);
-        output.writeBool(note.isVoiced);
-        output.writeBool(note.selected);
-        output.writeBool(note.dirty);
-    }
-}
-
-static bool readNotes(juce::InputStream& input, std::vector<Note>& out)
-{
-    out.clear();
-    const int noteCount = input.readInt();
-    if (noteCount < 0) {
-        return false;
-    }
-
-    out.reserve(static_cast<size_t>(noteCount));
-    for (int noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
-        Note note;
-        note.startTime = input.readDouble();
-        note.endTime = input.readDouble();
-        note.pitch = input.readFloat();
-        note.originalPitch = input.readFloat();
-        note.pitchOffset = input.readFloat();
-        note.retuneSpeed = input.readFloat();
-        note.vibratoDepth = input.readFloat();
-        note.vibratoRate = input.readFloat();
-        note.velocity = input.readFloat();
-        note.isVoiced = input.readBool();
-        note.selected = input.readBool();
-        note.dirty = input.readBool();
-        out.push_back(note);
-    }
-
-    return true;
-}
-
-static void writeAudioBuffer(juce::OutputStream& output,
-                             const std::shared_ptr<const juce::AudioBuffer<float>>& audioBuffer)
-{
-    output.writeBool(audioBuffer != nullptr);
-    if (audioBuffer == nullptr) {
-        return;
-    }
-
-    const int numChannels = audioBuffer->getNumChannels();
-    const int numSamples = audioBuffer->getNumSamples();
-    output.writeInt(numChannels);
-    output.writeInt(numSamples);
-    for (int channel = 0; channel < numChannels; ++channel) {
-        const auto* channelData = audioBuffer->getReadPointer(channel);
-        output.write(channelData, static_cast<size_t>(numSamples) * sizeof(float));
-    }
-}
-
-static std::shared_ptr<const juce::AudioBuffer<float>> readAudioBuffer(juce::InputStream& input)
-{
-    if (!input.readBool()) {
-        return nullptr;
-    }
-
-    const int numChannels = input.readInt();
-    const int numSamples = input.readInt();
-    if (numChannels <= 0 || numSamples <= 0) {
-        return nullptr;
-    }
-
-    auto buffer = std::make_shared<juce::AudioBuffer<float>>(numChannels, numSamples);
-    buffer->clear();
-    for (int channel = 0; channel < numChannels; ++channel) {
-        if (!readBytesExact(input,
-                            buffer->getWritePointer(channel),
-                            static_cast<size_t>(numSamples) * sizeof(float))) {
-            return nullptr;
-        }
-    }
-
-    return buffer;
-}
-
-#if JucePlugin_Enable_ARA
-static bool scanAudioBufferHeader(juce::InputStream& input, bool& hasAudioBuffer)
-{
-    if (input.getNumBytesRemaining() < 1) {
-        return false;
-    }
-
-    hasAudioBuffer = input.readBool();
-    if (!hasAudioBuffer) {
-        return true;
-    }
-
-    if (input.getNumBytesRemaining() < 8) {
-        return false;
-    }
-
-    const int numChannels = input.readInt();
-    const int numSamples = input.readInt();
-    if (numChannels <= 0 || numSamples <= 0) {
-        return false;
-    }
-
-    const auto bytesToSkip = static_cast<int64_t>(numChannels)
-        * static_cast<int64_t>(numSamples)
-        * static_cast<int64_t>(sizeof(float));
-    if (bytesToSkip < 0 || bytesToSkip > input.getNumBytesRemaining()) {
-        return false;
-    }
-
-    input.skipNextBytes(bytesToSkip);
-    return true;
-}
-
-static bool processorStateContainsMetadataOnlySource(const void* data, int sizeInBytes)
-{
-    if (data == nullptr || sizeInBytes <= 0) {
-        return false;
-    }
-
-    juce::MemoryInputStream scan(data, static_cast<size_t>(sizeInBytes), false);
-    if (scan.getNumBytesRemaining() < 8) {
-        return false;
-    }
-
-    const int magic = scan.readInt();
-    const int version = scan.readInt();
-    if (magic != static_cast<int>(kProcessorStateMagic)
-        || (version != kProcessorStateVersion && version != 7 && version != 6 && version != 5)) {
-        return false;
-    }
-
-    if (scan.getNumBytesRemaining() < 16) {
-        return false;
-    }
-
-    scan.readDouble(); // zoomLevel
-    scan.readInt();    // trackHeight
-
-    const int sourceCount = scan.readInt();
-    if (sourceCount < 0) {
-        return false;
-    }
-
-    for (int sourceIndex = 0; sourceIndex < sourceCount; ++sourceIndex) {
-        if (scan.getNumBytesRemaining() < 8) {
-            return false;
-        }
-
-        scan.readInt64();  // sourceId
-        scan.readString(); // displayName
-
-        if (scan.getNumBytesRemaining() < 8) {
-            return false;
-        }
-
-        scan.readDouble(); // sampleRate
-
-        bool hasAudioBuffer = false;
-        if (!scanAudioBufferHeader(scan, hasAudioBuffer)) {
-            return false;
-        }
-
-        if (!hasAudioBuffer) {
-            return true;
-        }
-    }
-
-    return false;
-}
-#endif
-
-static void writeSilentGaps(juce::OutputStream& output,
-                            const std::vector<SilentGap>& silentGaps)
-{
-    output.writeInt(static_cast<int>(silentGaps.size()));
-    for (const auto& gap : silentGaps) {
-        output.writeInt64(gap.startSample);
-        output.writeInt64(gap.endSampleExclusive);
-        output.writeFloat(gap.minLevel_dB);
-    }
-}
-
-static bool readSilentGaps(juce::InputStream& input, std::vector<SilentGap>& out)
-{
-    out.clear();
-    const int gapCount = input.readInt();
-    if (gapCount < 0) {
-        return false;
-    }
-
-    out.reserve(static_cast<size_t>(gapCount));
-    for (int gapIndex = 0; gapIndex < gapCount; ++gapIndex) {
-        SilentGap gap;
-        gap.startSample = input.readInt64();
-        gap.endSampleExclusive = input.readInt64();
-        gap.minLevel_dB = input.readFloat();
-        if (gap.isValid()) {
-            out.push_back(gap);
-        }
-    }
-
-    return true;
-}
 
 void OpenTuneAudioProcessor::configureReferenceAnalysisService()
 {
@@ -1034,7 +770,7 @@ ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
     };
 
     if (snapshot.audioBuffer == nullptr || snapshot.audioBuffer->getNumSamples() <= 0) {
-        return failGame("AUTO Ref GAME analysis requires materialization audio");
+        return failGame("AUTO Ref GAME analysis requires content audio");
     }
 
     if (!ensureNoteGeneratorReady() || noteGenerator_ == nullptr) {
@@ -1141,72 +877,6 @@ void OpenTuneAudioProcessor::analysisFailed(ContentKey key, const juce::String& 
     setContentReferenceFeatures(key, failed);
 }
 
-// ============================================================================
-// vocal-time-stretch §3.8 �?TimeGrid serialization (state version �?6)
-// State version 7 adds the per-handle confidence field.
-//
-// Layout per materialization (v6+ writes; v7+ writes confidence):
-//   int32  handleCount
-//   for each handle:
-//     int64   id
-//     double  source_seconds
-//     double  output_seconds
-//     int32   kind (HandleKind enum value, range 0-6 in v6, 0-7 in v7)
-//     bool    locked
-//     uint8   confidence  // v7+ only; v6 reads default to Default(0)
-//
-// If a v5 (or earlier) project is loaded, readTimeGridHandles writes nothing
-// and the createMaterialization auto-seed path produces an identity TimeGrid
-// downstream.
-// ============================================================================
-
-static void writeTimeGridHandles(juce::OutputStream& output,
-                                  const std::shared_ptr<const TimeGridSnapshot>& snapshot)
-{
-    if (snapshot == nullptr) {
-        output.writeInt(0);
-        return;
-    }
-    const auto& handles = snapshot->handles();
-    output.writeInt(static_cast<int>(handles.size()));
-    for (const auto& h : handles) {
-        output.writeInt64(static_cast<juce::int64>(h.id));
-        output.writeDouble(h.source_seconds);
-        output.writeDouble(h.output_seconds);
-        output.writeInt(static_cast<int>(h.kind));
-        output.writeBool(h.locked);
-        output.writeByte(static_cast<char>(h.confidence)); // v7+
-    }
-}
-
-static bool readTimeGridHandles(juce::InputStream& input,
-                                 std::vector<TimeHandle>& out,
-                                 bool readConfidenceField /* v7+ */)
-{
-    out.clear();
-    const int count = input.readInt();
-    if (count < 0) return false;
-    out.reserve(static_cast<size_t>(count));
-    for (int i = 0; i < count; ++i) {
-        TimeHandle h;
-        h.id             = static_cast<uint64_t>(input.readInt64());
-        h.source_seconds = input.readDouble();
-        h.output_seconds = input.readDouble();
-        const int kindRaw = input.readInt();
-        h.kind = static_cast<HandleKind>(kindRaw);
-        h.locked = input.readBool();
-        if (readConfidenceField) {
-            const int confRaw = static_cast<unsigned char>(input.readByte());
-            h.confidence = static_cast<Confidence>(confRaw);
-        } else {
-            h.confidence = Confidence::Default; // v6 backward compat
-        }
-        out.push_back(h);
-    }
-    return true;
-}
-
-
 static std::shared_ptr<PitchCurve> clonePitchCurveWithCorrectedSegments(
     const std::shared_ptr<PitchCurve>& sourceCurve,
     const std::vector<CorrectedSegment>& segments)
@@ -1231,10 +901,8 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     addParameter(editVersionParam_);
 
     sourceStore_ = std::make_shared<SourceStore>();
-    materializationStore_ = std::make_shared<MaterializationStore>();
     contentRenderService_ = std::make_shared<ContentRenderService>();
     standaloneContentRepository_ = std::make_unique<StandaloneContentRepository>();
-    materializationStore_->attachContentRenderService(contentRenderService_.get());
     // Bind processor's render callback to CRS via ExecutionLease (ARA 重构路由改制)
     {
         ContentRenderService::ExecutionLease lease;
@@ -1330,16 +998,15 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 
         bindings.replaceWithRendered = [this](juce::AudioBuffer<float>& buffer,
                                                int destStart, int numSamples,
-                                               uint64_t segmentId,
+                                               ContentKey segmentContentKey,
                                                double readStartSeconds,
                                                double targetSampleRate) {
-            // Capture segment id is the CRS content key.
+            // Capture segment contentKey is the CRS content key.
             jassert(contentRenderService_ != nullptr);
             if (contentRenderService_ == nullptr) return;
 
             PlaybackReadSource readSource;
-            const ContentKey captureKey{DomainKind::RegularVST3Capture, segmentId, 0};
-            if (!contentRenderService_->getPlaybackReadSource(captureKey, readSource)
+            if (!contentRenderService_->getPlaybackReadSource(segmentContentKey, readSource)
                 || !readSource.hasAudio()) {
                 buffer.clear(destStart, numSamples);
                 return;
@@ -1353,17 +1020,16 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             readPlaybackAudio(req, buffer, destStart);
         };
 
-        bindings.retireSegment = [this](uint64_t segmentId) {
+        bindings.retireSegment = [this](ContentKey segmentContentKey) {
             // CaptureSegmentContent owns content; CRS cache is derived.
             if (contentRenderService_) {
-                contentRenderService_->removeRenderCache(
-                    ContentKey{DomainKind::RegularVST3Capture, segmentId, 0});
+                contentRenderService_->removeRenderCache(segmentContentKey);
             }
         };
 
-        bindings.refreshSegment = [this](uint64_t segmentId) {
+        bindings.refreshSegment = [this](ContentKey segmentContentKey) {
             if (auto* captureSession = getCaptureSession()) {
-                auto* segment = captureSession->findSegmentById(segmentId);
+                auto* segment = captureSession->findSegmentByContentKey(segmentContentKey);
                 if (!segment || !segment->content)
                     return;
                 const double duration = segment->durationSeconds;
@@ -1374,15 +1040,15 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                 auto audio = snap->audioBuffer;
                 double sr = snap->audioSampleRate > 0.0
                     ? snap->audioSampleRate : segment->captureSampleRate;
-                uint64_t segId = segmentId;
-                std::shared_ptr<std::atomic<bool>> lifetimeFlag = materializationRefreshAliveFlag_;
+                ContentKey segContentKey = segment->contentKey;
+                std::shared_ptr<std::atomic<bool>> lifetimeFlag = contentRefreshAliveFlag_;
                 auto* f0Svc = getF0Service();
 
-                materializationRefreshService_.submit(
-                    segId,
-                    [lifetimeFlag, audio, sr, segId, f0Svc]() -> F0ExtractionService::Result {
+                contentRefreshService_.submit(
+                    F0RequestKey{segContentKey},
+                    [lifetimeFlag, audio, sr, segContentKey, f0Svc]() -> F0ExtractionService::Result {
                         F0ExtractionService::Result result;
-                        result.requestKey = segId;
+                        result.contentKey = segContentKey;
                         if (!lifetimeFlag->load(std::memory_order_acquire)) {
                             result.errorMessage = "processor_destroyed";
                             return result;
@@ -1411,11 +1077,11 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                         result.success = true;
                         return result;
                     },
-                    [this, segId](F0ExtractionService::Result&& result) {
+                    [this, segContentKey](F0ExtractionService::Result&& result) {
                         if (auto* session = getCaptureSession()) {
                             if (!result.success) {
                                 session->commitSegmentF0Result(
-                                    segId, nullptr,
+                                    segContentKey, nullptr,
                                     OriginalF0State::Failed, DetectedKey{});
                                 return;
                             }
@@ -1426,7 +1092,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                             if (!result.energy.empty())
                                 pitchCurve->setOriginalEnergy(result.energy);
                             session->commitSegmentF0Result(
-                                segId, std::move(pitchCurve),
+                                segContentKey, std::move(pitchCurve),
                                 OriginalF0State::Ready, DetectedKey{});
                         }
                     }
@@ -1471,7 +1137,7 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     );
 
     // Phase 1: 停止内部刷新标志（阻止新 work 提交）
-    materializationRefreshAliveFlag_->store(false, std::memory_order_release);
+    contentRefreshAliveFlag_->store(false, std::memory_order_release);
 
     // Phase 2: 解除 CRS execution lease — 取消 pending render jobs
     if (contentRenderService_) {
@@ -1582,7 +1248,7 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
 
         // §7 (Journey-1 fix) — publish "in-flight" status for UI badge.
         stage2InFlight_.store(true, std::memory_order_release);
-        stage2InFlightMatId_.store(entry.contentKey.objectId, std::memory_order_release);
+        stage2InFlightContentKey_.store(entry.contentKey, std::memory_order_release);
 
         const bool ok = runStage2RebuildForContentKey(entry.contentKey,
                                                       entry.pitchRevision,
@@ -1590,7 +1256,7 @@ void OpenTuneAudioProcessor::stage2WorkerLoop()
                                                       entry.timeGridRevision);
 
         stage2InFlight_.store(false, std::memory_order_release);
-        stage2InFlightMatId_.store(0, std::memory_order_release);
+        stage2InFlightContentKey_.store(ContentKey{}, std::memory_order_release);
 
         if (!ok) {
             AppLogger::warn("Stage2Worker: rebuild failed for objectId="
@@ -1821,11 +1487,11 @@ bool OpenTuneAudioProcessor::ensureVocoderReady()
         });
 }
 
-bool OpenTuneAudioProcessor::isNoteGenInFlightForMaterialization(uint64_t materializationId) const
+bool OpenTuneAudioProcessor::isNoteGenInFlightForContent(ContentKey contentKey) const
 {
-    if (materializationId == 0) return false;
+    if (!contentKey.isValid()) return false;
     std::lock_guard<std::mutex> lk(noteGenInFlightMutex_);
-    return noteGenInFlightMatIds_.count(materializationId) > 0;
+    return noteGenInFlightContentKeys_.count(contentKey) > 0;
 }
 
 OpenTuneAudioProcessor::AutoRefAvailability
@@ -1993,8 +1659,8 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
     if (currentVocoderModelWeight_ == weight) return;  // 幂等
 
     // 1. Pause render worker before releasing vocoder services
-    if (materializationStore_)
-        materializationStore_->pauseRenderWorker();
+    if (contentRenderService_)
+        contentRenderService_->pauseRenderWorker();
 
     // 2. Shutdown + 销�?vocoder domain（释放旧 ONNX session�?
     if (vocoderDomain_) {
@@ -2007,22 +1673,17 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
     // 3. 更新 runtime 权重（worker 已暂停，线程安全�?
     currentVocoderModelWeight_ = weight;
 
-    // 4. 清所�?materialization �?RenderCache + TimeStretchCache
-    if (materializationStore_) {
-        const auto ids = materializationStore_->getAllActiveMaterializationIds();
-        for (const auto matId : ids) {
-            std::shared_ptr<RenderCache> cache;
-            if (materializationStore_->getRenderCache(matId, cache) && cache) {
+    // 4. 清所�?content �?RenderCache + TimeStretchCache
+    if (contentRenderService_ && standaloneContentRepository_) {
+        const auto keys = standaloneContentRepository_->getAllClips();
+        for (const auto key : keys) {
+            if (auto cache = contentRenderService_->getRenderCache(key))
                 cache->clear();
-            }
-            MaterializationSnapshot snap;
-            if (getMaterializationSnapshotById(matId, snap) && snap.audioBuffer) {
-                const int numSamples = snap.audioBuffer->getNumSamples();
-                const double durationSec = static_cast<double>(numSamples) / 44100.0;
-                if (durationSec > 0.0) {
-                    materializationStore_->enqueuePartialRender(matId, 0.0, durationSec, 512);
-                }
-            }
+
+            const auto snap = getContentSnapshot(key);
+            const double durationSec = snap ? snap->sourceWindow.durationSeconds() : 0.0;
+            if (durationSec > 0.0)
+                enqueueContentPartialRender(key, 0.0, durationSec);
         }
         // �?TimeStretchCache
         contentRenderService_->getTimeStretchCache().clear();
@@ -2142,7 +1803,6 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
                         " -> " + juce::String(sampleRate, 0) + 
                        ", rebuilding playback assets");
 
-        jassert(materializationStore_ != nullptr);
 
     }
 
@@ -2215,17 +1875,7 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
         OpenTuneDocumentController::ProcessorServices services;
         services.owner = this;
         services.f0Service = f0Service_;
-        services.scheduleAsyncWork = [this](std::function<void()> work) {
-            static std::atomic<uint64_t> s_key{0};
-            materializationRefreshService_.submit(
-                F0ExtractionService::makeRequestKey(s_key.fetch_add(1), 0, -1),
-                [w = std::move(work)]() mutable {
-                    w();
-                    return F0ExtractionService::Result{};
-                },
-                [](F0ExtractionService::Result&&) {});
-        };
-        services.requestReclaimSweep = [this] { triggerAsyncUpdate(); };
+        services.contentF0ExtractionService = &contentRefreshService_;
         services.contentRenderService = contentRenderService_.get();
 
         if (contentRenderService_ != nullptr)
@@ -2498,7 +2148,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 float* dst = trackMixScratch_.getWritePointer(ch, offsetInBlock);
 
                 // Use placement-local time (offset by clipInSeconds so fade works
-                // relative to visible clip, not from raw materialization start)
+                // relative to visible clip, not from raw content start)
                 double timeInPlacement = TimeCoordinate::samplesToSeconds(readStartSample, deviceSampleRate) - placement.clipInSeconds;
                 const double dt = 1.0 / deviceSampleRate;
                 for (int s = 0; s < availableReadSamples; ++s) {
@@ -2648,31 +2298,6 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHost
     return snapshot;
 }
 
-RenderCache::ChunkStats OpenTuneAudioProcessor::getMaterializationChunkStatsById(uint64_t materializationId) const
-{
-    if (materializationId == 0) {
-        return {};
-    }
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController()) {
-        std::shared_ptr<RenderCache> renderCache;
-        if (!materializationStore_->getRenderCache(materializationId, renderCache) || renderCache == nullptr)
-            return {};
-        return renderCache->getChunkStats();
-    }
-#endif
-
-    jassert(materializationStore_ != nullptr);
-
-    std::shared_ptr<RenderCache> renderCache;
-    if (!materializationStore_->getRenderCache(materializationId, renderCache) || renderCache == nullptr) {
-        return {};
-    }
-
-    return renderCache->getChunkStats();
-}
-
 OpenTuneAudioProcessor::DiagnosticInfo OpenTuneAudioProcessor::getDiagnosticInfo(int trackId, uint64_t placementId) const
 {
     DiagnosticInfo info;
@@ -2705,12 +2330,10 @@ OpenTuneAudioProcessor::DiagnosticInfo OpenTuneAudioProcessor::getDiagnosticInfo
     if (!hasTargetPlacement) {
         return info;
     }
-    jassert(materializationStore_ != nullptr);
 
-    info.materializationId = targetPlacement.contentKey.objectId;
+    info.contentKey = targetPlacement.contentKey;
     info.placementId = targetPlacement.placementId;
-    std::shared_ptr<RenderCache> renderCache;
-    if (materializationStore_->getRenderCache(targetPlacement.contentKey.objectId, renderCache) && renderCache != nullptr) {
+    if (auto renderCache = contentRenderService_->getRenderCache(targetPlacement.contentKey)) {
         const auto renderState = renderCache->getStateSnapshot();
         info.chunkStats = renderState.chunkStats;
         info.publishedRevision = 0;
@@ -2720,7 +2343,7 @@ OpenTuneAudioProcessor::DiagnosticInfo OpenTuneAudioProcessor::getDiagnosticInfo
     return info;
 }
 
-bool OpenTuneAudioProcessor::freezeRenderBoundaries(const MaterializationSampleRange& materializationRange,
+bool OpenTuneAudioProcessor::freezeRenderBoundaries(const ContentSampleRange& contentRange,
                                                      int64_t startSample,
                                                      int64_t endSampleExclusive,
                                                      int hopSize,
@@ -2728,7 +2351,7 @@ bool OpenTuneAudioProcessor::freezeRenderBoundaries(const MaterializationSampleR
 {
     out = FrozenRenderBoundaries{};
 
-    if (!materializationRange.isValid() || hopSize <= 0) {
+    if (!contentRange.isValid() || hopSize <= 0) {
         return false;
     }
 
@@ -2739,15 +2362,15 @@ bool OpenTuneAudioProcessor::freezeRenderBoundaries(const MaterializationSampleR
     auto& synthSampleCount = out.synthSampleCount;
     auto& synthEndSample = out.synthEndSample;
 
-    trueStartSample = juce::jlimit(materializationRange.startSample, materializationRange.endSampleExclusive, startSample);
-    trueEndSample = juce::jlimit(trueStartSample, materializationRange.endSampleExclusive, endSampleExclusive);
+    trueStartSample = juce::jlimit(contentRange.startSample, contentRange.endSampleExclusive, startSample);
+    trueEndSample = juce::jlimit(trueStartSample, contentRange.endSampleExclusive, endSampleExclusive);
     publishSampleCount = trueEndSample - trueStartSample;
     if (publishSampleCount <= 0) {
         out = FrozenRenderBoundaries{};
         return false;
     }
 
-    const bool isLastChunk = (trueEndSample == materializationRange.endSampleExclusive);
+    const bool isLastChunk = (trueEndSample == contentRange.endSampleExclusive);
     if (!isLastChunk && (publishSampleCount % hopSize) != 0) {
         out = FrozenRenderBoundaries{};
         return false;
@@ -2813,115 +2436,17 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
         return;
     }
 
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-    {
-        auto xml = std::make_unique<juce::XmlElement>("OPENTUNE");
-        dc->getContentSnapshot(*xml);
-        copyXmlToBinary(*xml, destData);
-        return;
-    }
-#endif
-
-    std::vector<uint64_t> serializedMaterializationIds;
-    jassert(standaloneArrangement_ != nullptr);
-    for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
-        const int placementCount = standaloneArrangement_->getNumPlacements(trackId);
-        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
-            StandaloneArrangement::Placement placement;
-            if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-                continue;
-            }
-
-            if (placement.contentKey.isValid()) {
-                appendUniqueMaterializationId(serializedMaterializationIds, placement.contentKey.objectId);
-            }
-        }
-    }
-
-    // Phase 3: Capture segments use segment.id as their persistence key.
-    // Full content (audio + pitchCurve + notes + detectedKey) is stored in
-    // MaterializationStore under the segment's id for round-trip.
-    if (const auto* captureSession = getCaptureSession()) {
-        for (const auto& info : captureSession->listSegments()) {
-            if (info.id != 0) {
-                appendUniqueMaterializationId(serializedMaterializationIds, info.id);
-            }
-        }
-    }
-
-#if JucePlugin_Enable_ARA
-    if (const auto* dc = getDocumentController()) {
-        for (const auto& region : dc->getPlaybackRegionProjections()) {
-            appendUniqueMaterializationId(serializedMaterializationIds, region.contentKey.objectId);
-        }
-    }
-#endif
-
-    jassert(materializationStore_ != nullptr);
-    std::vector<MaterializationStore::MaterializationSnapshot> materializationSnapshots;
-    for (uint64_t materializationId : serializedMaterializationIds) {
-        MaterializationStore::MaterializationSnapshot materializationSnapshot;
-        if (!materializationStore_->getSnapshot(materializationId, materializationSnapshot)) {
-            continue;
-        }
-
-        materializationSnapshots.push_back(std::move(materializationSnapshot));
-    }
-
-    std::vector<SourceStore::SourceSnapshot> sourceSnapshots;
-    jassert(sourceStore_ != nullptr);
-    for (const auto& materializationSnapshot : materializationSnapshots) {
-        SourceStore::SourceSnapshot sourceSnapshot;
-        if (!sourceStore_->getSnapshot(materializationSnapshot.sourceId, sourceSnapshot)) {
-            continue;
-        }
-
-        const auto alreadySerialized = std::find_if(sourceSnapshots.begin(),
-                                                    sourceSnapshots.end(),
-                                                    [&sourceSnapshot](const SourceStore::SourceSnapshot& existing)
-                                                    {
-                                                        return existing.sourceId == sourceSnapshot.sourceId;
-                                                    });
-        if (alreadySerialized == sourceSnapshots.end()) {
-            sourceSnapshots.push_back(std::move(sourceSnapshot));
-        }
-    }
+    // Per ARA2 spec: ARA AudioModification objects are persisted via
+    // doStoreObjectsToStream/doRestoreObjectsFromStream, NOT via VST3 processor state.
+    // ARA host owns document archive lifecycle.
+    // VST3 state only stores standalone arrangement when ARA is not active.
 
     destData.reset();
     juce::MemoryOutputStream output(destData, false);
     output.writeInt(static_cast<int>(kProcessorStateMagic));
     output.writeInt(kProcessorStateVersion);
-    // BPM intentionally omitted in non-Standalone path: host owns transport
-    // tempo via PlayHead PositionInfo, plugin reads it live.
     output.writeDouble(zoomLevel_);
     output.writeInt(trackHeight_);
-    output.writeInt(static_cast<int>(sourceSnapshots.size()));
-    for (const auto& sourceSnapshot : sourceSnapshots) {
-        output.writeInt64(static_cast<juce::int64>(sourceSnapshot.sourceId));
-        output.writeString(sourceSnapshot.displayName);
-        output.writeDouble(sourceSnapshot.sampleRate);
-        writeAudioBuffer(output, sourceSnapshot.audioBuffer);
-    }
-
-    output.writeInt(static_cast<int>(materializationSnapshots.size()));
-    for (const auto& contentSnapshot : materializationSnapshots) {
-        output.writeInt64(static_cast<juce::int64>(contentSnapshot.materializationId));
-        output.writeInt64(static_cast<juce::int64>(contentSnapshot.sourceId));
-        output.writeInt64(static_cast<juce::int64>(contentSnapshot.lineageParentMaterializationId));
-        output.writeInt64(static_cast<juce::int64>(contentSnapshot.sourceWindow.sourceId));
-        output.writeDouble(contentSnapshot.sourceWindow.sourceStartSeconds);
-        output.writeDouble(contentSnapshot.sourceWindow.sourceEndSeconds);
-        output.writeInt64(static_cast<juce::int64>(contentSnapshot.renderRevision));
-        output.writeInt(static_cast<int>(contentSnapshot.originalF0State));
-        writeDetectedKey(output, contentSnapshot.detectedKey);
-        writeAudioBuffer(output, contentSnapshot.audioBuffer);
-        writePitchCurve(output, contentSnapshot.pitchCurve);
-        writeNotes(output, contentSnapshot.notes);
-        writeSilentGaps(output, contentSnapshot.silentGaps);
-        // §3.8 (state v6+): TimeGrid handles
-        writeTimeGridHandles(output, contentSnapshot.timeGrid);
-    }
 
     output.writeInt(standaloneArrangement_->getActiveTrackId());
     output.writeInt(MAX_TRACKS);
@@ -2955,7 +2480,6 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
             output.writeDouble(placement.fadeOutDuration);
             output.writeDouble(placement.clipInSeconds);
             output.writeString(placement.name);
-            output.writeInt(0);  // was placement.colour; kept for binary stream compat
         }
     }
 
@@ -2974,16 +2498,10 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
         return;
     }
 
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-    {
-        auto xml = getXmlFromBinary(data, sizeInBytes);
-        if (xml != nullptr) {
-            dc->restoreContentPayloadInto(*xml);
-            return;
-        }
-    }
-#endif
+    // Per ARA2 spec: ARA AudioModification objects are restored via
+    // doRestoreObjectsFromStream, NOT via VST3 processor state.
+    // ARA host owns document archive lifecycle.
+    // VST3 state only restores standalone arrangement when ARA is not active.
 
     juce::MemoryInputStream input(data, static_cast<size_t>(sizeInBytes), false);
     const int magic = input.readInt();
@@ -3002,32 +2520,12 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     }
 
     // Full state payload (VST3)
-    // vocal-time-stretch §3.8: state v6 adds TimeGrid section per materialization.
+    // vocal-time-stretch §3.8: state v6 adds TimeGrid section per content.
     // Accept v5 (no TimeGrid), v6 (TimeGrid w/o confidence), v7 (TimeGrid w/ confidence).
-    if (magic != static_cast<int>(kProcessorStateMagic)
-        || (version != kProcessorStateVersion && version != 7 && version != 6 && version != 5)) {
+    if (magic != static_cast<int>(kProcessorStateMagic) || version != kProcessorStateVersion) {
         AppLogger::warn("StateRestore: unsupported processor state payload (version=" + juce::String(version) + ")");
         return;
     }
-    const bool stateHasTimeGrid = (version >= 6);
-    const bool stateHasConfidence = (version >= 7);
-    const bool stateHasClipInSeconds = (version >= 8);
-
-#if JucePlugin_Enable_ARA
-    // ARA-capable VST3 can receive ARA document state before didBindToARA. Only
-    // metadata-only source payloads are treated as that ARA pre-bind path;
-    // regular unbound VST3 state still restores immediately into local stores.
-    if (wrapperType == juce::AudioProcessor::wrapperType_VST3
-        && !isBoundToARA()
-        && processorStateContainsMetadataOnlySource(data, sizeInBytes)) {
-        pendingAraState_.reset();
-        pendingAraState_.append(data, static_cast<size_t>(sizeInBytes));
-        AppLogger::log("StateRestore: ARA pre-bind metadata-only state - caching "
-                       + juce::String(sizeInBytes)
-                       + " bytes for replay after didBindToARA without restoring local stores");
-        return;
-    }
-#endif
 
     AppLogger::log("StateRestore: VST3 full-state begin sizeBytes=" + juce::String(sizeInBytes));
 
@@ -3046,113 +2544,11 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     jassert(sourceStore_ != nullptr);
     sourceStore_->clear();
 
-    jassert(materializationStore_ != nullptr);
-    materializationStore_->clear();
+    standaloneContentRepository_->clear();
+    contentRenderService_->clearAll();
 
     jassert(standaloneArrangement_ != nullptr);
     standaloneArrangement_->clear();
-
-    const int sourceCount = input.readInt();
-    if (sourceCount < 0) {
-        return;
-    }
-
-    for (int sourceIndex = 0; sourceIndex < sourceCount; ++sourceIndex) {
-        const auto sourceId = static_cast<uint64_t>(input.readInt64());
-        const auto displayName = input.readString();
-        const auto sourceSampleRate = input.readDouble();
-        const auto sourceAudioBuffer = readAudioBuffer(input);
-        if (sourceId == 0) {
-            return;
-        }
-        jassert(sourceStore_ != nullptr);
-
-        SourceStore::CreateSourceRequest request;
-        request.displayName = displayName;
-        request.sampleRate = sourceSampleRate > 0.0 ? sourceSampleRate : TimeCoordinate::kRenderSampleRate;
-        if (sourceAudioBuffer != nullptr) {
-            request.audioBuffer = sourceAudioBuffer;
-        } else {
-            // Metadata-only source (e.g. ARA): register without PCM buffer.
-            // The source may already exist from ARA document controller restore;
-            // if not, createSource will register it with identity only.
-        }
-        if (sourceStore_->createSource(std::move(request), sourceId) != sourceId) {
-            return;
-        }
-    }
-
-    const int materializationCount = input.readInt();
-    if (materializationCount < 0) {
-        return;
-    }
-
-    for (int materializationIndex = 0; materializationIndex < materializationCount; ++materializationIndex) {
-        const auto materializationId = static_cast<uint64_t>(input.readInt64());
-        const auto sourceId = static_cast<uint64_t>(input.readInt64());
-        const auto lineageParentMaterializationId = static_cast<uint64_t>(input.readInt64());
-        SourceWindow sourceWindow;
-        sourceWindow.sourceId = static_cast<uint64_t>(input.readInt64());
-        sourceWindow.sourceStartSeconds = input.readDouble();
-        sourceWindow.sourceEndSeconds = input.readDouble();
-        const auto renderRevision = static_cast<uint64_t>(input.readInt64());
-        const auto originalF0State = static_cast<OriginalF0State>(input.readInt());
-        const auto detectedKey = readDetectedKey(input);
-        const auto audioBuffer = readAudioBuffer(input);
-        auto pitchCurve = readPitchCurve(input);
-        std::vector<Note> notes;
-        std::vector<SilentGap> silentGaps;
-        if (materializationId == 0
-            || audioBuffer == nullptr
-            || !readNotes(input, notes)
-            || !readSilentGaps(input, silentGaps)
-            || sourceId == 0) {
-            return;
-        }
-
-        // §3.8 (state v6+): read TimeGrid handles. v7+ also reads per-handle confidence.
-        std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
-        if (stateHasTimeGrid) {
-            std::vector<TimeHandle> handles;
-            if (!readTimeGridHandles(input, handles, stateHasConfidence)) {
-                return;
-            }
-            if (!handles.empty()) {
-                timeGridSnapshot = TimeGridSnapshot::makeFromHandles(std::move(handles), /*revision=*/1);
-                if (timeGridSnapshot == nullptr) {
-                    AppLogger::warn("StateRestore: TimeGrid validation failed for matId="
-                                    + juce::String(static_cast<juce::int64>(materializationId))
-                                    + ", falling back to identity");
-                }
-            }
-        }
-
-        jassert(materializationStore_ != nullptr);
-
-        MaterializationStore::CreateMaterializationRequest request;
-        request.sourceId = sourceId;
-        request.lineageParentMaterializationId = lineageParentMaterializationId;
-        request.sourceWindow = sourceWindow;
-        request.audioBuffer = audioBuffer;
-        request.pitchCurve = std::move(pitchCurve);
-        request.originalF0State = originalF0State;
-        request.detectedKey = detectedKey;
-        request.renderCache = std::make_shared<RenderCache>();
-        request.notes = normalizeStoredNotes(notes);
-        request.silentGaps = std::move(silentGaps);
-        request.renderRevision = renderRevision;
-        request.timeGrid = std::move(timeGridSnapshot);   // null �?createMaterialization auto-seeds identity
-
-        if (materializationStore_->createMaterialization(std::move(request),
-                                                         materializationId) != materializationId) {
-            return;
-        }
-
-        std::shared_ptr<RenderCache> renderCache;
-        if (materializationStore_->getRenderCache(materializationId, renderCache) && renderCache != nullptr) {
-            renderCache->clear();
-        }
-    }
 
     const int restoredActiveTrackId = input.readInt();
     const int trackCount = input.readInt();
@@ -3184,11 +2580,8 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
             placement.gain = input.readFloat();
             placement.fadeInDuration = input.readDouble();
             placement.fadeOutDuration = input.readDouble();
-            if (stateHasClipInSeconds) {
-                placement.clipInSeconds = input.readDouble();
-            }
+            placement.clipInSeconds = input.readDouble();
             placement.name = input.readString();
-            input.readInt();  // skip legacy placement colour field
 
             if (!placement.contentKey.isValid()) {
                 continue;
@@ -3226,13 +2619,6 @@ void OpenTuneAudioProcessor::setTrackHeight(int height) {
     trackHeight_ = height;
 }
 
-std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneAudioProcessor::getMaterializationAudioBufferById(uint64_t materializationId) const
-{
-    if (materializationId == 0) return nullptr;
-    auto snap = getContentSnapshot(ContentKey{DomainKind::StandaloneClip, materializationId, 0});
-    return snap ? snap->audioBuffer : nullptr;
-}
-
 uint64_t OpenTuneAudioProcessor::getPlacementId(int trackId, int placementIndex) const
 {
     return standaloneArrangement_->getPlacementId(trackId, placementIndex);
@@ -3267,7 +2653,6 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
         AppLogger::log("Split rejected: invalid trackId=" + juce::String(trackId));
         return std::nullopt;
     }
-    jassert(standaloneArrangement_ != nullptr);
 
     StandaloneArrangement::Placement originalPlacement;
     if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, originalPlacement)) {
@@ -3284,79 +2669,71 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
         return std::nullopt;
     }
 
-    MaterializationSnapshot originalSnapshot;
-    if (!getMaterializationSnapshotById(originalPlacement.contentKey.objectId, originalSnapshot)
-        || originalSnapshot.audioBuffer == nullptr) {
+    const auto originalSnapshot = getContentSnapshot(originalPlacement.contentKey);
+    if (!originalSnapshot || originalSnapshot->audioBuffer == nullptr) {
         return std::nullopt;
     }
 
     const int64_t splitSample = TimeCoordinate::secondsToSamples(splitOffsetSeconds, TimeCoordinate::kRenderSampleRate);
-    const int64_t totalSamples = originalSnapshot.audioBuffer->getNumSamples();
+    const int64_t totalSamples = originalSnapshot->audioBuffer->getNumSamples();
     if (splitSample <= 0 || splitSample >= totalSamples) {
         return std::nullopt;
     }
 
-    MaterializationStore::CreateMaterializationRequest leadingRequest;
-    leadingRequest.sourceId = originalSnapshot.sourceId;
-    leadingRequest.lineageParentMaterializationId = originalPlacement.contentKey.objectId;
-    leadingRequest.sourceWindow = SourceWindow{
-        originalSnapshot.sourceWindow.sourceId,
-        originalSnapshot.sourceWindow.sourceStartSeconds,
-        originalSnapshot.sourceWindow.sourceStartSeconds + splitOffsetSeconds
+    ContentPayloadState leadingPayload = payloadFromSnapshot(*originalSnapshot);
+    leadingPayload.sourceWindow = SourceWindow{
+        originalSnapshot->sourceWindow.sourceId,
+        juce::String(),
+        originalSnapshot->sourceWindow.sourceStartSeconds,
+        originalSnapshot->sourceWindow.sourceStartSeconds + splitOffsetSeconds
     };
-    leadingRequest.audioBuffer = sliceAudioBuffer(originalSnapshot.audioBuffer, 0, splitSample);
-    leadingRequest.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot.pitchCurve, 0.0, splitOffsetSeconds);
-    leadingRequest.originalF0State = originalSnapshot.originalF0State;
-    leadingRequest.detectedKey = originalSnapshot.detectedKey;
-    leadingRequest.renderCache = std::make_shared<RenderCache>();
-    leadingRequest.notes = sliceNotesToLocalRange(originalSnapshot.notes, 0.0, splitOffsetSeconds);
-    leadingRequest.silentGaps = sliceSilentGaps(originalSnapshot.silentGaps, 0, splitSample);
+    leadingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, 0, splitSample);
+    leadingPayload.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve, 0.0, splitOffsetSeconds);
+    leadingPayload.correctedSegments = correctedSegmentsFromCurve(leadingPayload.pitchCurve);
+    leadingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes, 0.0, splitOffsetSeconds);
+    leadingPayload.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, 0, splitSample);
+    leadingPayload.timeGrid = nullptr;
 
-    MaterializationStore::CreateMaterializationRequest trailingRequest;
-    trailingRequest.sourceId = originalSnapshot.sourceId;
-    trailingRequest.lineageParentMaterializationId = originalPlacement.contentKey.objectId;
-    trailingRequest.sourceWindow = SourceWindow{
-        originalSnapshot.sourceWindow.sourceId,
-        originalSnapshot.sourceWindow.sourceStartSeconds + splitOffsetSeconds,
-        originalSnapshot.sourceWindow.sourceEndSeconds
+    ContentPayloadState trailingPayload = payloadFromSnapshot(*originalSnapshot);
+    trailingPayload.sourceWindow = SourceWindow{
+        originalSnapshot->sourceWindow.sourceId,
+        juce::String(),
+        originalSnapshot->sourceWindow.sourceStartSeconds + splitOffsetSeconds,
+        originalSnapshot->sourceWindow.sourceEndSeconds
     };
-    trailingRequest.audioBuffer = sliceAudioBuffer(originalSnapshot.audioBuffer, splitSample, totalSamples);
-    trailingRequest.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot.pitchCurve,
-                                                            splitOffsetSeconds,
-                                                            originalPlacement.durationSeconds);
-    trailingRequest.originalF0State = originalSnapshot.originalF0State;
-    trailingRequest.detectedKey = originalSnapshot.detectedKey;
-    trailingRequest.renderCache = std::make_shared<RenderCache>();
-    trailingRequest.notes = sliceNotesToLocalRange(originalSnapshot.notes,
-                                                  splitOffsetSeconds,
-                                                  originalPlacement.durationSeconds);
-    trailingRequest.silentGaps = sliceSilentGaps(originalSnapshot.silentGaps, splitSample, totalSamples);
+    trailingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, splitSample, totalSamples);
+    trailingPayload.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve,
+                                                             splitOffsetSeconds,
+                                                             originalPlacement.durationSeconds);
+    trailingPayload.correctedSegments = correctedSegmentsFromCurve(trailingPayload.pitchCurve);
+    trailingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes,
+                                                   splitOffsetSeconds,
+                                                   originalPlacement.durationSeconds);
+    trailingPayload.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, splitSample, totalSamples);
+    trailingPayload.timeGrid = nullptr;
 
-    const uint64_t leadingMaterializationId = materializationStore_->createMaterialization(std::move(leadingRequest));
-    const uint64_t trailingMaterializationId = materializationStore_->createMaterialization(std::move(trailingRequest));
-    if (leadingMaterializationId == 0 || trailingMaterializationId == 0) {
-        // Error rollback: new ids not yet in any owner graph, physical delete is correct
-        if (leadingMaterializationId != 0) {
-            materializationStore_->deleteMaterialization(leadingMaterializationId);
-        }
-        if (trailingMaterializationId != 0) {
-            materializationStore_->deleteMaterialization(trailingMaterializationId);
-        }
+    const ContentKey leadingKey = createStandaloneClipOwner(*standaloneContentRepository_,
+                                                            *contentRenderService_,
+                                                            std::move(leadingPayload));
+    const ContentKey trailingKey = createStandaloneClipOwner(*standaloneContentRepository_,
+                                                             *contentRenderService_,
+                                                             std::move(trailingPayload));
+    if (!leadingKey.isValid() || !trailingKey.isValid()) {
+        if (leadingKey.isValid()) standaloneContentRepository_->releaseClip(leadingKey);
+        if (trailingKey.isValid()) standaloneContentRepository_->releaseClip(trailingKey);
         return std::nullopt;
     }
 
     StandaloneArrangement::Placement leadingPlacement = originalPlacement;
     leadingPlacement.placementId = 0;
-    leadingPlacement.contentKey = ContentKey{DomainKind::StandaloneClip, leadingMaterializationId, 0};
+    leadingPlacement.contentKey = leadingKey;
     leadingPlacement.durationSeconds = splitOffsetSeconds;
     leadingPlacement.fadeOutDuration = 0.0;
-    // leading clipInSeconds stays the same as original (trim offset from original)
-    // leadingPlacement.clipInSeconds = originalPlacement.clipInSeconds; (already correct from copy)
     ++leadingPlacement.mappingRevision;
 
     StandaloneArrangement::Placement trailingPlacement = originalPlacement;
     trailingPlacement.placementId = 0;
-    trailingPlacement.contentKey = ContentKey{DomainKind::StandaloneClip, trailingMaterializationId, 0};
+    trailingPlacement.contentKey = trailingKey;
     trailingPlacement.timelineStartSeconds = splitSeconds;
     trailingPlacement.durationSeconds = originalPlacement.durationSeconds - splitOffsetSeconds;
     trailingPlacement.fadeInDuration = 0.0;
@@ -3364,36 +2741,33 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     ++trailingPlacement.mappingRevision;
 
     if (!standaloneArrangement_->insertPlacement(trackId, placementIndex, leadingPlacement)) {
-        // Error rollback
-        materializationStore_->deleteMaterialization(leadingMaterializationId);
-        materializationStore_->deleteMaterialization(trailingMaterializationId);
+        standaloneContentRepository_->releaseClip(leadingKey);
+        standaloneContentRepository_->releaseClip(trailingKey);
         return std::nullopt;
     }
 
     if (!standaloneArrangement_->insertPlacement(trackId, placementIndex + 1, trailingPlacement)) {
-        // Error rollback
         standaloneArrangement_->deletePlacementById(trackId, leadingPlacement.placementId, nullptr, nullptr);
-        materializationStore_->deleteMaterialization(leadingMaterializationId);
-        materializationStore_->deleteMaterialization(trailingMaterializationId);
+        standaloneContentRepository_->releaseClip(leadingKey);
+        standaloneContentRepository_->releaseClip(trailingKey);
         return std::nullopt;
     }
 
-    // Retire original placement and materialization (do not physically delete; sweep will reclaim when safe)
     standaloneArrangement_->retirePlacement(trackId, originalPlacement.placementId);
-    materializationStore_->retireMaterialization(originalPlacement.contentKey.objectId);
+    standaloneContentRepository_->retireClip(originalPlacement.contentKey);
 
     standaloneArrangement_->selectPlacement(trackId, trailingPlacement.placementId);
     scheduleReclaimSweep();
 
     SplitOutcome outcome;
     outcome.trackId = trackId;
-    outcome.sourceId = originalSnapshot.sourceId;
+    outcome.sourceId = originalSnapshot->sourceWindow.sourceId;
     outcome.originalPlacementId = originalPlacement.placementId;
-    outcome.originalMaterializationId = originalPlacement.contentKey.objectId;
+    outcome.originalContentKey = originalPlacement.contentKey;
     outcome.leadingPlacementId = leadingPlacement.placementId;
     outcome.trailingPlacementId = trailingPlacement.placementId;
-    outcome.leadingMaterializationId = leadingMaterializationId;
-    outcome.trailingMaterializationId = trailingMaterializationId;
+    outcome.leadingContentKey = leadingKey;
+    outcome.trailingContentKey = trailingKey;
     return outcome;
 }
 
@@ -3406,7 +2780,6 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
         AppLogger::log("Merge rejected: invalid trackId=" + juce::String(trackId));
         return std::nullopt;
     }
-    jassert(standaloneArrangement_ != nullptr);
 
     StandaloneArrangement::Placement leadingPlacement;
     StandaloneArrangement::Placement trailingPlacement;
@@ -3428,108 +2801,111 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
         return std::nullopt;
     }
 
-    MaterializationSnapshot leadingSnapshot;
-    MaterializationSnapshot trailingSnapshot;
-    if (!getMaterializationSnapshotById(leadingPlacement.contentKey.objectId, leadingSnapshot)
-        || !getMaterializationSnapshotById(trailingPlacement.contentKey.objectId, trailingSnapshot)
-        || leadingSnapshot.audioBuffer == nullptr
-        || trailingSnapshot.audioBuffer == nullptr
-        || leadingSnapshot.sourceId == 0
-        || leadingSnapshot.sourceId != trailingSnapshot.sourceId) {
+    const auto leadingSnapshot = getContentSnapshot(leadingPlacement.contentKey);
+    const auto trailingSnapshot = getContentSnapshot(trailingPlacement.contentKey);
+    if (!leadingSnapshot || !trailingSnapshot
+        || leadingSnapshot->audioBuffer == nullptr
+        || trailingSnapshot->audioBuffer == nullptr
+        || leadingSnapshot->sourceWindow.sourceId == 0
+        || leadingSnapshot->sourceWindow.sourceId != trailingSnapshot->sourceWindow.sourceId) {
         AppLogger::log("Merge rejected: placements do not resolve to the same source lineage");
         return std::nullopt;
     }
 
-    if (!nearlyEqualSeconds(leadingSnapshot.sourceWindow.sourceEndSeconds, trailingSnapshot.sourceWindow.sourceStartSeconds)) {
-        AppLogger::log("Merge rejected: materializations do not describe one contiguous source provenance window");
+    if (!nearlyEqualSeconds(leadingSnapshot->sourceWindow.sourceEndSeconds,
+                            trailingSnapshot->sourceWindow.sourceStartSeconds)) {
+        AppLogger::log("Merge rejected: clips do not describe one contiguous source provenance window");
         return std::nullopt;
     }
 
-    if (!detectedKeysMatch(leadingSnapshot.detectedKey, trailingSnapshot.detectedKey)) {
-        AppLogger::log("Merge rejected: materialization metadata diverged");
+    if (!detectedKeysMatch(leadingSnapshot->detectedKey, trailingSnapshot->detectedKey)) {
+        AppLogger::log("Merge rejected: content metadata diverged");
         return std::nullopt;
     }
 
-    if (leadingSnapshot.originalF0State == OriginalF0State::Extracting
-        || trailingSnapshot.originalF0State == OriginalF0State::Extracting) {
-        AppLogger::log("Merge rejected: materialization payload is still being refreshed");
+    if (leadingSnapshot->originalF0State == OriginalF0State::Extracting
+        || trailingSnapshot->originalF0State == OriginalF0State::Extracting) {
+        AppLogger::log("Merge rejected: content payload is still being refreshed");
         return std::nullopt;
     }
 
-    const auto mergedPitchCurve = mergePitchCurves(leadingSnapshot.pitchCurve,
-                                                   trailingSnapshot.pitchCurve,
-                                                   leadingSnapshot.originalF0State,
-                                                   trailingSnapshot.originalF0State);
-    const bool mergedCurveRejected = (leadingSnapshot.pitchCurve != nullptr || trailingSnapshot.pitchCurve != nullptr)
+    const auto mergedPitchCurve = mergePitchCurves(leadingSnapshot->pitchCurve,
+                                                   trailingSnapshot->pitchCurve,
+                                                   leadingSnapshot->originalF0State,
+                                                   trailingSnapshot->originalF0State);
+    const bool mergedCurveRejected = (leadingSnapshot->pitchCurve != nullptr || trailingSnapshot->pitchCurve != nullptr)
         && mergedPitchCurve == nullptr;
     if (mergedCurveRejected) {
         AppLogger::log("Merge rejected: pitch-curve payload cannot be merged without data loss");
         return std::nullopt;
     }
 
-    const int leadingSamples = leadingSnapshot.audioBuffer->getNumSamples();
-    const int trailingSamples = trailingSnapshot.audioBuffer->getNumSamples();
+    const int leadingSamples = leadingSnapshot->audioBuffer->getNumSamples();
+    const int trailingSamples = trailingSnapshot->audioBuffer->getNumSamples();
     const double leadingDurationSeconds = TimeCoordinate::samplesToSeconds(leadingSamples, TimeCoordinate::kRenderSampleRate);
-    auto mergedBuffer = std::make_shared<juce::AudioBuffer<float>>(juce::jmax(leadingSnapshot.audioBuffer->getNumChannels(),
-                                                                              trailingSnapshot.audioBuffer->getNumChannels()),
+    auto mergedBuffer = std::make_shared<juce::AudioBuffer<float>>(juce::jmax(leadingSnapshot->audioBuffer->getNumChannels(),
+                                                                              trailingSnapshot->audioBuffer->getNumChannels()),
                                                                    leadingSamples + trailingSamples);
     mergedBuffer->clear();
     for (int channel = 0; channel < mergedBuffer->getNumChannels(); ++channel) {
-        if (channel < leadingSnapshot.audioBuffer->getNumChannels()) {
-            mergedBuffer->copyFrom(channel, 0, *leadingSnapshot.audioBuffer, channel, 0, leadingSamples);
+        if (channel < leadingSnapshot->audioBuffer->getNumChannels()) {
+            mergedBuffer->copyFrom(channel, 0, *leadingSnapshot->audioBuffer, channel, 0, leadingSamples);
         }
-        if (channel < trailingSnapshot.audioBuffer->getNumChannels()) {
-            mergedBuffer->copyFrom(channel, leadingSamples, *trailingSnapshot.audioBuffer, channel, 0, trailingSamples);
+        if (channel < trailingSnapshot->audioBuffer->getNumChannels()) {
+            mergedBuffer->copyFrom(channel, leadingSamples, *trailingSnapshot->audioBuffer, channel, 0, trailingSamples);
         }
     }
 
-    std::vector<Note> mergedNotes = leadingSnapshot.notes;
-    for (auto note : trailingSnapshot.notes) {
+    std::vector<Note> mergedNotes = leadingSnapshot->notes;
+    for (auto note : trailingSnapshot->notes) {
         note.startTime += leadingDurationSeconds;
         note.endTime += leadingDurationSeconds;
         mergedNotes.push_back(note);
     }
     mergedNotes = normalizeStoredNotes(mergedNotes);
 
-    MaterializationStore::CreateMaterializationRequest mergedRequest;
-    mergedRequest.sourceId = leadingSnapshot.sourceId;
-    mergedRequest.audioBuffer = mergedBuffer;
-    mergedRequest.pitchCurve = mergedPitchCurve;
-    mergedRequest.originalF0State = leadingSnapshot.originalF0State;
-    mergedRequest.detectedKey = leadingSnapshot.detectedKey;
-    mergedRequest.renderCache = std::make_shared<RenderCache>();
-    mergedRequest.notes = std::move(mergedNotes);
-    mergedRequest.silentGaps = mergeSilentGaps(leadingSnapshot.silentGaps, trailingSnapshot.silentGaps, leadingSamples);
-    mergedRequest.sourceWindow = SourceWindow{
-        leadingSnapshot.sourceWindow.sourceId,
-        leadingSnapshot.sourceWindow.sourceStartSeconds,
-        trailingSnapshot.sourceWindow.sourceEndSeconds
+    ContentPayloadState mergedPayload;
+    mergedPayload.sourceWindow = SourceWindow{
+        leadingSnapshot->sourceWindow.sourceId,
+        juce::String(),
+        leadingSnapshot->sourceWindow.sourceStartSeconds,
+        trailingSnapshot->sourceWindow.sourceEndSeconds
     };
+    mergedPayload.audioBuffer = mergedBuffer;
+    mergedPayload.sampleRate = leadingSnapshot->audioSampleRate > 0.0 ? leadingSnapshot->audioSampleRate : TimeCoordinate::kRenderSampleRate;
+    mergedPayload.pitchCurve = mergedPitchCurve;
+    mergedPayload.originalF0State = leadingSnapshot->originalF0State;
+    mergedPayload.detectedKey = leadingSnapshot->detectedKey;
+    mergedPayload.notes = std::move(mergedNotes);
+    mergedPayload.correctedSegments = correctedSegmentsFromCurve(mergedPayload.pitchCurve);
+    mergedPayload.silentGaps = mergeSilentGaps(leadingSnapshot->silentGaps, trailingSnapshot->silentGaps, leadingSamples);
+    mergedPayload.pitchShiftSettings = leadingSnapshot->pitchShiftSettings;
 
-    const uint64_t mergedMaterializationId = materializationStore_->createMaterialization(std::move(mergedRequest));
-    if (mergedMaterializationId == 0) {
+    const ContentKey mergedKey = createStandaloneClipOwner(*standaloneContentRepository_,
+                                                           *contentRenderService_,
+                                                           std::move(mergedPayload));
+    if (!mergedKey.isValid()) {
         return std::nullopt;
     }
 
     StandaloneArrangement::Placement mergedPlacement = leadingPlacement;
     mergedPlacement.placementId = 0;
-    mergedPlacement.contentKey = ContentKey{DomainKind::StandaloneClip, mergedMaterializationId, 0};
+    mergedPlacement.contentKey = mergedKey;
     mergedPlacement.durationSeconds = leadingPlacement.durationSeconds + trailingPlacement.durationSeconds;
     mergedPlacement.fadeOutDuration = trailingPlacement.fadeOutDuration;
-    mergedPlacement.clipInSeconds = leadingPlacement.clipInSeconds; // merge uses leading trim offset
+    mergedPlacement.clipInSeconds = leadingPlacement.clipInSeconds;
     ++mergedPlacement.mappingRevision;
 
     const int mergedInsertIndex = targetPlacementIndex >= 0 ? targetPlacementIndex : 0;
     if (!standaloneArrangement_->insertPlacement(trackId, mergedInsertIndex, mergedPlacement)) {
-        materializationStore_->deleteMaterialization(mergedMaterializationId);
+        standaloneContentRepository_->releaseClip(mergedKey);
         return std::nullopt;
     }
 
-    // Retire leading and trailing placements and materializations (sweep will reclaim when safe)
     standaloneArrangement_->retirePlacement(trackId, trailingPlacementId);
     standaloneArrangement_->retirePlacement(trackId, leadingPlacementId);
-    materializationStore_->retireMaterialization(leadingPlacement.contentKey.objectId);
-    materializationStore_->retireMaterialization(trailingPlacement.contentKey.objectId);
+    standaloneContentRepository_->retireClip(leadingPlacement.contentKey);
+    standaloneContentRepository_->retireClip(trailingPlacement.contentKey);
 
     if (targetPlacementIndex >= 0) {
         standaloneArrangement_->setSelectedPlacementIndex(trackId, targetPlacementIndex);
@@ -3541,211 +2917,103 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
 
     MergeOutcome outcome;
     outcome.trackId = trackId;
-    outcome.sourceId = leadingSnapshot.sourceId;
+    outcome.sourceId = leadingSnapshot->sourceWindow.sourceId;
     outcome.leadingPlacementId = leadingPlacementId;
     outcome.trailingPlacementId = trailingPlacementId;
-    outcome.leadingMaterializationId = leadingPlacement.contentKey.objectId;
-    outcome.trailingMaterializationId = trailingPlacement.contentKey.objectId;
+    outcome.leadingContentKey = leadingPlacement.contentKey;
+    outcome.trailingContentKey = trailingPlacement.contentKey;
     outcome.mergedPlacementId = mergedPlacement.placementId;
-    outcome.mergedMaterializationId = mergedMaterializationId;
+    outcome.mergedContentKey = mergedKey;
     return outcome;
 }
 
 std::optional<DeleteOutcome> OpenTuneAudioProcessor::deletePlacement(int trackId, int placementIndex)
 {
-    jassert(standaloneArrangement_ != nullptr);
-    jassert(materializationStore_ != nullptr);
-
     StandaloneArrangement::Placement placement;
     if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
         return std::nullopt;
     }
 
-    MaterializationSnapshot snapshot;
     uint64_t sourceId = 0;
-    if (getMaterializationSnapshotById(placement.contentKey.objectId, snapshot)) {
-        sourceId = snapshot.sourceId;
+    if (const auto snap = getContentSnapshot(placement.contentKey)) {
+        sourceId = snap->sourceWindow.sourceId;
     }
 
     standaloneArrangement_->retirePlacement(trackId, placement.placementId);
-    materializationStore_->retireMaterialization(placement.contentKey.objectId);
+    standaloneContentRepository_->retireClip(placement.contentKey);
     scheduleReclaimSweep();
 
     DeleteOutcome outcome;
     outcome.trackId = trackId;
     outcome.sourceId = sourceId;
     outcome.placementId = placement.placementId;
-    outcome.materializationId = placement.contentKey.objectId;
+    outcome.contentKey = placement.contentKey;
     return outcome;
 }
-
-
-
-// ============================================================================
-// 垃圾回收（Reclaim Sweep�?
-// ============================================================================
 
 void OpenTuneAudioProcessor::scheduleReclaimSweep()
 {
     jassert(juce::MessageManager::getInstanceWithoutCreating() != nullptr);
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController()) {
-        dc->scheduleContentReclaim();
-        return;
-    }
-#endif
     triggerAsyncUpdate();
 }
 
 void OpenTuneAudioProcessor::handleAsyncUpdate()
 {
     runReclaimSweepOnMessageThread();
-
 }
 
 void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
 {
-    // Cancel any pending async reclaim sweep to avoid double-run on sync sweep.
     cancelPendingUpdate();
 
-    // Phase 1: physically erase retired placements.
-    {
-        const auto retiredPlacements = standaloneArrangement_->getRetiredPlacements();
-        for (const auto& entry : retiredPlacements) {
-            standaloneArrangement_->deletePlacementById(entry.trackId, entry.placementId, nullptr, nullptr);
-        }
+    const auto retiredPlacements = standaloneArrangement_->getRetiredPlacements();
+    for (const auto& entry : retiredPlacements) {
+        standaloneArrangement_->deletePlacementById(entry.trackId, entry.placementId, nullptr, nullptr);
     }
 
-    // Phase 2a: reclaim retired materializations from MaterializationStore.
-    // Counters: (a) placement refs in StandaloneArrangement, (b) ARA region refs.
-    jassert(materializationStore_ != nullptr);
-    const auto retiredIds = materializationStore_->getRetiredIds();
-    for (const uint64_t id : retiredIds) {
-        if (standaloneArrangement_->referencesContentAnyState(ContentKey{DomainKind::StandaloneClip, id, 0}))
+    const auto retiredClipIds = standaloneContentRepository_->getRetiredClipIds();
+    for (const uint64_t id : retiredClipIds) {
+        const ContentKey key{DomainKind::StandaloneClip, id, 0};
+        if (standaloneArrangement_->referencesContentAnyState(key)) {
             continue;
+        }
 
-        const uint64_t sourceId = materializationStore_->getSourceIdAnyState(id);
-        if (materializationStore_->physicallyDeleteIfReclaimable(id)) {
-            if (sourceId != 0 && sourceStore_ != nullptr
-                && !materializationStore_->hasMaterializationForSource(sourceId)
-                && sourceStore_->containsSource(sourceId)) {
-                sourceStore_->retireSource(sourceId);
-            }
+        uint64_t sourceId = 0;
+        if (auto* clip = standaloneContentRepository_->findClip(key)) {
+            sourceId = clip->payload().sourceWindow.sourceId;
+        }
+
+        if (contentRenderService_ != nullptr) {
+            contentRenderService_->removePlaybackSource(key);
+            contentRenderService_->removeRenderCache(key);
+            contentRenderService_->removeStretcher(key);
+            contentRenderService_->getTimeStretchCache().invalidate(key);
+        }
+
+        standaloneContentRepository_->releaseClip(key);
+
+        if (sourceId != 0
+            && sourceStore_ != nullptr
+            && sourceStore_->containsSource(sourceId)
+            && !standaloneRepositoryReferencesSource(*standaloneContentRepository_, sourceId)) {
+            sourceStore_->retireSource(sourceId);
         }
     }
 
-    // Phase 2b: reclaim retired clips from StandaloneContentRepository.
-    // During migration (Phase 3), clips retired via PlacementActions
-    // go through StandaloneContentRepository lifecycle. The reclaim
-    // sweep must cover both stores until migration is complete.
-    if (standaloneContentRepository_ != nullptr) {
-        const auto retiredClipIds = standaloneContentRepository_->getRetiredClipIds();
-        for (const uint64_t id : retiredClipIds) {
-            if (standaloneArrangement_->referencesContentAnyState(ContentKey{DomainKind::StandaloneClip, id, 0}))
-                continue;
-
-            standaloneContentRepository_->releaseClip(ContentKey{DomainKind::StandaloneClip, id, 0});
-
-            // During migration: also retire in MaterializationStore
-            // so Phase 3 source-reclaim can cascade correctly.
-            // Remove once all clip creation routes go through StandaloneContentRepository.
-            if (materializationStore_->containsMaterialization(id))
-                materializationStore_->retireMaterialization(id);
-        }
-    }
-
-    // Phase 3: reclaim retired sources whose reference counter is zero.
     if (sourceStore_ != nullptr) {
         const auto retiredSourceIds = sourceStore_->getRetiredSourceIds();
         for (const uint64_t sourceId : retiredSourceIds) {
-            if (materializationStore_->hasMaterializationForSourceAnyState(sourceId))
+            if (standaloneRepositoryReferencesSource(*standaloneContentRepository_, sourceId)) {
                 continue;
+            }
             sourceStore_->physicallyDeleteIfReclaimable(sourceId);
         }
     }
 }
 
 // ============================================================================
-// Materialization 读写代理接口
+// Content 读写代理接口
 // ============================================================================
-
-bool OpenTuneAudioProcessor::getMaterializationSnapshotById(uint64_t materializationId, MaterializationSnapshot& out) const
-{
-    out = MaterializationSnapshot{};
-    if (materializationId == 0) {
-        return false;
-    }
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-        return materializationStore_->getSnapshot(materializationId, out);
-#endif
-
-    jassert(materializationStore_ != nullptr);
-
-    MaterializationStore::MaterializationSnapshot coreSnapshot;
-    if (materializationStore_->getSnapshot(materializationId, coreSnapshot)) {
-        out.materializationId = coreSnapshot.materializationId;
-        out.sourceId = coreSnapshot.sourceId;
-        out.lineageParentMaterializationId = coreSnapshot.lineageParentMaterializationId;
-        out.sourceWindow = coreSnapshot.sourceWindow;
-        out.audioBuffer = coreSnapshot.audioBuffer;
-        out.renderRevision = coreSnapshot.renderRevision;
-        out.pitchCurve = coreSnapshot.pitchCurve;
-        out.originalF0State = coreSnapshot.originalF0State;
-        out.detectedKey = coreSnapshot.detectedKey;
-        out.renderCache = coreSnapshot.renderCache;
-        out.notes = coreSnapshot.notes;
-        out.notesRevision = coreSnapshot.notesRevision;
-        out.silentGaps = coreSnapshot.silentGaps;
-        return out.audioBuffer != nullptr;
-    }
-
-    // Fallback: StandaloneContentRepository (clips loaded from project files
-    // or created via CR API during Phase 3 migration).
-    if (auto* clip = standaloneContentRepository_->findClip(materializationId)) {
-        const auto& payload = clip->payload();
-        out.materializationId = materializationId;
-        out.sourceId = payload.sourceWindow.sourceId;
-        out.lineageParentMaterializationId = 0;
-        out.sourceWindow = payload.sourceWindow;
-        out.audioBuffer = payload.audioBuffer;
-        out.renderRevision = payload.contentRevision;
-        out.pitchCurve = payload.pitchCurve;
-        out.originalF0State = payload.originalF0State;
-        out.detectedKey = payload.detectedKey;
-        out.notes = payload.notes;
-        out.notesRevision = payload.notesRevision;
-        out.silentGaps = payload.silentGaps;
-        return out.audioBuffer != nullptr;
-    }
-
-    return false;
-}
-
-double OpenTuneAudioProcessor::getMaterializationAudioDurationById(uint64_t materializationId) const noexcept
-{
-    if (materializationId == 0)
-        return 0.0;
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-        return materializationStore_->getMaterializationAudioDurationById(materializationId);
-#endif
-
-    jassert(materializationStore_ != nullptr);
-    const auto msDuration = materializationStore_->getMaterializationAudioDurationById(materializationId);
-    if (msDuration > 0.0)
-        return msDuration;
-
-    if (auto* clip = standaloneContentRepository_->findClip(materializationId)) {
-        const auto& buf = clip->payload().audioBuffer;
-        if (buf != nullptr && buf->getNumSamples() > 0)
-            return static_cast<double>(buf->getNumSamples()) / clip->payload().sampleRate;
-    }
-
-    return 0.0;
-}
 
 bool OpenTuneAudioProcessor::getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const
 {
@@ -3756,6 +3024,47 @@ bool OpenTuneAudioProcessor::getSourceSnapshotById(uint64_t sourceId, SourceStor
     // ARA mode: source metadata is in AudioSource objects, not a separate store
     // Non-ARA mode: use processor sourceStore_
     return sourceStore_ != nullptr && sourceStore_->getSnapshot(sourceId, out);
+}
+
+std::shared_ptr<const EditableContentSnapshot> OpenTuneAudioProcessor::getContentSnapshot(ContentKey key) const
+{
+    if (!key.isValid()) {
+        return nullptr;
+    }
+
+    switch (key.domainKind) {
+        case DomainKind::StandaloneClip: {
+            auto* clip = standaloneContentRepository_ ? standaloneContentRepository_->findClip(key) : nullptr;
+            return clip ? clip->snapshotContent() : nullptr;
+        }
+#if JucePlugin_Enable_ARA
+        case DomainKind::ARAAudioModification: {
+            const auto* dc = getDocumentController();
+            return dc ? dc->readContentSnapshot(key) : nullptr;
+        }
+#else
+        case DomainKind::ARAAudioModification:
+            return nullptr;
+#endif
+        case DomainKind::RegularVST3Capture: {
+            const auto* session = getCaptureSession();
+            const auto* segment = session ? session->findSegmentByContentKey(key) : nullptr;
+            return segment && segment->content ? segment->content->snapshotContent() : nullptr;
+        }
+    }
+
+    return nullptr;
+}
+
+void OpenTuneAudioProcessor::invalidateRenderFor(ContentKey key)
+{
+    if (!key.isValid() || contentRenderService_ == nullptr) {
+        return;
+    }
+
+    contentRenderService_->removeRenderCache(key);
+    contentRenderService_->removeStretcher(key);
+    contentRenderService_->getTimeStretchCache().invalidate(key);
 }
 
 bool OpenTuneAudioProcessor::ensureSourceById(uint64_t sourceId,
@@ -3783,70 +3092,8 @@ bool OpenTuneAudioProcessor::ensureSourceById(uint64_t sourceId,
     return sourceStore_->createSource(std::move(request), sourceId) == sourceId;
 }
 
-bool OpenTuneAudioProcessor::getMaterializationChunkBoundariesById(uint64_t materializationId, std::vector<double>& outSeconds) const
-{
-    outSeconds.clear();
-    if (materializationId == 0) {
-        return false;
-    }
-    jassert(materializationStore_ != nullptr);
 
-    MaterializationStore::MaterializationSnapshot coreSnapshot;
-    if (!materializationStore_->getSnapshot(materializationId, coreSnapshot) || coreSnapshot.audioBuffer == nullptr) {
-        return false;
-    }
 
-    int hopSize = 512;
-    if (vocoderDomain_) {
-        const int currentHopSize = vocoderDomain_->getVocoderHopSize();
-        if (currentHopSize > 0) {
-            hopSize = currentHopSize;
-        }
-    }
-
-    MaterializationSampleRange materializationRange;
-    materializationRange.startSample = 0;
-    materializationRange.endSampleExclusive = static_cast<int64_t>(coreSnapshot.audioBuffer->getNumSamples());
-
-    const auto boundaries = RenderChunkPlanner::buildChunkBoundariesFromSilentGaps(materializationRange.endSampleExclusive, coreSnapshot.silentGaps, hopSize);
-    outSeconds.reserve(boundaries.size());
-    for (const auto sample : boundaries) {
-        outSeconds.push_back(TimeCoordinate::samplesToSeconds(sample - materializationRange.startSample,
-                                                              TimeCoordinate::kRenderSampleRate));
-    }
-
-    return true;
-}
-
-bool OpenTuneAudioProcessor::replaceMaterializationAudioById(uint64_t materializationId,
-                                                      std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
-                                                      std::vector<SilentGap> silentGaps)
-{
-    if (materializationId == 0 || audioBuffer == nullptr) {
-        return false;
-    }
-    jassert(materializationStore_ != nullptr);
-
-    if (audioBuffer->getNumChannels() <= 0 || audioBuffer->getNumSamples() <= 0) {
-        return false;
-    }
-
-    return materializationStore_->replaceAudio(materializationId,
-                                               std::move(audioBuffer),
-                                               std::move(silentGaps));
-}
-
-uint64_t OpenTuneAudioProcessor::replaceMaterializationWithNewLineage(uint64_t oldId,
-                                                       MaterializationStore::CreateMaterializationRequest request)
-{
-    if (oldId == 0) {
-        return 0;
-    }
-    jassert(materializationStore_ != nullptr);
-
-    return materializationStore_->replaceMaterializationWithNewLineage(oldId,
-                                                                       std::move(request));
-}
 
 // WAV文件写入辅助函数
 static bool writeAudioBufferToWavFile(const juce::AudioBuffer<float>& buffer,
@@ -4153,7 +3400,7 @@ bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
     out.displayName = displayName;
     out.sourceFilePath = sourceFilePath;
 
-    // 导入后的 materialization �?shared runtime 内统一落到固定 44.1kHz �?materialization-local 存储采样率�?
+    // 导入后的 content �?shared runtime 内统一落到固定 44.1kHz �?content-local 存储采样率�?
     const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
     if (std::abs(inSampleRate - targetSampleRate) > 1.0) {
         const int numChannels = inBuffer.getNumChannels();
@@ -4185,7 +3432,7 @@ bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
     return true;
 }
 
-uint64_t OpenTuneAudioProcessor::ensureSourceAndCreateMaterialization(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource)
+ContentKey OpenTuneAudioProcessor::ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource)
 {
     jassert(sourceStore_ != nullptr);
 
@@ -4198,22 +3445,22 @@ uint64_t OpenTuneAudioProcessor::ensureSourceAndCreateMaterialization(PreparedIm
         sourceRequest.audioBuffer = storedAudioBuffer;
         sourceRequest.sampleRate = TimeCoordinate::kRenderSampleRate;
         sourceId = sourceStore_->createSource(std::move(sourceRequest));
-        if (sourceId == 0) return 0;
+        if (sourceId == 0) return {};
         createdSource = true;
     } else if (!sourceStore_->containsSource(sourceId)) {
-        return 0;
+        return {};
     }
 
     ContentKey key = standaloneContentRepository_->createClip();
     if (!key.isValid()) {
         if (createdSource) sourceStore_->deleteSource(sourceId);
-        return 0;
+        return {};
     }
 
     auto* clip = standaloneContentRepository_->findClip(key);
     if (!clip) {
         if (createdSource) sourceStore_->deleteSource(sourceId);
-        return 0;
+        return {};
     }
 
     clip->applyAudioBuffer(storedAudioBuffer, TimeCoordinate::kRenderSampleRate);
@@ -4223,19 +3470,14 @@ uint64_t OpenTuneAudioProcessor::ensureSourceAndCreateMaterialization(PreparedIm
     if (sw.sourceId == 0) {
         const double durationSeconds = TimeCoordinate::samplesToSeconds(
             storedAudioBuffer->getNumSamples(), TimeCoordinate::kRenderSampleRate);
-        sw = SourceWindow{sourceId, 0.0, durationSeconds};
+        sw = SourceWindow{sourceId, juce::String(), 0.0, durationSeconds};
     }
     clip->payload().sourceWindow = sw;
     clip->payload().silentGaps = std::move(prepared.silentGaps);
 
-    // Publish playback source through CRS
-    PlaybackReadSource readSource;
-    readSource.contentKey = key;
-    readSource.audioBuffer = storedAudioBuffer;
-    readSource.renderCache = contentRenderService_->getOrCreateRenderCache(key);
-    contentRenderService_->publishPlaybackSource(key, readSource);
+    publishStandalonePlaybackSource(*contentRenderService_, key, clip->payload());
 
-    return key.objectId;
+    return key;
 }
 
 OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPreparedImportAsPlacement(
@@ -4246,12 +3488,11 @@ OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPrepare
 
     const juce::String displayName = prepared.displayName;
     bool createdSource = false;
-    const uint64_t materializationId = ensureSourceAndCreateMaterialization(std::move(prepared), sourceId, createdSource);
-    if (materializationId == 0) return {};
+    const ContentKey clipKey = ensureSourceAndCreateStandaloneClip(std::move(prepared), sourceId, createdSource);
+    if (!clipKey.isValid()) return {};
 
-    const ContentKey clipKey{DomainKind::StandaloneClip, materializationId, 0};
     auto durationSnap = getContentSnapshot(clipKey);
-    const double materializationDurationSeconds = durationSnap
+    const double contentDurationSeconds = durationSnap
         ? durationSnap->sourceWindow.durationSeconds()
         : 0.0;
 
@@ -4259,24 +3500,25 @@ OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPrepare
     importedPlacement.contentKey = clipKey;
     importedPlacement.mappingRevision = 0;
     importedPlacement.timelineStartSeconds = placement.timelineStartSeconds;
-    importedPlacement.durationSeconds = materializationDurationSeconds;
+    importedPlacement.durationSeconds = contentDurationSeconds;
     importedPlacement.gain = 1.0f;
     importedPlacement.name = displayName;
 
     if (!standaloneArrangement_->insertPlacement(placement.trackId, importedPlacement)) {
-        standaloneContentRepository_->releaseClip(ContentKey{DomainKind::StandaloneClip, materializationId, 0});
+        standaloneContentRepository_->releaseClip(clipKey);
         if (createdSource) sourceStore_->deleteSource(sourceId);
         return {};
     }
     standaloneArrangement_->selectPlacement(placement.trackId, importedPlacement.placementId);
 
-    return { sourceId, materializationId, importedPlacement.placementId };
+    return { sourceId, clipKey, importedPlacement.placementId };
 }
 
-uint64_t OpenTuneAudioProcessor::commitPreparedImportAsMaterialization(PreparedImport&& prepared, uint64_t sourceId)
+uint64_t OpenTuneAudioProcessor::commitPreparedImportAsContent(PreparedImport&& prepared, uint64_t sourceId)
 {
     bool createdSource = false;
-    return ensureSourceAndCreateMaterialization(std::move(prepared), sourceId, createdSource);
+    const auto key = ensureSourceAndCreateStandaloneClip(std::move(prepared), sourceId, createdSource);
+    return key.objectId;
 }
 
 
@@ -4286,7 +3528,7 @@ uint64_t OpenTuneAudioProcessor::commitPreparedImportAsMaterialization(PreparedI
 // F0 only �?does NOT run GAME note generation.
 // ============================================================================
 
-bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor::MaterializationRefreshRequest& request)
+bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor::ContentRefreshRequest& request)
 {
     if (!request.contentKey.isValid()) {
         return false;
@@ -4296,8 +3538,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
     if (snap == nullptr || snap->audioBuffer == nullptr) {
         return false;
     }
-
-    const uint64_t matId = request.contentKey.objectId;
 
     const bool hasChangedRange = request.preserveCorrectionsOutsideChangedRange
         && request.changedEndSeconds > request.changedStartSeconds;
@@ -4338,27 +3578,26 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
         }
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification:
-            // Handled by DC path in setMaterializationOriginalF0StateById
+            // Handled by DC path in setContentOriginalF0State
             break;
 #endif
         case DomainKind::RegularVST3Capture:
             break;
     }
 
-    if (materializationRefreshService_.isActive(matId)) {
-        materializationRefreshService_.cancel(matId);
+    if (contentRefreshService_.isActive(F0RequestKey{request.contentKey})) {
+        contentRefreshService_.cancel(F0RequestKey{request.contentKey});
     }
 
-    const auto lifetimeFlag = materializationRefreshAliveFlag_;
+    const auto lifetimeFlag = contentRefreshAliveFlag_;
     OpenTuneAudioProcessor* const processor = this;
     const auto capturedRequest = request;
 
-    const auto submitResult = materializationRefreshService_.submit(
-        matId,
+    const auto submitResult = contentRefreshService_.submit(
+        F0RequestKey{request.contentKey},
         [lifetimeFlag, processor, capturedRequest]() -> F0ExtractionService::Result {
             F0ExtractionService::Result result;
-            result.materializationId = capturedRequest.contentKey.objectId;
-            result.requestKey = capturedRequest.contentKey.objectId;
+            result.contentKey = capturedRequest.contentKey;
 
             if (!lifetimeFlag->load(std::memory_order_acquire)) {
                 result.errorMessage = "processor_destroyed";
@@ -4502,149 +3741,6 @@ bool OpenTuneAudioProcessor::movePlacementToTrack(int sourceTrackId,
     return standaloneArrangement_->movePlacementToTrack(sourceTrackId, targetTrackId, placementId, newTimelineStartSeconds);
 }
 
-std::shared_ptr<PitchCurve> OpenTuneAudioProcessor::getMaterializationPitchCurveById(uint64_t materializationId) const
-{
-    if (materializationId == 0) {
-        return nullptr;
-    }
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController()) {
-        std::shared_ptr<PitchCurve> curve;
-        return materializationStore_->getPitchCurve(materializationId, curve) ? curve : nullptr;
-    }
-#endif
-
-    std::shared_ptr<PitchCurve> curve;
-    jassert(materializationStore_ != nullptr);
-    return materializationStore_->getPitchCurve(materializationId, curve) ? curve : nullptr;
-}
-
-bool OpenTuneAudioProcessor::setMaterializationPitchCurveById(uint64_t materializationId, std::shared_ptr<PitchCurve> curve)
-{
-    if (materializationId == 0) {
-        return false;
-    }
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-    {
-        auto* mod = dc->findAudioModificationByContentKey(
-            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
-        if (mod == nullptr || !mod->hasContentState())
-            return false;
-
-        mod->applyPitchCurve(std::move(curve));
-
-        // Invalidate CRS derived artifacts
-        if (auto* crs = dc->getContentRenderService())
-        {
-            auto key = mod->contentKey();
-            crs->removeRenderCache(key);
-            crs->removeStretcher(key);
-        }
-
-        // Notify host
-        if (mod->audioModification != nullptr)
-            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
-
-        return true;
-    }
-#endif
-
-    jassert(materializationStore_ != nullptr);
-    if (!materializationStore_->setPitchCurve(materializationId, std::move(curve))) {
-        return false;
-    }
-
-    // §7 (Phase E): pitch edit invalidates Stage 2 (handled inside
-    // setPitchCurve via TimeStretchCache::invalidate).  If the materialization
-    // currently has a non-identity TimeGrid, the user is hearing stretched
-    // audio �?we must enqueue a Stage 2 rebuild so the new pitch is reflected.
-    // For identity grids, Stage 2 is unused; skip the rebuild.
-    {
-        std::shared_ptr<const TimeGridSnapshot> tg;
-        if (materializationStore_->getTimeGrid(materializationId, tg)
-            && tg != nullptr && !tg->isIdentity()) {
-            const auto pitchRev = materializationStore_->getPitchRevision(materializationId);
-            const auto pitchShiftRev = materializationStore_->getPitchShiftRevision(materializationId);
-            const auto tgRev = materializationStore_->getTimeGridRevision(materializationId);
-            requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, materializationId, 0},
-                                 pitchRev, pitchShiftRev, tgRev);
-        }
-    }
-    return true;
-}
-
-OriginalF0State OpenTuneAudioProcessor::getMaterializationOriginalF0StateById(uint64_t materializationId) const
-{
-    if (materializationId == 0)
-        return OriginalF0State::NotRequested;
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-        return materializationStore_->getOriginalF0State(materializationId);
-#endif
-
-    if (auto* captureSession = getCaptureSession()) {
-        auto* segment = captureSession->findSegmentById(materializationId);
-        if (segment && segment->content)
-            return segment->content->editable().originalF0State;
-    }
-
-    if (auto* clip = standaloneContentRepository_->findClip(materializationId))
-        return clip->payload().originalF0State;
-
-    jassert(materializationStore_ != nullptr);
-    return materializationStore_->getOriginalF0State(materializationId);
-}
-
-bool OpenTuneAudioProcessor::setMaterializationOriginalF0StateById(uint64_t materializationId, OriginalF0State state)
-{
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-    {
-        auto* mod = dc->findAudioModificationByContentKey(
-            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
-        if (mod == nullptr || !mod->hasContentState())
-            return false;
-
-        mod->content.analysis.originalF0State = state;
-        ++mod->content.contentRevision;
-
-        // Notify host
-        if (mod->audioModification != nullptr)
-            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
-
-        return true;
-    }
-#endif
-
-    if (auto* captureSession = getCaptureSession()) {
-        auto* segment = captureSession->findSegmentById(materializationId);
-        if (segment && segment->content) {
-            segment->content->applyOriginalF0State(state);
-            if (state == OriginalF0State::Ready)
-                segment->state.store(Capture::SegmentState::Edited, std::memory_order_release);
-            return true;
-        }
-    }
-
-    if (auto* clip = standaloneContentRepository_->findClip(materializationId)) {
-        clip->applyOriginalF0State(state);
-        return true;
-    }
-
-    jassert(materializationStore_ != nullptr);
-    return materializationId != 0 && materializationStore_->setOriginalF0State(materializationId, state);
-}
-
-void OpenTuneAudioProcessor::detectAndCommitMaterializationKeyIfUnset(uint64_t materializationId)
-{
-    ContentKey key{DomainKind::StandaloneClip, materializationId, 0};
-    detectContentKeyIfUnset(key);
-}
-
 void OpenTuneAudioProcessor::detectContentKeyIfUnset(ContentKey key)
 {
     auto snap = getContentSnapshot(key);
@@ -4665,72 +3761,10 @@ void OpenTuneAudioProcessor::detectContentKeyIfUnset(ContentKey key)
     setContentDetectedKey(key, detectedKey);
 }
 
-DetectedKey OpenTuneAudioProcessor::getMaterializationDetectedKeyById(uint64_t materializationId) const
+PitchShiftSettings OpenTuneAudioProcessor::getPitchShiftSettings(ContentKey key) const
 {
-    if (materializationId == 0)
-        return DetectedKey{};
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-        return materializationStore_->getDetectedKey(materializationId);
-#endif
-
-    if (auto* captureSession = getCaptureSession()) {
-        auto* segment = captureSession->findSegmentById(materializationId);
-        if (segment && segment->content)
-            return segment->content->editable().detectedKey;
-    }
-
-    if (auto* clip = standaloneContentRepository_->findClip(materializationId))
-        return clip->payload().detectedKey;
-
-    jassert(materializationStore_ != nullptr);
-    return materializationStore_->getDetectedKey(materializationId);
-}
-
-bool OpenTuneAudioProcessor::setMaterializationDetectedKeyById(uint64_t materializationId, const DetectedKey& key)
-{
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-    {
-        auto* mod = dc->findAudioModificationByContentKey(
-            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
-        if (mod == nullptr || !mod->hasContentState())
-            return false;
-
-        mod->applyDetectedKey(key);
-
-        // Notify host
-        if (mod->audioModification != nullptr)
-            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
-
-        return true;
-    }
-#endif
-
-    if (auto* captureSession = getCaptureSession()) {
-        auto* segment = captureSession->findSegmentById(materializationId);
-        if (segment && segment->content) {
-            segment->content->applyDetectedKey(key);
-            return true;
-        }
-    }
-
-    if (auto* clip = standaloneContentRepository_->findClip(materializationId)) {
-        clip->applyDetectedKey(key);
-        return true;
-    }
-
-    jassert(materializationStore_ != nullptr);
-    return materializationId != 0 && materializationStore_->setDetectedKey(materializationId, key);
-}
-
-PitchShiftSettings OpenTuneAudioProcessor::getPitchShiftSettings(uint64_t materializationId) const
-{
-    if (materializationId == 0)
-        return {};
-    jassert(materializationStore_ != nullptr);
-    return materializationStore_->getPitchShiftSettings(materializationId);
+    auto snap = getContentSnapshot(key);
+    return snap ? snap->pitchShiftSettings : PitchShiftSettings{};
 }
 
 ReferenceFeatureSet OpenTuneAudioProcessor::getReferenceFeatures(ContentKey key) const
@@ -4743,36 +3777,6 @@ ReferenceFeatureSet OpenTuneAudioProcessor::getReferenceFeatures(ContentKey key)
 // ============================================================================
 // vocal-time-stretch §3.6 — TimeGrid processor accessors
 // ============================================================================
-
-std::shared_ptr<const TimeGridSnapshot>
-OpenTuneAudioProcessor::getMaterializationTimeGridById(uint64_t materializationId) const
-{
-    if (materializationId == 0) return nullptr;
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController()) {
-        std::shared_ptr<const TimeGridSnapshot> snapshot;
-        return materializationStore_->getTimeGrid(materializationId, snapshot) ? snapshot : nullptr;
-    }
-#endif
-
-    jassert(materializationStore_ != nullptr);
-    std::shared_ptr<const TimeGridSnapshot> snapshot;
-    return materializationStore_->getTimeGrid(materializationId, snapshot) ? snapshot : nullptr;
-}
-
-uint64_t OpenTuneAudioProcessor::getMaterializationTimeGridRevisionById(uint64_t materializationId) const
-{
-    if (materializationId == 0) return 0;
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-        return materializationStore_->getTimeGridRevision(materializationId);
-#endif
-
-    jassert(materializationStore_ != nullptr);
-    return materializationStore_->getTimeGridRevision(materializationId);
-}
 
 bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
 {
@@ -4803,7 +3807,7 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
 
     if (!featuresReady) {
         const auto preheatStatus = preheatReferenceAlignmentFeatures(key);
-        if (preheatStatus == ReferenceAnalysisPreheatStatus::InvalidMaterialization
+        if (preheatStatus == ReferenceAnalysisPreheatStatus::InvalidContent
             || preheatStatus == ReferenceAnalysisPreheatStatus::AnalysisFailed) {
             return false;
         }
@@ -4896,267 +3900,16 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
                               affectedEndFrame);
 }
 
-bool OpenTuneAudioProcessor::setMaterializationTimeGridById(uint64_t materializationId,
-                                                              std::shared_ptr<const TimeGridSnapshot> snapshot,
-                                                              int64_t affectedSrcStartFrame,
-                                                              int64_t affectedSrcEndFrame)
-{
-    if (materializationId == 0 || snapshot == nullptr) return false;
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-    {
-        auto* mod = dc->findAudioModificationByContentKey(
-            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
-        if (mod == nullptr || !mod->hasContentState())
-            return false;
-
-        mod->applyTimeGrid(std::move(snapshot));
-
-        // Invalidate CRS derived artifacts
-        if (auto* crs = dc->getContentRenderService())
-        {
-            auto key = mod->contentKey();
-            crs->removeStretcher(key);
-            crs->getTimeStretchCache().invalidate(key);
-        }
-
-        // Notify host
-        if (mod->audioModification != nullptr)
-            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
-
-        return true;
-    }
-#endif
-
-    jassert(materializationStore_ != nullptr);
-    if (!materializationStore_->setTimeGrid(materializationId, std::move(snapshot))) {
-        return false;
-    }
-
-    // §7 (Phase D MVP): TimeStretchCache invalidation is performed inside
-    // setTimeGrid (§6.5).  Here we additionally enqueue a Stage 2 rebuild on
-    // the dedicated worker thread �?it will read the freshest snapshot and
-    // produce a new TimeStretchCache entry asynchronously.  affectedSrcStart/End
-    // bounds are reserved for future region-scoped re-stretch optimization
-    // (current Offline mode is clip-wide).
-    juce::ignoreUnused(affectedSrcStartFrame, affectedSrcEndFrame);
-    {
-            const auto pitchRev = materializationStore_->getPitchRevision(materializationId);
-            const auto pitchShiftRev = materializationStore_->getPitchShiftRevision(materializationId);
-            const auto tgRev = materializationStore_->getTimeGridRevision(materializationId);
-            requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, materializationId, 0},
-                                 pitchRev, pitchShiftRev, tgRev);
-    }
-    return true;
-}
-
-void OpenTuneAudioProcessor::setPitchShiftSettings(uint64_t materializationId, const PitchShiftSettings& settings)
-{
-    if (materializationId == 0) return;
-
-    materializationStore_->setPitchShiftSettings(materializationId, settings);
-
-    // Trigger full re-render for this materialization
-    MaterializationSnapshot snap;
-    if (getMaterializationSnapshotById(materializationId, snap) && snap.audioBuffer) {
-        const int numSamples = snap.audioBuffer->getNumSamples();
-        const double durationSec = static_cast<double>(numSamples) / 44100.0;
-        if (durationSec > 0.0) {
-            materializationStore_->enqueuePartialRender(materializationId, 0.0, durationSec, 512);
-        }
-    }
-}
-
-std::shared_ptr<RenderCache> OpenTuneAudioProcessor::getMaterializationRenderCacheById(uint64_t materializationId) const
-{
-    if (materializationId == 0) {
-        return nullptr;
-    }
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController()) {
-        std::shared_ptr<RenderCache> renderCache;
-        return materializationStore_->getRenderCache(materializationId, renderCache) ? renderCache : nullptr;
-    }
-#endif
-
-    std::shared_ptr<RenderCache> renderCache;
-    jassert(materializationStore_ != nullptr);
-    return materializationStore_->getRenderCache(materializationId, renderCache) ? renderCache : nullptr;
-}
-
-std::vector<Note> OpenTuneAudioProcessor::getMaterializationNotesById(uint64_t materializationId) const
-{
-    if (materializationId == 0)
-        return std::vector<Note>{};
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-        return materializationStore_->getNotes(materializationId);
-#endif
-
-    jassert(materializationStore_ != nullptr);
-    return materializationStore_->getNotes(materializationId);
-}
-
-OpenTuneAudioProcessor::MaterializationNotesSnapshot OpenTuneAudioProcessor::getMaterializationNotesSnapshotById(uint64_t materializationId) const
-{
-    MaterializationNotesSnapshot snapshot;
-    if (materializationId == 0) {
-        return snapshot;
-    }
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController()) {
-        materializationStore_->getNotesSnapshot(materializationId, snapshot);
-        return snapshot;
-    }
-#endif
-
-    jassert(materializationStore_ != nullptr);
-    materializationStore_->getNotesSnapshot(materializationId, snapshot);
-    return snapshot;
-}
-
-bool OpenTuneAudioProcessor::setMaterializationNotesById(uint64_t materializationId, const std::vector<Note>& notes)
-{
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-    {
-        auto* mod = dc->findAudioModificationByContentKey(
-            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
-        if (mod == nullptr || !mod->hasContentState())
-            return false;
-
-        mod->applyNotes(normalizeStoredNotes(notes));
-
-        // Invalidate CRS derived artifacts
-        if (auto* crs = dc->getContentRenderService())
-        {
-            auto key = mod->contentKey();
-            crs->removeRenderCache(key);
-        }
-
-        // Notify host
-        if (mod->audioModification != nullptr)
-            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
-
-        return true;
-    }
-#endif
-    jassert(materializationStore_ != nullptr);
-    return materializationId != 0 && materializationStore_->setNotes(materializationId, normalizeStoredNotes(notes));
-}
-
-bool OpenTuneAudioProcessor::setMaterializationCorrectedSegmentsById(uint64_t materializationId,
-                                                              const std::vector<CorrectedSegment>& segments)
-{
-    if (materializationId == 0) {
-        return false;
-    }
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController()) {
-        auto* mod = dc->findAudioModificationByContentKey(
-            ContentKey{DomainKind::ARAAudioModification, materializationId, 0});
-        if (mod == nullptr || !mod->hasContentState())
-            return false;
-
-        auto pitchCurve = mod->content.analysis.pitchCurve;
-        if (pitchCurve == nullptr)
-            return false;
-
-        auto committedCurve = clonePitchCurveWithCorrectedSegments(pitchCurve, segments);
-        if (committedCurve == nullptr)
-            return false;
-
-        mod->applyPitchCurve(std::move(committedCurve));
-
-        // Invalidate CRS derived artifacts
-        if (auto* crs = dc->getContentRenderService())
-        {
-            auto key = mod->contentKey();
-            crs->removeRenderCache(key);
-            crs->removeStretcher(key);
-        }
-
-        // Notify host
-        if (mod->audioModification != nullptr)
-            mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
-
-        return true;
-    }
-#endif
-
-    std::shared_ptr<PitchCurve> pitchCurve;
-    jassert(materializationStore_ != nullptr);
-    if (!materializationStore_->getPitchCurve(materializationId, pitchCurve) || pitchCurve == nullptr) {
-        return false;
-    }
-
-    auto committedCurve = clonePitchCurveWithCorrectedSegments(pitchCurve, segments);
-    return committedCurve != nullptr && materializationStore_->setPitchCurve(materializationId, std::move(committedCurve));
-}
-
-bool OpenTuneAudioProcessor::commitMaterializationNotesAndSegmentsById(uint64_t materializationId,
-                                                                const std::vector<Note>& notes,
-                                                                const std::vector<CorrectedSegment>& segments)
-{
-    if (materializationId == 0) {
-        return false;
-    }
-
-    const auto normalizedNotes = normalizeStoredNotes(notes);
-
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController()) {
-        auto* store = materializationStore_.get();
-        std::shared_ptr<PitchCurve> pitchCurve;
-        if (!store->getPitchCurve(materializationId, pitchCurve) || pitchCurve == nullptr)
-            return false;
-        auto committedCurve = clonePitchCurveWithCorrectedSegments(pitchCurve, segments);
-        return committedCurve != nullptr
-            && store->commitNotesAndPitchCurve(materializationId, normalizedNotes, std::move(committedCurve));
-    }
-#endif
-
-    std::shared_ptr<PitchCurve> pitchCurve;
-    jassert(materializationStore_ != nullptr);
-    if (!materializationStore_->getPitchCurve(materializationId, pitchCurve) || pitchCurve == nullptr) {
-        return false;
-    }
-
-    auto committedCurve = clonePitchCurveWithCorrectedSegments(pitchCurve, segments);
-    const bool committed = committedCurve != nullptr
-        && materializationStore_->commitNotesAndPitchCurve(materializationId,
-                                                           normalizedNotes,
-                                                           std::move(committedCurve));
-    if (committed) {
-        // §7 (Phase E): pitch edit �?Stage 2 rebuild if non-identity grid
-        std::shared_ptr<const TimeGridSnapshot> tg;
-        if (materializationStore_->getTimeGrid(materializationId, tg)
-            && tg != nullptr && !tg->isIdentity()) {
-            const auto pitchRev = materializationStore_->getPitchRevision(materializationId);
-            const auto pitchShiftRev = materializationStore_->getPitchShiftRevision(materializationId);
-            const auto tgRev = materializationStore_->getTimeGridRevision(materializationId);
-            requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, materializationId, 0},
-                                 pitchRev, pitchShiftRev, tgRev);
-        }
-    }
-    return committed;
-}
-
 OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus
 OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(ContentKey key)
 {
     if (!key.isValid()) {
-        return ReferenceAnalysisPreheatStatus::InvalidMaterialization;
+        return ReferenceAnalysisPreheatStatus::InvalidContent;
     }
 
     auto snap = getContentSnapshot(key);
     if (!snap) {
-        return ReferenceAnalysisPreheatStatus::InvalidMaterialization;
+        return ReferenceAnalysisPreheatStatus::InvalidContent;
     }
 
     auto& features = snap->referenceFeatures;
@@ -5196,7 +3949,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
 {
     ReferenceAlignmentResult result;
 
-    if (targetPlacementId == 0 || standaloneArrangement_ == nullptr || materializationStore_ == nullptr) {
+    if (targetPlacementId == 0 || standaloneArrangement_ == nullptr) {
         result.status = ReferenceAlignmentResult::Status::TargetPlacementNotFound;
         result.message = "AUTO Ref target placement is not available";
         return result;
@@ -5321,11 +4074,11 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
 
     ReferenceAlignmentRequest request;
     request.target.placementId = targetPlacement.placementId;
-    request.target.materializationId = targetPlacement.contentKey.objectId;
+    request.target.contentKey = targetPlacement.contentKey;
     request.target.timelineStartSeconds = targetPlacement.timelineStartSeconds;
     request.target.timelineEndSeconds = targetPlacement.timelineEndSeconds();
     request.reference.placementId = referencePlacement.placementId;
-    request.reference.materializationId = referencePlacement.contentKey.objectId;
+    request.reference.contentKey = referencePlacement.contentKey;
     request.reference.timelineStartSeconds = referencePlacement.timelineStartSeconds;
     request.reference.timelineEndSeconds = referencePlacement.timelineEndSeconds();
     request.targetTimeMap = EffectiveTimeMap::fromTimeGrid(targetSnap->timeGrid, targetDurationSeconds);
@@ -5366,7 +4119,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
                 break;
         }
         result.message = patch.diagnostics;
-        result.targetMaterializationId = targetPlacement.contentKey.objectId;
+        result.targetContentKey = targetPlacement.contentKey;
         result.affectedStartFrame = patch.affectedStartFrame;
         result.affectedEndFrame = patch.affectedEndFrame;
         return result;
@@ -5408,7 +4161,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     if (!commitOk) {
         result.status = ReferenceAlignmentResult::Status::CommitFailed;
         result.message = patch.diagnostics;
-        result.targetMaterializationId = targetPlacement.contentKey.objectId;
+        result.targetContentKey = targetPlacement.contentKey;
         result.affectedStartFrame = patch.affectedStartFrame;
         result.affectedEndFrame = patch.affectedEndFrame;
         return result;
@@ -5448,173 +4201,20 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
                             / TimeGridSnapshot::kSourceSpacingFrameRate;
     enqueueContentPartialRender(targetPlacement.contentKey, editStartSec, editEndSec);
     if (patch.timingChanged) {
-        const auto matId = targetPlacement.contentKey.objectId;
-        const auto pitchRev = materializationStore_->getPitchRevision(matId);
-        const auto pitchShiftRev = materializationStore_->getPitchShiftRevision(matId);
-        const auto tgRev = materializationStore_->getTimeGridRevision(matId);
-        requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, matId, 0},
-                             pitchRev, pitchShiftRev, tgRev);
+        if (const auto latestSnap = getContentSnapshot(targetPlacement.contentKey)) {
+            requestStage2Rebuild(targetPlacement.contentKey,
+                                 latestSnap->pitchRevision,
+                                 latestSnap->pitchShiftRevision,
+                                 latestSnap->timeGridRevision);
+        }
     }
 
     result.status = ReferenceAlignmentResult::Status::Succeeded;
     result.message = "AUTO Ref alignment applied";
-    result.targetMaterializationId = targetPlacement.contentKey.objectId;
+    result.targetContentKey = targetPlacement.contentKey;
     result.affectedStartFrame = patch.affectedStartFrame;
     result.affectedEndFrame = patch.affectedEndFrame;
     return result;
-}
-
-bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByMaterializationId(uint64_t materializationId,
-                                                                       const std::vector<Note>& generatedNotes,
-                                                                       int startFrame,
-                                                                       int endFrameExclusive,
-                                                                      float retuneSpeed,
-                                                                      float vibratoDepth,
-                                                                      float vibratoRate,
-                                                                      double audioSampleRate)
-{
-    AppLogger::log("AutoTune: commitAutoTuneGenerated entry matId=" + juce::String(static_cast<juce::int64>(materializationId))
-        + " notes=" + juce::String(static_cast<int>(generatedNotes.size()))
-        + " range=[" + juce::String(startFrame) + "," + juce::String(endFrameExclusive) + ")");
-
-    if (materializationId == 0 || endFrameExclusive <= startFrame) {
-        return false;
-    }
-
-    // Route to the correct store (DC-owned vs processor-local)
-    MaterializationStore* store = nullptr;
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-        store = materializationStore_.get();
-#endif
-    if (store == nullptr)
-        store = materializationStore_.get();
-
-    const auto normalizedNotes = normalizeStoredNotes(generatedNotes);
-    if (normalizedNotes.empty()) {
-        AppLogger::log("AutoTune: commitAutoTuneGenerated abort - normalizedNotes empty");
-        return false;
-    }
-
-    std::shared_ptr<PitchCurve> sharedCurve;
-    if (!store->getPitchCurve(materializationId, sharedCurve) || sharedCurve == nullptr) {
-        AppLogger::log("AutoTune: commitAutoTuneGenerated abort - no pitchCurve in store");
-        return false;
-    }
-
-    const double secondsPerFrame = static_cast<double>(sharedCurve->getHopSize()) / sharedCurve->getSampleRate();
-    const double rangeStartTime = static_cast<double>(startFrame) * secondsPerFrame;
-    const double rangeEndTime = static_cast<double>(endFrameExclusive) * secondsPerFrame;
-
-    auto existingSnapshot = getMaterializationNotesSnapshotById(materializationId);
-
-    std::vector<Note> mergedNotes;
-    mergedNotes.reserve(existingSnapshot.notes.size() + normalizedNotes.size());
-
-    for (const auto& note : existingSnapshot.notes) {
-        if (note.endTime <= rangeStartTime || note.startTime >= rangeEndTime) {
-            mergedNotes.push_back(note);
-        }
-    }
-
-    for (const auto& note : normalizedNotes) {
-        mergedNotes.push_back(note);
-    }
-
-    std::sort(mergedNotes.begin(), mergedNotes.end(),
-        [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
-
-    AppLogger::log("AutoTune: cloning curve and applying correction");
-    auto derivedCurve = sharedCurve->clone();
-    derivedCurve->applyCorrectionToRange(mergedNotes,
-                                         startFrame,
-                                         endFrameExclusive,
-                                         retuneSpeed,
-                                         vibratoDepth,
-                                         vibratoRate,
-                                         audioSampleRate);
-    AppLogger::log("AutoTune: applyCorrectionToRange completed");
-
-    // TOCTOU check: ensure the curve hasn't been replaced during correction
-    {
-        std::shared_ptr<PitchCurve> currentCurve;
-        if (!store->getPitchCurve(materializationId, currentCurve) || currentCurve != sharedCurve) {
-            AppLogger::log("AutoTune: commitAutoTuneGenerated abort - curve replaced during correction (TOCTOU)");
-            return false;
-        }
-    }
-
-    AppLogger::log("AutoTune: committing notes and curve to store");
-    bool result = store->commitNotesAndPitchCurve(materializationId,
-                                                    mergedNotes,
-                                                    std::move(derivedCurve));
-    AppLogger::log("AutoTune: commitNotesAndPitchCurve result=" + juce::String(result ? "true" : "false"));
-    return result;
-}
-
-bool OpenTuneAudioProcessor::enqueueMaterializationPartialRenderById(uint64_t materializationId,
-                                                        double relStartSeconds,
-                                                        double relEndSeconds)
-{
-    AppLogger::log("AutoTune: enqueueMaterializationPartialRender matId=" + juce::String(static_cast<juce::int64>(materializationId))
-        + " range=[" + juce::String(relStartSeconds, 3) + "s," + juce::String(relEndSeconds, 3) + "s]");
-
-    if (materializationId == 0 || relEndSeconds <= relStartSeconds)
-        return false;
-
-    // Route to the correct store (DC-owned vs processor-local)
-    MaterializationStore* store = nullptr;
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController())
-        store = materializationStore_.get();
-#endif
-    if (store == nullptr)
-        store = materializationStore_.get();
-
-    int hopSize = 512;
-    if (vocoderDomain_) {
-        const int currentHopSize = vocoderDomain_->getVocoderHopSize();
-        if (currentHopSize > 0)
-            hopSize = currentHopSize;
-    }
-
-    return store->enqueuePartialRender(materializationId, relStartSeconds, relEndSeconds, hopSize);
-}
-
-// ── Phase 4.3: ContentKey-based mutation and snapshot APIs ─────────────────
-
-std::shared_ptr<const EditableContentSnapshot>
-OpenTuneAudioProcessor::getContentSnapshot(ContentKey key) const
-{
-    switch (key.domainKind) {
-        case DomainKind::StandaloneClip: {
-            auto* clip = standaloneContentRepository_
-                ? standaloneContentRepository_->findClip(key) : nullptr;
-            return clip ? clip->snapshotContent() : nullptr;
-        }
-#if JucePlugin_Enable_ARA
-        case DomainKind::ARAAudioModification: {
-            auto* dc = getDocumentController();
-            auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
-            return mod ? mod->snapshotContent() : nullptr;
-        }
-#else
-        case DomainKind::ARAAudioModification:
-            return nullptr;
-#endif
-        case DomainKind::RegularVST3Capture: {
-            auto* session = getCaptureSession();
-            auto* seg = session ? session->findSegmentByContentKey(key) : nullptr;
-            return (seg && seg->content) ? seg->content->snapshotContent() : nullptr;
-        }
-    }
-    return nullptr;
-}
-
-void OpenTuneAudioProcessor::invalidateRenderFor(ContentKey key)
-{
-    contentRenderService_->removeRenderCache(key);
-    contentRenderService_->getTimeStretchCache().invalidate(key);
 }
 
 void OpenTuneAudioProcessor::enqueueContentPartialRender(ContentKey key,
@@ -6024,7 +4624,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
 }
 
 // ============================================================================
-// 分块渲染工作线程 (moved to MaterializationStore::renderWorkerLoop)
+// 分块渲染工作线程 (moved to CRS RenderWorker)
 // processChunkRenderJob is called by the CRS worker via ExecutionLease.
 // ============================================================================
 
@@ -6061,8 +4661,8 @@ void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
                 workerHopSize = currentHopSize;
         }
 
-        MaterializationSampleRange materializationRange{0, audioNumSamples};
-        if (freezeRenderBoundaries(materializationRange,
+        ContentSampleRange contentRange{0, audioNumSamples};
+        if (freezeRenderBoundaries(contentRange,
                                    wj.coreJob.startSample,
                                    wj.coreJob.endSampleExclusive,
                                    workerHopSize,
@@ -6188,7 +4788,7 @@ void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
 
                 const uint64_t objectId = wj.coreJob.contentKey.objectId;
                 if (objectId != 0) {
-                    contentRenderService_->getTimeStretchCache().invalidate(ContentKey{DomainKind::StandaloneClip, objectId, 0});
+                    contentRenderService_->getTimeStretchCache().invalidate(wj.coreJob.contentKey);
                     // Stage 2 rebuild now routed through CRS
                 }
 
@@ -6255,12 +4855,13 @@ void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
 
     auto renderCache = wj.coreJob.renderCache;
     auto targetRevision = wj.coreJob.targetRevision;
-    const uint64_t chunkObjId = wj.coreJob.contentKey.objectId;
+    const ContentKey captureContentKey = wj.coreJob.contentKey;
+    const uint64_t chunkObjId = captureContentKey.objectId;
     double jobStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
-                                                               TimeCoordinate::kRenderSampleRate);
+                                                                TimeCoordinate::kRenderSampleRate);
     const FrozenRenderBoundaries frozenBoundaries = boundaries;
 
-    vocoderJob.onComplete = [this, renderCache, targetRevision, chunkObjId, jobStartSeconds, frozenBoundaries](bool success, const juce::String& error, const std::vector<float>& audio) {
+    vocoderJob.onComplete = [this, renderCache, targetRevision, captureContentKey, chunkObjId, jobStartSeconds, frozenBoundaries](bool success, const juce::String& error, const std::vector<float>& audio) {
         const auto& boundaries = frozenBoundaries;
 
         if (success) {
@@ -6286,13 +4887,12 @@ void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
             renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::Succeeded);
 
             if (chunkObjId != 0) {
-                contentRenderService_->getTimeStretchCache().invalidate(ContentKey{DomainKind::StandaloneClip, chunkObjId, 0});
-                if (materializationStore_ != nullptr) {
-                    const auto pitchRev = materializationStore_->getPitchRevision(chunkObjId);
-                    const auto pitchShiftRev = materializationStore_->getPitchShiftRevision(chunkObjId);
-                    const auto tgRev = materializationStore_->getTimeGridRevision(chunkObjId);
-                    requestStage2Rebuild(ContentKey{DomainKind::StandaloneClip, chunkObjId, 0},
-                                         pitchRev, pitchShiftRev, tgRev);
+                contentRenderService_->getTimeStretchCache().invalidate(captureContentKey);
+                if (const auto latestSnap = getContentSnapshot(captureContentKey)) {
+                    requestStage2Rebuild(captureContentKey,
+                                         latestSnap->pitchRevision,
+                                         latestSnap->pitchShiftRevision,
+                                         latestSnap->timeGridRevision);
                 }
             }
         } else {
@@ -6340,7 +4940,7 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     // vocal-time-stretch §7 (Phase D MVP) �?TimeStretchCache fast-path
     //
     // When a non-identity TimeGrid is published AND the Stage 2 worker has
-    // populated the TimeStretchCache for this (materializationId, pitchRev,
+    // populated the TimeStretchCache for this (contentId, pitchRev,
     // timeGridRev), serve the audio directly from cache.  This bypasses the
     // dry-source resample + RenderCache piecewise-replace overlay path entirely.
     //
@@ -6397,7 +4997,7 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     // Write dry signal with linear interpolation (single pass, pointer-based).
     //
     // Per channel-layout-policy spec: srcChannels is guaranteed �?{1, 2} (enforced
-    // at `MaterializationStore::createMaterialization`). The `srcCh = ch % srcChannels`
+    // at `content creation`). The `srcCh = ch % srcChannels`
     // mapping below covers both layouts naturally:
     //   - srcChannels=1 (mono storage): every dest ch maps to src 0 �?broadcast.
     //   - srcChannels=2 (stereo storage): dest ch 0 �?src 0, ch 1 �?src 1 �?1:1 map.
@@ -6429,199 +5029,103 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
 }
 
 // ============================================================================
-// Clipboard �?materialization range copy for paste/duplicate
+// Clipboard �?content range copy for paste/duplicate
 // ============================================================================
 
-uint64_t OpenTuneAudioProcessor::copyMaterializationRange(uint64_t sourceMaterializationId,
+ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
                                                            double offsetSeconds,
                                                            double durationSeconds,
                                                            const juce::String& newName)
 {
     juce::ignoreUnused(newName);
-    if (materializationStore_ == nullptr || durationSeconds <= 0.0)
-        return 0;
+    if (!sourceContentKey.isValid() || durationSeconds <= 0.0) {
+        return ContentKey{};
+    }
 
-    MaterializationStore::MaterializationSnapshot sourceSnap;
-    if (!materializationStore_->getSnapshot(sourceMaterializationId, sourceSnap))
-        return 0;
-    if (!sourceSnap.audioBuffer || sourceSnap.audioBuffer->getNumSamples() == 0)
-        return 0;
+    const auto sourceSnap = getContentSnapshot(sourceContentKey);
+    if (!sourceSnap || sourceSnap->audioBuffer == nullptr || sourceSnap->audioBuffer->getNumSamples() == 0) {
+        return ContentKey{};
+    }
 
-    const int64_t totalSamples = sourceSnap.audioBuffer->getNumSamples();
-    constexpr double sr = 44100.0;
-    const int64_t offsetSamples = static_cast<int64_t>(offsetSeconds * sr);
-    const int64_t durSamples = static_cast<int64_t>(durationSeconds * sr);
+    const int64_t totalSamples = sourceSnap->audioBuffer->getNumSamples();
+    const double sampleRate = sourceSnap->audioSampleRate > 0.0 ? sourceSnap->audioSampleRate : TimeCoordinate::kRenderSampleRate;
+    const int64_t offsetSamples = TimeCoordinate::secondsToSamples(offsetSeconds, sampleRate);
+    const int64_t durSamples = TimeCoordinate::secondsToSamples(durationSeconds, sampleRate);
+    if (offsetSamples < 0 || durSamples <= 0 || offsetSamples + durSamples > totalSamples) {
+        return ContentKey{};
+    }
 
-    if (offsetSamples < 0 || durSamples <= 0 || offsetSamples + durSamples > totalSamples)
-        return 0;
-
-    // Slice audio buffer
-    auto newBuffer = std::make_shared<juce::AudioBuffer<float>>(
-        sourceSnap.audioBuffer->getNumChannels(),
-        static_cast<int>(durSamples));
-    for (int ch = 0; ch < sourceSnap.audioBuffer->getNumChannels(); ++ch)
-        newBuffer->copyFrom(ch, 0, *sourceSnap.audioBuffer, ch,
-                           static_cast<int>(offsetSamples), static_cast<int>(durSamples));
-
-    // Build request
-    MaterializationStore::CreateMaterializationRequest req;
-    req.sourceId = sourceSnap.sourceId;
-    req.audioBuffer = newBuffer;
-    req.renderCache = std::make_shared<RenderCache>();
-    req.sourceWindow = SourceWindow{
-        sourceSnap.sourceWindow.sourceId,
-        sourceSnap.sourceWindow.sourceStartSeconds + offsetSeconds,
-        sourceSnap.sourceWindow.sourceStartSeconds + offsetSeconds + durationSeconds
+    ContentPayloadState payload;
+    payload.sourceWindow = SourceWindow{
+        sourceSnap->sourceWindow.sourceId,
+        juce::String(),
+        sourceSnap->sourceWindow.sourceStartSeconds + offsetSeconds,
+        sourceSnap->sourceWindow.sourceStartSeconds + offsetSeconds + durationSeconds
     };
-    req.originalF0State = sourceSnap.originalF0State;
-    req.detectedKey = sourceSnap.detectedKey;
-    req.lineageParentMaterializationId = sourceMaterializationId;
+    payload.audioBuffer = sliceAudioBuffer(sourceSnap->audioBuffer,
+                                           offsetSamples,
+                                           offsetSamples + durSamples);
+    payload.sampleRate = sampleRate;
+    payload.pitchCurve = slicePitchCurveToLocalRange(sourceSnap->pitchCurve,
+                                                     offsetSeconds,
+                                                     offsetSeconds + durationSeconds);
+    payload.originalF0State = sourceSnap->originalF0State;
+    payload.detectedKey = sourceSnap->detectedKey;
+    payload.notes = sliceNotesToLocalRange(sourceSnap->notes,
+                                           offsetSeconds,
+                                           offsetSeconds + durationSeconds);
+    payload.correctedSegments = correctedSegmentsFromCurve(payload.pitchCurve);
+    payload.silentGaps = sliceSilentGaps(sourceSnap->silentGaps,
+                                         offsetSamples,
+                                         offsetSamples + durSamples);
+    payload.pitchShiftSettings = sourceSnap->pitchShiftSettings;
 
-    // Copy pitch curve range (slice originalF0/originalEnergy by frame domain)
-    if (sourceSnap.pitchCurve && sourceSnap.pitchCurve->getSnapshot() != nullptr
-        && !sourceSnap.pitchCurve->isEmpty())
-    {
-        auto snap = sourceSnap.pitchCurve->getSnapshot();
-        const double frameRate = snap->getSampleRate() / snap->getHopSize();
-        const int startFrame = static_cast<int>(std::round(offsetSeconds * frameRate));
-        const int endFrame   = static_cast<int>(std::round((offsetSeconds + durationSeconds) * frameRate));
-        const int numFrames  = endFrame - startFrame;
-
-        if (startFrame >= 0 && endFrame <= static_cast<int>(snap->size()) && numFrames > 0)
-        {
-            const auto& origF0 = snap->getOriginalF0();
-            const auto& origEnergy = snap->getOriginalEnergy();
-
-            std::vector<float> slicedF0(origF0.begin() + startFrame, origF0.begin() + endFrame);
-
-            std::vector<float> slicedEnergy;
-            if (!origEnergy.empty()
-                && static_cast<size_t>(endFrame) <= origEnergy.size())
-            {
-                slicedEnergy.assign(origEnergy.begin() + startFrame,
-                                    origEnergy.begin() + endFrame);
-            }
-
-            auto slicedCurve = std::make_shared<PitchCurve>();
-            slicedCurve->setHopSize(snap->getHopSize());
-            slicedCurve->setSampleRate(snap->getSampleRate());
-            slicedCurve->setOriginalF0(slicedF0);
-            if (!slicedEnergy.empty())
-                slicedCurve->setOriginalEnergy(slicedEnergy);
-
-            req.pitchCurve = slicedCurve;
-        }
-    }
-
-    // Copy notes shifted by offsetSeconds
-    if (!sourceSnap.notes.empty())
-    {
-        req.notes.reserve(sourceSnap.notes.size());
-        for (auto note : sourceSnap.notes)
-        {
-            if (note.endTime <= offsetSeconds || note.startTime >= offsetSeconds + durationSeconds)
-                continue;
-
-            note.startTime = std::max(0.0, note.startTime - offsetSeconds);
-            note.endTime = std::min(durationSeconds, note.endTime - offsetSeconds);
-            if (note.endTime > note.startTime)
-                req.notes.push_back(note);
-        }
-    }
-
-    // Copy silent gaps shifted by offsetSamples
-    if (!sourceSnap.silentGaps.empty())
-    {
-        req.silentGaps.reserve(sourceSnap.silentGaps.size());
-        for (auto gap : sourceSnap.silentGaps)
-        {
-            if (gap.endSampleExclusive <= offsetSamples
-                || gap.startSample >= offsetSamples + durSamples)
-                continue;
-
-            gap.startSample = std::max<int64_t>(0, gap.startSample - offsetSamples);
-            gap.endSampleExclusive = std::min<int64_t>(durSamples,
-                                                        gap.endSampleExclusive - offsetSamples);
-            if (gap.endSampleExclusive > gap.startSample)
-                req.silentGaps.push_back(gap);
-        }
-    }
-
-    // Copy corrected segments (pitch correction data)
-    if (sourceSnap.pitchCurve)
-    {
-        auto sourceSnapCurve = sourceSnap.pitchCurve->getSnapshot();
-        if (sourceSnapCurve && !sourceSnapCurve->getCorrectedSegments().empty())
-        {
-            std::vector<CorrectedSegment> segments;
-            segments.reserve(sourceSnapCurve->getCorrectedSegments().size());
-            for (auto seg : sourceSnapCurve->getCorrectedSegments())
-            {
-                if (seg.endFrame <= offsetSamples || seg.startFrame >= offsetSamples + durSamples)
-                    continue;
-                seg.startFrame = static_cast<int>(std::max<int64_t>(0, seg.startFrame - offsetSamples));
-                seg.endFrame   = static_cast<int>(std::min<int64_t>(durSamples, seg.endFrame - offsetSamples));
-                if (seg.endFrame > seg.startFrame)
-                    segments.push_back(std::move(seg));
-            }
-            if (!segments.empty() && req.pitchCurve)
-                req.pitchCurve->replaceCorrectedSegments(segments);
-        }
-    }
-
-    // Copy time grid (v7 vocal-time-stretch data) �?offset handles to new origin
-    if (sourceSnap.timeGrid && !sourceSnap.timeGrid->empty())
-    {
-        const auto& srcHandles = sourceSnap.timeGrid->handles();
+    if (sourceSnap->timeGrid && !sourceSnap->timeGrid->empty()) {
+        const auto& srcHandles = sourceSnap->timeGrid->handles();
         std::vector<TimeHandle> newHandles;
         newHandles.reserve(srcHandles.size());
-        for (const auto& h : srcHandles)
-        {
-            TimeHandle nh = h;
-            nh.source_seconds -= offsetSeconds;
-            nh.output_seconds -= offsetSeconds;
-            if (nh.source_seconds >= 0.0 && nh.source_seconds <= durationSeconds)
-                newHandles.push_back(std::move(nh));
+        for (const auto& handle : srcHandles) {
+            TimeHandle shifted = handle;
+            shifted.source_seconds -= offsetSeconds;
+            shifted.output_seconds -= offsetSeconds;
+            if (shifted.source_seconds >= 0.0 && shifted.source_seconds <= durationSeconds) {
+                newHandles.push_back(std::move(shifted));
+            }
         }
-        if (!newHandles.empty())
-            req.timeGrid = TimeGridSnapshot::makeFromHandles(std::move(newHandles),
-                                                              sourceSnap.timeGrid->revision());
+        if (!newHandles.empty()) {
+            payload.timeGrid = TimeGridSnapshot::makeFromHandles(std::move(newHandles),
+                                                                 sourceSnap->timeGrid->revision());
+        }
     }
 
-    return materializationStore_->createMaterialization(std::move(req));
+    const ContentKey newKey = createStandaloneClipOwner(*standaloneContentRepository_,
+                                                        *contentRenderService_,
+                                                        std::move(payload));
+    return newKey;
 }
 
-uint64_t OpenTuneAudioProcessor::cloneMaterialization(uint64_t sourceMaterializationId,
+ContentKey OpenTuneAudioProcessor::cloneContent(ContentKey sourceContentKey,
                                                       const juce::String& newName)
 {
     juce::ignoreUnused(newName);
-    if (materializationStore_ == nullptr) {
-        return 0;
+    if (!sourceContentKey.isValid()) {
+        return ContentKey{};
     }
 
-    MaterializationStore::MaterializationSnapshot sourceSnap;
-    if (!materializationStore_->getSnapshot(sourceMaterializationId, sourceSnap)) {
-        return 0;
+    const auto sourceSnap = getContentSnapshot(sourceContentKey);
+    if (!sourceSnap || sourceSnap->audioBuffer == nullptr || sourceSnap->audioBuffer->getNumSamples() == 0) {
+        return ContentKey{};
     }
 
-    if (sourceSnap.audioBuffer == nullptr || sourceSnap.audioBuffer->getNumSamples() == 0) {
-        return 0;
-    }
+    ContentPayloadState payload = payloadFromSnapshot(*sourceSnap);
+    payload.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(*sourceSnap->audioBuffer);
+    payload.pitchCurve = sourceSnap->pitchCurve != nullptr ? sourceSnap->pitchCurve->clone() : nullptr;
+    payload.correctedSegments = correctedSegmentsFromCurve(payload.pitchCurve);
 
-    MaterializationStore::CreateMaterializationRequest request;
-    request.sourceId = sourceSnap.sourceId;
-    request.lineageParentMaterializationId = sourceMaterializationId;
-    request.sourceWindow = sourceSnap.sourceWindow;
-    request.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(*sourceSnap.audioBuffer);
-    request.pitchCurve = sourceSnap.pitchCurve != nullptr ? sourceSnap.pitchCurve->clone() : nullptr;
-    request.originalF0State = sourceSnap.originalF0State;
-    request.detectedKey = sourceSnap.detectedKey;
-    request.renderCache = std::make_shared<RenderCache>();
-    request.notes = sourceSnap.notes;
-    request.silentGaps = sourceSnap.silentGaps;
-    request.renderRevision = sourceSnap.renderRevision;
-    request.timeGrid = sourceSnap.timeGrid;
-    return materializationStore_->createMaterialization(std::move(request));
+    const ContentKey newKey = createStandaloneClipOwner(*standaloneContentRepository_,
+                                                        *contentRenderService_,
+                                                        std::move(payload));
+    return newKey;
 }
 
 void OpenTuneAudioProcessor::consumeAudioThreadLogs()

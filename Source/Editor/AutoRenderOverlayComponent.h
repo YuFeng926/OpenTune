@@ -5,6 +5,7 @@
 #include <cmath>
 #include "Inference/RenderCache.h"
 #include "Standalone/UI/UIColors.h"
+#include "Content/ContentKey.h"
 
 namespace OpenTune {
 
@@ -17,7 +18,7 @@ enum class RenderStatus {
 struct RenderStatusSnapshot {
     RenderStatus status{RenderStatus::Idle};
     RenderCache::ChunkStats chunkStats;
-    uint64_t materializationId{0};
+    ContentKey contentKey;
     uint64_t placementId{0};
     bool hasContent{false};
 };
@@ -46,14 +47,14 @@ inline RenderStatus evaluateRenderStatus(const RenderCache::StateSnapshot& cache
     return RenderStatus::Idle;
 }
 
-inline RenderStatusSnapshot makeRenderStatusSnapshot(uint64_t materializationId,
+inline RenderStatusSnapshot makeRenderStatusSnapshot(ContentKey contentKey,
                                                      uint64_t placementId,
                                                      const RenderCache::StateSnapshot& cacheSnapshot)
 {
     RenderStatusSnapshot snapshot;
     snapshot.status = evaluateRenderStatus(cacheSnapshot);
     snapshot.chunkStats = cacheSnapshot.chunkStats;
-    snapshot.materializationId = materializationId;
+    snapshot.contentKey = contentKey;
     snapshot.placementId = placementId;
     snapshot.hasContent = cacheSnapshot.hasNonBlankChunks;
     return snapshot;
@@ -67,7 +68,7 @@ inline AutoRenderOverlayDecision evaluateAutoRenderOverlay(const RenderStatusSna
 
     if (hasAutoTargetClip)
     {
-        if (snapshot.materializationId == 0)
+        if (!snapshot.contentKey.isValid())
         {
             decision.shouldClearTargetClip = true;
             return decision;

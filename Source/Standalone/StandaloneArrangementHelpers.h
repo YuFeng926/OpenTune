@@ -69,14 +69,14 @@ inline void setStandaloneSelectedPlacementIndex(OpenTuneAudioProcessor& processo
     }
 }
 
-inline uint64_t getStandaloneMaterializationId(OpenTuneAudioProcessor& processor,
+inline ContentKey getStandaloneContentKey(OpenTuneAudioProcessor& processor,
                                                int trackId,
                                                int placementIndex)
 {
     StandaloneArrangement::Placement placement;
     return getStandalonePlacementByIndex(processor, trackId, placementIndex, placement)
-        ? placement.contentKey.objectId
-        : 0;
+        ? placement.contentKey
+        : ContentKey{};
 }
 
 inline bool moveStandalonePlacement(OpenTuneAudioProcessor& processor,

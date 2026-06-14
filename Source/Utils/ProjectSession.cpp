@@ -112,8 +112,8 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         snap.sources.push_back(entry);
     }
 
-    // Clips (from StandaloneContentRepository) — 收集所有 placement 引用的 clip
-    std::set<StandaloneClipId> activeClipIds;
+    // Clips (from StandaloneContentRepository) — collect all ContentKeys referenced by placements
+    std::set<ContentKey> activeContentKeys;
     int numTracks = arrangement->getNumTracks();
     for (int trackId = 0; trackId < numTracks; ++trackId) {
         const int numPlacements = arrangement->getNumPlacements(trackId);
@@ -122,22 +122,22 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
             if (!arrangement->getPlacementByIndex(trackId, pi, placement)) { continue; }
             if (placement.isRetired) { continue; }
             if (placement.contentKey.domainKind != DomainKind::StandaloneClip) { continue; }
-            activeClipIds.insert(placement.contentKey.objectId);
+            activeContentKeys.insert(placement.contentKey);
         }
     }
 
-    for (auto clipId : activeClipIds) {
-        auto* clip = contentRepo->findClip(clipId);
+    for (const auto& key : activeContentKeys) {
+        auto* clip = contentRepo->findClip(key);
         if (!clip) { continue; }
 
         const auto& payload = clip->payload();
 
-        ProjectMaterializationEntry entry;
-        entry.materializationId = clipId;
+        ProjectContentEntry entry;
+        entry.contentKey = key;
         entry.sourceId = payload.sourceWindow.sourceId;
         entry.retired = false;
         entry.renderRevision = payload.contentRevision;
-        entry.lineageParentMaterializationId = 0;
+        entry.lineageParentContentKey = ContentKey{}; // Invalid key for no parent
         entry.sourceWindow = payload.sourceWindow;
         entry.detectedKey = payload.detectedKey;
         entry.notes = payload.notes;
@@ -147,7 +147,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
             auto pcSnap = payload.pitchCurve->getSnapshot();
             const auto& segments = pcSnap->getCorrectedSegments();
             for (const auto& seg : segments) {
-                ProjectMaterializationEntry::SegmentEntry segEntry;
+                ProjectContentEntry::SegmentEntry segEntry;
                 segEntry.startFrame = seg.startFrame;
                 segEntry.endFrame = seg.endFrame;
                 segEntry.source = static_cast<uint8_t>(seg.source);
@@ -164,7 +164,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         if (payload.timeGrid) {
             entry.timeGrid.revision = payload.timeGridRevision;
             for (const auto& handle : payload.timeGrid->handles()) {
-                ProjectMaterializationEntry::TimeGridEntry::HandleEntry he;
+                ProjectContentEntry::TimeGridEntry::HandleEntry he;
                 he.id = static_cast<int>(handle.id);
                 he.kind = static_cast<uint8_t>(handle.kind);
                 he.sourceSeconds = handle.source_seconds;
@@ -184,7 +184,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
 
         // Silent gaps
         for (const auto& gap : payload.silentGaps) {
-            ProjectMaterializationEntry::SilentGapEntry gapEntry;
+            ProjectContentEntry::SilentGapEntry gapEntry;
             gapEntry.startSample = gap.startSample;
             gapEntry.endSampleExclusive = gap.endSampleExclusive;
             gapEntry.minLevel_dB = gap.minLevel_dB;
@@ -200,7 +200,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         entry.referenceFeatures.errorMessage = payload.referenceFeatures.errorMessage;
         entry.referenceFeatures.pitchNotes = payload.referenceFeatures.pitch.notes;
         for (const auto& anchor : payload.referenceFeatures.timing.anchors) {
-            ProjectMaterializationEntry::ReferenceFeatureEntry::TimingAnchorEntry anchorEntry;
+            ProjectContentEntry::ReferenceFeatureEntry::TimingAnchorEntry anchorEntry;
             anchorEntry.anchorId = anchor.anchorId;
             anchorEntry.sourceSeconds = anchor.sourceSeconds;
             anchorEntry.strength = anchor.strength;
@@ -209,7 +209,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
             entry.referenceFeatures.timingAnchors.push_back(anchorEntry);
         }
 
-        snap.materializations.push_back(entry);
+        snap.contents.push_back(entry);
     }
 
     // Tracks and Placements (from StandaloneArrangement)
@@ -229,7 +229,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
 
             ProjectPlacementEntry pEntry;
             pEntry.placementId = placement.placementId;
-            pEntry.materializationId = placement.contentKey.objectId;
+            pEntry.contentKey = placement.contentKey;
             pEntry.mappingRevision = placement.mappingRevision;
             pEntry.timelineStartSeconds = placement.timelineStartSeconds;
             pEntry.timelineDurationSeconds = placement.durationSeconds;
@@ -353,20 +353,20 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
     }
 
     // 2. 重建 Clips (from StandaloneContentRepository)
-    for (const auto& matEntry : snapshot.materializations) {
+    for (const auto& contentEntry : snapshot.contents) {
         // Get source buffer for this clip
         std::shared_ptr<const juce::AudioBuffer<float>> sourceBuf;
         double sourceSampleRate = 44100.0;
 
-        if (matEntry.sourceId != 0) {
-            if (!sourceStore->getAudioBuffer(matEntry.sourceId, sourceBuf)) {
-                AppLogger::log("ProjectSession: Source " + juce::String(matEntry.sourceId)
-                    + " not found for clip " + juce::String(matEntry.materializationId) + ", skipping");
+        if (contentEntry.sourceId != 0) {
+            if (!sourceStore->getAudioBuffer(contentEntry.sourceId, sourceBuf)) {
+                AppLogger::log("ProjectSession: Source " + juce::String(contentEntry.sourceId)
+                    + " not found for clip " + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
                 continue;
             }
             // 从 snapshot 中获取 source 的 sampleRate
             for (const auto& srcEntry : snapshot.sources) {
-                if (srcEntry.sourceId == matEntry.sourceId) {
+                if (srcEntry.sourceId == contentEntry.sourceId) {
                     sourceSampleRate = srcEntry.sampleRate;
                     break;
                 }
@@ -374,9 +374,9 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         }
 
         // 创建 clip，强制使用原 ID
-        ContentKey clipKey = contentRepo->createClip(matEntry.materializationId);
+        ContentKey clipKey = contentRepo->createClip(contentEntry.contentKey.objectId);
         if (!clipKey.isValid()) {
-            AppLogger::log("ProjectSession: Failed to create clip " + juce::String(matEntry.materializationId));
+            AppLogger::log("ProjectSession: Failed to create clip " + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)));
             continue;
         }
 
@@ -389,14 +389,14 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         }
 
         // 应用 notes
-        clip->applyNotes(matEntry.notes);
+        clip->applyNotes(contentEntry.notes);
 
         // 应用 detectedKey
-        clip->applyDetectedKey(matEntry.detectedKey);
+        clip->applyDetectedKey(contentEntry.detectedKey);
 
         // 恢复 pitch curve 和 corrected segments
         auto pitchCurve = std::make_shared<PitchCurve>();
-        for (const auto& seg : matEntry.correctedSegments) {
+        for (const auto& seg : contentEntry.correctedSegments) {
             if (!seg.f0Data.empty()) {
                 pitchCurve->setManualCorrectionRange(
                     seg.startFrame, seg.endFrame, seg.f0Data,
@@ -406,9 +406,9 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         clip->applyPitchCurve(pitchCurve);
 
         // 恢复 TimeGrid
-        if (!matEntry.timeGrid.handles.empty()) {
+        if (!contentEntry.timeGrid.handles.empty()) {
             std::vector<TimeHandle> handles;
-            for (const auto& he : matEntry.timeGrid.handles) {
+            for (const auto& he : contentEntry.timeGrid.handles) {
                 TimeHandle th;
                 th.id = static_cast<uint64_t>(he.id);
                 th.kind = static_cast<HandleKind>(he.kind);
@@ -418,23 +418,23 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
                 handles.push_back(th);
             }
             auto tgSnapshot = TimeGridSnapshot::makeFromHandles(
-                std::move(handles), matEntry.timeGrid.revision);
+                std::move(handles), contentEntry.timeGrid.revision);
             clip->applyTimeGrid(tgSnapshot);
         }
 
         // 恢复 Original F0 state
-        clip->applyOriginalF0State(static_cast<OriginalF0State>(matEntry.originalF0State));
+        clip->applyOriginalF0State(static_cast<OriginalF0State>(contentEntry.originalF0State));
 
         // 恢复 Pitch shift settings
         PitchShiftSettings pitchShift;
-        pitchShift.semitone = matEntry.pitchShiftSettings.semitone;
-        pitchShift.cents = matEntry.pitchShiftSettings.cents;
+        pitchShift.semitone = contentEntry.pitchShiftSettings.semitone;
+        pitchShift.cents = contentEntry.pitchShiftSettings.cents;
         clip->applyPitchShiftSettings(pitchShift);
 
         // 恢复 Silent gaps（直接写入 payload，因为 silentGaps 是分析结果）
         auto& payloadRef = clip->payload();
         payloadRef.silentGaps.clear();
-        for (const auto& gapEntry : matEntry.silentGaps) {
+        for (const auto& gapEntry : contentEntry.silentGaps) {
             SilentGap gap;
             gap.startSample = gapEntry.startSample;
             gap.endSampleExclusive = gapEntry.endSampleExclusive;
@@ -444,14 +444,14 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
 
         // 恢复 Reference features
         ReferenceFeatureSet refFeatures;
-        refFeatures.analysisRevision = matEntry.referenceFeatures.analysisRevision;
-        refFeatures.status = static_cast<ReferenceFeatureStatus>(matEntry.referenceFeatures.status);
-        refFeatures.producer = static_cast<ReferenceFeatureProducer>(matEntry.referenceFeatures.producer);
-        refFeatures.inputFingerprint = matEntry.referenceFeatures.inputFingerprint;
-        refFeatures.sourceDurationSeconds = matEntry.referenceFeatures.sourceDurationSeconds;
-        refFeatures.errorMessage = matEntry.referenceFeatures.errorMessage;
-        refFeatures.pitch.notes = matEntry.referenceFeatures.pitchNotes;
-        for (const auto& anchorEntry : matEntry.referenceFeatures.timingAnchors) {
+        refFeatures.analysisRevision = contentEntry.referenceFeatures.analysisRevision;
+        refFeatures.status = static_cast<ReferenceFeatureStatus>(contentEntry.referenceFeatures.status);
+        refFeatures.producer = static_cast<ReferenceFeatureProducer>(contentEntry.referenceFeatures.producer);
+        refFeatures.inputFingerprint = contentEntry.referenceFeatures.inputFingerprint;
+        refFeatures.sourceDurationSeconds = contentEntry.referenceFeatures.sourceDurationSeconds;
+        refFeatures.errorMessage = contentEntry.referenceFeatures.errorMessage;
+        refFeatures.pitch.notes = contentEntry.referenceFeatures.pitchNotes;
+        for (const auto& anchorEntry : contentEntry.referenceFeatures.timingAnchors) {
             ReferenceTimingAnchor anchor;
             anchor.anchorId = anchorEntry.anchorId;
             anchor.sourceSeconds = anchorEntry.sourceSeconds;
@@ -473,16 +473,16 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
 
         for (const auto& pEntry : trackEntry.placements) {
             // Verify clip exists
-            if (!contentRepo->findClip(pEntry.materializationId)) {
+            if (!contentRepo->findClip(pEntry.contentKey)) {
                 AppLogger::log("ProjectSession: Clip "
-                    + juce::String(pEntry.materializationId)
+                    + juce::String(static_cast<juce::int64>(pEntry.contentKey.objectId))
                     + " not found for placement " + juce::String(pEntry.placementId) + ", skipping");
                 continue;
             }
 
             StandaloneArrangement::Placement placement;
             placement.placementId = pEntry.placementId;
-            placement.contentKey = ContentKey{DomainKind::StandaloneClip, pEntry.materializationId, 0};
+            placement.contentKey = pEntry.contentKey;
             placement.mappingRevision = pEntry.mappingRevision;
             placement.timelineStartSeconds = pEntry.timelineStartSeconds;
             placement.durationSeconds = pEntry.timelineDurationSeconds;

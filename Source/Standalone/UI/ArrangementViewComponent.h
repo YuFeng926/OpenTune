@@ -155,7 +155,6 @@ public:
     void setExperimentalReferenceControlsEnabled(bool enabled);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& settings) { zoomSensitivity_ = settings; }
     void setShortcutSettings(const KeyShortcutConfig::KeyShortcutSettings& settings) { shortcutSettings_ = settings; }
-    bool isWaveformCacheCompleteForMaterialization(int trackId, uint64_t materializationId) const;
 
     // 缩放状态管理
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }

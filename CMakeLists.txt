@@ -498,8 +498,6 @@ target_sources(OpenTune
         Source/PluginProcessor.h
         Source/SourceStore.cpp
         Source/SourceStore.h
-        Source/MaterializationStore.cpp
-        Source/MaterializationStore.h
         Source/StandaloneArrangement.cpp
         Source/StandaloneArrangement.h
 

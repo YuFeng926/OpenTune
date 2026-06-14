@@ -179,9 +179,9 @@ private:
     static int scaleToUiScaleType(Scale scale);
     static Scale uiScaleTypeToScale(int scaleType);
     static DetectedKey makeDetectedKeyFromUi(int rootNote, int scaleType, float confidence = 1.0f);
-    DetectedKey resolveScaleForPlacementMaterialization(int trackId, int placementIndex, juce::String* sourceOut = nullptr) const;
+    DetectedKey resolveScaleForPlacementContent(int trackId, int placementIndex, juce::String* sourceOut = nullptr) const;
     void applyScaleToUi(int rootNote, int scaleType);
-    void applyResolvedScaleForPlacementMaterialization(int trackId, int placementIndex);
+    void applyResolvedScaleForPlacementContent(int trackId, int placementIndex);
     void syncPianoRollFromPlacementSelection(int trackId, int placementIndex);
     void applyPlacementSelectionContext(int trackId, uint64_t placementId);
 
@@ -272,13 +272,13 @@ private:
     Language appliedLanguage_ = Language::Chinese;
     bool inferenceActive_ = false;
     int inferenceActiveTickCounter_ = 0;
-    uint64_t lastPianoRollMaterializationId_ = 0;
+    ContentKey lastPianoRollContentKey_;
     int lastPianoRollSampleRate_ = 0;
     std::shared_ptr<PitchCurve> lastPianoRollCurve_;
     std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
     // Notes-revision tracking so the timer can pull fresh notes when an
-    // async note generator (GAME) commits to the active materialization
-    // without changing matId / curve / buffer.
+    // async note generator (GAME) commits to the active content
+    // without changing contentId / curve / buffer.
     uint64_t lastPianoRollNotesRevision_ = 0;
     double lastSyncedBpm_ = 0.0;
     int lastSyncedTimeSigNum_ = 0;
@@ -297,7 +297,7 @@ private:
     
     // RMVPE OriginalF0 阻塞事务锁：提取开始后 latch，直到"提取成功且当前钢琴卷帘可见"才释放
     bool rmvpeOverlayLatched_ = false;
-    uint64_t rmvpeOverlayTargetMaterializationId_ = 0;
+    ContentKey rmvpeOverlayTargetContentKey_;
 
     // Export worker thread management
     std::thread exportWorker_;

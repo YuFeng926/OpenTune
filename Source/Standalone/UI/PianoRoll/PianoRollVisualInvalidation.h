@@ -14,7 +14,7 @@ enum class PianoRollVisualInvalidationReason : uint32_t
     Playhead = 1u << 3,
     Decoration = 1u << 4,
     // ⚡️ vocal-time-stretch §8.6 — TimeGrid revision change.
-    // Triggered when MaterializationStore publishes a new TimeGridSnapshot.
+    // Triggered when content owner publishes a new TimeGridSnapshot.
     // Maps to a full piano-roll repaint (handles span the whole timeline).
     TimeGrid = 1u << 5
 };

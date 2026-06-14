@@ -14,7 +14,7 @@ bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
 }
 
 namespace {
-    double mapPlaybackTimeToMaterializationTime(const OpenTunePlaybackRenderer::PlaybackRegionRenderItem& region,
+    double mapPlaybackTimeToContentTime(const OpenTunePlaybackRenderer::PlaybackRegionRenderItem& region,
                                                 double playbackTimeSeconds) noexcept
     {
         if (region.durationInPlaybackTime <= 0.0 || region.durationInModificationTime <= 0.0)
@@ -27,7 +27,7 @@ namespace {
         const double contentOffset = modificationTime - region.contentWindow.sourceStartSeconds;
 
         return juce::jlimit(0.0,
-                            juce::jmax(0.0, region.materializationDurationSeconds),
+                            juce::jmax(0.0, region.contentDurationSeconds),
                             contentOffset);
     }
 
@@ -68,42 +68,49 @@ OpenTunePlaybackRenderer::~OpenTunePlaybackRenderer()
 void OpenTunePlaybackRenderer::didAddPlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
 {
     auto* jucePlaybackRegion = toJucePlaybackRegion(playbackRegion);
+    auto plan = currentPlan_.load(std::memory_order_acquire);
+    auto playbackRegions = plan != nullptr ? plan->playbackRegions
+                                           : std::vector<juce::ARAPlaybackRegion*>{};
     if (jucePlaybackRegion != nullptr
-        && std::find(assignedPlaybackRegions_.begin(), assignedPlaybackRegions_.end(), jucePlaybackRegion)
-            == assignedPlaybackRegions_.end())
+        && std::find(playbackRegions.begin(), playbackRegions.end(), jucePlaybackRegion)
+            == playbackRegions.end())
     {
-        assignedPlaybackRegions_.push_back(jucePlaybackRegion);
+        playbackRegions.push_back(jucePlaybackRegion);
     }
 
-    refreshRenderPlanFromDocument();
+    publishRenderPlanFor(std::move(playbackRegions));
 }
 
 void OpenTunePlaybackRenderer::willRemovePlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
 {
     auto* jucePlaybackRegion = toJucePlaybackRegion(playbackRegion);
-    assignedPlaybackRegions_.erase(std::remove(assignedPlaybackRegions_.begin(),
-                                               assignedPlaybackRegions_.end(),
-                                               jucePlaybackRegion),
-                                   assignedPlaybackRegions_.end());
-    renderItems_.erase(std::remove_if(renderItems_.begin(), renderItems_.end(),
-                                      [jucePlaybackRegion](const PlaybackRegionRenderItem& item)
-                                      {
-                                          return item.playbackRegion == jucePlaybackRegion;
-                                      }),
-                       renderItems_.end());
+    auto plan = currentPlan_.load(std::memory_order_acquire);
+    auto playbackRegions = plan != nullptr ? plan->playbackRegions
+                                           : std::vector<juce::ARAPlaybackRegion*>{};
+    playbackRegions.erase(std::remove(playbackRegions.begin(),
+                                      playbackRegions.end(),
+                                      jucePlaybackRegion),
+                          playbackRegions.end());
+    publishRenderPlanFor(std::move(playbackRegions));
 }
 
 void OpenTunePlaybackRenderer::refreshRenderPlanFromDocument()
 {
-    if (documentController_ == nullptr)
-    {
-        renderItems_.clear();
-        return;
-    }
+    auto plan = currentPlan_.load(std::memory_order_acquire);
+    publishRenderPlanFor(plan != nullptr ? plan->playbackRegions
+                                         : std::vector<juce::ARAPlaybackRegion*>{});
+}
 
-    const auto projections = documentController_->getPlaybackRegionProjectionsFor(assignedPlaybackRegions_);
-    std::vector<PlaybackRegionRenderItem> nextItems;
-    nextItems.reserve(projections.size());
+std::shared_ptr<const OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRenderer::buildRenderPlan(
+    std::vector<juce::ARAPlaybackRegion*> playbackRegions) const
+{
+    auto nextPlan = std::make_shared<RenderPlan>();
+    nextPlan->playbackRegions = std::move(playbackRegions);
+    if (documentController_ == nullptr)
+        return nextPlan;
+
+    const auto projections = documentController_->getPlaybackRegionProjectionsFor(nextPlan->playbackRegions);
+    nextPlan->items.reserve(projections.size());
 
     for (const auto& projection : projections)
     {
@@ -118,11 +125,16 @@ void OpenTunePlaybackRenderer::refreshRenderPlanFromDocument()
         item.startInModificationTime = projection.startInModificationTime;
         item.durationInPlaybackTime = projection.durationInPlaybackTime;
         item.durationInModificationTime = projection.durationInModificationTime;
-        item.materializationDurationSeconds = projection.materializationDurationSeconds;
-        nextItems.push_back(item);
+        item.contentDurationSeconds = projection.contentDurationSeconds;
+        nextPlan->items.push_back(item);
     }
 
-    renderItems_ = std::move(nextItems);
+    return nextPlan;
+}
+
+void OpenTunePlaybackRenderer::publishRenderPlanFor(std::vector<juce::ARAPlaybackRegion*> playbackRegions)
+{
+    currentPlan_.store(buildRenderPlan(std::move(playbackRegions)), std::memory_order_release);
 }
 
 void OpenTunePlaybackRenderer::prepareToPlay(double sampleRate,
@@ -161,7 +173,8 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
 
     buffer.clear();
 
-    if (documentController_ == nullptr || renderItems_.empty())
+    const auto plan = currentPlan_.load(std::memory_order_acquire);
+    if (documentController_ == nullptr || plan == nullptr || plan->items.empty())
         return true;
 
     auto* crs = documentController_->getContentRenderService();
@@ -170,7 +183,7 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
 
     const double blockStartSeconds = positionInfo.getTimeInSeconds().orFallback(0.0);
 
-    for (const auto& region : renderItems_)
+    for (const auto& region : plan->items)
     {
         const auto overlap = computeRegionBlockRenderSpan(blockStartSeconds,
                                                            buffer.getNumSamples(),
@@ -184,7 +197,7 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
         if (!crs->getPlaybackReadSource(region.contentKey, readSource))
             continue;
 
-        const double readStartSeconds = mapPlaybackTimeToMaterializationTime(region,
+        const double readStartSeconds = mapPlaybackTimeToContentTime(region,
                                                                               overlap->overlapStartSeconds);
         const PlaybackReadRequest request(readSource,
                                            readStartSeconds,

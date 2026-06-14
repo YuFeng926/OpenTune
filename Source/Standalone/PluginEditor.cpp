@@ -1,4 +1,4 @@
-#include "PluginEditor.h"
+﻿#include "PluginEditor.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -26,7 +26,6 @@
 #include "Editor/PitchShiftDialogContent.h"
 #include "Editor/ConfirmDialogContent.h"
 #include "Utils/TimeCoordinate.h"
-#include "Content/DomainContentOwner.h"
 #include "Content/StandaloneClipContent.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "DSP/ReferenceFeatures.h"
@@ -60,14 +59,14 @@ juce::String buildRenderingOverlayTitle(int completedTasks, int totalTasks, floa
 }
 
 
-MaterializationTimelineProjection makePianoRollProjection(const StandaloneArrangement::Placement& placement,
+ContentTimelineProjection makePianoRollProjection(const StandaloneArrangement::Placement& placement,
                                                          OpenTuneAudioProcessor& processor)
 {
-    MaterializationTimelineProjection projection;
+    ContentTimelineProjection projection;
     projection.timelineStartSeconds = placement.timelineStartSeconds;
     projection.timelineDurationSeconds = placement.durationSeconds;
     auto snap = processor.getContentSnapshot(placement.contentKey);
-    projection.materializationDurationSeconds =
+    projection.contentDurationSeconds =
         snap ? snap->sourceWindow.durationSeconds() : placement.durationSeconds;
     return projection;
 }
@@ -188,7 +187,7 @@ DetectedKey OpenTuneAudioProcessorEditor::makeDetectedKeyFromUi(int rootNote, in
     return key;
 }
 
-DetectedKey OpenTuneAudioProcessorEditor::resolveScaleForPlacementMaterialization(int trackId,
+DetectedKey OpenTuneAudioProcessorEditor::resolveScaleForPlacementContent(int trackId,
                                                                                   int placementIndex,
                                                                                   juce::String* sourceOut) const
 {
@@ -205,13 +204,13 @@ DetectedKey OpenTuneAudioProcessorEditor::resolveScaleForPlacementMaterializatio
                             && placementIndex >= 0
                             && placementIndex < getStandalonePlacementCount(processorRef_, trackId));
 
-    const uint64_t materializationId = hasPlacement ? getStandaloneMaterializationId(processorRef_, trackId, placementIndex) : 0;
-    if (materializationId != 0) {
-        auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, materializationId, 0});
-        const DetectedKey materializationKey = snap ? snap->detectedKey : DetectedKey{};
-        if (materializationKey.confidence > 0.0f) {
-            if (sourceOut) *sourceOut = "materialization";
-            return materializationKey;
+    const ContentKey contentKey = hasPlacement ? getStandaloneContentKey(processorRef_, trackId, placementIndex) : ContentKey{};
+    if (contentKey.isValid()) {
+        auto snap = processorRef_.getContentSnapshot(contentKey);
+        const DetectedKey detectedKey = snap ? snap->detectedKey : DetectedKey{};
+        if (detectedKey.confidence > 0.0f) {
+            if (sourceOut) *sourceOut = "content";
+            return detectedKey;
         }
     }
 
@@ -233,22 +232,22 @@ void OpenTuneAudioProcessorEditor::applyScaleToUi(int rootNote, int scaleType)
     lastScaleType_ = clampedType;
 }
 
-void OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementMaterialization(int trackId, int placementIndex)
+void OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent(int trackId, int placementIndex)
 {
     juce::String source;
-    const DetectedKey key = resolveScaleForPlacementMaterialization(trackId, placementIndex, &source);
+    const DetectedKey key = resolveScaleForPlacementContent(trackId, placementIndex, &source);
     const int rootNote = static_cast<int>(key.root);
     const int scaleType = scaleToUiScaleType(key.scale);
     applyScaleToUi(rootNote, scaleType);
 
-    const uint64_t materializationId = (trackId >= 0 && placementIndex >= 0)
-        ? getStandaloneMaterializationId(processorRef_, trackId, placementIndex)
-        : 0;
-    juce::ignoreUnused(materializationId);
+    const ContentKey contentKey = (trackId >= 0 && placementIndex >= 0)
+        ? getStandaloneContentKey(processorRef_, trackId, placementIndex)
+        : ContentKey{};
+    juce::ignoreUnused(contentKey);
     DBG("ScaleSyncTrace: source=" + source
         + " trackId=" + juce::String(trackId)
         + " placementIndex=" + juce::String(placementIndex)
-        + " materializationId=" + juce::String(static_cast<juce::int64>(materializationId))
+        + " contentKey=" + juce::String(static_cast<juce::int64>(contentKey.objectId))
         + " root=" + juce::String(rootNote)
         + " scale=" + juce::String(scaleType));
 }
@@ -317,7 +316,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     LocalizationManager::getInstance().addListener(this);
 
     // Setup Transport Bar Menu Callbacks
-    // menuName 从运行时获取（语言切换后自动反映当前语言），与 getMenuForIndex 的索引匹配
+    // menuName 浠庤繍琛屾椂鑾峰彇锛堣瑷€鍒囨崲鍚庤嚜鍔ㄥ弽鏄犲綋鍓嶈瑷€锛夛紝涓?getMenuForIndex 鐨勭储寮曞尮閰?
     transportBar_.onFileMenuRequested = [this]() {
         auto menuNames = menuBar_.getMenuBarNames();
         juce::PopupMenu menu = menuBar_.getMenuForIndex(0, menuNames.isEmpty() ? juce::String() : menuNames[0]);
@@ -367,16 +366,16 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     transportBar_.setLoopEnabled(processorRef_.isLoopEnabled());
     transportBar_.setBpm(processorRef_.getBpm());
 
-    // Initialize Scale (materialization > recent > default)
+    // Initialize Scale (content > recent > default)
     {
         const int initTrack = getStandaloneActiveTrack(processorRef_);
         const int initPlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, initTrack);
-        applyResolvedScaleForPlacementMaterialization(initTrack, initPlacementIndex);
+        applyResolvedScaleForPlacementContent(initTrack, initPlacementIndex);
     }
 
     addAndMakeVisible(topBar_);
 
-    // 顶部条：侧边栏折叠开关
+    // 椤堕儴鏉★細渚ц竟鏍忔姌鍙犲紑鍏?
     topBar_.onToggleTrackPanel = [this]() {
         isTrackPanelVisible_ = !isTrackPanelVisible_;
         trackPanel_.setVisible(isTrackPanelVisible_);
@@ -397,9 +396,9 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     trackPanel_.addListener(this);
     trackPanel_.setActiveTrack(getStandaloneActiveTrack(processorRef_));
-    // 初始化轨道高度（与ArrangementView同步）
+    // 鍒濆鍖栬建閬撻珮搴︼紙涓嶢rrangementView鍚屾锛?
     trackPanel_.setTrackHeight(processorRef_.getTrackHeight());
-    // 初始化所有12条轨道的状态
+    // 鍒濆鍖栨墍鏈?2鏉¤建閬撶殑鐘舵€?
     for (int i = 0; i < MAX_TRACKS; ++i)
     {
         trackPanel_.setTrackMuted(i, getStandaloneTrackMuted(processorRef_, i));
@@ -428,27 +427,15 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     arrangementView_.addListener(this);
     arrangementView_.setZoomLevel(processorRef_.getZoomLevel());
     addAndMakeVisible(arrangementView_);
-    // Initial sync: track panel visible track count → arrangement view
+    // Initial sync: track panel visible track count 鈫?arrangement view
     arrangementView_.setVisibleTrackCount(trackPanel_.getVisibleTrackCount());
 
     // Setup Piano Roll (main editor area)
     pianoRoll_.addListener(this);
     pianoRoll_.setProcessor(&processorRef_);
-    {
-        // [ARA 重构] 注入 StandaloneClipContent 作为域内容所有者
-        auto* arrangement = processorRef_.getStandaloneArrangement();
-        if (arrangement != nullptr) {
-            const int activeTrack = getStandaloneActiveTrack(processorRef_);
-            StandaloneArrangement::Placement activePlacement;
-            if (activeTrack >= 0 && arrangement->getPlacementByIndex(activeTrack,
-                    arrangement->getSelectedPlacementIndex(activeTrack), activePlacement)) {
-                auto* contentOwner = processorRef_.getStandaloneContentRepository()
-                    ? processorRef_.getStandaloneContentRepository()->findClip(activePlacement.contentKey)
-                    : nullptr;
-                pianoRoll_.setContentOwner(contentOwner);
-            }
-        }
-    }
+    pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
+        return processorRef_.getContentSnapshot(key);
+    });
     pianoRoll_.setContentCommands(processorRef_.getContentCommands());
     pianoRoll_.setPianoKeyAudition(&processorRef_.getPianoKeyAudition());
     {
@@ -463,7 +450,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setShowLanes(processorRef_.getShowLanes());
     pianoRoll_.setZoomLevel(processorRef_.getZoomLevel());
     
-    // 设置高性能播放头位置源 - 直接从 Processor 读取，绕过 60Hz Timer 瓶颈
+    // 璁剧疆楂樻€ц兘鎾斁澶翠綅缃簮 - 鐩存帴浠?Processor 璇诲彇锛岀粫杩?60Hz Timer 鐡堕
     pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
     arrangementView_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
     
@@ -493,25 +480,25 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Apply the purple theme to the window
     getLookAndFeel().setColour(juce::ResizableWindow::backgroundColourId, UIColors::backgroundDark);
 
-    // 在首次推理服务初始化前，将持久化的渲染优先级应用到检测器
+    // 鍦ㄩ娆℃帹鐞嗘湇鍔″垵濮嬪寲鍓嶏紝灏嗘寔涔呭寲鐨勬覆鏌撲紭鍏堢骇搴旂敤鍒版娴嬪櫒
     if (appPreferences_.getState().shared.renderingPriority == RenderingPriority::CpuFirst) {
         processorRef_.resetInferenceBackend(true);
     }
 
-    // 启用原生标题栏（系统风格的最大化/最小化/关闭按钮）
+    // 鍚敤鍘熺敓鏍囬鏍忥紙绯荤粺椋庢牸鐨勬渶澶у寲/鏈€灏忓寲/鍏抽棴鎸夐挳锛?
     juce::Timer::callAfterDelay(60, [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)]
     {
         if (safeThis == nullptr) return;
         if (auto* window = safeThis->findParentComponentOfClass<juce::DocumentWindow>())
         {
-            // 使用原生标题栏，让用户可以使用系统标准的最大化按钮
+            // 浣跨敤鍘熺敓鏍囬鏍忥紝璁╃敤鎴峰彲浠ヤ娇鐢ㄧ郴缁熸爣鍑嗙殑鏈€澶у寲鎸夐挳
             window->setUsingNativeTitleBar(true);
             window->setColour(juce::DocumentWindow::backgroundColourId, UIColors::backgroundMedium);
             window->repaint();
         }
     });
 
-    // 播放头渲染走 VBlank 覆盖层，主编辑器同步心跳降到 30Hz 减轻消息线程压力
+    // 鎾斁澶存覆鏌撹蛋 VBlank 瑕嗙洊灞傦紝涓荤紪杈戝櫒鍚屾蹇冭烦闄嶅埌 30Hz 鍑忚交娑堟伅绾跨▼鍘嬪姏
     startTimerHz(kHeartbeatHzIdle);
 
     // VocoderRenderScheduler queue depth is polled via getVocoderScheduler()->getQueueDepth()
@@ -546,10 +533,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     syncSharedAppPreferences();
 
-    // 启动时应用持久化声码器权重偏好
+    // 鍚姩鏃跺簲鐢ㄦ寔涔呭寲澹扮爜鍣ㄦ潈閲嶅亸濂?
     const auto weight = appPreferences_.getState().shared.vocoderModelWeight;
     processorRef_.setVocoderModelWeight(weight);
-    // 幂等：weight==Community 时 setVocoderModelWeight 会 return early
+    // 骞傜瓑锛歸eight==Community 鏃?setVocoderModelWeight 浼?return early
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
@@ -693,8 +680,8 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
     {
         ConfirmDialogContent::showMessage(
             this,
-            juce::String::fromUTF8(u8"导入音频"),
-            juce::String::fromUTF8(u8"当前正在导入音频，请稍后再试。")
+            juce::String("Import Audio"),
+            juce::String("Audio import is already in progress. Please try again later.")
         );
         return;
     }
@@ -714,8 +701,8 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
         const auto wildcard = getImportWildcardFilter().replaceCharacters("*", "");
         ConfirmDialogContent::showMessage(
             this,
-            juce::String::fromUTF8(u8"导入音频"),
-            juce::String::fromUTF8(u8"不支持的文件类型。\n当前版本支持：") + wildcard
+            juce::String("Import Audio"),
+            juce::String("Unsupported file type.\nSupported extensions: ") + wildcard
         );
         return;
     }
@@ -724,8 +711,8 @@ void OpenTuneAudioProcessorEditor::filesDropped(const juce::StringArray& files, 
     {
         ConfirmDialogContent::showMessage(
             this,
-            juce::String::fromUTF8(u8"导入音频"),
-            juce::String::fromUTF8(u8"检测到多个文件，本次将仅导入第一个文件。")
+            juce::String("Import Audio"),
+            juce::String("Multiple files detected. Only the first file will be imported.")
         );
     }
 
@@ -803,7 +790,7 @@ ImportDropTarget OpenTuneAudioProcessorEditor::resolveImportDropTarget(int globa
 
     if (!isInsideArrangement)
     {
-        // Non-Arrangement drop → fallback to active track
+        // Non-Arrangement drop 鈫?fallback to active track
         result.kind = ImportDropTarget::Kind::FallbackActiveTrack;
         result.trackId = getStandaloneActiveTrack(processorRef_);
         result.timelineStartSeconds = computeTrackAppendStartSeconds(result.trackId);
@@ -833,18 +820,18 @@ ImportDropTarget OpenTuneAudioProcessorEditor::resolveImportDropTarget(int globa
         return result;
     }
 
-    // Drop landed below the last visible track → blank area
+    // Drop landed below the last visible track 鈫?blank area
     if (visibleTracks >= OpenTuneAudioProcessor::MAX_TRACKS)
     {
-        // Already at MAX_TRACKS — reject with a direct message
+        // Already at MAX_TRACKS 鈥?reject with a direct message
         result.kind = ImportDropTarget::Kind::Reject;
-        result.rejectReason = juce::String::fromUTF8(u8"已达到最大轨道数量（")
+        result.rejectReason = juce::String("Maximum track count reached (")
                               + juce::String(OpenTuneAudioProcessor::MAX_TRACKS)
-                              + juce::String::fromUTF8(u8"条），无法创建更多轨道。");
+                              + juce::String("). Cannot create more tracks.");
         return result;
     }
 
-    // Blank area → create a new visible track
+    // Blank area 鈫?create a new visible track
     result.kind = ImportDropTarget::Kind::NewTrack;
     result.trackId = visibleTracks;  // new track will be at this index (0-based)
     result.timelineStartSeconds = juce::jmax(0.0, arrangementView_.viewportXToAbsoluteTime(localPt.x));
@@ -880,7 +867,7 @@ void OpenTuneAudioProcessorEditor::applyImportDropTarget(ImportDropTarget target
     case ImportDropTarget::Kind::Reject:
         ConfirmDialogContent::showMessage(
             this,
-            juce::String::fromUTF8(u8"导入音频"),
+            juce::String::fromUTF8(u8"瀵煎叆闊抽"),
             target.rejectReason
         );
         break;
@@ -904,22 +891,22 @@ void OpenTuneAudioProcessorEditor::resized()
     rippleOverlay_.setBounds(bounds);
     rippleOverlay_.toFront(false);
 
-    // 阴影边距：为各面板预留阴影渲染空间
-    // 各组件 paint() 使用 reduced(shadowMargin) 绘制背景，阴影在边距内渲染
+    // 闃村奖杈硅窛锛氫负鍚勯潰鏉块鐣欓槾褰辨覆鏌撶┖闂?
+    // 鍚勭粍浠?paint() 浣跨敤 reduced(shadowMargin) 缁樺埗鑳屾櫙锛岄槾褰卞湪杈硅窛鍐呮覆鏌?
     const int shadowMargin = 12;
-    const int gap = 6;  // Gap between panels (视觉间距，不含阴影)
+    const int gap = 6;  // Gap between panels (瑙嗚闂磋窛锛屼笉鍚槾褰?
 
     bounds.reduce(gap, gap); // Global padding
 
-    // TopBar：高度 + 阴影边距（上下各12px）
+    // TopBar锛氶珮搴?+ 闃村奖杈硅窛锛堜笂涓嬪悇12px锛?
     const int topBarHeight = menuBar_.isVisible() ? (MENU_BAR_HEIGHT + TRANSPORT_BAR_HEIGHT) : TRANSPORT_BAR_HEIGHT;
     const int topBarHeightWithShadow = topBarHeight + shadowMargin * 2;
     topBar_.setBounds(bounds.removeFromTop(topBarHeightWithShadow));
-    // 视觉间距：gap 减去已被阴影占用的下边距
+    // 瑙嗚闂磋窛锛歡ap 鍑忓幓宸茶闃村奖鍗犵敤鐨勪笅杈硅窛
     bounds.removeFromTop(juce::jmax(0, gap - shadowMargin));
 
-    // 左侧 Track Inspector（可折叠）
-    // 宽度 + 阴影边距（左右各12px）
+    // 宸︿晶 Track Inspector锛堝彲鎶樺彔锛?
+    // 瀹藉害 + 闃村奖杈硅窛锛堝乏鍙冲悇12px锛?
     if (isTrackPanelVisible_)
     {
         trackPanel_.setVisible(true);
@@ -933,8 +920,8 @@ void OpenTuneAudioProcessorEditor::resized()
         trackPanel_.setBounds({});
     }
 
-    // 右侧 Properties Panel（可折叠）
-    // 宽度 + 阴影边距（左右各12px）
+    // 鍙充晶 Properties Panel锛堝彲鎶樺彔锛?
+    // 瀹藉害 + 闃村奖杈硅窛锛堝乏鍙冲悇12px锛?
     if (isParameterPanelVisible_)
     {
         parameterPanel_.setVisible(true);
@@ -948,12 +935,12 @@ void OpenTuneAudioProcessorEditor::resized()
         parameterPanel_.setBounds({});
     }
 
-    // 中央区域（PianoRoll / ArrangementView）
-    // PianoRoll 已经使用 reduced(12.0f) 绘制背景，bounds 保持不变
+    // 涓ぎ鍖哄煙锛圥ianoRoll / ArrangementView锛?
+    // PianoRoll 宸茬粡浣跨敤 reduced(12.0f) 缁樺埗鑳屾櫙锛宐ounds 淇濇寔涓嶅彉
     arrangementView_.setBounds(bounds);
     pianoRoll_.setBounds(bounds);
     
-    // AutoRenderOverlay 覆盖整个 PianoRoll 区域
+    // AutoRenderOverlay 瑕嗙洊鏁翠釜 PianoRoll 鍖哄煙
     autoRenderOverlay_.setBounds(bounds);
     autoRenderOverlay_.toFront(false);
 
@@ -1044,66 +1031,65 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         const int sr = static_cast<int>(sampleRate);
         const int activeTrack = getStandaloneActiveTrack(processorRef_);
         const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
-        const uint64_t activeMaterializationId = (activeTrack >= 0 && activePlacementIndex >= 0)
-            ? getStandaloneMaterializationId(processorRef_, activeTrack, activePlacementIndex)
-            : 0;
-        auto ck = ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0};
-        auto snap = processorRef_.getContentSnapshot(ck);
+        const ContentKey activeKey = (activeTrack >= 0 && activePlacementIndex >= 0)
+            ? getStandaloneContentKey(processorRef_, activeTrack, activePlacementIndex)
+            : ContentKey{};
+        auto snap = processorRef_.getContentSnapshot(activeKey);
         auto curve = snap ? snap->pitchCurve : nullptr;
-        std::shared_ptr<const juce::AudioBuffer<float>> materializationBuffer =
+        std::shared_ptr<const juce::AudioBuffer<float>> contentBuffer =
             snap ? snap->audioBuffer : nullptr;
-        const uint64_t currentNotesRevision = activeMaterializationId != 0 && snap
+        const uint64_t currentNotesRevision = activeKey.isValid() && snap
             ? snap->notesRevision
             : 0;
-        const bool materializationChanged =
-            activeMaterializationId != lastPianoRollMaterializationId_
+        const bool contentChanged =
+            activeKey != lastPianoRollContentKey_
             || sr != lastPianoRollSampleRate_
             || curve != lastPianoRollCurve_
-            || materializationBuffer != lastPianoRollBuffer_;
-        if (materializationChanged) {
-            pianoRoll_.setEditedMaterialization(ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0}, curve, materializationBuffer, sr);
-            lastPianoRollMaterializationId_ = activeMaterializationId;
+            || contentBuffer != lastPianoRollBuffer_;
+        if (contentChanged) {
+            pianoRoll_.setEditedContent(activeKey, curve, contentBuffer, sr);
+            lastPianoRollContentKey_ = activeKey;
             lastPianoRollSampleRate_ = sr;
             lastPianoRollCurve_ = curve;
-            lastPianoRollBuffer_ = materializationBuffer;
+            lastPianoRollBuffer_ = contentBuffer;
         } else if (currentNotesRevision != lastPianoRollNotesRevision_) {
-            // Same materialization, fresh notes — typically GAME's async commit.
-            pianoRoll_.refreshEditedMaterializationNotes();
+            // Same content, fresh notes – typically GAME's async commit.
+            pianoRoll_.refreshEditedContentNotes();
             pianoRoll_.requestContentRedraw();
         }
         if (activeTrack >= 0 && activePlacementIndex >= 0) {
             const DetectedKey resolvedKey =
-                resolveScaleForPlacementMaterialization(activeTrack, activePlacementIndex, nullptr);
+                resolveScaleForPlacementContent(activeTrack, activePlacementIndex, nullptr);
             const int resolvedRootNote = static_cast<int>(resolvedKey.root);
             const int resolvedScaleType = scaleToUiScaleType(resolvedKey.scale);
             if (resolvedRootNote != lastScaleRootNote_ || resolvedScaleType != lastScaleType_) {
-                applyResolvedScaleForPlacementMaterialization(activeTrack, activePlacementIndex);
+                applyResolvedScaleForPlacementContent(activeTrack, activePlacementIndex);
             }
         }
 
         lastPianoRollNotesRevision_ = currentNotesRevision;
     }
 
-    // 播放头位置由各组件通过 positionSource_ 直接从 Processor 读取
+    // 鎾斁澶翠綅缃敱鍚勭粍浠堕€氳繃 positionSource_ 鐩存帴浠?Processor 璇诲彇
     transportBar_.setPositionSeconds(currentPositionSeconds);
 
     const RenderStatusSnapshot statusSnapshot = getRenderStatusSnapshot();
 
     // RMVPE overlay：与 vocoder 无关，独立于渲染状态
     if (rmvpeOverlayLatched_ && !isWorkspaceView_) {
-        const uint64_t targetMaterializationId = rmvpeOverlayTargetMaterializationId_;
+        const ContentKey targetContentKey = rmvpeOverlayTargetContentKey_;
 
         bool shouldUnlatch = false;
-        if (targetMaterializationId == 0) {
+        if (!targetContentKey.isValid()) {
             shouldUnlatch = true;
         } else {
-            auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, targetMaterializationId, 0});
+            auto snap = processorRef_.getContentSnapshot(targetContentKey);
             const auto f0State = snap ? snap->originalF0State : OriginalF0State::NotRequested;
             const bool f0Done = (f0State == OriginalF0State::Ready
                                   || f0State == OriginalF0State::Failed);
-            const bool noteGenBusy = processorRef_.isNoteGenInFlightForMaterialization(targetMaterializationId);
+            const bool noteGenBusy = processorRef_.isNoteGenInFlightForContent(targetContentKey.objectId);
             // Only unlatch when BOTH F0 and note generation are finished —
-            // shared "正在处理音频" overlay covers the whole import pipeline.
+            // shared "正在处理音高" overlay covers the whole import pipeline.
             if (f0Done && !noteGenBusy) {
                 shouldUnlatch = true;
             }
@@ -1111,14 +1097,14 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
         if (shouldUnlatch) {
             rmvpeOverlayLatched_ = false;
-            rmvpeOverlayTargetMaterializationId_ = 0;
+            rmvpeOverlayTargetContentKey_ = ContentKey{};
         }
     }
 
     bool shouldShowOverlay = false;
 
     if (rmvpeOverlayLatched_ && !isWorkspaceView_) {
-        autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在处理音频"));
+        autoRenderOverlay_.setMessageText(juce::String::fromUTF8("姝ｅ湪澶勭悊闊抽"));
         shouldShowOverlay = true;
     }
 
@@ -1127,37 +1113,39 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     if (!shouldShowOverlay && !isWorkspaceView_) {
         const int activeTrack = getStandaloneActiveTrack(processorRef_);
         const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
-        const uint64_t activeMaterializationId = (activeTrack >= 0 && activePlacementIndex >= 0)
-            ? getStandaloneMaterializationId(processorRef_, activeTrack, activePlacementIndex)
-            : 0;
-        if (activeMaterializationId != 0) {
+        const ContentKey activeContentKey = (activeTrack >= 0 && activePlacementIndex >= 0)
+            ? getStandaloneContentKey(processorRef_, activeTrack, activePlacementIndex)
+            : ContentKey{};
+        if (activeContentKey.isValid()) {
             // Check if GAME timing anchor extraction is in flight
-            const ReferenceFeatureSet refFeatures = processorRef_.getReferenceFeatures(activeMaterializationId);
+            const ReferenceFeatureSet refFeatures = processorRef_.getReferenceFeatures(activeContentKey);
             if (refFeatures.status == ReferenceFeatureStatus::Extracting) {
                 autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在提取节奏锚点"));
                 shouldShowOverlay = true;
             }
         }
     }
+        }
+    }
 
     // ============================================================================
-    // Render badge logic — Stage 2 (Rubber Band) is INDEPENDENT of vocoder.
-    // Pre-2026-05-19: entire badge gated on `vocoderDomain != nullptr` → users
+    // Render badge logic 鈥?Stage 2 (Rubber Band) is INDEPENDENT of vocoder.
+    // Pre-2026-05-19: entire badge gated on `vocoderDomain != nullptr` 鈫?users
     // dragging Time tool handles before vocoder lazy-load saw no badge even
     // though Stage 2 was running. Refactored: Stage 2 lifecycle checked
     // unconditionally; Stage 1 chunk stats only when vocoder loaded.
     // ============================================================================
     const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
 
-    // Stage 2 — always available
+    // Stage 2 鈥?always available
     const bool stage2InFlight = processorRef_.isStage2InFlight();
     const int  stage2Queue    = processorRef_.getStage2QueueDepth();
     // stage2HasWork covers entire lifecycle: enqueued but not yet pulled by worker
-    // → in-flight → done. Previously only checking inFlight missed the enqueue
+    // 鈫?in-flight 鈫?done. Previously only checking inFlight missed the enqueue
     // window for short clips processed faster than the 33ms heartbeat.
     const bool stage2HasWork  = stage2InFlight || stage2Queue > 0;
 
-    // Stage 1 — meaningful only when vocoder loaded
+    // Stage 1 鈥?meaningful only when vocoder loaded
     bool stage1HasWork = false;
     int  stage1Done = 0;
     int  stage1Total = 0;
@@ -1165,11 +1153,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         const int activeTrack = getStandaloneActiveTrack(processorRef_);
         const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
 
-        const uint64_t activeMaterializationId = (activeTrack >= 0 && activePlacementIndex >= 0)
-            ? getStandaloneMaterializationId(processorRef_, activeTrack, activePlacementIndex)
-            : 0;
-        auto rc = processorRef_.getContentRenderService()->getRenderCache(
-            ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0});
+        const ContentKey activeContentKey = (activeTrack >= 0 && activePlacementIndex >= 0)
+            ? getStandaloneContentKey(processorRef_, activeTrack, activePlacementIndex)
+            : ContentKey{};
+        auto rc = processorRef_.getContentRenderService()->getRenderCache(activeContentKey);
         const auto chunkStats = rc ? rc->getChunkStats() : RenderCache::ChunkStats{};
         stage1HasWork = chunkStats.hasActiveWork();
         stage1Done    = chunkStats.idle + chunkStats.blank;
@@ -1212,7 +1199,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         diagnosticHeartbeatCounter_ = 0;
         const auto diagnosticInfo = processorRef_.getDiagnosticInfo(getStandaloneActiveTrack(processorRef_), statusSnapshot.placementId);
         AppLogger::log("StandaloneEditor: render status=" + renderStatusToString(statusSnapshot.status)
-            + " materializationId=" + juce::String(static_cast<juce::int64>(diagnosticInfo.materializationId))
+            + " contentKey=" + juce::String(static_cast<juce::int64>(diagnosticInfo.contentKey.objectId))
             + " placementId=" + juce::String(static_cast<juce::int64>(diagnosticInfo.placementId))
             + " desiredRev=" + juce::String(static_cast<juce::int64>(diagnosticInfo.desiredRevision))
             + " publishedRev=" + juce::String(static_cast<juce::int64>(diagnosticInfo.publishedRevision))
@@ -1291,24 +1278,23 @@ RenderStatusSnapshot OpenTuneAudioProcessorEditor::getRenderStatusSnapshot() con
     const int trackId = getStandaloneActiveTrack(processorRef_);
     const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, trackId);
     const uint64_t placementId = (placementIndex >= 0) ? processorRef_.getPlacementId(trackId, placementIndex) : 0;
-    const uint64_t materializationId = getStandaloneMaterializationId(processorRef_, trackId, placementIndex);
+    const ContentKey contentKey = getStandaloneContentKey(processorRef_, trackId, placementIndex);
 
     RenderStatusSnapshot snapshot;
-    snapshot.materializationId = materializationId;
+    snapshot.contentKey = contentKey;
     snapshot.placementId = placementId;
-    if (materializationId == 0) {
+    if (!contentKey.isValid()) {
         return snapshot;
     }
 
-    auto renderCache = processorRef_.getContentRenderService()->getRenderCache(
-        ContentKey{DomainKind::StandaloneClip, materializationId, 0});
+    auto renderCache = processorRef_.getContentRenderService()->getRenderCache(contentKey);
     if (renderCache == nullptr) {
-        snapshot.materializationId = 0;
+        snapshot.contentKey = ContentKey{};
         snapshot.placementId = 0;
         return snapshot;
     }
 
-    return makeRenderStatusSnapshot(materializationId, placementId, renderCache->getStateSnapshot());
+    return makeRenderStatusSnapshot(contentKey, placementId, renderCache->getStateSnapshot());
 }
 
 void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int trackId, int placementIndex)
@@ -1316,24 +1302,24 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
     StandaloneArrangement::Placement placement;
     const bool hasPlacement = (placementIndex >= 0)
         && getStandalonePlacementByIndex(processorRef_, trackId, placementIndex, placement);
-    const uint64_t clipId = hasPlacement ? placement.contentKey.objectId : 0;
+    const ContentKey contentKey = hasPlacement ? placement.contentKey : ContentKey{};
 
-    pianoRoll_.setMaterializationProjection(hasPlacement ? makePianoRollProjection(placement, processorRef_)
-                                                  : MaterializationTimelineProjection{});
+    pianoRoll_.setContentProjection(hasPlacement ? makePianoRollProjection(placement, processorRef_)
+                                                  : ContentTimelineProjection{});
 
     const int sr = static_cast<int>(processorRef_.getSampleRate());
-    auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, clipId, 0});
-    std::shared_ptr<const juce::AudioBuffer<float>> materializationBuffer =
+    auto snap = processorRef_.getContentSnapshot(contentKey);
+    std::shared_ptr<const juce::AudioBuffer<float>> contentBuffer =
         snap ? snap->audioBuffer : nullptr;
     auto curve = snap ? snap->pitchCurve : nullptr;
-    pianoRoll_.setEditedMaterialization(ContentKey{DomainKind::StandaloneClip, clipId, 0}, curve, materializationBuffer, sr);
+    pianoRoll_.setEditedContent(contentKey, curve, contentBuffer, sr);
 
-    lastPianoRollMaterializationId_ = clipId;
+    lastPianoRollContentKey_ = contentKey;
     lastPianoRollSampleRate_ = sr;
     lastPianoRollCurve_ = curve;
-    lastPianoRollBuffer_ = materializationBuffer;
+    lastPianoRollBuffer_ = contentBuffer;
 
-    applyResolvedScaleForPlacementMaterialization(trackId, placementIndex);
+    applyResolvedScaleForPlacementContent(trackId, placementIndex);
 
 }
 
@@ -1341,9 +1327,9 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
 {
     if (trackId < 0 || trackId >= OpenTuneAudioProcessor::MAX_TRACKS)
     {
-        pianoRoll_.setMaterializationProjection({});
-        pianoRoll_.setEditedMaterialization(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
-        lastPianoRollMaterializationId_ = 0;
+        pianoRoll_.setContentProjection({});
+        pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
+        lastPianoRollContentKey_ = ContentKey{};
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
         return;
@@ -1355,9 +1341,9 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
     if (placementId == 0)
     {
         setStandaloneSelectedPlacementIndex(processorRef_, trackId, -1);
-        pianoRoll_.setMaterializationProjection({});
-        pianoRoll_.setEditedMaterialization(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
-        lastPianoRollMaterializationId_ = 0;
+        pianoRoll_.setContentProjection({});
+        pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
+        lastPianoRollContentKey_ = ContentKey{};
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
         return;
@@ -1367,9 +1353,9 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
     if (placementIndex < 0)
     {
         setStandaloneSelectedPlacementIndex(processorRef_, trackId, -1);
-        pianoRoll_.setMaterializationProjection({});
-        pianoRoll_.setEditedMaterialization(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
-        lastPianoRollMaterializationId_ = 0;
+        pianoRoll_.setContentProjection({});
+        pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
+        lastPianoRollContentKey_ = ContentKey{};
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
         return;
@@ -1443,37 +1429,37 @@ void OpenTuneAudioProcessorEditor::parameterDragEnded(int paramId, float oldValu
 // MenuBarComponent::Listener Implementation
 // ============================================================================
 
-// 导入模式枚举
+// 瀵煎叆妯″紡鏋氫妇
 enum class ImportMode
 {
-    SameTrack,      // 按顺序导入到同一个轨道
-    SeparateTracks  // 分别导入到多个轨道（齐头）
+    SameTrack,      // 鎸夐『搴忓鍏ュ埌鍚屼竴涓建閬?
+    SeparateTracks  // 鍒嗗埆瀵煎叆鍒板涓建閬擄紙榻愬ご锛?
 };
 
 void OpenTuneAudioProcessorEditor::importAudioRequested()
 {
-    // 新版本：直接弹出文件选择窗口，支持多选
-    // 导入哪个轨道由当前选中轨道决定
+    // 鏂扮増鏈細鐩存帴寮瑰嚭鏂囦欢閫夋嫨绐楀彛锛屾敮鎸佸閫?
+    // 瀵煎叆鍝釜杞ㄩ亾鐢卞綋鍓嶉€変腑杞ㄩ亾鍐冲畾
     DBG("OpenTuneAudioProcessorEditor::importAudioRequested called");
 
     if (isImportInProgress_)
     {
         ConfirmDialogContent::showMessage(
             this,
-            juce::String::fromUTF8(u8"导入音频"),
-            juce::String::fromUTF8(u8"当前正在导入音频，请稍后再试。")
+            juce::String("Import Audio"),
+            juce::String("Audio import is already in progress. Please try again later.")
         );
         return;
     }
 
     const auto wildcardFilter = getImportWildcardFilter();
     auto chooser = std::make_shared<juce::FileChooser>(
-        juce::String::fromUTF8(u8"选择要导入的音频文件"),
+        juce::String::fromUTF8(u8"閫夋嫨瑕佸鍏ョ殑闊抽鏂囦欢"),
         juce::File::getSpecialLocation(juce::File::userHomeDirectory),
         wildcardFilter
     );
 
-    // 支持多选
+    // 鏀寔澶氶€?
     auto chooserFlags = juce::FileBrowserComponent::openMode 
                       | juce::FileBrowserComponent::canSelectFiles 
                       | juce::FileBrowserComponent::canSelectMultipleItems;
@@ -1493,30 +1479,30 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
             return;
         }
 
-        // 获取当前选中的轨道
+        // 鑾峰彇褰撳墠閫変腑鐨勮建閬?
         int currentTrack = getStandaloneActiveTrack(safeThis->processorRef_);
         int visibleTracks = safeThis->trackPanel_.getVisibleTrackCount();
 
         if (selectedFiles.size() == 1)
         {
-            // 单文件：直接导入到当前选中的轨道
+            // 鍗曟枃浠讹細鐩存帴瀵煎叆鍒板綋鍓嶉€変腑鐨勮建閬?
             safeThis->importAudioFileToTrack(currentTrack, selectedFiles[0]);
         }
         else
         {
-            // 多文件：弹窗询问导入模式
+            // 澶氭枃浠讹細寮圭獥璇㈤棶瀵煎叆妯″紡
             auto filesPtr = std::make_shared<juce::Array<juce::File>>(selectedFiles);
 
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"选择导入模式"),
-                    juce::String::fromUTF8(u8"您选择了 ") + juce::String(selectedFiles.size()) + juce::String::fromUTF8(u8" 个音频文件，请选择导入方式："),
+                    juce::String("Choose Import Mode"),
+                    juce::String("You selected ") + juce::String(selectedFiles.size()) + juce::String(" audio files. Choose an import mode."),
                     {
-                        { juce::String::fromUTF8(u8"顺序导入到当前轨道"), [=]() {
+                        { juce::String("Import Sequentially To Current Track"), [=]() {
                             if (safeThis == nullptr)
                                 return;
 
-                            // 顺序导入到同一轨道（当前选中轨道）
+                            // 椤哄簭瀵煎叆鍒板悓涓€杞ㄩ亾锛堝綋鍓嶉€変腑杞ㄩ亾锛?
                             const int batchId = safeThis->nextImportBatchId_++;
                             safeThis->importBatchNextStartSeconds_[batchId] = safeThis->computeTrackAppendStartSeconds(currentTrack);
                             safeThis->importBatchRemainingItems_[batchId] = filesPtr->size();
@@ -1531,24 +1517,24 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                                 safeThis->queuePendingImport(std::move(pending));
                             }
                         }, true },
-                        { juce::String::fromUTF8(u8"分别导入到多个轨道"), [=]() {
+                        { juce::String("Import To Separate Tracks"), [=]() {
                             if (safeThis == nullptr)
                                 return;
 
-                            // 齐头导入多个轨道
+                            // 榻愬ご瀵煎叆澶氫釜杞ㄩ亾
                             const int remainingTrackCapacity = juce::jmax(0, OpenTuneAudioProcessor::MAX_TRACKS - currentTrack);
                             const int acceptedFileCount = juce::jmin(filesPtr->size(), remainingTrackCapacity);
                             if (acceptedFileCount <= 0)
                             {
                                 ConfirmDialogContent::showMessage(
                                     safeThis,
-                                    juce::String::fromUTF8(u8"导入失败"),
-                                    juce::String::fromUTF8(u8"当前轨道之后没有剩余可用轨道。")
+                                    juce::String("Import Failed"),
+                                    juce::String("There are no available tracks after the current track.")
                                 );
                                 return;
                             }
 
-                            // 自动扩展可见轨道数量
+                            // 鑷姩鎵╁睍鍙杞ㄩ亾鏁伴噺
                             int requiredTracks = currentTrack + acceptedFileCount;
                             if (requiredTracks > visibleTracks)
                             {
@@ -1557,7 +1543,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                                 safeThis->arrangementView_.setVisibleTrackCount(newVisibleTracks);
                             }
 
-                            // 从当前轨道开始，依次导入到后续轨道
+                            // 浠庡綋鍓嶈建閬撳紑濮嬶紝渚濇瀵煎叆鍒板悗缁建閬?
                             for (int i = 0; i < acceptedFileCount; ++i)
                             {
                                 OpenTuneAudioProcessorEditor::PendingImport pending;
@@ -1571,14 +1557,14 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                             {
                                 ConfirmDialogContent::showMessage(
                                     safeThis,
-                                    juce::String::fromUTF8(u8"导入数量已裁剪"),
-                                    juce::String::fromUTF8(u8"当前轨道之后只剩 ")
+                                    juce::String("Import Count Trimmed"),
+                                    juce::String("Only ")
                                         + juce::String(acceptedFileCount)
-                                        + juce::String::fromUTF8(u8" 条可用轨道，超出的文件未加入导入队列。")
+                                        + juce::String(" tracks are available after the current track. Extra files were not queued.")
                                 );
                             }
                         } },
-                        { juce::String::fromUTF8(u8"取消"), nullptr }
+                        { juce::String::fromUTF8(u8"鍙栨秷"), nullptr }
                     }
                 ),
                 this
@@ -1643,7 +1629,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                 safeThis->processNextImportInQueue();
                 ConfirmDialogContent::showMessage(
                     safeThis.getComponent(),
-                    juce::String::fromUTF8(u8"导入失败"),
+                    juce::String::fromUTF8(u8"瀵煎叆澶辫触"),
                     result.errorMessage
                 );
                 return;
@@ -1682,8 +1668,8 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                             safeThis->processNextImportInQueue();
                             ConfirmDialogContent::showMessage(
                                 safeThis.getComponent(),
-                                juce::String::fromUTF8(u8"导入失败"),
-                                juce::String::fromUTF8(u8"导入预处理失败，请重试。")
+                                juce::String("Import Failed"),
+                                juce::String("Audio import preprocessing failed. Please try again.")
                             );
                         });
                         return;
@@ -1709,8 +1695,8 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                         safeThis->processNextImportInQueue();
                         ConfirmDialogContent::showMessage(
                             safeThis.getComponent(),
-                            juce::String::fromUTF8(u8"导入失败"),
-                            juce::String::fromUTF8(u8"导入提交失败，请重试。")
+                            juce::String("Import Failed"),
+                            juce::String("Audio import commit failed. Please try again.")
                         );
                         return;
                     }
@@ -1725,25 +1711,24 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
 
                     safeThis->arrangementView_.grabKeyboardFocus();
                     safeThis->applyPlacementSelectionContext(placement.trackId, committedPlacement.placementId);
-                    auto importSnap = safeThis->processorRef_.getContentSnapshot(
-                        ContentKey{DomainKind::StandaloneClip, committedPlacement.materializationId, 0});
+                    auto importSnap = safeThis->processorRef_.getContentSnapshot(committedPlacement.contentKey);
                     auto importBuf = importSnap ? importSnap->audioBuffer : nullptr;
-                    safeThis->pianoRoll_.setEditedMaterialization(ContentKey{DomainKind::StandaloneClip, committedPlacement.materializationId, 0},
+                    safeThis->pianoRoll_.setEditedContent(committedPlacement.contentKey,
                                                           nullptr,
                                                             importBuf,
                                                           static_cast<int>(safeThis->processorRef_.getSampleRate()));
-                    safeThis->lastPianoRollMaterializationId_ = committedPlacement.materializationId;
+                    safeThis->lastPianoRollContentKey_ = committedPlacement.contentKey;
                     safeThis->lastPianoRollCurve_.reset();
                     safeThis->lastPianoRollBuffer_ = importBuf;
 
-                    OpenTuneAudioProcessor::MaterializationRefreshRequest refreshRequest;
-                    refreshRequest.contentKey = ContentKey{DomainKind::StandaloneClip, committedPlacement.materializationId, 0};
+                    OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
+                    refreshRequest.contentKey = committedPlacement.contentKey;
                     if (!safeThis->processorRef_.requestContentRefresh(refreshRequest)) {
-                        AppLogger::log("ClipDerivedRefresh: standalone request rejected materializationId="
-                            + juce::String(static_cast<juce::int64>(committedPlacement.materializationId)));
+                        AppLogger::log("ClipDerivedRefresh: standalone request rejected contentId="
+                            + juce::String(static_cast<juce::int64>(committedPlacement.contentKey.objectId)));
                     } else {
                         safeThis->rmvpeOverlayLatched_ = true;
-                        safeThis->rmvpeOverlayTargetMaterializationId_ = committedPlacement.materializationId;
+                        safeThis->rmvpeOverlayTargetContentKey_ = committedPlacement.contentKey;
                     }
 
                     safeThis->arrangementView_.resetUserZoomFlag();
@@ -1764,13 +1749,13 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
     );
 }
 
-// 处理导入队列中的下一个文件
+// 澶勭悊瀵煎叆闃熷垪涓殑涓嬩竴涓枃浠?
 void OpenTuneAudioProcessorEditor::processNextImportInQueue()
 {
     if (importQueue_.empty())
         return;
     
-    // 取出队列中的第一个待导入项
+    // 鍙栧嚭闃熷垪涓殑绗竴涓緟瀵煎叆椤?
     auto next = importQueue_.front();
     importQueue_.erase(importQueue_.begin());
 
@@ -1838,12 +1823,12 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
     {
         ConfirmDialogContent::showMessage(
             this,
-            juce::String::fromUTF8("导出音频"),
-            juce::String::fromUTF8("已有导出任务正在进行中，请稍后再试。"));
+            juce::String("Export Audio"),
+            juce::String("An export task is already in progress. Please try again later."));
         return;
     }
     
-    // 根据导出类型确定默认文件名
+    // 鏍规嵁瀵煎嚭绫诲瀷纭畾榛樿鏂囦欢鍚?
     juce::String defaultFileName;
     switch (exportType)
     {
@@ -1898,8 +1883,8 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                 {
                     ConfirmDialogContent::showMessage(
                         safeThis.getComponent(),
-                        juce::String::fromUTF8("导出失败"),
-                        juce::String::fromUTF8("没有选中的音频片段。请先在轨道上选择一个Clip。"));
+                        juce::String("Export Failed"),
+                        juce::String("No audio clip is selected. Select a clip on the track first."));
                     return;
                 }
 
@@ -1975,20 +1960,20 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                         DBG("Successfully exported " + outRequest.targetName);
                         ConfirmDialogContent::showMessage(
                             uiSafe.getComponent(),
-                            juce::String::fromUTF8("导出完成"),
-                            outRequest.targetName + juce::String::fromUTF8(" 已导出到: ") + outFile.getFullPathName());
+                            juce::String::fromUTF8("瀵煎嚭瀹屾垚"),
+                            outRequest.targetName + juce::String::fromUTF8(" 宸插鍑哄埌: ") + outFile.getFullPathName());
                         return;
                     }
 
-                    juce::String failText = juce::String::fromUTF8("无法导出音频到: ") + outFile.getFullPathName();
+                    juce::String failText = juce::String::fromUTF8("鏃犳硶瀵煎嚭闊抽鍒? ") + outFile.getFullPathName();
                     if (errorText.isNotEmpty())
                     {
-                        failText += juce::String::fromUTF8("\n原因: ") + errorText;
+                        failText += juce::String::fromUTF8("\n鍘熷洜: ") + errorText;
                     }
 
                     ConfirmDialogContent::showMessage(
                         uiSafe.getComponent(),
-                        juce::String::fromUTF8("导出失败"),
+                        juce::String::fromUTF8("瀵煎嚭澶辫触"),
                         failText);
                 });
             });
@@ -2003,7 +1988,7 @@ void OpenTuneAudioProcessorEditor::saveProjectRequested()
     }
     if (saveWorker_.joinable()) saveWorker_.join();
 
-    // Capture snapshot and paths on message thread — ProjectSession only accessed here
+    // Capture snapshot and paths on message thread 鈥?ProjectSession only accessed here
     auto task = projectSession_.prepareSave();
     const uint64_t gen = projectSession_.getDirtyGeneration();
     const auto path = task.targetFile;
@@ -2017,9 +2002,9 @@ void OpenTuneAudioProcessorEditor::saveProjectRequested()
             if (!result.ok()) {
                 ConfirmDialogContent::launch(
                     new ConfirmDialogContent(
-                        juce::String::fromUTF8(u8"保存工程失败"),
+                        juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
                         result.error().fullMessage(),
-                        { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                        { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                     safeThis.getComponent());
                 return;
             }
@@ -2043,9 +2028,9 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     ConfirmDialogContent::launch(
         new ConfirmDialogContent(
-            juce::String::fromUTF8(u8"当前工程尚未保存"),
-            juce::String::fromUTF8(u8"打开其他工程前，是否保存当前工程的更改？"),
-            {               { juce::String::fromUTF8(u8"保存"), [safeThis] {
+            juce::String::fromUTF8(u8"褰撳墠宸ョ▼灏氭湭淇濆瓨"),
+            juce::String::fromUTF8(u8"鎵撳紑鍏朵粬宸ョ▼鍓嶏紝鏄惁淇濆瓨褰撳墠宸ョ▼鐨勬洿鏀癸紵"),
+            {               { juce::String::fromUTF8(u8"淇濆瓨"), [safeThis] {
                     if (safeThis == nullptr) return;
                     if (!safeThis->projectSession_.hasProjectPath()) {
                         safeThis->saveProjectAsThenOpenProject();
@@ -2064,9 +2049,9 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
                                 if (!saveResult.ok()) {
                                     ConfirmDialogContent::launch(
                                         new ConfirmDialogContent(
-                                            juce::String::fromUTF8(u8"保存工程失败"),
+                                            juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
                                             saveResult.error().fullMessage(),
-                                            { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                            { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                                         safeThis.getComponent());
                                     return;
                                 }
@@ -2080,17 +2065,17 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
                         });
                     }
                 }, true },
-              { juce::String::fromUTF8(u8"不保存"), [safeThis] {
+              { juce::String("Do Not Save"), [safeThis] {
                     if (safeThis == nullptr) return;
                     safeThis->launchOpenProjectChooser();
                 }, false },
-              { juce::String::fromUTF8(u8"取消"), nullptr, false } }),
+              { juce::String::fromUTF8(u8"鍙栨秷"), nullptr, false } }),
         this);
 }
 
 void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
 {
-    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"打开工程"), juce::File(), "*.otproj");
+    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"鎵撳紑宸ョ▼"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
@@ -2104,9 +2089,9 @@ void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
         if (!result.ok()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"打开工程失败"),
+                    juce::String::fromUTF8(u8"鎵撳紑宸ョ▼澶辫触"),
                     result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                    { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                 safeThis.getComponent());
             return;
         }
@@ -2117,7 +2102,7 @@ void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
 
 void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
 {
-    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"保存工程"), juce::File(), "*.otproj");
+    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"淇濆瓨宸ョ▼"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
@@ -2131,18 +2116,18 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
         if (file.existsAsFile()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"覆盖现有工程？"),
-                    juce::String::fromUTF8(u8"目标工程文件已存在，是否覆盖？"),
-                    { { juce::String::fromUTF8(u8"覆盖"), [safeThis, file] {
+                    juce::String("Overwrite Existing Project?"),
+                    juce::String("The target project file already exists. Overwrite it?"),
+                    { { juce::String::fromUTF8(u8"瑕嗙洊"), [safeThis, file] {
                             if (safeThis == nullptr) return;
                             if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
                             auto result = safeThis->projectSession_.saveProjectAs(file);
                             if (!result.ok()) {
                                 ConfirmDialogContent::launch(
                                     new ConfirmDialogContent(
-                                        juce::String::fromUTF8(u8"保存工程失败"),
+                                        juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
                                         result.error().fullMessage(),
-                                        { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                        { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                                     safeThis.getComponent());
                                 return;
                             }
@@ -2150,7 +2135,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
                             safeThis->updateTitleWithProjectPath();
                             safeThis->launchOpenProjectChooser();
                         }, true },
-                      { juce::String::fromUTF8(u8"取消"), nullptr, false } }),
+                      { juce::String::fromUTF8(u8"鍙栨秷"), nullptr, false } }),
                 safeThis.getComponent());
             return;
         }
@@ -2160,9 +2145,9 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
         if (!result.ok()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"保存工程失败"),
+                    juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
                     result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                    { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                 safeThis.getComponent());
             return;
         }
@@ -2240,7 +2225,7 @@ void OpenTuneAudioProcessorEditor::helpRequested()
         ConfirmDialogContent::showMessage(
             this,
             LOC(kClose),
-            juce::String::fromUTF8(u8"无法找到帮助文档：") + helpFile.getFullPathName()
+            juce::String("Help file not found: ") + helpFile.getFullPathName()
         );
     }
 }
@@ -2326,7 +2311,7 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
     trackPanel_.applyTheme();
     parameterPanel_.applyTheme();
 
-    // 同步播放头颜色到高性能播放头覆盖层
+    // 鍚屾鎾斁澶撮鑹插埌楂樻€ц兘鎾斁澶磋鐩栧眰
     pianoRoll_.setPlayheadColour(UIColors::playhead);
     arrangementView_.setPlayheadColour(UIColors::playhead);
 
@@ -2371,23 +2356,23 @@ void OpenTuneAudioProcessorEditor::performUndoRedoAction(bool isUndo)
 
     const int activeTrack = getStandaloneActiveTrack(processorRef_);
     const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
-    const uint64_t matId = (activeTrack >= 0 && activePlacementIndex >= 0)
-        ? getStandaloneMaterializationId(processorRef_, activeTrack, activePlacementIndex) : 0;
-    if (matId == 0) return;
+    const ContentKey contentKey = (activeTrack >= 0 && activePlacementIndex >= 0)
+        ? getStandaloneContentKey(processorRef_, activeTrack, activePlacementIndex) : ContentKey{};
+    if (!contentKey.isValid()) return;
 
-    auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, matId, 0});
+    auto snap = processorRef_.getContentSnapshot(contentKey);
     auto curve = snap ? snap->pitchCurve : nullptr;
     if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
 
     double startSec = 0.0;
-    double endSec = pianoRoll_.getMaterializationDurationSeconds();
+    double endSec = pianoRoll_.getContentDurationSeconds();
     auto* editAction = dynamic_cast<OpenTune::PianoRollEditAction*>(action);
-    if (editAction && editAction->getContentKey().objectId == matId && editAction->getAffectedEndFrame() > 0) {
+    if (editAction && editAction->getContentKey().objectId == contentKey.objectId && editAction->getAffectedEndFrame() > 0) {
         const double spf = static_cast<double>(curve->getHopSize()) / curve->getSampleRate();
         startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
         endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
     }
-    processorRef_.enqueueContentPartialRender(ContentKey{DomainKind::StandaloneClip, matId, 0}, startSec, endSec);
+    processorRef_.enqueueContentPartialRender(contentKey, startSec, endSec);
 
     projectSession_.markDirty();
 }
@@ -2400,18 +2385,18 @@ void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
 {
     juce::ignoreUnused(newLanguage);
     
-    // 刷新菜单栏 - JUCE 需要调用 menuItemsChanged() 重建菜单
+    // 鍒锋柊鑿滃崟鏍?- JUCE 闇€瑕佽皟鐢?menuItemsChanged() 閲嶅缓鑿滃崟
     menuBar_.menuItemsChanged();
     menuBar_.repaint();
     
-    // 刷新顶部工具栏
+    // 鍒锋柊椤堕儴宸ュ叿鏍?
     transportBar_.refreshLocalizedText();
     topBar_.refreshLocalizedText();
     
-    // 刷新参数面板
+    // 鍒锋柊鍙傛暟闈㈡澘
     parameterPanel_.refreshLocalizedText();
     
-    // 刷新整个界面
+    // 鍒锋柊鏁翠釜鐣岄潰
     repaint();
 }
 
@@ -2471,12 +2456,12 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
 
     const int activeTrack = getStandaloneActiveTrack(processorRef_);
     const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
-    const uint64_t activeMaterializationId = getStandaloneMaterializationId(processorRef_, activeTrack, activePlacementIndex);
+    const ContentKey activeContentKey = getStandaloneContentKey(processorRef_, activeTrack, activePlacementIndex);
 
     const int newRoot = juce::jlimit(0, 11, rootNote);
     const int newScaleType = juce::jlimit(1, 8, scaleType);
 
-    const DetectedKey oldResolved = resolveScaleForPlacementMaterialization(activeTrack, activePlacementIndex, nullptr);
+    const DetectedKey oldResolved = resolveScaleForPlacementContent(activeTrack, activePlacementIndex, nullptr);
     const int oldRootNote = static_cast<int>(oldResolved.root);
     const int oldScaleType = scaleToUiScaleType(oldResolved.scale);
 
@@ -2487,14 +2472,14 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
 
     const DetectedKey newKey = makeDetectedKeyFromUi(newRoot, newScaleType, 1.0f);
 
-    if (activeMaterializationId != 0) {
-        processorRef_.setContentDetectedKey(ContentKey{DomainKind::StandaloneClip, activeMaterializationId, 0}, newKey);
+    if (activeContentKey.isValid()) {
+        processorRef_.setContentDetectedKey(activeContentKey, newKey);
     }
     applyScaleToUi(newRoot, newScaleType);
 
     DBG("ScaleSyncTrace: source=manual trackId=" + juce::String(activeTrack)
         + " placementIndex=" + juce::String(activePlacementIndex)
-        + " materializationId=" + juce::String(static_cast<juce::int64>(activeMaterializationId))
+        + " contentId=" + juce::String(static_cast<juce::int64>(activeContentKey.objectId))
         + " root=" + juce::String(newRoot)
         + " scale=" + juce::String(newScaleType));
 
@@ -2518,18 +2503,18 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
     resized();
     repaint();
 
-    // 延迟调用自动缩放，确保resized()完成后执行
+    // 寤惰繜璋冪敤鑷姩缂╂斁锛岀‘淇漴esized()瀹屾垚鍚庢墽琛?
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     juce::Timer::callAfterDelay(50, [safeThis, workspaceView]() {
         if (safeThis == nullptr) return;
 
         if (workspaceView) {
-            // 切换到ArrangementView
+            // 鍒囨崲鍒癆rrangementView
             if (!safeThis->arrangementView_.hasUserManuallyZoomed()) {
                 safeThis->arrangementView_.fitToContent();
             }
         } else {
-            // 切换到PianoRoll
+            // 鍒囨崲鍒癙ianoRoll
             if (!safeThis->pianoRoll_.hasUserManuallyZoomed()) {
                 safeThis->pianoRoll_.fitToScreen();
             }
@@ -2567,19 +2552,19 @@ void OpenTuneAudioProcessorEditor::trackVolumeChanged(int trackId, float volume)
     lastTrackVolumes_[static_cast<size_t>(trackId)] = volume;
 }
 
-// Y轴缩放同步：当TrackPanel或ArrangementView通过Ctrl+滚轮缩放时，同步另一个组件
+// Y杞寸缉鏀惧悓姝ワ細褰揟rackPanel鎴朅rrangementView閫氳繃Ctrl+婊氳疆缂╂斁鏃讹紝鍚屾鍙︿竴涓粍浠?
 void OpenTuneAudioProcessorEditor::trackHeightChanged(int newHeight)
 {
-    // 更新processor中的轨道高度
+    // 鏇存柊processor涓殑杞ㄩ亾楂樺害
     processorRef_.setTrackHeight(newHeight);
     
-    // 同步TrackPanel（如果不是由它触发的）
+    // 鍚屾TrackPanel锛堝鏋滀笉鏄敱瀹冭Е鍙戠殑锛?
     if (trackPanel_.getTrackHeight() != newHeight)
     {
         trackPanel_.setTrackHeight(newHeight);
     }
     
-    // 刷新ArrangementView
+    // 鍒锋柊ArrangementView
     arrangementView_.repaint();
 }
 
@@ -2697,15 +2682,15 @@ void OpenTuneAudioProcessorEditor::trackDeleteRequested(int trackId)
 
     const int visibleCount = trackPanel_.getVisibleTrackCount();
     if (visibleCount <= 1)
-        return; // 至少保留一条轨道
+        return; // 鑷冲皯淇濈暀涓€鏉¤建閬?
 
     if (trackId < 0 || trackId >= visibleCount)
         return;
 
-    // 原子地将后续轨道上移，清空最后一个槽位
+    // 鍘熷瓙鍦板皢鍚庣画杞ㄩ亾涓婄Щ锛屾竻绌烘渶鍚庝竴涓Ы浣?
     arrangement->removeTrackAndShift(trackId, visibleCount);
 
-    // 同步 TrackPanel UI 状态（颜色、mute/solo/volume）
+    // 鍚屾 TrackPanel UI 鐘舵€侊紙棰滆壊銆乵ute/solo/volume锛?
     const int newVisibleCount = visibleCount - 1;
     for (int i = 0; i < newVisibleCount; ++i) {
         trackPanel_.setTrackMuted(i, arrangement->isTrackMuted(i));
@@ -2714,7 +2699,7 @@ void OpenTuneAudioProcessorEditor::trackDeleteRequested(int trackId)
         trackPanel_.setTrackColour(i, arrangement->getTrackColour(i));
     }
 
-    // 减少可见轨道数（触发 resized + repaint + listener 通知）
+    // 鍑忓皯鍙杞ㄩ亾鏁帮紙瑙﹀彂 resized + repaint + listener 閫氱煡锛?
     trackPanel_.setVisibleTrackCount(newVisibleCount);
     arrangementView_.setVisibleTrackCount(newVisibleCount);
     arrangementView_.repaint();
@@ -2739,10 +2724,10 @@ void OpenTuneAudioProcessorEditor::placementSelectionChanged(int trackId, uint64
 {
     applyPlacementSelectionContext(trackId, placementId);
 
-    // 更新 reference context
+    // 鏇存柊 reference context
     refreshReferenceContext();
 
-    // 如果当前在PianoRoll视图，且用户没有手动缩放过，自动适配新clip
+    // 濡傛灉褰撳墠鍦≒ianoRoll瑙嗗浘锛屼笖鐢ㄦ埛娌℃湁鎵嬪姩缂╂斁杩囷紝鑷姩閫傞厤鏂癱lip
     if (!isWorkspaceView_) {
         juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
         juce::Timer::callAfterDelay(100, [safeThis]() {
@@ -2764,12 +2749,12 @@ void OpenTuneAudioProcessorEditor::placementTimingChanged(int trackId, int place
     projectSession_.markDirty();
 }
 
-// Y轴滚动同步：ArrangementView或TrackPanel滚动时通知另一个组件跟随
+// Y杞存粴鍔ㄥ悓姝ワ細ArrangementView鎴朤rackPanel婊氬姩鏃堕€氱煡鍙︿竴涓粍浠惰窡闅?
 void OpenTuneAudioProcessorEditor::verticalScrollChanged(int newOffset)
 {
-    // 同步TrackPanel
+    // 鍚屾TrackPanel
     trackPanel_.setVerticalScrollOffset(newOffset);
-    // 同步ArrangementView
+    // 鍚屾ArrangementView
     arrangementView_.setVerticalScrollOffset(newOffset);
 }
 
@@ -2796,11 +2781,11 @@ void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int place
     if (isWorkspaceView_)
     {
         transportBar_.setWorkspaceView(false);
-        viewToggled(false); // 会触发自动缩放
+        viewToggled(false); // 浼氳Е鍙戣嚜鍔ㄧ缉鏀?
     }
     else
     {
-        // 如果已经在PianoRoll视图，也需要调用fitToScreen
+        // 濡傛灉宸茬粡鍦≒ianoRoll瑙嗗浘锛屼篃闇€瑕佽皟鐢╢itToScreen
         juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
         juce::Timer::callAfterDelay(50, [safeThis]() {
             if (safeThis != nullptr && !safeThis->pianoRoll_.hasUserManuallyZoomed()) {
@@ -2873,7 +2858,14 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
         return;
     }
 
-    pianoRoll_.applyAutoTuneToSelection();
+    const auto result = pianoRoll_.applyAutoTuneToSelection();
+    if (!result.applied()) {
+        ConfirmDialogContent::showMessage(this,
+                                          juce::String("AUTO"),
+                                          result.message());
+        return;
+    }
+
     projectSession_.markDirty();
 }
 
@@ -2883,34 +2875,32 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, trackId);
     if (placementIndex < 0) return;
 
-    const uint64_t materializationId = getStandaloneMaterializationId(processorRef_, trackId, placementIndex);
-    if (materializationId == 0) return;
+    const ContentKey contentKey = getStandaloneContentKey(processorRef_, trackId, placementIndex);
+    if (!contentKey.isValid()) return;
 
-    const auto currentSettings = processorRef_.getPitchShiftSettings(materializationId);
+    const auto currentSettings = processorRef_.getPitchShiftSettings(contentKey);
 
     auto* content = new PitchShiftDialogContent(currentSettings);
 
     auto commands = processorRef_.getContentCommands();
-    content->setOnConfirm([this, materializationId, currentSettings, commands](const PitchShiftSettings& newSettings) {
+    content->setOnConfirm([this, contentKey, currentSettings, commands](const PitchShiftSettings& newSettings) {
         if (newSettings != currentSettings) {
-            ContentKey key{DomainKind::StandaloneClip, materializationId, 0};
             processorRef_.getUndoManager().addAction(std::make_unique<PitchShiftEditAction>(
-                commands, key, currentSettings, newSettings));
+                commands, contentKey, currentSettings, newSettings));
             if (commands)
-                commands->setPitchShiftSettings(key, newSettings);
+                commands->setPitchShiftSettings(contentKey, newSettings);
             parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
             projectSession_.markDirty();
         }
     });
 
-    content->setOnReset([this, materializationId, currentSettings, commands]() {
+    content->setOnReset([this, contentKey, currentSettings, commands]() {
         const auto identity = PitchShiftSettings::identity();
         if (identity != currentSettings) {
-            ContentKey key{DomainKind::StandaloneClip, materializationId, 0};
             processorRef_.getUndoManager().addAction(std::make_unique<PitchShiftEditAction>(
-                commands, key, currentSettings, identity));
+                commands, contentKey, currentSettings, identity));
             if (commands)
-                commands->setPitchShiftSettings(key, identity);
+                commands->setPitchShiftSettings(contentKey, identity);
             parameterPanel_.setPitchShiftIndicator(0, 0);
             projectSession_.markDirty();
         }
@@ -2936,12 +2926,12 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
     
     if (placementIndex < 0) return;
 
-    const uint64_t materializationId = getStandaloneMaterializationId(processorRef_, trackId, placementIndex);
-    if (materializationId == 0) {
+    const ContentKey contentKey = getStandaloneContentKey(processorRef_, trackId, placementIndex);
+    if (!contentKey.isValid()) {
         return;
     }
 
-    auto snap = processorRef_.getContentSnapshot(ContentKey{DomainKind::StandaloneClip, materializationId, 0});
+    auto snap = processorRef_.getContentSnapshot(contentKey);
     auto curve = snap ? snap->pitchCurve : nullptr;
     if (!curve) {
         return;
@@ -2984,14 +2974,14 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
         + " frameRange=[" + juce::String(startFrame) + "," + juce::String(endFrame) + "]"
         + " secRange=[" + juce::String(editStartSec, 3) + "," + juce::String(editEndSec, 3) + "]");
 
-    processorRef_.enqueueContentPartialRender(ContentKey{DomainKind::StandaloneClip, materializationId, 0}, editStartSec, editEndSec);
+    processorRef_.enqueueContentPartialRender(contentKey, editStartSec, editEndSec);
 
     projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::escapeKeyPressed()
 {
-    // ESC 等价于点击视图切换键：左右视图互切并同步按钮状态
+    // ESC 绛変环浜庣偣鍑昏鍥惧垏鎹㈤敭锛氬乏鍙宠鍥句簰鍒囧苟鍚屾鎸夐挳鐘舵€?
     const bool targetWorkspaceView = !isWorkspaceView_;
     transportBar_.setWorkspaceView(targetWorkspaceView);
     viewToggled(targetWorkspaceView);
@@ -3004,7 +2994,7 @@ void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
 
 void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
 {
-    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"保存工程"), juce::File(), "*.otproj");
+    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"淇濆瓨宸ョ▼"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
@@ -3018,27 +3008,27 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
         if (file.existsAsFile()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"覆盖现有工程？"),
-                    juce::String::fromUTF8(u8"目标工程文件已存在，是否覆盖？"),
-                    { { juce::String::fromUTF8(u8"覆盖"), [safeThis, file] {
+                    juce::String("Overwrite Existing Project?"),
+                    juce::String("The target project file already exists. Overwrite it?"),
+                    { { juce::String::fromUTF8(u8"瑕嗙洊"), [safeThis, file] {
                             if (safeThis == nullptr) return;
                             if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
                             auto result = safeThis->projectSession_.saveProjectAs(file);
                             if (!result.ok()) {
                                 ConfirmDialogContent::launch(
                                     new ConfirmDialogContent(
-                                        juce::String::fromUTF8(u8"保存工程失败"),
+                                        juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
                                         result.error().fullMessage(),
-                                        { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                        { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                                     safeThis.getComponent());
                                 return;
                             }
                             safeThis->syncRecentProjectsToMenu();
                             safeThis->updateTitleWithProjectPath();
                         }, true },
-                      { juce::String::fromUTF8(u8"取消"), nullptr, false } }),
+                      { juce::String::fromUTF8(u8"鍙栨秷"), nullptr, false } }),
                 safeThis.getComponent());
-            return; // Don't continue in outer callback — the inner callback handles save
+            return; // Don't continue in outer callback 鈥?the inner callback handles save
         }
 
         if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
@@ -3046,9 +3036,9 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
         if (!result.ok()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"保存工程失败"),
+                    juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
                     result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                    { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                 safeThis.getComponent());
             return;
         }
@@ -3065,9 +3055,9 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
         if (!result.ok()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"打开工程失败"),
+                    juce::String::fromUTF8(u8"鎵撳紑宸ョ▼澶辫触"),
                     result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                    { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                 this);
             projectSession_.clearRecentProjects();
             return;
@@ -3080,9 +3070,9 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     ConfirmDialogContent::launch(
         new ConfirmDialogContent(
-            juce::String::fromUTF8(u8"当前工程尚未保存"),
-            juce::String::fromUTF8(u8"打开其他工程前，是否保存当前工程的更改？"),
-            {               { juce::String::fromUTF8(u8"保存"), [safeThis, file] {
+            juce::String::fromUTF8(u8"褰撳墠宸ョ▼灏氭湭淇濆瓨"),
+            juce::String::fromUTF8(u8"鎵撳紑鍏朵粬宸ョ▼鍓嶏紝鏄惁淇濆瓨褰撳墠宸ョ▼鐨勬洿鏀癸紵"),
+            {               { juce::String::fromUTF8(u8"淇濆瓨"), [safeThis, file] {
                     if (safeThis == nullptr) return;
                     if (!safeThis->projectSession_.hasProjectPath()) {
                         safeThis->saveProjectAsRequested();
@@ -3101,9 +3091,9 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                                 if (!saveResult.ok()) {
                                     ConfirmDialogContent::launch(
                                         new ConfirmDialogContent(
-                                            juce::String::fromUTF8(u8"保存工程失败"),
+                                            juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
                                             saveResult.error().fullMessage(),
-                                            { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                            { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                                         safeThis.getComponent());
                                     return;
                                 }
@@ -3116,9 +3106,9 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                                 if (!openResult.ok()) {
                                     ConfirmDialogContent::launch(
                                         new ConfirmDialogContent(
-                                            juce::String::fromUTF8(u8"打开工程失败"),
+                                            juce::String::fromUTF8(u8"鎵撳紑宸ョ▼澶辫触"),
                                             openResult.error().fullMessage(),
-                                            { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                            { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                                         safeThis.getComponent());
                                     safeThis->projectSession_.clearRecentProjects();
                                     return;
@@ -3129,16 +3119,16 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                         });
                     }
                 }, true },
-              { juce::String::fromUTF8(u8"不保存"), [safeThis, file] {
+              { juce::String("Do Not Save"), [safeThis, file] {
                     if (safeThis == nullptr) return;
                     if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
                     auto openResult = safeThis->projectSession_.openProject(file);
                     if (!openResult.ok()) {
                         ConfirmDialogContent::launch(
                             new ConfirmDialogContent(
-                                juce::String::fromUTF8(u8"打开工程失败"),
+                                juce::String::fromUTF8(u8"鎵撳紑宸ョ▼澶辫触"),
                                 openResult.error().fullMessage(),
-                                { { juce::String::fromUTF8(u8"确定"), nullptr, true } }),
+                                { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
                             safeThis.getComponent());
                         safeThis->projectSession_.clearRecentProjects();
                         return;
@@ -3146,7 +3136,7 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                     safeThis->syncRecentProjectsToMenu();
                     safeThis->updateTitleWithProjectPath();
                 }, false },
-              { juce::String::fromUTF8(u8"取消"), nullptr, false } }),
+              { juce::String::fromUTF8(u8"鍙栨秷"), nullptr, false } }),
         this);
 }
 
@@ -3178,7 +3168,7 @@ void OpenTuneAudioProcessorEditor::syncRecentProjectsToMenu()
 // Reference Auto-Align Methods
 // ============================================================================
 
-// Look up a reference placement's materialization across all tracks.
+// Look up a reference placement's content across all tracks.
 static bool findReferencePlacementInfo(OpenTuneAudioProcessor& processor,
                                        uint64_t refPlacementId,
                                        StandaloneArrangement::Placement& out)
@@ -3195,7 +3185,7 @@ OpenTuneAudioProcessorEditor::AutoRefUiState OpenTuneAudioProcessorEditor::evalu
 {
     AutoRefUiState uiState;
     uiState.presentation.mode = ParameterPanel::AutoButtonPresentation::Mode::StandardAuto;
-    uiState.presentation.tooltip = juce::String::fromUTF8(u8"自动修音（吸附到临近音阶）");
+    uiState.presentation.tooltip = juce::String("Auto tune to nearby notes");
 
     const int trackId = getStandaloneActiveTrack(processorRef_);
     const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, trackId);
@@ -3215,7 +3205,7 @@ OpenTuneAudioProcessorEditor::AutoRefUiState OpenTuneAudioProcessorEditor::evalu
 
     if (uiState.availability.status == OpenTuneAudioProcessor::AutoRefAvailability::Status::Ready) {
         uiState.presentation.mode = ParameterPanel::AutoButtonPresentation::Mode::ReferenceAuto;
-        uiState.presentation.tooltip = juce::String::fromUTF8(u8"按参考 Clip 自动修音并对齐节奏");
+        uiState.presentation.tooltip = juce::String("Auto tune and align to the reference clip");
         return uiState;
     }
 
@@ -3247,7 +3237,7 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
         return;
     }
 
-    // Resolve reference materialization
+    // Resolve reference content
     StandaloneArrangement::Placement refPlacement;
     if (!findReferencePlacementInfo(processorRef_, autoRefUiState.availability.referencePlacementId, refPlacement)) {
         pianoRoll_.setReferenceOverlay(std::nullopt);
@@ -3256,7 +3246,7 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
 
     // If reference features are ready, set up piano roll overlay
     if (refPlacement.contentKey.isValid()) {
-        const ReferenceFeatureSet refFeatures = processorRef_.getReferenceFeatures(refPlacement.contentKey.objectId);
+        const ReferenceFeatureSet refFeatures = processorRef_.getReferenceFeatures(refPlacement.contentKey);
         if (refFeatures.isReady()
             && refFeatures.producer == ReferenceFeatureProducer::Game)
         {
@@ -3270,7 +3260,7 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
             }
             overlay.ghostColour = juce::Colours::steelblue;
             overlay.enabled = true;
-            // Source time projection: reference's local source time → timeline time
+            // Source time projection: reference's local source time 鈫?timeline time
             const double refTimelineStart = refPlacement.timelineStartSeconds;
             auto* refClip = processorRef_.getStandaloneContentRepository()
                 ? processorRef_.getStandaloneContentRepository()->findClip(refPlacement.contentKey) : nullptr;
@@ -3307,23 +3297,23 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
     auto* arrangement = processorRef_.getStandaloneArrangement();
     juce::PopupMenu menu;
 
-    // 获取 target placement 信息
+    // 鑾峰彇 target placement 淇℃伅
     StandaloneArrangement::Placement targetPlacement;
     if (!processorRef_.getPlacementById(trackId, targetPlacementId, targetPlacement)) {
         return;
     }
 
-    // 检查是否已有 reference binding
+    // 妫€鏌ユ槸鍚﹀凡鏈?reference binding
     const uint64_t existingRef = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
     if (existingRef != 0) {
-        menu.addItem(juce::String::fromUTF8(u8"不使用参考 Clip"), [this, arrangement, trackId, targetPlacementId]() {
+        menu.addItem(juce::String::fromUTF8(u8"涓嶄娇鐢ㄥ弬鑰?Clip"), [this, arrangement, trackId, targetPlacementId]() {
             arrangement->clearPlacementReferencePlacement(trackId, targetPlacementId);
             refreshReferenceContext();
         });
         menu.addSeparator();
     }
 
-    // 子菜单: 选择参考 Clip (列出同视图内其他 clip, 排除自身)
+    // 瀛愯彍鍗? 閫夋嫨鍙傝€?Clip (鍒楀嚭鍚岃鍥惧唴鍏朵粬 clip, 鎺掗櫎鑷韩)
     juce::PopupMenu refMenu;
     bool hasCandidates = false;
 
@@ -3332,11 +3322,11 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
         for (int pi = 0; pi < numPlacements; ++pi) {
             StandaloneArrangement::Placement candidate;
             if (!processorRef_.getPlacementByIndex(t, pi, candidate)) continue;
-            if (candidate.placementId == targetPlacementId) continue; // 排除自身
+            if (candidate.placementId == targetPlacementId) continue; // 鎺掗櫎鑷韩
             if (candidate.isRetired) continue;
 
-            // 排除已作为 target 的 (被其他 clip 引用)
-            // 简化检查: 只排除循环引用情况
+            // 鎺掗櫎宸蹭綔涓?target 鐨?(琚叾浠?clip 寮曠敤)
+            // 绠€鍖栨鏌? 鍙帓闄ゅ惊鐜紩鐢ㄦ儏鍐?
             if (arrangement->isCyclicReference(trackId, targetPlacementId, candidate.placementId)) continue;
 
             hasCandidates = true;
@@ -3351,9 +3341,9 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
     }
 
     if (hasCandidates) {
-        menu.addSubMenu(juce::String::fromUTF8(u8"选择参考 Clip"), refMenu);
+        menu.addSubMenu(juce::String::fromUTF8(u8"閫夋嫨鍙傝€?Clip"), refMenu);
     } else {
-        menu.addItem(juce::String::fromUTF8(u8"(无可用的参考 Clip)"), false, false, nullptr);
+        menu.addItem(juce::String::fromUTF8(u8"(鏃犲彲鐢ㄧ殑鍙傝€?Clip)"), false, false, nullptr);
     }
 
     if (buttonScreenArea.isEmpty())

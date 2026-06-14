@@ -17,7 +17,7 @@
  *   - 写者: clone snapshot → 修改 → atomic_store
  *   - 读者: atomic_load 拿 shared_ptr<const TimeGridSnapshot>，无锁读
  *
- * 与现有 PitchCurve 的协作: 平级在 MaterializationStore 内,
+ * 与现有 PitchCurve 的协作: 平级在 content owner 内,
  * 编辑 TimeGrid 不让 PitchCache 失效 (Stage 2 全重建,但 NSF 不重跑)。
  */
 #pragma once

@@ -109,7 +109,7 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
             if (s == SegmentState::Capturing)
                 continue;
             juce::ValueTree segNode("Segment");
-            segNode.setProperty("id", juce::String(seg->id), nullptr);
+            segNode.setProperty("id", juce::String(seg->contentKey.objectId), nullptr);
             segNode.setProperty("creationOrder", juce::String(seg->creationOrder), nullptr);
             segNode.setProperty("T_start", seg->T_start.load(std::memory_order_acquire), nullptr);
             segNode.setProperty("durationSeconds", seg->durationSeconds, nullptr);
@@ -137,7 +137,7 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
                 continue;
             const auto snap = seg->content->snapshotContent();
 
-            stream.writeInt64(static_cast<juce::int64>(seg->id));
+            stream.writeInt64(static_cast<juce::int64>(seg->contentKey.objectId));
             stream.writeInt64(static_cast<juce::int64>(seg->creationOrder));
             stream.writeDouble(seg->T_start.load(std::memory_order_acquire));
             stream.writeDouble(seg->durationSeconds);
@@ -268,11 +268,11 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
     // ── 3. Rebuild segments ──────────────────────────────────────────────
     uint64_t maxIdSeen = 0;
     int restoredCount = 0;
-    std::vector<uint64_t> idsToPublish;
-    std::vector<uint64_t> idsToRefresh;
+    std::vector<ContentKey> keysToPublish;
+    std::vector<ContentKey> keysToRefresh;
     for (auto& p : persisted) {
         auto seg = std::make_unique<CaptureSegment>();
-        seg->id = p.id;
+        seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, p.id, 0};
         seg->creationOrder = p.creationOrder;
         seg->captureSampleRate = p.captureSampleRate;
         seg->captureChannels = p.captureChannels;
@@ -280,7 +280,6 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         seg->anchored.store(true, std::memory_order_release);
         seg->durationSeconds = p.durationSeconds;
 
-        seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, p.id, 0};
         seg->content = std::make_unique<CaptureSegmentContent>(p.id);
 
         if (p.audio && p.audio->getNumSamples() > 0) {
@@ -294,6 +293,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         const bool ready = p.originalF0State == OriginalF0State::Ready;
         const auto restoredState = ready ? SegmentState::Edited : p.segmentState;
         seg->state.store(restoredState, std::memory_order_release);
+        const auto restoredKey = seg->contentKey;
 
         if (p.creationOrder > maxIdSeen)
             maxIdSeen = p.creationOrder;
@@ -304,10 +304,10 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
                 session.activeDisplaySegmentId_ = p.id;
             session.mutableSegments_.push_back(std::move(seg));
         }
-        idsToPublish.push_back(p.id);
+        keysToPublish.push_back(restoredKey);
         if (restoredState == SegmentState::Processing
             && p.originalF0State == OriginalF0State::Extracting) {
-            idsToRefresh.push_back(p.id);
+            keysToRefresh.push_back(restoredKey);
         }
         ++restoredCount;
     }
@@ -321,8 +321,9 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
 
     // Publish restored audio to CRS
     if (session.bindings_.publishPlaybackSource) {
-        for (uint64_t segId : idsToPublish) {
-            auto* seg = session.findSegmentById(segId);
+        for (const ContentKey& key : keysToPublish) {
+            auto* seg = session.findSegmentByContentKey(key);
+            if (!seg) continue;
             const auto snap = seg->content->snapshotContent();
             if (snap->audioBuffer) {
                 session.bindings_.publishPlaybackSource(
@@ -334,8 +335,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
     }
 
     if (session.bindings_.refreshSegment) {
-        for (uint64_t segId : idsToRefresh)
-            session.bindings_.refreshSegment(segId);
+        for (const ContentKey& key : keysToRefresh)
+            session.bindings_.refreshSegment(key);
     }
 
     return restoredCount > 0;

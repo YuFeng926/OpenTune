@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 namespace OpenTune {
 
@@ -283,19 +284,6 @@ void ArrangementViewComponent::setExperimentalReferenceControlsEnabled(bool enab
     }
 
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-}
-
-bool ArrangementViewComponent::isWaveformCacheCompleteForMaterialization(int trackId, uint64_t materializationId) const
-{
-    juce::ignoreUnused(trackId);
-    if (materializationId == 0)
-        return false;
-
-    const auto* mipmap = waveformMipmapCache_.get(materializationId);
-    if (!mipmap)
-        return false;
-
-    return mipmap->isComplete();
 }
 
 void ArrangementViewComponent::resized()
@@ -788,8 +776,7 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
     if (timeBudgetMs <= 0.0)
         return false;
 
-    std::unordered_set<uint64_t> alive;
-    alive.reserve(static_cast<std::size_t>(OpenTuneAudioProcessor::MAX_TRACKS * 16));
+    std::set<ContentKey> alive;
     
     for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
     {
@@ -801,7 +788,7 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
                 continue;
             }
 
-            const uint64_t key = placement.contentKey.objectId;
+            const ContentKey key = placement.contentKey;
             alive.insert(key);
             
             auto snap = processor_.getContentSnapshot(placement.contentKey);
@@ -1092,18 +1079,20 @@ bool ArrangementViewComponent::runDebugSelfTest()
 
     // 测试WaveformMipmapCache
     WaveformMipmapCache cache;
-    auto& m1 = cache.getOrCreate(1);
-    auto& m2 = cache.getOrCreate(2);
+    const ContentKey key1{DomainKind::StandaloneClip, 1, 0};
+    const ContentKey key2{DomainKind::StandaloneClip, 2, 0};
+    auto& m1 = cache.getOrCreate(key1);
+    auto& m2 = cache.getOrCreate(key2);
     m1.setAudioSource(sharedAudio);
     m2.setAudioSource(sharedAudio);
     
-    std::unordered_set<uint64_t> alive;
-    alive.insert(2u);
+    std::set<ContentKey> alive;
+    alive.insert(key2);
     cache.prune(alive);
     
-    if (cache.get(1u) != nullptr)
+    if (cache.get(key1) != nullptr)
         return false;
-    if (cache.get(2u) == nullptr)
+    if (cache.get(key2) == nullptr)
         return false;
 
     return true;
@@ -2152,7 +2141,6 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
         return;
     selectedPlacementIndex_ = placementIndex;
 
-    auto delta = e.getPosition() - dragStartPos_;
     if (isDraggingPlacement_)
     {
         setMouseCursor(juce::MouseCursor::DraggingHandCursor);
@@ -2182,6 +2170,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     }
     else if (isAdjustingGain_)
     {
+        auto delta = e.getPosition() - dragStartPos_;
         double factor = std::pow(10.0, (-static_cast<double>(delta.y)) / 200.0);
         setStandalonePlacementGain(processor_, selectedTrack_, selectedPlacementId_, static_cast<float>(dragStartPlacementGain_ * factor));
 
@@ -2472,16 +2461,16 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                 StandaloneArrangement::Placement placement;
                 if (getStandalonePlacementById(processor_, sel.trackId, sel.placementId, placement))
                 {
-                    entries.push_back({
-                        sel.trackId,
-                        placement.contentKey.objectId,
-                        placement.clipInSeconds,
-                        placement.durationSeconds,
-                        placement.gain,
-                        placement.fadeInDuration,
-                        placement.fadeOutDuration,
-                        placement.name
-                    });
+                    PlacementClipEntry entry;
+                    entry.sourceTrackId = sel.trackId;
+                    entry.sourceContentKey = placement.contentKey;
+                    entry.clipInSeconds = placement.clipInSeconds;
+                    entry.durationSeconds = placement.durationSeconds;
+                    entry.gain = placement.gain;
+                    entry.fadeInDuration = placement.fadeInDuration;
+                    entry.fadeOutDuration = placement.fadeOutDuration;
+                    entry.name = placement.name;
+                    entries.push_back(std::move(entry));
                 }
             }
             processor_.getClipClipboard().store(std::move(entries));
@@ -2503,14 +2492,14 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                 auto* arr = processor_.getStandaloneArrangement();
                 if (!arr) break;
 
-                // Copy materialization range
-                uint64_t newMatId = processor_.copyMaterializationRange(
-                    entry.sourceMaterializationId, entry.clipInSeconds, entry.durationSeconds);
-                if (newMatId == 0) continue;
+                // Copy content range
+                ContentKey newContentKey = processor_.copyContentRange(
+                    entry.sourceContentKey, entry.clipInSeconds, entry.durationSeconds);
+                if (!newContentKey.isValid()) continue;
 
                 StandaloneArrangement::Placement newPlacement;
                 newPlacement.placementId = 0; // will be assigned by insertPlacement
-                newPlacement.contentKey = ContentKey{DomainKind::StandaloneClip, newMatId, 0};
+                newPlacement.contentKey = newContentKey;
                 newPlacement.mappingRevision = 1;
                 newPlacement.timelineStartSeconds = pasteTime;
                 newPlacement.durationSeconds = entry.durationSeconds;
@@ -2518,11 +2507,11 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                 newPlacement.fadeInDuration = entry.fadeInDuration;
                 newPlacement.fadeOutDuration = entry.fadeOutDuration;
                 newPlacement.name = entry.name;
-                newPlacement.clipInSeconds = 0.0; // copy starts from beginning of new materialization
+                newPlacement.clipInSeconds = 0.0; // copy starts from beginning of new content
 
                 if (!arr->insertPlacement(selectedTrack_, newPlacement)) {
-                    // Rollback — delete the orphan materialization
-                    processor_.getStandaloneContentRepository()->retireClip(ContentKey{DomainKind::StandaloneClip, newMatId, 0});
+                    // Rollback — delete the orphan content
+                    processor_.getStandaloneContentRepository()->retireClip(newContentKey);
                     continue;
                 }
                 pasteTime += entry.durationSeconds; // chain placements sequentially
@@ -2542,22 +2531,22 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             StandaloneArrangement::Placement placement;
             if (getStandalonePlacementById(processor_, selectedTrack_, selectedPlacementId_, placement))
             {
-                uint64_t newMatId = processor_.cloneMaterialization(
-                    placement.contentKey.objectId, placement.name + " Copy");
-                if (newMatId != 0)
+                ContentKey newContentKey = processor_.cloneContent(
+                    placement.contentKey, placement.name + " Copy");
+                if (newContentKey.isValid())
                 {
                     auto* arr = processor_.getStandaloneArrangement();
                     if (arr)
                     {
                         StandaloneArrangement::Placement dup = placement;
                         dup.placementId = 0;
-                        dup.contentKey = ContentKey{DomainKind::StandaloneClip, newMatId, 0};
+                        dup.contentKey = newContentKey;
                         dup.mappingRevision = 1;
 
                         const int count = arr->getNumPlacements(selectedTrack_);
                         if (!arr->insertPlacement(selectedTrack_, count, dup)) {
-                            // Rollback — delete the orphan materialization
-                            processor_.getStandaloneContentRepository()->retireClip(ContentKey{DomainKind::StandaloneClip, newMatId, 0});
+                            // Rollback — delete the orphan content
+                            processor_.getStandaloneContentRepository()->retireClip(newContentKey);
                             return true;
                         }
 

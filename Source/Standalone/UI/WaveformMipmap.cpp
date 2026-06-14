@@ -231,22 +231,22 @@ void WaveformMipmap::clear()
     }
 }
 
-WaveformMipmap& WaveformMipmapCache::getOrCreate(uint64_t materializationId)
+WaveformMipmap& WaveformMipmapCache::getOrCreate(ContentKey contentKey)
 {
-    auto it = caches_.find(materializationId);
+    auto it = caches_.find(contentKey);
     if (it != caches_.end())
         return *it->second;
     
-    auto inserted = caches_.emplace(materializationId, std::make_unique<WaveformMipmap>());
+    auto inserted = caches_.emplace(contentKey, std::make_unique<WaveformMipmap>());
     return *inserted.first->second;
 }
 
-void WaveformMipmapCache::remove(uint64_t materializationId)
+void WaveformMipmapCache::remove(ContentKey contentKey)
 {
-    caches_.erase(materializationId);
+    caches_.erase(contentKey);
 }
 
-void WaveformMipmapCache::prune(const std::unordered_set<uint64_t>& alive)
+void WaveformMipmapCache::prune(const std::set<ContentKey>& alive)
 {
     for (auto it = caches_.begin(); it != caches_.end();)
     {

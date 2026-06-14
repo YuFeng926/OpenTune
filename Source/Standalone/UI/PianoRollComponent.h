@@ -17,7 +17,7 @@
 #include "UIColors.h"
 #include "Utils/F0Timeline.h"
 #include "Utils/AudioEditingScheme.h"
-#include "Utils/MaterializationTimelineProjection.h"
+#include "Utils/ContentTimelineProjection.h"
 #include "Utils/PianoRollVisualPreferences.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/Note.h"
@@ -46,7 +46,6 @@
 #include "WaveformMipmap.h"
 #include "../../Utils/UndoManager.h"
 #include "../../Content/ContentEditCommands.h"
-#include "../../Content/DomainContentOwner.h"
 
 namespace OpenTune {
 
@@ -155,7 +154,7 @@ public:
         Continuous
     };
 
-    using TimelineMaterializationPlacement = OpenTune::TimelineMaterializationPlacement;
+    using TimelineContentPlacement = OpenTune::TimelineContentPlacement;
 
     PianoRollComponent();
     ~PianoRollComponent() override;
@@ -165,7 +164,7 @@ public:
     void resized() override;
     void onHeartbeatTick();
 
-    void setEditedMaterialization(ContentKey contentKey,
+    void setEditedContent(ContentKey contentKey,
                            std::shared_ptr<PitchCurve> curve,
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
                            int sampleRate);
@@ -185,8 +184,6 @@ public:
     ContentKey editedContentKey() const { return editedContentKey_; }
 
     /** [ARA 重构] 注入域内容所有者（替代 setContentProviders）。统一 ARA/Standalone/Capture 路径。 */
-    void setContentOwner(DomainContentOwner* owner);
-    DomainContentOwner* contentOwner() const { return contentOwner_; }
 
     void setIsPlaying(bool playing) {
         bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
@@ -271,7 +268,7 @@ public:
     void setNoteSplit(float value);
     
     bool isAutoTuneProcessing() const;
-    double getMaterializationDurationSeconds() const;
+    double getContentDurationSeconds() const;
     bool hasSelectionRange() const { return interactionState_.selection.hasSelectionArea && interactionState_.selection.selectionStartTime != interactionState_.selection.selectionEndTime; }
     std::pair<double, double> getSelectionTimeRange() const
     {
@@ -279,8 +276,8 @@ public:
                  std::max(interactionState_.selection.selectionStartTime, interactionState_.selection.selectionEndTime) };
     }
 
-    void setMaterializationProjection(const MaterializationTimelineProjection& projection);
-    void setTimelineMaterializationPlacements(std::vector<TimelineMaterializationPlacement> placements);
+    void setContentProjection(const ContentTimelineProjection& projection);
+    void setTimelineContentPlacements(std::vector<TimelineContentPlacement> placements);
     void setTimelineViewDomain(double viewStartSeconds, double viewEndSeconds);
     void clearTimelineViewDomain();
     
@@ -298,7 +295,31 @@ public:
 
     void fitToScreen();
 
-    bool applyAutoTuneToSelection();
+    enum class AutoTuneApplyStatus
+    {
+        Applied,
+        NoCurve,
+        NoProcessor,
+        NoContent,
+        MissingContentSnapshot,
+        OriginalF0NotReady,
+        AlreadyInFlight,
+        MissingCurveSnapshot,
+        EmptyOriginalF0,
+        EmptyTimeline,
+        NoTargetSelection,
+        EmptyTargetRange
+    };
+
+    struct AutoTuneApplyResult
+    {
+        AutoTuneApplyStatus status = AutoTuneApplyStatus::NoContent;
+
+        bool applied() const noexcept { return status == AutoTuneApplyStatus::Applied; }
+        juce::String message() const;
+    };
+
+    AutoTuneApplyResult applyAutoTuneToSelection();
 
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
@@ -358,10 +379,10 @@ private:
 public:
     bool keyPressed(const juce::KeyPress& key) override;
 
-    /// Re-read notes from the materialization store and update the cache.
+    /// Re-read notes from the content store and update the cache.
     /// Public so editors can drive a refresh after an async note generator
-    /// (e.g. GAME) commits without changing the active materializationId.
-    void refreshEditedMaterializationNotes();
+    /// (e.g. GAME) commits without changing the active ContentKey.
+    void refreshEditedContentNotes();
 
 private:
     void onScrollVBlankCallback(double timestampSec);
@@ -412,10 +433,10 @@ private:
     bool commitCompletedNoteCorrectionResult(const PianoRollCorrectionWorker::AsyncCorrectionRequest& completed);
     PianoRollToolHandler::Context buildToolHandlerContext();
     void initializeToolHandler();
-    void applyEditedMaterializationCurve(std::shared_ptr<PitchCurve> curve);
-    void applyEditedMaterializationAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
-    PianoRollRenderer::MaterializationRenderItem buildMaterializationRenderItem(
-        const TimelineMaterializationPlacement& placement,
+    void applyEditedContentCurve(std::shared_ptr<PitchCurve> curve);
+    void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
+    PianoRollRenderer::ContentRenderItem buildContentRenderItem(
+        const TimelineContentPlacement& placement,
         double visibleTimeStart,
         double visibleTimeEnd,
         int viewportStartX,
@@ -431,12 +452,12 @@ private:
     void clearNoteDraft();
     // affectedRange: 编辑时已知的精确帧范围；undo/redo 用此范围 enqueuePartialRender。
     // 纯 note 编辑没有 corrected-F0 所有权时，调用方传入完整 F0 物化范围。
-    bool commitEditedMaterializationNotes(const std::vector<Note>& notes,
+    bool commitEditedContentNotes(const std::vector<Note>& notes,
                                           F0FrameRange affectedRange);
-    bool commitEditedMaterializationNotesAndSegments(const std::vector<Note>& notes,
+    bool commitEditedContentNotesAndSegments(const std::vector<Note>& notes,
                                              const std::vector<CorrectedSegment>& segments,
                                              F0FrameRange affectedRange);
-    bool commitEditedMaterializationCorrectedSegments(const std::vector<CorrectedSegment>& segments,
+    bool commitEditedContentCorrectedSegments(const std::vector<CorrectedSegment>& segments,
                                                        F0FrameRange affectedRange);
     bool selectNotesOverlappingFrames(int startFrame, int endFrameExclusive);
     juce::Rectangle<int> getNoteBounds(const Note& note) const;
@@ -469,10 +490,10 @@ private:
     double timelineViewOriginSeconds() const noexcept;
     double timelineViewEndSeconds() const noexcept;
     bool hasExplicitTimelineViewDomain() const noexcept;
-    const TimelineMaterializationPlacement* findActiveTimelineMaterializationPlacement() const noexcept;
-    MaterializationTimelineProjection activeMaterializationProjection() const noexcept;
-    double projectTimelineTimeToMaterialization(double timelineSeconds) const;
-    double projectMaterializationTimeToTimeline(double materializationSeconds) const;
+    const TimelineContentPlacement* findActiveTimelineContentPlacement() const noexcept;
+    ContentTimelineProjection activeContentProjection() const noexcept;
+    double projectTimelineTimeToContent(double timelineSeconds) const;
+    double projectContentTimeToTimeline(double contentSeconds) const;
     double getTimelinePixelsPerSecond() const;
     double getPlayheadAbsolutePixelX(double playheadTimeSeconds) const;
     int timeToXForRenderScroll(double seconds,
@@ -508,7 +529,7 @@ private:
                                                         int renderPianoKeyWidth) const;
 
     /** Rebuild the prepared render model from current state if the cache key has changed.
-     *  Called from every state-change path (scroll, zoom, visual prefs, materialization),
+     *  Called from every state-change path (scroll, zoom, visual prefs, content),
      *  NEVER from paint(). */
     void prepareVisibleRenderModel() const;
     void refreshVerticalViewportGeometry(PianoRollVisualInvalidationPriority priority =
@@ -565,7 +586,7 @@ private:
     NoteSegmentationPolicy segmentationPolicy_;
     
     std::atomic<bool> autoTuneInFlight_{false};
-    std::atomic<uint64_t> editedMaterializationEpoch_{0};
+    std::atomic<uint64_t> editedContentEpoch_{0};
 
     double bpm_ = 120.0;
     int timeSigNum_ = 4;
@@ -575,9 +596,9 @@ private:
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer_;
     double audioBufferSampleRate_ = static_cast<double>(kAudioSampleRate);
 
-    std::vector<TimelineMaterializationPlacement> timelineMaterializationPlacements_;
-    MaterializationTimelineProjection pendingSingleMaterializationProjection_;
-    bool explicitTimelineMaterializationPlacements_ = false;
+    std::vector<TimelineContentPlacement> timelineContentPlacements_;
+    ContentTimelineProjection pendingSingleContentProjection_;
+    bool explicitTimelineContentPlacements_ = false;
     struct TimelineViewDomain {
         double startSeconds{0.0};
         double endSeconds{0.0};
@@ -605,9 +626,7 @@ private:
     }
 
     // [ARA 重构] 域内容所有者（替代 contentAccess_/contentCommands_ 的旧路由）
-    DomainContentOwner* contentOwner_ = nullptr;
 
-    uint64_t editedMaterializationId_ = 0;
     ContentKey editedContentKey_;
     bool experimentalFeaturesEnabled_ = false;
     std::vector<Note> cachedNotes_;
@@ -652,11 +671,11 @@ private:
     std::vector<CorrectedSegment> getCurrentSegments() const;
     
     bool applyVibratoParameterToSelection(VibratoParam param, float value);
-    bool applyTimelineMaterializationPlacements(std::vector<TimelineMaterializationPlacement> placements,
+    bool applyTimelineContentPlacements(std::vector<TimelineContentPlacement> placements,
                                                 bool explicitContract);
-    void deriveSingleTimelineMaterializationPlacement();
+    void deriveSingleTimelineContentPlacement();
 
-    std::vector<Note> getEditedMaterializationNotesCopy() const;
+    std::vector<Note> getEditedContentNotesCopy() const;
 
     std::unique_ptr<PianoRollRenderer> renderer_;
     std::unique_ptr<PianoRollToolHandler> toolHandler_;

@@ -64,12 +64,12 @@ juce::ValueTree ProjectPersistence::toValueTree(const ProjectSnapshot& snapshot)
         root.addChild(mediaPool, -1, nullptr);
     }
 
-    if (!snapshot.materializations.empty()) {
-        juce::ValueTree matList("Materializations");
-        for (const auto& mat : snapshot.materializations) {
-            matList.addChild(materializationToValueTree(mat), -1, nullptr);
+    if (!snapshot.contents.empty()) {
+        juce::ValueTree contentList("Contents");
+        for (const auto& mat : snapshot.contents) {
+            contentList.addChild(contentToValueTree(mat), -1, nullptr);
         }
-        root.addChild(matList, -1, nullptr);
+        root.addChild(contentList, -1, nullptr);
     }
 
     if (!snapshot.tracks.empty()) {
@@ -129,13 +129,13 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
         }
     }
 
-    // Materializations
-    auto matList = tree.getChildWithName("Materializations");
-    if (matList.isValid()) {
-        for (int i = 0; i < matList.getNumChildren(); ++i) {
-            auto child = matList.getChild(i);
-            if (child.hasType("Materialization")) {
-                snapshot.materializations.push_back(materializationFromValueTree(child));
+    // Contents
+    auto contentList = tree.getChildWithName("Contents");
+    if (contentList.isValid()) {
+        for (int i = 0; i < contentList.getNumChildren(); ++i) {
+            auto child = contentList.getChild(i);
+            if (child.hasType("Content")) {
+                snapshot.contents.push_back(contentFromValueTree(child));
             }
         }
     }
@@ -270,17 +270,21 @@ ProjectSourceEntry ProjectPersistence::sourceFromValueTree(const juce::ValueTree
 }
 
 // ============================================================================
-// 序列化辅助 — Materialization
+// 序列化辅助 — Content
 // ============================================================================
 
-juce::ValueTree ProjectPersistence::materializationToValueTree(const ProjectMaterializationEntry& mat)
+juce::ValueTree ProjectPersistence::contentToValueTree(const ProjectContentEntry& mat)
 {
-    juce::ValueTree tree("Materialization");
-    tree.setProperty("materializationId", static_cast<int64_t>(mat.materializationId), nullptr);
+    juce::ValueTree tree("Content");
+    tree.setProperty("contentDomain", static_cast<int>(mat.contentKey.domainKind), nullptr);
+    tree.setProperty("contentObjectId", static_cast<int64_t>(mat.contentKey.objectId), nullptr);
+    tree.setProperty("contentDiscriminator", static_cast<int64_t>(mat.contentKey.sourceWindowDiscriminator), nullptr);
     tree.setProperty("sourceId", static_cast<int64_t>(mat.sourceId), nullptr);
     tree.setProperty("retired", mat.retired ? 1 : 0, nullptr);
     tree.setProperty("renderRevision", static_cast<int64_t>(mat.renderRevision), nullptr);
-    tree.setProperty("lineageParentMaterializationId", static_cast<int64_t>(mat.lineageParentMaterializationId), nullptr);
+    tree.setProperty("lineageParentDomain", static_cast<int>(mat.lineageParentContentKey.domainKind), nullptr);
+    tree.setProperty("lineageParentObjectId", static_cast<int64_t>(mat.lineageParentContentKey.objectId), nullptr);
+    tree.setProperty("lineageParentDiscriminator", static_cast<int64_t>(mat.lineageParentContentKey.sourceWindowDiscriminator), nullptr);
 
     // SourceWindow
     juce::ValueTree swTree("SourceWindow");
@@ -327,14 +331,18 @@ juce::ValueTree ProjectPersistence::materializationToValueTree(const ProjectMate
     return tree;
 }
 
-ProjectMaterializationEntry ProjectPersistence::materializationFromValueTree(const juce::ValueTree& tree)
+ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTree& tree)
 {
-    ProjectMaterializationEntry m;
-    m.materializationId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("materializationId", 0)));
+    ProjectContentEntry m;
+    m.contentKey.domainKind = static_cast<DomainKind>(static_cast<int>(tree.getProperty("contentDomain", 0)));
+    m.contentKey.objectId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("contentObjectId", 0)));
+    m.contentKey.sourceWindowDiscriminator = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("contentDiscriminator", 0)));
     m.sourceId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("sourceId", 0)));
     m.retired = static_cast<int>(tree.getProperty("retired", 0)) != 0;
     m.renderRevision = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("renderRevision", 0)));
-    m.lineageParentMaterializationId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("lineageParentMaterializationId", 0)));
+    m.lineageParentContentKey.domainKind = static_cast<DomainKind>(static_cast<int>(tree.getProperty("lineageParentDomain", 0)));
+    m.lineageParentContentKey.objectId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("lineageParentObjectId", 0)));
+    m.lineageParentContentKey.sourceWindowDiscriminator = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("lineageParentDiscriminator", 0)));
 
     // SourceWindow
     auto swTree = tree.getChildWithName("SourceWindow");
@@ -402,7 +410,6 @@ juce::ValueTree ProjectPersistence::notesToValueTree(const std::vector<Note>& no
         nt.setProperty("vibratoRate", note.vibratoRate, nullptr);
         nt.setProperty("velocity", note.velocity, nullptr);
         nt.setProperty("isVoiced", note.isVoiced ? 1 : 0, nullptr);
-        nt.setProperty("selected", note.selected ? 1 : 0, nullptr);
         tree.addChild(nt, -1, nullptr);
     }
     return tree;
@@ -426,7 +433,6 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
         note.vibratoRate = child.getProperty("vibratoRate", -1.0f);
         note.velocity = child.getProperty("velocity", 1.0f);
         note.isVoiced = static_cast<int>(child.getProperty("isVoiced", 1)) != 0;
-        note.selected = static_cast<int>(child.getProperty("selected", 0)) != 0;
         notes.push_back(note);
     }
     return notes;
@@ -437,7 +443,7 @@ std::vector<Note> ProjectPersistence::notesFromValueTree(const juce::ValueTree& 
 // ============================================================================
 
 juce::ValueTree ProjectPersistence::segmentsToValueTree(
-    const std::vector<ProjectMaterializationEntry::SegmentEntry>& segments)
+    const std::vector<ProjectContentEntry::SegmentEntry>& segments)
 {
     juce::ValueTree tree("CorrectedSegments");
     for (const auto& seg : segments) {
@@ -457,15 +463,15 @@ juce::ValueTree ProjectPersistence::segmentsToValueTree(
     return tree;
 }
 
-std::vector<ProjectMaterializationEntry::SegmentEntry> ProjectPersistence::segmentsFromValueTree(
+std::vector<ProjectContentEntry::SegmentEntry> ProjectPersistence::segmentsFromValueTree(
     const juce::ValueTree& tree)
 {
-    std::vector<ProjectMaterializationEntry::SegmentEntry> segments;
+    std::vector<ProjectContentEntry::SegmentEntry> segments;
     if (!tree.isValid()) { return segments; }
     for (int i = 0; i < tree.getNumChildren(); ++i) {
         auto child = tree.getChild(i);
         if (!child.hasType("Segment")) { continue; }
-        ProjectMaterializationEntry::SegmentEntry seg;
+        ProjectContentEntry::SegmentEntry seg;
         seg.startFrame = static_cast<int>(child.getProperty("startFrame", 0));
         seg.endFrame = static_cast<int>(child.getProperty("endFrame", 0));
         seg.source = static_cast<uint8_t>(static_cast<int>(child.getProperty("source", 0)));
@@ -491,7 +497,7 @@ std::vector<ProjectMaterializationEntry::SegmentEntry> ProjectPersistence::segme
 // TimeGrid 序列化
 // ============================================================================
 
-juce::ValueTree ProjectPersistence::timeGridToValueTree(const ProjectMaterializationEntry::TimeGridEntry& tg)
+juce::ValueTree ProjectPersistence::timeGridToValueTree(const ProjectContentEntry::TimeGridEntry& tg)
 {
     juce::ValueTree tree("TimeGrid");
     tree.setProperty("revision", static_cast<int64_t>(tg.revision), nullptr);
@@ -508,15 +514,15 @@ juce::ValueTree ProjectPersistence::timeGridToValueTree(const ProjectMaterializa
     return tree;
 }
 
-ProjectMaterializationEntry::TimeGridEntry ProjectPersistence::timeGridFromValueTree(const juce::ValueTree& tree)
+ProjectContentEntry::TimeGridEntry ProjectPersistence::timeGridFromValueTree(const juce::ValueTree& tree)
 {
-    ProjectMaterializationEntry::TimeGridEntry tg;
+    ProjectContentEntry::TimeGridEntry tg;
     if (!tree.isValid()) { return tg; }
     tg.revision = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("revision", 0)));
     for (int i = 0; i < tree.getNumChildren(); ++i) {
         auto child = tree.getChild(i);
         if (!child.hasType("Handle")) { continue; }
-        ProjectMaterializationEntry::TimeGridEntry::HandleEntry h;
+        ProjectContentEntry::TimeGridEntry::HandleEntry h;
         h.id = static_cast<int>(child.getProperty("id", 0));
         h.kind = static_cast<uint8_t>(static_cast<int>(child.getProperty("kind", 0)));
         h.sourceSeconds = child.getProperty("sourceSeconds", 0.0);
@@ -573,7 +579,9 @@ juce::ValueTree ProjectPersistence::placementsToValueTree(const std::vector<Proj
     for (const auto& p : placements) {
         juce::ValueTree pt("Placement");
         pt.setProperty("placementId", static_cast<int64_t>(p.placementId), nullptr);
-        pt.setProperty("materializationId", static_cast<int64_t>(p.materializationId), nullptr);
+        pt.setProperty("contentDomain", static_cast<int>(p.contentKey.domainKind), nullptr);
+        pt.setProperty("contentObjectId", static_cast<int64_t>(p.contentKey.objectId), nullptr);
+        pt.setProperty("contentDiscriminator", static_cast<int64_t>(p.contentKey.sourceWindowDiscriminator), nullptr);
         pt.setProperty("mappingRevision", static_cast<int64_t>(p.mappingRevision), nullptr);
         pt.setProperty("timelineStartSeconds", p.timelineStartSeconds, nullptr);
         pt.setProperty("timelineDurationSeconds", p.timelineDurationSeconds, nullptr);
@@ -596,7 +604,9 @@ std::vector<ProjectPlacementEntry> ProjectPersistence::placementsFromValueTree(c
         if (!child.hasType("Placement")) { continue; }
         ProjectPlacementEntry p;
         p.placementId = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("placementId", 0)));
-        p.materializationId = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("materializationId", 0)));
+        p.contentKey.domainKind = static_cast<DomainKind>(static_cast<int>(child.getProperty("contentDomain", 0)));
+        p.contentKey.objectId = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("contentObjectId", 0)));
+        p.contentKey.sourceWindowDiscriminator = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("contentDiscriminator", 0)));
         p.mappingRevision = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("mappingRevision", 0)));
         p.timelineStartSeconds = child.getProperty("timelineStartSeconds", 0.0);
         p.timelineDurationSeconds = child.getProperty("timelineDurationSeconds", 0.0);
@@ -636,7 +646,7 @@ ProjectReferenceBinding ProjectPersistence::referenceBindingFromValueTree(const 
 // SilentGaps 序列化
 // ============================================================================
 
-juce::ValueTree ProjectPersistence::silentGapsToValueTree(const std::vector<ProjectMaterializationEntry::SilentGapEntry>& gaps)
+juce::ValueTree ProjectPersistence::silentGapsToValueTree(const std::vector<ProjectContentEntry::SilentGapEntry>& gaps)
 {
     juce::ValueTree tree("SilentGaps");
     for (const auto& gap : gaps) {
@@ -649,14 +659,14 @@ juce::ValueTree ProjectPersistence::silentGapsToValueTree(const std::vector<Proj
     return tree;
 }
 
-std::vector<ProjectMaterializationEntry::SilentGapEntry> ProjectPersistence::silentGapsFromValueTree(const juce::ValueTree& tree)
+std::vector<ProjectContentEntry::SilentGapEntry> ProjectPersistence::silentGapsFromValueTree(const juce::ValueTree& tree)
 {
-    std::vector<ProjectMaterializationEntry::SilentGapEntry> gaps;
+    std::vector<ProjectContentEntry::SilentGapEntry> gaps;
     if (!tree.isValid()) { return gaps; }
     for (int i = 0; i < tree.getNumChildren(); ++i) {
         auto child = tree.getChild(i);
         if (!child.hasType("SilentGap")) { continue; }
-        ProjectMaterializationEntry::SilentGapEntry gap;
+        ProjectContentEntry::SilentGapEntry gap;
         gap.startSample = static_cast<int64_t>(child.getProperty("startSample", 0));
         gap.endSampleExclusive = static_cast<int64_t>(child.getProperty("endSampleExclusive", 0));
         gap.minLevel_dB = child.getProperty("minLevel_dB", 0.0f);
@@ -669,7 +679,7 @@ std::vector<ProjectMaterializationEntry::SilentGapEntry> ProjectPersistence::sil
 // ReferenceFeatures 序列化
 // ============================================================================
 
-juce::ValueTree ProjectPersistence::referenceFeaturesToValueTree(const ProjectMaterializationEntry::ReferenceFeatureEntry& rf)
+juce::ValueTree ProjectPersistence::referenceFeaturesToValueTree(const ProjectContentEntry::ReferenceFeatureEntry& rf)
 {
     juce::ValueTree tree("ReferenceFeatures");
     tree.setProperty("analysisRevision", rf.analysisRevision, nullptr);
@@ -702,9 +712,9 @@ juce::ValueTree ProjectPersistence::referenceFeaturesToValueTree(const ProjectMa
     return tree;
 }
 
-ProjectMaterializationEntry::ReferenceFeatureEntry ProjectPersistence::referenceFeaturesFromValueTree(const juce::ValueTree& tree)
+ProjectContentEntry::ReferenceFeatureEntry ProjectPersistence::referenceFeaturesFromValueTree(const juce::ValueTree& tree)
 {
-    ProjectMaterializationEntry::ReferenceFeatureEntry rf;
+    ProjectContentEntry::ReferenceFeatureEntry rf;
     if (!tree.isValid()) { return rf; }
 
     rf.analysisRevision = static_cast<int>(tree.getProperty("analysisRevision", 0));
@@ -723,7 +733,7 @@ ProjectMaterializationEntry::ReferenceFeatureEntry ProjectPersistence::reference
         for (int i = 0; i < taTree.getNumChildren(); ++i) {
             auto child = taTree.getChild(i);
             if (!child.hasType("TimingAnchor")) { continue; }
-            ProjectMaterializationEntry::ReferenceFeatureEntry::TimingAnchorEntry anchor;
+            ProjectContentEntry::ReferenceFeatureEntry::TimingAnchorEntry anchor;
             anchor.anchorId = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("anchorId", 0)));
             anchor.sourceSeconds = child.getProperty("sourceSeconds", 0.0);
             anchor.strength = child.getProperty("strength", 0.0f);

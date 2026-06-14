@@ -4,13 +4,13 @@
  * OpenTune 核心音频处理器
  * 
  * OpenTuneAudioProcessor 是 JUCE runtime 外壳，负责：
- * - 组合 SourceStore、MaterializationStore、StandaloneArrangement 与 VST3 ARA session
+ * - 组合 SourceStore、content owner、StandaloneArrangement 与 VST3 ARA session
  * - 实时音频播放和混音（processBlock）
  * - AI 推理调度（通过独立的 F0InferenceService 与 VocoderRenderScheduler）
  * - 项目状态序列化/反序列化
  * 
  * 线程安全说明：
- * - source truth 由 SourceStore 管理，editable truth 由 MaterializationStore 管理
+ * - source truth 由 SourceStore 管理，editable truth 由 content owner 管理
  * - Standalone placement/mix truth 由 StandaloneArrangement 管理
  * - 音频线程只读取 immutable playback snapshot 与 clip core 读取源
  */
@@ -28,7 +28,6 @@
 #include <thread>
 #include <optional>
 #include "SourceStore.h"
-#include "MaterializationStore.h"
 #include "StandaloneArrangement.h"
 #include "DSP/ResamplingManager.h"
 #include "Utils/PitchCurve.h"
@@ -38,7 +37,7 @@
 #include "Inference/VocoderDomain.h"
 #include "Services/F0ExtractionService.h"
 #include "Services/ReferenceAnalysisService.h"
-#include "Utils/MaterializationState.h"
+#include "Utils/ContentAnalysisState.h"
 #include "Utils/SourceWindow.h"
 #include "Utils/SilentGapDetector.h"
 #include "Utils/TimeCoordinate.h"
@@ -55,6 +54,7 @@
 #include "Utils/PlaybackAudioReader.h"
 #include "Content/ContentKey.h"
 #include "Content/StandaloneContentRepository.h"
+#include "Render/ContentRenderService.h"
 #include <functional>
 
 namespace OpenTune {
@@ -67,11 +67,11 @@ struct SplitOutcome {
     int      trackId{0};
     uint64_t sourceId{0};
     uint64_t originalPlacementId{0};
-    uint64_t originalMaterializationId{0};
+    ContentKey originalContentKey;
     uint64_t leadingPlacementId{0};
     uint64_t trailingPlacementId{0};
-    uint64_t leadingMaterializationId{0};
-    uint64_t trailingMaterializationId{0};
+    ContentKey leadingContentKey;
+    ContentKey trailingContentKey;
 };
 
 struct MergeOutcome {
@@ -79,17 +79,17 @@ struct MergeOutcome {
     uint64_t sourceId{0};
     uint64_t leadingPlacementId{0};
     uint64_t trailingPlacementId{0};
-    uint64_t leadingMaterializationId{0};
-    uint64_t trailingMaterializationId{0};
+    ContentKey leadingContentKey;
+    ContentKey trailingContentKey;
     uint64_t mergedPlacementId{0};
-    uint64_t mergedMaterializationId{0};
+    ContentKey mergedContentKey;
 };
 
 struct DeleteOutcome {
     int      trackId{0};
     uint64_t sourceId{0};
     uint64_t placementId{0};
-    uint64_t materializationId{0};
+    ContentKey contentKey;
 };
 
 // ============================================================================
@@ -177,17 +177,17 @@ public:
             InsufficientFeatures,
             InvalidTimeGrid,
             NoMutation,
-            CommitFailed
-        };
-
-        Status status{Status::CommitFailed};
-        juce::String message;
-        uint64_t targetMaterializationId{0};
-        int affectedStartFrame{0};
-        int affectedEndFrame{0};
-
-        bool succeeded() const noexcept { return status == Status::Succeeded; }
+        CommitFailed
     };
+
+    Status status{Status::CommitFailed};
+    juce::String message;
+    ContentKey targetContentKey;
+    int affectedStartFrame{0};
+    int affectedEndFrame{0};
+
+    bool succeeded() const noexcept { return status == Status::Succeeded; }
+};
 
     struct AutoRefAvailability {
         enum class Status : uint8_t {
@@ -209,7 +209,7 @@ public:
     enum class ReferenceAnalysisPreheatStatus : uint8_t {
         AlreadyReady = 0,
         Queued,
-        InvalidMaterialization,
+        InvalidContent,
         AnalysisFailed
     };
 
@@ -283,23 +283,23 @@ public:
 
     struct CommittedPlacement {
         uint64_t sourceId{0};
-        uint64_t materializationId{0};
+        ContentKey contentKey;
         uint64_t placementId{0};
 
         bool isValid() const noexcept
         {
-            return sourceId != 0 && materializationId != 0 && placementId != 0;
+            return sourceId != 0 && contentKey.isValid() && placementId != 0;
         }
     };
 
-    struct MaterializationRefreshRequest {
+    struct ContentRefreshRequest {
         ContentKey contentKey;
         bool preserveCorrectionsOutsideChangedRange{false};
         double changedStartSeconds{0.0};
         double changedEndSeconds{0.0};
     };
 
-    bool requestContentRefresh(const MaterializationRefreshRequest& request);
+    bool requestContentRefresh(const ContentRefreshRequest& request);
 
     bool prepareImport(juce::AudioBuffer<float>&& inBuffer,
                        double inSampleRate,
@@ -311,7 +311,7 @@ public:
     CommittedPlacement commitPreparedImportAsPlacement(PreparedImport&& prepared,
                                                        const ImportPlacement& placement,
                                                        uint64_t sourceId = 0);
-    uint64_t commitPreparedImportAsMaterialization(PreparedImport&& prepared,
+    uint64_t commitPreparedImportAsContent(PreparedImport&& prepared,
                                                     uint64_t sourceId = 0);
 
     bool ensureSourceById(uint64_t sourceId,
@@ -327,15 +327,15 @@ public:
     // Clipboard for arrangement clip copy/paste
     PlacementClipboard& getClipClipboard() { return clipClipboard_; }
 
-    uint64_t cloneMaterialization(uint64_t sourceMaterializationId,
-                                  const juce::String& newName = {});
+    ContentKey cloneContent(ContentKey sourceContentKey,
+                            const juce::String& newName = {});
 
-    // Deep copy materialization audio data for paste/duplicate operations.
-    // Creates a new materialization from a range of an existing one.
-    uint64_t copyMaterializationRange(uint64_t sourceMaterializationId,
-                                       double offsetSeconds,
-                                       double durationSeconds,
-                                       const juce::String& newName = {});
+    // Deep copy content audio data for paste/duplicate operations.
+    // Creates a new content from a range of an existing one.
+    ContentKey copyContentRange(ContentKey sourceContentKey,
+                                double offsetSeconds,
+                                double durationSeconds,
+                                const juce::String& newName = {});
 
 private:
     std::atomic<double> currentSampleRate_{44100.0};
@@ -378,7 +378,7 @@ public:
 
     struct DiagnosticInfo {
         int editVersion{0};
-        uint64_t materializationId{0};
+        ContentKey contentKey;
         uint64_t placementId{0};
         uint64_t publishedRevision{0};
         uint64_t desiredRevision{0};
@@ -387,7 +387,7 @@ public:
         RenderCache::ChunkStats chunkStats;
     };
 
-    struct MaterializationSampleRange {
+    struct ContentSampleRange {
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
 
@@ -426,7 +426,6 @@ public:
 
 private:
     std::shared_ptr<SourceStore> sourceStore_;
-    std::shared_ptr<MaterializationStore> materializationStore_;
     std::shared_ptr<ContentRenderService> contentRenderService_;
     std::unique_ptr<StandaloneContentRepository> standaloneContentRepository_;
     std::shared_ptr<ContentEditCommands> contentCommands_;
@@ -478,18 +477,18 @@ private:
 
     ExperimentalReferenceAlignMode experimentalReferenceAlignMode_ = ExperimentalReferenceAlignMode::Off;
 
-    // Set of materializationIds with a note-generation job pending or running
-    // on noteGeneratorPool_. Editors poll `isNoteGenInFlightForMaterialization`
+    // Set of ContentKeys with a note-generation job pending or running
+    // on noteGeneratorPool_. Editors poll `isNoteGenInFlightForContent`
     // to drive the shared "正在处理音频" overlay (covers F0 + note-gen).
     mutable std::mutex                  noteGenInFlightMutex_;
-    std::unordered_set<uint64_t>        noteGenInFlightMatIds_;
+    std::unordered_set<ContentKey>      noteGenInFlightContentKeys_;
 
 public:
-    bool isNoteGenInFlightForMaterialization(uint64_t materializationId) const;
+    bool isNoteGenInFlightForContent(ContentKey contentKey) const;
 private:
-    F0ExtractionService materializationRefreshService_{1, 64};
+    F0ExtractionService contentRefreshService_{1, 64};
 
-    std::shared_ptr<std::atomic<bool>> materializationRefreshAliveFlag_{std::make_shared<std::atomic<bool>>(true)};
+    std::shared_ptr<std::atomic<bool>> contentRefreshAliveFlag_{std::make_shared<std::atomic<bool>>(true)};
 
     // UI state
     bool showWaveform_{true};
@@ -512,9 +511,8 @@ private:
                             const char* serviceName,
                             std::function<bool(const std::string&)> initFunc);
 
-    void detectAndCommitMaterializationKeyIfUnset(uint64_t materializationId);
     void detectContentKeyIfUnset(ContentKey key);
-    uint64_t ensureSourceAndCreateMaterialization(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
+    ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
     void configureReferenceAnalysisService();
     void analysisCompleted(ContentKey key,
                            const ReferenceFeatureSet& result) override;
@@ -563,14 +561,14 @@ private:
     // Editor's per-frame update reads via isStage2InFlight() and shows
     // "时间拉伸中..." badge so the user knows their handle drag is being
     // processed (RB R3 is ~5× realtime; ~6s for 30s clip).
-    std::atomic<bool>     stage2InFlight_{false};
-    std::atomic<uint64_t> stage2InFlightMatId_{0};
-    std::atomic<int>      stage2QueueDepth_{0};
+    std::atomic<bool>        stage2InFlight_{false};
+    std::atomic<ContentKey>  stage2InFlightContentKey_{};
+    std::atomic<int>         stage2QueueDepth_{0};
 
 public:
     // Public API for triggering Stage 2 rebuilds (called from
-    // setMaterializationTimeGridById and from tests).
-    // Uses ContentKey (replaces old materializationId+store* pattern).
+    // setContentTimeGrid and from tests).
+    // Uses ContentKey (replaces old contentId+store* pattern).
     // Worker fetches current revisions from the store at runtime.
     void requestStage2Rebuild(ContentKey contentKey,
                               uint64_t pitchRevision,
@@ -578,9 +576,9 @@ public:
                               uint64_t timeGridRevision);
 
     // §7 — Stage 2 worker progress query for UI feedback.
-    bool     isStage2InFlight() const noexcept { return stage2InFlight_.load(std::memory_order_acquire); }
-    uint64_t getStage2InFlightMaterializationId() const noexcept { return stage2InFlightMatId_.load(std::memory_order_acquire); }
-    int      getStage2QueueDepth() const noexcept { return stage2QueueDepth_.load(std::memory_order_acquire); }
+    bool       isStage2InFlight() const noexcept { return stage2InFlight_.load(std::memory_order_acquire); }
+    ContentKey getStage2InFlightContentKey() const noexcept { return stage2InFlightContentKey_.load(std::memory_order_acquire); }
+    int        getStage2QueueDepth() const noexcept { return stage2QueueDepth_.load(std::memory_order_acquire); }
 
 private:
 
@@ -628,7 +626,7 @@ public:
     void didBindToARA() noexcept override;
 #endif
 
-    static bool freezeRenderBoundaries(const MaterializationSampleRange& materializationRange,
+    static bool freezeRenderBoundaries(const ContentSampleRange& contentRange,
                                        int64_t startSample,
                                        int64_t endSampleExclusive,
                                        int hopSize,
@@ -637,15 +635,15 @@ public:
                                                    const std::vector<float>& synthesizedAudio,
                                                    std::vector<float>& publishedAudio);
     
-    // Materialization and placement access
+    // Content and placement access
     uint64_t getPlacementId(int trackId, int placementIndex) const;
     int findPlacementIndexById(int trackId, uint64_t placementId) const;
     bool getPlacementByIndex(int trackId, int placementIndex, StandaloneArrangement::Placement& out) const;
     bool getPlacementById(int trackId, uint64_t placementId, StandaloneArrangement::Placement& out) const;
-    PitchShiftSettings getPitchShiftSettings(uint64_t materializationId) const;
+    PitchShiftSettings getPitchShiftSettings(ContentKey key) const;
     ReferenceFeatureSet getReferenceFeatures(ContentKey key) const;
 
-    // ⚡️ vocal-time-stretch §3.6 — TimeGrid accessors per materialization
+    // ⚡️ vocal-time-stretch §3.6 — TimeGrid accessors per content
     bool ensureTimeToolAnchorSeed(ContentKey key);
     AutoRefAvailability queryAutoRefAvailability(uint64_t targetPlacementId) const;
 
@@ -709,15 +707,7 @@ public:
     }
 #endif
     ReferenceAlignmentResult executeReferenceAlignmentForPlacement(uint64_t targetPlacementId);
-    bool commitAutoTuneGeneratedNotesByMaterializationId(uint64_t materializationId,
-                                                  const std::vector<Note>& generatedNotes,
-                                                  int startFrame,
-                                                  int endFrameExclusive,
-                                                 float retuneSpeed,
-                                                 float vibratoDepth,
-                                                 float vibratoRate,
-                                                 double audioSampleRate);
-    
+
     std::optional<SplitOutcome> splitPlacementAtSeconds(int trackId, int placementIndex, double splitSeconds);
     std::optional<MergeOutcome> mergePlacements(int trackId, uint64_t leadingPlacementId, uint64_t trailingPlacementId, int targetPlacementIndex);
     std::optional<DeleteOutcome> deletePlacement(int trackId, int placementIndex);
@@ -726,46 +716,10 @@ public:
 
     // ── Internal: these APIs exist to serve remaining PluginProcessor.cpp callers
     // ── (import, split, merge, clone, state save/load). Not for new code.
-    using MaterializationSnapshot = MaterializationStore::MaterializationSnapshot;
     bool getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const;
     bool extractImportedClipOriginalF0(const EditableContentSnapshot& snap,
                                        F0ExtractionService::Result& out,
                                        std::string& errorMessage);
-    bool getMaterializationSnapshotById(uint64_t materializationId, MaterializationSnapshot& out) const;
-    double getMaterializationAudioDurationById(uint64_t materializationId) const noexcept;
-    bool replaceMaterializationAudioById(uint64_t materializationId,
-                                 std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer,
-                                 std::vector<SilentGap> silentGaps);
-    uint64_t replaceMaterializationWithNewLineage(uint64_t oldId,
-                                 MaterializationStore::CreateMaterializationRequest request);
-    RenderCache::ChunkStats getMaterializationChunkStatsById(uint64_t materializationId) const;
-    bool getMaterializationChunkBoundariesById(uint64_t materializationId, std::vector<double>& outSeconds) const;
-    std::shared_ptr<const juce::AudioBuffer<float>> getMaterializationAudioBufferById(uint64_t materializationId) const;
-    MaterializationStore* getMaterializationStore() noexcept { return materializationStore_.get(); }
-    const MaterializationStore* getMaterializationStore() const noexcept { return materializationStore_.get(); }
-    bool enqueueMaterializationPartialRenderById(uint64_t materializationId, double relStartSeconds, double relEndSeconds);
-    std::shared_ptr<PitchCurve> getMaterializationPitchCurveById(uint64_t materializationId) const;
-    bool setMaterializationPitchCurveById(uint64_t materializationId, std::shared_ptr<PitchCurve> curve);
-    OriginalF0State getMaterializationOriginalF0StateById(uint64_t materializationId) const;
-    bool setMaterializationOriginalF0StateById(uint64_t materializationId, OriginalF0State state);
-    DetectedKey getMaterializationDetectedKeyById(uint64_t materializationId) const;
-    bool setMaterializationDetectedKeyById(uint64_t materializationId, const DetectedKey& key);
-    std::shared_ptr<const TimeGridSnapshot> getMaterializationTimeGridById(uint64_t materializationId) const;
-    uint64_t getMaterializationTimeGridRevisionById(uint64_t materializationId) const;
-    bool setMaterializationTimeGridById(uint64_t materializationId,
-                                         std::shared_ptr<const TimeGridSnapshot> snapshot,
-                                         int64_t affectedSrcStartFrame,
-                                         int64_t affectedSrcEndFrame);
-    void setPitchShiftSettings(uint64_t materializationId, const PitchShiftSettings& settings);
-    std::shared_ptr<RenderCache> getMaterializationRenderCacheById(uint64_t materializationId) const;
-    using MaterializationNotesSnapshot = MaterializationStore::MaterializationNotesSnapshot;
-    std::vector<Note> getMaterializationNotesById(uint64_t materializationId) const;
-    MaterializationNotesSnapshot getMaterializationNotesSnapshotById(uint64_t materializationId) const;
-    bool setMaterializationNotesById(uint64_t materializationId, const std::vector<Note>& notes);
-    bool setMaterializationCorrectedSegmentsById(uint64_t materializationId, const std::vector<CorrectedSegment>& segments);
-    bool commitMaterializationNotesAndSegmentsById(uint64_t materializationId,
-                                          const std::vector<Note>& notes,
-                                          const std::vector<CorrectedSegment>& segments);
     ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(ContentKey key);
 
     // ⚡️ vocal-time-stretch §7 — Stage2 rebuild queue control

@@ -1,7 +1,8 @@
 #pragma once
 
 #include "PianoRollRenderer.h"
-#include "Utils/MaterializationTimelineProjection.h"
+#include "Content/ContentKey.h"
+#include "Utils/ContentTimelineProjection.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -20,7 +21,7 @@ class OpenTuneAudioProcessor;
  * has not changed, or rebuilds it on demand.
  *
  * The cache is invalidated when any of the following changes:
- *   - materialization identity / pitch epoch / notes epoch
+ *   - content identity / pitch epoch / notes epoch
  *   - visual preference revision (show booleans, scale, tool, time-unit …)
  *   - zoom bucket (quantized to avoid tiny scroll-only rebuilds)
  *   - viewport visible range band / overscan window
@@ -39,7 +40,7 @@ public:
 
     /** Key struct that uniquely identifies a cached render model. */
     struct Key {
-        uint64_t materializationId = 0;
+        ContentKey contentKey;
         uint64_t pitchEpoch = 0;
         uint64_t notesEpoch = 0;
         uint64_t visualPrefsRevision = 0;
@@ -64,7 +65,7 @@ public:
         uint64_t interactionEpoch = 0;
 
         bool operator==(const Key& o) const noexcept {
-            return materializationId == o.materializationId
+            return contentKey == o.contentKey
                 && pitchEpoch == o.pitchEpoch
                 && notesEpoch == o.notesEpoch
                 && visualPrefsRevision == o.visualPrefsRevision

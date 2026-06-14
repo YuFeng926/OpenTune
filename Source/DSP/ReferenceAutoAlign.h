@@ -5,6 +5,7 @@
 #include "../Utils/Note.h"
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"
+#include "../Content/ContentKey.h"
 
 #include <cstdint>
 #include <memory>
@@ -14,7 +15,7 @@ namespace OpenTune {
 
 struct ReferenceClipProjection {
     uint64_t placementId{0};
-    uint64_t materializationId{0};
+    ContentKey contentKey;
     double timelineStartSeconds{0.0};
     double timelineEndSeconds{0.0};
 
@@ -52,7 +53,7 @@ struct AlignmentPatch {
     };
 
     bool success{false};
-    uint64_t targetMaterializationId{0};
+    ContentKey targetContentKey;
     int affectedStartFrame{0};
     int affectedEndFrame{0};
     std::vector<Note> notesAfter;

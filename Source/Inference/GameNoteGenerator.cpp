@@ -1,8 +1,8 @@
 #include "GameNoteGenerator.h"
-#include "../MaterializationStore.h"
 #include "../Utils/AppLogger.h"
 #include "../Utils/PitchUtils.h"
 #include "../Utils/SilentGapDetector.h"
+#include "../Render/RenderChunkPlanner.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>

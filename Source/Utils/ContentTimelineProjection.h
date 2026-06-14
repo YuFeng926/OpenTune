@@ -14,14 +14,14 @@ Value clampProjectionValue(Value value, Value low, Value high) noexcept
 
 } // namespace detail
 
-struct MaterializationTimelineProjection {
+struct ContentTimelineProjection {
     double timelineStartSeconds{0.0};
     double timelineDurationSeconds{0.0};
-    double materializationDurationSeconds{0.0};      // local 起点恒 0，故只需 duration
+    double contentDurationSeconds{0.0};      // local 起点恒 0，故只需 duration
 
     bool isValid() const noexcept
     {
-        return timelineDurationSeconds > 0.0 && materializationDurationSeconds > 0.0;
+        return timelineDurationSeconds > 0.0 && contentDurationSeconds > 0.0;
     }
 
     double timelineEndSeconds() const noexcept
@@ -29,26 +29,26 @@ struct MaterializationTimelineProjection {
         return timelineStartSeconds + timelineDurationSeconds;
     }
 
-    // 旧 materializationEndSeconds() 被 materializationDurationSeconds 替代；
-    // 任何需要 "local 区间末尾" 的调用点直接用 materializationDurationSeconds。
+    // 旧 contentEndSeconds() 被 contentDurationSeconds 替代；
+    // 任何需要 "local 区间末尾" 的调用点直接用 contentDurationSeconds。
 
-    double projectTimelineTimeToMaterialization(double timelineSeconds) const noexcept
+    double projectTimelineTimeToContent(double timelineSeconds) const noexcept
     {
         if (!isValid()) {
             return 0.0;
         }
 
         const double normalized = (timelineSeconds - timelineStartSeconds) / timelineDurationSeconds;
-        return normalized * materializationDurationSeconds;
+        return normalized * contentDurationSeconds;
     }
 
-    double projectMaterializationTimeToTimeline(double materializationSeconds) const noexcept
+    double projectContentTimeToTimeline(double contentSeconds) const noexcept
     {
         if (!isValid()) {
             return timelineStartSeconds;
         }
 
-        const double normalized = materializationSeconds / materializationDurationSeconds;
+        const double normalized = contentSeconds / contentDurationSeconds;
         return timelineStartSeconds + normalized * timelineDurationSeconds;
     }
 
@@ -61,13 +61,13 @@ struct MaterializationTimelineProjection {
         return detail::clampProjectionValue(timelineSeconds, timelineStartSeconds, timelineEndSeconds());
     }
 
-    double clampMaterializationTime(double materializationSeconds) const noexcept
+    double clampContentTime(double contentSeconds) const noexcept
     {
         if (!isValid()) {
             return 0.0;
         }
 
-        return detail::clampProjectionValue(materializationSeconds, 0.0, materializationDurationSeconds);
+        return detail::clampProjectionValue(contentSeconds, 0.0, contentDurationSeconds);
     }
 };
 

@@ -4,6 +4,7 @@
 #include "Utils/PitchCurve.h"
 #include "Utils/Note.h"
 #include "Utils/LegacyNoteGenerator.h"
+#include "Content/ContentKey.h"
 #include <vector>
 #include <memory>
 #include <optional>
@@ -55,8 +56,8 @@ public:
         // returns. Note generation itself is always chromatic.
         std::optional<ScaleSnapConfig> postSnap;
         std::vector<float> autoOriginalF0Full;
-        uint64_t materializationEpochSnapshot = 0;
-        uint64_t materializationIdSnapshot = 0;
+        uint64_t contentEpochSnapshot = 0;
+        ContentKey contentKeySnapshot;
 
         enum class ErrorKind {
             None,

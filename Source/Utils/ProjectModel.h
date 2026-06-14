@@ -7,7 +7,7 @@
  * 设计原则：
  *   - 只保存用户意图与编辑真相，不保存 RenderCache、推理状态、动画状态
  *   - 媒体引用使用工程目录下的相对路径
- *   - ID 字段统一使用 uint64_t，与现有 SourceStore/MaterializationStore/Arrangement 一致
+ *   - 内容身份统一使用 ContentKey；placement/source 自身 id 仍是 domain-local uint64_t
  *   - 所有时间统一用 Seconds，所有版本/修订统一用 revision
  */
 
@@ -19,9 +19,10 @@
 #include <cstdint>
 #include <vector>
 
-#include "DSP/ChromaKeyDetector.h"
-#include "Utils/Note.h"
-#include "Utils/SourceWindow.h"
+#include "../DSP/ChromaKeyDetector.h"
+#include "../Utils/Note.h"
+#include "../Utils/SourceWindow.h"
+#include "../Content/ContentKey.h"
 
 namespace OpenTune {
 
@@ -73,15 +74,15 @@ struct ProjectSourceEntry {
 };
 
 // ============================================================================
-// Materialization 持久化条目
+// Content 持久化条目
 // ============================================================================
 
-struct ProjectMaterializationEntry {
-    uint64_t materializationId{0};
+struct ProjectContentEntry {
+    ContentKey contentKey;
     uint64_t sourceId{0};
     bool retired{false};
     uint64_t renderRevision{0};
-    uint64_t lineageParentMaterializationId{0};
+    ContentKey lineageParentContentKey;
 
     // Source window (provenance)
     SourceWindow sourceWindow;
@@ -179,7 +180,7 @@ struct ProjectReferenceBinding {
 
 struct ProjectPlacementEntry {
     uint64_t placementId{0};
-    uint64_t materializationId{0};
+    ContentKey contentKey;
     uint64_t mappingRevision{0};
     double timelineStartSeconds{0.0};
     double timelineDurationSeconds{0.0};
@@ -208,7 +209,7 @@ struct ProjectSnapshot {
     ProjectHeader header;
     ProjectSettings settings;
     std::vector<ProjectSourceEntry> sources;
-    std::vector<ProjectMaterializationEntry> materializations;
+    std::vector<ProjectContentEntry> contents;
     std::vector<ProjectTrackEntry> tracks;
     std::vector<ProjectReferenceBinding> referenceBindings;
 

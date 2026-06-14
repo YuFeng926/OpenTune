@@ -27,7 +27,6 @@ struct Note {
     float vibratoRate = -1.0f;      // 颤音速率（-1表示使用默认值）
     float velocity = 1.0f;          // 力度
     bool isVoiced = true;           // 是否为有声段
-    bool selected = false;          // 选中状态
     bool dirty = false;             // 脏标记，用于增量渲染
 
     double getDuration() const {
@@ -125,7 +124,6 @@ public:
             if (note.startTime < startTime) {
                 Note left = note;
                 left.endTime = startTime;
-                left.selected = false;
                 left.dirty = true;
                 if (left.endTime > left.startTime) {
                     updated.push_back(left);
@@ -135,7 +133,6 @@ public:
             if (note.endTime > endTime) {
                 Note right = note;
                 right.startTime = endTime;
-                right.selected = false;
                 right.dirty = true;
                 if (right.endTime > right.startTime) {
                     updated.push_back(right);

@@ -2,8 +2,8 @@
  * Standalone 编曲视图数据模型（StandaloneArrangement）
  *
  * 管理 Standalone 模式下的多轨时间轴：Track、Placement 与播放快照。
- * 每个 Placement 引用一个 Materialization，并在时间轴上确定起始位置和时长。
- * 本类不持有音频数据本身——音频编辑内容由 MaterializationStore 管理。
+ * 每个 Placement 引用一个 Content，并在时间轴上确定起始位置和时长。
+ * 本类不持有音频数据本身——音频编辑内容由 content owner 管理。
  *
  * 线程安全：stateLock_ (ReadWriteLock) 保护所有 Track/Placement 状态；
  *          PlaybackSnapshot 通过 std::atomic_load/exchange(shared_ptr) 无锁发布。
@@ -35,7 +35,7 @@ public:
     // 时间轴上的一个片段摆放，引用 ContentKey 标识的内容域
     struct Placement {
         uint64_t placementId{0};
-        ContentKey contentKey;                  // 域内容标识（StandaloneClip 路径），替代 materializationId
+        ContentKey contentKey;                  // 域内容标识（StandaloneClip 路径），替代 contentId
         uint64_t mappingRevision{0};
         double timelineStartSeconds{0.0};
         double durationSeconds{0.0};
