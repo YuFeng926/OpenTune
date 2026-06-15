@@ -1,7 +1,6 @@
 #pragma once
 #include "DomainContentOwner.h"
 #include "EditableContentState.h"
-#include "RetiredContentRecord.h"
 #include "../Utils/PitchCurve.h"
 #include <memory>
 #include <vector>

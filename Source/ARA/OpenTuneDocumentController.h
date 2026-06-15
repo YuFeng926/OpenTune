@@ -30,7 +30,6 @@ public:
         juce::ARAPlaybackRegion* playbackRegion{nullptr};
         juce::String audioModificationPersistentId;
         SourceWindow contentWindow;
-        uint64_t sourceId{0};
         uint64_t contentRevision{0};
         uint64_t placementRevision{0};
         double startInPlaybackTime{0.0};
@@ -115,9 +114,6 @@ public:
 
     /** 读取材质化时长 */
     double readContentDuration(ContentKey key) const;
-
-    /** 读取 sourceId */
-    uint64_t readSourceId(ContentKey key) const;
 
     /** 是否有内容 */
     bool hasContent(ContentKey key) const;

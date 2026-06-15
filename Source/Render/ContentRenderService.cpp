@@ -59,12 +59,6 @@ void ContentRenderService::detachExecutionLease(void* owner)
     renderWorker_.detachExecutionLease(owner);
 }
 
-bool ContentRenderService::hasActiveLease(void* /*owner*/) const noexcept
-{
-    // RenderWorker 不公开 lease 状态；Phase 0.8 保留兼容性
-    return false;
-}
-
 void ContentRenderService::enqueueRender(RenderJob job)
 {
     renderWorker_.enqueue(std::move(job));
@@ -73,12 +67,6 @@ void ContentRenderService::enqueueRender(RenderJob job)
 bool ContentRenderService::hasPendingJobs() const
 {
     return renderWorker_.hasPendingJobs();
-}
-
-void ContentRenderService::notifyRenderWorker()
-{
-    // 不再需要手动通知：enqueue 和 worker loop 的 predicate wait 自动处理唤醒。
-    // Phase 0.7 时调用方会移除对 notifyRenderWorker 的调用。
 }
 
 void ContentRenderService::pauseRenderWorker()

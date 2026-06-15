@@ -2971,9 +2971,8 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
         standaloneArrangement_->deletePlacementById(entry.trackId, entry.placementId, nullptr, nullptr);
     }
 
-    const auto retiredClipIds = standaloneContentRepository_->getRetiredClipIds();
-    for (const uint64_t id : retiredClipIds) {
-        const ContentKey key{DomainKind::StandaloneClip, id, 0};
+    const auto retiredClips = standaloneContentRepository_->getRetiredClips();
+    for (const auto& key : retiredClips) {
         if (standaloneArrangement_->referencesContentAnyState(key)) {
             continue;
         }
@@ -4870,7 +4869,6 @@ void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
                 AppLogger::error("ChunkRender: synthesis length mismatch for RenderCache publish objId="
                     + juce::String(static_cast<juce::int64>(chunkObjId)));
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                contentRenderService_->notifyRenderWorker();
                 return;
             }
 
@@ -4880,7 +4878,6 @@ void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
                 AppLogger::error("ChunkRender: RenderCache rejected published chunk objId="
                     + juce::String(static_cast<juce::int64>(chunkObjId)));
                 renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                contentRenderService_->notifyRenderWorker();
                 return;
             }
 
@@ -4901,7 +4898,6 @@ void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
                 + " error=" + error);
             renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
         }
-        contentRenderService_->notifyRenderWorker();
     };
 
     vocoderDomain_->submit(std::move(vocoderJob));

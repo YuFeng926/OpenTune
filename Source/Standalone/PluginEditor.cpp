@@ -1087,7 +1087,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             const auto f0State = snap ? snap->originalF0State : OriginalF0State::NotRequested;
             const bool f0Done = (f0State == OriginalF0State::Ready
                                   || f0State == OriginalF0State::Failed);
-            const bool noteGenBusy = processorRef_.isNoteGenInFlightForContent(targetContentKey.objectId);
+            const bool noteGenBusy = processorRef_.isNoteGenInFlightForContent(targetContentKey);
             // Only unlatch when BOTH F0 and note generation are finished —
             // shared "正在处理音高" overlay covers the whole import pipeline.
             if (f0Done && !noteGenBusy) {
@@ -1123,8 +1123,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
                 autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在提取节奏锚点"));
                 shouldShowOverlay = true;
             }
-        }
-    }
         }
     }
 
