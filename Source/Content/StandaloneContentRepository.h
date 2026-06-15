@@ -23,7 +23,6 @@ public:
 
     /// 查找 content owner（不区分 active/retired）。
     StandaloneClipContent* findClip(ContentKey key) const;
-    StandaloneClipContent* findClip(StandaloneClipId clipId) const;
 
     // ── Lifecycle ───────────────────────────────────────────
 
@@ -41,9 +40,6 @@ public:
 
     /// 获取所有已退休 clip 的 key
     std::vector<ContentKey> getRetiredClips() const;
-
-    /// 获取所有已退休 clip 的 ID（便捷方法）
-    std::vector<uint64_t> getRetiredClipIds() const;
 
     /// 获取所有 clip 的 key（包括 active 和 retired）
     std::vector<ContentKey> getAllClips() const;

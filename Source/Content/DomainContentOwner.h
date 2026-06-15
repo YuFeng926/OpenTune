@@ -5,7 +5,6 @@
 namespace OpenTune {
 
 struct EditableContentSnapshot;
-struct RetiredContentRecord;
 
 class DomainContentOwner
 {

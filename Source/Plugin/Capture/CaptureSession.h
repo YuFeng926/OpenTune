@@ -158,9 +158,6 @@ public:
     double getCurrentlyCapturedSeconds() const noexcept;
     size_t getTotalCapturedBytes() const noexcept;
 
-    /** Find segment by id. Returns nullptr if not found. Thread-safe. */
-    CaptureSegment* findSegmentById(uint64_t segmentId) const;
-
     /** Find segment by ContentKey. Returns nullptr if not found. Thread-safe. */
     CaptureSegment* findSegmentByContentKey(const ContentKey& key) const;
 

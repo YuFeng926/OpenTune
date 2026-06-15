@@ -80,7 +80,8 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
 
     auto* sw = new juce::XmlElement("SourceWindow");
     sw->setAttribute("sourcePersistentId", mod.content.sourceWindow.sourcePersistentId);
-    sw->setAttribute("sourceId", juce::String(static_cast<juce::int64>(mod.content.sourceWindow.sourceId)));
+    // Note: numeric sourceId is NOT serialized in ARA domain (it's for Capture/Standalone only)
+    // ARA domain uses AudioSource persistentID only
     sw->setAttribute("startSeconds", mod.content.sourceWindow.sourceStartSeconds);
     sw->setAttribute("durationSeconds", mod.content.sourceWindow.durationSeconds());
     el.addChildElement(sw);
@@ -230,29 +231,63 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     el.addChildElement(analysis);
 }
 
-void restoreAudioModificationContent(AudioModification& mod, const juce::XmlElement& el)
+// Parse XML to new AudioModificationContentState with complete replacement semantics.
+// Missing optional children naturally result in default/empty state.
+// Per ARA2 spec: Maps archived source persistentID to current source persistentID via filter.
+AudioModificationContentState restoreAudioModificationContent(const juce::XmlElement& el,
+                                                              const juce::ARARestoreObjectsFilter* filter)
 {
-    mod.content.contentRevision = static_cast<uint64_t>(el.getStringAttribute("contentRevision").getLargeIntValue());
-    mod.content.lifecycle = static_cast<ContentLifecycle>(el.getIntAttribute("lifecycle"));
+    AudioModificationContentState content;
 
+    content.contentRevision = static_cast<uint64_t>(el.getStringAttribute("contentRevision").getLargeIntValue());
+    content.lifecycle = static_cast<ContentLifecycle>(el.getIntAttribute("lifecycle"));
+
+    // SourceWindow with ARA filter remapping for partial persistency
     if (auto* sw = el.getChildByName("SourceWindow"))
     {
-        mod.content.sourceWindow.sourcePersistentId = sw->getStringAttribute("sourcePersistentId");
-        mod.content.sourceWindow.sourceId = static_cast<uint64_t>(sw->getStringAttribute("sourceId").getLargeIntValue());
-        mod.content.sourceWindow.sourceStartSeconds = sw->getDoubleAttribute("startSeconds");
-        const double dur = sw->getDoubleAttribute("durationSeconds");
-        mod.content.sourceWindow.sourceEndSeconds = mod.content.sourceWindow.sourceStartSeconds + dur;
+        const juce::String archivedSourcePersistentId = sw->getStringAttribute("sourcePersistentId");
+
+        // Per ARA2 spec (ARAInterface.h:3092): "Any archived states that are either filtered
+        // explicitly, or for which there is no object with a matching persistent ID in the
+        // current graph are simply ignored."
+        // ARA domain uses sourcePersistentId only (not numeric sourceId from Capture/Standalone).
+        // Filter miss -> entire SourceWindow stays invalid (all fields zero/empty).
+        if (filter == nullptr)
+        {
+            // Full restore: use archived source persistentID and window as-is
+            content.sourceWindow.sourcePersistentId = archivedSourcePersistentId;
+            content.sourceWindow.sourceStartSeconds = sw->getDoubleAttribute("startSeconds");
+            const double dur = sw->getDoubleAttribute("durationSeconds");
+            content.sourceWindow.sourceEndSeconds = content.sourceWindow.sourceStartSeconds + dur;
+        }
+        else if (archivedSourcePersistentId.isNotEmpty())
+        {
+            if (auto* audioSource = filter->getAudioSourceToRestoreStateWithID(archivedSourcePersistentId.toRawUTF8()))
+            {
+                // Partial restore with successful mapping: use remapped persistentID and window
+                const auto& remappedId = audioSource->getPersistentID();
+                if (!remappedId.empty())
+                {
+                    content.sourceWindow.sourcePersistentId = juce::String::fromUTF8(remappedId.c_str());
+                    content.sourceWindow.sourceStartSeconds = sw->getDoubleAttribute("startSeconds");
+                    const double dur = sw->getDoubleAttribute("durationSeconds");
+                    content.sourceWindow.sourceEndSeconds = content.sourceWindow.sourceStartSeconds + dur;
+                }
+            }
+            // else: filter exists but no mapping found -> entire SourceWindow stays invalid (ignored per ARA2 spec)
+        }
+        // Note: numeric sourceId is NOT restored in ARA domain (it's for Capture/Standalone only)
     }
 
+    // EditableContent
     if (auto* editable = el.getChildByName("EditableContent"))
     {
-        mod.content.editable.notesRevision = static_cast<uint64_t>(editable->getStringAttribute("notesRevision").getLargeIntValue());
-        mod.content.editable.pitchRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchRevision").getLargeIntValue());
-        mod.content.editable.timeGridRevision = static_cast<uint64_t>(editable->getStringAttribute("timeGridRevision").getLargeIntValue());
-        mod.content.editable.pitchShiftRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchShiftRevision").getLargeIntValue());
-        mod.content.editable.contentRevision = static_cast<uint64_t>(editable->getStringAttribute("contentRevision").getLargeIntValue());
+        content.editable.notesRevision = static_cast<uint64_t>(editable->getStringAttribute("notesRevision").getLargeIntValue());
+        content.editable.pitchRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchRevision").getLargeIntValue());
+        content.editable.timeGridRevision = static_cast<uint64_t>(editable->getStringAttribute("timeGridRevision").getLargeIntValue());
+        content.editable.pitchShiftRevision = static_cast<uint64_t>(editable->getStringAttribute("pitchShiftRevision").getLargeIntValue());
+        content.editable.contentRevision = static_cast<uint64_t>(editable->getStringAttribute("contentRevision").getLargeIntValue());
 
-        mod.content.editable.notes.clear();
         for (auto* n : editable->getChildWithTagNameIterator("Note"))
         {
             Note note;
@@ -266,10 +301,9 @@ void restoreAudioModificationContent(AudioModification& mod, const juce::XmlElem
             note.vibratoRate = static_cast<float>(n->getDoubleAttribute("vibratoRate"));
             note.velocity = static_cast<float>(n->getDoubleAttribute("velocity"));
             note.isVoiced = n->getIntAttribute("isVoiced") != 0;
-            mod.content.editable.notes.push_back(note);
+            content.editable.notes.push_back(note);
         }
 
-        mod.content.editable.correctedSegments.clear();
         for (auto* s : editable->getChildWithTagNameIterator("CorrectedSegment"))
         {
             CorrectedSegment seg;
@@ -279,13 +313,13 @@ void restoreAudioModificationContent(AudioModification& mod, const juce::XmlElem
             seg.retuneSpeed = static_cast<float>(s->getDoubleAttribute("retuneSpeed"));
             seg.vibratoDepth = static_cast<float>(s->getDoubleAttribute("vibratoDepth"));
             seg.vibratoRate = static_cast<float>(s->getDoubleAttribute("vibratoRate"));
-            mod.content.editable.correctedSegments.push_back(seg);
+            content.editable.correctedSegments.push_back(seg);
         }
 
         if (auto* ps = editable->getChildByName("PitchShiftSettings"))
         {
-            mod.content.editable.pitchShiftSettings.semitone = ps->getIntAttribute("semitone");
-            mod.content.editable.pitchShiftSettings.cents = ps->getIntAttribute("cents");
+            content.editable.pitchShiftSettings.semitone = ps->getIntAttribute("semitone");
+            content.editable.pitchShiftSettings.cents = ps->getIntAttribute("cents");
         }
 
         if (auto* tg = editable->getChildByName("TimeGrid"))
@@ -301,48 +335,48 @@ void restoreAudioModificationContent(AudioModification& mod, const juce::XmlElem
                 h.locked = he->getIntAttribute("locked") != 0;
                 handles.push_back(h);
             }
-            mod.content.editable.timeGrid = TimeGridSnapshot::makeFromHandles(std::move(handles));
+            content.editable.timeGrid = TimeGridSnapshot::makeFromHandles(std::move(handles));
         }
+        // If TimeGrid XML child absent, timeGrid remains nullptr (default state)
     }
 
+    // AnalysisState
     if (auto* analysis = el.getChildByName("AnalysisState"))
     {
-        mod.content.analysis.f0Lifecycle = static_cast<AnalysisLifecycle>(analysis->getIntAttribute("f0Lifecycle"));
-        mod.content.analysis.pitchLifecycle = static_cast<AnalysisLifecycle>(analysis->getIntAttribute("pitchLifecycle"));
-        mod.content.analysis.analysisRevision = static_cast<uint64_t>(analysis->getStringAttribute("analysisRevision").getLargeIntValue());
-        mod.content.analysis.originalF0State = static_cast<OriginalF0State>(analysis->getIntAttribute("originalF0State"));
-        
+        content.analysis.f0Lifecycle = static_cast<AnalysisLifecycle>(analysis->getIntAttribute("f0Lifecycle"));
+        content.analysis.pitchLifecycle = static_cast<AnalysisLifecycle>(analysis->getIntAttribute("pitchLifecycle"));
+        content.analysis.analysisRevision = static_cast<uint64_t>(analysis->getStringAttribute("analysisRevision").getLargeIntValue());
+        content.analysis.originalF0State = static_cast<OriginalF0State>(analysis->getIntAttribute("originalF0State"));
+
         // DetectedKey
         if (auto* dk = analysis->getChildByName("DetectedKey"))
         {
-            mod.content.analysis.detectedKey.root = static_cast<Key>(dk->getIntAttribute("root"));
-            mod.content.analysis.detectedKey.scale = static_cast<Scale>(dk->getIntAttribute("scale"));
-            mod.content.analysis.detectedKey.confidence = static_cast<float>(dk->getDoubleAttribute("confidence"));
+            content.analysis.detectedKey.root = static_cast<Key>(dk->getIntAttribute("root"));
+            content.analysis.detectedKey.scale = static_cast<Scale>(dk->getIntAttribute("scale"));
+            content.analysis.detectedKey.confidence = static_cast<float>(dk->getDoubleAttribute("confidence"));
         }
-        
+
         // SilentGaps
-        mod.content.analysis.silentGaps.clear();
         for (auto* sg : analysis->getChildWithTagNameIterator("SilentGap"))
         {
             SilentGap gap;
             gap.startSample = sg->getStringAttribute("startSample").getLargeIntValue();
             gap.endSampleExclusive = sg->getStringAttribute("endSampleExclusive").getLargeIntValue();
             gap.minLevel_dB = static_cast<float>(sg->getDoubleAttribute("minLevel_dB"));
-            mod.content.analysis.silentGaps.push_back(gap);
+            content.analysis.silentGaps.push_back(gap);
         }
-        
+
         // ReferenceFeatures
         if (auto* rf = analysis->getChildByName("ReferenceFeatures"))
         {
-            mod.content.analysis.referenceFeatures.analysisRevision = rf->getIntAttribute("analysisRevision");
-            mod.content.analysis.referenceFeatures.status = static_cast<ReferenceFeatureStatus>(rf->getIntAttribute("status"));
-            mod.content.analysis.referenceFeatures.producer = static_cast<ReferenceFeatureProducer>(rf->getIntAttribute("producer"));
-            mod.content.analysis.referenceFeatures.inputFingerprint = rf->getStringAttribute("inputFingerprint").getLargeIntValue();
-            mod.content.analysis.referenceFeatures.sourceDurationSeconds = rf->getDoubleAttribute("sourceDurationSeconds");
-            mod.content.analysis.referenceFeatures.errorMessage = rf->getStringAttribute("errorMessage");
-            
+            content.analysis.referenceFeatures.analysisRevision = rf->getIntAttribute("analysisRevision");
+            content.analysis.referenceFeatures.status = static_cast<ReferenceFeatureStatus>(rf->getIntAttribute("status"));
+            content.analysis.referenceFeatures.producer = static_cast<ReferenceFeatureProducer>(rf->getIntAttribute("producer"));
+            content.analysis.referenceFeatures.inputFingerprint = rf->getStringAttribute("inputFingerprint").getLargeIntValue();
+            content.analysis.referenceFeatures.sourceDurationSeconds = rf->getDoubleAttribute("sourceDurationSeconds");
+            content.analysis.referenceFeatures.errorMessage = rf->getStringAttribute("errorMessage");
+
             // Pitch notes
-            mod.content.analysis.referenceFeatures.pitch.notes.clear();
             for (auto* n : rf->getChildWithTagNameIterator("PitchNote"))
             {
                 Note note;
@@ -350,11 +384,10 @@ void restoreAudioModificationContent(AudioModification& mod, const juce::XmlElem
                 note.endTime = n->getDoubleAttribute("end");
                 note.pitch = static_cast<float>(n->getDoubleAttribute("pitch"));
                 note.originalPitch = static_cast<float>(n->getDoubleAttribute("originalPitch"));
-                mod.content.analysis.referenceFeatures.pitch.notes.push_back(note);
+                content.analysis.referenceFeatures.pitch.notes.push_back(note);
             }
-            
+
             // Timing anchors
-            mod.content.analysis.referenceFeatures.timing.anchors.clear();
             for (auto* a : rf->getChildWithTagNameIterator("TimingAnchor"))
             {
                 ReferenceTimingAnchor anchor;
@@ -363,9 +396,10 @@ void restoreAudioModificationContent(AudioModification& mod, const juce::XmlElem
                 anchor.strength = static_cast<float>(a->getDoubleAttribute("strength"));
                 anchor.kind = static_cast<ReferenceTimingAnchorKind>(a->getIntAttribute("kind"));
                 anchor.confidence = static_cast<float>(a->getDoubleAttribute("confidence"));
-                mod.content.analysis.referenceFeatures.timing.anchors.push_back(anchor);
+                content.analysis.referenceFeatures.timing.anchors.push_back(anchor);
             }
         }
+        // If ReferenceFeatures XML child absent, referenceFeatures remains default state
 
         if (auto* pc = analysis->getChildByName("PitchCurve"))
         {
@@ -392,15 +426,18 @@ void restoreAudioModificationContent(AudioModification& mod, const juce::XmlElem
                 }
             }
 
-            mod.content.analysis.pitchCurve = std::make_shared<PitchCurve>();
-            mod.content.analysis.pitchCurve->setHopSize(hopSize);
-            mod.content.analysis.pitchCurve->setSampleRate(sampleRate);
+            content.analysis.pitchCurve = std::make_shared<PitchCurve>();
+            content.analysis.pitchCurve->setHopSize(hopSize);
+            content.analysis.pitchCurve->setSampleRate(sampleRate);
             if (!f0.empty())
-                mod.content.analysis.pitchCurve->setOriginalF0(std::move(f0));
+                content.analysis.pitchCurve->setOriginalF0(std::move(f0));
             if (!energy.empty())
-                mod.content.analysis.pitchCurve->setOriginalEnergy(std::move(energy));
+                content.analysis.pitchCurve->setOriginalEnergy(std::move(energy));
         }
+        // If PitchCurve XML child absent, pitchCurve remains nullptr (default state)
     }
+
+    return content;
 }
 } // namespace
 
@@ -712,7 +749,11 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         {
             auto xml = juce::XmlDocument::parse(xmlStr);
             if (xml != nullptr)
-                restoreAudioModificationContent(*targetMod, *xml);
+            {
+                // Parse XML to new content state with ARA filter remapping,
+                // then atomically replace modification content (complete replacement semantics).
+                targetMod->content = restoreAudioModificationContent(*xml, filter);
+            }
         }
     }
 
@@ -1039,7 +1080,6 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
         return projection;
 
     projection.contentWindow = modification->content.sourceWindow;
-    projection.sourceId = 0;  // Deprecated: use contentWindow.sourcePersistentId
     projection.contentRevision = modification->content.contentRevision;
     projection.contentDurationSeconds = modification->content.sourceWindow.durationSeconds();
     projection.contentKey = modification->contentKey();
@@ -1647,13 +1687,6 @@ double OpenTuneDocumentController::readContentDuration(ContentKey key) const
     const auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr) return 0.0;
     return mod->content.sourceWindow.durationSeconds();
-}
-
-uint64_t OpenTuneDocumentController::readSourceId(ContentKey key) const
-{
-    const auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr) return 0;
-    return mod->content.sourceWindow.sourceId;
 }
 
 bool OpenTuneDocumentController::hasContent(ContentKey key) const

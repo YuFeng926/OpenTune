@@ -71,6 +71,20 @@ ContentKey chooseActiveCaptureContentKey(Capture::CaptureSession& session,
     return {};
 }
 
+#if JucePlugin_Enable_ARA
+ContentTimelineProjection makePianoRollLocalProjection(
+    const OpenTuneDocumentController::PlaybackRegionProjection& region)
+{
+    ContentTimelineProjection projection;
+    projection.timelineStartSeconds = region.startInPlaybackTime;
+    projection.timelineDurationSeconds = region.durationInPlaybackTime;
+    projection.contentDurationSeconds = region.contentDurationSeconds;
+    return projection;
+}
+#endif
+
+} // anonymous namespace
+
 ContentKey OpenTuneAudioProcessorEditor::resolveCurrentContentKey()
 {
     return resolveCurrentContentSync().activeContentKey;

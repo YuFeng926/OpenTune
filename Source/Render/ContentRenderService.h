@@ -70,11 +70,9 @@ public:
     // RenderWorker
     void attachExecutionLease(ExecutionLease lease);
     void detachExecutionLease(void* owner);
-    bool hasActiveLease(void* owner) const noexcept;
 
     void enqueueRender(RenderJob job);
     bool hasPendingJobs() const;
-    void notifyRenderWorker();
     void pauseRenderWorker();
     void resumeRenderWorker();
     void drainRenderWorker();

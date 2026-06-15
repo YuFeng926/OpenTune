@@ -793,17 +793,6 @@ void CaptureSession::applyNumericGuardForTest(juce::AudioBuffer<float>& buffer) 
     }
 }
 
-CaptureSegment* CaptureSession::findSegmentById(uint64_t segmentId) const
-{
-    std::lock_guard<std::mutex> lock(mutableMutex_);
-    for (const auto& seg : mutableSegments_) {
-        if (seg->contentKey.objectId == segmentId) {
-            return seg.get();
-        }
-    }
-    return nullptr;
-}
-
 CaptureSegment* CaptureSession::findSegmentByContentKey(const ContentKey& key) const
 {
     if (key.domainKind != DomainKind::RegularVST3Capture) {

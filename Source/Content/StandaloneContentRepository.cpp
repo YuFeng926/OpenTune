@@ -35,12 +35,6 @@ StandaloneClipContent* StandaloneContentRepository::findClip(ContentKey key) con
     return findClipImpl(static_cast<StandaloneClipId>(key.objectId));
 }
 
-StandaloneClipContent* StandaloneContentRepository::findClip(StandaloneClipId clipId) const
-{
-    juce::ScopedReadLock rl(lock_);
-    return findClipImpl(clipId);
-}
-
 bool StandaloneContentRepository::retireClip(ContentKey key)
 {
     if (key.domainKind != DomainKind::StandaloneClip)
@@ -114,18 +108,6 @@ std::vector<ContentKey> StandaloneContentRepository::getRetiredClips() const
     for (const auto& [id, clip] : clips_) {
         if (clip && clip->payload().lifecycle == ContentLifecycle::Retired) {
             result.push_back(clip->contentKey());
-        }
-    }
-    return result;
-}
-
-std::vector<uint64_t> StandaloneContentRepository::getRetiredClipIds() const
-{
-    juce::ScopedReadLock rl(lock_);
-    std::vector<uint64_t> result;
-    for (const auto& [id, clip] : clips_) {
-        if (clip && clip->payload().lifecycle == ContentLifecycle::Retired) {
-            result.push_back(id);
         }
     }
     return result;
