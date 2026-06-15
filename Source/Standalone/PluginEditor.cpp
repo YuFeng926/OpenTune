@@ -1722,7 +1722,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
                     refreshRequest.contentKey = committedPlacement.contentKey;
                     if (!safeThis->processorRef_.requestContentRefresh(refreshRequest)) {
-                        AppLogger::log("ClipDerivedRefresh: standalone request rejected contentId="
+                        AppLogger::log("ClipDerivedRefresh: standalone request rejected contentKey.objectId="
                             + juce::String(static_cast<juce::int64>(committedPlacement.contentKey.objectId)));
                     } else {
                         safeThis->rmvpeOverlayLatched_ = true;
@@ -2477,7 +2477,7 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
 
     DBG("ScaleSyncTrace: source=manual trackId=" + juce::String(activeTrack)
         + " placementIndex=" + juce::String(activePlacementIndex)
-        + " contentId=" + juce::String(static_cast<juce::int64>(activeContentKey.objectId))
+        + " contentKey.objectId=" + juce::String(static_cast<juce::int64>(activeContentKey.objectId))
         + " root=" + juce::String(newRoot)
         + " scale=" + juce::String(newScaleType));
 

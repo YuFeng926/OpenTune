@@ -1003,7 +1003,6 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                                                double targetSampleRate) {
             // Capture segment contentKey is the CRS content key.
             jassert(contentRenderService_ != nullptr);
-            if (contentRenderService_ == nullptr) return;
 
             PlaybackReadSource readSource;
             if (!contentRenderService_->getPlaybackReadSource(segmentContentKey, readSource)
@@ -1104,7 +1103,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                                                  std::shared_ptr<const juce::AudioBuffer<float>> audio,
                                                  double sampleRate) {
             jassert(contentRenderService_ != nullptr);
-            if (contentRenderService_ == nullptr || audio == nullptr || !key.isValid())
+            if (audio == nullptr || !key.isValid())
                 return;
 
             auto renderCache = contentRenderService_->getOrCreateRenderCache(key);
@@ -3033,7 +3032,7 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneAudioProcessor::getConten
 
     switch (key.domainKind) {
         case DomainKind::StandaloneClip: {
-            auto* clip = standaloneContentRepository_ ? standaloneContentRepository_->findClip(key) : nullptr;
+            auto* clip = standaloneContentRepository_->findClip(key);
             return clip ? clip->snapshotContent() : nullptr;
         }
 #if JucePlugin_Enable_ARA
@@ -4935,14 +4934,12 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     // ============================================================
     // vocal-time-stretch §7 (Phase D MVP) �?TimeStretchCache fast-path
     //
-    // When a non-identity TimeGrid is published AND the Stage 2 worker has
-    // populated the TimeStretchCache for this (contentId, pitchRev,
-    // timeGridRev), serve the audio directly from cache.  This bypasses the
-    // dry-source resample + RenderCache piecewise-replace overlay path entirely.
+    // When a non-identity TimeGrid is published and Stage 2 has populated the
+    // TimeStretchCache for this ContentKey/revision tuple, serve the stretched
+    // audio directly from cache.
     //
-    // On any miss (cache not yet populated, locked, or revision mismatch),
-    // fall through to the existing dry-path �?perceptually the user hears
-    // unstretched audio for the brief moment until Stage 2 finishes.
+    // Otherwise continue with the owner-published base audio plus RenderCache
+    // overlay below.
     // ============================================================
     const uint64_t objectId = request.source.contentKey.objectId;
     if (!request.source.timeGridIsIdentity
@@ -4961,8 +4958,8 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
         if (wrote > 0) {
             return wrote;
         }
-        // Cache miss �?fall through to the dry-path (silent-stretch fallback)
-        // until Stage 2 finishes populating the cache for this revision.
+        // Cache is not ready for this revision yet; continue with the base
+        // audio plus render overlay for this block.
     }
 
     const auto& srcBuffer = *request.source.audioBuffer;

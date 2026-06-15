@@ -11,14 +11,11 @@
 namespace OpenTune {
 
 /**
- * PlaybackReadSource — 播放时的只读音频来源。
+ * PlaybackReadSource is the immutable read view consumed by render paths.
  *
- * 统一定义，使用 ContentKey 标识内容。
- * 优先使用 RenderCache（overlay），降级为原始 audioBuffer（dry）。
- *
- * Phase 0: 提取自 CRS PlaybackReadSource 和
- *          ContentRenderService::PlaybackReadSource
- * 关键改变：使用 ContentKey 替代 contentId
+ * The domain content owner supplies the base audioBuffer and revisions.
+ * RenderCache and TimeStretchCache are derived overlays keyed by the same
+ * ContentKey; they never replace the base audio ownership contract.
  */
 struct PlaybackReadSource
 {
@@ -43,7 +40,7 @@ struct PlaybackReadSource
 
     bool canRead() const noexcept
     {
-        return renderCache != nullptr || hasAudio();
+        return hasAudio();
     }
 };
 

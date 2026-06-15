@@ -367,8 +367,7 @@ void CaptureSession::tick()
             }
         }
         for (auto* seg : pendingSegments) {
-            if (seg != nullptr)
-                anyChange = finalizePendingCapture(*seg) || anyChange;
+            anyChange = finalizePendingCapture(*seg) || anyChange;
         }
     }
 
@@ -519,7 +518,6 @@ void CaptureSession::setActiveSegmentChangedCallback(ActiveSegmentChangedFn fn)
 SessionState CaptureSession::getGlobalState() const noexcept
 {
     auto view = std::atomic_load(&publishedSegments_);
-    if (view == nullptr) return SessionState::Idle;
 
     bool hasCapturing = false, hasProcessing = false;
     for (auto* seg : view->snapshot) {
@@ -535,7 +533,6 @@ SessionState CaptureSession::getGlobalState() const noexcept
 double CaptureSession::getCurrentlyCapturedSeconds() const noexcept
 {
     auto view = std::atomic_load(&publishedSegments_);
-    if (view == nullptr) return 0.0;
     for (auto* seg : view->snapshot) {
         if (seg->state.load(std::memory_order_acquire) == SegmentState::Capturing) {
             const int written = seg->fifo.getTotalWrittenSamples();
@@ -549,7 +546,6 @@ size_t CaptureSession::getTotalCapturedBytes() const noexcept
 {
     size_t total = 0;
     auto view = std::atomic_load(&publishedSegments_);
-    if (view == nullptr) return 0;
     for (auto* seg : view->snapshot) {
         if (seg->content) {
             const auto& editable = seg->content->editable();
@@ -687,8 +683,7 @@ void CaptureSession::publishSegmentsView()
 
 void CaptureSession::queueForReclaimLocked(std::unique_ptr<CaptureSegment> segment)
 {
-    if (segment == nullptr)
-        return;
+    jassert(segment != nullptr);
 
     ReclaimEntry entry;
     entry.segment = std::move(segment);

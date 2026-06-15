@@ -10,7 +10,7 @@ namespace OpenTune {
 inline int getStandaloneActiveTrack(OpenTuneAudioProcessor& processor)
 {
     const auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr ? arrangement->getActiveTrackId() : 0;
+    return arrangement->getActiveTrackId();
 }
 
 inline bool setStandaloneActiveTrack(OpenTuneAudioProcessor& processor, int trackId)
@@ -27,13 +27,13 @@ inline bool setStandaloneActiveTrack(OpenTuneAudioProcessor& processor, int trac
 inline int getStandaloneSelectedPlacementIndex(OpenTuneAudioProcessor& processor, int trackId)
 {
     const auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr ? arrangement->getSelectedPlacementIndex(trackId) : -1;
+    return arrangement->getSelectedPlacementIndex(trackId);
 }
 
 inline int getStandalonePlacementCount(OpenTuneAudioProcessor& processor, int trackId)
 {
     const auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr ? arrangement->getNumPlacements(trackId) : 0;
+    return arrangement->getNumPlacements(trackId);
 }
 
 inline bool getStandalonePlacementByIndex(OpenTuneAudioProcessor& processor,
@@ -42,8 +42,7 @@ inline bool getStandalonePlacementByIndex(OpenTuneAudioProcessor& processor,
                                           StandaloneArrangement::Placement& out)
 {
     const auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr
-        && trackId >= 0
+    return trackId >= 0
         && trackId < OpenTuneAudioProcessor::MAX_TRACKS
         && placementIndex >= 0
         && arrangement->getPlacementByIndex(trackId, placementIndex, out);
@@ -55,8 +54,7 @@ inline bool getStandalonePlacementById(OpenTuneAudioProcessor& processor,
                                        StandaloneArrangement::Placement& out)
 {
     const auto* arrangement = processor.getStandaloneArrangement();
-    return arrangement != nullptr
-        && trackId >= 0
+    return trackId >= 0
         && trackId < OpenTuneAudioProcessor::MAX_TRACKS
         && placementId != 0
         && arrangement->getPlacementById(trackId, placementId, out);
