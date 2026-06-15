@@ -3535,7 +3535,7 @@ juce::String PianoRollComponent::AutoTuneApplyResult::message() const
 PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelection()
 {
     AppLogger::log("AutoTune: applyAutoTuneToSelection entry"
-        " contentId=" + juce::String(static_cast<juce::int64>(editedContentKey_.objectId))
+        " contentKey.objectId=" + juce::String(static_cast<juce::int64>(editedContentKey_.objectId))
         + " curve=" + juce::String(currentCurve_ != nullptr ? 1 : 0)
         + " processor=" + juce::String(processor_ != nullptr ? 1 : 0));
 
@@ -3689,7 +3689,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
 
     correctionWorker_->enqueue(request);
 
-    AppLogger::log("AutoTune: enqueued contentId=" + juce::String(static_cast<juce::int64>(editedContentKey_.objectId))
+    AppLogger::log("AutoTune: enqueued contentKey.objectId=" + juce::String(static_cast<juce::int64>(editedContentKey_.objectId))
         + " startFrame=" + juce::String(startFrame) + " endFrame=" + juce::String(endFrame));
 
     return { AutoTuneApplyStatus::Applied };

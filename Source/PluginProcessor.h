@@ -568,7 +568,7 @@ private:
 public:
     // Public API for triggering Stage 2 rebuilds (called from
     // setContentTimeGrid and from tests).
-    // Uses ContentKey (replaces old contentId+store* pattern).
+    // Uses ContentKey and the owning domain content root.
     // Worker fetches current revisions from the store at runtime.
     void requestStage2Rebuild(ContentKey contentKey,
                               uint64_t pitchRevision,

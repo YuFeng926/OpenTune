@@ -12,7 +12,8 @@ enum class DomainKind : uint8_t
     RegularVST3Capture
 };
 
-// 标识一个域内容根，不包含 contentId、store 指针、render-cache 指针。
+// Identifies one domain content root. It does not carry store pointers,
+// render-cache pointers, or cross-domain materialization identity.
 struct ContentKey
 {
     DomainKind domainKind{DomainKind::ARAAudioModification};

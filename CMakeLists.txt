@@ -659,7 +659,6 @@ target_sources(OpenTune
         Source/Content/EditableContentState.h
         Source/Content/AudioModificationContentState.h
         Source/Content/ContentPayloadState.h
-        Source/Content/RetiredContentRecord.h
         Source/Content/StandaloneRetiredContentRecord.h
         Source/Content/EditableContentSnapshot.h
         Source/Content/StandaloneClipContent.h

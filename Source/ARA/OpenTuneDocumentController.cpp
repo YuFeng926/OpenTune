@@ -1310,8 +1310,6 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     publishPlaybackReadSourceForModification(modification, storedAudioBuffer);
 
     // 8. Set modification state and notify ARA host
-    // Store sourceWindow in content state (single source of truth)
-    modification.content.sourceWindow = sourceWindow;
     modification.birthState = AudioModificationBirthState::Ready;
     modification.content.lifecycle = ContentLifecycle::Ready;
     if (modification.audioModification != nullptr)

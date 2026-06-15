@@ -85,6 +85,238 @@ ContentTimelineProjection makePianoRollLocalProjection(
 
 } // anonymous namespace
 
+// =========================================================================
+// 构造函数 & 析构函数
+// =========================================================================
+
+OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& processor)
+    : AudioProcessorEditor(&processor)
+#if JucePlugin_Enable_ARA
+    , AudioProcessorEditorARAExtension(&processor)
+#endif
+    , processorRef_(processor)
+    , languageState_(std::make_shared<LocalizationManager::LanguageState>(
+          LocalizationManager::LanguageState{ appPreferences_.getState().shared.language }))
+    , languageBinding_(languageState_)
+    , menuBar_(processor, MenuBarComponent::Profile::Plugin)
+    , topBar_(menuBar_, transportBar_)
+{
+    setResizable(true, true);
+    setResizeLimits(800, 500, 2000, 1400);
+    setSize(1000, 700);
+
+    UIColors::applyTheme(appPreferences_.getState().shared.theme);
+
+    menuBar_.addListener(this);
+    LocalizationManager::getInstance().addListener(this);
+
+    transportBar_.addListener(this);
+
+    addAndMakeVisible(topBar_);
+    addAndMakeVisible(parameterPanel_);
+    parameterPanel_.addListener(this);
+
+    addAndMakeVisible(pianoRoll_);
+    pianoRoll_.addListener(this);
+
+    addAndMakeVisible(autoRenderOverlay_);
+    addAndMakeVisible(renderBadge_);
+
+    contentCommands_ = processorRef_.getContentCommands();
+    pianoRoll_.setProcessor(&processorRef_);
+    pianoRoll_.setContentCommands(contentCommands_);
+    pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
+        return processorRef_.getContentSnapshot(key);
+    });
+
+    pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
+
+    applyThemeToEditor(appPreferences_.getState().shared.theme);
+
+    startTimerHz(kHeartbeatHz);
+
+    grabKeyboardFocus();
+}
+
+OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
+{
+    setLookAndFeel(nullptr);
+    stopTimer();
+    clearRegularCaptureSessionCallback();
+    LocalizationManager::getInstance().removeListener(this);
+    menuBar_.removeListener(this);
+    transportBar_.removeListener(this);
+    parameterPanel_.removeListener(this);
+    pianoRoll_.removeListener(this);
+}
+
+// =========================================================================
+// paint / resized / mouseDown
+// =========================================================================
+
+void OpenTuneAudioProcessorEditor::paint(juce::Graphics& g)
+{
+    g.fillAll(UIColors::backgroundDark);
+}
+
+void OpenTuneAudioProcessorEditor::resized()
+{
+    auto bounds = getLocalBounds();
+    constexpr int gap = 4;
+
+    bounds.reduce(gap, gap);
+
+    // TopBar: 固定高度
+    constexpr int topBarHeight = TOP_BAR_HEIGHT;
+    topBar_.setBounds(bounds.removeFromTop(topBarHeight));
+    bounds.removeFromTop(gap);
+
+    // 右侧 ParameterPanel
+    constexpr int paramPanelWidth = PARAMETER_PANEL_WIDTH;
+    parameterPanel_.setBounds(bounds.removeFromRight(paramPanelWidth));
+    bounds.removeFromRight(gap);
+
+    // 中央 PianoRoll
+    pianoRoll_.setBounds(bounds);
+
+    // Overlay 覆盖 PianoRoll 区域
+    autoRenderOverlay_.setBounds(pianoRoll_.getBounds());
+    autoRenderOverlay_.toFront(false);
+
+    renderBadge_.setBounds(pianoRoll_.getRight() - 148, pianoRoll_.getY() + 8, 140, 28);
+    renderBadge_.toFront(false);
+}
+
+void OpenTuneAudioProcessorEditor::mouseDown(const juce::MouseEvent& e)
+{
+    juce::ignoreUnused(e);
+}
+
+// =========================================================================
+// syncSharedAppPreferences
+// =========================================================================
+
+void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
+{
+    const auto preferencesState = appPreferences_.getState();
+    const auto& sharedPreferences = preferencesState.shared;
+    const auto& visualPreferences = sharedPreferences.pianoRollVisualPreferences;
+
+    languageState_->language = sharedPreferences.language;
+
+    if (appliedLanguage_ != sharedPreferences.language) {
+        appliedLanguage_ = sharedPreferences.language;
+        LocalizationManager::getInstance().notifyLanguageChanged(sharedPreferences.language);
+    }
+
+    if (appliedThemeId_ != sharedPreferences.theme)
+        applyThemeToEditor(sharedPreferences.theme);
+
+    pianoRoll_.setAudioEditingScheme(sharedPreferences.audioEditingScheme);
+    pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
+    pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
+    pianoRoll_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
+    pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+    menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
+    menuBar_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
+    menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+}
+
+// =========================================================================
+// timerCallback
+// =========================================================================
+
+void OpenTuneAudioProcessorEditor::timerCallback()
+{
+    syncSharedAppPreferences();
+
+    syncParameterPanelFromSelection();
+
+    if (pianoRoll_.isShowing()) {
+        pianoRoll_.onHeartbeatTick();
+    }
+
+    // ARA content birth timeout
+    if (waitingForAraContent_) {
+        const auto elapsedMs = juce::Time::getApproximateMillisecondCounter() - araWaitStartMs_;
+        if (elapsedMs > 5000) {
+            waitingForAraContent_ = false;
+            autoRenderOverlay_.setVisible(false);
+        }
+    }
+
+    syncContentProjectionToPianoRoll();
+
+    // 播放头位置：positionAtomic_ 已通过 setPlayheadPositionSource 接入 PianoRoll，
+    // transportBar 仍需显式同步
+    const double positionSeconds = processorRef_.getPosition();
+    transportBar_.setPositionSeconds(positionSeconds);
+
+    // playing 状态同步
+    if (transportBar_.isPlaying() != processorRef_.isPlaying()) {
+        transportBar_.setPlaying(processorRef_.isPlaying());
+        pianoRoll_.setIsPlaying(processorRef_.isPlaying());
+    }
+
+    // BPM 同步
+    const double bpm = processorRef_.getBpm();
+    if (bpm > 0.0 && std::abs(bpm - lastSyncedBpm_) > 0.001) {
+        transportBar_.setBpm(bpm);
+        pianoRoll_.setBpm(bpm);
+        lastSyncedBpm_ = bpm;
+    }
+}
+
+// =========================================================================
+// syncParameterPanelFromSelection
+// =========================================================================
+
+void OpenTuneAudioProcessorEditor::syncParameterPanelFromSelection()
+{
+    ParameterPanelSyncContext context;
+    context.clipRetuneSpeedPercent = pianoRoll_.getCurrentRetuneSpeed() * 100.0f;
+    context.clipVibratoDepth = pianoRoll_.getCurrentVibratoDepth();
+    context.clipVibratoRate = pianoRoll_.getCurrentVibratoRate();
+    context.wasShowingSelectionParameters = showingSingleNoteParams_;
+
+    context.hasSelectedNoteParameters = pianoRoll_.getSingleSelectedNoteParameters(
+        context.selectedNoteRetuneSpeedPercent,
+        context.selectedNoteVibratoDepth,
+        context.selectedNoteVibratoRate);
+
+    const auto scheme = appPreferences_.getState().shared.audioEditingScheme;
+    const auto decision = resolveParameterPanelSyncDecision(scheme, context);
+    if (decision.shouldSetRetuneSpeed) {
+        parameterPanel_.setRetuneSpeed(decision.retuneSpeedPercent);
+    }
+    if (decision.shouldSetVibratoDepth) {
+        parameterPanel_.setVibratoDepth(decision.vibratoDepth);
+    }
+    if (decision.shouldSetVibratoRate) {
+        parameterPanel_.setVibratoRate(decision.vibratoRate);
+    }
+
+    showingSingleNoteParams_ = decision.nextShowingSelectionParameters;
+}
+
+// =========================================================================
+// languageChanged
+// =========================================================================
+
+void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
+{
+    juce::ignoreUnused(newLanguage);
+
+    menuBar_.menuItemsChanged();
+    menuBar_.repaint();
+
+    transportBar_.refreshLocalizedText();
+    topBar_.refreshLocalizedText();
+    parameterPanel_.refreshLocalizedText();
+
+    repaint();
+}
+
 ContentKey OpenTuneAudioProcessorEditor::resolveCurrentContentKey()
 {
     return resolveCurrentContentSync().activeContentKey;
@@ -606,12 +838,6 @@ void OpenTuneAudioProcessorEditor::recordRequested()
     return;
 #else
     auto* dc = processorRef_.getDocumentController();
-    if (dc == nullptr) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                               "Read Audio",
-                                               "This VST3 instance is not ready for audio capture or ARA reading.");
-        return;
-    }
 
     AppLogger::log("VST3 recordRequested mode=ara-bound processor="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(&processorRef_))
@@ -677,7 +903,7 @@ void OpenTuneAudioProcessorEditor::stopPlaybackRequested()
 void OpenTuneAudioProcessorEditor::autoTuneRequested()
 {
     const auto activeKey = resolveCurrentContentKey();
-    AppLogger::log("AutoTune: vst3 request contentId=" + juce::String(static_cast<juce::int64>(activeKey.objectId)));
+    AppLogger::log("AutoTune: vst3 request contentKey.objectId=" + juce::String(static_cast<juce::int64>(activeKey.objectId)));
     if (!activeKey.isValid()) {
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon,
@@ -907,14 +1133,12 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     std::shared_ptr<const juce::AudioBuffer<float>> syncBuffer;
     std::shared_ptr<PitchCurve> curve;
     DetectedKey detectedKey;
-#if JucePlugin_Enable_ARA
-    if (auto* dc = processorRef_.getDocumentController()) {
-        ContentKey ck = sync.activeContentKey;
-        syncBuffer = dc->readAudioBuffer(ck);
-        curve = dc->readPitchCurve(ck);
-        detectedKey = dc->readDetectedKey(ck);
+    if (sync.activeContentKey.isValid()) {
+        auto snap = processorRef_.getContentSnapshot(sync.activeContentKey);
+        syncBuffer = snap ? snap->audioBuffer : nullptr;
+        curve = snap ? snap->pitchCurve : nullptr;
+        detectedKey = snap ? snap->detectedKey : DetectedKey{};
     }
-#endif
 
     if (!sync.hasActiveContent()
         || syncBuffer == nullptr) {

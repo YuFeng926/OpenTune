@@ -278,7 +278,7 @@ private:
     std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
     // Notes-revision tracking so the timer can pull fresh notes when an
     // async note generator (GAME) commits to the active content
-    // without changing contentId / curve / buffer.
+    // without changing ContentKey / curve / buffer.
     uint64_t lastPianoRollNotesRevision_ = 0;
     double lastSyncedBpm_ = 0.0;
     int lastSyncedTimeSigNum_ = 0;

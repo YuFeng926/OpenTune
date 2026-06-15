@@ -9,16 +9,10 @@
 namespace OpenTune {
 
 /**
- * PlaybackSourcePublisher — lock-free playback source snapshot publisher.
- * 
- * 发布 audio-thread 可无锁读取的 PlaybackReadSource snapshot。
- * 使用 atomic shared_ptr 模式，writer 可用锁，reader 完全无锁。
- * 
- * Phase 0: 提取自 CRS playback source publication (L317-320)
- *          和 ContentRenderService::playbackSourceCache_ (L178-179)
- * 
- * 复用代码：
- * - ContentRenderService.cpp:21-59 (rebuildPlaybackSourceCache + publish/remove/clear)
+ * Publishes ContentKey-indexed PlaybackReadSource snapshots.
+ *
+ * Writers rebuild an immutable map on the message/background side; audio readers
+ * take the latest atomic shared_ptr snapshot and do not lock the model graph.
  */
 class PlaybackSourcePublisher
 {

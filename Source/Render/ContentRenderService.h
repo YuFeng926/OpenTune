@@ -19,17 +19,11 @@ namespace OpenTune {
 class SoundTouchStretcher; // forward
 
 /**
- * ContentRenderService — runtime services facade (Phase 0 thin facade).
- * 
- * 组合 extracted runtime services，不再自己实现基础设施。
- * 保留 facade API 供外部调用。
- * 
- * Phase 0.8: 删除重复实现，改为组合：
- * - PlaybackSourcePublisher (替代 playbackSources_/playbackSourceCache_)
- * - RenderCacheRegistry (替代 renderCaches_)
- * - RenderWorker (替代 worker thread fields)
- * - StretcherPool (替代 stretchers_)
- * - TimeStretchCache (保留)
+ * Domain-neutral runtime rendering services.
+ *
+ * ContentRenderService stores derived artifacts only: playback read views,
+ * render caches, render jobs, stretchers, and time-stretch cache. Editable
+ * content remains owned by the domain model object addressed by ContentKey.
  */
 class ContentRenderService
 {
@@ -88,7 +82,7 @@ public:
     // Utility
     void clearAll();
 
-    // Accessors for extracted services (供 Phase 0.7 使用)
+    // Accessors for focused runtime services.
     PlaybackSourcePublisher& playbackSources() noexcept { return playbackSources_; }
     RenderCacheRegistry& renderCaches() noexcept { return renderCaches_; }
     RenderWorker& renderWorker() noexcept { return renderWorker_; }
