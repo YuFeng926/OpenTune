@@ -30,6 +30,21 @@ namespace {
         info.state = segment.state.load(std::memory_order_acquire);
         return info;
     }
+
+    CaptureSegment* findMutableSegmentByContentKey(
+        std::vector<std::unique_ptr<CaptureSegment>>& segments,
+        const ContentKey& key)
+    {
+        if (key.domainKind != DomainKind::RegularVST3Capture)
+            return nullptr;
+
+        for (auto& segment : segments) {
+            if (segment != nullptr && segment->contentKey.objectId == key.objectId)
+                return segment.get();
+        }
+
+        return nullptr;
+    }
 }
 
 CaptureSession::CaptureSession(ProcessorBindings bindings)
@@ -505,6 +520,82 @@ bool CaptureSession::commitSegmentF0Result(
 
     seg->content->applyDetectedKey(detectedKey);
     seg->content->applyOriginalF0State(state);
+    return true;
+}
+
+bool CaptureSession::applyAutoTuneGeneratedNotes(ContentKey segmentContentKey,
+                                                 std::vector<Note> notes,
+                                                 std::shared_ptr<PitchCurve> pitchCurve)
+{
+    return applyNotesAndPitchCurve(segmentContentKey, std::move(notes), std::move(pitchCurve));
+}
+
+bool CaptureSession::applyNotes(ContentKey segmentContentKey, std::vector<Note> notes)
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    auto* seg = findMutableSegmentByContentKey(mutableSegments_, segmentContentKey);
+    if (seg == nullptr || !seg->content)
+        return false;
+
+    seg->content->applyNotes(std::move(notes));
+    return true;
+}
+
+bool CaptureSession::applyNotesAndPitchCurve(ContentKey segmentContentKey,
+                                             std::vector<Note> notes,
+                                             std::shared_ptr<PitchCurve> pitchCurve)
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    auto* seg = findMutableSegmentByContentKey(mutableSegments_, segmentContentKey);
+    if (seg == nullptr || !seg->content || pitchCurve == nullptr)
+        return false;
+
+    seg->content->applyNotes(std::move(notes));
+    seg->content->applyPitchCurve(std::move(pitchCurve));
+    return true;
+}
+
+bool CaptureSession::applyPitchCurve(ContentKey segmentContentKey, std::shared_ptr<PitchCurve> pitchCurve)
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    auto* seg = findMutableSegmentByContentKey(mutableSegments_, segmentContentKey);
+    if (seg == nullptr || !seg->content || pitchCurve == nullptr)
+        return false;
+
+    seg->content->applyPitchCurve(std::move(pitchCurve));
+    return true;
+}
+
+bool CaptureSession::applyTimeGrid(ContentKey segmentContentKey, std::shared_ptr<const TimeGridSnapshot> grid)
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    auto* seg = findMutableSegmentByContentKey(mutableSegments_, segmentContentKey);
+    if (seg == nullptr || !seg->content)
+        return false;
+
+    seg->content->applyTimeGrid(std::move(grid));
+    return true;
+}
+
+bool CaptureSession::applyDetectedKey(ContentKey segmentContentKey, const DetectedKey& detectedKey)
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    auto* seg = findMutableSegmentByContentKey(mutableSegments_, segmentContentKey);
+    if (seg == nullptr || !seg->content)
+        return false;
+
+    seg->content->applyDetectedKey(detectedKey);
+    return true;
+}
+
+bool CaptureSession::applyPitchShiftSettings(ContentKey segmentContentKey, const PitchShiftSettings& settings)
+{
+    std::lock_guard<std::mutex> lock(mutableMutex_);
+    auto* seg = findMutableSegmentByContentKey(mutableSegments_, segmentContentKey);
+    if (seg == nullptr || !seg->content)
+        return false;
+
+    seg->content->applyPitchShiftSettings(settings);
     return true;
 }
 

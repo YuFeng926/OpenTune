@@ -128,6 +128,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
         return processorRef_.getContentSnapshot(key);
     });
+    updateRegularCaptureSessionCallback();
 
     pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
 
@@ -229,6 +230,7 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
 void OpenTuneAudioProcessorEditor::timerCallback()
 {
     syncSharedAppPreferences();
+    updateRegularCaptureSessionCallback();
 
     syncParameterPanelFromSelection();
 
@@ -662,56 +664,14 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
 
 void OpenTuneAudioProcessorEditor::undoRequested()
 {
-    auto* action = processorRef_.getUndoManager().undo();
-    if (!action) return;
-    syncContentProjectionToPianoRoll();
-    const auto activeKey = resolveCurrentContentKey();
-    if (!activeKey.isValid()) return;
-
-    std::shared_ptr<PitchCurve> curve;
-#if JucePlugin_Enable_ARA
-    if (auto* dc = processorRef_.getDocumentController())
-        curve = dc->readPitchCurve(activeKey);
-#endif
-
-    if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
-
-    double startSec = 0.0;
-    double endSec = pianoRoll_.getContentDurationSeconds();
-    auto* editAction = dynamic_cast<OpenTune::PianoRollEditAction*>(action);
-    if (editAction && editAction->getContentKey() == activeKey && editAction->getAffectedEndFrame() > 0) {
-        const double spf = static_cast<double>(curve->getHopSize()) / curve->getSampleRate();
-        startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
-        endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
-    }
-    contentCommands_->enqueuePartialRender(activeKey, startSec, endSec);
+    if (processorRef_.getUndoManager().undo() != nullptr)
+        syncContentProjectionToPianoRoll();
 }
 
 void OpenTuneAudioProcessorEditor::redoRequested()
 {
-    auto* action = processorRef_.getUndoManager().redo();
-    if (!action) return;
-    syncContentProjectionToPianoRoll();
-    const auto activeKey = resolveCurrentContentKey();
-    if (!activeKey.isValid()) return;
-
-    std::shared_ptr<PitchCurve> curve;
-#if JucePlugin_Enable_ARA
-    if (auto* dc = processorRef_.getDocumentController())
-        curve = dc->readPitchCurve(activeKey);
-#endif
-
-    if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
-
-    double startSec = 0.0;
-    double endSec = pianoRoll_.getContentDurationSeconds();
-    auto* editAction = dynamic_cast<OpenTune::PianoRollEditAction*>(action);
-    if (editAction && editAction->getContentKey() == activeKey && editAction->getAffectedEndFrame() > 0) {
-        const double spf = static_cast<double>(curve->getHopSize()) / curve->getSampleRate();
-        startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
-        endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
-    }
-    contentCommands_->enqueuePartialRender(activeKey, startSec, endSec);
+    if (processorRef_.getUndoManager().redo() != nullptr)
+        syncContentProjectionToPianoRoll();
 }
 
 void OpenTuneAudioProcessorEditor::mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme)
@@ -913,8 +873,10 @@ void OpenTuneAudioProcessorEditor::autoTuneRequested()
     }
 
     OriginalF0State f0State = OriginalF0State::NotRequested;
+    if (auto snap = processorRef_.getContentSnapshot(activeKey))
+        f0State = snap->originalF0State;
 #if JucePlugin_Enable_ARA
-    if (auto* dc = processorRef_.getDocumentController())
+    else if (auto* dc = processorRef_.getDocumentController())
         f0State = dc->readOriginalF0State(activeKey);
 #endif
 
@@ -1048,56 +1010,6 @@ void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
 void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame)
 {
     AppLogger::log("AutoTune: pitchCurveEdited startFrame=" + juce::String(startFrame) + " endFrame=" + juce::String(endFrame));
-    const auto activeKey = resolveCurrentContentKey();
-    if (!activeKey.isValid()) {
-        AppLogger::log("InvariantViolation: pitchCurveEdited - no active content during curve edit callback");
-        jassertfalse;
-        return;
-    }
-
-    std::shared_ptr<PitchCurve> curve;
-#if JucePlugin_Enable_ARA
-    if (auto* dc = processorRef_.getDocumentController())
-        curve = dc->readPitchCurve(activeKey);
-#endif
-
-    if (curve == nullptr) {
-        AppLogger::log("InvariantViolation: pitchCurveEdited - content " + juce::String(static_cast<juce::int64>(activeKey.objectId)) + " has no pitch curve");
-        jassertfalse;
-        return;
-    }
-
-    int hopSize = curve->getHopSize();
-    double f0SampleRate = curve->getSampleRate();
-    if (hopSize <= 0 || f0SampleRate <= 0.0) {
-        auto* f0Service = processorRef_.getF0Service();
-        if (f0Service != nullptr) {
-            hopSize = f0Service->getF0HopSize();
-            f0SampleRate = static_cast<double>(f0Service->getF0SampleRate());
-        }
-    }
-    if (hopSize <= 0 || f0SampleRate <= 0.0) {
-        return;
-    }
-
-    const int numFrames = static_cast<int>(curve->size());
-    if (numFrames <= 0) {
-        return;
-    }
-
-    if (startFrame > endFrame) {
-        std::swap(startFrame, endFrame);
-    }
-    startFrame = juce::jmax(0, startFrame);
-    endFrame = juce::jmin(endFrame, numFrames - 1);
-    if (endFrame < startFrame) {
-        return;
-    }
-
-    const double secondsPerFrame = static_cast<double>(hopSize) / f0SampleRate;
-    const double editStartSec = static_cast<double>(startFrame) * secondsPerFrame;
-    const double editEndSec = static_cast<double>(endFrame + 1) * secondsPerFrame;
-    contentCommands_->enqueuePartialRender(activeKey, editStartSec, editEndSec);
 }
 
 void OpenTuneAudioProcessorEditor::escapeKeyPressed()

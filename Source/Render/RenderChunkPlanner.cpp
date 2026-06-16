@@ -105,4 +105,44 @@ std::vector<int64_t> RenderChunkPlanner::buildChunkBoundariesFromSilentGaps(
     return boundaries;
 }
 
+std::vector<RenderChunkPlanner::ChunkRange> RenderChunkPlanner::selectChunksIntersectingRange(
+    int64_t contentSampleCount,
+    const std::vector<SilentGap>& silentGaps,
+    int64_t requestStartSample,
+    int64_t requestEndSampleExclusive,
+    int hopSize)
+{
+    std::vector<ChunkRange> chunks;
+    if (contentSampleCount <= 0 || requestEndSampleExclusive <= requestStartSample || hopSize <= 0) {
+        return chunks;
+    }
+
+    const int64_t clampedRequestStart = juce::jlimit<int64_t>(0, contentSampleCount, requestStartSample);
+    const int64_t clampedRequestEnd = juce::jlimit<int64_t>(0, contentSampleCount, requestEndSampleExclusive);
+    if (clampedRequestEnd <= clampedRequestStart) {
+        return chunks;
+    }
+
+    const auto chunkBoundaries = buildChunkBoundariesFromSilentGaps(contentSampleCount, silentGaps, hopSize);
+    if (chunkBoundaries.size() < 2) {
+        chunks.push_back({clampedRequestStart, clampedRequestEnd});
+        return chunks;
+    }
+
+    chunks.reserve(chunkBoundaries.size() - 1);
+    for (size_t i = 0; i + 1 < chunkBoundaries.size(); ++i) {
+        const int64_t chunkStartSample = chunkBoundaries[i];
+        const int64_t chunkEndSampleExclusive = chunkBoundaries[i + 1];
+        const int64_t overlapStart = std::max(clampedRequestStart, chunkStartSample);
+        const int64_t overlapEnd = std::min(clampedRequestEnd, chunkEndSampleExclusive);
+        if (overlapEnd <= overlapStart) {
+            continue;
+        }
+
+        chunks.push_back({chunkStartSample, chunkEndSampleExclusive});
+    }
+
+    return chunks;
+}
+
 } // namespace OpenTune

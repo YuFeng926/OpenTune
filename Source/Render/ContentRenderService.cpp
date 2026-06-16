@@ -4,31 +4,6 @@
 
 namespace OpenTune {
 
-namespace {
-
-std::vector<SilentGap> makeRangeLocalSilentGaps(const std::vector<SilentGap>& gaps,
-                                                int64_t rangeStartSample,
-                                                int64_t rangeEndSampleExclusive)
-{
-    std::vector<SilentGap> localGaps;
-    localGaps.reserve(gaps.size());
-    for (const auto& gap : gaps)
-    {
-        const int64_t clippedStart = juce::jmax(gap.startSample, rangeStartSample);
-        const int64_t clippedEnd = juce::jmin(gap.endSampleExclusive, rangeEndSampleExclusive);
-        if (clippedEnd <= clippedStart)
-            continue;
-
-        SilentGap localGap = gap;
-        localGap.startSample = clippedStart - rangeStartSample;
-        localGap.endSampleExclusive = clippedEnd - rangeStartSample;
-        localGaps.push_back(localGap);
-    }
-    return localGaps;
-}
-
-} // namespace
-
 ContentRenderService::ContentRenderService() = default;
 
 ContentRenderService::~ContentRenderService() = default;
@@ -87,42 +62,32 @@ void ContentRenderService::detachExecutionLease(void* owner)
 
 void ContentRenderService::enqueueRender(RenderJob job)
 {
-    const int64_t rangeSampleCount = job.endSampleExclusive - job.startSample;
-    if (rangeSampleCount <= 0) return;
+    if (job.audioBuffer == nullptr || job.endSampleExclusive <= job.startSample) return;
 
     const int hopSize = 512;
-    auto localGaps = makeRangeLocalSilentGaps(job.silentGaps, job.startSample, job.endSampleExclusive);
-    auto boundaries = RenderChunkPlanner::buildChunkBoundariesFromSilentGaps(
-        rangeSampleCount,
-        localGaps,
+    const double sampleRate = job.audioSampleRate;
+    if (sampleRate <= 0.0) return;
+
+    const auto chunks = RenderChunkPlanner::selectChunksIntersectingRange(
+        job.audioBuffer->getNumSamples(),
+        job.silentGaps,
+        job.startSample,
+        job.endSampleExclusive,
         hopSize);
 
-    const double sampleRate = job.audioSampleRate;
-
-    if (boundaries.size() > 2)
+    for (const auto& chunk : chunks)
     {
-        for (size_t i = 0; i + 1 < boundaries.size(); ++i)
-        {
-            RenderJob subJob = job;
-            subJob.startSample = job.startSample + boundaries[i];
-            subJob.endSampleExclusive = job.startSample + boundaries[i + 1];
-            subJob.startSeconds = static_cast<double>(subJob.startSample) / sampleRate;
-            subJob.endSeconds = static_cast<double>(subJob.endSampleExclusive) / sampleRate;
+        RenderJob subJob = job;
+        subJob.startSample = chunk.startSample;
+        subJob.endSampleExclusive = chunk.endSampleExclusive;
+        subJob.startSeconds = static_cast<double>(subJob.startSample) / sampleRate;
+        subJob.endSeconds = static_cast<double>(subJob.endSampleExclusive) / sampleRate;
 
-            subJob.renderCache->requestRenderPending(
-                subJob.startSeconds, subJob.endSeconds,
-                subJob.startSample, subJob.endSampleExclusive);
+        subJob.renderCache->requestRenderPending(
+            subJob.startSeconds, subJob.endSeconds,
+            subJob.startSample, subJob.endSampleExclusive);
 
-            renderWorker_.enqueue(std::move(subJob));
-        }
-    }
-    else
-    {
-        job.renderCache->requestRenderPending(
-            job.startSeconds, job.endSeconds,
-            job.startSample, job.endSampleExclusive);
-
-        renderWorker_.enqueue(std::move(job));
+        renderWorker_.enqueue(std::move(subJob));
     }
 }
 

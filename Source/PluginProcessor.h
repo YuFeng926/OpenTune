@@ -53,6 +53,7 @@
 #include "Utils/PitchShiftSettings.h"
 #include "Utils/PlaybackAudioReader.h"
 #include "Content/ContentKey.h"
+#include "Content/ContentEditCommands.h"
 #include "Content/StandaloneContentRepository.h"
 #include "Render/ContentRenderService.h"
 #include <functional>
@@ -106,8 +107,6 @@ namespace AudioConstants {
 #if JucePlugin_Enable_ARA
 class OpenTuneDocumentController;
 #endif
-
-class ContentEditCommands;
 
 namespace Capture {
     class CaptureSession;  // forward decl; full type in Source/Plugin/Capture/CaptureSession.h
@@ -682,10 +681,20 @@ public:
         NotesChanged,         // setContentNotes
     };
 
-    void onContentMutationCompleted(ContentKey key,
-                                    MutationScope scope,
-                                    double affectedStartSeconds,
-                                    double affectedEndSeconds);
+    // Hard-cut render mutation sinks: local edits carry their true affected
+    // range; whole-content rebuilds carry only the reason. The two paths never
+    // mix — local edits never widen into a full rebuild, full rebuilds never
+    // pretend to know a precise range.
+    void onContentLocalMutationCompleted(ContentKey key,
+                                         MutationScope scope,
+                                         ContentEditRangeFrames affectedRange);
+    void onContentFullMutationCompleted(ContentKey key,
+                                        MutationScope scope,
+                                        FullRenderReason reason);
+
+    // Full-content render request for import/restore/global operations.
+    // Local edits must go through onContentLocalMutationCompleted instead.
+    void requestFullContentRender(ContentKey key, FullRenderReason reason);
 
     void handleStage1ChunkPublished(ContentKey key, uint64_t publishedRevision);
 
@@ -696,20 +705,17 @@ public:
 
     bool setContentReferenceFeatures(ContentKey key, const ReferenceFeatureSet& features);
 
-    void enqueueContentPartialRender(ContentKey key,
-                                     double relStartSeconds,
-                                     double relEndSeconds);
-
     bool setContentNotes(ContentKey key, std::vector<Note> notes);
     bool setContentCorrectedSegments(ContentKey key, std::vector<CorrectedSegment> segments);
     bool commitContentNotesAndSegments(ContentKey key,
                                        std::vector<Note> notes,
-                                       std::vector<CorrectedSegment> segments);
-    bool setContentPitchCurve(ContentKey key, std::shared_ptr<PitchCurve> curve);
+                                       std::vector<CorrectedSegment> segments,
+                                       ContentEditRangeFrames affectedRange);
+    bool setContentPitchCurve(ContentKey key,
+                              std::shared_ptr<PitchCurve> curve,
+                              ContentEditRangeFrames affectedRange);
     bool setContentTimeGrid(ContentKey key,
-                            std::shared_ptr<const TimeGridSnapshot> grid,
-                            int64_t affectedSrcStartFrame,
-                            int64_t affectedSrcEndFrame);
+                            std::shared_ptr<const TimeGridSnapshot> grid);
     bool setContentDetectedKey(ContentKey key, const DetectedKey& detectedKey);
     bool setContentOriginalF0State(ContentKey key, OriginalF0State state);
     bool setContentPitchShiftSettings(ContentKey key, const PitchShiftSettings& settings);
@@ -721,8 +727,6 @@ public:
                                                    float vibratoDepth,
                                                    float vibratoRate,
                                                    double audioSampleRate);
-
-    void invalidateRenderFor(ContentKey key);
 public:
 
 #if defined(OPENTUNE_TEST_BUILD)
@@ -838,6 +842,15 @@ private:
 
     AppPreferences* appPreferences_{nullptr};
     std::unique_ptr<AutoTunePitchShifter> autoTuneShifter_;  ///< 轻量修音 cycle-resampling pitch-shift（懒初始化）
+
+    // Hard-cut render mutation request primitive. This is the only path
+    // that builds RenderJob and enqueues into ContentRenderService; every other
+    // mutation entry point funnels through the two sinks above.
+    void requestRenderForLocalMutationRange(ContentKey key, double startSeconds, double endSeconds);
+
+    // Owner-truth-only write helpers: no render trigger, used by full-content
+    // mutation paths that pair them with onContentFullMutationCompleted.
+    bool writePitchCurveToOwner(ContentKey key, std::shared_ptr<PitchCurve> curve);
 
 #if JucePlugin_Enable_ARA
     // Cached project state for pre-bind restore.

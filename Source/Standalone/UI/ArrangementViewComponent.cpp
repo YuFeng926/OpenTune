@@ -290,7 +290,7 @@ void ArrangementViewComponent::resized()
 {
     auto bounds = getLocalBounds();
     horizontalScrollBar_.setBounds(bounds.removeFromBottom(UIColors::scrollBarThickness));
-    verticalScrollBar_.setBounds(bounds.removeFromLeft(UIColors::scrollBarThickness));
+    verticalScrollBar_.setBounds(bounds.removeFromRight(UIColors::scrollBarThickness));
 
     // Position toggle buttons in top right of ruler
     int btnW = 50;
@@ -694,7 +694,7 @@ double ArrangementViewComponent::viewportXToAbsoluteTime(int x) const
 juce::Rectangle<int> ArrangementViewComponent::getTrackLaneBounds(int trackId) const
 {
     auto bounds = getLocalBounds().withTrimmedTop(rulerHeight_);
-    bounds.removeFromLeft(UIColors::scrollBarThickness); // Reserve space for vertical scrollbar
+    bounds.removeFromRight(UIColors::scrollBarThickness); // Reserve space for vertical scrollbar
     bounds.removeFromBottom(UIColors::scrollBarThickness); // Reserve space for horizontal scrollbar
     int h = processor_.getTrackHeight();
     return bounds.withY(rulerHeight_ + trackId * h - verticalScrollOffset_).withHeight(h);

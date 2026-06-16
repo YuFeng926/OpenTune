@@ -1242,6 +1242,48 @@ if(TARGET OpenTune_VST3)
 endif()
 
 # ==============================================================================
+# Architecture / Signal-Chain Tests
+# ==============================================================================
+option(OPENTUNE_BUILD_ARCHITECTURE_TESTS "Build source-level architecture and signal-chain tests" ON)
+
+if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
+    enable_testing()
+    add_executable(OpenTuneArchitectureTests
+        Tests/TestMain.cpp
+    )
+    target_compile_features(OpenTuneArchitectureTests PRIVATE cxx_std_17)
+    target_compile_definitions(OpenTuneArchitectureTests
+        PRIVATE
+            OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneArchitectureTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneArchitectureTests COMMAND OpenTuneArchitectureTests)
+
+    add_executable(OpenTuneRenderChunkPlannerTests
+        Tests/TestRenderChunkPlanner.cpp
+        Source/Render/RenderChunkPlanner.cpp
+    )
+    target_compile_features(OpenTuneRenderChunkPlannerTests PRIVATE cxx_std_17)
+    target_link_libraries(OpenTuneRenderChunkPlannerTests
+        PRIVATE
+            juce::juce_audio_basics
+            juce::juce_recommended_config_flags
+    )
+    target_compile_definitions(OpenTuneRenderChunkPlannerTests
+        PRIVATE
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneRenderChunkPlannerTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneRenderChunkPlannerTests COMMAND OpenTuneRenderChunkPlannerTests)
+endif()
+
+# ==============================================================================
 # Installation
 # ==============================================================================
 install(TARGETS OpenTune

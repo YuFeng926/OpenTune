@@ -9,6 +9,7 @@
 #include "AppLogger.h"
 #include "AppPreferences.h"
 #include "ProjectPersistence.h"
+#include "TimeCoordinate.h"
 #include <set>
 
 namespace OpenTune {
@@ -293,6 +294,50 @@ static std::shared_ptr<juce::AudioBuffer<float>> loadAudioFile(const juce::File&
     outSampleRate = reader->sampleRate;
     return buffer;
 }
+
+static std::shared_ptr<const juce::AudioBuffer<float>> rebuildStandaloneClipAudioFromSourceWindow(
+    const std::shared_ptr<const juce::AudioBuffer<float>>& sourceBuffer,
+    const SourceWindow& sourceWindow,
+    double sourceSampleRate)
+{
+    if (sourceBuffer == nullptr
+        || sourceBuffer->getNumChannels() <= 0
+        || sourceBuffer->getNumSamples() <= 0
+        || sourceSampleRate <= 0.0
+        || !sourceWindow.isValid()) {
+        return nullptr;
+    }
+
+    const int64_t totalSamples = sourceBuffer->getNumSamples();
+    const int64_t startSample = juce::jlimit<int64_t>(
+        0,
+        totalSamples,
+        TimeCoordinate::secondsToSamplesFloor(sourceWindow.sourceStartSeconds, sourceSampleRate));
+    const int64_t endSample = juce::jlimit<int64_t>(
+        startSample,
+        totalSamples,
+        TimeCoordinate::secondsToSamplesCeil(sourceWindow.sourceEndSeconds, sourceSampleRate));
+
+    if (endSample <= startSample)
+        return nullptr;
+
+    if (startSample == 0 && endSample == totalSamples)
+        return sourceBuffer;
+
+    const auto windowSamples = static_cast<int>(endSample - startSample);
+    auto windowedBuffer = std::make_shared<juce::AudioBuffer<float>>(sourceBuffer->getNumChannels(), windowSamples);
+    for (int channel = 0; channel < sourceBuffer->getNumChannels(); ++channel) {
+        windowedBuffer->copyFrom(
+            channel,
+            0,
+            *sourceBuffer,
+            channel,
+            static_cast<int>(startSample),
+            windowSamples);
+    }
+
+    return windowedBuffer;
+}
 } // namespace
 
 Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
@@ -360,22 +405,34 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         std::shared_ptr<const juce::AudioBuffer<float>> sourceBuf;
         double sourceSampleRate = 44100.0;
 
-        if (contentEntry.sourceId != 0) {
-            if (!sourceStore->getAudioBuffer(contentEntry.sourceId, sourceBuf)) {
-                AppLogger::log("ProjectSession: Source " + juce::String(contentEntry.sourceId)
-                    + " not found for clip " + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
-                continue;
-            }
-            // 从 snapshot 中获取 source 的 sampleRate
-            for (const auto& srcEntry : snapshot.sources) {
-                if (srcEntry.sourceId == contentEntry.sourceId) {
-                    sourceSampleRate = srcEntry.sampleRate;
-                    break;
-                }
-            }
+        if (contentEntry.sourceId == 0
+            || !sourceStore->getAudioBuffer(contentEntry.sourceId, sourceBuf)) {
+            AppLogger::log("ProjectSession: Source " + juce::String(contentEntry.sourceId)
+                + " not found for clip " + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
+            continue;
         }
 
+        SourceStore::SourceSnapshot sourceSnapshot;
+        if (!sourceStore->getSnapshot(contentEntry.sourceId, sourceSnapshot)
+            || sourceSnapshot.sampleRate <= 0.0) {
+            AppLogger::log("ProjectSession: Source " + juce::String(contentEntry.sourceId)
+                + " has invalid sample rate for clip "
+                + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
+            continue;
+        }
+        sourceSampleRate = sourceSnapshot.sampleRate;
+
         // 创建 clip，强制使用原 ID
+        auto windowedBuffer = rebuildStandaloneClipAudioFromSourceWindow(
+            sourceBuf,
+            contentEntry.sourceWindow,
+            sourceSampleRate);
+        if (windowedBuffer == nullptr) {
+            AppLogger::log("ProjectSession: Invalid source window for clip "
+                + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)) + ", skipping");
+            continue;
+        }
+
         ContentKey clipKey = contentRepo->createClip(contentEntry.contentKey.objectId);
         if (!clipKey.isValid()) {
             AppLogger::log("ProjectSession: Failed to create clip " + juce::String(static_cast<juce::int64>(contentEntry.contentKey.objectId)));
@@ -386,9 +443,8 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         if (!clip) { continue; }
 
         // 应用音频数据
-        if (sourceBuf) {
-            clip->applyAudioBuffer(sourceBuf, sourceSampleRate);
-        }
+        clip->payload().sourceWindow = contentEntry.sourceWindow;
+        clip->applyAudioBuffer(windowedBuffer, sourceSampleRate);
 
         // 应用 notes
         clip->applyNotes(contentEntry.notes);
@@ -576,7 +632,7 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
             {
                 const double durationSeconds = snap->sourceWindow.durationSeconds();
                 if (durationSeconds > 0.0)
-                    processorRef_.enqueueContentPartialRender(key, 0.0, durationSeconds);
+                    processorRef_.requestFullContentRender(key, FullRenderReason::ProjectRestore);
             }
         }
     }

@@ -867,7 +867,7 @@ void OpenTuneAudioProcessorEditor::applyImportDropTarget(ImportDropTarget target
     case ImportDropTarget::Kind::Reject:
         ConfirmDialogContent::showMessage(
             this,
-            juce::String::fromUTF8(u8"瀵煎叆闊抽"),
+            juce::String::fromUTF8(u8"\u5BFC\u5165\u97F3\u9891"),
             target.rejectReason
         );
         break;
@@ -1104,7 +1104,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     bool shouldShowOverlay = false;
 
     if (rmvpeOverlayLatched_ && !isWorkspaceView_) {
-        autoRenderOverlay_.setMessageText(juce::String::fromUTF8("姝ｅ湪澶勭悊闊抽"));
+        autoRenderOverlay_.setMessageText(juce::String::fromUTF8(u8"\u6B63\u5728\u5904\u7406\u97F3\u9891"));
         shouldShowOverlay = true;
     }
 
@@ -1430,8 +1430,8 @@ void OpenTuneAudioProcessorEditor::parameterDragEnded(int paramId, float oldValu
 // Import mode enumeration
 enum class ImportMode
 {
-    SameTrack,      // 鎸夐『搴忓鍏ュ埌鍚屼竴涓建閬?
-    SeparateTracks  // 鍒嗗埆瀵煎叆鍒板涓建閬擄紙榻愬ご锛?
+    SameTrack,      // 按顺序导入到同一个轨道
+    SeparateTracks  // 分别导入到多个轨道（齐头）
 };
 
 void OpenTuneAudioProcessorEditor::importAudioRequested()
@@ -1452,7 +1452,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
 
     const auto wildcardFilter = getImportWildcardFilter();
     auto chooser = std::make_shared<juce::FileChooser>(
-        juce::String::fromUTF8(u8"閫夋嫨瑕佸鍏ョ殑闊抽鏂囦欢"),
+        juce::String::fromUTF8(u8"\u9009\u62E9\u8981\u5BFC\u5165\u7684\u97F3\u9891\u6587\u4EF6"),
         juce::File::getSpecialLocation(juce::File::userHomeDirectory),
         wildcardFilter
     );
@@ -1562,7 +1562,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                                 );
                             }
                         } },
-                        { juce::String::fromUTF8(u8"鍙栨秷"), nullptr }
+                        { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr }
                     }
                 ),
                 this
@@ -1627,7 +1627,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                 safeThis->processNextImportInQueue();
                 ConfirmDialogContent::showMessage(
                     safeThis.getComponent(),
-                    juce::String::fromUTF8(u8"瀵煎叆澶辫触"),
+                    juce::String::fromUTF8(u8"\u5BFC\u5165\u5931\u8D25"),
                     result.errorMessage
                 );
                 return;
@@ -1958,20 +1958,20 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
                         DBG("Successfully exported " + outRequest.targetName);
                         ConfirmDialogContent::showMessage(
                             uiSafe.getComponent(),
-                            juce::String::fromUTF8("瀵煎嚭瀹屾垚"),
-                            outRequest.targetName + juce::String::fromUTF8(" 宸插鍑哄埌: ") + outFile.getFullPathName());
+                            juce::String::fromUTF8(u8"\u5BFC\u51FA\u5B8C\u6210"),
+                            outRequest.targetName + juce::String::fromUTF8(u8" \u5DF2\u5BFC\u51FA\u5230: ") + outFile.getFullPathName());
                         return;
                     }
 
-                    juce::String failText = juce::String::fromUTF8("鏃犳硶瀵煎嚭闊抽鍒? ") + outFile.getFullPathName();
+                    juce::String failText = juce::String::fromUTF8(u8"\u65E0\u6CD5\u5BFC\u51FA\u97F3\u9891\u5230 ") + outFile.getFullPathName();
                     if (errorText.isNotEmpty())
                     {
-                        failText += juce::String::fromUTF8("\n鍘熷洜: ") + errorText;
+                        failText += juce::String::fromUTF8(u8"\n\u539F\u56E0: ") + errorText;
                     }
 
                     ConfirmDialogContent::showMessage(
                         uiSafe.getComponent(),
-                        juce::String::fromUTF8("瀵煎嚭澶辫触"),
+                        juce::String::fromUTF8(u8"\u5BFC\u51FA\u5931\u8D25"),
                         failText);
                 });
             });
@@ -2000,9 +2000,9 @@ void OpenTuneAudioProcessorEditor::saveProjectRequested()
             if (!result.ok()) {
                 ConfirmDialogContent::launch(
                     new ConfirmDialogContent(
-                        juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
+                        juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
                         result.error().fullMessage(),
-                        { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                        { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                     safeThis.getComponent());
                 return;
             }
@@ -2026,9 +2026,9 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     ConfirmDialogContent::launch(
         new ConfirmDialogContent(
-            juce::String::fromUTF8(u8"褰撳墠宸ョ▼灏氭湭淇濆瓨"),
-            juce::String::fromUTF8(u8"鎵撳紑鍏朵粬宸ョ▼鍓嶏紝鏄惁淇濆瓨褰撳墠宸ョ▼鐨勬洿鏀癸紵"),
-            {               { juce::String::fromUTF8(u8"淇濆瓨"), [safeThis] {
+            juce::String::fromUTF8(u8"\u5F53\u524D\u5DE5\u7A0B\u5C1A\u672A\u4FDD\u5B58"),
+            juce::String::fromUTF8(u8"\u6253\u5F00\u5176\u4ED6\u5DE5\u7A0B\u524D\uFF0C\u662F\u5426\u4FDD\u5B58\u5F53\u524D\u5DE5\u7A0B\u7684\u66F4\u6539\uFF1F"),
+            {               { juce::String::fromUTF8(u8"\u4FDD\u5B58"), [safeThis] {
                     if (safeThis == nullptr) return;
                     if (!safeThis->projectSession_.hasProjectPath()) {
                         safeThis->saveProjectAsThenOpenProject();
@@ -2047,9 +2047,9 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
                                 if (!saveResult.ok()) {
                                     ConfirmDialogContent::launch(
                                         new ConfirmDialogContent(
-                                            juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
+                                            juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
                                             saveResult.error().fullMessage(),
-                                            { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                                            { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                                         safeThis.getComponent());
                                     return;
                                 }
@@ -2067,13 +2067,13 @@ void OpenTuneAudioProcessorEditor::openProjectRequested()
                     if (safeThis == nullptr) return;
                     safeThis->launchOpenProjectChooser();
                 }, false },
-              { juce::String::fromUTF8(u8"鍙栨秷"), nullptr, false } }),
+              { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
         this);
 }
 
 void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
 {
-    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"鎵撳紑宸ョ▼"), juce::File(), "*.otproj");
+    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
@@ -2087,9 +2087,9 @@ void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
         if (!result.ok()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"鎵撳紑宸ョ▼澶辫触"),
+                    juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
                     result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                    { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                 safeThis.getComponent());
             return;
         }
@@ -2100,7 +2100,7 @@ void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
 
 void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
 {
-    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"淇濆瓨宸ョ▼"), juce::File(), "*.otproj");
+    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
@@ -2116,16 +2116,16 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
                 new ConfirmDialogContent(
                     juce::String("Overwrite Existing Project?"),
                     juce::String("The target project file already exists. Overwrite it?"),
-                    { { juce::String::fromUTF8(u8"瑕嗙洊"), [safeThis, file] {
+                    { { juce::String::fromUTF8(u8"\u8986\u76D6"), [safeThis, file] {
                             if (safeThis == nullptr) return;
                             if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
                             auto result = safeThis->projectSession_.saveProjectAs(file);
                             if (!result.ok()) {
                                 ConfirmDialogContent::launch(
                                     new ConfirmDialogContent(
-                                        juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
+                                        juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
                                         result.error().fullMessage(),
-                                        { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                                        { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                                     safeThis.getComponent());
                                 return;
                             }
@@ -2133,7 +2133,7 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
                             safeThis->updateTitleWithProjectPath();
                             safeThis->launchOpenProjectChooser();
                         }, true },
-                      { juce::String::fromUTF8(u8"鍙栨秷"), nullptr, false } }),
+                      { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
                 safeThis.getComponent());
             return;
         }
@@ -2143,9 +2143,9 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
         if (!result.ok()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
+                    juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
                     result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                    { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                 safeThis.getComponent());
             return;
         }
@@ -2348,29 +2348,10 @@ void OpenTuneAudioProcessorEditor::trackColorModeChanged(TrackColorMode mode)
 
 void OpenTuneAudioProcessorEditor::performUndoRedoAction(bool isUndo)
 {
-    auto* action = isUndo ? processorRef_.getUndoManager().undo()
-                          : processorRef_.getUndoManager().redo();
-    if (!action) return;
-
-    const int activeTrack = getStandaloneActiveTrack(processorRef_);
-    const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
-    const ContentKey contentKey = (activeTrack >= 0 && activePlacementIndex >= 0)
-        ? getStandaloneContentKey(processorRef_, activeTrack, activePlacementIndex) : ContentKey{};
-    if (!contentKey.isValid()) return;
-
-    auto snap = processorRef_.getContentSnapshot(contentKey);
-    auto curve = snap ? snap->pitchCurve : nullptr;
-    if (!curve || !curve->getSnapshot()->hasRenderableCorrectedF0()) return;
-
-    double startSec = 0.0;
-    double endSec = pianoRoll_.getContentDurationSeconds();
-    auto* editAction = dynamic_cast<OpenTune::PianoRollEditAction*>(action);
-    if (editAction && editAction->getContentKey().objectId == contentKey.objectId && editAction->getAffectedEndFrame() > 0) {
-        const double spf = static_cast<double>(curve->getHopSize()) / curve->getSampleRate();
-        startSec = static_cast<double>(editAction->getAffectedStartFrame()) * spf;
-        endSec = static_cast<double>(editAction->getAffectedEndFrame()) * spf;
-    }
-    processorRef_.enqueueContentPartialRender(contentKey, startSec, endSec);
+    if (isUndo)
+        processorRef_.getUndoManager().undo();
+    else
+        processorRef_.getUndoManager().redo();
 
     projectSession_.markDirty();
 }
@@ -2918,61 +2899,6 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
 void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame)
 {
     DBG("Editor: Pitch curve edited frames " + juce::String(startFrame) + " to " + juce::String(endFrame));
-    
-    int trackId = getStandaloneActiveTrack(processorRef_);
-    int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, trackId);
-    
-    if (placementIndex < 0) return;
-
-    const ContentKey contentKey = getStandaloneContentKey(processorRef_, trackId, placementIndex);
-    if (!contentKey.isValid()) {
-        return;
-    }
-
-    auto snap = processorRef_.getContentSnapshot(contentKey);
-    auto curve = snap ? snap->pitchCurve : nullptr;
-    if (!curve) {
-        return;
-    }
-
-    int hopSize = curve->getHopSize();
-    double f0SampleRate = curve->getSampleRate();
-    if (hopSize <= 0 || f0SampleRate <= 0.0) {
-        auto* f0Service = processorRef_.getF0Service();
-        if (f0Service) {
-            hopSize = f0Service->getF0HopSize();
-            f0SampleRate = static_cast<double>(f0Service->getF0SampleRate());
-        }
-    }
-    if (hopSize <= 0 || f0SampleRate <= 0.0) {
-        return;
-    }
-
-    int numFrames = (int) curve->size();
-    if (numFrames <= 0) {
-        return;
-    }
-
-    if (startFrame > endFrame) {
-        std::swap(startFrame, endFrame);
-    }
-    startFrame = std::max(0, startFrame);
-    endFrame = std::min(endFrame, numFrames - 1);
-    if (endFrame < startFrame) {
-        return;
-    }
-
-    const double secondsPerFrame = static_cast<double>(hopSize) / f0SampleRate;
-    const double editStartSec = static_cast<double>(startFrame) * secondsPerFrame;
-    const double editEndSec = static_cast<double>(endFrame + 1) * secondsPerFrame;
-
-    AppLogger::log("RenderTrace: pitchCurveEdited"
-        " track=" + juce::String(trackId)
-        + " placementIndex=" + juce::String(placementIndex)
-        + " frameRange=[" + juce::String(startFrame) + "," + juce::String(endFrame) + "]"
-        + " secRange=[" + juce::String(editStartSec, 3) + "," + juce::String(editEndSec, 3) + "]");
-
-    processorRef_.enqueueContentPartialRender(contentKey, editStartSec, editEndSec);
 
     projectSession_.markDirty();
 }
@@ -2992,7 +2918,7 @@ void OpenTuneAudioProcessorEditor::currentToolChanged(ToolId tool)
 
 void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
 {
-    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"淇濆瓨宸ョ▼"), juce::File(), "*.otproj");
+    auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"), juce::File(), "*.otproj");
     auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
 
@@ -3008,25 +2934,25 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
                 new ConfirmDialogContent(
                     juce::String("Overwrite Existing Project?"),
                     juce::String("The target project file already exists. Overwrite it?"),
-                    { { juce::String::fromUTF8(u8"瑕嗙洊"), [safeThis, file] {
+                    { { juce::String::fromUTF8(u8"\u8986\u76D6"), [safeThis, file] {
                             if (safeThis == nullptr) return;
                             if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
                             auto result = safeThis->projectSession_.saveProjectAs(file);
                             if (!result.ok()) {
                                 ConfirmDialogContent::launch(
                                     new ConfirmDialogContent(
-                                        juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
+                                        juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
                                         result.error().fullMessage(),
-                                        { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                                        { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                                     safeThis.getComponent());
                                 return;
                             }
                             safeThis->syncRecentProjectsToMenu();
                             safeThis->updateTitleWithProjectPath();
                         }, true },
-                      { juce::String::fromUTF8(u8"鍙栨秷"), nullptr, false } }),
+                      { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
                 safeThis.getComponent());
-            return; // Don't continue in outer callback 鈥?the inner callback handles save
+            return; // Don't continue in outer callback — the inner callback handles save
         }
 
         if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
@@ -3034,9 +2960,9 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
         if (!result.ok()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
+                    juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
                     result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                    { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                 safeThis.getComponent());
             return;
         }
@@ -3053,9 +2979,9 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
         if (!result.ok()) {
             ConfirmDialogContent::launch(
                 new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"鎵撳紑宸ョ▼澶辫触"),
+                    juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
                     result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                    { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                 this);
             projectSession_.clearRecentProjects();
             return;
@@ -3068,9 +2994,9 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     ConfirmDialogContent::launch(
         new ConfirmDialogContent(
-            juce::String::fromUTF8(u8"褰撳墠宸ョ▼灏氭湭淇濆瓨"),
-            juce::String::fromUTF8(u8"鎵撳紑鍏朵粬宸ョ▼鍓嶏紝鏄惁淇濆瓨褰撳墠宸ョ▼鐨勬洿鏀癸紵"),
-            {               { juce::String::fromUTF8(u8"淇濆瓨"), [safeThis, file] {
+            juce::String::fromUTF8(u8"\u5F53\u524D\u5DE5\u7A0B\u5C1A\u672A\u4FDD\u5B58"),
+            juce::String::fromUTF8(u8"\u6253\u5F00\u5176\u4ED6\u5DE5\u7A0B\u524D\uFF0C\u662F\u5426\u4FDD\u5B58\u5F53\u524D\u5DE5\u7A0B\u7684\u66F4\u6539\uFF1F"),
+            {               { juce::String::fromUTF8(u8"\u4FDD\u5B58"), [safeThis, file] {
                     if (safeThis == nullptr) return;
                     if (!safeThis->projectSession_.hasProjectPath()) {
                         safeThis->saveProjectAsRequested();
@@ -3089,9 +3015,9 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                                 if (!saveResult.ok()) {
                                     ConfirmDialogContent::launch(
                                         new ConfirmDialogContent(
-                                            juce::String::fromUTF8(u8"淇濆瓨宸ョ▼澶辫触"),
+                                            juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
                                             saveResult.error().fullMessage(),
-                                            { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                                            { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                                         safeThis.getComponent());
                                     return;
                                 }
@@ -3104,9 +3030,9 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                                 if (!openResult.ok()) {
                                     ConfirmDialogContent::launch(
                                         new ConfirmDialogContent(
-                                            juce::String::fromUTF8(u8"鎵撳紑宸ョ▼澶辫触"),
+                                            juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
                                             openResult.error().fullMessage(),
-                                            { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                                            { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                                         safeThis.getComponent());
                                     safeThis->projectSession_.clearRecentProjects();
                                     return;
@@ -3124,9 +3050,9 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                     if (!openResult.ok()) {
                         ConfirmDialogContent::launch(
                             new ConfirmDialogContent(
-                                juce::String::fromUTF8(u8"鎵撳紑宸ョ▼澶辫触"),
+                                juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
                                 openResult.error().fullMessage(),
-                                { { juce::String::fromUTF8(u8"纭畾"), nullptr, true } }),
+                                { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
                             safeThis.getComponent());
                         safeThis->projectSession_.clearRecentProjects();
                         return;
@@ -3134,7 +3060,7 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                     safeThis->syncRecentProjectsToMenu();
                     safeThis->updateTitleWithProjectPath();
                 }, false },
-              { juce::String::fromUTF8(u8"鍙栨秷"), nullptr, false } }),
+              { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
         this);
 }
 
@@ -3304,7 +3230,7 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
 // Check if already has reference binding
     const uint64_t existingRef = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
     if (existingRef != 0) {
-        menu.addItem(juce::String::fromUTF8(u8"涓嶄娇鐢ㄥ弬鑰?Clip"), [this, arrangement, trackId, targetPlacementId]() {
+        menu.addItem(juce::String::fromUTF8(u8"\u4E0D\u4F7F\u7528\u53C2\u8003Clip"), [this, arrangement, trackId, targetPlacementId]() {
             arrangement->clearPlacementReferencePlacement(trackId, targetPlacementId);
             refreshReferenceContext();
         });
@@ -3320,7 +3246,7 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
         for (int pi = 0; pi < numPlacements; ++pi) {
             StandaloneArrangement::Placement candidate;
             if (!processorRef_.getPlacementByIndex(t, pi, candidate)) continue;
-            if (candidate.placementId == targetPlacementId) continue; // 鎺掗櫎鑷韩
+            if (candidate.placementId == targetPlacementId) continue; // 排除自身
             if (candidate.isRetired) continue;
 
 // Exclude clips already serving as target (referenced by other clips)
@@ -3339,9 +3265,9 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
     }
 
     if (hasCandidates) {
-        menu.addSubMenu(juce::String::fromUTF8(u8"閫夋嫨鍙傝€?Clip"), refMenu);
+        menu.addSubMenu(juce::String::fromUTF8(u8"\u9009\u62E9\u53C2\u8003Clip"), refMenu);
     } else {
-        menu.addItem(juce::String::fromUTF8(u8"(鏃犲彲鐢ㄧ殑鍙傝€?Clip)"), false, false, nullptr);
+        menu.addItem(juce::String::fromUTF8(u8"(\u65E0\u53EF\u7528\u7684\u53C2\u8003Clip)"), false, false, nullptr);
     }
 
     if (buttonScreenArea.isEmpty())

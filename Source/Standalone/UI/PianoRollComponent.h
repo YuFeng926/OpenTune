@@ -450,7 +450,7 @@ private:
     void beginNoteDraft();
     bool commitNoteDraft();
     void clearNoteDraft();
-    // affectedRange: 编辑时已知的精确帧范围；undo/redo 用此范围 enqueuePartialRender。
+    // affectedRange: 编辑时已知的精确帧范围；通过 commitNotesAndSegments 传递到 mutation sink 触发局部渲染。
     // 纯 note 编辑没有 corrected-F0 所有权时，调用方传入完整 F0 物化范围。
     bool commitEditedContentNotes(const std::vector<Note>& notes,
                                           F0FrameRange affectedRange);

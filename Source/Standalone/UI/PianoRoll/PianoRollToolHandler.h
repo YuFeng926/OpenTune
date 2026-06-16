@@ -146,12 +146,10 @@ public:
         // ============================================================
         std::function<std::shared_ptr<const TimeGridSnapshot>()> getTimeGridSnapshot;
         // commitTimeGrid: publish (newSnapshot) and record undo with
-        // (oldSnapshot, affectedSourceFrameRange) supplied by caller.  Returns
-        // true when the processor accepted the snapshot (validation passed).
+        // (oldSnapshot) supplied by caller.  Returns true when the processor
+        // accepted the snapshot (validation passed).
         std::function<bool(std::shared_ptr<const TimeGridSnapshot> /*newSnapshot*/,
                             std::shared_ptr<const TimeGridSnapshot> /*oldSnapshot*/,
-                            int64_t /*affectedSrcStartFrame*/,
-                            int64_t /*affectedSrcEndFrame*/,
                             juce::String /*description*/)> commitTimeGrid;
         // notifyTimeGridChanged: lighter visual-only notification (e.g., for
         // hover/select state changes that don't need an undo entry).

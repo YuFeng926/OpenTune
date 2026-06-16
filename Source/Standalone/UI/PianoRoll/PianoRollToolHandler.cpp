@@ -2478,36 +2478,8 @@ void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
     if (tt.dragWorkingSnapshot != nullptr
         && tt.dragWorkingSnapshot != tt.dragOriginalSnapshot
         && ctx_.commitTimeGrid) {
-        // Compute affected source frame range from the dragged handle's
-        // source_seconds neighborhood (per undo-affected-range-invariant.md
-        // — the range must be supplied by the UI at edit time, never derived
-        // from snapshot diff afterwards).
-        const auto& handles = tt.dragWorkingSnapshot->handles();
-        int draggedIdx = -1;
-        for (int i = 0; i < static_cast<int>(handles.size()); ++i) {
-            if (handles[i].id == tt.draggedHandleId) { draggedIdx = i; break; }
-        }
-
-        int64_t affectedStartFrame = 0;
-        int64_t affectedEndFrame   = 0;
-        if (draggedIdx > 0 && draggedIdx < static_cast<int>(handles.size()) - 1) {
-            const F0Timeline f0tl = ctx_.getF0Timeline ? ctx_.getF0Timeline() : F0Timeline{};
-            const double srcStartSec = handles[static_cast<size_t>(draggedIdx - 1)].source_seconds;
-            const double srcEndSec   = handles[static_cast<size_t>(draggedIdx + 1)].source_seconds;
-            if (!f0tl.isEmpty()) {
-                const auto range = f0tl.rangeForTimes(srcStartSec, srcEndSec);
-                affectedStartFrame = range.startFrame;
-                affectedEndFrame   = range.endFrameExclusive;
-            } else {
-                affectedStartFrame = static_cast<int64_t>(srcStartSec * 100.0);
-                affectedEndFrame   = static_cast<int64_t>(srcEndSec   * 100.0);
-            }
-        }
-
         ctx_.commitTimeGrid(tt.dragWorkingSnapshot,
                              tt.dragOriginalSnapshot,
-                             affectedStartFrame,
-                             affectedEndFrame,
                              juce::String("拖动时间手柄"));
     }
 
@@ -2600,25 +2572,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
         return;
     }
 
-    // Compute affected source frame range from neighbors.
-    int64_t affectedStart = 0;
-    int64_t affectedEnd   = 0;
-    {
-        const F0Timeline f0tl = ctx_.getF0Timeline ? ctx_.getF0Timeline() : F0Timeline{};
-        const double srcStartSec = handles[static_cast<size_t>(insertIdx - 1)].source_seconds;
-        const double srcEndSec   = handles[static_cast<size_t>(insertIdx)].source_seconds;
-        if (!f0tl.isEmpty()) {
-            const auto range = f0tl.rangeForTimes(srcStartSec, srcEndSec);
-            affectedStart = range.startFrame;
-            affectedEnd   = range.endFrameExclusive;
-        } else {
-            affectedStart = static_cast<int64_t>(srcStartSec * 100.0);
-            affectedEnd   = static_cast<int64_t>(srcEndSec   * 100.0);
-        }
-    }
-
-    ctx_.commitTimeGrid(newSnap, snap, affectedStart, affectedEnd,
-                         juce::String("插入时间手柄"));
+    ctx_.commitTimeGrid(newSnap, snap, juce::String("插入时间手柄"));
 
     // Auto-select the newly-inserted handle so user can immediately drag.
     auto& tt = ctx_.getState().timeTool;
@@ -2671,25 +2625,7 @@ bool PianoRollToolHandler::handleTimeToolDeleteSelected()
         return false;
     }
 
-    // Affected range = source span between the deleted handle's neighbors.
-    int64_t affectedStart = 0;
-    int64_t affectedEnd   = 0;
-    {
-        const F0Timeline f0tl = ctx_.getF0Timeline ? ctx_.getF0Timeline() : F0Timeline{};
-        const double srcStartSec = handles[static_cast<size_t>(targetIdx - 1)].source_seconds;
-        const double srcEndSec   = handles[static_cast<size_t>(targetIdx + 1)].source_seconds;
-        if (!f0tl.isEmpty()) {
-            const auto range = f0tl.rangeForTimes(srcStartSec, srcEndSec);
-            affectedStart = range.startFrame;
-            affectedEnd   = range.endFrameExclusive;
-        } else {
-            affectedStart = static_cast<int64_t>(srcStartSec * 100.0);
-            affectedEnd   = static_cast<int64_t>(srcEndSec   * 100.0);
-        }
-    }
-
-    ctx_.commitTimeGrid(newSnap, snap, affectedStart, affectedEnd,
-                         juce::String("删除时间手柄"));
+    ctx_.commitTimeGrid(newSnap, snap, juce::String("删除时间手柄"));
 
     tt.selectedHandleId = 0;
     tt.hoveredHandleId  = 0;
