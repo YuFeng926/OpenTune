@@ -296,24 +296,20 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     };
     toolCtx.commitTimeGrid = [this](std::shared_ptr<const TimeGridSnapshot> newSnap,
                                      std::shared_ptr<const TimeGridSnapshot> oldSnap,
-                                     int64_t affectedSrcStart,
-                                     int64_t affectedSrcEnd,
                                      juce::String description) -> bool {
         if (processor_ == nullptr || !editedContentKey_.isValid()) return false;
-        if (newSnap == nullptr) return false;
+        if (newSnap == nullptr || oldSnap == nullptr) return false;
 
         auto action = std::make_unique<TimeGridEditAction>(
             contentCommands_,
             editedContentKey_,
             description.isNotEmpty() ? description : juce::String("缂栬緫鏃堕棿缃戞牸"),
             std::move(oldSnap),
-            newSnap,
-            affectedSrcStart,
-            affectedSrcEnd);
+            newSnap);
         // First publish the new snapshot to the content (the action's redo()
         // will replay this); then push the action so undo() reverts.
         const bool published = contentCommands_->setTimeGrid(
-            editedContentKey_, newSnap, affectedSrcStart, affectedSrcEnd);
+            editedContentKey_, newSnap);
         if (!published) return false;
         processor_->getUndoManager().addAction(std::move(action));
         return true;
@@ -622,7 +618,8 @@ bool PianoRollComponent::commitEditedContentNotesAndSegments(const std::vector<N
     if (!undoSnapshotCaptured_)
         captureBeforeUndoSnapshot();
 
-    if (!contentCommands_->commitNotesAndSegments(editedContentKey_, notes, segments)) {
+    if (!contentCommands_->commitNotesAndSegments(editedContentKey_, notes, segments,
+            ContentEditRangeFrames{affectedRange.startFrame, affectedRange.endFrameExclusive})) {
         return false;
     }
 

@@ -261,9 +261,12 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         persisted.push_back(std::move(p));
     }
 
-    // End-magic check (informational).
+    // End-magic check.
     const uint32_t endMagic = static_cast<uint32_t>(stream.readInt());
-    juce::ignoreUnused(endMagic);
+    if (endMagic != kCaptureEndMagic) {
+        AppLogger::log("CapturePersistence: invalid end magic");
+        return false;
+    }
 
     // ── 3. Rebuild segments ──────────────────────────────────────────────
     uint64_t maxIdSeen = 0;
@@ -331,12 +334,12 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
 
     // Restore: owner truth (audio + pitch curve + detected key) already persisted.
     // CRS republished above; now immediately rebuild render cache from restored owner truth.
-    if (session.bindings_.enqueuePartialRender) {
+    if (session.bindings_.requestFullRender) {
         for (const ContentKey& key : keysToPublish) {
             auto* seg = session.findSegmentByContentKey(key);
             if (!seg || seg->durationSeconds <= 0.0)
                 continue;
-            session.bindings_.enqueuePartialRender(key, 0.0, seg->durationSeconds);
+            session.bindings_.requestFullRender(key);
         }
     }
 

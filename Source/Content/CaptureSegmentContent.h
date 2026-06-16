@@ -30,7 +30,10 @@ public:
     void applyAudioBuffer(const juce::AudioBuffer<float>* buffer, double sampleRate);
     void applyOriginalF0State(OriginalF0State state);
     void applyDetectedKey(const DetectedKey& key);
+    void applyNotes(std::vector<Note> notes);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
+    void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot);
+    void applyPitchShiftSettings(const PitchShiftSettings& settings);
     void applyReferenceFeatures(const ReferenceFeatureSet& features);
     std::shared_ptr<PitchCurve> pitchCurve() const { return pitchCurve_; }
 

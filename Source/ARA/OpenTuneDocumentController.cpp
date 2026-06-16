@@ -576,13 +576,7 @@ void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModi
         return;
 
     // 清理 CRS derived artifacts
-    if (contentRenderService_)
-    {
-        auto key = mod->contentKey();
-        contentRenderService_->removePlaybackSource(key);
-        contentRenderService_->removeRenderCache(key);
-        contentRenderService_->removeStretcher(key);
-    }
+    removeCRSArtifactsForModification(*mod);
 
     // Detach host pointer
     mod->audioModification = nullptr;
@@ -647,7 +641,10 @@ void OpenTuneDocumentController::doUpdateAudioSourceContent(juce::ARAAudioSource
         for (auto& modification : audioModifications_)
         {
             if (modification.content.sourceWindow.sourcePersistentId == source->getIdentity().persistentId)
+            {
+                removeCRSArtifactsForModification(modification);
                 modification.resetContent();
+            }
         }
     }
 
@@ -666,7 +663,10 @@ void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess(juce::ARAAudi
     auto& source = ensureAudioSource(audioSource);
     source.setSampleAccessEnabled(enable);
     if (enable)
+    {
         source.createReaderLease();
+        rebuildCRSForSource(source);
+    }
 
     refreshRegisteredRenderers(publishModelChange());
 }
@@ -696,7 +696,10 @@ void OpenTuneDocumentController::willDestroyAudioSource(juce::ARAAudioSource* au
         for (auto& modification : audioModifications_)
         {
             if (modification.content.sourceWindow.sourcePersistentId == persistentId)
+            {
+                removeCRSArtifactsForModification(modification);
                 modification.resetContent();
+            }
         }
     }
 
@@ -1404,6 +1407,39 @@ bool OpenTuneDocumentController::rebuildCRSFromSource(AudioModification& modific
     publishPlaybackReadSourceForModification(modification, storedAudioBuffer);
 
     return true;
+}
+
+void OpenTuneDocumentController::removeCRSArtifactsForModification(const AudioModification& modification)
+{
+    if (contentRenderService_ == nullptr)
+        return;
+
+    const auto key = modification.contentKey();
+    if (!key.isValid())
+        return;
+
+    contentRenderService_->removePlaybackSource(key);
+    contentRenderService_->removeRenderCache(key);
+    contentRenderService_->removeStretcher(key);
+    contentRenderService_->getTimeStretchCache().invalidate(key);
+}
+
+int OpenTuneDocumentController::rebuildCRSForSource(const AudioSource& source)
+{
+    if (!source.canReadSamples())
+        return 0;
+
+    int rebuiltCount = 0;
+    const auto& sourcePersistentId = source.getIdentity().persistentId;
+    for (auto& modification : audioModifications_)
+    {
+        if (modification.content.sourceWindow.sourcePersistentId != sourcePersistentId)
+            continue;
+
+        if (rebuildCRSFromSource(modification))
+            ++rebuiltCount;
+    }
+    return rebuiltCount;
 }
 
 void OpenTuneDocumentController::scheduleAsyncF0Extraction(

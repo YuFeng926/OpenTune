@@ -13,9 +13,10 @@ namespace OpenTune {
 /**
  * PlaybackReadSource is the immutable read view consumed by render paths.
  *
- * The domain content owner supplies the base audioBuffer and revisions.
- * RenderCache and TimeStretchCache are derived overlays keyed by the same
- * ContentKey; they never replace the base audio ownership contract.
+ * Standalone and regular VST3 capture publish their owner audio here. ARA2
+ * publishes a CRS-derived buffer rebuilt from AudioSource sample access. RenderCache
+ * and TimeStretchCache are derived overlays keyed by the same ContentKey; they
+ * never become persisted source truth.
  */
 struct PlaybackReadSource
 {

@@ -216,6 +216,8 @@ private:
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer);
     bool birthContentForModification(AudioModification& modification);
     bool rebuildCRSFromSource(AudioModification& modification);
+    void removeCRSArtifactsForModification(const AudioModification& modification);
+    int rebuildCRSForSource(const AudioSource& source);
     void scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
                                    double sourceSampleRate);

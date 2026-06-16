@@ -79,8 +79,8 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
     const auto& srcBuffer = *request.source.audioBuffer;
     const int srcChannels = srcBuffer.getNumChannels();
     const int64_t srcLengthSamples = srcBuffer.getNumSamples();
-    constexpr double srcSampleRate = TimeCoordinate::kRenderSampleRate;
-    if (srcChannels <= 0 || srcLengthSamples <= 0) {
+    const double srcSampleRate = request.source.audioSampleRate;
+    if (srcChannels <= 0 || srcLengthSamples <= 0 || srcSampleRate <= 0.0) {
         return 0;
     }
 

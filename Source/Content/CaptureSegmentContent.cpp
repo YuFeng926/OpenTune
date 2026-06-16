@@ -2,6 +2,7 @@
 #include "EditableContentSnapshot.h"
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace OpenTune {
 
@@ -113,10 +114,31 @@ void CaptureSegmentContent::applyDetectedKey(const DetectedKey& key)
     ++editable_.contentRevision;
 }
 
+void CaptureSegmentContent::applyNotes(std::vector<Note> notes)
+{
+    editable_.notes = std::move(notes);
+    ++editable_.notesRevision;
+    ++editable_.contentRevision;
+}
+
 void CaptureSegmentContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
 {
     pitchCurve_ = std::move(curve);
     ++editable_.pitchRevision;
+    ++editable_.contentRevision;
+}
+
+void CaptureSegmentContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot)
+{
+    editable_.timeGrid = std::move(snapshot);
+    ++editable_.timeGridRevision;
+    ++editable_.contentRevision;
+}
+
+void CaptureSegmentContent::applyPitchShiftSettings(const PitchShiftSettings& settings)
+{
+    editable_.pitchShiftSettings = settings;
+    ++editable_.pitchShiftRevision;
     ++editable_.contentRevision;
 }
 

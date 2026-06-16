@@ -182,6 +182,20 @@ bool standaloneRepositoryReferencesSource(const StandaloneContentRepository& rep
     return false;
 }
 
+double contentDurationSeconds(const EditableContentSnapshot& snap)
+{
+    if (snap.sourceWindow.isValid())
+        return snap.sourceWindow.durationSeconds();
+
+    if (snap.audioBuffer != nullptr
+        && snap.audioBuffer->getNumSamples() > 0
+        && snap.audioSampleRate > 0.0) {
+        return static_cast<double>(snap.audioBuffer->getNumSamples()) / snap.audioSampleRate;
+    }
+
+    return 0.0;
+}
+
 juce::String diagnosticControlCallToString(OpenTuneAudioProcessor::DiagnosticControlCall controlCall)
 {
     switch (controlCall) {
@@ -931,11 +945,6 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             return proc_->setContentPitchShiftSettings(key, settings);
         }
 
-        void enqueuePartialRender(ContentKey key, double relStartSeconds, double relEndSeconds) override
-        {
-            if (proc_) proc_->enqueueContentPartialRender(key, relStartSeconds, relEndSeconds);
-        }
-
         bool commitAutoTuneGeneratedNotes(ContentKey key,
                                            std::vector<Note> generatedNotes,
                                            int startFrame, int endFrameExclusive,
@@ -956,10 +965,11 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 
         bool commitNotesAndSegments(ContentKey key,
                                      std::vector<Note> notes,
-                                     std::vector<CorrectedSegment> segments) override
+                                     std::vector<CorrectedSegment> segments,
+                                     ContentEditRangeFrames affectedRange) override
         {
             if (!proc_) return false;
-            return proc_->commitContentNotesAndSegments(key, std::move(notes), std::move(segments));
+            return proc_->commitContentNotesAndSegments(key, std::move(notes), std::move(segments), affectedRange);
         }
 
         bool setCorrectedSegments(ContentKey key,
@@ -969,18 +979,18 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             return proc_->setContentCorrectedSegments(key, std::move(segments));
         }
 
-        bool setPitchCurve(ContentKey key, std::shared_ptr<PitchCurve> curve) override
+        bool setPitchCurve(ContentKey key, std::shared_ptr<PitchCurve> curve,
+                           ContentEditRangeFrames affectedRange) override
         {
             if (!proc_) return false;
-            return proc_->setContentPitchCurve(key, std::move(curve));
+            return proc_->setContentPitchCurve(key, std::move(curve), affectedRange);
         }
 
         bool setTimeGrid(ContentKey key,
-                          std::shared_ptr<const TimeGridSnapshot> grid,
-                          int64_t srcStartFrame, int64_t srcEndFrame) override
+                          std::shared_ptr<const TimeGridSnapshot> grid) override
         {
             if (!proc_) return false;
-            return proc_->setContentTimeGrid(key, std::move(grid), srcStartFrame, srcEndFrame);
+            return proc_->setContentTimeGrid(key, std::move(grid));
         }
 
     private:
@@ -1121,8 +1131,8 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             contentRenderService_->publishPlaybackSource(key, readSource);
         };
 
-        bindings.enqueuePartialRender = [this](ContentKey key, double startSeconds, double endSeconds) {
-            enqueueContentPartialRender(key, startSeconds, endSeconds);
+        bindings.requestFullRender = [this](ContentKey key) {
+            requestFullContentRender(key, FullRenderReason::CaptureRestore);
         };
 
         captureSession_ = std::make_unique<Capture::CaptureSession>(std::move(bindings));
@@ -1680,10 +1690,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
             if (auto cache = contentRenderService_->getRenderCache(key))
                 cache->clear();
 
-            const auto snap = getContentSnapshot(key);
-            const double durationSec = snap ? snap->sourceWindow.durationSeconds() : 0.0;
-            if (durationSec > 0.0)
-                enqueueContentPartialRender(key, 0.0, durationSec);
+            requestFullContentRender(key, FullRenderReason::ModelOrSettingsWholeContentRerender);
         }
         // �?TimeStretchCache
         contentRenderService_->getTimeStretchCache().clear();
@@ -3090,18 +3097,85 @@ OpenTuneAudioProcessor::resolveAnalysisAudioProvider(ContentKey key)
     return result;
 }
 
-void OpenTuneAudioProcessor::onContentMutationCompleted(
-    ContentKey key,
-    MutationScope scope,
-    double affectedStartSeconds,
-    double affectedEndSeconds)
+void OpenTuneAudioProcessor::onContentLocalMutationCompleted(ContentKey key,
+                                                              MutationScope scope,
+                                                              ContentEditRangeFrames affectedRange)
 {
     juce::ignoreUnused(scope);
-
-    invalidateRenderFor(key);
     refreshCRSMetadata(key);
-    if (affectedEndSeconds > affectedStartSeconds)
-        enqueueContentPartialRender(key, affectedStartSeconds, affectedEndSeconds);
+
+    auto snap = getContentSnapshot(key);
+    if (!snap || !snap->pitchCurve) return;
+    const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
+                                 / snap->pitchCurve->getSampleRate();
+    const double startSec = static_cast<double>(affectedRange.startFrame) * secondsPerFrame;
+    const double endSec   = static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame;
+    requestRenderForLocalMutationRange(key, startSec, endSec);
+}
+
+void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key,
+                                                             MutationScope scope,
+                                                             FullRenderReason reason)
+{
+    juce::ignoreUnused(scope);
+    refreshCRSMetadata(key);
+    requestFullContentRender(key, reason);
+}
+
+void OpenTuneAudioProcessor::requestFullContentRender(ContentKey key, FullRenderReason reason)
+{
+    juce::ignoreUnused(reason);
+    auto snap = getContentSnapshot(key);
+    if (!snap) return;
+    const double durationSeconds = snap->sourceWindow.durationSeconds();
+    if (durationSeconds <= 0.0) return;
+    requestRenderForLocalMutationRange(key, 0.0, durationSeconds);
+}
+
+void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
+                                                                double startSeconds,
+                                                                double endSeconds)
+{
+    auto snap = getContentSnapshot(key);
+    if (!snap) return;
+
+    PlaybackReadSource readSource;
+    if (!contentRenderService_->getPlaybackReadSource(key, readSource)) return;
+
+    const double crsSampleRate = readSource.audioSampleRate;
+    auto audioBuffer = readSource.audioBuffer;
+    if (crsSampleRate <= 0.0 || audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0) return;
+
+    auto renderCache = contentRenderService_->getOrCreateRenderCache(key);
+    readSource.renderCache = renderCache;
+    contentRenderService_->publishPlaybackSource(key, readSource);
+
+    const int64_t totalSamples = audioBuffer->getNumSamples();
+    const int64_t startSample = juce::jlimit<int64_t>(
+        0, totalSamples, TimeCoordinate::secondsToSamplesFloor(startSeconds, crsSampleRate));
+    const int64_t endSample = juce::jlimit<int64_t>(
+        0, totalSamples, TimeCoordinate::secondsToSamplesCeil(endSeconds, crsSampleRate));
+
+    if (endSample <= startSample) return;
+
+    RenderJob job;
+    job.contentKey = key;
+    job.renderCache = renderCache;
+    job.audioBuffer = audioBuffer;
+    job.startSeconds = static_cast<double>(startSample) / crsSampleRate;
+    job.endSeconds = static_cast<double>(endSample) / crsSampleRate;
+    job.targetRevision = snap->contentRevision;
+    job.renderRevision = snap->contentRevision;
+    job.pitchRevision = snap->pitchRevision;
+    job.pitchShiftRevision = snap->pitchShiftRevision;
+    job.timeGridRevision = snap->timeGridRevision;
+    job.contentRevision = snap->contentRevision;
+    job.silentGaps = snap->silentGaps;
+    job.audioSampleRate = crsSampleRate;
+    job.startSample = startSample;
+    job.endSampleExclusive = endSample;
+
+    contentRenderService_->enqueueRender(std::move(job));
 }
 
 void OpenTuneAudioProcessor::handleStage1ChunkPublished(ContentKey key, uint64_t publishedRevision)
@@ -3137,18 +3211,6 @@ void OpenTuneAudioProcessor::refreshCRSMetadata(ContentKey key)
     src.timeGridIsIdentity = snap->timeGrid == nullptr || snap->timeGrid->isIdentity();
 
     crs.publishPlaybackSource(key, src);
-}
-
-void OpenTuneAudioProcessor::invalidateRenderFor(ContentKey key)
-{
-    if (!key.isValid()) {
-        return;
-    }
-
-    auto& crs = *contentRenderService_;
-    crs.removeRenderCache(key);
-    crs.removeStretcher(key);
-    crs.getTimeStretchCache().invalidate(key);
 }
 
 bool OpenTuneAudioProcessor::ensureSourceById(uint64_t sourceId,
@@ -3576,15 +3638,15 @@ OpenTuneAudioProcessor::CommittedPlacement OpenTuneAudioProcessor::commitPrepare
     if (!clipKey.isValid()) return {};
 
     auto durationSnap = getContentSnapshot(clipKey);
-    const double contentDurationSeconds = durationSnap
-        ? durationSnap->sourceWindow.durationSeconds()
+    const double contentDuration = durationSnap
+        ? contentDurationSeconds(*durationSnap)
         : 0.0;
 
     StandaloneArrangement::Placement importedPlacement;
     importedPlacement.contentKey = clipKey;
     importedPlacement.mappingRevision = 0;
     importedPlacement.timelineStartSeconds = placement.timelineStartSeconds;
-    importedPlacement.durationSeconds = contentDurationSeconds;
+    importedPlacement.durationSeconds = contentDuration;
     importedPlacement.gain = 1.0f;
     importedPlacement.name = displayName;
 
@@ -3645,9 +3707,10 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                     static_cast<int>(std::ceil(request.changedEndSeconds * frameRate)));
                 auto clearedCurve = snap->pitchCurve->clone();
                 clearedCurve->clearCorrectionRange(startFrame, endFrame);
-                if (!setContentPitchCurve(request.contentKey, std::move(clearedCurve))) {
+                if (!writePitchCurveToOwner(request.contentKey, std::move(clearedCurve))) {
                     return false;
                 }
+                onContentFullMutationCompleted(request.contentKey, MutationScope::PitchCurveChanged, FullRenderReason::GlobalPitchShift);
             }
         }
 
@@ -3666,6 +3729,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             break;
 #endif
         case DomainKind::RegularVST3Capture:
+            setContentOriginalF0State(request.contentKey, OriginalF0State::Extracting);
             break;
     }
 
@@ -3779,12 +3843,13 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 }
             }
 
-            if (!processor->setContentPitchCurve(capturedRequest.contentKey, pitchCurve)) {
+            if (!processor->writePitchCurveToOwner(capturedRequest.contentKey, pitchCurve)) {
                 AppLogger::log("ContentRefresh: pitch curve commit failed contentKey objectId="
                     + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId)));
                 processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Failed);
                 return;
             }
+            processor->onContentFullMutationCompleted(capturedRequest.contentKey, MutationScope::PitchCurveChanged, FullRenderReason::GlobalPitchShift);
 
             {
                 AppLogger::log("F0Alignment: contentKey objectId="
@@ -3977,12 +4042,7 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
         return false;
     }
 
-    const int64_t affectedEndFrame = static_cast<int64_t>(
-        std::ceil(durationSeconds * TimeGridSnapshot::kSourceSpacingFrameRate));
-    return setContentTimeGrid(key,
-                              std::move(seededGrid),
-                              0,
-                              affectedEndFrame);
+    return setContentTimeGrid(key, std::move(seededGrid));
 }
 
 OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus
@@ -4239,9 +4299,10 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
 
     const auto normalizedNotes = normalizeStoredNotes(patch.notesAfter);
     const bool commitOk = commitContentNotesAndSegments(
-        targetPlacement.contentKey, normalizedNotes, patch.correctedSegmentsAfter);
-    if (commitOk && timeGridAfter)
-        setContentTimeGrid(targetPlacement.contentKey, timeGridAfter, patch.affectedStartFrame, patch.affectedEndFrame);
+        targetPlacement.contentKey, normalizedNotes, patch.correctedSegmentsAfter,
+        ContentEditRangeFrames{patch.affectedStartFrame, patch.affectedEndFrame});
+    if (commitOk && patch.timingChanged && timeGridAfter)
+        setContentTimeGrid(targetPlacement.contentKey, timeGridAfter);
     if (!commitOk) {
         result.status = ReferenceAlignmentResult::Status::CommitFailed;
         result.message = patch.diagnostics;
@@ -4270,20 +4331,13 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
             targetPlacement.contentKey,
             "AUTO (Ref) Time",
             oldTimeGrid,
-            timeGridAfter,
-            patch.affectedStartFrame,
-            patch.affectedEndFrame));
+            timeGridAfter));
     }
 
     if (composite->getNumActions() > 0) {
         undoManager_.addAction(std::move(composite));
     }
 
-    const double editStartSec = static_cast<double>(patch.affectedStartFrame)
-                              / TimeGridSnapshot::kSourceSpacingFrameRate;
-    const double editEndSec = static_cast<double>(patch.affectedEndFrame)
-                            / TimeGridSnapshot::kSourceSpacingFrameRate;
-    enqueueContentPartialRender(targetPlacement.contentKey, editStartSec, editEndSec);
     if (patch.timingChanged) {
         if (const auto latestSnap = getContentSnapshot(targetPlacement.contentKey)) {
             requestStage2Rebuild(targetPlacement.contentKey,
@@ -4299,52 +4353,6 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     result.affectedStartFrame = patch.affectedStartFrame;
     result.affectedEndFrame = patch.affectedEndFrame;
     return result;
-}
-
-void OpenTuneAudioProcessor::enqueueContentPartialRender(ContentKey key,
-                                                          double startSeconds,
-                                                          double endSeconds)
-{
-    auto snap = getContentSnapshot(key);
-    if (!snap) return;
-
-    PlaybackReadSource readSource;
-    if (!contentRenderService_->getPlaybackReadSource(key, readSource)) return;
-
-    const double crsSampleRate = readSource.audioSampleRate;
-    auto audioBuffer = readSource.audioBuffer;
-    if (crsSampleRate <= 0.0 || audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0) return;
-
-    auto renderCache = contentRenderService_->getOrCreateRenderCache(key);
-    readSource.renderCache = renderCache;
-    contentRenderService_->publishPlaybackSource(key, readSource);
-
-    const int64_t totalSamples = audioBuffer->getNumSamples();
-    const int64_t startSample = juce::jlimit<int64_t>(
-        0, totalSamples, TimeCoordinate::secondsToSamplesFloor(startSeconds, crsSampleRate));
-    const int64_t endSample = juce::jlimit<int64_t>(
-        0, totalSamples, TimeCoordinate::secondsToSamplesCeil(endSeconds, crsSampleRate));
-
-    if (endSample <= startSample) return;
-
-    RenderJob job;
-    job.contentKey = key;
-    job.renderCache = renderCache;
-    job.audioBuffer = audioBuffer;
-    job.startSeconds = static_cast<double>(startSample) / crsSampleRate;
-    job.endSeconds = static_cast<double>(endSample) / crsSampleRate;
-    job.targetRevision = snap->contentRevision;
-    job.renderRevision = snap->contentRevision;
-    job.pitchRevision = snap->pitchRevision;
-    job.pitchShiftRevision = snap->pitchShiftRevision;
-    job.timeGridRevision = snap->timeGridRevision;
-    job.contentRevision = snap->contentRevision;
-    job.silentGaps = snap->silentGaps;
-    job.audioSampleRate = crsSampleRate;
-    job.startSample = startSample;
-    job.endSampleExclusive = endSample;
-
-    contentRenderService_->enqueueRender(std::move(job));
 }
 
 bool OpenTuneAudioProcessor::setContentNotes(ContentKey key, std::vector<Note> notes)
@@ -4371,13 +4379,16 @@ bool OpenTuneAudioProcessor::setContentNotes(ContentKey key, std::vector<Note> n
         case DomainKind::ARAAudioModification:
             break;
 #endif
-        case DomainKind::RegularVST3Capture:
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            if (session == nullptr || !session->applyNotes(key, normalizeStoredNotes(std::move(notes))))
+                return false;
+            ok = true;
             break;
+        }
     }
     if (ok) {
-        auto snap = getContentSnapshot(key);
-        double endSeconds = snap ? snap->sourceWindow.durationSeconds() : 0.0;
-        onContentMutationCompleted(key, MutationScope::NotesChanged, 0.0, endSeconds);
+        onContentFullMutationCompleted(key, MutationScope::NotesChanged, FullRenderReason::Import);
     }
     return ok;
 }
@@ -4391,14 +4402,16 @@ bool OpenTuneAudioProcessor::setContentCorrectedSegments(ContentKey key,
     auto newCurve = clonePitchCurveWithCorrectedSegments(snap->pitchCurve, std::move(segments));
     if (!newCurve) return false;
 
-    // 统一�?mutation sink：setContentPitchCurve 内部已处�?
-    // onContentMutationCompleted(key, MutationScope::PitchCurveChanged, ...)
-    return setContentPitchCurve(key, std::move(newCurve));
+    if (!writePitchCurveToOwner(key, std::move(newCurve)))
+        return false;
+    onContentFullMutationCompleted(key, MutationScope::PitchCurveChanged, FullRenderReason::GlobalPitchShift);
+    return true;
 }
 
 bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
                                                             std::vector<Note> notes,
-                                                            std::vector<CorrectedSegment> segments)
+                                                            std::vector<CorrectedSegment> segments,
+                                                            ContentEditRangeFrames affectedRange)
 {
     auto snap = getContentSnapshot(key);
     if (!snap || !snap->pitchCurve) return false;
@@ -4427,26 +4440,32 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
             break;
         }
 #endif
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            if (session == nullptr
+                || !session->applyNotesAndPitchCurve(key, normalizeStoredNotes(std::move(notes)), std::move(newCurve))) {
+                return false;
+            }
+            ok = true;
+            break;
+        }
         default:
             break;
     }
     if (ok) {
-        double endSeconds = snap->sourceWindow.durationSeconds();
-        onContentMutationCompleted(key, MutationScope::NotesChanged, 0.0, endSeconds);
+        onContentLocalMutationCompleted(key, MutationScope::NotesChanged, affectedRange);
     }
     return ok;
 }
 
-bool OpenTuneAudioProcessor::setContentPitchCurve(ContentKey key, std::shared_ptr<PitchCurve> curve)
+bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,
+                                                      std::shared_ptr<PitchCurve> curve)
 {
     switch (key.domainKind) {
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyPitchCurve(std::move(curve));
-            auto snap = getContentSnapshot(key);
-            double endSeconds = snap ? snap->sourceWindow.durationSeconds() : 0.0;
-            onContentMutationCompleted(key, MutationScope::PitchCurveChanged, 0.0, endSeconds);
             return true;
         }
 #if JucePlugin_Enable_ARA
@@ -4455,37 +4474,43 @@ bool OpenTuneAudioProcessor::setContentPitchCurve(ContentKey key, std::shared_pt
             auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
             if (!mod) return false;
             mod->applyPitchCurve(std::move(curve));
-            auto snap = getContentSnapshot(key);
-            double endSeconds = snap ? snap->sourceWindow.durationSeconds() : 0.0;
-            onContentMutationCompleted(key, MutationScope::PitchCurveChanged, 0.0, endSeconds);
             return true;
         }
 #else
         case DomainKind::ARAAudioModification:
             return false;
 #endif
-        case DomainKind::RegularVST3Capture:
-            return false;
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            if (session == nullptr || !session->applyPitchCurve(key, std::move(curve)))
+                return false;
+            return true;
+        }
     }
     return false;
 }
 
-bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
-                                                  std::shared_ptr<const TimeGridSnapshot> grid,
-                                                  int64_t affectedSrcStartFrame,
-                                                  int64_t affectedSrcEndFrame)
+bool OpenTuneAudioProcessor::setContentPitchCurve(ContentKey key,
+                                                   std::shared_ptr<PitchCurve> curve,
+                                                   ContentEditRangeFrames affectedRange)
 {
-    (void)affectedSrcStartFrame;
-    (void)affectedSrcEndFrame;
+    if (!writePitchCurveToOwner(key, std::move(curve)))
+        return false;
+    onContentLocalMutationCompleted(key, MutationScope::PitchCurveChanged, affectedRange);
+    return true;
+}
+
+bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
+                                                  std::shared_ptr<const TimeGridSnapshot> grid)
+{
+    bool ok = false;
     switch (key.domainKind) {
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyTimeGrid(grid);
-            auto snap = getContentSnapshot(key);
-            double endSeconds = snap ? snap->sourceWindow.durationSeconds() : 0.0;
-            onContentMutationCompleted(key, MutationScope::TimeGridChanged, 0.0, endSeconds);
-            return true;
+            ok = true;
+            break;
         }
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
@@ -4493,19 +4518,25 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
             if (!mod) return false;
             mod->applyTimeGrid(grid);
-            auto snap = getContentSnapshot(key);
-            double endSeconds = snap ? snap->sourceWindow.durationSeconds() : 0.0;
-            onContentMutationCompleted(key, MutationScope::TimeGridChanged, 0.0, endSeconds);
-            return true;
+            ok = true;
+            break;
         }
 #else
         case DomainKind::ARAAudioModification:
             return false;
 #endif
-        case DomainKind::RegularVST3Capture:
-            return false;
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            if (session == nullptr || !session->applyTimeGrid(key, std::move(grid)))
+                return false;
+            ok = true;
+            break;
+        }
     }
-    return false;
+    if (ok) {
+        onContentFullMutationCompleted(key, MutationScope::TimeGridChanged, FullRenderReason::GlobalTimeGrid);
+    }
+    return ok;
 }
 
 bool OpenTuneAudioProcessor::setContentDetectedKey(ContentKey key, const DetectedKey& detectedKey)
@@ -4529,8 +4560,10 @@ bool OpenTuneAudioProcessor::setContentDetectedKey(ContentKey key, const Detecte
         case DomainKind::ARAAudioModification:
             return false;
 #endif
-        case DomainKind::RegularVST3Capture:
-            return false;
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            return session != nullptr && session->applyDetectedKey(key, detectedKey);
+        }
     }
     return false;
 }
@@ -4603,15 +4636,14 @@ bool OpenTuneAudioProcessor::setContentOriginalF0State(ContentKey key, OriginalF
 bool OpenTuneAudioProcessor::setContentPitchShiftSettings(ContentKey key,
                                                            const PitchShiftSettings& settings)
 {
+    bool ok = false;
     switch (key.domainKind) {
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
             clip->applyPitchShiftSettings(settings);
-            auto snap = getContentSnapshot(key);
-            double endSeconds = snap ? snap->sourceWindow.durationSeconds() : 0.0;
-            onContentMutationCompleted(key, MutationScope::PitchShiftChanged, 0.0, endSeconds);
-            return true;
+            ok = true;
+            break;
         }
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
@@ -4619,19 +4651,25 @@ bool OpenTuneAudioProcessor::setContentPitchShiftSettings(ContentKey key,
             auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
             if (!mod) return false;
             mod->applyPitchShift(settings);
-            auto snap = getContentSnapshot(key);
-            double endSeconds = snap ? snap->sourceWindow.durationSeconds() : 0.0;
-            onContentMutationCompleted(key, MutationScope::PitchShiftChanged, 0.0, endSeconds);
-            return true;
+            ok = true;
+            break;
         }
 #else
         case DomainKind::ARAAudioModification:
             return false;
 #endif
-        case DomainKind::RegularVST3Capture:
-            return false;
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            if (session == nullptr || !session->applyPitchShiftSettings(key, settings))
+                return false;
+            ok = true;
+            break;
+        }
     }
-    return false;
+    if (ok) {
+        onContentFullMutationCompleted(key, MutationScope::PitchShiftChanged, FullRenderReason::GlobalPitchShift);
+    }
+    return ok;
 }
 
 bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey key,
@@ -4696,13 +4734,22 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
             break;
         }
 #endif
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            if (session == nullptr
+                || !session->applyAutoTuneGeneratedNotes(key, std::move(mergedNotes), std::move(derivedCurve))) {
+                return false;
+            }
+            ok = true;
+            break;
+        }
         default:
             break;
     }
 
     if (!ok) return false;
-    double endSeconds = snap ? snap->sourceWindow.durationSeconds() : 0.0;
-    onContentMutationCompleted(key, MutationScope::NotesChanged, 0.0, endSeconds);
+    onContentLocalMutationCompleted(key, MutationScope::NotesChanged,
+                                    ContentEditRangeFrames{startFrame, endFrameExclusive});
     return true;
 }
 
@@ -5081,8 +5128,8 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     const auto& srcBuffer = *request.source.audioBuffer;
     const int srcChannels = srcBuffer.getNumChannels();
     const int64_t srcLengthSamples = srcBuffer.getNumSamples();
-    constexpr double srcSampleRate = TimeCoordinate::kRenderSampleRate;
-    if (srcChannels <= 0 || srcLengthSamples <= 0) {
+    const double srcSampleRate = request.source.audioSampleRate;
+    if (srcChannels <= 0 || srcLengthSamples <= 0 || srcSampleRate <= 0.0) {
         return 0;
     }
 

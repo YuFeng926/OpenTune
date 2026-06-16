@@ -30,13 +30,15 @@ PianoRollEditAction::PianoRollEditAction(std::shared_ptr<ContentEditCommands> co
 void PianoRollEditAction::undo()
 {
     if (commands_ != nullptr)
-        commands_->commitNotesAndSegments(contentKey_, oldNotes_, oldSegments_);
+        commands_->commitNotesAndSegments(contentKey_, oldNotes_, oldSegments_,
+            ContentEditRangeFrames{affectedStartFrame_, affectedEndFrame_});
 }
 
 void PianoRollEditAction::redo()
 {
     if (commands_ != nullptr)
-        commands_->commitNotesAndSegments(contentKey_, newNotes_, newSegments_);
+        commands_->commitNotesAndSegments(contentKey_, newNotes_, newSegments_,
+            ContentEditRangeFrames{affectedStartFrame_, affectedEndFrame_});
 }
 
 } // namespace OpenTune

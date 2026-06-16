@@ -67,10 +67,10 @@ using PublishPlaybackSourceFn = std::function<void(const ContentKey& key,
                                                      std::shared_ptr<const juce::AudioBuffer<float>> audio,
                                                      double sampleRate)>;
 
-/** Enqueue a partial render to rebuild render cache from restored owner truth.
+/** Enqueue a full-content render to rebuild render cache from restored owner truth.
  *  Called by CapturePersistence::deserialize immediately after CRS publish;
  *  does not re-run F0 analysis — uses the already-restored pitch curve. */
-using EnqueuePartialRenderFn = std::function<void(ContentKey, double startSeconds, double endSeconds)>;
+using RequestFullRenderFn = std::function<void(ContentKey)>;
 
 /** Bundle of processor-side callbacks injected at CaptureSession construction. */
 struct ProcessorBindings
@@ -79,7 +79,7 @@ struct ProcessorBindings
     RetireSegmentFn retireSegment;
     RefreshSegmentFn refreshSegment;
     PublishPlaybackSourceFn publishPlaybackSource;
-    EnqueuePartialRenderFn enqueuePartialRender;
+    RequestFullRenderFn requestFullRender;
 };
 
 /**
@@ -158,6 +158,17 @@ public:
                                std::shared_ptr<PitchCurve> pitchCurve,
                                OriginalF0State state,
                                const DetectedKey& detectedKey);
+    bool applyAutoTuneGeneratedNotes(ContentKey segmentContentKey,
+                                     std::vector<Note> notes,
+                                     std::shared_ptr<PitchCurve> pitchCurve);
+    bool applyNotes(ContentKey segmentContentKey, std::vector<Note> notes);
+    bool applyNotesAndPitchCurve(ContentKey segmentContentKey,
+                                 std::vector<Note> notes,
+                                 std::shared_ptr<PitchCurve> pitchCurve);
+    bool applyPitchCurve(ContentKey segmentContentKey, std::shared_ptr<PitchCurve> pitchCurve);
+    bool applyTimeGrid(ContentKey segmentContentKey, std::shared_ptr<const TimeGridSnapshot> grid);
+    bool applyDetectedKey(ContentKey segmentContentKey, const DetectedKey& detectedKey);
+    bool applyPitchShiftSettings(ContentKey segmentContentKey, const PitchShiftSettings& settings);
 
     // ─── Query (any thread) ────────────────────────────────────────────────
     SessionState getGlobalState() const noexcept;

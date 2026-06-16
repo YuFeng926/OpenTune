@@ -17,6 +17,12 @@ namespace OpenTune {
 class RenderChunkPlanner
 {
 public:
+    struct ChunkRange
+    {
+        int64_t startSample{0};
+        int64_t endSampleExclusive{0};
+    };
+
     /**
      * 根据 silent gaps 和 hop size 构建 chunk boundaries。
      * 
@@ -28,6 +34,13 @@ public:
     static std::vector<int64_t> buildChunkBoundariesFromSilentGaps(
         int64_t sampleCount,
         const std::vector<SilentGap>& silentGaps,
+        int hopSize);
+
+    static std::vector<ChunkRange> selectChunksIntersectingRange(
+        int64_t contentSampleCount,
+        const std::vector<SilentGap>& silentGaps,
+        int64_t requestStartSample,
+        int64_t requestEndSampleExclusive,
         int hopSize);
 };
 
