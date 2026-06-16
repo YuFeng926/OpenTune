@@ -1135,8 +1135,10 @@ void OpenTuneDocumentController::reconcileEditorSelectionPlaybackRegions()
 
 bool OpenTuneDocumentController::refreshPlaybackReadSource(ContentKey key)
 {
-    auto* modification = findAudioModificationByContentKey(key);
-    return modification != nullptr && publishPlaybackReadSourceForModification(*modification);
+    // ARA2: 从 AudioSource 重建 CRS，不复用旧 buffer
+    auto* mod = findAudioModificationByContentKey(key);
+    if (!mod) return false;
+    return rebuildCRSFromSource(*mod);
 }
 
 bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
@@ -1146,21 +1148,16 @@ bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
     if (contentRenderService_ == nullptr)
         return false;
 
-    const auto key = modification.contentKey();
-    PlaybackReadSource existingSource;
-    if (audioBuffer == nullptr
-        && contentRenderService_->getPlaybackReadSource(key, existingSource))
-    {
-        audioBuffer = existingSource.audioBuffer;
-    }
-
     if (audioBuffer == nullptr)
         return false;
+
+    const auto key = modification.contentKey();
 
     PlaybackReadSource readSource;
     readSource.contentKey = key;
     readSource.renderCache = contentRenderService_->getOrCreateRenderCache(key);
     readSource.audioBuffer = std::move(audioBuffer);
+    readSource.audioSampleRate = TimeCoordinate::kRenderSampleRate;
     readSource.timeStretchCache = &contentRenderService_->getTimeStretchCache();
     readSource.renderRevision = modification.content.contentRevision;
     readSource.pitchRevision = modification.content.editable.pitchRevision;
@@ -1300,9 +1297,6 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     modification.content.lifecycle = ContentLifecycle::Loading;
     modification.content.analysis.silentGaps = std::move(silentGaps);
     modification.content.analysis.originalF0State = OriginalF0State::NotRequested;
-
-    const double contentDurationSeconds =
-        TimeCoordinate::samplesToSeconds(storedAudioBuffer->getNumSamples(), targetSampleRate);
 
     // 7. Publish to CRS (derived playback cache + resampled audio buffer)
     // Per ARA2 spec: CRS holds derived/cache for renderer fast read,

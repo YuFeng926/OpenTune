@@ -412,6 +412,13 @@ public:
         int hopSize{0};
     };
 
+    struct AnalysisAudioProvider {
+        const float* samples = nullptr;
+        int numSamples = 0;
+        double sampleRate = 0.0;
+        bool valid = false;
+    };
+
     /**
      * 统一播放读取 API
      *
@@ -514,6 +521,9 @@ private:
     void detectContentKeyIfUnset(ContentKey key);
     ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
     void configureReferenceAnalysisService();
+
+    AnalysisAudioProvider resolveAnalysisAudioProvider(ContentKey key);
+
     void analysisCompleted(ContentKey key,
                            const ReferenceFeatureSet& result) override;
     void analysisFailed(ContentKey key,
@@ -649,7 +659,7 @@ public:
 
     /** AUTO(REF) 正式特征生产入口。产品合同固定使用 GAME producer。 */
     ReferenceFeatureSet buildReferenceFeatureSet(
-        const EditableContentSnapshot& snapshot);
+        ContentKey key, const EditableContentSnapshot& snapshot);
 
     /** 设置当前实验性参考对齐模式。由 UI 首选项变更驱动。 */
     void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode)
@@ -659,10 +669,27 @@ public:
 
 private:
     ReferenceFeatureSet buildGameReferenceFeatureSet(
-        const EditableContentSnapshot& snapshot);
+        ContentKey key, const EditableContentSnapshot& snapshot);
 public:
 
     std::shared_ptr<ContentEditCommands> getContentCommands() const { return contentCommands_; }
+
+    // ── Mutation notification scope ────────────────────────────────────────────
+    enum class MutationScope : uint8_t {
+        TimeGridChanged,      // setContentTimeGrid
+        PitchShiftChanged,    // setContentPitchShiftSettings
+        PitchCurveChanged,    // setContentPitchCurve
+        NotesChanged,         // setContentNotes
+    };
+
+    void onContentMutationCompleted(ContentKey key,
+                                    MutationScope scope,
+                                    double affectedStartSeconds,
+                                    double affectedEndSeconds);
+
+    void handleStage1ChunkPublished(ContentKey key, uint64_t publishedRevision);
+
+    void refreshCRSMetadata(ContentKey key);
 
     // ── ContentKey-based mutation and snapshot APIs (Phase 4.3) ─────────────────
     std::shared_ptr<const EditableContentSnapshot> getContentSnapshot(ContentKey key) const;
@@ -695,7 +722,6 @@ public:
                                                    float vibratoRate,
                                                    double audioSampleRate);
 
-private:
     void invalidateRenderFor(ContentKey key);
 public:
 

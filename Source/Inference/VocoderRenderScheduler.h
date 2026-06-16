@@ -52,7 +52,7 @@ public:
      * Submit a rendering job to the queue
      * @param job Job to execute
      */
-    void submit(Job job);
+    bool submit(Job job);
 
     static constexpr int kMaxQueueDepth = 50;
 

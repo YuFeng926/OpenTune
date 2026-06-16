@@ -40,15 +40,16 @@ void VocoderDomain::shutdown() {
     }
 }
 
-void VocoderDomain::submit(Job job) {
-    if (!scheduler_) return;
+bool VocoderDomain::submit(Job job) {
+    if (!scheduler_)
+        return false;
 
     VocoderRenderScheduler::Job schedulerJob;
     schedulerJob.f0 = std::move(job.f0);
     schedulerJob.mel = std::move(job.mel);
     schedulerJob.chunkKey = job.chunkKey;
     schedulerJob.onComplete = std::move(job.onComplete);
-    scheduler_->submit(std::move(schedulerJob));
+    return scheduler_->submit(std::move(schedulerJob));
 }
 
 int VocoderDomain::getVocoderHopSize() const {

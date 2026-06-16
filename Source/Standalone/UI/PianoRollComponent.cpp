@@ -375,7 +375,7 @@ bool PianoRollComponent::applyCorrectionAsyncForEntireClip(float retuneSpeed, fl
     request->audioSampleRate = static_cast<double>(PianoRollComponent::kAudioSampleRate);
 
     captureBeforeUndoSnapshot();
-    pendingUndoDescription_ = TRANS("鑷姩璋冮煶");
+    pendingUndoDescription_ = TRANS("自动调音");
     correctionWorker_->enqueue(request);
     return true;
 }
@@ -712,7 +712,7 @@ void PianoRollComponent::recordUndoAction(const juce::String& description, F0Fra
     auto action = std::make_unique<PianoRollEditAction>(
         contentCommands_,
         editedContentKey_,
-        description.isNotEmpty() ? description : TRANS("缂栬緫"),
+        description.isNotEmpty() ? description : TRANS("编辑"),
         std::move(beforeUndoNotes_),
         std::move(afterNotes),
         std::move(beforeUndoSegments_),
@@ -1515,12 +1515,12 @@ bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
 }
 
 bool PianoRollComponent::applyVibratoDepthToSelection(float depth) {
-    pendingUndoDescription_ = TRANS("淇敼棰ら煶娣卞害");
+    pendingUndoDescription_ = TRANS("修改颤音深度");
     return applyVibratoParameterToSelection(VibratoParam::Depth, depth);
 }
 
 bool PianoRollComponent::applyVibratoRateToSelection(float rate) {
-    pendingUndoDescription_ = TRANS("淇敼棰ら煶閫熺巼");
+    pendingUndoDescription_ = TRANS("修改颤音速率");
     return applyVibratoParameterToSelection(VibratoParam::Rate, rate);
 }
 
@@ -3685,7 +3685,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
     request->contentKeySnapshot = editedContentKey_;
 
     captureBeforeUndoSnapshot();
-    pendingUndoDescription_ = TRANS("鑷姩璋冮煶");
+    pendingUndoDescription_ = TRANS("自动调音");
 
     correctionWorker_->enqueue(request);
 

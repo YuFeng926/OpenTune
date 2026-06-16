@@ -103,12 +103,8 @@ inline AutoRenderOverlayDecision evaluateAutoRenderOverlay(const RenderStatusSna
 }
 
 /**
- * AutoRenderOverlayComponent - 全屏遮罩组件，用于 AUTO 处理期间阻塞用户输入
- * 
- * 功能：
- * - 半透明黑色遮罩覆盖整个 PianoRoll
- * - 显示"正在渲染中"文案 + 圆形转圈动画
- * - 拦截所有鼠标和键盘输入
+ * Blocking overlay used while content analysis or render work owns the UI.
+ * It covers PianoRoll, paints a spinner, and consumes pointer/key input.
  */
 class AutoRenderOverlayComponent : public juce::Component,
                                     private juce::Timer
@@ -141,13 +137,13 @@ public:
         switch (status)
         {
             case RenderStatus::Idle:
-                setMessageText(juce::String::fromUTF8("就绪"), customSubText);
+                setMessageText(juce::String::fromUTF8(u8"\u5c31\u7eea"), customSubText);
                 break;
             case RenderStatus::Rendering:
-                setMessageText(juce::String::fromUTF8("正在渲染中"), customSubText);
+                setMessageText(juce::String::fromUTF8(u8"\u6b63\u5728\u6e32\u67d3\u4e2d"), customSubText);
                 break;
             case RenderStatus::Ready:
-                setMessageText(juce::String::fromUTF8("渲染完成"), customSubText);
+                setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u5b8c\u6210"), customSubText);
                 break;
         }
     }
@@ -241,13 +237,13 @@ public:
     bool keyPressed(const juce::KeyPress& key) override 
     { 
         juce::ignoreUnused(key); 
-        return true; // 消费所有按键
+        return true;
     }
 
 private:
     void timerCallback() override { repaint(); }
 
-    juce::String messageText_ = juce::String::fromUTF8("正在渲染中");
+    juce::String messageText_ = juce::String::fromUTF8(u8"\u6b63\u5728\u6e32\u67d3\u4e2d");
     juce::String subText_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AutoRenderOverlayComponent)

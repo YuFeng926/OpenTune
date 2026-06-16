@@ -69,6 +69,22 @@ bool RenderWorker::hasPendingJobs() const
     return !queue_.empty();
 }
 
+void RenderWorker::beginAsyncJob()
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    ++asyncInFlight_;
+}
+
+void RenderWorker::completeAsyncJob()
+{
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        jassert(asyncInFlight_ > 0);
+        --asyncInFlight_;
+    }
+    cv_.notify_one();
+}
+
 // ============================================================
 // 暂停 / 恢复 / 排空
 // ============================================================
@@ -78,7 +94,7 @@ void RenderWorker::pause()
     std::unique_lock<std::mutex> lk(mutex_);
     paused_ = true;
     // Wait for in-flight jobs to complete
-    while (inFlight_ > 0)
+    while (inFlight_ > 0 || asyncInFlight_ > 0)
     {
         lk.unlock();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -100,7 +116,7 @@ void RenderWorker::drain()
     while (true)
     {
         std::unique_lock<std::mutex> lk(mutex_);
-        if (queue_.empty() && inFlight_ == 0)
+        if (queue_.empty() && inFlight_ == 0 && asyncInFlight_ == 0)
             break;
         lk.unlock();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -121,13 +137,13 @@ void RenderWorker::loop()
         {
             std::unique_lock<std::mutex> lk(mutex_);
             cv_.wait(lk, [this] {
-                return stopping_.load() || (!paused_ && !queue_.empty());
+                return stopping_.load() || (!paused_ && asyncInFlight_ == 0 && !queue_.empty());
             });
 
             if (stopping_.load())
                 break;
 
-            if (!paused_ && !queue_.empty())
+            if (!paused_ && asyncInFlight_ == 0 && !queue_.empty())
             {
                 job = std::move(queue_.front());
                 queue_.pop_front();
@@ -138,7 +154,24 @@ void RenderWorker::loop()
 
         if (hasJob && lease_.isValid())
         {
-            lease_.renderJobCallback(job);
+            if (job.renderCache != nullptr)
+            {
+                RenderCache::PendingJob pendingJob;
+                if (job.renderCache->getNextPendingJob(pendingJob))
+                {
+                    job.startSeconds = pendingJob.startSeconds;
+                    job.endSeconds = pendingJob.endSeconds;
+                    job.startSample = pendingJob.startSample;
+                    job.endSampleExclusive = pendingJob.endSampleExclusive;
+                    job.targetRevision = pendingJob.targetRevision;
+                    job.renderRevision = pendingJob.targetRevision;
+                    lease_.renderJobCallback(job);
+                }
+            }
+            else
+            {
+                lease_.renderJobCallback(job);
+            }
 
             std::lock_guard<std::mutex> lk(mutex_);
             --inFlight_;

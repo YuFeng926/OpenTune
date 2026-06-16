@@ -36,6 +36,7 @@ public:
         Status status{Status::Idle};
 
         uint64_t desiredRevision{0};    // 目标版本（用户最新编辑产生）
+        uint64_t runningRevision{0};   // 当前正在运行的 revision（在 Pending→Running 时记录）
         uint64_t publishedRevision{0};  // 已成功发布的版本
     };
 
@@ -65,10 +66,10 @@ public:
     // - Succeeded 且版本匹配：Idle，publishedRevision = revision
     // - Succeeded 但版本过期（revision < desiredRevision）：Pending，需重新渲染
     // - TerminalFailure：Idle，不重试
-    void completeChunkRender(double startSeconds, uint64_t revision, CompletionResult result);
+    bool completeChunkRender(double startSeconds, uint64_t revision, CompletionResult result);
 
     // 标记 Chunk 为空白区域（无有效F0），从待渲染队列移除
-    void markChunkAsBlank(double startSeconds);
+    void markChunkAsBlank(double startSeconds, uint64_t revision);
 
     // 获取当前 Pending 任务数
     int getPendingCount() const;

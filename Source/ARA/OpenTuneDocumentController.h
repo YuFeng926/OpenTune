@@ -213,7 +213,7 @@ private:
     void reconcileEditorSelectionPlaybackRegions();
     bool publishPlaybackReadSourceForModification(
         AudioModification& modification,
-        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer = nullptr);
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer);
     bool birthContentForModification(AudioModification& modification);
     bool rebuildCRSFromSource(AudioModification& modification);
     void scheduleAsyncF0Extraction(ContentKey contentKey,

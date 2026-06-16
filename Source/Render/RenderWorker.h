@@ -53,6 +53,8 @@ public:
 
     void enqueue(RenderJob job);
     bool hasPendingJobs() const;
+    void beginAsyncJob();
+    void completeAsyncJob();
 
     void pause();
     void resume();
@@ -72,6 +74,7 @@ private:
     std::atomic<bool> stopping_{false};
     bool paused_{false};
     int inFlight_{0};
+    int asyncInFlight_{0};
 };
 
 } // namespace OpenTune

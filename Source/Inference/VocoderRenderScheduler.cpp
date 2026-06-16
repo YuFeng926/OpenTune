@@ -50,12 +50,13 @@ void VocoderRenderScheduler::shutdown() {
     }
 }
 
-void VocoderRenderScheduler::submit(Job job) {
+bool VocoderRenderScheduler::submit(Job job) {
     std::function<void(bool, const juce::String&, const std::vector<float>&)> supersededCallback;
 
     {
         std::lock_guard<std::mutex> lock(queueMutex_);
-        if (!acceptingJobs_.load()) return;
+        if (!acceptingJobs_.load())
+            return false;
 
         // 同 chunkKey 替换
         bool replaced = false;
@@ -87,6 +88,7 @@ void VocoderRenderScheduler::submit(Job job) {
         supersededCallback(false, "Superseded by newer revision", {});
     }
     queueCV_.notify_one();
+    return true;
 }
 
 void VocoderRenderScheduler::workerThread() {

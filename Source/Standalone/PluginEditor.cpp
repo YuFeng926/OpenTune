@@ -316,7 +316,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     LocalizationManager::getInstance().addListener(this);
 
     // Setup Transport Bar Menu Callbacks
-    // menuName 浠庤繍琛屾椂鑾峰彇锛堣瑷€鍒囨崲鍚庤嚜鍔ㄥ弽鏄犲綋鍓嶈瑷€锛夛紝涓?getMenuForIndex 鐨勭储寮曞尮閰?
+// menuName obtained at runtime (auto-reflects after language switch), matched by getMenuForIndex index
     transportBar_.onFileMenuRequested = [this]() {
         auto menuNames = menuBar_.getMenuBarNames();
         juce::PopupMenu menu = menuBar_.getMenuForIndex(0, menuNames.isEmpty() ? juce::String() : menuNames[0]);
@@ -375,7 +375,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     addAndMakeVisible(topBar_);
 
-    // 椤堕儴鏉★細渚ц竟鏍忔姌鍙犲紑鍏?
+// Top bar: side panel collapse toggle
     topBar_.onToggleTrackPanel = [this]() {
         isTrackPanelVisible_ = !isTrackPanelVisible_;
         trackPanel_.setVisible(isTrackPanelVisible_);
@@ -396,9 +396,9 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     trackPanel_.addListener(this);
     trackPanel_.setActiveTrack(getStandaloneActiveTrack(processorRef_));
-    // 鍒濆鍖栬建閬撻珮搴︼紙涓嶢rrangementView鍚屾锛?
+// Initialize track heights (synced with ArrangementView)
     trackPanel_.setTrackHeight(processorRef_.getTrackHeight());
-    // 鍒濆鍖栨墍鏈?2鏉¤建閬撶殑鐘舵€?
+// Initialize state for all 32 tracks
     for (int i = 0; i < MAX_TRACKS; ++i)
     {
         trackPanel_.setTrackMuted(i, getStandaloneTrackMuted(processorRef_, i));
@@ -450,7 +450,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setShowLanes(processorRef_.getShowLanes());
     pianoRoll_.setZoomLevel(processorRef_.getZoomLevel());
     
-    // 璁剧疆楂樻€ц兘鎾斁澶翠綅缃簮 - 鐩存帴浠?Processor 璇诲彇锛岀粫杩?60Hz Timer 鐡堕
+// Set high-performance playhead position source - read directly from Processor, bypassing 60Hz Timer bottleneck
     pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
     arrangementView_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
     
@@ -480,28 +480,28 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Apply the purple theme to the window
     getLookAndFeel().setColour(juce::ResizableWindow::backgroundColourId, UIColors::backgroundDark);
 
-    // 鍦ㄩ娆℃帹鐞嗘湇鍔″垵濮嬪寲鍓嶏紝灏嗘寔涔呭寲鐨勬覆鏌撲紭鍏堢骇搴旂敤鍒版娴嬪櫒
+// Apply persisted rendering priority to detector before first inference service init
     if (appPreferences_.getState().shared.renderingPriority == RenderingPriority::CpuFirst) {
         processorRef_.resetInferenceBackend(true);
     }
 
-    // 鍚敤鍘熺敓鏍囬鏍忥紙绯荤粺椋庢牸鐨勬渶澶у寲/鏈€灏忓寲/鍏抽棴鎸夐挳锛?
+// Enable native title bar (system-style maximize/minimize/close buttons)
     juce::Timer::callAfterDelay(60, [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)]
     {
         if (safeThis == nullptr) return;
         if (auto* window = safeThis->findParentComponentOfClass<juce::DocumentWindow>())
         {
-            // 浣跨敤鍘熺敓鏍囬鏍忥紝璁╃敤鎴峰彲浠ヤ娇鐢ㄧ郴缁熸爣鍑嗙殑鏈€澶у寲鎸夐挳
+// Use native title bar for standard maximize button
             window->setUsingNativeTitleBar(true);
             window->setColour(juce::DocumentWindow::backgroundColourId, UIColors::backgroundMedium);
             window->repaint();
         }
     });
 
-    // 鎾斁澶存覆鏌撹蛋 VBlank 瑕嗙洊灞傦紝涓荤紪杈戝櫒鍚屾蹇冭烦闄嶅埌 30Hz 鍑忚交娑堟伅绾跨▼鍘嬪姏
+// Playhead render via VBlank overlay; main editor heartbeat reduced to 30Hz to ease message thread pressure
     startTimerHz(kHeartbeatHzIdle);
 
-    // VocoderRenderScheduler queue depth is polled via getVocoderScheduler()->getQueueDepth()
+// Playhead render via VBlank overlay; main editor heartbeat reduced to 30Hz
 
     // Hide the standalone "Options" button and Mute Warning if running in standalone mode
     juce::Timer::callAfterDelay(50, [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)]() {
@@ -533,10 +533,10 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     syncSharedAppPreferences();
 
-    // 鍚姩鏃跺簲鐢ㄦ寔涔呭寲澹扮爜鍣ㄦ潈閲嶅亸濂?
+// Apply persisted vocoder model weight bias at startup
     const auto weight = appPreferences_.getState().shared.vocoderModelWeight;
     processorRef_.setVocoderModelWeight(weight);
-    // 骞傜瓑锛歸eight==Community 鏃?setVocoderModelWeight 浼?return early
+// Apply persisted vocoder model weight bias at startup
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
@@ -891,22 +891,22 @@ void OpenTuneAudioProcessorEditor::resized()
     rippleOverlay_.setBounds(bounds);
     rippleOverlay_.toFront(false);
 
-    // 闃村奖杈硅窛锛氫负鍚勯潰鏉块鐣欓槾褰辨覆鏌撶┖闂?
-    // 鍚勭粍浠?paint() 浣跨敤 reduced(shadowMargin) 缁樺埗鑳屾櫙锛岄槾褰卞湪杈硅窛鍐呮覆鏌?
+// Shadow margin: reserve space for panel shadow rendering
+// Each component paint() uses reduced(shadowMargin) for background; shadow renders in margin
     const int shadowMargin = 12;
     const int gap = 6;  // Gap between panels (瑙嗚闂磋窛锛屼笉鍚槾褰?
 
     bounds.reduce(gap, gap); // Global padding
 
-    // TopBar锛氶珮搴?+ 闃村奖杈硅窛锛堜笂涓嬪悇12px锛?
+// TopBar: height + shadow margin (12px top and bottom)
     const int topBarHeight = menuBar_.isVisible() ? (MENU_BAR_HEIGHT + TRANSPORT_BAR_HEIGHT) : TRANSPORT_BAR_HEIGHT;
     const int topBarHeightWithShadow = topBarHeight + shadowMargin * 2;
     topBar_.setBounds(bounds.removeFromTop(topBarHeightWithShadow));
-    // 瑙嗚闂磋窛锛歡ap 鍑忓幓宸茶闃村奖鍗犵敤鐨勪笅杈硅窛
+// Visual gap: subtract bottom shadow margin already consumed
     bounds.removeFromTop(juce::jmax(0, gap - shadowMargin));
 
-    // 宸︿晶 Track Inspector锛堝彲鎶樺彔锛?
-    // 瀹藉害 + 闃村奖杈硅窛锛堝乏鍙冲悇12px锛?
+// Visual gap: subtract bottom shadow margin already consumed
+// Width + shadow margin (12px left and right)
     if (isTrackPanelVisible_)
     {
         trackPanel_.setVisible(true);
@@ -920,8 +920,8 @@ void OpenTuneAudioProcessorEditor::resized()
         trackPanel_.setBounds({});
     }
 
-    // 鍙充晶 Properties Panel锛堝彲鎶樺彔锛?
-    // 瀹藉害 + 闃村奖杈硅窛锛堝乏鍙冲悇12px锛?
+// Right Properties Panel (collapsible)
+// Width + shadow margin (12px left and right)
     if (isParameterPanelVisible_)
     {
         parameterPanel_.setVisible(true);
@@ -935,12 +935,12 @@ void OpenTuneAudioProcessorEditor::resized()
         parameterPanel_.setBounds({});
     }
 
-    // 涓ぎ鍖哄煙锛圥ianoRoll / ArrangementView锛?
-    // PianoRoll 宸茬粡浣跨敤 reduced(12.0f) 缁樺埗鑳屾櫙锛宐ounds 淇濇寔涓嶅彉
+// Center area (PianoRoll / ArrangementView)
+// PianoRoll already uses reduced(12.0f) for background; bounds unchanged
     arrangementView_.setBounds(bounds);
     pianoRoll_.setBounds(bounds);
     
-    // AutoRenderOverlay 瑕嗙洊鏁翠釜 PianoRoll 鍖哄煙
+// AutoRenderOverlay covers entire PianoRoll area
     autoRenderOverlay_.setBounds(bounds);
     autoRenderOverlay_.toFront(false);
 
@@ -1070,7 +1070,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         lastPianoRollNotesRevision_ = currentNotesRevision;
     }
 
-    // 鎾斁澶翠綅缃敱鍚勭粍浠堕€氳繃 positionSource_ 鐩存帴浠?Processor 璇诲彇
+// Playhead position read by each component via positionSource_ directly from Processor
     transportBar_.setPositionSeconds(currentPositionSeconds);
 
     const RenderStatusSnapshot statusSnapshot = getRenderStatusSnapshot();
@@ -1427,7 +1427,7 @@ void OpenTuneAudioProcessorEditor::parameterDragEnded(int paramId, float oldValu
 // MenuBarComponent::Listener Implementation
 // ============================================================================
 
-// 瀵煎叆妯″紡鏋氫妇
+// Import mode enumeration
 enum class ImportMode
 {
     SameTrack,      // 鎸夐『搴忓鍏ュ埌鍚屼竴涓建閬?
@@ -1436,8 +1436,8 @@ enum class ImportMode
 
 void OpenTuneAudioProcessorEditor::importAudioRequested()
 {
-    // 鏂扮増鏈細鐩存帴寮瑰嚭鏂囦欢閫夋嫨绐楀彛锛屾敮鎸佸閫?
-    // 瀵煎叆鍝釜杞ㄩ亾鐢卞綋鍓嶉€変腑杞ㄩ亾鍐冲畾
+// Direct file chooser dialog with multi-select support
+// Import destination track determined by currently selected track
     DBG("OpenTuneAudioProcessorEditor::importAudioRequested called");
 
     if (isImportInProgress_)
@@ -1457,7 +1457,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
         wildcardFilter
     );
 
-    // 鏀寔澶氶€?
+// Support multi-select
     auto chooserFlags = juce::FileBrowserComponent::openMode 
                       | juce::FileBrowserComponent::canSelectFiles 
                       | juce::FileBrowserComponent::canSelectMultipleItems;
@@ -1477,18 +1477,18 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
             return;
         }
 
-        // 鑾峰彇褰撳墠閫変腑鐨勮建閬?
+// Get currently selected track
         int currentTrack = getStandaloneActiveTrack(safeThis->processorRef_);
         int visibleTracks = safeThis->trackPanel_.getVisibleTrackCount();
 
         if (selectedFiles.size() == 1)
         {
-            // 鍗曟枃浠讹細鐩存帴瀵煎叆鍒板綋鍓嶉€変腑鐨勮建閬?
+// Single file: import directly to currently selected track
             safeThis->importAudioFileToTrack(currentTrack, selectedFiles[0]);
         }
         else
         {
-            // 澶氭枃浠讹細寮圭獥璇㈤棶瀵煎叆妯″紡
+// Multiple files: prompt for import mode
             auto filesPtr = std::make_shared<juce::Array<juce::File>>(selectedFiles);
 
             ConfirmDialogContent::launch(
@@ -1500,7 +1500,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                             if (safeThis == nullptr)
                                 return;
 
-                            // 椤哄簭瀵煎叆鍒板悓涓€杞ㄩ亾锛堝綋鍓嶉€変腑杞ㄩ亾锛?
+// Sequential import into same track (currently selected)
                             const int batchId = safeThis->nextImportBatchId_++;
                             safeThis->importBatchNextStartSeconds_[batchId] = safeThis->computeTrackAppendStartSeconds(currentTrack);
                             safeThis->importBatchRemainingItems_[batchId] = filesPtr->size();
@@ -1519,7 +1519,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                             if (safeThis == nullptr)
                                 return;
 
-                            // 榻愬ご瀵煎叆澶氫釜杞ㄩ亾
+// Aligned import across multiple tracks
                             const int remainingTrackCapacity = juce::jmax(0, OpenTuneAudioProcessor::MAX_TRACKS - currentTrack);
                             const int acceptedFileCount = juce::jmin(filesPtr->size(), remainingTrackCapacity);
                             if (acceptedFileCount <= 0)
@@ -1532,7 +1532,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                                 return;
                             }
 
-                            // 鑷姩鎵╁睍鍙杞ㄩ亾鏁伴噺
+// Auto-expand visible track count
                             int requiredTracks = currentTrack + acceptedFileCount;
                             if (requiredTracks > visibleTracks)
                             {
@@ -1541,7 +1541,7 @@ void OpenTuneAudioProcessorEditor::importAudioRequested()
                                 safeThis->arrangementView_.setVisibleTrackCount(newVisibleTracks);
                             }
 
-                            // 浠庡綋鍓嶈建閬撳紑濮嬶紝渚濇瀵煎叆鍒板悗缁建閬?
+// Starting from current track, import into subsequent tracks in order
                             for (int i = 0; i < acceptedFileCount; ++i)
                             {
                                 OpenTuneAudioProcessorEditor::PendingImport pending;
@@ -1747,13 +1747,13 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
     );
 }
 
-// 澶勭悊瀵煎叆闃熷垪涓殑涓嬩竴涓枃浠?
+// Process next file in the import queue
 void OpenTuneAudioProcessorEditor::processNextImportInQueue()
 {
     if (importQueue_.empty())
         return;
     
-    // 鍙栧嚭闃熷垪涓殑绗竴涓緟瀵煎叆椤?
+// Dequeue the first pending import item
     auto next = importQueue_.front();
     importQueue_.erase(importQueue_.begin());
 
@@ -1826,7 +1826,7 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
         return;
     }
     
-    // 鏍规嵁瀵煎嚭绫诲瀷纭畾榛樿鏂囦欢鍚?
+// Determine default filename based on export type
     juce::String defaultFileName;
     switch (exportType)
     {
@@ -2309,7 +2309,7 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
     trackPanel_.applyTheme();
     parameterPanel_.applyTheme();
 
-    // 鍚屾鎾斁澶撮鑹插埌楂樻€ц兘鎾斁澶磋鐩栧眰
+// Sync playhead color to high-performance playhead overlay
     pianoRoll_.setPlayheadColour(UIColors::playhead);
     arrangementView_.setPlayheadColour(UIColors::playhead);
 
@@ -2383,18 +2383,18 @@ void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
 {
     juce::ignoreUnused(newLanguage);
     
-    // 鍒锋柊鑿滃崟鏍?- JUCE 闇€瑕佽皟鐢?menuItemsChanged() 閲嶅缓鑿滃崟
+// Refresh menu bar - JUCE requires menuItemsChanged() to rebuild menu
     menuBar_.menuItemsChanged();
     menuBar_.repaint();
     
-    // 鍒锋柊椤堕儴宸ュ叿鏍?
+// Refresh top toolbar
     transportBar_.refreshLocalizedText();
     topBar_.refreshLocalizedText();
     
-    // 鍒锋柊鍙傛暟闈㈡澘
+// Refresh parameter panel
     parameterPanel_.refreshLocalizedText();
     
-    // 鍒锋柊鏁翠釜鐣岄潰
+// Refresh entire UI
     repaint();
 }
 
@@ -2501,18 +2501,18 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
     resized();
     repaint();
 
-    // 寤惰繜璋冪敤鑷姩缂╂斁锛岀‘淇漴esized()瀹屾垚鍚庢墽琛?
+// Delayed auto-zoom call, ensures resized() completes first
     juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
     juce::Timer::callAfterDelay(50, [safeThis, workspaceView]() {
         if (safeThis == nullptr) return;
 
         if (workspaceView) {
-            // 鍒囨崲鍒癆rrangementView
+// Switch to ArrangementView
             if (!safeThis->arrangementView_.hasUserManuallyZoomed()) {
                 safeThis->arrangementView_.fitToContent();
             }
         } else {
-            // 鍒囨崲鍒癙ianoRoll
+// Switch to PianoRoll
             if (!safeThis->pianoRoll_.hasUserManuallyZoomed()) {
                 safeThis->pianoRoll_.fitToScreen();
             }
@@ -2550,13 +2550,13 @@ void OpenTuneAudioProcessorEditor::trackVolumeChanged(int trackId, float volume)
     lastTrackVolumes_[static_cast<size_t>(trackId)] = volume;
 }
 
-// Y杞寸缉鏀惧悓姝ワ細褰揟rackPanel鎴朅rrangementView閫氳繃Ctrl+婊氳疆缂╂斁鏃讹紝鍚屾鍙︿竴涓粍浠?
+// Y-axis zoom sync: when TrackPanel or ArrangementView zooms via Ctrl+scrollwheel, sync the other component
 void OpenTuneAudioProcessorEditor::trackHeightChanged(int newHeight)
 {
-    // 鏇存柊processor涓殑杞ㄩ亾楂樺害
+// Update track height in processor
     processorRef_.setTrackHeight(newHeight);
     
-    // 鍚屾TrackPanel锛堝鏋滀笉鏄敱瀹冭Е鍙戠殑锛?
+// Sync TrackPanel if not triggered by it
     if (trackPanel_.getTrackHeight() != newHeight)
     {
         trackPanel_.setTrackHeight(newHeight);
@@ -2685,10 +2685,10 @@ void OpenTuneAudioProcessorEditor::trackDeleteRequested(int trackId)
     if (trackId < 0 || trackId >= visibleCount)
         return;
 
-    // 鍘熷瓙鍦板皢鍚庣画杞ㄩ亾涓婄Щ锛屾竻绌烘渶鍚庝竴涓Ы浣?
+// Atomically shift subsequent tracks up, clear the last slot
     arrangement->removeTrackAndShift(trackId, visibleCount);
 
-    // 鍚屾 TrackPanel UI 鐘舵€侊紙棰滆壊銆乵ute/solo/volume锛?
+// Sync TrackPanel UI state (color, mute/solo/volume)
     const int newVisibleCount = visibleCount - 1;
     for (int i = 0; i < newVisibleCount; ++i) {
         trackPanel_.setTrackMuted(i, arrangement->isTrackMuted(i));
@@ -2697,7 +2697,7 @@ void OpenTuneAudioProcessorEditor::trackDeleteRequested(int trackId)
         trackPanel_.setTrackColour(i, arrangement->getTrackColour(i));
     }
 
-    // 鍑忓皯鍙杞ㄩ亾鏁帮紙瑙﹀彂 resized + repaint + listener 閫氱煡锛?
+// Reduce visible track count (triggers resized + repaint + listener notification)
     trackPanel_.setVisibleTrackCount(newVisibleCount);
     arrangementView_.setVisibleTrackCount(newVisibleCount);
     arrangementView_.repaint();
@@ -2725,7 +2725,7 @@ void OpenTuneAudioProcessorEditor::placementSelectionChanged(int trackId, uint64
     // 鏇存柊 reference context
     refreshReferenceContext();
 
-    // 濡傛灉褰撳墠鍦≒ianoRoll瑙嗗浘锛屼笖鐢ㄦ埛娌℃湁鎵嬪姩缂╂斁杩囷紝鑷姩閫傞厤鏂癱lip
+// If in PianoRoll view and user has not manually zoomed, auto-fit to new clip
     if (!isWorkspaceView_) {
         juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
         juce::Timer::callAfterDelay(100, [safeThis]() {
@@ -2747,7 +2747,7 @@ void OpenTuneAudioProcessorEditor::placementTimingChanged(int trackId, int place
     projectSession_.markDirty();
 }
 
-// Y杞存粴鍔ㄥ悓姝ワ細ArrangementView鎴朤rackPanel婊氬姩鏃堕€氱煡鍙︿竴涓粍浠惰窡闅?
+// Y-axis scroll sync: notify other component when ArrangementView or TrackPanel scrolls
 void OpenTuneAudioProcessorEditor::verticalScrollChanged(int newOffset)
 {
     // 鍚屾TrackPanel
@@ -2783,7 +2783,7 @@ void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int place
     }
     else
     {
-        // 濡傛灉宸茬粡鍦≒ianoRoll瑙嗗浘锛屼篃闇€瑕佽皟鐢╢itToScreen
+// If already in PianoRoll view, also call fitToScreen
         juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
         juce::Timer::callAfterDelay(50, [safeThis]() {
             if (safeThis != nullptr && !safeThis->pianoRoll_.hasUserManuallyZoomed()) {
@@ -2979,7 +2979,7 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
 
 void OpenTuneAudioProcessorEditor::escapeKeyPressed()
 {
-    // ESC 绛変环浜庣偣鍑昏鍥惧垏鎹㈤敭锛氬乏鍙宠鍥句簰鍒囧苟鍚屾鎸夐挳鐘舵€?
+// ESC equivalent to view toggle button: switch PianoRoll/ArrangementView and sync button state
     const bool targetWorkspaceView = !isWorkspaceView_;
     transportBar_.setWorkspaceView(targetWorkspaceView);
     viewToggled(targetWorkspaceView);
@@ -3295,13 +3295,13 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
     auto* arrangement = processorRef_.getStandaloneArrangement();
     juce::PopupMenu menu;
 
-    // 鑾峰彇 target placement 淇℃伅
+// Get target placement info
     StandaloneArrangement::Placement targetPlacement;
     if (!processorRef_.getPlacementById(trackId, targetPlacementId, targetPlacement)) {
         return;
     }
 
-    // 妫€鏌ユ槸鍚﹀凡鏈?reference binding
+// Check if already has reference binding
     const uint64_t existingRef = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
     if (existingRef != 0) {
         menu.addItem(juce::String::fromUTF8(u8"涓嶄娇鐢ㄥ弬鑰?Clip"), [this, arrangement, trackId, targetPlacementId]() {
@@ -3311,7 +3311,7 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
         menu.addSeparator();
     }
 
-    // 瀛愯彍鍗? 閫夋嫨鍙傝€?Clip (鍒楀嚭鍚岃鍥惧唴鍏朵粬 clip, 鎺掗櫎鑷韩)
+// Submenu: Select Reference Clip (list other clips in same view, excluding self)
     juce::PopupMenu refMenu;
     bool hasCandidates = false;
 
@@ -3323,8 +3323,8 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
             if (candidate.placementId == targetPlacementId) continue; // 鎺掗櫎鑷韩
             if (candidate.isRetired) continue;
 
-            // 鎺掗櫎宸蹭綔涓?target 鐨?(琚叾浠?clip 寮曠敤)
-            // 绠€鍖栨鏌? 鍙帓闄ゅ惊鐜紩鐢ㄦ儏鍐?
+// Exclude clips already serving as target (referenced by other clips)
+// Simplified check: only exclude cyclic reference cases
             if (arrangement->isCyclicReference(trackId, targetPlacementId, candidate.placementId)) continue;
 
             hasCandidates = true;

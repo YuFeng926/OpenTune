@@ -20,8 +20,13 @@ struct EditableContentSnapshot
     SourceWindow sourceWindow;
 
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
-    double audioSampleRate{0.0};
+    double audioSampleRate{0.0};  // 与 audioBuffer 绑定
     uint64_t audioRevision{0};
+
+    // ARA2: AudioSource 只读元数据（从 AudioModification.cachedSourceShape_ 委托）
+    double sourceSampleRate{0.0};
+    int sourceChannelCount{0};
+    int64_t sourceSampleCount{0};
 
     std::vector<Note> notes;
     std::vector<CorrectedSegment> correctedSegments;

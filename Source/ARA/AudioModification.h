@@ -47,7 +47,11 @@ struct AudioModification
     // 内容生命周期
     ContentKey contentKey() const noexcept;
 
+private:
+    AraSourceShape cachedSourceShape_;  // 从 AudioSource 缓存（ARA2 委托）
+
     // 编辑入口：应用命令并推高 revision
+public:
     void applyNotes(const std::vector<Note>& notes);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
     void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> grid);

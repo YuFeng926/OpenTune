@@ -269,7 +269,6 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
     uint64_t maxIdSeen = 0;
     int restoredCount = 0;
     std::vector<ContentKey> keysToPublish;
-    std::vector<ContentKey> keysToRefresh;
     for (auto& p : persisted) {
         auto seg = std::make_unique<CaptureSegment>();
         seg->contentKey = ContentKey{DomainKind::RegularVST3Capture, p.id, 0};
@@ -305,10 +304,6 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             session.mutableSegments_.push_back(std::move(seg));
         }
         keysToPublish.push_back(restoredKey);
-        if (restoredState == SegmentState::Processing
-            && p.originalF0State == OriginalF0State::Extracting) {
-            keysToRefresh.push_back(restoredKey);
-        }
         ++restoredCount;
     }
 
@@ -334,9 +329,15 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         }
     }
 
-    if (session.bindings_.refreshSegment) {
-        for (const ContentKey& key : keysToRefresh)
-            session.bindings_.refreshSegment(key);
+    // Restore: owner truth (audio + pitch curve + detected key) already persisted.
+    // CRS republished above; now immediately rebuild render cache from restored owner truth.
+    if (session.bindings_.enqueuePartialRender) {
+        for (const ContentKey& key : keysToPublish) {
+            auto* seg = session.findSegmentByContentKey(key);
+            if (!seg || seg->durationSeconds <= 0.0)
+                continue;
+            session.bindings_.enqueuePartialRender(key, 0.0, seg->durationSeconds);
+        }
     }
 
     return restoredCount > 0;
