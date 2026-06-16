@@ -299,6 +299,7 @@ private:
     bool rmvpeOverlayLatched_ = false;
     ContentKey rmvpeOverlayTargetContentKey_;
 
+
     // Export worker thread management
     std::thread exportWorker_;
     // Save worker thread (joinable, same pattern as exportWorker_)

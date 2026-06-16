@@ -23,6 +23,7 @@ struct PlaybackReadSource
 
     std::shared_ptr<RenderCache> renderCache;
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
+    double audioSampleRate{0.0};
     TimeStretchCache* timeStretchCache{nullptr};
 
     uint64_t renderRevision{0};

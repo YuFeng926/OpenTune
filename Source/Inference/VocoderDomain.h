@@ -27,7 +27,7 @@ public:
 
     bool initialize(const std::string& modelPath);
     void shutdown();
-    void submit(Job job);
+    bool submit(Job job);
     int getVocoderHopSize() const;
     int getMelBins() const;
     float getFMax() const;

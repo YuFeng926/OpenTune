@@ -67,6 +67,8 @@ public:
 
     void enqueueRender(RenderJob job);
     bool hasPendingJobs() const;
+    void beginAsyncRenderJob();
+    void completeAsyncRenderJob();
     void pauseRenderWorker();
     void resumeRenderWorker();
     void drainRenderWorker();

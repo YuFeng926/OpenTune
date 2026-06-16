@@ -67,6 +67,11 @@ using PublishPlaybackSourceFn = std::function<void(const ContentKey& key,
                                                      std::shared_ptr<const juce::AudioBuffer<float>> audio,
                                                      double sampleRate)>;
 
+/** Enqueue a partial render to rebuild render cache from restored owner truth.
+ *  Called by CapturePersistence::deserialize immediately after CRS publish;
+ *  does not re-run F0 analysis — uses the already-restored pitch curve. */
+using EnqueuePartialRenderFn = std::function<void(ContentKey, double startSeconds, double endSeconds)>;
+
 /** Bundle of processor-side callbacks injected at CaptureSession construction. */
 struct ProcessorBindings
 {
@@ -74,6 +79,7 @@ struct ProcessorBindings
     RetireSegmentFn retireSegment;
     RefreshSegmentFn refreshSegment;
     PublishPlaybackSourceFn publishPlaybackSource;
+    EnqueuePartialRenderFn enqueuePartialRender;
 };
 
 /**

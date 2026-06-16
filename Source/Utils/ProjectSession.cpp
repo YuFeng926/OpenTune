@@ -4,6 +4,8 @@
 #include <juce_core/juce_core.h>
 
 #include "../PluginProcessor.h"
+#include "../Render/PlaybackReadSource.h"
+#include "../Standalone/StandaloneArrangementHelpers.h"
 #include "AppLogger.h"
 #include "AppPreferences.h"
 #include "ProjectPersistence.h"
@@ -537,6 +539,47 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
 
     // 恢复工程设置
     processorRef_.setBpm(snapshot.settings.bpm);
+
+    // Rehydrate CRS derived truth from restored owner state
+    for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
+    {
+        const int placementCount = getStandalonePlacementCount(processorRef_, trackId);
+        for (int placementIdx = 0; placementIdx < placementCount; ++placementIdx)
+        {
+            ContentKey key = getStandaloneContentKey(processorRef_, trackId, placementIdx);
+            if (!key.isValid()) continue;
+
+            if (auto snap = processorRef_.getContentSnapshot(key))
+            {
+                if (snap->audioBuffer && snap->audioBuffer->getNumSamples() > 0)
+                {
+                    auto* crs = processorRef_.getContentRenderService();
+                    PlaybackReadSource readSource;
+                    readSource.contentKey = key;
+                    readSource.audioBuffer = snap->audioBuffer;
+                    readSource.audioSampleRate = snap->audioSampleRate;
+                    readSource.renderCache = crs->getOrCreateRenderCache(key);
+                    readSource.timeStretchCache = &crs->getTimeStretchCache();
+                    readSource.renderRevision = snap->contentRevision;
+                    readSource.pitchRevision = snap->pitchRevision;
+                    readSource.timeGridRevision = snap->timeGridRevision;
+                    readSource.pitchShiftRevision = snap->pitchShiftRevision;
+                    readSource.pitchShiftSettings = snap->pitchShiftSettings;
+                    readSource.timeGridIsIdentity = snap->timeGrid == nullptr || snap->timeGrid->isIdentity();
+
+                    crs->publishPlaybackSource(key, std::move(readSource));
+                }
+            }
+
+            processorRef_.refreshCRSMetadata(key);
+            if (auto snap = processorRef_.getContentSnapshot(key))
+            {
+                const double durationSeconds = snap->sourceWindow.durationSeconds();
+                if (durationSeconds > 0.0)
+                    processorRef_.enqueueContentPartialRender(key, 0.0, durationSeconds);
+            }
+        }
+    }
 
     return Result<void>::success();
 }

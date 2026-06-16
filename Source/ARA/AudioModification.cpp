@@ -17,6 +17,7 @@ void AudioModification::attachSource(const AudioSource& source)
     // single source of truth for source identity.
     const auto& shape = source.getShape();
     content.sourceWindow = SourceWindow{0, source.getIdentity().persistentId, 0.0, shape.durationSeconds()};
+    cachedSourceShape_ = shape;  // 缓存 shape
 }
 
 void AudioModification::resetContent() noexcept
@@ -40,6 +41,17 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
 {
     auto snap = std::make_shared<EditableContentSnapshot>();
     snap->sourceWindow = content.sourceWindow;
+
+    // ARA2: 从缓存的 AudioSource shape 提供只读元数据
+    snap->sourceSampleRate = cachedSourceShape_.sourceSampleRate;
+    snap->sourceChannelCount = cachedSourceShape_.numChannels;
+    snap->sourceSampleCount = cachedSourceShape_.numSamples;
+
+    // 保持 audioSampleRate 与 audioBuffer 绑定（ARA 下为 nullptr/0.0）
+    snap->audioBuffer = nullptr;  // ARA 不拥有 PCM
+    snap->audioSampleRate = 0.0;  // 与 audioBuffer 一致
+
+    // modification-scoped state
     snap->notes = content.editable.notes;
     snap->correctedSegments = content.editable.correctedSegments;
     snap->pitchCurve = content.analysis.pitchCurve;

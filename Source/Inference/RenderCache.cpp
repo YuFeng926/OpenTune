@@ -343,6 +343,8 @@ bool RenderCache::getNextPendingJob(PendingJob& outJob) {
 
     chunk.status = Chunk::Status::Running;
 
+    chunk.runningRevision = chunk.desiredRevision;
+
     outJob.startSeconds = chunk.startSeconds;
     outJob.endSeconds = chunk.endSeconds;
     outJob.startSample = chunk.startSample;
@@ -358,15 +360,24 @@ bool RenderCache::getNextPendingJob(PendingJob& outJob) {
     return true;
 }
 
-void RenderCache::completeChunkRender(double startSeconds, uint64_t revision, RenderCache::CompletionResult result) {
+bool RenderCache::completeChunkRender(double startSeconds, uint64_t revision, RenderCache::CompletionResult result) {
     const juce::SpinLock::ScopedLockType guard(lock_);
     auto it = chunks_.find(startSeconds);
     if (it == chunks_.end()) {
         AppLogger::log("RenderCache::completeChunkRender NOT_FOUND start=" + juce::String(startSeconds, 3));
-        return;
+        return false;
     }
 
     auto& chunk = it->second;
+
+    if (chunk.runningRevision != revision) {
+        AppLogger::log("RenderCache::completeChunkRender STALE runningRevision="
+            + juce::String(static_cast<juce::int64>(chunk.runningRevision))
+            + " != completionRev=" + juce::String(static_cast<juce::int64>(revision))
+            + " -> ignore");
+        return false;
+    }
+
     const char* resultText = "unknown";
     switch (result) {
         case CompletionResult::Succeeded: resultText = "Succeeded"; break;
@@ -379,23 +390,25 @@ void RenderCache::completeChunkRender(double startSeconds, uint64_t revision, Re
         + " oldStatus=" + juce::String(static_cast<int>(chunk.status)));
 
     if (revision != chunk.desiredRevision) {
-        // 版本过期：回到 Pending，重新渲染最新版本
         chunk.status = Chunk::Status::Pending;
+        chunk.runningRevision = 0;
         pendingChunks_.insert(startSeconds);
         AppLogger::log("RenderCache::completeChunkRender STALE revision=" + juce::String(static_cast<juce::int64>(revision))
             + " < desired=" + juce::String(static_cast<juce::int64>(chunk.desiredRevision))
             + " -> requeue Pending");
-        return;
+        return false;
     }
 
     if (result == CompletionResult::TerminalFailure) {
-        // 终态失败：当前 revision 不可渲染，回到 Idle，等待后续编辑触发新 revision
         chunk.status = Chunk::Status::Idle;
+        chunk.runningRevision = 0;
+        return false;
     } else {
-        // 版本匹配：成功完成，发布结果
         chunk.status = Chunk::Status::Idle;
+        chunk.runningRevision = 0;
         chunk.publishedRevision = revision;
         AppLogger::log("RenderCache::completeChunkRender SUCCESS revision=" + juce::String(static_cast<juce::int64>(revision)));
+        return true;
     }
 }
 
@@ -443,7 +456,7 @@ RenderCache::StateSnapshot RenderCache::getStateSnapshot() const {
     return snapshot;
 }
 
-void RenderCache::markChunkAsBlank(double startSeconds) {
+void RenderCache::markChunkAsBlank(double startSeconds, uint64_t revision) {
     const juce::SpinLock::ScopedLockType guard(lock_);
     auto it = chunks_.find(startSeconds);
     if (it == chunks_.end()) {
@@ -451,6 +464,16 @@ void RenderCache::markChunkAsBlank(double startSeconds) {
     }
 
     auto& chunk = it->second;
+
+    if (revision != chunk.desiredRevision) {
+        chunk.status = Chunk::Status::Pending;
+        pendingChunks_.insert(startSeconds);
+        AppLogger::log("RenderCache::markChunkAsBlank STALE start=" + juce::String(startSeconds, 3)
+            + " revision=" + juce::String(static_cast<juce::int64>(revision))
+            + " desired=" + juce::String(static_cast<juce::int64>(chunk.desiredRevision))
+            + " -> requeue Pending");
+        return;
+    }
     
     // 只处理 Pending 或 Running 状态
     // Pending: 还在 pendingChunks_ 中，需要移除
@@ -463,6 +486,7 @@ void RenderCache::markChunkAsBlank(double startSeconds) {
         pendingChunks_.erase(startSeconds);
     }
     chunk.status = Chunk::Status::Blank;
+    chunk.runningRevision = 0;
 
     // Blank = 无有效渲染结果，清理旧 published audio 防止 stale overlay
     if (chunk.audio != nullptr && !chunk.audio->empty()) {
@@ -476,7 +500,7 @@ void RenderCache::markChunkAsBlank(double startSeconds) {
 
     AppLogger::log("RenderCache::markChunkAsBlank start=" + juce::String(startSeconds, 3)
         + " end=" + juce::String(chunk.endSeconds, 3)
-        + " revision=" + juce::String(static_cast<juce::int64>(chunk.desiredRevision)));
+        + " revision=" + juce::String(static_cast<juce::int64>(revision)));
 }
 
 } // namespace OpenTune
