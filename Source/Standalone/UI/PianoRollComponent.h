@@ -355,11 +355,11 @@ private:
 
     enum class VibratoParam { Depth, Rate };
 
-    bool hasManualCorrectionInRange(int startFrame, int endFrame) const;
     bool applyNoteParameterToSelectedNotes(float retuneSpeed, float vibratoDepth, float vibratoRate);
     bool applyParameterToFrameRange(float retuneSpeed, float vibratoDepth, float vibratoRate, int startFrame, int endFrameExclusive);
     bool getFrameRangeForTimeSpan(double startTime, double endTime, int& startFrame, int& endFrameExclusive) const;
     bool getSelectedNotesFrameRange(int& startFrame, int& endFrameExclusive) const;
+    void syncF0SelectionToSelectedNotes();
     bool getSelectionAreaFrameRange(int& startFrame, int& endFrameExclusive) const;
     bool getF0SelectionFrameRange(int& startFrame, int& endFrameExclusive) const;
 

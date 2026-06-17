@@ -112,6 +112,54 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     transportBar_.addListener(this);
 
+    // VST3 ARA layout: show record button, hide standalone transport group
+    transportBar_.setLayoutProfile(TransportBarComponent::LayoutProfile::VST3AraSingleClip);
+
+    // Sync initial transport state from processor
+    transportBar_.setPlaying(processorRef_.isPlaying());
+    transportBar_.setLoopEnabled(processorRef_.isLoopEnabled());
+    transportBar_.setBpm(processorRef_.getBpm());
+
+    // Piano key audition
+    pianoRoll_.setPianoKeyAudition(&processorRef_.getPianoKeyAudition());
+
+    // Menu popup callbacks — MenuBarComponent stays hidden, provides menu content
+    // via TransportBar icon buttons (File/Edit/View)
+    menuBar_.setVisible(false);
+
+    transportBar_.onFileMenuRequested = [this]() {
+        auto menuNames = menuBar_.getMenuBarNames();
+        auto menu = menuBar_.getMenuForIndex(0, menuNames.isEmpty() ? juce::String() : menuNames[0]);
+        menu.showMenuAsync(juce::PopupMenu::Options()
+                               .withTargetComponent(&transportBar_.getFileButton())
+                               .withParentComponent(this),
+                           [this](int result) {
+                               if (result != 0) menuBar_.menuItemSelected(result, 0);
+                           });
+    };
+
+    transportBar_.onEditMenuRequested = [this]() {
+        auto menuNames = menuBar_.getMenuBarNames();
+        auto menu = menuBar_.getMenuForIndex(1, menuNames.size() > 1 ? menuNames[1] : juce::String());
+        menu.showMenuAsync(juce::PopupMenu::Options()
+                               .withTargetComponent(&transportBar_.getEditButton())
+                               .withParentComponent(this),
+                           [this](int result) {
+                               if (result != 0) menuBar_.menuItemSelected(result, 1);
+                           });
+    };
+
+    transportBar_.onViewMenuRequested = [this]() {
+        auto menuNames = menuBar_.getMenuBarNames();
+        auto menu = menuBar_.getMenuForIndex(2, menuNames.size() > 2 ? menuNames[2] : juce::String());
+        menu.showMenuAsync(juce::PopupMenu::Options()
+                               .withTargetComponent(&transportBar_.getViewButton())
+                               .withParentComponent(this),
+                           [this](int result) {
+                               if (result != 0) menuBar_.menuItemSelected(result, 2);
+                           });
+    };
+
     addAndMakeVisible(topBar_);
     addAndMakeVisible(parameterPanel_);
     parameterPanel_.addListener(this);

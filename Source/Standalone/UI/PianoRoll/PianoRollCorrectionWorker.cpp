@@ -80,8 +80,7 @@ void PianoRollCorrectionWorker::executeRequest(AsyncCorrectionRequest& request)
                 request.endFrameExclusive,
                 request.retuneSpeed,
                 request.vibratoDepth,
-                request.vibratoRate,
-                request.audioSampleRate
+                request.vibratoRate
             );
             break;
         }
@@ -96,7 +95,6 @@ void PianoRollCorrectionWorker::executeRequest(AsyncCorrectionRequest& request)
                 request.autoEndFrame + 1,
                 request.autoHopSize,
                 request.autoF0SampleRate,
-                request.audioSampleRate,
                 request.autoGenParams);
 
             // Apply scale snap as a separate AutoTune-only step. Note

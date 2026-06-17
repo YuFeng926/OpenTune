@@ -31,15 +31,28 @@ public:
     // ExecutionLease — 使用统一的 RenderExecutionLease
     using ExecutionLease = RenderExecutionLease;
 
-    // Stage2Request — 保留（外部使用）
+    // Stage2Request — 调用方填写的身份 + 最小修订号。
+    // owner snapshot 由调用方在域层获取后通过 requestStage2Rebuild 的
+    // 第二参数显式传入，避免 CRS 反向依赖具体域实现。
     struct Stage2Request
     {
         ContentKey contentKey;
         uint64_t pitchRevision{0};
         uint64_t pitchShiftRevision{0};
         uint64_t timeGridRevision{0};
-        std::shared_ptr<const EditableContentSnapshot> snapshot;
     };
+
+    /**
+     * 触发一次 Stage2（时间拉伸）重建。
+     *
+     * 该入口由调用方域（非 ARA 路径走 processor，ARA 路径走
+     * OpenTuneDocumentController）提供其已抓取的 owner snapshot。
+     * CRS 不直接抓 snapshot——这保持了 CRS 的域无关性（domain-neutral）。
+     *
+     * 当前为同步执行，调用方负责决定是否需要异步/队列化。
+     */
+    void requestStage2Rebuild(Stage2Request request,
+                              std::shared_ptr<const EditableContentSnapshot> ownerSnap);
 
     ContentRenderService();
     ~ContentRenderService();

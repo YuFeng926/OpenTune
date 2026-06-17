@@ -528,6 +528,8 @@ target_sources(OpenTune
         Source/Inference/ModelFactory.cpp
         Source/Inference/ModelFactory.h
         Source/Inference/F0InferenceService.cpp
+        Source/Runtime/ProcessF0Runtime.cpp
+        Source/Runtime/ProcessRenderRuntime.cpp
         Source/Inference/VocoderDomain.cpp
         Source/Inference/VocoderInferenceService.cpp
         Source/Inference/VocoderRenderScheduler.cpp
@@ -679,6 +681,8 @@ target_sources(OpenTune
         Source/Render/RenderWorker.cpp
         Source/Render/ContentRenderService.h
         Source/Render/ContentRenderService.cpp
+        Source/Render/Stage2TimeStretchRebuilder.h
+        Source/Render/Stage2TimeStretchRebuilder.cpp
         Source/Render/StretcherPool.h
         Source/Render/StretcherPool.cpp
         Source/Render/RenderChunkPlanner.h
@@ -930,11 +934,11 @@ elseif(APPLE)
         INSTALL_RPATH "@executable_path/../Frameworks"
     )
 
-    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide.html" PROPERTIES
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide.html" PROPERTIES
         HEADER_FILE_ONLY TRUE
         MACOSX_PACKAGE_LOCATION "Resources/docs"
     )
-    target_sources(OpenTune_Standalone PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide.html")
+    target_sources(OpenTune_Standalone PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide.html")
 endif()
 
 # ==============================================================================
@@ -1073,19 +1077,19 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide.html"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_en.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_en.html"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide_en.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_ja.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_ja.html"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide_ja.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_ru.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_ru.html"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide_ru.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_es.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_es.html"
             "$<TARGET_BUNDLE_DIR:OpenTune_Standalone>/Contents/Resources/docs/UserGuide_es.html"
         COMMENT "Copying UserGuide translations to app bundle Resources..."
     )
@@ -1095,19 +1099,19 @@ else()
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide.html"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_en.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_en.html"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide_en.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_ja.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_ja.html"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide_ja.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_ru.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_ru.html"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide_ru.html"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_es.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_es.html"
             "$<TARGET_FILE_DIR:OpenTune_Standalone>/docs/UserGuide_es.html"
         COMMENT "Copying UserGuide translations to Standalone..."
     )
@@ -1222,19 +1226,19 @@ if(TARGET OpenTune_VST3)
             COMMAND ${CMAKE_COMMAND} -E make_directory
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide.html"
+                "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide.html"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs/UserGuide.html"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_en.html"
+                "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_en.html"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs/UserGuide_en.html"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_ja.html"
+                "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_ja.html"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs/UserGuide_ja.html"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_ru.html"
+                "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_ru.html"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs/UserGuide_ru.html"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/docs/UserGuide_es.html"
+                "${CMAKE_CURRENT_SOURCE_DIR}/userguide/UserGuide_es.html"
                 "$<TARGET_BUNDLE_DIR:OpenTune_VST3>/Contents/Resources/docs/UserGuide_es.html"
             COMMENT "Copying UserGuide translations to VST3 bundle Resources..."
         )
@@ -1281,6 +1285,27 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
         target_compile_options(OpenTuneRenderChunkPlannerTests PRIVATE /utf-8)
     endif()
     add_test(NAME OpenTuneRenderChunkPlannerTests COMMAND OpenTuneRenderChunkPlannerTests)
+
+    add_executable(OpenTunePitchCurveEditingContractTests
+        Tests/TestPitchCurveEditingContract.cpp
+        Source/Utils/PitchCurve.cpp
+    )
+    target_compile_features(OpenTunePitchCurveEditingContractTests PRIVATE cxx_std_17)
+    target_link_libraries(OpenTunePitchCurveEditingContractTests
+        PRIVATE
+            juce::juce_core
+            juce::juce_recommended_config_flags
+    )
+    target_compile_definitions(OpenTunePitchCurveEditingContractTests
+        PRIVATE
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+    )
+    if(MSVC)
+        target_compile_options(OpenTunePitchCurveEditingContractTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTunePitchCurveEditingContractTests COMMAND OpenTunePitchCurveEditingContractTests)
 endif()
 
 # ==============================================================================

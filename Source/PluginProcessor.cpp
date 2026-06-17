@@ -10,7 +10,6 @@
 #include "Utils/AppLogger.h"
 #include "Utils/ChannelLayoutLogger.h"
 #include "Plugin/Capture/CaptureSession.h"
-#include "Inference/SoundTouchStretcher.h"   // §7 Phase D �?Stage 2 worker (WSOLA, replaces RB)
 #include "DSP/ReferenceAutoAlign.h"
 #include "DSP/TimeGridPatchBuilder.h"
 #include <onnxruntime_cxx_api.h>
@@ -35,6 +34,14 @@
 #include "Content/ContentEditCommands.h"
 
 namespace OpenTune {
+
+void fillF0GapsForVocoder(std::vector<float>& f0,
+                          const std::shared_ptr<const PitchCurveSnapshot>& snap,
+                          double frameStartTimeSec,
+                          double frameEndTimeSec,
+                          double hopDuration,
+                          double f0FrameRate,
+                          bool allowTrailingExtension);
 
 // ============================================================================
 // Export Helper Functions (Anonymous Namespace)
@@ -486,173 +493,6 @@ std::shared_ptr<PitchCurve> mergePitchCurves(const std::shared_ptr<PitchCurve>& 
 
 } // anonymous namespace
 
-// ==============================================================================
-// F0 Gap Filling for Vocoder (Mel Frame Space)
-// ==============================================================================
-// 在渲染提交前填补 correctedF0 中的零值间隙：
-//   1. 内部间隙：≤10帧用 log-domain 线性插值填�?
-//   2. 边界延伸：起�?终点若为零，向边界外查询并延伸填�?
-//      - 检测延伸方向是否有 voiced 段，有则延伸到该段起点为�?
-//
-// 目的：消�?PC-NSF-HiFiGAN �?F0 不连续处的相位震荡（低频砰砰声）
-void fillF0GapsForVocoder(
-    std::vector<float>& f0,
-    const std::shared_ptr<const PitchCurveSnapshot>& snap,
-    double frameStartTimeSec,
-    double frameEndTimeSec,
-    double hopDuration,
-    double f0FrameRate,
-    bool allowTrailingExtension)
-{
-    if (f0.empty() || !snap) return;
-
-    constexpr int maxGapFrames = 50;  // ~580ms at 86fps
-    const int n = static_cast<int>(f0.size());
-
-    // ---- Step 1: Fill internal gaps with log-domain interpolation ----
-    {
-        int i = 0;
-        while (i < n) {
-            // Find next voiced frame
-            while (i < n && f0[static_cast<size_t>(i)] <= 0.0f) ++i;
-            if (i >= n) break;
-
-            // Find voiced segment end
-            int segEnd = i;
-            while (segEnd < n && f0[static_cast<size_t>(segEnd)] > 0.0f) ++segEnd;
-
-            // Find next voiced segment after gap
-            int gapStart = segEnd;
-            while (gapStart < n && f0[static_cast<size_t>(gapStart)] <= 0.0f) ++gapStart;
-
-            if (gapStart >= n) break;  // No more voiced segments
-
-            int gapLen = gapStart - segEnd;
-            if (gapLen > 0 && gapLen <= maxGapFrames) {
-                // Fill gap with log-domain interpolation
-                const float fStart = f0[static_cast<size_t>(segEnd - 1)];
-                const float fEnd = f0[static_cast<size_t>(gapStart)];
-                const float logStart = std::log2(std::max(fStart, 1e-6f));
-                const float logEnd = std::log2(std::max(fEnd, 1e-6f));
-                for (int j = 0; j < gapLen; ++j) {
-                    float t = static_cast<float>(j + 1) / static_cast<float>(gapLen + 1);
-                    f0[static_cast<size_t>(segEnd + j)] = std::pow(2.0f, logStart + (logEnd - logStart) * t);
-                }
-            }
-
-            i = gapStart;
-        }
-    }
-
-    // ---- Step 2: Extend leading zeros (f0[0] == 0) ----
-    if (n > 0 && f0[0] <= 0.0f) {
-        // Find first voiced frame in current chunk
-        int firstVoicedIdx = 0;
-        while (firstVoicedIdx < n && f0[static_cast<size_t>(firstVoicedIdx)] <= 0.0f) ++firstVoicedIdx;
-
-        if (firstVoicedIdx < n) {
-            const float firstVoicedF0 = f0[static_cast<size_t>(firstVoicedIdx)];
-
-            // Query PitchCurve for F0 before this chunk's start
-            // We need to look backward from frameStartTimeSec
-            const int lookbackF0Frames = 100;  // Look back up to 1 second (100 frames at 100fps)
-            const int queryStartFrame = static_cast<int>(std::floor(frameStartTimeSec * f0FrameRate)) - lookbackF0Frames;
-            const int queryEndFrame = static_cast<int>(std::floor(frameStartTimeSec * f0FrameRate));
-
-            std::vector<float> prevF0(static_cast<size_t>(queryEndFrame - queryStartFrame), 0.0f);
-            snap->renderF0Range(queryStartFrame, queryEndFrame,
-                [&prevF0, queryStartFrame](int frameIndex, const float* data, int length) {
-                    if (!data || length <= 0) return;
-                    const int offset = frameIndex - queryStartFrame;
-                    if (offset < 0) return;
-                    const int copyLen = std::min(length, static_cast<int>(prevF0.size()) - offset);
-                    if (copyLen > 0) {
-                        std::copy(data, data + copyLen, prevF0.begin() + offset);
-                    }
-                });
-
-            // Find the nearest voiced F0 going backward
-            float extendF0 = 0.0f;
-            for (int j = static_cast<int>(prevF0.size()) - 1; j >= 0; --j) {
-                if (prevF0[static_cast<size_t>(j)] > 0.0f) {
-                    extendF0 = prevF0[static_cast<size_t>(j)];
-                    break;
-                }
-            }
-
-            // If we found a voiced F0 before, fill the leading zeros
-            // But check if there's a voiced segment between extend point and firstVoicedIdx
-            if (extendF0 > 0.0f) {
-                // Use the closer F0 value (extendF0 or firstVoicedF0) for smoother transition
-                const float fillF0 = (extendF0 > 0.0f && firstVoicedF0 > 0.0f)
-                    ? std::sqrt(extendF0 * firstVoicedF0)  // Geometric mean
-                    : (firstVoicedF0 > 0.0f ? firstVoicedF0 : extendF0);
-
-                // Fill leading zeros with gradual transition
-                for (int j = 0; j < firstVoicedIdx; ++j) {
-                    float t = static_cast<float>(j) / static_cast<float>(firstVoicedIdx + 1);
-                    // Linear interpolation in log domain
-                    float logFill = std::log2(std::max(fillF0, 1e-6f));
-                    float logFirst = std::log2(std::max(firstVoicedF0, 1e-6f));
-                    f0[static_cast<size_t>(j)] = std::pow(2.0f, logFill + (logFirst - logFill) * t);
-                }
-            }
-        }
-    }
-
-    // ---- Step 3: Extend trailing zeros (f0[n-1] == 0) ----
-    if (allowTrailingExtension && n > 0 && f0[static_cast<size_t>(n - 1)] <= 0.0f) {
-        // Find last voiced frame in current chunk
-        int lastVoicedIdx = n - 1;
-        while (lastVoicedIdx >= 0 && f0[static_cast<size_t>(lastVoicedIdx)] <= 0.0f) --lastVoicedIdx;
-
-        if (lastVoicedIdx >= 0) {
-            const float lastVoicedF0 = f0[static_cast<size_t>(lastVoicedIdx)];
-
-            // Query PitchCurve for F0 after this chunk's end
-            const int lookaheadF0Frames = 100;  // Look ahead up to 1 second
-            const int queryStartFrame = static_cast<int>(std::ceil(frameEndTimeSec * f0FrameRate));
-            const int queryEndFrame = queryStartFrame + lookaheadF0Frames;
-
-            std::vector<float> nextF0(static_cast<size_t>(queryEndFrame - queryStartFrame), 0.0f);
-            snap->renderF0Range(queryStartFrame, queryEndFrame,
-                [&nextF0, queryStartFrame](int frameIndex, const float* data, int length) {
-                    if (!data || length <= 0) return;
-                    const int offset = frameIndex - queryStartFrame;
-                    if (offset < 0) return;
-                    const int copyLen = std::min(length, static_cast<int>(nextF0.size()) - offset);
-                    if (copyLen > 0) {
-                        std::copy(data, data + copyLen, nextF0.begin() + offset);
-                    }
-                });
-
-            // Find the nearest voiced F0 going forward
-            float extendF0 = 0.0f;
-            for (size_t j = 0; j < nextF0.size(); ++j) {
-                if (nextF0[j] > 0.0f) {
-                    extendF0 = nextF0[j];
-                    break;
-                }
-            }
-
-            // If we found a voiced F0 after, fill the trailing zeros
-            if (extendF0 > 0.0f || lastVoicedF0 > 0.0f) {
-                const float fillF0 = (extendF0 > 0.0f && lastVoicedF0 > 0.0f)
-                    ? std::sqrt(extendF0 * lastVoicedF0)
-                    : (lastVoicedF0 > 0.0f ? lastVoicedF0 : extendF0);
-
-                // Fill trailing zeros with gradual transition
-                const int trailingLen = n - lastVoicedIdx - 1;
-                for (int j = 0; j < trailingLen; ++j) {
-                    float t = static_cast<float>(j + 1) / static_cast<float>(trailingLen + 1);
-                    float logLast = std::log2(std::max(lastVoicedF0, 1e-6f));
-                    float logFill = std::log2(std::max(fillF0, 1e-6f));
-                    f0[static_cast<size_t>(lastVoicedIdx + 1 + j)] = std::pow(2.0f, logLast + (logFill - logLast) * t);
-                }
-            }
-        }
-    }
-}
 
 namespace {
 
@@ -801,7 +641,6 @@ ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
     NoteGeneratorInput input;
     input.sampleRate = TimeCoordinate::kRenderSampleRate;
     input.audio.assign(audio.samples, audio.samples + audio.numSamples);
-    input.hostSampleRate = TimeCoordinate::kRenderSampleRate;
 
     std::vector<Note> gameNotes;
     try {
@@ -923,7 +762,24 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
         ContentRenderService::ExecutionLease lease;
         lease.owner = this;
         lease.renderJobCallback = [this](RenderJob& job) {
-            processChunkRenderJob(job);
+            if (job.renderCache == nullptr) return;
+            auto contentSnap = getContentSnapshot(job.contentKey);
+            if (!contentSnap) {
+                job.renderCache->completeChunkRender(job.startSeconds,
+                                                     job.targetRevision,
+                                                     RenderCache::CompletionResult::TerminalFailure);
+                return;
+            }
+            ProcessRenderRuntime::CompletionContext completion;
+            completion.alive = contentRefreshAliveFlag_;
+            completion.chunkPublished = [this](ContentKey key, uint64_t revision) {
+                handleStage1ChunkPublished(key, revision);
+            };
+            const bool lightPitchEnabled = appPreferences_ != nullptr
+                && appPreferences_->getState().shared.lightPitchCorrectionEnabled;
+            ProcessRenderRuntime::getInstance().processChunkRenderJob(
+                contentRenderService_, job, std::move(contentSnap),
+                lightPitchEnabled, std::move(completion));
         };
         contentRenderService_->attachExecutionLease(std::move(lease));
     }
@@ -949,12 +805,12 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                                            std::vector<Note> generatedNotes,
                                            int startFrame, int endFrameExclusive,
                                            float retuneSpeed, float vibratoDepth,
-                                           float vibratoRate, double audioSampleRate) override
+                                           float vibratoRate) override
         {
             if (!proc_) return false;
             return proc_->commitAutoTuneGeneratedNotesByContentKey(
-                key, generatedNotes, startFrame, endFrameExclusive,
-                retuneSpeed, vibratoDepth, vibratoRate, audioSampleRate);
+                key, std::move(generatedNotes), startFrame, endFrameExclusive,
+                retuneSpeed, vibratoDepth, vibratoRate);
         }
 
         bool setNotes(ContentKey key, std::vector<Note> notes) override
@@ -1054,7 +910,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                 std::shared_ptr<std::atomic<bool>> lifetimeFlag = contentRefreshAliveFlag_;
                 auto* f0Svc = getF0Service();
 
-                contentRefreshService_.submit(
+                f0ExtractionService_.submit(
                     F0RequestKey{segContentKey},
                     [lifetimeFlag, audio, sr, segContentKey, f0Svc]() -> F0ExtractionService::Result {
                         F0ExtractionService::Result result;
@@ -1159,37 +1015,16 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
         contentRenderService_->detachExecutionLease(this);
     }
 
-    // Phase 3: 通知 DC 解除服务（撤销租约 token，取�?pending F0 completion�?
-#if JucePlugin_Enable_ARA
-    if (auto* dc = getDocumentController()) {
-        dc->detachProcessorServices(this);
-    }
-#endif
-
     // Phase 4: 内部清理
     cancelPendingUpdate();
     referenceAnalysisService_.removeListener(this);
     referenceAnalysisService_.cancelAll();
     isPlaying_.store(false);
 
-    // Phase 5: 停止 Stage2 worker 线程
-    {
-        std::lock_guard<std::mutex> lock(stage2Mutex_);
-        stage2WorkerRunning_.store(false, std::memory_order_release);
-    }
-    stage2Cv_.notify_all();
-    if (stage2WorkerThread_.joinable()) {
-        stage2WorkerThread_.join();
-    }
-
-    if (vocoderDomain_) {
-        vocoderDomain_->shutdown();
-    }
-
-    // Phase 6: F0 service shutdown（最后调用，此时所�?async F0 work 已被取消�?
-    if (f0Service_) {
-        f0Service_->shutdown();
-    }
+    // Vocoder is process-level (ProcessRenderRuntime singleton); do not
+    // shutdown here — that would break every other processor in the process.
+    // F0 inference service is process-level (ProcessF0Runtime singleton); do not
+    // shutdown here — that would break every other processor in the process.
 
     AppLogger::shutdown();
 }
@@ -1197,216 +1032,6 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 // ============================================================================
 // 推理引擎初始化与生命周期
 // ============================================================================
-
-// ============================================================================
-// vocal-time-stretch §7 (Phase D MVP) �?Stage 2 worker lifecycle + processing
-// ============================================================================
-
-void OpenTuneAudioProcessor::ensureStage2WorkerStarted()
-{
-    bool expected = false;
-    if (!stage2WorkerRunning_.compare_exchange_strong(expected,
-                                                       true,
-                                                       std::memory_order_acq_rel,
-                                                       std::memory_order_acquire)) {
-        return;
-    }
-    stage2WorkerThread_ = std::thread([this]() { stage2WorkerLoop(); });
-}
-
-void OpenTuneAudioProcessor::requestStage2Rebuild(ContentKey contentKey,
-                                                   uint64_t pitchRevision,
-                                                   uint64_t pitchShiftRevision,
-                                                   uint64_t timeGridRevision)
-{
-    if (!contentKey.isValid()) return;
-    ensureStage2WorkerStarted();
-    {
-        std::lock_guard<std::mutex> lock(stage2Mutex_);
-        // Replace stale entries for the same ContentKey so the queue always
-        // carries the freshest revision values.
-        for (auto it = stage2RebuildQueue_.begin(); it != stage2RebuildQueue_.end(); ++it) {
-            if (it->contentKey == contentKey) {
-                *it = {contentKey, pitchRevision, pitchShiftRevision, timeGridRevision};
-                return;
-            }
-        }
-        stage2RebuildQueue_.push_back({contentKey, pitchRevision, pitchShiftRevision, timeGridRevision});
-        stage2QueueDepth_.store(static_cast<int>(stage2RebuildQueue_.size()),
-                                 std::memory_order_release);
-    }
-    stage2Cv_.notify_one();
-}
-
-void OpenTuneAudioProcessor::stage2WorkerLoop()
-{
-    AppLogger::log("Stage2Worker: started");
-    while (true) {
-        Stage2RebuildEntry entry;
-        {
-            std::unique_lock<std::mutex> lock(stage2Mutex_);
-            stage2Cv_.wait_for(lock, std::chrono::seconds(10), [this]() {
-                return !stage2WorkerRunning_.load(std::memory_order_acquire)
-                    || !stage2RebuildQueue_.empty();
-            });
-            if (!stage2WorkerRunning_.load(std::memory_order_acquire)) {
-                AppLogger::log("Stage2Worker: stopping");
-                return;
-            }
-
-            if (stage2RebuildQueue_.empty()) continue;
-            entry = stage2RebuildQueue_.front();
-            stage2RebuildQueue_.pop_front();
-            stage2QueueDepth_.store(static_cast<int>(stage2RebuildQueue_.size()),
-                                     std::memory_order_release);
-        }
-
-        // §7 (Journey-1 fix) �?publish "in-flight" status for UI badge.
-        stage2InFlight_.store(true, std::memory_order_release);
-        stage2InFlightContentKey_.store(entry.contentKey, std::memory_order_release);
-
-        const bool ok = runStage2RebuildForContentKey(entry.contentKey,
-                                                      entry.pitchRevision,
-                                                      entry.pitchShiftRevision,
-                                                      entry.timeGridRevision);
-
-        stage2InFlight_.store(false, std::memory_order_release);
-        stage2InFlightContentKey_.store(ContentKey{}, std::memory_order_release);
-
-        if (!ok) {
-            AppLogger::warn("Stage2Worker: rebuild failed for objectId="
-                            + juce::String(static_cast<juce::int64>(entry.contentKey.objectId)));
-        }
-    }
-}
-
-bool OpenTuneAudioProcessor::runStage2RebuildForContentKey(ContentKey contentKey,
-                                                           uint64_t requestPitchRev,
-                                                           uint64_t requestPitchShiftRev,
-                                                           uint64_t requestTimeGridRev)
-{
-    if (!contentKey.isValid()) return false;
-
-    auto ownerSnap = getContentSnapshot(contentKey);
-    if (!ownerSnap) {
-        AppLogger::warn("Stage2: no owner snapshot for contentKey domain="
-                        + juce::String(static_cast<int>(contentKey.domainKind))
-                        + " objectId=" + juce::String(static_cast<juce::int64>(contentKey.objectId)));
-        return false;
-    }
-
-    PlaybackReadSource stage1Source;
-    if (!contentRenderService_->getPlaybackReadSource(contentKey, stage1Source)) {
-        AppLogger::warn("Stage2: no CRS playback source for contentKey objectId="
-                        + juce::String(static_cast<juce::int64>(contentKey.objectId)));
-        return false;
-    }
-
-    if (stage1Source.audioBuffer == nullptr
-        || stage1Source.audioBuffer->getNumChannels() <= 0
-        || stage1Source.audioBuffer->getNumSamples() <= 0) {
-        AppLogger::warn("Stage2: playback source has no valid audio buffer for objectId="
-                        + juce::String(static_cast<juce::int64>(contentKey.objectId)));
-        return false;
-    }
-
-    if (requestPitchRev < ownerSnap->pitchRevision
-        || requestPitchShiftRev < ownerSnap->pitchShiftRevision
-        || requestTimeGridRev < ownerSnap->timeGridRevision) {
-        return false;
-    }
-
-    if (ownerSnap->timeGrid == nullptr || ownerSnap->timeGrid->isIdentity()) {
-        contentRenderService_->getTimeStretchCache().invalidate(contentKey);
-        return true;
-    }
-
-    constexpr double sampleRate = TimeCoordinate::kRenderSampleRate;
-    SoundTouchStretcher* stretcher = contentRenderService_->getStretcher(contentKey, sampleRate, 1);
-    if (stretcher == nullptr) return false;
-
-    auto schedule = stretcher->buildTempoScheduleFromTimeGrid(*ownerSnap->timeGrid);
-    stretcher->beginRebuild(schedule);
-
-    const int totalSamples = stage1Source.audioBuffer->getNumSamples();
-    constexpr int kBlock = 4096;
-
-    stage1Source.timeStretchCache = nullptr;
-    stage1Source.timeGridIsIdentity = true;
-
-    juce::AudioBuffer<float> readBuf(1, kBlock);
-
-    const uint32_t buildGen = contentRenderService_->getTimeStretchCache().beginBuild(contentKey);
-
-    std::vector<float> output;
-    output.reserve(static_cast<size_t>(totalSamples + kBlock));
-    std::vector<float> retrieveBuf(static_cast<size_t>(kBlock));
-
-    auto drainAvailable = [&]() {
-        while (true) {
-            const size_t avail = stretcher->available();
-            if (avail == 0) break;
-            const size_t want = std::min<size_t>(avail, retrieveBuf.size());
-            const size_t got = stretcher->pull(retrieveBuf.data(), want);
-            if (got == 0) break;
-            output.insert(output.end(),
-                          retrieveBuf.begin(),
-                          retrieveBuf.begin() + static_cast<std::ptrdiff_t>(got));
-        }
-    };
-
-    for (int offset = 0; offset < totalSamples; offset += kBlock) {
-        const int n = std::min(kBlock, totalSamples - offset);
-        readBuf.clear(0, 0, n);
-
-        PlaybackReadRequest req(stage1Source,
-                                static_cast<double>(offset) / sampleRate,
-                                sampleRate,
-                                n);
-
-        const int wrote = readPlaybackAudio(req, readBuf, 0);
-        const int actuallyWrote = juce::jlimit(0, n, wrote);
-
-        for (int i = actuallyWrote; i < n; ++i) {
-            const int srcIdx = offset + i;
-            readBuf.setSample(0, i,
-                              (srcIdx < totalSamples)
-                                  ? stage1Source.audioBuffer->getSample(0, srcIdx)
-                                  : 0.0f);
-        }
-        const bool isLast = (offset + n) >= totalSamples;
-        stretcher->push(readBuf.getReadPointer(0), static_cast<size_t>(n), isLast);
-        drainAvailable();
-    }
-    drainAvailable();
-
-    const size_t expectedSamples = stretcher->expectedOutputSamples();
-    if (output.size() > expectedSamples) {
-        output.resize(expectedSamples);
-    } else if (output.size() < expectedSamples) {
-        output.resize(expectedSamples, 0.0f);
-    }
-
-    const uint64_t pitchRev = ownerSnap->pitchRevision;
-    const uint64_t pitchShiftRev = ownerSnap->pitchShiftRevision;
-    const uint64_t timeGridRev = ownerSnap->timeGridRevision;
-
-    contentRenderService_->getTimeStretchCache().store(contentKey,
-                                                       std::move(output),
-                                                       pitchRev,
-                                                       pitchShiftRev,
-                                                       timeGridRev,
-                                                       sampleRate,
-                                                       buildGen);
-
-    AppLogger::log("Stage2Worker: rebuilt objectId="
-                   + juce::String(static_cast<juce::int64>(contentKey.objectId))
-                   + " timeGridRev=" + juce::String(static_cast<juce::int64>(timeGridRev))
-                   + " stage1InputSamples=" + juce::String(totalSamples)
-                   + " stage2OutputSamples=" + juce::String(static_cast<int>(stretcher->expectedOutputSamples()))
-                   + " (SoundTouch WSOLA, Stage 1 via readPlaybackAudio dry+vocoder-overlay)");
-    return true;
-}
 
 bool OpenTuneAudioProcessor::ensureServiceReady(
     std::atomic<bool>& readyFlag,
@@ -1459,42 +1084,11 @@ bool OpenTuneAudioProcessor::ensureServiceReady(
 
 bool OpenTuneAudioProcessor::ensureF0Ready()
 {
-    return ensureServiceReady(f0Ready_, f0InitAttempted_, f0InitMutex_, "F0",
-        [this](const std::string& modelsDir) {
-            if (!f0Service_) {
-                if (!ortEnv_) {
-                    Ort::InitApi();
-                    ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
-                }
-                f0Service_ = std::make_shared<F0InferenceService>(ortEnv_);
-            }
-            return f0Service_->initialize(modelsDir);
-        });
-}
-
-std::string OpenTuneAudioProcessor::modelPathForWeight(const std::string& modelDir, VocoderModelWeight weight)
-{
-    switch (weight) {
-        case VocoderModelWeight::Community: return modelDir + "/hifigan.onnx";
-        case VocoderModelWeight::Coulin9V4: return modelDir + "/hifigan_coulin9.onnx";
-    }
-    return modelDir + "/hifigan.onnx";
-}
-
-bool OpenTuneAudioProcessor::ensureVocoderReady()
-{
-    return ensureServiceReady(vocoderReady_, vocoderInitAttempted_, vocoderInitMutex_, "Vocoder",
-        [this](const std::string& modelsDir) {
-            if (!vocoderDomain_) {
-                if (!ortEnv_) {
-                    Ort::InitApi();
-                    ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
-                }
-                vocoderDomain_ = std::make_unique<VocoderDomain>(ortEnv_);
-            }
-            const auto modelPath = modelPathForWeight(modelsDir, currentVocoderModelWeight_);
-            return vocoderDomain_->initialize(modelPath);
-        });
+    // F0 is process-level (ProcessF0Runtime singleton).
+    if (ProcessF0Runtime::getInstance().isReady())
+        return true;
+    const auto modelsDir = ModelPathResolver::getModelsDirectory();
+    return ProcessF0Runtime::getInstance().initialize(modelsDir);
 }
 
 bool OpenTuneAudioProcessor::isNoteGenInFlightForContent(ContentKey contentKey) const
@@ -1600,15 +1194,17 @@ bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
                             + " �?forceLegacy=" + (forceLegacy ? "true" : "false"));
 
             if (!forceLegacy) {
-                if (!ortEnv_) {
+                auto ortEnv = ProcessF0Runtime::getInstance().getOrtEnv();
+                if (!ortEnv) {
                     Ort::InitApi();
-                    ortEnv_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "OpenTune");
+                    ProcessF0Runtime::getInstance().initialize(ModelPathResolver::getModelsDirectory());
+                    ortEnv = ProcessF0Runtime::getInstance().getOrtEnv();
                 }
                 const auto gameDir = juce::File(juce::String(modelsDir))
                                          .getChildFile("GAME").getFullPathName().toStdString();
                 if (juce::File(juce::String(gameDir)).getChildFile("encoder.onnx").existsAsFile()) {
                     try {
-                        noteGenerator_ = std::make_unique<GameNoteGenerator>(gameDir, *ortEnv_);
+                        noteGenerator_ = std::make_unique<GameNoteGenerator>(gameDir, *ortEnv);
                         AppLogger::info("[NoteGen] backend=GAME-small (modelsDir=" + juce::String(gameDir) + ")");
                         return true;
                     } catch (const std::exception& e) {
@@ -1637,19 +1233,9 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
         contentRenderService_->pauseRenderWorker();
     
     // 2. �?worker 已暂停，安全释放推理服�?
-    if (vocoderDomain_) {
-        vocoderDomain_->shutdown();
-        vocoderDomain_.reset();
-    }
-    vocoderReady_.store(false);
-    vocoderInitAttempted_.store(false);
-    
-    if (f0Service_) {
-        f0Service_->shutdown();
-        f0Service_.reset();
-    }
-    f0Ready_.store(false);
-    f0InitAttempted_.store(false);
+    // 2. Vocoder and F0 are process-level singletons (ProcessRenderRuntime / ProcessF0Runtime).
+    //    Reset vocoder via process runtime; do NOT reset F0 (would break other processors).
+    ProcessRenderRuntime::getInstance().resetVocoder();
     
     // 3. 重置加速检测器并重新检�?
     auto& detector = AccelerationDetector::getInstance();
@@ -1666,22 +1252,8 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
 
 void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
 {
-    if (currentVocoderModelWeight_ == weight) return;  // 幂等
-
-    // 1. Pause render worker before releasing vocoder services
-    if (contentRenderService_)
-        contentRenderService_->pauseRenderWorker();
-
-    // 2. Shutdown + 销�?vocoder domain（释放旧 ONNX session�?
-    if (vocoderDomain_) {
-        vocoderDomain_->shutdown();
-        vocoderDomain_.reset();
-    }
-    vocoderReady_.store(false);
-    vocoderInitAttempted_.store(false);
-
-    // 3. 更新 runtime 权重（worker 已暂停，线程安全�?
-    currentVocoderModelWeight_ = weight;
+    // 2. Delegate vocoder weight change to process-level runtime
+    ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight);
 
     // 4. 清所�?content �?RenderCache + TimeStretchCache
     if (contentRenderService_ && standaloneContentRepository_) {
@@ -1710,23 +1282,16 @@ bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const EditableContent
     if (!ensureF0Ready()) {
         errorMessage = "inference_not_ready";
         AppLogger::log("RecordTrace: F0 initialization unavailable"
-            " processor=" + juce::String::toHexString(reinterpret_cast<juce::int64>(this))
-            + " f0Ready=" + juce::String(f0Ready_.load() ? 1 : 0));
+            " processor=" + juce::String::toHexString(reinterpret_cast<juce::int64>(this)));
         return false;
     }
 
-    std::shared_ptr<F0InferenceService> f0Service;
-    {
-        std::lock_guard<std::mutex> lock(f0InitMutex_);
-        f0Service = f0Service_;
-    }
+    auto f0Service = ProcessF0Runtime::getInstance().getF0Service();
 
     if (f0Service == nullptr) {
         errorMessage = "f0_service_unavailable";
         AppLogger::log("RecordTrace: F0 service missing after init"
-            " processor=" + juce::String::toHexString(reinterpret_cast<juce::int64>(this))
-            + " f0Ready=" + juce::String(f0Ready_.load() ? 1 : 0)
-            + " f0InitAttempted=" + juce::String(f0InitAttempted_.load() ? 1 : 0));
+            " processor=" + juce::String::toHexString(reinterpret_cast<juce::int64>(this)));
         return false;
     }
 
@@ -1879,26 +1444,13 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
     {
         ensureF0Ready();
 
-        OpenTuneDocumentController::ProcessorServices services;
-        services.owner = this;
-        services.f0Service = f0Service_;
-        services.contentF0ExtractionService = &contentRefreshService_;
-        services.contentRenderService = contentRenderService_.get();
+        // The DC installs its own lease on its CRS in its constructor
+        // (installDocumentRenderExecution -> processDocumentRenderJob -> ProcessRenderRuntime).
+        // The processor does NOT attach an additional lease: doing so would
+        // override the DC's lease and break the ARA2 render path.
 
-        if (contentRenderService_ != nullptr)
-        {
-            ContentRenderService::ExecutionLease lease;
-            lease.owner = this;
-            lease.renderJobCallback = [this](RenderJob& job) {
-                processChunkRenderJob(job);
-            };
-            contentRenderService_->attachExecutionLease(std::move(lease));
-        }
-
-        dc->attachProcessorServices(std::move(services));
-
-        AppLogger::log("ARA: didBindToARA - attached processor services"
-            " processor=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
+        AppLogger::log("ARA: didBindToARA - DC owns its CRS lease; processor=" 
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(this))
             + " dc=" + juce::String::toHexString(reinterpret_cast<uintptr_t>(dc)));
 
         // Replay any pre-bind state that was cached by setStateInformation.
@@ -2348,65 +1900,6 @@ OpenTuneAudioProcessor::DiagnosticInfo OpenTuneAudioProcessor::getDiagnosticInfo
     }
 
     return info;
-}
-
-bool OpenTuneAudioProcessor::freezeRenderBoundaries(const ContentSampleRange& contentRange,
-                                                     int64_t startSample,
-                                                     int64_t endSampleExclusive,
-                                                     int hopSize,
-                                                     FrozenRenderBoundaries& out)
-{
-    out = FrozenRenderBoundaries{};
-
-    if (!contentRange.isValid() || hopSize <= 0) {
-        return false;
-    }
-
-    auto& trueStartSample = out.trueStartSample;
-    auto& trueEndSample = out.trueEndSample;
-    auto& publishSampleCount = out.publishSampleCount;
-    auto& frameCount = out.frameCount;
-    auto& synthSampleCount = out.synthSampleCount;
-    auto& synthEndSample = out.synthEndSample;
-
-    trueStartSample = juce::jlimit(contentRange.startSample, contentRange.endSampleExclusive, startSample);
-    trueEndSample = juce::jlimit(trueStartSample, contentRange.endSampleExclusive, endSampleExclusive);
-    publishSampleCount = trueEndSample - trueStartSample;
-    if (publishSampleCount <= 0) {
-        out = FrozenRenderBoundaries{};
-        return false;
-    }
-
-    const bool isLastChunk = (trueEndSample == contentRange.endSampleExclusive);
-    if (!isLastChunk && (publishSampleCount % hopSize) != 0) {
-        out = FrozenRenderBoundaries{};
-        return false;
-    }
-
-    frameCount = juce::jmax(1, static_cast<int>((publishSampleCount + hopSize - 1) / hopSize));
-    synthSampleCount = isLastChunk ? frameCount * hopSize : publishSampleCount;
-    synthEndSample = trueStartSample + synthSampleCount;
-    out.hopSize = hopSize;
-    return true;
-}
-
-bool OpenTuneAudioProcessor::preparePublishedAudioFromSynthesis(const FrozenRenderBoundaries& boundaries,
-                                                                const std::vector<float>& synthesizedAudio,
-                                                                std::vector<float>& publishedAudio)
-{
-    publishedAudio.clear();
-
-    if (boundaries.publishSampleCount <= 0 || boundaries.synthSampleCount <= 0) {
-        return false;
-    }
-
-    if (synthesizedAudio.size() != static_cast<size_t>(boundaries.synthSampleCount)) {
-        return false;
-    }
-
-    publishedAudio.assign(synthesizedAudio.begin(),
-                          synthesizedAudio.begin() + static_cast<size_t>(boundaries.publishSampleCount));
-    return true;
 }
 
 void OpenTuneAudioProcessor::recordControlCall(DiagnosticControlCall controlCall)
@@ -3062,14 +2555,47 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneAudioProcessor::getConten
     return nullptr;
 }
 
+const ContentRenderService* OpenTuneAudioProcessor::resolveReadableContentRenderService(ContentKey key) const noexcept
+{
+    switch (key.domainKind) {
+#if JucePlugin_Enable_ARA
+        case DomainKind::ARAAudioModification: {
+            auto* dc = getDocumentController();
+            return dc != nullptr ? dc->getContentRenderService() : nullptr;
+        }
+#else
+        case DomainKind::ARAAudioModification:
+            return nullptr;
+#endif
+        case DomainKind::StandaloneClip:
+        case DomainKind::RegularVST3Capture:
+            return contentRenderService_.get();
+    }
+    return nullptr;
+}
+
+ContentRenderService* OpenTuneAudioProcessor::resolveMutableLocalContentRenderService(ContentKey key) const noexcept
+{
+    switch (key.domainKind) {
+        case DomainKind::StandaloneClip:
+        case DomainKind::RegularVST3Capture:
+            return contentRenderService_.get();
+        case DomainKind::ARAAudioModification:
+            return nullptr;  // ARA CRS is owned by DC, processor must not mutate it
+    }
+    return nullptr;
+}
+
 OpenTuneAudioProcessor::AnalysisAudioProvider
 OpenTuneAudioProcessor::resolveAnalysisAudioProvider(ContentKey key)
 {
     AnalysisAudioProvider result;
 
-    // 优先�?CRS PlaybackReadSource 获取（适用于所有域，包�?ARA�?
+    // 优先从 CRS PlaybackReadSource 获取（适用于所有域，包括 ARA）
+    const ContentRenderService* readableCrs = resolveReadableContentRenderService(key);
     PlaybackReadSource readSource;
-    if (contentRenderService_->getPlaybackReadSource(key, readSource)
+    if (readableCrs != nullptr
+        && readableCrs->getPlaybackReadSource(key, readSource)
         && readSource.audioBuffer != nullptr
         && readSource.audioBuffer->getNumSamples() > 0
         && readSource.audioSampleRate > 0.0)
@@ -3102,8 +2628,30 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompleted(ContentKey key,
                                                               ContentEditRangeFrames affectedRange)
 {
     juce::ignoreUnused(scope);
-    refreshCRSMetadata(key);
 
+#if JucePlugin_Enable_ARA
+    if (key.domainKind == DomainKind::ARAAudioModification)
+    {
+        auto* dc = getDocumentController();
+        if (dc != nullptr)
+        {
+            dc->refreshModificationCRSMetadata(key);
+            auto snap = getContentSnapshot(key);
+            if (snap && snap->pitchCurve)
+            {
+                const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
+                                             / snap->pitchCurve->getSampleRate();
+                const double startSec = static_cast<double>(affectedRange.startFrame) * secondsPerFrame;
+                const double endSec   = static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame;
+                dc->requestModificationRender(key, startSec, endSec);
+            }
+        }
+        return;
+    }
+#endif
+
+    // Non-ARA path: processor-local CRS
+    refreshCRSMetadata(key);
     auto snap = getContentSnapshot(key);
     if (!snap || !snap->pitchCurve) return;
     const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
@@ -3118,6 +2666,21 @@ void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key,
                                                              FullRenderReason reason)
 {
     juce::ignoreUnused(scope);
+
+#if JucePlugin_Enable_ARA
+    if (key.domainKind == DomainKind::ARAAudioModification)
+    {
+        auto* dc = getDocumentController();
+        if (dc != nullptr)
+        {
+            dc->refreshModificationCRSMetadata(key);
+            dc->requestFullModificationRender(key);
+        }
+        return;
+    }
+#endif
+
+    // Non-ARA path
     refreshCRSMetadata(key);
     requestFullContentRender(key, reason);
 }
@@ -3138,17 +2701,19 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
 {
     auto snap = getContentSnapshot(key);
     if (!snap) return;
+    auto* crs = resolveMutableLocalContentRenderService(key);
+    if (crs == nullptr) return;
 
     PlaybackReadSource readSource;
-    if (!contentRenderService_->getPlaybackReadSource(key, readSource)) return;
+    if (!crs->getPlaybackReadSource(key, readSource)) return;
 
     const double crsSampleRate = readSource.audioSampleRate;
     auto audioBuffer = readSource.audioBuffer;
     if (crsSampleRate <= 0.0 || audioBuffer == nullptr || audioBuffer->getNumSamples() <= 0) return;
 
-    auto renderCache = contentRenderService_->getOrCreateRenderCache(key);
+    auto renderCache = crs->getOrCreateRenderCache(key);
     readSource.renderCache = renderCache;
-    contentRenderService_->publishPlaybackSource(key, readSource);
+    crs->publishPlaybackSource(key, readSource);
 
     const int64_t totalSamples = audioBuffer->getNumSamples();
     const int64_t startSample = juce::jlimit<int64_t>(
@@ -3175,7 +2740,7 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     job.startSample = startSample;
     job.endSampleExclusive = endSample;
 
-    contentRenderService_->enqueueRender(std::move(job));
+    crs->enqueueRender(std::move(job));
 }
 
 void OpenTuneAudioProcessor::handleStage1ChunkPublished(ContentKey key, uint64_t publishedRevision)
@@ -3186,19 +2751,31 @@ void OpenTuneAudioProcessor::handleStage1ChunkPublished(ContentKey key, uint64_t
 
     refreshCRSMetadata(key);
     if (snap->timeGrid != nullptr && !snap->timeGrid->isIdentity())
-        requestStage2Rebuild(key,
-                             snap->pitchRevision,
-                             snap->pitchShiftRevision,
-                             snap->timeGridRevision);
+    {
+        // Use CRS-owned Stage2 rebuild API
+        ContentRenderService::Stage2Request stage2Req;
+        stage2Req.contentKey = key;
+        stage2Req.pitchRevision = snap->pitchRevision;
+        stage2Req.pitchShiftRevision = snap->pitchShiftRevision;
+        stage2Req.timeGridRevision = snap->timeGridRevision;
+
+        auto* crs = resolveMutableLocalContentRenderService(key);
+        if (crs != nullptr)
+        {
+            crs->requestStage2Rebuild(stage2Req, snap);
+        }
+    }
 }
 
 void OpenTuneAudioProcessor::refreshCRSMetadata(ContentKey key)
 {
     auto snap = getContentSnapshot(key);
     if (!snap) return;
+    auto* resolvedCrs = resolveMutableLocalContentRenderService(key);
+    if (resolvedCrs == nullptr) return;
 
     PlaybackReadSource src;
-    auto& crs = *contentRenderService_;
+    auto& crs = *resolvedCrs;
     if (!crs.getPlaybackReadSource(key, src))
         return;
 
@@ -3733,15 +3310,15 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             break;
     }
 
-    if (contentRefreshService_.isActive(F0RequestKey{request.contentKey})) {
-        contentRefreshService_.cancel(F0RequestKey{request.contentKey});
+    if (f0ExtractionService_.isActive(F0RequestKey{request.contentKey})) {
+        f0ExtractionService_.cancel(F0RequestKey{request.contentKey});
     }
 
     const auto lifetimeFlag = contentRefreshAliveFlag_;
     OpenTuneAudioProcessor* const processor = this;
     const auto capturedRequest = request;
 
-    const auto submitResult = contentRefreshService_.submit(
+    const auto submitResult = f0ExtractionService_.submit(
         F0RequestKey{request.contentKey},
         [lifetimeFlag, processor, capturedRequest]() -> F0ExtractionService::Result {
             F0ExtractionService::Result result;
@@ -4340,10 +3917,24 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
 
     if (patch.timingChanged) {
         if (const auto latestSnap = getContentSnapshot(targetPlacement.contentKey)) {
-            requestStage2Rebuild(targetPlacement.contentKey,
-                                 latestSnap->pitchRevision,
-                                 latestSnap->pitchShiftRevision,
-                                 latestSnap->timeGridRevision);
+            ContentRenderService::Stage2Request stage2Req;
+            stage2Req.contentKey = targetPlacement.contentKey;
+            stage2Req.pitchRevision = latestSnap->pitchRevision;
+            stage2Req.pitchShiftRevision = latestSnap->pitchShiftRevision;
+            stage2Req.timeGridRevision = latestSnap->timeGridRevision;
+
+#if JucePlugin_Enable_ARA
+            if (targetPlacement.contentKey.domainKind == DomainKind::ARAAudioModification) {
+                auto* dc = getDocumentController();
+                if (dc != nullptr)
+                    dc->requestModificationStage2Rebuild(targetPlacement.contentKey);
+            } else
+#endif
+            {
+                auto* crs = resolveMutableLocalContentRenderService(targetPlacement.contentKey);
+                if (crs != nullptr)
+                    crs->requestStage2Rebuild(stage2Req, latestSnap);
+            }
         }
     }
 
@@ -4678,8 +4269,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
                                                                         int endFrameExclusive,
                                                                         float retuneSpeed,
                                                                         float vibratoDepth,
-                                                                        float vibratoRate,
-                                                                        double audioSampleRate)
+                                                                        float vibratoRate)
 {
     auto snap = getContentSnapshot(key);
     if (!snap || !snap->pitchCurve) return false;
@@ -4710,8 +4300,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
                                          endFrameExclusive,
                                          retuneSpeed,
                                          vibratoDepth,
-                                         vibratoRate,
-                                         audioSampleRate);
+                                         vibratoRate);
 
     bool ok = false;
     switch (key.domainKind) {
@@ -4751,318 +4340,6 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
     onContentLocalMutationCompleted(key, MutationScope::NotesChanged,
                                     ContentEditRangeFrames{startFrame, endFrameExclusive});
     return true;
-}
-
-// ============================================================================
-// 分块渲染工作线程 (moved to CRS RenderWorker)
-// processChunkRenderJob is called by the CRS worker via ExecutionLease.
-// ============================================================================
-
-void OpenTuneAudioProcessor::processChunkRenderJob(RenderJob& job)
-{
-    auto contentSnap = getContentSnapshot(job.contentKey);
-
-    if (!contentSnap) {
-        job.renderCache->completeChunkRender(job.startSeconds,
-                                             job.targetRevision,
-                                             RenderCache::CompletionResult::TerminalFailure);
-        return;
-    }
-
-    PlaybackReadSource readSource;
-    if (contentRenderService_->getPlaybackReadSource(job.contentKey, readSource))
-    {
-        job.audioBuffer = readSource.audioBuffer;
-        job.audioSampleRate = readSource.audioSampleRate;
-    }
-    job.pitchCurve = contentSnap->pitchCurve;
-    job.timeGrid = contentSnap->timeGrid;
-    job.pitchShiftSettings = contentSnap->pitchShiftSettings;
-    job.silentGaps = contentSnap->silentGaps;
-    job.pitchRevision = contentSnap->pitchRevision;
-    job.pitchShiftRevision = contentSnap->pitchShiftRevision;
-    job.timeGridRevision = contentSnap->timeGridRevision;
-    job.contentRevision = contentSnap->contentRevision;
-
-    struct WorkerRenderJob {
-        RenderJob coreJob;
-        FrozenRenderBoundaries boundaries;
-    };
-
-    // 复用 scratch buffer，避免每 chunk 重新堆分�?
-    std::vector<float> monoAudio;
-    std::vector<float> sourceF0;
-    std::vector<float> correctedF0;
-
-    const double relChunkStartSec = job.startSeconds;
-    WorkerRenderJob wj;
-    wj.coreJob = std::move(job);
-    auto& boundaries = wj.boundaries;
-
-    // 2. 准备渲染数据（读 Clip 中的音频、PitchCurve�?
-    std::shared_ptr<PitchCurve> pitchCurve = wj.coreJob.pitchCurve;
-    int numFrames = 0;
-    bool clipFound = false;
-    bool boundariesFrozen = false;
-
-    if (wj.coreJob.audioBuffer != nullptr) {
-        const int audioNumSamples = wj.coreJob.audioBuffer->getNumSamples();
-        const int audioNumChannels = wj.coreJob.audioBuffer->getNumChannels();
-        int workerHopSize = 512;
-        if (vocoderDomain_) {
-            const int currentHopSize = vocoderDomain_->getVocoderHopSize();
-            if (currentHopSize > 0)
-                workerHopSize = currentHopSize;
-        }
-
-        ContentSampleRange contentRange{0, audioNumSamples};
-        if (freezeRenderBoundaries(contentRange,
-                                   wj.coreJob.startSample,
-                                   wj.coreJob.endSampleExclusive,
-                                   workerHopSize,
-                                   boundaries)) {
-            boundariesFrozen = true;
-            if (audioNumChannels > 0) {
-                numFrames = boundaries.frameCount;
-                monoAudio.resize(static_cast<size_t>(boundaries.synthSampleCount), 0.0f);
-                const float* ch0 = wj.coreJob.audioBuffer->getReadPointer(0);
-                for (int64_t i = 0; i < boundaries.publishSampleCount; ++i)
-                    monoAudio[static_cast<size_t>(i)] = ch0[static_cast<int>(boundaries.trueStartSample + i)];
-                ChannelLayoutLog::logChunkRender(
-                    static_cast<juce::int64>(wj.coreJob.contentKey.objectId),
-                    audioNumChannels);
-                clipFound = true;
-            }
-        }
-    }
-
-    if (!clipFound || !pitchCurve || monoAudio.empty() || numFrames <= 0 || !boundariesFrozen) {
-        wj.coreJob.renderCache->completeChunkRender(relChunkStartSec, wj.coreJob.targetRevision,
-            RenderCache::CompletionResult::TerminalFailure);
-        return;
-    }
-
-    const double trueStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
-                                                                     TimeCoordinate::kRenderSampleRate);
-    const double trueEndSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueEndSample,
-                                                                    TimeCoordinate::kRenderSampleRate);
-    const double hopDuration = static_cast<double>(boundaries.hopSize) / RenderCache::kSampleRate;
-
-    auto snap = pitchCurve->getSnapshot();
-    if (!snap->hasRenderableCorrectedF0()) {
-        wj.coreJob.renderCache->markChunkAsBlank(relChunkStartSec, wj.coreJob.targetRevision);
-        return;
-    }
-
-    const int f0HopSize = snap->getHopSize();
-    const double f0SampleRate = snap->getSampleRate();
-    if (f0HopSize <= 0 || f0SampleRate <= 0.0) {
-        wj.coreJob.renderCache->completeChunkRender(relChunkStartSec, wj.coreJob.targetRevision,
-            RenderCache::CompletionResult::TerminalFailure);
-        return;
-    }
-
-    const double f0FrameRate = f0SampleRate / static_cast<double>(f0HopSize);
-
-    // 3. 构建 F0 数据
-    const int f0StartFrame = static_cast<int>(std::floor(trueStartSeconds * f0FrameRate));
-    const int f0EndFrame = static_cast<int>(std::ceil(trueEndSeconds * f0FrameRate)) + 1;
-    const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
-
-    sourceF0.assign(static_cast<size_t>(numF0Frames), 0.0f);
-    snap->renderF0Range(f0StartFrame, f0EndFrame,
-        [&sourceF0, f0StartFrame](int frameIndex, const float* data, int length) {
-            if (!data || length <= 0) return;
-            const int offset = frameIndex - f0StartFrame;
-            if (offset < 0) return;
-            const int copyLen = std::min(length, static_cast<int>(sourceF0.size()) - offset);
-            if (copyLen > 0)
-                std::copy(data, data + copyLen, sourceF0.begin() + offset);
-        });
-
-    // ===== Pitch Shift render modifier: apply global F0 offset =====
-    {
-        PlaybackReadSource psSrc;
-        PitchShiftSettings pitchShiftSettings;
-        if (contentRenderService_->getPlaybackReadSource(wj.coreJob.contentKey, psSrc))
-            pitchShiftSettings = psSrc.pitchShiftSettings;
-        if (!pitchShiftSettings.isIdentity()) {
-            const float pitchRatio = static_cast<float>(pitchShiftSettings.getPitchRatio());
-            for (auto& f0Val : sourceF0) {
-                if (f0Val > 0.0f)
-                    f0Val *= pitchRatio;
-            }
-        }
-    }
-
-    bool hasValidF0 = false;
-    for (float f : sourceF0) {
-        if (f > 0.0f) { hasValidF0 = true; break; }
-    }
-    if (!hasValidF0) {
-        wj.coreJob.renderCache->markChunkAsBlank(relChunkStartSec, wj.coreJob.targetRevision);
-        return;
-    }
-
-    // ===== AutoTune 轻量修音分流 =====
-    const bool lightPitchEnabled = appPreferences_ != nullptr
-        && appPreferences_->getState().shared.lightPitchCorrectionEnabled;
-
-    if (lightPitchEnabled) {
-        const auto& originalF0Full = snap->getOriginalF0();
-        const int originalF0Size = static_cast<int>(originalF0Full.size());
-        if (f0StartFrame >= 0 && f0StartFrame < originalF0Size) {
-            const bool needsVocoder = chunkNeedsVocoder(
-                sourceF0.data(), numF0Frames, originalF0Full, f0StartFrame);
-            if (!needsVocoder) {
-                if (!autoTuneShifter_)
-                    autoTuneShifter_ = std::make_unique<AutoTunePitchShifter>(RenderCache::kSampleRate);
-                else
-                    autoTuneShifter_->reset();
-
-                const int safeNumF0Frames = std::min(numF0Frames, originalF0Size - f0StartFrame);
-                auto shiftedAudio = autoTuneShifter_->shiftChunk(
-                    monoAudio.data(),
-                    static_cast<int>(boundaries.publishSampleCount),
-                    originalF0Full.data() + f0StartFrame,
-                    sourceF0.data(), safeNumF0Frames, f0FrameRate);
-
-                if (static_cast<int64_t>(shiftedAudio.size()) != boundaries.publishSampleCount)
-                    shiftedAudio.resize(static_cast<size_t>(boundaries.publishSampleCount), 0.0f);
-
-                const bool added = wj.coreJob.renderCache->addChunk(
-                    boundaries.trueStartSample, boundaries.trueEndSample,
-                    std::move(shiftedAudio), wj.coreJob.targetRevision);
-                const uint64_t objectId = wj.coreJob.contentKey.objectId;
-                if (added) {
-                    const bool published = wj.coreJob.renderCache->completeChunkRender(relChunkStartSec,
-                        wj.coreJob.targetRevision, RenderCache::CompletionResult::Succeeded);
-
-                    if (published && objectId != 0) {
-                        contentRenderService_->getTimeStretchCache().invalidate(wj.coreJob.contentKey);
-                        handleStage1ChunkPublished(wj.coreJob.contentKey, wj.coreJob.targetRevision);
-                    }
-                } else {
-                    wj.coreJob.renderCache->completeChunkRender(relChunkStartSec,
-                        wj.coreJob.targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                }
-
-                AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk objId="
-                    + juce::String(static_cast<juce::int64>(objectId))
-                    + " start=" + juce::String(relChunkStartSec, 3));
-                return;
-            }
-        }
-    }
-
-    if (!ensureVocoderReady()) {
-        AppLogger::log("RenderWorker: ensureVocoderReady FAILED");
-        wj.coreJob.renderCache->completeChunkRender(relChunkStartSec, wj.coreJob.targetRevision,
-            RenderCache::CompletionResult::TerminalFailure);
-        return;
-    }
-
-    // 4. 构建 Mel Spectrogram
-    MelSpectrogramConfig melConfig;
-    melConfig.sampleRate = static_cast<int>(RenderCache::kSampleRate);
-    melConfig.nMels = vocoderDomain_->getMelBins();
-    melConfig.fMax = vocoderDomain_->getFMax();
-
-    auto melResult = computeLogMelSpectrogram(monoAudio.data(), static_cast<int>(monoAudio.size()), numFrames, melConfig);
-    if (!melResult.ok() || melResult.value().empty()) {
-        wj.coreJob.renderCache->completeChunkRender(relChunkStartSec, wj.coreJob.targetRevision,
-            RenderCache::CompletionResult::TerminalFailure);
-        return;
-    }
-
-    auto mel = std::move(melResult).value();
-    const int actualFrames = static_cast<int>(mel.size() / melConfig.nMels);
-
-    // 5. F0-to-Mel 插�?
-    correctedF0.assign(static_cast<size_t>(actualFrames), 0.0f);
-    for (int i = 0; i < actualFrames; ++i) {
-        const double melTimeSec = trueStartSeconds + i * hopDuration;
-        const double srcPos = melTimeSec * f0FrameRate - static_cast<double>(f0StartFrame);
-        if (srcPos < 0.0) continue;
-        const int srcIdx0 = static_cast<int>(srcPos);
-        if (srcIdx0 >= numF0Frames) continue;
-        const int srcIdx1 = std::min(srcIdx0 + 1, numF0Frames - 1);
-        const double frac = srcPos - static_cast<double>(srcIdx0);
-        const float f0_0 = sourceF0[static_cast<size_t>(srcIdx0)];
-        const float f0_1 = sourceF0[static_cast<size_t>(srcIdx1)];
-        if (f0_0 > 0.0f && f0_1 > 0.0f)
-            correctedF0[static_cast<size_t>(i)] = static_cast<float>(std::exp(std::log(f0_0) * (1.0 - frac) + std::log(f0_1) * frac));
-        else if (f0_0 > 0.0f)
-            correctedF0[static_cast<size_t>(i)] = f0_0;
-        else if (f0_1 > 0.0f)
-            correctedF0[static_cast<size_t>(i)] = f0_1;
-    }
-
-    const bool allowTrailingExtension = !(boundaries.synthSampleCount > boundaries.publishSampleCount);
-    OpenTune::fillF0GapsForVocoder(correctedF0, snap, trueStartSeconds, trueEndSeconds,
-                                   hopDuration, f0FrameRate, allowTrailingExtension);
-
-    // 6. 提交执行
-    VocoderDomain::Job vocoderJob;
-    vocoderJob.chunkKey = (wj.coreJob.contentKey.objectId << 32) | static_cast<uint64_t>(static_cast<uint32_t>(wj.coreJob.startSample));
-    vocoderJob.f0 = std::move(correctedF0);
-    vocoderJob.mel = std::move(mel);
-
-    auto renderCache = wj.coreJob.renderCache;
-    auto targetRevision = wj.coreJob.targetRevision;
-    const ContentKey captureContentKey = wj.coreJob.contentKey;
-    const uint64_t chunkObjId = captureContentKey.objectId;
-    double jobStartSeconds = TimeCoordinate::samplesToSeconds(boundaries.trueStartSample,
-                                                                TimeCoordinate::kRenderSampleRate);
-    const FrozenRenderBoundaries frozenBoundaries = boundaries;
-
-    vocoderJob.onComplete = [this, renderCache, targetRevision, captureContentKey, chunkObjId, jobStartSeconds, frozenBoundaries](bool success, const juce::String& error, const std::vector<float>& audio) {
-        struct AsyncRenderCompletion final {
-            ContentRenderService& service;
-            ~AsyncRenderCompletion() { service.completeAsyncRenderJob(); }
-        } asyncCompletion{*contentRenderService_};
-
-        const auto& boundaries = frozenBoundaries;
-
-        if (success) {
-            std::vector<float> publishedAudio;
-            if (!preparePublishedAudioFromSynthesis(boundaries, audio, publishedAudio)) {
-                AppLogger::error("ChunkRender: synthesis length mismatch for RenderCache publish objId="
-                    + juce::String(static_cast<juce::int64>(chunkObjId)));
-                renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                return;
-            }
-
-            const bool added = renderCache->addChunk(boundaries.trueStartSample, boundaries.trueEndSample,
-                                                     std::move(publishedAudio), targetRevision);
-            if (!added) {
-                AppLogger::error("ChunkRender: RenderCache rejected published chunk objId="
-                    + juce::String(static_cast<juce::int64>(chunkObjId)));
-                renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
-                return;
-            }
-
-            const bool published = renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::Succeeded);
-
-            if (published && chunkObjId != 0) {
-                contentRenderService_->getTimeStretchCache().invalidate(captureContentKey);
-                handleStage1ChunkPublished(captureContentKey, targetRevision);
-            }
-        } else {
-            AppLogger::error("ChunkRender: vocoder failed objId="
-                + juce::String(static_cast<juce::int64>(chunkObjId))
-                + " error=" + error);
-            renderCache->completeChunkRender(jobStartSeconds, targetRevision, RenderCache::CompletionResult::TerminalFailure);
-        }
-    };
-
-    contentRenderService_->beginAsyncRenderJob();
-    if (!vocoderDomain_->submit(std::move(vocoderJob))) {
-        renderCache->completeChunkRender(jobStartSeconds,
-                                         targetRevision,
-                                         RenderCache::CompletionResult::TerminalFailure);
-        contentRenderService_->completeAsyncRenderJob();
-    }
 }
 
 // ============================================================================

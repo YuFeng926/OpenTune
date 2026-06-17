@@ -537,7 +537,11 @@ CheckResult mutationSinkAndRenderPipelineStayUnified()
         "getPlaybackReadSource",
         "readSource.audioSampleRate",
         "RenderJob job",
-        "contentRenderService_->enqueueRender"
+        // non-ARA render path: processor enqueues via resolved local CRS.
+        // ARA render path delegates to OpenTuneDocumentController via the
+        // DC's own CRS execution lease (see processDocumentRenderJob), so it
+        // is intentionally absent from the processor's mutation-sink path.
+        "enqueueRender"
     });
     if (!renderMissing.empty())
         return fail("mutationSinkAndRenderPipelineStayUnified", "render range request lost CRS/read-source inputs:" + renderMissing);
@@ -846,6 +850,232 @@ CheckResult timeGridEditActionHasNoAffectedRange()
     return pass("timeGridEditActionHasNoAffectedRange");
 }
 
+CheckResult pitchCurveEditingHasNoSourcePriorityProtection()
+{
+    const auto pitchCurve = readText("Source/Utils/PitchCurve.cpp");
+    const auto pitchCurveHeader = readText("Source/Utils/PitchCurve.h");
+    const auto legacyNoteGeneratorHeader = readText("Source/Utils/LegacyNoteGenerator.h");
+    const auto legacyNoteGenerator = readText("Source/Utils/LegacyNoteGenerator.cpp");
+    const auto noteGeneratorInterface = readText("Source/Inference/INoteGenerator.h");
+    const auto pianoRoll = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const std::vector<std::string_view> bannedPitchCurveTokens = {
+        "clearSegmentsMatchingSourceInRangePreserveOutside",
+        "insertNoteBasedSegmentPreservingNonNoteBasedSegments",
+        "PreservingNonNoteBased",
+        "seg.source != source",
+        "audioSampleRate",
+        "audioSamplePos"
+    };
+
+    for (const auto token : bannedPitchCurveTokens) {
+        if (contains(pitchCurve, token))
+            return fail("pitchCurveEditingHasNoSourcePriorityProtection",
+                        "PitchCurve must not give one correction source priority over another: "
+                            + std::string(token));
+    }
+
+    if (contains(pitchCurveHeader, "audioSampleRate")
+        || contains(legacyNoteGeneratorHeader, "hostSampleRate")
+        || contains(legacyNoteGenerator, "hostSampleRate")
+        || contains(noteGeneratorInterface, "hostSampleRate"))
+        return fail("pitchCurveEditingHasNoSourcePriorityProtection",
+                    "F0 correction and frame-domain note generation must use hopSize/f0SampleRate, not source audio sample-rate parameters.");
+
+    if (contains(pianoRoll, "hasManualCorrectionInRange")
+        || contains(pianoRoll, "isManualCorrectionSource"))
+        return fail("pitchCurveEditingHasNoSourcePriorityProtection",
+                    "PianoRoll parameter edits must not preserve manual correction segments as a protected source.");
+
+    return pass("pitchCurveEditingHasNoSourcePriorityProtection");
+}
+
+CheckResult dcOwnsCrsAndRejectsProcessorInjection()
+{
+    const auto dcCpp = readText("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto dcH = readText("Source/ARA/OpenTuneDocumentController.h");
+    const auto procCpp = readText("Source/PluginProcessor.cpp");
+
+    if (contains(dcCpp, "setDocumentServices"))
+        return fail("dcOwnsCrsAndRejectsProcessorInjection",
+                    "OpenTuneDocumentController.cpp must not contain setDocumentServices; DC creates its own CRS.");
+
+    if (contains(dcH, "setDocumentServices"))
+        return fail("dcOwnsCrsAndRejectsProcessorInjection",
+                    "OpenTuneDocumentController.h must not declare setDocumentServices.");
+
+    if (!contains(dcCpp, "make_shared<ContentRenderService>()"))
+        return fail("dcOwnsCrsAndRejectsProcessorInjection",
+                    "OpenTuneDocumentController.cpp constructor must create its own CRS via make_shared<ContentRenderService>().");
+
+    if (contains(procCpp, "setDocumentServices"))
+        return fail("dcOwnsCrsAndRejectsProcessorInjection",
+                    "PluginProcessor.cpp must not call setDocumentServices; processor does not inject services into DC.");
+
+    return pass("dcOwnsCrsAndRejectsProcessorInjection");
+}
+
+CheckResult dcGetsF0FromProcessRuntime()
+{
+    const auto dcCpp = readText("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto dcH = readText("Source/ARA/OpenTuneDocumentController.h");
+
+    if (!contains(dcCpp, "ProcessF0Runtime"))
+        return fail("dcGetsF0FromProcessRuntime",
+                    "OpenTuneDocumentController.cpp must use ProcessF0Runtime to obtain F0 service.");
+
+    if (contains(dcH, "shared_ptr<F0InferenceService> f0Service_"))
+        return fail("dcGetsF0FromProcessRuntime",
+                    "OpenTuneDocumentController.h must not store F0InferenceService as a member; use ProcessF0Runtime on demand.");
+
+    return pass("dcGetsF0FromProcessRuntime");
+}
+
+CheckResult processorF0ServiceHasSingleProcessOwner()
+{
+    const auto procH = readText("Source/PluginProcessor.h");
+    const auto procCpp = readText("Source/PluginProcessor.cpp");
+
+    if (contains(procH, "shared_ptr<F0InferenceService> f0Service_"))
+        return fail("processorF0ServiceHasSingleProcessOwner",
+                    "PluginProcessor.h must not keep a processor-owned F0InferenceService cache.");
+
+    if (contains(procH, "getF0Service() const { return f0Service_.get(); }"))
+        return fail("processorF0ServiceHasSingleProcessOwner",
+                    "OpenTuneAudioProcessor::getF0Service() must expose ProcessF0Runtime, not a processor cache.");
+
+    if (contains(procCpp, "f0Service_.reset()"))
+        return fail("processorF0ServiceHasSingleProcessOwner",
+                    "resetInferenceBackend() must not reset a processor-level F0 service cache.");
+
+    return pass("processorF0ServiceHasSingleProcessOwner");
+}
+
+// =============================================================================
+// ARA CRS Runtime hard-cut architecture contract tests
+// =============================================================================
+//
+// The ARA render-ownership refactor enforces the following contract:
+//   - didBindToARA must not attach a processor-owned execution lease to the
+//     DC's ContentRenderService; DC owns its own CRS execution path.
+//   - OpenTuneDocumentController::processDocumentRenderJob must delegate to
+//     the process-level ProcessRenderRuntime singleton, not run inference
+//     inline.
+//   - ProcessRenderRuntime.cpp must be a first-class source in the CMake
+//     build (alongside ProcessF0Runtime.cpp).
+//   - PluginProcessor must shed chunk-render and vocoder-runtime ownership
+//     (processChunkRenderJob / ensureVocoderReady / modelPathForWeight all
+//     moved to ProcessRenderRuntime).
+//   - ProcessRenderRuntime must stay infrastructure-only: it must not
+//     reference any ARA model concept (DocumentController, AudioModification,
+//     AudioSource, PlaybackRegion, ARAArchive, archive store/restore hooks).
+
+CheckResult didBindToArADoesNotAttachProcessorLease()
+{
+    const auto processor = readText("Source/PluginProcessor.cpp");
+    const auto didBind = extractFunctionBlock(processor, "OpenTuneAudioProcessor::didBindToARA()");
+
+    if (didBind.empty())
+        return fail("didBindToArADoesNotAttachProcessorLease",
+                    "could not locate OpenTuneAudioProcessor::didBindToARA() in PluginProcessor.cpp.");
+
+    const std::vector<std::string_view> banned = {
+        "attachExecutionLease",
+        "dcCrs",
+        "attached execution lease to DC CRS"
+    };
+
+    for (const auto token : banned) {
+        if (contains(didBind, token))
+            return fail("didBindToArADoesNotAttachProcessorLease",
+                        std::string("didBindToARA() must not reference '") + std::string(token) +
+                        "'; DC owns its own CRS execution path and the processor must not attach a lease to it.");
+    }
+
+    return pass("didBindToArADoesNotAttachProcessorLease");
+}
+
+CheckResult dcExecutorCallsProcessRenderRuntime()
+{
+    const auto dc = readText("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto processJob = extractFunctionBlock(dc, "OpenTuneDocumentController::processDocumentRenderJob");
+
+    if (processJob.empty())
+        return fail("dcExecutorCallsProcessRenderRuntime",
+                    "could not locate OpenTuneDocumentController::processDocumentRenderJob "
+                    "in OpenTuneDocumentController.cpp.");
+
+    if (!contains(processJob, "ProcessRenderRuntime::getInstance().processChunkRenderJob"))
+        return fail("dcExecutorCallsProcessRenderRuntime",
+                    "OpenTuneDocumentController::processDocumentRenderJob must delegate chunk "
+                    "rendering to ProcessRenderRuntime::getInstance().processChunkRenderJob; "
+                    "shared inference/render execution lives at the process level, not in DC.");
+
+    return pass("dcExecutorCallsProcessRenderRuntime");
+}
+
+CheckResult processRenderRuntimeInCMake()
+{
+    const auto cmake = readText("CMakeLists.txt");
+
+    if (!contains(cmake, "Source/Runtime/ProcessRenderRuntime.cpp"))
+        return fail("processRenderRuntimeInCMake",
+                    "CMakeLists.txt must include Source/Runtime/ProcessRenderRuntime.cpp as a first-class "
+                    "source (alongside Source/Runtime/ProcessF0Runtime.cpp); the process-level render "
+                    "runtime must be built.");
+
+    return pass("processRenderRuntimeInCMake");
+}
+
+CheckResult processorHasNoChunkRenderOrVocoderRuntime()
+{
+    const auto processor = readText("Source/PluginProcessor.cpp");
+
+    const std::vector<std::string_view> banned = {
+        "OpenTuneAudioProcessor::processChunkRenderJob",
+        "OpenTuneAudioProcessor::ensureVocoderReady",
+        "OpenTuneAudioProcessor::modelPathForWeight"
+    };
+
+    for (const auto token : banned) {
+        if (contains(processor, token))
+            return fail("processorHasNoChunkRenderOrVocoderRuntime",
+                        std::string("PluginProcessor.cpp must not define '") + std::string(token) +
+                        "'; chunk rendering and vocoder runtime ownership have moved to ProcessRenderRuntime.");
+    }
+
+    return pass("processorHasNoChunkRenderOrVocoderRuntime");
+}
+
+CheckResult processRenderRuntimeOwnsNoAraModels()
+{
+    const auto runtimeH = readText("Source/Runtime/ProcessRenderRuntime.h");
+    const auto runtimeCpp = readText("Source/Runtime/ProcessRenderRuntime.cpp");
+
+    const std::vector<std::string_view> banned = {
+        "OpenTuneDocumentController",
+        "AudioModification",
+        "AudioSource",
+        "PlaybackRegion",
+        "ARAArchive",
+        "doStoreObjectsToStream",
+        "doRestoreObjectsFromStream"
+    };
+
+    for (const auto token : banned) {
+        if (contains(runtimeH, token))
+            return fail("processRenderRuntimeOwnsNoAraModels",
+                        std::string("ProcessRenderRuntime.h must not reference ARA model concept '") +
+                        std::string(token) + "'; the process runtime is infrastructure-only.");
+        if (contains(runtimeCpp, token))
+            return fail("processRenderRuntimeOwnsNoAraModels",
+                        std::string("ProcessRenderRuntime.cpp must not reference ARA model concept '") +
+                        std::string(token) + "'; the process runtime is infrastructure-only.");
+    }
+
+    return pass("processRenderRuntimeOwnsNoAraModels");
+}
+
 } // namespace
 
 int main()
@@ -871,7 +1101,16 @@ int main()
         mutationSinkDoesNotIgnoreRange,
         requestRenderForLocalMutationRangeHasSingleEntryPath,
         noEmptyRangeAsFullSentinel,
-        timeGridEditActionHasNoAffectedRange
+        timeGridEditActionHasNoAffectedRange,
+        pitchCurveEditingHasNoSourcePriorityProtection,
+        dcOwnsCrsAndRejectsProcessorInjection,
+        dcGetsF0FromProcessRuntime,
+        processorF0ServiceHasSingleProcessOwner,
+        didBindToArADoesNotAttachProcessorLease,
+        dcExecutorCallsProcessRenderRuntime,
+        processRenderRuntimeInCMake,
+        processorHasNoChunkRenderOrVocoderRuntime,
+        processRenderRuntimeOwnsNoAraModels
     };
 
     int failed = 0;

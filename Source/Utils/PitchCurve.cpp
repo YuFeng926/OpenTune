@@ -17,54 +17,6 @@ void insertSegmentSorted(std::vector<CorrectedSegment>& segments, CorrectedSegme
     segments.insert(insertPos, std::move(seg));
 }
 
-void clearSegmentsMatchingSourceInRangePreserveOutside(std::vector<CorrectedSegment>& segments,
-                                                       int startFrame,
-                                                       int endFrame,
-                                                       CorrectedSegment::Source source)
-{
-    if (startFrame >= endFrame) {
-        return;
-    }
-
-    std::vector<CorrectedSegment> kept;
-    kept.reserve(segments.size() + 1);
-
-    for (const auto& seg : segments) {
-        if (seg.source != source) {
-            kept.push_back(seg);
-            continue;
-        }
-
-        if (seg.endFrame <= startFrame || seg.startFrame >= endFrame) {
-            kept.push_back(seg);
-            continue;
-        }
-
-        if (seg.startFrame < startFrame) {
-            CorrectedSegment left = seg;
-            left.endFrame = startFrame;
-            const int leftLen = left.endFrame - left.startFrame;
-            if (leftLen > 0 && leftLen <= static_cast<int>(seg.f0Data.size())) {
-                left.f0Data.assign(seg.f0Data.begin(), seg.f0Data.begin() + leftLen);
-                kept.push_back(std::move(left));
-            }
-        }
-
-        if (seg.endFrame > endFrame) {
-            CorrectedSegment right = seg;
-            right.startFrame = endFrame;
-            const int offset = right.startFrame - seg.startFrame;
-            const int rightLen = right.endFrame - right.startFrame;
-            if (offset >= 0 && rightLen > 0 && offset + rightLen <= static_cast<int>(seg.f0Data.size())) {
-                right.f0Data.assign(seg.f0Data.begin() + offset, seg.f0Data.begin() + offset + rightLen);
-                kept.push_back(std::move(right));
-            }
-        }
-    }
-
-    segments.swap(kept);
-}
-
 void clearSegmentsInRangePreserveOutside(std::vector<CorrectedSegment>& segments, int startFrame, int endFrame)
 {
     if (startFrame >= endFrame) {
@@ -103,63 +55,6 @@ void clearSegmentsInRangePreserveOutside(std::vector<CorrectedSegment>& segments
     }
 
     segments.swap(kept);
-}
-
-void insertNoteBasedSegmentPreservingNonNoteBasedSegments(std::vector<CorrectedSegment>& segments,
-                                                          CorrectedSegment&& noteBasedSegment)
-{
-    std::vector<std::pair<int, int>> preservedRanges;
-    for (const auto& seg : segments) {
-        if (seg.source == CorrectedSegment::Source::NoteBased
-            || seg.endFrame <= noteBasedSegment.startFrame
-            || seg.startFrame >= noteBasedSegment.endFrame) {
-            continue;
-        }
-
-        preservedRanges.emplace_back(std::max(seg.startFrame, noteBasedSegment.startFrame),
-                                     std::min(seg.endFrame, noteBasedSegment.endFrame));
-    }
-
-    if (preservedRanges.empty()) {
-        insertSegmentSorted(segments, std::move(noteBasedSegment));
-        return;
-    }
-
-    std::sort(preservedRanges.begin(), preservedRanges.end());
-
-    int cursor = noteBasedSegment.startFrame;
-    for (const auto& [protectedStart, protectedEnd] : preservedRanges) {
-        if (cursor < protectedStart) {
-            CorrectedSegment piece = noteBasedSegment;
-            piece.startFrame = cursor;
-            piece.endFrame = protectedStart;
-            const int offset = piece.startFrame - noteBasedSegment.startFrame;
-            const int length = piece.endFrame - piece.startFrame;
-            if (offset >= 0
-                && length > 0
-                && offset + length <= static_cast<int>(noteBasedSegment.f0Data.size())) {
-                piece.f0Data.assign(noteBasedSegment.f0Data.begin() + offset,
-                                    noteBasedSegment.f0Data.begin() + offset + length);
-                insertSegmentSorted(segments, std::move(piece));
-            }
-        }
-
-        cursor = std::max(cursor, protectedEnd);
-    }
-
-    if (cursor < noteBasedSegment.endFrame) {
-        CorrectedSegment piece = noteBasedSegment;
-        piece.startFrame = cursor;
-        const int offset = piece.startFrame - noteBasedSegment.startFrame;
-        const int length = piece.endFrame - piece.startFrame;
-        if (offset >= 0
-            && length > 0
-            && offset + length <= static_cast<int>(noteBasedSegment.f0Data.size())) {
-            piece.f0Data.assign(noteBasedSegment.f0Data.begin() + offset,
-                                noteBasedSegment.f0Data.begin() + offset + length);
-            insertSegmentSorted(segments, std::move(piece));
-        }
-    }
 }
 
 float smootherstep(float t) noexcept
@@ -411,8 +306,7 @@ void PitchCurve::applyCorrectionToRange(
     int endFrame,
     float retuneSpeed,
     float vibratoDepth,
-    float vibratoRate,
-    double audioSampleRate)
+    float vibratoRate)
 {
     auto oldSnapshot = getSnapshot();
     const auto& originalF0 = oldSnapshot->getOriginalF0();
@@ -428,7 +322,7 @@ void PitchCurve::applyCorrectionToRange(
 
     const int hopSize = oldSnapshot->getHopSize();
     const double sampleRate = oldSnapshot->getSampleRate();
-    if (hopSize <= 0 || sampleRate <= 0.0 || audioSampleRate <= 0.0) {
+    if (hopSize <= 0 || sampleRate <= 0.0) {
         return;
     }
 
@@ -440,10 +334,7 @@ void PitchCurve::applyCorrectionToRange(
     const int calculationEndFrame = calculationRange.endFrameExclusive;
 
     auto correctedSegments = oldSnapshot->getCorrectedSegments();
-    clearSegmentsMatchingSourceInRangePreserveOutside(correctedSegments,
-                                                      calculationStartFrame,
-                                                      calculationEndFrame,
-                                                      CorrectedSegment::Source::NoteBased);
+    clearSegmentsInRangePreserveOutside(correctedSegments, calculationStartFrame, calculationEndFrame);
 
     struct NoteCorrectionInfo {
         float anchorPitch = 0.0f;
@@ -542,8 +433,7 @@ void PitchCurve::applyCorrectionToRange(
             continue;
         }
 
-        int64_t audioSamplePos = static_cast<int64_t>(std::llround(static_cast<double>(i) * static_cast<double>(hopSize) * audioSampleRate / sampleRate));
-        double timeSeconds = static_cast<double>(audioSamplePos) / audioSampleRate;
+        const double timeSeconds = static_cast<double>(i) * static_cast<double>(hopSize) / sampleRate;
 
         const Note* activeNote = nullptr;
         size_t activeNoteIndex = 0;
@@ -615,7 +505,7 @@ void PitchCurve::applyCorrectionToRange(
     newSeg.vibratoDepth = vibratoDepth;
     newSeg.vibratoRate = vibratoRate;
 
-    insertNoteBasedSegmentPreservingNonNoteBasedSegments(correctedSegments, std::move(newSeg));
+    insertSegmentSorted(correctedSegments, std::move(newSeg));
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(

@@ -44,7 +44,6 @@ public:
         float retuneSpeed = 1.0f;
         float vibratoDepth = 0.0f;
         float vibratoRate = 5.0f;
-        double audioSampleRate = 44100.0;
         uint64_t version = 0;
         int autoHopSize = 160;
         double autoF0SampleRate = 16000.0;

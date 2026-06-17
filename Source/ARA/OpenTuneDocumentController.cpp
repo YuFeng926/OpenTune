@@ -4,6 +4,8 @@
 #include "OpenTunePlaybackRenderer.h"
 
 #include "../Inference/F0InferenceService.h"
+#include "../Runtime/ProcessF0Runtime.h"
+#include "../Runtime/ProcessRenderRuntime.h"
 #include "../Services/F0ExtractionService.h"
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/TimeCoordinate.h"
@@ -12,6 +14,7 @@
 #include "../Inference/RenderCache.h"
 #include "../Render/RenderChunkPlanner.h"
 #include "../Utils/SourceWindow.h"
+#include "../Utils/AppLogger.h"
 
 #include <algorithm>
 #include <cmath>
@@ -32,8 +35,12 @@ constexpr int kMaxContentPayloadRecords = 4096;
 OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugInEntry* entry,
                                                        const ARA::ARADocumentControllerHostInstance* instance)
     : ARADocumentControllerSpecialisation(entry, instance)
+    , contentRenderService_(std::make_shared<ContentRenderService>())
     , resamplingManager_(std::make_shared<ResamplingManager>())
+    , contentF0ExtractionService_(std::make_unique<F0ExtractionService>(1, 64))
 {
+    asyncLeaseToken_ = std::make_shared<std::atomic<bool>>(true);
+    installDocumentRenderExecution();
 }
 
 OpenTuneDocumentController::~OpenTuneDocumentController()
@@ -44,32 +51,6 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
 
     playbackRenderers_.clear();
 }
-
-void OpenTuneDocumentController::attachProcessorServices(ProcessorServices services)
-{
-    jassert(services.owner != nullptr);
-    serviceOwner_ = services.owner;
-    f0Service_ = std::move(services.f0Service);
-    contentF0ExtractionService_ = services.contentF0ExtractionService;
-    contentRenderService_ = services.contentRenderService;
-    asyncLeaseToken_ = std::make_shared<std::atomic<bool>>(true);
-}
-
-void OpenTuneDocumentController::detachProcessorServices(const OpenTuneAudioProcessor* owner)
-{
-    if (serviceOwner_ != owner) return;
-
-    // 撤销服务租约 — 通知所有后台 F0 work 释放
-    if (asyncLeaseToken_)
-        asyncLeaseToken_->store(false, std::memory_order_release);
-
-    serviceOwner_ = nullptr;
-    contentRenderService_ = nullptr;
-    contentF0ExtractionService_ = nullptr;
-    f0Service_.reset();
-}
-
-
 
 namespace {
 void serializeAudioModificationContent(const AudioModification& mod, juce::XmlElement& el)
@@ -441,9 +422,9 @@ AudioModificationContentState restoreAudioModificationContent(const juce::XmlEle
 }
 } // namespace
 
-ContentRenderService* OpenTuneDocumentController::getContentRenderService() const noexcept
+const ContentRenderService* OpenTuneDocumentController::getContentRenderService() const noexcept
 {
-    return contentRenderService_;
+    return contentRenderService_.get();
 }
 
 bool OpenTuneDocumentController::PlaybackRegionProjection::isRenderable() const noexcept
@@ -1447,11 +1428,14 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
     std::vector<float> channel0Data,
     double sourceSampleRate)
 {
-    if (!contentF0ExtractionService_ || !f0Service_)
+    if (!contentF0ExtractionService_)
+        return;
+
+    auto f0Svc = ProcessF0Runtime::getInstance().getF0Service();
+    if (!f0Svc)
         return;
 
     auto crs = contentRenderService_;
-    auto f0Svc = f0Service_;
 
     // Submit real ARA AudioModification ContentKey to F0 extraction service
     contentF0ExtractionService_->submit(
@@ -1536,6 +1520,201 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
                     mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
             }
         });
+}
+
+void OpenTuneDocumentController::installDocumentRenderExecution()
+{
+    ContentRenderService::ExecutionLease lease;
+    lease.owner = this;
+    lease.renderJobCallback = [this](RenderJob& job)
+    {
+        processDocumentRenderJob(job);
+    };
+
+    contentRenderService_->attachExecutionLease(std::move(lease));
+}
+
+std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr || mod->content.lifecycle != ContentLifecycle::Ready)
+        return nullptr;
+
+    auto snap = std::make_shared<EditableContentSnapshot>();
+    snap->audioBuffer = nullptr;
+    snap->audioSampleRate = 0.0;
+    snap->sourceWindow = mod->content.sourceWindow;
+    snap->notes = mod->content.editable.notes;
+    snap->correctedSegments = mod->content.editable.correctedSegments;
+    snap->pitchCurve = mod->content.analysis.pitchCurve;
+    snap->timeGrid = mod->content.editable.timeGrid;
+    snap->pitchShiftSettings = mod->content.editable.pitchShiftSettings;
+    snap->silentGaps = mod->content.analysis.silentGaps;
+    snap->detectedKey = mod->content.analysis.detectedKey;
+    snap->referenceFeatures = mod->content.analysis.referenceFeatures;
+    snap->originalF0State = mod->content.analysis.originalF0State;
+    snap->pitchRevision = mod->content.editable.pitchRevision;
+    snap->pitchShiftRevision = mod->content.editable.pitchShiftRevision;
+    snap->timeGridRevision = mod->content.editable.timeGridRevision;
+    snap->contentRevision = mod->content.contentRevision;
+    snap->notesRevision = mod->content.editable.notesRevision;
+    return snap;
+}
+
+void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
+{
+    if (job.renderCache == nullptr)
+        return;
+
+    auto* mod = findAudioModificationByContentKey(job.contentKey);
+    if (mod == nullptr || mod->content.lifecycle != ContentLifecycle::Ready)
+    {
+        job.renderCache->completeChunkRender(job.startSeconds,
+                                             job.targetRevision,
+                                             RenderCache::CompletionResult::TerminalFailure);
+        return;
+    }
+
+    PlaybackReadSource readSource;
+    if (contentRenderService_ == nullptr
+        || !contentRenderService_->getPlaybackReadSource(job.contentKey, readSource)
+        || readSource.audioBuffer == nullptr)
+    {
+        job.renderCache->completeChunkRender(job.startSeconds,
+                                             job.targetRevision,
+                                             RenderCache::CompletionResult::TerminalFailure);
+        return;
+    }
+
+    auto snap = snapshotAudioModification(job.contentKey);
+    if (!snap)
+    {
+        job.renderCache->completeChunkRender(job.startSeconds,
+                                             job.targetRevision,
+                                             RenderCache::CompletionResult::TerminalFailure);
+        return;
+    }
+
+    ProcessRenderRuntime::CompletionContext completion;
+    completion.alive = asyncLeaseToken_;
+    completion.chunkPublished = [this](ContentKey key, uint64_t revision) {
+        handleDocumentStage1ChunkPublished(key, revision);
+    };
+    ProcessRenderRuntime::getInstance().processChunkRenderJob(
+        contentRenderService_, job, std::move(snap), false, std::move(completion));
+}
+
+void OpenTuneDocumentController::handleDocumentStage1ChunkPublished(ContentKey key, uint64_t publishedRevision)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr)
+        return;
+
+    auto snap = snapshotAudioModification(key);
+    if (!snap || snap->contentRevision != publishedRevision)
+        return;
+
+    if (snap->timeGrid != nullptr && !snap->timeGrid->isIdentity())
+    {
+        ContentRenderService::Stage2Request stage2Req;
+        stage2Req.contentKey = key;
+        stage2Req.pitchRevision = snap->pitchRevision;
+        stage2Req.pitchShiftRevision = snap->pitchShiftRevision;
+        stage2Req.timeGridRevision = snap->timeGridRevision;
+
+        if (contentRenderService_ != nullptr)
+            contentRenderService_->requestStage2Rebuild(stage2Req, std::move(snap));
+    }
+}
+
+void OpenTuneDocumentController::requestModificationStage2Rebuild(ContentKey key)
+{
+    auto snap = snapshotAudioModification(key);
+    if (!snap)
+        return;
+
+    if (snap->timeGrid != nullptr && !snap->timeGrid->isIdentity())
+    {
+        ContentRenderService::Stage2Request stage2Req;
+        stage2Req.contentKey = key;
+        stage2Req.pitchRevision = snap->pitchRevision;
+        stage2Req.pitchShiftRevision = snap->pitchShiftRevision;
+        stage2Req.timeGridRevision = snap->timeGridRevision;
+
+        if (contentRenderService_ != nullptr)
+            contentRenderService_->requestStage2Rebuild(stage2Req, std::move(snap));
+    }
+}
+
+void OpenTuneDocumentController::refreshModificationCRSMetadata(ContentKey key)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr)
+        return;
+
+    // 刷新 CRS 的 PlaybackReadSource metadata（不重新发布 audio buffer）
+    // PlaybackReadSource 只承载元数据：pitchShiftSettings、revision 系列、timeGridIsIdentity
+    // 真正的分析态（pitchCurve/timeGrid/silentGaps）由 AudioModification.content 持有，
+    // 渲染时通过 snapshotAudioModification 注入到 EditableContentSnapshot，再交给 ProcessRenderRuntime。
+    PlaybackReadSource readSource;
+    if (contentRenderService_ && contentRenderService_->getPlaybackReadSource(key, readSource))
+    {
+        readSource.pitchShiftSettings = mod->content.editable.pitchShiftSettings;
+        readSource.pitchRevision = mod->content.editable.pitchRevision;
+        readSource.pitchShiftRevision = mod->content.editable.pitchShiftRevision;
+        readSource.timeGridRevision = mod->content.editable.timeGridRevision;
+        readSource.renderRevision = mod->content.contentRevision;
+        readSource.timeGridIsIdentity = mod->content.editable.timeGrid == nullptr
+            || mod->content.editable.timeGrid->isIdentity();
+        contentRenderService_->publishPlaybackSource(key, std::move(readSource));
+    }
+}
+
+void OpenTuneDocumentController::requestModificationRender(ContentKey key, double startSeconds, double endSeconds)
+{
+    if (contentRenderService_ == nullptr)
+        return;
+
+    PlaybackReadSource readSource;
+    if (!contentRenderService_->getPlaybackReadSource(key, readSource))
+        return;
+
+    if (readSource.audioBuffer == nullptr || readSource.audioSampleRate <= 0.0)
+        return;
+
+    const int startSample = static_cast<int>(startSeconds * readSource.audioSampleRate);
+    const int endSample = static_cast<int>(endSeconds * readSource.audioSampleRate);
+
+    RenderJob job;
+    job.contentKey = key;
+    job.audioBuffer = readSource.audioBuffer;
+    job.audioSampleRate = readSource.audioSampleRate;
+    job.startSample = startSample;
+    job.endSampleExclusive = endSample;
+    job.startSeconds = startSeconds;
+    job.endSeconds = endSeconds;
+    job.renderCache = contentRenderService_->getOrCreateRenderCache(key);
+    job.targetRevision = readSource.renderRevision;
+
+    contentRenderService_->enqueueRender(std::move(job));
+}
+
+void OpenTuneDocumentController::requestFullModificationRender(ContentKey key)
+{
+    if (contentRenderService_ == nullptr)
+        return;
+
+    PlaybackReadSource readSource;
+    if (!contentRenderService_->getPlaybackReadSource(key, readSource))
+        return;
+
+    if (readSource.audioBuffer == nullptr || readSource.audioSampleRate <= 0.0)
+        return;
+
+    const int totalSamples = readSource.audioBuffer->getNumSamples();
+    const double totalSeconds = static_cast<double>(totalSamples) / readSource.audioSampleRate;
+
+    requestModificationRender(key, 0.0, totalSeconds);
 }
 
 bool OpenTuneDocumentController::removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion)

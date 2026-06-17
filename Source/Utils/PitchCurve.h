@@ -216,8 +216,7 @@ public:
         int endFrame,
         float retuneSpeed,
         float vibratoDepth = 0.0f,
-        float vibratoRate = 7.5f,
-        double audioSampleRate = 44100.0);
+        float vibratoRate = 7.5f);
 
     static constexpr int getCorrectedF0BoundaryContextFrames() noexcept { return 8; }
     static F0FrameRange expandNoteBasedCorrectionRange(int startFrame, int endFrameExclusive, int frameCount) noexcept;

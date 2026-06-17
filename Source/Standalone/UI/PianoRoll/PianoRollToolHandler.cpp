@@ -213,8 +213,7 @@ bool commitNoteBasedCorrection(PianoRollToolHandler::Context& ctx,
                                         editRange.endFrameExclusive,
                                         ctx.getRetuneSpeed(),
                                         ctx.getVibratoDepth(),
-                                        ctx.getVibratoRate(),
-                                        44100.0);
+                                        ctx.getVibratoRate());
 
     const auto snap = clonedCurve->getSnapshot();
     const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(editRange.startFrame,
@@ -1939,6 +1938,7 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
         if (newSelectedIndex >= 0) {
             ctx_.getState().noteSelection.setSingle(newSelectedIndex,
                                                     static_cast<int>(notes.size()));
+            updateF0SelectionFromNotes(notes);
         }
     }
 
@@ -1999,6 +1999,7 @@ void PianoRollToolHandler::deleteSelectedNotes(std::vector<Note>& notes)
         notes.end()
     );
     ctx_.getState().noteSelection.clear();
+    ctx_.getState().selection.clearF0Selection();
 }
 
 void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
