@@ -201,6 +201,7 @@ private:
     void syncParameterPanelFromSelection();
     void updateTitleWithProjectPath();
     void syncRecentProjectsToMenu();
+    void refreshAllUIFromProject();
     void launchOpenProjectChooser();
     void saveProjectAsThenOpenProject();
     void playFromStartToggleRequested();  // 播放/暂停并回到起始位置

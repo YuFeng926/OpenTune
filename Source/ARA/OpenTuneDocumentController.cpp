@@ -49,6 +49,24 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
     if (asyncLeaseToken_)
         asyncLeaseToken_->store(false, std::memory_order_release);
 
+    // 等待所有后台 F0 任务完成（它们持有 leaseToken，token 已 false，
+    // 但 job 本体可能仍在执行，需要等待线程池排空）
+    if (asyncWorkPool_ != nullptr)
+    {
+        while (asyncWorkPool_->getNumJobs() > 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    // 停止渲染服务：排空队列后析构，防止 chunkPublished 回调访问已析构的 DC
+    if (contentRenderService_)
+    {
+        contentRenderService_->pauseRenderWorker();
+        contentRenderService_->drainRenderWorker();
+    }
+
+    // 停止 F0 提取服务
+    contentF0ExtractionService_.reset();
+
     playbackRenderers_.clear();
 }
 
@@ -504,6 +522,17 @@ int OpenTuneDocumentController::refreshAllAudioModifications()
     return refreshedCount;
 }
 
+void OpenTuneDocumentController::refreshAllAudioModificationsAsync(
+    std::function<void(int)> completionCallback)
+{
+    // ARA SDK requires DocumentController operations on main thread.
+    // This method now executes synchronously to comply with ARA thread constraints.
+    // Callers should display a loading overlay before calling if UI responsiveness is needed.
+    const int count = refreshAllAudioModifications();
+    if (completionCallback)
+        completionCallback(count);
+}
+
 void OpenTuneDocumentController::setEditorViewSelectionPlaybackRegions(
     std::vector<juce::ARAPlaybackRegion*> playbackRegions)
 {
@@ -623,8 +652,10 @@ void OpenTuneDocumentController::doUpdateAudioSourceContent(juce::ARAAudioSource
         {
             if (modification.content.sourceWindow.sourcePersistentId == source->getIdentity().persistentId)
             {
+                // Invalidate derived artifacts (CRS, analysis cache) but preserve
+                // user-editable modification-scoped truth (notes, pitchCurve, timeGrid, etc.)
                 removeCRSArtifactsForModification(modification);
-                modification.resetContent();
+                modification.invalidateDerivedContent();
             }
         }
     }
@@ -1908,6 +1939,71 @@ OpenTuneDocumentController::readContentSnapshot(ContentKey key) const
     const auto* mod = findAudioModificationByContentKey(key);
     if (!mod) return nullptr;
     return mod->snapshotContent();
+}
+
+// ARA mutation API implementations — Processor delegates ARA writes here
+
+bool OpenTuneDocumentController::applyNotesToModification(const ContentKey& key, std::vector<Note> notes)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (!mod) return false;
+    mod->applyNotes(std::move(notes));
+    refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
+bool OpenTuneDocumentController::applyPitchCurveToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (!mod) return false;
+    mod->applyPitchCurve(std::move(curve));
+    refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
+bool OpenTuneDocumentController::applyTimeGridToModification(const ContentKey& key, std::shared_ptr<const TimeGridSnapshot> grid)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (!mod) return false;
+    mod->applyTimeGrid(std::move(grid));
+    refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
+bool OpenTuneDocumentController::applyPitchShiftToModification(const ContentKey& key, const PitchShiftSettings& settings)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (!mod) return false;
+    mod->applyPitchShift(settings);
+    refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
+bool OpenTuneDocumentController::applyDetectedKeyToModification(const ContentKey& key, const DetectedKey& detectedKey)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (!mod) return false;
+    mod->applyDetectedKey(detectedKey);
+    refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
+bool OpenTuneDocumentController::applyReferenceFeaturesToModification(const ContentKey& key, const ReferenceFeatureSet& features)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (!mod) return false;
+    mod->applyReferenceFeatures(features);
+    refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
+bool OpenTuneDocumentController::applyOriginalF0StateToModification(const ContentKey& key, const OriginalF0State& state)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (!mod) return false;
+    mod->applyOriginalF0State(state);
+    refreshRegisteredRenderers(publishModelChange());
+    return true;
 }
 
 } // namespace OpenTune

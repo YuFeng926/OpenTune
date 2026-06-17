@@ -2197,7 +2197,7 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
         }
     }
 
-    // Record Fade undo
+    // Record Fade undo + notify dirty
     if ((currentDragOp_ == DragOperation::FadeIn || currentDragOp_ == DragOperation::FadeOut) && dragOperationPlacementId_ != 0) {
         auto* arr = processor_.getStandaloneArrangement();
         if (arr) {
@@ -2208,6 +2208,9 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
                         std::make_unique<FadeChangeAction>(processor_, dragStartTrackId_, dragOperationPlacementId_,
                                                            fadeStartInDuration_, fadeStartOutDuration_,
                                                            placement.fadeInDuration, placement.fadeOutDuration));
+                    listeners_.call([this](Listener& l) {
+                        l.placementTimingChanged(dragStartTrackId_, selectedPlacementIndex_);
+                    });
                 }
             }
         }
@@ -2320,6 +2323,9 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
             processor_.getUndoManager().addAction(
                 std::make_unique<GainChangeAction>(processor_, selectedTrack_, dragStartPlacementId_,
                                                     dragStartPlacementGain_, currentGain));
+            listeners_.call([this](Listener& l) {
+                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+            });
         }
     }
 

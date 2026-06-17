@@ -13,17 +13,24 @@ void AudioModification::updateIdentity(juce::ARAAudioModification* modification)
 
 void AudioModification::attachSource(const AudioSource& source)
 {
-    // Per ARA2 spec: AudioSource binding is part of content.sourceWindow,
-    // single source of truth for source identity.
-    const auto& shape = source.getShape();
-    content.sourceWindow = SourceWindow{0, source.getIdentity().persistentId, 0.0, shape.durationSeconds()};
-    cachedSourceShape_ = shape;  // 缓存 shape
+    cachedSourceShape_ = source.getShape();
+    // sourceWindow is set during identity binding (updateIdentity / birth),
+    // not overwritten on every source properties update.
+    // This preserves restore-time windowed/remapped bindings.
 }
 
 void AudioModification::resetContent() noexcept
 {
     content = AudioModificationContentState{};
     birthState = AudioModificationBirthState::Empty;
+}
+
+void AudioModification::invalidateDerivedContent() noexcept
+{
+    // Clear analysis/derived data but preserve user-editable modification truth
+    content.analysis = AnalysisState{};
+    content.lifecycle = ContentLifecycle::Empty;
+    // Keep content.editable (notes, pitchCurve, timeGrid, pitchShift) and content.sourceWindow intact
 }
 
 bool AudioModification::isRenderable() const noexcept
