@@ -74,8 +74,7 @@ public:
                                               int endFrameExclusive,
                                               float retuneSpeed,
                                               float vibratoDepth,
-                                              float vibratoRate,
-                                              double audioSampleRate) = 0;
+                                              float vibratoRate) = 0;
 };
 
 } // namespace OpenTune

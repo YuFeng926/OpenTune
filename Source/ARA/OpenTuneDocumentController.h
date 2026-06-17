@@ -11,6 +11,7 @@
 #include "AudioModification.h"
 #include "AudioSource.h"
 #include "../Render/ContentRenderService.h"
+#include "../Services/F0ExtractionService.h"
 #include "../Content/ContentKey.h"
 #include "PlaybackRegion.h"
 
@@ -19,8 +20,6 @@ namespace OpenTune {
 class OpenTuneEditorView;
 class OpenTunePlaybackRenderer;
 class OpenTuneAudioProcessor;
-class F0InferenceService;
-class F0ExtractionService;
 class ResamplingManager;
 class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
@@ -55,22 +54,16 @@ public:
 
     ~OpenTuneDocumentController() override;
 
-    struct ProcessorServices
-    {
-        const OpenTuneAudioProcessor* owner = nullptr;
-        std::shared_ptr<F0InferenceService> f0Service;
-        F0ExtractionService* contentF0ExtractionService{nullptr};
-        ContentRenderService* contentRenderService{nullptr};
-    };
-
-    void attachProcessorServices(ProcessorServices services);
-    void detachProcessorServices(const OpenTuneAudioProcessor* owner);
-
     // Per ARA2 spec: ARA object persistence uses doStoreObjectsToStream/doRestoreObjectsFromStream,
     // NOT VST3 processor state. Legacy getContentSnapshot/restoreContentPayloadInto removed.
 
-    ContentRenderService* getContentRenderService() const noexcept;
+    const ContentRenderService* getContentRenderService() const noexcept;
     bool refreshPlaybackReadSource(ContentKey key);
+    // ARA mutation/render API — processor 通过这些 API 请求 ARA 渲染
+    void refreshModificationCRSMetadata(ContentKey key);
+    void requestModificationRender(ContentKey key, double startSeconds, double endSeconds);
+    void requestFullModificationRender(ContentKey key);
+    void requestModificationStage2Rebuild(ContentKey key);
     // ============================================================
     // 编辑器只读内容访问器（通过 ContentKey 路由到 AudioModification + CRS）
     // ARA 模式下编辑器不经过 content owner，直接读 AudioModification.content
@@ -177,13 +170,11 @@ private:
     std::map<uint64_t, juce::String> araPersistentIdsByObjectId_;
     std::map<juce::String, uint64_t> araObjectIdsByPersistentId_;
 
-    ContentRenderService* contentRenderService_{nullptr};
+    std::shared_ptr<ContentRenderService> contentRenderService_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
-    std::shared_ptr<F0InferenceService> f0Service_;
-    F0ExtractionService* contentF0ExtractionService_{nullptr};
-    const OpenTuneAudioProcessor* serviceOwner_ = nullptr;
+    std::unique_ptr<F0ExtractionService> contentF0ExtractionService_;
 
-    // 服务租约 token：detach 时置 false，后台 F0 work 持有 shared_ptr 可安全检查
+    // 服务租约 token：DC 析构时置 false，后台 F0 work 持有 shared_ptr 可安全检查
     std::shared_ptr<std::atomic<bool>> asyncLeaseToken_;
 
     AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
@@ -221,6 +212,10 @@ private:
     void scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
                                    double sourceSampleRate);
+    void installDocumentRenderExecution();
+    void processDocumentRenderJob(RenderJob& job);
+    std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
+    void handleDocumentStage1ChunkPublished(ContentKey key, uint64_t publishedRevision);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)

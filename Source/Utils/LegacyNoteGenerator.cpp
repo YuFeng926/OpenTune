@@ -166,7 +166,6 @@ std::vector<Note> LegacyNoteGenerator::generate(
     int                        endFrameExclusive,
     int                        hopSize,
     double                     f0SampleRate,
-    double                     hostSampleRate,
     const NoteGeneratorParams& params)
 {
     std::vector<Note> out;
@@ -297,7 +296,6 @@ std::vector<Note> LegacyNoteGenerator::generate(
     const std::vector<float>&  energy,
     int                        hopSize,
     double                     f0SampleRate,
-    double                     hostSampleRate,
     const NoteGeneratorParams& params)
 {
     const float* energyPtr = (energy.size() == f0.size() && !energy.empty()) ? energy.data() : nullptr;
@@ -309,7 +307,6 @@ std::vector<Note> LegacyNoteGenerator::generate(
         static_cast<int>(f0.size()),
         hopSize,
         f0SampleRate,
-        hostSampleRate,
         params);
 }
 
@@ -331,7 +328,6 @@ std::vector<Note> LegacyNoteGenerator::generate(const NoteGeneratorInput& input)
         endFrame,
         input.hopSize,
         input.f0SampleRate,
-        input.hostSampleRate,
         input.params);
 }
 

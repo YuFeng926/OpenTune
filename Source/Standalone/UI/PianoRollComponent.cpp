@@ -48,12 +48,6 @@ std::vector<CorrectedSegment> copyCorrectedSegments(const std::shared_ptr<PitchC
     return copiedSegments;
 }
 
-bool isManualCorrectionSource(CorrectedSegment::Source source) noexcept
-{
-    return source == CorrectedSegment::Source::HandDraw
-        || source == CorrectedSegment::Source::LineAnchor;
-}
-
 int64_t secondsToMs(double seconds) noexcept
 {
     return static_cast<int64_t>(std::llround(seconds * 1000.0));
@@ -368,7 +362,6 @@ bool PianoRollComponent::applyCorrectionAsyncForEntireClip(float retuneSpeed, fl
     request->retuneSpeed = retuneSpeed;
     request->vibratoDepth = vibratoDepth;
     request->vibratoRate = vibratoRate;
-    request->audioSampleRate = static_cast<double>(PianoRollComponent::kAudioSampleRate);
 
     captureBeforeUndoSnapshot();
     pendingUndoDescription_ = TRANS("自动调音");
@@ -449,8 +442,7 @@ bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrection
             completed.autoEndFrame + 1,
             completed.retuneSpeed,
             completed.vibratoDepth,
-            completed.vibratoRate,
-            completed.audioSampleRate)) {
+            completed.vibratoRate)) {
         AppLogger::log("AutoTune: commitAutoTuneGeneratedNotes returned false");
         return false;
     }
@@ -522,15 +514,15 @@ void PianoRollComponent::refreshEditedContentNotes()
 {
     cachedNotes_.clear();
     cachedNotesRevision_ = 0;
-    if (processor_ == nullptr || !editedContentKey_.isValid()) {
-        return;
-    }
 
-    if (auto snap = readEditedSnapshot()) {
-        cachedNotes_ = snap->notes;
-        cachedNotesRevision_ = snap->notesRevision;
+    if (processor_ != nullptr && editedContentKey_.isValid()) {
+        if (auto snap = readEditedSnapshot()) {
+            cachedNotes_ = snap->notes;
+            cachedNotesRevision_ = snap->notesRevision;
+        }
     }
     interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
+    syncF0SelectionToSelectedNotes();
 }
 
 const std::vector<Note>& PianoRollComponent::getCommittedNotes() const
@@ -994,7 +986,6 @@ void PianoRollComponent::enqueueNoteBasedCorrectionAsync(const std::vector<Note>
     request->retuneSpeed = retuneSpeed;
     request->vibratoDepth = vibratoDepth;
     request->vibratoRate = vibratoRate;
-    request->audioSampleRate = static_cast<double>(PianoRollComponent::kAudioSampleRate);
     request->contentEpochSnapshot = editedContentEpoch_.load(std::memory_order_acquire);
     request->contentKeySnapshot = editedContentKey_;
     if (!undoSnapshotCaptured_)
@@ -1364,7 +1355,7 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
             auto clonedCurve = currentCurve_->clone();
             clonedCurve->applyCorrectionToRange(
                 notes, editRange.startFrame, editRange.endFrameExclusive,
-                retuneSpeed, vibratoDepth, vibratoRate, 44100.0);
+                retuneSpeed, vibratoDepth, vibratoRate);
             auto snap = clonedCurve->getSnapshot();
 
             const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
@@ -1395,7 +1386,6 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
 bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vibratoDepth, float vibratoRate, int startFrame, int endFrameExclusive) {
     if (!currentCurve_ || endFrameExclusive <= startFrame) return false;
     if (!currentCurve_->hasCorrectionInRange(startFrame, endFrameExclusive)) return false;
-    if (hasManualCorrectionInRange(startFrame, endFrameExclusive)) return true;
 
     enqueueNoteBasedCorrectionAsync(getEditedContentNotesCopy(),
                                     startFrame, endFrameExclusive,
@@ -1437,6 +1427,18 @@ bool PianoRollComponent::getSelectedNotesFrameRange(int& startFrame, int& endFra
         maxEnd = std::max(maxEnd, note.endTime);
     }
     return maxEnd > minStart && getFrameRangeForTimeSpan(minStart, maxEnd, startFrame, endFrameExclusive);
+}
+
+void PianoRollComponent::syncF0SelectionToSelectedNotes()
+{
+    int startFrame = 0;
+    int endFrameExclusive = 0;
+    if (getSelectedNotesFrameRange(startFrame, endFrameExclusive)) {
+        interactionState_.selection.setF0Range(startFrame, endFrameExclusive);
+        return;
+    }
+
+    interactionState_.selection.clearF0Selection();
 }
 
 bool PianoRollComponent::getSelectionAreaFrameRange(int& startFrame, int& endFrameExclusive) const
@@ -1677,25 +1679,6 @@ void PianoRollComponent::setNoteSplit(float value) {
     // Note Split 浠呮洿鏂板垎娈电瓥鐣ュ弬鏁帮紝涓嶈Е鍙?AUTO 閲嶆柊鐢熸垚銆?
     // AUTO 鎿嶄綔鐢辩敤鎴蜂富鍔ㄨЕ鍙戯紝浣跨敤褰撳墠绛栫暐鎵ц鍒嗘銆?
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
-}
-
-bool PianoRollComponent::hasManualCorrectionInRange(int startFrame, int endFrame) const {
-    if (currentCurve_ == nullptr || startFrame >= endFrame) {
-        return false;
-    }
-
-    auto snapshot = currentCurve_->getSnapshot();
-    const auto& segments = snapshot->getCorrectedSegments();
-    for (const auto& seg : segments) {
-        if (!isManualCorrectionSource(seg.source)) {
-            continue;
-        }
-        if (seg.endFrame <= startFrame || seg.startFrame >= endFrame) {
-            continue;
-        }
-        return true;
-    }
-    return false;
 }
 
 void PianoRollComponent::resized() {
@@ -3669,7 +3652,6 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
     request->vibratoDepth = currentVibratoDepth_;
     request->vibratoRate = currentVibratoRate_;
     request->postSnap = postSnapCfg;
-    request->audioSampleRate = static_cast<double>(PianoRollComponent::kAudioSampleRate);
 
     request->autoOriginalF0Full = originalF0;
     request->autoHopSize = currentCurve_ ? currentCurve_->getHopSize() : 512;

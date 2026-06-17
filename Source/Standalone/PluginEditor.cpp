@@ -27,6 +27,7 @@
 #include "Editor/ConfirmDialogContent.h"
 #include "Utils/TimeCoordinate.h"
 #include "Content/StandaloneClipContent.h"
+#include "Runtime/ProcessF0Runtime.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "DSP/ReferenceFeatures.h"
 #include <cmath>
@@ -126,11 +127,10 @@ static bool runDebugSelfTests() {
         curve.setOriginalEnergy(energy);
         constexpr int kHopSize = 160;
         constexpr double kF0SampleRate = 16000.0;
-        constexpr double kHostSampleRate = 96000.0;
         NoteGeneratorParams params;
         params.policy.transitionThresholdCents = 512.0f;
         params.policy.minDurationMs = 100.0f;
-        auto notes = LegacyNoteGenerator::generate(f0, energy, kHopSize, kF0SampleRate, kHostSampleRate, params);
+        auto notes = LegacyNoteGenerator::generate(f0, energy, kHopSize, kF0SampleRate, params);
         if (notes.empty()) {
             return false;
         }
@@ -999,7 +999,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     // Sync other state if needed (e.g. from Toolbar or ParameterPanel)
     if (allowSecondaryRefresh && !f0ParamsSyncedFromInference_ && processorRef_.isInferenceReady()) {
-        auto* f0Service = processorRef_.getF0Service();
+        auto f0Service = ProcessF0Runtime::getInstance().getF0Service();
         if (f0Service) {
             parameterPanel_.setF0Min(f0Service->getF0Min());
             parameterPanel_.setF0Max(f0Service->getF0Max());
@@ -1127,23 +1127,12 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
     // ============================================================================
-    // Render badge logic 鈥?Stage 2 (Rubber Band) is INDEPENDENT of vocoder.
-    // Pre-2026-05-19: entire badge gated on `vocoderDomain != nullptr` 鈫?users
-    // dragging Time tool handles before vocoder lazy-load saw no badge even
-    // though Stage 2 was running. Refactored: Stage 2 lifecycle checked
-    // unconditionally; Stage 1 chunk stats only when vocoder loaded.
+    // Render badge logic — Stage 2 (time-stretch) is now synchronous inside CRS,
+    // so there is no async "in-flight" state to display. Badge reflects Stage 1 only.
     // ============================================================================
     const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
 
-    // Stage 2 鈥?always available
-    const bool stage2InFlight = processorRef_.isStage2InFlight();
-    const int  stage2Queue    = processorRef_.getStage2QueueDepth();
-    // stage2HasWork covers entire lifecycle: enqueued but not yet pulled by worker
-    // 鈫?in-flight 鈫?done. Previously only checking inFlight missed the enqueue
-    // window for short clips processed faster than the 33ms heartbeat.
-    const bool stage2HasWork  = stage2InFlight || stage2Queue > 0;
-
-    // Stage 1 鈥?meaningful only when vocoder loaded
+    // Stage 1 — meaningful only when vocoder loaded
     bool stage1HasWork = false;
     int  stage1Done = 0;
     int  stage1Total = 0;
@@ -1168,20 +1157,11 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
     }
 
-    // Combined badge visibility. Stage 2 takes precedence over Stage 1 in text
-    // since Stage 2 produces the audio user actually hears after time edits.
-    const bool shouldShowBadge = (stage1HasWork && !isAutoProcessing) || stage2HasWork;
+    // Combined badge visibility — Stage 1 only (Stage 2 is synchronous in CRS).
+    const bool shouldShowBadge = stage1HasWork && !isAutoProcessing;
     if (shouldShowBadge) {
-        if (stage2HasWork) {
-            juce::String msg = juce::String::fromUTF8(u8"\u65f6\u95f4\u62c9\u4f38\u4e2d");
-            if (stage2Queue > 0) {
-                msg += " (+" + juce::String(stage2Queue) + ")";
-            }
-            renderBadge_.setMessageText(msg);
-        } else {
-            renderBadge_.setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u4e2d (")
-                + juce::String(stage1Done) + "/" + juce::String(stage1Total) + ")");
-        }
+        renderBadge_.setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u4e2d (")
+            + juce::String(stage1Done) + "/" + juce::String(stage1Total) + ")");
     }
     if (renderBadge_.isVisible() != shouldShowBadge) {
         renderBadge_.setVisible(shouldShowBadge);

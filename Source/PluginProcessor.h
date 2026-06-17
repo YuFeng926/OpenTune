@@ -22,10 +22,7 @@
 #include <vector>
 #include <array>
 #include <map>
-#include <deque>
 #include <mutex>
-#include <condition_variable>
-#include <thread>
 #include <optional>
 #include "SourceStore.h"
 #include "StandaloneArrangement.h"
@@ -34,7 +31,6 @@
 #include "DSP/ChromaKeyDetector.h"
 #include "Inference/RenderCache.h"
 #include "Inference/F0InferenceService.h"
-#include "Inference/VocoderDomain.h"
 #include "Services/F0ExtractionService.h"
 #include "Services/ReferenceAnalysisService.h"
 #include "Utils/ContentAnalysisState.h"
@@ -45,8 +41,6 @@
 #include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
 #include "Inference/INoteGenerator.h"
-#include "DSP/AutoTunePitchShifter.h"
-#include "Inference/ChunkRenderStrategy.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/PlacementClipboard.h"
 #include "Utils/TrackConstants.h"
@@ -56,6 +50,8 @@
 #include "Content/ContentEditCommands.h"
 #include "Content/StandaloneContentRepository.h"
 #include "Render/ContentRenderService.h"
+#include "Runtime/ProcessF0Runtime.h"
+#include "Runtime/ProcessRenderRuntime.h"
 #include <functional>
 
 namespace OpenTune {
@@ -349,17 +345,9 @@ private:
     juce::AudioParameterInt* editVersionParam_{nullptr};
     std::atomic<juce::int64> lastControlTimestamp_{0};
     std::atomic<int> lastControlType_{static_cast<int>(DiagnosticControlCall::None)};
-    std::atomic<bool> f0Ready_{false};
-    std::atomic<bool> f0InitAttempted_{false};
-    std::mutex f0InitMutex_;
     std::atomic<bool> noteGenReady_{false};
     std::atomic<bool> noteGenInitAttempted_{false};
     mutable std::mutex noteGenInitMutex_;
-
-    std::atomic<bool> vocoderReady_{false};
-    std::atomic<bool> vocoderInitAttempted_{false};
-    std::mutex vocoderInitMutex_;
-    VocoderModelWeight currentVocoderModelWeight_ = VocoderModelWeight::Community;
 
 public:
     // ========================================================================
@@ -384,31 +372,6 @@ public:
         juce::String lastControlCall{"none"};
         juce::int64 lastControlTimestamp{0};
         RenderCache::ChunkStats chunkStats;
-    };
-
-    struct ContentSampleRange {
-        int64_t startSample{0};
-        int64_t endSampleExclusive{0};
-
-        int64_t sampleCount() const
-        {
-            return endSampleExclusive - startSample;
-        }
-
-        bool isValid() const
-        {
-            return endSampleExclusive > startSample;
-        }
-    };
-
-    struct FrozenRenderBoundaries {
-        int64_t trueStartSample{0};
-        int64_t trueEndSample{0};
-        int64_t synthEndSample{0};
-        int64_t publishSampleCount{0};
-        int64_t synthSampleCount{0};
-        int frameCount{0};
-        int hopSize{0};
     };
 
     struct AnalysisAudioProvider {
@@ -469,10 +432,7 @@ private:
     std::atomic<int> hostTransportTimeSignatureDenominator_{4};
     HostTransportSnapshot updateHostTransportSnapshot(const juce::AudioPlayHead::PositionInfo& positionInfo);
     
-    std::shared_ptr<Ort::Env> ortEnv_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
-    std::shared_ptr<F0InferenceService> f0Service_;
-    std::unique_ptr<VocoderDomain> vocoderDomain_;
 
     // Note generator (GAME-small by default; LegacyNoteGenerator
     // when env OPENTUNE_NOTE_BACKEND=legacy or models missing). Lazily
@@ -492,7 +452,7 @@ private:
 public:
     bool isNoteGenInFlightForContent(ContentKey contentKey) const;
 private:
-    F0ExtractionService contentRefreshService_{1, 64};
+    F0ExtractionService f0ExtractionService_{1, 64};
 
     std::shared_ptr<std::atomic<bool>> contentRefreshAliveFlag_{std::make_shared<std::atomic<bool>>(true)};
 
@@ -507,8 +467,6 @@ private:
     juce::String lastExportError_;
 
     bool ensureF0Ready();
-    bool ensureVocoderReady();
-    static std::string modelPathForWeight(const std::string& modelDir, VocoderModelWeight weight);
     bool ensureNoteGeneratorReady();
 
     bool ensureServiceReady(std::atomic<bool>& readyFlag,
@@ -521,6 +479,8 @@ private:
     ContentKey ensureSourceAndCreateStandaloneClip(PreparedImport&& prepared, uint64_t& sourceId, bool& createdSource);
     void configureReferenceAnalysisService();
 
+    ContentRenderService* resolveMutableLocalContentRenderService(ContentKey key) const noexcept;
+    const ContentRenderService* resolveReadableContentRenderService(ContentKey key) const noexcept;
     AnalysisAudioProvider resolveAnalysisAudioProvider(ContentKey key);
 
     void analysisCompleted(ContentKey key,
@@ -528,66 +488,9 @@ private:
     void analysisFailed(ContentKey key,
                         const juce::String& reason) override;
 
-    // ========================================================================
-    // ⚡️ vocal-time-stretch §7 (Phase D MVP) — Stage 2 (Time-Stretch) Worker
-    //
-    // A SECOND, dedicated worker thread that owns SoundTouch re-build cycles.
-    // Why a separate thread (not extend chunkRenderWorker)?
-    //   - chunkRenderWorker is chunk-incremental (low-latency UI updates per
-    //     small region edit).  Stage 2 is clip-wide (RB Offline mode forces a
-    //     full study + process pass after every TimeGrid revision change).
-    //   - Mixing the two would force every Stage 1 chunk to wait for the slow
-    //     Stage 2 pass.  Independent threads keep Stage 1 responsive.
-    //   - Phase E will rewire Stage 2 to consume Stage 1 output (Pitch → Mix
-    //     → RB).  Phase D MVP runs RB on the source PCM directly to prove the
-    //     wiring; output sounds dry-only when TimeGrid is non-identity.
-    // ========================================================================
-    void ensureStage2WorkerStarted();
-    void stage2WorkerLoop();
-    bool runStage2RebuildForContentKey(ContentKey contentKey,
-                                       uint64_t requestPitchRev,
-                                       uint64_t requestPitchShiftRev,
-                                       uint64_t requestTimeGridRev);
-
-    // Queue entry holding both the ContentKey and the revision values at
-    // enqueue-time, so the worker can detect "stale pending" from a later edit.
-    struct Stage2RebuildEntry {
-        ContentKey contentKey;
-        uint64_t pitchRevision{0};
-        uint64_t pitchShiftRevision{0};
-        uint64_t timeGridRevision{0};
-    };
-
-    std::thread stage2WorkerThread_;
-    mutable std::mutex stage2Mutex_;
-    std::condition_variable stage2Cv_;
-    std::atomic<bool> stage2WorkerRunning_{false};
-    std::deque<Stage2RebuildEntry> stage2RebuildQueue_;
-
-    // ⚡️ vocal-time-stretch §7 (Journey-1 fix 2026-05-12) — Stage 2 in-flight
-    // status for UI progress badge.  Set when worker enters
-    // runStage2RebuildForContentKey, cleared on exit (success or failure).
-    // Editor's per-frame update reads via isStage2InFlight() and shows
-    // "时间拉伸中..." badge so the user knows their handle drag is being
-    // processed (RB R3 is ~5× realtime; ~6s for 30s clip).
-    std::atomic<bool>        stage2InFlight_{false};
-    std::atomic<ContentKey>  stage2InFlightContentKey_{};
-    std::atomic<int>         stage2QueueDepth_{0};
-
 public:
-    // Public API for triggering Stage 2 rebuilds (called from
-    // setContentTimeGrid and from tests).
-    // Uses ContentKey and the owning domain content root.
-    // Worker fetches current revisions from the store at runtime.
-    void requestStage2Rebuild(ContentKey contentKey,
-                              uint64_t pitchRevision,
-                              uint64_t pitchShiftRevision,
-                              uint64_t timeGridRevision);
+    // ⚡️ vocal-time-stretch §7 — Stage 2 worker progress query for UI feedback.
 
-    // §7 — Stage 2 worker progress query for UI feedback.
-    bool       isStage2InFlight() const noexcept { return stage2InFlight_.load(std::memory_order_acquire); }
-    ContentKey getStage2InFlightContentKey() const noexcept { return stage2InFlightContentKey_.load(std::memory_order_acquire); }
-    int        getStage2QueueDepth() const noexcept { return stage2QueueDepth_.load(std::memory_order_acquire); }
 
 private:
 
@@ -613,10 +516,10 @@ public:
     /** @brief 切换声码器模型权重。停worker→清cache→懒重建vocoder。调用方负责持久化偏好。 */
     void setVocoderModelWeight(VocoderModelWeight weight);
 
-    bool isInferenceReady() const { return f0Ready_.load(); }
+    bool isInferenceReady() const { return ProcessF0Runtime::getInstance().isReady(); }
 
-    F0InferenceService* getF0Service() const { return f0Service_.get(); }
-    VocoderDomain* getVocoderDomain() const { return vocoderDomain_.get(); }
+    F0InferenceService* getF0Service() const { return ProcessF0Runtime::getInstance().getF0Service().get(); }
+    VocoderDomain* getVocoderDomain() const { return ProcessRenderRuntime::getInstance().getVocoderDomain(); }
     SourceStore* getSourceStore() noexcept { return sourceStore_.get(); }
     const SourceStore* getSourceStore() const noexcept { return sourceStore_.get(); }
     ContentRenderService* getContentRenderService() noexcept { return contentRenderService_.get(); }
@@ -635,15 +538,6 @@ public:
     void didBindToARA() noexcept override;
 #endif
 
-    static bool freezeRenderBoundaries(const ContentSampleRange& contentRange,
-                                       int64_t startSample,
-                                       int64_t endSampleExclusive,
-                                       int hopSize,
-                                       FrozenRenderBoundaries& out);
-    static bool preparePublishedAudioFromSynthesis(const FrozenRenderBoundaries& boundaries,
-                                                   const std::vector<float>& synthesizedAudio,
-                                                   std::vector<float>& publishedAudio);
-    
     // Content and placement access
     uint64_t getPlacementId(int trackId, int placementIndex) const;
     int findPlacementIndexById(int trackId, uint64_t placementId) const;
@@ -725,8 +619,7 @@ public:
                                                    int endFrameExclusive,
                                                    float retuneSpeed,
                                                    float vibratoDepth,
-                                                   float vibratoRate,
-                                                   double audioSampleRate);
+                                                   float vibratoRate);
 public:
 
 #if defined(OPENTUNE_TEST_BUILD)
@@ -749,10 +642,9 @@ public:
     bool getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const;
     bool extractImportedClipOriginalF0(const EditableContentSnapshot& snap,
                                        F0ExtractionService::Result& out,
-                                       std::string& errorMessage);
+                                        std::string& errorMessage);
     ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(ContentKey key);
 
-    // ⚡️ vocal-time-stretch §7 — Stage2 rebuild queue control
     bool exportPlacementAudio(int trackId, int placementIndex, const juce::File& file);
     // 导出整个轨道的音频（时长以最晚Clip结束为准）
     bool exportTrackAudio(int trackId, const juce::File& file);
@@ -763,7 +655,6 @@ public:
     juce::String getLastExportError() const { return lastExportError_; }
 
     // Rendering & Buffering
-    void processChunkRenderJob(RenderJob& job);
 
     // Transport control API
     void setPlaying(bool playing);
@@ -841,7 +732,6 @@ private:
     uint64_t                        logEventReadGeneration_{0}; // message-thread only
 
     AppPreferences* appPreferences_{nullptr};
-    std::unique_ptr<AutoTunePitchShifter> autoTuneShifter_;  ///< 轻量修音 cycle-resampling pitch-shift（懒初始化）
 
     // Hard-cut render mutation request primitive. This is the only path
     // that builds RenderJob and enqueues into ContentRenderService; every other

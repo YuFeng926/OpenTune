@@ -1,5 +1,6 @@
 #include "ContentRenderService.h"
 #include "RenderChunkPlanner.h"
+#include "Stage2TimeStretchRebuilder.h"
 #include "../Inference/SoundTouchStretcher.h"
 
 namespace OpenTune {
@@ -7,6 +8,21 @@ namespace OpenTune {
 ContentRenderService::ContentRenderService() = default;
 
 ContentRenderService::~ContentRenderService() = default;
+
+void ContentRenderService::requestStage2Rebuild(Stage2Request request,
+                                                  std::shared_ptr<const EditableContentSnapshot> ownerSnap)
+{
+    // Stage2 rebuild runs synchronously on the caller's thread.  Callers that need
+    // off-thread / queued execution (e.g. the processor's Stage2Worker) must wrap this
+    // entry in their own threading primitive.
+    Stage2TimeStretchRebuilder::Request rebuildRequest;
+    rebuildRequest.contentKey = request.contentKey;
+    rebuildRequest.pitchRevision = request.pitchRevision;
+    rebuildRequest.pitchShiftRevision = request.pitchShiftRevision;
+    rebuildRequest.timeGridRevision = request.timeGridRevision;
+
+    Stage2TimeStretchRebuilder::rebuild(*this, rebuildRequest, std::move(ownerSnap));
+}
 
 // ========================================
 // PlaybackSource facade
