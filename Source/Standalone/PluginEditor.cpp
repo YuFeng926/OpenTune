@@ -2075,6 +2075,7 @@ void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
         }
         safeThis->syncRecentProjectsToMenu();
         safeThis->updateTitleWithProjectPath();
+        safeThis->refreshAllUIFromProject();
     });
 }
 
@@ -2099,19 +2100,31 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
                     { { juce::String::fromUTF8(u8"\u8986\u76D6"), [safeThis, file] {
                             if (safeThis == nullptr) return;
                             if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
-                            auto result = safeThis->projectSession_.saveProjectAs(file);
-                            if (!result.ok()) {
-                                ConfirmDialogContent::launch(
-                                    new ConfirmDialogContent(
-                                        juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
-                                        result.error().fullMessage(),
-                                        { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                                    safeThis.getComponent());
-                                return;
-                            }
-                            safeThis->syncRecentProjectsToMenu();
-                            safeThis->updateTitleWithProjectPath();
-                            safeThis->launchOpenProjectChooser();
+                            safeThis->projectSession_.setCurrentProjectFile(file);
+                            auto task = safeThis->projectSession_.prepareSave();
+                            const uint64_t gen = safeThis->projectSession_.getDirtyGeneration();
+                            safeThis->saveWorker_ = std::thread([safeThis, task = std::move(task), gen, file]() mutable {
+                                auto result = ProjectSession::executeSaveToFile(task);
+                                juce::MessageManager::callAsync([safeThis, result, gen, file]() {
+                                    if (safeThis == nullptr) return;
+                                    if (!result.ok()) {
+                                        ConfirmDialogContent::launch(
+                                            new ConfirmDialogContent(
+                                                juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
+                                                result.error().fullMessage(),
+                                                { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                                            safeThis.getComponent());
+                                        return;
+                                    }
+                                    if (safeThis->projectSession_.getDirtyGeneration() == gen)
+                                        safeThis->projectSession_.clearDirty();
+                                    safeThis->projectSession_.pushRecentProject(file);
+                                    safeThis->syncRecentProjectsToMenu();
+                                    safeThis->updateTitleWithProjectPath();
+                                    safeThis->refreshAllUIFromProject();
+                                    safeThis->launchOpenProjectChooser();
+                                });
+                            });
                         }, true },
                       { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
                 safeThis.getComponent());
@@ -2119,21 +2132,31 @@ void OpenTuneAudioProcessorEditor::saveProjectAsThenOpenProject()
         }
 
         if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
-        auto result = safeThis->projectSession_.saveProjectAs(file);
-        if (!result.ok()) {
-            ConfirmDialogContent::launch(
-                new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
-                    result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                safeThis.getComponent());
-            return;
-        }
-        safeThis->syncRecentProjectsToMenu();
-        safeThis->updateTitleWithProjectPath();
-
-        // Chain: after save-as completes, continue to open project
-        safeThis->launchOpenProjectChooser();
+        safeThis->projectSession_.setCurrentProjectFile(file);
+        auto task = safeThis->projectSession_.prepareSave();
+        const uint64_t gen = safeThis->projectSession_.getDirtyGeneration();
+        safeThis->saveWorker_ = std::thread([safeThis, task = std::move(task), gen, file]() mutable {
+            auto result = ProjectSession::executeSaveToFile(task);
+            juce::MessageManager::callAsync([safeThis, result, gen, file]() {
+                if (safeThis == nullptr) return;
+                if (!result.ok()) {
+                    ConfirmDialogContent::launch(
+                        new ConfirmDialogContent(
+                            juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
+                            result.error().fullMessage(),
+                            { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                        safeThis.getComponent());
+                    return;
+                }
+                if (safeThis->projectSession_.getDirtyGeneration() == gen)
+                    safeThis->projectSession_.clearDirty();
+                safeThis->projectSession_.pushRecentProject(file);
+                safeThis->syncRecentProjectsToMenu();
+                safeThis->updateTitleWithProjectPath();
+                safeThis->refreshAllUIFromProject();
+                safeThis->launchOpenProjectChooser();
+            });
+        });
     });
 }
 
@@ -2496,11 +2519,13 @@ void OpenTuneAudioProcessorEditor::trackSelected(int trackId)
 void OpenTuneAudioProcessorEditor::trackMuteToggled(int trackId, bool muted)
 {
     setStandaloneTrackMuted(processorRef_, trackId, muted);
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::trackSoloToggled(int trackId, bool solo)
 {
     setStandaloneTrackSolo(processorRef_, trackId, solo);
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::trackVolumeChanged(int trackId, float volume)
@@ -2509,6 +2534,7 @@ void OpenTuneAudioProcessorEditor::trackVolumeChanged(int trackId, float volume)
     
     setStandaloneTrackVolume(processorRef_, trackId, volume);
     lastTrackVolumes_[static_cast<size_t>(trackId)] = volume;
+    projectSession_.markDirty();
 }
 
 // Y-axis zoom sync: when TrackPanel or ArrangementView zooms via Ctrl+scrollwheel, sync the other component
@@ -2596,6 +2622,7 @@ void OpenTuneAudioProcessorEditor::trackAddRequested()
     trackPanel_.setVisibleTrackCount(current + 1);
     arrangementView_.setVisibleTrackCount(current + 1);
     arrangementView_.repaint();
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::trackDuplicateRequested(int trackId)
@@ -2631,6 +2658,7 @@ void OpenTuneAudioProcessorEditor::trackDuplicateRequested(int trackId)
     arrangementView_.setVisibleTrackCount(visibleCount + 1);
     trackPanel_.setTrackColour(targetSlot, arrangement->getTrackColour(trackId));
     arrangementView_.repaint();
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::trackDeleteRequested(int trackId)
@@ -2662,6 +2690,7 @@ void OpenTuneAudioProcessorEditor::trackDeleteRequested(int trackId)
     trackPanel_.setVisibleTrackCount(newVisibleCount);
     arrangementView_.setVisibleTrackCount(newVisibleCount);
     arrangementView_.repaint();
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::trackColorRandomizeRequested(int trackId)
@@ -2677,6 +2706,7 @@ void OpenTuneAudioProcessorEditor::trackColorRandomizeRequested(int trackId)
     arrangement->setTrackColour(trackId, newColour);
     trackPanel_.setTrackColour(trackId, newColour);
     arrangementView_.repaint();
+    projectSession_.markDirty();
 }
 
 void OpenTuneAudioProcessorEditor::placementSelectionChanged(int trackId, uint64_t placementId)
@@ -2917,18 +2947,29 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
                     { { juce::String::fromUTF8(u8"\u8986\u76D6"), [safeThis, file] {
                             if (safeThis == nullptr) return;
                             if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
-                            auto result = safeThis->projectSession_.saveProjectAs(file);
-                            if (!result.ok()) {
-                                ConfirmDialogContent::launch(
-                                    new ConfirmDialogContent(
-                                        juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
-                                        result.error().fullMessage(),
-                                        { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                                    safeThis.getComponent());
-                                return;
-                            }
-                            safeThis->syncRecentProjectsToMenu();
-                            safeThis->updateTitleWithProjectPath();
+                            safeThis->projectSession_.setCurrentProjectFile(file);
+                            auto task = safeThis->projectSession_.prepareSave();
+                            const uint64_t gen = safeThis->projectSession_.getDirtyGeneration();
+                            safeThis->saveWorker_ = std::thread([safeThis, task = std::move(task), gen, file]() mutable {
+                                auto result = ProjectSession::executeSaveToFile(task);
+                                juce::MessageManager::callAsync([safeThis, result, gen, file]() {
+                                    if (safeThis == nullptr) return;
+                                    if (!result.ok()) {
+                                        ConfirmDialogContent::launch(
+                                            new ConfirmDialogContent(
+                                                juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
+                                                result.error().fullMessage(),
+                                                { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                                            safeThis.getComponent());
+                                        return;
+                                    }
+                                    if (safeThis->projectSession_.getDirtyGeneration() == gen)
+                                        safeThis->projectSession_.clearDirty();
+                                    safeThis->projectSession_.pushRecentProject(file);
+                                    safeThis->syncRecentProjectsToMenu();
+                                    safeThis->updateTitleWithProjectPath();
+                                });
+                            });
                         }, true },
                       { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
                 safeThis.getComponent());
@@ -2936,18 +2977,29 @@ void OpenTuneAudioProcessorEditor::saveProjectAsRequested()
         }
 
         if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
-        auto result = safeThis->projectSession_.saveProjectAs(file);
-        if (!result.ok()) {
-            ConfirmDialogContent::launch(
-                new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
-                    result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                safeThis.getComponent());
-            return;
-        }
-        safeThis->syncRecentProjectsToMenu();
-        safeThis->updateTitleWithProjectPath();
+        safeThis->projectSession_.setCurrentProjectFile(file);
+        auto task = safeThis->projectSession_.prepareSave();
+        const uint64_t gen = safeThis->projectSession_.getDirtyGeneration();
+        safeThis->saveWorker_ = std::thread([safeThis, task = std::move(task), gen, file]() mutable {
+            auto result = ProjectSession::executeSaveToFile(task);
+            juce::MessageManager::callAsync([safeThis, result, gen, file]() {
+                if (safeThis == nullptr) return;
+                if (!result.ok()) {
+                    ConfirmDialogContent::launch(
+                        new ConfirmDialogContent(
+                            juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
+                            result.error().fullMessage(),
+                            { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                        safeThis.getComponent());
+                    return;
+                }
+                if (safeThis->projectSession_.getDirtyGeneration() == gen)
+                    safeThis->projectSession_.clearDirty();
+                safeThis->projectSession_.pushRecentProject(file);
+                safeThis->syncRecentProjectsToMenu();
+                safeThis->updateTitleWithProjectPath();
+            });
+        });
     });
 }
 
@@ -2968,6 +3020,7 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
         }
         syncRecentProjectsToMenu();
         updateTitleWithProjectPath();
+        refreshAllUIFromProject();
         return;
     }
 
@@ -3017,13 +3070,14 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                                     safeThis->projectSession_.clearRecentProjects();
                                     return;
                                 }
-                                safeThis->syncRecentProjectsToMenu();
-                                safeThis->updateTitleWithProjectPath();
-                            });
-                        });
-                    }
-                }, true },
-              { juce::String("Do Not Save"), [safeThis, file] {
+                                 safeThis->syncRecentProjectsToMenu();
+                                 safeThis->updateTitleWithProjectPath();
+                                 safeThis->refreshAllUIFromProject();
+                             });
+                         });
+                     }
+                 }, true },
+               { juce::String("Do Not Save"), [safeThis, file] {
                     if (safeThis == nullptr) return;
                     if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
                     auto openResult = safeThis->projectSession_.openProject(file);
@@ -3039,6 +3093,7 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                     }
                     safeThis->syncRecentProjectsToMenu();
                     safeThis->updateTitleWithProjectPath();
+                    safeThis->refreshAllUIFromProject();
                 }, false },
               { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
         this);
@@ -3066,6 +3121,31 @@ void OpenTuneAudioProcessorEditor::syncRecentProjectsToMenu()
 {
     const auto files = projectSession_.getRecentProjects();
     menuBar_.setRecentProjects(files);
+}
+
+void OpenTuneAudioProcessorEditor::refreshAllUIFromProject()
+{
+    // Sync track panel with restored arrangement
+    syncTrackColorsToPanel();
+    for (int i = 0; i < OpenTuneAudioProcessor::MAX_TRACKS; ++i) {
+        trackPanel_.setTrackMuted(i, getStandaloneTrackMuted(processorRef_, i));
+        trackPanel_.setTrackSolo(i, getStandaloneTrackSolo(processorRef_, i));
+        trackPanel_.setTrackVolume(i, getStandaloneTrackVolume(processorRef_, i));
+    }
+    const int visibleCount = trackPanel_.getVisibleTrackCount();
+    trackPanel_.setVisibleTrackCount(visibleCount);
+
+    // Sync arrangement view
+    arrangementView_.setVisibleTrackCount(visibleCount);
+    arrangementView_.repaint();
+
+    // Sync piano roll to current selection
+    const int activeTrack = getStandaloneActiveTrack(processorRef_);
+    const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
+    syncPianoRollFromPlacementSelection(activeTrack, placementIndex);
+
+    // Clear selection state
+    pianoRoll_.requestContentRedraw();
 }
 
 // ============================================================================

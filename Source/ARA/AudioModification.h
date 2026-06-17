@@ -38,6 +38,7 @@ struct AudioModification
     void updateIdentity(juce::ARAAudioModification* modification);
     void attachSource(const AudioSource& source);
     void resetContent() noexcept;
+    void invalidateDerivedContent() noexcept;
     bool isRenderable() const noexcept;
 
     // 内容辅助

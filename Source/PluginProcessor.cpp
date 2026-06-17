@@ -1442,6 +1442,7 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
 
     if (auto* dc = getDocumentController())
     {
+        dc->setAsyncWorkThreadPool(&noteGeneratorPool_);
         ensureF0Ready();
 
         // The DC installs its own lease on its CRS in its constructor
@@ -2873,6 +2874,9 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
         return false;
     }
 
+    // 等待 RenderWorker 完成当前渲染，确保导出最新数据
+    contentRenderService_->drainRenderWorker();
+
     PlaybackReadSource source;
     if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.canRead()) {
         lastExportError_ = "Placement audio is unavailable";
@@ -2922,6 +2926,9 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         lastExportError_ = "轨道 " + juce::String(trackId + 1) + " 没有音频片段";
         return false;
     }
+
+    // 等待 RenderWorker 完成当前渲染，确保导出最新数据
+    contentRenderService_->drainRenderWorker();
 
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
     int64_t totalLen = 0;
@@ -2981,6 +2988,9 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
     if (playbackSnapshot == nullptr) {
         return false;
     }
+
+    // 等待 RenderWorker 完成当前渲染，确保导出最新数据
+    contentRenderService_->drainRenderWorker();
 
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
     int64_t totalLen = 0;
@@ -3960,10 +3970,8 @@ bool OpenTuneAudioProcessor::setContentNotes(ContentKey key, std::vector<Note> n
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
-            if (!mod) return false;
-            mod->applyNotes(normalizeStoredNotes(notes));
-            ok = true;
+            if (!dc) return false;
+            ok = dc->applyNotesToModification(key, normalizeStoredNotes(std::move(notes)));
             break;
         }
 #else
@@ -4023,10 +4031,9 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
-            if (!mod) return false;
-            mod->applyNotes(normalizeStoredNotes(notes));
-            mod->applyPitchCurve(std::move(newCurve));
+            if (!dc) return false;
+            if (!dc->applyNotesToModification(key, normalizeStoredNotes(std::move(notes)))) return false;
+            if (newCurve) dc->applyPitchCurveToModification(key, std::move(newCurve));
             ok = true;
             break;
         }
@@ -4062,10 +4069,8 @@ bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
-            if (!mod) return false;
-            mod->applyPitchCurve(std::move(curve));
-            return true;
+            if (!dc) return false;
+            return dc->applyPitchCurveToModification(key, std::move(curve));
         }
 #else
         case DomainKind::ARAAudioModification:
@@ -4106,10 +4111,8 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
-            if (!mod) return false;
-            mod->applyTimeGrid(grid);
-            ok = true;
+            if (!dc) return false;
+            ok = dc->applyTimeGridToModification(key, std::move(grid));
             break;
         }
 #else
@@ -4142,10 +4145,8 @@ bool OpenTuneAudioProcessor::setContentDetectedKey(ContentKey key, const Detecte
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
-            if (!mod) return false;
-            mod->applyDetectedKey(detectedKey);
-            return true;
+            if (!dc) return false;
+            return dc->applyDetectedKeyToModification(key, detectedKey);
         }
 #else
         case DomainKind::ARAAudioModification:
@@ -4172,10 +4173,8 @@ bool OpenTuneAudioProcessor::setContentReferenceFeatures(ContentKey key,
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
-            if (!mod) return false;
-            mod->applyReferenceFeatures(features);
-            return true;
+            if (!dc) return false;
+            return dc->applyReferenceFeaturesToModification(key, features);
         }
 #else
         case DomainKind::ARAAudioModification:
@@ -4204,10 +4203,8 @@ bool OpenTuneAudioProcessor::setContentOriginalF0State(ContentKey key, OriginalF
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
-            if (!mod) return false;
-            mod->applyOriginalF0State(state);
-            return true;
+            if (!dc) return false;
+            return dc->applyOriginalF0StateToModification(key, state);
         }
 #else
         case DomainKind::ARAAudioModification:
@@ -4239,10 +4236,8 @@ bool OpenTuneAudioProcessor::setContentPitchShiftSettings(ContentKey key,
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
-            if (!mod) return false;
-            mod->applyPitchShift(settings);
-            ok = true;
+            if (!dc) return false;
+            ok = dc->applyPitchShiftToModification(key, settings);
             break;
         }
 #else
@@ -4315,10 +4310,9 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            auto* mod = dc ? dc->findAudioModificationByContentKey(key) : nullptr;
-            if (!mod) return false;
-            mod->applyNotes(mergedNotes);
-            mod->applyPitchCurve(std::move(derivedCurve));
+            if (!dc) return false;
+            if (!dc->applyNotesToModification(key, std::move(mergedNotes))) return false;
+            if (derivedCurve) dc->applyPitchCurveToModification(key, std::move(derivedCurve));
             ok = true;
             break;
         }

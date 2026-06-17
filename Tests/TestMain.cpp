@@ -249,9 +249,9 @@ CheckResult araSampleAccessAndSourceUpdateMaintainCRS()
                     "sample access enable must rebuild CRS for restored modifications.");
 
     if (!contains(sourceUpdate, "removeCRSArtifactsForModification(modification)")
-        || !contains(sourceUpdate, "modification.resetContent()"))
+        || !contains(sourceUpdate, "modification.invalidateDerivedContent()"))
         return fail("araSampleAccessAndSourceUpdateMaintainCRS",
-                    "AudioSource content updates must drop stale CRS artifacts before resetting modification state.");
+                    "AudioSource content updates must drop stale CRS artifacts before invalidating derived content (preserving user edits).");
 
     const auto removeMissing = missingTokens(remove, {
         "removePlaybackSource",

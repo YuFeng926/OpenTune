@@ -280,6 +280,25 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     syncSharedAppPreferences();
     updateRegularCaptureSessionCallback();
 
+    // Drive non-ARA capture state machine: Pending -> Processing -> Edited
+    if (auto* session = processorRef_.getCaptureSession()) {
+        session->tick();
+
+        // Sync record button visual state
+        using OpenTune::Capture::SessionState;
+        switch (session->getGlobalState()) {
+            case SessionState::Idle:
+                transportBar_.setRecordButtonState(RecordButtonState::Idle);
+                break;
+            case SessionState::HasCapturing:
+                transportBar_.setRecordButtonState(RecordButtonState::Capturing);
+                break;
+            case SessionState::HasProcessing:
+                transportBar_.setRecordButtonState(RecordButtonState::Processing);
+                break;
+        }
+    }
+
     syncParameterPanelFromSelection();
 
     if (pianoRoll_.isShowing()) {
@@ -859,24 +878,27 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         return;
     }
 
-    const int refreshed = dc->refreshAllAudioModifications();
-    if (refreshed == 0) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                               "Read Audio",
-                                               "Audio regions could not be processed.");
-        return;
-    }
+    dc->refreshAllAudioModificationsAsync([this, regionCount = static_cast<int>(allRegions.size())](int refreshed) {
+        if (refreshed == -1) return; // cancelled
 
-    AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
-        + " AudioModification(s) from " + juce::String(static_cast<int>(allRegions.size()))
-        + " playback region(s)");
+        if (refreshed == 0) {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                   "Read Audio",
+                                                   "Audio regions could not be processed.");
+            return;
+        }
 
-    waitingForAraContent_ = true;
-    araWaitStartMs_ = juce::Time::getApproximateMillisecondCounter();
-    autoRenderOverlay_.setMessageText(
-        juce::String::fromUTF8("\xe9\x9f\xb3\xe9\xa2\x91\xe5\xa4\x84\xe7\x90\x86\xe4\xb8\xad"),
-        "Audio data is being processed. The region will appear shortly.");
-    autoRenderOverlay_.setVisible(true);
+        AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
+            + " AudioModification(s) from " + juce::String(regionCount)
+            + " playback region(s)");
+
+        waitingForAraContent_ = true;
+        araWaitStartMs_ = juce::Time::getApproximateMillisecondCounter();
+        autoRenderOverlay_.setMessageText(
+            juce::String::fromUTF8("\xe9\x9f\xb3\xe9\xa2\x91\xe5\xa4\x84\xe7\x90\x86\xe4\xb8\xad"),
+            "Audio data is being processed. The region will appear shortly.");
+        autoRenderOverlay_.setVisible(true);
+    });
 #endif
 }
 
@@ -1094,10 +1116,21 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     std::shared_ptr<PitchCurve> curve;
     DetectedKey detectedKey;
     if (sync.activeContentKey.isValid()) {
-        auto snap = processorRef_.getContentSnapshot(sync.activeContentKey);
-        syncBuffer = snap ? snap->audioBuffer : nullptr;
-        curve = snap ? snap->pitchCurve : nullptr;
-        detectedKey = snap ? snap->detectedKey : DetectedKey{};
+#if JucePlugin_Enable_ARA
+        if (sync.activeContentKey.domainKind == DomainKind::ARAAudioModification) {
+            if (const auto* dc = processorRef_.getDocumentController()) {
+                syncBuffer = dc->readAudioBuffer(sync.activeContentKey);
+                curve = dc->readPitchCurve(sync.activeContentKey);
+                detectedKey = dc->readDetectedKey(sync.activeContentKey);
+            }
+        } else
+#endif
+        {
+            auto snap = processorRef_.getContentSnapshot(sync.activeContentKey);
+            syncBuffer = snap ? snap->audioBuffer : nullptr;
+            curve = snap ? snap->pitchCurve : nullptr;
+            detectedKey = snap ? snap->detectedKey : DetectedKey{};
+        }
     }
 
     if (!sync.hasActiveContent()

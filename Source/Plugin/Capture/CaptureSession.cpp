@@ -205,28 +205,14 @@ void CaptureSession::processBlock(juce::AudioBuffer<float>& buffer,
     // Any legitimate finite float (regardless of magnitude) passes through unchanged
     // — the user's recording is preserved as-is. NaN/Inf would otherwise propagate
     // through downstream FFT / SIMD lanes and corrupt the entire frame.
-    int zeroedSamplesAcrossChannels = 0;
-    int firstZeroedChannel = -1;
     for (int ch = 0; ch < copyChannels; ++ch) {
         float* p = dryScratch_.getWritePointer(ch);
-        int chZeroed = 0;
         for (int s = 0; s < numSamples; ++s) {
             const float v = p[s];
             if (!std::isfinite(v)) {
                 p[s] = 0.0f;
-                ++chZeroed;
             }
         }
-        if (chZeroed > 0) {
-            zeroedSamplesAcrossChannels += chZeroed;
-            if (firstZeroedChannel < 0) firstZeroedChannel = ch;
-        }
-    }
-    if (zeroedSamplesAcrossChannels > 0) {
-        // Audio-thread direct call to ChannelLayoutLog is allowed: AppLogger::log is
-        // thread-safe (uses juce::Logger which serializes via FileLogger). The 1Hz
-        // throttle inside logNumericGuard prevents log floods.
-        ChannelLayoutLog::logNumericGuard(zeroedSamplesAcrossChannels, firstZeroedChannel);
     }
 
     // Detect "transport is running" by observing host_t advance across blocks.

@@ -40,12 +40,11 @@ void RenderWorker::attachExecutionLease(RenderExecutionLease lease)
 
 void RenderWorker::detachExecutionLease(void* owner)
 {
-    if (lease_.owner != owner)
-        return;
-
     drain();
     {
         std::lock_guard<std::mutex> lk(mutex_);
+        if (lease_.owner != owner)
+            return;
         lease_ = RenderExecutionLease{};
     }
 }
@@ -132,6 +131,7 @@ void RenderWorker::loop()
     while (!stopping_.load())
     {
         RenderJob job;
+        RenderExecutionLease leaseCopy;
         bool hasJob = false;
 
         {
@@ -147,12 +147,13 @@ void RenderWorker::loop()
             {
                 job = std::move(queue_.front());
                 queue_.pop_front();
+                leaseCopy = lease_;
                 hasJob = true;
                 ++inFlight_;
             }
         }
 
-        if (hasJob && lease_.isValid())
+        if (hasJob && leaseCopy.isValid())
         {
             if (job.renderCache != nullptr)
             {
@@ -165,12 +166,12 @@ void RenderWorker::loop()
                     job.endSampleExclusive = pendingJob.endSampleExclusive;
                     job.targetRevision = pendingJob.targetRevision;
                     job.renderRevision = pendingJob.targetRevision;
-                    lease_.renderJobCallback(job);
+                    leaseCopy.renderJobCallback(job);
                 }
             }
             else
             {
-                lease_.renderJobCallback(job);
+                leaseCopy.renderJobCallback(job);
             }
 
             std::lock_guard<std::mutex> lk(mutex_);
