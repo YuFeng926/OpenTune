@@ -991,6 +991,11 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             requestFullContentRender(key, FullRenderReason::CaptureRestore);
         };
 
+        bindings.onRenderComplete = [this](ContentKey key) {
+            if (auto* session = getCaptureSession())
+                session->onRenderComplete(key);
+        };
+
         captureSession_ = std::make_unique<Capture::CaptureSession>(std::move(bindings));
         AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
@@ -2691,7 +2696,7 @@ void OpenTuneAudioProcessor::requestFullContentRender(ContentKey key, FullRender
     juce::ignoreUnused(reason);
     auto snap = getContentSnapshot(key);
     if (!snap) return;
-    const double durationSeconds = snap->sourceWindow.durationSeconds();
+    const double durationSeconds = contentDurationSeconds(*snap);
     if (durationSeconds <= 0.0) return;
     requestRenderForLocalMutationRange(key, 0.0, durationSeconds);
 }
@@ -2751,6 +2756,11 @@ void OpenTuneAudioProcessor::handleStage1ChunkPublished(ContentKey key, uint64_t
         return;
 
     refreshCRSMetadata(key);
+    
+    // Notify capture session that render is complete for this segment
+    if (auto* session = getCaptureSession())
+        session->onRenderComplete(key);
+    
     if (snap->timeGrid != nullptr && !snap->timeGrid->isIdentity())
     {
         // Use CRS-owned Stage2 rebuild API

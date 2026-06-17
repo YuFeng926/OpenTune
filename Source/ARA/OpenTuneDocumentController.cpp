@@ -57,11 +57,11 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
-    // 停止渲染服务：排空队列后析构，防止 chunkPublished 回调访问已析构的 DC
+    // 停止渲染服务：先排空队列再停止，防止 chunkPublished 回调访问已析构的 DC
     if (contentRenderService_)
     {
-        contentRenderService_->pauseRenderWorker();
         contentRenderService_->drainRenderWorker();
+        contentRenderService_->pauseRenderWorker();
     }
 
     // 停止 F0 提取服务
@@ -1371,17 +1371,35 @@ bool OpenTuneDocumentController::rebuildCRSFromSource(AudioModification& modific
     if (windowSamples <= 0)
         return false;
 
-    const int readSamples = static_cast<int>(std::min<int64_t>(windowSamples, std::numeric_limits<int>::max()));
-    juce::AudioBuffer<float> playableAccum(numChannels, readSamples);
+    juce::AudioBuffer<float> playableAccum(numChannels, static_cast<int>(windowSamples));
     playableAccum.clear();
 
-    // Read from AudioSource
-    std::vector<void*> channelPointers(static_cast<size_t>(numChannels));
-    for (int ch = 0; ch < numChannels; ++ch)
-        channelPointers[static_cast<size_t>(ch)] = playableAccum.getWritePointer(ch);
+    // Read from AudioSource in chunks to handle long audio files
+    constexpr int64_t kChunkSamples = 32768;
+    {
+        int64_t readOffset = sourceStartSample;
+        int64_t accumWriteOffset = 0;
+        int64_t remaining = windowSamples;
 
-    if (!readerLease->readAudioSamples(sourceStartSample, readSamples, channelPointers.data()))
-        return false;
+        while (remaining > 0)
+        {
+            const int64_t chunkSamples = std::min(kChunkSamples, remaining);
+            const int accumOffset = static_cast<int>(accumWriteOffset);
+
+            std::vector<void*> channelPointers(static_cast<size_t>(numChannels));
+            for (int ch = 0; ch < numChannels; ++ch)
+                channelPointers[static_cast<size_t>(ch)] = playableAccum.getWritePointer(ch, accumOffset);
+
+            if (!readerLease->readAudioSamples(readOffset,
+                                                 static_cast<int>(chunkSamples),
+                                                 channelPointers.data()))
+                return false;
+
+            readOffset += chunkSamples;
+            accumWriteOffset += chunkSamples;
+            remaining -= chunkSamples;
+        }
+    }
 
     // Resample to 44.1kHz if needed
     juce::AudioBuffer<float> storedBuffer;
@@ -1948,6 +1966,11 @@ bool OpenTuneDocumentController::applyNotesToModification(const ContentKey& key,
     auto* mod = findAudioModificationByContentKey(key);
     if (!mod) return false;
     mod->applyNotes(std::move(notes));
+    
+    // Notify ARA host of content change for cache/save state invalidation
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+    
     refreshRegisteredRenderers(publishModelChange());
     return true;
 }
@@ -1957,6 +1980,11 @@ bool OpenTuneDocumentController::applyPitchCurveToModification(const ContentKey&
     auto* mod = findAudioModificationByContentKey(key);
     if (!mod) return false;
     mod->applyPitchCurve(std::move(curve));
+    
+    // Notify ARA host of content change for cache/save state invalidation
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+    
     refreshRegisteredRenderers(publishModelChange());
     return true;
 }
@@ -1966,6 +1994,11 @@ bool OpenTuneDocumentController::applyTimeGridToModification(const ContentKey& k
     auto* mod = findAudioModificationByContentKey(key);
     if (!mod) return false;
     mod->applyTimeGrid(std::move(grid));
+    
+    // Notify ARA host of content change for cache/save state invalidation
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+    
     refreshRegisteredRenderers(publishModelChange());
     return true;
 }
@@ -1975,6 +2008,11 @@ bool OpenTuneDocumentController::applyPitchShiftToModification(const ContentKey&
     auto* mod = findAudioModificationByContentKey(key);
     if (!mod) return false;
     mod->applyPitchShift(settings);
+    
+    // Notify ARA host of content change for cache/save state invalidation
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+    
     refreshRegisteredRenderers(publishModelChange());
     return true;
 }
@@ -1984,6 +2022,11 @@ bool OpenTuneDocumentController::applyDetectedKeyToModification(const ContentKey
     auto* mod = findAudioModificationByContentKey(key);
     if (!mod) return false;
     mod->applyDetectedKey(detectedKey);
+    
+    // Notify ARA host of content change for cache/save state invalidation
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+    
     refreshRegisteredRenderers(publishModelChange());
     return true;
 }
@@ -1993,6 +2036,11 @@ bool OpenTuneDocumentController::applyReferenceFeaturesToModification(const Cont
     auto* mod = findAudioModificationByContentKey(key);
     if (!mod) return false;
     mod->applyReferenceFeatures(features);
+    
+    // Notify ARA host of content change for cache/save state invalidation
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+    
     refreshRegisteredRenderers(publishModelChange());
     return true;
 }
@@ -2002,6 +2050,11 @@ bool OpenTuneDocumentController::applyOriginalF0StateToModification(const Conten
     auto* mod = findAudioModificationByContentKey(key);
     if (!mod) return false;
     mod->applyOriginalF0State(state);
+    
+    // Notify ARA host of content change for cache/save state invalidation
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+    
     refreshRegisteredRenderers(publishModelChange());
     return true;
 }

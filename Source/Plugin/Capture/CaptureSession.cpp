@@ -375,7 +375,6 @@ void CaptureSession::tick()
     // 3. Read Processing segments' F0 state directly from content owner.
     // No reentrant callback — tick() owns the lock while scanning.
     {
-        std::vector<ContentKey> readyKeys;
         std::vector<ContentKey> failedKeys;
 
         {
@@ -404,7 +403,12 @@ void CaptureSession::tick()
                 }
 
                 if (f0State == OriginalF0State::Ready) {
-                    readyKeys.push_back(seg.contentKey);
+                    // F0 Ready: trigger render, wait for onRenderComplete callback
+                    // Do NOT set Edited here; wait for render completion
+                    if (bindings_.requestFullRender) {
+                        bindings_.requestFullRender(seg.contentKey);
+                    }
+                    anyChange = true;
                 }
 
                 ++it;
@@ -414,11 +418,6 @@ void CaptureSession::tick()
         if (bindings_.retireSegment) {
             for (const auto& key : failedKeys)
                 bindings_.retireSegment(key);
-        }
-
-        for (const auto& key : readyKeys) {
-            onSegmentRenderingComplete(key);
-            anyChange = true;
         }
     }
 
@@ -456,6 +455,7 @@ void CaptureSession::tick()
 
 void CaptureSession::onSegmentRenderingComplete(ContentKey segmentContentKey)
 {
+    // Legacy method - kept for API compatibility but F0 Ready path now uses onRenderComplete
     CaptureSegment* edited = nullptr;
     {
         std::lock_guard<std::mutex> lock(mutableMutex_);
@@ -476,6 +476,33 @@ void CaptureSession::onSegmentRenderingComplete(ContentKey segmentContentKey)
                                           edited->captureChannels,
                                           edited->durationSeconds);
 
+    runCompaction(*edited);
+    publishSegmentsView();
+
+    if (activeSegmentChanged_)
+        activeSegmentChanged_(segmentContentKey);
+}
+
+void CaptureSession::onRenderComplete(ContentKey segmentContentKey)
+{
+    CaptureSegment* edited = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutableMutex_);
+        for (auto& seg : mutableSegments_) {
+            if (seg->contentKey == segmentContentKey) {
+                seg->state.store(SegmentState::Edited, std::memory_order_release);
+                activeDisplaySegmentId_ = seg->contentKey.objectId;
+                edited = seg.get();
+                break;
+            }
+        }
+    }
+    if (edited == nullptr)
+        return;
+
+    AppLogger::log("CaptureSession: segment render complete -> Edited id=" 
+        + juce::String(static_cast<juce::int64>(segmentContentKey.objectId)));
+    
     runCompaction(*edited);
     publishSegmentsView();
 

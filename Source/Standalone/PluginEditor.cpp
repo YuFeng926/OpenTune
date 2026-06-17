@@ -565,6 +565,12 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
         saveWorker_.join();
     }
 
+    // Safely join open worker thread if it exists
+    if (openWorker_.joinable())
+    {
+        openWorker_.join();
+    }
+
     // Remove custom LookAndFeel
     setLookAndFeel(nullptr);
 
@@ -2063,19 +2069,30 @@ void OpenTuneAudioProcessorEditor::launchOpenProjectChooser()
         if (file == juce::File{}) return;
 
         if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
-        auto result = safeThis->projectSession_.openProject(file);
-        if (!result.ok()) {
-            ConfirmDialogContent::launch(
-                new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
-                    result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                safeThis.getComponent());
-            return;
-        }
-        safeThis->syncRecentProjectsToMenu();
-        safeThis->updateTitleWithProjectPath();
-        safeThis->refreshAllUIFromProject();
+        if (safeThis->openWorker_.joinable()) safeThis->openWorker_.join();
+
+        safeThis->openWorker_ = std::thread([safeThis, file]() {
+            auto result = safeThis->projectSession_.openProject(file);
+
+            juce::MessageManager::callAsync([safeThis, result, file]() {
+                if (safeThis == nullptr) return;
+
+                if (!result.ok()) {
+                    ConfirmDialogContent::launch(
+                        new ConfirmDialogContent(
+                            juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
+                            result.error().fullMessage(),
+                            { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                        safeThis.getComponent());
+                    safeThis->projectSession_.clearRecentProjects();
+                    return;
+                }
+
+                safeThis->syncRecentProjectsToMenu();
+                safeThis->updateTitleWithProjectPath();
+                safeThis->refreshAllUIFromProject();
+            });
+        });
     });
 }
 
@@ -3007,20 +3024,31 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
 {
     if (saveWorker_.joinable()) saveWorker_.join();
     if (!projectSession_.isDirty()) {
-        auto result = projectSession_.openProject(file);
-        if (!result.ok()) {
-            ConfirmDialogContent::launch(
-                new ConfirmDialogContent(
-                    juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
-                    result.error().fullMessage(),
-                    { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                this);
-            projectSession_.clearRecentProjects();
-            return;
-        }
-        syncRecentProjectsToMenu();
-        updateTitleWithProjectPath();
-        refreshAllUIFromProject();
+        if (openWorker_.joinable()) openWorker_.join();
+
+        juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+        openWorker_ = std::thread([safeThis, file]() {
+            auto result = safeThis->projectSession_.openProject(file);
+
+            juce::MessageManager::callAsync([safeThis, result, file]() {
+                if (safeThis == nullptr) return;
+
+                if (!result.ok()) {
+                    ConfirmDialogContent::launch(
+                        new ConfirmDialogContent(
+                            juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
+                            result.error().fullMessage(),
+                            { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                        safeThis.getComponent());
+                    safeThis->projectSession_.clearRecentProjects();
+                    return;
+                }
+
+                safeThis->syncRecentProjectsToMenu();
+                safeThis->updateTitleWithProjectPath();
+                safeThis->refreshAllUIFromProject();
+            });
+        });
         return;
     }
 
@@ -3032,7 +3060,79 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
             {               { juce::String::fromUTF8(u8"\u4FDD\u5B58"), [safeThis, file] {
                     if (safeThis == nullptr) return;
                     if (!safeThis->projectSession_.hasProjectPath()) {
-                        safeThis->saveProjectAsRequested();
+                        // No project path: async save-as, then open recent file
+                        auto chooser = std::make_shared<juce::FileChooser>(juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B"), juce::File(), "*.otproj");
+                        auto chooserFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles;
+                        chooser->launchAsync(chooserFlags, [safeThis, chooser, file](const juce::FileChooser& fc) {
+                            if (safeThis == nullptr) return;
+                            auto saveFile = fc.getResult();
+                            if (saveFile == juce::File{}) return;
+                            if (!saveFile.hasFileExtension(".otproj"))
+                                saveFile = saveFile.withFileExtension(".otproj");
+
+                            auto handleSaveAndOpen = [safeThis, file](const juce::File& saveFile, bool overwrite) {
+                                if (safeThis == nullptr) return;
+                                if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
+                                safeThis->projectSession_.setCurrentProjectFile(saveFile);
+                                auto task = safeThis->projectSession_.prepareSave();
+                                const uint64_t gen = safeThis->projectSession_.getDirtyGeneration();
+                                safeThis->saveWorker_ = std::thread([safeThis, task = std::move(task), gen, saveFile, file]() mutable {
+                                    auto result = ProjectSession::executeSaveToFile(task);
+                                    juce::MessageManager::callAsync([safeThis, result, gen, saveFile, file]() {
+                                        if (safeThis == nullptr) return;
+                                        if (!result.ok()) {
+                                            ConfirmDialogContent::launch(
+                                                new ConfirmDialogContent(
+                                                    juce::String::fromUTF8(u8"\u4FDD\u5B58\u5DE5\u7A0B\u5931\u8D25"),
+                                                    result.error().fullMessage(),
+                                                    { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                                                safeThis.getComponent());
+                                            return;
+                                        }
+                                        if (safeThis->projectSession_.getDirtyGeneration() == gen)
+                                            safeThis->projectSession_.clearDirty();
+                                        safeThis->projectSession_.pushRecentProject(saveFile);
+                                        safeThis->syncRecentProjectsToMenu();
+                                        safeThis->updateTitleWithProjectPath();
+                                        // Open the recent file after save completes
+                                        if (safeThis->openWorker_.joinable()) safeThis->openWorker_.join();
+                                        safeThis->openWorker_ = std::thread([safeThis, file]() {
+                                            auto openResult = safeThis->projectSession_.openProject(file);
+                                            juce::MessageManager::callAsync([safeThis, openResult, file]() {
+                                                if (safeThis == nullptr) return;
+                                                if (!openResult.ok()) {
+                                                    ConfirmDialogContent::launch(
+                                                        new ConfirmDialogContent(
+                                                            juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
+                                                            openResult.error().fullMessage(),
+                                                            { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                                                        safeThis.getComponent());
+                                                    safeThis->projectSession_.clearRecentProjects();
+                                                    return;
+                                                }
+                                                safeThis->syncRecentProjectsToMenu();
+                                                safeThis->updateTitleWithProjectPath();
+                                                safeThis->refreshAllUIFromProject();
+                                            });
+                                        });
+                                    });
+                                });
+                            };
+
+                            if (saveFile.existsAsFile()) {
+                                ConfirmDialogContent::launch(
+                                    new ConfirmDialogContent(
+                                        juce::String("Overwrite Existing Project?"),
+                                        juce::String("The target project file already exists. Overwrite it?"),
+                                        { { juce::String::fromUTF8(u8"\u8986\u76D6"), [safeThis, saveFile, handleSaveAndOpen] {
+                                                handleSaveAndOpen(saveFile, true);
+                                            }, true },
+                                          { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
+                                    safeThis.getComponent());
+                                return;
+                            }
+                            handleSaveAndOpen(saveFile, false);
+                        });
                         return;
                     }
                     if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
@@ -3059,42 +3159,54 @@ void OpenTuneAudioProcessorEditor::openRecentProjectRequested(const juce::File& 
                                 safeThis->projectSession_.pushRecentProject(path);
                                 safeThis->updateTitleWithProjectPath();
                                 safeThis->syncRecentProjectsToMenu();
-                                auto openResult = safeThis->projectSession_.openProject(file);
-                                if (!openResult.ok()) {
-                                    ConfirmDialogContent::launch(
-                                        new ConfirmDialogContent(
-                                            juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
-                                            openResult.error().fullMessage(),
-                                            { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                                        safeThis.getComponent());
-                                    safeThis->projectSession_.clearRecentProjects();
-                                    return;
-                                }
-                                 safeThis->syncRecentProjectsToMenu();
-                                 safeThis->updateTitleWithProjectPath();
-                                 safeThis->refreshAllUIFromProject();
+                                if (safeThis->openWorker_.joinable()) safeThis->openWorker_.join();
+                                safeThis->openWorker_ = std::thread([safeThis, file]() {
+                                    auto openResult = safeThis->projectSession_.openProject(file);
+                                    juce::MessageManager::callAsync([safeThis, openResult, file]() {
+                                        if (safeThis == nullptr) return;
+                                        if (!openResult.ok()) {
+                                            ConfirmDialogContent::launch(
+                                                new ConfirmDialogContent(
+                                                    juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
+                                                    openResult.error().fullMessage(),
+                                                    { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                                                safeThis.getComponent());
+                                            safeThis->projectSession_.clearRecentProjects();
+                                            return;
+                                        }
+                                        safeThis->syncRecentProjectsToMenu();
+                                        safeThis->updateTitleWithProjectPath();
+                                        safeThis->refreshAllUIFromProject();
+                                    });
+                                });
                              });
+                          });
+                      }
+                  }, true },
+{ juce::String("Do Not Save"), [safeThis, file] {
+                     if (safeThis == nullptr) return;
+                     if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
+                     if (safeThis->openWorker_.joinable()) safeThis->openWorker_.join();
+                     safeThis->openWorker_ = std::thread([safeThis, file]() {
+                         auto openResult = safeThis->projectSession_.openProject(file);
+                         juce::MessageManager::callAsync([safeThis, openResult, file]() {
+                             if (safeThis == nullptr) return;
+                             if (!openResult.ok()) {
+                                 ConfirmDialogContent::launch(
+                                     new ConfirmDialogContent(
+                                         juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
+                                         openResult.error().fullMessage(),
+                                         { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
+                                     safeThis.getComponent());
+                                 safeThis->projectSession_.clearRecentProjects();
+                                 return;
+                             }
+                             safeThis->syncRecentProjectsToMenu();
+                             safeThis->updateTitleWithProjectPath();
+                             safeThis->refreshAllUIFromProject();
                          });
-                     }
-                 }, true },
-               { juce::String("Do Not Save"), [safeThis, file] {
-                    if (safeThis == nullptr) return;
-                    if (safeThis->saveWorker_.joinable()) safeThis->saveWorker_.join();
-                    auto openResult = safeThis->projectSession_.openProject(file);
-                    if (!openResult.ok()) {
-                        ConfirmDialogContent::launch(
-                            new ConfirmDialogContent(
-                                juce::String::fromUTF8(u8"\u6253\u5F00\u5DE5\u7A0B\u5931\u8D25"),
-                                openResult.error().fullMessage(),
-                                { { juce::String::fromUTF8(u8"\u786E\u5B9A"), nullptr, true } }),
-                            safeThis.getComponent());
-                        safeThis->projectSession_.clearRecentProjects();
-                        return;
-                    }
-                    safeThis->syncRecentProjectsToMenu();
-                    safeThis->updateTitleWithProjectPath();
-                    safeThis->refreshAllUIFromProject();
-                }, false },
+                     });
+                 }, false },
               { juce::String::fromUTF8(u8"\u53D6\u6D88"), nullptr, false } }),
         this);
 }

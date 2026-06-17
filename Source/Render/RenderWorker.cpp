@@ -153,26 +153,30 @@ void RenderWorker::loop()
             }
         }
 
-        if (hasJob && leaseCopy.isValid())
+        if (hasJob)
         {
-            if (job.renderCache != nullptr)
+            if (leaseCopy.isValid())
             {
-                RenderCache::PendingJob pendingJob;
-                if (job.renderCache->getNextPendingJob(pendingJob))
+                if (job.renderCache != nullptr)
                 {
-                    job.startSeconds = pendingJob.startSeconds;
-                    job.endSeconds = pendingJob.endSeconds;
-                    job.startSample = pendingJob.startSample;
-                    job.endSampleExclusive = pendingJob.endSampleExclusive;
-                    job.targetRevision = pendingJob.targetRevision;
-                    job.renderRevision = pendingJob.targetRevision;
+                    RenderCache::PendingJob pendingJob;
+                    if (job.renderCache->getNextPendingJob(pendingJob))
+                    {
+                        job.startSeconds = pendingJob.startSeconds;
+                        job.endSeconds = pendingJob.endSeconds;
+                        job.startSample = pendingJob.startSample;
+                        job.endSampleExclusive = pendingJob.endSampleExclusive;
+                        job.targetRevision = pendingJob.targetRevision;
+                        job.renderRevision = pendingJob.targetRevision;
+                        leaseCopy.renderJobCallback(job);
+                    }
+                }
+                else
+                {
                     leaseCopy.renderJobCallback(job);
                 }
             }
-            else
-            {
-                leaseCopy.renderJobCallback(job);
-            }
+            // Lease invalid: job was popped but cannot execute. Decrement to prevent leak.
 
             std::lock_guard<std::mutex> lk(mutex_);
             --inFlight_;
