@@ -72,6 +72,10 @@ using PublishPlaybackSourceFn = std::function<void(const ContentKey& key,
  *  does not re-run F0 analysis — uses the already-restored pitch curve. */
 using RequestFullRenderFn = std::function<void(ContentKey)>;
 
+/** Callback from render pipeline when CRS render is complete and ready for playback.
+ *  Triggers segment state transition from Processing to Edited. */
+using OnRenderCompleteFn = std::function<void(ContentKey)>;
+
 /** Bundle of processor-side callbacks injected at CaptureSession construction. */
 struct ProcessorBindings
 {
@@ -80,6 +84,7 @@ struct ProcessorBindings
     RefreshSegmentFn refreshSegment;
     PublishPlaybackSourceFn publishPlaybackSource;
     RequestFullRenderFn requestFullRender;
+    OnRenderCompleteFn onRenderComplete;
 };
 
 /**
@@ -152,6 +157,10 @@ public:
 
     /** Called by render pipeline when a segment's content is ready. */
     void onSegmentRenderingComplete(ContentKey segmentContentKey);
+
+    /** Called by render pipeline when CRS render cache is complete and ready for playback.
+     *  Transitions segment from Processing to Edited state. */
+    void onRenderComplete(ContentKey segmentContentKey);
 
     /** Commit F0 extraction result to segment content. Does not promote lifecycle. */
     bool commitSegmentF0Result(ContentKey segmentContentKey,

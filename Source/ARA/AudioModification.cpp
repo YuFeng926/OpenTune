@@ -17,6 +17,18 @@ void AudioModification::attachSource(const AudioSource& source)
     // sourceWindow is set during identity binding (updateIdentity / birth),
     // not overwritten on every source properties update.
     // This preserves restore-time windowed/remapped bindings.
+
+    // Initialize sourceWindow for new modifications (empty sourcePersistentId).
+    // Restore path already has valid sourceWindow, so we don't overwrite.
+    if (content.sourceWindow.sourcePersistentId.isEmpty())
+    {
+        content.sourceWindow = SourceWindow{
+            0,
+            source.getIdentity().persistentId,
+            0.0,
+            source.getShape().durationSeconds()
+        };
+    }
 }
 
 void AudioModification::resetContent() noexcept
