@@ -57,12 +57,34 @@ OpenTunePlaybackRenderer::OpenTunePlaybackRenderer(ARA::PlugIn::DocumentControll
     : juce::ARAPlaybackRenderer(araDc)
     , documentController_(docController)
 {
+    std::atomic_store_explicit(&contentRenderServiceSnapshot_,
+                               docController ? docController->getContentRenderServiceShared() : nullptr,
+                               std::memory_order_release);
 }
 
 OpenTunePlaybackRenderer::~OpenTunePlaybackRenderer()
 {
+    // After owner-driven detach, destructor becomes no-op.
+    // Only unregister when documentController_ is still live (relationship not revoked).
     if (documentController_ != nullptr)
         documentController_->unregisterPlaybackRenderer(*this);
+}
+
+void OpenTunePlaybackRenderer::detachDocumentController(OpenTuneDocumentController& owner)
+{
+    // Atomically clear documentController_ only for the matching owner.
+    // Per architecture: teardown is owner-driven. Renderer cannot call into destroyed DC.
+    if (documentController_ == &owner)
+    {
+        // 1. Publish empty render plan FIRST to stop audio thread from entering render loop
+        currentPlan_.store(std::make_shared<RenderPlan>(), std::memory_order_release);
+        // 2. Clear CRS snapshot atomically so audio thread sees nullptr
+        std::atomic_store_explicit(&contentRenderServiceSnapshot_,
+                                   std::shared_ptr<ContentRenderService>(),
+                                   std::memory_order_release);
+        // 3. Finally clear documentController_ pointer
+        documentController_ = nullptr;
+    }
 }
 
 void OpenTunePlaybackRenderer::didAddPlaybackRegion(ARA::PlugIn::PlaybackRegion* playbackRegion) noexcept
@@ -99,6 +121,11 @@ void OpenTunePlaybackRenderer::refreshRenderPlanFromDocument()
     auto plan = currentPlan_.load(std::memory_order_acquire);
     publishRenderPlanFor(plan != nullptr ? plan->playbackRegions
                                          : std::vector<juce::ARAPlaybackRegion*>{});
+}
+
+void OpenTunePlaybackRenderer::setContentRenderService(std::shared_ptr<ContentRenderService> crs)
+{
+    std::atomic_store_explicit(&contentRenderServiceSnapshot_, crs, std::memory_order_release);
 }
 
 std::shared_ptr<const OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRenderer::buildRenderPlan(
@@ -173,12 +200,14 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
 
     buffer.clear();
 
-    const auto plan = currentPlan_.load(std::memory_order_acquire);
-    if (documentController_ == nullptr || plan == nullptr || plan->items.empty())
+    // Use CRS snapshot instead of chasing documentController_ pointer
+    // to avoid TOCTOU race with DocumentController destruction
+    auto crs = std::atomic_load_explicit(&contentRenderServiceSnapshot_, std::memory_order_acquire);
+    if (crs == nullptr)
         return true;
 
-    auto* crs = documentController_->getContentRenderService();
-    if (crs == nullptr)
+    const auto plan = currentPlan_.load(std::memory_order_acquire);
+    if (plan == nullptr || plan->items.empty())
         return true;
 
     const double blockStartSeconds = positionInfo.getTimeInSeconds().orFallback(0.0);

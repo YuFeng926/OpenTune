@@ -15,6 +15,7 @@ namespace OpenTune {
  * 
  * 处理器桥接短租约，RenderWorker 不长期持有 callback。
  * Worker 调用 callback 时传入完整的 RenderJob。
+ * 析构时必须 detach，防止 dangling lambda。
  */
 struct RenderExecutionLease
 {

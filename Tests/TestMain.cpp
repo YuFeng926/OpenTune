@@ -183,10 +183,9 @@ CheckResult araArchiveRestoresFromAudioSourceOnly()
     const auto dc = readText("Source/ARA/OpenTuneDocumentController.cpp");
     const auto serialize = extractFunctionBlock(dc, "void serializeAudioModificationContent");
     const auto restore = extractFunctionBlock(dc, "bool OpenTuneDocumentController::doRestoreObjectsFromStream");
-    const auto rebuild = extractFunctionBlock(dc, "bool OpenTuneDocumentController::rebuildCRSFromSource");
 
-    if (serialize.empty() || restore.empty() || rebuild.empty())
-        return fail("araArchiveRestoresFromAudioSourceOnly", "could not locate archive/restore/CRS functions.");
+    if (serialize.empty() || restore.empty())
+        return fail("araArchiveRestoresFromAudioSourceOnly", "could not locate archive/restore functions.");
 
     const auto serializeMissing = missingTokens(serialize, {
         "AudioModificationContent",
@@ -205,13 +204,20 @@ CheckResult araArchiveRestoresFromAudioSourceOnly()
         return fail("araArchiveRestoresFromAudioSourceOnly",
                     "ARA archive serialization must not mention source PCM buffers.");
 
-    const auto restoreMissing = missingTokens(restore, {
-        "targetMod->content = restoreAudioModificationContent",
-        "rebuildCRSFromSource(mod)",
-        "notifyContentChanged"
-    });
-    if (!restoreMissing.empty())
-        return fail("araArchiveRestoresFromAudioSourceOnly", "restore no longer restores state then rebuilds CRS:" + restoreMissing);
+    // Per explicit-read architecture: restore only restores modification-scoped state.
+    // It does NOT rebuild CRS, read AudioSource samples, or schedule F0.
+    // CRS is lazily rebuilt by the next explicit user read (requestReadAudioForPlaybackRegions).
+    if (contains(restore, "rebuildCRSFromSource"))
+        return fail("araArchiveRestoresFromAudioSourceOnly",
+                    "ARA restore must NOT rebuild CRS automatically. CRS is user-commanded only.");
+
+    if (contains(restore, "readAudioSamples"))
+        return fail("araArchiveRestoresFromAudioSourceOnly",
+                    "ARA restore must NOT read AudioSource samples. Reading host audio requires explicit user intent.");
+
+    if (contains(restore, "scheduleAsyncF0Extraction"))
+        return fail("araArchiveRestoresFromAudioSourceOnly",
+                    "ARA restore must NOT schedule F0 extraction. F0 inference is user-commanded only.");
 
     if (contains(restore, "targetMod->content.audio")
         || contains(restore, "targetMod->content.editable.audio")
@@ -219,39 +225,136 @@ CheckResult araArchiveRestoresFromAudioSourceOnly()
         return fail("araArchiveRestoresFromAudioSourceOnly",
                     "ARA restore must not hydrate AudioModification content or CRS directly from archive audio.");
 
-    const auto rebuildMissing = missingTokens(rebuild, {
-        "shareReaderLease",
-        "readAudioSamples",
-        "sourceWindow",
-        "publishPlaybackReadSourceForModification",
-        "Do NOT modify modification.content"
-    });
-    if (!rebuildMissing.empty())
-        return fail("araArchiveRestoresFromAudioSourceOnly", "CRS rebuild no longer reads from AudioSource sample access:" + rebuildMissing);
-
     return pass("araArchiveRestoresFromAudioSourceOnly");
 }
 
-CheckResult araSampleAccessAndSourceUpdateMaintainCRS()
+CheckResult araSampleAccessEnableDoesNotReadFreshContent()
 {
     const auto dc = readText("Source/ARA/OpenTuneDocumentController.cpp");
     const auto didEnable = extractFunctionBlock(dc, "void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess");
+
+    if (didEnable.empty())
+        return fail("araSampleAccessEnableDoesNotReadFreshContent", "didEnableAudioSourceSamplesAccess callback is missing.");
+
+    // Per VST3 ARA explicit-read principle: didEnableAudioSourceSamplesAccess only grants permission,
+    // it must NOT read AudioSource samples, create reader lease, rebuild CRS, or trigger F0 extraction.
+    // The only user-read entry point is through PluginEditor::recordRequested() -> document controller request.
+
+    if (contains(didEnable, "source.createReaderLease()"))
+        return fail("araSampleAccessEnableDoesNotReadFreshContent",
+                    "didEnableAudioSourceSamplesAccess must NOT create reader lease. Only user-read request can read AudioSource samples.");
+
+    if (contains(didEnable, "rebuildCRSForSource"))
+        return fail("araSampleAccessEnableDoesNotReadFreshContent",
+                    "didEnableAudioSourceSamplesAccess must NOT rebuild CRS. CRS materialization is user-commanded only.");
+
+    if (contains(didEnable, "readAudioSamples"))
+        return fail("araSampleAccessEnableDoesNotReadFreshContent",
+                    "didEnableAudioSourceSamplesAccess must NOT call readAudioSamples. Reading host audio requires explicit user intent.");
+
+    if (contains(didEnable, "birthContentForModification"))
+        return fail("araSampleAccessEnableDoesNotReadFreshContent",
+                    "didEnableAudioSourceSamplesAccess must NOT call birthContentForModification. Content materialization is user-triggered.");
+
+    if (contains(didEnable, "scheduleAsyncF0Extraction"))
+        return fail("araSampleAccessEnableDoesNotReadFreshContent",
+                    "didEnableAudioSourceSamplesAccess must NOT schedule F0 extraction. F0 inference is user-commanded only.");
+
+    return pass("araSampleAccessEnableDoesNotReadFreshContent");
+}
+
+CheckResult refreshPlaybackReadSourceIsPrivate()
+{
+    const auto dcHeader = readText("Source/ARA/OpenTuneDocumentController.h");
+
+    // Extract the public section (lines up to the first 'private:')
+    const auto publicSectionEnd = dcHeader.find("private:");
+    if (publicSectionEnd == std::string::npos)
+        return fail("refreshPlaybackReadSourceIsPrivate", "Cannot locate private section marker in DocumentController.h.");
+
+    const auto publicSection = dcHeader.substr(0, publicSectionEnd);
+
+    // refreshPlaybackReadSource must NOT be in the public section
+    if (contains(publicSection, "refreshPlaybackReadSource"))
+        return fail("refreshPlaybackReadSourceIsPrivate",
+                    "refreshPlaybackReadSource must be private to prevent bypassing user-intent read gate. "
+                    "Only requestReadAudioForPlaybackRegions() should be the public read entry point.");
+
+    // Verify it exists in the file (either in private section or removed entirely)
+    if (!contains(dcHeader, "refreshPlaybackReadSource"))
+        return fail("refreshPlaybackReadSourceIsPrivate",
+                    "refreshPlaybackReadSource declaration is missing from DocumentController.h. "
+                    "If intentionally removed, update this test accordingly.");
+
+    return pass("refreshPlaybackReadSourceIsPrivate");
+}
+
+CheckResult playbackRendererUsesCrsSnapshotNotOwnerPointer()
+{
+    const auto renderer = readText("Source/ARA/OpenTunePlaybackRenderer.cpp");
+    const auto processBlock = extractFunctionBlock(renderer, "OpenTunePlaybackRenderer::processBlock");
+
+    if (processBlock.empty())
+        return fail("playbackRendererUsesCrsSnapshotNotOwnerPointer",
+                    "Cannot locate OpenTunePlaybackRenderer::processBlock in PlaybackRenderer.cpp.");
+
+    // processBlock must NOT directly access documentController_->getContentRenderService()
+    // which creates a TOCTOU race with DocumentController destruction
+    if (contains(processBlock, "documentController_->getContentRenderService()"))
+        return fail("playbackRendererUsesCrsSnapshotNotOwnerPointer",
+                    "processBlock must NOT chase documentController_ pointer to get CRS. "
+                    "Use contentRenderServiceSnapshot_ instead to avoid TOCTOU race with DC destruction.");
+
+    // processBlock must use CRS snapshot
+    if (!contains(processBlock, "contentRenderServiceSnapshot_"))
+        return fail("playbackRendererUsesCrsSnapshotNotOwnerPointer",
+                    "processBlock must use contentRenderServiceSnapshot_ for CRS access "
+                    "to ensure atomic snapshot prevents use-after-free during DC teardown.");
+
+    // Verify detachDocumentController has correct order
+    const auto detach = extractFunctionBlock(renderer, "OpenTunePlaybackRenderer::detachDocumentController");
+    if (detach.empty())
+        return fail("playbackRendererUsesCrsSnapshotNotOwnerPointer",
+                    "Cannot locate detachDocumentController in PlaybackRenderer.cpp.");
+
+    // Check that empty plan is published BEFORE CRS snapshot is cleared
+    // The order must be: store empty plan -> atomic_store CRS snapshot -> clear documentController_
+    const auto storePos = detach.find("currentPlan_.store");
+    const auto atomicStorePos = detach.find("atomic_store_explicit(&contentRenderServiceSnapshot_");
+    const auto clearPos = detach.find("documentController_ = nullptr");
+
+    if (storePos == std::string::npos || atomicStorePos == std::string::npos || clearPos == std::string::npos)
+        return fail("playbackRendererUsesCrsSnapshotNotOwnerPointer",
+                    "detachDocumentController must have all three steps: store empty plan, atomic_store CRS snapshot, clear pointer.");
+
+    if (!(storePos < atomicStorePos && atomicStorePos < clearPos))
+        return fail("playbackRendererUsesCrsSnapshotNotOwnerPointer",
+                    "detachDocumentController order is wrong. Must be: (1) store empty plan FIRST, "
+                    "(2) atomic_store CRS snapshot, (3) clear pointer LAST. "
+                    "This prevents audio thread from entering render loop with stale CRS.");
+
+    // Verify processBlock uses atomic_load for CRS snapshot (not plain shared_ptr copy)
+    if (!contains(processBlock, "atomic_load_explicit(&contentRenderServiceSnapshot_"))
+        return fail("playbackRendererUsesCrsSnapshotNotOwnerPointer",
+                    "processBlock must use atomic_load_explicit for CRS snapshot access "
+                    "to prevent data race with detach thread's atomic_store.");
+
+    return pass("playbackRendererUsesCrsSnapshotNotOwnerPointer");
+}
+
+CheckResult araSourceContentUpdateInvalidatesOnly()
+{
+    const auto dc = readText("Source/ARA/OpenTuneDocumentController.cpp");
     const auto sourceUpdate = extractFunctionBlock(dc, "void OpenTuneDocumentController::doUpdateAudioSourceContent");
     const auto remove = extractFunctionBlock(dc, "void OpenTuneDocumentController::removeCRSArtifactsForModification");
-    const auto rebuild = extractFunctionBlock(dc, "int OpenTuneDocumentController::rebuildCRSForSource");
 
-    if (didEnable.empty() || sourceUpdate.empty() || remove.empty() || rebuild.empty())
-        return fail("araSampleAccessAndSourceUpdateMaintainCRS", "CRS maintenance helpers or callbacks are missing.");
-
-    if (!contains(didEnable, "source.createReaderLease()")
-        || !contains(didEnable, "rebuildCRSForSource(source)"))
-        return fail("araSampleAccessAndSourceUpdateMaintainCRS",
-                    "sample access enable must rebuild CRS for restored modifications.");
+    if (sourceUpdate.empty() || remove.empty())
+        return fail("araSourceContentUpdateInvalidatesOnly", "AudioSource content update or removal helpers are missing.");
 
     if (!contains(sourceUpdate, "removeCRSArtifactsForModification(modification)")
         || !contains(sourceUpdate, "modification.invalidateDerivedContent()"))
-        return fail("araSampleAccessAndSourceUpdateMaintainCRS",
-                    "AudioSource content updates must drop stale CRS artifacts before invalidating derived content (preserving user edits).");
+        return fail("araSourceContentUpdateInvalidatesOnly",
+                    "AudioSource content updates must drop stale CRS artifacts before invalidating derived content.");
 
     const auto removeMissing = missingTokens(remove, {
         "removePlaybackSource",
@@ -260,14 +363,17 @@ CheckResult araSampleAccessAndSourceUpdateMaintainCRS()
         "getTimeStretchCache().invalidate"
     });
     if (!removeMissing.empty())
-        return fail("araSampleAccessAndSourceUpdateMaintainCRS", "CRS artifact removal is incomplete:" + removeMissing);
+        return fail("araSourceContentUpdateInvalidatesOnly", "CRS artifact removal is incomplete:" + removeMissing);
 
-    if (!contains(rebuild, "source.canReadSamples()")
-        || !contains(rebuild, "rebuildCRSFromSource(modification)"))
-        return fail("araSampleAccessAndSourceUpdateMaintainCRS",
-                    "source-level CRS rebuild must be gated by sample access and rebuild matching modifications.");
+    if (contains(sourceUpdate, "readAudioSamples"))
+        return fail("araSourceContentUpdateInvalidatesOnly",
+                    "doUpdateAudioSourceContent must NOT read AudioSource samples. It only invalidates derived state.");
 
-    return pass("araSampleAccessAndSourceUpdateMaintainCRS");
+    if (contains(sourceUpdate, "scheduleAsyncF0Extraction"))
+        return fail("araSourceContentUpdateInvalidatesOnly",
+                    "doUpdateAudioSourceContent must NOT schedule F0 extraction. Source update is not user-read intent.");
+
+    return pass("araSourceContentUpdateInvalidatesOnly");
 }
 
 CheckResult araRendererUsesAssignedRegionsAndMixesOverlap()
@@ -995,23 +1101,37 @@ CheckResult didBindToArADoesNotAttachProcessorLease()
     return pass("didBindToArADoesNotAttachProcessorLease");
 }
 
-CheckResult dcExecutorCallsProcessRenderRuntime()
+CheckResult renderExecutionLeaseLifecycleSafety()
 {
+    const auto worker = readText("Source/Render/RenderWorker.cpp");
     const auto dc = readText("Source/ARA/OpenTuneDocumentController.cpp");
-    const auto processJob = extractFunctionBlock(dc, "OpenTuneDocumentController::processDocumentRenderJob");
 
-    if (processJob.empty())
-        return fail("dcExecutorCallsProcessRenderRuntime",
-                    "could not locate OpenTuneDocumentController::processDocumentRenderJob "
-                    "in OpenTuneDocumentController.cpp.");
+    // Per architecture: ExecutionLease is a short-term lease with drain-before-detach lifecycle safety.
+    // RenderWorker invokes owner callback via lease, but the lease must be detached before owner destruction.
+    // The critical safety is: DC destructor must call detachExecutionLease(this) after draining.
 
-    if (!contains(processJob, "ProcessRenderRuntime::getInstance().processChunkRenderJob"))
-        return fail("dcExecutorCallsProcessRenderRuntime",
-                    "OpenTuneDocumentController::processDocumentRenderJob must delegate chunk "
-                    "rendering to ProcessRenderRuntime::getInstance().processChunkRenderJob; "
-                    "shared inference/render execution lives at the process level, not in DC.");
+    if (!contains(worker, "attachExecutionLease")
+        || !contains(worker, "detachExecutionLease")
+        || !contains(worker, "leaseCopy.renderJobCallback"))
+        return fail("renderExecutionLeaseLifecycleSafety",
+                    "RenderWorker must use ExecutionLease with attach/detach mechanism and callback through lease.");
 
-    return pass("dcExecutorCallsProcessRenderRuntime");
+    if (!contains(worker, "drain()")
+        || !contains(worker, "lease_ = RenderExecutionLease{}"))
+        return fail("renderExecutionLeaseLifecycleSafety",
+                    "detachExecutionLease must drain queue then clear lease to prevent dangling callback.");
+
+    if (!contains(dc, "installDocumentRenderExecution()"))
+        return fail("renderExecutionLeaseLifecycleSafety",
+                    "DC must install ExecutionLease to enable render pipeline.");
+
+    // P0 critical fix: DC destructor must detach ExecutionLease
+    if (!contains(dc, "detachExecutionLease(this)")
+        || !contains(dc, "drainRenderWorker()"))
+        return fail("renderExecutionLeaseLifecycleSafety",
+                    "DC destructor must drain and detach ExecutionLease before clearing to prevent dangling lambda callback.");
+
+    return pass("renderExecutionLeaseLifecycleSafety");
 }
 
 CheckResult processRenderRuntimeInCMake()
@@ -1083,7 +1203,10 @@ int main()
     const std::vector<CheckResult (*)()> tests = {
         araObjectBoundariesMatchOfficialRoles,
         araArchiveRestoresFromAudioSourceOnly,
-        araSampleAccessAndSourceUpdateMaintainCRS,
+        araSampleAccessEnableDoesNotReadFreshContent,
+        refreshPlaybackReadSourceIsPrivate,
+        playbackRendererUsesCrsSnapshotNotOwnerPointer,
+        araSourceContentUpdateInvalidatesOnly,
         araRendererUsesAssignedRegionsAndMixesOverlap,
         standaloneMainSignalChainIsConnected,
         standaloneRestoreKeepsWindowedClipAudio,
@@ -1107,7 +1230,7 @@ int main()
         dcGetsF0FromProcessRuntime,
         processorF0ServiceHasSingleProcessOwner,
         didBindToArADoesNotAttachProcessorLease,
-        dcExecutorCallsProcessRenderRuntime,
+        renderExecutionLeaseLifecycleSafety,
         processRenderRuntimeInCMake,
         processorHasNoChunkRenderOrVocoderRuntime,
         processRenderRuntimeOwnsNoAraModels
