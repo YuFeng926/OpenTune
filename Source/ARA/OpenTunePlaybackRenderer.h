@@ -85,9 +85,14 @@ public:
         std::vector<PlaybackRegionRenderItem> items;
     };
     
-    ~OpenTunePlaybackRenderer() override;
+~OpenTunePlaybackRenderer() override;
+
+    // Owner-driven detach: clears documentController_ for matching owner and publishes empty render plan.
+    // Called by OpenTuneDocumentController before clearing playbackRenderers_ in destructor.
+    void detachDocumentController(OpenTuneDocumentController& owner);
 
     void refreshRenderPlanFromDocument();
+    void setContentRenderService(std::shared_ptr<ContentRenderService> crs);
     
     void prepareToPlay(double sampleRate,
                        int maximumSamplesPerBlock,
@@ -111,6 +116,7 @@ private:
     int maximumSamplesPerBlock_ = 512;
     juce::AudioBuffer<float> playbackScratch_;
     OpenTuneDocumentController* documentController_ = nullptr;
+    std::shared_ptr<ContentRenderService> contentRenderServiceSnapshot_;
 
     struct AtomicRenderPlan
     {

@@ -5,16 +5,18 @@ namespace OpenTune {
 void PlaybackSourcePublisher::publish(ContentKey key, PlaybackReadSource source)
 {
     source.contentKey = key;
-    {
-        const juce::ScopedWriteLock wl(lock_);
-        sources_[key] = std::move(source);
-        rebuildSnapshotLocked();
-    }
+    std::lock_guard<std::mutex> lg(writerMutex_);
+    auto current = std::atomic_load(&data_);
+    auto next = current
+        ? std::make_shared<std::map<ContentKey, PlaybackReadSource>>(*current)
+        : std::make_shared<std::map<ContentKey, PlaybackReadSource>>();
+    (*next)[key] = std::move(source);
+    std::atomic_store(&data_, std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>>(std::move(next)));
 }
 
 bool PlaybackSourcePublisher::get(ContentKey key, PlaybackReadSource& out) const noexcept
 {
-    auto snap = std::atomic_load(&snapshot_);
+    auto snap = std::atomic_load(&data_);
     if (!snap) return false;
     auto it = snap->find(key);
     if (it == snap->end()) return false;
@@ -24,22 +26,18 @@ bool PlaybackSourcePublisher::get(ContentKey key, PlaybackReadSource& out) const
 
 void PlaybackSourcePublisher::remove(ContentKey key)
 {
-    const juce::ScopedWriteLock wl(lock_);
-    sources_.erase(key);
-    rebuildSnapshotLocked();
+    std::lock_guard<std::mutex> lg(writerMutex_);
+    auto current = std::atomic_load(&data_);
+    if (!current || current->find(key) == current->end()) return;
+    auto next = std::make_shared<std::map<ContentKey, PlaybackReadSource>>(*current);
+    next->erase(key);
+    std::atomic_store(&data_, std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>>(std::move(next)));
 }
 
 void PlaybackSourcePublisher::clear()
 {
-    const juce::ScopedWriteLock wl(lock_);
-    sources_.clear();
-    rebuildSnapshotLocked();
-}
-
-void PlaybackSourcePublisher::rebuildSnapshotLocked()
-{
-    auto snap = std::make_shared<const std::map<ContentKey, PlaybackReadSource>>(sources_);
-    std::atomic_store(&snapshot_, snap);
+    std::lock_guard<std::mutex> lg(writerMutex_);
+    std::atomic_store(&data_, std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>>());
 }
 
 } // namespace OpenTune

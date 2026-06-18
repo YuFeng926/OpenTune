@@ -33,7 +33,7 @@ constexpr int kMaxContentPayloadRecords = 4096;
 } // namespace
 
 OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugInEntry* entry,
-                                                       const ARA::ARADocumentControllerHostInstance* instance)
+                                                        const ARA::ARADocumentControllerHostInstance* instance)
     : ARADocumentControllerSpecialisation(entry, instance)
     , contentRenderService_(std::make_shared<ContentRenderService>())
     , resamplingManager_(std::make_shared<ResamplingManager>())
@@ -57,16 +57,25 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
-    // 停止渲染服务：先排空队列再停止，防止 chunkPublished 回调访问已析构的 DC
+    // 停止渲染服务：先排空队列，再 detach execution lease，最后暂停
     if (contentRenderService_)
     {
         contentRenderService_->drainRenderWorker();
+        // P0 修复：detach execution lease 防止 dangling lambda 回调
+        contentRenderService_->detachExecutionLease(this);
         contentRenderService_->pauseRenderWorker();
     }
 
     // 停止 F0 提取服务
     contentF0ExtractionService_.reset();
 
+    // Owner-driven detach: before clearing playbackRenderers_, walk the list
+    // and call detachDocumentController(*this) on each renderer.
+    for (auto* renderer : playbackRenderers_)
+    {
+        if (renderer != nullptr)
+            renderer->detachDocumentController(*this);
+    }
     playbackRenderers_.clear();
 }
 
@@ -445,6 +454,11 @@ const ContentRenderService* OpenTuneDocumentController::getContentRenderService(
     return contentRenderService_.get();
 }
 
+std::shared_ptr<ContentRenderService> OpenTuneDocumentController::getContentRenderServiceShared() const noexcept
+{
+    return contentRenderService_;
+}
+
 bool OpenTuneDocumentController::PlaybackRegionProjection::isRenderable() const noexcept
 {
     return contentKey.isValid()
@@ -492,8 +506,12 @@ OpenTuneDocumentController::getFocusedEditorPlaybackRegionProjection() const
     return projections.front();
 }
 
-int OpenTuneDocumentController::refreshAllAudioModifications()
+int OpenTuneDocumentController::requestReadAudioForPlaybackRegions()
 {
+    // User-read entry point: the ONLY method that reads AudioSource samples.
+    // Per architecture: sample access enable is permission, not user intent.
+    // Only explicit user button press (Record/Read) can read host audio.
+
     std::set<juce::String> uniqueModIds;
     for (const auto& region : playbackRegions_)
     {
@@ -522,13 +540,13 @@ int OpenTuneDocumentController::refreshAllAudioModifications()
     return refreshedCount;
 }
 
-void OpenTuneDocumentController::refreshAllAudioModificationsAsync(
+void OpenTuneDocumentController::requestReadAudioForPlaybackRegionsAsync(
     std::function<void(int)> completionCallback)
 {
     // ARA SDK requires DocumentController operations on main thread.
     // This method now executes synchronously to comply with ARA thread constraints.
     // Callers should display a loading overlay before calling if UI responsiveness is needed.
-    const int count = refreshAllAudioModifications();
+    const int count = requestReadAudioForPlaybackRegions();
     if (completionCallback)
         completionCallback(count);
 }
@@ -670,15 +688,16 @@ void OpenTuneDocumentController::willEnableAudioSourceSamplesAccess(juce::ARAAud
 }
 
 void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess(juce::ARAAudioSource* audioSource,
-                                                                   bool enable)
+                                                                    bool enable)
 {
     auto& source = ensureAudioSource(audioSource);
     source.setSampleAccessEnabled(enable);
-    if (enable)
-    {
-        source.createReaderLease();
-        rebuildCRSForSource(source);
-    }
+
+    // Per architecture: sample access enable is permission, not user intent.
+    // This callback does NOT create reader lease, rebuild CRS, materialize content,
+    // refresh modifications, or read host source PCM.
+    // Only requestReadAudioForPlaybackRegions() (triggered by Record button)
+    // is allowed to read host audio.
 
     refreshRegisteredRenderers(publishModelChange());
 }
@@ -739,7 +758,7 @@ juce::String mapRestoredPersistentId(const juce::String& archivedPersistentId,
 } // namespace
 
 bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream& input,
-                                                             const juce::ARARestoreObjectsFilter* filter)
+                                                              const juce::ARARestoreObjectsFilter* filter)
 {
     const int magic = input.readInt();
     if (magic != kContentPayloadArchiveMagic)
@@ -772,34 +791,16 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         }
     }
 
-    // Per ARA2 spec: After restoring modification-scoped state,
-    // rebuild CRS derived playback buffer from AudioSource if sample access available.
-    // Modification state is restored; CRS cache must be regenerated from source.
+    // Per architecture: Archive restore restores modification-scoped state and source binding only.
+    // It does NOT create reader leases, read host PCM, publish playback sources, or rebuild CRS.
+    // CRS is lazily rebuilt by the next explicit user read (requestReadAudioForPlaybackRegions).
+
+    // Notify ARA host of content changes for each restored modification
     for (auto& mod : audioModifications_)
     {
         if (mod.audioModification == nullptr || mod.persistentId.isEmpty())
             continue;
 
-        // If modification has source window with ARA persistentID and source is accessible,
-        // attempt to rebuild CRS playback source from AudioSource
-        if (mod.content.sourceWindow.isValid() && mod.content.sourceWindow.sourcePersistentId.isNotEmpty())
-        {
-            const auto& sourcePersistentId = mod.content.sourceWindow.sourcePersistentId;
-            auto sourceIt = std::find_if(audioSources_.begin(), audioSources_.end(),
-                                         [&sourcePersistentId](const AudioSource& s) {
-                                             return s.getIdentity().persistentId == sourcePersistentId;
-                                         });
-            
-            if (sourceIt != audioSources_.end() && sourceIt->canReadSamples())
-            {
-                // Rebuild CRS from AudioSource WITHOUT modifying restored modification state
-                // Per ARA2: AudioModification.content was already restored from archive.
-                // Only regenerate CRS derived playback buffer for renderer.
-                rebuildCRSFromSource(mod);
-            }
-        }
-
-        // Notify ARA host of content changes
         mod.audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
     }
 
@@ -1454,23 +1455,9 @@ void OpenTuneDocumentController::removeCRSArtifactsForModification(const AudioMo
     contentRenderService_->getTimeStretchCache().invalidate(key);
 }
 
-int OpenTuneDocumentController::rebuildCRSForSource(const AudioSource& source)
-{
-    if (!source.canReadSamples())
-        return 0;
-
-    int rebuiltCount = 0;
-    const auto& sourcePersistentId = source.getIdentity().persistentId;
-    for (auto& modification : audioModifications_)
-    {
-        if (modification.content.sourceWindow.sourcePersistentId != sourcePersistentId)
-            continue;
-
-        if (rebuildCRSFromSource(modification))
-            ++rebuiltCount;
-    }
-    return rebuiltCount;
-}
+// Removed rebuildCRSForSource per architecture: sample access enable is permission,
+// not user intent. Source-level scan that infers user intent is prohibited.
+// Only requestReadAudioForPlaybackRegions() (user button press) may read host audio.
 
 void OpenTuneDocumentController::scheduleAsyncF0Extraction(
     ContentKey key,
@@ -1571,6 +1558,9 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
         });
 }
 
+// Per architecture: DC owns CRS and installs render execution lease.
+// The lease is detached in destructor to prevent dangling callback.
+
 void OpenTuneDocumentController::installDocumentRenderExecution()
 {
     ContentRenderService::ExecutionLease lease;
@@ -1581,33 +1571,6 @@ void OpenTuneDocumentController::installDocumentRenderExecution()
     };
 
     contentRenderService_->attachExecutionLease(std::move(lease));
-}
-
-std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const
-{
-    auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || mod->content.lifecycle != ContentLifecycle::Ready)
-        return nullptr;
-
-    auto snap = std::make_shared<EditableContentSnapshot>();
-    snap->audioBuffer = nullptr;
-    snap->audioSampleRate = 0.0;
-    snap->sourceWindow = mod->content.sourceWindow;
-    snap->notes = mod->content.editable.notes;
-    snap->correctedSegments = mod->content.editable.correctedSegments;
-    snap->pitchCurve = mod->content.analysis.pitchCurve;
-    snap->timeGrid = mod->content.editable.timeGrid;
-    snap->pitchShiftSettings = mod->content.editable.pitchShiftSettings;
-    snap->silentGaps = mod->content.analysis.silentGaps;
-    snap->detectedKey = mod->content.analysis.detectedKey;
-    snap->referenceFeatures = mod->content.analysis.referenceFeatures;
-    snap->originalF0State = mod->content.analysis.originalF0State;
-    snap->pitchRevision = mod->content.editable.pitchRevision;
-    snap->pitchShiftRevision = mod->content.editable.pitchShiftRevision;
-    snap->timeGridRevision = mod->content.editable.timeGridRevision;
-    snap->contentRevision = mod->content.contentRevision;
-    snap->notesRevision = mod->content.editable.notesRevision;
-    return snap;
 }
 
 void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
@@ -1649,8 +1612,37 @@ void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
     completion.chunkPublished = [this](ContentKey key, uint64_t revision) {
         handleDocumentStage1ChunkPublished(key, revision);
     };
+
     ProcessRenderRuntime::getInstance().processChunkRenderJob(
-        contentRenderService_, job, std::move(snap), false, std::move(completion));
+        contentRenderService_, job, std::move(snap),
+        false, std::move(completion));
+}
+
+std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr || mod->content.lifecycle != ContentLifecycle::Ready)
+        return nullptr;
+
+    auto snap = std::make_shared<EditableContentSnapshot>();
+    snap->audioBuffer = nullptr;
+    snap->audioSampleRate = 0.0;
+    snap->sourceWindow = mod->content.sourceWindow;
+    snap->notes = mod->content.editable.notes;
+    snap->correctedSegments = mod->content.editable.correctedSegments;
+    snap->pitchCurve = mod->content.analysis.pitchCurve;
+    snap->timeGrid = mod->content.editable.timeGrid;
+    snap->pitchShiftSettings = mod->content.editable.pitchShiftSettings;
+    snap->silentGaps = mod->content.analysis.silentGaps;
+    snap->detectedKey = mod->content.analysis.detectedKey;
+    snap->referenceFeatures = mod->content.analysis.referenceFeatures;
+    snap->originalF0State = mod->content.analysis.originalF0State;
+    snap->pitchRevision = mod->content.editable.pitchRevision;
+    snap->pitchShiftRevision = mod->content.editable.pitchShiftRevision;
+    snap->timeGridRevision = mod->content.editable.timeGridRevision;
+    snap->contentRevision = mod->content.contentRevision;
+    snap->notesRevision = mod->content.editable.notesRevision;
+    return snap;
 }
 
 void OpenTuneDocumentController::handleDocumentStage1ChunkPublished(ContentKey key, uint64_t publishedRevision)
@@ -1734,6 +1726,10 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
     const int startSample = static_cast<int>(startSeconds * readSource.audioSampleRate);
     const int endSample = static_cast<int>(endSeconds * readSource.audioSampleRate);
 
+    // Build complete immutable RenderJob with frozen data at enqueue time.
+    // Per architecture: RenderWorker consumes immutable data, never calls back to DC.
+    auto snap = snapshotAudioModification(key);
+
     RenderJob job;
     job.contentKey = key;
     job.audioBuffer = readSource.audioBuffer;
@@ -1744,6 +1740,20 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
     job.endSeconds = endSeconds;
     job.renderCache = contentRenderService_->getOrCreateRenderCache(key);
     job.targetRevision = readSource.renderRevision;
+    job.renderRevision = readSource.renderRevision;
+    job.pitchRevision = readSource.pitchRevision;
+    job.pitchShiftRevision = readSource.pitchShiftRevision;
+    job.timeGridRevision = readSource.timeGridRevision;
+
+    // Freeze content snapshot data into the job
+    if (snap)
+    {
+        job.pitchCurve = snap->pitchCurve;
+        job.timeGrid = snap->timeGrid;
+        job.pitchShiftSettings = snap->pitchShiftSettings;
+        job.silentGaps = snap->silentGaps;
+        job.contentRevision = snap->contentRevision;
+    }
 
     contentRenderService_->enqueueRender(std::move(job));
 }

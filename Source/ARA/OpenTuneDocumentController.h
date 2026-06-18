@@ -21,6 +21,7 @@ class OpenTuneEditorView;
 class OpenTunePlaybackRenderer;
 class OpenTuneAudioProcessor;
 class ResamplingManager;
+struct RenderJob;
 class OpenTuneDocumentController : public juce::ARADocumentControllerSpecialisation
 {
 public:
@@ -58,7 +59,7 @@ public:
     // NOT VST3 processor state. Legacy getContentSnapshot/restoreContentPayloadInto removed.
 
     const ContentRenderService* getContentRenderService() const noexcept;
-    bool refreshPlaybackReadSource(ContentKey key);
+    std::shared_ptr<ContentRenderService> getContentRenderServiceShared() const noexcept;
     // ARA mutation/render API — processor 通过这些 API 请求 ARA 渲染
     void refreshModificationCRSMetadata(ContentKey key);
     void requestModificationRender(ContentKey key, double startSeconds, double endSeconds);
@@ -119,11 +120,14 @@ public:
         const std::vector<juce::ARAPlaybackRegion*>& playbackRegions) const;
     std::vector<PlaybackRegionProjection> getEditorSelectionPlaybackRegionProjections() const;
     std::optional<PlaybackRegionProjection> getFocusedEditorPlaybackRegionProjection() const;
-    int refreshAllAudioModifications();
+    // User-read entry point: the ONLY method that reads AudioSource samples.
+    // Sample access enable is permission, not user intent. Only explicit user
+    // button press (Record/Read) can read host audio.
+    int requestReadAudioForPlaybackRegions();
     // ARA SDK requires DocumentController operations on main thread.
     // This method executes synchronously to comply with ARA thread constraints.
     // Callers should display a loading overlay before calling if UI responsiveness is needed.
-    void refreshAllAudioModificationsAsync(std::function<void(int)> completionCallback);
+    void requestReadAudioForPlaybackRegionsAsync(std::function<void(int)> completionCallback);
     void setAsyncWorkThreadPool(juce::ThreadPool* pool) noexcept { asyncWorkPool_ = pool; }
     void setEditorViewSelectionPlaybackRegions(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
@@ -225,14 +229,15 @@ private:
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer);
     bool birthContentForModification(AudioModification& modification);
     bool rebuildCRSFromSource(AudioModification& modification);
+    bool refreshPlaybackReadSource(ContentKey key);
     void removeCRSArtifactsForModification(const AudioModification& modification);
-    int rebuildCRSForSource(const AudioSource& source);
+    void continuePendingUserReadForSource(const AudioSource& source);
     void scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
                                    double sourceSampleRate);
+    std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
     void installDocumentRenderExecution();
     void processDocumentRenderJob(RenderJob& job);
-    std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
     void handleDocumentStage1ChunkPublished(ContentKey key, uint64_t publishedRevision);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
 

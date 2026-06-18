@@ -878,7 +878,7 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         return;
     }
 
-    dc->refreshAllAudioModificationsAsync([this, regionCount = static_cast<int>(allRegions.size())](int refreshed) {
+    dc->requestReadAudioForPlaybackRegionsAsync([this, regionCount = static_cast<int>(allRegions.size())](int refreshed) {
         if (refreshed == -1) return; // cancelled
 
         if (refreshed == 0) {

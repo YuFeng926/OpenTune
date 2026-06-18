@@ -2,17 +2,20 @@
 
 #include "PlaybackReadSource.h"
 #include "../Content/ContentKey.h"
-#include <juce_core/juce_core.h>
+#include <atomic>
 #include <map>
 #include <memory>
+#include <mutex>
 
 namespace OpenTune {
 
 /**
  * Publishes ContentKey-indexed PlaybackReadSource snapshots.
  *
- * Writers rebuild an immutable map on the message/background side; audio readers
- * take the latest atomic shared_ptr snapshot and do not lock the model graph.
+ * Single atomic shared_ptr + copy-on-write pattern:
+ * - Writers (ARA host thread / message thread) clone current map, modify, atomic_store
+ * - Audio readers atomic_load and do not lock.
+ * - std::mutex protects concurrent writers (lost-update prevention).
  */
 class PlaybackSourcePublisher
 {
@@ -29,11 +32,8 @@ public:
     void clear();
 
 private:
-    void rebuildSnapshotLocked();
-
-    juce::ReadWriteLock lock_;
-    std::map<ContentKey, PlaybackReadSource> sources_;
-    mutable std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>> snapshot_;
+    mutable std::mutex writerMutex_;  // Protects concurrent writers only
+    mutable std::shared_ptr<const std::map<ContentKey, PlaybackReadSource>> data_;
 };
 
 } // namespace OpenTune

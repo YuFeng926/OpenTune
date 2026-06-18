@@ -68,7 +68,7 @@ void ContentRenderService::removeRenderCache(ContentKey key)
 
 void ContentRenderService::attachExecutionLease(ExecutionLease lease)
 {
-    renderWorker_.attachExecutionLease(lease);
+    renderWorker_.attachExecutionLease(std::move(lease));
 }
 
 void ContentRenderService::detachExecutionLease(void* owner)
@@ -161,7 +161,7 @@ void ContentRenderService::clearAll()
     renderCaches_.clear();
     stretchers_.clear();
     timeStretchCache_.clear();
-    // renderWorker_ queue �?drain() 控制，不清空
+    // renderWorker_ queue 由 drain() 控制，不清空
 }
 
 } // namespace OpenTune

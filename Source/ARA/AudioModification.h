@@ -11,6 +11,12 @@
 
 namespace OpenTune {
 
+enum class AudioModificationReadIntent
+{
+    None,
+    UserRead
+};
+
 enum class AudioModificationBirthState
 {
     Empty,
@@ -30,6 +36,7 @@ struct AudioModification
     ContentKey contentIdentity;
     uint64_t birthRevision{0};
     AudioModificationBirthState birthState{AudioModificationBirthState::Empty};
+    AudioModificationReadIntent readIntent{AudioModificationReadIntent::None};
 
     // 内容所有权
     AudioModificationContentState content;
