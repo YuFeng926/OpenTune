@@ -688,16 +688,13 @@ void OpenTuneDocumentController::willEnableAudioSourceSamplesAccess(juce::ARAAud
 }
 
 void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess(juce::ARAAudioSource* audioSource,
-                                                                    bool enable)
+                                                                     bool enable)
 {
     auto& source = ensureAudioSource(audioSource);
     source.setSampleAccessEnabled(enable);
-
-    // Per architecture: sample access enable is permission, not user intent.
-    // This callback does NOT create reader lease, rebuild CRS, materialize content,
-    // refresh modifications, or read host source PCM.
-    // Only requestReadAudioForPlaybackRegions() (triggered by Record button)
-    // is allowed to read host audio.
+    // Per plan doc: sample access enable is permission only, not read intent.
+    // Do NOT create reader lease here. Lease creation is user-commanded only
+    // via requestReadAudioForPlaybackRegions() -> recordRequested().
 
     refreshRegisteredRenderers(publishModelChange());
 }
@@ -1581,9 +1578,7 @@ void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
     auto* mod = findAudioModificationByContentKey(job.contentKey);
     if (mod == nullptr || mod->content.lifecycle != ContentLifecycle::Ready)
     {
-        job.renderCache->completeChunkRender(job.startSeconds,
-                                             job.targetRevision,
-                                             RenderCache::CompletionResult::TerminalFailure);
+        job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
         return;
     }
 
@@ -1592,18 +1587,14 @@ void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
         || !contentRenderService_->getPlaybackReadSource(job.contentKey, readSource)
         || readSource.audioBuffer == nullptr)
     {
-        job.renderCache->completeChunkRender(job.startSeconds,
-                                             job.targetRevision,
-                                             RenderCache::CompletionResult::TerminalFailure);
+        job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
         return;
     }
 
     auto snap = snapshotAudioModification(job.contentKey);
     if (!snap)
     {
-        job.renderCache->completeChunkRender(job.startSeconds,
-                                             job.targetRevision,
-                                             RenderCache::CompletionResult::TerminalFailure);
+        job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
         return;
     }
 

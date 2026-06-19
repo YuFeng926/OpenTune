@@ -57,16 +57,31 @@ public:
     };
     bool getNextPendingJob(PendingJob& outJob);
 
-    enum class CompletionResult : uint8_t {
-        Succeeded,        // 已成功产出 revision 对应结果
-        TerminalFailure   // 本次 revision 终态失败（不重试）
+    // 原子完成入口的窄语义返回值
+    // - Published: audio 写入 + published + Idle，status = Idle, runningRevision = 0
+    // - Stale: runningRevision != revision，chunk 状态不变
+    // - InvalidInput: 输入无效（audio.empty、span mismatch、not found），调用方应走 failure 收口
+    enum class ChunkRenderResult : uint8_t {
+        Published,
+        Stale,
+        InvalidInput
     };
 
-    // 渲染完成回调：Running -> Idle/Pending
-    // - Succeeded 且版本匹配：Idle，publishedRevision = revision
-    // - Succeeded 但版本过期（revision < desiredRevision）：Pending，需重新渲染
-    // - TerminalFailure：Idle，不重试
-    bool completeChunkRender(double startSeconds, uint64_t revision, CompletionResult result);
+    // 原子完成入口：一把锁内完成 audio 写入 + 发布 + 状态转移
+    // - 校验 runningRevision == revision（唯一 stale 检测）
+    // - 写入 audio，设置 publishedRevision
+    // - status = Idle，runningRevision = 0
+    // - publishLocked()
+    // 输入无效属于调用方 bug，返回 InvalidInput 让调用方明确 failure 路径
+    ChunkRenderResult completeChunkRenderWithAudio(int64_t startSample,
+                                                   int64_t endSampleExclusive,
+                                                   std::vector<float>&& audio,
+                                                   uint64_t revision);
+
+    // 渲染失败回调：仅处理 TerminalFailure
+    // - runningRevision != revision → ignore（stale）
+    // - 否则：status = Idle，runningRevision = 0
+    void completeChunkRenderFailure(double startSeconds, uint64_t revision);
 
     // 标记 Chunk 为空白区域（无有效F0），从待渲染队列移除
     void markChunkAsBlank(double startSeconds, uint64_t revision);
@@ -94,8 +109,6 @@ public:
 
     RenderCache();
     ~RenderCache();
-
-    bool addChunk(int64_t startSample, int64_t endSampleExclusive, std::vector<float>&& audio, uint64_t targetRevision);
 
     void overlayPublishedAudioForRate(juce::AudioBuffer<float>& destination,
                                       int destStartSample,
@@ -136,8 +149,8 @@ private:
     mutable std::vector<std::shared_ptr<const PublishedRenderSnapshot>> retiredSnapshots_;
 
     // Rebuild publishedSnapshot_ from chunks_ inside lock_ critical section.
-    // Call after any mutation that changes which PCM is visible (addChunk,
-    // markChunkAsBlank, clear, eviction).
+    // Call after any mutation that changes which PCM is visible
+    // (completeChunkRenderWithAudio, markChunkAsBlank, clear, eviction).
     void publishLocked();
     void pruneRetiredSnapshotsLocked() const;
 

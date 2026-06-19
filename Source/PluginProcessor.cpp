@@ -765,9 +765,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             if (job.renderCache == nullptr) return;
             auto contentSnap = getContentSnapshot(job.contentKey);
             if (!contentSnap) {
-                job.renderCache->completeChunkRender(job.startSeconds,
-                                                     job.targetRevision,
-                                                     RenderCache::CompletionResult::TerminalFailure);
+                job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
                 return;
             }
             ProcessRenderRuntime::CompletionContext completion;
