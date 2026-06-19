@@ -236,13 +236,15 @@ CheckResult araSampleAccessEnableDoesNotReadFreshContent()
     if (didEnable.empty())
         return fail("araSampleAccessEnableDoesNotReadFreshContent", "didEnableAudioSourceSamplesAccess callback is missing.");
 
-    // Per VST3 ARA explicit-read principle: didEnableAudioSourceSamplesAccess only grants permission,
-    // it must NOT read AudioSource samples, create reader lease, rebuild CRS, or trigger F0 extraction.
-    // The only user-read entry point is through PluginEditor::recordRequested() -> document controller request.
+// Per VST3 ARA explicit-read principle: didEnableAudioSourceSamplesAccess grants permission only.
+// Per architecture decision (commit 5215c6f): sample access enable is NOT read intent.
+// It must NOT create reader lease, read samples, rebuild CRS, materialize content, or schedule F0.
+// The only user-read entry point is requestReadAudioForPlaybackRegions() via recordRequested().
 
-    if (contains(didEnable, "source.createReaderLease()"))
+    // Forbidden: createReaderLease - lease creation is user-commanded only
+    if (contains(didEnable, "createReaderLease"))
         return fail("araSampleAccessEnableDoesNotReadFreshContent",
-                    "didEnableAudioSourceSamplesAccess must NOT create reader lease. Only user-read request can read AudioSource samples.");
+                    "didEnableAudioSourceSamplesAccess must NOT create reader lease. Lease creation is user-commanded only.");
 
     if (contains(didEnable, "rebuildCRSForSource"))
         return fail("araSampleAccessEnableDoesNotReadFreshContent",
@@ -287,6 +289,43 @@ CheckResult refreshPlaybackReadSourceIsPrivate()
                     "If intentionally removed, update this test accordingly.");
 
     return pass("refreshPlaybackReadSourceIsPrivate");
+}
+
+CheckResult vst3OverlayInitiallyHidden()
+{
+    const auto vst3Editor = readText("Source/Plugin/PluginEditor.cpp");
+
+    // 构造后必须显式隐藏 overlay 和 badge
+    // 不用 extractFunctionBlock——构造函数初始化列表含花括号会干扰大括号匹配
+    if (!contains(vst3Editor, "autoRenderOverlay_.setVisible(false)"))
+        return fail("vst3OverlayInitiallyHidden",
+            "VST3 PluginEditor must call autoRenderOverlay_.setVisible(false).");
+
+    if (!contains(vst3Editor, "renderBadge_.setVisible(false)"))
+        return fail("vst3OverlayInitiallyHidden",
+            "VST3 PluginEditor must call renderBadge_.setVisible(false).");
+
+    return pass("vst3OverlayInitiallyHidden");
+}
+
+CheckResult recordRequestedNoRegionNoAlert()
+{
+    const auto vst3Editor = readText("Source/Plugin/PluginEditor.cpp");
+    const auto recordRequested = extractFunctionBlock(vst3Editor, "recordRequested");
+
+    if (recordRequested.empty())
+        return fail("recordRequestedNoRegionNoAlert", "Cannot locate recordRequested function.");
+
+    // 无 region 时必须静默返回，不弹窗
+    const auto emptyCheck = extractFunctionBlock(recordRequested, "allRegions.empty()");
+    if (emptyCheck.empty())
+        return fail("recordRequestedNoRegionNoAlert", "Cannot locate allRegions.empty() check.");
+
+    if (contains(emptyCheck, "AlertWindow::showMessageBoxAsync"))
+        return fail("recordRequestedNoRegionNoAlert",
+            "recordRequested must NOT show AlertWindow when allRegions.empty(). Silent return only.");
+
+    return pass("recordRequestedNoRegionNoAlert");
 }
 
 CheckResult playbackRendererUsesCrsSnapshotNotOwnerPointer()
@@ -1196,11 +1235,96 @@ CheckResult processRenderRuntimeOwnsNoAraModels()
     return pass("processRenderRuntimeOwnsNoAraModels");
 }
 
+// ---------------------------------------------------------------------------
+// RenderCache 状态机回归测试（BUG3 根因：渲染风暴）
+// 验证关键序列：Running rev N → 编辑 requeue rev N+1 → 旧 completion ignored → 新 completion published
+// ---------------------------------------------------------------------------
+
+CheckResult renderCacheRequestRenderPendingCancelsRunning()
+{
+    const auto rc = readText("Source/Inference/RenderCache.cpp");
+    const auto reqFn = extractFunctionBlock(rc, "void RenderCache::requestRenderPending");
+
+    if (reqFn.empty())
+        return fail("renderCacheRequestRenderPendingCancelsRunning",
+                    "requestRenderPending function not found.");
+
+    // 关键：Running 状态下必须清零 runningRevision 并重新入 Pending
+    if (!contains(reqFn, "runningRevision = 0"))
+        return fail("renderCacheRequestRenderPendingCancelsRunning",
+                    "requestRenderPending must clear runningRevision=0 on Running state. "
+                    "Without this, stale Vocoder completions are not ignored.");
+
+    if (!contains(reqFn, "Chunk::Status::Pending") || !contains(reqFn, "Chunk::Status::Running"))
+        return fail("renderCacheRequestRenderPendingCancelsRunning",
+                    "requestRenderPending must handle Running state by requeueing to Pending.");
+
+    return pass("renderCacheRequestRenderPendingCancelsRunning");
+}
+
+CheckResult renderCacheMarkChunkAsBlankUsesRunningRevisionToken()
+{
+    const auto rc = readText("Source/Inference/RenderCache.cpp");
+    const auto blankFn = extractFunctionBlock(rc, "void RenderCache::markChunkAsBlank");
+
+    if (blankFn.empty())
+        return fail("renderCacheMarkChunkAsBlankUsesRunningRevisionToken",
+                    "markChunkAsBlank function not found.");
+
+    // 关键：stale 检测必须用 runningRevision，不是 desiredRevision
+    if (contains(blankFn, "desiredRevision") && contains(blankFn, "revision != chunk.desiredRevision"))
+        return fail("renderCacheMarkChunkAsBlankUsesRunningRevisionToken",
+                    "markChunkAsBlank must use runningRevision token for stale detection, "
+                    "not desiredRevision. Blank is a Running completion variant.");
+
+    if (!contains(blankFn, "runningRevision"))
+        return fail("renderCacheMarkChunkAsBlankUsesRunningRevisionToken",
+                    "markChunkAsBlank must reference runningRevision for stale detection.");
+
+    return pass("renderCacheMarkChunkAsBlankUsesRunningRevisionToken");
+}
+
+CheckResult renderCacheCompleteChunkRenderWithAudioReturnsTriState()
+{
+    const auto rcH = readText("Source/Inference/RenderCache.h");
+
+    // 关键：ChunkRenderResult 必须是三值枚举
+    if (!contains(rcH, "ChunkRenderResult"))
+        return fail("renderCacheCompleteChunkRenderWithAudioReturnsTriState",
+                    "ChunkRenderResult enum not found in RenderCache.h.");
+
+    if (!contains(rcH, "Published") || !contains(rcH, "Stale") || !contains(rcH, "InvalidInput"))
+        return fail("renderCacheCompleteChunkRenderWithAudioReturnsTriState",
+                    "ChunkRenderResult must have Published, Stale, and InvalidInput values. "
+                    "Two-value (Published/Stale) conflates input errors with stale completions.");
+
+    // 关键：completeChunkRenderWithAudio 必须返回 ChunkRenderResult，不是 bool
+    if (contains(rcH, "bool completeChunkRenderWithAudio"))
+        return fail("renderCacheCompleteChunkRenderWithAudioReturnsTriState",
+                    "completeChunkRenderWithAudio must return ChunkRenderResult, not bool.");
+
+    // 关键：旧 addChunk 和 completeChunkRender(CompletionResult) 必须已删除
+    if (contains(rcH, "bool addChunk("))
+        return fail("renderCacheCompleteChunkRenderWithAudioReturnsTriState",
+                    "Old addChunk() must be removed. Publication is now atomic in completeChunkRenderWithAudio.");
+
+    if (contains(rcH, "CompletionResult"))
+        return fail("renderCacheCompleteChunkRenderWithAudioReturnsTriState",
+                    "Old CompletionResult enum must be removed. Replaced by ChunkRenderResult + completeChunkRenderFailure.");
+
+    return pass("renderCacheCompleteChunkRenderWithAudioReturnsTriState");
+}
+
 } // namespace
 
 int main()
 {
     const std::vector<CheckResult (*)()> tests = {
+        // RenderCache 状态机回归测试（BUG3 根因）
+        renderCacheRequestRenderPendingCancelsRunning,
+        renderCacheMarkChunkAsBlankUsesRunningRevisionToken,
+        renderCacheCompleteChunkRenderWithAudioReturnsTriState,
+        // ARA 架构测试
         araObjectBoundariesMatchOfficialRoles,
         araArchiveRestoresFromAudioSourceOnly,
         araSampleAccessEnableDoesNotReadFreshContent,
@@ -1233,7 +1357,9 @@ int main()
         renderExecutionLeaseLifecycleSafety,
         processRenderRuntimeInCMake,
         processorHasNoChunkRenderOrVocoderRuntime,
-        processRenderRuntimeOwnsNoAraModels
+processRenderRuntimeOwnsNoAraModels,
+        vst3OverlayInitiallyHidden,
+        recordRequestedNoRegionNoAlert
     };
 
     int failed = 0;

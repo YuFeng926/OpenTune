@@ -1306,6 +1306,33 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
         target_compile_options(OpenTunePitchCurveEditingContractTests PRIVATE /utf-8)
     endif()
     add_test(NAME OpenTunePitchCurveEditingContractTests COMMAND OpenTunePitchCurveEditingContractTests)
+
+    add_executable(OpenTuneRenderCacheStateMachineTests
+        Tests/TestRenderCacheStateMachine.cpp
+        Source/Inference/RenderCache.cpp
+        Source/Utils/AppLogger.cpp
+    )
+    target_compile_features(OpenTuneRenderCacheStateMachineTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneRenderCacheStateMachineTests
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/Source
+    )
+    target_link_libraries(OpenTuneRenderCacheStateMachineTests
+        PRIVATE
+            juce::juce_audio_basics
+            juce::juce_core
+            juce::juce_recommended_config_flags
+    )
+    target_compile_definitions(OpenTuneRenderCacheStateMachineTests
+        PRIVATE
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneRenderCacheStateMachineTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneRenderCacheStateMachineTests COMMAND OpenTuneRenderCacheStateMachineTests)
 endif()
 
 # ==============================================================================
