@@ -29,6 +29,12 @@ struct ContentEditRangeFrames {
     int endFrameExclusive{0};
 };
 
+// Seconds-based range for note-only patches (notes are inherently time-based, not frame-based)
+struct ContentEditRangeSeconds {
+    double startSeconds{0.0};
+    double endSeconds{0.0};
+};
+
 enum class FullRenderReason : uint8_t {
     Import,
     SourceReplacement,
@@ -39,13 +45,22 @@ enum class FullRenderReason : uint8_t {
     ModelOrSettingsWholeContentRerender
 };
 
+struct ContentNoteRangePatch {
+    ContentEditRangeSeconds affectedRange;
+    std::vector<Note> afterNotesInRange;
+};
+
 class ContentEditCommands
 {
 public:
     virtual ~ContentEditCommands() = default;
 
-    virtual bool setNotes(ContentKey key,
-                          std::vector<Note> notes) = 0;
+    // Full-mutation path only — for import/project restore/full regeneration.
+    // PianoRoll UI edits must use commitNotePatch instead.
+    virtual bool replaceContentNotesForFullMutation(ContentKey key,
+                           std::vector<Note> notes) = 0;
+
+    virtual bool commitNotePatch(ContentKey key, ContentNoteRangePatch patch) = 0;
 
     virtual bool commitNotesAndSegments(ContentKey key,
                                         std::vector<Note> notes,

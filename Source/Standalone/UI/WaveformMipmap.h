@@ -29,6 +29,13 @@ struct PeakSample
     bool isZero() const noexcept { return min == 0 && max == 0; }
 };
 
+struct WaveformLevelSnapshot {
+    int samplesPerPeak = 0;
+    int64_t buildProgress = 0;
+    bool complete = false;
+    std::vector<PeakSample> peaks;
+};
+
 class WaveformMipmap
 {
 public:
@@ -70,6 +77,8 @@ public:
     
     const Level& selectBestLevel(double pixelsPerSecond) const;
     int selectBestLevelIndex(double pixelsPerSecond) const;
+    
+    WaveformLevelSnapshot snapshotLevel(int level) const;
     
     void clear();
     

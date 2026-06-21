@@ -535,7 +535,7 @@ CheckResult nonAraVst3CaptureSignalChainIsConnected()
     const auto processBlock = extractFunctionBlock(
         processor,
         "void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer");
-    const auto setNotes = extractFunctionBlock(processor, "bool OpenTuneAudioProcessor::setContentNotes");
+    const auto replaceNotes = extractFunctionBlock(processor, "bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation");
     const auto commitNotesAndSegments = extractFunctionBlock(processor, "bool OpenTuneAudioProcessor::commitContentNotesAndSegments");
     const auto setPitchCurve = extractFunctionBlock(processor, "bool OpenTuneAudioProcessor::setContentPitchCurve");
     const auto writePitchCurve = extractFunctionBlock(processor, "bool OpenTuneAudioProcessor::writePitchCurveToOwner");
@@ -547,7 +547,7 @@ CheckResult nonAraVst3CaptureSignalChainIsConnected()
     const auto updateCaptureCallback = extractFunctionBlock(vst3Editor, "void OpenTuneAudioProcessorEditor::updateRegularCaptureSessionCallback");
     const auto autoTune = extractFunctionBlock(vst3Editor, "void OpenTuneAudioProcessorEditor::autoTuneRequested");
     if (constructor.empty() || getCapture.empty() || processBlock.empty()
-        || setNotes.empty() || commitNotesAndSegments.empty() || setPitchCurve.empty()
+        || replaceNotes.empty() || commitNotesAndSegments.empty() || setPitchCurve.empty()
         || writePitchCurve.empty() || setTimeGrid.empty() || setPitchShift.empty() || durationHelper.empty()
         || commitAutoTune.empty() || editorTimer.empty()
         || updateCaptureCallback.empty() || autoTune.empty())
@@ -615,7 +615,7 @@ CheckResult nonAraVst3CaptureSignalChainIsConnected()
         return fail("nonAraVst3CaptureSignalChainIsConnected",
                     "regular VST3 AUTO must commit generated notes/pitch curve into capture owner truth and trigger render invalidation.");
 
-    if (!contains(setNotes, "session->applyNotes")
+    if (!contains(replaceNotes, "session->applyNotes")
         || !contains(commitNotesAndSegments, "session->applyNotesAndPitchCurve")
         || !contains(writePitchCurve, "session->applyPitchCurve")
         || !contains(setPitchCurve, "writePitchCurveToOwner")
@@ -1315,6 +1315,65 @@ CheckResult renderCacheCompleteChunkRenderWithAudioReturnsTriState()
     return pass("renderCacheCompleteChunkRenderWithAudioReturnsTriState");
 }
 
+// ── Phase 6: VBlank paint contract tests ────────────────────────────────────
+
+CheckResult paintDoesNotRequestCoverage()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    // Extract the paint() method body
+    const auto paint = extractFunctionBlock(cpp, "void PianoRollComponent::paint(juce::Graphics& g)");
+    if (paint.empty())
+        return fail("paintDoesNotRequestCoverage",
+                     "Cannot find PianoRollComponent::paint()");
+
+    if (contains(paint, "requestCoverage"))
+        return fail("paintDoesNotRequestCoverage",
+                     "paint() must not call requestCoverage(). "
+                     "Tile generation must happen outside paint (e.g. flushPendingVisualInvalidation).");
+
+    return pass("paintDoesNotRequestCoverage");
+}
+
+CheckResult paintDoesNotBuildSnapshot()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto paint = extractFunctionBlock(cpp, "void PianoRollComponent::paint(juce::Graphics& g)");
+    if (paint.empty())
+        return fail("paintDoesNotBuildSnapshot",
+                     "Cannot find PianoRollComponent::paint()");
+
+    if (contains(paint, "buildRenderSnapshot"))
+        return fail("paintDoesNotBuildSnapshot",
+                     "paint() must not call buildRenderSnapshot(). "
+                     "Snapshot construction is work; paint must only consume pre-built data.");
+
+    return pass("paintDoesNotBuildSnapshot");
+}
+
+CheckResult paintOnlyDrawsVisibleTilesForDetailLayer()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto paint = extractFunctionBlock(cpp, "void PianoRollComponent::paint(juce::Graphics& g)");
+    if (paint.empty())
+        return fail("paintOnlyDrawsVisibleTilesForDetailLayer",
+                     "Cannot find PianoRollComponent::paint()");
+
+    // paint must call drawVisibleTiles (consume published tiles)
+    if (!contains(paint, "drawVisibleTiles"))
+        return fail("paintOnlyDrawsVisibleTilesForDetailLayer",
+                     "paint() must call drawVisibleTiles() to consume published tiles.");
+
+    // paint must NOT call any tile generation method
+    if (contains(paint, "renderTile"))
+        return fail("paintOnlyDrawsVisibleTilesForDetailLayer",
+                     "paint() must not call renderTile() — tile rendering is the worker's job.");
+
+    return pass("paintOnlyDrawsVisibleTilesForDetailLayer");
+}
+
 } // namespace
 
 int main()
@@ -1359,7 +1418,11 @@ int main()
         processorHasNoChunkRenderOrVocoderRuntime,
 processRenderRuntimeOwnsNoAraModels,
         vst3OverlayInitiallyHidden,
-        recordRequestedNoRegionNoAlert
+        recordRequestedNoRegionNoAlert,
+        // Phase 6: VBlank paint contract
+        paintDoesNotRequestCoverage,
+        paintDoesNotBuildSnapshot,
+        paintOnlyDrawsVisibleTilesForDetailLayer
     };
 
     int failed = 0;
