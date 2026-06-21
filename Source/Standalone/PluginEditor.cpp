@@ -3354,16 +3354,8 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
                 ga.strength = event.strength;
                 overlay.ghostAnchors.push_back(ga);
             }
-            overlay.ghostColour = juce::Colours::steelblue;
+overlay.ghostColour = juce::Colours::steelblue;
             overlay.enabled = true;
-            // Source time projection: reference's local source time 鈫?timeline time
-            const double refTimelineStart = refPlacement.timelineStartSeconds;
-            auto* refClip = processorRef_.getStandaloneContentRepository()
-                ? processorRef_.getStandaloneContentRepository()->findClip(refPlacement.contentKey) : nullptr;
-            const auto refGrid = refClip ? refClip->payload().timeGrid : nullptr;
-            overlay.projectSourceTime = [refTimelineStart, refGrid](double srcSec) -> double {
-                return refTimelineStart + (refGrid != nullptr ? refGrid->tauForward(srcSec) : srcSec);
-            };
             pianoRoll_.setReferenceOverlay(overlay);
         } else {
             pianoRoll_.setReferenceOverlay(std::nullopt);

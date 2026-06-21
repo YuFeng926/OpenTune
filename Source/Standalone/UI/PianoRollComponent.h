@@ -37,7 +37,9 @@
 #include "SmallButton.h"
 #include "PlayheadOverlayComponent.h"
 #include "PianoRoll/PianoRollRenderer.h"
-#include "PianoRoll/PianoRollRenderModelCache.h"
+#include "PianoRoll/PianoRollCoordinateMapper.h"
+#include "PianoRoll/PianoRollTimelineSurfaceCache.h"
+#include "PianoRoll/PianoRollRenderSnapshot.h"
 #include "PianoRoll/PianoRollToolHandler.h"
 #include "PianoRoll/PianoRollVisualInvalidation.h"
 #include "PianoRoll/PianoRollCorrectionWorker.h"
@@ -53,50 +55,6 @@ class OpenTuneAudioProcessor;
 class PianoKeyAudition;
 
 struct PianoRollComponentTestProbe;
-
-class PianoRollContentSurface : public juce::Component
-{
-public:
-    PianoRollContentSurface()
-    {
-        setOpaque(false);
-        setInterceptsMouseClicks(false, false);
-    }
-
-    void setSurfaceImage(juce::Image image)
-    {
-        surfaceImage_ = std::move(image);
-        repaint();
-    }
-
-    void setImageOffsetX(int offsetX)
-    {
-        if (imageOffsetX_ == offsetX)
-            return;
-
-        imageOffsetX_ = offsetX;
-    }
-
-    void clearSurfaceImage()
-    {
-        if (!surfaceImage_.isValid())
-            return;
-
-        surfaceImage_ = {};
-        imageOffsetX_ = 0;
-        repaint();
-    }
-
-private:
-    void paint(juce::Graphics& g) override
-    {
-        if (surfaceImage_.isValid())
-            g.drawImageAt(surfaceImage_, imageOffsetX_, 0);
-    }
-
-    juce::Image surfaceImage_;
-    int imageOffsetX_ = 0;
-};
 
 // ============================================================================
 // Preview Overlay — lightweight child that draws transient interaction previews
@@ -219,13 +177,13 @@ public:
 
         scrollMode_ = mode;
         updatePlayheadPresentationPolicy();
-        prepareVisibleRenderModel();
+        ++visualPrefsRevision_;
         invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Viewport),
                          PianoRollVisualInvalidationPriority::Interactive);
     }
     ScrollMode getScrollMode() const { return scrollMode_; }
     void setScrollOffset(int offset);
-    int getScrollOffset() const { return scrollOffset_; }
+    int getScrollOffset() const { return viewportState_.scrollOffsetPx; }
     void setScale(int rootNote, int scaleType);
     void setAudioEditingScheme(AudioEditingScheme::Scheme scheme) { audioEditingScheme_ = scheme; }
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& settings) { zoomSensitivity_ = settings; }
@@ -238,14 +196,12 @@ public:
         if (showOriginalF0_ == show) return;
         showOriginalF0_ = show;
         ++visualPrefsRevision_;
-        prepareVisibleRenderModel();
         invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
     }
     void setShowCorrectedF0(bool show) {
         if (showCorrectedF0_ == show) return;
         showCorrectedF0_ = show;
         ++visualPrefsRevision_;
-        prepareVisibleRenderModel();
         invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
     }
     bool isShowingOriginalF0() const { return showOriginalF0_; }
@@ -399,24 +355,12 @@ private:
     void updatePresentationClock(double authoritativeTime, double timestampSec);
     void resetPresentationClock(double authoritativeTime);
     PianoRollRenderer::RenderContext makePresentationRenderContext() const;
-    bool preparedRenderBandCoversViewport(int viewportStartX, int viewportEndX) const;
-    bool renderBandNeedsRebuild(int contentViewportWidth, int viewportHeight) const;
-    bool ensureRenderBandCoversCurrentViewport(bool forceRebuild) const;
-    void refreshPreparedRenderModel(bool forceRebuild) const;
-    void rebuildRulerSurface() const;
-    void rebuildContentSurface() const;
-    void updateRulerSurfaceBounds() const;
-    void updateContentSurfaceBounds() const;
-    void rebuildPreparedRenderModelForViewport(int viewportStartX,
-                                               int viewportEndX,
-                                               bool forceRebuild) const;
+    PianoRollRenderSnapshot buildRenderSnapshot() const;
 
     void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
     void drawLineAnchorPreview(juce::Graphics& g);
     void drawSelectionBox(juce::Graphics& g, ThemeId themeId);
-    /** Draw just the background/theme when the prepared render model is not ready. */
-    void paintBackgroundOnly(juce::Graphics& g);
     bool shouldShowPianoKeys() const noexcept;
 
 
@@ -450,10 +394,6 @@ private:
     void beginNoteDraft();
     bool commitNoteDraft();
     void clearNoteDraft();
-    // affectedRange: 编辑时已知的精确帧范围；通过 commitNotesAndSegments 传递到 mutation sink 触发局部渲染。
-    // 纯 note 编辑没有 corrected-F0 所有权时，调用方传入完整 F0 物化范围。
-    bool commitEditedContentNotes(const std::vector<Note>& notes,
-                                          F0FrameRange affectedRange);
     bool commitEditedContentNotesAndSegments(const std::vector<Note>& notes,
                                              const std::vector<CorrectedSegment>& segments,
                                              F0FrameRange affectedRange);
@@ -515,7 +455,7 @@ private:
                                   xToTime(viewportEndX),
                                   viewportStartX,
                                   viewportEndX,
-                                  scrollOffset_,
+                                   viewportState_.scrollOffsetPx,
                                   viewport.getWidth(),
                                   pianoKeyWidth_);
     }
@@ -528,10 +468,6 @@ private:
                                                         int renderWidthPx,
                                                         int renderPianoKeyWidth) const;
 
-    /** Rebuild the prepared render model from current state if the cache key has changed.
-     *  Called from every state-change path (scroll, zoom, visual prefs, content),
-     *  NEVER from paint(). */
-    void prepareVisibleRenderModel() const;
     void refreshVerticalViewportGeometry(PianoRollVisualInvalidationPriority priority =
                                              PianoRollVisualInvalidationPriority::Interactive);
 
@@ -539,7 +475,6 @@ private:
 
     std::shared_ptr<PitchCurve> currentCurve_;
     double zoomLevel_ = 1.0;
-    int scrollOffset_ = 0;
     float verticalScrollOffset_ = 0.0f;
     ScrollMode scrollMode_ = ScrollMode::Continuous;
     std::atomic<bool> isPlaying_{false};
@@ -634,21 +569,9 @@ private:
 
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
 
-    mutable PianoRollRenderModelCache renderModelCache_;
-    mutable PianoRollContentSurface rulerSurface_;
-    mutable PianoRollContentSurface contentSurface_;
-    mutable juce::Image rulerSurfaceImage_;
-    mutable juce::Image contentSurfaceImage_;
-    mutable juce::Rectangle<int> rulerSurfaceBounds_;
-    mutable juce::Rectangle<int> contentSurfaceBounds_;
-    mutable int64_t preparedBandStartMs_ = 0;
-    mutable int64_t preparedBandEndMs_ = 0;
-    mutable struct RenderBandState {
-        int startContentX = 0;
-        int widthPx = 0;
-        int heightPx = 0;
-        bool valid = false;
-    } renderBand_;
+    TimelineViewportState viewportState_;
+    PianoRollCoordinateMapper coordinateMapper_;
+    PianoRollTimelineSurfaceCache surfaceCache_;
     uint64_t visualPrefsRevision_ = 0;
     uint64_t viewportSizeRevision_ = 0;
     mutable uint64_t interactionRevision_ = 0;
@@ -666,8 +589,6 @@ private:
     void captureBeforeUndoSnapshot();
     void recordUndoAction(const juce::String& description, F0FrameRange affectedRange);
 
-    // 纯 note 编辑或全局参数操作使用当前 currentCurve_ 的完整 F0 物化范围。
-    F0FrameRange currentFullF0Range() const;
     std::vector<CorrectedSegment> getCurrentSegments() const;
     
     bool applyVibratoParameterToSelection(VibratoParam param, float value);
@@ -691,7 +612,6 @@ private:
     int pressedPianoKey_ = -1;
     
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
-
     std::weak_ptr<std::atomic<double>> positionSource_;
 
     juce::ListenerList<Listener> listeners_;

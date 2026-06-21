@@ -216,6 +216,17 @@ int WaveformMipmap::selectBestLevelIndex(double pixelsPerSecond) const
     return 0;
 }
 
+WaveformLevelSnapshot WaveformMipmap::snapshotLevel(int level) const {
+    WaveformLevelSnapshot snap;
+    if (level < 0 || level >= kNumLevels) return snap;
+    const auto& lv = levels_[level];
+    snap.samplesPerPeak = kSamplesPerPeak[level];
+    snap.buildProgress = lv.buildProgress;
+    snap.complete = lv.complete;
+    snap.peaks = lv.peaks;
+    return snap;
+}
+
 void WaveformMipmap::clear()
 {
     audioBuffer_.reset();

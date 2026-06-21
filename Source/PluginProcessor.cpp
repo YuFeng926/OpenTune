@@ -811,10 +811,16 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                 retuneSpeed, vibratoDepth, vibratoRate);
         }
 
-        bool setNotes(ContentKey key, std::vector<Note> notes) override
+        bool replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes) override
         {
             if (!proc_) return false;
-            return proc_->setContentNotes(key, std::move(notes));
+            return proc_->replaceContentNotesForFullMutation(key, std::move(notes));
+        }
+
+        bool commitNotePatch(ContentKey key, ContentNoteRangePatch patch) override
+        {
+            if (!proc_) return false;
+            return proc_->commitContentNotePatch(key, std::move(patch));
         }
 
         bool commitNotesAndSegments(ContentKey key,
@@ -3288,7 +3294,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             NoteSequence sequence;
             sequence.setNotesSorted(snap->notes);
             sequence.eraseRange(request.changedStartSeconds, request.changedEndSeconds);
-            setContentNotes(request.contentKey, sequence.getNotes());
+            replaceContentNotesForFullMutation(request.contentKey, sequence.getNotes());
         }
 
         if (snap->pitchCurve != nullptr) {
@@ -3964,7 +3970,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     return result;
 }
 
-bool OpenTuneAudioProcessor::setContentNotes(ContentKey key, std::vector<Note> notes)
+bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes)
 {
     bool ok = false;
     switch (key.domainKind) {
@@ -4016,13 +4022,42 @@ bool OpenTuneAudioProcessor::setContentCorrectedSegments(ContentKey key,
 }
 
 bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
-                                                            std::vector<Note> notes,
+                                                            std::vector<Note> notesInRange,
                                                             std::vector<CorrectedSegment> segments,
                                                             ContentEditRangeFrames affectedRange)
 {
     auto snap = getContentSnapshot(key);
     if (!snap || !snap->pitchCurve) return false;
 
+    // Range-scoped notes merge (same logic as commitContentNotePatch)
+    const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
+                                 / snap->pitchCurve->getSampleRate();
+    const double rangeStartSec = static_cast<double>(affectedRange.startFrame) * secondsPerFrame;
+    const double rangeEndSec   = static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame;
+
+    std::vector<Note> mergedNotes;
+    mergedNotes.reserve(snap->notes.size() + notesInRange.size());
+
+    // keptBefore: notes entirely before the range
+    for (const auto& note : snap->notes) {
+        if (note.endTime <= rangeStartSec)
+            mergedNotes.push_back(note);
+    }
+
+    // afterNotesInRange: notes overlapping the range
+    mergedNotes.insert(mergedNotes.end(),
+                       notesInRange.begin(),
+                       notesInRange.end());
+
+    // keptAfter: notes entirely after the range
+    for (const auto& note : snap->notes) {
+        if (note.startTime >= rangeEndSec)
+            mergedNotes.push_back(note);
+    }
+
+    auto normalizedNotes = normalizeStoredNotes(std::move(mergedNotes));
+
+    // Segments are sparse structure — full replacement is correct
     auto newCurve = clonePitchCurveWithCorrectedSegments(snap->pitchCurve, std::move(segments));
     if (!newCurve) return false;
 
@@ -4031,7 +4066,7 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
-            clip->applyNotes(normalizeStoredNotes(std::move(notes)));
+            clip->applyNotes(std::move(normalizedNotes));
             clip->applyPitchCurve(std::move(newCurve));
             ok = true;
             break;
@@ -4040,7 +4075,7 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
-            if (!dc->applyNotesToModification(key, normalizeStoredNotes(std::move(notes)))) return false;
+            if (!dc->applyNotesToModification(key, std::move(normalizedNotes))) return false;
             if (newCurve) dc->applyPitchCurveToModification(key, std::move(newCurve));
             ok = true;
             break;
@@ -4049,7 +4084,7 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
             if (session == nullptr
-                || !session->applyNotesAndPitchCurve(key, normalizeStoredNotes(std::move(notes)), std::move(newCurve))) {
+                || !session->applyNotesAndPitchCurve(key, std::move(normalizedNotes), std::move(newCurve))) {
                 return false;
             }
             ok = true;
@@ -4060,6 +4095,79 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
     }
     if (ok) {
         onContentLocalMutationCompleted(key, MutationScope::NotesChanged, affectedRange);
+    }
+    return ok;
+}
+
+bool OpenTuneAudioProcessor::commitContentNotePatch(ContentKey key, ContentNoteRangePatch patch)
+{
+    auto snap = getContentSnapshot(key);
+    if (!snap) return false;
+
+    const double rangeStartSec = patch.affectedRange.startSeconds;
+    const double rangeEndSec   = patch.affectedRange.endSeconds;
+
+    // Merge: keptBefore + afterNotesInRange + keptAfter
+    // Notes are time-ordered; split at range boundaries.
+    std::vector<Note> mergedNotes;
+    mergedNotes.reserve(snap->notes.size() + patch.afterNotesInRange.size());
+
+    for (const auto& note : snap->notes) {
+        if (note.endTime <= rangeStartSec)
+            mergedNotes.push_back(note);
+    }
+
+    mergedNotes.insert(mergedNotes.end(),
+                       patch.afterNotesInRange.begin(),
+                       patch.afterNotesInRange.end());
+
+    for (const auto& note : snap->notes) {
+        if (note.startTime >= rangeEndSec)
+            mergedNotes.push_back(note);
+    }
+
+    auto normalizedNotes = normalizeStoredNotes(std::move(mergedNotes));
+
+    bool ok = false;
+    switch (key.domainKind) {
+        case DomainKind::StandaloneClip: {
+            auto* clip = standaloneContentRepository_->findClip(key);
+            if (!clip) return false;
+            clip->applyNotes(std::move(normalizedNotes));
+            ok = true;
+            break;
+        }
+#if JucePlugin_Enable_ARA
+        case DomainKind::ARAAudioModification: {
+            auto* dc = getDocumentController();
+            if (!dc) return false;
+            ok = dc->applyNotesToModification(key, std::move(normalizedNotes));
+            break;
+        }
+#else
+        case DomainKind::ARAAudioModification:
+            break;
+#endif
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            if (session == nullptr) return false;
+            ok = session->applyNotes(key, std::move(normalizedNotes));
+            break;
+        }
+        default:
+            break;
+    }
+
+    if (ok) {
+        // Convert seconds-based range to frames for render invalidation
+        ContentEditRangeFrames frameRange;
+        if (snap->pitchCurve && patch.affectedRange.endSeconds > patch.affectedRange.startSeconds) {
+            const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
+                                         / snap->pitchCurve->getSampleRate();
+            frameRange.startFrame = static_cast<int>(patch.affectedRange.startSeconds / secondsPerFrame);
+            frameRange.endFrameExclusive = static_cast<int>(std::ceil(patch.affectedRange.endSeconds / secondsPerFrame));
+        }
+        onContentLocalMutationCompleted(key, MutationScope::NotesChanged, frameRange);
     }
     return ok;
 }

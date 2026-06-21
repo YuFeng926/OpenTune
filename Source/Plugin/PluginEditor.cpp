@@ -168,7 +168,9 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.addListener(this);
 
     addAndMakeVisible(autoRenderOverlay_);
+    autoRenderOverlay_.setVisible(false);
     addAndMakeVisible(renderBadge_);
+    renderBadge_.setVisible(false);
 
     contentCommands_ = processorRef_.getContentCommands();
     pianoRoll_.setProcessor(&processorRef_);
@@ -872,10 +874,7 @@ void OpenTuneAudioProcessorEditor::recordRequested()
 
     const auto allRegions = dc->getPlaybackRegionProjections();
     if (allRegions.empty()) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                               "Read Audio",
-                                               "No audio region is available on this track.");
-        return;
+        return;  // 无 region 时静默返回
     }
 
     dc->requestReadAudioForPlaybackRegionsAsync([this, regionCount = static_cast<int>(allRegions.size())](int refreshed) {

@@ -572,7 +572,7 @@ public:
         TimeGridChanged,      // setContentTimeGrid
         PitchShiftChanged,    // setContentPitchShiftSettings
         PitchCurveChanged,    // setContentPitchCurve
-        NotesChanged,         // setContentNotes
+        NotesChanged,         // replaceContentNotesForFullMutation
     };
 
     // Hard-cut render mutation sinks: local edits carry their true affected
@@ -599,12 +599,13 @@ public:
 
     bool setContentReferenceFeatures(ContentKey key, const ReferenceFeatureSet& features);
 
-    bool setContentNotes(ContentKey key, std::vector<Note> notes);
+    bool replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes);
     bool setContentCorrectedSegments(ContentKey key, std::vector<CorrectedSegment> segments);
     bool commitContentNotesAndSegments(ContentKey key,
-                                       std::vector<Note> notes,
-                                       std::vector<CorrectedSegment> segments,
-                                       ContentEditRangeFrames affectedRange);
+                                        std::vector<Note> notes,
+                                        std::vector<CorrectedSegment> segments,
+                                        ContentEditRangeFrames affectedRange);
+    bool commitContentNotePatch(ContentKey key, ContentNoteRangePatch patch);
     bool setContentPitchCurve(ContentKey key,
                               std::shared_ptr<PitchCurve> curve,
                               ContentEditRangeFrames affectedRange);

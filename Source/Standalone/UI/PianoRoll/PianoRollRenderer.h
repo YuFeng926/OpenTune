@@ -14,6 +14,7 @@
 #include "Utils/Note.h"
 #include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §8.5 — TimeGrid handles
 #include "UI/ToolIds.h"       // ⚡️ vocal-time-stretch §8.5 (Phase J) — currentTool
+#include "PianoRollCoordinateMapper.h"
 #include <algorithm>
 #include <vector>
 #include <array>
@@ -133,6 +134,8 @@ public:
         std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
         uint64_t timeGridHoveredHandleId = 0;
         uint64_t timeGridSelectedHandleId = 0;
+        std::vector<uint64_t> additionalSelectedHandleIds;
+        std::vector<int> selectedLineAnchorSegmentIds;
 
         // ⚡️ vocal-time-stretch §8.5 (Phase I) — 将 content-local 的
         // handle output_seconds 转换为 timeline time，供 drawTimeGridHandles
@@ -152,6 +155,9 @@ public:
         std::function<float(float)> freqToMidi;
         std::function<double(int)> xToTime;
         std::function<int(double)> timeToX;
+
+        // Direct coordinate mapper — avoids lambda overhead in tile worker
+        PianoRollCoordinateMapper coords;
     };
 
     struct F0VisualBuildOptions
