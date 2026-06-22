@@ -3929,9 +3929,26 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     };
     auto filterSegments = [&](const std::vector<CorrectedSegment>& segs) {
         std::vector<CorrectedSegment> result;
-        for (const auto& s : segs)
-            if (s.endFrame > patch.affectedStartFrame && s.startFrame < patch.affectedEndFrame)
-                result.push_back(s);
+        for (const auto& s : segs) {
+            if (s.endFrame <= patch.affectedStartFrame || s.startFrame >= patch.affectedEndFrame)
+                continue;  // Outside range
+            
+            // Clip to range boundaries (split-preserve for boundary-crossing segments)
+            const int clipStart = std::max(s.startFrame, patch.affectedStartFrame);
+            const int clipEnd = std::min(s.endFrame, patch.affectedEndFrame);
+            if (clipEnd <= clipStart)
+                continue;  // Empty after clip
+            
+            CorrectedSegment clipped = s;
+            const int startOffset = clipStart - s.startFrame;
+            const int clipLen = clipEnd - clipStart;
+            if (startOffset >= 0 && clipLen > 0 && startOffset + clipLen <= static_cast<int>(s.f0Data.size())) {
+                clipped.startFrame = clipStart;
+                clipped.endFrame = clipEnd;
+                clipped.f0Data.assign(s.f0Data.begin() + startOffset, s.f0Data.begin() + startOffset + clipLen);
+                result.push_back(std::move(clipped));
+            }
+        }
         return result;
     };
 
@@ -4056,12 +4073,28 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
         notesInRange = std::move(filtered);
     }
 
-    // Filter incoming segments to range (self-protecting sink)
+    // Filter and clip incoming segments to range (self-protecting sink)
     {
         std::vector<CorrectedSegment> filtered;
         for (const auto& seg : segments) {
-            if (seg.endFrame > affectedRange.startFrame && seg.startFrame < affectedRange.endFrameExclusive)
-                filtered.push_back(seg);
+            if (seg.endFrame <= affectedRange.startFrame || seg.startFrame >= affectedRange.endFrameExclusive)
+                continue;  // Outside range
+            
+            // Clip to range boundaries
+            const int clipStart = std::max(seg.startFrame, affectedRange.startFrame);
+            const int clipEnd = std::min(seg.endFrame, affectedRange.endFrameExclusive);
+            if (clipEnd <= clipStart)
+                continue;  // Empty after clip
+            
+            CorrectedSegment clipped = seg;
+            const int startOffset = clipStart - seg.startFrame;
+            const int clipLen = clipEnd - clipStart;
+            if (startOffset >= 0 && clipLen > 0 && startOffset + clipLen <= static_cast<int>(seg.f0Data.size())) {
+                clipped.startFrame = clipStart;
+                clipped.endFrame = clipEnd;
+                clipped.f0Data.assign(seg.f0Data.begin() + startOffset, seg.f0Data.begin() + startOffset + clipLen);
+                filtered.push_back(std::move(clipped));
+            }
         }
         segments = std::move(filtered);
     }
