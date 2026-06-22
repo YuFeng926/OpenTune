@@ -24,7 +24,7 @@ void PianoRollTimelineSurfaceCache::requestCoverage(PianoRollRenderSnapshot snap
 void PianoRollTimelineSurfaceCache::invalidateAll() {
     std::lock_guard<std::mutex> lock(queueMutex_);
     tiles_.clear();
-    currentGeneration_++;
+    surfaceEpoch_++;
 }
 
 void PianoRollTimelineSurfaceCache::drawVisibleTiles(juce::Graphics& g,
@@ -67,13 +67,13 @@ void PianoRollTimelineSurfaceCache::workerLoop() {
             if (shutdown_.load(std::memory_order_acquire)) return;
 
             PianoRollTileKey key = makeTileKey(req.snapshot, req.viewport, ti);
-            key.generation = req.generation;
+            key.surfaceEpoch = req.surfaceEpoch;
 
             PianoRollTile tile;
             tile.key = key;
             tile.image = PianoRollTileRenderer::renderTile(req.snapshot, key);
 
-            completed.push_back({ti, std::move(tile), req.generation});
+            completed.push_back({ti, std::move(tile), req.surfaceEpoch});
         }
 
         // Publish completed tiles to message thread
@@ -99,11 +99,12 @@ void PianoRollTimelineSurfaceCache::handleAsyncUpdate() {
 
     std::lock_guard<std::mutex> lock(queueMutex_);
     for (auto& c : toPublish) {
-        // Only accept tiles from current or newer generations
-        if (c.generation < currentGeneration_) continue;
+        // 精确匹配：只接受当前 surface epoch 的 tile
+        if (c.surfaceEpoch != surfaceEpoch_) continue;
 
+        // 用完整 key 去重：同 key 跳过，不同 key 覆盖
         auto it = tiles_.find(c.tileIndex);
-        if (it != tiles_.end() && it->second.key.generation > c.generation) continue;
+        if (it != tiles_.end() && it->second.key == c.tile.key) continue;
 
         tiles_[c.tileIndex] = std::move(c.tile);
     }
@@ -112,10 +113,10 @@ void PianoRollTimelineSurfaceCache::handleAsyncUpdate() {
 void PianoRollTimelineSurfaceCache::enqueueRequest(PianoRollRenderSnapshot snapshot,
                                                     TimelineViewportState viewport) {
     std::lock_guard<std::mutex> lock(queueMutex_);
-    currentGeneration_++;
+    // 不再递增 surfaceEpoch_！纯滚动不改变内容身份
     pending_.snapshot = std::move(snapshot);
     pending_.viewport = viewport;
-    pending_.generation = currentGeneration_;
+    pending_.surfaceEpoch = surfaceEpoch_;
     pending_.valid = true;
     queueCv_.notify_one();
 }
