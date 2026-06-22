@@ -1,4 +1,4 @@
-#include "PianoRollRenderer.h"
+﻿#include "PianoRollRenderer.h"
 #include "../UiAssets.h"
 #include "../UIColors.h"
 #include "../../../Utils/AppLogger.h"
@@ -94,19 +94,19 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
     if (window.viewportEndX <= window.viewportStartX)
         return {};
 
-    window.visibleStartTime = ctx.xToTime(window.viewportStartX);
-    window.visibleEndTime = ctx.xToTime(window.viewportEndX);
+    window.visibleStartTime = ctx.coords.xToTime(window.viewportStartX);
+    window.visibleEndTime = ctx.coords.xToTime(window.viewportEndX);
     if (window.visibleEndTime <= window.visibleStartTime)
         return {};
 
     window.visibleContentStartTime = item.projection.projectTimelineTimeToContent(window.visibleStartTime);
     window.visibleContentEndTime = item.projection.projectTimelineTimeToContent(window.visibleEndTime);
 
-    // vocal-time-stretch §8.5 — When a non-identity TimeGrid is published,
+    // vocal-time-stretch 搂8.5 鈥?When a non-identity TimeGrid is published,
     // projectTimelineTimeToContent returns OUTPUT time inside the
     // content, but Notes / PitchCurve / F0 timeline / WaveformMipmap
     // are all indexed by SOURCE time. Convert to source time via tauInverse
-    // so downstream filters work correctly. Identity grid → no-op.
+    // so downstream filters work correctly. Identity grid 鈫?no-op.
     if (ctx.timeGridSnapshot != nullptr && !ctx.timeGridSnapshot->isIdentity()) {
         window.visibleContentStartTime = ctx.timeGridSnapshot->tauInverse(window.visibleContentStartTime);
         window.visibleContentEndTime   = ctx.timeGridSnapshot->tauInverse(window.visibleContentEndTime);
@@ -114,9 +114,9 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
     return window;
 }
 
-// vocal-time-stretch §8.5 — convert a SOURCE-time anchor (Note.startTime,
+// vocal-time-stretch 搂8.5 鈥?convert a SOURCE-time anchor (Note.startTime,
 // f0Timeline frame timestamp, WaveformMipmap peak) into screen X via the
-// item's projection. Identity TimeGrid → degenerates to existing pipeline.
+// item's projection. Identity TimeGrid 鈫?degenerates to existing pipeline.
 inline int sourceTimeToScreenX(double sourceTime,
                                 const PianoRollRenderer::RenderContext& ctx,
                                 const PianoRollRenderer::ContentRenderItem& item)
@@ -126,284 +126,15 @@ inline int sourceTimeToScreenX(double sourceTime,
         outputTime = ctx.timeGridSnapshot->tauForward(sourceTime);
     }
     const double timelineTime = item.projection.projectContentTimeToTimeline(outputTime);
-    return ctx.timeToX(timelineTime);
+    return ctx.coords.timeToX(timelineTime);
 }
-
 
 bool isVoicedFrame(float frequencyHz) noexcept
 {
     return frequencyHz > 0.0f;
 }
 
-float clampF0VisualAlpha(float alpha) noexcept
-{
-    return juce::jlimit(0.0f, 1.0f, alpha);
-}
-
-struct F0VisualLevelStyle {
-    float energyAlpha = 1.0f;
-    float levelHotMix = 0.0f;
-};
-
-static constexpr std::size_t kMaxF0VisualPointsPerSegment = 4096;
-
-float smootherStep(float value) noexcept
-{
-    const float t = juce::jlimit(0.0f, 1.0f, value);
-    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
-}
-
-float linearRmsToDbfs(float rms) noexcept
-{
-    if (!std::isfinite(rms) || rms <= 0.0f) {
-        return -120.0f;
-    }
-
-    return 20.0f * std::log10(juce::jmax(1.0e-6f, std::abs(rms)));
-}
-
-F0VisualLevelStyle calculateF0VisualLevelStyle(float linearRms,
-                                               bool hasAbsoluteEnergy) noexcept
-{
-    static constexpr float kMinEnergyAlpha = 0.34f;
-    static constexpr float kQuietDb = -60.0f;
-    static constexpr float kOpaqueDb = -18.0f;
-    static constexpr float kHotFadeStartDb = -21.0f;
-    static constexpr float kHotFullDb = -6.0f;
-    static constexpr float kMaxHotMix = 0.34f;
-
-    if (!hasAbsoluteEnergy || !std::isfinite(linearRms)) {
-        return {};
-    }
-
-    const float dbfs = linearRmsToDbfs(linearRms);
-    const float levelAlpha = kMinEnergyAlpha + (1.0f - kMinEnergyAlpha)
-        * smootherStep((dbfs - kQuietDb) / (kOpaqueDb - kQuietDb));
-    const float hotMix = kMaxHotMix * smootherStep((dbfs - kHotFadeStartDb) / (kHotFullDb - kHotFadeStartDb));
-
-    return {
-        clampF0VisualAlpha(levelAlpha),
-        juce::jlimit(0.0f, kMaxHotMix, hotMix)
-    };
-}
-
-void appendSmoothedF0Path(juce::Path& path,
-                          const std::vector<PianoRollRenderer::F0VisualPoint>& points,
-                          std::size_t startIndex,
-                          std::size_t endIndexInclusive)
-{
-    if (points.empty() || startIndex >= points.size()) {
-        return;
-    }
-
-    endIndexInclusive = std::min(endIndexInclusive, points.size() - 1);
-    if (endIndexInclusive <= startIndex) {
-        const auto& point = points[startIndex];
-        path.startNewSubPath(point.x - 0.01f, point.y);
-        path.lineTo(point.x + 0.01f, point.y);
-        return;
-    }
-
-    path.startNewSubPath(points[startIndex].x, points[startIndex].y);
-    for (std::size_t i = startIndex + 1; i < endIndexInclusive; ++i) {
-        const auto& control = points[i];
-        const auto& next = points[i + 1];
-        path.quadraticTo(control.x,
-                         control.y,
-                         (control.x + next.x) * 0.5f,
-                         (control.y + next.y) * 0.5f);
-    }
-
-    const auto& last = points[endIndexInclusive];
-    path.lineTo(last.x, last.y);
-}
-
-std::vector<PianoRollRenderer::F0VisualPoint> buildDisplaySmoothedF0Points(
-    const std::vector<PianoRollRenderer::F0VisualPoint>& points,
-    int radius)
-{
-    if (radius <= 0 || points.size() < 3) {
-        return points;
-    }
-
-    auto smoothed = points;
-    for (std::size_t i = 1; i + 1 < points.size(); ++i) {
-        const std::size_t start = (i > static_cast<std::size_t>(radius)) ? i - static_cast<std::size_t>(radius) : 0;
-        const std::size_t end = std::min(points.size() - 1, i + static_cast<std::size_t>(radius));
-
-        float ySum = 0.0f;
-        float weightSum = 0.0f;
-        for (std::size_t j = start; j <= end; ++j) {
-            const float distance = static_cast<float>(std::abs(static_cast<int>(j) - static_cast<int>(i)));
-            const float weight = static_cast<float>(radius + 1) - distance;
-            ySum += points[j].y * weight;
-            weightSum += weight;
-        }
-
-        if (weightSum > 0.0f) {
-            smoothed[i].y = ySum / weightSum;
-        }
-    }
-
-    smoothed.front().y = points.front().y;
-    smoothed.back().y = points.back().y;
-    return smoothed;
-}
-
-void appendUniqueF0VisualPoint(std::vector<PianoRollRenderer::F0VisualPoint>& out,
-                               const PianoRollRenderer::F0VisualPoint& point)
-{
-    if (out.empty() || out.back().frame != point.frame) {
-        out.push_back(point);
-    }
-}
-
-void reduceF0VisualSegmentDensity(PianoRollRenderer::F0VisualSegment& segment)
-{
-    auto& points = segment.points;
-    if (points.size() <= kMaxF0VisualPointsPerSegment) {
-        return;
-    }
-
-    static constexpr std::size_t kPointsPerBucket = 4;
-    const std::size_t bucketCount = std::max<std::size_t>(1, kMaxF0VisualPointsPerSegment / kPointsPerBucket);
-    const double bucketSize = static_cast<double>(points.size()) / static_cast<double>(bucketCount);
-
-    std::vector<PianoRollRenderer::F0VisualPoint> reduced;
-    reduced.reserve(kMaxF0VisualPointsPerSegment);
-
-    for (std::size_t bucketIndex = 0; bucketIndex < bucketCount; ++bucketIndex) {
-        const std::size_t start = static_cast<std::size_t>(std::floor(static_cast<double>(bucketIndex) * bucketSize));
-        const std::size_t endExclusive = std::min(points.size(),
-            static_cast<std::size_t>(std::floor(static_cast<double>(bucketIndex + 1) * bucketSize)));
-        if (start >= endExclusive) {
-            continue;
-        }
-
-        std::array<std::size_t, kPointsPerBucket> candidates {
-            start,
-            start,
-            start,
-            endExclusive - 1
-        };
-
-        for (std::size_t i = start + 1; i < endExclusive; ++i) {
-            if (points[i].y < points[candidates[1]].y) {
-                candidates[1] = i;
-            }
-            if (points[i].y > points[candidates[2]].y) {
-                candidates[2] = i;
-            }
-        }
-
-        std::sort(candidates.begin(), candidates.end());
-        for (const auto candidate : candidates) {
-            appendUniqueF0VisualPoint(reduced, points[candidate]);
-        }
-    }
-
-    points = std::move(reduced);
-}
-
 } // namespace
-
-std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0VisualSegments(
-    const std::vector<float>& f0,
-    const std::vector<float>* originalEnergy,
-    const std::vector<uint8_t>* visibleMask,
-    const F0VisualBuildOptions& options,
-    const F0FrameToX& frameToX,
-    const F0FrameToY& frameToY)
-{
-    std::vector<F0VisualSegment> segments;
-    if (f0.empty() || !frameToX || !frameToY) {
-        return segments;
-    }
-
-    const int startFrame = juce::jlimit(0, static_cast<int>(f0.size()), options.startFrame);
-    const int endFrameExclusive = juce::jlimit(startFrame, static_cast<int>(f0.size()), options.endFrameExclusive);
-    if (endFrameExclusive <= startFrame) {
-        return segments;
-    }
-
-    const bool hasEnergy = originalEnergy != nullptr && originalEnergy->size() == f0.size();
-    if (visibleMask != nullptr && visibleMask->size() != f0.size()) {
-        return segments;
-    }
-
-    const bool hasVisibleMask = visibleMask != nullptr;
-
-    int validEnergyCount = 0;
-    bool allEnergyIsLegacyUnit = true;
-    bool allEnergyIsZero = true;
-    if (hasEnergy) {
-        for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
-            const float frequency = f0[static_cast<std::size_t>(frame)];
-            if (frequency < 20.0f || frequency > 2000.0f) {
-                continue;
-            }
-            if (hasVisibleMask && (*visibleMask)[static_cast<std::size_t>(frame)] == 0) {
-                continue;
-            }
-
-            const float energy = (*originalEnergy)[static_cast<std::size_t>(frame)];
-            if (std::isfinite(energy)) {
-                ++validEnergyCount;
-                if (std::abs(energy - 1.0f) > 1.0e-4f) {
-                    allEnergyIsLegacyUnit = false;
-                }
-                if (std::abs(energy) > 1.0e-6f) {
-                    allEnergyIsZero = false;
-                }
-            }
-        }
-    }
-    const bool hasAbsoluteEnergy = hasEnergy && validEnergyCount > 0 && !allEnergyIsLegacyUnit && !allEnergyIsZero;
-
-    F0VisualSegment currentSegment;
-
-    auto flushSegment = [&]() {
-        if (!currentSegment.points.empty()) {
-            reduceF0VisualSegmentDensity(currentSegment);
-            segments.push_back(std::move(currentSegment));
-            currentSegment = {};
-        }
-    };
-
-    for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
-        if (hasVisibleMask && (*visibleMask)[static_cast<std::size_t>(frame)] == 0) {
-            flushSegment();
-            continue;
-        }
-
-        const float frequency = f0[static_cast<std::size_t>(frame)];
-        if (frequency < 20.0f || frequency > 2000.0f) {
-            flushSegment();
-            continue;
-        }
-
-        const float x = frameToX(frame);
-        if (x < static_cast<float>(options.viewportStartX) || x > static_cast<float>(options.viewportEndX)) {
-            flushSegment();
-            continue;
-        }
-
-        const float y = frameToY(frame, frequency);
-        const auto levelStyle = hasEnergy
-            ? calculateF0VisualLevelStyle((*originalEnergy)[static_cast<std::size_t>(frame)], hasAbsoluteEnergy)
-            : F0VisualLevelStyle {};
-        currentSegment.points.push_back({
-            frame,
-            x,
-            y,
-            levelStyle.energyAlpha,
-            levelStyle.levelHotMix
-        });
-    }
-
-    flushSegment();
-    return segments;
-}
 
 void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
 {
@@ -418,7 +149,7 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
 
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
-        float y = ctx.midiToY(static_cast<float>(midi));
+        float y = ctx.coords.midiToY(static_cast<float>(midi));
         float laneH = ctx.pixelsPerSemitone;
 
         if (y < -laneH || y > h) continue;
@@ -503,7 +234,7 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
             return;
         }
 
-        // §8.5 — frame timestamps are SOURCE time; project through τ so
+        // 搂8.5 鈥?frame timestamps are SOURCE time; project through 蟿 so
         // unvoiced bands align with the stretched waveform.
         const int x1 = std::max(ctx.pianoKeyWidth,
             sourceTimeToScreenX(item.f0Timeline.timeAtFrame(startFrame), ctx, item));
@@ -576,23 +307,23 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
 
     juce::Path waveformPath;
 
-    // ⚡️ vocal-time-stretch §8.5 (Phase H) — waveform stretching.
+    // 鈿★笍 vocal-time-stretch 搂8.5 (Phase H) 鈥?waveform stretching.
     // When the TimeGrid is non-identity, the visible waveform must reflect
-    // the user's retiming.  We invert the output → source mapping (tau_inverse)
+    // the user's retiming.  We invert the output 鈫?source mapping (tau_inverse)
     // so the screen X axis (output time) reads from the SOURCE peaks at the
-    // tau-inverted time.  Identity grid → zero-cost passthrough.
+    // tau-inverted time.  Identity grid 鈫?zero-cost passthrough.
     const bool useTauInverse = (ctx.timeGridSnapshot != nullptr
                                   && !ctx.timeGridSnapshot->isIdentity());
 
     for (int x = startX; x < endX; ++x)
     {
-        double matTime = item.projection.projectTimelineTimeToContent(ctx.xToTime(x));
+        double matTime = item.projection.projectTimelineTimeToContent(ctx.coords.xToTime(x));
         if (useTauInverse) {
             matTime = ctx.timeGridSnapshot->tauInverse(matTime);
         }
 
         // Aggregate all peaks covered by this pixel's time span
-        double matTimeNext = item.projection.projectTimelineTimeToContent(ctx.xToTime(x + 1));
+        double matTimeNext = item.projection.projectTimelineTimeToContent(ctx.coords.xToTime(x + 1));
         if (useTauInverse) {
             matTimeNext = ctx.timeGridSnapshot->tauInverse(matTimeNext);
         }
@@ -688,8 +419,8 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
 
         double beatInterval = selectBeatInterval(pixelsPerBeat);
 
-        double startTime = ctx.xToTime(0);
-        double endTime = ctx.xToTime(ctx.width);
+        double startTime = ctx.coords.xToTime(0);
+        double endTime = ctx.coords.xToTime(ctx.width);
 
         int64_t startBeat = static_cast<int64_t>(startTime / secondsPerBeat);
         if (startBeat < 0) startBeat = 0;
@@ -702,7 +433,7 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
         for (int64_t beat = startBeat; beat <= endBeat; beat += static_cast<int64_t>(beatInterval))
         {
             double time = beat * secondsPerBeat;
-            int pixelX = ctx.timeToX(time);
+            int pixelX = ctx.coords.timeToX(time);
 
             g.setColour(isAurora
                 ? UIColors::gridLine.withAlpha(0.080f)
@@ -729,16 +460,16 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
 
         double markerInterval = selectMarkerInterval(pixelsPerSecond);
 
-        double startTime = ctx.xToTime(0);
+        double startTime = ctx.coords.xToTime(0);
         if (startTime < 0.0) startTime = 0.0;
         startTime = std::floor(startTime / markerInterval) * markerInterval;
 
-        double endTime = ctx.xToTime(ctx.width);
+        double endTime = ctx.coords.xToTime(ctx.width);
 
         g.setFont(UIColors::getUIFont(13.0f));
         for (double time = startTime; time < endTime; time += markerInterval)
         {
-            int pixelX = ctx.timeToX(time);
+            int pixelX = ctx.coords.timeToX(time);
 
             g.setColour(isAurora
                 ? UIColors::gridLine.withAlpha(0.080f)
@@ -776,8 +507,8 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ct
 
         double beatInterval = selectBeatInterval(pixelsPerBeat);
 
-        double startTime = ctx.xToTime(0);
-        double endTime = ctx.xToTime(ctx.width);
+        double startTime = ctx.coords.xToTime(0);
+        double endTime = ctx.coords.xToTime(ctx.width);
 
         int64_t startBeat = static_cast<int64_t>(startTime / secondsPerBeat);
         if (startBeat < 0) startBeat = 0;
@@ -790,7 +521,7 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ct
         for (int64_t beat = startBeat; beat <= endBeat; beat += static_cast<int64_t>(beatInterval))
         {
             double time = beat * secondsPerBeat;
-            int pixelX = ctx.timeToX(time);
+            int pixelX = ctx.coords.timeToX(time);
 
             if (pixelX < ctx.pianoKeyWidth - 2 || pixelX > ctx.width + 2) continue;
 
@@ -833,17 +564,17 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ct
 
         double markerInterval = selectMarkerInterval(pixelsPerSecond);
 
-        double startTime = ctx.xToTime(0);
+        double startTime = ctx.coords.xToTime(0);
         if (startTime < 0.0) startTime = 0.0;
         startTime = std::floor(startTime / markerInterval) * markerInterval;
 
-        double endTime = ctx.xToTime(ctx.width);
+        double endTime = ctx.coords.xToTime(ctx.width);
 
         if (markerInterval < 0.001) markerInterval = 1.0;
 
         for (double time = startTime; time < endTime + markerInterval; time += markerInterval)
         {
-            int pixelX = ctx.timeToX(time);
+            int pixelX = ctx.coords.timeToX(time);
 
             if (pixelX < ctx.pianoKeyWidth - 2 || pixelX > ctx.width + 2) continue;
             if (themeId == ThemeId::Aurora)
@@ -869,7 +600,7 @@ void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g,
     g.setColour(UIColors::accent.withAlpha(0.92f));
 
     for (std::size_t index = 1; index + 1 < item.chunkBoundaries.size(); ++index) {
-        // §8.5 — chunk boundaries are SOURCE time; project through τ.
+        // 搂8.5 鈥?chunk boundaries are SOURCE time; project through 蟿.
         const int x = sourceTimeToScreenX(item.chunkBoundaries[index], ctx, item);
         if (x < ctx.pianoKeyWidth || x >= ctx.width) {
             continue;
@@ -955,7 +686,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.midiToY(static_cast<float>(drawMidi));
+        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
         float h = ctx.pixelsPerSemitone;
 
         if (y < -50.0f || y > height + 50.0f) continue;
@@ -1071,7 +802,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.midiToY(static_cast<float>(drawMidi));
+        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
         float h = ctx.pixelsPerSemitone;
         if (y < -50.0f || y > height + 50.0f) continue;
 
@@ -1086,7 +817,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.midiToY(static_cast<float>(drawMidi));
+        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
         float h = ctx.pixelsPerSemitone;
 
         if (y < -50.0f || y > height + 50.0f) continue;
@@ -1260,11 +991,11 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         float adjustedPitch = note.getAdjustedPitch();
         if (adjustedPitch <= 0.0f) continue;
 
-        float midi = ctx.freqToMidi(adjustedPitch);
-        float y = ctx.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
+        float midi = ctx.coords.freqToMidi(adjustedPitch);
+        float y = ctx.coords.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
         float h = ctx.pixelsPerSemitone;
 
-        // §8.5 — note.startTime/endTime are SOURCE time; project through τ
+        // 搂8.5 鈥?note.startTime/endTime are SOURCE time; project through 蟿
         // so a stretched segment renders at its correct visual width.
         int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
         int x2 = sourceTimeToScreenX(note.endTime,   ctx, item);
@@ -1342,356 +1073,6 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
     }
 }
 
-void PianoRollRenderer::drawPreparedF0Curve(juce::Graphics& g,
-                                            const std::vector<F0VisualSegment>& visualSegments,
-                                            juce::Colour colour,
-                                            float alpha,
-                                            bool isThinLine,
-                                            const RenderContext& ctx)
-{
-    if (visualSegments.empty()) return;
-
-    const auto themeId = UIColors::currentThemeId();
-    const bool isAurora = themeId == ThemeId::Aurora;
-    const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
-    const bool isOverdose = themeId == ThemeId::Overdose;
-    const float lineWidth = isAurora
-        ? (isThinLine ? 1.35f : 2.25f)
-        : ((isBlueBreeze || isOverdose) ? (isThinLine ? 1.15f : 1.85f) : (isThinLine ? 1.25f : 2.05f));
-    const juce::PathStrokeType strokeType(lineWidth,
-                                           juce::PathStrokeType::curved,
-                                           juce::PathStrokeType::rounded);
-    const float glowLineWidth = lineWidth + (isAurora ? (isThinLine ? 2.2f : 2.7f) : 1.8f);
-    const juce::PathStrokeType glowStrokeType(glowLineWidth,
-                                               juce::PathStrokeType::curved,
-                                               juce::PathStrokeType::rounded);
-    const juce::PathStrokeType innerGlowStrokeType(lineWidth + (isThinLine ? 0.72f : 0.95f),
-                                                    juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded);
-    const juce::PathStrokeType highlightStrokeType(juce::jmax(0.75f, lineWidth * 0.46f),
-                                                    juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded);
-
-    const juce::Colour selectionColour = isAurora
-        ? colour.brighter(0.18f)
-        : colour.brighter(0.14f);
-    const float selectionLineWidth = isAurora ? lineWidth + 0.85f : lineWidth + 0.65f;
-    const juce::PathStrokeType selectionStrokeType(selectionLineWidth,
-                                                    juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded);
-    static const juce::Colour kLevelHotGold { 0xFFFFC24A };
-    const auto blendLevelHotColour = [&](juce::Colour base, float levelHotMix) {
-        return base.interpolatedWith(kLevelHotGold, juce::jlimit(0.0f, 0.42f, levelHotMix));
-    };
-    const auto drawNormalCurve = [&](const juce::Path& path, float effectiveAlpha, float levelHotMix)
-    {
-        const auto curveColour = blendLevelHotColour(colour, levelHotMix);
-        if (isAurora)
-        {
-            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.080f : 0.095f)));
-            g.strokePath(path, glowStrokeType);
-            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.22f : 0.20f)));
-            g.strokePath(path, innerGlowStrokeType);
-            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.96f : 0.98f)));
-            g.strokePath(path, strokeType);
-            g.setColour(curveColour.brighter(isThinLine ? 0.30f : 0.20f).withAlpha(effectiveAlpha * (isThinLine ? 0.18f : 0.15f)));
-            g.strokePath(path, highlightStrokeType);
-            return;
-        }
-
-        if (isBlueBreeze || isOverdose)
-        {
-            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.055f : 0.070f)));
-            g.strokePath(path, glowStrokeType);
-            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.14f : 0.15f)));
-            g.strokePath(path, innerGlowStrokeType);
-            g.setColour(curveColour.withAlpha(effectiveAlpha * (isThinLine ? 0.96f : 0.92f)));
-            g.strokePath(path, strokeType);
-            g.setColour(curveColour.brighter(0.16f).withAlpha(effectiveAlpha * 0.12f));
-            g.strokePath(path, highlightStrokeType);
-            return;
-        }
-
-        g.setColour(curveColour.withAlpha(effectiveAlpha));
-        g.strokePath(path, strokeType);
-    };
-    const auto drawSelectionCurve = [&](const juce::Path& path, float effectiveAlpha, float levelHotMix)
-    {
-        const auto curveColour = blendLevelHotColour(selectionColour, levelHotMix);
-        if (isAurora)
-        {
-            g.setColour(curveColour.withAlpha(effectiveAlpha * 0.10f));
-            g.strokePath(path, glowStrokeType);
-        }
-        else if (isBlueBreeze || isOverdose)
-        {
-            g.setColour(curveColour.withAlpha(effectiveAlpha * 0.075f));
-            g.strokePath(path, glowStrokeType);
-        }
-
-        g.setColour(curveColour.withAlpha(effectiveAlpha * 0.96f));
-        g.strokePath(path, selectionStrokeType);
-    };
-
-    const auto drawTaperedCurve = [&](const F0VisualSegment& segment) {
-        if (segment.points.empty()) {
-            return;
-        }
-
-        const auto displayPoints = buildDisplaySmoothedF0Points(segment.points, isThinLine ? 1 : 2);
-
-        if (displayPoints.size() == 1) {
-            const auto& point = displayPoints.front();
-            juce::Path pointPath;
-            pointPath.startNewSubPath(point.x - 0.01f, point.y);
-            pointPath.lineTo(point.x + 0.01f, point.y);
-            drawNormalCurve(pointPath, alpha * point.energyAlpha * 0.35f, point.levelHotMix);
-            return;
-        }
-
-        const std::size_t spanCount = displayPoints.size() - 1;
-        const std::size_t fadeSpanCount = std::min<std::size_t>(6, std::max<std::size_t>(1, spanCount / 4));
-
-        // 2. Build the full path
-        juce::Path fullPath;
-        appendSmoothedF0Path(fullPath, displayPoints, 0, displayPoints.size() - 1);
-
-        const float leftX = displayPoints.front().x;
-        const float rightX = displayPoints.back().x;
-        const float xRange = rightX - leftX;
-
-        if (xRange <= 0.0f) {
-            drawNormalCurve(fullPath, alpha * displayPoints.front().energyAlpha, displayPoints.front().levelHotMix);
-            return;
-        }
-
-        // Pre-compute per-point taper + base alpha (shared across all layers)
-        struct PointAlpha {
-            double position;
-            float baseAlpha;   // alpha * energyAlpha * taperAlpha
-            float levelHotMix;
-        };
-        std::vector<PointAlpha> pointAlphas(displayPoints.size());
-        for (std::size_t i = 0; i < displayPoints.size(); ++i) {
-            const auto& pt = displayPoints[i];
-            float taperAlpha = 1.0f;
-            if (i < spanCount) {
-                const float startFade = juce::jmin(1.0f, static_cast<float>(i + 1) / static_cast<float>(fadeSpanCount + 1));
-                const float endFade = juce::jmin(1.0f, static_cast<float>(spanCount - i) / static_cast<float>(fadeSpanCount + 1));
-                taperAlpha = juce::jlimit(0.18f, 1.0f, juce::jmin(startFade, endFade));
-            } else {
-                const float endFade = 1.0f / static_cast<float>(fadeSpanCount + 1);
-                taperAlpha = juce::jlimit(0.18f, 1.0f, endFade);
-            }
-            pointAlphas[i].position = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
-            pointAlphas[i].baseAlpha = alpha * pt.energyAlpha * taperAlpha;
-            pointAlphas[i].levelHotMix = pt.levelHotMix;
-        }
-
-        // 3. Build gradient from pre-computed data (one loop per layer, no redundant taper math)
-        auto buildGradient = [&](auto colourFn, float alphaScale) {
-            juce::ColourGradient grad;
-            grad.isRadial = false;
-            grad.point1 = { leftX, 0.0f };
-            grad.point2 = { rightX, 0.0f };
-            for (const auto& pa : pointAlphas) {
-                const auto c = colourFn(pa.levelHotMix);
-                grad.addColour(pa.position, c.withAlpha(pa.baseAlpha * alphaScale));
-            }
-            return grad;
-        };
-
-        // 4. Stroke with gradient for each layer based on theme
-        if (isAurora) {
-            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
-                                             isThinLine ? 0.080f : 0.095f));
-            g.strokePath(fullPath, glowStrokeType);
-            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
-                                             isThinLine ? 0.22f : 0.20f));
-            g.strokePath(fullPath, innerGlowStrokeType);
-            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
-                                             isThinLine ? 0.96f : 0.98f));
-            g.strokePath(fullPath, strokeType);
-            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm).brighter(isThinLine ? 0.30f : 0.20f); },
-                                             isThinLine ? 0.18f : 0.15f));
-            g.strokePath(fullPath, highlightStrokeType);
-        } else if (isBlueBreeze || isOverdose) {
-            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
-                                             isThinLine ? 0.055f : 0.070f));
-            g.strokePath(fullPath, glowStrokeType);
-            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
-                                             isThinLine ? 0.14f : 0.15f));
-            g.strokePath(fullPath, innerGlowStrokeType);
-            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); },
-                                             isThinLine ? 0.96f : 0.92f));
-            g.strokePath(fullPath, strokeType);
-            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm).brighter(0.16f); },
-                                             0.12f));
-            g.strokePath(fullPath, highlightStrokeType);
-        } else {
-            g.setGradientFill(buildGradient([&](float hm) { return blendLevelHotColour(colour, hm); }, 1.0f));
-            g.strokePath(fullPath, strokeType);
-        }
-
-        // 5. Selection overlay — build sub-path for selected frames and stroke with selection gradient
-        if (ctx.hasF0Selection) {
-            // Find selected point range
-            std::size_t selStart = displayPoints.size();
-            std::size_t selEnd = 0;
-            for (std::size_t i = 0; i < displayPoints.size(); ++i) {
-                if (displayPoints[i].frame >= ctx.f0SelectionStartFrame
-                    && displayPoints[i].frame < ctx.f0SelectionEndFrameExclusive) {
-                    if (i < selStart) selStart = i;
-                    selEnd = i;
-                }
-            }
-
-            if (selStart < displayPoints.size() && selEnd > selStart) {
-                juce::Path selPath;
-                appendSmoothedF0Path(selPath, displayPoints, selStart, selEnd);
-
-                const float selLeftX = displayPoints[selStart].x;
-                const float selRightX = displayPoints[selEnd].x;
-                const float selXRange = selRightX - selLeftX;
-
-                if (selXRange > 0.0f) {
-                    auto buildSelGradient = [&](float alphaScale) {
-                        juce::ColourGradient grad;
-                        grad.isRadial = false;
-                        grad.point1 = { selLeftX, 0.0f };
-                        grad.point2 = { selRightX, 0.0f };
-                        for (std::size_t i = selStart; i <= selEnd; ++i) {
-                            const auto& pa = pointAlphas[i];
-                            const double position = (displayPoints[i].x - selLeftX) / selXRange;
-                            const auto c = blendLevelHotColour(selectionColour, pa.levelHotMix);
-                            grad.addColour(juce::jlimit(0.0, 1.0, position), c.withAlpha(pa.baseAlpha * alphaScale));
-                        }
-                        return grad;
-                    };
-
-                    if (isAurora) {
-                        g.setGradientFill(buildSelGradient(0.10f));
-                        g.strokePath(selPath, glowStrokeType);
-                    } else if (isBlueBreeze || isOverdose) {
-                        g.setGradientFill(buildSelGradient(0.075f));
-                        g.strokePath(selPath, glowStrokeType);
-                    }
-                    g.setGradientFill(buildSelGradient(0.96f));
-                    g.strokePath(selPath, selectionStrokeType);
-                }
-            }
-        }
-    };
-
-    for (const auto& segment : visualSegments) {
-        drawTaperedCurve(segment);
-    }
-}
-
-// ============================================================================
-// vocal-time-stretch §8.5 (Phase F) — TimeGrid handles overlay
-//
-// Each handle is rendered as a vertical guide line at output_seconds (because
-// the piano roll x-axis represents OUTPUT/display time per the v7 "data stores
-// source time, display uses output time" invariant).  HandleKind drives color:
-//   ClipStart / ClipEnd     → solid grey, locked (dimmer)
-//   OnsetVoiced             → cyan
-//   OnsetSibilant           → yellow
-//   OnsetSilence            → dim grey
-//   InternalOnset           → lavender
-//   UserAdded               → white
-//
-// Selected / hovered handles get extra emphasis (thicker line + glow box).
-// ============================================================================
-void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx)
-{
-    if (ctx.timeGridSnapshot == nullptr) return;
-    // §8.5 (Phase J / Journey-1 fix): handles are a Time-tool-only affordance.
-    // Pitch view (note/F0 editing) hides them entirely so the user has a clean
-    // canvas; Time view always shows them (including endpoint locked anchors
-    // on identity grid as visual reference + double-click target).
-    if (!ctx.isTimeView()) {
-        return;
-    }
-
-    const int contentTop    = ctx.rulerHeight;
-    const int contentBottom = ctx.height;
-    if (contentBottom <= contentTop) return;
-
-    auto colorForKind = [](HandleKind k) -> juce::Colour {
-        switch (k) {
-            case HandleKind::ClipStart:     return juce::Colours::lightgrey;
-            case HandleKind::ClipEnd:       return juce::Colours::lightgrey;
-            case HandleKind::OnsetVoiced:   return juce::Colour::fromRGB(64, 200, 220);
-            case HandleKind::OnsetSibilant: return juce::Colour::fromRGB(220, 200, 64);
-            case HandleKind::OnsetSilence:  return juce::Colours::dimgrey;
-            case HandleKind::InternalOnset: return juce::Colour::fromRGB(180, 140, 220);
-            case HandleKind::UserAdded:     return juce::Colours::white;
-            case HandleKind::ReferenceAuto: return juce::Colour::fromRGB(255, 196, 87);
-        }
-        return juce::Colours::white;
-    };
-
-    // High-confidence handles use a gold overlay. Locked endpoints do not use
-    // this overlay.
-    const juce::Colour kHighConfidenceColour = juce::Colour::fromRGB(0xE0, 0xB0, 0x40); // #E0B040 金色
-
-    // §8.5 — TimeGrid handles belong to the active edited content.
-    // The projection is supplied by buildRenderContext via contentTimeToTimeline,
-    // which delegates to activeContentProjection().  The renderer MUST NOT
-    // select an owner from ctx.contents — that would risk using a wrong
-    // placement's timeline offset.
-    if (!ctx.contentTimeToTimeline) return;
-
-    for (const auto& h : ctx.timeGridSnapshot->handles()) {
-        const double timelineTime = ctx.contentTimeToTimeline(h.output_seconds);
-        const int x = ctx.timeToX(timelineTime);
-        if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
-
-        juce::Colour col = colorForKind(h.kind);
-        if (h.locked) {
-            col = col.withAlpha(0.45f); // endpoints dimmer; confidence styling 不应用于 locked
-        } else if (h.confidence == Confidence::High) {
-            col = kHighConfidenceColour;
-        }
-
-        const bool selected = (ctx.timeGridSelectedHandleId == h.id);
-        const bool hovered  = (ctx.timeGridHoveredHandleId  == h.id);
-        // High confidence: 默认线宽 +50% (1.5×); selected/hovered 优先级仍最高。
-        const bool isHigh = (!h.locked && h.confidence == Confidence::High);
-        const float baseThickness = isHigh ? 1.5f : 1.0f;
-        const float lineThickness = (selected ? 2.0f : (hovered ? 1.5f : baseThickness));
-
-        // Vertical guide line spanning full content area (below ruler).
-        g.setColour(col.withMultipliedAlpha(selected ? 1.0f : (hovered ? 0.85f : 0.65f)));
-        g.drawLine(static_cast<float>(x),
-                   static_cast<float>(contentTop),
-                   static_cast<float>(x),
-                   static_cast<float>(contentBottom),
-                   lineThickness);
-
-        // Top "diamond" affordance under the ruler so user can grab it.
-        constexpr float kDiamondSize = 6.0f;
-        const float cy = static_cast<float>(contentTop) + kDiamondSize;
-        juce::Path diamond;
-        diamond.startNewSubPath(static_cast<float>(x), cy - kDiamondSize);
-        diamond.lineTo(static_cast<float>(x) + kDiamondSize, cy);
-        diamond.lineTo(static_cast<float>(x), cy + kDiamondSize);
-        diamond.lineTo(static_cast<float>(x) - kDiamondSize, cy);
-        diamond.closeSubPath();
-        g.setColour(col);
-        g.fillPath(diamond);
-        g.setColour(col.darker(0.35f));
-        g.strokePath(diamond, juce::PathStrokeType(0.8f));
-    }
-}
-
-// ============================================================================
-// Ghost Notes & Reference Anchors Overlay
-//
-// 参考 clip 的 derived notes 以半透明形式投影到当前视图，帮助用户对齐编辑。
-// Ghost notes 在当前轨活跃 notes 之下绘制；ghost anchors 为竖虚线参考线。
-// ============================================================================
 void PianoRollRenderer::drawGhostNotes(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay)
 {
     if (overlay.ghostNotes.empty())
@@ -1707,20 +1088,16 @@ void PianoRollRenderer::drawGhostNotes(juce::Graphics& g, const RenderContext& c
         if (adjustedPitch <= 0.0f)
             continue;
 
-        const double timelineStart = ctx.contentTimeToTimeline
-            ? ctx.contentTimeToTimeline(note.startTime)
-            : note.startTime;
-        const double timelineEnd = ctx.contentTimeToTimeline
-            ? ctx.contentTimeToTimeline(note.endTime)
-            : note.endTime;
+        const double timelineStart = overlay.sourceProjection.projectContentTimeToTimeline(note.startTime);
+        const double timelineEnd = overlay.sourceProjection.projectContentTimeToTimeline(note.endTime);
 
-        const int x1 = ctx.timeToX(timelineStart);
-        const int x2 = ctx.timeToX(timelineEnd);
+        const int x1 = ctx.coords.timeToX(timelineStart);
+        const int x2 = ctx.coords.timeToX(timelineEnd);
         if (x2 <= ctx.pianoKeyWidth || x1 >= ctx.width)
             continue;
 
-        const float midi = ctx.freqToMidi(adjustedPitch);
-        const float y = ctx.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
+        const float midi = ctx.coords.freqToMidi(adjustedPitch);
+        const float y = ctx.coords.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
         const float w = std::max(1.0f, static_cast<float>(x2 - x1));
         const float h = ctx.pixelsPerSemitone;
         const auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
@@ -1754,15 +1131,13 @@ void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext&
         return;
 
     static constexpr float kDashLengths[] = { 2.0f, 4.0f };
-    const float yTop = ctx.midiToY(ctx.minMidi);
-    const float yBottom = ctx.midiToY(ctx.maxMidi);
+    const float yTop = ctx.coords.midiToY(ctx.minMidi);
+    const float yBottom = ctx.coords.midiToY(ctx.maxMidi);
 
     for (const auto& anchor : overlay.ghostAnchors)
     {
-        const double timelineTime = overlay.projectSourceTime
-            ? overlay.projectSourceTime(anchor.sourceSeconds)
-            : anchor.sourceSeconds;
-        const int x = ctx.timeToX(timelineTime);
+        const double timelineTime = overlay.sourceProjection.projectContentTimeToTimeline(anchor.sourceSeconds);
+        const int x = ctx.coords.timeToX(timelineTime);
         if (x < ctx.pianoKeyWidth || x >= ctx.width)
             continue;
 
@@ -1772,6 +1147,190 @@ void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext&
             juce::Line<float>(static_cast<float>(x), yTop,
                               static_cast<float>(x), yBottom),
             kDashLengths, 2, 1.0f);
+    }
+}
+
+// ============================================================================
+// TimeGrid Handles
+// ============================================================================
+void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx)
+{
+    if (ctx.timeGridSnapshot == nullptr) return;
+
+    // Time-tool-only affordance — Pitch view hides them for a clean canvas.
+    if (!ctx.isTimeView()) return;
+
+    const int contentTop    = ctx.rulerHeight;
+    const int contentBottom = ctx.height;
+    if (contentBottom <= contentTop) return;
+
+    auto colorForKind = [](HandleKind k) -> juce::Colour {
+        switch (k) {
+            case HandleKind::ClipStart:     return juce::Colours::lightgrey;
+            case HandleKind::ClipEnd:       return juce::Colours::lightgrey;
+            case HandleKind::OnsetVoiced:   return juce::Colour::fromRGB(64, 200, 220);
+            case HandleKind::OnsetSibilant: return juce::Colour::fromRGB(220, 200, 64);
+            case HandleKind::OnsetSilence:  return juce::Colours::dimgrey;
+            case HandleKind::InternalOnset: return juce::Colour::fromRGB(180, 140, 220);
+            case HandleKind::UserAdded:     return juce::Colours::white;
+            case HandleKind::ReferenceAuto: return juce::Colour::fromRGB(255, 196, 87);
+        }
+        return juce::Colours::white;
+    };
+
+    const juce::Colour kHighConfidenceColour = juce::Colour::fromRGB(0xE0, 0xB0, 0x40);
+
+    for (const auto& h : ctx.timeGridSnapshot->handles()) {
+        const double timelineTime = ctx.activeProjection.projectContentTimeToTimeline(h.output_seconds);
+        const int x = ctx.coords.timeToX(timelineTime);
+        if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
+
+        juce::Colour col = colorForKind(h.kind);
+        if (h.locked) {
+            col = col.withAlpha(0.45f);
+        } else if (h.confidence == Confidence::High) {
+            col = kHighConfidenceColour;
+        }
+
+        const bool selected = (ctx.timeGridSelectedHandleId == h.id);
+        const bool hovered  = (ctx.timeGridHoveredHandleId  == h.id);
+        const bool isHigh = (!h.locked && h.confidence == Confidence::High);
+        const float baseThickness = isHigh ? 1.5f : 1.0f;
+        const float lineThickness = (selected ? 2.0f : (hovered ? 1.5f : baseThickness));
+
+        g.setColour(col.withMultipliedAlpha(selected ? 1.0f : (hovered ? 0.85f : 0.65f)));
+        g.drawLine(static_cast<float>(x),
+                   static_cast<float>(contentTop),
+                   static_cast<float>(x),
+                   static_cast<float>(contentBottom),
+                   lineThickness);
+
+        constexpr float kDiamondSize = 6.0f;
+        const float cy = static_cast<float>(contentTop) + kDiamondSize;
+        juce::Path diamond;
+        diamond.startNewSubPath(static_cast<float>(x), cy - kDiamondSize);
+        diamond.lineTo(static_cast<float>(x) + kDiamondSize, cy);
+        diamond.lineTo(static_cast<float>(x), cy + kDiamondSize);
+        diamond.lineTo(static_cast<float>(x) - kDiamondSize, cy);
+        diamond.closeSubPath();
+        g.setColour(col);
+        g.fillPath(diamond);
+        g.setColour(col.darker(0.35f));
+        g.strokePath(diamond, juce::PathStrokeType(0.8f));
+    }
+}
+
+void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
+                                     const RenderContext& ctx,
+                                     const ContentRenderItem& item)
+{
+    if (item.pitchSnapshot == nullptr || item.f0Timeline.isEmpty())
+        return;
+
+    const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+    if (originalF0.empty())
+        return;
+
+    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
+    if (!visibleWindow.isValid())
+        return;
+
+    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(
+        visibleWindow.visibleContentStartTime,
+        visibleWindow.visibleContentEndTime,
+        1);
+    const int visibleStartFrame = std::max(0, visibleFrames.startFrame);
+    const int visibleEndFrame = std::min(static_cast<int>(originalF0.size()), visibleFrames.endFrameExclusive);
+    if (visibleEndFrame <= visibleStartFrame)
+        return;
+
+    if (!ctx.showOriginalF0 && !ctx.showCorrectedF0)
+        return;
+
+    // Draw original F0 as a dim curve
+    if (ctx.showOriginalF0)
+    {
+        juce::Path originalPath;
+        bool pathStarted = false;
+        const float alpha = 0.35f;
+
+        for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
+            const float f0 = originalF0[static_cast<std::size_t>(frame)];
+            if (!isVoicedFrame(f0)) {
+                pathStarted = false;
+                continue;
+            }
+
+            const double timePos = item.f0Timeline.timeAtFrame(frame);
+            const int x = sourceTimeToScreenX(timePos, ctx, item);
+            const float y = ctx.coords.freqToY(f0);
+
+            if (x < ctx.pianoKeyWidth || x >= ctx.width)
+                continue;
+
+            if (!pathStarted) {
+                originalPath.startNewSubPath(static_cast<float>(x), y);
+                pathStarted = true;
+            } else {
+                juce::Point<float> last = originalPath.getCurrentPosition();
+                if (std::abs(static_cast<float>(x) - last.x) > 30.0f) {
+                    originalPath.startNewSubPath(static_cast<float>(x), y);
+                } else {
+                    originalPath.lineTo(static_cast<float>(x), y);
+                }
+            }
+        }
+
+        if (!originalPath.isEmpty()) {
+            g.setColour(UIColors::originalF0.withAlpha(alpha));
+            g.strokePath(originalPath, juce::PathStrokeType(1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+    }
+
+    // Draw corrected F0 segments as a bright curve
+    if (ctx.showCorrectedF0 && item.pitchSnapshot->hasAnyCorrection()) {
+        juce::Path correctedPath;
+        bool pathStarted = false;
+
+        item.pitchSnapshot->renderCorrectedOnlyRange(
+            visibleStartFrame, visibleEndFrame,
+            [&](int frame, const float* data, int length) {
+                for (int i = 0; i < length; ++i) {
+                    const int f = frame + i;
+                    if (f < visibleStartFrame || f >= visibleEndFrame)
+                        continue;
+
+                    const float f0 = data[i];
+                    if (!isVoicedFrame(f0)) {
+                        pathStarted = false;
+                        continue;
+                    }
+
+                    const double timePos = item.f0Timeline.timeAtFrame(f);
+                    const int x = sourceTimeToScreenX(timePos, ctx, item);
+                    const float y = ctx.coords.freqToY(f0);
+
+                    if (x < ctx.pianoKeyWidth || x >= ctx.width)
+                        continue;
+
+                    if (!pathStarted) {
+                        correctedPath.startNewSubPath(static_cast<float>(x), y);
+                        pathStarted = true;
+                    } else {
+                        juce::Point<float> last = correctedPath.getCurrentPosition();
+                        if (std::abs(static_cast<float>(x) - last.x) > 30.0f) {
+                            correctedPath.startNewSubPath(static_cast<float>(x), y);
+                        } else {
+                            correctedPath.lineTo(static_cast<float>(x), y);
+                        }
+                    }
+                }
+            });
+
+        if (!correctedPath.isEmpty()) {
+            g.setColour(UIColors::correctedF0.withAlpha(0.85f));
+            g.strokePath(correctedPath, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
     }
 }
 

@@ -825,14 +825,14 @@ CheckResult pianoRollEditActionPassesRangeInUndoRedo()
         return fail("pianoRollEditActionPassesRangeInUndoRedo",
                     "could not locate PianoRollEditAction::undo() or redo().");
 
-    if (!contains(undo, "affectedStartFrame_") || !contains(undo, "affectedEndFrame_"))
+    if (!contains(undo, "affectedRange_"))
         return fail("pianoRollEditActionPassesRangeInUndoRedo",
-                    "PianoRollEditAction::undo() must forward affectedStartFrame_/affectedEndFrame_ "
+                    "PianoRollEditAction::undo() must forward affectedRange_ "
                     "to commitNotesAndSegments.");
 
-    if (!contains(redo, "affectedStartFrame_") || !contains(redo, "affectedEndFrame_"))
+    if (!contains(redo, "affectedRange_"))
         return fail("pianoRollEditActionPassesRangeInUndoRedo",
-                    "PianoRollEditAction::redo() must forward affectedStartFrame_/affectedEndFrame_ "
+                    "PianoRollEditAction::redo() must forward affectedRange_ "
                     "to commitNotesAndSegments.");
 
     return pass("pianoRollEditActionPassesRangeInUndoRedo");
@@ -1374,6 +1374,56 @@ CheckResult paintOnlyDrawsVisibleTilesForDetailLayer()
     return pass("paintOnlyDrawsVisibleTilesForDetailLayer");
 }
 
+// ── Kill List resurrection guards ──
+
+CheckResult noInvalidateContentVisualResurrection()
+{
+    const auto h = readText("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h");
+    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto comp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    if (contains(h, "invalidateContentVisual"))
+        return fail("noInvalidateContentVisualResurrection",
+                     "PianoRollToolHandler.h must not contain 'invalidateContentVisual' — deleted, use invalidateInteractionVisual.");
+    if (contains(cpp, "invalidateContentVisual"))
+        return fail("noInvalidateContentVisualResurrection",
+                     "PianoRollToolHandler.cpp must not contain 'invalidateContentVisual' — deleted, use invalidateInteractionVisual.");
+    if (contains(comp, "invalidateContentVisual"))
+        return fail("noInvalidateContentVisualResurrection",
+                     "PianoRollComponent.cpp must not contain 'invalidateContentVisual' — deleted, use invalidateInteractionVisual.");
+    return pass("noInvalidateContentVisualResurrection");
+}
+
+CheckResult noRendererLambdaResurrection()
+{
+    const auto h = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+    if (contains(h, "contentTimeToTimeline"))
+        return fail("noRendererLambdaResurrection",
+                     "PianoRollRenderer.h must not contain 'contentTimeToTimeline' — replaced by activeProjection value field.");
+    if (contains(h, "projectSourceTime"))
+        return fail("noRendererLambdaResurrection",
+                     "PianoRollRenderer.h must not contain 'projectSourceTime' — replaced by sourceProjection value field.");
+    return pass("noRendererLambdaResurrection");
+}
+
+CheckResult noF0FrameToXYResurrection()
+{
+    const auto h = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+    if (contains(h, "F0FrameToX") || contains(h, "F0FrameToY"))
+        return fail("noF0FrameToXYResurrection",
+                     "PianoRollRenderer.h must not contain F0FrameToX/Y typedefs — deleted, buildF0VisualSegments takes value-object params.");
+    return pass("noF0FrameToXYResurrection");
+}
+
+CheckResult noDrawPreparedF0CurveResurrection()
+{
+    const auto h = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+    if (contains(h, "drawPreparedF0Curve"))
+        return fail("noDrawPreparedF0CurveResurrection",
+                     "PianoRollRenderer.h must not contain drawPreparedF0Curve — deleted as dead code. Rewrite F0 rendering from scratch when needed.");
+    return pass("noDrawPreparedF0CurveResurrection");
+}
+
 } // namespace
 
 int main()
@@ -1422,7 +1472,12 @@ processRenderRuntimeOwnsNoAraModels,
         // Phase 6: VBlank paint contract
         paintDoesNotRequestCoverage,
         paintDoesNotBuildSnapshot,
-        paintOnlyDrawsVisibleTilesForDetailLayer
+        paintOnlyDrawsVisibleTilesForDetailLayer,
+        // Kill List resurrection guards
+        noInvalidateContentVisualResurrection,
+        noRendererLambdaResurrection,
+        noF0FrameToXYResurrection,
+        noDrawPreparedF0CurveResurrection
     };
 
     int failed = 0;

@@ -832,13 +832,6 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             return proc_->commitContentNotesAndSegments(key, std::move(notes), std::move(segments), affectedRange);
         }
 
-        bool setCorrectedSegments(ContentKey key,
-                                   std::vector<CorrectedSegment> segments) override
-        {
-            if (!proc_) return false;
-            return proc_->setContentCorrectedSegments(key, std::move(segments));
-        }
-
         bool setPitchCurve(ContentKey key, std::shared_ptr<PitchCurve> curve,
                            ContentEditRangeFrames affectedRange) override
         {
@@ -3899,8 +3892,17 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     }
 
     const auto normalizedNotes = normalizeStoredNotes(patch.notesAfter);
+
+    // Filter segments to affected range before passing to commitContentNotesAndSegments.
+    // Contract: callers must pass range-scoped segments only.
+    std::vector<CorrectedSegment> segmentsInRange;
+    for (const auto& seg : patch.correctedSegmentsAfter) {
+        if (seg.startFrame < patch.affectedEndFrame && seg.endFrame > patch.affectedStartFrame)
+            segmentsInRange.push_back(seg);
+    }
+
     const bool commitOk = commitContentNotesAndSegments(
-        targetPlacement.contentKey, normalizedNotes, patch.correctedSegmentsAfter,
+        targetPlacement.contentKey, normalizedNotes, segmentsInRange,
         ContentEditRangeFrames{patch.affectedStartFrame, patch.affectedEndFrame});
     if (commitOk && patch.timingChanged && timeGridAfter)
         setContentTimeGrid(targetPlacement.contentKey, timeGridAfter);
@@ -3913,18 +3915,42 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         return result;
     }
 
+    // Compute range-scoped before/after for memory-efficient undo.
+    const double secondsPerFrameUndo = static_cast<double>(oldCurve->getHopSize()) / oldCurve->getSampleRate();
+    const double rangeStartSecUndo = static_cast<double>(patch.affectedStartFrame) * secondsPerFrameUndo;
+    const double rangeEndSecUndo = static_cast<double>(patch.affectedEndFrame) * secondsPerFrameUndo;
+
+    auto filterNotes = [&](const std::vector<Note>& notes) {
+        std::vector<Note> result;
+        for (const auto& n : notes)
+            if (n.endTime > rangeStartSecUndo && n.startTime < rangeEndSecUndo)
+                result.push_back(n);
+        return result;
+    };
+    auto filterSegments = [&](const std::vector<CorrectedSegment>& segs) {
+        std::vector<CorrectedSegment> result;
+        for (const auto& s : segs)
+            if (s.endFrame > patch.affectedStartFrame && s.startFrame < patch.affectedEndFrame)
+                result.push_back(s);
+        return result;
+    };
+
+    auto beforeNotesScoped = filterNotes(oldNotes);
+    auto afterNotesScoped = filterNotes(normalizedNotes);
+    auto beforeSegmentsScoped = filterSegments(oldSegments);
+    auto afterSegmentsScoped = filterSegments(patch.correctedSegmentsAfter);
+
     auto composite = std::make_unique<CompositeUndoAction>("AUTO (Ref)");
     if (patch.pitchChanged) {
         composite->addAction(std::make_unique<PianoRollEditAction>(
             contentCommands_,
             targetPlacement.contentKey,
             "AUTO (Ref) Pitch",
-            oldNotes,
-            normalizedNotes,
-            oldSegments,
-            patch.correctedSegmentsAfter,
-            patch.affectedStartFrame,
-            patch.affectedEndFrame));
+            std::move(beforeNotesScoped),
+            std::move(afterNotesScoped),
+            std::move(beforeSegmentsScoped),
+            std::move(afterSegmentsScoped),
+            ContentEditRangeFrames{patch.affectedStartFrame, patch.affectedEndFrame}));
     }
     if (patch.timingChanged) {
         composite->addAction(std::make_unique<TimeGridEditAction>(
@@ -4006,21 +4032,6 @@ bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, 
     return ok;
 }
 
-bool OpenTuneAudioProcessor::setContentCorrectedSegments(ContentKey key,
-                                                           std::vector<CorrectedSegment> segments)
-{
-    auto snap = getContentSnapshot(key);
-    if (!snap || !snap->pitchCurve) return false;
-
-    auto newCurve = clonePitchCurveWithCorrectedSegments(snap->pitchCurve, std::move(segments));
-    if (!newCurve) return false;
-
-    if (!writePitchCurveToOwner(key, std::move(newCurve)))
-        return false;
-    onContentFullMutationCompleted(key, MutationScope::PitchCurveChanged, FullRenderReason::GlobalPitchShift);
-    return true;
-}
-
 bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
                                                             std::vector<Note> notesInRange,
                                                             std::vector<CorrectedSegment> segments,
@@ -4034,6 +4045,26 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
                                  / snap->pitchCurve->getSampleRate();
     const double rangeStartSec = static_cast<double>(affectedRange.startFrame) * secondsPerFrame;
     const double rangeEndSec   = static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame;
+
+    // Filter incoming notes to range (self-protecting sink)
+    {
+        std::vector<Note> filtered;
+        for (const auto& note : notesInRange) {
+            if (note.endTime > rangeStartSec && note.startTime < rangeEndSec)
+                filtered.push_back(note);
+        }
+        notesInRange = std::move(filtered);
+    }
+
+    // Filter incoming segments to range (self-protecting sink)
+    {
+        std::vector<CorrectedSegment> filtered;
+        for (const auto& seg : segments) {
+            if (seg.endFrame > affectedRange.startFrame && seg.startFrame < affectedRange.endFrameExclusive)
+                filtered.push_back(seg);
+        }
+        segments = std::move(filtered);
+    }
 
     std::vector<Note> mergedNotes;
     mergedNotes.reserve(snap->notes.size() + notesInRange.size());
@@ -4057,8 +4088,30 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
 
     auto normalizedNotes = normalizeStoredNotes(std::move(mergedNotes));
 
-    // Segments are sparse structure — full replacement is correct
-    auto newCurve = clonePitchCurveWithCorrectedSegments(snap->pitchCurve, std::move(segments));
+    // Range-scoped segments merge: keep segments outside affected range, insert
+    // only the incoming range-scoped segments. Contract: callers filter to range.
+    auto oldSegments = snap->pitchCurve->getSnapshot()->getCorrectedSegments();
+    std::vector<CorrectedSegment> mergedSegments;
+    mergedSegments.reserve(oldSegments.size() + segments.size());
+
+    // keptBefore: segments entirely before the range
+    for (const auto& seg : oldSegments) {
+        if (seg.endFrame <= affectedRange.startFrame)
+            mergedSegments.push_back(seg);
+    }
+
+    // segmentsInRange: callers already filtered to range-overlapping only
+    mergedSegments.insert(mergedSegments.end(),
+                          segments.begin(),
+                          segments.end());
+
+    // keptAfter: segments entirely after the range
+    for (const auto& seg : oldSegments) {
+        if (seg.startFrame >= affectedRange.endFrameExclusive)
+            mergedSegments.push_back(seg);
+    }
+
+    auto newCurve = clonePitchCurveWithCorrectedSegments(snap->pitchCurve, std::move(mergedSegments));
     if (!newCurve) return false;
 
     bool ok = false;

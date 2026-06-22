@@ -110,7 +110,7 @@ public:
         std::function<void(int)> setNoteDragPreviewEndFrameExclusive;
 
         std::function<void(const juce::Rectangle<int>&)> invalidateVisual;
-        std::function<void()> invalidateContentVisual;
+        std::function<void()> invalidateInteractionVisual;
         std::function<void()> repaintPreviewOverlay;
         std::function<void(const juce::MouseCursor&)> setMouseCursor;
         std::function<void()> grabKeyboardFocus;

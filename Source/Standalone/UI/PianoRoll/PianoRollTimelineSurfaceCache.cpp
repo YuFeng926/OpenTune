@@ -57,7 +57,11 @@ void PianoRollTimelineSurfaceCache::workerLoop() {
         int firstTile = 0, lastTile = 0;
         computeNeededTiles(req.viewport, firstTile, lastTile);
 
-        // Render each tile
+        // Unconditionally render all needed tiles. Worker does NOT read the published
+        // tile map — message thread owns tiles_ exclusively. Deduplication happens in
+        // handleAsyncUpdate() where tiles with a matching, already-published key are
+        // skipped. This keeps the hot path (worker render-to-publish) simple and avoids
+        // lock contention on tiles_.
         std::vector<CompletedTile> completed;
         for (int ti = firstTile; ti <= lastTile; ++ti) {
             if (shutdown_.load(std::memory_order_acquire)) return;
@@ -65,14 +69,6 @@ void PianoRollTimelineSurfaceCache::workerLoop() {
             PianoRollTileKey key = makeTileKey(req.snapshot, req.viewport, ti);
             key.generation = req.generation;
 
-            // Check if tile already exists with matching key
-            {
-                std::lock_guard<std::mutex> lock(queueMutex_);
-                auto it = tiles_.find(ti);
-                if (it != tiles_.end() && it->second.key == key) continue;
-            }
-
-            // Render tile
             PianoRollTile tile;
             tile.key = key;
             tile.image = PianoRollTileRenderer::renderTile(req.snapshot, key);

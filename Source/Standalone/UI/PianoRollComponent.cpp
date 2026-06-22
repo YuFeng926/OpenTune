@@ -2,6 +2,7 @@
 #include "../../Utils/LocalizationManager.h"
 #include "../Utils/AppLogger.h"
 #include "../../Utils/PianoRollEditAction.h"
+#include "../../Utils/PianoRollNotePatchAction.h"
 #include "../../Utils/TimeGridEditAction.h"   // 鈿★笍 vocal-time-stretch 搂8.7
 #include <algorithm>
 #include <cmath>
@@ -235,8 +236,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.invalidateVisual = [this](const juce::Rectangle<int>& dirtyArea) {
         invalidateInteractionArea(dirtyArea);
     };
-    toolCtx.invalidateContentVisual = [this]() {
-        invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content),
+    toolCtx.invalidateInteractionVisual = [this]() {
+        invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Interaction),
                          PianoRollVisualInvalidationPriority::Interactive);
     };
     toolCtx.repaintPreviewOverlay = [this]() { previewOverlay_.repaint(); };
@@ -566,9 +567,6 @@ bool PianoRollComponent::commitNoteDraft()
         return false;
     }
 
-    if (!undoSnapshotCaptured_)
-        captureBeforeUndoSnapshot();
-
     // Build ContentNoteRangePatch via merge-based diff (content-based, not index-based)
     const auto& baseline = interactionState_.noteDraft.baselineNotes;
     const auto& working = interactionState_.noteDraft.workingNotes;
@@ -636,7 +634,28 @@ bool PianoRollComponent::commitNoteDraft()
     }
 
     refreshEditedContentNotes();
-    recordUndoAction(pendingUndoDescription_, F0FrameRange{});  // No F0 timeline, record empty range
+
+    // Build the before-patch from baseline notes in the same seconds range.
+    // Note-only undo uses seconds-based PianoRollNotePatchAction — no frame
+    // conversion, no segment involvement, same coordinate system as commitNotePatch().
+    ContentNoteRangePatch beforePatch;
+    beforePatch.affectedRange = patch.affectedRange;
+    for (const auto& n : baseline) {
+        if (overlapsRange(n)) beforePatch.afterNotesInRange.push_back(n);
+    }
+
+    auto action = std::make_unique<PianoRollNotePatchAction>(
+        contentCommands_,
+        editedContentKey_,
+        pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : TRANS("编辑"),
+        std::move(beforePatch),
+        std::move(patch));
+
+    if (processor_ != nullptr)
+        processor_->getUndoManager().addAction(std::move(action));
+
+    pendingUndoDescription_ = {};
+    undoSnapshotCaptured_ = false;
     interactionState_.noteDraft.clear();
     return true;
 }
@@ -647,49 +666,81 @@ void PianoRollComponent::clearNoteDraft()
 }
 
 bool PianoRollComponent::commitEditedContentCorrectedSegments(const std::vector<CorrectedSegment>& segments,
-                                                                        F0FrameRange affectedRange)
+                                                                         F0FrameRange affectedRange)
 {
-    if (processor_ == nullptr || !editedContentKey_.isValid()) {
-        return false;
-    }
-
-    if (!undoSnapshotCaptured_)
-        captureBeforeUndoSnapshot();
-
-    if (!contentCommands_->setCorrectedSegments(editedContentKey_, segments)) {
-        return false;
-    }
-
-    auto committedSnap = readEditedSnapshot();
-    if (committedSnap != nullptr && committedSnap->pitchCurve != nullptr) {
-        setEditedContent(editedContentKey_, committedSnap->pitchCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
-    }
-
-    recordUndoAction(pendingUndoDescription_, affectedRange);
-    return true;
+    // Delegate to the range-scoped merge path.  setCorrectedSegments does
+    // full replacement which would discard segments outside affectedRange.
+    // commitEditedContentNotesAndSegments → commitContentNotesAndSegments
+    // performs range-scoped merge (keptBefore + incoming + keptAfter).
+    return commitEditedContentNotesAndSegments(cachedNotes_, segments, affectedRange);
 }
 
 bool PianoRollComponent::commitEditedContentNotesAndSegments(const std::vector<Note>& notes,
-                                                             const std::vector<CorrectedSegment>& segments,
-                                                             F0FrameRange affectedRange)
+                                                              const std::vector<CorrectedSegment>& segments,
+                                                              F0FrameRange affectedRange)
 {
     if (processor_ == nullptr || !editedContentKey_.isValid()) {
         return false;
     }
 
-    if (!undoSnapshotCaptured_)
-        captureBeforeUndoSnapshot();
+    // Capture range-scoped before data directly — no full snapshot.
+    const auto f0tl = currentF0Timeline();
+    const double rangeStartSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.startFrame);
+    const double rangeEndSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.endFrameExclusive);
+
+    auto extractNotesInRange = [](const std::vector<Note>& notes, double startSec, double endSec) {
+        std::vector<Note> result;
+        for (const auto& note : notes) {
+            if (note.startTime < endSec && note.endTime > startSec)
+                result.push_back(note);
+        }
+        return result;
+    };
+
+    auto extractSegmentsInRange = [](const std::vector<CorrectedSegment>& segs, int startFrame, int endFrame) {
+        std::vector<CorrectedSegment> result;
+        for (const auto& seg : segs) {
+            if (seg.startFrame < endFrame && seg.endFrame > startFrame)
+                result.push_back(seg);
+        }
+        return result;
+    };
+
+    auto beforeNotes = extractNotesInRange(cachedNotes_, rangeStartSec, rangeEndSec);
+    auto beforeSegments = extractSegmentsInRange(getCurrentSegments(), affectedRange.startFrame, affectedRange.endFrameExclusive);
+
+    // Enforce range-scoped contract: filter incoming data so sink never
+    // receives notes/segments outside the affected range.
+    auto scopedNotes = extractNotesInRange(notes, rangeStartSec, rangeEndSec);
+    auto scopedSegments = extractSegmentsInRange(segments, affectedRange.startFrame, affectedRange.endFrameExclusive);
 
     ContentEditRangeFrames editRange;
     editRange.startFrame = affectedRange.startFrame;
     editRange.endFrameExclusive = affectedRange.endFrameExclusive;
 
-    if (!contentCommands_->commitNotesAndSegments(editedContentKey_, notes, segments, editRange)) {
+    if (!contentCommands_->commitNotesAndSegments(editedContentKey_, scopedNotes, scopedSegments, editRange)) {
         return false;
     }
 
     refreshEditedContentNotes();
-    recordUndoAction(pendingUndoDescription_, affectedRange);
+
+    // Capture range-scoped after data directly.
+    auto afterNotes = extractNotesInRange(cachedNotes_, rangeStartSec, rangeEndSec);
+    auto afterSegments = extractSegmentsInRange(getCurrentSegments(), affectedRange.startFrame, affectedRange.endFrameExclusive);
+
+    auto action = std::make_unique<PianoRollEditAction>(
+        contentCommands_,
+        editedContentKey_,
+        pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : TRANS("编辑"),
+        std::move(beforeNotes),
+        std::move(afterNotes),
+        std::move(beforeSegments),
+        std::move(afterSegments),
+        ContentEditRangeFrames{affectedRange.startFrame, affectedRange.endFrameExclusive});
+
+    processor_->getUndoManager().addAction(std::move(action));
+    pendingUndoDescription_ = {};
+    undoSnapshotCaptured_ = false;
     return true;
 }
 
@@ -719,36 +770,57 @@ void PianoRollComponent::recordUndoAction(const juce::String& description, F0Fra
         + " affectedRange=[" + juce::String(affectedRange.startFrame)
         + "," + juce::String(affectedRange.endFrameExclusive) + ")");
 
-    auto afterNotes = cachedNotes_;
-    auto afterSegments = getCurrentSegments();
+    // Extract range-scoped notes and segments for memory-efficient undo.
+    // Notes use seconds; segments use frames. Convert frame range to seconds.
+    const auto f0tl = currentF0Timeline();
+    const double rangeStartSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.startFrame);
+    const double rangeEndSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.endFrameExclusive);
 
-    AppLogger::log("AutoTune: recordUndoAction afterSegments=" + juce::String(static_cast<int>(afterSegments.size()))
-        + " constructing PianoRollEditAction");
+    auto notesInRange = [](const std::vector<Note>& notes, double startSec, double endSec) {
+        std::vector<Note> result;
+        for (const auto& note : notes) {
+            if (note.startTime < endSec && note.endTime > startSec)
+                result.push_back(note);
+        }
+        return result;
+    };
 
-    // F0FrameRange.endFrameExclusive 鏄紑鍖洪棿鍙崇锛汸ianoRollEditAction 鐨?
-    // affectedEndFrame 鏄棴鍖洪棿鍙崇锛堝吋瀹规棦鏈?getter 璇箟锛夛紝鎹㈢畻 -1銆?
-    const int affectedStart = std::max(0, affectedRange.startFrame);
-    const int affectedEnd = std::max(affectedStart,
-                                      affectedRange.endFrameExclusive > 0
-                                          ? affectedRange.endFrameExclusive - 1
-                                          : 0);
+    auto segmentsInRange = [](const std::vector<CorrectedSegment>& segments, int startFrame, int endFrameExclusive) {
+        std::vector<CorrectedSegment> result;
+        for (const auto& seg : segments) {
+            if (seg.startFrame < endFrameExclusive && seg.endFrame > startFrame)
+                result.push_back(seg);
+        }
+        return result;
+    };
+
+    auto beforeNotes = notesInRange(beforeUndoNotes_, rangeStartSec, rangeEndSec);
+    auto afterNotes = notesInRange(cachedNotes_, rangeStartSec, rangeEndSec);
+    auto beforeSegments = segmentsInRange(beforeUndoSegments_, affectedRange.startFrame, affectedRange.endFrameExclusive);
+    auto afterSegments = segmentsInRange(getCurrentSegments(), affectedRange.startFrame, affectedRange.endFrameExclusive);
+
+    AppLogger::log("AutoTune: recordUndoAction range-scoped beforeNotes=" + juce::String(static_cast<int>(beforeNotes.size()))
+        + " afterNotes=" + juce::String(static_cast<int>(afterNotes.size()))
+        + " beforeSegments=" + juce::String(static_cast<int>(beforeSegments.size()))
+        + " afterSegments=" + juce::String(static_cast<int>(afterSegments.size())));
 
     auto action = std::make_unique<PianoRollEditAction>(
         contentCommands_,
         editedContentKey_,
         description.isNotEmpty() ? description : TRANS("编辑"),
-        std::move(beforeUndoNotes_),
+        std::move(beforeNotes),
         std::move(afterNotes),
-        std::move(beforeUndoSegments_),
+        std::move(beforeSegments),
         std::move(afterSegments),
-        affectedStart,
-        affectedEnd);
+        ContentEditRangeFrames{affectedRange.startFrame, affectedRange.endFrameExclusive});
 
     AppLogger::log("AutoTune: recordUndoAction before addAction");
     processor_->getUndoManager().addAction(std::move(action));
     AppLogger::log("AutoTune: recordUndoAction after addAction");
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
+    beforeUndoNotes_.clear();
+    beforeUndoSegments_.clear();
 }
 
 bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFrameExclusive)
@@ -1275,12 +1347,6 @@ void PianoRollComponent::paint(juce::Graphics& g) {
     renderer_->drawGridLines(g, ctx);
     for (const auto& item : ctx.contents) {
         renderer_->drawWaveform(g, ctx, item);
-        renderer_->drawUnvoicedFrameBands(g, ctx, item);
-    }
-
-    if (ctx.referenceOverlay.has_value() && ctx.referenceOverlay->enabled) {
-        renderer_->drawGhostNotes(g, ctx, *ctx.referenceOverlay);
-        renderer_->drawGhostAnchors(g, ctx, *ctx.referenceOverlay);
     }
 
     // Detail layer: consume already-published tiles (no tile generation in paint)
@@ -1309,6 +1375,7 @@ void PianoRollComponent::setInferenceActive(bool active)
 
 bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, float vibratoDepth, float vibratoRate) {
     auto notes = getEditedContentNotesCopy();
+    auto originalNotes = notes;  // Save for before-patch in note-only undo path
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) return false;
 
@@ -1354,7 +1421,15 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
                 if (overlapsRange(n)) notesInRange.push_back(n);
             }
 
-            if (!commitEditedContentNotesAndSegments(notesInRange, snap->getCorrectedSegments(), affectedRange)) {
+            // Extract segments overlapping the affected range (range-scoped, not full)
+            auto allSegments = snap->getCorrectedSegments();
+            std::vector<CorrectedSegment> segmentsInRange;
+            for (const auto& seg : allSegments) {
+                if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
+                    segmentsInRange.push_back(seg);
+            }
+
+            if (!commitEditedContentNotesAndSegments(notesInRange, segmentsInRange, affectedRange)) {
                 return false;
             }
 
@@ -1365,33 +1440,45 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
     }
 
     // Fallback: notes changed but no valid F0 timeline mapping or no current curve.
-    // Pure note edit → commitNotePatch with seconds-based range.
+    // Pure note edit → seconds-based PianoRollNotePatchAction for undo.
     if (anySelected && dirtyEndTime > dirtyStartTime) {
-        ContentNoteRangePatch patch;
-        patch.affectedRange.startSeconds = dirtyStartTime;
-        patch.affectedRange.endSeconds = dirtyEndTime;
+        ContentNoteRangePatch afterPatch;
+        afterPatch.affectedRange.startSeconds = dirtyStartTime;
+        afterPatch.affectedRange.endSeconds = dirtyEndTime;
 
         auto overlapsRange = [dirtyStartTime, dirtyEndTime](const Note& n) {
             return n.endTime > dirtyStartTime && n.startTime < dirtyEndTime;
         };
 
         for (const auto& n : notes) {
-            if (overlapsRange(n)) patch.afterNotesInRange.push_back(n);
+            if (overlapsRange(n)) afterPatch.afterNotesInRange.push_back(n);
         }
 
-        if (!contentCommands_->commitNotePatch(editedContentKey_, patch)) {
+        if (!contentCommands_->commitNotePatch(editedContentKey_, afterPatch)) {
             return false;
         }
 
         refreshEditedContentNotes();
-        const auto f0tl = currentF0Timeline();
-        F0FrameRange undoRange;
-        if (!f0tl.isEmpty()) {
-            auto frameRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
-            undoRange.startFrame = frameRange.startFrame;
-            undoRange.endFrameExclusive = frameRange.endFrameExclusive;
+
+        // Build before-patch from original (unmodified) notes for undo.
+        ContentNoteRangePatch beforePatch;
+        beforePatch.affectedRange = afterPatch.affectedRange;
+        for (const auto& n : originalNotes) {
+            if (overlapsRange(n)) beforePatch.afterNotesInRange.push_back(n);
         }
-        recordUndoAction(pendingUndoDescription_, undoRange);
+
+        auto action = std::make_unique<PianoRollNotePatchAction>(
+            contentCommands_,
+            editedContentKey_,
+            pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : TRANS("编辑"),
+            std::move(beforePatch),
+            std::move(afterPatch));
+
+        if (processor_ != nullptr)
+            processor_->getUndoManager().addAction(std::move(action));
+
+        pendingUndoDescription_ = {};
+        undoSnapshotCaptured_ = false;
         invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
         return true;
     }
@@ -2052,8 +2139,11 @@ void PianoRollComponent::setScrollOffset(int offset) {
     playheadOverlay_.setScrollOffset(static_cast<double>(newScroll));
     updatePlayheadPresentationPolicy();
 
-    FrameScheduler::instance().requestViewportShift(*this, {});
-    repaint();
+    // Viewport change drives tile coverage request via flush pipeline.
+    // flushPendingVisualInvalidation() will call surfaceCache_.requestCoverage()
+    // and schedule repaint through FrameScheduler.
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
+                     PianoRollVisualInvalidationPriority::Interactive);
 }
 
 double PianoRollComponent::readPlayheadTime() const
@@ -2140,6 +2230,7 @@ PianoRollRenderSnapshot PianoRollComponent::buildRenderSnapshot() const
         snap.timeGridSnapshot = editedSnap->timeGrid;
     }
 
+    snap.activeProjection = activeContentProjection();
     snap.referenceOverlay = referenceOverlay_;
 
     // Chunk boundaries
@@ -2851,6 +2942,7 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext(double v
     // 搂8.5 (Phase J) 鈥?currentTool drives view-mode in renderer.
     ctx.currentTool = currentTool_;
 
+    ctx.activeProjection = activeContentProjection();
     ctx.referenceOverlay = referenceOverlay_;
 
     return ctx;
