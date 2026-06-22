@@ -1943,7 +1943,7 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
     updateScrollBars();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
                      PianoRollVisualInvalidationPriority::Interactive);
     return true;
 }
@@ -1980,7 +1980,7 @@ void PianoRollComponent::setContentProjection(const ContentTimelineProjection& p
     }
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
                      PianoRollVisualInvalidationPriority::Interactive);
 }
 
@@ -2246,6 +2246,13 @@ PianoRollRenderSnapshot PianoRollComponent::buildRenderSnapshot() const
     if (editedContentKey_.isValid()) {
         snap.contentKey = editedContentKey_;
         snap.notes = getDisplayedNotes();
+
+        // 补全 epoch 字段：让 tile key 反映真实内容版本
+        snap.notesEpoch = cachedNotesRevision_;
+        if (auto editedSnap = readEditedSnapshot()) {
+            snap.pitchEpoch = editedSnap->pitchRevision;
+            snap.timeGridRevision = editedSnap->timeGridRevision;
+        }
 
         if (currentCurve_) {
             auto pitchSnap = currentCurve_->getSnapshot();

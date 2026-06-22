@@ -14,7 +14,7 @@
 namespace OpenTune {
 
 struct PianoRollTileKey {
-    uint64_t generation = 0;
+    uint64_t surfaceEpoch = 0;
     int tileIndex = 0;
     int tileStartContentX = 0;
     int tileWidthPx = 1024;
@@ -33,7 +33,7 @@ struct PianoRollTileKey {
     uint32_t themeId = 0;
 
     bool operator==(const PianoRollTileKey& o) const noexcept {
-        return generation == o.generation
+        return surfaceEpoch == o.surfaceEpoch
             && tileIndex == o.tileIndex
             && tileStartContentX == o.tileStartContentX
             && tileWidthPx == o.tileWidthPx
@@ -58,20 +58,19 @@ struct PianoRollTile {
 
 // Async DAW-style tile cache.
 // - requestCoverage() enqueues tile generation on a worker thread.
-// - Worker renders tiles in single-latest-generation order.
+// - Worker renders tiles tagged with the current surfaceEpoch.
 // - Completed tiles are published to the tile map via AsyncUpdater (safe lifecycle:
 //   cancelPendingUpdate() in destructor prevents dangling callbacks).
 // - drawVisibleTiles() only reads already-published tiles (consume-only in paint).
-// - invalidateAll() clears published tiles AND advances the generation counter,
-//   preventing in-flight worker results from stale generations from being published.
+// - invalidateAll() clears published tiles AND advances the surfaceEpoch counter,
+//   preventing in-flight worker results from stale epochs from being published.
 class PianoRollTimelineSurfaceCache : private juce::AsyncUpdater {
 public:
     PianoRollTimelineSurfaceCache();
     ~PianoRollTimelineSurfaceCache();
 
     // Enqueue tile generation for the given viewport. Called from scroll/zoom/content
-    // change triggers — NOT from paint(). Increments generation; worker discards
-    // stale requests from older generations.
+    // change triggers — NOT from paint(). Worker discards stale requests from older epochs.
     void requestCoverage(PianoRollRenderSnapshot snapshot,
                          TimelineViewportState viewport);
 
@@ -88,7 +87,7 @@ private:
 
     // Published tile map — only written by message thread (via AsyncUpdater), read by paint.
     std::map<int, PianoRollTile> tiles_;
-    uint64_t currentGeneration_ = 0;
+    uint64_t surfaceEpoch_ = 0;
 
     // Worker thread state
     std::thread worker_;
@@ -100,7 +99,7 @@ private:
     struct PendingRequest {
         PianoRollRenderSnapshot snapshot;
         TimelineViewportState viewport;
-        uint64_t generation = 0;
+        uint64_t surfaceEpoch = 0;
         bool valid = false;
     };
     PendingRequest pending_;
@@ -109,7 +108,7 @@ private:
     struct CompletedTile {
         int tileIndex;
         PianoRollTile tile;
-        uint64_t generation;
+        uint64_t surfaceEpoch;
     };
     std::mutex completedMutex_;
     std::vector<CompletedTile> completedTiles_;
