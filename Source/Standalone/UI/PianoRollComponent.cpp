@@ -2147,6 +2147,7 @@ void PianoRollComponent::flushPendingVisualInvalidation()
     // Enqueue tile generation for the current viewport (async, non-blocking)
     viewportState_.viewportWidthPx = getWidth();
     viewportState_.viewportHeightPx = getHeight();
+    viewportState_.contentStartX = pianoKeyWidth_;
     surfaceCache_.requestCoverage(buildRenderSnapshot(), viewportState_);
 
     const auto priority = toFrameSchedulerPriority(decision.priority);
@@ -2436,7 +2437,7 @@ void PianoRollComponent::setZoomLevel(double zoom) {
     timeConverter_.setZoom(zoomLevel_);
     playheadOverlay_.setZoomLevel(zoomLevel_);
     updateScrollBars();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
                      PianoRollVisualInvalidationPriority::Interactive);
 }
 
