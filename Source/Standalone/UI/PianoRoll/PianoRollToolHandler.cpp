@@ -219,7 +219,16 @@ bool commitNoteBasedCorrection(PianoRollToolHandler::Context& ctx,
     const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(editRange.startFrame,
                                                                           editRange.endFrameExclusive,
                                                                           f0tl.endFrameExclusive());
-    if (!ctx.commitNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange)) {
+
+    // Extract segments overlapping the affected range (range-scoped, not full)
+    auto allSegments = snap->getCorrectedSegments();
+    std::vector<CorrectedSegment> segmentsInRange;
+    for (const auto& seg : allSegments) {
+        if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
+            segmentsInRange.push_back(seg);
+    }
+
+    if (!ctx.commitNotesAndSegments(notes, segmentsInRange, affectedRange)) {
         return false;
     }
 
@@ -576,8 +585,8 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
         
         updateF0SelectionFromNotes(committed);
         invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
-        if (ctx_.invalidateContentVisual) {
-            ctx_.invalidateContentVisual();
+        if (ctx_.invalidateInteractionVisual) {
+            ctx_.invalidateInteractionVisual();
         }
         return true;
     }
@@ -809,8 +818,8 @@ void PianoRollToolHandler::beginF0SelectionAt(const juce::MouseEvent& e, int fra
     state.selection.f0SelectionAnchorFrame = frameIndex;
     state.selection.setF0Range(frameIndex, frameIndex + 1);
     ctx_.clearNoteDraft();
-    if (ctx_.invalidateContentVisual) {
-        ctx_.invalidateContentVisual();
+    if (ctx_.invalidateInteractionVisual) {
+        ctx_.invalidateInteractionVisual();
     }
 }
 
@@ -837,8 +846,8 @@ void PianoRollToolHandler::updateF0SelectionDrag(const juce::MouseEvent& e)
     const int endFrameExclusive = std::max(selection.f0SelectionAnchorFrame, frame) + 1;
     selection.setF0Range(startFrame, endFrameExclusive);
     selection.isSelectingF0 = true;
-    if (ctx_.invalidateContentVisual) {
-        ctx_.invalidateContentVisual();
+    if (ctx_.invalidateInteractionVisual) {
+        ctx_.invalidateInteractionVisual();
     }
 }
 
@@ -1066,7 +1075,16 @@ void PianoRollToolHandler::handleDeleteKey()
             // delete 路径：affectedRange = globalDirty*Frame 的覆盖范围（含端点），
             // 转 F0FrameRange 的 endFrameExclusive 语义。
             const F0FrameRange affectedRange{globalDirtyStartFrame, globalDirtyEndFrame + 1};
-            committed = ctx_.commitNotesAndSegments(notes, snap->getCorrectedSegments(), affectedRange);
+
+            // Extract segments overlapping the affected range (range-scoped, not full)
+            auto allSegments = snap->getCorrectedSegments();
+            std::vector<CorrectedSegment> segmentsInRange;
+            for (const auto& seg : allSegments) {
+                if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
+                    segmentsInRange.push_back(seg);
+            }
+
+            committed = ctx_.commitNotesAndSegments(notes, segmentsInRange, affectedRange);
             if (committed) {
                 ctx_.notifyPitchCurveEdited(globalDirtyStartFrame, globalDirtyEndFrame);
             }

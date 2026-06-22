@@ -15,7 +15,6 @@ namespace OpenTune {
 
 struct PianoRollRenderSnapshot {
     ContentKey contentKey;
-    ContentTimelineProjection projection;
     double pixelsPerSecond = 100.0;
     int scrollOffsetPx = 0;
     int contentStartX = 60;
@@ -36,6 +35,8 @@ struct PianoRollRenderSnapshot {
     std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
 
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay;
+
+    ContentTimelineProjection activeProjection;
 
     bool showWaveform = true;
     bool showLanes = true;

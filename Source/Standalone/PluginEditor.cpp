@@ -3354,8 +3354,9 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
                 ga.strength = event.strength;
                 overlay.ghostAnchors.push_back(ga);
             }
-overlay.ghostColour = juce::Colours::steelblue;
+            overlay.ghostColour = juce::Colours::steelblue;
             overlay.enabled = true;
+            overlay.sourceProjection = makePianoRollProjection(refPlacement, processorRef_);
             pianoRoll_.setReferenceOverlay(overlay);
         } else {
             pianoRoll_.setReferenceOverlay(std::nullopt);

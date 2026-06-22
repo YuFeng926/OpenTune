@@ -10,11 +10,13 @@ juce::Image PianoRollTileRenderer::renderTile(const PianoRollRenderSnapshot& sna
     const int h = juce::jmax(1, key.contentHeightPx);
     juce::Image image(juce::Image::ARGB, w, h, true);
 
-    // Build RenderContext from snapshot
+    // Build RenderContext from snapshot — use tile-local coordinates.
+    // Tile content is rendered relative to tileStartContentX, then drawVisibleTiles()
+    // places the tile at the correct screen position.
     PianoRollRenderer::RenderContext ctx;
     ctx.width = w;
     ctx.height = h;
-    ctx.pianoKeyWidth = snapshot.contentStartX;
+    ctx.pianoKeyWidth = 0;  // No piano keys inside tile
     ctx.pixelsPerSecond = snapshot.pixelsPerSecond;
     ctx.pixelsPerSemitone = snapshot.pixelsPerSemitone;
     ctx.minMidi = 0.0f;
@@ -26,22 +28,26 @@ juce::Image PianoRollTileRenderer::renderTile(const PianoRollRenderSnapshot& sna
     ctx.showLanes = snapshot.showLanes;
     ctx.showChunkBoundaries = snapshot.showChunkBoundaries;
     ctx.showUnvoicedFrames = snapshot.showUnvoicedFrames;
+    ctx.showOriginalF0 = snapshot.showOriginalF0;
+    ctx.showCorrectedF0 = snapshot.showCorrectedF0;
     ctx.currentTool = snapshot.currentTool;
 
+    // Tile-local coordinate mapper: scrollOffset = tileStartContentX, contentStartX = 0
     ctx.coords.pixelsPerSecond = snapshot.pixelsPerSecond;
-    ctx.coords.scrollOffsetPx = snapshot.scrollOffsetPx;
-    ctx.coords.contentStartX = snapshot.contentStartX;
+    ctx.coords.scrollOffsetPx = key.tileStartContentX;  // Tile-local scroll
+    ctx.coords.contentStartX = 0;  // No piano key offset inside tile
     ctx.coords.pixelsPerSemitone = snapshot.pixelsPerSemitone;
     ctx.coords.verticalScrollOffset = snapshot.verticalScrollOffset;
     ctx.coords.maxMidi = snapshot.maxMidi;
 
     ctx.referenceOverlay = snapshot.referenceOverlay;
+    ctx.activeProjection = snapshot.activeProjection;
     ctx.timeGridSnapshot = snapshot.timeGridSnapshot;
 
     // Build ContentRenderItem from snapshot
     PianoRollRenderer::ContentRenderItem item;
     item.contentKey = snapshot.contentKey;
-    item.projection = snapshot.projection;
+    item.projection = snapshot.activeProjection;
     item.active = true;
     item.displayNotes = snapshot.notes;
     item.pitchSnapshot = snapshot.pitchSnapshot;
@@ -59,10 +65,18 @@ juce::Image PianoRollTileRenderer::renderTile(const PianoRollRenderSnapshot& sna
 
     if (!ctx.isTimeView()) {
         renderer.drawLanes(g, ctx);
+        renderer.drawUnvoicedFrameBands(g, ctx, item);
         renderer.drawNotes(g, ctx, item);
+        renderer.drawF0Curve(g, ctx, item);
     }
 
     renderer.drawChunkBoundaries(g, ctx, item);
+
+    // Ghost overlay (reference content)
+    if (ctx.referenceOverlay.has_value() && ctx.referenceOverlay->enabled) {
+        renderer.drawGhostNotes(g, ctx, *ctx.referenceOverlay);
+        renderer.drawGhostAnchors(g, ctx, *ctx.referenceOverlay);
+    }
 
     return image;
 }

@@ -3,7 +3,6 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
-#include <functional>
 #include "UI/UIColors.h"
 #include "UI/WaveformMipmap.h"
 #include "Utils/F0Timeline.h"
@@ -44,23 +43,9 @@ class PianoRollRenderer
 public:
     PianoRollRenderer() = default;
 
-    struct F0VisualPoint
-    {
-        int frame = 0;
-        float x = 0.0f;
-        float y = 0.0f;
-        float energyAlpha = 1.0f;
-        float levelHotMix = 0.0f;
-    };
-
-    struct F0VisualSegment
-    {
-        std::vector<F0VisualPoint> points;
-    };
-
     /**
      * 渲染上下文结构体
-     * 包含渲染所需的所有参数和回调函数
+     * 包含渲染所需的所有参数
      */
     struct ContentRenderItem
     {
@@ -70,8 +55,6 @@ public:
         WaveformMipmap* waveformMipmap = nullptr;
         std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
         std::vector<float> correctedF0;
-        std::vector<F0VisualSegment> originalF0VisualSegments;
-        std::vector<F0VisualSegment> correctedF0VisualSegments;
         F0Timeline f0Timeline;
         std::vector<Note> displayNotes;
         std::vector<int> selectedNoteIndices;
@@ -96,8 +79,8 @@ public:
         juce::Colour ghostColour;                    // ghost 颜色（不同于当前轨）
         bool enabled{false};                         // 是否启用 overlay
 
-        // sourceSeconds → timeline time 的投影函数
-        std::function<double(double)> projectSourceTime;
+        // source content → timeline 的投影值
+        ContentTimelineProjection sourceProjection;
     };
 
     struct RenderContext
@@ -118,6 +101,8 @@ public:
         bool showLanes = true;
         bool showChunkBoundaries = false;
         bool showUnvoicedFrames = false;
+        bool showOriginalF0 = true;
+        bool showCorrectedF0 = true;
         int pressedPianoKey = -1;
 
         bool hasF0Selection = false;
@@ -137,10 +122,10 @@ public:
         std::vector<uint64_t> additionalSelectedHandleIds;
         std::vector<int> selectedLineAnchorSegmentIds;
 
-        // ⚡️ vocal-time-stretch §8.5 (Phase I) — 将 content-local 的
-        // handle output_seconds 转换为 timeline time，供 drawTimeGridHandles
-        // 通过 timeToX 正确映射到屏幕坐标。在 Standalone 模式下此投影为恒等。
-        std::function<double(double)> contentTimeToTimeline;
+        // Active content → timeline projection.
+        // drawTimeGridHandles and ghost-note rendering use this to convert
+        // content-local time to timeline time for screen coordinate mapping.
+        ContentTimelineProjection activeProjection;
 
         // ⚡️ vocal-time-stretch §8.5 (Phase J) — current tool drives view
         // mode: TimeTool → Time view (no piano keys, no notes/F0, full-height
@@ -150,33 +135,10 @@ public:
 
         enum class TimeUnit { Seconds, Bars } timeUnit = TimeUnit::Seconds;
 
-        std::function<float(float)> midiToY;
-        std::function<float(float)> freqToY;
-        std::function<float(float)> freqToMidi;
-        std::function<double(int)> xToTime;
-        std::function<int(double)> timeToX;
-
-        // Direct coordinate mapper — avoids lambda overhead in tile worker
+        // Coordinate mapper — replaces midiToY/freqToY/freqToMidi/xToTime/timeToX lambdas.
+        // All coordinate conversions use ctx.coords.xxx directly.
         PianoRollCoordinateMapper coords;
     };
-
-    struct F0VisualBuildOptions
-    {
-        int startFrame = 0;
-        int endFrameExclusive = 0;
-        int viewportStartX = 0;
-        int viewportEndX = 0;
-    };
-
-    using F0FrameToX = std::function<float(int)>;
-    using F0FrameToY = std::function<float(int, float)>;
-
-    static std::vector<F0VisualSegment> buildF0VisualSegments(const std::vector<float>& f0,
-                                                              const std::vector<float>* originalEnergy,
-                                                              const std::vector<uint8_t>* visibleMask,
-                                                              const F0VisualBuildOptions& options,
-                                                              const F0FrameToX& frameToX,
-                                                              const F0FrameToY& frameToY);
 
     void drawLanes(juce::Graphics& g, const RenderContext& ctx);
     void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
@@ -186,16 +148,10 @@ public:
     void drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
     void drawNotes(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    void drawF0Curve(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
 
     // ⚡️ §8.5 — paint TimeGrid handles as vertical guide lines.
     void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx);
-
-    void drawPreparedF0Curve(juce::Graphics& g,
-                             const std::vector<F0VisualSegment>& visualSegments,
-                             juce::Colour colour,
-                             float alpha,
-                             bool isThinLine,
-                             const RenderContext& ctx);
 
     void drawGhostNotes(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);
     void drawGhostAnchors(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);

@@ -7,38 +7,34 @@ namespace OpenTune {
 PianoRollEditAction::PianoRollEditAction(std::shared_ptr<ContentEditCommands> commands,
                                          ContentKey key,
                                          juce::String description,
-                                         std::vector<Note> oldNotes,
-                                         std::vector<Note> newNotes,
-                                         std::vector<CorrectedSegment> oldSegments,
-                                         std::vector<CorrectedSegment> newSegments,
-                                         int affectedStartFrame,
-                                         int affectedEndFrame)
+                                         std::vector<Note> beforeNotesInRange,
+                                         std::vector<Note> afterNotesInRange,
+                                         std::vector<CorrectedSegment> beforeSegments,
+                                         std::vector<CorrectedSegment> afterSegments,
+                                         ContentEditRangeFrames affectedRange)
     : commands_(commands)
     , contentKey_(key)
     , description_(std::move(description))
-    , oldNotes_(std::move(oldNotes))
-    , newNotes_(std::move(newNotes))
-    , oldSegments_(std::move(oldSegments))
-    , newSegments_(std::move(newSegments))
-    , affectedStartFrame_(affectedStartFrame)
-    , affectedEndFrame_(affectedEndFrame)
+    , beforeNotes_(std::move(beforeNotesInRange))
+    , afterNotes_(std::move(afterNotesInRange))
+    , beforeSegments_(std::move(beforeSegments))
+    , afterSegments_(std::move(afterSegments))
+    , affectedRange_(affectedRange)
 {
-    jassert(affectedStartFrame_ >= 0);
-    jassert(affectedEndFrame_ >= affectedStartFrame_);
+    jassert(affectedRange_.startFrame >= 0);
+    jassert(affectedRange_.endFrameExclusive >= affectedRange_.startFrame);
 }
 
 void PianoRollEditAction::undo()
 {
     if (commands_ != nullptr)
-        commands_->commitNotesAndSegments(contentKey_, oldNotes_, oldSegments_,
-            ContentEditRangeFrames{affectedStartFrame_, affectedEndFrame_});
+        commands_->commitNotesAndSegments(contentKey_, beforeNotes_, beforeSegments_, affectedRange_);
 }
 
 void PianoRollEditAction::redo()
 {
     if (commands_ != nullptr)
-        commands_->commitNotesAndSegments(contentKey_, newNotes_, newSegments_,
-            ContentEditRangeFrames{affectedStartFrame_, affectedEndFrame_});
+        commands_->commitNotesAndSegments(contentKey_, afterNotes_, afterSegments_, affectedRange_);
 }
 
 } // namespace OpenTune

@@ -67,9 +67,6 @@ public:
                                         std::vector<CorrectedSegment> segments,
                                         ContentEditRangeFrames affectedRange) = 0;
 
-    virtual bool setCorrectedSegments(ContentKey key,
-                                      std::vector<CorrectedSegment> segments) = 0;
-
     virtual bool setPitchCurve(ContentKey key,
                                std::shared_ptr<PitchCurve> curve,
                                ContentEditRangeFrames affectedRange) = 0;

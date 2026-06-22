@@ -568,8 +568,12 @@ target_sources(OpenTune
         Source/Standalone/UI/PianoRollComponent.h
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.h
-        Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.cpp
-        Source/Standalone/UI/PianoRoll/PianoRollRenderModelCache.h
+        Source/Standalone/UI/PianoRoll/PianoRollCoordinateMapper.h
+        Source/Standalone/UI/PianoRoll/PianoRollRenderSnapshot.h
+        Source/Standalone/UI/PianoRoll/PianoRollTileRenderer.cpp
+        Source/Standalone/UI/PianoRoll/PianoRollTileRenderer.h
+        Source/Standalone/UI/PianoRoll/PianoRollTimelineSurfaceCache.cpp
+        Source/Standalone/UI/PianoRoll/PianoRollTimelineSurfaceCache.h
         Source/Standalone/UI/PianoRoll/PianoRollVisualInvalidation.cpp
         Source/Standalone/UI/PianoRoll/PianoRollVisualInvalidation.h
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp
@@ -641,6 +645,8 @@ target_sources(OpenTune
         Source/Utils/UndoManager.h
         Source/Utils/PianoRollEditAction.cpp
         Source/Utils/PianoRollEditAction.h
+        Source/Utils/PianoRollNotePatchAction.cpp
+        Source/Utils/PianoRollNotePatchAction.h
         Source/Utils/PitchShiftSettings.h
         Source/Utils/PitchShiftEditAction.cpp
         Source/Utils/PitchShiftEditAction.h
@@ -819,6 +825,17 @@ target_include_directories(OpenTune
         ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master
         ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/soundtouch-2.3.3/include
         ${ONNXRUNTIME_INCLUDE_DIR}
+        # JUCE module include paths — required for juce::* namespace resolution
+        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_basics>
+        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_utils>
+        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_core>
+        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_data_structures>
+        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_dsp>
+        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_events>
+        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_gui_basics>
+        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_gui_extra>
+        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_graphics>
+        $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_opengl>
 )
 
 if(WIN32)
