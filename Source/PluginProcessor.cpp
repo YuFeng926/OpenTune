@@ -4088,28 +4088,56 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
 
     auto normalizedNotes = normalizeStoredNotes(std::move(mergedNotes));
 
-    // Range-scoped segments merge: keep segments outside affected range, insert
-    // only the incoming range-scoped segments. Contract: callers filter to range.
+    // Range-scoped segments merge with split-preserve for boundary-crossing segments.
+    // When a segment crosses the affected range boundary, we preserve the outside parts.
+    // Example: old segment [0,100], edit range [40,60] → keep [0,40] and [60,100], replace [40,60].
     auto oldSegments = snap->pitchCurve->getSnapshot()->getCorrectedSegments();
     std::vector<CorrectedSegment> mergedSegments;
     mergedSegments.reserve(oldSegments.size() + segments.size());
 
-    // keptBefore: segments entirely before the range
+    const int rangeStart = affectedRange.startFrame;
+    const int rangeEnd = affectedRange.endFrameExclusive;
+
     for (const auto& seg : oldSegments) {
-        if (seg.endFrame <= affectedRange.startFrame)
+        // Segment entirely outside range — keep as-is
+        if (seg.endFrame <= rangeStart || seg.startFrame >= rangeEnd) {
             mergedSegments.push_back(seg);
+            continue;
+        }
+
+        // Segment crosses range boundary — split and preserve outside parts
+        // Left part: segment starts before range
+        if (seg.startFrame < rangeStart) {
+            CorrectedSegment left = seg;
+            left.endFrame = rangeStart;
+            const int leftLen = left.endFrame - left.startFrame;
+            if (leftLen > 0 && leftLen <= static_cast<int>(seg.f0Data.size())) {
+                left.f0Data.assign(seg.f0Data.begin(), seg.f0Data.begin() + leftLen);
+                mergedSegments.push_back(std::move(left));
+            }
+        }
+
+        // Right part: segment ends after range
+        if (seg.endFrame > rangeEnd) {
+            CorrectedSegment right = seg;
+            right.startFrame = rangeEnd;
+            const int offset = right.startFrame - seg.startFrame;
+            const int rightLen = right.endFrame - right.startFrame;
+            if (offset >= 0 && rightLen > 0 && offset + rightLen <= static_cast<int>(seg.f0Data.size())) {
+                right.f0Data.assign(seg.f0Data.begin() + offset, seg.f0Data.begin() + offset + rightLen);
+                mergedSegments.push_back(std::move(right));
+            }
+        }
     }
 
-    // segmentsInRange: callers already filtered to range-overlapping only
-    mergedSegments.insert(mergedSegments.end(),
-                          segments.begin(),
-                          segments.end());
+    // Insert new range-scoped segments (callers already filtered to range-overlapping only)
+    mergedSegments.insert(mergedSegments.end(), segments.begin(), segments.end());
 
-    // keptAfter: segments entirely after the range
-    for (const auto& seg : oldSegments) {
-        if (seg.startFrame >= affectedRange.endFrameExclusive)
-            mergedSegments.push_back(seg);
-    }
+    // Sort by startFrame to maintain segment order
+    std::sort(mergedSegments.begin(), mergedSegments.end(),
+              [](const CorrectedSegment& a, const CorrectedSegment& b) {
+                  return a.startFrame < b.startFrame;
+              });
 
     auto newCurve = clonePitchCurveWithCorrectedSegments(snap->pitchCurve, std::move(mergedSegments));
     if (!newCurve) return false;
