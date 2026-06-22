@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenTune User Guide</title>
+    <style>
+        @page { size: A4; margin: 2cm; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.8; color: #333; font-size: 11pt;
+            max-width: 210mm; margin: 0 auto; padding: 20mm; background: #fff;
+        }
+        .cover { text-align: center; padding: 60px 0; page-break-after: always; }
+        .cover h1 { font-size: 48pt; color: #2563eb; margin-bottom: 20px; font-weight: 700; }
+        .cover .subtitle { font-size: 18pt; color: #64748b; margin-bottom: 40px; }
+        .cover .version { font-size: 14pt; color: #94a3b8; margin-top: 100px; }
+        .cover .tagline { font-size: 16pt; color: #3b82f6; margin-top: 20px; font-weight: 500; }
+        .toc { page-break-after: always; }
+        .toc h2 { font-size: 24pt; color: #1e293b; border-bottom: 3px solid #2563eb; padding-bottom: 10px; margin-bottom: 30px; }
+        .toc ul { list-style: none; }
+        .toc li { padding: 8px 0; border-bottom: 1px dotted #e2e8f0; }
+        .toc a { color: #334155; text-decoration: none; }
+        .toc a:hover { color: #2563eb; }
+        .toc .page-num { float: right; color: #94a3b8; }
+        h2 { font-size: 22pt; color: #1e293b; margin-top: 40px; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
+        h3 { font-size: 16pt; color: #334155; margin-top: 30px; margin-bottom: 15px; }
+        h4 { font-size: 13pt; color: #475569; margin-top: 20px; margin-bottom: 10px; }
+        p { margin-bottom: 12px; text-align: justify; }
+        ul, ol { margin-left: 20px; margin-bottom: 15px; }
+        li { margin-bottom: 6px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 10pt; }
+        th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; }
+        th { background: #f1f5f9; color: #1e293b; font-weight: 600; }
+        tr:nth-child(even) { background: #f8fafc; }
+        .tip, .warning, .note { padding: 15px 20px; margin: 20px 0; border-radius: 6px; border-left: 4px solid; }
+        .tip { background: #eff6ff; border-color: #3b82f6; }
+        .warning { background: #fffbeb; border-color: #f59e0b; }
+        .note { background: #f0fdf4; border-color: #22c55e; }
+        .tip-title, .warning-title, .note-title { font-weight: 600; margin-bottom: 5px; }
+        .tip-title { color: #1d4ed8; }
+        .warning-title { color: #d97706; }
+        .note-title { color: #16a34a; }
+        code { background: #f1f5f9; padding: 2px 6px; border-radius: 3px; font-family: "Consolas", "Monaco", monospace; font-size: 10pt; }
+        .workflow { background: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .workflow-step { display: flex; align-items: flex-start; margin-bottom: 15px; }
+        .step-number { background: #2563eb; color: white; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; margin-right: 15px; flex-shrink: 0; }
+        .step-content h4 { margin-top: 0; margin-bottom: 5px; }
+        .step-content p { margin-bottom: 0; color: #64748b; }
+        .legend { display: flex; flex-wrap: wrap; gap: 20px; margin: 15px 0; }
+        .legend-item { display: flex; align-items: center; gap: 8px; }
+        .legend-color { width: 20px; height: 4px; border-radius: 2px; }
+        .page-break { page-break-before: always; }
+        .shortcut-table td:first-child { white-space: nowrap; font-family: monospace; background: #f1f5f9; }
+        .tool-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin: 10px 0; background: #fafafa; }
+        .tool-card h4 { margin-top: 0; color: #2563eb; }
+        .param-item { margin: 15px 0; padding: 10px 0; border-bottom: 1px dashed #e2e8f0; }
+        .param-name { font-weight: 600; color: #1e293b; }
+        .param-range { color: #64748b; font-size: 10pt; }
+        footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #e2e8f0; text-align: center; color: #94a3b8; font-size: 10pt; }
+        @media print { body { padding: 0; } .cover { padding: 100px 0; } }
+    </style>
+</head>
+<body>
+
+<div class="cover">
+    <h1>OpenTune</h1>
+    <div class="subtitle">AI-Powered Pitch Correction Software</div>
+    <div class="tagline">Preserve formants, pitch-shift without distortion</div>
+    <div class="version">User Guide v1.5</div>
+    <div class="version" style="margin-top: 10px;">May 2026</div>
+</div>
+
+<div class="toc">
+    <h2>Table of Contents</h2>
+    <ul>
+        <li><a href="#whats-new">★ What's New in v1.5</a></li>
+        <li><a href="#intro">1. Introduction</a></li>
+        <li><a href="#requirements">2. System Requirements</a></li>
+        <li><a href="#install">3. Installation &amp; Launch</a></li>
+        <li><a href="#interface">4. Interface Overview</a></li>
+        <li><a href="#quickstart">5. Quick Start</a></li>
+        <li><a href="#features">6. Core Features</a></li>
+        <li><a href="#tools">7. Editing Tools</a></li>
+        <li><a href="#parameters">8. Parameter Reference</a></li>
+        <li><a href="#schemes">9. Editing Schemes</a></li>
+        <li><a href="#preferences">10. Preferences</a></li>
+        <li><a href="#shortcuts">11. Keyboard Shortcuts</a></li>
+        <li><a href="#themes">12. Themes &amp; Visuals</a></li>
+        <li><a href="#gpu">13. GPU Acceleration</a></li>
+        <li><a href="#vst3">14. VST3/ARA Plugin Mode</a></li>
+        <li><a href="#export">15. Audio Export</a></li>
+        <li><a href="#faq">16. FAQ</a></li>
+    </ul>
+</div>
+
+
+<div class="page-break"></div>
+<h2 id="whats-new">★ What's New in v1.5</h2>
+
+<h3>🎉 New Features</h3>
+<table>
+    <tr><th width="25%">Feature</th><th>Description</th></tr>
+    <tr><td><strong>VST3/ARA Plugin Mode</strong></td><td>Load OpenTune as a VST3 + ARA2 plugin in DAWs (Studio One, Cubase, Logic Pro)</td></tr>
+    <tr><td><strong>Universal GPU Acceleration</strong></td><td>GPU acceleration now works on NVIDIA / AMD / Intel GPUs</td></tr>
+    <tr><td><strong>8 Scale/Mode Types</strong></td><td>Scale detection expanded from Major/Minor to 8 types: Major, Minor, Chromatic, Harmonic Minor, Dorian, Mixolydian, Major Pentatonic, Minor Pentatonic</td></tr>
+    <tr><td><strong>Piano Key Audition</strong></td><td>Click piano keys on the left side of the piano roll to preview pitch; supports click-and-drag across keys, release to stop</td></tr>
+    <tr><td><strong>Editing Schemes</strong></td><td>New "Curve-Priority" and "Note-Priority" editing schemes, switchable in Preferences</td></tr>
+    <tr><td><strong>Preferences Panel</strong></td><td>Full preferences dialog for language, theme, editing scheme, render priority, zoom sensitivity, and more</td></tr>
+    <tr><td><strong>5-Language Interface</strong></td><td>UI available in Chinese, English, Japanese, Russian, and Spanish</td></tr>
+    <tr><td><strong>Mouse Trail Effects</strong></td><td>8 mouse trail themes (Classic, Neon, Fire, Ocean, Galaxy, Cherry Blossom, Matrix, etc.)</td></tr>
+    <tr><td><strong>Panel Collapse</strong></td><td>Left/right panels can be hidden for immersive full-screen editing</td></tr>
+    <tr><td><strong>Render Status Badge</strong></td><td>Floating badge in the top-right corner showing current render progress</td></tr>
+    <tr><td><strong>Per-Note Vibrato</strong></td><td>Vibrato Depth and Rate can be set independently for each note</td></tr>
+    <tr><td><strong>Line Anchor Segment Parameters</strong></td><td>Line Anchor segments can be selected and given individual Retune Speed values</td></tr>
+    <tr><td><strong>Hover Tooltips</strong></td><td>All controls show tooltips on hover with description and shortcut key</td></tr>
+    <tr><td><strong>Batch Import</strong></td><td>Import multiple audio files at once — arrange sequentially or distribute to separate tracks</td></tr>
+    <tr><td><strong>View Menu Quick Settings</strong></td><td>Toggle waveform, lanes, note labels, chunk boundaries, and other visual options from the View menu</td></tr>
+</table>
+
+<h3>🐛 Fixes &amp; Optimizations</h3>
+<table>
+    <tr><th width="25%">Issue</th><th>Improvement</th></tr>
+    <tr><td><strong>High Memory Usage</strong></td><td>Optimized memory management reduces resident memory by ~500–900 MB</td></tr>
+    <tr><td><strong>Poor GPU Compatibility</strong></td><td>GPU acceleration now works on all major GPUs, with automatic CPU fallback when no compatible GPU is available</td></tr>
+    <tr><td><strong>Slow Processing</strong></td><td>GPU acceleration significantly improves processing speed</td></tr>
+</table>
+
+<h2 id="intro">1. Introduction</h2>
+
+<p>OpenTune is an open-source AI pitch correction application powered by a neural vocoder. Unlike traditional DSP algorithms that transpose by directly shifting pitch, OpenTune uses the PC-NSF-HiFiGAN vocoder to regenerate vocals while preserving the original formants. Even extreme pitch adjustments sound natural, solid, and artifact-free.</p>
+
+<p>OpenTune offers both <strong>Standalone</strong> and <strong>VST3/ARA (DAW plugin)</strong> modes — use it as an independent multi-track editor, or embed it into your DAW for collaborative real-time editing.</p>
+
+<h3>Core Advantages</h3>
+<table>
+    <tr><th width="25%">Feature</th><th>Description</th></tr>
+    <tr><td><strong>Formant-Preserving</strong></td><td>Changes pitch without altering vocal timbre — no "chipmunk effect" or unnatural voice shift</td></tr>
+    <tr><td><strong>Wide Transposition Range</strong></td><td>Supports dramatic pitch correction and key changes while maintaining clarity and stability</td></tr>
+    <tr><td><strong>AI Resynthesis</strong></td><td>Powered by PC-NSF-HiFiGAN deep-learning vocoder for high-fidelity vocal reconstruction</td></tr>
+    <tr><td><strong>Auto-Tune-Style Workflow</strong></td><td>Full suite of tools: auto-correction, hand-draw, note, and anchor</td></tr>
+    <tr><td><strong>Auto Scale Detection</strong></td><td>Built-in Krumhansl-Schmuckler algorithm supporting 8 scale types</td></tr>
+    <tr><td><strong>Dual-Format Support</strong></td><td>Standalone for independent use + VST3/ARA plugin for seamless DAW integration</td></tr>
+    <tr><td><strong>GPU Acceleration</strong></td><td>DirectML / CoreML automatically accelerates AI inference; seamless CPU fallback</td></tr>
+    <tr><td><strong>500-Step Undo</strong></td><td>Custom Undo/Redo system — every editing operation is reversible</td></tr>
+    <tr><td><strong>Open Source &amp; Free</strong></td><td>Permanently free, community-driven, continuously improved</td></tr>
+</table>
+
+<div class="tip">
+    <div class="tip-title">Technical Highlights</div>
+    OpenTune uses the RMVPE deep-learning model for high-precision pitch extraction, paired with PC-NSF-HiFiGAN neural vocoder for high-quality resynthesis. GPU acceleration delivers fast processing speeds.
+</div>
+
+<h2 id="requirements">2. System Requirements</h2>
+
+<h3>Minimum Requirements</h3>
+<table>
+    <tr><th width="25%">Item</th><th>Requirement</th></tr>
+    <tr><td>Operating System</td><td>Windows 10/11 (64-bit) or macOS 11+</td></tr>
+    <tr><td>Processor</td><td>Intel Core i5 or equivalent AMD processor</td></tr>
+    <tr><td>Memory</td><td>8 GB RAM</td></tr>
+    <tr><td>Storage</td><td>500 MB free space (including AI models)</td></tr>
+    <tr><td>Sound Card</td><td>Audio device supporting ASIO or WASAPI</td></tr>
+</table>
+
+<h3>Recommended Requirements</h3>
+<table>
+    <tr><th width="25%">Item</th><th>Requirement</th></tr>
+    <tr><td>Processor</td><td>Intel Core i7 / Apple M1 or higher</td></tr>
+    <tr><td>Memory</td><td>16 GB RAM or higher</td></tr>
+    <tr><td>Graphics</td><td>DirectML-compatible GPU (NVIDIA / AMD / Intel) for accelerated vocoder inference</td></tr>
+</table>
+
+<div class="note">
+    <div class="note-title">GPU Acceleration Notes</div>
+    <p>OpenTune supports DirectML (Windows) or CoreML (macOS) GPU acceleration. If no compatible GPU is available, it automatically falls back to CPU — normal operation is unaffected. You can manually switch to "CPU Preferred" in Preferences.</p>
+</div>
+
+<h2 id="install">3. Installation &amp; Launch</h2>
+
+<h3>3.1 Download</h3>
+<p>Download the latest version from the GitHub Releases page.</p>
+
+<h3>3.2 File Structure</h3>
+<ul>
+    <li><code>OpenTune.exe</code> — Main program (Standalone)</li>
+    <li><code>OpenTune.vst3</code> — VST3 plugin (for DAW use)</li>
+    <li><code>onnxruntime.dll</code> / <code>onnxruntime_providers_shared.dll</code> — ONNX Runtime</li>
+    <li><code>DirectML.dll</code> — DirectML Runtime (GPU acceleration)</li>
+    <li><code>models/</code> — AI model folder
+        <ul>
+            <li><code>rmvpe.onnx</code> — Pitch extraction model (~28MB)</li>
+            <li><code>pc_nsf_hifigan_44.1k_ONNX/</code> — Vocoder model</li>
+        </ul>
+    </li>
+    <li><code>docs/UserGuide.html</code> — This user guide</li>
+</ul>
+
+<h3>3.3 Launching</h3>
+<p>Double-click <code>OpenTune.exe</code> to start the standalone version. AI models are automatically initialized on first launch. For VST3 plugin use, copy the <code>OpenTune.vst3</code> folder to your DAW's VST3 scan directory.</p>
+
+<div class="page-break"></div>
+<h2 id="interface">4. Interface Overview</h2>
+
+<p>The OpenTune Standalone interface features a modern multi-panel design. Each panel can be collapsed to hide:</p>
+
+<h3>4.1 Interface Layout</h3>
+<table>
+    <tr><th width="20%">Area</th><th>Function</th></tr>
+    <tr><td><strong>Top Toolbar</strong></td><td>Menu buttons (File/Edit/View), transport controls, BPM/Scale settings, Tap Tempo, view switching</td></tr>
+    <tr><td><strong>Left Track Panel</strong></td><td>Multi-track management (up to 12 tracks), volume knobs, Solo/Mute, circular level meters, add-track button</td></tr>
+    <tr><td><strong>Center Arrange View</strong></td><td>Audio clip arrangement, waveform preview, timeline, clip drag/split/merge/delete</td></tr>
+    <tr><td><strong>Center Piano Roll</strong></td><td>Pitch curve editing, note drawing/selection, F0 curve visualization, playhead, piano key audition (click the keyboard to preview pitch)</td></tr>
+    <tr><td><strong>Right Parameter Panel</strong></td><td>Retune Speed / Vibrato / Note Split knobs, tool selection buttons</td></tr>
+    <tr><td><strong>Render Status Badge</strong></td><td>Top-right floating indicator showing current render progress (e.g. "Rendering 3/8")</td></tr>
+</table>
+
+<h3>4.2 Panel Toggle</h3>
+<p>Click the panel toggle buttons at the left and right ends of the top toolbar to show/hide the left track panel or right parameter panel, enabling an "immersive main canvas" mode.</p>
+
+<h3>4.3 View Switching</h3>
+<ul>
+    <li><strong>Track View</strong>: Shows the arrange view + piano roll, ideal for managing multiple audio clips</li>
+    <li><strong>Piano Roll View</strong>: Full-screen piano roll editing for focused, fine-grained pitch work</li>
+</ul>
+
+<h3>4.4 Mouse Hover Tooltips</h3>
+<p>Hover over any control for approximately 0.6 seconds to reveal a dark-themed floating tooltip window, showing the control's function description and shortcut key (if any). Tooltip text automatically switches with the interface language.</p>
+
+<h2 id="quickstart">5. Quick Start</h2>
+
+<div class="workflow">
+    <div class="workflow-step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+            <h4>Import Audio</h4>
+            <p>Drag and drop audio files into the application window, or use File &rarr; Import Audio. Supported formats: WAV, MP3, FLAC, OGG, AIFF, and more.</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+            <h4>Automatic Pitch Extraction</h4>
+            <p>After import, the software automatically extracts the original pitch curve, displayed as a red curve in the piano roll.</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+            <h4>Scale Settings</h4>
+            <p>The software automatically detects the scale, or you can manually select the root note (C&ndash;B) and scale type (Major, Minor, Chromatic, etc. — 8 types).</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+            <h4>Edit Pitch</h4>
+            <p>Use the AutoTune tool for one-click correction, or manually draw notes/anchors/freehand curves. Corrected pitch is displayed as a blue curve.</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">5</div>
+        <div class="step-content">
+            <h4>Adjust Parameters</h4>
+            <p>Adjust Retune Speed, Vibrato Depth/Rate, etc. in the parameter panel. Per-note vibrato settings are supported.</p>
+        </div>
+    </div>
+    <div class="workflow-step">
+        <div class="step-number">6</div>
+        <div class="step-content">
+            <h4>Preview &amp; Export</h4>
+            <p>Press Space to play and preview. When satisfied, export via File &rarr; Export. Supports exporting selected clips, individual tracks, or master bus mix.</p>
+        </div>
+    </div>
+</div>
+
+<div class="page-break"></div>
+<h2 id="features">6. Core Features</h2>
+
+<h3>6.1 Audio Import</h3>
+<ul>
+    <li>Supported formats: WAV, MP3, FLAC, OGG, AIFF, and more</li>
+    <li>Auto-resampled to 44.1kHz on import</li>
+    <li>Drag-and-drop import (drop directly into the window)</li>
+    <li>Multi-track support: up to 12 independent tracks, each capable of holding multiple clips</li>
+    <li>Batch import of multiple files (sequential layout or split by track)</li>
+</ul>
+
+<h3>6.2 Pitch Extraction (RMVPE)</h3>
+<ul>
+    <li>Automatically extracts the original pitch curve after importing audio (displayed in red)</li>
+    <li>Based on the RMVPE deep-learning model — high accuracy and strong noise immunity</li>
+    <li>Supports vocal detection in the 50Hz &ndash; 1100Hz frequency range</li>
+</ul>
+
+<h3>6.3 Scale Detection &amp; Selection</h3>
+<p>Built-in automatic scale detection using the Krumhansl-Schmuckler algorithm, supporting 8 scale types:</p>
+<table>
+    <tr><th>Scale</th><th>Abbrev.</th><th>Description</th></tr>
+    <tr><td>Major</td><td>Maj.</td><td>Natural major scale</td></tr>
+    <tr><td>Minor</td><td>Min.</td><td>Natural minor scale</td></tr>
+    <tr><td>Chromatic</td><td>Chr.</td><td>All 12 semitones available (no scale filtering)</td></tr>
+    <tr><td>Harmonic Minor</td><td>H.Min.</td><td>Minor scale with raised 7th degree</td></tr>
+    <tr><td>Dorian</td><td>Dor.</td><td>Common in jazz and blues</td></tr>
+    <tr><td>Mixolydian</td><td>Mix.</td><td>Major scale with lowered 7th degree</td></tr>
+    <tr><td>Major Pentatonic</td><td>Pent.</td><td>Five-note pentatonic scale</td></tr>
+    <tr><td>Minor Pentatonic</td><td>m.Pent.</td><td>Blues pentatonic scale</td></tr>
+</table>
+
+<h3>6.4 AI Vocoder Resynthesis</h3>
+<ul>
+    <li>After pitch correction, the software uses the PC-NSF-HiFiGAN neural vocoder to resynthesize audio</li>
+    <li>Preserves original formants — wide transposition ranges sound natural</li>
+    <li>Output sample rate: 44.1kHz — clear, natural audio quality</li>
+    <li>GPU acceleration supported (configurable in Preferences)</li>
+</ul>
+
+<h3>6.5 Multi-Track Management</h3>
+<ul>
+    <li>Up to 12 independent tracks</li>
+    <li>Each track supports multiple audio clips</li>
+    <li>Track operations: Solo, Mute, Volume (circular knob)</li>
+    <li>Circular LED level meters show real-time volume</li>
+    <li>Clip operations: drag to move, split, merge, delete</li>
+</ul>
+
+<h3>6.6 Undo/Redo</h3>
+<ul>
+    <li>Preserves up to <strong>500 steps</strong> of operation history</li>
+    <li>Covers all editing operations: note drawing, parameter adjustments, clip operations, etc.</li>
+    <li>Shortcuts: <code>Ctrl+Z</code> (Undo), <code>Ctrl+Y</code> or <code>Ctrl+Shift+Z</code> (Redo)</li>
+</ul>
+
+<div class="page-break"></div>
+<h2 id="tools">7. Editing Tools</h2>
+
+<p>OpenTune provides five professional editing tools, switchable via the tool area in the parameter panel or by keyboard shortcut:</p>
+
+<div class="tool-card">
+    <h4>AutoTune — Automatic Correction Tool (Shortcut: 6)</h4>
+    <p>Automatically corrects pitch to the nearest target note based on the current scale. Ideal for quick batch correction.</p>
+</div>
+
+<div class="tool-card">
+    <h4>Select — Selection Tool (Shortcut: 3)</h4>
+    <p>Select notes or time regions. After selection, you can move, delete, adjust parameters, etc.</p>
+    <p><strong>Operations</strong>: Click to select, drag to marquee-select, Shift+click to multi-select, Delete to remove.</p>
+</div>
+
+<div class="tool-card">
+    <h4>DrawNote — Note Drawing Tool (Shortcut: 2)</h4>
+    <p>Manually draw note blocks. Drag in the piano roll to create notes with specified pitch and duration.</p>
+    <p><strong>Feature</strong>: Each note can have independent Retune Speed, Vibrato Depth/Rate settings.</p>
+</div>
+
+<div class="tool-card">
+    <h4>LineAnchor — Line Anchor Tool (Shortcut: 4)</h4>
+    <p>Place key anchor points on the pitch curve; the software automatically generates linear interpolation transitions between anchors. Ideal for precise control of glides and pitch bends.</p>
+</div>
+
+<div class="tool-card">
+    <h4>HandDraw — Freehand Tool</h4>
+    <p>Draw the F0 curve directly by hand for fully customized pitch shaping. Ideal for drawing vibrato, glides, bends, and other ornamental effects.</p>
+</div>
+
+<h3>7.1 Piano Key Audition</h3>
+<p>Click the piano keys on the left side of the piano roll to play the corresponding pitch as a piano sample in real time, making it easy to confirm target pitches. You can hold and drag across keys to glide between notes; releasing the mouse stops playback automatically. The pressed key is highlighted in blue.</p>
+
+<h2 id="parameters">8. Parameter Reference</h2>
+
+<h3>8.1 Pitch Correction Parameters</h3>
+
+<div class="param-item">
+    <div class="param-name">Retune Speed</div>
+    <div class="param-range">Range: 0% &ndash; 100% | Default: 15%</div>
+    <p>Controls the speed and intensity of pitch correction. Higher values yield faster, more precise correction; lower values preserve more of the original pitch fluctuation.</p>
+    <ul>
+        <li><strong>Low (0&ndash;30%)</strong>: Preserves natural vibrato — ideal for a realistic feel</li>
+        <li><strong>Medium (30&ndash;70%)</strong>: Balances precision and naturalness</li>
+        <li><strong>High (70&ndash;100%)</strong>: Precise correction — produces the distinct Auto-Tune effect</li>
+    </ul>
+    <p><strong>Per-note</strong>: Select a note before adjusting to affect only that note.</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Vibrato Depth</div>
+    <div class="param-range">Range: 0 &ndash; 1 | Default: 0</div>
+    <p>Adds artificial vibrato amplitude to notes. 0 = no addition, 1 = maximum depth. Supports per-note setting.</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Vibrato Rate</div>
+    <div class="param-range">Range: 0 &ndash; 15 Hz | Default: 7.5 Hz</div>
+    <p>Controls the oscillation frequency of artificial vibrato. Natural vocal vibrato typically falls in the 5&ndash;8 Hz range. Supports per-note setting.</p>
+</div>
+
+<div class="param-item">
+    <div class="param-name">Note Split Threshold</div>
+    <div class="param-range">Range: 0 &ndash; 100 cents | Default: 80 cents</div>
+    <p>Controls the split sensitivity during automatic note generation. Lower values make it easier to split into independent notes.</p>
+</div>
+
+<h3>8.2 Track Parameters</h3>
+<div class="param-item">
+    <div class="param-name">Volume</div>
+    <div class="param-range">Range: 0 &ndash; 4.0&times; | Default: 1.0</div>
+    <p>Track volume knob, supports gain amplification beyond 1.0.</p>
+</div>
+
+<h3>8.3 Playback Parameters</h3>
+<div class="param-item">
+    <div class="param-name">BPM (Beats Per Minute)</div>
+    <div class="param-range">Range: 20 &ndash; 300 BPM | Default: 120</div>
+    <p>Controls the project tempo and timeline grid. Double-click the number to enter an exact value directly.</p>
+</div>
+<div class="param-item">
+    <div class="param-name">Tap Tempo</div>
+    <p>Continuously tap the Tap button; the software automatically calculates the average interval to derive BPM. Up to 5 taps are recorded.</p>
+</div>
+
+<div class="page-break"></div>
+<h2 id="schemes">9. Editing Schemes</h2>
+
+<p>OpenTune provides two editing schemes that determine tool behavior. Switch via Preferences &rarr; Editing Scheme.</p>
+
+<h3>9.1 Curve-First Editing (Default)</h3>
+<ul>
+    <li>LineAnchor segments can be selected and given independent Retune Speed</li>
+    <li>The parameter panel prioritizes displaying parameters of the selected LineAnchor segment</li>
+    <li>AutoTune prioritizes acting on the selected time region</li>
+</ul>
+
+<h3>9.2 Note-First Editing</h3>
+<ul>
+    <li>After HandDraw / LineAnchor drawing, affected notes are automatically selected</li>
+    <li>AutoTune prioritizes acting on the selected note range</li>
+    <li>The parameter panel prioritizes displaying parameters of the selected note</li>
+</ul>
+
+<h2 id="preferences">10. Preferences</h2>
+
+<p>Open the Preferences dialog via <strong>File &rarr; Options</strong> or <strong>Edit &rarr; Preferences</strong>.</p>
+
+<h3>10.1 Shared Settings (common to Standalone and VST3)</h3>
+<table>
+    <tr><th>Setting</th><th>Description</th><th>Default</th></tr>
+    <tr><td>Interface Language</td><td>Chinese / English / &#26085;&#26412;&#35486; / &#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081; / Espa&ntilde;ol</td><td>Chinese</td></tr>
+    <tr><td>Theme</td><td>BlueBreeze / DarkBlueGrey / Aurora</td><td>Aurora</td></tr>
+    <tr><td>Editing Scheme</td><td>Curve-First / Note-First</td><td>Curve-First</td></tr>
+    <tr><td>Render Priority</td><td>GPU Preferred / CPU Preferred</td><td>GPU Preferred</td></tr>
+    <tr><td>Horizontal Zoom Sensitivity</td><td>Controls mouse wheel horizontal zoom speed</td><td>1.0</td></tr>
+    <tr><td>Vertical Zoom Sensitivity</td><td>Controls mouse wheel vertical zoom speed</td><td>1.0</td></tr>
+    <tr><td>Scroll Speed</td><td>View scrolling speed</td><td>1.0</td></tr>
+    <tr><td>Note Name Display</td><td>Show All / C Only / Hidden</td><td>C Only</td></tr>
+    <tr><td>Show Chunk Boundaries</td><td>Visualize render chunk boundaries</td><td>Off</td></tr>
+    <tr><td>Show Unvoiced Frames</td><td>Display F0 data for non-voiced frames</td><td>Off</td></tr>
+</table>
+
+<h3>10.2 Standalone-Specific Settings</h3>
+<table>
+    <tr><th>Setting</th><th>Description</th></tr>
+    <tr><td>Audio Device</td><td>Driver type, device selection, sample rate, buffer size</td></tr>
+    <tr><td>Keyboard Shortcuts</td><td>10 customizable shortcut bindings (supports conflict detection and reset)</td></tr>
+    <tr><td>Mouse Trail</td><td>8 mouse trail effect theme choices</td></tr>
+</table>
+
+<h3>10.3 View Menu Quick Settings</h3>
+<p>The following visual settings can also be toggled directly via the <strong>View</strong> menu:</p>
+<ul>
+    <li>Show Waveform — Show/hide waveform</li>
+    <li>Show Lanes — Show/hide note lanes</li>
+    <li>Note Labels — Note name display mode</li>
+    <li>Show Chunk Boundaries — Chunk boundaries</li>
+    <li>Show Unvoiced Frames — Unvoiced frames</li>
+    <li>Theme — Theme switching</li>
+    <li>Mouse Trail — Mouse trail theme</li>
+</ul>
+
+<h2 id="shortcuts">11. Keyboard Shortcuts</h2>
+
+<h3>11.1 Playback Controls</h3>
+<table class="shortcut-table">
+    <tr><th>Shortcut</th><th>Function</th></tr>
+    <tr><td>Space</td><td>Play / Pause</td></tr>
+    <tr><td>Enter</td><td>Stop playback</td></tr>
+    <tr><td>A</td><td>Play from beginning</td></tr>
+    <tr><td>Escape</td><td>Cancel current operation / Stop</td></tr>
+</table>
+
+<h3>11.2 Editing Operations</h3>
+<table class="shortcut-table">
+    <tr><th>Shortcut</th><th>Function</th></tr>
+    <tr><td>Ctrl + Z</td><td>Undo</td></tr>
+    <tr><td>Ctrl + Y / Ctrl + Shift + Z</td><td>Redo</td></tr>
+    <tr><td>Ctrl + X</td><td>Cut</td></tr>
+    <tr><td>Ctrl + C</td><td>Copy</td></tr>
+    <tr><td>Ctrl + V</td><td>Paste</td></tr>
+    <tr><td>Ctrl + A</td><td>Select All</td></tr>
+    <tr><td>Delete / Backspace</td><td>Delete selected content</td></tr>
+</table>
+
+<h3>11.3 Tool Switching</h3>
+<table class="shortcut-table">
+    <tr><th>Shortcut</th><th>Tool</th></tr>
+    <tr><td>2</td><td>DrawNote — Note Drawing</td></tr>
+    <tr><td>3</td><td>Select — Selection Tool</td></tr>
+    <tr><td>4</td><td>LineAnchor — Anchor Tool</td></tr>
+    <tr><td>6</td><td>AutoTune — Auto Correction</td></tr>
+</table>
+
+<h3>11.4 View Operations</h3>
+<table class="shortcut-table">
+    <tr><th>Shortcut</th><th>Function</th></tr>
+    <tr><td>Mouse Wheel</td><td>Vertical scrolling</td></tr>
+    <tr><td>Shift + Mouse Wheel</td><td>Horizontal scrolling</td></tr>
+    <tr><td>Ctrl + Mouse Wheel</td><td>Horizontal zoom (timeline)</td></tr>
+    <tr><td>Alt + Mouse Wheel</td><td>Vertical zoom (pitch axis)</td></tr>
+</table>
+
+<div class="tip">
+    <div class="tip-title">Customizable Shortcuts</div>
+    All shortcuts can be customized in Preferences &rarr; Shortcuts. Supports multiple bindings, conflict detection, and one-click reset. macOS displays keys using &#8984;/&#8997;/&#8679; symbols automatically.
+</div>
+
+<div class="page-break"></div>
+<h2 id="themes">12. Themes &amp; Visuals</h2>
+
+<h3>12.1 Interface Themes</h3>
+<table>
+    <tr><th>Theme</th><th>Style</th><th>Best For</th></tr>
+    <tr><td><strong>Blue Breeze</strong></td><td>Light palette, soft blue tones, modern minimalism</td><td>Bright environments, extended sessions</td></tr>
+    <tr><td><strong>Dark Blue-Grey</strong></td><td>Dark palette, professional studio style, dimensional shadows</td><td>Dark-room environments, professional production</td></tr>
+    <tr><td><strong>Aurora Glass</strong></td><td>Dark background, neon glow, frosted glass texture</td><td>Tech-forward aesthetic, personal expression</td></tr>
+</table>
+
+<h3>12.2 Mouse Trail Effects (Standalone Only)</h3>
+<table>
+    <tr><th>Effect</th><th>Style</th></tr>
+    <tr><td>Off</td><td>No trail</td></tr>
+    <tr><td>Classic</td><td>Blue classic trail (default)</td></tr>
+    <tr><td>Neon</td><td>Magenta/cyan neon gradient</td></tr>
+    <tr><td>Fire</td><td>Orange-red/gold flame effect</td></tr>
+    <tr><td>Ocean</td><td>Blue/teal ocean ripple</td></tr>
+    <tr><td>Galaxy</td><td>Purple/pink galaxy effect</td></tr>
+    <tr><td>Cherry Blossom</td><td>Light pink blossom petals</td></tr>
+    <tr><td>Matrix</td><td>Green matrix digital rain</td></tr>
+</table>
+
+<h3>12.3 Hover Animations</h3>
+<p>All toolbar buttons provide subtle visual feedback on mouse hover: icons slightly enlarge (1.08&times;) and brighten by 15%, delivering instant interactive confirmation.</p>
+
+<h2 id="gpu">13. GPU Acceleration</h2>
+
+<p>OpenTune supports GPU-accelerated vocoder inference, significantly improving rendering speed.</p>
+
+<h3>13.1 Supported Platforms</h3>
+<ul>
+    <li><strong>Windows</strong>: Supports NVIDIA / AMD / Intel GPUs via DirectML</li>
+    <li><strong>macOS</strong>: Supports Apple GPU via CoreML</li>
+    <li>Automatically falls back to CPU if no discrete GPU is present or GPU is incompatible — normal usage unaffected</li>
+</ul>
+
+<h3>13.2 Configuration</h3>
+<p>In Preferences &rarr; Shared &rarr; Render Priority, select:</p>
+<ul>
+    <li><strong>GPU Preferred</strong> (default): Automatically use GPU acceleration</li>
+    <li><strong>CPU Preferred</strong>: Force CPU usage — suitable when GPU compatibility issues arise</li>
+</ul>
+
+<h2 id="vst3">14. VST3/ARA Plugin Mode</h2>
+
+<p>The OpenTune VST3 plugin integrates deeply with DAWs via the ARA2 protocol, enabling non-destructive editing.</p>
+
+<h3>14.1 How It Works</h3>
+<ul>
+    <li>Loaded as a VST3 + ARA2 extension in compatible DAWs (e.g., Studio One, Cubase, Logic Pro)</li>
+    <li>The DAW provides audio source data via the ARA protocol — no file import/export needed</li>
+    <li>Editing results are reflected in real time during DAW timeline playback</li>
+    <li>Supports host transport sync (Play/Stop/Seek) and BPM following</li>
+</ul>
+
+<h3>14.2 Differences from Standalone</h3>
+<table>
+    <tr><th>Feature</th><th>Standalone</th><th>VST3/ARA</th></tr>
+    <tr><td>Multi-track editing</td><td>&#10003; Up to 12 tracks</td><td>&#10007; Single clip editing</td></tr>
+    <tr><td>File import/export</td><td>&#10003;</td><td>&#10007; (Managed by DAW)</td></tr>
+    <tr><td>Mouse trail effects</td><td>&#10003; 8 themes</td><td>&#10007;</td></tr>
+    <tr><td>Custom shortcuts</td><td>&#10003;</td><td>&#10007; (Uses DAW shortcuts)</td></tr>
+    <tr><td>Audio device settings</td><td>&#10003;</td><td>&#10007; (Uses DAW audio engine)</td></tr>
+    <tr><td>Host transport sync</td><td>&#10007;</td><td>&#10003;</td></tr>
+    <tr><td>ARA non-destructive editing</td><td>&#10007;</td><td>&#10003;</td></tr>
+    <tr><td>Piano roll editing</td><td>&#10003;</td><td>&#10003;</td></tr>
+    <tr><td>Parameter panel</td><td>&#10003;</td><td>&#10003;</td></tr>
+    <tr><td>Undo/Redo</td><td>&#10003;</td><td>&#10003;</td></tr>
+    <tr><td>Theme switching</td><td>&#10003;</td><td>&#10003;</td></tr>
+    <tr><td>Multi-language UI</td><td>&#10003;</td><td>&#10003;</td></tr>
+</table>
+
+<div class="page-break"></div>
+<h2 id="export">15. Audio Export</h2>
+
+<h3>15.1 Export Format</h3>
+<ul>
+    <li><strong>Format</strong>: WAV</li>
+    <li><strong>Sample Rate</strong>: 44.1kHz</li>
+    <li><strong>Bit Depth</strong>: 32-bit Float</li>
+    <li><strong>Channels</strong>: Mono (Clip/Track) / Stereo (Master Mix)</li>
+</ul>
+
+<h3>15.2 Export Options</h3>
+<table>
+    <tr><th>Option</th><th>Description</th></tr>
+    <tr><td>Export Selected Clip</td><td>Export only the currently selected audio clip</td></tr>
+    <tr><td>Export Track</td><td>Export the mix of all clips on a specified track</td></tr>
+    <tr><td>Export Bus (Master Mix)</td><td>Export the final mixdown of all tracks</td></tr>
+</table>
+
+<h3>15.3 Export Workflow</h3>
+<ol>
+    <li>Menu <strong>File &rarr; Export Audio</strong></li>
+    <li>Select export range</li>
+    <li>Choose save location and filename</li>
+    <li>Wait for background rendering to complete (progress shown in render badge)</li>
+</ol>
+
+<h2 id="faq">16. FAQ</h2>
+
+<h3>Q1: No pitch curve after importing audio?</h3>
+<p><strong>A:</strong> Ensure <code>models/rmvpe.onnx</code> exists and is intact. The audio must contain clear vocal melodic content. Pure accompaniment/percussion cannot extract F0.</p>
+
+<h3>Q2: GPU acceleration not working?</h3>
+<p><strong>A:</strong> Check the following:</p>
+<ul>
+    <li>Ensure <code>DirectML.dll</code> is in the program directory</li>
+    <li>Confirm GPU drivers are updated to the latest version</li>
+    <li>Verify "Render Priority" is set to GPU Preferred in Preferences</li>
+    <li>Check log files to confirm the DML provider loaded successfully</li>
+</ul>
+
+<h3>Q3: High memory usage?</h3>
+<p><strong>A:</strong> v1.5 has optimized memory management — the F0 model is automatically released after use. If usage remains high, try: disabling GPU acceleration (GPU sessions consume additional memory), reducing the number of simultaneously open tracks.</p>
+
+<h3>Q4: Abnormal audio quality after correction?</h3>
+<p><strong>A:</strong> Possible causes: corrupted vocoder model files (re-download), Retune Speed set too high (try lowering below 30%), poor original recording quality.</p>
+
+<h3>Q5: How to achieve a natural tuning effect?</h3>
+<ul>
+    <li>Use a lower Retune Speed (10&ndash;30%)</li>
+    <li>Preserve original vibrato; do not add artificial Vibrato</li>
+    <li>Use the LineAnchor tool for fine adjustments at key points</li>
+    <li>Choose "Curve-First Editing" scheme for more refined control</li>
+</ul>
+
+<h3>Q6: VST3 plugin won't load in DAW?</h3>
+<p><strong>A:</strong> Ensure the <code>OpenTune.vst3</code> folder is complete (contains Contents/x86_64-win/ subdirectory), and the ONNX Runtime DLLs and model files are in the correct locations. Re-scan the VST3 directory in your DAW.</p>
+
+<h3>Q7: How to switch the interface language?</h3>
+<p><strong>A:</strong> Preferences &rarr; Language — select your target language and the interface updates immediately. Supports Chinese, English, Japanese, Russian, and Spanish.</p>
+
+<hr>
+
+<footer>
+    <p>OpenTune v1.5 &mdash; AI-Powered Pitch Correction Software | Open Source &amp; Free | AGPL v3.0 License</p>
+    <p>Thanks to the DiffSinger open-source community and all contributors</p>
+</footer>
+
+</body>
+</html>

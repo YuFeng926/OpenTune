@@ -1139,6 +1139,13 @@ void PianoRollComponent::enqueueNoteBasedCorrectionAsync(const std::vector<Note>
 
 void PianoRollPreviewOverlay::paint(juce::Graphics& g)
 {
+    // Ghost overlay (reference content) — drawn in overlay layer, not tiles
+    if (owner_.referenceOverlay_.has_value() && owner_.referenceOverlay_->enabled) {
+        auto ctx = owner_.makePresentationRenderContext();
+        owner_.renderer_->drawGhostNotes(g, ctx, *owner_.referenceOverlay_);
+        owner_.renderer_->drawGhostAnchors(g, ctx, *owner_.referenceOverlay_);
+    }
+
     const auto themeId = UIColors::currentThemeId();
 
     if (owner_.currentTool_ != ToolId::TimeTool) {
@@ -2263,7 +2270,6 @@ PianoRollRenderSnapshot PianoRollComponent::buildRenderSnapshot() const
     }
 
     snap.activeProjection = activeContentProjection();
-    snap.referenceOverlay = referenceOverlay_;
 
     // Chunk boundaries
     if (showChunkBoundaries_ && processor_) {
@@ -2901,9 +2907,7 @@ void PianoRollComponent::visibilityChanged()
 void PianoRollComponent::setReferenceOverlay(std::optional<PianoRollRenderer::ReferenceOverlay> overlay)
 {
     referenceOverlay_ = std::move(overlay);
-    ++visualPrefsRevision_;
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    previewOverlay_.repaint();
 }
 
 PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext(double visibleTimeStart,

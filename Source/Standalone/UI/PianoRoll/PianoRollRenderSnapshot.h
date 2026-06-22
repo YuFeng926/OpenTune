@@ -34,8 +34,6 @@ struct PianoRollRenderSnapshot {
     std::vector<double> chunkBoundaries;
     std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
 
-    std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay;
-
     ContentTimelineProjection activeProjection;
 
     bool showWaveform = true;

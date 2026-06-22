@@ -42,6 +42,8 @@ spike/
 .planning/
 JUCE-master/
 AGENTS.md
+CLAUDE.md
+MACOS_PORT.md
 Installer/
 ThirdParty/
 

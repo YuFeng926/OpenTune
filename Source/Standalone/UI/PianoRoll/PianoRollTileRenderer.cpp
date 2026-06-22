@@ -40,7 +40,6 @@ juce::Image PianoRollTileRenderer::renderTile(const PianoRollRenderSnapshot& sna
     ctx.coords.verticalScrollOffset = snapshot.verticalScrollOffset;
     ctx.coords.maxMidi = snapshot.maxMidi;
 
-    ctx.referenceOverlay = snapshot.referenceOverlay;
     ctx.activeProjection = snapshot.activeProjection;
     ctx.timeGridSnapshot = snapshot.timeGridSnapshot;
 
@@ -71,12 +70,6 @@ juce::Image PianoRollTileRenderer::renderTile(const PianoRollRenderSnapshot& sna
     }
 
     renderer.drawChunkBoundaries(g, ctx, item);
-
-    // Ghost overlay (reference content)
-    if (ctx.referenceOverlay.has_value() && ctx.referenceOverlay->enabled) {
-        renderer.drawGhostNotes(g, ctx, *ctx.referenceOverlay);
-        renderer.drawGhostAnchors(g, ctx, *ctx.referenceOverlay);
-    }
 
     return image;
 }

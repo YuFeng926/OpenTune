@@ -1,5 +1,23 @@
 CompileFlags:
-  CompilationDatabase: build-ara-lsp
+  CompilationDatabase: build-ara-overlay-vs18-clean
+  Add:
+    # JUCE module include paths — fallback when compile_commands.json unavailable
+    - "-IJUCE-master/modules/juce_audio_basics"
+    - "-IJUCE-master/modules/juce_audio_utils"
+    - "-IJUCE-master/modules/juce_core"
+    - "-IJUCE-master/modules/juce_data_structures"
+    - "-IJUCE-master/modules/juce_dsp"
+    - "-IJUCE-master/modules/juce_events"
+    - "-IJUCE-master/modules/juce_gui_basics"
+    - "-IJUCE-master/modules/juce_gui_extra"
+    - "-IJUCE-master/modules/juce_graphics"
+    - "-IJUCE-master/modules/juce_opengl"
+    # MSVC standard library paths
+    - "-IF:/VSC/VC/Tools/MSVC/14.44.35207/include"
+    - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/ucrt"
+    - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared"
+    - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um"
+    - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/winrt"
 
 Diagnostics:
   UnusedIncludes: Strict
