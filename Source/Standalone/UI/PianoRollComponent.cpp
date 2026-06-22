@@ -700,8 +700,24 @@ bool PianoRollComponent::commitEditedContentNotesAndSegments(const std::vector<N
     auto extractSegmentsInRange = [](const std::vector<CorrectedSegment>& segs, int startFrame, int endFrame) {
         std::vector<CorrectedSegment> result;
         for (const auto& seg : segs) {
-            if (seg.startFrame < endFrame && seg.endFrame > startFrame)
-                result.push_back(seg);
+            if (seg.endFrame <= startFrame || seg.startFrame >= endFrame)
+                continue;  // Outside range
+            
+            // Clip to range boundaries (split-preserve for boundary-crossing segments)
+            const int clipStart = std::max(seg.startFrame, startFrame);
+            const int clipEnd = std::min(seg.endFrame, endFrame);
+            if (clipEnd <= clipStart)
+                continue;  // Empty after clip
+            
+            CorrectedSegment clipped = seg;
+            const int startOffset = clipStart - seg.startFrame;
+            const int clipLen = clipEnd - clipStart;
+            if (startOffset >= 0 && clipLen > 0 && startOffset + clipLen <= static_cast<int>(seg.f0Data.size())) {
+                clipped.startFrame = clipStart;
+                clipped.endFrame = clipEnd;
+                clipped.f0Data.assign(seg.f0Data.begin() + startOffset, seg.f0Data.begin() + startOffset + clipLen);
+                result.push_back(std::move(clipped));
+            }
         }
         return result;
     };
@@ -788,8 +804,24 @@ void PianoRollComponent::recordUndoAction(const juce::String& description, F0Fra
     auto segmentsInRange = [](const std::vector<CorrectedSegment>& segments, int startFrame, int endFrameExclusive) {
         std::vector<CorrectedSegment> result;
         for (const auto& seg : segments) {
-            if (seg.startFrame < endFrameExclusive && seg.endFrame > startFrame)
-                result.push_back(seg);
+            if (seg.endFrame <= startFrame || seg.startFrame >= endFrameExclusive)
+                continue;  // Outside range
+            
+            // Clip to range boundaries (split-preserve for boundary-crossing segments)
+            const int clipStart = std::max(seg.startFrame, startFrame);
+            const int clipEnd = std::min(seg.endFrame, endFrameExclusive);
+            if (clipEnd <= clipStart)
+                continue;  // Empty after clip
+            
+            CorrectedSegment clipped = seg;
+            const int startOffset = clipStart - seg.startFrame;
+            const int clipLen = clipEnd - clipStart;
+            if (startOffset >= 0 && clipLen > 0 && startOffset + clipLen <= static_cast<int>(seg.f0Data.size())) {
+                clipped.startFrame = clipStart;
+                clipped.endFrame = clipEnd;
+                clipped.f0Data.assign(seg.f0Data.begin() + startOffset, seg.f0Data.begin() + startOffset + clipLen);
+                result.push_back(std::move(clipped));
+            }
         }
         return result;
     };
