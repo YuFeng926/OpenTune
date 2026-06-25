@@ -1315,63 +1315,431 @@ CheckResult renderCacheCompleteChunkRenderWithAudioReturnsTriState()
     return pass("renderCacheCompleteChunkRenderWithAudioReturnsTriState");
 }
 
-// ── Phase 6: VBlank paint contract tests ────────────────────────────────────
+// ── VBlank 双层缓存架构守卫测试（Task 7）────────────────
 
-CheckResult paintDoesNotRequestCoverage()
+CheckResult vBlankCache_paintDoesNoImmediateModeRendering()
 {
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-
-    // Extract the paint() method body
     const auto paint = extractFunctionBlock(cpp, "void PianoRollComponent::paint(juce::Graphics& g)");
     if (paint.empty())
-        return fail("paintDoesNotRequestCoverage",
-                     "Cannot find PianoRollComponent::paint()");
+        return fail("vBlankCache_paintDoesNoImmediateModeRendering", "Cannot find paint()");
 
-    if (contains(paint, "requestCoverage"))
-        return fail("paintDoesNotRequestCoverage",
-                     "paint() must not call requestCoverage(). "
-                     "Tile generation must happen outside paint (e.g. flushPendingVisualInvalidation).");
+    // Forbidden: old renderer calls (moved to cache rebuild)
+    const std::vector<std::string_view> forbidden = {
+        "drawTimeRuler", "drawGridLines", "drawWaveform",
+        "drawLanes", "drawUnvoicedFrameBands", "drawNotes",
+        "drawF0Curve", "drawChunkBoundaries"
+    };
+    for (const auto token : forbidden) {
+        if (contains(paint, token))
+            return fail("vBlankCache_paintDoesNoImmediateModeRendering",
+                         "paint() must not contain " + std::string(token));
+    }
 
-    return pass("paintDoesNotRequestCoverage");
+    // Forbidden: cache rebuild in paint (no cache-miss fallback)
+    const std::vector<std::string_view> noRebuild = {
+        "rebuildDirtyCaches", "rebuildBackgroundCache", "rebuildDetailCache",
+        "needsGeometryRebuild"
+    };
+    for (const auto token : noRebuild) {
+        if (contains(paint, token))
+            return fail("vBlankCache_paintDoesNoImmediateModeRendering",
+                         "paint() must not call " + std::string(token) + " (no cache-miss fallback)");
+    }
+
+    // Required: blits both cache images
+    if (!contains(paint, "backgroundCacheImage_") || !contains(paint, "detailCacheImage_"))
+        return fail("vBlankCache_paintDoesNoImmediateModeRendering",
+                     "paint() must blit both backgroundCacheImage_ and detailCacheImage_");
+
+    return pass("vBlankCache_paintDoesNoImmediateModeRendering");
 }
 
-CheckResult paintDoesNotBuildSnapshot()
+CheckResult vBlankCache_cacheMembersExist()
 {
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-
-    const auto paint = extractFunctionBlock(cpp, "void PianoRollComponent::paint(juce::Graphics& g)");
-    if (paint.empty())
-        return fail("paintDoesNotBuildSnapshot",
-                     "Cannot find PianoRollComponent::paint()");
-
-    if (contains(paint, "buildRenderSnapshot"))
-        return fail("paintDoesNotBuildSnapshot",
-                     "paint() must not call buildRenderSnapshot(). "
-                     "Snapshot construction is work; paint must only consume pre-built data.");
-
-    return pass("paintDoesNotBuildSnapshot");
+    const auto header = readText("Source/Standalone/UI/PianoRollComponent.h");
+    const std::vector<std::string_view> required = {
+        "juce::Image backgroundCacheImage_",
+        "juce::Image detailCacheImage_",
+        "int cacheBandStartX_",
+        "int cacheBandWidth_",
+        "int cacheBandHeight_",
+        "bool backgroundCacheDirty_",
+        "bool detailCacheDirty_"
+    };
+    const auto missing = missingTokens(header, required);
+    if (!missing.empty())
+        return fail("vBlankCache_cacheMembersExist", "missing cache members:" + missing);
+    return pass("vBlankCache_cacheMembersExist");
 }
 
-CheckResult paintOnlyDrawsVisibleTilesForDetailLayer()
+CheckResult vBlankCache_flushRebuildsBeforeInvalidate()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto flush = extractFunctionBlock(cpp, "void PianoRollComponent::flushPendingVisualInvalidation()");
+    if (flush.empty())
+        return fail("vBlankCache_flushRebuildsBeforeInvalidate", "Cannot find flushPendingVisualInvalidation");
+
+    if (!contains(flush, "rebuildDirtyCaches"))
+        return fail("vBlankCache_flushRebuildsBeforeInvalidate",
+                     "flush must call rebuildDirtyCaches");
+
+    size_t rebuildPos = flush.find("rebuildDirtyCaches");
+    size_t invalidatePos = flush.find("requestInvalidate");
+    if (rebuildPos == std::string_view::npos || invalidatePos == std::string_view::npos)
+        return fail("vBlankCache_flushRebuildsBeforeInvalidate", "missing tokens");
+    if (rebuildPos > invalidatePos)
+        return fail("vBlankCache_flushRebuildsBeforeInvalidate",
+                     "rebuildDirtyCaches must precede requestInvalidate");
+
+    return pass("vBlankCache_flushRebuildsBeforeInvalidate");
+}
+
+CheckResult vBlankCache_vblankNoDuplicateUpdate()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto vblank = extractFunctionBlock(cpp, "void PianoRollComponent::onScrollVBlankCallback");
+    if (vblank.empty())
+        return fail("vBlankCache_vblankNoDuplicateUpdate", "Cannot find onScrollVBlankCallback");
+
+    if (contains(vblank, "updatePlayheadPresentationPolicy"))
+        return fail("vBlankCache_vblankNoDuplicateUpdate",
+                     "onScrollVBlankCallback must NOT call updatePlayheadPresentationPolicy");
+    return pass("vBlankCache_vblankNoDuplicateUpdate");
+}
+
+CheckResult vBlankCache_setTimelineViewportNoOpGuard()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto stv = extractFunctionBlock(cpp, "void PianoRollComponent::setTimelineViewport");
+    if (stv.empty())
+        return fail("vBlankCache_setTimelineViewportNoOpGuard", "Cannot find setTimelineViewport");
+
+    // Must compare camera with tolerance
+    if (!contains(stv, "visibleStartSeconds") || !contains(stv, "0.001"))
+        return fail("vBlankCache_setTimelineViewportNoOpGuard", "must compare visibleStartSeconds (tol 0.001)");
+    if (!contains(stv, "pixelsPerSecond") || !contains(stv, "0.01"))
+        return fail("vBlankCache_setTimelineViewportNoOpGuard", "must compare pixelsPerSecond (tol 0.01)");
+
+    // return must appear before listeners_.call / invalidateVisual (no-op must skip heavy work)
+    const size_t returnPos = stv.find("return;");
+    const size_t listenersPos = stv.find("listeners_.call");
+    const size_t invalidatePos = stv.find("invalidateVisual");
+    if (returnPos != std::string_view::npos) {
+        if ((listenersPos != std::string_view::npos && returnPos > listenersPos)
+            || (invalidatePos != std::string_view::npos && returnPos > invalidatePos))
+            return fail("vBlankCache_setTimelineViewportNoOpGuard",
+                         "no-op return must precede listeners_.call and invalidateVisual");
+    }
+
+    return pass("vBlankCache_setTimelineViewportNoOpGuard");
+}
+
+CheckResult vBlankCache_setEditedContentHasDirtyFlags()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto sec = extractFunctionBlock(cpp, "void PianoRollComponent::setEditedContent");
+    if (sec.empty())
+        return fail("vBlankCache_setEditedContentHasDirtyFlags", "Cannot find setEditedContent");
+
+    if (!contains(sec, "detailCacheDirty_"))
+        return fail("vBlankCache_setEditedContentHasDirtyFlags", "must set detailCacheDirty_");
+    if (!contains(sec, "backgroundCacheDirty_"))
+        return fail("vBlankCache_setEditedContentHasDirtyFlags", "must set backgroundCacheDirty_");
+    return pass("vBlankCache_setEditedContentHasDirtyFlags");
+}
+
+CheckResult vBlankCache_commitPathsMarkDetailDirty()
 {
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
 
-    const auto paint = extractFunctionBlock(cpp, "void PianoRollComponent::paint(juce::Graphics& g)");
-    if (paint.empty())
-        return fail("paintOnlyDrawsVisibleTilesForDetailLayer",
-                     "Cannot find PianoRollComponent::paint()");
+    const auto commitNote = extractFunctionBlock(cpp, "bool PianoRollComponent::commitNoteDraft()");
+    const auto commitNotesSeg = extractFunctionBlock(cpp, "bool PianoRollComponent::commitEditedContentNotesAndSegments");
 
-    // paint must call drawVisibleTiles (consume published tiles)
-    if (!contains(paint, "drawVisibleTiles"))
-        return fail("paintOnlyDrawsVisibleTilesForDetailLayer",
-                     "paint() must call drawVisibleTiles() to consume published tiles.");
+    if (commitNote.empty() && commitNotesSeg.empty())
+        return fail("vBlankCache_commitPathsMarkDetailDirty", "Cannot find commit functions");
 
-    // paint must NOT call any tile generation method
-    if (contains(paint, "renderTile"))
-        return fail("paintOnlyDrawsVisibleTilesForDetailLayer",
-                     "paint() must not call renderTile() — tile rendering is the worker's job.");
+    // At least one commit path must set detailCacheDirty_
+    if (!contains(commitNote, "detailCacheDirty_") && !contains(commitNotesSeg, "detailCacheDirty_"))
+        return fail("vBlankCache_commitPathsMarkDetailDirty",
+                     "commitNoteDraft or commitNotesAndSegments must set detailCacheDirty_");
+    return pass("vBlankCache_commitPathsMarkDetailDirty");
+}
 
-    return pass("paintOnlyDrawsVisibleTilesForDetailLayer");
+CheckResult vBlankCache_backgroundRebuildInvalidatesDetail()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto rebuild = extractFunctionBlock(cpp, "bool PianoRollComponent::rebuildBackgroundCache()");
+    if (rebuild.empty())
+        return fail("vBlankCache_backgroundRebuildInvalidatesDetail", "Cannot find rebuildBackgroundCache");
+
+    if (!contains(rebuild, "detailCacheDirty_"))
+        return fail("vBlankCache_backgroundRebuildInvalidatesDetail",
+                     "rebuildBackgroundCache must set detailCacheDirty_=true");
+    return pass("vBlankCache_backgroundRebuildInvalidatesDetail");
+}
+
+CheckResult vBlankCache_cacheUsesBandMapper()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    auto bg = extractFunctionBlock(cpp, "bool PianoRollComponent::rebuildBackgroundCache()");
+    auto dt = extractFunctionBlock(cpp, "bool PianoRollComponent::rebuildDetailCache()");
+
+    if (bg.empty()) return fail("vBlankCache_cacheUsesBandMapper", "Cannot find rebuildBackgroundCache");
+    if (dt.empty()) return fail("vBlankCache_cacheUsesBandMapper", "Cannot find rebuildDetailCache");
+
+    // Both must use band mapper for band-local coords (directly or via makeBandViewMapper)
+    const auto usesBandMapper = [](std::string_view s) {
+        return contains(s, "withBand") || contains(s, "makeBandViewMapper");
+    };
+    if (!usesBandMapper(bg) || !usesBandMapper(dt))
+        return fail("vBlankCache_cacheUsesBandMapper",
+                     "cache rebuild must use ViewMapper::withBand() for band-local coords");
+    return pass("vBlankCache_cacheUsesBandMapper");
+}
+
+CheckResult vBlankCache_rebuildResetsDirtyFlags()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto rebuild = extractFunctionBlock(cpp, "void PianoRollComponent::rebuildDirtyCaches()");
+    if (rebuild.empty())
+        return fail("vBlankCache_rebuildResetsDirtyFlags", "Cannot find rebuildDirtyCaches");
+
+    if (!contains(rebuild, "backgroundCacheDirty_"))
+        return fail("vBlankCache_rebuildResetsDirtyFlags", "must reset backgroundCacheDirty_");
+    if (!contains(rebuild, "detailCacheDirty_"))
+        return fail("vBlankCache_rebuildResetsDirtyFlags", "must reset detailCacheDirty_");
+    return pass("vBlankCache_rebuildResetsDirtyFlags");
+}
+
+// ── VBlank 缓存重构修复架构守卫测试 ──
+
+CheckResult vBlankCache_fix_bandGeometryUsesContentViewportWidth()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto needs = extractFunctionBlock(cpp, "bool PianoRollComponent::needsGeometryRebuild()");
+    if (needs.empty())
+        return fail("vBlankCache_fix_bandGeometryUsesContentViewportWidth", "Cannot find needsGeometryRebuild()");
+
+    if (contains(needs, "vp.getWidth() + vp.getWidth() * 2"))
+        return fail("vBlankCache_fix_bandGeometryUsesContentViewportWidth",
+                    "needsGeometryRebuild() must not compare vp.getWidth() * 3");
+
+    if (contains(needs, "vpW * 2") || contains(needs, "vpW * 3"))
+        return fail("vBlankCache_fix_bandGeometryUsesContentViewportWidth",
+                    "needsGeometryRebuild() must not use vpW * 2 or vpW * 3");
+
+    if (!contains(needs, "scrollPx < cacheBandStartX_")
+        && !contains(needs, "scrollPx + vp.getWidth()"))
+        return fail("vBlankCache_fix_bandGeometryUsesContentViewportWidth",
+                    "needsGeometryRebuild() must check visible range coverage");
+
+    return pass("vBlankCache_fix_bandGeometryUsesContentViewportWidth");
+}
+
+CheckResult vBlankCache_fix_timeGridChangesMarkDirty()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    // Find the unified markTimeGridChanged lambda
+    const size_t lambdaPos = cpp.find("auto markTimeGridChanged = [this]()");
+    if (lambdaPos == std::string_view::npos)
+        return fail("vBlankCache_fix_timeGridChangesMarkDirty", "Cannot find markTimeGridChanged lambda");
+
+    const size_t blockStart = cpp.find('{', lambdaPos);
+    const size_t blockEnd = cpp.find('}', blockStart);
+    if (blockStart == std::string_view::npos || blockEnd == std::string_view::npos)
+        return fail("vBlankCache_fix_timeGridChangesMarkDirty", "Cannot parse lambda body");
+
+    const std::string lambdaBody = cpp.substr(blockStart, blockEnd - blockStart + 1);
+
+    if (!contains(lambdaBody, "backgroundCacheDirty_"))
+        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
+                    "markTimeGridChanged must set backgroundCacheDirty_");
+
+    if (!contains(lambdaBody, "detailCacheDirty_"))
+        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
+                    "markTimeGridChanged must set detailCacheDirty_");
+
+    if (!contains(lambdaBody, "invalidateVisual"))
+        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
+                    "markTimeGridChanged must call invalidateVisual");
+
+    // Verify commitTimeGrid calls markTimeGridChanged after successful publish
+    if (!contains(cpp, "markTimeGridChanged();"))
+        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
+                    "commitTimeGrid must call markTimeGridChanged()");
+
+    // Verify TimeGridEditAction does NOT store UI callback (no dangling this risk)
+    const auto actionH = readText("Source/Utils/TimeGridEditAction.h");
+    if (contains(actionH, "setOnChangedCallback") || contains(actionH, "onChanged_"))
+        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
+                    "TimeGridEditAction must not store UI callback");
+
+    // Verify PluginEditor detects TimeGrid revision changes
+    const auto editorCpp = readText("Source/Standalone/PluginEditor.cpp");
+    if (!contains(editorCpp, "timeGridRevision") || !contains(editorCpp, "onTimeGridRevisionChanged"))
+        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
+                    "PluginEditor must detect TimeGrid revision changes");
+
+    return pass("vBlankCache_fix_timeGridChangesMarkDirty");
+}
+
+CheckResult vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto heartbeat = extractFunctionBlock(cpp, "void PianoRollComponent::onHeartbeatTick()");
+    if (heartbeat.empty())
+        return fail("vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty", "Cannot find onHeartbeatTick()");
+
+    const size_t progressedPos = heartbeat.find("progressed");
+    if (progressedPos == std::string_view::npos)
+        return fail("vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty", "Cannot find progressed check");
+
+    const std::string progressedBlock = heartbeat.substr(progressedPos);
+    if (!contains(progressedBlock, "backgroundCacheDirty_"))
+        return fail("vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty",
+                    "onHeartbeatTick() progressed branch must set backgroundCacheDirty_");
+
+    return pass("vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty");
+}
+
+CheckResult vBlankCache_fix_selectionHighlightInOverlay()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto rendererCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+
+    const auto drawNotes = extractFunctionBlock(rendererCpp, "void PianoRollRenderer::drawNotes(");
+    if (drawNotes.empty())
+        return fail("vBlankCache_fix_selectionHighlightInOverlay", "Cannot find drawNotes()");
+
+    if (contains(drawNotes, "selectedNoteIndices"))
+        return fail("vBlankCache_fix_selectionHighlightInOverlay",
+                    "drawNotes() must NOT use selectedNoteIndices (draw all notes in base state)");
+
+    const auto buildItem = extractFunctionBlock(cpp, "PianoRollRenderer::ContentRenderItem PianoRollComponent::buildContentRenderItem(");
+    if (!buildItem.empty()) {
+        if (contains(buildItem, "item.selectedNoteIndices = "))
+            return fail("vBlankCache_fix_selectionHighlightInOverlay",
+                        "buildContentRenderItem() must NOT set item.selectedNoteIndices");
+    }
+
+    const auto previewPaint = extractFunctionBlock(cpp, "void PianoRollPreviewOverlay::paint(");
+    if (previewPaint.empty())
+        return fail("vBlankCache_fix_selectionHighlightInOverlay", "Cannot find PianoRollPreviewOverlay::paint()");
+
+    if (!contains(previewPaint, "drawSelectedNoteHighlights") && !contains(previewPaint, "selectedNote"))
+        return fail("vBlankCache_fix_selectionHighlightInOverlay",
+                    "PianoRollPreviewOverlay::paint() must render selected note highlights");
+
+    return pass("vBlankCache_fix_selectionHighlightInOverlay");
+}
+
+CheckResult vBlankCache_fix_applyNoteParameterFallbackMarksDirty()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto apply = extractFunctionBlock(cpp, "bool PianoRollComponent::applyNoteParameterToSelectedNotes");
+    if (apply.empty())
+        return fail("vBlankCache_fix_applyNoteParameterFallbackMarksDirty", "Cannot find applyNoteParameterToSelectedNotes()");
+
+    const size_t fallbackPos = apply.find("// Fallback:");
+    if (fallbackPos == std::string_view::npos)
+        return fail("vBlankCache_fix_applyNoteParameterFallbackMarksDirty", "Cannot find fallback comment");
+
+    const std::string fallbackBlock = apply.substr(fallbackPos);
+    if (!contains(fallbackBlock, "detailCacheDirty_"))
+        return fail("vBlankCache_fix_applyNoteParameterFallbackMarksDirty",
+                    "applyNoteParameterToSelectedNotes fallback must set detailCacheDirty_");
+
+    return pass("vBlankCache_fix_applyNoteParameterFallbackMarksDirty");
+}
+
+CheckResult vBlankCache_fix_vblankCallbackNoPolicyUpdate()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto vblank = extractFunctionBlock(cpp, "void PianoRollComponent::onScrollVBlankCallback");
+    if (vblank.empty())
+        return fail("vBlankCache_fix_vblankCallbackNoPolicyUpdate", "Cannot find onScrollVBlankCallback()");
+
+    if (contains(vblank, "updatePlayheadPresentationPolicy"))
+        return fail("vBlankCache_fix_vblankCallbackNoPolicyUpdate",
+                    "onScrollVBlankCallback must NOT call updatePlayheadPresentationPolicy");
+
+    return pass("vBlankCache_fix_vblankCallbackNoPolicyUpdate");
+}
+
+CheckResult vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto rebuild = extractFunctionBlock(cpp, "void PianoRollComponent::rebuildDirtyCaches()");
+    if (rebuild.empty())
+        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess", "Cannot find rebuildDirtyCaches()");
+
+    const size_t bgIfPos = rebuild.find("if (backgroundCacheDirty_");
+    if (bgIfPos == std::string_view::npos)
+        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess",
+                    "Cannot find backgroundCacheDirty_ condition");
+
+    const size_t bgBraceStart = rebuild.find('{', bgIfPos);
+    const size_t bgBraceEnd = rebuild.find('}', bgBraceStart);
+    if (bgBraceStart == std::string_view::npos || bgBraceEnd == std::string_view::npos)
+        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess", "Cannot parse if block");
+
+    const std::string bgIfBlock = rebuild.substr(bgBraceStart, bgBraceEnd - bgBraceStart + 1);
+    if (!contains(bgIfBlock, "rebuildBackgroundCache()") && !contains(bgIfBlock, "backgroundCacheImage_.isValid()"))
+        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess",
+                    "backgroundCacheDirty_ must only be cleared when rebuild succeeds");
+
+    const size_t dtIfPos = rebuild.find("if (detailCacheDirty_");
+    if (dtIfPos == std::string_view::npos)
+        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess",
+                    "Cannot find detailCacheDirty_ condition");
+
+    const size_t dtBraceStart = rebuild.find('{', dtIfPos);
+    const size_t dtBraceEnd = rebuild.find('}', dtBraceStart);
+    if (dtBraceStart == std::string_view::npos || dtBraceEnd == std::string_view::npos)
+        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess", "Cannot parse if block");
+
+    const std::string dtIfBlock = rebuild.substr(dtBraceStart, dtBraceEnd - dtBraceStart + 1);
+    if (!contains(dtIfBlock, "rebuildDetailCache()") && !contains(dtIfBlock, "detailCacheImage_.isValid()"))
+        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess",
+                    "detailCacheDirty_ must only be cleared when rebuild succeeds");
+
+    return pass("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess");
+}
+
+CheckResult noTileCacheInSourceTree()
+{
+    // 扫描 Source/ 和 CMakeLists.txt，确保不再出现 tile cache 引用
+    const std::vector<std::string> forbidden = {
+        "PianoRollTimelineSurfaceCache",
+        "PianoRollTileRenderer",
+        "PianoRollRenderSnapshot"
+    };
+    
+    // 递归扫描 Source/ 目录下所有 .h, .cpp, .hpp 文件
+    const auto allSourceFiles = readSourceFilesUnder("Source");
+    for (const auto& keyword : forbidden) {
+        if (contains(allSourceFiles, keyword))
+            return fail("noTileCacheInSourceTree",
+                         "Found '" + keyword + "' in Source/ tree");
+    }
+    
+    // 额外检查 CMakeLists.txt
+    const auto cmake = readText("CMakeLists.txt");
+    for (const auto& keyword : forbidden) {
+        if (contains(cmake, keyword))
+            return fail("noTileCacheInSourceTree",
+                         "Found '" + keyword + "' in CMakeLists.txt");
+    }
+    
+    return pass("noTileCacheInSourceTree");
 }
 
 // ── Kill List resurrection guards ──
@@ -1424,6 +1792,414 @@ CheckResult noDrawPreparedF0CurveResurrection()
     return pass("noDrawPreparedF0CurveResurrection");
 }
 
+// =============================================================================
+// v12 Timeline/Camera/ViewMapper architecture contract tests
+// =============================================================================
+
+CheckResult v12ViewMapperExistsWithRequiredMethods()
+{
+    const auto header = readText("Source/Standalone/UI/ViewMapper.h");
+
+    const auto missing = missingTokens(header, {
+        "struct ViewMapper",
+        "double visibleStartSeconds",
+        "double pixelsPerSecond",
+        "int contentStartX",
+        "int contentWidth",
+        "int contentHeight",
+        "float pixelsPerSemitone",
+        "float verticalScrollOffset",
+        "float maxMidi",
+        "int timeToX(",
+        "int timeToXWithScroll(",
+        "int timeToContentX(",
+        "double xToTime(",
+        "float midiToY(",
+        "float yToMidi(",
+        "float freqToMidi(",
+        "float midiToFreq(",
+        "float freqToY(",
+        "float yToFreq(",
+        "ViewMapper withBand("
+    });
+    if (!missing.empty())
+        return fail("v12ViewMapperExistsWithRequiredMethods",
+                    "ViewMapper.h missing required members/methods:" + missing);
+
+    return pass("v12ViewMapperExistsWithRequiredMethods");
+}
+
+CheckResult v12TimelineViewportCameraHasDefaultConstant()
+{
+    const auto header = readText("Source/Standalone/UI/TimelineViewportCamera.h");
+
+    if (!contains(header, "kDefaultPixelsPerSecond"))
+        return fail("v12TimelineViewportCameraHasDefaultConstant",
+                    "TimelineViewportCamera must define kDefaultPixelsPerSecond constant.");
+
+    if (!contains(header, "static constexpr double kDefaultPixelsPerSecond = 100.0"))
+        return fail("v12TimelineViewportCameraHasDefaultConstant",
+                    "kDefaultPixelsPerSecond must be 'static constexpr double = 100.0'.");
+
+    return pass("v12TimelineViewportCameraHasDefaultConstant");
+}
+
+CheckResult v12PlayheadOverlayOnlyHasSetPresentation()
+{
+    const auto header = readText("Source/Standalone/UI/PlayheadOverlayComponent.h");
+
+    // 必须有 setPresentation 和 PlayheadPresentation
+    if (!contains(header, "struct PlayheadPresentation"))
+        return fail("v12PlayheadOverlayOnlyHasSetPresentation",
+                    "PlayheadOverlayComponent.h must define PlayheadPresentation struct.");
+    if (!contains(header, "void setPresentation(const PlayheadPresentation&"))
+        return fail("v12PlayheadOverlayOnlyHasSetPresentation",
+                    "PlayheadOverlayComponent must have setPresentation(PlayheadPresentation).");
+
+    // setPlayheadColour 是允许的 — 它是颜色 setter，不是坐标/时间/滚动状态 setter
+    // 不强制必须保留（以后颜色可能并入 PlayheadPresentation），但当前不禁止
+
+    // 禁止旧坐标/时间/滚动状态 API
+    const std::vector<std::string_view> banned = {
+        "setPlayheadSeconds",
+        "setTimelineStartSeconds",
+        "setZoomLevel",
+        "setScrollOffset",
+        "setPinnedViewportX",
+        "clearPinnedViewportX",
+        "setPlaying",
+        "playheadSeconds_",
+        "timelineStartSeconds_",
+        "pinnedViewportX_",
+        "usePinnedViewportX_"
+    };
+    for (const auto token : banned) {
+        if (contains(header, token))
+            return fail("v12PlayheadOverlayOnlyHasSetPresentation",
+                        "PlayheadOverlayComponent.h still contains banned old API: " + std::string(token));
+    }
+
+    return pass("v12PlayheadOverlayOnlyHasSetPresentation");
+}
+
+CheckResult v12NoDeletedTypesInSource()
+{
+    // 扫描全部 Source/ 下的 .h/.cpp，确认旧类型零残留
+    const auto allSource = readSourceFilesUnder("Source");
+
+    const std::vector<std::string_view> banned = {
+        "TimeConverter",
+        "PianoRollCoordinateMapper",
+        "TimelineViewportState",
+        "timeConverter_",
+        "coordinateMapper_",
+        "viewportState_"
+    };
+    for (const auto token : banned) {
+        if (contains(allSource, token))
+            return fail("v12NoDeletedTypesInSource",
+                        "Deleted type/member still referenced in Source/: " + std::string(token));
+    }
+
+    return pass("v12NoDeletedTypesInSource");
+}
+
+CheckResult v12NoDeletedFunctionsInSource()
+{
+    const auto allSource = readSourceFilesUnder("Source");
+
+    const std::vector<std::string_view> banned = {
+        "toVisibleTimelineSeconds",
+        "toAbsoluteTimelineSeconds",
+        "getPlayheadAbsolutePixelX",
+        "timeToXForRenderScroll",
+        "xToTimeForRenderScroll",
+        "getTimelinePixelsPerSecond",
+        "makeTimelineViewportState",
+        "applyDerivedZoomLevel",
+        "applyDerivedScrollOffset",
+        "projectPlayheadTime",
+        "readProjectedPlayheadTime"
+    };
+    for (const auto token : banned) {
+        if (contains(allSource, token))
+            return fail("v12NoDeletedFunctionsInSource",
+                        "Deleted function still referenced in Source/: " + std::string(token));
+    }
+
+    return pass("v12NoDeletedFunctionsInSource");
+}
+
+CheckResult v12PianoRollComponentHasCameraArchitecture()
+{
+    const auto header = readText("Source/Standalone/UI/PianoRollComponent.h");
+
+    const auto missing = missingTokens(header, {
+        "TimelineViewportCamera camera_",
+        "ViewMapper makeViewMapper()",
+        "int computeScrollOffsetPx()",
+        "void setTimelineViewport(",
+        "void publishPlayheadPresentation("
+    });
+    if (!missing.empty())
+        return fail("v12PianoRollComponentHasCameraArchitecture",
+                    "PianoRollComponent.h missing v12 camera architecture:" + missing);
+
+    // 禁止旧成员
+    if (contains(header, "zoomLevel_")
+        || contains(header, "scrollOffset_")
+        || contains(header, "viewMapperCache_"))
+        return fail("v12PianoRollComponentHasCameraArchitecture",
+                    "PianoRollComponent.h still contains banned old viewport members.");
+
+    return pass("v12PianoRollComponentHasCameraArchitecture");
+}
+
+CheckResult v12ArrangementViewComponentHasCameraArchitecture()
+{
+    const auto header = readText("Source/Standalone/UI/ArrangementViewComponent.h");
+
+    const auto missing = missingTokens(header, {
+        "TimelineViewportCamera camera_",
+        "ViewMapper makeViewMapper()",
+        "int computeScrollOffsetPx()",
+        "void setTimelineViewport("
+    });
+    if (!missing.empty())
+        return fail("v12ArrangementViewComponentHasCameraArchitecture",
+                    "ArrangementViewComponent.h missing v12 camera architecture:" + missing);
+
+    if (contains(header, "zoomLevel_")
+        || contains(header, "scrollOffset_")
+        || contains(header, "viewportState_"))
+        return fail("v12ArrangementViewComponentHasCameraArchitecture",
+                    "ArrangementViewComponent.h still contains banned old viewport members.");
+
+    return pass("v12ArrangementViewComponentHasCameraArchitecture");
+}
+
+CheckResult v12RendererUsesViewMapperInRenderContext()
+{
+    const auto header = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+
+    if (!contains(header, "ViewMapper"))
+        return fail("v12RendererUsesViewMapperInRenderContext",
+                    "PianoRollRenderer.h must reference ViewMapper in RenderContext.");
+
+    // 禁止旧坐标映射器
+    if (contains(header, "PianoRollCoordinateMapper"))
+        return fail("v12RendererUsesViewMapperInRenderContext",
+                    "PianoRollRenderer.h still references deleted PianoRollCoordinateMapper.");
+
+    return pass("v12RendererUsesViewMapperInRenderContext");
+}
+
+CheckResult v12ToolHandlerUsesViewMapper()
+{
+    const auto header = readText("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h");
+
+    if (!contains(header, "ViewMapper"))
+        return fail("v12ToolHandlerUsesViewMapper",
+                    "PianoRollToolHandler.h must reference ViewMapper.");
+
+    // 禁止旧坐标回调
+    const std::vector<std::string_view> banned = {
+        "timeToX",
+        "xToTime",
+        "freqToY",
+        "yToFreq"
+    };
+    for (const auto token : banned) {
+        // 允许出现在注释中，但不能作为函数声明/定义
+        if (contains(header, std::string("std::function<") + std::string(token))
+            || contains(header, std::string(token) + std::string("(")))
+            return fail("v12ToolHandlerUsesViewMapper",
+                        "PianoRollToolHandler.h still declares old coordinate callback: " + std::string(token));
+    }
+
+    return pass("v12ToolHandlerUsesViewMapper");
+}
+
+CheckResult v12DeletedFilesAreGone()
+{
+    const std::vector<std::string_view> deletedFiles = {
+        "Source/Standalone/UI/TimeConverter.h",
+        "Source/Standalone/UI/TimeConverter.cpp",
+        "Source/Standalone/UI/PianoRoll/PianoRollCoordinateMapper.h",
+        "Source/Standalone/UI/TimelineViewportState.h"
+    };
+
+    for (const auto file : deletedFiles) {
+        const auto path = sourcePath(file);
+        if (std::filesystem::exists(path))
+            return fail("v12DeletedFilesAreGone",
+                        "Deleted file still exists: " + std::string(file));
+    }
+
+    return pass("v12DeletedFilesAreGone");
+}
+
+CheckResult v12CMakeListsHasViewMapper()
+{
+    const auto cmake = readText("CMakeLists.txt");
+
+    if (!contains(cmake, "ViewMapper.h"))
+        return fail("v12CMakeListsHasViewMapper",
+                    "CMakeLists.txt must reference ViewMapper.h.");
+
+    // 禁止已删除文件
+    if (contains(cmake, "TimeConverter.h")
+        || contains(cmake, "TimeConverter.cpp")
+        || contains(cmake, "PianoRollCoordinateMapper.h")
+        || contains(cmake, "TimelineViewportState.h"))
+        return fail("v12CMakeListsHasViewMapper",
+                    "CMakeLists.txt still references deleted files.");
+
+    return pass("v12CMakeListsHasViewMapper");
+}
+
+// =============================================================================
+// v12 Kill List 契约测试 — 防止已修复的 Kill List 问题复活
+// =============================================================================
+
+CheckResult v12KillList_noDeadGetCameraGetter()
+{
+    // K1/K2: getCamera() 是死 getter，已删除
+    const auto pianoRollHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
+    const auto arrangementHeader = readText("Source/Standalone/UI/ArrangementViewComponent.h");
+
+    if (contains(pianoRollHeader, "getCamera()"))
+        return fail("v12KillList_noDeadGetCameraGetter",
+                    "PianoRollComponent.h must not contain dead getCamera() getter (K1).");
+
+    if (contains(arrangementHeader, "getCamera()"))
+        return fail("v12KillList_noDeadGetCameraGetter",
+                    "ArrangementViewComponent.h must not contain dead getCamera() getter (K2).");
+
+    return pass("v12KillList_noDeadGetCameraGetter");
+}
+
+CheckResult v12KillList_noRenderScrollOffsetPxParam()
+{
+    // K3: buildContentRenderItem/buildRenderContext 旧参数链已收口
+    // 检测方式：1) renderScrollOffsetPx 零残留  2) buildContentRenderItem 参数区 0 逗号（1 参数）  3) buildRenderContext(int...) 参数区 1 逗号（2 参数）
+    const auto pianoRollHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
+    const auto pianoRollCpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    // 1. renderScrollOffsetPx 零残留
+    if (contains(pianoRollHeader, "renderScrollOffsetPx"))
+        return fail("v12KillList_noRenderScrollOffsetPxParam",
+                    "PianoRollComponent.h must not contain renderScrollOffsetPx (K3).");
+    if (contains(pianoRollCpp, "renderScrollOffsetPx"))
+        return fail("v12KillList_noRenderScrollOffsetPxParam",
+                    "PianoRollComponent.cpp must not contain renderScrollOffsetPx (K3).");
+
+    // 2. buildContentRenderItem 仅 1 参数（参数区 0 逗号）
+    {
+        const size_t sigPos = pianoRollHeader.find("buildContentRenderItem(");
+        if (sigPos == std::string::npos)
+            return fail("v12KillList_noRenderScrollOffsetPxParam",
+                        "Cannot locate buildContentRenderItem declaration.");
+        const size_t parenEnd = pianoRollHeader.find(')', sigPos);
+        if (parenEnd == std::string::npos)
+            return fail("v12KillList_noRenderScrollOffsetPxParam",
+                        "buildContentRenderItem signature malformed.");
+        const std::string params = pianoRollHeader.substr(sigPos, parenEnd - sigPos);
+        if (contains(params, ","))
+            return fail("v12KillList_noRenderScrollOffsetPxParam",
+                        "buildContentRenderItem must have only 1 parameter (placement) — comma detected in param list (K3).");
+        if (!contains(params, "placement"))
+            return fail("v12KillList_noRenderScrollOffsetPxParam",
+                        "buildContentRenderItem must accept a placement parameter.");
+    }
+
+    // 3. buildRenderContext(int...) 仅 2 参数（参数区恰好 1 逗号）
+    {
+        const size_t sigPos = pianoRollHeader.find("buildRenderContext(int");
+        if (sigPos == std::string::npos)
+            return fail("v12KillList_noRenderScrollOffsetPxParam",
+                        "Cannot locate 2-param buildRenderContext(int...) declaration.");
+        const size_t parenEnd = pianoRollHeader.find(')', sigPos);
+        if (parenEnd == std::string::npos)
+            return fail("v12KillList_noRenderScrollOffsetPxParam",
+                        "buildRenderContext signature malformed.");
+        const std::string params = pianoRollHeader.substr(sigPos, parenEnd - sigPos);
+        const size_t commaCount = countOf(params, ",");
+        if (commaCount != 1)
+            return fail("v12KillList_noRenderScrollOffsetPxParam",
+                        "buildRenderContext must have exactly 2 parameters — expected 1 comma, found "
+                        + std::to_string(commaCount) + " (K3).");
+    }
+
+    return pass("v12KillList_noRenderScrollOffsetPxParam");
+}
+
+CheckResult v12KillList_noRulerSurfaceStateZoomLevel()
+{
+    // K4: RulerSurfaceState::zoomLevel 实存 pixelsPerSecond，已重命名
+    const auto header = readText("Source/Standalone/UI/ArrangementViewComponent.h");
+    const auto cpp = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
+
+    // RulerSurfaceState 内不应有 zoomLevel 字段
+    const auto rulerBlock = extractFunctionBlock(header, "struct RulerSurfaceState");
+    if (!rulerBlock.empty() && contains(rulerBlock, "zoomLevel"))
+        return fail("v12KillList_noRulerSurfaceStateZoomLevel",
+                    "RulerSurfaceState must not have zoomLevel field (K4 renamed to pixelsPerSecond).");
+
+    if (contains(cpp, "rulerSurfaceState_.zoomLevel"))
+        return fail("v12KillList_noRulerSurfaceStateZoomLevel",
+                    "ArrangementViewComponent.cpp must not reference rulerSurfaceState_.zoomLevel (K4).");
+
+    return pass("v12KillList_noRulerSurfaceStateZoomLevel");
+}
+
+CheckResult v12KillList_fitToContentHasNoZoomTautology()
+{
+    // K5: fitToContent 不应有 zoom 中间变量和 /100*100 同义反复
+    const auto cpp = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
+    const auto fitBlock = extractFunctionBlock(cpp, "ArrangementViewComponent::fitToContent");
+
+    if (fitBlock.empty())
+        return fail("v12KillList_fitToContentHasNoZoomTautology",
+                    "Cannot locate fitToContent function.");
+
+    // 禁止 zoom 中间变量（任何形式的 double zoom 都不应出现）
+    if (contains(fitBlock, "double zoom"))
+        return fail("v12KillList_fitToContentHasNoZoomTautology",
+                    "fitToContent must not declare 'double zoom' intermediate variable (K5).");
+
+    // 禁止 / 100.0 + * 100.0 同义反复（任何写法）
+    if (contains(fitBlock, "/ 100.0") && contains(fitBlock, "* 100.0"))
+        return fail("v12KillList_fitToContentHasNoZoomTautology",
+                    "fitToContent must not have /100*100 tautology (K5).");
+
+    // 必须直接用 drawableWidth / maxEndTime 计算 pps
+    if (!contains(fitBlock, "drawableWidth / maxEndTime") && !contains(fitBlock, "drawableWidth) / maxEndTime"))
+        return fail("v12KillList_fitToContentHasNoZoomTautology",
+                    "fitToContent must directly compute pps = drawableWidth / maxEndTime (K5).");
+
+    return pass("v12KillList_fitToContentHasNoZoomTautology");
+}
+
+CheckResult v12CMakeListsHasViewMapperTestTarget()
+{
+    const auto cmake = readText("CMakeLists.txt");
+
+    if (!contains(cmake, "OpenTuneViewMapperTests"))
+        return fail("v12CMakeListsHasViewMapperTestTarget",
+                    "CMakeLists.txt must define OpenTuneViewMapperTests target.");
+
+    if (!contains(cmake, "Tests/TestViewMapper.cpp"))
+        return fail("v12CMakeListsHasViewMapperTestTarget",
+                    "CMakeLists.txt must include Tests/TestViewMapper.cpp in test target.");
+
+    if (!contains(cmake, "add_test(NAME OpenTuneViewMapperTests"))
+        return fail("v12CMakeListsHasViewMapperTestTarget",
+                    "CMakeLists.txt must register OpenTuneViewMapperTests with add_test().");
+
+    return pass("v12CMakeListsHasViewMapperTestTarget");
+}
+
 } // namespace
 
 int main()
@@ -1466,18 +2242,52 @@ int main()
         renderExecutionLeaseLifecycleSafety,
         processRenderRuntimeInCMake,
         processorHasNoChunkRenderOrVocoderRuntime,
-processRenderRuntimeOwnsNoAraModels,
+        processRenderRuntimeOwnsNoAraModels,
         vst3OverlayInitiallyHidden,
         recordRequestedNoRegionNoAlert,
-        // Phase 6: VBlank paint contract
-        paintDoesNotRequestCoverage,
-        paintDoesNotBuildSnapshot,
-        paintOnlyDrawsVisibleTilesForDetailLayer,
+        // VBlank 双层缓存架构守卫测试（Task 7）
+        vBlankCache_paintDoesNoImmediateModeRendering,
+        vBlankCache_cacheMembersExist,
+        vBlankCache_flushRebuildsBeforeInvalidate,
+        vBlankCache_vblankNoDuplicateUpdate,
+        vBlankCache_setTimelineViewportNoOpGuard,
+        vBlankCache_setEditedContentHasDirtyFlags,
+        vBlankCache_commitPathsMarkDetailDirty,
+        vBlankCache_backgroundRebuildInvalidatesDetail,
+        vBlankCache_cacheUsesBandMapper,
+        vBlankCache_rebuildResetsDirtyFlags,
+        // VBlank 缓存重构修复架构守卫测试
+        vBlankCache_fix_bandGeometryUsesContentViewportWidth,
+        vBlankCache_fix_timeGridChangesMarkDirty,
+        vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty,
+        vBlankCache_fix_selectionHighlightInOverlay,
+        vBlankCache_fix_applyNoteParameterFallbackMarksDirty,
+        vBlankCache_fix_vblankCallbackNoPolicyUpdate,
+        vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess,
+        noTileCacheInSourceTree,
         // Kill List resurrection guards
         noInvalidateContentVisualResurrection,
         noRendererLambdaResurrection,
         noF0FrameToXYResurrection,
-        noDrawPreparedF0CurveResurrection
+        noDrawPreparedF0CurveResurrection,
+        // v12 Timeline/Camera/ViewMapper architecture contracts
+        v12ViewMapperExistsWithRequiredMethods,
+        v12TimelineViewportCameraHasDefaultConstant,
+        v12PlayheadOverlayOnlyHasSetPresentation,
+        v12NoDeletedTypesInSource,
+        v12NoDeletedFunctionsInSource,
+        v12PianoRollComponentHasCameraArchitecture,
+        v12ArrangementViewComponentHasCameraArchitecture,
+        v12RendererUsesViewMapperInRenderContext,
+        v12ToolHandlerUsesViewMapper,
+        v12DeletedFilesAreGone,
+        v12CMakeListsHasViewMapper,
+        // v12 Kill List 契约
+        v12KillList_noDeadGetCameraGetter,
+        v12KillList_noRenderScrollOffsetPxParam,
+        v12KillList_noRulerSurfaceStateZoomLevel,
+        v12KillList_fitToContentHasNoZoomTautology,
+        v12CMakeListsHasViewMapperTestTarget
     };
 
     int failed = 0;

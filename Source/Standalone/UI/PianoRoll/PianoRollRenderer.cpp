@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <map>
 
 namespace OpenTune {
 
@@ -984,10 +985,6 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
     for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
     {
         const auto& note = *noteIt;
-        const int noteIndex = static_cast<int>(std::distance(notes.begin(), noteIt));
-        const bool selected = std::find(item.selectedNoteIndices.begin(),
-                                        item.selectedNoteIndices.end(),
-                                        noteIndex) != item.selectedNoteIndices.end();
         float adjustedPitch = note.getAdjustedPitch();
         if (adjustedPitch <= 0.0f) continue;
 
@@ -1005,15 +1002,15 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         float w = std::max(1.0f, static_cast<float>(x2 - x1));
         auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
-        const auto noteColor = selected ? UIColors::noteBlockSelected : UIColors::noteBlock;
+        const auto noteColor = UIColors::noteBlock;
 
         if (isAurora)
         {
-            g.setColour(noteColor.withAlpha(selected ? 0.48f : 0.34f));
+            g.setColour(noteColor.withAlpha(0.34f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 7.0f));
-            juce::ColourGradient topSheen(noteColor.brighter(0.58f).withAlpha(selected ? 0.18f : 0.12f),
+            juce::ColourGradient topSheen(noteColor.brighter(0.58f).withAlpha(0.12f),
                                           topSheenBounds.getX(),
                                           topSheenBounds.getY(),
                                           juce::Colours::transparentWhite,
@@ -1023,13 +1020,10 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.setGradientFill(topSheen);
             g.fillRect(topSheenBounds);
 
-            const auto edgeColour = selected
-                ? noteColor.brighter(0.32f)
-                : UIColors::noteBlockBorder;
-            g.setColour(edgeColour.withAlpha(selected ? 0.72f : 0.56f));
-            g.drawRect(noteBounds, selected ? 1.35f : 1.0f);
+            g.setColour(UIColors::noteBlockBorder.withAlpha(0.56f));
+            g.drawRect(noteBounds, 1.0f);
 
-            g.setColour(UIColors::glassHighlight.withAlpha(selected ? 0.22f : 0.14f));
+            g.setColour(UIColors::glassHighlight.withAlpha(0.14f));
             g.drawLine(noteBounds.getX() + 1.0f,
                        noteBounds.getY() + 1.0f,
                        noteBounds.getRight() - 1.0f,
@@ -1038,11 +1032,11 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(noteColor.withAlpha(selected ? 0.42f : 0.28f));
+            g.setColour(noteColor.withAlpha(0.28f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 6.0f));
-            juce::ColourGradient topSheen(noteColor.brighter(0.42f).withAlpha(selected ? 0.16f : 0.10f),
+            juce::ColourGradient topSheen(noteColor.brighter(0.42f).withAlpha(0.10f),
                                           topSheenBounds.getX(),
                                           topSheenBounds.getY(),
                                           juce::Colours::transparentWhite,
@@ -1052,24 +1046,71 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
             g.setGradientFill(topSheen);
             g.fillRect(topSheenBounds);
 
-            g.setColour(noteColor.withAlpha(selected ? 0.14f : 0.08f));
+            g.setColour(UIColors::noteBlockBorder.withAlpha(0.08f));
             g.drawRect(noteBounds.expanded(1.0f, 0.5f), 2.0f);
 
-            const auto edgeColour = selected
-                ? noteColor.brighter(0.28f)
-                : UIColors::noteBlockBorder;
-            g.setColour(edgeColour.withAlpha(selected ? 0.66f : 0.48f));
-            g.drawRect(noteBounds, selected ? 1.25f : 0.9f);
+            g.setColour(UIColors::noteBlockBorder.withAlpha(0.48f));
+            g.drawRect(noteBounds, 0.9f);
         }
         else
         {
-            g.setColour(noteColor.withAlpha(selected ? 0.44f : 0.30f));
+            g.setColour(noteColor.withAlpha(0.30f));
             g.fillRect(noteBounds);
 
-            const auto edgeColour = selected ? noteColor.brighter(0.3f) : UIColors::noteBlockBorder;
-            g.setColour(edgeColour.withAlpha(selected ? 0.66f : 0.50f));
-            g.drawRect(noteBounds, selected ? 1.25f : 1.0f);
+            g.setColour(UIColors::noteBlockBorder.withAlpha(0.50f));
+            g.drawRect(noteBounds, 1.0f);
         }
+    }
+}
+
+void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
+                                                    const RenderContext& ctx,
+                                                    const std::vector<Note>& notes,
+                                                    const std::vector<int>& selectedNoteIndices,
+                                                    const ContentRenderItem& item)
+{
+    if (notes.empty() || selectedNoteIndices.empty())
+        return;
+
+    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
+    if (!visibleWindow.isValid())
+        return;
+
+    const auto themeId = UIColors::currentThemeId();
+    const bool isAurora = themeId == ThemeId::Aurora;
+
+    for (int idx : selectedNoteIndices)
+    {
+        if (idx < 0 || idx >= static_cast<int>(notes.size()))
+            continue;
+
+        const auto& note = notes[static_cast<size_t>(idx)];
+        float adjustedPitch = note.getAdjustedPitch();
+        if (adjustedPitch <= 0.0f)
+            continue;
+
+        float midi = ctx.coords.freqToMidi(adjustedPitch);
+        float y = ctx.coords.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
+        float h = ctx.pixelsPerSemitone;
+
+        int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
+        int x2 = sourceTimeToScreenX(note.endTime, ctx, item);
+        if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
+            continue;
+
+        // Clip to content viewport to prevent drawing into piano key area
+        x1 = juce::jmax(x1, visibleWindow.viewportStartX);
+        x2 = juce::jmin(x2, visibleWindow.viewportEndX);
+
+        float w = std::max(1.0f, static_cast<float>(x2 - x1));
+        auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
+
+        // Selection highlight: semi-transparent tint + brighter border
+        g.setColour(UIColors::noteBlockSelected.withAlpha(isAurora ? 0.15f : 0.12f));
+        g.fillRect(noteBounds);
+
+        g.setColour(UIColors::noteBlockSelected.withAlpha(isAurora ? 0.72f : 0.60f));
+        g.drawRect(noteBounds, isAurora ? 1.35f : 1.1f);
     }
 }
 
@@ -1247,89 +1288,172 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     if (!ctx.showOriginalF0 && !ctx.showCorrectedF0)
         return;
 
-    // Draw original F0 as a dim curve
+    const int visiblePixelWidth = ctx.width - ctx.pianoKeyWidth;
+    const int visibleFrameCount = visibleEndFrame - visibleStartFrame;
+    const bool useDecimation = visibleFrameCount > visiblePixelWidth * 2;
+
+    // Draw original F0
     if (ctx.showOriginalF0)
     {
-        juce::Path originalPath;
-        bool pathStarted = false;
         const float alpha = 0.35f;
 
-        for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
-            const float f0 = originalF0[static_cast<std::size_t>(frame)];
-            if (!isVoicedFrame(f0)) {
-                pathStarted = false;
-                continue;
-            }
+        if (useDecimation) {
+            // Per-pixel decimation: collect min/max freq per screen x
+            std::map<int, std::pair<float, float>> buckets; // x -> (minFreq, maxFreq)
 
-            const double timePos = item.f0Timeline.timeAtFrame(frame);
-            const int x = sourceTimeToScreenX(timePos, ctx, item);
-            const float y = ctx.coords.freqToY(f0);
+            for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
+                const float f0 = originalF0[static_cast<std::size_t>(frame)];
+                if (!isVoicedFrame(f0))
+                    continue;
 
-            if (x < ctx.pianoKeyWidth || x >= ctx.width)
-                continue;
+                const double timePos = item.f0Timeline.timeAtFrame(frame);
+                const int x = sourceTimeToScreenX(timePos, ctx, item);
 
-            if (!pathStarted) {
-                originalPath.startNewSubPath(static_cast<float>(x), y);
-                pathStarted = true;
-            } else {
-                juce::Point<float> last = originalPath.getCurrentPosition();
-                if (std::abs(static_cast<float>(x) - last.x) > 30.0f) {
-                    originalPath.startNewSubPath(static_cast<float>(x), y);
+                if (x < ctx.pianoKeyWidth || x >= ctx.width)
+                    continue;
+
+                auto it = buckets.find(x);
+                if (it == buckets.end()) {
+                    buckets[x] = {f0, f0};
                 } else {
-                    originalPath.lineTo(static_cast<float>(x), y);
+                    it->second.first = std::min(it->second.first, f0);
+                    it->second.second = std::max(it->second.second, f0);
                 }
             }
-        }
 
-        if (!originalPath.isEmpty()) {
+            // Draw vertical line segments for each bucket
             g.setColour(UIColors::originalF0.withAlpha(alpha));
-            g.strokePath(originalPath, juce::PathStrokeType(1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            for (const auto& [x, range] : buckets) {
+                const float yMin = ctx.coords.freqToY(range.second); // max freq = min y
+                const float yMax = ctx.coords.freqToY(range.first);  // min freq = max y
+                g.drawVerticalLine(x, yMin, yMax);
+            }
+        } else {
+            // Original per-frame polyline rendering
+            juce::Path originalPath;
+            bool pathStarted = false;
+
+            for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
+                const float f0 = originalF0[static_cast<std::size_t>(frame)];
+                if (!isVoicedFrame(f0)) {
+                    pathStarted = false;
+                    continue;
+                }
+
+                const double timePos = item.f0Timeline.timeAtFrame(frame);
+                const int x = sourceTimeToScreenX(timePos, ctx, item);
+                const float y = ctx.coords.freqToY(f0);
+
+                if (x < ctx.pianoKeyWidth || x >= ctx.width)
+                    continue;
+
+                if (!pathStarted) {
+                    originalPath.startNewSubPath(static_cast<float>(x), y);
+                    pathStarted = true;
+                } else {
+                    juce::Point<float> last = originalPath.getCurrentPosition();
+                    if (std::abs(static_cast<float>(x) - last.x) > 30.0f) {
+                        originalPath.startNewSubPath(static_cast<float>(x), y);
+                    } else {
+                        originalPath.lineTo(static_cast<float>(x), y);
+                    }
+                }
+            }
+
+            if (!originalPath.isEmpty()) {
+                g.setColour(UIColors::originalF0.withAlpha(alpha));
+                g.strokePath(originalPath, juce::PathStrokeType(1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
         }
     }
 
-    // Draw corrected F0 segments as a bright curve
+    // Draw corrected F0 segments
     if (ctx.showCorrectedF0 && item.pitchSnapshot->hasAnyCorrection()) {
-        juce::Path correctedPath;
-        bool pathStarted = false;
+        const float alpha = 0.85f;
 
-        item.pitchSnapshot->renderCorrectedOnlyRange(
-            visibleStartFrame, visibleEndFrame,
-            [&](int frame, const float* data, int length) {
-                for (int i = 0; i < length; ++i) {
-                    const int f = frame + i;
-                    if (f < visibleStartFrame || f >= visibleEndFrame)
-                        continue;
+        if (useDecimation) {
+            // Per-pixel decimation for corrected F0
+            std::map<int, std::pair<float, float>> buckets;
 
-                    const float f0 = data[i];
-                    if (!isVoicedFrame(f0)) {
-                        pathStarted = false;
-                        continue;
-                    }
+            item.pitchSnapshot->renderCorrectedOnlyRange(
+                visibleStartFrame, visibleEndFrame,
+                [&](int frame, const float* data, int length) {
+                    for (int i = 0; i < length; ++i) {
+                        const int f = frame + i;
+                        if (f < visibleStartFrame || f >= visibleEndFrame)
+                            continue;
 
-                    const double timePos = item.f0Timeline.timeAtFrame(f);
-                    const int x = sourceTimeToScreenX(timePos, ctx, item);
-                    const float y = ctx.coords.freqToY(f0);
+                        const float f0 = data[i];
+                        if (!isVoicedFrame(f0))
+                            continue;
 
-                    if (x < ctx.pianoKeyWidth || x >= ctx.width)
-                        continue;
+                        const double timePos = item.f0Timeline.timeAtFrame(f);
+                        const int x = sourceTimeToScreenX(timePos, ctx, item);
 
-                    if (!pathStarted) {
-                        correctedPath.startNewSubPath(static_cast<float>(x), y);
-                        pathStarted = true;
-                    } else {
-                        juce::Point<float> last = correctedPath.getCurrentPosition();
-                        if (std::abs(static_cast<float>(x) - last.x) > 30.0f) {
-                            correctedPath.startNewSubPath(static_cast<float>(x), y);
+                        if (x < ctx.pianoKeyWidth || x >= ctx.width)
+                            continue;
+
+                        auto it = buckets.find(x);
+                        if (it == buckets.end()) {
+                            buckets[x] = {f0, f0};
                         } else {
-                            correctedPath.lineTo(static_cast<float>(x), y);
+                            it->second.first = std::min(it->second.first, f0);
+                            it->second.second = std::max(it->second.second, f0);
                         }
                     }
-                }
-            });
+                });
 
-        if (!correctedPath.isEmpty()) {
-            g.setColour(UIColors::correctedF0.withAlpha(0.85f));
-            g.strokePath(correctedPath, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            // Draw vertical line segments for each bucket
+            g.setColour(UIColors::correctedF0.withAlpha(alpha));
+            for (const auto& [x, range] : buckets) {
+                const float yMin = ctx.coords.freqToY(range.second);
+                const float yMax = ctx.coords.freqToY(range.first);
+                g.drawVerticalLine(x, yMin, yMax);
+            }
+        } else {
+            // Original per-frame polyline rendering
+            juce::Path correctedPath;
+            bool pathStarted = false;
+
+            item.pitchSnapshot->renderCorrectedOnlyRange(
+                visibleStartFrame, visibleEndFrame,
+                [&](int frame, const float* data, int length) {
+                    for (int i = 0; i < length; ++i) {
+                        const int f = frame + i;
+                        if (f < visibleStartFrame || f >= visibleEndFrame)
+                            continue;
+
+                        const float f0 = data[i];
+                        if (!isVoicedFrame(f0)) {
+                            pathStarted = false;
+                            continue;
+                        }
+
+                        const double timePos = item.f0Timeline.timeAtFrame(f);
+                        const int x = sourceTimeToScreenX(timePos, ctx, item);
+                        const float y = ctx.coords.freqToY(f0);
+
+                        if (x < ctx.pianoKeyWidth || x >= ctx.width)
+                            continue;
+
+                        if (!pathStarted) {
+                            correctedPath.startNewSubPath(static_cast<float>(x), y);
+                            pathStarted = true;
+                        } else {
+                            juce::Point<float> last = correctedPath.getCurrentPosition();
+                            if (std::abs(static_cast<float>(x) - last.x) > 30.0f) {
+                                correctedPath.startNewSubPath(static_cast<float>(x), y);
+                            } else {
+                                correctedPath.lineTo(static_cast<float>(x), y);
+                            }
+                        }
+                    }
+                });
+
+            if (!correctedPath.isEmpty()) {
+                g.setColour(UIColors::correctedF0.withAlpha(alpha));
+                g.strokePath(correctedPath, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
         }
     }
 }

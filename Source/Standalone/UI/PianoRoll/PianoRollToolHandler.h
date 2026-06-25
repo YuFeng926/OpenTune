@@ -17,6 +17,7 @@
 #include "Utils/PitchCurve.h"
 #include "UI/ToolIds.h"
 #include "InteractionState.h"
+#include "UI/ViewMapper.h"
 #include <vector>
 #include <functional>
 #include <cstdint>
@@ -42,10 +43,9 @@ public:
     {
         std::function<InteractionState&()> getState;
 
-        std::function<double(int)> xToTime;
-        std::function<int(double)> timeToX;
-        std::function<float(float)> yToFreq;
-        std::function<float(float)> freqToY;
+        // Coordinate mapper — replaces timeToX/xToTime/freqToY/yToFreq callbacks.
+        // Returns ViewMapper by value to ensure fresh coordinate state.
+        std::function<ViewMapper()> getViewMapper;
 
         std::function<const std::vector<Note>&()> getCommittedNotes;
         std::function<const std::vector<Note>&()> getDisplayNotes;
@@ -98,11 +98,11 @@ public:
         std::function<void(juce::Point<int>)> setDrawNoteToolMouseDownPos;
         std::function<int()> getDragThreshold;
 
-        std::function<double()> getNoteDragManualStartTime;
-        std::function<void(double)> setNoteDragManualStartTime;
-        std::function<double()> getNoteDragManualEndTime;
-        std::function<void(double)> setNoteDragManualEndTime;
-        std::function<std::vector<std::pair<double, float>>&()> getNoteDragInitialManualTargets;
+        std::function<int()> getNoteDragManualStartFrame;
+        std::function<void(int)> setNoteDragManualStartFrame;
+        std::function<int()> getNoteDragManualEndFrameExclusive;
+        std::function<void(int)> setNoteDragManualEndFrameExclusive;
+        std::function<std::vector<NoteDragManualTarget>&()> getNoteDragInitialManualTargets;
         std::function<std::vector<float>&()> getNoteDragPreviewF0;
         std::function<int()> getNoteDragPreviewStartFrame;
         std::function<void(int)> setNoteDragPreviewStartFrame;
@@ -151,9 +151,9 @@ public:
         std::function<bool(std::shared_ptr<const TimeGridSnapshot> /*newSnapshot*/,
                             std::shared_ptr<const TimeGridSnapshot> /*oldSnapshot*/,
                             juce::String /*description*/)> commitTimeGrid;
-        // notifyTimeGridChanged: lighter visual-only notification (e.g., for
-        // hover/select state changes that don't need an undo entry).
-        std::function<void()> notifyTimeGridChanged;
+        // repaintTimeGridHandles: visual-only repaint for hover/select/drag
+        // (handles are in paintOverChildren overlay, not in cache).
+        std::function<void()> repaintTimeGridHandles;
     };
 
     explicit PianoRollToolHandler(Context context);

@@ -425,7 +425,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     addAndMakeVisible(parameterPanel_);
 
     arrangementView_.addListener(this);
-    arrangementView_.setZoomLevel(processorRef_.getZoomLevel());
     addAndMakeVisible(arrangementView_);
     // Initial sync: track panel visible track count 鈫?arrangement view
     arrangementView_.setVisibleTrackCount(trackPanel_.getVisibleTrackCount());
@@ -448,7 +447,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setTimeSignature(processorRef_.getTimeSigNumerator(), processorRef_.getTimeSigDenominator());
     pianoRoll_.setShowWaveform(processorRef_.getShowWaveform());
     pianoRoll_.setShowLanes(processorRef_.getShowLanes());
-    pianoRoll_.setZoomLevel(processorRef_.getZoomLevel());
     
 // Set high-performance playhead position source - read directly from Processor, bypassing 60Hz Timer bottleneck
     pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
@@ -457,7 +455,15 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     addAndMakeVisible(pianoRoll_);
     pianoRoll_.setVisible(!isWorkspaceView_);
     arrangementView_.setVisible(isWorkspaceView_);
-
+    
+    // Initialize shared timeline viewport camera and apply to both views
+    {
+        const double zoomLevel = processorRef_.getZoomLevel();
+        timelineViewportCamera_.visibleStartSeconds = 0.0;
+        timelineViewportCamera_.pixelsPerSecond = zoomLevel * TimelineViewportCamera::kDefaultPixelsPerSecond;
+        applyTimelineViewportToViews();
+    }
+    
     // Add AutoRenderOverlay (initially hidden, covers PianoRoll during AUTO)
     addAndMakeVisible(autoRenderOverlay_);
     autoRenderOverlay_.setVisible(false);
@@ -1047,6 +1053,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         const uint64_t currentNotesRevision = activeKey.isValid() && snap
             ? snap->notesRevision
             : 0;
+        const uint64_t currentTimeGridRevision = activeKey.isValid() && snap
+            ? snap->timeGridRevision
+            : 0;
         const bool contentChanged =
             activeKey != lastPianoRollContentKey_
             || sr != lastPianoRollSampleRate_
@@ -1063,6 +1072,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             pianoRoll_.refreshEditedContentNotes();
             pianoRoll_.requestContentRedraw();
         }
+        if (currentTimeGridRevision != lastPianoRollTimeGridRevision_) {
+            pianoRoll_.onTimeGridRevisionChanged();
+        }
         if (activeTrack >= 0 && activePlacementIndex >= 0) {
             const DetectedKey resolvedKey =
                 resolveScaleForPlacementContent(activeTrack, activePlacementIndex, nullptr);
@@ -1074,6 +1086,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
 
         lastPianoRollNotesRevision_ = currentNotesRevision;
+        lastPianoRollTimeGridRevision_ = currentTimeGridRevision;
     }
 
 // Playhead position read by each component via positionSource_ directly from Processor
@@ -1288,8 +1301,12 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
         && getStandalonePlacementByIndex(processorRef_, trackId, placementIndex, placement);
     const ContentKey contentKey = hasPlacement ? placement.contentKey : ContentKey{};
 
+    // Detect ARA region change: when the active content key changes, initialize
+    // the piano roll camera to show the new region's start time.
+    const bool regionChanged = hasPlacement && contentKey != lastPianoRollContentKey_;
+
     pianoRoll_.setContentProjection(hasPlacement ? makePianoRollProjection(placement, processorRef_)
-                                                  : ContentTimelineProjection{});
+                                                   : ContentTimelineProjection{});
 
     const int sr = static_cast<int>(processorRef_.getSampleRate());
     auto snap = processorRef_.getContentSnapshot(contentKey);
@@ -1297,6 +1314,14 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
         snap ? snap->audioBuffer : nullptr;
     auto curve = snap ? snap->pitchCurve : nullptr;
     pianoRoll_.setEditedContent(contentKey, curve, contentBuffer, sr);
+
+    // On region switch, position camera to the new region's timeline start
+    // Note: PianoRollComponent encapsulates its camera state; use default pps for new region view
+    if (regionChanged) {
+        const double regionStart = placement.timelineStartSeconds;
+        constexpr double defaultPps = TimelineViewportCamera::kDefaultPixelsPerSecond;
+        pianoRoll_.setTimelineViewport({ regionStart, defaultPps }, juce::sendNotification);
+    }
 
     lastPianoRollContentKey_ = contentKey;
     lastPianoRollSampleRate_ = sr;
@@ -1719,12 +1744,6 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     safeThis->pianoRoll_.resetUserZoomFlag();
 
                     FrameScheduler::instance().requestInvalidate(safeThis->arrangementView_, FrameScheduler::Priority::Interactive);
-
-                    juce::Timer::callAfterDelay(100, [safeThis]() {
-                        if (safeThis != nullptr && !safeThis->arrangementView_.hasUserManuallyZoomed()) {
-                            safeThis->arrangementView_.fitToContent();
-                        }
-                    });
 
                     safeThis->processNextImportInQueue();
                 });
@@ -2491,6 +2510,9 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
     arrangementView_.setVisible(isWorkspaceView_);
     pianoRoll_.setVisible(!isWorkspaceView_);
     
+    // Re-sync camera to both views after visibility switch
+    applyTimelineViewportToViews();
+    
     // Explicitly grab focus for the active view to ensure keyboard shortcuts work immediately
     if (isWorkspaceView_) {
         arrangementView_.grabKeyboardFocus();
@@ -2501,24 +2523,6 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
 
     resized();
     repaint();
-
-// Delayed auto-zoom call, ensures resized() completes first
-    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
-    juce::Timer::callAfterDelay(50, [safeThis, workspaceView]() {
-        if (safeThis == nullptr) return;
-
-        if (workspaceView) {
-// Switch to ArrangementView
-            if (!safeThis->arrangementView_.hasUserManuallyZoomed()) {
-                safeThis->arrangementView_.fitToContent();
-            }
-        } else {
-// Switch to PianoRoll
-            if (!safeThis->pianoRoll_.hasUserManuallyZoomed()) {
-                safeThis->pianoRoll_.fitToScreen();
-            }
-        }
-    });
 
 }
 
@@ -2730,18 +2734,8 @@ void OpenTuneAudioProcessorEditor::placementSelectionChanged(int trackId, uint64
 {
     applyPlacementSelectionContext(trackId, placementId);
 
-    // 鏇存柊 reference context
+    // 更新 reference context
     refreshReferenceContext();
-
-// If in PianoRoll view and user has not manually zoomed, auto-fit to new clip
-    if (!isWorkspaceView_) {
-        juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
-        juce::Timer::callAfterDelay(100, [safeThis]() {
-            if (safeThis != nullptr && !safeThis->pianoRoll_.hasUserManuallyZoomed()) {
-                safeThis->pianoRoll_.fitToScreen();
-            }
-        });
-    }
 }
 
 void OpenTuneAudioProcessorEditor::placementTimingChanged(int trackId, int placementIndex)
@@ -2764,21 +2758,23 @@ void OpenTuneAudioProcessorEditor::verticalScrollChanged(int newOffset)
     arrangementView_.setVerticalScrollOffset(newOffset);
 }
 
-void OpenTuneAudioProcessorEditor::horizontalScrollChanged(int newOffset)
-{
-    pianoRoll_.setScrollOffset(newOffset);
-}
-
-void OpenTuneAudioProcessorEditor::zoomLevelChanged(double newZoom)
-{
-    pianoRoll_.setZoomLevel(newZoom);
-}
-
 void OpenTuneAudioProcessorEditor::scrollModeChanged(bool isContinuous)
 {
     pianoRoll_.setScrollMode(isContinuous
         ? PianoRollComponent::ScrollMode::Continuous
         : PianoRollComponent::ScrollMode::Page);
+}
+
+void OpenTuneAudioProcessorEditor::applyTimelineViewportToViews()
+{
+    arrangementView_.setTimelineViewport(timelineViewportCamera_, juce::dontSendNotification);
+    pianoRoll_.setTimelineViewport(timelineViewportCamera_, juce::dontSendNotification);
+}
+
+void OpenTuneAudioProcessorEditor::timelineViewportChanged(TimelineViewportCamera camera)
+{
+    timelineViewportCamera_ = camera;
+    applyTimelineViewportToViews();
 }
 
 void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int placementIndex)
@@ -2787,17 +2783,7 @@ void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int place
     if (isWorkspaceView_)
     {
         transportBar_.setWorkspaceView(false);
-        viewToggled(false); // 浼氳Е鍙戣嚜鍔ㄧ缉鏀?
-    }
-    else
-    {
-// If already in PianoRoll view, also call fitToScreen
-        juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
-        juce::Timer::callAfterDelay(50, [safeThis]() {
-            if (safeThis != nullptr && !safeThis->pianoRoll_.hasUserManuallyZoomed()) {
-                safeThis->pianoRoll_.fitToScreen();
-            }
-        });
+        viewToggled(false);
     }
 
     // 2. Select the placement
