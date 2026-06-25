@@ -568,12 +568,6 @@ target_sources(OpenTune
         Source/Standalone/UI/PianoRollComponent.h
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.h
-        Source/Standalone/UI/PianoRoll/PianoRollCoordinateMapper.h
-        Source/Standalone/UI/PianoRoll/PianoRollRenderSnapshot.h
-        Source/Standalone/UI/PianoRoll/PianoRollTileRenderer.cpp
-        Source/Standalone/UI/PianoRoll/PianoRollTileRenderer.h
-        Source/Standalone/UI/PianoRoll/PianoRollTimelineSurfaceCache.cpp
-        Source/Standalone/UI/PianoRoll/PianoRollTimelineSurfaceCache.h
         Source/Standalone/UI/PianoRoll/PianoRollVisualInvalidation.cpp
         Source/Standalone/UI/PianoRoll/PianoRollVisualInvalidation.h
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp
@@ -584,8 +578,7 @@ target_sources(OpenTune
         Source/Standalone/UI/PianoRoll/InteractionState.h
         Source/Standalone/UI/PlayheadOverlayComponent.cpp
         Source/Standalone/UI/PlayheadOverlayComponent.h
-        Source/Standalone/UI/TimeConverter.cpp
-        Source/Standalone/UI/TimeConverter.h
+        Source/Standalone/UI/ViewMapper.h
         Source/Standalone/UI/MenuBarComponent.cpp
         Source/Standalone/UI/MenuBarComponent.h
         Source/Standalone/UI/TransportBarComponent.cpp
@@ -600,7 +593,7 @@ target_sources(OpenTune
         Source/Standalone/UI/ArrangementRenderModelCache.h
         Source/Standalone/UI/TimelineRenderingDiagnostics.cpp
         Source/Standalone/UI/TimelineRenderingDiagnostics.h
-        Source/Standalone/UI/TimelineViewportState.h
+        Source/Standalone/UI/TimelineViewportCamera.h
         Source/Standalone/UI/WaveformMipmap.cpp
         Source/Standalone/UI/WaveformMipmap.h
         Source/Standalone/UI/RippleOverlayComponent.h
@@ -1350,6 +1343,31 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
         target_compile_options(OpenTuneRenderCacheStateMachineTests PRIVATE /utf-8)
     endif()
     add_test(NAME OpenTuneRenderCacheStateMachineTests COMMAND OpenTuneRenderCacheStateMachineTests)
+
+    add_executable(OpenTuneViewMapperTests
+        Tests/TestViewMapper.cpp
+    )
+    target_compile_features(OpenTuneViewMapperTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneViewMapperTests
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/Source
+    )
+    target_link_libraries(OpenTuneViewMapperTests
+        PRIVATE
+            juce::juce_audio_basics
+            juce::juce_core
+            juce::juce_recommended_config_flags
+    )
+    target_compile_definitions(OpenTuneViewMapperTests
+        PRIVATE
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneViewMapperTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneViewMapperTests COMMAND OpenTuneViewMapperTests)
 endif()
 
 # ==============================================================================
