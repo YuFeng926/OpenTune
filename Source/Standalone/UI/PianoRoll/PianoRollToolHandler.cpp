@@ -272,27 +272,24 @@ void updateNoteDragPreview(PianoRollToolHandler::Context& ctx, float shiftFactor
     const auto f0tl = ctx.getF0Timeline();
     if (f0tl.isEmpty()) return;
     const auto& manualTargets = ctx.getNoteDragInitialManualTargets();
-    const double manualStartTime = ctx.getNoteDragManualStartTime();
-    const double manualEndTime = ctx.getNoteDragManualEndTime();
-    if (manualStartTime < 0.0 || manualEndTime <= manualStartTime || manualTargets.empty()) {
+    const int manualStartFrame = ctx.getNoteDragManualStartFrame();
+    const int manualEndFrameExclusive = ctx.getNoteDragManualEndFrameExclusive();
+    if (manualStartFrame < 0 || manualEndFrameExclusive <= manualStartFrame || manualTargets.empty()) {
         return;
     }
 
-    const auto manualRange = f0tl.rangeForTimes(manualStartTime, manualEndTime);
-    if (manualRange.isEmpty()) {
-        return;
-    }
+    const F0FrameRange manualRange{manualStartFrame, manualEndFrameExclusive};
 
     ctx.setNoteDragPreviewStartFrame(manualRange.startFrame);
     ctx.setNoteDragPreviewEndFrameExclusive(manualRange.endFrameExclusive);
 
     auto& preview = ctx.getNoteDragPreviewF0();
     preview.assign(static_cast<std::size_t>(manualRange.endFrameExclusive - manualRange.startFrame), -1.0f);
-    for (const auto& fv : manualTargets) {
-        const int frame = f0tl.frameAtOrBefore(fv.first);
+    for (const auto& target : manualTargets) {
+        const int frame = target.frame;
         const int relIndex = frame - manualRange.startFrame;
         if (relIndex >= 0 && relIndex < static_cast<int>(preview.size())) {
-            preview[static_cast<std::size_t>(relIndex)] = fv.second * shiftFactor;
+            preview[static_cast<std::size_t>(relIndex)] = target.f0 * shiftFactor;
         }
     }
 }
@@ -311,6 +308,7 @@ void invalidateNoteChange(PianoRollToolHandler::Context& ctx,
     auto dirty = ctx.getNotesBounds(before).getUnion(ctx.getNotesBounds(after));
     dirty = dirty.getUnion(ctx.getSelectionBounds());
     invalidateIfNeeded(ctx, dirty);
+    if (ctx.repaintPreviewOverlay) ctx.repaintPreviewOverlay();
 }
 
 }
@@ -334,7 +332,7 @@ void PianoRollToolHandler::setTool(ToolId tool)
 double PianoRollToolHandler::pixelXToSourceTime(int pixelX) const
 {
     // Stage 1: pixel → output (timeline coords).
-    const double timelineTime = ctx_.xToTime(pixelX);
+    const double timelineTime = ctx_.getViewMapper().xToTime(pixelX);
     // Stage 2: timeline → output (content coords).
     const double outputMatTime = ctx_.projectTimelineTimeToContent
         ? ctx_.projectTimelineTimeToContent(timelineTime)
@@ -377,12 +375,12 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
     int edgeThreshold = 6;
     
     bool cursorSet = false;
-    float mousePitch = ctx_.yToFreq((float)e.y);
+    float mousePitch = ctx_.getViewMapper().yToFreq((float)e.y);
     float mouseMidiVal = 69.0f + 12.0f * std::log2(mousePitch / 440.0f) - 0.5f;
 
     for (const auto& note : displayNotes(ctx_)) {
-        int x1 = ctx_.timeToX(ctx_.projectContentTimeToTimeline(note.startTime));
-        int x2 = ctx_.timeToX(ctx_.projectContentTimeToTimeline(note.endTime));
+        int x1 = ctx_.getViewMapper().timeToX(ctx_.projectContentTimeToTimeline(note.startTime));
+        int x2 = ctx_.getViewMapper().timeToX(ctx_.projectContentTimeToTimeline(note.endTime));
         
         bool nearLeft = std::abs(e.x - x1) <= edgeThreshold;
         bool nearRight = std::abs(e.x - x2) <= edgeThreshold;
@@ -429,7 +427,7 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
     constexpr int timelineExtendedHitArea = 20;
     const int timelineBottomExtended = inset + rulerHeight + timelineExtendedHitArea;
     if (e.y < timelineBottomExtended && e.x > ctx_.getPianoKeyWidth()) {
-        double clickedTime = ctx_.xToTime(e.x);
+        double clickedTime = ctx_.getViewMapper().xToTime(e.x);
         if (clickedTime >= 0) {
             ctx_.notifyPlayheadChange(clickedTime);
         }
@@ -683,7 +681,7 @@ bool PianoRollToolHandler::isEmptySpaceMouseDown(const juce::MouseEvent& e)
 bool PianoRollToolHandler::hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e)
 {
     const auto projection = ctx_.getContentProjection();
-    double time = ctx_.projectTimelineTimeToContent(ctx_.xToTime(e.x));
+    double time = ctx_.projectTimelineTimeToContent(ctx_.getViewMapper().xToTime(e.x));
     if (projection.isValid()) {
         time = projection.clampContentTime(time);
     }
@@ -692,7 +690,7 @@ bool PianoRollToolHandler::hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e)
         return false;
     }
 
-    const float clickedPitch = ctx_.yToFreq(static_cast<float>(e.y));
+    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y));
     const float mouseMidi = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
     constexpr int edgeThreshold = 6;
 
@@ -702,8 +700,8 @@ bool PianoRollToolHandler::hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e)
             continue;
         }
 
-        const int x1 = ctx_.timeToX(ctx_.projectContentTimeToTimeline(note.startTime));
-        const int x2 = ctx_.timeToX(ctx_.projectContentTimeToTimeline(note.endTime));
+        const int x1 = ctx_.getViewMapper().timeToX(ctx_.projectContentTimeToTimeline(note.startTime));
+        const int x2 = ctx_.getViewMapper().timeToX(ctx_.projectContentTimeToTimeline(note.endTime));
         const bool insideBody = e.x >= x1 && e.x <= x2;
         const bool nearEdge = std::abs(e.x - x1) <= edgeThreshold || std::abs(e.x - x2) <= edgeThreshold;
         if (insideBody || nearEdge) {
@@ -782,8 +780,8 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
             return;
         }
 
-        const int x = ctx_.timeToX(ctx_.projectContentTimeToTimeline(f0tl.timeAtFrame(frame)));
-        const float y = ctx_.freqToY(frequency);
+        const int x = ctx_.getViewMapper().timeToX(ctx_.projectContentTimeToTimeline(f0tl.timeAtFrame(frame)));
+        const float y = ctx_.getViewMapper().freqToY(frequency);
         const float dx = static_cast<float>(e.x - x);
         const float dy = static_cast<float>(e.y) - y;
         const float distanceSquared = dx * dx + dy * dy;
@@ -857,7 +855,7 @@ void PianoRollToolHandler::beginEmptySpaceIntent(const juce::MouseEvent& e)
     intent.active = true;
     intent.tool = currentTool_;
     intent.mouseDownPos = e.getPosition();
-    intent.mouseDownTime = ctx_.xToTime(e.x);
+    intent.mouseDownTime = ctx_.getViewMapper().xToTime(e.x);
 }
 
 bool PianoRollToolHandler::consumeEmptySpaceIntentDrag(const juce::MouseEvent& e)
@@ -1118,7 +1116,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
         trackRelativeTime = projection.clampContentTime(trackRelativeTime);
     }
 
-    float clickedPitch = ctx_.yToFreq((float)e.y);
+    float clickedPitch = ctx_.getViewMapper().yToFreq((float)e.y);
 
     const int clickedNoteIndex = trackRelativeTime >= 0
         ? findNoteIndexAt(notes, trackRelativeTime, clickedPitch, 100.0f)
@@ -1132,8 +1130,8 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 
     for (int noteIndex = 0; noteIndex < static_cast<int>(notes.size()); ++noteIndex) {
         const auto& note = notes[static_cast<size_t>(noteIndex)];
-        int x1 = ctx_.timeToX(ctx_.projectContentTimeToTimeline(note.startTime));
-        int x2 = ctx_.timeToX(ctx_.projectContentTimeToTimeline(note.endTime));
+        int x1 = ctx_.getViewMapper().timeToX(ctx_.projectContentTimeToTimeline(note.startTime));
+        int x2 = ctx_.getViewMapper().timeToX(ctx_.projectContentTimeToTimeline(note.endTime));
 
         bool nearLeft = std::abs(e.x - x1) <= edgeThreshold;
         bool nearRight = std::abs(e.x - x2) <= edgeThreshold;
@@ -1186,8 +1184,8 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
             ctx_.getState().noteDrag.draggedNoteIndices = collectSelectedNoteIndices(notes);
             clearNoteDragPreview(ctx_);
 
-            ctx_.setNoteDragManualStartTime(-1.0);
-            ctx_.setNoteDragManualEndTime(-1.0);
+            ctx_.setNoteDragManualStartFrame(-1);
+            ctx_.setNoteDragManualEndFrameExclusive(-1);
             ctx_.getNoteDragInitialManualTargets().clear();
 
             auto pitchCurve = ctx_.getPitchCurve();
@@ -1239,20 +1237,20 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
                                 std::copy_n(data + copyOffset, copyLength, renderedF0.begin() + relStart);
                             });
 
-                        ctx_.setNoteDragManualStartTime(f0tl.timeAtFrame(manualRange.startFrame));
-                        ctx_.setNoteDragManualEndTime(f0tl.timeAtFrame(manualRange.endFrameExclusive));
+                        ctx_.setNoteDragManualStartFrame(manualRange.startFrame);
+                        ctx_.setNoteDragManualEndFrameExclusive(manualRange.endFrameExclusive);
 
                         auto& manualTargets = ctx_.getNoteDragInitialManualTargets();
                         for (int relIdx = 0; relIdx < rangeSize; ++relIdx) {
                             int f = manualRange.startFrame + relIdx;
                             float v = renderedF0[relIdx];
                             if (v <= 0.0f) continue;
-                            manualTargets.push_back({ f0tl.timeAtFrame(f), v });
+                            manualTargets.push_back({ f, v });
                         }
 
                         if (manualTargets.empty()) {
-                            ctx_.setNoteDragManualStartTime(-1.0);
-                            ctx_.setNoteDragManualEndTime(-1.0);
+                            ctx_.setNoteDragManualStartFrame(-1);
+                            ctx_.setNoteDragManualEndFrameExclusive(-1);
                         }
                     }
                 }
@@ -1317,7 +1315,7 @@ void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
         curveTime = projection.clampContentTime(curveTime);
     }
 
-    float targetF0 = ctx_.yToFreq((float)e.y);
+    float targetF0 = ctx_.getViewMapper().yToFreq((float)e.y);
 
     const auto& originalF0 = ctx_.getOriginalF0();
     const auto f0tl = ctx_.getF0Timeline();
@@ -1387,14 +1385,14 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
 {
     // Clicking an existing note changes only the editor-local selection model.
     const auto& committedNotes = ctx_.getCommittedNotes();
-    float clickedPitch = ctx_.yToFreq((float)e.y);
+    float clickedPitch = ctx_.getViewMapper().yToFreq((float)e.y);
     float mouseMidi = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
     
     int existingNoteIndex = -1;
     for (int noteIndex = 0; noteIndex < static_cast<int>(committedNotes.size()); ++noteIndex) {
         const auto& note = committedNotes[static_cast<size_t>(noteIndex)];
-        int x1 = ctx_.timeToX(ctx_.projectContentTimeToTimeline(note.startTime));
-        int x2 = ctx_.timeToX(ctx_.projectContentTimeToTimeline(note.endTime));
+        int x1 = ctx_.getViewMapper().timeToX(ctx_.projectContentTimeToTimeline(note.startTime));
+        int x2 = ctx_.getViewMapper().timeToX(ctx_.projectContentTimeToTimeline(note.endTime));
         float noteMidi = 69.0f + 12.0f * std::log2(note.getAdjustedPitch() / 440.0f) - 0.5f;
         
         if (e.x >= x1 && e.x <= x2 && std::abs(mouseMidi - noteMidi) < 1.0f) {
@@ -1436,7 +1434,7 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
         currentTime = projection.clampContentTime(currentTime);
     }
 
-    float targetF0 = ctx_.yToFreq((float)e.y);
+    float targetF0 = ctx_.getViewMapper().yToFreq((float)e.y);
     float midiNote = 69.0f + 12.0f * std::log2(targetF0 / 440.0f);
     int roundedMidi = static_cast<int>(std::round(midiNote));
     float snappedF0 = 440.0f * std::pow(2.0f, (roundedMidi - 69) / 12.0f);
@@ -1480,7 +1478,7 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
         }
         ctx_.getState().selection.selectionEndTime = std::max(0.0, currentTime);
 
-        float currentMidi = 69.0f + 12.0f * std::log2(ctx_.yToFreq((float)e.y) / 440.0f) - 0.5f;
+        float currentMidi = 69.0f + 12.0f * std::log2(ctx_.getViewMapper().yToFreq((float)e.y) / 440.0f) - 0.5f;
         ctx_.getState().selection.selectionEndMidi = currentMidi;
 
         double selStartTime = std::min(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
@@ -1504,7 +1502,6 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
                                                      static_cast<int>(notes.size()));
         updateF0SelectionFromNotes(notes);
         invalidateNoteChange(ctx_, beforeNotes, notes);
-        if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
         return;
     }
 
@@ -1564,8 +1561,8 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
         }
         ctx_.getNoteDraft().contentDirty = true;
 
-        float startF0 = ctx_.yToFreq((float)dragStartPos_.y);
-        float currentF0 = ctx_.yToFreq((float)e.y);
+        float startF0 = ctx_.getViewMapper().yToFreq((float)dragStartPos_.y);
+        float currentF0 = ctx_.getViewMapper().yToFreq((float)e.y);
 
         float deltaSemitones = 0.0f;
         if (startF0 > 0.0f && currentF0 > 0.0f) {
@@ -1593,7 +1590,6 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
 
         updateNoteDragPreview(ctx_, std::pow(2.0f, appliedDeltaSemitones / 12.0f));
         invalidateNoteChange(ctx_, beforeNotes, notes);
-        if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
         return;
     }
 
@@ -1660,16 +1656,21 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
         const bool hasManualTargets = hasNoteDragPreview(ctx_);
         if (dirtyEndTime > dirtyStartTime || hasManualTargets) {
             auto pitchCurve = ctx_.getPitchCurve();
-            double rangeStartTime = hasManualTargets ? ctx_.getNoteDragManualStartTime() : dirtyStartTime;
-            double rangeEndTime = hasManualTargets ? ctx_.getNoteDragManualEndTime() : dirtyEndTime;
-            if (dirtyEndTime > dirtyStartTime && hasManualTargets) {
-                rangeStartTime = std::min(rangeStartTime, dirtyStartTime);
-                rangeEndTime = std::max(rangeEndTime, dirtyEndTime);
-            }
-
             F0FrameRange editRange;
             if (pitchCurve) {
-                editRange = f0tl.rangeForTimes(rangeStartTime, rangeEndTime);
+                if (hasManualTargets) {
+                    const int manualStartFrame = ctx_.getNoteDragManualStartFrame();
+                    const int manualEndFrameExclusive = ctx_.getNoteDragManualEndFrameExclusive();
+                    if (dirtyEndTime > dirtyStartTime) {
+                        const auto noteDirtyRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
+                        editRange.startFrame = std::min(manualStartFrame, noteDirtyRange.startFrame);
+                        editRange.endFrameExclusive = std::max(manualEndFrameExclusive, noteDirtyRange.endFrameExclusive);
+                    } else {
+                        editRange = F0FrameRange{manualStartFrame, manualEndFrameExclusive};
+                    }
+                } else {
+                    editRange = f0tl.rangeForTimes(dirtyStartTime, dirtyEndTime);
+                }
             }
 
             if (hasManualTargets) {
@@ -1706,8 +1707,8 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
         }
 
         ctx_.getState().noteDrag.draggedNoteIndices.clear();
-        ctx_.setNoteDragManualStartTime(-1.0);
-        ctx_.setNoteDragManualEndTime(-1.0);
+        ctx_.setNoteDragManualStartFrame(-1);
+        ctx_.setNoteDragManualEndFrameExclusive(-1);
         ctx_.getNoteDragInitialManualTargets().clear();
         clearNoteDragPreview(ctx_);
     }
@@ -1982,9 +1983,6 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
 
     ctx_.clearNoteDraft();
     invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
-
-    // Clear overlay preview
-    if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
 }
 
 void PianoRollToolHandler::showToolContextMenu(const juce::MouseEvent& e)
@@ -2029,7 +2027,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     if (projection.isValid()) {
         clickTime = projection.clampContentTime(clickTime);
     }
-    float clickFreq = ctx_.yToFreq(static_cast<float>(e.y));
+    float clickFreq = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y));
     clickFreq = std::max(20.0f, clickFreq);
     const auto scheme = ctx_.getAudioEditingScheme();
 
@@ -2261,7 +2259,7 @@ uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) 
 
         // output_seconds → timeline via projectContentTimeToTimeline → screen X via timeToX.
         // Uses the same active projection as drawTimeGridHandles for consistent hit-testing.
-        const int handleX = ctx_.timeToX(
+        const int handleX = ctx_.getViewMapper().timeToX(
             ctx_.projectContentTimeToTimeline
                 ? ctx_.projectContentTimeToTimeline(h.output_seconds)
                 : h.output_seconds);
@@ -2287,8 +2285,8 @@ void PianoRollToolHandler::handleTimeToolMouseMove(const juce::MouseEvent& e)
         ctx_.setMouseCursor(juce::MouseCursor::NormalCursor);
     }
 
-    if (prevHovered != hovered && ctx_.notifyTimeGridChanged) {
-        ctx_.notifyTimeGridChanged();
+    if (prevHovered != hovered && ctx_.repaintTimeGridHandles) {
+        ctx_.repaintTimeGridHandles();
     }
 }
 
@@ -2306,14 +2304,14 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
         // rule, everything that's "seek/play/pause/transport" operates in
         // timeline time; everything that's "edit handle/grid" operates in
         // content-local output time.
-        const double timelineTime = ctx_.xToTime(e.x);
+        const double timelineTime = ctx_.getViewMapper().xToTime(e.x);
         if (timelineTime >= 0.0 && ctx_.notifyPlayheadChange) {
             ctx_.notifyPlayheadChange(timelineTime);
         }
         if (!e.mods.isShiftDown()) {
             if ((tt.selectedHandleId != 0 || !tt.additionalSelectedIds.empty())
-                && ctx_.notifyTimeGridChanged) {
-                ctx_.notifyTimeGridChanged();
+                && ctx_.repaintTimeGridHandles) {
+                ctx_.repaintTimeGridHandles();
             }
             tt.selectedHandleId = 0;
             tt.additionalSelectedIds.clear();
@@ -2370,7 +2368,7 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
     tt.dragStartOutputSeconds = hitHandle->output_seconds;
     tt.dragStartPixel = e.getPosition();
 
-    if (ctx_.notifyTimeGridChanged) ctx_.notifyTimeGridChanged();
+    if (ctx_.repaintTimeGridHandles) ctx_.repaintTimeGridHandles();
 }
 
 void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
@@ -2393,7 +2391,7 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
     if (!tt.isDraggingHandle || tt.dragOriginalSnapshot == nullptr) return;
 
     // pixel → timeline time → content-local output time
-    const double timelineTime = ctx_.xToTime(e.x);
+    const double timelineTime = ctx_.getViewMapper().xToTime(e.x);
     const double newOutputTime = ctx_.projectTimelineTimeToContent
         ? ctx_.projectTimelineTimeToContent(timelineTime)
         : timelineTime;
@@ -2477,7 +2475,7 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
     }
 
     tt.dragWorkingSnapshot = newSnap;
-    if (ctx_.notifyTimeGridChanged) ctx_.notifyTimeGridChanged();
+    if (ctx_.repaintTimeGridHandles) ctx_.repaintTimeGridHandles();
 }
 
 void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
@@ -2506,7 +2504,6 @@ void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
     tt.draggedHandleId = 0;
     tt.dragOriginalSnapshot.reset();
     tt.dragWorkingSnapshot.reset();
-    if (ctx_.notifyTimeGridChanged) ctx_.notifyTimeGridChanged();
 }
 
 // ============================================================================
@@ -2524,7 +2521,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
     auto snap = ctx_.getTimeGridSnapshot();
     if (snap == nullptr) return;
 
-    const double timelineTime = ctx_.xToTime(e.x);
+    const double timelineTime = ctx_.getViewMapper().xToTime(e.x);
     const double clickedTime = ctx_.projectTimelineTimeToContent
         ? ctx_.projectTimelineTimeToContent(timelineTime)
         : timelineTime;
@@ -2594,9 +2591,9 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
     ctx_.commitTimeGrid(newSnap, snap, juce::String("插入时间手柄"));
 
     // Auto-select the newly-inserted handle so user can immediately drag.
+    // commitTimeGrid already triggers cache dirty via markTimeGridChanged.
     auto& tt = ctx_.getState().timeTool;
     tt.selectedHandleId = newHandle.id;
-    if (ctx_.notifyTimeGridChanged) ctx_.notifyTimeGridChanged();
 }
 
 // ============================================================================
@@ -2648,7 +2645,7 @@ bool PianoRollToolHandler::handleTimeToolDeleteSelected()
 
     tt.selectedHandleId = 0;
     tt.hoveredHandleId  = 0;
-    if (ctx_.notifyTimeGridChanged) ctx_.notifyTimeGridChanged();
+    // commitTimeGrid already triggers cache dirty via markTimeGridChanged.
     return true;
 }
 

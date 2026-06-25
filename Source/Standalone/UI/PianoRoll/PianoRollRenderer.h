@@ -13,7 +13,7 @@
 #include "Utils/Note.h"
 #include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §8.5 — TimeGrid handles
 #include "UI/ToolIds.h"       // ⚡️ vocal-time-stretch §8.5 (Phase J) — currentTool
-#include "PianoRollCoordinateMapper.h"
+#include "UI/ViewMapper.h"
 #include <algorithm>
 #include <vector>
 #include <array>
@@ -57,7 +57,6 @@ public:
         std::vector<float> correctedF0;
         F0Timeline f0Timeline;
         std::vector<Note> displayNotes;
-        std::vector<int> selectedNoteIndices;
         std::vector<double> chunkBoundaries;
         bool active = false;
 
@@ -89,7 +88,7 @@ public:
         int height = 0;
         int pianoKeyWidth = 60;
         int rulerHeight = 30;
-        double pixelsPerSecond = 100.0;
+        double pixelsPerSecond = TimelineViewportCamera::kDefaultPixelsPerSecond;
         float pixelsPerSemitone = 15.0f;
         float minMidi = 24.0f;
         float maxMidi = 108.0f;
@@ -137,7 +136,7 @@ public:
 
         // Coordinate mapper — replaces midiToY/freqToY/freqToMidi/xToTime/timeToX lambdas.
         // All coordinate conversions use ctx.coords.xxx directly.
-        PianoRollCoordinateMapper coords;
+        ViewMapper coords;
     };
 
     void drawLanes(juce::Graphics& g, const RenderContext& ctx);
@@ -148,6 +147,11 @@ public:
     void drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
     void drawNotes(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    void drawSelectedNoteHighlights(juce::Graphics& g,
+                                    const RenderContext& ctx,
+                                    const std::vector<Note>& notes,
+                                    const std::vector<int>& selectedNoteIndices,
+                                    const ContentRenderItem& item);
     void drawF0Curve(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
 
     // ⚡️ §8.5 — paint TimeGrid handles as vertical guide lines.

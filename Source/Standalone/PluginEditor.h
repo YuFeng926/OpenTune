@@ -37,6 +37,7 @@
 #include "Utils/ProjectSession.h"
 #include "Utils/LocalizationManager.h"
 #include "Audio/AsyncAudioLoader.h"
+#include "UI/TimelineViewportCamera.h"
 
 namespace OpenTune {
 
@@ -139,9 +140,9 @@ public:
     void placementDoubleClicked(int trackId, int placementIndex) override;
     void verticalScrollChanged(int newOffset) override;
     void referenceButtonClicked(int trackId, uint64_t placementId, juce::Rectangle<int> buttonScreenArea) override;
-    void horizontalScrollChanged(int newOffset) override;
-    void zoomLevelChanged(double newZoom) override;
+
     void scrollModeChanged(bool isContinuous) override;
+    void timelineViewportChanged(TimelineViewportCamera camera) override;
     // trackHeightChanged已在TrackPanelComponent::Listener中声明
 
     // PianoRollComponent::Listener
@@ -218,6 +219,10 @@ private:
     void waitForBackgroundUiTasks();
     double computeTrackAppendStartSeconds(int trackId) const;
     void releaseImportBatchSlot(int batchId);
+
+    // Timeline viewport camera — 唯一共享时间轴视口状态
+    void applyTimelineViewportToViews();
+    TimelineViewportCamera timelineViewportCamera_;
     
     OpenTuneAudioProcessor& processorRef_;
     AppPreferences appPreferences_;
@@ -281,6 +286,7 @@ private:
     // async note generator (GAME) commits to the active content
     // without changing ContentKey / curve / buffer.
     uint64_t lastPianoRollNotesRevision_ = 0;
+    uint64_t lastPianoRollTimeGridRevision_ = 0;
     double lastSyncedBpm_ = 0.0;
     int lastSyncedTimeSigNum_ = 0;
     int lastSyncedTimeSigDenom_ = 0;
