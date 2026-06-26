@@ -1,17 +1,24 @@
 CompileFlags:
-  CompilationDatabase: build-ara-overlay-vs18-clean
+  # 使用 Ninja 预设 (windows-ara-lsp) 产出 compile_commands.json
+  CompilationDatabase: build-ara-lsp
   Add:
-    # JUCE module include paths — fallback when compile_commands.json unavailable
-    - "-IJUCE-master/modules/juce_audio_basics"
-    - "-IJUCE-master/modules/juce_audio_utils"
-    - "-IJUCE-master/modules/juce_core"
-    - "-IJUCE-master/modules/juce_data_structures"
-    - "-IJUCE-master/modules/juce_dsp"
-    - "-IJUCE-master/modules/juce_events"
-    - "-IJUCE-master/modules/juce_gui_basics"
-    - "-IJUCE-master/modules/juce_gui_extra"
-    - "-IJUCE-master/modules/juce_graphics"
-    - "-IJUCE-master/modules/juce_opengl"
+    # JUCE 跨模块引用格式为 <juce_core/juce_core.h>，需要 modules 父目录
+    - "-IJUCE-master/modules"
+    # 项目源码根（使 Source/... 相对包含可解析）
+    - "-ISource"
+    # JUCE 关键宏定义（与 CMakeLists target_compile_definitions 对齐）
+    - "-DJUCE_WEB_BROWSER=0"
+    - "-DJUCE_USE_CURL=0"
+    - "-DJUCE_VST3_CAN_REPLACE_VST2=0"
+    - "-DJUCE_REPORT_APP_USAGE=0"
+    - "-DJUCE_STRICT_REFCOUNTEDPOINTER=1"
+    - "-DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1"
+    - "-DJUCE_ASIO=1"
+    - "-DJUCE_USE_FLAC=1"
+    - "-DJUCE_USE_OGGVORBIS=1"
+    - "-DJUCE_USE_MP3AUDIOFORMAT=1"
+    - "-DJUCE_USE_WINDOWS_MEDIA_FORMAT=1"
+    - "-D_CRT_SECURE_NO_WARNINGS"
     # MSVC standard library paths
     - "-IF:/VSC/VC/Tools/MSVC/14.44.35207/include"
     - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/ucrt"
