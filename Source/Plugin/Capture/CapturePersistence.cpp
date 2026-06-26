@@ -51,7 +51,7 @@ namespace {
         writeFloatVector(stream, snap->getOriginalF0());
         writeFloatVector(stream, snap->getOriginalEnergy());
 
-        const auto& segments = snap->getCorrectedSegments();
+        const auto& segments = snap->getCorrectionSegments();
         stream.writeInt(static_cast<int>(segments.size()));
         for (const auto& segment : segments) {
             stream.writeInt(segment.startFrame);
@@ -76,20 +76,20 @@ namespace {
         curve->setOriginalEnergy(readFloatVector(stream));
 
         const int segmentCount = stream.readInt();
-        std::vector<CorrectedSegment> segments;
+        std::vector<PitchCorrectionSegment> segments;
         segments.reserve(static_cast<size_t>(juce::jmax(0, segmentCount)));
         for (int i = 0; i < segmentCount; ++i) {
-            CorrectedSegment segment;
+            PitchCorrectionSegment segment;
             segment.startFrame = stream.readInt();
             segment.endFrame = stream.readInt();
             segment.f0Data = readFloatVector(stream);
-            segment.source = static_cast<CorrectedSegment::Source>(stream.readInt());
+            segment.source = static_cast<PitchCorrectionSegment::Source>(stream.readInt());
             segment.retuneSpeed = stream.readFloat();
             segment.vibratoDepth = stream.readFloat();
             segment.vibratoRate = stream.readFloat();
             segments.push_back(std::move(segment));
         }
-        curve->replaceCorrectedSegments(segments);
+        curve->replaceCorrectionSegments(segments);
         return curve;
     }
 }  // namespace

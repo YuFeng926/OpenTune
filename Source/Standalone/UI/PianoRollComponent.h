@@ -128,6 +128,7 @@ public:
                            int sampleRate);
     void onTimeGridRevisionChanged();
     void onNotesRevisionChanged();
+    void onPitchRevisionChanged();
     void setPianoKeyAudition(PianoKeyAudition* audition) { pianoKeyAudition_ = audition; }
     int getPressedPianoKey() const { return pressedPianoKey_; }
 
@@ -358,6 +359,7 @@ private:
     // v12 New: camera-based viewport
     ViewMapper makeViewMapper() const noexcept;
     int computeScrollOffsetPx() const noexcept;
+    double computeContentTimelineEndSeconds() const noexcept;
     double computeMaxTimelineEndSeconds() const noexcept;
     double computeMaxVisibleStartSeconds(double pps) const noexcept;
     void publishPlayheadPresentation(double displayPlayheadTime);
@@ -394,9 +396,9 @@ private:
     bool commitNoteDraft();
     void clearNoteDraft();
     bool commitEditedContentNotesAndSegments(const std::vector<Note>& notes,
-                                             const std::vector<CorrectedSegment>& segments,
+                                             const std::vector<PitchCorrectionSegment>& segments,
                                              F0FrameRange affectedRange);
-    bool commitEditedContentCorrectedSegments(const std::vector<CorrectedSegment>& segments,
+    bool commitEditedContentPitchCorrectionSegments(const std::vector<PitchCorrectionSegment>& segments,
                                                        F0FrameRange affectedRange);
     bool selectNotesOverlappingFrames(int startFrame, int endFrameExclusive);
     juce::Rectangle<int> getNoteBounds(const Note& note) const;
@@ -550,12 +552,12 @@ private:
     // Undo support
     juce::String pendingUndoDescription_;
     std::vector<Note> beforeUndoNotes_;
-    std::vector<CorrectedSegment> beforeUndoSegments_;
+    std::vector<PitchCorrectionSegment> beforeUndoSegments_;
     bool undoSnapshotCaptured_{false};
     void captureBeforeUndoSnapshot();
     void recordUndoAction(const juce::String& description, F0FrameRange affectedRange);
 
-    std::vector<CorrectedSegment> getCurrentSegments() const;
+    std::vector<PitchCorrectionSegment> getCurrentSegments() const;
     
     bool applyVibratoParameterToSelection(VibratoParam param, float value);
     

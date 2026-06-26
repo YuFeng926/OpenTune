@@ -8,7 +8,7 @@ namespace OpenTune {
 /**
  * Pitch Shift 设置（clip 级整体移调渲染修饰器）
  *
- * 轻量值类型，存储在 ContentEntry 中，与 notes / correctedSegments / TimeGrid 同级。
+ * 轻量值类型，存储在 ContentEntry 中，与 notes / correctionSegments / TimeGrid 同级。
  * 不改写 OriginalF0 真值，仅作为渲染链路的全局偏移修饰器。
  */
 struct PitchShiftSettings {

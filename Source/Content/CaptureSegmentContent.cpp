@@ -23,7 +23,7 @@ std::shared_ptr<const EditableContentSnapshot> CaptureSegmentContent::snapshotCo
 {
     auto snap = std::make_shared<EditableContentSnapshot>();
     snap->notes = editable_.notes;
-    snap->correctedSegments = editable_.correctedSegments;
+    snap->correctionSegments = editable_.correctionSegments;
     snap->pitchCurve = pitchCurve_;
     snap->timeGrid = editable_.timeGrid;
     snap->pitchShiftSettings = editable_.pitchShiftSettings;

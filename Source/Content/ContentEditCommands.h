@@ -64,7 +64,7 @@ public:
 
     virtual bool commitNotesAndSegments(ContentKey key,
                                         std::vector<Note> notes,
-                                        std::vector<CorrectedSegment> segments,
+                                        std::vector<PitchCorrectionSegment> segments,
                                         ContentEditRangeFrames affectedRange) = 0;
 
     virtual bool setPitchCurve(ContentKey key,

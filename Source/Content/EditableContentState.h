@@ -27,7 +27,7 @@ struct EditableContentState
 
     // Musical content
     std::vector<Note> notes;
-    std::vector<CorrectedSegment> correctedSegments;
+    std::vector<PitchCorrectionSegment> correctionSegments;
     std::shared_ptr<const TimeGridSnapshot> timeGrid;
     PitchShiftSettings pitchShiftSettings;
     ReferenceFeatureSet referenceFeatures;

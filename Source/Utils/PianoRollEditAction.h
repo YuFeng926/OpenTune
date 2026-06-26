@@ -22,8 +22,8 @@ public:
                         juce::String description,
                         std::vector<Note> beforeNotesInRange,
                         std::vector<Note> afterNotesInRange,
-                        std::vector<CorrectedSegment> beforeSegments,
-                        std::vector<CorrectedSegment> afterSegments,
+                        std::vector<PitchCorrectionSegment> beforeSegments,
+                        std::vector<PitchCorrectionSegment> afterSegments,
                         ContentEditRangeFrames affectedRange);
 
     void undo() override;
@@ -39,7 +39,7 @@ private:
     ContentKey contentKey_;
     juce::String description_;
     std::vector<Note> beforeNotes_, afterNotes_;
-    std::vector<CorrectedSegment> beforeSegments_, afterSegments_;
+    std::vector<PitchCorrectionSegment> beforeSegments_, afterSegments_;
     ContentEditRangeFrames affectedRange_;
 };
 

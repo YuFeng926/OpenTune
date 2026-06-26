@@ -27,7 +27,7 @@ std::shared_ptr<const EditableContentSnapshot> StandaloneClipContent::snapshotCo
     snap->audioSampleRate = content_.sampleRate;
     snap->audioRevision = content_.audioRevision;
     snap->notes = content_.notes;
-    snap->correctedSegments = content_.correctedSegments;
+    snap->correctionSegments = content_.correctionSegments;
     snap->pitchCurve = content_.pitchCurve;
     snap->timeGrid = content_.timeGrid;
     snap->pitchShiftSettings = content_.pitchShiftSettings;

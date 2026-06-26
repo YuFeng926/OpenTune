@@ -3,7 +3,7 @@
 #include "../Utils/AppLogger.h"
 #include "../../Utils/PianoRollEditAction.h"
 #include "../../Utils/PianoRollNotePatchAction.h"
-#include "../../Utils/TimeGridEditAction.h"   // 鈿★笍 vocal-time-stretch 搂8.7
+#include "../../Utils/TimeGridEditAction.h"   // 鈿★�?vocal-time-stretch �?.7
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -34,16 +34,16 @@ FrameScheduler::Priority toFrameSchedulerPriority(PianoRollVisualInvalidationPri
     return static_cast<FrameScheduler::Priority>(static_cast<int>(priority));
 }
 
-std::vector<CorrectedSegment> copyCorrectedSegments(const std::shared_ptr<PitchCurve>& curve)
+std::vector<PitchCorrectionSegment> copyPitchCorrectionSegments(const std::shared_ptr<PitchCurve>& curve)
 {
-    std::vector<CorrectedSegment> copiedSegments;
+    std::vector<PitchCorrectionSegment> copiedSegments;
     if (curve == nullptr) {
         return copiedSegments;
     }
 
     const auto snapshot = curve->getSnapshot();
-    copiedSegments.reserve(snapshot->getCorrectedSegments().size());
-    for (const auto& segment : snapshot->getCorrectedSegments()) {
+    copiedSegments.reserve(snapshot->getCorrectionSegments().size());
+    for (const auto& segment : snapshot->getCorrectionSegments()) {
         copiedSegments.push_back(segment);
     }
     return copiedSegments;
@@ -146,7 +146,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.commitNoteDraft = [this]() { return commitNoteDraft(); };
     toolCtx.clearNoteDraft = [this]() { clearNoteDraft(); };
     toolCtx.commitNotesAndSegments = [this](const std::vector<Note>& notes,
-                                            const std::vector<CorrectedSegment>& segments,
+                                            const std::vector<PitchCorrectionSegment>& segments,
                                             F0FrameRange affectedRange) {
         return commitEditedContentNotesAndSegments(notes, segments, affectedRange);
     };
@@ -247,8 +247,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         userScrollHold_ = false;
         pendingSeekTime_ = projectTimelineTimeToContent(time);
         const bool isPlaying = isPlaying_.load(std::memory_order_relaxed);
-        publishPlayheadPresentation(time);
-        updatePlayheadPresentationPolicy();
+        
+        // 先更�?camera（确�?cache 同步�?
         if (scrollMode_ == ScrollMode::Continuous || isPlaying) {
             const int visibleWidth = getTimelineContentViewportWidth();
             if (visibleWidth > 0) {
@@ -258,6 +258,10 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
                 setTimelineViewport({ newVisibleStart, pps }, juce::sendNotification);
             }
         }
+        
+        // 后发�?playhead（按�?camera�?
+        publishPlayheadPresentation(time);
+        updatePlayheadPresentationPolicy();
     };
     toolCtx.notifyPitchCurveEdited = [this](int s, int e) {
         listeners_.call([s, e](Listener& l) { l.pitchCurveEdited(s, e); });
@@ -276,7 +280,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.setUndoDescription = [this](juce::String desc) { pendingUndoDescription_ = std::move(desc); };
 
     // ============================================================
-    // 鈿★笍 vocal-time-stretch 搂8.7 鈥?Time tool / TimeGrid wiring
+    // 鈿★�?vocal-time-stretch �?.7 �?Time tool / TimeGrid wiring
     // ============================================================
     toolCtx.getTimeGridSnapshot = [this]() -> std::shared_ptr<const TimeGridSnapshot> {
         auto snap = readEditedSnapshot();
@@ -483,7 +487,7 @@ bool PianoRollComponent::commitCompletedNoteCorrectionResult(const PianoRollCorr
         completed.startFrame,
         completed.endFrameExclusive,
         currentF0Timeline().endFrameExclusive());
-    if (!commitEditedContentCorrectedSegments(copyCorrectedSegments(completed.curve),
+    if (!commitEditedContentPitchCorrectionSegments(copyPitchCorrectionSegments(completed.curve),
                                                        correctionRange)) {
         return false;
     }
@@ -572,8 +576,8 @@ bool PianoRollComponent::commitNoteDraft()
     double dirtyEndTime = -1e30;
 
     // Notes are sorted by startTime. Walk both arrays simultaneously.
-    // When startTime matches → same note, compare content.
-    // When startTime differs → deletion or insertion.
+    // When startTime matches �?same note, compare content.
+    // When startTime differs �?deletion or insertion.
     auto notesContentEqual = [](const Note& a, const Note& b) {
         return a.endTime == b.endTime
             && a.pitch == b.pitch
@@ -589,7 +593,7 @@ bool PianoRollComponent::commitNoteDraft()
         const bool wHas = j < working.size();
 
         if (bHas && wHas && baseline[i].startTime == working[j].startTime) {
-            // Same position — compare content for modification
+            // Same position �?compare content for modification
             if (!notesContentEqual(baseline[i], working[j])) {
                 dirtyStartTime = std::min(dirtyStartTime, baseline[i].startTime);
                 dirtyEndTime = std::max(dirtyEndTime, baseline[i].endTime);
@@ -608,7 +612,7 @@ bool PianoRollComponent::commitNoteDraft()
         }
     }
 
-    // No actual changes — skip commit, not a failure
+    // No actual changes �?skip commit, not a failure
     if (dirtyEndTime <= dirtyStartTime) {
         interactionState_.noteDraft.clear();
         return true;
@@ -632,7 +636,7 @@ bool PianoRollComponent::commitNoteDraft()
     refreshEditedContentNotes();
 
     // Build the before-patch from baseline notes in the same seconds range.
-    // Note-only undo uses seconds-based PianoRollNotePatchAction — no frame
+    // Note-only undo uses seconds-based PianoRollNotePatchAction �?no frame
     // conversion, no segment involvement, same coordinate system as commitNotePatch().
     ContentNoteRangePatch beforePatch;
     beforePatch.affectedRange = patch.affectedRange;
@@ -662,25 +666,25 @@ void PianoRollComponent::clearNoteDraft()
     interactionState_.noteDraft.clear();
 }
 
-bool PianoRollComponent::commitEditedContentCorrectedSegments(const std::vector<CorrectedSegment>& segments,
+bool PianoRollComponent::commitEditedContentPitchCorrectionSegments(const std::vector<PitchCorrectionSegment>& segments,
                                                                          F0FrameRange affectedRange)
 {
-    // Delegate to the range-scoped merge path.  setCorrectedSegments does
+    // Delegate to the range-scoped merge path.  setPitchCorrectionSegments does
     // full replacement which would discard segments outside affectedRange.
-    // commitEditedContentNotesAndSegments → commitContentNotesAndSegments
+    // commitEditedContentNotesAndSegments �?commitContentNotesAndSegments
     // performs range-scoped merge (keptBefore + incoming + keptAfter).
     return commitEditedContentNotesAndSegments(cachedNotes_, segments, affectedRange);
 }
 
 bool PianoRollComponent::commitEditedContentNotesAndSegments(const std::vector<Note>& notes,
-                                                              const std::vector<CorrectedSegment>& segments,
+                                                              const std::vector<PitchCorrectionSegment>& segments,
                                                               F0FrameRange affectedRange)
 {
     if (processor_ == nullptr || !editedContentKey_.isValid()) {
         return false;
     }
 
-    // Capture range-scoped before data directly — no full snapshot.
+    // Capture range-scoped before data directly �?no full snapshot.
     const auto f0tl = currentF0Timeline();
     const double rangeStartSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.startFrame);
     const double rangeEndSec = f0tl.isEmpty() ? 0.0 : f0tl.timeAtFrame(affectedRange.endFrameExclusive);
@@ -694,8 +698,8 @@ bool PianoRollComponent::commitEditedContentNotesAndSegments(const std::vector<N
         return result;
     };
 
-    auto extractSegmentsInRange = [](const std::vector<CorrectedSegment>& segs, int startFrame, int endFrame) {
-        std::vector<CorrectedSegment> result;
+    auto extractSegmentsInRange = [](const std::vector<PitchCorrectionSegment>& segs, int startFrame, int endFrame) {
+        std::vector<PitchCorrectionSegment> result;
         for (const auto& seg : segs) {
             if (seg.endFrame <= startFrame || seg.startFrame >= endFrame)
                 continue;  // Outside range
@@ -706,7 +710,7 @@ bool PianoRollComponent::commitEditedContentNotesAndSegments(const std::vector<N
             if (clipEnd <= clipStart)
                 continue;  // Empty after clip
             
-            CorrectedSegment clipped = seg;
+            PitchCorrectionSegment clipped = seg;
             const int startOffset = clipStart - seg.startFrame;
             const int clipLen = clipEnd - clipStart;
             if (startOffset >= 0 && clipLen > 0 && startOffset + clipLen <= static_cast<int>(seg.f0Data.size())) {
@@ -758,12 +762,12 @@ bool PianoRollComponent::commitEditedContentNotesAndSegments(const std::vector<N
     return true;
 }
 
-std::vector<CorrectedSegment> PianoRollComponent::getCurrentSegments() const
+std::vector<PitchCorrectionSegment> PianoRollComponent::getCurrentSegments() const
 {
     if (!currentCurve_) return {};
     auto snap = currentCurve_->getSnapshot();
     if (!snap) return {};
-    return snap->getCorrectedSegments();
+    return snap->getCorrectionSegments();
 }
 
 void PianoRollComponent::captureBeforeUndoSnapshot()
@@ -799,8 +803,8 @@ void PianoRollComponent::recordUndoAction(const juce::String& description, F0Fra
         return result;
     };
 
-    auto segmentsInRange = [](const std::vector<CorrectedSegment>& segments, int startFrame, int endFrameExclusive) {
-        std::vector<CorrectedSegment> result;
+    auto segmentsInRange = [](const std::vector<PitchCorrectionSegment>& segments, int startFrame, int endFrameExclusive) {
+        std::vector<PitchCorrectionSegment> result;
         for (const auto& seg : segments) {
             if (seg.endFrame <= startFrame || seg.startFrame >= endFrameExclusive)
                 continue;  // Outside range
@@ -811,7 +815,7 @@ void PianoRollComponent::recordUndoAction(const juce::String& description, F0Fra
             if (clipEnd <= clipStart)
                 continue;  // Empty after clip
             
-            CorrectedSegment clipped = seg;
+            PitchCorrectionSegment clipped = seg;
             const int startOffset = clipStart - seg.startFrame;
             const int clipLen = clipEnd - clipStart;
             if (startOffset >= 0 && clipLen > 0 && startOffset + clipLen <= static_cast<int>(seg.f0Data.size())) {
@@ -1089,10 +1093,10 @@ bool PianoRollComponent::enqueueManualCorrectionPatchAsync(const std::vector<Pia
             op.source);
     }
 
-    // dirtyStartFrame/dirtyEndFrame 鏄墍鏈?manual ops 鐨?dirty 甯у苟闆嗭紙鍚鐐癸級銆?
+    // dirtyStartFrame/dirtyEndFrame 鏄墍鏈?manual ops �?dirty 甯у苟闆嗭紙鍚鐐癸級銆?
     const F0FrameRange affectedRange{dirtyStartFrame,
                                       dirtyEndFrame >= dirtyStartFrame ? dirtyEndFrame + 1 : dirtyStartFrame};
-    if (!commitEditedContentCorrectedSegments(copyCorrectedSegments(editedCurve), affectedRange)) {
+    if (!commitEditedContentPitchCorrectionSegments(copyPitchCorrectionSegments(editedCurve), affectedRange)) {
         return false;
     }
 
@@ -1134,16 +1138,16 @@ void PianoRollComponent::enqueueNoteBasedCorrectionAsync(const std::vector<Note>
 }
 
 // ============================================================================
-// PianoRollPreviewOverlay 鈥?paint transient interaction previews
+// PianoRollPreviewOverlay �?paint transient interaction previews
 // ============================================================================
 
 void PianoRollPreviewOverlay::paint(juce::Graphics& g)
 {
-    // ⚡️ P0-2: Draft notes 绘制 — 绘制正在被拖拽或缩放的 notes
-    // 避免 detail cache 旧位置 + selection highlights 新位置 = 重影
+    // ⚡️ P0-2: Draft notes 绘制 �?绘制正在被拖拽或缩放�?notes
+    // 避免 detail cache 旧位�?+ selection highlights 新位�?= 重影
     auto& interaction = owner_.interactionState_;
     
-    // 绘制单个 draft note 的 lambda
+    // 绘制单个 draft note �?lambda
     auto drawDraftNote = [&](const Note& note) {
         auto bounds = owner_.getNoteBounds(note);
         if (bounds.isEmpty()) return;
@@ -1173,7 +1177,7 @@ void PianoRollPreviewOverlay::paint(juce::Graphics& g)
         }
     }
     
-    // Ghost overlay (reference content) — drawn in overlay layer, not tiles
+    // Ghost overlay (reference content) �?drawn in overlay layer, not tiles
     if (owner_.referenceOverlay_.has_value() && owner_.referenceOverlay_->enabled) {
         auto ctx = owner_.makePresentationRenderContext();
         owner_.renderer_->drawGhostNotes(g, ctx, *owner_.referenceOverlay_);
@@ -1219,7 +1223,7 @@ void PianoRollPreviewOverlay::paint(juce::Graphics& g)
 
     owner_.drawSelectionBox(g, themeId);
 
-    // Selected note highlights — drawn in overlay, not baked into detail cache
+    // Selected note highlights �?drawn in overlay, not baked into detail cache
     if (!owner_.interactionState_.noteSelection.selectedIndices.empty()) {
         auto renderCtx = owner_.makePresentationRenderContext();
         if (auto* placement = owner_.findActiveTimelineContentPlacement()) {
@@ -1411,7 +1415,7 @@ void PianoRollComponent::paint(juce::Graphics& g) {
     chromePath.addRoundedRectangle(bounds, UIColors::cornerRadius);
     g.reduceClipRegion(chromePath);
 
-    // 静态面板 chrome（不随滚动移动）
+    // 静态面�?chrome（不随滚动移动）
     if (themeId == ThemeId::DarkBlueGrey)
         UIColors::fillSoothe2SpectrumBackground(g, bounds, UIColors::cornerRadius);
     else if (themeId == ThemeId::Aurora)
@@ -1427,7 +1431,7 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         && themeId != ThemeId::BlueBreeze && themeId != ThemeId::Overdose)
         g.fillPath(chromePath);
 
-    // Blit 缓存层
+    // Blit 缓存�?
     const int scrollPx = computeScrollOffsetPx();
     const int imageOffsetX = pianoKeyWidth_ + cacheBandStartX_ - scrollPx;
 
@@ -1507,8 +1511,8 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
             }
 
             // Extract segments overlapping the affected range (range-scoped, not full)
-            auto allSegments = snap->getCorrectedSegments();
-            std::vector<CorrectedSegment> segmentsInRange;
+            auto allSegments = snap->getCorrectionSegments();
+            std::vector<PitchCorrectionSegment> segmentsInRange;
             for (const auto& seg : allSegments) {
                 if (seg.startFrame < affectedRange.endFrameExclusive && seg.endFrame > affectedRange.startFrame)
                     segmentsInRange.push_back(seg);
@@ -1525,7 +1529,7 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
     }
 
     // Fallback: notes changed but no valid F0 timeline mapping or no current curve.
-    // Pure note edit → seconds-based PianoRollNotePatchAction for undo.
+    // Pure note edit �?seconds-based PianoRollNotePatchAction for undo.
     if (anySelected && dirtyEndTime > dirtyStartTime) {
         ContentNoteRangePatch afterPatch;
         afterPatch.affectedRange.startSeconds = dirtyStartTime;
@@ -1793,7 +1797,7 @@ int PianoRollComponent::findLineAnchorSegmentNear(int x, int y) const
     if (currentCurve_ == nullptr) return -1;
 
     auto snapshot = currentCurve_->getSnapshot();
-    const auto& allSegments = snapshot->getCorrectedSegments();
+    const auto& allSegments = snapshot->getCorrectionSegments();
 
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) return -1;
@@ -1805,7 +1809,7 @@ int PianoRollComponent::findLineAnchorSegmentNear(int x, int y) const
 
     for (int i = 0; i < static_cast<int>(allSegments.size()); ++i) {
         const auto& seg = allSegments[i];
-        if (seg.source != CorrectedSegment::Source::LineAnchor) continue;
+        if (seg.source != PitchCorrectionSegment::Source::LineAnchor) continue;
         if (seg.f0Data.empty()) continue;
 
         const double startTime = f0tl.timeAtFrame(seg.startFrame);
@@ -1859,14 +1863,14 @@ void PianoRollComponent::clearLineAnchorSegmentSelection()
 }
 
 void PianoRollComponent::setNoteSplit(float value) {
-    // Note Split 鎺у埗闊抽珮鍒嗘闃堝€硷紙cents锛?
+    // Note Split 鎺у埗闊抽珮鍒嗘闃堝€硷紙cents�?
     segmentationPolicy_.transitionThresholdCents = juce::jlimit(
         OpenTune::PitchControlConfig::kMinNoteSplitCents,
         OpenTune::PitchControlConfig::kMaxNoteSplitCents,
         value);
 
-    // Note Split 浠呮洿鏂板垎娈电瓥鐣ュ弬鏁帮紝涓嶈Е鍙?AUTO 閲嶆柊鐢熸垚銆?
-    // AUTO 鎿嶄綔鐢辩敤鎴蜂富鍔ㄨЕ鍙戯紝浣跨敤褰撳墠绛栫暐鎵ц鍒嗘銆?
+    // Note Split 浠呮洿鏂板垎娈电瓥鐣ュ弬鏁帮紝涓嶈Е鍙?AUTO 閲嶆柊鐢熸垚�?
+    // AUTO 鎿嶄綔鐢辩敤鎴蜂富鍔ㄨЕ鍙戯紝浣跨敤褰撳墠绛栫暐鎵ц鍒嗘�?
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
 }
 
@@ -2101,9 +2105,9 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
         undoSnapshotCaptured_ = false;
     }
 
-    // notes 涓?pitchCurve 閫氳繃 commitNotesAndPitchCurve 鍚屽啓鍒?store锛?
-    // 璇讳晶涔熷繀椤诲悓璇伙細curveChanged 鏃跺繀椤?refresh notes锛屽惁鍒?undo/redo 浼?
-    // 鍑虹幇 curve 鍥為€€浣?notes 瑙嗚娈嬬暀鐨勪笉瀵圭О锛坈achedNotes_ 婊炲悗锛夈€?
+    // notes �?pitchCurve 閫氳�?commitNotesAndPitchCurve 鍚屽啓鍒?store�?
+    // 璇讳晶涔熷繀椤诲悓璇伙細curveChanged 鏃跺繀�?refresh notes锛屽惁鍒?undo/redo �?
+    // 鍑虹�?curve 鍥為€€�?notes 瑙嗚娈嬬暀鐨勪笉瀵圭О锛坈achedNotes_ 婊炲悗锛夈€?
     if (contentChanged || curveChanged) {
         refreshEditedContentNotes();
     }
@@ -2145,6 +2149,13 @@ void PianoRollComponent::onTimeGridRevisionChanged()
 void PianoRollComponent::onNotesRevisionChanged()
 {
     refreshEditedContentNotes();
+    detailCacheDirty_ = true;
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
+                     PianoRollVisualInvalidationPriority::Interactive);
+}
+
+void PianoRollComponent::onPitchRevisionChanged()
+{
     detailCacheDirty_ = true;
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
                      PianoRollVisualInvalidationPriority::Interactive);
@@ -2307,14 +2318,14 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         // Paused: still mirror the host transport position so DAW timeline seeks
         // (and standalone setPosition writes) appear in the plugin window without
         // requiring playback. The playing-only auto-scroll/centering logic below
-        // is intentionally skipped 鈥?when paused, the user controls the view.
+        // is intentionally skipped �?when paused, the user controls the view.
         const double stoppedPresentationTime = pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : hostTime;
         resetPresentationClock(stoppedPresentationTime);
         publishPlayheadPresentation(projectContentTimeToTimeline(stoppedPresentationTime));
         return;
     }
 
-    // 濡傛灉鏈?pending seek锛屾鏌?host 鏄惁宸茬‘璁わ紙position 鎺ヨ繎 pending 鍊硷級
+    // 濡傛灉鏈?pending seek锛屾鏌?host 鏄惁宸茬‘璁わ紙position 鎺ヨ�?pending 鍊硷�?
     lastObservedRawPlayheadTime_ = rawHostTime;
     double playheadTime;
     if (pendingSeekTime_ >= 0.0) {
@@ -2345,9 +2356,7 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
             const double pps = camera_.pixelsPerSecond;
             const double timelinePlayheadTime = projectContentTimeToTimeline(displayPlayheadTime);
             const double desiredVisibleStart = timelinePlayheadTime - pinnedContentX / pps;
-            const double maxStart = computeMaxVisibleStartSeconds(pps);
-            const double clampedStart = juce::jlimit(0.0, maxStart, desiredVisibleStart);
-            setTimelineViewport({ clampedStart, pps }, juce::sendNotification);
+            setTimelineViewport({ desiredVisibleStart, pps }, juce::sendNotification);
         }
     }
     else if (scrollMode_ == ScrollMode::Page) {
@@ -2365,10 +2374,17 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
 
 void PianoRollComponent::setTimelineViewport(TimelineViewportCamera camera, juce::NotificationType notify) {
     camera.pixelsPerSecond = juce::jlimit(10.0, 500.0, camera.pixelsPerSecond);
-    const double maxStart = computeMaxVisibleStartSeconds(camera.pixelsPerSecond);
+
+    // 用目标视口计�?maxStart，避�?clamp 循环依赖
+    const int visibleWidth = getTimelineContentViewportWidth();
+    const double visibleDuration = visibleWidth > 0 ? visibleWidth / camera.pixelsPerSecond : 0.0;
+    const double contentEnd = computeContentTimelineEndSeconds();
+    const double viewportRight = camera.visibleStartSeconds + visibleDuration;
+    const double maxTimelineEnd = std::max(contentEnd, viewportRight);
+    const double maxStart = std::max(0.0, maxTimelineEnd - visibleDuration);
     camera.visibleStartSeconds = juce::jlimit(0.0, maxStart, camera.visibleStartSeconds);
 
-    // No-op guard — 同时消除 editor 回声
+    // No-op guard �?同时消除 editor 回声
     if (std::abs(camera.visibleStartSeconds - camera_.visibleStartSeconds) < 0.001
         && std::abs(camera.pixelsPerSecond - camera_.pixelsPerSecond) < 0.01)
         return;
@@ -2379,16 +2395,20 @@ void PianoRollComponent::setTimelineViewport(TimelineViewportCamera camera, juce
     const int scrollPx = computeScrollOffsetPx();
     horizontalScrollBar_.setCurrentRange(scrollPx, getTimelineContentViewportWidth(), juce::dontSendNotification);
 
-    // zoom 变化或视口超出 band → 标脏（flush 时重建）
-    if (zoomChanged || needsGeometryRebuild())
+    // zoom 变化或视口超�?band �?标脏并立即重�?
+    const bool cacheDoesNotCover = zoomChanged || needsGeometryRebuild();
+    if (cacheDoesNotCover) {
         backgroundCacheDirty_ = true;
+        rebuildDirtyCaches();  // 直接重建，保�?camera + cache 原子发布
+    }
 
     if (notify == juce::sendNotification) {
         userHasManuallyZoomed_ = true;
         listeners_.call([this](Listener& l) { l.timelineViewportChanged(camera_); });
     }
 
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
+                     PianoRollVisualInvalidationPriority::Interactive);
 }
 
 void PianoRollComponent::setCurrentTool(ToolId tool) {
@@ -2412,7 +2432,7 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
         clearedAnchorPreview = true;
     }
 
-    // 鈿★笍 vocal-time-stretch 搂8.4 (Phase F) 鈥?Time tool is mutually exclusive
+    // 鈿★�?vocal-time-stretch �?.4 (Phase F) �?Time tool is mutually exclusive
     // with the Note family of tools.  Switching INTO TimeTool drops any
     // inflight note-side state so the user's next mouseDown is interpreted
     // strictly as a TimeGrid handle action; switching OUT clears Time-tool
@@ -2453,7 +2473,7 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             setMouseCursor(juce::MouseCursor::PointingHandCursor);
             break;
         case ToolId::TimeTool:
-            // 搂8.4: Time tool uses normal cursor + per-handle hover hand cursor
+            // �?.4: Time tool uses normal cursor + per-handle hover hand cursor
             // applied by handleTimeToolMouseMove (via ctx.setMouseCursor).
             setMouseCursor(juce::MouseCursor::NormalCursor);
             break;
@@ -2565,7 +2585,7 @@ void PianoRollComponent::mouseMove(const juce::MouseEvent& e) {
 }
 
 void PianoRollComponent::mouseDoubleClick(const juce::MouseEvent& e) {
-    // 鈿★笍 vocal-time-stretch 搂8.4 鈥?Time tool double-click forwarded to handler.
+    // 鈿★�?vocal-time-stretch �?.4 �?Time tool double-click forwarded to handler.
     // Other tools currently have no double-click semantics, so the handler
     // ignores them by switching on currentTool_.
     toolHandler_->mouseDoubleClick(e);
@@ -2576,7 +2596,7 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
         return;
     }
 
-    // Ctrl+drag panning 鈥?only on non-interactive area, so existing
+    // Ctrl+drag panning �?only on non-interactive area, so existing
     // Ctrl+click behaviors (note toggle selection, context menu) work.
     if (e.mods.isCtrlDown() && !e.mods.isPopupMenu() && e.x >= pianoKeyWidth_) {
         bool onNote = false;
@@ -2837,11 +2857,11 @@ PianoRollRenderer::ContentRenderItem PianoRollComponent::buildContentRenderItem(
 
 void PianoRollComponent::visibilityChanged()
 {
-    // 褰撶粍浠跺彉涓哄彲瑙佹椂锛岃嚜鍔ㄨ幏鍙栭敭鐩樼劍鐐?
-    // 杩欑‘淇濈敤鎴锋棤闇€鎵嬪姩鐐瑰嚮鍗冲彲浣跨敤蹇嵎閿紙濡?Ctrl+A 鍏ㄩ€夛級
+    // 褰撶粍浠跺彉涓哄彲瑙佹椂锛岃嚜鍔ㄨ幏鍙栭敭鐩樼劍�?
+    // 杩欑‘淇濈敤鎴锋棤闇€鎵嬪姩鐐瑰嚮鍗冲彲浣跨敤蹇嵎閿紙濡?Ctrl+A 鍏ㄩ€夛�?
     if (isShowing() && isVisible())
     {
-        // 浣跨敤 callAfterDelay 纭繚鍦ㄦ秷鎭惊鐜鐞嗗畬鎴愬悗鑾峰彇鐒︾偣
+        // 浣跨�?callAfterDelay 纭繚鍦ㄦ秷鎭惊鐜鐞嗗畬鎴愬悗鑾峰彇鐒︾偣
         // 杩欐槸蹇呰鐨勶紝鍥犱负缁勪欢鍒氬垰鏄剧ず鏃跺彲鑳借繕涓嶈兘绔嬪嵆鎺ユ敹鐒︾偣
         juce::Component::SafePointer<PianoRollComponent> safeThis(this);
         juce::Timer::callAfterDelay(10, [safeThis]() {
@@ -2897,7 +2917,7 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext(int rend
     ctx.f0SelectionStartFrame = interactionState_.selection.selectedF0StartFrame;
     ctx.f0SelectionEndFrameExclusive = interactionState_.selection.selectedF0EndFrameExclusive;
 
-    // 鈿★笍 vocal-time-stretch 搂8.7 鈥?inject TimeGrid snapshot for 搂8.5 renderer.
+    // 鈿★�?vocal-time-stretch �?.7 �?inject TimeGrid snapshot for �?.5 renderer.
     // During an active drag, prefer the working snapshot for live preview;
     // otherwise pull from the processor's published TimeGrid.
     if (interactionState_.timeTool.isDraggingHandle
@@ -2910,7 +2930,7 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext(int rend
     ctx.timeGridSelectedHandleId = interactionState_.timeTool.selectedHandleId;
     ctx.additionalSelectedHandleIds = interactionState_.timeTool.additionalSelectedIds;
     ctx.selectedLineAnchorSegmentIds = interactionState_.selectedLineAnchorSegmentIds;
-    // 搂8.5 (Phase J) 鈥?currentTool drives view-mode in renderer.
+    // �?.5 (Phase J) �?currentTool drives view-mode in renderer.
     ctx.currentTool = currentTool_;
 
     ctx.activeProjection = activeContentProjection();
@@ -3003,10 +3023,8 @@ void PianoRollComponent::updatePlayheadPresentationPolicy()
     const double displayTime = getDisplayPlayheadTime(juce::Time::getMillisecondCounterHiRes() * 0.001);
     const double timelinePlayheadTime = projectContentTimeToTimeline(displayTime);
     const double desiredVisibleStart = timelinePlayheadTime - pinnedContentX / pps;
-    const double maxStart = computeMaxVisibleStartSeconds(pps);
-    const double clampedStart = juce::jlimit(0.0, maxStart, desiredVisibleStart);
 
-    setTimelineViewport({ clampedStart, pps }, juce::sendNotification);
+    setTimelineViewport({ desiredVisibleStart, pps }, juce::sendNotification);
     publishPlayheadPresentation(timelinePlayheadTime);
 }
 
@@ -3032,7 +3050,7 @@ void PianoRollComponent::setScale(int rootNote, int scaleType)
 }
 
 void PianoRollComponent::fitToScreen() {
-    // 濡傛灉鐢ㄦ埛宸叉墜鍔ㄨ皟鏁磋繃缂╂斁锛屼笉鑷姩瑕嗙洊
+    // 濡傛灉鐢ㄦ埛宸叉墜鍔ㄨ皟鏁磋繃缂╂斁锛屼笉鑷姩瑕嗙�?
     if (userHasManuallyZoomed_) {
         return;
     }
@@ -3095,12 +3113,12 @@ float PianoRollComponent::getTotalHeight() const {
 
 float PianoRollComponent::freqToMidi(float frequency) const {
     if (frequency <= 0.0f) return 0.0f;
-    // 缁熶竴璇箟锛氶鐜団啍MIDI 浠モ€滃崐闊充腑蹇冪嚎鈥濅负閿氱偣锛堜笉鏄敭杈圭晫锛夈€?
+    // 缁熶竴璇箟锛氶鐜団啍MIDI 浠モ€滃崐闊充腑蹇冪嚎鈥濅负閿氱偣锛堜笉鏄敭杈圭晫锛夈�?
     return 12.0f * std::log2(frequency / 440.0f) + 69.0f - 0.5f;
 }
 
 float PianoRollComponent::midiToFreq(float midiNote) const {
-    // 涓?freqToMidi 淇濇寔涓ユ牸浜掗€嗙殑涓績绾块敋鐐圭害瀹氥€?
+    // �?freqToMidi 淇濇寔涓ユ牸浜掗€嗙殑涓績绾块敋鐐圭害瀹氥�?
     return 440.0f * std::pow(2.0f, (midiNote + 0.5f - 69.0f) / 12.0f);
 }
 
@@ -3455,34 +3473,44 @@ int PianoRollComponent::computeScrollOffsetPx() const noexcept {
     return static_cast<int>(std::llround(camera_.visibleStartSeconds * camera_.pixelsPerSecond));
 }
 
-double PianoRollComponent::computeMaxTimelineEndSeconds() const noexcept {
+double PianoRollComponent::computeContentTimelineEndSeconds() const noexcept {
     const double origin = timelineViewOriginSeconds();
-    
-    double contentEndSeconds = origin;
+    double maxEndSeconds = origin;
+
     for (const auto& placement : timelineContentPlacements_) {
         if (placement.isValid()) {
-            contentEndSeconds = std::max(contentEndSeconds, placement.projection.timelineEndSeconds());
+            maxEndSeconds = std::max(maxEndSeconds, placement.projection.timelineEndSeconds());
         }
     }
-    if (contentEndSeconds > origin) {
-        return contentEndSeconds + 5.0;
-    }
-    
-    double duration = 0.0;
-    if (audioBuffer_ && audioBuffer_->getNumSamples() > 0) {
-        duration = static_cast<double>(audioBuffer_->getNumSamples()) / audioBufferSampleRate_;
-    } else {
-        const auto& notes = getCommittedNotes();
-        for (const auto& note : notes) {
-            if (note.endTime > duration) duration = note.endTime;
+
+    // �?placement 时使�?audio �?notes 的实�?duration
+    if (maxEndSeconds <= origin) {
+        double duration = 0.0;
+        if (audioBuffer_ && audioBuffer_->getNumSamples() > 0) {
+            duration = static_cast<double>(audioBuffer_->getNumSamples()) / audioBufferSampleRate_;
+        } else {
+            const auto& notes = getCommittedNotes();
+            for (const auto& note : notes) {
+                if (note.endTime > duration)
+                    duration = note.endTime;
+            }
         }
+        if (duration > 0.0)
+            maxEndSeconds = origin + duration;
     }
-    
-    if (duration > 0.0) {
-        return origin + duration + 5.0;
-    }
-    
-    return origin + 15.0;
+
+    return maxEndSeconds;
+}
+
+double PianoRollComponent::computeMaxTimelineEndSeconds() const noexcept {
+    const double contentEnd = computeContentTimelineEndSeconds();
+
+    // 用当前视口右边界，不用固�?padding
+    const int visibleWidth = getTimelineContentViewportWidth();
+    const double visibleDuration = visibleWidth > 0 ? visibleWidth / camera_.pixelsPerSecond : 0.0;
+    const double viewportRight = camera_.visibleStartSeconds + visibleDuration;
+
+    return std::max(contentEnd, viewportRight);
 }
 
 double PianoRollComponent::computeMaxVisibleStartSeconds(double pps) const noexcept {
@@ -3539,9 +3567,8 @@ bool PianoRollComponent::rebuildBackgroundCache() {
 
     const int overscanPx = contentVpW;
     const int scrollPx = computeScrollOffsetPx();
-    const int totalContentW = static_cast<int>(computeMaxTimelineEndSeconds() * camera_.pixelsPerSecond);
     cacheBandStartX_ = juce::jmax(0, scrollPx - overscanPx);
-    cacheBandWidth_  = juce::jmin(contentVpW + overscanPx * 2, totalContentW - cacheBandStartX_);
+    cacheBandWidth_  = contentVpW + overscanPx * 2;
     cacheBandHeight_ = contentVpH;
 
     if (cacheBandWidth_ <= 0 || cacheBandHeight_ <= 0) {

@@ -1056,6 +1056,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         const uint64_t currentTimeGridRevision = activeKey.isValid() && snap
             ? snap->timeGridRevision
             : 0;
+        const uint64_t currentPitchRevision = activeKey.isValid() && snap
+            ? snap->pitchRevision
+            : 0;
         const bool contentChanged =
             activeKey != lastPianoRollContentKey_
             || sr != lastPianoRollSampleRate_
@@ -1073,6 +1076,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
         if (currentTimeGridRevision != lastPianoRollTimeGridRevision_) {
             pianoRoll_.onTimeGridRevisionChanged();
+        }
+        if (currentPitchRevision != lastPianoRollPitchRevision_) {
+            pianoRoll_.onPitchRevisionChanged();
         }
         if (activeTrack >= 0 && activePlacementIndex >= 0) {
             const DetectedKey resolvedKey =

@@ -9,8 +9,8 @@ PianoRollEditAction::PianoRollEditAction(std::shared_ptr<ContentEditCommands> co
                                          juce::String description,
                                          std::vector<Note> beforeNotesInRange,
                                          std::vector<Note> afterNotesInRange,
-                                         std::vector<CorrectedSegment> beforeSegments,
-                                         std::vector<CorrectedSegment> afterSegments,
+                                         std::vector<PitchCorrectionSegment> beforeSegments,
+                                         std::vector<PitchCorrectionSegment> afterSegments,
                                          ContentEditRangeFrames affectedRange)
     : commands_(commands)
     , contentKey_(key)

@@ -114,8 +114,8 @@ bool noteEqualsForPatch(const Note& a, const Note& b)
         && a.isVoiced == b.isVoiced;
 }
 
-bool segmentsEqualForPatch(const std::vector<CorrectedSegment>& a,
-                           const std::vector<CorrectedSegment>& b)
+bool segmentsEqualForPatch(const std::vector<PitchCorrectionSegment>& a,
+                           const std::vector<PitchCorrectionSegment>& b)
 {
     if (a.size() != b.size()) {
         return false;
@@ -144,7 +144,7 @@ void fail(AlignmentPatch& patch, AlignmentPatch::ErrorCode error, const juce::St
     patch.error = error;
     patch.diagnostics = message;
     patch.notesAfter.clear();
-    patch.correctedSegmentsAfter.clear();
+    patch.correctionSegmentsAfter.clear();
     patch.timingIntents.clear();
     patch.pitchChanged = false;
     patch.timingChanged = false;
@@ -162,7 +162,7 @@ bool buildPitchPatch(const ReferenceAlignmentRequest& request,
 
     patch.notesAfter = pitchSeedNotes;
 
-    std::vector<CorrectedSegment> segmentsAfter;
+    std::vector<PitchCorrectionSegment> segmentsAfter;
     segmentsAfter.reserve(request.targetSegmentsBefore.size() + request.referenceFeatures.pitch.notes.size());
     for (const auto& segment : request.targetSegmentsBefore) {
         const bool overlaps = segment.endFrame > patch.affectedStartFrame
@@ -213,10 +213,10 @@ bool buildPitchPatch(const ReferenceAlignmentRequest& request,
         targetNote = corrected;
         usedTargetNotes.insert(targetIndex);
 
-        CorrectedSegment segment;
+        PitchCorrectionSegment segment;
         segment.startFrame = timeToFrame(targetNote.startTime);
         segment.endFrame = timeToFrame(targetNote.endTime);
-        segment.source = CorrectedSegment::Source::NoteBased;
+        segment.source = PitchCorrectionSegment::Source::NoteBased;
         segment.retuneSpeed = refNote.retuneSpeed;
         segment.vibratoDepth = refNote.vibratoDepth;
         segment.vibratoRate = refNote.vibratoRate;
@@ -224,7 +224,7 @@ bool buildPitchPatch(const ReferenceAlignmentRequest& request,
     }
 
     std::sort(segmentsAfter.begin(), segmentsAfter.end(),
-              [](const CorrectedSegment& a, const CorrectedSegment& b) {
+              [](const PitchCorrectionSegment& a, const PitchCorrectionSegment& b) {
                   return a.startFrame < b.startFrame;
               });
 
@@ -232,7 +232,7 @@ bool buildPitchPatch(const ReferenceAlignmentRequest& request,
         changed = true;
     }
 
-    patch.correctedSegmentsAfter = std::move(segmentsAfter);
+    patch.correctionSegmentsAfter = std::move(segmentsAfter);
     patch.pitchChanged = changed;
     return changed;
 }
@@ -365,7 +365,7 @@ AlignmentPatch ReferenceAutoAlign::align(const ReferenceAlignmentRequest& reques
         ? request.targetFeatures.pitch.notes
         : request.targetNotesBefore;
     patch.notesAfter = pitchSeedNotes;
-    patch.correctedSegmentsAfter = request.targetSegmentsBefore;
+    patch.correctionSegmentsAfter = request.targetSegmentsBefore;
 
     const bool hasPitchFeatures = request.referenceFeatures.hasPitchNotes() && !pitchSeedNotes.empty();
     const bool hasTimeFeatures = request.referenceFeatures.hasTimingAnchors()
