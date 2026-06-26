@@ -173,10 +173,9 @@ private:
     bool initialFocusGrabbed_{false};
     // Tracks last-seen notesRevision per active content so the timer
     // can pull fresh notes when an async note generator (GAME) commits late.
+    ContentKey lastActiveContentKey_;
     uint64_t lastPianoRollNotesRevision_{0};
-    ContentKey lastPianoRollNotesRevisionContentKey_;
     uint64_t lastPianoRollTimeGridRevision_{0};
-    ContentKey lastPianoRollTimeGridRevisionContentKey_;
 
     // When true, the blocking overlay is shown until ARA content birth completes.
     bool waitingForAraContent_ = false;

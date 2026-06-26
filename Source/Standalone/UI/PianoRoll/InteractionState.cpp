@@ -154,8 +154,8 @@ void NoteDragState::clear()
     draggedNoteIndex = -1;
     draggedNoteIndices.clear();
     isDraggingNotes = false;
-    manualStartTime = -1.0;
-    manualEndTime = -1.0;
+    manualStartFrame = -1;
+    manualEndFrameExclusive = -1;
     initialManualTargets.clear();
     previewStartFrame = -1;
     previewEndFrameExclusive = -1;

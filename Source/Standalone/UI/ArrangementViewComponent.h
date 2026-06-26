@@ -24,7 +24,8 @@
 #include "PlayheadOverlayComponent.h"
 #include "WaveformMipmap.h"
 #include "ArrangementRenderModelCache.h"
-#include "TimelineViewportState.h"
+#include "ViewMapper.h"
+#include "TimelineViewportCamera.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../Utils/KeyShortcutConfig.h"
 
@@ -104,9 +105,9 @@ public:
         virtual void trackHeightChanged(int newHeight) { juce::ignoreUnused(newHeight); }
         // Y轴滚动回调 - 通知外部垂直滚动偏移变化（用于同步TrackPanel）
         virtual void verticalScrollChanged(int newOffset) { juce::ignoreUnused(newOffset); }
-        // 水平时间轴同步回调 - 用于同步 PianoRoll
-        virtual void horizontalScrollChanged(int newOffset) { juce::ignoreUnused(newOffset); }
-        virtual void zoomLevelChanged(double newZoom) { juce::ignoreUnused(newZoom); }
+        // Timeline viewport camera上报 - 两个视图共享同一时间窗口
+        virtual void timelineViewportChanged(TimelineViewportCamera camera) { juce::ignoreUnused(camera); }
+
         virtual void scrollModeChanged(bool isContinuous) { juce::ignoreUnused(isContinuous); }
     };
 
@@ -131,14 +132,13 @@ public:
     void setIsPlaying(bool playing) {
         const bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
         isPlaying_.store(playing, std::memory_order_relaxed);
-        playheadOverlay_.setPlaying(playing);
         if (stateChanged) {
             resetPresentationClock(readPlayheadSeconds());
             syncPlayheadOverlayToAbsoluteTime(readPlayheadSeconds(), true);
         }
     }
-    // 设置播放头颜色（主题切换时调用）
     void setPlayheadColour(juce::Colour colour) {
+        playheadColour_ = colour;
         playheadOverlay_.setPlayheadColour(colour);
     }
     
@@ -146,8 +146,7 @@ public:
     void setPlayheadPositionSource(std::weak_ptr<std::atomic<double>> source) {
         positionSource_ = source;
     }
-    void setZoomLevel(double zoom);
-    void setScrollOffset(int pixels);
+    void setTimelineViewport(TimelineViewportCamera camera, juce::NotificationType notify);
     void setVerticalScrollOffset(int offset);
     void setVisibleTrackCount(int count);
     void setInferenceActive(bool active) { inferenceActive_ = active; }
@@ -182,6 +181,12 @@ public:
 private:
     enum class DragOperation { None, Move, Gain, TrimLeft, TrimRight, FadeIn, FadeOut };
 
+    // Camera-derived state
+    ViewMapper makeViewMapper() const noexcept;
+    int computeScrollOffsetPx() const noexcept;
+    double computeMaxTimelineEndSeconds() const noexcept;
+    double computeMaxVisibleStartSeconds(double pps) const noexcept;
+
     struct HitTestResult {
         int trackId{-1};
         int placementIndex{-1};
@@ -204,7 +209,7 @@ private:
     juce::Rectangle<int> buildProjectedPlacementBounds(int trackId, int placementIndex) const;
     juce::Rectangle<int> getPlacementBounds(int trackId, int placementIndex) const;
 
-    // 时间 ↔ 像素坐标（委托给 TimelineViewportState）
+    // 时间 ↔ 像素坐标（委托给 ViewMapper）
     int absoluteTimeToContentX(double seconds) const;
     int absoluteTimeToViewportX(double seconds) const;
     int absoluteTimeToViewportX(double seconds, double projectedScrollOffset) const;
@@ -240,7 +245,7 @@ private:
     void drawGridLines(juce::Graphics& g);
     void drawPlacementClips(juce::Graphics& g,
                             const ArrangementRenderModelCache::RenderModel& model,
-                            const TimelineViewportState& viewport);
+                            const ViewMapper& mapper);
 
     /** Request render model rebuild from current state. */
     void requestRenderModelUpdate();
@@ -254,7 +259,7 @@ private:
     bool buildWaveformCaches(double timeBudgetMs);
 
     // ---- Timeline rendering pipeline ----
-    TimelineViewportState viewportState_;
+    TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
     ArrangementRenderModelCache renderModelCache_;
     WaveformMipmapCache waveformMipmapCache_;
     ArrangementCachedSurface contentSurface_;
@@ -281,8 +286,7 @@ private:
     TimeUnit timeUnit_{ TimeUnit::Seconds };
 
     std::atomic<bool> isPlaying_{false};  // atomic 确保 VBlank 线程安全
-    double zoomLevel_{1.0};
-    int scrollOffset_{0};
+    juce::Colour playheadColour_{UIColors::playhead};
     int verticalScrollOffset_{0};
     int visibleTrackCount_{2};  // synced from TrackPanel via PluginEditor
     double lastAuthoritativePlayheadTime_{0.0};
@@ -310,7 +314,7 @@ private:
     struct RulerSurfaceState {
         double startSeconds = 0.0;
         double endSeconds = 0.0;
-        double zoomLevel = 0.0;
+        double pixelsPerSecond = 0.0;
         double bpm = 0.0;
         int startContentX = 0;
         int widthPx = 0;

@@ -78,7 +78,6 @@ constexpr double kArrangementRenderBandOverscanScreens = 1.0;
 ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& processor)
     : processor_(processor)
 {
-    viewportState_.contentStartX = kArrangementContentStartX;
     setWantsKeyboardFocus(true);
 
     addAndMakeVisible(horizontalScrollBar_);
@@ -133,7 +132,7 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     addAndMakeVisible(playheadOverlay_);
     timeUnitToggleButton_.toFront(false);
     scrollModeToggleButton_.toFront(false);
-    playheadOverlay_.setPianoKeyWidth(kArrangementContentStartX);
+    playheadOverlay_.setBounds(getLocalBounds());
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
         this, [this](double timestampSec) { onScrollVBlankCallback(timestampSec); });
 }
@@ -158,52 +157,35 @@ void ArrangementViewComponent::removeListener(Listener* listener)
     listeners_.remove(listener);
 }
 
-void ArrangementViewComponent::setZoomLevel(double zoom)
+void ArrangementViewComponent::setTimelineViewport(TimelineViewportCamera camera, juce::NotificationType notify)
 {
-    // 限制缩放范围：0.02~10.0（支持更长音频的完整显示）
-    zoomLevel_ = juce::jlimit(0.02, 10.0, zoom);
-    viewportState_.zoomLevel = zoomLevel_;
-    playheadOverlay_.setZoomLevel(zoomLevel_);
+    // Normalize pixelsPerSecond to valid range
+    camera.pixelsPerSecond = juce::jlimit(10.0, 1000.0, camera.pixelsPerSecond);
+
+    // Clamp to valid range
+    const double maxStart = computeMaxVisibleStartSeconds(camera.pixelsPerSecond);
+    camera.visibleStartSeconds = juce::jlimit(0.0, maxStart, camera.visibleStartSeconds);
+    camera_ = camera;
+
+    // Derive scroll for scrollbar
+    const int scrollPx = computeScrollOffsetPx();
+    horizontalScrollBar_.setCurrentRange(scrollPx, getVisibleViewportWidth(), juce::dontSendNotification);
+
+    if (notify == juce::sendNotification) {
+        userHasManuallyZoomed_ = true;
+    }
+
     resetPresentationClock(readPlayheadSeconds());
     updateScrollBars();
     ensureRenderBandCoversCurrentViewport(true);
     updateOverlayPresentation(readPlayheadSeconds());
-    FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
-    listeners_.call([zoom = zoomLevel_](Listener& l) { l.zoomLevelChanged(zoom); });
-}
 
-void ArrangementViewComponent::setScrollOffset(int pixels)
-{
-    const int visibleWidth = getVisibleViewportWidth();
-    const int maxScrollOffset = juce::jmax(0, getTotalContentWidth() - visibleWidth);
-    const int newOffset = juce::jlimit(0, maxScrollOffset, pixels);
-    if (newOffset == scrollOffset_)
-        return;
-
-    const int oldOffset = scrollOffset_;
-    scrollOffset_ = newOffset;
-    viewportState_.scrollOffsetPx = scrollOffset_;
-
-    horizontalScrollBar_.setCurrentRangeStart(scrollOffset_, juce::dontSendNotification);
-    updateContentSurfaceBounds();
-    updateRulerSurfaceBounds();
-
-    const auto dirtyArea = viewportState_.exposedStripForScrollDelta(oldOffset, newOffset);
-    const bool requiresFullRedraw = viewportState_.requiresFullRedrawForDelta(oldOffset, newOffset);
-    const bool rebuiltRenderBand = ensureRenderBandCoversCurrentViewport(false);
-    const bool requiresFullRepaint = requiresFullRedraw || rebuiltRenderBand;
-
-    if (requiresFullRepaint) {
-        FrameScheduler::instance().requestContentInvalidation(*this,
-                                                              getLocalBounds(),
-                                                              FrameScheduler::Priority::Interactive);
-    } else {
-        rulerSurface_.repaint();
-        contentSurface_.repaint();
-        FrameScheduler::instance().requestViewportShift(*this, dirtyArea);
+    // Notify listener if requested
+    if (notify == juce::sendNotification) {
+        listeners_.call([camera](Listener& l) { l.timelineViewportChanged(camera); });
     }
 
-    listeners_.call([newOffset](Listener& l) { l.horizontalScrollChanged(newOffset); });
+    repaint();
 }
 
 void ArrangementViewComponent::setVerticalScrollOffset(int offset)
@@ -238,20 +220,13 @@ void ArrangementViewComponent::fitToContent()
     }
 
     double maxEndTime = 0.0;
-    // 音频存储采样率为固定 44.1kHz，用于计算音频时长
-    constexpr double storedSampleRate = 44100.0;
-
-    for (int t = 0; t < OpenTuneAudioProcessor::MAX_TRACKS; ++t)
-    {
+    for (int t = 0; t < OpenTuneAudioProcessor::MAX_TRACKS; ++t) {
         const int placementCount = getStandalonePlacementCount(processor_, t);
-        for (int i = 0; i < placementCount; ++i)
-        {
+        for (int i = 0; i < placementCount; ++i) {
             StandaloneArrangement::Placement placement;
             if (!getStandalonePlacementByIndex(processor_, t, i, placement)) {
                 continue;
             }
-
-            juce::ignoreUnused(storedSampleRate);
             maxEndTime = juce::jmax(maxEndTime, placement.timelineEndSeconds());
         }
     }
@@ -263,11 +238,9 @@ void ArrangementViewComponent::fitToContent()
     int viewWidth = getWidth() - kArrangementContentStartX;
     int paddingPx = 12;
     int drawableWidth = juce::jmax(1, viewWidth - paddingPx);
-    double zoom = (static_cast<double>(drawableWidth) / maxEndTime) / 100.0;
-    // 限制缩放范围：0.02~10.0（支持自动缩放到更长音频）
-    zoom = juce::jlimit(0.02, 10.0, zoom);
-    setZoomLevel(zoom);
-    setScrollOffset(0);
+    const double pps = drawableWidth / maxEndTime;
+
+    setTimelineViewport({0.0, pps}, juce::sendNotification);
 }
 
 void ArrangementViewComponent::setExperimentalReferenceControlsEnabled(bool enabled)
@@ -302,10 +275,6 @@ void ArrangementViewComponent::resized()
     currentX -= (btnW + spacing);
     timeUnitToggleButton_.setBounds(currentX, 5, btnW, btnH);
 
-    // Sync viewport state dimensions
-    viewportState_.viewportWidthPx = getVisibleViewportWidth();
-    viewportState_.viewportHeightPx = getContentViewportBounds().getHeight();
-
     updateScrollBars();
     updateContentSurfaceBounds();
     updateRulerSurfaceBounds();
@@ -322,7 +291,9 @@ void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double
 {
     if (scrollBar == &horizontalScrollBar_)
     {
-        setScrollOffset(static_cast<int>(newRangeStart));
+        const double pps = camera_.pixelsPerSecond;
+        const double newVisibleStart = newRangeStart / pps;
+        setTimelineViewport({newVisibleStart, pps}, juce::sendNotification);
     }
     else if (scrollBar == &verticalScrollBar_)
     {
@@ -339,7 +310,7 @@ void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double
 int ArrangementViewComponent::getTotalContentWidth() const
 {
     return juce::jmax(contentMetrics_.totalContentWidthPx,
-                      viewportState_.timeToContentX(kArrangementDefaultSpanSeconds));
+                      makeViewMapper().timeToContentX(kArrangementDefaultSpanSeconds));
 }
 
 void ArrangementViewComponent::updateScrollBars()
@@ -348,7 +319,7 @@ void ArrangementViewComponent::updateScrollBars()
     const int visibleWidth = getVisibleViewportWidth();
 
     horizontalScrollBar_.setRangeLimits(0.0, totalContentWidth + visibleWidth, juce::dontSendNotification);
-    horizontalScrollBar_.setCurrentRange(scrollOffset_, visibleWidth, juce::dontSendNotification);
+    horizontalScrollBar_.setCurrentRange(computeScrollOffsetPx(), visibleWidth, juce::dontSendNotification);
 
     int totalTrackHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
     int visibleHeight = getHeight() - UIColors::scrollBarThickness;
@@ -359,12 +330,12 @@ void ArrangementViewComponent::updateScrollBars()
 int ArrangementViewComponent::getVisibleViewportWidth() const
 {
     return juce::jmax(1,
-                      getWidth() - UIColors::scrollBarThickness - viewportState_.contentStartX);
+                      getWidth() - UIColors::scrollBarThickness - kArrangementContentStartX);
 }
 
 juce::Rectangle<int> ArrangementViewComponent::getContentViewportBounds() const
 {
-    return { viewportState_.contentStartX,
+    return { kArrangementContentStartX,
              rulerHeight_,
              getVisibleViewportWidth(),
              juce::jmax(0, getHeight() - rulerHeight_ - UIColors::scrollBarThickness) };
@@ -384,7 +355,7 @@ double ArrangementViewComponent::getPinnedPlayheadViewportX() const
 double ArrangementViewComponent::getContinuousFollowTargetScroll(double displayPlayheadTime) const
 {
     const double contentX = static_cast<double>(absoluteTimeToContentX(displayPlayheadTime));
-    const double targetScroll = contentX - (getPinnedPlayheadViewportX() - viewportState_.contentStartX);
+    const double targetScroll = contentX - (getPinnedPlayheadViewportX() - kArrangementContentStartX);
     return juce::jmax(0.0, targetScroll);
 }
 
@@ -459,7 +430,7 @@ void ArrangementViewComponent::rebuildContentMetrics()
 
     contentMetrics_.revision = revision;
     contentMetrics_.maxEndTimeSeconds = maxEndTime;
-    contentMetrics_.totalContentWidthPx = viewportState_.timeToContentX(maxEndTime);
+    contentMetrics_.totalContentWidthPx = makeViewMapper().timeToContentX(maxEndTime);
 }
 
 bool ArrangementViewComponent::renderBandNeedsRebuild() const
@@ -468,7 +439,8 @@ bool ArrangementViewComponent::renderBandNeedsRebuild() const
         return true;
 
     const auto viewportBounds = getContentViewportBounds();
-    const int visibleStartContentX = scrollOffset_;
+    const int scrollPx = computeScrollOffsetPx();
+    const int visibleStartContentX = scrollPx;
     const int visibleEndContentX = visibleStartContentX + viewportBounds.getWidth();
     const int bandEndContentX = renderBand_.startContentX + renderBand_.widthPx;
     return renderBand_.revision != contentMetrics_.revision
@@ -489,7 +461,8 @@ bool ArrangementViewComponent::ensureRenderBandCoversCurrentViewport(bool forceR
     const auto viewportBounds = getContentViewportBounds();
     const int overscanPx = static_cast<int>(std::llround(viewportBounds.getWidth() * kArrangementRenderBandOverscanScreens));
     const int totalContentWidth = getTotalContentWidth();
-    int bandStartContentX = juce::jmax(0, scrollOffset_ - overscanPx);
+    const int scrollPx = computeScrollOffsetPx();
+    int bandStartContentX = juce::jmax(0, scrollPx - overscanPx);
     int bandWidthPx = viewportBounds.getWidth() + overscanPx * 2;
     if (bandStartContentX + bandWidthPx > totalContentWidth)
         bandStartContentX = juce::jmax(0, totalContentWidth - bandWidthPx);
@@ -498,8 +471,8 @@ bool ArrangementViewComponent::ensureRenderBandCoversCurrentViewport(bool forceR
     renderBand_.startContentX = bandStartContentX;
     renderBand_.widthPx = bandWidthPx;
     renderBand_.heightPx = viewportBounds.getHeight();
-    renderBand_.startSeconds = viewportState_.viewportXToTime(viewportState_.contentStartX, bandStartContentX);
-    renderBand_.endSeconds = viewportState_.viewportXToTime(viewportState_.contentStartX + bandWidthPx, bandStartContentX);
+    renderBand_.startSeconds = bandStartContentX / camera_.pixelsPerSecond;
+    renderBand_.endSeconds = (bandStartContentX + bandWidthPx) / camera_.pixelsPerSecond;
     renderBand_.revision = contentMetrics_.revision;
     renderBand_.valid = true;
 
@@ -526,7 +499,7 @@ void ArrangementViewComponent::rebuildContentSurface()
                                        true);
     juce::Graphics g(contentSurfaceImage_);
     drawGridLines(g);
-    drawPlacementClips(g, renderModelCache_.getModel(), viewportState_);
+    drawPlacementClips(g, renderModelCache_.getModel(), makeViewMapper());
     contentSurface_.setSurfaceImage(contentSurfaceImage_);
 }
 
@@ -537,7 +510,7 @@ void ArrangementViewComponent::updateContentSurfaceBounds()
     contentSurfaceBounds_ = viewportBounds;
     contentSurface_.setBounds(contentSurfaceBounds_);
     // Offset the pre-rendered image to compensate for scroll within the render band
-    contentSurface_.setImageOffsetX(renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0);
+    contentSurface_.setImageOffsetX(renderBand_.valid ? renderBand_.startContentX - computeScrollOffsetPx() : 0);
 }
 
 void ArrangementViewComponent::drawTimeRulerBackdrop(juce::Graphics& g)
@@ -589,15 +562,15 @@ void ArrangementViewComponent::rebuildRulerSurface()
     const int timeSigDenom = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
     const int surfaceWidth = renderBand_.valid ? renderBand_.widthPx : viewportBounds.getWidth();
     const double startSeconds = renderBand_.valid ? renderBand_.startSeconds
-                                                  : viewportState_.viewportXToTime(viewportState_.contentStartX, scrollOffset_);
+                                                   : camera_.visibleStartSeconds;
     const double endSeconds = renderBand_.valid ? renderBand_.endSeconds
-                                                : viewportState_.viewportXToTime(viewportState_.contentStartX + surfaceWidth, scrollOffset_);
-    const int startContentX = renderBand_.valid ? renderBand_.startContentX : scrollOffset_;
+                                                 : makeViewMapper().xToTime(kArrangementContentStartX + surfaceWidth);
+    const int startContentX = renderBand_.valid ? renderBand_.startContentX : computeScrollOffsetPx();
 
     if (rulerSurfaceState_.valid
         && rulerSurfaceState_.startContentX == startContentX
         && rulerSurfaceState_.widthPx == surfaceWidth
-        && rulerSurfaceState_.zoomLevel == zoomLevel_
+        && rulerSurfaceState_.pixelsPerSecond == camera_.pixelsPerSecond
         && rulerSurfaceState_.timeUnit == timeUnit_
         && rulerSurfaceState_.themeId == themeId
         && rulerSurfaceState_.bpm == bpm
@@ -625,7 +598,7 @@ void ArrangementViewComponent::rebuildRulerSurface()
 
     rulerSurfaceState_.startSeconds = startSeconds;
     rulerSurfaceState_.endSeconds = endSeconds;
-    rulerSurfaceState_.zoomLevel = zoomLevel_;
+    rulerSurfaceState_.pixelsPerSecond = camera_.pixelsPerSecond;
     rulerSurfaceState_.bpm = bpm;
     rulerSurfaceState_.startContentX = startContentX;
     rulerSurfaceState_.widthPx = surfaceWidth;
@@ -646,49 +619,41 @@ void ArrangementViewComponent::updateRulerSurfaceBounds()
                             viewportBounds.getWidth(), rulerHeight_ };
     rulerSurface_.setBounds(rulerSurfaceBounds_);
     // Offset the pre-rendered image to compensate for scroll within the render band
-    rulerSurface_.setImageOffsetX(renderBand_.valid ? renderBand_.startContentX - scrollOffset_ : 0);
+    rulerSurface_.setImageOffsetX(renderBand_.valid ? renderBand_.startContentX - computeScrollOffsetPx() : 0);
 }
 
 void ArrangementViewComponent::updateOverlayPresentation(double displayPlayheadTime)
 {
-    if (isPinnedContinuousFollowActive()) {
-        const double contentX = static_cast<double>(absoluteTimeToContentX(displayPlayheadTime));
-        const double pinnedOffset = getPinnedPlayheadViewportX() - viewportState_.contentStartX;
-        const double desiredScroll = contentX - pinnedOffset;
-        const int maxScroll = juce::jmax(0, getTotalContentWidth() - getVisibleViewportWidth());
+    const ViewMapper mapper = makeViewMapper();
+    const int playheadParentX = mapper.timeToX(displayPlayheadTime);
+    const bool visible = playheadParentX >= kArrangementContentStartX
+        && playheadParentX <= kArrangementContentStartX + mapper.contentWidth;
 
-        if (desiredScroll >= 0.0 && desiredScroll <= static_cast<double>(maxScroll)) {
-            playheadOverlay_.setPinnedViewportX(getPinnedPlayheadViewportX());
-        } else {
-            playheadOverlay_.clearPinnedViewportX();
-            playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
-        }
-    } else {
-        playheadOverlay_.clearPinnedViewportX();
-        playheadOverlay_.setScrollOffset(static_cast<double>(scrollOffset_));
-    }
-
-    playheadOverlay_.setPlayheadSeconds(displayPlayheadTime);
+    playheadOverlay_.setPresentation({
+        static_cast<double>(playheadParentX),
+        visible,
+        playheadColour_
+    });
 }
 
 int ArrangementViewComponent::absoluteTimeToContentX(double seconds) const
 {
-    return viewportState_.timeToContentX(seconds);
+    return makeViewMapper().timeToContentX(seconds);
 }
 
 int ArrangementViewComponent::absoluteTimeToViewportX(double seconds) const
 {
-    return viewportState_.timeToViewportX(seconds);
+    return makeViewMapper().timeToX(seconds);
 }
 
 int ArrangementViewComponent::absoluteTimeToViewportX(double seconds, double projectedScrollOffset) const
 {
-    return viewportState_.timeToViewportX(seconds, static_cast<int>(std::llround(projectedScrollOffset)));
+    return makeViewMapper().timeToXWithScroll(seconds, static_cast<int>(std::llround(projectedScrollOffset)));
 }
 
 double ArrangementViewComponent::viewportXToAbsoluteTime(int x) const
 {
-    return viewportState_.viewportXToTime(x);
+    return makeViewMapper().xToTime(x);
 }
 
 juce::Rectangle<int> ArrangementViewComponent::getTrackLaneBounds(int trackId) const
@@ -808,13 +773,9 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
 
 void ArrangementViewComponent::requestRenderModelUpdate()
 {
-    const auto viewportBounds = getContentViewportBounds();
-    viewportState_.viewportWidthPx = viewportBounds.getWidth();
-    viewportState_.viewportHeightPx = viewportBounds.getHeight();
-
     // Invoke render model cache update with current state
     renderModelCache_.update(processor_,
-                             viewportState_,
+                             makeViewMapper(),
                              selectedTrack_,
                              selectedPlacementIndex_,
                              [this](int trackId, uint64_t placementId) -> bool {
@@ -1101,7 +1062,7 @@ bool ArrangementViewComponent::runDebugSelfTest()
 
 void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
                                                     const ArrangementRenderModelCache::RenderModel& model,
-                                                    const TimelineViewportState& /*viewport*/)
+                                                    const ViewMapper& /*mapper*/)
 {
     const auto themeId = UIColors::currentThemeId();
 
@@ -1212,7 +1173,7 @@ void ArrangementViewComponent::drawPlacementClips(juce::Graphics& g,
 
         // Draw fade curves
         if (vp.fadeInDuration > 0.001 || vp.fadeOutDuration > 0.001) {
-            const double pixelsPerSec = 100.0 * zoomLevel_;
+            const double pixelsPerSec = camera_.pixelsPerSecond;
 
             if (vp.fadeInDuration > 0.001) {
                 const double fadePixels = vp.fadeInDuration * pixelsPerSec;
@@ -1395,14 +1356,14 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
     const int rulerWidth = g.getClipBounds().getWidth();
     const double startTime = renderBand_.valid
         ? renderBand_.startSeconds
-        : viewportState_.viewportXToTime(viewportState_.contentStartX, scrollOffset_);
+        : camera_.visibleStartSeconds;
     const double endTime = renderBand_.valid
         ? renderBand_.endSeconds
-        : viewportState_.viewportXToTime(viewportState_.contentStartX + rulerWidth, scrollOffset_);
+        : makeViewMapper().xToTime(kArrangementContentStartX + rulerWidth);
     const auto timeToRulerX = [this](double seconds) {
         return renderBand_.valid
-            ? absoluteTimeToContentX(seconds) - renderBand_.startContentX
-            : absoluteTimeToViewportX(seconds) - viewportState_.contentStartX;
+            ? makeViewMapper().timeToContentX(seconds) - renderBand_.startContentX
+            : makeViewMapper().timeToX(seconds) - kArrangementContentStartX;
     };
 
     // Switch between Seconds and Bars based on timeUnit_
@@ -1412,7 +1373,7 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
         if (bpm <= 0.0) bpm = 120.0;
         
         // Calculate pixels per beat
-        double pixelsPerSecond = 100.0 * zoomLevel_;
+        double pixelsPerSecond = camera_.pixelsPerSecond;
         double secondsPerBeat = 60.0 / bpm;
         double pixelsPerBeat = pixelsPerSecond * secondsPerBeat;
         
@@ -1462,7 +1423,7 @@ void ArrangementViewComponent::drawTimeRuler(juce::Graphics& g)
     else
     {
         // Seconds mode
-        double pixelsPerSecond = 100.0 * zoomLevel_;
+        double pixelsPerSecond = camera_.pixelsPerSecond;
         // double secondsPerPixel = 1.0 / pixelsPerSecond;
         
         double markerInterval = selectMarkerInterval(pixelsPerSecond);
@@ -1503,10 +1464,10 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
     };
     const auto bandStartTime = renderBand_.valid
         ? renderBand_.startSeconds
-        : viewportState_.viewportXToTime(viewportState_.contentStartX, scrollOffset_);
+        : camera_.visibleStartSeconds;
     const auto bandEndTime = renderBand_.valid
         ? renderBand_.endSeconds
-        : viewportState_.viewportXToTime(viewportState_.contentStartX + gridWidth, scrollOffset_);
+        : makeViewMapper().xToTime(kArrangementContentStartX + gridWidth);
 
     // Switch between Seconds and Bars based on timeUnit_ (match drawTimeRuler logic)
     if (timeUnit_ == TimeUnit::Bars)
@@ -1514,7 +1475,7 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
         double bpm = lastContextBpm_;
         if (bpm <= 0.0) bpm = 120.0;
         
-        double pixelsPerSecond = 100.0 * zoomLevel_;
+        double pixelsPerSecond = camera_.pixelsPerSecond;
         double secondsPerBeat = 60.0 / bpm;
         double pixelsPerBeat = pixelsPerSecond * secondsPerBeat;
         
@@ -1581,7 +1542,7 @@ void ArrangementViewComponent::drawGridLines(juce::Graphics& g)
     else
     {
         // Seconds mode
-        double pixelsPerSecond = 100.0 * zoomLevel_;
+        double pixelsPerSecond = camera_.pixelsPerSecond;
         // double secondsPerPixel = 1.0 / pixelsPerSecond;
         
         double markerInterval = selectMarkerInterval(pixelsPerSecond);
@@ -1622,9 +1583,6 @@ void ArrangementViewComponent::onHeartbeatTick()
         return;
 
     const bool playingNow = processor_.isPlaying();
-
-    // 同步播放状态到高性能播放头覆盖层
-    playheadOverlay_.setPlaying(playingNow);
 
     // 推理活跃时主动降频：波形后台构建改为低频小预算，减少消息线程竞争。
     bool progressed = false;
@@ -1675,9 +1633,10 @@ void ArrangementViewComponent::performPageScroll(double playheadTime)
     const int visibleW = getVisibleViewportWidth();
     const int absX = absoluteTimeToContentX(playheadTime);
     const int pageIndex = visibleW > 0 ? juce::jmax(0, absX / visibleW) : 0;
-    const int newScroll = pageIndex * visibleW;
-    if (newScroll != scrollOffset_)
-        setScrollOffset(newScroll);
+    const double newVisibleStart = static_cast<double>(pageIndex * visibleW) / camera_.pixelsPerSecond;
+    if (std::abs(newVisibleStart - camera_.visibleStartSeconds) > 0.001) {
+        setTimelineViewport({newVisibleStart, camera_.pixelsPerSecond}, juce::sendNotification);
+    }
 }
 
 void ArrangementViewComponent::updateAutoScroll()
@@ -1702,7 +1661,9 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
 
     if (scrollMode_ == ScrollMode::Continuous)
     {
-        setScrollOffset(static_cast<int>(std::llround(getContinuousFollowTargetScroll(displayPlayheadTime))));
+        const double targetScroll = getContinuousFollowTargetScroll(displayPlayheadTime);
+        const double newVisibleStart = targetScroll / camera_.pixelsPerSecond;
+        setTimelineViewport({newVisibleStart, camera_.pixelsPerSecond}, juce::sendNotification);
         updateOverlayPresentation(displayPlayheadTime);
         return;
     }
@@ -1858,22 +1819,29 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         }
     }
 
-    // Seek playhead (for clicks outside reference button area)
-    double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
-    processor_.setPosition(newPosSeconds);
-    syncPlayheadOverlayToAbsoluteTime(newPosSeconds, true);
-
-    if (e.y <= rulerHeight_)
+    // Clicked on placement body/edge/handle — do NOT seek playhead, only select/drag
+    if (hit.trackId >= 0)
     {
+        // Fall through to placement selection/drag logic below
+    }
+    else if (e.y <= rulerHeight_)
+    {
+        // Clicked on ruler — seek playhead and start drag
+        double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
+        processor_.setPosition(newPosSeconds);
+        syncPlayheadOverlayToAbsoluteTime(newPosSeconds, true);
         isDraggingPlayhead_ = true;
         dragStartPos_ = e.getPosition();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
-
-    // No placement hit — clear selection (unless mod key held)
-    if (hit.trackId < 0)
+    else
     {
+        // Clicked on empty area — seek playhead and clear selection
+        double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
+        processor_.setPosition(newPosSeconds);
+        syncPlayheadOverlayToAbsoluteTime(newPosSeconds, true);
+
         if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
         {
             clearPlacementSelection();
@@ -1882,6 +1850,8 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
+
+    // --- Placement hit: selection and drag logic (no playhead seek) ---
 
     const uint64_t hitPlacementId = processor_.getPlacementId(hit.trackId, hit.placementIndex);
 
@@ -2039,8 +2009,9 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     {
         auto delta = e.getPosition() - lastMousePos_;
         
-        // Horizontal Scroll
-        setScrollOffset(scrollOffset_ - delta.x);
+        // Horizontal Scroll — pan via camera
+        const double deltaTime = static_cast<double>(-delta.x) / camera_.pixelsPerSecond;
+        setTimelineViewport({camera_.visibleStartSeconds + deltaTime, camera_.pixelsPerSecond}, juce::sendNotification);
         
         // Vertical Scroll
         verticalScrollOffset_ -= delta.y;
@@ -2066,7 +2037,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     }
 
     if (currentDragOp_ == DragOperation::TrimLeft || currentDragOp_ == DragOperation::TrimRight) {
-        const double pixelsPerSec = 100.0 * zoomLevel_;
+        const double pixelsPerSec = camera_.pixelsPerSecond;
         const double deltaSeconds = static_cast<double>(e.x - dragStartPos_.x) / pixelsPerSec;
         const double bpm = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
         const SnapSettings snap = processor_.getSnapSettings();
@@ -2105,7 +2076,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     }
 
     if (currentDragOp_ == DragOperation::FadeIn || currentDragOp_ == DragOperation::FadeOut) {
-        const double pixelsPerSec = 100.0 * zoomLevel_;
+        const double pixelsPerSec = camera_.pixelsPerSecond;
         const double deltaSeconds = static_cast<double>(e.x - dragStartPos_.x) / pixelsPerSec;
 
         auto* arr = processor_.getStandaloneArrangement();
@@ -2292,6 +2263,9 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
                             }
                         }
                     }
+                    listeners_.call([this](Listener& l) {
+                        l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+                    });
                 }
             }
         }
@@ -2312,6 +2286,9 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
                 }
             } else if (isDraggedSignificantly) {
                 setStandalonePlacementStartSeconds(processor_, dragStartTrackId_, dragStartPlacementId_, currentStart);
+                listeners_.call([this](Listener& l) {
+                    l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+                });
             }
         }
     }
@@ -2398,18 +2375,14 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
         {
             double zoomFactor = 1.0 + wheel.deltaY * settings.horizontalZoomFactor * 1.7;
             zoomFactor = juce::jlimit(0.5, 1.5, zoomFactor);
-            double newZoom = juce::jlimit(0.02, 10.0, zoomLevel_ * zoomFactor);
+            const double oldPps = camera_.pixelsPerSecond;
+            const double newPps = juce::jlimit(10.0, 1000.0, oldPps * zoomFactor);
 
-            if (std::abs(newZoom - zoomLevel_) > 0.001)
+            if (std::abs(newPps - oldPps) > 0.001)
             {
                 double timeAtMouse = viewportXToAbsoluteTime(e.x);
-
-                setZoomLevel(newZoom);
-                userHasManuallyZoomed_ = true;
-
-                int newOffset = absoluteTimeToContentX(timeAtMouse) + kArrangementContentStartX - e.x;
-                setScrollOffset(newOffset);
-
+                const double newVisibleStart = timeAtMouse - (e.x - kArrangementContentStartX) / newPps;
+                setTimelineViewport({newVisibleStart, newPps}, juce::sendNotification);
                 FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
             }
         }
@@ -2421,7 +2394,8 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
     {
         if (wheel.deltaY != 0.0f)
         {
-            setScrollOffset(scrollOffset_ - static_cast<int>(wheel.deltaY * settings.scrollSpeed * 10.0f));
+            const double deltaTime = static_cast<double>(-wheel.deltaY * settings.scrollSpeed * 10.0f) / camera_.pixelsPerSecond;
+            setTimelineViewport({camera_.visibleStartSeconds + deltaTime, camera_.pixelsPerSecond}, juce::sendNotification);
         }
         return;
     }
@@ -2438,7 +2412,8 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
     // Horizontal Scroll via Touchpad/Mouse Horizontal Wheel
     if (wheel.deltaX != 0.0f)
     {
-        setScrollOffset(scrollOffset_ - static_cast<int>(wheel.deltaX * settings.scrollSpeed * 5.0f));
+        const double deltaTime = static_cast<double>(-wheel.deltaX * settings.scrollSpeed * 5.0f) / camera_.pixelsPerSecond;
+        setTimelineViewport({camera_.visibleStartSeconds + deltaTime, camera_.pixelsPerSecond}, juce::sendNotification);
     }
 }
 
@@ -2923,6 +2898,42 @@ void ArrangementViewComponent::setClipAnalysisInProgress(uint64_t placementId, b
         refreshRenderModel();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
     }
+}
+
+// ============================================================================
+// ViewMapper construction
+// ============================================================================
+
+ViewMapper ArrangementViewComponent::makeViewMapper() const noexcept
+{
+    const auto viewportBounds = getContentViewportBounds();
+    return ViewMapper{
+        camera_.visibleStartSeconds,
+        camera_.pixelsPerSecond,
+        kArrangementContentStartX,
+        viewportBounds.getWidth(),
+        viewportBounds.getHeight(),
+        1.0f,  // pixelsPerSemitone (not used in ArrangementView)
+        0.0f,  // verticalScrollOffset (not used in ArrangementView)
+        127.0f // maxMidi (not used in ArrangementView)
+    };
+}
+
+int ArrangementViewComponent::computeScrollOffsetPx() const noexcept
+{
+    return static_cast<int>(std::llround(camera_.visibleStartSeconds * camera_.pixelsPerSecond));
+}
+
+double ArrangementViewComponent::computeMaxTimelineEndSeconds() const noexcept
+{
+    return contentMetrics_.maxEndTimeSeconds;
+}
+
+double ArrangementViewComponent::computeMaxVisibleStartSeconds(double pps) const noexcept
+{
+    const int viewportWidth = getVisibleViewportWidth();
+    const double visibleDuration = viewportWidth / pps;
+    return juce::jmax(0.0, computeMaxTimelineEndSeconds() - visibleDuration);
 }
 
 } // namespace OpenTune

@@ -127,6 +127,7 @@ public:
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
                            int sampleRate);
     void onTimeGridRevisionChanged();
+    void onNotesRevisionChanged();
     void setPianoKeyAudition(PianoKeyAudition* audition) { pianoKeyAudition_ = audition; }
     int getPressedPianoKey() const { return pressedPianoKey_; }
 

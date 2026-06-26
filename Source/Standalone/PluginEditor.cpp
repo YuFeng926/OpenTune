@@ -1069,8 +1069,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             lastPianoRollBuffer_ = contentBuffer;
         } else if (currentNotesRevision != lastPianoRollNotesRevision_) {
             // Same content, fresh notes – typically GAME's async commit.
-            pianoRoll_.refreshEditedContentNotes();
-            pianoRoll_.requestContentRedraw();
+            pianoRoll_.onNotesRevisionChanged();
         }
         if (currentTimeGridRevision != lastPianoRollTimeGridRevision_) {
             pianoRoll_.onTimeGridRevisionChanged();

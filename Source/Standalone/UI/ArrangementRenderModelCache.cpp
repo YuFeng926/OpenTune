@@ -21,7 +21,7 @@ uint64_t hashCombine(uint64_t seed, uint64_t value) noexcept
 
 ArrangementRenderModelCache::Key
 ArrangementRenderModelCache::makeKey(OpenTuneAudioProcessor& processor,
-                                      const TimelineViewportState& viewport,
+                                      const ViewMapper& mapper,
                                       int selectedTrack,
                                       int selectedPlacementIndex,
                                       uint64_t hoveredPlacementId,
@@ -38,9 +38,9 @@ ArrangementRenderModelCache::makeKey(OpenTuneAudioProcessor& processor,
     key.bandTimeEndMs = timeToMs(bandEndSeconds);
     key.bandStartContentX = bandStartContentX;
     key.bandWidthPx = bandWidthPx;
-    key.viewportWidthPx = viewport.viewportWidthPx;
-    key.viewportHeightPx = viewport.viewportHeightPx;
-    key.zoomBucket = static_cast<int>(std::llround(viewport.zoomLevel * 100.0));
+    key.viewportWidthPx = mapper.contentWidth;
+    key.viewportHeightPx = mapper.contentHeight;
+    key.zoomBucket = static_cast<int>(std::llround(mapper.pixelsPerSecond));
     key.trackHeight = trackHeight;
     key.selectedTrack = selectedTrack;
     key.selectedPlacementIndex = selectedPlacementIndex;
@@ -100,7 +100,7 @@ ArrangementRenderModelCache::computeWaveformDrawableBounds(juce::Rectangle<int> 
 }
 
 juce::Path ArrangementRenderModelCache::buildWaveformPathForPlacement(const WaveformMipmap& mipmap,
-                                                                      const TimelineViewportState& viewport,
+                                                                      const ViewMapper& mapper,
                                                                       juce::Rectangle<int> placementBounds,
                                                                       double timelineStartSeconds,
                                                                       double durationSeconds,
@@ -115,7 +115,7 @@ juce::Path ArrangementRenderModelCache::buildWaveformPathForPlacement(const Wave
     if (waveformBounds.isEmpty())
         return path;
 
-    const int levelIndex = mipmap.selectBestLevelIndex(viewport.pixelsPerSecond());
+    const int levelIndex = mipmap.selectBestLevelIndex(mapper.pixelsPerSecond);
     const auto& level = mipmap.getLevel(levelIndex);
     if (level.peaks.empty())
         return path;
@@ -129,15 +129,15 @@ juce::Path ArrangementRenderModelCache::buildWaveformPathForPlacement(const Wave
     const float halfH = waveformBounds.getHeight() * 0.45f;
     const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[levelIndex];
     const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
-    const double visibleTimeStart = viewport.visibleTimeStart();
-    const double visibleTimeEnd = viewport.visibleTimeEnd();
+    const double visibleTimeStart = mapper.xToTime(0);
+    const double visibleTimeEnd = mapper.xToTime(mapper.contentWidth);
     const double timelineEndSeconds = timelineStartSeconds + durationSeconds;
     const double sourceEndSeconds = clipInSeconds + durationSeconds;
     if (timelineEndSeconds <= visibleTimeStart || timelineStartSeconds >= visibleTimeEnd)
         return path;
 
     for (int x = waveformBounds.getX(); x < waveformBounds.getRight(); ++x) {
-        const double timelineTime = viewport.viewportXToTime(x);
+        const double timelineTime = mapper.xToTime(x);
         if (timelineTime < visibleTimeStart || timelineTime >= visibleTimeEnd)
             continue;
 
@@ -153,7 +153,7 @@ juce::Path ArrangementRenderModelCache::buildWaveformPathForPlacement(const Wave
             continue;
 
         // Aggregate all peaks covered by this pixel
-        const double timelineTimeNext = viewport.viewportXToTime(x + 1);
+        const double timelineTimeNext = mapper.xToTime(x + 1);
         const double matTimeNext = clipInSeconds + (timelineTimeNext - timelineStartSeconds);
         int64_t idxStart = peakIndex;
         int64_t idxEnd = static_cast<int64_t>(matTimeNext / timePerPeak);
@@ -205,7 +205,7 @@ juce::Path ArrangementRenderModelCache::buildWaveformPathForPlacement(const Wave
 
 const ArrangementRenderModelCache::RenderModel&
 ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
-                                    const TimelineViewportState& viewport,
+                                    const ViewMapper& mapper,
                                     int selectedTrack,
                                     int selectedPlacementIndex,
                                     std::function<bool(int, uint64_t)> isPlacementSelected,
@@ -222,7 +222,7 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
                                     bool forceRebuild)
 {
     const auto nextKey = makeKey(processor,
-                                 viewport,
+                                 mapper,
                                  selectedTrack,
                                  selectedPlacementIndex,
                                  hoveredPlacementId,
@@ -246,7 +246,7 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
     model_.timeSigDenominator = processor.getTimeSigDenominator();
     model_.bandStartContentX = bandStartContentX;
     model_.bandWidthPx = bandWidthPx;
-    model_.viewportHeightPx = viewport.viewportHeightPx;
+    model_.viewportHeightPx = mapper.contentHeight;
 
     const auto* arrangement = processor.getStandaloneArrangement();
     if (arrangement == nullptr) {
@@ -290,8 +290,8 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
 
         auto laneBounds = juce::Rectangle<int>(0, displayTrackId * trackHeight, bandWidthPx, trackHeight);
         auto lane = laneBounds.reduced(kClipShellInsetX, kClipShellInsetY);
-        const int x1 = viewport.timeToContentX(timelineStartSeconds) - bandStartContentX;
-        const int x2 = viewport.timeToContentX(timelineEndSeconds) - bandStartContentX;
+        const int x1 = mapper.timeToContentX(timelineStartSeconds) - bandStartContentX;
+        const int x2 = mapper.timeToContentX(timelineEndSeconds) - bandStartContentX;
         const int width = juce::jmax(8, x2 - x1);
         juce::Rectangle<int> placementBounds{x1, lane.getY(), width, lane.getHeight()};
 
@@ -309,7 +309,7 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         vp.referencePlacementId = placement.referencePlacementId;
         vp.pixelBounds = placementBounds;
         vp.pixelArea = placementBounds.toFloat();
-        vp.contentBounds = juce::Rectangle<int>(viewport.timeToContentX(timelineStartSeconds),
+        vp.contentBounds = juce::Rectangle<int>(mapper.timeToContentX(timelineStartSeconds),
                                                 placementBounds.getY(),
                                                 width,
                                                 placementBounds.getHeight());
@@ -337,12 +337,9 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         if (audioBuffer != nullptr) {
             auto& mipmap = mipmapCache.getOrCreate(placement.contentKey);
             mipmap.setAudioSource(audioBuffer);
-            auto bandViewport = viewport;
-            bandViewport.scrollOffsetPx = bandStartContentX;
-            bandViewport.viewportWidthPx = bandWidthPx;
-            bandViewport.contentStartX = 0;
+            auto bandMapper = mapper.withBand(bandStartContentX, bandWidthPx, mapper.contentHeight);
             vp.waveformPath = buildWaveformPathForPlacement(mipmap,
-                                                            bandViewport,
+                                                            bandMapper,
                                                             placementBounds,
                                                             timelineStartSeconds,
                                                             placement.durationSeconds,
@@ -359,12 +356,12 @@ ArrangementRenderModelCache::update(OpenTuneAudioProcessor& processor,
         auto laneBounds = juce::Rectangle<int>(0, kTrackLaneTopOffset + trackId * trackHeight,
                                                    bandWidthPx, trackHeight);
 
-        if (laneBounds.getY() <= viewport.viewportHeightPx + kTrackLaneTopOffset) {
+        if (laneBounds.getY() <= mapper.contentHeight + kTrackLaneTopOffset) {
             RenderModel::VisibleLane lane;
             lane.trackId = trackId;
             lane.area = laneBounds.toFloat();
             lane.area.setX(0.0f);
-            lane.area.setWidth(static_cast<float>(viewport.viewportWidthPx));
+            lane.area.setWidth(static_cast<float>(mapper.contentWidth));
             lane.selected = trackId == selectedTrack;
             model_.lanes.push_back(lane);
         }
