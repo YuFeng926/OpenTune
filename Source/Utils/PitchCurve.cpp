@@ -8,22 +8,22 @@ namespace OpenTune {
 
 namespace {
 
-void insertSegmentSorted(std::vector<CorrectedSegment>& segments, CorrectedSegment&& seg)
+void insertSegmentSorted(std::vector<PitchCorrectionSegment>& segments, PitchCorrectionSegment&& seg)
 {
     auto insertPos = std::lower_bound(segments.begin(), segments.end(), seg.startFrame,
-        [](const CorrectedSegment& s, int frame) {
+        [](const PitchCorrectionSegment& s, int frame) {
             return s.startFrame < frame;
         });
     segments.insert(insertPos, std::move(seg));
 }
 
-void clearSegmentsInRangePreserveOutside(std::vector<CorrectedSegment>& segments, int startFrame, int endFrame)
+void clearSegmentsInRangePreserveOutside(std::vector<PitchCorrectionSegment>& segments, int startFrame, int endFrame)
 {
     if (startFrame >= endFrame) {
         return;
     }
 
-    std::vector<CorrectedSegment> kept;
+    std::vector<PitchCorrectionSegment> kept;
     kept.reserve(segments.size() + 1);
 
     for (const auto& seg : segments) {
@@ -33,7 +33,7 @@ void clearSegmentsInRangePreserveOutside(std::vector<CorrectedSegment>& segments
         }
 
         if (seg.startFrame < startFrame) {
-            CorrectedSegment left = seg;
+            PitchCorrectionSegment left = seg;
             left.endFrame = startFrame;
             const int leftLen = left.endFrame - left.startFrame;
             if (leftLen > 0 && leftLen <= static_cast<int>(seg.f0Data.size())) {
@@ -43,7 +43,7 @@ void clearSegmentsInRangePreserveOutside(std::vector<CorrectedSegment>& segments
         }
 
         if (seg.endFrame > endFrame) {
-            CorrectedSegment right = seg;
+            PitchCorrectionSegment right = seg;
             right.startFrame = endFrame;
             const int offset = right.startFrame - seg.startFrame;
             const int rightLen = right.endFrame - right.startFrame;
@@ -141,16 +141,16 @@ float noteBoundaryShiftSemitoneOffset(const std::vector<Note>& notes,
 } // namespace
 
 bool PitchCurveSnapshot::hasCorrectionInRange(int startFrame, int endFrame) const {
-    if (correctedSegments_.empty()) {
+    if (correctionSegments_.empty()) {
         return false;
     }
 
-    auto it = std::lower_bound(correctedSegments_.begin(), correctedSegments_.end(), startFrame,
-        [](const CorrectedSegment& seg, int frame) {
+    auto it = std::lower_bound(correctionSegments_.begin(), correctionSegments_.end(), startFrame,
+        [](const PitchCorrectionSegment& seg, int frame) {
             return seg.endFrame <= frame;
         });
 
-    while (it != correctedSegments_.end() && it->startFrame < endFrame) {
+    while (it != correctionSegments_.end() && it->startFrame < endFrame) {
         if (it->endFrame > startFrame) {
             return true;
         }
@@ -160,7 +160,7 @@ bool PitchCurveSnapshot::hasCorrectionInRange(int startFrame, int endFrame) cons
     return false;
 }
 
-void PitchCurveSnapshot::renderF0Range(int startFrame, int endFrame,
+void PitchCurveSnapshot::renderFinalF0Range(int startFrame, int endFrame,
                                        std::function<void(int, const float*, int)> callback) const {
     if (startFrame >= endFrame || startFrame < 0) {
         return;
@@ -174,14 +174,14 @@ void PitchCurveSnapshot::renderF0Range(int startFrame, int endFrame,
         return;
     }
 
-    auto it = std::lower_bound(correctedSegments_.begin(), correctedSegments_.end(), startFrame,
-        [](const CorrectedSegment& seg, int frame) {
+    auto it = std::lower_bound(correctionSegments_.begin(), correctionSegments_.end(), startFrame,
+        [](const PitchCorrectionSegment& seg, int frame) {
             return seg.endFrame <= frame;
         });
 
     int currentPos = startFrame;
     while (currentPos < endFrame) {
-        if (it != correctedSegments_.end() && it->startFrame < endFrame) {
+        if (it != correctionSegments_.end() && it->startFrame < endFrame) {
             if (currentPos < it->startFrame) {
                 int gapEnd = std::min(it->startFrame, endFrame);
                 int gapLength = gapEnd - currentPos;
@@ -218,7 +218,7 @@ void PitchCurveSnapshot::renderF0Range(int startFrame, int endFrame,
     }
 }
 
-void PitchCurveSnapshot::renderCorrectedOnlyRange(int startFrame, int endFrame,
+void PitchCurveSnapshot::renderCorrectionLayerF0Range(int startFrame, int endFrame,
                                                   std::function<void(int, const float*, int)> callback) const {
     if (startFrame >= endFrame || startFrame < 0) {
         return;
@@ -232,8 +232,8 @@ void PitchCurveSnapshot::renderCorrectedOnlyRange(int startFrame, int endFrame,
         return;
     }
 
-    auto it = std::lower_bound(correctedSegments_.begin(), correctedSegments_.end(), startFrame,
-        [](const CorrectedSegment& seg, int frame) {
+    auto it = std::lower_bound(correctionSegments_.begin(), correctionSegments_.end(), startFrame,
+        [](const PitchCorrectionSegment& seg, int frame) {
             return seg.endFrame <= frame;
         });
 
@@ -241,7 +241,7 @@ void PitchCurveSnapshot::renderCorrectedOnlyRange(int startFrame, int endFrame,
     std::vector<float> tempBuffer;
 
     while (currentPos < endFrame) {
-        if (it != correctedSegments_.end() && it->startFrame < endFrame) {
+        if (it != correctionSegments_.end() && it->startFrame < endFrame) {
             if (currentPos < it->startFrame) {
                 const int gapEnd = std::min(it->startFrame, endFrame);
                 const int gapLength = gapEnd - currentPos;
@@ -333,8 +333,8 @@ void PitchCurve::applyCorrectionToRange(
     const int calculationStartFrame = calculationRange.startFrame;
     const int calculationEndFrame = calculationRange.endFrameExclusive;
 
-    auto correctedSegments = oldSnapshot->getCorrectedSegments();
-    clearSegmentsInRangePreserveOutside(correctedSegments, calculationStartFrame, calculationEndFrame);
+    auto correctionSegments = oldSnapshot->getCorrectionSegments();
+    clearSegmentsInRangePreserveOutside(correctionSegments, calculationStartFrame, calculationEndFrame);
 
     struct NoteCorrectionInfo {
         float anchorPitch = 0.0f;
@@ -500,18 +500,18 @@ void PitchCurve::applyCorrectionToRange(
         }
     }
 
-    CorrectedSegment newSeg(calculationStartFrame, calculationEndFrame, correctedF0Buffer, CorrectedSegment::Source::NoteBased);
+    PitchCorrectionSegment newSeg(calculationStartFrame, calculationEndFrame, correctedF0Buffer, PitchCorrectionSegment::Source::NoteBased);
     newSeg.retuneSpeed = retuneSpeed;
     newSeg.vibratoDepth = vibratoDepth;
     newSeg.vibratoRate = vibratoRate;
 
-    insertSegmentSorted(correctedSegments, std::move(newSeg));
+    insertSegmentSorted(correctionSegments, std::move(newSeg));
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
         oldSnapshot->getOriginalF0(),
         oldSnapshot->getOriginalEnergy(),
-        std::move(correctedSegments),
+        std::move(correctionSegments),
         hopSize,
         sampleRate,
         newGen
@@ -520,23 +520,23 @@ void PitchCurve::applyCorrectionToRange(
 }
 
 void PitchCurve::setManualCorrectionRange(int startFrame, int endFrame, const std::vector<float>& f0Data,
-                                          CorrectedSegment::Source source) {
+                                          PitchCorrectionSegment::Source source) {
     if (startFrame >= endFrame || f0Data.empty()) {
         return;
     }
 
     auto oldSnapshot = getSnapshot();
-    auto correctedSegments = oldSnapshot->getCorrectedSegments();
+    auto correctionSegments = oldSnapshot->getCorrectionSegments();
     
-    CorrectedSegment newSeg(startFrame, endFrame, f0Data, source);
-    clearSegmentsInRangePreserveOutside(correctedSegments, startFrame, endFrame);
-    insertSegmentSorted(correctedSegments, std::move(newSeg));
+    PitchCorrectionSegment newSeg(startFrame, endFrame, f0Data, source);
+    clearSegmentsInRangePreserveOutside(correctionSegments, startFrame, endFrame);
+    insertSegmentSorted(correctionSegments, std::move(newSeg));
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
         oldSnapshot->getOriginalF0(),
         oldSnapshot->getOriginalEnergy(),
-        std::move(correctedSegments),
+        std::move(correctionSegments),
         oldSnapshot->getHopSize(),
         oldSnapshot->getSampleRate(),
         newGen
@@ -550,14 +550,14 @@ void PitchCurve::clearCorrectionRange(int startFrame, int endFrame) {
     }
 
     auto oldSnapshot = getSnapshot();
-    auto correctedSegments = oldSnapshot->getCorrectedSegments();
-    clearSegmentsInRangePreserveOutside(correctedSegments, startFrame, endFrame);
+    auto correctionSegments = oldSnapshot->getCorrectionSegments();
+    clearSegmentsInRangePreserveOutside(correctionSegments, startFrame, endFrame);
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
         oldSnapshot->getOriginalF0(),
         oldSnapshot->getOriginalEnergy(),
-        std::move(correctedSegments),
+        std::move(correctionSegments),
         oldSnapshot->getHopSize(),
         oldSnapshot->getSampleRate(),
         newGen

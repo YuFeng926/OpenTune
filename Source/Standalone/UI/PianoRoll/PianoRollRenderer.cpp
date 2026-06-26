@@ -1368,14 +1368,14 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     }
 
     // Draw corrected F0 segments
-    if (ctx.showCorrectedF0 && item.pitchSnapshot->hasAnyCorrection()) {
+    if (ctx.showCorrectedF0 && item.pitchSnapshot->hasCorrectionLayer()) {
         const float alpha = 0.85f;
 
         if (useDecimation) {
             // Per-pixel decimation for corrected F0
             std::map<int, std::pair<float, float>> buckets;
 
-            item.pitchSnapshot->renderCorrectedOnlyRange(
+            item.pitchSnapshot->renderCorrectionLayerF0Range(
                 visibleStartFrame, visibleEndFrame,
                 [&](int frame, const float* data, int length) {
                     for (int i = 0; i < length; ++i) {
@@ -1415,7 +1415,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             juce::Path correctedPath;
             bool pathStarted = false;
 
-            item.pitchSnapshot->renderCorrectedOnlyRange(
+            item.pitchSnapshot->renderCorrectionLayerF0Range(
                 visibleStartFrame, visibleEndFrame,
                 [&](int frame, const float* data, int length) {
                     for (int i = 0; i < length; ++i) {

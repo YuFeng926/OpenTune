@@ -13,7 +13,7 @@
 
 namespace OpenTune {
 
-struct CorrectedSegment {
+struct PitchCorrectionSegment {
     int startFrame;
     int endFrame;
     std::vector<float> f0Data;
@@ -30,8 +30,8 @@ struct CorrectedSegment {
     float vibratoDepth = -1.0f;
     float vibratoRate = -1.0f;
 
-    CorrectedSegment() = default;
-    CorrectedSegment(int start, int end, const std::vector<float>& data, Source src = Source::None)
+    PitchCorrectionSegment() = default;
+    PitchCorrectionSegment(int start, int end, const std::vector<float>& data, Source src = Source::None)
         : startFrame(start), endFrame(end), f0Data(data), source(src) {}
 };
 
@@ -40,13 +40,13 @@ public:
     PitchCurveSnapshot(
         std::vector<float> originalF0,
         std::vector<float> originalEnergy,
-        std::vector<CorrectedSegment> correctedSegments,
+        std::vector<PitchCorrectionSegment> correctionSegments,
         int hopSize,
         double sampleRate,
         uint64_t renderGeneration = 0)
         : originalF0_(std::move(originalF0))
         , originalEnergy_(std::move(originalEnergy))
-        , correctedSegments_(std::move(correctedSegments))
+        , correctionSegments_(std::move(correctionSegments))
         , hopSize_(hopSize)
         , sampleRate_(sampleRate)
         , renderGeneration_(renderGeneration)
@@ -54,7 +54,7 @@ public:
 
     const std::vector<float>& getOriginalF0() const { return originalF0_; }
     const std::vector<float>& getOriginalEnergy() const { return originalEnergy_; }
-    const std::vector<CorrectedSegment>& getCorrectedSegments() const { return correctedSegments_; }
+    const std::vector<PitchCorrectionSegment>& getCorrectionSegments() const { return correctionSegments_; }
     int getHopSize() const { return hopSize_; }
     double getSampleRate() const { return sampleRate_; }
 
@@ -63,22 +63,22 @@ public:
 
     uint64_t getRenderGeneration() const { return renderGeneration_; }
 
-    bool hasAnyCorrection() const { return !correctedSegments_.empty(); }
+    bool hasCorrectionLayer() const { return !correctionSegments_.empty(); }
 
     bool hasCorrectionInRange(int startFrame, int endFrame) const;
 
-    void renderF0Range(int startFrame, int endFrame,
-                       std::function<void(int, const float*, int)> callback) const;
+    void renderFinalF0Range(int startFrame, int endFrame,
+                        std::function<void(int, const float*, int)> callback) const;
 
-    void renderCorrectedOnlyRange(int startFrame, int endFrame,
+    void renderCorrectionLayerF0Range(int startFrame, int endFrame,
                                   std::function<void(int, const float*, int)> callback) const;
 
-    bool hasRenderableCorrectedF0() const { return !correctedSegments_.empty(); }
+    bool hasFinalF0Data() const { return !originalF0_.empty(); }
 
 private:
     const std::vector<float> originalF0_;
     const std::vector<float> originalEnergy_;
-    const std::vector<CorrectedSegment> correctedSegments_;
+    const std::vector<PitchCorrectionSegment> correctionSegments_;
     const int hopSize_;
     const double sampleRate_;
     const uint64_t renderGeneration_;
@@ -87,19 +87,13 @@ private:
 class PitchCurve {
 public:
     PitchCurve() : snapshot_(std::make_shared<const PitchCurveSnapshot>(
-        std::vector<float>(), std::vector<float>(), std::vector<CorrectedSegment>(), 512, 16000.0)) {}
+        std::vector<float>(), std::vector<float>(), std::vector<PitchCorrectionSegment>(), 512, 16000.0)) {}
     ~PitchCurve() = default;
 
     std::shared_ptr<const PitchCurveSnapshot> getSnapshot() const {
         return std::atomic_load(&snapshot_);
     }
 
-    // Convenience forwarding methods (delegate to snapshot)
-    // Note: These methods call getSnapshot() once per call, so for consistency
-    // across multiple fields, callers should capture a snapshot explicitly:
-    //   auto snap = curve->getSnapshot();
-    //   auto& f0 = snap->getOriginalF0();
-    //   auto hop = snap->getHopSize();
     bool isEmpty() const { return getSnapshot()->isEmpty(); }
     size_t size() const { return getSnapshot()->size(); }
     int getHopSize() const { return getSnapshot()->getHopSize(); }
@@ -107,15 +101,15 @@ public:
     bool hasCorrectionInRange(int startFrame, int endFrame) const {
         return getSnapshot()->hasCorrectionInRange(startFrame, endFrame);
     }
-    bool hasAnyCorrection() const { return getSnapshot()->hasAnyCorrection(); }
-    bool hasRenderableCorrectedF0() const { return getSnapshot()->hasRenderableCorrectedF0(); }
-    void renderCorrectedOnlyRange(int startFrame, int endFrame,
+    bool hasCorrectionLayer() const { return getSnapshot()->hasCorrectionLayer(); }
+    bool hasFinalF0Data() const { return getSnapshot()->hasFinalF0Data(); }
+    void renderCorrectionLayerF0Range(int startFrame, int endFrame,
                                   std::function<void(int, const float*, int)> callback) const {
-        getSnapshot()->renderCorrectedOnlyRange(startFrame, endFrame, callback);
+        getSnapshot()->renderCorrectionLayerF0Range(startFrame, endFrame, callback);
     }
-    void renderF0Range(int startFrame, int endFrame,
+    void renderFinalF0Range(int startFrame, int endFrame,
                        std::function<void(int, const float*, int)> callback) const {
-        getSnapshot()->renderF0Range(startFrame, endFrame, callback);
+        getSnapshot()->renderFinalF0Range(startFrame, endFrame, callback);
     }
 
     void setOriginalF0(const std::vector<float>& f0) {
@@ -125,7 +119,7 @@ public:
             oldSnapshot->getOriginalEnergy().size() != f0.size() 
                 ? std::vector<float>(f0.size(), 0.0f) 
                 : oldSnapshot->getOriginalEnergy(),
-            oldSnapshot->getCorrectedSegments(),
+            oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
             oldSnapshot->getRenderGeneration()
@@ -146,7 +140,7 @@ public:
                 : energy.size() > oldSnapshot->getOriginalF0().size()
                     ? std::vector<float>(energy.begin(), energy.begin() + oldSnapshot->getOriginalF0().size())
                     : energy,
-            oldSnapshot->getCorrectedSegments(),
+            oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
             oldSnapshot->getRenderGeneration()
@@ -174,7 +168,7 @@ public:
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             std::move(originalF0),
             std::move(originalEnergy),
-            oldSnapshot->getCorrectedSegments(),
+            oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
             oldSnapshot->getRenderGeneration()
@@ -202,7 +196,7 @@ public:
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             std::move(originalF0),
             std::move(originalEnergy),
-            oldSnapshot->getCorrectedSegments(),
+            oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
             oldSnapshot->getRenderGeneration()
@@ -222,7 +216,7 @@ public:
     static F0FrameRange expandNoteBasedCorrectionRange(int startFrame, int endFrameExclusive, int frameCount) noexcept;
 
     void setManualCorrectionRange(int startFrame, int endFrame, const std::vector<float>& f0Data,
-                                   CorrectedSegment::Source source);
+                                   PitchCorrectionSegment::Source source);
 
     void clearCorrectionRange(int startFrame, int endFrame);
 
@@ -232,7 +226,7 @@ public:
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             oldSnapshot->getOriginalF0(),
             oldSnapshot->getOriginalEnergy(),
-            std::vector<CorrectedSegment>(),
+            std::vector<PitchCorrectionSegment>(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
             newGen
@@ -240,11 +234,11 @@ public:
         std::atomic_store(&snapshot_, newSnapshot);
     }
 
-    void replaceCorrectedSegments(const std::vector<CorrectedSegment>& segments) {
+    void replaceCorrectionSegments(const std::vector<PitchCorrectionSegment>& segments) {
         auto oldSnapshot = getSnapshot();
         auto normalized = segments;
         std::sort(normalized.begin(), normalized.end(),
-            [](const CorrectedSegment& a, const CorrectedSegment& b) {
+            [](const PitchCorrectionSegment& a, const PitchCorrectionSegment& b) {
                 return a.startFrame < b.startFrame;
             });
 
@@ -260,13 +254,13 @@ public:
         std::atomic_store(&snapshot_, newSnapshot);
     }
 
-    void restoreCorrectedSegment(const CorrectedSegment& segment) {
+    void restoreCorrectionSegment(const PitchCorrectionSegment& segment) {
         auto oldSnapshot = getSnapshot();
-        auto segments = oldSnapshot->getCorrectedSegments();
+        auto segments = oldSnapshot->getCorrectionSegments();
         
         segments.erase(
             std::remove_if(segments.begin(), segments.end(),
-                [&](const CorrectedSegment& s) {
+                [&](const PitchCorrectionSegment& s) {
                     return s.endFrame > segment.startFrame && s.startFrame < segment.endFrame;
                 }),
             segments.end()
@@ -275,7 +269,7 @@ public:
         segments.push_back(segment);
         
         std::sort(segments.begin(), segments.end(),
-            [](const CorrectedSegment& a, const CorrectedSegment& b) {
+            [](const PitchCorrectionSegment& a, const PitchCorrectionSegment& b) {
                 return a.startFrame < b.startFrame;
             });
         
@@ -296,7 +290,7 @@ public:
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             std::vector<float>(),
             std::vector<float>(),
-            std::vector<CorrectedSegment>(),
+            std::vector<PitchCorrectionSegment>(),
             512,
             16000.0,
             newGen
@@ -309,7 +303,7 @@ public:
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             oldSnapshot->getOriginalF0(),
             oldSnapshot->getOriginalEnergy(),
-            oldSnapshot->getCorrectedSegments(),
+            oldSnapshot->getCorrectionSegments(),
             hopSize,
             oldSnapshot->getSampleRate(),
             oldSnapshot->getRenderGeneration()
@@ -322,7 +316,7 @@ public:
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             oldSnapshot->getOriginalF0(),
             oldSnapshot->getOriginalEnergy(),
-            oldSnapshot->getCorrectedSegments(),
+            oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             sampleRate,
             oldSnapshot->getRenderGeneration()
@@ -338,12 +332,12 @@ public:
         copiedCurve->setOriginalF0(snapshot->getOriginalF0());
         copiedCurve->setOriginalEnergy(snapshot->getOriginalEnergy());
 
-        std::vector<CorrectedSegment> segments;
-        segments.reserve(snapshot->getCorrectedSegments().size());
-        for (const auto& segment : snapshot->getCorrectedSegments()) {
+        std::vector<PitchCorrectionSegment> segments;
+        segments.reserve(snapshot->getCorrectionSegments().size());
+        for (const auto& segment : snapshot->getCorrectionSegments()) {
             segments.push_back(segment);
         }
-        copiedCurve->replaceCorrectedSegments(segments);
+        copiedCurve->replaceCorrectionSegments(segments);
         return copiedCurve;
     }
 

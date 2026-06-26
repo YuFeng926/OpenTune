@@ -91,7 +91,7 @@ void fillF0GapsForVocoder(
             const int queryEndFrame = static_cast<int>(std::floor(frameStartTimeSec * f0FrameRate));
 
             std::vector<float> prevF0(static_cast<size_t>(queryEndFrame - queryStartFrame), 0.0f);
-            snap->renderF0Range(queryStartFrame, queryEndFrame,
+            snap->renderFinalF0Range(queryStartFrame, queryEndFrame,
                 [&prevF0, queryStartFrame](int frameIndex, const float* data, int length) {
                     if (!data || length <= 0) return;
                     const int offset = frameIndex - queryStartFrame;
@@ -146,7 +146,7 @@ void fillF0GapsForVocoder(
             const int queryEndFrame = queryStartFrame + lookaheadF0Frames;
 
             std::vector<float> nextF0(static_cast<size_t>(queryEndFrame - queryStartFrame), 0.0f);
-            snap->renderF0Range(queryStartFrame, queryEndFrame,
+            snap->renderFinalF0Range(queryStartFrame, queryEndFrame,
                 [&nextF0, queryStartFrame](int frameIndex, const float* data, int length) {
                     if (!data || length <= 0) return;
                     const int offset = frameIndex - queryStartFrame;
@@ -438,7 +438,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const double hopDuration = static_cast<double>(boundaries.hopSize) / RenderCache::kSampleRate;
 
     auto snap = pitchCurve->getSnapshot();
-    if (!snap->hasRenderableCorrectedF0())
+    if (!snap->hasFinalF0Data())
     {
         coreJob.renderCache->markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);
         return;
@@ -458,7 +458,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
 
     sourceF0.assign(static_cast<size_t>(numF0Frames), 0.0f);
-    snap->renderF0Range(f0StartFrame, f0EndFrame,
+    snap->renderFinalF0Range(f0StartFrame, f0EndFrame,
         [&sourceF0, f0StartFrame](int frameIndex, const float* data, int length)
         {
             if (!data || length <= 0)

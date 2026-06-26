@@ -33,7 +33,7 @@ struct ReferenceAlignmentRequest {
     ReferenceFeatureSet targetFeatures;
     ReferenceFeatureSet referenceFeatures;
     std::vector<Note> targetNotesBefore;
-    std::vector<CorrectedSegment> targetSegmentsBefore;
+    std::vector<PitchCorrectionSegment> targetSegmentsBefore;
     std::shared_ptr<const TimeGridSnapshot> targetTimeGridBefore;
     double overlapStartTimelineSeconds{0.0};
     double overlapEndTimelineSeconds{0.0};
@@ -57,7 +57,7 @@ struct AlignmentPatch {
     int affectedStartFrame{0};
     int affectedEndFrame{0};
     std::vector<Note> notesAfter;
-    std::vector<CorrectedSegment> correctedSegmentsAfter;
+    std::vector<PitchCorrectionSegment> correctionSegmentsAfter;
     std::vector<TimeGridIntent> timingIntents;
     bool pitchChanged{false};
     bool timingChanged{false};

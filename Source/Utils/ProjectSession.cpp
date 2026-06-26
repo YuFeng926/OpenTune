@@ -15,7 +15,7 @@
 namespace OpenTune {
 
 // ============================================================================
-// 构造 / 析构
+// 构�?/ 析构
 // ============================================================================
 
 ProjectSession::ProjectSession(OpenTuneAudioProcessor& processor, AppPreferences& appPreferences)
@@ -48,7 +48,7 @@ juce::String ProjectSession::getProjectName() const
 }
 
 // ============================================================================
-// 脏状态
+// 脏状�?
 // ============================================================================
 
 bool ProjectSession::isDirty() const noexcept { return dirty_; }
@@ -72,7 +72,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
     snap.header.appVersion = "1.5.0";
     snap.header.projectName = getProjectName();
 
-    // 工程身份固化：首次保存时生成，后续保存复用
+    // 工程身份固化：首次保存时生成，后续保存复�?
     if (cachedProjectId_.isEmpty()) {
         cachedProjectId_ = ProjectSnapshot::generateProjectId();
         cachedCreatedAt_ = ProjectSnapshot::generateTimestamp();
@@ -88,7 +88,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
 
     // All three stores are essential for a valid snapshot
     if (!sourceStore || !contentRepo || !arrangement) {
-        AppLogger::error("ProjectSession: Cannot capture snapshot — one or more core stores are unavailable");
+        AppLogger::error("ProjectSession: Cannot capture snapshot �?one or more core stores are unavailable");
         return ProjectSnapshot{};  // Empty snapshot
     }
 
@@ -115,7 +115,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         snap.sources.push_back(entry);
     }
 
-    // Clips (from StandaloneContentRepository) — collect all ContentKeys referenced by placements
+    // Clips (from StandaloneContentRepository) �?collect all ContentKeys referenced by placements
     std::set<ContentKey> activeContentKeys;
     int numTracks = arrangement->getNumTracks();
     for (int trackId = 0; trackId < numTracks; ++trackId) {
@@ -148,7 +148,7 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
         // Extract corrected segments from pitch curve
         if (payload.pitchCurve) {
             auto pcSnap = payload.pitchCurve->getSnapshot();
-            const auto& segments = pcSnap->getCorrectedSegments();
+            const auto& segments = pcSnap->getCorrectionSegments();
             for (const auto& seg : segments) {
                 ProjectContentEntry::SegmentEntry segEntry;
                 segEntry.startFrame = seg.startFrame;
@@ -157,9 +157,9 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
                 segEntry.retuneSpeed = seg.retuneSpeed;
                 segEntry.vibratoDepth = seg.vibratoDepth;
                 segEntry.vibratoRate = seg.vibratoRate;
-                // Always serialize f0Data — HandDraw/LineAnchor segments rely on it
+                // Always serialize f0Data �?HandDraw/LineAnchor segments rely on it
                 segEntry.f0Data = seg.f0Data;
-                entry.correctedSegments.push_back(segEntry);
+                entry.correctionSegments.push_back(segEntry);
             }
         }
 
@@ -342,14 +342,14 @@ static std::shared_ptr<const juce::AudioBuffer<float>> rebuildStandaloneClipAudi
 
 Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
 {
-    // 清空当前状态
+    // 清空当前状�?
     auto* sourceStore = processorRef_.getSourceStore();
     auto* contentRepo = processorRef_.getStandaloneContentRepository();
     auto* arrangement = processorRef_.getStandaloneArrangement();
 
     // All three stores are essential for applying a snapshot
     if (!sourceStore || !contentRepo || !arrangement) {
-        AppLogger::error("ProjectSession: Cannot apply snapshot — one or more core stores are unavailable");
+        AppLogger::error("ProjectSession: Cannot apply snapshot �?one or more core stores are unavailable");
         return Result<void>::failure(
             Error::fromCode(ErrorCode::InvalidParameter,
                 "Cannot apply snapshot: core stores unavailable"));
@@ -361,19 +361,19 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
 
     processorRef_.getUndoManager().clear();
 
-    // 获取工程文件所在目录（用于解析相对路径）
+    // 获取工程文件所在目录（用于解析相对路径�?
     const auto projectDir = currentProjectFile_.getParentDirectory();
 
     // 1. 重建 Sources
     for (const auto& srcEntry : snapshot.sources) {
         juce::File audioFile;
 
-        // 优先从相对路径加载
+        // 优先从相对路径加�?
         if (srcEntry.relativeMediaPath.isNotEmpty() && projectDir != juce::File{}) {
             audioFile = projectDir.getChildFile(srcEntry.relativeMediaPath);
         }
 
-        // 回退到原始路径
+        // 回退到原始路�?
         if (!audioFile.existsAsFile() && srcEntry.originalImportPath.isNotEmpty()) {
             audioFile = juce::File(srcEntry.originalImportPath);
         }
@@ -452,13 +452,13 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         // 应用 detectedKey
         clip->applyDetectedKey(contentEntry.detectedKey);
 
-        // 恢复 pitch curve 和 corrected segments
+        // 恢复 pitch curve �?corrected segments
         auto pitchCurve = std::make_shared<PitchCurve>();
-        for (const auto& seg : contentEntry.correctedSegments) {
+        for (const auto& seg : contentEntry.correctionSegments) {
             if (!seg.f0Data.empty()) {
                 pitchCurve->setManualCorrectionRange(
                     seg.startFrame, seg.endFrame, seg.f0Data,
-                    static_cast<CorrectedSegment::Source>(seg.source));
+                    static_cast<PitchCorrectionSegment::Source>(seg.source));
             }
         }
         clip->applyPitchCurve(pitchCurve);
@@ -489,7 +489,7 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         pitchShift.cents = contentEntry.pitchShiftSettings.cents;
         clip->applyPitchShiftSettings(pitchShift);
 
-        // 恢复 Silent gaps（直接写入 payload，因为 silentGaps 是分析结果）
+        // 恢复 Silent gaps（直接写�?payload，因�?silentGaps 是分析结果）
         auto& payloadRef = clip->payload();
         payloadRef.silentGaps.clear();
         for (const auto& gapEntry : contentEntry.silentGaps) {
@@ -556,7 +556,7 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
 
     arrangement->setActiveTrack(snapshot.settings.selectedTrackId);
 
-    // Restore reference bindings (不触发 analysis)
+    // Restore reference bindings (不触�?analysis)
     bool anyBindingLost = false;
     for (const auto& binding : snapshot.referenceBindings) {
         // Find which track the target placement is on
@@ -590,7 +590,7 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         }
     }
     if (anyBindingLost) {
-        markDirty(); // 工程损坏：部分 reference binding 无法恢复
+        markDirty(); // 工程损坏：部�?reference binding 无法恢复
     }
 
     // 恢复工程设置
@@ -659,7 +659,7 @@ Result<void> ProjectSession::openProject(const juce::File& file)
         return applyResult;
     }
 
-    // 恢复持久化工程身份
+    // 恢复持久化工程身�?
     cachedProjectId_ = snapshot.header.projectId;
     cachedCreatedAt_ = snapshot.header.createdAt;
 
@@ -831,7 +831,7 @@ Result<void> ProjectSession::copyMediaToProjectDirectory(ProjectSnapshot& snapsh
 }
 
 // ============================================================================
-// 最近工程管理
+// 最近工程管�?
 // ============================================================================
 
 void ProjectSession::pushRecentProject(const juce::File& file)

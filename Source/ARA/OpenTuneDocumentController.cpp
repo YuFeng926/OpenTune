@@ -117,9 +117,9 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         editable->addChildElement(n);
     }
 
-    for (const auto& seg : mod.content.editable.correctedSegments)
+    for (const auto& seg : mod.content.editable.correctionSegments)
     {
-        auto* s = new juce::XmlElement("CorrectedSegment");
+        auto* s = new juce::XmlElement("PitchCorrectionSegment");
         s->setAttribute("startFrame", seg.startFrame);
         s->setAttribute("endFrame", seg.endFrame);
         s->setAttribute("source", static_cast<int>(seg.source));
@@ -312,16 +312,16 @@ AudioModificationContentState restoreAudioModificationContent(const juce::XmlEle
             content.editable.notes.push_back(note);
         }
 
-        for (auto* s : editable->getChildWithTagNameIterator("CorrectedSegment"))
+        for (auto* s : editable->getChildWithTagNameIterator("PitchCorrectionSegment"))
         {
-            CorrectedSegment seg;
+            PitchCorrectionSegment seg;
             seg.startFrame = s->getIntAttribute("startFrame");
             seg.endFrame = s->getIntAttribute("endFrame");
-            seg.source = static_cast<CorrectedSegment::Source>(s->getIntAttribute("source"));
+            seg.source = static_cast<PitchCorrectionSegment::Source>(s->getIntAttribute("source"));
             seg.retuneSpeed = static_cast<float>(s->getDoubleAttribute("retuneSpeed"));
             seg.vibratoDepth = static_cast<float>(s->getDoubleAttribute("vibratoDepth"));
             seg.vibratoRate = static_cast<float>(s->getDoubleAttribute("vibratoRate"));
-            content.editable.correctedSegments.push_back(seg);
+            content.editable.correctionSegments.push_back(seg);
         }
 
         if (auto* ps = editable->getChildByName("PitchShiftSettings"))
@@ -1620,7 +1620,7 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snaps
     snap->audioSampleRate = 0.0;
     snap->sourceWindow = mod->content.sourceWindow;
     snap->notes = mod->content.editable.notes;
-    snap->correctedSegments = mod->content.editable.correctedSegments;
+    snap->correctionSegments = mod->content.editable.correctionSegments;
     snap->pitchCurve = mod->content.analysis.pitchCurve;
     snap->timeGrid = mod->content.editable.timeGrid;
     snap->pitchShiftSettings = mod->content.editable.pitchShiftSettings;

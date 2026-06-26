@@ -602,7 +602,7 @@ public:
     bool replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes);
     bool commitContentNotesAndSegments(ContentKey key,
                                         std::vector<Note> notes,
-                                        std::vector<CorrectedSegment> segments,
+                                        std::vector<PitchCorrectionSegment> segments,
                                         ContentEditRangeFrames affectedRange);
     bool commitContentNotePatch(ContentKey key, ContentNoteRangePatch patch);
     bool setContentPitchCurve(ContentKey key,

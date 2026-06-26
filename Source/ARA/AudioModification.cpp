@@ -72,7 +72,7 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
 
     // modification-scoped state
     snap->notes = content.editable.notes;
-    snap->correctedSegments = content.editable.correctedSegments;
+    snap->correctionSegments = content.editable.correctionSegments;
     snap->pitchCurve = content.analysis.pitchCurve;
     snap->timeGrid = content.editable.timeGrid;
     snap->pitchShiftSettings = content.editable.pitchShiftSettings;

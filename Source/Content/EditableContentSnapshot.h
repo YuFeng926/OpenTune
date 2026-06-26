@@ -29,7 +29,7 @@ struct EditableContentSnapshot
     int64_t sourceSampleCount{0};
 
     std::vector<Note> notes;
-    std::vector<CorrectedSegment> correctedSegments;
+    std::vector<PitchCorrectionSegment> correctionSegments;
     std::shared_ptr<PitchCurve> pitchCurve;
     std::shared_ptr<const TimeGridSnapshot> timeGrid;
     PitchShiftSettings pitchShiftSettings;

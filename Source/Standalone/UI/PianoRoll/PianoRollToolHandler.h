@@ -33,7 +33,7 @@ public:
         int startFrame = 0;
         int endFrameExclusive = 0;
         std::vector<float> f0Data;
-        CorrectedSegment::Source source = CorrectedSegment::Source::HandDraw;
+        PitchCorrectionSegment::Source source = PitchCorrectionSegment::Source::HandDraw;
     };
 
     // PianoRoll 组件提供的回调上下文。
@@ -55,7 +55,7 @@ public:
         std::function<void()> clearNoteDraft;
         // 第三参 affectedRange 来自 ToolHandler 编辑时计算的精确范围，用于
         // undo/redo 时只重渲染该范围（而不是 segments 列表反推的并集 = 全长）。
-        std::function<bool(const std::vector<Note>&, const std::vector<CorrectedSegment>&, F0FrameRange)> commitNotesAndSegments;
+        std::function<bool(const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)> commitNotesAndSegments;
 
         std::function<std::shared_ptr<PitchCurve>()> getPitchCurve;
 

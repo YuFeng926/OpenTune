@@ -97,13 +97,13 @@ struct ProjectContentEntry {
     struct SegmentEntry {
         int startFrame{0};
         int endFrame{0};
-        uint8_t source{0};              // CorrectedSegment::Source 枚举值
+        uint8_t source{0};              // PitchCorrectionSegment::Source 枚举值
         float retuneSpeed{-1.0f};
         float vibratoDepth{-1.0f};
         float vibratoRate{-1.0f};
         std::vector<float> f0Data;
     };
-    std::vector<SegmentEntry> correctedSegments;
+    std::vector<SegmentEntry> correctionSegments;
 
     // TimeGrid (v7 vocal-time-stretch)
     struct TimeGridEntry {

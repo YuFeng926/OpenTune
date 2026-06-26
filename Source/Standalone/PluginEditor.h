@@ -287,6 +287,7 @@ private:
     // without changing ContentKey / curve / buffer.
     uint64_t lastPianoRollNotesRevision_ = 0;
     uint64_t lastPianoRollTimeGridRevision_ = 0;
+    uint64_t lastPianoRollPitchRevision_ = 0;
     double lastSyncedBpm_ = 0.0;
     int lastSyncedTimeSigNum_ = 0;
     int lastSyncedTimeSigDenom_ = 0;

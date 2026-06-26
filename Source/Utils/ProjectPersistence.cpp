@@ -306,8 +306,8 @@ juce::ValueTree ProjectPersistence::contentToValueTree(const ProjectContentEntry
     }
 
     // CorrectedSegments
-    if (!mat.correctedSegments.empty()) {
-        tree.addChild(segmentsToValueTree(mat.correctedSegments), -1, nullptr);
+    if (!mat.correctionSegments.empty()) {
+        tree.addChild(segmentsToValueTree(mat.correctionSegments), -1, nullptr);
     }
 
     // TimeGrid
@@ -364,7 +364,7 @@ ProjectContentEntry ProjectPersistence::contentFromValueTree(const juce::ValueTr
     m.notes = notesFromValueTree(tree.getChildWithName("Notes"));
 
     // CorrectedSegments
-    m.correctedSegments = segmentsFromValueTree(tree.getChildWithName("CorrectedSegments"));
+    m.correctionSegments = segmentsFromValueTree(tree.getChildWithName("CorrectedSegments"));
 
     // TimeGrid
     auto tgTree = tree.getChildWithName("TimeGrid");

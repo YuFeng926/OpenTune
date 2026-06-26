@@ -15,8 +15,8 @@ bool expect(bool condition, const char* message)
     return true;
 }
 
-bool hasSegmentSourceOverlap(const std::vector<OpenTune::CorrectedSegment>& segments,
-                             OpenTune::CorrectedSegment::Source source,
+bool hasSegmentSourceOverlap(const std::vector<OpenTune::PitchCorrectionSegment>& segments,
+                             OpenTune::PitchCorrectionSegment::Source source,
                              int startFrame,
                              int endFrameExclusive)
 {
@@ -34,7 +34,7 @@ bool hasSegmentSourceOverlap(const std::vector<OpenTune::CorrectedSegment>& segm
 float renderedF0At(const OpenTune::PitchCurve& curve, int frame)
 {
     float value = 0.0f;
-    curve.renderF0Range(frame, frame + 1, [&](int, const float* data, int count) {
+    curve.renderFinalF0Range(frame, frame + 1, [&](int, const float* data, int count) {
         if (count > 0)
             value = data[0];
     });
@@ -89,25 +89,25 @@ bool noteBasedEditReplacesPriorLineAnchorResult()
     curve.setManualCorrectionRange(kEditStartFrame,
                                    kEditEndFrame,
                                    std::vector<float>(20, 330.0f),
-                                   OpenTune::CorrectedSegment::Source::LineAnchor);
+                                   OpenTune::PitchCorrectionSegment::Source::LineAnchor);
 
     const OpenTune::Note note = makeNoteForEditFrames();
 
     curve.applyCorrectionToRange({ note }, kEditStartFrame, kEditEndFrame, 1.0f, 0.0f, 7.5f);
 
     const auto snapshot = curve.getSnapshot();
-    const auto& segments = snapshot->getCorrectedSegments();
+    const auto& segments = snapshot->getCorrectionSegments();
     const auto affectedRange = OpenTune::PitchCurve::expandNoteBasedCorrectionRange(kEditStartFrame, kEditEndFrame, 100);
 
     if (!expect(!hasSegmentSourceOverlap(segments,
-                                         OpenTune::CorrectedSegment::Source::LineAnchor,
+                                         OpenTune::PitchCorrectionSegment::Source::LineAnchor,
                                          affectedRange.startFrame,
                                          affectedRange.endFrameExclusive),
                 "noteBasedEditReplacesPriorLineAnchorResult: LineAnchor segment must not survive inside the note edit range"))
         return false;
 
     if (!expect(hasSegmentSourceOverlap(segments,
-                                        OpenTune::CorrectedSegment::Source::NoteBased,
+                                        OpenTune::PitchCorrectionSegment::Source::NoteBased,
                                         kEditStartFrame,
                                         kEditEndFrame),
                 "noteBasedEditReplacesPriorLineAnchorResult: note edit must publish a NoteBased corrected segment"))
@@ -129,18 +129,18 @@ bool noteBasedEditReplacesPriorHandDrawResult()
     curve.setManualCorrectionRange(25,
                                    35,
                                    std::vector<float>(10, 310.0f),
-                                   OpenTune::CorrectedSegment::Source::HandDraw);
+                                   OpenTune::PitchCorrectionSegment::Source::HandDraw);
 
     const OpenTune::Note note = makeNoteForEditFrames();
 
     curve.applyCorrectionToRange({ note }, kEditStartFrame, kEditEndFrame, 1.0f, 0.0f, 7.5f);
 
     const auto snapshot = curve.getSnapshot();
-    const auto& segments = snapshot->getCorrectedSegments();
+    const auto& segments = snapshot->getCorrectionSegments();
     const auto affectedRange = OpenTune::PitchCurve::expandNoteBasedCorrectionRange(kEditStartFrame, kEditEndFrame, 100);
 
     if (!expect(!hasSegmentSourceOverlap(segments,
-                                         OpenTune::CorrectedSegment::Source::HandDraw,
+                                         OpenTune::PitchCorrectionSegment::Source::HandDraw,
                                          affectedRange.startFrame,
                                          affectedRange.endFrameExclusive),
                 "noteBasedEditReplacesPriorHandDrawResult: HandDraw segment must not survive inside the note edit range"))
