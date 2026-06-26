@@ -318,6 +318,44 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     syncContentProjectionToPianoRoll();
 
+    // Revision detection (aligned with Standalone pattern)
+    const auto sync = resolveCurrentContentSync();
+    const ContentKey activeKey = sync.activeContentKey;
+
+    // Content 切换检测
+    bool contentJustSwitched = false;
+    if (activeKey != lastActiveContentKey_) {
+        lastActiveContentKey_ = activeKey;
+        contentJustSwitched = true;
+
+        // 同步到当前 snapshot 的 revision baseline（与 Standalone 对齐）
+        if (activeKey.isValid()) {
+            auto snap = processorRef_.getContentSnapshot(activeKey);
+            lastPianoRollNotesRevision_ = snap ? snap->notesRevision : 0;
+            lastPianoRollTimeGridRevision_ = snap ? snap->timeGridRevision : 0;
+        } else {
+            lastPianoRollNotesRevision_ = 0;
+            lastPianoRollTimeGridRevision_ = 0;
+        }
+    }
+
+    // Revision 检测（只在有效 content 且未切换时执行）
+    if (activeKey.isValid() && !contentJustSwitched) {
+        auto snap = processorRef_.getContentSnapshot(activeKey);
+        const uint64_t currentNotesRevision = snap ? snap->notesRevision : 0;
+        const uint64_t currentTimeGridRevision = snap ? snap->timeGridRevision : 0;
+
+        if (currentNotesRevision != lastPianoRollNotesRevision_) {
+            pianoRoll_.onNotesRevisionChanged();
+            lastPianoRollNotesRevision_ = currentNotesRevision;
+        }
+
+        if (currentTimeGridRevision != lastPianoRollTimeGridRevision_) {
+            pianoRoll_.onTimeGridRevisionChanged();
+            lastPianoRollTimeGridRevision_ = currentTimeGridRevision;
+        }
+    }
+
     // 播放头位置：positionAtomic_ 已通过 setPlayheadPositionSource 接入 PianoRoll，
     // transportBar 仍需显式同步
     const double positionSeconds = processorRef_.getPosition();

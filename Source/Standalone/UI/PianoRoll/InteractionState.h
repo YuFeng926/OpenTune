@@ -53,15 +53,21 @@ struct NoteSelectionState
     bool empty() const noexcept { return selectedIndices.empty(); }
 };
 
+struct NoteDragManualTarget
+{
+    int frame = -1;
+    float f0 = 0.0f;
+};
+
 struct NoteDragState
 {
     int draggedNoteIndex = -1;
     std::vector<int> draggedNoteIndices;
     bool isDraggingNotes = false;
     
-    double manualStartTime = -1.0;
-    double manualEndTime = -1.0;
-    std::vector<std::pair<double, float>> initialManualTargets;
+    int manualStartFrame = -1;
+    int manualEndFrameExclusive = -1;
+    std::vector<NoteDragManualTarget> initialManualTargets;
     int previewStartFrame = -1;
     int previewEndFrameExclusive = -1;
     std::vector<float> previewF0;

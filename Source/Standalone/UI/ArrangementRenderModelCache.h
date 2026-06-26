@@ -17,7 +17,7 @@
 #include <map>
 #include <functional>
 #include "WaveformMipmap.h"
-#include "TimelineViewportState.h"
+#include "ViewMapper.h"
 #include "../PluginProcessor.h"
 #include "../../Content/ContentKey.h"
 
@@ -136,7 +136,7 @@ public:
      * @param getAnalysisState - callback(placementId) -> bool (analysis in progress)
      */
     const RenderModel& update(OpenTuneAudioProcessor& processor,
-                              const TimelineViewportState& viewport,
+                              const ViewMapper& mapper,
                               int selectedTrack,
                               int selectedPlacementIndex,
                               std::function<bool(int, uint64_t)> isPlacementSelected,
@@ -156,7 +156,7 @@ public:
 
     static juce::Rectangle<int> computeWaveformDrawableBounds(juce::Rectangle<int> placementBounds) noexcept;
     static juce::Path buildWaveformPathForPlacement(const WaveformMipmap& mipmap,
-                                                    const TimelineViewportState& viewport,
+                                                    const ViewMapper& mapper,
                                                     juce::Rectangle<int> placementBounds,
                                                     double timelineStartSeconds,
                                                     double durationSeconds,
@@ -168,7 +168,7 @@ public:
 
 private:
     static Key makeKey(OpenTuneAudioProcessor& processor,
-                       const TimelineViewportState& viewport,
+                       const ViewMapper& mapper,
                        int selectedTrack,
                        int selectedPlacementIndex,
                        uint64_t hoveredPlacementId,

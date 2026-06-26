@@ -1139,6 +1139,40 @@ void PianoRollComponent::enqueueNoteBasedCorrectionAsync(const std::vector<Note>
 
 void PianoRollPreviewOverlay::paint(juce::Graphics& g)
 {
+    // ⚡️ P0-2: Draft notes 绘制 — 绘制正在被拖拽或缩放的 notes
+    // 避免 detail cache 旧位置 + selection highlights 新位置 = 重影
+    auto& interaction = owner_.interactionState_;
+    
+    // 绘制单个 draft note 的 lambda
+    auto drawDraftNote = [&](const Note& note) {
+        auto bounds = owner_.getNoteBounds(note);
+        if (bounds.isEmpty()) return;
+        
+        g.setColour(juce::Colours::white.withAlpha(0.6f));
+        g.fillRect(bounds);
+        g.setColour(juce::Colours::white.withAlpha(0.8f));
+        g.drawRect(bounds, 1);
+    };
+    
+    // Note drag: 绘制被拖拽的 notes
+    if (interaction.noteDraft.active && interaction.noteDrag.isDraggingNotes) {
+        const auto& workingNotes = interaction.noteDraft.workingNotes;
+        for (int idx : interaction.noteDrag.draggedNoteIndices) {
+            if (idx >= 0 && idx < static_cast<int>(workingNotes.size())) {
+                drawDraftNote(workingNotes[idx]);
+            }
+        }
+    }
+    
+    // Note resize: 绘制被缩放的 note
+    if (interaction.noteDraft.active && interaction.noteResize.noteIndex >= 0) {
+        const auto& workingNotes = interaction.noteDraft.workingNotes;
+        int idx = interaction.noteResize.noteIndex;
+        if (idx < static_cast<int>(workingNotes.size())) {
+            drawDraftNote(workingNotes[idx]);
+        }
+    }
+    
     // Ghost overlay (reference content) — drawn in overlay layer, not tiles
     if (owner_.referenceOverlay_.has_value() && owner_.referenceOverlay_->enabled) {
         auto ctx = owner_.makePresentationRenderContext();
@@ -1863,6 +1897,8 @@ void PianoRollComponent::resized() {
     updatePlayheadPresentationPolicy();
     backgroundCacheDirty_ = true;
     detailCacheDirty_ = true;
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
+                     PianoRollVisualInvalidationPriority::Interactive);
 }
 
 void PianoRollComponent::applyEditedContentCurve(std::shared_ptr<PitchCurve> curve)
@@ -2055,8 +2091,6 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
         return;
     }
 
-    const bool hasAudio = (buffer != nullptr);
-
     if (contentChanged) {
         editedContentKey_ = contentKey;
         clearNoteDraft();
@@ -2103,6 +2137,14 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 void PianoRollComponent::onTimeGridRevisionChanged()
 {
     backgroundCacheDirty_ = true;
+    detailCacheDirty_ = true;
+    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
+                     PianoRollVisualInvalidationPriority::Interactive);
+}
+
+void PianoRollComponent::onNotesRevisionChanged()
+{
+    refreshEditedContentNotes();
     detailCacheDirty_ = true;
     invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
                      PianoRollVisualInvalidationPriority::Interactive);
@@ -3474,7 +3516,7 @@ ViewMapper PianoRollComponent::makeBandViewMapper() const {
 bool PianoRollComponent::needsGeometryRebuild() const {
     if (!backgroundCacheImage_.isValid()) return true;
 
-    if (cacheBandHeight_ != getTimelineContentViewportHeight())
+    if (cacheBandHeight_ != getTimelineViewportBounds().getHeight())
         return true;
 
     const int contentVpW = getTimelineContentViewportWidth();
@@ -3485,7 +3527,7 @@ bool PianoRollComponent::needsGeometryRebuild() const {
 
 bool PianoRollComponent::rebuildBackgroundCache() {
     const int contentVpW = getTimelineContentViewportWidth();
-    const int contentVpH = getTimelineContentViewportHeight();
+    const int contentVpH = getTimelineViewportBounds().getHeight();  // 包含 ruler 空间
     if (contentVpW <= 0 || contentVpH <= 0) {
         backgroundCacheImage_ = {};
         detailCacheImage_ = {};
