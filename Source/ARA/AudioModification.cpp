@@ -126,13 +126,14 @@ void AudioModification::applyDetectedKey(const DetectedKey& key)
     ++content.contentRevision;
 }
 
-void AudioModification::applyF0Analysis(std::shared_ptr<PitchCurve> curve)
+void AudioModification::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 {
     content.analysis.pitchCurve = std::move(curve);
     content.analysis.originalF0State = OriginalF0State::Ready;
     content.analysis.f0Lifecycle = AnalysisLifecycle::Ready;
     ++content.analysis.analysisRevision;
-    ++content.contentRevision;
+    ++content.editable.pitchRevision;
+    // OriginalF0 只更新分析数据和 UI revision，不触发音频渲染
 }
 
 void AudioModification::applyReferenceFeatures(const ReferenceFeatureSet& features)

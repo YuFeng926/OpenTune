@@ -62,10 +62,10 @@ private:
 public:
     void applyNotes(const std::vector<Note>& notes);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
+    void applyOriginalF0(std::shared_ptr<PitchCurve> curve);
     void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> grid);
     void applyPitchShift(const PitchShiftSettings& settings);
     void applyDetectedKey(const DetectedKey& key);
-    void applyF0Analysis(std::shared_ptr<PitchCurve> curve);
     void applyOriginalF0State(OriginalF0State state);
     void applyReferenceFeatures(const ReferenceFeatureSet& features);
 };

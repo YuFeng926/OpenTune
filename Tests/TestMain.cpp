@@ -2200,6 +2200,137 @@ CheckResult v12CMakeListsHasViewMapperTestTarget()
     return pass("v12CMakeListsHasViewMapperTestTarget");
 }
 
+// ============================================================================
+// F0 可见性刷新链守卫测试
+// ============================================================================
+
+// 测试：OriginalF0 写入不触发 full render
+CheckResult testOriginalF0WriteDoesNotTriggerFullRender()
+{
+    const auto source = readText("Source/PluginProcessor.cpp");
+
+    // writeOriginalF0ToOwner 不应该调用 onContentFullMutationCompleted
+    const auto writeOriginalF0 = extractFunctionBlock(source, "bool OpenTuneAudioProcessor::writeOriginalF0ToOwner");
+    if (writeOriginalF0.empty())
+        return fail("testOriginalF0WriteDoesNotTriggerFullRender",
+            "writeOriginalF0ToOwner function not found");
+    if (contains(writeOriginalF0, "onContentFullMutationCompleted"))
+        return fail("testOriginalF0WriteDoesNotTriggerFullRender",
+            "writeOriginalF0ToOwner MUST NOT call onContentFullMutationCompleted");
+
+    // OriginalF0 完成回调附近不应有 onContentFullMutationCompleted
+    // 搜索 "writeOriginalF0ToOwner(capturedRequest.contentKey, pitchCurve)" 前后 10 行
+    const auto callSite = source.find("writeOriginalF0ToOwner(capturedRequest.contentKey, pitchCurve)");
+    if (callSite == std::string::npos)
+        return fail("testOriginalF0WriteDoesNotTriggerFullRender",
+            "OriginalF0 completion call site not found");
+    const auto callContext = source.substr(
+        callSite > 500 ? callSite - 500 : 0,
+        std::min(size_t(1000), source.size() - (callSite > 500 ? callSite - 500 : 0)));
+    if (contains(callContext, "onContentFullMutationCompleted"))
+        return fail("testOriginalF0WriteDoesNotTriggerFullRender",
+            "OriginalF0 completion MUST NOT call onContentFullMutationCompleted");
+
+    return pass("testOriginalF0WriteDoesNotTriggerFullRender");
+}
+
+// 测试：pitchRevision 回写闭环
+CheckResult testPitchRevisionTrackingClosedLoop()
+{
+    const auto source = readText("Source/Standalone/PluginEditor.cpp");
+
+    // lastPianoRollPitchRevision_ 必须在 timerCallback 中回写
+    const auto timerCallback = extractFunctionBlock(source, "void OpenTuneAudioProcessorEditor::timerCallback()");
+    if (!contains(timerCallback, "lastPianoRollPitchRevision_ = currentPitchRevision"))
+        return fail("testPitchRevisionTrackingClosedLoop",
+            "timerCallback MUST write back lastPianoRollPitchRevision_");
+
+    return pass("testPitchRevisionTrackingClosedLoop");
+}
+
+// 测试：导入路径不传 nullptr curve
+CheckResult testImportDoesNotPassNullCurve()
+{
+    const auto source = readText("Source/Standalone/PluginEditor.cpp");
+
+    // 搜索导入路径中 setEditedContent 调用附近上下文
+    const auto callSite = source.find("setEditedContent(committedPlacement.contentKey");
+    if (callSite == std::string::npos)
+        return fail("testImportDoesNotPassNullCurve",
+            "Import setEditedContent call site not found");
+    const auto callContext = source.substr(
+        callSite > 300 ? callSite - 300 : 0,
+        std::min(size_t(600), source.size() - (callSite > 300 ? callSite - 300 : 0)));
+
+    // 导入路径中 setEditedContent 不应该传 nullptr 作为 curve 参数
+    // 检查 "importCurve," 存在（说明传了实际 curve）
+    if (!contains(callContext, "importCurve,"))
+        return fail("testImportDoesNotPassNullCurve",
+            "Import path MUST pass importCurve as curve to setEditedContent");
+
+    // lastPianoRollCurve_ 不应该 reset 为 nullptr
+    if (contains(callContext, "lastPianoRollCurve_.reset()"))
+        return fail("testImportDoesNotPassNullCurve",
+            "Import path MUST NOT reset lastPianoRollCurve_ to nullptr");
+
+    return pass("testImportDoesNotPassNullCurve");
+}
+
+// 测试：selection sync 同步 revision baseline
+CheckResult testSelectionSyncRevisions()
+{
+    const auto source = readText("Source/Standalone/PluginEditor.cpp");
+
+    // 验证 selection sync 路径中存在 pitchRevision baseline 赋值
+    // 特征模式：lastPianoRollPitchRevision_ = snap ? snap->pitchRevision
+    if (!contains(source, "lastPianoRollPitchRevision_ = snap"))
+        return fail("testSelectionSyncRevisions",
+            "Selection sync MUST sync pitchRevision baseline");
+
+    return pass("testSelectionSyncRevisions");
+}
+
+// 测试：applyOriginalF0 不递增 contentRevision
+CheckResult testApplyOriginalF0DoesNotBumpContentRevision()
+{
+    const auto standaloneSource = readText("Source/Content/StandaloneClipContent.cpp");
+    const auto applyOrigF0 = extractFunctionBlock(standaloneSource, "void StandaloneClipContent::applyOriginalF0(");
+    if (applyOrigF0.empty())
+        return fail("testApplyOriginalF0DoesNotBumpContentRevision",
+            "StandaloneClipContent::applyOriginalF0 not found");
+    if (contains(applyOrigF0, "bumpContentRevision"))
+        return fail("testApplyOriginalF0DoesNotBumpContentRevision",
+            "applyOriginalF0 MUST NOT call bumpContentRevision");
+
+    const auto captureSource = readText("Source/Content/CaptureSegmentContent.cpp");
+    // Use "applyOriginalF0(" with opening paren to avoid matching applyOriginalF0State
+    const auto captureApplyOrigF0 = extractFunctionBlock(captureSource, "void CaptureSegmentContent::applyOriginalF0(");
+    if (captureApplyOrigF0.empty())
+        return fail("testApplyOriginalF0DoesNotBumpContentRevision",
+            "CaptureSegmentContent::applyOriginalF0 not found");
+    if (contains(captureApplyOrigF0, "contentRevision"))
+        return fail("testApplyOriginalF0DoesNotBumpContentRevision",
+            "CaptureSegmentContent::applyOriginalF0 MUST NOT increment contentRevision");
+
+    return pass("testApplyOriginalF0DoesNotBumpContentRevision");
+}
+
+// 测试：AudioModification 无重复 API
+CheckResult testNoDuplicateF0AnalysisAPI()
+{
+    const auto source = readText("Source/ARA/AudioModification.h");
+    if (contains(source, "applyF0Analysis"))
+        return fail("testNoDuplicateF0AnalysisAPI",
+            "AudioModification MUST NOT have applyF0Analysis (use applyOriginalF0)");
+
+    const auto cppSource = readText("Source/ARA/AudioModification.cpp");
+    if (contains(cppSource, "void AudioModification::applyF0Analysis"))
+        return fail("testNoDuplicateF0AnalysisAPI",
+            "AudioModification.cpp MUST NOT define applyF0Analysis");
+
+    return pass("testNoDuplicateF0AnalysisAPI");
+}
+
 } // namespace
 
 int main()
@@ -2287,7 +2418,14 @@ int main()
         v12KillList_noRenderScrollOffsetPxParam,
         v12KillList_noRulerSurfaceStateZoomLevel,
         v12KillList_fitToContentHasNoZoomTautology,
-        v12CMakeListsHasViewMapperTestTarget
+        v12CMakeListsHasViewMapperTestTarget,
+        // F0 可见性刷新链守卫测试
+        testOriginalF0WriteDoesNotTriggerFullRender,
+        testPitchRevisionTrackingClosedLoop,
+        testImportDoesNotPassNullCurve,
+        testSelectionSyncRevisions,
+        testApplyOriginalF0DoesNotBumpContentRevision,
+        testNoDuplicateF0AnalysisAPI
     };
 
     int failed = 0;

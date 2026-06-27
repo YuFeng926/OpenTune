@@ -209,6 +209,7 @@ public:
     // ARA mutation API — Processor delegates ARA writes here
     bool applyNotesToModification(const ContentKey& key, std::vector<Note> notes);
     bool applyPitchCurveToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve);
+    bool applyOriginalF0ToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve);
     bool applyTimeGridToModification(const ContentKey& key, std::shared_ptr<const TimeGridSnapshot> grid);
     bool applyPitchShiftToModification(const ContentKey& key, const PitchShiftSettings& settings);
     bool applyDetectedKeyToModification(const ContentKey& key, const DetectedKey& detectedKey);

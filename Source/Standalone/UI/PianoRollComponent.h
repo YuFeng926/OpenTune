@@ -23,6 +23,7 @@
 #include "Utils/Note.h"
 #include "Utils/LegacyNoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
+#include "Utils/SilentGapDetector.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/ZoomSensitivityConfig.h"
 #include <cmath>
@@ -159,6 +160,8 @@ public:
         }
     }
     void setTimelineViewport(TimelineViewportCamera camera, juce::NotificationType notify);
+    void focusActiveContentForRegionSwitch(const std::vector<SilentGap>& silentGaps,
+                                           juce::NotificationType notify);
     void setCurrentTool(ToolId tool);
     void setExperimentalFeaturesEnabled(bool enabled);
     ToolId getCurrentTool() const { return currentTool_; }
