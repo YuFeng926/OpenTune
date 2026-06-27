@@ -1,4 +1,4 @@
-#include "PluginProcessor.h"
+﻿#include "PluginProcessor.h"
 #include "SourceStore.h"
 #include "StandaloneArrangement.h"
 #include "Editor/EditorFactory.h"
@@ -524,7 +524,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 
     OpenTuneAudioProcessor::PlaybackReadRequest readRequest;
     readRequest.source = source;
-    readRequest.readStartSeconds = placement.clipInSeconds; // was 0.0 �?respect trim offset
+    readRequest.readStartSeconds = placement.clipInSeconds; // was 0.0, respect trim offset
     readRequest.targetSampleRate = kExportSr;
     readRequest.numSamples = samplesToRender;
 
@@ -563,7 +563,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
 
 constexpr uint32_t kProcessorStateMagic = 0x4F545354; // OTST
 constexpr int kProcessorStateVersion = 9; // v9 removes persisted Note selection
-// vocal-time-stretch §3.8: bumped 5 �?6 to add per-content TimeGrid section.
+// vocal-time-stretch §3.8: bumped 5 → 6 to add per-content TimeGrid section.
 // v5 projects load with auto-seeded identity TimeGrid (output==source).
 // Processor state v7 adds per-handle confidence. v6 reads default confidence=Default.
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
@@ -781,7 +781,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
         };
         contentRenderService_->attachExecutionLease(std::move(lease));
     }
-    // [ARA 重构] 内联 ProcessorContentEditCommands 替代工厂函数 �?直接分发到域所有�?
+    // [ARA 重构] 内联 ProcessorContentEditCommands 替代工厂函数，直接分发到域所有者
     class ProcessorContentCommandsInline final : public ContentEditCommands
     {
     public:
@@ -1009,10 +1009,10 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 #endif
     );
 
-    // Phase 1: 停止内部刷新标志（阻止新 work 提交�?
+    // Phase 1: 停止内部刷新标志（阻止新 work 提交）
     contentRefreshAliveFlag_->store(false, std::memory_order_release);
 
-    // Phase 2: 解除 CRS execution lease �?取消 pending render jobs
+    // Phase 2: 解除 CRS execution lease，取消 pending render jobs
     if (contentRenderService_) {
         contentRenderService_->detachExecutionLease(this);
     }
@@ -1024,9 +1024,9 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     isPlaying_.store(false);
 
     // Vocoder is process-level (ProcessRenderRuntime singleton); do not
-    // shutdown here �?that would break every other processor in the process.
+    // shutdown here -- that would break every other processor in the process.
     // F0 inference service is process-level (ProcessF0Runtime singleton); do not
-    // shutdown here �?that would break every other processor in the process.
+    // shutdown here -- that would break every other processor in the process.
 
     AppLogger::shutdown();
 }
@@ -1179,8 +1179,8 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
 bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
 {
     // Backend selection (per design D7):
-    //   1. env OPENTUNE_NOTE_BACKEND=legacy  �?LegacyNoteGenerator
-    //   2. else if GAME-small ONNX bundle present �?GameNoteGenerator
+    //   1. env OPENTUNE_NOTE_BACKEND=legacy  → LegacyNoteGenerator
+    //   2. else if GAME-small ONNX bundle present → GameNoteGenerator
     //   3. else fallback to LegacyNoteGenerator
     // Logged once at first init so support can identify which path ran.
     return ensureServiceReady(noteGenReady_, noteGenInitAttempted_, noteGenInitMutex_, "NoteGen",
@@ -1193,7 +1193,7 @@ bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
             const bool forceLegacy = (envBackend == "legacy");
             AppLogger::info(juce::String("[NoteGen] env OPENTUNE_NOTE_BACKEND=")
                             + (envBackendRaw.isEmpty() ? "<unset>" : envBackendRaw)
-                            + " �?forceLegacy=" + (forceLegacy ? "true" : "false"));
+                            + ", forceLegacy=" + (forceLegacy ? "true" : "false"));
 
             if (!forceLegacy) {
                 auto ortEnv = ProcessF0Runtime::getInstance().getOrtEnv();
@@ -1214,7 +1214,7 @@ bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
                     }
                 } else {
                     AppLogger::info("[NoteGen] GAME bundle missing at " + juce::String(gameDir)
-                                    + " �?falling back to Legacy");
+                                    + ", falling back to Legacy");
                 }
             }
 
@@ -1234,12 +1234,12 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
     if (contentRenderService_)
         contentRenderService_->pauseRenderWorker();
     
-    // 2. �?worker 已暂停，安全释放推理服�?
+    // 2. Worker 已暂停，安全释放推理服务
     // 2. Vocoder and F0 are process-level singletons (ProcessRenderRuntime / ProcessF0Runtime).
     //    Reset vocoder via process runtime; do NOT reset F0 (would break other processors).
     ProcessRenderRuntime::getInstance().resetVocoder();
     
-    // 3. 重置加速检测器并重新检�?
+    // 3. 重置加速检测器并重新检测
     auto& detector = AccelerationDetector::getInstance();
     detector.reset();
     detector.detect(forceCpu);
@@ -1257,7 +1257,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
     // 2. Delegate vocoder weight change to process-level runtime
     ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight);
 
-    // 4. 清所�?content �?RenderCache + TimeStretchCache
+    // 4. 清除所有 content 的 RenderCache + TimeStretchCache
     if (contentRenderService_ && standaloneContentRepository_) {
         const auto keys = standaloneContentRepository_->getAllClips();
         for (const auto key : keys) {
@@ -1266,7 +1266,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
 
             requestFullContentRender(key, FullRenderReason::ModelOrSettingsWholeContentRerender);
         }
-        // �?TimeStretchCache
+        // 清理 TimeStretchCache
         contentRenderService_->getTimeStretchCache().clear();
     }
 
@@ -1274,7 +1274,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
     if (contentRenderService_)
         contentRenderService_->resumeRenderWorker();
 
-    // 不重�?F0 / AccelerationDetector / GAME
+    // 不重置 F0 / AccelerationDetector / GAME
 }
 
 bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const EditableContentSnapshot& snap,
@@ -1486,7 +1486,7 @@ bool OpenTuneAudioProcessor::supportsDoublePrecisionProcessing() const {
 }
 
 // ============================================================================
-// 音频处理（processBlock�?
+// 音频处理（processBlock）
 // ============================================================================
 
 void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<double>& buffer,
@@ -1564,12 +1564,12 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         // Host transport mirror: in non-ARA VST3 mode the plugin is a passive observer.
         // Forcing positionAtomic_ and isPlaying_ to host values every block ensures any
         // local transport change (spacebar / setPlaying) is overridden by host within
-        // one audio block �?there is no plugin-side play/pause illusion to maintain.
+        // one audio block -- there is no plugin-side play/pause illusion to maintain.
         positionAtomic_->store(host_t, std::memory_order_relaxed);
         isPlaying_.store(isPlayingNow, std::memory_order_relaxed);
 
         // Diagnostic: once per ~1 second, post capture buffer stats via atomic event
-        // for message-thread consumption (PluginEditor::timerCallback �?consumeAudioThreadLogs).
+        // for message-thread consumption (PluginEditor::timerCallback → consumeAudioThreadLogs).
         static std::atomic<int> diagBlockCounter { 0 };
         const int blockIdx = diagBlockCounter.fetch_add(1, std::memory_order_relaxed);
         const int blocksPerSecond = static_cast<int>(juce::jmax(1.0, getSampleRate())) / juce::jmax(1, numSamples);
@@ -1604,7 +1604,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     bool isPlaying = isPlaying_.load();
     
     if (!isPlaying && !isFading) {
-        // Fully stopped �?still mix piano key audition so preview works without transport
+        // Fully stopped -- still mix piano key audition so preview works without transport
         pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, currentSampleRate_.load());
         jassert(standaloneArrangement_ != nullptr);
         for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
@@ -1924,7 +1924,7 @@ bool OpenTuneAudioProcessor::hasEditor() const {
 // ============================================================================
 
 void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
-    // Dispatch by runtime wrapperType �?same compiled object serves both
+    // Dispatch by runtime wrapperType -- same compiled object serves both
     // Standalone and VST3 binaries (shared `OpenTune` lib), so a build-time
     // guard cannot differentiate. Standalone owns its own project save format
     // and only needs settings here; VST3 needs full state for host round-trip.
@@ -1965,7 +1965,7 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
         for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
             StandaloneArrangement::Placement placement;
             if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-                jassertfalse; // Placement index/track mismatch �?data integrity error
+                jassertfalse; // Placement index/track mismatch -- data integrity error
                 AppLogger::error("SerializationCorruption: getPlacementByIndex failed for track="
                                  + juce::String(trackId) + " index=" + juce::String(placementIndex));
                 return; // Don't serialize known-corrupt data
@@ -2034,12 +2034,12 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
 
     // Standalone instance receiving a full-state payload: settings are not in
     // this format anymore (BPM/zoom/trackHeight live in OTSS), so there is
-    // nothing meaningful to restore �?return without touching stores.
+    // nothing meaningful to restore -- return without touching stores.
     if (wrapperType == juce::AudioProcessor::wrapperType_Standalone) {
         return;
     }
 
-    // Note: BPM is not in OTST v5 �?host owns transport tempo in plugin mode.
+    // Note: BPM is not in OTST v5 -- host owns transport tempo in plugin mode.
     zoomLevel_ = input.readDouble();
     trackHeight_ = input.readInt();
 
@@ -2594,7 +2594,7 @@ OpenTuneAudioProcessor::resolveAnalysisAudioProvider(ContentKey key)
 {
     AnalysisAudioProvider result;
 
-    // 优先�?CRS PlaybackReadSource 获取（适用于所有域，包�?ARA�?
+    // 优先从 CRS PlaybackReadSource 获取（适用于所有域，包括 ARA）
     const ContentRenderService* readableCrs = resolveReadableContentRenderService(key);
     PlaybackReadSource readSource;
     if (readableCrs != nullptr
@@ -2860,7 +2860,7 @@ static bool writeAudioBufferToWavFile(const juce::AudioBuffer<float>& buffer,
     return writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
 }
 
-// 导出单个 placement 的音�?
+// 导出单个 placement 的音频
 // ============================================================================
 // 音频导出
 // ============================================================================
@@ -2877,11 +2877,11 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
 
     StandaloneArrangement::Placement placement;
     if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
-        lastExportError_ = "无效的片段索�? " + juce::String(placementIndex);
+        lastExportError_ = "无效的片段索引 " + juce::String(placementIndex);
         return false;
     }
 
-    // 等待 RenderWorker 完成当前渲染，确保导出最新数�?
+    // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
     PlaybackReadSource source;
@@ -2934,7 +2934,7 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
         return false;
     }
 
-    // 等待 RenderWorker 完成当前渲染，确保导出最新数�?
+    // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
@@ -2996,7 +2996,7 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
         return false;
     }
 
-    // 等待 RenderWorker 完成当前渲染，确保导出最新数�?
+    // 等待 RenderWorker 完成当前渲染，确保导出最新数据
     contentRenderService_->drainRenderWorker();
 
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
@@ -3134,13 +3134,13 @@ bool OpenTuneAudioProcessor::prepareImport(juce::AudioBuffer<float>&& inBuffer,
         return false;
     }
 
-    // Storage layout exactly matches the declaration (1 �?mono, 2 �?stereo).
+    // Storage layout exactly matches the declaration (1 = mono, 2 = stereo).
     ChannelLayoutLog::logEntry(entrySourceTag, declaredChannels, declaredChannels, displayName);
 
     out.displayName = displayName;
     out.sourceFilePath = sourceFilePath;
 
-    // 导入后的 content �?shared runtime 内统一落到固定 44.1kHz �?content-local 存储采样率�?
+    // 导入后的 content 在 shared runtime 内统一落到固定 44.1kHz（content-local 存储采样率）
     const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
     if (std::abs(inSampleRate - targetSampleRate) > 1.0) {
         const int numChannels = inBuffer.getNumChannels();
@@ -3264,8 +3264,8 @@ uint64_t OpenTuneAudioProcessor::commitPreparedImportAsContent(PreparedImport&& 
 
 
 // ============================================================================
-// requestContentRefresh �?Standalone / regular VST3 F0 refresh.
-// F0 only �?does NOT run GAME note generation.
+// requestContentRefresh -- Standalone / regular VST3 F0 refresh.
+// F0 only -- does NOT run GAME note generation.
 // ============================================================================
 
 bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor::ContentRefreshRequest& request)
@@ -3437,13 +3437,14 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 }
             }
 
-            if (!processor->writePitchCurveToOwner(capturedRequest.contentKey, pitchCurve)) {
-                AppLogger::log("ContentRefresh: pitch curve commit failed contentKey objectId="
+            if (!processor->writeOriginalF0ToOwner(capturedRequest.contentKey, pitchCurve)) {
+                AppLogger::log("ContentRefresh: OriginalF0 commit failed contentKey objectId="
                     + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId)));
                 processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Failed);
                 return;
             }
-            processor->onContentFullMutationCompleted(capturedRequest.contentKey, MutationScope::PitchCurveChanged, FullRenderReason::GlobalPitchShift);
+            // OriginalF0 只更新分析数据，不触发音频渲染
+            // 音频渲染只在 Correction/Final F0 写入时触发
 
             {
                 AppLogger::log("F0Alignment: contentKey objectId="
@@ -3519,7 +3520,7 @@ ReferenceFeatureSet OpenTuneAudioProcessor::getReferenceFeatures(ContentKey key)
 }
 
 // ============================================================================
-// vocal-time-stretch §3.6 �?TimeGrid processor accessors
+// vocal-time-stretch §3.6 -- TimeGrid processor accessors
 // ============================================================================
 
 bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
@@ -3787,7 +3788,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     }
 
     const auto oldSegments = copyPitchCorrectionSegments(oldCurve);
-    // 优先�?sourceWindow 或已�?features �?duration，不加载 PCM
+    // 优先从 sourceWindow 或已有 features 的 duration，不加载 PCM
     const double targetDurationSeconds = targetSnap->sourceWindow.isValid()
         ? targetSnap->sourceWindow.durationSeconds()
         : targetFeatures.sourceDurationSeconds;
@@ -4123,7 +4124,7 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
 
     // Range-scoped segments merge with split-preserve for boundary-crossing segments.
     // When a segment crosses the affected range boundary, we preserve the outside parts.
-    // Example: old segment [0,100], edit range [40,60] �?keep [0,40] and [60,100], replace [40,60].
+    // Example: old segment [0,100], edit range [40,60] → keep [0,40] and [60,100], replace [40,60].
     auto oldSegments = snap->pitchCurve->getSnapshot()->getCorrectionSegments();
     std::vector<PitchCorrectionSegment> mergedSegments;
     mergedSegments.reserve(oldSegments.size() + segments.size());
@@ -4132,13 +4133,13 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
     const int rangeEnd = affectedRange.endFrameExclusive;
 
     for (const auto& seg : oldSegments) {
-        // Segment entirely outside range �?keep as-is
+        // Segment entirely outside range → keep as-is
         if (seg.endFrame <= rangeStart || seg.startFrame >= rangeEnd) {
             mergedSegments.push_back(seg);
             continue;
         }
 
-        // Segment crosses range boundary �?split and preserve outside parts
+        // Segment crosses range boundary → split and preserve outside parts
         // Left part: segment starts before range
         if (seg.startFrame < rangeStart) {
             PitchCorrectionSegment left = seg;
@@ -4310,6 +4311,38 @@ bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,
             auto* session = getCaptureSession();
             if (session == nullptr || !session->applyPitchCurve(key, std::move(curve)))
                 return false;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool OpenTuneAudioProcessor::writeOriginalF0ToOwner(ContentKey key,
+                                                      std::shared_ptr<PitchCurve> curve)
+{
+    switch (key.domainKind) {
+        case DomainKind::StandaloneClip: {
+            auto* clip = standaloneContentRepository_->findClip(key);
+            if (!clip) return false;
+            clip->applyOriginalF0(std::move(curve));
+            return true;
+        }
+#if JucePlugin_Enable_ARA
+        case DomainKind::ARAAudioModification: {
+            auto* dc = getDocumentController();
+            if (!dc) return false;
+            return dc->applyOriginalF0ToModification(key, std::move(curve));
+        }
+#else
+        case DomainKind::ARAAudioModification:
+            return false;
+#endif
+        case DomainKind::RegularVST3Capture: {
+            auto* session = getCaptureSession();
+            if (session == nullptr) return false;
+            auto* seg = session->findSegmentByContentKey(key);
+            if (!seg || !seg->content) return false;
+            seg->content->applyOriginalF0(std::move(curve));
             return true;
         }
     }
@@ -4596,7 +4629,7 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
     }
 
     // ============================================================
-    // vocal-time-stretch §7 (Phase D MVP) �?TimeStretchCache fast-path
+    // vocal-time-stretch §7 (Phase D MVP) -- TimeStretchCache fast-path
     //
     // When a non-identity TimeGrid is published and Stage 2 has populated the
     // TimeStretchCache for this ContentKey/revision tuple, serve the stretched
@@ -4653,11 +4686,11 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
 
     // Write dry signal with linear interpolation (single pass, pointer-based).
     //
-    // Per channel-layout-policy spec: srcChannels is guaranteed �?{1, 2} (enforced
+    // Per channel-layout-policy spec: srcChannels is guaranteed ∈ {1, 2} (enforced
     // at `content creation`). The `srcCh = ch % srcChannels`
     // mapping below covers both layouts naturally:
-    //   - srcChannels=1 (mono storage): every dest ch maps to src 0 �?broadcast.
-    //   - srcChannels=2 (stereo storage): dest ch 0 �?src 0, ch 1 �?src 1 �?1:1 map.
+    //   - srcChannels=1 (mono storage): every dest ch maps to src 0 -- broadcast.
+    //   - srcChannels=2 (stereo storage): dest ch 0 → src 0, ch 1 → src 1 → 1:1 map.
     // No extra channel-count guards or general-N-channel handling needed.
     for (int channel = 0; channel < destinationChannels; ++channel) {
         const int srcCh = channel % srcChannels;
@@ -4686,7 +4719,7 @@ int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request
 }
 
 // ============================================================================
-// Clipboard �?content range copy for paste/duplicate
+// Clipboard -- content range copy for paste/duplicate
 // ============================================================================
 
 ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
@@ -4792,7 +4825,7 @@ void OpenTuneAudioProcessor::consumeAudioThreadLogs()
         return; // No new events
 
     logEventReadGeneration_ = gen;
-    const AudioThreadLogEvent evt = logEventData_; // Plain read �?single consumer, no tearing risk
+    const AudioThreadLogEvent evt = logEventData_; // Plain read -- single consumer, no tearing risk
 
     switch (evt.type) {
     case AudioThreadLogEvent::Type::FadeOutComplete:

@@ -37,6 +37,7 @@ public:
     // ── Apply commands（由 PluginProcessor coordinator 调用）─
     void applyNotes(std::vector<Note> notes);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
+    void applyOriginalF0(std::shared_ptr<PitchCurve> curve);
     void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot);
     void applyPitchShiftSettings(const PitchShiftSettings& settings);
     void applyDetectedKey(const DetectedKey& key);

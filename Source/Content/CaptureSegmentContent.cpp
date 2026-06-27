@@ -128,6 +128,13 @@ void CaptureSegmentContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
     ++editable_.contentRevision;
 }
 
+void CaptureSegmentContent::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
+{
+    pitchCurve_ = std::move(curve);
+    ++editable_.pitchRevision;
+    // OriginalF0 只更新 UI revision，不触发音频渲染
+}
+
 void CaptureSegmentContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot)
 {
     editable_.timeGrid = std::move(snapshot);

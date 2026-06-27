@@ -1548,7 +1548,7 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
             // Wire F0 analysis into AudioModification content state
             if (auto* mod = findAudioModificationByContentKey(key))
             {
-                mod->applyF0Analysis(std::move(pitchCurve));
+                mod->applyOriginalF0(std::move(pitchCurve));
                 if (mod->audioModification != nullptr)
                     mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
             }
@@ -1987,6 +1987,20 @@ bool OpenTuneDocumentController::applyPitchCurveToModification(const ContentKey&
         mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
     
     refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
+bool OpenTuneDocumentController::applyOriginalF0ToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve)
+{
+    auto* mod = findAudioModificationByContentKey(key);
+    if (!mod) return false;
+    mod->applyOriginalF0(std::move(curve));
+
+    // Notify ARA host of content change for cache/save state invalidation
+    if (mod->audioModification != nullptr)
+        mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes(), true);
+
+    // OriginalF0 只更新分析数据，不触发音频渲染，所以不调用 refreshRegisteredRenderers
     return true;
 }
 

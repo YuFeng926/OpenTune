@@ -738,9 +738,12 @@ private:
     // mutation entry point funnels through the two sinks above.
     void requestRenderForLocalMutationRange(ContentKey key, double startSeconds, double endSeconds);
 
-    // Owner-truth-only write helpers: no render trigger, used by full-content
-    // mutation paths that pair them with onContentFullMutationCompleted.
+    // Owner-truth-only write helpers. These update the underlying content stores without triggering
+    // immediate render. They are designed for write-back mutation paths (Correction/Final F0) and are
+    // paired with onContentFullMutationCompleted() to trigger batch rendering.
     bool writePitchCurveToOwner(ContentKey key, std::shared_ptr<PitchCurve> curve);
+    // For OriginalF0 analysis data only — does NOT trigger audio rendering, only updates analysis state.
+    bool writeOriginalF0ToOwner(ContentKey key, std::shared_ptr<PitchCurve> curve);
 
 #if JucePlugin_Enable_ARA
     // Cached project state for pre-bind restore.

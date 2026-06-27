@@ -122,6 +122,13 @@ void StandaloneClipContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
     bumpContentRevision();
 }
 
+void StandaloneClipContent::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
+{
+    content_.pitchCurve = std::move(curve);
+    ++content_.pitchRevision;
+    // OriginalF0 只更新 UI revision，不触发音频渲染
+}
+
 void StandaloneClipContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot)
 {
     content_.timeGrid = std::move(snapshot);

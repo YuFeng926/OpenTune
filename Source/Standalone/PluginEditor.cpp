@@ -1092,6 +1092,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
         lastPianoRollNotesRevision_ = currentNotesRevision;
         lastPianoRollTimeGridRevision_ = currentTimeGridRevision;
+        lastPianoRollPitchRevision_ = currentPitchRevision;
     }
 
 // Playhead position read by each component via positionSource_ directly from Processor
@@ -1320,18 +1321,19 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
     auto curve = snap ? snap->pitchCurve : nullptr;
     pianoRoll_.setEditedContent(contentKey, curve, contentBuffer, sr);
 
-    // On region switch, position camera to the new region's timeline start
-    // Note: PianoRollComponent encapsulates its camera state; use default pps for new region view
     if (regionChanged) {
-        const double regionStart = placement.timelineStartSeconds;
-        constexpr double defaultPps = TimelineViewportCamera::kDefaultPixelsPerSecond;
-        pianoRoll_.setTimelineViewport({ regionStart, defaultPps }, juce::sendNotification);
+        pianoRoll_.focusActiveContentForRegionSwitch(
+            snap ? snap->silentGaps : std::vector<SilentGap>{},
+            juce::sendNotification);
     }
 
     lastPianoRollContentKey_ = contentKey;
     lastPianoRollSampleRate_ = sr;
     lastPianoRollCurve_ = curve;
     lastPianoRollBuffer_ = contentBuffer;
+    lastPianoRollNotesRevision_ = snap ? snap->notesRevision : 0;
+    lastPianoRollTimeGridRevision_ = snap ? snap->timeGridRevision : 0;
+    lastPianoRollPitchRevision_ = snap ? snap->pitchRevision : 0;
 
     applyResolvedScaleForPlacementContent(trackId, placementIndex);
 
@@ -1727,12 +1729,13 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     safeThis->applyPlacementSelectionContext(placement.trackId, committedPlacement.placementId);
                     auto importSnap = safeThis->processorRef_.getContentSnapshot(committedPlacement.contentKey);
                     auto importBuf = importSnap ? importSnap->audioBuffer : nullptr;
+                    auto importCurve = importSnap ? importSnap->pitchCurve : nullptr;
                     safeThis->pianoRoll_.setEditedContent(committedPlacement.contentKey,
-                                                          nullptr,
-                                                            importBuf,
+                                                          importCurve,
+                                                          importBuf,
                                                           static_cast<int>(safeThis->processorRef_.getSampleRate()));
                     safeThis->lastPianoRollContentKey_ = committedPlacement.contentKey;
-                    safeThis->lastPianoRollCurve_.reset();
+                    safeThis->lastPianoRollCurve_ = importCurve;
                     safeThis->lastPianoRollBuffer_ = importBuf;
 
                     OpenTuneAudioProcessor::ContentRefreshRequest refreshRequest;
