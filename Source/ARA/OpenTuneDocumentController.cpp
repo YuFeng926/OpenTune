@@ -880,6 +880,16 @@ AudioSource* OpenTuneDocumentController::findAudioSource(juce::ARAAudioSource* a
     return it != audioSources_.end() ? &*it : nullptr;
 }
 
+AudioSource* OpenTuneDocumentController::findAudioSource(const juce::String& persistentId)
+{
+    const auto it = std::find_if(audioSources_.begin(), audioSources_.end(),
+                                 [&persistentId](const AudioSource& source)
+                                 {
+                                     return source.getIdentity().persistentId == persistentId;
+                                 });
+    return it != audioSources_.end() ? &*it : nullptr;
+}
+
 const AudioSource* OpenTuneDocumentController::findAudioSource(const juce::String& persistentId) const
 {
     const auto it = std::find_if(audioSources_.begin(), audioSources_.end(),
@@ -1146,14 +1156,6 @@ void OpenTuneDocumentController::reconcileEditorSelectionPlaybackRegions()
         editorSelectionPlaybackRegions_.end());
 }
 
-bool OpenTuneDocumentController::refreshPlaybackReadSource(ContentKey key)
-{
-    // ARA2: 从 AudioSource 重建 CRS，不复用旧 buffer
-    auto* mod = findAudioModificationByContentKey(key);
-    if (!mod) return false;
-    return rebuildCRSFromSource(*mod);
-}
-
 bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
     AudioModification& modification,
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer)
@@ -1190,7 +1192,16 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
         return false;
 
     auto* source = findAudioSource(modification.content.sourceWindow.sourcePersistentId);
-    if (source == nullptr || !source->canReadSamples())
+    if (source == nullptr)
+    {
+        modification.birthState = AudioModificationBirthState::WaitingForSource;
+        return false;
+    }
+
+    if (!source->hasReaderLease())
+        source->createReaderLease();
+
+    if (!source->canReadSamples())
     {
         modification.birthState = AudioModificationBirthState::WaitingForSource;
         return false;
@@ -1325,114 +1336,6 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     // 9. Schedule async F0 extraction via CRS
     if (contentRenderService_ != nullptr)
         scheduleAsyncF0Extraction(modification.contentKey(), std::move(channel0Data), sourceSampleRate);
-
-    return true;
-}
-
-bool OpenTuneDocumentController::rebuildCRSFromSource(AudioModification& modification)
-{
-    // Per ARA2 spec: After restore, rebuild CRS derived playback buffer from AudioSource.
-    // This function ONLY regenerates CRS cache; it does NOT modify AudioModification.content
-    // which has already been restored from archive.
-    
-    if (modification.persistentId.isEmpty() || modification.content.sourceWindow.sourcePersistentId.isEmpty())
-        return false;
-
-    auto* source = findAudioSource(modification.content.sourceWindow.sourcePersistentId);
-    if (source == nullptr || !source->canReadSamples())
-        return false;
-
-    // Use restored sourceWindow from modification.content
-    if (!modification.content.sourceWindow.isValid())
-        return false;
-
-    const auto& sourceWindow = modification.content.sourceWindow;
-    auto readerLease = source->shareReaderLease();
-    if (readerLease == nullptr)
-        return false;
-
-    const double sourceSampleRate = source->getShape().sourceSampleRate;
-    const int64_t numSamples = source->getShape().numSamples;
-    const int numChannels = source->getShape().numChannels;
-
-    if (numChannels <= 0 || numSamples <= 0 || sourceSampleRate <= 0.0)
-        return false;
-
-    // Read source window
-    const int64_t sourceStartSample = static_cast<int64_t>(
-        std::round(sourceWindow.sourceStartSeconds * sourceSampleRate));
-    const int64_t sourceEndSample = static_cast<int64_t>(
-        std::round(sourceWindow.sourceEndSeconds * sourceSampleRate));
-    const int64_t windowSamples = std::max<int64_t>(0,
-        std::min<int64_t>(sourceEndSample, numSamples) - std::max<int64_t>(0, sourceStartSample));
-
-    if (windowSamples <= 0)
-        return false;
-
-    juce::AudioBuffer<float> playableAccum(numChannels, static_cast<int>(windowSamples));
-    playableAccum.clear();
-
-    // Read from AudioSource in chunks to handle long audio files
-    constexpr int64_t kChunkSamples = 32768;
-    {
-        int64_t readOffset = sourceStartSample;
-        int64_t accumWriteOffset = 0;
-        int64_t remaining = windowSamples;
-
-        while (remaining > 0)
-        {
-            const int64_t chunkSamples = std::min(kChunkSamples, remaining);
-            const int accumOffset = static_cast<int>(accumWriteOffset);
-
-            std::vector<void*> channelPointers(static_cast<size_t>(numChannels));
-            for (int ch = 0; ch < numChannels; ++ch)
-                channelPointers[static_cast<size_t>(ch)] = playableAccum.getWritePointer(ch, accumOffset);
-
-            if (!readerLease->readAudioSamples(readOffset,
-                                                 static_cast<int>(chunkSamples),
-                                                 channelPointers.data()))
-                return false;
-
-            readOffset += chunkSamples;
-            accumWriteOffset += chunkSamples;
-            remaining -= chunkSamples;
-        }
-    }
-
-    // Resample to 44.1kHz if needed
-    juce::AudioBuffer<float> storedBuffer;
-    const double targetSampleRate = TimeCoordinate::kRenderSampleRate;
-    if (std::abs(sourceSampleRate - targetSampleRate) > 1.0)
-    {
-        const int storedLen = juce::jmax(1,
-            static_cast<int>(TimeCoordinate::secondsToSamples(
-                TimeCoordinate::samplesToSeconds(playableAccum.getNumSamples(), sourceSampleRate),
-                targetSampleRate)));
-
-        storedBuffer.setSize(numChannels, storedLen);
-
-        for (int ch = 0; ch < numChannels; ++ch)
-        {
-            auto resampledData = resamplingManager_->upsampleForHost(
-                playableAccum.getReadPointer(ch),
-                playableAccum.getNumSamples(),
-                static_cast<int>(sourceSampleRate),
-                static_cast<int>(targetSampleRate));
-            const int toCopy = juce::jmin(storedLen, static_cast<int>(resampledData.size()));
-            storedBuffer.copyFrom(ch, 0, resampledData.data(), toCopy);
-        }
-    }
-    else
-    {
-        storedBuffer = std::move(playableAccum);
-    }
-
-    auto storedAudioBuffer = std::make_shared<const juce::AudioBuffer<float>>(std::move(storedBuffer));
-
-    // Publish to CRS (derived playback cache only)
-    // Per ARA2 spec: CRS holds derived/cache for renderer fast read.
-    // Do NOT modify modification.content - it was already restored from archive.
-    publishPlaybackReadSourceForModification(modification, storedAudioBuffer);
 
     return true;
 }

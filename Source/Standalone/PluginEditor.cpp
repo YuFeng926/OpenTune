@@ -148,45 +148,6 @@ static bool runDebugSelfTests() {
 }
 #endif
 
-int OpenTuneAudioProcessorEditor::scaleToUiScaleType(Scale scale)
-{
-    switch (scale) {
-        case Scale::Major:          return 1;
-        case Scale::Minor:          return 2;
-        case Scale::Chromatic:      return 3;
-        case Scale::HarmonicMinor:  return 4;
-        case Scale::Dorian:         return 5;
-        case Scale::Mixolydian:     return 6;
-        case Scale::PentatonicMajor:return 7;
-        case Scale::PentatonicMinor:return 8;
-        default:                    return 1;
-    }
-}
-
-Scale OpenTuneAudioProcessorEditor::uiScaleTypeToScale(int scaleType)
-{
-    switch (scaleType) {
-        case 1: return Scale::Major;
-        case 2: return Scale::Minor;
-        case 3: return Scale::Chromatic;
-        case 4: return Scale::HarmonicMinor;
-        case 5: return Scale::Dorian;
-        case 6: return Scale::Mixolydian;
-        case 7: return Scale::PentatonicMajor;
-        case 8: return Scale::PentatonicMinor;
-        default: return Scale::Major;
-    }
-}
-
-DetectedKey OpenTuneAudioProcessorEditor::makeDetectedKeyFromUi(int rootNote, int scaleType, float confidence)
-{
-    DetectedKey key;
-    key.root = static_cast<Key>(juce::jlimit(0, 11, rootNote));
-    key.scale = uiScaleTypeToScale(scaleType);
-    key.confidence = confidence;
-    return key;
-}
-
 DetectedKey OpenTuneAudioProcessorEditor::resolveScaleForPlacementContent(int trackId,
                                                                                   int placementIndex,
                                                                                   juce::String* sourceOut) const
@@ -237,7 +198,7 @@ void OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent(int tra
     juce::String source;
     const DetectedKey key = resolveScaleForPlacementContent(trackId, placementIndex, &source);
     const int rootNote = static_cast<int>(key.root);
-    const int scaleType = scaleToUiScaleType(key.scale);
+    const int scaleType = OpenTune::scaleToUiScaleType(key.scale);
     applyScaleToUi(rootNote, scaleType);
 
     const ContentKey contentKey = (trackId >= 0 && placementIndex >= 0)
@@ -1084,7 +1045,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             const DetectedKey resolvedKey =
                 resolveScaleForPlacementContent(activeTrack, activePlacementIndex, nullptr);
             const int resolvedRootNote = static_cast<int>(resolvedKey.root);
-            const int resolvedScaleType = scaleToUiScaleType(resolvedKey.scale);
+            const int resolvedScaleType = OpenTune::scaleToUiScaleType(resolvedKey.scale);
             if (resolvedRootNote != lastScaleRootNote_ || resolvedScaleType != lastScaleType_) {
                 applyResolvedScaleForPlacementContent(activeTrack, activePlacementIndex);
             }
@@ -2489,14 +2450,14 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
 
     const DetectedKey oldResolved = resolveScaleForPlacementContent(activeTrack, activePlacementIndex, nullptr);
     const int oldRootNote = static_cast<int>(oldResolved.root);
-    const int oldScaleType = scaleToUiScaleType(oldResolved.scale);
+    const int oldScaleType = OpenTune::scaleToUiScaleType(oldResolved.scale);
 
     if (oldRootNote == newRoot && oldScaleType == newScaleType) {
         applyScaleToUi(newRoot, newScaleType);
         return;
     }
 
-    const DetectedKey newKey = makeDetectedKeyFromUi(newRoot, newScaleType, 1.0f);
+    const DetectedKey newKey = OpenTune::makeDetectedKeyFromUi(newRoot, newScaleType, 1.0f);
 
     if (activeContentKey.isValid()) {
         processorRef_.setContentDetectedKey(activeContentKey, newKey);

@@ -190,6 +190,7 @@ private:
     std::shared_ptr<std::atomic<bool>> asyncLeaseToken_;
 
     AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
+    AudioSource* findAudioSource(const juce::String& persistentId);
     const AudioSource* findAudioSource(const juce::String& persistentId) const;
     AudioSource& ensureAudioSource(juce::ARAAudioSource* audioSource);
     AudioModification* findAudioModification(const juce::String& persistentId);
@@ -229,8 +230,6 @@ private:
         AudioModification& modification,
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer);
     bool birthContentForModification(AudioModification& modification);
-    bool rebuildCRSFromSource(AudioModification& modification);
-    bool refreshPlaybackReadSource(ContentKey key);
     void removeCRSArtifactsForModification(const AudioModification& modification);
     void continuePendingUserReadForSource(const AudioSource& source);
     void scheduleAsyncF0Extraction(ContentKey contentKey,
