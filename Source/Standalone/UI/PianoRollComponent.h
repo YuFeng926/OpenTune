@@ -38,6 +38,7 @@
 #include "SmallButton.h"
 #include "PlayheadOverlayComponent.h"
 #include "PianoRoll/PianoRollRenderer.h"
+#include "PianoRoll/PianoRollSurfaceCache.h"
 
 #include "PianoRoll/PianoRollToolHandler.h"
 #include "PianoRoll/PianoRollVisualInvalidation.h"
@@ -181,8 +182,6 @@ public:
         }
 
         scrollMode_ = mode;
-        backgroundCacheDirty_ = true;
-        detailCacheDirty_ = true;
         updatePlayheadPresentationPolicy();
         invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Viewport),
                          PianoRollVisualInvalidationPriority::Interactive);
@@ -199,13 +198,11 @@ public:
     void setShowOriginalF0(bool show) {
         if (showOriginalF0_ == show) return;
         showOriginalF0_ = show;
-        detailCacheDirty_ = true;
         invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
     }
     void setShowCorrectedF0(bool show) {
         if (showCorrectedF0_ == show) return;
         showCorrectedF0_ = show;
-        detailCacheDirty_ = true;
         invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
     }
     bool isShowingOriginalF0() const { return showOriginalF0_; }
@@ -344,6 +341,7 @@ public:
     /// Public so editors can drive a refresh after an async note generator
     /// (e.g. GAME) commits without changing the active ContentKey.
     void refreshEditedContentNotes();
+    void rebuildSurfaceCache();
 
 private:
     void onScrollVBlankCallback(double timestampSec);
@@ -363,9 +361,12 @@ private:
     ViewMapper makeViewMapper() const noexcept;
     int computeScrollOffsetPx() const noexcept;
     double computeContentTimelineEndSeconds() const noexcept;
+    double computeSurfaceStartTimelineSeconds() const noexcept;
+    double computeSurfaceEndTimelineSeconds() const noexcept;
     double computeMaxTimelineEndSeconds() const noexcept;
     double computeMaxVisibleStartSeconds(double pps) const noexcept;
     void publishPlayheadPresentation(double displayPlayheadTime);
+    void followAndPublishPlayhead(double timelinePlayheadTime);
 
     void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
@@ -564,21 +565,7 @@ private:
     
     bool applyVibratoParameterToSelection(VibratoParam param, float value);
     
-    // VBlank 双层缓存渲染
-    bool needsGeometryRebuild() const;
-    bool rebuildBackgroundCache();
-    bool rebuildDetailCache();
-    void rebuildDirtyCaches();
-    ViewMapper makeBandViewMapper() const;
-    
-    // 缓存成员
-    juce::Image backgroundCacheImage_;
-    juce::Image detailCacheImage_;
-    int cacheBandStartX_ = 0;
-    int cacheBandWidth_  = 0;
-    int cacheBandHeight_ = 0;
-    bool backgroundCacheDirty_ = true;
-    bool detailCacheDirty_     = true;
+
     bool applyTimelineContentPlacements(std::vector<TimelineContentPlacement> placements,
                                                 bool explicitContract);
     void deriveSingleTimelineContentPlacement();
@@ -589,6 +576,7 @@ private:
     std::unique_ptr<PianoRollToolHandler> toolHandler_;
     std::unique_ptr<PianoRollCorrectionWorker> correctionWorker_;
     mutable WaveformMipmapCache waveformMipmapCache_;
+    PianoRollSurfaceCache surfaceCache_;
 
     static constexpr int pianoKeyWidth_ = 60;
     static constexpr int rulerHeight_ = 30;

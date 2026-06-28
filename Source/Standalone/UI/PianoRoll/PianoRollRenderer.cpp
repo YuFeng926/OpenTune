@@ -135,6 +135,75 @@ bool isVoicedFrame(float frequencyHz) noexcept
     return frequencyHz > 0.0f;
 }
 
+// 构建连续 F0 path：逐帧追加点，仅在 unvoiced frame 处断开子路径
+// 宏观视图时，每像素 x 只取一个代表点（该像素内第一个 voiced frame 的 f0）
+void buildF0ContinuousPath(
+    juce::Path& path,
+    const std::vector<float>& f0Data,
+    int visibleStartFrame,
+    int visibleEndFrame,
+    const F0Timeline& f0Timeline,
+    const PianoRollRenderer::RenderContext& ctx,
+    const PianoRollRenderer::ContentRenderItem& item,
+    bool useDecimation)
+{
+    if (useDecimation) {
+        // 宏观视图：每像素 x 只取一个代表点（取该像素内第一个 voiced frame 的 f0）
+        int lastX = -999;
+        bool pathStarted = false;
+
+        for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
+            const float f0 = f0Data[static_cast<std::size_t>(frame)];
+            if (!isVoicedFrame(f0))
+                continue;
+
+            const double timePos = f0Timeline.timeAtFrame(frame);
+            const int x = sourceTimeToScreenX(timePos, ctx, item);
+
+            if (x < ctx.pianoKeyWidth || x >= ctx.width)
+                continue;
+
+            if (x == lastX)
+                continue; // 同一像素列，跳过
+            lastX = x;
+
+            const float y = ctx.coords.freqToY(f0);
+
+            if (!pathStarted) {
+                path.startNewSubPath(static_cast<float>(x), y);
+                pathStarted = true;
+            } else {
+                path.lineTo(static_cast<float>(x), y);
+            }
+        }
+    } else {
+        // 普通视图：逐帧追加点
+        bool pathStarted = false;
+
+        for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
+            const float f0 = f0Data[static_cast<std::size_t>(frame)];
+            if (!isVoicedFrame(f0)) {
+                pathStarted = false;
+                continue;
+            }
+
+            const double timePos = f0Timeline.timeAtFrame(frame);
+            const int x = sourceTimeToScreenX(timePos, ctx, item);
+            const float y = ctx.coords.freqToY(f0);
+
+            if (x < ctx.pianoKeyWidth || x >= ctx.width)
+                continue;
+
+            if (!pathStarted) {
+                path.startNewSubPath(static_cast<float>(x), y);
+                pathStarted = true;
+            } else {
+                path.lineTo(static_cast<float>(x), y);
+            }
+        }
+    }
+}
+
 } // namespace
 
 void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
@@ -1295,165 +1364,40 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     // Draw original F0
     if (ctx.showOriginalF0)
     {
-        const float alpha = 0.35f;
+        juce::Path originalPath;
+        buildF0ContinuousPath(originalPath, originalF0, visibleStartFrame, visibleEndFrame,
+                              item.f0Timeline, ctx, item, useDecimation);
 
-        if (useDecimation) {
-            // Per-pixel decimation: collect min/max freq per screen x
-            std::map<int, std::pair<float, float>> buckets; // x -> (minFreq, maxFreq)
-
-            for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
-                const float f0 = originalF0[static_cast<std::size_t>(frame)];
-                if (!isVoicedFrame(f0))
-                    continue;
-
-                const double timePos = item.f0Timeline.timeAtFrame(frame);
-                const int x = sourceTimeToScreenX(timePos, ctx, item);
-
-                if (x < ctx.pianoKeyWidth || x >= ctx.width)
-                    continue;
-
-                auto it = buckets.find(x);
-                if (it == buckets.end()) {
-                    buckets[x] = {f0, f0};
-                } else {
-                    it->second.first = std::min(it->second.first, f0);
-                    it->second.second = std::max(it->second.second, f0);
-                }
-            }
-
-            // Draw vertical line segments for each bucket
+        if (!originalPath.isEmpty()) {
+            const float alpha = 0.35f;
             g.setColour(UIColors::originalF0.withAlpha(alpha));
-            for (const auto& [x, range] : buckets) {
-                const float yMin = ctx.coords.freqToY(range.second); // max freq = min y
-                const float yMax = ctx.coords.freqToY(range.first);  // min freq = max y
-                g.drawVerticalLine(x, yMin, yMax);
-            }
-        } else {
-            // Original per-frame polyline rendering
-            juce::Path originalPath;
-            bool pathStarted = false;
-
-            for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
-                const float f0 = originalF0[static_cast<std::size_t>(frame)];
-                if (!isVoicedFrame(f0)) {
-                    pathStarted = false;
-                    continue;
-                }
-
-                const double timePos = item.f0Timeline.timeAtFrame(frame);
-                const int x = sourceTimeToScreenX(timePos, ctx, item);
-                const float y = ctx.coords.freqToY(f0);
-
-                if (x < ctx.pianoKeyWidth || x >= ctx.width)
-                    continue;
-
-                if (!pathStarted) {
-                    originalPath.startNewSubPath(static_cast<float>(x), y);
-                    pathStarted = true;
-                } else {
-                    juce::Point<float> last = originalPath.getCurrentPosition();
-                    if (std::abs(static_cast<float>(x) - last.x) > 30.0f) {
-                        originalPath.startNewSubPath(static_cast<float>(x), y);
-                    } else {
-                        originalPath.lineTo(static_cast<float>(x), y);
-                    }
-                }
-            }
-
-            if (!originalPath.isEmpty()) {
-                g.setColour(UIColors::originalF0.withAlpha(alpha));
-                g.strokePath(originalPath, juce::PathStrokeType(1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            }
+            g.strokePath(originalPath, juce::PathStrokeType(1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
     }
 
     // Draw corrected F0 segments
     if (ctx.showCorrectedF0 && item.pitchSnapshot->hasCorrectionLayer()) {
-        const float alpha = 0.85f;
-
-        if (useDecimation) {
-            // Per-pixel decimation for corrected F0
-            std::map<int, std::pair<float, float>> buckets;
-
-            item.pitchSnapshot->renderCorrectionLayerF0Range(
-                visibleStartFrame, visibleEndFrame,
-                [&](int frame, const float* data, int length) {
-                    for (int i = 0; i < length; ++i) {
-                        const int f = frame + i;
-                        if (f < visibleStartFrame || f >= visibleEndFrame)
-                            continue;
-
-                        const float f0 = data[i];
-                        if (!isVoicedFrame(f0))
-                            continue;
-
-                        const double timePos = item.f0Timeline.timeAtFrame(f);
-                        const int x = sourceTimeToScreenX(timePos, ctx, item);
-
-                        if (x < ctx.pianoKeyWidth || x >= ctx.width)
-                            continue;
-
-                        auto it = buckets.find(x);
-                        if (it == buckets.end()) {
-                            buckets[x] = {f0, f0};
-                        } else {
-                            it->second.first = std::min(it->second.first, f0);
-                            it->second.second = std::max(it->second.second, f0);
-                        }
+        // 先收集 corrected F0 数据
+        std::vector<float> correctedF0(visibleEndFrame, 0.0f);
+        item.pitchSnapshot->renderCorrectionLayerF0Range(
+            visibleStartFrame, visibleEndFrame,
+            [&](int frame, const float* data, int length) {
+                for (int i = 0; i < length; ++i) {
+                    const int f = frame + i;
+                    if (f >= visibleStartFrame && f < visibleEndFrame) {
+                        correctedF0[static_cast<std::size_t>(f)] = data[i];
                     }
-                });
+                }
+            });
 
-            // Draw vertical line segments for each bucket
+        juce::Path correctedPath;
+        buildF0ContinuousPath(correctedPath, correctedF0, visibleStartFrame, visibleEndFrame,
+                              item.f0Timeline, ctx, item, useDecimation);
+
+        if (!correctedPath.isEmpty()) {
+            const float alpha = 0.85f;
             g.setColour(UIColors::correctedF0.withAlpha(alpha));
-            for (const auto& [x, range] : buckets) {
-                const float yMin = ctx.coords.freqToY(range.second);
-                const float yMax = ctx.coords.freqToY(range.first);
-                g.drawVerticalLine(x, yMin, yMax);
-            }
-        } else {
-            // Original per-frame polyline rendering
-            juce::Path correctedPath;
-            bool pathStarted = false;
-
-            item.pitchSnapshot->renderCorrectionLayerF0Range(
-                visibleStartFrame, visibleEndFrame,
-                [&](int frame, const float* data, int length) {
-                    for (int i = 0; i < length; ++i) {
-                        const int f = frame + i;
-                        if (f < visibleStartFrame || f >= visibleEndFrame)
-                            continue;
-
-                        const float f0 = data[i];
-                        if (!isVoicedFrame(f0)) {
-                            pathStarted = false;
-                            continue;
-                        }
-
-                        const double timePos = item.f0Timeline.timeAtFrame(f);
-                        const int x = sourceTimeToScreenX(timePos, ctx, item);
-                        const float y = ctx.coords.freqToY(f0);
-
-                        if (x < ctx.pianoKeyWidth || x >= ctx.width)
-                            continue;
-
-                        if (!pathStarted) {
-                            correctedPath.startNewSubPath(static_cast<float>(x), y);
-                            pathStarted = true;
-                        } else {
-                            juce::Point<float> last = correctedPath.getCurrentPosition();
-                            if (std::abs(static_cast<float>(x) - last.x) > 30.0f) {
-                                correctedPath.startNewSubPath(static_cast<float>(x), y);
-                            } else {
-                                correctedPath.lineTo(static_cast<float>(x), y);
-                            }
-                        }
-                    }
-                });
-
-            if (!correctedPath.isEmpty()) {
-                g.setColour(UIColors::correctedF0.withAlpha(alpha));
-                g.strokePath(correctedPath, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            }
+            g.strokePath(correctedPath, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
     }
 }
