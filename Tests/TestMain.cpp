@@ -107,6 +107,19 @@ std::string extractFunctionBlock(std::string_view text, std::string_view signatu
     return {};
 }
 
+std::string extractBlock(std::string_view text, std::string_view marker, std::string_view endMarker)
+{
+    const size_t markerPos = text.find(marker);
+    if (markerPos == std::string_view::npos)
+        return {};
+
+    const size_t endPos = text.find(endMarker, markerPos);
+    if (endPos == std::string_view::npos)
+        return {};
+
+    return std::string(text.substr(markerPos, endPos - markerPos + endMarker.size()));
+}
+
 std::string readSourceFilesUnder(std::string_view relativeDir)
 {
     std::ostringstream joined;
@@ -265,28 +278,35 @@ CheckResult araSampleAccessEnableDoesNotReadFreshContent()
     return pass("araSampleAccessEnableDoesNotReadFreshContent");
 }
 
+CheckResult araUserReadGateCreatesLease()
+{
+    const auto dc = readText("Source/ARA/OpenTuneDocumentController.cpp");
+    const auto birthFunc = extractFunctionBlock(dc, "bool OpenTuneDocumentController::birthContentForModification");
+    
+    if (birthFunc.empty())
+        return fail("araUserReadGateCreatesLease", "birthContentForModification not found");
+    
+    if (birthFunc.find("createReaderLease()") == std::string::npos)
+        return fail("araUserReadGateCreatesLease",
+            "birthContentForModification must call createReaderLease() to ensure reader lease exists before canReadSamples()");
+    
+    const auto didEnableFunc = extractFunctionBlock(dc, "void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess");
+    if (!didEnableFunc.empty() && didEnableFunc.find("createReaderLease()") != std::string::npos)
+        return fail("araUserReadGateCreatesLease",
+            "didEnableAudioSourceSamplesAccess must NOT call createReaderLease()");
+    
+    return pass("araUserReadGateCreatesLease");
+}
+
 CheckResult refreshPlaybackReadSourceIsPrivate()
 {
     const auto dcHeader = readText("Source/ARA/OpenTuneDocumentController.h");
 
-    // Extract the public section (lines up to the first 'private:')
-    const auto publicSectionEnd = dcHeader.find("private:");
-    if (publicSectionEnd == std::string::npos)
-        return fail("refreshPlaybackReadSourceIsPrivate", "Cannot locate private section marker in DocumentController.h.");
-
-    const auto publicSection = dcHeader.substr(0, publicSectionEnd);
-
-    // refreshPlaybackReadSource must NOT be in the public section
-    if (contains(publicSection, "refreshPlaybackReadSource"))
+    // refreshPlaybackReadSource was removed as dead code.
+    // Verify it no longer exists in the header.
+    if (contains(dcHeader, "refreshPlaybackReadSource"))
         return fail("refreshPlaybackReadSourceIsPrivate",
-                    "refreshPlaybackReadSource must be private to prevent bypassing user-intent read gate. "
-                    "Only requestReadAudioForPlaybackRegions() should be the public read entry point.");
-
-    // Verify it exists in the file (either in private section or removed entirely)
-    if (!contains(dcHeader, "refreshPlaybackReadSource"))
-        return fail("refreshPlaybackReadSourceIsPrivate",
-                    "refreshPlaybackReadSource declaration is missing from DocumentController.h. "
-                    "If intentionally removed, update this test accordingly.");
+                    "refreshPlaybackReadSource was removed as dead code. Remove it from the header.");
 
     return pass("refreshPlaybackReadSourceIsPrivate");
 }
@@ -1315,404 +1335,7 @@ CheckResult renderCacheCompleteChunkRenderWithAudioReturnsTriState()
     return pass("renderCacheCompleteChunkRenderWithAudioReturnsTriState");
 }
 
-// ── VBlank 双层缓存架构守卫测试（Task 7）────────────────
-
-CheckResult vBlankCache_paintDoesNoImmediateModeRendering()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto paint = extractFunctionBlock(cpp, "void PianoRollComponent::paint(juce::Graphics& g)");
-    if (paint.empty())
-        return fail("vBlankCache_paintDoesNoImmediateModeRendering", "Cannot find paint()");
-
-    // Forbidden: old renderer calls (moved to cache rebuild)
-    const std::vector<std::string_view> forbidden = {
-        "drawTimeRuler", "drawGridLines", "drawWaveform",
-        "drawLanes", "drawUnvoicedFrameBands", "drawNotes",
-        "drawF0Curve", "drawChunkBoundaries"
-    };
-    for (const auto token : forbidden) {
-        if (contains(paint, token))
-            return fail("vBlankCache_paintDoesNoImmediateModeRendering",
-                         "paint() must not contain " + std::string(token));
-    }
-
-    // Forbidden: cache rebuild in paint (no cache-miss fallback)
-    const std::vector<std::string_view> noRebuild = {
-        "rebuildDirtyCaches", "rebuildBackgroundCache", "rebuildDetailCache",
-        "needsGeometryRebuild"
-    };
-    for (const auto token : noRebuild) {
-        if (contains(paint, token))
-            return fail("vBlankCache_paintDoesNoImmediateModeRendering",
-                         "paint() must not call " + std::string(token) + " (no cache-miss fallback)");
-    }
-
-    // Required: blits both cache images
-    if (!contains(paint, "backgroundCacheImage_") || !contains(paint, "detailCacheImage_"))
-        return fail("vBlankCache_paintDoesNoImmediateModeRendering",
-                     "paint() must blit both backgroundCacheImage_ and detailCacheImage_");
-
-    return pass("vBlankCache_paintDoesNoImmediateModeRendering");
-}
-
-CheckResult vBlankCache_cacheMembersExist()
-{
-    const auto header = readText("Source/Standalone/UI/PianoRollComponent.h");
-    const std::vector<std::string_view> required = {
-        "juce::Image backgroundCacheImage_",
-        "juce::Image detailCacheImage_",
-        "int cacheBandStartX_",
-        "int cacheBandWidth_",
-        "int cacheBandHeight_",
-        "bool backgroundCacheDirty_",
-        "bool detailCacheDirty_"
-    };
-    const auto missing = missingTokens(header, required);
-    if (!missing.empty())
-        return fail("vBlankCache_cacheMembersExist", "missing cache members:" + missing);
-    return pass("vBlankCache_cacheMembersExist");
-}
-
-CheckResult vBlankCache_flushRebuildsBeforeInvalidate()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto flush = extractFunctionBlock(cpp, "void PianoRollComponent::flushPendingVisualInvalidation()");
-    if (flush.empty())
-        return fail("vBlankCache_flushRebuildsBeforeInvalidate", "Cannot find flushPendingVisualInvalidation");
-
-    if (!contains(flush, "rebuildDirtyCaches"))
-        return fail("vBlankCache_flushRebuildsBeforeInvalidate",
-                     "flush must call rebuildDirtyCaches");
-
-    size_t rebuildPos = flush.find("rebuildDirtyCaches");
-    size_t invalidatePos = flush.find("requestInvalidate");
-    if (rebuildPos == std::string_view::npos || invalidatePos == std::string_view::npos)
-        return fail("vBlankCache_flushRebuildsBeforeInvalidate", "missing tokens");
-    if (rebuildPos > invalidatePos)
-        return fail("vBlankCache_flushRebuildsBeforeInvalidate",
-                     "rebuildDirtyCaches must precede requestInvalidate");
-
-    return pass("vBlankCache_flushRebuildsBeforeInvalidate");
-}
-
-CheckResult vBlankCache_vblankNoDuplicateUpdate()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto vblank = extractFunctionBlock(cpp, "void PianoRollComponent::onScrollVBlankCallback");
-    if (vblank.empty())
-        return fail("vBlankCache_vblankNoDuplicateUpdate", "Cannot find onScrollVBlankCallback");
-
-    if (contains(vblank, "updatePlayheadPresentationPolicy"))
-        return fail("vBlankCache_vblankNoDuplicateUpdate",
-                     "onScrollVBlankCallback must NOT call updatePlayheadPresentationPolicy");
-    return pass("vBlankCache_vblankNoDuplicateUpdate");
-}
-
-CheckResult vBlankCache_setTimelineViewportNoOpGuard()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto stv = extractFunctionBlock(cpp, "void PianoRollComponent::setTimelineViewport");
-    if (stv.empty())
-        return fail("vBlankCache_setTimelineViewportNoOpGuard", "Cannot find setTimelineViewport");
-
-    // Must compare camera with tolerance
-    if (!contains(stv, "visibleStartSeconds") || !contains(stv, "0.001"))
-        return fail("vBlankCache_setTimelineViewportNoOpGuard", "must compare visibleStartSeconds (tol 0.001)");
-    if (!contains(stv, "pixelsPerSecond") || !contains(stv, "0.01"))
-        return fail("vBlankCache_setTimelineViewportNoOpGuard", "must compare pixelsPerSecond (tol 0.01)");
-
-    // return must appear before listeners_.call / invalidateVisual (no-op must skip heavy work)
-    const size_t returnPos = stv.find("return;");
-    const size_t listenersPos = stv.find("listeners_.call");
-    const size_t invalidatePos = stv.find("invalidateVisual");
-    if (returnPos != std::string_view::npos) {
-        if ((listenersPos != std::string_view::npos && returnPos > listenersPos)
-            || (invalidatePos != std::string_view::npos && returnPos > invalidatePos))
-            return fail("vBlankCache_setTimelineViewportNoOpGuard",
-                         "no-op return must precede listeners_.call and invalidateVisual");
-    }
-
-    return pass("vBlankCache_setTimelineViewportNoOpGuard");
-}
-
-CheckResult vBlankCache_setEditedContentHasDirtyFlags()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto sec = extractFunctionBlock(cpp, "void PianoRollComponent::setEditedContent");
-    if (sec.empty())
-        return fail("vBlankCache_setEditedContentHasDirtyFlags", "Cannot find setEditedContent");
-
-    if (!contains(sec, "detailCacheDirty_"))
-        return fail("vBlankCache_setEditedContentHasDirtyFlags", "must set detailCacheDirty_");
-    if (!contains(sec, "backgroundCacheDirty_"))
-        return fail("vBlankCache_setEditedContentHasDirtyFlags", "must set backgroundCacheDirty_");
-    return pass("vBlankCache_setEditedContentHasDirtyFlags");
-}
-
-CheckResult vBlankCache_commitPathsMarkDetailDirty()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-
-    const auto commitNote = extractFunctionBlock(cpp, "bool PianoRollComponent::commitNoteDraft()");
-    const auto commitNotesSeg = extractFunctionBlock(cpp, "bool PianoRollComponent::commitEditedContentNotesAndSegments");
-
-    if (commitNote.empty() && commitNotesSeg.empty())
-        return fail("vBlankCache_commitPathsMarkDetailDirty", "Cannot find commit functions");
-
-    // At least one commit path must set detailCacheDirty_
-    if (!contains(commitNote, "detailCacheDirty_") && !contains(commitNotesSeg, "detailCacheDirty_"))
-        return fail("vBlankCache_commitPathsMarkDetailDirty",
-                     "commitNoteDraft or commitNotesAndSegments must set detailCacheDirty_");
-    return pass("vBlankCache_commitPathsMarkDetailDirty");
-}
-
-CheckResult vBlankCache_backgroundRebuildInvalidatesDetail()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto rebuild = extractFunctionBlock(cpp, "bool PianoRollComponent::rebuildBackgroundCache()");
-    if (rebuild.empty())
-        return fail("vBlankCache_backgroundRebuildInvalidatesDetail", "Cannot find rebuildBackgroundCache");
-
-    if (!contains(rebuild, "detailCacheDirty_"))
-        return fail("vBlankCache_backgroundRebuildInvalidatesDetail",
-                     "rebuildBackgroundCache must set detailCacheDirty_=true");
-    return pass("vBlankCache_backgroundRebuildInvalidatesDetail");
-}
-
-CheckResult vBlankCache_cacheUsesBandMapper()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-
-    auto bg = extractFunctionBlock(cpp, "bool PianoRollComponent::rebuildBackgroundCache()");
-    auto dt = extractFunctionBlock(cpp, "bool PianoRollComponent::rebuildDetailCache()");
-
-    if (bg.empty()) return fail("vBlankCache_cacheUsesBandMapper", "Cannot find rebuildBackgroundCache");
-    if (dt.empty()) return fail("vBlankCache_cacheUsesBandMapper", "Cannot find rebuildDetailCache");
-
-    // Both must use band mapper for band-local coords (directly or via makeBandViewMapper)
-    const auto usesBandMapper = [](std::string_view s) {
-        return contains(s, "withBand") || contains(s, "makeBandViewMapper");
-    };
-    if (!usesBandMapper(bg) || !usesBandMapper(dt))
-        return fail("vBlankCache_cacheUsesBandMapper",
-                     "cache rebuild must use ViewMapper::withBand() for band-local coords");
-    return pass("vBlankCache_cacheUsesBandMapper");
-}
-
-CheckResult vBlankCache_rebuildResetsDirtyFlags()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto rebuild = extractFunctionBlock(cpp, "void PianoRollComponent::rebuildDirtyCaches()");
-    if (rebuild.empty())
-        return fail("vBlankCache_rebuildResetsDirtyFlags", "Cannot find rebuildDirtyCaches");
-
-    if (!contains(rebuild, "backgroundCacheDirty_"))
-        return fail("vBlankCache_rebuildResetsDirtyFlags", "must reset backgroundCacheDirty_");
-    if (!contains(rebuild, "detailCacheDirty_"))
-        return fail("vBlankCache_rebuildResetsDirtyFlags", "must reset detailCacheDirty_");
-    return pass("vBlankCache_rebuildResetsDirtyFlags");
-}
-
-// ── VBlank 缓存重构修复架构守卫测试 ──
-
-CheckResult vBlankCache_fix_bandGeometryUsesContentViewportWidth()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-
-    const auto needs = extractFunctionBlock(cpp, "bool PianoRollComponent::needsGeometryRebuild()");
-    if (needs.empty())
-        return fail("vBlankCache_fix_bandGeometryUsesContentViewportWidth", "Cannot find needsGeometryRebuild()");
-
-    if (contains(needs, "vp.getWidth() + vp.getWidth() * 2"))
-        return fail("vBlankCache_fix_bandGeometryUsesContentViewportWidth",
-                    "needsGeometryRebuild() must not compare vp.getWidth() * 3");
-
-    if (contains(needs, "vpW * 2") || contains(needs, "vpW * 3"))
-        return fail("vBlankCache_fix_bandGeometryUsesContentViewportWidth",
-                    "needsGeometryRebuild() must not use vpW * 2 or vpW * 3");
-
-    if (!contains(needs, "scrollPx < cacheBandStartX_")
-        && !contains(needs, "scrollPx + vp.getWidth()"))
-        return fail("vBlankCache_fix_bandGeometryUsesContentViewportWidth",
-                    "needsGeometryRebuild() must check visible range coverage");
-
-    return pass("vBlankCache_fix_bandGeometryUsesContentViewportWidth");
-}
-
-CheckResult vBlankCache_fix_timeGridChangesMarkDirty()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-
-    // Find the unified markTimeGridChanged lambda
-    const size_t lambdaPos = cpp.find("auto markTimeGridChanged = [this]()");
-    if (lambdaPos == std::string_view::npos)
-        return fail("vBlankCache_fix_timeGridChangesMarkDirty", "Cannot find markTimeGridChanged lambda");
-
-    const size_t blockStart = cpp.find('{', lambdaPos);
-    const size_t blockEnd = cpp.find('}', blockStart);
-    if (blockStart == std::string_view::npos || blockEnd == std::string_view::npos)
-        return fail("vBlankCache_fix_timeGridChangesMarkDirty", "Cannot parse lambda body");
-
-    const std::string lambdaBody = cpp.substr(blockStart, blockEnd - blockStart + 1);
-
-    if (!contains(lambdaBody, "backgroundCacheDirty_"))
-        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
-                    "markTimeGridChanged must set backgroundCacheDirty_");
-
-    if (!contains(lambdaBody, "detailCacheDirty_"))
-        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
-                    "markTimeGridChanged must set detailCacheDirty_");
-
-    if (!contains(lambdaBody, "invalidateVisual"))
-        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
-                    "markTimeGridChanged must call invalidateVisual");
-
-    // Verify commitTimeGrid calls markTimeGridChanged after successful publish
-    if (!contains(cpp, "markTimeGridChanged();"))
-        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
-                    "commitTimeGrid must call markTimeGridChanged()");
-
-    // Verify TimeGridEditAction does NOT store UI callback (no dangling this risk)
-    const auto actionH = readText("Source/Utils/TimeGridEditAction.h");
-    if (contains(actionH, "setOnChangedCallback") || contains(actionH, "onChanged_"))
-        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
-                    "TimeGridEditAction must not store UI callback");
-
-    // Verify PluginEditor detects TimeGrid revision changes
-    const auto editorCpp = readText("Source/Standalone/PluginEditor.cpp");
-    if (!contains(editorCpp, "timeGridRevision") || !contains(editorCpp, "onTimeGridRevisionChanged"))
-        return fail("vBlankCache_fix_timeGridChangesMarkDirty",
-                    "PluginEditor must detect TimeGrid revision changes");
-
-    return pass("vBlankCache_fix_timeGridChangesMarkDirty");
-}
-
-CheckResult vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-
-    const auto heartbeat = extractFunctionBlock(cpp, "void PianoRollComponent::onHeartbeatTick()");
-    if (heartbeat.empty())
-        return fail("vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty", "Cannot find onHeartbeatTick()");
-
-    const size_t progressedPos = heartbeat.find("progressed");
-    if (progressedPos == std::string_view::npos)
-        return fail("vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty", "Cannot find progressed check");
-
-    const std::string progressedBlock = heartbeat.substr(progressedPos);
-    if (!contains(progressedBlock, "backgroundCacheDirty_"))
-        return fail("vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty",
-                    "onHeartbeatTick() progressed branch must set backgroundCacheDirty_");
-
-    return pass("vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty");
-}
-
-CheckResult vBlankCache_fix_selectionHighlightInOverlay()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto rendererCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
-
-    const auto drawNotes = extractFunctionBlock(rendererCpp, "void PianoRollRenderer::drawNotes(");
-    if (drawNotes.empty())
-        return fail("vBlankCache_fix_selectionHighlightInOverlay", "Cannot find drawNotes()");
-
-    if (contains(drawNotes, "selectedNoteIndices"))
-        return fail("vBlankCache_fix_selectionHighlightInOverlay",
-                    "drawNotes() must NOT use selectedNoteIndices (draw all notes in base state)");
-
-    const auto buildItem = extractFunctionBlock(cpp, "PianoRollRenderer::ContentRenderItem PianoRollComponent::buildContentRenderItem(");
-    if (!buildItem.empty()) {
-        if (contains(buildItem, "item.selectedNoteIndices = "))
-            return fail("vBlankCache_fix_selectionHighlightInOverlay",
-                        "buildContentRenderItem() must NOT set item.selectedNoteIndices");
-    }
-
-    const auto previewPaint = extractFunctionBlock(cpp, "void PianoRollPreviewOverlay::paint(");
-    if (previewPaint.empty())
-        return fail("vBlankCache_fix_selectionHighlightInOverlay", "Cannot find PianoRollPreviewOverlay::paint()");
-
-    if (!contains(previewPaint, "drawSelectedNoteHighlights") && !contains(previewPaint, "selectedNote"))
-        return fail("vBlankCache_fix_selectionHighlightInOverlay",
-                    "PianoRollPreviewOverlay::paint() must render selected note highlights");
-
-    return pass("vBlankCache_fix_selectionHighlightInOverlay");
-}
-
-CheckResult vBlankCache_fix_applyNoteParameterFallbackMarksDirty()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-
-    const auto apply = extractFunctionBlock(cpp, "bool PianoRollComponent::applyNoteParameterToSelectedNotes");
-    if (apply.empty())
-        return fail("vBlankCache_fix_applyNoteParameterFallbackMarksDirty", "Cannot find applyNoteParameterToSelectedNotes()");
-
-    const size_t fallbackPos = apply.find("// Fallback:");
-    if (fallbackPos == std::string_view::npos)
-        return fail("vBlankCache_fix_applyNoteParameterFallbackMarksDirty", "Cannot find fallback comment");
-
-    const std::string fallbackBlock = apply.substr(fallbackPos);
-    if (!contains(fallbackBlock, "detailCacheDirty_"))
-        return fail("vBlankCache_fix_applyNoteParameterFallbackMarksDirty",
-                    "applyNoteParameterToSelectedNotes fallback must set detailCacheDirty_");
-
-    return pass("vBlankCache_fix_applyNoteParameterFallbackMarksDirty");
-}
-
-CheckResult vBlankCache_fix_vblankCallbackNoPolicyUpdate()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-
-    const auto vblank = extractFunctionBlock(cpp, "void PianoRollComponent::onScrollVBlankCallback");
-    if (vblank.empty())
-        return fail("vBlankCache_fix_vblankCallbackNoPolicyUpdate", "Cannot find onScrollVBlankCallback()");
-
-    if (contains(vblank, "updatePlayheadPresentationPolicy"))
-        return fail("vBlankCache_fix_vblankCallbackNoPolicyUpdate",
-                    "onScrollVBlankCallback must NOT call updatePlayheadPresentationPolicy");
-
-    return pass("vBlankCache_fix_vblankCallbackNoPolicyUpdate");
-}
-
-CheckResult vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess()
-{
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-
-    const auto rebuild = extractFunctionBlock(cpp, "void PianoRollComponent::rebuildDirtyCaches()");
-    if (rebuild.empty())
-        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess", "Cannot find rebuildDirtyCaches()");
-
-    const size_t bgIfPos = rebuild.find("if (backgroundCacheDirty_");
-    if (bgIfPos == std::string_view::npos)
-        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess",
-                    "Cannot find backgroundCacheDirty_ condition");
-
-    const size_t bgBraceStart = rebuild.find('{', bgIfPos);
-    const size_t bgBraceEnd = rebuild.find('}', bgBraceStart);
-    if (bgBraceStart == std::string_view::npos || bgBraceEnd == std::string_view::npos)
-        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess", "Cannot parse if block");
-
-    const std::string bgIfBlock = rebuild.substr(bgBraceStart, bgBraceEnd - bgBraceStart + 1);
-    if (!contains(bgIfBlock, "rebuildBackgroundCache()") && !contains(bgIfBlock, "backgroundCacheImage_.isValid()"))
-        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess",
-                    "backgroundCacheDirty_ must only be cleared when rebuild succeeds");
-
-    const size_t dtIfPos = rebuild.find("if (detailCacheDirty_");
-    if (dtIfPos == std::string_view::npos)
-        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess",
-                    "Cannot find detailCacheDirty_ condition");
-
-    const size_t dtBraceStart = rebuild.find('{', dtIfPos);
-    const size_t dtBraceEnd = rebuild.find('}', dtBraceStart);
-    if (dtBraceStart == std::string_view::npos || dtBraceEnd == std::string_view::npos)
-        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess", "Cannot parse if block");
-
-    const std::string dtIfBlock = rebuild.substr(dtBraceStart, dtBraceEnd - dtBraceStart + 1);
-    if (!contains(dtIfBlock, "rebuildDetailCache()") && !contains(dtIfBlock, "detailCacheImage_.isValid()"))
-        return fail("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess",
-                    "detailCacheDirty_ must only be cleared when rebuild succeeds");
-
-    return pass("vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess");
-}
+// ── Kill List resurrection guards ──
 
 CheckResult noTileCacheInSourceTree()
 {
@@ -2181,6 +1804,99 @@ CheckResult v12KillList_fitToContentHasNoZoomTautology()
     return pass("v12KillList_fitToContentHasNoZoomTautology");
 }
 
+CheckResult v12KillList_maxEndNoViewportRight()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::computeMaxTimelineEndSeconds");
+    
+    if (fn.empty())
+        return fail("v12KillList_maxEndNoViewportRight",
+                    "Cannot locate computeMaxTimelineEndSeconds function.");
+    
+    if (contains(fn, "viewportRight") || contains(fn, "visibleStartSeconds") || contains(fn, "visibleDuration"))
+        return fail("v12KillList_maxEndNoViewportRight",
+                    "computeMaxTimelineEndSeconds must not depend on viewport state (viewportRight/visibleStartSeconds/visibleDuration).");
+    
+    return pass("v12KillList_maxEndNoViewportRight");
+}
+
+CheckResult v12KillList_maxEndNoHostPlayhead()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::computeMaxTimelineEndSeconds");
+    
+    if (fn.empty())
+        return fail("v12KillList_maxEndNoHostPlayhead",
+                    "Cannot locate computeMaxTimelineEndSeconds function.");
+    
+    if (contains(fn, "readPlayheadTime") || contains(fn, "isPlaying_") || contains(fn, "positionAtomic_"))
+        return fail("v12KillList_maxEndNoHostPlayhead",
+                    "computeMaxTimelineEndSeconds must not depend on host playhead time.");
+    
+    return pass("v12KillList_maxEndNoHostPlayhead");
+}
+
+CheckResult v12KillList_setTimelineViewportNoUserZoomFlag()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::setTimelineViewport");
+    
+    if (fn.empty())
+        return fail("v12KillList_setTimelineViewportNoUserZoomFlag",
+                    "Cannot locate setTimelineViewport function.");
+    
+    if (contains(fn, "userHasManuallyZoomed_"))
+        return fail("v12KillList_setTimelineViewportNoUserZoomFlag",
+                    "setTimelineViewport must not set userHasManuallyZoomed_ (only user zoom operations should).");
+    
+    return pass("v12KillList_setTimelineViewportNoUserZoomFlag");
+}
+
+CheckResult v12KillList_followAndPublishReceivesParam()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::followAndPublishPlayhead");
+    
+    if (fn.empty())
+        return fail("v12KillList_followAndPublishReceivesParam",
+                    "Cannot locate followAndPublishPlayhead function.");
+    
+    // 函数签名应接收参数
+    if (!contains(cpp, "followAndPublishPlayhead(double timelinePlayheadTime)"))
+        return fail("v12KillList_followAndPublishReceivesParam",
+                    "followAndPublishPlayhead must receive double timelinePlayheadTime parameter.");
+    
+    // 函数体内不应自己读墙钟
+    if (contains(fn, "getDisplayPlayheadTime") || contains(fn, "Time::getMillisecondCounterHiRes"))
+        return fail("v12KillList_followAndPublishReceivesParam",
+                    "followAndPublishPlayhead must not read wall clock internally (receive param instead).");
+    
+    // Verify that callers (updatePlayheadPresentationPolicy, onScrollVBlankCallback) DELEGATE
+    // to followAndPublishPlayhead, not inline CONT follow
+    const auto policyFn = extractFunctionBlock(cpp, "PianoRollComponent::updatePlayheadPresentationPolicy");
+    if (!policyFn.empty()) {
+        if (!contains(policyFn, "followAndPublishPlayhead"))
+            return fail("v12KillList_followAndPublishReceivesParam",
+                        "updatePlayheadPresentationPolicy must delegate to followAndPublishPlayhead.");
+        if (contains(policyFn, "setTimelineViewport"))
+            return fail("v12KillList_followAndPublishReceivesParam",
+                        "updatePlayheadPresentationPolicy must not inline setTimelineViewport (delegate to followAndPublishPlayhead).");
+    }
+    
+    const auto vblankFn = extractFunctionBlock(cpp, "PianoRollComponent::onScrollVBlankCallback");
+    if (!vblankFn.empty()) {
+        if (!contains(vblankFn, "followAndPublishPlayhead"))
+            return fail("v12KillList_followAndPublishReceivesParam",
+                        "onScrollVBlankCallback must call followAndPublishPlayhead.");
+        // CONT follow logic must NOT be inlined
+        if (contains(vblankFn, "pinnedContentX"))
+            return fail("v12KillList_followAndPublishReceivesParam",
+                        "onScrollVBlankCallback must not inline CONT follow logic (pinnedContentX belongs in followAndPublishPlayhead).");
+    }
+
+    return pass("v12KillList_followAndPublishReceivesParam");
+}
+
 CheckResult v12CMakeListsHasViewMapperTestTarget()
 {
     const auto cmake = readText("CMakeLists.txt");
@@ -2331,6 +2047,623 @@ CheckResult testNoDuplicateF0AnalysisAPI()
     return pass("testNoDuplicateF0AnalysisAPI");
 }
 
+CheckResult scaleUiMappingCoversAllEightTypes()
+{
+    const auto source = readText("Source/Utils/ScaleUiMapping.h");
+
+    const std::vector<std::string_view> required = {
+        "scaleToUiScaleType",
+        "uiScaleTypeToScale",
+        "makeDetectedKeyFromUi",
+        "Scale::HarmonicMinor",
+        "Scale::Dorian",
+        "Scale::Mixolydian",
+        "Scale::PentatonicMajor",
+        "Scale::PentatonicMinor",
+    };
+
+    for (const auto token : required) {
+        if (!contains(source, token))
+            return fail("scaleUiMappingCoversAllEightTypes",
+                "ScaleUiMapping.h missing: " + std::string(token));
+    }
+
+    return pass("scaleUiMappingCoversAllEightTypes");
+}
+
+CheckResult vst3PluginEditorDoesNotUseThreeStateScaleMapping()
+{
+    const auto source = readText("Source/Plugin/PluginEditor.cpp");
+
+    if (contains(source, "clampedType == 2") && contains(source, "Scale::Minor"))
+        return fail("vst3PluginEditorDoesNotUseThreeStateScaleMapping",
+            "PluginEditor.cpp MUST NOT have three-state scale mapping (scaleType==2 ? Minor ...)");
+
+    if (contains(source, "clampedType == 3") && contains(source, "Scale::Chromatic"))
+        return fail("vst3PluginEditorDoesNotUseThreeStateScaleMapping",
+            "PluginEditor.cpp MUST NOT have three-state scale mapping (scaleType==3 ? Chromatic ...)");
+
+    if (contains(source, "detectedKey.scale == Scale::Minor") && contains(source, "? 2 :"))
+        return fail("vst3PluginEditorDoesNotUseThreeStateScaleMapping",
+            "PluginEditor.cpp MUST NOT have reverse three-state mapping (Minor ? 2 : ...)");
+
+    return pass("vst3PluginEditorDoesNotUseThreeStateScaleMapping");
+}
+
+CheckResult standaloneAndPluginUseSharedScaleMapping()
+{
+    const auto standaloneHeader = readText("Source/Standalone/PluginEditor.h");
+    const auto standaloneSource = readText("Source/Standalone/PluginEditor.cpp");
+    const auto pluginSource = readText("Source/Plugin/PluginEditor.cpp");
+
+    // Standalone must NOT declare private scaleToUiScaleType/uiScaleTypeToScale
+    if (contains(standaloneHeader, "static int scaleToUiScaleType"))
+        return fail("standaloneAndPluginUseSharedScaleMapping",
+            "Standalone PluginEditor.h MUST NOT declare private scaleToUiScaleType");
+
+    if (contains(standaloneHeader, "static Scale uiScaleTypeToScale"))
+        return fail("standaloneAndPluginUseSharedScaleMapping",
+            "Standalone PluginEditor.h MUST NOT declare private uiScaleTypeToScale");
+
+    if (contains(standaloneHeader, "static DetectedKey makeDetectedKeyFromUi"))
+        return fail("standaloneAndPluginUseSharedScaleMapping",
+            "Standalone PluginEditor.h MUST NOT declare private makeDetectedKeyFromUi");
+
+    // Standalone source must NOT define these functions as member implementations
+    if (contains(standaloneSource, "OpenTuneAudioProcessorEditor::scaleToUiScaleType"))
+        return fail("standaloneAndPluginUseSharedScaleMapping",
+            "Standalone PluginEditor.cpp MUST NOT define scaleToUiScaleType as member");
+
+    if (contains(standaloneSource, "OpenTuneAudioProcessorEditor::uiScaleTypeToScale"))
+        return fail("standaloneAndPluginUseSharedScaleMapping",
+            "Standalone PluginEditor.cpp MUST NOT define uiScaleTypeToScale as member");
+
+    // Both must include the shared header
+    if (!contains(standaloneSource, "ScaleUiMapping.h") && !contains(standaloneHeader, "ScaleUiMapping.h"))
+        return fail("standaloneAndPluginUseSharedScaleMapping",
+            "Standalone MUST include ScaleUiMapping.h");
+
+    if (!contains(pluginSource, "ScaleUiMapping.h"))
+        return fail("standaloneAndPluginUseSharedScaleMapping",
+            "Plugin PluginEditor.cpp MUST include ScaleUiMapping.h");
+
+    return pass("standaloneAndPluginUseSharedScaleMapping");
+}
+
+CheckResult f0RendererHasNoVerticalBucketDecimation()
+{
+    const auto source = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+
+    // Extract the drawF0Curve function block
+    const auto drawF0Curve = extractFunctionBlock(source, "void PianoRollRenderer::drawF0Curve(");
+    if (drawF0Curve.empty())
+        return fail("f0RendererHasNoVerticalBucketDecimation",
+            "drawF0Curve function not found in PianoRollRenderer.cpp");
+
+    if (contains(drawF0Curve, "drawVerticalLine"))
+        return fail("f0RendererHasNoVerticalBucketDecimation",
+            "drawF0Curve MUST NOT use drawVerticalLine for F0 rendering");
+
+    if (contains(drawF0Curve, "std::map<int, std::pair<float, float>>"))
+        return fail("f0RendererHasNoVerticalBucketDecimation",
+            "drawF0Curve MUST NOT use std::map buckets for F0 decimation");
+
+    if (contains(drawF0Curve, "std::map<int, std::pair"))
+        return fail("f0RendererHasNoVerticalBucketDecimation",
+            "drawF0Curve MUST NOT use any std::map bucket pattern");
+
+    return pass("f0RendererHasNoVerticalBucketDecimation");
+}
+
+CheckResult f0RendererUsesSingleContinuousPathHelper()
+{
+    const auto source = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+
+    // The shared helper must exist
+    if (!contains(source, "buildF0ContinuousPath"))
+        return fail("f0RendererUsesSingleContinuousPathHelper",
+            "PianoRollRenderer.cpp MUST define buildF0ContinuousPath helper");
+
+    // Extract drawF0Curve
+    const auto drawF0Curve = extractFunctionBlock(source, "void PianoRollRenderer::drawF0Curve(");
+    if (drawF0Curve.empty())
+        return fail("f0RendererUsesSingleContinuousPathHelper",
+            "drawF0Curve function not found");
+
+    // Both OriginalF0 and CorrectedF0 must use the shared helper
+    if (!contains(drawF0Curve, "buildF0ContinuousPath"))
+        return fail("f0RendererUsesSingleContinuousPathHelper",
+            "drawF0Curve MUST call buildF0ContinuousPath");
+
+    // Count how many times buildF0ContinuousPath is called in drawF0Curve
+    // It should be called exactly twice (once for original, once for corrected)
+    const size_t callCount = countOf(drawF0Curve, "buildF0ContinuousPath(");
+    if (callCount < 2)
+        return fail("f0RendererUsesSingleContinuousPathHelper",
+            "drawF0Curve MUST call buildF0ContinuousPath at least twice (original + corrected), found " + std::to_string(callCount));
+
+    // Must NOT have separate decimation branches with their own path building
+    if (contains(drawF0Curve, "useDecimation") && contains(drawF0Curve, "std::map"))
+        return fail("f0RendererUsesSingleContinuousPathHelper",
+            "drawF0Curve MUST NOT have separate decimation branches with std::map");
+
+    return pass("f0RendererUsesSingleContinuousPathHelper");
+}
+
+// =============================================================================
+// PianoRollSurfaceCache architecture guard tests
+// =============================================================================
+
+CheckResult surfaceCache_noOldBandCacheTokensInSource()
+{
+    // Verify old band cache tokens are gone from source tree
+    const std::vector<std::string> forbidden = {
+        "backgroundCacheImage_",
+        "detailCacheImage_",
+        "cacheBandStartX_",
+        "cacheBandWidth_",
+        "cacheBandHeight_",
+        "backgroundCacheDirty_",
+        "detailCacheDirty_",
+        "rebuildDirtyCaches",
+        "rebuildBackgroundCache",
+        "rebuildDetailCache",
+        "needsGeometryRebuild",
+        "makeBandViewMapper"
+    };
+    
+    const std::vector<std::string> sourceFiles = {
+        "Source/Standalone/UI/PianoRollComponent.h",
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h",
+        "Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp"
+    };
+    
+    for (const auto& file : sourceFiles) {
+        std::ifstream ifs(sourcePath(file));
+        if (!ifs.is_open()) continue;
+        std::string line;
+        int lineNum = 0;
+        while (std::getline(ifs, line)) {
+            ++lineNum;
+            for (const auto& token : forbidden) {
+                if (line.find(token) != std::string::npos) {
+                    return fail("surfaceCache_noOldBandCacheTokensInSource",
+                                "Forbidden token '" + token + "' found in " + file + ":" + std::to_string(lineNum));
+                }
+            }
+        }
+    }
+    return pass("surfaceCache_noOldBandCacheTokensInSource");
+}
+
+CheckResult surfaceCache_hasFourSemanticSlots()
+{
+    // Verify PianoRollSurfaceCache has exactly 4 slots
+    const auto header = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h");
+    
+    if (!contains(header, "kSlotCount"))
+        return fail("surfaceCache_hasFourSemanticSlots",
+                    "PianoRollSurfaceCache must define kSlotCount constant.");
+    
+    // Check that SlotCount enum value is 4 (Background=0, Waveform=1, Notes=2, F0=3, SlotCount=4)
+    if (!contains(header, "SlotCount"))
+        return fail("surfaceCache_hasFourSemanticSlots",
+                    "PianoRollSurfaceCache::Slot must have SlotCount enum value.");
+    
+    return pass("surfaceCache_hasFourSemanticSlots");
+}
+
+CheckResult surfaceCache_reasonMappingContentIncludesBackground()
+{
+    // Source check: Content reason must mark all 4 slots (Background, Waveform, Notes, F0)
+    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
+    
+    const auto markDirtyFn = extractFunctionBlock(cpp, "void PianoRollSurfaceCache::markDirtyFromReasonsMask");
+    if (markDirtyFn.empty())
+        return fail("surfaceCache_reasonMappingContentIncludesBackground",
+                    "markDirtyFromReasonsMask implementation not found.");
+    
+    // Content reason should exist and mark specific slots
+    if (!contains(markDirtyFn, "Content"))
+        return fail("surfaceCache_reasonMappingContentIncludesBackground",
+                    "markDirtyFromReasonsMask must handle Content reason.");
+    
+    // Check that Content marks all 4 slots: Background, Waveform, Notes, F0
+    // Look for the pattern: if (reasonsMask & content) { markDirty(Slot::Background); ... }
+    const auto contentBlock = extractBlock(markDirtyFn, "Content", "}");
+    if (contentBlock.empty() || !contains(contentBlock, "Background") || !contains(contentBlock, "Waveform") || !contains(contentBlock, "Notes") || !contains(contentBlock, "F0"))
+        return fail("surfaceCache_reasonMappingContentIncludesBackground",
+                    "Content reason must mark all 4 slots: Background, Waveform, Notes, and F0.");
+    
+    return pass("surfaceCache_reasonMappingContentIncludesBackground");
+}
+
+CheckResult surfaceCache_reasonMappingPlayheadMarksNothing()
+{
+    // Source check: Playhead reason should NOT call markDirty or invalidateAll
+    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
+    
+    const auto markDirtyFn = extractFunctionBlock(cpp, "void PianoRollSurfaceCache::markDirtyFromReasonsMask");
+    if (markDirtyFn.empty())
+        return fail("surfaceCache_reasonMappingPlayheadMarksNothing",
+                    "markDirtyFromReasonsMask implementation not found.");
+    
+    // Check that there's no "if (reasonsMask & playhead)" pattern
+    // Playhead should only appear in comments
+    if (contains(markDirtyFn, "if (reasonsMask & playhead)"))
+        return fail("surfaceCache_reasonMappingPlayheadMarksNothing",
+                    "Playhead reason must NOT have an if block that marks slots dirty.");
+    
+    return pass("surfaceCache_reasonMappingPlayheadMarksNothing");
+}
+
+CheckResult surfaceCache_reasonMappingDecorationOnlyBackground()
+{
+    // Source check: Decoration reason should only mark Background
+    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
+    
+    const auto markDirtyFn = extractFunctionBlock(cpp, "void PianoRollSurfaceCache::markDirtyFromReasonsMask");
+    if (markDirtyFn.empty())
+        return fail("surfaceCache_reasonMappingDecorationOnlyBackground",
+                    "markDirtyFromReasonsMask implementation not found.");
+    
+    // Check that Decoration has an if block
+    const size_t decorationPos = markDirtyFn.find("if (reasonsMask & decoration)");
+    if (decorationPos == std::string::npos)
+        return fail("surfaceCache_reasonMappingDecorationOnlyBackground",
+                    "Decoration reason must have an if block.");
+    
+    // Check that Decoration marks Background
+    const size_t decorationEnd = markDirtyFn.find("TimeGrid", decorationPos);
+    if (decorationEnd == std::string::npos)
+        return fail("surfaceCache_reasonMappingDecorationOnlyBackground",
+                    "Could not find end of Decoration block.");
+    
+    const auto decorationBlock = markDirtyFn.substr(decorationPos, decorationEnd - decorationPos);
+    if (!contains(decorationBlock, "Slot::Background"))
+        return fail("surfaceCache_reasonMappingDecorationOnlyBackground",
+                    "Decoration reason must mark Background slot.");
+    
+    // Ensure it doesn't mark Waveform, Notes, F0
+    if (contains(decorationBlock, "Slot::Waveform") || contains(decorationBlock, "Slot::Notes") || contains(decorationBlock, "Slot::F0"))
+        return fail("surfaceCache_reasonMappingDecorationOnlyBackground",
+                    "Decoration reason must NOT mark Waveform, Notes, or F0 slots.");
+    
+    return pass("surfaceCache_reasonMappingDecorationOnlyBackground");
+}
+
+CheckResult surfaceCache_setTimelineViewportNoUserZoomFlag()
+{
+    // Verify setTimelineViewport() does NOT set userHasManuallyZoomed_
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::setTimelineViewport");
+    
+    if (fn.empty())
+        return fail("surfaceCache_setTimelineViewportNoUserZoomFlag",
+                    "Cannot locate setTimelineViewport function.");
+    
+    if (contains(fn, "userHasManuallyZoomed_"))
+        return fail("surfaceCache_setTimelineViewportNoUserZoomFlag",
+                    "setTimelineViewport must NOT set userHasManuallyZoomed_ (only direct user zoom operations should).");
+    
+    return pass("surfaceCache_setTimelineViewportNoUserZoomFlag");
+}
+
+CheckResult surfaceCache_fullClipDomainUsesPlacementMinMax()
+{
+    // Surface domain must be derived from clip placement min/max timeline times
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    // Must have computeSurfaceStartTimelineSeconds using timelineStartSeconds
+    const auto startFn = extractFunctionBlock(cpp, "PianoRollComponent::computeSurfaceStartTimelineSeconds");
+    if (startFn.empty() || !contains(startFn, "timelineStartSeconds"))
+        return fail("surfaceCache_fullClipDomainUsesPlacementMinMax",
+                    "computeSurfaceStartTimelineSeconds must scan placements for timelineStartSeconds.");
+
+    // Must have computeSurfaceEndTimelineSeconds using timelineEndSeconds
+    const auto endFn = extractFunctionBlock(cpp, "PianoRollComponent::computeSurfaceEndTimelineSeconds");
+    if (endFn.empty() || !contains(endFn, "timelineEndSeconds"))
+        return fail("surfaceCache_fullClipDomainUsesPlacementMinMax",
+                    "computeSurfaceEndTimelineSeconds must scan placements for timelineEndSeconds.");
+
+    // Neither function may reference viewportRight
+    if (contains(startFn, "viewportRight") || contains(endFn, "viewportRight"))
+        return fail("surfaceCache_fullClipDomainUsesPlacementMinMax",
+                    "Surface domain must not reference viewportRight.");
+
+    return pass("surfaceCache_fullClipDomainUsesPlacementMinMax");
+}
+
+CheckResult surfaceCache_noViewportSizedOrOverscanTokens()
+{
+    // Cache surface must be full-clip, not viewport-sized.
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto flushFn = extractFunctionBlock(cpp, "PianoRollComponent::flushPendingVisualInvalidation");
+    if (flushFn.empty())
+        return fail("surfaceCache_noViewportSizedOrOverscanTokens",
+                    "Cannot locate flushPendingVisualInvalidation.");
+
+    if (contains(flushFn, "setSize("))
+        return fail("surfaceCache_noViewportSizedOrOverscanTokens",
+                    "flushPendingVisualInvalidation must not call setSize (use configureGeometry).");
+
+    // No overscan/coverage fallback tokens in surface cache files
+    const auto cacheCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
+    const auto cacheH = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h");
+    const std::vector<std::string> forbidden = {"overscan", "coverage", "fallback", "exposed"};
+    for (const auto& token : forbidden) {
+        if (contains(cacheCpp, token) || contains(cacheH, token))
+            return fail("surfaceCache_noViewportSizedOrOverscanTokens",
+                        "Forbidden token '" + token + "' found in surface cache files.");
+    }
+
+    return pass("surfaceCache_noViewportSizedOrOverscanTokens");
+}
+
+CheckResult surfaceCache_scrollOnlyDoesNotDirtySlots()
+{
+    // CONT scroll (Viewport reason) must NOT dirty/rebuild cache slots
+    const auto cacheCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
+    const auto markDirtyFn = extractFunctionBlock(cacheCpp, "void PianoRollSurfaceCache::markDirtyFromReasonsMask");
+
+    if (markDirtyFn.empty())
+        return fail("surfaceCache_scrollOnlyDoesNotDirtySlots",
+                    "Cannot locate markDirtyFromReasonsMask.");
+
+    // Viewport should NOT call markDirty(Slot::...)
+    const auto viewportBlock = extractBlock(markDirtyFn, "Viewport", "\n");
+    if (!viewportBlock.empty() && contains(viewportBlock, "markDirty"))
+        return fail("surfaceCache_scrollOnlyDoesNotDirtySlots",
+                    "Viewport reason must not call markDirty (scroll-only, no cache rebuild).");
+
+    return pass("surfaceCache_scrollOnlyDoesNotDirtySlots");
+}
+
+CheckResult surfaceCache_zoomDirtyAllSlots()
+{
+    // Zoom change must dirty all 4 slots for resolution-dependent rebuild
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto setFn = extractFunctionBlock(cpp, "PianoRollComponent::setTimelineViewport");
+
+    if (setFn.empty())
+        return fail("surfaceCache_zoomDirtyAllSlots",
+                    "Cannot locate setTimelineViewport.");
+
+    // Must have zoom detection (pixelsPerSecond comparison)
+    if (!contains(setFn, "zoomChanged") || !contains(setFn, "pixelsPerSecond"))
+        return fail("surfaceCache_zoomDirtyAllSlots",
+                    "setTimelineViewport must detect zoom change via pixelsPerSecond comparison.");
+
+    // Must call invalidateAll on zoom change
+    if (!contains(setFn, "invalidateAll"))
+        return fail("surfaceCache_zoomDirtyAllSlots",
+                    "Zoom change must call surfaceCache_.invalidateAll() to dirty all slots.");
+
+    return pass("surfaceCache_zoomDirtyAllSlots");
+}
+
+CheckResult surfaceCache_paintUsesFullClipOffset()
+{
+    // computeScrollOffsetPx must subtract surfaceStartSec for full-clip domain
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto scrollFn = extractFunctionBlock(cpp, "PianoRollComponent::computeScrollOffsetPx");
+
+    if (scrollFn.empty())
+        return fail("surfaceCache_paintUsesFullClipOffset",
+                    "Cannot locate computeScrollOffsetPx.");
+
+    // Must reference surfaceStartSec (not assume origin = 0)
+    if (!contains(scrollFn, "surfaceStartSec"))
+        return fail("surfaceCache_paintUsesFullClipOffset",
+                    "computeScrollOffsetPx must subtract surfaceStartSec for full-clip offset.");
+
+    return pass("surfaceCache_paintUsesFullClipOffset");
+}
+
+CheckResult surfaceCache_buildUsesFullClipMapper()
+{
+    // Cache build must use ViewMapper with contentStartX=0 and full-clip width
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto flushFn = extractFunctionBlock(cpp, "PianoRollComponent::flushPendingVisualInvalidation");
+
+    if (flushFn.empty())
+        return fail("surfaceCache_buildUsesFullClipMapper",
+                    "Cannot locate flushPendingVisualInvalidation.");
+
+    // Must reference configureGeometry (not setSize)
+    if (!contains(flushFn, "configureGeometry"))
+        return fail("surfaceCache_buildUsesFullClipMapper",
+                    "flushPendingVisualInvalidation must call configureGeometry, not setSize.");
+
+    // Must set contentStartX = 0 for cache ViewMapper
+    if (!contains(flushFn, "contentStartX"))
+        return fail("surfaceCache_buildUsesFullClipMapper",
+                    "Cache ViewMapper must have contentStartX = 0.");
+
+    return pass("surfaceCache_buildUsesFullClipMapper");
+}
+
+CheckResult surfaceCache_paintNoRendererDrawNoFallback()
+{
+    // paint() must only blit cache surfaces — no renderer draw calls, no fallback
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto paintFn = extractFunctionBlock(cpp, "PianoRollComponent::paint");
+
+    if (paintFn.empty())
+        return fail("surfaceCache_paintNoRendererDrawNoFallback",
+                    "Cannot locate paint().");
+
+    // Must call surfaceCache_.paint (the blit)
+    if (!contains(paintFn, "surfaceCache_.paint"))
+        return fail("surfaceCache_paintNoRendererDrawNoFallback",
+                    "paint() must call surfaceCache_.paint().");
+
+    // Must NOT call renderer_->draw* within paint() body
+    const std::vector<std::string> forbiddenRenders = {
+        "renderer_->drawLanes", "renderer_->drawNotes", "renderer_->drawWaveform",
+        "renderer_->drawF0Curve", "renderer_->drawGridLines", "renderer_->drawTimeRuler",
+        "renderer_->drawChunkBoundaries", "renderer_->drawUnvoicedFrameBands"
+    };
+    for (const auto& token : forbiddenRenders) {
+        if (contains(paintFn, token))
+            return fail("surfaceCache_paintNoRendererDrawNoFallback",
+                        "paint() must not call '" + token + "' — cache blit only.");
+    }
+
+    return pass("surfaceCache_paintNoRendererDrawNoFallback");
+}
+
+CheckResult surfaceCache_forbiddenTransientStateNotCached()
+{
+    // Interactive overlay state must never enter cache slots
+    const auto cacheCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
+    const auto buildSlotFn = extractFunctionBlock(cacheCpp, "PianoRollSurfaceCache::buildSlot");
+
+    if (buildSlotFn.empty())
+        return fail("surfaceCache_forbiddenTransientStateNotCached",
+                    "Cannot locate buildSlot.");
+
+    // Must not reference selection, playhead, hover, drag within buildSlot
+    const std::vector<std::string> forbidden = {
+        "selection", "playhead", "hover", "drag", "pending",
+        "transport", "seeking", "seek"
+    };
+    for (const auto& token : forbidden) {
+        if (contains(buildSlotFn, token))
+            return fail("surfaceCache_forbiddenTransientStateNotCached",
+                        "buildSlot must not cache transient state token '" + token + "'.");
+    }
+
+    return pass("surfaceCache_forbiddenTransientStateNotCached");
+}
+
+CheckResult surfaceCache_timeGridHandlesStayOverlay()
+{
+    // Time-grid handles must be painted as overlay (paintOverChildren), never in cache slots
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto overlayFn = extractFunctionBlock(cpp, "PianoRollComponent::paintOverChildren");
+
+    if (overlayFn.empty())
+        return fail("surfaceCache_timeGridHandlesStayOverlay",
+                    "Cannot locate paintOverChildren.");
+
+    // paintOverChildren must draw time grid handles
+    if (!contains(overlayFn, "drawTimeGridHandles"))
+        return fail("surfaceCache_timeGridHandlesStayOverlay",
+                    "paintOverChildren must call drawTimeGridHandles.");
+
+    // Cache buildSlot must not draw time grid handles
+    const auto cacheCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
+    const auto buildSlotFn = extractFunctionBlock(cacheCpp, "PianoRollSurfaceCache::buildSlot");
+    if (contains(buildSlotFn, "drawTimeGridHandles"))
+        return fail("surfaceCache_timeGridHandlesStayOverlay",
+                    "buildSlot must NOT call drawTimeGridHandles (overlay only).");
+
+    return pass("surfaceCache_timeGridHandlesStayOverlay");
+}
+
+CheckResult surfaceCache_verticalGeometryDirtiesYSlots()
+{
+    // Vertical scroll/zoom must dirty Background, Notes, F0 (y-dependent slots)
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto refreshFn = extractFunctionBlock(cpp, "PianoRollComponent::refreshVerticalViewportGeometry");
+
+    if (refreshFn.empty())
+        return fail("surfaceCache_verticalGeometryDirtiesYSlots",
+                    "Cannot locate refreshVerticalViewportGeometry.");
+
+    // Must mark Background dirty
+    if (!contains(refreshFn, "Slot::Background"))
+        return fail("surfaceCache_verticalGeometryDirtiesYSlots",
+                    "refreshVerticalViewportGeometry must markDirty Slot::Background.");
+
+    // Must mark Notes dirty
+    if (!contains(refreshFn, "Slot::Notes"))
+        return fail("surfaceCache_verticalGeometryDirtiesYSlots",
+                    "refreshVerticalViewportGeometry must markDirty Slot::Notes.");
+
+    // Must mark F0 dirty
+    if (!contains(refreshFn, "Slot::F0"))
+        return fail("surfaceCache_verticalGeometryDirtiesYSlots",
+                    "refreshVerticalViewportGeometry must markDirty Slot::F0.");
+
+    // Must NOT mark Waveform dirty (not y-dependent)
+    if (contains(refreshFn, "Slot::Waveform"))
+        return fail("surfaceCache_verticalGeometryDirtiesYSlots",
+                    "refreshVerticalViewportGeometry must NOT dirty Waveform (not y-dependent).");
+
+    return pass("surfaceCache_verticalGeometryDirtiesYSlots");
+}
+
+CheckResult surfaceCache_configureGeometryDetectsDomainShift()
+{
+    // configureGeometry must detect domain shift (startSec/endSec change)
+    const auto cacheCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
+    const auto configFn = extractFunctionBlock(cacheCpp, "PianoRollSurfaceCache::configureGeometry");
+
+    if (configFn.empty())
+        return fail("surfaceCache_configureGeometryDetectsDomainShift",
+                    "Cannot locate configureGeometry.");
+
+    // Must check startSec against surfaceStartSec_
+    if (!contains(configFn, "surfaceStartSec_"))
+        return fail("surfaceCache_configureGeometryDetectsDomainShift",
+                    "configureGeometry must detect startSec change via surfaceStartSec_ comparison.");
+
+    // Must check endSec against surfaceEndSec_  
+    if (!contains(configFn, "surfaceEndSec_"))
+        return fail("surfaceCache_configureGeometryDetectsDomainShift",
+                    "configureGeometry must detect endSec change via surfaceEndSec_ comparison.");
+
+    return pass("surfaceCache_configureGeometryDetectsDomainShift");
+}
+
+CheckResult surfaceCache_noVBlankCacheTestNamesRemain()
+{
+    // Verify no old vBlankCache test names remain in TestMain.cpp
+    const auto testMain = readText("Tests/TestMain.cpp");
+    
+    // Check for specific old test function patterns (not this test's own name)
+    // Use string concatenation to avoid self-matching
+    const std::string prefix = "vBlank" + std::string("Cache_");
+    if (contains(testMain, prefix + "paint") ||
+        contains(testMain, prefix + "cacheMembers") ||
+        contains(testMain, prefix + "flush") ||
+        contains(testMain, prefix + "rebuild"))
+        return fail("surfaceCache_noVBlankCacheTestNamesRemain",
+                    "TestMain.cpp must not contain old vBlankCache test functions.");
+    
+    return pass("surfaceCache_noVBlankCacheTestNamesRemain");
+}
+
+CheckResult surfaceCache_noGenericCachedSurfaceInPianoRoll()
+{
+    // Verify PianoRoll doesn't use ArrangementCachedSurface or generic cached surface
+    const std::vector<std::string> forbidden = {
+        "ArrangementCachedSurface",
+        "GenericCachedSurface",
+        "PianoRollCachedSurface"
+    };
+    
+    const std::vector<std::string> sourceFiles = {
+        "Source/Standalone/UI/PianoRollComponent.h",
+        "Source/Standalone/UI/PianoRollComponent.cpp",
+        "Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h",
+        "Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp"
+    };
+    
+    for (const auto& file : sourceFiles) {
+        const auto content = readText(file);
+        for (const auto& token : forbidden) {
+            if (contains(content, token))
+                return fail("surfaceCache_noGenericCachedSurfaceInPianoRoll",
+                            "Forbidden token '" + token + "' found in " + file);
+        }
+    }
+    return pass("surfaceCache_noGenericCachedSurfaceInPianoRoll");
+}
+
 } // namespace
 
 int main()
@@ -2344,6 +2677,7 @@ int main()
         araObjectBoundariesMatchOfficialRoles,
         araArchiveRestoresFromAudioSourceOnly,
         araSampleAccessEnableDoesNotReadFreshContent,
+        araUserReadGateCreatesLease,
         refreshPlaybackReadSourceIsPrivate,
         playbackRendererUsesCrsSnapshotNotOwnerPointer,
         araSourceContentUpdateInvalidatesOnly,
@@ -2376,25 +2710,6 @@ int main()
         processRenderRuntimeOwnsNoAraModels,
         vst3OverlayInitiallyHidden,
         recordRequestedNoRegionNoAlert,
-        // VBlank 双层缓存架构守卫测试（Task 7）
-        vBlankCache_paintDoesNoImmediateModeRendering,
-        vBlankCache_cacheMembersExist,
-        vBlankCache_flushRebuildsBeforeInvalidate,
-        vBlankCache_vblankNoDuplicateUpdate,
-        vBlankCache_setTimelineViewportNoOpGuard,
-        vBlankCache_setEditedContentHasDirtyFlags,
-        vBlankCache_commitPathsMarkDetailDirty,
-        vBlankCache_backgroundRebuildInvalidatesDetail,
-        vBlankCache_cacheUsesBandMapper,
-        vBlankCache_rebuildResetsDirtyFlags,
-        // VBlank 缓存重构修复架构守卫测试
-        vBlankCache_fix_bandGeometryUsesContentViewportWidth,
-        vBlankCache_fix_timeGridChangesMarkDirty,
-        vBlankCache_fix_waveformMipmapProgressMarksBackgroundDirty,
-        vBlankCache_fix_selectionHighlightInOverlay,
-        vBlankCache_fix_applyNoteParameterFallbackMarksDirty,
-        vBlankCache_fix_vblankCallbackNoPolicyUpdate,
-        vBlankCache_fix_rebuildDirtyCachesOnlyClearsOnSuccess,
         noTileCacheInSourceTree,
         // Kill List resurrection guards
         noInvalidateContentVisualResurrection,
@@ -2418,6 +2733,10 @@ int main()
         v12KillList_noRenderScrollOffsetPxParam,
         v12KillList_noRulerSurfaceStateZoomLevel,
         v12KillList_fitToContentHasNoZoomTautology,
+        v12KillList_maxEndNoViewportRight,
+        v12KillList_maxEndNoHostPlayhead,
+        v12KillList_setTimelineViewportNoUserZoomFlag,
+        v12KillList_followAndPublishReceivesParam,
         v12CMakeListsHasViewMapperTestTarget,
         // F0 可见性刷新链守卫测试
         testOriginalF0WriteDoesNotTriggerFullRender,
@@ -2425,7 +2744,33 @@ int main()
         testImportDoesNotPassNullCurve,
         testSelectionSyncRevisions,
         testApplyOriginalF0DoesNotBumpContentRevision,
-        testNoDuplicateF0AnalysisAPI
+        testNoDuplicateF0AnalysisAPI,
+        // 调式映射/F0渲染唯一架构守卫
+        scaleUiMappingCoversAllEightTypes,
+        vst3PluginEditorDoesNotUseThreeStateScaleMapping,
+        standaloneAndPluginUseSharedScaleMapping,
+        f0RendererHasNoVerticalBucketDecimation,
+        f0RendererUsesSingleContinuousPathHelper,
+        // PianoRollSurfaceCache architecture guards
+        surfaceCache_noOldBandCacheTokensInSource,
+        surfaceCache_hasFourSemanticSlots,
+        surfaceCache_reasonMappingContentIncludesBackground,
+        surfaceCache_reasonMappingPlayheadMarksNothing,
+        surfaceCache_reasonMappingDecorationOnlyBackground,
+        surfaceCache_setTimelineViewportNoUserZoomFlag,
+        surfaceCache_fullClipDomainUsesPlacementMinMax,
+        surfaceCache_noViewportSizedOrOverscanTokens,
+        surfaceCache_scrollOnlyDoesNotDirtySlots,
+        surfaceCache_zoomDirtyAllSlots,
+        surfaceCache_paintUsesFullClipOffset,
+        surfaceCache_buildUsesFullClipMapper,
+        surfaceCache_paintNoRendererDrawNoFallback,
+        surfaceCache_forbiddenTransientStateNotCached,
+        surfaceCache_timeGridHandlesStayOverlay,
+        surfaceCache_verticalGeometryDirtiesYSlots,
+        surfaceCache_configureGeometryDetectsDomainShift,
+        surfaceCache_noVBlankCacheTestNamesRemain,
+        surfaceCache_noGenericCachedSurfaceInPianoRoll
     };
 
     int failed = 0;
