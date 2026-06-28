@@ -36,6 +36,7 @@
 #include "Utils/AppPreferences.h"
 #include "Utils/ProjectSession.h"
 #include "Utils/LocalizationManager.h"
+#include "Utils/ScaleUiMapping.h"
 #include "Audio/AsyncAudioLoader.h"
 #include "UI/TimelineViewportCamera.h"
 
@@ -177,9 +178,6 @@ private:
     void performUndoRedoAction(bool isUndo);
 
     // 调式状态辅助
-    static int scaleToUiScaleType(Scale scale);
-    static Scale uiScaleTypeToScale(int scaleType);
-    static DetectedKey makeDetectedKeyFromUi(int rootNote, int scaleType, float confidence = 1.0f);
     DetectedKey resolveScaleForPlacementContent(int trackId, int placementIndex, juce::String* sourceOut = nullptr) const;
     void applyScaleToUi(int rootNote, int scaleType);
     void applyResolvedScaleForPlacementContent(int trackId, int placementIndex);

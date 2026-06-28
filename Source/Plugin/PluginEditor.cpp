@@ -16,6 +16,7 @@
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/PitchShiftSettings.h"
 #include "Utils/PitchShiftEditAction.h"
+#include "Utils/ScaleUiMapping.h"
 #include "Editor/PitchShiftDialogContent.h"
 #include "Utils/TimeCoordinate.h"
 #include "UI/UiAssets.h"
@@ -857,7 +858,7 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
     if (activeKey.isValid()) {
         DetectedKey key;
         key.root = static_cast<Key>(clampedRoot);
-        key.scale = (clampedType == 2) ? Scale::Minor : ((clampedType == 3) ? Scale::Chromatic : Scale::Major);
+        key.scale = OpenTune::uiScaleTypeToScale(clampedType);
         key.confidence = 1.0f;
         contentCommands_->setDetectedKey(activeKey, key);
     }
@@ -1196,7 +1197,7 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         pianoRoll_.clearTimelineViewDomain();
     }
     const int rootNote = static_cast<int>(detectedKey.root);
-    const int scaleType = (detectedKey.scale == Scale::Minor) ? 2 : ((detectedKey.scale == Scale::Chromatic) ? 3 : 1);
+    const int scaleType = OpenTune::scaleToUiScaleType(detectedKey.scale);
 
     suppressScaleChangedCallback_ = true;
     transportBar_.setScale(rootNote, scaleType);
