@@ -14,6 +14,7 @@
 #include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §8.5 — TimeGrid handles
 #include "UI/ToolIds.h"       // ⚡️ vocal-time-stretch §8.5 (Phase J) — currentTool
 #include "UI/ViewMapper.h"
+#include "Utils/F0VisualLOD.h"
 #include <algorithm>
 #include <vector>
 #include <array>
@@ -54,9 +55,9 @@ public:
         ContentKey contentKey;
         ContentTimelineProjection projection;
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
-        WaveformMipmap* waveformMipmap = nullptr;
+        WaveformLevelSnapshot waveformSnapshot;
+        std::shared_ptr<const F0VisualLOD> f0LOD;
         std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
-        std::vector<float> correctedF0;
         F0Timeline f0Timeline;
         std::vector<Note> displayNotes;
         bool active = false;
@@ -85,7 +86,7 @@ public:
 
     /// Surface-render-only context — stripped of transient UI fields (selection, hover,
     /// pressed key, playhead, reference overlay, drag-working handles).
-    /// Used exclusively by PianoRollSurfaceCache::buildSlot().
+    /// Used exclusively by surface generation builders.
     struct SurfaceRenderContext
     {
         int width = 0;
