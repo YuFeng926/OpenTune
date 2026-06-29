@@ -41,7 +41,6 @@
 #include "PianoRoll/PianoRollSurfaceCache.h"
 
 #include "PianoRoll/PianoRollToolHandler.h"
-#include "PianoRoll/PianoRollVisualInvalidation.h"
 #include "PianoRoll/PianoRollCorrectionWorker.h"
 #include "PianoRoll/InteractionState.h"
 #include "TimelineViewportCamera.h"
@@ -169,7 +168,6 @@ public:
     void setShowWaveform(bool shouldShow);
     void setShowLanes(bool shouldShow);
     void setNoteNameMode(NoteNameMode noteNameMode);
-    void setShowChunkBoundaries(bool shouldShow);
     void setShowUnvoicedFrames(bool shouldShow);
     void setInferenceActive(bool active);
     void setBpm(double bpm);
@@ -183,8 +181,7 @@ public:
 
         scrollMode_ = mode;
         updatePlayheadPresentationPolicy();
-        invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Viewport),
-                         PianoRollVisualInvalidationPriority::Interactive);
+        repaint();
     }
     ScrollMode getScrollMode() const { return scrollMode_; }
     void setScale(int rootNote, int scaleType);
@@ -198,12 +195,16 @@ public:
     void setShowOriginalF0(bool show) {
         if (showOriginalF0_ == show) return;
         showOriginalF0_ = show;
-        invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
+        repaint();
     }
     void setShowCorrectedF0(bool show) {
         if (showCorrectedF0_ == show) return;
         showCorrectedF0_ = show;
-        invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content));
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
+        repaint();
     }
     bool isShowingOriginalF0() const { return showOriginalF0_; }
 
@@ -282,15 +283,7 @@ public:
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
 
-    void invalidateVisual(const PianoRollVisualInvalidationRequest& request);
-    void invalidateVisual(uint32_t reasonsMask,
-                          PianoRollVisualInvalidationPriority priority = PianoRollVisualInvalidationPriority::Normal);
-    void invalidateVisual(uint32_t reasonsMask,
-                          const juce::Rectangle<int>& dirtyArea,
-                          PianoRollVisualInvalidationPriority priority = PianoRollVisualInvalidationPriority::Interactive);
-    void flushPendingVisualInvalidation();
-
-    /** Request a semantic content redraw via FrameScheduler. */
+    /** Request a semantic content redraw. */
     void requestContentRedraw();
 
     void scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) override;
@@ -373,6 +366,7 @@ private:
     void drawLineAnchorPreview(juce::Graphics& g);
     void drawSelectionBox(juce::Graphics& g, ThemeId themeId);
     bool shouldShowPianoKeys() const noexcept;
+    bool isTimeView() const noexcept { return currentTool_ == ToolId::TimeTool; }
 
 
     void handleVerticalZoomWheel(const juce::MouseEvent& e, float deltaY);
@@ -449,8 +443,7 @@ private:
 
     PianoRollRenderer::RenderContext buildRenderContext(int renderWidthPx, int renderPianoKeyWidth) const;
 
-    void refreshVerticalViewportGeometry(PianoRollVisualInvalidationPriority priority =
-                                             PianoRollVisualInvalidationPriority::Interactive);
+    void refreshVerticalViewportGeometry();
 
     std::shared_ptr<PitchCurve> currentCurve_;
     TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
@@ -488,7 +481,6 @@ private:
     bool showWaveform_ = true;
     bool showLanes_ = true;
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
-    bool showChunkBoundaries_ = false;
     bool showUnvoicedFrames_ = false;
     bool showOriginalF0_ = true;
     bool showCorrectedF0_ = true;
@@ -519,8 +511,6 @@ private:
         bool isValid() const noexcept { return endSeconds > startSeconds; }
     };
     TimelineViewDomain timelineViewDomain_;
-    PianoRollVisualInvalidationState pendingVisualInvalidation_;
-    double lastVisualFlushMs_ = 0.0;
     bool inferenceActive_ = false;
     int waveformBuildTickCounter_ = 0;
     bool waveformVisualRefreshPending_ = false;

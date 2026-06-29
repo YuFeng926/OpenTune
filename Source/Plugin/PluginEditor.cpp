@@ -267,10 +267,8 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setAudioEditingScheme(sharedPreferences.audioEditingScheme);
     pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
-    pianoRoll_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
-    menuBar_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
 }
 
@@ -712,16 +710,6 @@ void OpenTuneAudioProcessorEditor::noteNameModeChanged(NoteNameMode noteNameMode
 {
     if (appPreferences_.getState().shared.pianoRollVisualPreferences.noteNameMode != noteNameMode) {
         appPreferences_.setNoteNameMode(noteNameMode);
-    }
-
-    syncSharedAppPreferences();
-    menuBar_.repaint();
-}
-
-void OpenTuneAudioProcessorEditor::showChunkBoundariesToggled(bool shouldShow)
-{
-    if (appPreferences_.getState().shared.pianoRollVisualPreferences.showChunkBoundaries != shouldShow) {
-        appPreferences_.setShowChunkBoundaries(shouldShow);
     }
 
     syncSharedAppPreferences();

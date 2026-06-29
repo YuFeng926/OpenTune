@@ -14,8 +14,9 @@ public:
     {
         Background = 0,   // lanes + grid lines + time ruler
         Waveform,         // waveform per content item
-        Notes,            // notes per content item
+        Notes,            // notes only (committed notes, no chunk boundaries, no highlights)
         F0,               // F0 curves per content item
+        TimeAnchors,      // published TimeGrid anchors (not hover/selected handles)
         SlotCount
     };
 
@@ -24,7 +25,6 @@ public:
     PianoRollSurfaceCache();
 
     void markDirty(Slot s);
-    void markDirtyFromReasonsMask(uint32_t reasonsMask);
     bool isDirty(Slot s) const;
     void clearDirty(Slot s);
     void invalidateAll();
@@ -33,13 +33,13 @@ public:
     const juce::Image& image(Slot s) const;
 
     /// Build a single slot. Creates/resizes image, renders into it, clears dirty.
-    void buildSlot(Slot s, const PianoRollRenderer::RenderContext& ctx, PianoRollRenderer& renderer);
+    void buildSlot(Slot s, const PianoRollRenderer::SurfaceRenderContext& sctx, PianoRollRenderer& renderer);
 
     /// Build all dirty slots.
-    void buildAllDirty(const PianoRollRenderer::RenderContext& ctx, PianoRollRenderer& renderer);
+    void buildAllDirty(const PianoRollRenderer::SurfaceRenderContext& sctx, PianoRollRenderer& renderer);
 
-    /// Paint all slot images at the given offset.
-    void paint(juce::Graphics& g, int offsetX, int offsetY) const;
+    /// Paint all slot images at the given offset. When timeView is true, skips Waveform/Notes/F0.
+    void paint(juce::Graphics& g, int offsetX, int offsetY, bool timeView = false) const;
 
     /// Configure full-clip domain geometry. Dirties all slots on change.
     bool configureGeometry(double startSec, double endSec, double pps, int height);

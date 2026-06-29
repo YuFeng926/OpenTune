@@ -1213,13 +1213,11 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
     pianoRoll_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     pianoRoll_.setNoteNameMode(visualPreferences.noteNameMode);
-    pianoRoll_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
     parameterPanel_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
     arrangementView_.setZoomSensitivity(sharedPreferences.zoomSensitivity);
     arrangementView_.setExperimentalReferenceControlsEnabled(experimentalFeaturesEnabled);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
-    menuBar_.setShowChunkBoundaries(visualPreferences.showChunkBoundaries);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
 
     shortcutSettings_ = preferencesState.shared.shortcuts;
@@ -2256,16 +2254,6 @@ void OpenTuneAudioProcessorEditor::noteNameModeChanged(NoteNameMode noteNameMode
     menuBar_.repaint();
 }
 
-void OpenTuneAudioProcessorEditor::showChunkBoundariesToggled(bool shouldShow)
-{
-    if (appPreferences_.getState().shared.pianoRollVisualPreferences.showChunkBoundaries != shouldShow) {
-        appPreferences_.setShowChunkBoundaries(shouldShow);
-    }
-
-    syncSharedAppPreferences();
-    menuBar_.repaint();
-}
-
 void OpenTuneAudioProcessorEditor::showUnvoicedFramesToggled(bool shouldShow)
 {
     if (appPreferences_.getState().shared.pianoRollVisualPreferences.showUnvoicedFrames != shouldShow) {
@@ -2324,14 +2312,7 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
     sendLookAndFeelChange();
     repaint();
 
-    PianoRollVisualInvalidationRequest pianoRollRefresh;
-    pianoRollRefresh.reasonsMask = static_cast<uint32_t>(PianoRollVisualInvalidationReason::Viewport)
-        | static_cast<uint32_t>(PianoRollVisualInvalidationReason::Content)
-        | static_cast<uint32_t>(PianoRollVisualInvalidationReason::Decoration)
-        | static_cast<uint32_t>(PianoRollVisualInvalidationReason::Interaction);
-    pianoRollRefresh.fullRepaint = true;
-    pianoRollRefresh.priority = PianoRollVisualInvalidationPriority::Interactive;
-    pianoRoll_.invalidateVisual(pianoRollRefresh);
+    pianoRoll_.rebuildSurfaceCache();
 
     repaint();
 }

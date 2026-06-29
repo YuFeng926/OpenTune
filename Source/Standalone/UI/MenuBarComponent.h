@@ -54,7 +54,6 @@ public:
         virtual void showWaveformToggled(bool shouldShow) = 0;
         virtual void showLanesToggled(bool shouldShow) = 0;
         virtual void noteNameModeChanged(NoteNameMode noteNameMode) = 0;
-        virtual void showChunkBoundariesToggled(bool shouldShow) = 0;
         virtual void showUnvoicedFramesToggled(bool shouldShow) = 0;
         virtual void themeChanged(ThemeId themeId) = 0;
         virtual void undoRequested() = 0;
@@ -76,7 +75,6 @@ public:
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme) { mouseTrailTheme_ = theme; }
     void setRecentProjects(const std::vector<juce::File>& recentFiles);
     void setNoteNameMode(NoteNameMode noteNameMode);
-    void setShowChunkBoundaries(bool shouldShow);
     void setShowUnvoicedFrames(bool shouldShow);
     void setTrackColorMode(TrackColorMode mode);
 
@@ -92,7 +90,6 @@ private:
     std::vector<juce::File> recentProjects_;
     MouseTrailConfig::TrailTheme mouseTrailTheme_ = MouseTrailConfig::TrailTheme::Classic;
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
-    bool showChunkBoundaries_ = false;
     bool showUnvoicedFrames_ = false;
     TrackColorMode trackColorMode_ = TrackColorMode::Random;
 
@@ -116,7 +113,6 @@ private:
         NoteNameModeShowAll,
         NoteNameModeCOnly,
         NoteNameModeHide,
-        ShowChunkBoundaries,
         ShowUnvoicedFrames,
         ThemeBlueBreeze,
         ThemeDarkBlueGrey,

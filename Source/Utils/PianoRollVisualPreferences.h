@@ -11,7 +11,6 @@ enum class NoteNameMode
 
 struct PianoRollVisualPreferences {
     NoteNameMode noteNameMode = NoteNameMode::COnly;
-    bool showChunkBoundaries = false;
     bool showUnvoicedFrames = false;
 };
 

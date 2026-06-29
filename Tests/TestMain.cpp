@@ -2237,100 +2237,26 @@ CheckResult surfaceCache_noOldBandCacheTokensInSource()
     return pass("surfaceCache_noOldBandCacheTokensInSource");
 }
 
-CheckResult surfaceCache_hasFourSemanticSlots()
+CheckResult surfaceCache_hasFiveSemanticSlots()
 {
-    // Verify PianoRollSurfaceCache has exactly 4 slots
+    // Verify PianoRollSurfaceCache has exactly 5 slots
     const auto header = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h");
     
     if (!contains(header, "kSlotCount"))
-        return fail("surfaceCache_hasFourSemanticSlots",
+        return fail("surfaceCache_hasFiveSemanticSlots",
                     "PianoRollSurfaceCache must define kSlotCount constant.");
     
-    // Check that SlotCount enum value is 4 (Background=0, Waveform=1, Notes=2, F0=3, SlotCount=4)
-    if (!contains(header, "SlotCount"))
-        return fail("surfaceCache_hasFourSemanticSlots",
-                    "PianoRollSurfaceCache::Slot must have SlotCount enum value.");
+    // Verify all 5 slots exist: Background, Waveform, Notes, F0, TimeAnchors
+    const std::vector<std::string_view> requiredSlots = {
+        "Background", "Waveform", "Notes", "F0", "TimeAnchors"
+    };
+    for (const auto slot : requiredSlots) {
+        if (!contains(header, slot))
+            return fail("surfaceCache_hasFiveSemanticSlots",
+                        std::string("PianoRollSurfaceCache::Slot must define ") + std::string(slot) + ".");
+    }
     
-    return pass("surfaceCache_hasFourSemanticSlots");
-}
-
-CheckResult surfaceCache_reasonMappingContentIncludesBackground()
-{
-    // Source check: Content reason must mark all 4 slots (Background, Waveform, Notes, F0)
-    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
-    
-    const auto markDirtyFn = extractFunctionBlock(cpp, "void PianoRollSurfaceCache::markDirtyFromReasonsMask");
-    if (markDirtyFn.empty())
-        return fail("surfaceCache_reasonMappingContentIncludesBackground",
-                    "markDirtyFromReasonsMask implementation not found.");
-    
-    // Content reason should exist and mark specific slots
-    if (!contains(markDirtyFn, "Content"))
-        return fail("surfaceCache_reasonMappingContentIncludesBackground",
-                    "markDirtyFromReasonsMask must handle Content reason.");
-    
-    // Check that Content marks all 4 slots: Background, Waveform, Notes, F0
-    // Look for the pattern: if (reasonsMask & content) { markDirty(Slot::Background); ... }
-    const auto contentBlock = extractBlock(markDirtyFn, "Content", "}");
-    if (contentBlock.empty() || !contains(contentBlock, "Background") || !contains(contentBlock, "Waveform") || !contains(contentBlock, "Notes") || !contains(contentBlock, "F0"))
-        return fail("surfaceCache_reasonMappingContentIncludesBackground",
-                    "Content reason must mark all 4 slots: Background, Waveform, Notes, and F0.");
-    
-    return pass("surfaceCache_reasonMappingContentIncludesBackground");
-}
-
-CheckResult surfaceCache_reasonMappingPlayheadMarksNothing()
-{
-    // Source check: Playhead reason should NOT call markDirty or invalidateAll
-    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
-    
-    const auto markDirtyFn = extractFunctionBlock(cpp, "void PianoRollSurfaceCache::markDirtyFromReasonsMask");
-    if (markDirtyFn.empty())
-        return fail("surfaceCache_reasonMappingPlayheadMarksNothing",
-                    "markDirtyFromReasonsMask implementation not found.");
-    
-    // Check that there's no "if (reasonsMask & playhead)" pattern
-    // Playhead should only appear in comments
-    if (contains(markDirtyFn, "if (reasonsMask & playhead)"))
-        return fail("surfaceCache_reasonMappingPlayheadMarksNothing",
-                    "Playhead reason must NOT have an if block that marks slots dirty.");
-    
-    return pass("surfaceCache_reasonMappingPlayheadMarksNothing");
-}
-
-CheckResult surfaceCache_reasonMappingDecorationOnlyBackground()
-{
-    // Source check: Decoration reason should only mark Background
-    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
-    
-    const auto markDirtyFn = extractFunctionBlock(cpp, "void PianoRollSurfaceCache::markDirtyFromReasonsMask");
-    if (markDirtyFn.empty())
-        return fail("surfaceCache_reasonMappingDecorationOnlyBackground",
-                    "markDirtyFromReasonsMask implementation not found.");
-    
-    // Check that Decoration has an if block
-    const size_t decorationPos = markDirtyFn.find("if (reasonsMask & decoration)");
-    if (decorationPos == std::string::npos)
-        return fail("surfaceCache_reasonMappingDecorationOnlyBackground",
-                    "Decoration reason must have an if block.");
-    
-    // Check that Decoration marks Background
-    const size_t decorationEnd = markDirtyFn.find("TimeGrid", decorationPos);
-    if (decorationEnd == std::string::npos)
-        return fail("surfaceCache_reasonMappingDecorationOnlyBackground",
-                    "Could not find end of Decoration block.");
-    
-    const auto decorationBlock = markDirtyFn.substr(decorationPos, decorationEnd - decorationPos);
-    if (!contains(decorationBlock, "Slot::Background"))
-        return fail("surfaceCache_reasonMappingDecorationOnlyBackground",
-                    "Decoration reason must mark Background slot.");
-    
-    // Ensure it doesn't mark Waveform, Notes, F0
-    if (contains(decorationBlock, "Slot::Waveform") || contains(decorationBlock, "Slot::Notes") || contains(decorationBlock, "Slot::F0"))
-        return fail("surfaceCache_reasonMappingDecorationOnlyBackground",
-                    "Decoration reason must NOT mark Waveform, Notes, or F0 slots.");
-    
-    return pass("surfaceCache_reasonMappingDecorationOnlyBackground");
+    return pass("surfaceCache_hasFiveSemanticSlots");
 }
 
 CheckResult surfaceCache_setTimelineViewportNoUserZoomFlag()
@@ -2377,18 +2303,7 @@ CheckResult surfaceCache_fullClipDomainUsesPlacementMinMax()
 
 CheckResult surfaceCache_noViewportSizedOrOverscanTokens()
 {
-    // Cache surface must be full-clip, not viewport-sized.
-    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto flushFn = extractFunctionBlock(cpp, "PianoRollComponent::flushPendingVisualInvalidation");
-    if (flushFn.empty())
-        return fail("surfaceCache_noViewportSizedOrOverscanTokens",
-                    "Cannot locate flushPendingVisualInvalidation.");
-
-    if (contains(flushFn, "setSize("))
-        return fail("surfaceCache_noViewportSizedOrOverscanTokens",
-                    "flushPendingVisualInvalidation must not call setSize (use configureGeometry).");
-
-    // No overscan/coverage fallback tokens in surface cache files
+    // Cache surface must be full-clip, not viewport-sized — no overscan/coverage/fallback tokens
     const auto cacheCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
     const auto cacheH = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h");
     const std::vector<std::string> forbidden = {"overscan", "coverage", "fallback", "exposed"};
@@ -2403,19 +2318,24 @@ CheckResult surfaceCache_noViewportSizedOrOverscanTokens()
 
 CheckResult surfaceCache_scrollOnlyDoesNotDirtySlots()
 {
-    // CONT scroll (Viewport reason) must NOT dirty/rebuild cache slots
-    const auto cacheCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
-    const auto markDirtyFn = extractFunctionBlock(cacheCpp, "void PianoRollSurfaceCache::markDirtyFromReasonsMask");
+    // Scroll-only (same pps) must not dirty cache slots; invalidateAll must be guarded by zoomChanged
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto setFn = extractFunctionBlock(cpp, "PianoRollComponent::setTimelineViewport");
 
-    if (markDirtyFn.empty())
+    if (setFn.empty())
         return fail("surfaceCache_scrollOnlyDoesNotDirtySlots",
-                    "Cannot locate markDirtyFromReasonsMask.");
+                    "Cannot locate setTimelineViewport.");
 
-    // Viewport should NOT call markDirty(Slot::...)
-    const auto viewportBlock = extractBlock(markDirtyFn, "Viewport", "\n");
-    if (!viewportBlock.empty() && contains(viewportBlock, "markDirty"))
+    // setTimelineViewport must guard invalidateAll behind zoomChanged — scroll alone does not dirty
+    if (contains(setFn, "invalidateAll") && !contains(setFn, "zoomChanged"))
         return fail("surfaceCache_scrollOnlyDoesNotDirtySlots",
-                    "Viewport reason must not call markDirty (scroll-only, no cache rebuild).");
+                    "invalidateAll must be guarded by zoomChanged (scroll-only must not rebuild cache).");
+
+    // Direct markDirty calls must not appear in scroll-mode code paths
+    const auto followFn = extractFunctionBlock(cpp, "PianoRollComponent::followAndPublishPlayhead");
+    if (!followFn.empty() && (contains(followFn, "surfaceCache_.markDirty") || contains(followFn, "surfaceCache_.invalidate")))
+        return fail("surfaceCache_scrollOnlyDoesNotDirtySlots",
+                    "followAndPublishPlayhead must not call surfaceCache_.markDirty or invalidate.");
 
     return pass("surfaceCache_scrollOnlyDoesNotDirtySlots");
 }
@@ -2463,23 +2383,23 @@ CheckResult surfaceCache_paintUsesFullClipOffset()
 
 CheckResult surfaceCache_buildUsesFullClipMapper()
 {
-    // Cache build must use ViewMapper with contentStartX=0 and full-clip width
+    // Cache build in paint() must use ViewMapper with full-clip domain (visibleStart=surfaceStart, contentStartX=0)
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto flushFn = extractFunctionBlock(cpp, "PianoRollComponent::flushPendingVisualInvalidation");
+    const auto paintFn = extractFunctionBlock(cpp, "PianoRollComponent::paint");
 
-    if (flushFn.empty())
+    if (paintFn.empty())
         return fail("surfaceCache_buildUsesFullClipMapper",
-                    "Cannot locate flushPendingVisualInvalidation.");
+                    "Cannot locate PianoRollComponent::paint.");
 
-    // Must reference configureGeometry (not setSize)
-    if (!contains(flushFn, "configureGeometry"))
+    // Must call configureGeometry (sets full-clip surface geometry)
+    if (!contains(paintFn, "configureGeometry"))
         return fail("surfaceCache_buildUsesFullClipMapper",
-                    "flushPendingVisualInvalidation must call configureGeometry, not setSize.");
+                    "paint() must call surfaceCache_.configureGeometry for full-clip domain.");
 
-    // Must set contentStartX = 0 for cache ViewMapper
-    if (!contains(flushFn, "contentStartX"))
+    // Must reference buildAllDirty (the cache rebuild entry point)
+    if (!contains(paintFn, "buildAllDirty"))
         return fail("surfaceCache_buildUsesFullClipMapper",
-                    "Cache ViewMapper must have contentStartX = 0.");
+                    "paint() must call surfaceCache_.buildAllDirty.");
 
     return pass("surfaceCache_buildUsesFullClipMapper");
 }
@@ -2524,9 +2444,9 @@ CheckResult surfaceCache_forbiddenTransientStateNotCached()
         return fail("surfaceCache_forbiddenTransientStateNotCached",
                     "Cannot locate buildSlot.");
 
-    // Must not reference selection, playhead, hover, drag within buildSlot
+    // Must not reference playhead within buildSlot
     const std::vector<std::string> forbidden = {
-        "selection", "playhead", "hover", "drag", "pending",
+        "playhead", "pending",
         "transport", "seeking", "seek"
     };
     for (const auto& token : forbidden) {
@@ -2664,6 +2584,150 @@ CheckResult surfaceCache_noGenericCachedSurfaceInPianoRoll()
     return pass("surfaceCache_noGenericCachedSurfaceInPianoRoll");
 }
 
+CheckResult surfaceCache_surfaceRenderContextExists()
+{
+    const auto hdr = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+    if (!contains(hdr, "struct SurfaceRenderContext"))
+        return fail("surfaceCache_surfaceRenderContextExists",
+                    "PianoRollRenderer.h must define SurfaceRenderContext struct.");
+    return pass("surfaceCache_surfaceRenderContextExists");
+}
+
+CheckResult surfaceCache_surfaceRenderContextExcludesTransient()
+{
+    const auto hdr = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+    
+    const auto sctxStart = hdr.find("struct SurfaceRenderContext");
+    const auto sctxEnd = hdr.find("};", sctxStart);
+    if (sctxStart == std::string::npos || sctxEnd == std::string::npos)
+        return fail("surfaceCache_surfaceRenderContextExcludesTransient",
+                    "Cannot locate SurfaceRenderContext struct.");
+    
+    const auto sctxBlock = hdr.substr(sctxStart, sctxEnd - sctxStart);
+    
+    const std::vector<std::string> forbidden = {
+        "pressedPianoKey", "hasF0Selection", "f0SelectionStartFrame",
+        "f0SelectionEndFrameExclusive", "referenceOverlay",
+        "timeGridHoveredHandleId", "timeGridSelectedHandleId",
+        "additionalSelectedHandleIds", "selectedLineAnchorSegmentIds"
+    };
+    for (const auto& token : forbidden) {
+        if (contains(sctxBlock, token))
+            return fail("surfaceCache_surfaceRenderContextExcludesTransient",
+                        "SurfaceRenderContext must not contain '" + token + "'.");
+    }
+    return pass("surfaceCache_surfaceRenderContextExcludesTransient");
+}
+
+CheckResult surfaceCache_revisionRouteNotesOnlyDirtiesNotes()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::onNotesRevisionChanged");
+    if (fn.empty())
+        return fail("surfaceCache_revisionRouteNotesOnlyDirtiesNotes",
+                    "Cannot locate onNotesRevisionChanged.");
+    if (!contains(fn, "Slot::Notes"))
+        return fail("surfaceCache_revisionRouteNotesOnlyDirtiesNotes",
+                    "onNotesRevisionChanged must dirty Slot::Notes.");
+    // Must NOT dirty ChunkBoundaries
+    if (contains(fn, "Slot::ChunkBoundaries"))
+        return fail("surfaceCache_revisionRouteNotesOnlyDirtiesNotes",
+                    "onNotesRevisionChanged must NOT dirty ChunkBoundaries.");
+    if (contains(fn, "Slot::F0") || contains(fn, "Slot::Waveform") || contains(fn, "Slot::TimeAnchors"))
+        return fail("surfaceCache_revisionRouteNotesOnlyDirtiesNotes",
+                    "onNotesRevisionChanged must only dirty Notes.");
+    return pass("surfaceCache_revisionRouteNotesOnlyDirtiesNotes");
+}
+
+CheckResult surfaceCache_revisionRouteTimeGridDirtiesAllFourContentSlots()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::onTimeGridRevisionChanged");
+    if (fn.empty())
+        return fail("surfaceCache_revisionRouteTimeGridDirtiesAllFourContentSlots",
+                    "Cannot locate onTimeGridRevisionChanged.");
+    for (const auto& slot : {"Slot::Waveform", "Slot::Notes", "Slot::F0", "Slot::TimeAnchors"}) {
+        if (!contains(fn, slot))
+            return fail("surfaceCache_revisionRouteTimeGridDirtiesAllFourContentSlots",
+                        std::string("onTimeGridRevisionChanged must dirty ") + slot + ".");
+    }
+    return pass("surfaceCache_revisionRouteTimeGridDirtiesAllFourContentSlots");
+}
+
+
+CheckResult surfaceCache_timeAnchorsSlotExists()
+{
+    const auto hdr = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h");
+    if (!contains(hdr, "TimeAnchors"))
+        return fail("surfaceCache_timeAnchorsSlotExists", "Slot enum must include TimeAnchors.");
+    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
+    const auto buildFn = extractFunctionBlock(cpp, "PianoRollSurfaceCache::buildSlot");
+    if (!contains(buildFn, "Slot::TimeAnchors"))
+        return fail("surfaceCache_timeAnchorsSlotExists", "buildSlot must handle Slot::TimeAnchors.");
+    if (!contains(buildFn, "drawTimeGridAnchors"))
+        return fail("surfaceCache_timeAnchorsSlotExists", "TimeAnchors slot must call drawTimeGridAnchors.");
+    return pass("surfaceCache_timeAnchorsSlotExists");
+}
+
+CheckResult surfaceCache_noChunkBoundariesInPianoRoll()
+{
+    // PianoRoll 源码中不得出现 ChunkBoundaries (slot enum除外)、chunkBoundaries、drawChunkBoundaries
+    const auto rendererCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    const auto rendererH = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+    const auto compCpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto compH = readText("Source/Standalone/UI/PianoRollComponent.h");
+    
+    const std::vector<std::string> forbidden = {
+        "chunkBoundaries", "drawChunkBoundaries", "setShowChunkBoundaries",
+        "RenderChunkPlanner::buildChunkBoundariesFromSilentGaps"
+    };
+    for (const auto& token : forbidden) {
+        if (contains(rendererCpp, token) || contains(rendererH, token) ||
+            contains(compCpp, token) || contains(compH, token))
+            return fail("surfaceCache_noChunkBoundariesInPianoRoll",
+                        "Forbidden token '" + token + "' found in PianoRoll source.");
+    }
+    return pass("surfaceCache_noChunkBoundariesInPianoRoll");
+}
+
+CheckResult surfaceCache_fiveSlotEnum()
+{
+    const auto hdr = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h");
+    if (!contains(hdr, "Background") || !contains(hdr, "Waveform") || 
+        !contains(hdr, "Notes") || !contains(hdr, "F0") || !contains(hdr, "TimeAnchors"))
+        return fail("surfaceCache_fiveSlotEnum", "Slot enum must contain all 5 slots.");
+    if (contains(hdr, "ChunkBoundaries"))
+        return fail("surfaceCache_fiveSlotEnum", "Slot enum must NOT contain ChunkBoundaries.");
+    return pass("surfaceCache_fiveSlotEnum");
+}
+
+CheckResult surfaceCache_buildSlotDoesNotConstructRenderContext()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
+    const auto buildFn = extractFunctionBlock(cpp, "PianoRollSurfaceCache::buildSlot");
+    if (buildFn.empty())
+        return fail("surfaceCache_buildSlotDoesNotConstructRenderContext", "Cannot locate buildSlot.");
+    // buildSlot must NOT construct a full RenderContext
+    if (contains(buildFn, "RenderContext ctx") || contains(buildFn, "RenderContext{"))
+        return fail("surfaceCache_buildSlotDoesNotConstructRenderContext",
+                    "buildSlot must not construct a full RenderContext — use SurfaceRenderContext directly.");
+    return pass("surfaceCache_buildSlotDoesNotConstructRenderContext");
+}
+
+CheckResult surfaceCache_drawTimeGridHandlesOnlyInteractive()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    const auto handlesFn = extractFunctionBlock(cpp, "PianoRollRenderer::drawTimeGridHandles");
+    if (handlesFn.empty())
+        return fail("surfaceCache_drawTimeGridHandlesOnlyInteractive",
+                    "Cannot locate drawTimeGridHandles.");
+    // Must have the interactive-only guard
+    if (!contains(handlesFn, "!selected && !hovered"))
+        return fail("surfaceCache_drawTimeGridHandlesOnlyInteractive",
+                    "drawTimeGridHandles must only draw interactive (selected/hovered) handles, skip non-interactive ones.");
+    return pass("surfaceCache_drawTimeGridHandlesOnlyInteractive");
+}
+
 } // namespace
 
 int main()
@@ -2753,10 +2817,7 @@ int main()
         f0RendererUsesSingleContinuousPathHelper,
         // PianoRollSurfaceCache architecture guards
         surfaceCache_noOldBandCacheTokensInSource,
-        surfaceCache_hasFourSemanticSlots,
-        surfaceCache_reasonMappingContentIncludesBackground,
-        surfaceCache_reasonMappingPlayheadMarksNothing,
-        surfaceCache_reasonMappingDecorationOnlyBackground,
+        surfaceCache_hasFiveSemanticSlots,
         surfaceCache_setTimelineViewportNoUserZoomFlag,
         surfaceCache_fullClipDomainUsesPlacementMinMax,
         surfaceCache_noViewportSizedOrOverscanTokens,
@@ -2770,7 +2831,16 @@ int main()
         surfaceCache_verticalGeometryDirtiesYSlots,
         surfaceCache_configureGeometryDetectsDomainShift,
         surfaceCache_noVBlankCacheTestNamesRemain,
-        surfaceCache_noGenericCachedSurfaceInPianoRoll
+        surfaceCache_noGenericCachedSurfaceInPianoRoll,
+        surfaceCache_surfaceRenderContextExists,
+        surfaceCache_surfaceRenderContextExcludesTransient,
+        surfaceCache_revisionRouteNotesOnlyDirtiesNotes,
+        surfaceCache_revisionRouteTimeGridDirtiesAllFourContentSlots,
+        surfaceCache_noChunkBoundariesInPianoRoll,
+        surfaceCache_fiveSlotEnum,
+        surfaceCache_buildSlotDoesNotConstructRenderContext,
+        surfaceCache_drawTimeGridHandlesOnlyInteractive,
+        surfaceCache_timeAnchorsSlotExists
     };
 
     int failed = 0;

@@ -197,7 +197,6 @@ constexpr const char* kNoteLabels = "Note Labels";
 constexpr const char* kNoteLabelsShowAll = "Show All";
 constexpr const char* kNoteLabelsCOnly = "C Only";
 constexpr const char* kNoteLabelsHide = "Hide";
-constexpr const char* kShowChunkBoundaries = "Show Chunk Boundaries";
 constexpr const char* kShowUnvoicedFrames = "Show Unvoiced Frames";
 constexpr const char* kTrackColors = "Track Colors";
 constexpr const char* kTrackColorsRandom = "Random Colors";
@@ -370,7 +369,6 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kNoteLabelsShowAll, "Show All", "全部显示", "全表示", "Показывать все", "Mostrar todo" },
         { Keys::kNoteLabelsCOnly, "C Only", "仅 C", "C のみ", "Только C", "Solo C" },
         { Keys::kNoteLabelsHide, "Hide", "隐藏", "非表示", "Скрыть", "Ocultar" },
-        { Keys::kShowChunkBoundaries, "Show Chunk Boundaries", "显示分块边界", "チャンク境界を表示", "Показывать границы чанков", "Mostrar limites de bloques" },
         { Keys::kShowUnvoicedFrames, "Show Unvoiced Frames", "显示无声音帧", "無声音フレームを表示", "Показывать глухие кадры", "Mostrar cuadros sordos" },
         { Keys::kTrackColors, "Track Colors", "轨道颜色", "トラック色", "Цвет дорожки", "Color pista" },
         { Keys::kTrackColorsRandom, "Random Colors", "随机颜色", "ランダム色", "Случайный цвет", "Color aleatorio" },

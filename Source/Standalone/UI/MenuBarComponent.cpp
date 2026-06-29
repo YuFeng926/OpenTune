@@ -54,16 +54,6 @@ void MenuBarComponent::setNoteNameMode(NoteNameMode noteNameMode)
     menuItemsChanged();
 }
 
-void MenuBarComponent::setShowChunkBoundaries(bool shouldShow)
-{
-    if (showChunkBoundaries_ == shouldShow) {
-        return;
-    }
-
-    showChunkBoundaries_ = shouldShow;
-    menuItemsChanged();
-}
-
 void MenuBarComponent::setShowUnvoicedFrames(bool shouldShow)
 {
     if (showUnvoicedFrames_ == shouldShow) {
@@ -138,7 +128,6 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
 
             menu.addSeparator();
             menu.addSubMenu(LOC(kNoteLabels), noteLabelMenu);
-            menu.addItem(ShowChunkBoundaries, LOC(kShowChunkBoundaries), true, showChunkBoundaries_);
             menu.addItem(ShowUnvoicedFrames, LOC(kShowUnvoicedFrames), true, showUnvoicedFrames_);
 
             juce::PopupMenu themeMenu;
@@ -248,13 +237,6 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             listeners_.call([](Listener& l) { l.noteNameModeChanged(NoteNameMode::Hide); });
             menuItemsChanged();
             break;
-        case ShowChunkBoundaries:
-        {
-            const bool newState = !showChunkBoundaries_;
-            listeners_.call([newState](Listener& l) { l.showChunkBoundariesToggled(newState); });
-            menuItemsChanged();
-            break;
-        }
         case ShowUnvoicedFrames:
         {
             const bool newState = !showUnvoicedFrames_;

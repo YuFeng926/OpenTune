@@ -1807,34 +1807,6 @@ RenderCache::ChunkStats OpenTuneDocumentController::readChunkStats(ContentKey ke
     return {};
 }
 
-bool OpenTuneDocumentController::readChunkBoundaries(ContentKey key, std::vector<double>& outSeconds) const
-{
-    outSeconds.clear();
-
-    const auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr)
-        return false;
-
-    PlaybackReadSource crsSrc;
-    if (contentRenderService_ == nullptr || !contentRenderService_->getPlaybackReadSource(key, crsSrc))
-        return false;
-    if (crsSrc.audioBuffer == nullptr)
-        return false;
-
-    const int64_t sampleCount = static_cast<int64_t>(crsSrc.audioBuffer->getNumSamples());
-    const auto& silentGaps = mod->content.analysis.silentGaps;
-    constexpr int hopSize = 512; // DC 没有 vocoderDomain_，使用默认值
-
-    auto boundaries = RenderChunkPlanner::buildChunkBoundariesFromSilentGaps(
-        sampleCount, silentGaps, hopSize);
-
-    outSeconds.reserve(boundaries.size());
-    for (auto sample : boundaries)
-        outSeconds.push_back(static_cast<double>(sample) / TimeCoordinate::kRenderSampleRate);
-
-    return true;
-}
-
 uint64_t OpenTuneDocumentController::readContentRevision(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);

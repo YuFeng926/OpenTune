@@ -13,26 +13,14 @@
 #include "../Utils/SimdPerceptualPitchEstimator.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../../PluginProcessor.h"
-#include "FrameScheduler.h"
 #include "UiAssets.h"
 #include "UiText.h"
 #include "ToolbarIcons.h"
 #include "../../Utils/AudioEditingScheme.h"
-#include "../../Render/RenderChunkPlanner.h"
 #include "Utils/PianoKeyAudition.h"
 namespace OpenTune {
 
 namespace {
-
-constexpr uint32_t toInvalidationMask(PianoRollVisualInvalidationReason reason)
-{
-    return static_cast<uint32_t>(reason);
-}
-
-FrameScheduler::Priority toFrameSchedulerPriority(PianoRollVisualInvalidationPriority priority)
-{
-    return static_cast<FrameScheduler::Priority>(static_cast<int>(priority));
-}
 
 std::vector<PitchCorrectionSegment> copyPitchCorrectionSegments(const std::shared_ptr<PitchCurve>& curve)
 {
@@ -247,8 +235,8 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         invalidateInteractionArea(dirtyArea);
     };
     toolCtx.invalidateInteractionVisual = [this]() {
-        invalidateVisual(static_cast<uint32_t>(PianoRollVisualInvalidationReason::Interaction),
-                         PianoRollVisualInvalidationPriority::Interactive);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
+        repaint();
     };
     toolCtx.repaintPreviewOverlay = [this]() { previewOverlay_.repaint(); };
     toolCtx.setMouseCursor = [this](const juce::MouseCursor& c) { setMouseCursor(c); };
@@ -299,8 +287,12 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         return snap ? snap->timeGrid : nullptr;
     };
     auto markTimeGridChanged = [this]() {
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                         PianoRollVisualInvalidationPriority::Interactive);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors);
+        repaint();
     };
     toolCtx.commitTimeGrid = [this, markTimeGridChanged](std::shared_ptr<const TimeGridSnapshot> newSnap,
                                                           std::shared_ptr<const TimeGridSnapshot> oldSnap,
@@ -421,7 +413,7 @@ void PianoRollComponent::consumeCompletedCorrectionResults()
         autoTuneInFlight_.store(false, std::memory_order_release);
     }
 
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
 }
 
 bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrectionWorker::AsyncCorrectionRequest& completed)
@@ -470,7 +462,7 @@ bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrection
     AppLogger::log("AutoTune: after setEditedContent");
     updateScrollBars();
     AppLogger::log("AutoTune: after outer updateScrollBars");
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
     AppLogger::log("AutoTune: after outer invalidateVisual, before recordUndoAction");
     const auto autoTuneRange = PitchCurve::expandNoteBasedCorrectionRange(
         completed.autoStartFrame,
@@ -503,7 +495,7 @@ bool PianoRollComponent::commitCompletedNoteCorrectionResult(const PianoRollCorr
     }
 
     updateScrollBars();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
     return true;
 }
 
@@ -530,6 +522,42 @@ void PianoRollComponent::refreshEditedContentNotes()
     }
     interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
     syncF0SelectionToSelectedNotes();
+}
+
+void PianoRollComponent::rebuildSurfaceCache()
+{
+    auto ctx = makePresentationRenderContext();
+    if (auto placement = findActiveTimelineContentPlacement()) {
+        ctx.contents.push_back(buildContentRenderItem(*placement));
+    }
+
+    // Extract surface-only fields into SurfaceRenderContext.
+    // Transient UI fields (selection, hover, pressed key, reference overlay, drag handles) are excluded.
+    PianoRollRenderer::SurfaceRenderContext sctx;
+    sctx.width = ctx.width;
+    sctx.height = ctx.height;
+    sctx.pianoKeyWidth = ctx.pianoKeyWidth;
+    sctx.rulerHeight = ctx.rulerHeight;
+    sctx.pixelsPerSecond = ctx.pixelsPerSecond;
+    sctx.pixelsPerSemitone = ctx.pixelsPerSemitone;
+    sctx.minMidi = ctx.minMidi;
+    sctx.maxMidi = ctx.maxMidi;
+    sctx.bpm = ctx.bpm;
+    sctx.contents = std::move(ctx.contents);
+    sctx.scaleRootNote = ctx.scaleRootNote;
+    sctx.scaleType = ctx.scaleType;
+    sctx.noteNameMode = ctx.noteNameMode;
+    sctx.showLanes = ctx.showLanes;
+    sctx.showUnvoicedFrames = ctx.showUnvoicedFrames;
+    sctx.showOriginalF0 = ctx.showOriginalF0;
+    sctx.showCorrectedF0 = ctx.showCorrectedF0;
+    sctx.timeGridSnapshot = ctx.timeGridSnapshot;
+    sctx.activeProjection = ctx.activeProjection;
+    sctx.currentTool = ctx.currentTool;
+    sctx.timeUnit = ctx.timeUnit;
+    sctx.coords = ctx.coords;
+
+    surfaceCache_.buildAllDirty(sctx, *renderer_);
 }
 
 const std::vector<Note>& PianoRollComponent::getCommittedNotes() const
@@ -874,8 +902,7 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
         interactionState_.selection.hasSelectionArea = false;
         interactionState_.selection.isSelectingArea = false;
         interactionState_.selection.clearF0Selection();
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                         PianoRollVisualInvalidationPriority::Interactive);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
         previewOverlay_.repaint();
         return false;
     }
@@ -905,8 +932,7 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
     } else {
         interactionState_.selection.clearF0Selection();
     }
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
     previewOverlay_.repaint();
 
     return anyOverlap;
@@ -1074,9 +1100,7 @@ void PianoRollComponent::invalidateInteractionArea(const juce::Rectangle<int>& d
         ++interactionRevision_;
     }
 
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Interaction),
-                     dirtyArea,
-                     PianoRollVisualInvalidationPriority::Interactive);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); repaint(dirtyArea);
 }
 
 bool PianoRollComponent::enqueueManualCorrectionPatchAsync(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
@@ -1114,7 +1138,7 @@ bool PianoRollComponent::enqueueManualCorrectionPatchAsync(const std::vector<Pia
         });
     }
 
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
     return true;
 }
 
@@ -1439,9 +1463,59 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         && themeId != ThemeId::BlueBreeze && themeId != ThemeId::Overdose)
         g.fillPath(chromePath);
 
-    // Blit 缓存图层
+    // Rebuild dirty cache tiles before blitting
     const int scrollPx = computeScrollOffsetPx();
-    surfaceCache_.paint(g, pianoKeyWidth_ - scrollPx, 0);
+    const double pps = camera_.pixelsPerSecond;
+    const double surfaceStart = computeSurfaceStartTimelineSeconds();
+    const double surfaceEnd = computeSurfaceEndTimelineSeconds();
+    if (surfaceStart < surfaceEnd) {
+        const int vpH = getTimelineViewportBounds().getBottom();
+        if (vpH > 0) {
+            surfaceCache_.configureGeometry(surfaceStart, surfaceEnd, pps, vpH);
+            auto ctx = buildRenderContext(surfaceCache_.surfaceWidthPx(), 0);
+            ctx.height = vpH;
+            ctx.coords = ViewMapper{
+                surfaceStart, pps,
+                0,
+                surfaceCache_.surfaceWidthPx(),
+                vpH,
+                pixelsPerSemitone_,
+                verticalScrollOffset_,
+                maxMidi_
+            };
+
+            // Extract surface-only fields into SurfaceRenderContext.
+            // Transient UI fields (selection, hover, pressed key, reference overlay, drag handles) are excluded.
+            PianoRollRenderer::SurfaceRenderContext sctx;
+            sctx.width = ctx.width;
+            sctx.height = ctx.height;
+            sctx.pianoKeyWidth = ctx.pianoKeyWidth;
+            sctx.rulerHeight = ctx.rulerHeight;
+            sctx.pixelsPerSecond = ctx.pixelsPerSecond;
+            sctx.pixelsPerSemitone = ctx.pixelsPerSemitone;
+            sctx.minMidi = ctx.minMidi;
+            sctx.maxMidi = ctx.maxMidi;
+            sctx.bpm = ctx.bpm;
+            sctx.contents = std::move(ctx.contents);
+            sctx.scaleRootNote = ctx.scaleRootNote;
+            sctx.scaleType = ctx.scaleType;
+            sctx.noteNameMode = ctx.noteNameMode;
+            sctx.showLanes = ctx.showLanes;
+            sctx.showUnvoicedFrames = ctx.showUnvoicedFrames;
+            sctx.showOriginalF0 = ctx.showOriginalF0;
+            sctx.showCorrectedF0 = ctx.showCorrectedF0;
+            sctx.timeGridSnapshot = ctx.timeGridSnapshot;
+            sctx.activeProjection = ctx.activeProjection;
+            sctx.currentTool = ctx.currentTool;
+            sctx.timeUnit = ctx.timeUnit;
+            sctx.coords = ctx.coords;
+
+            surfaceCache_.buildAllDirty(sctx, *renderer_);
+        }
+    }
+
+    // Blit 缓存图层
+    surfaceCache_.paint(g, pianoKeyWidth_ - scrollPx, 0, isTimeView());
 }
 
 void PianoRollComponent::paintOverChildren(juce::Graphics& g)
@@ -1525,7 +1599,7 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
             }
 
             listeners_.call([affectedRange](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1); });
-            invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+            surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
             return true;
         }
     }
@@ -1570,7 +1644,7 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
 
         pendingUndoDescription_ = {};
         undoSnapshotCaptured_ = false;
-            invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+            surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
         return true;
     }
 
@@ -1590,7 +1664,7 @@ bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vib
                                                                           currentF0Timeline().endFrameExclusive());
     const int notifyEndFrame = std::max(affectedRange.startFrame, affectedRange.endFrameExclusive - 1);
     listeners_.call([affectedRange, notifyEndFrame](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, notifyEndFrame); });
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
     return true;
 }
 
@@ -1872,7 +1946,7 @@ void PianoRollComponent::setNoteSplit(float value) {
 
     // Note Split 浠呮洿鏂板垎娈电瓥鐣ュ弬鏁帮紝涓嶈Е鍙?AUTO 閲嶆柊鐢熸垚�?
     // AUTO 鎿嶄綔鐢辩敤鎴蜂富鍔ㄨЕ鍙戯紝浣跨敤褰撳墠绛栫暐鎵ц鍒嗘�?
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
 }
 
 void PianoRollComponent::resized() {
@@ -1900,8 +1974,7 @@ void PianoRollComponent::resized() {
     previewOverlay_.setBounds(getLocalBounds());
     playheadOverlay_.setBounds(getLocalBounds());
     updatePlayheadPresentationPolicy();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
 }
 
 void PianoRollComponent::applyEditedContentCurve(std::shared_ptr<PitchCurve> curve)
@@ -1990,8 +2063,7 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
     updateScrollBars();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
     return true;
 }
 
@@ -2024,8 +2096,7 @@ void PianoRollComponent::setContentProjection(const ContentTimelineProjection& p
     deriveSingleTimelineContentPlacement();
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                      PianoRollVisualInvalidationPriority::Interactive);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
 }
 
 void PianoRollComponent::setTimelineContentPlacements(std::vector<TimelineContentPlacement> placements)
@@ -2053,8 +2124,7 @@ void PianoRollComponent::setTimelineViewDomain(double viewStartSeconds, double v
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
     updateScrollBars();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    repaint();
 }
 
 void PianoRollComponent::clearTimelineViewDomain()
@@ -2067,8 +2137,7 @@ void PianoRollComponent::clearTimelineViewDomain()
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
     updateScrollBars();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    repaint();
 }
 
 void PianoRollComponent::setEditedContent(ContentKey contentKey,
@@ -2118,120 +2187,33 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 
     userScrollHold_ = false;
     updateScrollBars();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content)
-                     | toInvalidationMask(PianoRollVisualInvalidationReason::Decoration));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); repaint();
 }
 
 void PianoRollComponent::onTimeGridRevisionChanged()
 {
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors);
+    repaint();
 }
 
 void PianoRollComponent::onNotesRevisionChanged()
 {
     refreshEditedContentNotes();
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
+    repaint();
 }
 
 void PianoRollComponent::onPitchRevisionChanged()
 {
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                     PianoRollVisualInvalidationPriority::Interactive);
-}
-
-void PianoRollComponent::invalidateVisual(const PianoRollVisualInvalidationRequest& request)
-{
-    if (request.reasonsMask == 0) {
-        return;
-    }
-
-    surfaceCache_.markDirtyFromReasonsMask(request.reasonsMask);
-    pendingVisualInvalidation_.merge(request);
-
-    if (request.priority != PianoRollVisualInvalidationPriority::Interactive || !isShowing()) {
-        return;
-    }
-
-    constexpr double minIntervalMs = 1000.0 / 60.0;
-    const double nowMs = juce::Time::getMillisecondCounterHiRes();
-    if ((nowMs - lastVisualFlushMs_) >= minIntervalMs) {
-        flushPendingVisualInvalidation();
-    }
-}
-
-void PianoRollComponent::invalidateVisual(uint32_t reasonsMask,
-                                          PianoRollVisualInvalidationPriority priority)
-{
-    PianoRollVisualInvalidationRequest request;
-    request.reasonsMask = reasonsMask;
-    request.fullRepaint = true;
-    request.priority = priority;
-    invalidateVisual(request);
-}
-
-void PianoRollComponent::invalidateVisual(uint32_t reasonsMask,
-                                          const juce::Rectangle<int>& dirtyArea,
-                                          PianoRollVisualInvalidationPriority priority)
-{
-    PianoRollVisualInvalidationRequest request;
-    request.reasonsMask = reasonsMask;
-    request.fullRepaint = dirtyArea.isEmpty();
-    request.hasDirtyArea = !dirtyArea.isEmpty();
-    request.dirtyArea = dirtyArea;
-    request.priority = priority;
-    invalidateVisual(request);
-}
-
-void PianoRollComponent::flushPendingVisualInvalidation()
-{
-    const auto decision = makeVisualFlushDecision(pendingVisualInvalidation_, getLocalBounds());
-    pendingVisualInvalidation_.clear();
-    if (!decision.shouldRepaint) return;
-
-    lastVisualFlushMs_ = juce::Time::getMillisecondCounterHiRes();
-
-    const double pps = camera_.pixelsPerSecond;
-    const double surfaceStart = computeSurfaceStartTimelineSeconds();
-    const double surfaceEnd = computeSurfaceEndTimelineSeconds();
-    if (surfaceStart < surfaceEnd) {
-        const int vpH = getTimelineViewportBounds().getBottom();
-        if (vpH > 0) {
-            surfaceCache_.configureGeometry(surfaceStart, surfaceEnd, pps, vpH);
-            
-            auto ctx = buildRenderContext(surfaceCache_.surfaceWidthPx(), 0);
-            ctx.height = vpH;
-            // Full-clip ViewMapper: canvas origin = surfaceStart, no piano key offset
-            ctx.coords = ViewMapper{
-                surfaceStart, pps,
-                0,                                    // contentStartX = 0
-                surfaceCache_.surfaceWidthPx(),
-                vpH,
-                pixelsPerSemitone_,
-                verticalScrollOffset_,
-                maxMidi_
-            };
-            
-            surfaceCache_.buildAllDirty(ctx, *renderer_);
-        }
-    }
-
-    const auto priority = toFrameSchedulerPriority(decision.priority);
-    auto requestInvalidate = [&](auto&&... args) {
-        FrameScheduler::instance().requestInvalidate(*this, std::forward<decltype(args)>(args)...);
-    };
-
-    if (decision.fullRepaint || !decision.hasDirtyArea) {
-        requestInvalidate(priority);
-        return;
-    }
-    requestInvalidate(decision.dirtyArea, priority);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
+    repaint();
 }
 
 void PianoRollComponent::requestContentRedraw() {
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content),
-                     PianoRollVisualInvalidationPriority::Normal);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); repaint();
 }
 
 double PianoRollComponent::readPlayheadTime() const
@@ -2284,7 +2266,7 @@ void PianoRollComponent::onHeartbeatTick()
                 waveformVisualRefreshPending_ = true;
             } else {
                 waveformVisualRefreshPending_ = false;
-                invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+                surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
             }
         }
     } else {
@@ -2294,10 +2276,8 @@ void PianoRollComponent::onHeartbeatTick()
 
     if (!playingNow && waveformVisualRefreshPending_) {
         waveformVisualRefreshPending_ = false;
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
     }
-
-    flushPendingVisualInvalidation();
 }
 
 void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
@@ -2392,8 +2372,7 @@ void PianoRollComponent::setTimelineViewport(TimelineViewportCamera camera, juce
         listeners_.call([this](Listener& l) { l.timelineViewportChanged(camera_); });
     }
 
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    repaint();
 }
 
 void PianoRollComponent::focusActiveContentForRegionSwitch(
@@ -2515,9 +2494,7 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
         }
 
     if (toolChanged || clearedAnchorPreview) {
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Interaction),
-                         getLocalBounds(),
-                         PianoRollVisualInvalidationPriority::Interactive);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); repaint(getLocalBounds());
     }
 }
 
@@ -2533,47 +2510,38 @@ void PianoRollComponent::setExperimentalFeaturesEnabled(bool enabled)
         return;
     }
 
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Interaction),
-                     getLocalBounds(),
-                     PianoRollVisualInvalidationPriority::Interactive);
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); repaint(getLocalBounds());
 }
 
 void PianoRollComponent::setShowWaveform(bool shouldShow) {
     if (showWaveform_ == shouldShow) return;
     showWaveform_ = shouldShow;
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); repaint();
 }
 
 void PianoRollComponent::setShowLanes(bool shouldShow) {
     if (showLanes_ == shouldShow) return;
     showLanes_ = shouldShow;
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); repaint();
 }
 
 void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
     if (noteNameMode_ == noteNameMode) return;
 
     noteNameMode_ = noteNameMode;
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
-}
-
-void PianoRollComponent::setShowChunkBoundaries(bool shouldShow) {
-    if (showChunkBoundaries_ == shouldShow) return;
-
-    showChunkBoundaries_ = shouldShow;
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); repaint();
 }
 
 void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
     if (showUnvoicedFrames_ == shouldShow) return;
 
     showUnvoicedFrames_ = shouldShow;
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
 }
 
 void PianoRollComponent::setBpm(double bpm) {
     bpm_ = juce::jlimit(60.0, 240.0, bpm);
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); repaint();
 }
 
 void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
@@ -2583,12 +2551,12 @@ void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
 
     timeSigNum_ = numerator;
     timeSigDenom_ = denominator;
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); repaint();
 }
 
 void PianoRollComponent::setTimeUnit(TimeUnit unit) {
     timeUnit_ = unit;
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); repaint();
 }
 
 void PianoRollComponent::addListener(Listener* listener) {
@@ -2641,8 +2609,7 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
         pressedPianoKey_ = midiNote;
         if (pianoKeyAudition_ != nullptr)
             pianoKeyAudition_->noteOn(midiNote);
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                         PianoRollVisualInvalidationPriority::Interactive);
+        repaint();
         return;
     }
 
@@ -2677,8 +2644,7 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
                 pianoKeyAudition_->noteOn(midiNote);
             }
             pressedPianoKey_ = midiNote;
-            invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                             PianoRollVisualInvalidationPriority::Interactive);
+            repaint();
         }
         return;
     }
@@ -2705,8 +2671,7 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent& e) {
         if (pianoKeyAudition_ != nullptr)
             pianoKeyAudition_->noteOff(pressedPianoKey_);
         pressedPianoKey_ = -1;
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport),
-                         PianoRollVisualInvalidationPriority::Interactive);
+        repaint();
         return;
     }
 
@@ -2852,21 +2817,6 @@ PianoRollRenderer::ContentRenderItem PianoRollComponent::buildContentRenderItem(
         item.waveformMipmap = &mipmap;
     }
 
-    if (showChunkBoundaries_ && processor_) {
-        auto snap = processor_->getContentSnapshot(placement.contentKey);
-        if (snap && snap->audioBuffer) {
-            const int totalSamples = snap->audioBuffer->getNumSamples();
-            constexpr int defaultHop = 512;
-            auto boundaries = RenderChunkPlanner::buildChunkBoundariesFromSilentGaps(
-                totalSamples, snap->silentGaps, defaultHop);
-            item.chunkBoundaries.reserve(boundaries.size());
-            for (const auto sample : boundaries) {
-                item.chunkBoundaries.push_back(
-                    TimeCoordinate::samplesToSeconds(sample, TimeCoordinate::kRenderSampleRate));
-            }
-        }
-    }
-
     return item;
 }
 
@@ -2913,13 +2863,12 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext(int rend
     ctx.scaleType = scaleType_;
     ctx.noteNameMode = noteNameMode_;
     ctx.showLanes = showLanes_;
-    ctx.showChunkBoundaries = showChunkBoundaries_;
     ctx.showUnvoicedFrames = showUnvoicedFrames_;
     ctx.showOriginalF0 = showOriginalF0_;
     ctx.showCorrectedF0 = showCorrectedF0_;
     ctx.timeUnit = (timeUnit_ == TimeUnit::Bars)
-        ? PianoRollRenderer::RenderContext::TimeUnit::Bars
-        : PianoRollRenderer::RenderContext::TimeUnit::Seconds;
+        ? PianoRollTimeUnit::Bars
+        : PianoRollTimeUnit::Seconds;
 
     ctx.contents.reserve(timelineContentPlacements_.size());
     for (const auto& placement : timelineContentPlacements_)
@@ -3028,14 +2977,14 @@ void PianoRollComponent::updatePlayheadPresentationPolicy()
     followAndPublishPlayhead(timelinePlayheadTime);
 }
 
-void PianoRollComponent::refreshVerticalViewportGeometry(PianoRollVisualInvalidationPriority priority)
+void PianoRollComponent::refreshVerticalViewportGeometry()
 {
     updateScrollBars();
     // Vertical geometry changes must rebuild y-dependent cache layers
     surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background);
     surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
     surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Viewport), priority);
+    repaint();
 }
 
 void PianoRollComponent::setScale(int rootNote, int scaleType)
@@ -3046,7 +2995,7 @@ void PianoRollComponent::setScale(int rootNote, int scaleType)
         return;
     scaleRootNote_ = clampedRoot;
     scaleType_ = clampedType;
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Content));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); repaint();
 }
 
 void PianoRollComponent::fitToScreen() {
@@ -3280,11 +3229,11 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
         return { AutoTuneApplyStatus::AlreadyInFlight };
     }
 
-    invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Decoration));
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); repaint();
 
     auto failAfterStart = [this](AutoTuneApplyStatus status) {
         autoTuneInFlight_.store(false, std::memory_order_release);
-        invalidateVisual(toInvalidationMask(PianoRollVisualInvalidationReason::Decoration));
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); repaint();
         return AutoTuneApplyResult{ status };
     };
 
@@ -3416,7 +3365,7 @@ void PianoRollComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRa
         setTimelineViewport({ newVisibleStart, pps }, juce::sendNotification);
     } else if (scrollBar == &verticalScrollBar_) {
         verticalScrollOffset_ = static_cast<float>(newRangeStart);
-        refreshVerticalViewportGeometry(PianoRollVisualInvalidationPriority::Normal);
+        refreshVerticalViewportGeometry();
     }
 }
 

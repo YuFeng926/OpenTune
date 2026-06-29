@@ -483,15 +483,6 @@ public:
         initialiseComboBox(noteNameModeSelector_);
         addAndMakeVisible(noteNameModeSelector_);
 
-        showChunkBoundariesToggle_.setButtonText(LOC(kShowChunkBoundaries));
-        showChunkBoundariesToggle_.setToggleState(visualPreferences.showChunkBoundaries, juce::dontSendNotification);
-        showChunkBoundariesToggle_.onClick = [this] {
-            appPreferences_.setShowChunkBoundaries(showChunkBoundariesToggle_.getToggleState());
-            notifyChanged();
-        };
-        initialiseToggleButton(showChunkBoundariesToggle_);
-        addAndMakeVisible(showChunkBoundariesToggle_);
-
         showUnvoicedFramesToggle_.setButtonText(LOC(kShowUnvoicedFrames));
         showUnvoicedFramesToggle_.setToggleState(visualPreferences.showUnvoicedFrames, juce::dontSendNotification);
         showUnvoicedFramesToggle_.onClick = [this] {
@@ -518,9 +509,6 @@ public:
         noteNameModeSelector_.setBounds(row.removeFromLeft(240).reduced(0, 4));
 
         bounds.removeFromTop(14);
-        showChunkBoundariesToggle_.setBounds(bounds.removeFromTop(rowHeight));
-
-        bounds.removeFromTop(8);
         showUnvoicedFramesToggle_.setBounds(bounds.removeFromTop(rowHeight));
     }
 
@@ -556,7 +544,6 @@ private:
     std::function<void()> onPreferencesChanged_;
     juce::Label noteNameModeLabel_;
     juce::ComboBox noteNameModeSelector_;
-    juce::ToggleButton showChunkBoundariesToggle_;
     juce::ToggleButton showUnvoicedFramesToggle_;
 };
 

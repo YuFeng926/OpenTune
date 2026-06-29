@@ -13,7 +13,6 @@ constexpr const char* kSharedLanguageKey = "shared.language";
 constexpr const char* kSharedThemeKey = "shared.theme.activeTheme";
 constexpr const char* kSharedAudioEditingSchemeKey = "shared.audioEditing.scheme";
 constexpr const char* kSharedPianoRollNoteNameModeKey = "shared.pianoRoll.noteNameMode";
-constexpr const char* kSharedPianoRollShowChunkBoundariesKey = "shared.pianoRoll.showChunkBoundaries";
 constexpr const char* kSharedPianoRollShowUnvoicedFramesKey = "shared.pianoRoll.showUnvoicedFrames";
 constexpr const char* kSharedZoomHorizontalFactorKey = "shared.zoom.horizontalFactor";
 constexpr const char* kSharedZoomVerticalFactorKey = "shared.zoom.verticalFactor";
@@ -301,9 +300,6 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.pianoRollVisualPreferences.noteNameMode = noteNameModeFromToken(
         properties.getValue(kSharedPianoRollNoteNameModeKey,
                             toNoteNameModeToken(state.shared.pianoRollVisualPreferences.noteNameMode)));
-    state.shared.pianoRollVisualPreferences.showChunkBoundaries = properties.getBoolValue(
-        kSharedPianoRollShowChunkBoundariesKey,
-        state.shared.pianoRollVisualPreferences.showChunkBoundaries);
     state.shared.pianoRollVisualPreferences.showUnvoicedFrames = properties.getBoolValue(
         kSharedPianoRollShowUnvoicedFramesKey,
         state.shared.pianoRollVisualPreferences.showUnvoicedFrames);
@@ -358,8 +354,6 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedAudioEditingSchemeKey, toAudioEditingSchemeToken(state.shared.audioEditingScheme));
     properties.setValue(kSharedPianoRollNoteNameModeKey,
                         toNoteNameModeToken(state.shared.pianoRollVisualPreferences.noteNameMode));
-    properties.setValue(kSharedPianoRollShowChunkBoundariesKey,
-                        state.shared.pianoRollVisualPreferences.showChunkBoundaries);
     properties.setValue(kSharedPianoRollShowUnvoicedFramesKey,
                         state.shared.pianoRollVisualPreferences.showUnvoicedFrames);
     properties.setValue(kSharedZoomHorizontalFactorKey, static_cast<double>(state.shared.zoomSensitivity.horizontalZoomFactor));
@@ -466,13 +460,6 @@ void AppPreferences::setNoteNameMode(NoteNameMode noteNameMode)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.pianoRollVisualPreferences.noteNameMode = noteNameMode;
-    saveLocked();
-}
-
-void AppPreferences::setShowChunkBoundaries(bool shouldShow)
-{
-    const std::lock_guard<std::mutex> lock(mutex_);
-    state_.shared.pianoRollVisualPreferences.showChunkBoundaries = shouldShow;
     saveLocked();
 }
 
