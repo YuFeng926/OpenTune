@@ -130,80 +130,6 @@ inline int sourceTimeToScreenX(double sourceTime,
     return ctx.coords.timeToX(timelineTime);
 }
 
-bool isVoicedFrame(float frequencyHz) noexcept
-{
-    return frequencyHz > 0.0f;
-}
-
-// 构建连续 F0 path：逐帧追加点，仅在 unvoiced frame 处断开子路径
-// 宏观视图时，每像素 x 只取一个代表点（该像素内第一个 voiced frame 的 f0）
-void buildF0ContinuousPath(
-    juce::Path& path,
-    const std::vector<float>& f0Data,
-    int visibleStartFrame,
-    int visibleEndFrame,
-    const F0Timeline& f0Timeline,
-    const PianoRollRenderer::SurfaceRenderContext& ctx,
-    const PianoRollRenderer::ContentRenderItem& item,
-    bool useDecimation)
-{
-    if (useDecimation) {
-        // 宏观视图：每像素 x 只取一个代表点（取该像素内第一个 voiced frame 的 f0）
-        int lastX = -999;
-        bool pathStarted = false;
-
-        for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
-            const float f0 = f0Data[static_cast<std::size_t>(frame)];
-            if (!isVoicedFrame(f0))
-                continue;
-
-            const double timePos = f0Timeline.timeAtFrame(frame);
-            const int x = sourceTimeToScreenX(timePos, ctx, item);
-
-            if (x < ctx.pianoKeyWidth || x >= ctx.width)
-                continue;
-
-            if (x == lastX)
-                continue; // 同一像素列，跳过
-            lastX = x;
-
-            const float y = ctx.coords.freqToY(f0);
-
-            if (!pathStarted) {
-                path.startNewSubPath(static_cast<float>(x), y);
-                pathStarted = true;
-            } else {
-                path.lineTo(static_cast<float>(x), y);
-            }
-        }
-    } else {
-        // 普通视图：逐帧追加点
-        bool pathStarted = false;
-
-        for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
-            const float f0 = f0Data[static_cast<std::size_t>(frame)];
-            if (!isVoicedFrame(f0)) {
-                pathStarted = false;
-                continue;
-            }
-
-            const double timePos = f0Timeline.timeAtFrame(frame);
-            const int x = sourceTimeToScreenX(timePos, ctx, item);
-            const float y = ctx.coords.freqToY(f0);
-
-            if (x < ctx.pianoKeyWidth || x >= ctx.width)
-                continue;
-
-            if (!pathStarted) {
-                path.startNewSubPath(static_cast<float>(x), y);
-                pathStarted = true;
-            } else {
-                path.lineTo(static_cast<float>(x), y);
-            }
-        }
-    }
-}
-
 } // namespace
 
 void PianoRollRenderer::drawLanes(juce::Graphics& g, const SurfaceRenderContext& ctx)
@@ -271,70 +197,47 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
                                                const SurfaceRenderContext& ctx,
                                                const ContentRenderItem& item)
 {
-    if (!ctx.showUnvoicedFrames || item.pitchSnapshot == nullptr || item.f0Timeline.isEmpty()) {
+    if (!ctx.showUnvoicedFrames || !item.f0LOD || item.f0Timeline.isEmpty())
         return;
-    }
-
-    const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
-    if (originalF0.empty()) {
-        return;
-    }
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
-    if (!visibleWindow.isValid()) {
+    if (!visibleWindow.isValid())
         return;
-    }
 
-    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(visibleWindow.visibleContentStartTime,
-                                                                       visibleWindow.visibleContentEndTime,
-                                                                       1);
-    const int visibleStartFrame = visibleFrames.startFrame;
-    const int visibleEndFrame = visibleFrames.endFrameExclusive;
-    if (visibleEndFrame <= visibleStartFrame) {
-        return;
-    }
+    const auto& level = item.f0LOD->selectBestLevel(
+        ctx.pixelsPerSecond,
+        item.pitchSnapshot->getSampleRate(),
+        item.pitchSnapshot->getHopSize());
 
     const auto bandColour = UIColors::currentThemeId() == ThemeId::DarkBlueGrey
         ? UIColors::backgroundDark.withAlpha(0.28f)
         : UIColors::backgroundMedium.withAlpha(0.22f);
     g.setColour(bandColour);
 
-    auto drawBand = [&](int startFrame, int endFrameExclusive) {
-        if (endFrameExclusive <= startFrame) {
-            return;
-        }
-
-        // 搂8.5 鈥?frame timestamps are SOURCE time; project through 蟿 so
-        // unvoiced bands align with the stretched waveform.
-        const int x1 = std::max(ctx.pianoKeyWidth,
-            sourceTimeToScreenX(item.f0Timeline.timeAtFrame(startFrame), ctx, item));
-        const int x2 = std::min(ctx.width,
-            sourceTimeToScreenX(item.f0Timeline.timeAtFrame(endFrameExclusive), ctx, item));
-        if (x2 <= x1) {
-            return;
-        }
-
-        g.fillRect(static_cast<float>(x1), 0.0f, static_cast<float>(x2 - x1), static_cast<float>(ctx.height));
-    };
-
-    int currentBandStart = -1;
-    for (int frame = visibleStartFrame; frame < visibleEndFrame; ++frame) {
-        const bool unvoiced = !isVoicedFrame(originalF0[static_cast<std::size_t>(frame)]);
-        if (unvoiced) {
-            if (currentBandStart < 0) {
-                currentBandStart = frame;
-            }
+    for (const auto& interval : level.unvoicedIntervals) {
+        if (!interval.isValid())
             continue;
-        }
 
-        if (currentBandStart >= 0) {
-            drawBand(currentBandStart, frame);
-            currentBandStart = -1;
-        }
-    }
+        const double intervalStartTime = item.f0Timeline.timeAtFrame(interval.startFrame);
+        const double intervalEndTime = item.f0Timeline.timeAtFrame(interval.endFrameExclusive);
 
-    if (currentBandStart >= 0) {
-        drawBand(currentBandStart, visibleEndFrame);
+        if (intervalEndTime <= visibleWindow.visibleContentStartTime ||
+            intervalStartTime >= visibleWindow.visibleContentEndTime)
+            continue;
+
+        const int x1 = sourceTimeToScreenX(intervalStartTime, ctx, item);
+        const int x2 = sourceTimeToScreenX(intervalEndTime, ctx, item);
+
+        if (x2 <= ctx.pianoKeyWidth || x1 >= ctx.width)
+            continue;
+
+        const float drawX = static_cast<float>(std::max(x1, ctx.pianoKeyWidth));
+        const float drawW = static_cast<float>(std::min(x2, ctx.width)) - drawX;
+
+        if (drawW > 0.5f) {
+            g.fillRect(drawX, static_cast<float>(ctx.rulerHeight),
+                       drawW, static_cast<float>(ctx.height - ctx.rulerHeight));
+        }
     }
 }
 
@@ -342,7 +245,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
                                      const SurfaceRenderContext& ctx,
                                      const ContentRenderItem& item)
 {
-    if (item.audioBuffer == nullptr || item.waveformMipmap == nullptr)
+    if (item.audioBuffer == nullptr || item.waveformSnapshot.peaks.empty())
         return;
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
@@ -354,8 +257,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     const int w = endX - startX;
     if (w <= 0) return;
 
-    const int levelIndex = item.waveformMipmap->selectBestLevelIndex(ctx.pixelsPerSecond);
-    const auto& level = item.waveformMipmap->getLevel(levelIndex);
+    const auto& level = item.waveformSnapshot;
     
     if (level.peaks.empty())
         return;
@@ -366,7 +268,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     const float centerY = ctx.height / 2.0f;
     const float amplitudeScale = ctx.height / 2.0f;
 
-    const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[levelIndex];
+    const int samplesPerPeak = level.samplesPerPeak;
     const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
     const int64_t numPeaks = static_cast<int64_t>(level.peaks.size());
     const int64_t builtPeaks = level.complete ? numPeaks : level.buildProgress;
@@ -1333,71 +1235,69 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                                      const SurfaceRenderContext& ctx,
                                      const ContentRenderItem& item)
 {
-    if (item.pitchSnapshot == nullptr || item.f0Timeline.isEmpty())
+    if (item.f0LOD == nullptr || item.f0Timeline.isEmpty())
         return;
 
-    const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
-    if (originalF0.empty())
+    if (item.f0LOD->isEmpty())
+        return;
+
+    if (!ctx.showOriginalF0 && !ctx.showCorrectedF0)
         return;
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
     if (!visibleWindow.isValid())
         return;
 
-    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(
-        visibleWindow.visibleContentStartTime,
-        visibleWindow.visibleContentEndTime,
-        1);
-    const int visibleStartFrame = std::max(0, visibleFrames.startFrame);
-    const int visibleEndFrame = std::min(static_cast<int>(originalF0.size()), visibleFrames.endFrameExclusive);
-    if (visibleEndFrame <= visibleStartFrame)
-        return;
+    // 选择当前缩放级别的最佳 LOD
+    const auto& lodLevel = item.f0LOD->selectBestLevel(
+        ctx.pixelsPerSecond,
+        item.pitchSnapshot->getSampleRate(),
+        item.pitchSnapshot->getHopSize());
 
-    if (!ctx.showOriginalF0 && !ctx.showCorrectedF0)
-        return;
+    // 绘制 voiced runs 的辅助函数
+    auto drawVoicedRuns = [&](const std::vector<F0VisualLOD::VoicedRun>& runs,
+                              juce::Colour colour, float strokeWidth) {
+        juce::Path path;
+        for (const auto& run : runs) {
+            if (!run.isValid()) continue;
+            if (run.f0Values.empty()) continue;
 
-    const int visiblePixelWidth = ctx.width - ctx.pianoKeyWidth;
-    const int visibleFrameCount = visibleEndFrame - visibleStartFrame;
-    const bool useDecimation = visibleFrameCount > visiblePixelWidth * 2;
+            bool subPathStarted = false;
+            for (size_t i = 0; i < run.f0Values.size(); ++i) {
+                const int frame = run.startFrame + static_cast<int>(i) * lodLevel.framesPerPoint;
+                const float f0 = run.f0Values[i];
+                if (f0 <= 0.0f) continue;
+
+                const double timePos = item.f0Timeline.timeAtFrame(frame);
+                const int x = sourceTimeToScreenX(timePos, ctx, item);
+                if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
+
+                const float y = ctx.coords.freqToY(f0);
+                if (!subPathStarted) {
+                    path.startNewSubPath(static_cast<float>(x), y);
+                    subPathStarted = true;
+                } else {
+                    path.lineTo(static_cast<float>(x), y);
+                }
+            }
+        }
+        if (!path.isEmpty()) {
+            g.setColour(colour);
+            g.strokePath(path, juce::PathStrokeType(strokeWidth,
+                juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+    };
 
     // Draw original F0
-    if (ctx.showOriginalF0)
-    {
-        juce::Path originalPath;
-        buildF0ContinuousPath(originalPath, originalF0, visibleStartFrame, visibleEndFrame,
-                              item.f0Timeline, ctx, item, useDecimation);
-
-        if (!originalPath.isEmpty()) {
-            const float alpha = 0.35f;
-            g.setColour(UIColors::originalF0.withAlpha(alpha));
-            g.strokePath(originalPath, juce::PathStrokeType(1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
+    if (ctx.showOriginalF0) {
+        drawVoicedRuns(lodLevel.originalVoicedRuns,
+                       UIColors::originalF0.withAlpha(0.35f), 1.2f);
     }
 
     // Draw corrected F0 segments
-    if (ctx.showCorrectedF0 && item.pitchSnapshot->hasCorrectionLayer()) {
-        // 先收集 corrected F0 数据
-        std::vector<float> correctedF0(visibleEndFrame, 0.0f);
-        item.pitchSnapshot->renderCorrectionLayerF0Range(
-            visibleStartFrame, visibleEndFrame,
-            [&](int frame, const float* data, int length) {
-                for (int i = 0; i < length; ++i) {
-                    const int f = frame + i;
-                    if (f >= visibleStartFrame && f < visibleEndFrame) {
-                        correctedF0[static_cast<std::size_t>(f)] = data[i];
-                    }
-                }
-            });
-
-        juce::Path correctedPath;
-        buildF0ContinuousPath(correctedPath, correctedF0, visibleStartFrame, visibleEndFrame,
-                              item.f0Timeline, ctx, item, useDecimation);
-
-        if (!correctedPath.isEmpty()) {
-            const float alpha = 0.85f;
-            g.setColour(UIColors::correctedF0.withAlpha(alpha));
-            g.strokePath(correctedPath, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
+    if (ctx.showCorrectedF0 && !lodLevel.correctedVoicedRuns.empty()) {
+        drawVoicedRuns(lodLevel.correctedVoicedRuns,
+                       UIColors::correctedF0.withAlpha(0.85f), 1.8f);
     }
 }
 

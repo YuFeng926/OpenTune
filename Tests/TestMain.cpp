@@ -2155,39 +2155,52 @@ CheckResult f0RendererHasNoVerticalBucketDecimation()
     return pass("f0RendererHasNoVerticalBucketDecimation");
 }
 
-CheckResult f0RendererUsesSingleContinuousPathHelper()
+CheckResult f0RendererUsesLODArchitecture()
 {
     const auto source = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
 
-    // The shared helper must exist
-    if (!contains(source, "buildF0ContinuousPath"))
-        return fail("f0RendererUsesSingleContinuousPathHelper",
-            "PianoRollRenderer.cpp MUST define buildF0ContinuousPath helper");
-
-    // Extract drawF0Curve
+    // drawF0Curve must use f0LOD (not raw originalF0)
     const auto drawF0Curve = extractFunctionBlock(source, "void PianoRollRenderer::drawF0Curve(");
     if (drawF0Curve.empty())
-        return fail("f0RendererUsesSingleContinuousPathHelper",
+        return fail("f0RendererUsesLODArchitecture",
             "drawF0Curve function not found");
 
-    // Both OriginalF0 and CorrectedF0 must use the shared helper
-    if (!contains(drawF0Curve, "buildF0ContinuousPath"))
-        return fail("f0RendererUsesSingleContinuousPathHelper",
-            "drawF0Curve MUST call buildF0ContinuousPath");
+    if (contains(drawF0Curve, "getOriginalF0()"))
+        return fail("f0RendererUsesLODArchitecture",
+            "drawF0Curve MUST NOT call getOriginalF0() — use f0LOD instead");
 
-    // Count how many times buildF0ContinuousPath is called in drawF0Curve
-    // It should be called exactly twice (once for original, once for corrected)
-    const size_t callCount = countOf(drawF0Curve, "buildF0ContinuousPath(");
-    if (callCount < 2)
-        return fail("f0RendererUsesSingleContinuousPathHelper",
-            "drawF0Curve MUST call buildF0ContinuousPath at least twice (original + corrected), found " + std::to_string(callCount));
+    if (contains(drawF0Curve, "renderCorrectionLayerF0Range"))
+        return fail("f0RendererUsesLODArchitecture",
+            "drawF0Curve MUST NOT call renderCorrectionLayerF0Range — use f0LOD instead");
 
-    // Must NOT have separate decimation branches with their own path building
-    if (contains(drawF0Curve, "useDecimation") && contains(drawF0Curve, "std::map"))
-        return fail("f0RendererUsesSingleContinuousPathHelper",
-            "drawF0Curve MUST NOT have separate decimation branches with std::map");
+    if (!contains(drawF0Curve, "f0LOD"))
+        return fail("f0RendererUsesLODArchitecture",
+            "drawF0Curve MUST use f0LOD");
 
-    return pass("f0RendererUsesSingleContinuousPathHelper");
+    if (contains(drawF0Curve, "std::vector<float> correctedF0"))
+        return fail("f0RendererUsesLODArchitecture",
+            "drawF0Curve MUST NOT construct temporary correctedF0 vector — use LOD");
+
+    // drawUnvoicedFrameBands must use f0LOD (not raw originalF0)
+    const auto drawUnvoicedFrameBands = extractFunctionBlock(source, "void PianoRollRenderer::drawUnvoicedFrameBands(");
+    if (drawUnvoicedFrameBands.empty())
+        return fail("f0RendererUsesLODArchitecture",
+            "drawUnvoicedFrameBands function not found");
+
+    if (contains(drawUnvoicedFrameBands, "getOriginalF0()"))
+        return fail("f0RendererUsesLODArchitecture",
+            "drawUnvoicedFrameBands MUST NOT call getOriginalF0() — use f0LOD instead");
+
+    if (!contains(drawUnvoicedFrameBands, "f0LOD"))
+        return fail("f0RendererUsesLODArchitecture",
+            "drawUnvoicedFrameBands MUST use f0LOD");
+
+    // Must NOT have dead helpers
+    if (contains(source, "buildF0ContinuousPath"))
+        return fail("f0RendererUsesLODArchitecture",
+            "buildF0ContinuousPath must be deleted — replaced by LOD architecture");
+
+    return pass("f0RendererUsesLODArchitecture");
 }
 
 // =============================================================================
@@ -2342,7 +2355,7 @@ CheckResult surfaceCache_scrollOnlyDoesNotDirtySlots()
 
 CheckResult surfaceCache_zoomDirtyAllSlots()
 {
-    // Zoom change must dirty all 4 slots for resolution-dependent rebuild
+    // Zoom change must trigger generation rebuild via single entry point
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto setFn = extractFunctionBlock(cpp, "PianoRollComponent::setTimelineViewport");
 
@@ -2355,17 +2368,17 @@ CheckResult surfaceCache_zoomDirtyAllSlots()
         return fail("surfaceCache_zoomDirtyAllSlots",
                     "setTimelineViewport must detect zoom change via pixelsPerSecond comparison.");
 
-    // Must call invalidateAll on zoom change
-    if (!contains(setFn, "invalidateAll"))
+    // Must call queueSurfaceRebuild on zoom change (single build entry)
+    if (!contains(setFn, "queueSurfaceRebuild"))
         return fail("surfaceCache_zoomDirtyAllSlots",
-                    "Zoom change must call surfaceCache_.invalidateAll() to dirty all slots.");
+                    "Zoom change must call queueSurfaceRebuild() — the single build entry.");
 
     return pass("surfaceCache_zoomDirtyAllSlots");
 }
 
 CheckResult surfaceCache_paintUsesFullClipOffset()
 {
-    // computeScrollOffsetPx must subtract surfaceStartSec for full-clip domain
+    // computeScrollOffsetPx must compute offset relative to surface start for full-clip domain
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto scrollFn = extractFunctionBlock(cpp, "PianoRollComponent::computeScrollOffsetPx");
 
@@ -2373,17 +2386,16 @@ CheckResult surfaceCache_paintUsesFullClipOffset()
         return fail("surfaceCache_paintUsesFullClipOffset",
                     "Cannot locate computeScrollOffsetPx.");
 
-    // Must reference surfaceStartSec (not assume origin = 0)
-    if (!contains(scrollFn, "surfaceStartSec"))
+    // Must reference surface start (not assume origin = 0)
+    if (!contains(scrollFn, "computeSurfaceStartTimelineSeconds") && !contains(scrollFn, "surfaceStartSec"))
         return fail("surfaceCache_paintUsesFullClipOffset",
-                    "computeScrollOffsetPx must subtract surfaceStartSec for full-clip offset.");
+                    "computeScrollOffsetPx must subtract surface start for full-clip offset.");
 
     return pass("surfaceCache_paintUsesFullClipOffset");
 }
 
 CheckResult surfaceCache_buildUsesFullClipMapper()
 {
-    // Cache build in paint() must use ViewMapper with full-clip domain (visibleStart=surfaceStart, contentStartX=0)
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto paintFn = extractFunctionBlock(cpp, "PianoRollComponent::paint");
 
@@ -2391,15 +2403,30 @@ CheckResult surfaceCache_buildUsesFullClipMapper()
         return fail("surfaceCache_buildUsesFullClipMapper",
                     "Cannot locate PianoRollComponent::paint.");
 
-    // Must call configureGeometry (sets full-clip surface geometry)
-    if (!contains(paintFn, "configureGeometry"))
+    // paint() 必须 PURE blit only — 不触发任何 rebuild
+    if (contains(paintFn, "requestSurfaceGeneration"))
         return fail("surfaceCache_buildUsesFullClipMapper",
-                    "paint() must call surfaceCache_.configureGeometry for full-clip domain.");
+                    "paint() 必不调用 requestSurfaceGeneration");
+    if (contains(paintFn, "triggerAsyncUpdate"))
+        return fail("surfaceCache_buildUsesFullClipMapper",
+                    "paint() 必不调用 triggerAsyncUpdate");
+    if (contains(paintFn, "queueSurfaceRebuild"))
+        return fail("surfaceCache_buildUsesFullClipMapper",
+                    "paint() 必不调用 queueSurfaceRebuild");
+    if (contains(paintFn, "configureGeometry"))
+        return fail("surfaceCache_buildUsesFullClipMapper",
+                    "paint() 必不调用 configureGeometry");
+    if (contains(paintFn, "buildAllDirty"))
+        return fail("surfaceCache_buildUsesFullClipMapper",
+                    "paint() 必不调用 buildAllDirty");
+    if (contains(paintFn, "buildSurfaceRenderContextForGeometry"))
+        return fail("surfaceCache_buildUsesFullClipMapper",
+                    "paint() 必不调用 buildSurfaceRenderContextForGeometry");
 
-    // Must reference buildAllDirty (the cache rebuild entry point)
-    if (!contains(paintFn, "buildAllDirty"))
+    // paint() 必须只调用 surfaceCache_.paint (blit)
+    if (!contains(paintFn, "surfaceCache_.paint"))
         return fail("surfaceCache_buildUsesFullClipMapper",
-                    "paint() must call surfaceCache_.buildAllDirty.");
+                    "paint() 必须调用 surfaceCache_.paint()");
 
     return pass("surfaceCache_buildUsesFullClipMapper");
 }
@@ -2434,25 +2461,87 @@ CheckResult surfaceCache_paintNoRendererDrawNoFallback()
     return pass("surfaceCache_paintNoRendererDrawNoFallback");
 }
 
+CheckResult surfaceCache_handleAsyncUpdateIsBuildEntry()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto handleAsyncFn = extractFunctionBlock(cpp, "PianoRollComponent::handleAsyncUpdate");
+
+    if (handleAsyncFn.empty())
+        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
+                    "Cannot locate handleAsyncUpdate().");
+
+    // handleAsyncUpdate() 是唯一 build 入口
+    if (!contains(handleAsyncFn, "renderer_->drawLanes"))
+        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
+                    "handleAsyncUpdate() 必须调用 renderer_->drawLanes().");
+    if (!contains(handleAsyncFn, "renderer_->drawGridLines"))
+        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
+                    "handleAsyncUpdate() 必须调用 renderer_->drawGridLines().");
+    if (!contains(handleAsyncFn, "renderer_->drawTimeRuler"))
+        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
+                    "handleAsyncUpdate() 必须调用 renderer_->drawTimeRuler().");
+    if (!contains(handleAsyncFn, "renderer_->drawWaveform"))
+        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
+                    "handleAsyncUpdate() 必须调用 renderer_->drawWaveform().");
+    if (!contains(handleAsyncFn, "renderer_->drawNotes"))
+        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
+                    "handleAsyncUpdate() 必须调用 renderer_->drawNotes().");
+    if (!contains(handleAsyncFn, "renderer_->drawUnvoicedFrameBands"))
+        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
+                    "handleAsyncUpdate() 必须调用 renderer_->drawUnvoicedFrameBands().");
+    if (!contains(handleAsyncFn, "renderer_->drawF0Curve"))
+        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
+                    "handleAsyncUpdate() 必须调用 renderer_->drawF0Curve().");
+    if (!contains(handleAsyncFn, "renderer_->drawTimeGridAnchors"))
+        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
+                    "handleAsyncUpdate() 必须调用 renderer_->drawTimeGridAnchors().");
+
+    return pass("surfaceCache_handleAsyncUpdateIsBuildEntry");
+}
+
+CheckResult surfaceCache_dirtyPointsCallQueueNotRequest()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto paintFn = extractFunctionBlock(cpp, "PianoRollComponent::paint");
+    const auto onScrollFn = extractFunctionBlock(cpp, "PianoRollComponent::onScrollVBlankCallback");
+
+    // paint() 不应包含任何 queueSurfaceRebuild
+    if (contains(paintFn, "queueSurfaceRebuild"))
+        return fail("surfaceCache_dirtyPointsCallQueueNotRequest",
+                    "paint() 不能调用 queueSurfaceRebuild（纯 blit）");
+
+    // onScrollVBlankCallback 不应包含任何 markDirty/queueSurfaceRebuild
+    if (onScrollFn.empty())
+        return pass("surfaceCache_dirtyPointsCallQueueNotRequest");
+    if (contains(onScrollFn, "surfaceCache_.markDirty"))
+        return fail("surfaceCache_dirtyPointsCallQueueNotRequest",
+                    "onScrollVBlankCallback 不能调用 surfaceCache_.markDirty（CONT follow 只更新 camera）");
+    if (contains(onScrollFn, "queueSurfaceRebuild"))
+        return fail("surfaceCache_dirtyPointsCallQueueNotRequest",
+                    "onScrollVBlankCallback 不能调用 queueSurfaceRebuild（CONT follow 只更新 camera）");
+
+    return pass("surfaceCache_dirtyPointsCallQueueNotRequest");
+}
+
 CheckResult surfaceCache_forbiddenTransientStateNotCached()
 {
     // Interactive overlay state must never enter cache slots
-    const auto cacheCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
-    const auto buildSlotFn = extractFunctionBlock(cacheCpp, "PianoRollSurfaceCache::buildSlot");
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto buildFn = extractFunctionBlock(cpp, "PianoRollComponent::handleAsyncUpdate");
 
-    if (buildSlotFn.empty())
+    if (buildFn.empty())
         return fail("surfaceCache_forbiddenTransientStateNotCached",
-                    "Cannot locate buildSlot.");
+                    "Cannot locate handleAsyncUpdate.");
 
-    // Must not reference playhead within buildSlot
+    // Must not reference playhead within surface build
     const std::vector<std::string> forbidden = {
-        "playhead", "pending",
+        "playhead",
         "transport", "seeking", "seek"
     };
     for (const auto& token : forbidden) {
-        if (contains(buildSlotFn, token))
+        if (contains(buildFn, token))
             return fail("surfaceCache_forbiddenTransientStateNotCached",
-                        "buildSlot must not cache transient state token '" + token + "'.");
+                        "handleAsyncUpdate must not cache transient state token '" + token + "'.");
     }
 
     return pass("surfaceCache_forbiddenTransientStateNotCached");
@@ -2473,12 +2562,11 @@ CheckResult surfaceCache_timeGridHandlesStayOverlay()
         return fail("surfaceCache_timeGridHandlesStayOverlay",
                     "paintOverChildren must call drawTimeGridHandles.");
 
-    // Cache buildSlot must not draw time grid handles
-    const auto cacheCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
-    const auto buildSlotFn = extractFunctionBlock(cacheCpp, "PianoRollSurfaceCache::buildSlot");
-    if (contains(buildSlotFn, "drawTimeGridHandles"))
+    // Surface build must not draw time grid handles
+    const auto buildFn = extractFunctionBlock(cpp, "PianoRollComponent::handleAsyncUpdate");
+    if (contains(buildFn, "drawTimeGridHandles"))
         return fail("surfaceCache_timeGridHandlesStayOverlay",
-                    "buildSlot must NOT call drawTimeGridHandles (overlay only).");
+                    "handleAsyncUpdate must NOT call drawTimeGridHandles (overlay only).");
 
     return pass("surfaceCache_timeGridHandlesStayOverlay");
 }
@@ -2518,23 +2606,23 @@ CheckResult surfaceCache_verticalGeometryDirtiesYSlots()
 
 CheckResult surfaceCache_configureGeometryDetectsDomainShift()
 {
-    // configureGeometry must detect domain shift (startSec/endSec change)
-    const auto cacheCpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
-    const auto configFn = extractFunctionBlock(cacheCpp, "PianoRollSurfaceCache::configureGeometry");
+    // computeGeometryKey must compute full-clip domain from placement min/max
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto geomFn = extractFunctionBlock(cpp, "PianoRollComponent::computeGeometryKey");
 
-    if (configFn.empty())
+    if (geomFn.empty())
         return fail("surfaceCache_configureGeometryDetectsDomainShift",
-                    "Cannot locate configureGeometry.");
+                    "Cannot locate computeGeometryKey.");
 
-    // Must check startSec against surfaceStartSec_
-    if (!contains(configFn, "surfaceStartSec_"))
+    // Must compute surface start from placements
+    if (!contains(geomFn, "computeSurfaceStartTimelineSeconds"))
         return fail("surfaceCache_configureGeometryDetectsDomainShift",
-                    "configureGeometry must detect startSec change via surfaceStartSec_ comparison.");
+                    "computeGeometryKey must use computeSurfaceStartTimelineSeconds for surface start.");
 
-    // Must check endSec against surfaceEndSec_  
-    if (!contains(configFn, "surfaceEndSec_"))
+    // Must compute surface end from placements
+    if (!contains(geomFn, "computeSurfaceEndTimelineSeconds"))
         return fail("surfaceCache_configureGeometryDetectsDomainShift",
-                    "configureGeometry must detect endSec change via surfaceEndSec_ comparison.");
+                    "computeGeometryKey must use computeSurfaceEndTimelineSeconds for surface end.");
 
     return pass("surfaceCache_configureGeometryDetectsDomainShift");
 }
@@ -2661,10 +2749,10 @@ CheckResult surfaceCache_timeAnchorsSlotExists()
     const auto hdr = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h");
     if (!contains(hdr, "TimeAnchors"))
         return fail("surfaceCache_timeAnchorsSlotExists", "Slot enum must include TimeAnchors.");
-    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
-    const auto buildFn = extractFunctionBlock(cpp, "PianoRollSurfaceCache::buildSlot");
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto buildFn = extractFunctionBlock(cpp, "PianoRollComponent::handleAsyncUpdate");
     if (!contains(buildFn, "Slot::TimeAnchors"))
-        return fail("surfaceCache_timeAnchorsSlotExists", "buildSlot must handle Slot::TimeAnchors.");
+        return fail("surfaceCache_timeAnchorsSlotExists", "handleAsyncUpdate must handle Slot::TimeAnchors.");
     if (!contains(buildFn, "drawTimeGridAnchors"))
         return fail("surfaceCache_timeAnchorsSlotExists", "TimeAnchors slot must call drawTimeGridAnchors.");
     return pass("surfaceCache_timeAnchorsSlotExists");
@@ -2704,20 +2792,19 @@ CheckResult surfaceCache_fiveSlotEnum()
 
 CheckResult surfaceCache_buildSlotDoesNotConstructRenderContext()
 {
-    const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp");
-    const auto buildFn = extractFunctionBlock(cpp, "PianoRollSurfaceCache::buildSlot");
+    // Surface build must use SurfaceRenderContext, not full RenderContext
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto buildFn = extractFunctionBlock(cpp, "PianoRollComponent::handleAsyncUpdate");
     if (buildFn.empty())
-        return fail("surfaceCache_buildSlotDoesNotConstructRenderContext", "Cannot locate buildSlot.");
-    // buildSlot must NOT construct a full RenderContext
+        return fail("surfaceCache_buildSlotDoesNotConstructRenderContext", "Cannot locate handleAsyncUpdate.");
+    // Must construct SurfaceRenderContext (via buildSurfaceRenderContextForGeometry), not RenderContext
     if (contains(buildFn, "RenderContext ctx") || contains(buildFn, "RenderContext{"))
         return fail("surfaceCache_buildSlotDoesNotConstructRenderContext",
-                    "buildSlot must not construct a full RenderContext — use SurfaceRenderContext directly.");
-    // buildSlot must not access RenderContext — only SurfaceRenderContext
-    // Note: SurfaceRenderContext contains "RenderContext" as substring,
-    // so countOf RenderContext must equal countOf SurfaceRenderContext
-    if (countOf(buildFn, "RenderContext") != countOf(buildFn, "SurfaceRenderContext"))
+                    "handleAsyncUpdate must not construct a full RenderContext — use SurfaceRenderContext via buildSurfaceRenderContextForGeometry.");
+    // Must reference SurfaceRenderContext
+    if (!contains(buildFn, "SurfaceRenderContext") && !contains(buildFn, "buildSurfaceRenderContextForGeometry"))
         return fail("surfaceCache_buildSlotDoesNotConstructRenderContext",
-                    "buildSlot must not reference RenderContext — only SurfaceRenderContext.");
+                    "handleAsyncUpdate must use SurfaceRenderContext via buildSurfaceRenderContextForGeometry.");
     return pass("surfaceCache_buildSlotDoesNotConstructRenderContext");
 }
 
@@ -2862,23 +2949,37 @@ CheckResult surfaceCache_noDragWorkingSnapshotInSurfaceCache()
 
 CheckResult surfaceCache_buildUsesPublishedSurfaceContextOnly()
 {
-    // rebuildSurfaceCache must call buildSurfaceRenderContext(), not buildRenderContext()
+    // rebuildSurfaceCache dirties cache; paint() triggers lazy build via single entry (AsyncUpdater)
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::rebuildSurfaceCache");
     if (fn.empty())
         return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
                     "Cannot locate rebuildSurfaceCache.");
-    if (!contains(fn, "buildSurfaceRenderContext()"))
+    // Must dirty (not build directly)
+    if (!contains(fn, "invalidateAll"))
         return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
-                    "rebuildSurfaceCache must call buildSurfaceRenderContext() for the cache build.");
-    // Must NOT call buildRenderContext (which includes transient/drag state)
+                    "rebuildSurfaceCache must invalidateAll to trigger AsyncUpdater.");
+    // Must NOT call old-style build methods
+    if (contains(fn, "buildSurfaceRenderContext"))
+        return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
+                    "rebuildSurfaceCache must NOT call buildSurfaceRenderContext — build is deferred to handleAsyncUpdate.");
     if (contains(fn, "buildRenderContext"))
         return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
-                    "rebuildSurfaceCache must NOT call buildRenderContext — surface cache uses published state only.");
-    // rebuildSurfaceCache must NOT manually push content items — buildSurfaceRenderContext now fills contents
+                    "rebuildSurfaceCache must NOT call buildRenderContext.");
     if (contains(fn, "buildContentRenderItem"))
         return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
-                    "rebuildSurfaceCache must NOT call buildContentRenderItem — contents are filled by buildSurfaceRenderContext.");
+                    "rebuildSurfaceCache must NOT call buildContentRenderItem.");
+    // Verify single build entry exists: queueSurfaceRebuild → triggerAsyncUpdate → handleAsyncUpdate
+    if (!contains(cpp, "queueSurfaceRebuild"))
+        return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
+                    "Missing queueSurfaceRebuild — the AsyncUpdater trigger.");
+    if (!contains(cpp, "handleAsyncUpdate"))
+        return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
+                    "Missing handleAsyncUpdate — the single build entry.");
+    // Verify buildSurfaceRenderContextForGeometry is used in handleAsyncUpdate
+    if (!contains(cpp, "buildSurfaceRenderContextForGeometry"))
+        return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
+                    "Missing buildSurfaceRenderContextForGeometry — the surface build context factory.");
     return pass("surfaceCache_buildUsesPublishedSurfaceContextOnly");
 }
 
@@ -3103,7 +3204,7 @@ int main()
         vst3PluginEditorDoesNotUseThreeStateScaleMapping,
         standaloneAndPluginUseSharedScaleMapping,
         f0RendererHasNoVerticalBucketDecimation,
-        f0RendererUsesSingleContinuousPathHelper,
+        f0RendererUsesLODArchitecture,
         // PianoRollSurfaceCache architecture guards
         surfaceCache_noOldBandCacheTokensInSource,
         surfaceCache_hasFiveSemanticSlots,
@@ -3115,6 +3216,8 @@ int main()
         surfaceCache_paintUsesFullClipOffset,
         surfaceCache_buildUsesFullClipMapper,
         surfaceCache_paintNoRendererDrawNoFallback,
+        surfaceCache_handleAsyncUpdateIsBuildEntry,
+        surfaceCache_dirtyPointsCallQueueNotRequest,
         surfaceCache_forbiddenTransientStateNotCached,
         surfaceCache_timeGridHandlesStayOverlay,
         surfaceCache_verticalGeometryDirtiesYSlots,

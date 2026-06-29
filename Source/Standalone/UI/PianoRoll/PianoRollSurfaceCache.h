@@ -22,41 +22,51 @@ public:
 
     static constexpr int kSlotCount = static_cast<int>(Slot::SlotCount);
 
+    struct GeometryKey {
+        double surfaceStartSec = 0.0;
+        double surfaceEndSec = 0.0;
+        double pixelsPerSecond = 0.0;
+        int surfaceWidth = 0;
+        int surfaceHeight = 0;
+
+        bool operator==(const GeometryKey& other) const
+        {
+            return surfaceStartSec == other.surfaceStartSec
+                && surfaceEndSec == other.surfaceEndSec
+                && pixelsPerSecond == other.pixelsPerSecond
+                && surfaceWidth == other.surfaceWidth
+                && surfaceHeight == other.surfaceHeight;
+        }
+    };
+
+    struct PublishedGeneration {
+        GeometryKey geometry;
+        std::array<juce::Image, kSlotCount> images;
+
+        bool isValid() const { return images[0].isValid(); }
+    };
+
     PianoRollSurfaceCache();
 
+    // 只读 published generation
+    const PublishedGeneration& getPublishedGeneration() const { return published_; }
+    bool hasPublishedGeneration() const { return published_.isValid(); }
+
+    // 发布新 generation（由 builder 调用）
+    void publishGeneration(GeometryKey geometry, std::array<juce::Image, kSlotCount> images);
+
+    // 只设置 dirty mask，不 build
     void markDirty(Slot s);
-    bool isDirty(Slot s) const;
-    void clearDirty(Slot s);
     void invalidateAll();
+    uint32_t getDirtyMask() const { return dirtyMask_; }
+    void clearDirtyMask() { dirtyMask_ = 0; }
 
-    juce::Image& image(Slot s);
-    const juce::Image& image(Slot s) const;
-
-    /// Build a single slot. Creates/resizes image, renders into it, clears dirty.
-    void buildSlot(Slot s, const PianoRollRenderer::SurfaceRenderContext& sctx, PianoRollRenderer& renderer);
-
-    /// Build all dirty slots.
-    void buildAllDirty(const PianoRollRenderer::SurfaceRenderContext& sctx, PianoRollRenderer& renderer);
-
-    /// Paint all slot images at the given offset. When timeView is true, skips Waveform/Notes/F0.
+    // 只绘制，不 build
     void paint(juce::Graphics& g, int offsetX, int offsetY, bool timeView = false) const;
 
-    /// Configure full-clip domain geometry. Dirties all slots on change.
-    bool configureGeometry(double startSec, double endSec, double pps, int height);
-    double surfaceStartSec() const { return surfaceStartSec_; }
-    double surfaceEndSec() const { return surfaceEndSec_; }
-    double cachePixelsPerSecond() const { return pixelsPerSecond_; }
-    int surfaceWidthPx() const { return surfaceWidth_; }
-    int surfaceHeightPx() const { return surfaceHeight_; }
-
 private:
-    std::array<juce::Image, kSlotCount> images_;
-    uint32_t dirtyMask_ = 0xFFFFFFFF;
-    double surfaceStartSec_ = 0.0;
-    double surfaceEndSec_ = 0.0;
-    double pixelsPerSecond_ = 0.0;
-    int surfaceWidth_ = 0;
-    int surfaceHeight_ = 0;
+    PublishedGeneration published_;
+    uint32_t dirtyMask_ = 0;  // 初始为 0，不 dirty
 };
 
 } // namespace OpenTune

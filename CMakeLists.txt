@@ -602,6 +602,8 @@ target_sources(OpenTune
         Source/Editor/ConfirmDialogContent.h
 
         # Utilities
+        Source/Utils/F0VisualLOD.cpp
+        Source/Utils/F0VisualLOD.h
         Source/Utils/PitchCurve.cpp
         Source/Utils/PitchCurve.h
         Source/Utils/LegacyNoteGenerator.cpp

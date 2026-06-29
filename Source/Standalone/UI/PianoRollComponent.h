@@ -30,11 +30,11 @@
 #include <memory>
 #include <algorithm>
 #include <vector>
+#include <map>
 #include <unordered_map>
 #include <optional>
 #include <utility>
 #include <atomic>
-#include <thread>
 #include "SmallButton.h"
 #include "PlayheadOverlayComponent.h"
 #include "PianoRoll/PianoRollRenderer.h"
@@ -78,7 +78,8 @@ private:
 };
 
 class PianoRollComponent : public juce::Component,
-                           public juce::ScrollBar::Listener {
+                           public juce::ScrollBar::Listener,
+                           private juce::AsyncUpdater {
 public:
     void visibilityChanged() override;
     static constexpr int kAudioSampleRate = 44100;
@@ -196,12 +197,14 @@ public:
         if (showOriginalF0_ == show) return;
         showOriginalF0_ = show;
         surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
+        queueSurfaceRebuild();
         repaint();
     }
     void setShowCorrectedF0(bool show) {
         if (showCorrectedF0_ == show) return;
         showCorrectedF0_ = show;
         surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
+        queueSurfaceRebuild();
         repaint();
     }
     bool isShowingOriginalF0() const { return showOriginalF0_; }
@@ -348,6 +351,8 @@ private:
     void resetPresentationClock(double authoritativeTime);
     PianoRollRenderer::RenderContext makePresentationRenderContext() const;
     PianoRollRenderer::SurfaceRenderContext buildSurfaceRenderContext() const;
+    PianoRollRenderer::SurfaceRenderContext buildSurfaceRenderContextForGeometry(
+        PianoRollSurfaceCache::GeometryKey geometry) const;
 
     // v12 New: camera-based viewport
     ViewMapper makeViewMapper() const noexcept;
@@ -359,6 +364,11 @@ private:
     double computeMaxVisibleStartSeconds(double pps) const noexcept;
     void publishPlayheadPresentation(double displayPlayheadTime);
     void followAndPublishPlayhead(double timelinePlayheadTime);
+
+    // 单一 surface rebuild 入口（AsyncUpdater）
+    void handleAsyncUpdate() override;
+    void queueSurfaceRebuild();
+    PianoRollSurfaceCache::GeometryKey computeGeometryKey(TimelineViewportCamera camera) const;
 
     void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
@@ -386,7 +396,7 @@ private:
     PianoRollRenderer::ContentRenderItem buildContentRenderItem(
         const TimelineContentPlacement& placement) const;
     PianoRollRenderer::ContentRenderItem buildSurfaceContentRenderItem(
-        const TimelineContentPlacement& placement) const;
+        const TimelineContentPlacement& placement, double pixelsPerSecond) const;
     const std::vector<Note>& getCommittedNotes() const;
     const std::vector<Note>& getDisplayedNotes() const;
     NoteInteractionDraft& getNoteDraft();
@@ -568,6 +578,26 @@ private:
     std::unique_ptr<PianoRollCorrectionWorker> correctionWorker_;
     mutable WaveformMipmapCache waveformMipmapCache_;
     PianoRollSurfaceCache surfaceCache_;
+
+
+
+    // F0 LOD cache keyed by ContentKey + pitchRenderGeneration
+    struct F0LODCacheKey {
+        ContentKey contentKey;
+        uint64_t pitchRenderGeneration = 0;
+        bool operator==(const F0LODCacheKey& other) const noexcept {
+            return contentKey == other.contentKey && pitchRenderGeneration == other.pitchRenderGeneration;
+        }
+        bool operator<(const F0LODCacheKey& other) const noexcept {
+            if (contentKey != other.contentKey) return contentKey < other.contentKey;
+            return pitchRenderGeneration < other.pitchRenderGeneration;
+        }
+    };
+    mutable std::map<F0LODCacheKey, std::shared_ptr<const F0VisualLOD>> f0LODCache_;
+
+    std::shared_ptr<const F0VisualLOD> getOrBuildF0LOD(
+        ContentKey key,
+        std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot) const;
 
     static constexpr int pianoKeyWidth_ = 60;
     static constexpr int rulerHeight_ = 30;
