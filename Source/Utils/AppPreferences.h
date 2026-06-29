@@ -92,7 +92,6 @@ public:
     void setAudioEditingScheme(AudioEditingScheme::Scheme scheme);
     void setPianoRollVisualPreferences(const PianoRollVisualPreferences& visualPreferences);
     void setNoteNameMode(NoteNameMode noteNameMode);
-    void setShowChunkBoundaries(bool shouldShow);
     void setShowUnvoicedFrames(bool shouldShow);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& zoomSensitivity);
     void setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);

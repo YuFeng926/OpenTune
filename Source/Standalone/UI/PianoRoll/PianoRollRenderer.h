@@ -23,6 +23,8 @@
 
 namespace OpenTune {
 
+enum class PianoRollTimeUnit { Seconds, Bars };
+
 struct TimelineContentPlacement
 {
     ContentKey contentKey;
@@ -57,7 +59,6 @@ public:
         std::vector<float> correctedF0;
         F0Timeline f0Timeline;
         std::vector<Note> displayNotes;
-        std::vector<double> chunkBoundaries;
         bool active = false;
 
         bool isValid() const noexcept
@@ -82,7 +83,10 @@ public:
         ContentTimelineProjection sourceProjection;
     };
 
-    struct RenderContext
+    /// Surface-render-only context — stripped of transient UI fields (selection, hover,
+    /// pressed key, playhead, reference overlay, drag-working handles).
+    /// Used exclusively by PianoRollSurfaceCache::buildSlot().
+    struct SurfaceRenderContext
     {
         int width = 0;
         int height = 0;
@@ -98,10 +102,21 @@ public:
         int scaleType = 1;
         NoteNameMode noteNameMode = NoteNameMode::COnly;
         bool showLanes = true;
-        bool showChunkBoundaries = false;
         bool showUnvoicedFrames = false;
         bool showOriginalF0 = true;
         bool showCorrectedF0 = true;
+
+        std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
+        ContentTimelineProjection activeProjection;
+        ToolId currentTool = ToolId::Select;
+        bool isTimeView() const { return currentTool == ToolId::TimeTool; }
+
+        PianoRollTimeUnit timeUnit = PianoRollTimeUnit::Seconds;
+        ViewMapper coords;
+    };
+
+    struct RenderContext : public SurfaceRenderContext
+    {
         int pressedPianoKey = -1;
 
         bool hasF0Selection = false;
@@ -110,49 +125,30 @@ public:
 
         std::optional<ReferenceOverlay> referenceOverlay; // 可选参考投射
 
-        // ⚡️ vocal-time-stretch §8.5 — TimeGrid handles overlay.
-        // When non-null, renderer paints vertical guide lines at each handle's
-        // output_seconds (because piano-roll x-axis is OUTPUT/display time).
-        // Endpoint handles are visually distinguished (locked = solid, dimmer);
-        // user-draggable handles use kind-specific colors.
-        std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
         uint64_t timeGridHoveredHandleId = 0;
         uint64_t timeGridSelectedHandleId = 0;
         std::vector<uint64_t> additionalSelectedHandleIds;
         std::vector<int> selectedLineAnchorSegmentIds;
-
-        // Active content → timeline projection.
-        // drawTimeGridHandles and ghost-note rendering use this to convert
-        // content-local time to timeline time for screen coordinate mapping.
-        ContentTimelineProjection activeProjection;
-
-        // ⚡️ vocal-time-stretch §8.5 (Phase J) — current tool drives view
-        // mode: TimeTool → Time view (no piano keys, no notes/F0, full-height
-        // handles); else → Pitch view (existing).
-        ToolId currentTool = ToolId::Select;
-        bool isTimeView() const { return currentTool == ToolId::TimeTool; }
-
-        enum class TimeUnit { Seconds, Bars } timeUnit = TimeUnit::Seconds;
-
-        // Coordinate mapper — replaces midiToY/freqToY/freqToMidi/xToTime/timeToX lambdas.
-        // All coordinate conversions use ctx.coords.xxx directly.
-        ViewMapper coords;
     };
 
-    void drawLanes(juce::Graphics& g, const RenderContext& ctx);
-    void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
-    void drawWaveform(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
-    void drawTimeRuler(juce::Graphics& g, const RenderContext& ctx);
-    void drawGridLines(juce::Graphics& g, const RenderContext& ctx);
-    void drawChunkBoundaries(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    void drawLanes(juce::Graphics& g, const SurfaceRenderContext& ctx);
+    void drawUnvoicedFrameBands(juce::Graphics& g, const SurfaceRenderContext& ctx, const ContentRenderItem& item);
+    void drawWaveform(juce::Graphics& g, const SurfaceRenderContext& ctx, const ContentRenderItem& item);
+    void drawTimeRuler(juce::Graphics& g, const SurfaceRenderContext& ctx);
+    void drawGridLines(juce::Graphics& g, const SurfaceRenderContext& ctx);
+
+    /// Draw published TimeGrid anchors as cache-friendly neutral lines.
+    /// No hover/selected/drag affordances — those are painted by drawTimeGridHandles in overlay.
+    void drawTimeGridAnchors(juce::Graphics& g, const SurfaceRenderContext& ctx);
+
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
-    void drawNotes(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    void drawNotes(juce::Graphics& g, const SurfaceRenderContext& ctx, const ContentRenderItem& item);
     void drawSelectedNoteHighlights(juce::Graphics& g,
                                     const RenderContext& ctx,
                                     const std::vector<Note>& notes,
                                     const std::vector<int>& selectedNoteIndices,
                                     const ContentRenderItem& item);
-    void drawF0Curve(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    void drawF0Curve(juce::Graphics& g, const SurfaceRenderContext& ctx, const ContentRenderItem& item);
 
     // ⚡️ §8.5 — paint TimeGrid handles as vertical guide lines.
     void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx);

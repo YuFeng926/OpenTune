@@ -82,7 +82,7 @@ struct VisibleTimeWindow {
     }
 };
 
-VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContext& ctx,
+VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::SurfaceRenderContext& ctx,
                                            const PianoRollRenderer::ContentRenderItem& item)
 {
     VisibleTimeWindow window;
@@ -119,7 +119,7 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
 // f0Timeline frame timestamp, WaveformMipmap peak) into screen X via the
 // item's projection. Identity TimeGrid 鈫?degenerates to existing pipeline.
 inline int sourceTimeToScreenX(double sourceTime,
-                                const PianoRollRenderer::RenderContext& ctx,
+                                const PianoRollRenderer::SurfaceRenderContext& ctx,
                                 const PianoRollRenderer::ContentRenderItem& item)
 {
     double outputTime = sourceTime;
@@ -143,7 +143,7 @@ void buildF0ContinuousPath(
     int visibleStartFrame,
     int visibleEndFrame,
     const F0Timeline& f0Timeline,
-    const PianoRollRenderer::RenderContext& ctx,
+    const PianoRollRenderer::SurfaceRenderContext& ctx,
     const PianoRollRenderer::ContentRenderItem& item,
     bool useDecimation)
 {
@@ -206,7 +206,7 @@ void buildF0ContinuousPath(
 
 } // namespace
 
-void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
+void PianoRollRenderer::drawLanes(juce::Graphics& g, const SurfaceRenderContext& ctx)
 {
     const int w = ctx.width;
     const int h = ctx.height;
@@ -268,7 +268,7 @@ void PianoRollRenderer::drawLanes(juce::Graphics& g, const RenderContext& ctx)
 }
 
 void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
-                                               const RenderContext& ctx,
+                                               const SurfaceRenderContext& ctx,
                                                const ContentRenderItem& item)
 {
     if (!ctx.showUnvoicedFrames || item.pitchSnapshot == nullptr || item.f0Timeline.isEmpty()) {
@@ -339,7 +339,7 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
 }
 
 void PianoRollRenderer::drawWaveform(juce::Graphics& g,
-                                     const RenderContext& ctx,
+                                     const SurfaceRenderContext& ctx,
                                      const ContentRenderItem& item)
 {
     if (item.audioBuffer == nullptr || item.waveformMipmap == nullptr)
@@ -462,7 +462,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     }
 }
 
-void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ctx)
+void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const SurfaceRenderContext& ctx)
 {
     auto rulerArea = juce::Rectangle<int>(0, 0, ctx.width, ctx.rulerHeight);
 
@@ -478,7 +478,7 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
         : ((isBlueBreeze || isOverdose) ? UIColors::pianoRollGrid.withAlpha(0.040f) : UIColors::panelBorder));
     g.drawLine(0.0f, static_cast<float>(rulerBottom), static_cast<float>(ctx.width), static_cast<float>(rulerBottom), (isAurora || isBlueBreeze || isOverdose) ? 0.7f : 1.0f);
 
-    if (ctx.timeUnit == RenderContext::TimeUnit::Bars)
+    if (ctx.timeUnit == PianoRollTimeUnit::Bars)
     {
         double bpm = ctx.bpm;
         if (bpm <= 0.0) bpm = 120.0;
@@ -562,11 +562,11 @@ void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const RenderContext& ct
     }
 }
 
-void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ctx)
+void PianoRollRenderer::drawGridLines(juce::Graphics& g, const SurfaceRenderContext& ctx)
 {
     const auto themeId = UIColors::currentThemeId();
 
-    if (ctx.timeUnit == RenderContext::TimeUnit::Bars)
+    if (ctx.timeUnit == PianoRollTimeUnit::Bars)
     {
         double bpm = ctx.bpm;
         if (bpm <= 0.0) bpm = 120.0;
@@ -655,34 +655,6 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const RenderContext& ct
                 g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::panelBorder.withAlpha(0.12f) : UIColors::panelBorder.withAlpha(0.25f));
             g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(ctx.height));
         }
-    }
-}
-
-void PianoRollRenderer::drawChunkBoundaries(juce::Graphics& g,
-                                            const RenderContext& ctx,
-                                            const ContentRenderItem& item)
-{
-    if (!ctx.showChunkBoundaries || item.chunkBoundaries.size() < 3) {
-        return;
-    }
-
-    static constexpr float dashLengths[] { 6.0f, 2.5f };
-    g.setColour(UIColors::accent.withAlpha(0.92f));
-
-    for (std::size_t index = 1; index + 1 < item.chunkBoundaries.size(); ++index) {
-        // 搂8.5 鈥?chunk boundaries are SOURCE time; project through 蟿.
-        const int x = sourceTimeToScreenX(item.chunkBoundaries[index], ctx, item);
-        if (x < ctx.pianoKeyWidth || x >= ctx.width) {
-            continue;
-        }
-
-        g.drawDashedLine(juce::Line<float>(static_cast<float>(x),
-                                          0.0f,
-                                          static_cast<float>(x),
-                                          static_cast<float>(ctx.height)),
-                         dashLengths,
-                         2,
-                         1.5f);
     }
 }
 
@@ -1013,7 +985,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
 }
 
 void PianoRollRenderer::drawNotes(juce::Graphics& g,
-                                  const RenderContext& ctx,
+                                  const SurfaceRenderContext& ctx,
                                   const ContentRenderItem& item)
 {
     const auto& notes = item.displayNotes;
@@ -1261,14 +1233,37 @@ void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext&
 }
 
 // ============================================================================
-// TimeGrid Handles
+// TimeGrid Anchors (cached slot — neutral lines, no interaction)
+// ============================================================================
+void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const SurfaceRenderContext& ctx)
+{
+    if (ctx.timeGridSnapshot == nullptr) return;
+
+    const int contentTop    = ctx.rulerHeight;
+    const int contentBottom = ctx.height;
+    if (contentBottom <= contentTop) return;
+
+    for (const auto& h : ctx.timeGridSnapshot->handles()) {
+        const double timelineTime = ctx.activeProjection.projectContentTimeToTimeline(h.output_seconds);
+        const int x = ctx.coords.timeToX(timelineTime);
+        if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
+
+        const float alpha = h.locked ? 0.3f : 0.4f;
+        g.setColour(juce::Colours::white.withAlpha(alpha));
+        g.drawLine(static_cast<float>(x),
+                   static_cast<float>(contentTop),
+                   static_cast<float>(x),
+                   static_cast<float>(contentBottom),
+                   1.0f);
+    }
+}
+
+// ============================================================================
+// TimeGrid Handles (overlay — hover/selected/drag affordances)
 // ============================================================================
 void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx)
 {
     if (ctx.timeGridSnapshot == nullptr) return;
-
-    // Time-tool-only affordance — Pitch view hides them for a clean canvas.
-    if (!ctx.isTimeView()) return;
 
     const int contentTop    = ctx.rulerHeight;
     const int contentBottom = ctx.height;
@@ -1291,6 +1286,10 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
     const juce::Colour kHighConfidenceColour = juce::Colour::fromRGB(0xE0, 0xB0, 0x40);
 
     for (const auto& h : ctx.timeGridSnapshot->handles()) {
+        const bool selected = (ctx.timeGridSelectedHandleId == h.id);
+        const bool hovered  = (ctx.timeGridHoveredHandleId  == h.id);
+        if (!selected && !hovered) continue;
+
         const double timelineTime = ctx.activeProjection.projectContentTimeToTimeline(h.output_seconds);
         const int x = ctx.coords.timeToX(timelineTime);
         if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
@@ -1302,8 +1301,6 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
             col = kHighConfidenceColour;
         }
 
-        const bool selected = (ctx.timeGridSelectedHandleId == h.id);
-        const bool hovered  = (ctx.timeGridHoveredHandleId  == h.id);
         const bool isHigh = (!h.locked && h.confidence == Confidence::High);
         const float baseThickness = isHigh ? 1.5f : 1.0f;
         const float lineThickness = (selected ? 2.0f : (hovered ? 1.5f : baseThickness));
@@ -1331,7 +1328,7 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
 }
 
 void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
-                                     const RenderContext& ctx,
+                                     const SurfaceRenderContext& ctx,
                                      const ContentRenderItem& item)
 {
     if (item.pitchSnapshot == nullptr || item.f0Timeline.isEmpty())
