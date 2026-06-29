@@ -235,7 +235,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         invalidateInteractionArea(dirtyArea);
     };
     toolCtx.invalidateInteractionVisual = [this]() {
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
         repaint();
     };
     toolCtx.repaintPreviewOverlay = [this]() { previewOverlay_.repaint(); };
@@ -286,17 +285,9 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         auto snap = readEditedSnapshot();
         return snap ? snap->timeGrid : nullptr;
     };
-    auto markTimeGridChanged = [this]() {
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background);
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform);
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors);
-        repaint();
-    };
-    toolCtx.commitTimeGrid = [this, markTimeGridChanged](std::shared_ptr<const TimeGridSnapshot> newSnap,
-                                                          std::shared_ptr<const TimeGridSnapshot> oldSnap,
-                                                          juce::String description) -> bool {
+    toolCtx.commitTimeGrid = [this](std::shared_ptr<const TimeGridSnapshot> newSnap,
+                                    std::shared_ptr<const TimeGridSnapshot> oldSnap,
+                                    juce::String description) -> bool {
         if (processor_ == nullptr || !editedContentKey_.isValid()) return false;
         if (newSnap == nullptr || oldSnap == nullptr) return false;
 
@@ -310,7 +301,11 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             editedContentKey_, newSnap);
         if (!published) return false;
         processor_->getUndoManager().addAction(std::move(action));
-        markTimeGridChanged();
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors);
+        repaint();
         return true;
     };
     toolCtx.repaintTimeGridHandles = [this]() {
@@ -526,37 +521,7 @@ void PianoRollComponent::refreshEditedContentNotes()
 
 void PianoRollComponent::rebuildSurfaceCache()
 {
-    auto ctx = makePresentationRenderContext();
-    if (auto placement = findActiveTimelineContentPlacement()) {
-        ctx.contents.push_back(buildContentRenderItem(*placement));
-    }
-
-    // Extract surface-only fields into SurfaceRenderContext.
-    // Transient UI fields (selection, hover, pressed key, reference overlay, drag handles) are excluded.
-    PianoRollRenderer::SurfaceRenderContext sctx;
-    sctx.width = ctx.width;
-    sctx.height = ctx.height;
-    sctx.pianoKeyWidth = ctx.pianoKeyWidth;
-    sctx.rulerHeight = ctx.rulerHeight;
-    sctx.pixelsPerSecond = ctx.pixelsPerSecond;
-    sctx.pixelsPerSemitone = ctx.pixelsPerSemitone;
-    sctx.minMidi = ctx.minMidi;
-    sctx.maxMidi = ctx.maxMidi;
-    sctx.bpm = ctx.bpm;
-    sctx.contents = std::move(ctx.contents);
-    sctx.scaleRootNote = ctx.scaleRootNote;
-    sctx.scaleType = ctx.scaleType;
-    sctx.noteNameMode = ctx.noteNameMode;
-    sctx.showLanes = ctx.showLanes;
-    sctx.showUnvoicedFrames = ctx.showUnvoicedFrames;
-    sctx.showOriginalF0 = ctx.showOriginalF0;
-    sctx.showCorrectedF0 = ctx.showCorrectedF0;
-    sctx.timeGridSnapshot = ctx.timeGridSnapshot;
-    sctx.activeProjection = ctx.activeProjection;
-    sctx.currentTool = ctx.currentTool;
-    sctx.timeUnit = ctx.timeUnit;
-    sctx.coords = ctx.coords;
-
+    auto sctx = buildSurfaceRenderContext();
     surfaceCache_.buildAllDirty(sctx, *renderer_);
 }
 
@@ -902,7 +867,7 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
         interactionState_.selection.hasSelectionArea = false;
         interactionState_.selection.isSelectingArea = false;
         interactionState_.selection.clearF0Selection();
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
+        repaint();
         previewOverlay_.repaint();
         return false;
     }
@@ -932,7 +897,7 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
     } else {
         interactionState_.selection.clearF0Selection();
     }
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
+    repaint();
     previewOverlay_.repaint();
 
     return anyOverlap;
@@ -1100,7 +1065,7 @@ void PianoRollComponent::invalidateInteractionArea(const juce::Rectangle<int>& d
         ++interactionRevision_;
     }
 
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); repaint(dirtyArea);
+    repaint(dirtyArea);
 }
 
 bool PianoRollComponent::enqueueManualCorrectionPatchAsync(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
@@ -1472,44 +1437,7 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         const int vpH = getTimelineViewportBounds().getBottom();
         if (vpH > 0) {
             surfaceCache_.configureGeometry(surfaceStart, surfaceEnd, pps, vpH);
-            auto ctx = buildRenderContext(surfaceCache_.surfaceWidthPx(), 0);
-            ctx.height = vpH;
-            ctx.coords = ViewMapper{
-                surfaceStart, pps,
-                0,
-                surfaceCache_.surfaceWidthPx(),
-                vpH,
-                pixelsPerSemitone_,
-                verticalScrollOffset_,
-                maxMidi_
-            };
-
-            // Extract surface-only fields into SurfaceRenderContext.
-            // Transient UI fields (selection, hover, pressed key, reference overlay, drag handles) are excluded.
-            PianoRollRenderer::SurfaceRenderContext sctx;
-            sctx.width = ctx.width;
-            sctx.height = ctx.height;
-            sctx.pianoKeyWidth = ctx.pianoKeyWidth;
-            sctx.rulerHeight = ctx.rulerHeight;
-            sctx.pixelsPerSecond = ctx.pixelsPerSecond;
-            sctx.pixelsPerSemitone = ctx.pixelsPerSemitone;
-            sctx.minMidi = ctx.minMidi;
-            sctx.maxMidi = ctx.maxMidi;
-            sctx.bpm = ctx.bpm;
-            sctx.contents = std::move(ctx.contents);
-            sctx.scaleRootNote = ctx.scaleRootNote;
-            sctx.scaleType = ctx.scaleType;
-            sctx.noteNameMode = ctx.noteNameMode;
-            sctx.showLanes = ctx.showLanes;
-            sctx.showUnvoicedFrames = ctx.showUnvoicedFrames;
-            sctx.showOriginalF0 = ctx.showOriginalF0;
-            sctx.showCorrectedF0 = ctx.showCorrectedF0;
-            sctx.timeGridSnapshot = ctx.timeGridSnapshot;
-            sctx.activeProjection = ctx.activeProjection;
-            sctx.currentTool = ctx.currentTool;
-            sctx.timeUnit = ctx.timeUnit;
-            sctx.coords = ctx.coords;
-
+            PianoRollRenderer::SurfaceRenderContext sctx = buildSurfaceRenderContext();
             surfaceCache_.buildAllDirty(sctx, *renderer_);
         }
     }
@@ -1599,8 +1527,8 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
             }
 
             listeners_.call([affectedRange](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1); });
-            surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
-            return true;
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); repaint();
+    return true;
         }
     }
 
@@ -2063,7 +1991,7 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
     updateScrollBars();
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); repaint();
     return true;
 }
 
@@ -2096,7 +2024,7 @@ void PianoRollComponent::setContentProjection(const ContentTimelineProjection& p
     deriveSingleTimelineContentPlacement();
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); repaint();
 }
 
 void PianoRollComponent::setTimelineContentPlacements(std::vector<TimelineContentPlacement> placements)
@@ -2237,6 +2165,50 @@ PianoRollRenderer::RenderContext PianoRollComponent::makePresentationRenderConte
     return buildRenderContext();
 }
 
+PianoRollRenderer::SurfaceRenderContext PianoRollComponent::buildSurfaceRenderContext() const
+{
+    PianoRollRenderer::SurfaceRenderContext sctx;
+    sctx.width = surfaceCache_.surfaceWidthPx();
+    sctx.height = getTimelineViewportBounds().getBottom();
+    sctx.pianoKeyWidth = 0;
+    sctx.rulerHeight = rulerHeight_;
+    sctx.pixelsPerSecond = camera_.pixelsPerSecond;
+    sctx.pixelsPerSemitone = pixelsPerSemitone_;
+    sctx.minMidi = minMidi_;
+    sctx.maxMidi = maxMidi_;
+    sctx.bpm = bpm_;
+    sctx.scaleRootNote = scaleRootNote_;
+    sctx.scaleType = scaleType_;
+    sctx.noteNameMode = noteNameMode_;
+    sctx.showLanes = showLanes_;
+    sctx.showUnvoicedFrames = showUnvoicedFrames_;
+    sctx.showOriginalF0 = showOriginalF0_;
+    sctx.showCorrectedF0 = showCorrectedF0_;
+    sctx.timeUnit = (timeUnit_ == TimeUnit::Bars)
+        ? PianoRollTimeUnit::Bars
+        : PianoRollTimeUnit::Seconds;
+    sctx.activeProjection = activeContentProjection();
+    sctx.coords = ViewMapper{
+        computeSurfaceStartTimelineSeconds(),
+        camera_.pixelsPerSecond,
+        0,
+        surfaceCache_.surfaceWidthPx(),
+        getTimelineViewportBounds().getBottom(),
+        pixelsPerSemitone_,
+        verticalScrollOffset_,
+        maxMidi_
+    };
+    if (auto snap = readEditedSnapshot())
+        sctx.timeGridSnapshot = snap->timeGrid;
+
+    sctx.contents.reserve(timelineContentPlacements_.size());
+    for (const auto& placement : timelineContentPlacements_)
+        if (placement.isValid())
+            sctx.contents.push_back(buildSurfaceContentRenderItem(placement));
+
+    return sctx;
+}
+
 void PianoRollComponent::onHeartbeatTick()
 {
     if (!isShowing()) {
@@ -2266,7 +2238,7 @@ void PianoRollComponent::onHeartbeatTick()
                 waveformVisualRefreshPending_ = true;
             } else {
                 waveformVisualRefreshPending_ = false;
-                surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
+                surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); repaint();
             }
         }
     } else {
@@ -2276,7 +2248,7 @@ void PianoRollComponent::onHeartbeatTick()
 
     if (!playingNow && waveformVisualRefreshPending_) {
         waveformVisualRefreshPending_ = false;
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); repaint();
+        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); repaint();
     }
 }
 
@@ -2494,7 +2466,7 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
         }
 
     if (toolChanged || clearedAnchorPreview) {
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); repaint(getLocalBounds());
+        repaint(getLocalBounds());
     }
 }
 
@@ -2510,7 +2482,7 @@ void PianoRollComponent::setExperimentalFeaturesEnabled(bool enabled)
         return;
     }
 
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); repaint(getLocalBounds());
+    repaint(getLocalBounds());
 }
 
 void PianoRollComponent::setShowWaveform(bool shouldShow) {
@@ -2820,6 +2792,45 @@ PianoRollRenderer::ContentRenderItem PianoRollComponent::buildContentRenderItem(
     return item;
 }
 
+PianoRollRenderer::ContentRenderItem PianoRollComponent::buildSurfaceContentRenderItem(
+    const TimelineContentPlacement& placement) const
+{
+    PianoRollRenderer::ContentRenderItem item;
+    item.contentKey = placement.contentKey;
+    item.projection = placement.projection;
+    item.active = placement.contentKey == editedContentKey_;
+
+    std::shared_ptr<PitchCurve> curve;
+    if (item.active) {
+        curve = currentCurve_;
+        item.audioBuffer = audioBuffer_;
+        item.displayNotes = cachedNotes_;
+    } else {
+        if (auto snap = readSnapshotFor(placement.contentKey)) {
+            curve = snap->pitchCurve;
+            item.audioBuffer = snap->audioBuffer;
+            item.displayNotes = snap->notes;
+        }
+    }
+
+    if (curve != nullptr) {
+        item.pitchSnapshot = curve->getSnapshot();
+        if (item.pitchSnapshot != nullptr && item.pitchSnapshot->size() > 0)
+            item.f0Timeline = { item.pitchSnapshot->getHopSize(),
+                                item.pitchSnapshot->getSampleRate(),
+                                static_cast<int>(item.pitchSnapshot->size()) };
+    }
+
+    if (item.audioBuffer != nullptr) {
+        auto& mipmap = waveformMipmapCache_.getOrCreate(placement.contentKey);
+        if (mipmap.isSourceChanged(item.audioBuffer))
+            mipmap.setAudioSource(item.audioBuffer);
+        item.waveformMipmap = &mipmap;
+    }
+
+    return item;
+}
+
 void PianoRollComponent::visibilityChanged()
 {
     // 褰撶粍浠跺彉涓哄彲瑙佹椂锛岃嚜鍔ㄨ幏鍙栭敭鐩樼劍�?
@@ -2848,56 +2859,34 @@ PianoRollRenderer::RenderContext PianoRollComponent::buildRenderContext(int rend
                                                                         int renderPianoKeyWidth) const
 {
     PianoRollRenderer::RenderContext ctx;
-    ctx.width = renderWidthPx;
-    ctx.height = getTimelineViewportBounds().getBottom();
-    ctx.pianoKeyWidth = renderPianoKeyWidth;
+    ctx.surface = buildSurfaceRenderContext();  // Get stable surface context (committed notes, published timeGrid)
+
+    // Override geometry for this render pass
+    ctx.surface.width = renderWidthPx;
+    ctx.surface.height = getTimelineViewportBounds().getBottom();
+    ctx.surface.pianoKeyWidth = renderPianoKeyWidth;
+    // Restore viewport coords for live overlay (cache uses full-clip coords from buildSurfaceRenderContext)
+    ctx.surface.coords = makeViewMapper();
+
+    // Transient fields — on ctx directly
     ctx.pressedPianoKey = pressedPianoKey_;
-    ctx.rulerHeight = rulerHeight_;
-
-    ctx.pixelsPerSecond = camera_.pixelsPerSecond;
-    ctx.pixelsPerSemitone = pixelsPerSemitone_;
-    ctx.minMidi = minMidi_;
-    ctx.maxMidi = maxMidi_;
-    ctx.bpm = bpm_;
-    ctx.scaleRootNote = scaleRootNote_;
-    ctx.scaleType = scaleType_;
-    ctx.noteNameMode = noteNameMode_;
-    ctx.showLanes = showLanes_;
-    ctx.showUnvoicedFrames = showUnvoicedFrames_;
-    ctx.showOriginalF0 = showOriginalF0_;
-    ctx.showCorrectedF0 = showCorrectedF0_;
-    ctx.timeUnit = (timeUnit_ == TimeUnit::Bars)
-        ? PianoRollTimeUnit::Bars
-        : PianoRollTimeUnit::Seconds;
-
-    ctx.contents.reserve(timelineContentPlacements_.size());
-    for (const auto& placement : timelineContentPlacements_)
-        if (placement.isValid())
-            ctx.contents.push_back(buildContentRenderItem(placement));
-
-    ctx.coords = makeViewMapper();
-
     ctx.hasF0Selection = interactionState_.selection.hasF0Selection;
     ctx.f0SelectionStartFrame = interactionState_.selection.selectedF0StartFrame;
     ctx.f0SelectionEndFrameExclusive = interactionState_.selection.selectedF0EndFrameExclusive;
 
-    // 鈿★�?vocal-time-stretch �?.7 �?inject TimeGrid snapshot for �?.5 renderer.
-    // During an active drag, prefer the working snapshot for live preview;
-    // otherwise pull from the processor's published TimeGrid.
+    // Live timeGrid snapshot (may be drag working)
     if (interactionState_.timeTool.isDraggingHandle
         && interactionState_.timeTool.dragWorkingSnapshot != nullptr) {
         ctx.timeGridSnapshot = interactionState_.timeTool.dragWorkingSnapshot;
     } else if (auto snap = readEditedSnapshot()) {
         ctx.timeGridSnapshot = snap->timeGrid;
     }
+
     ctx.timeGridHoveredHandleId  = interactionState_.timeTool.hoveredHandleId;
     ctx.timeGridSelectedHandleId = interactionState_.timeTool.selectedHandleId;
     ctx.additionalSelectedHandleIds = interactionState_.timeTool.additionalSelectedIds;
     ctx.selectedLineAnchorSegmentIds = interactionState_.selectedLineAnchorSegmentIds;
-    // �?.5 (Phase J) �?currentTool drives view-mode in renderer.
     ctx.currentTool = currentTool_;
-
-    ctx.activeProjection = activeContentProjection();
     ctx.referenceOverlay = referenceOverlay_;
 
     return ctx;

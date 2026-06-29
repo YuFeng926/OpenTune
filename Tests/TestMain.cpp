@@ -2606,10 +2606,11 @@ CheckResult surfaceCache_surfaceRenderContextExcludesTransient()
     const auto sctxBlock = hdr.substr(sctxStart, sctxEnd - sctxStart);
     
     const std::vector<std::string> forbidden = {
-        "pressedPianoKey", "hasF0Selection", "f0SelectionStartFrame",
-        "f0SelectionEndFrameExclusive", "referenceOverlay",
-        "timeGridHoveredHandleId", "timeGridSelectedHandleId",
-        "additionalSelectedHandleIds", "selectedLineAnchorSegmentIds"
+        "currentTool", "isTimeView",
+        "pressedPianoKey", "hasF0Selection",
+        "referenceOverlay",
+        "additionalSelectedHandleIds", "selectedLineAnchorSegmentIds",
+        "timeGridHoveredHandleId", "timeGridSelectedHandleId"
     };
     for (const auto& token : forbidden) {
         if (contains(sctxBlock, token))
@@ -2711,21 +2712,309 @@ CheckResult surfaceCache_buildSlotDoesNotConstructRenderContext()
     if (contains(buildFn, "RenderContext ctx") || contains(buildFn, "RenderContext{"))
         return fail("surfaceCache_buildSlotDoesNotConstructRenderContext",
                     "buildSlot must not construct a full RenderContext — use SurfaceRenderContext directly.");
+    // buildSlot must not access RenderContext — only SurfaceRenderContext
+    // Note: SurfaceRenderContext contains "RenderContext" as substring,
+    // so countOf RenderContext must equal countOf SurfaceRenderContext
+    if (countOf(buildFn, "RenderContext") != countOf(buildFn, "SurfaceRenderContext"))
+        return fail("surfaceCache_buildSlotDoesNotConstructRenderContext",
+                    "buildSlot must not reference RenderContext — only SurfaceRenderContext.");
     return pass("surfaceCache_buildSlotDoesNotConstructRenderContext");
 }
 
-CheckResult surfaceCache_drawTimeGridHandlesOnlyInteractive()
+CheckResult surfaceCache_timeGridHandlesAreLiveTimeViewOverlay()
 {
     const auto cpp = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
     const auto handlesFn = extractFunctionBlock(cpp, "PianoRollRenderer::drawTimeGridHandles");
     if (handlesFn.empty())
-        return fail("surfaceCache_drawTimeGridHandlesOnlyInteractive",
+        return fail("surfaceCache_timeGridHandlesAreLiveTimeViewOverlay",
                     "Cannot locate drawTimeGridHandles.");
-    // Must have the interactive-only guard
-    if (!contains(handlesFn, "!selected && !hovered"))
-        return fail("surfaceCache_drawTimeGridHandlesOnlyInteractive",
-                    "drawTimeGridHandles must only draw interactive (selected/hovered) handles, skip non-interactive ones.");
-    return pass("surfaceCache_drawTimeGridHandlesOnlyInteractive");
+
+    // (a) TimeView gate: must gate entire function on ctx.isTimeView()
+    if (!contains(handlesFn, "isTimeView()"))
+        return fail("surfaceCache_timeGridHandlesAreLiveTimeViewOverlay",
+                    "drawTimeGridHandles must gate on ctx.isTimeView() — only TimeView mode draws live handles.");
+
+    // (b) additionalSelectedHandleIds usage: multi-select handle rendering
+    if (!contains(handlesFn, "additionalSelectedHandleIds"))
+        return fail("surfaceCache_timeGridHandlesAreLiveTimeViewOverlay",
+                    "drawTimeGridHandles must use additionalSelectedHandleIds for multi-select handle rendering.");
+
+    // (c) The continue condition includes !isAdditional (skip non-interactive handles)
+    if (!contains(handlesFn, "!isAdditional") || !contains(handlesFn, "continue"))
+        return fail("surfaceCache_timeGridHandlesAreLiveTimeViewOverlay",
+                    "drawTimeGridHandles must skip handles where !selected && !hovered && !isAdditional via continue.");
+
+    return pass("surfaceCache_timeGridHandlesAreLiveTimeViewOverlay");
+}
+
+CheckResult surfaceCache_waveformProgressOnlyDirtiesWaveform()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto tickFn = extractFunctionBlock(cpp, "PianoRollComponent::onHeartbeatTick");
+    if (tickFn.empty())
+        return fail("surfaceCache_waveformProgressOnlyDirtiesWaveform",
+                    "Cannot locate onHeartbeatTick.");
+
+    // Must have exactly two markDirty calls
+    const size_t dirtyCount = countOf(tickFn, "markDirty");
+    if (dirtyCount != 2)
+        return fail("surfaceCache_waveformProgressOnlyDirtiesWaveform",
+                    "onHeartbeatTick must have exactly 2 markDirty calls for waveform progress flushing.");
+
+    // Both blocks must only dirty Slot::Waveform (never Background/Notes/F0/TimeAnchors)
+    const std::vector<std::string_view> forbiddenSlots = {
+        "Slot::Background", "Slot::Notes", "Slot::F0", "Slot::TimeAnchors"
+    };
+    for (const auto slot : forbiddenSlots) {
+        if (contains(tickFn, slot))
+            return fail("surfaceCache_waveformProgressOnlyDirtiesWaveform",
+                        std::string("onHeartbeatTick must not dirty ") + std::string(slot) + " — only Slot::Waveform allowed.");
+    }
+    return pass("surfaceCache_waveformProgressOnlyDirtiesWaveform");
+}
+
+CheckResult surfaceCache_toolSwitchDoesNotDirtySurfaceSlots()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto setToolFn = extractFunctionBlock(cpp, "PianoRollComponent::setCurrentTool");
+    if (setToolFn.empty())
+        return fail("surfaceCache_toolSwitchDoesNotDirtySurfaceSlots",
+                    "Cannot locate setCurrentTool.");
+    if (contains(setToolFn, "markDirty"))
+        return fail("surfaceCache_toolSwitchDoesNotDirtySurfaceSlots",
+                    "setCurrentTool must not call markDirty — tool switch repaints via repaint(), not surface invalidation.");
+
+    const auto setExpFn = extractFunctionBlock(cpp, "PianoRollComponent::setExperimentalFeaturesEnabled");
+    if (setExpFn.empty())
+        return fail("surfaceCache_toolSwitchDoesNotDirtySurfaceSlots",
+                    "Cannot locate setExperimentalFeaturesEnabled.");
+    if (contains(setExpFn, "markDirty"))
+        return fail("surfaceCache_toolSwitchDoesNotDirtySurfaceSlots",
+                    "setExperimentalFeaturesEnabled must not call markDirty — feature toggle repaints via repaint(), not surface invalidation.");
+
+    return pass("surfaceCache_toolSwitchDoesNotDirtySurfaceSlots");
+}
+
+CheckResult surfaceCache_surfaceContextHasNoToolState()
+{
+    const auto hdr = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+
+    // Extract SurfaceRenderContext struct body
+    const auto surfaceCtx = extractBlock(hdr, "struct SurfaceRenderContext", "};");
+    if (surfaceCtx.empty())
+        return fail("surfaceCache_surfaceContextHasNoToolState",
+                    "Cannot locate SurfaceRenderContext.");
+
+    // SurfaceRenderContext must NOT contain transient tool/selection state
+    const std::vector<std::string_view> forbiddenInSurface = {
+        "currentTool", "isTimeView", "hover", "selection", "reference", "pressed"
+    };
+    for (const auto token : forbiddenInSurface) {
+        if (contains(surfaceCtx, token))
+            return fail("surfaceCache_surfaceContextHasNoToolState",
+                        std::string("SurfaceRenderContext must not contain '") + std::string(token) +
+                        "' — it is a cache-only context, not a live-render context.");
+    }
+
+    // Extract RenderContext struct body
+    const auto renderCtx = extractBlock(hdr, "struct RenderContext", "};");
+    if (renderCtx.empty())
+        return fail("surfaceCache_surfaceContextHasNoToolState",
+                    "Cannot locate RenderContext.");
+
+    // RenderContext must NOT inherit from SurfaceRenderContext
+    if (contains(renderCtx, ": public SurfaceRenderContext") || contains(renderCtx, ": SurfaceRenderContext"))
+        return fail("surfaceCache_surfaceContextHasNoToolState",
+                    "RenderContext must NOT inherit from SurfaceRenderContext — use composition, not inheritance.");
+
+    // RenderContext must contain SurfaceRenderContext as a composition member
+    if (!contains(renderCtx, "SurfaceRenderContext surface"))
+        return fail("surfaceCache_surfaceContextHasNoToolState",
+                    "RenderContext must contain 'SurfaceRenderContext surface' as a composition member.");
+
+    // RenderContext must own currentTool directly (not inherited from SurfaceRenderContext)
+    if (!contains(renderCtx, "currentTool"))
+        return fail("surfaceCache_surfaceContextHasNoToolState",
+                    "RenderContext must contain its own currentTool field — transient state lives here, not in SurfaceRenderContext.");
+
+    // isTimeView() must be a method on RenderContext, not on SurfaceRenderContext
+    if (!contains(renderCtx, "isTimeView"))
+        return fail("surfaceCache_surfaceContextHasNoToolState",
+                    "RenderContext must contain isTimeView() method for TimeView gating.");
+
+    return pass("surfaceCache_surfaceContextHasNoToolState");
+}
+
+CheckResult surfaceCache_noDragWorkingSnapshotInSurfaceCache()
+{
+    // buildSurfaceRenderContext() must not access dragWorkingSnapshot — it reads only published state
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::buildSurfaceRenderContext");
+    if (fn.empty())
+        return fail("surfaceCache_noDragWorkingSnapshotInSurfaceCache",
+                    "Cannot locate buildSurfaceRenderContext.");
+    if (contains(fn, "dragWorkingSnapshot"))
+        return fail("surfaceCache_noDragWorkingSnapshotInSurfaceCache",
+                    "buildSurfaceRenderContext must not access dragWorkingSnapshot — transient drag state lives in buildRenderContext.");
+    return pass("surfaceCache_noDragWorkingSnapshotInSurfaceCache");
+}
+
+CheckResult surfaceCache_buildUsesPublishedSurfaceContextOnly()
+{
+    // rebuildSurfaceCache must call buildSurfaceRenderContext(), not buildRenderContext()
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::rebuildSurfaceCache");
+    if (fn.empty())
+        return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
+                    "Cannot locate rebuildSurfaceCache.");
+    if (!contains(fn, "buildSurfaceRenderContext()"))
+        return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
+                    "rebuildSurfaceCache must call buildSurfaceRenderContext() for the cache build.");
+    // Must NOT call buildRenderContext (which includes transient/drag state)
+    if (contains(fn, "buildRenderContext"))
+        return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
+                    "rebuildSurfaceCache must NOT call buildRenderContext — surface cache uses published state only.");
+    // rebuildSurfaceCache must NOT manually push content items — buildSurfaceRenderContext now fills contents
+    if (contains(fn, "buildContentRenderItem"))
+        return fail("surfaceCache_buildUsesPublishedSurfaceContextOnly",
+                    "rebuildSurfaceCache must NOT call buildContentRenderItem — contents are filled by buildSurfaceRenderContext.");
+    return pass("surfaceCache_buildUsesPublishedSurfaceContextOnly");
+}
+
+CheckResult surfaceCache_surfaceContentsFromPublishedState()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    // buildSurfaceRenderContext must fill contents from timelineContentPlacements_
+    const auto sctxFn = extractFunctionBlock(cpp, "PianoRollComponent::buildSurfaceRenderContext");
+    if (sctxFn.empty())
+        return fail("surfaceCache_surfaceContentsFromPublishedState",
+                    "Cannot locate buildSurfaceRenderContext.");
+    if (!contains(sctxFn, "timelineContentPlacements_"))
+        return fail("surfaceCache_surfaceContentsFromPublishedState",
+                    "buildSurfaceRenderContext must iterate timelineContentPlacements_ to fill contents.");
+    if (!contains(sctxFn, "buildSurfaceContentRenderItem"))
+        return fail("surfaceCache_surfaceContentsFromPublishedState",
+                    "buildSurfaceRenderContext must call buildSurfaceContentRenderItem for each placement.");
+
+    // buildSurfaceContentRenderItem must use cachedNotes_ for active content (never getDisplayedNotes)
+    const auto itemFn = extractFunctionBlock(cpp, "PianoRollComponent::buildSurfaceContentRenderItem");
+    if (itemFn.empty())
+        return fail("surfaceCache_surfaceContentsFromPublishedState",
+                    "Cannot locate buildSurfaceContentRenderItem.");
+    if (!contains(itemFn, "cachedNotes_"))
+        return fail("surfaceCache_surfaceContentsFromPublishedState",
+                    "buildSurfaceContentRenderItem must use cachedNotes_ for active content (committed notes only).");
+    if (contains(itemFn, "getDisplayedNotes"))
+        return fail("surfaceCache_surfaceContentsFromPublishedState",
+                    "buildSurfaceContentRenderItem must NOT call getDisplayedNotes — that would leak draft notes into surface cache.");
+
+    return pass("surfaceCache_surfaceContentsFromPublishedState");
+}
+
+CheckResult surfaceCache_markTimeGridChangedExcludesBackground()
+{
+    // commitTimeGrid lambda dirties only content slots, never Background
+    // (markTimeGridChanged lambda has been removed — dirty logic is now inlined)
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    // Verify markTimeGridChanged lambda is gone
+    if (contains(cpp, "auto markTimeGridChanged"))
+        return fail("surfaceCache_markTimeGridChangedExcludesBackground",
+                    "markTimeGridChanged lambda must be removed — dirty logic is now inlined in commitTimeGrid.");
+
+    const auto fn = extractFunctionBlock(cpp, "toolCtx.commitTimeGrid");
+    if (fn.empty())
+        return fail("surfaceCache_markTimeGridChangedExcludesBackground",
+                    "Cannot locate commitTimeGrid lambda.");
+    if (contains(fn, "Slot::Background"))
+        return fail("surfaceCache_markTimeGridChangedExcludesBackground",
+                    "commitTimeGrid must NOT dirty Background — it is a content-level invalidation.");
+    if (!contains(fn, "Slot::Waveform") || !contains(fn, "Slot::Notes") ||
+        !contains(fn, "Slot::F0") || !contains(fn, "Slot::TimeAnchors"))
+        return fail("surfaceCache_markTimeGridChangedExcludesBackground",
+                    "commitTimeGrid must dirty all four content slots: Waveform, Notes, F0, TimeAnchors.");
+    return pass("surfaceCache_markTimeGridChangedExcludesBackground");
+}
+
+CheckResult surfaceCache_invalidationInteractionOnlyRepaint()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    // invalidateInteractionVisual lambda must only repaint, never markDirty surface slots
+    const auto visFn = extractFunctionBlock(cpp, "toolCtx.invalidateInteractionVisual");
+    if (visFn.empty())
+        return fail("surfaceCache_invalidationInteractionOnlyRepaint",
+                    "Cannot locate invalidateInteractionVisual lambda.");
+    if (contains(visFn, "markDirty"))
+        return fail("surfaceCache_invalidationInteractionOnlyRepaint",
+                    "invalidateInteractionVisual must not call markDirty — interaction visual repaint is overlay-only.");
+
+    // invalidateInteractionArea function must only repaint, never markDirty surface slots
+    const auto areaFn = extractFunctionBlock(cpp, "PianoRollComponent::invalidateInteractionArea");
+    if (areaFn.empty())
+        return fail("surfaceCache_invalidationInteractionOnlyRepaint",
+                    "Cannot locate invalidateInteractionArea.");
+    if (contains(areaFn, "markDirty"))
+        return fail("surfaceCache_invalidationInteractionOnlyRepaint",
+                    "invalidateInteractionArea must not call markDirty — interaction area repaint is local only.");
+
+    return pass("surfaceCache_invalidationInteractionOnlyRepaint");
+}
+
+CheckResult surfaceCache_f0VisibilityOnlyDirtiesF0()
+{
+    const auto hdr = readText("Source/Standalone/UI/PianoRollComponent.h");
+
+    // setShowOriginalF0 must only dirty Slot::F0, never Slot::Notes
+    const auto origFn = extractFunctionBlock(hdr, "void setShowOriginalF0");
+    if (origFn.empty())
+        return fail("surfaceCache_f0VisibilityOnlyDirtiesF0",
+                    "Cannot locate setShowOriginalF0.");
+    if (!contains(origFn, "Slot::F0"))
+        return fail("surfaceCache_f0VisibilityOnlyDirtiesF0",
+                    "setShowOriginalF0 must dirty Slot::F0.");
+    if (contains(origFn, "Slot::Notes"))
+        return fail("surfaceCache_f0VisibilityOnlyDirtiesF0",
+                    "setShowOriginalF0 must NOT dirty Slot::Notes — F0 visibility only affects F0 slot.");
+
+    // setShowCorrectedF0 must only dirty Slot::F0, never Slot::Notes
+    const auto corrFn = extractFunctionBlock(hdr, "void setShowCorrectedF0");
+    if (corrFn.empty())
+        return fail("surfaceCache_f0VisibilityOnlyDirtiesF0",
+                    "Cannot locate setShowCorrectedF0.");
+    if (!contains(corrFn, "Slot::F0"))
+        return fail("surfaceCache_f0VisibilityOnlyDirtiesF0",
+                    "setShowCorrectedF0 must dirty Slot::F0.");
+    if (contains(corrFn, "Slot::Notes"))
+        return fail("surfaceCache_f0VisibilityOnlyDirtiesF0",
+                    "setShowCorrectedF0 must NOT dirty Slot::Notes — F0 visibility only affects F0 slot.");
+
+    return pass("surfaceCache_f0VisibilityOnlyDirtiesF0");
+}
+
+CheckResult surfaceCache_renderContextUsesViewportCoords()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::buildRenderContext");
+    if (fn.empty())
+        return fail("surfaceCache_renderContextUsesViewportCoords",
+                    "Cannot locate buildRenderContext.");
+
+    if (!contains(fn, "buildSurfaceRenderContext()"))
+        return fail("surfaceCache_renderContextUsesViewportCoords",
+                    "buildRenderContext must call buildSurfaceRenderContext.");
+
+    if (!inOrder(fn, {"buildSurfaceRenderContext()", "makeViewMapper()"}))
+        return fail("surfaceCache_renderContextUsesViewportCoords",
+                    "makeViewMapper() must be called after buildSurfaceRenderContext() to restore viewport coords.");
+
+    if (!contains(fn, "ctx.surface.coords = makeViewMapper()"))
+        return fail("surfaceCache_renderContextUsesViewportCoords",
+                    "Must set ctx.surface.coords = makeViewMapper() for live overlay.");
+
+    return pass("surfaceCache_renderContextUsesViewportCoords");
 }
 
 } // namespace
@@ -2839,8 +3128,18 @@ int main()
         surfaceCache_noChunkBoundariesInPianoRoll,
         surfaceCache_fiveSlotEnum,
         surfaceCache_buildSlotDoesNotConstructRenderContext,
-        surfaceCache_drawTimeGridHandlesOnlyInteractive,
-        surfaceCache_timeAnchorsSlotExists
+        surfaceCache_timeGridHandlesAreLiveTimeViewOverlay,
+        surfaceCache_timeAnchorsSlotExists,
+        surfaceCache_waveformProgressOnlyDirtiesWaveform,
+        surfaceCache_toolSwitchDoesNotDirtySurfaceSlots,
+        surfaceCache_surfaceContextHasNoToolState,
+        surfaceCache_noDragWorkingSnapshotInSurfaceCache,
+        surfaceCache_buildUsesPublishedSurfaceContextOnly,
+        surfaceCache_surfaceContentsFromPublishedState,
+        surfaceCache_markTimeGridChangedExcludesBackground,
+        surfaceCache_invalidationInteractionOnlyRepaint,
+        surfaceCache_f0VisibilityOnlyDirtiesF0,
+        surfaceCache_renderContextUsesViewportCoords
     };
 
     int failed = 0;

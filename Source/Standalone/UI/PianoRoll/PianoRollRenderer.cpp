@@ -660,8 +660,8 @@ void PianoRollRenderer::drawGridLines(juce::Graphics& g, const SurfaceRenderCont
 
 void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ctx)
 {
-    const int height = ctx.height;
-    const int w = ctx.pianoKeyWidth;
+    const int height = ctx.surface.height;
+    const int w = ctx.surface.pianoKeyWidth;
     const float blackKeyWidthRatio = 0.6f;
     const float blackKeyW = w * blackKeyWidthRatio;
     static constexpr int kScaleTypeChromatic = 3;
@@ -695,17 +695,17 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     static constexpr float kShowCOnlyMinPPS = 8.0f;
 
     // Build scale pitch-class membership using shared helper (supports all 8 scale types)
-    const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);
+    const auto inScalePitchClass = buildInScalePitchClasses(ctx.surface.scaleType, ctx.surface.scaleRootNote);
 
     // Compute effective note name display mode (zoom-adaptive downgrade)
-    int effectiveNoteNameMode = static_cast<int>(ctx.noteNameMode); // 0=ShowAll, 1=COnly, 2=Hide
-    if (effectiveNoteNameMode == 0 && ctx.pixelsPerSemitone < kShowAllLabelsMinPPS)
+    int effectiveNoteNameMode = static_cast<int>(ctx.surface.noteNameMode); // 0=ShowAll, 1=COnly, 2=Hide
+    if (effectiveNoteNameMode == 0 && ctx.surface.pixelsPerSemitone < kShowAllLabelsMinPPS)
         effectiveNoteNameMode = 1; // downgrade to C-only
-    if (effectiveNoteNameMode <= 1 && ctx.pixelsPerSemitone < kShowCOnlyMinPPS)
+    if (effectiveNoteNameMode <= 1 && ctx.surface.pixelsPerSemitone < kShowCOnlyMinPPS)
         effectiveNoteNameMode = 2; // downgrade to hidden
 
     // Accidental preference: sharp or flat based on root note
-    const bool useFlats = (ctx.scaleType != kScaleTypeChromatic) ? kUseFlatsByRoot[juce::jlimit(0, 11, ctx.scaleRootNote)] : false;
+    const bool useFlats = (ctx.surface.scaleType != kScaleTypeChromatic) ? kUseFlatsByRoot[juce::jlimit(0, 11, ctx.surface.scaleRootNote)] : false;
 
     const auto isMidiInCurrentScale = [&inScalePitchClass](int midiNote) noexcept {
         const int pitchClass = ((midiNote % 12) + 12) % 12;
@@ -725,11 +725,11 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     juce::Colour keyPressedGlowColor = isOverdose ? juce::Colour { Overdose::Colors::KeyPressedGlow }
                                     : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyPressedGlow } : juce::Colour(0x500078D7));
 
-    for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
+    for (int midi = static_cast<int>(ctx.surface.minMidi); midi <= static_cast<int>(ctx.surface.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
-        float h = ctx.pixelsPerSemitone;
+        float y = ctx.surface.coords.midiToY(static_cast<float>(drawMidi));
+        float h = ctx.surface.pixelsPerSemitone;
 
         if (y < -50.0f || y > height + 50.0f) continue;
 
@@ -761,7 +761,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             g.fillRect(keyRect);
 
             // Scale highlight overlay on in-scale white keys
-            if (inScale && ctx.scaleType != kScaleTypeChromatic)
+            if (inScale && ctx.surface.scaleType != kScaleTypeChromatic)
             {
                 g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
                 g.fillRect(keyRect);
@@ -830,7 +830,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             g.fillRect(extensionRect);
 
             // Scale highlight overlay on in-scale black key extension area
-            if (inScale && ctx.scaleType != kScaleTypeChromatic)
+            if (inScale && ctx.surface.scaleType != kScaleTypeChromatic)
             {
                 g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
                 g.fillRect(extensionRect);
@@ -841,11 +841,11 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
         }
     }
 
-    for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
+    for (int midi = static_cast<int>(ctx.surface.minMidi); midi <= static_cast<int>(ctx.surface.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
-        float h = ctx.pixelsPerSemitone;
+        float y = ctx.surface.coords.midiToY(static_cast<float>(drawMidi));
+        float h = ctx.surface.pixelsPerSemitone;
         if (y < -50.0f || y > height + 50.0f) continue;
 
         int noteInOctave = drawMidi % 12;
@@ -856,11 +856,11 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
         }
     }
 
-    for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
+    for (int midi = static_cast<int>(ctx.surface.minMidi); midi <= static_cast<int>(ctx.surface.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
-        float h = ctx.pixelsPerSemitone;
+        float y = ctx.surface.coords.midiToY(static_cast<float>(drawMidi));
+        float h = ctx.surface.pixelsPerSemitone;
 
         if (y < -50.0f || y > height + 50.0f) continue;
 
@@ -938,7 +938,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             }
 
             // Scale highlight overlay on in-scale black keys (reduced alpha)
-            if (inScale && ctx.scaleType != kScaleTypeChromatic)
+            if (inScale && ctx.surface.scaleType != kScaleTypeChromatic)
             {
                 g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.22f)
                                          : UIColors::scaleHighlight.withMultipliedAlpha(0.5f));
@@ -1113,7 +1113,7 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
     if (notes.empty() || selectedNoteIndices.empty())
         return;
 
-    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
+    const auto visibleWindow = computeVisibleTimeWindow(ctx.surface, item);
     if (!visibleWindow.isValid())
         return;
 
@@ -1130,12 +1130,12 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
         if (adjustedPitch <= 0.0f)
             continue;
 
-        float midi = ctx.coords.freqToMidi(adjustedPitch);
-        float y = ctx.coords.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
-        float h = ctx.pixelsPerSemitone;
+        float midi = ctx.surface.coords.freqToMidi(adjustedPitch);
+        float y = ctx.surface.coords.midiToY(midi) - (ctx.surface.pixelsPerSemitone * 0.5f);
+        float h = ctx.surface.pixelsPerSemitone;
 
-        int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
-        int x2 = sourceTimeToScreenX(note.endTime, ctx, item);
+        int x1 = sourceTimeToScreenX(note.startTime, ctx.surface, item);
+        int x2 = sourceTimeToScreenX(note.endTime, ctx.surface, item);
         if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
             continue;
 
@@ -1173,15 +1173,15 @@ void PianoRollRenderer::drawGhostNotes(juce::Graphics& g, const RenderContext& c
         const double timelineStart = overlay.sourceProjection.projectContentTimeToTimeline(note.startTime);
         const double timelineEnd = overlay.sourceProjection.projectContentTimeToTimeline(note.endTime);
 
-        const int x1 = ctx.coords.timeToX(timelineStart);
-        const int x2 = ctx.coords.timeToX(timelineEnd);
-        if (x2 <= ctx.pianoKeyWidth || x1 >= ctx.width)
+        const int x1 = ctx.surface.coords.timeToX(timelineStart);
+        const int x2 = ctx.surface.coords.timeToX(timelineEnd);
+        if (x2 <= ctx.surface.pianoKeyWidth || x1 >= ctx.surface.width)
             continue;
 
-        const float midi = ctx.coords.freqToMidi(adjustedPitch);
-        const float y = ctx.coords.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
+        const float midi = ctx.surface.coords.freqToMidi(adjustedPitch);
+        const float y = ctx.surface.coords.midiToY(midi) - (ctx.surface.pixelsPerSemitone * 0.5f);
         const float w = std::max(1.0f, static_cast<float>(x2 - x1));
-        const float h = ctx.pixelsPerSemitone;
+        const float h = ctx.surface.pixelsPerSemitone;
         const auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
         g.setColour(fillColour);
@@ -1213,14 +1213,14 @@ void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext&
         return;
 
     static constexpr float kDashLengths[] = { 2.0f, 4.0f };
-    const float yTop = ctx.coords.midiToY(ctx.minMidi);
-    const float yBottom = ctx.coords.midiToY(ctx.maxMidi);
+    const float yTop = ctx.surface.coords.midiToY(ctx.surface.minMidi);
+    const float yBottom = ctx.surface.coords.midiToY(ctx.surface.maxMidi);
 
     for (const auto& anchor : overlay.ghostAnchors)
     {
         const double timelineTime = overlay.sourceProjection.projectContentTimeToTimeline(anchor.sourceSeconds);
-        const int x = ctx.coords.timeToX(timelineTime);
-        if (x < ctx.pianoKeyWidth || x >= ctx.width)
+        const int x = ctx.surface.coords.timeToX(timelineTime);
+        if (x < ctx.surface.pianoKeyWidth || x >= ctx.surface.width)
             continue;
 
         const float alpha = overlay.ghostOpacity * std::min(1.0f, anchor.strength);
@@ -1264,9 +1264,10 @@ void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const SurfaceRend
 void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx)
 {
     if (ctx.timeGridSnapshot == nullptr) return;
+    if (!ctx.isTimeView()) return;
 
-    const int contentTop    = ctx.rulerHeight;
-    const int contentBottom = ctx.height;
+    const int contentTop    = ctx.surface.rulerHeight;
+    const int contentBottom = ctx.surface.height;
     if (contentBottom <= contentTop) return;
 
     auto colorForKind = [](HandleKind k) -> juce::Colour {
@@ -1288,11 +1289,12 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
     for (const auto& h : ctx.timeGridSnapshot->handles()) {
         const bool selected = (ctx.timeGridSelectedHandleId == h.id);
         const bool hovered  = (ctx.timeGridHoveredHandleId  == h.id);
-        if (!selected && !hovered) continue;
+        const bool isAdditional = std::find(ctx.additionalSelectedHandleIds.begin(), ctx.additionalSelectedHandleIds.end(), h.id) != ctx.additionalSelectedHandleIds.end();
+        if (!selected && !hovered && !isAdditional) continue;
 
-        const double timelineTime = ctx.activeProjection.projectContentTimeToTimeline(h.output_seconds);
-        const int x = ctx.coords.timeToX(timelineTime);
-        if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
+        const double timelineTime = ctx.surface.activeProjection.projectContentTimeToTimeline(h.output_seconds);
+        const int x = ctx.surface.coords.timeToX(timelineTime);
+        if (x < ctx.surface.pianoKeyWidth || x >= ctx.surface.width) continue;
 
         juce::Colour col = colorForKind(h.kind);
         if (h.locked) {
