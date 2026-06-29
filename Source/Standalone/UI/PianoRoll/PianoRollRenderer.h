@@ -108,27 +108,30 @@ public:
 
         std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
         ContentTimelineProjection activeProjection;
-        ToolId currentTool = ToolId::Select;
-        bool isTimeView() const { return currentTool == ToolId::TimeTool; }
 
         PianoRollTimeUnit timeUnit = PianoRollTimeUnit::Seconds;
         ViewMapper coords;
     };
 
-    struct RenderContext : public SurfaceRenderContext
+    struct RenderContext
     {
-        int pressedPianoKey = -1;
+        SurfaceRenderContext surface;  // Stable content state — DO NOT put transient fields here
 
+        int pressedPianoKey = -1;
+        ToolId currentTool = ToolId::Select;
+        bool isTimeView() const { return currentTool == ToolId::TimeTool; }
         bool hasF0Selection = false;
         int f0SelectionStartFrame = -1;
         int f0SelectionEndFrameExclusive = -1;
-
-        std::optional<ReferenceOverlay> referenceOverlay; // 可选参考投射
-
+        std::optional<ReferenceOverlay> referenceOverlay;
         uint64_t timeGridHoveredHandleId = 0;
         uint64_t timeGridSelectedHandleId = 0;
         std::vector<uint64_t> additionalSelectedHandleIds;
         std::vector<int> selectedLineAnchorSegmentIds;
+
+        // Live timeGrid snapshot — may be drag working snapshot;
+        // surface.timeGridSnapshot is always published.
+        std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
     };
 
     void drawLanes(juce::Graphics& g, const SurfaceRenderContext& ctx);

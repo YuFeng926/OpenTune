@@ -195,14 +195,12 @@ public:
     void setShowOriginalF0(bool show) {
         if (showOriginalF0_ == show) return;
         showOriginalF0_ = show;
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
         surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
         repaint();
     }
     void setShowCorrectedF0(bool show) {
         if (showCorrectedF0_ == show) return;
         showCorrectedF0_ = show;
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
         surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
         repaint();
     }
@@ -349,6 +347,7 @@ private:
     void updatePresentationClock(double authoritativeTime, double timestampSec);
     void resetPresentationClock(double authoritativeTime);
     PianoRollRenderer::RenderContext makePresentationRenderContext() const;
+    PianoRollRenderer::SurfaceRenderContext buildSurfaceRenderContext() const;
 
     // v12 New: camera-based viewport
     ViewMapper makeViewMapper() const noexcept;
@@ -385,6 +384,8 @@ private:
     void applyEditedContentCurve(std::shared_ptr<PitchCurve> curve);
     void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
     PianoRollRenderer::ContentRenderItem buildContentRenderItem(
+        const TimelineContentPlacement& placement) const;
+    PianoRollRenderer::ContentRenderItem buildSurfaceContentRenderItem(
         const TimelineContentPlacement& placement) const;
     const std::vector<Note>& getCommittedNotes() const;
     const std::vector<Note>& getDisplayedNotes() const;
