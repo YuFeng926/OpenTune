@@ -394,7 +394,7 @@ void PianoRollComponent::consumeCompletedCorrectionResults()
         autoTuneInFlight_.store(false, std::memory_order_release);
     }
 
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
 }
 
 bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrectionWorker::AsyncCorrectionRequest& completed)
@@ -443,7 +443,7 @@ bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrection
     AppLogger::log("AutoTune: after setEditedContent");
     updateScrollBars();
     AppLogger::log("AutoTune: after outer updateScrollBars");
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
     AppLogger::log("AutoTune: after outer invalidateVisual, before recordUndoAction");
     const auto autoTuneRange = PitchCurve::expandNoteBasedCorrectionRange(
         completed.autoStartFrame,
@@ -476,7 +476,7 @@ bool PianoRollComponent::commitCompletedNoteCorrectionResult(const PianoRollCorr
     }
 
     updateScrollBars();
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
     return true;
 }
 
@@ -1090,7 +1090,7 @@ bool PianoRollComponent::enqueueManualCorrectionPatchAsync(const std::vector<Pia
         });
     }
 
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
     return true;
 }
 
@@ -1399,7 +1399,7 @@ void PianoRollComponent::paint(juce::Graphics& g) {
     chromePath.addRoundedRectangle(bounds, UIColors::cornerRadius);
     g.reduceClipRegion(chromePath);
 
-    // 静态面�?chrome（不随滚动移动）
+    // 静态面? chrome（不随滚动移动）
     if (themeId == ThemeId::DarkBlueGrey)
         UIColors::fillSoothe2SpectrumBackground(g, bounds, UIColors::cornerRadius);
     else if (themeId == ThemeId::Aurora)
@@ -1415,7 +1415,38 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         && themeId != ThemeId::BlueBreeze && themeId != ThemeId::Overdose)
         g.fillPath(chromePath);
 
-    // Pure blit only — no build trigger, geometry mismatch → no blit
+    // 硬切关键：永远先画chrome，不依赖placement或generation
+    const auto viewport = getTimelineViewportBounds();
+    PianoRollRenderer::SurfaceRenderContext sctx;
+    sctx.width = viewport.getWidth();
+    sctx.height = viewport.getBottom();
+    sctx.pianoKeyWidth = pianoKeyWidth_;
+    sctx.rulerHeight = rulerHeight_;
+    sctx.pixelsPerSecond = camera_.pixelsPerSecond;
+    sctx.pixelsPerSemitone = pixelsPerSemitone_;
+    sctx.minMidi = minMidi_;
+    sctx.maxMidi = maxMidi_;
+    sctx.bpm = bpm_;
+    sctx.scaleRootNote = scaleRootNote_;
+    sctx.scaleType = scaleType_;
+    sctx.noteNameMode = noteNameMode_;
+    sctx.showLanes = showLanes_;
+    sctx.showUnvoicedFrames = showUnvoicedFrames_;
+    sctx.showOriginalF0 = showOriginalF0_;
+    sctx.showCorrectedF0 = showCorrectedF0_;
+    sctx.timeUnit = (timeUnit_ == TimeUnit::Bars)
+        ? PianoRollTimeUnit::Bars
+        : PianoRollTimeUnit::Seconds;
+    sctx.coords = makeViewMapper();
+    if (auto snap = readEditedSnapshot())
+        sctx.timeGridSnapshot = snap->timeGrid;
+    sctx.contents.clear();
+
+    renderer_->drawLanes(g, sctx);
+    renderer_->drawGridLines(g, sctx);
+    renderer_->drawTimeRuler(g, sctx);
+
+    // 然后才尝试blit semantic surface
     if (surfaceCache_.hasPublishedGeneration()) {
         const auto publishedGeometry = surfaceCache_.getPublishedGeneration().geometry;
         const auto currentGeometry = computeGeometryKey(camera_);
@@ -1423,7 +1454,7 @@ void PianoRollComponent::paint(juce::Graphics& g) {
             const int scrollPx = computeScrollOffsetPx();
             surfaceCache_.paint(g, pianoKeyWidth_ - scrollPx, 0, isTimeView());
         }
-        // else: geometry mismatch, don't blit old surface — wait for handleAsyncUpdate
+        // geometry mismatch: chrome已画，等待handleAsyncUpdate重建surface
     }
 }
 
@@ -1508,7 +1539,7 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
             }
 
             listeners_.call([affectedRange](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1); });
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); queueSurfaceRebuild(); repaint();
     return true;
         }
     }
@@ -1553,7 +1584,7 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
 
         pendingUndoDescription_ = {};
         undoSnapshotCaptured_ = false;
-            surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
+            surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
         return true;
     }
 
@@ -1573,7 +1604,7 @@ bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vib
                                                                           currentF0Timeline().endFrameExclusive());
     const int notifyEndFrame = std::max(affectedRange.startFrame, affectedRange.endFrameExclusive - 1);
     listeners_.call([affectedRange, notifyEndFrame](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, notifyEndFrame); });
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
     return true;
 }
 
@@ -1855,7 +1886,7 @@ void PianoRollComponent::setNoteSplit(float value) {
 
     // Note Split 浠呮洿鏂板垎娈电瓥鐣ュ弬鏁帮紝涓嶈Е鍙?AUTO 閲嶆柊鐢熸垚�?
     // AUTO 鎿嶄綔鐢辩敤鎴蜂富鍔ㄨЕ鍙戯紝浣跨敤褰撳墠绛栫暐鎵ц鍒嗘�?
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); queueSurfaceRebuild(); repaint();
 }
 
 void PianoRollComponent::resized() {
@@ -1930,6 +1961,16 @@ const PianoRollComponent::TimelineContentPlacement* PianoRollComponent::findActi
     return firstValidIt != timelineContentPlacements_.end() ? &(*firstValidIt) : nullptr;
 }
 
+bool PianoRollComponent::hasTimelineContentPlacement() const noexcept
+{
+    for (const auto& placement : timelineContentPlacements_) {
+        if (placement.isValid()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 ContentTimelineProjection PianoRollComponent::activeContentProjection() const noexcept
 {
     const auto* activePlacement = findActiveTimelineContentPlacement();
@@ -1974,7 +2015,7 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
     updateScrollBars();
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); queueSurfaceRebuild(); repaint();
     return true;
 }
 
@@ -2007,7 +2048,7 @@ void PianoRollComponent::setContentProjection(const ContentTimelineProjection& p
     deriveSingleTimelineContentPlacement();
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); queueSurfaceRebuild(); repaint();
 }
 
 void PianoRollComponent::setTimelineContentPlacements(std::vector<TimelineContentPlacement> placements)
@@ -2035,7 +2076,6 @@ void PianoRollComponent::setTimelineViewDomain(double viewStartSeconds, double v
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
     updateScrollBars();
-    queueSurfaceRebuild();
     repaint();
 }
 
@@ -2049,7 +2089,6 @@ void PianoRollComponent::clearTimelineViewDomain()
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
     updateScrollBars();
-    queueSurfaceRebuild();
     repaint();
 }
 
@@ -2100,7 +2139,7 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 
     userScrollHold_ = false;
     updateScrollBars();
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); queueSurfaceRebuild(); repaint();
 }
 
 void PianoRollComponent::onTimeGridRevisionChanged()
@@ -2130,7 +2169,7 @@ void PianoRollComponent::onPitchRevisionChanged()
 }
 
 void PianoRollComponent::requestContentRedraw() {
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); queueSurfaceRebuild(); repaint();
+    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0); surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::TimeAnchors); queueSurfaceRebuild(); repaint();
 }
 
 double PianoRollComponent::readPlayheadTime() const
@@ -3492,7 +3531,7 @@ double PianoRollComponent::computeSurfaceStartTimelineSeconds() const noexcept
             minStart = std::min(minStart, placement.projection.timelineStartSeconds);
         }
     }
-    return (minStart < 1e30) ? minStart : timelineViewOriginSeconds();
+    return (minStart < 1e30) ? minStart : 0.0;
 }
 
 double PianoRollComponent::computeSurfaceEndTimelineSeconds() const noexcept
@@ -3508,7 +3547,7 @@ double PianoRollComponent::computeSurfaceEndTimelineSeconds() const noexcept
     if (hasPlacement) {
         return maxEnd;
     }
-    return std::max(computeContentTimelineEndSeconds(), timelineViewEndSeconds());
+    return 0.0;
 }
 
 double PianoRollComponent::computeMaxTimelineEndSeconds() const noexcept {
@@ -3615,12 +3654,17 @@ PianoRollRenderer::SurfaceRenderContext PianoRollComponent::buildSurfaceRenderCo
 }
 
 void PianoRollComponent::handleAsyncUpdate() {
+    // No placement → no semantic surface, clear dirty and return
+    if (!hasTimelineContentPlacement()) {
+        surfaceCache_.clearDirtyMask();
+        return;
+    }
+    
     const auto geometry = computeGeometryKey(camera_);
     
     // 若无 published generation 或 geometry 改变 → dirty 全 slot
     if (!surfaceCache_.hasPublishedGeneration()
         || !(surfaceCache_.getPublishedGeneration().geometry == geometry)) {
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background);
         surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform);
         surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
         surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
@@ -3642,11 +3686,6 @@ void PianoRollComponent::handleAsyncUpdate() {
             juce::Graphics g(images[i]);
             g.fillAll(juce::Colours::transparentBlack);
             switch (slot) {
-                case PianoRollSurfaceCache::Slot::Background:
-                    renderer_->drawLanes(g, sctx);
-                    renderer_->drawGridLines(g, sctx);
-                    renderer_->drawTimeRuler(g, sctx);
-                    break;
                 case PianoRollSurfaceCache::Slot::Waveform:
                     for (const auto& item : sctx.contents)
                         renderer_->drawWaveform(g, sctx, item);
