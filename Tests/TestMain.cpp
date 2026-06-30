@@ -2250,26 +2250,26 @@ CheckResult surfaceCache_noOldBandCacheTokensInSource()
     return pass("surfaceCache_noOldBandCacheTokensInSource");
 }
 
-CheckResult surfaceCache_hasFiveSemanticSlots()
+CheckResult surfaceCache_hasFourSemanticSlots()
 {
-    // Verify PianoRollSurfaceCache has exactly 5 slots
+    // Verify PianoRollSurfaceCache has exactly 4 slots
     const auto header = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h");
     
     if (!contains(header, "kSlotCount"))
-        return fail("surfaceCache_hasFiveSemanticSlots",
+        return fail("surfaceCache_hasFourSemanticSlots",
                     "PianoRollSurfaceCache must define kSlotCount constant.");
     
-    // Verify all 5 slots exist: Background, Waveform, Notes, F0, TimeAnchors
+    // Verify all 4 slots exist: Waveform, Notes, F0, TimeAnchors
     const std::vector<std::string_view> requiredSlots = {
-        "Background", "Waveform", "Notes", "F0", "TimeAnchors"
+        "Waveform", "Notes", "F0", "TimeAnchors"
     };
     for (const auto slot : requiredSlots) {
         if (!contains(header, slot))
-            return fail("surfaceCache_hasFiveSemanticSlots",
+            return fail("surfaceCache_hasFourSemanticSlots",
                         std::string("PianoRollSurfaceCache::Slot must define ") + std::string(slot) + ".");
     }
     
-    return pass("surfaceCache_hasFiveSemanticSlots");
+    return pass("surfaceCache_hasFourSemanticSlots");
 }
 
 CheckResult surfaceCache_setTimelineViewportNoUserZoomFlag()
@@ -2758,15 +2758,15 @@ CheckResult surfaceCache_noChunkBoundariesInPianoRoll()
     return pass("surfaceCache_noChunkBoundariesInPianoRoll");
 }
 
-CheckResult surfaceCache_fiveSlotEnum()
+CheckResult surfaceCache_fourSlotEnum()
 {
     const auto hdr = readText("Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h");
-    if (!contains(hdr, "Background") || !contains(hdr, "Waveform") || 
-        !contains(hdr, "Notes") || !contains(hdr, "F0") || !contains(hdr, "TimeAnchors"))
-        return fail("surfaceCache_fiveSlotEnum", "Slot enum must contain all 5 slots.");
+    if (!contains(hdr, "Waveform") || !contains(hdr, "Notes") || 
+        !contains(hdr, "F0") || !contains(hdr, "TimeAnchors"))
+        return fail("surfaceCache_fourSlotEnum", "Slot enum must contain all 4 slots.");
     if (contains(hdr, "ChunkBoundaries"))
-        return fail("surfaceCache_fiveSlotEnum", "Slot enum must NOT contain ChunkBoundaries.");
-    return pass("surfaceCache_fiveSlotEnum");
+        return fail("surfaceCache_fourSlotEnum", "Slot enum must NOT contain ChunkBoundaries.");
+    return pass("surfaceCache_fourSlotEnum");
 }
 
 CheckResult surfaceCache_buildSlotDoesNotConstructRenderContext()
@@ -3363,7 +3363,7 @@ int main()
         f0RendererUsesLODArchitecture,
         // PianoRollSurfaceCache architecture guards
         surfaceCache_noOldBandCacheTokensInSource,
-        surfaceCache_hasFiveSemanticSlots,
+        surfaceCache_hasFourSemanticSlots,
         surfaceCache_setTimelineViewportNoUserZoomFlag,
         surfaceCache_fullClipDomainUsesPlacementMinMax,
         surfaceCache_noViewportSizedOrOverscanTokens,
@@ -3385,7 +3385,7 @@ int main()
         surfaceCache_revisionRouteNotesOnlyDirtiesNotes,
         surfaceCache_revisionRouteTimeGridDirtiesAllFourContentSlots,
         surfaceCache_noChunkBoundariesInPianoRoll,
-        surfaceCache_fiveSlotEnum,
+        surfaceCache_fourSlotEnum,
         surfaceCache_buildSlotDoesNotConstructRenderContext,
         surfaceCache_timeGridHandlesAreLiveTimeViewOverlay,
         surfaceCache_timeAnchorsSlotExists,
