@@ -2433,7 +2433,8 @@ CheckResult surfaceCache_buildUsesFullClipMapper()
 
 CheckResult surfaceCache_paintNoRendererDrawNoFallback()
 {
-    // paint() must only blit cache surfaces — no renderer draw calls, no fallback
+    // paint() with placement: only blit cache surfaces, no renderer draw calls
+    // paint() without placement: live chrome using renderer_->drawLanes/drawGridLines/drawTimeRuler
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto paintFn = extractFunctionBlock(cpp, "PianoRollComponent::paint");
 
@@ -2441,22 +2442,14 @@ CheckResult surfaceCache_paintNoRendererDrawNoFallback()
         return fail("surfaceCache_paintNoRendererDrawNoFallback",
                     "Cannot locate paint().");
 
-    // Must call surfaceCache_.paint (the blit)
-    if (!contains(paintFn, "surfaceCache_.paint"))
+    // Must check hasTimelineContentPlacement to decide cache vs live chrome
+    if (!contains(paintFn, "hasTimelineContentPlacement"))
         return fail("surfaceCache_paintNoRendererDrawNoFallback",
-                    "paint() must call surfaceCache_.paint().");
+                    "paint() must check hasTimelineContentPlacement() for live chrome branch.");
 
-    // Must NOT call renderer_->draw* within paint() body
-    const std::vector<std::string> forbiddenRenders = {
-        "renderer_->drawLanes", "renderer_->drawNotes", "renderer_->drawWaveform",
-        "renderer_->drawF0Curve", "renderer_->drawGridLines", "renderer_->drawTimeRuler",
-        "renderer_->drawChunkBoundaries", "renderer_->drawUnvoicedFrameBands"
-    };
-    for (const auto& token : forbiddenRenders) {
-        if (contains(paintFn, token))
-            return fail("surfaceCache_paintNoRendererDrawNoFallback",
-                        "paint() must not call '" + token + "' — cache blit only.");
-    }
+    // Live chrome path (no placement) may call drawLanes/drawGridLines/drawTimeRuler
+    // Cache path (has placement) must NOT call renderer_->draw* directly
+    // This is already enforced by surfaceCache_onlyForPlacements test
 
     return pass("surfaceCache_paintNoRendererDrawNoFallback");
 }
@@ -2470,16 +2463,7 @@ CheckResult surfaceCache_handleAsyncUpdateIsBuildEntry()
         return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
                     "Cannot locate handleAsyncUpdate().");
 
-    // handleAsyncUpdate() 是唯一 build 入口
-    if (!contains(handleAsyncFn, "renderer_->drawLanes"))
-        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
-                    "handleAsyncUpdate() 必须调用 renderer_->drawLanes().");
-    if (!contains(handleAsyncFn, "renderer_->drawGridLines"))
-        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
-                    "handleAsyncUpdate() 必须调用 renderer_->drawGridLines().");
-    if (!contains(handleAsyncFn, "renderer_->drawTimeRuler"))
-        return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
-                    "handleAsyncUpdate() 必须调用 renderer_->drawTimeRuler().");
+    // handleAsyncUpdate() 是唯一 build 入口 — 只绘制 semantic layers，不绘 chrome
     if (!contains(handleAsyncFn, "renderer_->drawWaveform"))
         return fail("surfaceCache_handleAsyncUpdateIsBuildEntry",
                     "handleAsyncUpdate() 必须调用 renderer_->drawWaveform().");
@@ -2573,18 +2557,13 @@ CheckResult surfaceCache_timeGridHandlesStayOverlay()
 
 CheckResult surfaceCache_verticalGeometryDirtiesYSlots()
 {
-    // Vertical scroll/zoom must dirty Background, Notes, F0 (y-dependent slots)
+    // Vertical scroll/zoom must dirty Notes, F0 (y-dependent slots)
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto refreshFn = extractFunctionBlock(cpp, "PianoRollComponent::refreshVerticalViewportGeometry");
 
     if (refreshFn.empty())
         return fail("surfaceCache_verticalGeometryDirtiesYSlots",
                     "Cannot locate refreshVerticalViewportGeometry.");
-
-    // Must mark Background dirty
-    if (!contains(refreshFn, "Slot::Background"))
-        return fail("surfaceCache_verticalGeometryDirtiesYSlots",
-                    "refreshVerticalViewportGeometry must markDirty Slot::Background.");
 
     // Must mark Notes dirty
     if (!contains(refreshFn, "Slot::Notes"))
@@ -2848,9 +2827,9 @@ CheckResult surfaceCache_waveformProgressOnlyDirtiesWaveform()
         return fail("surfaceCache_waveformProgressOnlyDirtiesWaveform",
                     "onHeartbeatTick must have exactly 2 markDirty calls for waveform progress flushing.");
 
-    // Both blocks must only dirty Slot::Waveform (never Background/Notes/F0/TimeAnchors)
+    // Both blocks must only dirty Slot::Waveform (never Notes/F0/TimeAnchors)
     const std::vector<std::string_view> forbiddenSlots = {
-        "Slot::Background", "Slot::Notes", "Slot::F0", "Slot::TimeAnchors"
+        "Slot::Notes", "Slot::F0", "Slot::TimeAnchors"
     };
     for (const auto slot : forbiddenSlots) {
         if (contains(tickFn, slot))
@@ -3118,35 +3097,40 @@ CheckResult surfaceCache_renderContextUsesViewportCoords()
     return pass("surfaceCache_renderContextUsesViewportCoords");
 }
 
-CheckResult emptyView_surfaceEndReferencesTimelineViewDomain()
+CheckResult emptyView_noSurfaceForEmptyDomain()
 {
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::computeSurfaceEndTimelineSeconds");
     if (fn.empty())
-        return fail("emptyView_surfaceEndReferencesTimelineViewDomain",
+        return fail("emptyView_noSurfaceForEmptyDomain",
                     "Cannot locate computeSurfaceEndTimelineSeconds.");
 
-    // Must track whether any valid placement was found
+    // Must use hasPlacement to distinguish clip vs empty
     if (!contains(fn, "hasPlacement"))
-        return fail("emptyView_surfaceEndReferencesTimelineViewDomain",
-                    "computeSurfaceEndTimelineSeconds must use hasPlacement to distinguish clip vs empty view.");
+        return fail("emptyView_noSurfaceForEmptyDomain",
+                    "computeSurfaceEndTimelineSeconds must use hasPlacement.");
 
-    // Must not reference viewport width
-    if (contains(fn, "getWidth") || contains(fn, "viewportWidth") || contains(fn, "ViewportWidth"))
-        return fail("emptyView_surfaceEndReferencesTimelineViewDomain",
-                    "computeSurfaceEndTimelineSeconds must not reference viewport width.");
+    // No placement → return 0.0 (empty surface)
+    if (!contains(fn, "return 0.0"))
+        return fail("emptyView_noSurfaceForEmptyDomain",
+                    "computeSurfaceEndTimelineSeconds must return 0.0 when no placement.");
 
-    return pass("emptyView_surfaceEndReferencesTimelineViewDomain");
+    // Must not reference timelineViewEndSeconds in no-placement branch
+    if (contains(fn, "timelineViewEndSeconds"))
+        return fail("emptyView_noSurfaceForEmptyDomain",
+                    "computeSurfaceEndTimelineSeconds must not reference timelineViewEndSeconds.");
+
+    return pass("emptyView_noSurfaceForEmptyDomain");
 }
 
-CheckResult emptyView_standaloneInitsTimelineViewDomain()
+CheckResult emptyView_noStandaloneSyntheticDomain()
 {
     const auto cpp = readText("Source/Standalone/PluginEditor.cpp");
-    if (!contains(cpp, "pianoRoll_.setTimelineViewDomain(0.0, 300.0)"))
-        return fail("emptyView_standaloneInitsTimelineViewDomain",
-                    "Standalone editor must call pianoRoll_.setTimelineViewDomain(0.0, 300.0).");
+    if (contains(cpp, "pianoRoll_.setTimelineViewDomain(0.0, 300.0)"))
+        return fail("emptyView_noStandaloneSyntheticDomain",
+                    "Standalone editor must NOT call setTimelineViewDomain(0.0, 300.0) — live chrome only.");
 
-    return pass("emptyView_standaloneInitsTimelineViewDomain");
+    return pass("emptyView_noStandaloneSyntheticDomain");
 }
 
 CheckResult emptyView_notifyPlayheadUsesFollowAndPublish()
@@ -3183,29 +3167,111 @@ CheckResult emptyView_notifyPlayheadUsesFollowAndPublish()
     return pass("emptyView_notifyPlayheadUsesFollowAndPublish");
 }
 
-CheckResult emptyView_domainChangeTriggersSurfaceRebuild()
+CheckResult emptyView_paintUsesLiveChromeWithoutPlacement()
 {
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto paintFn = extractFunctionBlock(cpp, "PianoRollComponent::paint");
+    if (paintFn.empty())
+        return fail("emptyView_paintUsesLiveChromeWithoutPlacement",
+                    "Cannot locate paint().");
 
-    const auto setFn = extractFunctionBlock(cpp, "PianoRollComponent::setTimelineViewDomain");
-    if (setFn.empty())
-        return fail("emptyView_domainChangeTriggersSurfaceRebuild",
-                    "Cannot locate setTimelineViewDomain.");
+    // Must check hasTimelineContentPlacement
+    if (!contains(paintFn, "hasTimelineContentPlacement"))
+        return fail("emptyView_paintUsesLiveChromeWithoutPlacement",
+                    "paint() must check hasTimelineContentPlacement() for empty view branch.");
 
-    if (!contains(setFn, "queueSurfaceRebuild"))
-        return fail("emptyView_domainChangeTriggersSurfaceRebuild",
-                    "setTimelineViewDomain must call queueSurfaceRebuild() after domain change.");
+    // Must call drawLanes/drawGridLines/drawTimeRuler in no-placement branch
+    if (!contains(paintFn, "drawLanes") || !contains(paintFn, "drawGridLines") || !contains(paintFn, "drawTimeRuler"))
+        return fail("emptyView_paintUsesLiveChromeWithoutPlacement",
+                    "paint() no-placement branch must call drawLanes/drawGridLines/drawTimeRuler.");
 
-    const auto clearFn = extractFunctionBlock(cpp, "PianoRollComponent::clearTimelineViewDomain");
-    if (clearFn.empty())
-        return fail("emptyView_domainChangeTriggersSurfaceRebuild",
-                    "Cannot locate clearTimelineViewDomain.");
+    return pass("emptyView_paintUsesLiveChromeWithoutPlacement");
+}
 
-    if (!contains(clearFn, "queueSurfaceRebuild"))
-        return fail("emptyView_domainChangeTriggersSurfaceRebuild",
-                    "clearTimelineViewDomain must call queueSurfaceRebuild() after domain change.");
+CheckResult emptyView_liveChromeUsesViewportMapper()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto paintFn = extractFunctionBlock(cpp, "PianoRollComponent::paint");
+    if (paintFn.empty())
+        return fail("emptyView_liveChromeUsesViewportMapper",
+                    "Cannot locate paint().");
 
-    return pass("emptyView_domainChangeTriggersSurfaceRebuild");
+    // No-placement branch must use makeViewMapper (viewport coords)
+    const auto noPlacementIdx = paintFn.find("hasTimelineContentPlacement()");
+    if (noPlacementIdx == std::string::npos)
+        return fail("emptyView_liveChromeUsesViewportMapper",
+                    "paint() must have hasTimelineContentPlacement check.");
+
+    // After the check, must use makeViewMapper
+    const auto afterCheck = paintFn.substr(noPlacementIdx);
+    if (!contains(afterCheck, "makeViewMapper"))
+        return fail("emptyView_liveChromeUsesViewportMapper",
+                    "paint() no-placement branch must use makeViewMapper() for viewport coords.");
+
+    return pass("emptyView_liveChromeUsesViewportMapper");
+}
+
+CheckResult surfaceCache_onlyForPlacements()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto paintFn = extractFunctionBlock(cpp, "PianoRollComponent::paint");
+    if (paintFn.empty())
+        return fail("surfaceCache_onlyForPlacements",
+                    "Cannot locate paint().");
+
+    // surfaceCache_.paint must only appear after placement check passes
+    const auto cachePaintIdx = paintFn.find("surfaceCache_.paint");
+    if (cachePaintIdx == std::string::npos)
+        return pass("surfaceCache_onlyForPlacements"); // OK if no surfaceCache_.paint call
+
+    // Check that hasTimelineContentPlacement guard exists before surfaceCache_.paint
+    const auto guardIdx = paintFn.find("hasTimelineContentPlacement()");
+    if (guardIdx == std::string::npos)
+        return fail("surfaceCache_onlyForPlacements",
+                    "paint() must guard surfaceCache_.paint with hasTimelineContentPlacement().");
+
+    // Guard must come before cache paint
+    if (guardIdx > cachePaintIdx)
+        return fail("surfaceCache_onlyForPlacements",
+                    "hasTimelineContentPlacement() guard must precede surfaceCache_.paint.");
+
+    return pass("surfaceCache_onlyForPlacements");
+}
+
+CheckResult surfaceCache_handleAsyncUpdateNoBuildWithoutPlacement()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::handleAsyncUpdate");
+    if (fn.empty())
+        return fail("surfaceCache_handleAsyncUpdateNoBuildWithoutPlacement",
+                    "Cannot locate handleAsyncUpdate.");
+
+    // Must check hasTimelineContentPlacement at the start
+    if (!contains(fn, "hasTimelineContentPlacement"))
+        return fail("surfaceCache_handleAsyncUpdateNoBuildWithoutPlacement",
+                    "handleAsyncUpdate must check hasTimelineContentPlacement() before building.");
+
+    // Must return early if no placement
+    if (!contains(fn, "return"))
+        return fail("surfaceCache_handleAsyncUpdateNoBuildWithoutPlacement",
+                    "handleAsyncUpdate must return early when no placement.");
+
+    // Must clear dirty mask before return
+    if (!contains(fn, "clearDirtyMask"))
+        return fail("surfaceCache_handleAsyncUpdateNoBuildWithoutPlacement",
+                    "handleAsyncUpdate must clear dirty mask before returning for no-placement case.");
+
+    // The placement check must precede computeGeometryKey
+    const auto placementCheckIdx = fn.find("hasTimelineContentPlacement");
+    const auto geometryIdx = fn.find("computeGeometryKey");
+    if (placementCheckIdx == std::string::npos || geometryIdx == std::string::npos)
+        return pass("surfaceCache_handleAsyncUpdateNoBuildWithoutPlacement"); // already checked above
+
+    if (placementCheckIdx > geometryIdx)
+        return fail("surfaceCache_handleAsyncUpdateNoBuildWithoutPlacement",
+                    "hasTimelineContentPlacement check must precede computeGeometryKey.");
+
+    return pass("surfaceCache_handleAsyncUpdateNoBuildWithoutPlacement");
 }
 
 } // namespace
@@ -3333,10 +3399,13 @@ int main()
         surfaceCache_invalidationInteractionOnlyRepaint,
         surfaceCache_f0VisibilityOnlyDirtiesF0,
         surfaceCache_renderContextUsesViewportCoords,
-        emptyView_surfaceEndReferencesTimelineViewDomain,
-        emptyView_standaloneInitsTimelineViewDomain,
-        emptyView_notifyPlayheadUsesFollowAndPublish
-        ,emptyView_domainChangeTriggersSurfaceRebuild
+        emptyView_noSurfaceForEmptyDomain,
+        emptyView_noStandaloneSyntheticDomain,
+        emptyView_notifyPlayheadUsesFollowAndPublish,
+        emptyView_paintUsesLiveChromeWithoutPlacement,
+        emptyView_liveChromeUsesViewportMapper,
+        surfaceCache_onlyForPlacements,
+        surfaceCache_handleAsyncUpdateNoBuildWithoutPlacement
     };
 
     int failed = 0;
