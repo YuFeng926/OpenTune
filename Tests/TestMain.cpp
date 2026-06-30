@@ -3118,6 +3118,96 @@ CheckResult surfaceCache_renderContextUsesViewportCoords()
     return pass("surfaceCache_renderContextUsesViewportCoords");
 }
 
+CheckResult emptyView_surfaceEndReferencesTimelineViewDomain()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto fn = extractFunctionBlock(cpp, "PianoRollComponent::computeSurfaceEndTimelineSeconds");
+    if (fn.empty())
+        return fail("emptyView_surfaceEndReferencesTimelineViewDomain",
+                    "Cannot locate computeSurfaceEndTimelineSeconds.");
+
+    // Must track whether any valid placement was found
+    if (!contains(fn, "hasPlacement"))
+        return fail("emptyView_surfaceEndReferencesTimelineViewDomain",
+                    "computeSurfaceEndTimelineSeconds must use hasPlacement to distinguish clip vs empty view.");
+
+    // Must not reference viewport width
+    if (contains(fn, "getWidth") || contains(fn, "viewportWidth") || contains(fn, "ViewportWidth"))
+        return fail("emptyView_surfaceEndReferencesTimelineViewDomain",
+                    "computeSurfaceEndTimelineSeconds must not reference viewport width.");
+
+    return pass("emptyView_surfaceEndReferencesTimelineViewDomain");
+}
+
+CheckResult emptyView_standaloneInitsTimelineViewDomain()
+{
+    const auto cpp = readText("Source/Standalone/PluginEditor.cpp");
+    if (!contains(cpp, "pianoRoll_.setTimelineViewDomain(0.0, 300.0)"))
+        return fail("emptyView_standaloneInitsTimelineViewDomain",
+                    "Standalone editor must call pianoRoll_.setTimelineViewDomain(0.0, 300.0).");
+
+    return pass("emptyView_standaloneInitsTimelineViewDomain");
+}
+
+CheckResult emptyView_notifyPlayheadUsesFollowAndPublish()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    // Find the notifyPlayheadChange lambda assignment
+    const auto notifyIdx = cpp.find("notifyPlayheadChange");
+    if (notifyIdx == std::string::npos)
+        return fail("emptyView_notifyPlayheadUsesFollowAndPublish",
+                    "Cannot locate notifyPlayheadChange.");
+
+    // Extract a window around the lambda (up to 600 chars after the match)
+    const auto window = cpp.substr(notifyIdx, std::min<size_t>(600, cpp.size() - notifyIdx));
+
+    // Must call followAndPublishPlayhead
+    if (!contains(window, "followAndPublishPlayhead"))
+        return fail("emptyView_notifyPlayheadUsesFollowAndPublish",
+                    "notifyPlayheadChange must call followAndPublishPlayhead.");
+
+    // Must NOT directly call these
+    if (contains(window, "setTimelineViewport"))
+        return fail("emptyView_notifyPlayheadUsesFollowAndPublish",
+                    "notifyPlayheadChange must not directly call setTimelineViewport.");
+
+    if (contains(window, "publishPlayheadPresentation"))
+        return fail("emptyView_notifyPlayheadUsesFollowAndPublish",
+                    "notifyPlayheadChange must not directly call publishPlayheadPresentation.");
+
+    if (contains(window, "updatePlayheadPresentationPolicy"))
+        return fail("emptyView_notifyPlayheadUsesFollowAndPublish",
+                    "notifyPlayheadChange must not directly call updatePlayheadPresentationPolicy.");
+
+    return pass("emptyView_notifyPlayheadUsesFollowAndPublish");
+}
+
+CheckResult emptyView_domainChangeTriggersSurfaceRebuild()
+{
+    const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto setFn = extractFunctionBlock(cpp, "PianoRollComponent::setTimelineViewDomain");
+    if (setFn.empty())
+        return fail("emptyView_domainChangeTriggersSurfaceRebuild",
+                    "Cannot locate setTimelineViewDomain.");
+
+    if (!contains(setFn, "queueSurfaceRebuild"))
+        return fail("emptyView_domainChangeTriggersSurfaceRebuild",
+                    "setTimelineViewDomain must call queueSurfaceRebuild() after domain change.");
+
+    const auto clearFn = extractFunctionBlock(cpp, "PianoRollComponent::clearTimelineViewDomain");
+    if (clearFn.empty())
+        return fail("emptyView_domainChangeTriggersSurfaceRebuild",
+                    "Cannot locate clearTimelineViewDomain.");
+
+    if (!contains(clearFn, "queueSurfaceRebuild"))
+        return fail("emptyView_domainChangeTriggersSurfaceRebuild",
+                    "clearTimelineViewDomain must call queueSurfaceRebuild() after domain change.");
+
+    return pass("emptyView_domainChangeTriggersSurfaceRebuild");
+}
+
 } // namespace
 
 int main()
@@ -3242,7 +3332,11 @@ int main()
         surfaceCache_markTimeGridChangedExcludesBackground,
         surfaceCache_invalidationInteractionOnlyRepaint,
         surfaceCache_f0VisibilityOnlyDirtiesF0,
-        surfaceCache_renderContextUsesViewportCoords
+        surfaceCache_renderContextUsesViewportCoords,
+        emptyView_surfaceEndReferencesTimelineViewDomain,
+        emptyView_standaloneInitsTimelineViewDomain,
+        emptyView_notifyPlayheadUsesFollowAndPublish
+        ,emptyView_domainChangeTriggersSurfaceRebuild
     };
 
     int failed = 0;
