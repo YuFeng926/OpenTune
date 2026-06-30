@@ -2533,14 +2533,14 @@ void PianoRollComponent::setShowWaveform(bool shouldShow) {
 void PianoRollComponent::setShowLanes(bool shouldShow) {
     if (showLanes_ == shouldShow) return;
     showLanes_ = shouldShow;
-    queueSurfaceRebuild(); repaint();
+    repaint();  // lanes是chrome，只repaint，不重建surface
 }
 
 void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
     if (noteNameMode_ == noteNameMode) return;
 
     noteNameMode_ = noteNameMode;
-    queueSurfaceRebuild(); repaint();
+    repaint();  // noteName是chrome，只repaint
 }
 
 void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
@@ -2552,7 +2552,7 @@ void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
 
 void PianoRollComponent::setBpm(double bpm) {
     bpm_ = juce::jlimit(60.0, 240.0, bpm);
-    queueSurfaceRebuild(); repaint();
+    repaint();  // BPM ruler是chrome，只repaint
 }
 
 void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
@@ -2562,12 +2562,12 @@ void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
 
     timeSigNum_ = numerator;
     timeSigDenom_ = denominator;
-    queueSurfaceRebuild(); repaint();
+    repaint();  // time signature是chrome，只repaint
 }
 
 void PianoRollComponent::setTimeUnit(TimeUnit unit) {
     timeUnit_ = unit;
-    queueSurfaceRebuild(); repaint();
+    repaint();  // time unit是chrome，只repaint
 }
 
 void PianoRollComponent::addListener(Listener* listener) {
