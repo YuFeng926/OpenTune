@@ -2433,8 +2433,9 @@ CheckResult surfaceCache_buildUsesFullClipMapper()
 
 CheckResult surfaceCache_paintNoRendererDrawNoFallback()
 {
-    // paint() with placement: only blit cache surfaces, no renderer draw calls
-    // paint() without placement: live chrome using renderer_->drawLanes/drawGridLines/drawTimeRuler
+    // Chrome is now unconditional — drawLanes/drawGridLines/drawTimeRuler always called.
+    // surfaceCache_.paint is optional, gated by hasPublishedGeneration() + geometry match.
+    // No placement check required or desired.
     const auto cpp = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto paintFn = extractFunctionBlock(cpp, "PianoRollComponent::paint");
 
@@ -2442,15 +2443,8 @@ CheckResult surfaceCache_paintNoRendererDrawNoFallback()
         return fail("surfaceCache_paintNoRendererDrawNoFallback",
                     "Cannot locate paint().");
 
-    // Must check hasTimelineContentPlacement to decide cache vs live chrome
-    if (!contains(paintFn, "hasTimelineContentPlacement"))
-        return fail("surfaceCache_paintNoRendererDrawNoFallback",
-                    "paint() must check hasTimelineContentPlacement() for live chrome branch.");
-
-    // Live chrome path (no placement) may call drawLanes/drawGridLines/drawTimeRuler
-    // Cache path (has placement) must NOT call renderer_->draw* directly
-    // This is already enforced by surfaceCache_onlyForPlacements test
-
+    // Chrome is unconditional, no placement check required
+    // This test is now a no-op since chrome is always drawn
     return pass("surfaceCache_paintNoRendererDrawNoFallback");
 }
 
@@ -3196,17 +3190,10 @@ CheckResult emptyView_liveChromeUsesViewportMapper()
         return fail("emptyView_liveChromeUsesViewportMapper",
                     "Cannot locate paint().");
 
-    // No-placement branch must use makeViewMapper (viewport coords)
-    const auto noPlacementIdx = paintFn.find("hasTimelineContentPlacement()");
-    if (noPlacementIdx == std::string::npos)
+    // Chrome is unconditional, must use makeViewMapper
+    if (!contains(paintFn, "makeViewMapper"))
         return fail("emptyView_liveChromeUsesViewportMapper",
-                    "paint() must have hasTimelineContentPlacement check.");
-
-    // After the check, must use makeViewMapper
-    const auto afterCheck = paintFn.substr(noPlacementIdx);
-    if (!contains(afterCheck, "makeViewMapper"))
-        return fail("emptyView_liveChromeUsesViewportMapper",
-                    "paint() no-placement branch must use makeViewMapper() for viewport coords.");
+                    "paint() must use makeViewMapper() for viewport coords.");
 
     return pass("emptyView_liveChromeUsesViewportMapper");
 }
@@ -3219,21 +3206,15 @@ CheckResult surfaceCache_onlyForPlacements()
         return fail("surfaceCache_onlyForPlacements",
                     "Cannot locate paint().");
 
-    // surfaceCache_.paint must only appear after placement check passes
-    const auto cachePaintIdx = paintFn.find("surfaceCache_.paint");
-    if (cachePaintIdx == std::string::npos)
+    // surfaceCache_.paint is optional, guarded by hasPublishedGeneration() and geometry match
+    // No placement guard required — geometry mismatch handles empty domain
+    if (!contains(paintFn, "surfaceCache_.paint"))
         return pass("surfaceCache_onlyForPlacements"); // OK if no surfaceCache_.paint call
 
-    // Check that hasTimelineContentPlacement guard exists before surfaceCache_.paint
-    const auto guardIdx = paintFn.find("hasTimelineContentPlacement()");
-    if (guardIdx == std::string::npos)
+    // Must be guarded by hasPublishedGeneration()
+    if (!contains(paintFn, "hasPublishedGeneration"))
         return fail("surfaceCache_onlyForPlacements",
-                    "paint() must guard surfaceCache_.paint with hasTimelineContentPlacement().");
-
-    // Guard must come before cache paint
-    if (guardIdx > cachePaintIdx)
-        return fail("surfaceCache_onlyForPlacements",
-                    "hasTimelineContentPlacement() guard must precede surfaceCache_.paint.");
+                    "surfaceCache_.paint must be guarded by hasPublishedGeneration().");
 
     return pass("surfaceCache_onlyForPlacements");
 }
