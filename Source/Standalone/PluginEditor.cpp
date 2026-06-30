@@ -424,6 +424,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         timelineViewportCamera_.pixelsPerSecond = zoomLevel * TimelineViewportCamera::kDefaultPixelsPerSecond;
         applyTimelineViewportToViews();
     }
+    pianoRoll_.setTimelineViewDomain(0.0, 300.0);
     
     // Add AutoRenderOverlay (initially hidden, covers PianoRoll during AUTO)
     addAndMakeVisible(autoRenderOverlay_);

@@ -245,22 +245,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         listeners_.call([time](Listener& l) { l.playheadPositionChangeRequested(time); });
         userScrollHold_ = false;
         pendingSeekTime_ = projectTimelineTimeToContent(time);
-        const bool isPlaying = isPlaying_.load(std::memory_order_relaxed);
-        
-        // 先更�?camera（确�?cache 同步�?
-        if (scrollMode_ == ScrollMode::Continuous || isPlaying) {
-            const int visibleWidth = getTimelineContentViewportWidth();
-            if (visibleWidth > 0) {
-                const int pinnedViewportX = getContinuousPinnedPlayheadViewportX();
-                const double pps = camera_.pixelsPerSecond;
-                const double newVisibleStart = time - (pinnedViewportX - pianoKeyWidth_) / pps;
-                setTimelineViewport({ newVisibleStart, pps }, juce::sendNotification);
-            }
-        }
-        
-        // 后发�?playhead（按�?camera�?
-        publishPlayheadPresentation(time);
-        updatePlayheadPresentationPolicy();
+        followAndPublishPlayhead(time);
     };
     toolCtx.notifyPitchCurveEdited = [this](int s, int e) {
         listeners_.call([s, e](Listener& l) { l.pitchCurveEdited(s, e); });
@@ -1898,9 +1883,9 @@ void PianoRollComponent::resized() {
     previewOverlay_.setBounds(getLocalBounds());
     playheadOverlay_.setBounds(getLocalBounds());
     updatePlayheadPresentationPolicy();
-    auto geometry = computeGeometryKey(camera_);
     queueSurfaceRebuild();
     repaint();
+    followAndPublishPlayhead(readPlayheadTime());
 }
 
 void PianoRollComponent::applyEditedContentCurve(std::shared_ptr<PitchCurve> curve)
@@ -2050,6 +2035,7 @@ void PianoRollComponent::setTimelineViewDomain(double viewStartSeconds, double v
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
     updateScrollBars();
+    queueSurfaceRebuild();
     repaint();
 }
 
@@ -2063,6 +2049,7 @@ void PianoRollComponent::clearTimelineViewDomain()
     userScrollHold_ = false;
     updatePlayheadPresentationPolicy();
     updateScrollBars();
+    queueSurfaceRebuild();
     repaint();
 }
 
@@ -2902,6 +2889,7 @@ void PianoRollComponent::visibilityChanged()
                 safeThis->grabKeyboardFocus();
             }
         });
+        followAndPublishPlayhead(readPlayheadTime());
     }
 }
 
@@ -3509,13 +3497,18 @@ double PianoRollComponent::computeSurfaceStartTimelineSeconds() const noexcept
 
 double PianoRollComponent::computeSurfaceEndTimelineSeconds() const noexcept
 {
-    double maxEnd = timelineViewOriginSeconds();
+    double maxEnd = 0.0;
+    bool hasPlacement = false;
     for (const auto& placement : timelineContentPlacements_) {
         if (placement.isValid()) {
+            hasPlacement = true;
             maxEnd = std::max(maxEnd, placement.projection.timelineEndSeconds());
         }
     }
-    return (maxEnd > timelineViewOriginSeconds()) ? maxEnd : computeContentTimelineEndSeconds();
+    if (hasPlacement) {
+        return maxEnd;
+    }
+    return std::max(computeContentTimelineEndSeconds(), timelineViewEndSeconds());
 }
 
 double PianoRollComponent::computeMaxTimelineEndSeconds() const noexcept {
