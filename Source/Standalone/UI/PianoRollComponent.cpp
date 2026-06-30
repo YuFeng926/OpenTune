@@ -2369,7 +2369,6 @@ void PianoRollComponent::setTimelineViewport(TimelineViewportCamera camera, juce
     }
     else if (zoomChanged) {
         // Zoom changed: dirty all slots + queue (geometry 变了，handleAsyncUpdate 会全量重建)
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background);
         surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Waveform);
         surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
         surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
@@ -2534,14 +2533,14 @@ void PianoRollComponent::setShowWaveform(bool shouldShow) {
 void PianoRollComponent::setShowLanes(bool shouldShow) {
     if (showLanes_ == shouldShow) return;
     showLanes_ = shouldShow;
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); queueSurfaceRebuild(); repaint();
+    queueSurfaceRebuild(); repaint();
 }
 
 void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
     if (noteNameMode_ == noteNameMode) return;
 
     noteNameMode_ = noteNameMode;
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); queueSurfaceRebuild(); repaint();
+    queueSurfaceRebuild(); repaint();
 }
 
 void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
@@ -2553,7 +2552,7 @@ void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
 
 void PianoRollComponent::setBpm(double bpm) {
     bpm_ = juce::jlimit(60.0, 240.0, bpm);
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); queueSurfaceRebuild(); repaint();
+    queueSurfaceRebuild(); repaint();
 }
 
 void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
@@ -2563,12 +2562,12 @@ void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
 
     timeSigNum_ = numerator;
     timeSigDenom_ = denominator;
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); queueSurfaceRebuild(); repaint();
+    queueSurfaceRebuild(); repaint();
 }
 
 void PianoRollComponent::setTimeUnit(TimeUnit unit) {
     timeUnit_ = unit;
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); queueSurfaceRebuild(); repaint();
+    queueSurfaceRebuild(); repaint();
 }
 
 void PianoRollComponent::addListener(Listener* listener) {
@@ -3053,7 +3052,6 @@ void PianoRollComponent::refreshVerticalViewportGeometry()
 {
     updateScrollBars();
     // Vertical geometry changes must rebuild y-dependent cache layers
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background);
     surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Notes);
     surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
     queueSurfaceRebuild();
@@ -3068,7 +3066,7 @@ void PianoRollComponent::setScale(int rootNote, int scaleType)
         return;
     scaleRootNote_ = clampedRoot;
     scaleType_ = clampedType;
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); queueSurfaceRebuild(); repaint();
+    queueSurfaceRebuild(); repaint();
 }
 
 void PianoRollComponent::fitToScreen() {
@@ -3302,11 +3300,11 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
         return { AutoTuneApplyStatus::AlreadyInFlight };
     }
 
-    surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); queueSurfaceRebuild(); repaint();
+    queueSurfaceRebuild(); repaint();
 
     auto failAfterStart = [this](AutoTuneApplyStatus status) {
         autoTuneInFlight_.store(false, std::memory_order_release);
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::Background); queueSurfaceRebuild(); repaint();
+        queueSurfaceRebuild(); repaint();
         return AutoTuneApplyResult{ status };
     };
 
