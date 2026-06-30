@@ -439,6 +439,7 @@ private:
     double timelineViewEndSeconds() const noexcept;
     bool hasExplicitTimelineViewDomain() const noexcept;
     const TimelineContentPlacement* findActiveTimelineContentPlacement() const noexcept;
+    bool hasTimelineContentPlacement() const noexcept;
     ContentTimelineProjection activeContentProjection() const noexcept;
     double projectTimelineTimeToContent(double timelineSeconds) const;
     double projectContentTimeToTimeline(double contentSeconds) const;
