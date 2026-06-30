@@ -3066,7 +3066,7 @@ void PianoRollComponent::setScale(int rootNote, int scaleType)
         return;
     scaleRootNote_ = clampedRoot;
     scaleType_ = clampedType;
-    queueSurfaceRebuild(); repaint();
+    repaint();  // scale高亮是chrome，只repaint
 }
 
 void PianoRollComponent::fitToScreen() {
@@ -3304,7 +3304,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
 
     auto failAfterStart = [this](AutoTuneApplyStatus status) {
         autoTuneInFlight_.store(false, std::memory_order_release);
-        queueSurfaceRebuild(); repaint();
+    repaint();  // scale高亮是chrome，只repaint
         return AutoTuneApplyResult{ status };
     };
 
