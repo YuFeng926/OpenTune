@@ -12,12 +12,11 @@ class PianoRollSurfaceCache
 public:
     enum class Slot : int
     {
-        Background = 0,   // lanes + grid lines + time ruler
-        Waveform,         // waveform per content item
+        Waveform = 0,     // waveform per content item
         Notes,            // notes only (committed notes, no chunk boundaries, no highlights)
         F0,               // F0 curves per content item
         TimeAnchors,      // published TimeGrid anchors (not hover/selected handles)
-        SlotCount
+        SlotCount         // 现在是4个slot
     };
 
     static constexpr int kSlotCount = static_cast<int>(Slot::SlotCount);
