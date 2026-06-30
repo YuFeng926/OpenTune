@@ -30,8 +30,8 @@ void PianoRollSurfaceCache::paint(juce::Graphics& g, int offsetX, int offsetY, b
         const auto s = static_cast<Slot>(i);
         if (timeView)
         {
-            // Time view: only Background and TimeAnchors
-            if (s != Slot::Background && s != Slot::TimeAnchors)
+            // Time view: only TimeAnchors（Background已删除，chrome由paint()实时绘制）
+            if (s != Slot::TimeAnchors)
                 continue;
         }
         else
