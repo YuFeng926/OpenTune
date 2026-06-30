@@ -3175,15 +3175,15 @@ CheckResult emptyView_paintUsesLiveChromeWithoutPlacement()
         return fail("emptyView_paintUsesLiveChromeWithoutPlacement",
                     "Cannot locate paint().");
 
-    // Must check hasTimelineContentPlacement
-    if (!contains(paintFn, "hasTimelineContentPlacement"))
+    // Must NOT check hasTimelineContentPlacement for chrome (chrome is unconditional)
+    if (contains(paintFn, "hasTimelineContentPlacement"))
         return fail("emptyView_paintUsesLiveChromeWithoutPlacement",
-                    "paint() must check hasTimelineContentPlacement() for empty view branch.");
+                    "paint() must NOT check hasTimelineContentPlacement() for chrome — chrome is now unconditional, drawn before surface blit.");
 
-    // Must call drawLanes/drawGridLines/drawTimeRuler in no-placement branch
+    // Must call drawLanes/drawGridLines/drawTimeRuler unconditionally (not in placement branch)
     if (!contains(paintFn, "drawLanes") || !contains(paintFn, "drawGridLines") || !contains(paintFn, "drawTimeRuler"))
         return fail("emptyView_paintUsesLiveChromeWithoutPlacement",
-                    "paint() no-placement branch must call drawLanes/drawGridLines/drawTimeRuler.");
+                    "paint() must call drawLanes/drawGridLines/drawTimeRuler unconditionally (live chrome before surface).");
 
     return pass("emptyView_paintUsesLiveChromeWithoutPlacement");
 }
