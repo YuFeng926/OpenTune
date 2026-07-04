@@ -35,18 +35,21 @@
 #include <optional>
 #include <utility>
 #include <atomic>
-#include "SmallButton.h"
-#include "PlayheadOverlayComponent.h"
-#include "PianoRoll/PianoRollRenderer.h"
-#include "PianoRoll/PianoRollSurfaceCache.h"
+#include <array>
+    #include "SmallButton.h"
+    #include "FixedPlayheadComponent.h"
+    #include "PianoRoll/PianoRollRenderer.h"
 
 #include "PianoRoll/PianoRollToolHandler.h"
 #include "PianoRoll/PianoRollCorrectionWorker.h"
 #include "PianoRoll/InteractionState.h"
 #include "TimelineViewportCamera.h"
+#include "TimelineViewportPolicy.h"
+#include "TimelinePatternCache.h"
 #include "WaveformMipmap.h"
 #include "../../Utils/UndoManager.h"
 #include "../../Content/ContentEditCommands.h"
+#include "../../TimelineContentCache.h"
 
 namespace OpenTune {
 
@@ -151,16 +154,13 @@ public:
     void setIsPlaying(bool playing) {
         bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
         isPlaying_.store(playing, std::memory_order_relaxed);
-        if (stateChanged && playing)
-            pendingSeekTime_ = -1.0;
         if (stateChanged) {
-            lastObservedRawPlayheadTime_ = readPlayheadTime();
-            resetPresentationClock(readPlayheadTime());
             userScrollHold_ = false;
-            updatePlayheadPresentationPolicy();
+            updatePlayheadVisibility();
         }
     }
-    void setTimelineViewport(TimelineViewportCamera camera, juce::NotificationType notify);
+    void commitViewportRequest(TimelineViewportRequest req, juce::NotificationType notify);
+    int timelinePolicyViewportWidth() const noexcept { return getTimelineContentViewportWidth(); }
     void focusActiveContentForRegionSwitch(const std::vector<SilentGap>& silentGaps,
                                            juce::NotificationType notify);
     void setCurrentTool(ToolId tool);
@@ -181,7 +181,7 @@ public:
         }
 
         scrollMode_ = mode;
-        updatePlayheadPresentationPolicy();
+        updatePlayheadVisibility();
         repaint();
     }
     ScrollMode getScrollMode() const { return scrollMode_; }
@@ -196,15 +196,13 @@ public:
     void setShowOriginalF0(bool show) {
         if (showOriginalF0_ == show) return;
         showOriginalF0_ = show;
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
-        queueSurfaceRebuild();
+        prepareVisibleContentTiles();
         repaint();
     }
     void setShowCorrectedF0(bool show) {
         if (showCorrectedF0_ == show) return;
         showCorrectedF0_ = show;
-        surfaceCache_.markDirty(PianoRollSurfaceCache::Slot::F0);
-        queueSurfaceRebuild();
+        prepareVisibleContentTiles();
         repaint();
     }
     bool isShowingOriginalF0() const { return showOriginalF0_; }
@@ -237,16 +235,14 @@ public:
 
     void setContentProjection(const ContentTimelineProjection& projection);
     void setTimelineContentPlacements(std::vector<TimelineContentPlacement> placements);
-    void setTimelineViewDomain(double viewStartSeconds, double viewEndSeconds);
-    void clearTimelineViewDomain();
-    
+
     /** 设置 reference overlay 数据（ghost notes + anchors）。
      *  传入 std::nullopt 清除 overlay。 */
     void setReferenceOverlay(std::optional<PianoRollRenderer::ReferenceOverlay> overlay);
 
     void setPlayheadColour(juce::Colour colour) {
         playheadColour_ = colour;
-        playheadOverlay_.setPlayheadColour(colour);
+        fixedPlayhead_.setColour(colour);
     }
 
     void setPlayheadPositionSource(std::weak_ptr<std::atomic<double>> source) {
@@ -294,6 +290,8 @@ private:
     friend struct PianoRollComponentTestProbe;
     friend class PianoRollPreviewOverlay;
 
+    void applyResolvedCamera(TimelineViewportCamera next, juce::NotificationType notify);
+
     bool enqueueManualCorrectionPatchAsync(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
                                            int dirtyStartFrame,
                                            int dirtyEndFrame,
@@ -319,7 +317,7 @@ private:
     juce::ScrollBar verticalScrollBar_{ true };
     SmallButton scrollModeToggleButton_;
     SmallButton timeUnitToggleButton_;
-    PlayheadOverlayComponent playheadOverlay_;
+    FixedPlayheadComponent fixedPlayhead_;
     PianoRollPreviewOverlay previewOverlay_{*this};
 
     void mouseDown(const juce::MouseEvent& e) override;
@@ -335,7 +333,6 @@ public:
     /// Public so editors can drive a refresh after an async note generator
     /// (e.g. GAME) commits without changing the active ContentKey.
     void refreshEditedContentNotes();
-    void rebuildSurfaceCache();
 
 private:
     void onScrollVBlankCallback(double timestampSec);
@@ -343,32 +340,20 @@ private:
     juce::Rectangle<int> getTimelineViewportBounds() const;
     int getTimelineContentViewportWidth() const;
     int getTimelineContentViewportHeight() const;
-    int getContinuousPinnedPlayheadViewportX() const;
-    void updatePlayheadPresentationPolicy();
+    void updatePlayheadVisibility();
     int getMaxHorizontalScroll() const;
-    double getDisplayPlayheadTime(double timestampSec) const;
-    void updatePresentationClock(double authoritativeTime, double timestampSec);
-    void resetPresentationClock(double authoritativeTime);
     PianoRollRenderer::RenderContext makePresentationRenderContext() const;
-    PianoRollRenderer::SurfaceRenderContext buildSurfaceRenderContext() const;
-    PianoRollRenderer::SurfaceRenderContext buildSurfaceRenderContextForGeometry(
-        PianoRollSurfaceCache::GeometryKey geometry) const;
 
     // v12 New: camera-based viewport
     ViewMapper makeViewMapper() const noexcept;
-    int computeScrollOffsetPx() const noexcept;
     double computeContentTimelineEndSeconds() const noexcept;
-    double computeSurfaceStartTimelineSeconds() const noexcept;
-    double computeSurfaceEndTimelineSeconds() const noexcept;
-    double computeMaxTimelineEndSeconds() const noexcept;
-    double computeMaxVisibleStartSeconds(double pps) const noexcept;
-    void publishPlayheadPresentation(double displayPlayheadTime);
-    void followAndPublishPlayhead(double timelinePlayheadTime);
-
-    // 单一 surface rebuild 入口（AsyncUpdater）
+    void prepareVisiblePatternTiles();
+    void prepareVisibleContentTiles();
+    uint64_t revisionForContentSlot(ContentSlot slot) const noexcept;
+    std::vector<ContentSlot> visibleContentSlots() const noexcept;
+    void drawPreparedPatternTiles(juce::Graphics& g);
+    void drawPreparedContentTiles(juce::Graphics& g);
     void handleAsyncUpdate() override;
-    void queueSurfaceRebuild();
-    PianoRollSurfaceCache::GeometryKey computeGeometryKey(TimelineViewportCamera camera) const;
 
     void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
@@ -395,8 +380,6 @@ private:
     void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
     PianoRollRenderer::ContentRenderItem buildContentRenderItem(
         const TimelineContentPlacement& placement) const;
-    PianoRollRenderer::ContentRenderItem buildSurfaceContentRenderItem(
-        const TimelineContentPlacement& placement, double pixelsPerSecond) const;
     const std::vector<Note>& getCommittedNotes() const;
     const std::vector<Note>& getDisplayedNotes() const;
     NoteInteractionDraft& getNoteDraft();
@@ -435,17 +418,9 @@ private:
     float yToFreq(float y) const;
     float freqToY(float freq) const;
 
-    double timelineViewOriginSeconds() const noexcept;
-    double timelineViewEndSeconds() const noexcept;
-    bool hasExplicitTimelineViewDomain() const noexcept;
-    const TimelineContentPlacement* findActiveTimelineContentPlacement() const noexcept;
+    const TimelineContentPlacement* findEditedPlacement() const noexcept;
     bool hasTimelineContentPlacement() const noexcept;
     ContentTimelineProjection activeContentProjection() const noexcept;
-    double projectTimelineTimeToContent(double timelineSeconds) const;
-    double projectContentTimeToTimeline(double contentSeconds) const;
-
-    int timeToX(double seconds) const;
-    double xToTime(int x) const;
 
     PianoRollRenderer::RenderContext buildRenderContext() const
     {
@@ -465,8 +440,6 @@ private:
 
     // Cont-mode scroll state
     bool userScrollHold_{false};         // user manually scrolled → pause auto-follow
-    double pendingSeekTime_{-1.0};       // pending playhead presentation intent; -1 = none
-    double lastObservedRawPlayheadTime_{0.0}; // host raw playhead last seen by stopped-state presentation
 
     bool userHasManuallyZoomed_ = false;
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity_ = ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
@@ -504,6 +477,9 @@ private:
     
     std::atomic<bool> autoTuneInFlight_{false};
     std::atomic<uint64_t> editedContentEpoch_{0};
+    std::atomic<uint64_t> notesEpoch_{0};
+    std::atomic<uint64_t> pitchEpoch_{0};
+    std::atomic<uint64_t> timeGridEpoch_{0};
 
     double bpm_ = 120.0;
     int timeSigNum_ = 4;
@@ -516,13 +492,6 @@ private:
     std::vector<TimelineContentPlacement> timelineContentPlacements_;
     ContentTimelineProjection pendingSingleContentProjection_;
     bool explicitTimelineContentPlacements_ = false;
-    struct TimelineViewDomain {
-        double startSeconds{0.0};
-        double endSeconds{0.0};
-
-        bool isValid() const noexcept { return endSeconds > startSeconds; }
-    };
-    TimelineViewDomain timelineViewDomain_;
     bool inferenceActive_ = false;
     int waveformBuildTickCounter_ = 0;
     bool waveformVisualRefreshPending_ = false;
@@ -549,11 +518,6 @@ private:
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
 
     mutable uint64_t interactionRevision_ = 0;
-    double lastAuthoritativePlayheadTime_ = 0.0;
-    double presentationClockAnchorTime_ = 0.0;
-    double presentationClockAnchorTimestampSec_ = 0.0;
-    double presentationClockLastObservationTimestampSec_ = 0.0;
-    bool presentationClockPrimed_ = false;
 
     // Undo support
     juce::String pendingUndoDescription_;
@@ -578,7 +542,24 @@ private:
     std::unique_ptr<PianoRollToolHandler> toolHandler_;
     std::unique_ptr<PianoRollCorrectionWorker> correctionWorker_;
     mutable WaveformMipmapCache waveformMipmapCache_;
-    PianoRollSurfaceCache surfaceCache_;
+
+    // New: Pattern and content tile caches for infinite timeline
+    mutable TimelinePatternCache patternCache_;
+    mutable TimelineContentCache contentCache_;
+
+    // Pre-built pattern tiles for paint consumption
+    struct PreparedPatternTile {
+        PatternTileKey key;
+        const juce::Image* image = nullptr;
+    };
+    std::vector<PreparedPatternTile> preparedPatternTiles_;
+
+    // Pre-built content tiles for paint consumption
+    struct PreparedContentTile {
+        ContentTileKey key;
+        const juce::Image* image = nullptr;
+    };
+    std::vector<PreparedContentTile> preparedContentTiles_;
 
 
 
