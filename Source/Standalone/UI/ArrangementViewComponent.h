@@ -5,9 +5,9 @@
  * 
  * 显示多轨道的音频片段排列视图，支持：
  * - 片段显示与拖拽
- * - 波形可视化（通过 WaveformMipmapCache 和 ArrangementRenderModelCache）
+ * - 波形可视化（通过 WaveformMipmapCache）
  * - 时间标尺和网格
- * - 播放头位置显示（通过 PlayheadOverlayComponent）
+ * - 播放头位置显示（通过 FixedPlayheadComponent）
  */
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -18,18 +18,53 @@
 #include <vector>
 #include <set>
 #include <map>
+#include <optional>
 #include "../PluginProcessor.h"
 #include "UIColors.h"
 #include "SmallButton.h"
-#include "PlayheadOverlayComponent.h"
 #include "WaveformMipmap.h"
-#include "ArrangementRenderModelCache.h"
 #include "ViewMapper.h"
 #include "TimelineViewportCamera.h"
+#include "TimelinePatternCache.h"
+#include "TimelineViewportPolicy.h"
+#include "../../TimelineContentCache.h"
+#include "FixedPlayheadComponent.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../Utils/KeyShortcutConfig.h"
 
 namespace OpenTune {
+
+// ============================================================================
+// Arrangement Vertical Window — defines the vertical viewport state
+// ============================================================================
+
+struct ArrangementVerticalWindow {
+    int rulerHeight = 0;
+    int trackHeight = 0;
+    int scrollTopPx = 0;               // content-area track-space y (pixels scrolled past ruler)
+    int viewportContentHeight = 0;     // visible content area height (excluding ruler)
+
+    int firstTrack() const {
+        return trackHeight > 0 ? scrollTopPx / trackHeight : 0;
+    }
+
+    int lastTrackExclusive() const {
+        if (trackHeight <= 0) return 0;
+        const int totalPx = scrollTopPx + viewportContentHeight;
+        return (totalPx + trackHeight - 1) / trackHeight;  // ceil division
+    }
+
+    // Encode all state that affects tile content into a single hash
+    uint64_t encode() const {
+        // Pack into 64 bits: rulerHeight(16) | trackHeight(16) | scrollTopPx(16) | viewportContentHeight(16)
+        uint64_t h = 0;
+        h |= static_cast<uint64_t>(rulerHeight & 0xFFFF);
+        h |= static_cast<uint64_t>(trackHeight & 0xFFFF) << 16;
+        h |= static_cast<uint64_t>(scrollTopPx & 0xFFFF) << 32;
+        h |= static_cast<uint64_t>(viewportContentHeight & 0xFFFF) << 48;
+        return h;
+    }
+};
 
 // ============================================================================
 // Import Drop Preview — transient UI-only state for drag-drop visual feedback
@@ -41,50 +76,6 @@ struct ImportDropPreview {
     bool isNewTrack = false;       // true = blank-area drop; render a "new track" indicator
     int visibleTrackCount = 0;     // current visible track count (for positioning new-track indicator)
     int trackHeight = 100;         // track lane height in pixels (for positioning; avoids paint() processor read)
-};
-
-class ArrangementCachedSurface : public juce::Component
-{
-public:
-    ArrangementCachedSurface()
-    {
-        setOpaque(false);
-        setInterceptsMouseClicks(false, false);
-    }
-
-    void setSurfaceImage(juce::Image image)
-    {
-        surfaceImage_ = std::move(image);
-        repaint();
-    }
-
-    void setImageOffsetX(int offsetX)
-    {
-        if (imageOffsetX_ == offsetX)
-            return;
-
-        imageOffsetX_ = offsetX;
-    }
-
-    void clearSurfaceImage()
-    {
-        if (!surfaceImage_.isValid())
-            return;
-
-        surfaceImage_ = {};
-        imageOffsetX_ = 0;
-        repaint();
-    }
-
-private:
-    void paint(juce::Graphics& g) override
-    {
-        if (surfaceImage_.isValid())
-            g.drawImageAt(surfaceImage_, imageOffsetX_, 0);
-    }
-
-    juce::Image surfaceImage_;
-    int imageOffsetX_ = 0;
 };
 
 class ArrangementViewComponent : public juce::Component,
@@ -133,20 +124,22 @@ public:
         const bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
         isPlaying_.store(playing, std::memory_order_relaxed);
         if (stateChanged) {
-            resetPresentationClock(readPlayheadSeconds());
-            syncPlayheadOverlayToAbsoluteTime(readPlayheadSeconds(), true);
+            // Fixed playhead - layout only, no time-based updates
+            const auto viewportBounds = getContentViewportBounds();
+            fixedPlayhead_.setAnchorBounds(viewportBounds.getCentreX(), getHeight());
         }
     }
     void setPlayheadColour(juce::Colour colour) {
         playheadColour_ = colour;
-        playheadOverlay_.setPlayheadColour(colour);
+        fixedPlayhead_.setColour(colour);
     }
     
     // 设置播放头位置源（由组件内部读取）
     void setPlayheadPositionSource(std::weak_ptr<std::atomic<double>> source) {
         positionSource_ = source;
     }
-    void setTimelineViewport(TimelineViewportCamera camera, juce::NotificationType notify);
+    void commitViewportRequest(TimelineViewportRequest req, juce::NotificationType notify);
+    int timelinePolicyViewportWidth() const noexcept { return getVisibleViewportWidth(); }
     void setVerticalScrollOffset(int offset);
     void setVisibleTrackCount(int count);
     void setInferenceActive(bool active) { inferenceActive_ = active; }
@@ -181,11 +174,11 @@ public:
 private:
     enum class DragOperation { None, Move, Gain, TrimLeft, TrimRight, FadeIn, FadeOut };
 
+    void applyResolvedCamera(TimelineViewportCamera next, juce::NotificationType notify);
+
     // Camera-derived state
     ViewMapper makeViewMapper() const noexcept;
-    int computeScrollOffsetPx() const noexcept;
-    double computeMaxTimelineEndSeconds() const noexcept;
-    double computeMaxVisibleStartSeconds(double pps) const noexcept;
+    ArrangementVerticalWindow makeArrangementVerticalWindow() const noexcept;
 
     struct HitTestResult {
         int trackId{-1};
@@ -210,48 +203,31 @@ private:
     juce::Rectangle<int> getPlacementBounds(int trackId, int placementIndex) const;
 
     // 时间 ↔ 像素坐标（委托给 ViewMapper）
-    int absoluteTimeToContentX(double seconds) const;
     int absoluteTimeToViewportX(double seconds) const;
-    int absoluteTimeToViewportX(double seconds, double projectedScrollOffset) const;
     int getTotalContentWidth() const;
     int getVisibleViewportWidth() const;
     juce::Rectangle<int> getContentViewportBounds() const;
-    bool isPinnedContinuousFollowActive() const;
-    double getPinnedPlayheadViewportX() const;
-    double getContinuousFollowTargetScroll(double displayPlayheadTime) const;
-    double getDisplayPlayheadTime(double timestampSec) const;
-    void updatePresentationClock(double authoritativeTime, double timestampSec);
-    void resetPresentationClock(double authoritativeTime);
     void rebuildContentMetrics();
-    bool renderBandNeedsRebuild() const;
-    bool ensureRenderBandCoversCurrentViewport(bool forceRebuild = false);
-    void rebuildContentSurface();
-    void updateContentSurfaceBounds();
-    void drawTimeRulerBackdrop(juce::Graphics& g);
-    void rebuildRulerSurface();
-    void updateRulerSurfaceBounds();
-    void updateOverlayPresentation(double displayPlayheadTime);
+    void updateOverlayPresentation();
     void updateAutoScroll();
     void performPageScroll(double playheadTime);
     void onScrollVBlankCallback(double timestampSec);
     double readPlayheadSeconds() const;
+
 public:
-    void syncPlayheadOverlay();
-    void syncPlayheadOverlayToAbsoluteTime(double absoluteSeconds, bool repaintOverlay = false);
+    void syncFixedPlayhead();
+
+private:
 
 private:
     void updateScrollBars();
-    void drawTimeRuler(juce::Graphics& g);
-    void drawGridLines(juce::Graphics& g);
-    void drawPlacementClips(juce::Graphics& g,
-                            const ArrangementRenderModelCache::RenderModel& model,
-                            const ViewMapper& mapper);
-
-    /** Request render model rebuild from current state. */
-    void requestRenderModelUpdate();
-    void refreshRenderModel();
+    void requestVisualRefresh();
+    void refreshVisualState();
     void updateMoveDragPreview(const juce::MouseEvent& e);
     void clearMoveDragPreview();
+    void drawTransientOverlay(juce::Graphics& g);
+    void drawImportDropPreview(juce::Graphics& g);
+    void drawMoveDragOverlay(juce::Graphics& g);
 
     OpenTuneAudioProcessor& processor_;
     juce::ListenerList<Listener> listeners_;
@@ -260,14 +236,11 @@ private:
 
     // ---- Timeline rendering pipeline ----
     TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
-    ArrangementRenderModelCache renderModelCache_;
     WaveformMipmapCache waveformMipmapCache_;
-    ArrangementCachedSurface contentSurface_;
-    ArrangementCachedSurface rulerSurface_;
-    juce::Image contentSurfaceImage_;
-    juce::Image rulerSurfaceImage_;
-    juce::Rectangle<int> contentSurfaceBounds_;
-    juce::Rectangle<int> rulerSurfaceBounds_;
+
+    // New: Pattern and content tile caches for infinite timeline
+    mutable TimelinePatternCache patternCache_;
+    mutable TimelineContentCache contentCache_;
 
     double lastContextBpm_{ 0.0 };
     int lastContextTimeSigNum_{ 0 };
@@ -289,11 +262,6 @@ private:
     juce::Colour playheadColour_{UIColors::playhead};
     int verticalScrollOffset_{0};
     int visibleTrackCount_{2};  // synced from TrackPanel via PluginEditor
-    double lastAuthoritativePlayheadTime_{0.0};
-    double presentationClockAnchorTime_{0.0};
-    double presentationClockAnchorTimestampSec_{0.0};
-    double presentationClockLastObservationTimestampSec_{0.0};
-    bool presentationClockPrimed_{false};
 
     struct ContentMetrics {
         uint64_t revision = 0;
@@ -301,34 +269,25 @@ private:
         int totalContentWidthPx = 0;
     };
 
-    struct RenderBandState {
-        double startSeconds = 0.0;
-        double endSeconds = 0.0;
-        int startContentX = 0;
-        int widthPx = 0;
-        int heightPx = 0;
-        uint64_t revision = 0;
-        bool valid = false;
-    };
-
-    struct RulerSurfaceState {
-        double startSeconds = 0.0;
-        double endSeconds = 0.0;
-        double pixelsPerSecond = 0.0;
-        double bpm = 0.0;
-        int startContentX = 0;
-        int widthPx = 0;
-        int timeSigNum = 0;
-        int timeSigDenom = 0;
-        TimeUnit timeUnit = TimeUnit::Seconds;
-        ThemeId themeId = ThemeId::DarkBlueGrey;
-        bool valid = false;
-    };
-
     ContentMetrics contentMetrics_;
-    RenderBandState renderBand_;
-    RulerSurfaceState rulerSurfaceState_;
-    
+
+    // Pre-built pattern tiles for paint consumption
+    struct PreparedPatternTile {
+        PatternTileKey key;
+        const juce::Image* image = nullptr;
+    };
+    std::vector<PreparedPatternTile> preparedPatternTiles_;
+    void prepareVisiblePatternTiles();
+
+    // Pre-built content tiles for paint consumption (P0-1)
+    struct PreparedContentTile {
+        ContentTileKey key;
+        const juce::Image* image = nullptr;
+    };
+    std::vector<PreparedContentTile> preparedContentTiles_;
+    void prepareVisibleContentTiles();
+    uint64_t waveformBuildGeneration_ = 0;  // tracks mipmap build progress for revision
+
     // Smooth scrolling
     // 用户是否手动调整过缩放（用于避免自动缩放覆盖用户设置）
     bool userHasManuallyZoomed_ = false;
@@ -372,20 +331,26 @@ private:
     void selectAllPlacementsInTrack(int trackId);
 
     // === 多选拖拽状态 ===
-    struct DragStartState {
-        int trackId;
-        uint64_t placementId;
-        double startSeconds;
+    struct MoveDragStartState {
+        int trackId = -1;
+        uint64_t placementId = 0;
+        double startSeconds = 0.0;
+        double durationSeconds = 0.0;
+        juce::String name;
+        juce::Colour colour;
     };
-    std::vector<DragStartState> multiDragStartStates_;
-    ArrangementRenderModelCache::MoveDragPreviewState moveDragPreview_;
-    uint64_t nextMoveDragPreviewRevision_{ 1 };
+    std::vector<MoveDragStartState> moveDragStartStates_;
+
+    std::optional<std::vector<MoveDragStartState>> resolveMoveDragParticipants(const HitTestResult& hit) const;
+    void beginMoveDrag(const HitTestResult& hit, juce::Point<int> mousePos);
+    void finishMoveDrag(const juce::MouseEvent& e);
 
     bool isDraggingPlacement_{false};
     bool isAdjustingGain_{false};
     bool isDraggingPlayhead_{false};
     bool isPanning_{false};
     juce::Point<int> dragStartPos_;
+    juce::Point<int> dragCurrentPos_;
     juce::Point<int> lastMousePos_;
     double dragStartPlacementSeconds_{0.0};
     float dragStartPlacementGain_{1.0f};
@@ -399,8 +364,8 @@ private:
     double fadeStartOutDuration_{0.0};
     uint64_t dragOperationPlacementId_{0};
 
-    // 高性能播放头覆盖层（VBlank同步，独立于主组件重绘）
-    PlayheadOverlayComponent playheadOverlay_;
+    // 固定屏幕空间播放头（VBlank同步，独立于主组件重绘）
+    FixedPlayheadComponent fixedPlayhead_;
 
     // 滚动跟随独立 VBlank 附件（仅负责滚动，不影响 Overlay 的 VBlank）
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;

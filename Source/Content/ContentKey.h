@@ -9,7 +9,8 @@ enum class DomainKind : uint8_t
 {
     ARAAudioModification,
     StandaloneClip,
-    RegularVST3Capture
+    RegularVST3Capture,
+    StandaloneArrangement
 };
 
 // Identifies one domain content root. It does not carry store pointers,

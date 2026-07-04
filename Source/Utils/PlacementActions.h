@@ -92,16 +92,17 @@ private:
 class MultiMovePlacementAction : public UndoAction {
 public:
     struct Entry {
-        int trackId;
-        uint64_t placementId;
-        double oldStartSeconds;
-        double newStartSeconds;
+        int sourceTrackId = -1;
+        int targetTrackId = -1;
+        uint64_t placementId = 0;
+        double oldStartSeconds = 0.0;
+        double newStartSeconds = 0.0;
     };
 
     MultiMovePlacementAction(OpenTuneAudioProcessor& processor, std::vector<Entry> entries);
     void undo() override;
     void redo() override;
-    juce::String getDescription() const override { return TRANS("微移片段"); }
+    juce::String getDescription() const override { return TRANS("移动片段"); }
 
 private:
     OpenTuneAudioProcessor& processor_;

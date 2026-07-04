@@ -13,6 +13,15 @@ struct TimelineViewportCamera {
 
     double visibleStartSeconds = 0.0;  // 可见窗口的绝对起始时间（秒）
     double pixelsPerSecond = kDefaultPixelsPerSecond;    // 缩放级别（像素/秒）
+
+    bool operator==(const TimelineViewportCamera& other) const noexcept {
+        return visibleStartSeconds == other.visibleStartSeconds
+            && pixelsPerSecond == other.pixelsPerSecond;
+    }
+
+    bool operator!=(const TimelineViewportCamera& other) const noexcept {
+        return !(*this == other);
+    }
 };
 
 } // namespace OpenTune

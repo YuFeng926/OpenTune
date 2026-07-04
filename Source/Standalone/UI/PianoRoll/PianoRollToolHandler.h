@@ -21,8 +21,64 @@
 #include <vector>
 #include <functional>
 #include <cstdint>
+#include <optional>
 
 namespace OpenTune {
+
+// ============================================================================
+// ContentEditRange — 编辑工具显式范围语义
+//
+// 替代 ContentTimelineProjection::clampContentTime 的隐式裁剪。
+// mouseDown/preview 路径用 contains(t) 验证输入是否落在可编辑区间；
+// commit 路径用 normalizeForCommit() 把 draft 范围规整为合法提交值
+// （方向、最小持续时间、非负起点）。
+// ============================================================================
+struct ContentEditRange
+{
+    double startSeconds = 0.0;
+    double endSeconds = 0.0;
+    double minDurationSeconds = 0.0;
+
+    static ContentEditRange fromProjection(const ContentTimelineProjection& projection,
+                                            double minDurationSeconds = 0.0) noexcept
+    {
+        ContentEditRange range;
+        if (projection.isValid()) {
+            range.startSeconds = 0.0;
+            range.endSeconds = projection.contentDurationSeconds;
+        }
+        range.minDurationSeconds = minDurationSeconds;
+        return range;
+    }
+
+    bool contains(double t) const noexcept
+    {
+        return endSeconds > startSeconds && t >= startSeconds && t <= endSeconds;
+    }
+
+    void normalizeForCommit(double& startTime, double& endTime) const noexcept
+    {
+        if (startTime > endTime) {
+            std::swap(startTime, endTime);
+        }
+        if (startTime < startSeconds) {
+            startTime = startSeconds;
+        }
+        if (endTime > endSeconds) {
+            endTime = endSeconds;
+        }
+        if (endTime - startTime < minDurationSeconds) {
+            endTime = startTime + minDurationSeconds;
+            if (endTime > endSeconds) {
+                endTime = endSeconds;
+                startTime = endTime - minDurationSeconds;
+                if (startTime < startSeconds) {
+                    startTime = startSeconds;
+                }
+            }
+        }
+    }
+};
 
 class PianoRollToolHandler
 {
@@ -61,8 +117,6 @@ public:
 
         std::function<int()> getPianoKeyWidth;
         std::function<ContentTimelineProjection()> getContentProjection;
-        std::function<double(double)> projectTimelineTimeToContent;
-        std::function<double(double)> projectContentTimeToTimeline;
         std::function<juce::Rectangle<int>(const std::vector<Note>&)> getNotesBounds;
         std::function<juce::Rectangle<int>()> getSelectionBounds;
         std::function<juce::Rectangle<int>()> getHandDrawPreviewBounds;
@@ -234,7 +288,10 @@ private:
     // helper instead of computing source time directly, otherwise non-identity
     // TimeGrid causes pixel→data shift (data layer stores source time per
     // cross-cutting/coordinate-system-source-time-display-output.md).
-    double pixelXToSourceTime(int pixelX) const;
+    //
+    // Returns std::nullopt when no valid ContentTimelineProjection exists —
+    // no content edit target, no legal edit.
+    std::optional<double> pixelXToSourceTime(int pixelX) const;
 
     Context ctx_;
     ToolId currentTool_ = ToolId::Select;

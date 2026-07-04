@@ -168,29 +168,39 @@ MultiMovePlacementAction::MultiMovePlacementAction(OpenTuneAudioProcessor& proce
 
 void MultiMovePlacementAction::undo()
 {
-    auto* arrangement = processor_.getStandaloneArrangement();
-    if (arrangement == nullptr) {
-        return;
-    }
-
     for (const auto& entry : entries_) {
-        arrangement->setPlacementTimelineStartSeconds(entry.trackId,
-                                                      entry.placementId,
-                                                      entry.oldStartSeconds);
+        if (entry.sourceTrackId == entry.targetTrackId) {
+            auto* arrangement = processor_.getStandaloneArrangement();
+            if (arrangement != nullptr) {
+                arrangement->setPlacementTimelineStartSeconds(entry.targetTrackId,
+                                                              entry.placementId,
+                                                              entry.oldStartSeconds);
+            }
+        } else {
+            processor_.movePlacementToTrack(entry.targetTrackId,
+                                            entry.sourceTrackId,
+                                            entry.placementId,
+                                            entry.oldStartSeconds);
+        }
     }
 }
 
 void MultiMovePlacementAction::redo()
 {
-    auto* arrangement = processor_.getStandaloneArrangement();
-    if (arrangement == nullptr) {
-        return;
-    }
-
     for (const auto& entry : entries_) {
-        arrangement->setPlacementTimelineStartSeconds(entry.trackId,
-                                                      entry.placementId,
-                                                      entry.newStartSeconds);
+        if (entry.sourceTrackId == entry.targetTrackId) {
+            auto* arrangement = processor_.getStandaloneArrangement();
+            if (arrangement != nullptr) {
+                arrangement->setPlacementTimelineStartSeconds(entry.targetTrackId,
+                                                              entry.placementId,
+                                                              entry.newStartSeconds);
+            }
+        } else {
+            processor_.movePlacementToTrack(entry.sourceTrackId,
+                                            entry.targetTrackId,
+                                            entry.placementId,
+                                            entry.newStartSeconds);
+        }
     }
 }
 

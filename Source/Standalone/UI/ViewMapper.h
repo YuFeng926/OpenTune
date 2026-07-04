@@ -21,17 +21,7 @@ struct ViewMapper {
     int timeToX(double absoluteSeconds) const {
         return contentStartX + static_cast<int>(std::llround((absoluteSeconds - visibleStartSeconds) * pixelsPerSecond));
     }
-    
-    // Returns parent-component X for an absolute timeline position with a projected scroll offset.
-    int timeToXWithScroll(double absoluteSeconds, int projectedScrollOffset) const {
-        return contentStartX + static_cast<int>(std::llround(absoluteSeconds * pixelsPerSecond)) - projectedScrollOffset;
-    }
-    
-    // Returns absolute content pixel X (without contentStartX offset).
-    int timeToContentX(double absoluteSeconds) const {
-        return static_cast<int>(std::llround(absoluteSeconds * pixelsPerSecond));
-    }
-    
+
     // Returns absolute timeline seconds for a parent-component X.
     double xToTime(int x) const {
         return visibleStartSeconds + (x - contentStartX) / pixelsPerSecond;
@@ -62,20 +52,7 @@ struct ViewMapper {
         return midiToFreq(yToMidi(y));
     }
     
-    // Band mapper for render strips
-    ViewMapper withBand(int bandStartContentX, int bandWidth, int bandHeight) const {
-        const double bandVisibleStartSeconds = static_cast<double>(bandStartContentX) / pixelsPerSecond;
-        ViewMapper vm;
-        vm.visibleStartSeconds = bandVisibleStartSeconds;
-        vm.pixelsPerSecond = pixelsPerSecond;
-        vm.contentStartX = 0;
-        vm.contentWidth = bandWidth;
-        vm.contentHeight = bandHeight;
-        vm.pixelsPerSemitone = pixelsPerSemitone;
-        vm.verticalScrollOffset = verticalScrollOffset;
-        vm.maxMidi = maxMidi;
-        return vm;
-    }
+
 };
 
 } // namespace OpenTune

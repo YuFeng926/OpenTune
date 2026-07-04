@@ -82,7 +82,7 @@ struct VisibleTimeWindow {
     }
 };
 
-VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::SurfaceRenderContext& ctx,
+VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContext& ctx,
                                            const PianoRollRenderer::ContentRenderItem& item)
 {
     VisibleTimeWindow window;
@@ -119,7 +119,7 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::SurfaceRende
 // f0Timeline frame timestamp, WaveformMipmap peak) into screen X via the
 // item's projection. Identity TimeGrid 鈫?degenerates to existing pipeline.
 inline int sourceTimeToScreenX(double sourceTime,
-                                const PianoRollRenderer::SurfaceRenderContext& ctx,
+                                const PianoRollRenderer::RenderContext& ctx,
                                 const PianoRollRenderer::ContentRenderItem& item)
 {
     double outputTime = sourceTime;
@@ -132,69 +132,8 @@ inline int sourceTimeToScreenX(double sourceTime,
 
 } // namespace
 
-void PianoRollRenderer::drawLanes(juce::Graphics& g, const SurfaceRenderContext& ctx)
-{
-    const int w = ctx.width;
-    const int h = ctx.height;
-    const auto themeId = UIColors::currentThemeId();
-    const bool isAurora = themeId == ThemeId::Aurora;
-    const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
-    const bool isOverdose = themeId == ThemeId::Overdose;
-    static constexpr int kScaleTypeChromatic = 3;
-    const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);
-
-    for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
-    {
-        float y = ctx.coords.midiToY(static_cast<float>(midi));
-        float laneH = ctx.pixelsPerSemitone;
-
-        if (y < -laneH || y > h) continue;
-
-        int noteInOctave = midi % 12;
-        bool isBlackKey = (noteInOctave == 1 || noteInOctave == 3 || noteInOctave == 6 ||
-                          noteInOctave == 8 || noteInOctave == 10);
-
-        if (ctx.showLanes)
-        {
-            if (isAurora)
-            {
-                const auto laneColour = isBlackKey
-                    ? UIColors::glassSurface.withAlpha(0.075f)
-                    : UIColors::pianoRollLane.withAlpha(0.024f);
-                g.setColour(laneColour);
-                g.fillRect(static_cast<float>(ctx.pianoKeyWidth), y, static_cast<float>(w - ctx.pianoKeyWidth), laneH);
-            }
-            else if (isBlackKey)
-            {
-                g.setColour((isBlueBreeze || isOverdose)
-                    ? UIColors::pianoRollLane.withAlpha(0.16f)
-                    : UIColors::backgroundDark.withAlpha(0.3f));
-                g.fillRect(static_cast<float>(ctx.pianoKeyWidth), y, static_cast<float>(w - ctx.pianoKeyWidth), laneH);
-            }
-
-            // Scale-aware lane highlighting: tint in-scale lanes with scaleHighlight color
-            if (ctx.scaleType != kScaleTypeChromatic)
-            {
-                const int pitchClass = ((midi % 12) + 12) % 12;
-                if (inScalePitchClass[static_cast<std::size_t>(pitchClass)])
-                {
-                    const float scaleAlpha = isAurora ? 0.060f : ((isBlueBreeze || isOverdose) ? 0.14f : 0.65f);
-                    g.setColour(UIColors::scaleHighlight.withMultipliedAlpha(scaleAlpha));
-                    g.fillRect(static_cast<float>(ctx.pianoKeyWidth), y, static_cast<float>(w - ctx.pianoKeyWidth), laneH);
-                }
-            }
-        }
-
-        const auto rowLineColour = isAurora
-            ? UIColors::pianoRollGrid.withAlpha(0.022f)
-            : ((isBlueBreeze || isOverdose) ? UIColors::pianoRollGrid.withAlpha(0.030f) : UIColors::panelBorder.withAlpha(0.15f));
-        g.setColour(rowLineColour);
-        g.drawLine(static_cast<float>(ctx.pianoKeyWidth), y, static_cast<float>(w), y, (isAurora || isBlueBreeze || isOverdose) ? 0.55f : 1.0f);
-    }
-}
-
 void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
-                                               const SurfaceRenderContext& ctx,
+                                               const RenderContext& ctx,
                                                const ContentRenderItem& item)
 {
     if (!ctx.showUnvoicedFrames || !item.f0LOD || item.f0Timeline.isEmpty())
@@ -242,7 +181,7 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
 }
 
 void PianoRollRenderer::drawWaveform(juce::Graphics& g,
-                                     const SurfaceRenderContext& ctx,
+                                     const RenderContext& ctx,
                                      const ContentRenderItem& item)
 {
     if (item.audioBuffer == nullptr || item.waveformSnapshot.peaks.empty())
@@ -364,206 +303,10 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     }
 }
 
-void PianoRollRenderer::drawTimeRuler(juce::Graphics& g, const SurfaceRenderContext& ctx)
-{
-    auto rulerArea = juce::Rectangle<int>(0, 0, ctx.width, ctx.rulerHeight);
-
-    const int rulerTop = rulerArea.getY();
-    const int rulerBottom = rulerArea.getBottom();
-    const auto themeId = UIColors::currentThemeId();
-    const bool isAurora = themeId == ThemeId::Aurora;
-    const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
-    const bool isOverdose = themeId == ThemeId::Overdose;
-
-    g.setColour(isAurora
-        ? UIColors::gridLine.withAlpha(0.060f)
-        : ((isBlueBreeze || isOverdose) ? UIColors::pianoRollGrid.withAlpha(0.040f) : UIColors::panelBorder));
-    g.drawLine(0.0f, static_cast<float>(rulerBottom), static_cast<float>(ctx.width), static_cast<float>(rulerBottom), (isAurora || isBlueBreeze || isOverdose) ? 0.7f : 1.0f);
-
-    if (ctx.timeUnit == PianoRollTimeUnit::Bars)
-    {
-        double bpm = ctx.bpm;
-        if (bpm <= 0.0) bpm = 120.0;
-
-        double pixelsPerSecond = ctx.pixelsPerSecond;
-        double secondsPerBeat = 60.0 / bpm;
-        double pixelsPerBeat = pixelsPerSecond * secondsPerBeat;
-
-        double beatInterval = selectBeatInterval(pixelsPerBeat);
-
-        double startTime = ctx.coords.xToTime(0);
-        double endTime = ctx.coords.xToTime(ctx.width);
-
-        int64_t startBeat = static_cast<int64_t>(startTime / secondsPerBeat);
-        if (startBeat < 0) startBeat = 0;
-        startBeat = (startBeat / static_cast<int64_t>(beatInterval)) * static_cast<int64_t>(beatInterval);
-
-        int64_t endBeat = static_cast<int64_t>(endTime / secondsPerBeat) + 1;
-
-        g.setFont(UIColors::getUIFont(13.0f));
-
-        for (int64_t beat = startBeat; beat <= endBeat; beat += static_cast<int64_t>(beatInterval))
-        {
-            double time = beat * secondsPerBeat;
-            int pixelX = ctx.coords.timeToX(time);
-
-            g.setColour(isAurora
-                ? UIColors::gridLine.withAlpha(0.080f)
-                : ((isBlueBreeze || isOverdose) ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine));
-            g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerBottom - 10),
-                       static_cast<float>(pixelX), static_cast<float>(rulerBottom), (isAurora || isBlueBreeze || isOverdose) ? 0.7f : 1.0f);
-
-            int64_t bar = (beat / 4) + 1;
-            int64_t beatInBar = (beat % 4) + 1;
-
-            juce::String label;
-            if (beatInterval >= 4.0)
-                label = juce::String(bar);
-            else
-                label = juce::String::formatted("%lld.%lld", (long long)bar, (long long)beatInBar);
-
-        g.setColour(isAurora
-            ? UIColors::textSecondary.withMultipliedAlpha(0.48f)
-            : ((isBlueBreeze || isOverdose) ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary));
-        g.drawText(label, pixelX - 20, rulerTop + 2, 40, ctx.rulerHeight - 12, juce::Justification::centred);
-        }
-    } else {
-        double pixelsPerSecond = ctx.pixelsPerSecond;
-
-        double markerInterval = selectMarkerInterval(pixelsPerSecond);
-
-        double startTime = ctx.coords.xToTime(0);
-        if (startTime < 0.0) startTime = 0.0;
-        startTime = std::floor(startTime / markerInterval) * markerInterval;
-
-        double endTime = ctx.coords.xToTime(ctx.width);
-
-        g.setFont(UIColors::getUIFont(13.0f));
-        for (double time = startTime; time < endTime; time += markerInterval)
-        {
-            int pixelX = ctx.coords.timeToX(time);
-
-            g.setColour(isAurora
-                ? UIColors::gridLine.withAlpha(0.080f)
-                : ((isBlueBreeze || isOverdose) ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine));
-            g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerBottom - 10),
-                       static_cast<float>(pixelX), static_cast<float>(rulerBottom), (isAurora || isBlueBreeze || isOverdose) ? 0.7f : 1.0f);
-
-            // `time` here is absolute host/arrangement time; the component's
-            // xToTime callback applies the current timeline view-domain origin.
-            const int totalSecs = static_cast<int>(time);
-            const int mins = totalSecs / 60;
-            const int secs = totalSecs % 60;
-            juce::String timeStr = juce::String::formatted("%d:%02d", mins, secs);
-
-            g.setColour(isAurora
-                ? UIColors::textSecondary.withMultipliedAlpha(0.48f)
-                : ((isBlueBreeze || isOverdose) ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary));
-            g.drawText(timeStr, pixelX - 20, rulerTop + 2, 40, ctx.rulerHeight - 12, juce::Justification::centred);
-        }
-    }
-}
-
-void PianoRollRenderer::drawGridLines(juce::Graphics& g, const SurfaceRenderContext& ctx)
-{
-    const auto themeId = UIColors::currentThemeId();
-
-    if (ctx.timeUnit == PianoRollTimeUnit::Bars)
-    {
-        double bpm = ctx.bpm;
-        if (bpm <= 0.0) bpm = 120.0;
-
-        double pixelsPerSecond = ctx.pixelsPerSecond;
-        double secondsPerBeat = 60.0 / bpm;
-        double pixelsPerBeat = pixelsPerSecond * secondsPerBeat;
-
-        double beatInterval = selectBeatInterval(pixelsPerBeat);
-
-        double startTime = ctx.coords.xToTime(0);
-        double endTime = ctx.coords.xToTime(ctx.width);
-
-        int64_t startBeat = static_cast<int64_t>(startTime / secondsPerBeat);
-        if (startBeat < 0) startBeat = 0;
-        startBeat = (startBeat / static_cast<int64_t>(beatInterval)) * static_cast<int64_t>(beatInterval);
-
-        int64_t endBeat = static_cast<int64_t>(endTime / secondsPerBeat) + 1;
-
-        if (endBeat - startBeat > 2000) endBeat = startBeat + 2000;
-
-        for (int64_t beat = startBeat; beat <= endBeat; beat += static_cast<int64_t>(beatInterval))
-        {
-            double time = beat * secondsPerBeat;
-            int pixelX = ctx.coords.timeToX(time);
-
-            if (pixelX < ctx.pianoKeyWidth - 2 || pixelX > ctx.width + 2) continue;
-
-            bool isMeasure = false;
-            if (beatInterval >= 4.0) {
-                isMeasure = true;
-            } else {
-                isMeasure = (beat % 4) == 0;
-            }
-
-            if (themeId == ThemeId::Aurora)
-            {
-                const auto colour = isMeasure
-                    ? UIColors::pianoRollGrid.interpolatedWith(UIColors::textSecondary, 0.14f).withAlpha(0.064f)
-                    : UIColors::pianoRollGrid.withAlpha(0.022f);
-                g.setColour(colour);
-                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(ctx.height));
-            }
-            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-            {
-                g.setColour(UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f));
-                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(ctx.height));
-            }
-            else if (themeId == ThemeId::DarkBlueGrey)
-            {
-                g.setColour(UIColors::panelBorder.withAlpha(0.12f));
-                g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(ctx.height));
-            } else {
-                if (isMeasure) {
-                    g.setColour(UIColors::panelBorder.brighter(0.3f));
-                    g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(ctx.height));
-                } else {
-                    g.setColour(UIColors::panelBorder.withAlpha(0.25f));
-                    g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(ctx.height));
-                }
-            }
-        }
-    } else {
-        double pixelsPerSecond = ctx.pixelsPerSecond;
-
-        double markerInterval = selectMarkerInterval(pixelsPerSecond);
-
-        double startTime = ctx.coords.xToTime(0);
-        if (startTime < 0.0) startTime = 0.0;
-        startTime = std::floor(startTime / markerInterval) * markerInterval;
-
-        double endTime = ctx.coords.xToTime(ctx.width);
-
-        if (markerInterval < 0.001) markerInterval = 1.0;
-
-        for (double time = startTime; time < endTime + markerInterval; time += markerInterval)
-        {
-            int pixelX = ctx.coords.timeToX(time);
-
-            if (pixelX < ctx.pianoKeyWidth - 2 || pixelX > ctx.width + 2) continue;
-            if (themeId == ThemeId::Aurora)
-                g.setColour(UIColors::pianoRollGrid.withAlpha(0.016f));
-            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-                g.setColour(UIColors::pianoRollGrid.withAlpha(0.022f));
-            else
-                g.setColour(themeId == ThemeId::DarkBlueGrey ? UIColors::panelBorder.withAlpha(0.12f) : UIColors::panelBorder.withAlpha(0.25f));
-            g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(ctx.height));
-        }
-    }
-}
-
 void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ctx)
 {
-    const int height = ctx.surface.height;
-    const int w = ctx.surface.pianoKeyWidth;
+    const int height = ctx.height;
+    const int w = ctx.pianoKeyWidth;
     const float blackKeyWidthRatio = 0.6f;
     const float blackKeyW = w * blackKeyWidthRatio;
     static constexpr int kScaleTypeChromatic = 3;
@@ -597,17 +340,17 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     static constexpr float kShowCOnlyMinPPS = 8.0f;
 
     // Build scale pitch-class membership using shared helper (supports all 8 scale types)
-    const auto inScalePitchClass = buildInScalePitchClasses(ctx.surface.scaleType, ctx.surface.scaleRootNote);
+    const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);
 
     // Compute effective note name display mode (zoom-adaptive downgrade)
-    int effectiveNoteNameMode = static_cast<int>(ctx.surface.noteNameMode); // 0=ShowAll, 1=COnly, 2=Hide
-    if (effectiveNoteNameMode == 0 && ctx.surface.pixelsPerSemitone < kShowAllLabelsMinPPS)
+    int effectiveNoteNameMode = static_cast<int>(ctx.noteNameMode); // 0=ShowAll, 1=COnly, 2=Hide
+    if (effectiveNoteNameMode == 0 && ctx.pixelsPerSemitone < kShowAllLabelsMinPPS)
         effectiveNoteNameMode = 1; // downgrade to C-only
-    if (effectiveNoteNameMode <= 1 && ctx.surface.pixelsPerSemitone < kShowCOnlyMinPPS)
+    if (effectiveNoteNameMode <= 1 && ctx.pixelsPerSemitone < kShowCOnlyMinPPS)
         effectiveNoteNameMode = 2; // downgrade to hidden
 
     // Accidental preference: sharp or flat based on root note
-    const bool useFlats = (ctx.surface.scaleType != kScaleTypeChromatic) ? kUseFlatsByRoot[juce::jlimit(0, 11, ctx.surface.scaleRootNote)] : false;
+    const bool useFlats = (ctx.scaleType != kScaleTypeChromatic) ? kUseFlatsByRoot[juce::jlimit(0, 11, ctx.scaleRootNote)] : false;
 
     const auto isMidiInCurrentScale = [&inScalePitchClass](int midiNote) noexcept {
         const int pitchClass = ((midiNote % 12) + 12) % 12;
@@ -627,11 +370,11 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     juce::Colour keyPressedGlowColor = isOverdose ? juce::Colour { Overdose::Colors::KeyPressedGlow }
                                     : (isBlueBreeze ? juce::Colour { BlueBreeze::Colors::KeyPressedGlow } : juce::Colour(0x500078D7));
 
-    for (int midi = static_cast<int>(ctx.surface.minMidi); midi <= static_cast<int>(ctx.surface.maxMidi); ++midi)
+    for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.surface.coords.midiToY(static_cast<float>(drawMidi));
-        float h = ctx.surface.pixelsPerSemitone;
+        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
+        float h = ctx.pixelsPerSemitone;
 
         if (y < -50.0f || y > height + 50.0f) continue;
 
@@ -663,7 +406,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             g.fillRect(keyRect);
 
             // Scale highlight overlay on in-scale white keys
-            if (inScale && ctx.surface.scaleType != kScaleTypeChromatic)
+            if (inScale && ctx.scaleType != kScaleTypeChromatic)
             {
                 g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
                 g.fillRect(keyRect);
@@ -732,7 +475,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             g.fillRect(extensionRect);
 
             // Scale highlight overlay on in-scale black key extension area
-            if (inScale && ctx.surface.scaleType != kScaleTypeChromatic)
+            if (inScale && ctx.scaleType != kScaleTypeChromatic)
             {
                 g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.18f) : UIColors::scaleHighlight);
                 g.fillRect(extensionRect);
@@ -743,11 +486,11 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
         }
     }
 
-    for (int midi = static_cast<int>(ctx.surface.minMidi); midi <= static_cast<int>(ctx.surface.maxMidi); ++midi)
+    for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.surface.coords.midiToY(static_cast<float>(drawMidi));
-        float h = ctx.surface.pixelsPerSemitone;
+        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
+        float h = ctx.pixelsPerSemitone;
         if (y < -50.0f || y > height + 50.0f) continue;
 
         int noteInOctave = drawMidi % 12;
@@ -758,11 +501,11 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
         }
     }
 
-    for (int midi = static_cast<int>(ctx.surface.minMidi); midi <= static_cast<int>(ctx.surface.maxMidi); ++midi)
+    for (int midi = static_cast<int>(ctx.minMidi); midi <= static_cast<int>(ctx.maxMidi); ++midi)
     {
         int drawMidi = midi;
-        float y = ctx.surface.coords.midiToY(static_cast<float>(drawMidi));
-        float h = ctx.surface.pixelsPerSemitone;
+        float y = ctx.coords.midiToY(static_cast<float>(drawMidi));
+        float h = ctx.pixelsPerSemitone;
 
         if (y < -50.0f || y > height + 50.0f) continue;
 
@@ -840,7 +583,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             }
 
             // Scale highlight overlay on in-scale black keys (reduced alpha)
-            if (inScale && ctx.surface.scaleType != kScaleTypeChromatic)
+            if (inScale && ctx.scaleType != kScaleTypeChromatic)
             {
                 g.setColour(isLightTheme ? UIColors::scaleHighlight.withMultipliedAlpha(0.22f)
                                          : UIColors::scaleHighlight.withMultipliedAlpha(0.5f));
@@ -887,7 +630,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
 }
 
 void PianoRollRenderer::drawNotes(juce::Graphics& g,
-                                  const SurfaceRenderContext& ctx,
+                                  const RenderContext& ctx,
                                   const ContentRenderItem& item)
 {
     const auto& notes = item.displayNotes;
@@ -1015,7 +758,7 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
     if (notes.empty() || selectedNoteIndices.empty())
         return;
 
-    const auto visibleWindow = computeVisibleTimeWindow(ctx.surface, item);
+    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
     if (!visibleWindow.isValid())
         return;
 
@@ -1032,12 +775,12 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
         if (adjustedPitch <= 0.0f)
             continue;
 
-        float midi = ctx.surface.coords.freqToMidi(adjustedPitch);
-        float y = ctx.surface.coords.midiToY(midi) - (ctx.surface.pixelsPerSemitone * 0.5f);
-        float h = ctx.surface.pixelsPerSemitone;
+        float midi = ctx.coords.freqToMidi(adjustedPitch);
+        float y = ctx.coords.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
+        float h = ctx.pixelsPerSemitone;
 
-        int x1 = sourceTimeToScreenX(note.startTime, ctx.surface, item);
-        int x2 = sourceTimeToScreenX(note.endTime, ctx.surface, item);
+        int x1 = sourceTimeToScreenX(note.startTime, ctx, item);
+        int x2 = sourceTimeToScreenX(note.endTime, ctx, item);
         if (x2 <= visibleWindow.viewportStartX || x1 >= visibleWindow.viewportEndX)
             continue;
 
@@ -1075,15 +818,15 @@ void PianoRollRenderer::drawGhostNotes(juce::Graphics& g, const RenderContext& c
         const double timelineStart = overlay.sourceProjection.projectContentTimeToTimeline(note.startTime);
         const double timelineEnd = overlay.sourceProjection.projectContentTimeToTimeline(note.endTime);
 
-        const int x1 = ctx.surface.coords.timeToX(timelineStart);
-        const int x2 = ctx.surface.coords.timeToX(timelineEnd);
-        if (x2 <= ctx.surface.pianoKeyWidth || x1 >= ctx.surface.width)
+        const int x1 = ctx.coords.timeToX(timelineStart);
+        const int x2 = ctx.coords.timeToX(timelineEnd);
+        if (x2 <= ctx.pianoKeyWidth || x1 >= ctx.width)
             continue;
 
-        const float midi = ctx.surface.coords.freqToMidi(adjustedPitch);
-        const float y = ctx.surface.coords.midiToY(midi) - (ctx.surface.pixelsPerSemitone * 0.5f);
+        const float midi = ctx.coords.freqToMidi(adjustedPitch);
+        const float y = ctx.coords.midiToY(midi) - (ctx.pixelsPerSemitone * 0.5f);
         const float w = std::max(1.0f, static_cast<float>(x2 - x1));
-        const float h = ctx.surface.pixelsPerSemitone;
+        const float h = ctx.pixelsPerSemitone;
         const auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
         g.setColour(fillColour);
@@ -1115,14 +858,14 @@ void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext&
         return;
 
     static constexpr float kDashLengths[] = { 2.0f, 4.0f };
-    const float yTop = ctx.surface.coords.midiToY(ctx.surface.minMidi);
-    const float yBottom = ctx.surface.coords.midiToY(ctx.surface.maxMidi);
+    const float yTop = ctx.coords.midiToY(ctx.minMidi);
+    const float yBottom = ctx.coords.midiToY(ctx.maxMidi);
 
     for (const auto& anchor : overlay.ghostAnchors)
     {
         const double timelineTime = overlay.sourceProjection.projectContentTimeToTimeline(anchor.sourceSeconds);
-        const int x = ctx.surface.coords.timeToX(timelineTime);
-        if (x < ctx.surface.pianoKeyWidth || x >= ctx.surface.width)
+        const int x = ctx.coords.timeToX(timelineTime);
+        if (x < ctx.pianoKeyWidth || x >= ctx.width)
             continue;
 
         const float alpha = overlay.ghostOpacity * std::min(1.0f, anchor.strength);
@@ -1137,7 +880,7 @@ void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext&
 // ============================================================================
 // TimeGrid Anchors (cached slot — neutral lines, no interaction)
 // ============================================================================
-void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const SurfaceRenderContext& ctx)
+void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const RenderContext& ctx)
 {
     if (ctx.timeGridSnapshot == nullptr) return;
 
@@ -1168,8 +911,8 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
     if (ctx.timeGridSnapshot == nullptr) return;
     if (!ctx.isTimeView()) return;
 
-    const int contentTop    = ctx.surface.rulerHeight;
-    const int contentBottom = ctx.surface.height;
+    const int contentTop    = ctx.rulerHeight;
+    const int contentBottom = ctx.height;
     if (contentBottom <= contentTop) return;
 
     auto colorForKind = [](HandleKind k) -> juce::Colour {
@@ -1194,9 +937,9 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
         const bool isAdditional = std::find(ctx.additionalSelectedHandleIds.begin(), ctx.additionalSelectedHandleIds.end(), h.id) != ctx.additionalSelectedHandleIds.end();
         if (!selected && !hovered && !isAdditional) continue;
 
-        const double timelineTime = ctx.surface.activeProjection.projectContentTimeToTimeline(h.output_seconds);
-        const int x = ctx.surface.coords.timeToX(timelineTime);
-        if (x < ctx.surface.pianoKeyWidth || x >= ctx.surface.width) continue;
+        const double timelineTime = ctx.activeProjection.projectContentTimeToTimeline(h.output_seconds);
+        const int x = ctx.coords.timeToX(timelineTime);
+        if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
 
         juce::Colour col = colorForKind(h.kind);
         if (h.locked) {
@@ -1232,7 +975,7 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
 }
 
 void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
-                                     const SurfaceRenderContext& ctx,
+                                     const RenderContext& ctx,
                                      const ContentRenderItem& item)
 {
     if (item.f0LOD == nullptr || item.f0Timeline.isEmpty())

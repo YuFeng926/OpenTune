@@ -568,16 +568,14 @@ target_sources(OpenTune
         Source/Standalone/UI/PianoRollComponent.h
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.h
-        Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.cpp
-        Source/Standalone/UI/PianoRoll/PianoRollSurfaceCache.h
+
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h
         Source/Standalone/UI/PianoRoll/PianoRollCorrectionWorker.cpp
         Source/Standalone/UI/PianoRoll/PianoRollCorrectionWorker.h
         Source/Standalone/UI/PianoRoll/InteractionState.cpp
         Source/Standalone/UI/PianoRoll/InteractionState.h
-        Source/Standalone/UI/PlayheadOverlayComponent.cpp
-        Source/Standalone/UI/PlayheadOverlayComponent.h
+
         Source/Standalone/UI/ViewMapper.h
         Source/Standalone/UI/MenuBarComponent.cpp
         Source/Standalone/UI/MenuBarComponent.h
@@ -589,11 +587,17 @@ target_sources(OpenTune
         Source/Standalone/UI/TrackPanelComponent.h
         Source/Standalone/UI/ArrangementViewComponent.cpp
         Source/Standalone/UI/ArrangementViewComponent.h
-        Source/Standalone/UI/ArrangementRenderModelCache.cpp
-        Source/Standalone/UI/ArrangementRenderModelCache.h
+
         Source/Standalone/UI/TimelineRenderingDiagnostics.cpp
         Source/Standalone/UI/TimelineRenderingDiagnostics.h
         Source/Standalone/UI/TimelineViewportCamera.h
+        Source/Standalone/UI/TimelineViewportPolicy.cpp
+        Source/Standalone/UI/TimelineViewportPolicy.h
+        Source/Standalone/UI/TimelinePatternCache.cpp
+        Source/Standalone/UI/TimelinePatternCache.h
+        Source/Standalone/UI/TimelineLayerComposer.cpp
+        Source/Standalone/UI/FixedPlayheadComponent.cpp
+        Source/Standalone/UI/FixedPlayheadComponent.h
         Source/Standalone/UI/WaveformMipmap.cpp
         Source/Standalone/UI/WaveformMipmap.h
         Source/Standalone/UI/RippleOverlayComponent.h
@@ -670,6 +674,10 @@ target_sources(OpenTune
         Source/Content/StandaloneContentRepository.cpp
         Source/Content/CaptureSegmentContent.h
         Source/Content/CaptureSegmentContent.cpp
+
+        # Timeline Content Cache
+        Source/TimelineContentCache.cpp
+        Source/TimelineContentCache.h
 
         # Render Layer
         Source/Render/PlaybackReadSource.h
@@ -1346,30 +1354,61 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
     endif()
     add_test(NAME OpenTuneRenderCacheStateMachineTests COMMAND OpenTuneRenderCacheStateMachineTests)
 
-    add_executable(OpenTuneViewMapperTests
-        Tests/TestViewMapper.cpp
+    add_executable(OpenTuneTimelineViewportPolicyTests
+        Tests/TimelineViewportPolicyTests.cpp
+        Source/Standalone/UI/TimelineViewportPolicy.cpp
     )
-    target_compile_features(OpenTuneViewMapperTests PRIVATE cxx_std_17)
-    target_include_directories(OpenTuneViewMapperTests
+    target_compile_features(OpenTuneTimelineViewportPolicyTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneTimelineViewportPolicyTests
         PRIVATE
             ${CMAKE_SOURCE_DIR}/Source
     )
-    target_link_libraries(OpenTuneViewMapperTests
+    if(MSVC)
+        target_compile_options(OpenTuneTimelineViewportPolicyTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneTimelineViewportPolicyTests COMMAND OpenTuneTimelineViewportPolicyTests)
+
+    # Timeline Presentation Tests - Infinite Timeline / Fixed Playhead / Pattern Cache
+    add_executable(OpenTuneTimelinePresentationTests
+        Tests/TimelinePresentationTests.cpp
+        Source/Standalone/UI/TimelineViewportPolicy.cpp
+        Source/Standalone/UI/TimelinePatternCache.cpp
+        Source/Standalone/UI/TimelineLayerComposer.cpp
+        Source/Standalone/UI/FixedPlayheadComponent.cpp
+        Source/TimelineContentCache.cpp
+        Source/Utils/LegacyNoteGenerator.cpp
+        Source/Utils/SimdAccelerator.cpp
+        Source/Utils/AppLogger.cpp
+        Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
+        Source/Utils/TimeGrid.cpp
+        Source/Utils/F0VisualLOD.cpp
+    )
+    target_compile_features(OpenTuneTimelinePresentationTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneTimelinePresentationTests
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/Source
+            ${CMAKE_SOURCE_DIR}/Source/Standalone
+    )
+    target_link_libraries(OpenTuneTimelinePresentationTests
         PRIVATE
             juce::juce_audio_basics
-            juce::juce_core
+            juce::juce_gui_basics
+            juce::juce_graphics
             juce::juce_recommended_config_flags
+            OpenTuneResources
     )
-    target_compile_definitions(OpenTuneViewMapperTests
+    target_compile_definitions(OpenTuneTimelinePresentationTests
         PRIVATE
+            OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
             JUCE_WEB_BROWSER=0
             JUCE_USE_CURL=0
             JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
     )
     if(MSVC)
-        target_compile_options(OpenTuneViewMapperTests PRIVATE /utf-8)
+        target_compile_options(OpenTuneTimelinePresentationTests PRIVATE /utf-8)
     endif()
-    add_test(NAME OpenTuneViewMapperTests COMMAND OpenTuneViewMapperTests)
+    add_test(NAME OpenTuneTimelinePresentationTests COMMAND OpenTuneTimelinePresentationTests)
+
 endif()
 
 # ==============================================================================

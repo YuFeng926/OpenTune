@@ -1129,7 +1129,7 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     const auto sync = resolveCurrentContentSync();
 
     if (!sync.hasPlacements()) {
-        pianoRoll_.clearTimelineViewDomain();
+        // Infinite timeline: no explicit domain needed.
         pianoRoll_.setTimelineContentPlacements({});
         pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
@@ -1166,11 +1166,7 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
                                     nullptr,
                                     static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
         pianoRoll_.setTimelineContentPlacements(sync.placements);
-        if (sync.timelineViewEndSeconds > sync.timelineViewStartSeconds) {
-            pianoRoll_.setTimelineViewDomain(sync.timelineViewStartSeconds, sync.timelineViewEndSeconds);
-        } else {
-            pianoRoll_.clearTimelineViewDomain();
-        }
+        // Infinite timeline: no explicit domain needed.
         return;
     }
 
@@ -1179,11 +1175,9 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
                                 syncBuffer,
                                 static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
     pianoRoll_.setTimelineContentPlacements(sync.placements);
-    if (sync.timelineViewEndSeconds > sync.timelineViewStartSeconds) {
-        pianoRoll_.setTimelineViewDomain(sync.timelineViewStartSeconds, sync.timelineViewEndSeconds);
-    } else {
-        pianoRoll_.clearTimelineViewDomain();
-    }
+    // Infinite timeline: no explicit domain needed.
+    // Timeline view domain is derived from camera + content.
+    juce::ignoreUnused(sync);
     const int rootNote = static_cast<int>(detectedKey.root);
     const int scaleType = OpenTune::scaleToUiScaleType(detectedKey.scale);
 
