@@ -421,6 +421,9 @@ private:
     const TimelineContentPlacement* findEditedPlacement() const noexcept;
     bool hasTimelineContentPlacement() const noexcept;
     ContentTimelineProjection activeContentProjection() const noexcept;
+    double sourceTimeToTimelineTime(double sourceSeconds) const;
+    int  sourceTimeToX(double sourceSeconds) const;
+    double xToSourceTime(int x) const;
 
     PianoRollRenderer::RenderContext buildRenderContext() const
     {

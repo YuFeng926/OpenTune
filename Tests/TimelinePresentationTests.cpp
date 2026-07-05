@@ -14,6 +14,9 @@
 #include "../Source/Standalone/UI/ViewMapper.h"
 #include "../Source/StandaloneArrangement.h"
 
+#include <juce_gui_basics/juce_gui_basics.h>
+#include "../Source/Utils/TimeGrid.h"
+
 #include <cmath>
 #include <iostream>
 #include <string>
@@ -383,6 +386,7 @@ bool contentCache_realRendererPixelOutput()
             item.active = true;
             Note n; n.startTime = 1.0; n.endTime = 3.0; n.pitch = 261.63f; n.velocity = 0.8f;
             item.displayNotes = {n};
+            ctx.timeGridSnapshot = TimeGridSnapshot::makeIdentity(k.endSeconds - k.startSeconds);
             renderer.drawNotes(g, ctx, item);
         });
     {
@@ -412,6 +416,7 @@ bool contentCache_realRendererPixelOutput()
             PianoRollRenderer::ContentRenderItem item;
             Note n; n.startTime = 1.0; n.endTime = 3.0; n.pitch = 261.63f; n.velocity = 0.8f;
             item.displayNotes = {n};
+            ctx.timeGridSnapshot = TimeGridSnapshot::makeIdentity(k.endSeconds - k.startSeconds);
             renderer.drawNotes(g, ctx, item);
         });
     {
@@ -744,10 +749,17 @@ bool timelineViewportPolicy_contracts()
     const auto arrangementHeaderText = readFileContent(arrangementHeader);
     const auto pluginEditorText = readFileContent(pluginEditor);
 
-    if (patternInMethodBody(piano, "commitViewportRequest(", "viewportWidth =")) return false;
-    if (patternInMethodBody(piano, "commitViewportRequest(", "pixelsPerSecond =")) return false;
-    if (patternInMethodBody(arrangement, "commitViewportRequest(", "viewportWidth =")) return false;
-    if (patternInMethodBody(arrangement, "commitViewportRequest(", "pixelsPerSecond =")) return false;
+    // Extract method bodies using qualified signatures (definition only, not calls)
+    const auto pianoCommitBody = extractMethodBody(pianoText, "void PianoRollComponent::commitViewportRequest");
+    const auto arrangementCommitBody = extractMethodBody(arrangementText, "void ArrangementViewComponent::commitViewportRequest");
+    const auto pianoApplyBody = extractMethodBody(pianoText, "void PianoRollComponent::applyResolvedCamera");
+    const auto arrangementApplyBody = extractMethodBody(arrangementText, "void ArrangementViewComponent::applyResolvedCamera");
+
+    // commitViewportRequest must not set viewportWidth or pixelsPerSecond
+    if (pianoCommitBody.find("viewportWidth =") != std::string::npos) { std::cout << "[FAIL] Piano commitViewportRequest must not set viewportWidth\n"; return false; }
+    if (pianoCommitBody.find("pixelsPerSecond =") != std::string::npos) { std::cout << "[FAIL] Piano commitViewportRequest must not set pixelsPerSecond\n"; return false; }
+    if (arrangementCommitBody.find("viewportWidth =") != std::string::npos) { std::cout << "[FAIL] Arrangement commitViewportRequest must not set viewportWidth\n"; return false; }
+    if (arrangementCommitBody.find("pixelsPerSecond =") != std::string::npos) { std::cout << "[FAIL] Arrangement commitViewportRequest must not set pixelsPerSecond\n"; return false; }
 
     // public API must expose request commit only. Raw camera replay is a private implementation detail.
     if (pianoText.find("commitCamera(") != std::string::npos) return false;
@@ -761,24 +773,32 @@ bool timelineViewportPolicy_contracts()
     if (pianoPublic.find("applyResolvedCamera(") != std::string::npos) return false;
     if (arrangementPublic.find("applyResolvedCamera(") != std::string::npos) return false;
 
-    const auto pianoCommit = extractMethodBody(pianoText, "void PianoRollComponent::commitViewportRequest");
-    const auto arrangementCommit = extractMethodBody(arrangementText, "void ArrangementViewComponent::commitViewportRequest");
-    if (pianoCommit.find("applyResolvedCamera(TimelineViewportPolicy::resolve(req), notify)") == std::string::npos) return false;
-    if (arrangementCommit.find("applyResolvedCamera(TimelineViewportPolicy::resolve(req), notify)") == std::string::npos) return false;
+    // commitViewportRequest must resolve through policy
+    if (pianoCommitBody.find("applyResolvedCamera(TimelineViewportPolicy::resolve(req), notify)") == std::string::npos) { std::cout << "[FAIL] Piano commitViewportRequest must resolve through TimelineViewportPolicy\n"; return false; }
+    if (arrangementCommitBody.find("applyResolvedCamera(TimelineViewportPolicy::resolve(req), notify)") == std::string::npos) { std::cout << "[FAIL] Arrangement commitViewportRequest must resolve through TimelineViewportPolicy\n"; return false; }
 
-    if (patternInMethodBody(piano, "commitViewportRequest(", "camera_ =")) return false;
-    if (patternInMethodBody(arrangement, "commitViewportRequest(", "camera_ =")) return false;
-    if (patternInMethodBody(piano, "commitViewportRequest(", "TimelineViewportCamera")) return false;
-    if (patternInMethodBody(arrangement, "commitViewportRequest(", "TimelineViewportCamera")) return false;
-    if (!patternInMethodBody(piano, "applyResolvedCamera(", "camera_ =")) return false;
-    if (!patternInMethodBody(arrangement, "applyResolvedCamera(", "camera_ =")) return false;
+    // commitViewportRequest must not mutate camera directly or reference TimelineViewportCamera
+    if (pianoCommitBody.find("camera_ =") != std::string::npos) { std::cout << "[FAIL] Piano commitViewportRequest must not mutate camera directly\n"; return false; }
+    if (arrangementCommitBody.find("camera_ =") != std::string::npos) { std::cout << "[FAIL] Arrangement commitViewportRequest must not mutate camera directly\n"; return false; }
+    if (pianoCommitBody.find("TimelineViewportCamera") != std::string::npos) { std::cout << "[FAIL] Piano commitViewportRequest must not reference TimelineViewportCamera\n"; return false; }
+    if (arrangementCommitBody.find("TimelineViewportCamera") != std::string::npos) { std::cout << "[FAIL] Arrangement commitViewportRequest must not reference TimelineViewportCamera\n"; return false; }
 
-    if (patternInMethodBody(arrangement, "mouseWheelMove(", "req.kind = TimelineViewportRequest::Kind::Zoom")
-        && !patternInMethodBody(arrangement, "mouseWheelMove(", "req.viewportWidth = getVisibleViewportWidth()"))
-        return false;
-    if (patternInMethodBody(arrangement, "mouseWheelMove(", "req.kind = TimelineViewportRequest::Kind::Zoom")
-        && !patternInMethodBody(arrangement, "mouseWheelMove(", "req.anchorViewportX = static_cast<double>(e.x - kArrangementContentStartX)"))
-        return false;
+    // applyResolvedCamera must be the private camera mutation point
+    if (pianoApplyBody.find("camera_ =") == std::string::npos) { std::cout << "[FAIL] Piano applyResolvedCamera must be the private camera mutation point\n"; return false; }
+    if (arrangementApplyBody.find("camera_ =") == std::string::npos) { std::cout << "[FAIL] Arrangement applyResolvedCamera must be the private camera mutation point\n"; return false; }
+
+    // Arrangement mouseWheelMove must construct complete zoom request
+    const auto mouseWheelBody = extractMethodBody(arrangementText, "void ArrangementViewComponent::mouseWheelMove");
+    if (!mouseWheelBody.empty()) {
+        if (mouseWheelBody.find("req.kind = TimelineViewportRequest::Kind::Zoom") != std::string::npos) {
+            if (mouseWheelBody.find("req.viewportWidth = getVisibleViewportWidth()") == std::string::npos) {
+                std::cout << "[FAIL] Arrangement mouseWheelMove zoom request must set viewportWidth\n"; return false;
+            }
+            if (mouseWheelBody.find("req.anchorViewportX = static_cast<double>(e.x - kArrangementContentStartX)") == std::string::npos) {
+                std::cout << "[FAIL] Arrangement mouseWheelMove zoom request must set anchorViewportX\n"; return false;
+            }
+        }
+    }
 
     return true;
 }
@@ -804,7 +824,11 @@ bool arrangementMoveDrag_transientOverlayContract()
     if (multiMoveEntry.find("sourceTrackId") == std::string::npos) return false;
     if (multiMoveEntry.find("targetTrackId") == std::string::npos) return false;
 
-    const auto updateBody = extractMethodBody(sourceText, "ArrangementViewComponent::updateMoveDragPreview");
+    const auto updateBody = extractMethodBody(sourceText, "ArrangementViewComponent::updateMoveDragOverlay");
+    if (updateBody.empty()) {
+        std::cout << "[FAIL] arrangement: updateMoveDragOverlay body missing\n";
+        return false;
+    }
     if (updateBody.find("refreshVisualState") != std::string::npos) return false;
     if (updateBody.find("prepareVisibleContentTiles") != std::string::npos) return false;
     if (updateBody.find("requestContentInvalidation") != std::string::npos) return false;
@@ -826,37 +850,206 @@ bool arrangementMoveDrag_transientOverlayContract()
 bool pianoRollProjection_noIdentityFallbackContract()
 {
     const std::string sourceDir = getSourceRoot();
-    const auto tool = sourceDir + "/Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp";
-    const auto toolHeader = sourceDir + "/Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h";
-    const auto component = sourceDir + "/Source/Standalone/UI/PianoRollComponent.cpp";
-    const auto componentHeader = sourceDir + "/Source/Standalone/UI/PianoRollComponent.h";
-    const auto projection = sourceDir + "/Source/Utils/ContentTimelineProjection.h";
+    const auto componentText = readFileContent(sourceDir + "/Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto toolText = readFileContent(sourceDir + "/Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto toolHeaderText = readFileContent(sourceDir + "/Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h");
+    const auto componentHeaderText = readFileContent(sourceDir + "/Source/Standalone/UI/PianoRollComponent.h");
+    const auto projectionText = readFileContent(sourceDir + "/Source/Utils/ContentTimelineProjection.h");
 
-    const auto toolText = readFileContent(tool);
-    const auto toolHeaderText = readFileContent(toolHeader);
+    auto expectContains = [](const std::string& body, const std::string& pattern, const char* msg) -> bool {
+        if (body.find(pattern) == std::string::npos) {
+            std::cout << "[FAIL] " << msg << " — missing: " << pattern << "\n";
+            return false;
+        }
+        return true;
+    };
+    auto expectNotContains = [](const std::string& body, const std::string& pattern, const char* msg) -> bool {
+        if (body.find(pattern) != std::string::npos) {
+            std::cout << "[FAIL] " << msg << " — found: " << pattern << "\n";
+            return false;
+        }
+        return true;
+    };
+
+    // Header: pixelXToSourceTime must return std::optional<double>, NOT plain double
     if (toolHeaderText.find("std::optional<double> pixelXToSourceTime") == std::string::npos) return false;
     if (toolHeaderText.find("double pixelXToSourceTime") != std::string::npos) return false;
-    if (toolText.find("return timelineTime;") != std::string::npos) return false;
-    if (toolText.find("ctx_.projectTimelineTimeToContent") != std::string::npos) return false;
-    if (toolText.find("ctx_.projectContentTimeToTimeline") != std::string::npos) return false;
-    if (toolText.find("projectTimelineTimeToContent ?") != std::string::npos) return false;
-    if (toolText.find("projectContentTimeToTimeline ?") != std::string::npos) return false;
-    if (toolText.find("value_or(") != std::string::npos) return false;
-    if (toolText.find("trackRelativeTime = -1.0") != std::string::npos) return false;
-    if (toolText.find("= -1.0") != std::string::npos) return false;
-    if (toolText.find("return -1.0") != std::string::npos) return false;
-    if (extractMethodBody(toolText, "PianoRollToolHandler::pixelXToSourceTime").find("return 0.0") != std::string::npos) return false;
 
-    const auto componentText = readFileContent(component);
-    const auto componentHeaderText = readFileContent(componentHeader);
-    if (componentText.find("PianoRollComponent::projectTimelineTimeToContent") != std::string::npos) return false;
-    if (componentText.find("PianoRollComponent::projectContentTimeToTimeline") != std::string::npos) return false;
+    // === PianoRollComponent::xToSourceTime body ===
+    const auto componentBody =
+        extractMethodBody(componentText, "PianoRollComponent::xToSourceTime");
+
+    if (!expectContains(componentBody, "projectTimelineTimeToContent",
+                        "xToSourceTime: projectTimelineTimeToContent")) return false;
+    if (!expectContains(componentBody, "tauInverse",
+                        "xToSourceTime: tauInverse")) return false;
+
+    if (!expectNotContains(componentBody, "return timelineTime",
+                           "xToSourceTime: no return timelineTime")) return false;
+    if (!expectNotContains(componentBody, "return 0.0",
+                           "xToSourceTime: no return 0.0")) return false;
+    if (!expectNotContains(componentBody, "return -1.0",
+                           "xToSourceTime: no return -1.0")) return false;
+    if (!expectNotContains(componentBody, "value_or(",
+                           "xToSourceTime: no value_or fallback")) return false;
+
+    // === PianoRollToolHandler::pixelXToSourceTime body ===
+    const auto pixelBody =
+        extractMethodBody(toolText, "PianoRollToolHandler::pixelXToSourceTime");
+
+    if (!expectContains(pixelBody, "projectTimelineTimeToContent",
+                        "pixelXToSourceTime: projectTimelineTimeToContent")) return false;
+    if (!expectContains(pixelBody, "tauInverse",
+                        "pixelXToSourceTime: tauInverse")) return false;
+    if (!expectNotContains(pixelBody, "projectContentTimeToTimeline",
+                           "pixelXToSourceTime: no projectContentTimeToTimeline")) return false;
+    if (!expectNotContains(pixelBody, "value_or(",
+                           "pixelXToSourceTime: no value_or fallback")) return false;
+
+    // Header checks: PianoRollComponent must NOT expose raw projection pair
     if (componentHeaderText.find("projectTimelineTimeToContent") != std::string::npos) return false;
     if (componentHeaderText.find("projectContentTimeToTimeline") != std::string::npos) return false;
 
-    const auto projectionText = readFileContent(projection);
+    // Projection method bodies must NOT have isValid guard (valid projection is caller's job)
     if (extractMethodBody(projectionText, "projectTimelineTimeToContent").find("isValid") != std::string::npos) return false;
     if (extractMethodBody(projectionText, "projectContentTimeToTimeline").find("isValid") != std::string::npos) return false;
+
+    return true;
+}
+
+// Source-code contract: PianoRoll source/output/timeline time-domain invariance (Plan 3.1)
+// Enforces single conversion chain: source <-> output/content <-> timeline <-> screen.
+// ContentTimelineProjection must only handle timeline<->output; source data (note/F0/anchor)
+// must not be passed directly to projectContentTimeToTimeline.
+bool pianoRollProjection_sourceDomainContracts()
+{
+    const std::string sourceDir = getSourceRoot();
+    const auto toolHeaderText = readFileContent(sourceDir + "/Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h");
+    const auto toolText = readFileContent(sourceDir + "/Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto componentText = readFileContent(sourceDir + "/Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto rendererText = readFileContent(sourceDir + "/Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+
+    auto requireContains = [](const std::string& content, const std::string& pattern, const char* msg) -> bool {
+        if (content.find(pattern) == std::string::npos) {
+            std::cout << "[FAIL] " << msg << " — missing: " << pattern << "\n";
+            return false;
+        }
+        return true;
+    };
+    auto requireNotContains = [](const std::string& content, const std::string& pattern, const char* msg) -> bool {
+        if (content.find(pattern) != std::string::npos) {
+            std::cout << "[FAIL] " << msg << " — found: " << pattern << "\n";
+            return false;
+        }
+        return true;
+    };
+
+    // ToolHandler header: SourceEditRange present, ContentEditRange and fromProjection absent
+    if (!requireContains(toolHeaderText, "struct SourceEditRange", "toolHeader: SourceEditRange required")) return false;
+    if (!requireNotContains(toolHeaderText, "struct ContentEditRange", "toolHeader: ContentEditRange must be removed")) return false;
+    if (!requireNotContains(toolHeaderText, "fromProjection(", "toolHeader: fromProjection must be removed")) return false;
+
+    // ToolHandler cpp: no ContentEditRange::fromProjection, no source time direct to projection
+    if (!requireNotContains(toolText, "ContentEditRange::fromProjection(projection)", "tool: ContentEditRange::fromProjection must be removed")) return false;
+    if (!requireNotContains(toolText, "projectContentTimeToTimeline(note.startTime)", "tool: source note.startTime must not go through projection directly")) return false;
+    if (!requireNotContains(toolText, "projectContentTimeToTimeline(note.endTime)", "tool: source note.endTime must not go through projection directly")) return false;
+    if (!requireNotContains(toolText, "projectContentTimeToTimeline(f0tl.timeAtFrame", "tool: f0 source time must not go through projection directly")) return false;
+    if (!requireNotContains(toolText, "projectContentTimeToTimeline(anchor.", "tool: anchor source time must not go through projection directly")) return false;
+    if (!requireNotContains(toolText, "if (!snap->isIdentity())", "tool: identity TimeGrid special-case must be removed")) return false;
+
+    // Component cpp: no source time direct to activeContentProjection
+    if (!requireNotContains(componentText, "activeContentProjection().projectContentTimeToTimeline(note.startTime)", "component: source note.startTime must not go through projection directly")) return false;
+    if (!requireNotContains(componentText, "activeContentProjection().projectContentTimeToTimeline(note.endTime)", "component: source note.endTime must not go through projection directly")) return false;
+    if (!requireNotContains(componentText, "activeContentProjection().projectContentTimeToTimeline(f0tl.timeAtFrame", "component: f0 source time must not go through projection directly")) return false;
+    if (!requireNotContains(componentText, "activeContentProjection().projectContentTimeToTimeline(anchor.", "component: anchor source time must not go through projection directly")) return false;
+    if (!requireNotContains(componentText, "activeContentProjection().projectContentTimeToTimeline(prev.time)", "component: prev.time must not go through projection directly")) return false;
+    if (!requireNotContains(componentText, "activeContentProjection().projectContentTimeToTimeline(last.time)", "component: last.time must not go through projection directly")) return false;
+
+    // Renderer cpp: overlay must not pass source time directly to sourceProjection; sourceTimeToScreenX helper must exist
+    if (!requireNotContains(rendererText, "sourceProjection.projectContentTimeToTimeline(note.startTime)", "renderer: overlay note.startTime must not go through projection directly")) return false;
+    if (!requireNotContains(rendererText, "sourceProjection.projectContentTimeToTimeline(note.endTime)", "renderer: overlay note.endTime must not go through projection directly")) return false;
+    if (!requireNotContains(rendererText, "sourceProjection.projectContentTimeToTimeline(anchor.sourceSeconds)", "renderer: anchor sourceSeconds must not go through projection directly")) return false;
+    if (!requireContains(rendererText, "sourceTimeToScreenX(", "renderer: sourceTimeToScreenX helper must exist")) return false;
+
+    // Check xToSourceTime returns double, not int
+    {
+        const auto componentHeader = readFileContent(sourceDir + "/Source/Standalone/UI/PianoRollComponent.h");
+        if (componentHeader.find("int  xToSourceTime") != std::string::npos
+            || componentHeader.find("int xToSourceTime") != std::string::npos)
+        {
+            std::cout << "[FAIL] source-domain: xToSourceTime must return double source seconds\n";
+            return false;
+        }
+        if (componentHeader.find("double xToSourceTime(int x) const") == std::string::npos)
+        {
+            std::cout << "[FAIL] source-domain: xToSourceTime double signature missing\n";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// ============================================================================
+// Arrangement visible placement range & ghost colour contract
+// ============================================================================
+bool arrangementVisiblePlacement_clipsTileBounds()
+{
+    const auto srcDir = std::string(OPENTUNE_SOURCE_DIR);
+    const auto arrangementText = readFileContent(srcDir + "/Source/Standalone/UI/ArrangementViewComponent.cpp");
+
+    const auto collectBody = extractMethodBody(arrangementText, "collectVisiblePlacements");
+    if (collectBody.find("visibleStart") == std::string::npos
+        || collectBody.find("visibleEnd") == std::string::npos
+        || collectBody.find("visibleEnd - visibleStart") == std::string::npos)
+    {
+        std::cout << "[FAIL] arrangement: collectVisiblePlacements must derive width from visible interval\n";
+        return false;
+    }
+
+    if (collectBody.find("placement.durationSeconds * pixelsPerSecond") != std::string::npos)
+    {
+        std::cout << "[FAIL] arrangement: tile width still uses full placement duration\n";
+        return false;
+    }
+
+    const auto waveformBody = extractMethodBody(arrangementText, "paintPlacementWaveform");
+    if (waveformBody.find("clipInSeconds + (timelineTime - visual.timelineStartSeconds)") == std::string::npos)
+    {
+        std::cout << "[FAIL] arrangement: waveform must stay anchored to original placement timeline\n";
+        return false;
+    }
+
+    const auto fadeBody = extractMethodBody(arrangementText, "paintPlacementFadeShapes");
+    if (fadeBody.find("paintStartSeconds") == std::string::npos
+        || fadeBody.find("paintEndSeconds") == std::string::npos
+        || fadeBody.find("visibleFadeInStart") == std::string::npos
+        || fadeBody.find("visibleFadeOutStart") == std::string::npos)
+    {
+        std::cout << "[FAIL] arrangement: fades must be clipped by absolute visible interval\n";
+        return false;
+    }
+
+    // Ghost colour contract
+    const auto overlayBody = extractMethodBody(arrangementText, "ArrangementViewComponent::drawMoveDragOverlay");
+    if (overlayBody.find("getTrackLaneBounds(target.trackId)") == std::string::npos)
+    {
+        std::cout << "[FAIL] arrangement: move ghost lane must come from target.trackId\n";
+        return false;
+    }
+    if (overlayBody.find("getTrackColour(target.trackId)") == std::string::npos)
+    {
+        std::cout << "[FAIL] arrangement: move ghost colour must come from target.trackId\n";
+        return false;
+    }
+    for (const auto* banned : {"state.colour", "placement.colour", "UIColors::", "Colours::"})
+    {
+        if (overlayBody.find(banned) != std::string::npos)
+        {
+            std::cout << "[FAIL] arrangement: move ghost uses non-target colour source: " << banned << "\n";
+            return false;
+        }
+    }
 
     return true;
 }
@@ -1024,6 +1217,7 @@ static int runKillListChecks()
 
 int main()
 {
+    juce::ScopedJuceInitialiser_GUI juceGui;
     int failed = 0;
     auto run = [&failed](bool (*fn)(), const char* name) {
         std::cout << "  " << name << "...\n";
@@ -1070,6 +1264,8 @@ int main()
     run(timelineViewportPolicy_contracts, "timelineViewportPolicy_contracts");
     run(arrangementMoveDrag_transientOverlayContract, "arrangementMoveDrag_transientOverlayContract");
     run(pianoRollProjection_noIdentityFallbackContract, "pianoRollProjection_noIdentityFallbackContract");
+    run(pianoRollProjection_sourceDomainContracts, "pianoRollProjection_sourceDomainContracts");
+    run(arrangementVisiblePlacement_clipsTileBounds, "arrangementVisiblePlacement_clipsTileBounds");
 
     std::cout << "\n--- Kill List ---\n";
     failed += runKillListChecks();

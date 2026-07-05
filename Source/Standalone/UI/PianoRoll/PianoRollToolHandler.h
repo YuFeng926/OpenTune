@@ -26,56 +26,45 @@
 namespace OpenTune {
 
 // ============================================================================
-// ContentEditRange — 编辑工具显式范围语义
+// SourceEditRange — source-domain 编辑边界
 //
-// 替代 ContentTimelineProjection::clampContentTime 的隐式裁剪。
-// mouseDown/preview 路径用 contains(t) 验证输入是否落在可编辑区间；
-// commit 路径用 normalizeForCommit() 把 draft 范围规整为合法提交值
-// （方向、最小持续时间、非负起点）。
+// 数据层 Note/F0/curve/anchor 存储 source time。TimeGrid 负责 source <-> output，
+// Projection 负责 output <-> timeline。ToolHandler 编辑入口只操作 source-domain，
+// 所以编辑范围必须由 TimeGridSnapshot::totalDurationSeconds() 推导，不是 projection。
+//
+// invalid projection 表示没有 edit target，不是 identity fallback。
 // ============================================================================
-struct ContentEditRange
+struct SourceEditRange
 {
     double startSeconds = 0.0;
     double endSeconds = 0.0;
     double minDurationSeconds = 0.0;
 
-    static ContentEditRange fromProjection(const ContentTimelineProjection& projection,
-                                            double minDurationSeconds = 0.0) noexcept
+    static SourceEditRange fromTimeGrid(const TimeGridSnapshot& grid,
+                                        double minDurationSeconds = 0.0) noexcept
     {
-        ContentEditRange range;
-        if (projection.isValid()) {
-            range.startSeconds = 0.0;
-            range.endSeconds = projection.contentDurationSeconds;
-        }
-        range.minDurationSeconds = minDurationSeconds;
-        return range;
+        return {0.0, grid.totalDurationSeconds(), minDurationSeconds};
     }
 
-    bool contains(double t) const noexcept
+    bool contains(double sourceSeconds) const noexcept
     {
-        return endSeconds > startSeconds && t >= startSeconds && t <= endSeconds;
+        return endSeconds > startSeconds
+            && sourceSeconds >= startSeconds
+            && sourceSeconds <= endSeconds;
     }
 
-    void normalizeForCommit(double& startTime, double& endTime) const noexcept
+    void normalizeForCommit(double& startSecondsInSource,
+                            double& endSecondsInSource) const noexcept
     {
-        if (startTime > endTime) {
-            std::swap(startTime, endTime);
-        }
-        if (startTime < startSeconds) {
-            startTime = startSeconds;
-        }
-        if (endTime > endSeconds) {
-            endTime = endSeconds;
-        }
-        if (endTime - startTime < minDurationSeconds) {
-            endTime = startTime + minDurationSeconds;
-            if (endTime > endSeconds) {
-                endTime = endSeconds;
-                startTime = endTime - minDurationSeconds;
-                if (startTime < startSeconds) {
-                    startTime = startSeconds;
-                }
-            }
+        if (startSecondsInSource > endSecondsInSource)
+            std::swap(startSecondsInSource, endSecondsInSource);
+
+        startSecondsInSource = juce::jlimit(startSeconds, endSeconds, startSecondsInSource);
+        endSecondsInSource = juce::jlimit(startSeconds, endSeconds, endSecondsInSource);
+
+        if (endSecondsInSource - startSecondsInSource < minDurationSeconds) {
+            endSecondsInSource = juce::jmin(endSeconds, startSecondsInSource + minDurationSeconds);
+            startSecondsInSource = juce::jmax(startSeconds, endSecondsInSource - minDurationSeconds);
         }
     }
 };
@@ -279,19 +268,22 @@ private:
     void selectNotesBetween(const std::vector<Note>& notes, int startIndex, int endIndex);
     void updateF0SelectionFromNotes(const std::vector<Note>& notes);
 
-    // ⚡️ vocal-time-stretch §8.5 — convert pixelX directly to SOURCE time.
-    // Pipeline: pixelX → output(timeline) → output(content) →
-    // tauInverse → source.  Identity TimeGrid degenerates to existing
-    // "xToTime + projectTimelineTimeToContent" path.
+    // ⚡️ vocal-time-stretch §8.5 — 唯一时间域转换链
     //
-    // All Note tool write-back paths (drag / draw / resize) MUST use this
-    // helper instead of computing source time directly, otherwise non-identity
-    // TimeGrid causes pixel→data shift (data layer stores source time per
-    // cross-cutting/coordinate-system-source-time-display-output.md).
+    // 数据层 Note/F0/curve/anchor 存储 source time。
+    // TimeGrid 负责 source <-> output(content)。
+    // Projection 负责 output(content) <-> timeline。
+    // ViewMapper 负责 timeline <-> screen x。
     //
-    // Returns std::nullopt when no valid ContentTimelineProjection exists —
-    // no content edit target, no legal edit.
+    // pixel → source: xToTime → projectTimelineTimeToContent → tauInverse
+    // source → screen: tauForward → projectContentTimeToTimeline → timeToX
+    //
+    // 所有编辑入口只接受 source-domain double。
+    // invalid projection 意味着没有 edit target，返回 nullopt（不是 identity fallback）。
     std::optional<double> pixelXToSourceTime(int pixelX) const;
+    double sourceTimeToTimelineTime(double sourceSeconds) const;
+    int sourceTimeToScreenX(double sourceSeconds) const;
+    SourceEditRange sourceEditRange(double minDurationSeconds = 0.0) const;
 
     Context ctx_;
     ToolId currentTool_ = ToolId::Select;
