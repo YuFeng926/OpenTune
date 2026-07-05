@@ -103,15 +103,12 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
     window.visibleContentStartTime = item.projection.projectTimelineTimeToContent(window.visibleStartTime);
     window.visibleContentEndTime = item.projection.projectTimelineTimeToContent(window.visibleEndTime);
 
-    // vocal-time-stretch 搂8.5 鈥?When a non-identity TimeGrid is published,
-    // projectTimelineTimeToContent returns OUTPUT time inside the
-    // content, but Notes / PitchCurve / F0 timeline / WaveformMipmap
-    // are all indexed by SOURCE time. Convert to source time via tauInverse
-    // so downstream filters work correctly. Identity grid 鈫?no-op.
-    if (ctx.timeGridSnapshot != nullptr && !ctx.timeGridSnapshot->isIdentity()) {
-        window.visibleContentStartTime = ctx.timeGridSnapshot->tauInverse(window.visibleContentStartTime);
-        window.visibleContentEndTime   = ctx.timeGridSnapshot->tauInverse(window.visibleContentEndTime);
-    }
+    // vocal-time-stretch 搂8.5 鈥?projectTimelineTimeToContent returns OUTPUT time
+    // inside the content, but Notes / PitchCurve / F0 timeline / WaveformMipmap
+    // are all indexed by SOURCE time. Convert to source time via tauInverse.
+    jassert(ctx.timeGridSnapshot != nullptr);
+    window.visibleContentStartTime = ctx.timeGridSnapshot->tauInverse(window.visibleContentStartTime);
+    window.visibleContentEndTime   = ctx.timeGridSnapshot->tauInverse(window.visibleContentEndTime);
     return window;
 }
 
@@ -122,10 +119,8 @@ inline int sourceTimeToScreenX(double sourceTime,
                                 const PianoRollRenderer::RenderContext& ctx,
                                 const PianoRollRenderer::ContentRenderItem& item)
 {
-    double outputTime = sourceTime;
-    if (ctx.timeGridSnapshot != nullptr && !ctx.timeGridSnapshot->isIdentity()) {
-        outputTime = ctx.timeGridSnapshot->tauForward(sourceTime);
-    }
+    jassert(ctx.timeGridSnapshot != nullptr);
+    const double outputTime = ctx.timeGridSnapshot->tauForward(sourceTime);
     const double timelineTime = item.projection.projectContentTimeToTimeline(outputTime);
     return ctx.coords.timeToX(timelineTime);
 }
@@ -218,26 +213,19 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
 
     juce::Path waveformPath;
 
-    // 鈿★笍 vocal-time-stretch 搂8.5 (Phase H) 鈥?waveform stretching.
-    // When the TimeGrid is non-identity, the visible waveform must reflect
-    // the user's retiming.  We invert the output 鈫?source mapping (tau_inverse)
-    // so the screen X axis (output time) reads from the SOURCE peaks at the
-    // tau-inverted time.  Identity grid 鈫?zero-cost passthrough.
-    const bool useTauInverse = (ctx.timeGridSnapshot != nullptr
-                                  && !ctx.timeGridSnapshot->isIdentity());
+    // vocal-time-stretch 搂8.5 (Phase H) 鈥?waveform stretching.
+    // Invert the output 鈫?source mapping (tau_inverse) so the screen X axis
+    // (output time) reads from the SOURCE peaks at the tau-inverted time.
+    jassert(ctx.timeGridSnapshot != nullptr);
 
     for (int x = startX; x < endX; ++x)
     {
         double matTime = item.projection.projectTimelineTimeToContent(ctx.coords.xToTime(x));
-        if (useTauInverse) {
-            matTime = ctx.timeGridSnapshot->tauInverse(matTime);
-        }
+        matTime = ctx.timeGridSnapshot->tauInverse(matTime);
 
         // Aggregate all peaks covered by this pixel's time span
         double matTimeNext = item.projection.projectTimelineTimeToContent(ctx.coords.xToTime(x + 1));
-        if (useTauInverse) {
-            matTimeNext = ctx.timeGridSnapshot->tauInverse(matTimeNext);
-        }
+        matTimeNext = ctx.timeGridSnapshot->tauInverse(matTimeNext);
 
         int64_t idxStart = static_cast<int64_t>(matTime / timePerPeak);
         int64_t idxEnd = static_cast<int64_t>(matTimeNext / timePerPeak);
@@ -809,17 +797,17 @@ void PianoRollRenderer::drawGhostNotes(juce::Graphics& g, const RenderContext& c
     const juce::Colour fillColour = overlay.ghostColour.withMultipliedAlpha(overlay.ghostOpacity);
     const juce::Colour borderColour = overlay.ghostColour.withMultipliedAlpha(overlay.ghostOpacity * 0.7f);
 
+    ContentRenderItem overlayItem;
+    overlayItem.projection = overlay.sourceProjection;
+
     for (const auto& note : overlay.ghostNotes)
     {
         const float adjustedPitch = note.getAdjustedPitch();
         if (adjustedPitch <= 0.0f)
             continue;
 
-        const double timelineStart = overlay.sourceProjection.projectContentTimeToTimeline(note.startTime);
-        const double timelineEnd = overlay.sourceProjection.projectContentTimeToTimeline(note.endTime);
-
-        const int x1 = ctx.coords.timeToX(timelineStart);
-        const int x2 = ctx.coords.timeToX(timelineEnd);
+        const int x1 = sourceTimeToScreenX(note.startTime, ctx, overlayItem);
+        const int x2 = sourceTimeToScreenX(note.endTime, ctx, overlayItem);
         if (x2 <= ctx.pianoKeyWidth || x1 >= ctx.width)
             continue;
 
@@ -861,10 +849,12 @@ void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext&
     const float yTop = ctx.coords.midiToY(ctx.minMidi);
     const float yBottom = ctx.coords.midiToY(ctx.maxMidi);
 
+    ContentRenderItem overlayItem;
+    overlayItem.projection = overlay.sourceProjection;
+
     for (const auto& anchor : overlay.ghostAnchors)
     {
-        const double timelineTime = overlay.sourceProjection.projectContentTimeToTimeline(anchor.sourceSeconds);
-        const int x = ctx.coords.timeToX(timelineTime);
+        const int x = sourceTimeToScreenX(anchor.sourceSeconds, ctx, overlayItem);
         if (x < ctx.pianoKeyWidth || x >= ctx.width)
             continue;
 

@@ -21,6 +21,406 @@ namespace OpenTune {
 namespace {
 
 constexpr int kArrangementContentStartX = 8;
+constexpr float kPlacementCornerRadius = 6.0f;
+
+struct PlacementVisual {
+    juce::Rectangle<float> bounds;
+    juce::Colour colour;
+    juce::String name;
+    float gain = 1.0f;
+    double fadeIn = 0.0;
+    double fadeOut = 0.0;
+    bool selected = false;
+    bool preview = false;
+    ContentKey contentKey;
+    double clipInSeconds = 0.0;
+    double timelineStartSeconds = 0.0;
+    double durationSeconds = 0.0;
+    double pixelsPerSecond = 1.0;
+    double paintStartSeconds = 0.0;
+    double paintEndSeconds = 0.0;
+};
+
+juce::String placementFallbackName(const PlacementVisual& visual)
+{
+    return visual.name.isNotEmpty() ? visual.name : juce::String(visual.contentKey.objectId);
+}
+
+juce::String formatGainLabel(float gain)
+{
+    float db = juce::Decibels::gainToDecibels(gain, -96.0f);
+    if (std::abs(db) < 0.05f)
+        db = 0.0f;
+
+    auto text = juce::String(db, 1);
+    if (db > 0.0f)
+        text = "+" + text;
+
+    return text + " dB";
+}
+
+juce::String formatFadeLabel(double seconds)
+{
+    return juce::String(seconds, seconds < 1.0 ? 2 : 1) + "s";
+}
+
+float placementRadiusFor(juce::Rectangle<float> bounds)
+{
+    return juce::jmin(kPlacementCornerRadius,
+                      juce::jmax(0.0f, bounds.getWidth() * 0.5f),
+                      juce::jmax(0.0f, bounds.getHeight() * 0.5f));
+}
+
+juce::Colour placementReadableTextColour(const PlacementVisual& visual)
+{
+    const auto trackColour = visual.colour;
+    return trackColour.getPerceivedBrightness() > 0.62f
+        ? juce::Colours::black.withAlpha(visual.preview ? 0.70f : 0.82f)
+        : juce::Colours::white.withAlpha(visual.preview ? 0.70f : 0.88f);
+}
+
+void paintPlacementWaveform(juce::Graphics& g,
+                            const PlacementVisual& visual,
+                            const WaveformMipmapCache& waveformMipmapCache)
+{
+    const int width = juce::roundToInt(visual.bounds.getWidth());
+    const int height = juce::roundToInt(visual.bounds.getHeight());
+    const auto* mipmap = waveformMipmapCache.get(visual.contentKey);
+    if (mipmap == nullptr || !mipmap->hasSource() || width <= 2 || height <= 2)
+        return;
+
+    const int bestLevelIdx = mipmap->selectBestLevelIndex(visual.pixelsPerSecond);
+    const auto snapshot = mipmap->snapshotLevel(bestLevelIdx);
+    if (snapshot.peaks.empty() || snapshot.samplesPerPeak <= 0)
+        return;
+
+    const int numPeaks = static_cast<int>(snapshot.peaks.size());
+    const double timePerPeak = static_cast<double>(snapshot.samplesPerPeak)
+        / static_cast<double>(WaveformMipmap::kBaseSampleRate);
+    const float halfH = visual.bounds.getHeight() * 0.5f;
+    const float centerY = visual.bounds.getCentreY();
+
+    juce::Path wavePath;
+    bool started = false;
+
+    for (int x = 0; x < width; ++x) {
+        const double timelineTime = visual.paintStartSeconds + static_cast<double>(x) / visual.pixelsPerSecond;
+        const double contentTime = visual.clipInSeconds + (timelineTime - visual.timelineStartSeconds);
+        const int peakIdx = static_cast<int>(contentTime / timePerPeak);
+        if (peakIdx < 0 || peakIdx >= numPeaks)
+            continue;
+
+        const float mag = snapshot.peaks[static_cast<size_t>(peakIdx)].getMagnitude();
+        const float barH = mag * halfH;
+        const float drawX = visual.bounds.getX() + static_cast<float>(x);
+        if (!started) {
+            wavePath.startNewSubPath(drawX, centerY - barH);
+            started = true;
+        } else {
+            wavePath.lineTo(drawX, centerY - barH);
+        }
+    }
+
+    for (int x = width - 1; x >= 0; --x) {
+        const double timelineTime = visual.paintStartSeconds + static_cast<double>(x) / visual.pixelsPerSecond;
+        const double contentTime = visual.clipInSeconds + (timelineTime - visual.timelineStartSeconds);
+        const int peakIdx = static_cast<int>(contentTime / timePerPeak);
+        if (peakIdx < 0 || peakIdx >= numPeaks)
+            continue;
+
+        const float mag = snapshot.peaks[static_cast<size_t>(peakIdx)].getMagnitude();
+        const float barH = mag * halfH;
+        wavePath.lineTo(visual.bounds.getX() + static_cast<float>(x), centerY + barH);
+    }
+
+    if (!started)
+        return;
+
+    wavePath.closeSubPath();
+    g.setColour(visual.colour.brighter(0.28f).withAlpha(visual.preview ? 0.30f : 0.48f));
+    g.fillPath(wavePath);
+}
+
+void paintPlacementFadeShapes(juce::Graphics& g, const PlacementVisual& visual)
+{
+    const auto bounds = visual.bounds;
+    const float radius = placementRadiusFor(bounds);
+    juce::Path shell;
+    shell.addRoundedRectangle(bounds, radius);
+
+    juce::Graphics::ScopedSaveState clip(g);
+    g.reduceClipRegion(shell);
+
+    const auto shade = juce::Colours::black.withAlpha(visual.preview ? 0.16f : 0.24f);
+    const auto line = UIColors::textPrimary.withAlpha(visual.preview ? 0.34f : 0.52f);
+    const float handleSize = juce::jmin(7.0f, juce::jmax(4.0f, bounds.getHeight() * 0.18f));
+
+    const double paintStart = visual.paintStartSeconds;
+    const double paintEnd   = visual.paintEndSeconds;
+
+    auto xForTimeline = [&](double t) {
+        return visual.bounds.getX()
+            + static_cast<float>((t - paintStart) * visual.pixelsPerSecond);
+    };
+
+    if (visual.fadeIn > 0.0) {
+        const double fadeInStart = visual.timelineStartSeconds;
+        const double fadeInEnd   = visual.timelineStartSeconds + visual.fadeIn;
+        const double visibleFadeInStart = std::max(fadeInStart, paintStart);
+        const double visibleFadeInEnd   = std::min(fadeInEnd, paintEnd);
+
+        if (visibleFadeInEnd > visibleFadeInStart) {
+            const float x0 = xForTimeline(visibleFadeInStart);
+            const float x1 = xForTimeline(visibleFadeInEnd);
+
+            juce::Path fadePath;
+            fadePath.startNewSubPath(x0, bounds.getY());
+            fadePath.lineTo(x0, bounds.getBottom());
+            fadePath.lineTo(x1, bounds.getY());
+            fadePath.closeSubPath();
+
+            g.setColour(shade);
+            g.fillPath(fadePath);
+            g.setColour(line);
+            g.drawLine(x0, bounds.getBottom(), x1, bounds.getY(), 1.2f);
+            g.fillRoundedRectangle(x1 - handleSize * 0.5f,
+                                   bounds.getY() + 2.0f,
+                                   handleSize,
+                                   handleSize,
+                                   handleSize * 0.35f);
+        }
+    }
+
+    if (visual.fadeOut > 0.0) {
+        const double placementEnd = visual.timelineStartSeconds + visual.durationSeconds;
+        const double fadeOutStart = placementEnd - visual.fadeOut;
+        const double fadeOutEnd   = placementEnd;
+        const double visibleFadeOutStart = std::max(fadeOutStart, paintStart);
+        const double visibleFadeOutEnd   = std::min(fadeOutEnd, paintEnd);
+
+        if (visibleFadeOutEnd > visibleFadeOutStart) {
+            const float x0 = xForTimeline(visibleFadeOutStart);
+            const float x1 = xForTimeline(visibleFadeOutEnd);
+
+            juce::Path fadePath;
+            fadePath.startNewSubPath(x0, bounds.getY());
+            fadePath.lineTo(x1, bounds.getY());
+            fadePath.lineTo(x1, bounds.getBottom());
+            fadePath.closeSubPath();
+
+            g.setColour(shade);
+            g.fillPath(fadePath);
+            g.setColour(line);
+            g.drawLine(x0, bounds.getY(), x1, bounds.getBottom(), 1.2f);
+            g.fillRoundedRectangle(x0 - handleSize * 0.5f,
+                                   bounds.getY() + 2.0f,
+                                   handleSize,
+                                   handleSize,
+                                   handleSize * 0.35f);
+        }
+    }
+}
+
+void paintPlacementShellAndWaveform(juce::Graphics& g,
+                                    const PlacementVisual& visual,
+                                    const WaveformMipmapCache& waveformMipmapCache)
+{
+    const auto bounds = visual.bounds;
+    const float radius = placementRadiusFor(bounds);
+    const auto themeId = UIColors::currentThemeId();
+    const bool lightTheme = themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose;
+    const float alphaScale = visual.preview ? 0.58f : 1.0f;
+
+    juce::Path shell;
+    shell.addRoundedRectangle(bounds, radius);
+
+    const auto top = visual.colour.brighter(lightTheme ? 0.18f : 0.32f).withAlpha((lightTheme ? 0.66f : 0.52f) * alphaScale);
+    const auto mid = visual.colour.withAlpha((lightTheme ? 0.58f : 0.44f) * alphaScale);
+    const auto bottom = visual.colour.darker(lightTheme ? 0.06f : 0.34f).withAlpha((lightTheme ? 0.62f : 0.48f) * alphaScale);
+
+    juce::ColourGradient fill(top, bounds.getX(), bounds.getY(), bottom, bounds.getX(), bounds.getBottom(), false);
+    fill.addColour(0.52, mid);
+    g.setGradientFill(fill);
+    g.fillPath(shell);
+
+    {
+        juce::Graphics::ScopedSaveState clip(g);
+        g.reduceClipRegion(shell);
+        juce::ColourGradient highlight(UIColors::textPrimary.withAlpha((lightTheme ? 0.30f : 0.16f) * alphaScale),
+                                       bounds.getX(),
+                                       bounds.getY(),
+                                       UIColors::textPrimary.withAlpha(0.0f),
+                                       bounds.getX(),
+                                       bounds.getY() + bounds.getHeight() * 0.42f,
+                                       false);
+        g.setGradientFill(highlight);
+        g.fillRect(bounds.withHeight(bounds.getHeight() * 0.48f));
+
+        paintPlacementWaveform(g, visual, waveformMipmapCache);
+    }
+
+    paintPlacementFadeShapes(g, visual);
+
+    const auto border = visual.selected
+        ? visual.colour.brighter(0.92f).interpolatedWith(UIColors::textHighlight, 0.34f).withAlpha(visual.preview ? 0.72f : 0.96f)
+        : visual.colour.brighter(lightTheme ? 0.12f : 0.42f).withAlpha(visual.preview ? 0.50f : 0.74f);
+    const float stroke = visual.selected ? (visual.preview ? 1.6f : 2.0f) : (visual.preview ? 0.9f : 1.1f);
+
+    g.setColour(border);
+    g.drawRoundedRectangle(bounds.reduced(0.5f), radius, stroke);
+}
+
+void paintOverlapShading(juce::Graphics& g, const std::vector<PlacementVisual>& visuals)
+{
+    for (size_t i = 0; i < visuals.size(); ++i) {
+        for (size_t j = i + 1; j < visuals.size(); ++j) {
+            const auto overlap = visuals[i].bounds.getIntersection(visuals[j].bounds);
+            if (overlap.isEmpty())
+                continue;
+
+            g.setColour(juce::Colours::black.withAlpha(0.18f));
+            g.fillRect(overlap);
+        }
+    }
+}
+
+void paintPlacementTextFadeGain(juce::Graphics& g, const PlacementVisual& visual)
+{
+    const auto bounds = visual.bounds;
+    if (bounds.getWidth() <= 30.0f || bounds.getHeight() <= 12.0f)
+        return;
+
+    auto label = placementFallbackName(visual);
+    const int maxChars = juce::jmax(1, juce::roundToInt(bounds.getWidth() / 7.0f));
+    if (label.length() > maxChars)
+        label = label.substring(0, maxChars) + ".";
+
+    const auto textColour = placementReadableTextColour(visual);
+    const auto shadowColour = juce::Colours::black.withAlpha(visual.preview ? 0.32f : 0.46f);
+    const auto textArea = bounds.reduced(6.0f, 3.0f).withTrimmedBottom(juce::jmin(12.0f, bounds.getHeight() * 0.34f));
+
+    g.setFont(11.0f);
+    const float labelWidth = juce::jmin(textArea.getWidth(), static_cast<float>(label.length()) * 7.0f + 8.0f);
+    const auto labelBack = textArea.withWidth(labelWidth).reduced(0.0f, 1.0f);
+
+    g.setColour(juce::Colours::black.withAlpha(visual.preview ? 0.16f : 0.26f));
+    g.fillRoundedRectangle(labelBack, 3.0f);
+    g.setColour(shadowColour);
+    g.drawText(label, textArea.translated(0.8f, 0.8f), juce::Justification::centredLeft, false);
+    g.setColour(textColour);
+    g.drawText(label, textArea, juce::Justification::centredLeft, false);
+
+    if (bounds.getWidth() > 58.0f && bounds.getHeight() > 24.0f) {
+        const auto gainText = formatGainLabel(visual.gain);
+        const auto gainArea = bounds.reduced(6.0f, 3.0f).removeFromBottom(12.0f);
+
+        g.setFont(10.0f);
+        const float gainWidth = juce::jmin(gainArea.getWidth(), static_cast<float>(gainText.length()) * 6.0f + 8.0f);
+        const auto gainBack = gainArea.withLeft(gainArea.getRight() - gainWidth).reduced(0.0f, 1.0f);
+        g.setColour(juce::Colours::black.withAlpha(visual.preview ? 0.13f : 0.22f));
+        g.fillRoundedRectangle(gainBack, 3.0f);
+        g.setColour(textColour.withAlpha(visual.preview ? 0.58f : 0.72f));
+        g.drawText(gainText, gainArea, juce::Justification::centredRight, false);
+    }
+
+    if (bounds.getWidth() > 84.0f && bounds.getHeight() > 28.0f) {
+        g.setFont(9.0f);
+        g.setColour(textColour.withAlpha(visual.preview ? 0.52f : 0.68f));
+
+        if (visual.fadeIn > 0.0) {
+            const float fadeW = juce::jlimit(1.0f,
+                                            bounds.getWidth(),
+                                            static_cast<float>(visual.fadeIn * visual.pixelsPerSecond));
+            const auto fadeArea = juce::Rectangle<float>(bounds.getX() + fadeW + 4.0f,
+                                                         bounds.getY() + 2.0f,
+                                                         42.0f,
+                                                         10.0f);
+            g.drawText(formatFadeLabel(visual.fadeIn), fadeArea, juce::Justification::centredLeft, false);
+        }
+
+        if (visual.fadeOut > 0.0) {
+            const float fadeW = juce::jlimit(1.0f,
+                                            bounds.getWidth(),
+                                            static_cast<float>(visual.fadeOut * visual.pixelsPerSecond));
+            const auto fadeArea = juce::Rectangle<float>(bounds.getRight() - fadeW - 46.0f,
+                                                         bounds.getY() + 2.0f,
+                                                         42.0f,
+                                                         10.0f);
+            g.drawText(formatFadeLabel(visual.fadeOut), fadeArea, juce::Justification::centredRight, false);
+        }
+    }
+}
+
+void paintPlacementGhost(juce::Graphics& g,
+                         PlacementVisual visual,
+                         const WaveformMipmapCache& waveformMipmapCache)
+{
+    visual.preview = true;
+    paintPlacementShellAndWaveform(g, visual, waveformMipmapCache);
+    paintPlacementTextFadeGain(g, visual);
+}
+
+template <typename IsSelected>
+std::vector<PlacementVisual> collectVisiblePlacements(const StandaloneArrangement& arrangement,
+                                                      double tileStart,
+                                                      double tileEnd,
+                                                      const ArrangementVerticalWindow& verticalWindow,
+                                                      double pixelsPerSecond,
+                                                      int tileWidth,
+                                                      IsSelected&& isSelected)
+{
+    std::vector<PlacementVisual> visuals;
+
+    for (int trackId = verticalWindow.firstTrack(); trackId < verticalWindow.lastTrackExclusive(); ++trackId) {
+        const int trackY = trackId * verticalWindow.trackHeight - verticalWindow.scrollTopPx;
+        const int placementCount = arrangement.getNumPlacements(trackId);
+
+        for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
+            StandaloneArrangement::Placement placement;
+            [[maybe_unused]] const bool placementFound = arrangement.getPlacementByIndex(trackId, placementIndex, placement);
+            jassert(placementFound);
+            if (placement.timelineStartSeconds >= tileEnd || placement.timelineEndSeconds() <= tileStart)
+                continue;
+
+            const double placementStart = placement.timelineStartSeconds;
+            const double placementEnd = placement.timelineEndSeconds();
+            const double visibleStart = std::max(placementStart, tileStart);
+            const double visibleEnd = std::min(placementEnd, tileEnd);
+
+            if (visibleEnd <= visibleStart)
+                continue;
+
+            const int x = static_cast<int>(std::llround((visibleStart - tileStart) * pixelsPerSecond));
+            const int width = juce::jmax(1,
+                static_cast<int>(std::llround((visibleEnd - visibleStart) * pixelsPerSecond)));
+            const int y = trackY + 2;
+            const int height = verticalWindow.trackHeight - 4;
+
+            visuals.push_back({
+                juce::Rectangle<float>(static_cast<float>(x),
+                                       static_cast<float>(y),
+                                       static_cast<float>(width),
+                                       static_cast<float>(height)),
+                arrangement.getTrackColour(trackId),
+                placement.name,
+                placement.gain,
+                placement.fadeInDuration,
+                placement.fadeOutDuration,
+                isSelected(trackId, placement.placementId),
+                false,
+                placement.contentKey,
+                placement.clipInSeconds,
+                placement.timelineStartSeconds,
+                placement.durationSeconds,
+                pixelsPerSecond,
+                visibleStart,
+                visibleEnd
+            });
+        }
+    }
+
+    return visuals;
+}
 
 uint64_t hashCombine(uint64_t seed, uint64_t value) noexcept
 {
@@ -381,6 +781,10 @@ void ArrangementViewComponent::rebuildContentMetrics()
             revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.timelineStartSeconds * 1000.0)));
             revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.durationSeconds * 1000.0)));
             revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.clipInSeconds * 1000.0)));
+            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(static_cast<double>(placement.gain) * 1000.0)));
+            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.fadeInDuration * 1000.0)));
+            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.fadeOutDuration * 1000.0)));
+            revision = hashCombine(revision, isPlacementSelected(trackId, placement.placementId) ? 1ull : 0ull);
             // Include placement name in revision (content tile renders label)
             revision = hashCombine(revision, static_cast<uint64_t>(placement.name.hashCode()));
         }
@@ -467,102 +871,25 @@ void ArrangementViewComponent::prepareVisibleContentTiles()
         const auto& tile = contentCache_.getOrBuildTile(key, tileContentH,
             [&](juce::Graphics& g, const ContentTileKey& k, juce::Rectangle<int> bounds) {
                 const int tileW = bounds.getWidth();
-                const int tH = trackH;
-
-                 // Decode vertical window from key.verticalGeometry (64-bit)
-                 const uint64_t vwinEncoded = k.verticalGeometry;
-                 const int scrollTopPx = static_cast<int>((vwinEncoded >> 32) & 0xFFFF);
-                 const int viewportH = static_cast<int>((vwinEncoded >> 48) & 0xFFFF);
-                
-                // Draw only tracks within the vertical window
-                const int firstTrack = tH > 0 ? scrollTopPx / tH : 0;
-                const int lastTrackExclusive = tH > 0 ? (scrollTopPx + viewportH + tH - 1) / tH : 0;
-
-                if (auto* arr = processor_.getStandaloneArrangement()) {
-                    const double tileStart = k.startSeconds;
-                    const double tileEnd = k.endSeconds;
-                    const double pps = k.pixelsPerSecond;
-
-                    for (int tid = firstTrack; tid < lastTrackExclusive; ++tid) {
-                        // Convert to tile-local Y: subtract scrollTopPx
-                        const int ty = tid * tH - scrollTopPx;
-                        const int numPlacements = arr->getNumPlacements(tid);
-                        for (int pi = 0; pi < numPlacements; ++pi) {
-                            StandaloneArrangement::Placement pl;
-                            if (!arr->getPlacementByIndex(tid, pi, pl)) continue;
-                            if (pl.timelineStartSeconds >= tileEnd || pl.timelineEndSeconds() <= tileStart) continue;
-
-                            const int px = juce::jmax(0, static_cast<int>(std::llround((pl.timelineStartSeconds - tileStart) * pps)));
-                            const int pqw = juce::jmin(tileW - px, juce::jmax(1, static_cast<int>(std::llround(pl.durationSeconds * pps))));
-                            const int py = ty + 2;
-                            const int ph = tH - 4;
-
-                            // Placement body
-                            juce::Colour plColour = arr->getTrackColour(tid);
-                            g.setColour(plColour.withAlpha(0.5f));
-                            g.fillRect(px, py, pqw, ph);
-
-                            // Placement waveform (FIXED: clipInSeconds anchor)
-                            const auto* mipmap = waveformMipmapCache_.get(pl.contentKey);
-                            if (mipmap && mipmap->hasSource() && pqw > 2 && ph > 2) {
-                                int bestLevelIdx = mipmap->selectBestLevelIndex(pps);
-                                auto snapshot = mipmap->snapshotLevel(bestLevelIdx);
-                                if (!snapshot.peaks.empty() && snapshot.samplesPerPeak > 0) {
-                                    const int numPeaks = static_cast<int>(snapshot.peaks.size());
-                                    const double timePerPeak = static_cast<double>(snapshot.samplesPerPeak)
-                                                             / static_cast<double>(WaveformMipmap::kBaseSampleRate);
-                                    const float halfH = static_cast<float>(ph) * 0.5f;
-                                    const float centerY = static_cast<float>(py) + halfH;
-
-                                    juce::Path wavePath;
-                                    bool started = false;
-
-                                    for (int x = 0; x < pqw; ++x) {
-                                        const double timelineTime = tileStart + (px + x) / pps;
-                                        const double contentTime = pl.clipInSeconds + (timelineTime - pl.timelineStartSeconds);
-                                        const int peakIdx = static_cast<int>(contentTime / timePerPeak);
-                                        if (peakIdx < 0 || peakIdx >= numPeaks) continue;
-                                        const float mag = snapshot.peaks[static_cast<size_t>(peakIdx)].getMagnitude();
-                                        const float barH = mag * halfH;
-                                        if (!started) {
-                                            wavePath.startNewSubPath(static_cast<float>(px + x), centerY - barH);
-                                            started = true;
-                                        } else {
-                                            wavePath.lineTo(static_cast<float>(px + x), centerY - barH);
-                                        }
-                                    }
-                                    for (int x = pqw - 1; x >= 0; --x) {
-                                        const double timelineTime = tileStart + (px + x) / pps;
-                                        const double contentTime = pl.clipInSeconds + (timelineTime - pl.timelineStartSeconds);
-                                        const int peakIdx = static_cast<int>(contentTime / timePerPeak);
-                                        if (peakIdx < 0 || peakIdx >= numPeaks) continue;
-                                        const float mag = snapshot.peaks[static_cast<size_t>(peakIdx)].getMagnitude();
-                                        const float barH = mag * halfH;
-                                        wavePath.lineTo(static_cast<float>(px + x), centerY + barH);
-                                    }
-                                    wavePath.closeSubPath();
-
-                                    g.setColour(plColour.withAlpha(0.6f));
-                                    g.fillPath(wavePath);
-                                }
-                            }
-
-                            // Placement border
-                            g.setColour(plColour.withAlpha(0.8f));
-                            g.drawRect(static_cast<float>(px), static_cast<float>(py), static_cast<float>(pqw), static_cast<float>(ph), 1.0f);
-
-                            // Placement name (truncated)
-                            if (pqw > 30 && ph > 12) {
-                                g.setColour(juce::Colours::white.withAlpha(0.8f));
-                                g.setFont(11.0f);
-                                juce::String label = pl.name.isNotEmpty() ? pl.name : juce::String(pl.contentKey.objectId);
-                                int maxChars = juce::jmax(1, pqw / 7);
-                                if (label.length() > maxChars) label = label.substring(0, maxChars) + ".";
-                                g.drawText(label, px + 3, py, pqw - 6, ph, juce::Justification::centredLeft, false);
-                            }
-                        }
-                    }
-                }
+                const ArrangementVerticalWindow verticalWindow{
+                    static_cast<int>(k.verticalGeometry & 0xFFFF),
+                    static_cast<int>((k.verticalGeometry >> 16) & 0xFFFF),
+                    static_cast<int>((k.verticalGeometry >> 32) & 0xFFFF),
+                    static_cast<int>((k.verticalGeometry >> 48) & 0xFFFF)
+                };
+                auto& arrangement = *processor_.getStandaloneArrangement();
+                auto visuals = collectVisiblePlacements(arrangement,
+                                                        k.startSeconds,
+                                                        k.endSeconds,
+                                                        verticalWindow,
+                                                        k.pixelsPerSecond,
+                                                        tileW,
+                                                        [this](int trackId, uint64_t placementId) {
+                                                            return isPlacementSelected(trackId, placementId);
+                                                        });
+                for (const auto& v : visuals) paintPlacementShellAndWaveform(g, v, waveformMipmapCache_);
+                paintOverlapShading(g, visuals);
+                for (const auto& v : visuals) paintPlacementTextFadeGain(g, v);
             });
 
         preparedContentTiles_.push_back({key, &tile});
@@ -733,7 +1060,7 @@ int ArrangementViewComponent::trackIdForViewportY(int y) const noexcept
                         (adjustedY - rulerHeight_) / trackHeight);
 }
 
-void ArrangementViewComponent::clearMoveDragPreview()
+void ArrangementViewComponent::clearMoveDragOverlay()
 {
     moveDragStartStates_.clear();
     repaint();
@@ -758,7 +1085,7 @@ void ArrangementViewComponent::clearImportDropPreview()
     repaint();
 }
 
-void ArrangementViewComponent::updateMoveDragPreview(const juce::MouseEvent& e)
+void ArrangementViewComponent::updateMoveDragOverlay(const juce::MouseEvent& e)
 {
     if (!isDraggingPlacement_ || currentDragOp_ != DragOperation::Move)
         return;
@@ -767,47 +1094,41 @@ void ArrangementViewComponent::updateMoveDragPreview(const juce::MouseEvent& e)
     repaint();
 }
 
-std::optional<std::vector<ArrangementViewComponent::MoveDragStartState>>
+std::vector<ArrangementViewComponent::MoveDragStartState>
 ArrangementViewComponent::resolveMoveDragParticipants(const HitTestResult& hit) const
 {
     const uint64_t hitPlacementId = processor_.getPlacementId(hit.trackId, hit.placementIndex);
-    if (hitPlacementId == 0)
-        return std::nullopt;
+    jassert(hitPlacementId != 0);
 
     const auto* arrangement = processor_.getStandaloneArrangement();
-    if (arrangement == nullptr)
-        return std::nullopt;
+    jassert(arrangement != nullptr);
 
     std::vector<MoveDragStartState> states;
 
-    const auto addState = [&](int trackId, uint64_t placementId) -> bool
+    const auto addState = [&](int trackId, uint64_t placementId)
     {
         StandaloneArrangement::Placement placement;
-        if (!getStandalonePlacementById(processor_, trackId, placementId, placement))
-            return false;
+        const bool found = getStandalonePlacementById(processor_, trackId, placementId, placement);
+        jassert(found);
 
         states.push_back({
             trackId,
             placementId,
             placement.timelineStartSeconds,
             placement.durationSeconds,
-            placement.name,
-            arrangement->getTrackColour(trackId)
+            placement.name
         });
-        return true;
     };
 
     if (isPlacementSelected(hit.trackId, hitPlacementId))
     {
         for (const auto& key : selectedPlacements_)
-            if (!addState(key.trackId, key.placementId))
-                return std::nullopt;
-
-        return states;
+            addState(key.trackId, key.placementId);
     }
-
-    if (!addState(hit.trackId, hitPlacementId))
-        return std::nullopt;
+    else
+    {
+        addState(hit.trackId, hitPlacementId);
+    }
 
     return states;
 }
@@ -816,17 +1137,24 @@ void ArrangementViewComponent::beginMoveDrag(const HitTestResult& hit, juce::Poi
 {
     moveDragStartStates_.clear();
 
-    auto states = resolveMoveDragParticipants(hit);
-    if (!states)
-    {
-        currentDragOp_ = DragOperation::None;
-        isDraggingPlacement_ = false;
-        return;
-    }
+    const uint64_t hitPlacementId = processor_.getPlacementId(hit.trackId, hit.placementIndex);
+    jassert(hitPlacementId != 0);
+    moveDragPrimaryStart_ = {hit.trackId, hitPlacementId};
 
-    moveDragStartStates_ = std::move(*states);
+    moveDragStartStates_ = resolveMoveDragParticipants(hit);
     dragStartPos_ = mousePos;
     dragCurrentPos_ = mousePos;
+}
+
+auto ArrangementViewComponent::resolveMoveDragTarget(
+    const MoveDragStartState& state,
+    double deltaSeconds,
+    int trackDelta) const -> MoveDragResolvedTarget
+{
+    return {
+        juce::jlimit(0, OpenTuneAudioProcessor::MAX_TRACKS - 1, state.trackId + trackDelta),
+        juce::jmax(0.0, state.startSeconds + deltaSeconds)
+    };
 }
 
 void ArrangementViewComponent::finishMoveDrag(const juce::MouseEvent& e)
@@ -834,43 +1162,55 @@ void ArrangementViewComponent::finishMoveDrag(const juce::MouseEvent& e)
     if (currentDragOp_ != DragOperation::Move || moveDragStartStates_.empty())
         return;
 
-    const double deltaSeconds =
-        viewportXToAbsoluteTime(e.x) - viewportXToAbsoluteTime(dragStartPos_.x);
+    jassert(moveDragPrimaryStart_.trackId >= 0 && moveDragPrimaryStart_.placementId != 0);
 
-    const int targetTrackId = trackIdForViewportY(e.y);
-    const bool crossTrack = targetTrackId != moveDragStartStates_.front().trackId;
+    const double deltaSeconds = viewportXToAbsoluteTime(e.x) - viewportXToAbsoluteTime(dragStartPos_.x);
+    const int trackDelta = trackIdForViewportY(e.y) - moveDragPrimaryStart_.trackId;
 
     std::vector<MultiMovePlacementAction::Entry> undoEntries;
-    undoEntries.reserve(moveDragStartStates_.size());
     std::set<PlacementSelectionKey> movedSelection;
+    PlacementSelectionKey primaryAfterMove{-1, 0};
 
-    for (const auto& state : moveDragStartStates_)
-    {
-        const int destinationTrackId = crossTrack ? targetTrackId : state.trackId;
-        const double destinationStart = juce::jmax(0.0, state.startSeconds + deltaSeconds);
+    for (const auto& state : moveDragStartStates_) {
+        const auto target = resolveMoveDragTarget(state, deltaSeconds, trackDelta);
 
-        if (destinationTrackId == state.trackId)
-            setStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, destinationStart);
+        if (target.trackId == state.trackId)
+            setStandalonePlacementStartSeconds(processor_, state.trackId, state.placementId, target.startSeconds);
         else
-            moveStandalonePlacement(processor_, state.trackId, destinationTrackId, state.placementId, destinationStart);
+            moveStandalonePlacement(processor_, state.trackId, target.trackId, state.placementId, target.startSeconds);
 
-        undoEntries.push_back({state.trackId, destinationTrackId, state.placementId, state.startSeconds, destinationStart});
-        movedSelection.insert({destinationTrackId, state.placementId});
+        undoEntries.push_back({state.trackId, target.trackId, state.placementId, state.startSeconds, target.startSeconds});
+        movedSelection.insert({target.trackId, state.placementId});
+
+        if (state.trackId == moveDragPrimaryStart_.trackId
+            && state.placementId == moveDragPrimaryStart_.placementId) {
+            primaryAfterMove = {target.trackId, state.placementId};
+        }
     }
 
     processor_.getUndoManager().addAction(
         std::make_unique<MultiMovePlacementAction>(processor_, std::move(undoEntries)));
 
     selectedPlacements_ = std::move(movedSelection);
-    selectedTrack_ = targetTrackId;
-    selectedPlacementId_ = moveDragStartStates_.front().placementId;
-    selectedPlacementIndex_ = processor_.findPlacementIndexById(selectedTrack_, selectedPlacementId_);
+    jassert(primaryAfterMove.trackId >= 0 && primaryAfterMove.placementId != 0);
+    selectedTrack_ = primaryAfterMove.trackId;
+    selectedPlacementId_ = primaryAfterMove.placementId;
+    selectedPlacementIndex_ = processor_.findPlacementIndexById(primaryAfterMove.trackId, primaryAfterMove.placementId);
+
+    // Sync StandaloneArrangement model selection
+    auto* arrangement = processor_.getStandaloneArrangement();
+    jassert(arrangement != nullptr);
+    arrangement->selectPlacement(selectedTrack_, selectedPlacementId_);
+
     moveDragStartStates_.clear();
     currentDragOp_ = DragOperation::None;
     isDraggingPlacement_ = false;
 
     refreshVisualState();
-    listeners_.call([this](Listener& l) { l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_); });
+    listeners_.call([this](Listener& l) {
+        l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
+        l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+    });
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
 }
 
@@ -923,33 +1263,52 @@ void ArrangementViewComponent::drawMoveDragOverlay(juce::Graphics& g)
     if (!isDraggingPlacement_ || currentDragOp_ != DragOperation::Move || moveDragStartStates_.empty())
         return;
 
-    const double startTime = viewportXToAbsoluteTime(dragStartPos_.x);
-    const double currentTime = viewportXToAbsoluteTime(dragCurrentPos_.x);
-    const double deltaSeconds = currentTime - startTime;
-    const int targetTrackId = trackIdForViewportY(dragCurrentPos_.y);
+    const double deltaSeconds = viewportXToAbsoluteTime(dragCurrentPos_.x)
+        - viewportXToAbsoluteTime(dragStartPos_.x);
+    const int trackDelta = trackIdForViewportY(dragCurrentPos_.y) - moveDragPrimaryStart_.trackId;
+    auto& arrangement = *processor_.getStandaloneArrangement();
 
-    for (const auto& state : moveDragStartStates_)
-    {
-        const int previewTrackId = targetTrackId;
-        const double previewStart = state.startSeconds + deltaSeconds;
-        if (previewStart < 0.0) continue;
+    for (const auto& state : moveDragStartStates_) {
+        const auto target = resolveMoveDragTarget(state, deltaSeconds, trackDelta);
+        const int x = absoluteTimeToViewportX(target.startSeconds);
+        const int width = juce::jmax(1, static_cast<int>(std::round(state.durationSeconds * camera_.pixelsPerSecond)));
+        const auto lane = getTrackLaneBounds(target.trackId);
+        const juce::Rectangle<float> bounds(static_cast<float>(x),
+                                            static_cast<float>(lane.getY() + 2),
+                                            static_cast<float>(width),
+                                            static_cast<float>(lane.getHeight() - 4));
 
-        const int x = absoluteTimeToViewportX(previewStart);
-        const int width = static_cast<int>(state.durationSeconds * camera_.pixelsPerSecond);
-        const auto trackBounds = getTrackLaneBounds(previewTrackId);
-        juce::Rectangle<int> bounds(x, trackBounds.getY(), width, trackBounds.getHeight());
+        StandaloneArrangement::Placement placement;
+        [[maybe_unused]] const bool found = arrangement.getPlacementById(state.trackId, state.placementId, placement);
+        jassert(found);
 
-        g.setColour(state.colour.withAlpha(0.4f));
-        g.fillRect(bounds.toFloat());
-        g.setColour(state.colour.withAlpha(0.6f));
-        g.drawRect(bounds.toFloat(), 1.0f);
-        if (width > 30)
-        {
-            g.setColour(juce::Colours::white.withAlpha(0.7f));
-            g.setFont(11.0f);
-            g.drawText(state.name, bounds.reduced(3, 0), juce::Justification::centredLeft, false);
-        }
+        const auto targetColour = arrangement.getTrackColour(target.trackId);
+
+        PlacementVisual visual{
+            bounds,
+            targetColour,
+            state.name,
+            placement.gain,
+            placement.fadeInDuration,
+            placement.fadeOutDuration,
+            isPlacementSelected(state.trackId, state.placementId),
+            true,
+            placement.contentKey,
+            placement.clipInSeconds,
+            target.startSeconds,
+            state.durationSeconds,
+            camera_.pixelsPerSecond,
+            target.startSeconds,
+            target.startSeconds + state.durationSeconds
+        };
+        paintPlacementGhost(g, visual, waveformMipmapCache_);
     }
+}
+
+void ArrangementViewComponent::drawTransientOverlay(juce::Graphics& g)
+{
+    drawImportDropPreview(g);
+    drawMoveDragOverlay(g);
 }
 
 void ArrangementViewComponent::paint(juce::Graphics& g)
@@ -1462,7 +1821,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    clearMoveDragPreview();
+    clearMoveDragOverlay();
 
     refreshVisualState();
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
@@ -1580,7 +1939,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     if (isDraggingPlacement_)
     {
         setMouseCursor(juce::MouseCursor::DraggingHandCursor);
-        updateMoveDragPreview(e);
+        updateMoveDragOverlay(e);
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
@@ -1665,7 +2024,7 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
     currentDragOp_ = DragOperation::None;
     dragOperationPlacementId_ = 0;
     dragStartTrackId_ = -1;
-    clearMoveDragPreview();
+    clearMoveDragOverlay();
     setMouseCursor(juce::MouseCursor::NormalCursor);
 }
 

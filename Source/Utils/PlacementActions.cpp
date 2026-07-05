@@ -129,33 +129,6 @@ void DeletePlacementAction::redo()
 }
 
 // ============================================================================
-// MovePlacementAction
-// ============================================================================
-
-MovePlacementAction::MovePlacementAction(OpenTuneAudioProcessor& processor,
-                                         int sourceTrackId, int targetTrackId,
-                                         uint64_t placementId,
-                                         double oldStartSeconds, double newStartSeconds)
-    : processor_(processor)
-    , sourceTrackId_(sourceTrackId)
-    , targetTrackId_(targetTrackId)
-    , placementId_(placementId)
-    , oldStartSeconds_(oldStartSeconds)
-    , newStartSeconds_(newStartSeconds)
-{
-}
-
-void MovePlacementAction::undo()
-{
-    processor_.movePlacementToTrack(targetTrackId_, sourceTrackId_, placementId_, oldStartSeconds_);
-}
-
-void MovePlacementAction::redo()
-{
-    processor_.movePlacementToTrack(sourceTrackId_, targetTrackId_, placementId_, newStartSeconds_);
-}
-
-// ============================================================================
 // MultiMovePlacementAction
 // ============================================================================
 

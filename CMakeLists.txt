@@ -701,12 +701,17 @@ target_sources(OpenTune
 # ==============================================================================
 # Conditional Source Files per Format
 # ==============================================================================
+# Shared Standalone editor sources used by product and behavior test target
+set(OPENTUNE_STANDALONE_UI_SOURCES
+    Source/Standalone/EditorFactoryStandalone.cpp
+    Source/Standalone/PluginEditor.cpp
+    Source/Standalone/PluginEditor.h
+)
+
 target_sources(OpenTune_Standalone
     PRIVATE
         Source/Utils/D3D12AgilityBootstrap.cpp
-        Source/Standalone/EditorFactoryStandalone.cpp
-        Source/Standalone/PluginEditor.cpp
-        Source/Standalone/PluginEditor.h
+        ${OPENTUNE_STANDALONE_UI_SOURCES}
 )
 
 target_compile_definitions(OpenTune_Standalone
@@ -1411,15 +1416,101 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
 
 endif()
 
-# ==============================================================================
-# Installation
-# ==============================================================================
-install(TARGETS OpenTune
-    RUNTIME DESTINATION bin
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-    RESOURCE DESTINATION bin
-)
+if(OPENTUNE_BUILD_ARCHITECTURE_TESTS AND NOT OPENTUNE_ENABLE_ARA)
+    # Arrangement Move-Drag Behavior Tests (non-ARA Standalone only)
+    # Real juce::MouseEvent synthesis on ArrangementViewComponent.
+    # Links OpenTune shared lib + Standalone editor sources to resolve createOpenTuneEditor.
+    add_executable(OpenTuneArrangementBehaviorTests
+        Tests/ArrangementMoveDragBehaviorTests.cpp
+        ${OPENTUNE_STANDALONE_UI_SOURCES}
+    )
+    target_compile_features(OpenTuneArrangementBehaviorTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneArrangementBehaviorTests
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}
+            ${CMAKE_SOURCE_DIR}/Source
+            ${CMAKE_SOURCE_DIR}/Source/Standalone
+    )
+    target_link_libraries(OpenTuneArrangementBehaviorTests
+        PRIVATE
+            OpenTune
+            OpenTuneResources
+            juce::juce_gui_basics
+            juce::juce_audio_basics
+            juce::juce_graphics
+            juce::juce_audio_utils
+            juce::juce_recommended_config_flags
+    )
+    target_compile_definitions(OpenTuneArrangementBehaviorTests
+        PRIVATE
+            JucePlugin_Build_Standalone=1
+            JucePlugin_Build_VST3=0
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneArrangementBehaviorTests PRIVATE /utf-8 /bigobj)
+    endif()
+    add_test(NAME OpenTuneArrangementBehaviorTests COMMAND OpenTuneArrangementBehaviorTests)
+
+    # Deploy runtime DLLs for the behavior test executable
+    if(WIN32)
+        add_custom_command(TARGET OpenTuneArrangementBehaviorTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneArrangementBehaviorTests>/onnxruntime.dll"
+            COMMENT "Copying ONNX Runtime DLL to BehaviorTests..."
+        )
+
+        if(ONNXRUNTIME_PROVIDERS_SHARED_DLL)
+            add_custom_command(TARGET OpenTuneArrangementBehaviorTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_PROVIDERS_SHARED_DLL}"
+                    "$<TARGET_FILE_DIR:OpenTuneArrangementBehaviorTests>/onnxruntime_providers_shared.dll"
+                COMMENT "Copying ONNX Runtime shared providers DLL to BehaviorTests..."
+            )
+        endif()
+
+        if(ONNXRUNTIME_PROVIDERS_DML_DLL)
+            add_custom_command(TARGET OpenTuneArrangementBehaviorTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_PROVIDERS_DML_DLL}"
+                    "$<TARGET_FILE_DIR:OpenTuneArrangementBehaviorTests>/onnxruntime_providers_dml.dll"
+                COMMENT "Copying ONNX Runtime DML providers DLL to BehaviorTests..."
+            )
+        endif()
+
+        add_custom_command(TARGET OpenTuneArrangementBehaviorTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${DIRECTML_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneArrangementBehaviorTests>/DirectML.dll"
+            COMMENT "Copying DirectML runtime DLL to BehaviorTests..."
+        )
+
+        add_custom_command(TARGET OpenTuneArrangementBehaviorTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:OpenTuneArrangementBehaviorTests>/D3D12"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${D3D12_CORE_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneArrangementBehaviorTests>/D3D12/D3D12Core.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${D3D12_SDK_LAYERS_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneArrangementBehaviorTests>/D3D12/D3D12SDKLayers.dll"
+            COMMENT "Copying DirectX Agility runtime to BehaviorTests..."
+        )
+    endif()
+endif()
+
+    # ==============================================================================
+    # Installation
+    # ==============================================================================
+    install(TARGETS OpenTune
+        RUNTIME DESTINATION bin
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RESOURCE DESTINATION bin
+    )
 
 # ==============================================================================
 # Summary

@@ -69,26 +69,6 @@ private:
     ContentKey contentKey_;
 };
 
-// Move undo: 恢复原始 timeline 位置（支持跨轨）
-class MovePlacementAction : public UndoAction {
-public:
-    MovePlacementAction(OpenTuneAudioProcessor& processor,
-                        int sourceTrackId, int targetTrackId,
-                        uint64_t placementId,
-                        double oldStartSeconds, double newStartSeconds);
-    void undo() override;
-    void redo() override;
-    juce::String getDescription() const override { return TRANS("移动片段"); }
-
-private:
-    OpenTuneAudioProcessor& processor_;
-    int sourceTrackId_;
-    int targetTrackId_;
-    uint64_t placementId_;
-    double oldStartSeconds_;
-    double newStartSeconds_;
-};
-
 class MultiMovePlacementAction : public UndoAction {
 public:
     struct Entry {

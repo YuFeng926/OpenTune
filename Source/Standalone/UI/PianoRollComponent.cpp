@@ -886,8 +886,8 @@ juce::Rectangle<int> PianoRollComponent::getNoteBounds(const Note& note) const
         return {};
     }
 
-    const int x1 = makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(note.startTime));
-    const int x2 = makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(note.endTime));
+    const int x1 = sourceTimeToX(note.startTime);
+    const int x2 = sourceTimeToX(note.endTime);
     const int width = std::max(1, x2 - x1);
     const float midi = freqToMidi(adjustedPitch);
     const float y = midiToY(midi) - (pixelsPerSemitone_ * 0.5f);
@@ -930,8 +930,8 @@ juce::Rectangle<int> PianoRollComponent::getSelectionBounds() const
     const float maxMidi = std::max(interactionState_.selection.selectionStartMidi,
                                    interactionState_.selection.selectionEndMidi);
 
-    const int x1 = makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(startTime));
-    const int x2 = makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(endTime));
+    const int x1 = sourceTimeToX(startTime);
+    const int x2 = sourceTimeToX(endTime);
     const int y1 = static_cast<int>(std::floor(midiToY(maxMidi)));
     const int y2 = static_cast<int>(std::ceil(midiToY(minMidi)));
     return juce::Rectangle<int>(std::min(x1, x2),
@@ -951,10 +951,10 @@ juce::Rectangle<int> PianoRollComponent::getHandDrawPreviewBounds() const
         return {};
     }
 
-    const int x1 = makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(std::min(interactionState_.drawing.dirtyStartTime,
-                                                                 interactionState_.drawing.dirtyEndTime)));
-    const int x2 = makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(std::max(interactionState_.drawing.dirtyStartTime,
-                                                                 interactionState_.drawing.dirtyEndTime)));
+    const int x1 = sourceTimeToX(std::min(interactionState_.drawing.dirtyStartTime,
+                                          interactionState_.drawing.dirtyEndTime));
+    const int x2 = sourceTimeToX(std::max(interactionState_.drawing.dirtyStartTime,
+                                          interactionState_.drawing.dirtyEndTime));
     return juce::Rectangle<int>(std::min(x1, x2),
                                 getTimelineViewportBounds().getY(),
                                 std::max(1, std::abs(x2 - x1)),
@@ -978,7 +978,7 @@ juce::Rectangle<int> PianoRollComponent::getLineAnchorPreviewBounds() const
     };
 
     for (const auto& anchor : interactionState_.drawing.pendingAnchors) {
-        includePoint(static_cast<float>(makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(anchor.time))), freqToY(anchor.freq));
+        includePoint(static_cast<float>(sourceTimeToX(anchor.time)), freqToY(anchor.freq));
     }
     includePoint(interactionState_.drawing.currentMousePos.x, interactionState_.drawing.currentMousePos.y);
 
@@ -1013,7 +1013,7 @@ juce::Rectangle<int> PianoRollComponent::getNoteDragCurvePreviewBounds() const
             continue;
         }
 
-        const float x = static_cast<float>(makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(f0tl.timeAtFrame(frame))));
+        const float x = static_cast<float>(sourceTimeToX(f0tl.timeAtFrame(frame)));
         const float y = freqToY(f0);
         const auto pointBounds = juce::Rectangle<float>(x - 2.0f, y - 2.0f, 4.0f, 4.0f);
         bounds = hasBounds ? bounds.getUnion(pointBounds) : pointBounds;
@@ -1169,9 +1169,8 @@ void PianoRollPreviewOverlay::paint(juce::Graphics& g)
         float pitch = owner_.interactionState_.drawing.drawingNotePitch;
 
         if (pitch > 0.0f && endTime > startTime) {
-            const auto mapper = owner_.makeViewMapper();
-            int x1 = mapper.timeToX(owner_.activeContentProjection().projectContentTimeToTimeline(startTime));
-            int x2 = mapper.timeToX(owner_.activeContentProjection().projectContentTimeToTimeline(endTime));
+            int x1 = owner_.sourceTimeToX(startTime);
+            int x2 = owner_.sourceTimeToX(endTime);
             float midiNote = 69.0f + 12.0f * std::log2(pitch / 440.0f);
             float y = owner_.midiToY(midiNote);
             float noteHeight = owner_.pixelsPerSemitone_;
@@ -1220,7 +1219,7 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
         if (f0 > 0.0f) {
             float y = freqToY(f0);
             double timePos = f0tl.timeAtFrame(i);
-            float x = static_cast<float>(makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(timePos)));
+            float x = static_cast<float>(sourceTimeToX(timePos));
 
             if (!pathStarted) {
                 previewPath.startNewSubPath(x, y);
@@ -1273,7 +1272,7 @@ void PianoRollComponent::drawNoteDragCurvePreview(juce::Graphics& g)
             continue;
         }
 
-        const float x = static_cast<float>(makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(f0tl.timeAtFrame(frame))));
+        const float x = static_cast<float>(sourceTimeToX(f0tl.timeAtFrame(frame)));
         const float y = freqToY(f0);
         if (!pathStarted) {
             previewPath.startNewSubPath(x, y);
@@ -1299,7 +1298,7 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
 
     for (size_t i = 0; i < interactionState_.drawing.pendingAnchors.size(); ++i) {
         const auto& anchor = interactionState_.drawing.pendingAnchors[i];
-        float x = static_cast<float>(makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(anchor.time)));
+        float x = static_cast<float>(sourceTimeToX(anchor.time));
         float y = freqToY(anchor.freq);
 
         g.setColour(anchorColour);
@@ -1307,7 +1306,7 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
 
         if (i > 0) {
             const auto& prev = interactionState_.drawing.pendingAnchors[i - 1];
-            float prevX = static_cast<float>(makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(prev.time)));
+            float prevX = static_cast<float>(sourceTimeToX(prev.time));
             float prevY = freqToY(prev.freq);
             g.setColour(anchorColour.withAlpha(0.7f));
             g.drawLine(prevX, prevY, x, y, 2.0f);
@@ -1316,7 +1315,7 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
 
     if (!interactionState_.drawing.pendingAnchors.empty()) {
         const auto& last = interactionState_.drawing.pendingAnchors.back();
-        float lastX = static_cast<float>(makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(last.time)));
+        float lastX = static_cast<float>(sourceTimeToX(last.time));
         float lastY = freqToY(last.freq);
         g.setColour(anchorColour.withAlpha(0.4f));
         g.drawLine(lastX, lastY, interactionState_.drawing.currentMousePos.x, interactionState_.drawing.currentMousePos.y, 1.5f);
@@ -1332,8 +1331,8 @@ void PianoRollComponent::drawSelectionBox(juce::Graphics& g, ThemeId themeId) {
     float minMidi = std::min(interactionState_.selection.selectionStartMidi, interactionState_.selection.selectionEndMidi);
     float maxMidi = std::max(interactionState_.selection.selectionStartMidi, interactionState_.selection.selectionEndMidi);
 
-    int x1 = makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(startTime));
-    int x2 = makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(endTime));
+    int x1 = sourceTimeToX(startTime);
+    int x2 = sourceTimeToX(endTime);
     float y1 = midiToY(maxMidi);
     float y2 = midiToY(minMidi);
 
@@ -1736,7 +1735,6 @@ int PianoRollComponent::findLineAnchorSegmentNear(int x, int y) const
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) return -1;
     const float tolerancePixels = 15.0f;
-    const double clickTime = activeContentProjection().projectTimelineTimeToContent(makeViewMapper().xToTime(x));
 
     int bestIdx = -1;
     float bestDist = tolerancePixels;
@@ -1747,14 +1745,16 @@ int PianoRollComponent::findLineAnchorSegmentNear(int x, int y) const
         if (seg.f0Data.empty()) continue;
 
         const double startTime = f0tl.timeAtFrame(seg.startFrame);
-        const double endTime = f0tl.timeAtFrame(seg.endFrame);
+        const double endTime   = f0tl.timeAtFrame(seg.endFrame);
 
-        const int startX = makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(startTime));
-        const int endX = makeViewMapper().timeToX(activeContentProjection().projectContentTimeToTimeline(endTime));
+        const int startX = sourceTimeToX(startTime);
+        const int endX   = sourceTimeToX(endTime);
 
         if (x < startX - tolerancePixels || x > endX + tolerancePixels) continue;
 
-        const double relT = juce::jlimit(0.0, 1.0, (clickTime - startTime) / (endTime - startTime));
+        const double clickSource = xToSourceTime(x);
+        const double relT = juce::jlimit(0.0, 1.0,
+            (clickSource - startTime) / (endTime - startTime));
         const int f0Idx = juce::jlimit(0, static_cast<int>(seg.f0Data.size()) - 1,
                                        static_cast<int>(relT * (seg.f0Data.size() - 1)));
 
@@ -1889,6 +1889,34 @@ ContentTimelineProjection PianoRollComponent::activeContentProjection() const no
     if (const auto* placement = findEditedPlacement())
         return placement->projection;
     return {};
+}
+
+double PianoRollComponent::sourceTimeToTimelineTime(double sourceSeconds) const
+{
+    const auto projection = activeContentProjection();
+    jassert(projection.isValid());
+    const auto snap = readEditedSnapshot();
+    jassert(snap != nullptr && snap->timeGrid != nullptr);
+    const double outputSeconds = snap->timeGrid->tauForward(sourceSeconds);
+    return projection.projectContentTimeToTimeline(outputSeconds);
+}
+
+int PianoRollComponent::sourceTimeToX(double sourceSeconds) const
+{
+    return makeViewMapper().timeToX(sourceTimeToTimelineTime(sourceSeconds));
+}
+
+double PianoRollComponent::xToSourceTime(int x) const
+{
+    const auto projection = activeContentProjection();
+    jassert(projection.isValid());
+
+    const auto snap = readEditedSnapshot();
+    jassert(snap != nullptr && snap->timeGrid != nullptr);
+
+    const double timeline = makeViewMapper().xToTime(x);
+    const double output   = projection.projectTimelineTimeToContent(timeline);
+    return snap->timeGrid->tauInverse(output);
 }
 
 bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineContentPlacement> placements,

@@ -223,8 +223,8 @@ private:
     void updateScrollBars();
     void requestVisualRefresh();
     void refreshVisualState();
-    void updateMoveDragPreview(const juce::MouseEvent& e);
-    void clearMoveDragPreview();
+    void updateMoveDragOverlay(const juce::MouseEvent& e);
+    void clearMoveDragOverlay();
     void drawTransientOverlay(juce::Graphics& g);
     void drawImportDropPreview(juce::Graphics& g);
     void drawMoveDragOverlay(juce::Graphics& g);
@@ -337,11 +337,20 @@ private:
         double startSeconds = 0.0;
         double durationSeconds = 0.0;
         juce::String name;
-        juce::Colour colour;
     };
     std::vector<MoveDragStartState> moveDragStartStates_;
+    PlacementSelectionKey moveDragPrimaryStart_{-1, 0};
 
-    std::optional<std::vector<MoveDragStartState>> resolveMoveDragParticipants(const HitTestResult& hit) const;
+    struct MoveDragResolvedTarget {
+        int trackId = 0;
+        double startSeconds = 0.0;
+    };
+
+    MoveDragResolvedTarget resolveMoveDragTarget(const MoveDragStartState& state,
+                                                 double deltaSeconds,
+                                                 int trackDelta) const;
+
+    std::vector<MoveDragStartState> resolveMoveDragParticipants(const HitTestResult& hit) const;
     void beginMoveDrag(const HitTestResult& hit, juce::Point<int> mousePos);
     void finishMoveDrag(const juce::MouseEvent& e);
 
