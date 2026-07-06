@@ -600,7 +600,7 @@ public:
     bool setContentReferenceFeatures(ContentKey key, const ReferenceFeatureSet& features);
 
     bool replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes);
-    bool commitContentNotesAndSegments(ContentKey key,
+    ContentCommitSnapshot commitContentNotesAndSegments(ContentKey key,
                                         std::vector<Note> notes,
                                         std::vector<PitchCorrectionSegment> segments,
                                         ContentEditRangeFrames affectedRange);

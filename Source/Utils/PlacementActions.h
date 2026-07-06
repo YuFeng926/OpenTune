@@ -69,6 +69,11 @@ private:
     ContentKey contentKey_;
 };
 
+struct PlacementKey {
+    int trackId = -1;
+    uint64_t placementId = 0;
+};
+
 class MultiMovePlacementAction : public UndoAction {
 public:
     struct Entry {
@@ -79,7 +84,10 @@ public:
         double newStartSeconds = 0.0;
     };
 
-    MultiMovePlacementAction(OpenTuneAudioProcessor& processor, std::vector<Entry> entries);
+    MultiMovePlacementAction(OpenTuneAudioProcessor& processor,
+                             std::vector<Entry> entries,
+                             PlacementKey primaryBefore,
+                             PlacementKey primaryAfter);
     void undo() override;
     void redo() override;
     juce::String getDescription() const override { return TRANS("移动片段"); }
@@ -87,6 +95,10 @@ public:
 private:
     OpenTuneAudioProcessor& processor_;
     std::vector<Entry> entries_;
+    PlacementKey primaryBefore_;
+    PlacementKey primaryAfter_;
+
+    void applySelection(const PlacementKey& key);
 };
 
 // Gain undo: 恢复原始增益

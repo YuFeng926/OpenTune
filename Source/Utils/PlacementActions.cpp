@@ -133,10 +133,22 @@ void DeletePlacementAction::redo()
 // ============================================================================
 
 MultiMovePlacementAction::MultiMovePlacementAction(OpenTuneAudioProcessor& processor,
-                                                   std::vector<Entry> entries)
+                                                   std::vector<Entry> entries,
+                                                   PlacementKey primaryBefore,
+                                                   PlacementKey primaryAfter)
     : processor_(processor)
     , entries_(std::move(entries))
+    , primaryBefore_(primaryBefore)
+    , primaryAfter_(primaryAfter)
 {
+}
+
+void MultiMovePlacementAction::applySelection(const PlacementKey& key)
+{
+    auto* arrangement = processor_.getStandaloneArrangement();
+    if (arrangement != nullptr) {
+        arrangement->selectPlacement(key.trackId, key.placementId);
+    }
 }
 
 void MultiMovePlacementAction::undo()
@@ -156,6 +168,7 @@ void MultiMovePlacementAction::undo()
                                             entry.oldStartSeconds);
         }
     }
+    applySelection(primaryBefore_);
 }
 
 void MultiMovePlacementAction::redo()
@@ -175,6 +188,7 @@ void MultiMovePlacementAction::redo()
                                             entry.newStartSeconds);
         }
     }
+    applySelection(primaryAfter_);
 }
 
 // ============================================================================

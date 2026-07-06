@@ -161,18 +161,17 @@ if(WIN32)
     set(OPENTUNE_DIRECTML_PACKAGE_DLL "${OPENTUNE_DIRECTML_ROOT}/bin/x64-win/DirectML.dll")
     set(OPENTUNE_DIRECTML_PACKAGE_LIB "${OPENTUNE_DIRECTML_ROOT}/bin/x64-win/DirectML.lib")
 
-    set(DIRECTML_INCLUDE_DIR "")
-    set(OPENTUNE_DEFAULT_DIRECTML_DLL "")
-    if(EXISTS "${OPENTUNE_DIRECTML_PACKAGE_INCLUDE_DIR}/DirectML.h"
-            AND EXISTS "${OPENTUNE_DIRECTML_PACKAGE_DLL}")
-        set(DIRECTML_INCLUDE_DIR "${OPENTUNE_DIRECTML_PACKAGE_INCLUDE_DIR}")
-        set(OPENTUNE_DEFAULT_DIRECTML_DLL "${OPENTUNE_DIRECTML_PACKAGE_DLL}")
-    else()
-        opentune_find_windows_um_include_file("DirectML.h" OPENTUNE_WINDOWS_SDK_DIRECTML_HEADER)
-        get_filename_component(DIRECTML_INCLUDE_DIR "${OPENTUNE_WINDOWS_SDK_DIRECTML_HEADER}" DIRECTORY)
-        set(OPENTUNE_DEFAULT_DIRECTML_DLL "C:/Windows/System32/DirectML.dll")
-        message(STATUS "Vendored Microsoft.AI.DirectML package not found; using Windows SDK DirectML headers/libs.")
+    if(NOT EXISTS "${OPENTUNE_DIRECTML_PACKAGE_INCLUDE_DIR}/DirectML.h"
+            OR NOT EXISTS "${OPENTUNE_DIRECTML_PACKAGE_DLL}"
+            OR NOT EXISTS "${OPENTUNE_DIRECTML_PACKAGE_LIB}")
+        message(FATAL_ERROR
+            "Vendored DirectML package is required under ${OPENTUNE_DEFAULT_DIRECTML_ROOT}. "
+            "Install it via ThirdParty/ or provide DIRECTML_ROOT.")
     endif()
+
+    set(DIRECTML_INCLUDE_DIR "${OPENTUNE_DIRECTML_PACKAGE_INCLUDE_DIR}")
+    set(OPENTUNE_DEFAULT_DIRECTML_DLL "${OPENTUNE_DIRECTML_PACKAGE_DLL}")
+    set(DIRECTML_LIB "${OPENTUNE_DIRECTML_PACKAGE_LIB}")
 
     if(NOT DEFINED OPENTUNE_DIRECTML_DLL OR "${OPENTUNE_DIRECTML_DLL}" STREQUAL "")
         set(OPENTUNE_DIRECTML_DLL "${OPENTUNE_DEFAULT_DIRECTML_DLL}" CACHE FILEPATH "DirectML runtime DLL source" FORCE)
@@ -1414,6 +1413,50 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
     endif()
     add_test(NAME OpenTuneTimelinePresentationTests COMMAND OpenTuneTimelinePresentationTests)
 
+    # PianoRoll Static Contract Tests — source-level kill-list guards
+    add_executable(OpenTunePianoRollStaticContractTests
+        Tests/PianoRollStaticContractTests.cpp
+    )
+    target_compile_features(OpenTunePianoRollStaticContractTests PRIVATE cxx_std_17)
+    target_compile_definitions(OpenTunePianoRollStaticContractTests
+        PRIVATE
+            OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    if(MSVC)
+        target_compile_options(OpenTunePianoRollStaticContractTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTunePianoRollStaticContractTests COMMAND OpenTunePianoRollStaticContractTests)
+
+    # PianoRoll Behavior Tests — real product undo boundary
+    add_executable(OpenTunePianoRollBehaviorTests
+        Tests/PianoRollBehaviorTests.cpp
+        Source/Utils/PianoRollEditAction.cpp
+        Source/Utils/UndoManager.cpp
+    )
+    target_compile_features(OpenTunePianoRollBehaviorTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTunePianoRollBehaviorTests
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}
+            ${CMAKE_SOURCE_DIR}/Source
+    )
+    target_link_libraries(OpenTunePianoRollBehaviorTests
+        PRIVATE
+            juce::juce_core
+            juce::juce_audio_basics
+            juce::juce_recommended_config_flags
+    )
+    target_compile_definitions(OpenTunePianoRollBehaviorTests
+        PRIVATE
+            OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+    )
+    if(MSVC)
+        target_compile_options(OpenTunePianoRollBehaviorTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTunePianoRollBehaviorTests COMMAND OpenTunePianoRollBehaviorTests)
+
 endif()
 
 if(OPENTUNE_BUILD_ARCHITECTURE_TESTS AND NOT OPENTUNE_ENABLE_ARA)
@@ -1498,6 +1541,86 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS AND NOT OPENTUNE_ENABLE_ARA)
                 "${D3D12_SDK_LAYERS_DLL}"
                 "$<TARGET_FILE_DIR:OpenTuneArrangementBehaviorTests>/D3D12/D3D12SDKLayers.dll"
             COMMENT "Copying DirectX Agility runtime to BehaviorTests..."
+        )
+    endif()
+
+    # Timeline Visual Equivalence Tests — read-only golden comparison
+    add_executable(OpenTuneTimelineVisualEquivalenceTests
+        Tests/TimelineVisualEquivalenceTests.cpp
+        ${OPENTUNE_STANDALONE_UI_SOURCES}
+    )
+    target_compile_features(OpenTuneTimelineVisualEquivalenceTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneTimelineVisualEquivalenceTests
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}
+            ${CMAKE_SOURCE_DIR}/Source
+            ${CMAKE_SOURCE_DIR}/Source/Standalone
+            ${ONNXRUNTIME_INCLUDE_DIR}
+    )
+    target_link_libraries(OpenTuneTimelineVisualEquivalenceTests
+        PRIVATE
+            OpenTune
+            OpenTuneResources
+            juce::juce_gui_basics
+            juce::juce_audio_basics
+            juce::juce_graphics
+            juce::juce_audio_utils
+            juce::juce_recommended_config_flags
+    )
+    target_compile_definitions(OpenTuneTimelineVisualEquivalenceTests
+        PRIVATE
+            OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+            JucePlugin_Build_Standalone=1
+            JucePlugin_Build_VST3=0
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneTimelineVisualEquivalenceTests PRIVATE /utf-8 /bigobj)
+    endif()
+    add_test(NAME OpenTuneTimelineVisualEquivalenceTests COMMAND OpenTuneTimelineVisualEquivalenceTests)
+
+    # Deploy runtime DLLs for visual equivalence test
+    if(WIN32)
+        add_custom_command(TARGET OpenTuneTimelineVisualEquivalenceTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneTimelineVisualEquivalenceTests>/onnxruntime.dll"
+            COMMENT "Copying ONNX Runtime DLL to VisualEquivalenceTests..."
+        )
+        if(ONNXRUNTIME_PROVIDERS_SHARED_DLL)
+            add_custom_command(TARGET OpenTuneTimelineVisualEquivalenceTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_PROVIDERS_SHARED_DLL}"
+                    "$<TARGET_FILE_DIR:OpenTuneTimelineVisualEquivalenceTests>/onnxruntime_providers_shared.dll"
+                COMMENT "Copying ONNX Runtime shared providers DLL to VisualEquivalenceTests..."
+            )
+        endif()
+        if(ONNXRUNTIME_PROVIDERS_DML_DLL)
+            add_custom_command(TARGET OpenTuneTimelineVisualEquivalenceTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_PROVIDERS_DML_DLL}"
+                    "$<TARGET_FILE_DIR:OpenTuneTimelineVisualEquivalenceTests>/onnxruntime_providers_dml.dll"
+                COMMENT "Copying ONNX Runtime DML providers DLL to VisualEquivalenceTests..."
+            )
+        endif()
+        add_custom_command(TARGET OpenTuneTimelineVisualEquivalenceTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${DIRECTML_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneTimelineVisualEquivalenceTests>/DirectML.dll"
+            COMMENT "Copying DirectML runtime DLL to VisualEquivalenceTests..."
+        )
+        add_custom_command(TARGET OpenTuneTimelineVisualEquivalenceTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:OpenTuneTimelineVisualEquivalenceTests>/D3D12"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${D3D12_CORE_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneTimelineVisualEquivalenceTests>/D3D12/D3D12Core.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${D3D12_SDK_LAYERS_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneTimelineVisualEquivalenceTests>/D3D12/D3D12SDKLayers.dll"
+            COMMENT "Copying DirectX Agility runtime to VisualEquivalenceTests..."
         )
     endif()
 endif()

@@ -72,10 +72,13 @@ ContentTimelineProjection makePianoRollProjection(const StandaloneArrangement::P
     return projection;
 }
 
-static TimelineViewportRequest makeManualViewportReplayRequest(TimelineViewportCamera camera, int viewportWidth)
+static TimelineViewportRequest makeManualViewportReplayRequest(TimelineViewportCamera camera,
+                                                               int viewportWidth,
+                                                               TimelineViewportRequest::ViewKind viewKind)
 {
     TimelineViewportRequest req;
     req.kind = TimelineViewportRequest::Kind::Manual;
+    req.viewKind = viewKind;
     req.targetTime = camera.visibleStartSeconds;
     req.viewportWidth = viewportWidth;
     req.pixelsPerSecond = camera.pixelsPerSecond;
@@ -2727,8 +2730,14 @@ void OpenTuneAudioProcessorEditor::scrollModeChanged(bool isContinuous)
 
 void OpenTuneAudioProcessorEditor::applyTimelineViewportToViews()
 {
-    arrangementView_.commitViewportRequest(makeManualViewportReplayRequest(timelineViewportCamera_, arrangementView_.timelinePolicyViewportWidth()), juce::dontSendNotification);
-    pianoRoll_.commitViewportRequest(makeManualViewportReplayRequest(timelineViewportCamera_, pianoRoll_.timelinePolicyViewportWidth()), juce::dontSendNotification);
+    arrangementView_.commitViewportRequest(makeManualViewportReplayRequest(timelineViewportCamera_,
+                                                                           arrangementView_.timelinePolicyViewportWidth(),
+                                                                           TimelineViewportRequest::ViewKind::Arrangement),
+                                           juce::dontSendNotification);
+    pianoRoll_.commitViewportRequest(makeManualViewportReplayRequest(timelineViewportCamera_,
+                                                                     pianoRoll_.timelinePolicyViewportWidth(),
+                                                                     TimelineViewportRequest::ViewKind::PianoRoll),
+                                     juce::dontSendNotification);
 
     // Pre-warm pattern tiles for both views synchronously so view switches
     // never show empty content. Pattern tiles are lazily built on first draw;

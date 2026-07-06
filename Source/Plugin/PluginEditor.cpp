@@ -332,9 +332,11 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             auto snap = processorRef_.getContentSnapshot(activeKey);
             lastPianoRollNotesRevision_ = snap ? snap->notesRevision : 0;
             lastPianoRollTimeGridRevision_ = snap ? snap->timeGridRevision : 0;
+            lastPianoRollPitchRevision_ = snap ? snap->pitchRevision : 0;
         } else {
             lastPianoRollNotesRevision_ = 0;
             lastPianoRollTimeGridRevision_ = 0;
+            lastPianoRollPitchRevision_ = 0;
         }
     }
 
@@ -343,6 +345,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         auto snap = processorRef_.getContentSnapshot(activeKey);
         const uint64_t currentNotesRevision = snap ? snap->notesRevision : 0;
         const uint64_t currentTimeGridRevision = snap ? snap->timeGridRevision : 0;
+        const uint64_t currentPitchRevision = snap ? snap->pitchRevision : 0;
 
         if (currentNotesRevision != lastPianoRollNotesRevision_) {
             pianoRoll_.onNotesRevisionChanged();
@@ -352,6 +355,11 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         if (currentTimeGridRevision != lastPianoRollTimeGridRevision_) {
             pianoRoll_.onTimeGridRevisionChanged();
             lastPianoRollTimeGridRevision_ = currentTimeGridRevision;
+        }
+
+        if (currentPitchRevision != lastPianoRollPitchRevision_) {
+            pianoRoll_.onPitchRevisionChanged();
+            lastPianoRollPitchRevision_ = currentPitchRevision;
         }
     }
 

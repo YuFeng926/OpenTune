@@ -175,6 +175,7 @@ private:
     ContentKey lastActiveContentKey_;
     uint64_t lastPianoRollNotesRevision_{0};
     uint64_t lastPianoRollTimeGridRevision_{0};
+    uint64_t lastPianoRollPitchRevision_{0};
 
     // When true, the blocking overlay is shown until ARA content birth completes.
     bool waitingForAraContent_ = false;

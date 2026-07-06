@@ -846,7 +846,7 @@ bool arrangementMoveDrag_transientOverlayContract()
     return true;
 }
 
-// Source-code contract: PianoRoll tool layer must not have identity fallback
+// Source-code contract: PianoRoll tool layer must return no edit time for invalid projection.
 bool pianoRollProjection_noIdentityFallbackContract()
 {
     const std::string sourceDir = getSourceRoot();
@@ -998,35 +998,42 @@ bool arrangementVisiblePlacement_clipsTileBounds()
     const auto srcDir = std::string(OPENTUNE_SOURCE_DIR);
     const auto arrangementText = readFileContent(srcDir + "/Source/Standalone/UI/ArrangementViewComponent.cpp");
 
-    const auto collectBody = extractMethodBody(arrangementText, "collectVisiblePlacements");
+    const auto collectBody = extractMethodBody(arrangementText, "collectVisibleArrangementClips");
     if (collectBody.find("visibleStart") == std::string::npos
         || collectBody.find("visibleEnd") == std::string::npos
         || collectBody.find("visibleEnd - visibleStart") == std::string::npos)
     {
-        std::cout << "[FAIL] arrangement: collectVisiblePlacements must derive width from visible interval\n";
+        std::cout << "[FAIL] arrangement: collectVisibleArrangementClips must derive width from visible interval\n";
         return false;
     }
 
-    if (collectBody.find("placement.durationSeconds * pixelsPerSecond") != std::string::npos)
+    if (collectBody.find("placement.durationSeconds * pixelsPerSecond") != std::string::npos
+        || collectBody.find("state.durationSeconds * camera_.pixelsPerSecond") != std::string::npos)
     {
         std::cout << "[FAIL] arrangement: tile width still uses full placement duration\n";
         return false;
     }
 
-    const auto waveformBody = extractMethodBody(arrangementText, "paintPlacementWaveform");
-    if (waveformBody.find("clipInSeconds + (timelineTime - visual.timelineStartSeconds)") == std::string::npos)
+    const auto waveformBody = extractMethodBody(arrangementText, "paintClipWaveform");
+    if (waveformBody.find("clipInSeconds + (timelineTime - clip.timelineStartSeconds)") == std::string::npos)
     {
         std::cout << "[FAIL] arrangement: waveform must stay anchored to original placement timeline\n";
         return false;
     }
 
-    const auto fadeBody = extractMethodBody(arrangementText, "paintPlacementFadeShapes");
-    if (fadeBody.find("paintStartSeconds") == std::string::npos
-        || fadeBody.find("paintEndSeconds") == std::string::npos
-        || fadeBody.find("visibleFadeInStart") == std::string::npos
-        || fadeBody.find("visibleFadeOutStart") == std::string::npos)
+    if (arrangementText.find(std::string("paintPlacementFade") + "Shapes") != std::string::npos
+        || arrangementText.find(std::string("paintClipFade") + "Shapes") != std::string::npos)
     {
-        std::cout << "[FAIL] arrangement: fades must be clipped by absolute visible interval\n";
+        std::cout << "[FAIL] arrangement: deleted black fade-shade path still exists\n";
+        return false;
+    }
+
+    const auto historicalPainterBody = extractMethodBody(arrangementText, "paintHistoricalArrangementClips");
+    if (historicalPainterBody.find("paintClipShellAndWaveform") == std::string::npos
+        || historicalPainterBody.find("paintOverlapShading") == std::string::npos
+        || historicalPainterBody.find("paintClipTextFadeGain") == std::string::npos)
+    {
+        std::cout << "[FAIL] arrangement: historical clip painter must own shell/overlap/text route\n";
         return false;
     }
 
@@ -1172,7 +1179,7 @@ static int runKillListChecks()
     {
         ++total;
         std::vector<std::string> bannedPatterns = {
-            "pendingSeekTime_", "presentationClock", "getDisplayPlayheadTime",
+            std::string("pendingSeek") + "Time_", "presentationClock", "getDisplayPlayheadTime",
             "updatePresentationClock", "resetPresentationClock",
             "clampContentTime", "clampTimelineTime", "clampProjectionValue",
             "setTimelineViewport(", "computeCamera(", "zoomAtMouse("

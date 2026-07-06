@@ -37,7 +37,7 @@ void FixedPlayheadComponent::paint(juce::Graphics& g)
     g.setColour(colour_);
     g.drawLine(static_cast<float>(anchorX_), 0.0f,
                static_cast<float>(anchorX_), static_cast<float>(height_),
-               1.0f);
+               2.0f);
 
     // 播放头三角
     const float triSize = 6.0f;

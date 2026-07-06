@@ -368,6 +368,12 @@ private:
     void handleVerticalScrollWheel(float deltaY);
     void handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY);
 
+    TimelineViewportRequest makeViewportRequest(
+        TimelineViewportRequest::Kind kind,
+        double targetTime,
+        double anchorViewportX,
+        double pps) const;
+
     void initializeUIComponents();
     void initializeRenderer();
     void initializeCorrectionWorker();
@@ -387,10 +393,10 @@ private:
     void beginNoteDraft();
     bool commitNoteDraft();
     void clearNoteDraft();
-    bool commitEditedContentNotesAndSegments(const std::vector<Note>& notes,
+    ContentCommitSnapshot commitEditedContentNotesAndSegments(const std::vector<Note>& notes,
                                              const std::vector<PitchCorrectionSegment>& segments,
                                              F0FrameRange affectedRange);
-    bool commitEditedContentPitchCorrectionSegments(const std::vector<PitchCorrectionSegment>& segments,
+    ContentCommitSnapshot commitEditedContentPitchCorrectionSegments(const std::vector<PitchCorrectionSegment>& segments,
                                                        F0FrameRange affectedRange);
     bool selectNotesOverlappingFrames(int startFrame, int endFrameExclusive);
     juce::Rectangle<int> getNoteBounds(const Note& note) const;
@@ -424,6 +430,7 @@ private:
     double sourceTimeToTimelineTime(double sourceSeconds) const;
     int  sourceTimeToX(double sourceSeconds) const;
     double xToSourceTime(int x) const;
+    SourceEditRange sourceEditRange() const;
 
     PianoRollRenderer::RenderContext buildRenderContext() const
     {

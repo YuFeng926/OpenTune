@@ -16,6 +16,8 @@ namespace OpenTune {
 
 struct EditableContentSnapshot;
 
+using ContentCommitSnapshot = std::shared_ptr<const EditableContentSnapshot>;
+
 // ── Hard-cut render mutation contract ────────────────────────────────────────
 //
 // Two distinct sinks separate local edits (where the caller knows the precise
@@ -62,7 +64,7 @@ public:
 
     virtual bool commitNotePatch(ContentKey key, ContentNoteRangePatch patch) = 0;
 
-    virtual bool commitNotesAndSegments(ContentKey key,
+    virtual ContentCommitSnapshot commitNotesAndSegments(ContentKey key,
                                         std::vector<Note> notes,
                                         std::vector<PitchCorrectionSegment> segments,
                                         ContentEditRangeFrames affectedRange) = 0;

@@ -209,6 +209,11 @@ private:
     juce::Rectangle<int> getContentViewportBounds() const;
     void rebuildContentMetrics();
     void updateOverlayPresentation();
+    TimelineViewportRequest makeViewportRequest(
+        TimelineViewportRequest::Kind kind,
+        double targetTime,
+        double anchorViewportX,
+        double pps) const;
     void updateAutoScroll();
     void performPageScroll(double playheadTime);
     void onScrollVBlankCallback(double timestampSec);
