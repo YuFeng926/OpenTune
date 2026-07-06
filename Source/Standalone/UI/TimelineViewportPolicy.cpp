@@ -4,9 +4,35 @@
 
 namespace OpenTune {
 
-double TimelineViewportPolicy::normalisePixelsPerSecond(double pps) noexcept
+static double ppsMinFor(TimelineViewportRequest::ViewKind viewKind) noexcept
 {
-    return std::clamp(pps, kMinPixelsPerSecond, kMaxPixelsPerSecond);
+    switch (viewKind)
+    {
+    case TimelineViewportRequest::ViewKind::PianoRoll:
+        return 10.0;
+    case TimelineViewportRequest::ViewKind::Arrangement:
+        return 10.0;
+    }
+    return 10.0;
+}
+
+static double ppsMaxFor(TimelineViewportRequest::ViewKind viewKind) noexcept
+{
+    switch (viewKind)
+    {
+    case TimelineViewportRequest::ViewKind::PianoRoll:
+        return 500.0;
+    case TimelineViewportRequest::ViewKind::Arrangement:
+        return 1000.0;
+    }
+    return 1000.0;
+}
+
+double TimelineViewportPolicy::normalisePixelsPerSecond(
+    double pps,
+    TimelineViewportRequest::ViewKind viewKind) noexcept
+{
+    return std::clamp(pps, ppsMinFor(viewKind), ppsMaxFor(viewKind));
 }
 
 double TimelineViewportPolicy::clampStartSeconds(double startSeconds)
@@ -23,7 +49,7 @@ double TimelineViewportPolicy::visibleEndSeconds(const TimelineViewportCamera& c
 
 TimelineViewportCamera TimelineViewportPolicy::resolve(const TimelineViewportRequest& request)
 {
-    const double pps = normalisePixelsPerSecond(request.pixelsPerSecond);
+    const double pps = normalisePixelsPerSecond(request.pixelsPerSecond, request.viewKind);
 
     const int vw = request.viewportWidth;
 

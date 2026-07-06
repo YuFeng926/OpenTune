@@ -27,14 +27,14 @@ PianoRollEditAction::PianoRollEditAction(std::shared_ptr<ContentEditCommands> co
 
 void PianoRollEditAction::undo()
 {
-    if (commands_ != nullptr)
-        commands_->commitNotesAndSegments(contentKey_, beforeNotes_, beforeSegments_, affectedRange_);
+    jassert(commands_ != nullptr);
+    commands_->commitNotesAndSegments(contentKey_, beforeNotes_, beforeSegments_, affectedRange_);
 }
 
 void PianoRollEditAction::redo()
 {
-    if (commands_ != nullptr)
-        commands_->commitNotesAndSegments(contentKey_, afterNotes_, afterSegments_, affectedRange_);
+    jassert(commands_ != nullptr);
+    commands_->commitNotesAndSegments(contentKey_, afterNotes_, afterSegments_, affectedRange_);
 }
 
 } // namespace OpenTune

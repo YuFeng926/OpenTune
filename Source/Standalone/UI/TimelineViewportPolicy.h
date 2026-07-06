@@ -16,7 +16,14 @@ struct TimelineViewportRequest
         Zoom     // Zoom at mouse
     };
 
+    enum class ViewKind
+    {
+        Arrangement,
+        PianoRoll
+    };
+
     Kind kind = Kind::Manual;
+    ViewKind viewKind = ViewKind::Arrangement;
     double targetTime = 0.0;          // 目标时间点（absolute timeline seconds）
     double anchorViewportX = 0.0;     // anchor 在 viewport 中的 X 像素位置
     int viewportWidth = 0;            // viewport 宽度（像素）
@@ -46,7 +53,7 @@ public:
     static constexpr double kMinPixelsPerSecond = 10.0;
     static constexpr double kMaxPixelsPerSecond = 1000.0;
 
-    static double normalisePixelsPerSecond(double pps) noexcept;
+    static double normalisePixelsPerSecond(double pps, TimelineViewportRequest::ViewKind viewKind) noexcept;
 
     // 唯一入口：根据 request 计算 camera（含 Zoom）
     static TimelineViewportCamera resolve(const TimelineViewportRequest& request);

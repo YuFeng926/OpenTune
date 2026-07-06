@@ -18,6 +18,7 @@
 #include "UI/ToolIds.h"
 #include "InteractionState.h"
 #include "UI/ViewMapper.h"
+#include "../../../Content/ContentEditCommands.h"
 #include <vector>
 #include <functional>
 #include <cstdint>
@@ -32,7 +33,7 @@ namespace OpenTune {
 // Projection 负责 output <-> timeline。ToolHandler 编辑入口只操作 source-domain，
 // 所以编辑范围必须由 TimeGridSnapshot::totalDurationSeconds() 推导，不是 projection。
 //
-// invalid projection 表示没有 edit target，不是 identity fallback。
+// invalid projection 表示没有 edit target，返回空编辑时间。
 // ============================================================================
 struct SourceEditRange
 {
@@ -100,7 +101,7 @@ public:
         std::function<void()> clearNoteDraft;
         // 第三参 affectedRange 来自 ToolHandler 编辑时计算的精确范围，用于
         // undo/redo 时只重渲染该范围（而不是 segments 列表反推的并集 = 全长）。
-        std::function<bool(const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)> commitNotesAndSegments;
+        std::function<ContentCommitSnapshot(const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)> commitNotesAndSegments;
 
         std::function<std::shared_ptr<PitchCurve>()> getPitchCurve;
 
@@ -279,7 +280,7 @@ private:
     // source → screen: tauForward → projectContentTimeToTimeline → timeToX
     //
     // 所有编辑入口只接受 source-domain double。
-    // invalid projection 意味着没有 edit target，返回 nullopt（不是 identity fallback）。
+    // invalid projection 意味着没有 edit target，返回 nullopt。
     std::optional<double> pixelXToSourceTime(int pixelX) const;
     double sourceTimeToTimelineTime(double sourceSeconds) const;
     int sourceTimeToScreenX(double sourceSeconds) const;

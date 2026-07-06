@@ -556,7 +556,7 @@ CheckResult nonAraVst3CaptureSignalChainIsConnected()
         processor,
         "void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer");
     const auto replaceNotes = extractFunctionBlock(processor, "bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation");
-    const auto commitNotesAndSegments = extractFunctionBlock(processor, "bool OpenTuneAudioProcessor::commitContentNotesAndSegments");
+    const auto commitNotesAndSegments = extractFunctionBlock(processor, "ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments");
     const auto setPitchCurve = extractFunctionBlock(processor, "bool OpenTuneAudioProcessor::setContentPitchCurve");
     const auto writePitchCurve = extractFunctionBlock(processor, "bool OpenTuneAudioProcessor::writePitchCurveToOwner");
     const auto setTimeGrid = extractFunctionBlock(processor, "bool OpenTuneAudioProcessor::setContentTimeGrid");

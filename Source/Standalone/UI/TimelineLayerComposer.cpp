@@ -38,13 +38,11 @@ static float decodePixelsPerSemitone(std::uint64_t hash) {
 }
 
 static int decodePianoKeyWidth(std::uint64_t hash) {
-    int v = static_cast<int>((hash >> 16) & 0xFF);
-    return v > 0 ? v : 60;
+    return static_cast<int>((hash >> 16) & 0xFF);
 }
 
 static int decodeRulerHeight(std::uint64_t hash) {
-    int v = static_cast<int>((hash >> 24) & 0xFF);
-    return v > 0 ? v : 30;
+    return static_cast<int>((hash >> 24) & 0xFF);
 }
 
 static bool decodeShowLanes(int laneStyle) {
@@ -111,31 +109,6 @@ void TimelineLayerComposer::drawBackground(juce::Graphics& g, const RenderParams
     else
         g.fillAll(UIColors::rollBackground);
 
-    // Arrangement-specific: draw track lane backgrounds and separators
-    if (params.viewKind == "arrangement") {
-        const int rulerH = decodeArrangementRulerHeight(params.verticalGeometry);
-        const int trackAreaHeight = decodeArrangementContentHeight(params.verticalGeometry);
-        
-        // Draw track lane backgrounds and separators in the content area (below ruler)
-        const int w = params.viewportWidth;
-        
-        // Use actual track height from params (consistent with content tiles)
-        const int trackHeight = params.trackHeight;
-        const int numTracks = trackAreaHeight / trackHeight;
-        
-        for (int tid = 0; tid < numTracks; ++tid) {
-            const int y = rulerH + tid * trackHeight;
-            const juce::Colour bg = (tid % 2 == 0)
-                ? UIColors::backgroundLight.withAlpha(0.15f)
-                : UIColors::backgroundLight.withAlpha(0.05f);
-            g.setColour(bg);
-            g.fillRect(0, y, w, trackHeight);
-            
-            // Track separator line
-            g.setColour(UIColors::panelBorder.withAlpha(0.2f));
-            g.drawHorizontalLine(static_cast<float>(y), 0.0f, static_cast<float>(w));
-        }
-    }
 }
 
 // ============================================================================
@@ -338,12 +311,12 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
                 g.setColour(isBlackKey
                     ? UIColors::glassSurface.withAlpha(0.075f)
                     : UIColors::pianoRollLane.withAlpha(0.024f));
+                g.fillRect(static_cast<float>(pianoKeyWidth), y,
+                           static_cast<float>(w - pianoKeyWidth), laneH);
             } else if (isBlackKey) {
                 g.setColour((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
                     ? UIColors::pianoRollLane.withAlpha(0.16f)
                     : UIColors::backgroundDark.withAlpha(0.3f));
-            }
-            if (isBlackKey) {
                 g.fillRect(static_cast<float>(pianoKeyWidth), y,
                            static_cast<float>(w - pianoKeyWidth), laneH);
             }
@@ -410,11 +383,22 @@ juce::Image TimelineLayerComposer::buildPatternTile(const PatternTileKey& key) {
     params.trackHeight = key.trackHeight;
     params.viewKind = key.viewKind;
 
-    juce::Image tile(juce::Image::RGB, tileW, tileH, true);
+    const bool transparentBackdrop = key.viewKind == "pianoroll" || key.viewKind == "arrangement";
+    juce::Image tile(transparentBackdrop ? juce::Image::ARGB : juce::Image::RGB,
+                     tileW,
+                     tileH,
+                     true);
     juce::Graphics g(tile);
 
-    // 绘制顺序：background → lanes → grid → ruler
-    drawBackground(g, params);
+    if (transparentBackdrop)
+    {
+        g.setColour(juce::Colours::transparentBlack);
+        g.fillAll();
+    }
+    else
+    {
+        drawBackground(g, params);
+    }
     if (key.viewKind != "arrangement")  // Arrangement 不绘制 MIDI lane strips
         drawLaneStripRepeats(g, params);
     drawGridLines(g, params);

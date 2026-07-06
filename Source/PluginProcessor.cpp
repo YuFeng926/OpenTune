@@ -823,12 +823,12 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             return proc_->commitContentNotePatch(key, std::move(patch));
         }
 
-        bool commitNotesAndSegments(ContentKey key,
+        ContentCommitSnapshot commitNotesAndSegments(ContentKey key,
                                      std::vector<Note> notes,
                                      std::vector<PitchCorrectionSegment> segments,
                                      ContentEditRangeFrames affectedRange) override
         {
-            if (!proc_) return false;
+            if (!proc_) return {};
             return proc_->commitContentNotesAndSegments(key, std::move(notes), std::move(segments), affectedRange);
         }
 
@@ -3902,9 +3902,10 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
             segmentsInRange.push_back(seg);
     }
 
-    const bool commitOk = commitContentNotesAndSegments(
+    auto commitSnap = commitContentNotesAndSegments(
         targetPlacement.contentKey, normalizedNotes, segmentsInRange,
         ContentEditRangeFrames{patch.affectedStartFrame, patch.affectedEndFrame});
+    const bool commitOk = (commitSnap != nullptr);
     if (commitOk && patch.timingChanged && timeGridAfter)
         setContentTimeGrid(targetPlacement.contentKey, timeGridAfter);
     if (!commitOk) {
@@ -4050,13 +4051,13 @@ bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, 
     return ok;
 }
 
-bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
+ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
                                                             std::vector<Note> notesInRange,
                                                             std::vector<PitchCorrectionSegment> segments,
                                                             ContentEditRangeFrames affectedRange)
 {
     auto snap = getContentSnapshot(key);
-    if (!snap || !snap->pitchCurve) return false;
+    if (!snap || !snap->pitchCurve) return {};
 
     // Range-scoped notes merge (same logic as commitContentNotePatch)
     const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
@@ -4174,13 +4175,13 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
               });
 
     auto newCurve = clonePitchCurveWithPitchCorrectionSegments(snap->pitchCurve, std::move(mergedSegments));
-    if (!newCurve) return false;
+    if (!newCurve) return {};
 
     bool ok = false;
     switch (key.domainKind) {
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
-            if (!clip) return false;
+            if (!clip) return {};
             clip->applyNotes(std::move(normalizedNotes));
             clip->applyPitchCurve(std::move(newCurve));
             ok = true;
@@ -4189,8 +4190,8 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            if (!dc) return false;
-            if (!dc->applyNotesToModification(key, std::move(normalizedNotes))) return false;
+            if (!dc) return {};
+            if (!dc->applyNotesToModification(key, std::move(normalizedNotes))) return {};
             if (newCurve) dc->applyPitchCurveToModification(key, std::move(newCurve));
             ok = true;
             break;
@@ -4200,7 +4201,7 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
             auto* session = getCaptureSession();
             if (session == nullptr
                 || !session->applyNotesAndPitchCurve(key, std::move(normalizedNotes), std::move(newCurve))) {
-                return false;
+                return {};
             }
             ok = true;
             break;
@@ -4210,8 +4211,11 @@ bool OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
     }
     if (ok) {
         onContentLocalMutationCompleted(key, MutationScope::NotesChanged, affectedRange);
+        auto committedSnap = getContentSnapshot(key);
+        jassert(committedSnap != nullptr);
+        return committedSnap;
     }
-    return ok;
+    return {};
 }
 
 bool OpenTuneAudioProcessor::commitContentNotePatch(ContentKey key, ContentNoteRangePatch patch)
