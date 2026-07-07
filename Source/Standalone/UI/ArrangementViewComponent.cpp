@@ -1299,15 +1299,36 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         }
     }
 
-    // --- Pattern Layer: Ruler, Grid ---
-    for (const auto& pt : preparedPatternTiles_) {
-        if (pt.image && pt.image->isValid()) {
-            RenderParams patternParams;
-            patternParams.visibleStartSeconds = camera_.visibleStartSeconds;
-            patternParams.pixelsPerSecond = camera_.pixelsPerSecond;
-            patternParams.viewportBoundsX = kArrangementContentStartX;
-            patternParams.contentOffsetY = 0;
-            TimelineLayerComposer::drawPatternTile(g, *pt.image, pt.key.startSeconds, patternParams);
+    // Ruler separator — 组件层绘制全宽标尺分隔线，样式来自 resolveRulerStyle
+    {
+        const auto style = TimelineLayerComposer::resolveRulerStyle("arrangement", themeId);
+        g.setColour(style.separatorColour);
+        g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), style.tickStroke);
+    }
+
+    // --- Pattern Layer: Ruler, Grid（按钮 footprint 用 clip 排除）---
+    {
+        juce::RectangleList<int> visibleArea;
+        visibleArea.addWithoutMerging(getLocalBounds());
+
+        const auto buttonZone = scrollModeToggleButton_.getBounds()
+            .getUnion(timeUnitToggleButton_.getBounds()).expanded(6, 2);
+        juce::RectangleList<int> excluded;
+        excluded.addWithoutMerging(buttonZone);
+        visibleArea.subtract(excluded);
+
+        juce::Graphics::ScopedSaveState save(g);
+        g.reduceClipRegion(visibleArea);
+
+        for (const auto& pt : preparedPatternTiles_) {
+            if (pt.image && pt.image->isValid()) {
+                RenderParams patternParams;
+                patternParams.visibleStartSeconds = camera_.visibleStartSeconds;
+                patternParams.pixelsPerSecond = camera_.pixelsPerSecond;
+                patternParams.viewportBoundsX = kArrangementContentStartX;
+                patternParams.contentOffsetY = 0;
+                TimelineLayerComposer::drawPatternTile(g, *pt.image, pt.key.startSeconds, patternParams);
+            }
         }
     }
 

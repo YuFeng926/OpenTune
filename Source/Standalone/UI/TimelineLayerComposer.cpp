@@ -89,26 +89,31 @@ static std::array<bool, 12> buildInScalePitchClasses(int scaleType, int rootNote
 }
 
 // ============================================================================
-// drawBackground — pattern tile 内绘制背景
+// resolveRulerStyle — 从 viewKind + themeId 推导历史视觉合同
 // ============================================================================
-void TimelineLayerComposer::drawBackground(juce::Graphics& g, const RenderParams& params) {
-    const auto themeId = static_cast<ThemeId>(params.themeId);
-    auto bounds = juce::Rectangle<float>(
-        0.0f, 0.0f,
-        static_cast<float>(params.viewportWidth),
-        static_cast<float>(params.viewportHeight));
+TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(const std::string& viewKind, ThemeId themeId) {
+    TimelineRulerStyle style;
+    const bool isArrangement = (viewKind == "arrangement");
 
-    if (themeId == ThemeId::DarkBlueGrey)
-        UIColors::fillSoothe2SpectrumBackground(g, bounds, 0.0f);
-    else if (themeId == ThemeId::Aurora)
-        UIColors::fillAuroraTimelineBackground(g, bounds, 0.0f);
-    else if (themeId == ThemeId::BlueBreeze)
-        UIColors::fillMistedTimelineField(g, bounds, 0.0f);
-    else if (themeId == ThemeId::Overdose)
-        UiAssets::drawAssetStretch(g, UiAssetId::PanelEditorMain, bounds);
-    else
-        g.fillAll(UIColors::rollBackground);
-
+    if (themeId == ThemeId::Aurora) {
+        style.labelColour = isArrangement
+            ? UIColors::textSecondary
+            : UIColors::textSecondary.withMultipliedAlpha(0.48f);
+        style.tickColour = UIColors::gridLine.withAlpha(0.080f);
+        style.separatorColour = UIColors::gridLine.withAlpha(0.060f);
+        style.tickStroke = isArrangement ? 1.0f : 0.7f;
+    } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
+        style.labelColour = UIColors::textSecondary.withAlpha(0.58f);
+        style.tickColour = UIColors::pianoRollGrid.withAlpha(0.052f);
+        style.separatorColour = UIColors::pianoRollGrid.withAlpha(0.040f);
+        style.tickStroke = 0.7f;
+    } else {
+        style.labelColour = UIColors::textSecondary;
+        style.tickColour = UIColors::gridLine;
+        style.separatorColour = UIColors::panelBorder;
+        style.tickStroke = 1.0f;
+    }
+    return style;
 }
 
 // ============================================================================
@@ -190,18 +195,18 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
         : decodeRulerHeight(params.verticalGeometry);
     const int w = params.viewportWidth;
     const auto themeId = static_cast<ThemeId>(params.themeId);
+    const auto rulerStyle = resolveRulerStyle(params.viewKind, themeId);
     const double pps = params.pixelsPerSecond;
 
     int rulerTop = 0;
     int rulerBottom = rulerHeight;
 
-    // Bottom separator line
-    g.setColour(themeId == ThemeId::Aurora
-        ? UIColors::gridLine.withAlpha(0.060f)
-        : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-            ? UIColors::pianoRollGrid.withAlpha(0.040f) : UIColors::panelBorder));
-    g.drawLine(0.0f, static_cast<float>(rulerBottom), static_cast<float>(w), static_cast<float>(rulerBottom),
-               (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.7f : 1.0f);
+    // Bottom separator line — Arrangement 的 separator 由组件层绘制
+    if (params.viewKind != "arrangement") {
+        g.setColour(rulerStyle.separatorColour);
+        g.drawLine(0.0f, static_cast<float>(rulerBottom), static_cast<float>(w), static_cast<float>(rulerBottom),
+                   rulerStyle.tickStroke);
+    }
 
     if (params.timeUnit == 1) { // Bars
         double bpm = static_cast<double>(params.tempo);
@@ -221,13 +226,10 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
             double time = beat * secondsPerBeat;
             int pixelX = static_cast<int>(std::llround((time - params.visibleStartSeconds) * pps));
 
-            g.setColour(themeId == ThemeId::Aurora
-                ? UIColors::gridLine.withAlpha(0.080f)
-                : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-                    ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine));
+            g.setColour(rulerStyle.tickColour);
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerBottom - 10),
                        static_cast<float>(pixelX), static_cast<float>(rulerBottom),
-                       (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.7f : 1.0f);
+                       rulerStyle.tickStroke);
 
             int64_t bar = (beat / 4) + 1;
             int64_t beatInBar = (beat % 4) + 1;
@@ -235,10 +237,7 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
                 ? juce::String(bar)
                 : juce::String::formatted("%lld.%lld", static_cast<long long>(bar), static_cast<long long>(beatInBar));
 
-            g.setColour(themeId == ThemeId::Aurora
-                ? UIColors::textSecondary.withMultipliedAlpha(0.48f)
-                : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-                    ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary));
+            g.setColour(rulerStyle.labelColour);
             g.drawText(label, pixelX - 20, rulerTop + 2, 40, rulerHeight - 12, juce::Justification::centred);
         }
     } else { // Seconds
@@ -252,23 +251,17 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
         for (double time = startTime; time < endTime; time += markerInterval) {
             int pixelX = static_cast<int>(std::llround((time - params.visibleStartSeconds) * pps));
 
-            g.setColour(themeId == ThemeId::Aurora
-                ? UIColors::gridLine.withAlpha(0.080f)
-                : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-                    ? UIColors::pianoRollGrid.withAlpha(0.052f) : UIColors::gridLine));
+            g.setColour(rulerStyle.tickColour);
             g.drawLine(static_cast<float>(pixelX), static_cast<float>(rulerBottom - 10),
                        static_cast<float>(pixelX), static_cast<float>(rulerBottom),
-                       (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.7f : 1.0f);
+                       rulerStyle.tickStroke);
 
             const int totalSecs = static_cast<int>(time);
             const int mins = totalSecs / 60;
             const int secs = totalSecs % 60;
             juce::String timeStr = juce::String::formatted("%d:%02d", mins, secs);
 
-            g.setColour(themeId == ThemeId::Aurora
-                ? UIColors::textSecondary.withMultipliedAlpha(0.48f)
-                : ((themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
-                    ? UIColors::textSecondary.withAlpha(0.58f) : UIColors::textSecondary));
+            g.setColour(rulerStyle.labelColour);
             g.drawText(timeStr, pixelX - 20, rulerTop + 2, 40, rulerHeight - 12, juce::Justification::centred);
         }
     }
@@ -383,22 +376,11 @@ juce::Image TimelineLayerComposer::buildPatternTile(const PatternTileKey& key) {
     params.trackHeight = key.trackHeight;
     params.viewKind = key.viewKind;
 
-    const bool transparentBackdrop = key.viewKind == "pianoroll" || key.viewKind == "arrangement";
-    juce::Image tile(transparentBackdrop ? juce::Image::ARGB : juce::Image::RGB,
-                     tileW,
-                     tileH,
-                     true);
+    // Pattern tile 始终使用透明底 — 背景由组件层绘制（组件作为视觉权威）
+    juce::Image tile(juce::Image::ARGB, tileW, tileH, true);
     juce::Graphics g(tile);
-
-    if (transparentBackdrop)
-    {
-        g.setColour(juce::Colours::transparentBlack);
-        g.fillAll();
-    }
-    else
-    {
-        drawBackground(g, params);
-    }
+    g.setColour(juce::Colours::transparentBlack);
+    g.fillAll();
     if (key.viewKind != "arrangement")  // Arrangement 不绘制 MIDI lane strips
         drawLaneStripRepeats(g, params);
     drawGridLines(g, params);

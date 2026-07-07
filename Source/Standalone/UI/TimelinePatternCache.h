@@ -8,6 +8,8 @@
 
 namespace OpenTune {
 
+enum class ThemeId : int;
+
 // ============================================================================
 // PatternTileKey — 完整的 tile 生成参数
 // 不同视图、缩放、主题、垂直布局都会产生不同的 key -> 不同的 tile
@@ -95,6 +97,16 @@ struct RenderParams {
     int contentOffsetY = 0;         // content tile Y offset (vertically past ruler, e.g. rulerHeight)
     int trackHeight = 100;          // single track height (for arrangement pattern layer)
     std::string viewKind = "pianoroll";  // "pianoroll" / "arrangement"
+};
+
+// ============================================================================
+// TimelineRulerStyle — 时间标尺视觉合同（缓存层只搬运样式，不重写）
+// ============================================================================
+struct TimelineRulerStyle {
+    juce::Colour labelColour;
+    juce::Colour tickColour;
+    juce::Colour separatorColour;
+    float tickStroke = 0.7f;
 };
 
 // ============================================================================
@@ -217,12 +229,14 @@ public:
     // 生成 pattern tile 内容（由 cache 的 buildFn 调用）
     static juce::Image buildPatternTile(const PatternTileKey& key);
 
+    // 时间标尺视觉合同 — 组件层和缓存层唯一样式来源
+    static TimelineRulerStyle resolveRulerStyle(const std::string& viewKind, ThemeId themeId);
+
 private:
     // 内部绘制助手
     static void drawGridLines(juce::Graphics& g, const RenderParams& params);
     static void drawTimeRuler(juce::Graphics& g, const RenderParams& params);
     static void drawLaneStripRepeats(juce::Graphics& g, const RenderParams& params);
-    static void drawBackground(juce::Graphics& g, const RenderParams& params);
 
     static double selectBeatInterval(double pixelsPerBeat);
     static double selectMarkerInterval(double pixelsPerSecond);
