@@ -12,6 +12,8 @@ FixedPlayheadComponent::~FixedPlayheadComponent() = default;
 
 void FixedPlayheadComponent::setAnchorBounds(int anchorX, int height)
 {
+    if (anchorX_ == anchorX && height_ == height)
+        return;
     anchorX_ = anchorX;
     height_ = height;
     repaint();

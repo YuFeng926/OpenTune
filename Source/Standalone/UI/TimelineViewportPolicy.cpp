@@ -64,13 +64,19 @@ TimelineViewportCamera TimelineViewportPolicy::resolve(const TimelineViewportReq
         break;
 
     case TimelineViewportRequest::Kind::Cont:
-    case TimelineViewportRequest::Kind::Page:
-        // Cont / Page: center targetTime in viewport
-        {
-            const double halfViewportDuration = (vw > 0) ? (vw / pps) / 2.0 : 0.0;
-            camera.visibleStartSeconds = clampStartSeconds(request.targetTime - halfViewportDuration);
-        }
+    {
+        const double visibleDuration = vw / pps;
+        camera.visibleStartSeconds = clampStartSeconds(request.targetTime - visibleDuration * 0.5);
         break;
+    }
+
+    case TimelineViewportRequest::Kind::Page:
+    {
+        const double visibleDuration = vw / pps;
+        const double pageStart = std::floor(request.targetTime / visibleDuration) * visibleDuration;
+        camera.visibleStartSeconds = clampStartSeconds(pageStart);
+        break;
+    }
 
     case TimelineViewportRequest::Kind::Click:
     case TimelineViewportRequest::Kind::Zoom:

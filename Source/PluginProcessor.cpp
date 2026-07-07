@@ -167,6 +167,16 @@ ContentKey createStandaloneClipOwner(StandaloneContentRepository& repository,
     }
 
     payload.lifecycle = ContentLifecycle::Ready;
+
+    if (payload.timeGrid == nullptr) {
+        const double durationSeconds = payload.sourceWindow.isValid()
+            ? payload.sourceWindow.durationSeconds()
+            : static_cast<double>(payload.audioBuffer->getNumSamples()) / payload.sampleRate;
+
+        payload.timeGrid = TimeGridSnapshot::makeIdentity(durationSeconds);
+        ++payload.timeGridRevision;
+    }
+
     clip->payload() = std::move(payload);
     publishStandalonePlaybackSource(crs, key, clip->payload());
     return key;
@@ -3191,32 +3201,26 @@ ContentKey OpenTuneAudioProcessor::ensureSourceAndCreateStandaloneClip(PreparedI
         return {};
     }
 
-    ContentKey key = standaloneContentRepository_->createClip();
-    if (!key.isValid()) {
-        if (createdSource) sourceStore_->deleteSource(sourceId);
-        return {};
-    }
-
-    auto* clip = standaloneContentRepository_->findClip(key);
-    if (!clip) {
-        if (createdSource) sourceStore_->deleteSource(sourceId);
-        return {};
-    }
-
-    clip->applyAudioBuffer(storedAudioBuffer, TimeCoordinate::kRenderSampleRate);
-    clip->applyOriginalF0State(OriginalF0State::NotRequested);
-
     SourceWindow sw = prepared.sourceWindow;
     if (sw.sourceId == 0) {
         const double durationSeconds = TimeCoordinate::samplesToSeconds(
             storedAudioBuffer->getNumSamples(), TimeCoordinate::kRenderSampleRate);
         sw = SourceWindow{sourceId, juce::String(), 0.0, durationSeconds};
     }
-    clip->payload().sourceWindow = sw;
-    clip->payload().silentGaps = std::move(prepared.silentGaps);
 
-    publishStandalonePlaybackSource(*contentRenderService_, key, clip->payload());
+    ContentPayloadState payload;
+    payload.sourceWindow = sw;
+    payload.audioBuffer = storedAudioBuffer;
+    payload.sampleRate = TimeCoordinate::kRenderSampleRate;
+    payload.originalF0State = OriginalF0State::NotRequested;
+    payload.silentGaps = std::move(prepared.silentGaps);
 
+    const ContentKey key = createStandaloneClipOwner(*standaloneContentRepository_,
+                                                     *contentRenderService_,
+                                                     std::move(payload));
+    if (!key.isValid() && createdSource) {
+        sourceStore_->deleteSource(sourceId);
+    }
     return key;
 }
 

@@ -163,9 +163,13 @@ void StandaloneClipContent::applyOriginalF0State(OriginalF0State state)
 
 void StandaloneClipContent::applyAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, double sampleRate)
 {
+    const double durationSeconds = static_cast<double>(buffer->getNumSamples()) / sampleRate;
+
     content_.audioBuffer = std::move(buffer);
     content_.sampleRate = sampleRate;
     ++content_.audioRevision;
+    content_.timeGrid = TimeGridSnapshot::makeIdentity(durationSeconds);
+    ++content_.timeGridRevision;
     bumpContentRevision();
 }
 
