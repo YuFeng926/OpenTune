@@ -146,9 +146,13 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
             bool isMeasure = (beatInterval >= 4.0) ? true : ((beat % 4) == 0);
 
             if (themeId == ThemeId::Aurora) {
-                g.setColour(isMeasure
-                    ? UIColors::pianoRollGrid.interpolatedWith(UIColors::textSecondary, 0.14f).withAlpha(0.064f)
-                    : UIColors::pianoRollGrid.withAlpha(0.022f));
+                if (params.viewKind == "arrangement") {
+                    g.setColour(UIColors::gridLine.withAlpha(isMeasure ? 0.060f : 0.022f));
+                } else {
+                    g.setColour(isMeasure
+                        ? UIColors::pianoRollGrid.interpolatedWith(UIColors::textSecondary, 0.14f).withAlpha(0.064f)
+                        : UIColors::pianoRollGrid.withAlpha(0.022f));
+                }
             } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
                 g.setColour(UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f));
             } else if (themeId == ThemeId::DarkBlueGrey) {
@@ -173,9 +177,12 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
             int pixelX = static_cast<int>(std::llround((time - params.visibleStartSeconds) * pps));
             if (pixelX < -2 || pixelX > w + 2) continue;
 
-            if (themeId == ThemeId::Aurora)
-                g.setColour(UIColors::pianoRollGrid.withAlpha(0.016f));
-            else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+            if (themeId == ThemeId::Aurora) {
+                if (params.viewKind == "arrangement")
+                    g.setColour(UIColors::gridLine.withAlpha(0.022f));
+                else
+                    g.setColour(UIColors::pianoRollGrid.withAlpha(0.016f));
+            } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
                 g.setColour(UIColors::pianoRollGrid.withAlpha(0.022f));
             else if (themeId == ThemeId::DarkBlueGrey)
                 g.setColour(UIColors::panelBorder.withAlpha(0.12f));
