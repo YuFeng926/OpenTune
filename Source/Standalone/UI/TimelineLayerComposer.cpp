@@ -96,18 +96,27 @@ TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(const std::string& v
     const bool isArrangement = (viewKind == "arrangement");
 
     if (themeId == ThemeId::Aurora) {
-        style.labelColour = isArrangement
-            ? UIColors::textSecondary
-            : UIColors::textSecondary.withMultipliedAlpha(0.48f);
-        style.tickColour = UIColors::gridLine.withAlpha(0.080f);
-        style.separatorColour = UIColors::gridLine.withAlpha(0.060f);
-        style.tickStroke = isArrangement ? 1.0f : 0.7f;
+        if (isArrangement) {
+            style.backgroundColour = juce::Colour { 0xFF2F3640 };
+            style.labelColour      = juce::Colour { 0xFFBDC3C7 };
+            style.tickColour       = juce::Colour { 0xFF3E4652 };
+            style.separatorColour  = juce::Colour { 0xFF4E5865 };
+            style.tickStroke       = 1.0f;
+        } else {
+            style.backgroundColour = UIColors::pianoRollBackground;
+            style.labelColour = UIColors::textSecondary.withMultipliedAlpha(0.48f);
+            style.tickColour = UIColors::gridLine.withAlpha(0.080f);
+            style.separatorColour = UIColors::gridLine.withAlpha(0.060f);
+            style.tickStroke = 0.7f;
+        }
     } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
+        style.backgroundColour = UIColors::pianoRollBackground;
         style.labelColour = UIColors::textSecondary.withAlpha(0.58f);
         style.tickColour = UIColors::pianoRollGrid.withAlpha(0.052f);
         style.separatorColour = UIColors::pianoRollGrid.withAlpha(0.040f);
         style.tickStroke = 0.7f;
     } else {
+        style.backgroundColour = UIColors::backgroundMedium;
         style.labelColour = UIColors::textSecondary;
         style.tickColour = UIColors::gridLine;
         style.separatorColour = UIColors::panelBorder;
@@ -207,6 +216,12 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
 
     int rulerTop = 0;
     int rulerBottom = rulerHeight;
+
+    // Arrangement 标尺背板 — 由 resolveRulerStyle 合同驱动
+    if (params.viewKind == "arrangement") {
+        g.setColour(rulerStyle.backgroundColour);
+        g.fillRect(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(rulerHeight));
+    }
 
     // Bottom separator line — Arrangement 的 separator 由组件层绘制
     if (params.viewKind != "arrangement") {

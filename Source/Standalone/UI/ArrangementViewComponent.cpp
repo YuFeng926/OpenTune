@@ -1299,9 +1299,12 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         }
     }
 
-    // Ruler separator — 组件层绘制全宽标尺分隔线，样式来自 resolveRulerStyle
+    // Ruler backdrop + separator: both driven by the shared ruler style contract.
     {
         const auto style = TimelineLayerComposer::resolveRulerStyle("arrangement", themeId);
+        const juce::Rectangle<int> rulerArea(0, 0, getWidth(), rulerHeight_);
+        g.setColour(style.backgroundColour);
+        g.fillRect(rulerArea.toFloat());
         g.setColour(style.separatorColour);
         g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), style.tickStroke);
     }

@@ -10,7 +10,7 @@ struct TimelineViewportRequest
     enum class Kind
     {
         Cont,    // Continuous scroll — center targetTime
-        Page,    // Page navigation — center targetTime
+        Page,    // Page navigation — show the page containing targetTime
         Manual,  // Manual drag — targetTime is desired visibleStartSeconds
         Click,   // Click seeking — position targetTime at anchorViewportX
         Zoom     // Zoom at mouse

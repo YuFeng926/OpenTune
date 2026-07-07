@@ -227,6 +227,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.notifyPlayheadChange = [this](double time) {
         listeners_.call([time](Listener& l) { l.playheadPositionChangeRequested(time); });
         userScrollHold_ = false;
+        updatePlayheadVisibility();
     };
     toolCtx.notifyPitchCurveEdited = [this](int s, int e) {
         listeners_.call([s, e](Listener& l) { l.pitchCurveEdited(s, e); });
@@ -2193,6 +2194,10 @@ void PianoRollComponent::onHeartbeatTick()
         waveformVisualRefreshPending_ = false;
         repaint();
     }
+
+    if (!playingNow) {
+        updatePlayheadVisibility();
+    }
 }
 
 void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
@@ -2213,13 +2218,21 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     if (visibleWidth <= 0)
         return;
 
-    if (scrollMode_ == ScrollMode::Continuous || scrollMode_ == ScrollMode::Page) {
-        const auto req = makeViewportRequest(
-            TimelineViewportRequest::Kind::Click,
+    if (scrollMode_ == ScrollMode::Continuous) {
+        commitViewportRequest(makeViewportRequest(
+            TimelineViewportRequest::Kind::Cont,
             playheadTime,
-            static_cast<double>(getTimelineViewportBounds().getCentreX() - pianoKeyWidth_),
-            camera_.pixelsPerSecond);
-        commitViewportRequest(req, juce::sendNotification);
+            0.0,
+            camera_.pixelsPerSecond), juce::sendNotification);
+        return;
+    }
+
+    if (scrollMode_ == ScrollMode::Page) {
+        commitViewportRequest(makeViewportRequest(
+            TimelineViewportRequest::Kind::Page,
+            playheadTime,
+            0.0,
+            camera_.pixelsPerSecond), juce::sendNotification);
     }
 }
 
