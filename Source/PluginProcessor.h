@@ -604,7 +604,7 @@ public:
                                         std::vector<Note> notes,
                                         std::vector<PitchCorrectionSegment> segments,
                                         ContentEditRangeFrames affectedRange);
-    bool commitContentNotePatch(ContentKey key, ContentNoteRangePatch patch);
+    ContentCommitSnapshot commitContentNotePatch(ContentKey key, ContentNoteRangePatch patch);
     bool setContentPitchCurve(ContentKey key,
                               std::shared_ptr<PitchCurve> curve,
                               ContentEditRangeFrames affectedRange);

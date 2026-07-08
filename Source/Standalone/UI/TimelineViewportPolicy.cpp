@@ -1,6 +1,7 @@
 #include "TimelineViewportPolicy.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace OpenTune {
 
@@ -128,6 +129,28 @@ TimelineViewportRange TimelineViewportPolicy::computeViewportRange(
     }
 
     return range;
+}
+
+TimelinePlayheadPresentation TimelineViewportPolicy::computePlayheadPresentation(
+    int timeDerivedX,
+    int viewportCentreX,
+    int viewportRight,
+    int viewLeftGuardX,
+    bool playing,
+    bool continuousMode) noexcept
+{
+    TimelinePlayheadPresentation pres;
+
+    // 居中判定：resolved camera 真正满足居中（像素舍入容差 1px）
+    const bool centreSatisfied = playing
+        && continuousMode
+        && std::abs(timeDerivedX - viewportCentreX) <= 1;
+
+    pres.anchorX = centreSatisfied ? viewportCentreX : timeDerivedX;
+    pres.visible = pres.anchorX >= viewLeftGuardX && pres.anchorX <= viewportRight;
+    pres.fixedCentre = centreSatisfied;
+
+    return pres;
 }
 
 } // namespace OpenTune

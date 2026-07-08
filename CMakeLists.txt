@@ -1269,6 +1269,57 @@ if(TARGET OpenTune_VST3)
     endif()
 endif()
 
+option(OPENTUNE_BUILD_ARCHITECTURE_TESTS "Build source-level architecture and behavior tests" ON)
+
+if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
+    enable_testing()
+
+    add_executable(OpenTuneArchitectureTests
+        Tests/TestMain.cpp
+    )
+    target_compile_features(OpenTuneArchitectureTests PRIVATE cxx_std_17)
+    target_compile_definitions(OpenTuneArchitectureTests
+        PRIVATE
+            OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneArchitectureTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneArchitectureTests COMMAND OpenTuneArchitectureTests)
+
+    add_executable(OpenTunePianoRollBehaviorTests
+        Tests/PianoRollBehaviorTests.cpp
+        Source/Standalone/UI/PianoRoll/InteractionState.cpp
+        Source/Utils/PianoRollEditAction.cpp
+        Source/Utils/UndoManager.cpp
+    )
+    target_compile_features(OpenTunePianoRollBehaviorTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTunePianoRollBehaviorTests
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}
+            ${CMAKE_SOURCE_DIR}/Source
+            ${CMAKE_SOURCE_DIR}/Source/Standalone
+    )
+    target_link_libraries(OpenTunePianoRollBehaviorTests
+        PRIVATE
+            juce::juce_core
+            juce::juce_audio_basics
+            juce::juce_gui_basics
+            juce::juce_recommended_config_flags
+    )
+    target_compile_definitions(OpenTunePianoRollBehaviorTests
+        PRIVATE
+            OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+    )
+    if(MSVC)
+        target_compile_options(OpenTunePianoRollBehaviorTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTunePianoRollBehaviorTests COMMAND OpenTunePianoRollBehaviorTests)
+endif()
+
     # ==============================================================================
     # Installation
     # ==============================================================================

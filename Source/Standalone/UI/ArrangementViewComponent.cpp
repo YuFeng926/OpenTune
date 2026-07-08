@@ -21,13 +21,11 @@ namespace OpenTune {
 namespace {
 
 constexpr int kArrangementContentStartX = 8;
-constexpr float kPlacementCornerRadius = 6.0f;
 constexpr float kPlacementDragThresholdPx = 5.0f;
 
 struct ArrangementClipPaintInput {
     juce::Rectangle<float> fullBounds;
-    juce::Rectangle<int> visibleClip;
-    juce::Path waveformPath;
+    juce::Rectangle<int> paintClip;
     juce::Colour trackColour;
     juce::String displayName;
     ContentKey contentKey;
@@ -36,13 +34,10 @@ struct ArrangementClipPaintInput {
     double fadeOutSeconds = 0.0;
     bool selected = false;
     bool preview = false;
-    bool analysisInProgress = false;
     double clipInSeconds = 0.0;
     double timelineStartSeconds = 0.0;
     double durationSeconds = 0.0;
     double pixelsPerSecond = 1.0;
-    double paintStartSeconds = 0.0;
-    double paintEndSeconds = 0.0;
 };
 
 juce::String formatGainLabel(float gain)
@@ -58,71 +53,119 @@ juce::String formatGainLabel(float gain)
     return text + " dB";
 }
 
-float placementRadiusFor(juce::Rectangle<float> bounds)
+juce::Rectangle<int> computeHistoricalWaveformDrawableBounds(juce::Rectangle<int> placementBounds) noexcept
 {
-    return juce::jmin(kPlacementCornerRadius,
-                      juce::jmax(0.0f, bounds.getWidth() * 0.5f),
-                      juce::jmax(0.0f, bounds.getHeight() * 0.5f));
+    if (placementBounds.isEmpty())
+        return {};
+
+    const int horizontalInset = juce::jmin(6, juce::jmax(0, (placementBounds.getWidth() - 1) / 2));
+    const int verticalInset = juce::jmin(6, juce::jmax(0, (placementBounds.getHeight() - 1) / 2));
+    auto bounds = placementBounds.reduced(horizontalInset, verticalInset);
+
+    if (bounds.getWidth() <= 0)
+        bounds.setWidth(1);
+    if (bounds.getHeight() <= 0)
+        bounds.setHeight(1);
+
+    return bounds;
 }
 
-static void paintClipWaveform(juce::Graphics& g,
-                              const ArrangementClipPaintInput& clip,
-                              const WaveformMipmapCache& waveformMipmapCache)
+static void paintHistoricalClipWaveform(juce::Graphics& g,
+                                        const ArrangementClipPaintInput& clip,
+                                        const WaveformMipmapCache& waveformMipmapCache)
 {
-    const int width = juce::roundToInt(clip.fullBounds.getWidth());
-    const int height = juce::roundToInt(clip.fullBounds.getHeight());
+    const auto placementBounds = clip.fullBounds.getSmallestIntegerContainer();
+    const auto waveformBounds = computeHistoricalWaveformDrawableBounds(placementBounds);
+    const auto visibleWaveformBounds = waveformBounds.getIntersection(clip.paintClip);
     const auto* mipmap = waveformMipmapCache.get(clip.contentKey);
-    if (mipmap == nullptr || !mipmap->hasSource() || width <= 2 || height <= 2)
+    if (mipmap == nullptr || !mipmap->hasSource() || visibleWaveformBounds.isEmpty() || clip.durationSeconds <= 0.0)
         return;
 
-    const int bestLevelIdx = mipmap->selectBestLevelIndex(clip.pixelsPerSecond);
-    const auto snapshot = mipmap->snapshotLevel(bestLevelIdx);
-    if (snapshot.peaks.empty() || snapshot.samplesPerPeak <= 0)
+    const int levelIndex = mipmap->selectBestLevelIndex(clip.pixelsPerSecond);
+    const auto& level = mipmap->getLevel(levelIndex);
+    if (level.peaks.empty())
         return;
 
-    const int numPeaks = static_cast<int>(snapshot.peaks.size());
-    const double timePerPeak = static_cast<double>(snapshot.samplesPerPeak)
-        / static_cast<double>(WaveformMipmap::kBaseSampleRate);
-    const float halfH = clip.fullBounds.getHeight() * 0.5f;
-    const float centerY = clip.fullBounds.getCentreY();
+    const int64_t numPeaks = static_cast<int64_t>(level.peaks.size());
+    const int64_t builtPeaks = level.complete ? numPeaks : level.buildProgress;
+    if (builtPeaks <= 0)
+        return;
+
+    const float midY = static_cast<float>(waveformBounds.getCentreY());
+    const float halfH = waveformBounds.getHeight() * 0.45f;
+    const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[levelIndex];
+    const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
+    const double timelineEndSeconds = clip.timelineStartSeconds + clip.durationSeconds;
+    const double sourceEndSeconds = clip.clipInSeconds + clip.durationSeconds;
 
     juce::Path wavePath;
-    bool started = false;
 
-    for (int x = 0; x < width; ++x) {
-        const double timelineTime = clip.paintStartSeconds + static_cast<double>(x) / clip.pixelsPerSecond;
-        const double contentTime = clip.clipInSeconds + (timelineTime - clip.timelineStartSeconds);
-        const int peakIdx = static_cast<int>(contentTime / timePerPeak);
-        if (peakIdx < 0 || peakIdx >= numPeaks)
+    for (int x = visibleWaveformBounds.getX(); x < visibleWaveformBounds.getRight(); ++x) {
+        const double timelineTime = clip.timelineStartSeconds
+            + (static_cast<double>(x) - static_cast<double>(clip.fullBounds.getX())) / clip.pixelsPerSecond;
+        if (timelineTime < clip.timelineStartSeconds || timelineTime >= timelineEndSeconds)
             continue;
 
-        const float mag = snapshot.peaks[static_cast<size_t>(peakIdx)].getMagnitude();
-        const float barH = mag * halfH;
-        const float drawX = clip.fullBounds.getX() + static_cast<float>(x);
-        if (!started) {
-            wavePath.startNewSubPath(drawX, centerY - barH);
-            started = true;
-        } else {
-            wavePath.lineTo(drawX, centerY - barH);
+        const double contentTime = clip.clipInSeconds + (timelineTime - clip.timelineStartSeconds);
+        if (contentTime < clip.clipInSeconds || contentTime >= sourceEndSeconds)
+            continue;
+
+        const int64_t peakIndex = static_cast<int64_t>(contentTime / timePerPeak);
+        if (peakIndex < 0 || peakIndex >= builtPeaks)
+            continue;
+
+        const double timelineTimeNext = clip.timelineStartSeconds
+            + (static_cast<double>(x + 1) - static_cast<double>(clip.fullBounds.getX())) / clip.pixelsPerSecond;
+        const double contentTimeNext = clip.clipInSeconds + (timelineTimeNext - clip.timelineStartSeconds);
+        int64_t idxStart = peakIndex;
+        int64_t idxEnd = static_cast<int64_t>(contentTimeNext / timePerPeak);
+        if (idxEnd <= idxStart)
+            idxEnd = idxStart + 1;
+
+        float aggMin = 0.0f;
+        float aggMax = 0.0f;
+        bool hasData = false;
+
+        for (int64_t i = idxStart; i < idxEnd && i < builtPeaks; ++i) {
+            if (i < 0)
+                continue;
+
+            const auto& pk = level.peaks[static_cast<std::size_t>(i)];
+            if (pk.isZero())
+                continue;
+
+            if (!hasData) {
+                aggMin = pk.getMin();
+                aggMax = pk.getMax();
+                hasData = true;
+            } else {
+                aggMin = std::min(aggMin, pk.getMin());
+                aggMax = std::max(aggMax, pk.getMax());
+            }
         }
-    }
 
-    for (int x = width - 1; x >= 0; --x) {
-        const double timelineTime = clip.paintStartSeconds + static_cast<double>(x) / clip.pixelsPerSecond;
-        const double contentTime = clip.clipInSeconds + (timelineTime - clip.timelineStartSeconds);
-        const int peakIdx = static_cast<int>(contentTime / timePerPeak);
-        if (peakIdx < 0 || peakIdx >= numPeaks)
+        if (!hasData)
             continue;
 
-        const float mag = snapshot.peaks[static_cast<size_t>(peakIdx)].getMagnitude();
-        const float barH = mag * halfH;
-        wavePath.lineTo(clip.fullBounds.getX() + static_cast<float>(x), centerY + barH);
+        const float displayTop = aggMax * clip.gain * halfH;
+        const float displayBottom = aggMin * clip.gain * halfH;
+        float y1 = midY - displayTop;
+        float y2 = midY - displayBottom;
+
+        if ((y2 - y1) < 2.0f) {
+            const float expand = (2.0f - (y2 - y1)) * 0.5f;
+            y1 -= expand;
+            y2 += expand;
+        }
+
+        const float fx = static_cast<float>(x) + 0.5f;
+        wavePath.startNewSubPath(fx, y1);
+        wavePath.lineTo(fx, y2);
     }
 
-    if (!started)
+    if (wavePath.isEmpty())
         return;
 
-    wavePath.closeSubPath();
     const auto themeId = UIColors::currentThemeId();
     juce::PathStrokeType glowStroke(2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
     juce::PathStrokeType mainStroke(1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
@@ -144,10 +187,13 @@ static void paintClipWaveform(juce::Graphics& g,
     }
 }
 
-static void paintClipShellAndWaveform(juce::Graphics& g,
-                                      const ArrangementClipPaintInput& clip,
-                                      const WaveformMipmapCache& waveformMipmapCache)
+static void paintHistoricalClipShellAndWaveform(juce::Graphics& g,
+                                                const ArrangementClipPaintInput& clip,
+                                                const WaveformMipmapCache& waveformMipmapCache)
 {
+    juce::Graphics::ScopedSaveState scoped(g);
+    g.reduceClipRegion(clip.paintClip);
+
     const auto bounds = clip.fullBounds;
     const auto themeId = UIColors::currentThemeId();
     if (themeId == ThemeId::DarkBlueGrey && clip.selected) {
@@ -210,7 +256,7 @@ static void paintClipShellAndWaveform(juce::Graphics& g,
         g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.6f);
     }
 
-    paintClipWaveform(g, clip, waveformMipmapCache);
+    paintHistoricalClipWaveform(g, clip, waveformMipmapCache);
 
     if (clip.fadeInSeconds > 0.001) {
         const float fadePixels = static_cast<float>(clip.fadeInSeconds * clip.pixelsPerSecond);
@@ -218,9 +264,9 @@ static void paintClipShellAndWaveform(juce::Graphics& g,
         p.addTriangle(bounds.getX(), bounds.getY(),
                       bounds.getX() + fadePixels, bounds.getY(),
                       bounds.getX(), bounds.getBottom());
-        g.setColour(juce::Colours::white.withAlpha(clip.preview ? 0.08f : 0.12f));
+        g.setColour(juce::Colours::white.withAlpha(0.12f));
         g.fillPath(p);
-        g.setColour(juce::Colours::white.withAlpha(clip.preview ? 0.24f : 0.35f));
+        g.setColour(juce::Colours::white.withAlpha(0.35f));
         g.fillRect(juce::Rectangle<float>(bounds.getX(), bounds.getY(), 10.0f, 10.0f));
     }
 
@@ -230,9 +276,9 @@ static void paintClipShellAndWaveform(juce::Graphics& g,
         p.addTriangle(bounds.getRight(), bounds.getY(),
                       bounds.getRight() - fadePixels, bounds.getY(),
                       bounds.getRight(), bounds.getBottom());
-        g.setColour(juce::Colours::white.withAlpha(clip.preview ? 0.08f : 0.12f));
+        g.setColour(juce::Colours::white.withAlpha(0.12f));
         g.fillPath(p);
-        g.setColour(juce::Colours::white.withAlpha(clip.preview ? 0.24f : 0.35f));
+        g.setColour(juce::Colours::white.withAlpha(0.35f));
         g.fillRect(juce::Rectangle<float>(bounds.getRight() - 10.0f, bounds.getY(), 10.0f, 10.0f));
     }
 }
@@ -251,11 +297,16 @@ static void paintOverlapShading(juce::Graphics& g, const std::vector<Arrangement
     }
 }
 
-static void paintClipTextFadeGain(juce::Graphics& g, const ArrangementClipPaintInput& clip)
+static void paintHistoricalClipTextFadeGain(juce::Graphics& g, const ArrangementClipPaintInput& clip)
 {
+    juce::Graphics::ScopedSaveState scoped(g);
+    g.reduceClipRegion(clip.paintClip);
+
     const auto bounds = clip.fullBounds;
     if (bounds.getWidth() <= 30.0f || bounds.getHeight() <= 12.0f)
         return;
+
+    const auto textArea = bounds.getSmallestIntegerContainer().reduced(6, 4);
 
     if (clip.displayName.isNotEmpty()) {
         auto displayName = clip.displayName;
@@ -264,21 +315,12 @@ static void paintClipTextFadeGain(juce::Graphics& g, const ArrangementClipPaintI
 
         g.setColour(UIColors::textPrimary.withAlpha(0.85f));
         g.setFont(UIColors::getUIFont(10.0f));
-        g.drawText(displayName, clip.visibleClip.reduced(6, 4), juce::Justification::topLeft);
+        g.drawText(displayName, textArea, juce::Justification::topLeft);
     }
 
     g.setColour(UIColors::textSecondary.withAlpha(0.9f));
     g.setFont(UIColors::getUIFont(11.0f));
-    g.drawText(formatGainLabel(clip.gain), clip.visibleClip.reduced(6, 4), juce::Justification::topRight);
-}
-
-static void paintArrangementClipGhost(juce::Graphics& g,
-                                      ArrangementClipPaintInput clip,
-                                      const WaveformMipmapCache& waveformMipmapCache)
-{
-    clip.preview = true;
-    paintClipShellAndWaveform(g, clip, waveformMipmapCache);
-    paintClipTextFadeGain(g, clip);
+    g.drawText(formatGainLabel(clip.gain), textArea, juce::Justification::topRight);
 }
 
 static void paintHistoricalArrangementClips(juce::Graphics& g,
@@ -286,12 +328,12 @@ static void paintHistoricalArrangementClips(juce::Graphics& g,
                                             const WaveformMipmapCache& waveformMipmapCache)
 {
     for (const auto& clip : clips)
-        paintClipShellAndWaveform(g, clip, waveformMipmapCache);
+        paintHistoricalClipShellAndWaveform(g, clip, waveformMipmapCache);
 
     paintOverlapShading(g, clips);
 
     for (const auto& clip : clips)
-        paintClipTextFadeGain(g, clip);
+        paintHistoricalClipTextFadeGain(g, clip);
 }
 
 template <typename IsSelected>
@@ -324,9 +366,9 @@ std::vector<ArrangementClipPaintInput> collectVisibleArrangementClips(const Stan
             if (visibleEnd <= visibleStart)
                 continue;
 
-            const int x = static_cast<int>(std::llround((visibleStart - tileStart) * pixelsPerSecond));
-            const int width = juce::jmax(1,
-                static_cast<int>(std::llround((visibleEnd - visibleStart) * pixelsPerSecond)));
+            const int x = static_cast<int>(std::llround((placementStart - tileStart) * pixelsPerSecond));
+            const int width = juce::jmax(8,
+                static_cast<int>(std::llround(placement.durationSeconds * pixelsPerSecond)));
             const int y = trackY + 2;
             const int height = verticalWindow.trackHeight - 4;
 
@@ -334,12 +376,18 @@ std::vector<ArrangementClipPaintInput> collectVisibleArrangementClips(const Stan
                                                            static_cast<float>(y),
                                                            static_cast<float>(width),
                                                            static_cast<float>(height));
-            const auto visRect = juce::Rectangle<int>(x, y, width, height);
+            const auto tileBounds = juce::Rectangle<int>(0, 0, tileWidth, verticalWindow.viewportContentHeight);
+            const auto laneBounds = juce::Rectangle<int>(0, y, tileWidth, height);
+            const auto paintClip = fullBounds.getSmallestIntegerContainer()
+                .getIntersection(tileBounds)
+                .getIntersection(laneBounds);
+
+            if (paintClip.isEmpty())
+                continue;
 
             clips.push_back({
                 fullBounds,
-                visRect,
-                {},  // waveformPath (computed during paint)
+                paintClip,
                 arrangement.getTrackColour(trackId),
                 placement.name,
                 placement.contentKey,
@@ -348,13 +396,10 @@ std::vector<ArrangementClipPaintInput> collectVisibleArrangementClips(const Stan
                 placement.fadeOutDuration,
                 isSelected(trackId, placement.placementId),
                 false,
-                false,
                 placement.clipInSeconds,
                 placement.timelineStartSeconds,
                 placement.durationSeconds,
-                pixelsPerSecond,
-                visibleStart,
-                visibleEnd
+                pixelsPerSecond
             });
         }
     }
@@ -482,8 +527,10 @@ void ArrangementViewComponent::removeListener(Listener* listener)
 
 void ArrangementViewComponent::applyResolvedCamera(TimelineViewportCamera next, juce::NotificationType notify)
 {
-    if (next == camera_)
+    if (next == camera_) {
+        updateOverlayPresentation();
         return;
+    }
 
     camera_ = next;
 
@@ -491,6 +538,7 @@ void ArrangementViewComponent::applyResolvedCamera(TimelineViewportCamera next, 
     prepareVisibleContentTiles();
     updateScrollBars();
     refreshVisualState();
+    updateOverlayPresentation();
 
     if (notify == juce::sendNotification) {
         listeners_.call([this](Listener& l) { l.timelineViewportChanged(camera_); });
@@ -835,17 +883,20 @@ void ArrangementViewComponent::updateOverlayPresentation()
 {
     const auto viewportBounds = getContentViewportBounds();
 
-    // Cont + playing + following → anchor at viewport center
-    // Paused/manual/Page/seek → anchor at time-derived x
-    const bool contFollowing = isPlaying_.load(std::memory_order_relaxed)
-                            && scrollMode_ == ScrollMode::Continuous;
+    const int timeDerivedX = makeViewMapper().timeToX(readPlayheadSeconds());
+    const int viewportCentreX = viewportBounds.getCentreX();
+    const int viewportRight = viewportBounds.getRight();
+    const int viewLeftGuardX = viewportBounds.getX();
 
-    const int anchorX = contFollowing
-        ? viewportBounds.getCentreX()
-        : makeViewMapper().timeToX(readPlayheadSeconds());
+    const bool playing = isPlaying_.load(std::memory_order_relaxed);
+    const bool continuousMode = scrollMode_ == ScrollMode::Continuous;
 
-    fixedPlayhead_.setAnchorBounds(anchorX, getHeight());
-    fixedPlayhead_.setVisible(anchorX >= 0 && anchorX <= viewportBounds.getRight());
+    const auto pres = TimelineViewportPolicy::computePlayheadPresentation(
+        timeDerivedX, viewportCentreX, viewportRight, viewLeftGuardX,
+        playing, continuousMode);
+
+    fixedPlayhead_.setAnchorBounds(pres.anchorX, getHeight());
+    fixedPlayhead_.setVisible(pres.visible);
 }
 
 int ArrangementViewComponent::absoluteTimeToViewportX(double seconds) const
@@ -1216,7 +1267,7 @@ void ArrangementViewComponent::drawMoveDragOverlay(juce::Graphics& g)
     for (const auto& state : moveDragStartStates_) {
         const auto target = resolveMoveDragTarget(state, deltaSeconds, trackDelta);
         const int x = absoluteTimeToViewportX(target.startSeconds);
-        const int width = juce::jmax(1, static_cast<int>(std::round(state.durationSeconds * camera_.pixelsPerSecond)));
+        const int width = juce::jmax(8, static_cast<int>(std::round(state.durationSeconds * camera_.pixelsPerSecond)));
         const auto lane = getTrackLaneBounds(target.trackId);
         const juce::Rectangle<float> bounds(static_cast<float>(x),
                                             static_cast<float>(lane.getY() + 2),
@@ -1229,11 +1280,14 @@ void ArrangementViewComponent::drawMoveDragOverlay(juce::Graphics& g)
 
         const auto targetColour = arrangement.getTrackColour(target.trackId);
 
-        const auto visRect = juce::Rectangle<int>(x, lane.getY() + 2, width, lane.getHeight() - 4);
+        const auto paintClip = bounds.getSmallestIntegerContainer()
+            .getIntersection(getContentViewportBounds());
+        if (paintClip.isEmpty())
+            continue;
+
         ArrangementClipPaintInput clip{
             bounds,
-            visRect,
-            {},
+            paintClip,
             targetColour,
             state.name,
             placement.contentKey,
@@ -1242,15 +1296,13 @@ void ArrangementViewComponent::drawMoveDragOverlay(juce::Graphics& g)
             placement.fadeOutDuration,
             isPlacementSelected(state.trackId, state.placementId),
             true,
-            false,
             placement.clipInSeconds,
             target.startSeconds,
             state.durationSeconds,
-            camera_.pixelsPerSecond,
-            target.startSeconds,
-            target.startSeconds + state.durationSeconds
+            camera_.pixelsPerSecond
         };
-        paintArrangementClipGhost(g, clip, waveformMipmapCache_);
+        paintHistoricalClipShellAndWaveform(g, clip, waveformMipmapCache_);
+        paintHistoricalClipTextFadeGain(g, clip);
     }
 }
 
@@ -1475,11 +1527,8 @@ void ArrangementViewComponent::performPageScroll(double playheadTime)
         0.0,
         camera_.pixelsPerSecond);
 
-    const auto resolved = TimelineViewportPolicy::resolve(req);
-
-    if (std::abs(resolved.visibleStartSeconds - camera_.visibleStartSeconds) > 0.001) {
-        commitViewportRequest(req, juce::sendNotification);
-    }
+    // Always commit to trigger overlay refresh via applyResolvedCamera equal branch
+    commitViewportRequest(req, juce::sendNotification);
 }
 
 void ArrangementViewComponent::updateAutoScroll()

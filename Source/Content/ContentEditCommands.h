@@ -62,7 +62,7 @@ public:
     virtual bool replaceContentNotesForFullMutation(ContentKey key,
                            std::vector<Note> notes) = 0;
 
-    virtual bool commitNotePatch(ContentKey key, ContentNoteRangePatch patch) = 0;
+    virtual ContentCommitSnapshot commitNotePatch(ContentKey key, ContentNoteRangePatch patch) = 0;
 
     virtual ContentCommitSnapshot commitNotesAndSegments(ContentKey key,
                                         std::vector<Note> notes,

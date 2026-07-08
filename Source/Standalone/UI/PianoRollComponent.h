@@ -353,6 +353,7 @@ private:
     std::vector<ContentSlot> visibleContentSlots() const noexcept;
     void drawPreparedPatternTiles(juce::Graphics& g);
     void drawPreparedContentTiles(juce::Graphics& g);
+    void drawLiveNotes(juce::Graphics& g);
     void handleAsyncUpdate() override;
 
     void drawNoteDragCurvePreview(juce::Graphics& g);
@@ -405,7 +406,9 @@ private:
     juce::Rectangle<int> getHandDrawPreviewBounds() const;
     juce::Rectangle<int> getLineAnchorPreviewBounds() const;
     juce::Rectangle<int> getNoteDragCurvePreviewBounds() const;
-    void invalidateInteractionArea(const juce::Rectangle<int>& dirtyArea);
+    void invalidateLiveNotes(const std::vector<Note>& beforeNotes, const std::vector<Note>& afterNotes);
+    void invalidateSelectionFeedback();
+    void invalidateInteractionPreview(const juce::Rectangle<int>& bounds);
 
     float midiToY(float midiNote) const;
     float yToMidi(float y) const;
@@ -487,7 +490,7 @@ private:
     
     std::atomic<bool> autoTuneInFlight_{false};
     std::atomic<uint64_t> editedContentEpoch_{0};
-    std::atomic<uint64_t> notesEpoch_{0};
+    std::atomic<uint64_t> waveformSourceEpoch_{0};
     std::atomic<uint64_t> pitchEpoch_{0};
     std::atomic<uint64_t> timeGridEpoch_{0};
 
@@ -526,8 +529,6 @@ private:
     std::vector<Note> cachedNotes_;
 
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
-
-    mutable uint64_t interactionRevision_ = 0;
 
     // Undo support
     juce::String pendingUndoDescription_;

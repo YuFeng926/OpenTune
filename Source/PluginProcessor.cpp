@@ -827,9 +827,9 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             return proc_->replaceContentNotesForFullMutation(key, std::move(notes));
         }
 
-        bool commitNotePatch(ContentKey key, ContentNoteRangePatch patch) override
+        ContentCommitSnapshot commitNotePatch(ContentKey key, ContentNoteRangePatch patch) override
         {
-            if (!proc_) return false;
+            if (!proc_) return {};
             return proc_->commitContentNotePatch(key, std::move(patch));
         }
 
@@ -4222,10 +4222,10 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
     return {};
 }
 
-bool OpenTuneAudioProcessor::commitContentNotePatch(ContentKey key, ContentNoteRangePatch patch)
+ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotePatch(ContentKey key, ContentNoteRangePatch patch)
 {
     auto snap = getContentSnapshot(key);
-    if (!snap) return false;
+    if (!snap) return {};
 
     const double rangeStartSec = patch.affectedRange.startSeconds;
     const double rangeEndSec   = patch.affectedRange.endSeconds;
@@ -4255,7 +4255,7 @@ bool OpenTuneAudioProcessor::commitContentNotePatch(ContentKey key, ContentNoteR
     switch (key.domainKind) {
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
-            if (!clip) return false;
+            if (!clip) return {};
             clip->applyNotes(std::move(normalizedNotes));
             ok = true;
             break;
@@ -4263,7 +4263,7 @@ bool OpenTuneAudioProcessor::commitContentNotePatch(ContentKey key, ContentNoteR
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
-            if (!dc) return false;
+            if (!dc) return {};
             ok = dc->applyNotesToModification(key, std::move(normalizedNotes));
             break;
         }
@@ -4273,7 +4273,7 @@ bool OpenTuneAudioProcessor::commitContentNotePatch(ContentKey key, ContentNoteR
 #endif
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
-            if (session == nullptr) return false;
+            if (session == nullptr) return {};
             ok = session->applyNotes(key, std::move(normalizedNotes));
             break;
         }
@@ -4291,8 +4291,11 @@ bool OpenTuneAudioProcessor::commitContentNotePatch(ContentKey key, ContentNoteR
             frameRange.endFrameExclusive = static_cast<int>(std::ceil(patch.affectedRange.endSeconds / secondsPerFrame));
         }
         onContentLocalMutationCompleted(key, MutationScope::NotesChanged, frameRange);
+        auto committedSnap = getContentSnapshot(key);
+        jassert(committedSnap != nullptr);
+        return committedSnap;
     }
-    return ok;
+    return {};
 }
 
 bool OpenTuneAudioProcessor::writePitchCurveToOwner(ContentKey key,

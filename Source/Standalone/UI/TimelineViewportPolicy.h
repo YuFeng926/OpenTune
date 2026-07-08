@@ -5,6 +5,21 @@
 
 namespace OpenTune {
 
+// ── 共享播放头表现判定 ────────────────────────────────────────
+// 给定 resolved camera 与 view 几何，推导 playhead anchor/visible/fixedCentre。
+// 核心原则：playing + Continuous 只是意图，不是结果。
+// 播放头是否固定居中，必须由 resolved camera 是否真的让
+// timeToX(playheadTime) 落在 content viewport center 来决定。
+
+struct TimelinePlayheadPresentation
+{
+    int anchorX = 0;
+    bool visible = false;
+    bool fixedCentre = false;
+};
+
+// ─────────────────────────────────────────────────────────────────
+
 struct TimelineViewportRequest
 {
     enum class Kind
@@ -71,6 +86,20 @@ public:
 
     // 便捷：从 camera + viewportWidth 计算 visibleEndSeconds
     static double visibleEndSeconds(const TimelineViewportCamera& camera, int viewportWidth);
+
+    // 共享播放头表现判定：只有 resolved camera 真的让 playhead 居中时才固定居中
+    // timeDerivedX: ViewMapper::timeToX(playheadTime)
+    // viewportCentreX: content viewport 中心（组件坐标系）
+    // viewportRight: content viewport 右边界
+    // viewLeftGuardX: 播放头最小可见 x（PianoRoll: mapper.contentStartX; Arrangement: viewport left）
+    // playing / continuousMode: 状态和意图（PianoRoll continuousMode 应含 !userScrollHold_）
+    static TimelinePlayheadPresentation computePlayheadPresentation(
+        int timeDerivedX,
+        int viewportCentreX,
+        int viewportRight,
+        int viewLeftGuardX,
+        bool playing,
+        bool continuousMode) noexcept;
 };
 
 } // namespace OpenTune

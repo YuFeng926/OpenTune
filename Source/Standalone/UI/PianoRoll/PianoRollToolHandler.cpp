@@ -295,23 +295,6 @@ void updateNoteDragPreview(PianoRollToolHandler::Context& ctx, float shiftFactor
     }
 }
 
-void invalidateIfNeeded(PianoRollToolHandler::Context& ctx, const juce::Rectangle<int>& dirtyArea)
-{
-    if (!dirtyArea.isEmpty()) {
-        ctx.invalidateVisual(dirtyArea);
-    }
-}
-
-void invalidateNoteChange(PianoRollToolHandler::Context& ctx,
-                          const std::vector<Note>& before,
-                          const std::vector<Note>& after)
-{
-    auto dirty = ctx.getNotesBounds(before).getUnion(ctx.getNotesBounds(after));
-    dirty = dirty.getUnion(ctx.getSelectionBounds());
-    invalidateIfNeeded(ctx, dirty);
-    if (ctx.repaintPreviewOverlay) ctx.repaintPreviewOverlay();
-}
-
 }
 
 // ============================================================================
@@ -385,7 +368,7 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
     if (currentTool_ == ToolId::LineAnchor && ctx_.getState().drawing.isPlacingAnchors) {
         const auto dirtyBefore = ctx_.getLineAnchorPreviewBounds();
         ctx_.getState().drawing.currentMousePos = e.position;
-        invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
+        if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
         return;
     }
 
@@ -445,7 +428,7 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
             ctx_.getState().drawing.isPlacingAnchors = false;
             ctx_.getState().drawing.pendingAnchors.clear();
             ctx_.clearLineAnchorSegmentSelection();
-            invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
+            if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
             return;
         }
         showToolContextMenu(e);
@@ -579,7 +562,6 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
     const auto& shortcutSettings = ctx_.getShortcutSettings();
 
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::SelectAll, key)) {
-        const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
         const auto& notes = committedNotes(ctx_);
         auto curve = ctx_.getPitchCurve();
         bool hasNotes = !notes.empty();
@@ -612,10 +594,7 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
         }
         
         updateF0SelectionFromNotes(committed);
-        invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
-        if (ctx_.invalidateInteractionVisual) {
-            ctx_.invalidateInteractionVisual();
-        }
+        if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
         return true;
     }
 
@@ -842,9 +821,7 @@ void PianoRollToolHandler::beginF0SelectionAt(const juce::MouseEvent& e, int fra
     state.selection.f0SelectionAnchorFrame = frameIndex;
     state.selection.setF0Range(frameIndex, frameIndex + 1);
     ctx_.clearNoteDraft();
-    if (ctx_.invalidateInteractionVisual) {
-        ctx_.invalidateInteractionVisual();
-    }
+    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 }
 
 void PianoRollToolHandler::updateF0SelectionDrag(const juce::MouseEvent& e)
@@ -871,9 +848,7 @@ void PianoRollToolHandler::updateF0SelectionDrag(const juce::MouseEvent& e)
     const int endFrameExclusive = std::max(selection.f0SelectionAnchorFrame, frame) + 1;
     selection.setF0Range(startFrame, endFrameExclusive);
     selection.isSelectingF0 = true;
-    if (ctx_.invalidateInteractionVisual) {
-        ctx_.invalidateInteractionVisual();
-    }
+    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 }
 
 void PianoRollToolHandler::beginEmptySpaceIntent(const juce::MouseEvent& e)
@@ -1119,7 +1094,7 @@ void PianoRollToolHandler::handleDeleteKey()
         }
 
         if (committed) {
-            invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
+            if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, committedNotes(ctx_));
         }
         return;
     }
@@ -1130,7 +1105,6 @@ void PianoRollToolHandler::handleDeleteKey()
 void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 // 选择工具鼠标按下处理：检测音符边缘调整、音符选中/取消选中、框选区域开�?
 {
-    const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
     const auto& notes = committedNotes(ctx_);
 
     ctx_.getState().noteResize.isResizing = false;
@@ -1184,7 +1158,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
                 }
 
                 updateF0SelectionFromNotes(notes);
-                invalidateNoteChange(ctx_, beforeNotes, notes);
+                if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
                 return;
             }
         }
@@ -1292,7 +1266,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
             }
         }
 
-        invalidateNoteChange(ctx_, beforeNotes, notes);
+        if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
     } else {
         int f0Frame = -1;
         if (hitTestF0Curve(e, f0Frame)) {
@@ -1320,7 +1294,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
                 ctx_.getState().selection.isSelectingArea = false;
                 ctx_.getState().selection.hasSelectionArea = false;
             }
-            invalidateNoteChange(ctx_, beforeNotes, notes);
+            if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
         } else {
             ctx_.clearNoteDraft();
         }
@@ -1407,8 +1381,8 @@ void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
     }
 
     lastDrawPoint_ = juce::Point<float>(static_cast<float>(curveTime), targetF0);
-    invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
-    if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
+    if (ctx_.invalidateInteractionPreview)
+        ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
 }
 
 void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
@@ -1437,7 +1411,6 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
     }
     
     if (existingNoteIndex >= 0) {
-        const auto beforeNotes = committedNotes;
         bool isCtrlDown = e.mods.isCtrlDown() || e.mods.isCommandDown();
         auto& noteSelection = ctx_.getState().noteSelection;
         const int noteCount = static_cast<int>(committedNotes.size());
@@ -1449,7 +1422,7 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
             }
         }
         updateF0SelectionFromNotes(committedNotes);
-        invalidateNoteChange(ctx_, beforeNotes, committedNotes);
+        if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
     }
     
     ctx_.setDrawNoteToolPendingDrag(true);
@@ -1490,9 +1463,7 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
     }
 
     // Only repaint the lightweight preview overlay �?no render model rebuild
-    if (ctx_.repaintPreviewOverlay) {
-        ctx_.repaintPreviewOverlay();
-    }
+    if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview({});
 }
 
 void PianoRollToolHandler::handleAutoTuneTool(const juce::MouseEvent& e)
@@ -1543,7 +1514,7 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
         ctx_.getState().noteSelection.setFromIndices(std::move(selectedIndices),
                                                      static_cast<int>(notes.size()));
         updateF0SelectionFromNotes(notes);
-        invalidateNoteChange(ctx_, beforeNotes, notes);
+        if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
         return;
     }
 
@@ -1589,7 +1560,7 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
         }
 
         notes[static_cast<size_t>(ctx_.getState().noteResize.noteIndex)].dirty = true;
-        invalidateNoteChange(ctx_, beforeNotes, notes);
+        if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, notes);
         return;
     }
 
@@ -1634,7 +1605,7 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
         }
 
         updateNoteDragPreview(ctx_, std::pow(2.0f, appliedDeltaSemitones / 12.0f));
-        invalidateNoteChange(ctx_, beforeNotes, notes);
+        if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, notes);
         return;
     }
 
@@ -1824,7 +1795,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
     ctx_.getState().selection.f0SelectionAnchorFrame = -1;
     ctx_.getState().noteDrag.draggedNoteIndex = -1;
     ctx_.clearNoteDraft();
-    invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
+    if (ctx_.invalidateSelectionFeedback) ctx_.invalidateSelectionFeedback();
 }
 
 void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
@@ -1851,7 +1822,7 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
             ctx_.setDirtyStartTime(-1.0);
             ctx_.setDirtyEndTime(-1.0);
             ctx_.getState().drawing.handDrawBuffer.clear();
-            invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
+            if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
             return;
         }
         const auto f0tl = ctx_.getF0Timeline();
@@ -1884,7 +1855,7 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
     ctx_.setDirtyStartTime(-1.0);
     ctx_.setDirtyEndTime(-1.0);
     ctx_.getState().drawing.handDrawBuffer.clear();
-    invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
+    if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getHandDrawPreviewBounds()));
 }
 
 void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
@@ -1896,7 +1867,7 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
     if (ctx_.getDrawNoteToolPendingDrag()) {
         ctx_.setDrawNoteToolPendingDrag(false);
         // Repaint overlay to clear any stale preview
-        if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
+        if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview({});
         return;
     }
     
@@ -2013,7 +1984,7 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
     }
 
     ctx_.clearNoteDraft();
-    invalidateNoteChange(ctx_, beforeNotes, committedNotes(ctx_));
+    if (ctx_.invalidateLiveNotes) ctx_.invalidateLiveNotes(beforeNotes, committedNotes(ctx_));
 }
 
 void PianoRollToolHandler::showToolContextMenu(const juce::MouseEvent& e)
@@ -2096,7 +2067,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
                 } else {
                     ctx_.selectLineAnchorSegment(segmentIdx);
                 }
-                invalidateIfNeeded(ctx_, ctx_.getLineAnchorPreviewBounds());
+                if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview(ctx_.getLineAnchorPreviewBounds());
                 return;
             }
         }
@@ -2112,7 +2083,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
         firstAnchor.selected = false;
         ctx_.getState().drawing.pendingAnchors.push_back(firstAnchor);
         ctx_.getState().drawing.currentMousePos = e.position;
-        invalidateIfNeeded(ctx_, ctx_.getLineAnchorPreviewBounds());
+        if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview(ctx_.getLineAnchorPreviewBounds());
         return;
     }
 
@@ -2163,15 +2134,15 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     newAnchor.selected = false;
     anchors.push_back(newAnchor);
     ctx_.getState().drawing.currentMousePos = e.position;
-    invalidateIfNeeded(ctx_, ctx_.getLineAnchorPreviewBounds());
+    if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview(ctx_.getLineAnchorPreviewBounds());
 }
 
 void PianoRollToolHandler::handleLineAnchorMouseDrag(const juce::MouseEvent& e) {
     if (!ctx_.getState().drawing.isPlacingAnchors) return;
     const auto dirtyBefore = ctx_.getLineAnchorPreviewBounds();
     ctx_.getState().drawing.currentMousePos = e.position;
-    invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
-    if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
+    if (ctx_.invalidateInteractionPreview)
+        ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
 }
 
 void PianoRollToolHandler::clearLineAnchorPreview()
@@ -2179,8 +2150,8 @@ void PianoRollToolHandler::clearLineAnchorPreview()
     const auto dirtyBefore = ctx_.getLineAnchorPreviewBounds();
     ctx_.getState().drawing.isPlacingAnchors = false;
     ctx_.getState().drawing.pendingAnchors.clear();
-    invalidateIfNeeded(ctx_, dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
-    if (ctx_.repaintPreviewOverlay) ctx_.repaintPreviewOverlay();
+    if (ctx_.invalidateInteractionPreview)
+        ctx_.invalidateInteractionPreview(dirtyBefore.getUnion(ctx_.getLineAnchorPreviewBounds()));
 }
 
 int PianoRollToolHandler::findNoteIndexAt(const std::vector<Note>& notes,
