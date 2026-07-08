@@ -214,13 +214,15 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.getNoteDragPreviewEndFrameExclusive = [this]() { return interactionState_.noteDrag.previewEndFrameExclusive; };
     toolCtx.setNoteDragPreviewEndFrameExclusive = [this](int v) { interactionState_.noteDrag.previewEndFrameExclusive = v; };
 
-    toolCtx.invalidateVisual = [this](const juce::Rectangle<int>& dirtyArea) {
-        invalidateInteractionArea(dirtyArea);
+    toolCtx.invalidateLiveNotes = [this](const std::vector<Note>& before, const std::vector<Note>& after) {
+        invalidateLiveNotes(before, after);
     };
-    toolCtx.invalidateInteractionVisual = [this]() {
-        repaint();
+    toolCtx.invalidateSelectionFeedback = [this]() {
+        invalidateSelectionFeedback();
     };
-    toolCtx.repaintPreviewOverlay = [this]() { previewOverlay_.repaint(); };
+    toolCtx.invalidateInteractionPreview = [this](const juce::Rectangle<int>& bounds) {
+        invalidateInteractionPreview(bounds);
+    };
     toolCtx.setMouseCursor = [this](const juce::MouseCursor& c) { setMouseCursor(c); };
     toolCtx.grabKeyboardFocus = [this]() { grabKeyboardFocus(); };
     toolCtx.getAudioEditingScheme = [this]() { return audioEditingScheme_; };
@@ -422,7 +424,7 @@ bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrection
     updateScrollBars();
     AppLogger::log("AutoTune: after outer updateScrollBars");
     repaint();
-    AppLogger::log("AutoTune: after outer invalidateVisual, before recordUndoAction");
+    AppLogger::log("AutoTune: after outer repaint, before recordUndoAction");
     const auto autoTuneRange = PitchCurve::expandNoteBasedCorrectionRange(
         completed.autoStartFrame,
         completed.autoEndFrame + 1,
@@ -590,11 +592,14 @@ bool PianoRollComponent::commitNoteDraft()
         if (overlapsRange(n)) patch.afterNotesInRange.push_back(n);
     }
 
-    if (!contentCommands_->commitNotePatch(editedContentKey_, patch)) {
+    const auto committedSnap = contentCommands_->commitNotePatch(editedContentKey_, patch);
+    if (!committedSnap) {
         return false;
     }
 
-    refreshEditedContentNotes();
+    cachedNotes_ = committedSnap->notes;
+    interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
+    syncF0SelectionToSelectedNotes();
 
     // Build the before-patch from baseline notes in the same seconds range.
     // Note-only undo uses seconds-based PianoRollNotePatchAction �?no frame
@@ -898,6 +903,7 @@ juce::Rectangle<int> PianoRollComponent::getNoteBounds(const Note& note) const
     const int height = std::max(1, static_cast<int>(std::ceil(pixelsPerSemitone_)));
     return juce::Rectangle<int>(x1, top, width, height)
         .expanded(4)
+        .translated(0, rulerHeight_)
         .getIntersection(getTimelineViewportBounds());
 }
 
@@ -1027,17 +1033,29 @@ juce::Rectangle<int> PianoRollComponent::getNoteDragCurvePreviewBounds() const
                      : juce::Rectangle<int>();
 }
 
-void PianoRollComponent::invalidateInteractionArea(const juce::Rectangle<int>& dirtyArea)
+void PianoRollComponent::invalidateLiveNotes(const std::vector<Note>& beforeNotes, const std::vector<Note>& afterNotes)
 {
-    if (dirtyArea.isEmpty()) {
-        return;
-    }
+    auto beforeBounds = getNotesBounds(beforeNotes);
+    auto afterBounds = getNotesBounds(afterNotes);
+    auto dirty = beforeBounds.getUnion(afterBounds);
+    if (!dirty.isEmpty())
+        repaint(dirty);
+    previewOverlay_.repaint();
+}
 
-    if (interactionState_.noteDraft.active) {
-        ++interactionRevision_;
-    }
+void PianoRollComponent::invalidateSelectionFeedback()
+{
+    // Selection-only change: repaint live note + overlay layer, no content tile rebuild
+    repaint();
+    previewOverlay_.repaint();
+}
 
-    repaint(dirtyArea);
+void PianoRollComponent::invalidateInteractionPreview(const juce::Rectangle<int>& bounds)
+{
+    if (bounds.isEmpty())
+        previewOverlay_.repaint();
+    else
+        previewOverlay_.repaint(bounds);
 }
 
 bool PianoRollComponent::enqueueManualCorrectionPatchAsync(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
@@ -1112,40 +1130,6 @@ void PianoRollComponent::enqueueNoteBasedCorrectionAsync(const std::vector<Note>
 
 void PianoRollPreviewOverlay::paint(juce::Graphics& g)
 {
-    // ⚡️ P0-2: Draft notes 绘制 �?绘制正在被拖拽或缩放�?notes
-    // 避免 detail cache 旧位�?+ selection highlights 新位�?= 重影
-    auto& interaction = owner_.interactionState_;
-    
-    // 绘制单个 draft note �?lambda
-    auto drawDraftNote = [&](const Note& note) {
-        auto bounds = owner_.getNoteBounds(note);
-        if (bounds.isEmpty()) return;
-        
-        g.setColour(juce::Colours::white.withAlpha(0.6f));
-        g.fillRect(bounds);
-        g.setColour(juce::Colours::white.withAlpha(0.8f));
-        g.drawRect(bounds, 1);
-    };
-    
-    // Note drag: 绘制被拖拽的 notes
-    if (interaction.noteDraft.active && interaction.noteDrag.isDraggingNotes) {
-        const auto& workingNotes = interaction.noteDraft.workingNotes;
-        for (int idx : interaction.noteDrag.draggedNoteIndices) {
-            if (idx >= 0 && idx < static_cast<int>(workingNotes.size())) {
-                drawDraftNote(workingNotes[idx]);
-            }
-        }
-    }
-    
-    // Note resize: 绘制被缩放的 note
-    if (interaction.noteDraft.active && interaction.noteResize.noteIndex >= 0) {
-        const auto& workingNotes = interaction.noteDraft.workingNotes;
-        int idx = interaction.noteResize.noteIndex;
-        if (idx < static_cast<int>(workingNotes.size())) {
-            drawDraftNote(workingNotes[idx]);
-        }
-    }
-    
     // Ghost overlay (reference content) �?drawn in overlay layer, not tiles
     if (owner_.referenceOverlay_.has_value() && owner_.referenceOverlay_->enabled) {
         auto ctx = owner_.makePresentationRenderContext();
@@ -1163,8 +1147,13 @@ void PianoRollPreviewOverlay::paint(juce::Graphics& g)
         }
     }
 
+    // ⚡️ Cursor preview (豁免路径): DrawNote tool 的绘制中 note preview
+    // 这是交互 cursor preview，不是 committed/draft note body
+    // Note body 由 drawLiveNotes() 负责绘制
     if (owner_.interactionState_.drawing.isDrawingNote
         && owner_.currentTool_ == ToolId::DrawNote) {
+        juce::Graphics::ScopedSaveState previewSave(g);
+        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(owner_.rulerHeight_)));
         double startTime = std::min(owner_.interactionState_.drawing.drawingNoteStartTime,
                                     owner_.interactionState_.drawing.drawingNoteEndTime);
         double endTime = std::max(owner_.interactionState_.drawing.drawingNoteStartTime,
@@ -1193,7 +1182,10 @@ void PianoRollPreviewOverlay::paint(juce::Graphics& g)
     owner_.drawSelectionBox(g, themeId);
 
     // Selected note highlights �?drawn in overlay, not baked into detail cache
+    // Translate to content area Y coordinate system, matching drawLiveNotes and content tile blit offset
     if (!owner_.interactionState_.noteSelection.selectedIndices.empty()) {
+        juce::Graphics::ScopedSaveState highlightSave(g);
+        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(owner_.rulerHeight_)));
         auto renderCtx = owner_.makePresentationRenderContext();
         if (auto* placement = owner_.findEditedPlacement()) {
             auto renderItem = owner_.buildContentRenderItem(*placement);
@@ -1407,8 +1399,9 @@ void PianoRollComponent::paint(juce::Graphics& g) {
 
     // Pattern tiles: ruler/grid/lanes (already clipped to chrome shell)
     drawPreparedPatternTiles(g);
-    // Content tiles: waveform/notes/F0/anchors (already clipped to chrome shell)
+    // Content tiles: waveform/F0/anchors (already clipped to chrome shell)
     drawPreparedContentTiles(g);
+    drawLiveNotes(g);
 }
 
 void PianoRollComponent::paintOverChildren(juce::Graphics& g)
@@ -1512,11 +1505,14 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
             if (overlapsRange(n)) afterPatch.afterNotesInRange.push_back(n);
         }
 
-        if (!contentCommands_->commitNotePatch(editedContentKey_, afterPatch)) {
+        const auto committedSnap = contentCommands_->commitNotePatch(editedContentKey_, afterPatch);
+        if (!committedSnap) {
             return false;
         }
 
-        refreshEditedContentNotes();
+        cachedNotes_ = committedSnap->notes;
+        interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
+        syncF0SelectionToSelectedNotes();
 
         // Build before-patch from original (unmodified) notes for undo.
         ContentNoteRangePatch beforePatch;
@@ -1890,6 +1886,17 @@ void PianoRollComponent::applyEditedContentAudioBuffer(std::shared_ptr<const juc
     audioBuffer_ = std::move(buffer);
     audioBufferSampleRate_ = sampleRate > 0 ? static_cast<double>(sampleRate)
                                             : static_cast<double>(PianoRollComponent::kAudioSampleRate);
+
+    if (editedContentKey_.isValid() && audioBuffer_ != nullptr && audioBuffer_->getNumSamples() > 0) {
+        auto& mipmap = waveformMipmapCache_.getOrCreate(editedContentKey_);
+        const bool changed = mipmap.isSourceChanged(audioBuffer_);
+        mipmap.setAudioSource(audioBuffer_);
+        if (changed)
+            waveformSourceEpoch_.fetch_add(1, std::memory_order_release);
+    } else if (editedContentKey_.isValid() && waveformMipmapCache_.get(editedContentKey_) != nullptr) {
+        waveformMipmapCache_.remove(editedContentKey_);
+        waveformSourceEpoch_.fetch_add(1, std::memory_order_release);
+    }
 }
 
 double PianoRollComponent::getContentDurationSeconds() const
@@ -2098,9 +2105,8 @@ void PianoRollComponent::onTimeGridRevisionChanged()
 void PianoRollComponent::onNotesRevisionChanged()
 {
     refreshEditedContentNotes();
-    notesEpoch_.fetch_add(1, std::memory_order_relaxed);
-    prepareVisibleContentTiles();
     repaint();
+    previewOverlay_.repaint();
 }
 
 void PianoRollComponent::onPitchRevisionChanged()
@@ -2182,6 +2188,7 @@ void PianoRollComponent::onHeartbeatTick()
                 waveformVisualRefreshPending_ = true;
             } else {
                 waveformVisualRefreshPending_ = false;
+                prepareVisibleContentTiles();
             repaint();
             }
         }
@@ -2192,6 +2199,7 @@ void PianoRollComponent::onHeartbeatTick()
 
     if (!playingNow && waveformVisualRefreshPending_) {
         waveformVisualRefreshPending_ = false;
+        prepareVisibleContentTiles();
         repaint();
     }
 
@@ -2398,7 +2406,6 @@ void PianoRollComponent::setShowLanes(bool shouldShow) {
 void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
     if (noteNameMode_ == noteNameMode) return;
     noteNameMode_ = noteNameMode;
-    prepareVisibleContentTiles();
     repaint();
 }
 
@@ -2526,9 +2533,8 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
     }
 
     toolHandler_->mouseDrag(e);
-    // Note: individual tool handlers call invalidateVisual() with proper dirty
-    // rects when needed. The preview overlay handles transient visuals (draw-note
-    // preview, selection box) without triggering render-model rebuild.
+    // Tool handlers invalidate either live note content or transient preview
+    // feedback directly, keeping note drawing out of content tiles.
 }
 
 void PianoRollComponent::mouseUp(const juce::MouseEvent& e) {
@@ -3283,20 +3289,22 @@ double PianoRollComponent::computeContentTimelineEndSeconds() const noexcept {
 void PianoRollComponent::updatePlayheadVisibility()
 {
     const auto viewportBounds = getTimelineViewportBounds();
+    const auto mapper = makeViewMapper();
 
-    // Cont + playing + following → anchor at viewport center
-    // Paused/manual/Page/seek → anchor at time-derived x
-    const bool contFollowing = isPlaying_.load(std::memory_order_relaxed)
-                            && scrollMode_ == ScrollMode::Continuous
-                            && !userScrollHold_;
+    const int contentViewportLeft = mapper.contentStartX;
+    const int timeDerivedX = mapper.timeToX(readPlayheadTime());
+    const int contentViewportRight = viewportBounds.getRight();
+    const int viewportCentreX = (contentViewportLeft + contentViewportRight) / 2;
 
-    const int anchorX = contFollowing
-        ? viewportBounds.getCentreX()
-        : makeViewMapper().timeToX(readPlayheadTime());
+    const bool playing = isPlaying_.load(std::memory_order_relaxed);
+    const bool continuousMode = scrollMode_ == ScrollMode::Continuous && !userScrollHold_;
 
-    const int pianoKeyW = shouldShowPianoKeys() ? pianoKeyWidth_ : 0;
-    fixedPlayhead_.setAnchorBounds(anchorX, getHeight());
-    fixedPlayhead_.setVisible(anchorX >= pianoKeyW && anchorX <= viewportBounds.getRight());
+    const auto pres = TimelineViewportPolicy::computePlayheadPresentation(
+        timeDerivedX, viewportCentreX, contentViewportRight, contentViewportLeft,
+        playing, continuousMode);
+
+    fixedPlayhead_.setAnchorBounds(pres.anchorX, getHeight());
+    fixedPlayhead_.setVisible(pres.visible);
 }
 
 void PianoRollComponent::handleAsyncUpdate() {}
@@ -3343,16 +3351,11 @@ uint64_t PianoRollComponent::revisionForContentSlot(ContentSlot slot) const noex
 
     if (slot == ContentSlot::Waveform)
     {
+        r ^= waveformSourceEpoch_.load(std::memory_order_relaxed);
         // Mipmap build progress: re-generate tile when incremental build changes pixels
         if (const auto* mipmap = waveformMipmapCache_.get(editedContentKey_))
             r ^= static_cast<uint64_t>(mipmap->isComplete() ? 1 : 0) + static_cast<uint64_t>(
                 std::llround(mipmap->getBuildProgress() * 10000.0)) * 31 + 0x9e3779b9 + (r << 6) + (r >> 2);
-    }
-
-    if (slot == ContentSlot::Notes)
-    {
-        r ^= notesEpoch_.load(std::memory_order_relaxed) * 31 + 0x9e3779b9 + (r << 6) + (r >> 2);
-        r ^= static_cast<uint64_t>(noteNameMode_) + 0x9e3779b9 + (r << 6) + (r >> 2);
     }
 
     if (slot == ContentSlot::F0)
@@ -3373,7 +3376,7 @@ std::vector<ContentSlot> PianoRollComponent::visibleContentSlots() const noexcep
 {
     std::vector<ContentSlot> slots;
     if (showWaveform_)  slots.push_back(ContentSlot::Waveform);
-    slots.push_back(ContentSlot::Notes);
+    // Notes 不再是 cache tile，由 live draw 负责
     if (showOriginalF0_ || showCorrectedF0_ || showUnvoicedFrames_) slots.push_back(ContentSlot::F0);
     slots.push_back(ContentSlot::TimeAnchors);
     return slots;
@@ -3433,7 +3436,6 @@ void PianoRollComponent::prepareVisibleContentTiles()
                     ctx.bpm = bpm_;
                     ctx.scaleRootNote = scaleRootNote_;
                     ctx.scaleType = scaleType_;
-                    ctx.noteNameMode = noteNameMode_;
                     ctx.showLanes = false;
                     ctx.showUnvoicedFrames = showUnvoicedFrames_;
                     ctx.showOriginalF0 = showOriginalF0_;
@@ -3458,7 +3460,7 @@ void PianoRollComponent::prepareVisibleContentTiles()
                     item.projection = projection;
                     item.active = true;
                     item.audioBuffer = audioBuffer_;
-                    item.displayNotes = getDisplayedNotes();
+                    item.displayNotes = {};
 
                     if (currentCurve_) {
                         item.pitchSnapshot = currentCurve_->getSnapshot();
@@ -3483,9 +3485,6 @@ void PianoRollComponent::prepareVisibleContentTiles()
                         case ContentSlot::Waveform:
                             if (showWaveform_ && item.waveformSnapshot.peaks.size() > 0)
                                 renderer_->drawWaveform(g, ctx, item);
-                            break;
-                        case ContentSlot::Notes:
-                            renderer_->drawNotes(g, ctx, item);
                             break;
                         case ContentSlot::F0:
                             if (showUnvoicedFrames_)
@@ -3536,6 +3535,26 @@ void PianoRollComponent::drawPreparedContentTiles(juce::Graphics& g)
         if (!pt.image || !pt.image->isValid()) continue;
         TimelineLayerComposer::drawContentTile(g, *pt.image, pt.key.startSeconds, params);
     }
+}
+
+void PianoRollComponent::drawLiveNotes(juce::Graphics& g)
+{
+    juce::Graphics::ScopedSaveState save(g);
+
+    // Clip and offset to content area (below ruler), matching content tile Y coordinate system
+    auto contentArea = getTimelineViewportBounds();
+    contentArea.setTop(rulerHeight_);
+    g.reduceClipRegion(contentArea);
+    g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
+
+    const auto* placement = findEditedPlacement();
+    if (!placement) return;
+
+    auto item = buildContentRenderItem(*placement);
+    if (item.displayNotes.empty()) return;
+
+    auto ctx = buildRenderContext();
+    renderer_->drawNotes(g, ctx, item);
 }
 
 } // namespace OpenTune

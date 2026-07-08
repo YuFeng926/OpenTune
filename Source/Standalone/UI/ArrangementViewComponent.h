@@ -124,9 +124,7 @@ public:
         const bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
         isPlaying_.store(playing, std::memory_order_relaxed);
         if (stateChanged) {
-            // Fixed playhead - layout only, no time-based updates
-            const auto viewportBounds = getContentViewportBounds();
-            fixedPlayhead_.setAnchorBounds(viewportBounds.getCentreX(), getHeight());
+            updateOverlayPresentation();
         }
     }
     void setPlayheadColour(juce::Colour colour) {

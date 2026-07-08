@@ -153,9 +153,13 @@ public:
         std::function<int()> getNoteDragPreviewEndFrameExclusive;
         std::function<void(int)> setNoteDragPreviewEndFrameExclusive;
 
-        std::function<void(const juce::Rectangle<int>&)> invalidateVisual;
-        std::function<void()> invalidateInteractionVisual;
-        std::function<void()> repaintPreviewOverlay;
+        // === 精确 invalidation ===
+        // 拖拽/缩放 note 内容变化时调用
+        std::function<void(const std::vector<Note>&, const std::vector<Note>&)> invalidateLiveNotes;
+        // 仅选择变化（Ctrl+A、点击选择、框选），不涉及 note 内容变化
+        std::function<void()> invalidateSelectionFeedback;
+        // 交互预览区域变化（hand draw、line anchor、draw note cursor preview）
+        std::function<void(const juce::Rectangle<int>&)> invalidateInteractionPreview;
         std::function<void(const juce::MouseCursor&)> setMouseCursor;
         std::function<void()> grabKeyboardFocus;
         std::function<void(ToolId)> setCurrentTool;

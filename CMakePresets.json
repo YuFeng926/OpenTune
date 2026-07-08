@@ -40,5 +40,23 @@
       "configurePreset": "windows-nonara-vs2022",
       "configuration": "Release"
     }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-ara-release",
+      "configurePreset": "windows-ara-vs2022",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-nonara-release",
+      "configurePreset": "windows-nonara-vs2022",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
   ]
 }

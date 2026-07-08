@@ -17,14 +17,14 @@ PianoRollNotePatchAction::PianoRollNotePatchAction(std::shared_ptr<ContentEditCo
 
 void PianoRollNotePatchAction::undo()
 {
-    if (commands_ != nullptr)
-        commands_->commitNotePatch(contentKey_, beforePatch_);
+    jassert(commands_ != nullptr);
+    commands_->commitNotePatch(contentKey_, beforePatch_);
 }
 
 void PianoRollNotePatchAction::redo()
 {
-    if (commands_ != nullptr)
-        commands_->commitNotePatch(contentKey_, afterPatch_);
+    jassert(commands_ != nullptr);
+    commands_->commitNotePatch(contentKey_, afterPatch_);
 }
 
 } // namespace OpenTune

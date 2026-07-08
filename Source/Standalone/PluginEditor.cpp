@@ -1045,7 +1045,8 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             lastPianoRollSampleRate_ = sr;
             lastPianoRollCurve_ = curve;
             lastPianoRollBuffer_ = contentBuffer;
-        } else if (currentNotesRevision != lastPianoRollNotesRevision_) {
+        }
+        if (currentNotesRevision != lastPianoRollNotesRevision_) {
             // Same content, fresh notes – typically GAME's async commit.
             pianoRoll_.onNotesRevisionChanged();
         }
