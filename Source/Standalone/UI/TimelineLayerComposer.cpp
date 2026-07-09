@@ -89,26 +89,17 @@ static std::array<bool, 12> buildInScalePitchClasses(int scaleType, int rootNote
 }
 
 // ============================================================================
-// resolveRulerStyle — 从 viewKind + themeId 推导历史视觉合同
+// resolveRulerStyle — 从 themeId 推导 ruler 视觉样式
 // ============================================================================
-TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(const std::string& viewKind, ThemeId themeId) {
+TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(ThemeId themeId) {
     TimelineRulerStyle style;
-    const bool isArrangement = (viewKind == "arrangement");
 
     if (themeId == ThemeId::Aurora) {
-        if (isArrangement) {
-            style.backgroundColour = juce::Colour { 0xFF2F3640 };
-            style.labelColour      = juce::Colour { 0xFFBDC3C7 };
-            style.tickColour       = juce::Colour { 0xFF3E4652 };
-            style.separatorColour  = juce::Colour { 0xFF4E5865 };
-            style.tickStroke       = 1.0f;
-        } else {
-            style.backgroundColour = UIColors::pianoRollBackground;
-            style.labelColour = UIColors::textSecondary.withMultipliedAlpha(0.48f);
-            style.tickColour = UIColors::gridLine.withAlpha(0.080f);
-            style.separatorColour = UIColors::gridLine.withAlpha(0.060f);
-            style.tickStroke = 0.7f;
-        }
+        style.backgroundColour = UIColors::pianoRollBackground;
+        style.labelColour = UIColors::textSecondary.withMultipliedAlpha(0.48f);
+        style.tickColour = UIColors::gridLine.withAlpha(0.080f);
+        style.separatorColour = UIColors::gridLine.withAlpha(0.060f);
+        style.tickStroke = 0.7f;
     } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
         style.backgroundColour = UIColors::pianoRollBackground;
         style.labelColour = UIColors::textSecondary.withAlpha(0.58f);
@@ -155,13 +146,9 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
             bool isMeasure = (beatInterval >= 4.0) ? true : ((beat % 4) == 0);
 
             if (themeId == ThemeId::Aurora) {
-                if (params.viewKind == "arrangement") {
-                    g.setColour(UIColors::gridLine.withAlpha(isMeasure ? 0.060f : 0.022f));
-                } else {
-                    g.setColour(isMeasure
-                        ? UIColors::pianoRollGrid.interpolatedWith(UIColors::textSecondary, 0.14f).withAlpha(0.064f)
-                        : UIColors::pianoRollGrid.withAlpha(0.022f));
-                }
+                g.setColour(isMeasure
+                    ? UIColors::pianoRollGrid.interpolatedWith(UIColors::textSecondary, 0.14f).withAlpha(0.064f)
+                    : UIColors::pianoRollGrid.withAlpha(0.022f));
             } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
                 g.setColour(UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f));
             } else if (themeId == ThemeId::DarkBlueGrey) {
@@ -187,16 +174,14 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
             if (pixelX < -2 || pixelX > w + 2) continue;
 
             if (themeId == ThemeId::Aurora) {
-                if (params.viewKind == "arrangement")
-                    g.setColour(UIColors::gridLine.withAlpha(0.022f));
-                else
-                    g.setColour(UIColors::pianoRollGrid.withAlpha(0.016f));
-            } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+                g.setColour(UIColors::pianoRollGrid.withAlpha(0.016f));
+            } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
                 g.setColour(UIColors::pianoRollGrid.withAlpha(0.022f));
-            else if (themeId == ThemeId::DarkBlueGrey)
+            } else if (themeId == ThemeId::DarkBlueGrey) {
                 g.setColour(UIColors::panelBorder.withAlpha(0.12f));
-            else
+            } else {
                 g.setColour(UIColors::panelBorder.withAlpha(0.25f));
+            }
             g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(h));
         }
     }
@@ -211,17 +196,11 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
         : decodeRulerHeight(params.verticalGeometry);
     const int w = params.viewportWidth;
     const auto themeId = static_cast<ThemeId>(params.themeId);
-    const auto rulerStyle = resolveRulerStyle(params.viewKind, themeId);
+    const auto rulerStyle = resolveRulerStyle(themeId);
     const double pps = params.pixelsPerSecond;
 
     int rulerTop = 0;
     int rulerBottom = rulerHeight;
-
-    // Arrangement 标尺背板 — 由 resolveRulerStyle 合同驱动
-    if (params.viewKind == "arrangement") {
-        g.setColour(rulerStyle.backgroundColour);
-        g.fillRect(0.0f, 0.0f, static_cast<float>(w), static_cast<float>(rulerHeight));
-    }
 
     // Bottom separator line — Arrangement 的 separator 由组件层绘制
     if (params.viewKind != "arrangement") {
