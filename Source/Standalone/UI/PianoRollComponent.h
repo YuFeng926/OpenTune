@@ -572,26 +572,6 @@ private:
     };
     std::vector<PreparedContentTile> preparedContentTiles_;
 
-
-
-    // F0 LOD cache keyed by ContentKey + pitchRenderGeneration
-    struct F0LODCacheKey {
-        ContentKey contentKey;
-        uint64_t pitchRenderGeneration = 0;
-        bool operator==(const F0LODCacheKey& other) const noexcept {
-            return contentKey == other.contentKey && pitchRenderGeneration == other.pitchRenderGeneration;
-        }
-        bool operator<(const F0LODCacheKey& other) const noexcept {
-            if (contentKey != other.contentKey) return contentKey < other.contentKey;
-            return pitchRenderGeneration < other.pitchRenderGeneration;
-        }
-    };
-    mutable std::map<F0LODCacheKey, std::shared_ptr<const F0VisualLOD>> f0LODCache_;
-
-    std::shared_ptr<const F0VisualLOD> getOrBuildF0LOD(
-        ContentKey key,
-        std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot) const;
-
     static constexpr int pianoKeyWidth_ = 60;
     static constexpr int rulerHeight_ = 30;
     static constexpr int timelineExtendedHitArea_ = 20;

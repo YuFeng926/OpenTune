@@ -740,7 +740,7 @@ uint64_t CaptureSession::testInjectEditedSegment(double T_start,
     seg->durationSeconds = durationSeconds;
     seg->content = std::make_unique<CaptureSegmentContent>(id);
     if (pcm)
-        seg->content->applyAudioBuffer(pcm.get(), currentSampleRate_);
+        seg->content->applyAudioBuffer(*pcm, currentSampleRate_);
     seg->state.store(SegmentState::Edited, std::memory_order_release);
     activeDisplaySegmentId_ = id;
     mutableSegments_.push_back(std::move(seg));
@@ -768,7 +768,7 @@ uint64_t CaptureSession::testInjectProcessingSegment(double T_start,
     seg->durationSeconds = durationSeconds;
     seg->content = std::make_unique<CaptureSegmentContent>(id);
     if (pcm)
-        seg->content->applyAudioBuffer(pcm.get(), sampleRate);
+        seg->content->applyAudioBuffer(*pcm, sampleRate);
     seg->content->applyOriginalF0State(OriginalF0State::Extracting);
     seg->state.store(SegmentState::Processing, std::memory_order_release);
     mutableSegments_.push_back(std::move(seg));
@@ -846,7 +846,7 @@ bool CaptureSession::finalizePendingCapture(CaptureSegment& pending)
         return true;
     }
 
-    pending.content->applyAudioBuffer(pcm.get(), pending.captureSampleRate);
+    pending.content->applyAudioBuffer(*pcm, pending.captureSampleRate);
     pending.content->applyOriginalF0State(OriginalF0State::Extracting);
 
     const auto snap = pending.content->snapshotContent();

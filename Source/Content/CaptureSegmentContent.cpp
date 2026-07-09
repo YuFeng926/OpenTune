@@ -78,21 +78,20 @@ void CaptureSegmentContent::releaseRetiredContent(ContentKey key)
         captureRetired_.end());
 }
 
-void CaptureSegmentContent::applyAudioBuffer(const juce::AudioBuffer<float>* buffer, double sampleRate)
+void CaptureSegmentContent::applyAudioBuffer(const juce::AudioBuffer<float>& buffer, double sampleRate)
 {
-    if (buffer == nullptr || buffer->getNumSamples() == 0) {
-        editable_.audioBuffer = nullptr;
-        editable_.audioSampleRate = 0.0;
-        return;
-    }
+    const double durationSeconds = static_cast<double>(buffer.getNumSamples()) / sampleRate;
 
-    // Make a shared copy of the audio buffer
     auto bufferCopy = std::make_shared<juce::AudioBuffer<float>>();
-    bufferCopy->makeCopyOf(*buffer);
+    bufferCopy->makeCopyOf(buffer);
 
-    editable_.audioBuffer = bufferCopy;
+    editable_.audioBuffer = std::move(bufferCopy);
     editable_.audioSampleRate = sampleRate;
     ++editable_.audioRevision;
+
+    editable_.timeGrid = TimeGridSnapshot::makeIdentity(durationSeconds);
+    ++editable_.timeGridRevision;
+
     ++editable_.contentRevision;
 }
 

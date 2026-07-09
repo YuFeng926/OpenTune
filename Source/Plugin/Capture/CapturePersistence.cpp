@@ -285,7 +285,7 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         seg->content = std::make_unique<CaptureSegmentContent>(p.id);
 
         if (p.audio && p.audio->getNumSamples() > 0) {
-            seg->content->applyAudioBuffer(p.audio.get(), p.captureSampleRate);
+            seg->content->applyAudioBuffer(*p.audio, p.captureSampleRate);
         }
         seg->content->applyDetectedKey(p.detectedKey);
         if (p.pitchCurve)

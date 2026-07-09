@@ -27,7 +27,7 @@ public:
     const EditableContentState& editable() const { return editable_; }
 
     // Apply methods for Capture segment content
-    void applyAudioBuffer(const juce::AudioBuffer<float>* buffer, double sampleRate);
+    void applyAudioBuffer(const juce::AudioBuffer<float>& buffer, double sampleRate);
     void applyOriginalF0State(OriginalF0State state);
     void applyDetectedKey(const DetectedKey& key);
     void applyNotes(std::vector<Note> notes);
