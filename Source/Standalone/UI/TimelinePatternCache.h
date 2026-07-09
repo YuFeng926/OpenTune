@@ -231,7 +231,7 @@ public:
     static juce::Image buildPatternTile(const PatternTileKey& key);
 
     // 时间标尺视觉合同 — 组件层和缓存层唯一样式来源
-    static TimelineRulerStyle resolveRulerStyle(const std::string& viewKind, ThemeId themeId);
+    static TimelineRulerStyle resolveRulerStyle(ThemeId themeId);
 
 private:
     // 内部绘制助手
