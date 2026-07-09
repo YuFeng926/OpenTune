@@ -605,8 +605,6 @@ target_sources(OpenTune
         Source/Editor/ConfirmDialogContent.h
 
         # Utilities
-        Source/Utils/F0VisualLOD.cpp
-        Source/Utils/F0VisualLOD.h
         Source/Utils/PitchCurve.cpp
         Source/Utils/PitchCurve.h
         Source/Utils/LegacyNoteGenerator.cpp
@@ -1292,6 +1290,9 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
         Source/Standalone/UI/PianoRoll/InteractionState.cpp
         Source/Utils/PianoRollEditAction.cpp
         Source/Utils/UndoManager.cpp
+        Source/Content/CaptureSegmentContent.cpp
+        Source/Utils/TimeGrid.cpp
+        Source/Utils/AppLogger.cpp
     )
     target_compile_features(OpenTunePianoRollBehaviorTests PRIVATE cxx_std_17)
     target_include_directories(OpenTunePianoRollBehaviorTests

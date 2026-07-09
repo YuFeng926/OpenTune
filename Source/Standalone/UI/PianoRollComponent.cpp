@@ -2111,7 +2111,6 @@ void PianoRollComponent::onNotesRevisionChanged()
 
 void PianoRollComponent::onPitchRevisionChanged()
 {
-    f0LODCache_.clear();
     pitchEpoch_.fetch_add(1, std::memory_order_relaxed);
     prepareVisibleContentTiles();
     repaint();
@@ -2701,49 +2700,6 @@ PianoRollRenderer::ContentRenderItem PianoRollComponent::buildContentRenderItem(
     }
 
     return item;
-}
-
-std::shared_ptr<const F0VisualLOD> PianoRollComponent::getOrBuildF0LOD(
-    ContentKey key,
-    std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot) const
-{
-    if (!pitchSnapshot || pitchSnapshot->size() == 0)
-        return nullptr;
-
-    F0LODCacheKey cacheKey;
-    cacheKey.contentKey = key;
-    cacheKey.pitchRenderGeneration = pitchSnapshot->getRenderGeneration();
-
-    // Cache hit
-    auto it = f0LODCache_.find(cacheKey);
-    if (it != f0LODCache_.end())
-        return it->second;
-
-    // Cache miss: build
-    auto f0LOD = std::make_shared<F0VisualLOD>();
-    const auto& originalF0 = pitchSnapshot->getOriginalF0();
-
-    // Only build correctedF0 if correction layer exists (lazy)
-    std::vector<float> correctedF0;
-    if (pitchSnapshot->hasCorrectionLayer()) {
-        correctedF0.resize(originalF0.size(), 0.0f);
-        pitchSnapshot->renderCorrectionLayerF0Range(
-            0, static_cast<int>(originalF0.size()),
-            [&](int frame, const float* data, int length) {
-                for (int i = 0; i < length; ++i) {
-                    const int f = frame + i;
-                    if (f >= 0 && f < static_cast<int>(correctedF0.size()))
-                        correctedF0[static_cast<size_t>(f)] = data[i];
-                }
-            });
-    }
-
-    f0LOD->build(originalF0, correctedF0,
-                pitchSnapshot->getHopSize(),
-                pitchSnapshot->getSampleRate());
-
-    f0LODCache_[cacheKey] = f0LOD;
-    return f0LOD;
 }
 
 void PianoRollComponent::visibilityChanged()
@@ -3466,9 +3422,8 @@ void PianoRollComponent::prepareVisibleContentTiles()
                         item.pitchSnapshot = currentCurve_->getSnapshot();
                         if (item.pitchSnapshot && item.pitchSnapshot->size() > 0) {
                             item.f0Timeline = { item.pitchSnapshot->getHopSize(),
-                                               item.pitchSnapshot->getSampleRate(),
-                                               static_cast<int>(item.pitchSnapshot->size()) };
-                            item.f0LOD = getOrBuildF0LOD(editedContentKey_, item.pitchSnapshot);
+                                                   item.pitchSnapshot->getSampleRate(),
+                                                   static_cast<int>(item.pitchSnapshot->size()) };
                         }
                     }
 

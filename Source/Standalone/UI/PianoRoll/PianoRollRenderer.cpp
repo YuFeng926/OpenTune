@@ -112,6 +112,70 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
     return window;
 }
 
+static float clampF0VisualAlpha(float alpha) noexcept
+{
+    return juce::jlimit(0.0f, 1.0f, alpha);
+}
+
+static float calculateF0VisualEnergyAlpha(float energy,
+                                          float minEnergy,
+                                          float maxEnergy) noexcept
+{
+    static constexpr float kMinEnergyAlpha = 0.70f;
+    static constexpr float kMaxEnergyAlpha = 1.00f;
+
+    if (!std::isfinite(energy) || maxEnergy <= minEnergy + std::numeric_limits<float>::epsilon()) {
+        return kMaxEnergyAlpha;
+    }
+
+    const float normalized = juce::jlimit(0.0f, 1.0f, (energy - minEnergy) / (maxEnergy - minEnergy));
+    return kMinEnergyAlpha + (kMaxEnergyAlpha - kMinEnergyAlpha) * normalized;
+}
+
+static float f0VisualTargetPointSpacing(double framePixelSpacing) noexcept
+{
+    if (framePixelSpacing >= 1.05) {
+        return 0.0f;
+    }
+
+    if (framePixelSpacing >= 0.50) {
+        return 1.0f;
+    }
+
+    return 1.5f;
+}
+
+static void appendSmoothedF0Path(juce::Path& path,
+                                 const std::vector<PianoRollRenderer::F0VisualPoint>& points,
+                                 std::size_t startIndex,
+                                 std::size_t endIndexInclusive)
+{
+    if (points.empty() || startIndex >= points.size()) {
+        return;
+    }
+
+    endIndexInclusive = std::min(endIndexInclusive, points.size() - 1);
+    if (endIndexInclusive <= startIndex) {
+        const auto& point = points[startIndex];
+        path.startNewSubPath(point.x - 0.01f, point.y);
+        path.lineTo(point.x + 0.01f, point.y);
+        return;
+    }
+
+    path.startNewSubPath(points[startIndex].x, points[startIndex].y);
+    for (std::size_t i = startIndex + 1; i < endIndexInclusive; ++i) {
+        const auto& control = points[i];
+        const auto& next = points[i + 1];
+        path.quadraticTo(control.x,
+                         control.y,
+                         (control.x + next.x) * 0.5f,
+                         (control.y + next.y) * 0.5f);
+    }
+
+    const auto& last = points[endIndexInclusive];
+    path.lineTo(last.x, last.y);
+}
+
 // vocal-time-stretch 搂8.5 鈥?convert a SOURCE-time anchor (Note.startTime,
 // f0Timeline frame timestamp, WaveformMipmap peak) into screen X via the
 // item's projection. Identity TimeGrid 鈫?degenerates to existing pipeline.
@@ -127,50 +191,225 @@ inline int sourceTimeToScreenX(double sourceTime,
 
 } // namespace
 
+std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0VisualSegments(
+    const std::vector<float>& f0,
+    const std::vector<float>* originalEnergy,
+    const F0VisualBuildOptions& options,
+    const F0FrameToX& frameToX,
+    const F0FrameToY& frameToY)
+{
+    std::vector<F0VisualSegment> segments;
+    if (f0.empty() || !frameToX || !frameToY) {
+        return segments;
+    }
+
+    const int startFrame = juce::jlimit(0, static_cast<int>(f0.size()), options.startFrame);
+    const int endFrameExclusive = juce::jlimit(startFrame, static_cast<int>(f0.size()), options.endFrameExclusive);
+    if (endFrameExclusive <= startFrame) {
+        return segments;
+    }
+
+    const bool hasEnergy = originalEnergy != nullptr && originalEnergy->size() == f0.size();
+
+    float minEnergy = std::numeric_limits<float>::max();
+    float maxEnergy = std::numeric_limits<float>::lowest();
+    if (hasEnergy) {
+        for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
+            const float frequency = f0[static_cast<std::size_t>(frame)];
+            if (frequency < 20.0f || frequency > 2000.0f) {
+                continue;
+            }
+
+            const float energy = (*originalEnergy)[static_cast<std::size_t>(frame)];
+            if (std::isfinite(energy)) {
+                minEnergy = std::min(minEnergy, energy);
+                maxEnergy = std::max(maxEnergy, energy);
+            }
+        }
+    }
+
+    const float targetPointSpacing = f0VisualTargetPointSpacing(options.pixelsPerSecond * options.secondsPerFrame);
+
+    struct BucketAccumulator {
+        bool active = false;
+        int frame = 0;
+        float xSum = 0.0f;
+        float ySum = 0.0f;
+        float alphaSum = 0.0f;
+        float weightSum = 0.0f;
+
+        void clear() noexcept
+        {
+            active = false;
+            frame = 0;
+            xSum = 0.0f;
+            ySum = 0.0f;
+            alphaSum = 0.0f;
+            weightSum = 0.0f;
+        }
+    };
+
+    F0VisualSegment currentSegment;
+    BucketAccumulator bucket;
+    float bucketAnchorX = 0.0f;
+
+    auto flushBucket = [&]() {
+        if (!bucket.active || bucket.weightSum <= 0.0f) {
+            bucket.clear();
+            return;
+        }
+
+        currentSegment.points.push_back({
+            bucket.frame,
+            bucket.xSum / bucket.weightSum,
+            bucket.ySum / bucket.weightSum,
+            clampF0VisualAlpha(bucket.alphaSum / bucket.weightSum)
+        });
+        bucket.clear();
+    };
+
+    auto flushSegment = [&]() {
+        flushBucket();
+        if (!currentSegment.points.empty()) {
+            segments.push_back(std::move(currentSegment));
+            currentSegment = {};
+        }
+    };
+
+    for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
+        const float frequency = f0[static_cast<std::size_t>(frame)];
+        if (frequency < 20.0f || frequency > 2000.0f) {
+            flushSegment();
+            continue;
+        }
+
+        const float x = frameToX(frame);
+        if (x < static_cast<float>(options.viewportStartX) || x > static_cast<float>(options.viewportEndX)) {
+            flushSegment();
+            continue;
+        }
+
+        const float y = frameToY(frame, frequency);
+        const float energyAlpha = hasEnergy
+            ? calculateF0VisualEnergyAlpha((*originalEnergy)[static_cast<std::size_t>(frame)], minEnergy, maxEnergy)
+            : 1.0f;
+        const float weight = juce::jmax(0.001f, energyAlpha);
+
+        if (targetPointSpacing <= 0.0f) {
+            flushBucket();
+            currentSegment.points.push_back({ frame, x, y, energyAlpha });
+            continue;
+        }
+
+        if (!bucket.active) {
+            bucket.active = true;
+            bucket.frame = frame;
+            bucketAnchorX = x;
+            bucket.weightSum = weight;
+            bucket.xSum = x * weight;
+            bucket.ySum = y * weight;
+            bucket.alphaSum = energyAlpha * weight;
+            continue;
+        }
+
+        if (std::abs(x - bucketAnchorX) < targetPointSpacing) {
+            bucket.frame = frame;
+            bucket.weightSum += weight;
+            bucket.xSum += x * weight;
+            bucket.ySum += y * weight;
+            bucket.alphaSum += energyAlpha * weight;
+            continue;
+        }
+
+        flushBucket();
+
+        bucket.active = true;
+        bucket.frame = frame;
+        bucketAnchorX = x;
+        bucket.weightSum = weight;
+        bucket.xSum = x * weight;
+        bucket.ySum = y * weight;
+        bucket.alphaSum = energyAlpha * weight;
+    }
+
+    flushSegment();
+
+    return segments;
+}
+
 void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
                                                const RenderContext& ctx,
                                                const ContentRenderItem& item)
 {
-    if (!ctx.showUnvoicedFrames || !item.f0LOD || item.f0Timeline.isEmpty())
+    if (!ctx.showUnvoicedFrames || item.f0Timeline.isEmpty())
+        return;
+    if (!item.pitchSnapshot || item.pitchSnapshot->size() == 0)
         return;
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
     if (!visibleWindow.isValid())
         return;
 
-    const auto& level = item.f0LOD->selectBestLevel(
-        ctx.pixelsPerSecond,
-        item.pitchSnapshot->getSampleRate(),
-        item.pitchSnapshot->getHopSize());
+    const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+    if (originalF0.empty())
+        return;
 
     const auto bandColour = UIColors::currentThemeId() == ThemeId::DarkBlueGrey
         ? UIColors::backgroundDark.withAlpha(0.28f)
         : UIColors::backgroundMedium.withAlpha(0.22f);
     g.setColour(bandColour);
 
-    for (const auto& interval : level.unvoicedIntervals) {
-        if (!interval.isValid())
-            continue;
+    // Scan originalF0 for unvoiced intervals directly
+    int unvoicedStart = -1;
+    const int totalFrames = static_cast<int>(originalF0.size());
+    for (int frame = 0; frame < totalFrames; ++frame) {
+        const bool isVoiced = originalF0[static_cast<std::size_t>(frame)] > 0.0f;
+        if (isVoiced) {
+            if (unvoicedStart >= 0) {
+                // End unvoiced interval
+                const double intervalStartTime = item.f0Timeline.timeAtFrame(unvoicedStart);
+                const double intervalEndTime = item.f0Timeline.timeAtFrame(frame);
 
-        const double intervalStartTime = item.f0Timeline.timeAtFrame(interval.startFrame);
-        const double intervalEndTime = item.f0Timeline.timeAtFrame(interval.endFrameExclusive);
+                if (intervalEndTime > visibleWindow.visibleContentStartTime &&
+                    intervalStartTime < visibleWindow.visibleContentEndTime) {
+                    const int x1 = sourceTimeToScreenX(intervalStartTime, ctx, item);
+                    const int x2 = sourceTimeToScreenX(intervalEndTime, ctx, item);
 
-        if (intervalEndTime <= visibleWindow.visibleContentStartTime ||
-            intervalStartTime >= visibleWindow.visibleContentEndTime)
-            continue;
+                    if (x2 > ctx.pianoKeyWidth && x1 < ctx.width) {
+                        const float drawX = static_cast<float>(std::max(x1, ctx.pianoKeyWidth));
+                        const float drawW = static_cast<float>(std::min(x2, ctx.width)) - drawX;
+                        if (drawW > 0.5f) {
+                            g.fillRect(drawX, static_cast<float>(ctx.rulerHeight),
+                                       drawW, static_cast<float>(ctx.height - ctx.rulerHeight));
+                        }
+                    }
+                }
+                unvoicedStart = -1;
+            }
+        } else {
+            if (unvoicedStart < 0) {
+                unvoicedStart = frame;
+            }
+        }
+    }
+    // Handle trailing unvoiced interval
+    if (unvoicedStart >= 0) {
+        const double intervalStartTime = item.f0Timeline.timeAtFrame(unvoicedStart);
+        const double intervalEndTime = item.f0Timeline.timeAtFrame(totalFrames);
 
-        const int x1 = sourceTimeToScreenX(intervalStartTime, ctx, item);
-        const int x2 = sourceTimeToScreenX(intervalEndTime, ctx, item);
+        if (intervalEndTime > visibleWindow.visibleContentStartTime &&
+            intervalStartTime < visibleWindow.visibleContentEndTime) {
+            const int x1 = sourceTimeToScreenX(intervalStartTime, ctx, item);
+            const int x2 = sourceTimeToScreenX(intervalEndTime, ctx, item);
 
-        if (x2 <= ctx.pianoKeyWidth || x1 >= ctx.width)
-            continue;
-
-        const float drawX = static_cast<float>(std::max(x1, ctx.pianoKeyWidth));
-        const float drawW = static_cast<float>(std::min(x2, ctx.width)) - drawX;
-
-        if (drawW > 0.5f) {
-            g.fillRect(drawX, static_cast<float>(ctx.rulerHeight),
-                       drawW, static_cast<float>(ctx.height - ctx.rulerHeight));
+            if (x2 > ctx.pianoKeyWidth && x1 < ctx.width) {
+                const float drawX = static_cast<float>(std::max(x1, ctx.pianoKeyWidth));
+                const float drawW = static_cast<float>(std::min(x2, ctx.width)) - drawX;
+                if (drawW > 0.5f) {
+                    g.fillRect(drawX, static_cast<float>(ctx.rulerHeight),
+                               drawW, static_cast<float>(ctx.height - ctx.rulerHeight));
+                }
+            }
         }
     }
 }
@@ -968,10 +1207,10 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                                      const RenderContext& ctx,
                                      const ContentRenderItem& item)
 {
-    if (item.f0LOD == nullptr || item.f0Timeline.isEmpty())
+    if (item.f0Timeline.isEmpty())
         return;
 
-    if (item.f0LOD->isEmpty())
+    if (!item.pitchSnapshot || item.pitchSnapshot->size() == 0)
         return;
 
     if (!ctx.showOriginalF0 && !ctx.showCorrectedF0)
@@ -981,56 +1220,204 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     if (!visibleWindow.isValid())
         return;
 
-    // 选择当前缩放级别的最佳 LOD
-    const auto& lodLevel = item.f0LOD->selectBestLevel(
-        ctx.pixelsPerSecond,
-        item.pitchSnapshot->getSampleRate(),
-        item.pitchSnapshot->getHopSize());
+    const int marginFrames = 10;
+    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(
+        visibleWindow.visibleContentStartTime,
+        visibleWindow.visibleContentEndTime,
+        marginFrames);
+    const auto iStart = std::min(static_cast<std::size_t>(visibleFrames.startFrame),
+                                 item.pitchSnapshot->size());
+    const auto iEnd = std::min(static_cast<std::size_t>(
+        std::max(visibleFrames.startFrame, visibleFrames.endFrameExclusive)),
+        item.pitchSnapshot->size());
 
-    // 绘制 voiced runs 的辅助函数
-    auto drawVoicedRuns = [&](const std::vector<F0VisualLOD::VoicedRun>& runs,
-                              juce::Colour colour, float strokeWidth) {
-        juce::Path path;
-        for (const auto& run : runs) {
-            if (!run.isValid()) continue;
-            if (run.f0Values.empty()) continue;
-
-            bool subPathStarted = false;
-            for (size_t i = 0; i < run.f0Values.size(); ++i) {
-                const int frame = run.startFrame + static_cast<int>(i) * lodLevel.framesPerPoint;
-                const float f0 = run.f0Values[i];
-                if (f0 <= 0.0f) continue;
-
-                const double timePos = item.f0Timeline.timeAtFrame(frame);
-                const int x = sourceTimeToScreenX(timePos, ctx, item);
-                if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
-
-                const float y = ctx.coords.freqToY(f0);
-                if (!subPathStarted) {
-                    path.startNewSubPath(static_cast<float>(x), y);
-                    subPathStarted = true;
-                } else {
-                    path.lineTo(static_cast<float>(x), y);
-                }
-            }
-        }
-        if (!path.isEmpty()) {
-            g.setColour(colour);
-            g.strokePath(path, juce::PathStrokeType(strokeWidth,
-                juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-    };
-
-    // Draw original F0
-    if (ctx.showOriginalF0) {
-        drawVoicedRuns(lodLevel.originalVoicedRuns,
-                       UIColors::originalF0.withAlpha(0.35f), 1.2f);
+    double secondsPerFrame = 0.01;
+    if (item.f0Timeline.endFrameExclusive() > 1) {
+        secondsPerFrame = item.f0Timeline.timeAtFrame(1) - item.f0Timeline.timeAtFrame(0);
     }
 
-    // Draw corrected F0 segments
-    if (ctx.showCorrectedF0 && !lodLevel.correctedVoicedRuns.empty()) {
-        drawVoicedRuns(lodLevel.correctedVoicedRuns,
-                       UIColors::correctedF0.withAlpha(0.85f), 1.8f);
+    F0VisualBuildOptions visualOptions;
+    visualOptions.startFrame = static_cast<int>(iStart);
+    visualOptions.endFrameExclusive = static_cast<int>(iEnd);
+    visualOptions.viewportStartX = visibleWindow.viewportStartX;
+    visualOptions.viewportEndX = visibleWindow.viewportEndX;
+    visualOptions.pixelsPerSecond = ctx.pixelsPerSecond;
+    visualOptions.secondsPerFrame = secondsPerFrame;
+
+    const std::vector<float>* originalEnergy = &item.pitchSnapshot->getOriginalEnergy();
+    if (originalEnergy->empty()) originalEnergy = nullptr;
+
+    auto makeFrameToX = [&](int frame) -> float {
+        return static_cast<float>(sourceTimeToScreenX(
+            item.f0Timeline.timeAtFrame(frame), ctx, item));
+    };
+
+    auto makeFrameToY = [&](int, float frequency) -> float {
+        return ctx.coords.freqToY(frequency);
+    };
+
+    const auto themeId = UIColors::currentThemeId();
+    const bool isAurora = themeId == ThemeId::Aurora;
+    const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
+    const bool isOverdose = themeId == ThemeId::Overdose;
+
+    // Draw original F0 (thin, low alpha)
+    if (ctx.showOriginalF0) {
+        const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+        const auto visualSegments = buildF0VisualSegments(
+            originalF0, originalEnergy,
+            visualOptions, makeFrameToX, makeFrameToY);
+
+        const juce::Colour colour = UIColors::originalF0;
+        const float alpha = 0.35f;
+
+        const float lineWidth = isAurora ? 1.35f : ((isBlueBreeze || isOverdose) ? 1.15f : 1.25f);
+        const juce::PathStrokeType strokeType(lineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        const float glowLineWidth = lineWidth + (isAurora ? 2.2f : 1.8f);
+        const juce::PathStrokeType glowStrokeType(glowLineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        const juce::PathStrokeType innerGlowStrokeType(lineWidth + 0.72f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        const juce::PathStrokeType highlightStrokeType(juce::jmax(0.75f, lineWidth * 0.46f), juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+
+        for (const auto& segment : visualSegments) {
+            if (segment.points.empty()) continue;
+
+            if (segment.points.size() == 1) {
+                const auto& p = segment.points.front();
+                juce::Path ptPath;
+                ptPath.startNewSubPath(p.x - 0.01f, p.y);
+                ptPath.lineTo(p.x + 0.01f, p.y);
+                if (isAurora) {
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.080f));
+                    g.strokePath(ptPath, glowStrokeType);
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.22f));
+                    g.strokePath(ptPath, innerGlowStrokeType);
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.96f));
+                    g.strokePath(ptPath, strokeType);
+                } else if (isBlueBreeze || isOverdose) {
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.055f));
+                    g.strokePath(ptPath, glowStrokeType);
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.14f));
+                    g.strokePath(ptPath, innerGlowStrokeType);
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.96f));
+                    g.strokePath(ptPath, strokeType);
+                } else {
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha));
+                    g.strokePath(ptPath, strokeType);
+                }
+                continue;
+            }
+
+            juce::Path runPath;
+            appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+
+            if (isAurora) {
+                g.setColour(colour.withAlpha(alpha * 0.080f));
+                g.strokePath(runPath, glowStrokeType);
+                g.setColour(colour.withAlpha(alpha * 0.22f));
+                g.strokePath(runPath, innerGlowStrokeType);
+                g.setColour(colour.withAlpha(alpha * 0.96f));
+                g.strokePath(runPath, strokeType);
+                g.setColour(colour.brighter(0.30f).withAlpha(alpha * 0.18f));
+                g.strokePath(runPath, highlightStrokeType);
+            } else if (isBlueBreeze || isOverdose) {
+                g.setColour(colour.withAlpha(alpha * 0.055f));
+                g.strokePath(runPath, glowStrokeType);
+                g.setColour(colour.withAlpha(alpha * 0.14f));
+                g.strokePath(runPath, innerGlowStrokeType);
+                g.setColour(colour.withAlpha(alpha * 0.96f));
+                g.strokePath(runPath, strokeType);
+                g.setColour(colour.brighter(0.16f).withAlpha(alpha * 0.12f));
+                g.strokePath(runPath, highlightStrokeType);
+            } else {
+                g.setColour(colour.withAlpha(alpha));
+                g.strokePath(runPath, strokeType);
+            }
+        }
+    }
+
+    // Draw corrected F0 (thicker, higher alpha) — lazily render correction layer
+    if (ctx.showCorrectedF0 && item.pitchSnapshot->hasCorrectionLayer()) {
+        const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+        std::vector<float> correctedF0(originalF0.size(), 0.0f);
+        item.pitchSnapshot->renderCorrectionLayerF0Range(
+            0, static_cast<int>(originalF0.size()),
+            [&](int frame, const float* data, int length) {
+                for (int i = 0; i < length; ++i) {
+                    const int f = frame + i;
+                    if (f >= 0 && f < static_cast<int>(correctedF0.size()))
+                        correctedF0[static_cast<std::size_t>(f)] = data[i];
+                }
+            });
+
+        const auto visualSegments = buildF0VisualSegments(
+            correctedF0, originalEnergy,
+            visualOptions, makeFrameToX, makeFrameToY);
+
+        const juce::Colour colour = UIColors::correctedF0;
+        const float alpha = 0.85f;
+
+        const float lineWidth = isAurora ? 2.25f : ((isBlueBreeze || isOverdose) ? 1.85f : 2.05f);
+        const juce::PathStrokeType strokeType(lineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        const float glowLineWidth = lineWidth + (isAurora ? 2.7f : 1.8f);
+        const juce::PathStrokeType glowStrokeType(glowLineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        const juce::PathStrokeType innerGlowStrokeType(lineWidth + 0.95f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        const juce::PathStrokeType highlightStrokeType(juce::jmax(0.75f, lineWidth * 0.46f), juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+
+        for (const auto& segment : visualSegments) {
+            if (segment.points.empty()) continue;
+
+            if (segment.points.size() == 1) {
+                const auto& p = segment.points.front();
+                juce::Path ptPath;
+                ptPath.startNewSubPath(p.x - 0.01f, p.y);
+                ptPath.lineTo(p.x + 0.01f, p.y);
+                if (isAurora) {
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.095f));
+                    g.strokePath(ptPath, glowStrokeType);
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.20f));
+                    g.strokePath(ptPath, innerGlowStrokeType);
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.98f));
+                    g.strokePath(ptPath, strokeType);
+                } else if (isBlueBreeze || isOverdose) {
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.070f));
+                    g.strokePath(ptPath, glowStrokeType);
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.15f));
+                    g.strokePath(ptPath, innerGlowStrokeType);
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.92f));
+                    g.strokePath(ptPath, strokeType);
+                } else {
+                    g.setColour(colour.withAlpha(alpha * p.energyAlpha));
+                    g.strokePath(ptPath, strokeType);
+                }
+                continue;
+            }
+
+            juce::Path runPath;
+            appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+
+            if (isAurora) {
+                g.setColour(colour.withAlpha(alpha * 0.095f));
+                g.strokePath(runPath, glowStrokeType);
+                g.setColour(colour.withAlpha(alpha * 0.20f));
+                g.strokePath(runPath, innerGlowStrokeType);
+                g.setColour(colour.withAlpha(alpha * 0.98f));
+                g.strokePath(runPath, strokeType);
+                g.setColour(colour.brighter(0.20f).withAlpha(alpha * 0.15f));
+                g.strokePath(runPath, highlightStrokeType);
+            } else if (isBlueBreeze || isOverdose) {
+                g.setColour(colour.withAlpha(alpha * 0.070f));
+                g.strokePath(runPath, glowStrokeType);
+                g.setColour(colour.withAlpha(alpha * 0.15f));
+                g.strokePath(runPath, innerGlowStrokeType);
+                g.setColour(colour.withAlpha(alpha * 0.92f));
+                g.strokePath(runPath, strokeType);
+                g.setColour(colour.brighter(0.16f).withAlpha(alpha * 0.12f));
+                g.strokePath(runPath, highlightStrokeType);
+            } else {
+                g.setColour(colour.withAlpha(alpha));
+                g.strokePath(runPath, strokeType);
+            }
+        }
     }
 }
 

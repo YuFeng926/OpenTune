@@ -14,12 +14,12 @@
 #include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §8.5 — TimeGrid handles
 #include "UI/ToolIds.h"       // ⚡️ vocal-time-stretch §8.5 (Phase J) — currentTool
 #include "UI/ViewMapper.h"
-#include "Utils/F0VisualLOD.h"
 #include <algorithm>
 #include <vector>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <optional>
 
 namespace OpenTune {
@@ -56,7 +56,6 @@ public:
         ContentTimelineProjection projection;
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
         WaveformLevelSnapshot waveformSnapshot;
-        std::shared_ptr<const F0VisualLOD> f0LOD;
         std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
         F0Timeline f0Timeline;
         std::vector<Note> displayNotes;
@@ -67,6 +66,38 @@ public:
             return contentKey.isValid() && projection.isValid();
         }
     };
+
+    struct F0VisualPoint
+    {
+        int frame = 0;
+        float x = 0.0f;
+        float y = 0.0f;
+        float energyAlpha = 1.0f;
+    };
+
+    struct F0VisualSegment
+    {
+        std::vector<F0VisualPoint> points;
+    };
+
+    struct F0VisualBuildOptions
+    {
+        int startFrame = 0;
+        int endFrameExclusive = 0;
+        int viewportStartX = 0;
+        int viewportEndX = 0;
+        double pixelsPerSecond = 100.0;
+        double secondsPerFrame = 0.01;
+    };
+
+    using F0FrameToX = std::function<float(int)>;
+    using F0FrameToY = std::function<float(int, float)>;
+
+    static std::vector<F0VisualSegment> buildF0VisualSegments(const std::vector<float>& f0,
+                                                              const std::vector<float>* originalEnergy,
+                                                              const F0VisualBuildOptions& options,
+                                                              const F0FrameToX& frameToX,
+                                                              const F0FrameToY& frameToY);
 
     struct ReferenceOverlay
     {
