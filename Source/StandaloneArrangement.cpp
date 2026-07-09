@@ -281,6 +281,11 @@ bool StandaloneArrangement::selectPlacement(int trackId, uint64_t placementId)
         return false;
     }
 
+    // Primary selection is exclusive: clear all other tracks' selectedPlacementId
+    for (int t = 0; t < kTrackCount; ++t) {
+        if (t != trackId)
+            tracks_[static_cast<size_t>(t)].selectedPlacementId = 0;
+    }
     track.selectedPlacementId = placementId;
     activeTrackId_ = trackId;
     return true;
@@ -299,6 +304,11 @@ bool StandaloneArrangement::setSelectedPlacementIndex(int trackId, int placement
     for (const auto& p : track.placements) {
         if (!p.isRetired) {
             if (activeIndex == placementIndex) {
+                // Primary selection is exclusive: clear all other tracks
+                for (int t = 0; t < kTrackCount; ++t) {
+                    if (t != trackId)
+                        tracks_[static_cast<size_t>(t)].selectedPlacementId = 0;
+                }
                 track.selectedPlacementId = p.placementId;
                 activeTrackId_ = trackId;
                 return true;
@@ -329,6 +339,15 @@ void StandaloneArrangement::clear()
     }
 
     publishPlaybackSnapshotLocked();
+}
+
+void StandaloneArrangement::clearAllSelections()
+{
+    const juce::ScopedWriteLock lock(stateLock_);
+    activeTrackId_ = 0;
+    for (int trackId = 0; trackId < kTrackCount; ++trackId) {
+        tracks_[static_cast<size_t>(trackId)].selectedPlacementId = 0;
+    }
 }
 
 bool StandaloneArrangement::insertPlacement(int trackId, Placement& placement)
