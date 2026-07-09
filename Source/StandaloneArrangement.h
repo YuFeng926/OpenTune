@@ -137,6 +137,7 @@ public:
     uint64_t getSelectedPlacementId(int trackId) const;
     int getSelectedPlacementIndex(int trackId) const;
     bool selectPlacement(int trackId, uint64_t placementId);
+    void clearAllSelections();
     bool setSelectedPlacementIndex(int trackId, int placementIndex);
     void clear();
 

@@ -1189,25 +1189,15 @@ void ArrangementViewComponent::finishMoveDrag(const juce::MouseEvent& e)
 
     selectedPlacements_ = std::move(movedSelection);
     jassert(primaryAfterMove.trackId >= 0 && primaryAfterMove.placementId != 0);
-    selectedTrack_ = primaryAfterMove.trackId;
-    selectedPlacementId_ = primaryAfterMove.placementId;
-    selectedPlacementIndex_ = processor_.findPlacementIndexById(primaryAfterMove.trackId, primaryAfterMove.placementId);
-
-    // Sync StandaloneArrangement model selection
-    auto* arrangement = processor_.getStandaloneArrangement();
-    jassert(arrangement != nullptr);
-    arrangement->selectPlacement(selectedTrack_, selectedPlacementId_);
+    commitPlacementSelection(primaryAfterMove);
 
     moveDragStartStates_.clear();
     currentDragOp_ = DragOperation::None;
     isDraggingPlacement_ = false;
 
-    refreshVisualState();
     listeners_.call([this](Listener& l) {
-        l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
         l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
     });
-    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
 }
 
 void ArrangementViewComponent::drawImportDropPreview(juce::Graphics& g)
@@ -1686,20 +1676,15 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         {
             // Select this placement so downstream context is correct
             const uint64_t hitPlacementId = processor_.getPlacementId(hit.trackId, hit.placementIndex);
-            selectedTrack_ = hit.trackId;
-            selectedPlacementIndex_ = hit.placementIndex;
-            selectedPlacementId_ = hitPlacementId;
-            listeners_.call([&](Listener& l) {
-                l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
-            });
+            selectedPlacements_.clear();
+            selectedPlacements_.insert(PlacementSelectionKey{hit.trackId, hitPlacementId});
+            commitPlacementSelection(PlacementSelectionKey{hit.trackId, hitPlacementId});
 
             // Compute reference button screen area for popup menu positioning
             auto refBtnScreenArea = localAreaToGlobal(refBtnArea.toFloat()).toNearestInt();
             listeners_.call([&](Listener& l) {
                 l.referenceButtonClicked(hit.trackId, hitPlacementId, refBtnScreenArea);
             });
-            refreshVisualState();
-            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
             return;
         }
     }
@@ -1729,10 +1714,13 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
 
         if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
         {
-            clearPlacementSelection();
+            commitEmptyPlacementSelection();
         }
-        refreshVisualState();
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        else
+        {
+            refreshVisualState();
+            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        }
         return;
     }
 
@@ -1743,14 +1731,18 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     if (e.mods.isCtrlDown() && !e.mods.isShiftDown())
     {
         togglePlacementSelection(hit.trackId, hitPlacementId);
-        selectedTrack_ = hit.trackId;
-        selectedPlacementIndex_ = hit.placementIndex;
-        selectedPlacementId_ = hitPlacementId;
-        listeners_.call([this](Listener& l) {
-            l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
-        });
-        refreshVisualState();
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+
+        PlacementSelectionKey primary;
+        if (isPlacementSelected(hit.trackId, hitPlacementId))
+            primary = PlacementSelectionKey{hit.trackId, hitPlacementId};
+        else if (!selectedPlacements_.empty())
+            primary = *selectedPlacements_.begin();
+        else
+        {
+            commitEmptyPlacementSelection();
+            return;
+        }
+        commitPlacementSelection(primary);
         return;
     }
 
@@ -1758,14 +1750,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     {
         PlacementSelectionKey toKey{hit.trackId, hitPlacementId};
         selectPlacementsInRange(shiftAnchor_, toKey);
-        selectedTrack_ = hit.trackId;
-        selectedPlacementIndex_ = hit.placementIndex;
-        selectedPlacementId_ = hitPlacementId;
-        listeners_.call([this](Listener& l) {
-            l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
-        });
-        refreshVisualState();
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        commitPlacementSelection(toKey);
         return;
     }
 
@@ -1775,30 +1760,17 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         {
             clearPlacementSelection();
         }
+        // Always ensure clicked placement is in the selection
+        if (!isPlacementSelected(hit.trackId, hitPlacementId))
+        {
+            selectedPlacements_.insert(PlacementSelectionKey{hit.trackId, hitPlacementId});
+        }
         shiftAnchor_ = PlacementSelectionKey{hit.trackId, hitPlacementId};
         hasShiftAnchor_ = true;
     }
 
-    selectedTrack_ = hit.trackId;
-    selectedPlacementIndex_ = hit.placementIndex;
-    selectedPlacementId_ = hitPlacementId;
-
-    if (selectedPlacements_.empty())
-    {
-        selectedPlacements_.insert(PlacementSelectionKey{selectedTrack_, selectedPlacementId_});
-    }
-    else if (!isPlacementSelected(selectedTrack_, selectedPlacementId_))
-    {
-        if (!e.mods.isCtrlDown())
-        {
-            clearPlacementSelection();
-            selectedPlacements_.insert(PlacementSelectionKey{selectedTrack_, selectedPlacementId_});
-        }
-    }
-
-    listeners_.call([this](Listener& l) {
-        l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
-    });
+    // Commit primary selection (all branches converge here)
+    commitPlacementSelection(PlacementSelectionKey{hit.trackId, hitPlacementId});
 
     dragStartPos_ = e.getPosition();
     getStandalonePlacementStartSeconds(processor_, selectedTrack_, selectedPlacementId_, dragStartPlacementSeconds_);
@@ -1817,7 +1789,6 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
             dragStartPos_ = e.getPosition();
             dragStartTrackId_ = hit.trackId;
         }
-        refreshVisualState();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
@@ -1831,7 +1802,6 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
             dragStartPos_ = e.getPosition();
             dragStartTrackId_ = hit.trackId;
         }
-        refreshVisualState();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
@@ -1848,7 +1818,6 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
             dragStartPos_ = e.getPosition();
             dragStartTrackId_ = hit.trackId;
         }
-        refreshVisualState();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
@@ -1863,7 +1832,6 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
             dragStartPos_ = e.getPosition();
             dragStartTrackId_ = hit.trackId;
         }
-        refreshVisualState();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
@@ -1875,14 +1843,11 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     if (currentDragOp_ == DragOperation::Move)
     {
         beginMoveDrag(hit, e.getPosition());
-        repaint();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
     clearMoveDragOverlay();
-
-    refreshVisualState();
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
 }
 
@@ -1993,7 +1958,6 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     }
     if (placementIndex < 0 || placementIndex >= getStandalonePlacementCount(processor_, selectedTrack_))
         return;
-    selectedPlacementIndex_ = placementIndex;
 
     if (isDraggingPlacement_)
     {
@@ -2203,6 +2167,14 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::SelectAll, key))
     {
         selectAllPlacementsInTrack(selectedTrack_);
+        if (!selectedPlacements_.empty()) {
+            const auto& firstKey = *selectedPlacements_.begin();
+            hasShiftAnchor_ = true;
+            shiftAnchor_ = firstKey;
+            commitPlacementSelection(firstKey);
+        } else {
+            commitEmptyPlacementSelection();
+        }
         return true;
     }
 
@@ -2306,21 +2278,16 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                             return true;
                         }
 
-                        arr->selectPlacement(selectedTrack_, dup.placementId);
-                        selectedTrack_ = arr->getActiveTrackId();
-                        selectedPlacementIndex_ = processor_.findPlacementIndexById(selectedTrack_, dup.placementId);
-                        selectedPlacementId_ = dup.placementId;
+                        const int dupTrack = selectedTrack_;
                         clearPlacementSelection();
-                        selectedPlacements_.insert(PlacementSelectionKey{selectedTrack_, selectedPlacementId_});
+                        selectedPlacements_.insert(PlacementSelectionKey{dupTrack, dup.placementId});
                         hasShiftAnchor_ = true;
-                        shiftAnchor_ = PlacementSelectionKey{selectedTrack_, selectedPlacementId_};
+                        shiftAnchor_ = PlacementSelectionKey{dupTrack, dup.placementId};
+                        commitPlacementSelection(PlacementSelectionKey{dupTrack, dup.placementId});
 
                         listeners_.call([this](Listener& l) {
-                            l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
                             l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
                         });
-                        refreshVisualState();
-                        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
                     }
                 }
             }
@@ -2338,6 +2305,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
         // Copy selected placements to a vector to avoid iterator invalidation during split
         std::vector<std::pair<int, uint64_t>> toSplit;
+        std::vector<SplitOutcome> outcomes;
         for (const auto& sel : selectedPlacements_)
             toSplit.emplace_back(sel.trackId, sel.placementId);
 
@@ -2359,27 +2327,32 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             {
                 processor_.getUndoManager().addAction(
                     std::make_unique<SplitPlacementAction>(processor_, *splitOutcome));
+                outcomes.push_back(*splitOutcome);
                 anySplit = true;
             }
         }
 
         if (anySplit)
         {
-            // Refresh selection state after splits
-            selectedTrack_ = processor_.getStandaloneArrangement()
-                ? processor_.getStandaloneArrangement()->getActiveTrackId()
-                : selectedTrack_;
-            selectedPlacementIndex_ = getStandaloneSelectedPlacementIndex(processor_, selectedTrack_);
-            if (selectedPlacementIndex_ >= 0 && selectedPlacementIndex_ < getStandalonePlacementCount(processor_, selectedTrack_)) {
-                selectedPlacementId_ = processor_.getPlacementId(selectedTrack_, selectedPlacementIndex_);
-            } else {
-                selectedPlacementId_ = 0;
+            // Rebuild selection from split outcomes: each split's trailing placement
+            selectedPlacements_.clear();
+            PlacementSelectionKey primary{-1, 0};
+            for (const auto& outcome : outcomes)
+            {
+                if (outcome.trailingPlacementId != 0)
+                {
+                    selectedPlacements_.insert(PlacementSelectionKey{outcome.trackId, outcome.trailingPlacementId});
+                    primary = PlacementSelectionKey{outcome.trackId, outcome.trailingPlacementId};
+                }
             }
+            if (primary.trackId >= 0 && primary.placementId != 0)
+                commitPlacementSelection(primary);
+            else
+                commitEmptyPlacementSelection();
+
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
-            refreshVisualState();
-            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         }
         return true;
     }
@@ -2405,17 +2378,16 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             processor_.getUndoManager().addAction(
                 std::make_unique<MergePlacementAction>(processor_, *mergeOutcome));
 
-            selectedPlacementIndex_ = getStandaloneSelectedPlacementIndex(processor_, selectedTrack_);
-            if (selectedPlacementIndex_ >= 0 && selectedPlacementIndex_ < getStandalonePlacementCount(processor_, selectedTrack_)) {
-                selectedPlacementId_ = processor_.getPlacementId(selectedTrack_, selectedPlacementIndex_);
+            selectedPlacements_.clear();
+            if (mergeOutcome->mergedPlacementId != 0) {
+                selectedPlacements_.insert(PlacementSelectionKey{selectedTrack_, mergeOutcome->mergedPlacementId});
+                commitPlacementSelection(PlacementSelectionKey{selectedTrack_, mergeOutcome->mergedPlacementId});
             } else {
-                selectedPlacementId_ = 0;
+                commitEmptyPlacementSelection();
             }
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
-            refreshVisualState();
-            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         }
         return true;
     }
@@ -2445,18 +2417,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
         if (anyDeleted)
         {
-            clearPlacementSelection();
-            selectedPlacementIndex_ = getStandaloneSelectedPlacementIndex(processor_, selectedTrack_);
-            if (selectedPlacementIndex_ >= 0 && selectedPlacementIndex_ < getStandalonePlacementCount(processor_, selectedTrack_)) {
-                selectedPlacementId_ = processor_.getPlacementId(selectedTrack_, selectedPlacementIndex_);
-            } else {
-                selectedPlacementId_ = 0;
-            }
-            listeners_.call([this](Listener& l) {
-                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
-            });
-            refreshVisualState();
-            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+            commitEmptyPlacementSelection();
         }
         return true;
     }
@@ -2565,15 +2526,11 @@ bool ArrangementViewComponent::isPlacementSelected(int trackId, uint64_t placeme
 
 void ArrangementViewComponent::togglePlacementSelection(int trackId, uint64_t placementId)
 {
-    juce::ignoreUnused(trackId);
     PlacementSelectionKey key{trackId, placementId};
     auto it = selectedPlacements_.find(key);
     if (it != selectedPlacements_.end())
     {
-        if (selectedPlacements_.size() > 1)
-        {
-            selectedPlacements_.erase(it);
-        }
+        selectedPlacements_.erase(it);
     }
     else
     {
@@ -2649,17 +2606,40 @@ void ArrangementViewComponent::selectAllPlacementsInTrack(int trackId)
         const uint64_t placementId = processor_.getPlacementId(trackId, i);
         selectedPlacements_.insert(PlacementSelectionKey{trackId, placementId});
     }
+}
 
-    if (!selectedPlacements_.empty())
-    {
-        selectedTrack_ = trackId;
-        selectedPlacementIndex_ = placementCount > 0 ? 0 : -1;
-        selectedPlacementId_ = placementCount > 0 ? processor_.getPlacementId(trackId, 0) : 0;
-    }
+void ArrangementViewComponent::commitPlacementSelection(PlacementSelectionKey primary)
+{
+    selectedTrack_ = primary.trackId;
+    selectedPlacementId_ = primary.placementId;
+    selectedPlacementIndex_ = processor_.findPlacementIndexById(primary.trackId, primary.placementId);
+
+    if (auto* arrangement = processor_.getStandaloneArrangement())
+        arrangement->selectPlacement(selectedTrack_, selectedPlacementId_);
 
     listeners_.call([this](Listener& l) {
         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
     });
+
+    refreshVisualState();
+    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+}
+
+void ArrangementViewComponent::commitEmptyPlacementSelection()
+{
+    selectedPlacements_.clear();
+    selectedTrack_ = -1;
+    selectedPlacementIndex_ = -1;
+    selectedPlacementId_ = 0;
+    hasShiftAnchor_ = false;
+
+    if (auto* arrangement = processor_.getStandaloneArrangement())
+        arrangement->clearAllSelections();
+
+    listeners_.call([this](Listener& l) {
+        l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
+    });
+
     refreshVisualState();
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
 }

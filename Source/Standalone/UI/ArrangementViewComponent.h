@@ -332,6 +332,8 @@ private:
     void clearPlacementSelection();
     void selectPlacementsInRange(const PlacementSelectionKey& from, const PlacementSelectionKey& to);
     void selectAllPlacementsInTrack(int trackId);
+    void commitPlacementSelection(PlacementSelectionKey primary);
+    void commitEmptyPlacementSelection();
 
     // === 多选拖拽状态 ===
     struct MoveDragStartState {
