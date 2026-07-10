@@ -124,72 +124,53 @@ void expectTokens(std::string_view blockName,
 
 void expectNoTokens(std::string_view blockName,
                     std::string_view text,
-                    std::initializer_list<std::string_view> tokens)
+                    std::initializer_list<std::string_view> tokens,
+                    std::string_view detail = {})
 {
-    for (const auto token : tokens)
-        expect(!contains(text, token), std::string(blockName) + " contains forbidden token: " + std::string(token));
+    for (const auto token : tokens) {
+        std::string msg = std::string(blockName) + " contains forbidden token: " + std::string(token);
+        if (!detail.empty())
+            msg += " — " + std::string(detail);
+        expect(!contains(text, token), msg);
+    }
 }
 
-void contentSlotNotesIsRemoved()
-{
-    const auto cacheHeader = readText("Source/TimelineContentCache.h");
-    const auto enumBlock = extractBlockByMarker(cacheHeader, "enum class ContentSlot");
-
-    expect(!enumBlock.empty(), "ContentSlot enum must be found");
-    expectNoTokens("ContentSlot enum", enumBlock, {"Notes"});
-}
-
-void cachedContentTilesDoNotOwnNotes()
+void contentSlotNotesIsRestored()
 {
     const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto visibleSlots = extractFunctionBlock(
+    const auto slotsFunc = extractFunctionBlock(
         component, "std::vector<ContentSlot> PianoRollComponent::visibleContentSlots");
-    const auto revision = extractFunctionBlock(
+    const auto revisionFunc = extractFunctionBlock(
         component, "uint64_t PianoRollComponent::revisionForContentSlot");
-    const auto prepareTiles = extractFunctionBlock(
-        component, "void PianoRollComponent::prepareVisibleContentTiles");
 
-    expect(!visibleSlots.empty(), "visibleContentSlots must be found");
-    expect(!revision.empty(), "revisionForContentSlot must be found");
-    expect(!prepareTiles.empty(), "prepareVisibleContentTiles must be found");
+    expect(!slotsFunc.empty(), "visibleContentSlots must be found");
+    expect(contains(slotsFunc, "ContentSlot::Notes"),
+           "visibleContentSlots must include ContentSlot::Notes");
+    expect(contains(slotsFunc, "ContentSlot::Waveform"),
+           "visibleContentSlots must include ContentSlot::Waveform");
 
-    expectNoTokens("visibleContentSlots", visibleSlots, {"ContentSlot::Notes"});
-    expectNoTokens("revisionForContentSlot", revision, {"ContentSlot::Notes", "interactionRevision_", "notesEpoch_"});
-    expectNoTokens("prepareVisibleContentTiles",
-                   prepareTiles,
-                   {"ContentSlot::Notes",
-                    "renderer_->drawNotes",
-                    "getDisplayedNotes()",
-                    "noteDraft",
-                    "workingNotes",
-                    "drawSelectedNoteHighlights"});
-    expect(contains(prepareTiles, "item.displayNotes = {};"),
-           "prepareVisibleContentTiles must explicitly keep content-tile note input empty");
+    expect(!revisionFunc.empty(), "revisionForContentSlot must be found");
+    expect(contains(revisionFunc, "ContentSlot::Notes"),
+           "revisionForContentSlot must handle ContentSlot::Notes");
 }
 
-void liveNotesIsTheOnlyEditedNoteBodyPainter()
+void cachedContentTilesOwnNotes()
 {
     const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto paint = extractFunctionBlock(component, "void PianoRollComponent::paint");
-    const auto getDisplayedNotes = extractFunctionBlock(
-        component, "const std::vector<Note>& PianoRollComponent::getDisplayedNotes");
-    const auto buildItem = extractFunctionBlock(
-        component, "PianoRollRenderer::ContentRenderItem PianoRollComponent::buildContentRenderItem");
-    const auto drawLiveNotes = extractFunctionBlock(
-        component, "void PianoRollComponent::drawLiveNotes");
+    const auto prepareTiles = extractFunctionBlock(
+        component, "void PianoRollComponent::prepareCoverageContentTiles");
 
-    expect(countOf(component, "renderer_->drawNotes(") == 1,
-           "PianoRollComponent must have exactly one renderer_->drawNotes call");
-    expectTokens("drawLiveNotes",
-                 drawLiveNotes,
-                 {"buildContentRenderItem", "renderer_->drawNotes(g, ctx, item)"});
-    expectTokens("getDisplayedNotes",
-                 getDisplayedNotes,
-                 {"noteDraft.active", "noteDraft.workingNotes", "cachedNotes_"});
-    expect(contains(buildItem, "item.displayNotes = getDisplayedNotes();"),
-           "buildContentRenderItem must source edited notes through getDisplayedNotes");
-    expect(inOrder(paint, {"drawPreparedContentTiles(g);", "drawLiveNotes(g);"}),
-           "paint must draw live notes after cached content tiles");
+    expect(!prepareTiles.empty(), "prepareCoverageContentTiles must be found");
+
+    expect(contains(prepareTiles, "ContentSlot::Notes"),
+           "prepareCoverageContentTiles must handle ContentSlot::Notes");
+    expect(contains(prepareTiles, "renderer_->drawNotes"),
+           "prepareCoverageContentTiles must call renderer_->drawNotes for Notes slot");
+    expect(contains(prepareTiles, "getCommittedNotes()"),
+           "prepareCoverageContentTiles must pass committed notes to renderer");
+    expectNoTokens("prepareCoverageContentTiles", prepareTiles,
+                   {"item.displayNotes = {}", "getDisplayedNotes()"},
+                   "Must not assign empty displayNotes or use draft notes in cache");
 }
 
 void previewOverlayIsFeedbackOnly()
@@ -206,7 +187,7 @@ void previewOverlayIsFeedbackOnly()
                    {"renderer_->drawNotes",
                     "drawDraftNote",
                     "commitNoteDraft",
-                    "prepareVisibleContentTiles",
+                    "prepareCoverageContentTiles",
                     "contentCache_",
                     "workingDraftNotes"});
 }
@@ -226,25 +207,25 @@ void interactionInvalidationDoesNotDirtyContentTiles()
         handler, "if (ctx_.getState().noteDrag.draggedNoteIndex >= 0)");
 
     expectTokens("invalidateLiveNotes", live, {"getNotesBounds(beforeNotes)", "getNotesBounds(afterNotes)", "previewOverlay_.repaint"});
-    expectNoTokens("invalidateLiveNotes", live, {"prepareVisibleContentTiles", "contentCache_", "patternCache_"});
+    expectNoTokens("invalidateLiveNotes", live, {"prepareCoverageContentTiles", "contentCache_", "patternCache_"});
     expectTokens("invalidateSelectionFeedback", selection, {"repaint();", "previewOverlay_.repaint();"});
-    expectNoTokens("invalidateSelectionFeedback", selection, {"prepareVisibleContentTiles", "contentCache_", "patternCache_"});
+    expectNoTokens("invalidateSelectionFeedback", selection, {"prepareCoverageContentTiles", "contentCache_", "patternCache_"});
     expectTokens("invalidateInteractionPreview", preview, {"previewOverlay_.repaint"});
-    expectNoTokens("invalidateInteractionPreview", preview, {"prepareVisibleContentTiles", "contentCache_", "patternCache_"});
+    expectNoTokens("invalidateInteractionPreview", preview, {"prepareCoverageContentTiles", "contentCache_", "patternCache_"});
 
     expectTokens("SelectAll shortcut path",
                  selectAll,
                  {"selectAllNotes(notes);", "updateF0SelectionFromNotes(committed)", "invalidateSelectionFeedback"});
     expectNoTokens("SelectAll shortcut path",
                    selectAll,
-                   {"invalidateLiveNotes", "invalidateInteractionPreview", "prepareVisibleContentTiles", "beginNoteDraft", "commitNoteDraft"});
+                   {"invalidateLiveNotes", "invalidateInteractionPreview", "prepareCoverageContentTiles", "beginNoteDraft", "commitNoteDraft"});
 
     expectTokens("note drag path",
                  drag,
                  {"ctx_.beginNoteDraft()", "workingDraftNotes(ctx_)", "resetDraftNotesToBaseline(ctx_)", "invalidateLiveNotes"});
     expectNoTokens("note drag path",
                    drag,
-                   {"invalidateSelectionFeedback", "prepareVisibleContentTiles", "renderer_->drawNotes", "contentCache_"});
+                   {"invalidateSelectionFeedback", "prepareCoverageContentTiles", "renderer_->drawNotes", "contentCache_"});
 
     expectNoTokens("PianoRollToolHandler.h",
                    handlerHeader,
@@ -426,19 +407,19 @@ void setMutatingHelpersArePure()
 
     expectNoTokens("togglePlacementSelection", toggleBody,
                    {"listeners_.", "refreshVisualState", "repaint()", "FrameScheduler", "requestInvalidate",
-                    "contentCache_", "patternCache_", "prepareVisibleContentTiles",
+                    "contentCache_", "patternCache_", "prepareCoverageContentTiles",
                     "requestContentInvalidation", "requestVisualRefresh"});
     expectNoTokens("clearPlacementSelection", clearBody,
                    {"listeners_.", "refreshVisualState", "repaint()", "FrameScheduler", "requestInvalidate",
-                    "contentCache_", "patternCache_", "prepareVisibleContentTiles",
+                    "contentCache_", "patternCache_", "prepareCoverageContentTiles",
                     "requestContentInvalidation", "requestVisualRefresh"});
     expectNoTokens("selectPlacementsInRange", rangeBody,
                    {"listeners_.", "refreshVisualState", "repaint()", "FrameScheduler", "requestInvalidate",
-                    "contentCache_", "patternCache_", "prepareVisibleContentTiles",
+                    "contentCache_", "patternCache_", "prepareCoverageContentTiles",
                     "requestContentInvalidation", "requestVisualRefresh"});
     expectNoTokens("selectAllPlacementsInTrack", trackBody,
                    {"listeners_.", "refreshVisualState", "repaint()", "FrameScheduler", "requestInvalidate",
-                    "contentCache_", "patternCache_", "prepareVisibleContentTiles",
+                    "contentCache_", "patternCache_", "prepareCoverageContentTiles",
                     "requestContentInvalidation", "requestVisualRefresh"});
 }
 
@@ -520,16 +501,16 @@ void rebuildContentMetricsUsesIsPlacementSelected()
            "rebuildContentMetrics must use isPlacementSelected");
 }
 
-void prepareVisibleContentTilesUsesArrangementClips()
+void prepareCoverageContentTilesUsesArrangementClips()
 {
     const auto src = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
-    const auto body = extractFunctionBlock(src, "void ArrangementViewComponent::prepareVisibleContentTiles");
+    const auto body = extractFunctionBlock(src, "void ArrangementViewComponent::prepareCoverageContentTiles");
 
-    expect(!body.empty(), "prepareVisibleContentTiles must be found");
+    expect(!body.empty(), "prepareCoverageContentTiles must be found");
     expect(contains(body, "ContentSlot::ArrangementClips"),
-           "prepareVisibleContentTiles must use ContentSlot::ArrangementClips");
+           "prepareCoverageContentTiles must use ContentSlot::ArrangementClips");
     expect(contains(body, "contentMetrics_.revision"),
-           "prepareVisibleContentTiles must use contentMetrics_.revision");
+           "prepareCoverageContentTiles must use contentMetrics_.revision");
 }
 
 void selectPlacementClearsOtherTracks()
@@ -595,6 +576,160 @@ void captureCallSitesDereferenceNotNullSharedPtr()
            "CapturePersistence must dereference p.audio with *p.audio");
 }
 
+// ============================================================================
+// PianoRoll ruler control footprint — pattern cache identity 只描述像素
+// Time/Cont 按钮覆盖效果由 child component z-order 产生，不属于 tile cache
+// ============================================================================
+
+void patternTileKeyExcludesRulerControlFootprint()
+{
+    const auto cacheHeader = readText("Source/Standalone/UI/TimelinePatternCache.h");
+    const auto keyBlock = extractBlockByMarker(cacheHeader, "struct PatternTileKey");
+    const auto eqBlock = extractBlockByMarker(keyBlock, "bool operator==");
+    const auto hashBlock = extractBlockByMarker(cacheHeader, "struct hash<OpenTune::PatternTileKey>");
+
+    expect(!keyBlock.empty(), "PatternTileKey struct must be found");
+    expect(!eqBlock.empty(), "operator== must be found");
+    expect(!hashBlock.empty(), "std::hash<PatternTileKey> must be found");
+
+    expectNoTokens("PatternTileKey", keyBlock,
+                   {"rulerControlFootprintX", "rulerControlFootprintY",
+                    "rulerControlFootprintW", "rulerControlFootprintH"});
+    expectNoTokens("operator==", eqBlock,
+                   {"rulerControlFootprintX", "rulerControlFootprintY",
+                    "rulerControlFootprintW", "rulerControlFootprintH"});
+    expectNoTokens("hash<PatternTileKey>", hashBlock,
+                   {"rulerControlFootprintX", "rulerControlFootprintY",
+                    "rulerControlFootprintW", "rulerControlFootprintH"});
+}
+
+void renderParamsExcludesRulerControlFootprint()
+{
+    const auto cacheHeader = readText("Source/Standalone/UI/TimelinePatternCache.h");
+    const auto paramsBlock = extractBlockByMarker(cacheHeader, "struct RenderParams");
+
+    expect(!paramsBlock.empty(), "RenderParams struct must be found");
+    expectNoTokens("RenderParams", paramsBlock,
+                   {"rulerControlFootprintX", "rulerControlFootprintY",
+                    "rulerControlFootprintW", "rulerControlFootprintH"});
+}
+
+void prepareCoveragePatternTilesNoFootprintOrTileViewportX()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto prepareBlock = extractFunctionBlock(
+        component, "void PianoRollComponent::prepareCoveragePatternTiles");
+
+    expect(!prepareBlock.empty(), "prepareCoveragePatternTiles must be found");
+    expectNoTokens("prepareCoveragePatternTiles", prepareBlock,
+                   {"rulerControlFootprint", "tileViewportX"});
+}
+
+void buildPatternTileNoFootprintToRenderParams()
+{
+    const auto composer = readText("Source/Standalone/UI/TimelineLayerComposer.cpp");
+    const auto buildBlock = extractFunctionBlock(
+        composer, "juce::Image TimelineLayerComposer::buildPatternTile");
+
+    expect(!buildBlock.empty(), "buildPatternTile must be found");
+    expectNoTokens("buildPatternTile", buildBlock,
+                   {"rulerControlFootprintX", "rulerControlFootprintY",
+                    "rulerControlFootprintW", "rulerControlFootprintH"});
+}
+
+void drawTimeRulerHasRulerPaintBounds()
+{
+    const auto composer = readText("Source/Standalone/UI/TimelineLayerComposer.cpp");
+    const auto drawBlock = extractFunctionBlock(
+        composer, "void TimelineLayerComposer::drawTimeRuler");
+
+    expect(!drawBlock.empty(), "drawTimeRuler must be found");
+    expectTokens("drawTimeRuler uses rulerPaintBounds",
+                 drawBlock,
+                 {"rulerPaintBounds", "getWidth()"});
+    expectNoTokens("drawTimeRuler no footprint",
+                   drawBlock,
+                   {"rulerControlFootprint"});
+}
+
+void noArrangementClipExclusionLeakedToPianoRoll()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto header = readText("Source/Standalone/UI/PianoRollComponent.h");
+
+    expectNoTokens("PianoRollComponent.cpp", component,
+                   {"rulerClipExclusion", "buttonClipExclusion", "rulerButtonClip",
+                    "exclusionRect", "clipExclusionRect"});
+    expectNoTokens("PianoRollComponent.h", header,
+                   {"rulerClipExclusion", "buttonClipExclusion", "rulerButtonClip",
+                    "exclusionRect", "clipExclusionRect"});
+}
+
+// ============================================================================
+// Coverage-local TileCanvas contract — paint / bounds / VBlank / z-order
+// ============================================================================
+
+void tileCanvasUsesCoverageLocal()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto paint = extractFunctionBlock(
+        component, "void PianoRollComponent::TileCanvas::paint");
+
+    expect(!paint.empty(), "TileCanvas::paint must be found");
+    expectNoTokens("TileCanvas::paint", paint,
+                   {"visibleStartSeconds = 0.0"},
+                   "TileCanvas::paint must not use absolute time origin");
+    expect(contains(paint, "tileCoverageStartSeconds_"),
+           "TileCanvas::paint must consume tileCoverageStartSeconds_");
+}
+
+void tileCanvasBoundsUseCoverage()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto position = extractFunctionBlock(
+        component, "void PianoRollComponent::positionTileCanvasForCamera");
+
+    expect(!position.empty(), "positionTileCanvasForCamera must be found");
+    expectNoTokens("positionTileCanvasForCamera", position,
+                   {"contentW * 3", "w * 3"},
+                   "positionTileCanvasForCamera must not use fixed-width multiplier");
+    expect(contains(position, "tileCoverageEndSeconds_ - tileCoverageStartSeconds_"),
+           "positionTileCanvasForCamera must size width by coverage duration");
+}
+
+void vblankIsPureMotion()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto vblank = extractFunctionBlock(
+        component, "void PianoRollComponent::onScrollVBlankCallback");
+
+    expect(!vblank.empty(), "onScrollVBlankCallback must be found");
+    expectNoTokens("onScrollVBlankCallback", vblank,
+                   {"prepareCoveragePatternTiles", "prepareCoverageContentTiles",
+                    "repaint", "listeners_.call", "commitViewportRequest", "FrameScheduler"},
+                   "VBlank must only move camera and child, not rebuild tiles or notify");
+}
+
+void tileCanvasZOrderIsCorrect()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto init = extractFunctionBlock(
+        component, "void PianoRollComponent::initializeUIComponents");
+
+    expect(!init.empty(), "initializeUIComponents must be found");
+
+    const auto addTileCanvas = init.find("addAndMakeVisible(*tileCanvas_)");
+    const auto addOverlay = init.find("addAndMakeVisible(previewOverlay_)");
+    const auto addPlayhead = init.find("addAndMakeVisible(fixedPlayhead_)");
+
+    expect(addTileCanvas < addOverlay && addOverlay < addPlayhead,
+           "tileCanvas must be added before overlay and playhead");
+    expect(contains(init, "previewOverlay_.toFront(false)"),
+           "previewOverlay must toFront after tileCanvas");
+    expect(contains(init, "fixedPlayhead_.toFront(false)"),
+           "fixedPlayhead must toFront after tileCanvas");
+}
+
 } // namespace
 
 int main()
@@ -602,9 +737,8 @@ int main()
     std::cout << "=== OpenTune Architecture Tests ===\n\n";
 
     try {
-        contentSlotNotesIsRemoved();
-        cachedContentTilesDoNotOwnNotes();
-        liveNotesIsTheOnlyEditedNoteBodyPainter();
+        contentSlotNotesIsRestored();
+        cachedContentTilesOwnNotes();
         previewOverlayIsFeedbackOnly();
         interactionInvalidationDoesNotDirtyContentTiles();
         noteAndPitchRevisionPollingIsIndependent();
@@ -621,11 +755,25 @@ int main()
         noSelectPlacementOutsideCommitHelpers();
         selectPlacementClearsOtherTracks();
         rebuildContentMetricsUsesIsPlacementSelected();
-        prepareVisibleContentTilesUsesArrangementClips();
+        prepareCoverageContentTilesUsesArrangementClips();
 
         // Capture audio buffer → identity TimeGrid contract (VST3 sync with Standalone fix eaf3bf7)
         captureApplyAudioBufferContractIsReferenceWithIdentityTimeGrid();
         captureCallSitesDereferenceNotNullSharedPtr();
+
+        // PianoRoll ruler control footprint — tile cache identity 只描述像素
+        patternTileKeyExcludesRulerControlFootprint();
+        renderParamsExcludesRulerControlFootprint();
+        prepareCoveragePatternTilesNoFootprintOrTileViewportX();
+        buildPatternTileNoFootprintToRenderParams();
+        drawTimeRulerHasRulerPaintBounds();
+        noArrangementClipExclusionLeakedToPianoRoll();
+
+        // Coverage-local TileCanvas contract — paint / bounds / VBlank / z-order
+        tileCanvasUsesCoverageLocal();
+        tileCanvasBoundsUseCoverage();
+        vblankIsPureMotion();
+        tileCanvasZOrderIsCorrect();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";
