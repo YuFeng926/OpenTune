@@ -33,7 +33,6 @@ public:
     /** Repaint reason for timeline content. Values are used as bit positions. */
     enum class TimelineReason {
         PlayheadOverlay = 0,
-        ViewportShift = 1,
         ContentModelInvalid = 2,
         LowPriorityAnimation = 3,
         FullContent = 4
@@ -48,7 +47,6 @@ public:
     struct DiagnosticsSnapshot
     {
         uint64_t playheadOverlayRequests = 0;
-        uint64_t viewportShiftRequests = 0;
         uint64_t contentRepaintRequests = 0;
         uint64_t contentInvalidationRequests = 0;
         uint64_t renderModelRebuilds = 0;
@@ -91,7 +89,6 @@ public:
         const auto raw = TimelineRenderingDiagnostics::instance().snapshot();
         DiagnosticsSnapshot snapshot;
         snapshot.playheadOverlayRequests = raw.overlayRepaintRequests;
-        snapshot.viewportShiftRequests = raw.exposedStripRepaintRequests;
         snapshot.contentRepaintRequests = raw.contentRepaintRequests;
         snapshot.contentInvalidationRequests = raw.contentRepaintRequests;
         snapshot.renderModelRebuilds = raw.renderModelRebuilds;
@@ -157,19 +154,6 @@ public:
         requestTimelineInvalidate(component,
                                   TimelineReason::PlayheadOverlay,
                                   overlayDirty,
-                                  Priority::Interactive,
-                                  false);
-    }
-
-    /**
-     * Request only the exposed strip when scrolling horizontally.
-     */
-    void requestViewportShift(juce::Component& component,
-                              const juce::Rectangle<int>& exposedStrip)
-    {
-        requestTimelineInvalidate(component,
-                                  TimelineReason::ViewportShift,
-                                  exposedStrip,
                                   Priority::Interactive,
                                   false);
     }
@@ -324,8 +308,6 @@ private:
 
         if (reason == TimelineReason::PlayheadOverlay)
             diagnostics.recordOverlayRepaintRequest(dirtyArea);
-        else if (reason == TimelineReason::ViewportShift)
-            diagnostics.recordExposedStripRepaintRequest(dirtyArea);
         else if (reason == TimelineReason::ContentModelInvalid
                  || reason == TimelineReason::FullContent)
             diagnostics.recordContentRepaintRequest(dirtyArea);

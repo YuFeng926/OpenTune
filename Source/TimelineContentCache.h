@@ -15,6 +15,7 @@ namespace OpenTune {
 // ============================================================================
 enum class ContentSlot : int {
     Waveform = 0,
+    Notes = 1,
     F0 = 2,
     TimeAnchors = 3,
     ArrangementClips = 4,

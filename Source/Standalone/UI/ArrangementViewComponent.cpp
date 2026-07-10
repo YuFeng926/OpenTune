@@ -468,7 +468,6 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
             scrollMode_ = ScrollMode::Page;
             scrollModeToggleButton_.setButtonText("Page");
         }
-        updateAutoScroll();
         listeners_.call([isCont = (scrollMode_ == ScrollMode::Continuous)](Listener& l) {
             l.scrollModeChanged(isCont);
         });
@@ -488,7 +487,9 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
             timeUnit_ = TimeUnit::Seconds;
             timeUnitToggleButton_.setButtonText("Time");
         }
-        refreshVisualState();
+        rebuildTimelineCoverage();
+        positionTileCanvasForCamera();
+        tileCanvas_->repaint();
         FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
     };
     timeUnitToggleButton_.setColour(juce::TextButton::buttonColourId, UIColors::backgroundLight);
@@ -496,9 +497,10 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     addAndMakeVisible(timeUnitToggleButton_);
     timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
 
+    tileCanvas_ = std::make_unique<TileCanvas>(*this);
+    addAndMakeVisible(*tileCanvas_);
+
     addAndMakeVisible(fixedPlayhead_);
-    timeUnitToggleButton_.toFront(false);
-    scrollModeToggleButton_.toFront(false);
     fixedPlayhead_.setColour(playheadColour_);
     fixedPlayhead_.setBounds(getLocalBounds());
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
@@ -525,31 +527,38 @@ void ArrangementViewComponent::removeListener(Listener* listener)
     listeners_.remove(listener);
 }
 
-void ArrangementViewComponent::applyResolvedCamera(TimelineViewportCamera next, juce::NotificationType notify)
+void ArrangementViewComponent::commitViewportRequest(TimelineViewportRequest req)
 {
-    if (next == camera_) {
-        updateOverlayPresentation();
-        return;
-    }
-
-    camera_ = next;
-
-    prepareVisiblePatternTiles();
-    prepareVisibleContentTiles();
+    camera_ = TimelineViewportPolicy::resolve(req);
+    rebuildTimelineCoverage();
+    positionTileCanvasForCamera();
     updateScrollBars();
-    refreshVisualState();
     updateOverlayPresentation();
-
-    if (notify == juce::sendNotification) {
-        listeners_.call([this](Listener& l) { l.timelineViewportChanged(camera_); });
-    }
-
-    repaint();
+    tileCanvas_->repaint();
 }
 
-void ArrangementViewComponent::commitViewportRequest(TimelineViewportRequest req, juce::NotificationType notify)
+void ArrangementViewComponent::activateTimelineCamera(TimelineViewportCamera camera)
 {
-    applyResolvedCamera(TimelineViewportPolicy::resolve(req), notify);
+    camera_ = camera;
+    rebuildTimelineCoverage();
+    positionTileCanvasForCamera();
+    updateScrollBars();
+    updateOverlayPresentation();
+    tileCanvas_->repaint();
+}
+
+void ArrangementViewComponent::rebuildTimelineCoverage()
+{
+    const int contentViewportWidth = getVisibleViewportWidth();
+    const double tileDuration = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / camera_.pixelsPerSecond;
+    const double visibleStart = camera_.visibleStartSeconds;
+    const double visibleEnd = visibleStart + contentViewportWidth / camera_.pixelsPerSecond;
+
+    tileCoverageStartSeconds_ = std::max(0.0, std::floor((visibleStart - tileDuration) / tileDuration) * tileDuration);
+    tileCoverageEndSeconds_ = std::ceil((visibleEnd + tileDuration) / tileDuration) * tileDuration;
+
+    prepareCoveragePatternTiles();
+    prepareCoverageContentTiles();
 }
 
 TimelineViewportRequest ArrangementViewComponent::makeViewportRequest(
@@ -580,11 +589,10 @@ void ArrangementViewComponent::setVerticalScrollOffset(int offset)
     verticalScrollBar_.setCurrentRangeStart(verticalScrollOffset_);
     
     // Rebuild pattern and content tiles with new vertical window
-    prepareVisiblePatternTiles();
-    prepareVisibleContentTiles();
-    
-    repaint();
-    FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
+    rebuildTimelineCoverage();
+    positionTileCanvasForCamera();
+
+    tileCanvas_->repaint();
 }
 
 void ArrangementViewComponent::setVisibleTrackCount(int count)
@@ -595,8 +603,9 @@ void ArrangementViewComponent::setVisibleTrackCount(int count)
     updateScrollBars();
     
     // Prepare pattern and content tiles for new track count
-    prepareVisiblePatternTiles();
-    prepareVisibleContentTiles();
+    rebuildTimelineCoverage();
+    positionTileCanvasForCamera();
+    tileCanvas_->repaint();
 }
 
 void ArrangementViewComponent::fitToContent()
@@ -630,7 +639,7 @@ void ArrangementViewComponent::fitToContent()
         0.0,
         0.0,
         static_cast<double>(drawableWidth) / maxEndTime);
-    commitViewportRequest(req, juce::sendNotification);
+    commitViewportRequest(req);
 }
 
 void ArrangementViewComponent::setExperimentalReferenceControlsEnabled(bool enabled)
@@ -666,7 +675,8 @@ void ArrangementViewComponent::resized()
     timeUnitToggleButton_.setBounds(currentX, 5, btnW, btnH);
 
     updateScrollBars();
-    refreshVisualState();
+    rebuildTimelineCoverage();
+    positionTileCanvasForCamera();
     // Import drop preview highlight (transient, UI-only)
 
     // 固定播放头覆盖整个组件区域
@@ -685,14 +695,16 @@ void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double
             newRangeStart / camera_.pixelsPerSecond,
             0.0,
             camera_.pixelsPerSecond);
-        commitViewportRequest(req, juce::sendNotification);
+        commitViewportRequest(req);
     }
     else if (scrollBar == &verticalScrollBar_)
     {
         verticalScrollOffset_ = static_cast<int>(newRangeStart);
         // 通知监听器垂直滚动偏移变化（用于同步TrackPanel）
         listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
-        refreshVisualState();
+        rebuildTimelineCoverage();
+        positionTileCanvasForCamera();
+        tileCanvas_->repaint();
         FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
     }
 }
@@ -775,8 +787,7 @@ void ArrangementViewComponent::rebuildContentMetrics()
         }
     }
 
-    // P1-5: Include clipInSeconds and waveformBuildGeneration_ in revision
-    revision = hashCombine(revision, waveformBuildGeneration_);
+    // P1-5: Include clipInSeconds in revision (waveform visual updates go through pending mechanism)
 
     contentMetrics_.revision = revision;
     contentMetrics_.maxEndTimeSeconds = maxEndTime;
@@ -784,15 +795,15 @@ void ArrangementViewComponent::rebuildContentMetrics()
 }
 
 // Pre-build pattern tiles for paint() consumption
-void ArrangementViewComponent::prepareVisiblePatternTiles()
+void ArrangementViewComponent::prepareCoveragePatternTiles()
 {
     preparedPatternTiles_.clear();
 
     const auto vpBounds = getContentViewportBounds();
     const double pps = camera_.pixelsPerSecond;
     const double tileDurationSec = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / pps;
-    const double viewStart = camera_.visibleStartSeconds;
-    const double viewEnd = viewStart + vpBounds.getWidth() / pps;
+    const double viewStart = tileCoverageStartSeconds_;
+    const double viewEnd = tileCoverageEndSeconds_;
 
     double firstTileStart = std::floor(viewStart / tileDurationSec) * tileDurationSec;
     if (firstTileStart < 0.0) firstTileStart = 0.0;
@@ -819,7 +830,7 @@ void ArrangementViewComponent::prepareVisiblePatternTiles()
 }
 
 // P0-1: Pre-build content tiles for paint() consumption
-void ArrangementViewComponent::prepareVisibleContentTiles()
+void ArrangementViewComponent::prepareCoverageContentTiles()
 {
     preparedContentTiles_.clear();
 
@@ -832,8 +843,8 @@ void ArrangementViewComponent::prepareVisibleContentTiles()
     ContentKey arrangementKey{DomainKind::StandaloneArrangement, 1, 0};
 
     const double tileDurationSec = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / camera_.pixelsPerSecond;
-    const double viewStart = camera_.visibleStartSeconds;
-    const double viewEnd = viewStart + vpBounds.getWidth() / camera_.pixelsPerSecond;
+    const double viewStart = tileCoverageStartSeconds_;
+    const double viewEnd = tileCoverageEndSeconds_;
 
     // Compute tile boundaries aligned to kPatternTileWidthPx
     double firstTileStart = std::floor(viewStart / tileDurationSec) * tileDurationSec;
@@ -1031,14 +1042,6 @@ void ArrangementViewComponent::requestVisualRefresh()
     lastContextBpm_ = 120.0;
     lastContextTimeSigNum_ = 4;
     lastContextTimeSigDenom_ = 4;
-}
-
-void ArrangementViewComponent::refreshVisualState()
-{
-    requestVisualRefresh();
-    prepareVisiblePatternTiles();
-    prepareVisibleContentTiles();
-    repaint();
 }
 
 int ArrangementViewComponent::trackIdForViewportY(int y) const noexcept
@@ -1351,45 +1354,11 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), style.tickStroke);
     }
 
-    // --- Pattern Layer: Ruler, Grid（按钮 footprint 用 clip 排除）---
-    {
-        juce::RectangleList<int> visibleArea;
-        visibleArea.addWithoutMerging(getLocalBounds());
+    // Tiles drawn by tileCanvas_ child component
+}
 
-        const auto buttonZone = scrollModeToggleButton_.getBounds()
-            .getUnion(timeUnitToggleButton_.getBounds()).expanded(6, 2);
-        juce::RectangleList<int> excluded;
-        excluded.addWithoutMerging(buttonZone);
-        visibleArea.subtract(excluded);
-
-        juce::Graphics::ScopedSaveState save(g);
-        g.reduceClipRegion(visibleArea);
-
-        for (const auto& pt : preparedPatternTiles_) {
-            if (pt.image && pt.image->isValid()) {
-                RenderParams patternParams;
-                patternParams.visibleStartSeconds = camera_.visibleStartSeconds;
-                patternParams.pixelsPerSecond = camera_.pixelsPerSecond;
-                patternParams.viewportBoundsX = kArrangementContentStartX;
-                patternParams.contentOffsetY = 0;
-                TimelineLayerComposer::drawPatternTile(g, *pt.image, pt.key.startSeconds, patternParams);
-            }
-        }
-    }
-
-    // --- Content Layer: Arrangement Clips, Waveforms ---
-    for (const auto& pt : preparedContentTiles_) {
-        if (pt.image && pt.image->isValid()) {
-            RenderParams contentParams;
-            contentParams.visibleStartSeconds = camera_.visibleStartSeconds;
-            contentParams.pixelsPerSecond = camera_.pixelsPerSecond;
-            contentParams.viewportBoundsX = kArrangementContentStartX;
-            contentParams.contentOffsetY = rulerHeight_;
-            TimelineLayerComposer::drawContentTile(g, *pt.image, pt.key.startSeconds, contentParams);
-        }
-    }
-
-    // --- Transient Overlay: import drop, drag, hover (post-content) ---
+void ArrangementViewComponent::paintOverChildren(juce::Graphics& g)
+{
     drawTransientOverlay(g);
 }
 
@@ -1485,13 +1454,13 @@ void ArrangementViewComponent::onHeartbeatTick()
     }
 
     if (progressed) {
-        ++waveformBuildGeneration_;  // Increment generation for revision tracking
         if (playingNow) {
             waveformVisualRefreshPending_ = true;
         } else {
             waveformVisualRefreshPending_ = false;
-            prepareVisibleContentTiles();
-            refreshVisualState();
+            rebuildTimelineCoverage();
+            positionTileCanvasForCamera();
+            tileCanvas_->repaint();
             FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Background);
         }
     }
@@ -1499,37 +1468,31 @@ void ArrangementViewComponent::onHeartbeatTick()
     if (!playingNow && waveformVisualRefreshPending_) {
         waveformVisualRefreshPending_ = false;
         // No-op — render model cache removed
-        refreshVisualState();
+        rebuildTimelineCoverage();
+        positionTileCanvasForCamera();
+        tileCanvas_->repaint();
         FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Background);
     }
 
     if (!playingNow)
         return;
 
-    // Playback follow remains overlay-only unless waveform mipmaps advanced above.
-}
+    // Coverage boundary maintenance during playback
+    if (isPlaying_.load(std::memory_order_relaxed)) {
+        const int contentViewportWidth = getVisibleViewportWidth();
+        const double tileDuration = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / camera_.pixelsPerSecond;
+        const double visibleEnd = camera_.visibleStartSeconds + contentViewportWidth / camera_.pixelsPerSecond;
 
-void ArrangementViewComponent::performPageScroll(double playheadTime)
-{
-    const auto req = makeViewportRequest(
-        TimelineViewportRequest::Kind::Page,
-        playheadTime,
-        0.0,
-        camera_.pixelsPerSecond);
+        const bool coverageNeedsRebuild =
+            camera_.visibleStartSeconds < tileCoverageStartSeconds_ + tileDuration
+            || visibleEnd > tileCoverageEndSeconds_ - tileDuration;
 
-    // Always commit to trigger overlay refresh via applyResolvedCamera equal branch
-    commitViewportRequest(req, juce::sendNotification);
-}
-
-void ArrangementViewComponent::updateAutoScroll()
-{
-    if (!isPlaying_.load(std::memory_order_relaxed))
-        return;
-
-    const double playheadTime = readPlayheadSeconds();
-
-    if (scrollMode_ == ScrollMode::Page)
-        performPageScroll(playheadTime);
+        if (coverageNeedsRebuild) {
+            rebuildTimelineCoverage();
+            positionTileCanvasForCamera();
+            tileCanvas_->repaint();
+        }
+    }
 }
 
 void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
@@ -1539,20 +1502,17 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
         return;
 
     const double playheadTime = readPlayheadSeconds();
+    const double pps = camera_.pixelsPerSecond;
 
-    if (scrollMode_ == ScrollMode::Continuous)
-    {
-        const auto req = makeViewportRequest(
-            TimelineViewportRequest::Kind::Cont,
-            playheadTime,
-            0.0,
-            camera_.pixelsPerSecond);
-        commitViewportRequest(req, juce::sendNotification);
-        return;
-    }
+    TimelineViewportRequest::Kind kind = (scrollMode_ == ScrollMode::Continuous)
+        ? TimelineViewportRequest::Kind::Cont
+        : TimelineViewportRequest::Kind::Page;
 
-    if (scrollMode_ == ScrollMode::Page)
-        performPageScroll(playheadTime);
+    auto req = makeViewportRequest(kind, playheadTime, 0.0, pps);
+    TimelineViewportCamera nextCamera = TimelineViewportPolicy::resolve(req);
+    camera_ = nextCamera;
+    positionTileCanvasForCamera();
+    syncFixedPlayhead();
 }
 
 double ArrangementViewComponent::readPlayheadSeconds() const
@@ -1718,7 +1678,9 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         }
         else
         {
-            refreshVisualState();
+            rebuildTimelineCoverage();
+        positionTileCanvasForCamera();
+        tileCanvas_->repaint();
             FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         }
         return;
@@ -1864,7 +1826,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
             camera_.visibleStartSeconds + deltaTime,
             0.0,
             camera_.pixelsPerSecond);
-        commitViewportRequest(req, juce::sendNotification);
+        commitViewportRequest(req);
 
         // Vertical Scroll — use setVerticalScrollOffset() to properly update tile cache
         const int newVerticalOffset = verticalScrollOffset_ - delta.y;
@@ -2018,7 +1980,9 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
     if (currentDragOp_ != DragOperation::Move && currentDragOp_ != DragOperation::Gain) {
         currentDragOp_ = DragOperation::None;
         dragOperationPlacementId_ = 0;
-        refreshVisualState();
+        rebuildTimelineCoverage();
+        positionTileCanvasForCamera();
+        tileCanvas_->repaint();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
     }
 
@@ -2085,7 +2049,9 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
             {
                 processor_.setTrackHeight(newHeight);
                 listeners_.call([newHeight](Listener& l) { l.trackHeightChanged(newHeight); });
-                refreshVisualState();
+                rebuildTimelineCoverage();
+        positionTileCanvasForCamera();
+        tileCanvas_->repaint();
                 FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
             }
         }
@@ -2111,7 +2077,7 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
                     mouseTime,
                     static_cast<double>(e.x - kArrangementContentStartX),
                     newPps);
-                commitViewportRequest(req, juce::sendNotification);
+                commitViewportRequest(req);
                 FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
             }
         }
@@ -2129,7 +2095,7 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
                 camera_.visibleStartSeconds + deltaTime,
                 0.0,
                 camera_.pixelsPerSecond);
-            commitViewportRequest(req, juce::sendNotification);
+            commitViewportRequest(req);
         }
         return;
     }
@@ -2152,7 +2118,7 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
             camera_.visibleStartSeconds + deltaTime,
             0.0,
             camera_.pixelsPerSecond);
-        commitViewportRequest(req, juce::sendNotification);
+        commitViewportRequest(req);
     }
 }
 
@@ -2245,7 +2211,9 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                 pasteTime += entry.durationSeconds; // chain placements sequentially
             }
 
-            refreshVisualState();
+            rebuildTimelineCoverage();
+        positionTileCanvasForCamera();
+        tileCanvas_->repaint();
             FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         }
         return true;
@@ -2454,7 +2422,9 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
-            refreshVisualState();
+            rebuildTimelineCoverage();
+        positionTileCanvasForCamera();
+        tileCanvas_->repaint();
             FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         }
         return true;
@@ -2492,7 +2462,9 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
-            refreshVisualState();
+            rebuildTimelineCoverage();
+        positionTileCanvasForCamera();
+        tileCanvas_->repaint();
             FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         }
         return true;
@@ -2621,7 +2593,9 @@ void ArrangementViewComponent::commitPlacementSelection(PlacementSelectionKey pr
         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
     });
 
-    refreshVisualState();
+    rebuildTimelineCoverage();
+    positionTileCanvasForCamera();
+    tileCanvas_->repaint();
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
 }
 
@@ -2640,7 +2614,9 @@ void ArrangementViewComponent::commitEmptyPlacementSelection()
         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
     });
 
-    refreshVisualState();
+    rebuildTimelineCoverage();
+    positionTileCanvasForCamera();
+    tileCanvas_->repaint();
     FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
 }
 
@@ -2654,7 +2630,9 @@ void ArrangementViewComponent::setClipAnalysisInProgress(uint64_t placementId, b
     if (state.isAnalysisInProgress != inProgress)
     {
         state.isAnalysisInProgress = inProgress;
-        refreshVisualState();
+        rebuildTimelineCoverage();
+        positionTileCanvasForCamera();
+        tileCanvas_->repaint();
         FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
     }
 }
@@ -2687,6 +2665,57 @@ ArrangementVerticalWindow ArrangementViewComponent::makeArrangementVerticalWindo
         verticalScrollOffset_,
         vpBounds.getHeight()
     };
+}
+
+// ============================================================================
+// TileCanvas
+// ============================================================================
+
+ArrangementViewComponent::TileCanvas::TileCanvas(ArrangementViewComponent& owner)
+    : owner_(owner)
+{
+    setInterceptsMouseClicks(false, false);
+}
+
+void ArrangementViewComponent::TileCanvas::paint(juce::Graphics& g)
+{
+    const double pps = owner_.camera_.pixelsPerSecond;
+    const int rulerH = owner_.rulerHeight_;
+
+    // Pattern tiles at coverage-local positions
+    for (const auto& pt : owner_.preparedPatternTiles_) {
+        if (pt.image && pt.image->isValid()) {
+            RenderParams patternParams;
+            patternParams.visibleStartSeconds = owner_.tileCoverageStartSeconds_;
+            patternParams.pixelsPerSecond = pps;
+            patternParams.viewportBoundsX = kArrangementContentStartX;
+            patternParams.contentOffsetY = rulerH;
+            TimelineLayerComposer::drawPatternTile(g, *pt.image, pt.key.startSeconds, patternParams);
+        }
+    }
+
+    // Content tiles at coverage-local positions
+    for (const auto& pt : owner_.preparedContentTiles_) {
+        if (pt.image && pt.image->isValid()) {
+            RenderParams contentParams;
+            contentParams.visibleStartSeconds = owner_.tileCoverageStartSeconds_;
+            contentParams.pixelsPerSecond = pps;
+            contentParams.viewportBoundsX = kArrangementContentStartX;
+            contentParams.contentOffsetY = rulerH;
+            TimelineLayerComposer::drawContentTile(g, *pt.image, pt.key.startSeconds, contentParams);
+        }
+    }
+}
+
+void ArrangementViewComponent::positionTileCanvasForCamera()
+{
+    const int contentStartX = kArrangementContentStartX;
+    const int contentViewportHeight = getContentViewportBounds().getHeight();
+    const int x = static_cast<int>(std::round((tileCoverageStartSeconds_ - camera_.visibleStartSeconds) * camera_.pixelsPerSecond));
+    const int y = 0;  // covers full viewport, not rulerHeight_
+    const int w = contentStartX + static_cast<int>(std::round((tileCoverageEndSeconds_ - tileCoverageStartSeconds_) * camera_.pixelsPerSecond));
+    const int h = rulerHeight_ + contentViewportHeight;
+    tileCanvas_->setBounds(x, y, w, h);
 }
 
 } // namespace OpenTune
