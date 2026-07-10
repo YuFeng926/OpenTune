@@ -72,18 +72,6 @@ ContentTimelineProjection makePianoRollProjection(const StandaloneArrangement::P
     return projection;
 }
 
-static TimelineViewportRequest makeManualViewportReplayRequest(TimelineViewportCamera camera,
-                                                               int viewportWidth,
-                                                               TimelineViewportRequest::ViewKind viewKind)
-{
-    TimelineViewportRequest req;
-    req.kind = TimelineViewportRequest::Kind::Manual;
-    req.viewKind = viewKind;
-    req.targetTime = camera.visibleStartSeconds;
-    req.viewportWidth = viewportWidth;
-    req.pixelsPerSecond = camera.pixelsPerSecond;
-    return req;
-}
 
 
 static juce::String getImportWildcardFilter()
@@ -431,13 +419,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setVisible(!isWorkspaceView_);
     arrangementView_.setVisible(isWorkspaceView_);
     
-    // Initialize shared timeline viewport camera and apply to both views
-    {
-        const double zoomLevel = processorRef_.getZoomLevel();
-        timelineViewportCamera_.visibleStartSeconds = 0.0;
-        timelineViewportCamera_.pixelsPerSecond = zoomLevel * TimelineViewportCamera::kDefaultPixelsPerSecond;
-        applyTimelineViewportToViews();
-    }
+    // Each view initializes its own camera from TimelineViewportPolicy independently.
+    // No shared camera echo — playback VBlank is per-view.
     
     // Add AutoRenderOverlay (initially hidden, covers PianoRoll during AUTO)
     addAndMakeVisible(autoRenderOverlay_);
@@ -1297,8 +1280,7 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
 
     if (regionChanged) {
         pianoRoll_.focusActiveContentForRegionSwitch(
-            snap ? snap->silentGaps : std::vector<SilentGap>{},
-            juce::sendNotification);
+            snap ? snap->silentGaps : std::vector<SilentGap>{});
     }
 
     lastPianoRollContentKey_ = contentKey;
@@ -2470,13 +2452,15 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
 
 void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
 {
+    // Capture the timeline camera from the outgoing view before toggling visibility.
+    const TimelineViewportCamera camera = isWorkspaceView_
+        ? arrangementView_.timelineCamera()
+        : pianoRoll_.timelineCamera();
+
     isWorkspaceView_ = workspaceView;
     arrangementView_.setVisible(isWorkspaceView_);
     pianoRoll_.setVisible(!isWorkspaceView_);
-    
-    // Re-sync camera to both views after visibility switch
-    applyTimelineViewportToViews();
-    
+
     // Explicitly grab focus for the active view to ensure keyboard shortcuts work immediately
     if (isWorkspaceView_) {
         arrangementView_.grabKeyboardFocus();
@@ -2485,9 +2469,16 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
         pianoRoll_.grabKeyboardFocus();
     }
 
+    // Push the captured camera into the incoming view so the timeline viewport survives the switch.
+    // activateTimelineCamera rebuilds coverage, repositions the tile canvas, and repaints.
+    // The now-hidden view is left untouched, so playback never replays camera into it.
+    if (isWorkspaceView_)
+        arrangementView_.activateTimelineCamera(camera);
+    else
+        pianoRoll_.activateTimelineCamera(camera);
+
     resized();
     repaint();
-
 }
 
 // ============================================================================
@@ -2729,29 +2720,7 @@ void OpenTuneAudioProcessorEditor::scrollModeChanged(bool isContinuous)
         : PianoRollComponent::ScrollMode::Page);
 }
 
-void OpenTuneAudioProcessorEditor::applyTimelineViewportToViews()
-{
-    arrangementView_.commitViewportRequest(makeManualViewportReplayRequest(timelineViewportCamera_,
-                                                                           arrangementView_.timelinePolicyViewportWidth(),
-                                                                           TimelineViewportRequest::ViewKind::Arrangement),
-                                           juce::dontSendNotification);
-    pianoRoll_.commitViewportRequest(makeManualViewportReplayRequest(timelineViewportCamera_,
-                                                                     pianoRoll_.timelinePolicyViewportWidth(),
-                                                                     TimelineViewportRequest::ViewKind::PianoRoll),
-                                     juce::dontSendNotification);
 
-    // Pre-warm pattern tiles for both views synchronously so view switches
-    // never show empty content. Pattern tiles are lazily built on first draw;
-    // requesting them here ensures they exist before the next paint().
-    arrangementView_.repaint();
-    pianoRoll_.repaint();
-}
-
-void OpenTuneAudioProcessorEditor::timelineViewportChanged(TimelineViewportCamera camera)
-{
-    timelineViewportCamera_ = camera;
-    applyTimelineViewportToViews();
-}
 
 void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int placementIndex)
 {

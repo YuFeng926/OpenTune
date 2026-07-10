@@ -64,6 +64,51 @@ constexpr double kPianoRollPinnedViewportRatio = 0.5;
 
 } // namespace
 
+PianoRollComponent::TileCanvas::TileCanvas(PianoRollComponent& owner)
+    : owner_(owner)
+{
+    setInterceptsMouseClicks(false, false);
+}
+
+void PianoRollComponent::TileCanvas::paint(juce::Graphics& g)
+{
+    const auto bounds = getLocalBounds().toFloat();
+    juce::Path chromePath;
+    chromePath.addRoundedRectangle(bounds, UIColors::cornerRadius);
+    juce::Graphics::ScopedSaveState clipState(g);
+    g.reduceClipRegion(chromePath);
+
+    const double pps = owner_.camera_.pixelsPerSecond;
+    const auto viewport = owner_.getTimelineViewportBounds();
+
+    // Pattern tiles — coverage-local coordinates
+    RenderParams patternParams;
+    patternParams.viewportBoundsX = pianoKeyWidth_;
+    patternParams.visibleStartSeconds = owner_.tileCoverageStartSeconds_;
+    patternParams.pixelsPerSecond = pps;
+    patternParams.viewportWidth = viewport.getWidth();
+    patternParams.viewportHeight = viewport.getHeight();
+
+    for (const auto& pt : owner_.preparedPatternTiles_) {
+        if (!pt.image || !pt.image->isValid()) continue;
+        TimelineLayerComposer::drawPatternTile(g, *pt.image, pt.key.startSeconds, patternParams);
+    }
+
+    // Content tiles — coverage-local coordinates
+    RenderParams contentParams;
+    contentParams.viewportBoundsX = pianoKeyWidth_;
+    contentParams.visibleStartSeconds = owner_.tileCoverageStartSeconds_;
+    contentParams.pixelsPerSecond = pps;
+    contentParams.viewportWidth = viewport.getWidth();
+    contentParams.viewportHeight = viewport.getHeight();
+    contentParams.contentOffsetY = rulerHeight_;
+
+    for (const auto& pt : owner_.preparedContentTiles_) {
+        if (!pt.image || !pt.image->isValid()) continue;
+        TimelineLayerComposer::drawContentTile(g, *pt.image, pt.key.startSeconds, contentParams);
+    }
+}
+
 void PianoRollComponent::initializeUIComponents() {
     setWantsKeyboardFocus(true);
     addAndMakeVisible(horizontalScrollBar_);
@@ -101,14 +146,18 @@ void PianoRollComponent::initializeUIComponents() {
     addAndMakeVisible(timeUnitToggleButton_);
     timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
 
-    addAndMakeVisible(previewOverlay_);
-    addAndMakeVisible(fixedPlayhead_);
-    timeUnitToggleButton_.toFront(false);
-    scrollModeToggleButton_.toFront(false);
-    fixedPlayhead_.setColour(playheadColour_);
-
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
         this, [this](double timestampSec) { onScrollVBlankCallback(timestampSec); });
+
+    tileCanvas_ = std::make_unique<TileCanvas>(*this);
+    addAndMakeVisible(*tileCanvas_);
+    addAndMakeVisible(previewOverlay_);
+    previewOverlay_.toFront(false);
+    addAndMakeVisible(fixedPlayhead_);
+    fixedPlayhead_.toFront(false);
+    scrollModeToggleButton_.toFront(false);
+    timeUnitToggleButton_.toFront(false);
+    fixedPlayhead_.setColour(playheadColour_);
 }
 
 
@@ -1149,7 +1198,7 @@ void PianoRollPreviewOverlay::paint(juce::Graphics& g)
 
     // ⚡️ Cursor preview (豁免路径): DrawNote tool 的绘制中 note preview
     // 这是交互 cursor preview，不是 committed/draft note body
-    // Note body 由 drawLiveNotes() 负责绘制
+    // Note body is rendered into content cache tiles (no longer drawn live)
     if (owner_.interactionState_.drawing.isDrawingNote
         && owner_.currentTool_ == ToolId::DrawNote) {
         juce::Graphics::ScopedSaveState previewSave(g);
@@ -1182,7 +1231,7 @@ void PianoRollPreviewOverlay::paint(juce::Graphics& g)
     owner_.drawSelectionBox(g, themeId);
 
     // Selected note highlights �?drawn in overlay, not baked into detail cache
-    // Translate to content area Y coordinate system, matching drawLiveNotes and content tile blit offset
+    // Translate to content area Y coordinate system, matching content tile blit offset
     if (!owner_.interactionState_.noteSelection.selectedIndices.empty()) {
         juce::Graphics::ScopedSaveState highlightSave(g);
         g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(owner_.rulerHeight_)));
@@ -1397,11 +1446,7 @@ void PianoRollComponent::paint(juce::Graphics& g) {
             break;
     }
 
-    // Pattern tiles: ruler/grid/lanes (already clipped to chrome shell)
-    drawPreparedPatternTiles(g);
-    // Content tiles: waveform/F0/anchors (already clipped to chrome shell)
-    drawPreparedContentTiles(g);
-    drawLiveNotes(g);
+    // Tiles are drawn by tileCanvas_ child component (scrollable layer)
 }
 
 void PianoRollComponent::paintOverChildren(juce::Graphics& g)
@@ -1864,9 +1909,10 @@ void PianoRollComponent::resized() {
     previewOverlay_.setBounds(getLocalBounds());
     fixedPlayhead_.setBounds(getLocalBounds());
     updatePlayheadVisibility();
-    prepareVisiblePatternTiles();
-    prepareVisibleContentTiles();
-    repaint();
+    prepareCoveragePatternTiles();
+    prepareCoverageContentTiles();
+    positionTileCanvasForCamera();
+    tileCanvas_->repaint();
 }
 
 void PianoRollComponent::applyEditedContentCurve(std::shared_ptr<PitchCurve> curve)
@@ -2000,7 +2046,7 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
 
     userScrollHold_ = false;
     updateScrollBars();
-    prepareVisibleContentTiles();
+    prepareCoverageContentTiles();
     repaint();
     return true;
 }
@@ -2033,7 +2079,7 @@ void PianoRollComponent::setContentProjection(const ContentTimelineProjection& p
     explicitTimelineContentPlacements_ = false;
     deriveSingleTimelineContentPlacement();
     userScrollHold_ = false;
-    prepareVisibleContentTiles();
+    prepareCoverageContentTiles();
     repaint();
 }
 
@@ -2091,14 +2137,14 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 
     userScrollHold_ = false;
     updateScrollBars();
-    prepareVisibleContentTiles();
+    prepareCoverageContentTiles();
     repaint();
 }
 
 void PianoRollComponent::onTimeGridRevisionChanged()
 {
     timeGridEpoch_.fetch_add(1, std::memory_order_relaxed);
-    prepareVisibleContentTiles();
+    prepareCoverageContentTiles();
     repaint();
 }
 
@@ -2112,12 +2158,12 @@ void PianoRollComponent::onNotesRevisionChanged()
 void PianoRollComponent::onPitchRevisionChanged()
 {
     pitchEpoch_.fetch_add(1, std::memory_order_relaxed);
-    prepareVisibleContentTiles();
+    prepareCoverageContentTiles();
     repaint();
 }
 
 void PianoRollComponent::requestContentRedraw() {
-    prepareVisibleContentTiles();
+    prepareCoverageContentTiles();
     repaint();
 }
 
@@ -2167,6 +2213,24 @@ void PianoRollComponent::onHeartbeatTick()
     consumeCompletedCorrectionResults();
 
     const bool playingNow = isPlaying_.load(std::memory_order_relaxed);
+
+    // Coverage boundary maintenance during playback
+    if (playingNow) {
+        const int contentViewportWidth = getTimelineContentViewportWidth();
+        const double tileDuration = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / camera_.pixelsPerSecond;
+        const double visibleEnd = camera_.visibleStartSeconds + contentViewportWidth / camera_.pixelsPerSecond;
+
+        const bool coverageNeedsRebuild =
+            camera_.visibleStartSeconds < tileCoverageStartSeconds_ + tileDuration
+            || visibleEnd > tileCoverageEndSeconds_ - tileDuration;
+
+        if (coverageNeedsRebuild) {
+            rebuildTimelineCoverage();
+            positionTileCanvasForCamera();
+            tileCanvas_->repaint();
+        }
+    }
+
     if (showWaveform_) {
         bool progressed = false;
         if (inferenceActive_) {
@@ -2187,7 +2251,7 @@ void PianoRollComponent::onHeartbeatTick()
                 waveformVisualRefreshPending_ = true;
             } else {
                 waveformVisualRefreshPending_ = false;
-                prepareVisibleContentTiles();
+                prepareCoverageContentTiles();
             repaint();
             }
         }
@@ -2198,7 +2262,7 @@ void PianoRollComponent::onHeartbeatTick()
 
     if (!playingNow && waveformVisualRefreshPending_) {
         waveformVisualRefreshPending_ = false;
-        prepareVisibleContentTiles();
+        prepareCoverageContentTiles();
         repaint();
     }
 
@@ -2217,58 +2281,70 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     if (!isPlaying_.load(std::memory_order_relaxed))
         return;
 
-    // Playing: camera follows transport. hostTime is already absolute timeline
-    // seconds; pass it directly to the policy (no content/timeline projection).
-    // Playhead is fixed at content-area centre (viewport centre - pianoKeyWidth).
     const double playheadTime = readPlayheadTime();
     const int visibleWidth = getTimelineContentViewportWidth();
     if (visibleWidth <= 0)
         return;
 
-    if (scrollMode_ == ScrollMode::Continuous) {
-        commitViewportRequest(makeViewportRequest(
-            TimelineViewportRequest::Kind::Cont,
-            playheadTime,
-            0.0,
-            camera_.pixelsPerSecond), juce::sendNotification);
-        return;
-    }
+    const double pps = camera_.pixelsPerSecond;
+    TimelineViewportRequest::Kind kind = (scrollMode_ == ScrollMode::Continuous)
+        ? TimelineViewportRequest::Kind::Cont
+        : TimelineViewportRequest::Kind::Page;
 
-    if (scrollMode_ == ScrollMode::Page) {
-        commitViewportRequest(makeViewportRequest(
-            TimelineViewportRequest::Kind::Page,
-            playheadTime,
-            0.0,
-            camera_.pixelsPerSecond), juce::sendNotification);
-    }
+    auto req = makeViewportRequest(kind, playheadTime, 0.0, pps);
+    TimelineViewportCamera nextCamera = TimelineViewportPolicy::resolve(req);
+    camera_ = nextCamera;
+    positionTileCanvasForCamera();
+    updatePlayheadVisibility();
 }
 
-void PianoRollComponent::commitViewportRequest(TimelineViewportRequest req, juce::NotificationType notify) {
-    applyResolvedCamera(TimelineViewportPolicy::resolve(req), notify);
-}
-
-void PianoRollComponent::applyResolvedCamera(TimelineViewportCamera next, juce::NotificationType notify) {
-    if (next == camera_) {
-        updatePlayheadVisibility();
-        return;
-    }
-
-    camera_ = next;
-
-    prepareVisiblePatternTiles();
-    prepareVisibleContentTiles();
+void PianoRollComponent::commitViewportRequest(TimelineViewportRequest req)
+{
+    camera_ = TimelineViewportPolicy::resolve(req);
+    rebuildTimelineCoverage();
+    positionTileCanvasForCamera();
     updateScrollBars();
     updatePlayheadVisibility();
-    repaint();
+    tileCanvas_->repaint();
+}
 
-    if (notify == juce::sendNotification) {
-        listeners_.call([this](Listener& l) { l.timelineViewportChanged(camera_); });
-    }
+void PianoRollComponent::activateTimelineCamera(TimelineViewportCamera camera)
+{
+    camera_ = camera;
+    rebuildTimelineCoverage();
+    positionTileCanvasForCamera();
+    updateScrollBars();
+    updatePlayheadVisibility();
+    tileCanvas_->repaint();
+}
+
+void PianoRollComponent::rebuildTimelineCoverage()
+{
+    const int contentViewportWidth = getTimelineContentViewportWidth();
+    const double tileDuration = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / camera_.pixelsPerSecond;
+    const double visibleStart = camera_.visibleStartSeconds;
+    const double visibleEnd = visibleStart + contentViewportWidth / camera_.pixelsPerSecond;
+
+    tileCoverageStartSeconds_ = std::max(0.0, std::floor((visibleStart - tileDuration) / tileDuration) * tileDuration);
+    tileCoverageEndSeconds_ = std::ceil((visibleEnd + tileDuration) / tileDuration) * tileDuration;
+
+    prepareCoveragePatternTiles();
+    prepareCoverageContentTiles();
+}
+
+void PianoRollComponent::positionTileCanvasForCamera()
+{
+    const int contentStartX = pianoKeyWidth_;
+    const int contentViewportHeight = getTimelineContentViewportHeight();
+    const int x = static_cast<int>(std::round((tileCoverageStartSeconds_ - camera_.visibleStartSeconds) * camera_.pixelsPerSecond));
+    const int y = 0;
+    const int w = contentStartX + static_cast<int>(std::round((tileCoverageEndSeconds_ - tileCoverageStartSeconds_) * camera_.pixelsPerSecond));
+    const int h = rulerHeight_ + contentViewportHeight;
+    tileCanvas_->setBounds(x, y, w, h);
 }
 
 void PianoRollComponent::focusActiveContentForRegionSwitch(
-    const std::vector<SilentGap>& silentGaps,
-    juce::NotificationType notify)
+    const std::vector<SilentGap>& silentGaps)
 {
     // Respect user manual interaction
     if (userHasManuallyZoomed_ || userScrollHold_)
@@ -2292,7 +2368,7 @@ void PianoRollComponent::focusActiveContentForRegionSwitch(
         projection.timelineStartSeconds,
         0.0,
         (fitPps > 0.0) ? fitPps : defaultPps);
-    commitViewportRequest(req, notify);
+    commitViewportRequest(req);
 }
 
 void PianoRollComponent::setCurrentTool(ToolId tool) {
@@ -2391,14 +2467,14 @@ void PianoRollComponent::setExperimentalFeaturesEnabled(bool enabled)
 void PianoRollComponent::setShowWaveform(bool shouldShow) {
     if (showWaveform_ == shouldShow) return;
     showWaveform_ = shouldShow;
-    prepareVisibleContentTiles();
+    prepareCoverageContentTiles();
     repaint();
 }
 
 void PianoRollComponent::setShowLanes(bool shouldShow) {
     if (showLanes_ == shouldShow) return;
     showLanes_ = shouldShow;
-    prepareVisiblePatternTiles();
+    prepareCoveragePatternTiles();
     repaint();
 }
 
@@ -2411,13 +2487,13 @@ void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
 void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
     if (showUnvoicedFrames_ == shouldShow) return;
     showUnvoicedFrames_ = shouldShow;
-    prepareVisibleContentTiles();
+    prepareCoverageContentTiles();
     repaint();
 }
 
 void PianoRollComponent::setBpm(double bpm) {
     bpm_ = juce::jlimit(60.0, 240.0, bpm);
-    prepareVisiblePatternTiles();
+    prepareCoveragePatternTiles();
     repaint();
 }
 
@@ -2425,14 +2501,14 @@ void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
     if (numerator <= 0 || denominator <= 0) return;
     timeSigNum_ = numerator;
     timeSigDenom_ = denominator;
-    prepareVisiblePatternTiles();
+    prepareCoveragePatternTiles();
     repaint();
 }
 
 void PianoRollComponent::setTimeUnit(TimeUnit unit) {
     if (timeUnit_ == unit) return;
     timeUnit_ = unit;
-    prepareVisiblePatternTiles();
+    prepareCoveragePatternTiles();
     repaint();
 }
 
@@ -2508,7 +2584,7 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
             newVisibleStart,
             0.0,
             pps);
-        commitViewportRequest(req, juce::dontSendNotification);
+        commitViewportRequest(req);
         float newScrollY = dragStartVerticalScrollOffset_ - (float)deltaY;
         float maxScroll = getTotalHeight() - getHeight();
         verticalScrollOffset_ = juce::jlimit(0.0f, std::max(0.0f, maxScroll), newScrollY);
@@ -2595,7 +2671,7 @@ void PianoRollComponent::handleHorizontalScrollWheel(float deltaX, float deltaY)
         newVisibleStart,
         0.0,
         pps);
-    commitViewportRequest(req, juce::sendNotification);
+    commitViewportRequest(req);
 }
 
 void PianoRollComponent::handleVerticalScrollWheel(float deltaY) {
@@ -2628,7 +2704,7 @@ void PianoRollComponent::handleHorizontalZoomWheel(const juce::MouseEvent& e, fl
         mouseTime,
         static_cast<double>(mouseX),
         newPps);
-    commitViewportRequest(req, juce::sendNotification);
+    commitViewportRequest(req);
 }
 
 void PianoRollComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) {
@@ -2804,8 +2880,8 @@ int PianoRollComponent::getMaxHorizontalScroll() const
 void PianoRollComponent::refreshVerticalViewportGeometry()
 {
     updateScrollBars();
-    prepareVisiblePatternTiles();
-    prepareVisibleContentTiles();
+    prepareCoveragePatternTiles();
+    prepareCoverageContentTiles();
     repaint();
 }
 
@@ -2817,7 +2893,7 @@ void PianoRollComponent::setScale(int rootNote, int scaleType)
         return;
     scaleRootNote_ = clampedRoot;
     scaleType_ = clampedType;
-    prepareVisiblePatternTiles();
+    prepareCoveragePatternTiles();
     repaint();
 }
 
@@ -2862,14 +2938,14 @@ void PianoRollComponent::fitToScreen() {
             hasProjectedClipTimeline ? activeProjection.timelineStartSeconds - duration * 0.1 : 0.0,
             0.0,
             pixelsPerSecond);
-        commitViewportRequest(req, juce::sendNotification);
+        commitViewportRequest(req);
     } else {
         const auto req = makeViewportRequest(
             TimelineViewportRequest::Kind::Manual,
             0.0,
             0.0,
             TimelineViewportCamera::kDefaultPixelsPerSecond);
-        commitViewportRequest(req, juce::sendNotification);
+        commitViewportRequest(req);
     }
 }
 
@@ -3145,7 +3221,7 @@ void PianoRollComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRa
             newVisibleStart,
             0.0,
             pps);
-        commitViewportRequest(req, juce::sendNotification);
+        commitViewportRequest(req);
     } else if (scrollBar == &verticalScrollBar_) {
         verticalScrollOffset_ = static_cast<float>(newRangeStart);
         refreshVerticalViewportGeometry();
@@ -3265,21 +3341,19 @@ void PianoRollComponent::updatePlayheadVisibility()
 
 void PianoRollComponent::handleAsyncUpdate() {}
 
-void PianoRollComponent::prepareVisiblePatternTiles()
+void PianoRollComponent::prepareCoveragePatternTiles()
 {
     preparedPatternTiles_.clear();
-    
+
     const auto viewport = getTimelineViewportBounds();
     const double pps = camera_.pixelsPerSecond;
     const double tileDurationSec = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / pps;
-    const double viewStart = camera_.visibleStartSeconds;
-    const double viewEnd = viewStart + viewport.getWidth() / pps;
-    
-    // Floor to tile boundary
-    double firstTileStart = std::floor(viewStart / tileDurationSec) * tileDurationSec;
+
+    // Coverage-local: prepare tiles over [tileCoverageStartSeconds_, tileCoverageEndSeconds_)
+    double firstTileStart = std::floor(tileCoverageStartSeconds_ / tileDurationSec) * tileDurationSec;
     if (firstTileStart < 0.0) firstTileStart = 0.0;
-    
-    for (double tileStart = firstTileStart; tileStart < viewEnd; tileStart += tileDurationSec)
+
+    for (double tileStart = firstTileStart; tileStart < tileCoverageEndSeconds_; tileStart += tileDurationSec)
     {
         PatternTileKey key;
         key.viewKind = "pianoroll";
@@ -3295,7 +3369,7 @@ void PianoRollComponent::prepareVisiblePatternTiles()
             pixelsPerSemitone_, 0, rulerHeight_,
             verticalScrollOffset_, getTimelineViewportBounds().getHeight());
         key.laneStyle = encodeLaneStyle(showLanes_, scaleRootNote_, scaleType_);
-        
+
         const juce::Image& tile = patternCache_.getPatternTile(key, TimelineLayerComposer::buildPatternTile);
         preparedPatternTiles_.push_back({key, &tile});
     }
@@ -3305,13 +3379,17 @@ uint64_t PianoRollComponent::revisionForContentSlot(ContentSlot slot) const noex
 {
     uint64_t r = editedContentEpoch_.load(std::memory_order_relaxed);
 
+    if (slot == ContentSlot::Notes)
+    {
+        r ^= static_cast<uint64_t>(noteNameMode_);
+    }
+
     if (slot == ContentSlot::Waveform)
     {
         r ^= waveformSourceEpoch_.load(std::memory_order_relaxed);
-        // Mipmap build progress: re-generate tile when incremental build changes pixels
+        // Waveform mipmap completion toggles revision once
         if (const auto* mipmap = waveformMipmapCache_.get(editedContentKey_))
-            r ^= static_cast<uint64_t>(mipmap->isComplete() ? 1 : 0) + static_cast<uint64_t>(
-                std::llround(mipmap->getBuildProgress() * 10000.0)) * 31 + 0x9e3779b9 + (r << 6) + (r >> 2);
+            r ^= static_cast<uint64_t>(mipmap->isComplete() ? 1 : 0) * 31 + 0x9e3779b9 + (r << 6) + (r >> 2);
     }
 
     if (slot == ContentSlot::F0)
@@ -3332,13 +3410,13 @@ std::vector<ContentSlot> PianoRollComponent::visibleContentSlots() const noexcep
 {
     std::vector<ContentSlot> slots;
     if (showWaveform_)  slots.push_back(ContentSlot::Waveform);
-    // Notes 不再是 cache tile，由 live draw 负责
+    slots.push_back(ContentSlot::Notes);
     if (showOriginalF0_ || showCorrectedF0_ || showUnvoicedFrames_) slots.push_back(ContentSlot::F0);
     slots.push_back(ContentSlot::TimeAnchors);
     return slots;
 }
 
-void PianoRollComponent::prepareVisibleContentTiles()
+void PianoRollComponent::prepareCoverageContentTiles()
 {
     preparedContentTiles_.clear();
 
@@ -3349,16 +3427,15 @@ void PianoRollComponent::prepareVisibleContentTiles()
     const auto viewport = getTimelineViewportBounds();
     const double pps = camera_.pixelsPerSecond;
     const double tileDurationSec = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / pps;
-    const double viewStart = camera_.visibleStartSeconds;
-    const double viewEnd = viewStart + viewport.getWidth() / pps;
 
-    double firstTileStart = std::floor(viewStart / tileDurationSec) * tileDurationSec;
+    // Coverage-local: prepare tiles over [tileCoverageStartSeconds_, tileCoverageEndSeconds_)
+    double firstTileStart = std::floor(tileCoverageStartSeconds_ / tileDurationSec) * tileDurationSec;
     if (firstTileStart < 0.0) firstTileStart = 0.0;
 
     const auto slots = visibleContentSlots();
     const int tileContentH = getTimelineContentViewportHeight();
 
-    for (double tileStart = firstTileStart; tileStart < viewEnd; tileStart += tileDurationSec)
+    for (double tileStart = firstTileStart; tileStart < tileCoverageEndSeconds_; tileStart += tileDurationSec)
     {
         for (auto slot : slots)
         {
@@ -3416,7 +3493,7 @@ void PianoRollComponent::prepareVisibleContentTiles()
                     item.projection = projection;
                     item.active = true;
                     item.audioBuffer = audioBuffer_;
-                    item.displayNotes = {};
+                    item.displayNotes = getCommittedNotes();
 
                     if (currentCurve_) {
                         item.pitchSnapshot = currentCurve_->getSnapshot();
@@ -3437,6 +3514,9 @@ void PianoRollComponent::prepareVisibleContentTiles()
 
                     switch (slot)
                     {
+                        case ContentSlot::Notes:
+                            renderer_->drawNotes(g, ctx, item);
+                            break;
                         case ContentSlot::Waveform:
                             if (showWaveform_ && item.waveformSnapshot.peaks.size() > 0)
                                 renderer_->drawWaveform(g, ctx, item);
@@ -3457,59 +3537,7 @@ void PianoRollComponent::prepareVisibleContentTiles()
             preparedContentTiles_.push_back({key, &tile});
         }
     }
-}
 
-void PianoRollComponent::drawPreparedPatternTiles(juce::Graphics& g)
-{
-    RenderParams params;
-    const auto viewport = getTimelineViewportBounds();
-    params.viewportBoundsX = pianoKeyWidth_;
-    params.visibleStartSeconds = camera_.visibleStartSeconds;
-    params.pixelsPerSecond = camera_.pixelsPerSecond;
-    params.viewportWidth = viewport.getWidth();
-    params.viewportHeight = viewport.getHeight();
-
-    for (const auto& pt : preparedPatternTiles_) {
-        if (!pt.image || !pt.image->isValid()) continue;
-        TimelineLayerComposer::drawPatternTile(g, *pt.image, pt.key.startSeconds, params);
-    }
-}
-
-void PianoRollComponent::drawPreparedContentTiles(juce::Graphics& g)
-{
-    RenderParams params;
-    const auto viewport = getTimelineViewportBounds();
-    params.viewportBoundsX = pianoKeyWidth_;
-    params.visibleStartSeconds = camera_.visibleStartSeconds;
-    params.pixelsPerSecond = camera_.pixelsPerSecond;
-    params.viewportWidth = viewport.getWidth();
-    params.viewportHeight = viewport.getHeight();
-    params.contentOffsetY = rulerHeight_;
-
-    for (const auto& pt : preparedContentTiles_) {
-        if (!pt.image || !pt.image->isValid()) continue;
-        TimelineLayerComposer::drawContentTile(g, *pt.image, pt.key.startSeconds, params);
-    }
-}
-
-void PianoRollComponent::drawLiveNotes(juce::Graphics& g)
-{
-    juce::Graphics::ScopedSaveState save(g);
-
-    // Clip and offset to content area (below ruler), matching content tile Y coordinate system
-    auto contentArea = getTimelineViewportBounds();
-    contentArea.setTop(rulerHeight_);
-    g.reduceClipRegion(contentArea);
-    g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
-
-    const auto* placement = findEditedPlacement();
-    if (!placement) return;
-
-    auto item = buildContentRenderItem(*placement);
-    if (item.displayNotes.empty()) return;
-
-    auto ctx = buildRenderContext();
-    renderer_->drawNotes(g, ctx, item);
 }
 
 } // namespace OpenTune

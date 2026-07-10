@@ -101,8 +101,6 @@ public:
         virtual void undoRequested() {}
         virtual void redoRequested() {}
         virtual void currentToolChanged(ToolId tool) { (void)tool; }
-        // Timeline viewport camera上报 - 两个视图共享同一时间窗口
-        virtual void timelineViewportChanged(TimelineViewportCamera camera) { (void)camera; }
     };
 
     enum class TimeUnit
@@ -159,10 +157,11 @@ public:
             updatePlayheadVisibility();
         }
     }
-    void commitViewportRequest(TimelineViewportRequest req, juce::NotificationType notify);
+    void commitViewportRequest(TimelineViewportRequest req);
     int timelinePolicyViewportWidth() const noexcept { return getTimelineContentViewportWidth(); }
-    void focusActiveContentForRegionSwitch(const std::vector<SilentGap>& silentGaps,
-                                           juce::NotificationType notify);
+    void focusActiveContentForRegionSwitch(const std::vector<SilentGap>& silentGaps);
+    TimelineViewportCamera timelineCamera() const noexcept { return camera_; }
+    void activateTimelineCamera(TimelineViewportCamera camera);
     void setCurrentTool(ToolId tool);
     void setExperimentalFeaturesEnabled(bool enabled);
     ToolId getCurrentTool() const { return currentTool_; }
@@ -196,13 +195,13 @@ public:
     void setShowOriginalF0(bool show) {
         if (showOriginalF0_ == show) return;
         showOriginalF0_ = show;
-        prepareVisibleContentTiles();
+        prepareCoverageContentTiles();
         repaint();
     }
     void setShowCorrectedF0(bool show) {
         if (showCorrectedF0_ == show) return;
         showCorrectedF0_ = show;
-        prepareVisibleContentTiles();
+        prepareCoverageContentTiles();
         repaint();
     }
     bool isShowingOriginalF0() const { return showOriginalF0_; }
@@ -289,8 +288,9 @@ public:
 private:
     friend struct PianoRollComponentTestProbe;
     friend class PianoRollPreviewOverlay;
+    friend class TileCanvas;
 
-    void applyResolvedCamera(TimelineViewportCamera next, juce::NotificationType notify);
+    void rebuildTimelineCoverage();
 
     bool enqueueManualCorrectionPatchAsync(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
                                            int dirtyStartFrame,
@@ -347,13 +347,10 @@ private:
     // v12 New: camera-based viewport
     ViewMapper makeViewMapper() const noexcept;
     double computeContentTimelineEndSeconds() const noexcept;
-    void prepareVisiblePatternTiles();
-    void prepareVisibleContentTiles();
+    void prepareCoveragePatternTiles();
+    void prepareCoverageContentTiles();
     uint64_t revisionForContentSlot(ContentSlot slot) const noexcept;
     std::vector<ContentSlot> visibleContentSlots() const noexcept;
-    void drawPreparedPatternTiles(juce::Graphics& g);
-    void drawPreparedContentTiles(juce::Graphics& g);
-    void drawLiveNotes(juce::Graphics& g);
     void handleAsyncUpdate() override;
 
     void drawNoteDragCurvePreview(juce::Graphics& g);
@@ -445,8 +442,21 @@ private:
 
     void refreshVerticalViewportGeometry();
 
+    void positionTileCanvasForCamera();
+
+    class TileCanvas : public juce::Component
+    {
+    public:
+        explicit TileCanvas(PianoRollComponent& owner);
+        void paint(juce::Graphics& g) override;
+    private:
+        PianoRollComponent& owner_;
+    };
+
     std::shared_ptr<PitchCurve> currentCurve_;
     TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
+    double tileCoverageStartSeconds_ = 0.0;
+    double tileCoverageEndSeconds_ = 0.0;
     float verticalScrollOffset_ = 0.0f;
     ScrollMode scrollMode_ = ScrollMode::Continuous;
     std::atomic<bool> isPlaying_{false};
@@ -581,6 +591,7 @@ private:
     int pressedPianoKey_ = -1;
     
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
+    std::unique_ptr<TileCanvas> tileCanvas_;
     std::weak_ptr<std::atomic<double>> positionSource_;
 
     juce::ListenerList<Listener> listeners_;

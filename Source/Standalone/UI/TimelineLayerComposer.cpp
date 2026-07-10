@@ -194,7 +194,8 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
     int rulerHeight = (params.viewKind == "arrangement")
         ? decodeArrangementRulerHeight(params.verticalGeometry)
         : decodeRulerHeight(params.verticalGeometry);
-    const int w = params.viewportWidth;
+    const juce::Rectangle<int> rulerPaintBounds { 0, 0, params.viewportWidth, rulerHeight };
+
     const auto themeId = static_cast<ThemeId>(params.themeId);
     const auto rulerStyle = resolveRulerStyle(themeId);
     const double pps = params.pixelsPerSecond;
@@ -205,7 +206,8 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
     // Bottom separator line — Arrangement 的 separator 由组件层绘制
     if (params.viewKind != "arrangement") {
         g.setColour(rulerStyle.separatorColour);
-        g.drawLine(0.0f, static_cast<float>(rulerBottom), static_cast<float>(w), static_cast<float>(rulerBottom),
+        g.drawLine(0.0f, static_cast<float>(rulerBottom),
+                   static_cast<float>(rulerPaintBounds.getWidth()), static_cast<float>(rulerBottom),
                    rulerStyle.tickStroke);
     }
 

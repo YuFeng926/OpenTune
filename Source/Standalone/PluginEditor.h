@@ -38,7 +38,6 @@
 #include "Utils/LocalizationManager.h"
 #include "Utils/ScaleUiMapping.h"
 #include "Audio/AsyncAudioLoader.h"
-#include "UI/TimelineViewportCamera.h"
 
 namespace OpenTune {
 
@@ -142,7 +141,6 @@ public:
     void referenceButtonClicked(int trackId, uint64_t placementId, juce::Rectangle<int> buttonScreenArea) override;
 
     void scrollModeChanged(bool isContinuous) override;
-    void timelineViewportChanged(TimelineViewportCamera camera) override;
     // trackHeightChanged已在TrackPanelComponent::Listener中声明
 
     // PianoRollComponent::Listener
@@ -217,10 +215,6 @@ private:
     double computeTrackAppendStartSeconds(int trackId) const;
     void releaseImportBatchSlot(int batchId);
 
-    // Timeline viewport camera — 唯一共享时间轴视口状态
-    void applyTimelineViewportToViews();
-    TimelineViewportCamera timelineViewportCamera_;
-    
     OpenTuneAudioProcessor& processorRef_;
     AppPreferences appPreferences_;
     std::shared_ptr<LocalizationManager::LanguageState> languageState_;

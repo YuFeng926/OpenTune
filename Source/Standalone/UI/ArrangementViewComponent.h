@@ -96,9 +96,6 @@ public:
         virtual void trackHeightChanged(int newHeight) { juce::ignoreUnused(newHeight); }
         // Y轴滚动回调 - 通知外部垂直滚动偏移变化（用于同步TrackPanel）
         virtual void verticalScrollChanged(int newOffset) { juce::ignoreUnused(newOffset); }
-        // Timeline viewport camera上报 - 两个视图共享同一时间窗口
-        virtual void timelineViewportChanged(TimelineViewportCamera camera) { juce::ignoreUnused(camera); }
-
         virtual void scrollModeChanged(bool isContinuous) { juce::ignoreUnused(isContinuous); }
     };
 
@@ -106,6 +103,7 @@ public:
     ~ArrangementViewComponent() override;
 
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
     void timerCallback() override;
     void onHeartbeatTick();
@@ -136,7 +134,9 @@ public:
     void setPlayheadPositionSource(std::weak_ptr<std::atomic<double>> source) {
         positionSource_ = source;
     }
-    void commitViewportRequest(TimelineViewportRequest req, juce::NotificationType notify);
+    void commitViewportRequest(TimelineViewportRequest req);
+    TimelineViewportCamera timelineCamera() const noexcept { return camera_; }
+    void activateTimelineCamera(TimelineViewportCamera camera);
     int timelinePolicyViewportWidth() const noexcept { return getVisibleViewportWidth(); }
     void setVerticalScrollOffset(int offset);
     void setVisibleTrackCount(int count);
@@ -170,9 +170,20 @@ public:
 #endif
 
 private:
+    friend class TileCanvas;
+
+    class TileCanvas : public juce::Component
+    {
+    public:
+        explicit TileCanvas(ArrangementViewComponent& owner);
+        void paint(juce::Graphics& g) override;
+    private:
+        ArrangementViewComponent& owner_;
+    };
+
     enum class DragOperation { None, Move, Gain, TrimLeft, TrimRight, FadeIn, FadeOut };
 
-    void applyResolvedCamera(TimelineViewportCamera next, juce::NotificationType notify);
+
 
     // Camera-derived state
     ViewMapper makeViewMapper() const noexcept;
@@ -212,8 +223,7 @@ private:
         double targetTime,
         double anchorViewportX,
         double pps) const;
-    void updateAutoScroll();
-    void performPageScroll(double playheadTime);
+
     void onScrollVBlankCallback(double timestampSec);
     double readPlayheadSeconds() const;
 
@@ -221,11 +231,9 @@ public:
     void syncFixedPlayhead();
 
 private:
-
-private:
     void updateScrollBars();
     void requestVisualRefresh();
-    void refreshVisualState();
+    void rebuildTimelineCoverage();
     void updateMoveDragOverlay(const juce::MouseEvent& e);
     void clearMoveDragOverlay();
     void drawTransientOverlay(juce::Graphics& g);
@@ -239,6 +247,8 @@ private:
 
     // ---- Timeline rendering pipeline ----
     TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
+    double tileCoverageStartSeconds_ = 0.0;
+    double tileCoverageEndSeconds_ = 0.0;
     WaveformMipmapCache waveformMipmapCache_;
 
     // New: Pattern and content tile caches for infinite timeline
@@ -280,7 +290,7 @@ private:
         const juce::Image* image = nullptr;
     };
     std::vector<PreparedPatternTile> preparedPatternTiles_;
-    void prepareVisiblePatternTiles();
+    void prepareCoveragePatternTiles();
 
     // Pre-built content tiles for paint consumption (P0-1)
     struct PreparedContentTile {
@@ -288,8 +298,8 @@ private:
         const juce::Image* image = nullptr;
     };
     std::vector<PreparedContentTile> preparedContentTiles_;
-    void prepareVisibleContentTiles();
-    uint64_t waveformBuildGeneration_ = 0;  // tracks mipmap build progress for revision
+    void prepareCoverageContentTiles();
+    // Waveform visual refresh is deferred during playback via waveformVisualRefreshPending_
 
     // Smooth scrolling
     // 用户是否手动调整过缩放（用于避免自动缩放覆盖用户设置）
@@ -383,6 +393,9 @@ private:
 
     // 滚动跟随独立 VBlank 附件（仅负责滚动，不影响 Overlay 的 VBlank）
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
+
+    std::unique_ptr<TileCanvas> tileCanvas_;
+    void positionTileCanvasForCamera();
 
     // 播放头位置源（来自 Processor 的原子位置）
     std::weak_ptr<std::atomic<double>> positionSource_;
