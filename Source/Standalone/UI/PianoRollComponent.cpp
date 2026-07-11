@@ -1444,8 +1444,8 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         const int64_t lastTile = static_cast<int64_t>(std::floor((visibleStart + viewport.getWidth() / pps) / tileDuration));
         for (int64_t t = firstTile; t <= lastTile; ++t) {
             if (const auto* img = compositeCache_.findTile(t)) {
-                const int blitX = viewport.getX() + static_cast<int>(std::round(t * tileDuration * pps - visibleStart * pps));
-                g.drawImageAt(*img, blitX, viewport.getY());
+                const int blitX = viewport.getX() + pianoKeyWidth_ + static_cast<int>(std::round((t * tileDuration - visibleStart) * pps));
+                g.drawImageAt(*img, blitX, 0);
             }
         }
 
@@ -3339,7 +3339,32 @@ void PianoRollComponent::buildCompositeTile(
     const double tileStartSec = absoluteTile * tileDuration;
     const double tileEndSec = tileStartSec + tileDuration;
 
-    // 1. Pattern layer: grid + lanes (from e7c6f65 stable implementation)
+    // Encode vertical geometry for ruler + lane rendering
+    const int contentHeight = tileBounds.getHeight() - rulerHeight_;
+    const uint64_t verticalGeometry = encodePianoRollVerticalGeometry(
+        pixelsPerSemitone_, 0, rulerHeight_,
+        verticalScrollOffset_, contentHeight);
+
+    // 0. Ruler layer (Y: 0..rulerHeight_)
+    RenderParams rulerParams;
+    rulerParams.visibleStartSeconds = tileStartSec;
+    rulerParams.visibleEndSeconds = tileEndSec;
+    rulerParams.pixelsPerSecond = ppsCanonical;
+    rulerParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
+    rulerParams.tempo = static_cast<int>(bpm_);
+    rulerParams.timeSigNumerator = timeSigNum_;
+    rulerParams.timeSigDenominator = timeSigDenom_;
+    rulerParams.themeId = static_cast<int>(UIColors::currentThemeId());
+    rulerParams.verticalGeometry = verticalGeometry;
+    rulerParams.laneStyle = 0;
+    rulerParams.viewportWidth = tileBounds.getWidth();
+    rulerParams.viewportHeight = tileBounds.getHeight();
+    rulerParams.viewportBoundsX = 0;
+    rulerParams.contentOffsetY = 0;
+    rulerParams.viewKind = "pianoroll";
+    TimelineLayerComposer::drawTimeRuler(g, rulerParams);
+
+    // 1. Pattern layer: grid + lanes (translated below ruler so lanes align with notes)
     RenderParams patternParams;
     patternParams.visibleStartSeconds = tileStartSec;
     patternParams.visibleEndSeconds = tileEndSec;
@@ -3349,6 +3374,7 @@ void PianoRollComponent::buildCompositeTile(
     patternParams.timeSigNumerator = timeSigNum_;
     patternParams.timeSigDenominator = timeSigDenom_;
     patternParams.themeId = static_cast<int>(UIColors::currentThemeId());
+    patternParams.verticalGeometry = verticalGeometry;
     patternParams.laneStyle = encodeLaneStyle(showLanes_, scaleRootNote_, scaleType_);
     patternParams.viewportWidth = tileBounds.getWidth();
     patternParams.viewportHeight = tileBounds.getHeight();
@@ -3356,9 +3382,13 @@ void PianoRollComponent::buildCompositeTile(
     patternParams.contentOffsetY = 0;
     patternParams.viewKind = "pianoroll";
 
-    if (showLanes_)
-        TimelineLayerComposer::drawLaneStripRepeats(g, patternParams);
-    TimelineLayerComposer::drawGridLines(g, patternParams);
+    {
+        juce::Graphics::ScopedSaveState patternSave(g);
+        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
+        if (showLanes_)
+            TimelineLayerComposer::drawLaneStripRepeats(g, patternParams);
+        TimelineLayerComposer::drawGridLines(g, patternParams);
+    }
 
     // 2. Content layer: notes/waveform/f0/anchors (from e7c6f65 stable implementation)
     const auto projection = activeContentProjection();
@@ -3369,7 +3399,7 @@ void PianoRollComponent::buildCompositeTile(
     ctx.width = tileBounds.getWidth();
     ctx.height = tileBounds.getHeight();
     ctx.pianoKeyWidth = 0;
-    ctx.rulerHeight = 0;
+    ctx.rulerHeight = rulerHeight_;
     ctx.pixelsPerSecond = ppsCanonical;
     ctx.pixelsPerSemitone = pixelsPerSemitone_;
     ctx.minMidi = minMidi_;
@@ -3392,7 +3422,7 @@ void PianoRollComponent::buildCompositeTile(
     tileCoords.contentHeight = tileBounds.getHeight();
     tileCoords.pixelsPerSemitone = pixelsPerSemitone_;
     tileCoords.maxMidi = maxMidi_;
-    tileCoords.verticalScrollOffset = verticalScrollOffset_;
+    tileCoords.verticalScrollOffset = verticalScrollOffset_ - rulerHeight_;
     ctx.coords = tileCoords;
 
     std::shared_ptr<const TimeGridSnapshot> timeAnchorsSnapshot;
@@ -3447,7 +3477,7 @@ void PianoRollComponent::prepareCoverageCompositeTilesNew()
         std::floor((tileCoverageEndSeconds_ - 1e-9) / tileDuration));
 
     const auto viewport = getTimelineViewportBounds();
-    const int tileHeight = viewport.getHeight();
+    const int tileHeight = rulerHeight_ + viewport.getHeight();
 
     compositeCache_.prepare(sig, firstTile, lastTile, tileHeight,
         [this, ppsCanonical, tileDuration](juce::Graphics& g, juce::Rectangle<int> bounds, int64_t tile) {

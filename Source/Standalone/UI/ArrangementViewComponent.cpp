@@ -546,6 +546,13 @@ void ArrangementViewComponent::rebuildTimelineCoverage()
     prepareCoverageCompositeTilesNew();
 }
 
+void ArrangementViewComponent::invalidateStableScene()
+{
+    ++stableVisualSceneEpoch_;
+    rebuildTimelineCoverage();
+    repaint();
+}
+
 TimelineViewportRequest ArrangementViewComponent::makeViewportRequest(
     TimelineViewportRequest::Kind kind,
     double targetTime,
@@ -814,14 +821,36 @@ void ArrangementViewComponent::buildCompositeTile(
     const double tileStartSec = absoluteTile * tileDuration;
     const double tileEndSec = tileStartSec + tileDuration;
 
-    // 1. Pattern layer: track lanes (from e7c6f65 stable implementation)
+    // Encode vertical geometry for ruler rendering (contentHeight: bits 0-15, rulerHeight: bits 16-23)
+    const int contentHeight = tileBounds.getHeight() - rulerHeight_;
+    const uint64_t verticalGeometry = encodeArrangementVerticalGeometry(contentHeight, rulerHeight_);
+
+    // 0. Ruler layer (Y: 0..rulerHeight_)
     const auto themeId = UIColors::currentThemeId();
+    RenderParams rulerParams;
+    rulerParams.visibleStartSeconds = tileStartSec;
+    rulerParams.visibleEndSeconds = tileEndSec;
+    rulerParams.pixelsPerSecond = ppsCanonical;
+    rulerParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
+    rulerParams.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
+    rulerParams.timeSigNumerator = lastContextTimeSigNum_ > 0 ? lastContextTimeSigNum_ : 4;
+    rulerParams.timeSigDenominator = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
+    rulerParams.themeId = static_cast<int>(themeId);
+    rulerParams.verticalGeometry = verticalGeometry;
+    rulerParams.viewportWidth = tileBounds.getWidth();
+    rulerParams.viewportHeight = tileBounds.getHeight();
+    rulerParams.viewportBoundsX = 0;
+    rulerParams.contentOffsetY = 0;
+    rulerParams.viewKind = "arrangement";
+    TimelineLayerComposer::drawTimeRuler(g, rulerParams);
+
+    // 1. Pattern layer: track lanes (from e7c6f65 stable implementation)
     if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
         const int trackHeight = processor_.getTrackHeight();
         const int visibleTracks = juce::jmax(1, visibleTrackCount_);
         for (int trackId = 0; trackId < visibleTracks; ++trackId) {
             auto lane = juce::Rectangle<float>(0.0f,
-                                               static_cast<float>(trackId * trackHeight - verticalScrollOffset_),
+                                               static_cast<float>(rulerHeight_ + trackId * trackHeight - verticalScrollOffset_),
                                                static_cast<float>(tileBounds.getWidth()),
                                                static_cast<float>(trackHeight));
             if (lane.getBottom() < 0.0f || lane.getY() > tileBounds.getBottom())
@@ -866,9 +895,7 @@ void ArrangementViewComponent::buildCompositeTile(
         vwin,
         ppsCanonical,
         tileBounds.getWidth(),
-        [this](int trackId, uint64_t placementId) {
-            return isPlacementSelected(trackId, placementId);
-        });
+        [](int, uint64_t) { return false; });
 
     paintHistoricalArrangementClips(g, clips, waveformMipmapCache_);
 }
@@ -885,7 +912,7 @@ void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
         std::floor((tileCoverageEndSeconds_ - 1e-9) / tileDuration));
 
     const auto viewport = getContentViewportBounds();
-    const int tileHeight = viewport.getHeight();
+    const int tileHeight = rulerHeight_ + viewport.getHeight();
 
     compositeCache_.prepare(sig, firstTile, lastTile, tileHeight,
         [this, ppsCanonical, tileDuration](juce::Graphics& g, juce::Rectangle<int> bounds, int64_t tile) {
@@ -1382,8 +1409,8 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         const int64_t lastTile = static_cast<int64_t>(std::floor((visibleStart + viewport.getWidth() / pps) / tileDuration));
         for (int64_t t = firstTile; t <= lastTile; ++t) {
             if (const auto* img = compositeCache_.findTile(t)) {
-                const int blitX = viewport.getX() + static_cast<int>(std::round(t * tileDuration * pps - visibleStart * pps));
-                g.drawImageAt(*img, blitX, viewport.getY());
+                const int blitX = viewport.getX() + static_cast<int>(std::round((t * tileDuration - visibleStart) * pps));
+                g.drawImageAt(*img, blitX, 0);
             }
         }
 

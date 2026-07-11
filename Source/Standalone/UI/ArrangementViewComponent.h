@@ -217,6 +217,7 @@ private:
     void updateScrollBars();
     void requestVisualRefresh();
     void rebuildTimelineCoverage();
+    void invalidateStableScene();
     void updateMoveDragOverlay(const juce::MouseEvent& e);
     void clearMoveDragOverlay();
     void drawPlayhead(juce::Graphics& g);
