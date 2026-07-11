@@ -55,7 +55,7 @@ TimelineViewportCamera TimelineViewportPolicy::resolve(const TimelineViewportReq
     const int vw = request.viewportWidth;
 
     TimelineViewportCamera camera;
-    camera.pixelsPerSecond = pps;
+    camera.pixelsPerSecond = std::round(pps * 1000.0) / 1000.0;
 
     switch (request.kind)
     {
