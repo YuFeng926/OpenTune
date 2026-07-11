@@ -37,7 +37,6 @@
 #include <atomic>
 #include <array>
     #include "SmallButton.h"
-    #include "FixedPlayheadComponent.h"
     #include "PianoRoll/PianoRollRenderer.h"
 
 #include "PianoRoll/PianoRollToolHandler.h"
@@ -59,26 +58,8 @@ class PianoKeyAudition;
 struct PianoRollComponentTestProbe;
 
 // ============================================================================
-// Preview Overlay — lightweight child that draws transient interaction previews
-// (note-draw rectangle, hand-draw F0, line-anchor, selection box) without
-// triggering the expensive main render-model rebuild.
+// PianoRollComponent — piano roll editor with tile-cached rendering.
 // ============================================================================
-class PianoRollPreviewOverlay : public juce::Component
-{
-public:
-    explicit PianoRollPreviewOverlay(class PianoRollComponent& owner)
-        : owner_(owner)
-    {
-        setOpaque(false);
-        setInterceptsMouseClicks(false, false);
-    }
-
-    void paint(juce::Graphics& g) override;
-
-private:
-    PianoRollComponent& owner_;
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PianoRollPreviewOverlay)
-};
 
 class PianoRollComponent : public juce::Component,
                            public juce::ScrollBar::Listener,
@@ -241,7 +222,6 @@ public:
 
     void setPlayheadColour(juce::Colour colour) {
         playheadColour_ = colour;
-        fixedPlayhead_.setColour(colour);
     }
 
     void setPlayheadPositionSource(std::weak_ptr<std::atomic<double>> source) {
@@ -287,8 +267,6 @@ public:
 
 private:
     friend struct PianoRollComponentTestProbe;
-    friend class PianoRollPreviewOverlay;
-    friend class TileCanvas;
 
     void rebuildTimelineCoverage();
 
@@ -317,8 +295,6 @@ private:
     juce::ScrollBar verticalScrollBar_{ true };
     SmallButton scrollModeToggleButton_;
     SmallButton timeUnitToggleButton_;
-    FixedPlayheadComponent fixedPlayhead_;
-    PianoRollPreviewOverlay previewOverlay_{*this};
 
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseMove(const juce::MouseEvent& e) override;
@@ -365,6 +341,9 @@ private:
     void handleHorizontalScrollWheel(float deltaX, float deltaY);
     void handleVerticalScrollWheel(float deltaY);
     void handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY);
+
+    void drawTransientOverlay(juce::Graphics& g);
+    void drawFixedChrome(juce::Graphics& g);
 
     TimelineViewportRequest makeViewportRequest(
         TimelineViewportRequest::Kind kind,
@@ -442,18 +421,7 @@ private:
 
     void refreshVerticalViewportGeometry();
 
-    void positionTileCanvasForCamera();
-
-    class TileCanvas : public juce::Component
-    {
-    public:
-        explicit TileCanvas(PianoRollComponent& owner);
-        void paint(juce::Graphics& g) override;
-    private:
-        PianoRollComponent& owner_;
-    };
-
-    std::shared_ptr<PitchCurve> currentCurve_;
+private:
     TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
     double tileCoverageStartSeconds_ = 0.0;
     double tileCoverageEndSeconds_ = 0.0;
@@ -559,6 +527,8 @@ private:
 
     std::vector<Note> getEditedContentNotesCopy() const;
 
+    std::shared_ptr<PitchCurve> currentCurve_;
+    
     std::unique_ptr<PianoRollRenderer> renderer_;
     std::unique_ptr<PianoRollToolHandler> toolHandler_;
     std::unique_ptr<PianoRollCorrectionWorker> correctionWorker_;
@@ -591,7 +561,6 @@ private:
     int pressedPianoKey_ = -1;
     
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
-    std::unique_ptr<TileCanvas> tileCanvas_;
     std::weak_ptr<std::atomic<double>> positionSource_;
 
     juce::ListenerList<Listener> listeners_;
