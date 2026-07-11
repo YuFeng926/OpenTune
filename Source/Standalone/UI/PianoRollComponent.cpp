@@ -3339,11 +3339,100 @@ void PianoRollComponent::buildCompositeTile(
     const double tileStartSec = absoluteTile * tileDuration;
     const double tileEndSec = tileStartSec + tileDuration;
 
-    // 暂时只画背景（完整实现留给后续任务）
-    g.fillAll(UIColors::pianoRollBackground);
+    // 1. Pattern layer: grid + lanes (from e7c6f65 stable implementation)
+    RenderParams patternParams;
+    patternParams.visibleStartSeconds = tileStartSec;
+    patternParams.visibleEndSeconds = tileEndSec;
+    patternParams.pixelsPerSecond = ppsCanonical;
+    patternParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
+    patternParams.tempo = static_cast<int>(bpm_);
+    patternParams.timeSigNumerator = timeSigNum_;
+    patternParams.timeSigDenominator = timeSigDenom_;
+    patternParams.themeId = static_cast<int>(UIColors::currentThemeId());
+    patternParams.laneStyle = encodeLaneStyle(showLanes_, scaleRootNote_, scaleType_);
+    patternParams.viewportWidth = tileBounds.getWidth();
+    patternParams.viewportHeight = tileBounds.getHeight();
+    patternParams.viewportBoundsX = 0;
+    patternParams.contentOffsetY = 0;
+    patternParams.viewKind = "pianoroll";
 
-    // TODO: 调用 PianoRollRenderer 绘制 pattern + content
-    // 这需要构建 RenderContext，留给后续完善
+    if (showLanes_)
+        TimelineLayerComposer::drawLaneStripRepeats(g, patternParams);
+    TimelineLayerComposer::drawGridLines(g, patternParams);
+
+    // 2. Content layer: notes/waveform/f0/anchors (from e7c6f65 stable implementation)
+    const auto projection = activeContentProjection();
+    if (!projection.isValid())
+        return;
+
+    PianoRollRenderer::RenderContext ctx;
+    ctx.width = tileBounds.getWidth();
+    ctx.height = tileBounds.getHeight();
+    ctx.pianoKeyWidth = 0;
+    ctx.rulerHeight = 0;
+    ctx.pixelsPerSecond = ppsCanonical;
+    ctx.pixelsPerSemitone = pixelsPerSemitone_;
+    ctx.minMidi = minMidi_;
+    ctx.maxMidi = maxMidi_;
+    ctx.bpm = bpm_;
+    ctx.scaleRootNote = scaleRootNote_;
+    ctx.scaleType = scaleType_;
+    ctx.showLanes = false;
+    ctx.showUnvoicedFrames = showUnvoicedFrames_;
+    ctx.showOriginalF0 = showOriginalF0_;
+    ctx.showCorrectedF0 = showCorrectedF0_;
+    ctx.timeUnit = (timeUnit_ == TimeUnit::Bars) ? PianoRollTimeUnit::Bars : PianoRollTimeUnit::Seconds;
+    ctx.activeProjection = projection;
+
+    ViewMapper tileCoords;
+    tileCoords.visibleStartSeconds = tileStartSec;
+    tileCoords.pixelsPerSecond = ppsCanonical;
+    tileCoords.contentStartX = 0;
+    tileCoords.contentWidth = tileBounds.getWidth();
+    tileCoords.contentHeight = tileBounds.getHeight();
+    tileCoords.pixelsPerSemitone = pixelsPerSemitone_;
+    tileCoords.maxMidi = maxMidi_;
+    tileCoords.verticalScrollOffset = verticalScrollOffset_;
+    ctx.coords = tileCoords;
+
+    std::shared_ptr<const TimeGridSnapshot> timeAnchorsSnapshot;
+    if (auto snap = readEditedSnapshot())
+        timeAnchorsSnapshot = snap->timeGrid;
+    ctx.timeGridSnapshot = timeAnchorsSnapshot;
+
+    PianoRollRenderer::ContentRenderItem item;
+    item.contentKey = editedContentKey_;
+    item.projection = projection;
+    item.active = true;
+    item.audioBuffer = audioBuffer_;
+    item.displayNotes = getCommittedNotes();
+
+    if (currentCurve_) {
+        item.pitchSnapshot = currentCurve_->getSnapshot();
+        if (item.pitchSnapshot && item.pitchSnapshot->size() > 0) {
+            item.f0Timeline = { item.pitchSnapshot->getHopSize(),
+                                   item.pitchSnapshot->getSampleRate(),
+                                   static_cast<int>(item.pitchSnapshot->size()) };
+        }
+    }
+
+    if (audioBuffer_) {
+        const auto* mipmap = waveformMipmapCache_.get(editedContentKey_);
+        if (mipmap && mipmap->hasSource()) {
+            int bestLevel = mipmap->selectBestLevelIndex(ppsCanonical);
+            item.waveformSnapshot = mipmap->snapshotLevel(bestLevel);
+        }
+    }
+
+    // Draw content layers
+    renderer_->drawTimeGridAnchors(g, ctx);
+    renderer_->drawNotes(g, ctx, item);
+    if (showWaveform_ && item.waveformSnapshot.peaks.size() > 0)
+        renderer_->drawWaveform(g, ctx, item);
+    if (showUnvoicedFrames_)
+        renderer_->drawUnvoicedFrameBands(g, ctx, item);
+    if (showOriginalF0_ || showCorrectedF0_)
+        renderer_->drawF0Curve(g, ctx, item);
 }
 
 void PianoRollComponent::prepareCoverageCompositeTilesNew()
