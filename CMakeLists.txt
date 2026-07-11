@@ -586,17 +586,14 @@ target_sources(OpenTune
         Source/Standalone/UI/TrackPanelComponent.h
         Source/Standalone/UI/ArrangementViewComponent.cpp
         Source/Standalone/UI/ArrangementViewComponent.h
+        Source/Standalone/UI/TimelineCompositeCache.cpp
+        Source/Standalone/UI/TimelineCompositeCache.h
 
-        Source/Standalone/UI/TimelineRenderingDiagnostics.cpp
-        Source/Standalone/UI/TimelineRenderingDiagnostics.h
         Source/Standalone/UI/TimelineViewportCamera.h
         Source/Standalone/UI/TimelineViewportPolicy.cpp
         Source/Standalone/UI/TimelineViewportPolicy.h
-        Source/Standalone/UI/TimelinePatternCache.cpp
-        Source/Standalone/UI/TimelinePatternCache.h
         Source/Standalone/UI/TimelineLayerComposer.cpp
-        Source/Standalone/UI/FixedPlayheadComponent.cpp
-        Source/Standalone/UI/FixedPlayheadComponent.h
+        Source/Standalone/UI/TimelineLayerComposer.h
         Source/Standalone/UI/WaveformMipmap.cpp
         Source/Standalone/UI/WaveformMipmap.h
         Source/Standalone/UI/RippleOverlayComponent.h
@@ -671,10 +668,6 @@ target_sources(OpenTune
         Source/Content/StandaloneContentRepository.cpp
         Source/Content/CaptureSegmentContent.h
         Source/Content/CaptureSegmentContent.cpp
-
-        # Timeline Content Cache
-        Source/TimelineContentCache.cpp
-        Source/TimelineContentCache.h
 
         # Render Layer
         Source/Render/PlaybackReadSource.h

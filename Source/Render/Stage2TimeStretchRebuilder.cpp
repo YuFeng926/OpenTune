@@ -15,14 +15,14 @@
 namespace OpenTune {
 
 /**
- * Pure Stage2 rebuild â€” extracted from OpenTuneAudioProcessor::runStage2RebuildForContentKey.
+ * Pure Stage2 rebuild â€?extracted from OpenTuneAudioProcessor::runStage2RebuildForContentKey.
  * The original implementation was a private method on the processor; this helper takes its
  * dependencies (CRS, owner snapshot) explicitly as parameters so the same algorithm can be
  * invoked from any domain owner (processor non-ARA path or ARA2 document controller).
  *
  * Behavior must be byte-identical to the original:
  *   - guard: invalid key, no snapshot, no source, empty audio, stale revisions
- *   - identity time-grid â†’ invalidate cache, return true
+ *   - identity time-grid â†?invalidate cache, return true
  *   - otherwise: SoundTouch WSOLA time-stretch, write into CRS TimeStretchCache
  *     using snapshot revisions as the cache identity tuple.
  */
@@ -108,7 +108,7 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
         const int n = std::min(kBlock, totalSamples - offset);
         readBuf.clear(0, 0, n);
 
-        PlaybackReadRequest req(stage1Source,
+        ::OpenTune::PlaybackReadRequest req(stage1Source,
                                 static_cast<double>(offset) / sampleRate,
                                 sampleRate,
                                 n);

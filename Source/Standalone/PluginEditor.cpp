@@ -7,7 +7,6 @@
 
 #include "UI/UIColors.h"
 #include "UI/UiAssets.h"
-#include "UI/FrameScheduler.h"
 #include "Editor/Preferences/SharedPreferencePages.h"
 #include "Editor/Preferences/StandalonePreferencePages.h"
 #include "Editor/Preferences/TabbedPreferencesDialog.h"
@@ -1177,7 +1176,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         transportBar_.setPlaying(processorRef_.isPlaying());
         pianoRoll_.setIsPlaying(processorRef_.isPlaying());
         arrangementView_.setIsPlaying(processorRef_.isPlaying());
-        FrameScheduler::instance().setTimelinePlaybackActive(processorRef_.isPlaying());
     }
 
     if (allowSecondaryRefresh) {
@@ -1706,8 +1704,6 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
 
                     safeThis->arrangementView_.resetUserZoomFlag();
                     safeThis->pianoRoll_.resetUserZoomFlag();
-
-                    FrameScheduler::instance().requestInvalidate(safeThis->arrangementView_, FrameScheduler::Priority::Interactive);
 
                     safeThis->processNextImportInQueue();
                 });
@@ -2309,7 +2305,7 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
     sendLookAndFeelChange();
     repaint();
 
-    // rebuildContentCache() 已删除 - 使用 TimelineContentCache 按需生成
+    // rebuildContentCache() 已删除 - 现使用 TimelineCompositeCache 按需生成
     repaint();
 }
 
@@ -2375,7 +2371,6 @@ void OpenTuneAudioProcessorEditor::playRequested()
     transportBar_.setPlaying(true);
     pianoRoll_.setIsPlaying(true);  // Notify PianoRoll for auto-scroll
     arrangementView_.setIsPlaying(true);  // Notify ArrangementView for overlay sync
-    FrameScheduler::instance().setTimelinePlaybackActive(true);
 }
 
 void OpenTuneAudioProcessorEditor::pauseRequested()
@@ -2385,7 +2380,6 @@ void OpenTuneAudioProcessorEditor::pauseRequested()
     transportBar_.setPlaying(false);
     pianoRoll_.setIsPlaying(false);  // Notify PianoRoll to stop auto-scroll
     arrangementView_.setIsPlaying(false);  // Notify ArrangementView to stop overlay updates
-    FrameScheduler::instance().setTimelinePlaybackActive(false);
 }
 
 void OpenTuneAudioProcessorEditor::stopRequested()
@@ -2396,7 +2390,6 @@ void OpenTuneAudioProcessorEditor::stopRequested()
     transportBar_.setPlaying(false);
     pianoRoll_.setIsPlaying(false);  // Notify PianoRoll to stop auto-scroll
     arrangementView_.setIsPlaying(false);  // Notify ArrangementView to stop overlay updates
-    FrameScheduler::instance().setTimelinePlaybackActive(false);
 }
 
 void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
@@ -2464,7 +2457,6 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
     // Explicitly grab focus for the active view to ensure keyboard shortcuts work immediately
     if (isWorkspaceView_) {
         arrangementView_.grabKeyboardFocus();
-        arrangementView_.syncFixedPlayhead();
     } else {
         pianoRoll_.grabKeyboardFocus();
     }
@@ -2772,7 +2764,6 @@ void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
         transportBar_.setPlaying(false);
         pianoRoll_.setIsPlaying(false);
         arrangementView_.setIsPlaying(false);
-        FrameScheduler::instance().setTimelinePlaybackActive(false);
     } else {
         double startPos = processorRef_.getPlayStartPosition();
         processorRef_.setPosition(startPos);
@@ -2781,7 +2772,6 @@ void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
         transportBar_.setPlaying(true);
         pianoRoll_.setIsPlaying(true);
         arrangementView_.setIsPlaying(true);
-        FrameScheduler::instance().setTimelinePlaybackActive(true);
     }
 }
 

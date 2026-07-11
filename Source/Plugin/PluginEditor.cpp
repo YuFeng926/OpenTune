@@ -1,26 +1,11 @@
-#if JucePlugin_Build_VST3
-
 #include "PluginEditor.h"
 
 #include <algorithm>
 #include <cmath>
 
 #include "Editor/Preferences/SharedPreferencePages.h"
-#include "Editor/Preferences/StandalonePreferencePages.h"
-#include "Editor/Preferences/TabbedPreferencesDialog.h"
-#include "Plugin/Capture/CaptureSession.h"
-#include "Utils/AppLogger.h"
-#include "Utils/KeyShortcutConfig.h"
-#include "Utils/ParameterPanelSync.h"
-#include "Utils/Note.h"
-#include "Utils/PianoRollEditAction.h"
-#include "Utils/PitchShiftSettings.h"
-#include "Utils/PitchShiftEditAction.h"
-#include "Utils/ScaleUiMapping.h"
-#include "Editor/PitchShiftDialogContent.h"
 #include "Utils/TimeCoordinate.h"
 #include "UI/UiAssets.h"
-#include "UI/FrameScheduler.h"
 
 #if JucePlugin_Enable_ARA
 #include "ARA/OpenTuneDocumentController.h"

@@ -1,4 +1,5 @@
-#include "TimelinePatternCache.h"
+#include "TimelineLayerComposer.h"
+#include "TimelineCompositeCache.h"
 #include "UIColors.h"
 #include "UiAssets.h"
 #include "ThemeTokens.h"
@@ -345,7 +346,7 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
 // buildPatternTile — 生成 pattern tile 内容
 // ============================================================================
 juce::Image TimelineLayerComposer::buildPatternTile(const PatternTileKey& key) {
-    const int tileW = TimelinePatternCache::kPatternTileWidthPx;
+    const int tileW = TimelineCompositeCache::kTileWidthPx;
     
     // 从 key 推算 tile 总高度 — 使用 viewKind 决定 decoder
     static constexpr float minMidi = 24.0f;

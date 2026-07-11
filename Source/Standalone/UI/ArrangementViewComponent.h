@@ -25,9 +25,8 @@
 #include "WaveformMipmap.h"
 #include "ViewMapper.h"
 #include "TimelineViewportCamera.h"
-#include "TimelinePatternCache.h"
 #include "TimelineViewportPolicy.h"
-#include "../../TimelineContentCache.h"
+#include "TimelineCompositeCache.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../Utils/KeyShortcutConfig.h"
 
@@ -121,11 +120,12 @@ public:
         const bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
         isPlaying_.store(playing, std::memory_order_relaxed);
         if (stateChanged) {
-            updateOverlayPresentation();
+            repaint();
         }
     }
     void setPlayheadColour(juce::Colour colour) {
         playheadColour_ = colour;
+        repaint();
     }
     
     // 设置播放头位置源（由组件内部读取）
@@ -204,7 +204,6 @@ private:
     int getVisibleViewportWidth() const;
     juce::Rectangle<int> getContentViewportBounds() const;
     void rebuildContentMetrics();
-    void updateOverlayPresentation();
     TimelineViewportRequest makeViewportRequest(
         TimelineViewportRequest::Kind kind,
         double targetTime,
@@ -214,16 +213,12 @@ private:
     void onScrollVBlankCallback(double timestampSec);
     double readPlayheadSeconds() const;
 
-public:
-    void syncFixedPlayhead();
-
 private:
     void updateScrollBars();
     void requestVisualRefresh();
     void rebuildTimelineCoverage();
     void updateMoveDragOverlay(const juce::MouseEvent& e);
     void clearMoveDragOverlay();
-    void drawTransientOverlay(juce::Graphics& g);
     void drawPlayhead(juce::Graphics& g);
     void drawImportDropPreview(juce::Graphics& g);
     void drawMoveDragOverlay(juce::Graphics& g);
@@ -238,10 +233,6 @@ private:
     double tileCoverageStartSeconds_ = 0.0;
     double tileCoverageEndSeconds_ = 0.0;
     WaveformMipmapCache waveformMipmapCache_;
-
-    // New: Pattern and content tile caches for infinite timeline
-    mutable TimelinePatternCache patternCache_;
-    mutable TimelineContentCache contentCache_;
 
     double lastContextBpm_{ 0.0 };
     int lastContextTimeSigNum_{ 0 };
@@ -272,22 +263,14 @@ private:
 
     ContentMetrics contentMetrics_;
 
-    // Pre-built pattern tiles for paint consumption
-    struct PreparedPatternTile {
-        PatternTileKey key;
-        const juce::Image* image = nullptr;
-    };
-    std::vector<PreparedPatternTile> preparedPatternTiles_;
-    void prepareCoveragePatternTiles();
+    // ---- Composite cache (new tile pipeline) ----
+    mutable TimelineCompositeCache compositeCache_;
+    uint64_t stableVisualSceneEpoch_ = 0;
 
-    // Pre-built content tiles for paint consumption (P0-1)
-    struct PreparedContentTile {
-        ContentTileKey key;
-        const juce::Image* image = nullptr;
-    };
-    std::vector<PreparedContentTile> preparedContentTiles_;
-    void prepareCoverageContentTiles();
-    // Waveform visual refresh is deferred during playback via waveformVisualRefreshPending_
+    GenerationSignature makeGenerationSignature() const;
+    void buildCompositeTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,
+                           int64_t absoluteTile, double ppsCanonical, double tileDuration);
+    void prepareCoverageCompositeTilesNew();
 
     // Smooth scrolling
     // 用户是否手动调整过缩放（用于避免自动缩放覆盖用户设置）

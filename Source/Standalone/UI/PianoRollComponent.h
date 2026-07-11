@@ -44,11 +44,10 @@
 #include "PianoRoll/InteractionState.h"
 #include "TimelineViewportCamera.h"
 #include "TimelineViewportPolicy.h"
-#include "TimelinePatternCache.h"
+#include "TimelineCompositeCache.h"
 #include "WaveformMipmap.h"
 #include "../../Utils/UndoManager.h"
 #include "../../Content/ContentEditCommands.h"
-#include "../../TimelineContentCache.h"
 
 namespace OpenTune {
 
@@ -135,7 +134,7 @@ public:
         isPlaying_.store(playing, std::memory_order_relaxed);
         if (stateChanged) {
             userScrollHold_ = false;
-            updatePlayheadVisibility();
+            repaint();
         }
     }
     void commitViewportRequest(TimelineViewportRequest req);
@@ -161,7 +160,6 @@ public:
         }
 
         scrollMode_ = mode;
-        updatePlayheadVisibility();
         repaint();
     }
     ScrollMode getScrollMode() const { return scrollMode_; }
@@ -176,13 +174,15 @@ public:
     void setShowOriginalF0(bool show) {
         if (showOriginalF0_ == show) return;
         showOriginalF0_ = show;
-        prepareCoverageContentTiles();
+        ++stableVisualSceneEpoch_;
+        prepareCoverageCompositeTilesNew();
         repaint();
     }
     void setShowCorrectedF0(bool show) {
         if (showCorrectedF0_ == show) return;
         showCorrectedF0_ = show;
-        prepareCoverageContentTiles();
+        ++stableVisualSceneEpoch_;
+        prepareCoverageCompositeTilesNew();
         repaint();
     }
     bool isShowingOriginalF0() const { return showOriginalF0_; }
@@ -222,6 +222,7 @@ public:
 
     void setPlayheadColour(juce::Colour colour) {
         playheadColour_ = colour;
+        repaint();
     }
 
     void setPlayheadPositionSource(std::weak_ptr<std::atomic<double>> source) {
@@ -316,17 +317,19 @@ private:
     juce::Rectangle<int> getTimelineViewportBounds() const;
     int getTimelineContentViewportWidth() const;
     int getTimelineContentViewportHeight() const;
-    void updatePlayheadVisibility();
     int getMaxHorizontalScroll() const;
     PianoRollRenderer::RenderContext makePresentationRenderContext() const;
 
     // v12 New: camera-based viewport
     ViewMapper makeViewMapper() const noexcept;
     double computeContentTimelineEndSeconds() const noexcept;
-    void prepareCoveragePatternTiles();
-    void prepareCoverageContentTiles();
-    uint64_t revisionForContentSlot(ContentSlot slot) const noexcept;
-    std::vector<ContentSlot> visibleContentSlots() const noexcept;
+    void prepareCoverageCompositeTilesNew();
+
+    // Composite cache helpers (Phase 2)
+    GenerationSignature makeGenerationSignature() const;
+    void buildCompositeTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,
+                           int64_t absoluteTile, double ppsCanonical, double tileDuration);
+
     void handleAsyncUpdate() override;
 
     void drawNoteDragCurvePreview(juce::Graphics& g);
@@ -343,6 +346,7 @@ private:
     void handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY);
 
     void drawTransientOverlay(juce::Graphics& g);
+    void drawPlayhead(juce::Graphics& g);
 
     TimelineViewportRequest makeViewportRequest(
         TimelineViewportRequest::Kind kind,
@@ -533,23 +537,9 @@ private:
     std::unique_ptr<PianoRollCorrectionWorker> correctionWorker_;
     mutable WaveformMipmapCache waveformMipmapCache_;
 
-    // New: Pattern and content tile caches for infinite timeline
-    mutable TimelinePatternCache patternCache_;
-    mutable TimelineContentCache contentCache_;
-
-    // Pre-built pattern tiles for paint consumption
-    struct PreparedPatternTile {
-        PatternTileKey key;
-        const juce::Image* image = nullptr;
-    };
-    std::vector<PreparedPatternTile> preparedPatternTiles_;
-
-    // Pre-built content tiles for paint consumption
-    struct PreparedContentTile {
-        ContentTileKey key;
-        const juce::Image* image = nullptr;
-    };
-    std::vector<PreparedContentTile> preparedContentTiles_;
+    // 新增 composite cache (Phase 2 集成)
+    mutable TimelineCompositeCache compositeCache_;
+    uint64_t stableVisualSceneEpoch_ = 0;
 
     static constexpr int pianoKeyWidth_ = 60;
     static constexpr int rulerHeight_ = 30;
