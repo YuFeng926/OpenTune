@@ -228,7 +228,7 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
 
         const double readStartSeconds = mapPlaybackTimeToContentTime(region,
                                                                               overlap->overlapStartSeconds);
-        const PlaybackReadRequest request(readSource,
+        const ::OpenTune::PlaybackReadRequest request(readSource,
                                            readStartSeconds,
                                            hostSampleRate_,
                                            overlap->samplesToCopy);

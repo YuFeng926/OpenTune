@@ -1,8 +1,9 @@
-#include "ArrangementViewComponent.h"
+﻿#include "ArrangementViewComponent.h"
 #include "AuroraTheme.h"
-#include "FrameScheduler.h"
 #include "UiAssets.h"
 #include "TimelineViewportPolicy.h"
+#include "TimelineCompositeCache.h"
+#include "TimelineLayerComposer.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../../Utils/KeyShortcutConfig.h"
 #include "../../Utils/PlacementActions.h"
@@ -489,8 +490,7 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
         }
         rebuildTimelineCoverage();
         repaint();
-        FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
-    };
+        };
     timeUnitToggleButton_.setColour(juce::TextButton::buttonColourId, UIColors::backgroundLight);
     timeUnitToggleButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
     addAndMakeVisible(timeUnitToggleButton_);
@@ -522,10 +522,7 @@ void ArrangementViewComponent::removeListener(Listener* listener)
 
 void ArrangementViewComponent::commitViewportRequest(TimelineViewportRequest req)
 {
-    commitViewportRequest(req);
-    updateScrollBars();
-    updateOverlayPresentation();
-    repaint();
+    activateTimelineCamera(TimelineViewportPolicy::resolve(req));
 }
 
 void ArrangementViewComponent::activateTimelineCamera(TimelineViewportCamera camera)
@@ -533,22 +530,20 @@ void ArrangementViewComponent::activateTimelineCamera(TimelineViewportCamera cam
     camera_ = camera;
     rebuildTimelineCoverage();
     updateScrollBars();
-    updateOverlayPresentation();
     repaint();
 }
 
 void ArrangementViewComponent::rebuildTimelineCoverage()
 {
     const int contentViewportWidth = getVisibleViewportWidth();
-    const double tileDuration = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / camera_.pixelsPerSecond;
+    const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / camera_.pixelsPerSecond;
     const double visibleStart = camera_.visibleStartSeconds;
     const double visibleEnd = visibleStart + contentViewportWidth / camera_.pixelsPerSecond;
 
     tileCoverageStartSeconds_ = std::max(0.0, std::floor((visibleStart - tileDuration) / tileDuration) * tileDuration);
     tileCoverageEndSeconds_ = std::ceil((visibleEnd + tileDuration) / tileDuration) * tileDuration;
 
-    prepareCoveragePatternTiles();
-    prepareCoverageContentTiles();
+    prepareCoverageCompositeTilesNew();
 }
 
 TimelineViewportRequest ArrangementViewComponent::makeViewportRequest(
@@ -569,12 +564,12 @@ TimelineViewportRequest ArrangementViewComponent::makeViewportRequest(
 
 void ArrangementViewComponent::setVerticalScrollOffset(int offset)
 {
-    // 计算最大滚动偏移（可见轨道高度 + ruler高度 - 可见高度）
+    // 璁＄畻鏈€澶ф粴鍔ㄥ亸绉伙紙鍙杞ㄩ亾楂樺害 + ruler楂樺害 - 鍙楂樺害锛?
     const int totalContentHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
     const int visibleHeight = getHeight();
     const int maxScrollOffset = juce::jmax(0, totalContentHeight - visibleHeight);
     
-    // 限制滚动范围 [0, maxScrollOffset]
+    // 闄愬埗婊氬姩鑼冨洿 [0, maxScrollOffset]
     verticalScrollOffset_ = juce::jlimit(0, maxScrollOffset, offset);
     verticalScrollBar_.setCurrentRangeStart(verticalScrollOffset_);
     
@@ -597,7 +592,7 @@ void ArrangementViewComponent::setVisibleTrackCount(int count)
 
 void ArrangementViewComponent::fitToContent()
 {
-    // 如果用户已手动调整过缩放，不自动覆盖
+    // 濡傛灉鐢ㄦ埛宸叉墜鍔ㄨ皟鏁磋繃缂╂斁锛屼笉鑷姩瑕嗙洊
     if (userHasManuallyZoomed_) {
         return;
     }
@@ -642,8 +637,8 @@ void ArrangementViewComponent::setExperimentalReferenceControlsEnabled(bool enab
         setMouseCursor(juce::MouseCursor::NormalCursor);
     }
 
-    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-}
+    ++stableVisualSceneEpoch_;  // Phase 2: Track reference controls state changes
+    }
 
 void ArrangementViewComponent::resized()
 {
@@ -663,6 +658,7 @@ void ArrangementViewComponent::resized()
 
     updateScrollBars();
     rebuildTimelineCoverage();
+    prepareCoverageCompositeTilesNew();  // Phase 2: New composite tile pipeline
     repaint();
     // Import drop preview highlight (transient, UI-only)
 
@@ -685,12 +681,11 @@ void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double
     else if (scrollBar == &verticalScrollBar_)
     {
         verticalScrollOffset_ = static_cast<int>(newRangeStart);
-        // 通知监听器垂直滚动偏移变化（用于同步TrackPanel）
+        // 閫氱煡鐩戝惉鍣ㄥ瀭鐩存粴鍔ㄥ亸绉诲彉鍖栵紙鐢ㄤ簬鍚屾TrackPanel锛?
         listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
         rebuildTimelineCoverage();
         repaint();
-        FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Normal);
-    }
+        }
 }
 
 int ArrangementViewComponent::getTotalContentWidth() const
@@ -778,105 +773,70 @@ void ArrangementViewComponent::rebuildContentMetrics()
     contentMetrics_.totalContentWidthPx = makeViewMapper().timeToX(maxEndTime);
 }
 
-// Pre-build pattern tiles for paint() consumption
-void ArrangementViewComponent::prepareCoveragePatternTiles()
+// ============================================================================
+// Composite cache pipeline (new)
+// ============================================================================
+
+GenerationSignature ArrangementViewComponent::makeGenerationSignature() const
 {
-    preparedPatternTiles_.clear();
+    GenerationSignature sig;
+    sig.ppsMilli = static_cast<int64_t>(std::round(camera_.pixelsPerSecond * 1000.0));
 
-    const auto vpBounds = getContentViewportBounds();
-    const double pps = camera_.pixelsPerSecond;
-    const double tileDurationSec = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / pps;
-    const double viewStart = tileCoverageStartSeconds_;
-    const double viewEnd = tileCoverageEndSeconds_;
+    const auto viewport = getContentViewportBounds();
+    sig.geometry.contentViewportHeight = viewport.getHeight();
+    sig.geometry.rulerHeight = rulerHeight_;
+    sig.geometry.pianoKeyWidth = 0;
+    sig.geometry.minMidi = 0.0f;
+    sig.geometry.maxMidi = 127.0f;
+    sig.geometry.pixelsPerSemitone = 0.0f;
+    sig.geometry.verticalScrollOffset = 0.0f;
+    sig.geometry.trackHeight = processor_.getTrackHeight();
+    sig.geometry.scrollTopPx = verticalScrollOffset_;
 
-    double firstTileStart = std::floor(viewStart / tileDurationSec) * tileDurationSec;
-    if (firstTileStart < 0.0) firstTileStart = 0.0;
+    sig.themeId = static_cast<int>(UIColors::currentThemeId());
+    sig.laneStyle = 0;  // Arrangement 涓嶄娇鐢?lane style
+    sig.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
+    sig.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
+    sig.timeSigNumerator = lastContextTimeSigNum_ > 0 ? lastContextTimeSigNum_ : 4;
+    sig.timeSigDenominator = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
+    sig.stableVisualSceneEpoch = stableVisualSceneEpoch_;
 
-    for (double tileStart = firstTileStart; tileStart < viewEnd; tileStart += tileDurationSec)
-    {
-        PatternTileKey key;
-        key.viewKind = "arrangement";
-        key.startSeconds = tileStart;
-        key.endSeconds = tileStart + tileDurationSec;
-        key.pixelsPerSecond = pps;
-        key.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
-        key.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
-        key.timeSigNumerator = lastContextTimeSigNum_ > 0 ? lastContextTimeSigNum_ : 4;
-        key.timeSigDenominator = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
-        key.themeId = static_cast<int>(UIColors::currentThemeId());
-        key.verticalGeometry = encodeArrangementVerticalGeometry(vpBounds.getHeight(), rulerHeight_);
-        key.laneStyle = 0;
-        key.trackHeight = processor_.getTrackHeight();
-
-        const juce::Image& tile = patternCache_.getPatternTile(key, TimelineLayerComposer::buildPatternTile);
-        preparedPatternTiles_.push_back({ key, &tile });
-    }
+    return sig;
 }
 
-// P0-1: Pre-build content tiles for paint() consumption
-void ArrangementViewComponent::prepareCoverageContentTiles()
+void ArrangementViewComponent::buildCompositeTile(
+    juce::Graphics& g,
+    juce::Rectangle<int> tileBounds,
+    int64_t absoluteTile,
+    double ppsCanonical,
+    double tileDuration)
 {
-    preparedContentTiles_.clear();
+    juce::ignoreUnused(absoluteTile, ppsCanonical, tileDuration);
 
-    const auto vpBounds = getContentViewportBounds();
-    const auto vwin = makeArrangementVerticalWindow();
-    const int visibleCount = juce::jmax(1, visibleTrackCount_);
-    const int trackH = vwin.trackHeight;
+    // 鏆傛椂鍙敾鑳屾櫙
+    g.fillAll(UIColors::rollBackground);
 
-    // P0-3: Use valid ContentKey for arrangement content (objectId != 0)
-    ContentKey arrangementKey{DomainKind::StandaloneArrangement, 1, 0};
-
-    const double tileDurationSec = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / camera_.pixelsPerSecond;
-    const double viewStart = tileCoverageStartSeconds_;
-    const double viewEnd = tileCoverageEndSeconds_;
-
-    // Compute tile boundaries aligned to kPatternTileWidthPx
-    double firstTileStart = std::floor(viewStart / tileDurationSec) * tileDurationSec;
-    if (firstTileStart < 0.0) firstTileStart = 0.0;
-
-    for (double tileStart = firstTileStart; tileStart < viewEnd; tileStart += tileDurationSec)
-    {
-        ContentTileKey key;
-        key.viewKind = "arrangement";
-        key.slot = ContentSlot::ArrangementClips;
-        key.contentKey = arrangementKey;
-        key.startSeconds = tileStart;
-        key.endSeconds = tileStart + tileDurationSec;
-        key.pixelsPerSecond = camera_.pixelsPerSecond;
-        // Encode full vertical window state into verticalGeometry (64-bit)
-        key.verticalGeometry = vwin.encode();
-        key.revision = contentMetrics_.revision;
-
-        const int tileContentH = visibleCount * trackH;
-        const auto& tile = contentCache_.getOrBuildTile(key, tileContentH,
-            [&](juce::Graphics& g, const ContentTileKey& k, juce::Rectangle<int> bounds) {
-                const int tileW = bounds.getWidth();
-                const ArrangementVerticalWindow verticalWindow{
-                    static_cast<int>(k.verticalGeometry & 0xFFFF),
-                    static_cast<int>((k.verticalGeometry >> 16) & 0xFFFF),
-                    static_cast<int>((k.verticalGeometry >> 32) & 0xFFFF),
-                    static_cast<int>((k.verticalGeometry >> 48) & 0xFFFF)
-                };
-                auto& arrangement = *processor_.getStandaloneArrangement();
-                auto clips = collectVisibleArrangementClips(arrangement,
-                                                         k.startSeconds,
-                                                         k.endSeconds,
-                                                         verticalWindow,
-                                                         k.pixelsPerSecond,
-                                                         tileW,
-                                                         [this](int trackId, uint64_t placementId) {
-                                                             return isPlacementSelected(trackId, placementId);
-                                                         });
-                paintHistoricalArrangementClips(g, clips, waveformMipmapCache_);
-            });
-
-        preparedContentTiles_.push_back({key, &tile});
-    }
+    // TODO: 璋冪敤 renderer 缁樺埗 pattern + clips
 }
 
-void ArrangementViewComponent::updateOverlayPresentation()
+void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
 {
-    repaint();
+    const auto sig = makeGenerationSignature();
+    const double ppsCanonical = sig.ppsMilli / 1000.0;
+    const double tileDuration = TimelineCompositeCache::kTileWidthPx / ppsCanonical;
+
+    const int64_t firstTile = std::max(0LL,
+        static_cast<int64_t>(std::floor(tileCoverageStartSeconds_ / tileDuration)));
+    const int64_t lastTile = static_cast<int64_t>(
+        std::floor((tileCoverageEndSeconds_ - 1e-9) / tileDuration));
+
+    const auto viewport = getContentViewportBounds();
+    const int tileHeight = viewport.getHeight();
+
+    compositeCache_.prepare(sig, firstTile, lastTile, tileHeight,
+        [this, ppsCanonical, tileDuration](juce::Graphics& g, juce::Rectangle<int> bounds, int64_t tile) {
+            buildCompositeTile(g, bounds, tile, ppsCanonical, tileDuration);
+        });
 }
 
 int ArrangementViewComponent::absoluteTimeToViewportX(double seconds) const
@@ -1011,6 +971,8 @@ void ArrangementViewComponent::requestVisualRefresh()
     lastContextBpm_ = 120.0;
     lastContextTimeSigNum_ = 4;
     lastContextTimeSigDenom_ = 4;
+
+    ++stableVisualSceneEpoch_;  // Phase 2: Content metrics refreshed 鈥?invalidate composite tiles
 }
 
 int ArrangementViewComponent::trackIdForViewportY(int y) const noexcept
@@ -1193,7 +1155,7 @@ void ArrangementViewComponent::drawImportDropPreview(juce::Graphics& g)
                 g.drawHorizontalLine(newTrackRect.getY(), 0.0f, static_cast<float>(barWidth));
                 g.setColour(UIColors::panelGlow.withAlpha(0.60f));
                 g.setFont(16.0f);
-                g.drawText(juce::String::fromUTF8(u8"+ 新建轨道"),
+                g.drawText(juce::String::fromUTF8(u8"+ 鏂板缓杞ㄩ亾"),
                            newTrackRect.toFloat(),
                            juce::Justification::centredLeft);
             }
@@ -1266,13 +1228,6 @@ void ArrangementViewComponent::drawMoveDragOverlay(juce::Graphics& g)
         paintHistoricalClipShellAndWaveform(g, clip, waveformMipmapCache_);
         paintHistoricalClipTextFadeGain(g, clip);
     }
-}
-
-void ArrangementViewComponent::drawTransientOverlay(juce::Graphics& g)
-{
-    drawImportDropPreview(g);
-    drawMoveDragOverlay(g);
-    drawPlayhead(g);
 }
 
 void ArrangementViewComponent::drawPlayhead(juce::Graphics& g)
@@ -1359,30 +1314,26 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
     // Clip to timeline viewport
     const auto viewport = getContentViewportBounds();
-    juce::Graphics::ScopedSaveState clipState(g);
-    g.reduceClipRegion(viewport);
+    {
+        juce::Graphics::ScopedSaveState clipState(g);
+        g.reduceClipRegion(viewport);
 
-    // 直接 blit pattern tiles
-    const double visibleStart = camera_.visibleStartSeconds;
-    const double pps = camera_.pixelsPerSecond;
+        // 鐩存帴 blit pattern tiles
+        const double visibleStart = camera_.visibleStartSeconds;
+        const double pps = camera_.pixelsPerSecond;
 
-    for (const auto& pt : preparedPatternTiles_) {
-        if (!pt.image || !pt.image->isValid()) continue;
-        const int blitX = viewport.getX() + static_cast<int>(std::round(
-            (pt.key.startSeconds - visibleStart) * pps));
-        g.drawImageAt(*pt.image, blitX, viewport.getY());
-    }
+        // Composite cache blit handled above
 
-    // 使用相同的绘制顺序
-    for (const auto& ct : preparedContentTiles_) {
-        if (!ct.image || !ct.image->isValid()) continue;
-        const int blitX = viewport.getX() + static_cast<int>(std::round(
-            (ct.key.startSeconds - visibleStart) * pps));
-        g.drawImageAt(*ct.image, blitX, viewport.getY());
-    }
+        // 浣跨敤鐩稿悓鐨勭粯鍒堕『搴?
+        // Removed old content tile loop
 
-    // Transient overlay
-    drawTransientOverlay(g);
+        // Import/move overlays锛堜繚鎸佸湪 clip 鍐咃級
+        drawImportDropPreview(g);
+        drawMoveDragOverlay(g);
+    }  // clipState 缁撴潫
+
+    // Playhead锛堜笉鍙?content viewport clip 闄愬埗锛?
+    drawPlayhead(g);
 }
 
 void ArrangementViewComponent::paintOverChildren(juce::Graphics& g)
@@ -1424,12 +1375,12 @@ bool ArrangementViewComponent::runDebugSelfTest()
     if (!mipmap.isComplete())
         return false;
     
-    // 测试层级选择
+    // 娴嬭瘯灞傜骇閫夋嫨
     const auto& level = mipmap.selectBestLevel(100.0);
     if (level.peaks.empty())
         return false;
 
-    // 测试WaveformMipmapCache
+    // 娴嬭瘯WaveformMipmapCache
     WaveformMipmapCache cache;
     const ContentKey key1{DomainKind::StandaloneClip, 1, 0};
     const ContentKey key2{DomainKind::StandaloneClip, 2, 0};
@@ -1463,7 +1414,7 @@ void ArrangementViewComponent::onHeartbeatTick()
 
     const bool playingNow = processor_.isPlaying();
 
-    // 推理活跃时主动降频：波形后台构建改为低频小预算，减少消息线程竞争。
+    // 鎺ㄧ悊娲昏穬鏃朵富鍔ㄩ檷棰戯細娉㈠舰鍚庡彴鏋勫缓鏀逛负浣庨灏忛绠楋紝鍑忓皯娑堟伅绾跨▼绔炰簤銆?
     bool progressed = false;
     if (inferenceActive_)
     {
@@ -1490,17 +1441,15 @@ void ArrangementViewComponent::onHeartbeatTick()
             waveformVisualRefreshPending_ = false;
             rebuildTimelineCoverage();
             repaint();
-            FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Background);
-        }
+            }
     }
 
     if (!playingNow && waveformVisualRefreshPending_) {
         waveformVisualRefreshPending_ = false;
-        // No-op — render model cache removed
+        // No-op 鈥?render model cache removed
         rebuildTimelineCoverage();
         repaint();
-        FrameScheduler::instance().requestContentInvalidation(*this, {}, FrameScheduler::Priority::Background);
-    }
+        }
 
     if (!playingNow)
         return;
@@ -1508,7 +1457,7 @@ void ArrangementViewComponent::onHeartbeatTick()
     // Coverage boundary maintenance during playback
     if (isPlaying_.load(std::memory_order_relaxed)) {
         const int contentViewportWidth = getVisibleViewportWidth();
-        const double tileDuration = static_cast<double>(TimelinePatternCache::kPatternTileWidthPx) / camera_.pixelsPerSecond;
+        const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / camera_.pixelsPerSecond;
         const double visibleEnd = camera_.visibleStartSeconds + contentViewportWidth / camera_.pixelsPerSecond;
 
         const bool coverageNeedsRebuild =
@@ -1539,7 +1488,6 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
     TimelineViewportCamera nextCamera = TimelineViewportPolicy::resolve(req);
     camera_ = nextCamera;
     repaint();
-    syncFixedPlayhead();
 }
 
 double ArrangementViewComponent::readPlayheadSeconds() const
@@ -1548,12 +1496,6 @@ double ArrangementViewComponent::readPlayheadSeconds() const
         return source->load(std::memory_order_relaxed);
 
     return 0.0;
-}
-
-void ArrangementViewComponent::syncFixedPlayhead()
-{
-    // Playhead overlay is drawn in paint() directly
-    repaint();
 }
 
 void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
@@ -1571,7 +1513,7 @@ void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
         const uint64_t movePlacementId = processor_.getPlacementId(moveHit.trackId, moveHit.placementIndex);
         hoveredPlacementId_ = movePlacementId;
 
-        // Reference button area — match paint gate (width > 30)
+        // Reference button area 鈥?match paint gate (width > 30)
         if (experimentalReferenceControlsEnabled_ && moveHit.placementBounds.getWidth() > 30)
         {
             juce::Rectangle<int> refBtnArea(moveHit.placementBounds.getRight() - 20,
@@ -1588,14 +1530,11 @@ void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
         || wasOverRefBtn != mouseOverReferenceButton_)
     {
         // Narrow dirty rect for reference button icon area (bottom-right corner)
-        FrameScheduler::instance().requestInvalidate(*this,
-            juce::Rectangle<int>(getWidth() - 60, getHeight() - 60, 60, 60),
-            FrameScheduler::Priority::Interactive);
-    }
+        }
 
     auto hit = hitTestPlacement(e.getPosition());
 
-    // Ctrl+drag cursor preview — only on empty area, consistent with mouseDown
+    // Ctrl+drag cursor preview 鈥?only on empty area, consistent with mouseDown
     if (e.mods.isCtrlDown() && hit.trackId < 0)
     {
         setMouseCursor(juce::MouseCursor::DraggingHandCursor);
@@ -1640,7 +1579,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
 
-    // Ctrl+drag panning — only on empty area (not on a placement, to avoid
+    // Ctrl+drag panning 鈥?only on empty area (not on a placement, to avoid
     // conflicting with Ctrl+click toggle placement selection).
     if (e.mods.isCtrlDown()) {
         auto hit = hitTestPlacement(e.getPosition());
@@ -1652,10 +1591,10 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         }
     }
 
-    // Hit-test placement before seek — reference button intercepts without seeking
+    // Hit-test placement before seek 鈥?reference button intercepts without seeking
     auto hit = hitTestPlacement(e.getPosition());
 
-    // Check reference button click (bottom-right corner) — always active, before seek
+    // Check reference button click (bottom-right corner) 鈥?always active, before seek
     if (experimentalReferenceControlsEnabled_ && hit.trackId >= 0 && hit.placementBounds.getWidth() > 30)
     {
         juce::Rectangle<int> refBtnArea(hit.placementBounds.getRight() - 20,
@@ -1677,28 +1616,27 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         }
     }
 
-    // Clicked on placement body/edge/handle — do NOT seek playhead, only select/drag
+    // Clicked on placement body/edge/handle 鈥?do NOT seek playhead, only select/drag
     if (hit.trackId >= 0)
     {
         // Fall through to placement selection/drag logic below
     }
     else if (e.y <= rulerHeight_)
     {
-        // Clicked on ruler — seek playhead and start drag
+        // Clicked on ruler 鈥?seek playhead and start drag
         double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         processor_.setPosition(newPosSeconds);
-        syncFixedPlayhead();
+        repaint();
         isDraggingPlayhead_ = true;
         dragStartPos_ = e.getPosition();
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
     else
     {
-        // Clicked on empty area — seek playhead and clear selection
+        // Clicked on empty area 鈥?seek playhead and clear selection
         double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         processor_.setPosition(newPosSeconds);
-        syncFixedPlayhead();
+        repaint();
 
         if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
         {
@@ -1708,8 +1646,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         {
             rebuildTimelineCoverage();
         repaint();
-            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-        }
+            }
         return;
     }
 
@@ -1767,7 +1704,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     dragStartPlacementId_ = selectedPlacementId_;
     dragStartTrackId_ = selectedTrack_;
 
-    // Check Fade handles first (before trim — to give priority to 16x16 fade handle areas
+    // Check Fade handles first (before trim 鈥?to give priority to 16x16 fade handle areas
     // over 8px edge hit zones that would otherwise absorb clicks in the top corners)
     if (hit.isFadeInHandle) {
         currentDragOp_ = DragOperation::FadeIn;
@@ -1778,7 +1715,6 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
             dragStartPos_ = e.getPosition();
             dragStartTrackId_ = hit.trackId;
         }
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
@@ -1791,11 +1727,10 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
             dragStartPos_ = e.getPosition();
             dragStartTrackId_ = hit.trackId;
         }
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
-    // Check Trim edges (after fade — 8px edge zones should not steal hits from 16x16 fade handles)
+    // Check Trim edges (after fade 鈥?8px edge zones should not steal hits from 16x16 fade handles)
     if (hit.isLeftEdge) {
         currentDragOp_ = DragOperation::TrimLeft;
         StandaloneArrangement::Placement placement;
@@ -1807,7 +1742,6 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
             dragStartPos_ = e.getPosition();
             dragStartTrackId_ = hit.trackId;
         }
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
@@ -1821,7 +1755,6 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
             dragStartPos_ = e.getPosition();
             dragStartTrackId_ = hit.trackId;
         }
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
@@ -1832,13 +1765,11 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     if (currentDragOp_ == DragOperation::Move)
     {
         beginMoveDrag(hit, e.getPosition());
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
     clearMoveDragOverlay();
-    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-}
+    }
 
 void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
 {
@@ -1846,7 +1777,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     {
         auto delta = e.getPosition() - lastMousePos_;
         
-        // Horizontal Scroll — pan via camera
+        // Horizontal Scroll 鈥?pan via camera
         const double deltaTime = static_cast<double>(-delta.x) / camera_.pixelsPerSecond;
         const auto req = makeViewportRequest(
             TimelineViewportRequest::Kind::Manual,
@@ -1855,7 +1786,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
             camera_.pixelsPerSecond);
         commitViewportRequest(req);
 
-        // Vertical Scroll — use setVerticalScrollOffset() to properly update tile cache
+        // Vertical Scroll 鈥?use setVerticalScrollOffset() to properly update tile cache
         const int newVerticalOffset = verticalScrollOffset_ - delta.y;
         setVerticalScrollOffset(newVerticalOffset);
         listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
@@ -1868,8 +1799,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     {
         double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         processor_.setPosition(newPosSeconds);
-        syncFixedPlayhead();
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
+        repaint();
         return;
     }
 
@@ -1908,7 +1838,6 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
         listeners_.call([this](Listener& l) {
             l.placementTimingChanged(dragStartTrackId_, selectedPlacementIndex_);
         });
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
@@ -1934,7 +1863,6 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
             if (newFade > maxFade) newFade = maxFade;
             arr->setPlacementFade(dragStartTrackId_, dragOperationPlacementId_, placement.fadeInDuration, newFade);
         }
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
 
@@ -1952,7 +1880,6 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     {
         setMouseCursor(juce::MouseCursor::DraggingHandCursor);
         updateMoveDragOverlay(e);
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
         return;
     }
     else if (isAdjustingGain_)
@@ -1961,8 +1888,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
         double factor = std::pow(10.0, (-static_cast<double>(delta.y)) / 200.0);
         setStandalonePlacementGain(processor_, selectedTrack_, selectedPlacementId_, static_cast<float>(dragStartPlacementGain_ * factor));
 
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-    }
+        }
 }
 
 void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
@@ -2009,8 +1935,7 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
         dragOperationPlacementId_ = 0;
         rebuildTimelineCoverage();
         repaint();
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-    }
+        }
 
     if (isDraggingPlacement_ && currentDragOp_ == DragOperation::Move)
     {
@@ -2060,7 +1985,7 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
 {
     const auto& settings = zoomSensitivity_;
     
-    // Shift + Wheel = Vertical Zoom (Track Height) - 与TrackPanel同步
+    // Shift + Wheel = Vertical Zoom (Track Height) - 涓嶵rackPanel鍚屾
     if (e.mods.isShiftDown())
     {
         if (wheel.deltaY != 0.0f)
@@ -2077,8 +2002,7 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
                 listeners_.call([newHeight](Listener& l) { l.trackHeightChanged(newHeight); });
                 rebuildTimelineCoverage();
         repaint();
-                FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-            }
+                }
         }
         return;
     }
@@ -2103,8 +2027,7 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
                     static_cast<double>(e.x - kArrangementContentStartX),
                     newPps);
                 commitViewportRequest(req);
-                FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Normal);
-            }
+                }
         }
         return;
     }
@@ -2169,7 +2092,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    // CopyClips — Ctrl+C
+    // CopyClips 鈥?Ctrl+C
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Copy, key))
     {
         if (!selectedPlacements_.empty())
@@ -2197,7 +2120,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    // PasteClips — Ctrl+V (at playhead)
+    // PasteClips 鈥?Ctrl+V (at playhead)
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Paste, key))
     {
         auto& clipboard = processor_.getClipClipboard();
@@ -2229,7 +2152,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                 newPlacement.clipInSeconds = 0.0; // copy starts from beginning of new content
 
                 if (!arr->insertPlacement(selectedTrack_, newPlacement)) {
-                    // Rollback — delete the orphan content
+                    // Rollback 鈥?delete the orphan content
                     processor_.getStandaloneContentRepository()->retireClip(newContentKey);
                     continue;
                 }
@@ -2238,12 +2161,11 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
             rebuildTimelineCoverage();
         repaint();
-            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-        }
+            }
         return true;
     }
 
-    // DuplicateClip — Ctrl+D
+    // DuplicateClip 鈥?Ctrl+D
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::DuplicateClip, key))
     {
         if (selectedPlacementId_ != 0 && selectedTrack_ >= 0)
@@ -2265,7 +2187,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
                         const int count = arr->getNumPlacements(selectedTrack_);
                         if (!arr->insertPlacement(selectedTrack_, count, dup)) {
-                            // Rollback — delete the orphan content
+                            // Rollback 鈥?delete the orphan content
                             processor_.getStandaloneContentRepository()->retireClip(newContentKey);
                             return true;
                         }
@@ -2414,7 +2336,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
-    // Nudge Left — move selected placements earlier by 10ms
+    // Nudge Left 鈥?move selected placements earlier by 10ms
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::NudgeLeft, key))
     {
         auto* arr = processor_.getStandaloneArrangement();
@@ -2448,12 +2370,11 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             });
             rebuildTimelineCoverage();
         repaint();
-            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-        }
+            }
         return true;
     }
 
-    // Nudge Right — move selected placements later by 10ms
+    // Nudge Right 鈥?move selected placements later by 10ms
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::NudgeRight, key))
     {
         auto* arr = processor_.getStandaloneArrangement();
@@ -2487,12 +2408,11 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             });
             rebuildTimelineCoverage();
         repaint();
-            FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-        }
+            }
         return true;
     }
 
-    // ToggleSnap — Ctrl+Shift+S
+    // ToggleSnap 鈥?Ctrl+Shift+S
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::ToggleSnap, key))
     {
         auto snap = processor_.getSnapSettings();
@@ -2510,7 +2430,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 }
 
 // ============================================================================
-// 多选实现
+// 澶氶€夊疄鐜?
 // ============================================================================
 
 bool ArrangementViewComponent::isPlacementSelected(int trackId, uint64_t placementId) const
@@ -2617,8 +2537,7 @@ void ArrangementViewComponent::commitPlacementSelection(PlacementSelectionKey pr
 
     rebuildTimelineCoverage();
     repaint();
-    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-}
+    }
 
 void ArrangementViewComponent::commitEmptyPlacementSelection()
 {
@@ -2637,11 +2556,10 @@ void ArrangementViewComponent::commitEmptyPlacementSelection()
 
     rebuildTimelineCoverage();
     repaint();
-    FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-}
+    }
 
 // ============================================================================
-// Analysis animation 状态管理
+// Analysis animation 鐘舵€佺鐞?
 // ============================================================================
 
 void ArrangementViewComponent::setClipAnalysisInProgress(uint64_t placementId, bool inProgress)
@@ -2652,8 +2570,7 @@ void ArrangementViewComponent::setClipAnalysisInProgress(uint64_t placementId, b
         state.isAnalysisInProgress = inProgress;
         rebuildTimelineCoverage();
         repaint();
-        FrameScheduler::instance().requestInvalidate(*this, FrameScheduler::Priority::Interactive);
-    }
+        }
 }
 
 // ============================================================================
@@ -2687,3 +2604,5 @@ ArrangementVerticalWindow ArrangementViewComponent::makeArrangementVerticalWindo
 }
 
 } // namespace OpenTune
+
+
