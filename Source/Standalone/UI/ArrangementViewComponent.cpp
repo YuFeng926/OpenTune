@@ -811,12 +811,66 @@ void ArrangementViewComponent::buildCompositeTile(
     double ppsCanonical,
     double tileDuration)
 {
-    juce::ignoreUnused(absoluteTile, ppsCanonical, tileDuration);
+    const double tileStartSec = absoluteTile * tileDuration;
+    const double tileEndSec = tileStartSec + tileDuration;
 
-    // 鏆傛椂鍙敾鑳屾櫙
-    g.fillAll(UIColors::rollBackground);
+    // 1. Pattern layer: track lanes (from e7c6f65 stable implementation)
+    const auto themeId = UIColors::currentThemeId();
+    if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
+        const int trackHeight = processor_.getTrackHeight();
+        const int visibleTracks = juce::jmax(1, visibleTrackCount_);
+        for (int trackId = 0; trackId < visibleTracks; ++trackId) {
+            auto lane = juce::Rectangle<float>(0.0f,
+                                               static_cast<float>(trackId * trackHeight - verticalScrollOffset_),
+                                               static_cast<float>(tileBounds.getWidth()),
+                                               static_cast<float>(trackHeight));
+            if (lane.getBottom() < 0.0f || lane.getY() > tileBounds.getBottom())
+                continue;
 
-    // TODO: 璋冪敤 renderer 缁樺埗 pattern + clips
+            const auto laneFill = themeId == ThemeId::Aurora
+                ? ((trackId % 2 == 0) ? UIColors::glassSurface.withAlpha(0.055f) : UIColors::pianoRollLane.withAlpha(0.030f))
+                : ((trackId % 2 == 0) ? UIColors::pianoRollLane.withAlpha(0.060f) : UIColors::glassSurface.withAlpha(0.022f));
+            g.setColour(laneFill);
+            g.fillRect(lane);
+
+            g.setColour((themeId == ThemeId::Aurora ? UIColors::gridLine : UIColors::pianoRollGrid)
+                            .withAlpha(themeId == ThemeId::Aurora ? 0.026f : 0.036f));
+            g.drawHorizontalLine(juce::roundToInt(lane.getBottom()), lane.getX(), lane.getRight());
+        }
+    }
+
+    // 2. Pattern layer: grid lines
+    RenderParams gridParams;
+    gridParams.visibleStartSeconds = tileStartSec;
+    gridParams.visibleEndSeconds = tileEndSec;
+    gridParams.pixelsPerSecond = ppsCanonical;
+    gridParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
+    gridParams.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
+    gridParams.timeSigNumerator = lastContextTimeSigNum_ > 0 ? lastContextTimeSigNum_ : 4;
+    gridParams.timeSigDenominator = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
+    gridParams.themeId = static_cast<int>(themeId);
+    gridParams.viewportWidth = tileBounds.getWidth();
+    gridParams.viewportHeight = tileBounds.getHeight();
+    gridParams.viewportBoundsX = 0;
+    gridParams.contentOffsetY = 0;
+    gridParams.viewKind = "arrangement";
+
+    TimelineLayerComposer::drawGridLines(g, gridParams);
+
+    // 3. Content layer: clips + waveform (from stable implementation)
+    const ArrangementVerticalWindow vwin = makeArrangementVerticalWindow();
+    auto& arrangement = *processor_.getStandaloneArrangement();
+    auto clips = collectVisibleArrangementClips(
+        arrangement,
+        tileStartSec, tileEndSec,
+        vwin,
+        ppsCanonical,
+        tileBounds.getWidth(),
+        [this](int trackId, uint64_t placementId) {
+            return isPlacementSelected(trackId, placementId);
+        });
+
+    paintHistoricalArrangementClips(g, clips, waveformMipmapCache_);
 }
 
 void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
@@ -1322,9 +1376,17 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         const double visibleStart = camera_.visibleStartSeconds;
         const double pps = camera_.pixelsPerSecond;
 
-        // Composite cache blit handled above
+        // 3. Blit composite tiles (new pipeline)
+        const double tileDuration = TimelineCompositeCache::kTileWidthPx / pps;
+        const int64_t firstTile = static_cast<int64_t>(std::floor(visibleStart / tileDuration));
+        const int64_t lastTile = static_cast<int64_t>(std::floor((visibleStart + viewport.getWidth() / pps) / tileDuration));
+        for (int64_t t = firstTile; t <= lastTile; ++t) {
+            if (const auto* img = compositeCache_.findTile(t)) {
+                const int blitX = viewport.getX() + static_cast<int>(std::round(t * tileDuration * pps - visibleStart * pps));
+                g.drawImageAt(*img, blitX, viewport.getY());
+            }
+        }
 
-        // 浣跨敤鐩稿悓鐨勭粯鍒堕『搴?
         // Removed old content tile loop
 
         // Import/move overlays锛堜繚鎸佸湪 clip 鍐咃級
