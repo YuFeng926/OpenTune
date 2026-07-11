@@ -352,8 +352,6 @@ private:
 public:
     // ========================================================================
     // Playback Read API Types (Unified read path for Standalone/VST3)
-    // PlaybackReadRequest is defined in Utils/PlaybackAudioReader.h — kept as alias for backward compat.
-    using PlaybackReadRequest = ::OpenTune::PlaybackReadRequest;
 
     enum class DiagnosticControlCall : uint8_t {
         None = 0,
@@ -387,7 +385,7 @@ public:
      * 二元播放模型：先读当前播放采样率 dry signal，再用当前播放采样率的
      * 已发布 render cache 覆盖同一段目标 buffer。
      */
-    int readPlaybackAudio(const PlaybackReadRequest& request,
+    int readPlaybackAudio(const ::OpenTune::PlaybackReadRequest& request,
                           juce::AudioBuffer<float>& destination,
                           int destinationStartSample) const;
     DiagnosticInfo getDiagnosticInfo(int trackId = 0, uint64_t placementId = 0) const;
