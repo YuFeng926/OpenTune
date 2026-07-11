@@ -7,7 +7,7 @@
  * - 片段显示与拖拽
  * - 波形可视化（通过 WaveformMipmapCache）
  * - 时间标尺和网格
- * - 播放头位置显示（通过 FixedPlayheadComponent）
+ * - 播放头位置显示（通过 paint() 直接绘制）
  */
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -28,7 +28,6 @@
 #include "TimelinePatternCache.h"
 #include "TimelineViewportPolicy.h"
 #include "../../TimelineContentCache.h"
-#include "FixedPlayheadComponent.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../Utils/KeyShortcutConfig.h"
 
@@ -127,7 +126,6 @@ public:
     }
     void setPlayheadColour(juce::Colour colour) {
         playheadColour_ = colour;
-        fixedPlayhead_.setColour(colour);
     }
     
     // 设置播放头位置源（由组件内部读取）
@@ -170,17 +168,6 @@ public:
 #endif
 
 private:
-    friend class TileCanvas;
-
-    class TileCanvas : public juce::Component
-    {
-    public:
-        explicit TileCanvas(ArrangementViewComponent& owner);
-        void paint(juce::Graphics& g) override;
-    private:
-        ArrangementViewComponent& owner_;
-    };
-
     enum class DragOperation { None, Move, Gain, TrimLeft, TrimRight, FadeIn, FadeOut };
 
 
@@ -237,6 +224,8 @@ private:
     void updateMoveDragOverlay(const juce::MouseEvent& e);
     void clearMoveDragOverlay();
     void drawTransientOverlay(juce::Graphics& g);
+    void drawFixedChrome(juce::Graphics& g);
+    void drawPlayhead(juce::Graphics& g);
     void drawImportDropPreview(juce::Graphics& g);
     void drawMoveDragOverlay(juce::Graphics& g);
 
@@ -388,14 +377,8 @@ private:
     double fadeStartOutDuration_{0.0};
     uint64_t dragOperationPlacementId_{0};
 
-    // 固定屏幕空间播放头（VBlank同步，独立于主组件重绘）
-    FixedPlayheadComponent fixedPlayhead_;
-
     // 滚动跟随独立 VBlank 附件（仅负责滚动，不影响 Overlay 的 VBlank）
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
-
-    std::unique_ptr<TileCanvas> tileCanvas_;
-    void positionTileCanvasForCamera();
 
     // 播放头位置源（来自 Processor 的原子位置）
     std::weak_ptr<std::atomic<double>> positionSource_;
