@@ -155,9 +155,6 @@ public:
     // ─── Notification injection (message thread) ───────────────────────────
     void setActiveSegmentChangedCallback(ActiveSegmentChangedFn fn);
 
-    /** Called by render pipeline when a segment's content is ready. */
-    void onSegmentRenderingComplete(ContentKey segmentContentKey);
-
     /** Called by render pipeline when CRS render cache is complete and ready for playback.
      *  Transitions segment from Processing to Edited state. */
     void onRenderComplete(ContentKey segmentContentKey);

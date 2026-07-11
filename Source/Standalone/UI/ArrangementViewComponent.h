@@ -224,7 +224,6 @@ private:
     void updateMoveDragOverlay(const juce::MouseEvent& e);
     void clearMoveDragOverlay();
     void drawTransientOverlay(juce::Graphics& g);
-    void drawFixedChrome(juce::Graphics& g);
     void drawPlayhead(juce::Graphics& g);
     void drawImportDropPreview(juce::Graphics& g);
     void drawMoveDragOverlay(juce::Graphics& g);

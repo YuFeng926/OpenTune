@@ -343,7 +343,6 @@ private:
     void handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY);
 
     void drawTransientOverlay(juce::Graphics& g);
-    void drawFixedChrome(juce::Graphics& g);
 
     TimelineViewportRequest makeViewportRequest(
         TimelineViewportRequest::Kind kind,
