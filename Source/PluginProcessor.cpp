@@ -532,7 +532,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     juce::AudioBuffer<float> placementBuffer(out.getNumChannels(), samplesToRender);
     placementBuffer.clear();
 
-    OpenTuneAudioProcessor::PlaybackReadRequest readRequest;
+    ::OpenTune::PlaybackReadRequest readRequest;
     readRequest.source = source;
     readRequest.readStartSeconds = placement.clipInSeconds; // was 0.0, respect trim offset
     readRequest.targetSampleRate = kExportSr;
@@ -884,7 +884,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                 buffer.clear(destStart, numSamples);
                 return;
             }
-            PlaybackReadRequest req;
+            ::OpenTune::PlaybackReadRequest req;
             req.source = readSource;
             req.readStartSeconds = readStartSeconds;
             req.targetSampleRate = targetSampleRate;
@@ -1706,7 +1706,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             // ====================================================================
             // Unified Playback Read API call
             // ====================================================================
-            PlaybackReadRequest readRequest;
+            ::OpenTune::PlaybackReadRequest readRequest;
             readRequest.source = readSource;
             readRequest.readStartSeconds = readStartSeconds;
             readRequest.targetSampleRate = deviceSampleRate;
@@ -4614,7 +4614,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
 // Unified Playback Read API
 // ============================================================================
 
-int OpenTuneAudioProcessor::readPlaybackAudio(const PlaybackReadRequest& request,
+int OpenTuneAudioProcessor::readPlaybackAudio(const ::OpenTune::PlaybackReadRequest& request,
                                               juce::AudioBuffer<float>& destination,
                                               int destinationStartSample) const
 {
