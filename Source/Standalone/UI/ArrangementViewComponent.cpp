@@ -1275,12 +1275,6 @@ void ArrangementViewComponent::drawTransientOverlay(juce::Graphics& g)
     drawPlayhead(g);
 }
 
-void ArrangementViewComponent::drawFixedChrome(juce::Graphics& /*g*/)
-{
-    // Arrangement fixed chrome (ruler backdrop, toggle buttons) is painted
-    // directly in paint() and paintOverChildren(); no separate chrome pass.
-}
-
 void ArrangementViewComponent::drawPlayhead(juce::Graphics& g)
 {
     const auto viewportBounds = getContentViewportBounds();
@@ -1393,7 +1387,9 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
 void ArrangementViewComponent::paintOverChildren(juce::Graphics& g)
 {
-    drawTransientOverlay(g);
+    // Fixed chrome is drawn here (ruler, track headers)
+    // Transient overlay already drawn in paint()
+    (void)g;
 }
 
 #if JUCE_DEBUG

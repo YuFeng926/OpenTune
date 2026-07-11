@@ -453,36 +453,6 @@ void CaptureSession::tick()
 
 // ─── Render pipeline callback ──────────────────────────────────────────────
 
-void CaptureSession::onSegmentRenderingComplete(ContentKey segmentContentKey)
-{
-    // Legacy method - kept for API compatibility but F0 Ready path now uses onRenderComplete
-    CaptureSegment* edited = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(mutableMutex_);
-        for (auto& seg : mutableSegments_) {
-            if (seg->contentKey == segmentContentKey) {
-                seg->state.store(SegmentState::Edited, std::memory_order_release);
-                activeDisplaySegmentId_ = seg->contentKey.objectId;
-                edited = seg.get();
-                break;
-            }
-        }
-    }
-    if (edited == nullptr)
-        return;
-
-    AppLogger::log("CaptureSession: segment Edited id=" + juce::String(static_cast<juce::int64>(segmentContentKey.objectId)));
-    ChannelLayoutLog::logSegmentFinalize(static_cast<juce::int64>(segmentContentKey.objectId),
-                                          edited->captureChannels,
-                                          edited->durationSeconds);
-
-    runCompaction(*edited);
-    publishSegmentsView();
-
-    if (activeSegmentChanged_)
-        activeSegmentChanged_(segmentContentKey);
-}
-
 void CaptureSession::onRenderComplete(ContentKey segmentContentKey)
 {
     CaptureSegment* edited = nullptr;

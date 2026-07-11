@@ -1415,18 +1415,8 @@ void PianoRollComponent::paint(juce::Graphics& g) {
         g.drawImageAt(*ct.image, blitX, viewport.getY());
     }
 
-    // 5. Fixed chrome（piano keys、ruler�?
-    drawFixedChrome(g);
-
-    // 6. Transient overlay（playhead、selection、drag�?
+    // 5. Transient overlay（playhead、selection、drag）
     drawTransientOverlay(g);
-}
-
-void PianoRollComponent::drawFixedChrome(juce::Graphics& g)
-{
-    // Fixed chrome (piano keys, ruler) is drawn in paintOverChildren()
-    // This method is reserved for future use if needed
-    (void)g;
 }
 
 void PianoRollComponent::paintOverChildren(juce::Graphics& g)
