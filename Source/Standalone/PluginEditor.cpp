@@ -2303,9 +2303,8 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
     arrangementView_.setPlayheadColour(UIColors::playhead);
 
     sendLookAndFeelChange();
-    repaint();
-
-    // rebuildContentCache() 已删除 - 现使用 TimelineCompositeCache 按需生成
+    pianoRoll_.requestContentRedraw();
+    arrangementView_.requestContentRedraw();
     repaint();
 }
 
@@ -2509,6 +2508,7 @@ void OpenTuneAudioProcessorEditor::trackVolumeChanged(int trackId, float volume)
 void OpenTuneAudioProcessorEditor::trackHeightChanged(int newHeight)
 {
 // Update track height in processor
+    const bool needsArrangementRebuild = processorRef_.getTrackHeight() != newHeight;
     processorRef_.setTrackHeight(newHeight);
     
 // Sync TrackPanel if not triggered by it
@@ -2518,7 +2518,8 @@ void OpenTuneAudioProcessorEditor::trackHeightChanged(int newHeight)
     }
     
     // 鍒锋柊ArrangementView
-    arrangementView_.repaint();
+    if (needsArrangementRebuild)
+        arrangementView_.requestContentRedraw();
 }
 
 void OpenTuneAudioProcessorEditor::visibleTrackCountChanged(int newCount)
@@ -2550,8 +2551,7 @@ void OpenTuneAudioProcessorEditor::trackColorChangeRequested(int trackId)
                 juce::Colour selected = selector_->getCurrentColour();
                 setStandaloneTrackColour(owner_.processorRef_, trackId_, selected);
                 owner_.trackPanel_.setTrackColour(trackId_, selected);
-                owner_.trackPanel_.repaint();
-                owner_.arrangementView_.repaint();
+                owner_.arrangementView_.requestContentRedraw();
                 owner_.projectSession_.markDirty();
             }
         }
@@ -2589,7 +2589,6 @@ void OpenTuneAudioProcessorEditor::trackAddRequested()
 
     trackPanel_.setVisibleTrackCount(current + 1);
     arrangementView_.setVisibleTrackCount(current + 1);
-    arrangementView_.repaint();
     projectSession_.markDirty();
 }
 
@@ -2625,7 +2624,6 @@ void OpenTuneAudioProcessorEditor::trackDuplicateRequested(int trackId)
     trackPanel_.setVisibleTrackCount(visibleCount + 1);
     arrangementView_.setVisibleTrackCount(visibleCount + 1);
     trackPanel_.setTrackColour(targetSlot, arrangement->getTrackColour(trackId));
-    arrangementView_.repaint();
     projectSession_.markDirty();
 }
 
@@ -2657,7 +2655,6 @@ void OpenTuneAudioProcessorEditor::trackDeleteRequested(int trackId)
 // Reduce visible track count (triggers resized + repaint + listener notification)
     trackPanel_.setVisibleTrackCount(newVisibleCount);
     arrangementView_.setVisibleTrackCount(newVisibleCount);
-    arrangementView_.repaint();
     projectSession_.markDirty();
 }
 
@@ -2673,7 +2670,7 @@ void OpenTuneAudioProcessorEditor::trackColorRandomizeRequested(int trackId)
 
     arrangement->setTrackColour(trackId, newColour);
     trackPanel_.setTrackColour(trackId, newColour);
-    arrangementView_.repaint();
+    arrangementView_.requestContentRedraw();
     projectSession_.markDirty();
 }
 
@@ -3170,15 +3167,11 @@ void OpenTuneAudioProcessorEditor::refreshAllUIFromProject()
 
     // Sync arrangement view
     arrangementView_.setVisibleTrackCount(visibleCount);
-    arrangementView_.repaint();
 
     // Sync piano roll to current selection
     const int activeTrack = getStandaloneActiveTrack(processorRef_);
     const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
     syncPianoRollFromPlacementSelection(activeTrack, placementIndex);
-
-    // Clear selection state
-    pianoRoll_.requestContentRedraw();
 }
 
 // ============================================================================
