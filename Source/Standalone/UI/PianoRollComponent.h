@@ -270,6 +270,7 @@ private:
     friend struct PianoRollComponentTestProbe;
 
     void rebuildTimelineCoverage();
+    void invalidateStableScene();
 
     bool enqueueManualCorrectionPatchAsync(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
                                            int dirtyStartFrame,

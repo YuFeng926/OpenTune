@@ -593,8 +593,7 @@ void ArrangementViewComponent::setVisibleTrackCount(int count)
     updateScrollBars();
     
     // Prepare pattern and content tiles for new track count
-    rebuildTimelineCoverage();
-    repaint();
+    invalidateStableScene();
 }
 
 void ArrangementViewComponent::fitToContent()
@@ -665,7 +664,6 @@ void ArrangementViewComponent::resized()
 
     updateScrollBars();
     rebuildTimelineCoverage();
-    prepareCoverageCompositeTilesNew();  // Phase 2: New composite tile pipeline
     repaint();
     // Import drop preview highlight (transient, UI-only)
 
@@ -767,7 +765,6 @@ void ArrangementViewComponent::rebuildContentMetrics()
             revision = hashCombine(revision, static_cast<uint64_t>(std::llround(static_cast<double>(placement.gain) * 1000.0)));
             revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.fadeInDuration * 1000.0)));
             revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.fadeOutDuration * 1000.0)));
-            revision = hashCombine(revision, isPlacementSelected(trackId, placement.placementId) ? 1ull : 0ull);
             // Include placement name in revision (content tile renders label)
             revision = hashCombine(revision, static_cast<uint64_t>(placement.name.hashCode()));
         }
@@ -844,16 +841,21 @@ void ArrangementViewComponent::buildCompositeTile(
     rulerParams.viewKind = "arrangement";
     TimelineLayerComposer::drawTimeRuler(g, rulerParams);
 
+    // Content layers (translated below ruler)
+    {
+        juce::Graphics::ScopedSaveState contentSave(g);
+        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
+
     // 1. Pattern layer: track lanes (from e7c6f65 stable implementation)
     if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
         const int trackHeight = processor_.getTrackHeight();
         const int visibleTracks = juce::jmax(1, visibleTrackCount_);
         for (int trackId = 0; trackId < visibleTracks; ++trackId) {
             auto lane = juce::Rectangle<float>(0.0f,
-                                               static_cast<float>(rulerHeight_ + trackId * trackHeight - verticalScrollOffset_),
+                                               static_cast<float>(trackId * trackHeight - verticalScrollOffset_),
                                                static_cast<float>(tileBounds.getWidth()),
                                                static_cast<float>(trackHeight));
-            if (lane.getBottom() < 0.0f || lane.getY() > tileBounds.getBottom())
+            if (lane.getBottom() < 0.0f || lane.getY() > contentHeight)
                 continue;
 
             const auto laneFill = themeId == ThemeId::Aurora
@@ -879,7 +881,7 @@ void ArrangementViewComponent::buildCompositeTile(
     gridParams.timeSigDenominator = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
     gridParams.themeId = static_cast<int>(themeId);
     gridParams.viewportWidth = tileBounds.getWidth();
-    gridParams.viewportHeight = tileBounds.getHeight();
+    gridParams.viewportHeight = tileBounds.getHeight() - rulerHeight_;
     gridParams.viewportBoundsX = 0;
     gridParams.contentOffsetY = 0;
     gridParams.viewKind = "arrangement";
@@ -898,6 +900,7 @@ void ArrangementViewComponent::buildCompositeTile(
         [](int, uint64_t) { return false; });
 
     paintHistoricalArrangementClips(g, clips, waveformMipmapCache_);
+    }  // contentSave
 }
 
 void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
@@ -1210,9 +1213,59 @@ void ArrangementViewComponent::finishMoveDrag(const juce::MouseEvent& e)
     currentDragOp_ = DragOperation::None;
     isDraggingPlacement_ = false;
 
-    listeners_.call([this](Listener& l) {
-        l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
-    });
+            listeners_.call([this](Listener& l) {
+                l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
+            });
+            invalidateStableScene();
+        }
+
+void ArrangementViewComponent::drawSelectionOverlay(juce::Graphics& g)
+{
+    if (selectedPlacements_.empty())
+        return;
+
+    const auto viewport = getContentViewportBounds();
+    const double visibleStart = camera_.visibleStartSeconds;
+    const double pps = camera_.pixelsPerSecond;
+    const int trackHeight = processor_.getTrackHeight();
+
+    for (const auto& sel : selectedPlacements_) {
+        StandaloneArrangement::Placement placement;
+        if (!getStandalonePlacementById(processor_, sel.trackId, sel.placementId, placement))
+            continue;
+
+        const double placementStart = placement.timelineStartSeconds;
+        const double placementEnd = placement.timelineEndSeconds();
+
+        // Early out if completely off-screen
+        if (placementEnd <= visibleStart || placementStart >= visibleStart + viewport.getWidth() / pps)
+            continue;
+
+        const int x = viewport.getX() + static_cast<int>(std::llround((placementStart - visibleStart) * pps));
+        const int width = juce::jmax(8, static_cast<int>(std::llround(placement.durationSeconds * pps)));
+        const int y = rulerHeight_ + sel.trackId * trackHeight - verticalScrollOffset_ + 2;
+        const int height = trackHeight - 4;
+
+        juce::Rectangle<float> bounds(static_cast<float>(x), static_cast<float>(y),
+                                      static_cast<float>(width), static_cast<float>(height));
+
+        // Skip if entirely outside clip
+        if (bounds.getBottom() < static_cast<float>(rulerHeight_) || bounds.getY() > viewport.getBottom())
+            continue;
+
+        const auto themeId = UIColors::currentThemeId();
+        if (themeId == ThemeId::Aurora) {
+            g.setColour(juce::Colour(Aurora::Colors::Cyan).withAlpha(0.35f));
+            g.fillRoundedRectangle(bounds, 6.0f);
+            g.setColour(juce::Colour(Aurora::Colors::Cyan).withAlpha(0.85f));
+            g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 2.0f);
+        } else {
+            g.setColour(UIColors::accent.withAlpha(0.12f));
+            g.fillRoundedRectangle(bounds, 6.0f);
+            g.setColour(UIColors::accent.withAlpha(0.65f));
+            g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.5f);
+        }
+    }
 }
 
 void ArrangementViewComponent::drawImportDropPreview(juce::Graphics& g)
@@ -1360,29 +1413,6 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
     else
         g.fillAll(UIColors::rollBackground);
 
-    if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
-        const int trackHeight = processor_.getTrackHeight();
-        const int visibleTracks = juce::jmax(1, visibleTrackCount_);
-        for (int trackId = 0; trackId < visibleTracks; ++trackId) {
-            auto lane = juce::Rectangle<float>(0.0f,
-                                               static_cast<float>(rulerHeight_ + trackId * trackHeight - verticalScrollOffset_),
-                                               static_cast<float>(getWidth()),
-                                               static_cast<float>(trackHeight));
-            if (lane.getBottom() < static_cast<float>(rulerHeight_) || lane.getY() > bounds.getBottom())
-                continue;
-
-            const auto laneFill = themeId == ThemeId::Aurora
-                ? ((trackId % 2 == 0) ? UIColors::glassSurface.withAlpha(0.055f) : UIColors::pianoRollLane.withAlpha(0.030f))
-                : ((trackId % 2 == 0) ? UIColors::pianoRollLane.withAlpha(0.060f) : UIColors::glassSurface.withAlpha(0.022f));
-            g.setColour(laneFill);
-            g.fillRect(lane);
-
-            g.setColour((themeId == ThemeId::Aurora ? UIColors::gridLine : UIColors::pianoRollGrid)
-                            .withAlpha(themeId == ThemeId::Aurora ? 0.026f : 0.036f));
-            g.drawHorizontalLine(juce::roundToInt(lane.getBottom()), lane.getX(), lane.getRight());
-        }
-    }
-
     // Ruler backdrop + separator: both driven by the shared ruler style contract.
     {
         const auto style = TimelineLayerComposer::resolveRulerStyle(themeId);
@@ -1393,13 +1423,13 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), style.tickStroke);
     }
 
-    // Clip to timeline viewport
     const auto viewport = getContentViewportBounds();
-    {
-        juce::Graphics::ScopedSaveState clipState(g);
-        g.reduceClipRegion(viewport);
 
-        // 鐩存帴 blit pattern tiles
+    // Tile blit: full height (ruler + content)
+    {
+        juce::Graphics::ScopedSaveState tileClipState(g);
+        g.reduceClipRegion(juce::Rectangle<int>(viewport.getX(), 0, viewport.getWidth(), rulerHeight_ + viewport.getHeight()));
+
         const double visibleStart = camera_.visibleStartSeconds;
         const double pps = camera_.pixelsPerSecond;
 
@@ -1413,13 +1443,22 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
                 g.drawImageAt(*img, blitX, 0);
             }
         }
+    }
 
-        // Removed old content tile loop
+    // Selection overlay: draw tint/border for selected clips (transient, not cached)
+    {
+        juce::Graphics::ScopedSaveState selectionClipState(g);
+        g.reduceClipRegion(viewport);
+        drawSelectionOverlay(g);
+    }
 
-        // Import/move overlays锛堜繚鎸佸湪 clip 鍐咃級
+    // Import/move overlays: content viewport clip only
+    {
+        juce::Graphics::ScopedSaveState overlayClipState(g);
+        g.reduceClipRegion(viewport);
         drawImportDropPreview(g);
         drawMoveDragOverlay(g);
-    }  // clipState 缁撴潫
+    }
 
     // Playhead锛堜笉鍙?content viewport clip 闄愬埗锛?
     drawPlayhead(g);
@@ -1528,16 +1567,14 @@ void ArrangementViewComponent::onHeartbeatTick()
             waveformVisualRefreshPending_ = true;
         } else {
             waveformVisualRefreshPending_ = false;
-            rebuildTimelineCoverage();
-            repaint();
+            invalidateStableScene();
             }
     }
 
     if (!playingNow && waveformVisualRefreshPending_) {
         waveformVisualRefreshPending_ = false;
         // No-op 鈥?render model cache removed
-        rebuildTimelineCoverage();
-        repaint();
+        invalidateStableScene();
         }
 
     if (!playingNow)
@@ -2018,19 +2055,18 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
         }
     }
 
-    // Reset drag op for non-move/gain operations
-    if (currentDragOp_ != DragOperation::Move && currentDragOp_ != DragOperation::Gain) {
+    // Reset drag op for non-move/gain operations (skip plain clicks — None — to avoid invalidating stable scene)
+    if (currentDragOp_ != DragOperation::None && currentDragOp_ != DragOperation::Move && currentDragOp_ != DragOperation::Gain) {
         currentDragOp_ = DragOperation::None;
         dragOperationPlacementId_ = 0;
-        rebuildTimelineCoverage();
-        repaint();
+        invalidateStableScene();
         }
 
     if (isDraggingPlacement_ && currentDragOp_ == DragOperation::Move)
     {
         const auto delta = e.getPosition() - dragStartPos_;
         if (delta.getDistanceFromOrigin() > kPlacementDragThresholdPx) {
-            finishMoveDrag(e);
+            finishMoveDrag(e);  // finishMoveDrag already calls invalidateStableScene
         }
         // else: click only, fall through to cleanup below
     }
@@ -2045,6 +2081,7 @@ void ArrangementViewComponent::mouseUp(const juce::MouseEvent& e)
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
+            invalidateStableScene();
         }
     }
 
@@ -2089,8 +2126,7 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
             {
                 processor_.setTrackHeight(newHeight);
                 listeners_.call([newHeight](Listener& l) { l.trackHeightChanged(newHeight); });
-                rebuildTimelineCoverage();
-        repaint();
+                invalidateStableScene();
                 }
         }
         return;
@@ -2248,8 +2284,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                 pasteTime += entry.durationSeconds; // chain placements sequentially
             }
 
-            rebuildTimelineCoverage();
-        repaint();
+            invalidateStableScene();
             }
         return true;
     }
@@ -2291,6 +2326,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
                         listeners_.call([this](Listener& l) {
                             l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
                         });
+                        invalidateStableScene();
                     }
                 }
             }
@@ -2356,6 +2392,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
+            invalidateStableScene();
         }
         return true;
     }
@@ -2391,6 +2428,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
+            invalidateStableScene();
         }
         return true;
     }
@@ -2420,6 +2458,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 
         if (anyDeleted)
         {
+            invalidateStableScene();
             commitEmptyPlacementSelection();
         }
         return true;
@@ -2457,8 +2496,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
-            rebuildTimelineCoverage();
-        repaint();
+            invalidateStableScene();
             }
         return true;
     }
@@ -2495,8 +2533,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
             listeners_.call([this](Listener& l) {
                 l.placementTimingChanged(selectedTrack_, selectedPlacementIndex_);
             });
-            rebuildTimelineCoverage();
-        repaint();
+            invalidateStableScene();
             }
         return true;
     }
@@ -2624,7 +2661,7 @@ void ArrangementViewComponent::commitPlacementSelection(PlacementSelectionKey pr
         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
     });
 
-    rebuildTimelineCoverage();
+    // Selection is transient overlay — just repaint, don't rebuild tiles
     repaint();
     }
 
@@ -2642,8 +2679,7 @@ void ArrangementViewComponent::commitEmptyPlacementSelection()
     listeners_.call([this](Listener& l) {
         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
     });
-
-    rebuildTimelineCoverage();
+    // Selection is transient overlay — just repaint, don't rebuild tiles
     repaint();
     }
 

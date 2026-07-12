@@ -1914,7 +1914,7 @@ void PianoRollComponent::resized() {
     timeUnitToggleButton_.toFront(false);
     scrollModeToggleButton_.toFront(false);
 
-    prepareCoverageCompositeTilesNew();
+    rebuildTimelineCoverage();
     repaint();
 }
 
@@ -2139,13 +2139,15 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 
     userScrollHold_ = false;
     updateScrollBars();
+    if (contentChanged || curveChanged || bufferChanged)
+        prepareCoverageCompositeTilesNew();
     repaint();
 }
 
 void PianoRollComponent::onTimeGridRevisionChanged()
 {
     timeGridEpoch_.fetch_add(1, std::memory_order_relaxed);
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::onNotesRevisionChanged()
@@ -2157,7 +2159,7 @@ void PianoRollComponent::onNotesRevisionChanged()
 void PianoRollComponent::onPitchRevisionChanged()
 {
     pitchEpoch_.fetch_add(1, std::memory_order_relaxed);
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::requestContentRedraw() {
@@ -2317,6 +2319,13 @@ void PianoRollComponent::rebuildTimelineCoverage()
     prepareCoverageCompositeTilesNew();
 }
 
+void PianoRollComponent::invalidateStableScene()
+{
+    ++stableVisualSceneEpoch_;
+    rebuildTimelineCoverage();
+    repaint();
+}
+
 void PianoRollComponent::focusActiveContentForRegionSwitch(
     const std::vector<SilentGap>& silentGaps)
 {
@@ -2441,54 +2450,43 @@ void PianoRollComponent::setExperimentalFeaturesEnabled(bool enabled)
 void PianoRollComponent::setShowWaveform(bool shouldShow) {
     if (showWaveform_ == shouldShow) return;
     showWaveform_ = shouldShow;
-    ++stableVisualSceneEpoch_;
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::setShowLanes(bool shouldShow) {
     if (showLanes_ == shouldShow) return;
     showLanes_ = shouldShow;
-    ++stableVisualSceneEpoch_;
-    prepareCoverageCompositeTilesNew();
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
     if (noteNameMode_ == noteNameMode) return;
     noteNameMode_ = noteNameMode;
-    ++stableVisualSceneEpoch_;
-    repaint();
+    repaint();  // note names drawn live in paintOverChildren, not cached
 }
 
 void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
     if (showUnvoicedFrames_ == shouldShow) return;
     showUnvoicedFrames_ = shouldShow;
-    ++stableVisualSceneEpoch_;
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::setBpm(double bpm) {
     bpm_ = juce::jlimit(60.0, 240.0, bpm);
-    ++stableVisualSceneEpoch_;
-    prepareCoverageCompositeTilesNew();
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
     if (numerator <= 0 || denominator <= 0) return;
     timeSigNum_ = numerator;
     timeSigDenom_ = denominator;
-    ++stableVisualSceneEpoch_;
-    prepareCoverageCompositeTilesNew();
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::setTimeUnit(TimeUnit unit) {
     if (timeUnit_ == unit) return;
     timeUnit_ = unit;
-    ++stableVisualSceneEpoch_;
-    prepareCoverageCompositeTilesNew();
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::addListener(Listener* listener) {
@@ -2870,9 +2868,7 @@ void PianoRollComponent::setScale(int rootNote, int scaleType)
         return;
     scaleRootNote_ = clampedRoot;
     scaleType_ = clampedType;
-    ++stableVisualSceneEpoch_;
-    prepareCoverageCompositeTilesNew();
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::fitToScreen() {
@@ -3377,7 +3373,7 @@ void PianoRollComponent::buildCompositeTile(
     patternParams.verticalGeometry = verticalGeometry;
     patternParams.laneStyle = encodeLaneStyle(showLanes_, scaleRootNote_, scaleType_);
     patternParams.viewportWidth = tileBounds.getWidth();
-    patternParams.viewportHeight = tileBounds.getHeight();
+    patternParams.viewportHeight = contentHeight;
     patternParams.viewportBoundsX = 0;
     patternParams.contentOffsetY = 0;
     patternParams.viewKind = "pianoroll";
@@ -3390,16 +3386,20 @@ void PianoRollComponent::buildCompositeTile(
         TimelineLayerComposer::drawGridLines(g, patternParams);
     }
 
-    // 2. Content layer: notes/waveform/f0/anchors (from e7c6f65 stable implementation)
+    // 2. Content layer: notes/waveform/f0/anchors (translated below ruler)
+    {
+        juce::Graphics::ScopedSaveState contentSave(g);
+        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
+
     const auto projection = activeContentProjection();
     if (!projection.isValid())
         return;
 
     PianoRollRenderer::RenderContext ctx;
     ctx.width = tileBounds.getWidth();
-    ctx.height = tileBounds.getHeight();
+    ctx.height = contentHeight;
     ctx.pianoKeyWidth = 0;
-    ctx.rulerHeight = rulerHeight_;
+    ctx.rulerHeight = 0;
     ctx.pixelsPerSecond = ppsCanonical;
     ctx.pixelsPerSemitone = pixelsPerSemitone_;
     ctx.minMidi = minMidi_;
@@ -3419,10 +3419,10 @@ void PianoRollComponent::buildCompositeTile(
     tileCoords.pixelsPerSecond = ppsCanonical;
     tileCoords.contentStartX = 0;
     tileCoords.contentWidth = tileBounds.getWidth();
-    tileCoords.contentHeight = tileBounds.getHeight();
+    tileCoords.contentHeight = contentHeight;
     tileCoords.pixelsPerSemitone = pixelsPerSemitone_;
     tileCoords.maxMidi = maxMidi_;
-    tileCoords.verticalScrollOffset = verticalScrollOffset_ - rulerHeight_;
+    tileCoords.verticalScrollOffset = verticalScrollOffset_;
     ctx.coords = tileCoords;
 
     std::shared_ptr<const TimeGridSnapshot> timeAnchorsSnapshot;
@@ -3454,15 +3454,17 @@ void PianoRollComponent::buildCompositeTile(
         }
     }
 
-    // Draw content layers
-    renderer_->drawTimeGridAnchors(g, ctx);
-    renderer_->drawNotes(g, ctx, item);
+    // Draw content layers (Z-order: waveform bottom, notes, unvoiced, F0, anchors top)
     if (showWaveform_ && item.waveformSnapshot.peaks.size() > 0)
         renderer_->drawWaveform(g, ctx, item);
+    renderer_->drawNotes(g, ctx, item);
     if (showUnvoicedFrames_)
         renderer_->drawUnvoicedFrameBands(g, ctx, item);
     if (showOriginalF0_ || showCorrectedF0_)
         renderer_->drawF0Curve(g, ctx, item);
+    renderer_->drawTimeGridAnchors(g, ctx);
+
+    }  // contentSave
 }
 
 void PianoRollComponent::prepareCoverageCompositeTilesNew()
@@ -3477,7 +3479,7 @@ void PianoRollComponent::prepareCoverageCompositeTilesNew()
         std::floor((tileCoverageEndSeconds_ - 1e-9) / tileDuration));
 
     const auto viewport = getTimelineViewportBounds();
-    const int tileHeight = rulerHeight_ + viewport.getHeight();
+    const int tileHeight = viewport.getHeight();  // viewport already includes ruler
 
     compositeCache_.prepare(sig, firstTile, lastTile, tileHeight,
         [this, ppsCanonical, tileDuration](juce::Graphics& g, juce::Rectangle<int> bounds, int64_t tile) {

@@ -222,6 +222,7 @@ private:
     void clearMoveDragOverlay();
     void drawPlayhead(juce::Graphics& g);
     void drawImportDropPreview(juce::Graphics& g);
+    void drawSelectionOverlay(juce::Graphics& g);
     void drawMoveDragOverlay(juce::Graphics& g);
 
     OpenTuneAudioProcessor& processor_;
