@@ -1048,17 +1048,6 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
     return waveformMipmapCache_.buildIncremental(timeBudgetMs);
 }
 
-void ArrangementViewComponent::requestVisualRefresh()
-{
-    rebuildContentMetrics();
-    // BPM/TimeSig are now read directly from processor context
-    lastContextBpm_ = 120.0;
-    lastContextTimeSigNum_ = 4;
-    lastContextTimeSigDenom_ = 4;
-
-    ++stableVisualSceneEpoch_;  // Phase 2: Content metrics refreshed 鈥?invalidate composite tiles
-}
-
 int ArrangementViewComponent::trackIdForViewportY(int y) const noexcept
 {
     const int trackHeight = processor_.getTrackHeight();
@@ -1462,13 +1451,6 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
     // Playhead锛堜笉鍙?content viewport clip 闄愬埗锛?
     drawPlayhead(g);
-}
-
-void ArrangementViewComponent::paintOverChildren(juce::Graphics& g)
-{
-    // Fixed chrome is drawn here (ruler, track headers)
-    // Transient overlay already drawn in paint()
-    (void)g;
 }
 
 #if JUCE_DEBUG

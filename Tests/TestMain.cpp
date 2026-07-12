@@ -346,19 +346,19 @@ void setMutatingHelpersArePure()
     expectNoTokens("togglePlacementSelection", toggleBody,
                    {"listeners_.", "refreshVisualState", "repaint()", "requestInvalidate",
                     "contentCache_", "patternCache_", "prepareCoverageContentTiles",
-                    "requestContentInvalidation", "requestVisualRefresh"});
+                    "requestContentInvalidation"});
     expectNoTokens("clearPlacementSelection", clearBody,
                    {"listeners_.", "refreshVisualState", "repaint()", "requestInvalidate",
                     "contentCache_", "patternCache_", "prepareCoverageContentTiles",
-                    "requestContentInvalidation", "requestVisualRefresh"});
+                    "requestContentInvalidation"});
     expectNoTokens("selectPlacementsInRange", rangeBody,
                    {"listeners_.", "refreshVisualState", "repaint()", "FrameScheduler", "requestInvalidate",
                     "contentCache_", "patternCache_", "prepareCoverageContentTiles",
-                    "requestContentInvalidation", "requestVisualRefresh"});
+                    "requestContentInvalidation"});
     expectNoTokens("selectAllPlacementsInTrack", trackBody,
                    {"listeners_.", "refreshVisualState", "repaint()", "FrameScheduler", "requestInvalidate",
                     "contentCache_", "patternCache_", "prepareCoverageContentTiles",
-                    "requestContentInvalidation", "requestVisualRefresh"});
+                    "requestContentInvalidation"});
 }
 
 void moveBranchHasNoBareRepaint()

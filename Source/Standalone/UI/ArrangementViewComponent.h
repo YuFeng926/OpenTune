@@ -101,7 +101,6 @@ public:
     ~ArrangementViewComponent() override;
 
     void paint(juce::Graphics& g) override;
-    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
     void timerCallback() override;
     void onHeartbeatTick();
@@ -215,7 +214,6 @@ private:
 
 private:
     void updateScrollBars();
-    void requestVisualRefresh();
     void rebuildTimelineCoverage();
     void invalidateStableScene();
     void updateMoveDragOverlay(const juce::MouseEvent& e);
