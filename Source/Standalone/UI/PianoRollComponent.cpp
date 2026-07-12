@@ -270,7 +270,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         if (!published) return false;
         processor_->getUndoManager().addAction(std::move(action));
         repaint();
-        repaint();
         return true;
     };
     toolCtx.repaintTimeGridHandles = [this]() {
@@ -984,7 +983,8 @@ juce::Rectangle<int> PianoRollComponent::getLineAnchorPreviewBounds() const
     };
 
     for (const auto& anchor : interactionState_.drawing.pendingAnchors) {
-        includePoint(static_cast<float>(sourceTimeToX(anchor.time)), freqToY(anchor.freq));
+        includePoint(static_cast<float>(sourceTimeToX(anchor.time)),
+                     freqToY(anchor.freq) + static_cast<float>(rulerHeight_));
     }
     includePoint(interactionState_.drawing.currentMousePos.x, interactionState_.drawing.currentMousePos.y);
 
@@ -1163,6 +1163,9 @@ void PianoRollComponent::drawPlayhead(juce::Graphics& g)
 
 void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
 {
+    juce::Graphics::ScopedSaveState overlaySave(g);
+    g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
+
     // Ghost overlay (reference content) �?drawn in overlay layer, not tiles
     if (referenceOverlay_.has_value() && referenceOverlay_->enabled) {
         auto ctx = makePresentationRenderContext();
@@ -1186,7 +1189,6 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
     if (interactionState_.drawing.isDrawingNote
         && currentTool_ == ToolId::DrawNote) {
         juce::Graphics::ScopedSaveState previewSave(g);
-        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
         double startTime = std::min(interactionState_.drawing.drawingNoteStartTime,
                                     interactionState_.drawing.drawingNoteEndTime);
         double endTime = std::max(interactionState_.drawing.drawingNoteStartTime,
@@ -1218,7 +1220,6 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
     // Translate to content area Y coordinate system, matching content tile blit offset
     if (!interactionState_.noteSelection.selectedIndices.empty()) {
         juce::Graphics::ScopedSaveState highlightSave(g);
-        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
         auto renderCtx = makePresentationRenderContext();
         if (auto* placement = findEditedPlacement()) {
             auto renderItem = buildContentRenderItem(*placement);
@@ -1346,7 +1347,10 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
         float lastX = static_cast<float>(sourceTimeToX(last.time));
         float lastY = freqToY(last.freq);
         g.setColour(anchorColour.withAlpha(0.4f));
-        g.drawLine(lastX, lastY, interactionState_.drawing.currentMousePos.x, interactionState_.drawing.currentMousePos.y, 1.5f);
+        g.drawLine(lastX, lastY,
+                   interactionState_.drawing.currentMousePos.x,
+                   interactionState_.drawing.currentMousePos.y - static_cast<float>(rulerHeight_),
+                   1.5f);
     }
 }
 
@@ -2030,22 +2034,27 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
                     && std::abs(lhs.projection.contentDurationSeconds - rhs.projection.contentDurationSeconds) <= 1.0e-9;
             });
 
-    explicitTimelineContentPlacements_ = explicitContract;
+    // Register waveform mipmap sources (before early-return so late-binding audio works)
+    std::set<ContentKey> aliveContents;
+    for (const auto& placement : placements) {
+        aliveContents.insert(placement.contentKey);
+        if (const auto snapshot = readSnapshotFor(placement.contentKey);
+            snapshot != nullptr && snapshot->audioBuffer != nullptr) {
+            waveformMipmapCache_.getOrCreate(placement.contentKey)
+                .setAudioSource(snapshot->audioBuffer);
+        }
+    }
+    waveformMipmapCache_.prune(aliveContents);
 
+    explicitTimelineContentPlacements_ = explicitContract;
     if (!changed) {
         return false;
     }
 
     timelineContentPlacements_ = std::move(placements);
 
-    std::set<ContentKey> aliveContents;
-    for (const auto& placement : timelineContentPlacements_)
-        aliveContents.insert(placement.contentKey);
-    waveformMipmapCache_.prune(aliveContents);
-
     userScrollHold_ = false;
     updateScrollBars();
-    repaint();
     return true;
 }
 
@@ -2077,13 +2086,14 @@ void PianoRollComponent::setContentProjection(const ContentTimelineProjection& p
     explicitTimelineContentPlacements_ = false;
     deriveSingleTimelineContentPlacement();
     userScrollHold_ = false;
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::setTimelineContentPlacements(std::vector<TimelineContentPlacement> placements)
 {
     if (applyTimelineContentPlacements(std::move(placements), true)) {
         pendingSingleContentProjection_ = activeContentProjection();
+        invalidateStableScene();
     }
 }
 
@@ -2121,7 +2131,6 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 
     if (contentChanged || curveChanged) {
         editedContentEpoch_.fetch_add(1, std::memory_order_release);
-        ++stableVisualSceneEpoch_;
         applyEditedContentCurve(std::move(curve));
     }
 
@@ -2135,9 +2144,7 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 
     userScrollHold_ = false;
     updateScrollBars();
-    if (contentChanged || curveChanged || bufferChanged)
-        prepareCoverageCompositeTilesNew();
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::onTimeGridRevisionChanged()
@@ -2148,7 +2155,7 @@ void PianoRollComponent::onTimeGridRevisionChanged()
 void PianoRollComponent::onNotesRevisionChanged()
 {
     refreshEditedContentNotes();
-    repaint();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::onPitchRevisionChanged()
@@ -2157,7 +2164,7 @@ void PianoRollComponent::onPitchRevisionChanged()
 }
 
 void PianoRollComponent::requestContentRedraw() {
-    repaint();
+    invalidateStableScene();
 }
 
 double PianoRollComponent::readPlayheadTime() const
@@ -2243,7 +2250,7 @@ void PianoRollComponent::onHeartbeatTick()
                 waveformVisualRefreshPending_ = true;
             } else {
                 waveformVisualRefreshPending_ = false;
-                        repaint();
+                        invalidateStableScene();
             }
         }
     } else {
@@ -2253,7 +2260,7 @@ void PianoRollComponent::onHeartbeatTick()
 
     if (!playingNow && waveformVisualRefreshPending_) {
         waveformVisualRefreshPending_ = false;
-            repaint();
+            invalidateStableScene();
     }
 }
 
@@ -2462,6 +2469,18 @@ void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
 void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
     if (showUnvoicedFrames_ == shouldShow) return;
     showUnvoicedFrames_ = shouldShow;
+    invalidateStableScene();
+}
+
+void PianoRollComponent::setShowOriginalF0(bool show) {
+    if (showOriginalF0_ == show) return;
+    showOriginalF0_ = show;
+    invalidateStableScene();
+}
+
+void PianoRollComponent::setShowCorrectedF0(bool show) {
+    if (showCorrectedF0_ == show) return;
+    showCorrectedF0_ = show;
     invalidateStableScene();
 }
 
@@ -3050,7 +3069,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
         return { AutoTuneApplyStatus::AlreadyInFlight };
     }
 
-    repaint(); repaint();
+    repaint();
 
     auto failAfterStart = [this](AutoTuneApplyStatus status) {
         autoTuneInFlight_.store(false, std::memory_order_release);
@@ -3383,10 +3402,6 @@ void PianoRollComponent::buildCompositeTile(
         juce::Graphics::ScopedSaveState contentSave(g);
         g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
 
-    const auto projection = activeContentProjection();
-    if (!projection.isValid())
-        return;
-
     PianoRollRenderer::RenderContext ctx;
     ctx.width = tileBounds.getWidth();
     ctx.height = contentHeight;
@@ -3404,7 +3419,7 @@ void PianoRollComponent::buildCompositeTile(
     ctx.showOriginalF0 = showOriginalF0_;
     ctx.showCorrectedF0 = showCorrectedF0_;
     ctx.timeUnit = (timeUnit_ == TimeUnit::Bars) ? PianoRollTimeUnit::Bars : PianoRollTimeUnit::Seconds;
-    ctx.activeProjection = projection;
+    ctx.activeProjection = activeContentProjection();
 
     ViewMapper tileCoords;
     tileCoords.visibleStartSeconds = tileStartSec;
@@ -3422,39 +3437,34 @@ void PianoRollComponent::buildCompositeTile(
         timeAnchorsSnapshot = snap->timeGrid;
     ctx.timeGridSnapshot = timeAnchorsSnapshot;
 
-    PianoRollRenderer::ContentRenderItem item;
-    item.contentKey = editedContentKey_;
-    item.projection = projection;
-    item.active = true;
-    item.audioBuffer = audioBuffer_;
-    item.displayNotes = getCommittedNotes();
+    // Draw content layers for each placement (Z-order per placement: waveform, notes, unvoiced, F0)
+    for (const auto& placement : timelineContentPlacements_) {
+        if (!placement.isValid()) continue;
 
-    if (currentCurve_) {
-        item.pitchSnapshot = currentCurve_->getSnapshot();
-        if (item.pitchSnapshot && item.pitchSnapshot->size() > 0) {
-            item.f0Timeline = { item.pitchSnapshot->getHopSize(),
-                                   item.pitchSnapshot->getSampleRate(),
-                                   static_cast<int>(item.pitchSnapshot->size()) };
+        auto item = buildContentRenderItem(placement);
+        if (item.active)
+            item.displayNotes = getCommittedNotes();
+
+        // Waveform snapshot
+        if (item.audioBuffer) {
+            const auto* mipmap = waveformMipmapCache_.get(placement.contentKey);
+            if (mipmap && mipmap->hasSource()) {
+                int bestLevel = mipmap->selectBestLevelIndex(ppsCanonical);
+                item.waveformSnapshot = mipmap->snapshotLevel(bestLevel);
+            }
         }
-    }
 
-    if (audioBuffer_) {
-        const auto* mipmap = waveformMipmapCache_.get(editedContentKey_);
-        if (mipmap && mipmap->hasSource()) {
-            int bestLevel = mipmap->selectBestLevelIndex(ppsCanonical);
-            item.waveformSnapshot = mipmap->snapshotLevel(bestLevel);
-        }
+        if (showWaveform_ && item.waveformSnapshot.peaks.size() > 0)
+            renderer_->drawWaveform(g, ctx, item);
+        renderer_->drawNotes(g, ctx, item);
+        if (showUnvoicedFrames_)
+            renderer_->drawUnvoicedFrameBands(g, ctx, item);
+        if (showOriginalF0_ || showCorrectedF0_)
+            renderer_->drawF0Curve(g, ctx, item);
     }
-
-    // Draw content layers (Z-order: waveform bottom, notes, unvoiced, F0, anchors top)
-    if (showWaveform_ && item.waveformSnapshot.peaks.size() > 0)
-        renderer_->drawWaveform(g, ctx, item);
-    renderer_->drawNotes(g, ctx, item);
-    if (showUnvoicedFrames_)
-        renderer_->drawUnvoicedFrameBands(g, ctx, item);
-    if (showOriginalF0_ || showCorrectedF0_)
-        renderer_->drawF0Curve(g, ctx, item);
-    renderer_->drawTimeGridAnchors(g, ctx);
+    // Time grid anchors drawn once (shared across all placements)
+    if (ctx.activeProjection.isValid() && ctx.timeGridSnapshot != nullptr)
+        renderer_->drawTimeGridAnchors(g, ctx);
 
     }  // contentSave
 }

@@ -4,6 +4,15 @@
 #include <cmath>
 
 #include "Editor/Preferences/SharedPreferencePages.h"
+#include "Editor/Preferences/TabbedPreferencesDialog.h"
+#include "Editor/PitchShiftDialogContent.h"
+#include "Plugin/Capture/CaptureSession.h"
+#include "Utils/AppLogger.h"
+#include "Utils/KeyShortcutConfig.h"
+#include "Utils/ParameterPanelSync.h"
+#include "Utils/PitchShiftEditAction.h"
+#include "Utils/PitchShiftSettings.h"
+#include "Utils/ScaleUiMapping.h"
 #include "Utils/TimeCoordinate.h"
 #include "UI/UiAssets.h"
 
@@ -662,13 +671,6 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         std::move(onVocoderModelWeightChanged));
     pages.insert(pages.begin(), { LOC(kAudio), std::move(audioPage) });
 
-    // Append standalone-only pages (Keyswitch, MouseTrail)
-    auto standalonePages = StandalonePreferencePages::createStandaloneOnlyPages(
-        appPreferences_, [this] { syncSharedAppPreferences(); });
-    for (auto& page : standalonePages) {
-        pages.push_back(std::move(page));
-    }
-
     auto* dialogContent = new TabbedPreferencesDialog(std::move(pages));
     dialogContent->setSize(640, 560);
 
@@ -748,6 +750,7 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
     parameterPanel_.applyTheme();
     pianoRoll_.setPlayheadColour(UIColors::playhead);
     sendLookAndFeelChange();
+    pianoRoll_.requestContentRedraw();
     repaint();
 }
 
@@ -1181,5 +1184,3 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
 }
 
 } // namespace OpenTune::PluginUI
-
-#endif // JucePlugin_Build_VST3

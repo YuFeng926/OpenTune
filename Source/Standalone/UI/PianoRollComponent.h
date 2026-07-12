@@ -170,20 +170,8 @@ public:
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
     bool hasUserManuallyZoomed() const { return userHasManuallyZoomed_; }
 
-    void setShowOriginalF0(bool show) {
-        if (showOriginalF0_ == show) return;
-        showOriginalF0_ = show;
-        ++stableVisualSceneEpoch_;
-        prepareCoverageCompositeTilesNew();
-        repaint();
-    }
-    void setShowCorrectedF0(bool show) {
-        if (showCorrectedF0_ == show) return;
-        showCorrectedF0_ = show;
-        ++stableVisualSceneEpoch_;
-        prepareCoverageCompositeTilesNew();
-        repaint();
-    }
+    void setShowOriginalF0(bool show);
+    void setShowCorrectedF0(bool show);
     bool isShowingOriginalF0() const { return showOriginalF0_; }
 
     void setRetuneSpeed(float speed) { currentRetuneSpeed_ = speed; }

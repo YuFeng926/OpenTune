@@ -152,6 +152,7 @@ public:
 
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
+    void requestContentRedraw();
 
     // Import drop preview (transient, UI-only)
     void setImportDropPreview(const ImportDropPreview& preview);

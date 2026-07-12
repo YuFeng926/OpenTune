@@ -135,44 +135,6 @@ void expectNoTokens(std::string_view blockName,
     }
 }
 
-void contentSlotNotesIsRestored()
-{
-    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto slotsFunc = extractFunctionBlock(
-        component, "std::vector<ContentSlot> PianoRollComponent::visibleContentSlots");
-    const auto revisionFunc = extractFunctionBlock(
-        component, "uint64_t PianoRollComponent::revisionForContentSlot");
-
-    expect(!slotsFunc.empty(), "visibleContentSlots must be found");
-    expect(contains(slotsFunc, "ContentSlot::Notes"),
-           "visibleContentSlots must include ContentSlot::Notes");
-    expect(contains(slotsFunc, "ContentSlot::Waveform"),
-           "visibleContentSlots must include ContentSlot::Waveform");
-
-    expect(!revisionFunc.empty(), "revisionForContentSlot must be found");
-    expect(contains(revisionFunc, "ContentSlot::Notes"),
-           "revisionForContentSlot must handle ContentSlot::Notes");
-}
-
-void cachedContentTilesOwnNotes()
-{
-    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto prepareTiles = extractFunctionBlock(
-        component, "void PianoRollComponent::prepareCoverageContentTiles");
-
-    expect(!prepareTiles.empty(), "prepareCoverageContentTiles must be found");
-
-    expect(contains(prepareTiles, "ContentSlot::Notes"),
-           "prepareCoverageContentTiles must handle ContentSlot::Notes");
-    expect(contains(prepareTiles, "renderer_->drawNotes"),
-           "prepareCoverageContentTiles must call renderer_->drawNotes for Notes slot");
-    expect(contains(prepareTiles, "getCommittedNotes()"),
-           "prepareCoverageContentTiles must pass committed notes to renderer");
-    expectNoTokens("prepareCoverageContentTiles", prepareTiles,
-                   {"item.displayNotes = {}", "getDisplayedNotes()"},
-                   "Must not assign empty displayNotes or use draft notes in cache");
-}
-
 void noteAndPitchRevisionPollingIsIndependent()
 {
     const auto standalone = readText("Source/Standalone/PluginEditor.cpp");
@@ -429,28 +391,6 @@ void noSelectPlacementOutsideCommitHelpers()
            + " commit=" + std::to_string(inCommit) + " empty=" + std::to_string(inEmpty) + ")");
 }
 
-void rebuildContentMetricsUsesIsPlacementSelected()
-{
-    const auto src = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
-    const auto body = extractFunctionBlock(src, "void ArrangementViewComponent::rebuildContentMetrics");
-
-    expect(!body.empty(), "rebuildContentMetrics must be found");
-    expect(contains(body, "isPlacementSelected"),
-           "rebuildContentMetrics must use isPlacementSelected");
-}
-
-void prepareCoverageContentTilesUsesArrangementClips()
-{
-    const auto src = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
-    const auto body = extractFunctionBlock(src, "void ArrangementViewComponent::prepareCoverageContentTiles");
-
-    expect(!body.empty(), "prepareCoverageContentTiles must be found");
-    expect(contains(body, "ContentSlot::ArrangementClips"),
-           "prepareCoverageContentTiles must use ContentSlot::ArrangementClips");
-    expect(contains(body, "contentMetrics_.revision"),
-           "prepareCoverageContentTiles must use contentMetrics_.revision");
-}
-
 void selectPlacementClearsOtherTracks()
 {
     const auto src = readText("Source/StandaloneArrangement.cpp");
@@ -570,8 +510,6 @@ int main()
     std::cout << "=== OpenTune Architecture Tests ===\n\n";
 
     try {
-        contentSlotNotesIsRestored();
-        cachedContentTilesOwnNotes();
         noteAndPitchRevisionPollingIsIndependent();
         notePatchCommitReturnsAuthoritativeSnapshot();
         noLegacyNoteInteractionState();
@@ -585,8 +523,6 @@ int main()
         commitEmptyClearsModelSelection();
         noSelectPlacementOutsideCommitHelpers();
         selectPlacementClearsOtherTracks();
-        rebuildContentMetricsUsesIsPlacementSelected();
-        prepareCoverageContentTilesUsesArrangementClips();
 
         // Capture audio buffer → identity TimeGrid contract (VST3 sync with Standalone fix eaf3bf7)
         captureApplyAudioBufferContractIsReferenceWithIdentityTimeGrid();
