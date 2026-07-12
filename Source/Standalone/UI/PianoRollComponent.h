@@ -61,8 +61,7 @@ struct PianoRollComponentTestProbe;
 // ============================================================================
 
 class PianoRollComponent : public juce::Component,
-                           public juce::ScrollBar::Listener,
-                           private juce::AsyncUpdater {
+                           public juce::ScrollBar::Listener {
 public:
     void visibilityChanged() override;
     static constexpr int kAudioSampleRate = 44100;
@@ -331,8 +330,6 @@ private:
     void buildCompositeTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,
                            int64_t absoluteTile, double ppsCanonical, double tileDuration);
 
-    void handleAsyncUpdate() override;
-
     void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
     void drawLineAnchorPreview(juce::Graphics& g);
@@ -472,9 +469,6 @@ private:
     
     std::atomic<bool> autoTuneInFlight_{false};
     std::atomic<uint64_t> editedContentEpoch_{0};
-    std::atomic<uint64_t> waveformSourceEpoch_{0};
-    std::atomic<uint64_t> pitchEpoch_{0};
-    std::atomic<uint64_t> timeGridEpoch_{0};
 
     double bpm_ = 120.0;
     int timeSigNum_ = 4;

@@ -1938,13 +1938,9 @@ void PianoRollComponent::applyEditedContentAudioBuffer(std::shared_ptr<const juc
 
     if (editedContentKey_.isValid() && audioBuffer_ != nullptr && audioBuffer_->getNumSamples() > 0) {
         auto& mipmap = waveformMipmapCache_.getOrCreate(editedContentKey_);
-        const bool changed = mipmap.isSourceChanged(audioBuffer_);
         mipmap.setAudioSource(audioBuffer_);
-        if (changed)
-            waveformSourceEpoch_.fetch_add(1, std::memory_order_release);
     } else if (editedContentKey_.isValid() && waveformMipmapCache_.get(editedContentKey_) != nullptr) {
         waveformMipmapCache_.remove(editedContentKey_);
-        waveformSourceEpoch_.fetch_add(1, std::memory_order_release);
     }
 }
 
@@ -2146,7 +2142,6 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 
 void PianoRollComponent::onTimeGridRevisionChanged()
 {
-    timeGridEpoch_.fetch_add(1, std::memory_order_relaxed);
     invalidateStableScene();
 }
 
@@ -2158,7 +2153,6 @@ void PianoRollComponent::onNotesRevisionChanged()
 
 void PianoRollComponent::onPitchRevisionChanged()
 {
-    pitchEpoch_.fetch_add(1, std::memory_order_relaxed);
     invalidateStableScene();
 }
 
@@ -3291,8 +3285,6 @@ double PianoRollComponent::computeContentTimelineEndSeconds() const noexcept {
 
     return maxEndSeconds;
 }
-
-void PianoRollComponent::handleAsyncUpdate() {}
 
 // ============================================================================
 // Phase 2: Composite cache integration
