@@ -553,6 +553,11 @@ void ArrangementViewComponent::invalidateStableScene()
     repaint();
 }
 
+void ArrangementViewComponent::requestContentRedraw()
+{
+    invalidateStableScene();
+}
+
 TimelineViewportRequest ArrangementViewComponent::makeViewportRequest(
     TimelineViewportRequest::Kind kind,
     double targetTime,
@@ -573,12 +578,12 @@ void ArrangementViewComponent::setVerticalScrollOffset(int offset)
 {
     // 璁＄畻鏈€澶ф粴鍔ㄥ亸绉伙紙鍙杞ㄩ亾楂樺害 + ruler楂樺害 - 鍙楂樺害锛?
     const int totalContentHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
-    const int visibleHeight = getHeight();
+    const int visibleHeight = getHeight() - UIColors::scrollBarThickness;
     const int maxScrollOffset = juce::jmax(0, totalContentHeight - visibleHeight);
     
     // 闄愬埗婊氬姩鑼冨洿 [0, maxScrollOffset]
     verticalScrollOffset_ = juce::jlimit(0, maxScrollOffset, offset);
-    verticalScrollBar_.setCurrentRangeStart(verticalScrollOffset_);
+    verticalScrollBar_.setCurrentRangeStart(verticalScrollOffset_, juce::dontSendNotification);
     
     // Rebuild pattern and content tiles with new vertical window
     rebuildTimelineCoverage();
@@ -589,10 +594,11 @@ void ArrangementViewComponent::setVisibleTrackCount(int count)
 {
     visibleTrackCount_ = juce::jlimit(1, OpenTuneAudioProcessor::MAX_TRACKS, count);
     // Re-clamp scroll offset for new track count
-    setVerticalScrollOffset(verticalScrollOffset_);
+    const int totalContentHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
+    const int visibleHeight = getHeight() - UIColors::scrollBarThickness;
+    const int maxScrollOffset = juce::jmax(0, totalContentHeight - visibleHeight);
+    verticalScrollOffset_ = juce::jlimit(0, maxScrollOffset, verticalScrollOffset_);
     updateScrollBars();
-    
-    // Prepare pattern and content tiles for new track count
     invalidateStableScene();
 }
 
@@ -643,8 +649,8 @@ void ArrangementViewComponent::setExperimentalReferenceControlsEnabled(bool enab
         setMouseCursor(juce::MouseCursor::NormalCursor);
     }
 
-    ++stableVisualSceneEpoch_;  // Phase 2: Track reference controls state changes
-    }
+    repaint();
+}
 
 void ArrangementViewComponent::resized()
 {
@@ -664,7 +670,6 @@ void ArrangementViewComponent::resized()
 
     updateScrollBars();
     rebuildTimelineCoverage();
-    repaint();
     // Import drop preview highlight (transient, UI-only)
 
     timeUnitToggleButton_.toFront(false);
@@ -715,10 +720,14 @@ void ArrangementViewComponent::updateScrollBars()
     horizontalScrollBar_.setRangeLimits(range.absoluteStartPx(), range.absoluteEndPx(), juce::dontSendNotification);
     horizontalScrollBar_.setCurrentRange(range.visibleStartPx(), range.visibleWidthPx(), juce::dontSendNotification);
 
-    int totalTrackHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
-    int visibleHeight = getHeight() - UIColors::scrollBarThickness;
-    verticalScrollBar_.setRangeLimits(0.0, static_cast<double>(totalTrackHeight + visibleHeight));
-    verticalScrollBar_.setCurrentRange(static_cast<double>(verticalScrollOffset_), static_cast<double>(visibleHeight));
+    const int totalTrackHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
+    const int visibleHeight = getHeight() - UIColors::scrollBarThickness;
+    verticalScrollBar_.setRangeLimits(
+        0.0, static_cast<double>(totalTrackHeight), juce::dontSendNotification);
+    verticalScrollBar_.setCurrentRange(
+        static_cast<double>(verticalScrollOffset_),
+        static_cast<double>(visibleHeight),
+        juce::dontSendNotification);
 }
 
 int ArrangementViewComponent::getVisibleViewportWidth() const
