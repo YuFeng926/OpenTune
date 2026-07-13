@@ -133,6 +133,7 @@ public:
         isPlaying_.store(playing, std::memory_order_relaxed);
         if (stateChanged) {
             userScrollHold_ = false;
+            playheadTimeForPaint_ = readPlayheadTime();
             repaint();
         }
     }
@@ -214,6 +215,7 @@ public:
 
     void setPlayheadPositionSource(std::weak_ptr<std::atomic<double>> source) {
         positionSource_ = source;
+        playheadTimeForPaint_ = readPlayheadTime();
     }
 
     void fitToScreen();
@@ -534,6 +536,7 @@ private:
     
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
     std::weak_ptr<std::atomic<double>> positionSource_;
+    double playheadTimeForPaint_ = 0.0;
 
     juce::ListenerList<Listener> listeners_;
     

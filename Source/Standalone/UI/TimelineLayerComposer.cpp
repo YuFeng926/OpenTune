@@ -92,15 +92,20 @@ static std::array<bool, 12> buildInScalePitchClasses(int scaleType, int rootNote
 // ============================================================================
 // resolveRulerStyle — 从 themeId 推导 ruler 视觉样式
 // ============================================================================
-TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(ThemeId themeId) {
+TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(const std::string& viewKind, ThemeId themeId) {
     TimelineRulerStyle style;
+    const bool isArrangement = (viewKind == "arrangement");
 
     if (themeId == ThemeId::Aurora) {
         style.backgroundColour = UIColors::pianoRollBackground;
-        style.labelColour = UIColors::textSecondary.withMultipliedAlpha(0.48f);
-        style.tickColour = UIColors::gridLine.withAlpha(0.080f);
+        style.labelColour = isArrangement
+            ? UIColors::textSecondary
+            : UIColors::textSecondary.withMultipliedAlpha(0.48f);
+        style.tickColour = isArrangement
+            ? UIColors::textSecondary
+            : UIColors::gridLine.withAlpha(0.080f);
         style.separatorColour = UIColors::gridLine.withAlpha(0.060f);
-        style.tickStroke = 0.7f;
+        style.tickStroke = isArrangement ? 1.0f : 0.7f;
     } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
         style.backgroundColour = UIColors::pianoRollBackground;
         style.labelColour = UIColors::textSecondary.withAlpha(0.58f);
@@ -147,9 +152,12 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
             bool isMeasure = (beatInterval >= 4.0) ? true : ((beat % 4) == 0);
 
             if (themeId == ThemeId::Aurora) {
-                g.setColour(isMeasure
-                    ? UIColors::pianoRollGrid.interpolatedWith(UIColors::textSecondary, 0.14f).withAlpha(0.064f)
-                    : UIColors::pianoRollGrid.withAlpha(0.022f));
+                if (params.viewKind == "arrangement")
+                    g.setColour(UIColors::gridLine.withAlpha(isMeasure ? 0.060f : 0.022f));
+                else
+                    g.setColour(isMeasure
+                        ? UIColors::pianoRollGrid.interpolatedWith(UIColors::textSecondary, 0.14f).withAlpha(0.064f)
+                        : UIColors::pianoRollGrid.withAlpha(0.022f));
             } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
                 g.setColour(UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f));
             } else if (themeId == ThemeId::DarkBlueGrey) {
@@ -175,7 +183,10 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
             if (pixelX < -2 || pixelX > w + 2) continue;
 
             if (themeId == ThemeId::Aurora) {
-                g.setColour(UIColors::pianoRollGrid.withAlpha(0.016f));
+                if (params.viewKind == "arrangement")
+                    g.setColour(UIColors::gridLine.withAlpha(0.022f));
+                else
+                    g.setColour(UIColors::pianoRollGrid.withAlpha(0.016f));
             } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
                 g.setColour(UIColors::pianoRollGrid.withAlpha(0.022f));
             } else if (themeId == ThemeId::DarkBlueGrey) {
@@ -198,7 +209,7 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
     const juce::Rectangle<int> rulerPaintBounds { 0, 0, params.viewportWidth, rulerHeight };
 
     const auto themeId = static_cast<ThemeId>(params.themeId);
-    const auto rulerStyle = resolveRulerStyle(themeId);
+    const auto rulerStyle = resolveRulerStyle(params.viewKind, themeId);
     const double pps = params.pixelsPerSecond;
 
     int rulerTop = 0;

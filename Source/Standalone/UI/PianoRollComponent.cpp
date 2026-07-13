@@ -228,6 +228,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.notifyPlayheadChange = [this](double time) {
         listeners_.call([time](Listener& l) { l.playheadPositionChangeRequested(time); });
         userScrollHold_ = false;
+        playheadTimeForPaint_ = readPlayheadTime();
         repaint();
     };
     toolCtx.notifyPitchCurveEdited = [this](int s, int e) {
@@ -1129,7 +1130,7 @@ void PianoRollComponent::drawPlayhead(juce::Graphics& g)
     const auto mapper = makeViewMapper();
 
     const int contentViewportLeft = mapper.contentStartX;
-    const int timeDerivedX = mapper.timeToX(readPlayheadTime());
+    const int timeDerivedX = mapper.timeToX(playheadTimeForPaint_);
     const int contentViewportRight = viewportBounds.getRight();
     const int viewportCentreX = (contentViewportLeft + contentViewportRight) / 2;
 
@@ -2214,6 +2215,14 @@ void PianoRollComponent::onHeartbeatTick()
 
     const bool playingNow = isPlaying_.load(std::memory_order_relaxed);
 
+    if (!playingNow) {
+        const double currentPlayheadTime = readPlayheadTime();
+        if (currentPlayheadTime != playheadTimeForPaint_) {
+            playheadTimeForPaint_ = currentPlayheadTime;
+            repaint();
+        }
+    }
+
     // Coverage boundary maintenance during playback
     if (playingNow) {
         const int contentViewportWidth = getTimelineContentViewportWidth();
@@ -2275,6 +2284,7 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         return;
 
     const double playheadTime = readPlayheadTime();
+    playheadTimeForPaint_ = playheadTime;
     const int visibleWidth = getTimelineContentViewportWidth();
     if (visibleWidth <= 0)
         return;
