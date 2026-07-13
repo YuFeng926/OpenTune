@@ -61,7 +61,6 @@ struct TimelineRulerStyle {
     juce::Colour labelColour;
     juce::Colour tickColour;
     juce::Colour separatorColour;
-    juce::Colour backgroundColour;
     float tickStroke = 0.7f;
 };
 

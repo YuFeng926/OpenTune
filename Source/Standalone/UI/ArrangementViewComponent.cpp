@@ -1413,10 +1413,8 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
     // Ruler backdrop + separator: both driven by the shared ruler style contract.
     {
+        juce::Graphics::ScopedSaveState separatorState(g);
         const auto style = TimelineLayerComposer::resolveRulerStyle("arrangement", themeId);
-        const juce::Rectangle<int> rulerArea(0, 0, getWidth(), rulerHeight_);
-        g.setColour(style.backgroundColour);
-        g.fillRect(rulerArea.toFloat());
         g.setColour(style.separatorColour);
         g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), style.tickStroke);
     }
