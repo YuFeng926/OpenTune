@@ -97,23 +97,16 @@ TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(const std::string& v
     const bool isArrangement = (viewKind == "arrangement");
 
     if (themeId == ThemeId::Aurora) {
-        style.backgroundColour = UIColors::pianoRollBackground;
-        style.labelColour = isArrangement
-            ? UIColors::textSecondary
-            : UIColors::textSecondary.withMultipliedAlpha(0.48f);
-        style.tickColour = isArrangement
-            ? UIColors::textSecondary
-            : UIColors::gridLine.withAlpha(0.080f);
+        style.labelColour = UIColors::textSecondary.withMultipliedAlpha(0.48f);
+        style.tickColour = UIColors::gridLine.withAlpha(0.080f);
         style.separatorColour = UIColors::gridLine.withAlpha(0.060f);
         style.tickStroke = isArrangement ? 1.0f : 0.7f;
     } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
-        style.backgroundColour = UIColors::pianoRollBackground;
         style.labelColour = UIColors::textSecondary.withAlpha(0.58f);
         style.tickColour = UIColors::pianoRollGrid.withAlpha(0.052f);
         style.separatorColour = UIColors::pianoRollGrid.withAlpha(0.040f);
         style.tickStroke = 0.7f;
     } else {
-        style.backgroundColour = UIColors::backgroundMedium;
         style.labelColour = UIColors::textSecondary;
         style.tickColour = UIColors::gridLine;
         style.separatorColour = UIColors::panelBorder;
