@@ -126,7 +126,7 @@ namespace TimelineLayerComposer {
     void drawContentTile(juce::Graphics& g, const juce::Image& tile, double cacheStartSeconds, const RenderParams& params);
 
     juce::Image buildPatternTile(const PatternTileKey& key);
-    TimelineRulerStyle resolveRulerStyle(ThemeId themeId);
+    TimelineRulerStyle resolveRulerStyle(const std::string& viewKind, ThemeId themeId);
     void drawGridLines(juce::Graphics& g, const RenderParams& params);
     void drawTimeRuler(juce::Graphics& g, const RenderParams& params);
 

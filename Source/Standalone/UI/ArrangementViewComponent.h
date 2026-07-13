@@ -119,6 +119,7 @@ public:
         const bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
         isPlaying_.store(playing, std::memory_order_relaxed);
         if (stateChanged) {
+            playheadTimeForPaint_ = readPlayheadSeconds();
             repaint();
         }
     }
@@ -130,6 +131,7 @@ public:
     // 设置播放头位置源（由组件内部读取）
     void setPlayheadPositionSource(std::weak_ptr<std::atomic<double>> source) {
         positionSource_ = source;
+        playheadTimeForPaint_ = readPlayheadSeconds();
     }
     void commitViewportRequest(TimelineViewportRequest req);
     TimelineViewportCamera timelineCamera() const noexcept { return camera_; }
@@ -365,6 +367,7 @@ private:
 
     // 播放头位置源（来自 Processor 的原子位置）
     std::weak_ptr<std::atomic<double>> positionSource_;
+    double playheadTimeForPaint_ = 0.0;
 
     // Import drop preview state (transient, cleared on drop/cancel)
     ImportDropPreview importDropPreview_;

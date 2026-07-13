@@ -1366,7 +1366,7 @@ void ArrangementViewComponent::drawPlayhead(juce::Graphics& g)
 {
     const auto viewportBounds = getContentViewportBounds();
 
-    const int timeDerivedX = makeViewMapper().timeToX(readPlayheadSeconds());
+    const int timeDerivedX = makeViewMapper().timeToX(playheadTimeForPaint_);
     const int viewportCentreX = viewportBounds.getCentreX();
     const int viewportRight = viewportBounds.getRight();
     const int viewLeftGuardX = viewportBounds.getX();
@@ -1413,7 +1413,7 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
     // Ruler backdrop + separator: both driven by the shared ruler style contract.
     {
-        const auto style = TimelineLayerComposer::resolveRulerStyle(themeId);
+        const auto style = TimelineLayerComposer::resolveRulerStyle("arrangement", themeId);
         const juce::Rectangle<int> rulerArea(0, 0, getWidth(), rulerHeight_);
         g.setColour(style.backgroundColour);
         g.fillRect(rulerArea.toFloat());
@@ -1533,6 +1533,14 @@ void ArrangementViewComponent::onHeartbeatTick()
 
     const bool playingNow = processor_.isPlaying();
 
+    if (!playingNow) {
+        const double currentPlayheadTime = readPlayheadSeconds();
+        if (currentPlayheadTime != playheadTimeForPaint_) {
+            playheadTimeForPaint_ = currentPlayheadTime;
+            repaint();
+        }
+    }
+
     // 鎺ㄧ悊娲昏穬鏃朵富鍔ㄩ檷棰戯細娉㈠舰鍚庡彴鏋勫缓鏀逛负浣庨灏忛绠楋紝鍑忓皯娑堟伅绾跨▼绔炰簤銆?
     bool progressed = false;
     if (inferenceActive_)
@@ -1595,6 +1603,7 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
         return;
 
     const double playheadTime = readPlayheadSeconds();
+    playheadTimeForPaint_ = playheadTime;
     const double pps = camera_.pixelsPerSecond;
 
     TimelineViewportRequest::Kind kind = (scrollMode_ == ScrollMode::Continuous)
@@ -1743,6 +1752,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         // Clicked on ruler 鈥?seek playhead and start drag
         double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         processor_.setPosition(newPosSeconds);
+        playheadTimeForPaint_ = readPlayheadSeconds();
         repaint();
         isDraggingPlayhead_ = true;
         dragStartPos_ = e.getPosition();
@@ -1753,6 +1763,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         // Clicked on empty area 鈥?seek playhead and clear selection
         double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         processor_.setPosition(newPosSeconds);
+        playheadTimeForPaint_ = readPlayheadSeconds();
         repaint();
 
         if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
@@ -1916,6 +1927,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     {
         double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         processor_.setPosition(newPosSeconds);
+        playheadTimeForPaint_ = readPlayheadSeconds();
         repaint();
         return;
     }
