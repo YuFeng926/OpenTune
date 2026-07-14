@@ -82,9 +82,16 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
     }
 
     // Strict monotonicity (source AND output)
+    // Internal/internal and internal/endpoint spacing: 150 ms minimum source-time spacing
     for (size_t i = 1; i < handles.size(); ++i) {
         const auto& prev = handles[i - 1];
         const auto& curr = handles[i];
+
+        // Endpoint spacing not checked: ClipStart→ClipEnd distance = total duration
+        const bool isEndpointOnly = (handles.size() == 2) &&
+                                    (i == 1);  // last handle is ClipEnd
+
+        // Source monotonicity
         if (curr.source_seconds <= prev.source_seconds) {
             outError = "Handles must have strictly increasing source_seconds at index "
                        + juce::String((int) i)
@@ -92,6 +99,7 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
                        + ", curr=" + juce::String(curr.source_seconds, 9) + ")";
             return false;
         }
+        // Output monotonicity
         if (curr.output_seconds <= prev.output_seconds) {
             outError = "Handles must have strictly increasing output_seconds at index "
                        + juce::String((int) i)
@@ -99,15 +107,8 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
                        + ", curr=" + juce::String(curr.output_seconds, 9) + ")";
             return false;
         }
-        // 150 ms minimum source-time spacing between handles (15 frames @ 100 fps F0 rate).
-        // Tighter spacing produces segments too short for WSOLA to stretch
-        // without artifacts; 150 ms ≈ 1/16 note at 120 BPM.
-        //
-        // Comparison in frame domain (integers): source_seconds originated as
-        // integer frames ÷ 100.0, and kMinSourceSpacingFrames=15 is the exact
-        // integer equivalent of 150 ms.  Frame-domain comparison avoids IEEE 754
-        // decimal-fraction rounding issues with 0.15.
-        if (!hasMinimumSourceSpacing(prev.source_seconds, curr.source_seconds)) {
+        // Internal handle spacing: require 150 ms minimum source-time spacing
+        if (!isEndpointOnly && !hasMinimumSourceSpacing(prev.source_seconds, curr.source_seconds)) {
             const double srcGapMs = (curr.source_seconds - prev.source_seconds) * 1000.0;
             outError = "Handles must have source_seconds spacing >= "
                        + juce::String(static_cast<int>(kMinSourceSpacingSeconds * 1000.0))
@@ -177,8 +178,7 @@ std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::makeIdentity(double to
     clipEnd.locked = true;
     handles.push_back(clipEnd);
 
-    return std::shared_ptr<const TimeGridSnapshot>(
-        new TimeGridSnapshot(std::move(handles), /*revision=*/1));
+    return makeFromHandles(std::move(handles), /*revision=*/1);
 }
 
 std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::makeFromHandles(std::vector<TimeHandle> handles,

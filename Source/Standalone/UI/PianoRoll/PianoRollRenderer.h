@@ -54,6 +54,7 @@ public:
     {
         ContentKey contentKey;
         ContentTimelineProjection projection;
+        std::shared_ptr<const TimeGridSnapshot> timeGrid;
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
         WaveformLevelSnapshot waveformSnapshot;
         std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
@@ -63,7 +64,7 @@ public:
 
         bool isValid() const noexcept
         {
-            return contentKey.isValid() && projection.isValid();
+            return contentKey.isValid() && projection.isValid() && static_cast<bool>(timeGrid);
         }
     };
 
@@ -113,6 +114,8 @@ public:
 
         // source content → timeline 的投影值
         ContentTimelineProjection sourceProjection;
+        // reference content 的 TimeGrid（source↔output 转换）
+        std::shared_ptr<const TimeGridSnapshot> timeGrid;
     };
 
     /// Render context — includes stable content state and transient UI fields.
@@ -136,9 +139,6 @@ public:
         bool showOriginalF0 = true;
         bool showCorrectedF0 = true;
 
-        std::shared_ptr<const TimeGridSnapshot> timeGridSnapshot;
-        ContentTimelineProjection activeProjection;
-
         PianoRollTimeUnit timeUnit = PianoRollTimeUnit::Seconds;
         ViewMapper coords;
 
@@ -160,7 +160,7 @@ public:
 
     /// Draw published TimeGrid anchors as cache-friendly neutral lines.
     /// No hover/selected/drag affordances — those are painted by drawTimeGridHandles in overlay.
-    void drawTimeGridAnchors(juce::Graphics& g, const RenderContext& ctx);
+    void drawTimeGridAnchors(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
 
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
     void drawNotes(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
@@ -172,7 +172,7 @@ public:
     void drawF0Curve(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
 
     // ⚡️ §8.5 — paint TimeGrid handles as vertical guide lines.
-    void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx);
+    void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
 
     void drawGhostNotes(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);
     void drawGhostAnchors(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);

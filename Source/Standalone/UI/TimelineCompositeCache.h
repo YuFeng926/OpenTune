@@ -28,6 +28,7 @@ struct GeometryState {
 
 struct GenerationSignature {
     int64_t ppsMilli = 0;              // round(pps * 1000)
+    int64_t dpiMilli = 1000;            // round(desktop scale factor * 1000)
     GeometryState geometry;
     int themeId = 0;
     int laneStyle = 0;

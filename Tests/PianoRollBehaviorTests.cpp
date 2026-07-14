@@ -3,6 +3,7 @@
 #include "../Source/Standalone/UI/PianoRoll/InteractionState.h"
 #include "../Source/Content/EditableContentSnapshot.h"
 #include "../Source/Content/CaptureSegmentContent.h"
+#include "../Source/Utils/TimeGrid.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -343,6 +344,36 @@ void captureSegmentContentAudioBufferBirthsIdentityTimeGrid()
     expect(snap->timeGridRevision == 1, "timeGridRevision must be 1 after first applyAudioBuffer");
 }
 
+void timeGridSnapshotIdentityRoundTrip()
+{
+    const double duration = 0.1;
+
+    // makeIdentity(0.1) must succeed without throwing (returns shared_ptr<const TimeGridSnapshot>)
+    const auto identity = TimeGridSnapshot::makeIdentity(duration);
+    expect(identity != nullptr, "makeIdentity must return non-null snapshot");
+
+    expect(identity->totalDurationSeconds() == duration,
+           "makeIdentity duration must match argument");
+
+    expect(identity->isIdentity(),
+           "makeIdentity result must be identity time grid");
+
+    // Extract handles and round-trip through makeFromHandles
+    const std::vector<TimeHandle> handles = identity->handles();
+    expect(!handles.empty(),
+           "makeIdentity snapshot must have non-empty handles vector");
+
+    // makeFromHandles(std::vector<TimeHandle> handles, uint64_t revision = 1) → returns shared_ptr<const TimeGridSnapshot>
+    const auto restored = TimeGridSnapshot::makeFromHandles(handles);
+    expect(restored != nullptr, "makeFromHandles must return non-null snapshot");
+
+    expect(restored->totalDurationSeconds() == duration,
+           "round-tripped snapshot duration must match original");
+
+    expect(restored->isIdentity(),
+           "round-tripped snapshot must still be identity");
+}
+
 } // namespace
 
 int main()
@@ -354,6 +385,7 @@ int main()
         dragPreviewUsesWorkingNotesAndLiveInvalidation();
         pianoRollEditActionUndoRedoCommitsRangeSnapshots();
         captureSegmentContentAudioBufferBirthsIdentityTimeGrid();
+        timeGridSnapshotIdentityRoundTrip();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";

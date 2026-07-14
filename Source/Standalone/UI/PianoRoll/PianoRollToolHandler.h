@@ -192,7 +192,7 @@ public:
         // are optional: if the content has none (e.g., loose source
         // not yet bound), Time tool drag is suppressed by ToolHandler.
         // ============================================================
-        std::function<std::shared_ptr<const TimeGridSnapshot>()> getTimeGridSnapshot;
+        std::function<std::shared_ptr<const TimeGridSnapshot>()> getActiveContentTimeGrid;
         // commitTimeGrid: publish (newSnapshot) and record undo with
         // (oldSnapshot) supplied by caller.  Returns true when the processor
         // accepted the snapshot (validation passed).

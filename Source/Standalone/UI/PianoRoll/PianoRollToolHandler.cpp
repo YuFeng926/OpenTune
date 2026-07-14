@@ -1,4 +1,4 @@
-#include "PianoRollToolHandler.h"
+﻿#include "PianoRollToolHandler.h"
 #include "../../../Utils/AudioEditingScheme.h"
 #include "../../../Utils/PitchUtils.h"
 #include "../../../Utils/AppLogger.h"
@@ -298,7 +298,7 @@ void updateNoteDragPreview(PianoRollToolHandler::Context& ctx, float shiftFactor
 }
 
 // ============================================================================
-// PianoRollToolHandler - 钢琴卷帘工具处理器实�?
+// PianoRollToolHandler - 閽㈢惔鍗峰笜宸ュ叿澶勭悊鍣ㄥ疄锟?
 // ============================================================================
 
 PianoRollToolHandler::PianoRollToolHandler(Context context)
@@ -315,15 +315,15 @@ void PianoRollToolHandler::setTool(ToolId tool)
 
 std::optional<double> PianoRollToolHandler::pixelXToSourceTime(int pixelX) const
 {
-    // Pipeline: pixelX → timeline → output(content) → tauInverse → source.
-    // invalid projection 意味着没有 edit target，返回 nullopt。
-    // 一旦 projection valid，TimeGrid 必须参与 output/source 转换，
-    // identity TimeGrid 的 tauInverse 本身就是 identity，无需特判。
+    // Pipeline: pixelX 鈫?timeline 鈫?output(content) 鈫?tauInverse 鈫?source.
+    // invalid projection 鎰忓懗鐫€娌℃湁 edit target锛岃繑鍥?nullopt銆?
+    // 涓€鏃?projection valid锛孴imeGrid 蹇呴』鍙備笌 output/source 杞崲锛?
+    // identity TimeGrid 鐨?tauInverse 鏈韩灏辨槸 identity锛屾棤闇€鐗瑰垽銆?
     const auto projection = ctx_.getContentProjection();
     if (!projection.isValid())
         return std::nullopt;
 
-    const auto grid = ctx_.getTimeGridSnapshot();
+    const auto grid = ctx_.getActiveContentTimeGrid();
     jassert(grid != nullptr);
 
     const double timelineSeconds = ctx_.getViewMapper().xToTime(pixelX);
@@ -333,12 +333,12 @@ std::optional<double> PianoRollToolHandler::pixelXToSourceTime(int pixelX) const
 
 double PianoRollToolHandler::sourceTimeToTimelineTime(double sourceSeconds) const
 {
-    // Pipeline: source → tauForward → output(content) → timeline.
-    // projection valid 是调用方契约（入口已检查）。
+    // Pipeline: source 鈫?tauForward 鈫?output(content) 鈫?timeline.
+    // projection valid 鏄皟鐢ㄦ柟濂戠害锛堝叆鍙ｅ凡妫€鏌ワ級銆?
     const auto projection = ctx_.getContentProjection();
     jassert(projection.isValid());
 
-    const auto grid = ctx_.getTimeGridSnapshot();
+    const auto grid = ctx_.getActiveContentTimeGrid();
     jassert(grid != nullptr);
 
     const double outputSeconds = grid->tauForward(sourceSeconds);
@@ -352,13 +352,13 @@ int PianoRollToolHandler::sourceTimeToScreenX(double sourceSeconds) const
 
 SourceEditRange PianoRollToolHandler::sourceEditRange(double minDurationSeconds) const
 {
-    const auto grid = ctx_.getTimeGridSnapshot();
+    const auto grid = ctx_.getActiveContentTimeGrid();
     jassert(grid != nullptr);
     return SourceEditRange::fromTimeGrid(*grid, minDurationSeconds);
 }
 
 void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
-// 鼠标移动处理：更新光标形状（音符边缘调整、线锚点预览�?
+// 榧犳爣绉诲姩澶勭悊锛氭洿鏂板厜鏍囧舰鐘讹紙闊崇杈圭紭璋冩暣銆佺嚎閿氱偣棰勮锟?
 {
     if (e.mods.isCtrlDown()) {
         ctx_.setMouseCursor(juce::MouseCursor::DraggingHandCursor);
@@ -669,8 +669,8 @@ bool PianoRollToolHandler::isEmptySpaceMouseDown(const juce::MouseEvent& e)
         return false;
     }
 
-    // TimeTool �?mouseDown 自己处理 hit-test handle / 空区两种语义�?
-    // 不能被空区意图捕获，否则 handleTimeToolMouseDown 永不触发，handle 无法拖动�?
+    // TimeTool 锟?mouseDown 鑷繁澶勭悊 hit-test handle / 绌哄尯涓ょ璇箟锟?
+    // 涓嶈兘琚┖鍖烘剰鍥炬崟鑾凤紝鍚﹀垯 handleTimeToolMouseDown 姘镐笉瑙﹀彂锛宧andle 鏃犳硶鎷栧姩锟?
     if (currentTool_ == ToolId::TimeTool) {
         return false;
     }
@@ -961,7 +961,7 @@ void PianoRollToolHandler::cancelActiveMouseGesture()
 }
 
 void PianoRollToolHandler::handleDeleteKey()
-// 删除键处理：删除选中的音符和选区内的内容，同时清除对应的音高修正
+// 鍒犻櫎閿鐞嗭細鍒犻櫎閫変腑鐨勯煶绗﹀拰閫夊尯鍐呯殑鍐呭锛屽悓鏃舵竻闄ゅ搴旂殑闊抽珮淇
 {
     const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
     ctx_.beginNoteDraft();
@@ -1009,7 +1009,7 @@ void PianoRollToolHandler::handleDeleteKey()
     }
 
     bool handled = false;
-    // 本地累积需要清除的修正范围，不立即提交，最后一次性与音符原子提交
+    // 鏈湴绱Н闇€瑕佹竻闄ょ殑淇鑼冨洿锛屼笉绔嬪嵆鎻愪氦锛屾渶鍚庝竴娆℃€т笌闊崇鍘熷瓙鎻愪氦
     std::vector<F0FrameRange> correctionClearRanges;
 
     if (!selectedIndices.empty()) {
@@ -1062,9 +1062,9 @@ void PianoRollToolHandler::handleDeleteKey()
     if (handled) {
         ctx_.getNoteDraft().contentDirty = true;
         ctx_.getNoteDraft().workingNotes = notes;
-        ctx_.setUndoDescription(juce::String("删除音符"));
+        ctx_.setUndoDescription(juce::String("鍒犻櫎闊崇"));
 
-        // 同步计算清除修正 + 删除音符 �?一次性原子提�?
+        // 鍚屾璁＄畻娓呴櫎淇 + 鍒犻櫎闊崇 锟?涓€娆℃€у師瀛愭彁锟?
         bool committed = false;
         if (curve && !correctionClearRanges.empty()) {
             auto clonedCurve = curve->clone();
@@ -1072,8 +1072,8 @@ void PianoRollToolHandler::handleDeleteKey()
                 clonedCurve->clearCorrectionRange(range.startFrame, range.endFrameExclusive);
             }
             auto snap = clonedCurve->getSnapshot();
-            // delete 路径：affectedRange = globalDirty*Frame 的覆盖范围（含端点）�?
-            // �?F0FrameRange �?endFrameExclusive 语义�?
+            // delete 璺緞锛歛ffectedRange = globalDirty*Frame 鐨勮鐩栬寖鍥达紙鍚鐐癸級锟?
+            // 锟?F0FrameRange 锟?endFrameExclusive 璇箟锟?
             const F0FrameRange affectedRange{globalDirtyStartFrame, globalDirtyEndFrame + 1};
 
             // Extract segments overlapping the affected range (range-scoped, not full)
@@ -1103,7 +1103,7 @@ void PianoRollToolHandler::handleDeleteKey()
 }
 
 void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
-// 选择工具鼠标按下处理：检测音符边缘调整、音符选中/取消选中、框选区域开�?
+// 閫夋嫨宸ュ叿榧犳爣鎸変笅澶勭悊锛氭娴嬮煶绗﹁竟缂樿皟鏁淬€侀煶绗﹂€変腑/鍙栨秷閫変腑銆佹閫夊尯鍩熷紑锟?
 {
     const auto& notes = committedNotes(ctx_);
 
@@ -1302,7 +1302,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
-// 手绘曲线工具处理：将鼠标位置转换为F0值，在帧间进行对数插值，记录脏区�?
+// 鎵嬬粯鏇茬嚎宸ュ叿澶勭悊锛氬皢榧犳爣浣嶇疆杞崲涓篎0鍊硷紝鍦ㄥ抚闂磋繘琛屽鏁版彃鍊硷紝璁板綍鑴忓尯锟?
 {
     auto pitchCurve = ctx_.getPitchCurve();
     if (!pitchCurve) {
@@ -1386,7 +1386,7 @@ void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
-// 绘制音符工具鼠标按下处理：检测是否点击已有音符进行选择，设置待拖拽状�?
+// 缁樺埗闊崇宸ュ叿榧犳爣鎸変笅澶勭悊锛氭娴嬫槸鍚︾偣鍑诲凡鏈夐煶绗﹁繘琛岄€夋嫨锛岃缃緟鎷栨嫿鐘讹拷?
 {
     const auto projection = ctx_.getContentProjection();
     if (!projection.isValid())
@@ -1430,7 +1430,7 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
-// 绘制音符工具处理：更�?DrawingState 预览状态（不创�?noteDraft），overlay 负责渲染
+// 缁樺埗闊崇宸ュ叿澶勭悊锛氭洿锟?DrawingState 棰勮鐘舵€侊紙涓嶅垱锟?noteDraft锛夛紝overlay 璐熻矗娓叉煋
 {
     const auto projection = ctx_.getContentProjection();
     if (!projection.isValid())
@@ -1462,24 +1462,24 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
         ctx_.setDrawingNoteEndTime(clampedTime);
     }
 
-    // Only repaint the lightweight preview overlay �?no render model rebuild
+    // Only repaint the lightweight preview overlay 锟?no render model rebuild
     if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview({});
 }
 
 void PianoRollToolHandler::handleAutoTuneTool(const juce::MouseEvent& e)
-// 自动音调工具处理：触发自动音调生成请�?
+// 鑷姩闊宠皟宸ュ叿澶勭悊锛氳Е鍙戣嚜鍔ㄩ煶璋冪敓鎴愯锟?
 {
     juce::ignoreUnused(e);
     ctx_.notifyAutoTuneRequested();
 }
 
 void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
-// 选择工具拖拽处理：框选区域、音符边缘调整、音符拖拽移�?
+// 閫夋嫨宸ュ叿鎷栨嫿澶勭悊锛氭閫夊尯鍩熴€侀煶绗﹁竟缂樿皟鏁淬€侀煶绗︽嫋鎷界Щ锟?
 {
     const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
 
     if (ctx_.getState().selection.isSelectingArea) {
-        // §8.5 — selection box bounds compared against note.startTime (source time).
+        // 搂8.5 鈥?selection box bounds compared against note.startTime (source time).
         const auto currentTime = pixelXToSourceTime(e.x);
         if (!currentTime)
             return;
@@ -1538,7 +1538,7 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
             return;
         }
 
-        // §8.5 �?Note resize edge writes startTime/endTime in SOURCE time.
+        // 搂8.5 锟?Note resize edge writes startTime/endTime in SOURCE time.
         const auto currentTime = pixelXToSourceTime(e.x);
         if (!currentTime)
             return;
@@ -1636,7 +1636,7 @@ void PianoRollToolHandler::handleDrawNoteDrag(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
-// 选择工具鼠标释放处理：完成音符拖�?调整/框选，提交音高修正
+// 閫夋嫨宸ュ叿榧犳爣閲婃斁澶勭悊锛氬畬鎴愰煶绗︽嫋锟?璋冩暣/妗嗛€夛紝鎻愪氦闊抽珮淇
 {
     juce::ignoreUnused(e);
 
@@ -1702,7 +1702,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 
                 if (pitchCurve != nullptr && ctx_.commitNotesAndSegments) {
                     const auto updatedSegments = buildSegmentsWithManualOps(pitchCurve, ops);
-                    ctx_.setUndoDescription(juce::String("移动音符"));
+                    ctx_.setUndoDescription(juce::String("绉诲姩闊崇"));
                     if (ctx_.commitNotesAndSegments(notes, updatedSegments, editRange)) {
                         ctx_.notifyPitchCurveEdited(editRange.startFrame,
                                                     editRange.endFrameExclusive - 1);
@@ -1710,9 +1710,9 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
                 }
             } else {
                 ctx_.getNoteDraft().workingNotes = notes;
-                ctx_.setUndoDescription(juce::String("移动音符"));
+                ctx_.setUndoDescription(juce::String("绉诲姩闊崇"));
 
-                // 同步计算修正并一次性提交音符和F0�?
+                // 鍚屾璁＄畻淇骞朵竴娆℃€ф彁浜ら煶绗﹀拰F0锟?
                 if (pitchCurve && !editRange.isEmpty()) {
                     commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
                 } else {
@@ -1757,9 +1757,9 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
         }
 
         ctx_.getNoteDraft().workingNotes = notes;
-        ctx_.setUndoDescription(juce::String("调整音符长度"));
+        ctx_.setUndoDescription(juce::String("璋冩暣闊崇闀垮害"));
 
-        // 同步计算修正并一次性提交音符和F0�?
+        // 鍚屾璁＄畻淇骞朵竴娆℃€ф彁浜ら煶绗﹀拰F0锟?
         if (pitchCurve && !editRange.isEmpty()) {
             commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
         } else {
@@ -1771,7 +1771,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
     if (!queuedAsyncCommit) {
         if (ctx_.getNoteDraft().active && !suppressFinalNoteDraftCommit) {
             ctx_.getNoteDraft().workingNotes = notes;
-            ctx_.setUndoDescription(juce::String("编辑音符"));
+            ctx_.setUndoDescription(juce::String("缂栬緫闊崇"));
             ctx_.commitNoteDraft();
         }
     }
@@ -1799,7 +1799,7 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
-// 手绘曲线工具鼠标释放处理：将绘制的F0数据提交到音高修正队�?
+// 鎵嬬粯鏇茬嚎宸ュ叿榧犳爣閲婃斁澶勭悊锛氬皢缁樺埗鐨凢0鏁版嵁鎻愪氦鍒伴煶楂樹慨姝ｉ槦锟?
 {
     juce::ignoreUnused(e);
     const auto dirtyBefore = ctx_.getHandDrawPreviewBounds();
@@ -1843,7 +1843,7 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
         if (!ops.empty()) {
             const int editedStartFrame = ops.front().startFrame;
             const int editedEndFrameExclusive = ops.back().endFrameExclusive;
-            ctx_.setUndoDescription(juce::String("手绘曲线"));
+            ctx_.setUndoDescription(juce::String("鎵嬬粯鏇茬嚎"));
             ctx_.applyManualCorrection(std::move(ops), editedStartFrame, editedEndFrameExclusive - 1, false);
             ctx_.notifyPitchCurveEdited(editedStartFrame, editedEndFrameExclusive - 1);
             selectNotesForEditedFrameRange(ctx_, editedStartFrame, editedEndFrameExclusive);
@@ -1859,8 +1859,8 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
 }
 
 void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
-// 绘制音符工具鼠标释放处理：完成音符绘制，分割重叠音符，应用最小时�?
-// Option B: noteDraft 仅在 mouseUp 时一次性创建并提交
+// 缁樺埗闊崇宸ュ叿榧犳爣閲婃斁澶勭悊锛氬畬鎴愰煶绗︾粯鍒讹紝鍒嗗壊閲嶅彔闊崇锛屽簲鐢ㄦ渶灏忔椂锟?
+// Option B: noteDraft 浠呭湪 mouseUp 鏃朵竴娆℃€у垱寤哄苟鎻愪氦
 {
     const auto beforeNotes = std::vector<Note>(committedNotes(ctx_));
 
@@ -1878,7 +1878,7 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
     ctx_.getState().drawing.isDrawingNote = false;
 
     const auto editRange = sourceEditRange(0.02);
-    // §8.5 — DrawNote release writes endTime in SOURCE time.
+    // 搂8.5 鈥?DrawNote release writes endTime in SOURCE time.
     const auto releaseTime = pixelXToSourceTime(e.x);
     if (!releaseTime)
         return;
@@ -1965,10 +1965,10 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
 
     ctx_.getNoteDraft().contentDirty = true;
     ctx_.getNoteDraft().workingNotes = notes;
-    ctx_.setUndoDescription(juce::String("绘制音符"));
+    ctx_.setUndoDescription(juce::String("缁樺埗闊崇"));
     ctx_.setDrawingNoteIndex(-1);
 
-    // 同步计算修正并一次性提交音符和F0段，避免产生两个Undo Action
+    // 鍚屾璁＄畻淇骞朵竴娆℃€ф彁浜ら煶绗﹀拰F0娈碉紝閬垮厤浜х敓涓や釜Undo Action
     auto pitchCurve = ctx_.getPitchCurve();
     if (pitchCurve) {
         const auto f0tl = ctx_.getF0Timeline();
@@ -2021,10 +2021,10 @@ void PianoRollToolHandler::deleteSelectedNotes(std::vector<Note>& notes)
 }
 
 void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
-// 线锚点工具鼠标按下处理：放置锚点，在锚点间生成线性插值的F0曲线
+// 绾块敋鐐瑰伐鍏烽紶鏍囨寜涓嬪鐞嗭細鏀剧疆閿氱偣锛屽湪閿氱偣闂寸敓鎴愮嚎鎬ф彃鍊肩殑F0鏇茬嚎
 {
     const auto editRange = sourceEditRange();
-    // §8.5 — LineAnchor places anchors at SOURCE time (PitchCurve indexing).
+    // 搂8.5 鈥?LineAnchor places anchors at SOURCE time (PitchCurve indexing).
     const auto clickTime = pixelXToSourceTime(e.x);
     if (!clickTime)
         return;
@@ -2122,7 +2122,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
 
     const int editedStartFrame = ops.front().startFrame;
     const int editedEndFrameExclusive = ops.back().endFrameExclusive;
-    ctx_.setUndoDescription(juce::String("锚点修正"));
+    ctx_.setUndoDescription(juce::String("閿氱偣淇"));
     ctx_.applyManualCorrection(std::move(ops), editedStartFrame, editedEndFrameExclusive - 1, false);
     ctx_.notifyPitchCurveEdited(editedStartFrame, editedEndFrameExclusive - 1);
     selectNotesForEditedFrameRange(ctx_, editedStartFrame, editedEndFrameExclusive);
@@ -2241,7 +2241,7 @@ void PianoRollToolHandler::updateF0SelectionFromNotes(const std::vector<Note>& n
 }
 
 // ============================================================================
-// vocal-time-stretch §8.4 (Phase F) �?Time tool handlers
+// vocal-time-stretch 搂8.4 (Phase F) 锟?Time tool handlers
 //
 // Minimal scaffolding: hover detection + selection + drag + commit.
 // Phase G will add: double-click-insert, delete-handle, Alt-snap-disable,
@@ -2250,8 +2250,8 @@ void PianoRollToolHandler::updateF0SelectionFromNotes(const std::vector<Note>& n
 
 uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) const
 {
-    if (!ctx_.getTimeGridSnapshot) return 0;
-    auto snap = ctx_.getTimeGridSnapshot();
+    if (!ctx_.getActiveContentTimeGrid) return 0;
+    auto snap = ctx_.getActiveContentTimeGrid();
     if (snap == nullptr) return 0;
 
     constexpr int kHitToleranceX = 5;  // pixels
@@ -2262,7 +2262,7 @@ uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) 
     for (const auto& h : snap->handles()) {
         if (h.locked) continue;   // endpoints not selectable
 
-        // output_seconds �?timeline via projectContentTimeToTimeline �?screen X via timeToX.
+        // output_seconds 锟?timeline via projectContentTimeToTimeline 锟?screen X via timeToX.
         // Uses the same active projection as drawTimeGridHandles for consistent hit-testing.
         const auto projection = ctx_.getContentProjection();
         if (!projection.isValid()) continue;
@@ -2301,10 +2301,10 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
     const uint64_t hitId = hitTestTimeGridHandle(e);
 
     if (hitId == 0) {
-        // Clicked empty space �?seek playhead + clear selection.
-        // §8.4 (Phase I): TimeTool 下主区空白点击现在也会重定位播放头，
-        // 与标尺区点击行为一致，消除"点击无响�?的用户困惑�?
-        // §8.4 (Phase I bugfix): playhead seek must use TIMELINE time
+        // Clicked empty space 锟?seek playhead + clear selection.
+        // 搂8.4 (Phase I): TimeTool 涓嬩富鍖虹┖鐧界偣鍑荤幇鍦ㄤ篃浼氶噸瀹氫綅鎾斁澶达紝
+        // 涓庢爣灏哄尯鐐瑰嚮琛屼负涓€鑷达紝娑堥櫎"鐐瑰嚮鏃犲搷锟?鐨勭敤鎴峰洶鎯戯拷?
+        // 搂8.4 (Phase I bugfix): playhead seek must use TIMELINE time
         // (host-absolute), NOT content-local time.  As a general
         // rule, everything that's "seek/play/pause/transport" operates in
         // timeline time; everything that's "edit handle/grid" operates in
@@ -2325,8 +2325,8 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    // Found a handle �?select + arm drag.
-    auto snap = ctx_.getTimeGridSnapshot ? ctx_.getTimeGridSnapshot() : nullptr;
+    // Found a handle 锟?select + arm drag.
+    auto snap = ctx_.getActiveContentTimeGrid ? ctx_.getActiveContentTimeGrid() : nullptr;
     if (snap == nullptr) {
         AppLogger::warn("[TimeTool] mouseDown: no TimeGridSnapshot available");
         return;
@@ -2338,7 +2338,7 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
     }
     if (hitHandle == nullptr || hitHandle->locked) return;
 
-    // ⚡️ §8.4 (Phase H) �?Shift+click toggles in additionalSelectedIds
+    // 鈿★笍 搂8.4 (Phase H) 锟?Shift+click toggles in additionalSelectedIds
     // (multi-select).  Bare click replaces the selection.
     if (e.mods.isShiftDown()) {
         if (tt.selectedHandleId == 0) {
@@ -2362,8 +2362,8 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
         tt.additionalSelectedIds.clear();
     }
 
-    // §8.4 (Phase I): 命中 handle 后先进入 pending 状态�?
-    // mouseDrag 越过阈值后才转为真正拖拽，防止轻微抖动触发 undo�?
+    // 搂8.4 (Phase I): 鍛戒腑 handle 鍚庡厛杩涘叆 pending 鐘舵€侊拷?
+    // mouseDrag 瓒婅繃闃堝€煎悗鎵嶈浆涓虹湡姝ｆ嫋鎷斤紝闃叉杞诲井鎶栧姩瑙﹀彂 undo锟?
     tt.dragPending = true;
     tt.isDraggingHandle = false;
     tt.draggedHandleId = hitId;
@@ -2380,14 +2380,14 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
 {
     auto& tt = ctx_.getState().timeTool;
 
-    // §8.4 (Phase I): 检�?dragPending 阈值�?
+    // 搂8.4 (Phase I): 妫€锟?dragPending 闃堝€硷拷?
     // Time handles only move horizontally; use X-axis-only threshold so
     // vertical jitter does not start a drag that produces an identical output.
     if (tt.dragPending) {
         const int dx = std::abs(e.x - tt.dragStartPixel.x);
         constexpr int kHandleDragThreshold = 6;
         if (dx <= kHandleDragThreshold) {
-            return;   // 尚未越过阈值，保持 pending
+            return;   // 灏氭湭瓒婅繃闃堝€硷紝淇濇寔 pending
         }
         tt.dragPending = false;
         tt.isDraggingHandle = true;
@@ -2395,7 +2395,7 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
 
     if (!tt.isDraggingHandle || tt.dragOriginalSnapshot == nullptr) return;
 
-    // pixel �?timeline time �?content-local output time
+    // pixel 锟?timeline time 锟?content-local output time
     const double timelineTime = ctx_.getViewMapper().xToTime(e.x);
     const auto projection = ctx_.getContentProjection();
     if (!projection.isValid()) return;
@@ -2413,7 +2413,7 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
         return;   // endpoints can't be dragged
     }
 
-    // ⚡️ §8.4 (Phase H) �?group-drag detection.
+    // 鈿★笍 搂8.4 (Phase H) 锟?group-drag detection.
     // If the user has multi-selected handles AND the dragged handle is part
     // of that selection, every selected handle moves by the same delta
     // (uniformDelta).  Otherwise only the dragged handle moves.
@@ -2457,7 +2457,7 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
             const double localMin = tentative[i - 1] + kMinSpacingSec;
             const double localMax = tentative[i + 1] - kMinSpacingSec;
             if (localMin > localMax) {
-                // Region too tight �?abort the drag step (keep last valid
+                // Region too tight 锟?abort the drag step (keep last valid
                 // working snapshot).
                 return;
             }
@@ -2487,7 +2487,7 @@ void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
 {
     auto& tt = ctx_.getState().timeTool;
 
-    // §8.4 (Phase I): 如果从未越过拖动阈值，仅保�?selection 不提交�?
+    // 搂8.4 (Phase I): 濡傛灉浠庢湭瓒婅繃鎷栧姩闃堝€硷紝浠呬繚锟?selection 涓嶆彁浜わ拷?
     if (tt.dragPending) {
         tt.dragPending = false;
         tt.dragOriginalSnapshot.reset();
@@ -2502,7 +2502,7 @@ void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
         && ctx_.commitTimeGrid) {
         ctx_.commitTimeGrid(tt.dragWorkingSnapshot,
                              tt.dragOriginalSnapshot,
-                             juce::String("拖动时间手柄"));
+                             juce::String("鎷栧姩鏃堕棿鎵嬫焺"));
     }
 
     tt.isDraggingHandle = false;
@@ -2512,18 +2512,18 @@ void PianoRollToolHandler::handleTimeToolMouseUp(const juce::MouseEvent& /*e*/)
 }
 
 // ============================================================================
-// §8.4 (Phase G) �?Double-click to insert UserAdded handle
+// 搂8.4 (Phase G) 锟?Double-click to insert UserAdded handle
 //
 // Constraints (per spec time-tool-interaction.md):
-//   - Click must be on empty area (no existing handle within ±5 px)
+//   - Click must be on empty area (no existing handle within 卤5 px)
 //   - Click position must satisfy TimeGrid output/source spacing
 //   - source_seconds initially equals output_seconds (identity insertion);
 //     subsequent drag operations modify only output_seconds
 // ============================================================================
 void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent& e)
 {
-    if (!ctx_.getTimeGridSnapshot || !ctx_.commitTimeGrid) return;
-    auto snap = ctx_.getTimeGridSnapshot();
+    if (!ctx_.getActiveContentTimeGrid || !ctx_.commitTimeGrid) return;
+    auto snap = ctx_.getActiveContentTimeGrid();
     if (snap == nullptr) return;
 
     const double timelineTime = ctx_.getViewMapper().xToTime(e.x);
@@ -2537,10 +2537,10 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
 
     // Reject if too close to existing handle in output or source time.
     //
-    // § Phase I bugfix: clickedTime is output/content time.
+    // 搂 Phase I bugfix: clickedTime is output/content time.
     // Source spacing check must compare against source_seconds, so
-    // compute clickedOutput �?clickedSource via tauInverse.
-    // Identity grid �?tauInverse is identity �?same value.
+    // compute clickedOutput 锟?clickedSource via tauInverse.
+    // Identity grid 锟?tauInverse is identity 锟?same value.
     const double clickedSourceSeconds = snap->tauInverse(clickedTime);
     for (const auto& h : handles) {
         if (std::abs(h.output_seconds - clickedTime) < TimeGridSnapshot::kMinOutputSpacingSeconds) {
@@ -2579,7 +2579,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
     TimeHandle newHandle;
     newHandle.id = maxId + 1;
     // For non-identity TimeGrid, map output (display) time back to source
-    // time via tauInverse.  Identity grid �?tauInverse is identity.
+    // time via tauInverse.  Identity grid 锟?tauInverse is identity.
     newHandle.source_seconds = snap->tauInverse(clickedTime);
     newHandle.output_seconds = clickedTime;
     newHandle.kind = HandleKind::UserAdded;
@@ -2593,7 +2593,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
         return;
     }
 
-    ctx_.commitTimeGrid(newSnap, snap, juce::String("插入时间手柄"));
+    ctx_.commitTimeGrid(newSnap, snap, juce::String("鎻掑叆鏃堕棿鎵嬫焺"));
 
     // Auto-select the newly-inserted handle so user can immediately drag.
     // commitTimeGrid already triggers cache dirty internally.
@@ -2602,7 +2602,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
 }
 
 // ============================================================================
-// §8.4 (Phase G) �?Delete key removes selected handle (non-endpoint only)
+// 搂8.4 (Phase G) 锟?Delete key removes selected handle (non-endpoint only)
 //
 // Returns true when a handle was deleted (caller should not fall through to
 // note-delete logic).  Returns false when nothing was selected or the only
@@ -2610,11 +2610,11 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
 // ============================================================================
 bool PianoRollToolHandler::handleTimeToolDeleteSelected()
 {
-    if (!ctx_.getTimeGridSnapshot || !ctx_.commitTimeGrid) return false;
+    if (!ctx_.getActiveContentTimeGrid || !ctx_.commitTimeGrid) return false;
     auto& tt = ctx_.getState().timeTool;
     if (tt.selectedHandleId == 0) return false;
 
-    auto snap = ctx_.getTimeGridSnapshot();
+    auto snap = ctx_.getActiveContentTimeGrid();
     if (snap == nullptr) return false;
 
     const auto& handles = snap->handles();
@@ -2626,7 +2626,7 @@ bool PianoRollToolHandler::handleTimeToolDeleteSelected()
         }
     }
     if (targetIdx <= 0 || targetIdx >= static_cast<int>(handles.size()) - 1) {
-        // Endpoint or not found �?cannot delete
+        // Endpoint or not found 锟?cannot delete
         AppLogger::log("[TimeTool] delete rejected: cannot delete endpoint or unknown handle");
         return false;
     }
@@ -2646,7 +2646,7 @@ bool PianoRollToolHandler::handleTimeToolDeleteSelected()
         return false;
     }
 
-    ctx_.commitTimeGrid(newSnap, snap, juce::String("删除时间手柄"));
+    ctx_.commitTimeGrid(newSnap, snap, juce::String("鍒犻櫎鏃堕棿鎵嬫焺"));
 
     tt.selectedHandleId = 0;
     tt.hoveredHandleId  = 0;

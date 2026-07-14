@@ -7,6 +7,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace OpenTune {
@@ -21,7 +22,6 @@ enum class AudioModificationBirthState
 {
     Empty,
     WaitingForSource,
-    PendingBirth,
     Rendering,
     Ready,
     Failed
@@ -39,17 +39,17 @@ struct AudioModification
     AudioModificationReadIntent readIntent{AudioModificationReadIntent::None};
 
     // 内容所有权
-    AudioModificationContentState content;
+    std::optional<AudioModificationContentState> content;
 
     // 身份更新
     void updateIdentity(juce::ARAAudioModification* modification);
-    void attachSource(const AudioSource& source);
+    bool attachSource(const AudioSource& source);
     void resetContent() noexcept;
     void invalidateDerivedContent() noexcept;
     bool isRenderable() const noexcept;
 
     // 内容辅助
-    bool hasContentState() const noexcept { return content.lifecycle > ContentLifecycle::Empty; }
+    bool hasContentState() const noexcept { return content.has_value(); }
     std::shared_ptr<const EditableContentSnapshot> snapshotContent() const;
 
     // 内容生命周期
@@ -58,14 +58,15 @@ struct AudioModification
 private:
     AraSourceShape cachedSourceShape_;  // 从 AudioSource 缓存（ARA2 委托）
 
-    // 编辑入口：应用命令并推高 revision
 public:
+    // 编辑入口：应用命令并推高 revision
     void applyNotes(const std::vector<Note>& notes);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
-    void applyOriginalF0(std::shared_ptr<PitchCurve> curve);
-    void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> grid);
+    bool applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> grid);
     void applyPitchShift(const PitchShiftSettings& settings);
     void applyDetectedKey(const DetectedKey& key);
+    void applyOriginalF0(std::shared_ptr<PitchCurve> curve);
+    void submitSilentGaps(std::vector<SilentGap> gaps);
     void applyOriginalF0State(OriginalF0State state);
     void applyReferenceFeatures(const ReferenceFeatureSet& features);
 };
