@@ -3,6 +3,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
 #include <cmath>
+#include <cstdint>
 #include "TimelineViewportCamera.h"
 
 namespace OpenTune {
@@ -19,12 +20,18 @@ struct ViewMapper {
 
     // Returns parent-component X for an absolute timeline position.
     int timeToX(double absoluteSeconds) const {
-        return contentStartX + static_cast<int>(std::llround((absoluteSeconds - visibleStartSeconds) * pixelsPerSecond));
+        const auto worldPixel = static_cast<int64_t>(
+            std::llround(absoluteSeconds * pixelsPerSecond));
+        const auto surfaceOriginPixel = static_cast<int64_t>(
+            std::llround(visibleStartSeconds * pixelsPerSecond));
+        return contentStartX + static_cast<int>(worldPixel - surfaceOriginPixel);
     }
 
     // Returns absolute timeline seconds for a parent-component X.
     double xToTime(int x) const {
-        return visibleStartSeconds + (x - contentStartX) / pixelsPerSecond;
+        const auto surfaceOriginPixel = static_cast<int64_t>(
+            std::llround(visibleStartSeconds * pixelsPerSecond));
+        return (surfaceOriginPixel + x - contentStartX) / pixelsPerSecond;
     }
     
     float midiToY(float midi) const {

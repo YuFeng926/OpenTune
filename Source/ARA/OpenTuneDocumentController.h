@@ -232,7 +232,8 @@ private:
     void continuePendingUserReadForSource(const AudioSource& source);
     void scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
-                                   double sourceSampleRate);
+                                   double sourceSampleRate,
+                                   juce::ARAAudioModification* hostModification);
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
     void installDocumentRenderExecution();
     void processDocumentRenderJob(RenderJob& job);

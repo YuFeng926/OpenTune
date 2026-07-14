@@ -16,6 +16,7 @@ bool GeometryState::operator==(const GeometryState& o) const {
 
 bool GenerationSignature::operator==(const GenerationSignature& o) const {
     return ppsMilli == o.ppsMilli
+        && dpiMilli == o.dpiMilli
         && geometry == o.geometry
         && themeId == o.themeId
         && laneStyle == o.laneStyle

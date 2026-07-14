@@ -83,7 +83,7 @@ struct VisibleTimeWindow {
 };
 
 VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContext& ctx,
-                                           const PianoRollRenderer::ContentRenderItem& item)
+                                            const PianoRollRenderer::ContentRenderItem& item)
 {
     VisibleTimeWindow window;
     if (!item.projection.isValid()) {
@@ -103,12 +103,12 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
     window.visibleContentStartTime = item.projection.projectTimelineTimeToContent(window.visibleStartTime);
     window.visibleContentEndTime = item.projection.projectTimelineTimeToContent(window.visibleEndTime);
 
-    // vocal-time-stretch 搂8.5 鈥?projectTimelineTimeToContent returns OUTPUT time
+    // vocal-time-stretch 搂8.5 擂8.5 — projectTimelineTimeToContent returns OUTPUT time
     // inside the content, but Notes / PitchCurve / F0 timeline / WaveformMipmap
     // are all indexed by SOURCE time. Convert to source time via tauInverse.
-    jassert(ctx.timeGridSnapshot != nullptr);
-    window.visibleContentStartTime = ctx.timeGridSnapshot->tauInverse(window.visibleContentStartTime);
-    window.visibleContentEndTime   = ctx.timeGridSnapshot->tauInverse(window.visibleContentEndTime);
+    jassert(item.timeGrid);
+    window.visibleContentStartTime = item.timeGrid->tauInverse(window.visibleContentStartTime);
+    window.visibleContentEndTime   = item.timeGrid->tauInverse(window.visibleContentEndTime);
     return window;
 }
 
@@ -183,8 +183,8 @@ inline int sourceTimeToScreenX(double sourceTime,
                                 const PianoRollRenderer::RenderContext& ctx,
                                 const PianoRollRenderer::ContentRenderItem& item)
 {
-    jassert(ctx.timeGridSnapshot != nullptr);
-    const double outputTime = ctx.timeGridSnapshot->tauForward(sourceTime);
+    jassert(item.timeGrid);
+    const double outputTime = item.timeGrid->tauForward(sourceTime);
     const double timelineTime = item.projection.projectContentTimeToTimeline(outputTime);
     return ctx.coords.timeToX(timelineTime);
 }
@@ -415,8 +415,8 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
 }
 
 void PianoRollRenderer::drawWaveform(juce::Graphics& g,
-                                     const RenderContext& ctx,
-                                     const ContentRenderItem& item)
+                                      const RenderContext& ctx,
+                                      const ContentRenderItem& item)
 {
     if (item.audioBuffer == nullptr || item.waveformSnapshot.peaks.empty())
         return;
@@ -455,16 +455,16 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     // vocal-time-stretch 搂8.5 (Phase H) 鈥?waveform stretching.
     // Invert the output 鈫?source mapping (tau_inverse) so the screen X axis
     // (output time) reads from the SOURCE peaks at the tau-inverted time.
-    jassert(ctx.timeGridSnapshot != nullptr);
+    jassert(item.timeGrid);
 
     for (int x = startX; x < endX; ++x)
     {
         double matTime = item.projection.projectTimelineTimeToContent(ctx.coords.xToTime(x));
-        matTime = ctx.timeGridSnapshot->tauInverse(matTime);
+        matTime = item.timeGrid->tauInverse(matTime);
 
         // Aggregate all peaks covered by this pixel's time span
         double matTimeNext = item.projection.projectTimelineTimeToContent(ctx.coords.xToTime(x + 1));
-        matTimeNext = ctx.timeGridSnapshot->tauInverse(matTimeNext);
+        matTimeNext = item.timeGrid->tauInverse(matTimeNext);
 
         int64_t idxStart = static_cast<int64_t>(matTime / timePerPeak);
         int64_t idxEnd = static_cast<int64_t>(matTimeNext / timePerPeak);
@@ -1038,6 +1038,8 @@ void PianoRollRenderer::drawGhostNotes(juce::Graphics& g, const RenderContext& c
 
     ContentRenderItem overlayItem;
     overlayItem.projection = overlay.sourceProjection;
+    overlayItem.timeGrid = overlay.timeGrid;
+    jassert(overlayItem.timeGrid);
 
     for (const auto& note : overlay.ghostNotes)
     {
@@ -1090,6 +1092,8 @@ void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext&
 
     ContentRenderItem overlayItem;
     overlayItem.projection = overlay.sourceProjection;
+    overlayItem.timeGrid = overlay.timeGrid;
+    jassert(overlayItem.timeGrid);
 
     for (const auto& anchor : overlay.ghostAnchors)
     {
@@ -1109,16 +1113,16 @@ void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext&
 // ============================================================================
 // TimeGrid Anchors (cached slot — neutral lines, no interaction)
 // ============================================================================
-void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const RenderContext& ctx)
+void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item)
 {
-    if (ctx.timeGridSnapshot == nullptr) return;
+    jassert(item.timeGrid);
 
     const int contentTop    = ctx.rulerHeight;
     const int contentBottom = ctx.height;
     if (contentBottom <= contentTop) return;
 
-    for (const auto& h : ctx.timeGridSnapshot->handles()) {
-        const double timelineTime = ctx.activeProjection.projectContentTimeToTimeline(h.output_seconds);
+    for (const auto& h : item.timeGrid->handles()) {
+        const double timelineTime = item.projection.projectContentTimeToTimeline(h.output_seconds);
         const int x = ctx.coords.timeToX(timelineTime);
         if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
 
@@ -1135,9 +1139,9 @@ void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const RenderConte
 // ============================================================================
 // TimeGrid Handles (overlay — hover/selected/drag affordances)
 // ============================================================================
-void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx)
+void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item)
 {
-    if (ctx.timeGridSnapshot == nullptr) return;
+    jassert(item.timeGrid);
     if (!ctx.isTimeView()) return;
 
     const int contentTop    = ctx.rulerHeight;
@@ -1160,13 +1164,13 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
 
     const juce::Colour kHighConfidenceColour = juce::Colour::fromRGB(0xE0, 0xB0, 0x40);
 
-    for (const auto& h : ctx.timeGridSnapshot->handles()) {
+    for (const auto& h : item.timeGrid->handles()) {
         const bool selected = (ctx.timeGridSelectedHandleId == h.id);
         const bool hovered  = (ctx.timeGridHoveredHandleId  == h.id);
         const bool isAdditional = std::find(ctx.additionalSelectedHandleIds.begin(), ctx.additionalSelectedHandleIds.end(), h.id) != ctx.additionalSelectedHandleIds.end();
         if (!selected && !hovered && !isAdditional) continue;
 
-        const double timelineTime = ctx.activeProjection.projectContentTimeToTimeline(h.output_seconds);
+        const double timelineTime = item.projection.projectContentTimeToTimeline(h.output_seconds);
         const int x = ctx.coords.timeToX(timelineTime);
         if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
 

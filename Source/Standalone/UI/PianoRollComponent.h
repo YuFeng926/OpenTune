@@ -130,6 +130,8 @@ public:
 
     void setIsPlaying(bool playing) {
         bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
+        if (stateChanged && playing)
+            preparePlaybackCoverage();
         isPlaying_.store(playing, std::memory_order_relaxed);
         if (stateChanged) {
             userScrollHold_ = false;
@@ -352,8 +354,10 @@ private:
     void initializeToolHandler();
     void applyEditedContentCurve(std::shared_ptr<PitchCurve> curve);
     void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
-    PianoRollRenderer::ContentRenderItem buildContentRenderItem(
+    std::optional<PianoRollRenderer::ContentRenderItem> buildContentRenderItem(
         const TimelineContentPlacement& placement) const;
+    void refreshActiveOverlayItem();
+    void preparePlaybackCoverage();
     const std::vector<Note>& getCommittedNotes() const;
     const std::vector<Note>& getDisplayedNotes() const;
     NoteInteractionDraft& getNoteDraft();
@@ -411,6 +415,10 @@ private:
     PianoRollRenderer::RenderContext buildRenderContext(int renderWidthPx, int renderPianoKeyWidth) const;
 
     void refreshVerticalViewportGeometry();
+    juce::Rectangle<int> timeAxisRect() const;
+    void rebuildViewportSurfaceFromReadyTiles();
+    void scrollViewportSurfaceTo(const TimelineViewportCamera& nextCamera);
+    juce::Rectangle<int> playheadDirtyRect() const;
 
 private:
     TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
@@ -495,6 +503,7 @@ private:
     std::vector<Note> cachedNotes_;
 
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
+    std::optional<PianoRollRenderer::ContentRenderItem> activeOverlayItem_;
 
     // Undo support
     juce::String pendingUndoDescription_;
@@ -534,6 +543,12 @@ private:
     PianoKeyAudition* pianoKeyAudition_ = nullptr;
     int pressedPianoKey_ = -1;
     
+    // Per-view retained surface for timeline time-axis pixels (ruler + contents)
+    juce::Image viewportSurface_;
+    TimelineViewportCamera currentSurfaceCamera_;
+    juce::Rectangle<int> lastPlayheadDirtyRect_;
+    int64_t lastDpiMilli_ = 1000;
+
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
     std::weak_ptr<std::atomic<double>> positionSource_;
     double playheadTimeForPaint_ = 0.0;

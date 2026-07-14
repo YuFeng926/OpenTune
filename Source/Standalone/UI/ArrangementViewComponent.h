@@ -117,6 +117,8 @@ public:
 
     void setIsPlaying(bool playing) {
         const bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
+        if (stateChanged && playing)
+            preparePlaybackCoverage();
         isPlaying_.store(playing, std::memory_order_relaxed);
         if (stateChanged) {
             playheadTimeForPaint_ = readPlayheadSeconds();
@@ -230,7 +232,21 @@ private:
     juce::ListenerList<Listener> listeners_;
 
     bool buildWaveformCaches(double timeBudgetMs);
+    void preparePlaybackCoverage();
 
+    // ===== view retained surface =====
+    juce::Image viewportSurface_{};
+    int64_t surfaceOriginPx_ = 0;   // llround(visibleStartSeconds * pps) at last surface render
+    double  surfacePps_ = 0.0;      // pps at last surface render; change → full rebuild
+    juce::Rectangle<int> lastPlayheadRect_{};  // previous frame playhead presentation rect
+    int64_t lastDpiMilli_ = 1000;
+
+    // ---- View retained surface helper methods ----
+    juce::Rectangle<int> timeAxisRect() const noexcept;
+    void surfaceInvalidate();
+    void surfaceRebuildFromReadyTiles(int64_t firstTile, int64_t lastTile);
+    void surfaceScrollAndFillExposed(int64_t newOriginPx, int64_t firstTile, int64_t lastTile);
+    juce::Rectangle<int> playheadDirtyRect() const;
     // ---- Timeline rendering pipeline ----
     TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
     double tileCoverageStartSeconds_ = 0.0;

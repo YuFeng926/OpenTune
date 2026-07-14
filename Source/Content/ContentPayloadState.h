@@ -1,5 +1,4 @@
 #pragma once
-#include "AudioModificationContentState.h"   // ContentLifecycle
 #include "../Utils/SourceWindow.h"
 #include "../Utils/PitchCurve.h"
 #include "../Utils/TimeGrid.h"
@@ -15,6 +14,13 @@
 #include <cstdint>
 
 namespace OpenTune {
+
+enum class ContentLifecycle
+{
+    Empty,
+    Ready,
+    Retired
+};
 
 /// Standalone 域完整 payload — 所有数据由一个 ContentPayloadState 表达。
 /// 不含 render cache、worker、stretcher、playback publisher 所有权。
