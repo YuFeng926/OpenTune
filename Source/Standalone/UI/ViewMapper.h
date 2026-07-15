@@ -1,6 +1,5 @@
 #pragma once
 
-#include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
 #include <cmath>
 #include <cstdint>
@@ -48,7 +47,7 @@ struct ViewMapper {
     }
     
     float midiToFreq(float midi) const {
-        return static_cast<float>(juce::MidiMessage::getMidiNoteInHertz(juce::roundToInt(midi + 0.5f)));
+        return 440.0f * std::pow(2.0f, (midi + 0.5f - 69.0f) / 12.0f);
     }
     
     float freqToY(float hz) const {

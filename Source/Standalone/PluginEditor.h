@@ -144,7 +144,7 @@ public:
     // trackHeightChanged已在TrackPanelComponent::Listener中声明
 
     // PianoRollComponent::Listener
-    void playheadPositionChangeRequested(double timeSeconds) override;
+    bool playheadPositionChangeRequested(double timeSeconds) override;
     void playPauseToggleRequested() override;
     void stopPlaybackRequested() override;
     void autoTuneRequested() override;

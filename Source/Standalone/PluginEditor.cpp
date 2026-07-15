@@ -47,18 +47,6 @@ namespace {
 constexpr int kHeartbeatHzIdle = 30;
 constexpr int kHeartbeatHzInferenceActive = 10;
 
-juce::String buildRenderingOverlayTitle(int completedTasks, int totalTasks, float progress)
-{
-    if (totalTasks <= 0)
-        return juce::String::fromUTF8("\xe6\xad\xa3\xe5\x9c\xa8\xe6\xb8\xb2\xe6\x9f\x93\xe4\xb8\xad");
-    const int pct = static_cast<int>(std::round(progress * 100.0f));
-    return juce::String::fromUTF8("\xe6\xb8\xb2\xe6\x9f\x93\xe4\xb8\xad ")
-        + juce::String(pct) + "% ("
-        + juce::String(completedTasks) + "/"
-        + juce::String(totalTasks) + ")";
-}
-
-
 ContentTimelineProjection makePianoRollProjection(const StandaloneArrangement::Placement& placement,
                                                           OpenTuneAudioProcessor& processor)
 {
@@ -413,6 +401,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 // Set high-performance playhead position source - read directly from Processor, bypassing 60Hz Timer bottleneck
     pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
     arrangementView_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
+    pianoRoll_.setIsPlaying(processorRef_.isPlaying());
+    arrangementView_.setIsPlaying(processorRef_.isPlaying());
     
     addAndMakeVisible(pianoRoll_);
     pianoRoll_.setVisible(!isWorkspaceView_);
@@ -1126,8 +1116,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         const ContentKey activeContentKey = (activeTrack >= 0 && activePlacementIndex >= 0)
             ? getStandaloneContentKey(processorRef_, activeTrack, activePlacementIndex)
             : ContentKey{};
-        auto rc = processorRef_.getContentRenderService()->getRenderCache(activeContentKey);
-        const auto chunkStats = rc ? rc->getChunkStats() : RenderCache::ChunkStats{};
+        const auto chunkStats = processorRef_.getReadableContentChunkStats(activeContentKey);
         stage1HasWork = chunkStats.hasActiveWork();
         stage1Done    = chunkStats.idle + chunkStats.blank;
         stage1Total   = chunkStats.total();
@@ -2730,10 +2719,11 @@ void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int place
 // PianoRollComponent::Listener Implementation
 // ============================================================================
 
-void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSeconds)
+bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSeconds)
 {
     processorRef_.setPosition(timeSeconds);
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Seek);
+    return true;
 }
 
 void OpenTuneAudioProcessorEditor::playPauseToggleRequested()

@@ -97,10 +97,6 @@ public:
     /** 读取音高移调设置 */
     PitchShiftSettings readPitchShift(ContentKey key) const;
 
-    /** 从 CRS renderCache 读取渲染统计 */
-    RenderCache::ChunkStats readChunkStats(ContentKey key) const;
-
-
     /** 读取内容版本号 */
     uint64_t readContentRevision(ContentKey key) const;
 

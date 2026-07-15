@@ -2587,6 +2587,16 @@ const ContentRenderService* OpenTuneAudioProcessor::resolveReadableContentRender
     return nullptr;
 }
 
+RenderCache::ChunkStats OpenTuneAudioProcessor::getReadableContentChunkStats(ContentKey key) const noexcept
+{
+    const auto* readableCrs = resolveReadableContentRenderService(key);
+    if (readableCrs == nullptr)
+        return {};
+
+    const auto renderCache = readableCrs->getRenderCache(key);
+    return renderCache != nullptr ? renderCache->getChunkStats() : RenderCache::ChunkStats{};
+}
+
 ContentRenderService* OpenTuneAudioProcessor::resolveMutableLocalContentRenderService(ContentKey key) const noexcept
 {
     switch (key.domainKind) {

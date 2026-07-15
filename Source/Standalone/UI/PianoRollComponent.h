@@ -70,7 +70,7 @@ public:
     {
     public:
         virtual ~Listener() = default;
-        virtual void playheadPositionChangeRequested(double timeSeconds) = 0;
+        virtual bool playheadPositionChangeRequested(double timeSeconds) = 0;
         virtual void playPauseToggleRequested() = 0;
         virtual void stopPlaybackRequested() = 0;
         virtual void pitchCurveEdited(int startFrame, int endFrame) { (void)startFrame; (void)endFrame; }
@@ -135,9 +135,10 @@ public:
         isPlaying_.store(playing, std::memory_order_relaxed);
         if (stateChanged) {
             userScrollHold_ = false;
-            playheadTimeForPaint_ = readPlayheadTime();
+            playheadTimeForPaint_ = pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : readPlayheadTime();
             repaint();
         }
+        lastPlayheadDirtyRect_ = playheadDirtyRect();
     }
     void commitViewportRequest(TimelineViewportRequest req);
     int timelinePolicyViewportWidth() const noexcept { return getTimelineContentViewportWidth(); }
@@ -381,11 +382,6 @@ private:
     void invalidateSelectionFeedback();
     void invalidateInteractionPreview(const juce::Rectangle<int>& bounds);
 
-    float midiToY(float midiNote) const;
-    float yToMidi(float y) const;
-    float freqToMidi(float frequency) const;
-    float midiToFreq(float midiNote) const;
-
     float getTotalHeight() const;
     
     F0Timeline currentF0Timeline() const noexcept {
@@ -394,9 +390,6 @@ private:
         if (snap == nullptr || snap->size() == 0) return {};
         return { snap->getHopSize(), snap->getSampleRate(), static_cast<int>(snap->size()) };
     }
-
-    float yToFreq(float y) const;
-    float freqToY(float freq) const;
 
     const TimelineContentPlacement* findEditedPlacement() const noexcept;
     bool hasTimelineContentPlacement() const noexcept;
@@ -552,6 +545,7 @@ private:
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
     std::weak_ptr<std::atomic<double>> positionSource_;
     double playheadTimeForPaint_ = 0.0;
+    double pendingSeekTime_{-1.0}; // transient presentation prediction; canonical time still comes from positionSource_
 
     juce::ListenerList<Listener> listeners_;
     

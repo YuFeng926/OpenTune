@@ -15,6 +15,17 @@ enum class RenderStatus {
     Ready
 };
 
+inline juce::String buildRenderingOverlayTitle(int completedTasks, int totalTasks, float progress)
+{
+    if (totalTasks <= 0)
+        return juce::String::fromUTF8("\xe6\xad\xa3\xe5\x9c\xa8\xe6\xb8\xb2\xe6\x9f\x93\xe4\xb8\xad");
+    const int pct = static_cast<int>(std::round(progress * 100.0f));
+    return juce::String::fromUTF8("\xe6\xb8\xb2\xe6\x9f\x93\xe4\xb8\xad ")
+        + juce::String(pct) + "% ("
+        + juce::String(completedTasks) + "/"
+        + juce::String(totalTasks) + ")";
+}
+
 struct RenderStatusSnapshot {
     RenderStatus status{RenderStatus::Idle};
     RenderCache::ChunkStats chunkStats;

@@ -522,6 +522,7 @@ public:
     const SourceStore* getSourceStore() const noexcept { return sourceStore_.get(); }
     ContentRenderService* getContentRenderService() noexcept { return contentRenderService_.get(); }
     const ContentRenderService* getContentRenderService() const noexcept { return contentRenderService_.get(); }
+    RenderCache::ChunkStats getReadableContentChunkStats(ContentKey key) const noexcept;
 
     /** Returns the regular VST3 capture session, or nullptr outside regular VST3 mode. */
     Capture::CaptureSession* getCaptureSession() noexcept;
