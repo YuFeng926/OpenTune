@@ -504,6 +504,12 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
         this, [this](double timestampSec) { onScrollVBlankCallback(timestampSec); });
 }
 
+void ArrangementViewComponent::setPlayHeadState(const PlayHeadState& state)
+{
+    playHeadState_ = &state;
+    playheadTimeForPaint_ = readPlayheadSeconds();
+}
+
 ArrangementViewComponent::~ArrangementViewComponent()
 {
     scrollVBlankAttachment_.reset();
@@ -646,7 +652,7 @@ void ArrangementViewComponent::rebuildTimelineCoverage()
     const double visibleStart = camera_.visibleStartSeconds;
     const double visibleEnd = visibleStart + contentViewportWidth / camera_.pixelsPerSecond;
 
-    if (isPlaying_.load(std::memory_order_relaxed)) {
+    if (playHeadState_->isPlaying.load(std::memory_order_relaxed)) {
         rebuildContentMetrics();
         const double visibleDuration = contentViewportWidth / camera_.pixelsPerSecond;
         const double timelineEnd = std::max(
@@ -1522,7 +1528,7 @@ void ArrangementViewComponent::drawPlayhead(juce::Graphics& g)
     const int viewportRight = viewportBounds.getRight();
     const int viewLeftGuardX = viewportBounds.getX();
 
-    const bool playing = isPlaying_.load(std::memory_order_relaxed);
+    const bool playing = playHeadState_->isPlaying.load(std::memory_order_relaxed);
     const bool continuousMode = scrollMode_ == ScrollMode::Continuous;
 
     const auto pres = TimelineViewportPolicy::computePlayheadPresentation(
@@ -1555,7 +1561,7 @@ juce::Rectangle<int> ArrangementViewComponent::playheadDirtyRect() const
         viewportBounds.getCentreX(),
         viewportBounds.getRight(),
         viewportBounds.getX(),
-        isPlaying_.load(std::memory_order_relaxed),
+        playHeadState_->isPlaying.load(std::memory_order_relaxed),
         scrollMode_ == ScrollMode::Continuous);
     if (!presentation.visible)
         return {};
@@ -1686,7 +1692,15 @@ void ArrangementViewComponent::onHeartbeatTick()
     if (!isShowing())
         return;
 
-    const bool playingNow = processor_.isPlaying();
+    const bool playingNow = playHeadState_->isPlaying.load(std::memory_order_relaxed);
+    if (playingNow != lastObservedPlayHeadPlaying_) {
+        if (playingNow)
+            preparePlaybackCoverage();
+        playheadTimeForPaint_ = pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : readPlayheadSeconds();
+        lastObservedPlayHeadPlaying_ = playingNow;
+        lastPlayheadRect_ = playheadDirtyRect();
+        repaint();
+    }
 
     const int64_t currentDpiMilli = static_cast<int64_t>(
         std::llround(getDesktopScaleFactor() * 1000.0));
@@ -1709,9 +1723,18 @@ void ArrangementViewComponent::onHeartbeatTick()
 
     if (!playingNow) {
         const double currentPlayheadTime = readPlayheadSeconds();
-        if (currentPlayheadTime != playheadTimeForPaint_) {
+        double playheadTime = currentPlayheadTime;
+        if (pendingSeekTime_ >= 0.0) {
+            if (std::abs(currentPlayheadTime - pendingSeekTime_) < 0.05) {
+                pendingSeekTime_ = -1.0;
+            } else {
+                playheadTime = pendingSeekTime_;
+            }
+        }
+
+        if (playheadTime != playheadTimeForPaint_) {
             const auto oldRect = lastPlayheadRect_;
-            playheadTimeForPaint_ = currentPlayheadTime;
+            playheadTimeForPaint_ = playheadTime;
             const auto newRect = playheadDirtyRect();
             lastPlayheadRect_ = newRect;
             const auto dirty = newRect.getUnion(oldRect);
@@ -1759,10 +1782,18 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
 {
     juce::ignoreUnused(timestampSec);
 
-    if (!isShowing() || !isPlaying_.load(std::memory_order_relaxed))
+    if (!isShowing() || !playHeadState_->isPlaying.load(std::memory_order_relaxed))
         return;
 
-    const double playheadTime = readPlayheadSeconds();
+    const double currentPlayheadTime = readPlayheadSeconds();
+    double playheadTime = currentPlayheadTime;
+    if (pendingSeekTime_ >= 0.0) {
+        if (std::abs(currentPlayheadTime - pendingSeekTime_) < 0.05) {
+            pendingSeekTime_ = -1.0;
+        } else {
+            playheadTime = pendingSeekTime_;
+        }
+    }
     const auto oldPlayheadRect = lastPlayheadRect_;
     const int64_t oldOriginPx = surfaceOriginPx_;
     const double oldPps = surfacePps_;
@@ -1813,10 +1844,7 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
 
 double ArrangementViewComponent::readPlayheadSeconds() const
 {
-    if (auto source = positionSource_.lock())
-        return source->load(std::memory_order_relaxed);
-
-    return 0.0;
+    return playHeadState_->timeInSeconds.load(std::memory_order_relaxed);
 }
 
 void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
@@ -1945,9 +1973,20 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     else if (e.y <= rulerHeight_)
     {
         // Clicked on ruler 鈥?seek playhead and start drag
-        double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
-        processor_.setPosition(newPosSeconds);
-        playheadTimeForPaint_ = readPlayheadSeconds();
+        const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
+        bool seekRequestDispatched = false;
+        listeners_.call([&](Listener& listener) {
+            seekRequestDispatched = listener.playheadPositionChangeRequested(newPosSeconds)
+                || seekRequestDispatched;
+        });
+        if (seekRequestDispatched) {
+            pendingSeekTime_ = newPosSeconds;
+            playheadTimeForPaint_ = newPosSeconds;
+        } else {
+            pendingSeekTime_ = -1.0;
+            playheadTimeForPaint_ = readPlayheadSeconds();
+        }
+        lastPlayheadRect_ = playheadDirtyRect();
         repaint();
         isDraggingPlayhead_ = true;
         dragStartPos_ = e.getPosition();
@@ -1956,9 +1995,20 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     else
     {
         // Clicked on empty area 鈥?seek playhead and clear selection
-        double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
-        processor_.setPosition(newPosSeconds);
-        playheadTimeForPaint_ = readPlayheadSeconds();
+        const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
+        bool seekRequestDispatched = false;
+        listeners_.call([&](Listener& listener) {
+            seekRequestDispatched = listener.playheadPositionChangeRequested(newPosSeconds)
+                || seekRequestDispatched;
+        });
+        if (seekRequestDispatched) {
+            pendingSeekTime_ = newPosSeconds;
+            playheadTimeForPaint_ = newPosSeconds;
+        } else {
+            pendingSeekTime_ = -1.0;
+            playheadTimeForPaint_ = readPlayheadSeconds();
+        }
+        lastPlayheadRect_ = playheadDirtyRect();
         repaint();
 
         if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
@@ -2119,9 +2169,20 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
 
     if (isDraggingPlayhead_)
     {
-        double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
-        processor_.setPosition(newPosSeconds);
-        playheadTimeForPaint_ = readPlayheadSeconds();
+        const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
+        bool seekRequestDispatched = false;
+        listeners_.call([&](Listener& listener) {
+            seekRequestDispatched = listener.playheadPositionChangeRequested(newPosSeconds)
+                || seekRequestDispatched;
+        });
+        if (seekRequestDispatched) {
+            pendingSeekTime_ = newPosSeconds;
+            playheadTimeForPaint_ = newPosSeconds;
+        } else {
+            pendingSeekTime_ = -1.0;
+            playheadTimeForPaint_ = readPlayheadSeconds();
+        }
+        lastPlayheadRect_ = playheadDirtyRect();
         repaint();
         return;
     }
@@ -2396,7 +2457,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 {
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::PlayPause, key))
     {
-        processor_.setPlaying(!processor_.isPlaying());
+        listeners_.call([](Listener& listener) { listener.playPauseToggleRequested(); });
         return true;
     }
 

@@ -485,6 +485,12 @@ void PianoRollComponent::setProcessor(OpenTuneAudioProcessor* processor)
     refreshEditedContentNotes();
 }
 
+void PianoRollComponent::setPlayHeadState(const PlayHeadState& state)
+{
+    playHeadState_ = &state;
+    playheadTimeForPaint_ = readPlayheadTime();
+}
+
 void PianoRollComponent::setContentCommands(std::shared_ptr<ContentEditCommands> commands)
 {
     contentCommands_ = std::move(commands);
@@ -1158,7 +1164,7 @@ void PianoRollComponent::drawPlayhead(juce::Graphics& g)
     const int contentViewportRight = viewportBounds.getRight();
     const int viewportCentreX = (contentViewportLeft + contentViewportRight) / 2;
 
-    const bool playing = isPlaying_.load(std::memory_order_relaxed);
+    const bool playing = playHeadState_->isPlaying.load(std::memory_order_relaxed);
     const bool continuousMode = scrollMode_ == ScrollMode::Continuous && !userScrollHold_;
 
     const auto pres = TimelineViewportPolicy::computePlayheadPresentation(
@@ -2199,10 +2205,7 @@ void PianoRollComponent::requestContentRedraw() {
 
 double PianoRollComponent::readPlayheadTime() const
 {
-    if (auto source = positionSource_.lock()) {
-        return source->load(std::memory_order_relaxed);
-    }
-    return 0.0;
+    return playHeadState_->timeInSeconds.load(std::memory_order_relaxed);
 }
 
 juce::Rectangle<int> PianoRollComponent::getTimelineViewportBounds() const
@@ -2348,7 +2351,16 @@ void PianoRollComponent::onHeartbeatTick()
     tryConsumeInitialF0View(editedContentKey_);
     consumeCompletedCorrectionResults();
 
-    const bool playingNow = isPlaying_.load(std::memory_order_relaxed);
+    const bool playingNow = playHeadState_->isPlaying.load(std::memory_order_relaxed);
+    if (playingNow != lastObservedPlayHeadPlaying_) {
+        if (playingNow)
+            preparePlaybackCoverage();
+        userScrollHold_ = false;
+        playheadTimeForPaint_ = pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : readPlayheadTime();
+        lastObservedPlayHeadPlaying_ = playingNow;
+        lastPlayheadDirtyRect_ = playheadDirtyRect();
+        repaint();
+    }
 
     const int64_t currentDpiMilli = static_cast<int64_t>(
         std::llround(getDesktopScaleFactor() * 1000.0));
@@ -2419,7 +2431,7 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     if (!isShowing()) {
         return;
     }
-    if (!isPlaying_.load(std::memory_order_relaxed))
+    if (!playHeadState_->isPlaying.load(std::memory_order_relaxed))
         return;
 
     const double currentPlayheadTime = readPlayheadTime();
@@ -2527,7 +2539,7 @@ void PianoRollComponent::rebuildTimelineCoverage()
     const double visibleStart = camera_.visibleStartSeconds;
     const double visibleEnd = visibleStart + width / pps;
 
-    if (isPlaying_.load(std::memory_order_relaxed)) {
+    if (playHeadState_->isPlaying.load(std::memory_order_relaxed)) {
         const double visibleDuration = width / pps;
         const double timelineEnd = std::max(
             computeContentTimelineEndSeconds() + visibleDuration,
@@ -3240,7 +3252,7 @@ juce::Rectangle<int> PianoRollComponent::playheadDirtyRect() const
     const int timeDerivedX = mapper.timeToX(playheadTimeForPaint_);
     const int viewportRight = viewport.getRight();
     const int viewportCentreX = (contentLeft + viewportRight) / 2;
-    const bool playing = isPlaying_.load(std::memory_order_relaxed);
+    const bool playing = playHeadState_->isPlaying.load(std::memory_order_relaxed);
     const bool continuous = scrollMode_ == ScrollMode::Continuous && !userScrollHold_;
     const auto presentation = TimelineViewportPolicy::computePlayheadPresentation(
         timeDerivedX, viewportCentreX, viewportRight, contentLeft, playing, continuous);

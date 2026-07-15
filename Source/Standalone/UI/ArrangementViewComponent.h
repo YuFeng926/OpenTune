@@ -87,6 +87,8 @@ public:
         virtual ~Listener() = default;
         virtual void placementSelectionChanged(int trackId, uint64_t placementId) = 0;
         virtual void placementTimingChanged(int trackId, int placementIndex) = 0;
+        virtual bool playheadPositionChangeRequested(double /*timeSeconds*/) { return false; }
+        virtual void playPauseToggleRequested() {}
         virtual void placementDoubleClicked(int /*trackId*/, int /*placementIndex*/) {}
         virtual void referenceButtonClicked(int /*trackId*/, uint64_t /*placementId*/,
                                               juce::Rectangle<int> /*buttonScreenArea*/ = {}) {}
@@ -115,26 +117,12 @@ public:
 
     void scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) override;
 
-    void setIsPlaying(bool playing) {
-        const bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
-        if (stateChanged && playing)
-            preparePlaybackCoverage();
-        isPlaying_.store(playing, std::memory_order_relaxed);
-        if (stateChanged) {
-            playheadTimeForPaint_ = readPlayheadSeconds();
-            repaint();
-        }
-    }
+    void setPlayHeadState(const PlayHeadState& state);
     void setPlayheadColour(juce::Colour colour) {
         playheadColour_ = colour;
         repaint();
     }
-    
-    // 设置播放头位置源（由组件内部读取）
-    void setPlayheadPositionSource(std::weak_ptr<std::atomic<double>> source) {
-        positionSource_ = source;
-        playheadTimeForPaint_ = readPlayheadSeconds();
-    }
+
     void commitViewportRequest(TimelineViewportRequest req);
     TimelineViewportCamera timelineCamera() const noexcept { return camera_; }
     void activateTimelineCamera(TimelineViewportCamera camera);
@@ -269,7 +257,8 @@ private:
     enum class TimeUnit { Seconds, Bars };
     TimeUnit timeUnit_{ TimeUnit::Seconds };
 
-    std::atomic<bool> isPlaying_{false};  // atomic 确保 VBlank 线程安全
+    const PlayHeadState* playHeadState_ = nullptr;
+    bool lastObservedPlayHeadPlaying_ = false;
     juce::Colour playheadColour_{UIColors::playhead};
     int verticalScrollOffset_{0};
     int visibleTrackCount_{2};  // synced from TrackPanel via PluginEditor
@@ -381,9 +370,8 @@ private:
     // 滚动跟随独立 VBlank 附件（仅负责滚动，不影响 Overlay 的 VBlank）
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
 
-    // 播放头位置源（来自 Processor 的原子位置）
-    std::weak_ptr<std::atomic<double>> positionSource_;
     double playheadTimeForPaint_ = 0.0;
+    double pendingSeekTime_{-1.0};
 
     // Import drop preview state (transient, cleared on drop/cancel)
     ImportDropPreview importDropPreview_;
