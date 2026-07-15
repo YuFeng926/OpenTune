@@ -131,8 +131,6 @@ class OpenTuneAudioProcessor : public juce::AudioProcessor,
 {
 public:
     struct HostTransportSnapshot {
-        bool isPlaying{false};
-        double timeSeconds{0.0};
         double bpm{120.0};
         double ppqPosition{0.0};
         bool loopEnabled{false};
@@ -418,8 +416,6 @@ private:
     std::atomic<int> fadeOutSampleCount_{0};
     int fadeOutTotalSamples_{0};  // Set in prepareToPlay based on sample rate
 
-    std::atomic<bool> hostTransportIsPlaying_{false};
-    std::atomic<double> hostTransportTimeSeconds_{0.0};
     std::atomic<double> hostTransportBpm_{120.0};
     std::atomic<double> hostTransportPpqPosition_{0.0};
     std::atomic<bool> hostTransportLoopEnabled_{false};
@@ -657,7 +653,7 @@ public:
 
     // Transport control API
     void setPlaying(bool playing);
-    bool isPlaying() const { return isPlaying_; }
+    bool isPlaying() const;
     void setLoopEnabled(bool enabled);
     bool isLoopEnabled() const
     {
@@ -677,7 +673,7 @@ public:
     double getPlayStartPosition() const { return playStartPosition_.load(); }
     void setPlayStartPosition(double seconds) { playStartPosition_.store(seconds); }
     
-    std::shared_ptr<std::atomic<double>> getPositionAtomic() { return positionAtomic_; }
+    std::shared_ptr<std::atomic<double>> getPositionAtomic();
 
     void setBpm(double bpm);
     double getBpm() const

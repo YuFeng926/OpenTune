@@ -23,7 +23,6 @@
 #include "Utils/Note.h"
 #include "Utils/LegacyNoteGenerator.h"
 #include "Utils/PitchControlConfig.h"
-#include "Utils/SilentGapDetector.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/ZoomSensitivityConfig.h"
 #include <cmath>
@@ -32,6 +31,7 @@
 #include <vector>
 #include <map>
 #include <unordered_map>
+#include <set>
 #include <optional>
 #include <utility>
 #include <atomic>
@@ -108,6 +108,7 @@ public:
                            std::shared_ptr<PitchCurve> curve,
                            std::shared_ptr<const juce::AudioBuffer<float>> buffer,
                            int sampleRate);
+    void requestInitialF0View(ContentKey contentKey);
     void onTimeGridRevisionChanged();
     void onNotesRevisionChanged();
     void onPitchRevisionChanged();
@@ -142,7 +143,6 @@ public:
     }
     void commitViewportRequest(TimelineViewportRequest req);
     int timelinePolicyViewportWidth() const noexcept { return getTimelineContentViewportWidth(); }
-    void focusActiveContentForRegionSwitch(const std::vector<SilentGap>& silentGaps);
     TimelineViewportCamera timelineCamera() const noexcept { return camera_; }
     void activateTimelineCamera(TimelineViewportCamera camera);
     void setCurrentTool(ToolId tool);
@@ -263,6 +263,7 @@ private:
 
     void rebuildTimelineCoverage();
     void invalidateStableScene();
+    bool tryConsumeInitialF0View(ContentKey contentKey);
 
     bool enqueueManualCorrectionPatchAsync(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
                                            int dirtyStartFrame,
@@ -492,6 +493,7 @@ private:
     // [ARA 重构] 域内容所有者（替代 contentAccess_/contentCommands_ 的旧路由）
 
     ContentKey editedContentKey_;
+    std::set<ContentKey> pendingInitialF0ViewRequests_;
     bool experimentalFeaturesEnabled_ = false;
     std::vector<Note> cachedNotes_;
 

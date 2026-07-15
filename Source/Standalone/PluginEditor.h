@@ -270,6 +270,7 @@ private:
     bool inferenceActive_ = false;
     int inferenceActiveTickCounter_ = 0;
     ContentKey lastPianoRollContentKey_;
+    OriginalF0State lastPianoRollOriginalF0State_ = OriginalF0State::NotRequested;
     int lastPianoRollSampleRate_ = 0;
     std::shared_ptr<PitchCurve> lastPianoRollCurve_;
     std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;
