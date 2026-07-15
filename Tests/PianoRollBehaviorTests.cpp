@@ -4,8 +4,10 @@
 #include "../Source/Content/EditableContentSnapshot.h"
 #include "../Source/Content/CaptureSegmentContent.h"
 #include "../Source/Utils/TimeGrid.h"
+#include "../Source/Standalone/UI/ViewMapper.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -97,6 +99,256 @@ void expectNoTokens(std::string_view blockName,
 {
     for (const auto token : tokens)
         expect(!contains(text, token), std::string(blockName) + " contains forbidden token: " + std::string(token));
+}
+
+void pianoRollPendingSeekPresentationSourceContract()
+{
+    const auto source = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto notifyBlock = extractBlockByMarker(
+        source, "toolCtx.notifyPlayheadChange = [this](double time)");
+    const auto heartbeatBlock = extractBlockByMarker(
+        source, "void PianoRollComponent::onHeartbeatTick()");
+    const auto vblankBlock = extractBlockByMarker(
+        source, "void PianoRollComponent::onScrollVBlankCallback(double timestampSec)");
+    const auto hiddenVBlankBlock = extractBlockByMarker(
+        vblankBlock, "if (!isShowing())");
+
+    expectTokens("PianoRoll notify playhead request",
+                 notifyBlock,
+                 {"bool seekRequestDispatched = false;",
+                  "seekRequestDispatched = l.playheadPositionChangeRequested(time) || seekRequestDispatched;"});
+    expectTokens("PianoRoll accepted seek presentation",
+                 notifyBlock,
+                 {"playheadTimeForPaint_ = time;", "pendingSeekTime_ = time;"});
+    expectTokens("PianoRoll rejected seek presentation",
+                 notifyBlock,
+                 {"pendingSeekTime_ = -1.0;", "playheadTimeForPaint_ = readPlayheadTime();"});
+    expectTokens("PianoRoll heartbeat pending confirmation",
+                 heartbeatBlock,
+                 {"std::abs(currentPlayheadTime - pendingSeekTime_) < 0.05"});
+    expectTokens("PianoRoll VBlank pending confirmation",
+                 vblankBlock,
+                 {"std::abs(currentPlayheadTime - pendingSeekTime_) < 0.05"});
+    expectNoTokens("PianoRoll hidden VBlank path",
+                   hiddenVBlankBlock,
+                   {"pendingSeekTime_ = -1.0;"});
+    expectNoTokens("PianoRoll retained playhead architecture",
+                   source,
+                   {"playheadOverlay_", "PlayheadOverlayComponent"});
+}
+
+void pianoRollRetainedPlayheadSourceContract()
+{
+    const auto header = readText("Source/Standalone/UI/PianoRollComponent.h");
+    const auto source = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto setIsPlayingBlock = extractBlockByMarker(
+        header, "void setIsPlaying(bool playing)");
+    const auto notifyBlock = extractBlockByMarker(
+        source, "toolCtx.notifyPlayheadChange = [this](double time)");
+    const auto drawPlayheadBlock = extractBlockByMarker(
+        source, "void PianoRollComponent::drawPlayhead(juce::Graphics& g)");
+    const auto playheadDirtyRectBlock = extractBlockByMarker(
+        source, "juce::Rectangle<int> PianoRollComponent::playheadDirtyRect() const");
+    const auto rebuildTimelineCoverageBlock = extractBlockByMarker(
+        source, "void PianoRollComponent::rebuildTimelineCoverage()");
+    const auto rebuildSurface = rebuildTimelineCoverageBlock.find(
+        "rebuildViewportSurfaceFromReadyTiles();");
+    const auto rebuildPlayhead = rebuildTimelineCoverageBlock.find(
+        "lastPlayheadDirtyRect_ = playheadDirtyRect();", rebuildSurface);
+
+    expectTokens("PianoRoll setIsPlaying retained playhead tracking",
+                 setIsPlayingBlock,
+                 {"lastPlayheadDirtyRect_ = playheadDirtyRect();"});
+    expectTokens("PianoRoll retained playhead draw",
+                 drawPlayheadBlock,
+                 {"g.reduceClipRegion(timeAxisRect())"});
+    expectTokens("PianoRoll retained playhead dirty rect",
+                 playheadDirtyRectBlock,
+                 {"const auto axis = timeAxisRect();", "getIntersection(axis)"});
+    expectTokens("PianoRoll retained playhead dirty rect tracking",
+                 notifyBlock,
+                 {"lastPlayheadDirtyRect_ = playheadDirtyRect();"});
+    expect(rebuildSurface != std::string::npos
+               && rebuildPlayhead != std::string::npos
+               && rebuildSurface < rebuildPlayhead,
+           "PianoRoll coverage rebuild must refresh the retained playhead dirty rect after rebuilding the viewport surface");
+}
+
+void pluginEditorPlayheadRequestSourceContract()
+{
+    const auto source = readText("Source/Plugin/PluginEditor.cpp");
+    const auto functionBlock = extractBlockByMarker(
+        source, "bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSeconds)");
+
+    expectTokens("Plugin editor ARA playhead request",
+                 functionBlock,
+                 {"return docController->requestSetPlaybackPosition(timeSeconds);"});
+    expectNoTokens("Plugin editor ARA playhead request",
+                   functionBlock,
+                   {"processorRef_.setPosition(timeSeconds);"});
+    expectTokens("Plugin editor host-controlled playhead",
+                 functionBlock,
+                 {"Non-ARA VST3: playhead is host-controlled only.",
+                  "juce::ignoreUnused(timeSeconds);",
+                  "return false;"});
+}
+
+void standalonePlayheadRequestSourceContract()
+{
+    const auto source = readText("Source/Standalone/PluginEditor.cpp");
+    const auto functionBlock = extractBlockByMarker(
+        source, "bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSeconds)");
+
+    expectTokens("Standalone playhead request",
+                 functionBlock,
+                 {"processorRef_.setPosition(timeSeconds);", "return true;"});
+}
+
+void pluginEditorPlayheadPositionBindingSourceContract()
+{
+    const auto source = readText("Source/Plugin/PluginEditor.cpp");
+    const auto positionSource = source.find(
+        "pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());");
+    const auto playingSync = source.find(
+        "pianoRoll_.setIsPlaying(processorRef_.isPlaying());", positionSource);
+
+    expect(positionSource != std::string::npos
+               && playingSync != std::string::npos
+               && positionSource < playingSync,
+           "Plugin editor must sync PianoRoll playing state after binding the position source");
+}
+
+void standalonePlayheadPositionBindingSourceContract()
+{
+    const auto source = readText("Source/Standalone/PluginEditor.cpp");
+    const auto positionSource = source.find(
+        "pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());");
+    const auto pianoRollPlayingSync = source.find(
+        "pianoRoll_.setIsPlaying(processorRef_.isPlaying());", positionSource);
+    const auto arrangementPlayingSync = source.find(
+        "arrangementView_.setIsPlaying(processorRef_.isPlaying());", positionSource);
+
+    expect(positionSource != std::string::npos
+               && pianoRollPlayingSync != std::string::npos
+               && arrangementPlayingSync != std::string::npos
+               && positionSource < pianoRollPlayingSync
+               && positionSource < arrangementPlayingSync,
+           "Standalone editor must sync both playhead views after binding the position source");
+}
+
+void viewMapperContinuousConversionRoundTrips()
+{
+    const ViewMapper mapper{
+        1.25,
+        37.5,
+        19,
+        640,
+        480,
+        13.75f,
+        6.25f,
+        118.5f};
+
+    for (const float midi : {24.25f, 48.75f, 73.125f, 101.5f}) {
+        const float roundTripMidi = mapper.freqToMidi(mapper.midiToFreq(midi));
+        expect(std::abs(roundTripMidi - midi) < 1.0e-3f,
+               "ViewMapper MIDI/frequency conversion must round-trip fractional MIDI values");
+    }
+
+    for (const float y : {-4.75f, 18.125f, 67.625f, 143.5f}) {
+        const float roundTripY = mapper.freqToY(mapper.yToFreq(y));
+        expect(std::abs(roundTripY - y) < 1.0e-3f,
+               "ViewMapper Y/frequency conversion must round-trip fractional Y values");
+    }
+}
+
+void unifiedViewMappingAndReadableRenderSourceContracts()
+{
+    const auto viewMapperSource = readText("Source/Standalone/UI/ViewMapper.h");
+    expectNoTokens("ViewMapper continuous conversion source",
+                   viewMapperSource,
+                   {"juce::MidiMessage::getMidiNoteInHertz", "juce::roundToInt(midi"});
+    expectTokens("ViewMapper continuous conversion source",
+                 viewMapperSource,
+                 {"std::pow(2.0f, (midi + 0.5f - 69.0f) / 12.0f)"});
+
+    const auto pianoRollHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
+    expectNoTokens("PianoRoll legacy mapping declarations",
+                   pianoRollHeader,
+                   {"midiToY(", "yToMidi(", "freqToMidi(",
+                    "midiToFreq(", "yToFreq(", "freqToY("});
+
+    const auto pianoRollSource = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto transientOverlayBlock = extractBlockByMarker(
+        pianoRollSource, "void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)");
+    expectTokens("DrawNote transient preview ViewMapper mapping",
+                 transientOverlayBlock,
+                 {"mapper.freqToY(pitch)"});
+    expectNoTokens("DrawNote transient preview legacy mapping",
+                   transientOverlayBlock,
+                   {"std::log2(pitch / 440.0f)"});
+    expectNoTokens("PianoRoll legacy mapping definitions",
+                   pianoRollSource,
+                   {"PianoRollComponent::midiToY(", "PianoRollComponent::yToMidi(",
+                    "PianoRollComponent::freqToMidi(", "PianoRollComponent::midiToFreq(",
+                    "PianoRollComponent::yToFreq(", "PianoRollComponent::freqToY("});
+    expectTokens("PianoRoll ViewMapper call sites",
+                 pianoRollSource,
+                 {"makeViewMapper().yToMidi", "makeViewMapper().freqToY"});
+
+    const auto pluginProcessorHeader = readText("Source/PluginProcessor.h");
+    const auto pluginProcessorSource = readText("Source/PluginProcessor.cpp");
+    expectTokens("PluginProcessor readable chunk stats API",
+                 pluginProcessorHeader,
+                 {"getReadableContentChunkStats"});
+    expectTokens("PluginProcessor readable chunk stats API",
+                  pluginProcessorSource,
+                  {"getReadableContentChunkStats", "resolveReadableContentRenderService"});
+    const auto readableChunkStatsBlock = extractBlockByMarker(
+        pluginProcessorSource,
+        "RenderCache::ChunkStats OpenTuneAudioProcessor::getReadableContentChunkStats(ContentKey key) const noexcept");
+    expectTokens("PluginProcessor readable chunk stats implementation",
+                 readableChunkStatsBlock,
+                 {"resolveReadableContentRenderService(key)"});
+
+    const auto araControllerHeader = readText("Source/ARA/OpenTuneDocumentController.h");
+    const auto araControllerSource = readText("Source/ARA/OpenTuneDocumentController.cpp");
+    expectNoTokens("ARA controller chunk stats API",
+                   araControllerHeader,
+                   {"readChunkStats"});
+    expectNoTokens("ARA controller chunk stats API",
+                   araControllerSource,
+                   {"readChunkStats"});
+
+    const auto overlayHeader = readText("Source/Editor/AutoRenderOverlayComponent.h");
+    expectTokens("shared render overlay title helper",
+                 overlayHeader,
+                 {"buildRenderingOverlayTitle"});
+
+    const auto standaloneEditorSource = readText("Source/Standalone/PluginEditor.cpp");
+    const auto pluginEditorSource = readText("Source/Plugin/PluginEditor.cpp");
+    expectNoTokens("shared render overlay title definition",
+                   standaloneEditorSource,
+                   {"juce::String buildRenderingOverlayTitle(int completedTasks",
+                    "buildRenderingOverlayTitle(int completedTasks"});
+    expectNoTokens("shared render overlay title definition",
+                   pluginEditorSource,
+                   {"juce::String buildRenderingOverlayTitle(int completedTasks",
+                    "buildRenderingOverlayTitle(int completedTasks"});
+
+    const auto timerBlock = extractBlockByMarker(
+        pluginEditorSource, "void OpenTuneAudioProcessorEditor::timerCallback()");
+    expectTokens("Plugin editor render-state timer",
+                 timerBlock,
+                 {"bool shouldShowOverlay = waitingForAraContent_;",
+                  "if (!waitingForAraContent_)",
+                  "isAutoTuneProcessing",
+                  "else if (chunkStats.hasActiveWork())",
+                  "shouldShowBadge",
+                  "getReadableContentChunkStats"});
+    expectTokens("Plugin editor render-state visibility bindings",
+                 timerBlock,
+                 {"renderBadge_.setVisible(shouldShowBadge)",
+                  "autoRenderOverlay_.setVisible(shouldShowOverlay)"});
 }
 
 Note makeNote(double startSeconds, double endSeconds, float pitchHz, float pitchOffset = 0.0f)
@@ -381,6 +633,14 @@ int main()
     std::cout << "=== OpenTune PianoRoll Behavior Tests ===\n\n";
 
     try {
+        pianoRollPendingSeekPresentationSourceContract();
+        pianoRollRetainedPlayheadSourceContract();
+        pluginEditorPlayheadRequestSourceContract();
+        standalonePlayheadRequestSourceContract();
+        pluginEditorPlayheadPositionBindingSourceContract();
+        standalonePlayheadPositionBindingSourceContract();
+        viewMapperContinuousConversionRoundTrips();
+        unifiedViewMappingAndReadableRenderSourceContracts();
         selectAllFeedbackPathCoversEveryNote();
         dragPreviewUsesWorkingNotesAndLiveInvalidation();
         pianoRollEditActionUndoRedoCommitsRangeSnapshots();

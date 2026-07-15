@@ -97,7 +97,7 @@ public:
     void viewToggled(bool workspaceView) override;
     void recordRequested() override;
 
-    void playheadPositionChangeRequested(double timeSeconds) override;
+    bool playheadPositionChangeRequested(double timeSeconds) override;
     void playPauseToggleRequested() override;
     void stopPlaybackRequested() override;
     void autoTuneRequested() override;

@@ -226,9 +226,20 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.grabKeyboardFocus = [this]() { grabKeyboardFocus(); };
     toolCtx.getAudioEditingScheme = [this]() { return audioEditingScheme_; };
     toolCtx.notifyPlayheadChange = [this](double time) {
-        listeners_.call([time](Listener& l) { l.playheadPositionChangeRequested(time); });
+        bool seekRequestDispatched = false;
+        listeners_.call([time, &seekRequestDispatched](Listener& l) {
+            seekRequestDispatched = l.playheadPositionChangeRequested(time) || seekRequestDispatched;
+        });
         userScrollHold_ = false;
-        playheadTimeForPaint_ = readPlayheadTime();
+        if (seekRequestDispatched) {
+            playheadTimeForPaint_ = time;
+            pendingSeekTime_ = time;
+            lastPlayheadDirtyRect_ = playheadDirtyRect();
+        } else {
+            pendingSeekTime_ = -1.0;
+            playheadTimeForPaint_ = readPlayheadTime();
+            lastPlayheadDirtyRect_ = playheadDirtyRect();
+        }
         repaint();
     };
     toolCtx.notifyPitchCurveEdited = [this](int s, int e) {
@@ -903,8 +914,8 @@ juce::Rectangle<int> PianoRollComponent::getNoteBounds(const Note& note) const
     const int x1 = sourceTimeToX(note.startTime);
     const int x2 = sourceTimeToX(note.endTime);
     const int width = std::max(1, x2 - x1);
-    const float midi = freqToMidi(adjustedPitch);
-    const float y = midiToY(midi) - (pixelsPerSemitone_ * 0.5f);
+    const float midi = makeViewMapper().freqToMidi(adjustedPitch);
+    const float y = makeViewMapper().midiToY(midi) - (pixelsPerSemitone_ * 0.5f);
     const int top = static_cast<int>(std::floor(y));
     const int height = std::max(1, static_cast<int>(std::ceil(pixelsPerSemitone_)));
     return juce::Rectangle<int>(x1, top, width, height)
@@ -947,8 +958,8 @@ juce::Rectangle<int> PianoRollComponent::getSelectionBounds() const
 
     const int x1 = sourceTimeToX(startTime);
     const int x2 = sourceTimeToX(endTime);
-    const int y1 = static_cast<int>(std::floor(midiToY(maxMidi)));
-    const int y2 = static_cast<int>(std::ceil(midiToY(minMidi)));
+    const int y1 = static_cast<int>(std::floor(makeViewMapper().midiToY(maxMidi)));
+    const int y2 = static_cast<int>(std::ceil(makeViewMapper().midiToY(minMidi)));
     return juce::Rectangle<int>(std::min(x1, x2),
                                 std::min(y1, y2),
                                 std::max(1, std::abs(x2 - x1)),
@@ -994,7 +1005,7 @@ juce::Rectangle<int> PianoRollComponent::getLineAnchorPreviewBounds() const
 
     for (const auto& anchor : interactionState_.drawing.pendingAnchors) {
         includePoint(static_cast<float>(sourceTimeToX(anchor.time)),
-                     freqToY(anchor.freq) + static_cast<float>(rulerHeight_));
+                     makeViewMapper().freqToY(anchor.freq) + static_cast<float>(rulerHeight_));
     }
     includePoint(interactionState_.drawing.currentMousePos.x, interactionState_.drawing.currentMousePos.y);
 
@@ -1030,7 +1041,7 @@ juce::Rectangle<int> PianoRollComponent::getNoteDragCurvePreviewBounds() const
         }
 
         const float x = static_cast<float>(sourceTimeToX(f0tl.timeAtFrame(frame)));
-        const float y = freqToY(f0);
+        const float y = makeViewMapper().freqToY(f0);
         const auto pointBounds = juce::Rectangle<float>(x - 2.0f, y - 2.0f, 4.0f, 4.0f);
         bounds = hasBounds ? bounds.getUnion(pointBounds) : pointBounds;
         hasBounds = true;
@@ -1158,6 +1169,8 @@ void PianoRollComponent::drawPlayhead(juce::Graphics& g)
 
     const float anchorX = static_cast<float>(pres.anchorX);
     const float height = static_cast<float>(getHeight());
+    juce::Graphics::ScopedSaveState playheadClip(g);
+    g.reduceClipRegion(timeAxisRect());
 
     g.setColour(playheadColour_);
     g.drawLine(anchorX, 0.0f, anchorX, height, 2.0f);
@@ -1211,8 +1224,8 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
         if (pitch > 0.0f && endTime > startTime) {
             int x1 = sourceTimeToX(startTime);
             int x2 = sourceTimeToX(endTime);
-            float midiNote = 69.0f + 12.0f * std::log2(pitch / 440.0f);
-            float y = midiToY(midiNote);
+            const auto mapper = makeViewMapper();
+            const float y = mapper.freqToY(pitch) - (pixelsPerSemitone_ * 0.5f);
             float noteHeight = pixelsPerSemitone_;
 
             juce::Rectangle<float> noteRect(static_cast<float>(std::min(x1, x2)),
@@ -1258,7 +1271,7 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
     for (int i = 0; i < f0tl.endFrameExclusive(); ++i) {
         float f0 = interactionState_.drawing.handDrawBuffer[static_cast<size_t>(i)];
         if (f0 > 0.0f) {
-            float y = freqToY(f0);
+            float y = makeViewMapper().freqToY(f0);
             double timePos = f0tl.timeAtFrame(i);
             float x = static_cast<float>(sourceTimeToX(timePos));
 
@@ -1314,7 +1327,7 @@ void PianoRollComponent::drawNoteDragCurvePreview(juce::Graphics& g)
         }
 
         const float x = static_cast<float>(sourceTimeToX(f0tl.timeAtFrame(frame)));
-        const float y = freqToY(f0);
+        const float y = makeViewMapper().freqToY(f0);
         if (!pathStarted) {
             previewPath.startNewSubPath(x, y);
             pathStarted = true;
@@ -1340,7 +1353,7 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
     for (size_t i = 0; i < interactionState_.drawing.pendingAnchors.size(); ++i) {
         const auto& anchor = interactionState_.drawing.pendingAnchors[i];
         float x = static_cast<float>(sourceTimeToX(anchor.time));
-        float y = freqToY(anchor.freq);
+        float y = makeViewMapper().freqToY(anchor.freq);
 
         g.setColour(anchorColour);
         g.fillEllipse(x - 2.0f, y - 2.0f, 4.0f, 4.0f);
@@ -1348,7 +1361,7 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
         if (i > 0) {
             const auto& prev = interactionState_.drawing.pendingAnchors[i - 1];
             float prevX = static_cast<float>(sourceTimeToX(prev.time));
-            float prevY = freqToY(prev.freq);
+            float prevY = makeViewMapper().freqToY(prev.freq);
             g.setColour(anchorColour.withAlpha(0.7f));
             g.drawLine(prevX, prevY, x, y, 2.0f);
         }
@@ -1357,7 +1370,7 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
     if (!interactionState_.drawing.pendingAnchors.empty()) {
         const auto& last = interactionState_.drawing.pendingAnchors.back();
         float lastX = static_cast<float>(sourceTimeToX(last.time));
-        float lastY = freqToY(last.freq);
+        float lastY = makeViewMapper().freqToY(last.freq);
         g.setColour(anchorColour.withAlpha(0.4f));
         g.drawLine(lastX, lastY,
                    interactionState_.drawing.currentMousePos.x,
@@ -1377,8 +1390,8 @@ void PianoRollComponent::drawSelectionBox(juce::Graphics& g, ThemeId themeId) {
 
     int x1 = sourceTimeToX(startTime);
     int x2 = sourceTimeToX(endTime);
-    float y1 = midiToY(maxMidi);
-    float y2 = midiToY(minMidi);
+    float y1 = makeViewMapper().midiToY(maxMidi);
+    float y2 = makeViewMapper().midiToY(minMidi);
 
     float left = static_cast<float>(std::min(x1, x2));
     float top = std::min(y1, y2);
@@ -1849,7 +1862,7 @@ int PianoRollComponent::findLineAnchorSegmentNear(int x, int y) const
         const float segFreq = seg.f0Data[f0Idx];
         if (segFreq <= 0.0f) continue;
 
-        const float segY = freqToY(segFreq);
+        const float segY = makeViewMapper().freqToY(segFreq);
         const float dist = std::abs(segY - static_cast<float>(y));
 
         if (dist < bestDist) {
@@ -2255,9 +2268,18 @@ void PianoRollComponent::onHeartbeatTick()
 
     if (!playingNow) {
         const double currentPlayheadTime = readPlayheadTime();
-        if (currentPlayheadTime != playheadTimeForPaint_) {
+        double playheadTime = currentPlayheadTime;
+        if (pendingSeekTime_ >= 0.0) {
+            if (std::abs(currentPlayheadTime - pendingSeekTime_) < 0.05) {
+                pendingSeekTime_ = -1.0;
+            } else {
+                playheadTime = pendingSeekTime_;
+            }
+        }
+
+        if (playheadTime != playheadTimeForPaint_) {
             const auto oldRect = lastPlayheadDirtyRect_;
-            playheadTimeForPaint_ = currentPlayheadTime;
+            playheadTimeForPaint_ = playheadTime;
             const auto newRect = playheadDirtyRect();
             lastPlayheadDirtyRect_ = newRect;
             const auto dirty = oldRect.getUnion(newRect);
@@ -2303,10 +2325,22 @@ void PianoRollComponent::onHeartbeatTick()
 void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
 {
     (void)timestampSec;
-    if (!isShowing() || !isPlaying_.load(std::memory_order_relaxed))
+    if (!isShowing()) {
+        return;
+    }
+    if (!isPlaying_.load(std::memory_order_relaxed))
         return;
 
-    const double playheadTime = readPlayheadTime();
+    const double currentPlayheadTime = readPlayheadTime();
+    double playheadTime = currentPlayheadTime;
+    if (pendingSeekTime_ >= 0.0) {
+        if (std::abs(currentPlayheadTime - pendingSeekTime_) < 0.05) {
+            pendingSeekTime_ = -1.0;
+        } else {
+            playheadTime = pendingSeekTime_;
+        }
+    }
+
     const int visibleWidth = getTimelineContentViewportWidth();
     if (visibleWidth <= 0)
         return;
@@ -2417,6 +2451,7 @@ void PianoRollComponent::rebuildTimelineCoverage()
 
     prepareCoverageCompositeTilesNew();
     rebuildViewportSurfaceFromReadyTiles();
+    lastPlayheadDirtyRect_ = playheadDirtyRect();
 }
 
 void PianoRollComponent::invalidateStableScene()
@@ -2647,7 +2682,7 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
 
     // Piano key audition: click in piano key area triggers note preview.
     if (shouldShowPianoKeys() && e.x < pianoKeyWidth_) {
-        int midiNote = static_cast<int>(std::ceil(yToMidi(static_cast<float>(e.y))));
+        int midiNote = static_cast<int>(std::ceil(makeViewMapper().yToMidi(static_cast<float>(e.y))));
         midiNote = juce::jlimit(0, 127, midiNote);
         pressedPianoKey_ = midiNote;
         if (pianoKeyAudition_ != nullptr)
@@ -2684,7 +2719,7 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
 
     // Piano key glissando: dragging across keys changes the note
     if (shouldShowPianoKeys() && pressedPianoKey_ >= 0) {
-        int midiNote = static_cast<int>(std::ceil(yToMidi(static_cast<float>(e.y))));
+        int midiNote = static_cast<int>(std::ceil(makeViewMapper().yToMidi(static_cast<float>(e.y))));
         midiNote = juce::jlimit(0, 127, midiNote);
         if (midiNote != pressedPianoKey_) {
             if (pianoKeyAudition_ != nullptr) {
@@ -2729,7 +2764,7 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent& e) {
 void PianoRollComponent::handleVerticalZoomWheel(const juce::MouseEvent& e, float deltaY) {
     const auto& settings = zoomSensitivity_;
     float zoomFactor = 1.0f + (deltaY * settings.verticalZoomFactor);
-    float mouseMidi = yToMidi((float)e.y);
+    float mouseMidi = makeViewMapper().yToMidi((float)e.y);
     
     pixelsPerSemitone_ *= zoomFactor;
     pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, pixelsPerSemitone_);
@@ -3142,8 +3177,9 @@ juce::Rectangle<int> PianoRollComponent::playheadDirtyRect() const
         return {};
 
     const int anchorX = static_cast<int>(std::lround(presentation.anchorX));
-    return juce::Rectangle<int>(anchorX - 6, 0, 14, getHeight())
-        .getIntersection(getLocalBounds());
+    const auto axis = timeAxisRect();
+    return juce::Rectangle<int>(anchorX - 6, axis.getY(), 14, axis.getHeight())
+        .getIntersection(axis);
 }
 
 void PianoRollComponent::setScale(int rootNote, int scaleType)
@@ -3209,36 +3245,8 @@ void PianoRollComponent::fitToScreen() {
     }
 }
 
-// HachiTune-style MIDI-based coordinate conversion
-float PianoRollComponent::midiToY(float midiNote) const {
-    return (maxMidi_ - midiNote) * pixelsPerSemitone_ - verticalScrollOffset_;
-}
-
-float PianoRollComponent::yToMidi(float y) const {
-    return maxMidi_ - ((y + verticalScrollOffset_) / pixelsPerSemitone_);
-}
-
 float PianoRollComponent::getTotalHeight() const {
     return (maxMidi_ - minMidi_) * pixelsPerSemitone_;
-}
-
-float PianoRollComponent::freqToMidi(float frequency) const {
-    if (frequency <= 0.0f) return 0.0f;
-    // 缂佺喍绔寸拠顓濈疅閿涙岸顣堕悳鍥ｅ晬MIDI 娴犮儮鈧粌宕愰棅鍏呰厬韫囧啰鍤庨垾婵呰礋闁挎氨鍋ｉ敍鍫滅瑝閺勵垶鏁潏鍦櫕閿涘锟?
-    return 12.0f * std::log2(frequency / 440.0f) + 69.0f - 0.5f;
-}
-
-float PianoRollComponent::midiToFreq(float midiNote) const {
-    // 锟?freqToMidi 娣囨繃瀵旀稉銉︾壐娴滄帡鈧棛娈戞稉顓炵妇缁惧潡鏁嬮悙鍦鐎规哎锟?
-    return 440.0f * std::pow(2.0f, (midiNote + 0.5f - 69.0f) / 12.0f);
-}
-
-float PianoRollComponent::yToFreq(float y) const {
-    return midiToFreq(yToMidi(y));
-}
-
-float PianoRollComponent::freqToY(float freq) const {
-    return midiToY(freqToMidi(freq));
 }
 
 float PianoRollComponent::recalculatePIP(Note& note) {

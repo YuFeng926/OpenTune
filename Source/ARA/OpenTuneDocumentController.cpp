@@ -2047,18 +2047,6 @@ PitchShiftSettings OpenTuneDocumentController::readPitchShift(ContentKey key) co
     return mod->content->editable.pitchShiftSettings;
 }
 
-RenderCache::ChunkStats OpenTuneDocumentController::readChunkStats(ContentKey key) const
-{
-    PlaybackReadSource crsSrc;
-    if (contentRenderService_ != nullptr
-        && contentRenderService_->getPlaybackReadSource(key, crsSrc)
-        && crsSrc.renderCache != nullptr)
-    {
-        return crsSrc.renderCache->getChunkStats();
-    }
-    return {};
-}
-
 uint64_t OpenTuneDocumentController::readContentRevision(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);

@@ -176,6 +176,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     updateRegularCaptureSessionCallback();
 
     pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
+    pianoRoll_.setIsPlaying(processorRef_.isPlaying());
 
     applyThemeToEditor(appPreferences_.getState().shared.theme);
 
@@ -356,6 +357,33 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             lastPianoRollPitchRevision_ = currentPitchRevision;
         }
     }
+
+    bool shouldShowOverlay = waitingForAraContent_;
+    bool shouldShowBadge = false;
+    if (!waitingForAraContent_) {
+        const auto chunkStats = processorRef_.getReadableContentChunkStats(activeKey);
+        const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
+        const int completedTasks = chunkStats.idle + chunkStats.blank;
+        const int totalTasks = chunkStats.total();
+
+        if (isAutoProcessing) {
+            const float progress = totalTasks > 0
+                ? static_cast<float>(completedTasks) / static_cast<float>(totalTasks)
+                : 0.0f;
+            autoRenderOverlay_.setMessageText(
+                buildRenderingOverlayTitle(completedTasks, totalTasks, progress));
+            shouldShowOverlay = true;
+        } else if (chunkStats.hasActiveWork()) {
+            renderBadge_.setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u4e2d (")
+                + juce::String(completedTasks) + "/" + juce::String(totalTasks) + ")");
+            shouldShowBadge = true;
+        }
+    }
+
+    if (renderBadge_.isVisible() != shouldShowBadge)
+        renderBadge_.setVisible(shouldShowBadge);
+    if (autoRenderOverlay_.isVisible() != shouldShowOverlay)
+        autoRenderOverlay_.setVisible(shouldShowOverlay);
 
     // 播放头位置：positionAtomic_ 已通过 setPlayheadPositionSource 接入 PianoRoll，
     // transportBar 仍需显式同步
@@ -919,23 +947,24 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         autoRenderOverlay_.setMessageText(
             juce::String::fromUTF8("\xe9\x9f\xb3\xe9\xa2\x91\xe5\xa4\x84\xe7\x90\x86\xe4\xb8\xad"),
             "Audio data is being processed. The region will appear shortly.");
+        renderBadge_.setVisible(false);
         autoRenderOverlay_.setVisible(true);
     });
 #endif
 }
 
-void OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSeconds)
+bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSeconds)
 {
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
-        docController->requestSetPlaybackPosition(timeSeconds);
-        return;
+        return docController->requestSetPlaybackPosition(timeSeconds);
     }
 #endif
     // Non-ARA VST3: playhead is host-controlled only. Do NOT call setPosition() �?
     // the host would ignore it and the next processBlock would overwrite the value.
     // PianoRoll click/drag on timeline should not change plugin-internal position.
     juce::ignoreUnused(timeSeconds);
+    return false;
 }
 
 void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
