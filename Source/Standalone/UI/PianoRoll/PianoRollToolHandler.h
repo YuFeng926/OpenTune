@@ -92,6 +92,7 @@ public:
         // Coordinate mapper — replaces timeToX/xToTime/freqToY/yToFreq callbacks.
         // Returns ViewMapper by value to ensure fresh coordinate state.
         std::function<ViewMapper()> getViewMapper;
+        int contentOriginY;
 
         std::function<const std::vector<Note>&()> getCommittedNotes;
         std::function<const std::vector<Note>&()> getDisplayNotes;

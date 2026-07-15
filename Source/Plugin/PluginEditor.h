@@ -16,6 +16,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <memory>
+#include <map>
 #include <vector>
 
 #include "Content/ContentKey.h"
@@ -35,11 +36,6 @@
 #include "UI/UIColors.h"
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
-
-namespace OpenTune::Capture {
-class CaptureSession;
-struct SegmentInfo;
-}
 
 namespace OpenTune::PluginUI {
 
@@ -133,8 +129,6 @@ private:
     void syncParameterPanelFromSelection();
     void syncContentProjectionToPianoRoll();
     void showPreferencesDialog();
-    void updateRegularCaptureSessionCallback();
-    void clearRegularCaptureSessionCallback();
     bool handleEditorShortcut(const juce::KeyPress& key);
     void surfaceRegularVst3HostControlledTransport(const char* actionName);
 
@@ -173,6 +167,7 @@ private:
     // Tracks last-seen notesRevision per active content so the timer
     // can pull fresh notes when an async note generator (GAME) commits late.
     ContentKey lastActiveContentKey_;
+    std::map<ContentKey, OriginalF0State> lastObservedOriginalF0States_;
     uint64_t lastPianoRollNotesRevision_{0};
     uint64_t lastPianoRollTimeGridRevision_{0};
     uint64_t lastPianoRollPitchRevision_{0};
@@ -180,8 +175,6 @@ private:
     // When true, the blocking overlay is shown until ARA content birth completes.
     bool waitingForAraContent_ = false;
     juce::uint32 araWaitStartMs_ = 0;
-
-    Capture::CaptureSession* regularCaptureCallbackSession_ = nullptr;
 
     static constexpr int TOP_BAR_HEIGHT = 96;
     static constexpr int PARAMETER_PANEL_WIDTH = 240;

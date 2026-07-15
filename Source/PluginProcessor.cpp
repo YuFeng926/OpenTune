@@ -1543,16 +1543,14 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
 #if JucePlugin_Enable_ARA
     if (isBoundToARA()) {
+        juce::AudioPlayHead::PositionInfo positionInfo;
         if (auto* hostPlayHead = getPlayHead()) {
-            const auto pos = hostPlayHead->getPosition().orFallback(juce::AudioPlayHead::PositionInfo{});
-            const auto hostSnapshot = updateHostTransportSnapshot(pos);
-            positionAtomic_->store(hostSnapshot.timeSeconds, std::memory_order_relaxed);
-            isPlaying_.store(hostSnapshot.isPlaying, std::memory_order_relaxed);
+            positionInfo = hostPlayHead->getPosition().orFallback(juce::AudioPlayHead::PositionInfo{});
+            updateHostTransportSnapshot(positionInfo);
         }
-    }
+        getDocumentController()->updateTransport(positionInfo);
 
-    if (isBoundToARA()) {
-        if (processBlockForARA(buffer, isRealtime(), getPlayHead())) {
+        if (processBlockForARA(buffer, isRealtime(), positionInfo)) {
             pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
             return;
         }
@@ -1813,8 +1811,6 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::getHostTransportSnapshot() const
 {
     HostTransportSnapshot snapshot;
-    snapshot.isPlaying = hostTransportIsPlaying_.load(std::memory_order_relaxed);
-    snapshot.timeSeconds = hostTransportTimeSeconds_.load(std::memory_order_relaxed);
     snapshot.bpm = hostTransportBpm_.load(std::memory_order_relaxed);
     snapshot.ppqPosition = hostTransportPpqPosition_.load(std::memory_order_relaxed);
     snapshot.loopEnabled = hostTransportLoopEnabled_.load(std::memory_order_relaxed);
@@ -1831,13 +1827,8 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHost
 {
     HostTransportSnapshot snapshot = getHostTransportSnapshot();
 
-    snapshot.isPlaying = positionInfo.getIsPlaying();
     snapshot.isRecording = positionInfo.getIsRecording();
     snapshot.loopEnabled = positionInfo.getIsLooping();
-
-    if (const auto timeSeconds = positionInfo.getTimeInSeconds()) {
-        snapshot.timeSeconds = *timeSeconds;
-    }
 
     if (const auto bpm = positionInfo.getBpm()) {
         snapshot.bpm = *bpm;
@@ -1857,8 +1848,6 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHost
         snapshot.loopPpqEnd = loopPoints->ppqEnd;
     }
 
-    hostTransportIsPlaying_.store(snapshot.isPlaying, std::memory_order_relaxed);
-    hostTransportTimeSeconds_.store(snapshot.timeSeconds, std::memory_order_relaxed);
     hostTransportBpm_.store(snapshot.bpm, std::memory_order_relaxed);
     hostTransportPpqPosition_.store(snapshot.ppqPosition, std::memory_order_relaxed);
     hostTransportLoopEnabled_.store(snapshot.loopEnabled, std::memory_order_relaxed);
@@ -3066,6 +3055,15 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
 // 播放控制
 // ============================================================================
 
+bool OpenTuneAudioProcessor::isPlaying() const
+{
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+        return getDocumentController()->isPlaying();
+#endif
+    return isPlaying_.load();
+}
+
 void OpenTuneAudioProcessor::setPlaying(bool playing) {
     if (playing) {
         playStartPosition_.store(positionAtomic_->load(std::memory_order_relaxed));
@@ -3089,7 +3087,20 @@ void OpenTuneAudioProcessor::setPosition(double seconds) {
     positionAtomic_->store(seconds, std::memory_order_relaxed);
 }
 
+std::shared_ptr<std::atomic<double>> OpenTuneAudioProcessor::getPositionAtomic()
+{
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+        return getDocumentController()->getPlaybackPositionSource();
+#endif
+    return positionAtomic_;
+}
+
 double OpenTuneAudioProcessor::getPosition() const {
+#if JucePlugin_Enable_ARA
+    if (isBoundToARA())
+        return getDocumentController()->getPlaybackPosition();
+#endif
     return positionAtomic_->load(std::memory_order_relaxed);
 }
 

@@ -388,7 +388,7 @@ void PianoRollToolHandler::mouseMove(const juce::MouseEvent& e)
     int edgeThreshold = 6;
 
     bool cursorSet = false;
-    float mousePitch = ctx_.getViewMapper().yToFreq((float)e.y);
+    float mousePitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
     float mouseMidiVal = 69.0f + 12.0f * std::log2(mousePitch / 440.0f) - 0.5f;
 
     for (const auto& note : displayNotes(ctx_)) {
@@ -436,7 +436,7 @@ void PianoRollToolHandler::mouseDown(const juce::MouseEvent& e)
     }
 
     constexpr int inset = 12;
-    constexpr int rulerHeight = 30;
+    const int rulerHeight = ctx_.contentOriginY;
     constexpr int timelineExtendedHitArea = 20;
     const int timelineBottomExtended = inset + rulerHeight + timelineExtendedHitArea;
     if (e.y < timelineBottomExtended && e.x > ctx_.getPianoKeyWidth()) {
@@ -696,7 +696,7 @@ bool PianoRollToolHandler::hitsNoteBodyOrResizeEdge(const juce::MouseEvent& e)
     if (!editRange.contains(*sourceTime))
         return false;
 
-    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y));
+    const float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
     const float mouseMidi = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
     constexpr int edgeThreshold = 6;
 
@@ -788,7 +788,8 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
         const int x = sourceTimeToScreenX(f0tl.timeAtFrame(frame));
         const float y = ctx_.getViewMapper().freqToY(frequency);
         const float dx = static_cast<float>(e.x - x);
-        const float dy = static_cast<float>(e.y) - y;
+        const float contentY = static_cast<float>(e.y - ctx_.contentOriginY);
+        const float dy = contentY - y;
         const float distanceSquared = dx * dx + dy * dy;
         if (distanceSquared <= bestDistanceSquared) {
             bestDistanceSquared = distanceSquared;
@@ -1121,7 +1122,7 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
 
     const double trackRelativeTime = *sourceTime;
 
-    float clickedPitch = ctx_.getViewMapper().yToFreq((float)e.y);
+    float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
 
     const int clickedNoteIndex = findNoteIndexAt(notes, *sourceTime, clickedPitch, 100.0f);
 
@@ -1320,7 +1321,7 @@ void PianoRollToolHandler::handleDrawCurveTool(const juce::MouseEvent& e)
                                            editRange.endSeconds,
                                            *sourceTime);
 
-    float targetF0 = ctx_.getViewMapper().yToFreq((float)e.y);
+    float targetF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
 
     const auto& originalF0 = ctx_.getOriginalF0();
     const auto f0tl = ctx_.getF0Timeline();
@@ -1394,7 +1395,7 @@ void PianoRollToolHandler::handleDrawNoteMouseDown(const juce::MouseEvent& e)
 
     // Clicking an existing note changes only the editor-local selection model.
     const auto& committedNotes = ctx_.getCommittedNotes();
-    float clickedPitch = ctx_.getViewMapper().yToFreq((float)e.y);
+    float clickedPitch = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
     float mouseMidi = 69.0f + 12.0f * std::log2(clickedPitch / 440.0f) - 0.5f;
 
     int existingNoteIndex = -1;
@@ -1445,7 +1446,7 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
                                              editRange.endSeconds,
                                              *currentTime);
 
-    float targetF0 = ctx_.getViewMapper().yToFreq((float)e.y);
+    float targetF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
     float midiNote = 69.0f + 12.0f * std::log2(targetF0 / 440.0f);
     int roundedMidi = static_cast<int>(std::round(midiNote));
     float snappedF0 = 440.0f * std::pow(2.0f, (roundedMidi - 69) / 12.0f);
@@ -1491,7 +1492,8 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
 
         ctx_.getState().selection.selectionEndTime = std::max(0.0, clampedTime);
 
-        float currentMidi = 69.0f + 12.0f * std::log2(ctx_.getViewMapper().yToFreq((float)e.y) / 440.0f) - 0.5f;
+        float currentMidi = 69.0f + 12.0f * std::log2(
+            ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY)) / 440.0f) - 0.5f;
         ctx_.getState().selection.selectionEndMidi = currentMidi;
 
         double selStartTime = std::min(ctx_.getState().selection.selectionStartTime, ctx_.getState().selection.selectionEndTime);
@@ -1577,8 +1579,8 @@ void PianoRollToolHandler::handleSelectDrag(const juce::MouseEvent& e)
         }
         ctx_.getNoteDraft().contentDirty = true;
 
-        float startF0 = ctx_.getViewMapper().yToFreq((float)dragStartPos_.y);
-        float currentF0 = ctx_.getViewMapper().yToFreq((float)e.y);
+        float startF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(dragStartPos_.y - ctx_.contentOriginY));
+        float currentF0 = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
 
         float deltaSemitones = 0.0f;
         if (startF0 > 0.0f && currentF0 > 0.0f) {
@@ -2032,7 +2034,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
     if (!editRange.contains(*clickTime))
         return;
 
-    float clickFreq = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y));
+    float clickFreq = ctx_.getViewMapper().yToFreq(static_cast<float>(e.y - ctx_.contentOriginY));
     clickFreq = std::max(20.0f, clickFreq);
     const auto scheme = ctx_.getAudioEditingScheme();
 
@@ -2060,7 +2062,7 @@ void PianoRollToolHandler::handleLineAnchorMouseDown(const juce::MouseEvent& e)
 
     if (!ctx_.getState().drawing.isPlacingAnchors) {
         if (AudioEditingScheme::allowsLineAnchorSegmentSelection(scheme)) {
-            int segmentIdx = ctx_.findLineAnchorSegmentNear(e.x, e.y);
+            int segmentIdx = ctx_.findLineAnchorSegmentNear(e.x, e.y - ctx_.contentOriginY);
             if (segmentIdx >= 0) {
                 if (e.mods.isCtrlDown() || e.mods.isCommandDown()) {
                     ctx_.toggleLineAnchorSegmentSelection(segmentIdx);

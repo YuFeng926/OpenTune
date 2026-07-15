@@ -1006,8 +1006,12 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         const uint64_t currentPitchRevision = activeKey.isValid() && snap
             ? snap->pitchRevision
             : 0;
+        const OriginalF0State currentOriginalF0State = snap
+            ? snap->originalF0State
+            : OriginalF0State::NotRequested;
+        const bool contentKeyChanged = activeKey != lastPianoRollContentKey_;
         const bool contentChanged =
-            activeKey != lastPianoRollContentKey_
+            contentKeyChanged
             || sr != lastPianoRollSampleRate_
             || curve != lastPianoRollCurve_
             || contentBuffer != lastPianoRollBuffer_;
@@ -1017,6 +1021,16 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             lastPianoRollSampleRate_ = sr;
             lastPianoRollCurve_ = curve;
             lastPianoRollBuffer_ = contentBuffer;
+        }
+        if (contentKeyChanged) {
+            lastPianoRollOriginalF0State_ = currentOriginalF0State;
+        } else if (activeKey.isValid()
+                   && lastPianoRollOriginalF0State_ == OriginalF0State::Extracting
+                   && currentOriginalF0State == OriginalF0State::Ready) {
+            pianoRoll_.requestInitialF0View(activeKey);
+            lastPianoRollOriginalF0State_ = currentOriginalF0State;
+        } else {
+            lastPianoRollOriginalF0State_ = currentOriginalF0State;
         }
         if (currentNotesRevision != lastPianoRollNotesRevision_) {
             // Same content, fresh notes – typically GAME's async commit.
@@ -1251,10 +1265,6 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
         && getStandalonePlacementByIndex(processorRef_, trackId, placementIndex, placement);
     const ContentKey contentKey = hasPlacement ? placement.contentKey : ContentKey{};
 
-    // Detect ARA region change: when the active content key changes, initialize
-    // the piano roll camera to show the new region's start time.
-    const bool regionChanged = hasPlacement && contentKey != lastPianoRollContentKey_;
-
     pianoRoll_.setContentProjection(hasPlacement ? makePianoRollProjection(placement, processorRef_)
                                                    : ContentTimelineProjection{});
 
@@ -1265,12 +1275,10 @@ void OpenTuneAudioProcessorEditor::syncPianoRollFromPlacementSelection(int track
     auto curve = snap ? snap->pitchCurve : nullptr;
     pianoRoll_.setEditedContent(contentKey, curve, contentBuffer, sr);
 
-    if (regionChanged) {
-        pianoRoll_.focusActiveContentForRegionSwitch(
-            snap ? snap->silentGaps : std::vector<SilentGap>{});
-    }
-
     lastPianoRollContentKey_ = contentKey;
+    lastPianoRollOriginalF0State_ = snap
+        ? snap->originalF0State
+        : OriginalF0State::NotRequested;
     lastPianoRollSampleRate_ = sr;
     lastPianoRollCurve_ = curve;
     lastPianoRollBuffer_ = contentBuffer;
@@ -1289,6 +1297,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
         pianoRoll_.setContentProjection({});
         pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
         lastPianoRollContentKey_ = ContentKey{};
+        lastPianoRollOriginalF0State_ = OriginalF0State::NotRequested;
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
         return;
@@ -1303,6 +1312,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
         pianoRoll_.setContentProjection({});
         pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
         lastPianoRollContentKey_ = ContentKey{};
+        lastPianoRollOriginalF0State_ = OriginalF0State::NotRequested;
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
         return;
@@ -1315,6 +1325,7 @@ void OpenTuneAudioProcessorEditor::applyPlacementSelectionContext(int trackId, u
         pianoRoll_.setContentProjection({});
         pianoRoll_.setEditedContent(ContentKey{}, nullptr, nullptr, static_cast<int>(processorRef_.getSampleRate()));
         lastPianoRollContentKey_ = ContentKey{};
+        lastPianoRollOriginalF0State_ = OriginalF0State::NotRequested;
         lastPianoRollCurve_.reset();
         lastPianoRollBuffer_.reset();
         return;

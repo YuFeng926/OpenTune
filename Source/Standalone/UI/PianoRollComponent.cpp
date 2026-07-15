@@ -126,6 +126,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.getState = [this]() -> InteractionState& { return interactionState_; };
 
     toolCtx.getViewMapper = [this]() -> ViewMapper { return makeViewMapper(); };
+    toolCtx.contentOriginY = rulerHeight_;
 
     toolCtx.getCommittedNotes = [this]() -> const std::vector<Note>& { return getCommittedNotes(); };
     toolCtx.getDisplayNotes = [this]() -> const std::vector<Note>& { return getDisplayedNotes(); };
@@ -1479,8 +1480,14 @@ void PianoRollComponent::paintOverChildren(juce::Graphics& g)
     if (activeOverlayItem_)
         renderer_->drawTimeGridHandles(g, ctx, *activeOverlayItem_);
 
-    if (shouldShowPianoKeys())
-        renderer_->drawPianoKeys(g, ctx);
+    if (shouldShowPianoKeys()) {
+        auto keyContext = ctx;
+        keyContext.height = getTimelineContentViewportHeight();
+        juce::Graphics::ScopedSaveState pianoKeyOrigin(g);
+        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
+        g.reduceClipRegion(juce::Rectangle<int>(0, 0, pianoKeyWidth_, keyContext.height));
+        renderer_->drawPianoKeys(g, keyContext);
+    }
 }
 
 bool PianoRollComponent::shouldShowPianoKeys() const noexcept
@@ -1933,6 +1940,7 @@ void PianoRollComponent::resized() {
 
     rebuildTimelineCoverage();
     repaint();
+    tryConsumeInitialF0View(editedContentKey_);
 }
 
 void PianoRollComponent::applyEditedContentCurve(std::shared_ptr<PitchCurve> curve)
@@ -2160,6 +2168,15 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
     invalidateStableScene();
 }
 
+void PianoRollComponent::requestInitialF0View(ContentKey contentKey)
+{
+    if (!contentKey.isValid())
+        return;
+
+    pendingInitialF0ViewRequests_.insert(contentKey);
+    tryConsumeInitialF0View(contentKey);
+}
+
 void PianoRollComponent::onTimeGridRevisionChanged()
 {
     invalidateStableScene();
@@ -2250,11 +2267,85 @@ PianoRollRenderer::RenderContext PianoRollComponent::makePresentationRenderConte
     return ctx;
 }
 
+bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
+{
+    if (pendingInitialF0ViewRequests_.find(contentKey) == pendingInitialF0ViewRequests_.end()
+        || contentKey != editedContentKey_
+        || !isShowing()
+        || !isVisible()
+        || currentCurve_ == nullptr) {
+        return false;
+    }
+
+    const auto snapshot = readSnapshotFor(contentKey);
+    const auto curveSnapshot = currentCurve_->getSnapshot();
+    const auto projection = activeContentProjection();
+    const int contentWidth = getTimelineContentViewportWidth();
+    const int contentHeight = getTimelineContentViewportHeight();
+    if (snapshot == nullptr
+        || snapshot->originalF0State != OriginalF0State::Ready
+        || curveSnapshot == nullptr
+        || snapshot->timeGrid == nullptr
+        || snapshot->timeGrid->empty()
+        || !projection.isValid()
+        || curveSnapshot->getHopSize() <= 0
+        || !std::isfinite(curveSnapshot->getSampleRate())
+        || curveSnapshot->getSampleRate() <= 0.0
+        || contentWidth <= 0
+        || contentHeight <= 0
+        || camera_.pixelsPerSecond <= 0.0) {
+        return false;
+    }
+
+    const F0Timeline f0Timeline(curveSnapshot->getHopSize(),
+                                curveSnapshot->getSampleRate(),
+                                static_cast<int>(curveSnapshot->size()));
+    const auto& originalF0 = curveSnapshot->getOriginalF0();
+    int firstFrame = -1;
+    float startFrequency = 0.0f;
+    for (int frame = 0; frame < static_cast<int>(originalF0.size()); ++frame) {
+        const float f0 = originalF0[static_cast<size_t>(frame)];
+        if (std::isfinite(f0) && f0 >= 20.0f && f0 <= 2000.0f) {
+            firstFrame = frame;
+            startFrequency = f0;
+            break;
+        }
+    }
+
+    if (firstFrame < 0 || f0Timeline.isEmpty())
+        return false;
+
+    const double sourceSeconds = f0Timeline.timeAtFrame(firstFrame);
+    const double contentSeconds = snapshot->timeGrid->tauForward(sourceSeconds);
+    const double timelineSeconds = projection.projectContentTimeToTimeline(contentSeconds);
+    if (!std::isfinite(timelineSeconds))
+        return false;
+
+    const auto request = makeViewportRequest(
+        TimelineViewportRequest::Kind::Manual,
+        timelineSeconds,
+        0.0,
+        camera_.pixelsPerSecond);
+    camera_ = TimelineViewportPolicy::resolve(request);
+
+    const auto mapper = makeViewMapper();
+    const float startMidi = mapper.freqToMidi(startFrequency);
+    verticalScrollOffset_ = (maxMidi_ - startMidi) * pixelsPerSemitone_ - contentHeight * 0.5f;
+    verticalScrollOffset_ = std::clamp(verticalScrollOffset_, 0.0f, getTotalHeight() - contentHeight);
+
+    rebuildTimelineCoverage();
+    updateScrollBars();
+    repaint();
+    pendingInitialF0ViewRequests_.erase(contentKey);
+    return true;
+}
+
 void PianoRollComponent::onHeartbeatTick()
 {
     if (!isShowing())
         return;
 
+    tryConsumeInitialF0View(editedContentKey_);
     consumeCompletedCorrectionResults();
 
     const bool playingNow = isPlaying_.load(std::memory_order_relaxed);
@@ -2461,34 +2552,6 @@ void PianoRollComponent::invalidateStableScene()
     repaint();
 }
 
-void PianoRollComponent::focusActiveContentForRegionSwitch(
-    const std::vector<SilentGap>& silentGaps)
-{
-    // Respect user manual interaction
-    if (userHasManuallyZoomed_ || userScrollHold_)
-        return;
-
-    const auto projection = activeContentProjection();
-    if (!projection.isValid())
-        return;
-
-    const double duration = projection.timelineDurationSeconds;
-    const int visibleWidth = getTimelineContentViewportWidth();
-    if (visibleWidth <= 0 || duration <= 0.0)
-        return;
-
-    constexpr double defaultPps = TimelineViewportCamera::kDefaultPixelsPerSecond;
-
-    // Fit entire content 锟?policy clamps pps to valid range
-    const double fitPps = static_cast<double>(visibleWidth) / duration;
-    const auto req = makeViewportRequest(
-        TimelineViewportRequest::Kind::Manual,
-        projection.timelineStartSeconds,
-        0.0,
-        (fitPps > 0.0) ? fitPps : defaultPps);
-    commitViewportRequest(req);
-}
-
 void PianoRollComponent::setCurrentTool(ToolId tool) {
     if (tool == ToolId::TimeTool && !experimentalFeaturesEnabled_) {
         tool = ToolId::Select;
@@ -2680,9 +2743,14 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
         }
     }
 
+    if (e.y < rulerHeight_ && e.x < pianoKeyWidth_) {
+        return;
+    }
+
     // Piano key audition: click in piano key area triggers note preview.
-    if (shouldShowPianoKeys() && e.x < pianoKeyWidth_) {
-        int midiNote = static_cast<int>(std::ceil(makeViewMapper().yToMidi(static_cast<float>(e.y))));
+    if (shouldShowPianoKeys() && e.y >= rulerHeight_ && e.x < pianoKeyWidth_) {
+        int midiNote = static_cast<int>(std::ceil(
+            makeViewMapper().yToMidi(static_cast<float>(e.y - rulerHeight_))));
         midiNote = juce::jlimit(0, 127, midiNote);
         pressedPianoKey_ = midiNote;
         if (pianoKeyAudition_ != nullptr)
@@ -2719,7 +2787,8 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
 
     // Piano key glissando: dragging across keys changes the note
     if (shouldShowPianoKeys() && pressedPianoKey_ >= 0) {
-        int midiNote = static_cast<int>(std::ceil(makeViewMapper().yToMidi(static_cast<float>(e.y))));
+        int midiNote = static_cast<int>(std::ceil(
+            makeViewMapper().yToMidi(static_cast<float>(e.y - rulerHeight_))));
         midiNote = juce::jlimit(0, 127, midiNote);
         if (midiNote != pressedPianoKey_) {
             if (pianoKeyAudition_ != nullptr) {
@@ -2764,14 +2833,15 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent& e) {
 void PianoRollComponent::handleVerticalZoomWheel(const juce::MouseEvent& e, float deltaY) {
     const auto& settings = zoomSensitivity_;
     float zoomFactor = 1.0f + (deltaY * settings.verticalZoomFactor);
-    float mouseMidi = makeViewMapper().yToMidi((float)e.y);
+    const float contentY = static_cast<float>(e.y - rulerHeight_);
+    float mouseMidi = makeViewMapper().yToMidi(contentY);
     
     pixelsPerSemitone_ *= zoomFactor;
     pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, pixelsPerSemitone_);
     userHasManuallyZoomed_ = true;
 
     float targetY = (maxMidi_ - mouseMidi) * pixelsPerSemitone_;
-    verticalScrollOffset_ = targetY - (float)e.y;
+    verticalScrollOffset_ = targetY - contentY;
     
     float totalHeight = getTotalHeight();
     float visibleHeight = static_cast<float>(getHeight() - rulerHeight_ - UIColors::scrollBarThickness);
@@ -2927,6 +2997,7 @@ void PianoRollComponent::visibilityChanged()
     // manual click.
     if (isShowing() && isVisible())
     {
+        tryConsumeInitialF0View(editedContentKey_);
         // Use callAfterDelay to ensure focus grab after message loop processing
         // is complete. This is necessary because component may not be able to
         // receive focus immediately when it just became visible.

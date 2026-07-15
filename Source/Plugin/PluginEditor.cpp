@@ -173,7 +173,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
         return processorRef_.getContentSnapshot(key);
     });
-    updateRegularCaptureSessionCallback();
 
     pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
     pianoRoll_.setIsPlaying(processorRef_.isPlaying());
@@ -189,7 +188,6 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
     setLookAndFeel(nullptr);
     stopTimer();
-    clearRegularCaptureSessionCallback();
     LocalizationManager::getInstance().removeListener(this);
     menuBar_.removeListener(this);
     transportBar_.removeListener(this);
@@ -274,7 +272,6 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
 void OpenTuneAudioProcessorEditor::timerCallback()
 {
     syncSharedAppPreferences();
-    updateRegularCaptureSessionCallback();
 
     // Drive non-ARA capture state machine: Pending -> Processing -> Edited
     if (auto* session = processorRef_.getCaptureSession()) {
@@ -315,6 +312,29 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // Revision detection (aligned with Standalone pattern)
     const auto sync = resolveCurrentContentSync();
     const ContentKey activeKey = sync.activeContentKey;
+
+    const auto observeOriginalF0State = [this](ContentKey contentKey) {
+        const auto snapshot = processorRef_.getContentSnapshot(contentKey);
+        const auto currentState = snapshot
+            ? snapshot->originalF0State
+            : OriginalF0State::NotRequested;
+        const auto previous = lastObservedOriginalF0States_.find(contentKey);
+        if (previous != lastObservedOriginalF0States_.end()
+            && (previous->second == OriginalF0State::Extracting
+                || previous->second == OriginalF0State::NotRequested)
+            && currentState == OriginalF0State::Ready) {
+            pianoRoll_.requestInitialF0View(contentKey);
+        }
+        lastObservedOriginalF0States_[contentKey] = currentState;
+    };
+
+    for (const auto& placement : sync.placements)
+        observeOriginalF0State(placement.contentKey);
+
+    if (auto* session = processorRef_.getCaptureSession()) {
+        for (const auto& segment : session->listSegments())
+            observeOriginalF0State(segment.contentKey);
+    }
 
     // Content 切换检测
     bool contentJustSwitched = false;
@@ -526,33 +546,6 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
     }
 
     return sync;
-}
-
-void OpenTuneAudioProcessorEditor::updateRegularCaptureSessionCallback()
-{
-    auto* session = processorRef_.getCaptureSession();
-    if (session == regularCaptureCallbackSession_)
-        return;
-
-    clearRegularCaptureSessionCallback();
-
-    if (session == nullptr)
-        return;
-
-    regularCaptureCallbackSession_ = session;
-    session->setActiveSegmentChangedCallback([this](ContentKey contentKey) {
-        AppLogger::log("VST3 Capture: completed contentKey="
-            + juce::String(static_cast<juce::int64>(contentKey.objectId)));
-        syncContentProjectionToPianoRoll();
-    });
-}
-
-void OpenTuneAudioProcessorEditor::clearRegularCaptureSessionCallback()
-{
-    if (regularCaptureCallbackSession_ != nullptr) {
-        regularCaptureCallbackSession_->setActiveSegmentChangedCallback(nullptr);
-        regularCaptureCallbackSession_ = nullptr;
-    }
 }
 
 bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
