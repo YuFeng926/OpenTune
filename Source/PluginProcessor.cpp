@@ -35,6 +35,32 @@
 
 namespace OpenTune {
 
+void PlayHeadState::update(const juce::Optional<juce::AudioPlayHead::PositionInfo>& info)
+{
+    if (!info.hasValue())
+    {
+        isPlaying.store(false, std::memory_order_relaxed);
+        isLooping.store(false, std::memory_order_relaxed);
+        return;
+    }
+
+    const auto& positionInfo = *info;
+    timeInSeconds.store(positionInfo.getTimeInSeconds().orFallback(0.0), std::memory_order_relaxed);
+    isPlaying.store(positionInfo.getIsPlaying(), std::memory_order_relaxed);
+    isLooping.store(positionInfo.getIsLooping(), std::memory_order_relaxed);
+
+    if (const auto loopPoints = positionInfo.getLoopPoints())
+    {
+        loopPpqStart.store(loopPoints->ppqStart, std::memory_order_relaxed);
+        loopPpqEnd.store(loopPoints->ppqEnd, std::memory_order_relaxed);
+    }
+}
+
+void PlayHeadState::reset()
+{
+    update(juce::nullopt);
+}
+
 void fillF0GapsForVocoder(std::vector<float>& f0,
                           const std::shared_ptr<const PitchCurveSnapshot>& snap,
                           double frameStartTimeSec,
@@ -1031,7 +1057,7 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     cancelPendingUpdate();
     referenceAnalysisService_.removeListener(this);
     referenceAnalysisService_.cancelAll();
-    isPlaying_.store(false);
+    playHeadState_.reset();
 
     // Vocoder is process-level (ProcessRenderRuntime singleton); do not
     // shutdown here -- that would break every other processor in the process.
@@ -1367,6 +1393,8 @@ void OpenTuneAudioProcessor::changeProgramName(int index, const juce::String& ne
 }
 
 void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
+    playHeadState_.reset();
+
     const bool wasInitialized = (currentSampleRate_ > 0.0);
     const double oldSampleRate = currentSampleRate_;
     const bool sampleRateChanged = wasInitialized && (std::abs(oldSampleRate - sampleRate) > 1.0);
@@ -1408,7 +1436,7 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 }
 
 void OpenTuneAudioProcessor::releaseResources() {
-    isPlaying_.store(false);
+    playHeadState_.reset();
 
 #if JucePlugin_Enable_ARA
     releaseResourcesForARA();
@@ -1543,16 +1571,25 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
 #if JucePlugin_Enable_ARA
     if (isBoundToARA()) {
-        juce::AudioPlayHead::PositionInfo positionInfo;
+        juce::Optional<juce::AudioPlayHead::PositionInfo> positionInfo;
         if (auto* hostPlayHead = getPlayHead()) {
-            positionInfo = hostPlayHead->getPosition().orFallback(juce::AudioPlayHead::PositionInfo{});
-            updateHostTransportSnapshot(positionInfo);
+            positionInfo = hostPlayHead->getPosition();
         }
-        getDocumentController()->updateTransport(positionInfo);
 
-        if (processBlockForARA(buffer, isRealtime(), positionInfo)) {
-            pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
-            return;
+        playHeadState_.update(positionInfo);
+
+        if (positionInfo.hasValue()) {
+            updateHostTransportSnapshot(*positionInfo);
+            if (processBlockForARA(buffer, isRealtime(), *positionInfo)) {
+                pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+                return;
+            }
+        } else {
+            const juce::AudioPlayHead::PositionInfo emptyPositionInfo;
+            if (processBlockForARA(buffer, isRealtime(), emptyPositionInfo)) {
+                pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, static_cast<double>(getSampleRate()));
+                return;
+            }
         }
     }
 #endif
@@ -1561,20 +1598,21 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // this host_t, recording the dry input into the active Capturing segment if any.
     // ARA-capable builds reach this path only while the instance is not ARA-bound.
     if (auto* captureSession = getCaptureSession()) {
-        double host_t = 0.0;
-        bool isPlayingNow = false;
+        juce::Optional<juce::AudioPlayHead::PositionInfo> positionInfo;
         if (auto* hostPlayHead = getPlayHead()) {
-            const auto pos = hostPlayHead->getPosition().orFallback(juce::AudioPlayHead::PositionInfo{});
-            host_t = pos.getTimeInSeconds().orFallback(0.0);
-            isPlayingNow = pos.getIsPlaying();
+            positionInfo = hostPlayHead->getPosition();
         }
 
-        // Host transport mirror: in non-ARA VST3 mode the plugin is a passive observer.
-        // Forcing positionAtomic_ and isPlaying_ to host values every block ensures any
-        // local transport change (spacebar / setPlaying) is overridden by host within
-        // one audio block -- there is no plugin-side play/pause illusion to maintain.
-        positionAtomic_->store(host_t, std::memory_order_relaxed);
-        isPlaying_.store(isPlayingNow, std::memory_order_relaxed);
+        playHeadState_.update(positionInfo);
+
+        double host_t = 0.0;
+        bool isPlayingNow = false;
+        if (positionInfo.hasValue()) {
+            const auto& hostPositionInfo = *positionInfo;
+            updateHostTransportSnapshot(hostPositionInfo);
+            host_t = hostPositionInfo.getTimeInSeconds().orFallback(0.0);
+            isPlayingNow = hostPositionInfo.getIsPlaying();
+        }
 
         // Diagnostic: once per ~1 second, post capture buffer stats via atomic event
         // for message-thread consumption (PluginEditor::timerCallback → consumeAudioThreadLogs).
@@ -1609,7 +1647,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // Handle fade-out state
     bool isFading = isFadingOut_.load();
-    bool isPlaying = isPlaying_.load();
+    bool isPlaying = playHeadState_.isPlaying.load(std::memory_order_relaxed);
     
     if (!isPlaying && !isFading) {
         // Fully stopped -- still mix piano key audition so preview works without transport
@@ -1628,7 +1666,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     const double deviceSampleRate = currentSampleRate_.load();
     const double blockDurationSeconds = static_cast<double>(numSamples) / deviceSampleRate;
-    const double currentPosSeconds = positionAtomic_->load(std::memory_order_relaxed);
+    const double currentPosSeconds = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
     const double blockEndSeconds = currentPosSeconds + blockDurationSeconds;
     const int64_t blockStartSample = TimeCoordinate::secondsToSamples(currentPosSeconds, deviceSampleRate);
     const int64_t blockEndSample = blockStartSample + static_cast<int64_t>(numSamples);
@@ -1789,7 +1827,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         
         if (fadeCount >= fadeTotal) {
             isFadingOut_.store(false);
-            isPlaying_.store(false);
+            playHeadState_.isPlaying.store(false, std::memory_order_relaxed);
             AudioThreadLogEvent evt;
             evt.type = AudioThreadLogEvent::Type::FadeOutComplete;
             logEventData_ = evt;
@@ -1805,7 +1843,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
 
-    positionAtomic_->store(blockEndSeconds, std::memory_order_relaxed);
+    playHeadState_.timeInSeconds.store(blockEndSeconds, std::memory_order_relaxed);
 }
 
 OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::getHostTransportSnapshot() const
@@ -1813,9 +1851,6 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::getHostTra
     HostTransportSnapshot snapshot;
     snapshot.bpm = hostTransportBpm_.load(std::memory_order_relaxed);
     snapshot.ppqPosition = hostTransportPpqPosition_.load(std::memory_order_relaxed);
-    snapshot.loopEnabled = hostTransportLoopEnabled_.load(std::memory_order_relaxed);
-    snapshot.loopPpqStart = hostTransportLoopPpqStart_.load(std::memory_order_relaxed);
-    snapshot.loopPpqEnd = hostTransportLoopPpqEnd_.load(std::memory_order_relaxed);
     snapshot.isRecording = hostTransportIsRecording_.load(std::memory_order_relaxed);
     snapshot.timeSignatureNumerator = hostTransportTimeSignatureNumerator_.load(std::memory_order_relaxed);
     snapshot.timeSignatureDenominator = hostTransportTimeSignatureDenominator_.load(std::memory_order_relaxed);
@@ -1828,7 +1863,6 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHost
     HostTransportSnapshot snapshot = getHostTransportSnapshot();
 
     snapshot.isRecording = positionInfo.getIsRecording();
-    snapshot.loopEnabled = positionInfo.getIsLooping();
 
     if (const auto bpm = positionInfo.getBpm()) {
         snapshot.bpm = *bpm;
@@ -1843,16 +1877,8 @@ OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::updateHost
         snapshot.timeSignatureDenominator = timeSignature->denominator;
     }
 
-    if (const auto loopPoints = positionInfo.getLoopPoints()) {
-        snapshot.loopPpqStart = loopPoints->ppqStart;
-        snapshot.loopPpqEnd = loopPoints->ppqEnd;
-    }
-
     hostTransportBpm_.store(snapshot.bpm, std::memory_order_relaxed);
     hostTransportPpqPosition_.store(snapshot.ppqPosition, std::memory_order_relaxed);
-    hostTransportLoopEnabled_.store(snapshot.loopEnabled, std::memory_order_relaxed);
-    hostTransportLoopPpqStart_.store(snapshot.loopPpqStart, std::memory_order_relaxed);
-    hostTransportLoopPpqEnd_.store(snapshot.loopPpqEnd, std::memory_order_relaxed);
     hostTransportIsRecording_.store(snapshot.isRecording, std::memory_order_relaxed);
     hostTransportTimeSignatureNumerator_.store(snapshot.timeSignatureNumerator, std::memory_order_relaxed);
     hostTransportTimeSignatureDenominator_.store(snapshot.timeSignatureDenominator, std::memory_order_relaxed);
@@ -3057,51 +3083,36 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
 
 bool OpenTuneAudioProcessor::isPlaying() const
 {
-#if JucePlugin_Enable_ARA
-    if (isBoundToARA())
-        return getDocumentController()->isPlaying();
-#endif
-    return isPlaying_.load();
+    return playHeadState_.isPlaying.load(std::memory_order_relaxed);
 }
 
 void OpenTuneAudioProcessor::setPlaying(bool playing) {
     if (playing) {
-        playStartPosition_.store(positionAtomic_->load(std::memory_order_relaxed));
+        playStartPosition_.store(playHeadState_.timeInSeconds.load(std::memory_order_relaxed));
         isFadingOut_.store(false);
-        isPlaying_.store(true);
+        playHeadState_.isPlaying.store(true, std::memory_order_relaxed);
         AppLogger::log("Playback: start");
     } else {
-        if (isPlaying_.load()) {
+        const bool wasPlaying = playHeadState_.isPlaying.load(std::memory_order_relaxed);
+        if (wasPlaying) {
             isFadingOut_.store(true);
             fadeOutSampleCount_.store(0);
             AppLogger::log("Playback: fade-out started");
         }
+        playHeadState_.isPlaying.store(false, std::memory_order_relaxed);
     }
 }
 
 void OpenTuneAudioProcessor::setLoopEnabled(bool enabled) {
-    loopEnabled_.store(enabled);
+    playHeadState_.isLooping.store(enabled, std::memory_order_relaxed);
 }
 
 void OpenTuneAudioProcessor::setPosition(double seconds) {
-    positionAtomic_->store(seconds, std::memory_order_relaxed);
-}
-
-std::shared_ptr<std::atomic<double>> OpenTuneAudioProcessor::getPositionAtomic()
-{
-#if JucePlugin_Enable_ARA
-    if (isBoundToARA())
-        return getDocumentController()->getPlaybackPositionSource();
-#endif
-    return positionAtomic_;
+    playHeadState_.timeInSeconds.store(seconds, std::memory_order_relaxed);
 }
 
 double OpenTuneAudioProcessor::getPosition() const {
-#if JucePlugin_Enable_ARA
-    if (isBoundToARA())
-        return getDocumentController()->getPlaybackPosition();
-#endif
-    return positionAtomic_->load(std::memory_order_relaxed);
+    return playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
 }
 
 void OpenTuneAudioProcessor::setBpm(double bpm) {

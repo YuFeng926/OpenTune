@@ -111,8 +111,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     transportBar_.setLayoutProfile(TransportBarComponent::LayoutProfile::VST3AraSingleClip);
 
     // Sync initial transport state from processor
-    transportBar_.setPlaying(processorRef_.isPlaying());
-    transportBar_.setLoopEnabled(processorRef_.isLoopEnabled());
+    transportBar_.setPlaying(processorRef_.getPlayHeadState().isPlaying.load(std::memory_order_relaxed));
+    transportBar_.setLoopEnabled(processorRef_.getPlayHeadState().isLooping.load(std::memory_order_relaxed));
     transportBar_.setBpm(processorRef_.getBpm());
 
     // Piano key audition
@@ -159,6 +159,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     addAndMakeVisible(parameterPanel_);
     parameterPanel_.addListener(this);
 
+    pianoRoll_.setPlayHeadState(processorRef_.getPlayHeadState());
     addAndMakeVisible(pianoRoll_);
     pianoRoll_.addListener(this);
 
@@ -173,9 +174,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
         return processorRef_.getContentSnapshot(key);
     });
-
-    pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
-    pianoRoll_.setIsPlaying(processorRef_.isPlaying());
 
     applyThemeToEditor(appPreferences_.getState().shared.theme);
 
@@ -405,15 +403,15 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     if (autoRenderOverlay_.isVisible() != shouldShowOverlay)
         autoRenderOverlay_.setVisible(shouldShowOverlay);
 
-    // 播放头位置：positionAtomic_ 已通过 setPlayheadPositionSource 接入 PianoRoll，
-    // transportBar 仍需显式同步
-    const double positionSeconds = processorRef_.getPosition();
+    // PianoRoll 直接读取 processor-owned PlayHeadState，transportBar 仍需显式同步
+    const auto& playHeadState = processorRef_.getPlayHeadState();
+    const double positionSeconds = playHeadState.timeInSeconds.load(std::memory_order_relaxed);
     transportBar_.setPositionSeconds(positionSeconds);
 
     // playing 状态同步
-    if (transportBar_.isPlaying() != processorRef_.isPlaying()) {
-        transportBar_.setPlaying(processorRef_.isPlaying());
-        pianoRoll_.setIsPlaying(processorRef_.isPlaying());
+    const bool isPlaying = playHeadState.isPlaying.load(std::memory_order_relaxed);
+    if (transportBar_.isPlaying() != isPlaying) {
+        transportBar_.setPlaying(isPlaying);
     }
 
     // BPM 同步
@@ -531,7 +529,9 @@ OpenTuneAudioProcessorEditor::resolveCurrentContentSync()
         }
 
         if (!sync.placements.empty()) {
-            sync.activeContentKey = chooseActiveCaptureContentKey(*session, processorRef_.getPosition());
+            sync.activeContentKey = chooseActiveCaptureContentKey(
+                *session,
+                processorRef_.getPlayHeadState().timeInSeconds.load(std::memory_order_relaxed));
             const bool activeBelongsToPlacements = std::any_of(sync.placements.begin(),
                                                                sync.placements.end(),
                                                                [&sync](const auto& placement) {
@@ -840,7 +840,14 @@ void OpenTuneAudioProcessorEditor::surfaceRegularVst3HostControlledTransport(con
 
 void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
 {
-    processorRef_.setLoopEnabled(enabled);
+#if JucePlugin_Enable_ARA
+    if (auto* docController = processorRef_.getDocumentController()) {
+        if (!docController->requestEnableCycle(enabled))
+            AppLogger::log("ARA: requestEnableCycle failed — host playback controller unavailable");
+        return;
+    }
+#endif
+    surfaceRegularVst3HostControlledTransport(enabled ? "loop-on" : "loop-off");
 }
 
 void OpenTuneAudioProcessorEditor::bpmChanged(double newBpm)
@@ -953,7 +960,7 @@ bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
         return docController->requestSetPlaybackPosition(timeSeconds);
     }
 #endif
-    // Non-ARA VST3: playhead is host-controlled only. Do NOT call setPosition() �?
+    // Non-ARA VST3: playhead is host-controlled only. Do not write plugin transport;
     // the host would ignore it and the next processBlock would overwrite the value.
     // PianoRoll click/drag on timeline should not change plugin-internal position.
     juce::ignoreUnused(timeSeconds);
@@ -962,7 +969,7 @@ bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
 
 void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
 {
-    if (processorRef_.isPlaying()) {
+    if (processorRef_.getPlayHeadState().isPlaying.load(std::memory_order_relaxed)) {
         pauseRequested();
     } else {
         playRequested();
