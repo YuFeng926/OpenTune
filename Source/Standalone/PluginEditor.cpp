@@ -229,7 +229,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 {
     // Wire AppPreferences to processor for getSnapSettings()
     processorRef_.setAppPreferences(&appPreferences_);
-    arrangementView_.setPlayHeadState(processorRef_.getPlayHeadState());
 
     // Initialize track volumes array
     lastTrackVolumes_.fill(1.0f);
@@ -313,8 +312,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     // Setup Transport Bar (includes Scale controls)
     transportBar_.addListener(this);
-    transportBar_.setPlaying(processorRef_.getPlayHeadState().isPlaying.load(std::memory_order_relaxed));
-    transportBar_.setLoopEnabled(processorRef_.getPlayHeadState().isLooping.load(std::memory_order_relaxed));
+    transportBar_.setPlaying(processorRef_.isPlaying());
+    transportBar_.setLoopEnabled(processorRef_.isLoopEnabled());
     transportBar_.setBpm(processorRef_.getBpm());
 
     // Initialize Scale (content > recent > default)
@@ -382,7 +381,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     // Setup Piano Roll (main editor area)
     pianoRoll_.addListener(this);
-    pianoRoll_.setPlayHeadState(processorRef_.getPlayHeadState());
     pianoRoll_.setProcessor(&processorRef_);
     pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
         return processorRef_.getContentSnapshot(key);
@@ -399,6 +397,12 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setTimeSignature(processorRef_.getTimeSigNumerator(), processorRef_.getTimeSigDenominator());
     pianoRoll_.setShowWaveform(processorRef_.getShowWaveform());
     pianoRoll_.setShowLanes(processorRef_.getShowLanes());
+    
+// Set high-performance playhead position source - read directly from Processor, bypassing 60Hz Timer bottleneck
+    pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
+    arrangementView_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
+    pianoRoll_.setIsPlaying(processorRef_.isPlaying());
+    arrangementView_.setIsPlaying(processorRef_.isPlaying());
     
     addAndMakeVisible(pianoRoll_);
     pianoRoll_.setVisible(!isWorkspaceView_);
@@ -962,9 +966,8 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
     }
 
-    // Update transport presentation from processor-owned PlayHeadState
-    const auto& playHeadState = processorRef_.getPlayHeadState();
-    const double currentPositionSeconds = playHeadState.timeInSeconds.load(std::memory_order_relaxed);
+    // Update playhead position from processor
+    double currentPositionSeconds = processorRef_.getPosition();
     double sampleRate = processorRef_.getSampleRate();
 
     const double bpm = processorRef_.getBpm();
@@ -1054,6 +1057,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         lastPianoRollPitchRevision_ = currentPitchRevision;
     }
 
+// Playhead position read by each component via positionSource_ directly from Processor
     transportBar_.setPositionSeconds(currentPositionSeconds);
 
     const RenderStatusSnapshot statusSnapshot = getRenderStatusSnapshot();
@@ -1169,11 +1173,12 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 #endif
 
-    // Sync playing state presentation
-    const bool isPlaying = playHeadState.isPlaying.load(std::memory_order_relaxed);
-    if (transportBar_.isPlaying() != isPlaying)
+    // Sync playing state (Fix for inconsistent UI state)
+    if (transportBar_.isPlaying() != processorRef_.isPlaying())
     {
-        transportBar_.setPlaying(isPlaying);
+        transportBar_.setPlaying(processorRef_.isPlaying());
+        pianoRoll_.setIsPlaying(processorRef_.isPlaying());
+        arrangementView_.setIsPlaying(processorRef_.isPlaying());
     }
 
     if (allowSecondaryRefresh) {
@@ -2362,12 +2367,18 @@ void OpenTuneAudioProcessorEditor::playRequested()
 {
     processorRef_.setPlaying(true);
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Play);
+    transportBar_.setPlaying(true);
+    pianoRoll_.setIsPlaying(true);  // Notify PianoRoll for auto-scroll
+    arrangementView_.setIsPlaying(true);  // Notify ArrangementView for overlay sync
 }
 
 void OpenTuneAudioProcessorEditor::pauseRequested()
 {
     processorRef_.setPlaying(false);
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Pause);
+    transportBar_.setPlaying(false);
+    pianoRoll_.setIsPlaying(false);  // Notify PianoRoll to stop auto-scroll
+    arrangementView_.setIsPlaying(false);  // Notify ArrangementView to stop overlay updates
 }
 
 void OpenTuneAudioProcessorEditor::stopRequested()
@@ -2375,6 +2386,9 @@ void OpenTuneAudioProcessorEditor::stopRequested()
     processorRef_.setPlaying(false);
     processorRef_.setPosition(0);
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Stop);
+    transportBar_.setPlaying(false);
+    pianoRoll_.setIsPlaying(false);  // Notify PianoRoll to stop auto-scroll
+    arrangementView_.setIsPlaying(false);  // Notify ArrangementView to stop overlay updates
 }
 
 void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
@@ -2726,7 +2740,7 @@ bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
 void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
 {
     // Toggle play/pause
-    if (processorRef_.getPlayHeadState().isPlaying.load(std::memory_order_relaxed)) {
+    if (processorRef_.isPlaying()) {
         pauseRequested();
     } else {
         playRequested();
@@ -2740,16 +2754,22 @@ void OpenTuneAudioProcessorEditor::stopPlaybackRequested()
 
 void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
 {
-    if (processorRef_.getPlayHeadState().isPlaying.load(std::memory_order_relaxed)) {
+    if (processorRef_.isPlaying()) {
         processorRef_.setPlaying(false);
         double startPos = processorRef_.getPlayStartPosition();
         processorRef_.setPosition(startPos);
         processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Pause);
+        transportBar_.setPlaying(false);
+        pianoRoll_.setIsPlaying(false);
+        arrangementView_.setIsPlaying(false);
     } else {
         double startPos = processorRef_.getPlayStartPosition();
         processorRef_.setPosition(startPos);
         processorRef_.setPlaying(true);
         processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Play);
+        transportBar_.setPlaying(true);
+        pianoRoll_.setIsPlaying(true);
+        arrangementView_.setIsPlaying(true);
     }
 }
 

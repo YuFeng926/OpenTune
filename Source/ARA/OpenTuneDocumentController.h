@@ -61,6 +61,10 @@ public:
 
     const ContentRenderService* getContentRenderService() const noexcept;
     std::shared_ptr<ContentRenderService> getContentRenderServiceShared() const noexcept;
+    std::shared_ptr<std::atomic<double>> getPlaybackPositionSource() const noexcept;
+    double getPlaybackPosition() const noexcept;
+    bool isPlaying() const noexcept;
+    void updateTransport(const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept;
     // ARA mutation/render API — processor 通过这些 API 请求 ARA 渲染
     void refreshModificationCRSMetadata(ContentKey key);
     void requestModificationRender(ContentKey key, double startSeconds, double endSeconds);
@@ -155,7 +159,6 @@ public:
     bool requestSetPlaybackPosition(double timeInSeconds);
     bool requestStartPlayback();
     bool requestStopPlayback();
-    bool requestEnableCycle(bool enabled);
 
 protected:
     bool doRestoreObjectsFromStream(juce::ARAInputStream& input,
@@ -178,6 +181,8 @@ private:
     std::shared_ptr<ContentRenderService> contentRenderService_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::unique_ptr<F0ExtractionService> contentF0ExtractionService_;
+    std::shared_ptr<std::atomic<double>> playbackPositionSource_{std::make_shared<std::atomic<double>>(0.0)};
+    std::atomic<bool> playbackIsPlaying_{false};
 
     // 异步工作线程池（由 Processor 在 didBindToARA 时注入）
     juce::ThreadPool* asyncWorkPool_{nullptr};

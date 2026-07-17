@@ -53,7 +53,6 @@ namespace OpenTune {
 
 class OpenTuneAudioProcessor;
 class PianoKeyAudition;
-struct PlayHeadState;
 
 struct PianoRollComponentTestProbe;
 
@@ -130,7 +129,18 @@ public:
 
     /** [ARA 重构] 注入域内容所有者（替代 setContentProviders）。统一 ARA/Standalone/Capture 路径。 */
 
-    void setPlayHeadState(const PlayHeadState& state);
+    void setIsPlaying(bool playing) {
+        bool stateChanged = (isPlaying_.load(std::memory_order_relaxed) != playing);
+        if (stateChanged && playing)
+            preparePlaybackCoverage();
+        isPlaying_.store(playing, std::memory_order_relaxed);
+        if (stateChanged) {
+            userScrollHold_ = false;
+            playheadTimeForPaint_ = pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : readPlayheadTime();
+            repaint();
+        }
+        lastPlayheadDirtyRect_ = playheadDirtyRect();
+    }
     void commitViewportRequest(TimelineViewportRequest req);
     int timelinePolicyViewportWidth() const noexcept { return getTimelineContentViewportWidth(); }
     TimelineViewportCamera timelineCamera() const noexcept { return camera_; }
@@ -204,6 +214,11 @@ public:
     void setPlayheadColour(juce::Colour colour) {
         playheadColour_ = colour;
         repaint();
+    }
+
+    void setPlayheadPositionSource(std::weak_ptr<std::atomic<double>> source) {
+        positionSource_ = source;
+        playheadTimeForPaint_ = readPlayheadTime();
     }
 
     void fitToScreen();
@@ -405,8 +420,7 @@ private:
     double tileCoverageEndSeconds_ = 0.0;
     float verticalScrollOffset_ = 0.0f;
     ScrollMode scrollMode_ = ScrollMode::Continuous;
-    const PlayHeadState* playHeadState_ = nullptr;
-    bool lastObservedPlayHeadPlaying_ = false;
+    std::atomic<bool> isPlaying_{false};
 
     // Cont-mode scroll state
     bool userScrollHold_{false};         // user manually scrolled → pause auto-follow
@@ -531,8 +545,9 @@ private:
     int64_t lastDpiMilli_ = 1000;
 
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
+    std::weak_ptr<std::atomic<double>> positionSource_;
     double playheadTimeForPaint_ = 0.0;
-    double pendingSeekTime_{-1.0}; // transient presentation prediction; canonical time comes from PlayHeadState
+    double pendingSeekTime_{-1.0}; // transient presentation prediction; canonical time still comes from positionSource_
 
     juce::ListenerList<Listener> listeners_;
     
