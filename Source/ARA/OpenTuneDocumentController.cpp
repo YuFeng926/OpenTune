@@ -642,6 +642,30 @@ std::shared_ptr<ContentRenderService> OpenTuneDocumentController::getContentRend
     return contentRenderService_;
 }
 
+std::shared_ptr<std::atomic<double>> OpenTuneDocumentController::getPlaybackPositionSource() const noexcept
+{
+    return playbackPositionSource_;
+}
+
+double OpenTuneDocumentController::getPlaybackPosition() const noexcept
+{
+    return playbackPositionSource_->load(std::memory_order_relaxed);
+}
+
+bool OpenTuneDocumentController::isPlaying() const noexcept
+{
+    return playbackIsPlaying_.load(std::memory_order_relaxed);
+}
+
+void OpenTuneDocumentController::updateTransport(
+    const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
+{
+    if (const auto timeSeconds = positionInfo.getTimeInSeconds())
+        playbackPositionSource_->store(*timeSeconds, std::memory_order_relaxed);
+
+    playbackIsPlaying_.store(positionInfo.getIsPlaying(), std::memory_order_relaxed);
+}
+
 bool OpenTuneDocumentController::PlaybackRegionProjection::isRenderable() const noexcept
 {
     return contentKey.isValid()
@@ -1939,7 +1963,11 @@ bool OpenTuneDocumentController::removePlaybackRegion(juce::ARAPlaybackRegion* p
 
 bool OpenTuneDocumentController::requestSetPlaybackPosition(double timeInSeconds)
 {
-    auto* playbackController = getDocumentController()->getHostPlaybackController();
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+        return false;
+
+    auto* playbackController = dc->getHostPlaybackController();
     if (playbackController == nullptr)
         return false;
 
@@ -1949,7 +1977,11 @@ bool OpenTuneDocumentController::requestSetPlaybackPosition(double timeInSeconds
 
 bool OpenTuneDocumentController::requestStartPlayback()
 {
-    auto* playbackController = getDocumentController()->getHostPlaybackController();
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+        return false;
+
+    auto* playbackController = dc->getHostPlaybackController();
     if (playbackController == nullptr)
         return false;
 
@@ -1959,21 +1991,15 @@ bool OpenTuneDocumentController::requestStartPlayback()
 
 bool OpenTuneDocumentController::requestStopPlayback()
 {
-    auto* playbackController = getDocumentController()->getHostPlaybackController();
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+        return false;
+
+    auto* playbackController = dc->getHostPlaybackController();
     if (playbackController == nullptr)
         return false;
 
     playbackController->requestStopPlayback();
-    return true;
-}
-
-bool OpenTuneDocumentController::requestEnableCycle(bool enabled)
-{
-    auto* playbackController = getDocumentController()->getHostPlaybackController();
-    if (playbackController == nullptr)
-        return false;
-
-    playbackController->requestEnableCycle(enabled);
     return true;
 }
 

@@ -56,18 +56,6 @@
 
 namespace OpenTune {
 
-struct PlayHeadState
-{
-    std::atomic<bool> isPlaying { false };
-    std::atomic<bool> isLooping { false };
-    std::atomic<double> timeInSeconds { 0.0 };
-    std::atomic<double> loopPpqStart { 0.0 };
-    std::atomic<double> loopPpqEnd { 0.0 };
-
-    void update(const juce::Optional<juce::AudioPlayHead::PositionInfo>& info);
-    void reset();
-};
-
 // ============================================================================
 // Placement Operation Outcome Structures
 // ============================================================================
@@ -145,6 +133,9 @@ public:
     struct HostTransportSnapshot {
         double bpm{120.0};
         double ppqPosition{0.0};
+        bool loopEnabled{false};
+        double loopPpqStart{0.0};
+        double loopPpqEnd{0.0};
         bool isRecording{false};
         int timeSignatureNumerator{4};
         int timeSignatureDenominator{4};
@@ -343,6 +334,8 @@ private:
     std::atomic<double> currentSampleRate_{44100.0};
     int currentBlockSize_ = 512;
 
+    std::shared_ptr<std::atomic<double>> positionAtomic_{std::make_shared<std::atomic<double>>(0.0)};
+
     juce::AudioBuffer<float> doublePrecisionScratch_;
     juce::AudioBuffer<float> trackMixScratch_;
     juce::AudioBuffer<float> clipReadScratch_;
@@ -413,7 +406,8 @@ private:
 
 
     // Transport control
-    PlayHeadState playHeadState_;
+    std::atomic<bool> isPlaying_{false};
+    std::atomic<bool> loopEnabled_{false};
     double bpm_{120.0};  // Standalone 模式下的默认 BPM（插件模式下从主机同步）
     std::atomic<double> playStartPosition_{0.0};  // 播放起始位置（按下 Play 时的位置）
 
@@ -424,6 +418,9 @@ private:
 
     std::atomic<double> hostTransportBpm_{120.0};
     std::atomic<double> hostTransportPpqPosition_{0.0};
+    std::atomic<bool> hostTransportLoopEnabled_{false};
+    std::atomic<double> hostTransportLoopPpqStart_{0.0};
+    std::atomic<double> hostTransportLoopPpqEnd_{0.0};
     std::atomic<bool> hostTransportIsRecording_{false};
     std::atomic<int> hostTransportTimeSignatureNumerator_{4};
     std::atomic<int> hostTransportTimeSignatureDenominator_{4};
@@ -660,12 +657,15 @@ public:
     void setLoopEnabled(bool enabled);
     bool isLoopEnabled() const
     {
-        return playHeadState_.isLooping.load(std::memory_order_relaxed);
+       #if !JucePlugin_Build_Standalone
+        return getHostTransportSnapshot().loopEnabled;
+       #else
+        return loopEnabled_.load(std::memory_order_relaxed);
+       #endif
     }
     void setPosition(double seconds);
     double getPosition() const;
     HostTransportSnapshot getHostTransportSnapshot() const;
-    const PlayHeadState& getPlayHeadState() const noexcept { return playHeadState_; }
 
     /// Consume audio-thread log events on message thread. Called from PluginEditor::timerCallback().
     void consumeAudioThreadLogs();
@@ -673,6 +673,8 @@ public:
     double getPlayStartPosition() const { return playStartPosition_.load(); }
     void setPlayStartPosition(double seconds) { playStartPosition_.store(seconds); }
     
+    std::shared_ptr<std::atomic<double>> getPositionAtomic();
+
     void setBpm(double bpm);
     double getBpm() const
     {
