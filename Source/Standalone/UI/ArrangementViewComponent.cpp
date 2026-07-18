@@ -447,7 +447,10 @@ constexpr double kArrangementRenderBandOverscanScreens = 1.0;
 
 ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& processor)
     : processor_(processor)
+    , playHeadState_(processor.getPlayHeadState())
 {
+    // Initial playhead presentation comes straight from processor-owned state.
+    playheadTimeForPaint_ = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
     lastContextBpm_ = processor_.getBpm();
     lastContextTimeSigNum_ = processor_.getTimeSigNumerator();
     lastContextTimeSigDenom_ = processor_.getTimeSigDenominator();
@@ -646,7 +649,7 @@ void ArrangementViewComponent::rebuildTimelineCoverage()
     const double visibleStart = camera_.visibleStartSeconds;
     const double visibleEnd = visibleStart + contentViewportWidth / camera_.pixelsPerSecond;
 
-    if (isPlaying_.load(std::memory_order_relaxed)) {
+    if (playHeadState_.isPlaying.load(std::memory_order_relaxed)) {
         rebuildContentMetrics();
         const double visibleDuration = contentViewportWidth / camera_.pixelsPerSecond;
         const double timelineEnd = std::max(
@@ -1522,7 +1525,7 @@ void ArrangementViewComponent::drawPlayhead(juce::Graphics& g)
     const int viewportRight = viewportBounds.getRight();
     const int viewLeftGuardX = viewportBounds.getX();
 
-    const bool playing = isPlaying_.load(std::memory_order_relaxed);
+    const bool playing = playHeadState_.isPlaying.load(std::memory_order_relaxed);
     const bool continuousMode = scrollMode_ == ScrollMode::Continuous;
 
     const auto pres = TimelineViewportPolicy::computePlayheadPresentation(
@@ -1555,7 +1558,7 @@ juce::Rectangle<int> ArrangementViewComponent::playheadDirtyRect() const
         viewportBounds.getCentreX(),
         viewportBounds.getRight(),
         viewportBounds.getX(),
-        isPlaying_.load(std::memory_order_relaxed),
+        playHeadState_.isPlaying.load(std::memory_order_relaxed),
         scrollMode_ == ScrollMode::Continuous);
     if (!presentation.visible)
         return {};
@@ -1686,7 +1689,17 @@ void ArrangementViewComponent::onHeartbeatTick()
     if (!isShowing())
         return;
 
-    const bool playingNow = processor_.isPlaying();
+    const bool playingNow = playHeadState_.isPlaying.load(std::memory_order_relaxed);
+
+    if (playingNow != lastObservedPlayHeadPlaying_) {
+        if (playingNow)
+            preparePlaybackCoverage();
+
+        playheadTimeForPaint_ = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
+        lastObservedPlayHeadPlaying_ = playingNow;
+        lastPlayheadRect_ = playheadDirtyRect();
+        repaint();
+    }
 
     const int64_t currentDpiMilli = static_cast<int64_t>(
         std::llround(getDesktopScaleFactor() * 1000.0));
@@ -1759,7 +1772,7 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
 {
     juce::ignoreUnused(timestampSec);
 
-    if (!isShowing() || !isPlaying_.load(std::memory_order_relaxed))
+    if (!isShowing() || !playHeadState_.isPlaying.load(std::memory_order_relaxed))
         return;
 
     const double playheadTime = readPlayheadSeconds();
@@ -1813,10 +1826,9 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
 
 double ArrangementViewComponent::readPlayheadSeconds() const
 {
-    if (auto source = positionSource_.lock())
-        return source->load(std::memory_order_relaxed);
-
-    return 0.0;
+    // Canonical time comes directly from processor-owned PlayHeadState; no
+    // fallback to 0.0 and no second source of truth.
+    return playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
 }
 
 void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
@@ -1944,10 +1956,11 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     }
     else if (e.y <= rulerHeight_)
     {
-        // Clicked on ruler 鈥?seek playhead and start drag
-        double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
-        processor_.setPosition(newPosSeconds);
-        playheadTimeForPaint_ = readPlayheadSeconds();
+        // Clicked on ruler — emit seek request; the editor decides whether to
+        // drive processor.setPosition (Standalone) or ARA requestSetPlaybackPosition.
+        const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
+        listeners_.call([newPosSeconds](Listener& l) { l.playheadPositionChangeRequested(newPosSeconds); });
+        playheadTimeForPaint_ = newPosSeconds;
         repaint();
         isDraggingPlayhead_ = true;
         dragStartPos_ = e.getPosition();
@@ -1955,10 +1968,10 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
     }
     else
     {
-        // Clicked on empty area 鈥?seek playhead and clear selection
-        double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
-        processor_.setPosition(newPosSeconds);
-        playheadTimeForPaint_ = readPlayheadSeconds();
+        // Clicked on empty area — emit seek request and clear selection
+        const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
+        listeners_.call([newPosSeconds](Listener& l) { l.playheadPositionChangeRequested(newPosSeconds); });
+        playheadTimeForPaint_ = newPosSeconds;
         repaint();
 
         if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
@@ -2119,9 +2132,9 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
 
     if (isDraggingPlayhead_)
     {
-        double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
-        processor_.setPosition(newPosSeconds);
-        playheadTimeForPaint_ = readPlayheadSeconds();
+        const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
+        listeners_.call([newPosSeconds](Listener& l) { l.playheadPositionChangeRequested(newPosSeconds); });
+        playheadTimeForPaint_ = newPosSeconds;
         repaint();
         return;
     }
@@ -2396,7 +2409,8 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
 {
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::PlayPause, key))
     {
-        processor_.setPlaying(!processor_.isPlaying());
+        // Emit play/pause toggle request; editor drives the actual transport.
+        listeners_.call([](Listener& l) { l.playPauseToggleRequested(); });
         return true;
     }
 
@@ -2448,7 +2462,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         auto& clipboard = processor_.getClipClipboard();
         if (clipboard.hasEntries())
         {
-            double pasteTime = processor_.getPosition();
+            double pasteTime = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
             if (pasteTime < 0.0) pasteTime = 0.0;
 
             for (const auto& entry : clipboard.entries())
@@ -2536,7 +2550,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         if (selectedTrack_ < 0 || selectedTrack_ >= OpenTuneAudioProcessor::MAX_TRACKS)
             return true;
 
-        double splitSeconds = processor_.getPosition();
+        double splitSeconds = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
         bool anySplit = false;
 
         // Copy selected placements to a vector to avoid iterator invalidation during split

@@ -642,33 +642,10 @@ std::shared_ptr<ContentRenderService> OpenTuneDocumentController::getContentRend
     return contentRenderService_;
 }
 
-std::shared_ptr<std::atomic<double>> OpenTuneDocumentController::getPlaybackPositionSource() const noexcept
+bool OpenTuneDocumentController::PlaybackRegionProjection::isPlaybackRenderable() const noexcept
 {
-    return playbackPositionSource_;
-}
-
-double OpenTuneDocumentController::getPlaybackPosition() const noexcept
-{
-    return playbackPositionSource_->load(std::memory_order_relaxed);
-}
-
-bool OpenTuneDocumentController::isPlaying() const noexcept
-{
-    return playbackIsPlaying_.load(std::memory_order_relaxed);
-}
-
-void OpenTuneDocumentController::updateTransport(
-    const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
-{
-    if (const auto timeSeconds = positionInfo.getTimeInSeconds())
-        playbackPositionSource_->store(*timeSeconds, std::memory_order_relaxed);
-
-    playbackIsPlaying_.store(positionInfo.getIsPlaying(), std::memory_order_relaxed);
-}
-
-bool OpenTuneDocumentController::PlaybackRegionProjection::isRenderable() const noexcept
-{
-    return contentKey.isValid()
+    return playbackSourceReady
+        && contentKey.isValid()
         && contentDurationSeconds > 0.0
         && durationInPlaybackTime > 0.0
         && durationInModificationTime > 0.0;
@@ -1341,13 +1318,16 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
     projection.contentBasedFadeAtTail = placement.contentBasedFadeAtTail;
 
     const auto* modification = findAudioModification(placement.audioModificationPersistentId);
-    if (!modification || !modification->hasContentState() || !modification->isRenderable())
+    if (modification == nullptr || !modification->hasContentState())
         return projection;
 
     projection.contentWindow = modification->content->sourceWindow;
     projection.contentRevision = modification->content->contentRevision;
     projection.contentDurationSeconds = modification->content->sourceWindow.durationSeconds();
     projection.contentKey = modification->contentKey();
+    // playbackSourceReady 仅用于 renderer 严格 gate（isPlaybackRenderable）；
+    // UI projection 不再以它阻断，WaitingForSource 也能产出有效 contentKey/content snapshot。
+    projection.playbackSourceReady = modification->isRenderable();
 
     const auto* source = findAudioSource(modification->content->sourceWindow.sourcePersistentId);
     if (source != nullptr)
@@ -1788,7 +1768,7 @@ void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
 std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const
 {
     auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->isRenderable())
+    if (mod == nullptr || !mod->hasContentState())
         return nullptr;
 
     const auto& content = *mod->content;
@@ -2003,6 +1983,34 @@ bool OpenTuneDocumentController::requestStopPlayback()
     return true;
 }
 
+bool OpenTuneDocumentController::requestEnableCycle(bool enabled)
+{
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+        return false;
+
+    auto* playbackController = dc->getHostPlaybackController();
+    if (playbackController == nullptr)
+        return false;
+
+    playbackController->requestEnableCycle(enabled);
+    return true;
+}
+
+bool OpenTuneDocumentController::requestSetCycleRange(double startTime, double duration)
+{
+    auto* dc = getDocumentController();
+    if (dc == nullptr)
+        return false;
+
+    auto* playbackController = dc->getHostPlaybackController();
+    if (playbackController == nullptr)
+        return false;
+
+    playbackController->requestSetCycleRange(startTime, duration);
+    return true;
+}
+
 // -----------------------------------------------------------------------
 // 编辑器只读内容访问器实现
 // -----------------------------------------------------------------------
@@ -2088,7 +2096,7 @@ double OpenTuneDocumentController::readContentDuration(ContentKey key) const
 bool OpenTuneDocumentController::hasContent(ContentKey key) const
 {
     const auto* mod = findAudioModificationByContentKey(key);
-    return mod != nullptr && mod->isRenderable();
+    return mod != nullptr && mod->hasContentState();
 }
 
 std::shared_ptr<const EditableContentSnapshot>

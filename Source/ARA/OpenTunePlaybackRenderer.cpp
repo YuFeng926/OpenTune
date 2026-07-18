@@ -8,9 +8,12 @@
 namespace OpenTune {
 
 bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
-                                  const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
+                                   bool rendererIsPlaying) noexcept
 {
-    return realtime != juce::AudioProcessor::Realtime::yes || positionInfo.getIsPlaying();
+    if (realtime != juce::AudioProcessor::Realtime::yes)
+        return true;
+
+    return rendererIsPlaying;
 }
 
 namespace {
@@ -141,7 +144,7 @@ std::shared_ptr<const OpenTunePlaybackRenderer::RenderPlan> OpenTunePlaybackRend
 
     for (const auto& projection : projections)
     {
-        if (!projection.isRenderable())
+        if (!projection.isPlaybackRenderable())
             continue;
 
         PlaybackRegionRenderItem item;
@@ -189,10 +192,10 @@ void OpenTunePlaybackRenderer::releaseResources()
 }
 
 bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
-                                            juce::AudioProcessor::Realtime realtime,
-                                            const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
+                                             juce::AudioProcessor::Realtime realtime,
+                                             const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
 {
-    if (!shouldRenderAraPlaybackBlock(realtime, positionInfo))
+    if (!shouldRenderAraPlaybackBlock(realtime, positionInfo.getIsPlaying()))
     {
         buffer.clear();
         return true;
@@ -210,7 +213,12 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
     if (plan == nullptr || plan->items.empty())
         return true;
 
-    const double blockStartSeconds = positionInfo.getTimeInSeconds().orFallback(0.0);
+    // blockStartSeconds comes solely from this call's positionInfo. Missing
+    // timeInSeconds → no render (no zero / PPQ+BPM / fallback).
+    const auto positionTime = positionInfo.getTimeInSeconds();
+    if (!positionTime)
+        return true;
+    const double blockStartSeconds = *positionTime;
 
     for (const auto& region : plan->items)
     {
@@ -227,7 +235,7 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
             continue;
 
         const double readStartSeconds = mapPlaybackTimeToContentTime(region,
-                                                                              overlap->overlapStartSeconds);
+                                                                           overlap->overlapStartSeconds);
         const ::OpenTune::PlaybackReadRequest request(readSource,
                                            readStartSeconds,
                                            hostSampleRate_,

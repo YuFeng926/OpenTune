@@ -100,6 +100,65 @@ namespace AudioConstants {
     constexpr int RenderPollIntervalMs = 20;
 }
 
+// ============================================================================
+// PlayHeadState — processor-owned canonical transport truth
+// ============================================================================
+//
+// Each OpenTuneAudioProcessor owns exactly one PlayHeadState. It is updated
+// only from the processor's own processBlock() by consuming the host
+// AudioPlayHead::PositionInfo exactly once per block. UI binds to a const,
+// non-owning reference and reads atomics directly. ARA transport requests
+// are single-direction HostPlaybackController requests and never write back
+// here. DocumentController does NOT own transport state.
+//
+// update() contract (per docs/plans/2026-07-15-ara-playhead-official-state-hard-cut.md §3):
+//  1. nullopt: no-op. Do not clear fields, do not fake stopped, do not bump revision.
+//  2. valid PositionInfo but no timeInSeconds: keep last valid time, do not bump
+//     revision; still write isPlaying/isLooping from this PositionInfo and loop
+//     points if present.
+//  3. valid PositionInfo with timeInSeconds: write time, bump hostPositionRevision;
+//     write isPlaying/isLooping and loop points if present.
+//
+// reset() contract (only prepareToPlay/releaseResources call it):
+//  - clear isPlaying/isLooping; keep last time/loop range; do not touch revision.
+struct PlayHeadState
+{
+    std::atomic<bool>    isPlaying { false };
+    std::atomic<bool>    isLooping { false };
+    std::atomic<double>  timeInSeconds { 0.0 };
+    std::atomic<double>  loopPpqStart { 0.0 };
+    std::atomic<double>  loopPpqEnd { 0.0 };
+    std::atomic<uint64_t> hostPositionRevision { 0 };
+
+    void update(const juce::Optional<juce::AudioPlayHead::PositionInfo>& info)
+    {
+        if (!info.hasValue())
+            return;
+
+        const auto& positionInfo = *info;
+        isPlaying.store(positionInfo.getIsPlaying(), std::memory_order_relaxed);
+        isLooping.store(positionInfo.getIsLooping(), std::memory_order_relaxed);
+
+        if (const auto loopPoints = positionInfo.getLoopPoints())
+        {
+            loopPpqStart.store(loopPoints->ppqStart, std::memory_order_relaxed);
+            loopPpqEnd.store(loopPoints->ppqEnd, std::memory_order_relaxed);
+        }
+
+        if (const auto timeSeconds = positionInfo.getTimeInSeconds())
+        {
+            timeInSeconds.store(*timeSeconds, std::memory_order_relaxed);
+            hostPositionRevision.fetch_add(1, std::memory_order_acq_rel);
+        }
+    }
+
+    void reset()
+    {
+        isPlaying.store(false, std::memory_order_relaxed);
+        isLooping.store(false, std::memory_order_relaxed);
+    }
+};
+
 #if JucePlugin_Enable_ARA
 class OpenTuneDocumentController;
 #endif
@@ -133,9 +192,6 @@ public:
     struct HostTransportSnapshot {
         double bpm{120.0};
         double ppqPosition{0.0};
-        bool loopEnabled{false};
-        double loopPpqStart{0.0};
-        double loopPpqEnd{0.0};
         bool isRecording{false};
         int timeSignatureNumerator{4};
         int timeSignatureDenominator{4};
@@ -334,8 +390,6 @@ private:
     std::atomic<double> currentSampleRate_{44100.0};
     int currentBlockSize_ = 512;
 
-    std::shared_ptr<std::atomic<double>> positionAtomic_{std::make_shared<std::atomic<double>>(0.0)};
-
     juce::AudioBuffer<float> doublePrecisionScratch_;
     juce::AudioBuffer<float> trackMixScratch_;
     juce::AudioBuffer<float> clipReadScratch_;
@@ -405,27 +459,28 @@ private:
 
 
 
-    // Transport control
-    std::atomic<bool> isPlaying_{false};
-    std::atomic<bool> loopEnabled_{false};
-    double bpm_{120.0};  // Standalone 模式下的默认 BPM（插件模式下从主机同步）
+    // Transport control (Standalone-only helpers; canonical truth is playHeadState_)
     std::atomic<double> playStartPosition_{0.0};  // 播放起始位置（按下 Play 时的位置）
+    double bpm_{120.0};  // Standalone 模式下的默认 BPM（插件模式下从主机同步）
+
+    // Processor-owned canonical transport truth. Updated only from this
+    // processor's processBlock(); ARA/UI read it via getPlayHeadState().
+    PlayHeadState playHeadState_;
 
     // Fade-out state for smooth stop/pause
     std::atomic<bool> isFadingOut_{false};
     std::atomic<int> fadeOutSampleCount_{0};
     int fadeOutTotalSamples_{0};  // Set in prepareToPlay based on sample rate
 
+    // Independent host metadata snapshot (no loop fields; loop truth lives in
+    // playHeadState_). BPM/PPQ/recording/time-signature presentation only.
     std::atomic<double> hostTransportBpm_{120.0};
     std::atomic<double> hostTransportPpqPosition_{0.0};
-    std::atomic<bool> hostTransportLoopEnabled_{false};
-    std::atomic<double> hostTransportLoopPpqStart_{0.0};
-    std::atomic<double> hostTransportLoopPpqEnd_{0.0};
     std::atomic<bool> hostTransportIsRecording_{false};
     std::atomic<int> hostTransportTimeSignatureNumerator_{4};
     std::atomic<int> hostTransportTimeSignatureDenominator_{4};
     HostTransportSnapshot updateHostTransportSnapshot(const juce::AudioPlayHead::PositionInfo& positionInfo);
-    
+
     std::shared_ptr<ResamplingManager> resamplingManager_;
 
     // Note generator (GAME-small by default; LegacyNoteGenerator
@@ -651,56 +706,53 @@ public:
 
     // Rendering & Buffering
 
-    // Transport control API
+    // Transport control API — thin accessors over processor-owned PlayHeadState.
+    // VST3/ARA uses getPlayHeadState() const reference for UI. Writes only via
+    // Standalone setter methods (setPlaying/setLoopEnabled/setPosition).
     void setPlaying(bool playing);
-    bool isPlaying() const;
-    void setLoopEnabled(bool enabled);
-    bool isLoopEnabled() const
-    {
-       #if !JucePlugin_Build_Standalone
-        return getHostTransportSnapshot().loopEnabled;
-       #else
-        return loopEnabled_.load(std::memory_order_relaxed);
-       #endif
-    }
     void setPosition(double seconds);
-    double getPosition() const;
+    void setLoopEnabled(bool enabled);
+    bool isPlaying() const noexcept { return playHeadState_.isPlaying.load(std::memory_order_relaxed); }
+    bool isLoopEnabled() const noexcept { return playHeadState_.isLooping.load(std::memory_order_relaxed); }
+    double getPosition() const noexcept { return playHeadState_.timeInSeconds.load(std::memory_order_relaxed); }
     HostTransportSnapshot getHostTransportSnapshot() const;
+
+    /** Canonical processor-owned transport truth; UI binds a const non-owning reference. */
+    const PlayHeadState& getPlayHeadState() const noexcept { return playHeadState_; }
 
     /// Consume audio-thread log events on message thread. Called from PluginEditor::timerCallback().
     void consumeAudioThreadLogs();
     
     double getPlayStartPosition() const { return playStartPosition_.load(); }
     void setPlayStartPosition(double seconds) { playStartPosition_.store(seconds); }
-    
-    std::shared_ptr<std::atomic<double>> getPositionAtomic();
 
     void setBpm(double bpm);
+    // Shared code dispatches by runtime wrapperType, NOT by the
+    // JucePlugin_Build_Standalone macro: the OpenTune_SharedCode target is
+    // compiled with both JucePlugin_Build_Standalone=1 and
+    // JucePlugin_Build_VST3=1 simultaneously, so a compile-time branch would
+    // wrongly excise the VST3 host-snapshot read path. Only the VST3 runtime
+    // wrapper reads host transport; Standalone uses the processor-owned local
+    // BPM / 4-4 time signature.
     double getBpm() const
     {
-       #if !JucePlugin_Build_Standalone
-        return getHostTransportSnapshot().bpm;
-       #else
+        if (wrapperType == juce::AudioProcessor::wrapperType_VST3)
+            return getHostTransportSnapshot().bpm;
         return bpm_;
-       #endif
     }
 
     int getTimeSigNumerator() const
     {
-       #if !JucePlugin_Build_Standalone
-        return getHostTransportSnapshot().timeSignatureNumerator;
-       #else
+        if (wrapperType == juce::AudioProcessor::wrapperType_VST3)
+            return getHostTransportSnapshot().timeSignatureNumerator;
         return 4;
-       #endif
     }
 
     int getTimeSigDenominator() const
     {
-       #if !JucePlugin_Build_Standalone
-        return getHostTransportSnapshot().timeSignatureDenominator;
-       #else
+        if (wrapperType == juce::AudioProcessor::wrapperType_VST3)
+            return getHostTransportSnapshot().timeSignatureDenominator;
         return 4;
-       #endif
     }
 
     void setZoomLevel(double zoom);
@@ -745,6 +797,7 @@ private:
     // When setStateInformation arrives before didBindToARA, we cache the raw
     // block and replay it into the final shared stores after attach.
     juce::MemoryBlock pendingAraState_;
+
 #endif
 
 public:

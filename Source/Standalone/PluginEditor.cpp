@@ -225,6 +225,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , menuBar_(p, MenuBarComponent::Profile::Standalone)
     , topBar_(menuBar_, transportBar_)
     , arrangementView_(p)
+    , pianoRoll_(p.getPlayHeadState())
     , projectSession_(p, appPreferences_)
 {
     // Wire AppPreferences to processor for getSnapSettings()
@@ -398,11 +399,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setShowWaveform(processorRef_.getShowWaveform());
     pianoRoll_.setShowLanes(processorRef_.getShowLanes());
     
-// Set high-performance playhead position source - read directly from Processor, bypassing 60Hz Timer bottleneck
-    pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
-    arrangementView_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
-    pianoRoll_.setIsPlaying(processorRef_.isPlaying());
-    arrangementView_.setIsPlaying(processorRef_.isPlaying());
+    // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
     
     addAndMakeVisible(pianoRoll_);
     pianoRoll_.setVisible(!isWorkspaceView_);
@@ -1057,7 +1054,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         lastPianoRollPitchRevision_ = currentPitchRevision;
     }
 
-// Playhead position read by each component via positionSource_ directly from Processor
+// Playhead position read by each component directly from processor-owned PlayHeadState
     transportBar_.setPositionSeconds(currentPositionSeconds);
 
     const RenderStatusSnapshot statusSnapshot = getRenderStatusSnapshot();
@@ -1177,8 +1174,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     if (transportBar_.isPlaying() != processorRef_.isPlaying())
     {
         transportBar_.setPlaying(processorRef_.isPlaying());
-        pianoRoll_.setIsPlaying(processorRef_.isPlaying());
-        arrangementView_.setIsPlaying(processorRef_.isPlaying());
     }
 
     if (allowSecondaryRefresh) {
@@ -2368,8 +2363,7 @@ void OpenTuneAudioProcessorEditor::playRequested()
     processorRef_.setPlaying(true);
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Play);
     transportBar_.setPlaying(true);
-    pianoRoll_.setIsPlaying(true);  // Notify PianoRoll for auto-scroll
-    arrangementView_.setIsPlaying(true);  // Notify ArrangementView for overlay sync
+    // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
 }
 
 void OpenTuneAudioProcessorEditor::pauseRequested()
@@ -2377,8 +2371,7 @@ void OpenTuneAudioProcessorEditor::pauseRequested()
     processorRef_.setPlaying(false);
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Pause);
     transportBar_.setPlaying(false);
-    pianoRoll_.setIsPlaying(false);  // Notify PianoRoll to stop auto-scroll
-    arrangementView_.setIsPlaying(false);  // Notify ArrangementView to stop overlay updates
+    // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
 }
 
 void OpenTuneAudioProcessorEditor::stopRequested()
@@ -2387,13 +2380,14 @@ void OpenTuneAudioProcessorEditor::stopRequested()
     processorRef_.setPosition(0);
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Stop);
     transportBar_.setPlaying(false);
-    pianoRoll_.setIsPlaying(false);  // Notify PianoRoll to stop auto-scroll
-    arrangementView_.setIsPlaying(false);  // Notify ArrangementView to stop overlay updates
+    // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
 }
 
 void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
 {
+    // Standalone: write directly to processor-owned PlayHeadState via setter.
     processorRef_.setLoopEnabled(enabled);
+    transportBar_.setLoopEnabled(enabled);
 }
 
 void OpenTuneAudioProcessorEditor::bpmChanged(double newBpm)
@@ -2732,9 +2726,11 @@ void OpenTuneAudioProcessorEditor::placementDoubleClicked(int trackId, int place
 
 bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSeconds)
 {
+    // Standalone: canonical state is already synced via processorRef_.setPosition().
+    // Return false to indicate no ARA request was made (Standalone is not ARA-bound).
     processorRef_.setPosition(timeSeconds);
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Seek);
-    return true;
+    return false;
 }
 
 void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
@@ -2760,16 +2756,14 @@ void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
         processorRef_.setPosition(startPos);
         processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Pause);
         transportBar_.setPlaying(false);
-        pianoRoll_.setIsPlaying(false);
-        arrangementView_.setIsPlaying(false);
+        // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
     } else {
         double startPos = processorRef_.getPlayStartPosition();
         processorRef_.setPosition(startPos);
         processorRef_.setPlaying(true);
         processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Play);
         transportBar_.setPlaying(true);
-        pianoRoll_.setIsPlaying(true);
-        arrangementView_.setIsPlaying(true);
+        // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
     }
 }
 

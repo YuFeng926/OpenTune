@@ -172,10 +172,6 @@ private:
     uint64_t lastPianoRollTimeGridRevision_{0};
     uint64_t lastPianoRollPitchRevision_{0};
 
-    // When true, the blocking overlay is shown until ARA content birth completes.
-    bool waitingForAraContent_ = false;
-    juce::uint32 araWaitStartMs_ = 0;
-
     static constexpr int TOP_BAR_HEIGHT = 96;
     static constexpr int PARAMETER_PANEL_WIDTH = 240;
     static constexpr int kHeartbeatHz = 30;
