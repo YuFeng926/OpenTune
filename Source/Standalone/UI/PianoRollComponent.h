@@ -151,6 +151,8 @@ public:
         }
 
         scrollMode_ = mode;
+        transitionActive_ = false;
+        requestTransition_ = false;
         repaint();
     }
     ScrollMode getScrollMode() const { return scrollMode_; }
@@ -529,6 +531,18 @@ private:
     // Per-view retained surface for timeline time-axis pixels (ruler + contents)
     juce::Image viewportSurface_;
     TimelineViewportCamera currentSurfaceCamera_;
+    // Presentation-only bounded ease-out transition for Continuous follow
+    // return-to-centre. Not transport truth; not shared; cleared on user hold
+    // or mode switch. Driven by the VBlank timestamp, not a per-frame low-pass.
+    // requestTransition_ is an explicit one-shot arm signal: set by user
+    // ruler/empty seek, playhead drag, or the stop→play edge. VBlank consumes
+    // it once. Normal continuous playback never arms it — camera follows the
+    // target directly with no subpixel-threshold auto-trigger.
+    bool transitionActive_ = false;
+    double transitionStartTimestamp_ = 0.0;
+    double transitionStartVisibleSeconds_ = 0.0;
+    bool requestTransition_ = false;
+    static constexpr double kContinuousTransitionDurationSec = 0.18;
     juce::Rectangle<int> lastPlayheadDirtyRect_;
     int64_t lastDpiMilli_ = 1000;
 

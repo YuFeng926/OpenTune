@@ -1298,12 +1298,14 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
         PRIVATE
             juce::juce_core
             juce::juce_audio_basics
+            juce::juce_audio_processors
             juce::juce_gui_basics
             juce::juce_recommended_config_flags
     )
     target_compile_definitions(OpenTunePianoRollBehaviorTests
         PRIVATE
             OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+            OPENTUNE_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}"
             JUCE_WEB_BROWSER=0
             JUCE_USE_CURL=0
             JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
