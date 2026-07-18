@@ -11,22 +11,6 @@
 
 namespace OpenTune {
 
-static double selectBeatInterval(double pixelsPerBeat) {
-    if (pixelsPerBeat < 2.5) return 32.0;
-    if (pixelsPerBeat < 5.0) return 16.0;
-    if (pixelsPerBeat < 10.0) return 8.0;
-    if (pixelsPerBeat < 40.0) return 4.0;
-    return 1.0;
-}
-
-static double selectMarkerInterval(double pixelsPerSecond) {
-    if (pixelsPerSecond < 1.33) return 60.0;
-    if (pixelsPerSecond < 4.0) return 30.0;
-    if (pixelsPerSecond < 8.0) return 10.0;
-    if (pixelsPerSecond < 40.0) return 5.0;
-    return 1.0;
-}
-
 // ============================================================================
 // Shared scale computation helper
 // ============================================================================

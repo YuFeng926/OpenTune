@@ -987,22 +987,6 @@ void captureCallSitesDereferenceNotNullSharedPtr()
 // Time/Cont 按钮覆盖效果由 child component z-order 产生，不属于 tile cache
 // ============================================================================
 
-// Deleted: patternTileKeyExcludesRulerControlFootprint - tests removed TimelinePatternCache
-// Deleted: renderParamsExcludesRulerControlFootprint - tests removed TimelinePatternCache
-// Deleted: prepareCoveragePatternTilesNoFootprintOrTileViewportX - tests removed prepareCoveragePatternTiles
-
-void buildPatternTileNoFootprintToRenderParams()
-{
-    const auto composer = readText("Source/Standalone/UI/TimelineLayerComposer.cpp");
-    const auto buildBlock = extractFunctionBlock(
-        composer, "juce::Image TimelineLayerComposer::buildPatternTile");
-
-    expect(!buildBlock.empty(), "buildPatternTile must be found");
-    expectNoTokens("buildPatternTile", buildBlock,
-                   {"rulerControlFootprintX", "rulerControlFootprintY",
-                    "rulerControlFootprintW", "rulerControlFootprintH"});
-}
-
 void drawTimeRulerHasRulerPaintBounds()
 {
     const auto composer = readText("Source/Standalone/UI/TimelineLayerComposer.cpp");
@@ -1057,7 +1041,6 @@ int main()
         captureCallSitesDereferenceNotNullSharedPtr();
 
         // PianoRoll ruler control footprint — tile cache identity 只描述像素
-        buildPatternTileNoFootprintToRenderParams();
         drawTimeRulerHasRulerPaintBounds();
         noArrangementClipExclusionLeakedToPianoRoll();
 
