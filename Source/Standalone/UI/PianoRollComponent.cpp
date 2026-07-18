@@ -241,6 +241,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
                 requestDispatched = true;
         });
         userScrollHold_ = false;
+        requestTransition_ = true;
         if (requestDispatched) {
             seekSentRevision_ = seekRevision;
             pendingSeekTime_ = time;
@@ -2335,16 +2336,12 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
         timelineSeconds,
         0.0,
         camera_.pixelsPerSecond);
-    camera_ = TimelineViewportPolicy::resolve(request);
-
     const auto mapper = makeViewMapper();
     const float startMidi = mapper.freqToMidi(startFrequency);
     verticalScrollOffset_ = (maxMidi_ - startMidi) * pixelsPerSemitone_ - contentHeight * 0.5f;
     verticalScrollOffset_ = std::clamp(verticalScrollOffset_, 0.0f, getTotalHeight() - contentHeight);
 
-    rebuildTimelineCoverage();
-    updateScrollBars();
-    repaint();
+    activateTimelineCamera(TimelineViewportPolicy::resolve(request));
     pendingInitialF0ViewRequests_.erase(contentKey);
     return true;
 }
@@ -2360,8 +2357,13 @@ void PianoRollComponent::onHeartbeatTick()
     const bool playingNow = playHeadState_.isPlaying.load(std::memory_order_relaxed);
 
     if (playingNow != lastObservedPlayHeadPlaying_) {
-        if (playingNow)
+        if (playingNow) {
             preparePlaybackCoverage();
+            // Stop→play edge: arm a one-shot transition so the viewport eases
+            // from the current visible origin to the playhead-anchored target
+            // instead of snapping. Normal playback afterwards never re-arms it.
+            requestTransition_ = true;
+        }
 
         userScrollHold_ = false;
         playheadTimeForPaint_ = pendingSeekTime_ >= 0.0
@@ -2439,7 +2441,6 @@ void PianoRollComponent::onHeartbeatTick()
 
 void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
 {
-    (void)timestampSec;
     if (!isShowing()) {
         return;
     }
@@ -2472,27 +2473,66 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         : TimelineViewportRequest::Kind::Page;
 
     auto req = makeViewportRequest(kind, playheadTime, 0.0, pps);
-    TimelineViewportCamera nextCamera = TimelineViewportPolicy::resolve(req);
+    TimelineViewportCamera targetCamera = TimelineViewportPolicy::resolve(req);
 
-    camera_ = nextCamera;
+    // Page mode: resolvedCamera == targetCamera (direct assign below).
+    // Continuous follow: camera tracks the policy target directly. An ease-out
+    // transition is started only on an explicit requestTransition_ arm (user
+    // ruler/empty seek, playhead drag, or the stop→play edge). Normal playback
+    // never arms it, so the camera follows the target with no subpixel
+    // threshold that would re-trigger a transition every VBlank at high pps.
+    // The animation is driven by timestampSec (not a per-frame low-pass) so
+    // steady-state playback tracks the target with no offset. The half-pixel
+    // snap avoids perpetual animation causing raster instability.
+    // Continuous + userScrollHold_: preserve the user's manual viewport origin;
+    // only pps tracks the target and any in-flight transition is cleared.
+    TimelineViewportCamera resolvedCamera = targetCamera;
+    const bool continuousFollow = (scrollMode_ == ScrollMode::Continuous) && !userScrollHold_;
+    if (continuousFollow) {
+        if (transitionActive_) {
+            const double elapsed = timestampSec - transitionStartTimestamp_;
+            const double progress = std::clamp(elapsed / kContinuousTransitionDurationSec, 0.0, 1.0);
+            const double eased = progress * (2.0 - progress);
+            resolvedCamera.visibleStartSeconds = transitionStartVisibleSeconds_
+                + (targetCamera.visibleStartSeconds - transitionStartVisibleSeconds_) * eased;
+            const double remainingPx = std::abs(
+                targetCamera.visibleStartSeconds - resolvedCamera.visibleStartSeconds)
+                * targetCamera.pixelsPerSecond;
+            if (progress >= 1.0 || remainingPx <= 0.5) {
+                resolvedCamera.visibleStartSeconds = targetCamera.visibleStartSeconds;
+                transitionActive_ = false;
+            }
+        } else if (requestTransition_) {
+            transitionActive_ = true;
+            transitionStartTimestamp_ = timestampSec;
+            transitionStartVisibleSeconds_ = camera_.visibleStartSeconds;
+            resolvedCamera.visibleStartSeconds = camera_.visibleStartSeconds;
+        }
+    } else if (scrollMode_ == ScrollMode::Continuous && userScrollHold_) {
+        resolvedCamera.visibleStartSeconds = camera_.visibleStartSeconds;
+        transitionActive_ = false;
+    }
+    requestTransition_ = false;
+
+    camera_ = resolvedCamera;
     playheadTimeForPaint_ = playheadTime;
     const auto newPlayheadRect = playheadDirtyRect();
     const int64_t oldOrigin = static_cast<int64_t>(std::llround(
         oldSurfaceCamera.visibleStartSeconds * oldSurfaceCamera.pixelsPerSecond));
     const int64_t newOrigin = static_cast<int64_t>(std::llround(
-        nextCamera.visibleStartSeconds * nextCamera.pixelsPerSecond));
+        resolvedCamera.visibleStartSeconds * resolvedCamera.pixelsPerSecond));
     const bool ppsChanged = static_cast<int64_t>(std::llround(oldSurfaceCamera.pixelsPerSecond * 1000.0))
-        != static_cast<int64_t>(std::llround(nextCamera.pixelsPerSecond * 1000.0));
+        != static_cast<int64_t>(std::llround(resolvedCamera.pixelsPerSecond * 1000.0));
     const bool cameraRasterChanged = !viewportSurface_.isValid() || ppsChanged || oldOrigin != newOrigin;
 
     if (cameraRasterChanged) {
-        scrollViewportSurfaceTo(nextCamera);
+        scrollViewportSurfaceTo(resolvedCamera);
         lastPlayheadDirtyRect_ = newPlayheadRect;
         repaint(timeAxisRect());
         return;
     }
 
-    currentSurfaceCamera_ = nextCamera;
+    currentSurfaceCamera_ = resolvedCamera;
     lastPlayheadDirtyRect_ = newPlayheadRect;
     const auto dirty = oldPlayheadRect.getUnion(newPlayheadRect);
     if (!dirty.isEmpty() && newPlayheadRect != oldPlayheadRect)
@@ -2501,14 +2541,13 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
 
 void PianoRollComponent::commitViewportRequest(TimelineViewportRequest req)
 {
-    camera_ = TimelineViewportPolicy::resolve(req);
-    rebuildTimelineCoverage();
-    repaint();
-    updateScrollBars();
+    activateTimelineCamera(TimelineViewportPolicy::resolve(req));
 }
 
 void PianoRollComponent::activateTimelineCamera(TimelineViewportCamera camera)
 {
+    transitionActive_ = false;
+    requestTransition_ = false;
     camera_ = camera;
     rebuildTimelineCoverage();
     repaint();
@@ -2805,6 +2844,7 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
             newVisibleStart,
             0.0,
             pps);
+        userScrollHold_ = true;
         commitViewportRequest(req);
         float newScrollY = dragStartVerticalScrollOffset_ - (float)deltaY;
         float maxScroll = getTotalHeight() - getHeight();

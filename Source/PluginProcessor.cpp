@@ -1509,7 +1509,19 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<double>& buffer,
     const int numChannels = buffer.getNumChannels();
     const int numSamples = buffer.getNumSamples();
 
-    if (numChannels <= 0 || numSamples <= 0) {
+    // Zero-sample block: route through float processBlock for a single host
+    // PositionInfo observation (PlayHeadState update), then bail before any
+    // ARA / capture / renderer / audio work. No second getPosition() is added;
+    // the float path's own numSamples<=0 early return (after its update) does
+    // the bail. Mirrors Sample32 zero-data semantics on Sample64 path.
+    if (numSamples <= 0) {
+        juce::AudioBuffer<float> emptyFloatBuffer;
+        processBlock(emptyFloatBuffer, midiMessages);
+        return;
+    }
+
+    // Non-zero audio with no channels: keep original early return.
+    if (numChannels <= 0) {
         return;
     }
 
@@ -1564,6 +1576,13 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     // 1) Update processor-owned canonical transport truth first (no-op if nullopt).
     playHeadState_.update(hostPosOpt);
+
+    // Zero-data block: PositionInfo was observed and PlayHeadState updated above.
+    // Skip ARA / capture / renderer / standalone audio paths entirely — zero-data
+    // must not enter capture/renderer, but the host transport truth is still
+    // refreshed once per block.
+    if (numSamples <= 0)
+        return;
 
 #if JucePlugin_Enable_ARA
     if (isBoundToARA())

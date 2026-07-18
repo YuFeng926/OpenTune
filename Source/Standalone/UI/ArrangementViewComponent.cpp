@@ -476,6 +476,8 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
             scrollMode_ = ScrollMode::Page;
             scrollModeToggleButton_.setButtonText("Page");
         }
+        transitionActive_ = false;
+        requestTransition_ = false;
         listeners_.call([isCont = (scrollMode_ == ScrollMode::Continuous)](Listener& l) {
             l.scrollModeChanged(isCont);
         });
@@ -534,6 +536,8 @@ void ArrangementViewComponent::commitViewportRequest(TimelineViewportRequest req
 
 void ArrangementViewComponent::activateTimelineCamera(TimelineViewportCamera camera)
 {
+    transitionActive_ = false;
+    requestTransition_ = false;
     camera_ = camera;
     rebuildTimelineCoverage();
     updateScrollBars();
@@ -1692,8 +1696,13 @@ void ArrangementViewComponent::onHeartbeatTick()
     const bool playingNow = playHeadState_.isPlaying.load(std::memory_order_relaxed);
 
     if (playingNow != lastObservedPlayHeadPlaying_) {
-        if (playingNow)
+        if (playingNow) {
             preparePlaybackCoverage();
+            // Stop→play edge: arm a one-shot transition so the viewport eases
+            // from the current visible origin to the playhead-anchored target
+            // instead of snapping. Normal playback afterwards never re-arms it.
+            requestTransition_ = true;
+        }
 
         playheadTimeForPaint_ = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
         lastObservedPlayHeadPlaying_ = playingNow;
@@ -1770,8 +1779,6 @@ void ArrangementViewComponent::onHeartbeatTick()
 
 void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
 {
-    juce::ignoreUnused(timestampSec);
-
     if (!isShowing() || !playHeadState_.isPlaying.load(std::memory_order_relaxed))
         return;
 
@@ -1785,25 +1792,60 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
         : TimelineViewportRequest::Kind::Page;
 
     auto req = makeViewportRequest(kind, playheadTime, 0.0, camera_.pixelsPerSecond);
-    TimelineViewportCamera nextCamera = TimelineViewportPolicy::resolve(req);
+    TimelineViewportCamera targetCamera = TimelineViewportPolicy::resolve(req);
 
-    camera_ = nextCamera;
+    // Page mode: resolvedCamera == targetCamera (direct assign below).
+    // Continuous follow: camera tracks the policy target directly. An ease-out
+    // transition is started only on an explicit requestTransition_ arm (user
+    // ruler/empty seek, playhead drag, or the stop→play edge). Normal playback
+    // never arms it, so the camera follows the target with no subpixel
+    // threshold that would re-trigger a transition every VBlank at high pps.
+    // The animation is driven by timestampSec (not a per-frame low-pass) so
+    // steady-state playback tracks the target with no offset. The half-pixel
+    // snap avoids perpetual animation causing raster instability. Arrangement
+    // keeps its existing follow semantics; no user-scroll suppression state.
+    TimelineViewportCamera resolvedCamera = targetCamera;
+    const bool continuousFollow = (scrollMode_ == ScrollMode::Continuous);
+    if (continuousFollow) {
+        if (transitionActive_) {
+            const double elapsed = timestampSec - transitionStartTimestamp_;
+            const double progress = std::clamp(elapsed / kContinuousTransitionDurationSec, 0.0, 1.0);
+            const double eased = progress * (2.0 - progress);
+            resolvedCamera.visibleStartSeconds = transitionStartVisibleSeconds_
+                + (targetCamera.visibleStartSeconds - transitionStartVisibleSeconds_) * eased;
+            const double remainingPx = std::abs(
+                targetCamera.visibleStartSeconds - resolvedCamera.visibleStartSeconds)
+                * targetCamera.pixelsPerSecond;
+            if (progress >= 1.0 || remainingPx <= 0.5) {
+                resolvedCamera.visibleStartSeconds = targetCamera.visibleStartSeconds;
+                transitionActive_ = false;
+            }
+        } else if (requestTransition_) {
+            transitionActive_ = true;
+            transitionStartTimestamp_ = timestampSec;
+            transitionStartVisibleSeconds_ = camera_.visibleStartSeconds;
+            resolvedCamera.visibleStartSeconds = camera_.visibleStartSeconds;
+        }
+    }
+    requestTransition_ = false;
+
+    camera_ = resolvedCamera;
     playheadTimeForPaint_ = playheadTime;
     const auto newPlayheadRect = playheadDirtyRect();
     const int64_t newOriginPx = static_cast<int64_t>(
-        std::llround(nextCamera.visibleStartSeconds * nextCamera.pixelsPerSecond));
+        std::llround(resolvedCamera.visibleStartSeconds * resolvedCamera.pixelsPerSecond));
     const bool ppsChanged = static_cast<int64_t>(std::llround(oldPps * 1000.0))
-        != static_cast<int64_t>(std::llround(nextCamera.pixelsPerSecond * 1000.0));
+        != static_cast<int64_t>(std::llround(resolvedCamera.pixelsPerSecond * 1000.0));
     const bool cameraRasterChanged = !viewportSurface_.isValid()
         || ppsChanged
         || oldOriginPx != newOriginPx;
 
     if (cameraRasterChanged) {
-        const double tileDuration = TimelineCompositeCache::kTileWidthPx / nextCamera.pixelsPerSecond;
+        const double tileDuration = TimelineCompositeCache::kTileWidthPx / resolvedCamera.pixelsPerSecond;
         const int64_t firstTile = std::max<int64_t>(0,
-            static_cast<int64_t>(std::floor(nextCamera.visibleStartSeconds / tileDuration)));
+            static_cast<int64_t>(std::floor(resolvedCamera.visibleStartSeconds / tileDuration)));
         const int64_t lastTile = static_cast<int64_t>(std::floor(
-            (nextCamera.visibleStartSeconds + getVisibleViewportWidth() / nextCamera.pixelsPerSecond)
+            (resolvedCamera.visibleStartSeconds + getVisibleViewportWidth() / resolvedCamera.pixelsPerSecond)
             / tileDuration));
 
         if (!viewportSurface_.isValid() || ppsChanged
@@ -1961,6 +2003,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         listeners_.call([newPosSeconds](Listener& l) { l.playheadPositionChangeRequested(newPosSeconds); });
         playheadTimeForPaint_ = newPosSeconds;
+        requestTransition_ = true;
         repaint();
         isDraggingPlayhead_ = true;
         dragStartPos_ = e.getPosition();
@@ -1972,6 +2015,7 @@ void ArrangementViewComponent::mouseDown(const juce::MouseEvent& e)
         const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         listeners_.call([newPosSeconds](Listener& l) { l.playheadPositionChangeRequested(newPosSeconds); });
         playheadTimeForPaint_ = newPosSeconds;
+        requestTransition_ = true;
         repaint();
 
         if (!e.mods.isCtrlDown() && !e.mods.isShiftDown())
@@ -2135,6 +2179,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
         const double newPosSeconds = juce::jmax(0.0, viewportXToAbsoluteTime(e.x));
         listeners_.call([newPosSeconds](Listener& l) { l.playheadPositionChangeRequested(newPosSeconds); });
         playheadTimeForPaint_ = newPosSeconds;
+        requestTransition_ = true;
         repaint();
         return;
     }

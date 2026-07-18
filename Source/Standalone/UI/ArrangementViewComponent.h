@@ -232,6 +232,19 @@ private:
     juce::Rectangle<int> lastPlayheadRect_{};  // previous frame playhead presentation rect
     int64_t lastDpiMilli_ = 1000;
 
+    // Presentation-only bounded ease-out transition for Continuous follow
+    // return-to-centre. Not transport truth; not shared; cleared on mode switch.
+    // Driven by the VBlank timestamp, not a per-frame low-pass.
+    // requestTransition_ is an explicit one-shot arm signal: set by user
+    // ruler/empty seek, playhead drag, or the stop→play edge. VBlank consumes
+    // it once. Normal continuous playback never arms it — camera follows the
+    // target directly with no subpixel-threshold auto-trigger.
+    bool transitionActive_ = false;
+    double transitionStartTimestamp_ = 0.0;
+    double transitionStartVisibleSeconds_ = 0.0;
+    bool requestTransition_ = false;
+    static constexpr double kContinuousTransitionDurationSec = 0.18;
+
     // ---- View retained surface helper methods ----
     juce::Rectangle<int> timeAxisRect() const noexcept;
     void surfaceInvalidate();
