@@ -831,7 +831,6 @@ void ArrangementViewComponent::setExperimentalReferenceControlsEnabled(bool enab
 
     experimentalReferenceControlsEnabled_ = enabled;
     if (!experimentalReferenceControlsEnabled_) {
-        hoveredPlacementId_ = 0;
         mouseOverReferenceButton_ = false;
         setMouseCursor(juce::MouseCursor::NormalCursor);
     }
@@ -1882,20 +1881,12 @@ double ArrangementViewComponent::readPlayheadSeconds() const
 
 void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
 {
-    // Track hover state before update to detect transitions
-    const auto oldHoveredPlacementId = hoveredPlacementId_;
-    const bool wasOverRefBtn = mouseOverReferenceButton_;
-
-    hoveredPlacementId_ = 0;
     mouseOverReferenceButton_ = false;
 
     auto moveHit = hitTestPlacement(e.getPosition());
     if (moveHit.trackId >= 0 && moveHit.placementIndex >= 0)
     {
-        const uint64_t movePlacementId = processor_.getPlacementId(moveHit.trackId, moveHit.placementIndex);
-        hoveredPlacementId_ = movePlacementId;
-
-        // Reference button area 鈥?match paint gate (width > 30)
+        // Reference button area — match paint gate (width > 30)
         if (experimentalReferenceControlsEnabled_ && moveHit.placementBounds.getWidth() > 30)
         {
             juce::Rectangle<int> refBtnArea(moveHit.placementBounds.getRight() - 20,
@@ -1906,13 +1897,6 @@ void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
             }
         }
     }
-
-    // Repaint reference button area (narrow dirty zone) if hover state changed
-    if (oldHoveredPlacementId != hoveredPlacementId_
-        || wasOverRefBtn != mouseOverReferenceButton_)
-    {
-        // Narrow dirty rect for reference button icon area (bottom-right corner)
-        }
 
     auto hit = hitTestPlacement(e.getPosition());
 
