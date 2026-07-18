@@ -77,8 +77,7 @@ struct ImportDropPreview {
 };
 
 class ArrangementViewComponent : public juce::Component,
-                                 public juce::ScrollBar::Listener,
-                                 public juce::Timer
+                                 public juce::ScrollBar::Listener
 {
 public:
     class Listener
@@ -107,7 +106,6 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
-    void timerCallback() override;
     void onHeartbeatTick();
 
     void mouseDown(const juce::MouseEvent& e) override;

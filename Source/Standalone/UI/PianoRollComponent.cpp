@@ -1188,12 +1188,12 @@ void PianoRollComponent::drawPlayhead(juce::Graphics& g)
     g.setColour(playheadColour_);
     g.drawLine(anchorX, 0.0f, anchorX, height, 2.0f);
 
-    const float triSize = 6.0f;
-    juce::Path tri;
-    tri.addTriangle(anchorX - triSize, 0.0f,
-                    anchorX + triSize, 0.0f,
-                    anchorX, triSize);
-    g.fillPath(tri);
+    static const juce::Path kPlayheadTriangle = [] {
+        juce::Path p;
+        p.addTriangle(-6.0f, 0.0f, 6.0f, 0.0f, 0.0f, 6.0f);
+        return p;
+    }();
+    g.fillPath(kPlayheadTriangle, juce::AffineTransform::translation(anchorX, 0.0f));
 }
 
 // ============================================================================
@@ -1207,7 +1207,7 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
 
     // Ghost overlay (reference content) 锟?drawn in overlay layer, not tiles
     if (referenceOverlay_.has_value() && referenceOverlay_->enabled) {
-        auto ctx = makePresentationRenderContext();
+        auto& ctx = perFrameRenderContext_;
         renderer_->drawGhostNotes(g, ctx, *referenceOverlay_);
         renderer_->drawGhostAnchors(g, ctx, *referenceOverlay_);
     }
@@ -1259,7 +1259,7 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
     // Translate to content area Y coordinate system, matching content tile blit offset
     if (!interactionState_.noteSelection.selectedIndices.empty()) {
         juce::Graphics::ScopedSaveState highlightSave(g);
-        auto renderCtx = makePresentationRenderContext();
+        auto& renderCtx = perFrameRenderContext_;
         if (activeOverlayItem_) {
             renderer_->drawSelectedNoteHighlights(
                 g, renderCtx, activeOverlayItem_->displayNotes,
@@ -1440,6 +1440,8 @@ void PianoRollComponent::drawSelectionBox(juce::Graphics& g, ThemeId themeId) {
 }
 void PianoRollComponent::paint(juce::Graphics& g)
 {
+    perFrameRenderContext_ = makePresentationRenderContext();
+
     if (themeBackdrop_.isValid())
         g.drawImageAt(themeBackdrop_, 0, 0, false);
 
@@ -1459,18 +1461,46 @@ void PianoRollComponent::paint(juce::Graphics& g)
 
 void PianoRollComponent::paintOverChildren(juce::Graphics& g)
 {
-    auto ctx = makePresentationRenderContext();
+    auto& ctx = perFrameRenderContext_;
 
-    if (activeOverlayItem_)
+    if (ctx.isTimeView() && activeOverlayItem_
+        && (ctx.timeGridSelectedHandleId != 0
+            || ctx.timeGridHoveredHandleId != 0
+            || !ctx.additionalSelectedHandleIds.empty()))
         renderer_->drawTimeGridHandles(g, ctx, *activeOverlayItem_);
 
     if (shouldShowPianoKeys()) {
-        auto keyContext = ctx;
-        keyContext.height = getTimelineContentViewportHeight();
+        ensurePianoKeySurface();
+        const float yOffset = -verticalScrollOffset_;
         juce::Graphics::ScopedSaveState pianoKeyOrigin(g);
-        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
-        g.reduceClipRegion(juce::Rectangle<int>(0, 0, pianoKeyWidth_, keyContext.height));
-        renderer_->drawPianoKeys(g, keyContext);
+        g.addTransform(juce::AffineTransform::translation(0.0f,
+            static_cast<float>(rulerHeight_)));
+        g.reduceClipRegion(juce::Rectangle<int>(0, 0, pianoKeyWidth_,
+            getTimelineContentViewportHeight()));
+        g.drawImageTransformed(pianoKeySurface_,
+            juce::AffineTransform::translation(0.0f, yOffset), false);
+
+        if (pressedPianoKey_ >= 0) {
+            const float keyY = ctx.coords.midiToY(static_cast<float>(pressedPianoKey_));
+            const float pps = pixelsPerSemitone_;
+            const int noteInOctave = pressedPianoKey_ % 12;
+            const bool isBlack = (noteInOctave == 1 || noteInOctave == 3
+                || noteInOctave == 6 || noteInOctave == 8 || noteInOctave == 10);
+            const auto tid = UIColors::currentThemeId();
+            const bool isLight = tid == ThemeId::BlueBreeze || tid == ThemeId::Overdose;
+            const juce::Colour glow = isLight
+                ? (tid == ThemeId::Overdose ? juce::Colour{Overdose::Colors::KeyPressedGlow}
+                    : juce::Colour{BlueBreeze::Colors::KeyPressedGlow})
+                : juce::Colour(0x500078D7);
+            if (isBlack) {
+                g.setColour(isLight ? glow.withAlpha(0.30f) : juce::Colour(0x500078D7));
+                g.fillRoundedRectangle(0.0f, keyY + (pps - pps * 0.8f) * 0.5f,
+                    static_cast<float>(pianoKeyWidth_) * 0.6f, pps * 0.8f, 2.0f);
+            } else {
+                g.setColour(isLight ? glow.withAlpha(0.22f) : juce::Colour(0x500078D7));
+                g.fillRect(0.0f, keyY, static_cast<float>(pianoKeyWidth_), pps + 1.0f);
+            }
+        }
     }
 }
 
@@ -2632,6 +2662,39 @@ void PianoRollComponent::rebuildThemeBackdrop()
     }
 }
 
+void PianoRollComponent::ensurePianoKeySurface()
+{
+    const int w = pianoKeyWidth_;
+    const float pps = pixelsPerSemitone_;
+    const int h = static_cast<int>(std::ceil((maxMidi_ - minMidi_ + 1.0f) * pps)) + 1;
+
+    PianoKeySurfaceSignature sig;
+    sig.widthPx = w;
+    sig.heightPx = h;
+    sig.minMidi = minMidi_;
+    sig.maxMidi = maxMidi_;
+    sig.pixelsPerSemitone = pps;
+    sig.scaleRootNote = scaleRootNote_;
+    sig.scaleType = scaleType_;
+    sig.noteNameMode = noteNameMode_;
+    sig.themeId = static_cast<int>(UIColors::currentThemeId());
+    sig.desktopScale = getDesktopScaleFactor();
+
+    if (pianoKeySurface_.isValid() && sig == pianoKeySurfaceSignature_)
+        return;
+
+    pianoKeySurface_ = juce::Image(juce::Image::ARGB, w, h, true);
+    juce::Graphics g2(pianoKeySurface_);
+
+    auto ctx = perFrameRenderContext_;
+    ctx.height = h;
+    ctx.coords.verticalScrollOffset = 0.0f;
+    ctx.pressedPianoKey = -1;
+    renderer_->drawPianoKeys(g2, ctx);
+
+    pianoKeySurfaceSignature_ = sig;
+}
+
 void PianoRollComponent::setCurrentTool(ToolId tool) {
     if (tool == ToolId::TimeTool && !experimentalFeaturesEnabled_) {
         tool = ToolId::Select;
@@ -2741,7 +2804,7 @@ void PianoRollComponent::setShowLanes(bool shouldShow) {
 void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
     if (noteNameMode_ == noteNameMode) return;
     noteNameMode_ = noteNameMode;
-    repaint();  // note names drawn live in paintOverChildren, not cached
+    repaint();  // note names are part of the retained piano-key surface signature
 }
 
 void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
@@ -3808,15 +3871,11 @@ void PianoRollComponent::buildCompositeTile(
     rulerParams.pixelsPerSecond = ppsCanonical;
     rulerParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
     rulerParams.tempo = static_cast<int>(bpm_);
-    rulerParams.timeSigNumerator = timeSigNum_;
-    rulerParams.timeSigDenominator = timeSigDenom_;
     rulerParams.themeId = static_cast<int>(UIColors::currentThemeId());
     rulerParams.verticalGeometry = verticalGeometry;
     rulerParams.laneStyle = 0;
     rulerParams.viewportWidth = tileBounds.getWidth();
     rulerParams.viewportHeight = tileBounds.getHeight();
-    rulerParams.viewportBoundsX = 0;
-    rulerParams.contentOffsetY = 0;
     rulerParams.viewKind = "pianoroll";
     TimelineLayerComposer::drawTimeRuler(g, rulerParams);
 
@@ -3827,15 +3886,11 @@ void PianoRollComponent::buildCompositeTile(
     patternParams.pixelsPerSecond = ppsCanonical;
     patternParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
     patternParams.tempo = static_cast<int>(bpm_);
-    patternParams.timeSigNumerator = timeSigNum_;
-    patternParams.timeSigDenominator = timeSigDenom_;
     patternParams.themeId = static_cast<int>(UIColors::currentThemeId());
     patternParams.verticalGeometry = verticalGeometry;
     patternParams.laneStyle = encodeLaneStyle(showLanes_, scaleRootNote_, scaleType_);
     patternParams.viewportWidth = tileBounds.getWidth();
     patternParams.viewportHeight = contentHeight;
-    patternParams.viewportBoundsX = 0;
-    patternParams.contentOffsetY = 0;
     patternParams.viewKind = "pianoroll";
 
     {

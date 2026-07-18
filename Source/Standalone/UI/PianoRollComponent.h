@@ -518,6 +518,8 @@ private:
 
     // 新增 composite cache (Phase 2 集成)
     mutable TimelineCompositeCache compositeCache_;
+    /// Cached once per-frame in paint(); reused by drawTransientOverlay and paintOverChildren.
+    mutable PianoRollRenderer::RenderContext perFrameRenderContext_;
     uint64_t stableVisualSceneEpoch_ = 0;
 
     static constexpr int pianoKeyWidth_ = 60;
@@ -532,6 +534,33 @@ private:
     juce::Image viewportSurface_;
     juce::Image themeBackdrop_;
     void rebuildThemeBackdrop();
+
+    struct PianoKeySurfaceSignature {
+        int widthPx = 0;
+        int heightPx = 0;
+        float minMidi = 0.0f;
+        float maxMidi = 0.0f;
+        float pixelsPerSemitone = 0.0f;
+        int scaleRootNote = 0;
+        int scaleType = 1;
+        NoteNameMode noteNameMode = NoteNameMode::COnly;
+        int themeId = 0;
+        float desktopScale = 1.0f;
+
+        bool operator==(const PianoKeySurfaceSignature& o) const {
+            return widthPx == o.widthPx && heightPx == o.heightPx
+                && minMidi == o.minMidi && maxMidi == o.maxMidi
+                && pixelsPerSemitone == o.pixelsPerSemitone
+                && scaleRootNote == o.scaleRootNote && scaleType == o.scaleType
+                && noteNameMode == o.noteNameMode && themeId == o.themeId
+                && desktopScale == o.desktopScale;
+        }
+    };
+
+    PianoKeySurfaceSignature pianoKeySurfaceSignature_;
+    juce::Image pianoKeySurface_;
+    void ensurePianoKeySurface();
+
     TimelineViewportCamera currentSurfaceCamera_;
     // Presentation-only bounded ease-out transition for Continuous follow
     // return-to-centre. Not transport truth; not shared; cleared on user hold

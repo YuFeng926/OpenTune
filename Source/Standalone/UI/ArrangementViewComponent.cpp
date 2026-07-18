@@ -514,7 +514,6 @@ ArrangementViewComponent::~ArrangementViewComponent()
     scrollVBlankAttachment_.reset();
     scrollModeToggleButton_.setLookAndFeel(nullptr);
     timeUnitToggleButton_.setLookAndFeel(nullptr);
-    stopTimer();
     horizontalScrollBar_.removeListener(this);
     verticalScrollBar_.removeListener(this);
 }
@@ -1029,14 +1028,10 @@ void ArrangementViewComponent::buildCompositeTile(
     rulerParams.pixelsPerSecond = ppsCanonical;
     rulerParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
     rulerParams.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
-    rulerParams.timeSigNumerator = lastContextTimeSigNum_ > 0 ? lastContextTimeSigNum_ : 4;
-    rulerParams.timeSigDenominator = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
     rulerParams.themeId = static_cast<int>(themeId);
     rulerParams.verticalGeometry = verticalGeometry;
     rulerParams.viewportWidth = tileBounds.getWidth();
     rulerParams.viewportHeight = tileBounds.getHeight();
-    rulerParams.viewportBoundsX = 0;
-    rulerParams.contentOffsetY = 0;
     rulerParams.viewKind = "arrangement";
     TimelineLayerComposer::drawTimeRuler(g, rulerParams);
 
@@ -1076,13 +1071,9 @@ void ArrangementViewComponent::buildCompositeTile(
     gridParams.pixelsPerSecond = ppsCanonical;
     gridParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
     gridParams.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
-    gridParams.timeSigNumerator = lastContextTimeSigNum_ > 0 ? lastContextTimeSigNum_ : 4;
-    gridParams.timeSigDenominator = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
     gridParams.themeId = static_cast<int>(themeId);
     gridParams.viewportWidth = tileBounds.getWidth();
     gridParams.viewportHeight = tileBounds.getHeight() - rulerHeight_;
-    gridParams.viewportBoundsX = 0;
-    gridParams.contentOffsetY = 0;
     gridParams.viewKind = "arrangement";
 
     TimelineLayerComposer::drawGridLines(g, gridParams);
@@ -1577,12 +1568,12 @@ void ArrangementViewComponent::drawPlayhead(juce::Graphics& g)
     g.setColour(playheadColour_);
     g.drawLine(anchorX, 0.0f, anchorX, height, 2.0f);
 
-    const float triSize = 6.0f;
-    juce::Path tri;
-    tri.addTriangle(anchorX - triSize, 0.0f,
-                    anchorX + triSize, 0.0f,
-                    anchorX, triSize);
-    g.fillPath(tri);
+    static const juce::Path kPlayheadTriangle = [] {
+        juce::Path p;
+        p.addTriangle(-6.0f, 0.0f, 6.0f, 0.0f, 0.0f, 6.0f);
+        return p;
+    }();
+    g.fillPath(kPlayheadTriangle, juce::AffineTransform::translation(anchorX, 0.0f));
 }
 
 juce::Rectangle<int> ArrangementViewComponent::playheadDirtyRect() const
@@ -1703,11 +1694,6 @@ bool ArrangementViewComponent::runDebugSelfTest()
     return true;
 }
 #endif
-
-void ArrangementViewComponent::timerCallback()
-{
-    onHeartbeatTick();
-}
 
 void ArrangementViewComponent::onHeartbeatTick()
 {

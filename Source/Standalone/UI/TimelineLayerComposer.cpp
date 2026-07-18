@@ -1,5 +1,4 @@
 #include "TimelineLayerComposer.h"
-#include "TimelineCompositeCache.h"
 #include "UIColors.h"
 #include "UiAssets.h"
 #include "ThemeTokens.h"
@@ -344,92 +343,6 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
         g.drawLine(static_cast<float>(pianoKeyWidth), y, static_cast<float>(w), y,
                    (isAurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.55f : 1.0f);
     }
-}
-
-// ============================================================================
-// buildPatternTile — 生成 pattern tile 内容
-// ============================================================================
-juce::Image TimelineLayerComposer::buildPatternTile(const PatternTileKey& key) {
-    const int tileW = TimelineCompositeCache::kTileWidthPx;
-    
-    // 从 key 推算 tile 总高度 — 使用 viewKind 决定 decoder
-    static constexpr float minMidi = 24.0f;
-    static constexpr float maxMidi = 108.0f;
-    int rulerH;
-    int contentHeight;
-    if (key.viewKind == "arrangement") {
-        // Arrangement uses encodeArrangementVerticalGeometry: contentHeight(16bit) | rulerHeight(8bit)
-        rulerH = decodeArrangementRulerHeight(key.verticalGeometry);
-        contentHeight = decodeArrangementContentHeight(key.verticalGeometry);
-    } else {
-        rulerH = decodeRulerHeight(key.verticalGeometry);
-        int vpH = decodeViewportHeight(key.verticalGeometry);
-        contentHeight = juce::jmax(1, vpH - rulerH);
-    }
-    int tileH = rulerH + contentHeight;
-
-    RenderParams params;
-    params.visibleStartSeconds = key.startSeconds;
-    params.visibleEndSeconds = key.endSeconds;
-    params.pixelsPerSecond = key.pixelsPerSecond;
-    params.timeUnit = key.timeUnit;
-    params.tempo = key.tempo;
-    params.timeSigNumerator = key.timeSigNumerator;
-    params.timeSigDenominator = key.timeSigDenominator;
-    params.themeId = key.themeId;
-    params.verticalGeometry = key.verticalGeometry;
-    params.laneStyle = key.laneStyle;
-    params.viewportWidth = tileW;
-    params.viewportHeight = tileH;
-    params.trackHeight = key.trackHeight;
-    params.viewKind = key.viewKind;
-
-    // Pattern tile 始终使用透明底 — 背景由组件层绘制（组件作为视觉权威）
-    juce::Image tile(juce::Image::ARGB, tileW, tileH, true);
-    juce::Graphics g(tile);
-    g.setColour(juce::Colours::transparentBlack);
-    g.fillAll();
-    if (key.viewKind != "arrangement")  // Arrangement 不绘制 MIDI lane strips
-        drawLaneStripRepeats(g, params);
-    drawGridLines(g, params);
-    drawTimeRuler(g, params);
-
-    return tile;
-}
-
-// ============================================================================
-// drawPatternTile — 绘制单个 tile 到 viewport Graphics
-// ============================================================================
-void TimelineLayerComposer::drawPatternTile(
-    juce::Graphics& g,
-    const juce::Image& tile,
-    double cacheStartSeconds,
-    const RenderParams& params)
-{
-    if (!tile.isValid())
-        return;
-
-    // 唯一 blit 公式：
-    // viewportX = viewportBounds.x + round((cacheStartSeconds - camera.visibleStartSeconds) * pps)
-    int viewportX = params.viewportBoundsX + static_cast<int>(std::llround(
-        (cacheStartSeconds - params.visibleStartSeconds) * params.pixelsPerSecond));
-
-    g.drawImageAt(tile, viewportX, 0);
-}
-
-void TimelineLayerComposer::drawContentTile(
-    juce::Graphics& g,
-    const juce::Image& tile,
-    double cacheStartSeconds,
-    const RenderParams& params)
-{
-    if (!tile.isValid())
-        return;
-    // 唯一 blit 公式 — 与 drawPatternTile 使用相同的 X 公式
-    // Y: content tile 从 contentOffsetY 开始（跳过 pattern 占用的 ruler 区域）
-    int viewportX = params.viewportBoundsX + static_cast<int>(std::llround(
-        (cacheStartSeconds - params.visibleStartSeconds) * params.pixelsPerSecond));
-    g.drawImageAt(tile, viewportX, params.contentOffsetY);
 }
 
 } // namespace OpenTune
