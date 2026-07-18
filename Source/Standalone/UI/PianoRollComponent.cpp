@@ -1,4 +1,5 @@
 ﻿#include "PianoRollComponent.h"
+#include "../../PluginProcessor.h"
 #include "../../Utils/LocalizationManager.h"
 #include "../Utils/AppLogger.h"
 #include "../../Utils/PianoRollEditAction.h"
@@ -12,7 +13,6 @@
 #include "../Utils/LegacyNoteGenerator.h"
 #include "../Utils/SimdPerceptualPitchEstimator.h"
 #include "../Utils/ZoomSensitivityConfig.h"
-#include "../../PluginProcessor.h"
 #include "UiAssets.h"
 #include "UiText.h"
 #include "ToolbarIcons.h"
@@ -227,20 +227,30 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     toolCtx.grabKeyboardFocus = [this]() { grabKeyboardFocus(); };
     toolCtx.getAudioEditingScheme = [this]() { return audioEditingScheme_; };
     toolCtx.notifyPlayheadChange = [this](double time) {
-        bool seekRequestDispatched = false;
-        listeners_.call([time, &seekRequestDispatched](Listener& l) {
-            seekRequestDispatched = l.playheadPositionChangeRequested(time) || seekRequestDispatched;
+        // Save the host-observation revision BEFORE dispatching the seek request.
+        // If a listener (ARA editor) returns true, the request was forwarded to the
+        // host's HostPlaybackController — show the requested time as presentation
+        // prediction until the host acknowledges by bumping hostPositionRevision.
+        // If a listener returns false (Standalone already wrote canonical state, or
+        // regular VST3 host-controlled), there is no pending request — paint reads
+        // state.time directly.
+        const auto seekRevision = playHeadState_.hostPositionRevision.load(std::memory_order_acquire);
+        bool requestDispatched = false;
+        listeners_.call([&](Listener& l) {
+            if (l.playheadPositionChangeRequested(time))
+                requestDispatched = true;
         });
         userScrollHold_ = false;
-        if (seekRequestDispatched) {
-            playheadTimeForPaint_ = time;
+        if (requestDispatched) {
+            seekSentRevision_ = seekRevision;
             pendingSeekTime_ = time;
-            lastPlayheadDirtyRect_ = playheadDirtyRect();
+            playheadTimeForPaint_ = time;
         } else {
             pendingSeekTime_ = -1.0;
-            playheadTimeForPaint_ = readPlayheadTime();
-            lastPlayheadDirtyRect_ = playheadDirtyRect();
+            seekSentRevision_ = 0;
+            playheadTimeForPaint_ = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
         }
+        lastPlayheadDirtyRect_ = playheadDirtyRect();
         repaint();
     };
     toolCtx.notifyPitchCurveEdited = [this](int s, int e) {
@@ -304,7 +314,8 @@ void PianoRollComponent::initializeToolHandler() {
     toolHandler_ = std::make_unique<PianoRollToolHandler>(buildToolHandlerContext());
 }
 
-PianoRollComponent::PianoRollComponent() {
+PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState)
+    : playHeadState_(playHeadState) {
     initializeUIComponents();
     initializeRenderer();
     initializeCorrectionWorker();
@@ -1158,7 +1169,7 @@ void PianoRollComponent::drawPlayhead(juce::Graphics& g)
     const int contentViewportRight = viewportBounds.getRight();
     const int viewportCentreX = (contentViewportLeft + contentViewportRight) / 2;
 
-    const bool playing = isPlaying_.load(std::memory_order_relaxed);
+    const bool playing = playHeadState_.isPlaying.load(std::memory_order_relaxed);
     const bool continuousMode = scrollMode_ == ScrollMode::Continuous && !userScrollHold_;
 
     const auto pres = TimelineViewportPolicy::computePlayheadPresentation(
@@ -2199,10 +2210,8 @@ void PianoRollComponent::requestContentRedraw() {
 
 double PianoRollComponent::readPlayheadTime() const
 {
-    if (auto source = positionSource_.lock()) {
-        return source->load(std::memory_order_relaxed);
-    }
-    return 0.0;
+    // Canonical time comes directly from processor-owned state; no fallback to 0.
+    return playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
 }
 
 juce::Rectangle<int> PianoRollComponent::getTimelineViewportBounds() const
@@ -2348,7 +2357,20 @@ void PianoRollComponent::onHeartbeatTick()
     tryConsumeInitialF0View(editedContentKey_);
     consumeCompletedCorrectionResults();
 
-    const bool playingNow = isPlaying_.load(std::memory_order_relaxed);
+    const bool playingNow = playHeadState_.isPlaying.load(std::memory_order_relaxed);
+
+    if (playingNow != lastObservedPlayHeadPlaying_) {
+        if (playingNow)
+            preparePlaybackCoverage();
+
+        userScrollHold_ = false;
+        playheadTimeForPaint_ = pendingSeekTime_ >= 0.0
+            ? pendingSeekTime_
+            : playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
+        lastObservedPlayHeadPlaying_ = playingNow;
+        lastPlayheadDirtyRect_ = playheadDirtyRect();
+        repaint();
+    }
 
     const int64_t currentDpiMilli = static_cast<int64_t>(
         std::llround(getDesktopScaleFactor() * 1000.0));
@@ -2358,11 +2380,13 @@ void PianoRollComponent::onHeartbeatTick()
     }
 
     if (!playingNow) {
-        const double currentPlayheadTime = readPlayheadTime();
+        const double currentPlayheadTime = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
         double playheadTime = currentPlayheadTime;
         if (pendingSeekTime_ >= 0.0) {
-            if (std::abs(currentPlayheadTime - pendingSeekTime_) < 0.05) {
+            const auto hostRevision = playHeadState_.hostPositionRevision.load(std::memory_order_acquire);
+            if (hostRevision != seekSentRevision_) {
                 pendingSeekTime_ = -1.0;
+                seekSentRevision_ = 0;
             } else {
                 playheadTime = pendingSeekTime_;
             }
@@ -2419,14 +2443,18 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     if (!isShowing()) {
         return;
     }
-    if (!isPlaying_.load(std::memory_order_relaxed))
+
+    const bool playingNow = playHeadState_.isPlaying.load(std::memory_order_relaxed);
+    if (!playingNow)
         return;
 
-    const double currentPlayheadTime = readPlayheadTime();
+    const double currentPlayheadTime = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
     double playheadTime = currentPlayheadTime;
     if (pendingSeekTime_ >= 0.0) {
-        if (std::abs(currentPlayheadTime - pendingSeekTime_) < 0.05) {
+        const auto hostRevision = playHeadState_.hostPositionRevision.load(std::memory_order_acquire);
+        if (hostRevision != seekSentRevision_) {
             pendingSeekTime_ = -1.0;
+            seekSentRevision_ = 0;
         } else {
             playheadTime = pendingSeekTime_;
         }
@@ -2527,7 +2555,7 @@ void PianoRollComponent::rebuildTimelineCoverage()
     const double visibleStart = camera_.visibleStartSeconds;
     const double visibleEnd = visibleStart + width / pps;
 
-    if (isPlaying_.load(std::memory_order_relaxed)) {
+    if (playHeadState_.isPlaying.load(std::memory_order_relaxed)) {
         const double visibleDuration = width / pps;
         const double timelineEnd = std::max(
             computeContentTimelineEndSeconds() + visibleDuration,
@@ -3240,7 +3268,7 @@ juce::Rectangle<int> PianoRollComponent::playheadDirtyRect() const
     const int timeDerivedX = mapper.timeToX(playheadTimeForPaint_);
     const int viewportRight = viewport.getRight();
     const int viewportCentreX = (contentLeft + viewportRight) / 2;
-    const bool playing = isPlaying_.load(std::memory_order_relaxed);
+    const bool playing = playHeadState_.isPlaying.load(std::memory_order_relaxed);
     const bool continuous = scrollMode_ == ScrollMode::Continuous && !userScrollHold_;
     const auto presentation = TimelineViewportPolicy::computePlayheadPresentation(
         timeDerivedX, viewportCentreX, viewportRight, contentLeft, playing, continuous);
@@ -3591,7 +3619,7 @@ void PianoRollComponent::updateScrollBars() {
         scrollbarEndSeconds,
         camera_,
         visibleWidth,
-        readPlayheadTime());
+        pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : playHeadState_.timeInSeconds.load(std::memory_order_relaxed));
 
     horizontalScrollBar_.setRangeLimits(
         range.absoluteStartPx(),

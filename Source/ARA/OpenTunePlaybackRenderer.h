@@ -53,8 +53,12 @@ inline std::optional<RenderBlockSpan> computeRegionBlockRenderSpan(double blockS
 }
 
 #if JucePlugin_Enable_ARA
+// Realtime stopped gate, preserved per Studio One contract:
+//   - Non-realtime: always render.
+//   - Realtime: render only when this renderer's PositionInfo reports playing;
+//     stopped → clear buffer and return (mute), preserving the stopped gate.
 bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
-                                  const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept;
+                                   bool rendererIsPlaying) noexcept;
 
 class OpenTuneDocumentController;
 class ContentRenderService;

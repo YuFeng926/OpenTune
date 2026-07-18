@@ -95,6 +95,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , languageBinding_(languageState_)
     , menuBar_(processor, MenuBarComponent::Profile::Plugin)
     , topBar_(menuBar_, transportBar_)
+    , pianoRoll_(processor.getPlayHeadState())
 {
     setResizable(true, true);
     setResizeLimits(800, 500, 2000, 1400);
@@ -113,6 +114,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Sync initial transport state from processor
     transportBar_.setPlaying(processorRef_.isPlaying());
     transportBar_.setLoopEnabled(processorRef_.isLoopEnabled());
+    transportBar_.setPositionSeconds(processorRef_.getPosition());
     transportBar_.setBpm(processorRef_.getBpm());
 
     // Piano key audition
@@ -173,9 +175,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setReadContentSnapshot([this](ContentKey key) {
         return processorRef_.getContentSnapshot(key);
     });
-
-    pianoRoll_.setPlayheadPositionSource(processorRef_.getPositionAtomic());
-    pianoRoll_.setIsPlaying(processorRef_.isPlaying());
 
     applyThemeToEditor(appPreferences_.getState().shared.theme);
 
@@ -298,15 +297,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         pianoRoll_.onHeartbeatTick();
     }
 
-    // ARA content birth timeout
-    if (waitingForAraContent_) {
-        const auto elapsedMs = juce::Time::getApproximateMillisecondCounter() - araWaitStartMs_;
-        if (elapsedMs > 5000) {
-            waitingForAraContent_ = false;
-            autoRenderOverlay_.setVisible(false);
-        }
-    }
-
     syncContentProjectionToPianoRoll();
 
     // Revision detection (aligned with Standalone pattern)
@@ -378,26 +368,24 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
     }
 
-    bool shouldShowOverlay = waitingForAraContent_;
+    bool shouldShowOverlay = false;
     bool shouldShowBadge = false;
-    if (!waitingForAraContent_) {
-        const auto chunkStats = processorRef_.getReadableContentChunkStats(activeKey);
-        const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
-        const int completedTasks = chunkStats.idle + chunkStats.blank;
-        const int totalTasks = chunkStats.total();
+    const auto chunkStats = processorRef_.getReadableContentChunkStats(activeKey);
+    const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
+    const int completedTasks = chunkStats.idle + chunkStats.blank;
+    const int totalTasks = chunkStats.total();
 
-        if (isAutoProcessing) {
-            const float progress = totalTasks > 0
-                ? static_cast<float>(completedTasks) / static_cast<float>(totalTasks)
-                : 0.0f;
-            autoRenderOverlay_.setMessageText(
-                buildRenderingOverlayTitle(completedTasks, totalTasks, progress));
-            shouldShowOverlay = true;
-        } else if (chunkStats.hasActiveWork()) {
-            renderBadge_.setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u4e2d (")
-                + juce::String(completedTasks) + "/" + juce::String(totalTasks) + ")");
-            shouldShowBadge = true;
-        }
+    if (isAutoProcessing) {
+        const float progress = totalTasks > 0
+            ? static_cast<float>(completedTasks) / static_cast<float>(totalTasks)
+            : 0.0f;
+        autoRenderOverlay_.setMessageText(
+            buildRenderingOverlayTitle(completedTasks, totalTasks, progress));
+        shouldShowOverlay = true;
+    } else if (chunkStats.hasActiveWork()) {
+        renderBadge_.setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u4e2d (")
+            + juce::String(completedTasks) + "/" + juce::String(totalTasks) + ")");
+        shouldShowBadge = true;
     }
 
     if (renderBadge_.isVisible() != shouldShowBadge)
@@ -405,15 +393,19 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     if (autoRenderOverlay_.isVisible() != shouldShowOverlay)
         autoRenderOverlay_.setVisible(shouldShowOverlay);
 
-    // 播放头位置：positionAtomic_ 已通过 setPlayheadPositionSource 接入 PianoRoll，
-    // transportBar 仍需显式同步
+    // Playhead position: PianoRoll reads processor-owned PlayHeadState directly.
+    // TransportBar still needs an explicit position sync for its numeric display.
     const double positionSeconds = processorRef_.getPosition();
     transportBar_.setPositionSeconds(positionSeconds);
 
-    // playing 状态同步
+    // Playing state sync: TransportBar reflects canonical state from the processor.
     if (transportBar_.isPlaying() != processorRef_.isPlaying()) {
         transportBar_.setPlaying(processorRef_.isPlaying());
-        pianoRoll_.setIsPlaying(processorRef_.isPlaying());
+    }
+
+    // Loop state sync: TransportBar reflects canonical state from the processor.
+    if (transportBar_.isLoopEnabled() != processorRef_.isLoopEnabled()) {
+        transportBar_.setLoopEnabled(processorRef_.isLoopEnabled());
     }
 
     // BPM 同步
@@ -820,10 +812,8 @@ void OpenTuneAudioProcessorEditor::stopRequested()
 {
 #if JucePlugin_Enable_ARA
     if (auto* docController = processorRef_.getDocumentController()) {
-        bool ok = docController->requestStopPlayback();
-        ok = docController->requestSetPlaybackPosition(0.0) && ok;
-        if (!ok)
-            AppLogger::log("ARA: stop/seek request failed — host playback controller unavailable");
+        if (!docController->requestStopPlayback())
+            AppLogger::log("ARA: stop request failed — host playback controller unavailable");
         return;
     }
 #endif
@@ -840,7 +830,20 @@ void OpenTuneAudioProcessorEditor::surfaceRegularVst3HostControlledTransport(con
 
 void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
 {
-    processorRef_.setLoopEnabled(enabled);
+#if JucePlugin_Enable_ARA
+    // ARA-bound VST3: emit the official one-way HostPlaybackController request.
+    // Host may ignore/delay/quantize; loop truth is observed via companion
+    // PositionInfo, never written here. No local canonical write.
+    if (auto* docController = processorRef_.getDocumentController()) {
+        if (!docController->requestEnableCycle(enabled))
+            AppLogger::log("ARA: requestEnableCycle failed — host playback controller unavailable");
+        return;
+    }
+#endif
+    // Regular (non-ARA) VST3: loop is host-controlled only. No local write —
+    // the host owns loop state and surfaces it via PositionInfo.
+    juce::ignoreUnused(enabled);
+    surfaceRegularVst3HostControlledTransport("loop");
 }
 
 void OpenTuneAudioProcessorEditor::bpmChanged(double newBpm)
@@ -934,14 +937,6 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
             + " AudioModification(s) from " + juce::String(regionCount)
             + " playback region(s)");
-
-        waitingForAraContent_ = true;
-        araWaitStartMs_ = juce::Time::getApproximateMillisecondCounter();
-        autoRenderOverlay_.setMessageText(
-            juce::String::fromUTF8("\xe9\x9f\xb3\xe9\xa2\x91\xe5\xa4\x84\xe7\x90\x86\xe4\xb8\xad"),
-            "Audio data is being processed. The region will appear shortly.");
-        renderBadge_.setVisible(false);
-        autoRenderOverlay_.setVisible(true);
     });
 #endif
 }
@@ -962,7 +957,9 @@ bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
 
 void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
 {
-    if (processorRef_.isPlaying()) {
+    const bool isPlaying = processorRef_.isPlaying();
+
+    if (isPlaying) {
         pauseRequested();
     } else {
         playRequested();
@@ -1156,36 +1153,32 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
         return;
     }
 
-    std::shared_ptr<const juce::AudioBuffer<float>> syncBuffer;
-    std::shared_ptr<PitchCurve> curve;
-    DetectedKey detectedKey;
-    if (sync.activeContentKey.isValid()) {
-#if JucePlugin_Enable_ARA
-        if (sync.activeContentKey.domainKind == DomainKind::ARAAudioModification) {
-            if (const auto* dc = processorRef_.getDocumentController()) {
-                syncBuffer = dc->readAudioBuffer(sync.activeContentKey);
-                curve = dc->readPitchCurve(sync.activeContentKey);
-                detectedKey = dc->readDetectedKey(sync.activeContentKey);
-            }
-        } else
-#endif
-        {
-            auto snap = processorRef_.getContentSnapshot(sync.activeContentKey);
-            syncBuffer = snap ? snap->audioBuffer : nullptr;
-            curve = snap ? snap->pitchCurve : nullptr;
-            detectedKey = snap ? snap->detectedKey : DetectedKey{};
-        }
-    }
-
-    if (!sync.hasActiveContent()
-        || syncBuffer == nullptr) {
+    if (!sync.hasActiveContent()) {
         pianoRoll_.setEditedContent(ContentKey{},
                                     nullptr,
                                     nullptr,
                                     static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
         pianoRoll_.setTimelineContentPlacements(sync.placements);
-        // Infinite timeline: no explicit domain needed.
         return;
+    }
+
+    std::shared_ptr<const juce::AudioBuffer<float>> syncBuffer;
+    std::shared_ptr<PitchCurve> curve;
+    DetectedKey detectedKey;
+#if JucePlugin_Enable_ARA
+    if (sync.activeContentKey.domainKind == DomainKind::ARAAudioModification) {
+        if (const auto* dc = processorRef_.getDocumentController()) {
+            syncBuffer = dc->readAudioBuffer(sync.activeContentKey);
+            curve = dc->readPitchCurve(sync.activeContentKey);
+            detectedKey = dc->readDetectedKey(sync.activeContentKey);
+        }
+    } else
+#endif
+    {
+        auto snap = processorRef_.getContentSnapshot(sync.activeContentKey);
+        syncBuffer = snap ? snap->audioBuffer : nullptr;
+        curve = snap ? snap->pitchCurve : nullptr;
+        detectedKey = snap ? snap->detectedKey : DetectedKey{};
     }
 
     pianoRoll_.setEditedContent(sync.activeContentKey,
@@ -1193,8 +1186,12 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
                                 syncBuffer,
                                 static_cast<int>(OpenTuneAudioProcessor::getStoredAudioSampleRate()));
     pianoRoll_.setTimelineContentPlacements(sync.placements);
-    // Infinite timeline: no explicit domain needed.
-    // Timeline view domain is derived from camera + content.
+
+    if (syncBuffer == nullptr) {
+        // Waveform missing; notes/time grid/placement/edit state preserved.
+        return;
+    }
+
     juce::ignoreUnused(sync);
     const int rootNote = static_cast<int>(detectedKey.root);
     const int scaleType = OpenTune::scaleToUiScaleType(detectedKey.scale);
@@ -1202,6 +1199,7 @@ void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     suppressScaleChangedCallback_ = true;
     transportBar_.setScale(rootNote, scaleType);
     suppressScaleChangedCallback_ = false;
+
     pianoRoll_.setScale(rootNote, scaleType);
 }
 

@@ -703,7 +703,7 @@ TransportBarComponent::TransportBarComponent()
     addAndMakeVisible(stopButton_);
 
     // Setup Loop Button
-    loopButton_.setClickingTogglesState(true);
+    loopButton_.setClickingTogglesState(false);
     loopButton_.onClick = [this] { onLoopToggled(); };
     loopButton_.setTooltip(LOC(kTooltipLoop));
     loopButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleTransport);
@@ -1157,25 +1157,22 @@ void TransportBarComponent::setPositionSeconds(double seconds)
 
 void TransportBarComponent::onPlayClicked()
 {
-    setPlaying(true);
     listeners_.call([](Listener& l) { l.playRequested(); });
 }
 
 void TransportBarComponent::onPauseClicked()
 {
-    setPlaying(false);
     listeners_.call([](Listener& l) { l.pauseRequested(); });
 }
 
 void TransportBarComponent::onStopClicked()
 {
-    setPlaying(false);
     listeners_.call([](Listener& l) { l.stopRequested(); });
 }
 
 void TransportBarComponent::onLoopToggled()
 {
-    bool enabled = loopButton_.getToggleState();
+    bool enabled = !loopButton_.getToggleState();
     listeners_.call([enabled](Listener& l) { l.loopToggled(enabled); });
 }
 
