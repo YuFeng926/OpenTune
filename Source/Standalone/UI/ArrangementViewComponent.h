@@ -313,7 +313,6 @@ private:
 
     // reference binding 状态（placementId → state）
     std::map<uint64_t, ClipAnalysisState> clipAnalysisStates_;
-    uint64_t hoveredPlacementId_{0};       // 当前鼠标悬停的 placement
     bool mouseOverReferenceButton_{false}; // 鼠标在参考按钮区域内
 
     // === 多选支持 ===
