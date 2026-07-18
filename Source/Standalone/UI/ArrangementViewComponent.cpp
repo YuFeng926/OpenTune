@@ -577,6 +577,9 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTile, i
     surfacePps_ = pps;
 
     juce::Graphics g(viewportSurface_);
+    if (themeBackdrop_.isValid())
+        g.drawImageAt(themeBackdrop_, -rect.getX(), -rect.getY(), false);
+
     for (int64_t tile = firstTile; tile <= lastTile; ++tile) {
         if (const auto* img = compositeCache_.findTile(tile)) {
             const int tileX = static_cast<int>(
@@ -630,6 +633,9 @@ void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, 
         ? juce::Rectangle<int>(surfaceWidth - absDelta, 0, absDelta, surfaceHeight)
         : juce::Rectangle<int>(0, 0, absDelta, surfaceHeight);
     g.reduceClipRegion(exposed);
+    if (themeBackdrop_.isValid())
+        g.drawImageAt(themeBackdrop_, -(rect.getX() + exposed.getX()), -rect.getY(), false);
+
     for (int64_t tile = firstTile; tile <= lastTile; ++tile) {
         const int tileX = static_cast<int>(
             tile * static_cast<int64_t>(TimelineCompositeCache::kTileWidthPx) - newOriginPx);
@@ -680,8 +686,33 @@ void ArrangementViewComponent::rebuildTimelineCoverage()
 void ArrangementViewComponent::invalidateStableScene()
 {
     ++stableVisualSceneEpoch_;
+    rebuildThemeBackdrop();
     rebuildTimelineCoverage();
     repaint();
+}
+
+void ArrangementViewComponent::rebuildThemeBackdrop()
+{
+    const auto bounds = getLocalBounds();
+    const int w = bounds.getWidth();
+    const int h = bounds.getHeight();
+    if (w <= 0 || h <= 0) return;
+
+    themeBackdrop_ = juce::Image(juce::Image::ARGB, w, h, true);
+    juce::Graphics g(themeBackdrop_);
+
+    const auto themeId = UIColors::currentThemeId();
+    const auto bf = bounds.toFloat();
+    if (themeId == ThemeId::Aurora)
+        UIColors::fillAuroraTimelineBackground(g, bf, 0.0f);
+    else if (themeId == ThemeId::BlueBreeze)
+        UIColors::fillMistedTimelineField(g, bf, 0.0f);
+    else if (themeId == ThemeId::Overdose)
+        UiAssets::drawAssetStretch(g, UiAssetId::PanelEditorMain, bf);
+    else if (themeId == ThemeId::DarkBlueGrey)
+        UIColors::fillSoothe2SpectrumBackground(g, bf, 0.0f);
+    else
+        g.fillAll(UIColors::rollBackground);
 }
 
 void ArrangementViewComponent::preparePlaybackCoverage()
@@ -826,6 +857,7 @@ void ArrangementViewComponent::resized()
     timeUnitToggleButton_.setBounds(currentX, 5, btnW, btnH);
 
     updateScrollBars();
+    rebuildThemeBackdrop();
     rebuildTimelineCoverage();
     // Import drop preview highlight (transient, UI-only)
 
@@ -1574,30 +1606,18 @@ juce::Rectangle<int> ArrangementViewComponent::playheadDirtyRect() const
 
 void ArrangementViewComponent::paint(juce::Graphics& g)
 {
-    const auto themeId = UIColors::currentThemeId();
-    const auto bounds = getLocalBounds().toFloat();
-
-    if (themeId == ThemeId::Aurora)
-        UIColors::fillAuroraTimelineBackground(g, bounds, 0.0f);
-    else if (themeId == ThemeId::BlueBreeze)
-        UIColors::fillMistedTimelineField(g, bounds, 0.0f);
-    else if (themeId == ThemeId::Overdose)
-        UiAssets::drawAssetStretch(g, UiAssetId::PanelEditorMain, bounds);
-    else if (themeId == ThemeId::DarkBlueGrey)
-        UIColors::fillSoothe2SpectrumBackground(g, bounds, 0.0f);
-    else
-        g.fillAll(UIColors::rollBackground);
+    if (themeBackdrop_.isValid())
+        g.drawImageAt(themeBackdrop_, 0, 0, false);
 
     // Ruler backdrop + separator: both driven by the shared ruler style contract.
     {
         juce::Graphics::ScopedSaveState separatorState(g);
-        const auto style = TimelineLayerComposer::resolveRulerStyle("arrangement", themeId);
+        const auto style = TimelineLayerComposer::resolveRulerStyle("arrangement", UIColors::currentThemeId());
         g.setColour(style.separatorColour);
         g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), style.tickStroke);
     }
 
     const auto axis = timeAxisRect();
-    const auto viewport = getContentViewportBounds();
     {
         juce::Graphics::ScopedSaveState surfaceState(g);
         g.reduceClipRegion(axis);
@@ -1605,6 +1625,7 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
             g.drawImageAt(viewportSurface_, axis.getX(), axis.getY(), false);
     }
 
+    const auto viewport = getContentViewportBounds();
     // Selection overlay: draw tint/border for selected clips (transient, not cached)
     {
         juce::Graphics::ScopedSaveState selectionClipState(g);

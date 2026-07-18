@@ -530,6 +530,8 @@ private:
     
     // Per-view retained surface for timeline time-axis pixels (ruler + contents)
     juce::Image viewportSurface_;
+    juce::Image themeBackdrop_;
+    void rebuildThemeBackdrop();
     TimelineViewportCamera currentSurfaceCamera_;
     // Presentation-only bounded ease-out transition for Continuous follow
     // return-to-centre. Not transport truth; not shared; cleared on user hold
