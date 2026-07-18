@@ -227,6 +227,8 @@ private:
 
     // ===== view retained surface =====
     juce::Image viewportSurface_{};
+    juce::Image themeBackdrop_{};
+    void rebuildThemeBackdrop();
     int64_t surfaceOriginPx_ = 0;   // llround(visibleStartSeconds * pps) at last surface render
     double  surfacePps_ = 0.0;      // pps at last surface render; change → full rebuild
     juce::Rectangle<int> lastPlayheadRect_{};  // previous frame playhead presentation rect

@@ -1440,36 +1440,8 @@ void PianoRollComponent::drawSelectionBox(juce::Graphics& g, ThemeId themeId) {
 }
 void PianoRollComponent::paint(juce::Graphics& g)
 {
-    // Chrome shell: component-space background, shadow, rounded clip, theme
-    g.fillAll(UIColors::rollBackground);
-
-    const auto bounds = getLocalBounds().toFloat();
-    UIColors::drawShadow(g, bounds);
-
-    juce::Path chromePath;
-    chromePath.addRoundedRectangle(bounds, UIColors::cornerRadius);
-
-    juce::Graphics::ScopedSaveState clip(g);
-    g.reduceClipRegion(chromePath);
-
-    switch (UIColors::currentThemeId()) {
-        case ThemeId::DarkBlueGrey:
-            UIColors::fillSoothe2SpectrumBackground(g, bounds, UIColors::cornerRadius);
-            break;
-        case ThemeId::Aurora:
-            UIColors::fillAuroraTimelineBackground(g, bounds, UIColors::cornerRadius);
-            break;
-        case ThemeId::BlueBreeze:
-            UIColors::fillMistedTimelineField(g, bounds, UIColors::cornerRadius);
-            break;
-        case ThemeId::Overdose:
-            UiAssets::drawAssetStretch(g, UiAssetId::PanelEditorMain, bounds);
-            break;
-        default:
-            g.setColour(UIColors::rollBackground);
-            g.fillPath(chromePath);
-            break;
-    }
+    if (themeBackdrop_.isValid())
+        g.drawImageAt(themeBackdrop_, 0, 0, false);
 
     const auto viewport = getTimelineViewportBounds();
     const auto axis = timeAxisRect();
@@ -1950,6 +1922,7 @@ void PianoRollComponent::resized() {
     timeUnitToggleButton_.toFront(false);
     scrollModeToggleButton_.toFront(false);
 
+    rebuildThemeBackdrop();
     rebuildTimelineCoverage();
     repaint();
     tryConsumeInitialF0View(editedContentKey_);
@@ -2615,8 +2588,48 @@ void PianoRollComponent::rebuildTimelineCoverage()
 void PianoRollComponent::invalidateStableScene()
 {
     ++stableVisualSceneEpoch_;
+    rebuildThemeBackdrop();
     rebuildTimelineCoverage();
     repaint();
+}
+
+void PianoRollComponent::rebuildThemeBackdrop()
+{
+    const auto bounds = getLocalBounds();
+    const int w = bounds.getWidth();
+    const int h = bounds.getHeight();
+    if (w <= 0 || h <= 0) return;
+
+    themeBackdrop_ = juce::Image(juce::Image::ARGB, w, h, true);
+    juce::Graphics g(themeBackdrop_);
+    g.fillAll(UIColors::rollBackground);
+
+    UIColors::drawShadow(g, bounds.toFloat());
+
+    juce::Path chromePath;
+    chromePath.addRoundedRectangle(bounds.toFloat(), UIColors::cornerRadius);
+    {
+        juce::Graphics::ScopedSaveState clip(g);
+        g.reduceClipRegion(chromePath);
+        switch (UIColors::currentThemeId()) {
+            case ThemeId::DarkBlueGrey:
+                UIColors::fillSoothe2SpectrumBackground(g, bounds.toFloat(), UIColors::cornerRadius);
+                break;
+            case ThemeId::Aurora:
+                UIColors::fillAuroraTimelineBackground(g, bounds.toFloat(), UIColors::cornerRadius);
+                break;
+            case ThemeId::BlueBreeze:
+                UIColors::fillMistedTimelineField(g, bounds.toFloat(), UIColors::cornerRadius);
+                break;
+            case ThemeId::Overdose:
+                UiAssets::drawAssetStretch(g, UiAssetId::PanelEditorMain, bounds.toFloat());
+                break;
+            default:
+                g.setColour(UIColors::rollBackground);
+                g.fillPath(chromePath);
+                break;
+        }
+    }
 }
 
 void PianoRollComponent::setCurrentTool(ToolId tool) {
@@ -3219,6 +3232,11 @@ void PianoRollComponent::rebuildViewportSurfaceFromReadyTiles()
         std::llround(camera_.visibleStartSeconds * pps));
 
     juce::Graphics g(viewportSurface_);
+    // Fill surface backdrop with theme background so transparent tile areas
+    // show the correct theme instead of black.
+    if (themeBackdrop_.isValid())
+        g.drawImageAt(themeBackdrop_, -axis.getX(), -axis.getY(), false);
+
     for (int64_t tile = firstTile; tile <= lastTile; ++tile) {
         if (const auto* image = compositeCache_.findTile(tile)) {
             const int tileX = static_cast<int>(
@@ -3280,6 +3298,16 @@ void PianoRollComponent::scrollViewportSurfaceTo(const TimelineViewportCamera& n
     }
 
     viewportSurface_.clear(exposed, juce::Colours::transparentBlack);
+    // Fill exposed strip with theme backdrop so tiles on transparent areas
+    // show the correct theme background instead of black.
+    if (themeBackdrop_.isValid()) {
+        juce::Graphics g(viewportSurface_);
+        juce::Graphics::ScopedSaveState state(g);
+        g.reduceClipRegion(exposed);
+        const int offsetX = -(axis.getX() + exposed.getX());
+        const int offsetY = -axis.getY();
+        g.drawImageAt(themeBackdrop_, offsetX, offsetY, false);
+    }
     currentSurfaceCamera_ = nextCamera;
 
     const double pps = nextCamera.pixelsPerSecond;
