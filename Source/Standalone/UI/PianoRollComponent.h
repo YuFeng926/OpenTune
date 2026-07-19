@@ -40,7 +40,6 @@
     #include "PianoRoll/PianoRollRenderer.h"
 
 #include "PianoRoll/PianoRollToolHandler.h"
-#include "PianoRoll/PianoRollCorrectionWorker.h"
 #include "PianoRoll/InteractionState.h"
 #include "TimelineViewportCamera.h"
 #include "TimelineViewportPolicy.h"
@@ -182,10 +181,9 @@ public:
     void selectLineAnchorSegment(int idx);
     void toggleLineAnchorSegmentSelection(int idx);
     void clearLineAnchorSegmentSelection();
-    bool applyCorrectionAsyncForEntireClip(float retuneSpeed, float vibratoDepth, float vibratoRate);
     void setNoteSplit(float value);
-    
-    bool isAutoTuneProcessing() const;
+
+    bool applyCorrectionToEntireClip(float retuneSpeed, float vibratoDepth, float vibratoRate);
     double getContentDurationSeconds() const;
     bool hasSelectionRange() const { return interactionState_.selection.hasSelectionArea && interactionState_.selection.selectionStartTime != interactionState_.selection.selectionEndTime; }
     std::pair<double, double> getSelectionTimeRange() const
@@ -216,7 +214,6 @@ public:
         NoContent,
         MissingContentSnapshot,
         OriginalF0NotReady,
-        AlreadyInFlight,
         MissingCurveSnapshot,
         EmptyOriginalF0,
         EmptyTimeline,
@@ -250,16 +247,10 @@ private:
     void invalidateStableScene();
     bool tryConsumeInitialF0View(ContentKey contentKey);
 
-    bool enqueueManualCorrectionPatchAsync(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
-                                           int dirtyStartFrame,
-                                           int dirtyEndFrame,
-                                           bool triggerRenderEvent);
-    void enqueueNoteBasedCorrectionAsync(const std::vector<Note>& notes,
-                                         int startFrame,
-                                         int endFrameExclusive,
-                                         float retuneSpeed,
-                                         float vibratoDepth,
-                                         float vibratoRate);
+    bool applyManualCorrectionPatch(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
+                                    int dirtyStartFrame,
+                                    int dirtyEndFrame,
+                                    bool triggerRenderEvent);
 
     enum class VibratoParam { Depth, Rate };
 
@@ -335,10 +326,6 @@ private:
 
     void initializeUIComponents();
     void initializeRenderer();
-    void initializeCorrectionWorker();
-    void consumeCompletedCorrectionResults();
-    bool commitCompletedAutoTuneResult(const PianoRollCorrectionWorker::AsyncCorrectionRequest& completed);
-    bool commitCompletedNoteCorrectionResult(const PianoRollCorrectionWorker::AsyncCorrectionRequest& completed);
     PianoRollToolHandler::Context buildToolHandlerContext();
     void initializeToolHandler();
     void applyEditedContentCurve(std::shared_ptr<PitchCurve> curve);
@@ -453,8 +440,7 @@ private:
 
     NoteSegmentationPolicy segmentationPolicy_;
     
-    std::atomic<bool> autoTuneInFlight_{false};
-    std::atomic<uint64_t> editedContentEpoch_{0};
+
 
     double bpm_ = 120.0;
     int timeSigNum_ = 4;
@@ -517,7 +503,6 @@ private:
     
     std::unique_ptr<PianoRollRenderer> renderer_;
     std::unique_ptr<PianoRollToolHandler> toolHandler_;
-    std::unique_ptr<PianoRollCorrectionWorker> correctionWorker_;
     mutable WaveformMipmapCache waveformMipmapCache_;
 
     // 新增 composite cache (Phase 2 集成)

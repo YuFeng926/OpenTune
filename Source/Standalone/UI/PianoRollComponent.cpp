@@ -115,12 +115,6 @@ void PianoRollComponent::initializeRenderer() {
     renderer_ = std::make_unique<PianoRollRenderer>();
 }
 
-void PianoRollComponent::initializeCorrectionWorker() {
-    correctionWorker_ = std::make_unique<PianoRollCorrectionWorker>();
-}
-
-
-
 PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     PianoRollToolHandler::Context toolCtx;
     toolCtx.getState = [this]() -> InteractionState& { return interactionState_; };
@@ -259,7 +253,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
     };
 
     toolCtx.applyManualCorrection = [this](std::vector<PianoRollToolHandler::ManualCorrectionOp> ops, int s, int e, bool render) {
-        return enqueueManualCorrectionPatchAsync(ops, s, e, render);
+        return applyManualCorrectionPatch(ops, s, e, render);
     };
     toolCtx.selectNotesOverlappingFrames = [this](int startFrame, int endFrameExclusive) {
         return selectNotesOverlappingFrames(startFrame, endFrameExclusive);
@@ -319,25 +313,17 @@ PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState)
     : playHeadState_(playHeadState) {
     initializeUIComponents();
     initializeRenderer();
-    initializeCorrectionWorker();
     initializeToolHandler();
 }
 
 PianoRollComponent::~PianoRollComponent() {
-    if (correctionWorker_) {
-        correctionWorker_->stop();
-    }
     scrollVBlankAttachment_.reset();
     horizontalScrollBar_.removeListener(this);
     verticalScrollBar_.removeListener(this);
 }
 
-bool PianoRollComponent::applyCorrectionAsyncForEntireClip(float retuneSpeed, float vibratoDepth, float vibratoRate)
+bool PianoRollComponent::applyCorrectionToEntireClip(float retuneSpeed, float vibratoDepth, float vibratoRate)
 {
-    if (isAutoTuneProcessing()) {
-        return false;
-    }
-
     if (!currentCurve_) {
         return false;
     }
@@ -347,147 +333,21 @@ bool PianoRollComponent::applyCorrectionAsyncForEntireClip(float retuneSpeed, fl
         return false;
     }
 
-    auto request = std::make_shared<PianoRollCorrectionWorker::AsyncCorrectionRequest>();
-    request->curve = currentCurve_;
-    request->notes = getCommittedNotes();
-    request->startFrame = 0;
-    request->endFrameExclusive = f0tl.endFrameExclusive();
-    request->retuneSpeed = retuneSpeed;
-    request->vibratoDepth = vibratoDepth;
-    request->vibratoRate = vibratoRate;
+    auto notes = getCommittedNotes();
+    auto editedCurve = currentCurve_->clone();
+    editedCurve->applyCorrectionToRange(notes, 0, f0tl.endFrameExclusive(),
+                                        retuneSpeed, vibratoDepth, vibratoRate);
+
+    const auto snap = editedCurve->getSnapshot();
+    const auto allSegments = snap->getCorrectionSegments();
+    const F0FrameRange affectedRange{0, f0tl.endFrameExclusive()};
 
     captureBeforeUndoSnapshot();
-    pendingUndoDescription_ = TRANS("鑷姩璋冮煶");
-    correctionWorker_->enqueue(request);
-    return true;
-}
+    pendingUndoDescription_ = TRANS("自动调音");
 
-void PianoRollComponent::consumeCompletedCorrectionResults()
-{
-    if (!correctionWorker_) {
-        return;
-    }
-
-    auto completed = correctionWorker_->takeCompleted();
-    if (!completed) {
-        return;
-    }
-
-    AppLogger::log("AutoTune: consumeCompleted kind=" + juce::String(static_cast<int>(completed->kind))
-        + " success=" + juce::String(completed->success ? "true" : "false"));
-
-    const bool wasAutoTune = completed->kind == PianoRollCorrectionWorker::AsyncCorrectionRequest::Kind::AutoTuneGenerate;
-
-    bool committedSuccessfully = completed->success;
-    if (committedSuccessfully && wasAutoTune) {
-        committedSuccessfully = commitCompletedAutoTuneResult(*completed);
-    } else if (committedSuccessfully) {
-        committedSuccessfully = commitCompletedNoteCorrectionResult(*completed);
-    }
-
-    if (committedSuccessfully) {
-        F0FrameRange notifyRange;
-        if (wasAutoTune) {
-            notifyRange = PitchCurve::expandNoteBasedCorrectionRange(completed->autoStartFrame,
-                                                                     completed->autoEndFrame + 1,
-                                                                     currentF0Timeline().endFrameExclusive());
-        } else {
-            notifyRange = PitchCurve::expandNoteBasedCorrectionRange(completed->startFrame,
-                                                                     completed->endFrameExclusive,
-                                                                     currentF0Timeline().endFrameExclusive());
-        }
-
-        const int notifyEnd = std::max(notifyRange.startFrame, notifyRange.endFrameExclusive - 1);
-        listeners_.call([notifyRange, notifyEnd](Listener& l) { l.pitchCurveEdited(notifyRange.startFrame, notifyEnd); });
-    }
-
-    if (wasAutoTune) {
-        autoTuneInFlight_.store(false, std::memory_order_release);
-    }
-
-    repaint();
-}
-
-bool PianoRollComponent::commitCompletedAutoTuneResult(const PianoRollCorrectionWorker::AsyncCorrectionRequest& completed)
-{
-    AppLogger::log("AutoTune: commitCompletedAutoTuneResult entry");
-
-    if (processor_ == nullptr || !editedContentKey_.isValid()) {
-        AppLogger::log("AutoTune: commitCompleted abort - processor or content key invalid");
+    if (!commitEditedContentNotesAndSegments(notes, allSegments, affectedRange)) {
         return false;
     }
-
-    const uint64_t currentEpoch = editedContentEpoch_.load(std::memory_order_acquire);
-    if (completed.contentKeySnapshot != editedContentKey_
-        || completed.contentEpochSnapshot != currentEpoch) {
-        AppLogger::log("AutoTune: commitCompleted abort - epoch mismatch (snapshot="
-            + juce::String(completed.contentEpochSnapshot) + " current=" + juce::String(currentEpoch) + ")");
-        return false;
-    }
-
-    AppLogger::log("AutoTune: commitCompleted calling commitAutoTuneGeneratedNotes noteCount="
-        + juce::String(static_cast<int>(completed.notes.size())));
-
-    if (!contentCommands_->commitAutoTuneGeneratedNotes(
-            editedContentKey_,
-            completed.notes,
-            completed.autoStartFrame,
-            completed.autoEndFrame + 1,
-            completed.retuneSpeed,
-            completed.vibratoDepth,
-            completed.vibratoRate)) {
-        AppLogger::log("AutoTune: commitAutoTuneGeneratedNotes returned false");
-        return false;
-    }
-
-    AppLogger::log("AutoTune: commitAutoTuneGeneratedNotes succeeded, refreshing notes");
-    refreshEditedContentNotes();
-
-    auto committedCurve = readEditedSnapshot();
-    if (committedCurve == nullptr || committedCurve->pitchCurve == nullptr) {
-        AppLogger::log("AutoTune: commitCompleted abort - committedCurve null after commit");
-        return false;
-    }
-
-    AppLogger::log("AutoTune: setEditedContent + recordUndo");
-    setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
-    AppLogger::log("AutoTune: after setEditedContent");
-    updateScrollBars();
-    AppLogger::log("AutoTune: after outer updateScrollBars");
-    repaint();
-    AppLogger::log("AutoTune: after outer repaint, before recordUndoAction");
-    const auto autoTuneRange = PitchCurve::expandNoteBasedCorrectionRange(
-        completed.autoStartFrame,
-        completed.autoEndFrame + 1,
-        currentF0Timeline().endFrameExclusive());
-    recordUndoAction(pendingUndoDescription_, autoTuneRange);
-    AppLogger::log("AutoTune: commitCompletedAutoTuneResult done");
-    return true;
-}
-
-bool PianoRollComponent::commitCompletedNoteCorrectionResult(const PianoRollCorrectionWorker::AsyncCorrectionRequest& completed)
-{
-    if (processor_ == nullptr || !editedContentKey_.isValid() || completed.curve == nullptr) {
-        return false;
-    }
-
-    const uint64_t currentEpoch = editedContentEpoch_.load(std::memory_order_acquire);
-    if (completed.contentKeySnapshot != editedContentKey_
-        || completed.contentEpochSnapshot != currentEpoch) {
-        return false;
-    }
-
-    const auto correctionRange = PitchCurve::expandNoteBasedCorrectionRange(
-        completed.startFrame,
-        completed.endFrameExclusive,
-        currentF0Timeline().endFrameExclusive());
-    if (!commitEditedContentPitchCorrectionSegments(copyPitchCorrectionSegments(completed.curve),
-                                                       correctionRange)) {
-        return false;
-    }
-
-    updateScrollBars();
-    repaint();
     return true;
 }
 
@@ -1091,10 +951,10 @@ void PianoRollComponent::invalidateInteractionPreview(const juce::Rectangle<int>
         repaint(bounds);
 }
 
-bool PianoRollComponent::enqueueManualCorrectionPatchAsync(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
-                                                           int dirtyStartFrame,
-                                                           int dirtyEndFrame,
-                                                           bool triggerRenderEvent)
+bool PianoRollComponent::applyManualCorrectionPatch(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
+                                                     int dirtyStartFrame,
+                                                     int dirtyEndFrame,
+                                                     bool triggerRenderEvent)
 {
     if (!currentCurve_ || ops.empty()) {
         return false;
@@ -1128,33 +988,6 @@ bool PianoRollComponent::enqueueManualCorrectionPatchAsync(const std::vector<Pia
 
     repaint();
     return true;
-}
-
-void PianoRollComponent::enqueueNoteBasedCorrectionAsync(const std::vector<Note>& notes,
-                                                         int startFrame,
-                                                         int endFrameExclusive,
-                                                         float retuneSpeed,
-                                                         float vibratoDepth,
-                                                         float vibratoRate)
-{
-    if (!currentCurve_) {
-        return;
-    }
-
-    auto request = std::make_shared<PianoRollCorrectionWorker::AsyncCorrectionRequest>();
-    request->curve = currentCurve_->clone();
-    request->notes = notes;
-    request->startFrame = startFrame;
-    request->endFrameExclusive = endFrameExclusive;
-    request->retuneSpeed = retuneSpeed;
-    request->vibratoDepth = vibratoDepth;
-    request->vibratoRate = vibratoRate;
-    request->contentEpochSnapshot = editedContentEpoch_.load(std::memory_order_acquire);
-    request->contentKeySnapshot = editedContentKey_;
-    if (!undoSnapshotCaptured_)
-        captureBeforeUndoSnapshot();
-
-    correctionWorker_->enqueue(request);
 }
 
 // ============================================================================
@@ -1663,16 +1496,23 @@ bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vib
     if (!currentCurve_ || endFrameExclusive <= startFrame) return false;
     if (!currentCurve_->hasCorrectionInRange(startFrame, endFrameExclusive)) return false;
 
-    enqueueNoteBasedCorrectionAsync(getEditedContentNotesCopy(),
-                                    startFrame, endFrameExclusive,
-                                    retuneSpeed, vibratoDepth, vibratoRate);
+    auto notes = getEditedContentNotesCopy();
+    auto editedCurve = currentCurve_->clone();
+    editedCurve->applyCorrectionToRange(notes, startFrame, endFrameExclusive,
+                                        retuneSpeed, vibratoDepth, vibratoRate);
 
+    const auto snap = editedCurve->getSnapshot();
+    auto allSegments = snap->getCorrectionSegments();
     const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(startFrame,
                                                                           endFrameExclusive,
                                                                           currentF0Timeline().endFrameExclusive());
+
+    if (!commitEditedContentNotesAndSegments(notes, allSegments, affectedRange)) {
+        return false;
+    }
+
     const int notifyEndFrame = std::max(affectedRange.startFrame, affectedRange.endFrameExclusive - 1);
     listeners_.call([affectedRange, notifyEndFrame](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, notifyEndFrame); });
-    repaint();
     return true;
 }
 
@@ -1745,10 +1585,6 @@ bool PianoRollComponent::getF0SelectionFrameRange(int& startFrame, int& endFrame
 }
 
 bool PianoRollComponent::applyRetuneSpeedToSelection(float speed) {
-    if (isAutoTuneProcessing()) {
-        return false;
-    }
-
     speed = juce::jlimit(0.0f, 1.0f, speed);
     pendingUndoDescription_ = TRANS("Edit retune speed");
     if (!currentCurve_) return false;
@@ -1800,10 +1636,6 @@ bool PianoRollComponent::applyVibratoRateToSelection(float rate) {
 }
 
 bool PianoRollComponent::applyVibratoParameterToSelection(VibratoParam param, float value) {
-    if (isAutoTuneProcessing()) {
-        return false;
-    }
-
     auto clampValue = [&]() -> float {
         return (param == VibratoParam::Depth) ? juce::jlimit(0.0f, 100.0f, value)
                                               : juce::jlimit(0.1f, 30.0f, value);
@@ -2179,7 +2011,6 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
     if (contentChanged) {
         editedContentKey_ = contentKey;
         clearNoteDraft();
-        autoTuneInFlight_.store(false, std::memory_order_release);
         pendingUndoDescription_ = {};
         beforeUndoNotes_.clear();
         beforeUndoSegments_.clear();
@@ -2194,7 +2025,6 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
     }
 
     if (contentChanged || curveChanged) {
-        editedContentEpoch_.fetch_add(1, std::memory_order_release);
         applyEditedContentCurve(std::move(curve));
     }
 
@@ -2383,7 +2213,6 @@ void PianoRollComponent::onHeartbeatTick()
         return;
 
     tryConsumeInitialF0View(editedContentKey_);
-    consumeCompletedCorrectionResults();
 
     const bool playingNow = playHeadState_.isPlaying.load(std::memory_order_relaxed);
 
@@ -2919,10 +2748,6 @@ void PianoRollComponent::mouseDoubleClick(const juce::MouseEvent& e) {
 }
 
 void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
-    if (isAutoTuneProcessing()) {
-        return;
-    }
-
     // Ctrl+drag panning 锟?only on non-interactive area, so existing
     // Ctrl+click behaviors (note toggle selection, context menu) work.
     if (e.mods.isCtrlDown() && !e.mods.isPopupMenu() && e.x >= pianoKeyWidth_) {
@@ -2962,10 +2787,6 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent& e) {
 }
 
 void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
-    if (isAutoTuneProcessing()) {
-        return;
-    }
-
     if (interactionState_.isPanning) {
         int deltaX = e.x - interactionState_.dragStartPos.x;
         int deltaY = e.y - interactionState_.dragStartPos.y;
@@ -3007,10 +2828,6 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent& e) {
 }
 
 void PianoRollComponent::mouseUp(const juce::MouseEvent& e) {
-    if (isAutoTuneProcessing()) {
-        return;
-    }
-
     if (interactionState_.isPanning) {
         interactionState_.isPanning = false;
         setCurrentTool(currentTool_);
@@ -3127,9 +2944,6 @@ void PianoRollComponent::mouseWheelMove(const juce::MouseEvent& e, const juce::M
 }
 
 bool PianoRollComponent::keyPressed(const juce::KeyPress& key) {
-    if (isAutoTuneProcessing()) {
-        return false;
-    }
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Undo, key)) {
         listeners_.call([](Listener& l) { l.undoRequested(); });
         return true;
@@ -3701,8 +3515,6 @@ juce::String PianoRollComponent::AutoTuneApplyResult::message() const
             return juce::String("AUTO cannot read the editable content snapshot.");
         case AutoTuneApplyStatus::OriginalF0NotReady:
             return juce::String("AUTO needs OriginalF0 to be ready for this clip.");
-        case AutoTuneApplyStatus::AlreadyInFlight:
-            return juce::String("AUTO is already processing this clip.");
         case AutoTuneApplyStatus::MissingCurveSnapshot:
             return juce::String("AUTO cannot read the current pitch-curve snapshot.");
         case AutoTuneApplyStatus::EmptyOriginalF0:
@@ -3720,11 +3532,6 @@ juce::String PianoRollComponent::AutoTuneApplyResult::message() const
 
 PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelection()
 {
-    AppLogger::log("AutoTune: applyAutoTuneToSelection entry"
-        " contentKey.objectId=" + juce::String(static_cast<juce::int64>(editedContentKey_.objectId))
-        + " curve=" + juce::String(currentCurve_ != nullptr ? 1 : 0)
-        + " processor=" + juce::String(processor_ != nullptr ? 1 : 0));
-
     if (!currentCurve_) {
         return { AutoTuneApplyStatus::NoCurve };
     }
@@ -3747,47 +3554,29 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
         return { AutoTuneApplyStatus::OriginalF0NotReady };
     }
 
-    if (autoTuneInFlight_.exchange(true, std::memory_order_acq_rel)) {
-        return { AutoTuneApplyStatus::AlreadyInFlight };
-    }
-
-    repaint();
-
-    auto failAfterStart = [this](AutoTuneApplyStatus status) {
-        autoTuneInFlight_.store(false, std::memory_order_release);
-    repaint();  // scale楂樹寒鏄痗hrome锛屽彧repaint
-        return AutoTuneApplyResult{ status };
-    };
-
     auto snapshot = currentCurve_->getSnapshot();
     if (!snapshot) {
-        AppLogger::log("AutoTune: apply failed reason=null_snapshot");
-        return failAfterStart(AutoTuneApplyStatus::MissingCurveSnapshot);
+        return { AutoTuneApplyStatus::MissingCurveSnapshot };
     }
-
-    AppLogger::log("AutoTune: snapshot frames=" + juce::String(static_cast<int>(snapshot->size()))
-        + " hop=" + juce::String(snapshot->getHopSize())
-        + " sampleRate=" + juce::String(snapshot->getSampleRate())
-        + " duration=" + juce::String(getContentDurationSeconds()));
 
     const auto& originalF0 = snapshot->getOriginalF0();
     if (originalF0.empty()) {
-        return failAfterStart(AutoTuneApplyStatus::EmptyOriginalF0);
+        return { AutoTuneApplyStatus::EmptyOriginalF0 };
     }
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) {
-        return failAfterStart(AutoTuneApplyStatus::EmptyTimeline);
+        return { AutoTuneApplyStatus::EmptyTimeline };
     }
 
     int selectedNotesStartFrame = 0;
     int selectedNotesEndFrameExclusive = 0;
     const bool hasSelectedNotesRange = getSelectedNotesFrameRange(selectedNotesStartFrame,
-                                                                  selectedNotesEndFrameExclusive);
+                                                                   selectedNotesEndFrameExclusive);
 
     int selectionAreaStartFrame = 0;
     int selectionAreaEndFrameExclusive = 0;
     const bool hasSelectionAreaRange = getSelectionAreaFrameRange(selectionAreaStartFrame,
-                                                                  selectionAreaEndFrameExclusive);
+                                                                   selectionAreaEndFrameExclusive);
 
     int f0SelectionStartFrame = 0;
     int f0SelectionEndFrameExclusive = 0;
@@ -3808,17 +3597,16 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
 
     const auto targetDecision = AudioEditingScheme::resolveAutoTuneRange(audioEditingScheme_, targetContext);
     if (targetDecision.target == AudioEditingScheme::AutoTuneTarget::None) {
-        return failAfterStart(AutoTuneApplyStatus::NoTargetSelection);
+        return { AutoTuneApplyStatus::NoTargetSelection };
     }
 
     const auto targetRange = f0tl.rangeForFrames(targetDecision.range.startFrame,
-                                                targetDecision.range.endFrameExclusive);
+                                                 targetDecision.range.endFrameExclusive);
     if (targetRange.isEmpty()) {
-        return failAfterStart(AutoTuneApplyStatus::EmptyTargetRange);
+        return { AutoTuneApplyStatus::EmptyTargetRange };
     }
 
     const int startFrame = targetRange.startFrame;
-    const int endFrameExclusive = targetRange.endFrameExclusive;
     const int endFrame = targetRange.endFrameExclusive - 1;
 
     const bool useScaleSnap = (scaleType_ != 3);
@@ -3829,10 +3617,6 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
     genParams.vibratoDepth = currentVibratoDepth_;
     genParams.vibratoRate = currentVibratoRate_;
 
-    // Build scale-snap config separately from generation params. The snap is
-    // applied post-generation by the worker; note generation itself stays
-    // chromatic so the two responsibilities (segmentation vs scale theory)
-    // do not bleed into each other.
     std::optional<ScaleSnapConfig> postSnapCfg;
     if (useScaleSnap) {
         ScaleSnapConfig snapCfg;
@@ -3850,32 +3634,46 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
         postSnapCfg = snapCfg;
     }
 
-    auto request = std::make_shared<PianoRollCorrectionWorker::AsyncCorrectionRequest>();
-    request->kind = PianoRollCorrectionWorker::AsyncCorrectionRequest::Kind::AutoTuneGenerate;
-    request->startFrame = startFrame;
-    request->endFrameExclusive = endFrameExclusive;
-    request->retuneSpeed = currentRetuneSpeed_;
-    request->vibratoDepth = currentVibratoDepth_;
-    request->vibratoRate = currentVibratoRate_;
-    request->postSnap = postSnapCfg;
+    // Synchronous generation (no worker)
+    auto generatedNotes = LegacyNoteGenerator::generate(
+        originalF0.data(),
+        static_cast<int>(originalF0.size()),
+        nullptr,
+        startFrame,
+        endFrame + 1,
+        currentCurve_->getHopSize(),
+        static_cast<float>(currentCurve_->getSampleRate()),
+        genParams);
 
-    request->autoOriginalF0Full = originalF0;
-    request->autoHopSize = currentCurve_ ? currentCurve_->getHopSize() : 512;
-    request->autoF0SampleRate = currentCurve_ ? currentCurve_->getSampleRate() : 16000.0;
-    request->autoStartFrame = startFrame;
-    request->autoEndFrame = endFrame;
-    request->autoGenParams = genParams;
-
-    request->contentEpochSnapshot = editedContentEpoch_.load(std::memory_order_acquire);
-    request->contentKeySnapshot = editedContentKey_;
+    if (postSnapCfg.has_value()) {
+        postSnapCfg->applyToNotes(generatedNotes);
+    }
+    LegacyNoteGenerator::validate(generatedNotes);
 
     captureBeforeUndoSnapshot();
-    pendingUndoDescription_ = TRANS("鑷姩璋冮煶");
+    pendingUndoDescription_ = TRANS("自动调音");
 
-    correctionWorker_->enqueue(request);
+    if (!contentCommands_->commitAutoTuneGeneratedNotes(
+            editedContentKey_,
+            generatedNotes,
+            startFrame,
+            endFrame + 1,
+            currentRetuneSpeed_,
+            currentVibratoDepth_,
+            currentVibratoRate_)) {
+        return { AutoTuneApplyStatus::NoContent };
+    }
 
-    AppLogger::log("AutoTune: enqueued contentKey.objectId=" + juce::String(static_cast<juce::int64>(editedContentKey_.objectId))
-        + " startFrame=" + juce::String(startFrame) + " endFrame=" + juce::String(endFrame));
+    refreshEditedContentNotes();
+
+    auto committedCurve = readEditedSnapshot();
+    if (committedCurve != nullptr && committedCurve->pitchCurve != nullptr) {
+        setEditedContent(editedContentKey_, committedCurve->pitchCurve, audioBuffer_, static_cast<int>(audioBufferSampleRate_));
+    }
+
+    const auto autoTuneRange = PitchCurve::expandNoteBasedCorrectionRange(
+        startFrame, endFrame + 1, f0tl.endFrameExclusive());
+    recordUndoAction(pendingUndoDescription_, autoTuneRange);
 
     return { AutoTuneApplyStatus::Applied };
 }
@@ -3899,11 +3697,6 @@ void PianoRollComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRa
 
 std::vector<Note> PianoRollComponent::getEditedContentNotesCopy() const {
     return cachedNotes_;
-}
-
-bool PianoRollComponent::isAutoTuneProcessing() const
-{
-    return autoTuneInFlight_.load(std::memory_order_acquire);
 }
 
 void PianoRollComponent::updateScrollBars() {

@@ -1643,7 +1643,6 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
     juce::ignoreUnused(e);
 
     const auto beforeNotes = std::vector<Note>(displayNotes(ctx_));
-    bool queuedAsyncCommit = false;
     bool suppressFinalNoteDraftCommit = false;
 
     auto notes = beforeNotes;
@@ -1764,18 +1763,16 @@ void PianoRollToolHandler::handleSelectUp(const juce::MouseEvent& e)
         // 鍚屾璁＄畻淇骞朵竴娆℃€ф彁浜ら煶绗﹀拰F0锟?
         if (pitchCurve && !editRange.isEmpty()) {
             commitNoteBasedCorrection(ctx_, notes, pitchCurve, editRange);
+            suppressFinalNoteDraftCommit = true;
         } else {
             ctx_.commitNoteDraft();
         }
-        queuedAsyncCommit = true;
     }
 
-    if (!queuedAsyncCommit) {
-        if (ctx_.getNoteDraft().active && !suppressFinalNoteDraftCommit) {
-            ctx_.getNoteDraft().workingNotes = notes;
-            ctx_.setUndoDescription(juce::String("缂栬緫闊崇"));
-            ctx_.commitNoteDraft();
-        }
+    if (ctx_.getNoteDraft().active && !suppressFinalNoteDraftCommit) {
+        ctx_.getNoteDraft().workingNotes = notes;
+        ctx_.setUndoDescription(juce::String("缂栬緫闊崇"));
+        ctx_.commitNoteDraft();
     }
 
     ctx_.getState().noteResize.isResizing = false;

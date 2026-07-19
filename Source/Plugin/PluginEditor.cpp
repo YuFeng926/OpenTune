@@ -371,7 +371,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     bool shouldShowOverlay = false;
     bool shouldShowBadge = false;
     const auto chunkStats = processorRef_.getReadableContentChunkStats(activeKey);
-    const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
+    const bool isAutoProcessing = false;
     const int completedTasks = chunkStats.idle + chunkStats.blank;
     const int totalTasks = chunkStats.total();
 
@@ -581,7 +581,7 @@ void OpenTuneAudioProcessorEditor::retuneSpeedChanged(float speed)
     }
     const float depth = parameterPanel_.getVibratoDepth();
     const float rate = parameterPanel_.getVibratoRate();
-    pianoRoll_.applyCorrectionAsyncForEntireClip(normalized, depth, rate);
+    pianoRoll_.applyCorrectionToEntireClip(normalized, depth, rate);
 }
 
 void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
@@ -592,7 +592,7 @@ void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
     pianoRoll_.setVibratoDepth(value);
     const float speed = parameterPanel_.getRetuneSpeed() / 100.0f;
     const float rate = parameterPanel_.getVibratoRate();
-    pianoRoll_.applyCorrectionAsyncForEntireClip(speed, value, rate);
+    pianoRoll_.applyCorrectionToEntireClip(speed, value, rate);
 }
 
 void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
@@ -603,7 +603,7 @@ void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
     pianoRoll_.setVibratoRate(value);
     const float speed = parameterPanel_.getRetuneSpeed() / 100.0f;
     const float depth = parameterPanel_.getVibratoDepth();
-    pianoRoll_.applyCorrectionAsyncForEntireClip(speed, depth, value);
+    pianoRoll_.applyCorrectionToEntireClip(speed, depth, value);
 }
 
 void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)

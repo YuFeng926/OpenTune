@@ -570,8 +570,6 @@ target_sources(OpenTune
 
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h
-        Source/Standalone/UI/PianoRoll/PianoRollCorrectionWorker.cpp
-        Source/Standalone/UI/PianoRoll/PianoRollCorrectionWorker.h
         Source/Standalone/UI/PianoRoll/InteractionState.cpp
         Source/Standalone/UI/PianoRoll/InteractionState.h
 
