@@ -1503,6 +1503,7 @@ void PianoRollComponent::paintOverChildren(juce::Graphics& g)
             static_cast<float>(rulerHeight_)));
         g.reduceClipRegion(juce::Rectangle<int>(0, 0, pianoKeyWidth_,
             getTimelineContentViewportHeight()));
+        g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
         g.drawImageTransformed(pianoKeySurface_,
             juce::AffineTransform::translation(0.0f, yOffset), false);
 
@@ -3319,6 +3320,7 @@ void PianoRollComponent::rebuildViewportSurfaceFromReadyTiles()
         if (themeBackdrop_.isValid())
             g.drawImageAt(themeBackdrop_, -pianoKeyWidth_, -rulerHeight_, false);
 
+        g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
         const int64_t surfaceOriginPx = static_cast<int64_t>(
             std::llround(camera_.visibleStartSeconds * ppsCanonical));
         const float visibleBottomY = verticalScrollOffset_ + static_cast<float>(ch);
@@ -3491,6 +3493,8 @@ void PianoRollComponent::scrollViewportSurfaceTo(const TimelineViewportCamera& n
             if (themeBackdrop_.isValid())
                 g.drawImageAt(themeBackdrop_, -(pianoKeyWidth_ + exposed.getX()),
                               -rulerHeight_, false);
+
+            g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
 
             // Step 1: Background planes
             for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
