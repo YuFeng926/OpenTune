@@ -6,6 +6,7 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <cstdint>
 
 namespace OpenTune {
 
@@ -30,20 +31,8 @@ double TimelineLayerComposer::selectMarkerInterval(double pixelsPerSecond) {
 }
 
 // ============================================================================
-// 解码 verticalGeometry 和 laneStyle
+// 解码 laneStyle
 // ============================================================================
-
-static float decodePixelsPerSemitone(std::uint64_t hash) {
-    return static_cast<float>(hash & 0xFFFF) / 100.0f;
-}
-
-static int decodePianoKeyWidth(std::uint64_t hash) {
-    return static_cast<int>((hash >> 16) & 0xFF);
-}
-
-static int decodeRulerHeight(std::uint64_t hash) {
-    return static_cast<int>((hash >> 24) & 0xFF);
-}
 
 static bool decodeShowLanes(int laneStyle) {
     return (laneStyle & 0x1) != 0;
@@ -195,9 +184,7 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
 // drawTimeRuler — 在 tile 内绘制时间标尺
 // ============================================================================
 void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams& params) {
-    int rulerHeight = (params.viewKind == "arrangement")
-        ? decodeArrangementRulerHeight(params.verticalGeometry)
-        : decodeRulerHeight(params.verticalGeometry);
+    const int rulerHeight = params.rulerHeight;
     const juce::Rectangle<int> rulerPaintBounds { 0, 0, params.viewportWidth, rulerHeight };
 
     const auto themeId = static_cast<ThemeId>(params.themeId);
@@ -279,8 +266,9 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
 // ============================================================================
 void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const RenderParams& params) {
     const auto themeId = static_cast<ThemeId>(params.themeId);
-    const float pixelsPerSemitone = decodePixelsPerSemitone(params.verticalGeometry);
-    const int pianoKeyWidth = decodePianoKeyWidth(params.verticalGeometry);
+    const float pixelsPerSemitone = params.pixelsPerSemitone;
+    const int pianoKeyWidth = 0;
+    const int worldTopY = params.worldTopY;
     const bool showLanes = decodeShowLanes(params.laneStyle);
     const int scaleRootNote = decodeScaleRootNote(params.laneStyle);
     const int scaleType = decodeScaleType(params.laneStyle);
@@ -295,8 +283,7 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
     const auto inScalePitchClass = buildInScalePitchClasses(scaleType, scaleRootNote);
 
     for (int midi = static_cast<int>(minMidi); midi <= static_cast<int>(maxMidi); ++midi) {
-        float verticalScrollOffset = decodeVerticalScrollOffset(params.verticalGeometry);
-        float y = (maxMidi - static_cast<float>(midi)) * pixelsPerSemitone - verticalScrollOffset;
+        float y = (maxMidi - static_cast<float>(midi)) * pixelsPerSemitone - worldTopY;
         float laneH = pixelsPerSemitone;
 
         if (y < -laneH || y > h) continue;

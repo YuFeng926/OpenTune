@@ -3,15 +3,10 @@
 namespace OpenTune {
 
 bool GeometryState::operator==(const GeometryState& o) const {
-    return contentViewportHeight == o.contentViewportHeight
-        && rulerHeight == o.rulerHeight
-        && pianoKeyWidth == o.pianoKeyWidth
-        && minMidi == o.minMidi
+    return minMidi == o.minMidi
         && maxMidi == o.maxMidi
         && pixelsPerSemitone == o.pixelsPerSemitone
-        && verticalScrollOffset == o.verticalScrollOffset
-        && trackHeight == o.trackHeight
-        && scrollTopPx == o.scrollTopPx;
+        && trackHeight == o.trackHeight;
 }
 
 bool GenerationSignature::operator==(const GenerationSignature& o) const {
@@ -29,46 +24,64 @@ bool GenerationSignature::operator==(const GenerationSignature& o) const {
 
 void TimelineCompositeCache::prepare(
     const GenerationSignature& generation,
-    int64_t firstTile,
-    int64_t lastTile,
-    int tileHeightPx,
-    TileBuilder builder)
+    int64_t firstTimeTile, int64_t lastTimeTile,
+    int firstVertRow, int lastVertRow,
+    TileBuilder backgroundBuilder,
+    TileBuilder foregroundBuilder,
+    bool allocateForeground)
 {
-    jassert(firstTile >= 0);
-    jassert(lastTile >= firstTile);
-    jassert(tileHeightPx > 0);
-
     // Generation 变化 → 清空所有旧 tiles
     if (!generation_ || !(*generation_ == generation)) {
         tiles_.clear();
         generation_ = generation;
     }
 
-    // 删除离开 coverage 的 tiles
+    // 淘汰 coverage 外的 tiles（逐行检查 time 范围）
     for (auto it = tiles_.begin(); it != tiles_.end(); ) {
-        if (it->first < firstTile || it->first > lastTile)
+        const auto& key = it->first;
+        if (key.timeTile < firstTimeTile || key.timeTile > lastTimeTile
+            || key.vertRow < firstVertRow || key.vertRow > lastVertRow)
             it = tiles_.erase(it);
         else
             ++it;
     }
 
-    // 构建缺失的 tiles
-    for (int64_t tile = firstTile; tile <= lastTile; ++tile) {
-        if (tiles_.find(tile) != tiles_.end())
-            continue;
+    // 构建缺失 tiles（二维遍历）
+    for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
+        for (int vr = firstVertRow; vr <= lastVertRow; ++vr) {
+            TileKey key{tt, vr};
+            if (tiles_.find(key) != tiles_.end())
+                continue;
 
-        juce::Image image(juce::Image::ARGB, kTileWidthPx, tileHeightPx, true);
-        juce::Graphics g(image);
+            TileEntry entry;
+            // Background plane
+            entry.background = juce::Image(
+                juce::Image::ARGB, kTileWidthPx, kWorldTileHeight, true);
+            {
+                juce::Graphics g(entry.background);
+                juce::Rectangle<int> b(0, 0, kTileWidthPx, kWorldTileHeight);
+                backgroundBuilder(g, b, key);
+            }
 
-        juce::Rectangle<int> tileBounds(0, 0, kTileWidthPx, tileHeightPx);
-        builder(g, tileBounds, tile);
+            // Foreground plane (Arrangement skips this)
+            if (allocateForeground) {
+                entry.foreground = juce::Image(
+                    juce::Image::ARGB, kTileWidthPx, kWorldTileHeight, true);
+                {
+                    juce::Graphics g(entry.foreground);
+                    juce::Rectangle<int> b(0, 0, kTileWidthPx, kWorldTileHeight);
+                    foregroundBuilder(g, b, key);
+                }
+            }
 
-        tiles_[tile] = std::move(image);
+            tiles_[key] = std::move(entry);
+        }
     }
 }
 
-const juce::Image* TimelineCompositeCache::findTile(int64_t absoluteTile) const noexcept {
-    auto it = tiles_.find(absoluteTile);
+const TimelineCompositeCache::TileEntry*
+TimelineCompositeCache::findTile(TileKey key) const noexcept {
+    auto it = tiles_.find(key);
     return (it != tiles_.end()) ? &it->second : nullptr;
 }
 
