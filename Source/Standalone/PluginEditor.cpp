@@ -938,7 +938,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     syncSharedAppPreferences();
 
     auto* vocoderDomain = processorRef_.getVocoderDomain();
-    const bool inferenceNow = pianoRoll_.isAutoTuneProcessing();
+    const bool inferenceNow = false;
     setInferenceActive(inferenceNow);
 
     syncParameterPanelFromSelection();
@@ -1114,7 +1114,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // Render badge logic — Stage 2 (time-stretch) is now synchronous inside CRS,
     // so there is no async "in-flight" state to display. Badge reflects Stage 1 only.
     // ============================================================================
-    const bool isAutoProcessing = pianoRoll_.isAutoTuneProcessing();
+    const bool isAutoProcessing = false;
 
     // Stage 1 — meaningful only when vocoder loaded
     bool stage1HasWork = false;
@@ -1354,7 +1354,7 @@ void OpenTuneAudioProcessorEditor::retuneSpeedChanged(float speed)
 
     const float vibratoDepth = parameterPanel_.getVibratoDepth();
     const float vibratoRate = parameterPanel_.getVibratoRate();
-    pianoRoll_.applyCorrectionAsyncForEntireClip(normalizedSpeed, vibratoDepth, vibratoRate);
+    pianoRoll_.applyCorrectionToEntireClip(normalizedSpeed, vibratoDepth, vibratoRate);
 
     projectSession_.markDirty();
 }
@@ -1365,7 +1365,7 @@ void OpenTuneAudioProcessorEditor::vibratoDepthChanged(float value)
     pianoRoll_.setVibratoDepth(value);
     const float speed = parameterPanel_.getRetuneSpeed() / 100.0f;
     const float rate = parameterPanel_.getVibratoRate();
-    pianoRoll_.applyCorrectionAsyncForEntireClip(speed, value, rate);
+    pianoRoll_.applyCorrectionToEntireClip(speed, value, rate);
 
     projectSession_.markDirty();
 }
@@ -1376,7 +1376,7 @@ void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
     pianoRoll_.setVibratoRate(value);
     const float speed = parameterPanel_.getRetuneSpeed() / 100.0f;
     const float depth = parameterPanel_.getVibratoDepth();
-    pianoRoll_.applyCorrectionAsyncForEntireClip(speed, depth, value);
+    pianoRoll_.applyCorrectionToEntireClip(speed, depth, value);
 
     projectSession_.markDirty();
 }

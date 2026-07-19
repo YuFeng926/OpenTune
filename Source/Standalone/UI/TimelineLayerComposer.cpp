@@ -134,7 +134,7 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
 
             if (themeId == ThemeId::Aurora) {
                 if (params.viewKind == "arrangement")
-                    g.setColour(UIColors::gridLine.withAlpha(isMeasure ? 0.060f : 0.022f));
+                    g.setColour(UIColors::gridLine.withAlpha(isMeasure ? 0.090f : 0.045f));
                 else
                     g.setColour(isMeasure
                         ? UIColors::pianoRollGrid.interpolatedWith(UIColors::textSecondary, 0.14f).withAlpha(0.064f)
@@ -165,7 +165,7 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
 
             if (themeId == ThemeId::Aurora) {
                 if (params.viewKind == "arrangement")
-                    g.setColour(UIColors::gridLine.withAlpha(0.022f));
+                    g.setColour(UIColors::gridLine.withAlpha(0.045f));
                 else
                     g.setColour(UIColors::pianoRollGrid.withAlpha(0.016f));
             } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {

@@ -576,7 +576,7 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTil
 
     const int visibleTopY = verticalScrollOffset_;
     const int firstVertRow = visibleTopY / TimelineCompositeCache::kWorldTileHeight;
-    const int lastVertRow = (visibleTopY + sh - 1)
+    const int lastVertRow = (visibleTopY + sh + TimelineCompositeCache::kWorldTileHeight - 1)
         / TimelineCompositeCache::kWorldTileHeight;
 
     for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
@@ -625,7 +625,7 @@ void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, 
 
     const int visibleTopY = verticalScrollOffset_;
     const int firstVertRow = visibleTopY / TimelineCompositeCache::kWorldTileHeight;
-    const int lastVertRow = (visibleTopY + sh - 1)
+    const int lastVertRow = (visibleTopY + sh + TimelineCompositeCache::kWorldTileHeight - 1)
         / TimelineCompositeCache::kWorldTileHeight;
 
     juce::Graphics g(viewportSurface_);
