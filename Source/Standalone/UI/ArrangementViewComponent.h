@@ -37,31 +37,20 @@ namespace OpenTune {
 // ============================================================================
 
 struct ArrangementVerticalWindow {
-    int rulerHeight = 0;
     int trackHeight = 0;
-    int scrollTopPx = 0;               // content-area track-space y (pixels scrolled past ruler)
+    int worldTopY = 0;                 // world-space tile origin y
     int viewportContentHeight = 0;     // visible content area height (excluding ruler)
 
     int firstTrack() const {
-        return trackHeight > 0 ? scrollTopPx / trackHeight : 0;
+        return trackHeight > 0 ? worldTopY / trackHeight : 0;
     }
 
     int lastTrackExclusive() const {
         if (trackHeight <= 0) return 0;
-        const int totalPx = scrollTopPx + viewportContentHeight;
+        const int totalPx = worldTopY + viewportContentHeight;
         return (totalPx + trackHeight - 1) / trackHeight;  // ceil division
     }
 
-    // Encode all state that affects tile content into a single hash
-    uint64_t encode() const {
-        // Pack into 64 bits: rulerHeight(16) | trackHeight(16) | scrollTopPx(16) | viewportContentHeight(16)
-        uint64_t h = 0;
-        h |= static_cast<uint64_t>(rulerHeight & 0xFFFF);
-        h |= static_cast<uint64_t>(trackHeight & 0xFFFF) << 16;
-        h |= static_cast<uint64_t>(scrollTopPx & 0xFFFF) << 32;
-        h |= static_cast<uint64_t>(viewportContentHeight & 0xFFFF) << 48;
-        return h;
-    }
 };
 
 // ============================================================================
@@ -166,7 +155,6 @@ private:
 
     // Camera-derived state
     ViewMapper makeViewMapper() const noexcept;
-    ArrangementVerticalWindow makeArrangementVerticalWindow() const noexcept;
 
     struct HitTestResult {
         int trackId{-1};
@@ -293,7 +281,7 @@ private:
 
     GenerationSignature makeGenerationSignature() const;
     void buildCompositeTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,
-                           int64_t absoluteTile, double ppsCanonical, double tileDuration);
+                           TimelineCompositeCache::TileKey key);
     void prepareCoverageCompositeTilesNew();
 
     // Smooth scrolling

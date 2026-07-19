@@ -306,8 +306,10 @@ private:
 
     // Composite cache helpers (Phase 2)
     GenerationSignature makeGenerationSignature() const;
-    void buildCompositeTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,
-                           int64_t absoluteTile, double ppsCanonical, double tileDuration);
+    void buildBackgroundTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,
+                             TimelineCompositeCache::TileKey key);
+    void buildForegroundTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,
+                             TimelineCompositeCache::TileKey key);
 
     void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
@@ -396,6 +398,8 @@ private:
     void refreshVerticalViewportGeometry();
     juce::Rectangle<int> timeAxisRect() const;
     void rebuildViewportSurfaceFromReadyTiles();
+    void drawWaveformOnSurface(juce::Graphics& g, int surfaceWidth, int surfaceHeight,
+                               double ppsCanonical);
     void scrollViewportSurfaceTo(const TimelineViewportCamera& nextCamera);
     juce::Rectangle<int> playheadDirtyRect() const;
 
@@ -530,7 +534,7 @@ private:
     PianoKeyAudition* pianoKeyAudition_ = nullptr;
     int pressedPianoKey_ = -1;
     
-    // Per-view retained surface for timeline time-axis pixels (ruler + contents)
+    // Per-view retained surface for timeline content pixels
     juce::Image viewportSurface_;
     juce::Image themeBackdrop_;
     void rebuildThemeBackdrop();

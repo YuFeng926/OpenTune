@@ -2,7 +2,6 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <string>
-#include <cstdint>
 
 namespace OpenTune {
 
@@ -15,7 +14,9 @@ struct RenderParams {
     int timeUnit = 0;
     int tempo = 120;
     int themeId = 0;
-    uint64_t verticalGeometry = 0;
+    float pixelsPerSemitone = 1.0f;
+    int worldTopY = 0;
+    int rulerHeight = 0;
     int laneStyle = 0;
     int viewportWidth = 0;
     int viewportHeight = 0;
@@ -28,32 +29,6 @@ struct TimelineRulerStyle {
     juce::Colour separatorColour;
     float tickStroke = 0.7f;
 };
-
-inline uint64_t encodePianoRollVerticalGeometry(float pixelsPerSemitone, int pianoKeyWidth, int rulerHeight,
-                                                 float verticalScrollOffset, int contentViewportHeight) {
-    uint64_t h = 0;
-    h |= (static_cast<uint64_t>(static_cast<int>(pixelsPerSemitone * 100.0f)) & 0xFFFF);
-    h |= ((static_cast<uint64_t>(pianoKeyWidth) & 0xFF) << 16);
-    h |= ((static_cast<uint64_t>(rulerHeight) & 0xFF) << 24);
-    h |= ((static_cast<uint64_t>(static_cast<int>(verticalScrollOffset)) & 0xFFFF) << 32);
-    h |= ((static_cast<uint64_t>(contentViewportHeight) & 0xFFFF) << 48);
-    return h;
-}
-
-inline float decodeVerticalScrollOffset(uint64_t verticalGeometry) {
-    return static_cast<float>(static_cast<int>((verticalGeometry >> 32) & 0xFFFF));
-}
-
-inline uint64_t encodeArrangementVerticalGeometry(int contentHeight, int rulerHeight) {
-    uint64_t h = 0;
-    h |= (static_cast<uint64_t>(contentHeight) & 0xFFFF);
-    h |= ((static_cast<uint64_t>(rulerHeight) & 0xFF) << 16);
-    return h;
-}
-
-inline int decodeArrangementRulerHeight(uint64_t verticalGeometry) {
-    return static_cast<int>((verticalGeometry >> 16) & 0xFF);
-}
 
 inline int encodeLaneStyle(bool showLanes, int scaleRootNote, int scaleType) {
     int h = 0;

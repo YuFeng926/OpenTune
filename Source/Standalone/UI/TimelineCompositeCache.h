@@ -9,19 +9,10 @@
 namespace OpenTune {
 
 struct GeometryState {
-    int contentViewportHeight = 0;
-    int rulerHeight = 0;
-
-    // PianoRoll specific
-    int pianoKeyWidth = 0;
     float minMidi = 0.0f;
     float maxMidi = 127.0f;
     float pixelsPerSemitone = 0.0f;
-    float verticalScrollOffset = 0.0f;
-
-    // Arrangement specific
     int trackHeight = 0;
-    int scrollTopPx = 0;
 
     bool operator==(const GeometryState&) const;
 };
@@ -44,23 +35,43 @@ struct GenerationSignature {
 class TimelineCompositeCache {
 public:
     static constexpr int kTileWidthPx = 4096;
+    static constexpr int kWorldTileHeight = 512;
 
-    using TileBuilder = std::function<void(juce::Graphics&, juce::Rectangle<int>, int64_t)>;
+    struct TileKey {
+        int64_t timeTile = 0;
+        int vertRow = 0;
+        bool operator==(const TileKey& o) const { return timeTile == o.timeTile && vertRow == o.vertRow; }
+    };
+
+    struct TileKeyHash {
+        size_t operator()(const TileKey& k) const {
+            return std::hash<int64_t>{}(k.timeTile)
+                ^ (std::hash<int>{}(k.vertRow) << 1);
+        }
+    };
+
+    struct TileEntry {
+        juce::Image background;
+        juce::Image foreground;
+    };
+
+    using TileBuilder = std::function<void(juce::Graphics&, juce::Rectangle<int>, TileKey)>;
 
     void prepare(
         const GenerationSignature& generation,
-        int64_t firstTile,
-        int64_t lastTile,
-        int tileHeightPx,
-        TileBuilder builder);
+        int64_t firstTimeTile, int64_t lastTimeTile,
+        int firstVertRow, int lastVertRow,
+        TileBuilder backgroundBuilder,
+        TileBuilder foregroundBuilder,
+        bool allocateForeground = true);
 
-    const juce::Image* findTile(int64_t absoluteTile) const noexcept;
+    const TileEntry* findTile(TileKey key) const noexcept;
 
     size_t getTileCount() const noexcept { return tiles_.size(); }
 
 private:
     std::optional<GenerationSignature> generation_;
-    std::unordered_map<int64_t, juce::Image> tiles_;
+    std::unordered_map<TileKey, TileEntry, TileKeyHash> tiles_;
 };
 
 } // namespace OpenTune

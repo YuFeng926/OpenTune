@@ -349,7 +349,7 @@ std::vector<ArrangementClipPaintInput> collectVisibleArrangementClips(const Stan
     std::vector<ArrangementClipPaintInput> clips;
 
     for (int trackId = verticalWindow.firstTrack(); trackId < verticalWindow.lastTrackExclusive(); ++trackId) {
-        const int trackY = trackId * verticalWindow.trackHeight - verticalWindow.scrollTopPx;
+        const int trackY = trackId * verticalWindow.trackHeight - verticalWindow.worldTopY;
         const int placementCount = arrangement.getNumPlacements(trackId);
 
         for (int placementIndex = 0; placementIndex < placementCount; ++placementIndex) {
@@ -545,11 +545,8 @@ void ArrangementViewComponent::activateTimelineCamera(TimelineViewportCamera cam
 
 juce::Rectangle<int> ArrangementViewComponent::timeAxisRect() const noexcept
 {
-    const auto viewport = getContentViewportBounds();
-    return { kArrangementContentStartX,
-             0,
-             getVisibleViewportWidth(),
-             rulerHeight_ + viewport.getHeight() };
+    const auto vp = getContentViewportBounds();
+    return { kArrangementContentStartX, 0, vp.getWidth(), rulerHeight_ + vp.getHeight() };
 }
 
 void ArrangementViewComponent::surfaceInvalidate()
@@ -559,19 +556,17 @@ void ArrangementViewComponent::surfaceInvalidate()
     surfacePps_ = 0.0;
 }
 
-void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTile, int64_t lastTile)
+void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTile, int64_t lastTimeTile)
 {
-    const auto rect = timeAxisRect();
-    const int surfaceWidth = rect.getWidth();
-    const int surfaceHeight = rect.getHeight();
-    if (surfaceWidth <= 0 || surfaceHeight <= 0)
-        return;
+    const auto rect = getContentViewportBounds();
+    const int sw = rect.getWidth();
+    const int sh = rect.getHeight();
+    if (sw <= 0 || sh <= 0) return;
 
-    const double pps = camera_.pixelsPerSecond;
-    if (pps <= 0.0)
-        return;
+    const double pps = std::round(camera_.pixelsPerSecond * 1000.0) / 1000.0;
+    if (pps <= 0.0) return;
 
-    viewportSurface_ = juce::Image(juce::Image::ARGB, surfaceWidth, surfaceHeight, true);
+    viewportSurface_ = juce::Image(juce::Image::ARGB, sw, sh, true);
     surfaceOriginPx_ = static_cast<int64_t>(std::llround(camera_.visibleStartSeconds * pps));
     surfacePps_ = pps;
 
@@ -579,71 +574,76 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTile, i
     if (themeBackdrop_.isValid())
         g.drawImageAt(themeBackdrop_, -rect.getX(), -rect.getY(), false);
 
-    for (int64_t tile = firstTile; tile <= lastTile; ++tile) {
-        if (const auto* img = compositeCache_.findTile(tile)) {
-            const int tileX = static_cast<int>(
-                tile * static_cast<int64_t>(TimelineCompositeCache::kTileWidthPx) - surfaceOriginPx_);
-            g.drawImageAt(*img, tileX, 0);
+    const int visibleTopY = verticalScrollOffset_;
+    const int firstVertRow = visibleTopY / TimelineCompositeCache::kWorldTileHeight;
+    const int lastVertRow = (visibleTopY + sh + TimelineCompositeCache::kWorldTileHeight - 1)
+        / TimelineCompositeCache::kWorldTileHeight;
+
+    for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
+        for (int vr = firstVertRow; vr <= lastVertRow; ++vr) {
+            TimelineCompositeCache::TileKey key{tt, vr};
+            if (const auto* entry = compositeCache_.findTile(key)) {
+                const int destX = static_cast<int>(tt * TimelineCompositeCache::kTileWidthPx - surfaceOriginPx_);
+                const float destY = static_cast<float>(vr * TimelineCompositeCache::kWorldTileHeight - visibleTopY);
+                g.drawImageTransformed(entry->background,
+                    juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
+            }
         }
     }
 }
 
-void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, int64_t firstTile, int64_t lastTile)
+void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, int64_t firstTimeTile, int64_t lastTimeTile)
 {
-    const auto rect = timeAxisRect();
-    const int surfaceWidth = rect.getWidth();
-    const int surfaceHeight = rect.getHeight();
-    if (surfaceWidth <= 0 || surfaceHeight <= 0)
-        return;
+    const auto rect = getContentViewportBounds();
+    const int sw = rect.getWidth();
+    const int sh = rect.getHeight();
+    if (sw <= 0 || sh <= 0) return;
 
     if (!viewportSurface_.isValid()) {
-        surfaceRebuildFromReadyTiles(firstTile, lastTile);
+        surfaceRebuildFromReadyTiles(firstTimeTile, lastTimeTile);
         return;
     }
 
     const int64_t deltaPx = newOriginPx - surfaceOriginPx_;
     const int absDelta = static_cast<int>(std::llabs(deltaPx));
-
-    if (absDelta >= surfaceWidth) {
-        surfaceRebuildFromReadyTiles(firstTile, lastTile);
+    if (absDelta >= sw) {
+        surfaceRebuildFromReadyTiles(firstTimeTile, lastTimeTile);
         return;
     }
 
     if (deltaPx > 0) {
-        // camera 向右滚：surface 内容向左移，暴露右侧条带
-        viewportSurface_.moveImageSection(0, 0,
-                                          absDelta, 0,
-                                          surfaceWidth - absDelta, surfaceHeight);
-        viewportSurface_.clear({ surfaceWidth - absDelta, 0, absDelta, surfaceHeight },
-                               juce::Colours::transparentBlack);
+        viewportSurface_.moveImageSection(0, 0, absDelta, 0, sw - absDelta, sh);
+        viewportSurface_.clear({sw - absDelta, 0, absDelta, sh}, juce::Colours::transparentBlack);
     } else if (deltaPx < 0) {
-        // camera 向左滚：surface 内容向右移，暴露左侧条带
-        viewportSurface_.moveImageSection(absDelta, 0,
-                                          0, 0,
-                                          surfaceWidth - absDelta, surfaceHeight);
-        viewportSurface_.clear({ 0, 0, absDelta, surfaceHeight },
-                               juce::Colours::transparentBlack);
+        viewportSurface_.moveImageSection(absDelta, 0, 0, 0, sw - absDelta, sh);
+        viewportSurface_.clear({0, 0, absDelta, sh}, juce::Colours::transparentBlack);
     }
 
-    // 消费 ready tiles 填充暴露条带（整 surface 范围内可见的 ready tiles）
-    juce::Graphics g(viewportSurface_);
-    juce::Graphics::ScopedSaveState state(g);
     const juce::Rectangle<int> exposed = deltaPx > 0
-        ? juce::Rectangle<int>(surfaceWidth - absDelta, 0, absDelta, surfaceHeight)
-        : juce::Rectangle<int>(0, 0, absDelta, surfaceHeight);
+        ? juce::Rectangle<int>(sw - absDelta, 0, absDelta, sh)
+        : juce::Rectangle<int>(0, 0, absDelta, sh);
+
+    const int visibleTopY = verticalScrollOffset_;
+    const int firstVertRow = visibleTopY / TimelineCompositeCache::kWorldTileHeight;
+    const int lastVertRow = (visibleTopY + sh + TimelineCompositeCache::kWorldTileHeight - 1)
+        / TimelineCompositeCache::kWorldTileHeight;
+
+    juce::Graphics g(viewportSurface_);
+    juce::Graphics::ScopedSaveState st(g);
     g.reduceClipRegion(exposed);
     if (themeBackdrop_.isValid())
         g.drawImageAt(themeBackdrop_, -(rect.getX() + exposed.getX()), -rect.getY(), false);
 
-    for (int64_t tile = firstTile; tile <= lastTile; ++tile) {
-        const int tileX = static_cast<int>(
-            tile * static_cast<int64_t>(TimelineCompositeCache::kTileWidthPx) - newOriginPx);
-        if (tileX >= surfaceWidth)
-            continue;
-        if (tileX + TimelineCompositeCache::kTileWidthPx <= 0)
-            continue;
-        if (const auto* img = compositeCache_.findTile(tile))
-            g.drawImageAt(*img, tileX, 0);
+    for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
+        for (int vr = firstVertRow; vr <= lastVertRow; ++vr) {
+            TimelineCompositeCache::TileKey key{tt, vr};
+            if (const auto* entry = compositeCache_.findTile(key)) {
+                const int destX = static_cast<int>(tt * TimelineCompositeCache::kTileWidthPx - newOriginPx);
+                const float destY = static_cast<float>(vr * TimelineCompositeCache::kWorldTileHeight - visibleTopY);
+                g.drawImageTransformed(entry->background,
+                    juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
+            }
+        }
     }
 
     surfaceOriginPx_ = newOriginPx;
@@ -664,7 +664,8 @@ void ArrangementViewComponent::rebuildTimelineCoverage()
         const double timelineEnd = std::max(
             contentMetrics_.maxEndTimeSeconds + visibleDuration,
             visibleStart + visibleDuration);
-        tileCoverageStartSeconds_ = 0.0;
+        tileCoverageStartSeconds_ = std::max(0.0,
+            std::floor((visibleStart - tileDuration) / tileDuration) * tileDuration);
         tileCoverageEndSeconds_ = std::ceil(timelineEnd / tileDuration) * tileDuration;
     } else {
         tileCoverageStartSeconds_ = std::max(0.0,
@@ -674,12 +675,12 @@ void ArrangementViewComponent::rebuildTimelineCoverage()
 
     prepareCoverageCompositeTilesNew();
 
-    const int64_t firstTile = std::max<int64_t>(0,
+    const int64_t firstTimeTile = std::max<int64_t>(0,
         static_cast<int64_t>(std::floor(visibleStart / tileDuration)));
-    const int64_t lastTile = static_cast<int64_t>(
+    const int64_t lastTimeTile = static_cast<int64_t>(
         std::floor((visibleEnd - 1.0e-9) / tileDuration));
 
-    surfaceRebuildFromReadyTiles(firstTile, lastTile);
+    surfaceRebuildFromReadyTiles(firstTimeTile, lastTimeTile);
 }
 
 void ArrangementViewComponent::invalidateStableScene()
@@ -728,15 +729,16 @@ void ArrangementViewComponent::preparePlaybackCoverage()
         camera_.visibleStartSeconds + visibleDuration);
     const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / pps;
 
-    tileCoverageStartSeconds_ = 0.0;
+    tileCoverageStartSeconds_ = std::max(0.0,
+        std::floor((camera_.visibleStartSeconds - tileDuration) / tileDuration) * tileDuration);
     tileCoverageEndSeconds_ = std::ceil(timelineEnd / tileDuration) * tileDuration;
     prepareCoverageCompositeTilesNew();
     if (!viewportSurface_.isValid()) {
-        const int64_t firstTile = std::max<int64_t>(0,
+        const int64_t firstTimeTile = std::max<int64_t>(0,
             static_cast<int64_t>(std::floor(camera_.visibleStartSeconds / tileDuration)));
-        const int64_t lastTile = static_cast<int64_t>(
+        const int64_t lastTimeTile = static_cast<int64_t>(
             std::floor((camera_.visibleStartSeconds + width / pps) / tileDuration));
-        surfaceRebuildFromReadyTiles(firstTile, lastTile);
+        surfaceRebuildFromReadyTiles(firstTimeTile, lastTimeTile);
     }
 }
 
@@ -771,9 +773,15 @@ void ArrangementViewComponent::setVerticalScrollOffset(int offset)
     // 闄愬埗婊氬姩鑼冨洿 [0, maxScrollOffset]
     verticalScrollOffset_ = juce::jlimit(0, maxScrollOffset, offset);
     verticalScrollBar_.setCurrentRangeStart(verticalScrollOffset_, juce::dontSendNotification);
-    
-    // Rebuild pattern and content tiles with new vertical window
-    rebuildTimelineCoverage();
+
+    prepareCoverageCompositeTilesNew();
+    const double pps = std::round(camera_.pixelsPerSecond * 1000.0) / 1000.0;
+    const double tileDuration = TimelineCompositeCache::kTileWidthPx / pps;
+    const int64_t firstTimeTile = std::max<int64_t>(0,
+        static_cast<int64_t>(std::floor(camera_.visibleStartSeconds / tileDuration)));
+    const int64_t lastTimeTile = static_cast<int64_t>(
+        std::floor((camera_.visibleStartSeconds + getVisibleViewportWidth() / pps) / tileDuration));
+    surfaceRebuildFromReadyTiles(firstTimeTile, lastTimeTile);
     repaint();
 }
 
@@ -877,11 +885,9 @@ void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double
     }
     else if (scrollBar == &verticalScrollBar_)
     {
-        verticalScrollOffset_ = static_cast<int>(newRangeStart);
+        setVerticalScrollOffset(static_cast<int>(newRangeStart));
         // 閫氱煡鐩戝惉鍣ㄥ瀭鐩存粴鍔ㄥ亸绉诲彉鍖栵紙鐢ㄤ簬鍚屾TrackPanel锛?
         listeners_.call([this](Listener& l) { l.verticalScrollChanged(verticalScrollOffset_); });
-        rebuildTimelineCoverage();
-        repaint();
         }
 }
 
@@ -983,16 +989,10 @@ GenerationSignature ArrangementViewComponent::makeGenerationSignature() const
     sig.ppsMilli = static_cast<int64_t>(std::round(camera_.pixelsPerSecond * 1000.0));
     sig.dpiMilli = static_cast<int64_t>(std::round(getDesktopScaleFactor() * 1000.0));
 
-    const auto viewport = getContentViewportBounds();
-    sig.geometry.contentViewportHeight = viewport.getHeight();
-    sig.geometry.rulerHeight = rulerHeight_;
-    sig.geometry.pianoKeyWidth = 0;
     sig.geometry.minMidi = 0.0f;
     sig.geometry.maxMidi = 127.0f;
     sig.geometry.pixelsPerSemitone = 0.0f;
-    sig.geometry.verticalScrollOffset = 0.0f;
     sig.geometry.trackHeight = processor_.getTrackHeight();
-    sig.geometry.scrollTopPx = verticalScrollOffset_;
 
     sig.themeId = static_cast<int>(UIColors::currentThemeId());
     sig.laneStyle = 0;  // Arrangement 涓嶄娇鐢?lane style
@@ -1008,62 +1008,43 @@ GenerationSignature ArrangementViewComponent::makeGenerationSignature() const
 void ArrangementViewComponent::buildCompositeTile(
     juce::Graphics& g,
     juce::Rectangle<int> tileBounds,
-    int64_t absoluteTile,
-    double ppsCanonical,
-    double tileDuration)
+    TimelineCompositeCache::TileKey key)
 {
-    const double tileStartSec = absoluteTile * tileDuration;
+    const double ppsCanonical = std::round(camera_.pixelsPerSecond * 1000.0) / 1000.0;
+    const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / ppsCanonical;
+    const double tileStartSec = key.timeTile * tileDuration;
     const double tileEndSec = tileStartSec + tileDuration;
+    const int worldTopY = key.vertRow * TimelineCompositeCache::kWorldTileHeight;
 
-    // Encode vertical geometry for ruler rendering (contentHeight: bits 0-15, rulerHeight: bits 16-23)
-    const int contentHeight = tileBounds.getHeight() - rulerHeight_;
-    const uint64_t verticalGeometry = encodeArrangementVerticalGeometry(contentHeight, rulerHeight_);
-
-    // 0. Ruler layer (Y: 0..rulerHeight_)
     const auto themeId = UIColors::currentThemeId();
-    RenderParams rulerParams;
-    rulerParams.visibleStartSeconds = tileStartSec;
-    rulerParams.visibleEndSeconds = tileEndSec;
-    rulerParams.pixelsPerSecond = ppsCanonical;
-    rulerParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
-    rulerParams.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
-    rulerParams.themeId = static_cast<int>(themeId);
-    rulerParams.verticalGeometry = verticalGeometry;
-    rulerParams.viewportWidth = tileBounds.getWidth();
-    rulerParams.viewportHeight = tileBounds.getHeight();
-    rulerParams.viewKind = "arrangement";
-    TimelineLayerComposer::drawTimeRuler(g, rulerParams);
+    const int trackHeight = processor_.getTrackHeight();
 
-    // Content layers (translated below ruler)
-    {
-        juce::Graphics::ScopedSaveState contentSave(g);
-        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
-
-    // 1. Pattern layer: track lanes (from e7c6f65 stable implementation)
+    // 1. Pattern layer: track lanes
     if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
-        const int trackHeight = processor_.getTrackHeight();
         const int visibleTracks = juce::jmax(1, visibleTrackCount_);
-        for (int trackId = 0; trackId < visibleTracks; ++trackId) {
-            auto lane = juce::Rectangle<float>(0.0f,
-                                               static_cast<float>(trackId * trackHeight - verticalScrollOffset_),
+        const int firstTrack = std::max(0, worldTopY / trackHeight);
+        const int lastTrack = std::min(visibleTracks,
+            (worldTopY + tileBounds.getHeight() + trackHeight - 1) / trackHeight);
+        for (int trackId = firstTrack; trackId < lastTrack; ++trackId) {
+            const int trackCanvasY = trackId * trackHeight;
+            const float laneY = static_cast<float>(trackCanvasY - worldTopY);
+            auto lane = juce::Rectangle<float>(0.0f, laneY,
                                                static_cast<float>(tileBounds.getWidth()),
                                                static_cast<float>(trackHeight));
-            if (lane.getBottom() < 0.0f || lane.getY() > contentHeight)
-                continue;
+            if (lane.getBottom() < 0.0f || lane.getY() > tileBounds.getHeight()) continue;
 
             const auto laneFill = themeId == ThemeId::Aurora
                 ? ((trackId % 2 == 0) ? UIColors::glassSurface.withAlpha(0.055f) : UIColors::pianoRollLane.withAlpha(0.030f))
                 : ((trackId % 2 == 0) ? UIColors::pianoRollLane.withAlpha(0.060f) : UIColors::glassSurface.withAlpha(0.022f));
             g.setColour(laneFill);
             g.fillRect(lane);
-
             g.setColour((themeId == ThemeId::Aurora ? UIColors::gridLine : UIColors::pianoRollGrid)
                             .withAlpha(themeId == ThemeId::Aurora ? 0.026f : 0.036f));
             g.drawHorizontalLine(juce::roundToInt(lane.getBottom()), lane.getX(), lane.getRight());
         }
     }
 
-    // 2. Pattern layer: grid lines
+    // 2. Grid lines
     RenderParams gridParams;
     gridParams.visibleStartSeconds = tileStartSec;
     gridParams.visibleEndSeconds = tileEndSec;
@@ -1071,25 +1052,20 @@ void ArrangementViewComponent::buildCompositeTile(
     gridParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
     gridParams.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
     gridParams.themeId = static_cast<int>(themeId);
+    gridParams.pixelsPerSemitone = 0.0f;
+    gridParams.worldTopY = worldTopY;
+    gridParams.rulerHeight = 0;
     gridParams.viewportWidth = tileBounds.getWidth();
-    gridParams.viewportHeight = tileBounds.getHeight() - rulerHeight_;
+    gridParams.viewportHeight = tileBounds.getHeight();
     gridParams.viewKind = "arrangement";
-
     TimelineLayerComposer::drawGridLines(g, gridParams);
 
-    // 3. Content layer: clips + waveform (from stable implementation)
-    const ArrangementVerticalWindow vwin = makeArrangementVerticalWindow();
+    // 3. Content layer: clips
+    const ArrangementVerticalWindow vwin{trackHeight, worldTopY, tileBounds.getHeight()};
     auto& arrangement = *processor_.getStandaloneArrangement();
-    auto clips = collectVisibleArrangementClips(
-        arrangement,
-        tileStartSec, tileEndSec,
-        vwin,
-        ppsCanonical,
-        tileBounds.getWidth(),
-        [](int, uint64_t) { return false; });
-
+    auto clips = collectVisibleArrangementClips(arrangement, tileStartSec, tileEndSec, vwin, ppsCanonical,
+        tileBounds.getWidth(), [](int, uint64_t) { return false; });
     paintHistoricalArrangementClips(g, clips, waveformMipmapCache_);
-    }  // contentSave
 }
 
 void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
@@ -1098,18 +1074,32 @@ void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
     const double ppsCanonical = sig.ppsMilli / 1000.0;
     const double tileDuration = TimelineCompositeCache::kTileWidthPx / ppsCanonical;
 
-    const int64_t firstTile = std::max(0LL,
+    const int64_t firstTimeTile = std::max(0LL,
         static_cast<int64_t>(std::floor(tileCoverageStartSeconds_ / tileDuration)));
-    const int64_t lastTile = static_cast<int64_t>(
+    const int64_t lastTimeTile = static_cast<int64_t>(
         std::floor((tileCoverageEndSeconds_ - 1e-9) / tileDuration));
 
-    const auto viewport = getContentViewportBounds();
-    const int tileHeight = rulerHeight_ + viewport.getHeight();
+    const int vpHeight = getContentViewportBounds().getHeight();
+    const float visibleTopY = static_cast<float>(verticalScrollOffset_);
+    const float visibleBottomY = visibleTopY + static_cast<float>(vpHeight);
+    const int firstVertRow = static_cast<int>(std::floor(
+        visibleTopY / static_cast<float>(TimelineCompositeCache::kWorldTileHeight)));
+    const int lastVertRow = static_cast<int>(std::ceil(
+        visibleBottomY / static_cast<float>(TimelineCompositeCache::kWorldTileHeight))) - 1;
+    const int totalTrackHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
+    const int totalRows = (totalTrackHeight + TimelineCompositeCache::kWorldTileHeight - 1)
+        / TimelineCompositeCache::kWorldTileHeight;
+    const int effFirst = std::max(0, firstVertRow - 1);
+    const int effLast = std::min(totalRows - 1, lastVertRow + 1);
 
-    compositeCache_.prepare(sig, firstTile, lastTile, tileHeight,
-        [this, ppsCanonical, tileDuration](juce::Graphics& g, juce::Rectangle<int> bounds, int64_t tile) {
-            buildCompositeTile(g, bounds, tile, ppsCanonical, tileDuration);
-        });
+    compositeCache_.prepare(sig, firstTimeTile, lastTimeTile, effFirst, effLast,
+        [this](juce::Graphics& g, juce::Rectangle<int> b, TimelineCompositeCache::TileKey k) {
+            buildCompositeTile(g, b, k);
+        },
+        [](juce::Graphics&, juce::Rectangle<int>, TimelineCompositeCache::TileKey) {
+            // Foreground plane: no-op for Arrangement (单 plane)
+        },
+        false);
 }
 
 int ArrangementViewComponent::absoluteTimeToViewportX(double seconds) const
@@ -1599,39 +1589,64 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
     if (themeBackdrop_.isValid())
         g.drawImageAt(themeBackdrop_, 0, 0, false);
 
-    // Ruler backdrop + separator: both driven by the shared ruler style contract.
+    // Ruler + separator
     {
-        juce::Graphics::ScopedSaveState separatorState(g);
+        const double ppsCanonical = std::round(camera_.pixelsPerSecond * 1000.0) / 1000.0;
+        const int64_t surfaceOriginPx = static_cast<int64_t>(
+            std::llround(camera_.visibleStartSeconds * ppsCanonical));
+        RenderParams rulerParams;
+        rulerParams.visibleStartSeconds = static_cast<double>(surfaceOriginPx) / ppsCanonical;
+        rulerParams.visibleEndSeconds = rulerParams.visibleStartSeconds
+            + getVisibleViewportWidth() / ppsCanonical;
+        rulerParams.pixelsPerSecond = ppsCanonical;
+        rulerParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
+        rulerParams.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
+        rulerParams.themeId = static_cast<int>(UIColors::currentThemeId());
+        rulerParams.pixelsPerSemitone = 0.0f;
+        rulerParams.worldTopY = 0;
+        rulerParams.rulerHeight = rulerHeight_;
+        rulerParams.viewportWidth = getVisibleViewportWidth();
+        rulerParams.viewportHeight = rulerHeight_;
+        rulerParams.viewKind = "arrangement";
+
+        juce::Graphics::ScopedSaveState rulerSt(g);
+        g.addTransform(juce::AffineTransform::translation(
+            static_cast<float>(kArrangementContentStartX), 0.0f));
+        g.reduceClipRegion(0, 0, getVisibleViewportWidth(), rulerHeight_);
+        TimelineLayerComposer::drawTimeRuler(g, rulerParams);
+
+        // Separator line（drawTimeRuler 对 arrangement 跳过，需手动画）
         const auto style = TimelineLayerComposer::resolveRulerStyle("arrangement", UIColors::currentThemeId());
         g.setColour(style.separatorColour);
-        g.drawLine(0.0f, static_cast<float>(rulerHeight_), static_cast<float>(getWidth()), static_cast<float>(rulerHeight_), style.tickStroke);
+        g.drawLine(static_cast<float>(kArrangementContentStartX), static_cast<float>(rulerHeight_),
+                   static_cast<float>(kArrangementContentStartX + getVisibleViewportWidth()),
+                   static_cast<float>(rulerHeight_), style.tickStroke);
     }
 
-    const auto axis = timeAxisRect();
+    // Content surface
     {
-        juce::Graphics::ScopedSaveState surfaceState(g);
+        juce::Graphics::ScopedSaveState contentSave(g);
+        const auto axis = getContentViewportBounds();
         g.reduceClipRegion(axis);
         if (viewportSurface_.isValid())
             g.drawImageAt(viewportSurface_, axis.getX(), axis.getY(), false);
+
+        // Selection overlay
+        {
+            juce::Graphics::ScopedSaveState selSave(g);
+            g.reduceClipRegion(axis);
+            drawSelectionOverlay(g);
+        }
+
+        // Import/move overlays
+        {
+            juce::Graphics::ScopedSaveState ovSave(g);
+            g.reduceClipRegion(axis);
+            drawImportDropPreview(g);
+            drawMoveDragOverlay(g);
+        }
     }
 
-    const auto viewport = getContentViewportBounds();
-    // Selection overlay: draw tint/border for selected clips (transient, not cached)
-    {
-        juce::Graphics::ScopedSaveState selectionClipState(g);
-        g.reduceClipRegion(viewport);
-        drawSelectionOverlay(g);
-    }
-
-    // Import/move overlays: content viewport clip only
-    {
-        juce::Graphics::ScopedSaveState overlayClipState(g);
-        g.reduceClipRegion(viewport);
-        drawImportDropPreview(g);
-        drawMoveDragOverlay(g);
-    }
-
-    // Playhead（允许跨越 content viewport 边缘）
     drawPlayhead(g);
 }
 
@@ -1848,17 +1863,17 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
 
     if (cameraRasterChanged) {
         const double tileDuration = TimelineCompositeCache::kTileWidthPx / resolvedCamera.pixelsPerSecond;
-        const int64_t firstTile = std::max<int64_t>(0,
+        const int64_t firstTimeTile = std::max<int64_t>(0,
             static_cast<int64_t>(std::floor(resolvedCamera.visibleStartSeconds / tileDuration)));
-        const int64_t lastTile = static_cast<int64_t>(std::floor(
+        const int64_t lastTimeTile = static_cast<int64_t>(std::floor(
             (resolvedCamera.visibleStartSeconds + getVisibleViewportWidth() / resolvedCamera.pixelsPerSecond)
             / tileDuration));
 
         if (!viewportSurface_.isValid() || ppsChanged
-            || std::llabs(newOriginPx - oldOriginPx) >= timeAxisRect().getWidth()) {
-            surfaceRebuildFromReadyTiles(firstTile, lastTile);
+            || std::llabs(newOriginPx - oldOriginPx) >= getContentViewportBounds().getWidth()) {
+            surfaceRebuildFromReadyTiles(firstTimeTile, lastTimeTile);
         } else {
-            surfaceScrollAndFillExposed(newOriginPx, firstTile, lastTile);
+            surfaceScrollAndFillExposed(newOriginPx, firstTimeTile, lastTimeTile);
         }
 
         lastPlayheadRect_ = newPlayheadRect;
@@ -2961,17 +2976,6 @@ ViewMapper ArrangementViewComponent::makeViewMapper() const noexcept
         1.0f,  // pixelsPerSemitone (not used in ArrangementView)
         0.0f,  // verticalScrollOffset (not used in ArrangementView)
         127.0f // maxMidi (not used in ArrangementView)
-    };
-}
-
-ArrangementVerticalWindow ArrangementViewComponent::makeArrangementVerticalWindow() const noexcept
-{
-    const auto vpBounds = getContentViewportBounds();
-    return ArrangementVerticalWindow{
-        rulerHeight_,
-        processor_.getTrackHeight(),
-        verticalScrollOffset_,
-        vpBounds.getHeight()
     };
 }
 
