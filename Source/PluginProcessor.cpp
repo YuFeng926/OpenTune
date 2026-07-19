@@ -1263,8 +1263,16 @@ void OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu)
 
 void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
 {
+    // 1. Pause render worker before releasing vocoder
+    if (contentRenderService_)
+        contentRenderService_->pauseRenderWorker();
+
     // 2. Delegate vocoder weight change to process-level runtime
     ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight);
+
+    // 3. Resume render worker (vocoder will be lazily re-initialized by ensureVocoderReady)
+    if (contentRenderService_)
+        contentRenderService_->resumeRenderWorker();
 
     // 4. 清除所有 content 的 RenderCache + TimeStretchCache
     if (contentRenderService_ && standaloneContentRepository_) {
@@ -1278,10 +1286,6 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
         // 清理 TimeStretchCache
         contentRenderService_->getTimeStretchCache().clear();
     }
-
-    // 5. Resume render worker
-    if (contentRenderService_)
-        contentRenderService_->resumeRenderWorker();
 
     // 不重置 F0 / AccelerationDetector / GAME
 }
@@ -1459,7 +1463,6 @@ void OpenTuneAudioProcessor::didBindToARA() noexcept
 
     if (auto* dc = getDocumentController())
     {
-        dc->setAsyncWorkThreadPool(&noteGeneratorPool_);
         ensureF0Ready();
 
         // The DC installs its own lease on its CRS in its constructor

@@ -49,14 +49,6 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
     if (asyncLeaseToken_)
         asyncLeaseToken_->store(false, std::memory_order_release);
 
-    // 等待所有后台 F0 任务完成（它们持有 leaseToken，token 已 false，
-    // 但 job 本体可能仍在执行，需要等待线程池排空）
-    if (asyncWorkPool_ != nullptr)
-    {
-        while (asyncWorkPool_->getNumJobs() > 0)
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
-
     // 停止渲染服务：先排空队列，再 detach execution lease，最后暂停
     if (contentRenderService_)
     {

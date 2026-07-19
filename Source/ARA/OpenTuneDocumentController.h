@@ -126,7 +126,6 @@ public:
     // This method executes synchronously to comply with ARA thread constraints.
     // Callers should display a loading overlay before calling if UI responsiveness is needed.
     void requestReadAudioForPlaybackRegionsAsync(std::function<void(int)> completionCallback);
-    void setAsyncWorkThreadPool(juce::ThreadPool* pool) noexcept { asyncWorkPool_ = pool; }
     void setEditorViewSelectionPlaybackRegions(std::vector<juce::ARAPlaybackRegion*> playbackRegions);
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
     void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
@@ -185,9 +184,6 @@ private:
     std::shared_ptr<ContentRenderService> contentRenderService_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
     std::unique_ptr<F0ExtractionService> contentF0ExtractionService_;
-
-    // 异步工作线程池（由 Processor 在 didBindToARA 时注入）
-    juce::ThreadPool* asyncWorkPool_{nullptr};
 
     // 服务租约 token：DC 析构时置 false，后台 F0 work 持有 shared_ptr 可安全检查
     std::shared_ptr<std::atomic<bool>> asyncLeaseToken_;
