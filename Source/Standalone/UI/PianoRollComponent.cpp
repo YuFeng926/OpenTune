@@ -770,6 +770,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     processor_->getUndoManager().addAction(std::move(action));
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
+    invalidateStableScene();
     return committedSnap;
 }
 
@@ -2469,6 +2470,30 @@ void PianoRollComponent::onHeartbeatTick()
         rebuildViewportSurfaceFromReadyTiles();
         repaint();
     }
+
+    // 播放中维护有界覆盖窗口：视口+前瞻 bounded by max tiles，双端滑动
+    if (playingNow) {
+        const int w = getTimelineContentViewportWidth();
+        if (w > 0) {
+            const double p = camera_.pixelsPerSecond;
+            const double tileDur = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / p;
+            const double viewportDur = static_cast<double>(w) / p;
+            const double playhead = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
+            constexpr int kMaxAheadTiles = 16;
+            constexpr int kMaxBehindTiles = 4;
+            const double ahead = std::min(6.0 * viewportDur, kMaxAheadTiles * tileDur);
+            const double behind = kMaxBehindTiles * tileDur;
+            if (playhead + ahead > tileCoverageEndSeconds_
+                || playhead - tileCoverageStartSeconds_ > 2.0 * behind) {
+                tileCoverageStartSeconds_ = std::max(0.0,
+                    std::floor((playhead - behind) / tileDur) * tileDur);
+                const double camEnd = camera_.visibleStartSeconds + viewportDur;
+                tileCoverageEndSeconds_ = std::ceil(
+                    std::max(camEnd + ahead, playhead + ahead) / tileDur) * tileDur;
+                prepareCoverageCompositeTilesNew();
+            }
+        }
+    }
 }
 
 void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
@@ -2597,11 +2622,12 @@ void PianoRollComponent::preparePlaybackCoverage()
     const double visibleDuration = width / pps;
     const double visibleEnd = visibleStart + visibleDuration;
     const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / pps;
+    constexpr int kMaxAheadTiles = 16;
+    const double ahead = std::min(6.0 * visibleDuration, kMaxAheadTiles * tileDuration);
 
     tileCoverageStartSeconds_ = std::max(0.0,
         std::floor((visibleStart - 2.0 * tileDuration) / tileDuration) * tileDuration);
-    tileCoverageEndSeconds_ = std::ceil(
-        (visibleEnd + 2.0 * tileDuration) / tileDuration) * tileDuration;
+    tileCoverageEndSeconds_ = std::ceil((visibleEnd + ahead) / tileDuration) * tileDuration;
     prepareCoverageCompositeTilesNew();
     rebuildViewportSurfaceFromReadyTiles();
 }
@@ -2627,11 +2653,13 @@ void PianoRollComponent::rebuildTimelineCoverage()
     const double visibleEnd = visibleStart + width / pps;
 
     if (playHeadState_.isPlaying.load(std::memory_order_relaxed)) {
-        // 时间 coverage：visible + margin（不覆盖全时间线）
+        // 时间 coverage：视口 + bounded 前瞻（与 preparePlaybackCoverage 一致）
+        const double viewportDur = width / pps;
+        constexpr int kMaxAheadTiles = 16;
+        const double ahead = std::min(6.0 * viewportDur, kMaxAheadTiles * tileDuration);
         tileCoverageStartSeconds_ = std::max(0.0,
             std::floor((visibleStart - 2.0 * tileDuration) / tileDuration) * tileDuration);
-        tileCoverageEndSeconds_ = std::ceil(
-            (visibleEnd + 2.0 * tileDuration) / tileDuration) * tileDuration;
+        tileCoverageEndSeconds_ = std::ceil((visibleEnd + ahead) / tileDuration) * tileDuration;
     } else {
         tileCoverageStartSeconds_ = std::max(0.0,
             std::floor((visibleStart - tileDuration) / tileDuration) * tileDuration);
@@ -3576,7 +3604,7 @@ void PianoRollComponent::fitToScreen() {
     // Total range: maxMidi_ - minMidi_
     // Available height: getHeight()
     const auto timelineViewportBounds = getTimelineViewportBounds();
-    float range = maxMidi_ - minMidi_;
+    float range = maxMidi_ - minMidi_ + 1.0f;
     if (range > 0 && timelineViewportBounds.getHeight() > 0) {
         pixelsPerSemitone_ = static_cast<float>(timelineViewportBounds.getHeight()) / range;
         
@@ -3619,7 +3647,7 @@ void PianoRollComponent::fitToScreen() {
 }
 
 float PianoRollComponent::getTotalHeight() const {
-    return (maxMidi_ - minMidi_) * pixelsPerSemitone_;
+    return (maxMidi_ - minMidi_ + 1.0f) * pixelsPerSemitone_;
 }
 
 float PianoRollComponent::recalculatePIP(Note& note) {
@@ -4079,7 +4107,7 @@ void PianoRollComponent::prepareCoverageCompositeTilesNew()
 
     const int contentViewportHeight = getTimelineContentViewportHeight();
     const float visibleTopY = verticalScrollOffset_;
-    const float visibleBottomY = verticalScrollOffset_ + static_cast<float>(contentViewportHeight);
+    const float visibleBottomY = visibleTopY + static_cast<float>(contentViewportHeight);
     const int firstVertRow = static_cast<int>(std::floor(
         visibleTopY / static_cast<float>(TimelineCompositeCache::kWorldTileHeight)));
     const int lastVertRow = static_cast<int>(std::ceil(
