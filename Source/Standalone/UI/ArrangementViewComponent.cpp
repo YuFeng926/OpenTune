@@ -576,7 +576,7 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTil
 
     const int visibleTopY = verticalScrollOffset_;
     const int firstVertRow = visibleTopY / TimelineCompositeCache::kWorldTileHeight;
-    const int lastVertRow = (visibleTopY + sh + TimelineCompositeCache::kWorldTileHeight - 1)
+    const int lastVertRow = (visibleTopY + sh - 1)
         / TimelineCompositeCache::kWorldTileHeight;
 
     for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
@@ -625,7 +625,7 @@ void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, 
 
     const int visibleTopY = verticalScrollOffset_;
     const int firstVertRow = visibleTopY / TimelineCompositeCache::kWorldTileHeight;
-    const int lastVertRow = (visibleTopY + sh + TimelineCompositeCache::kWorldTileHeight - 1)
+    const int lastVertRow = (visibleTopY + sh - 1)
         / TimelineCompositeCache::kWorldTileHeight;
 
     juce::Graphics g(viewportSurface_);
@@ -659,14 +659,12 @@ void ArrangementViewComponent::rebuildTimelineCoverage()
     const double visibleEnd = visibleStart + contentViewportWidth / camera_.pixelsPerSecond;
 
     if (playHeadState_.isPlaying.load(std::memory_order_relaxed)) {
-        rebuildContentMetrics();
-        const double visibleDuration = contentViewportWidth / camera_.pixelsPerSecond;
-        const double timelineEnd = std::max(
-            contentMetrics_.maxEndTimeSeconds + visibleDuration,
-            visibleStart + visibleDuration);
+        const double viewportDur = contentViewportWidth / camera_.pixelsPerSecond;
+        constexpr int kMaxAheadTiles = 16;
+        const double ahead = std::min(6.0 * viewportDur, kMaxAheadTiles * tileDuration);
         tileCoverageStartSeconds_ = std::max(0.0,
-            std::floor((visibleStart - tileDuration) / tileDuration) * tileDuration);
-        tileCoverageEndSeconds_ = std::ceil(timelineEnd / tileDuration) * tileDuration;
+            std::floor((visibleStart - 2.0 * tileDuration) / tileDuration) * tileDuration);
+        tileCoverageEndSeconds_ = std::ceil((visibleEnd + ahead) / tileDuration) * tileDuration;
     } else {
         tileCoverageStartSeconds_ = std::max(0.0,
             std::floor((visibleStart - tileDuration) / tileDuration) * tileDuration);
@@ -722,22 +720,22 @@ void ArrangementViewComponent::preparePlaybackCoverage()
     if (width <= 0 || pps <= 0.0)
         return;
 
-    rebuildContentMetrics();
+    const double visibleStart = camera_.visibleStartSeconds;
     const double visibleDuration = width / pps;
-    const double timelineEnd = std::max(
-        contentMetrics_.maxEndTimeSeconds + visibleDuration,
-        camera_.visibleStartSeconds + visibleDuration);
+    const double visibleEnd = visibleStart + visibleDuration;
     const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / pps;
+    constexpr int kMaxAheadTiles = 16;
+    const double ahead = std::min(6.0 * visibleDuration, kMaxAheadTiles * tileDuration);
 
     tileCoverageStartSeconds_ = std::max(0.0,
-        std::floor((camera_.visibleStartSeconds - tileDuration) / tileDuration) * tileDuration);
-    tileCoverageEndSeconds_ = std::ceil(timelineEnd / tileDuration) * tileDuration;
+        std::floor((visibleStart - 2.0 * tileDuration) / tileDuration) * tileDuration);
+    tileCoverageEndSeconds_ = std::ceil((visibleEnd + ahead) / tileDuration) * tileDuration;
     prepareCoverageCompositeTilesNew();
     if (!viewportSurface_.isValid()) {
         const int64_t firstTimeTile = std::max<int64_t>(0,
             static_cast<int64_t>(std::floor(camera_.visibleStartSeconds / tileDuration)));
         const int64_t lastTimeTile = static_cast<int64_t>(
-            std::floor((camera_.visibleStartSeconds + width / pps) / tileDuration));
+            std::floor((camera_.visibleStartSeconds + visibleDuration) / tileDuration));
         surfaceRebuildFromReadyTiles(firstTimeTile, lastTimeTile);
     }
 }
@@ -1795,6 +1793,30 @@ void ArrangementViewComponent::onHeartbeatTick()
     if (!playingNow && waveformVisualRefreshPending_) {
         waveformVisualRefreshPending_ = false;
         invalidateStableScene();
+    }
+
+    // 播放中维护有界覆盖窗口（与PianoRoll一致）
+    if (playingNow) {
+        const int w = getVisibleViewportWidth();
+        if (w > 0) {
+            const double p = camera_.pixelsPerSecond;
+            const double tileDur = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / p;
+            const double viewportDur = static_cast<double>(w) / p;
+            const double playhead = readPlayheadSeconds();
+            constexpr int kMaxAheadTiles = 16;
+            constexpr int kMaxBehindTiles = 4;
+            const double ahead = std::min(6.0 * viewportDur, kMaxAheadTiles * tileDur);
+            const double behind = kMaxBehindTiles * tileDur;
+            if (playhead + ahead > tileCoverageEndSeconds_
+                || playhead - behind > tileCoverageStartSeconds_ + behind) {
+                tileCoverageStartSeconds_ = std::max(0.0,
+                    std::floor((playhead - behind) / tileDur) * tileDur);
+                const double camEnd = camera_.visibleStartSeconds + viewportDur;
+                tileCoverageEndSeconds_ = std::ceil(
+                    std::max(camEnd + ahead, playhead + ahead) / tileDur) * tileDur;
+                prepareCoverageCompositeTilesNew();
+            }
+        }
     }
 }
 
