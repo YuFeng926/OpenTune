@@ -490,9 +490,9 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
         if (isAurora)
         {
             const auto waveformColour = UIColors::pianoRollWaveform.brighter(0.08f);
-            g.setColour(waveformColour.withAlpha(0.24f));
+            g.setColour(waveformColour.withAlpha(0.12f));
             g.strokePath(waveformPath, juce::PathStrokeType(3.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            g.setColour(waveformColour.withAlpha(0.52f));
+            g.setColour(waveformColour.withAlpha(0.26f));
             g.strokePath(waveformPath, juce::PathStrokeType(1.25f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
         else if (isBlueBreeze || isOverdose)
