@@ -46,6 +46,7 @@ void WaveformMipmap::initializeLevels()
         levels_[i].complete = false;
         levels_[i].buildProgress = 0;
     }
+
 }
 
 bool WaveformMipmap::buildIncremental(double timeBudgetMs)
@@ -153,7 +154,7 @@ bool WaveformMipmap::buildLevelSlice(int level, double timeBudgetMs)
     
     if (lvl.buildProgress >= totalPeaks)
         lvl.complete = true;
-    
+
     return progressed;
 }
 
@@ -216,17 +217,6 @@ int WaveformMipmap::selectBestLevelIndex(double pixelsPerSecond) const
     return 0;
 }
 
-WaveformLevelSnapshot WaveformMipmap::snapshotLevel(int level) const {
-    WaveformLevelSnapshot snap;
-    if (level < 0 || level >= kNumLevels) return snap;
-    const auto& lv = levels_[level];
-    snap.samplesPerPeak = kSamplesPerPeak[level];
-    snap.buildProgress = lv.buildProgress;
-    snap.complete = lv.complete;
-    snap.peaks = lv.peaks;
-    return snap;
-}
-
 void WaveformMipmap::clear()
 {
     audioBuffer_.reset();
@@ -240,6 +230,7 @@ void WaveformMipmap::clear()
         levels_[i].complete = false;
         levels_[i].buildProgress = 0;
     }
+
 }
 
 WaveformMipmap& WaveformMipmapCache::getOrCreate(ContentKey contentKey)
@@ -249,6 +240,7 @@ WaveformMipmap& WaveformMipmapCache::getOrCreate(ContentKey contentKey)
         return *it->second;
     
     auto inserted = caches_.emplace(contentKey, std::make_unique<WaveformMipmap>());
+    allMipmapsComplete_ = false;
     return *inserted.first->second;
 }
 
@@ -273,27 +265,48 @@ void WaveformMipmapCache::prune(const std::set<ContentKey>& alive)
 void WaveformMipmapCache::clear()
 {
     caches_.clear();
+    allMipmapsComplete_ = true;
+}
+
+void WaveformMipmapCache::setAudioSource(ContentKey contentKey,
+                                         std::shared_ptr<const juce::AudioBuffer<float>> buffer)
+{
+    auto& mipmap = getOrCreate(contentKey);
+    if (!mipmap.isSourceChanged(buffer))
+        return;
+    mipmap.setAudioSource(buffer);
+    allMipmapsComplete_ = false;
 }
 
 bool WaveformMipmapCache::buildIncremental(double timeBudgetMs)
 {
     if (timeBudgetMs <= 0.0)
         return false;
+
+    if (allMipmapsComplete_)
+        return false;
     
     const double startMs = juce::Time::getMillisecondCounterHiRes();
     bool progressed = false;
+    bool allComplete = true;
     
     for (auto& kv : caches_)
     {
         const double nowMs = juce::Time::getMillisecondCounterHiRes();
         const double remain = timeBudgetMs - (nowMs - startMs);
         if (remain <= 0.0)
+        {
+            allComplete = false;
             break;
+        }
         
         if (kv.second->buildIncremental(remain))
             progressed = true;
+        if (!kv.second->isComplete())
+            allComplete = false;
     }
     
+    allMipmapsComplete_ = allComplete;
     return progressed;
 }
 

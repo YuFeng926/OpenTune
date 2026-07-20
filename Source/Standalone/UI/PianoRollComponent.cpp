@@ -289,7 +289,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             editedContentKey_, newSnap);
         if (!published) return false;
         processor_->getUndoManager().addAction(std::move(action));
-        repaint();
+        requestContentRedraw();
         return true;
     };
     toolCtx.repaintTimeGridHandles = [this]() {
@@ -514,6 +514,7 @@ bool PianoRollComponent::commitNoteDraft()
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
     clearNoteDraft();
+    requestContentRedraw();
     return true;
 }
 
@@ -630,7 +631,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     processor_->getUndoManager().addAction(std::move(action));
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
-    invalidateStableScene();
+    requestContentRedraw();
     return committedSnap;
 }
 
@@ -1437,7 +1438,6 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
             }
 
             listeners_.call([affectedRange](Listener& l) { l.pitchCurveEdited(affectedRange.startFrame, affectedRange.endFrameExclusive - 1); });
-    repaint();
     return true;
         }
     }
@@ -1485,7 +1485,7 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
 
         pendingUndoDescription_ = {};
         undoSnapshotCaptured_ = false;
-            repaint();
+            requestContentRedraw();
         return true;
     }
 
@@ -1837,8 +1837,7 @@ void PianoRollComponent::applyEditedContentAudioBuffer(std::shared_ptr<const juc
                                             : static_cast<double>(PianoRollComponent::kAudioSampleRate);
 
     if (editedContentKey_.isValid() && audioBuffer_ != nullptr && audioBuffer_->getNumSamples() > 0) {
-        auto& mipmap = waveformMipmapCache_.getOrCreate(editedContentKey_);
-        mipmap.setAudioSource(audioBuffer_);
+        waveformMipmapCache_.setAudioSource(editedContentKey_, audioBuffer_);
     } else if (editedContentKey_.isValid() && waveformMipmapCache_.get(editedContentKey_) != nullptr) {
         waveformMipmapCache_.remove(editedContentKey_);
     }
@@ -1936,8 +1935,7 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
         aliveContents.insert(placement.contentKey);
         if (const auto snapshot = readSnapshotFor(placement.contentKey);
             snapshot != nullptr && snapshot->audioBuffer != nullptr) {
-            waveformMipmapCache_.getOrCreate(placement.contentKey)
-                .setAudioSource(snapshot->audioBuffer);
+            waveformMipmapCache_.setAudioSource(placement.contentKey, snapshot->audioBuffer);
         }
     }
     waveformMipmapCache_.prune(aliveContents);
@@ -1982,14 +1980,14 @@ void PianoRollComponent::setContentProjection(const ContentTimelineProjection& p
     explicitTimelineContentPlacements_ = false;
     deriveSingleTimelineContentPlacement();
     userScrollHold_ = false;
-    invalidateStableScene();
+    requestContentRedraw();
 }
 
 void PianoRollComponent::setTimelineContentPlacements(std::vector<TimelineContentPlacement> placements)
 {
     if (applyTimelineContentPlacements(std::move(placements), true)) {
         pendingSingleContentProjection_ = activeContentProjection();
-        invalidateStableScene();
+        requestContentRedraw();
     }
 }
 
@@ -2038,7 +2036,10 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
 
     userScrollHold_ = false;
     updateScrollBars();
-    invalidateStableScene();
+    if (contentChanged || curveChanged)
+        requestContentRedraw();
+    else
+        invalidateStableScene();
 }
 
 void PianoRollComponent::requestInitialF0View(ContentKey contentKey)
@@ -2052,21 +2053,27 @@ void PianoRollComponent::requestInitialF0View(ContentKey contentKey)
 
 void PianoRollComponent::onTimeGridRevisionChanged()
 {
-    invalidateStableScene();
+    requestContentRedraw();
 }
 
 void PianoRollComponent::onNotesRevisionChanged()
 {
     refreshEditedContentNotes();
-    invalidateStableScene();
+    requestContentRedraw();
 }
 
 void PianoRollComponent::onPitchRevisionChanged()
 {
-    invalidateStableScene();
+    requestContentRedraw();
 }
 
 void PianoRollComponent::requestContentRedraw() {
+    ++contentRevision_;
+    invalidateStableScene();
+}
+
+void PianoRollComponent::requestThemeRedraw() {
+    rebuildThemeBackdrop();
     invalidateStableScene();
 }
 
@@ -2238,6 +2245,7 @@ void PianoRollComponent::onHeartbeatTick()
         std::llround(getDesktopScaleFactor() * 1000.0));
     if (currentDpiMilli != lastDpiMilli_) {
         lastDpiMilli_ = currentDpiMilli;
+        rebuildThemeBackdrop();
         invalidateStableScene();
     }
 
@@ -2502,8 +2510,6 @@ void PianoRollComponent::rebuildTimelineCoverage()
 
 void PianoRollComponent::invalidateStableScene()
 {
-    ++stableVisualSceneEpoch_;
-    rebuildThemeBackdrop();
     rebuildTimelineCoverage();
     repaint();
 }
@@ -2695,19 +2701,19 @@ void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
 void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
     if (showUnvoicedFrames_ == shouldShow) return;
     showUnvoicedFrames_ = shouldShow;
-    invalidateStableScene();
+    requestContentRedraw();
 }
 
 void PianoRollComponent::setShowOriginalF0(bool show) {
     if (showOriginalF0_ == show) return;
     showOriginalF0_ = show;
-    invalidateStableScene();
+    requestContentRedraw();
 }
 
 void PianoRollComponent::setShowCorrectedF0(bool show) {
     if (showCorrectedF0_ == show) return;
     showCorrectedF0_ = show;
-    invalidateStableScene();
+    requestContentRedraw();
 }
 
 void PianoRollComponent::setBpm(double bpm) {
@@ -3257,12 +3263,12 @@ void PianoRollComponent::drawWaveformOnSurface(juce::Graphics& g, int surfaceWid
             if (item->audioBuffer) {
                 const auto* mipmap = waveformMipmapCache_.get(placement.contentKey);
                 if (mipmap && mipmap->hasSource()) {
-                    int bestLevel = mipmap->selectBestLevelIndex(ppsCanonical);
-                    item->waveformSnapshot = mipmap->snapshotLevel(bestLevel);
+                    const int bestLevel = mipmap->selectBestLevelIndex(ppsCanonical);
+                    const auto& level = mipmap->getLevel(bestLevel);
+                    if (level.peaks.size() > 0)
+                        renderer_->drawWaveform(g, wfCtx, *item, level, bestLevel);
                 }
             }
-            if (item->waveformSnapshot.peaks.size() > 0)
-                renderer_->drawWaveform(g, wfCtx, *item);
         }
     }
 }
@@ -3800,7 +3806,7 @@ GenerationSignature PianoRollComponent::makeGenerationSignature() const
     sig.tempo = static_cast<int>(bpm_);
     sig.timeSigNumerator = timeSigNum_;
     sig.timeSigDenominator = timeSigDenom_;
-    sig.stableVisualSceneEpoch = stableVisualSceneEpoch_;
+    sig.contentRevision = contentRevision_;
 
     return sig;
 }

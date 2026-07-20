@@ -102,10 +102,6 @@ juce::String renderStatusToString(RenderStatus status)
 
 #if JUCE_DEBUG
 static bool runDebugSelfTests() {
-    if (!ArrangementViewComponent::runDebugSelfTest()) {
-        return false;
-    }
-
     {
         PitchCurve curve;
         curve.setHopSize(160);
@@ -2298,8 +2294,8 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
     arrangementView_.setPlayheadColour(UIColors::playhead);
 
     sendLookAndFeelChange();
-    pianoRoll_.requestContentRedraw();
-    arrangementView_.requestContentRedraw();
+    pianoRoll_.requestThemeRedraw();
+    arrangementView_.requestThemeRedraw();
     repaint();
 }
 

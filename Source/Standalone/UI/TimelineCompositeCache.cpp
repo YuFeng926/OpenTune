@@ -19,7 +19,7 @@ bool GenerationSignature::operator==(const GenerationSignature& o) const {
         && tempo == o.tempo
         && timeSigNumerator == o.timeSigNumerator
         && timeSigDenominator == o.timeSigDenominator
-        && stableVisualSceneEpoch == o.stableVisualSceneEpoch;
+        && contentRevision == o.contentRevision;
 }
 
 void TimelineCompositeCache::prepare(

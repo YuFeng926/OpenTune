@@ -134,6 +134,7 @@ public:
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
     void requestContentRedraw();
+    void requestThemeRedraw();
 
     // Import drop preview (transient, UI-only)
     void setImportDropPreview(const ImportDropPreview& preview);
@@ -143,10 +144,6 @@ public:
     int trackIdForViewportY(int y) const noexcept;
     double viewportXToAbsoluteTime(int x) const;
     int getRulerHeight() const noexcept { return rulerHeight_; }
-
-#if JUCE_DEBUG
-    static bool runDebugSelfTest();
-#endif
 
 private:
     enum class DragOperation { None, Move, Gain, TrimLeft, TrimRight, FadeIn, FadeOut };
@@ -274,10 +271,11 @@ private:
     };
 
     ContentMetrics contentMetrics_;
+    uint64_t waveformRevision_ = 0;
+    uint64_t lastWaveformSyncRevision_ = 0;
 
     // ---- Composite cache (new tile pipeline) ----
     mutable TimelineCompositeCache compositeCache_;
-    uint64_t stableVisualSceneEpoch_ = 0;
 
     GenerationSignature makeGenerationSignature() const;
     void buildCompositeTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,

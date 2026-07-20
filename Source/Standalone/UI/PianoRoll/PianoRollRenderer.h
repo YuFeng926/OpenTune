@@ -56,7 +56,6 @@ public:
         ContentTimelineProjection projection;
         std::shared_ptr<const TimeGridSnapshot> timeGrid;
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
-        WaveformLevelSnapshot waveformSnapshot;
         std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
         F0Timeline f0Timeline;
         std::vector<Note> displayNotes;
@@ -156,7 +155,8 @@ public:
     };
 
     void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
-    void drawWaveform(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    void drawWaveform(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item,
+                      const WaveformMipmap::Level& wfLevel, int wfLevelIndex);
 
     /// Draw published TimeGrid anchors as cache-friendly neutral lines.
     /// No hover/selected/drag affordances — those are painted by drawTimeGridHandles in overlay.

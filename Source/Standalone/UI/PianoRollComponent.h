@@ -123,7 +123,6 @@ public:
     /** Inject content commands (Phase 4: ContentEditCommands, write path with ContentKey). */
     void setContentCommands(std::shared_ptr<ContentEditCommands> commands);
 
-    void setEditedContentKey(ContentKey key) { editedContentKey_ = key; }
     ContentKey editedContentKey() const { return editedContentKey_; }
 
     /** [ARA 重构] 注入域内容所有者（替代 setContentProviders）。统一 ARA/Standalone/Capture 路径。 */
@@ -236,6 +235,7 @@ public:
 
     /** Request a semantic content redraw. */
     void requestContentRedraw();
+    void requestThemeRedraw();
 
     void scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) override;
     void updateScrollBars();
@@ -507,9 +507,9 @@ private:
 
     // 新增 composite cache (Phase 2 集成)
     mutable TimelineCompositeCache compositeCache_;
+    uint64_t contentRevision_ = 0;
     /// Cached once per-frame in paint(); reused by drawTransientOverlay and paintOverChildren.
     mutable PianoRollRenderer::RenderContext perFrameRenderContext_;
-    uint64_t stableVisualSceneEpoch_ = 0;
 
     static constexpr int pianoKeyWidth_ = 60;
     static constexpr int rulerHeight_ = 30;

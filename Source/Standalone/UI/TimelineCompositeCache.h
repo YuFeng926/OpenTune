@@ -27,7 +27,7 @@ struct GenerationSignature {
     int tempo = 120;
     int timeSigNumerator = 4;
     int timeSigDenominator = 4;
-    uint64_t stableVisualSceneEpoch = 0;
+    uint64_t contentRevision = 0;
 
     bool operator==(const GenerationSignature&) const;
 };

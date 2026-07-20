@@ -400,9 +400,11 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
 
 void PianoRollRenderer::drawWaveform(juce::Graphics& g,
                                       const RenderContext& ctx,
-                                      const ContentRenderItem& item)
+                                      const ContentRenderItem& item,
+                                      const WaveformMipmap::Level& wfLevel,
+                                      int wfLevelIndex)
 {
-    if (item.audioBuffer == nullptr || item.waveformSnapshot.peaks.empty())
+    if (item.audioBuffer == nullptr || wfLevel.peaks.empty())
         return;
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
@@ -414,21 +416,16 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     const int w = endX - startX;
     if (w <= 0) return;
 
-    const auto& level = item.waveformSnapshot;
-    
-    if (level.peaks.empty())
-        return;
-
     const double contentVisibleDuration = visibleWindow.visibleContentEndTime - visibleWindow.visibleContentStartTime;
     if (contentVisibleDuration <= 0.0) return;
 
     const float centerY = ctx.height / 2.0f;
     const float amplitudeScale = ctx.height / 2.0f;
 
-    const int samplesPerPeak = level.samplesPerPeak;
+    const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[wfLevelIndex];
     const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
-    const int64_t numPeaks = static_cast<int64_t>(level.peaks.size());
-    const int64_t builtPeaks = level.complete ? numPeaks : level.buildProgress;
+    const int64_t numPeaks = static_cast<int64_t>(wfLevel.peaks.size());
+    const int64_t builtPeaks = wfLevel.complete ? numPeaks : wfLevel.buildProgress;
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
@@ -465,7 +462,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
         for (int64_t i = idxStart; i < idxEnd && i < builtPeaks; ++i)
         {
             if (i < 0) continue;
-            const auto& peak = level.peaks[static_cast<std::size_t>(i)];
+            const auto& peak = wfLevel.peaks[static_cast<std::size_t>(i)];
             if (peak.isZero()) continue;
             if (!hasData) {
                 aggMin = peak.getMin();

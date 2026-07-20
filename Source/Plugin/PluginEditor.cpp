@@ -763,7 +763,7 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
     parameterPanel_.applyTheme();
     pianoRoll_.setPlayheadColour(UIColors::playhead);
     sendLookAndFeelChange();
-    pianoRoll_.requestContentRedraw();
+    pianoRoll_.requestThemeRedraw();
     repaint();
 }
 
