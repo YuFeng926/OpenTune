@@ -308,41 +308,36 @@ struct UIColors
         else
             shape.addRectangle(bounds);
 
-        const auto trayTop = juce::Colour { Aurora::Colors::TrayTop };
-        const auto trayMid = juce::Colour { Aurora::Colors::TrayMid };
-        const auto trayBottom = juce::Colour { Aurora::Colors::TrayBottom };
         const auto traySideGlow = juce::Colour { Aurora::Colors::TraySideGlow };
-        const auto trayHighlight = juce::Colour { Aurora::Colors::TrayTopHighlight };
 
-        juce::ColourGradient body(trayTop,
+        // 精确3色阶渐变：0%亮蓝灰 → 35%深蓝 → 100%极深黑蓝
+        juce::ColourGradient body(juce::Colour(0xFF264B6B),  // 顶部：rgba(38,75,107)
                                   bounds.getX(),
                                   bounds.getY(),
-                                  trayBottom,
+                                  juce::Colour(0xFF040F1B),  // 底部：rgba(4,15,27)
                                   bounds.getX(),
                                   bounds.getBottom(),
                                   false);
-        body.addColour(0.28, trayTop.interpolatedWith(trayMid, 0.45f));
-        body.addColour(0.48, trayMid);
-        body.addColour(0.72, trayMid.interpolatedWith(trayBottom, 0.38f));
-        body.addColour(0.84, glassSurface.interpolatedWith(trayBottom, 0.52f));
+        body.addColour(0.35, juce::Colour(0xFF17334E));       // 中段：rgba(23,51,78)
         g.setGradientFill(body);
         g.fillPath(shape);
 
         juce::Graphics::ScopedSaveState clipState(g);
         g.reduceClipRegion(shape);
 
-        const auto topBand = bounds.withHeight(bounds.getHeight() * 0.30f);
-        juce::ColourGradient topSheen(trayHighlight.withAlpha(0.26f),
-                                      topBand.getCentreX(),
-                                      topBand.getY(),
-                                      juce::Colours::transparentWhite,
-                                      topBand.getCentreX(),
-                                      topBand.getBottom(),
-                                      false);
-        g.setGradientFill(topSheen);
-        g.fillRect(topBand);
+        // 顶部玻璃洗光：覆盖0-18%H，向下淡出
+        const auto topWashBand = bounds.withHeight(bounds.getHeight() * 0.18f);
+        juce::ColourGradient topWash(juce::Colour(0xFFB4E1FF).withAlpha(0.10f),
+                                     topWashBand.getCentreX(),
+                                     topWashBand.getY(),
+                                     juce::Colours::transparentBlack,
+                                     topWashBand.getCentreX(),
+                                     topWashBand.getBottom(),
+                                     false);
+        g.setGradientFill(topWash);
+        g.fillRect(topWashBand);
 
-        juce::ColourGradient sourceLift(glassHighlight.withAlpha(0.14f),
+        juce::ColourGradient sourceLift(glassHighlight.withAlpha(0.18f),
                                         bounds.getX() + bounds.getWidth() * 0.18f,
                                         bounds.getY() + bounds.getHeight() * 0.12f,
                                         juce::Colours::transparentWhite,
@@ -362,15 +357,18 @@ struct UIColors
         g.setGradientFill(sideAura);
         g.fillRect(bounds);
 
-        juce::ColourGradient lowerSettle(juce::Colours::transparentBlack,
-                                         bounds.getCentreX(),
-                                         bounds.getY() + bounds.getHeight() * 0.28f,
-                                         juce::Colour { 0xFF02070D }.withAlpha(0.32f),
-                                         bounds.getCentreX(),
-                                         bounds.getBottom(),
-                                         false);
-        g.setGradientFill(lowerSettle);
-        g.fillRect(bounds);
+        // 底部蓝色环境光：覆盖78-100%H
+        const auto bottomGlowBand = bounds.withTrimmedTop(bounds.getHeight() * 0.78f);
+        juce::ColourGradient bottomGlow(juce::Colour(0xFF207EB8).withAlpha(0.16f),
+                                        bottomGlowBand.getCentreX(),
+                                        bottomGlowBand.getY(),
+                                        juce::Colours::transparentBlack,
+                                        bottomGlowBand.getCentreX(),
+                                        bottomGlowBand.getBottom(),
+                                        false);
+        bottomGlow.addColour(0.45, juce::Colour(0xFF207EB8).withAlpha(0.08f));
+        g.setGradientFill(bottomGlow);
+        g.fillRect(bottomGlowBand);
     }
 
     static void fillAuroraSidebarShell(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)
@@ -1041,31 +1039,44 @@ struct UIColors
                                      float radius,
                                      bool strong = false)
     {
-        const auto outerEdge = juce::Colour { Aurora::Colors::TrayOuterEdge };
-        const auto innerEdge = juce::Colour { Aurora::Colors::TrayInnerEdge };
-        const auto topHighlight = juce::Colour { Aurora::Colors::TrayTopHighlight };
-        const auto outerStroke = strong ? 1.25f : 0.95f;
-
-        g.setColour(outerEdge.withMultipliedAlpha(strong ? 0.95f : 0.78f));
+        // 外描边：1.25px rgba(67,153,215,0.55)
+        const auto outerColor = juce::Colour(0xFF4399D7).withAlpha(strong ? 0.65f : 0.55f);
+        const auto outerStroke = strong ? 1.35f : 1.25f;
+        g.setColour(outerColor);
         if (radius > 0.0f)
             g.drawRoundedRectangle(bounds.reduced(0.5f), radius, outerStroke);
         else
             g.drawRect(bounds.reduced(0.5f), outerStroke);
 
+        // 内描边：0.9px rgba(168,220,255,0.30)，内缩1.5px与外套边形成清晰双线
         if (radius > 1.5f)
         {
-            g.setColour(innerEdge.withMultipliedAlpha(strong ? 0.58f : 0.40f));
-            g.drawRoundedRectangle(bounds.reduced(1.35f), juce::jmax(0.0f, radius - 0.85f), 0.80f);
+            const auto innerColor = juce::Colour(0xFFA8DCFF).withAlpha(strong ? 0.38f : 0.30f);
+            g.setColour(innerColor);
+            g.drawRoundedRectangle(bounds.reduced(1.80f), juce::jmax(0.0f, radius - 1.30f), 0.90f);
         }
 
-        g.setColour(topHighlight.withMultipliedAlpha(strong ? 0.88f : 0.62f));
-        const auto topY = bounds.getY() + 1.0f;
+        // 顶沿高光：2px rgba(180,230,255,0.38)
+        const auto topColor = juce::Colour(0xFFB4E6FF).withAlpha(strong ? 0.48f : 0.38f);
+        g.setColour(topColor);
         const auto topInset = juce::jmin(radius, bounds.getWidth() * 0.24f);
         g.drawLine(bounds.getX() + topInset,
-                   topY,
+                   bounds.getY() + 1.0f,
                    bounds.getRight() - topInset,
-                   topY,
-                   0.95f);
+                   bounds.getY() + 1.0f,
+                   1.2f);
+
+        // 顶高光向下4px渐隐
+        juce::ColourGradient topFade(topColor.withAlpha(0.24f),
+                                     bounds.getX() + topInset,
+                                     bounds.getY() + 2.2f,
+                                     juce::Colours::transparentBlack,
+                                     bounds.getX() + topInset,
+                                     bounds.getY() + 6.5f,
+                                     false);
+        g.setGradientFill(topFade);
+        g.fillRect(bounds.getX() + topInset, bounds.getY() + 2.2f,
+                   bounds.getWidth() - topInset * 2.0f, 4.3f);
     }
 
     static void drawAuroraSidebarShellFrame(juce::Graphics& g,
@@ -1118,10 +1129,24 @@ struct UIColors
         else
             shape.addRectangle(bounds);
 
-        juce::DropShadow outerGlow(glow.withMultipliedAlpha(isActive ? 0.40f : (isHovered ? 0.24f : 0.10f)),
-                                   isActive ? 16 : (isHovered ? 11 : 10),
+        // 双层光晕：内层亮(halo core) + 外层柔(halo glow)
+        juce::DropShadow innerGlow(glow.withMultipliedAlpha(isActive ? 0.55f : (isHovered ? 0.28f : 0.08f)),
+                                   isActive ? 18 : (isHovered ? 12 : 9),
                                    {});
-        outerGlow.drawForPath(g, shape);
+        innerGlow.drawForPath(g, shape);
+
+        if (isActive || isHovered)
+        {
+            juce::Path outerHaloShape;
+            if (radius > 0.0f)
+                outerHaloShape.addRoundedRectangle(bounds.expanded(5.0f), radius + 5.0f);
+            else
+                outerHaloShape.addRectangle(bounds.expanded(5.0f));
+            juce::DropShadow outerHalo(glow.withMultipliedAlpha(isActive ? 0.22f : 0.10f),
+                                       isActive ? 32 : 22,
+                                       {});
+            outerHalo.drawForPath(g, outerHaloShape);
+        }
 
         const auto topLight = fill.brighter(isPressed ? 0.08f : 0.16f)
                                   .interpolatedWith(glassHighlight, isActive ? 0.18f : 0.14f);
@@ -1153,8 +1178,11 @@ struct UIColors
             g.setGradientFill(sourceLight);
             g.fillRect(bounds);
 
-            auto topBand = bounds.withHeight(bounds.getHeight() * 0.50f);
-            juce::ColourGradient topSheen(glassHighlight.withMultipliedAlpha(isActive ? 0.60f : 0.52f),
+            // 纯冷蓝玻璃反光：使用高饱和蓝
+            auto topBand = bounds.withHeight(bounds.getHeight() * 0.56f);
+            const auto sheenBlue = juce::Colour { Aurora::Colors::KnobGlow }; // 高饱和蓝#1688FF
+            const auto sheenColor = glassHighlight.interpolatedWith(sheenBlue, 0.55f);
+            juce::ColourGradient topSheen(sheenColor.withMultipliedAlpha(isActive ? 0.74f : 0.62f),
                                           topBand.getX(),
                                           topBand.getY(),
                                           juce::Colours::white.withAlpha(0.0f),
@@ -1164,16 +1192,18 @@ struct UIColors
             g.setGradientFill(topSheen);
             g.fillRect(topBand);
 
-            g.setColour(glassHighlight.withMultipliedAlpha(isActive ? 0.72f : 0.56f));
-            g.drawLine(bounds.getX() + radius * 0.6f, bounds.getY() + 1.5f,
-                       bounds.getRight() - radius * 0.6f, bounds.getY() + 1.5f,
-                       1.0f);
+            // 微棱高光：按钮顶部亮线，用冷白蓝色
+            const auto bevelColor = sheenBlue.interpolatedWith(juce::Colours::white, 0.30f);
+            g.setColour(bevelColor.withMultipliedAlpha(isActive ? 0.38f : 0.28f));
+            g.drawLine(bounds.getX() + radius * 0.55f, bounds.getY() + 1.5f,
+                       bounds.getRight() - radius * 0.55f, bounds.getY() + 1.5f,
+                       1.2f);
 
-            auto bottomBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.50f);
+            auto bottomBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.52f);
             juce::ColourGradient bottomShade(juce::Colours::transparentBlack,
                                              bottomBand.getX(),
                                              bottomBand.getY(),
-                                             juce::Colours::black.withAlpha(isPressed ? 0.42f : 0.32f),
+                                             juce::Colours::black.withAlpha(isPressed ? 0.56f : 0.44f),
                                              bottomBand.getX(),
                                              bottomBand.getBottom(),
                                              false);
@@ -1185,8 +1215,19 @@ struct UIColors
         }
 
         const auto stroke = isActive ? 1.45f : (isHovered ? 1.15f : 1.0f);
-        g.setColour(edge.withMultipliedAlpha(isActive ? 0.94f : (isHovered ? 0.80f : 0.64f)));
+        g.setColour(edge.withMultipliedAlpha(isActive ? 0.94f : (isHovered ? 0.82f : 0.70f)));
         g.strokePath(shape, juce::PathStrokeType(stroke));
+
+        // 边缘光扩散 - 所有状态可见
+        g.setColour(glow.withMultipliedAlpha(isActive ? 0.16f : (isHovered ? 0.10f : 0.06f)));
+        g.strokePath(shape, juce::PathStrokeType(isActive ? 4.0f : (isHovered ? 3.0f : 2.0f)));
+
+        // active/hover额外加强扩散
+        if (isActive || isHovered)
+        {
+            g.setColour(glow.withMultipliedAlpha(isActive ? 0.10f : 0.05f));
+            g.strokePath(shape, juce::PathStrokeType(isActive ? 7.0f : 4.5f));
+        }
 
         {
             juce::Graphics::ScopedSaveState clipState(g);
