@@ -538,7 +538,19 @@ void ArrangementViewComponent::activateTimelineCamera(TimelineViewportCamera cam
     transitionActive_ = false;
     requestTransition_ = false;
     camera_ = camera;
-    rebuildTimelineCoverage();
+
+    // During wheel zoom, defer tile rebuild. Camera updates immediately;
+    // surface is scaled in paint() as fast preview.
+    if (zoomDeferredRebuild_)
+    {
+        zoomDeferredRebuild_ = true;
+        lastZoomEventTimeMs_ = static_cast<int64_t>(juce::Time::getMillisecondCounterHiRes());
+    }
+    else
+    {
+        rebuildTimelineCoverage();
+    }
+
     updateScrollBars();
     repaint();
 }
@@ -558,6 +570,8 @@ void ArrangementViewComponent::surfaceInvalidate()
 
 void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTile, int64_t lastTimeTile)
 {
+    if (zoomDeferredRebuild_)
+        return;
     const auto rect = getContentViewportBounds();
     const int sw = rect.getWidth();
     const int sh = rect.getHeight();
@@ -569,6 +583,9 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTil
     viewportSurface_ = juce::Image(juce::Image::ARGB, sw, sh, true);
     surfaceOriginPx_ = static_cast<int64_t>(std::llround(camera_.visibleStartSeconds * pps));
     surfacePps_ = pps;
+    surfaceStartSeconds_ = camera_.visibleStartSeconds;
+    surfaceTrackHeight_ = processor_.getTrackHeight();
+    surfaceVertScrollOffset_ = verticalScrollOffset_;
 
     juce::Graphics g(viewportSurface_);
     if (themeBackdrop_.isValid())
@@ -594,6 +611,8 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTil
 
 void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, int64_t firstTimeTile, int64_t lastTimeTile)
 {
+    if (zoomDeferredRebuild_)
+        return;
     const auto rect = getContentViewportBounds();
     const int sw = rect.getWidth();
     const int sh = rect.getHeight();
@@ -647,10 +666,16 @@ void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, 
     }
 
     surfaceOriginPx_ = newOriginPx;
+    surfaceStartSeconds_ = camera_.visibleStartSeconds;
+    surfaceTrackHeight_ = processor_.getTrackHeight();
+    surfaceVertScrollOffset_ = verticalScrollOffset_;
 }
 
 void ArrangementViewComponent::rebuildTimelineCoverage()
 {
+    if (zoomDeferredRebuild_)
+        return;
+
     const int contentViewportWidth = getVisibleViewportWidth();
     const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / camera_.pixelsPerSecond;
     const double visibleStart = camera_.visibleStartSeconds;
@@ -1076,6 +1101,9 @@ void ArrangementViewComponent::buildCompositeTile(
 
 void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
 {
+    if (zoomDeferredRebuild_)
+        return;
+
     const auto sig = makeGenerationSignature();
     const double ppsCanonical = sig.ppsMilli / 1000.0;
     const double tileDuration = TimelineCompositeCache::kTileWidthPx / ppsCanonical;
@@ -1641,8 +1669,34 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         juce::Graphics::ScopedSaveState contentSave(g);
         const auto axis = getContentViewportBounds();
         g.reduceClipRegion(axis);
-        if (viewportSurface_.isValid())
-            g.drawImageAt(viewportSurface_, axis.getX(), axis.getY(), false);
+        if (viewportSurface_.isValid() && surfacePps_ > 0.0)
+        {
+            const double scaleX = camera_.pixelsPerSecond / surfacePps_;
+            const double scaleY = (surfaceTrackHeight_ > 0)
+                ? static_cast<double>(processor_.getTrackHeight()) / static_cast<double>(surfaceTrackHeight_)
+                : 1.0;
+            if (!zoomDeferredRebuild_)
+            {
+                g.drawImageAt(viewportSurface_, axis.getX(), axis.getY(), false);
+            }
+            else
+            {
+                // Zoom in progress: scale old surface as fast 2D preview.
+                const double offsetPx = (surfaceStartSeconds_ - camera_.visibleStartSeconds)
+                    * camera_.pixelsPerSecond;
+                const double offsetPy = static_cast<double>(surfaceVertScrollOffset_) * scaleY - static_cast<double>(verticalScrollOffset_);
+                const int dstW = juce::roundToInt(viewportSurface_.getWidth() * scaleX);
+                const int dstH = juce::roundToInt(viewportSurface_.getHeight() * scaleY);
+                g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
+                g.drawImage(viewportSurface_,
+                    axis.getX() + juce::roundToInt(offsetPx),
+                    axis.getY() + juce::roundToInt(offsetPy),
+                    dstW, dstH,
+                    0, 0,
+                    viewportSurface_.getWidth(), viewportSurface_.getHeight(),
+                    false);
+            }
+        }
 
         // Selection overlay
         {
@@ -1776,12 +1830,39 @@ void ArrangementViewComponent::onHeartbeatTick()
             }
         }
     }
+
+    // Deferred zoom rebuild: when zoom gesture has been idle for cooldown,
+    // do a single full rebuild at the final camera/geometry state.
+    if (zoomDeferredRebuild_) {
+        const double elapsed = juce::Time::getMillisecondCounterHiRes()
+            - static_cast<double>(lastZoomEventTimeMs_);
+        if (elapsed >= kZoomCooldownMs) {
+            zoomDeferredRebuild_ = false;
+            rebuildTimelineCoverage();
+            repaint();
+        }
+    }
 }
 
 void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
 {
     if (!isShowing() || !playHeadState_.isPlaying.load(std::memory_order_relaxed))
         return;
+
+    // During zoom deferral: keep camera/playhead running, but skip
+    // surface scrolling and tile coverage expansion. Paint() handles
+    // the scaled preview.
+    if (zoomDeferredRebuild_) {
+        camera_ = TimelineViewportPolicy::resolve(
+            makeViewportRequest(
+                (scrollMode_ == ScrollMode::Continuous) ? TimelineViewportRequest::Kind::Cont
+                                                        : TimelineViewportRequest::Kind::Page,
+                readPlayheadSeconds(), 0.0, camera_.pixelsPerSecond));
+        playheadTimeForPaint_ = readPlayheadSeconds();
+        lastPlayheadRect_ = playheadDirtyRect();
+        repaint(timeAxisRect());
+        return;
+    }
 
     const double playheadTime = readPlayheadSeconds();
     const auto oldPlayheadRect = lastPlayheadRect_;
@@ -2367,8 +2448,15 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
             {
                 processor_.setTrackHeight(newHeight);
                 listeners_.call([newHeight](Listener& l) { l.trackHeightChanged(newHeight); });
-                invalidateStableScene();
-                }
+                // Defer tile rebuild during vertical zoom: geometry change triggers
+                // tiles_.clear() which is expensive per-wheel-event. Surface is
+                // scaled in paint() as fast preview; full rebuild fires after cooldown.
+                zoomDeferredRebuild_ = true;
+                lastZoomEventTimeMs_ = static_cast<int64_t>(juce::Time::getMillisecondCounterHiRes());
+                rebuildContentMetrics();
+                updateScrollBars();
+                repaint();
+            }
         }
         return;
     }
@@ -2386,6 +2474,8 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
             if (std::abs(newPps - oldPps) > 0.001)
             {
                 const double mouseTime = viewportXToAbsoluteTime(e.x);
+                zoomDeferredRebuild_ = true;
+                lastZoomEventTimeMs_ = static_cast<int64_t>(juce::Time::getMillisecondCounterHiRes());
                 userHasManuallyZoomed_ = true;
                 const auto req = makeViewportRequest(
                     TimelineViewportRequest::Kind::Zoom,
