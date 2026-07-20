@@ -1093,7 +1093,8 @@ void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
     const int lastVertRow = static_cast<int>(std::ceil(
         visibleBottomY / static_cast<float>(TimelineCompositeCache::kWorldTileHeight))) - 1;
     const int totalTrackHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
-    const int totalRows = (totalTrackHeight + TimelineCompositeCache::kWorldTileHeight - 1)
+    const int requiredHeight = std::max(totalTrackHeight, static_cast<int>(visibleBottomY));
+    const int totalRows = (requiredHeight + TimelineCompositeCache::kWorldTileHeight - 1)
         / TimelineCompositeCache::kWorldTileHeight;
     const int effFirst = std::max(0, firstVertRow - 1);
     const int effLast = std::min(totalRows - 1, lastVertRow + 1);
