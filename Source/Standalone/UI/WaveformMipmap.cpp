@@ -12,9 +12,6 @@ void WaveformMipmap::setAudioSource(std::shared_ptr<const juce::AudioBuffer<floa
         return;
     }
     
-    if (!isSourceChanged(buffer))
-        return;
-    
     audioBuffer_ = buffer;
     numSamples_ = buffer->getNumSamples();
     numChannels_ = buffer->getNumChannels();
