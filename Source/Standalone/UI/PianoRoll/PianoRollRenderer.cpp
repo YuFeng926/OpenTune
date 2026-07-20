@@ -101,19 +101,10 @@ static float clampF0VisualAlpha(float alpha) noexcept
     return juce::jlimit(0.0f, 1.0f, alpha);
 }
 
-static float calculateF0VisualEnergyAlpha(float energy,
-                                          float minEnergy,
-                                          float maxEnergy) noexcept
+static float smootherStep(float value) noexcept
 {
-    static constexpr float kMinEnergyAlpha = 0.70f;
-    static constexpr float kMaxEnergyAlpha = 1.00f;
-
-    if (!std::isfinite(energy) || maxEnergy <= minEnergy + std::numeric_limits<float>::epsilon()) {
-        return kMaxEnergyAlpha;
-    }
-
-    const float normalized = juce::jlimit(0.0f, 1.0f, (energy - minEnergy) / (maxEnergy - minEnergy));
-    return kMinEnergyAlpha + (kMaxEnergyAlpha - kMinEnergyAlpha) * normalized;
+    const float t = juce::jlimit(0.0f, 1.0f, value);
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 }
 
 static float f0VisualTargetPointSpacing(double framePixelSpacing) noexcept
@@ -220,6 +211,7 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
         float xSum = 0.0f;
         float ySum = 0.0f;
         float alphaSum = 0.0f;
+        float hotMixSum = 0.0f;
         float weightSum = 0.0f;
 
         void clear() noexcept
@@ -229,6 +221,7 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
             xSum = 0.0f;
             ySum = 0.0f;
             alphaSum = 0.0f;
+            hotMixSum = 0.0f;
             weightSum = 0.0f;
         }
     };
@@ -247,7 +240,8 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
             bucket.frame,
             bucket.xSum / bucket.weightSum,
             bucket.ySum / bucket.weightSum,
-            clampF0VisualAlpha(bucket.alphaSum / bucket.weightSum)
+            clampF0VisualAlpha(bucket.alphaSum / bucket.weightSum),
+            bucket.hotMixSum / bucket.weightSum
         });
         bucket.clear();
     };
@@ -274,14 +268,21 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
         }
 
         const float y = frameToY(frame, frequency);
+        const float normalizedEnergy = hasEnergy
+            ? juce::jlimit(0.0f, 1.0f, ((*originalEnergy)[static_cast<std::size_t>(frame)] - minEnergy) / juce::jmax(1e-6f, maxEnergy - minEnergy))
+            : 0.0f;
         const float energyAlpha = hasEnergy
-            ? calculateF0VisualEnergyAlpha((*originalEnergy)[static_cast<std::size_t>(frame)], minEnergy, maxEnergy)
+            ? 0.70f + 0.30f * normalizedEnergy
             : 1.0f;
+        static constexpr float kMaxHotMix = 0.34f;
+        const float levelHotMix = hasEnergy
+            ? kMaxHotMix * smootherStep(normalizedEnergy)
+            : 0.0f;
         const float weight = juce::jmax(0.001f, energyAlpha);
 
         if (targetPointSpacing <= 0.0f) {
             flushBucket();
-            currentSegment.points.push_back({ frame, x, y, energyAlpha });
+            currentSegment.points.push_back({ frame, x, y, energyAlpha, levelHotMix });
             continue;
         }
 
@@ -293,6 +294,7 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
             bucket.xSum = x * weight;
             bucket.ySum = y * weight;
             bucket.alphaSum = energyAlpha * weight;
+            bucket.hotMixSum = levelHotMix * weight;
             continue;
         }
 
@@ -302,6 +304,7 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
             bucket.xSum += x * weight;
             bucket.ySum += y * weight;
             bucket.alphaSum += energyAlpha * weight;
+            bucket.hotMixSum += levelHotMix * weight;
             continue;
         }
 
@@ -314,6 +317,7 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
         bucket.xSum = x * weight;
         bucket.ySum = y * weight;
         bucket.alphaSum = energyAlpha * weight;
+        bucket.hotMixSum = levelHotMix * weight;
     }
 
     flushSegment();
@@ -1339,6 +1343,10 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             visualOptions, makeFrameToX, makeFrameToY);
 
         const juce::Colour colour = UIColors::correctedF0;
+        static const juce::Colour kLevelHotGold { 0xFFFFC24A };
+        const auto blendLevelHotColour = [&](juce::Colour base, float hm) {
+            return base.interpolatedWith(kLevelHotGold, juce::jlimit(0.0f, 0.42f, hm));
+        };
         const float alpha = 0.85f;
 
         const float lineWidth = isAurora ? 2.25f : ((isBlueBreeze || isOverdose) ? 1.85f : 2.05f);
@@ -1357,21 +1365,21 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 ptPath.startNewSubPath(p.x - 0.01f, p.y);
                 ptPath.lineTo(p.x + 0.01f, p.y);
                 if (isAurora) {
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.095f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.095f));
                     g.strokePath(ptPath, glowStrokeType);
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.20f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.20f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.98f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.98f));
                     g.strokePath(ptPath, strokeType);
                 } else if (isBlueBreeze || isOverdose) {
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.070f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.070f));
                     g.strokePath(ptPath, glowStrokeType);
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.15f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.15f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.92f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.92f));
                     g.strokePath(ptPath, strokeType);
                 } else {
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha));
                     g.strokePath(ptPath, strokeType);
                 }
                 continue;
@@ -1381,25 +1389,79 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
 
             if (isAurora) {
-                g.setColour(colour.withAlpha(alpha * 0.095f));
+                const auto& pts = segment.points;
+                const float leftX = pts.front().x;
+                const float rightX = pts.back().x;
+                const float xRange = juce::jmax(1.0f, rightX - leftX);
+
+                auto buildGradient = [&](float alphaScale, bool brighter = false) {
+                    juce::ColourGradient grad;
+                    grad.isRadial = false;
+                    grad.point1 = { leftX, 0.0f };
+                    grad.point2 = { rightX, 0.0f };
+                    for (const auto& pt : pts) {
+                        const juce::Colour c = brighter
+                            ? blendLevelHotColour(colour, pt.levelHotMix).brighter(0.20f)
+                            : blendLevelHotColour(colour, pt.levelHotMix);
+                        const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
+                        grad.addColour(pos, c.withAlpha(alpha * pt.energyAlpha * alphaScale));
+                    }
+                    return grad;
+                };
+
+                g.setGradientFill(buildGradient(0.095f));
                 g.strokePath(runPath, glowStrokeType);
-                g.setColour(colour.withAlpha(alpha * 0.20f));
+                g.setGradientFill(buildGradient(0.20f));
                 g.strokePath(runPath, innerGlowStrokeType);
-                g.setColour(colour.withAlpha(alpha * 0.98f));
+                g.setGradientFill(buildGradient(0.98f));
                 g.strokePath(runPath, strokeType);
-                g.setColour(colour.brighter(0.20f).withAlpha(alpha * 0.15f));
+                g.setGradientFill(buildGradient(0.15f, true));
                 g.strokePath(runPath, highlightStrokeType);
             } else if (isBlueBreeze || isOverdose) {
-                g.setColour(colour.withAlpha(alpha * 0.070f));
+                const auto& pts = segment.points;
+                const float leftX = pts.front().x;
+                const float rightX = pts.back().x;
+                const float xRange = juce::jmax(1.0f, rightX - leftX);
+
+                auto buildGradient = [&](float alphaScale, bool brighter = false) {
+                    juce::ColourGradient grad;
+                    grad.isRadial = false;
+                    grad.point1 = { leftX, 0.0f };
+                    grad.point2 = { rightX, 0.0f };
+                    for (const auto& pt : pts) {
+                        const juce::Colour c = brighter
+                            ? blendLevelHotColour(colour, pt.levelHotMix).brighter(0.16f)
+                            : blendLevelHotColour(colour, pt.levelHotMix);
+                        const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
+                        grad.addColour(pos, c.withAlpha(alpha * pt.energyAlpha * alphaScale));
+                    }
+                    return grad;
+                };
+
+                g.setGradientFill(buildGradient(0.070f));
                 g.strokePath(runPath, glowStrokeType);
-                g.setColour(colour.withAlpha(alpha * 0.15f));
+                g.setGradientFill(buildGradient(0.15f));
                 g.strokePath(runPath, innerGlowStrokeType);
-                g.setColour(colour.withAlpha(alpha * 0.92f));
+                g.setGradientFill(buildGradient(0.92f));
                 g.strokePath(runPath, strokeType);
-                g.setColour(colour.brighter(0.16f).withAlpha(alpha * 0.12f));
+                g.setGradientFill(buildGradient(0.12f, true));
                 g.strokePath(runPath, highlightStrokeType);
             } else {
-                g.setColour(colour.withAlpha(alpha));
+                const auto& pts = segment.points;
+                const float leftX = pts.front().x;
+                const float rightX = pts.back().x;
+                const float xRange = juce::jmax(1.0f, rightX - leftX);
+
+                juce::ColourGradient grad;
+                grad.isRadial = false;
+                grad.point1 = { leftX, 0.0f };
+                grad.point2 = { rightX, 0.0f };
+                for (const auto& pt : pts) {
+                    const juce::Colour c = blendLevelHotColour(colour, pt.levelHotMix);
+                    const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
+                    grad.addColour(pos, c.withAlpha(alpha * pt.energyAlpha));
+                }
+                g.setGradientFill(grad);
                 g.strokePath(runPath, strokeType);
             }
         }
