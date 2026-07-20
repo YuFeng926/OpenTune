@@ -28,6 +28,9 @@ struct GenerationSignature {
     int timeSigNumerator = 4;
     int timeSigDenominator = 4;
     uint64_t contentRevision = 0;
+    bool showOriginalF0 = true;
+    bool showCorrectedF0 = true;
+    bool showUnvoicedFrames = false;
 
     bool operator==(const GenerationSignature&) const;
 };
@@ -64,6 +67,9 @@ public:
         TileBuilder backgroundBuilder,
         TileBuilder foregroundBuilder,
         bool allocateForeground = true);
+
+    void removeTilesInTimeRange(int64_t firstTimeTile, int64_t lastTimeTile,
+                                 int firstVertRow, int lastVertRow);
 
     const TileEntry* findTile(TileKey key) const noexcept;
 
