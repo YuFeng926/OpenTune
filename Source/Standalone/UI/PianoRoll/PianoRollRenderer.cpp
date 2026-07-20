@@ -900,7 +900,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
         if (isAurora)
         {
-            g.setColour(noteColor.withAlpha(0.90f));
+            g.setColour(noteColor.withAlpha(0.50f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 7.0f));
@@ -926,7 +926,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(noteColor.withAlpha(0.90f));
+            g.setColour(noteColor.withAlpha(0.50f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 6.0f));
@@ -948,7 +948,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else
         {
-            g.setColour(noteColor.withAlpha(0.90f));
+            g.setColour(noteColor.withAlpha(0.50f));
             g.fillRect(noteBounds);
 
             g.setColour(UIColors::noteBlockBorder.withAlpha(0.50f));
@@ -1254,7 +1254,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             visualOptions, makeFrameToX, makeFrameToY);
 
         const juce::Colour colour = UIColors::originalF0;
-        const float alpha = 0.90f;
+        const float alpha = 1.0f;
 
         const float lineWidth = isAurora ? 1.35f : ((isBlueBreeze || isOverdose) ? 1.15f : 1.25f);
         const juce::PathStrokeType strokeType(lineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);

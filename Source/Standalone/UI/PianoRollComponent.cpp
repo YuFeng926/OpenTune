@@ -559,6 +559,7 @@ bool PianoRollComponent::commitNoteDraft()
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
     clearNoteDraft();
+    ++contentRevision_;
     lastKnownNotesRevision_ = committedSnap->notesRevision;
     requestContentRedraw(dirtyStartTime, dirtyEndTime);
     return true;
@@ -677,6 +678,7 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     processor_->getUndoManager().addAction(std::move(action));
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
+    ++contentRevision_;
     lastKnownNotesRevision_ = committedSnap->notesRevision;
     lastKnownPitchRevision_ = committedSnap->pitchRevision;
     {
