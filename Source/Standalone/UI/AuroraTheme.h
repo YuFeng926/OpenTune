@@ -14,22 +14,22 @@ namespace Aurora {
         static const juce::uint32 BgOverlay     = 0x1FFFFFFF; // Light Overlay
 
         // Aurora Glass v3 semantic surfaces
-        static const juce::uint32 GlassSurface   = 0xE10B1827; // Deeper neutral glass body
-        static const juce::uint32 GlassHighlight = 0x1A7CC5F4; // Restrained upper sheen
-        static const juce::uint32 GlassEdge      = 0x666DA8D8; // Cooler, thinner default edge
-        static const juce::uint32 PanelGlow      = 0x2A133964; // Subtle ambient cyan-blue aura
-        static const juce::uint32 ButtonNormal   = 0xC00B1728; // Resting dark glass button
-        static const juce::uint32 ButtonHover    = 0xD1112A44; // Hover glass button
-        static const juce::uint32 ButtonActive   = 0xE51B5F9E; // Pressed/active glass button
+        static const juce::uint32 GlassSurface   = 0xE80E2033; // Deeper neutral glass body
+        static const juce::uint32 GlassHighlight = 0x30A8E0FF; // Restrained upper sheen
+        static const juce::uint32 GlassEdge      = 0x8088BCE8; // Cooler, thinner default edge
+        static const juce::uint32 PanelGlow      = 0x3E1D4D7E; // Subtle ambient cyan-blue aura
+        static const juce::uint32 ButtonNormal   = 0xD0122B42; // Resting dark glass button
+        static const juce::uint32 ButtonHover    = 0xE4163252; // Hover glass button
+        static const juce::uint32 ButtonActive   = 0xF02870B8; // Pressed/active glass button
 
         // Top tray semantics
-        static const juce::uint32 TrayTop         = 0xFF14263A; // Subtle upper lift
-        static const juce::uint32 TrayMid         = 0xFF0D1A29; // Stable core tone
-        static const juce::uint32 TrayBottom      = 0xFF08121D; // Deep lower settle
-        static const juce::uint32 TraySideGlow    = 0x18367AC4; // Localized cool air, not full wash
-        static const juce::uint32 TrayTopHighlight = 0x3E9FD6FF; // Thin cold top edge
-        static const juce::uint32 TrayInnerEdge   = 0x2299CFFF; // Inner glass lip
-        static const juce::uint32 TrayOuterEdge   = 0x4F4F83B2; // Outer structural frame
+        static const juce::uint32 TrayTop         = 0xFF1B3350; // Subtle upper lift
+        static const juce::uint32 TrayMid         = 0xFF122840; // Stable core tone
+        static const juce::uint32 TrayBottom      = 0xFF0A1828; // Deep lower settle
+        static const juce::uint32 TraySideGlow    = 0x2860B0E8; // Localized cool air, not full wash
+        static const juce::uint32 TrayTopHighlight = 0x60BEE8FF; // Thin cold top edge
+        static const juce::uint32 TrayInnerEdge   = 0x3AB0DCFF; // Inner glass lip
+        static const juce::uint32 TrayOuterEdge   = 0x6A6098CC; // Outer structural frame
 
         // Right sidebar shell semantics
         static const juce::uint32 SidebarShellTop      = 0xFF18314C; // Slight upper lift for tall shell
