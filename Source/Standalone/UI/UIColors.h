@@ -321,16 +321,18 @@ struct UIColors
                                   bounds.getX(),
                                   bounds.getBottom(),
                                   false);
-        body.addColour(0.42, trayMid);
-        body.addColour(0.76, glassSurface.interpolatedWith(trayBottom, 0.52f));
+        body.addColour(0.28, trayTop.interpolatedWith(trayMid, 0.45f));
+        body.addColour(0.48, trayMid);
+        body.addColour(0.72, trayMid.interpolatedWith(trayBottom, 0.38f));
+        body.addColour(0.84, glassSurface.interpolatedWith(trayBottom, 0.52f));
         g.setGradientFill(body);
         g.fillPath(shape);
 
         juce::Graphics::ScopedSaveState clipState(g);
         g.reduceClipRegion(shape);
 
-        const auto topBand = bounds.withHeight(bounds.getHeight() * 0.22f);
-        juce::ColourGradient topSheen(trayHighlight.withAlpha(0.16f),
+        const auto topBand = bounds.withHeight(bounds.getHeight() * 0.30f);
+        juce::ColourGradient topSheen(trayHighlight.withAlpha(0.26f),
                                       topBand.getCentreX(),
                                       topBand.getY(),
                                       juce::Colours::transparentWhite,
@@ -340,7 +342,7 @@ struct UIColors
         g.setGradientFill(topSheen);
         g.fillRect(topBand);
 
-        juce::ColourGradient sourceLift(glassHighlight.withAlpha(0.08f),
+        juce::ColourGradient sourceLift(glassHighlight.withAlpha(0.14f),
                                         bounds.getX() + bounds.getWidth() * 0.18f,
                                         bounds.getY() + bounds.getHeight() * 0.12f,
                                         juce::Colours::transparentWhite,
@@ -350,7 +352,7 @@ struct UIColors
         g.setGradientFill(sourceLift);
         g.fillRect(bounds);
 
-        juce::ColourGradient sideAura(traySideGlow.withAlpha(0.12f),
+        juce::ColourGradient sideAura(traySideGlow.withAlpha(0.20f),
                                       bounds.getX() + bounds.getWidth() * 0.10f,
                                       bounds.getY() + bounds.getHeight() * 0.18f,
                                       juce::Colours::transparentBlack,
@@ -362,8 +364,8 @@ struct UIColors
 
         juce::ColourGradient lowerSettle(juce::Colours::transparentBlack,
                                          bounds.getCentreX(),
-                                         bounds.getY() + bounds.getHeight() * 0.34f,
-                                         juce::Colour { 0xFF02070D }.withAlpha(0.24f),
+                                         bounds.getY() + bounds.getHeight() * 0.28f,
+                                         juce::Colour { 0xFF02070D }.withAlpha(0.32f),
                                          bounds.getCentreX(),
                                          bounds.getBottom(),
                                          false);
@@ -1044,7 +1046,7 @@ struct UIColors
         const auto topHighlight = juce::Colour { Aurora::Colors::TrayTopHighlight };
         const auto outerStroke = strong ? 1.25f : 0.95f;
 
-        g.setColour(outerEdge.withMultipliedAlpha(strong ? 0.92f : 0.64f));
+        g.setColour(outerEdge.withMultipliedAlpha(strong ? 0.95f : 0.78f));
         if (radius > 0.0f)
             g.drawRoundedRectangle(bounds.reduced(0.5f), radius, outerStroke);
         else
@@ -1052,11 +1054,11 @@ struct UIColors
 
         if (radius > 1.5f)
         {
-            g.setColour(innerEdge.withMultipliedAlpha(strong ? 0.48f : 0.28f));
+            g.setColour(innerEdge.withMultipliedAlpha(strong ? 0.58f : 0.40f));
             g.drawRoundedRectangle(bounds.reduced(1.35f), juce::jmax(0.0f, radius - 0.85f), 0.80f);
         }
 
-        g.setColour(topHighlight.withMultipliedAlpha(strong ? 0.78f : 0.46f));
+        g.setColour(topHighlight.withMultipliedAlpha(strong ? 0.88f : 0.62f));
         const auto topY = bounds.getY() + 1.0f;
         const auto topInset = juce::jmin(radius, bounds.getWidth() * 0.24f);
         g.drawLine(bounds.getX() + topInset,
@@ -1116,8 +1118,8 @@ struct UIColors
         else
             shape.addRectangle(bounds);
 
-        juce::DropShadow outerGlow(glow.withMultipliedAlpha(isActive ? 0.20f : (isHovered ? 0.12f : 0.055f)),
-                                   isActive ? 13 : 9,
+        juce::DropShadow outerGlow(glow.withMultipliedAlpha(isActive ? 0.40f : (isHovered ? 0.24f : 0.10f)),
+                                   isActive ? 16 : (isHovered ? 11 : 10),
                                    {});
         outerGlow.drawForPath(g, shape);
 
@@ -1141,7 +1143,7 @@ struct UIColors
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(shape);
 
-            juce::ColourGradient sourceLight(textPrimary.withAlpha(isActive ? 0.15f : 0.105f),
+            juce::ColourGradient sourceLight(textPrimary.withAlpha(isActive ? 0.22f : 0.16f),
                                              bounds.getX() + bounds.getWidth() * 0.12f,
                                              bounds.getY() + bounds.getHeight() * 0.08f,
                                              juce::Colours::white.withAlpha(0.0f),
@@ -1151,8 +1153,8 @@ struct UIColors
             g.setGradientFill(sourceLight);
             g.fillRect(bounds);
 
-            auto topBand = bounds.withHeight(bounds.getHeight() * 0.44f);
-            juce::ColourGradient topSheen(glassHighlight.withMultipliedAlpha(isActive ? 0.44f : 0.36f),
+            auto topBand = bounds.withHeight(bounds.getHeight() * 0.50f);
+            juce::ColourGradient topSheen(glassHighlight.withMultipliedAlpha(isActive ? 0.60f : 0.52f),
                                           topBand.getX(),
                                           topBand.getY(),
                                           juce::Colours::white.withAlpha(0.0f),
@@ -1162,29 +1164,34 @@ struct UIColors
             g.setGradientFill(topSheen);
             g.fillRect(topBand);
 
-            auto bottomBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.56f);
+            g.setColour(glassHighlight.withMultipliedAlpha(isActive ? 0.72f : 0.56f));
+            g.drawLine(bounds.getX() + radius * 0.6f, bounds.getY() + 1.5f,
+                       bounds.getRight() - radius * 0.6f, bounds.getY() + 1.5f,
+                       1.0f);
+
+            auto bottomBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.50f);
             juce::ColourGradient bottomShade(juce::Colours::transparentBlack,
                                              bottomBand.getX(),
                                              bottomBand.getY(),
-                                             juce::Colours::black.withAlpha(isPressed ? 0.34f : 0.24f),
+                                             juce::Colours::black.withAlpha(isPressed ? 0.42f : 0.32f),
                                              bottomBand.getX(),
                                              bottomBand.getBottom(),
                                              false);
             g.setGradientFill(bottomShade);
             g.fillRect(bottomBand);
 
-            g.setColour(edge.withMultipliedAlpha(isActive ? 0.42f : (isHovered ? 0.30f : 0.20f)));
+            g.setColour(edge.withMultipliedAlpha(isActive ? 0.56f : (isHovered ? 0.42f : 0.30f)));
             g.strokePath(shape, juce::PathStrokeType(1.0f));
         }
 
         const auto stroke = isActive ? 1.45f : (isHovered ? 1.15f : 1.0f);
-        g.setColour(edge.withMultipliedAlpha(isActive ? 0.94f : (isHovered ? 0.70f : 0.52f)));
+        g.setColour(edge.withMultipliedAlpha(isActive ? 0.94f : (isHovered ? 0.80f : 0.64f)));
         g.strokePath(shape, juce::PathStrokeType(stroke));
 
         {
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(shape);
-            g.setColour(glassHighlight.withMultipliedAlpha(isActive ? 0.78f : 0.48f));
+            g.setColour(glassHighlight.withMultipliedAlpha(isActive ? 0.88f : 0.60f));
             const auto topInset = juce::jmin(radius, bounds.getWidth() * 0.25f);
             g.drawLine(bounds.getX() + topInset, bounds.getY() + 1.0f,
                        bounds.getRight() - topInset, bounds.getY() + 1.0f,
