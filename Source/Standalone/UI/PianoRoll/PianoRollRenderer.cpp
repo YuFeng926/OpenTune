@@ -1325,7 +1325,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
         std::vector<float> correctedF0(originalF0.size(), 0.0f);
         item.pitchSnapshot->renderCorrectionLayerF0Range(
-            0, static_cast<int>(originalF0.size()),
+            visualOptions.startFrame, visualOptions.endFrameExclusive,
             [&](int frame, const float* data, int length) {
                 for (int i = 0; i < length; ++i) {
                     const int f = frame + i;

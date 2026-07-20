@@ -235,6 +235,7 @@ public:
 
     /** Request a semantic content redraw. */
     void requestContentRedraw();
+    void requestContentRedraw(double dirtySourceStartSec, double dirtySourceEndSec);
     void requestThemeRedraw();
 
     void scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) override;
@@ -508,6 +509,11 @@ private:
     // 新增 composite cache (Phase 2 集成)
     mutable TimelineCompositeCache compositeCache_;
     uint64_t contentRevision_ = 0;
+    double pendingDirtySourceStartSec_ = 1e30;
+    double pendingDirtySourceEndSec_ = -1e30;
+    uint64_t lastKnownNotesRevision_ = 0;
+    uint64_t lastKnownPitchRevision_ = 0;
+    uint64_t lastKnownTimeGridRevision_ = 0;
     /// Cached once per-frame in paint(); reused by drawTransientOverlay and paintOverChildren.
     mutable PianoRollRenderer::RenderContext perFrameRenderContext_;
 

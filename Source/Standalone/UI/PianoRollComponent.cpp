@@ -274,22 +274,67 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         return snap ? snap->timeGrid : nullptr;
     };
     toolCtx.commitTimeGrid = [this](std::shared_ptr<const TimeGridSnapshot> newSnap,
-                                    std::shared_ptr<const TimeGridSnapshot> oldSnap,
-                                    juce::String description) -> bool {
+                                     std::shared_ptr<const TimeGridSnapshot> oldSnap,
+                                     juce::String description) -> bool {
         if (processor_ == nullptr || !editedContentKey_.isValid()) return false;
         if (newSnap == nullptr || oldSnap == nullptr) return false;
+
+        const auto& oldHandles = oldSnap->handles();
+        const auto& newHandles = newSnap->handles();
+
+        double dirtyMinSrc = 1e30, dirtyMaxSrc = -1e30;
+        bool anyChanged = false;
+        for (const auto& h : newHandles) {
+            auto it = std::find_if(oldHandles.begin(), oldHandles.end(),
+                [&](const TimeHandle& oh) { return oh.id == h.id; });
+            if (it == oldHandles.end() || std::abs(it->output_seconds - h.output_seconds) > 1e-9) {
+                dirtyMinSrc = std::min(dirtyMinSrc, h.source_seconds);
+                dirtyMaxSrc = std::max(dirtyMaxSrc, h.source_seconds);
+                anyChanged = true;
+            }
+        }
+        for (const auto& h : oldHandles) {
+            auto it = std::find_if(newHandles.begin(), newHandles.end(),
+                [&](const TimeHandle& nh) { return nh.id == h.id; });
+            if (it == newHandles.end()) {
+                dirtyMinSrc = std::min(dirtyMinSrc, h.source_seconds);
+                dirtyMaxSrc = std::max(dirtyMaxSrc, h.source_seconds);
+                anyChanged = true;
+            }
+        }
+
+        double dirtySrcStart = 0.0, dirtySrcEnd = 0.0;
+        bool isScoped = false;
+        if (anyChanged && dirtyMinSrc <= dirtyMaxSrc) {
+            // Expand to between adjacent anchor source positions
+            double expandMin = 0.0, expandMax = dirtyMaxSrc;
+            for (const auto& h : newHandles) {
+                if (h.source_seconds > dirtyMaxSrc) { expandMax = h.source_seconds; break; }
+            }
+            for (auto it = newHandles.rbegin(); it != newHandles.rend(); ++it) {
+                if (it->source_seconds < dirtyMinSrc) { expandMin = it->source_seconds; break; }
+            }
+            dirtySrcStart = expandMin;
+            dirtySrcEnd   = std::max(expandMax, dirtyMaxSrc);
+            isScoped = (dirtySrcStart < dirtySrcEnd);
+        }
 
         auto action = std::make_unique<TimeGridEditAction>(
             contentCommands_,
             editedContentKey_,
-            description.isNotEmpty() ? description : juce::String("缂栬緫鏃堕棿缃戞牸"),
+            description.isNotEmpty() ? description : juce::String("编辑时间网格"),
             std::move(oldSnap),
             newSnap);
-        const bool published = contentCommands_->setTimeGrid(
-            editedContentKey_, newSnap);
+        const bool published = contentCommands_->setTimeGrid(editedContentKey_, newSnap);
         if (!published) return false;
         processor_->getUndoManager().addAction(std::move(action));
-        requestContentRedraw();
+
+        {
+            auto snap = readEditedSnapshot();
+            if (snap) lastKnownTimeGridRevision_ = snap->timeGridRevision;
+        }
+        if (isScoped)
+            requestContentRedraw(dirtySrcStart, dirtySrcEnd);
         return true;
     };
     toolCtx.repaintTimeGridHandles = [this]() {
@@ -450,7 +495,7 @@ bool PianoRollComponent::commitNoteDraft()
             // Same position 锟?compare content for modification
             if (!notesContentEqual(baseline[i], working[j])) {
                 dirtyStartTime = std::min(dirtyStartTime, baseline[i].startTime);
-                dirtyEndTime = std::max(dirtyEndTime, baseline[i].endTime);
+                dirtyEndTime = std::max({dirtyEndTime, baseline[i].endTime, working[j].endTime});
             }
             i++; j++;
         } else if (!wHas || (bHas && baseline[i].startTime < working[j].startTime)) {
@@ -514,7 +559,8 @@ bool PianoRollComponent::commitNoteDraft()
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
     clearNoteDraft();
-    requestContentRedraw();
+    lastKnownNotesRevision_ = committedSnap->notesRevision;
+    requestContentRedraw(dirtyStartTime, dirtyEndTime);
     return true;
 }
 
@@ -631,7 +677,14 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
     processor_->getUndoManager().addAction(std::move(action));
     pendingUndoDescription_ = {};
     undoSnapshotCaptured_ = false;
-    requestContentRedraw();
+    lastKnownNotesRevision_ = committedSnap->notesRevision;
+    lastKnownPitchRevision_ = committedSnap->pitchRevision;
+    {
+        const auto f0tlC = currentF0Timeline();
+        const double srcStart = f0tlC.isEmpty() ? 0.0 : f0tlC.timeAtFrame(affectedRange.startFrame);
+        const double srcEnd = f0tlC.isEmpty() ? 0.0 : f0tlC.timeAtFrame(affectedRange.endFrameExclusive);
+        requestContentRedraw(srcStart, srcEnd);
+    }
     return committedSnap;
 }
 
@@ -987,7 +1040,6 @@ bool PianoRollComponent::applyManualCorrectionPatch(const std::vector<PianoRollT
         });
     }
 
-    repaint();
     return true;
 }
 
@@ -1485,7 +1537,8 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
 
         pendingUndoDescription_ = {};
         undoSnapshotCaptured_ = false;
-            requestContentRedraw();
+        lastKnownNotesRevision_ = committedSnap->notesRevision;
+        requestContentRedraw(dirtyStartTime, dirtyEndTime);
         return true;
     }
 
@@ -2013,6 +2066,9 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
         beforeUndoNotes_.clear();
         beforeUndoSegments_.clear();
         undoSnapshotCaptured_ = false;
+        lastKnownNotesRevision_ = 0;
+        lastKnownPitchRevision_ = 0;
+        lastKnownTimeGridRevision_ = 0;
     }
 
     // notes 锟?pitchCurve 闁俺锟?commitNotesAndPitchCurve 閸氬苯鍟撻崚?store锟?
@@ -2053,22 +2109,40 @@ void PianoRollComponent::requestInitialF0View(ContentKey contentKey)
 
 void PianoRollComponent::onTimeGridRevisionChanged()
 {
+    auto snap = readEditedSnapshot();
+    uint64_t rev = snap ? snap->timeGridRevision : 0;
+    if (rev == lastKnownTimeGridRevision_) return;
+    lastKnownTimeGridRevision_ = rev;
     requestContentRedraw();
 }
 
 void PianoRollComponent::onNotesRevisionChanged()
 {
+    auto snap = readEditedSnapshot();
+    uint64_t rev = snap ? snap->notesRevision : 0;
+    if (rev == lastKnownNotesRevision_) return;
+    lastKnownNotesRevision_ = rev;
     refreshEditedContentNotes();
     requestContentRedraw();
 }
 
 void PianoRollComponent::onPitchRevisionChanged()
 {
+    auto snap = readEditedSnapshot();
+    uint64_t rev = snap ? snap->pitchRevision : 0;
+    if (rev == lastKnownPitchRevision_) return;
+    lastKnownPitchRevision_ = rev;
     requestContentRedraw();
 }
 
 void PianoRollComponent::requestContentRedraw() {
     ++contentRevision_;
+    invalidateStableScene();
+}
+
+void PianoRollComponent::requestContentRedraw(double dirtySourceStartSec, double dirtySourceEndSec) {
+    pendingDirtySourceStartSec_ = dirtySourceStartSec;
+    pendingDirtySourceEndSec_ = dirtySourceEndSec;
     invalidateStableScene();
 }
 
@@ -2701,19 +2775,19 @@ void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
 void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
     if (showUnvoicedFrames_ == shouldShow) return;
     showUnvoicedFrames_ = shouldShow;
-    requestContentRedraw();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::setShowOriginalF0(bool show) {
     if (showOriginalF0_ == show) return;
     showOriginalF0_ = show;
-    requestContentRedraw();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::setShowCorrectedF0(bool show) {
     if (showCorrectedF0_ == show) return;
     showCorrectedF0_ = show;
-    requestContentRedraw();
+    invalidateStableScene();
 }
 
 void PianoRollComponent::setBpm(double bpm) {
@@ -3670,6 +3744,14 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
         return { AutoTuneApplyStatus::NoContent };
     }
 
+    {
+        auto autoSnap = readEditedSnapshot();
+        if (autoSnap) {
+            lastKnownNotesRevision_ = autoSnap->notesRevision;
+            lastKnownPitchRevision_ = autoSnap->pitchRevision;
+        }
+    }
+
     refreshEditedContentNotes();
 
     auto committedCurve = readEditedSnapshot();
@@ -3806,6 +3888,9 @@ GenerationSignature PianoRollComponent::makeGenerationSignature() const
     sig.tempo = static_cast<int>(bpm_);
     sig.timeSigNumerator = timeSigNum_;
     sig.timeSigDenominator = timeSigDenom_;
+    sig.showOriginalF0 = showOriginalF0_;
+    sig.showCorrectedF0 = showCorrectedF0_;
+    sig.showUnvoicedFrames = showUnvoicedFrames_;
     sig.contentRevision = contentRevision_;
 
     return sig;
@@ -3915,6 +4000,29 @@ void PianoRollComponent::prepareCoverageCompositeTilesNew()
         / static_cast<float>(TimelineCompositeCache::kWorldTileHeight)));
     const int effFirst = std::max(0, firstVertRow - 1);
     const int effLast = std::min(totalRows - 1, lastVertRow + 1);
+
+    if (pendingDirtySourceStartSec_ < pendingDirtySourceEndSec_) {
+        const auto snap = readEditedSnapshot();
+        for (const auto& placement : timelineContentPlacements_) {
+            if (!placement.isValid() || placement.contentKey != editedContentKey_)
+                continue;
+            const auto& proj = placement.projection;
+            if (!proj.isValid()) continue;
+            if (!snap || !snap->timeGrid) continue;
+            const double outputStart = snap->timeGrid->tauForward(pendingDirtySourceStartSec_);
+            const double outputEnd   = snap->timeGrid->tauForward(pendingDirtySourceEndSec_);
+            const double dirtyLineStart = proj.projectContentTimeToTimeline(outputStart);
+            const double dirtyLineEnd   = proj.projectContentTimeToTimeline(outputEnd);
+            if (!(dirtyLineStart < dirtyLineEnd)) continue;
+            const int64_t dirtyFirstTile = std::max(0LL,
+                static_cast<int64_t>(std::floor(dirtyLineStart / tileDuration)));
+            const int64_t dirtyLastTile = static_cast<int64_t>(
+                std::floor((dirtyLineEnd - 1e-9) / tileDuration));
+            compositeCache_.removeTilesInTimeRange(dirtyFirstTile, dirtyLastTile, effFirst, effLast);
+        }
+        pendingDirtySourceStartSec_ = 1e30;
+        pendingDirtySourceEndSec_ = -1e30;
+    }
 
     compositeCache_.prepare(sig, firstTimeTile, lastTimeTile, effFirst, effLast,
         [this](juce::Graphics& g, juce::Rectangle<int> b, TimelineCompositeCache::TileKey k) {

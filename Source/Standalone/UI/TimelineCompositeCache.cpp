@@ -19,6 +19,9 @@ bool GenerationSignature::operator==(const GenerationSignature& o) const {
         && tempo == o.tempo
         && timeSigNumerator == o.timeSigNumerator
         && timeSigDenominator == o.timeSigDenominator
+        && showOriginalF0 == o.showOriginalF0
+        && showCorrectedF0 == o.showCorrectedF0
+        && showUnvoicedFrames == o.showUnvoicedFrames
         && contentRevision == o.contentRevision;
 }
 
@@ -76,6 +79,20 @@ void TimelineCompositeCache::prepare(
 
             tiles_[key] = std::move(entry);
         }
+    }
+}
+
+void TimelineCompositeCache::removeTilesInTimeRange(
+    int64_t firstTimeTile, int64_t lastTimeTile,
+    int firstVertRow, int lastVertRow)
+{
+    for (auto it = tiles_.begin(); it != tiles_.end(); ) {
+        const auto& key = it->first;
+        if (key.timeTile >= firstTimeTile && key.timeTile <= lastTimeTile
+            && key.vertRow >= firstVertRow && key.vertRow <= lastVertRow)
+            it = tiles_.erase(it);
+        else
+            ++it;
     }
 }
 
