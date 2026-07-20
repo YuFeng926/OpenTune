@@ -1670,6 +1670,7 @@ void OpenTuneAudioProcessorEditor::startPendingImport(PendingImport pendingImpor
                     safeThis->isImportInProgress_ = false;
                     safeThis->releaseImportBatchSlot(pendingImport.batchId);
 
+                    safeThis->arrangementView_.requestContentRedraw();
                     safeThis->arrangementView_.grabKeyboardFocus();
                     safeThis->applyPlacementSelectionContext(placement.trackId, committedPlacement.placementId);
                     auto importSnap = safeThis->processorRef_.getContentSnapshot(committedPlacement.contentKey);
