@@ -651,8 +651,6 @@ void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, 
 
 void ArrangementViewComponent::rebuildTimelineCoverage()
 {
-    surfaceInvalidate();
-
     const int contentViewportWidth = getVisibleViewportWidth();
     const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / camera_.pixelsPerSecond;
     const double visibleStart = camera_.visibleStartSeconds;
@@ -683,8 +681,8 @@ void ArrangementViewComponent::rebuildTimelineCoverage()
 
 void ArrangementViewComponent::invalidateStableScene()
 {
-    ++stableVisualSceneEpoch_;
-    rebuildThemeBackdrop();
+    rebuildContentMetrics();
+    updateScrollBars();
     rebuildTimelineCoverage();
     repaint();
 }
@@ -742,6 +740,12 @@ void ArrangementViewComponent::preparePlaybackCoverage()
 
 void ArrangementViewComponent::requestContentRedraw()
 {
+    invalidateStableScene();
+}
+
+void ArrangementViewComponent::requestThemeRedraw()
+{
+    rebuildThemeBackdrop();
     invalidateStableScene();
 }
 
@@ -971,6 +975,10 @@ void ArrangementViewComponent::rebuildContentMetrics()
     }
 
     // P1-5: Include clipInSeconds in revision (waveform visual updates go through pending mechanism)
+    // Include waveform build state (tiles embed waveform pixels)
+    revision = hashCombine(revision, waveformRevision_);
+    // Include visible track count (tile builder depends on it for lane rendering)
+    revision = hashCombine(revision, static_cast<uint64_t>(visibleTrackCount_));
 
     contentMetrics_.revision = revision;
     contentMetrics_.maxEndTimeSeconds = maxEndTime;
@@ -998,7 +1006,7 @@ GenerationSignature ArrangementViewComponent::makeGenerationSignature() const
     sig.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
     sig.timeSigNumerator = lastContextTimeSigNum_ > 0 ? lastContextTimeSigNum_ : 4;
     sig.timeSigDenominator = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
-    sig.stableVisualSceneEpoch = stableVisualSceneEpoch_;
+    sig.contentRevision = contentMetrics_.revision;
 
     return sig;
 }
@@ -1195,6 +1203,10 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
     if (timeBudgetMs <= 0.0)
         return false;
 
+    if (contentMetrics_.revision == lastWaveformSyncRevision_
+        && waveformMipmapCache_.isComplete())
+        return false;
+
     std::set<ContentKey> alive;
     
     for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
@@ -1213,16 +1225,18 @@ bool ArrangementViewComponent::buildWaveformCaches(double timeBudgetMs)
             auto snap = processor_.getContentSnapshot(placement.contentKey);
             auto audioBuffer = snap ? snap->audioBuffer : nullptr;
             if (audioBuffer)
-            {
-                auto& mipmap = waveformMipmapCache_.getOrCreate(key);
-                mipmap.setAudioSource(audioBuffer);
-            }
+                waveformMipmapCache_.setAudioSource(key, audioBuffer);
         }
     }
 
     waveformMipmapCache_.prune(alive);
 
-    return waveformMipmapCache_.buildIncremental(timeBudgetMs);
+    const bool progressed = waveformMipmapCache_.buildIncremental(timeBudgetMs);
+
+    if (!progressed && waveformMipmapCache_.isComplete())
+        lastWaveformSyncRevision_ = contentMetrics_.revision;
+
+    return progressed;
 }
 
 int ArrangementViewComponent::trackIdForViewportY(int y) const noexcept
@@ -1648,65 +1662,6 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
     drawPlayhead(g);
 }
 
-#if JUCE_DEBUG
-bool ArrangementViewComponent::runDebugSelfTest()
-{
-    juce::AudioBuffer<float> audio(2, 4096);
-    for (int ch = 0; ch < audio.getNumChannels(); ++ch)
-    {
-        float* w = audio.getWritePointer(ch);
-        const float v = (ch == 0) ? 0.5f : -0.25f;
-        for (int i = 0; i < audio.getNumSamples(); ++i)
-            w[i] = v;
-    }
-
-    WaveformMipmap mipmap;
-    auto sharedAudio = std::make_shared<const juce::AudioBuffer<float>>(audio);
-    mipmap.setAudioSource(sharedAudio);
-    
-    if (!mipmap.hasSource())
-        return false;
-    if (mipmap.getNumSamples() != 4096)
-        return false;
-
-    int guard = 0;
-    while (!mipmap.isComplete() && guard < 10000)
-    {
-        if (!mipmap.buildIncremental(0.25))
-            break;
-        ++guard;
-    }
-
-    if (!mipmap.isComplete())
-        return false;
-    
-    // 娴嬭瘯灞傜骇閫夋嫨
-    const auto& level = mipmap.selectBestLevel(100.0);
-    if (level.peaks.empty())
-        return false;
-
-    // 娴嬭瘯WaveformMipmapCache
-    WaveformMipmapCache cache;
-    const ContentKey key1{DomainKind::StandaloneClip, 1, 0};
-    const ContentKey key2{DomainKind::StandaloneClip, 2, 0};
-    auto& m1 = cache.getOrCreate(key1);
-    auto& m2 = cache.getOrCreate(key2);
-    m1.setAudioSource(sharedAudio);
-    m2.setAudioSource(sharedAudio);
-    
-    std::set<ContentKey> alive;
-    alive.insert(key2);
-    cache.prune(alive);
-    
-    if (cache.get(key1) != nullptr)
-        return false;
-    if (cache.get(key2) == nullptr)
-        return false;
-
-    return true;
-}
-#endif
-
 void ArrangementViewComponent::onHeartbeatTick()
 {
     if (!isShowing())
@@ -1733,6 +1688,7 @@ void ArrangementViewComponent::onHeartbeatTick()
         std::llround(getDesktopScaleFactor() * 1000.0));
     if (currentDpiMilli != lastDpiMilli_) {
         lastDpiMilli_ = currentDpiMilli;
+        rebuildThemeBackdrop();
         invalidateStableScene();
     }
 
@@ -1782,6 +1738,7 @@ void ArrangementViewComponent::onHeartbeatTick()
     }
 
     if (progressed) {
+        ++waveformRevision_;
         if (playingNow) {
             waveformVisualRefreshPending_ = true;
         } else {

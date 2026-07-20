@@ -29,13 +29,6 @@ struct PeakSample
     bool isZero() const noexcept { return min == 0 && max == 0; }
 };
 
-struct WaveformLevelSnapshot {
-    int samplesPerPeak = 0;
-    int64_t buildProgress = 0;
-    bool complete = false;
-    std::vector<PeakSample> peaks;
-};
-
 class WaveformMipmap
 {
 public:
@@ -78,8 +71,6 @@ public:
     const Level& selectBestLevel(double pixelsPerSecond) const;
     int selectBestLevelIndex(double pixelsPerSecond) const;
     
-    WaveformLevelSnapshot snapshotLevel(int level) const;
-    
     void clear();
     
 private:
@@ -95,21 +86,24 @@ private:
 class WaveformMipmapCache
 {
 public:
-    WaveformMipmap& getOrCreate(ContentKey contentKey);
+    void setAudioSource(ContentKey contentKey, std::shared_ptr<const juce::AudioBuffer<float>> buffer);
     void remove(ContentKey contentKey);
     void prune(const std::set<ContentKey>& alive);
     void clear();
     
     bool buildIncremental(double timeBudgetMs);
+    bool isComplete() const noexcept { return allMipmapsComplete_; }
     
     const WaveformMipmap* get(ContentKey contentKey) const
     {
         auto it = caches_.find(contentKey);
         return it != caches_.end() ? it->second.get() : nullptr;
     }
-    
+
 private:
+    WaveformMipmap& getOrCreate(ContentKey contentKey);
     std::map<ContentKey, std::unique_ptr<WaveformMipmap>> caches_;
+    bool allMipmapsComplete_ = true;
 };
 
 } // namespace OpenTune
