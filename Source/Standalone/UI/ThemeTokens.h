@@ -108,7 +108,6 @@ struct ThemeTokens
     juce::Colour auroraSidebarInnerRim;
     juce::Colour auroraSidebarEdgeAura;
     juce::Colour auroraSidebarCornerBloom;
-    juce::Colour auroraSidebarLowerSettle;
     juce::Colour knobRim;
     juce::Colour knobGlow;
 
@@ -359,7 +358,6 @@ private:
             juce::Colour { BlueBreeze::Colors::AccentBlue }.withAlpha(0.10f),
             juce::Colour { BlueBreeze::Colors::AccentBlue }.withAlpha(0.08f),
             juce::Colour { BlueBreeze::Colors::GraphBgDeep },
-            juce::Colour { BlueBreeze::Colors::GraphBgDeep },
             juce::Colour { BlueBreeze::Colors::KnobEdge },
             juce::Colour { BlueBreeze::Colors::KnobGlow },
 
@@ -462,7 +460,6 @@ private:
             juce::Colour { DarkBlueGrey::Colors::GlowColor }.withAlpha(0.16f),
             juce::Colour { DarkBlueGrey::Colors::GlowColor }.withAlpha(0.08f),
             juce::Colour { DarkBlueGrey::Colors::GlowColor }.withAlpha(0.06f),
-            juce::Colour { DarkBlueGrey::Colors::BackgroundDark }.darker(0.30f),
             juce::Colour { DarkBlueGrey::Colors::KnobIndicator },
             juce::Colour { DarkBlueGrey::Colors::GlowColor }.withAlpha(0.25f),
 
@@ -619,7 +616,6 @@ private:
             juce::Colour { Aurora::Colors::SidebarInnerRim },
             juce::Colour { Aurora::Colors::SidebarEdgeAura },
             juce::Colour { Aurora::Colors::SidebarCornerBloom },
-            juce::Colour { Aurora::Colors::SidebarLowerSettle },
             juce::Colour { Aurora::Colors::KnobRim },
             juce::Colour { Aurora::Colors::KnobGlow },
 
@@ -655,7 +651,7 @@ private:
             juce::Colour(0xFFF4F0F6), juce::Colour(0xFFE8E8F0), juce::Colour(0xFFDADDE6),
             juce::Colour(0x30FFFFFF), juce::Colour(0x70AEB3C0), juce::Colour(0x24FFD4E8),
             juce::Colour(0x18FFD4E8), juce::Colour(0x14FFD4E8), juce::Colour(0xFFCCD0D8),
-            juce::Colour(0x24FFD4E8), juce::Colour(0xFFA8B0C0), juce::Colour(0x52FF80B8),
+            juce::Colour(0xFFA8B0C0), juce::Colour(0x52FF80B8),
             22.0f
         };
         return tokens;

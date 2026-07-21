@@ -112,7 +112,7 @@ struct UIColors
     static inline juce::Colour pianoRollGrid { 0xFF9BD5FF };
     static inline juce::Colour pianoRollWaveform { 0xFF0C3C4A };
     static inline juce::Colour sidebarTrackFade { 0x7A1F7BFF };
-    static inline juce::Colour auroraSidebarShellTop { 0xFF18314C };
+    static inline juce::Colour auroraSidebarShellTop { 0xFF142C45 };
     static inline juce::Colour auroraSidebarShellMid { 0xFF0E2238 };
     static inline juce::Colour auroraSidebarShellBottom { 0xFF081523 };
     static inline juce::Colour auroraSidebarTopLip { 0x4CA9D8FF };
@@ -120,7 +120,6 @@ struct UIColors
     static inline juce::Colour auroraSidebarInnerRim { 0x2193CCFF };
     static inline juce::Colour auroraSidebarEdgeAura { 0x1A2D7FD0 };
     static inline juce::Colour auroraSidebarCornerBloom { 0x142E8BE4 };
-    static inline juce::Colour auroraSidebarLowerSettle { 0xFF030A12 };
     static inline juce::Colour knobRim { 0x9A4FC3FF };
     static inline juce::Colour knobGlow { 0x821688FF };
     static inline const juce::Identifier auroraChromeIntensityProperty { "auroraChromeIntensity" };
@@ -232,7 +231,6 @@ struct UIColors
         auroraSidebarInnerRim = tokens.auroraSidebarInnerRim;
         auroraSidebarEdgeAura = tokens.auroraSidebarEdgeAura;
         auroraSidebarCornerBloom = tokens.auroraSidebarCornerBloom;
-        auroraSidebarLowerSettle = tokens.auroraSidebarLowerSettle;
         knobRim = tokens.knobRim;
         knobGlow = tokens.knobGlow;
 
@@ -491,20 +489,6 @@ struct UIColors
                                                topRightCornerBloomBounds.getBottom(),
                                                true));
         g.fillEllipse(topRightCornerBloomBounds);
-
-        const auto bottomSettleBounds = bounds.withTrimmedTop(bounds.getHeight() * 0.58f);
-        juce::ColourGradient lowerSettle(juce::Colours::transparentBlack,
-                                         bottomSettleBounds.getCentreX(),
-                                         bottomSettleBounds.getY(),
-                                         auroraSidebarLowerSettle.withAlpha(0.32f),
-                                         bottomSettleBounds.getCentreX(),
-                                         bottomSettleBounds.getBottom(),
-                                         false);
-        lowerSettle.addColour(0.22, auroraSidebarLowerSettle.withAlpha(0.05f));
-        lowerSettle.addColour(0.52, auroraSidebarLowerSettle.withAlpha(0.13f));
-        lowerSettle.addColour(0.80, auroraSidebarLowerSettle.withAlpha(0.24f));
-        g.setGradientFill(lowerSettle);
-        g.fillRect(bottomSettleBounds);
 
     }
 

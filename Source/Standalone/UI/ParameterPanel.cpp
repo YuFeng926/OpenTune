@@ -4,6 +4,7 @@
 #include "../../Utils/PitchControlConfig.h"
 #include "../../Utils/LocalizationManager.h"
 #include "../../Utils/AppLogger.h"
+#include <cmath>
 #include <vector>
 
 namespace OpenTune {
@@ -11,6 +12,70 @@ namespace OpenTune {
 namespace {
 
 constexpr float kAuroraSidebarChromeIntensity = 0.42f;
+constexpr float kAuroraSidebarCurveBlendStart = 0.26f;
+constexpr float kAuroraSidebarCurveBlendEnd = 0.44f;
+constexpr float kAuroraSidebarCoreStart = 0.42f;
+constexpr float kAuroraSidebarCoreEnd = 0.86f;
+constexpr float kAuroraSidebarBottomLiftEnd = 1.0f;
+constexpr float kAuroraSidebarCurveOpacity = 0.70f;
+
+float smoothStep(float start, float end, float position)
+{
+    const auto t = juce::jlimit(0.0f, 1.0f, (position - start) / (end - start));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+float fixedDitherNoise(int x, int y)
+{
+    auto phase = 0.06711056f * static_cast<float>(x) + 0.00583715f * static_cast<float>(y);
+    phase -= std::floor(phase);
+    phase *= 52.9829189f;
+    return phase - std::floor(phase) - 0.5f;
+}
+
+juce::Image makeAuroraSidebarSurfaceCurve(int width, int height)
+{
+    const auto curveTop = juce::Colour(0xFF1B2B3D);
+    const auto curveBottom = juce::Colour(0xFF122132);
+    const auto bottomLift = juce::Colour(0xFF132A41);
+    juce::Image surface(juce::Image::ARGB, width, height, true);
+
+    {
+        juce::Image::BitmapData pixels(surface, juce::Image::BitmapData::writeOnly);
+
+        for (int y = 0; y < height; ++y)
+        {
+            const auto position = (static_cast<float>(y) + 0.5f) / static_cast<float>(height);
+            const auto curveBlend = smoothStep(kAuroraSidebarCurveBlendStart, kAuroraSidebarCurveBlendEnd, position);
+            const auto coreBlend = smoothStep(kAuroraSidebarCoreStart, kAuroraSidebarCoreEnd, position);
+            const auto bottomBlend = smoothStep(kAuroraSidebarCoreEnd, kAuroraSidebarBottomLiftEnd, position);
+            const auto curveChannel = [coreBlend, bottomBlend](juce::uint8 top,
+                                                                juce::uint8 bottom,
+                                                                juce::uint8 lift)
+            {
+                const auto core = static_cast<float>(top) + (static_cast<float>(bottom) - top) * coreBlend;
+                return core + (static_cast<float>(lift) - core) * bottomBlend;
+            };
+            const auto red = curveChannel(curveTop.getRed(), curveBottom.getRed(), bottomLift.getRed());
+            const auto green = curveChannel(curveTop.getGreen(), curveBottom.getGreen(), bottomLift.getGreen());
+            const auto blue = curveChannel(curveTop.getBlue(), curveBottom.getBlue(), bottomLift.getBlue());
+            const auto alpha = static_cast<juce::uint8>(juce::roundToInt(255.0f * kAuroraSidebarCurveOpacity * curveBlend));
+
+            for (int x = 0; x < width; ++x)
+            {
+                const auto dither = fixedDitherNoise(x, y);
+                pixels.setPixelColour(x,
+                                      y,
+                                      juce::Colour(static_cast<juce::uint8>(juce::jlimit(0, 255, juce::roundToInt(red + dither))),
+                                                   static_cast<juce::uint8>(juce::jlimit(0, 255, juce::roundToInt(green + dither))),
+                                                   static_cast<juce::uint8>(juce::jlimit(0, 255, juce::roundToInt(blue + dither))),
+                                                   alpha));
+            }
+        }
+    }
+
+    return surface;
+}
 
 juce::String buildAutoButtonTooltip(const ParameterPanel::AutoButtonPresentation& presentation)
 {
@@ -431,6 +496,21 @@ ParameterPanel::~ParameterPanel()
     f0MaxSlider_.setLookAndFeel(nullptr);
 }
 
+void ParameterPanel::rebuildAuroraSidebarSurface(juce::Rectangle<float> bounds)
+{
+    const auto scale = getDesktopScaleFactor();
+    const auto width = juce::roundToInt(bounds.getWidth() * scale);
+    const auto height = juce::roundToInt(bounds.getHeight() * scale);
+
+    if (auroraSidebarSurface_.getWidth() == width
+        && auroraSidebarSurface_.getHeight() == height
+        && auroraSidebarSurfaceScale_ == scale)
+        return;
+
+    auroraSidebarSurface_ = makeAuroraSidebarSurfaceCurve(width, height);
+    auroraSidebarSurfaceScale_ = scale;
+}
+
 void ParameterPanel::paint(juce::Graphics& g)
 {
     const auto& style = UIColors::currentThemeStyle();
@@ -475,6 +555,15 @@ void ParameterPanel::paint(juce::Graphics& g)
     if (themeId == ThemeId::Aurora)
     {
         UIColors::fillAuroraSidebarShell(g, bounds, style.panelRadius);
+        rebuildAuroraSidebarSurface(bounds);
+        {
+            juce::Graphics::ScopedSaveState clipState(g);
+            juce::Path panelShape;
+            panelShape.addRoundedRectangle(bounds, style.panelRadius);
+            g.reduceClipRegion(panelShape);
+            g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+            g.drawImage(auroraSidebarSurface_, bounds, juce::RectanglePlacement::stretchToFit, false);
+        }
         UIColors::drawAuroraSidebarShellFrame(g, bounds, style.panelRadius);
         return;
     }
@@ -493,6 +582,7 @@ void ParameterPanel::paint(juce::Graphics& g)
 
 void ParameterPanel::resized()
 {
+    auroraSidebarSurface_ = juce::Image();
     const auto themeId = UIColors::currentThemeId();
     const bool isBlueBreeze = (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose);
 
@@ -596,6 +686,7 @@ void ParameterPanel::resized()
 
 void ParameterPanel::applyTheme()
 {
+    auroraSidebarSurface_ = juce::Image();
     pitchCorrectionHeader_.setColour(juce::Label::textColourId, UIColors::textPrimary);
     toolsHeader_.setColour(juce::Label::textColourId, UIColors::textPrimary);
 

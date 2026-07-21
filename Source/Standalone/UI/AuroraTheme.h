@@ -32,7 +32,7 @@ namespace Aurora {
         static const juce::uint32 TrayOuterEdge   = 0x6A6098CC; // Outer structural frame
 
         // Right sidebar shell semantics
-        static const juce::uint32 SidebarShellTop      = 0xFF18314C; // Slight upper lift for tall shell
+        static const juce::uint32 SidebarShellTop      = 0xFF142C45; // Restrained upper lift for tall shell
         static const juce::uint32 SidebarShellMid      = 0xFF0E2238; // Stable deep center mass
         static const juce::uint32 SidebarShellBottom   = 0xFF081523; // Lower settle into dark base
         static const juce::uint32 SidebarTopLip        = 0x4CA9D8FF; // Thin upper lip highlight
@@ -40,7 +40,6 @@ namespace Aurora {
         static const juce::uint32 SidebarInnerRim      = 0x2193CCFF; // Inner glass seam
         static const juce::uint32 SidebarEdgeAura      = 0x1A2D7FD0; // Faint edge-bound aura
         static const juce::uint32 SidebarCornerBloom   = 0x142E8BE4; // Corner bloom, not full-panel fog
-        static const juce::uint32 SidebarLowerSettle   = 0xFF030A12; // Deep lower shell settle
 
         static const juce::uint32 PianoRollBg    = 0xFF0C1D2F; // Clean deep piano roll field
         static const juce::uint32 PianoLane      = 0xFF87B6D4; // Low contrast pitch lane
