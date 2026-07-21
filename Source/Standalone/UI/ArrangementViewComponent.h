@@ -214,17 +214,8 @@ private:
     void rebuildThemeBackdrop();
     int64_t surfaceOriginPx_ = 0;   // llround(visibleStartSeconds * pps) at last surface render
     double  surfacePps_ = 0.0;      // pps at last surface render; change → full rebuild
-    double  surfaceStartSeconds_ = 0.0; // visibleStartSeconds when surface was last built
-    int     surfaceTrackHeight_ = 0;    // trackHeight at last surface build
-    int     surfaceVertScrollOffset_ = 0; // verticalScrollOffset_ at last surface build
     juce::Rectangle<int> lastPlayheadRect_{};  // previous frame playhead presentation rect
     int64_t lastDpiMilli_ = 1000;
-
-    // Zoom deferral: during wheel zoom, defer tile cache rebuild to avoid
-    // per-event full rebuild cascade. Surface scaled in paint() as fast preview.
-    bool zoomDeferredRebuild_ = false;
-    int64_t lastZoomEventTimeMs_ = 0;
-    static constexpr double kZoomCooldownMs = 120.0;
 
     // Presentation-only bounded ease-out transition for Continuous follow
     // return-to-centre. Not transport truth; not shared; cleared on mode switch.
