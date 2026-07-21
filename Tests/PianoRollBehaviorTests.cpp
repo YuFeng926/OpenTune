@@ -162,10 +162,10 @@ void pianoRollPendingSeekPresentationSourceContract()
                   "seekSentRevision_ = 0;",
                   "playheadTimeForPaint_ = playHeadState_.timeInSeconds.load"});
     expectTokens("PianoRoll heartbeat revision confirmation",
-                 heartbeatBlock,
-                 {"playHeadState_.hostPositionRevision.load",
-                  "hostRevision != seekSentRevision_",
-                  "pendingSeekTime_ = -1.0;"});
+                   heartbeatBlock,
+                   {"playHeadState_.hostPositionRevision.load",
+                    "hostRevision != seekSentRevision_",
+                    "pendingSeekTime_ = -1.0;"});
     expectTokens("PianoRoll VBlank revision confirmation",
                  vblankBlock,
                  {"playHeadState_.hostPositionRevision.load",
@@ -190,35 +190,20 @@ void pianoRollPendingSeekPresentationSourceContract()
                    {"playheadOverlay_", "PlayheadOverlayComponent"});
 }
 
-void pianoRollRetainedPlayheadSourceContract()
+void pianoRollPlayheadPaintsDirectly()
 {
     const auto source = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto notifyBlock = extractBlockByMarker(
         source, "toolCtx.notifyPlayheadChange = [this](double time)");
     const auto drawPlayheadBlock = extractBlockByMarker(
         source, "void PianoRollComponent::drawPlayhead(juce::Graphics& g)");
-    const auto playheadDirtyRectBlock = extractBlockByMarker(
-        source, "juce::Rectangle<int> PianoRollComponent::playheadDirtyRect() const");
-    const auto rebuildTimelineCoverageBlock = extractBlockByMarker(
-        source, "void PianoRollComponent::rebuildTimelineCoverage()");
-    const auto rebuildSurface = rebuildTimelineCoverageBlock.find(
-        "rebuildViewportSurfaceFromReadyTiles();");
-    const auto rebuildPlayhead = rebuildTimelineCoverageBlock.find(
-        "lastPlayheadDirtyRect_ = playheadDirtyRect();", rebuildSurface);
 
-    expectTokens("PianoRoll retained playhead draw",
+    expectTokens("PianoRoll direct playhead draw",
                  drawPlayheadBlock,
                  {"g.reduceClipRegion(timeAxisRect())"});
-    expectTokens("PianoRoll retained playhead dirty rect",
-                 playheadDirtyRectBlock,
-                 {"const auto axis = timeAxisRect();", "getIntersection(axis)"});
-    expectTokens("PianoRoll retained playhead dirty rect tracking",
+    expectTokens("PianoRoll direct playhead notify repaint",
                  notifyBlock,
-                 {"lastPlayheadDirtyRect_ = playheadDirtyRect();"});
-    expect(rebuildSurface != std::string::npos
-               && rebuildPlayhead != std::string::npos
-               && rebuildSurface < rebuildPlayhead,
-           "PianoRoll coverage rebuild must refresh the retained playhead dirty rect after rebuilding the viewport surface");
+                 {"repaint();"});
 }
 
 void pluginEditorPlayheadRequestSourceContract()
@@ -769,7 +754,7 @@ void unifiedViewMappingAndReadableRenderSourceContracts()
 
     const auto pianoRollSource = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto transientOverlayBlock = extractBlockByMarker(
-        pianoRollSource, "void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)");
+        pianoRollSource, "void PianoRollComponent::drawTransientOverlay(");
     expectTokens("DrawNote transient preview ViewMapper mapping",
                  transientOverlayBlock,
                  {"mapper.freqToY(pitch)"});
@@ -829,11 +814,11 @@ void unifiedViewMappingAndReadableRenderSourceContracts()
         pluginEditorSource, "void OpenTuneAudioProcessorEditor::timerCallback()");
     expectTokens("Plugin editor render-state timer",
                  timerBlock,
-                 {"bool shouldShowOverlay = false;",
-                  "isAutoTuneProcessing",
-                  "else if (chunkStats.hasActiveWork())",
-                  "shouldShowBadge",
-                  "getReadableContentChunkStats"});
+                  {"bool shouldShowOverlay = false;",
+                   "isAutoProcessing",
+                   "else if (chunkStats.hasActiveWork())",
+                   "shouldShowBadge",
+                   "getReadableContentChunkStats"});
     expectTokens("Plugin editor render-state visibility bindings",
                  timerBlock,
                  {"renderBadge_.setVisible(shouldShowBadge)",
@@ -1313,7 +1298,7 @@ int main()
 
     try {
         pianoRollPendingSeekPresentationSourceContract();
-        pianoRollRetainedPlayheadSourceContract();
+        pianoRollPlayheadPaintsDirectly();
         pluginEditorPlayheadRequestSourceContract();
         standalonePlayheadRequestSourceContract();
         pluginEditorPlayheadPositionBindingSourceContract();

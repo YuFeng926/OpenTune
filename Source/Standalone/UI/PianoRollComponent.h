@@ -43,7 +43,6 @@
 #include "PianoRoll/InteractionState.h"
 #include "TimelineViewportCamera.h"
 #include "TimelineViewportPolicy.h"
-#include "TimelineCompositeCache.h"
 #include "WaveformMipmap.h"
 #include "../../Utils/UndoManager.h"
 #include "../../Content/ContentEditCommands.h"
@@ -56,7 +55,7 @@ struct PlayHeadState;
 struct PianoRollComponentTestProbe;
 
 // ============================================================================
-// PianoRollComponent — piano roll editor with tile-cached rendering.
+// PianoRollComponent — piano roll editor with direct viewport rendering.
 // ============================================================================
 
 class PianoRollComponent : public juce::Component,
@@ -149,8 +148,6 @@ public:
         }
 
         scrollMode_ = mode;
-        transitionActive_ = false;
-        requestTransition_ = false;
         repaint();
     }
     ScrollMode getScrollMode() const { return scrollMode_; }
@@ -235,7 +232,6 @@ public:
 
     /** Request a semantic content redraw. */
     void requestContentRedraw();
-    void requestContentRedraw(double dirtySourceStartSec, double dirtySourceEndSec);
     void requestThemeRedraw();
 
     void scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) override;
@@ -244,8 +240,6 @@ public:
 private:
     friend struct PianoRollComponentTestProbe;
 
-    void rebuildTimelineCoverage();
-    void invalidateStableScene();
     bool tryConsumeInitialF0View(ContentKey contentKey);
 
     bool applyManualCorrectionPatch(const std::vector<PianoRollToolHandler::ManualCorrectionOp>& ops,
@@ -284,24 +278,12 @@ public:
 
 private:
     void onScrollVBlankCallback(double timestampSec);
-    double readPlayheadTime() const;
     juce::Rectangle<int> getTimelineViewportBounds() const;
     int getTimelineContentViewportWidth() const;
     int getTimelineContentViewportHeight() const;
-    int getMaxHorizontalScroll() const;
-    PianoRollRenderer::RenderContext makePresentationRenderContext() const;
 
-    // v12 New: camera-based viewport
     ViewMapper makeViewMapper() const noexcept;
     double computeContentTimelineEndSeconds() const noexcept;
-    void prepareCoverageCompositeTilesNew();
-
-    // Composite cache helpers (Phase 2)
-    GenerationSignature makeGenerationSignature() const;
-    void buildBackgroundTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,
-                             TimelineCompositeCache::TileKey key);
-    void buildForegroundTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,
-                             TimelineCompositeCache::TileKey key);
 
     void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
@@ -316,7 +298,8 @@ private:
     void handleVerticalScrollWheel(float deltaY);
     void handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY);
 
-    void drawTransientOverlay(juce::Graphics& g);
+    void drawTransientOverlay(juce::Graphics& g,
+                              const PianoRollRenderer::RenderContext& ctx);
     void drawPlayhead(juce::Graphics& g);
 
     TimelineViewportRequest makeViewportRequest(
@@ -333,8 +316,6 @@ private:
     void applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, int sampleRate);
     std::optional<PianoRollRenderer::ContentRenderItem> buildContentRenderItem(
         const TimelineContentPlacement& placement) const;
-    void refreshActiveOverlayItem();
-    void preparePlaybackCoverage();
     const std::vector<Note>& getCommittedNotes() const;
     const std::vector<Note>& getDisplayedNotes() const;
     NoteInteractionDraft& getNoteDraft();
@@ -375,26 +356,11 @@ private:
     double xToSourceTime(int x) const;
     SourceEditRange sourceEditRange() const;
 
-    PianoRollRenderer::RenderContext buildRenderContext() const
-    {
-        const auto viewport = getTimelineViewportBounds();
-        return buildRenderContext(viewport.getWidth(), pianoKeyWidth_);
-    }
-
-    PianoRollRenderer::RenderContext buildRenderContext(int renderWidthPx, int renderPianoKeyWidth) const;
-
-    void refreshVerticalViewportGeometry();
+    PianoRollRenderer::RenderContext buildRenderContext() const;
     juce::Rectangle<int> timeAxisRect() const;
-    void rebuildViewportSurfaceFromReadyTiles();
-    void drawWaveformOnSurface(juce::Graphics& g, int surfaceWidth, int surfaceHeight,
-                               double ppsCanonical);
-    void scrollViewportSurfaceTo(const TimelineViewportCamera& nextCamera);
-    juce::Rectangle<int> playheadDirtyRect() const;
 
 private:
     TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
-    double tileCoverageStartSeconds_ = 0.0;
-    double tileCoverageEndSeconds_ = 0.0;
     float verticalScrollOffset_ = 0.0f;
     ScrollMode scrollMode_ = ScrollMode::Continuous;
 
@@ -479,7 +445,6 @@ private:
     std::vector<Note> cachedNotes_;
 
     std::optional<PianoRollRenderer::ReferenceOverlay> referenceOverlay_;
-    std::optional<PianoRollRenderer::ContentRenderItem> activeOverlayItem_;
 
     // Undo support
     juce::String pendingUndoDescription_;
@@ -506,15 +471,10 @@ private:
     std::unique_ptr<PianoRollToolHandler> toolHandler_;
     mutable WaveformMipmapCache waveformMipmapCache_;
 
-    // 新增 composite cache (Phase 2 集成)
-    mutable TimelineCompositeCache compositeCache_;
-    uint64_t contentRevision_ = 0;
-    double pendingDirtySourceStartSec_ = 1e30;
-    double pendingDirtySourceEndSec_ = -1e30;
     uint64_t lastKnownNotesRevision_ = 0;
     uint64_t lastKnownPitchRevision_ = 0;
     uint64_t lastKnownTimeGridRevision_ = 0;
-    /// Cached once per-frame in paint(); reused by drawTransientOverlay and paintOverChildren.
+    /// Built once per frame in paint() and reused by paintOverChildren().
     mutable PianoRollRenderer::RenderContext perFrameRenderContext_;
 
     static constexpr int pianoKeyWidth_ = 60;
@@ -525,51 +485,8 @@ private:
     PianoKeyAudition* pianoKeyAudition_ = nullptr;
     int pressedPianoKey_ = -1;
     
-    // Per-view retained surface for timeline content pixels
-    juce::Image viewportSurface_;
     juce::Image themeBackdrop_;
     void rebuildThemeBackdrop();
-
-    struct PianoKeySurfaceSignature {
-        int widthPx = 0;
-        int heightPx = 0;
-        float minMidi = 0.0f;
-        float maxMidi = 0.0f;
-        float pixelsPerSemitone = 0.0f;
-        int scaleRootNote = 0;
-        int scaleType = 1;
-        NoteNameMode noteNameMode = NoteNameMode::COnly;
-        int themeId = 0;
-        float desktopScale = 1.0f;
-
-        bool operator==(const PianoKeySurfaceSignature& o) const {
-            return widthPx == o.widthPx && heightPx == o.heightPx
-                && minMidi == o.minMidi && maxMidi == o.maxMidi
-                && pixelsPerSemitone == o.pixelsPerSemitone
-                && scaleRootNote == o.scaleRootNote && scaleType == o.scaleType
-                && noteNameMode == o.noteNameMode && themeId == o.themeId
-                && desktopScale == o.desktopScale;
-        }
-    };
-
-    PianoKeySurfaceSignature pianoKeySurfaceSignature_;
-    juce::Image pianoKeySurface_;
-    void ensurePianoKeySurface();
-
-    TimelineViewportCamera currentSurfaceCamera_;
-    // Presentation-only bounded ease-out transition for Continuous follow
-    // return-to-centre. Not transport truth; not shared; cleared on user hold
-    // or mode switch. Driven by the VBlank timestamp, not a per-frame low-pass.
-    // requestTransition_ is an explicit one-shot arm signal: set by user
-    // ruler/empty seek, playhead drag, or the stop→play edge. VBlank consumes
-    // it once. Normal continuous playback never arms it — camera follows the
-    // target directly with no subpixel-threshold auto-trigger.
-    bool transitionActive_ = false;
-    double transitionStartTimestamp_ = 0.0;
-    double transitionStartVisibleSeconds_ = 0.0;
-    bool requestTransition_ = false;
-    static constexpr double kContinuousTransitionDurationSec = 0.18;
-    juce::Rectangle<int> lastPlayheadDirtyRect_;
     int64_t lastDpiMilli_ = 1000;
 
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
