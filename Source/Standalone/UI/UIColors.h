@@ -426,7 +426,7 @@ struct UIColors
         g.reduceClipRegion(shape);
 
         const auto topLipBand = bounds.withHeight(bounds.getHeight() * 0.10f);
-        juce::ColourGradient topLip(auroraSidebarTopLip.withAlpha(0.14f),
+        juce::ColourGradient topLip(auroraSidebarTopLip.withAlpha(0.06f),
                                     topLipBand.getCentreX(),
                                     topLipBand.getY(),
                                     juce::Colours::transparentWhite,
@@ -470,7 +470,7 @@ struct UIColors
                                                                      bounds.getY() - bounds.getWidth() * 0.05f,
                                                                      bounds.getWidth() * 0.30f,
                                                                      bounds.getWidth() * 0.24f);
-        g.setGradientFill(juce::ColourGradient(auroraSidebarCornerBloom.withAlpha(0.10f),
+        g.setGradientFill(juce::ColourGradient(auroraSidebarCornerBloom.withAlpha(0.05f),
                                                topLeftCornerBloomBounds.getX() + topLeftCornerBloomBounds.getWidth() * 0.24f,
                                                topLeftCornerBloomBounds.getY() + topLeftCornerBloomBounds.getHeight() * 0.22f,
                                                juce::Colours::transparentBlack,
@@ -483,7 +483,7 @@ struct UIColors
                                                                       bounds.getY() - bounds.getWidth() * 0.05f,
                                                                       bounds.getWidth() * 0.30f,
                                                                       bounds.getWidth() * 0.24f);
-        g.setGradientFill(juce::ColourGradient(auroraSidebarCornerBloom.withAlpha(0.09f),
+        g.setGradientFill(juce::ColourGradient(auroraSidebarCornerBloom.withAlpha(0.045f),
                                                topRightCornerBloomBounds.getRight() - topRightCornerBloomBounds.getWidth() * 0.24f,
                                                topRightCornerBloomBounds.getY() + topRightCornerBloomBounds.getHeight() * 0.22f,
                                                juce::Colours::transparentBlack,
@@ -506,33 +506,6 @@ struct UIColors
         g.setGradientFill(lowerSettle);
         g.fillRect(bottomSettleBounds);
 
-        const auto lowerSettleMidBandBounds = bounds.reduced(bounds.getWidth() * 0.12f, 0.0f)
-                                              .withTrimmedTop(bounds.getHeight() * 0.67f)
-                                              .withHeight(bounds.getHeight() * 0.12f);
-        juce::ColourGradient lowerSettleMidBand(auroraSidebarShellMid.withAlpha(0.05f),
-                                                lowerSettleMidBandBounds.getCentreX(),
-                                                lowerSettleMidBandBounds.getY(),
-                                                juce::Colours::transparentBlack,
-                                                lowerSettleMidBandBounds.getCentreX(),
-                                                lowerSettleMidBandBounds.getBottom(),
-                                                false);
-        lowerSettleMidBand.addColour(0.58, auroraSidebarShellBottom.withAlpha(0.04f));
-        g.setGradientFill(lowerSettleMidBand);
-        g.fillRect(lowerSettleMidBandBounds);
-
-        const auto lowerSettleTailBandBounds = bounds.reduced(bounds.getWidth() * 0.09f, 0.0f)
-                                               .withTrimmedTop(bounds.getHeight() * 0.79f)
-                                               .withHeight(bounds.getHeight() * 0.17f);
-        juce::ColourGradient lowerSettleTailBand(juce::Colours::transparentBlack,
-                                                 lowerSettleTailBandBounds.getCentreX(),
-                                                 lowerSettleTailBandBounds.getY(),
-                                                 auroraSidebarLowerSettle.withAlpha(0.16f),
-                                                 lowerSettleTailBandBounds.getCentreX(),
-                                                 lowerSettleTailBandBounds.getBottom(),
-                                                 false);
-        lowerSettleTailBand.addColour(0.44, auroraSidebarLowerSettle.withAlpha(0.08f));
-        g.setGradientFill(lowerSettleTailBand);
-        g.fillRect(lowerSettleTailBandBounds);
     }
 
     static void fillSoftTimelineCanvas(juce::Graphics& g,
@@ -1098,13 +1071,6 @@ struct UIColors
             g.drawRoundedRectangle(bounds.reduced(1.35f), juce::jmax(0.0f, radius - 0.9f), 0.80f);
         }
 
-        g.setColour(auroraSidebarTopLip.withAlpha(0.58f));
-        const auto topInset = juce::jmin(radius + 2.0f, bounds.getWidth() * 0.26f);
-        g.drawLine(bounds.getX() + topInset,
-                   bounds.getY() + 1.0f,
-                   bounds.getRight() - topInset,
-                   bounds.getY() + 1.0f,
-                   0.95f);
     }
 
     static void drawAuroraButtonChrome(juce::Graphics& g,
