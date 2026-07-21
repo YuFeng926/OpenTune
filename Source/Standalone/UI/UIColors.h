@@ -123,6 +123,7 @@ struct UIColors
     static inline juce::Colour auroraSidebarLowerSettle { 0xFF030A12 };
     static inline juce::Colour knobRim { 0x9A4FC3FF };
     static inline juce::Colour knobGlow { 0x821688FF };
+    static inline const juce::Identifier auroraChromeIntensityProperty { "auroraChromeIntensity" };
 
     // Global Corner Radius
     static inline float cornerRadius = 8.0f;
@@ -300,8 +301,12 @@ struct UIColors
         ds.drawForPath(g, glowPath);
     }
 
-    static void fillAuroraGlass(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)
+    static void fillAuroraGlass(juce::Graphics& g,
+                                const juce::Rectangle<float>& bounds,
+                                float radius,
+                                float lightIntensity = 1.0f)
     {
+        const auto light = juce::jlimit(0.0f, 1.0f, lightIntensity);
         juce::Path shape;
         if (radius > 0.0f)
             shape.addRoundedRectangle(bounds, radius);
@@ -309,16 +314,19 @@ struct UIColors
             shape.addRectangle(bounds);
 
         const auto traySideGlow = juce::Colour { Aurora::Colors::TraySideGlow };
+        const auto bodyTop = juce::Colour(0xFF091827).interpolatedWith(juce::Colour(0xFF0E1B2A), light);
+        const auto bodyMid = juce::Colour(0xFF071522).interpolatedWith(juce::Colour(0xFF0A1421), light);
+        const auto bodyBottom = juce::Colour(0xFF030A12).interpolatedWith(juce::Colour(0xFF040B13), light);
 
         // 精确3色阶渐变：0%深蓝黑 → 35%深蓝 → 100%极深黑蓝
-        juce::ColourGradient body(juce::Colour(0xFF0E1B2A),  // 顶部：rgba(14,27,42)
+        juce::ColourGradient body(bodyTop,
                                   bounds.getX(),
                                   bounds.getY(),
-                                  juce::Colour(0xFF040B13),  // 底部：rgba(4,11,19)
+                                  bodyBottom,
                                   bounds.getX(),
                                   bounds.getBottom(),
                                   false);
-        body.addColour(0.35, juce::Colour(0xFF0A1421));       // 中段：rgba(10,20,33)
+        body.addColour(0.35, bodyMid);
         g.setGradientFill(body);
         g.fillPath(shape);
 
@@ -327,7 +335,7 @@ struct UIColors
 
         // 顶部冷蓝洗光：短而克制，避免灰白高光带
         const auto topWashBand = bounds.withHeight(bounds.getHeight() * 0.12f);
-        juce::ColourGradient topWash(juce::Colour(0xFF5A9ACA).withAlpha(0.008f),
+        juce::ColourGradient topWash(juce::Colour(0xFF5A9ACA).withAlpha(0.008f * light),
                                      topWashBand.getCentreX(),
                                      topWashBand.getY(),
                                      juce::Colours::transparentBlack,
@@ -337,7 +345,7 @@ struct UIColors
         g.setGradientFill(topWash);
         g.fillRect(topWashBand);
 
-        juce::ColourGradient sideAura(traySideGlow.withAlpha(0.010f),
+        juce::ColourGradient sideAura(traySideGlow.withAlpha(0.010f * light),
                                       bounds.getX() + bounds.getWidth() * 0.10f,
                                       bounds.getY() + bounds.getHeight() * 0.18f,
                                       juce::Colours::transparentBlack,
@@ -349,14 +357,14 @@ struct UIColors
 
         // 底部蓝色环境光：覆盖78-100%H，保留深色空间感
         const auto bottomGlowBand = bounds.withTrimmedTop(bounds.getHeight() * 0.78f);
-        juce::ColourGradient bottomGlow(juce::Colour(0xFF207EB8).withAlpha(0.030f),
+        juce::ColourGradient bottomGlow(juce::Colour(0xFF207EB8).withAlpha(0.030f * light),
                                         bottomGlowBand.getCentreX(),
                                         bottomGlowBand.getY(),
                                         juce::Colours::transparentBlack,
                                         bottomGlowBand.getCentreX(),
                                         bottomGlowBand.getBottom(),
                                         false);
-        bottomGlow.addColour(0.45, juce::Colour(0xFF207EB8).withAlpha(0.010f));
+        bottomGlow.addColour(0.45, juce::Colour(0xFF207EB8).withAlpha(0.010f * light));
         g.setGradientFill(bottomGlow);
         g.fillRect(bottomGlowBand);
     }
@@ -1027,11 +1035,15 @@ struct UIColors
     static void drawAuroraGlassFrame(juce::Graphics& g,
                                      const juce::Rectangle<float>& bounds,
                                      float radius,
-                                     bool strong = false)
+                                     bool strong = false,
+                                     float lightIntensity = 1.0f)
     {
+        const auto light = juce::jlimit(0.0f, 1.0f, lightIntensity);
+        const auto framePresence = light;
         // 外描边：1.25px rgba(67,153,215,0.55)
-        const auto outerColor = juce::Colour(0xFF4399D7).withAlpha(strong ? 0.65f : 0.55f);
-        const auto outerStroke = strong ? 1.35f : 1.25f;
+        const auto outerColor = juce::Colour(0xFF4399D7).withAlpha((strong ? 0.65f : 0.55f) * framePresence);
+        const auto fullOuterStroke = strong ? 1.35f : 1.25f;
+        const auto outerStroke = 0.75f + (fullOuterStroke - 0.75f) * light;
         g.setColour(outerColor);
         if (radius > 0.0f)
             g.drawRoundedRectangle(bounds.reduced(0.5f), radius, outerStroke);
@@ -1041,23 +1053,24 @@ struct UIColors
         // 内描边：0.9px rgba(168,220,255,0.30)，内缩1.5px与外套边形成清晰双线
         if (radius > 1.5f)
         {
-            const auto innerColor = juce::Colour(0xFFA8DCFF).withAlpha(strong ? 0.38f : 0.30f);
+            const auto innerColor = juce::Colour(0xFFA8DCFF).withAlpha((strong ? 0.38f : 0.30f) * light);
+            const auto innerStroke = 0.55f + 0.35f * light;
             g.setColour(innerColor);
-            g.drawRoundedRectangle(bounds.reduced(1.80f), juce::jmax(0.0f, radius - 1.30f), 0.90f);
+            g.drawRoundedRectangle(bounds.reduced(1.80f), juce::jmax(0.0f, radius - 1.30f), innerStroke);
         }
 
         // 顶沿高光：2px rgba(180,230,255,0.38)
-        const auto topColor = juce::Colour(0xFFB4E6FF).withAlpha(strong ? 0.48f : 0.38f);
+        const auto topColor = juce::Colour(0xFFB4E6FF).withAlpha((strong ? 0.48f : 0.38f) * light);
         g.setColour(topColor);
         const auto topInset = juce::jmin(radius, bounds.getWidth() * 0.24f);
         g.drawLine(bounds.getX() + topInset,
                    bounds.getY() + 1.0f,
                    bounds.getRight() - topInset,
                    bounds.getY() + 1.0f,
-                   1.2f);
+                   0.60f + 0.60f * light);
 
         // 顶高光向下4px渐隐
-        juce::ColourGradient topFade(topColor.withAlpha(0.24f),
+        juce::ColourGradient topFade(topColor.withAlpha(0.24f * light),
                                      bounds.getX() + topInset,
                                      bounds.getY() + 2.2f,
                                      juce::Colours::transparentBlack,
@@ -1102,12 +1115,20 @@ struct UIColors
                                        bool active = false,
                                        juce::Colour glowColour = {},
                                        juce::Colour edgeColour = {},
-                                       const juce::Path* shapeOverride = nullptr)
+                                       const juce::Path* shapeOverride = nullptr,
+                                       float lightIntensity = 1.0f)
     {
+        const auto light = juce::jlimit(0.0f, 1.0f, lightIntensity);
+        const auto glowPresence = light * light;
+        const auto edgePresence = 0.28f + 0.72f * light;
         const auto isPressed = down;
         const auto isActive = active || isPressed;
         const auto isHovered = highlighted && !isPressed;
-        const auto fill = isActive ? auroraButtonActive : (isHovered ? auroraButtonHover : auroraButtonNormal);
+        const auto stateFill = isActive ? auroraButtonActive : (isHovered ? auroraButtonHover : auroraButtonNormal);
+        const auto lowLightFill = isActive ? juce::Colour(0xF0124678)
+                                          : (isHovered ? juce::Colour(0xF01A364F)
+                                                       : juce::Colour(0xF0172F46));
+        const auto fill = lowLightFill.interpolatedWith(stateFill, light);
         const auto glow = glowColour.getAlpha() > 0 ? glowColour : (isActive ? knobGlow : panelGlow);
         const auto edge = edgeColour.getAlpha() > 0 ? edgeColour : (isActive ? knobGlow : glassEdge);
 
@@ -1120,12 +1141,13 @@ struct UIColors
             shape.addRectangle(bounds);
 
         // 双层光晕：内层亮(halo core) + 外层柔(halo glow)，保持低亮度
-        juce::DropShadow innerGlow(glow.withMultipliedAlpha(isActive ? 0.18f : (isHovered ? 0.14f : 0.035f)),
-                                   isActive ? 15 : (isHovered ? 10 : 8),
+        const auto fullInnerGlowRadius = isActive ? 15 : (isHovered ? 10 : 8);
+        juce::DropShadow innerGlow(glow.withMultipliedAlpha((isActive ? 0.18f : (isHovered ? 0.14f : 0.035f)) * glowPresence),
+                                   juce::roundToInt(4.0f + (static_cast<float>(fullInnerGlowRadius) - 4.0f) * light),
                                    {});
         innerGlow.drawForPath(g, shape);
 
-        if (isActive || isHovered)
+        if ((isActive || isHovered) && light > 0.75f)
         {
             juce::Path outerHaloShape;
             if (radius > 0.0f)
@@ -1138,9 +1160,9 @@ struct UIColors
             outerHalo.drawForPath(g, outerHaloShape);
         }
 
-        const auto topLight = fill.brighter(isPressed ? 0.02f : 0.04f)
-                                  .interpolatedWith(glassHighlight, isActive ? 0.05f : 0.03f);
-        const auto midTone = fill.brighter(isHovered ? 0.02f : 0.005f);
+        const auto topLight = fill.brighter((isPressed ? 0.02f : 0.04f) * light)
+                                  .interpolatedWith(glassHighlight, (isActive ? 0.05f : 0.03f) * light);
+        const auto midTone = fill.brighter((isHovered ? 0.02f : 0.005f) * light);
         const auto lowerTone = fill.darker(isPressed ? 0.22f : 0.10f);
         juce::ColourGradient chrome(topLight,
                                     bounds.getX(),
@@ -1158,7 +1180,7 @@ struct UIColors
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(shape);
 
-            juce::ColourGradient sourceLight(textPrimary.withAlpha(isActive ? 0.05f : 0.03f),
+            juce::ColourGradient sourceLight(textPrimary.withAlpha((isActive ? 0.05f : 0.03f) * light),
                                              bounds.getX() + bounds.getWidth() * 0.12f,
                                              bounds.getY() + bounds.getHeight() * 0.08f,
                                              juce::Colours::white.withAlpha(0.0f),
@@ -1172,7 +1194,7 @@ struct UIColors
             auto topBand = bounds.withHeight(bounds.getHeight() * 0.42f);
             const auto sheenBlue = juce::Colour { Aurora::Colors::KnobGlow }; // 高饱和蓝#1688FF
             const auto sheenColor = glassHighlight.interpolatedWith(sheenBlue, 0.20f);
-            juce::ColourGradient topSheen(sheenColor.withMultipliedAlpha(isActive ? 0.20f : 0.15f),
+            juce::ColourGradient topSheen(sheenColor.withMultipliedAlpha((isActive ? 0.20f : 0.15f) * light),
                                           topBand.getX(),
                                           topBand.getY(),
                                           juce::Colours::white.withAlpha(0.0f),
@@ -1184,36 +1206,39 @@ struct UIColors
 
             // 微棱高光：按钮顶部亮线，用冷白蓝色
             const auto bevelColor = sheenBlue.interpolatedWith(juce::Colours::white, 0.18f);
-            g.setColour(bevelColor.withMultipliedAlpha(isActive ? 0.12f : 0.08f));
+            g.setColour(bevelColor.withMultipliedAlpha((isActive ? 0.12f : 0.08f) * light));
             g.drawLine(bounds.getX() + radius * 0.55f, bounds.getY() + 1.5f,
                        bounds.getRight() - radius * 0.55f, bounds.getY() + 1.5f,
-                       1.2f);
+                       0.65f + 0.55f * light);
 
             auto bottomBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.52f);
+            const auto shadePresence = 0.25f + 0.75f * light;
             juce::ColourGradient bottomShade(juce::Colours::transparentBlack,
                                              bottomBand.getX(),
                                              bottomBand.getY(),
-                                             juce::Colours::black.withAlpha(isPressed ? 0.56f : 0.44f),
+                                             juce::Colours::black.withAlpha((isPressed ? 0.56f : 0.44f) * shadePresence),
                                              bottomBand.getX(),
                                              bottomBand.getBottom(),
                                              false);
             g.setGradientFill(bottomShade);
             g.fillRect(bottomBand);
 
-            g.setColour(edge.withMultipliedAlpha(isActive ? 0.36f : (isHovered ? 0.26f : 0.20f)));
+            g.setColour(edge.withMultipliedAlpha((isActive ? 0.36f : (isHovered ? 0.26f : 0.20f)) * edgePresence));
             g.strokePath(shape, juce::PathStrokeType(1.0f));
         }
 
-        const auto stroke = isActive ? 1.45f : (isHovered ? 1.15f : 1.0f);
-        g.setColour(edge.withMultipliedAlpha(isActive ? 0.72f : (isHovered ? 0.60f : 0.50f)));
+        const auto fullStroke = isActive ? 1.45f : (isHovered ? 1.15f : 1.0f);
+        const auto stroke = 0.72f + (fullStroke - 0.72f) * light;
+        g.setColour(edge.withMultipliedAlpha((isActive ? 0.72f : (isHovered ? 0.60f : 0.50f)) * edgePresence));
         g.strokePath(shape, juce::PathStrokeType(stroke));
 
         // 边缘光扩散 - 所有状态可见但不形成白色光圈
-        g.setColour(glow.withMultipliedAlpha(isActive ? 0.08f : (isHovered ? 0.055f : 0.030f)));
-        g.strokePath(shape, juce::PathStrokeType(isActive ? 4.0f : (isHovered ? 3.0f : 2.0f)));
+        const auto fullGlowStroke = isActive ? 4.0f : (isHovered ? 3.0f : 2.0f);
+        g.setColour(glow.withMultipliedAlpha((isActive ? 0.08f : (isHovered ? 0.055f : 0.030f)) * glowPresence));
+        g.strokePath(shape, juce::PathStrokeType(0.75f + (fullGlowStroke - 0.75f) * light));
 
         // active/hover额外加强扩散
-        if (isActive || isHovered)
+        if ((isActive || isHovered) && light > 0.75f)
         {
             g.setColour(glow.withMultipliedAlpha(isActive ? 0.05f : 0.025f));
             g.strokePath(shape, juce::PathStrokeType(isActive ? 7.0f : 4.5f));
@@ -1222,11 +1247,11 @@ struct UIColors
         {
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(shape);
-            g.setColour(glassHighlight.withMultipliedAlpha(isActive ? 0.28f : 0.16f));
+            g.setColour(glassHighlight.withMultipliedAlpha((isActive ? 0.28f : 0.16f) * light));
             const auto topInset = juce::jmin(radius, bounds.getWidth() * 0.25f);
             g.drawLine(bounds.getX() + topInset, bounds.getY() + 1.0f,
                        bounds.getRight() - topInset, bounds.getY() + 1.0f,
-                       1.0f);
+                       0.65f + 0.35f * light);
         }
     }
 
