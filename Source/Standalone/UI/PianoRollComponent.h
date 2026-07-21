@@ -527,19 +527,8 @@ private:
     
     // Per-view retained surface for timeline content pixels
     juce::Image viewportSurface_;
-    double surfaceStartSeconds_ = 0.0;      // visibleStartSeconds at last surface build
-    double surfacePps_ = 0.0;               // PPS at last surface build
-    float  surfacePixelsPerSemitone_ = 0.0f; // Y-geometry at last surface build
-    float  surfaceVerticalScroll_ = 0.0f;    // verticalScrollOffset_ at last surface build
     juce::Image themeBackdrop_;
     void rebuildThemeBackdrop();
-
-    // Zoom deferral: during wheel zoom, defer tile cache rebuild to avoid
-    // per-event full rebuild cascade (160MB+ allocation per wheel event).
-    // Surface is scaled in paint() as fast preview; full rebuild after cooldown.
-    bool zoomDeferredRebuild_ = false;
-    int64_t lastZoomEventTimeMs_ = 0;
-    static constexpr double kZoomCooldownMs = 120.0;
 
     struct PianoKeySurfaceSignature {
         int widthPx = 0;

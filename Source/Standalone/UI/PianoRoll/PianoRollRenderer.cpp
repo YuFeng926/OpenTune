@@ -904,7 +904,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
         if (isAurora)
         {
-            g.setColour(noteColor.withAlpha(0.50f));
+            g.setColour(noteColor.withAlpha(0.90f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 7.0f));
@@ -930,7 +930,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(noteColor.withAlpha(0.50f));
+            g.setColour(noteColor.withAlpha(0.90f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 6.0f));
@@ -952,7 +952,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else
         {
-            g.setColour(noteColor.withAlpha(0.50f));
+            g.setColour(noteColor.withAlpha(0.90f));
             g.fillRect(noteBounds);
 
             g.setColour(UIColors::noteBlockBorder.withAlpha(0.50f));
@@ -1250,7 +1250,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
     const bool isOverdose = themeId == ThemeId::Overdose;
 
-    // Draw original F0 (thin, low alpha)
+    // Draw original F0 (thin)
     if (ctx.showOriginalF0) {
         const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
         const auto visualSegments = buildF0VisualSegments(
@@ -1276,21 +1276,21 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 ptPath.startNewSubPath(p.x - 0.01f, p.y);
                 ptPath.lineTo(p.x + 0.01f, p.y);
                 if (isAurora) {
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.080f));
+                    g.setColour(colour.withAlpha(alpha * 0.080f));
                     g.strokePath(ptPath, glowStrokeType);
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.22f));
+                    g.setColour(colour.withAlpha(alpha * 0.22f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.96f));
+                    g.setColour(colour.withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 } else if (isBlueBreeze || isOverdose) {
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.055f));
+                    g.setColour(colour.withAlpha(alpha * 0.055f));
                     g.strokePath(ptPath, glowStrokeType);
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.14f));
+                    g.setColour(colour.withAlpha(alpha * 0.14f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha * 0.96f));
+                    g.setColour(colour.withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 } else {
-                    g.setColour(colour.withAlpha(alpha * p.energyAlpha));
+                    g.setColour(colour.withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 }
                 continue;
@@ -1304,7 +1304,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 g.strokePath(runPath, glowStrokeType);
                 g.setColour(colour.withAlpha(alpha * 0.22f));
                 g.strokePath(runPath, innerGlowStrokeType);
-                g.setColour(colour.withAlpha(alpha * 0.96f));
+                g.setColour(colour.withAlpha(1.0f));
                 g.strokePath(runPath, strokeType);
                 g.setColour(colour.brighter(0.30f).withAlpha(alpha * 0.18f));
                 g.strokePath(runPath, highlightStrokeType);
@@ -1313,18 +1313,18 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 g.strokePath(runPath, glowStrokeType);
                 g.setColour(colour.withAlpha(alpha * 0.14f));
                 g.strokePath(runPath, innerGlowStrokeType);
-                g.setColour(colour.withAlpha(alpha * 0.96f));
+                g.setColour(colour.withAlpha(1.0f));
                 g.strokePath(runPath, strokeType);
                 g.setColour(colour.brighter(0.16f).withAlpha(alpha * 0.12f));
                 g.strokePath(runPath, highlightStrokeType);
             } else {
-                g.setColour(colour.withAlpha(alpha));
+                g.setColour(colour.withAlpha(1.0f));
                 g.strokePath(runPath, strokeType);
             }
         }
     }
 
-    // Draw corrected F0 (thicker, higher alpha) — lazily render correction layer
+    // Draw corrected F0 (thicker) — lazily render correction layer
     if (ctx.showCorrectedF0 && item.pitchSnapshot->hasCorrectionLayer()) {
         const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
         std::vector<float> correctedF0(originalF0.size(), 0.0f);
@@ -1347,7 +1347,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         const auto blendLevelHotColour = [&](juce::Colour base, float hm) {
             return base.interpolatedWith(kLevelHotGold, juce::jlimit(0.0f, 0.42f, hm));
         };
-        const float alpha = 0.85f;
+        const float alpha = 1.0f;
 
         const float lineWidth = isAurora ? 2.25f : ((isBlueBreeze || isOverdose) ? 1.85f : 2.05f);
         const juce::PathStrokeType strokeType(lineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
@@ -1365,21 +1365,21 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 ptPath.startNewSubPath(p.x - 0.01f, p.y);
                 ptPath.lineTo(p.x + 0.01f, p.y);
                 if (isAurora) {
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.095f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * 0.095f));
                     g.strokePath(ptPath, glowStrokeType);
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.20f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * 0.20f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.98f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 } else if (isBlueBreeze || isOverdose) {
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.070f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * 0.070f));
                     g.strokePath(ptPath, glowStrokeType);
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.15f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * 0.15f));
                     g.strokePath(ptPath, innerGlowStrokeType);
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha * 0.92f));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 } else {
-                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(alpha * p.energyAlpha));
+                    g.setColour(blendLevelHotColour(colour, p.levelHotMix).withAlpha(1.0f));
                     g.strokePath(ptPath, strokeType);
                 }
                 continue;
@@ -1404,7 +1404,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                             ? blendLevelHotColour(colour, pt.levelHotMix).brighter(0.20f)
                             : blendLevelHotColour(colour, pt.levelHotMix);
                         const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
-                        grad.addColour(pos, c.withAlpha(alpha * pt.energyAlpha * alphaScale));
+                        grad.addColour(pos, c.withAlpha(alpha * alphaScale));
                     }
                     return grad;
                 };
@@ -1413,7 +1413,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 g.strokePath(runPath, glowStrokeType);
                 g.setGradientFill(buildGradient(0.20f));
                 g.strokePath(runPath, innerGlowStrokeType);
-                g.setGradientFill(buildGradient(0.98f));
+                g.setGradientFill(buildGradient(1.0f));
                 g.strokePath(runPath, strokeType);
                 g.setGradientFill(buildGradient(0.15f, true));
                 g.strokePath(runPath, highlightStrokeType);
@@ -1433,7 +1433,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                             ? blendLevelHotColour(colour, pt.levelHotMix).brighter(0.16f)
                             : blendLevelHotColour(colour, pt.levelHotMix);
                         const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
-                        grad.addColour(pos, c.withAlpha(alpha * pt.energyAlpha * alphaScale));
+                        grad.addColour(pos, c.withAlpha(alpha * alphaScale));
                     }
                     return grad;
                 };
@@ -1442,7 +1442,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 g.strokePath(runPath, glowStrokeType);
                 g.setGradientFill(buildGradient(0.15f));
                 g.strokePath(runPath, innerGlowStrokeType);
-                g.setGradientFill(buildGradient(0.92f));
+                g.setGradientFill(buildGradient(1.0f));
                 g.strokePath(runPath, strokeType);
                 g.setGradientFill(buildGradient(0.12f, true));
                 g.strokePath(runPath, highlightStrokeType);
@@ -1459,7 +1459,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 for (const auto& pt : pts) {
                     const juce::Colour c = blendLevelHotColour(colour, pt.levelHotMix);
                     const double pos = juce::jlimit(0.0, 1.0, static_cast<double>((pt.x - leftX) / xRange));
-                    grad.addColour(pos, c.withAlpha(alpha * pt.energyAlpha));
+                    grad.addColour(pos, c.withAlpha(1.0f));
                 }
                 g.setGradientFill(grad);
                 g.strokePath(runPath, strokeType);
