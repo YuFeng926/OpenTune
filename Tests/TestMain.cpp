@@ -1071,6 +1071,32 @@ void pianoRollZoomHandlersAvoidBusinessImageAllocation()
                    {"juce::Image", "tiles_.clear()"});
 }
 
+void pianoRollZoomHandlersDoNotPauseAutoFollow()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto verticalZoom = extractFunctionBlock(
+        component, "void PianoRollComponent::handleVerticalZoomWheel");
+    const auto horizontalZoom = extractFunctionBlock(
+        component, "void PianoRollComponent::handleHorizontalZoomWheel");
+
+    expect(!verticalZoom.empty(), "vertical zoom handler must be found");
+    expect(!horizontalZoom.empty(), "horizontal zoom handler must be found");
+
+    // Zoom must set userHasManuallyZoomed_ but NOT pause CONT follow via userScrollHold_
+    expectTokens("vertical zoom keeps manual zoom flag",
+                 verticalZoom,
+                 {"userHasManuallyZoomed_ = true"});
+    expectTokens("horizontal zoom keeps manual zoom flag",
+                 horizontalZoom,
+                 {"userHasManuallyZoomed_ = true"});
+    expectNoTokens("vertical zoom must not pause auto-follow",
+                   verticalZoom,
+                   {"userScrollHold_"});
+    expectNoTokens("horizontal zoom must not pause auto-follow",
+                   horizontalZoom,
+                   {"userScrollHold_"});
+}
+
 } // namespace
 
 int main()
@@ -1102,6 +1128,7 @@ int main()
         f0CurvesStayFullyOpaque();
         pianoRollUsesDirectPaintingWithoutRetainedPixelCache();
         pianoRollZoomHandlersAvoidBusinessImageAllocation();
+        pianoRollZoomHandlersDoNotPauseAutoFollow();
 
         // ARA TimeGrid 计划的结构契约
         araAudioModificationStructureHasTimeGridPlan();
