@@ -775,8 +775,12 @@ void ArrangementViewComponent::setVerticalScrollOffset(int offset)
     const int maxScrollOffset = juce::jmax(0, totalContentHeight - visibleHeight);
     
     // 闄愬埗婊氬姩鑼冨洿 [0, maxScrollOffset]
-    verticalScrollOffset_ = juce::jlimit(0, maxScrollOffset, offset);
-    verticalScrollBar_.setCurrentRangeStart(verticalScrollOffset_, juce::dontSendNotification);
+    const int newOffset = juce::jlimit(0, maxScrollOffset, offset);
+    if (newOffset == verticalScrollOffset_)
+        return;
+
+    verticalScrollOffset_ = newOffset;
+    verticalScrollBar_.setCurrentRangeStart(newOffset, juce::dontSendNotification);
 
     prepareCoverageCompositeTilesNew();
     const double pps = std::round(camera_.pixelsPerSecond * 1000.0) / 1000.0;
