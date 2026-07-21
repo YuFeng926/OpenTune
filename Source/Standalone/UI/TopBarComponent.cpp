@@ -3,6 +3,13 @@
 
 namespace OpenTune {
 
+namespace {
+
+constexpr float kAuroraTopBarSurfaceIntensity = 0.62f;
+constexpr float kAuroraTopBarFrameIntensity = 0.12f;
+
+} // namespace
+
 TopBarComponent::TopBarComponent(MenuBarComponent& menuBar, TransportBarComponent& transportBar)
     : menuBar_(menuBar)
     , transportBar_(transportBar)
@@ -100,10 +107,10 @@ void TopBarComponent::paint(juce::Graphics& g)
     }
     else if (UIColors::currentThemeId() == ThemeId::Aurora)
     {
-        UIColors::drawShadow(g, bounds, UIColors::ShadowLevel::Float);
+        UIColors::drawShadow(g, bounds, UIColors::ShadowLevel::Ambient);
 
-        UIColors::fillAuroraGlass(g, bounds, 7.0f);
-        UIColors::drawAuroraGlassFrame(g, bounds, 7.0f, false);
+        UIColors::fillAuroraGlass(g, bounds, 7.0f, kAuroraTopBarSurfaceIntensity);
+        UIColors::drawAuroraGlassFrame(g, bounds, 7.0f, false, kAuroraTopBarFrameIntensity);
 
         juce::ColourGradient bottomClosure(juce::Colours::transparentBlack,
                                            bounds.getX(),

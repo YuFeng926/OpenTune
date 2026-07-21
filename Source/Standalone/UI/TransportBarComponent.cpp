@@ -13,6 +13,7 @@ namespace {
 constexpr const char* kOverdoseUiRoleKey = "overdoseUiRole";
 constexpr const char* kOverdoseUiRoleTransport = "transport";
 constexpr const char* kOverdoseUiRoleSegment = "segment";
+constexpr float kAuroraToolbarChromeIntensity = 0.42f;
 
 } // namespace
 
@@ -226,7 +227,11 @@ void BpmValueField::paint(juce::Graphics& g)
                                          style.fieldRadius,
                                          isMouseOver() || focused,
                                          false,
-                                         focused);
+                                         focused,
+                                         {},
+                                         {},
+                                         nullptr,
+                                         kAuroraToolbarChromeIntensity);
     }
     // 更厚实的输入框质感（深蓝灰主题）
     else if (themeId == ThemeId::DarkBlueGrey)
@@ -576,7 +581,8 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
                                          isToggled,
                                          {},
                                          {},
-                                         &p);
+                                         &p,
+                                         kAuroraToolbarChromeIntensity);
     }
     else
     {
@@ -780,6 +786,7 @@ TransportBarComponent::TransportBarComponent()
     scaleRootSelector_.setColour(juce::ComboBox::outlineColourId, UIColors::primaryPurple);
     scaleRootSelector_.getProperties().set("noArrow", true);
     scaleRootSelector_.getProperties().set("fontHeight", UIColors::navFontHeight);
+    scaleRootSelector_.getProperties().set(UIColors::auroraChromeIntensityProperty, kAuroraToolbarChromeIntensity);
     scaleRootSelector_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(scaleRootSelector_);
 
@@ -799,6 +806,7 @@ TransportBarComponent::TransportBarComponent()
     scaleTypeSelector_.setColour(juce::ComboBox::outlineColourId, UIColors::primaryPurple);
     scaleTypeSelector_.getProperties().set("noArrow", true);
     scaleTypeSelector_.getProperties().set("fontHeight", UIColors::navFontHeight);
+    scaleTypeSelector_.getProperties().set(UIColors::auroraChromeIntensityProperty, kAuroraToolbarChromeIntensity);
     scaleTypeSelector_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(scaleTypeSelector_);
 
@@ -922,7 +930,11 @@ void TransportBarComponent::paint(juce::Graphics& g)
                                          style.fieldRadius,
                                          false,
                                          false,
-                                         false);
+                                         false,
+                                         {},
+                                         {},
+                                         nullptr,
+                                         kAuroraToolbarChromeIntensity);
     }
     else
     {

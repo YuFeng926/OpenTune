@@ -120,13 +120,19 @@ void AuroraLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& bu
 {
     auto bounds = button.getLocalBounds().toFloat().reduced(1.0f);
     float radius = Aurora::Style::ControlRadius;
+    const auto chromeIntensity = static_cast<float>(button.getProperties().getWithDefault(
+        UIColors::auroraChromeIntensityProperty, 1.0f));
 
     UIColors::drawAuroraButtonChrome(g,
                                      bounds,
                                      radius,
                                      shouldDrawButtonAsHighlighted,
                                      shouldDrawButtonAsDown,
-                                     button.getToggleState());
+                                     button.getToggleState(),
+                                     {},
+                                     {},
+                                     nullptr,
+                                     chromeIntensity);
 }
 
 void AuroraLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
@@ -197,6 +203,8 @@ void AuroraLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, b
 {
     auto bounds = juce::Rectangle<float>(static_cast<float>(width), static_cast<float>(height));
     float radius = Aurora::Style::ControlRadius;
+    const auto chromeIntensity = static_cast<float>(box.getProperties().getWithDefault(
+        UIColors::auroraChromeIntensityProperty, 1.0f));
 
     bool isActive = isButtonDown || box.isPopupActive();
 
@@ -205,7 +213,11 @@ void AuroraLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, b
                                      radius,
                                      box.isMouseOver(),
                                      isButtonDown,
-                                     isActive);
+                                     isActive,
+                                     {},
+                                     {},
+                                     nullptr,
+                                     chromeIntensity);
     
     // Arrow
     if (buttonW > 0 && buttonH > 0)

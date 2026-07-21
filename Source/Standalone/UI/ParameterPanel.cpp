@@ -10,6 +10,8 @@ namespace OpenTune {
 
 namespace {
 
+constexpr float kAuroraSidebarChromeIntensity = 0.42f;
+
 juce::String buildAutoButtonTooltip(const ParameterPanel::AutoButtonPresentation& presentation)
 {
     juce::String tooltip = presentation.tooltip;
@@ -110,7 +112,11 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
                                          UIColors::currentThemeStyle().controlRadius,
                                          shouldDrawButtonAsHighlighted,
                                          shouldDrawButtonAsDown,
-                                         active);
+                                         active,
+                                         {},
+                                         {},
+                                         nullptr,
+                                         kAuroraSidebarChromeIntensity);
     }
     else
     {
@@ -397,6 +403,8 @@ ParameterPanel::ParameterPanel()
     // Pitch Shift action button
     pitchShiftButton_ = std::make_unique<juce::TextButton>("Pitch Shift...");
     pitchShiftButton_->setTooltip(juce::String::fromUTF8(u8"整体移调"));
+    pitchShiftButton_->getProperties().set(UIColors::auroraChromeIntensityProperty,
+                                           kAuroraSidebarChromeIntensity);
     pitchShiftButton_->onClick = [this] {
         listeners_.call(&Listener::pitchShiftRequested);
     };
