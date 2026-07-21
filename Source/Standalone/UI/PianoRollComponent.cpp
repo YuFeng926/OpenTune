@@ -2654,7 +2654,6 @@ void PianoRollComponent::handleVerticalZoomWheel(const juce::MouseEvent& e, floa
     pixelsPerSemitone_ *= zoomFactor;
     pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, pixelsPerSemitone_);
     userHasManuallyZoomed_ = true;
-    userScrollHold_ = true;
 
     float targetY = (maxMidi_ - mouseMidi) * pixelsPerSemitone_;
     verticalScrollOffset_ = targetY - contentY;
@@ -2713,7 +2712,6 @@ void PianoRollComponent::handleHorizontalZoomWheel(const juce::MouseEvent& e, fl
     const double mouseTime = camera_.visibleStartSeconds + mouseX / oldPps;
 
     userHasManuallyZoomed_ = true;
-    userScrollHold_ = true;
     const auto req = makeViewportRequest(
         TimelineViewportRequest::Kind::Zoom,
         mouseTime,
