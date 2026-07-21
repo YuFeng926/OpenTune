@@ -140,6 +140,7 @@ private:
     void onVibratoRateChanged();
     void onNoteSplitChanged();
     void onToolClicked(int toolId);
+    void rebuildAuroraSidebarSurface(juce::Rectangle<float> bounds);
 
     juce::ListenerList<Listener> listeners_;
 
@@ -172,6 +173,8 @@ private:
     std::unique_ptr<juce::TextButton> pitchShiftButton_;
 
     LargeKnobLookAndFeel largeKnobLookAndFeel_;
+    juce::Image auroraSidebarSurface_;
+    float auroraSidebarSurfaceScale_ = 0.0f;
 
     // 参数拖动前的值（用于 Undo 记录）
     float dragStartRetuneSpeed_{15.0f};
