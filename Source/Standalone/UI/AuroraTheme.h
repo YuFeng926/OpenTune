@@ -18,9 +18,9 @@ namespace Aurora {
         static const juce::uint32 GlassHighlight = 0x30A8E0FF; // Restrained upper sheen
         static const juce::uint32 GlassEdge      = 0x8088BCE8; // Cooler, thinner default edge
         static const juce::uint32 PanelGlow      = 0x3E1D4D7E; // Subtle ambient cyan-blue aura
-        static const juce::uint32 ButtonNormal   = 0xD0122B42; // Resting dark glass button
-        static const juce::uint32 ButtonHover    = 0xE4163252; // Hover glass button
-        static const juce::uint32 ButtonActive   = 0xF02870B8; // Pressed/active glass button
+        static const juce::uint32 ButtonNormal   = 0xD00E2238; // Resting deep blue-black glass button
+        static const juce::uint32 ButtonHover    = 0xD8142D49; // Hover glass button
+        static const juce::uint32 ButtonActive   = 0xE51A568E; // Pressed/active restrained blue button
 
         // Top tray semantics
         static const juce::uint32 TrayTop         = 0xFF1B3350; // Subtle upper lift
