@@ -35,9 +35,9 @@ float fixedDitherNoise(int x, int y)
 
 juce::Image makeAuroraSidebarSurfaceCurve(int width, int height)
 {
-    const auto curveTop = juce::Colour(0xFF1B2B3D);
-    const auto curveBottom = juce::Colour(0xFF122132);
-    const auto bottomLift = juce::Colour(0xFF132A41);
+    const auto curveTop = juce::Colour(0xFF0D2A43);
+    const auto curveBottom = juce::Colour(0xFF0A2139);
+    const auto bottomLift = juce::Colour(0xFF0B2A46);
     juce::Image surface(juce::Image::ARGB, width, height, true);
 
     {
