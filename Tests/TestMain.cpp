@@ -983,8 +983,8 @@ void captureCallSitesDereferenceNotNullSharedPtr()
 }
 
 // ============================================================================
-// PianoRoll ruler control footprint — pattern cache identity 只描述像素
-// Time/Cont 按钮覆盖效果由 child component z-order 产生，不属于 tile cache
+// PianoRoll direct-paint and ruler control contracts.
+// Time/Cont 按钮覆盖效果由 child component z-order 产生。
 // ============================================================================
 
 void drawTimeRulerHasRulerPaintBounds()
@@ -1041,45 +1041,34 @@ void f0CurvesStayFullyOpaque()
                  {"withAlpha(1.0f)", "buildGradient(1.0f)"});
 }
 
-void pianoRollBaseSceneStaysNativeRaster()
+void pianoRollUsesDirectPaintingWithoutRetainedPixelCache()
 {
     const auto componentHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
     const auto componentImpl = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto rendererImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
-    const auto paint = extractFunctionBlock(componentImpl, "void PianoRollComponent::paint");
-    const auto drawNotes = extractFunctionBlock(rendererImpl, "void PianoRollRenderer::drawNotes");
 
-    expectNoTokens("Piano Roll has no scaled base-scene preview",
+    expectNoTokens("Piano Roll has no retained pixel cache",
                    componentHeader + componentImpl,
-                   {"zoomDeferredRebuild_", "surfaceStartSeconds_", "surfacePps_",
-                    "surfacePixelsPerSemitone_", "surfaceVerticalScroll_"});
-    expectNoTokens("Piano Roll paints cached content at native raster",
-                   paint,
-                   {"g.drawImage(viewportSurface_", "setImageResamplingQuality"});
-    expect(countOf(drawNotes, "noteColor.withAlpha(0.90f)") == 3,
-           "all Piano Roll note styles must keep their 0.90f fill opacity");
-    expectNoTokens("Piano Roll notes have no regressed fill opacity", drawNotes,
-                   {"noteColor.withAlpha(0.50f)"});
+                   {"TimelineCompositeCache", "compositeCache_", "viewportSurface_",
+                    "pianoKeySurface_", "moveImageSection", "scrollViewportSurfaceTo",
+                    "rebuildViewportSurfaceFromReadyTiles"});
 }
 
-void pianoRollForegroundTilesResetOpaqueColourAfterWaveform()
+void pianoRollZoomHandlersAvoidBusinessImageAllocation()
 {
     const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto rebuild = extractFunctionBlock(
-        component, "void PianoRollComponent::rebuildViewportSurfaceFromReadyTiles");
-    const auto scroll = extractFunctionBlock(
-        component, "void PianoRollComponent::scrollViewportSurfaceTo");
+    const auto verticalZoom = extractFunctionBlock(
+        component, "void PianoRollComponent::handleVerticalZoomWheel");
+    const auto horizontalZoom = extractFunctionBlock(
+        component, "void PianoRollComponent::handleHorizontalZoomWheel");
 
-    expect(inOrder(rebuild,
-                   {"drawWaveformOnSurface(g, cw, ch, ppsCanonical);",
-                    "g.setColour(juce::Colours::white);",
-                    "g.drawImageTransformed(entry->foreground"}),
-           "rebuildViewportSurfaceFromReadyTiles must reset opaque colour before foreground tiles");
-    expect(inOrder(scroll,
-                   {"drawWaveformOnSurface(g, cw, ch, ppsCanonical);",
-                    "g.setColour(juce::Colours::white);",
-                    "g.drawImageTransformed(entry->foreground"}),
-           "scrollViewportSurfaceTo must reset opaque colour before foreground tiles");
+    expect(!verticalZoom.empty(), "vertical Piano Roll zoom handler must be found");
+    expect(!horizontalZoom.empty(), "horizontal Piano Roll zoom handler must be found");
+    expectNoTokens("vertical Piano Roll zoom handler",
+                   verticalZoom,
+                   {"juce::Image", "tiles_.clear()"});
+    expectNoTokens("horizontal Piano Roll zoom handler",
+                   horizontalZoom,
+                   {"juce::Image", "tiles_.clear()"});
 }
 
 } // namespace
@@ -1107,12 +1096,12 @@ int main()
         captureApplyAudioBufferContractIsReferenceWithIdentityTimeGrid();
         captureCallSitesDereferenceNotNullSharedPtr();
 
-        // PianoRoll ruler control footprint — tile cache identity 只描述像素
+        // PianoRoll direct-paint and ruler control contracts
         drawTimeRulerHasRulerPaintBounds();
         noArrangementClipExclusionLeakedToPianoRoll();
         f0CurvesStayFullyOpaque();
-        pianoRollBaseSceneStaysNativeRaster();
-        pianoRollForegroundTilesResetOpaqueColourAfterWaveform();
+        pianoRollUsesDirectPaintingWithoutRetainedPixelCache();
+        pianoRollZoomHandlersAvoidBusinessImageAllocation();
 
         // ARA TimeGrid 计划的结构契约
         araAudioModificationStructureHasTimeGridPlan();

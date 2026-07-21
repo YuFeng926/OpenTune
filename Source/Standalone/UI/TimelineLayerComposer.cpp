@@ -268,7 +268,7 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
     const auto themeId = static_cast<ThemeId>(params.themeId);
     const float pixelsPerSemitone = params.pixelsPerSemitone;
     const int pianoKeyWidth = 0;
-    const int worldTopY = params.worldTopY;
+    const float worldTopY = params.worldTopY;
     const bool showLanes = decodeShowLanes(params.laneStyle);
     const int scaleRootNote = decodeScaleRootNote(params.laneStyle);
     const int scaleType = decodeScaleType(params.laneStyle);

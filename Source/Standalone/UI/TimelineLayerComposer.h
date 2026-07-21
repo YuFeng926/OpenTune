@@ -15,7 +15,7 @@ struct RenderParams {
     int tempo = 120;
     int themeId = 0;
     float pixelsPerSemitone = 1.0f;
-    int worldTopY = 0;
+    float worldTopY = 0.0f;
     int rulerHeight = 0;
     int laneStyle = 0;
     int viewportWidth = 0;

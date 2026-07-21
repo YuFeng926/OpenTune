@@ -347,10 +347,18 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
         : UIColors::backgroundMedium.withAlpha(0.22f);
     g.setColour(bandColour);
 
-    // Scan originalF0 for unvoiced intervals directly
+    // Scan only the visible F0 frame range for unvoiced intervals directly.
     int unvoicedStart = -1;
     const int totalFrames = static_cast<int>(originalF0.size());
-    for (int frame = 0; frame < totalFrames; ++frame) {
+    const auto visibleFrames = item.f0Timeline.rangeForTimes(
+        visibleWindow.visibleContentStartTime,
+        visibleWindow.visibleContentEndTime);
+    const int startFrame = visibleFrames.startFrame;
+    const int endFrameExclusive = std::min(visibleFrames.endFrameExclusive, totalFrames);
+    if (endFrameExclusive <= startFrame)
+        return;
+
+    for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
         const bool isVoiced = originalF0[static_cast<std::size_t>(frame)] > 0.0f;
         if (isVoiced) {
             if (unvoicedStart >= 0) {
@@ -383,7 +391,7 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
     // Handle trailing unvoiced interval
     if (unvoicedStart >= 0) {
         const double intervalStartTime = item.f0Timeline.timeAtFrame(unvoicedStart);
-        const double intervalEndTime = item.f0Timeline.timeAtFrame(totalFrames);
+        const double intervalEndTime = item.f0Timeline.timeAtFrame(endFrameExclusive);
 
         if (intervalEndTime > visibleWindow.visibleContentStartTime &&
             intervalStartTime < visibleWindow.visibleContentEndTime) {
@@ -904,7 +912,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
         if (isAurora)
         {
-            g.setColour(noteColor.withAlpha(0.90f));
+            g.setColour(noteColor.withAlpha(0.50f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 7.0f));
@@ -930,7 +938,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(noteColor.withAlpha(0.90f));
+            g.setColour(noteColor.withAlpha(0.50f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 6.0f));
@@ -952,7 +960,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else
         {
-            g.setColour(noteColor.withAlpha(0.90f));
+            g.setColour(noteColor.withAlpha(0.50f));
             g.fillRect(noteBounds);
 
             g.setColour(UIColors::noteBlockBorder.withAlpha(0.50f));
