@@ -156,7 +156,7 @@ void TrackPanelComponent::paint(juce::Graphics& g)
     else if (themeId == ThemeId::Aurora)
     {
         UIColors::drawShadow(g, bounds);
-        UIColors::fillAuroraTimelineBackground(g, bounds, style.panelRadius);
+        UIColors::fillTrackPanelBackground(g, bounds, style.panelRadius);
     }
     else if (themeId == ThemeId::DarkBlueGrey) {
         // Draw Soft Shadow for the whole panel

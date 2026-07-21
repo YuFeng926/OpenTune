@@ -99,6 +99,7 @@ struct ThemeTokens
     juce::Colour pianoRollLane;
     juce::Colour pianoRollGrid;
     juce::Colour pianoRollWaveform;
+    juce::Colour trackPanelBackground;
     juce::Colour sidebarTrackFade;
     juce::Colour auroraSidebarShellTop;
     juce::Colour auroraSidebarShellMid;
@@ -350,6 +351,7 @@ private:
             juce::Colour { BlueBreeze::Colors::GridSoft }.withAlpha(0.14f),
             juce::Colour { 0xFF0C3C4A },
             juce::Colour { BlueBreeze::Colors::FieldFogBottom },
+            juce::Colour { BlueBreeze::Colors::FieldFogBottom },
             juce::Colour { BlueBreeze::Colors::FieldFogMid },
             juce::Colour { BlueBreeze::Colors::GraphBgDeep },
             juce::Colour { BlueBreeze::Colors::SourceLight }.withAlpha(0.18f),
@@ -451,6 +453,7 @@ private:
             juce::Colour { DarkBlueGrey::Colors::LaneC },
             juce::Colour { DarkBlueGrey::Colors::GridLine },
             juce::Colour { DarkBlueGrey::Colors::WaveformFill },
+            juce::Colour { DarkBlueGrey::Colors::RollBackground },
             juce::Colour { DarkBlueGrey::Colors::ShadowTrack },
             juce::Colour { DarkBlueGrey::Colors::BackgroundMedium },
             juce::Colour { DarkBlueGrey::Colors::BackgroundDark },
@@ -607,6 +610,7 @@ private:
             juce::Colour { Aurora::Colors::PianoLane },
             juce::Colour { Aurora::Colors::PianoGrid },
             juce::Colour { Aurora::Colors::PianoWaveform },
+            juce::Colour { Aurora::Colors::PianoRollBg }, // trackPanelBackground
             juce::Colour { Aurora::Colors::SidebarTrackFade },
             juce::Colour { Aurora::Colors::SidebarShellTop },
             juce::Colour { Aurora::Colors::SidebarShellMid },
@@ -648,6 +652,7 @@ private:
             juce::Colour(0xDDF8F0F8), juce::Colour(0xBFFFFFFF), juce::Colour(0x80FFD4E8), juce::Colour(0x32FF80B8),
             juce::Colour(0xFFE8E8F0), juce::Colour(0xFFF6F3FA), juce::Colour(0xFFFFE0F0),
             juce::Colour(0xFFF4F0F6), juce::Colour(0x22FFFFFF), juce::Colour(0x70AEB3C0), juce::Colour(0xFF0C3C4A),
+            juce::Colour(0xFFF4F0F6),
             juce::Colour(0xFFF4F0F6), juce::Colour(0xFFE8E8F0), juce::Colour(0xFFDADDE6),
             juce::Colour(0x30FFFFFF), juce::Colour(0x70AEB3C0), juce::Colour(0x24FFD4E8),
             juce::Colour(0x18FFD4E8), juce::Colour(0x14FFD4E8), juce::Colour(0xFFCCD0D8),

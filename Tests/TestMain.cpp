@@ -1062,6 +1062,26 @@ void pianoRollBaseSceneStaysNativeRaster()
                    {"noteColor.withAlpha(0.50f)"});
 }
 
+void pianoRollForegroundTilesResetOpaqueColourAfterWaveform()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto rebuild = extractFunctionBlock(
+        component, "void PianoRollComponent::rebuildViewportSurfaceFromReadyTiles");
+    const auto scroll = extractFunctionBlock(
+        component, "void PianoRollComponent::scrollViewportSurfaceTo");
+
+    expect(inOrder(rebuild,
+                   {"drawWaveformOnSurface(g, cw, ch, ppsCanonical);",
+                    "g.setColour(juce::Colours::white);",
+                    "g.drawImageTransformed(entry->foreground"}),
+           "rebuildViewportSurfaceFromReadyTiles must reset opaque colour before foreground tiles");
+    expect(inOrder(scroll,
+                   {"drawWaveformOnSurface(g, cw, ch, ppsCanonical);",
+                    "g.setColour(juce::Colours::white);",
+                    "g.drawImageTransformed(entry->foreground"}),
+           "scrollViewportSurfaceTo must reset opaque colour before foreground tiles");
+}
+
 } // namespace
 
 int main()
@@ -1092,6 +1112,7 @@ int main()
         noArrangementClipExclusionLeakedToPianoRoll();
         f0CurvesStayFullyOpaque();
         pianoRollBaseSceneStaysNativeRaster();
+        pianoRollForegroundTilesResetOpaqueColourAfterWaveform();
 
         // ARA TimeGrid 计划的结构契约
         araAudioModificationStructureHasTimeGridPlan();

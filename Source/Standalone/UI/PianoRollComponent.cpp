@@ -2616,7 +2616,8 @@ void PianoRollComponent::rebuildThemeBackdrop()
                 UIColors::fillSoothe2SpectrumBackground(g, bounds.toFloat(), UIColors::cornerRadius);
                 break;
             case ThemeId::Aurora:
-                UIColors::fillAuroraTimelineBackground(g, bounds.toFloat(), UIColors::cornerRadius);
+                g.setColour(UIColors::rollBackground);
+                g.fillPath(chromePath);
                 break;
             case ThemeId::BlueBreeze:
                 UIColors::fillMistedTimelineField(g, bounds.toFloat(), UIColors::cornerRadius);
@@ -3282,6 +3283,8 @@ void PianoRollComponent::rebuildViewportSurfaceFromReadyTiles()
 
         // Step 2: Waveform (viewport-space, 画在 background 之上)
         drawWaveformOnSurface(g, cw, ch, ppsCanonical);
+        // JUCE image compositing uses the current fill alpha; restore opaque colour for foreground tiles.
+        g.setColour(juce::Colours::white);
 
         // Step 3: Foreground planes (notes + F0 + anchors)
         for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
@@ -3441,6 +3444,7 @@ void PianoRollComponent::scrollViewportSurfaceTo(const TimelineViewportCamera& n
 
             // Step 2: Waveform
             drawWaveformOnSurface(g, cw, ch, ppsCanonical);
+            g.setColour(juce::Colours::white);
 
             // Step 3: Foreground planes
             for (int64_t tt = firstTimeTile; tt <= lastTimeTile; ++tt) {
