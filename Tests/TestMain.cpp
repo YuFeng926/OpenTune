@@ -1015,6 +1015,53 @@ void noArrangementClipExclusionLeakedToPianoRoll()
                     "exclusionRect", "clipExclusionRect"});
 }
 
+void f0CurvesStayFullyOpaque()
+{
+    const auto rendererHeader = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+    const auto rendererImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    const auto drawF0Curve = extractFunctionBlock(
+        rendererImpl,
+        "void PianoRollRenderer::drawF0Curve");
+    const auto originalCurve = extractBlockByMarker(drawF0Curve, "if (ctx.showOriginalF0)");
+    const auto correctedCurve = extractBlockByMarker(
+        drawF0Curve,
+        "if (ctx.showCorrectedF0 && item.pitchSnapshot->hasCorrectionLayer())");
+
+    expectNoTokens("F0 visual points have no segment taper", rendererHeader, {"segmentTaper"});
+    expectNoTokens("F0 renderer has no segment taper", rendererImpl,
+                   {"segmentTaper", "fadeSpanCount", "taperAlpha"});
+    expect(countOf(drawF0Curve, "const float alpha = 1.0f;") == 2,
+           "original and corrected F0 must use full base opacity");
+    expectNoTokens("original F0 has no energy alpha", originalCurve,
+                   {"p.energyAlpha", "pt.energyAlpha"});
+    expectNoTokens("corrected F0 has no energy alpha", correctedCurve,
+                   {"p.energyAlpha", "pt.energyAlpha"});
+    expectTokens("original F0 full core opacity", originalCurve, {"colour.withAlpha(1.0f)"});
+    expectTokens("corrected F0 full core opacity", correctedCurve,
+                 {"withAlpha(1.0f)", "buildGradient(1.0f)"});
+}
+
+void pianoRollBaseSceneStaysNativeRaster()
+{
+    const auto componentHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
+    const auto componentImpl = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto rendererImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    const auto paint = extractFunctionBlock(componentImpl, "void PianoRollComponent::paint");
+    const auto drawNotes = extractFunctionBlock(rendererImpl, "void PianoRollRenderer::drawNotes");
+
+    expectNoTokens("Piano Roll has no scaled base-scene preview",
+                   componentHeader + componentImpl,
+                   {"zoomDeferredRebuild_", "surfaceStartSeconds_", "surfacePps_",
+                    "surfacePixelsPerSemitone_", "surfaceVerticalScroll_"});
+    expectNoTokens("Piano Roll paints cached content at native raster",
+                   paint,
+                   {"g.drawImage(viewportSurface_", "setImageResamplingQuality"});
+    expect(countOf(drawNotes, "noteColor.withAlpha(0.90f)") == 3,
+           "all Piano Roll note styles must keep their 0.90f fill opacity");
+    expectNoTokens("Piano Roll notes have no regressed fill opacity", drawNotes,
+                   {"noteColor.withAlpha(0.50f)"});
+}
+
 } // namespace
 
 int main()
@@ -1043,6 +1090,8 @@ int main()
         // PianoRoll ruler control footprint — tile cache identity 只描述像素
         drawTimeRulerHasRulerPaintBounds();
         noArrangementClipExclusionLeakedToPianoRoll();
+        f0CurvesStayFullyOpaque();
+        pianoRollBaseSceneStaysNativeRaster();
 
         // ARA TimeGrid 计划的结构契约
         araAudioModificationStructureHasTimeGridPlan();

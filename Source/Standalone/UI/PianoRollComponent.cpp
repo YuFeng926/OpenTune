@@ -1365,34 +1365,8 @@ void PianoRollComponent::paint(juce::Graphics& g)
     {
         juce::Graphics::ScopedSaveState contentSave(g);
         g.reduceClipRegion(getTimelineViewportBounds().withTrimmedTop(rulerHeight_));
-        if (viewportSurface_.isValid() && surfacePps_ > 0.0)
-        {
-            const double scaleX = camera_.pixelsPerSecond / surfacePps_;
-            const double scaleY = (surfacePixelsPerSemitone_ > 0.0f)
-                ? static_cast<double>(pixelsPerSemitone_ / surfacePixelsPerSemitone_)
-                : 1.0;
-            if (!zoomDeferredRebuild_)
-            {
-                g.drawImageAt(viewportSurface_, pianoKeyWidth_, rulerHeight_, false);
-            }
-            else
-            {
-                // Zoom in progress: scale old surface as fast 2D preview.
-                const double offsetPx = (surfaceStartSeconds_ - camera_.visibleStartSeconds)
-                    * camera_.pixelsPerSecond;
-                const double offsetPy = static_cast<double>(surfaceVerticalScroll_) * scaleY - static_cast<double>(verticalScrollOffset_);
-                const int dstW = juce::roundToInt(viewportSurface_.getWidth() * scaleX);
-                const int dstH = juce::roundToInt(viewportSurface_.getHeight() * scaleY);
-                g.setImageResamplingQuality(juce::Graphics::lowResamplingQuality);
-                g.drawImage(viewportSurface_,
-                    pianoKeyWidth_ + juce::roundToInt(offsetPx),
-                    rulerHeight_ + juce::roundToInt(offsetPy),
-                    dstW, dstH,
-                    0, 0,
-                    viewportSurface_.getWidth(), viewportSurface_.getHeight(),
-                    false);
-            }
-        }
+        if (viewportSurface_.isValid())
+            g.drawImageAt(viewportSurface_, pianoKeyWidth_, rulerHeight_, false);
 
         drawTransientOverlay(g);
     }
@@ -2434,17 +2408,6 @@ void PianoRollComponent::onHeartbeatTick()
         }
     }
 
-    // Deferred zoom rebuild: when zoom gesture has been idle for cooldown,
-    // do a single full rebuild at the final camera/geometry state.
-    if (zoomDeferredRebuild_) {
-        const double elapsed = juce::Time::getMillisecondCounterHiRes()
-            - static_cast<double>(lastZoomEventTimeMs_);
-        if (elapsed >= kZoomCooldownMs) {
-            zoomDeferredRebuild_ = false;
-            rebuildTimelineCoverage();
-            repaint();
-        }
-    }
 }
 
 void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
@@ -2456,21 +2419,6 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     const bool playingNow = playHeadState_.isPlaying.load(std::memory_order_relaxed);
     if (!playingNow)
         return;
-
-    // During zoom deferral: keep camera/playhead running, but skip
-    // surface scrolling and tile coverage expansion. Paint() handles
-    // the scaled preview.
-    if (zoomDeferredRebuild_) {
-        camera_ = TimelineViewportPolicy::resolve(
-            makeViewportRequest(
-                (scrollMode_ == ScrollMode::Continuous) ? TimelineViewportRequest::Kind::Cont
-                                                        : TimelineViewportRequest::Kind::Page,
-                readPlayheadTime(), 0.0, camera_.pixelsPerSecond));
-        playheadTimeForPaint_ = readPlayheadTime();
-        lastPlayheadDirtyRect_ = playheadDirtyRect();
-        repaint(timeAxisRect());
-        return;
-    }
 
     const double currentPlayheadTime = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
     double playheadTime = currentPlayheadTime;
@@ -2573,17 +2521,7 @@ void PianoRollComponent::activateTimelineCamera(TimelineViewportCamera camera)
     requestTransition_ = false;
     camera_ = camera;
 
-    // During wheel zoom, defer tile rebuild. Camera updates immediately;
-    // surface is scaled in paint() as fast preview.
-    if (zoomDeferredRebuild_)
-    {
-        zoomDeferredRebuild_ = true;
-        lastZoomEventTimeMs_ = static_cast<int64_t>(juce::Time::getMillisecondCounterHiRes());
-    }
-    else
-    {
-        rebuildTimelineCoverage();
-    }
+    rebuildTimelineCoverage();
 
     repaint();
     updateScrollBars();
@@ -2612,8 +2550,6 @@ void PianoRollComponent::preparePlaybackCoverage()
 
 void PianoRollComponent::rebuildTimelineCoverage()
 {
-    if (zoomDeferredRebuild_)
-        return;
     viewportSurface_ = juce::Image();
     currentSurfaceCamera_ = {};
     lastPlayheadDirtyRect_ = {};
@@ -3004,8 +2940,6 @@ void PianoRollComponent::handleVerticalZoomWheel(const juce::MouseEvent& e, floa
     
     pixelsPerSemitone_ *= zoomFactor;
     pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, pixelsPerSemitone_);
-    zoomDeferredRebuild_ = true;
-    lastZoomEventTimeMs_ = static_cast<int64_t>(juce::Time::getMillisecondCounterHiRes());
     userHasManuallyZoomed_ = true;
 
     float targetY = (maxMidi_ - mouseMidi) * pixelsPerSemitone_;
@@ -3020,13 +2954,7 @@ void PianoRollComponent::handleVerticalZoomWheel(const juce::MouseEvent& e, floa
         verticalScrollOffset_ = 0.0f;
     }
 
-    // Defer tile rebuild during vertical zoom: geometry change triggers
-    // tiles_.clear() which is expensive per-wheel-event. Surface is
-    // scaled in paint() as fast preview; full rebuild fires after cooldown.
-    zoomDeferredRebuild_ = true;
-    lastZoomEventTimeMs_ = static_cast<int64_t>(juce::Time::getMillisecondCounterHiRes());
-    updateScrollBars();
-    repaint();
+    refreshVerticalViewportGeometry();
 }
 
 void PianoRollComponent::handleHorizontalScrollWheel(float deltaX, float deltaY) {
@@ -3068,8 +2996,6 @@ void PianoRollComponent::handleHorizontalZoomWheel(const juce::MouseEvent& e, fl
     const int mouseX = e.x - pianoKeyWidth_;
     const double mouseTime = camera_.visibleStartSeconds + mouseX / oldPps;
 
-    zoomDeferredRebuild_ = true;
-    lastZoomEventTimeMs_ = static_cast<int64_t>(juce::Time::getMillisecondCounterHiRes());
     userHasManuallyZoomed_ = true;
     const auto req = makeViewportRequest(
         TimelineViewportRequest::Kind::Zoom,
@@ -3307,8 +3233,6 @@ juce::Rectangle<int> PianoRollComponent::timeAxisRect() const
 
 void PianoRollComponent::rebuildViewportSurfaceFromReadyTiles()
 {
-    if (zoomDeferredRebuild_)
-        return;
     const int cw = getTimelineContentViewportWidth();
     const int ch = getTimelineContentViewportHeight();
     if (cw <= 0 || ch <= 0)
@@ -3376,10 +3300,6 @@ void PianoRollComponent::rebuildViewportSurfaceFromReadyTiles()
     }
 
     currentSurfaceCamera_ = camera_;
-    surfaceStartSeconds_ = camera_.visibleStartSeconds;
-    surfacePps_ = ppsCanonical;
-    surfacePixelsPerSemitone_ = pixelsPerSemitone_;
-    surfaceVerticalScroll_ = verticalScrollOffset_;
 }
 
 void PianoRollComponent::drawWaveformOnSurface(juce::Graphics& g, int surfaceWidth, int surfaceHeight,
@@ -3435,8 +3355,6 @@ void PianoRollComponent::drawWaveformOnSurface(juce::Graphics& g, int surfaceWid
 
 void PianoRollComponent::scrollViewportSurfaceTo(const TimelineViewportCamera& nextCamera)
 {
-    if (zoomDeferredRebuild_)
-        return;
     const int cw = getTimelineContentViewportWidth();
     const int ch = getTimelineContentViewportHeight();
     if (cw <= 0 || ch <= 0)
@@ -3542,10 +3460,6 @@ void PianoRollComponent::scrollViewportSurfaceTo(const TimelineViewportCamera& n
     }
 
     currentSurfaceCamera_ = nextCamera;
-    surfaceStartSeconds_ = nextCamera.visibleStartSeconds;
-    surfacePps_ = std::round(nextCamera.pixelsPerSecond * 1000.0) / 1000.0;
-    surfacePixelsPerSemitone_ = pixelsPerSemitone_;
-    surfaceVerticalScroll_ = verticalScrollOffset_;
 }
 
 juce::Rectangle<int> PianoRollComponent::playheadDirtyRect() const
@@ -4072,9 +3986,6 @@ void PianoRollComponent::buildForegroundTile(
 
 void PianoRollComponent::prepareCoverageCompositeTilesNew()
 {
-    if (zoomDeferredRebuild_)
-        return;
-
     const auto sig = makeGenerationSignature();
     const double ppsCanonical = sig.ppsMilli / 1000.0;
     const double tileDuration = TimelineCompositeCache::kTileWidthPx / ppsCanonical;
