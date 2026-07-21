@@ -111,6 +111,7 @@ struct UIColors
     static inline juce::Colour pianoRollLane { 0xFF87B6D4 };
     static inline juce::Colour pianoRollGrid { 0xFF9BD5FF };
     static inline juce::Colour pianoRollWaveform { 0xFF0C3C4A };
+    static inline juce::Colour trackPanelBackground { 0xFF0C1D2F };
     static inline juce::Colour sidebarTrackFade { 0x7A1F7BFF };
     static inline juce::Colour auroraSidebarShellTop { 0xFF142C45 };
     static inline juce::Colour auroraSidebarShellMid { 0xFF0E2238 };
@@ -222,6 +223,7 @@ struct UIColors
         pianoRollLane = tokens.pianoRollLane;
         pianoRollGrid = tokens.pianoRollGrid;
         pianoRollWaveform = tokens.pianoRollWaveform;
+        trackPanelBackground = tokens.trackPanelBackground;
         sidebarTrackFade = tokens.sidebarTrackFade;
         auroraSidebarShellTop = tokens.auroraSidebarShellTop;
         auroraSidebarShellMid = tokens.auroraSidebarShellMid;
@@ -523,6 +525,14 @@ struct UIColors
         const auto top = pianoRollBackground.brighter(0.045f);
         const auto middle = pianoRollBackground.interpolatedWith(backgroundDark, 0.08f);
         const auto bottom = pianoRollBackground.darker(0.075f);
+        fillSoftTimelineCanvas(g, bounds, radius, top, middle, bottom, 0.44);
+    }
+
+    static void fillTrackPanelBackground(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)
+    {
+        const auto top = trackPanelBackground.brighter(0.045f);
+        const auto middle = trackPanelBackground.interpolatedWith(backgroundDark, 0.08f);
+        const auto bottom = trackPanelBackground.darker(0.075f);
         fillSoftTimelineCanvas(g, bounds, radius, top, middle, bottom, 0.44);
     }
 
