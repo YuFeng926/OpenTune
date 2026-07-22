@@ -2,12 +2,17 @@
 
 /**
  * 钢琴卷帘组件
- * 
+ *
  * 显示和编辑音高曲线、音符序列的组件，支持：
  * - F0 曲线显示（原始音高和校正后音高）
  * - 音符绘制和编辑
  * - 多种工具（选择、绘制、音高线锚点等）
  * - 缩放和滚动
+ *
+ * 渲染架构：两张保留 Image + 一层透明 Overlay
+ * - staticSurface_  ：主题背景、标尺、lane、网格、琴键
+ * - contentSurface_ ：波形、无声帧、notes、F0、TimeGrid 锚点、ghost
+ * - overlay_        ：播放头、选中高亮、框选、绘制预览、TimeGrid 把手
  */
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -55,7 +60,22 @@ struct PlayHeadState;
 struct PianoRollComponentTestProbe;
 
 // ============================================================================
-// PianoRollComponent — piano roll editor with direct viewport rendering.
+// PianoRollOverlayComponent — 透明覆盖层，绘制所有交互/动态元素
+// ============================================================================
+
+class PianoRollComponent; // fwd
+
+class PianoRollOverlayComponent : public juce::Component {
+public:
+    explicit PianoRollOverlayComponent(PianoRollComponent& owner);
+    void paint(juce::Graphics& g) override;
+    bool hitTest(int x, int y) override { (void)x; (void)y; return false; }
+private:
+    PianoRollComponent& owner_;
+};
+
+// ============================================================================
+// PianoRollComponent — piano roll editor with retained-image rendering.
 // ============================================================================
 
 class PianoRollComponent : public juce::Component,
@@ -98,7 +118,6 @@ public:
     ~PianoRollComponent() override;
 
     void paint(juce::Graphics& g) override;
-    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
     void onHeartbeatTick();
 
@@ -143,12 +162,9 @@ public:
     void setTimeUnit(TimeUnit unit);
     TimeUnit getTimeUnit() const { return timeUnit_; }
     void setScrollMode(ScrollMode mode) {
-        if (scrollMode_ == mode) {
-            return;
-        }
-
+        if (scrollMode_ == mode) return;
         scrollMode_ = mode;
-        repaint();
+        overlay_->repaint();
     }
     ScrollMode getScrollMode() const { return scrollMode_; }
     void setScale(int rootNote, int scaleType);
@@ -197,7 +213,7 @@ public:
 
     void setPlayheadColour(juce::Colour colour) {
         playheadColour_ = colour;
-        repaint();
+        overlay_->repaint();
     }
 
     void fitToScreen();
@@ -239,6 +255,51 @@ public:
 
 private:
     friend struct PianoRollComponentTestProbe;
+    friend class PianoRollOverlayComponent;
+
+    // ── 表面状态 ──────────────────────────────────────────────
+    juce::Image staticSurface_;
+    juce::Image contentSurface_;
+    TimelineViewportCamera rasterCamera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
+    bool staticDirty_ = true;
+    bool contentDirty_ = true;
+
+    // ── 缩放事务冻结源值（仅预览期读取，非通用 raster 相机状态） ──
+    float surfacePixelsPerSemitone_ = 25.0f;
+    float surfaceVerticalScrollOffset_ = 0.0f;
+
+    // ── 缩放事务 ──────────────────────────────────────────────
+    bool zoomPreviewActive_ = false;
+    double zoomAnchorTime_ = -1.0;   // -1.0 sentinel: invalid until beginZoomPreview sets it
+    int zoomAnchorViewportX_ = 0;
+    int zoomDeadlineTicks_ = 0;          // 心跳计数倒计时，0 表示事务结束
+    static constexpr int kZoomDeadlineTicks = 10;  // ~400ms @ 25Hz 心跳
+
+    // ── 表面管理 ──────────────────────────────────────────────
+    void rasterizeDirtySurfaces();
+    void rasterizeStatic(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
+    void rasterizeContent(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
+
+    // ── 性能探针 ──────────────────────────────────────────────
+    struct RasterProbe { int count = 0; double totalMs = 0.0; };
+    RasterProbe staticRasterProbe_;
+    RasterProbe contentRasterProbe_;
+    RasterProbe overlayPresentProbe_;
+    double probeReportWindowStart_ = 0.0;
+
+    enum class RenderProbePoint { StaticRaster, ContentRaster, OverlayPresent };
+    void recordRenderProbe(RenderProbePoint point, double elapsedMs);
+
+    // ── 保留式相机更新 ────────────────────────────────────────
+    void applyRasterCamera(const TimelineViewportCamera& newCamera);
+
+    // ── 缩放事务 ──────────────────────────────────────────────
+    void beginZoomPreview(const juce::MouseEvent& e, float deltaY);
+    void updateZoomPreview(float deltaY);
+    void endZoomPreview();
+
+    // ── 内容构建（供 rasterize + overlay 共用） ────────────────
+    std::vector<PianoRollRenderer::ContentRenderItem> buildContentRenderItems() const;
 
     bool tryConsumeInitialF0View(ContentKey contentKey);
 
@@ -266,14 +327,12 @@ private:
     void mouseMove(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
-    void mouseDoubleClick(const juce::MouseEvent& e) override;   // ⚡️ §8.4 Time tool
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 public:
     bool keyPressed(const juce::KeyPress& key) override;
 
     /// Re-read notes from the content store and update the cache.
-    /// Public so editors can drive a refresh after an async note generator
-    /// (e.g. GAME) commits without changing the active ContentKey.
     void refreshEditedContentNotes();
 
 private:
@@ -283,24 +342,28 @@ private:
     int getTimelineContentViewportHeight() const;
 
     ViewMapper makeViewMapper() const noexcept;
+    ViewMapper makeViewMapperForCamera(const TimelineViewportCamera& cam) const noexcept;
     double computeContentTimelineEndSeconds() const noexcept;
+    juce::Rectangle<int> timeAxisRect() const;
 
+    // ── Overlay 绘制委托（由 PianoRollOverlayComponent 调用） ──
+    void drawPlayheadOverlay(juce::Graphics& g);
+    void drawTransientOverlay(juce::Graphics& g);
     void drawNoteDragCurvePreview(juce::Graphics& g);
     void drawHandDrawPreview(juce::Graphics& g);
     void drawLineAnchorPreview(juce::Graphics& g);
     void drawSelectionBox(juce::Graphics& g, ThemeId themeId);
+    void drawTimeGridHandles(juce::Graphics& g);
+    void drawSelectedNoteHighlights(juce::Graphics& g);
+    void drawPianoKeysPressed(juce::Graphics& g);
+
     bool shouldShowPianoKeys() const noexcept;
     bool isTimeView() const noexcept { return currentTool_ == ToolId::TimeTool; }
-
 
     void handleVerticalZoomWheel(const juce::MouseEvent& e, float deltaY);
     void handleHorizontalScrollWheel(float deltaX, float deltaY);
     void handleVerticalScrollWheel(float deltaY);
     void handleHorizontalZoomWheel(const juce::MouseEvent& e, float deltaY);
-
-    void drawTransientOverlay(juce::Graphics& g,
-                              const PianoRollRenderer::RenderContext& ctx);
-    void drawPlayhead(juce::Graphics& g);
 
     TimelineViewportRequest makeViewportRequest(
         TimelineViewportRequest::Kind kind,
@@ -340,7 +403,7 @@ private:
     void invalidateInteractionPreview(const juce::Rectangle<int>& bounds);
 
     float getTotalHeight() const;
-    
+
     F0Timeline currentF0Timeline() const noexcept {
         if (currentCurve_ == nullptr) return {};
         auto snap = currentCurve_->getSnapshot();
@@ -356,22 +419,15 @@ private:
     double xToSourceTime(int x) const;
     SourceEditRange sourceEditRange() const;
 
-    PianoRollRenderer::RenderContext buildRenderContext() const;
-    juce::Rectangle<int> timeAxisRect() const;
-
 private:
     TimelineViewportCamera camera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
     float verticalScrollOffset_ = 0.0f;
     ScrollMode scrollMode_ = ScrollMode::Continuous;
 
-    // Processor-owned canonical transport truth (non-owning const reference).
-    // UI reads isPlaying / timeInSeconds directly; writes happen only via the
-    // editor's transport actions (Standalone processor setters or ARA requests).
     const PlayHeadState& playHeadState_;
     bool lastObservedPlayHeadPlaying_{false};
 
-    // Cont-mode scroll state
-    bool userScrollHold_{false};         // user manually scrolled → pause auto-follow
+    bool userScrollHold_{false};
 
     bool userHasManuallyZoomed_ = false;
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity_ = ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
@@ -408,7 +464,6 @@ private:
     NoteSegmentationPolicy segmentationPolicy_;
     
 
-
     double bpm_ = 120.0;
     int timeSigNum_ = 4;
     int timeSigDenom_ = 4;
@@ -422,11 +477,9 @@ private:
     bool explicitTimelineContentPlacements_ = false;
     bool inferenceActive_ = false;
     int waveformBuildTickCounter_ = 0;
-    bool waveformVisualRefreshPending_ = false;
 
     OpenTuneAudioProcessor* processor_ = nullptr;
 
-    // Phase 4: Read snapshot via callback, write via ContentEditCommands
     ReadContentSnapshotFn readContentSnapshot_;
     std::shared_ptr<ContentEditCommands> contentCommands_;
 
@@ -436,8 +489,6 @@ private:
     std::shared_ptr<const EditableContentSnapshot> readEditedSnapshot() const {
         return readSnapshotFor(editedContentKey_);
     }
-
-    // [ARA 重构] 域内容所有者（替代 contentAccess_/contentCommands_ 的旧路由）
 
     ContentKey editedContentKey_;
     std::set<ContentKey> pendingInitialF0ViewRequests_;
@@ -474,8 +525,6 @@ private:
     uint64_t lastKnownNotesRevision_ = 0;
     uint64_t lastKnownPitchRevision_ = 0;
     uint64_t lastKnownTimeGridRevision_ = 0;
-    /// Built once per frame in paint() and reused by paintOverChildren().
-    mutable PianoRollRenderer::RenderContext perFrameRenderContext_;
 
     static constexpr int pianoKeyWidth_ = 60;
     static constexpr int rulerHeight_ = 30;
@@ -484,17 +533,13 @@ private:
     
     PianoKeyAudition* pianoKeyAudition_ = nullptr;
     int pressedPianoKey_ = -1;
-    
-    juce::Image themeBackdrop_;
-    void rebuildThemeBackdrop();
+
     int64_t lastDpiMilli_ = 1000;
 
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
+    std::unique_ptr<PianoRollOverlayComponent> overlay_;
+
     double playheadTimeForPaint_ = 0.0;
-    // Presentation prediction for a seek request that has been dispatched. Cleared
-    // as soon as the processor-owned state's hostPositionRevision advances (host
-    // acknowledged the seek) — never used as canonical time. No ±50ms / timeout
-    // / retry: the host may ignore, delay, quantize, or clamp the request.
     double pendingSeekTime_{-1.0};
     uint64_t seekSentRevision_{0};
 

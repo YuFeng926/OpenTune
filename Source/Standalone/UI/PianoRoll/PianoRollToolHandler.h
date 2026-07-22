@@ -201,7 +201,7 @@ public:
                             std::shared_ptr<const TimeGridSnapshot> /*oldSnapshot*/,
                             juce::String /*description*/)> commitTimeGrid;
         // repaintTimeGridHandles: visual-only repaint for hover/select/drag
-        // (handles are in paintOverChildren overlay, not in cache).
+        // (handles are in the transparent overlay, not in the retained cache).
         std::function<void()> repaintTimeGridHandles;
     };
 

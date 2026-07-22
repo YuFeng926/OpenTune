@@ -12,7 +12,7 @@ struct RenderParams {
     double visibleEndSeconds = 0.0;
     double pixelsPerSecond = 100.0;
     int timeUnit = 0;
-    int tempo = 120;
+    double tempo = 120.0;
     int themeId = 0;
     float pixelsPerSemitone = 1.0f;
     float worldTopY = 0.0f;

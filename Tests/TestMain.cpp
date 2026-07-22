@@ -360,16 +360,18 @@ void togglePlacementSelectionAllowsLastItemToggle()
            "togglePlacementSelection must not have unused-param ceremony");
 }
 
-void commitEmptyClearsModelSelection()
+void commitEmptyDoesNotDestroyPerTrackMemory()
 {
     const auto src = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
     const auto emptyBody = extractFunctionBlock(src, "void ArrangementViewComponent::commitEmptyPlacementSelection");
 
     expect(!emptyBody.empty(), "commitEmptyPlacementSelection must be found");
     expectTokens("commitEmptyPlacementSelection", emptyBody,
-                 {"clearAllSelections()"});
+                 {"placementSelectionChanged"});
+    expect(!contains(emptyBody, "clearAllSelections()"),
+            "commitEmptyPlacementSelection must NOT use clearAllSelections() — preserves per-track selectedPlacementId");
     expect(!contains(emptyBody, "selectPlacement(previousTrack"),
-            "commitEmptyPlacementSelection must use clearAllSelections() not per-track selectPlacement");
+            "commitEmptyPlacementSelection must not use per-track selectPlacement");
 }
 
 // ----------------------------------------------------------------------------
@@ -919,7 +921,7 @@ void noSelectPlacementOutsideCommitHelpers()
            + " commit=" + std::to_string(inCommit) + " empty=" + std::to_string(inEmpty) + ")");
 }
 
-void selectPlacementClearsOtherTracks()
+void selectPlacementPreservesPerTrackMemory()
 {
     const auto src = readText("Source/StandaloneArrangement.cpp");
     const auto selectBody = extractFunctionBlock(src, "bool StandaloneArrangement::selectPlacement");
@@ -928,13 +930,33 @@ void selectPlacementClearsOtherTracks()
     expect(!selectBody.empty(), "StandaloneArrangement::selectPlacement must be found");
     expect(!setIndexBody.empty(), "StandaloneArrangement::setSelectedPlacementIndex must be found");
 
-    // Both write paths must clear other tracks' selectedPlacementId before setting
+    // Per-track selectedPlacementId must survive cross-track selection – no cross-track clearing
     for (const auto* body : { &selectBody, &setIndexBody }) {
-        expect(contains(*body, "kTrackCount"),
-               "Must iterate all tracks to clear other selections");
-        expect(contains(*body, "!= trackId"),
-               "Must skip the target track when clearing");
+        expect(!contains(*body, "kTrackCount"),
+               "selectPlacement must not iterate all tracks – preserves per-track memory");
+        expect(!contains(*body, "!= trackId"),
+               "selectPlacement must not skip other tracks – no cross-track clearing");
     }
+}
+
+void perTrackSelectionMemorySurvivesEmptyClick()
+{
+    // arrangement model must carry per-track selectedPlacementId
+    const auto arrHeader = readText("Source/StandaloneArrangement.h");
+    expect(contains(arrHeader, "selectedPlacementId"),
+           "Track struct must have per-track selectedPlacementId for selection memory");
+
+    // empty click must NOT zero out per-track memory via clearAllSelections
+    const auto src = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
+    const auto emptyBody = extractFunctionBlock(src, "void ArrangementViewComponent::commitEmptyPlacementSelection");
+    expect(!contains(emptyBody, "clearAllSelections"),
+           "commitEmptyPlacementSelection must not call clearAllSelections");
+
+    // trackSelected callback must still use per-track getSelectedPlacementIndex
+    const auto editorSrc = readText("Source/Standalone/PluginEditor.cpp");
+    const auto trackSelBody = extractFunctionBlock(editorSrc, "void OpenTuneAudioProcessorEditor::trackSelected");
+    expect(contains(trackSelBody, "getStandaloneSelectedPlacementIndex"),
+           "trackSelected must use per-track getSelectedPlacementIndex lookup");
 }
 
 void captureApplyAudioBufferContractIsReferenceWithIdentityTimeGrid()
@@ -1041,16 +1063,262 @@ void f0CurvesStayFullyOpaque()
                  {"withAlpha(1.0f)", "buildGradient(1.0f)"});
 }
 
-void pianoRollUsesDirectPaintingWithoutRetainedPixelCache()
+void pianoRollPaintRestoresOpaqueFillAfterShadow()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto renderer = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    const auto rasterizeStatic = extractFunctionBlock(component, "void PianoRollComponent::rasterizeStatic");
+    const auto drawNotes = extractFunctionBlock(renderer, "void PianoRollRenderer::drawNotes");
+
+    expect(!rasterizeStatic.empty(), "PianoRollComponent::rasterizeStatic must be found");
+    expect(!drawNotes.empty(), "PianoRollRenderer::drawNotes must be found");
+
+    // 正常 paint 不再调用 drawShadow/fillAll；chrome 仅由 rasterizeStatic 和缩放预览分支绘制
+    // rasterizeStatic 在阴影后恢复 opaque fill
+    expectTokens("PianoRollComponent::rasterizeStatic restores opaque fill",
+                 rasterizeStatic,
+                 {"UIColors::drawShadow", "g.setColour(juce::Colours::white);", "TimelineLayerComposer::drawTimeRuler"});
+    expect(inOrder(rasterizeStatic,
+                   {"UIColors::drawShadow",
+                    "g.setColour(juce::Colours::white);",
+                    "TimelineLayerComposer::drawTimeRuler"}),
+           "PianoRollComponent::rasterizeStatic must restore opaque fill after shadow before drawing");
+
+    expectTokens("PianoRollRenderer::drawNotes uses opaque note fill",
+                 drawNotes,
+                 {"noteColor.withAlpha(0.90f)"});
+    expectNoTokens("PianoRollRenderer::drawNotes has no translucent note fill",
+                   drawNotes,
+                   {"noteColor.withAlpha(0.50f)"},
+                   "note fill must remain at 0.90f");
+}
+
+void pianoRollRetainedSurfaceArchitecture()
 {
     const auto componentHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
     const auto componentImpl = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto overlayImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollOverlayComponent.cpp");
 
-    expectNoTokens("Piano Roll has no retained pixel cache",
+    // 正面断言：两张 Image + 透明 Overlay
+    expectTokens("Piano Roll has retained surfaces",
+                 componentHeader,
+                 {"staticSurface_", "contentSurface_", "overlay_"});
+
+    // staticSurface_ 使用完整组件尺寸
+    expectTokens("staticSurface_ uses full component dimensions",
+                 componentImpl,
+                 {"staticSurface_.getWidth() != fullW", "juce::Image(juce::Image::ARGB, fullW, fullH"});
+
+    // 根 paint 不含 rasterizeDirtySurfaces（已迁出到各失效点）
+    const auto paint = extractFunctionBlock(componentImpl, "void PianoRollComponent::paint");
+    expectNoTokens("paint does not call rasterizeDirtySurfaces",
+                   paint,
+                   {"rasterizeDirtySurfaces"});
+    expectNoTokens("paint does not call rasterizeStatic/recreateSurfaces",
+                   paint,
+                   {"rasterizeStatic()", "rasterizeContent()", "recreateSurfaces"});
+    // 正常 else 分支仅 blit，无 fillAll/drawShadow；zoomPreviewActive_ 分支允许固定 chrome
+    const auto normalBranch = extractBlockByMarker(paint, "else {");
+    expect(!normalBranch.empty(), "normal paint else branch must be found");
+    expectNoTokens("normal paint branch has no fillAll/drawShadow",
+                   normalBranch,
+                   {"fillAll", "UIColors::drawShadow"});
+    expectTokens("paint blits staticSurface_",
+                 paint,
+                 {"drawImageAt(staticSurface_"});
+    expectTokens("paint blits contentSurface_",
+                 paint,
+                  {"drawImageAt(contentSurface_"});
+
+    // 缩放预览期间 invalidateLiveNotes 不栅格内容，仅标记 contentDirty_
+    const auto invalLiveBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::invalidateLiveNotes");
+    expectTokens("invalidateLiveNotes has zoomPreviewActive_ branch",
+                 invalLiveBlock,
+                 {"zoomPreviewActive_"});
+    const auto zoomBranch = extractBlockByMarker(invalLiveBlock, "if (zoomPreviewActive_)");
+    expect(!zoomBranch.empty(), "zoom preview branch in invalidateLiveNotes must be found");
+    expectTokens("invalidateLiveNotes zoom branch sets contentDirty_",
+                 zoomBranch,
+                 {"contentDirty_ = true;"});
+    expectNoTokens("invalidateLiveNotes zoom branch no rasterizeContent",
+                   zoomBranch,
+                   {"rasterizeContent"});
+    expectNoTokens("invalidateLiveNotes zoom branch no Image alloc",
+                   zoomBranch,
+                   {"juce::Image"});
+
+    // 缩放预览：drawImageTransformed、琴键 X 固定、时间标尺 Y 固定
+    expectTokens("Zoom preview uses drawImageTransformed",
+                 componentImpl,
+                 {"drawImageTransformed"});
+    expectTokens("Zoom preview piano keys X fixed",
+                 componentImpl,
+                 {"AffineTransform::scale(1.0f, (float)scaleY)"});
+    expectTokens("Zoom preview ruler Y fixed",
+                 componentImpl,
+                 {"AffineTransform::scale((float)scaleX, 1.0f)"});
+
+    // strip 滚动更新保留
+    expectTokens("Piano Roll uses moveImageSection for edge-scroll",
+                 componentImpl,
+                 {"moveImageSection"});
+
+    // 探针入口恰好三处：static-raster/content-raster 在 componentImpl，overlay-present 在 overlayImpl
+    expectTokens("Static and Content probes in componentImpl",
+                 componentImpl,
+                 {"recordRenderProbe(RenderProbePoint::StaticRaster",
+                  "recordRenderProbe(RenderProbePoint::ContentRaster"});
+    expectTokens("Overlay probe in overlayImpl",
+                 overlayImpl,
+                 {"recordRenderProbe(PianoRollComponent::RenderProbePoint::OverlayPresent"});
+
+    // playheadTimeForPaint_ 唯一 VBlank 写入
+    const auto vblank = extractFunctionBlock(componentImpl, "void PianoRollComponent::onScrollVBlankCallback");
+    const auto heartbeat = extractFunctionBlock(componentImpl, "void PianoRollComponent::onHeartbeatTick");
+    expectTokens("playheadTimeForPaint_ only written in VBlank",
+                 vblank,
+                 {"playheadTimeForPaint_ = playheadTime"});
+    expectNoTokens("playheadTimeForPaint_ not written in Heartbeat",
+                   heartbeat,
+                   {"playheadTimeForPaint_"});
+
+    // mouseDrag 仅纵向变化时设 dirty，commit 后无冗余 updateScrollBars/repaint
+    const auto mouseDragBlock = extractFunctionBlock(componentImpl, "if (interactionState_.isPanning)");
+    expectTokens("mouseDrag vertical change sets dirty before commit",
+                 mouseDragBlock,
+                 {"verticalChanged", "staticDirty_ = true", "contentDirty_ = true"});
+    expectNoTokens("mouseDrag no redundant updateScrollBars/repaint after commit",
+                   mouseDragBlock,
+                   {"updateScrollBars();", "repaint();"});
+
+    // 所有完整失效点经 rasterizeDirtySurfaces 触发
+    expectTokens("requestContentRedraw calls rasterizeDirtySurfaces",
+                 extractFunctionBlock(componentImpl, "void PianoRollComponent::requestContentRedraw()"),
+                 {"rasterizeDirtySurfaces();"});
+    expectTokens("requestThemeRedraw calls rasterizeDirtySurfaces",
+                 extractFunctionBlock(componentImpl, "void PianoRollComponent::requestThemeRedraw()"),
+                 {"rasterizeDirtySurfaces();"});
+    expectTokens("setShowWaveform calls rasterizeDirtySurfaces",
+                 extractFunctionBlock(componentImpl, "void PianoRollComponent::setShowWaveform"),
+                 {"rasterizeDirtySurfaces();"});
+    expectTokens("setBpm calls rasterizeDirtySurfaces",
+                 extractFunctionBlock(componentImpl, "void PianoRollComponent::setBpm"),
+                 {"rasterizeDirtySurfaces();"});
+    const auto vertScroll = extractFunctionBlock(componentImpl, "void PianoRollComponent::handleVerticalScrollWheel");
+    expectTokens("handleVerticalScrollWheel calls rasterizeDirtySurfaces",
+                 vertScroll,
+                 {"rasterizeDirtySurfaces();"});
+
+    // tryConsumeInitialF0View：纵向偏移脏标记置于 activateTimelineCamera 之前
+    const auto initialViewBlock = extractFunctionBlock(componentImpl, "bool PianoRollComponent::tryConsumeInitialF0View");
+    expect(!initialViewBlock.empty(), "tryConsumeInitialF0View must be found");
+    {
+        const auto verticalPos = initialViewBlock.find("verticalScrollOffset_ = std::clamp");
+        const auto dirtyPos = initialViewBlock.find("staticDirty_ = true;", verticalPos);
+        const auto activatePos = initialViewBlock.find("activateTimelineCamera(", dirtyPos);
+        expect(dirtyPos != std::string::npos && activatePos != std::string::npos
+               && dirtyPos < activatePos,
+               "tryConsumeInitialF0View must set dirty before activateTimelineCamera");
+    }
+
+    // fitToScreen：纵向 fit 分支不提前栅格/repaint，仅标记 dirty，由最终 commitViewportRequest 触发一次重建
+    const auto fitBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::fitToScreen()");
+    const auto vertFitBlock = extractBlockByMarker(fitBlock, "// Reset scroll to show top");
+    expect(!vertFitBlock.empty(), "fitToScreen vertical fit branch must be found");
+    expectNoTokens("fitToScreen vertical branch no premature rasterize",
+                   vertFitBlock,
+                   {"rasterizeDirtySurfaces", "updateScrollBars", "repaint"});
+    expectTokens("fitToScreen vertical branch sets dirty",
+                 vertFitBlock,
+                 {"staticDirty_ = true;", "contentDirty_ = true;"});
+    // 确保无论何时都到 commitViewportRequest
+    const auto afterFitBlock = fitBlock.substr(fitBlock.find("// 2. Horizontal Fit:"));
+    expect(contains(afterFitBlock, "commitViewportRequest"),
+           "fitToScreen horizontal branch must commit via commitViewportRequest");
+
+    // 无旧根探针残留
+    expectNoTokens("Piano Roll has no old root-paint probes",
+                   componentImpl,
+                   {"gFrameCount", "gRepaintCount", "gPaintTimerStart", "diagnosticReportFrameMs"});
+
+    // rasterCamera_ 存在，旧 surfaceOriginPx/surfacePps/tlPhasePx/tlSrcX 已删除
+    expectTokens("Piano Roll has rasterCamera_",
+                 componentHeader,
+                 {"TimelineViewportCamera rasterCamera_"});
+    expectNoTokens("Piano Roll has no surfaceOriginPx/surfacePps/tlPhasePx/tlSrcX",
+                   componentHeader + componentImpl,
+                   {"surfaceOriginPx_", "surfacePps_", "tlPhasePx", "tlSrcX"});
+
+    // rasterizeStatic 仅统一 clip chrome 链，无 stripVisibleStart/fillRect(*dirtyRect)
+    const auto rasterStatic = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeStatic");
+    expectNoTokens("rasterizeStatic no strip-specific path",
+                   rasterStatic,
+                   {"stripVisibleStart", "fillRect(*dirtyRect)", "inTimelineZone"});
+
+    // VBlank：稳定 CONT 有 fixedCentre 跳过 + playState/time/camera 变化 gate
+    const auto vblankBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::onScrollVBlankCallback");
+    expectNoTokens("VBlank no bare overlay repaint",
+                   vblankBlock,
+                   {"overlay_->repaint();"});
+    expectTokens("VBlank has fixedCentre in playhead lambda",
+                 vblankBlock,
+                 {"pres.fixedCentre"});
+    expectTokens("VBlank has stableCont skip gate",
+                 vblankBlock,
+                 {"stableCont"});
+    expectTokens("VBlank uses playStateChanged || timeChanged || cameraChanged",
+                 vblankBlock,
+                 {"playStateChanged || timeChanged || cameraChanged"});
+
+    // invalidateInteractionPreview 无条件转发 bounds，无 empty guard
+    const auto invalBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::invalidateInteractionPreview");
+    expectTokens("invalidateInteractionPreview calls overlay_->repaint(bounds)",
+                 invalBlock,
+                 {"overlay_->repaint(bounds)"});
+    expectNoTokens("invalidateInteractionPreview has no empty guard",
+                   invalBlock,
+                   {"isEmpty"});
+
+    // DrawNote 使用 sourceTimeToScreenX、contentOriginY、freqToMidi 真实几何，非 -12/16 硬编码
+    const auto toolHandler = readText("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    const auto drawNoteHandler = extractFunctionBlock(toolHandler, "void PianoRollToolHandler::handleDrawNoteTool");
+    expectTokens("DrawNote uses sourceTimeToScreenX",
+                 drawNoteHandler,
+                 {"sourceTimeToScreenX"});
+    expectTokens("DrawNote uses contentOriginY",
+                 drawNoteHandler,
+                 {"contentOriginY"});
+    expectTokens("DrawNote uses freqToMidi for pixelsPerSemitone",
+                 drawNoteHandler,
+                 {"freqToMidi"});
+    expectTokens("DrawNote uses beforeBounds.getUnion",
+                 drawNoteHandler,
+                 {"beforeBounds.getUnion"});
+    expectNoTokens("DrawNote no hardcoded -12 Y offset",
+                   drawNoteHandler + extractFunctionBlock(toolHandler, "void PianoRollToolHandler::handleDrawNoteUp"),
+                   {" - 12", " + 16"});
+
+    // 缩放冻结仅首事务捕获
+    const auto beginZoom = extractFunctionBlock(componentImpl, "void PianoRollComponent::beginZoomPreview");
+    expectTokens("beginZoomPreview freeze guarded by !zoomPreviewActive_",
+                 beginZoom,
+                 {"if (!zoomPreviewActive_)"});
+    const auto vertZoom = extractFunctionBlock(componentImpl, "void PianoRollComponent::handleVerticalZoomWheel");
+    expectTokens("handleVerticalZoomWheel freeze guarded by !zoomPreviewActive_",
+                 vertZoom,
+                 {"if (!zoomPreviewActive_)"});
+
+    // resized：updateScrollBars 位于 tryConsume 失败 fallback 后
+    const auto resizedBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::resized()");
+    expect(inOrder(resizedBlock, {"tryConsumeInitialF0View", "updateScrollBars"}),
+           "resized updateScrollBars must be after tryConsume");
+
+    // 反面断言：旧架构残留不存在
+    expectNoTokens("Piano Roll has no legacy tile cache or old surfaces",
                    componentHeader + componentImpl,
                    {"TimelineCompositeCache", "compositeCache_", "viewportSurface_",
-                    "pianoKeySurface_", "moveImageSection", "scrollViewportSurfaceTo",
-                    "rebuildViewportSurfaceFromReadyTiles"});
+                    "pianoKeySurface_", "scrollViewportSurfaceTo",
+                    "rebuildViewportSurfaceFromReadyTiles", "tiles_"});
 }
 
 void pianoRollZoomHandlersAvoidBusinessImageAllocation()
@@ -1078,23 +1346,176 @@ void pianoRollZoomHandlersDoNotPauseAutoFollow()
         component, "void PianoRollComponent::handleVerticalZoomWheel");
     const auto horizontalZoom = extractFunctionBlock(
         component, "void PianoRollComponent::handleHorizontalZoomWheel");
+    const auto beginZoom = extractFunctionBlock(
+        component, "void PianoRollComponent::beginZoomPreview");
 
     expect(!verticalZoom.empty(), "vertical zoom handler must be found");
     expect(!horizontalZoom.empty(), "horizontal zoom handler must be found");
+    expect(!beginZoom.empty(), "beginZoomPreview must be found");
 
     // Zoom must set userHasManuallyZoomed_ but NOT pause CONT follow via userScrollHold_
     expectTokens("vertical zoom keeps manual zoom flag",
                  verticalZoom,
                  {"userHasManuallyZoomed_ = true"});
-    expectTokens("horizontal zoom keeps manual zoom flag",
+    expectTokens("horizontal zoom delegates to beginZoomPreview",
                  horizontalZoom,
+                 {"beginZoomPreview"});
+    expectTokens("beginZoomPreview keeps manual zoom flag",
+                 beginZoom,
                  {"userHasManuallyZoomed_ = true"});
     expectNoTokens("vertical zoom must not pause auto-follow",
                    verticalZoom,
                    {"userScrollHold_"});
-    expectNoTokens("horizontal zoom must not pause auto-follow",
-                   horizontalZoom,
+    expectNoTokens("horizontal zoom must not pause auto-follow via handler nor beginZoom",
+                   horizontalZoom + beginZoom,
                    {"userScrollHold_"});
+}
+
+void absoluteTimelineTimeRemainsUnquantized()
+{
+    const auto viewMapper = readText("Source/Standalone/UI/ViewMapper.h");
+    const auto xToTime = extractFunctionBlock(viewMapper, "double xToTime(int x) const");
+    expect(!xToTime.empty(), "ViewMapper::xToTime must be found");
+    expectTokens("ViewMapper::xToTime uses continuous absolute seconds",
+                 xToTime,
+                 {"visibleStartSeconds +", "/ pixelsPerSecond"});
+    expectNoTokens("ViewMapper has no quantized visible start",
+                   viewMapper,
+                   {"llround(visibleStartSeconds * pixelsPerSecond)"});
+
+    const auto viewportPolicy = readText("Source/Standalone/UI/TimelineViewportPolicy.cpp");
+    expectNoTokens("TimelineViewportPolicy has no time quantization",
+                   viewportPolicy,
+                   {"std::round(pps * 1000.0)",
+                    "std::floor(request.targetTime / visibleDuration)"});
+
+    const auto pianoRoll = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    expectNoTokens("PianoRollComponent has no absolute-time quantization",
+                   pianoRoll,
+                   {"std::llround(camera_.visibleStartSeconds * camera_.pixelsPerSecond) / camera_.pixelsPerSecond",
+                    "newRangeStart / pps"});
+
+    const auto viewportPolicyHeader = readText("Source/Standalone/UI/TimelineViewportPolicy.h");
+    expectNoTokens("TimelineViewportPolicy has no pixel-derived range API",
+                   viewportPolicyHeader,
+                   {"absoluteStartPx", "absoluteEndPx", "visibleStartPx", "visibleWidthPx"});
+
+    const auto layerComposerHeader = readText("Source/Standalone/UI/TimelineLayerComposer.h");
+    expectTokens("TimelineLayerComposer keeps tempo continuous",
+                 layerComposerHeader,
+                 {"double tempo = 120.0;"});
+}
+
+void pitchCurveF0SpanApiReplacesOldRenderPath()
+{
+    const auto pitchCurveHeader = readText("Source/Utils/PitchCurve.h");
+    const auto pitchCurveImpl = readText("Source/Utils/PitchCurve.cpp");
+
+    expectTokens("PitchCurve.h has forEachCorrectionF0Span",
+                 pitchCurveHeader,
+                 {"forEachCorrectionF0Span"});
+    expectTokens("PitchCurve.h has template Sink",
+                 pitchCurveHeader,
+                 {"template <typename Sink>"});
+    expectTokens("PitchCurve.h has nullptr gap semantic",
+                 pitchCurveHeader,
+                 {"nullptr"});
+    expectNoTokens("PitchCurve.h no renderCorrectionLayerF0Range",
+                   pitchCurveHeader,
+                   {"renderCorrectionLayerF0Range"});
+
+    expectNoTokens("PitchCurve.cpp no renderCorrectionLayerF0Range",
+                   pitchCurveImpl,
+                   {"renderCorrectionLayerF0Range"});
+    expectNoTokens("PitchCurve.cpp no tempBuffer",
+                   pitchCurveImpl,
+                   {"tempBuffer"});
+    expectNoTokens("PitchCurve.cpp no tempBuffer.assign",
+                   pitchCurveImpl,
+                   {"tempBuffer.assign"});
+
+    const auto rendererHeader = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.h");
+    expectNoTokens("PianoRollRenderer.h no F0FrameToX",
+                   rendererHeader,
+                   {"F0FrameToX"});
+    expectNoTokens("PianoRollRenderer.h no F0FrameToY",
+                   rendererHeader,
+                   {"F0FrameToY"});
+    expectNoTokens("PianoRollRenderer.h no sourceFrameBase",
+                   rendererHeader,
+                   {"sourceFrameBase"});
+    expectNoTokens("PianoRollRenderer.h no buildF0VisualSegments",
+                   rendererHeader,
+                   {"buildF0VisualSegments"});
+    expectNoTokens("PianoRollRenderer.h no F0VisualBuildOptions",
+                   rendererHeader,
+                   {"F0VisualBuildOptions"});
+
+    const auto rendererImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    expectNoTokens("PianoRollRenderer.cpp no std::function",
+                   rendererImpl,
+                   {"std::function"});
+    expectNoTokens("PianoRollRenderer.cpp no F0VisualLOD",
+                   rendererImpl,
+                   {"F0VisualLOD"});
+    expectNoTokens("PianoRollRenderer.cpp no f0LODCache_",
+                   rendererImpl,
+                   {"f0LODCache_"});
+    expectNoTokens("PianoRollRenderer.cpp no correctedF0Scratch_",
+                   rendererImpl,
+                   {"correctedF0Scratch_"});
+    expectNoTokens("PianoRollRenderer.cpp no thread_local",
+                   rendererImpl,
+                   {"thread_local"});
+
+    const auto drawF0Curve = extractFunctionBlock(
+        rendererImpl,
+        "void PianoRollRenderer::drawF0Curve");
+
+    expect(!drawF0Curve.empty(), "drawF0Curve must be found");
+
+    expectNoTokens("drawF0Curve no std::vector<float> correctedF0",
+                   drawF0Curve,
+                   {"std::vector<float> correctedF0"});
+    expectTokens("drawF0Curve uses forEachCorrectionF0Span",
+                 drawF0Curve,
+                 {"forEachCorrectionF0Span"});
+    expectTokens("drawF0Curve uses appendSmoothedF0Path",
+                 drawF0Curve,
+                 {"appendSmoothedF0Path"});
+    expect(countOf(drawF0Curve, "buildF0VisualSegments(") == 2,
+           "drawF0Curve must call buildF0VisualSegments exactly twice (original + corrected count="
+           + std::to_string(countOf(drawF0Curve, "buildF0VisualSegments(")) + ")");
+
+    const auto builderBlock = extractFunctionBlock(
+        rendererImpl,
+        "static std::vector<F0VisualSegment> buildF0VisualSegments");
+    expect(!builderBlock.empty(), "buildF0VisualSegments must be found in .cpp");
+    expect(countOf(builderBlock, "emitSpans([") == 2,
+           "buildF0VisualSegments must replay emitSpans exactly twice (energy scan + visual construction count="
+           + std::to_string(countOf(builderBlock, "emitSpans([")) + ")");
+
+    const auto toolHandlerImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
+    expectNoTokens("PianoRollToolHandler.cpp no correctedF0",
+                   toolHandlerImpl,
+                   {"correctedF0"});
+    expectTokens("PianoRollToolHandler.cpp uses forEachCorrectionF0Span",
+                 toolHandlerImpl,
+                 {"forEachCorrectionF0Span"});
+
+    const auto hitTestF0Curve = extractFunctionBlock(
+        toolHandlerImpl,
+        "bool PianoRollToolHandler::hitTestF0Curve");
+    expect(!hitTestF0Curve.empty(), "hitTestF0Curve must be found");
+    expectTokens("hitTestF0Curve uses forEachCorrectionF0Span",
+                 hitTestF0Curve,
+                 {"forEachCorrectionF0Span"});
+    expect(inOrder(hitTestF0Curve,
+                   {"testCandidate(frame, originalF0[", "testCandidate(frame, data[i])"}),
+           "hitTestF0Curve must test originalF0 first, then correction data");
+    expectNoTokens("PianoRollToolHandler.cpp no ctx_.getViewMapper().freqToY hot path",
+                   toolHandlerImpl,
+                   {"ctx_.getViewMapper().freqToY"});
 }
 
 } // namespace
@@ -1114,9 +1535,10 @@ int main()
         setMutatingHelpersArePure();
         moveBranchHasNoBareRepaint();
         togglePlacementSelectionAllowsLastItemToggle();
-        commitEmptyClearsModelSelection();
+        commitEmptyDoesNotDestroyPerTrackMemory();
+        perTrackSelectionMemorySurvivesEmptyClick();
         noSelectPlacementOutsideCommitHelpers();
-        selectPlacementClearsOtherTracks();
+        selectPlacementPreservesPerTrackMemory();
 
         // Capture audio buffer → identity TimeGrid contract (VST3 sync with Standalone fix eaf3bf7)
         captureApplyAudioBufferContractIsReferenceWithIdentityTimeGrid();
@@ -1126,9 +1548,14 @@ int main()
         drawTimeRulerHasRulerPaintBounds();
         noArrangementClipExclusionLeakedToPianoRoll();
         f0CurvesStayFullyOpaque();
-        pianoRollUsesDirectPaintingWithoutRetainedPixelCache();
+        pianoRollPaintRestoresOpaqueFillAfterShadow();
+        pianoRollRetainedSurfaceArchitecture();
         pianoRollZoomHandlersAvoidBusinessImageAllocation();
         pianoRollZoomHandlersDoNotPauseAutoFollow();
+        absoluteTimelineTimeRemainsUnquantized();
+
+        // PitchCurve F0 span API replaces old render path
+        pitchCurveF0SpanApiReplacesOldRenderPath();
 
         // ARA TimeGrid 计划的结构契约
         araAudioModificationStructureHasTimeGridPlan();

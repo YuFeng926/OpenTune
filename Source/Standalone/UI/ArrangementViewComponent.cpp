@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <set>
 
 namespace OpenTune {
@@ -565,7 +566,7 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTil
     const int sh = rect.getHeight();
     if (sw <= 0 || sh <= 0) return;
 
-    const double pps = std::round(camera_.pixelsPerSecond * 1000.0) / 1000.0;
+    const double pps = camera_.pixelsPerSecond;
     if (pps <= 0.0) return;
 
     viewportSurface_ = juce::Image(juce::Image::ARGB, sw, sh, true);
@@ -761,6 +762,7 @@ TimelineViewportRequest ArrangementViewComponent::makeViewportRequest(
     req.kind = kind;
     req.viewKind = TimelineViewportRequest::ViewKind::Arrangement;
     req.targetTime = targetTime;
+    req.currentVisibleStartSeconds = camera_.visibleStartSeconds;
     req.anchorViewportX = anchorViewportX;
     req.viewportWidth = getVisibleViewportWidth();
     req.pixelsPerSecond = pps;
@@ -783,7 +785,7 @@ void ArrangementViewComponent::setVerticalScrollOffset(int offset)
     verticalScrollBar_.setCurrentRangeStart(newOffset, juce::dontSendNotification);
 
     prepareCoverageCompositeTilesNew();
-    const double pps = std::round(camera_.pixelsPerSecond * 1000.0) / 1000.0;
+    const double pps = camera_.pixelsPerSecond;
     const double tileDuration = TimelineCompositeCache::kTileWidthPx / pps;
     const int64_t firstTimeTile = std::max<int64_t>(0,
         static_cast<int64_t>(std::floor(camera_.visibleStartSeconds / tileDuration)));
@@ -886,7 +888,7 @@ void ArrangementViewComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double
     {
         const auto req = makeViewportRequest(
             TimelineViewportRequest::Kind::Manual,
-            newRangeStart / camera_.pixelsPerSecond,
+            newRangeStart,
             0.0,
             camera_.pixelsPerSecond);
         commitViewportRequest(req);
@@ -909,17 +911,11 @@ void ArrangementViewComponent::updateScrollBars()
 {
     const int visibleWidth = getVisibleViewportWidth();
     const double pps = camera_.pixelsPerSecond;
-    const double contentEndSeconds = (static_cast<double>(getTotalContentWidth()) + visibleWidth) / pps;
+    const double visibleDuration = static_cast<double>(visibleWidth) / pps;
+    const double contentEndSeconds = contentMetrics_.maxEndTimeSeconds + visibleDuration;
 
-    const auto range = TimelineViewportPolicy::computeViewportRange(
-        0.0,
-        contentEndSeconds,
-        camera_,
-        visibleWidth,
-        readPlayheadSeconds());
-
-    horizontalScrollBar_.setRangeLimits(range.absoluteStartPx(), range.absoluteEndPx(), juce::dontSendNotification);
-    horizontalScrollBar_.setCurrentRange(range.visibleStartPx(), range.visibleWidthPx(), juce::dontSendNotification);
+    horizontalScrollBar_.setRangeLimits(0.0, contentEndSeconds, juce::dontSendNotification);
+    horizontalScrollBar_.setCurrentRange(camera_.visibleStartSeconds, visibleDuration, juce::dontSendNotification);
 
     const int totalTrackHeight = rulerHeight_ + visibleTrackCount_ * processor_.getTrackHeight();
     const int visibleHeight = getHeight() - UIColors::scrollBarThickness;
@@ -969,12 +965,37 @@ void ArrangementViewComponent::rebuildContentMetrics()
                                     placement.timelineEndSeconds() + kArrangementTrailingPaddingSeconds);
             revision = hashCombine(revision, placement.placementId);
             revision = hashCombine(revision, placement.contentKey.objectId);
-            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.timelineStartSeconds * 1000.0)));
-            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.durationSeconds * 1000.0)));
-            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.clipInSeconds * 1000.0)));
-            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(static_cast<double>(placement.gain) * 1000.0)));
-            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.fadeInDuration * 1000.0)));
-            revision = hashCombine(revision, static_cast<uint64_t>(std::llround(placement.fadeOutDuration * 1000.0)));
+            {
+                int64_t bits;
+                std::memcpy(&bits, &placement.timelineStartSeconds, sizeof(bits));
+                revision = hashCombine(revision, static_cast<uint64_t>(bits));
+            }
+            {
+                int64_t bits;
+                std::memcpy(&bits, &placement.durationSeconds, sizeof(bits));
+                revision = hashCombine(revision, static_cast<uint64_t>(bits));
+            }
+            {
+                int64_t bits;
+                std::memcpy(&bits, &placement.clipInSeconds, sizeof(bits));
+                revision = hashCombine(revision, static_cast<uint64_t>(bits));
+            }
+            {
+                const double gain = static_cast<double>(placement.gain);
+                int64_t bits;
+                std::memcpy(&bits, &gain, sizeof(bits));
+                revision = hashCombine(revision, static_cast<uint64_t>(bits));
+            }
+            {
+                int64_t bits;
+                std::memcpy(&bits, &placement.fadeInDuration, sizeof(bits));
+                revision = hashCombine(revision, static_cast<uint64_t>(bits));
+            }
+            {
+                int64_t bits;
+                std::memcpy(&bits, &placement.fadeOutDuration, sizeof(bits));
+                revision = hashCombine(revision, static_cast<uint64_t>(bits));
+            }
             // Include placement name in revision (content tile renders label)
             revision = hashCombine(revision, static_cast<uint64_t>(placement.name.hashCode()));
         }
@@ -998,7 +1019,7 @@ void ArrangementViewComponent::rebuildContentMetrics()
 GenerationSignature ArrangementViewComponent::makeGenerationSignature() const
 {
     GenerationSignature sig;
-    sig.ppsMilli = static_cast<int64_t>(std::round(camera_.pixelsPerSecond * 1000.0));
+    sig.pixelsPerSecond = camera_.pixelsPerSecond;
     sig.dpiMilli = static_cast<int64_t>(std::round(getDesktopScaleFactor() * 1000.0));
 
     sig.geometry.minMidi = 0.0f;
@@ -1009,7 +1030,7 @@ GenerationSignature ArrangementViewComponent::makeGenerationSignature() const
     sig.themeId = static_cast<int>(UIColors::currentThemeId());
     sig.laneStyle = 0;  // Arrangement 涓嶄娇鐢?lane style
     sig.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
-    sig.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
+    sig.tempo = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
     sig.timeSigNumerator = lastContextTimeSigNum_ > 0 ? lastContextTimeSigNum_ : 4;
     sig.timeSigDenominator = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
     sig.contentRevision = contentMetrics_.revision;
@@ -1022,8 +1043,8 @@ void ArrangementViewComponent::buildCompositeTile(
     juce::Rectangle<int> tileBounds,
     TimelineCompositeCache::TileKey key)
 {
-    const double ppsCanonical = std::round(camera_.pixelsPerSecond * 1000.0) / 1000.0;
-    const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx) / ppsCanonical;
+    const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx)
+        / camera_.pixelsPerSecond;
     const double tileStartSec = key.timeTile * tileDuration;
     const double tileEndSec = tileStartSec + tileDuration;
     const int worldTopY = key.vertRow * TimelineCompositeCache::kWorldTileHeight;
@@ -1060,12 +1081,12 @@ void ArrangementViewComponent::buildCompositeTile(
     RenderParams gridParams;
     gridParams.visibleStartSeconds = tileStartSec;
     gridParams.visibleEndSeconds = tileEndSec;
-    gridParams.pixelsPerSecond = ppsCanonical;
+    gridParams.pixelsPerSecond = camera_.pixelsPerSecond;
     gridParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
-    gridParams.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
+    gridParams.tempo = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
     gridParams.themeId = static_cast<int>(themeId);
     gridParams.pixelsPerSemitone = 0.0f;
-    gridParams.worldTopY = worldTopY;
+    gridParams.worldTopY = static_cast<float>(worldTopY);
     gridParams.rulerHeight = 0;
     gridParams.viewportWidth = tileBounds.getWidth();
     gridParams.viewportHeight = tileBounds.getHeight();
@@ -1075,7 +1096,7 @@ void ArrangementViewComponent::buildCompositeTile(
     // 3. Content layer: clips
     const ArrangementVerticalWindow vwin{trackHeight, worldTopY, tileBounds.getHeight()};
     auto& arrangement = *processor_.getStandaloneArrangement();
-    auto clips = collectVisibleArrangementClips(arrangement, tileStartSec, tileEndSec, vwin, ppsCanonical,
+    auto clips = collectVisibleArrangementClips(arrangement, tileStartSec, tileEndSec, vwin, camera_.pixelsPerSecond,
         tileBounds.getWidth(), [](int, uint64_t) { return false; });
     paintHistoricalArrangementClips(g, clips, waveformMipmapCache_);
 }
@@ -1083,8 +1104,7 @@ void ArrangementViewComponent::buildCompositeTile(
 void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
 {
     const auto sig = makeGenerationSignature();
-    const double ppsCanonical = sig.ppsMilli / 1000.0;
-    const double tileDuration = TimelineCompositeCache::kTileWidthPx / ppsCanonical;
+    const double tileDuration = TimelineCompositeCache::kTileWidthPx / sig.pixelsPerSecond;
 
     const int64_t firstTimeTile = std::max(0LL,
         static_cast<int64_t>(std::floor(tileCoverageStartSeconds_ / tileDuration)));
@@ -1610,16 +1630,13 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
 
     // Ruler + separator
     {
-        const double ppsCanonical = std::round(camera_.pixelsPerSecond * 1000.0) / 1000.0;
-        const int64_t surfaceOriginPx = static_cast<int64_t>(
-            std::llround(camera_.visibleStartSeconds * ppsCanonical));
         RenderParams rulerParams;
-        rulerParams.visibleStartSeconds = static_cast<double>(surfaceOriginPx) / ppsCanonical;
+        rulerParams.visibleStartSeconds = camera_.visibleStartSeconds;
         rulerParams.visibleEndSeconds = rulerParams.visibleStartSeconds
-            + getVisibleViewportWidth() / ppsCanonical;
-        rulerParams.pixelsPerSecond = ppsCanonical;
+            + getVisibleViewportWidth() / camera_.pixelsPerSecond;
+        rulerParams.pixelsPerSecond = camera_.pixelsPerSecond;
         rulerParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
-        rulerParams.tempo = static_cast<int>(lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0);
+        rulerParams.tempo = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
         rulerParams.themeId = static_cast<int>(UIColors::currentThemeId());
         rulerParams.pixelsPerSemitone = 0.0f;
         rulerParams.worldTopY = 0;
@@ -1702,7 +1719,7 @@ void ArrangementViewComponent::onHeartbeatTick()
     const double currentBpm = processor_.getBpm();
     const int currentTimeSigNum = processor_.getTimeSigNumerator();
     const int currentTimeSigDenom = processor_.getTimeSigDenominator();
-    if (std::abs(currentBpm - lastContextBpm_) > 0.001
+    if (currentBpm != lastContextBpm_
         || currentTimeSigNum != lastContextTimeSigNum_
         || currentTimeSigDenom != lastContextTimeSigDenom_) {
         lastContextBpm_ = currentBpm;
@@ -2921,9 +2938,6 @@ void ArrangementViewComponent::commitEmptyPlacementSelection()
     selectedPlacementIndex_ = -1;
     selectedPlacementId_ = 0;
     hasShiftAnchor_ = false;
-
-    if (auto* arrangement = processor_.getStandaloneArrangement())
-        arrangement->clearAllSelections();
 
     listeners_.call([this](Listener& l) {
         l.placementSelectionChanged(selectedTrack_, selectedPlacementId_);
