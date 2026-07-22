@@ -18,13 +18,13 @@ struct GeometryState {
 };
 
 struct GenerationSignature {
-    int64_t ppsMilli = 0;              // round(pps * 1000)
+    double pixelsPerSecond = 0.0;
     int64_t dpiMilli = 1000;            // round(desktop scale factor * 1000)
     GeometryState geometry;
     int themeId = 0;
     int laneStyle = 0;
     int timeUnit = 0;
-    int tempo = 120;
+    double tempo = 120.0;
     int timeSigNumerator = 4;
     int timeSigDenominator = 4;
     uint64_t contentRevision = 0;

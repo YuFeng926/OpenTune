@@ -70,8 +70,47 @@ public:
     void renderFinalF0Range(int startFrame, int endFrame,
                         std::function<void(int, const float*, int)> callback) const;
 
-    void renderCorrectionLayerF0Range(int startFrame, int endFrame,
-                                  std::function<void(int, const float*, int)> callback) const;
+    /// Calls sink(startFrame, f0Data, length) for each correction span;
+    /// calls sink(startFrame, nullptr, length) for gaps between segments.
+    /// nullptr signals a zero-F0 gap — no allocation needed.
+    template <typename Sink>
+    void forEachCorrectionF0Span(int startFrame, int endFrame, Sink&& sink) const {
+        if (startFrame >= endFrame || startFrame < 0) return;
+        const int maxFrame = static_cast<int>(originalF0_.size());
+        if (endFrame > maxFrame) endFrame = maxFrame;
+        if (startFrame >= maxFrame) return;
+
+        auto it = std::lower_bound(correctionSegments_.begin(), correctionSegments_.end(), startFrame,
+            [](const PitchCorrectionSegment& seg, int frame) {
+                return seg.endFrame <= frame;
+            });
+
+        int currentPos = startFrame;
+        while (currentPos < endFrame) {
+            if (it != correctionSegments_.end() && it->startFrame < endFrame) {
+                if (currentPos < it->startFrame) {
+                    const int gapEnd = std::min(it->startFrame, endFrame);
+                    sink(currentPos, nullptr, gapEnd - currentPos);
+                    currentPos = gapEnd;
+                }
+
+                if (currentPos < it->endFrame && currentPos < maxFrame) {
+                    const int segStart = std::max(currentPos, it->startFrame);
+                    const int segEnd = std::min(endFrame, std::min(it->endFrame, maxFrame));
+                    const int offset = segStart - it->startFrame;
+                    const int length = segEnd - segStart;
+                    if (length <= 0) { ++it; continue; }
+                    if (static_cast<size_t>(offset + length) > it->f0Data.size()) { ++it; continue; }
+                    sink(segStart, it->f0Data.data() + offset, length);
+                    currentPos = segEnd;
+                }
+                ++it;
+            } else {
+                sink(currentPos, nullptr, endFrame - currentPos);
+                currentPos = endFrame;
+            }
+        }
+    }
 
     bool hasFinalF0Data() const { return !originalF0_.empty(); }
 
@@ -103,10 +142,6 @@ public:
     }
     bool hasCorrectionLayer() const { return getSnapshot()->hasCorrectionLayer(); }
     bool hasFinalF0Data() const { return getSnapshot()->hasFinalF0Data(); }
-    void renderCorrectionLayerF0Range(int startFrame, int endFrame,
-                                  std::function<void(int, const float*, int)> callback) const {
-        getSnapshot()->renderCorrectionLayerF0Range(startFrame, endFrame, callback);
-    }
     void renderFinalF0Range(int startFrame, int endFrame,
                        std::function<void(int, const float*, int)> callback) const {
         getSnapshot()->renderFinalF0Range(startFrame, endFrame, callback);

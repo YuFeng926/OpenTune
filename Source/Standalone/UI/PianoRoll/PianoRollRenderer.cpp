@@ -74,8 +74,13 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
         return window;
     }
 
-    window.viewportStartX = ctx.pianoKeyWidth;
-    window.viewportEndX = ctx.width;
+    if (ctx.rasterBounds.isEmpty()) {
+        window.viewportStartX = ctx.pianoKeyWidth;
+        window.viewportEndX = ctx.width;
+    } else {
+        window.viewportStartX = std::max(ctx.rasterBounds.getX(), ctx.pianoKeyWidth);
+        window.viewportEndX = std::min(ctx.rasterBounds.getRight(), ctx.width);
+    }
     if (window.viewportEndX <= window.viewportStartX)
         return {};
 
@@ -96,10 +101,25 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
     return window;
 }
 
-static float clampF0VisualAlpha(float alpha) noexcept
+struct F0VisualPoint
 {
-    return juce::jlimit(0.0f, 1.0f, alpha);
-}
+    float x = 0.0f;
+    float y = 0.0f;
+    float levelHotMix = 0.0f;
+};
+
+struct F0VisualSegment
+{
+    std::vector<F0VisualPoint> points;
+};
+
+struct F0VisualBuildOptions
+{
+    int viewportStartX = 0;
+    int viewportEndX = 0;
+    double pixelsPerSecond = 100.0;
+    double secondsPerFrame = 0.01;
+};
 
 static float smootherStep(float value) noexcept
 {
@@ -121,7 +141,7 @@ static float f0VisualTargetPointSpacing(double framePixelSpacing) noexcept
 }
 
 static void appendSmoothedF0Path(juce::Path& path,
-                                 const std::vector<PianoRollRenderer::F0VisualPoint>& points,
+                                 const std::vector<F0VisualPoint>& points,
                                  std::size_t startIndex,
                                  std::size_t endIndexInclusive)
 {
@@ -164,63 +184,55 @@ inline int sourceTimeToScreenX(double sourceTime,
     return ctx.coords.timeToX(timelineTime);
 }
 
-} // namespace
-
-std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0VisualSegments(
-    const std::vector<float>& f0,
+/// Span-stream F0 visual builder: replays the span producer twice.
+/// Pass 1 computes energy min/max across valid F0 frequencies.
+/// Pass 2 builds visual segments with bucket accumulation and Bézier control points.
+/// Producer receives a sink(startFrame, data, length); nullptr data means a gap — flush current segment.
+template <typename SpanProducer, typename FX, typename FY>
+static std::vector<F0VisualSegment> buildF0VisualSegments(
     const std::vector<float>* originalEnergy,
+    int endFrameExclusive,
     const F0VisualBuildOptions& options,
-    const F0FrameToX& frameToX,
-    const F0FrameToY& frameToY)
+    FX&& frameToX,
+    FY&& frameToY,
+    SpanProducer&& emitSpans)
 {
     std::vector<F0VisualSegment> segments;
-    if (f0.empty() || !frameToX || !frameToY) {
-        return segments;
-    }
 
-    const int startFrame = juce::jlimit(0, static_cast<int>(f0.size()), options.startFrame);
-    const int endFrameExclusive = juce::jlimit(startFrame, static_cast<int>(f0.size()), options.endFrameExclusive);
-    if (endFrameExclusive <= startFrame) {
-        return segments;
-    }
-
-    const bool hasEnergy = originalEnergy != nullptr && originalEnergy->size() == f0.size();
+    const bool hasEnergy = originalEnergy != nullptr
+        && endFrameExclusive <= static_cast<int>(originalEnergy->size());
 
     float minEnergy = std::numeric_limits<float>::max();
     float maxEnergy = std::numeric_limits<float>::lowest();
     if (hasEnergy) {
-        for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
-            const float frequency = f0[static_cast<std::size_t>(frame)];
-            if (frequency < 20.0f || frequency > 2000.0f) {
-                continue;
+        emitSpans([&](int start, const float* data, int length) {
+            if (!data) return;
+            for (int i = 0; i < length; ++i) {
+                const float frequency = data[i];
+                if (frequency < 20.0f || frequency > 2000.0f) continue;
+                const int globalFrame = start + i;
+                const float energy = (*originalEnergy)[static_cast<size_t>(globalFrame)];
+                if (std::isfinite(energy)) {
+                    minEnergy = std::min(minEnergy, energy);
+                    maxEnergy = std::max(maxEnergy, energy);
+                }
             }
-
-            const float energy = (*originalEnergy)[static_cast<std::size_t>(frame)];
-            if (std::isfinite(energy)) {
-                minEnergy = std::min(minEnergy, energy);
-                maxEnergy = std::max(maxEnergy, energy);
-            }
-        }
+        });
     }
 
     const float targetPointSpacing = f0VisualTargetPointSpacing(options.pixelsPerSecond * options.secondsPerFrame);
 
     struct BucketAccumulator {
         bool active = false;
-        int frame = 0;
         float xSum = 0.0f;
         float ySum = 0.0f;
-        float alphaSum = 0.0f;
         float hotMixSum = 0.0f;
         float weightSum = 0.0f;
 
-        void clear() noexcept
-        {
+        void clear() noexcept {
             active = false;
-            frame = 0;
             xSum = 0.0f;
             ySum = 0.0f;
-            alphaSum = 0.0f;
             hotMixSum = 0.0f;
             weightSum = 0.0f;
         }
@@ -235,12 +247,9 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
             bucket.clear();
             return;
         }
-
         currentSegment.points.push_back({
-            bucket.frame,
             bucket.xSum / bucket.weightSum,
             bucket.ySum / bucket.weightSum,
-            clampF0VisualAlpha(bucket.alphaSum / bucket.weightSum),
             bucket.hotMixSum / bucket.weightSum
         });
         bucket.clear();
@@ -254,76 +263,79 @@ std::vector<PianoRollRenderer::F0VisualSegment> PianoRollRenderer::buildF0Visual
         }
     };
 
-    for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
-        const float frequency = f0[static_cast<std::size_t>(frame)];
-        if (frequency < 20.0f || frequency > 2000.0f) {
+    emitSpans([&](int start, const float* data, int length) {
+        if (!data) {
             flushSegment();
-            continue;
+            return;
         }
+        for (int i = 0; i < length; ++i) {
+            const float frequency = data[i];
+            if (frequency < 20.0f || frequency > 2000.0f) {
+                flushSegment();
+                continue;
+            }
 
-        const float x = frameToX(frame);
-        if (x < static_cast<float>(options.viewportStartX) || x > static_cast<float>(options.viewportEndX)) {
-            flushSegment();
-            continue;
-        }
+            const int globalFrame = start + i;
+            const float x = frameToX(globalFrame);
+            if (x < static_cast<float>(options.viewportStartX) || x > static_cast<float>(options.viewportEndX)) {
+                flushSegment();
+                continue;
+            }
 
-        const float y = frameToY(frame, frequency);
-        const float normalizedEnergy = hasEnergy
-            ? juce::jlimit(0.0f, 1.0f, ((*originalEnergy)[static_cast<std::size_t>(frame)] - minEnergy) / juce::jmax(1e-6f, maxEnergy - minEnergy))
-            : 0.0f;
-        const float energyAlpha = hasEnergy
-            ? 0.70f + 0.30f * normalizedEnergy
-            : 1.0f;
-        static constexpr float kMaxHotMix = 0.34f;
-        const float levelHotMix = hasEnergy
-            ? kMaxHotMix * smootherStep(normalizedEnergy)
-            : 0.0f;
-        const float weight = juce::jmax(0.001f, energyAlpha);
+            const float y = frameToY(globalFrame, frequency);
+            float energyAlpha = 1.0f;
+            float levelHotMix = 0.0f;
+            if (hasEnergy) {
+                const float energy = (*originalEnergy)[static_cast<size_t>(globalFrame)];
+                const float normalizedEnergy = juce::jlimit(0.0f, 1.0f,
+                    (energy - minEnergy) / juce::jmax(1e-6f, maxEnergy - minEnergy));
+                energyAlpha = 0.70f + 0.30f * normalizedEnergy;
+                static constexpr float kMaxHotMix = 0.34f;
+                levelHotMix = kMaxHotMix * smootherStep(normalizedEnergy);
+            }
+            const float weight = juce::jmax(0.001f, energyAlpha);
 
-        if (targetPointSpacing <= 0.0f) {
+            if (targetPointSpacing <= 0.0f) {
+                flushBucket();
+                currentSegment.points.push_back({ x, y, levelHotMix });
+                continue;
+            }
+
+            if (!bucket.active) {
+                bucket.active = true;
+                bucketAnchorX = x;
+                bucket.weightSum = weight;
+                bucket.xSum = x * weight;
+                bucket.ySum = y * weight;
+                bucket.hotMixSum = levelHotMix * weight;
+                continue;
+            }
+
+            if (std::abs(x - bucketAnchorX) < targetPointSpacing) {
+                bucket.weightSum += weight;
+                bucket.xSum += x * weight;
+                bucket.ySum += y * weight;
+                bucket.hotMixSum += levelHotMix * weight;
+                continue;
+            }
+
             flushBucket();
-            currentSegment.points.push_back({ frame, x, y, energyAlpha, levelHotMix });
-            continue;
-        }
 
-        if (!bucket.active) {
             bucket.active = true;
-            bucket.frame = frame;
             bucketAnchorX = x;
             bucket.weightSum = weight;
             bucket.xSum = x * weight;
             bucket.ySum = y * weight;
-            bucket.alphaSum = energyAlpha * weight;
             bucket.hotMixSum = levelHotMix * weight;
-            continue;
         }
-
-        if (std::abs(x - bucketAnchorX) < targetPointSpacing) {
-            bucket.frame = frame;
-            bucket.weightSum += weight;
-            bucket.xSum += x * weight;
-            bucket.ySum += y * weight;
-            bucket.alphaSum += energyAlpha * weight;
-            bucket.hotMixSum += levelHotMix * weight;
-            continue;
-        }
-
-        flushBucket();
-
-        bucket.active = true;
-        bucket.frame = frame;
-        bucketAnchorX = x;
-        bucket.weightSum = weight;
-        bucket.xSum = x * weight;
-        bucket.ySum = y * weight;
-        bucket.alphaSum = energyAlpha * weight;
-        bucket.hotMixSum = levelHotMix * weight;
-    }
+    });
 
     flushSegment();
 
     return segments;
 }
+
+} // namespace
 
 void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
                                                const RenderContext& ctx,
@@ -853,7 +865,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                   const RenderContext& ctx,
                                   const ContentRenderItem& item)
 {
-    const auto& notes = item.displayNotes;
+    const auto& notes = *item.displayNotes;
     if (notes.empty()) return;
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
@@ -912,7 +924,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
         if (isAurora)
         {
-            g.setColour(noteColor.withAlpha(0.50f));
+            g.setColour(noteColor.withAlpha(0.90f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 7.0f));
@@ -938,7 +950,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(noteColor.withAlpha(0.50f));
+            g.setColour(noteColor.withAlpha(0.90f));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 6.0f));
@@ -960,7 +972,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else
         {
-            g.setColour(noteColor.withAlpha(0.50f));
+            g.setColour(noteColor.withAlpha(0.90f));
             g.fillRect(noteBounds);
 
             g.setColour(UIColors::noteBlockBorder.withAlpha(0.50f));
@@ -1222,11 +1234,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         visibleWindow.visibleContentStartTime,
         visibleWindow.visibleContentEndTime,
         marginFrames);
-    const auto iStart = std::min(static_cast<std::size_t>(visibleFrames.startFrame),
-                                 item.pitchSnapshot->size());
-    const auto iEnd = std::min(static_cast<std::size_t>(
+    const int startFrame = static_cast<int>(std::min(static_cast<std::size_t>(visibleFrames.startFrame),
+                                                     item.pitchSnapshot->size()));
+    const int endFrame = static_cast<int>(std::min(static_cast<std::size_t>(
         std::max(visibleFrames.startFrame, visibleFrames.endFrameExclusive)),
-        item.pitchSnapshot->size());
+        item.pitchSnapshot->size()));
 
     double secondsPerFrame = 0.01;
     if (item.f0Timeline.endFrameExclusive() > 1) {
@@ -1234,8 +1246,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     }
 
     F0VisualBuildOptions visualOptions;
-    visualOptions.startFrame = static_cast<int>(iStart);
-    visualOptions.endFrameExclusive = static_cast<int>(iEnd);
     visualOptions.viewportStartX = visibleWindow.viewportStartX;
     visualOptions.viewportEndX = visibleWindow.viewportEndX;
     visualOptions.pixelsPerSecond = ctx.pixelsPerSecond;
@@ -1258,12 +1268,19 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
     const bool isOverdose = themeId == ThemeId::Overdose;
 
-    // Draw original F0 (thin)
+    // Draw original F0 (thin) — single contiguous span producer
     if (ctx.showOriginalF0) {
         const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+        const int origStart = startFrame;
+        const int origEnd = std::min(endFrame, static_cast<int>(originalF0.size()));
+
+        auto originalProducer = [&](auto&& sink) {
+            if (origStart < origEnd)
+                sink(origStart, originalF0.data() + origStart, origEnd - origStart);
+        };
+
         const auto visualSegments = buildF0VisualSegments(
-            originalF0, originalEnergy,
-            visualOptions, makeFrameToX, makeFrameToY);
+            originalEnergy, origEnd, visualOptions, makeFrameToX, makeFrameToY, originalProducer);
 
         const juce::Colour colour = UIColors::originalF0;
         const float alpha = 1.0f;
@@ -1332,23 +1349,14 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         }
     }
 
-    // Draw corrected F0 (thicker) — lazily render correction layer
+    // Draw corrected F0 (thicker) — stream correction spans via forEachCorrectionF0Span
     if (ctx.showCorrectedF0 && item.pitchSnapshot->hasCorrectionLayer()) {
-        const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
-        std::vector<float> correctedF0(originalF0.size(), 0.0f);
-        item.pitchSnapshot->renderCorrectionLayerF0Range(
-            visualOptions.startFrame, visualOptions.endFrameExclusive,
-            [&](int frame, const float* data, int length) {
-                for (int i = 0; i < length; ++i) {
-                    const int f = frame + i;
-                    if (f >= 0 && f < static_cast<int>(correctedF0.size()))
-                        correctedF0[static_cast<std::size_t>(f)] = data[i];
-                }
-            });
+        auto correctedProducer = [&](auto&& sink) {
+            item.pitchSnapshot->forEachCorrectionF0Span(startFrame, endFrame, sink);
+        };
 
         const auto visualSegments = buildF0VisualSegments(
-            correctedF0, originalEnergy,
-            visualOptions, makeFrameToX, makeFrameToY);
+            originalEnergy, endFrame, visualOptions, makeFrameToX, makeFrameToY, correctedProducer);
 
         const juce::Colour colour = UIColors::correctedF0;
         static const juce::Colour kLevelHotGold { 0xFFFFC24A };

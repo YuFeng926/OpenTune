@@ -40,6 +40,7 @@ struct TimelineViewportRequest
     Kind kind = Kind::Manual;
     ViewKind viewKind = ViewKind::Arrangement;
     double targetTime = 0.0;          // 目标时间点（absolute timeline seconds）
+    double currentVisibleStartSeconds = 0.0;
     double anchorViewportX = 0.0;     // anchor 在 viewport 中的 X 像素位置
     int viewportWidth = 0;            // viewport 宽度（像素）
     double pixelsPerSecond = TimelineViewportCamera::kDefaultPixelsPerSecond;
@@ -54,12 +55,6 @@ struct TimelineViewportRange
     double currentPlayheadSeconds = 0.0;
     double scrollPercent = 0.0;       // 0.0-1.0 viewport start position in absolute range
     double thumbPercent = 0.0;        // 0.0-1.0 scrollbar thumb width relative to total range
-    double pixelsPerSecond = 0.0;
-
-    double absoluteStartPx() const noexcept { return static_cast<double>(std::llround(absoluteStartSeconds * pixelsPerSecond)); }
-    double absoluteEndPx() const noexcept { return static_cast<double>(std::llround(absoluteEndSeconds * pixelsPerSecond)); }
-    double visibleStartPx() const noexcept { return static_cast<double>(std::llround(visibleStartSeconds * pixelsPerSecond)); }
-    double visibleWidthPx() const noexcept { return static_cast<double>(std::llround(visibleDuration * pixelsPerSecond)); }
 };
 
 class TimelineViewportPolicy

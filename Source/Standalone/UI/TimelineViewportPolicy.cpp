@@ -55,7 +55,7 @@ TimelineViewportCamera TimelineViewportPolicy::resolve(const TimelineViewportReq
     const int vw = request.viewportWidth;
 
     TimelineViewportCamera camera;
-    camera.pixelsPerSecond = std::round(pps * 1000.0) / 1000.0;
+    camera.pixelsPerSecond = pps;
 
     switch (request.kind)
     {
@@ -74,7 +74,13 @@ TimelineViewportCamera TimelineViewportPolicy::resolve(const TimelineViewportReq
     case TimelineViewportRequest::Kind::Page:
     {
         const double visibleDuration = vw / pps;
-        const double pageStart = std::floor(request.targetTime / visibleDuration) * visibleDuration;
+        const double currentStart = request.currentVisibleStartSeconds;
+        const double currentEnd = currentStart + visibleDuration;
+        double pageStart = currentStart;
+        if (request.targetTime < currentStart)
+            pageStart = request.targetTime;
+        else if (request.targetTime > currentEnd)
+            pageStart = request.targetTime - visibleDuration;
         camera.visibleStartSeconds = clampStartSeconds(pageStart);
         break;
     }
@@ -100,7 +106,6 @@ TimelineViewportRange TimelineViewportPolicy::computeViewportRange(
     double currentPlayheadSeconds)
 {
     TimelineViewportRange range;
-    range.pixelsPerSecond = camera.pixelsPerSecond;
     range.absoluteStartSeconds = absoluteStartSeconds;
     range.absoluteEndSeconds = absoluteEndSeconds;
     range.visibleStartSeconds = camera.visibleStartSeconds;

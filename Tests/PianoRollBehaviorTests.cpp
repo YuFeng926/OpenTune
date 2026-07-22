@@ -4,6 +4,7 @@
 #include "../Source/Content/EditableContentSnapshot.h"
 #include "../Source/Content/CaptureSegmentContent.h"
 #include "../Source/Utils/TimeGrid.h"
+#include "../Source/Utils/PitchCurve.h"
 #include "../Source/PluginProcessor.h"
 #include "../Source/Standalone/UI/ViewMapper.h"
 
@@ -140,12 +141,8 @@ void pianoRollPendingSeekPresentationSourceContract()
     const auto header = readText("Source/Standalone/UI/PianoRollComponent.h");
     const auto notifyBlock = extractBlockByMarker(
         source, "toolCtx.notifyPlayheadChange = [this](double time)");
-    const auto heartbeatBlock = extractBlockByMarker(
-        source, "void PianoRollComponent::onHeartbeatTick()");
     const auto vblankBlock = extractBlockByMarker(
         source, "void PianoRollComponent::onScrollVBlankCallback(double timestampSec)");
-    const auto hiddenVBlankBlock = extractBlockByMarker(
-        vblankBlock, "if (!isShowing())");
 
     expectTokens("PianoRoll notify playhead request",
                  notifyBlock,
@@ -153,57 +150,66 @@ void pianoRollPendingSeekPresentationSourceContract()
                   "bool requestDispatched = false;",
                   "if (l.playheadPositionChangeRequested(time))",
                   "seekSentRevision_ = seekRevision;"});
-    expectTokens("PianoRoll accepted seek presentation",
+    expectTokens("PianoRoll accepted seek pending only",
                  notifyBlock,
-                 {"playheadTimeForPaint_ = time;", "pendingSeekTime_ = time;"});
-    expectTokens("PianoRoll rejected seek presentation",
+                 {"pendingSeekTime_ = time;"});
+    expectTokens("PianoRoll rejected seek pending only",
                  notifyBlock,
                  {"pendingSeekTime_ = -1.0;",
-                  "seekSentRevision_ = 0;",
-                  "playheadTimeForPaint_ = playHeadState_.timeInSeconds.load"});
-    expectTokens("PianoRoll heartbeat revision confirmation",
-                   heartbeatBlock,
-                   {"playHeadState_.hostPositionRevision.load",
-                    "hostRevision != seekSentRevision_",
-                    "pendingSeekTime_ = -1.0;"});
-    expectTokens("PianoRoll VBlank revision confirmation",
+                  "seekSentRevision_ = 0;"});
+
+    // notifyPlayheadChange 不再写入 playheadTimeForPaint_ 或 overlay repaint
+    expectNoTokens("PianoRoll notify no playheadTimeForPaint_ write",
+                   notifyBlock,
+                   {"playheadTimeForPaint_"});
+    expectNoTokens("PianoRoll notify no overlay repaint",
+                   notifyBlock,
+                   {"overlay_->repaint();"});
+
+    // VBlank 是唯一 playheadTimeForPaint_ 写入者
+    expectTokens("PianoRoll VBlank reconciliation",
                  vblankBlock,
                  {"playHeadState_.hostPositionRevision.load",
                   "hostRevision != seekSentRevision_",
                   "pendingSeekTime_ = -1.0;"});
+    expectTokens("PianoRoll VBlank unique presentation write",
+                 vblankBlock,
+                 {"playheadTimeForPaint_ = playheadTime"});
+
     expectTokens("PianoRoll state binding",
                  header,
                  {"PianoRollComponent(const PlayHeadState& playHeadState);",
                   "const PlayHeadState& playHeadState_;",
                   "uint64_t seekSentRevision_{0};"});
     expectNoTokens("PianoRoll revision ownership",
-                   source,
-                   {"hostPositionRevision.fetch_add", "hostPositionRevision.store"});
+                    source,
+                    {"hostPositionRevision.fetch_add", "hostPositionRevision.store"});
     expectNoTokens("PianoRoll pending seek tolerance",
-                   source,
-                   {"std::abs(currentPlayheadTime - pendingSeekTime_)", "setTimeout", "retry"});
-    expectNoTokens("PianoRoll hidden VBlank path",
-                   hiddenVBlankBlock,
-                   {"pendingSeekTime_ = -1.0;"});
+                    source,
+                    {"std::abs(currentPlayheadTime - pendingSeekTime_)", "setTimeout", "retry"});
+    // VBlank 不得 paused 早退（禁止 if (!playingNow) return; 形式）
+    expectNoTokens("PianoRoll VBlank no paused early-return",
+                   vblankBlock,
+                   {"if (!playingNow)"});
     expectNoTokens("PianoRoll retained playhead architecture",
-                   source,
-                   {"playheadOverlay_", "PlayheadOverlayComponent"});
+                    source,
+                    {"playheadOverlay_", "PlayheadOverlayComponent"});
 }
 
-void pianoRollPlayheadPaintsDirectly()
+void pianoRollPlayheadOverlayPaintsDirectly()
 {
     const auto source = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto notifyBlock = extractBlockByMarker(
-        source, "toolCtx.notifyPlayheadChange = [this](double time)");
     const auto drawPlayheadBlock = extractBlockByMarker(
-        source, "void PianoRollComponent::drawPlayhead(juce::Graphics& g)");
+        source, "void PianoRollComponent::drawPlayheadOverlay(juce::Graphics& g)");
 
     expectTokens("PianoRoll direct playhead draw",
                  drawPlayheadBlock,
                  {"g.reduceClipRegion(timeAxisRect())"});
-    expectTokens("PianoRoll direct playhead notify repaint",
-                 notifyBlock,
-                 {"repaint();"});
+
+    // notifyPlayheadChange 不再调用 repaint；VBlank 统一处理 Overlay repaint
+    expectTokens("PianoRoll VBlank handles overlay repaint",
+                 extractBlockByMarker(source, "void PianoRollComponent::onScrollVBlankCallback"),
+                 {"overlay_->repaint("});
 }
 
 void pluginEditorPlayheadRequestSourceContract()
@@ -1290,6 +1296,96 @@ void playHeadStatePausedExternalSeekRuntimeContract()
            "paused external seek must bump hostPositionRevision so observers notice the jump");
 }
 
+void pitchCurveSnapshotForEachCorrectionF0SpanContract()
+{
+    struct SpanRecord {
+        int startFrame = 0;
+        bool isGap = false;
+        int length = 0;
+        std::vector<float> values;
+    };
+
+    auto collect = [](const PitchCurveSnapshot& snap, int start, int end) {
+        std::vector<SpanRecord> records;
+        snap.forEachCorrectionF0Span(start, end, [&](int sf, const float* data, int len) {
+            SpanRecord r;
+            r.startFrame = sf;
+            r.isGap = (data == nullptr);
+            r.length = len;
+            if (data) r.values.assign(data, data + len);
+            records.push_back(std::move(r));
+        });
+        return records;
+    };
+
+    // --- setup: original F0 length 8, adjacent correction [2,4)={220,221}, [4,6)={222,223} ---
+    const std::vector<float> f0(8, 100.0f);
+    const std::vector<float> energy(8, 0.5f);
+    std::vector<PitchCorrectionSegment> segments;
+    segments.emplace_back(2, 4, std::vector<float>{220.0f, 221.0f});
+    segments.emplace_back(4, 6, std::vector<float>{222.0f, 223.0f});
+
+    const PitchCurveSnapshot snap(f0, energy, segments, 512, 16000.0);
+
+    // --- verify 1: query [0,8) → gap[0,2) data[2,4) data[4,6) gap[6,8), no nullptr between adjacent data ---
+    {
+        const auto r = collect(snap, 0, 8);
+        expect(r.size() == 4, "[0,8) must produce 4 spans: gap, data, data, gap");
+
+        expect(r[0].startFrame == 0 && r[0].isGap && r[0].length == 2 && r[0].values.empty(),
+               "[0,8) span 0 must be gap [0,2)");
+        expect(r[1].startFrame == 2 && !r[1].isGap && r[1].length == 2
+                   && r[1].values == (std::vector<float>{220.0f, 221.0f}),
+               "[0,8) span 1 must be data [2,4)={220,221}");
+        expect(r[2].startFrame == 4 && !r[2].isGap && r[2].length == 2
+                   && r[2].values == (std::vector<float>{222.0f, 223.0f}),
+               "[0,8) span 2 must be data [4,6)={222,223}");
+        expect(r[3].startFrame == 6 && r[3].isGap && r[3].length == 2 && r[3].values.empty(),
+               "[0,8) span 3 must be gap [6,8)");
+    }
+
+    // --- verify 2: query [3,5) → clipped data [3,4)={221}, [4,5)={222}, no extra gap ---
+    {
+        const auto r = collect(snap, 3, 5);
+        expect(r.size() == 2, "[3,5) must produce exactly 2 data spans");
+
+        expect(r[0].startFrame == 3 && !r[0].isGap && r[0].length == 1
+                   && r[0].values == (std::vector<float>{221.0f}),
+               "[3,5) span 0 must be data [3,4)={221}");
+        expect(r[1].startFrame == 4 && !r[1].isGap && r[1].length == 1
+                   && r[1].values == (std::vector<float>{222.0f}),
+               "[3,5) span 1 must be data [4,5)={222}");
+    }
+
+    // --- verify 3: empty / negative / inverted ranges must not callback ---
+    {
+        int callCount = 0;
+        snap.forEachCorrectionF0Span(0, 0, [&](int, const float*, int) { ++callCount; });
+        expect(callCount == 0, "empty range [0,0) must not callback");
+
+        callCount = 0;
+        snap.forEachCorrectionF0Span(-1, 3, [&](int, const float*, int) { ++callCount; });
+        expect(callCount == 0, "negative start [-1,3) must not callback");
+
+        callCount = 0;
+        snap.forEachCorrectionF0Span(3, 0, [&](int, const float*, int) { ++callCount; });
+        expect(callCount == 0, "inverted range [3,0) must not callback");
+    }
+
+    // --- verify 4: no-correction snapshot [0,>length) → one clipped nullptr gap [0,8) ---
+    {
+        const std::vector<float> rawF0(8, 100.0f);
+        const std::vector<float> rawEnergy(8, 0.5f);
+        const std::vector<PitchCorrectionSegment> noSegments;
+        const PitchCurveSnapshot noCorrSnap(rawF0, rawEnergy, noSegments, 512, 16000.0);
+
+        const auto r = collect(noCorrSnap, 0, 100);
+        expect(r.size() == 1, "no-correction [0,100) must produce exactly 1 span");
+        expect(r[0].startFrame == 0 && r[0].isGap && r[0].length == 8 && r[0].values.empty(),
+               "no-correction span must be gap [0,8) clipped to originalF0 length");
+    }
+}
+
 } // namespace
 
 int main()
@@ -1298,7 +1394,7 @@ int main()
 
     try {
         pianoRollPendingSeekPresentationSourceContract();
-        pianoRollPlayheadPaintsDirectly();
+        pianoRollPlayheadOverlayPaintsDirectly();
         pluginEditorPlayheadRequestSourceContract();
         standalonePlayheadRequestSourceContract();
         pluginEditorPlayheadPositionBindingSourceContract();
@@ -1325,6 +1421,7 @@ int main()
         vst3ClientGeneratedSourceZeroDataTransportContract();
         processBlockZeroSampleTransportObservationContract();
         playHeadStatePausedExternalSeekRuntimeContract();
+        pitchCurveSnapshotForEachCorrectionF0SpanContract();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";

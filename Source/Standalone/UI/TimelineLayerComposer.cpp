@@ -113,7 +113,7 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
     const double pps = params.pixelsPerSecond;
 
     if (params.timeUnit == 1) { // Bars
-        double bpm = static_cast<double>(params.tempo);
+        double bpm = params.tempo;
         if (bpm <= 0.0) bpm = 120.0;
         double secondsPerBeat = 60.0 / bpm;
         double pixelsPerBeat = pps * secondsPerBeat;
@@ -203,7 +203,7 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
     }
 
     if (params.timeUnit == 1) { // Bars
-        double bpm = static_cast<double>(params.tempo);
+        double bpm = params.tempo;
         if (bpm <= 0.0) bpm = 120.0;
         double secondsPerBeat = 60.0 / bpm;
         double pixelsPerBeat = pps * secondsPerBeat;

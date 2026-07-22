@@ -565,6 +565,7 @@ target_sources(OpenTune
         Source/Standalone/UI/ParameterPanel.h
         Source/Standalone/UI/PianoRollComponent.cpp
         Source/Standalone/UI/PianoRollComponent.h
+        Source/Standalone/UI/PianoRoll/PianoRollOverlayComponent.cpp
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.h
 

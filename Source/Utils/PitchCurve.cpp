@@ -218,68 +218,6 @@ void PitchCurveSnapshot::renderFinalF0Range(int startFrame, int endFrame,
     }
 }
 
-void PitchCurveSnapshot::renderCorrectionLayerF0Range(int startFrame, int endFrame,
-                                                  std::function<void(int, const float*, int)> callback) const {
-    if (startFrame >= endFrame || startFrame < 0) {
-        return;
-    }
-
-    const int maxFrame = static_cast<int>(originalF0_.size());
-    if (endFrame > maxFrame) {
-        endFrame = maxFrame;
-    }
-    if (startFrame >= maxFrame) {
-        return;
-    }
-
-    auto it = std::lower_bound(correctionSegments_.begin(), correctionSegments_.end(), startFrame,
-        [](const PitchCorrectionSegment& seg, int frame) {
-            return seg.endFrame <= frame;
-        });
-
-    int currentPos = startFrame;
-    std::vector<float> tempBuffer;
-
-    while (currentPos < endFrame) {
-        if (it != correctionSegments_.end() && it->startFrame < endFrame) {
-            if (currentPos < it->startFrame) {
-                const int gapEnd = std::min(it->startFrame, endFrame);
-                const int gapLength = gapEnd - currentPos;
-                tempBuffer.assign(static_cast<size_t>(gapLength), 0.0f);
-                callback(currentPos, tempBuffer.data(), gapLength);
-                currentPos = gapEnd;
-            }
-
-            if (currentPos < it->endFrame && currentPos < maxFrame) {
-                const int segStart = std::max(currentPos, it->startFrame);
-                const int segEnd = std::min(endFrame, std::min(it->endFrame, maxFrame));
-                const int offset = segStart - it->startFrame;
-                const int length = segEnd - segStart;
-
-                if (length <= 0) {
-                    ++it;
-                    continue;
-                }
-
-                if (static_cast<size_t>(offset + length) > it->f0Data.size()) {
-                    ++it;
-                    continue;
-                }
-
-                callback(segStart, it->f0Data.data() + offset, length);
-                currentPos = segEnd;
-            }
-
-            ++it;
-        } else {
-            const int length = endFrame - currentPos;
-            tempBuffer.assign(static_cast<size_t>(length), 0.0f);
-            callback(currentPos, tempBuffer.data(), length);
-            currentPos = endFrame;
-        }
-    }
-}
-
 F0FrameRange PitchCurve::expandNoteBasedCorrectionRange(int startFrame, int endFrameExclusive, int frameCount) noexcept
 {
     if (frameCount <= 0 || endFrameExclusive <= startFrame) {

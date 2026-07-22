@@ -754,31 +754,11 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
     const int endFrameExclusive = std::min(frameCount, centerFrame + 3);
     const auto& originalF0 = snapshot->getOriginalF0();
 
-    std::vector<float> correctedF0(static_cast<size_t>(endFrameExclusive - startFrame), 0.0f);
-    if (snapshot->hasCorrectionLayer()) {
-        snapshot->renderCorrectionLayerF0Range(
-            startFrame,
-            endFrameExclusive,
-            [startFrame, &correctedF0](int offsetFrame, const float* data, int length) {
-                const int relStart = offsetFrame - startFrame;
-                if (data == nullptr || length <= 0 || relStart >= static_cast<int>(correctedF0.size())) {
-                    return;
-                }
-                const int copyStart = std::max(0, relStart);
-                const int sourceOffset = copyStart - relStart;
-                const int copyLength = std::min(length - sourceOffset,
-                                                static_cast<int>(correctedF0.size()) - copyStart);
-                if (copyLength > 0) {
-                    std::copy_n(data + sourceOffset,
-                                copyLength,
-                                correctedF0.begin() + copyStart);
-                }
-            });
-    }
-
     constexpr float kHitTolerancePx = 7.0f;
     float bestDistanceSquared = kHitTolerancePx * kHitTolerancePx;
     int bestFrame = -1;
+
+    const auto& viewMapper = ctx_.getViewMapper();
 
     auto testCandidate = [&](int frame, float frequency) {
         if (frequency <= 0.0f) {
@@ -786,7 +766,7 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
         }
 
         const int x = sourceTimeToScreenX(f0tl.timeAtFrame(frame));
-        const float y = ctx_.getViewMapper().freqToY(frequency);
+        const float y = viewMapper.freqToY(frequency);
         const float dx = static_cast<float>(e.x - x);
         const float contentY = static_cast<float>(e.y - ctx_.contentOriginY);
         const float dy = contentY - y;
@@ -797,13 +777,16 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
         }
     };
 
-    for (int frame = startFrame; frame < endFrameExclusive; ++frame) {
-        if (frame < static_cast<int>(originalF0.size())) {
-            testCandidate(frame, originalF0[static_cast<size_t>(frame)]);
-        }
-        const float corrected = correctedF0[static_cast<size_t>(frame - startFrame)];
-        testCandidate(frame, corrected);
-    }
+    snapshot->forEachCorrectionF0Span(startFrame, endFrameExclusive,
+        [&](int spanStart, const float* data, int length) {
+            for (int i = 0; i < length; ++i) {
+                const int frame = spanStart + i;
+                testCandidate(frame, originalF0[static_cast<size_t>(frame)]);
+                if (data != nullptr) {
+                    testCandidate(frame, data[i]);
+                }
+            }
+        });
 
     frameIndex = bestFrame;
     return bestFrame >= 0;
@@ -1451,6 +1434,21 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
     int roundedMidi = static_cast<int>(std::round(midiNote));
     float snappedF0 = 440.0f * std::pow(2.0f, (roundedMidi - 69) / 12.0f);
 
+    // Compute before bounds from current drawing state
+    juce::Rectangle<int> beforeBounds;
+    {
+        const auto& dr = ctx_.getState().drawing;
+        if (dr.isDrawingNote && dr.drawingNotePitch > 0.0f) {
+            auto vm = ctx_.getViewMapper();
+            int sx1 = sourceTimeToScreenX(dr.drawingNoteStartTime);
+            int sx2 = sourceTimeToScreenX(dr.drawingNoteEndTime);
+            if (sx1 > sx2) std::swap(sx1, sx2);
+            float ps = vm.midiToY(vm.freqToMidi(dr.drawingNotePitch)) - vm.midiToY(vm.freqToMidi(dr.drawingNotePitch) + 1.0f);
+            float y = ctx_.contentOriginY + vm.freqToY(dr.drawingNotePitch) - ps * 0.5f;
+            beforeBounds = juce::Rectangle<int>(sx1, static_cast<int>(y), std::max(1, sx2 - sx1), static_cast<int>(std::ceil(ps))).expanded(2);
+        }
+    }
+
     if (!ctx_.getState().drawing.isDrawingNote) {
         // First drag frame: initialize drawing state
         ctx_.getState().drawing.isDrawingNote = true;
@@ -1463,8 +1461,20 @@ void PianoRollToolHandler::handleDrawNoteTool(const juce::MouseEvent& e)
         ctx_.setDrawingNoteEndTime(clampedTime);
     }
 
-    // Only repaint the lightweight preview overlay 锟?no render model rebuild
-    if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview({});
+    // Compute after bounds and invalidate
+    if (ctx_.invalidateInteractionPreview) {
+        const auto& dr = ctx_.getState().drawing;
+        if (dr.isDrawingNote && dr.drawingNotePitch > 0.0f) {
+            auto vm = ctx_.getViewMapper();
+            int sx1 = sourceTimeToScreenX(dr.drawingNoteStartTime);
+            int sx2 = sourceTimeToScreenX(dr.drawingNoteEndTime);
+            if (sx1 > sx2) std::swap(sx1, sx2);
+            float ps = vm.midiToY(vm.freqToMidi(dr.drawingNotePitch)) - vm.midiToY(vm.freqToMidi(dr.drawingNotePitch) + 1.0f);
+            float y = ctx_.contentOriginY + vm.freqToY(dr.drawingNotePitch) - ps * 0.5f;
+            juce::Rectangle<int> afterBounds(sx1, static_cast<int>(y), std::max(1, sx2 - sx1), static_cast<int>(std::ceil(ps)));
+            ctx_.invalidateInteractionPreview(beforeBounds.getUnion(afterBounds.expanded(2)));
+        }
+    }
 }
 
 void PianoRollToolHandler::handleAutoTuneTool(const juce::MouseEvent& e)
@@ -1864,9 +1874,23 @@ void PianoRollToolHandler::handleDrawNoteUp(const juce::MouseEvent& e)
     const auto beforeNotes = std::vector<Note>(committedNotes(ctx_));
 
     if (ctx_.getDrawNoteToolPendingDrag()) {
+        // Capture stale preview bounds before clearing state
+        juce::Rectangle<int> staleBounds;
+        {
+            const auto& dr = ctx_.getState().drawing;
+            if (dr.isDrawingNote && dr.drawingNotePitch > 0.0f) {
+                auto vm = ctx_.getViewMapper();
+                int sx1 = sourceTimeToScreenX(dr.drawingNoteStartTime);
+                int sx2 = sourceTimeToScreenX(dr.drawingNoteEndTime);
+                if (sx1 > sx2) std::swap(sx1, sx2);
+                float ps = vm.midiToY(vm.freqToMidi(dr.drawingNotePitch)) - vm.midiToY(vm.freqToMidi(dr.drawingNotePitch) + 1.0f);
+                float y = ctx_.contentOriginY + vm.freqToY(dr.drawingNotePitch) - ps * 0.5f;
+                staleBounds = juce::Rectangle<int>(sx1, static_cast<int>(y), std::max(1, sx2 - sx1), static_cast<int>(std::ceil(ps))).expanded(2);
+            }
+        }
         ctx_.setDrawNoteToolPendingDrag(false);
-        // Repaint overlay to clear any stale preview
-        if (ctx_.invalidateInteractionPreview) ctx_.invalidateInteractionPreview({});
+        if (ctx_.invalidateInteractionPreview && !staleBounds.isEmpty())
+            ctx_.invalidateInteractionPreview(staleBounds);
         return;
     }
     
