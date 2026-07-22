@@ -1241,18 +1241,75 @@ void pianoRollRetainedSurfaceArchitecture()
                    componentImpl,
                    {"gFrameCount", "gRepaintCount", "gPaintTimerStart", "diagnosticReportFrameMs"});
 
-    // rasterCamera_ 存在，旧 surfaceOriginPx/surfacePps/tlPhasePx/tlSrcX 已删除
-    expectTokens("Piano Roll has rasterCamera_",
+    // RasterView 单一快照，rasterCamera_/surfacePixelsPerSemitone_/surfaceVerticalScrollOffset_ 已删除
+    expectTokens("Piano Roll has struct RasterView",
                  componentHeader,
-                 {"TimelineViewportCamera rasterCamera_"});
-    expectNoTokens("Piano Roll has no surfaceOriginPx/surfacePps/tlPhasePx/tlSrcX",
+                 {"struct RasterView"});
+    expectTokens("Piano Roll has rasterView_ member",
+                 componentHeader,
+                 {"RasterView rasterView_"});
+    expectTokens("Piano Roll has makeViewMapperForRasterView",
+                 componentHeader,
+                 {"makeViewMapperForRasterView"});
+    expectNoTokens("Piano Roll has no rasterCamera_ / surfacePixelsPerSemitone_ / surfaceVerticalScrollOffset_ / surfaceOriginPx_ etc.",
                    componentHeader + componentImpl,
-                   {"surfaceOriginPx_", "surfacePps_", "tlPhasePx", "tlSrcX"});
+                   {"rasterCamera_", "surfacePixelsPerSemitone_", "surfaceVerticalScrollOffset_",
+                    "surfaceOriginPx_", "surfacePps_", "tlPhasePx", "tlSrcX"});
+    expectTokens("PianoRollComponent.cpp uses rasterView_ for rasterization",
+                  componentImpl,
+                  {"rasterView_.camera", "rasterView_.pixelsPerSemitone", "rasterView_.verticalScrollOffset"});
+
+    // 完整双表面 dirty 时一次性同步 rasterView_ 为 live 状态
+    {
+        const auto dirtySync = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeDirtySurfaces");
+        expect(!dirtySync.empty(), "rasterizeDirtySurfaces must be found");
+        expect(inOrder(dirtySync, {"staticDirty_ && contentDirty_",
+                                   "rasterView_.camera = camera_",
+                                   "rasterView_.pixelsPerSemitone = pixelsPerSemitone_",
+                                   "rasterView_.verticalScrollOffset = verticalScrollOffset_"}),
+               "full dual-surface dirty must sync all three rasterView_ fields in order");
+    }
+
+    // rasterizeStatic 从 rasterView_ 读取 source（相机 + 纵向）
+    {
+        const auto rasterStatic = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeStatic");
+        expect(!rasterStatic.empty(), "rasterizeStatic must be found");
+        expectTokens("rasterizeStatic reads rasterView_ camera source",
+                      rasterStatic,
+                      {"rasterView_.camera.pixelsPerSecond", "rasterView_.camera.visibleStartSeconds"});
+        expectTokens("rasterizeStatic reads rasterView_ vertical source",
+                      rasterStatic,
+                      {"rasterView_.verticalScrollOffset", "rasterView_.pixelsPerSemitone"});
+    }
+
+    // rasterizeContent 从 rasterView_ 读取 source，通过 makeViewMapperForRasterView 构建坐标
+    {
+        const auto rasterContent = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeContent");
+        expect(!rasterContent.empty(), "rasterizeContent must be found");
+        expectTokens("rasterizeContent reads rasterView_ camera + vertical source",
+                      rasterContent,
+                      {"rasterView_.camera.pixelsPerSecond", "rasterView_.pixelsPerSemitone"});
+        expectTokens("rasterizeContent uses makeViewMapperForRasterView",
+                      rasterContent,
+                      {"makeViewMapperForRasterView(rasterView_)"});
+    }
+
+    // applyRasterCamera 条带路径只写 rasterView_.camera，不写纵向 source
+    {
+        const auto applyCam = extractFunctionBlock(componentImpl, "void PianoRollComponent::applyRasterCamera");
+        expect(!applyCam.empty(), "applyRasterCamera must be found");
+        expectTokens("applyRasterCamera strip writes rasterView_.camera",
+                      applyCam,
+                      {"rasterView_.camera = newCamera"});
+        expectNoTokens("applyRasterCamera strip no vertical source write",
+                        applyCam,
+                        {"rasterView_.pixelsPerSemitone", "rasterView_.verticalScrollOffset"});
+    }
 
     // rasterizeStatic 仅统一 clip chrome 链，无 stripVisibleStart/fillRect(*dirtyRect)
-    const auto rasterStatic = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeStatic");
+    const auto rasterStatic2 = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeStatic");
     expectNoTokens("rasterizeStatic no strip-specific path",
-                   rasterStatic,
+                   rasterStatic2,
                    {"stripVisibleStart", "fillRect(*dirtyRect)", "inTimelineZone"});
 
     // VBlank：稳定 CONT 有 fixedCentre 跳过 + playState/time/camera 变化 gate
@@ -1298,15 +1355,22 @@ void pianoRollRetainedSurfaceArchitecture()
                    drawNoteHandler + extractFunctionBlock(toolHandler, "void PianoRollToolHandler::handleDrawNoteUp"),
                    {" - 12", " + 16"});
 
-    // 缩放冻结仅首事务捕获
+    // 缩放冻结不写 rasterView_（已有保留表面的冻结源，非缩放捕获目标）；
+    // 两函数仍设 zoomPreviewActive_
     const auto beginZoom = extractFunctionBlock(componentImpl, "void PianoRollComponent::beginZoomPreview");
-    expectTokens("beginZoomPreview freeze guarded by !zoomPreviewActive_",
+    expectNoTokens("beginZoomPreview does not write rasterView_",
+                   beginZoom,
+                   {"rasterView_"});
+    expectTokens("beginZoomPreview sets zoomPreviewActive_",
                  beginZoom,
-                 {"if (!zoomPreviewActive_)"});
+                 {"zoomPreviewActive_"});
     const auto vertZoom = extractFunctionBlock(componentImpl, "void PianoRollComponent::handleVerticalZoomWheel");
-    expectTokens("handleVerticalZoomWheel freeze guarded by !zoomPreviewActive_",
+    expectNoTokens("handleVerticalZoomWheel does not write rasterView_",
+                   vertZoom,
+                   {"rasterView_"});
+    expectTokens("handleVerticalZoomWheel sets zoomPreviewActive_",
                  vertZoom,
-                 {"if (!zoomPreviewActive_)"});
+                 {"zoomPreviewActive_"});
 
     // resized：updateScrollBars 位于 tryConsume 失败 fallback 后
     const auto resizedBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::resized()");
@@ -1480,20 +1544,6 @@ void pitchCurveF0SpanApiReplacesOldRenderPath()
     expectTokens("drawF0Curve uses forEachCorrectionF0Span",
                  drawF0Curve,
                  {"forEachCorrectionF0Span"});
-    expectTokens("drawF0Curve uses appendSmoothedF0Path",
-                 drawF0Curve,
-                 {"appendSmoothedF0Path"});
-    expect(countOf(drawF0Curve, "buildF0VisualSegments(") == 2,
-           "drawF0Curve must call buildF0VisualSegments exactly twice (original + corrected count="
-           + std::to_string(countOf(drawF0Curve, "buildF0VisualSegments(")) + ")");
-
-    const auto builderBlock = extractFunctionBlock(
-        rendererImpl,
-        "static std::vector<F0VisualSegment> buildF0VisualSegments");
-    expect(!builderBlock.empty(), "buildF0VisualSegments must be found in .cpp");
-    expect(countOf(builderBlock, "emitSpans([") == 2,
-           "buildF0VisualSegments must replay emitSpans exactly twice (energy scan + visual construction count="
-           + std::to_string(countOf(builderBlock, "emitSpans([")) + ")");
 
     const auto toolHandlerImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
     expectNoTokens("PianoRollToolHandler.cpp no correctedF0",

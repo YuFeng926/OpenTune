@@ -1,6 +1,7 @@
 #include "../Source/Utils/PianoRollEditAction.h"
 #include "../Source/Utils/UndoManager.h"
 #include "../Source/Standalone/UI/PianoRoll/InteractionState.h"
+#include "../Source/Standalone/UI/PianoRoll/PianoRollRenderer.h"
 #include "../Source/Content/EditableContentSnapshot.h"
 #include "../Source/Content/CaptureSegmentContent.h"
 #include "../Source/Utils/TimeGrid.h"
@@ -18,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #ifndef OPENTUNE_SOURCE_DIR
@@ -1386,6 +1388,353 @@ void pitchCurveSnapshotForEachCorrectionF0SpanContract()
     }
 }
 
+// ---------------------------------------------------------------------------
+// F0 pixel contract helpers — DarkBlueGrey theme (no glow), identity timeline
+// ---------------------------------------------------------------------------
+namespace {
+    const ThemeId kF0TestOrigTheme = UIColors::currentThemeId();
+}
+
+static void f0TestEnsureDarkBlueGrey()
+{
+    static bool applied = false;
+    if (!applied) {
+        UIColors::applyTheme(ThemeId::DarkBlueGrey);
+        applied = true;
+    }
+}
+
+static void f0TestRestoreTheme()
+{
+    UIColors::applyTheme(kF0TestOrigTheme);
+}
+
+// ---------------------------------------------------------------------------
+// Contract 1 : Original F0 bucket extremes survive asymmetric energy swap
+// ---------------------------------------------------------------------------
+void f0CurveOriginalBucketExtremesWithAsymmetricEnergy()
+{
+    f0TestEnsureDarkBlueGrey();
+
+    constexpr int numFrames = 40;
+    constexpr int hopSize   = 512;
+    constexpr double sr     = 16000.0;
+    constexpr double pps    = 8.0;           // frame 0&1 → same int X via llround
+    constexpr int startX    = 60;            // far from image boundary
+    constexpr int imgW = 300, imgH = 250;
+
+    // frame 0 (800 Hz) and frame 1 (200 Hz) share the bucket starting at X = startX
+    std::vector<float> f0(numFrames, 440.0f);
+    f0[0] = 800.0f;
+    f0[1] = 200.0f;
+
+    auto makeItem = [&](auto& snap) {
+        F0Timeline tl(hopSize, sr, numFrames);
+        const double dur = numFrames * static_cast<double>(hopSize) / sr;
+        auto tg = TimeGridSnapshot::makeIdentity(dur);
+        ContentTimelineProjection pr;
+        pr.timelineStartSeconds = 0.0;
+        pr.timelineDurationSeconds = dur;
+        pr.contentDurationSeconds  = dur;
+
+        PianoRollRenderer::ContentRenderItem it;
+        it.contentKey.domainKind = DomainKind::StandaloneClip;
+        it.contentKey.objectId   = 1;
+        it.projection  = pr;
+        it.timeGrid    = tg;
+        it.f0Timeline  = tl;
+        it.pitchSnapshot = snap;
+        it.active = true;
+        return it;
+    };
+
+    auto makeCtx = [&](bool showOrig) {
+        PianoRollRenderer::RenderContext c;
+        c.width            = imgW;
+        c.height           = imgH;
+        c.pianoKeyWidth    = startX;
+        c.rulerHeight      = 0;
+        c.pixelsPerSecond  = pps;
+        c.pixelsPerSemitone = 3.0f;
+        c.minMidi          = 24.0f;
+        c.maxMidi          = 108.0f;
+        c.showOriginalF0   = showOrig;
+        c.showCorrectedF0  = false;
+
+        c.coords.visibleStartSeconds = 0.0;
+        c.coords.pixelsPerSecond    = pps;
+        c.coords.contentStartX      = startX;
+        c.coords.contentWidth       = imgW;
+        c.coords.contentHeight      = imgH;
+        c.coords.pixelsPerSemitone  = 3.0f;
+        c.coords.maxMidi            = 108.0f;
+        return c;
+    };
+
+    // --- target Y via freqToY (one reference context) ---
+    auto refCtx   = makeCtx(true);
+    const int hiY = static_cast<int>(refCtx.coords.freqToY(800.0f));   // ≈ 87
+    const int loY = static_cast<int>(refCtx.coords.freqToY(200.0f));   // ≈ 159
+    const int bucketX = startX;  // frame 0 & 1 both resolve to this int X
+
+    auto renderAndCheck = [&](const std::vector<float>& energy,
+                              std::string_view tag) -> std::pair<int,int>
+    {
+        auto snap = std::make_shared<const PitchCurveSnapshot>(
+            f0, energy, std::vector<PitchCorrectionSegment>{}, hopSize, sr);
+        juce::Image img(juce::Image::ARGB, imgW, imgH, true);
+        {
+            juce::Graphics g(img);
+            PianoRollRenderer r;
+            auto item = makeItem(snap);
+            auto ctx  = makeCtx(true);
+            r.drawF0Curve(g, ctx, item);
+        }
+        bool hi = false, lo = false;
+        for (int dy = -1; dy <= 1; ++dy) {
+            const int yH = hiY + dy;
+            const int yL = loY + dy;
+            if (yH >= 0 && yH < imgH)
+                hi = hi || (img.getPixelAt(bucketX, yH).getAlpha() > 0);
+            if (yL >= 0 && yL < imgH)
+                lo = lo || (img.getPixelAt(bucketX, yL).getAlpha() > 0);
+        }
+        const auto label = std::string(tag);
+        expect(hi, label + ": Original F0 bucket must cover high-freq Y extreme (freqToY(800))");
+        expect(lo, label + ": Original F0 bucket must cover low-freq Y extreme (freqToY(200))");
+
+        // Scan bucketX column for alpha range [minY, maxY]
+        int colMin = imgH, colMax = -1;
+        for (int y = 0; y < imgH; ++y) {
+            if (img.getPixelAt(bucketX, y).getAlpha() > 0) {
+                if (y < colMin) colMin = y;
+                if (y > colMax) colMax = y;
+            }
+        }
+        return {colMin, colMax};
+    };
+
+    std::pair<int,int> rangeA, rangeB;
+
+    // Energy A — high energy on high-freq frame
+    {
+        std::vector<float> enA(numFrames, 0.3f);
+        enA[0] = 0.9f;  enA[1] = 0.05f;
+        rangeA = renderAndCheck(enA, "Energy-A (hi→800Hz)");
+    }
+    // Energy B — swapped: high energy on low-freq frame
+    {
+        std::vector<float> enB(numFrames, 0.3f);
+        enB[0] = 0.05f; enB[1] = 0.9f;
+        rangeB = renderAndCheck(enB, "Energy-B (hi→200Hz)");
+    }
+
+    expect(std::abs(rangeA.first  - rangeB.first)  <= 1,
+           "Energy swap: bucket alpha minY must match within 1px");
+    expect(std::abs(rangeA.second - rangeB.second) <= 1,
+           "Energy swap: bucket alpha maxY must match within 1px");
+}
+
+// ---------------------------------------------------------------------------
+// Contract 2 : Corrected F0 span extremes on same single bucket
+// ---------------------------------------------------------------------------
+void f0CurveCorrectedSpanExtremes()
+{
+    f0TestEnsureDarkBlueGrey();
+
+    constexpr int numFrames = 40;
+    constexpr int hopSize   = 512;
+    constexpr double sr     = 16000.0;
+    constexpr double pps    = 8.0;
+    constexpr int startX    = 60;
+    constexpr int imgW = 300, imgH = 250;
+
+    std::vector<float> f0(numFrames, 440.0f);
+    std::vector<float> energy(numFrames, 0.3f);
+
+    // correction segment [0,8): frame 0=800, frame 1=200 → same bucket at startX
+    std::vector<PitchCorrectionSegment> segments;
+    segments.emplace_back(0, 8, std::vector<float>{
+        800.0f, 200.0f, 440.0f, 440.0f, 440.0f, 440.0f, 440.0f, 440.0f });
+
+    auto snap = std::make_shared<const PitchCurveSnapshot>(
+        f0, energy, segments, hopSize, sr);
+
+    F0Timeline tl(hopSize, sr, numFrames);
+    const double dur = numFrames * static_cast<double>(hopSize) / sr;
+    auto tg = TimeGridSnapshot::makeIdentity(dur);
+    ContentTimelineProjection pr;
+    pr.timelineStartSeconds = 0.0;
+    pr.timelineDurationSeconds = dur;
+    pr.contentDurationSeconds  = dur;
+
+    PianoRollRenderer::RenderContext ctx;
+    ctx.width            = imgW;
+    ctx.height           = imgH;
+    ctx.pianoKeyWidth    = startX;
+    ctx.rulerHeight      = 0;
+    ctx.pixelsPerSecond  = pps;
+    ctx.pixelsPerSemitone = 3.0f;
+    ctx.minMidi          = 24.0f;
+    ctx.maxMidi          = 108.0f;
+    ctx.showOriginalF0   = false;
+    ctx.showCorrectedF0  = true;
+    ctx.coords.visibleStartSeconds = 0.0;
+    ctx.coords.pixelsPerSecond    = pps;
+    ctx.coords.contentStartX      = startX;
+    ctx.coords.contentWidth       = imgW;
+    ctx.coords.contentHeight      = imgH;
+    ctx.coords.pixelsPerSemitone  = 3.0f;
+    ctx.coords.maxMidi            = 108.0f;
+
+    PianoRollRenderer::ContentRenderItem item;
+    item.contentKey.domainKind = DomainKind::StandaloneClip;
+    item.contentKey.objectId   = 1;
+    item.projection  = pr;
+    item.timeGrid    = tg;
+    item.f0Timeline  = tl;
+    item.pitchSnapshot = snap;
+    item.active = true;
+
+    juce::Image img(juce::Image::ARGB, imgW, imgH, true);
+    {
+        juce::Graphics g(img);
+        PianoRollRenderer r;
+        r.drawF0Curve(g, ctx, item);
+    }
+
+    const int hiY = static_cast<int>(ctx.coords.freqToY(800.0f));
+    const int loY = static_cast<int>(ctx.coords.freqToY(200.0f));
+    const int bucketX = startX;
+
+    bool hi = false, lo = false;
+    for (int dy = -1; dy <= 1; ++dy) {
+        const int yH = hiY + dy;
+        const int yL = loY + dy;
+        if (yH >= 0 && yH < imgH)
+            hi = hi || (img.getPixelAt(bucketX, yH).getAlpha() > 0);
+        if (yL >= 0 && yL < imgH)
+            lo = lo || (img.getPixelAt(bucketX, yL).getAlpha() > 0);
+    }
+    expect(hi, "Corrected F0 span must cover high-freq Y extreme (freqToY(800))");
+    expect(lo, "Corrected F0 span must cover low-freq Y extreme (freqToY(200))");
+}
+
+// ---------------------------------------------------------------------------
+// Contract 3 : Original invalid-F0 gap & Corrected nullptr gap are isolated
+//              (two separate renders — curves never drawn together)
+// ---------------------------------------------------------------------------
+void f0CurveGapIsolation()
+{
+    f0TestEnsureDarkBlueGrey();
+
+    constexpr int numFrames = 120;
+    constexpr int hopSize   = 512;
+    constexpr double sr     = 16000.0;
+    constexpr double pps    = 8.0;
+    constexpr int startX    = 60;
+    constexpr int imgW = 350, imgH = 250;
+
+    auto makeItem = [&](int nf, auto& snap) {
+        F0Timeline tl(hopSize, sr, nf);
+        const double dur = nf * static_cast<double>(hopSize) / sr;
+        auto tg = TimeGridSnapshot::makeIdentity(dur);
+        ContentTimelineProjection pr;
+        pr.timelineStartSeconds = 0.0;
+        pr.timelineDurationSeconds = dur;
+        pr.contentDurationSeconds  = dur;
+        PianoRollRenderer::ContentRenderItem it;
+        it.contentKey.domainKind = DomainKind::StandaloneClip;
+        it.contentKey.objectId   = 1;
+        it.projection  = pr;
+        it.timeGrid    = tg;
+        it.f0Timeline  = tl;
+        it.pitchSnapshot = snap;
+        it.active = true;
+        return it;
+    };
+
+    auto makeCtx = [&](bool showOrig, bool showCorr) {
+        PianoRollRenderer::RenderContext c;
+        c.width            = imgW;
+        c.height           = imgH;
+        c.pianoKeyWidth    = startX;
+        c.rulerHeight      = 0;
+        c.pixelsPerSecond  = pps;
+        c.pixelsPerSemitone = 3.0f;
+        c.minMidi          = 24.0f;
+        c.maxMidi          = 108.0f;
+        c.showOriginalF0   = showOrig;
+        c.showCorrectedF0  = showCorr;
+        c.coords.visibleStartSeconds = 0.0;
+        c.coords.pixelsPerSecond    = pps;
+        c.coords.contentStartX      = startX;
+        c.coords.contentWidth       = imgW;
+        c.coords.contentHeight      = imgH;
+        c.coords.pixelsPerSemitone  = 3.0f;
+        c.coords.maxMidi            = 108.0f;
+        return c;
+    };
+
+    // Col scan helper: true iff every pixel in column x has zero alpha
+    auto columnClear = [&](const juce::Image& img, int x) {
+        for (int y = 0; y < imgH; ++y)
+            if (img.getPixelAt(x, y).getAlpha() > 0)
+                return false;
+        return true;
+    };
+
+    // ----- Original F0 gap (invalid frames [50, 80)) -----
+    // Last valid before gap: frame 49  →  X = startX+llround(49*0.256)=73
+    // First valid after  gap: frame 80  →  X = startX+llround(80*0.256)=80
+    // Bucket may push last point to X=72; gap centre  ≈  (72+80)/2 = 76
+    {
+        std::vector<float> f0O(numFrames, 440.0f);
+        for (int i = 50; i < 80; ++i) f0O[i] = 0.0f;
+        std::vector<float> enO(numFrames, 0.3f);
+        auto snapO = std::make_shared<const PitchCurveSnapshot>(
+            f0O, enO, std::vector<PitchCorrectionSegment>{}, hopSize, sr);
+
+        juce::Image img(juce::Image::ARGB, imgW, imgH, true);
+        {
+            juce::Graphics g(img);
+            PianoRollRenderer r;
+            auto item = makeItem(numFrames, snapO);
+            auto ctx  = makeCtx(true, false);
+            r.drawF0Curve(g, ctx, item);
+        }
+        const int gapCx = 76;
+        expect(columnClear(img, gapCx),
+               "Original-F0 gap centre column (X=76) must be fully transparent");
+    }
+
+    // ----- Corrected F0 nullptr gap (segments [5,15) & [50,60)) -----
+    // Segment-1 last frame: 14 → X = startX+llround(14*0.256)=64
+    // Segment-2 first frame: 50 → X = startX+llround(50*0.256)=73
+    // Bucket may push last point to X=63; gap centre ≈ (63+73)/2 = 68
+    {
+        std::vector<float> f0C(numFrames, 440.0f);
+        std::vector<float> enC(numFrames, 0.3f);
+        std::vector<PitchCorrectionSegment> segs;
+        segs.emplace_back( 5, 15, std::vector<float>(10, 440.0f));
+        segs.emplace_back(50, 60, std::vector<float>(10, 440.0f));
+        auto snapC = std::make_shared<const PitchCurveSnapshot>(
+            f0C, enC, segs, hopSize, sr);
+
+        juce::Image img(juce::Image::ARGB, imgW, imgH, true);
+        {
+            juce::Graphics g(img);
+            PianoRollRenderer r;
+            auto item = makeItem(numFrames, snapC);
+            auto ctx  = makeCtx(false, true);
+            r.drawF0Curve(g, ctx, item);
+        }
+        const int gapCx = 68;
+        expect(columnClear(img, gapCx),
+               "Corrected-F0 nullptr-gap centre column (X=68) must be fully transparent");
+    }
+}
+
 } // namespace
 
 int main()
@@ -1422,10 +1771,15 @@ int main()
         processBlockZeroSampleTransportObservationContract();
         playHeadStatePausedExternalSeekRuntimeContract();
         pitchCurveSnapshotForEachCorrectionF0SpanContract();
+        f0CurveOriginalBucketExtremesWithAsymmetricEnergy();
+        f0CurveCorrectedSpanExtremes();
+        f0CurveGapIsolation();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";
     }
+
+    f0TestRestoreTheme();
 
     std::cout << "\n";
     if (failures == 0) {

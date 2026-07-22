@@ -1280,6 +1280,9 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
     add_executable(OpenTunePianoRollBehaviorTests
         Tests/PianoRollBehaviorTests.cpp
         Source/Standalone/UI/PianoRoll/InteractionState.cpp
+        Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
+        Source/Utils/LegacyNoteGenerator.cpp
+        Source/Utils/SimdAccelerator.cpp
         Source/Utils/PianoRollEditAction.cpp
         Source/Utils/UndoManager.cpp
         Source/Content/CaptureSegmentContent.cpp
@@ -1300,6 +1303,7 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
             juce::juce_audio_processors
             juce::juce_gui_basics
             juce::juce_recommended_config_flags
+            OpenTuneResources
     )
     target_compile_definitions(OpenTunePianoRollBehaviorTests
         PRIVATE

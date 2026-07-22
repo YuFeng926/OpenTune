@@ -257,16 +257,17 @@ private:
     friend struct PianoRollComponentTestProbe;
     friend class PianoRollOverlayComponent;
 
-    // ── 表面状态 ──────────────────────────────────────────────
+    // ── 保留表面栅格快照 ──────────────────────────────────────
+    struct RasterView {
+        TimelineViewportCamera camera{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
+        float pixelsPerSemitone = 25.0f;
+        float verticalScrollOffset = 0.0f;
+    };
     juce::Image staticSurface_;
     juce::Image contentSurface_;
-    TimelineViewportCamera rasterCamera_{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
+    RasterView rasterView_;
     bool staticDirty_ = true;
     bool contentDirty_ = true;
-
-    // ── 缩放事务冻结源值（仅预览期读取，非通用 raster 相机状态） ──
-    float surfacePixelsPerSemitone_ = 25.0f;
-    float surfaceVerticalScrollOffset_ = 0.0f;
 
     // ── 缩放事务 ──────────────────────────────────────────────
     bool zoomPreviewActive_ = false;
@@ -342,7 +343,7 @@ private:
     int getTimelineContentViewportHeight() const;
 
     ViewMapper makeViewMapper() const noexcept;
-    ViewMapper makeViewMapperForCamera(const TimelineViewportCamera& cam) const noexcept;
+    ViewMapper makeViewMapperForRasterView(const RasterView& rv) const noexcept;
     double computeContentTimelineEndSeconds() const noexcept;
     juce::Rectangle<int> timeAxisRect() const;
 
