@@ -111,6 +111,7 @@ struct F0VisualPoint
 struct F0VisualSegment
 {
     std::vector<F0VisualPoint> points;
+    bool useLinearPath = false;
 };
 
 struct F0VisualBuildOptions
@@ -171,6 +172,28 @@ static void appendSmoothedF0Path(juce::Path& path,
     path.lineTo(last.x, last.y);
 }
 
+static void appendLinearF0Path(juce::Path& path,
+                               const std::vector<F0VisualPoint>& points,
+                               std::size_t startIndex,
+                               std::size_t endIndexInclusive)
+{
+    if (points.empty() || startIndex >= points.size())
+        return;
+
+    endIndexInclusive = std::min(endIndexInclusive, points.size() - 1);
+    if (endIndexInclusive <= startIndex) {
+        const auto& point = points[startIndex];
+        path.startNewSubPath(point.x - 0.01f, point.y);
+        path.lineTo(point.x + 0.01f, point.y);
+        return;
+    }
+
+    path.startNewSubPath(points[startIndex].x, points[startIndex].y);
+    for (std::size_t i = startIndex + 1; i <= endIndexInclusive; ++i) {
+        path.lineTo(points[i].x, points[i].y);
+    }
+}
+
 // vocal-time-stretch 搂8.5 鈥?convert a SOURCE-time anchor (Note.startTime,
 // f0Timeline frame timestamp, WaveformMipmap peak) into screen X via the
 // item's projection. Identity TimeGrid 鈫?degenerates to existing pipeline.
@@ -186,7 +209,7 @@ inline int sourceTimeToScreenX(double sourceTime,
 
 /// Span-stream F0 visual builder: replays the span producer twice.
 /// Pass 1 computes energy min/max across valid F0 frequencies.
-/// Pass 2 builds visual segments with bucket accumulation and Bézier control points.
+/// Pass 2 builds visual segments with bucket min/max envelope for LOD, linear path for downsampled, Bézier for full-resolution.
 /// Producer receives a sink(startFrame, data, length); nullptr data means a gap — flush current segment.
 template <typename SpanProducer, typename FX, typename FY>
 static std::vector<F0VisualSegment> buildF0VisualSegments(
@@ -224,17 +247,17 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
 
     struct BucketAccumulator {
         bool active = false;
-        float xSum = 0.0f;
-        float ySum = 0.0f;
-        float hotMixSum = 0.0f;
-        float weightSum = 0.0f;
+        float yMin = 0.0f;
+        float yMax = 0.0f;
+        float hotMixAccum = 0.0f;
+        int pointCount = 0;
 
         void clear() noexcept {
             active = false;
-            xSum = 0.0f;
-            ySum = 0.0f;
-            hotMixSum = 0.0f;
-            weightSum = 0.0f;
+            yMin = std::numeric_limits<float>::max();
+            yMax = std::numeric_limits<float>::lowest();
+            hotMixAccum = 0.0f;
+            pointCount = 0;
         }
     };
 
@@ -243,21 +266,22 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
     float bucketAnchorX = 0.0f;
 
     auto flushBucket = [&]() {
-        if (!bucket.active || bucket.weightSum <= 0.0f) {
+        if (!bucket.active) {
             bucket.clear();
             return;
         }
-        currentSegment.points.push_back({
-            bucket.xSum / bucket.weightSum,
-            bucket.ySum / bucket.weightSum,
-            bucket.hotMixSum / bucket.weightSum
-        });
+        const float avgHotMix = bucket.hotMixAccum / static_cast<float>(bucket.pointCount);
+        currentSegment.points.push_back({ bucketAnchorX, bucket.yMin, avgHotMix });
+        if (bucket.yMin != bucket.yMax) {
+            currentSegment.points.push_back({ bucketAnchorX, bucket.yMax, avgHotMix });
+        }
         bucket.clear();
     };
 
     auto flushSegment = [&]() {
         flushBucket();
         if (!currentSegment.points.empty()) {
+            currentSegment.useLinearPath = (targetPointSpacing > 0.0f);
             segments.push_back(std::move(currentSegment));
             currentSegment = {};
         }
@@ -283,17 +307,14 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
             }
 
             const float y = frameToY(globalFrame, frequency);
-            float energyAlpha = 1.0f;
             float levelHotMix = 0.0f;
             if (hasEnergy) {
                 const float energy = (*originalEnergy)[static_cast<size_t>(globalFrame)];
                 const float normalizedEnergy = juce::jlimit(0.0f, 1.0f,
                     (energy - minEnergy) / juce::jmax(1e-6f, maxEnergy - minEnergy));
-                energyAlpha = 0.70f + 0.30f * normalizedEnergy;
                 static constexpr float kMaxHotMix = 0.34f;
                 levelHotMix = kMaxHotMix * smootherStep(normalizedEnergy);
             }
-            const float weight = juce::jmax(0.001f, energyAlpha);
 
             if (targetPointSpacing <= 0.0f) {
                 flushBucket();
@@ -304,18 +325,18 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
             if (!bucket.active) {
                 bucket.active = true;
                 bucketAnchorX = x;
-                bucket.weightSum = weight;
-                bucket.xSum = x * weight;
-                bucket.ySum = y * weight;
-                bucket.hotMixSum = levelHotMix * weight;
+                bucket.yMin = y;
+                bucket.yMax = y;
+                bucket.hotMixAccum = levelHotMix;
+                bucket.pointCount = 1;
                 continue;
             }
 
             if (std::abs(x - bucketAnchorX) < targetPointSpacing) {
-                bucket.weightSum += weight;
-                bucket.xSum += x * weight;
-                bucket.ySum += y * weight;
-                bucket.hotMixSum += levelHotMix * weight;
+                bucket.yMin = std::min(bucket.yMin, y);
+                bucket.yMax = std::max(bucket.yMax, y);
+                bucket.hotMixAccum += levelHotMix;
+                ++bucket.pointCount;
                 continue;
             }
 
@@ -323,10 +344,10 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
 
             bucket.active = true;
             bucketAnchorX = x;
-            bucket.weightSum = weight;
-            bucket.xSum = x * weight;
-            bucket.ySum = y * weight;
-            bucket.hotMixSum = levelHotMix * weight;
+            bucket.yMin = y;
+            bucket.yMax = y;
+            bucket.hotMixAccum = levelHotMix;
+            bucket.pointCount = 1;
         }
     });
 
@@ -1322,7 +1343,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             }
 
             juce::Path runPath;
-            appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+            if (segment.useLinearPath) {
+                appendLinearF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+            } else {
+                appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+            }
 
             if (isAurora) {
                 g.setColour(colour.withAlpha(alpha * 0.080f));
@@ -1402,7 +1427,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
             }
 
             juce::Path runPath;
-            appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+            if (segment.useLinearPath) {
+                appendLinearF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+            } else {
+                appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+            }
 
             if (isAurora) {
                 const auto& pts = segment.points;

@@ -1327,15 +1327,13 @@ void PianoRollComponent::paint(juce::Graphics& g)
         UIColors::drawShadow(g, juce::Rectangle<float>(0, 0, (float)getWidth(), (float)getHeight()));
         g.setColour(juce::Colours::white);
 
-        const double scaleX = camera_.pixelsPerSecond / rasterCamera_.pixelsPerSecond;
-        const double scaleY = (surfacePixelsPerSemitone_ > 0.0f)
-            ? static_cast<double>(pixelsPerSemitone_ / surfacePixelsPerSemitone_)
-            : 1.0;
-        // 连续偏移：rasterCamera 原点在当前 camera 坐标系的位置
-        const double srcPx = (rasterCamera_.visibleStartSeconds - camera_.visibleStartSeconds) * camera_.pixelsPerSecond;
+        const double scaleX = camera_.pixelsPerSecond / rasterView_.camera.pixelsPerSecond;
+        const double scaleY = static_cast<double>(pixelsPerSemitone_ / rasterView_.pixelsPerSemitone);
+        // 连续偏移：rasterView_.camera 原点在当前 camera 坐标系的位置
+        const double srcPx = (rasterView_.camera.visibleStartSeconds - camera_.visibleStartSeconds) * camera_.pixelsPerSecond;
         const float tx = static_cast<float>(pianoKeyWidth_ * (1.0 - scaleX) + srcPx);
         const float offsetY = static_cast<float>(
-            rulerHeight_ * (1.0 - scaleY) + surfaceVerticalScrollOffset_ * scaleY - verticalScrollOffset_);
+            rulerHeight_ * (1.0 - scaleY) + rasterView_.verticalScrollOffset * scaleY - verticalScrollOffset_);
 
         // 1. 时间标尺：X 缩放，Y 不缩放
         if (staticSurface_.isValid()) {
@@ -1401,9 +1399,12 @@ void PianoRollComponent::rasterizeDirtySurfaces()
         contentDirty_ = true;
     }
 
-    // 仅 static && content 同时脏时更新 rasterCamera；单独脏继续使用既有相机
-    if (staticDirty_ && contentDirty_)
-        rasterCamera_ = camera_;
+    // 全量双表面重建时一次性同步 rasterView_ 为 live 状态
+    if (staticDirty_ && contentDirty_) {
+        rasterView_.camera = camera_;
+        rasterView_.pixelsPerSemitone = pixelsPerSemitone_;
+        rasterView_.verticalScrollOffset = verticalScrollOffset_;
+    }
 
     // 仅栅格脏表面
     if (staticDirty_) rasterizeStatic();
@@ -1473,8 +1474,8 @@ void PianoRollComponent::rasterizeStatic(std::optional<juce::Rectangle<int>> dir
         // 标尺
         {
             juce::Graphics::ScopedSaveState rs(g);
-            const double pps = rasterCamera_.pixelsPerSecond;
-            const double visibleStart = rasterCamera_.visibleStartSeconds;
+            const double pps = rasterView_.camera.pixelsPerSecond;
+            const double visibleStart = rasterView_.camera.visibleStartSeconds;
             const double visibleEnd = visibleStart + getTimelineContentViewportWidth() / pps;
             const int cw = getTimelineContentViewportWidth();
             RenderParams rp;
@@ -1495,20 +1496,20 @@ void PianoRollComponent::rasterizeStatic(std::optional<juce::Rectangle<int>> dir
         // Lane strips + grid + piano keys
         {
             juce::Graphics::ScopedSaveState ls(g);
-            const double pps = rasterCamera_.pixelsPerSecond;
-            const double visibleStart = rasterCamera_.visibleStartSeconds;
+            const double pps = rasterView_.camera.pixelsPerSecond;
+            const double visibleStart = rasterView_.camera.visibleStartSeconds;
             const double visibleEnd = visibleStart + getTimelineContentViewportWidth() / pps;
             const int cw = getTimelineContentViewportWidth();
             const int ch = getTimelineContentViewportHeight();
-            const float vOrigin = std::floor(verticalScrollOffset_);
-            const float vFrac = verticalScrollOffset_ - vOrigin;
+            const float vOrigin = std::floor(rasterView_.verticalScrollOffset);
+            const float vFrac = rasterView_.verticalScrollOffset - vOrigin;
 
             RenderParams lp;
             lp.visibleStartSeconds = visibleStart; lp.visibleEndSeconds = visibleEnd;
             lp.pixelsPerSecond = pps; lp.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
             lp.tempo = bpm_;
             lp.themeId = static_cast<int>(UIColors::currentThemeId());
-            lp.pixelsPerSemitone = pixelsPerSemitone_; lp.worldTopY = vOrigin;
+            lp.pixelsPerSemitone = rasterView_.pixelsPerSemitone; lp.worldTopY = vOrigin;
             lp.rulerHeight = 0; lp.laneStyle = encodeLaneStyle(showLanes_, scaleRootNote_, scaleType_);
             lp.viewportWidth = cw; lp.viewportHeight = ch; lp.viewKind = "pianoroll";
 
@@ -1533,13 +1534,13 @@ void PianoRollComponent::rasterizeStatic(std::optional<juce::Rectangle<int>> dir
                     rctx.pianoKeyWidth = pianoKeyWidth_;
                     rctx.rulerHeight = 0;
                     rctx.pixelsPerSecond = pps;
-                    rctx.pixelsPerSemitone = pixelsPerSemitone_;
+                    rctx.pixelsPerSemitone = rasterView_.pixelsPerSemitone;
                     rctx.minMidi = minMidi_;
                     rctx.maxMidi = maxMidi_;
                     rctx.scaleRootNote = scaleRootNote_;
                     rctx.scaleType = scaleType_;
                     rctx.noteNameMode = noteNameMode_;
-                    rctx.coords = makeViewMapperForCamera(rasterCamera_);
+                    rctx.coords = makeViewMapperForRasterView(rasterView_);
                     rctx.rasterBounds = rasterBounds;
                     return rctx;
                 };
@@ -1596,8 +1597,8 @@ void PianoRollComponent::rasterizeContent(std::optional<juce::Rectangle<int>> di
     renderCtx.height = ch;
     renderCtx.pianoKeyWidth = pianoKeyWidth_;
     renderCtx.rulerHeight = 0;
-    renderCtx.pixelsPerSecond = rasterCamera_.pixelsPerSecond;
-    renderCtx.pixelsPerSemitone = pixelsPerSemitone_;
+    renderCtx.pixelsPerSecond = rasterView_.camera.pixelsPerSecond;
+    renderCtx.pixelsPerSemitone = rasterView_.pixelsPerSemitone;
     renderCtx.minMidi = minMidi_;
     renderCtx.maxMidi = maxMidi_;
     renderCtx.bpm = bpm_;
@@ -1609,14 +1610,14 @@ void PianoRollComponent::rasterizeContent(std::optional<juce::Rectangle<int>> di
     renderCtx.showOriginalF0 = showOriginalF0_;
     renderCtx.showCorrectedF0 = showCorrectedF0_;
     renderCtx.timeUnit = (timeUnit_ == TimeUnit::Bars) ? PianoRollTimeUnit::Bars : PianoRollTimeUnit::Seconds;
-    renderCtx.coords = makeViewMapperForCamera(rasterCamera_);
+    renderCtx.coords = makeViewMapperForRasterView(rasterView_);
     renderCtx.referenceOverlay = referenceOverlay_;
     renderCtx.rasterBounds = rasterBounds;
 
     // Copy content items to render context
     renderCtx.contents = buildContentRenderItems();
 
-    const double pps = rasterCamera_.pixelsPerSecond;
+    const double pps = rasterView_.camera.pixelsPerSecond;
 
 
     for (const auto& item : renderCtx.contents) {
@@ -1667,7 +1668,7 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
     }
 
     // PPS 变化 → 全量重建
-    if (newCamera.pixelsPerSecond != rasterCamera_.pixelsPerSecond) {
+    if (newCamera.pixelsPerSecond != rasterView_.camera.pixelsPerSecond) {
         staticDirty_ = true;
         contentDirty_ = true;
         rasterizeDirtySurfaces();
@@ -1675,9 +1676,9 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
         return;
     }
 
-    // dPixels 由连续 rasterCamera 投影，不含任何量化时间
+    // dPixels 由连续 rasterView_.camera 投影，不含任何量化时间
     const int dPixels = static_cast<int>(std::llround(
-        (newCamera.visibleStartSeconds - rasterCamera_.visibleStartSeconds) * rasterCamera_.pixelsPerSecond));
+        (newCamera.visibleStartSeconds - rasterView_.camera.visibleStartSeconds) * rasterView_.camera.pixelsPerSecond));
 
     // 大幅跳转（超过视口宽度）→ 全量重建
     if (std::abs(dPixels) >= getTimelineContentViewportWidth()) {
@@ -1688,7 +1689,7 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
         return;
     }
 
-    // 无整数像素差 → 不移动、不栅格、不写 rasterCamera
+    // 无整数像素差 → 不移动、不栅格、不写 rasterView_.camera
     if (dPixels == 0) {
         repaint(timeAxisRect());
         return;
@@ -1709,8 +1710,8 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
         contentSurface_.moveImageSection(dstX, 0, srcX, 0, moveW, viewportH);
     }
 
-    // 直接写 rasterCamera 为新的连续语义相机
-    rasterCamera_ = newCamera;
+    // 直接写 rasterView_.camera 为新的连续语义相机
+    rasterView_.camera = newCamera;
 
     // 补绘露出条带
     int stripX, stripW;
@@ -1747,16 +1748,16 @@ std::vector<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildConte
     return items;
 }
 
-ViewMapper PianoRollComponent::makeViewMapperForCamera(const TimelineViewportCamera& cam) const noexcept
+ViewMapper PianoRollComponent::makeViewMapperForRasterView(const RasterView& rv) const noexcept
 {
     return ViewMapper{
-        cam.visibleStartSeconds,
-        cam.pixelsPerSecond,
+        rv.camera.visibleStartSeconds,
+        rv.camera.pixelsPerSecond,
         pianoKeyWidth_,
         getTimelineContentViewportWidth(),
         getTimelineContentViewportHeight(),
-        pixelsPerSemitone_,
-        verticalScrollOffset_,
+        rv.pixelsPerSemitone,
+        rv.verticalScrollOffset,
         maxMidi_
     };
 }
@@ -3057,12 +3058,6 @@ void PianoRollComponent::handleVerticalZoomWheel(const juce::MouseEvent& e, floa
     const float contentY = static_cast<float>(e.y - rulerHeight_);
     float mouseMidi = makeViewMapper().yToMidi(contentY);
 
-    // 冻结缩放事务源值（仅首事件，避免 vertical→horizontal 覆盖）
-    if (!zoomPreviewActive_) {
-        surfacePixelsPerSemitone_ = pixelsPerSemitone_;
-        surfaceVerticalScrollOffset_ = verticalScrollOffset_;
-    }
-    
     pixelsPerSemitone_ *= zoomFactor;
     pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, pixelsPerSemitone_);
     userHasManuallyZoomed_ = true;
@@ -3162,12 +3157,6 @@ void PianoRollComponent::beginZoomPreview(const juce::MouseEvent& e, float delta
         TimelineViewportRequest::ViewKind::PianoRoll);
     const int mouseX = e.x - pianoKeyWidth_;
     const double mouseTime = camera_.visibleStartSeconds + mouseX / oldPps;
-
-    // 冻结缩放事务源值（仅首事件，避免从 vertical preview 转 horizontal 时覆盖）
-    if (!zoomPreviewActive_) {
-        surfacePixelsPerSemitone_ = pixelsPerSemitone_;
-        surfaceVerticalScrollOffset_ = verticalScrollOffset_;
-    }
 
     zoomPreviewActive_ = true;
     zoomAnchorTime_ = mouseTime;
