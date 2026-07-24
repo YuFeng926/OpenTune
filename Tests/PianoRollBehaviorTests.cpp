@@ -1952,6 +1952,272 @@ void timelineLayerDrawTimeRulerSecondsPixelEquivalence()
         + std::to_string(diffs));
 }
 
+// ---------------------------------------------------------------------------
+// formatSecondsRulerLabel contract — MM:SS formatting for ruler display
+// ---------------------------------------------------------------------------
+void formatSecondsRulerLabelContract()
+{
+    auto label49  = TimelineLayerComposer::formatSecondsRulerLabel(49);
+    auto label605 = TimelineLayerComposer::formatSecondsRulerLabel(605);
+
+    expect(label49 == "00:49",
+           "formatSecondsRulerLabel(49) must be \"00:49\", got: " + label49.toStdString());
+    expect(label605 == "10:05",
+           "formatSecondsRulerLabel(605) must be \"10:05\", got: " + label605.toStdString());
+}
+
+// ---------------------------------------------------------------------------
+// makeRulerScrollDamage contract — entering / exiting bounds and overlap guard
+// ---------------------------------------------------------------------------
+void makeRulerScrollDamageContract()
+{
+    constexpr int timelineW = 200;
+    constexpr int timelineH = 30;
+    const juce::Rectangle<int> timelineBounds(timelineW, timelineH);
+
+    // Forward scroll (delta=+10): content shifts left, new labels enter right.
+    // entering expands left by kRulerLabelPaintOverflowX=21 to [169,200).
+    // exiting is empty — left-edge stale content scrolled offscreen cleanly.
+    {
+        const int delta = +10;
+        const juce::Rectangle<int> exposed(timelineW - 10, 0, 10, timelineH);
+        const auto damage = TimelineLayerComposer::makeRulerScrollDamage(exposed, timelineBounds, delta);
+
+        expect(damage.entering.getX() == 169,
+               "delta=+10: entering.x must be 169, got: " + std::to_string(damage.entering.getX()));
+        expect(damage.entering.getRight() == timelineW,
+               "delta=+10: entering.right must be " + std::to_string(timelineW)
+               + ", got: " + std::to_string(damage.entering.getRight()));
+        expect(damage.entering.getWidth() == 31,
+               "delta=+10: entering width must be 31, got: " + std::to_string(damage.entering.getWidth()));
+        expect(timelineBounds.contains(damage.entering),
+               "delta=+10: entering must be contained within timeline bounds");
+        expect(damage.exiting.isEmpty(),
+               "delta=+10: exiting must be empty, got: [" + std::to_string(damage.exiting.getX())
+               + "," + std::to_string(damage.exiting.getRight()) + ")");
+    }
+
+    // Backward scroll (delta=-10): content shifts right, new labels enter
+    // left, old right-edge labels exit. entering=[0,31), exiting=[179,200).
+    {
+        const int delta = -10;
+        const juce::Rectangle<int> exposed(0, 0, 10, timelineH);
+        const auto damage = TimelineLayerComposer::makeRulerScrollDamage(exposed, timelineBounds, delta);
+
+        expect(damage.entering.getX() == 0,
+               "delta=-10: entering.x must be 0, got: " + std::to_string(damage.entering.getX()));
+        expect(damage.entering.getRight() == 31,
+               "delta=-10: entering.right must be 31, got: " + std::to_string(damage.entering.getRight()));
+        expect(damage.entering.getWidth() == 31,
+               "delta=-10: entering width must be 31, got: " + std::to_string(damage.entering.getWidth()));
+        expect(timelineBounds.contains(damage.entering),
+               "delta=-10: entering must be contained within timeline bounds");
+
+        expect(damage.exiting.getX() == 179,
+               "delta=-10: exiting.x must be 179, got: " + std::to_string(damage.exiting.getX()));
+        expect(damage.exiting.getRight() == timelineW,
+               "delta=-10: exiting.right must be " + std::to_string(timelineW)
+               + ", got: " + std::to_string(damage.exiting.getRight()));
+        expect(damage.exiting.getWidth() == 21,
+               "delta=-10: exiting width must be 21, got: " + std::to_string(damage.exiting.getWidth()));
+        expect(timelineBounds.contains(damage.exiting),
+               "delta=-10: exiting must be contained within timeline bounds");
+
+        // entering and exiting must not overlap
+        expect(!damage.entering.intersects(damage.exiting),
+               "delta=-10: entering and exiting must not overlap");
+    }
+
+    // Narrow viewport: when entering and exiting would collide the API must
+    // fuse them — never return two intersecting rectangles.
+    {
+        const int delta = -10;
+        const juce::Rectangle<int> narrowBounds(25, timelineH);
+        const juce::Rectangle<int> exposed(0, 0, 10, timelineH);
+        const auto damage = TimelineLayerComposer::makeRulerScrollDamage(exposed, narrowBounds, delta);
+
+        expect(!damage.entering.intersects(damage.exiting),
+               "narrow viewport: entering and exiting must not intersect. "
+               "entering=[" + std::to_string(damage.entering.getX()) + "," + std::to_string(damage.entering.getRight())
+               + ") exiting=[" + std::to_string(damage.exiting.getX()) + "," + std::to_string(damage.exiting.getRight()) + ")");
+        expect(narrowBounds.contains(damage.entering),
+               "narrow viewport: entering must be contained within timeline bounds");
+        expect(damage.exiting.isEmpty() || narrowBounds.contains(damage.exiting),
+               "narrow viewport: exiting must be contained within timeline bounds");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ruler forward scroll pixel equivalence — moveImageSection + incremental draw
+// must match a full redraw. This scenario covers the 54s label appearing at
+// pixel 198 whose text spans the left boundary of the exposed strip [190,200).
+// ---------------------------------------------------------------------------
+void rulerForwardScrollPixelEquivalence()
+{
+    clipTestEnsureDarkBlueGrey();
+
+    constexpr double pps = 40.0;
+    constexpr int w = 200;
+    constexpr int h = 30;
+    constexpr double oldVisibleStart = 48.8;
+    constexpr double newVisibleStart = 49.05;
+    constexpr double visibleDuration = static_cast<double>(w) / pps; // 5.0 s
+    constexpr int scrollDeltaPx = 10;
+
+    auto makeParams = [&](double visibleStart) {
+        RenderParams p;
+        p.visibleStartSeconds = visibleStart;
+        p.visibleEndSeconds   = visibleStart + visibleDuration;
+        p.pixelsPerSecond     = pps;
+        p.timeUnit            = 0;  // seconds
+        p.tempo               = 120.0;
+        p.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
+        p.rulerHeight         = h;
+        p.viewportWidth       = w;
+        p.viewportHeight      = h;
+        p.viewKind            = "pianoroll";
+        return p;
+    };
+
+    const RenderParams oldParams = makeParams(oldVisibleStart);
+    const RenderParams newParams = makeParams(newVisibleStart);
+    const juce::Rectangle<int> timelineBounds(w, h);
+
+    // 1. Full render of old surface into test surface
+    juce::Image testSurface(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(testSurface);
+        testSurface.clear(timelineBounds);
+        TimelineLayerComposer::drawTimeRuler(g, oldParams);
+    }
+
+    // 2. Simulate forward scroll: moveImageSection shifts pixels left by 10px.
+    //    src (10,0,190,30) → dst (0,0)
+    testSurface.moveImageSection(0, 0, scrollDeltaPx, 0, w - scrollDeltaPx, h);
+
+    // Exposed strip = the new rightmost 10 px that must be repainted.
+    // Forward delta=+10 → entering=[169,200), exiting is empty.
+    const juce::Rectangle<int> exposedStrip(w - scrollDeltaPx, 0, scrollDeltaPx, h);
+    const auto damage = TimelineLayerComposer::makeRulerScrollDamage(
+        exposedStrip, timelineBounds, scrollDeltaPx);
+    expect(damage.exiting.isEmpty(),
+           "forward scroll: exiting must be empty");
+
+    // Clear entering zone to remove stale pixels from both the exposed
+    // strip and the label-overflow zone where new labels may extend.
+    testSurface.clear(damage.entering);
+
+    // Redraw ruler only within entering damage clip
+    {
+        juce::Graphics g(testSurface);
+        g.reduceClipRegion(damage.entering);
+        TimelineLayerComposer::drawTimeRuler(g, newParams);
+    }
+
+    // 3. Full render of new surface (the golden baseline)
+    juce::Image newBaseline(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(newBaseline);
+        newBaseline.clear(timelineBounds);
+        TimelineLayerComposer::drawTimeRuler(g, newParams);
+    }
+
+    // 4. Pixel comparison — every pixel must match
+    const int diffs = countPixelDiffs(testSurface, newBaseline, timelineBounds);
+    expect(diffs == 0,
+           "ruler forward scroll: incremental render must match full baseline. diffs="
+           + std::to_string(diffs));
+}
+
+// ---------------------------------------------------------------------------
+// Ruler backward scroll pixel equivalence — moveImageSection (shift right) +
+// incremental draw must match a full redraw.
+// Backward delta=-10 → entering=[0,31), exiting=[179,200).
+// exiting clears the old 54s label text (centred at pixel 198 in the old view)
+// that was pushed right by moveImageSection and is now stale.
+// ---------------------------------------------------------------------------
+void rulerBackwardScrollPixelEquivalence()
+{
+    clipTestEnsureDarkBlueGrey();
+
+    constexpr double pps = 40.0;
+    constexpr int w = 200;
+    constexpr int h = 30;
+    constexpr double oldVisibleStart = 49.05;
+    constexpr double newVisibleStart = 48.8;
+    constexpr double visibleDuration = static_cast<double>(w) / pps; // 5.0 s
+    constexpr int scrollDeltaPx = 10;
+
+    auto makeParams = [&](double visibleStart) {
+        RenderParams p;
+        p.visibleStartSeconds = visibleStart;
+        p.visibleEndSeconds   = visibleStart + visibleDuration;
+        p.pixelsPerSecond     = pps;
+        p.timeUnit            = 0;  // seconds
+        p.tempo               = 120.0;
+        p.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
+        p.rulerHeight         = h;
+        p.viewportWidth       = w;
+        p.viewportHeight      = h;
+        p.viewKind            = "pianoroll";
+        return p;
+    };
+
+    const RenderParams oldParams = makeParams(oldVisibleStart);
+    const RenderParams newParams = makeParams(newVisibleStart);
+    const juce::Rectangle<int> timelineBounds(w, h);
+
+    // 1. Full render of old surface into test surface
+    juce::Image testSurface(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(testSurface);
+        testSurface.clear(timelineBounds);
+        TimelineLayerComposer::drawTimeRuler(g, oldParams);
+    }
+
+    // 2. Simulate backward scroll: moveImageSection shifts pixels right by 10px.
+    //    src (0,0,190,30) → dst (10,0)
+    testSurface.moveImageSection(scrollDeltaPx, 0, 0, 0, w - scrollDeltaPx, h);
+
+    // Exposed strip = the new leftmost 10 px that must be repainted.
+    // Backward delta=-10 → entering=[0,31), exiting=[179,200).
+    // exiting clears the old 54s label text (centred at pixel 198 in the old
+    // view) that was pushed right by moveImageSection and is now stale.
+    const juce::Rectangle<int> exposedStrip(0, 0, scrollDeltaPx, h);
+    const auto damage = TimelineLayerComposer::makeRulerScrollDamage(
+        exposedStrip, timelineBounds, -scrollDeltaPx);
+
+    // Clear entering zone (new labels from left) and exiting zone (stale
+    // right-edge label text), then redraw the ruler in each clip.
+    testSurface.clear(damage.entering);
+    testSurface.clear(damage.exiting);
+
+    {
+        juce::Graphics g(testSurface);
+        g.reduceClipRegion(damage.entering);
+        TimelineLayerComposer::drawTimeRuler(g, newParams);
+    }
+    {
+        juce::Graphics g(testSurface);
+        g.reduceClipRegion(damage.exiting);
+        TimelineLayerComposer::drawTimeRuler(g, newParams);
+    }
+
+    // 3. Full render of new surface (the golden baseline)
+    juce::Image newBaseline(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(newBaseline);
+        newBaseline.clear(timelineBounds);
+        TimelineLayerComposer::drawTimeRuler(g, newParams);
+    }
+
+    // 4. Pixel comparison — every pixel must match
+    const int diffs = countPixelDiffs(testSurface, newBaseline, timelineBounds);
+    expect(diffs == 0,
+           "ruler backward scroll: incremental render must match full baseline. diffs="
+           + std::to_string(diffs));
+}
+
 } // namespace
 
 int main()
@@ -1997,6 +2263,12 @@ int main()
         timelineLayerDrawGridLinesSecondsPixelEquivalence();
         timelineLayerDrawTimeRulerBarsPixelEquivalence();
         timelineLayerDrawTimeRulerSecondsPixelEquivalence();
+
+        // Ruler scroll damage and pixel-equivalence for incremental rendering
+        formatSecondsRulerLabelContract();
+        makeRulerScrollDamageContract();
+        rulerForwardScrollPixelEquivalence();
+        rulerBackwardScrollPixelEquivalence();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";

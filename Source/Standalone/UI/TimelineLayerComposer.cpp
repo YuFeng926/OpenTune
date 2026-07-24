@@ -228,13 +228,11 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
         double beatInterval = selectBeatInterval(pixelsPerBeat);
 
         // ── performance: narrow beat range to clip bounds ──
-        // pad=21px: drawText half-width 20px + 1px AA margin
         const auto clip = g.getClipBounds();
-        constexpr int kRulerClipPadX = 21;
         const double rulerClipStartTime = params.visibleStartSeconds +
-            static_cast<double>(std::max(0, clip.getX() - kRulerClipPadX)) / pps;
+            static_cast<double>(std::max(0, clip.getX() - kRulerLabelPaintOverflowX)) / pps;
         const double rulerClipEndTime = params.visibleStartSeconds +
-            static_cast<double>(std::min(params.viewportWidth, clip.getRight() + kRulerClipPadX)) / pps;
+            static_cast<double>(std::min(params.viewportWidth, clip.getRight() + kRulerLabelPaintOverflowX)) / pps;
 
         int64_t startBeat = static_cast<int64_t>(rulerClipStartTime / secondsPerBeat);
         if (startBeat < 0) startBeat = 0;
@@ -265,13 +263,11 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
         double markerInterval = selectMarkerInterval(pps);
 
         // ── performance: narrow time range to clip bounds ──
-        // pad=21px: drawText half-width 20px + 1px AA margin
         const auto clip = g.getClipBounds();
-        constexpr int kRulerClipPadX = 21;
         const double rulerClipStartTime = params.visibleStartSeconds +
-            static_cast<double>(std::max(0, clip.getX() - kRulerClipPadX)) / pps;
+            static_cast<double>(std::max(0, clip.getX() - kRulerLabelPaintOverflowX)) / pps;
         const double rulerClipEndTime = params.visibleStartSeconds +
-            static_cast<double>(std::min(params.viewportWidth, clip.getRight() + kRulerClipPadX)) / pps;
+            static_cast<double>(std::min(params.viewportWidth, clip.getRight() + kRulerLabelPaintOverflowX)) / pps;
 
         double startTime = rulerClipStartTime;
         if (startTime < 0.0) startTime = 0.0;
@@ -287,10 +283,7 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
                        static_cast<float>(pixelX), static_cast<float>(rulerBottom),
                        rulerStyle.tickStroke);
 
-            const int totalSecs = static_cast<int>(time);
-            const int mins = totalSecs / 60;
-            const int secs = totalSecs % 60;
-            juce::String timeStr = juce::String::formatted("%d:%02d", mins, secs);
+            const juce::String timeStr = formatSecondsRulerLabel(static_cast<int>(time));
 
             g.setColour(rulerStyle.labelColour);
             g.drawText(timeStr, pixelX - 20, rulerTop + 2, 40, rulerHeight - 12, juce::Justification::centred);
@@ -367,6 +360,58 @@ void TimelineLayerComposer::drawLaneStripRepeats(juce::Graphics& g, const Render
         g.drawLine(static_cast<float>(pianoKeyWidth), y, static_cast<float>(w), y,
                    (isAurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) ? 0.55f : 1.0f);
     }
+}
+
+// ============================================================================
+// formatSecondsRulerLabel
+// ============================================================================
+juce::String TimelineLayerComposer::formatSecondsRulerLabel(int totalSeconds)
+{
+    const int mins = totalSeconds / 60;
+    const int secs = totalSeconds % 60;
+    return juce::String::formatted("%02d:%02d", mins, secs);
+}
+
+// ============================================================================
+// makeRulerScrollDamage — 双向最小带合同
+// delta>0: entering=exposed strip 左扩21; exiting空
+// delta<0: entering=exposed strip 右扩21; exiting=timeline右21px清幽灵像素
+// entering与exiting重叠或相邻时合并为一个entering，exiting为空
+// ============================================================================
+TimelineLayerComposer::RulerScrollDamage TimelineLayerComposer::makeRulerScrollDamage(
+    juce::Rectangle<int> exposedStrip,
+    juce::Rectangle<int> timelineBounds,
+    int scrollDeltaPixels)
+{
+    RulerScrollDamage d;
+
+    if (scrollDeltaPixels > 0) {
+        const int left = std::max(timelineBounds.getX(),
+                                  exposedStrip.getX() - kRulerLabelPaintOverflowX);
+        d.entering = juce::Rectangle<int>(left, exposedStrip.getY(),
+                                          exposedStrip.getRight() - left, exposedStrip.getHeight());
+    } else if (scrollDeltaPixels < 0) {
+        const int right = std::min(timelineBounds.getRight(),
+                                   exposedStrip.getRight() + kRulerLabelPaintOverflowX);
+        d.entering = juce::Rectangle<int>(exposedStrip.getX(), exposedStrip.getY(),
+                                          right - exposedStrip.getX(), exposedStrip.getHeight());
+        const int exitLeft = std::max(timelineBounds.getX(),
+                                      timelineBounds.getRight() - kRulerLabelPaintOverflowX);
+        d.exiting = juce::Rectangle<int>(exitLeft, exposedStrip.getY(),
+                                         timelineBounds.getRight() - exitLeft, exposedStrip.getHeight());
+    }
+
+    if (!d.entering.isEmpty() && !d.exiting.isEmpty()) {
+        if (d.entering.getRight() >= d.exiting.getX()) {
+            const int mergedLeft = std::min(d.entering.getX(), d.exiting.getX());
+            const int mergedRight = std::max(d.entering.getRight(), d.exiting.getRight());
+            d.entering = juce::Rectangle<int>(mergedLeft, d.entering.getY(),
+                                              mergedRight - mergedLeft, d.entering.getHeight());
+            d.exiting = {};
+        }
+    }
+
+    return d;
 }
 
 } // namespace OpenTune

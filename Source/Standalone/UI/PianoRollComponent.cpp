@@ -1703,7 +1703,12 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
 
     if (stripW > 0) {
         juce::Rectangle<int> strip(stripX, 0, stripW, viewportH);
-        rasterizeStatic(strip);
+        const juce::Rectangle<int> timelineBounds(timelineLeft, 0, timelineW, viewportH);
+        const auto damage = TimelineLayerComposer::makeRulerScrollDamage(strip, timelineBounds, dPixels);
+        if (!damage.entering.isEmpty())
+            rasterizeStatic(damage.entering);
+        if (!damage.exiting.isEmpty())
+            rasterizeStatic(damage.exiting);
         rasterizeContent(strip);
     }
 
