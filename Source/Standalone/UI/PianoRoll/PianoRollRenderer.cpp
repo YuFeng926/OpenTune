@@ -470,7 +470,6 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[wfLevelIndex];
     const double timePerPeak = static_cast<double>(samplesPerPeak) / WaveformMipmap::kBaseSampleRate;
     const int64_t numPeaks = static_cast<int64_t>(wfLevel.peaks.size());
-    const int64_t builtPeaks = wfLevel.complete ? numPeaks : wfLevel.buildProgress;
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
@@ -497,14 +496,14 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
         if (idxEnd <= idxStart)
             idxEnd = idxStart + 1;
 
-        if (idxStart >= builtPeaks || idxStart < 0)
+        if (idxStart >= numPeaks || idxStart < 0)
             continue;
 
         float aggMin = 0.0f;
         float aggMax = 0.0f;
         bool hasData = false;
 
-        for (int64_t i = idxStart; i < idxEnd && i < builtPeaks; ++i)
+        for (int64_t i = idxStart; i < idxEnd && i < numPeaks; ++i)
         {
             if (i < 0) continue;
             const auto& peak = wfLevel.peaks[static_cast<std::size_t>(i)];

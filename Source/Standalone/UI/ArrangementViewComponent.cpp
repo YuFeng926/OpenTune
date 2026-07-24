@@ -83,15 +83,15 @@ static void paintHistoricalClipWaveform(juce::Graphics& g,
     if (mipmap == nullptr || !mipmap->hasSource() || visibleWaveformBounds.isEmpty() || clip.durationSeconds <= 0.0)
         return;
 
+    if (!waveformMipmapCache.isComplete())
+        return;
+
     const int levelIndex = mipmap->selectBestLevelIndex(clip.pixelsPerSecond);
     const auto& level = mipmap->getLevel(levelIndex);
     if (level.peaks.empty())
         return;
 
     const int64_t numPeaks = static_cast<int64_t>(level.peaks.size());
-    const int64_t builtPeaks = level.complete ? numPeaks : level.buildProgress;
-    if (builtPeaks <= 0)
-        return;
 
     const float midY = static_cast<float>(waveformBounds.getCentreY());
     const float halfH = waveformBounds.getHeight() * 0.45f;
@@ -113,7 +113,7 @@ static void paintHistoricalClipWaveform(juce::Graphics& g,
             continue;
 
         const int64_t peakIndex = static_cast<int64_t>(contentTime / timePerPeak);
-        if (peakIndex < 0 || peakIndex >= builtPeaks)
+        if (peakIndex < 0 || peakIndex >= numPeaks)
             continue;
 
         const double timelineTimeNext = clip.timelineStartSeconds
@@ -128,7 +128,7 @@ static void paintHistoricalClipWaveform(juce::Graphics& g,
         float aggMax = 0.0f;
         bool hasData = false;
 
-        for (int64_t i = idxStart; i < idxEnd && i < builtPeaks; ++i) {
+        for (int64_t i = idxStart; i < idxEnd && i < numPeaks; ++i) {
             if (i < 0)
                 continue;
 
@@ -1761,7 +1761,7 @@ void ArrangementViewComponent::onHeartbeatTick()
         progressed = buildWaveformCaches(0.75);
     }
 
-    if (progressed) {
+    if (progressed && waveformMipmapCache_.isComplete()) {
         ++waveformRevision_;
         if (playingNow) {
             waveformVisualRefreshPending_ = true;
