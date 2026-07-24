@@ -281,6 +281,10 @@ private:
     void rasterizeStatic(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
     void rasterizeContent(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
 
+    // ── 共享绘制层（raster target 与 preview target 共用单一逻辑） ──
+    void drawStaticLayer(juce::Graphics& g, const RasterView& rv, juce::Rectangle<int> bounds);
+    void drawContentLayer(juce::Graphics& g, const RasterView& rv, juce::Rectangle<int> bounds);
+
     // ── 性能探针 ──────────────────────────────────────────────
     struct RasterProbe { int count = 0; double totalMs = 0.0; };
     RasterProbe staticRasterProbe_;
