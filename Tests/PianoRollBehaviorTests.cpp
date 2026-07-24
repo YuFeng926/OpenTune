@@ -7,6 +7,8 @@
 #include "../Source/Utils/TimeGrid.h"
 #include "../Source/Utils/PitchCurve.h"
 #include "../Source/PluginProcessor.h"
+#include "../Source/Standalone/UI/TimelineLayerComposer.h"
+#include "../Source/Standalone/UI/UIColors.h"
 #include "../Source/Standalone/UI/ViewMapper.h"
 
 #include <algorithm>
@@ -1735,6 +1737,221 @@ void f0CurveGapIsolation()
     }
 }
 
+// ---------------------------------------------------------------------------
+// drawGridLines / drawTimeRuler narrow-clip pixel-equivalence tests
+// Compares full-clip baseline against narrow-clip rendering; pixels inside the
+// narrow clip must be identical. Covers Bars (timeUnit=1) and Seconds (timeUnit=0).
+// Narrow clip boundaries are placed close to grid-line and ruler-label positions
+// to exercise the 2px grid padding and 21px ruler padding.
+// ---------------------------------------------------------------------------
+
+namespace {
+    const ThemeId kClipTestOrigTheme = UIColors::currentThemeId();
+}
+
+static void clipTestEnsureDarkBlueGrey()
+{
+    static bool applied = false;
+    if (!applied) {
+        UIColors::applyTheme(ThemeId::DarkBlueGrey);
+        applied = true;
+    }
+}
+
+static void clipTestRestoreTheme()
+{
+    UIColors::applyTheme(kClipTestOrigTheme);
+}
+
+static int countPixelDiffs(const juce::Image& a, const juce::Image& b, juce::Rectangle<int> region)
+{
+    int diffs = 0;
+    for (int y = region.getY(); y < region.getBottom(); ++y)
+        for (int x = region.getX(); x < region.getRight(); ++x)
+            if (a.getPixelAt(x, y).getARGB() != b.getPixelAt(x, y).getARGB())
+                ++diffs;
+    return diffs;
+}
+
+void timelineLayerDrawGridLinesBarsPixelEquivalence()
+{
+    clipTestEnsureDarkBlueGrey();
+
+    RenderParams params;
+    params.visibleStartSeconds = 0.0;
+    params.visibleEndSeconds   = 3.0;
+    params.pixelsPerSecond     = 100.0;
+    params.timeUnit            = 1;
+    params.tempo               = 120.0;
+    params.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
+    params.viewportWidth       = 300;
+    params.viewportHeight      = 200;
+    params.viewKind            = "pianoroll";
+
+    const int w = params.viewportWidth;
+    const int h = params.viewportHeight;
+
+    juce::Image baseline(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(baseline);
+        baseline.clear(juce::Rectangle<int>(w, h));
+        TimelineLayerComposer::drawGridLines(g, params);
+    }
+
+    // Narrow clip sits between grid lines at x=50 and x=150; boundary
+    // at x=51 is 1 px past the line at x=50, exercising the 2 px grid pad.
+    const juce::Rectangle<int> narrowClip(51, 0, 100, h);
+    juce::Image test(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(test);
+        test.clear(juce::Rectangle<int>(w, h));
+        g.reduceClipRegion(narrowClip);
+        TimelineLayerComposer::drawGridLines(g, params);
+    }
+
+    const int diffs = countPixelDiffs(baseline, test, narrowClip);
+    expect(diffs == 0,
+        "drawGridLines Bars: narrow-clip pixels must match full render (2px pad). diffs="
+        + std::to_string(diffs));
+}
+
+void timelineLayerDrawGridLinesSecondsPixelEquivalence()
+{
+    clipTestEnsureDarkBlueGrey();
+
+    RenderParams params;
+    params.visibleStartSeconds = 0.0;
+    params.visibleEndSeconds   = 20.0;
+    params.pixelsPerSecond     = 25.0;
+    params.timeUnit            = 0;
+    params.tempo               = 120.0;
+    params.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
+    params.viewportWidth       = 500;
+    params.viewportHeight      = 200;
+    params.viewKind            = "pianoroll";
+
+    const int w = params.viewportWidth;
+    const int h = params.viewportHeight;
+
+    juce::Image baseline(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(baseline);
+        baseline.clear(juce::Rectangle<int>(w, h));
+        TimelineLayerComposer::drawGridLines(g, params);
+    }
+
+    // Narrow clip at x=124: line at x=125 (5 s marker) is 1 px inside,
+    // exercising the 2 px grid pad on the left edge.
+    const juce::Rectangle<int> narrowClip(124, 0, 127, h);
+    juce::Image test(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(test);
+        test.clear(juce::Rectangle<int>(w, h));
+        g.reduceClipRegion(narrowClip);
+        TimelineLayerComposer::drawGridLines(g, params);
+    }
+
+    const int diffs = countPixelDiffs(baseline, test, narrowClip);
+    expect(diffs == 0,
+        "drawGridLines Seconds: narrow-clip pixels must match full render (2px pad). diffs="
+        + std::to_string(diffs));
+}
+
+void timelineLayerDrawTimeRulerBarsPixelEquivalence()
+{
+    clipTestEnsureDarkBlueGrey();
+
+    // pps=30, tempo=120 → secondsPerBeat=0.5, pixelsPerBeat=15, beatInterval=4.
+    // beat=4 centre at x=60, label rect [40,80).
+    // narrowClip=[40,44): label centre x=60 is 16 px outside clip,
+    // left 4 px of label [40,44) remain visible.
+    //
+    // Algebra: without 21 px pad → endBeat=int(min(44/30,3)/0.5)+1=3
+    //   → beat 4 excluded, label at x=60 not drawn, test fails.
+    // With pad → endBeat=int(min((44+21)/30,3)/0.5)+1=5
+    //   → beat 4 included, pixels [40,44) match baseline.
+    RenderParams params;
+    params.visibleStartSeconds = 0.0;
+    params.visibleEndSeconds   = 3.0;
+    params.pixelsPerSecond     = 30.0;
+    params.timeUnit            = 1;
+    params.tempo               = 120.0;
+    params.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
+    params.rulerHeight         = 30;
+    params.viewportWidth       = 200;
+    params.viewportHeight      = 30;
+    params.viewKind            = "pianoroll";
+
+    const int w = params.viewportWidth;
+    const int h = params.viewportHeight;
+
+    juce::Image baseline(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(baseline);
+        baseline.clear(juce::Rectangle<int>(w, h));
+        TimelineLayerComposer::drawTimeRuler(g, params);
+    }
+
+    const juce::Rectangle<int> narrowClip(40, 0, 4, h);
+    juce::Image test(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(test);
+        test.clear(juce::Rectangle<int>(w, h));
+        g.reduceClipRegion(narrowClip);
+        TimelineLayerComposer::drawTimeRuler(g, params);
+    }
+
+    const int diffs = countPixelDiffs(baseline, test, narrowClip);
+    expect(diffs == 0,
+        "drawTimeRuler Bars: narrow-clip pixels must match full render (21px ruler pad). diffs="
+        + std::to_string(diffs));
+}
+
+void timelineLayerDrawTimeRulerSecondsPixelEquivalence()
+{
+    clipTestEnsureDarkBlueGrey();
+
+    RenderParams params;
+    params.visibleStartSeconds = 0.0;
+    params.visibleEndSeconds   = 20.0;
+    params.pixelsPerSecond     = 25.0;
+    params.timeUnit            = 0;
+    params.tempo               = 120.0;
+    params.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
+    params.rulerHeight         = 30;
+    params.viewportWidth       = 500;
+    params.viewportHeight      = 30;
+    params.viewKind            = "pianoroll";
+
+    const int w = params.viewportWidth;
+    const int h = params.viewportHeight;
+
+    juce::Image baseline(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(baseline);
+        baseline.clear(juce::Rectangle<int>(w, h));
+        TimelineLayerComposer::drawTimeRuler(g, params);
+    }
+
+    // Label at pixelX=125 spans [105,145). Narrow clip right=124:
+    // centre x=125 is 1 px outside; label portion [105,124) remains inside.
+    // Without the 21 px pad endTime would be < 5.0 s, excluding x=125.
+    // With pad x=125 is included so pixels [105,124) match full render.
+    const juce::Rectangle<int> narrowClip(80, 0, 44, h);
+    juce::Image test(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(test);
+        test.clear(juce::Rectangle<int>(w, h));
+        g.reduceClipRegion(narrowClip);
+        TimelineLayerComposer::drawTimeRuler(g, params);
+    }
+
+    const int diffs = countPixelDiffs(baseline, test, narrowClip);
+    expect(diffs == 0,
+        "drawTimeRuler Seconds: narrow-clip pixels must match full render (21px ruler pad). diffs="
+        + std::to_string(diffs));
+}
+
 } // namespace
 
 int main()
@@ -1774,12 +1991,19 @@ int main()
         f0CurveOriginalBucketExtremesWithAsymmetricEnergy();
         f0CurveCorrectedSpanExtremes();
         f0CurveGapIsolation();
+
+        // Narrow-clip pixel-equivalence for grid/ruler optimizations
+        timelineLayerDrawGridLinesBarsPixelEquivalence();
+        timelineLayerDrawGridLinesSecondsPixelEquivalence();
+        timelineLayerDrawTimeRulerBarsPixelEquivalence();
+        timelineLayerDrawTimeRulerSecondsPixelEquivalence();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";
     }
 
     f0TestRestoreTheme();
+    clipTestRestoreTheme();
 
     std::cout << "\n";
     if (failures == 0) {

@@ -1484,7 +1484,7 @@ void PianoRollComponent::drawStaticLayer(juce::Graphics& g, const RasterView& rv
         }
 
         // 琴键
-        if (shouldShowPianoKeys()) {
+        if (shouldShowPianoKeys() && bounds.intersects(juce::Rectangle<int>(0, rulerHeight_, pianoKeyWidth_, ch))) {
             const int vpW = getTimelineViewportBounds().getWidth();
             auto ctxForKeys = [&]() {
                 PianoRollRenderer::RenderContext rctx;

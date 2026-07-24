@@ -1556,6 +1556,27 @@ void pianoRollZoomHandlersDoNotPauseAutoFollow()
                    {"userScrollHold_"});
 }
 
+void pianoKeysEmptyClippingGuardSourceContract()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto drawStaticBlock = extractFunctionBlock(
+        component, "void PianoRollComponent::drawStaticLayer");
+
+    expect(!drawStaticBlock.empty(), "PianoRollComponent::drawStaticLayer must be found");
+
+    expectTokens("drawStaticLayer piano-keys guard integrates bounds.intersects",
+                 drawStaticBlock,
+                 {"shouldShowPianoKeys()",
+                  "bounds.intersects(juce::Rectangle<int>",
+                  "rulerHeight_",
+                  "pianoKeyWidth_"});
+
+    expect(inOrder(drawStaticBlock,
+                   {"shouldShowPianoKeys()",
+                    "bounds.intersects"}),
+           "piano-keys guard must test shouldShowPianoKeys before bounds.intersects");
+}
+
 void absoluteTimelineTimeRemainsUnquantized()
 {
     const auto viewMapper = readText("Source/Standalone/UI/ViewMapper.h");
@@ -1723,6 +1744,7 @@ int main()
         pianoRollRetainedSurfaceArchitecture();
         pianoRollZoomHandlersAvoidBusinessImageAllocation();
         pianoRollZoomHandlersDoNotPauseAutoFollow();
+        pianoKeysEmptyClippingGuardSourceContract();
         absoluteTimelineTimeRemainsUnquantized();
 
         // PitchCurve F0 span API replaces old render path
