@@ -1313,6 +1313,7 @@ void PianoRollComponent::drawSelectionBox(juce::Graphics& g, ThemeId themeId) {
 }
 void PianoRollComponent::paint(juce::Graphics& g)
 {
+    const double paintStartMs = juce::Time::getMillisecondCounterHiRes();
     const int vpW = getTimelineViewportBounds().getWidth();
     const int vpH = getTimelineViewportBounds().getHeight();
     if (vpW <= 0 || vpH <= 0) return;
@@ -1399,6 +1400,11 @@ void PianoRollComponent::paint(juce::Graphics& g)
             g.drawImageAt(contentSurface_, 0, 0, false);
         }
     }
+
+    const double paintEndMs = juce::Time::getMillisecondCounterHiRes();
+    recordRenderProbe(RenderProbePoint::RootPaint, paintEndMs - paintStartMs);
+    if (lastVBlankMs_ > 0.0)
+        recordRenderProbe(RenderProbePoint::VBlankToRootPaint, paintStartMs - lastVBlankMs_);
 }
 
 void PianoRollComponent::rasterizeDirtySurfaces()
@@ -1442,6 +1448,8 @@ void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapse
         case RenderProbePoint::StaticRaster:  probe = &staticRasterProbe_;  break;
         case RenderProbePoint::ContentRaster: probe = &contentRasterProbe_; break;
         case RenderProbePoint::OverlayPresent: probe = &overlayPresentProbe_; break;
+        case RenderProbePoint::RootPaint: probe = &rootPaintProbe_; break;
+        case RenderProbePoint::VBlankToRootPaint: probe = &vblankToRootPaintProbe_; break;
     }
     probe->count++;
     probe->totalMs += elapsedMs;
@@ -1452,10 +1460,14 @@ void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapse
         auto avg = [](const RasterProbe& p) { return p.count > 0 ? p.totalMs / p.count : 0.0; };
         AppLogger::log(juce::String("[PR-Perf] static-raster:") + juce::String(avg(staticRasterProbe_), 1) + "ms x" + juce::String(staticRasterProbe_.count)
             + " content-raster:" + juce::String(avg(contentRasterProbe_), 1) + "ms x" + juce::String(contentRasterProbe_.count)
-            + " overlay-present:" + juce::String(avg(overlayPresentProbe_), 1) + "ms x" + juce::String(overlayPresentProbe_.count));
+            + " overlay-present:" + juce::String(avg(overlayPresentProbe_), 1) + "ms x" + juce::String(overlayPresentProbe_.count)
+            + " root-paint:" + juce::String(avg(rootPaintProbe_), 1) + "ms x" + juce::String(rootPaintProbe_.count)
+            + " vblank-to-root-paint:" + juce::String(avg(vblankToRootPaintProbe_), 1) + "ms x" + juce::String(vblankToRootPaintProbe_.count));
         staticRasterProbe_ = {};
         contentRasterProbe_ = {};
         overlayPresentProbe_ = {};
+        rootPaintProbe_ = {};
+        vblankToRootPaintProbe_ = {};
         probeReportWindowStart_ = now;
     }
 }
@@ -1715,7 +1727,6 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
 
     // 无整数像素差 → 不移动、不栅格、不写 rasterView_.camera
     if (dPixels == 0) {
-        repaint(timeAxisRect());
         return;
     }
 
@@ -2684,6 +2695,7 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         return;
     }
 
+    lastVBlankMs_ = juce::Time::getMillisecondCounterHiRes();
     juce::ignoreUnused(timestampSec);
 
     const bool playingNow = playHeadState_.isPlaying.load(std::memory_order_relaxed);

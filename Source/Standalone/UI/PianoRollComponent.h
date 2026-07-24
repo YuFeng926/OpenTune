@@ -286,9 +286,12 @@ private:
     RasterProbe staticRasterProbe_;
     RasterProbe contentRasterProbe_;
     RasterProbe overlayPresentProbe_;
+    RasterProbe rootPaintProbe_;
+    RasterProbe vblankToRootPaintProbe_;
     double probeReportWindowStart_ = 0.0;
+    double lastVBlankMs_ = 0.0;
 
-    enum class RenderProbePoint { StaticRaster, ContentRaster, OverlayPresent };
+    enum class RenderProbePoint { StaticRaster, ContentRaster, OverlayPresent, RootPaint, VBlankToRootPaint };
     void recordRenderProbe(RenderProbePoint point, double elapsedMs);
 
     // ── 保留式相机更新 ────────────────────────────────────────
