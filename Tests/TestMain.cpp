@@ -1147,16 +1147,60 @@ void pianoRollRetainedSurfaceArchitecture()
                    zoomBranch,
                    {"juce::Image"});
 
-    // 缩放预览：drawImageTransformed、琴键 X 固定、时间标尺 Y 固定
-    expectTokens("Zoom preview uses drawImageTransformed",
-                 componentImpl,
-                 {"drawImageTransformed"});
-    expectTokens("Zoom preview piano keys X fixed",
-                 componentImpl,
-                 {"AffineTransform::scale(1.0f, (float)scaleY)"});
-    expectTokens("Zoom preview ruler Y fixed",
-                 componentImpl,
-                 {"AffineTransform::scale((float)scaleX, 1.0f)"});
+    // 缩放预览：从 paint 提取 zoomPreviewActive_ block，验证三块表面 clip + transform 结构
+    const auto previewBlock = extractBlockByMarker(paint, "if (zoomPreviewActive_)");
+    expect(!previewBlock.empty(), "zoom preview block must be found in paint");
+
+    // 三块 staticSurface_.getClippedImage( 裁剪
+    expect(countOf(previewBlock, "staticSurface_.getClippedImage(") == 3,
+           "Preview block must have exactly three staticSurface_ clips");
+    expectTokens("Preview clipper: ruler zone",
+                  previewBlock,
+                  {"pianoKeyWidth_, 0, tlW, rulerHeight_"});
+    expectTokens("Preview clipper: piano key zone",
+                  previewBlock,
+                  {"0, rulerHeight_, pianoKeyWidth_, ch"});
+    expectTokens("Preview clipper: timeline zone",
+                  previewBlock,
+                  {"pianoKeyWidth_, rulerHeight_, tlW, ch"});
+
+    // 无 staticSurface_ 经 drawImageTransformed（即静态面不经 transform 绘制）
+    expectNoTokens("Preview no drawImageTransformed(staticSurface_",
+                   previewBlock,
+                   {"drawImageTransformed(staticSurface_"});
+
+    // contentSurface_ 经 drawImageTransformed(contentSurface_, fullXf, false)
+    expectTokens("Preview contentSurface_ via drawImageTransformed with fullXf",
+                  previewBlock,
+                  {"drawImageTransformed(contentSurface_, fullXf, false)"});
+
+    // 标尺 transform：原点补偿 + X-only scale
+    expectTokens("Ruler transform origin compensation",
+                  previewBlock,
+                  {"tx + static_cast<float>(pianoKeyWidth_ * scaleX)"});
+    expectTokens("Ruler transform X-only scale",
+                  previewBlock,
+                  {"static_cast<float>(scaleX), 1.0f"});
+    expectTokens("Ruler transform translated(rulerTx, 0.0f)",
+                  previewBlock,
+                  {"translated(rulerTx, 0.0f)"});
+
+    // 琴键 transform：原点补偿 + Y-only scale
+    expectTokens("Piano key transform origin compensation",
+                  previewBlock,
+                  {"offsetY + static_cast<float>(rulerHeight_ * scaleY)"});
+    expectTokens("Piano key transform Y-only scale",
+                  previewBlock,
+                  {"1.0f, static_cast<float>(scaleY)"});
+    expectTokens("Piano key transform translated(0.0f, keyOffsetY)",
+                  previewBlock,
+                  {"translated(0.0f, keyOffsetY)"});
+
+    // timeline transform：同时使用 rulerTx 与 keyOffsetY，XY static_cast<float> scale
+    expectTokens("Timeline transform XY scale + dual origin",
+                  previewBlock,
+                  {"static_cast<float>(scaleX), static_cast<float>(scaleY)",
+                   "translated(rulerTx, keyOffsetY)"});
 
     // strip 滚动更新保留
     expectTokens("Piano Roll uses moveImageSection for edge-scroll",
