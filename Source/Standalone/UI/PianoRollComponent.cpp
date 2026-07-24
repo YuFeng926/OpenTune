@@ -1657,7 +1657,7 @@ void PianoRollComponent::rasterizeContent(std::optional<juce::Rectangle<int>> di
 
 
     for (const auto& item : renderCtx.contents) {
-        if (showWaveform_ && item.audioBuffer != nullptr) {
+        if (showWaveform_ && waveformMipmapCache_.isComplete() && item.audioBuffer != nullptr) {
             const auto* mipmap = waveformMipmapCache_.get(item.contentKey);
             if (mipmap != nullptr && mipmap->hasSource()) {
                 const int bestLevel = mipmap->selectBestLevelIndex(pps);
@@ -2678,7 +2678,7 @@ void PianoRollComponent::onHeartbeatTick()
             progressed = waveformMipmapCache_.buildIncremental(0.75);
         }
 
-        if (progressed) {
+        if (progressed && waveformMipmapCache_.isComplete()) {
             contentDirty_ = true;
             rasterizeDirtySurfaces();
             repaint();

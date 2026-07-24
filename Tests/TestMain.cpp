@@ -1098,6 +1098,8 @@ void pianoRollRetainedSurfaceArchitecture()
     const auto componentHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
     const auto componentImpl = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto overlayImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollOverlayComponent.cpp");
+    const auto rendererImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+    const auto arrangementImpl = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
 
     // 正面断言：两张 Image + 透明 Overlay
     expectTokens("Piano Roll has retained surfaces",
@@ -1233,7 +1235,7 @@ void pianoRollRetainedSurfaceArchitecture()
     const auto heartbeat = extractFunctionBlock(componentImpl, "void PianoRollComponent::onHeartbeatTick");
     expect(countOf(heartbeat, "waveformMipmapCache_.buildIncremental(") == 2,
            "Heartbeat must have exactly two waveform build branches (throttle + non-throttle)");
-    const auto progressBlock = extractBlockByMarker(heartbeat, "if (progressed)");
+    const auto progressBlock = extractBlockByMarker(heartbeat, "if (progressed && waveformMipmapCache_.isComplete())");
     expect(!progressBlock.empty(), "Heartbeat progress block must be found");
     expectTokens("Heartbeat progress block triggers redraw chain",
                   progressBlock,
@@ -1360,6 +1362,9 @@ void pianoRollRetainedSurfaceArchitecture()
         expectTokens("rasterizeContent uses makeViewMapperForRasterView",
                       rasterContent,
                       {"makeViewMapperForRasterView(rasterView_)"});
+        expectTokens("rasterizeContent waveform draw uses isComplete gate",
+                      rasterContent,
+                      {"showWaveform_ && waveformMipmapCache_.isComplete()"});
     }
 
     // applyRasterCamera 条带路径只写 rasterView_.camera，不写纵向 source
@@ -1388,6 +1393,34 @@ void pianoRollRetainedSurfaceArchitecture()
     expectNoTokens("rasterizeStatic no strip-specific path",
                    rasterStatic2,
                    {"stripVisibleStart", "fillRect(*dirtyRect)", "inTimelineZone"});
+
+    // drawWaveform / paintHistoricalClipWaveform：完成态 cache 为唯一 source，不含 buildProgress 中间状态
+    {
+        const auto drawWaveform = extractFunctionBlock(rendererImpl, "void PianoRollRenderer::drawWaveform");
+        expect(!drawWaveform.empty(), "drawWaveform must be found");
+        expectNoTokens("drawWaveform has no buildProgress",
+                       drawWaveform,
+                       {"buildProgress"});
+    }
+    {
+        const auto paintHistWf = extractFunctionBlock(arrangementImpl, "static void paintHistoricalClipWaveform");
+        expect(!paintHistWf.empty(), "paintHistoricalClipWaveform must be found");
+        expectNoTokens("paintHistoricalClipWaveform has no buildProgress",
+                       paintHistWf,
+                       {"buildProgress"});
+        expectTokens("paintHistoricalClipWaveform uses isComplete gate",
+                      paintHistWf,
+                      {"waveformMipmapCache.isComplete()"});
+    }
+
+    // Arrangement heartbeat 可视刷新条件含 progressed && isComplete
+    {
+        const auto arrHeartbeat = extractFunctionBlock(arrangementImpl, "void ArrangementViewComponent::onHeartbeatTick");
+        expect(!arrHeartbeat.empty(), "Arrangement heartbeat must be found");
+        expectTokens("Arrangement heartbeat visible refresh uses progressed && isComplete",
+                      arrHeartbeat,
+                      {"progressed && waveformMipmapCache_.isComplete()"});
+    }
 
     // VBlank：稳定 CONT 有 fixedCentre 跳过 + playState/time/camera 变化 gate
     const auto vblankBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::onScrollVBlankCallback");
