@@ -1335,28 +1335,52 @@ void PianoRollComponent::paint(juce::Graphics& g)
         const float offsetY = static_cast<float>(
             rulerHeight_ * (1.0 - scaleY) + rasterView_.verticalScrollOffset * scaleY - verticalScrollOffset_);
 
-        // 1. 时间标尺：X 缩放，Y 不缩放
-        if (staticSurface_.isValid()) {
-            juce::Graphics::ScopedSaveState ss(g);
-            g.reduceClipRegion(pianoKeyWidth_, 0, tlW, rulerHeight_);
-            juce::AffineTransform rulerXf = juce::AffineTransform::scale((float)scaleX, 1.0f).translated(tx, 0.0f);
-            g.drawImageTransformed(staticSurface_, rulerXf, false);
-        }
+        const auto rulerSourceRect =
+            juce::Rectangle<int>(pianoKeyWidth_, 0, tlW, rulerHeight_);
+        const auto keySourceRect =
+            juce::Rectangle<int>(0, rulerHeight_, pianoKeyWidth_, ch);
+        const auto timelineSourceRect =
+            juce::Rectangle<int>(pianoKeyWidth_, rulerHeight_, tlW, ch);
 
-        // 2. 琴键：X 固定，Y 缩放
+        // getClippedImage 建立零像素拷贝的短生命周期子图，不新增像素表面。
         if (staticSurface_.isValid()) {
-            juce::Graphics::ScopedSaveState ss(g);
-            g.reduceClipRegion(0, rulerHeight_, pianoKeyWidth_, ch);
-            juce::AffineTransform keyXf = juce::AffineTransform::scale(1.0f, (float)scaleY).translated(0.0f, offsetY);
-            g.drawImageTransformed(staticSurface_, keyXf, false);
-        }
+            const auto rulerSource = staticSurface_.getClippedImage(rulerSourceRect);
+            const auto keySource = staticSurface_.getClippedImage(keySourceRect);
+            const auto timelineSource = staticSurface_.getClippedImage(timelineSourceRect);
 
-        // 3. Lane / 网格（时间轴区）：完整 XY 仿射
-        if (staticSurface_.isValid()) {
-            juce::Graphics::ScopedSaveState ss(g);
-            g.reduceClipRegion(pianoKeyWidth_, rulerHeight_, tlW, ch);
-            juce::AffineTransform fullXf = juce::AffineTransform::scale((float)scaleX, (float)scaleY).translated(tx, offsetY);
-            g.drawImageTransformed(staticSurface_, fullXf, false);
+            // 子图原点补偿，保持完全浮点连续值。
+            const float rulerTx =
+                tx + static_cast<float>(pianoKeyWidth_ * scaleX);
+            const float keyOffsetY =
+                offsetY + static_cast<float>(rulerHeight_ * scaleY);
+
+            // 1. 时间标尺：source 原点为 (pianoKeyWidth_, 0)，仅 X 缩放。
+            {
+                juce::Graphics::ScopedSaveState ss(g);
+                g.reduceClipRegion(pianoKeyWidth_, 0, tlW, rulerHeight_);
+                const auto rulerXf = juce::AffineTransform::scale(
+                    static_cast<float>(scaleX), 1.0f).translated(rulerTx, 0.0f);
+                g.drawImageTransformed(rulerSource, rulerXf, false);
+            }
+
+            // 2. 琴键：source 原点为 (0, rulerHeight_)，仅 Y 缩放。
+            {
+                juce::Graphics::ScopedSaveState ss(g);
+                g.reduceClipRegion(0, rulerHeight_, pianoKeyWidth_, ch);
+                const auto keyXf = juce::AffineTransform::scale(
+                    1.0f, static_cast<float>(scaleY)).translated(0.0f, keyOffsetY);
+                g.drawImageTransformed(keySource, keyXf, false);
+            }
+
+            // 3. lane / 网格：source 原点为 (pianoKeyWidth_, rulerHeight_)，XY 缩放。
+            {
+                juce::Graphics::ScopedSaveState ss(g);
+                g.reduceClipRegion(pianoKeyWidth_, rulerHeight_, tlW, ch);
+                const auto timelineXf = juce::AffineTransform::scale(
+                    static_cast<float>(scaleX), static_cast<float>(scaleY))
+                    .translated(rulerTx, keyOffsetY);
+                g.drawImageTransformed(timelineSource, timelineXf, false);
+            }
         }
 
         // 4. 内容表面：仅时间轴区，完整 XY 仿射
