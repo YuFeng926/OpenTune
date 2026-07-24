@@ -39,6 +39,10 @@ inline int encodeLaneStyle(bool showLanes, int scaleRootNote, int scaleType) {
 }
 
 namespace TimelineLayerComposer {
+
+    // Centered 40px ruler label: half-width 20px + 1px AA margin
+    inline constexpr int kRulerLabelPaintOverflowX = 21;
+
     // Internal helpers (not part of public API)
     double selectBeatInterval(double pixelsPerBeat);
     double selectMarkerInterval(double pixelsPerSecond);
@@ -46,6 +50,18 @@ namespace TimelineLayerComposer {
     TimelineRulerStyle resolveRulerStyle(const std::string& viewKind, ThemeId themeId);
     void drawGridLines(juce::Graphics& g, const RenderParams& params);
     void drawTimeRuler(juce::Graphics& g, const RenderParams& params);
+
+    // Ruler scroll damage — 双向最小带合同
+    struct RulerScrollDamage {
+        juce::Rectangle<int> entering;
+        juce::Rectangle<int> exiting;
+    };
+    RulerScrollDamage makeRulerScrollDamage(juce::Rectangle<int> exposedStrip,
+                                            juce::Rectangle<int> timelineBounds,
+                                            int scrollDeltaPixels);
+
+    // Public formatting
+    juce::String formatSecondsRulerLabel(int totalSeconds);
 
 } // namespace TimelineLayerComposer
 
