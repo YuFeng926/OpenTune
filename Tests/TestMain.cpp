@@ -1067,22 +1067,21 @@ void pianoRollPaintRestoresOpaqueFillAfterShadow()
 {
     const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto renderer = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
-    const auto rasterizeStatic = extractFunctionBlock(component, "void PianoRollComponent::rasterizeStatic");
+    const auto drawStaticLayer = extractFunctionBlock(component, "void PianoRollComponent::drawStaticLayer");
     const auto drawNotes = extractFunctionBlock(renderer, "void PianoRollRenderer::drawNotes");
 
-    expect(!rasterizeStatic.empty(), "PianoRollComponent::rasterizeStatic must be found");
+    expect(!drawStaticLayer.empty(), "PianoRollComponent::drawStaticLayer must be found");
     expect(!drawNotes.empty(), "PianoRollRenderer::drawNotes must be found");
 
-    // 正常 paint 不再调用 drawShadow/fillAll；chrome 仅由 rasterizeStatic 和缩放预览分支绘制
-    // rasterizeStatic 在阴影后恢复 opaque fill
-    expectTokens("PianoRollComponent::rasterizeStatic restores opaque fill",
-                 rasterizeStatic,
+    // 正常与预览路径共享 drawStaticLayer；阴影后恢复 opaque fill
+    expectTokens("PianoRollComponent::drawStaticLayer restores opaque fill",
+                 drawStaticLayer,
                  {"UIColors::drawShadow", "g.setColour(juce::Colours::white);", "TimelineLayerComposer::drawTimeRuler"});
-    expect(inOrder(rasterizeStatic,
+    expect(inOrder(drawStaticLayer,
                    {"UIColors::drawShadow",
                     "g.setColour(juce::Colours::white);",
                     "TimelineLayerComposer::drawTimeRuler"}),
-           "PianoRollComponent::rasterizeStatic must restore opaque fill after shadow before drawing");
+           "PianoRollComponent::drawStaticLayer must restore opaque fill after shadow before drawing");
 
     expectTokens("PianoRollRenderer::drawNotes uses opaque note fill",
                  drawNotes,
@@ -1149,60 +1148,81 @@ void pianoRollRetainedSurfaceArchitecture()
                    zoomBranch,
                    {"juce::Image"});
 
-    // 缩放预览：从 paint 提取 zoomPreviewActive_ block，验证三块表面 clip + transform 结构
+    // 缩放预览：从 paint 提取 zoomPreviewActive_ block，验证 live composition 结构
     const auto previewBlock = extractBlockByMarker(paint, "if (zoomPreviewActive_)");
     expect(!previewBlock.empty(), "zoom preview block must be found in paint");
 
-    // 三块 staticSurface_.getClippedImage( 裁剪
-    expect(countOf(previewBlock, "staticSurface_.getClippedImage(") == 3,
-           "Preview block must have exactly three staticSurface_ clips");
-    expectTokens("Preview clipper: ruler zone",
+    // preview 构造 liveView，按静态层→内容层顺序调用两个共享函数
+    expectTokens("Preview constructs RasterView liveView",
                   previewBlock,
-                  {"pianoKeyWidth_, 0, tlW, rulerHeight_"});
-    expectTokens("Preview clipper: piano key zone",
-                  previewBlock,
-                  {"0, rulerHeight_, pianoKeyWidth_, ch"});
-    expectTokens("Preview clipper: timeline zone",
-                  previewBlock,
-                  {"pianoKeyWidth_, rulerHeight_, tlW, ch"});
+                  {"RasterView liveView{camera_, pixelsPerSemitone_, verticalScrollOffset_}"});
+    expect(inOrder(previewBlock,
+                   {"drawStaticLayer(g, liveView", "drawContentLayer(g, liveView"}),
+           "Preview must call drawStaticLayer before drawContentLayer on liveView");
 
-    // 无 staticSurface_ 经 drawImageTransformed（即静态面不经 transform 绘制）
-    expectNoTokens("Preview no drawImageTransformed(staticSurface_",
+    // preview 不含旧 source-crop/affine 路径
+    expectNoTokens("Preview no drawImageTransformed",
                    previewBlock,
-                   {"drawImageTransformed(staticSurface_"});
+                   {"drawImageTransformed"});
+    expectNoTokens("Preview no getClippedImage",
+                   previewBlock,
+                   {"getClippedImage"});
+    expectNoTokens("Preview no staticSurface_",
+                   previewBlock,
+                   {"staticSurface_"});
+    expectNoTokens("Preview no contentSurface_",
+                   previewBlock,
+                   {"contentSurface_"});
+    expectNoTokens("Preview no scaleX",
+                   previewBlock,
+                   {"scaleX"});
+    expectNoTokens("Preview no scaleY",
+                   previewBlock,
+                   {"scaleY"});
+    expectNoTokens("Preview no rulerTx",
+                   previewBlock,
+                   {"rulerTx"});
+    expectNoTokens("Preview no keyOffsetY",
+                   previewBlock,
+                   {"keyOffsetY"});
 
-    // contentSurface_ 经 drawImageTransformed(contentSurface_, fullXf, false)
-    expectTokens("Preview contentSurface_ via drawImageTransformed with fullXf",
-                  previewBlock,
-                  {"drawImageTransformed(contentSurface_, fullXf, false)"});
+    // header 声明两个共享绘制函数
+    expectTokens("Header declares drawStaticLayer",
+                  componentHeader,
+                  {"drawStaticLayer(juce::Graphics&", "const RasterView&"});
+    expectTokens("Header declares drawContentLayer",
+                  componentHeader,
+                  {"drawContentLayer(juce::Graphics&", "const RasterView&"});
 
-    // 标尺 transform：原点补偿 + X-only scale
-    expectTokens("Ruler transform origin compensation",
-                  previewBlock,
-                  {"tx + static_cast<float>(pianoKeyWidth_ * scaleX)"});
-    expectTokens("Ruler transform X-only scale",
-                  previewBlock,
-                  {"static_cast<float>(scaleX), 1.0f"});
-    expectTokens("Ruler transform translated(rulerTx, 0.0f)",
-                  previewBlock,
-                  {"translated(rulerTx, 0.0f)"});
+    // drawStaticLayer 从传入 view 读取 camera / vertical state，包含现有 ruler/grid/piano key composition
+    {
+        const auto drawStatic = extractFunctionBlock(componentImpl, "void PianoRollComponent::drawStaticLayer");
+        expect(!drawStatic.empty(), "drawStaticLayer must be found");
+        expectTokens("drawStaticLayer reads camera source from view parameter",
+                      drawStatic,
+                      {"camera.pixelsPerSecond", "camera.visibleStartSeconds"});
+        expectTokens("drawStaticLayer reads vertical source from view parameter",
+                      drawStatic,
+                      {"verticalScrollOffset", "pixelsPerSemitone"});
+        expectTokens("drawStaticLayer contains ruler/grid/piano key composition",
+                      drawStatic,
+                      {"drawTimeRuler", "drawGridLines", "drawPianoKeys"});
+    }
 
-    // 琴键 transform：原点补偿 + Y-only scale
-    expectTokens("Piano key transform origin compensation",
-                  previewBlock,
-                  {"offsetY + static_cast<float>(rulerHeight_ * scaleY)"});
-    expectTokens("Piano key transform Y-only scale",
-                  previewBlock,
-                  {"1.0f, static_cast<float>(scaleY)"});
-    expectTokens("Piano key transform translated(0.0f, keyOffsetY)",
-                  previewBlock,
-                  {"translated(0.0f, keyOffsetY)"});
-
-    // timeline transform：同时使用 rulerTx 与 keyOffsetY，XY static_cast<float> scale
-    expectTokens("Timeline transform XY scale + dual origin",
-                  previewBlock,
-                  {"static_cast<float>(scaleX), static_cast<float>(scaleY)",
-                   "translated(rulerTx, keyOffsetY)"});
+    // drawContentLayer 从传入 RasterView 读取 camera / vertical state，并构建对应 ViewMapper
+    {
+        const auto drawContent = extractFunctionBlock(componentImpl, "void PianoRollComponent::drawContentLayer");
+        expect(!drawContent.empty(), "drawContentLayer must be found");
+        expectTokens("drawContentLayer reads camera + vertical from view parameter",
+                      drawContent,
+                      {"camera.pixelsPerSecond", "pixelsPerSemitone"});
+        expectTokens("drawContentLayer uses makeViewMapperForRasterView",
+                      drawContent,
+                      {"makeViewMapperForRasterView("});
+        expectTokens("drawContentLayer has waveform complete gate",
+                      drawContent,
+                      {"showWaveform_ && waveformMipmapCache_.isComplete()"});
+    }
 
     // strip 滚动更新保留
     expectTokens("Piano Roll uses moveImageSection for edge-scroll",
@@ -1340,31 +1360,22 @@ void pianoRollRetainedSurfaceArchitecture()
                "full dual-surface dirty must sync all three rasterView_ fields in order");
     }
 
-    // rasterizeStatic 从 rasterView_ 读取 source（相机 + 纵向）
+    // rasterizeStatic 委托给 drawStaticLayer，传 rasterView_
     {
         const auto rasterStatic = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeStatic");
         expect(!rasterStatic.empty(), "rasterizeStatic must be found");
-        expectTokens("rasterizeStatic reads rasterView_ camera source",
+        expectTokens("rasterizeStatic calls drawStaticLayer with rasterView_",
                       rasterStatic,
-                      {"rasterView_.camera.pixelsPerSecond", "rasterView_.camera.visibleStartSeconds"});
-        expectTokens("rasterizeStatic reads rasterView_ vertical source",
-                      rasterStatic,
-                      {"rasterView_.verticalScrollOffset", "rasterView_.pixelsPerSemitone"});
+                      {"drawStaticLayer(g, rasterView_"});
     }
 
-    // rasterizeContent 从 rasterView_ 读取 source，通过 makeViewMapperForRasterView 构建坐标
+    // rasterizeContent 委托给 drawContentLayer，传 rasterView_
     {
         const auto rasterContent = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeContent");
         expect(!rasterContent.empty(), "rasterizeContent must be found");
-        expectTokens("rasterizeContent reads rasterView_ camera + vertical source",
+        expectTokens("rasterizeContent calls drawContentLayer with rasterView_",
                       rasterContent,
-                      {"rasterView_.camera.pixelsPerSecond", "rasterView_.pixelsPerSemitone"});
-        expectTokens("rasterizeContent uses makeViewMapperForRasterView",
-                      rasterContent,
-                      {"makeViewMapperForRasterView(rasterView_)"});
-        expectTokens("rasterizeContent waveform draw uses isComplete gate",
-                      rasterContent,
-                      {"showWaveform_ && waveformMipmapCache_.isComplete()"});
+                      {"drawContentLayer(g, rasterView_"});
     }
 
     // applyRasterCamera 条带路径只写 rasterView_.camera，不写纵向 source
