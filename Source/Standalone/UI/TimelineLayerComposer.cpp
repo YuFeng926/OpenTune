@@ -119,10 +119,19 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
         double pixelsPerBeat = pps * secondsPerBeat;
         double beatInterval = selectBeatInterval(pixelsPerBeat);
 
-        int64_t startBeat = static_cast<int64_t>(params.visibleStartSeconds / secondsPerBeat);
+        // ── performance: narrow beat range to clip bounds ──
+        // pad=2px derived from existing cull: if (pixelX < -2 || pixelX > w + 2) continue;
+        const auto clip = g.getClipBounds();
+        constexpr int kGridClipPadX = 2;
+        const double gridClipStartTime = params.visibleStartSeconds +
+            static_cast<double>(std::max(0, clip.getX() - kGridClipPadX)) / pps;
+        const double gridClipEndTime = params.visibleStartSeconds +
+            static_cast<double>(std::min(w, clip.getRight() + kGridClipPadX)) / pps;
+
+        int64_t startBeat = static_cast<int64_t>(gridClipStartTime / secondsPerBeat);
         if (startBeat < 0) startBeat = 0;
         startBeat = (startBeat / static_cast<int64_t>(beatInterval)) * static_cast<int64_t>(beatInterval);
-        int64_t endBeat = static_cast<int64_t>(params.visibleEndSeconds / secondsPerBeat) + 1;
+        int64_t endBeat = static_cast<int64_t>(std::min(gridClipEndTime, params.visibleEndSeconds) / secondsPerBeat) + 1;
         if (endBeat - startBeat > 2000) endBeat = startBeat + 2000;
 
         for (int64_t beat = startBeat; beat <= endBeat; beat += static_cast<int64_t>(beatInterval)) {
@@ -154,10 +163,19 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
         double markerInterval = selectMarkerInterval(pps);
         if (markerInterval < 0.001) markerInterval = 1.0;
 
-        double startTime = params.visibleStartSeconds;
+        // ── performance: narrow time range to clip bounds ──
+        // pad=2px derived from existing cull: if (pixelX < -2 || pixelX > w + 2) continue;
+        const auto clip = g.getClipBounds();
+        constexpr int kGridClipPadX = 2;
+        const double gridClipStartTime = params.visibleStartSeconds +
+            static_cast<double>(std::max(0, clip.getX() - kGridClipPadX)) / pps;
+        const double gridClipEndTime = params.visibleStartSeconds +
+            static_cast<double>(std::min(w, clip.getRight() + kGridClipPadX)) / pps;
+
+        double startTime = gridClipStartTime;
         if (startTime < 0.0) startTime = 0.0;
         startTime = std::floor(startTime / markerInterval) * markerInterval;
-        double endTime = params.visibleEndSeconds;
+        double endTime = std::min(gridClipEndTime, params.visibleEndSeconds);
 
         for (double time = startTime; time < endTime + markerInterval; time += markerInterval) {
             int pixelX = static_cast<int>(std::llround((time - params.visibleStartSeconds) * pps));
@@ -209,10 +227,19 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
         double pixelsPerBeat = pps * secondsPerBeat;
         double beatInterval = selectBeatInterval(pixelsPerBeat);
 
-        int64_t startBeat = static_cast<int64_t>(params.visibleStartSeconds / secondsPerBeat);
+        // ── performance: narrow beat range to clip bounds ──
+        // pad=21px: drawText half-width 20px + 1px AA margin
+        const auto clip = g.getClipBounds();
+        constexpr int kRulerClipPadX = 21;
+        const double rulerClipStartTime = params.visibleStartSeconds +
+            static_cast<double>(std::max(0, clip.getX() - kRulerClipPadX)) / pps;
+        const double rulerClipEndTime = params.visibleStartSeconds +
+            static_cast<double>(std::min(params.viewportWidth, clip.getRight() + kRulerClipPadX)) / pps;
+
+        int64_t startBeat = static_cast<int64_t>(rulerClipStartTime / secondsPerBeat);
         if (startBeat < 0) startBeat = 0;
         startBeat = (startBeat / static_cast<int64_t>(beatInterval)) * static_cast<int64_t>(beatInterval);
-        int64_t endBeat = static_cast<int64_t>(params.visibleEndSeconds / secondsPerBeat) + 1;
+        int64_t endBeat = static_cast<int64_t>(std::min(rulerClipEndTime, params.visibleEndSeconds) / secondsPerBeat) + 1;
 
         g.setFont(UIColors::getUIFont(13.0f));
 
@@ -236,10 +263,20 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
         }
     } else { // Seconds
         double markerInterval = selectMarkerInterval(pps);
-        double startTime = params.visibleStartSeconds;
+
+        // ── performance: narrow time range to clip bounds ──
+        // pad=21px: drawText half-width 20px + 1px AA margin
+        const auto clip = g.getClipBounds();
+        constexpr int kRulerClipPadX = 21;
+        const double rulerClipStartTime = params.visibleStartSeconds +
+            static_cast<double>(std::max(0, clip.getX() - kRulerClipPadX)) / pps;
+        const double rulerClipEndTime = params.visibleStartSeconds +
+            static_cast<double>(std::min(params.viewportWidth, clip.getRight() + kRulerClipPadX)) / pps;
+
+        double startTime = rulerClipStartTime;
         if (startTime < 0.0) startTime = 0.0;
         startTime = std::floor(startTime / markerInterval) * markerInterval;
-        double endTime = params.visibleEndSeconds;
+        double endTime = std::min(rulerClipEndTime, params.visibleEndSeconds);
 
         g.setFont(UIColors::getUIFont(13.0f));
         for (double time = startTime; time < endTime; time += markerInterval) {
