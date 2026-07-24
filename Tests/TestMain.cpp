@@ -1207,11 +1207,23 @@ void pianoRollRetainedSurfaceArchitecture()
                  componentImpl,
                  {"moveImageSection"});
 
-    // 探针入口恰好三处：static-raster/content-raster 在 componentImpl，overlay-present 在 overlayImpl
+    // 探针入口：static-raster/content-raster/root-paint/vblank-to-root-paint 在 componentImpl，overlay-present 在 overlayImpl
     expectTokens("Static and Content probes in componentImpl",
+                  componentImpl,
+                  {"recordRenderProbe(RenderProbePoint::StaticRaster",
+                   "recordRenderProbe(RenderProbePoint::ContentRaster"});
+    expectTokens("Root paint probes in componentImpl",
+                 componentHeader + componentImpl,
+                 {"rootPaintProbe_",
+                  "vblankToRootPaintProbe_",
+                  "lastVBlankMs_",
+                  "RenderProbePoint::RootPaint",
+                  "RenderProbePoint::VBlankToRootPaint",
+                  "recordRenderProbe(RenderProbePoint::RootPaint",
+                  "recordRenderProbe(RenderProbePoint::VBlankToRootPaint"});
+    expectTokens("Root paint probe log fields",
                  componentImpl,
-                 {"recordRenderProbe(RenderProbePoint::StaticRaster",
-                  "recordRenderProbe(RenderProbePoint::ContentRaster"});
+                 {"root-paint:", "vblank-to-root-paint:"});
     expectTokens("Overlay probe in overlayImpl",
                  overlayImpl,
                  {"recordRenderProbe(PianoRollComponent::RenderProbePoint::OverlayPresent"});
@@ -1219,6 +1231,18 @@ void pianoRollRetainedSurfaceArchitecture()
     // playheadTimeForPaint_ 唯一 VBlank 写入
     const auto vblank = extractFunctionBlock(componentImpl, "void PianoRollComponent::onScrollVBlankCallback");
     const auto heartbeat = extractFunctionBlock(componentImpl, "void PianoRollComponent::onHeartbeatTick");
+    expect(countOf(heartbeat, "waveformMipmapCache_.buildIncremental(") == 2,
+           "Heartbeat must have exactly two waveform build branches (throttle + non-throttle)");
+    const auto progressBlock = extractBlockByMarker(heartbeat, "if (progressed)");
+    expect(!progressBlock.empty(), "Heartbeat progress block must be found");
+    expectTokens("Heartbeat progress block triggers redraw chain",
+                  progressBlock,
+                  {"contentDirty_ = true;",
+                   "rasterizeDirtySurfaces();",
+                   "repaint();"});
+    expectTokens("VBlank records absolute timestamp",
+                 vblank,
+                 {"lastVBlankMs_ = juce::Time::getMillisecondCounterHiRes();", "juce::ignoreUnused(timestampSec);"});
     expectTokens("playheadTimeForPaint_ only written in VBlank",
                  vblank,
                  {"playheadTimeForPaint_ = playheadTime"});
@@ -1348,6 +1372,15 @@ void pianoRollRetainedSurfaceArchitecture()
         expectNoTokens("applyRasterCamera strip no vertical source write",
                         applyCam,
                         {"rasterView_.pixelsPerSemitone", "rasterView_.verticalScrollOffset"});
+
+        const auto zeroPixelBlock = extractBlockByMarker(applyCam, "if (dPixels == 0)");
+        expect(!zeroPixelBlock.empty(), "applyRasterCamera dPixels==0 block must be found");
+        expectTokens("applyRasterCamera dPixels==0 returns directly",
+                     zeroPixelBlock,
+                     {"return;"});
+        expectNoTokens("applyRasterCamera dPixels==0 has no repaint or raster",
+                       zeroPixelBlock,
+                       {"repaint", "rasterize", "rasterView_.camera ="});
     }
 
     // rasterizeStatic 仅统一 clip chrome 链，无 stripVisibleStart/fillRect(*dirtyRect)
