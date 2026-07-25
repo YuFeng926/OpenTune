@@ -10,8 +10,8 @@
  * - 缩放和滚动
  *
  * 渲染架构：两张保留 Image + 一层透明 Overlay
- * - staticSurface_  ：主题背景、标尺、lane、网格、琴键
- * - contentSurface_ ：波形、无声帧、notes、F0、TimeGrid 锚点、ghost
+ * - staticSurface_  ：主题背景、标尺、lane、网格、琴键（由 drawFixedChrome/drawRuler/drawPitchBackground/drawPianoKeyboard 共享）
+ * - contentSurface_ ：波形、无声帧、notes、F0、TimeGrid 锚点、ghost（由 drawContent 共享）
  * - overlay_        ：播放头、选中高亮、框选、绘制预览、TimeGrid 把手
  */
 
@@ -257,15 +257,15 @@ private:
     friend struct PianoRollComponentTestProbe;
     friend class PianoRollOverlayComponent;
 
-    // ── 保留表面栅格快照 ──────────────────────────────────────
-    struct RasterView {
+    // ── 保留表面状态快照 ──────────────────────────────────────
+    struct ViewState {
         TimelineViewportCamera camera{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
         float pixelsPerSemitone = 25.0f;
         float verticalScrollOffset = 0.0f;
     };
     juce::Image staticSurface_;
     juce::Image contentSurface_;
-    RasterView rasterView_;
+    ViewState surfaceView_;
     bool staticDirty_ = true;
     bool contentDirty_ = true;
 
@@ -281,9 +281,12 @@ private:
     void rasterizeStatic(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
     void rasterizeContent(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
 
-    // ── 共享绘制层（raster target 与 preview target 共用单一逻辑） ──
-    void drawStaticLayer(juce::Graphics& g, const RasterView& rv, juce::Rectangle<int> bounds);
-    void drawContentLayer(juce::Graphics& g, const RasterView& rv, juce::Rectangle<int> bounds);
+    // ── 按坐标域拆分的唯一绘制函数（raster target 与 preview target 共用） ──
+    void drawFixedChrome(juce::Graphics& g, juce::Rectangle<int> damage);
+    void drawRuler(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);
+    void drawPitchBackground(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);
+    void drawPianoKeyboard(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);
+    void drawContent(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);
 
     // ── 性能探针 ──────────────────────────────────────────────
     struct RasterProbe { int count = 0; double totalMs = 0.0; };
@@ -292,10 +295,12 @@ private:
     RasterProbe overlayPresentProbe_;
     RasterProbe rootPaintProbe_;
     RasterProbe vblankToRootPaintProbe_;
+    RasterProbe zoomPreviewPaintProbe_;
+    RasterProbe zoomCommitRasterProbe_;
     double probeReportWindowStart_ = 0.0;
     double lastVBlankMs_ = 0.0;
 
-    enum class RenderProbePoint { StaticRaster, ContentRaster, OverlayPresent, RootPaint, VBlankToRootPaint };
+    enum class RenderProbePoint { StaticRaster, ContentRaster, OverlayPresent, RootPaint, VBlankToRootPaint, ZoomPreviewPaint, ZoomCommitRaster };
     void recordRenderProbe(RenderProbePoint point, double elapsedMs);
 
     // ── 保留式相机更新 ────────────────────────────────────────
@@ -350,7 +355,7 @@ private:
     int getTimelineContentViewportHeight() const;
 
     ViewMapper makeViewMapper() const noexcept;
-    ViewMapper makeViewMapperForRasterView(const RasterView& rv) const noexcept;
+    ViewMapper makeViewMapperForView(const ViewState& view) const noexcept;
     double computeContentTimelineEndSeconds() const noexcept;
     juce::Rectangle<int> timeAxisRect() const;
 
