@@ -1067,21 +1067,24 @@ void pianoRollPaintRestoresOpaqueFillAfterShadow()
 {
     const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto renderer = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
-    const auto drawStaticLayer = extractFunctionBlock(component, "void PianoRollComponent::drawStaticLayer");
+    const auto drawFixedChrome = extractFunctionBlock(component, "void PianoRollComponent::drawFixedChrome");
     const auto drawNotes = extractFunctionBlock(renderer, "void PianoRollRenderer::drawNotes");
 
-    expect(!drawStaticLayer.empty(), "PianoRollComponent::drawStaticLayer must be found");
+    expect(!drawFixedChrome.empty(), "PianoRollComponent::drawFixedChrome must be found");
     expect(!drawNotes.empty(), "PianoRollRenderer::drawNotes must be found");
 
-    // 正常与预览路径共享 drawStaticLayer；阴影后恢复 opaque fill
-    expectTokens("PianoRollComponent::drawStaticLayer restores opaque fill",
-                 drawStaticLayer,
-                 {"UIColors::drawShadow", "g.setColour(juce::Colours::white);", "TimelineLayerComposer::drawTimeRuler"});
-    expect(inOrder(drawStaticLayer,
-                   {"UIColors::drawShadow",
-                    "g.setColour(juce::Colours::white);",
-                    "TimelineLayerComposer::drawTimeRuler"}),
-           "PianoRollComponent::drawStaticLayer must restore opaque fill after shadow before drawing");
+    // drawFixedChrome 背景→阴影语义：clip→fillRect(全尺寸)→drawShadow，damage 仅用于 clip
+    expectTokens("drawFixedChrome has clip + full fill + shadow",
+                 drawFixedChrome,
+                 {"g.reduceClipRegion(damage)", "g.fillRect(0, 0, imgW, imgH)", "UIColors::drawShadow"});
+    expectNoTokens("drawFixedChrome no g.fillRect(damage)",
+                   drawFixedChrome,
+                   {"g.fillRect(damage)"});
+    expect(inOrder(drawFixedChrome,
+                   {"g.reduceClipRegion(damage)",
+                    "g.fillRect(0, 0, imgW, imgH)",
+                    "UIColors::drawShadow"}),
+           "drawFixedChrome must clip, fill full bounds, then draw shadow");
 
     expectTokens("PianoRollRenderer::drawNotes uses opaque note fill",
                  drawNotes,
@@ -1100,7 +1103,15 @@ void pianoRollRetainedSurfaceArchitecture()
     const auto rendererImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
     const auto arrangementImpl = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
 
-    // 正面断言：两张 Image + 透明 Overlay
+    // ── 正面：ViewState 替代旧 RasterView ──
+    expectTokens("Piano Roll has ViewState struct",
+                 componentHeader,
+                 {"struct ViewState"});
+    expectTokens("Piano Roll has surfaceView_ member",
+                 componentHeader,
+                 {"ViewState surfaceView_"});
+
+    // ── 两张保留 Image ──
     expectTokens("Piano Roll has retained surfaces",
                  componentHeader,
                  {"staticSurface_", "contentSurface_", "overlay_"});
@@ -1110,7 +1121,50 @@ void pianoRollRetainedSurfaceArchitecture()
                  componentImpl,
                  {"staticSurface_.getWidth() != fullW", "juce::Image(juce::Image::ARGB, fullW, fullH"});
 
-    // 根 paint 不含 rasterizeDirtySurfaces（已迁出到各失效点）
+    // ── 五个唯一复用绘制函数（drawFixedChrome 无 view，其余四个带 const ViewState&）──
+    expectTokens("Header declares five unique draw functions",
+                 componentHeader,
+                 {"void drawFixedChrome(juce::Graphics& g, juce::Rectangle<int> damage);",
+                  "void drawRuler(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);",
+                  "void drawPitchBackground(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);",
+                  "void drawPianoKeyboard(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);",
+                  "void drawContent(juce::Graphics& g, const ViewState& view, juce::Rectangle<int> damage);"});
+
+    // ── 四个 view-dependent 函数使用 view. 字段 和 makeViewMapperForView(view) ──
+    {
+        const auto drawRulerFn = extractFunctionBlock(componentImpl, "void PianoRollComponent::drawRuler");
+        const auto drawPitchFn = extractFunctionBlock(componentImpl, "void PianoRollComponent::drawPitchBackground");
+        const auto drawPianoFn = extractFunctionBlock(componentImpl, "void PianoRollComponent::drawPianoKeyboard");
+        const auto drawContFn = extractFunctionBlock(componentImpl, "void PianoRollComponent::drawContent");
+
+        expectTokens("drawRuler reads view.camera.pixelsPerSecond",
+                     drawRulerFn,
+                     {"view.camera.pixelsPerSecond", "view.camera.visibleStartSeconds"});
+        expectTokens("drawPitchBackground reads view fields",
+                     drawPitchFn,
+                     {"view.camera.pixelsPerSecond", "view.pixelsPerSemitone", "view.verticalScrollOffset"});
+        expectTokens("drawPianoKeyboard uses view + makeViewMapperForView(view)",
+                     drawPianoFn,
+                     {"makeViewMapperForView(view)", "view.camera.pixelsPerSecond", "view.pixelsPerSemitone"});
+        expectTokens("drawContent uses view.camera + makeViewMapperForView(view)",
+                     drawContFn,
+                     {"makeViewMapperForView(view)", "view.camera.pixelsPerSecond", "view.pixelsPerSemitone"});
+        // 正面断言无旧无 view 签名被替换（drawRuler/Pitch/Piano/Content 均含 const ViewState&）
+        expectTokens("drawRuler has const ViewState& view parameter",
+                     drawRulerFn,
+                     {"const ViewState& view"});
+        expectTokens("drawPitchBackground has const ViewState& view parameter",
+                     drawPitchFn,
+                     {"const ViewState& view"});
+        expectTokens("drawPianoKeyboard has const ViewState& view parameter",
+                     drawPianoFn,
+                     {"const ViewState& view"});
+        expectTokens("drawContent has const ViewState& view parameter",
+                     drawContFn,
+                     {"const ViewState& view"});
+    }
+
+    // ── paint：正常分支两张 Image blit，预览分支顺序调用五个唯一函数 ──
     const auto paint = extractFunctionBlock(componentImpl, "void PianoRollComponent::paint");
     expectNoTokens("paint does not call rasterizeDirtySurfaces",
                    paint,
@@ -1118,7 +1172,8 @@ void pianoRollRetainedSurfaceArchitecture()
     expectNoTokens("paint does not call rasterizeStatic/recreateSurfaces",
                    paint,
                    {"rasterizeStatic()", "rasterizeContent()", "recreateSurfaces"});
-    // 正常 else 分支仅 blit，无 fillAll/drawShadow；zoomPreviewActive_ 分支允许固定 chrome
+
+    // 正常 else 分支：两张 Image blit，无 fillAll/drawShadow
     const auto normalBranch = extractBlockByMarker(paint, "else {");
     expect(!normalBranch.empty(), "normal paint else branch must be found");
     expectNoTokens("normal paint branch has no fillAll/drawShadow",
@@ -1129,9 +1184,112 @@ void pianoRollRetainedSurfaceArchitecture()
                  {"drawImageAt(staticSurface_"});
     expectTokens("paint blits contentSurface_",
                  paint,
-                  {"drawImageAt(contentSurface_"});
+                 {"drawImageAt(contentSurface_"});
 
-    // 缩放预览期间 invalidateLiveNotes 不栅格内容，仅标记 contentDirty_
+    // 缩放预览分支：按固定顺序 drawFixedChrome→drawRuler→drawPitchBackground→drawPianoKeyboard→drawContent
+    const auto previewBlock = extractBlockByMarker(paint, "if (zoomPreviewActive_)");
+    expect(!previewBlock.empty(), "zoom preview block must be found in paint");
+    expectTokens("Zoom preview constructs live ViewState",
+                 previewBlock,
+                 {"const ViewState liveView{camera_, pixelsPerSemitone_, verticalScrollOffset_}"});
+    expect(inOrder(previewBlock,
+                   {"drawFixedChrome(g, fullBounds)",
+                    "drawRuler(g, liveView, fullBounds)",
+                    "drawPitchBackground(g, liveView, fullBounds)",
+                    "drawPianoKeyboard(g, liveView, fullBounds)",
+                    "drawContent(g, liveView, fullBounds)"}),
+           "Preview must call five functions in fixed order with liveView");
+
+    // preview 禁止 affine image scaling
+    expectNoTokens("Preview no drawImageTransformed",
+                   previewBlock,
+                   {"drawImageTransformed"});
+    expectNoTokens("Preview no getClippedImage",
+                   previewBlock,
+                   {"getClippedImage"});
+    expectNoTokens("Preview no scaleX/scaleY",
+                   previewBlock,
+                   {"scaleX", "scaleY"});
+
+    // ── rasterizeStatic 按固定顺序绘制至 staticSurface_ ──
+    {
+        const auto rasterStatic = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeStatic");
+        expect(!rasterStatic.empty(), "rasterizeStatic must be found");
+        expect(inOrder(rasterStatic,
+                       {"drawFixedChrome(g, rasterBounds)",
+                        "drawRuler(g, surfaceView_, rasterBounds)",
+                        "drawPitchBackground(g, surfaceView_, rasterBounds)",
+                        "drawPianoKeyboard(g, surfaceView_, rasterBounds)"}),
+               "rasterizeStatic must call four static functions in order with surfaceView_");
+        expectNoTokens("rasterizeStatic no strip-specific path",
+                       rasterStatic,
+                       {"stripVisibleStart", "fillRect(*dirtyRect)", "inTimelineZone"});
+    }
+
+    // ── rasterizeContent 传 surfaceView_ 给 drawContent ──
+    {
+        const auto rasterContent = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeContent");
+        expect(!rasterContent.empty(), "rasterizeContent must be found");
+        expectTokens("rasterizeContent passes surfaceView_ to drawContent",
+                     rasterContent,
+                     {"drawContent(g, surfaceView_, rasterBounds)"});
+    }
+
+    // ── surfaceView_ 在 rasterizeDirtySurfaces 中同步为 live 状态 ──
+    {
+        const auto dirtySync = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeDirtySurfaces");
+        expect(!dirtySync.empty(), "rasterizeDirtySurfaces must be found");
+        expect(inOrder(dirtySync, {"staticDirty_ && contentDirty_",
+                                   "surfaceView_.camera = camera_",
+                                   "surfaceView_.pixelsPerSemitone = pixelsPerSemitone_",
+                                   "surfaceView_.verticalScrollOffset = verticalScrollOffset_"}),
+               "full dual-surface dirty must sync all three surfaceView_ fields in order");
+    }
+
+    // ── applyRasterCamera 条带路径写 surfaceView_.camera，不写纵向 source ──
+    {
+        const auto applyCam = extractFunctionBlock(componentImpl, "void PianoRollComponent::applyRasterCamera");
+        expect(!applyCam.empty(), "applyRasterCamera must be found");
+        expectTokens("applyRasterCamera strip writes surfaceView_.camera",
+                      applyCam,
+                      {"surfaceView_.camera = newCamera"});
+        expectNoTokens("applyRasterCamera strip no vertical source write",
+                        applyCam,
+                        {"surfaceView_.pixelsPerSemitone", "surfaceView_.verticalScrollOffset"});
+
+        const auto zeroPixelBlock = extractBlockByMarker(applyCam, "if (dPixels == 0)");
+        expect(!zeroPixelBlock.empty(), "applyRasterCamera dPixels==0 block must be found");
+        expectTokens("applyRasterCamera dPixels==0 returns directly",
+                     zeroPixelBlock,
+                     {"return;"});
+        expectNoTokens("applyRasterCamera dPixels==0 has no repaint or raster",
+                       zeroPixelBlock,
+                       {"repaint", "rasterize", "surfaceView_.camera ="});
+    }
+
+    // ── strip moveImageSection 保留 ──
+    expectTokens("Piano Roll uses moveImageSection for edge-scroll",
+                 componentImpl,
+                 {"moveImageSection"});
+
+    // ── endZoomPreview：同步 surfaceView_ → 重建两张表面 → root repaint ──
+    {
+        const auto endZoom = extractFunctionBlock(componentImpl, "void PianoRollComponent::endZoomPreview");
+        expect(!endZoom.empty(), "endZoomPreview must be found");
+        expectTokens("endZoomPreview syncs surfaceView_ to live",
+                      endZoom,
+                      {"surfaceView_.camera = camera_",
+                       "surfaceView_.pixelsPerSemitone = pixelsPerSemitone_",
+                       "surfaceView_.verticalScrollOffset = verticalScrollOffset_"});
+        expectTokens("endZoomPreview rebuilds both surfaces then repaints",
+                      endZoom,
+                      {"staticDirty_ = true;",
+                       "contentDirty_ = true;",
+                       "rasterizeDirtySurfaces();",
+                       "repaint();"});
+    }
+
+    // ── 缩放预览期间 invalidateLiveNotes 不栅格内容，仅标记 contentDirty_ ──
     const auto invalLiveBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::invalidateLiveNotes");
     expectTokens("invalidateLiveNotes has zoomPreviewActive_ branch",
                  invalLiveBlock,
@@ -1148,88 +1306,7 @@ void pianoRollRetainedSurfaceArchitecture()
                    zoomBranch,
                    {"juce::Image"});
 
-    // 缩放预览：从 paint 提取 zoomPreviewActive_ block，验证 live composition 结构
-    const auto previewBlock = extractBlockByMarker(paint, "if (zoomPreviewActive_)");
-    expect(!previewBlock.empty(), "zoom preview block must be found in paint");
-
-    // preview 构造 liveView，按静态层→内容层顺序调用两个共享函数
-    expectTokens("Preview constructs RasterView liveView",
-                  previewBlock,
-                  {"RasterView liveView{camera_, pixelsPerSemitone_, verticalScrollOffset_}"});
-    expect(inOrder(previewBlock,
-                   {"drawStaticLayer(g, liveView", "drawContentLayer(g, liveView"}),
-           "Preview must call drawStaticLayer before drawContentLayer on liveView");
-
-    // preview 不含旧 source-crop/affine 路径
-    expectNoTokens("Preview no drawImageTransformed",
-                   previewBlock,
-                   {"drawImageTransformed"});
-    expectNoTokens("Preview no getClippedImage",
-                   previewBlock,
-                   {"getClippedImage"});
-    expectNoTokens("Preview no staticSurface_",
-                   previewBlock,
-                   {"staticSurface_"});
-    expectNoTokens("Preview no contentSurface_",
-                   previewBlock,
-                   {"contentSurface_"});
-    expectNoTokens("Preview no scaleX",
-                   previewBlock,
-                   {"scaleX"});
-    expectNoTokens("Preview no scaleY",
-                   previewBlock,
-                   {"scaleY"});
-    expectNoTokens("Preview no rulerTx",
-                   previewBlock,
-                   {"rulerTx"});
-    expectNoTokens("Preview no keyOffsetY",
-                   previewBlock,
-                   {"keyOffsetY"});
-
-    // header 声明两个共享绘制函数
-    expectTokens("Header declares drawStaticLayer",
-                  componentHeader,
-                  {"drawStaticLayer(juce::Graphics&", "const RasterView&"});
-    expectTokens("Header declares drawContentLayer",
-                  componentHeader,
-                  {"drawContentLayer(juce::Graphics&", "const RasterView&"});
-
-    // drawStaticLayer 从传入 view 读取 camera / vertical state，包含现有 ruler/grid/piano key composition
-    {
-        const auto drawStatic = extractFunctionBlock(componentImpl, "void PianoRollComponent::drawStaticLayer");
-        expect(!drawStatic.empty(), "drawStaticLayer must be found");
-        expectTokens("drawStaticLayer reads camera source from view parameter",
-                      drawStatic,
-                      {"camera.pixelsPerSecond", "camera.visibleStartSeconds"});
-        expectTokens("drawStaticLayer reads vertical source from view parameter",
-                      drawStatic,
-                      {"verticalScrollOffset", "pixelsPerSemitone"});
-        expectTokens("drawStaticLayer contains ruler/grid/piano key composition",
-                      drawStatic,
-                      {"drawTimeRuler", "drawGridLines", "drawPianoKeys"});
-    }
-
-    // drawContentLayer 从传入 RasterView 读取 camera / vertical state，并构建对应 ViewMapper
-    {
-        const auto drawContent = extractFunctionBlock(componentImpl, "void PianoRollComponent::drawContentLayer");
-        expect(!drawContent.empty(), "drawContentLayer must be found");
-        expectTokens("drawContentLayer reads camera + vertical from view parameter",
-                      drawContent,
-                      {"camera.pixelsPerSecond", "pixelsPerSemitone"});
-        expectTokens("drawContentLayer uses makeViewMapperForRasterView",
-                      drawContent,
-                      {"makeViewMapperForRasterView("});
-        expectTokens("drawContentLayer has waveform complete gate",
-                      drawContent,
-                      {"showWaveform_ && waveformMipmapCache_.isComplete()"});
-    }
-
-    // strip 滚动更新保留
-    expectTokens("Piano Roll uses moveImageSection for edge-scroll",
-                 componentImpl,
-                 {"moveImageSection"});
-
-    // 探针入口：static-raster/content-raster/root-paint/vblank-to-root-paint 在 componentImpl，overlay-present 在 overlayImpl
+    // ── 探针入口 ──
     expectTokens("Static and Content probes in componentImpl",
                   componentImpl,
                   {"recordRenderProbe(RenderProbePoint::StaticRaster",
@@ -1250,7 +1327,7 @@ void pianoRollRetainedSurfaceArchitecture()
                  overlayImpl,
                  {"recordRenderProbe(PianoRollComponent::RenderProbePoint::OverlayPresent"});
 
-    // playheadTimeForPaint_ 唯一 VBlank 写入
+    // ── playheadTimeForPaint_ 唯一 VBlank 写入 ──
     const auto vblank = extractFunctionBlock(componentImpl, "void PianoRollComponent::onScrollVBlankCallback");
     const auto heartbeat = extractFunctionBlock(componentImpl, "void PianoRollComponent::onHeartbeatTick");
     expect(countOf(heartbeat, "waveformMipmapCache_.buildIncremental(") == 2,
@@ -1272,7 +1349,7 @@ void pianoRollRetainedSurfaceArchitecture()
                    heartbeat,
                    {"playheadTimeForPaint_"});
 
-    // mouseDrag 仅纵向变化时设 dirty，commit 后无冗余 updateScrollBars/repaint
+    // ── mouseDrag 仅纵向变化时设 dirty，commit 后无冗余 updateScrollBars/repaint ──
     const auto mouseDragBlock = extractFunctionBlock(componentImpl, "if (interactionState_.isPanning)");
     expectTokens("mouseDrag vertical change sets dirty before commit",
                  mouseDragBlock,
@@ -1281,7 +1358,7 @@ void pianoRollRetainedSurfaceArchitecture()
                    mouseDragBlock,
                    {"updateScrollBars();", "repaint();"});
 
-    // 所有完整失效点经 rasterizeDirtySurfaces 触发
+    // ── 所有完整失效点经 rasterizeDirtySurfaces 触发 ──
     expectTokens("requestContentRedraw calls rasterizeDirtySurfaces",
                  extractFunctionBlock(componentImpl, "void PianoRollComponent::requestContentRedraw()"),
                  {"rasterizeDirtySurfaces();"});
@@ -1294,12 +1371,12 @@ void pianoRollRetainedSurfaceArchitecture()
     expectTokens("setBpm calls rasterizeDirtySurfaces",
                  extractFunctionBlock(componentImpl, "void PianoRollComponent::setBpm"),
                  {"rasterizeDirtySurfaces();"});
-    const auto vertScroll = extractFunctionBlock(componentImpl, "void PianoRollComponent::handleVerticalScrollWheel");
+    const auto vertScrollFn = extractFunctionBlock(componentImpl, "void PianoRollComponent::handleVerticalScrollWheel");
     expectTokens("handleVerticalScrollWheel calls rasterizeDirtySurfaces",
-                 vertScroll,
+                 vertScrollFn,
                  {"rasterizeDirtySurfaces();"});
 
-    // tryConsumeInitialF0View：纵向偏移脏标记置于 activateTimelineCamera 之前
+    // ── tryConsumeInitialF0View：纵向偏移脏标记置于 activateTimelineCamera 之前 ──
     const auto initialViewBlock = extractFunctionBlock(componentImpl, "bool PianoRollComponent::tryConsumeInitialF0View");
     expect(!initialViewBlock.empty(), "tryConsumeInitialF0View must be found");
     {
@@ -1311,7 +1388,19 @@ void pianoRollRetainedSurfaceArchitecture()
                "tryConsumeInitialF0View must set dirty before activateTimelineCamera");
     }
 
-    // fitToScreen：纵向 fit 分支不提前栅格/repaint，仅标记 dirty，由最终 commitViewportRequest 触发一次重建
+    // ── activateTimelineCamera zoom 分支同时 repaint()+overlay_->repaint() ──
+    {
+        const auto activateCam = extractFunctionBlock(componentImpl, "void PianoRollComponent::activateTimelineCamera");
+        expect(!activateCam.empty(), "activateTimelineCamera must be found");
+        expectTokens("activateTimelineCamera zoom branch repaint+overlay",
+                     activateCam,
+                     {"zoomPreviewActive_", "repaint();", "overlay_->repaint();"});
+        expect(inOrder(activateCam,
+                       {"repaint();", "overlay_->repaint();"}),
+               "activateTimelineCamera zoom branch must repaint before overlay repaint");
+    }
+
+    // ── fitToScreen ──
     const auto fitBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::fitToScreen()");
     const auto vertFitBlock = extractBlockByMarker(fitBlock, "// Reset scroll to show top");
     expect(!vertFitBlock.empty(), "fitToScreen vertical fit branch must be found");
@@ -1321,91 +1410,16 @@ void pianoRollRetainedSurfaceArchitecture()
     expectTokens("fitToScreen vertical branch sets dirty",
                  vertFitBlock,
                  {"staticDirty_ = true;", "contentDirty_ = true;"});
-    // 确保无论何时都到 commitViewportRequest
     const auto afterFitBlock = fitBlock.substr(fitBlock.find("// 2. Horizontal Fit:"));
     expect(contains(afterFitBlock, "commitViewportRequest"),
            "fitToScreen horizontal branch must commit via commitViewportRequest");
 
-    // 无旧根探针残留
+    // ── 无旧根探针残留 ──
     expectNoTokens("Piano Roll has no old root-paint probes",
                    componentImpl,
                    {"gFrameCount", "gRepaintCount", "gPaintTimerStart", "diagnosticReportFrameMs"});
 
-    // RasterView 单一快照，rasterCamera_/surfacePixelsPerSemitone_/surfaceVerticalScrollOffset_ 已删除
-    expectTokens("Piano Roll has struct RasterView",
-                 componentHeader,
-                 {"struct RasterView"});
-    expectTokens("Piano Roll has rasterView_ member",
-                 componentHeader,
-                 {"RasterView rasterView_"});
-    expectTokens("Piano Roll has makeViewMapperForRasterView",
-                 componentHeader,
-                 {"makeViewMapperForRasterView"});
-    expectNoTokens("Piano Roll has no rasterCamera_ / surfacePixelsPerSemitone_ / surfaceVerticalScrollOffset_ / surfaceOriginPx_ etc.",
-                   componentHeader + componentImpl,
-                   {"rasterCamera_", "surfacePixelsPerSemitone_", "surfaceVerticalScrollOffset_",
-                    "surfaceOriginPx_", "surfacePps_", "tlPhasePx", "tlSrcX"});
-    expectTokens("PianoRollComponent.cpp uses rasterView_ for rasterization",
-                  componentImpl,
-                  {"rasterView_.camera", "rasterView_.pixelsPerSemitone", "rasterView_.verticalScrollOffset"});
-
-    // 完整双表面 dirty 时一次性同步 rasterView_ 为 live 状态
-    {
-        const auto dirtySync = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeDirtySurfaces");
-        expect(!dirtySync.empty(), "rasterizeDirtySurfaces must be found");
-        expect(inOrder(dirtySync, {"staticDirty_ && contentDirty_",
-                                   "rasterView_.camera = camera_",
-                                   "rasterView_.pixelsPerSemitone = pixelsPerSemitone_",
-                                   "rasterView_.verticalScrollOffset = verticalScrollOffset_"}),
-               "full dual-surface dirty must sync all three rasterView_ fields in order");
-    }
-
-    // rasterizeStatic 委托给 drawStaticLayer，传 rasterView_
-    {
-        const auto rasterStatic = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeStatic");
-        expect(!rasterStatic.empty(), "rasterizeStatic must be found");
-        expectTokens("rasterizeStatic calls drawStaticLayer with rasterView_",
-                      rasterStatic,
-                      {"drawStaticLayer(g, rasterView_"});
-    }
-
-    // rasterizeContent 委托给 drawContentLayer，传 rasterView_
-    {
-        const auto rasterContent = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeContent");
-        expect(!rasterContent.empty(), "rasterizeContent must be found");
-        expectTokens("rasterizeContent calls drawContentLayer with rasterView_",
-                      rasterContent,
-                      {"drawContentLayer(g, rasterView_"});
-    }
-
-    // applyRasterCamera 条带路径只写 rasterView_.camera，不写纵向 source
-    {
-        const auto applyCam = extractFunctionBlock(componentImpl, "void PianoRollComponent::applyRasterCamera");
-        expect(!applyCam.empty(), "applyRasterCamera must be found");
-        expectTokens("applyRasterCamera strip writes rasterView_.camera",
-                      applyCam,
-                      {"rasterView_.camera = newCamera"});
-        expectNoTokens("applyRasterCamera strip no vertical source write",
-                        applyCam,
-                        {"rasterView_.pixelsPerSemitone", "rasterView_.verticalScrollOffset"});
-
-        const auto zeroPixelBlock = extractBlockByMarker(applyCam, "if (dPixels == 0)");
-        expect(!zeroPixelBlock.empty(), "applyRasterCamera dPixels==0 block must be found");
-        expectTokens("applyRasterCamera dPixels==0 returns directly",
-                     zeroPixelBlock,
-                     {"return;"});
-        expectNoTokens("applyRasterCamera dPixels==0 has no repaint or raster",
-                       zeroPixelBlock,
-                       {"repaint", "rasterize", "rasterView_.camera ="});
-    }
-
-    // rasterizeStatic 仅统一 clip chrome 链，无 stripVisibleStart/fillRect(*dirtyRect)
-    const auto rasterStatic2 = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeStatic");
-    expectNoTokens("rasterizeStatic no strip-specific path",
-                   rasterStatic2,
-                   {"stripVisibleStart", "fillRect(*dirtyRect)", "inTimelineZone"});
-
-    // drawWaveform / paintHistoricalClipWaveform：完成态 cache 为唯一 source，不含 buildProgress 中间状态
+    // ── drawWaveform / paintHistoricalClipWaveform：完成态 cache 为唯一 source ──
     {
         const auto drawWaveform = extractFunctionBlock(rendererImpl, "void PianoRollRenderer::drawWaveform");
         expect(!drawWaveform.empty(), "drawWaveform must be found");
@@ -1424,7 +1438,7 @@ void pianoRollRetainedSurfaceArchitecture()
                       {"waveformMipmapCache.isComplete()"});
     }
 
-    // Arrangement heartbeat 可视刷新条件含 progressed && isComplete
+    // ── Arrangement heartbeat ──
     {
         const auto arrHeartbeat = extractFunctionBlock(arrangementImpl, "void ArrangementViewComponent::onHeartbeatTick");
         expect(!arrHeartbeat.empty(), "Arrangement heartbeat must be found");
@@ -1433,7 +1447,7 @@ void pianoRollRetainedSurfaceArchitecture()
                       {"progressed && waveformMipmapCache_.isComplete()"});
     }
 
-    // VBlank：稳定 CONT 有 fixedCentre 跳过 + playState/time/camera 变化 gate
+    // ── VBlank：稳定 CONT 有 fixedCentre 跳过 + playState/time/camera 变化 gate ──
     const auto vblankBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::onScrollVBlankCallback");
     expectNoTokens("VBlank no bare overlay repaint",
                    vblankBlock,
@@ -1448,7 +1462,7 @@ void pianoRollRetainedSurfaceArchitecture()
                  vblankBlock,
                  {"playStateChanged || timeChanged || cameraChanged"});
 
-    // invalidateInteractionPreview 无条件转发 bounds，无 empty guard
+    // ── invalidateInteractionPreview 无条件转发 bounds ──
     const auto invalBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::invalidateInteractionPreview");
     expectTokens("invalidateInteractionPreview calls overlay_->repaint(bounds)",
                  invalBlock,
@@ -1457,7 +1471,7 @@ void pianoRollRetainedSurfaceArchitecture()
                    invalBlock,
                    {"isEmpty"});
 
-    // DrawNote 使用 sourceTimeToScreenX、contentOriginY、freqToMidi 真实几何，非 -12/16 硬编码
+    // ── DrawNote 使用真实几何 ──
     const auto toolHandler = readText("Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp");
     const auto drawNoteHandler = extractFunctionBlock(toolHandler, "void PianoRollToolHandler::handleDrawNoteTool");
     expectTokens("DrawNote uses sourceTimeToScreenX",
@@ -1476,34 +1490,46 @@ void pianoRollRetainedSurfaceArchitecture()
                    drawNoteHandler + extractFunctionBlock(toolHandler, "void PianoRollToolHandler::handleDrawNoteUp"),
                    {" - 12", " + 16"});
 
-    // 缩放冻结不写 rasterView_（已有保留表面的冻结源，非缩放捕获目标）；
-    // 两函数仍设 zoomPreviewActive_
+    // ── 缩放冻结不写 surfaceView_；两函数仍设 zoomPreviewActive_ ──
     const auto beginZoom = extractFunctionBlock(componentImpl, "void PianoRollComponent::beginZoomPreview");
-    expectNoTokens("beginZoomPreview does not write rasterView_",
+    expectNoTokens("beginZoomPreview does not write surfaceView_",
                    beginZoom,
-                   {"rasterView_"});
+                   {"surfaceView_"});
     expectTokens("beginZoomPreview sets zoomPreviewActive_",
                  beginZoom,
                  {"zoomPreviewActive_"});
-    const auto vertZoom = extractFunctionBlock(componentImpl, "void PianoRollComponent::handleVerticalZoomWheel");
-    expectNoTokens("handleVerticalZoomWheel does not write rasterView_",
-                   vertZoom,
-                   {"rasterView_"});
+    const auto vertZoomFn2 = extractFunctionBlock(componentImpl, "void PianoRollComponent::handleVerticalZoomWheel");
+    expectNoTokens("handleVerticalZoomWheel does not write surfaceView_",
+                   vertZoomFn2,
+                   {"surfaceView_"});
     expectTokens("handleVerticalZoomWheel sets zoomPreviewActive_",
-                 vertZoom,
+                 vertZoomFn2,
                  {"zoomPreviewActive_"});
+    expectTokens("handleVerticalZoomWheel repaints overlay",
+                 vertZoomFn2,
+                 {"overlay_->repaint();"});
 
-    // resized：updateScrollBars 位于 tryConsume 失败 fallback 后
+    // ── resized：updateScrollBars 位于 tryConsume 失败 fallback 后 ──
     const auto resizedBlock = extractFunctionBlock(componentImpl, "void PianoRollComponent::resized()");
     expect(inOrder(resizedBlock, {"tryConsumeInitialF0View", "updateScrollBars"}),
            "resized updateScrollBars must be after tryConsume");
 
-    // 反面断言：旧架构残留不存在
+    // ── 反面断言：无旧架构残留 ──
+    expectNoTokens("Piano Roll has no legacy RasterView/rasterView_",
+                   componentHeader + componentImpl,
+                   {"struct RasterView", "RasterView rasterView_", "makeViewMapperForRasterView"});
+    expectNoTokens("Piano Roll has no drawStaticLayer/drawContentLayer",
+                   componentHeader + componentImpl,
+                   {"drawStaticLayer", "drawContentLayer"});
     expectNoTokens("Piano Roll has no legacy tile cache or old surfaces",
                    componentHeader + componentImpl,
                    {"TimelineCompositeCache", "compositeCache_", "viewportSurface_",
                     "pianoKeySurface_", "scrollViewportSurfaceTo",
                     "rebuildViewportSurfaceFromReadyTiles", "tiles_"});
+    expectNoTokens("Piano Roll has no rasterCamera_ / surfacePixelsPerSemitone_ / surfaceVerticalScrollOffset_ etc.",
+                   componentHeader + componentImpl,
+                   {"rasterCamera_", "surfacePixelsPerSemitone_", "surfaceVerticalScrollOffset_",
+                    "surfaceOriginPx_", "surfacePps_", "tlPhasePx", "tlSrcX"});
 }
 
 void pianoRollZoomHandlersAvoidBusinessImageAllocation()
@@ -1559,22 +1585,51 @@ void pianoRollZoomHandlersDoNotPauseAutoFollow()
 void pianoKeysEmptyClippingGuardSourceContract()
 {
     const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
-    const auto drawStaticBlock = extractFunctionBlock(
-        component, "void PianoRollComponent::drawStaticLayer");
+    const auto drawPianoKeyboardBlock = extractFunctionBlock(
+        component, "void PianoRollComponent::drawPianoKeyboard");
 
-    expect(!drawStaticBlock.empty(), "PianoRollComponent::drawStaticLayer must be found");
+    expect(!drawPianoKeyboardBlock.empty(), "PianoRollComponent::drawPianoKeyboard must be found");
 
-    expectTokens("drawStaticLayer piano-keys guard integrates bounds.intersects",
-                 drawStaticBlock,
-                 {"shouldShowPianoKeys()",
-                  "bounds.intersects(juce::Rectangle<int>",
-                  "rulerHeight_",
-                  "pianoKeyWidth_"});
+    // drawPianoKeyboard 使用 shouldShowPianoKeys() 守卫 + 琴键域 damage 交
+    expectTokens("drawPianoKeyboard uses shouldShowPianoKeys guard",
+                 drawPianoKeyboardBlock,
+                 {"shouldShowPianoKeys()"});
 
-    expect(inOrder(drawStaticBlock,
-                   {"shouldShowPianoKeys()",
-                    "bounds.intersects"}),
-           "piano-keys guard must test shouldShowPianoKeys before bounds.intersects");
+    // 琴键域定义：pianoDomain(0, rulerHeight_, pianoKeyWidth_, contentHeight)
+    expectTokens("drawPianoKeyboard has pianoDomain rectangle",
+                 drawPianoKeyboardBlock,
+                 {"pianoDomain", "pianoKeyWidth_"});
+    // damage 交集 → 空早返
+    expectTokens("drawPianoKeyboard intersects damage with pianoDomain",
+                 drawPianoKeyboardBlock,
+                 {"damage.getIntersection(pianoDomain)"});
+    expectTokens("drawPianoKeyboard returns on empty clip",
+                 drawPianoKeyboardBlock,
+                 {"clipArea.isEmpty()"});
+    // clip + 绘制
+    expectTokens("drawPianoKeyboard sets g.reduceClipRegion(clipArea)",
+                 drawPianoKeyboardBlock,
+                 {"g.reduceClipRegion(clipArea)"});
+
+    // 不含旧 bounds.intersects（旧守卫在 drawStaticLayer 中已删除）
+    expectNoTokens("drawPianoKeyboard has no old bounds.intersects guard",
+                   drawPianoKeyboardBlock,
+                   {"bounds.intersects"});
+}
+
+void pianoRollRendererFontIsSingleFixedSize()
+{
+    const auto rendererImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+
+    // renderer 有单一固定字号常量
+    expectTokens("PianoRollRenderer has single fixed font-size constant",
+                 rendererImpl,
+                 {"static constexpr float kNoteLabelFontSize = 12.0f"});
+
+    // 无 h * 0.7f 动态字号推算
+    expectNoTokens("PianoRollRenderer has no dynamic font-size scaling",
+                   rendererImpl,
+                   {"h * 0.7f"});
 }
 
 void absoluteTimelineTimeRemainsUnquantized()
@@ -1745,6 +1800,7 @@ int main()
         pianoRollZoomHandlersAvoidBusinessImageAllocation();
         pianoRollZoomHandlersDoNotPauseAutoFollow();
         pianoKeysEmptyClippingGuardSourceContract();
+        pianoRollRendererFontIsSingleFixedSize();
         absoluteTimelineTimeRemainsUnquantized();
 
         // PitchCurve F0 span API replaces old render path

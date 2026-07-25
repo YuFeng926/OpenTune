@@ -588,8 +588,9 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     static const char* kSharpNames[12] = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
     static const char* kFlatNames[12]  = {"C","Db","D","Eb","E","F","Gb","G","Ab","A","Bb","B"};
     static constexpr bool kUseFlatsByRoot[12] = {false,true,false,true,false,false,true,false,true,false,true,false};
+    static constexpr float kNoteLabelFontSize = 12.0f;
     static constexpr float kShowAllLabelsMinPPS = 14.0f;
-    static constexpr float kShowCOnlyMinPPS = 8.0f;
+    static constexpr float kShowCOnlyMinPPS = kNoteLabelFontSize;
 
     // Build scale pitch-class membership using shared helper (supports all 8 scale types)
     const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);
@@ -685,8 +686,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             // Note name labels (with outline for readability)
             if (effectiveNoteNameMode == 0 || (effectiveNoteNameMode == 1 && noteInOctave == 0))
             {
-                const float fontSize = juce::jmax(8.0f, juce::jmin(h * 0.7f, 14.0f));
-                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", fontSize)));
+                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", kNoteLabelFontSize)));
                 int octave = (drawMidi / 12) - 1;
                 const char* name = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
                 juce::String noteName = juce::String(name) + juce::String(octave);
@@ -853,8 +853,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
             // Note name labels for black keys (drawn on top of the black key body with outline)
             if (effectiveNoteNameMode == 0)
             {
-                const float fontSize = juce::jmax(8.0f, juce::jmin(h * 0.7f, 14.0f));
-                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", fontSize)));
+                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), "Bold", kNoteLabelFontSize)));
                 int octave = (drawMidi / 12) - 1;
                 const char* bkName = useFlats ? kFlatNames[noteInOctave] : kSharpNames[noteInOctave];
                 juce::String noteName = juce::String(bkName) + juce::String(octave);

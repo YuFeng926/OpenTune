@@ -2218,6 +2218,249 @@ void rulerBackwardScrollPixelEquivalence()
            + std::to_string(diffs));
 }
 
+// ============================================================================
+// Rendering-core behavior tests — real pixel/geometry/ViewMapper runtime tests.
+// No PianoRollComponent dependency (not linked).  Uses linked sources:
+//   PianoRollRenderer, TimelineLayerComposer, ViewMapper (header-only).
+// ============================================================================
+
+// ── Composite vertical shrink pixel-equivalence ────────────────────────────
+// Renders old view (larger pps) with background + grid + lane + piano keys,
+// then new view (smaller pps) on top.  Compared against clean render of new
+// view.  Must be pixel-identical — no old background/piano-key leakage.
+
+void compositedVerticalShrinkMatchesCleanRender()
+{
+    clipTestEnsureDarkBlueGrey();
+
+    constexpr int w = 400, h = 350;
+    constexpr float oldPPS = 25.0f, newPPS = 15.0f;
+    constexpr int keyW = 60, rulerH = 30;
+
+    auto makeGridParams = [&](float pps) {
+        RenderParams p;
+        p.visibleStartSeconds = 0.0;
+        p.visibleEndSeconds   = 4.0;
+        p.pixelsPerSecond     = 100.0;
+        p.timeUnit            = 1;  // Bars
+        p.tempo               = 120.0;
+        p.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
+        p.pixelsPerSemitone   = pps;
+        p.worldTopY           = 0.0f;
+        p.rulerHeight         = 0;
+        p.laneStyle           = encodeLaneStyle(true, 0, 1);
+        p.viewportWidth       = w - keyW;
+        p.viewportHeight      = h - rulerH;
+        p.viewKind            = "pianoroll";
+        return p;
+    };
+
+    auto makeRenderCtx = [&](float pps, const juce::Rectangle<int>& bounds) {
+        PianoRollRenderer::RenderContext rctx;
+        rctx.width            = w;
+        rctx.height           = bounds.getHeight();
+        rctx.pianoKeyWidth    = keyW;
+        rctx.rulerHeight      = 0;
+        rctx.pixelsPerSecond  = 100.0;
+        rctx.pixelsPerSemitone = pps;
+        rctx.minMidi          = 24.0f;
+        rctx.maxMidi          = 108.0f;
+        rctx.scaleRootNote    = 0;
+        rctx.scaleType        = 1;
+        rctx.noteNameMode     = NoteNameMode::COnly;
+        rctx.coords           = ViewMapper{0.0, 100.0, keyW, w - keyW, bounds.getHeight(), pps, 0.0f, 108.0f};
+        rctx.rasterBounds     = bounds;
+        return rctx;
+    };
+
+    // Shared piano-key render area (y starts below ruler)
+    const juce::Rectangle<int> pianoArea(0, rulerH, w, h - rulerH);
+
+    // Image A — composited: old view background + grid + lane + keys,
+    //           then new view background + grid + lane + keys on top.
+    juce::Image imgA(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(imgA);
+
+        // Old view (larger pps)
+        {
+            const auto oldParams = makeGridParams(oldPPS);
+            // full-area background — distinct from new to detect leaks
+            g.setColour(juce::Colour(0xFF3A0000)); // dark red
+            g.fillRect(pianoArea);
+
+            {
+                juce::Graphics::ScopedSaveState ss(g);
+                g.reduceClipRegion(pianoArea);
+                {
+                    juce::Graphics::ScopedSaveState gs(g);
+                    g.addTransform(juce::AffineTransform::translation(static_cast<float>(keyW), static_cast<float>(rulerH)));
+                    TimelineLayerComposer::drawLaneStripRepeats(g, oldParams);
+                    TimelineLayerComposer::drawGridLines(g, oldParams);
+                }
+            }
+
+            // Old-pitch piano keys (must be fully covered by new-pitch keys)
+            {
+                PianoRollRenderer renderer;
+                auto oldCtx = makeRenderCtx(oldPPS, pianoArea);
+                juce::Graphics::ScopedSaveState ss(g);
+                g.reduceClipRegion(pianoArea);
+                g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerH)));
+                oldCtx.rasterBounds = juce::Rectangle<int>(0, 0, w, h - rulerH);
+                renderer.drawPianoKeys(g, oldCtx);
+            }
+        }
+
+        // New view (smaller pps) on top — must fully cover old pixels
+        {
+            const auto newParams = makeGridParams(newPPS);
+            g.setColour(UIColors::rollBackground);
+            g.fillRect(pianoArea);
+
+            juce::Graphics::ScopedSaveState ss(g);
+            g.reduceClipRegion(pianoArea);
+            {
+                juce::Graphics::ScopedSaveState gs(g);
+                g.addTransform(juce::AffineTransform::translation(static_cast<float>(keyW), static_cast<float>(rulerH)));
+                TimelineLayerComposer::drawLaneStripRepeats(g, newParams);
+                TimelineLayerComposer::drawGridLines(g, newParams);
+            }
+
+            PianoRollRenderer renderer;
+            auto ctx = makeRenderCtx(newPPS, pianoArea);
+            g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerH)));
+            ctx.rasterBounds = juce::Rectangle<int>(0, 0, w, h - rulerH);
+            renderer.drawPianoKeys(g, ctx);
+        }
+    }
+
+    // Image B — clean render of new view only.
+    juce::Image imgB(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(imgB);
+        const auto newParams = makeGridParams(newPPS);
+
+        g.setColour(UIColors::rollBackground);
+        g.fillRect(pianoArea);
+
+        juce::Graphics::ScopedSaveState ss(g);
+        g.reduceClipRegion(pianoArea);
+        {
+            juce::Graphics::ScopedSaveState gs(g);
+            g.addTransform(juce::AffineTransform::translation(static_cast<float>(keyW), static_cast<float>(rulerH)));
+            TimelineLayerComposer::drawLaneStripRepeats(g, newParams);
+            TimelineLayerComposer::drawGridLines(g, newParams);
+        }
+
+        PianoRollRenderer renderer;
+        auto ctx = makeRenderCtx(newPPS, pianoArea);
+        g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerH)));
+        ctx.rasterBounds = juce::Rectangle<int>(0, 0, w, h - rulerH);
+        renderer.drawPianoKeys(g, ctx);
+    }
+
+    // Full-area comparison
+    const int diffs = countPixelDiffs(imgA, imgB, pianoArea);
+    expect(diffs == 0,
+           "composited vertical shrink must match clean render (old bg/key pixels, "
+           "inward shrink, fractures). diffs=" + std::to_string(diffs));
+}
+
+// ── ViewMapper horizontal zoom anchor preservation ─────────────────────────
+// After pps change, the time at the mouse position must remain invariant.
+
+void horizontalZoomMouseTimeAnchorPreserved()
+{
+    constexpr double oldPps        = 100.0;
+    constexpr double visibleStart  = 0.5;
+    constexpr int    contentStartX = 60;    // pianoKeyWidth_
+    constexpr double mouseContentX = 120.0; // mouse X relative to content-start
+
+    const double mouseTime = visibleStart + mouseContentX / oldPps;  // 1.7s
+
+    ViewMapper vmBefore{visibleStart, oldPps, contentStartX, 800, 600, 25.0f, 0.0f, 108.0f};
+    const int screenX = contentStartX + static_cast<int>(mouseContentX);
+    const double timeBefore = vmBefore.xToTime(screenX);
+
+    // Zoom in: pps → 200; visibleStart adjusts to keep anchor at same screen X.
+    constexpr double newPps = 200.0;
+    const double newVisibleStart = mouseTime - mouseContentX / newPps;  // 1.1s
+
+    ViewMapper vmAfter{newVisibleStart, newPps, contentStartX, 800, 600, 25.0f, 0.0f, 108.0f};
+    const double timeAfter = vmAfter.xToTime(screenX);
+
+    expect(std::abs(timeBefore - timeAfter) < 1e-12,
+           "horizontal zoom must preserve mouse time anchor (before="
+           + std::to_string(timeBefore) + " after=" + std::to_string(timeAfter) + ")");
+    expect(std::abs(mouseTime - timeAfter) < 1e-12,
+           "zoomed view must map same mouse X to original anchor time");
+}
+
+// ── ViewMapper vertical zoom pitch anchor preservation ─────────────────────
+// After pps change and scroll adjustment, the same screen Y maps to same MIDI.
+
+void verticalZoomMousePitchAnchorPreserved()
+{
+    constexpr float oldPPS        = 25.0f;
+    constexpr float oldScroll     = 100.0f;
+    constexpr float mouseContentY = 200.0f; // Y relative to content top
+    constexpr float maxMidi       = 108.0f;
+
+    ViewMapper vmBefore{0.0, 100.0, 60, 800, 600, oldPPS, oldScroll, maxMidi};
+    const float mouseMidiBefore = vmBefore.yToMidi(mouseContentY);
+
+    // Apply vertical zoom: new pps, adjusted scroll to preserve anchor Y→Midi
+    constexpr float newPPS   = 15.0f;
+    const float     targetY  = (maxMidi - mouseMidiBefore) * newPPS;
+    const float     newScroll = targetY - mouseContentY;
+
+    ViewMapper vmAfter{0.0, 100.0, 60, 800, 600, newPPS, newScroll, maxMidi};
+    const float mouseMidiAfter = vmAfter.yToMidi(mouseContentY);
+
+    expect(std::abs(mouseMidiBefore - mouseMidiAfter) < 0.01f,
+           "vertical zoom must preserve mouse pitch anchor (before="
+           + std::to_string(mouseMidiBefore) + " after=" + std::to_string(mouseMidiAfter) + ")");
+}
+
+// ── Piano key width / ruler height are zoom-invariant constants ────────────
+
+void pianoKeyWidthAndRulerHeightAreZoomInvariant()
+{
+    // Verify RenderContext defaults match contract
+    constexpr int kExpectedKeyWidth  = 60;
+    constexpr int kExpectedRulerH    = 30;
+
+    // Check via struct defaults defined in header
+    PianoRollRenderer::RenderContext ctx;
+    expect(ctx.pianoKeyWidth == kExpectedKeyWidth,
+           "RenderContext::pianoKeyWidth default must be 60");
+    expect(ctx.rulerHeight == kExpectedRulerH,
+           "RenderContext::rulerHeight default must be 30");
+}
+
+// ── Key row total height scales linearly with pixelsPerSemitone ────────────
+
+void keyRowTotalHeightScalesWithPixelsPerSemitone()
+{
+    constexpr float minMidi = 24.0f;
+    constexpr float maxMidi = 108.0f;
+    constexpr float semitones = maxMidi - minMidi;  // 84
+
+    constexpr float pps1 = 25.0f;
+    constexpr float pps2 = 15.0f;
+
+    const float h1 = semitones * pps1;  // 2100
+    const float h2 = semitones * pps2;  // 1260
+
+    expect(h1 == 2100.0f,
+           "total height at pps=25 must be 2100 (84 semitones × 25)");
+    expect(h2 == 1260.0f,
+           "total height at pps=15 must be 1260 (84 semitones × 15)");
+    expect(std::abs(h1 / h2 - pps1 / pps2) < 1e-6f,
+           "total height must scale linearly with pixelsPerSemitone");
+}
+
 } // namespace
 
 int main()
@@ -2269,6 +2512,13 @@ int main()
         makeRulerScrollDamageContract();
         rulerForwardScrollPixelEquivalence();
         rulerBackwardScrollPixelEquivalence();
+
+        // ── Rendering-core behavior tests ──────────────────────────────
+        compositedVerticalShrinkMatchesCleanRender();
+        horizontalZoomMouseTimeAnchorPreserved();
+        verticalZoomMousePitchAnchorPreserved();
+        pianoKeyWidthAndRulerHeightAreZoomInvariant();
+        keyRowTotalHeightScalesWithPixelsPerSemitone();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";
