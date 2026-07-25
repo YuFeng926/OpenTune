@@ -1216,6 +1216,10 @@ void pianoRollRetainedSurfaceArchitecture()
         const auto rasterStatic = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeStatic");
         expect(!rasterStatic.empty(), "rasterizeStatic must be found");
         expect(inOrder(rasterStatic,
+                       {"staticSurface_.clear(rasterBounds);",
+                        "juce::Graphics g(staticSurface_);"}),
+               "rasterizeStatic must clear staticSurface_ before creating Graphics on it");
+        expect(inOrder(rasterStatic,
                        {"drawFixedChrome(g, rasterBounds)",
                         "drawRuler(g, surfaceView_, rasterBounds)",
                         "drawPitchBackground(g, surfaceView_, rasterBounds)",
@@ -1230,6 +1234,11 @@ void pianoRollRetainedSurfaceArchitecture()
     {
         const auto rasterContent = extractFunctionBlock(componentImpl, "void PianoRollComponent::rasterizeContent");
         expect(!rasterContent.empty(), "rasterizeContent must be found");
+        expect(inOrder(rasterContent,
+                       {"contentSurface_.clear(contentSurface_.getBounds());",
+                        "contentSurface_.clear(*dirtyRect);",
+                        "juce::Graphics g(contentSurface_);"}),
+               "rasterizeContent must clear contentSurface_ (full + dirtyRect) before creating Graphics on it");
         expectTokens("rasterizeContent passes surfaceView_ to drawContent",
                      rasterContent,
                      {"drawContent(g, surfaceView_, rasterBounds)"});

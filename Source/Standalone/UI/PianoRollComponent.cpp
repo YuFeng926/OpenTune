@@ -1074,7 +1074,6 @@ void PianoRollComponent::drawTimeGridHandles(juce::Graphics& g)
     ctx.pixelsPerSemitone = pixelsPerSemitone_;
     ctx.minMidi = minMidi_;
     ctx.maxMidi = maxMidi_;
-    ctx.bpm = bpm_;
     ctx.coords = makeViewMapper();
     ctx.timeGridHoveredHandleId = interactionState_.timeTool.hoveredHandleId;
     ctx.timeGridSelectedHandleId = interactionState_.timeTool.selectedHandleId;
@@ -1553,8 +1552,9 @@ void PianoRollComponent::rasterizeStatic(std::optional<juce::Rectangle<int>> dir
 
     const juce::Rectangle<int> rasterBounds = dirtyRect.value_or(staticSurface_.getBounds());
 
-    juce::Graphics g(staticSurface_);
     staticSurface_.clear(rasterBounds);
+
+    juce::Graphics g(staticSurface_);
 
     drawFixedChrome(g, rasterBounds);
     drawRuler(g, surfaceView_, rasterBounds);
@@ -1590,17 +1590,13 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewState& view, j
     renderCtx.pixelsPerSemitone = view.pixelsPerSemitone;
     renderCtx.minMidi = minMidi_;
     renderCtx.maxMidi = maxMidi_;
-    renderCtx.bpm = bpm_;
     renderCtx.scaleRootNote = scaleRootNote_;
     renderCtx.scaleType = scaleType_;
     renderCtx.noteNameMode = noteNameMode_;
-    renderCtx.showLanes = showLanes_;
     renderCtx.showUnvoicedFrames = showUnvoicedFrames_;
     renderCtx.showOriginalF0 = showOriginalF0_;
     renderCtx.showCorrectedF0 = showCorrectedF0_;
-    renderCtx.timeUnit = (timeUnit_ == TimeUnit::Bars) ? PianoRollTimeUnit::Bars : PianoRollTimeUnit::Seconds;
     renderCtx.coords = mapper;
-    renderCtx.referenceOverlay = referenceOverlay_;
     renderCtx.rasterBounds = clipArea;
 
     renderCtx.contents = buildContentRenderItems();
@@ -1645,16 +1641,15 @@ void PianoRollComponent::rasterizeContent(std::optional<juce::Rectangle<int>> di
     const int h = getTimelineViewportBounds().getHeight();
     if (!contentSurface_.isValid() || w <= 0 || h <= 0) return;
 
-    juce::Graphics g(contentSurface_);
-
     const bool fullRaster = !dirtyRect.has_value();
     const auto rasterBounds = dirtyRect.value_or(juce::Rectangle<int>(0, 0, w, h));
 
-    if (!dirtyRect.has_value()) {
+    if (fullRaster)
         contentSurface_.clear(contentSurface_.getBounds());
-    } else {
+    else
         contentSurface_.clear(*dirtyRect);
-    }
+
+    juce::Graphics g(contentSurface_);
 
     drawContent(g, surfaceView_, rasterBounds);
 
