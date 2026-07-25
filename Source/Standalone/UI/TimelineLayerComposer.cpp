@@ -26,7 +26,7 @@ double TimelineLayerComposer::selectMarkerInterval(double pixelsPerSecond) {
     if (pixelsPerSecond < 1.33) return 60.0;
     if (pixelsPerSecond < 4.0) return 30.0;
     if (pixelsPerSecond < 8.0) return 10.0;
-    if (pixelsPerSecond < 40.0) return 5.0;
+    if (pixelsPerSecond < 60.0) return 5.0;
     return 1.0;
 }
 

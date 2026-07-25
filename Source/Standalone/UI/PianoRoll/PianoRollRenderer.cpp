@@ -590,7 +590,7 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
     static constexpr bool kUseFlatsByRoot[12] = {false,true,false,true,false,false,true,false,true,false,true,false};
     static constexpr float kNoteLabelFontSize = 12.0f;
     static constexpr float kShowAllLabelsMinPPS = 14.0f;
-    static constexpr float kShowCOnlyMinPPS = kNoteLabelFontSize;
+    static constexpr float kShowCOnlyMinPPS = 12.0f;
 
     // Build scale pitch-class membership using shared helper (supports all 8 scale types)
     const auto inScalePitchClass = buildInScalePitchClasses(ctx.scaleType, ctx.scaleRootNote);

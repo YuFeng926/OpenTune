@@ -20,11 +20,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <optional>
 
 namespace OpenTune {
-
-enum class PianoRollTimeUnit { Seconds, Bars };
 
 struct TimelineContentPlacement
 {
@@ -98,30 +95,22 @@ public:
         float pixelsPerSemitone = 15.0f;
         float minMidi = 24.0f;
         float maxMidi = 108.0f;
-        double bpm = 120.0;
         std::vector<ContentRenderItem> contents;
         int scaleRootNote = 0;
         int scaleType = 1;
         NoteNameMode noteNameMode = NoteNameMode::COnly;
-        bool showLanes = true;
         bool showUnvoicedFrames = false;
         bool showOriginalF0 = true;
         bool showCorrectedF0 = true;
 
-        PianoRollTimeUnit timeUnit = PianoRollTimeUnit::Seconds;
         ViewMapper coords;
 
         int pressedPianoKey = -1;
         ToolId currentTool = ToolId::Select;
         bool isTimeView() const { return currentTool == ToolId::TimeTool; }
-        bool hasF0Selection = false;
-        int f0SelectionStartFrame = -1;
-        int f0SelectionEndFrameExclusive = -1;
-        std::optional<ReferenceOverlay> referenceOverlay;
         uint64_t timeGridHoveredHandleId = 0;
         uint64_t timeGridSelectedHandleId = 0;
         std::vector<uint64_t> additionalSelectedHandleIds;
-        std::vector<int> selectedLineAnchorSegmentIds;
     };
 
     void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);

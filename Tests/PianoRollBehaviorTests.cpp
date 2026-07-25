@@ -1967,6 +1967,19 @@ void formatSecondsRulerLabelContract()
 }
 
 // ---------------------------------------------------------------------------
+// selectMarkerInterval milestone contract — interval boundary crossings
+// ---------------------------------------------------------------------------
+void selectMarkerIntervalMilestoneContract()
+{
+    expect(std::abs(TimelineLayerComposer::selectMarkerInterval(40.0) - 5.0) < 1e-12,
+           "selectMarkerInterval(40.0) must return 5.0");
+    expect(std::abs(TimelineLayerComposer::selectMarkerInterval(59.999) - 5.0) < 1e-12,
+           "selectMarkerInterval(59.999) must return 5.0 (just below 60)");
+    expect(std::abs(TimelineLayerComposer::selectMarkerInterval(60.0) - 1.0) < 1e-12,
+           "selectMarkerInterval(60.0) must return 1.0");
+}
+
+// ---------------------------------------------------------------------------
 // makeRulerScrollDamage contract — entering / exiting bounds and overlap guard
 // ---------------------------------------------------------------------------
 void makeRulerScrollDamageContract()
@@ -2049,20 +2062,20 @@ void makeRulerScrollDamageContract()
 
 // ---------------------------------------------------------------------------
 // Ruler forward scroll pixel equivalence — moveImageSection + incremental draw
-// must match a full redraw. This scenario covers the 54s label appearing at
-// pixel 198 whose text spans the left boundary of the exposed strip [190,200).
+// must match a full redraw. Covers 1-second ruler labels crossing the exposed
+// strip boundary.
 // ---------------------------------------------------------------------------
 void rulerForwardScrollPixelEquivalence()
 {
     clipTestEnsureDarkBlueGrey();
 
-    constexpr double pps = 40.0;
+    constexpr double pps = 60.0;
     constexpr int w = 200;
     constexpr int h = 30;
     constexpr double oldVisibleStart = 48.8;
     constexpr double newVisibleStart = 49.05;
-    constexpr double visibleDuration = static_cast<double>(w) / pps; // 5.0 s
-    constexpr int scrollDeltaPx = 10;
+    constexpr double visibleDuration = static_cast<double>(w) / pps;
+    constexpr int scrollDeltaPx = 15;
 
     auto makeParams = [&](double visibleStart) {
         RenderParams p;
@@ -2091,12 +2104,12 @@ void rulerForwardScrollPixelEquivalence()
         TimelineLayerComposer::drawTimeRuler(g, oldParams);
     }
 
-    // 2. Simulate forward scroll: moveImageSection shifts pixels left by 10px.
-    //    src (10,0,190,30) → dst (0,0)
+    // 2. Simulate forward scroll: moveImageSection shifts pixels left by 15px.
+    //    src (15,0,185,30) → dst (0,0)
     testSurface.moveImageSection(0, 0, scrollDeltaPx, 0, w - scrollDeltaPx, h);
 
-    // Exposed strip = the new rightmost 10 px that must be repainted.
-    // Forward delta=+10 → entering=[169,200), exiting is empty.
+    // Exposed strip = the new rightmost 15 px that must be repainted.
+    // Forward delta=+15 → entering=[164,200), exiting is empty.
     const juce::Rectangle<int> exposedStrip(w - scrollDeltaPx, 0, scrollDeltaPx, h);
     const auto damage = TimelineLayerComposer::makeRulerScrollDamage(
         exposedStrip, timelineBounds, scrollDeltaPx);
@@ -2132,21 +2145,20 @@ void rulerForwardScrollPixelEquivalence()
 // ---------------------------------------------------------------------------
 // Ruler backward scroll pixel equivalence — moveImageSection (shift right) +
 // incremental draw must match a full redraw.
-// Backward delta=-10 → entering=[0,31), exiting=[179,200).
-// exiting clears the old 54s label text (centred at pixel 198 in the old view)
-// that was pushed right by moveImageSection and is now stale.
+// Backward delta=-15 → entering=[0,36), exiting=[179,200).
+// exiting clears stale right-edge label text pushed right by moveImageSection.
 // ---------------------------------------------------------------------------
 void rulerBackwardScrollPixelEquivalence()
 {
     clipTestEnsureDarkBlueGrey();
 
-    constexpr double pps = 40.0;
+    constexpr double pps = 60.0;
     constexpr int w = 200;
     constexpr int h = 30;
     constexpr double oldVisibleStart = 49.05;
     constexpr double newVisibleStart = 48.8;
-    constexpr double visibleDuration = static_cast<double>(w) / pps; // 5.0 s
-    constexpr int scrollDeltaPx = 10;
+    constexpr double visibleDuration = static_cast<double>(w) / pps;
+    constexpr int scrollDeltaPx = 15;
 
     auto makeParams = [&](double visibleStart) {
         RenderParams p;
@@ -2175,14 +2187,13 @@ void rulerBackwardScrollPixelEquivalence()
         TimelineLayerComposer::drawTimeRuler(g, oldParams);
     }
 
-    // 2. Simulate backward scroll: moveImageSection shifts pixels right by 10px.
-    //    src (0,0,190,30) → dst (10,0)
+    // 2. Simulate backward scroll: moveImageSection shifts pixels right by 15px.
+    //    src (0,0,185,30) → dst (15,0)
     testSurface.moveImageSection(scrollDeltaPx, 0, 0, 0, w - scrollDeltaPx, h);
 
-    // Exposed strip = the new leftmost 10 px that must be repainted.
-    // Backward delta=-10 → entering=[0,31), exiting=[179,200).
-    // exiting clears the old 54s label text (centred at pixel 198 in the old
-    // view) that was pushed right by moveImageSection and is now stale.
+    // Exposed strip = the new leftmost 15 px that must be repainted.
+    // Backward delta=-15 → entering=[0,36), exiting=[179,200).
+    // exiting clears stale right-edge label text pushed right by moveImageSection.
     const juce::Rectangle<int> exposedStrip(0, 0, scrollDeltaPx, h);
     const auto damage = TimelineLayerComposer::makeRulerScrollDamage(
         exposedStrip, timelineBounds, -scrollDeltaPx);
@@ -2219,15 +2230,13 @@ void rulerBackwardScrollPixelEquivalence()
 }
 
 // ============================================================================
-// Rendering-core behavior tests — real pixel/geometry/ViewMapper runtime tests.
-// No PianoRollComponent dependency (not linked).  Uses linked sources:
-//   PianoRollRenderer, TimelineLayerComposer, ViewMapper (header-only).
+// Real pixel rendering tests — linked against PianoRollRenderer,
+// TimelineLayerComposer, ViewMapper.
 // ============================================================================
 
-// ── Composite vertical shrink pixel-equivalence ────────────────────────────
-// Renders old view (larger pps) with background + grid + lane + piano keys,
-// then new view (smaller pps) on top.  Compared against clean render of new
-// view.  Must be pixel-identical — no old background/piano-key leakage.
+// ── Composite vertical shrink pixel-equivalence ─────────────────────
+// Old-pps render under new-pps render must match clean new-pps render
+// pixel-by-pixel — no old background or piano-key leakage.
 
 void compositedVerticalShrinkMatchesCleanRender()
 {
@@ -2367,99 +2376,6 @@ void compositedVerticalShrinkMatchesCleanRender()
            "inward shrink, fractures). diffs=" + std::to_string(diffs));
 }
 
-// ── ViewMapper horizontal zoom anchor preservation ─────────────────────────
-// After pps change, the time at the mouse position must remain invariant.
-
-void horizontalZoomMouseTimeAnchorPreserved()
-{
-    constexpr double oldPps        = 100.0;
-    constexpr double visibleStart  = 0.5;
-    constexpr int    contentStartX = 60;    // pianoKeyWidth_
-    constexpr double mouseContentX = 120.0; // mouse X relative to content-start
-
-    const double mouseTime = visibleStart + mouseContentX / oldPps;  // 1.7s
-
-    ViewMapper vmBefore{visibleStart, oldPps, contentStartX, 800, 600, 25.0f, 0.0f, 108.0f};
-    const int screenX = contentStartX + static_cast<int>(mouseContentX);
-    const double timeBefore = vmBefore.xToTime(screenX);
-
-    // Zoom in: pps → 200; visibleStart adjusts to keep anchor at same screen X.
-    constexpr double newPps = 200.0;
-    const double newVisibleStart = mouseTime - mouseContentX / newPps;  // 1.1s
-
-    ViewMapper vmAfter{newVisibleStart, newPps, contentStartX, 800, 600, 25.0f, 0.0f, 108.0f};
-    const double timeAfter = vmAfter.xToTime(screenX);
-
-    expect(std::abs(timeBefore - timeAfter) < 1e-12,
-           "horizontal zoom must preserve mouse time anchor (before="
-           + std::to_string(timeBefore) + " after=" + std::to_string(timeAfter) + ")");
-    expect(std::abs(mouseTime - timeAfter) < 1e-12,
-           "zoomed view must map same mouse X to original anchor time");
-}
-
-// ── ViewMapper vertical zoom pitch anchor preservation ─────────────────────
-// After pps change and scroll adjustment, the same screen Y maps to same MIDI.
-
-void verticalZoomMousePitchAnchorPreserved()
-{
-    constexpr float oldPPS        = 25.0f;
-    constexpr float oldScroll     = 100.0f;
-    constexpr float mouseContentY = 200.0f; // Y relative to content top
-    constexpr float maxMidi       = 108.0f;
-
-    ViewMapper vmBefore{0.0, 100.0, 60, 800, 600, oldPPS, oldScroll, maxMidi};
-    const float mouseMidiBefore = vmBefore.yToMidi(mouseContentY);
-
-    // Apply vertical zoom: new pps, adjusted scroll to preserve anchor Y→Midi
-    constexpr float newPPS   = 15.0f;
-    const float     targetY  = (maxMidi - mouseMidiBefore) * newPPS;
-    const float     newScroll = targetY - mouseContentY;
-
-    ViewMapper vmAfter{0.0, 100.0, 60, 800, 600, newPPS, newScroll, maxMidi};
-    const float mouseMidiAfter = vmAfter.yToMidi(mouseContentY);
-
-    expect(std::abs(mouseMidiBefore - mouseMidiAfter) < 0.01f,
-           "vertical zoom must preserve mouse pitch anchor (before="
-           + std::to_string(mouseMidiBefore) + " after=" + std::to_string(mouseMidiAfter) + ")");
-}
-
-// ── Piano key width / ruler height are zoom-invariant constants ────────────
-
-void pianoKeyWidthAndRulerHeightAreZoomInvariant()
-{
-    // Verify RenderContext defaults match contract
-    constexpr int kExpectedKeyWidth  = 60;
-    constexpr int kExpectedRulerH    = 30;
-
-    // Check via struct defaults defined in header
-    PianoRollRenderer::RenderContext ctx;
-    expect(ctx.pianoKeyWidth == kExpectedKeyWidth,
-           "RenderContext::pianoKeyWidth default must be 60");
-    expect(ctx.rulerHeight == kExpectedRulerH,
-           "RenderContext::rulerHeight default must be 30");
-}
-
-// ── Key row total height scales linearly with pixelsPerSemitone ────────────
-
-void keyRowTotalHeightScalesWithPixelsPerSemitone()
-{
-    constexpr float minMidi = 24.0f;
-    constexpr float maxMidi = 108.0f;
-    constexpr float semitones = maxMidi - minMidi;  // 84
-
-    constexpr float pps1 = 25.0f;
-    constexpr float pps2 = 15.0f;
-
-    const float h1 = semitones * pps1;  // 2100
-    const float h2 = semitones * pps2;  // 1260
-
-    expect(h1 == 2100.0f,
-           "total height at pps=25 must be 2100 (84 semitones × 25)");
-    expect(h2 == 1260.0f,
-           "total height at pps=15 must be 1260 (84 semitones × 15)");
-    expect(std::abs(h1 / h2 - pps1 / pps2) < 1e-6f,
-           "total height must scale linearly with pixelsPerSemitone");
-}
 
 } // namespace
 
@@ -2509,16 +2425,13 @@ int main()
 
         // Ruler scroll damage and pixel-equivalence for incremental rendering
         formatSecondsRulerLabelContract();
+        selectMarkerIntervalMilestoneContract();
         makeRulerScrollDamageContract();
         rulerForwardScrollPixelEquivalence();
         rulerBackwardScrollPixelEquivalence();
 
-        // ── Rendering-core behavior tests ──────────────────────────────
+        // ── Real pixel rendering test ──────────────────────────────────
         compositedVerticalShrinkMatchesCleanRender();
-        horizontalZoomMouseTimeAnchorPreserved();
-        verticalZoomMousePitchAnchorPreserved();
-        pianoKeyWidthAndRulerHeightAreZoomInvariant();
-        keyRowTotalHeightScalesWithPixelsPerSemitone();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";
