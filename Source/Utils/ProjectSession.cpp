@@ -269,6 +269,8 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
 
     // Settings
     snap.settings.bpm = processorRef_.getBpm();
+    snap.settings.timeSignatureNumerator = processorRef_.getTimeSigNumerator();
+    snap.settings.timeSignatureDenominator = processorRef_.getTimeSigDenominator();
     snap.settings.sampleRate = processorRef_.getSampleRate();
 
     return snap;
@@ -595,6 +597,8 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
 
     // 恢复工程设置
     processorRef_.setBpm(snapshot.settings.bpm);
+    processorRef_.setTimeSignature(snapshot.settings.timeSignatureNumerator,
+                                   snapshot.settings.timeSignatureDenominator);
 
     // Rehydrate CRS derived truth from restored owner state
     for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)

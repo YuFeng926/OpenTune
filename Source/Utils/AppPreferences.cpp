@@ -27,6 +27,7 @@ constexpr const char* kSharedSnapEnabledKey = "shared.snap.enabled";
 constexpr const char* kSharedSnapModeKey = "shared.snap.mode";
 constexpr const char* kSharedTrackColorModeKey = "shared.trackColor.mode";
 constexpr const char* kSharedLightPitchCorrectionEnabledKey = "shared.render.lightPitchCorrection";
+constexpr const char* kSharedTimelineDisplayModeKey = "shared.timeline.displayMode";
 
 constexpr std::array<const char*, static_cast<size_t>(KeyShortcutConfig::ShortcutId::Count)> kShortcutStorageKeys{{
     "shared.shortcuts.playPause",
@@ -329,6 +330,11 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
         properties.getIntValue(kSharedSnapModeKey, static_cast<int>(SnapSettings::Mode::Off)));
     state.shared.trackColorMode = trackColorModeFromToken(
         properties.getValue(kSharedTrackColorModeKey, toTrackColorModeToken(state.shared.trackColorMode)));
+    {
+        const int modeVal = properties.getIntValue(kSharedTimelineDisplayModeKey, static_cast<int>(TimelineDisplayMode::Time));
+        state.shared.timelineDisplayMode = (modeVal == static_cast<int>(TimelineDisplayMode::Bars))
+            ? TimelineDisplayMode::Bars : TimelineDisplayMode::Time;
+    }
 
     state.shared.shortcuts = decodeShortcutSettings(properties);
     state.standalone.mouseTrailTheme = mouseTrailThemeFromToken(
@@ -372,6 +378,7 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedSnapEnabledKey, state.shared.snap.enabled);
     properties.setValue(kSharedSnapModeKey, static_cast<int>(state.shared.snap.mode));
     properties.setValue(kSharedTrackColorModeKey, toTrackColorModeToken(state.shared.trackColorMode));
+    properties.setValue(kSharedTimelineDisplayModeKey, static_cast<int>(state.shared.timelineDisplayMode));
     properties.setValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme));
 
     juce::StringArray recentPaths;
@@ -601,6 +608,19 @@ void AppPreferences::setLightPitchCorrectionEnabled(bool enabled)
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.lightPitchCorrectionEnabled = enabled;
     saveLocked();
+}
+
+void AppPreferences::setTimelineDisplayMode(TimelineDisplayMode mode)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.timelineDisplayMode = mode;
+    saveLocked();
+}
+
+TimelineDisplayMode AppPreferences::getTimelineDisplayMode() const
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return state_.shared.timelineDisplayMode;
 }
 
 } // namespace OpenTune

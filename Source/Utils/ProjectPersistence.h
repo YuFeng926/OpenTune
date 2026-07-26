@@ -54,7 +54,7 @@ public:
     // 常量
     // ============================================================================
 
-    static constexpr int kCurrentProjectFormatVersion = 1;
+    static constexpr int kCurrentProjectFormatVersion = 2; // v2 adds time signature to ProjectSettings
     static constexpr const char* kRootNodeName = "OpenTuneProject";
     static constexpr const char* kProjectFormatVersionAttr = "projectFormatVersion";
     static constexpr const char* kAppVersionAttr = "appVersion";

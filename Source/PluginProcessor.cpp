@@ -577,7 +577,7 @@ constexpr int kProcessorStateVersion = 9; // v9 removes persisted Note selection
 // v5 projects load with auto-seeded identity TimeGrid (output==source).
 // Processor state v7 adds per-handle confidence. v6 reads default confidence=Default.
 constexpr uint32_t kStandaloneSettingsMagic = 0x4F545353; // OTSS (OpenTune Standalone Settings)
-constexpr int kStandaloneSettingsVersion = 1;
+constexpr int kStandaloneSettingsVersion = 2; // v2 adds canonical time signature
 
 // --- Serialization helpers (full state) ---
 // Compiled unconditionally into the shared OpenTune lib; getStateInformation /
@@ -1580,6 +1580,23 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // 1) Update processor-owned canonical transport truth first (no-op if nullopt).
     playHeadState_.update(hostPosOpt);
 
+    // 2) Publish presentation projection anchor (before any early return).
+    //    VST3/ARA: only when the host supplied timeInSeconds in this block.
+    //    Standalone: publish later, after reading currentPosSeconds/blockDuration.
+    {
+        const double nowClock = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        const double blockDur = (numSamples > 0)
+            ? static_cast<double>(numSamples) / currentSampleRate_.load(std::memory_order_relaxed)
+            : 0.0;
+        const uint64_t epoch = playHeadState_.presentationEpoch.load(std::memory_order_relaxed);
+
+        if (hostPosOpt.hasValue())
+        {
+            if (const auto timeSec = hostPosOpt->getTimeInSeconds())
+                playHeadState_.presentationProjection.publish(*timeSec, nowClock, *timeSec + blockDur, epoch);
+        }
+    }
+
     // Zero-data block: PositionInfo was observed and PlayHeadState updated above.
     // Skip ARA / capture / renderer / standalone audio paths entirely — zero-data
     // must not enter capture/renderer, but the host transport truth is still
@@ -1658,6 +1675,18 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const double blockDurationSeconds = static_cast<double>(numSamples) / deviceSampleRate;
     const double currentPosSeconds = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
     const double blockEndSeconds = currentPosSeconds + blockDurationSeconds;
+
+    // Capture the epoch at block entry. Used at block-end to guard the CAS:
+    // a pause that happened during this block bumps the epoch, so the CAS
+    // below will see a mismatch and skip, preserving the pause position.
+    const uint64_t blockEpoch = playHeadState_.presentationEpoch.load(std::memory_order_acquire);
+
+    // Publish Standalone projection anchor (tagged with the block's epoch)
+    {
+        const double nowClock = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        playHeadState_.presentationProjection.publish(currentPosSeconds, nowClock, blockEndSeconds, blockEpoch);
+    }
+
     const int64_t blockStartSample = TimeCoordinate::secondsToSamples(currentPosSeconds, deviceSampleRate);
     const int64_t blockEndSample = blockStartSample + static_cast<int64_t>(numSamples);
 
@@ -1817,7 +1846,7 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         
         if (fadeCount >= fadeTotal) {
             isFadingOut_.store(false);
-            playHeadState_.isPlaying.store(false, std::memory_order_relaxed);
+            playHeadState_.isPlaying.store(false, std::memory_order_release);
             AudioThreadLogEvent evt;
             evt.type = AudioThreadLogEvent::Type::FadeOutComplete;
             logEventData_ = evt;
@@ -1833,8 +1862,18 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
 
-    // Standalone transport advance: write back to processor-owned state.
-    playHeadState_.timeInSeconds.store(blockEndSeconds, std::memory_order_relaxed);
+    // Standalone transport advance — only advance when play was not paused
+    // during this block. The blockEpoch snapshotted at entry is compared against
+    // the live presentationEpoch: if a setPlaying(false) call on another thread
+    // bumped the epoch during this block, the CAS is skipped and the pause
+    // position is preserved. Acquire-load of the live epoch pairs with the
+    // acq_rel epoch bump in setPlaying(false).
+    if (playHeadState_.isPlaying.load(std::memory_order_relaxed)
+        && playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch)
+    {
+        double expected = currentPosSeconds;
+        playHeadState_.timeInSeconds.compare_exchange_strong(expected, blockEndSeconds, std::memory_order_relaxed);
+    }
 }
 
 OpenTuneAudioProcessor::HostTransportSnapshot OpenTuneAudioProcessor::getHostTransportSnapshot() const
@@ -1950,6 +1989,8 @@ void OpenTuneAudioProcessor::getStateInformation(juce::MemoryBlock& destData) {
         output.writeInt(static_cast<int>(kStandaloneSettingsMagic));
         output.writeInt(kStandaloneSettingsVersion);
         output.writeDouble(getBpm());
+        output.writeInt(getTimeSigNumerator());
+        output.writeInt(getTimeSigDenominator());
         output.writeDouble(zoomLevel_);
         output.writeInt(trackHeight_);
         return;
@@ -2029,10 +2070,12 @@ void OpenTuneAudioProcessor::setStateInformation(const void* data, int sizeInByt
     // Standalone settings-only payload
     if (magic == static_cast<int>(kStandaloneSettingsMagic)) {
         if (version != kStandaloneSettingsVersion) {
-            AppLogger::warn("StateRestore: unsupported standalone settings version");
+            AppLogger::warn("StateRestore: unsupported standalone settings version "
+                + juce::String(version) + " (expect " + juce::String(kStandaloneSettingsVersion) + ")");
             return;
         }
         setBpm(input.readDouble());
+        setTimeSignature(input.readInt(), input.readInt());
         zoomLevel_ = input.readDouble();
         trackHeight_ = input.readInt();
         return;
@@ -3074,15 +3117,29 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
 
 void OpenTuneAudioProcessor::setPlaying(bool playing) {
     if (playing) {
+        // Play: bump epoch first (acq_rel full barrier) so that any stale
+        // projection anchor is invalidated before isPlaying becomes visible.
+        // isPlaying release forms the synchronizes-with pair for
+        // getPresentedPositionAt's acquire.
+        playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
         playStartPosition_.store(playHeadState_.timeInSeconds.load(std::memory_order_relaxed));
         isFadingOut_.store(false);
-        playHeadState_.isPlaying.store(true, std::memory_order_relaxed);
+        playHeadState_.isPlaying.store(true, std::memory_order_release);
         AppLogger::log("Playback: start");
     } else {
-        // Direct canonical write: UI reads isPlaying immediately as false. Fade-out
-        // machinery is retained so the current block still ramps to silence.
+        // Pause (setPlaying(false)) — precise ordering:
+        //   1) Capture projected position from the current UI view of the playhead.
+        //   2) Invalidate the block epoch (acq_rel full barrier) so any in-flight
+        //      processBlock tail cannot CAS its blockEnd over the pause position.
+        //   3) Write the canonical pause position.
+        //   4) isPlaying.store(false, release): UI acquire sees false → pause
+        //      position is visible. The release on isPlaying (not the epoch)
+        //      orders timeInSeconds and isPlaying to the reader.
+        const double presentedPos = playHeadState_.getPresentedPositionSeconds();
         const bool wasPlaying = playHeadState_.isPlaying.load(std::memory_order_relaxed);
-        playHeadState_.isPlaying.store(false, std::memory_order_relaxed);
+        playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
+        playHeadState_.timeInSeconds.store(presentedPos, std::memory_order_relaxed);
+        playHeadState_.isPlaying.store(false, std::memory_order_release);
         if (wasPlaying) {
             isFadingOut_.store(true);
             fadeOutSampleCount_.store(0);
@@ -3096,12 +3153,36 @@ void OpenTuneAudioProcessor::setLoopEnabled(bool enabled) {
 }
 
 void OpenTuneAudioProcessor::setPosition(double seconds) {
+    // Write canonical position then release the epoch bump to make it visible.
+    // The release ensures timeInSeconds is ordered-before the epoch increment
+    // so any reader that acquires the new epoch also sees the new position.
     playHeadState_.timeInSeconds.store(seconds, std::memory_order_relaxed);
+    playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_release);
 }
 
+// ============================================================================
+// Canonical Standalone BPM / Time Signature setters
+// These write ONLY the processor-owned canonical state. They never touch host
+// transport atomics (hostTransportBpm_, hostTransportTimeSignatureNumerator_,
+// hostTransportTimeSignatureDenominator_) — those are written exclusively by
+// updateHostTransportSnapshot() from the host PlayHead PositionInfo.
+// ============================================================================
+
 void OpenTuneAudioProcessor::setBpm(double bpm) {
-    bpm_ = bpm;
-    hostTransportBpm_.store(bpm, std::memory_order_relaxed);
+    bpm_ = juce::jlimit(1.0, 999.0, bpm);
+}
+
+void OpenTuneAudioProcessor::setTimeSignature(int numerator, int denominator) {
+    // Denominator must be one of the valid powers-of-two from whole-note to 64th.
+    // Validate denominator FIRST; write numerator+denominator atomically
+    // to avoid numerator-only change on invalid denominator.
+    switch (denominator) {
+        case 1: case 2: case 4: case 8: case 16: case 32: case 64:
+            timeSigNumerator_ = juce::jlimit(1, 64, numerator);
+            timeSigDenominator_ = denominator;
+            break;
+        default: break; // reject invalid denominator, keep previous canonical pair
+    }
 }
 
 void OpenTuneAudioProcessor::setZoomLevel(double zoom) {

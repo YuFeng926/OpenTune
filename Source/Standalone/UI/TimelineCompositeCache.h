@@ -5,34 +5,30 @@
 #include <optional>
 #include <unordered_map>
 #include <cstdint>
+#include "../../Utils/TimelineDisplayMode.h"
 
 namespace OpenTune {
 
-struct GeometryState {
-    float minMidi = 0.0f;
-    float maxMidi = 127.0f;
-    float pixelsPerSemitone = 0.0f;
-    int trackHeight = 0;
-
-    bool operator==(const GeometryState&) const;
-};
-
-struct GenerationSignature {
+// Background-plane generation parameters (BPM/time sig/display mode/theme only affect grid/lanes)
+struct BackgroundGenerationSignature {
     double pixelsPerSecond = 0.0;
-    int64_t dpiMilli = 1000;            // round(desktop scale factor * 1000)
-    GeometryState geometry;
+    int64_t dpiMilli = 1000;
+    int trackHeight = 0;
+    int visibleTrackCount = 2;
     int themeId = 0;
-    int laneStyle = 0;
-    int timeUnit = 0;
+    TimelineDisplayMode displayMode = TimelineDisplayMode::Time;
     double tempo = 120.0;
     int timeSigNumerator = 4;
     int timeSigDenominator = 4;
-    uint64_t contentRevision = 0;
-    bool showOriginalF0 = true;
-    bool showCorrectedF0 = true;
-    bool showUnvoicedFrames = false;
 
-    bool operator==(const GenerationSignature&) const;
+    bool operator==(const BackgroundGenerationSignature&) const;
+};
+
+// Foreground-plane generation parameters (content revision only affects clips/waveforms)
+struct ForegroundGenerationSignature {
+    uint64_t contentRevision = 0;
+
+    bool operator==(const ForegroundGenerationSignature&) const;
 };
 
 class TimelineCompositeCache {
@@ -61,12 +57,12 @@ public:
     using TileBuilder = std::function<void(juce::Graphics&, juce::Rectangle<int>, TileKey)>;
 
     void prepare(
-        const GenerationSignature& generation,
+        const BackgroundGenerationSignature& bgSig,
+        const ForegroundGenerationSignature& fgSig,
         int64_t firstTimeTile, int64_t lastTimeTile,
         int firstVertRow, int lastVertRow,
         TileBuilder backgroundBuilder,
-        TileBuilder foregroundBuilder,
-        bool allocateForeground = true);
+        TileBuilder foregroundBuilder);
 
     void removeTilesInTimeRange(int64_t firstTimeTile, int64_t lastTimeTile,
                                  int firstVertRow, int lastVertRow);
@@ -76,7 +72,8 @@ public:
     size_t getTileCount() const noexcept { return tiles_.size(); }
 
 private:
-    std::optional<GenerationSignature> generation_;
+    std::optional<BackgroundGenerationSignature> bgGen_;
+    std::optional<ForegroundGenerationSignature> fgGen_;
     std::unordered_map<TileKey, TileEntry, TileKeyHash> tiles_;
 };
 

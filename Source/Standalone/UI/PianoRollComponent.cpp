@@ -64,25 +64,10 @@ void PianoRollComponent::initializeUIComponents() {
     addAndMakeVisible(scrollModeToggleButton_);
     scrollModeToggleButton_.setTooltip(LOC(kTooltipScrollMode));
 
-    timeUnitToggleButton_.setButtonText("Time");
-    timeUnitToggleButton_.setFontHeight(11.0f);
-    timeUnitToggleButton_.onClick = [this] {
-        if (timeUnit_ == TimeUnit::Seconds) {
-            setTimeUnit(TimeUnit::Bars);
-            timeUnitToggleButton_.setButtonText("BPM");
-        } else {
-            setTimeUnit(TimeUnit::Seconds);
-            timeUnitToggleButton_.setButtonText("Time");
-        }
-    };
-    addAndMakeVisible(timeUnitToggleButton_);
-    timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
-
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
         this, [this](double timestampSec) { onScrollVBlankCallback(timestampSec); });
 
     scrollModeToggleButton_.toFront(false);
-    timeUnitToggleButton_.toFront(false);
 }
 
 
@@ -1342,6 +1327,16 @@ void PianoRollComponent::paint(juce::Graphics& g)
         recordRenderProbe(RenderProbePoint::VBlankToRootPaint, paintStartMs - lastVBlankMs_);
 }
 
+void PianoRollComponent::invalidateTimeAxisStaticSurface()
+{
+    // Static surface 已可用、非全局脏、非缩放预览 → 增量栅格时间轴矩形
+    if (!zoomPreviewActive_ && staticSurface_.isValid() && !staticDirty_)
+        rasterizeStatic(timeAxisRect());
+    else
+        staticDirty_ = true;
+    repaint(timeAxisRect());
+}
+
 void PianoRollComponent::rasterizeDirtySurfaces()
 {
     if (zoomPreviewActive_) return;  // 缩放预览期间保留 dirty，不栅格
@@ -1453,8 +1448,10 @@ void PianoRollComponent::drawRuler(juce::Graphics& g, const ViewState& view, juc
     RenderParams rp;
     rp.visibleStartSeconds = visibleStart; rp.visibleEndSeconds = visibleEnd;
     rp.pixelsPerSecond = pps;
-    rp.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
+    rp.displayMode = displayMode_;
     rp.tempo = bpm_;
+    rp.timeSigNumerator = timeSigNum_;
+    rp.timeSigDenominator = timeSigDenom_;
     rp.themeId = static_cast<int>(UIColors::currentThemeId());
     rp.pixelsPerSemitone = 0.0f; rp.worldTopY = 0;
     rp.rulerHeight = rulerHeight_; rp.laneStyle = 0;
@@ -1483,8 +1480,10 @@ void PianoRollComponent::drawPitchBackground(juce::Graphics& g, const ViewState&
 
     RenderParams lp;
     lp.visibleStartSeconds = visibleStart; lp.visibleEndSeconds = visibleEnd;
-    lp.pixelsPerSecond = pps; lp.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
+    lp.pixelsPerSecond = pps; lp.displayMode = displayMode_;
     lp.tempo = bpm_;
+    lp.timeSigNumerator = timeSigNum_;
+    lp.timeSigDenominator = timeSigDenom_;
     lp.themeId = static_cast<int>(UIColors::currentThemeId());
     lp.pixelsPerSemitone = view.pixelsPerSemitone; lp.worldTopY = vOrigin;
     lp.rulerHeight = 0; lp.laneStyle = encodeLaneStyle(showLanes_, scaleRootNote_, scaleType_);
@@ -2197,9 +2196,6 @@ void PianoRollComponent::resized() {
     int currentX = getWidth() - spacing - btnW;
     
     scrollModeToggleButton_.setBounds(currentX, 5, btnW, btnH);
-    currentX -= (btnW + spacing);
-    timeUnitToggleButton_.setBounds(currentX, 5, btnW, btnH);
-    timeUnitToggleButton_.toFront(false);
     scrollModeToggleButton_.toFront(false);
 
     staticDirty_ = true;
@@ -2689,7 +2685,7 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     }
 
     // 解 pending seek
-    const double currentPlayheadTime = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
+    const double currentPlayheadTime = playHeadState_.getPresentedPositionSeconds();
     double playheadTime = currentPlayheadTime;
     if (pendingSeekTime_ >= 0.0) {
         const auto hostRevision = playHeadState_.hostPositionRevision.load(std::memory_order_acquire);
@@ -2898,27 +2894,22 @@ void PianoRollComponent::setShowCorrectedF0(bool show) {
 }
 
 void PianoRollComponent::setBpm(double bpm) {
-    bpm_ = juce::jlimit(60.0, 240.0, bpm);
-    staticDirty_ = true;
-    rasterizeDirtySurfaces();
-    repaint();
+    if (bpm_ == bpm) return;
+    bpm_ = bpm;
+    invalidateTimeAxisStaticSurface();
 }
 
 void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
-    if (numerator <= 0 || denominator <= 0) return;
+    if (timeSigNum_ == numerator && timeSigDenom_ == denominator) return;
     timeSigNum_ = numerator;
     timeSigDenom_ = denominator;
-    staticDirty_ = true;
-    rasterizeDirtySurfaces();
-    repaint();
+    invalidateTimeAxisStaticSurface();
 }
 
-void PianoRollComponent::setTimeUnit(TimeUnit unit) {
-    if (timeUnit_ == unit) return;
-    timeUnit_ = unit;
-    staticDirty_ = true;
-    rasterizeDirtySurfaces();
-    repaint();
+void PianoRollComponent::setTimelineDisplayMode(TimelineDisplayMode mode) {
+    if (displayMode_ == mode) return;
+    displayMode_ = mode;
+    invalidateTimeAxisStaticSurface();
 }
 
 void PianoRollComponent::addListener(Listener* listener) {
@@ -3652,7 +3643,7 @@ void PianoRollComponent::updateScrollBars() {
         scrollbarEndSeconds,
         camera_,
         visibleWidth,
-        pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : playHeadState_.timeInSeconds.load(std::memory_order_relaxed));
+        pendingSeekTime_ >= 0.0 ? pendingSeekTime_ : playHeadState_.getPresentedPositionSeconds());
 
     horizontalScrollBar_.setRangeLimits(
         range.absoluteStartSeconds,

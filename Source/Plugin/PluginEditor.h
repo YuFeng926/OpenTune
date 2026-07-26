@@ -30,6 +30,7 @@
 #include "UI/MenuBarComponent.h"
 #include "UI/TransportBarComponent.h"
 #include "UI/TopBarComponent.h"
+#include "Utils/TimelineDisplayMode.h"
 #include "UI/OpenTuneLookAndFeel.h"
 #include "UI/OpenTuneTooltipWindow.h"
 #include "UI/AuroraLookAndFeel.h"
@@ -89,9 +90,11 @@ public:
     void stopRequested() override;
     void loopToggled(bool enabled) override;
     void bpmChanged(double newBpm) override;
+    void timeSignatureChanged(int numerator, int denominator) override;
     void scaleChanged(int rootNote, int scaleType) override;
     void viewToggled(bool workspaceView) override;
     void recordRequested() override;
+    void timelineDisplayModeChanged(TimelineDisplayMode mode) override;
 
     bool playheadPositionChangeRequested(double timeSeconds) override;
     void playPauseToggleRequested() override;
@@ -161,6 +164,7 @@ private:
     double lastSyncedBpm_ = 120.0;
     int lastSyncedTimeSigNum_ = 4;
     int lastSyncedTimeSigDenom_ = 4;
+    TimelineDisplayMode timelineDisplayMode_ = TimelineDisplayMode::Time;
 
     bool showingSingleNoteParams_{false};
     bool initialFocusGrabbed_{false};

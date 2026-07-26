@@ -395,14 +395,14 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     pianoRoll_.setShowWaveform(processorRef_.getShowWaveform());
     pianoRoll_.setShowLanes(processorRef_.getShowLanes());
     
-    // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
+    // PianoRoll and ArrangementView read presented position from processor-owned
+    // PlayHeadState via getPresentedPositionSeconds(); no second forwarding path needed.
     
     addAndMakeVisible(pianoRoll_);
     pianoRoll_.setVisible(!isWorkspaceView_);
     arrangementView_.setVisible(isWorkspaceView_);
     
-    // Each view initializes its own camera from TimelineViewportPolicy independently.
-    // No shared camera echo — playback VBlank is per-view.
+    // Each view drives its own camera from presented position; no shared camera echo.
     
     // Add AutoRenderOverlay (initially hidden, covers PianoRoll during AUTO)
     addAndMakeVisible(autoRenderOverlay_);
@@ -447,7 +447,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 // Playhead render via VBlank overlay; main editor heartbeat reduced to 30Hz to ease message thread pressure
     startTimerHz(kHeartbeatHzIdle);
 
-// Playhead render via VBlank overlay; main editor heartbeat reduced to 30Hz
+// Playhead position read from shared projection — each component calls getPresentedPositionSeconds()
 
     // Hide the standalone "Options" button and Mute Warning if running in standalone mode
     juce::Timer::callAfterDelay(50, [safeThis = juce::Component::SafePointer<OpenTuneAudioProcessorEditor>(this)]() {
@@ -959,24 +959,37 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
     }
 
-    // Update playhead position from processor
+// Update playhead position from processor (presented position via shared projection)
     double currentPositionSeconds = processorRef_.getPosition();
     double sampleRate = processorRef_.getSampleRate();
 
     const double bpm = processorRef_.getBpm();
+    const int timeSigNum = processorRef_.getTimeSigNumerator();
+    const int timeSigDenom = processorRef_.getTimeSigDenominator();
+
+    // Sync BPM from processor to UI (processor is canonical)
     if (bpm > 0.0 && std::abs(bpm - lastSyncedBpm_) > 0.001) {
         transportBar_.setBpm(bpm);
         pianoRoll_.setBpm(bpm);
         lastSyncedBpm_ = bpm;
     }
 
-    const int timeSigNum = processorRef_.getTimeSigNumerator();
-    const int timeSigDenom = processorRef_.getTimeSigDenominator();
+    // Sync time signature from processor to UI (processor is canonical)
     if (timeSigNum > 0 && timeSigDenom > 0
         && (timeSigNum != lastSyncedTimeSigNum_ || timeSigDenom != lastSyncedTimeSigDenom_)) {
+        transportBar_.setTimeSignature(timeSigNum, timeSigDenom);
         pianoRoll_.setTimeSignature(timeSigNum, timeSigDenom);
         lastSyncedTimeSigNum_ = timeSigNum;
         lastSyncedTimeSigDenom_ = timeSigDenom;
+    }
+
+    // Sync timeline display mode from AppPreferences
+    const auto prefMode = appPreferences_.getTimelineDisplayMode();
+    if (prefMode != timelineDisplayMode_) {
+        timelineDisplayMode_ = prefMode;
+        transportBar_.setTimelineDisplayMode(timelineDisplayMode_);
+        pianoRoll_.setTimelineDisplayMode(timelineDisplayMode_);
+        arrangementView_.setTimelineDisplayMode(timelineDisplayMode_);
     }
     
     if (allowSecondaryRefresh && sampleRate > 0.0) {
@@ -1050,7 +1063,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         lastPianoRollPitchRevision_ = currentPitchRevision;
     }
 
-// Playhead position read by each component directly from processor-owned PlayHeadState
+// Playhead position: each component reads presented position from PlayHeadState projection
     transportBar_.setPositionSeconds(currentPositionSeconds);
 
     const RenderStatusSnapshot statusSnapshot = getRenderStatusSnapshot();
@@ -2389,8 +2402,36 @@ void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
 
 void OpenTuneAudioProcessorEditor::bpmChanged(double newBpm)
 {
+    // Write raw value to processor (canonical truth)
     processorRef_.setBpm(newBpm);
-    pianoRoll_.setBpm(newBpm);  // Update piano roll to redraw time grid
+
+    // Read back canonical value from processor
+    double canonicalBpm = processorRef_.getBpm();
+    lastSyncedBpm_ = canonicalBpm;
+
+    // Sync to UI
+    transportBar_.setBpm(canonicalBpm);
+    pianoRoll_.setBpm(canonicalBpm);
+    // ArrangementView reads from processor directly
+
+    projectSession_.markDirty();
+}
+
+void OpenTuneAudioProcessorEditor::timeSignatureChanged(int numerator, int denominator)
+{
+    // Write raw value to processor (canonical truth)
+    processorRef_.setTimeSignature(numerator, denominator);
+
+    // Read back canonical value from processor
+    int canonicalNum = processorRef_.getTimeSigNumerator();
+    int canonicalDenom = processorRef_.getTimeSigDenominator();
+    lastSyncedTimeSigNum_ = canonicalNum;
+    lastSyncedTimeSigDenom_ = canonicalDenom;
+
+    // Sync to UI
+    transportBar_.setTimeSignature(canonicalNum, canonicalDenom);
+    pianoRoll_.setTimeSignature(canonicalNum, canonicalDenom);
+    // ArrangementView reads from processor directly
 
     projectSession_.markDirty();
 }
@@ -2431,6 +2472,15 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
         + " scale=" + juce::String(newScaleType));
 
     projectSession_.markDirty();
+}
+
+void OpenTuneAudioProcessorEditor::timelineDisplayModeChanged(TimelineDisplayMode mode)
+{
+    timelineDisplayMode_ = mode;
+    appPreferences_.setTimelineDisplayMode(mode);
+    transportBar_.setTimelineDisplayMode(mode);
+    pianoRoll_.setTimelineDisplayMode(mode);
+    arrangementView_.setTimelineDisplayMode(mode);
 }
 
 void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)

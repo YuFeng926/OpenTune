@@ -51,6 +51,7 @@
 #include "WaveformMipmap.h"
 #include "../../Utils/UndoManager.h"
 #include "../../Content/ContentEditCommands.h"
+#include "../../Utils/TimelineDisplayMode.h"
 namespace OpenTune {
 
 class OpenTuneAudioProcessor;
@@ -98,12 +99,6 @@ public:
         virtual void undoRequested() {}
         virtual void redoRequested() {}
         virtual void currentToolChanged(ToolId tool) { (void)tool; }
-    };
-
-    enum class TimeUnit
-    {
-        Seconds,
-        Bars
     };
 
     enum class ScrollMode
@@ -159,8 +154,8 @@ public:
     void setInferenceActive(bool active);
     void setBpm(double bpm);
     void setTimeSignature(int numerator, int denominator);
-    void setTimeUnit(TimeUnit unit);
-    TimeUnit getTimeUnit() const { return timeUnit_; }
+    void setTimelineDisplayMode(TimelineDisplayMode mode);
+    TimelineDisplayMode getTimelineDisplayMode() const { return displayMode_; }
     void setScrollMode(ScrollMode mode) {
         if (scrollMode_ == mode) return;
         scrollMode_ = mode;
@@ -277,6 +272,7 @@ private:
     static constexpr int kZoomDeadlineTicks = 10;  // ~400ms @ 25Hz 心跳
 
     // ── 表面管理 ──────────────────────────────────────────────
+    void invalidateTimeAxisStaticSurface();
     void rasterizeDirtySurfaces();
     void rasterizeStatic(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
     void rasterizeContent(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt);
@@ -334,7 +330,6 @@ private:
     juce::ScrollBar horizontalScrollBar_{ false };
     juce::ScrollBar verticalScrollBar_{ true };
     SmallButton scrollModeToggleButton_;
-    SmallButton timeUnitToggleButton_;
 
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseMove(const juce::MouseEvent& e) override;
@@ -480,7 +475,7 @@ private:
     double bpm_ = 120.0;
     int timeSigNum_ = 4;
     int timeSigDenom_ = 4;
-    TimeUnit timeUnit_ = TimeUnit::Seconds;
+    TimelineDisplayMode displayMode_ = TimelineDisplayMode::Time;
 
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer_;
     double audioBufferSampleRate_ = static_cast<double>(kAudioSampleRate);

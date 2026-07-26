@@ -112,11 +112,19 @@ Result<ProjectSnapshot> ProjectPersistence::fromValueTree(const juce::ValueTree&
     snapshot.header.createdAt = getOptionalProperty(tree, "createdAt", "");
     snapshot.header.lastSavedAt = getOptionalProperty(tree, "lastSavedAt", "");
 
-    // ProjectSettings
+    // ProjectSettings — current format requires the node and mandatory fields
     auto settingsTree = tree.getChildWithName("ProjectSettings");
-    if (settingsTree.isValid()) {
-        snapshot.settings = settingsFromValueTree(settingsTree);
+    if (!settingsTree.isValid()) {
+        return Result<ProjectSnapshot>::failure(
+            Error::fromCode(ErrorCode::InvalidParameter,
+                "Project is missing required ProjectSettings node"));
     }
+    if (!settingsTree.hasProperty("timeSignatureNumerator") || !settingsTree.hasProperty("timeSignatureDenominator")) {
+        return Result<ProjectSnapshot>::failure(
+            Error::fromCode(ErrorCode::InvalidParameter,
+                "ProjectSettings is missing required timeSignatureNumerator or timeSignatureDenominator"));
+    }
+    snapshot.settings = settingsFromValueTree(settingsTree);
 
     // MediaPool → Sources
     auto mediaPool = tree.getChildWithName("MediaPool");
@@ -206,6 +214,8 @@ juce::ValueTree ProjectPersistence::settingsToValueTree(const ProjectSettings& s
     juce::ValueTree tree("ProjectSettings");
     tree.setProperty("bpm", settings.bpm, nullptr);
     tree.setProperty("sampleRate", settings.sampleRate, nullptr);
+    tree.setProperty("timeSignatureNumerator", settings.timeSignatureNumerator, nullptr);
+    tree.setProperty("timeSignatureDenominator", settings.timeSignatureDenominator, nullptr);
     tree.setProperty("selectedTrackId", settings.selectedTrackId, nullptr);
     tree.setProperty("selectedPlacementId", static_cast<int64_t>(settings.selectedPlacementId), nullptr);
     tree.setProperty("activeTrackId", settings.activeTrackId, nullptr);
@@ -222,6 +232,8 @@ ProjectSettings ProjectPersistence::settingsFromValueTree(const juce::ValueTree&
     ProjectSettings s;
     s.bpm = tree.getProperty("bpm", 120.0);
     s.sampleRate = tree.getProperty("sampleRate", 44100.0);
+    s.timeSignatureNumerator = static_cast<int>(tree.getProperty("timeSignatureNumerator", 4));
+    s.timeSignatureDenominator = static_cast<int>(tree.getProperty("timeSignatureDenominator", 4));
     s.selectedTrackId = static_cast<int>(tree.getProperty("selectedTrackId", 0));
     s.selectedPlacementId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("selectedPlacementId", 0)));
     s.activeTrackId = static_cast<int>(tree.getProperty("activeTrackId", 0));

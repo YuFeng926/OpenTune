@@ -450,11 +450,8 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     : processor_(processor)
     , playHeadState_(processor.getPlayHeadState())
 {
-    // Initial playhead presentation comes straight from processor-owned state.
-    playheadTimeForPaint_ = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
-    lastContextBpm_ = processor_.getBpm();
-    lastContextTimeSigNum_ = processor_.getTimeSigNumerator();
-    lastContextTimeSigDenom_ = processor_.getTimeSigDenominator();
+    // Initial playhead presentation comes from presented position.
+    playheadTimeForPaint_ = playHeadState_.getPresentedPositionSeconds();
 
     setWantsKeyboardFocus(true);
 
@@ -488,24 +485,6 @@ ArrangementViewComponent::ArrangementViewComponent(OpenTuneAudioProcessor& proce
     addAndMakeVisible(scrollModeToggleButton_);
     scrollModeToggleButton_.setTooltip(LOC(kTooltipScrollMode));
 
-    timeUnitToggleButton_.setButtonText("Time");
-    timeUnitToggleButton_.setLookAndFeel(&smallButtonLookAndFeel_);
-    timeUnitToggleButton_.onClick = [this] {
-        if (timeUnit_ == TimeUnit::Seconds) {
-            timeUnit_ = TimeUnit::Bars;
-            timeUnitToggleButton_.setButtonText("BPM");
-        } else {
-            timeUnit_ = TimeUnit::Seconds;
-            timeUnitToggleButton_.setButtonText("Time");
-        }
-        rebuildTimelineCoverage();
-        repaint();
-        };
-    timeUnitToggleButton_.setColour(juce::TextButton::buttonColourId, UIColors::backgroundLight);
-    timeUnitToggleButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
-    addAndMakeVisible(timeUnitToggleButton_);
-    timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
-
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
         this, [this](double timestampSec) { onScrollVBlankCallback(timestampSec); });
 }
@@ -514,7 +493,6 @@ ArrangementViewComponent::~ArrangementViewComponent()
 {
     scrollVBlankAttachment_.reset();
     scrollModeToggleButton_.setLookAndFeel(nullptr);
-    timeUnitToggleButton_.setLookAndFeel(nullptr);
     horizontalScrollBar_.removeListener(this);
     verticalScrollBar_.removeListener(this);
 }
@@ -588,8 +566,12 @@ void ArrangementViewComponent::surfaceRebuildFromReadyTiles(int64_t firstTimeTil
             if (const auto* entry = compositeCache_.findTile(key)) {
                 const int destX = static_cast<int>(tt * TimelineCompositeCache::kTileWidthPx - surfaceOriginPx_);
                 const float destY = static_cast<float>(vr * TimelineCompositeCache::kWorldTileHeight - visibleTopY);
-                g.drawImageTransformed(entry->background,
-                    juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
+                if (entry->background.isValid())
+                    g.drawImageTransformed(entry->background,
+                        juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
+                if (entry->foreground.isValid())
+                    g.drawImageTransformed(entry->foreground,
+                        juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
             }
         }
     }
@@ -643,8 +625,12 @@ void ArrangementViewComponent::surfaceScrollAndFillExposed(int64_t newOriginPx, 
             if (const auto* entry = compositeCache_.findTile(key)) {
                 const int destX = static_cast<int>(tt * TimelineCompositeCache::kTileWidthPx - newOriginPx);
                 const float destY = static_cast<float>(vr * TimelineCompositeCache::kWorldTileHeight - visibleTopY);
-                g.drawImageTransformed(entry->background,
-                    juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
+                if (entry->background.isValid())
+                    g.drawImageTransformed(entry->background,
+                        juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
+                if (entry->foreground.isValid())
+                    g.drawImageTransformed(entry->foreground,
+                        juce::AffineTransform::translation(static_cast<float>(destX), destY), false);
             }
         }
     }
@@ -672,7 +658,7 @@ void ArrangementViewComponent::rebuildTimelineCoverage()
         tileCoverageEndSeconds_ = std::ceil((visibleEnd + tileDuration) / tileDuration) * tileDuration;
     }
 
-    prepareCoverageCompositeTilesNew();
+    prepareCoverageCompositeTiles();
 
     const int64_t firstTimeTile = std::max<int64_t>(0,
         static_cast<int64_t>(std::floor(visibleStart / tileDuration)));
@@ -686,6 +672,15 @@ void ArrangementViewComponent::invalidateStableScene()
 {
     rebuildContentMetrics();
     updateScrollBars();
+    rebuildTimelineCoverage();
+    repaint();
+}
+
+void ArrangementViewComponent::setTimelineDisplayMode(TimelineDisplayMode mode)
+{
+    if (displayMode_ == mode) return;
+    displayMode_ = mode;
+    // Only background changed (grid + ruler), no metric rebuild needed
     rebuildTimelineCoverage();
     repaint();
 }
@@ -731,7 +726,7 @@ void ArrangementViewComponent::preparePlaybackCoverage()
     tileCoverageStartSeconds_ = std::max(0.0,
         std::floor((visibleStart - 2.0 * tileDuration) / tileDuration) * tileDuration);
     tileCoverageEndSeconds_ = std::ceil((visibleEnd + ahead) / tileDuration) * tileDuration;
-    prepareCoverageCompositeTilesNew();
+    prepareCoverageCompositeTiles();
     if (!viewportSurface_.isValid()) {
         const int64_t firstTimeTile = std::max<int64_t>(0,
             static_cast<int64_t>(std::floor(camera_.visibleStartSeconds / tileDuration)));
@@ -784,7 +779,7 @@ void ArrangementViewComponent::setVerticalScrollOffset(int offset)
     verticalScrollOffset_ = newOffset;
     verticalScrollBar_.setCurrentRangeStart(newOffset, juce::dontSendNotification);
 
-    prepareCoverageCompositeTilesNew();
+    prepareCoverageCompositeTiles();
     const double pps = camera_.pixelsPerSecond;
     const double tileDuration = TimelineCompositeCache::kTileWidthPx / pps;
     const int64_t firstTimeTile = std::max<int64_t>(0,
@@ -869,15 +864,12 @@ void ArrangementViewComponent::resized()
     int currentX = getWidth() - spacing - btnW;
     
     scrollModeToggleButton_.setBounds(currentX, 5, btnW, btnH);
-    currentX -= (btnW + spacing);
-    timeUnitToggleButton_.setBounds(currentX, 5, btnW, btnH);
 
     updateScrollBars();
     rebuildThemeBackdrop();
     rebuildTimelineCoverage();
     // Import drop preview highlight (transient, UI-only)
 
-    timeUnitToggleButton_.toFront(false);
     scrollModeToggleButton_.toFront(false);
     repaint();
 }
@@ -1013,32 +1005,32 @@ void ArrangementViewComponent::rebuildContentMetrics()
 }
 
 // ============================================================================
-// Composite cache pipeline (new)
+// Composite cache pipeline (new) — 双平面：background=轨道底色+网格，foreground=片段+波形
 // ============================================================================
 
-GenerationSignature ArrangementViewComponent::makeGenerationSignature() const
+BackgroundGenerationSignature ArrangementViewComponent::makeBackgroundSignature() const
 {
-    GenerationSignature sig;
+    BackgroundGenerationSignature sig;
     sig.pixelsPerSecond = camera_.pixelsPerSecond;
     sig.dpiMilli = static_cast<int64_t>(std::round(getDesktopScaleFactor() * 1000.0));
-
-    sig.geometry.minMidi = 0.0f;
-    sig.geometry.maxMidi = 127.0f;
-    sig.geometry.pixelsPerSemitone = 0.0f;
-    sig.geometry.trackHeight = processor_.getTrackHeight();
-
+    sig.trackHeight = processor_.getTrackHeight();
+    sig.visibleTrackCount = visibleTrackCount_;
     sig.themeId = static_cast<int>(UIColors::currentThemeId());
-    sig.laneStyle = 0;  // Arrangement 涓嶄娇鐢?lane style
-    sig.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
-    sig.tempo = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
-    sig.timeSigNumerator = lastContextTimeSigNum_ > 0 ? lastContextTimeSigNum_ : 4;
-    sig.timeSigDenominator = lastContextTimeSigDenom_ > 0 ? lastContextTimeSigDenom_ : 4;
-    sig.contentRevision = contentMetrics_.revision;
-
+    sig.displayMode = displayMode_;
+    sig.tempo = processor_.getBpm();
+    sig.timeSigNumerator = processor_.getTimeSigNumerator();
+    sig.timeSigDenominator = processor_.getTimeSigDenominator();
     return sig;
 }
 
-void ArrangementViewComponent::buildCompositeTile(
+ForegroundGenerationSignature ArrangementViewComponent::makeForegroundSignature() const
+{
+    ForegroundGenerationSignature sig;
+    sig.contentRevision = contentMetrics_.revision;
+    return sig;
+}
+
+void ArrangementViewComponent::buildCompositeBackground(
     juce::Graphics& g,
     juce::Rectangle<int> tileBounds,
     TimelineCompositeCache::TileKey key)
@@ -1052,7 +1044,7 @@ void ArrangementViewComponent::buildCompositeTile(
     const auto themeId = UIColors::currentThemeId();
     const int trackHeight = processor_.getTrackHeight();
 
-    // 1. Pattern layer: track lanes
+    // 1. Track lanes
     if (themeId == ThemeId::Aurora || themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
         const int visibleTracks = juce::jmax(1, visibleTrackCount_);
         const int firstTrack = std::max(0, worldTopY / trackHeight);
@@ -1082,8 +1074,10 @@ void ArrangementViewComponent::buildCompositeTile(
     gridParams.visibleStartSeconds = tileStartSec;
     gridParams.visibleEndSeconds = tileEndSec;
     gridParams.pixelsPerSecond = camera_.pixelsPerSecond;
-    gridParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
-    gridParams.tempo = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
+    gridParams.displayMode = displayMode_;
+    gridParams.tempo = processor_.getBpm();
+    gridParams.timeSigNumerator = processor_.getTimeSigNumerator();
+    gridParams.timeSigDenominator = processor_.getTimeSigDenominator();
     gridParams.themeId = static_cast<int>(themeId);
     gridParams.pixelsPerSemitone = 0.0f;
     gridParams.worldTopY = static_cast<float>(worldTopY);
@@ -1092,8 +1086,22 @@ void ArrangementViewComponent::buildCompositeTile(
     gridParams.viewportHeight = tileBounds.getHeight();
     gridParams.viewKind = "arrangement";
     TimelineLayerComposer::drawGridLines(g, gridParams);
+}
 
-    // 3. Content layer: clips
+void ArrangementViewComponent::buildCompositeForeground(
+    juce::Graphics& g,
+    juce::Rectangle<int> tileBounds,
+    TimelineCompositeCache::TileKey key)
+{
+    const double tileDuration = static_cast<double>(TimelineCompositeCache::kTileWidthPx)
+        / camera_.pixelsPerSecond;
+    const double tileStartSec = key.timeTile * tileDuration;
+    const double tileEndSec = tileStartSec + tileDuration;
+    const int worldTopY = key.vertRow * TimelineCompositeCache::kWorldTileHeight;
+
+    const int trackHeight = processor_.getTrackHeight();
+
+    // Content layer: clips + waveform
     const ArrangementVerticalWindow vwin{trackHeight, worldTopY, tileBounds.getHeight()};
     auto& arrangement = *processor_.getStandaloneArrangement();
     auto clips = collectVisibleArrangementClips(arrangement, tileStartSec, tileEndSec, vwin, camera_.pixelsPerSecond,
@@ -1101,10 +1109,11 @@ void ArrangementViewComponent::buildCompositeTile(
     paintHistoricalArrangementClips(g, clips, waveformMipmapCache_);
 }
 
-void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
+void ArrangementViewComponent::prepareCoverageCompositeTiles()
 {
-    const auto sig = makeGenerationSignature();
-    const double tileDuration = TimelineCompositeCache::kTileWidthPx / sig.pixelsPerSecond;
+    const auto bgSig = makeBackgroundSignature();
+    const auto fgSig = makeForegroundSignature();
+    const double tileDuration = TimelineCompositeCache::kTileWidthPx / bgSig.pixelsPerSecond;
 
     const int64_t firstTimeTile = std::max(0LL,
         static_cast<int64_t>(std::floor(tileCoverageStartSeconds_ / tileDuration)));
@@ -1125,14 +1134,17 @@ void ArrangementViewComponent::prepareCoverageCompositeTilesNew()
     const int effFirst = std::max(0, firstVertRow - 1);
     const int effLast = std::min(totalRows - 1, lastVertRow + 1);
 
-    compositeCache_.prepare(sig, firstTimeTile, lastTimeTile, effFirst, effLast,
+    compositeCache_.prepare(bgSig, fgSig, firstTimeTile, lastTimeTile, effFirst, effLast,
         [this](juce::Graphics& g, juce::Rectangle<int> b, TimelineCompositeCache::TileKey k) {
-            buildCompositeTile(g, b, k);
+            buildCompositeBackground(g, b, k);
         },
-        [](juce::Graphics&, juce::Rectangle<int>, TimelineCompositeCache::TileKey) {
-            // Foreground plane: no-op for Arrangement (单 plane)
-        },
-        false);
+        [this](juce::Graphics& g, juce::Rectangle<int> b, TimelineCompositeCache::TileKey k) {
+            buildCompositeForeground(g, b, k);
+        });
+
+    // Sync last signatures to avoid redundant work on next heartbeat
+    lastBgSignature_ = bgSig;
+    lastFgSignature_ = fgSig;
 }
 
 int ArrangementViewComponent::absoluteTimeToViewportX(double seconds) const
@@ -1367,7 +1379,7 @@ auto ArrangementViewComponent::resolveMoveDragTarget(
     int trackDelta) const -> MoveDragResolvedTarget
 {
     const double rawStart = juce::jmax(0.0, state.startSeconds + deltaSeconds);
-    const double bpm = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
+    const double bpm = processor_.getBpm();
     const double snappedStart = SnapUtils::snapTime(rawStart, bpm, processor_.getSnapSettings());
     return {
         juce::jlimit(0, OpenTuneAudioProcessor::MAX_TRACKS - 1, state.trackId + trackDelta),
@@ -1635,8 +1647,10 @@ void ArrangementViewComponent::paint(juce::Graphics& g)
         rulerParams.visibleEndSeconds = rulerParams.visibleStartSeconds
             + getVisibleViewportWidth() / camera_.pixelsPerSecond;
         rulerParams.pixelsPerSecond = camera_.pixelsPerSecond;
-        rulerParams.timeUnit = (timeUnit_ == TimeUnit::Bars) ? 1 : 0;
-        rulerParams.tempo = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
+        rulerParams.displayMode = displayMode_;
+        rulerParams.tempo = processor_.getBpm();
+        rulerParams.timeSigNumerator = processor_.getTimeSigNumerator();
+        rulerParams.timeSigDenominator = processor_.getTimeSigDenominator();
         rulerParams.themeId = static_cast<int>(UIColors::currentThemeId());
         rulerParams.pixelsPerSemitone = 0.0f;
         rulerParams.worldTopY = 0;
@@ -1702,7 +1716,7 @@ void ArrangementViewComponent::onHeartbeatTick()
             requestTransition_ = true;
         }
 
-        playheadTimeForPaint_ = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
+        playheadTimeForPaint_ = readPlayheadSeconds();
         lastObservedPlayHeadPlaying_ = playingNow;
         lastPlayheadRect_ = playheadDirtyRect();
         repaint();
@@ -1716,16 +1730,18 @@ void ArrangementViewComponent::onHeartbeatTick()
         invalidateStableScene();
     }
 
-    const double currentBpm = processor_.getBpm();
-    const int currentTimeSigNum = processor_.getTimeSigNumerator();
-    const int currentTimeSigDenom = processor_.getTimeSigDenominator();
-    if (currentBpm != lastContextBpm_
-        || currentTimeSigNum != lastContextTimeSigNum_
-        || currentTimeSigDenom != lastContextTimeSigDenom_) {
-        lastContextBpm_ = currentBpm;
-        lastContextTimeSigNum_ = currentTimeSigNum;
-        lastContextTimeSigDenom_ = currentTimeSigDenom;
-        invalidateStableScene();
+    // BPM / 拍号 / 显示模式变化 → 仅重建背景 tile 平面（不重建 content metrics / scrollbars）
+    // Content revision 变化 → 仅重建前景 tile 平面
+    // Cache 根据双签名自动选择平面；prepare 后同步 last 签名避免下一 heartbeat 重做
+    {
+        const auto currentBgSig = makeBackgroundSignature();
+        const auto currentFgSig = makeForegroundSignature();
+        const bool bgChanged = !(currentBgSig == lastBgSignature_);
+        const bool fgChanged = !(currentFgSig == lastFgSignature_);
+        if (bgChanged || fgChanged) {
+            rebuildTimelineCoverage();
+            repaint();
+        }
     }
 
     if (!playingNow) {
@@ -1795,7 +1811,7 @@ void ArrangementViewComponent::onHeartbeatTick()
                 const double camEnd = camera_.visibleStartSeconds + viewportDur;
                 tileCoverageEndSeconds_ = std::ceil(
                     std::max(camEnd + ahead, playhead + ahead) / tileDur) * tileDur;
-                prepareCoverageCompositeTilesNew();
+                prepareCoverageCompositeTiles();
             }
         }
     }
@@ -1893,9 +1909,8 @@ void ArrangementViewComponent::onScrollVBlankCallback(double timestampSec)
 
 double ArrangementViewComponent::readPlayheadSeconds() const
 {
-    // Canonical time comes directly from processor-owned PlayHeadState; no
-    // fallback to 0.0 and no second source of truth.
-    return playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
+    // Presented position: projection when playing, canonical when paused.
+    return playHeadState_.getPresentedPositionSeconds();
 }
 
 void ArrangementViewComponent::mouseMove(const juce::MouseEvent& e)
@@ -2197,7 +2212,7 @@ void ArrangementViewComponent::mouseDrag(const juce::MouseEvent& e)
     if (currentDragOp_ == DragOperation::TrimLeft || currentDragOp_ == DragOperation::TrimRight) {
         const double pixelsPerSec = camera_.pixelsPerSecond;
         const double deltaSeconds = static_cast<double>(e.x - dragStartPos_.x) / pixelsPerSec;
-        const double bpm = lastContextBpm_ > 0.0 ? lastContextBpm_ : 120.0;
+        const double bpm = processor_.getBpm();
         const SnapSettings snap = processor_.getSnapSettings();
         const double snappedDelta = SnapUtils::snapDelta(deltaSeconds, bpm, snap);
 
@@ -2517,7 +2532,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         auto& clipboard = processor_.getClipClipboard();
         if (clipboard.hasEntries())
         {
-            double pasteTime = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
+            double pasteTime = playHeadState_.getPresentedPositionSeconds();
             if (pasteTime < 0.0) pasteTime = 0.0;
 
             for (const auto& entry : clipboard.entries())
@@ -2605,7 +2620,7 @@ bool ArrangementViewComponent::keyPressed(const juce::KeyPress& key)
         if (selectedTrack_ < 0 || selectedTrack_ >= OpenTuneAudioProcessor::MAX_TRACKS)
             return true;
 
-        double splitSeconds = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
+        double splitSeconds = playHeadState_.getPresentedPositionSeconds();
         bool anySplit = false;
 
         // Copy selected placements to a vector to avoid iterator invalidation during split
