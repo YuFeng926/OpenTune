@@ -1282,6 +1282,7 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
         Source/Standalone/UI/PianoRoll/InteractionState.cpp
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
         Source/Standalone/UI/TimelineLayerComposer.cpp
+        Source/Standalone/UI/TimelineViewportPolicy.cpp
         Source/Utils/LegacyNoteGenerator.cpp
         Source/Utils/SimdAccelerator.cpp
         Source/Utils/PianoRollEditAction.cpp

@@ -1641,6 +1641,65 @@ void pianoRollRendererFontIsSingleFixedSize()
                    {"h * 0.7f"});
 }
 
+void f0SceneWindowUsesFullViewportNotDamageStrip()
+{
+    const auto rendererImpl = readText("Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp");
+
+    // 1. drawF0Curve 使用 computeFullViewportTimeWindow，禁用 damage-strip 窗口
+    const auto drawF0Curve = extractFunctionBlock(
+        rendererImpl,
+        "void PianoRollRenderer::drawF0Curve");
+    expect(!drawF0Curve.empty(), "drawF0Curve must be found");
+    expectTokens("drawF0Curve uses computeFullViewportTimeWindow",
+                 drawF0Curve,
+                 {"computeFullViewportTimeWindow(ctx, item)"});
+    expectNoTokens("drawF0Curve must NOT use damage-aware computeVisibleTimeWindow",
+                   drawF0Curve,
+                   {"computeVisibleTimeWindow"},
+                   "F0 scene window is full viewport, not damage strip");
+
+    // 2. F0VisualBuildOptions 不含 viewportStartX / viewportEndX
+    const auto f0OptionsBlock = extractBlockByMarker(rendererImpl, "struct F0VisualBuildOptions");
+    expect(!f0OptionsBlock.empty(), "F0VisualBuildOptions struct must be found");
+    expectNoTokens("F0VisualBuildOptions no viewportStartX",
+                   f0OptionsBlock,
+                   {"viewportStartX"},
+                   "viewport bounds belong to scene window, not build options");
+    expectNoTokens("F0VisualBuildOptions no viewportEndX",
+                   f0OptionsBlock,
+                   {"viewportEndX"},
+                   "viewport bounds belong to scene window, not build options");
+
+    // 3. buildF0VisualSegments 不裁剪/flush F0 Path 基于 damage strip 的 viewport X 边界
+    const auto buildSegments = extractFunctionBlock(
+        rendererImpl,
+        "static std::vector<F0VisualSegment> buildF0VisualSegments");
+    expect(!buildSegments.empty(), "buildF0VisualSegments must be found");
+    expectNoTokens("buildF0VisualSegments no options.viewportStartX strip clip",
+                   buildSegments,
+                   {"options.viewportStartX"},
+                   "F0 segment build must not clip by viewport pixel bounds");
+    expectNoTokens("buildF0VisualSegments no options.viewportEndX strip clip",
+                   buildSegments,
+                   {"options.viewportEndX"},
+                   "F0 segment build must not clip by viewport pixel bounds");
+
+    // 4. computeVisibleTimeWindow 仍存在，damage-aware 行为未被全局切换到完整视口
+    const auto visibleTimeWindowFn = extractFunctionBlock(
+        rendererImpl,
+        "VisibleTimeWindow computeVisibleTimeWindow");
+    expect(!visibleTimeWindowFn.empty(), "computeVisibleTimeWindow must still exist");
+    expectTokens("computeVisibleTimeWindow still uses rasterBounds for damage awareness",
+                 visibleTimeWindowFn,
+                 {"ctx.rasterBounds"});
+
+    // 5. computeFullViewportTimeWindow 存在
+    const auto fullViewportFn = extractFunctionBlock(
+        rendererImpl,
+        "VisibleTimeWindow computeFullViewportTimeWindow");
+    expect(!fullViewportFn.empty(), "computeFullViewportTimeWindow must exist for F0 scene window");
+}
+
 void absoluteTimelineTimeRemainsUnquantized()
 {
     const auto viewMapper = readText("Source/Standalone/UI/ViewMapper.h");
@@ -1806,6 +1865,7 @@ int main()
         f0CurvesStayFullyOpaque();
         pianoRollPaintRestoresOpaqueFillAfterShadow();
         pianoRollRetainedSurfaceArchitecture();
+        f0SceneWindowUsesFullViewportNotDamageStrip();
         pianoRollZoomHandlersAvoidBusinessImageAllocation();
         pianoRollZoomHandlersDoNotPauseAutoFollow();
         pianoKeysEmptyClippingGuardSourceContract();

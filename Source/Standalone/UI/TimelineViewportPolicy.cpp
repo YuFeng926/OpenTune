@@ -77,10 +77,11 @@ TimelineViewportCamera TimelineViewportPolicy::resolve(const TimelineViewportReq
         const double currentStart = request.currentVisibleStartSeconds;
         const double currentEnd = currentStart + visibleDuration;
         double pageStart = currentStart;
+        // 越界后放在运动方向进入边缘，避免下一帧重触发
         if (request.targetTime < currentStart)
-            pageStart = request.targetTime;
-        else if (request.targetTime > currentEnd)
             pageStart = request.targetTime - visibleDuration;
+        else if (request.targetTime > currentEnd)
+            pageStart = request.targetTime;
         camera.visibleStartSeconds = clampStartSeconds(pageStart);
         break;
     }
