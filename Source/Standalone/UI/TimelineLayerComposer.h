@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "../../Utils/TimelineDisplayMode.h"
 #include <string>
 
 namespace OpenTune {
@@ -11,8 +12,10 @@ struct RenderParams {
     double visibleStartSeconds = 0.0;
     double visibleEndSeconds = 0.0;
     double pixelsPerSecond = 100.0;
-    int timeUnit = 0;
+    TimelineDisplayMode displayMode = TimelineDisplayMode::Time;
     double tempo = 120.0;
+    int timeSigNumerator = 4;
+    int timeSigDenominator = 4;
     int themeId = 0;
     float pixelsPerSemitone = 1.0f;
     float worldTopY = 0.0f;

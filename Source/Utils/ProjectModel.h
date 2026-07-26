@@ -31,7 +31,7 @@ namespace OpenTune {
 // ============================================================================
 
 struct ProjectHeader {
-    int projectFormatVersion{1};
+    int projectFormatVersion{2};
     juce::String appVersion;
     juce::String projectName{"Untitled"};
     juce::String projectId;
@@ -46,6 +46,8 @@ struct ProjectHeader {
 struct ProjectSettings {
     double bpm{120.0};
     double sampleRate{44100.0};
+    int timeSignatureNumerator{4};
+    int timeSignatureDenominator{4};
     int selectedTrackId{0};
     uint64_t selectedPlacementId{0};
     int activeTrackId{0};

@@ -393,8 +393,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     if (autoRenderOverlay_.isVisible() != shouldShowOverlay)
         autoRenderOverlay_.setVisible(shouldShowOverlay);
 
-    // Playhead position: PianoRoll reads processor-owned PlayHeadState directly.
-    // TransportBar still needs an explicit position sync for its numeric display.
+    // Playhead position: TransportBar gets presented position via processorRef_.getPosition()
+    // which maps to the shared PlayHeadState projection. PianoRoll reads presented position
+    // directly from PlayHeadState in its VBlank callback.
     const double positionSeconds = processorRef_.getPosition();
     transportBar_.setPositionSeconds(positionSeconds);
 
@@ -408,12 +409,31 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         transportBar_.setLoopEnabled(processorRef_.isLoopEnabled());
     }
 
-    // BPM 同步
+    // BPM sync (host-owned, read-only)
     const double bpm = processorRef_.getBpm();
     if (bpm > 0.0 && std::abs(bpm - lastSyncedBpm_) > 0.001) {
         transportBar_.setBpm(bpm);
         pianoRoll_.setBpm(bpm);
         lastSyncedBpm_ = bpm;
+    }
+
+    // Time signature sync (host-owned, read-only)
+    const int timeSigNum = processorRef_.getTimeSigNumerator();
+    const int timeSigDenom = processorRef_.getTimeSigDenominator();
+    if (timeSigNum > 0 && timeSigDenom > 0
+        && (timeSigNum != lastSyncedTimeSigNum_ || timeSigDenom != lastSyncedTimeSigDenom_)) {
+        transportBar_.setTimeSignature(timeSigNum, timeSigDenom);
+        pianoRoll_.setTimeSignature(timeSigNum, timeSigDenom);
+        lastSyncedTimeSigNum_ = timeSigNum;
+        lastSyncedTimeSigDenom_ = timeSigDenom;
+    }
+
+    // Timeline display mode sync from preferences
+    const auto prefMode = appPreferences_.getTimelineDisplayMode();
+    if (prefMode != timelineDisplayMode_) {
+        timelineDisplayMode_ = prefMode;
+        transportBar_.setTimelineDisplayMode(timelineDisplayMode_);
+        pianoRoll_.setTimelineDisplayMode(timelineDisplayMode_);
     }
 }
 
@@ -828,6 +848,25 @@ void OpenTuneAudioProcessorEditor::surfaceRegularVst3HostControlledTransport(con
     transportBar_.setRenderStatusText("Host-controlled transport");
 }
 
+void OpenTuneAudioProcessorEditor::timelineDisplayModeChanged(TimelineDisplayMode mode)
+{
+    timelineDisplayMode_ = mode;
+    appPreferences_.setTimelineDisplayMode(mode);
+    transportBar_.setTimelineDisplayMode(mode);
+    pianoRoll_.setTimelineDisplayMode(mode);
+}
+
+void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
+{
+    juce::ignoreUnused(workspaceView);
+    // VST3: always single-clip piano view, ignore workspace view toggle
+    transportBar_.setWorkspaceView(false);
+    pianoRoll_.setVisible(true);
+    pianoRoll_.grabKeyboardFocus();
+    resized();
+    repaint();
+}
+
 void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
 {
 #if JucePlugin_Enable_ARA
@@ -848,8 +887,15 @@ void OpenTuneAudioProcessorEditor::loopToggled(bool enabled)
 
 void OpenTuneAudioProcessorEditor::bpmChanged(double newBpm)
 {
-    processorRef_.setBpm(newBpm);
-    pianoRoll_.setBpm(newBpm);
+    // VST3/ARA: host owns BPM. Do not write to processor.
+    juce::ignoreUnused(newBpm);
+}
+
+void OpenTuneAudioProcessorEditor::timeSignatureChanged(int numerator, int denominator)
+{
+    // VST3/ARA: host owns time signature. Do not write to processor.
+    juce::ignoreUnused(numerator);
+    juce::ignoreUnused(denominator);
 }
 
 void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
@@ -872,18 +918,7 @@ void OpenTuneAudioProcessorEditor::scaleChanged(int rootNote, int scaleType)
     }
 }
 
-void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
-{
-    if (workspaceView) {
-        AppLogger::log("VST3Editor: workspace view request received, enforcing single-clip piano view");
-    }
 
-    transportBar_.setWorkspaceView(false);
-    pianoRoll_.setVisible(true);
-    pianoRoll_.grabKeyboardFocus();
-    resized();
-    repaint();
-}
 
 void OpenTuneAudioProcessorEditor::recordRequested()
 {

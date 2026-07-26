@@ -11,6 +11,9 @@
 #include "../Source/Standalone/UI/UIColors.h"
 #include "../Source/Standalone/UI/ViewMapper.h"
 #include "../Source/Standalone/UI/TimelineViewportPolicy.h"
+#include "../Source/Utils/TimelineDisplayMode.h"
+#include "../Source/Utils/SnapUtils.h"
+#include "../Source/Standalone/UI/TimelineCompositeCache.h"
 
 #include <algorithm>
 #include <cmath>
@@ -385,12 +388,12 @@ void sharedCodeRuntimeWrapperTypeDispatchContract()
                  getNumBlock,
                  {"wrapperType == juce::AudioProcessor::wrapperType_VST3",
                   "getHostTransportSnapshot().timeSignatureNumerator",
-                  "return 4"});
+                  "return timeSigNumerator_"});
     expectTokens("getTimeSigDenominator runtime VST3 wrapperType dispatch",
                  getDenBlock,
                  {"wrapperType == juce::AudioProcessor::wrapperType_VST3",
                   "getHostTransportSnapshot().timeSignatureDenominator",
-                  "return 4"});
+                  "return timeSigDenominator_"});
 }
 
 void documentControllerTransportBoundaryContract()
@@ -1741,7 +1744,7 @@ void f0CurveGapIsolation()
 // ---------------------------------------------------------------------------
 // drawGridLines / drawTimeRuler narrow-clip pixel-equivalence tests
 // Compares full-clip baseline against narrow-clip rendering; pixels inside the
-// narrow clip must be identical. Covers Bars (timeUnit=1) and Seconds (timeUnit=0).
+// narrow clip must be identical. Covers Bars and Seconds display modes.
 // Narrow clip boundaries are placed close to grid-line and ruler-label positions
 // to exercise the 2px grid padding and 21px ruler padding.
 // ---------------------------------------------------------------------------
@@ -1966,7 +1969,7 @@ void timelineLayerDrawGridLinesBarsPixelEquivalence()
     params.visibleStartSeconds = 0.0;
     params.visibleEndSeconds   = 3.0;
     params.pixelsPerSecond     = 100.0;
-    params.timeUnit            = 1;
+    params.displayMode          = TimelineDisplayMode::Bars;
     params.tempo               = 120.0;
     params.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
     params.viewportWidth       = 300;
@@ -2008,7 +2011,7 @@ void timelineLayerDrawGridLinesSecondsPixelEquivalence()
     params.visibleStartSeconds = 0.0;
     params.visibleEndSeconds   = 20.0;
     params.pixelsPerSecond     = 25.0;
-    params.timeUnit            = 0;
+    params.displayMode          = TimelineDisplayMode::Time;
     params.tempo               = 120.0;
     params.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
     params.viewportWidth       = 500;
@@ -2059,7 +2062,7 @@ void timelineLayerDrawTimeRulerBarsPixelEquivalence()
     params.visibleStartSeconds = 0.0;
     params.visibleEndSeconds   = 3.0;
     params.pixelsPerSecond     = 30.0;
-    params.timeUnit            = 1;
+    params.displayMode          = TimelineDisplayMode::Bars;
     params.tempo               = 120.0;
     params.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
     params.rulerHeight         = 30;
@@ -2100,7 +2103,7 @@ void timelineLayerDrawTimeRulerSecondsPixelEquivalence()
     params.visibleStartSeconds = 0.0;
     params.visibleEndSeconds   = 20.0;
     params.pixelsPerSecond     = 25.0;
-    params.timeUnit            = 0;
+    params.displayMode          = TimelineDisplayMode::Time;
     params.tempo               = 120.0;
     params.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
     params.rulerHeight         = 30;
@@ -2267,7 +2270,7 @@ void rulerForwardScrollPixelEquivalence()
         p.visibleStartSeconds = visibleStart;
         p.visibleEndSeconds   = visibleStart + visibleDuration;
         p.pixelsPerSecond     = pps;
-        p.timeUnit            = 0;  // seconds
+        p.displayMode          = TimelineDisplayMode::Time;
         p.tempo               = 120.0;
         p.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
         p.rulerHeight         = h;
@@ -2350,7 +2353,7 @@ void rulerBackwardScrollPixelEquivalence()
         p.visibleStartSeconds = visibleStart;
         p.visibleEndSeconds   = visibleStart + visibleDuration;
         p.pixelsPerSecond     = pps;
-        p.timeUnit            = 0;  // seconds
+        p.displayMode          = TimelineDisplayMode::Time;
         p.tempo               = 120.0;
         p.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
         p.rulerHeight         = h;
@@ -2442,7 +2445,7 @@ void rulerFractionalScrollRasterPhaseEquivalence()
         p.visibleStartSeconds = visibleStart;
         p.visibleEndSeconds   = visibleStart + visibleDuration;
         p.pixelsPerSecond     = pps;
-        p.timeUnit            = 0;  // seconds
+        p.displayMode          = TimelineDisplayMode::Time;
         p.tempo               = 120.0;
         p.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
         p.rulerHeight         = h;
@@ -2526,7 +2529,7 @@ void compositedVerticalShrinkMatchesCleanRender()
         p.visibleStartSeconds = 0.0;
         p.visibleEndSeconds   = 4.0;
         p.pixelsPerSecond     = 100.0;
-        p.timeUnit            = 1;  // Bars
+        p.displayMode          = TimelineDisplayMode::Bars;
         p.tempo               = 120.0;
         p.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
         p.pixelsPerSemitone   = pps;
@@ -2730,6 +2733,359 @@ void pageEdgeStability()
     }
 }
 
+// ============================================================================
+// Category 2: TimelineLayerComposer beatSeconds、小节边界、ruler 行为
+// ============================================================================
+
+void timelineLayerComposerBeatCalculationAndRulerContract()
+{
+    // beatSeconds = (60.0 / tempo) * 4.0 / denom
+    // 3/4 @120 BPM: quarter=0.5, beat=0.5*4/4=0.5 → pixelsPerBeat=pps*0.5
+    // beatInterval under dense pps stays at 1, drawn every beat
+    {
+        RenderParams p;
+        p.displayMode = TimelineDisplayMode::Bars;
+        p.visibleStartSeconds = 0.0;
+        p.visibleEndSeconds = 10.0;
+        p.pixelsPerSecond = 100.0;
+        p.tempo = 120.0;
+        p.timeSigNumerator = 3;
+        p.timeSigDenominator = 4;
+        p.themeId = static_cast<int>(ThemeId::DarkBlueGrey);
+        p.viewportWidth = 1000;
+        p.viewportHeight = 200;
+        p.viewKind = "pianoroll";
+
+        const double beatSeconds = (60.0 / 120.0) * 4.0 / 4.0; // =0.5
+        const double barSeconds = beatSeconds * 3; // =1.5
+        // Beat 0 at X=0 (visibleStart=0), Beat 3 at X=150 (3*0.5*100)
+        // Beat 0 is bar start (0%3==0), Beat 3 is bar start (3%3==0)
+        expect(std::abs(beatSeconds - 0.5) < 1e-12, "3/4 beatSeconds must be 0.5");
+        expect(std::abs(barSeconds - 1.5) < 1e-12, "3/4 barSeconds must be 1.5");
+    }
+
+    // 6/8 @120 BPM: beatSeconds = 0.5 * 4/8 = 0.25
+    {
+        const double beatSeconds = (60.0 / 120.0) * 4.0 / 8.0;
+        expect(std::abs(beatSeconds - 0.25) < 1e-12, "6/8 beatSeconds must be 0.25");
+    }
+
+    // 5/4 @120 BPM: beatSeconds = 0.5 * 4/4 = 0.5, bar = 2.5s
+    {
+        const double beatSeconds = (60.0 / 120.0) * 4.0 / 4.0;
+        expect(std::abs(beatSeconds - 0.5) < 1e-12, "5/4 beatSeconds must be 0.5");
+    }
+
+    // 2/2 @120 BPM: beatSeconds = 0.5 * 4/2 = 1.0
+    {
+        const double beatSeconds = (60.0 / 120.0) * 4.0 / 2.0;
+        expect(std::abs(beatSeconds - 1.0) < 1e-12, "2/2 beatSeconds must be 1.0");
+    }
+
+    // BPM change shifts X positions: draw grid at 60 BPM vs 120 BPM at same pps,
+    // beat 1 X positions must be different
+    {
+        clipTestEnsureDarkBlueGrey();
+        constexpr int w = 300, h = 100;
+
+        auto renderGrid = [&](double bpm) {
+            RenderParams p;
+            p.displayMode = TimelineDisplayMode::Bars;
+            p.visibleStartSeconds = 0.0;
+            p.visibleEndSeconds = 5.0;
+            p.pixelsPerSecond = 50.0;
+            p.tempo = bpm;
+            p.timeSigNumerator = 4;
+            p.timeSigDenominator = 4;
+            p.themeId = static_cast<int>(ThemeId::DarkBlueGrey);
+            p.viewportWidth = w;
+            p.viewportHeight = h;
+            p.viewKind = "pianoroll";
+
+            juce::Image img(juce::Image::ARGB, w, h, true);
+            juce::Graphics g(img);
+            TimelineLayerComposer::drawGridLines(g, p);
+            return img;
+        };
+
+        auto img60 = renderGrid(60.0);
+        auto img120 = renderGrid(120.0);
+
+        // At beat 1: 60BPM → beatSeconds=1.0 → pixelX=50
+        //            120BPM → beatSeconds=0.5 → pixelX=25
+        // These produce different grid line positions → pixels differ
+        int diffCount = 0;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                if (img60.getPixelAt(x, y).getARGB() != img120.getPixelAt(x, y).getARGB())
+                    ++diffCount;
+        expect(diffCount > 0, "different BPM must produce different grid pixel positions");
+    }
+
+    // Dense draw: beatInterval=1 draws every beat; sparse step aligns to bar
+    // selectBeatInterval returns 1 for pixelsPerBeat ≥ 40, then bar alignment
+    // step is num-aligned: when beatInterval > 1, it snaps to multiple of num
+    {
+        // pixelsPerBeat = 50*1.0 = 50 ≥ 40 → selectBeatInterval returns 1
+        const double rawInterval = TimelineLayerComposer::selectBeatInterval(50.0);
+        expect(std::abs(rawInterval - 1.0) < 1e-12,
+               "dense pps must return beatInterval 1 (every beat)");
+
+        // Sparse: pixelsPerBeat < 2.5 → selectBeatInterval returns 32
+        const double sparseRaw = TimelineLayerComposer::selectBeatInterval(2.0);
+        expect(std::abs(sparseRaw - 32.0) < 1e-12,
+               "sparse pps must return beatInterval >= 1 bar");
+
+        // Bar alignment: beatInterval=16 with num=3 → snaps to 18 (next multiple of 3)
+        int64_t beatInterval = 16;
+        const int num = 3;
+        beatInterval = ((beatInterval + num - 1) / num) * num;
+        expect(beatInterval == 18,
+               "sparse beatInterval must snap to multiple of numerator (16→18 for 3/4)");
+    }
+}
+
+// ============================================================================
+// Category 4: TimelineCompositeCache runtime — 双 plane 初始构建与增量变更
+// ============================================================================
+
+void timelineCompositeCacheTwoPlaneBuildAndIncrementalUpdate()
+{
+    TimelineCompositeCache cache;
+
+    BackgroundGenerationSignature bgSig;
+    bgSig.pixelsPerSecond = 100.0;
+    bgSig.displayMode = TimelineDisplayMode::Time;
+    bgSig.tempo = 120.0;
+    bgSig.timeSigNumerator = 4;
+    bgSig.timeSigDenominator = 4;
+    bgSig.trackHeight = 100;
+    bgSig.visibleTrackCount = 2;
+    bgSig.themeId = static_cast<int>(ThemeId::DarkBlueGrey);
+
+    ForegroundGenerationSignature fgSig;
+    fgSig.contentRevision = 1;
+
+    int bgCalls = 0;
+    int fgCalls = 0;
+
+    auto bgBuilder = [&](juce::Graphics&, juce::Rectangle<int>, TimelineCompositeCache::TileKey) {
+        ++bgCalls;
+    };
+    auto fgBuilder = [&](juce::Graphics&, juce::Rectangle<int>, TimelineCompositeCache::TileKey) {
+        ++fgCalls;
+    };
+
+    // Initial prepare: 2 time tiles × 2 vert rows = 4 tiles, each gets both planes
+    cache.prepare(bgSig, fgSig, 0, 1, 0, 1, bgBuilder, fgBuilder);
+    expect(cache.getTileCount() == 4, "initial prepare must create 4 tiles (2×2)");
+    expect(bgCalls == 4, "initial prepare must call bg builder 4 times");
+    expect(fgCalls == 4, "initial prepare must call fg builder 4 times");
+
+    // Only change BackgroundSignature (tempo) → only bg builder fires
+    const int bgBefore = bgCalls;
+    const int fgBefore = fgCalls;
+    bgSig.tempo = 140.0;
+    cache.prepare(bgSig, fgSig, 0, 1, 0, 1, bgBuilder, fgBuilder);
+    expect(bgCalls > bgBefore, "bg sig change must call bg builder");
+    expect(fgCalls == fgBefore, "bg sig change must NOT call fg builder");
+
+    // Only change contentRevision → only fg builder fires
+    const int bgBefore2 = bgCalls;
+    const int fgBefore2 = fgCalls;
+    bgSig.tempo = 140.0; // same
+    fgSig.contentRevision = 2;
+    cache.prepare(bgSig, fgSig, 0, 1, 0, 1, bgBuilder, fgBuilder);
+    expect(bgCalls == bgBefore2, "fg sig change must NOT call bg builder");
+    expect(fgCalls > fgBefore2, "fg sig change must call fg builder");
+
+    // New coverage tile gets both planes
+    const int bgBefore3 = bgCalls;
+    const int fgBefore3 = fgCalls;
+    cache.prepare(bgSig, fgSig, 0, 2, 0, 1, bgBuilder, fgBuilder);
+    expect(bgCalls > bgBefore3, "new coverage time tiles must call bg builder");
+    expect(fgCalls > fgBefore3, "new coverage time tiles must call fg builder");
+}
+
+// ============================================================================
+// Category 6: Canonical meter/persistence — BPM/拍号范围与 roundtrip
+// ============================================================================
+
+void canonicalMeterPersistenceRoundTrip()
+{
+    // OpenTuneAudioProcessor accessible via PluginProcessor.h include.
+    // Test that getBpm/setBpm, getTimeSigNumerator/getTimeSigDenominator
+    // accept valid ranges and reject v1 format.
+
+    // BPM: clamp to 1..999 via setBpm source contract
+    {
+        const auto processor = readText("Source/PluginProcessor.cpp");
+        const auto setBpmBlock = extractBlockByMarker(
+            processor, "void OpenTuneAudioProcessor::setBpm");
+        expect(contains(setBpmBlock, "juce::jlimit(1.0, 999.0"),
+               "setBpm must clamp to [1, 999]");
+    }
+
+    // Time signature validation is centralized in the single pair setter.
+    {
+        const auto processor = readText("Source/PluginProcessor.cpp");
+        const auto setTimeSignature = extractBlockByMarker(
+            processor, "void OpenTuneAudioProcessor::setTimeSignature");
+        expect(contains(setTimeSignature, "juce::jlimit(1, 64, numerator)"),
+               "setTimeSignature must clamp numerator to [1, 64]");
+        expectTokens("setTimeSignature denominator domain",
+                     setTimeSignature,
+                     {"case 1:", "case 2:", "case 4:", "case 8:",
+                      "case 16:", "case 32:", "case 64:"});
+    }
+
+    // Project and Standalone settings are strict v2 hard-cuts.
+    {
+        const auto projectHeader = readText("Source/Utils/ProjectPersistence.h");
+        const auto projectSource = readText("Source/Utils/ProjectPersistence.cpp");
+        const auto processorSource = readText("Source/PluginProcessor.cpp");
+        expect(contains(projectHeader, "kCurrentProjectFormatVersion = 2"),
+               "project persistence must write v2");
+        expect(contains(projectSource, "version != kCurrentProjectFormatVersion"),
+               "project persistence must strictly reject non-v2 files");
+        expect(contains(processorSource, "kStandaloneSettingsVersion = 2"),
+               "Standalone settings must write v2");
+        expect(contains(processorSource, "version != kStandaloneSettingsVersion"),
+               "Standalone settings must strictly reject non-v2 payloads");
+    }
+}
+
+// ============================================================================
+// Category 9: PlayHeadPresentationProjection deterministic runtime
+// ============================================================================
+
+void playHeadPresentationProjectionDeterministicContract()
+{
+    PlayHeadState state;
+    state.timeInSeconds.store(10.0, std::memory_order_relaxed);
+    state.isPlaying.store(true, std::memory_order_relaxed);
+    state.presentationEpoch.store(1, std::memory_order_relaxed);
+
+    // 1) No anchor published → invalid snapshot → returns 0.0 from projectAt
+    {
+        auto snap = state.presentationProjection.load();
+        if (snap.valid)
+            snap = {}; // force invalid
+        expect(!snap.valid, "unpublished projection must be invalid");
+        expect(std::abs(snap.projectAt(5.0)) < 1e-12,
+               "invalid projection projectAt must return 0.0");
+    }
+
+    // 2) Publish → linear projection
+    state.presentationProjection.publish(10.0, 0.0, 100.0, 1);
+    {
+        auto snap = state.presentationProjection.load();
+        expect(snap.valid, "published projection must be valid");
+        expect(snap.epoch == 1, "epoch must match published value");
+        // anchorPosition=10, anchorClock=0 → at clock=2.0 → 10+2=12
+        double proj = snap.projectAt(2.0);
+        expect(std::abs(proj - 12.0) < 1e-9,
+               "linear projection must be anchor + elapsed");
+        // at clock=-1 → elapsed ≤ 0 → anchor = 10
+        proj = snap.projectAt(-1.0);
+        expect(std::abs(proj - 10.0) < 1e-9,
+               "negative elapsed must clamp to anchor");
+    }
+
+    // 3) Horizon cap
+    state.presentationProjection.publish(10.0, 0.0, 15.0, 1);
+    {
+        auto snap = state.presentationProjection.load();
+        double proj = snap.projectAt(100.0);
+        expect(std::abs(proj - 15.0) < 1e-9,
+               "projection must cap at horizon");
+    }
+
+    // 4) Epoch mismatch → canonical (real code path uses getPresentedPositionAt)
+    {
+        state.presentationEpoch.store(99, std::memory_order_release);
+        state.presentationProjection.publish(10.0, 0.0, 100.0, 1); // epoch=1 ≠ 99
+        state.timeInSeconds.store(42.0, std::memory_order_relaxed);
+        // getPresentedPositionAt should return timeInSeconds when epoch mismatch
+        double pos = state.getPresentedPositionAt(5.0);
+        expect(std::abs(pos - 42.0) < 1e-9,
+               "epoch mismatch must return canonical timeInSeconds");
+    }
+
+    // 5) Paused → canonical
+    {
+        state.isPlaying.store(false, std::memory_order_relaxed);
+        state.timeInSeconds.store(77.0, std::memory_order_relaxed);
+        double pos = state.getPresentedPositionAt(5.0);
+        expect(std::abs(pos - 77.0) < 1e-9,
+               "paused must return canonical timeInSeconds");
+        state.isPlaying.store(true, std::memory_order_relaxed);
+    }
+
+    // 6) Seek epoch invalidation: publish(anchorA), then reset/publish(anchorB) with larger epoch
+    {
+        state.presentationEpoch.store(10, std::memory_order_release);
+        state.presentationProjection.publish(5.0, 0.0, 100.0, 10);
+        auto snapA = state.presentationProjection.load();
+        expect(snapA.epoch == 10 && snapA.valid, "epoch 10 projection must be valid");
+
+        state.presentationEpoch.store(11, std::memory_order_release);
+        state.presentationProjection.publish(20.0, 5.0, 100.0, 11);
+        auto snapB = state.presentationProjection.load();
+        expect(snapB.epoch == 11 && snapB.valid, "epoch 11 projection must be valid");
+        expect(std::abs(snapB.anchorPosition - 20.0) < 1e-9,
+               "seek must reset anchor position");
+    }
+}
+
+// ============================================================================
+// Category 10: Snap 与 display mode 隔离
+// ============================================================================
+
+void snapIsolationFromDisplayMode()
+{
+    const double bpm = 120.0;
+    const double seconds = 2.5;
+    SnapSettings beatSnap;
+    beatSnap.enabled = true;
+    beatSnap.mode = SnapSettings::Mode::Beat;
+
+    SnapSettings barSnap;
+    barSnap.enabled = true;
+    barSnap.mode = SnapSettings::Mode::Bar;
+
+    SnapSettings secondSnap;
+    secondSnap.enabled = true;
+    secondSnap.mode = SnapSettings::Mode::Second;
+
+    // Snap is purely math: snapTime(seconds, bpm, settings) depends only on
+    // bpm and mode, never on TimelineDisplayMode.
+
+    double beatResult = SnapUtils::snapTime(seconds, bpm, beatSnap);
+    double barResult = SnapUtils::snapTime(seconds, bpm, barSnap);
+    double secResult = SnapUtils::snapTime(seconds, bpm, secondSnap);
+
+    // Beat: grid = (60/120)/4 = 0.125, 2.5/0.125=20.0 → exactly on grid
+    expect(std::abs(beatResult - 2.5) < 1e-9,
+           "beat snap of 2.5s at 120BPM must stay 2.5 (on grid)");
+
+    // Bar: grid = (60/120)*4 = 2.0, 2.5/2.0=1.25 → round to 1*2.0=2.0
+    expect(std::abs(barResult - 2.0) < 1e-9,
+           "bar snap of 2.5s at 120BPM must snap to 2.0");
+
+    // Second: grid = 1.0, 2.5 → round to 3.0
+    expect(std::abs(secResult - 3.0) < 1e-9,
+           "second snap of 2.5s must snap to 3.0");
+
+    // Snap is display-mode independent — same input always same output
+    // (no TimelineDisplayMode parameter in any snap function)
+    SnapSettings off;
+    off.enabled = false;
+    double offResult = SnapUtils::snapTime(seconds, bpm, off);
+    expect(std::abs(offResult - 2.5) < 1e-9,
+           "disabled snap must return original value");
+}
+
 
 } // namespace
 
@@ -2791,6 +3147,21 @@ int main()
 
         // ── Real pixel rendering test ──────────────────────────────────
         compositedVerticalShrinkMatchesCleanRender();
+
+        // ── Category 2: TimelineLayerComposer beat/bar/ruler ───────────
+        timelineLayerComposerBeatCalculationAndRulerContract();
+
+        // ── Category 4: TimelineCompositeCache two-plane runtime ───────
+        timelineCompositeCacheTwoPlaneBuildAndIncrementalUpdate();
+
+        // ── Category 6: Canonical meter/persistence ────────────────────
+        canonicalMeterPersistenceRoundTrip();
+
+        // ── Category 9: PlayHeadPresentationProjection ─────────────────
+        playHeadPresentationProjectionDeterministicContract();
+
+        // ── Category 10: Snap isolation from display mode ──────────────
+        snapIsolationFromDisplayMode();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";

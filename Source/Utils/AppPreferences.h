@@ -12,6 +12,7 @@
 #include "MouseTrailConfig.h"
 #include "PianoRollVisualPreferences.h"
 #include "../Standalone/UI/ThemeTokens.h"
+#include "TimelineDisplayMode.h"
 #include "VocoderModelWeight.h"
 #include "ZoomSensitivityConfig.h"
 
@@ -59,6 +60,7 @@ struct SharedPreferencesState {
     TrackColorMode trackColorMode = TrackColorMode::Random;
     KeyShortcutConfig::KeyShortcutSettings shortcuts = KeyShortcutConfig::KeyShortcutSettings::getDefault();
     bool lightPitchCorrectionEnabled = false;  ///< 轻量修音开关（AutoTune cycle resampling，默认关）
+    TimelineDisplayMode timelineDisplayMode = TimelineDisplayMode::Time;
 };
 
 struct StandalonePreferencesState {
@@ -107,6 +109,9 @@ public:
     TrackColorMode getTrackColorMode() const;
 
     void setLightPitchCorrectionEnabled(bool enabled);
+
+    void setTimelineDisplayMode(TimelineDisplayMode mode);
+    TimelineDisplayMode getTimelineDisplayMode() const;
 
     std::vector<juce::String> getRecentProjects() const;
     void pushRecentProject(const juce::String& projectPath);

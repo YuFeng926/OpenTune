@@ -15,20 +15,43 @@ constexpr const char* kOverdoseUiRoleTransport = "transport";
 constexpr const char* kOverdoseUiRoleSegment = "segment";
 constexpr float kAuroraToolbarChromeIntensity = 0.42f;
 
+constexpr int kValidDenominators[] = { 1, 2, 4, 8, 16, 32, 64 };
+
 } // namespace
 
 DigitalTimeDisplay::DigitalTimeDisplay()
 {
-    setInterceptsMouseClicks(false, false);
+    setInterceptsMouseClicks(true, true);
 }
 
 void DigitalTimeDisplay::setTimeString(const juce::String& time)
 {
-    if (timeString_ != time)
+    if (timeString_ != time || isBarsMode_)
     {
         timeString_ = time;
+        isBarsMode_ = false;
         repaint();
     }
+}
+
+void DigitalTimeDisplay::setBarsString(int bar, int beat)
+{
+    juce::String barsText = juce::String(bar) + "." + juce::String(beat);
+    if (timeString_ != barsText || !isBarsMode_)
+    {
+        bar_ = bar;
+        beat_ = beat;
+        isBarsMode_ = true;
+        timeString_ = barsText;
+        repaint();
+    }
+}
+
+void DigitalTimeDisplay::mouseDown(const juce::MouseEvent& e)
+{
+    juce::ignoreUnused(e);
+    if (onClick)
+        onClick();
 }
 
 void DigitalTimeDisplay::paint(juce::Graphics& g)
@@ -46,7 +69,6 @@ void DigitalTimeDisplay::paint(juce::Graphics& g)
     if (!style.timeSegmentStyle)
     {
         g.setColour(UIColors::textPrimary);
-        // 瀵艰埅鏍忓瓧浣撶粺涓€锛氭椂闂寸爜涓庡叾浠栨帶浠朵繚鎸佸悓涓€瀛楀彿浣撶郴
         g.setFont(UIColors::getMonoFont(UIColors::navMonoFontHeight));
         g.drawFittedText(timeString_, getLocalBounds().reduced(6, 0), juce::Justification::centred, 1, 1.0f);
         return;
@@ -56,7 +78,7 @@ void DigitalTimeDisplay::paint(juce::Graphics& g)
     for (int i = 0; i < timeString_.length(); ++i)
     {
         auto c = timeString_[i];
-        totalWeight += (c == ':' || c == '.') ? 0.50f : 1.00f;
+        totalWeight += (c == ':' || c == '.' || c == ' ') ? 0.50f : 1.00f;
     }
     if (totalWeight <= 0.0f)
         totalWeight = 1.0f;
@@ -67,7 +89,7 @@ void DigitalTimeDisplay::paint(juce::Graphics& g)
     for (int i = 0; i < timeString_.length(); ++i)
     {
         auto c = timeString_[i];
-        const float w = (c == ':' || c == '.') ? baseCharW * 0.50f : baseCharW;
+        const float w = (c == ':' || c == '.' || c == ' ') ? baseCharW * 0.50f : baseCharW;
         drawChar(g, c, { x, bounds.getY(), w, bounds.getHeight() });
         x += w;
     }
@@ -80,7 +102,7 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
     {
         const float dotSize = area.getWidth() * 0.55f;
         const float cx = area.getCentreX();
-        
+
         if (UIColors::currentThemeId() == ThemeId::Overdose)
         {
              g.setColour(UIColors::displayText);
@@ -93,7 +115,7 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
         {
              g.setColour(style.timeActive);
         }
-        
+
         g.fillEllipse(cx - dotSize * 0.5f, area.getCentreY() - area.getHeight() * 0.22f - dotSize * 0.5f, dotSize, dotSize);
         g.fillEllipse(cx - dotSize * 0.5f, area.getCentreY() + area.getHeight() * 0.22f - dotSize * 0.5f, dotSize, dotSize);
         return;
@@ -102,7 +124,7 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
     if (c == '.')
     {
         const float dotSize = area.getWidth() * 0.75f;
-        
+
         if (UIColors::currentThemeId() == ThemeId::Overdose)
         {
              g.setColour(UIColors::displayText);
@@ -115,10 +137,13 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
         {
              g.setColour(style.timeActive);
         }
-        
+
         g.fillEllipse(area.getCentreX() - dotSize * 0.5f, area.getBottom() - dotSize * 1.45f, dotSize, dotSize);
         return;
     }
+
+    if (c == ' ')
+        return;
 
     bool seg[7] = { false, false, false, false, false, false, false };
     switch (static_cast<char>(c))
@@ -144,7 +169,7 @@ void DigitalTimeDisplay::drawChar(juce::Graphics& g, juce::juce_wchar c, juce::R
 void DigitalTimeDisplay::drawSegment(juce::Graphics& g, int segment, juce::Rectangle<float> area, bool active)
 {
     const auto& style = UIColors::currentThemeStyle();
-    
+
     if (UIColors::currentThemeId() == ThemeId::Overdose)
     {
         g.setColour(active ? UIColors::displayText : UIColors::displayTextDim);
@@ -188,9 +213,9 @@ BpmValueField::BpmValueField()
 
 void BpmValueField::setValue(double value)
 {
-    text_ = juce::String(static_cast<int>(value));
+    text_ = juce::String(value, 1);
     caretIndex_ = text_.length();
-    lastValidValue_ = static_cast<int>(value);
+    lastValidValue_ = value;
     isEditing_ = false;
     repaint();
 }
@@ -198,6 +223,58 @@ void BpmValueField::setValue(double value)
 double BpmValueField::getValue() const
 {
     return text_.getDoubleValue();
+}
+
+void BpmValueField::setTimeSignature(int numerator, int denominator)
+{
+    timeSigNum_ = numerator;
+    timeSigDenom_ = denominator;
+    repaint();
+}
+
+void BpmValueField::setReadOnly(bool readOnly)
+{
+    if (readOnly_ == readOnly)
+        return;
+
+    readOnly_ = readOnly;
+
+    if (readOnly_)
+    {
+        // End any active editing and release focus
+        if (isEditing_)
+        {
+            isEditing_ = false;
+            text_ = juce::String(lastValidValue_, 1);
+            caretIndex_ = text_.length();
+        }
+        if (hasKeyboardFocus(true))
+            giveAwayKeyboardFocus();
+    }
+
+    repaint();
+}
+
+BpmValueField::LayoutRects BpmValueField::calculateLayout() const
+{
+    auto content = getLocalBounds().reduced(6, 0);
+
+    auto bpmValue = content.removeFromLeft(90);
+
+    content.removeFromLeft(8);
+
+    auto num = content.removeFromLeft(18);
+    auto slash = content.removeFromLeft(8);
+    auto denom = content.removeFromLeft(18);
+
+    return { bpmValue, num, slash, denom };
+}
+
+juce::String BpmValueField::formatBpmText() const
+{
+    if (std::floor(lastValidValue_) == lastValidValue_)
+        return juce::String(static_cast<int>(lastValidValue_));
+    return juce::String(lastValidValue_, 1);
 }
 
 void BpmValueField::paint(juce::Graphics& g)
@@ -233,7 +310,6 @@ void BpmValueField::paint(juce::Graphics& g)
                                          nullptr,
                                          kAuroraToolbarChromeIntensity);
     }
-    // 更厚实的输入框质感（深蓝灰主题）
     else if (themeId == ThemeId::DarkBlueGrey)
     {
         juce::ColourGradient grad(UIColors::backgroundLight.brighter(0.06f), bounds.getX(), bounds.getY(),
@@ -260,20 +336,54 @@ void BpmValueField::paint(juce::Graphics& g)
         g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, focused ? style.focusRingThickness : style.strokeThin);
     }
 
+    // Calculate layout rectangles (paint and hit-test use same logic)
+    auto lr = calculateLayout();
+
+    // Hover feedback is painted below text so labels remain crisp.
+    if (!readOnly_ && isMouseOver())
+    {
+        const auto mouse = getMouseXYRelative();
+        const juce::Rectangle<int>* hoverRect = nullptr;
+        if (lr.bpmValue.contains(mouse))
+            hoverRect = &lr.bpmValue;
+        else if (lr.numerator.contains(mouse))
+            hoverRect = &lr.numerator;
+        else if (lr.denominator.contains(mouse))
+            hoverRect = &lr.denominator;
+
+        if (hoverRect != nullptr)
+        {
+            g.setColour(UIColors::textPrimary.withAlpha(0.12f));
+            g.fillRect(hoverRect->toFloat());
+        }
+    }
+
     auto font = UIColors::getLabelFont(UIColors::navFontHeight);
     g.setFont(font);
 
-    // 灏忓瓧鏀捐繘鎺т欢鍐呴儴锛欱PM 涓嶅啀鍗犵敤鎸夐挳宸﹀彸涓よ竟
-    auto content = getLocalBounds().reduced(8, 0);
-    auto prefixArea = content.removeFromLeft(40);
-    auto valueArea = content;
+    // Draw vertical divider line between BPM and time signature
+    const int dividerX = lr.bpmValue.getRight() + 2;
+    g.setColour(UIColors::textSecondary.withAlpha(0.25f));
+    g.drawVerticalLine(dividerX, bounds.getY() + 8.0f, bounds.getBottom() - 8.0f);
 
-    g.setColour(UIColors::textSecondary.withAlpha(0.85f));
-    g.drawFittedText("BPM", prefixArea, juce::Justification::centredLeft, 1, 1.0f);
+    // BPM value
+    g.setFont(font);
+    g.setColour(readOnly_ ? UIColors::textSecondary : UIColors::textPrimary);
+    juce::String bpmText = isEditing_ ? text_ : formatBpmText();
+    g.drawFittedText(bpmText, lr.bpmValue, juce::Justification::centredLeft, 1, 1.0f);
 
-    g.setColour(UIColors::textPrimary);
-    g.drawFittedText(text_, valueArea, juce::Justification::centredLeft, 1, 1.0f);
+    // Time signature: draw each part separately for precise hit-test alignment
+    g.setColour(readOnly_ ? UIColors::textSecondary.withAlpha(0.70f) : UIColors::textSecondary.withAlpha(0.85f));
+    g.setFont(UIColors::getLabelFont(UIColors::navFontHeight - 1.0f));
 
+    // Numerator
+    g.drawFittedText(juce::String(timeSigNum_), lr.numerator, juce::Justification::centred, 1, 1.0f);
+    // Slash
+    g.drawFittedText("/", lr.slash, juce::Justification::centred, 1, 1.0f);
+    // Denominator
+    g.drawFittedText(juce::String(timeSigDenom_), lr.denominator, juce::Justification::centred, 1, 1.0f);
+
+    // Caret for BPM editing
     if (isEditing_ && showCaret_)
     {
         auto getTextWidth = [&](const juce::String& s) -> float {
@@ -281,7 +391,7 @@ void BpmValueField::paint(juce::Graphics& g)
             ga.addLineOfText(font, s, 0.0f, 0.0f);
             return ga.getBoundingBox(0, 0, true).getWidth();
         };
-        const auto area = valueArea.toFloat();
+        const auto area = lr.bpmValue.toFloat();
         const auto cx = area.getX();
         const auto caretX = cx + getTextWidth(text_.substring(0, caretIndex_));
         g.setColour(UIColors::textPrimary.withAlpha(0.8f));
@@ -291,15 +401,89 @@ void BpmValueField::paint(juce::Graphics& g)
 
 void BpmValueField::mouseDown(const juce::MouseEvent& e)
 {
-    juce::ignoreUnused(e);
-    grabKeyboardFocus();
-    if (!isEditing_)
+    if (readOnly_)
+        return;
+
+    auto lr = calculateLayout();
+
+    if (lr.bpmValue.contains(e.getPosition()))
     {
-        isEditing_ = true;
-        text_.clear();
-        caretIndex_ = 0;
+        grabKeyboardFocus();
+        if (!isEditing_)
+        {
+            isEditing_ = true;
+            text_.clear();
+            caretIndex_ = 0;
+        }
+        repaint();
     }
-    repaint();
+    else if (lr.numerator.contains(e.getPosition()))
+    {
+        showNumeratorDialog();
+    }
+    else if (lr.denominator.contains(e.getPosition()))
+    {
+        showDenominatorMenu();
+    }
+}
+
+void BpmValueField::showNumeratorDialog()
+{
+    auto* alert = new juce::AlertWindow("Time Signature",
+                                           "Enter beats per bar:",
+                                           juce::AlertWindow::QuestionIcon);
+    alert->addTextEditor("numerator", juce::String(timeSigNum_), "Numerator:");
+    alert->getTextEditor("numerator")->setInputRestrictions(3, "0123456789");
+    alert->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    alert->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    // SafePointer for async lifetime
+    juce::Component::SafePointer<BpmValueField> safeThis(this);
+    juce::Component::SafePointer<juce::AlertWindow> safeAlert(alert);
+
+    alert->enterModalState(true, juce::ModalCallbackFunction::create(
+        [safeThis, safeAlert](int result) {
+            auto* dialog = safeAlert.getComponent();
+            if (dialog == nullptr)
+                return;
+
+            if (result == 1 && safeThis != nullptr)
+            {
+                auto text = dialog->getTextEditorContents("numerator");
+                auto val = text.getIntValue();
+                // Send raw value to Editor; processor handles canonical clamp
+                safeThis->timeSigNum_ = val;
+                if (safeThis->onTimeSignatureCommit)
+                    safeThis->onTimeSignatureCommit(safeThis->timeSigNum_, safeThis->timeSigDenom_);
+                safeThis->repaint();
+            }
+
+            delete dialog;
+        }), false);
+}
+
+void BpmValueField::showDenominatorMenu()
+{
+    juce::PopupMenu menu;
+
+    for (int denom : kValidDenominators)
+    {
+        menu.addItem(denom, juce::String(denom), true, denom == timeSigDenom_);
+    }
+
+    // SafePointer for async lifetime
+    juce::Component::SafePointer<BpmValueField> safeThis(this);
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+        [safeThis](int result) {
+            if (safeThis != nullptr && result > 0)
+            {
+                safeThis->timeSigDenom_ = result;
+                if (safeThis->onTimeSignatureCommit)
+                    safeThis->onTimeSignatureCommit(safeThis->timeSigNum_, safeThis->timeSigDenom_);
+                safeThis->repaint();
+            }
+        });
 }
 
 bool BpmValueField::keyPressed(const juce::KeyPress& key)
@@ -354,6 +538,18 @@ bool BpmValueField::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
+    if (ch == '.')
+    {
+        // Allow one decimal point
+        if (!text_.containsChar('.'))
+        {
+            text_ = text_.substring(0, caretIndex_) + "." + text_.substring(caretIndex_);
+            caretIndex_ = juce::jmin(text_.length(), caretIndex_ + 1);
+            repaint();
+        }
+        return true;
+    }
+
     return false;
 }
 
@@ -383,29 +579,33 @@ void BpmValueField::timerCallback()
 void BpmValueField::commit()
 {
     isEditing_ = false;
-    
-    auto v = text_.getIntValue();
-    if (v <= 0 || text_.isEmpty())
+
+    // Empty text: cancel edit, restore last valid value
+    if (text_.isEmpty())
     {
-        text_ = juce::String(lastValidValue_);
+        text_ = juce::String(lastValidValue_, 1);
         caretIndex_ = text_.length();
         repaint();
         return;
     }
-    
+
+    auto v = text_.getDoubleValue();
+
+    // Update local state with raw value (no UI clamp)
     lastValidValue_ = v;
-    text_ = juce::String(v);
+    text_ = juce::String(v, 1);
     caretIndex_ = text_.length();
     repaint();
-    
+
+    // Send raw value to Editor; processor handles canonical validation
     if (onCommit)
-        onCommit(static_cast<double>(v));
+        onCommit(v);
 }
 
 void BpmValueField::cancelEdit()
 {
     isEditing_ = false;
-    text_ = juce::String(lastValidValue_);
+    text_ = juce::String(lastValidValue_, 1);
     caretIndex_ = text_.length();
     repaint();
 }
@@ -590,14 +790,14 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
         auto base = isActive ? UIColors::accent : UIColors::buttonNormal;
         getLookAndFeel().drawButtonBackground(g, *this, base, shouldDrawButtonAsHighlighted, shouldDrawButtonAsDown);
     }
-    
+
     // 2. Icon
     juce::Path& path = (isToggled && !toggledIconPath_.isEmpty()) ? toggledIconPath_ : iconPath_;
-    
+
     // 鑾峰彇鎸夐挳鍚嶇О锛岀敤浜庡垽鏂槸鍚︽槸 Play/Pause/Stop
     juce::String buttonName = getName();
     bool isTransportButton = (buttonName == "Play" || buttonName == "Pause" || buttonName == "Stop");
-    
+
     juce::Colour iconColor;
     if (themeId == ThemeId::BlueBreeze)
     {
@@ -642,7 +842,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
     {
         iconColor = isEnabled() ? UIColors::textPrimary : UIColors::textDisabled;
     }
-    
+
     if (!isEnabled())
     {
         iconColor = iconColor.withAlpha(0.4f);
@@ -658,7 +858,7 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
         iconArea = iconArea.withSizeKeepingCentre(iconArea.getWidth() * hoverScale, iconArea.getHeight() * hoverScale);
         iconColor = iconColor.brighter(0.15f);
     }
-    
+
     // Use ToolbarIcons helper
     ToolbarIcons::drawIcon(g, path, iconArea, iconColor, 1.5f, false);
 }
@@ -737,19 +937,14 @@ TransportBarComponent::TransportBarComponent()
     pianoViewButton_.setTooltip(LOC(kTooltipPianoRollView));
     pianoViewButton_.getProperties().set(kOverdoseUiRoleKey, kOverdoseUiRoleSegment);
     addAndMakeVisible(pianoViewButton_);
-    
+
     // Setup Joined Buttons (Segmented Control style)
     trackViewButton_.setConnectedEdges(UnifiedToolbarButton::Right);
     pianoViewButton_.setConnectedEdges(UnifiedToolbarButton::Left);
 
-    // Setup BPM Label
-    bpmLabel_.setText("BPM", juce::dontSendNotification);
-    bpmLabel_.setFont(UIColors::getUIFont(UIColors::navFontHeight));
-    bpmLabel_.setJustificationType(juce::Justification::centredRight);
-    bpmLabel_.setVisible(false);
-
     bpmField_.setValue(120.0);
     bpmField_.onCommit = [this](double) { onBpmChanged(); };
+    bpmField_.onTimeSignatureCommit = [this](int num, int denom) { onTimeSignatureChanged(num, denom); };
     bpmField_.setTooltip(LOC(kTooltipBpm));
     addAndMakeVisible(bpmField_);
 
@@ -761,10 +956,10 @@ TransportBarComponent::TransportBarComponent()
 
     timeDisplay_.setTimeString("00:00");
     timeDisplay_.setTooltip(LOC(kTooltipTimeline));
+    timeDisplay_.onClick = [this] { onTimeDisplayClicked(); };
     addAndMakeVisible(timeDisplay_);
 
     // Apply styling (transport buttons use custom paintButton)
-    bpmLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
 
     // Setup scale selector
     scaleLabel_.setText("Scale:", juce::dontSendNotification);
@@ -831,16 +1026,15 @@ void TransportBarComponent::refreshLocalizedText()
     trackViewButton_.setTooltip(LOC(kTooltipTrackView));
     pianoViewButton_.setTooltip(LOC(kTooltipPianoRollView));
     tapButton_.setTooltip(LOC(kTooltipTapTempo));
-    
+
     // 刷新 scaleLabel
     scaleLabel_.setText(LOC(kScale), juce::dontSendNotification);
-    
+
     repaint();
 }
 
 void TransportBarComponent::applyTheme()
 {
-    bpmLabel_.setColour(juce::Label::textColourId, UIColors::currentThemeId() == ThemeId::DarkBlueGrey ? UIColors::textPrimary : UIColors::textSecondary);
     scaleLabel_.setColour(juce::Label::textColourId, UIColors::textSecondary);
 
     scaleRootSelector_.setColour(juce::ComboBox::backgroundColourId, UIColors::backgroundLight);
@@ -964,7 +1158,7 @@ void TransportBarComponent::mouseDown(const juce::MouseEvent& e)
             bpmField_.giveAwayKeyboardFocus();
         }
     }
-    
+
     // 缁х画浼犻€掍簨浠剁粰鐖剁被
     juce::Component::mouseDown(e);
 }
@@ -977,7 +1171,7 @@ void TransportBarComponent::resized()
     const int buttonWidth = 50;
     const int spacing = 10;
     const int groupGap = 20;
-    
+
     auto row = bounds.withHeight(controlHeight).withY(bounds.getCentreY() - controlHeight / 2);
 
     if (layoutProfile_ == LayoutProfile::VST3AraSingleClip)
@@ -997,7 +1191,8 @@ void TransportBarComponent::resized()
         trackViewButton_.setVisible(false);
         pianoViewButton_.setVisible(false);
 
-        bpmField_.setVisible(false);
+        bpmField_.setVisible(true);
+        bpmField_.setReadOnly(true);
         tapButton_.setVisible(false);
 
         const int timeDisplayWidth = 140;
@@ -1006,6 +1201,10 @@ void TransportBarComponent::resized()
 
         recordButton_.setVisible(true);
         recordButton_.setBounds(row.removeFromLeft(buttonWidth));
+
+        const int bpmWidth = 160;
+        bpmField_.setBounds(row.removeFromLeft(bpmWidth));
+        row.removeFromLeft(spacing);
 
         const int rootWidth = 60;
         const int typeWidth = 180;
@@ -1025,6 +1224,7 @@ void TransportBarComponent::resized()
     trackViewButton_.setVisible(true);
     pianoViewButton_.setVisible(true);
     bpmField_.setVisible(true);
+    bpmField_.setReadOnly(false);
     tapButton_.setVisible(true);
     recordButton_.setVisible(false);
 
@@ -1052,7 +1252,7 @@ void TransportBarComponent::resized()
     timeDisplay_.setBounds(row.removeFromLeft(timeDisplayWidth));
     row.removeFromLeft(spacing);
 
-    const int bpmWidth = 110;
+    const int bpmWidth = 160;
     bpmField_.setBounds(row.removeFromLeft(bpmWidth));
     row.removeFromLeft(spacing);
     tapButton_.setBounds(row.removeFromLeft(buttonWidth));
@@ -1141,12 +1341,20 @@ bool TransportBarComponent::isWorkspaceView() const
 
 void TransportBarComponent::setBpm(double bpm)
 {
+    currentBpm_ = bpm;
     bpmField_.setValue(bpm);
 }
 
 double TransportBarComponent::getBpm() const
 {
     return bpmField_.getValue();
+}
+
+void TransportBarComponent::setTimeSignature(int numerator, int denominator)
+{
+    currentTimeSigNum_ = numerator;
+    currentTimeSigDenom_ = denominator;
+    bpmField_.setTimeSignature(numerator, denominator);
 }
 
 void TransportBarComponent::setScale(int rootNote, int scaleType)
@@ -1159,12 +1367,39 @@ void TransportBarComponent::setScale(int rootNote, int scaleType)
 
 void TransportBarComponent::setPositionSeconds(double seconds)
 {
-    const int totalSeconds = static_cast<int>(seconds);
-    const int minutes = totalSeconds / 60;
-    const int secs = totalSeconds % 60;
-    const int milliseconds = static_cast<int>(std::fmod(seconds * 1000.0, 1000.0));
+    currentPositionSeconds_ = seconds;
 
-    timeDisplay_.setTimeString(juce::String::formatted("%02d:%02d.%03d", minutes, secs, milliseconds));
+    if (timelineDisplayMode_ == TimelineDisplayMode::Bars)
+    {
+        // Convert seconds to bars/beats using canonical BPM and time signature
+        const double quarterSeconds = 60.0 / currentBpm_;
+        const double beatSeconds = quarterSeconds * 4.0 / currentTimeSigDenom_;
+
+        const double totalBeats = seconds / beatSeconds;
+        const int bar = static_cast<int>(totalBeats / currentTimeSigNum_) + 1;
+        const int beat = (static_cast<int>(totalBeats) % currentTimeSigNum_) + 1;
+
+        timeDisplay_.setBarsString(bar, beat);
+    }
+    else
+    {
+        const int totalSeconds = static_cast<int>(seconds);
+        const int minutes = totalSeconds / 60;
+        const int secs = totalSeconds % 60;
+        const int milliseconds = static_cast<int>(std::fmod(seconds * 1000.0, 1000.0));
+
+        timeDisplay_.setTimeString(juce::String::formatted("%02d:%02d.%03d", minutes, secs, milliseconds));
+    }
+}
+
+void TransportBarComponent::setTimelineDisplayMode(TimelineDisplayMode mode)
+{
+    if (timelineDisplayMode_ == mode)
+        return;
+
+    timelineDisplayMode_ = mode;
+    // Refresh display with current position
+    setPositionSeconds(currentPositionSeconds_);
 }
 
 void TransportBarComponent::onPlayClicked()
@@ -1195,7 +1430,7 @@ void TransportBarComponent::onTrackViewClicked()
         trackViewButton_.setToggleState(true, juce::dontSendNotification);
         return;
     }
-    
+
     setWorkspaceView(true);
     listeners_.call([this](Listener& l) { l.viewToggled(workspaceView_); });
 }
@@ -1207,7 +1442,7 @@ void TransportBarComponent::onPianoViewClicked()
         pianoViewButton_.setToggleState(true, juce::dontSendNotification);
         return;
     }
-    
+
     setWorkspaceView(false);
     listeners_.call([this](Listener& l) { l.viewToggled(workspaceView_); });
 }
@@ -1215,14 +1450,15 @@ void TransportBarComponent::onPianoViewClicked()
 void TransportBarComponent::onBpmChanged()
 {
     double bpm = getBpm();
-
-    // Clamp BPM to reasonable range
-    bpm = juce::jlimit(1.0, 480.0, bpm);
-
-    // Update text editor with clamped value
-    setBpm(bpm);
-
+    currentBpm_ = bpm;
     listeners_.call([bpm](Listener& l) { l.bpmChanged(bpm); });
+}
+
+void TransportBarComponent::onTimeSignatureChanged(int num, int denom)
+{
+    currentTimeSigNum_ = num;
+    currentTimeSigDenom_ = denom;
+    listeners_.call([num, denom](Listener& l) { l.timeSignatureChanged(num, denom); });
 }
 
 void TransportBarComponent::onTapClicked()
@@ -1287,5 +1523,16 @@ void TransportBarComponent::onRecordClicked()
     listeners_.call([](Listener& l) { l.recordRequested(); });
 }
 
-} // namespace OpenTune
+void TransportBarComponent::onTimeDisplayClicked()
+{
+    timelineDisplayMode_ = (timelineDisplayMode_ == TimelineDisplayMode::Time)
+        ? TimelineDisplayMode::Bars
+        : TimelineDisplayMode::Time;
 
+    // Refresh display
+    setPositionSeconds(currentPositionSeconds_);
+
+    listeners_.call([this](Listener& l) { l.timelineDisplayModeChanged(timelineDisplayMode_); });
+}
+
+} // namespace OpenTune

@@ -2,19 +2,21 @@
 
 /**
  * 传输控制栏组件
- * 
+ *
  * 提供播放控制、BPM设置、调式选择等功能的工具栏：
  * - 播放/暂停/停止控制
  * - 循环开关
  * - BPM 显示和编辑
  * - 调式选择（大调/小调等）
  * - 视图切换
+ * - 时间显示模式切换（Time/Bars）
  */
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <vector>
 #include <functional>
 #include "UIColors.h"
+#include "../../Utils/TimelineDisplayMode.h"
 
 namespace OpenTune {
 
@@ -32,7 +34,7 @@ public:
     };
 
     UnifiedToolbarButton(const juce::String& name, juce::Path iconPath, juce::Path toggledIconPath = {});
-    
+
     void setIcon(juce::Path iconPath);
     void setConnectedEdges(int edges);
 
@@ -50,10 +52,14 @@ class DigitalTimeDisplay : public juce::Component,
 public:
     DigitalTimeDisplay();
     void setTimeString(const juce::String& time);
+    void setBarsString(int bar, int beat);
     void paint(juce::Graphics& g) override;
+    void mouseDown(const juce::MouseEvent& e) override;
 
     juce::String getTooltip() override { return tooltip_; }
     void setTooltip(const juce::String& t) { tooltip_ = t; }
+
+    std::function<void()> onClick;
 
 private:
     void drawChar(juce::Graphics& g, juce::juce_wchar c, juce::Rectangle<float> area);
@@ -61,6 +67,9 @@ private:
 
     juce::String timeString_ = "00:00";
     juce::String tooltip_;
+    bool isBarsMode_ = false;
+    int bar_ = 1;
+    int beat_ = 1;
 };
 
 class BpmValueField : public juce::Component,
@@ -71,6 +80,8 @@ public:
     BpmValueField();
     void setValue(double value);
     double getValue() const;
+    void setTimeSignature(int numerator, int denominator);
+    void setReadOnly(bool readOnly);
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& e) override;
     bool keyPressed(const juce::KeyPress& key) override;
@@ -80,17 +91,34 @@ public:
     void setTooltip(const juce::String& t) { tooltip_ = t; }
 
     std::function<void(double)> onCommit;
+    std::function<void(int, int)> onTimeSignatureCommit;  // num, denom
 
 private:
     void timerCallback() override;
     void commit();
     void cancelEdit();
+    void showNumeratorDialog();
+    void showDenominatorMenu();
+    juce::String formatBpmText() const;
+
+    // Layout rectangles for hit testing and painting
+    struct LayoutRects
+    {
+        juce::Rectangle<int> bpmValue;
+        juce::Rectangle<int> numerator;
+        juce::Rectangle<int> slash;
+        juce::Rectangle<int> denominator;
+    };
+    LayoutRects calculateLayout() const;
 
     juce::String text_ = "120";
     bool showCaret_ = false;
     int caretIndex_ = 0;
     bool isEditing_ = false;
-    int lastValidValue_ = 120;
+    double lastValidValue_ = 120.0;
+    int timeSigNum_ = 4;
+    int timeSigDenom_ = 4;
+    bool readOnly_ = false;
     juce::String tooltip_;
 };
 
@@ -120,9 +148,11 @@ public:
         virtual void stopRequested() = 0;
         virtual void loopToggled(bool enabled) = 0;
         virtual void bpmChanged(double newBpm) = 0;
+        virtual void timeSignatureChanged(int numerator, int denominator) = 0;
         virtual void scaleChanged(int rootNote, int scaleType) = 0;
         virtual void viewToggled(bool workspaceView) = 0;
         virtual void recordRequested() {}
+        virtual void timelineDisplayModeChanged(TimelineDisplayMode mode) {}
     };
 
     // Callback functions for Menu requests (File/Edit/View)
@@ -135,7 +165,7 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
-    void mouseDown(const juce::MouseEvent& e) override;  // 点击外部区域时让BpmField失去焦点
+    void mouseDown(const juce::MouseEvent& e) override;
 
     void applyTheme();
     void setEmbeddedInTopBar(bool embedded);
@@ -145,7 +175,7 @@ public:
     void addListener(Listener* l);
     void removeListener(Listener* l);
 
-    void refreshLocalizedText();  // 刷新本地化文本
+    void refreshLocalizedText();
 
     void setPlaying(bool playing);
     bool isPlaying() const;
@@ -162,12 +192,18 @@ public:
     void setBpm(double bpm);
     double getBpm() const;
 
+    void setTimeSignature(int numerator, int denominator);
+
     void setScale(int rootNote, int scaleType);
 
     void setPositionSeconds(double seconds);
+
     void setWorkspaceView(bool workspaceView);
     bool isWorkspaceView() const;
     void setRenderStatusText(const juce::String& text);
+
+    void setTimelineDisplayMode(TimelineDisplayMode mode);
+    TimelineDisplayMode getTimelineDisplayMode() const { return timelineDisplayMode_; }
 
     juce::Component& getFileButton() { return fileButton_; }
     juce::Component& getEditButton() { return editButton_; }
@@ -180,11 +216,13 @@ private:
     void onStopClicked();
     void onLoopToggled();
     void onBpmChanged();
+    void onTimeSignatureChanged(int num, int denom);
     void onTapClicked();
     void onScaleChanged();
     void onTrackViewClicked();
     void onPianoViewClicked();
     void onRecordClicked();
+    void onTimeDisplayClicked();
 
     juce::ListenerList<Listener> listeners_;
 
@@ -199,21 +237,21 @@ private:
     UnifiedToolbarButton stopButton_;
     UnifiedToolbarButton loopButton_;
     UnifiedToolbarButton recordButton_;
-    
+
     // Split View Buttons
     UnifiedToolbarButton trackViewButton_;
     UnifiedToolbarButton pianoViewButton_;
-    
+
     // Labels & Editors
     DigitalTimeDisplay timeDisplay_;
-    juce::Label bpmLabel_;
     BpmValueField bpmField_;
     UnifiedToolbarButton tapButton_;
-    
+
     // Scale controls
     juce::Label scaleLabel_;
     juce::ComboBox scaleRootSelector_;
     juce::ComboBox scaleTypeSelector_;
+
     // State
     bool isPlaying_ = false;
     bool workspaceView_ = true;
@@ -223,6 +261,13 @@ private:
     juce::Time lastTapTime_;
     std::vector<double> tapIntervals_;
     static const int maxTapSamples_ = 5;
+
+    // Timeline display mode
+    TimelineDisplayMode timelineDisplayMode_ = TimelineDisplayMode::Time;
+    double currentBpm_ = 120.0;
+    int currentTimeSigNum_ = 4;
+    int currentTimeSigDenom_ = 4;
+    double currentPositionSeconds_ = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TransportBarComponent);
 };

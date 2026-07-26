@@ -34,6 +34,7 @@
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
 #include "Utils/AppPreferences.h"
+#include "Utils/TimelineDisplayMode.h"
 #include "Utils/ProjectSession.h"
 #include "Utils/LocalizationManager.h"
 #include "Utils/ScaleUiMapping.h"
@@ -117,8 +118,10 @@ public:
     void stopRequested() override;
     void loopToggled(bool enabled) override;
     void bpmChanged(double newBpm) override;
+    void timeSignatureChanged(int numerator, int denominator) override;
     void scaleChanged(int rootNote, int scaleType) override;
     void viewToggled(bool workspaceView) override;
+    void timelineDisplayModeChanged(TimelineDisplayMode mode) override;
 
     // TrackPanelComponent::Listener
     void trackSelected(int trackId) override;
@@ -283,6 +286,7 @@ private:
     double lastSyncedBpm_ = 0.0;
     int lastSyncedTimeSigNum_ = 0;
     int lastSyncedTimeSigDenom_ = 0;
+    TimelineDisplayMode timelineDisplayMode_ = TimelineDisplayMode::Time;
 #if JUCE_DEBUG
     int diagnosticHeartbeatCounter_ = 0;
 #endif

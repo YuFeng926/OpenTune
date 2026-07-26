@@ -29,6 +29,7 @@
 #include "TimelineCompositeCache.h"
 #include "../Utils/ZoomSensitivityConfig.h"
 #include "../Utils/KeyShortcutConfig.h"
+#include "../../Utils/TimelineDisplayMode.h"
 
 namespace OpenTune {
 
@@ -123,6 +124,8 @@ public:
     void setExperimentalReferenceControlsEnabled(bool enabled);
     void setZoomSensitivity(const ZoomSensitivityConfig::ZoomSensitivitySettings& settings) { zoomSensitivity_ = settings; }
     void setShortcutSettings(const KeyShortcutConfig::KeyShortcutSettings& settings) { shortcutSettings_ = settings; }
+    void setTimelineDisplayMode(TimelineDisplayMode mode);
+    TimelineDisplayMode getTimelineDisplayMode() const noexcept { return displayMode_; }
 
     // 缩放状态管理
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
@@ -242,21 +245,20 @@ private:
     double tileCoverageEndSeconds_ = 0.0;
     WaveformMipmapCache waveformMipmapCache_;
 
-    double lastContextBpm_{ 0.0 };
-    int lastContextTimeSigNum_{ 0 };
-    int lastContextTimeSigDenom_{ 0 };
+    // Last render background signature — only used to detect BPM/time sig/display mode changes
+    BackgroundGenerationSignature lastBgSignature_{};
+    // Last render foreground signature — only used to detect content revision changes
+    ForegroundGenerationSignature lastFgSignature_{};
 
     juce::ScrollBar horizontalScrollBar_{ false };
     juce::ScrollBar verticalScrollBar_{ true };
     juce::TextButton scrollModeToggleButton_;
-    juce::TextButton timeUnitToggleButton_;
     SmallButtonLookAndFeel smallButtonLookAndFeel_;
 
     enum class ScrollMode { Page, Continuous };
     ScrollMode scrollMode_{ ScrollMode::Continuous };
 
-    enum class TimeUnit { Seconds, Bars };
-    TimeUnit timeUnit_{ TimeUnit::Seconds };
+    TimelineDisplayMode displayMode_ = TimelineDisplayMode::Time;
 
     bool lastObservedPlayHeadPlaying_{false};
 
@@ -277,10 +279,13 @@ private:
     // ---- Composite cache (new tile pipeline) ----
     mutable TimelineCompositeCache compositeCache_;
 
-    GenerationSignature makeGenerationSignature() const;
-    void buildCompositeTile(juce::Graphics& g, juce::Rectangle<int> tileBounds,
-                           TimelineCompositeCache::TileKey key);
-    void prepareCoverageCompositeTilesNew();
+    BackgroundGenerationSignature makeBackgroundSignature() const;
+    ForegroundGenerationSignature makeForegroundSignature() const;
+    void buildCompositeBackground(juce::Graphics& g, juce::Rectangle<int> tileBounds,
+                                  TimelineCompositeCache::TileKey key);
+    void buildCompositeForeground(juce::Graphics& g, juce::Rectangle<int> tileBounds,
+                                  TimelineCompositeCache::TileKey key);
+    void prepareCoverageCompositeTiles();
 
     // Smooth scrolling
     // 用户是否手动调整过缩放（用于避免自动缩放覆盖用户设置）

@@ -1382,7 +1382,7 @@ void pianoRollRetainedSurfaceArchitecture()
     expectTokens("setShowWaveform calls rasterizeDirtySurfaces",
                  extractFunctionBlock(componentImpl, "void PianoRollComponent::setShowWaveform"),
                  {"rasterizeDirtySurfaces();"});
-    expectTokens("setBpm calls rasterizeDirtySurfaces",
+    expectNoTokens("setBpm avoids full-surface rasterization",
                  extractFunctionBlock(componentImpl, "void PianoRollComponent::setBpm"),
                  {"rasterizeDirtySurfaces();"});
     const auto vertScrollFn = extractFunctionBlock(componentImpl, "void PianoRollComponent::handleVerticalScrollWheel");
@@ -1838,6 +1838,184 @@ void pitchCurveF0SpanApiReplacesOldRenderPath()
                    {"ctx_.getViewMapper().freqToY"});
 }
 
+// ============================================================================
+// Category 3: Theme grid — Time 与 Bars 使用同一 token/minor alpha
+// Bars major 仅 alpha 更高；验证源码禁止 interpolatedWith/brighter
+// ============================================================================
+
+void themeGridDoesNotUseInterpolatedWithOrBrighterForBars()
+{
+    const auto composer = readText("Source/Standalone/UI/TimelineLayerComposer.cpp");
+    const auto resolveFn = extractBlockByMarker(composer, "static juce::Colour resolveGridLineColour");
+
+    expect(!resolveFn.empty(), "resolveGridLineColour must be found");
+
+    // Time and Bars both use the same grid token (pianoRollGrid or panelBorder)
+    // with the same minor alpha formula. Bars major only increases alpha.
+    expectNoTokens("resolveGridLineColour no interpolatedWith",
+                   resolveFn,
+                   {"interpolatedWith"},
+                   "Bars must use same token as Time, not interpolatedWith");
+    expectNoTokens("resolveGridLineColour no brighter",
+                   resolveFn,
+                   {"brighter"},
+                   "Bars must not use brighter() for major alpha");
+    expectNoTokens("resolveGridLineColour no darker",
+                   resolveFn,
+                   {"darker"});
+
+    // Verify the function uses withAlpha for both Time and Bars paths
+    expectTokens("resolveGridLineColour uses withAlpha for major lines",
+                 resolveFn,
+                 {"withAlpha"});
+}
+
+// ============================================================================
+// Category 5: Piano setter 合同 — BPM/拍号/模式只走 invalidateTimeAxisStaticSurface
+// ============================================================================
+
+void pianoSettersOnlyInvalidateTimeAxisNotContent()
+{
+    const auto component = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+
+    const auto setBpmFn = extractBlockByMarker(component, "void PianoRollComponent::setBpm");
+    const auto setTsFn = extractBlockByMarker(component, "void PianoRollComponent::setTimeSignature");
+    const auto setDmFn = extractBlockByMarker(component, "void PianoRollComponent::setTimelineDisplayMode");
+
+    expect(!setBpmFn.empty(), "setBpm must be found");
+    expect(!setTsFn.empty(), "setTimeSignature must be found");
+    expect(!setDmFn.empty(), "setTimelineDisplayMode must be found");
+
+    // All three must call invalidateTimeAxisStaticSurface
+    expectTokens("setBpm calls invalidateTimeAxisStaticSurface",
+                 setBpmFn, {"invalidateTimeAxisStaticSurface"});
+    expectTokens("setTimeSignature calls invalidateTimeAxisStaticSurface",
+                 setTsFn, {"invalidateTimeAxisStaticSurface"});
+    expectTokens("setTimelineDisplayMode calls invalidateTimeAxisStaticSurface",
+                 setDmFn, {"invalidateTimeAxisStaticSurface"});
+
+    // None must set contentDirty_
+    expectNoTokens("setBpm no contentDirty_", setBpmFn, {"contentDirty_"});
+    expectNoTokens("setTimeSignature no contentDirty_", setTsFn, {"contentDirty_"});
+    expectNoTokens("setTimelineDisplayMode no contentDirty_", setDmFn, {"contentDirty_"});
+
+    // invalidateTimeAxisStaticSurface uses timeAxisRect for damage repaint
+    const auto invalidateFn = extractBlockByMarker(component,
+        "void PianoRollComponent::invalidateTimeAxisStaticSurface");
+    expect(!invalidateFn.empty(), "invalidateTimeAxisStaticSurface must be found");
+    expectTokens("invalidateTimeAxisStaticSurface damages timeAxisRect",
+                 invalidateFn, {"timeAxisRect()"});
+    expectTokens("invalidateTimeAxisStaticSurface repaints timeAxisRect",
+                 invalidateFn, {"repaint(timeAxisRect())"});
+}
+
+// ============================================================================
+// Category 7: VST3/ARA host-owned — PluginEditor 不调用 setBpm/setTimeSignature
+// Transport meter 可见只读
+// ============================================================================
+
+void vst3PluginEditorDoesNotWriteBpmOrTimeSignature()
+{
+    const auto pluginEditorSource = readText("Source/Plugin/PluginEditor.cpp");
+    const auto pluginEditorHeader = readText("Source/Plugin/PluginEditor.h");
+
+    // PluginEditor's timerCallback reads BPM/timeSig from processor and
+    // pushes to TransportBar/PianoRoll for display — this is read-only sync.
+    // The bpmChanged/timeSignatureChanged listener callbacks (user edits
+    // in TransportBar) must NOT call setBpm/setTimeSignature on the processor
+    // in VST3 mode.
+
+    const auto bpmChangedFn = extractBlockByMarker(
+        pluginEditorSource, "void OpenTuneAudioProcessorEditor::bpmChanged");
+    const auto tsChangedFn = extractBlockByMarker(
+        pluginEditorSource, "void OpenTuneAudioProcessorEditor::timeSignatureChanged");
+
+    // bpmChanged in VST3: must NOT set BPM on processor
+    expectNoTokens("PluginEditor bpmChanged must not set BPM on processor",
+                   bpmChangedFn,
+                   {"processorRef_.setBpm(", "setBpm("});
+
+    // timeSignatureChanged in VST3: must NOT set time sig on processor
+    expectNoTokens("PluginEditor timeSignatureChanged must not set time sig on processor",
+                   tsChangedFn,
+                   {"processorRef_.setTimeSig", "setTimeSignature("});
+
+    // TransportBar BPM field must be read-only in VST3
+    const auto transportBarSource = readText("Source/Standalone/UI/TransportBarComponent.cpp");
+    const auto setReadOnlyCalls = countOf(transportBarSource, "setReadOnly");
+    // At least one call must exist (BPM field set to read-only somewhere)
+    expect(setReadOnlyCalls >= 1,
+           "TransportBar must have setReadOnly calls for BPM field in VST3");
+}
+
+// ============================================================================
+// Category 8: Global TimelineDisplayMode — 两个本地 toggle 成员零残留
+// DigitalTimeDisplay 唯一切换入口，AppPreferences 往返，Editor 同步两视图
+// ============================================================================
+
+void globalTimelineDisplayModeNoLocalToggleResidue()
+{
+    const auto transportBarSource = readText("Source/Standalone/UI/TransportBarComponent.cpp");
+    const auto pianoRollHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
+    const auto pianoRollSource = readText("Source/Standalone/UI/PianoRollComponent.cpp");
+    const auto arrangementHeader = readText("Source/Standalone/UI/ArrangementViewComponent.h");
+    const auto arrangementSource = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
+
+    // No local toggle members — only the single displayMode_ field
+    // TransportBarComponent: uses timelineDisplayMode_, toggled in onTimeDisplayClicked via DigitalTimeDisplay
+    // No additional toggle flag
+    expectNoTokens("TransportBar no local toggle flag",
+                   transportBarSource,
+                   {"toggleDisplayMode", "timeUnitToggle",
+                    "displayToggleFlag"});
+
+    // DigitalTimeDisplay onClick is the ONLY toggle entry
+    const auto onClickFn = extractBlockByMarker(transportBarSource,
+        "void TransportBarComponent::onTimeDisplayClicked");
+    expect(!onClickFn.empty(), "onTimeDisplayClicked must be found");
+    expectTokens("DigitalTimeDisplay onClick is the sole toggle",
+                 onClickFn,
+                 {"timelineDisplayMode_ ="});
+
+    // AppPreferences stores and retrieves TimelineDisplayMode
+    const auto prefsHeader = readText("Source/Utils/AppPreferences.h");
+    expectTokens("AppPreferences has setTimelineDisplayMode",
+                 prefsHeader, {"setTimelineDisplayMode"});
+    expectTokens("AppPreferences has getTimelineDisplayMode",
+                 prefsHeader, {"getTimelineDisplayMode"});
+    expectTokens("SharedPreferencesState has timelineDisplayMode",
+                 prefsHeader, {"TimelineDisplayMode timelineDisplayMode"});
+
+    // Editor syncs both views: standalone PluginEditor calls both
+    // pianoRoll_.setTimelineDisplayMode and arrangementView_.setTimelineDisplayMode
+    const auto standaloneEditor = readText("Source/Standalone/PluginEditor.cpp");
+    const auto tldmFn = extractBlockByMarker(standaloneEditor,
+        "void OpenTuneAudioProcessorEditor::timelineDisplayModeChanged");
+    expect(!tldmFn.empty(), "timelineDisplayModeChanged in standalone editor must be found");
+    expectTokens("Standalone editor syncs both PianoRoll and Arrangement",
+                 tldmFn,
+                 {"pianoRoll_.setTimelineDisplayMode",
+                  "arrangementView_.setTimelineDisplayMode"});
+
+    // Plugin editor also syncs PianoRoll
+    const auto pluginEditor = readText("Source/Plugin/PluginEditor.cpp");
+    const auto tldmPluginFn = extractBlockByMarker(pluginEditor,
+        "void OpenTuneAudioProcessorEditor::timelineDisplayModeChanged");
+    expect(!tldmPluginFn.empty(), "timelineDisplayModeChanged in plugin editor must be found");
+    expectTokens("Plugin editor syncs PianoRoll",
+                 tldmPluginFn,
+                 {"pianoRoll_.setTimelineDisplayMode"});
+
+    // No residual toggle functions
+    expectNoTokens("PianoRoll no toggle",
+                   pianoRollHeader + pianoRollSource,
+                   {"toggleDisplayMode", "toogleTimelineDisplay", "switchTimeMode"});
+    expectNoTokens("Arrangement no toggle",
+                   arrangementHeader + arrangementSource,
+                   {"toggleDisplayMode", "toggleTimelineDisplay", "switchTimeMode"});
+}
+
+
 } // namespace
 
 int main()
@@ -1902,6 +2080,18 @@ int main()
         araSetReferenceOverlayUsesMatchedSnapshotTimeGrid();
         araPianoRollSourceOutputUsesItemTimeGridAndToolHandlerUsesCallback();
         araStaticResidualChecksForTimeGridOwnershipPlan();
+
+        // Category 3: Theme grid source contract (no interpolatedWith/brighter)
+        themeGridDoesNotUseInterpolatedWithOrBrighterForBars();
+
+        // Category 5: Piano setter contracts (invalidateTimeAxis only)
+        pianoSettersOnlyInvalidateTimeAxisNotContent();
+
+        // Category 7: VST3/ARA host-owned (PluginEditor no setBpm/setTimeSignature)
+        vst3PluginEditorDoesNotWriteBpmOrTimeSignature();
+
+        // Category 8: Global TimelineDisplayMode (no toggle residue)
+        globalTimelineDisplayModeNoLocalToggleResidue();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";

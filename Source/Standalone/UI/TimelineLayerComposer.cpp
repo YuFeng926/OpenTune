@@ -104,6 +104,20 @@ TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(const std::string& v
 }
 
 // ============================================================================
+// resolveGridLineColour — 业务语义统一：同一主题同一 grid token，同一 minor alpha
+// Bars 仅在小节线使用 major alpha；Seconds 永远使用 minor alpha
+// ============================================================================
+static juce::Colour resolveGridLineColour(ThemeId themeId, bool isMeasure) {
+    if (themeId == ThemeId::Aurora)
+        return UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.064f : 0.022f);
+    if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+        return UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f);
+    if (themeId == ThemeId::DarkBlueGrey)
+        return UIColors::panelBorder.withAlpha(0.12f);
+    return UIColors::panelBorder.withAlpha(isMeasure ? 0.35f : 0.25f);
+}
+
+// ============================================================================
 // drawGridLines — 在 tile 内按 absolute time 绘制网格线
 // ============================================================================
 void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams& params) {
@@ -112,15 +126,19 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
     const auto themeId = static_cast<ThemeId>(params.themeId);
     const double pps = params.pixelsPerSecond;
 
-    if (params.timeUnit == 1) { // Bars
-        double bpm = params.tempo;
-        if (bpm <= 0.0) bpm = 120.0;
-        double secondsPerBeat = 60.0 / bpm;
-        double pixelsPerBeat = pps * secondsPerBeat;
-        double beatInterval = selectBeatInterval(pixelsPerBeat);
+    if (params.displayMode == TimelineDisplayMode::Bars) {
+        const double quarterSeconds = 60.0 / params.tempo;
+        const double beatSeconds = quarterSeconds * 4.0 / static_cast<double>(params.timeSigDenominator);
+        const double pixelsPerBeat = pps * beatSeconds;
+        const double rawBeatInterval = selectBeatInterval(pixelsPerBeat);
+        const int num = params.timeSigNumerator;
+
+        // 稀疏刻度保持小节对齐：step 必须是 num 的整数倍
+        int64_t beatInterval = static_cast<int64_t>(rawBeatInterval);
+        if (beatInterval > 1)
+            beatInterval = ((beatInterval + num - 1) / num) * num;
 
         // ── performance: narrow beat range to clip bounds ──
-        // pad=2px derived from existing cull: if (pixelX < -2 || pixelX > w + 2) continue;
         const auto clip = g.getClipBounds();
         constexpr int kGridClipPadX = 2;
         const double gridClipStartTime = params.visibleStartSeconds +
@@ -128,43 +146,25 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
         const double gridClipEndTime = params.visibleStartSeconds +
             static_cast<double>(std::min(w, clip.getRight() + kGridClipPadX)) / pps;
 
-        int64_t startBeat = static_cast<int64_t>(gridClipStartTime / secondsPerBeat);
+        int64_t startBeat = static_cast<int64_t>(gridClipStartTime / beatSeconds);
         if (startBeat < 0) startBeat = 0;
-        startBeat = (startBeat / static_cast<int64_t>(beatInterval)) * static_cast<int64_t>(beatInterval);
-        int64_t endBeat = static_cast<int64_t>(std::min(gridClipEndTime, params.visibleEndSeconds) / secondsPerBeat) + 1;
+        startBeat = (startBeat / beatInterval) * beatInterval;
+        int64_t endBeat = static_cast<int64_t>(std::min(gridClipEndTime, params.visibleEndSeconds) / beatSeconds) + 1;
         if (endBeat - startBeat > 2000) endBeat = startBeat + 2000;
 
-        for (int64_t beat = startBeat; beat <= endBeat; beat += static_cast<int64_t>(beatInterval)) {
-            double time = beat * secondsPerBeat;
+        for (int64_t beatIndex = startBeat; beatIndex <= endBeat; beatIndex += beatInterval) {
+            double time = static_cast<double>(beatIndex) * beatSeconds;
             int pixelX = static_cast<int>(std::llround((time - params.visibleStartSeconds) * pps));
             if (pixelX < -2 || pixelX > w + 2) continue;
 
-            bool isMeasure = (beatInterval >= 4.0) ? true : ((beat % 4) == 0);
-
-            if (themeId == ThemeId::Aurora) {
-                if (params.viewKind == "arrangement")
-                    g.setColour(UIColors::gridLine.withAlpha(isMeasure ? 0.090f : 0.045f));
-                else
-                    g.setColour(isMeasure
-                        ? UIColors::pianoRollGrid.interpolatedWith(UIColors::textSecondary, 0.14f).withAlpha(0.064f)
-                        : UIColors::pianoRollGrid.withAlpha(0.022f));
-            } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
-                g.setColour(UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f));
-            } else if (themeId == ThemeId::DarkBlueGrey) {
-                g.setColour(UIColors::panelBorder.withAlpha(0.12f));
-            } else {
-                g.setColour(isMeasure
-                    ? UIColors::panelBorder.brighter(0.3f)
-                    : UIColors::panelBorder.withAlpha(0.25f));
-            }
+            const bool isMeasure = (beatIndex % num) == 0;
+            g.setColour(resolveGridLineColour(themeId, isMeasure));
             g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(h));
         }
-    } else { // Seconds
+    } else { // Seconds — 永远 minor alpha
         double markerInterval = selectMarkerInterval(pps);
         if (markerInterval < 0.001) markerInterval = 1.0;
 
-        // ── performance: narrow time range to clip bounds ──
-        // pad=2px derived from existing cull: if (pixelX < -2 || pixelX > w + 2) continue;
         const auto clip = g.getClipBounds();
         constexpr int kGridClipPadX = 2;
         const double gridClipStartTime = params.visibleStartSeconds +
@@ -177,22 +177,12 @@ void TimelineLayerComposer::drawGridLines(juce::Graphics& g, const RenderParams&
         startTime = std::floor(startTime / markerInterval) * markerInterval;
         double endTime = std::min(gridClipEndTime, params.visibleEndSeconds);
 
+        const auto minorColour = resolveGridLineColour(themeId, false);
         for (double time = startTime; time < endTime + markerInterval; time += markerInterval) {
             int pixelX = static_cast<int>(std::llround((time - params.visibleStartSeconds) * pps));
             if (pixelX < -2 || pixelX > w + 2) continue;
 
-            if (themeId == ThemeId::Aurora) {
-                if (params.viewKind == "arrangement")
-                    g.setColour(UIColors::gridLine.withAlpha(0.045f));
-                else
-                    g.setColour(UIColors::pianoRollGrid.withAlpha(0.016f));
-            } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
-                g.setColour(UIColors::pianoRollGrid.withAlpha(0.022f));
-            } else if (themeId == ThemeId::DarkBlueGrey) {
-                g.setColour(UIColors::panelBorder.withAlpha(0.12f));
-            } else {
-                g.setColour(UIColors::panelBorder.withAlpha(0.25f));
-            }
+            g.setColour(minorColour);
             g.drawVerticalLine(pixelX, 0.0f, static_cast<float>(h));
         }
     }
@@ -220,12 +210,17 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
                    rulerStyle.tickStroke);
     }
 
-    if (params.timeUnit == 1) { // Bars
-        double bpm = params.tempo;
-        if (bpm <= 0.0) bpm = 120.0;
-        double secondsPerBeat = 60.0 / bpm;
-        double pixelsPerBeat = pps * secondsPerBeat;
-        double beatInterval = selectBeatInterval(pixelsPerBeat);
+    if (params.displayMode == TimelineDisplayMode::Bars) {
+        const double quarterSeconds = 60.0 / params.tempo;
+        const double beatSeconds = quarterSeconds * 4.0 / static_cast<double>(params.timeSigDenominator);
+        const double pixelsPerBeat = pps * beatSeconds;
+        const double rawBeatInterval = selectBeatInterval(pixelsPerBeat);
+        const int num = params.timeSigNumerator;
+
+        // 稀疏刻度保持小节对齐：step 必须是 num 的整数倍
+        int64_t beatInterval = static_cast<int64_t>(rawBeatInterval);
+        if (beatInterval > 1)
+            beatInterval = ((beatInterval + num - 1) / num) * num;
 
         // ── performance: narrow beat range to clip bounds ──
         const auto clip = g.getClipBounds();
@@ -234,15 +229,15 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
         const double rulerClipEndTime = params.visibleStartSeconds +
             static_cast<double>(std::min(params.viewportWidth, clip.getRight() + kRulerLabelPaintOverflowX)) / pps;
 
-        int64_t startBeat = static_cast<int64_t>(rulerClipStartTime / secondsPerBeat);
+        int64_t startBeat = static_cast<int64_t>(rulerClipStartTime / beatSeconds);
         if (startBeat < 0) startBeat = 0;
-        startBeat = (startBeat / static_cast<int64_t>(beatInterval)) * static_cast<int64_t>(beatInterval);
-        int64_t endBeat = static_cast<int64_t>(std::min(rulerClipEndTime, params.visibleEndSeconds) / secondsPerBeat) + 1;
+        startBeat = (startBeat / beatInterval) * beatInterval;
+        int64_t endBeat = static_cast<int64_t>(std::min(rulerClipEndTime, params.visibleEndSeconds) / beatSeconds) + 1;
 
         g.setFont(UIColors::getUIFont(13.0f));
 
-        for (int64_t beat = startBeat; beat <= endBeat; beat += static_cast<int64_t>(beatInterval)) {
-            double time = beat * secondsPerBeat;
+        for (int64_t beatIndex = startBeat; beatIndex <= endBeat; beatIndex += beatInterval) {
+            double time = static_cast<double>(beatIndex) * beatSeconds;
             int pixelX = static_cast<int>(std::llround((time - params.visibleStartSeconds) * pps));
 
             g.setColour(rulerStyle.tickColour);
@@ -250,9 +245,9 @@ void TimelineLayerComposer::drawTimeRuler(juce::Graphics& g, const RenderParams&
                        static_cast<float>(pixelX), static_cast<float>(rulerBottom),
                        rulerStyle.tickStroke);
 
-            int64_t bar = (beat / 4) + 1;
-            int64_t beatInBar = (beat % 4) + 1;
-            juce::String label = (beatInterval >= 4.0)
+            const int64_t bar = beatIndex / num + 1;
+            const int64_t beatInBar = beatIndex % num + 1;
+            juce::String label = (beatInterval >= static_cast<int64_t>(num))
                 ? juce::String(bar)
                 : juce::String::formatted("%lld.%lld", static_cast<long long>(bar), static_cast<long long>(beatInBar));
 
