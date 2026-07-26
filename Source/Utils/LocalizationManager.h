@@ -325,6 +325,7 @@ constexpr const char* kTooltipTrackPanel = "Track Panel";
 constexpr const char* kTooltipParameterPanel = "Parameter Panel";
 constexpr const char* kTooltipBpm = "Tempo (BPM)";
 constexpr const char* kTooltipTimeline = "Playback Time";
+constexpr const char* kTooltipTimeUnit = "Toggle Time/Bars Display";
 constexpr const char* kTooltipScrollMode = "Scroll Mode";
 constexpr const char* kTooltipRetuneSpeed = "Retune Speed - Controls how fast pitch is corrected";
 constexpr const char* kTooltipVibratoDepth = "Vibrato Depth - Controls vibrato amplitude";
@@ -493,6 +494,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kTooltipParameterPanel, "Parameter Panel", "参数面板", "パラメータパネル", "Панель параметров", "Panel de parámetros" },
         { Keys::kTooltipBpm, "Tempo (BPM)", "节拍速度 (BPM)", "テンポ (BPM)", "Темп (BPM)", "Tempo (BPM)" },
         { Keys::kTooltipTimeline, "Playback Time", "播放时间", "再生時間", "Время воспроизведения", "Tiempo de reproducción" },
+        { Keys::kTooltipTimeUnit, "Toggle Time/Bars Display", "切换时间/小节显示", "時間/小節表示切替", "Переключить время/такты", "Alternar tiempo/compases" },
         { Keys::kTooltipScrollMode, "Scroll Mode - Toggle between Continuous and Page scroll", "滚动模式 - 切换连续/翻页滚动", "スクロールモード - 連続/ページ切替", "Режим прокрутки - непрерывная/постраничная", "Modo desplazamiento - Continuo/Página" },
         { Keys::kTooltipRetuneSpeed, "Retune Speed - Controls how fast pitch is corrected", "校正速度 - 控制音高校正的速度", "チューン速度 - ピッチ補正の速度を制御", "Скорость коррекции - насколько быстро корректируется тон", "Vel. afinación - Controla la rapidez de corrección" },
         { Keys::kTooltipVibratoDepth, "Vibrato Depth - Controls vibrato amplitude", "颤音深度 - 控制颤音幅度", "ビブラート深さ - ビブラートの振幅を制御", "Глубина вибрато - амплитуда вибрато", "Prof. vibrato - Controla la amplitud" },

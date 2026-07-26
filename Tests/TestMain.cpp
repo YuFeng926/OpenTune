@@ -1949,33 +1949,99 @@ void vst3PluginEditorDoesNotWriteBpmOrTimeSignature()
 }
 
 // ============================================================================
-// Category 8: Global TimelineDisplayMode — 两个本地 toggle 成员零残留
-// DigitalTimeDisplay 唯一切换入口，AppPreferences 往返，Editor 同步两视图
+// Category 8: Global TimelineDisplayMode — timeModeButton_ 唯一切换入口
+// DigitalTimeDisplay 纯显示，onTimelineDisplayModeClicked 走 setter + 通知
 // ============================================================================
 
 void globalTimelineDisplayModeNoLocalToggleResidue()
 {
     const auto transportBarSource = readText("Source/Standalone/UI/TransportBarComponent.cpp");
+    const auto transportBarHeader = readText("Source/Standalone/UI/TransportBarComponent.h");
     const auto pianoRollHeader = readText("Source/Standalone/UI/PianoRollComponent.h");
     const auto pianoRollSource = readText("Source/Standalone/UI/PianoRollComponent.cpp");
     const auto arrangementHeader = readText("Source/Standalone/UI/ArrangementViewComponent.h");
     const auto arrangementSource = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
 
-    // No local toggle members — only the single displayMode_ field
-    // TransportBarComponent: uses timelineDisplayMode_, toggled in onTimeDisplayClicked via DigitalTimeDisplay
-    // No additional toggle flag
+    // 无本地 toggle 残留标志
     expectNoTokens("TransportBar no local toggle flag",
                    transportBarSource,
                    {"toggleDisplayMode", "timeUnitToggle",
                     "displayToggleFlag"});
 
-    // DigitalTimeDisplay onClick is the ONLY toggle entry
+    // timeModeButton_.onClick 绑定到 onTimelineDisplayModeClicked —— 唯一切换入口
+    expectTokens("timeModeButton_.onClick bound to onTimelineDisplayModeClicked",
+                 transportBarSource,
+                 {"timeModeButton_.onClick = [this] { onTimelineDisplayModeClicked(); };"});
+
+    // DigitalTimeDisplay 不得有 mouseDown/onClick/模式切换回调
+    const auto digitalTimeDisplayClass = extractBlockByMarker(
+        transportBarHeader, "class DigitalTimeDisplay");
+    const auto digitalTimeDisplayCtor = extractBlockByMarker(
+        transportBarSource, "DigitalTimeDisplay::DigitalTimeDisplay()");
+    expect(!digitalTimeDisplayClass.empty(), "DigitalTimeDisplay class must be found");
+    expect(!digitalTimeDisplayCtor.empty(), "DigitalTimeDisplay constructor must be found");
+    expectNoTokens("DigitalTimeDisplay no mouseDown",
+                   digitalTimeDisplayClass,
+                   {"mouseDown"});
+    expectNoTokens("DigitalTimeDisplay no onClick/mode callback",
+                   digitalTimeDisplayClass,
+                   {"onClick", "onTimelineDisplayModeClicked"});
+    expectTokens("DigitalTimeDisplay ignores mouse input",
+                 digitalTimeDisplayCtor,
+                 {"setInterceptsMouseClicks(false, false)"});
+
+    // onTimelineDisplayModeClicked 调用 setTimelineDisplayMode(nextMode) 并通知 listener
     const auto onClickFn = extractBlockByMarker(transportBarSource,
-        "void TransportBarComponent::onTimeDisplayClicked");
-    expect(!onClickFn.empty(), "onTimeDisplayClicked must be found");
-    expectTokens("DigitalTimeDisplay onClick is the sole toggle",
+        "void TransportBarComponent::onTimelineDisplayModeClicked");
+    expect(!onClickFn.empty(), "onTimelineDisplayModeClicked must be found");
+    expectTokens("onTimelineDisplayModeClicked uses const auto nextMode",
                  onClickFn,
-                 {"timelineDisplayMode_ ="});
+                 {"const auto nextMode"});
+    expectTokens("onTimelineDisplayModeClicked calls setTimelineDisplayMode",
+                 onClickFn,
+                 {"setTimelineDisplayMode(nextMode)"});
+    expectTokens("onTimelineDisplayModeClicked notifies listener with nextMode",
+                  onClickFn,
+                  {"timelineDisplayModeChanged(nextMode)"});
+
+    // Layout regression: bpmWidth must be 110 in both profiles, never 160
+    const auto resizedFn = extractBlockByMarker(transportBarSource,
+        "void TransportBarComponent::resized()");
+    expect(!resizedFn.empty(), "resized must be found");
+    expect(countOf(resizedFn, "bpmWidth = 110;") == 2,
+           "Both profiles must have bpmWidth=110 (count=" + std::to_string(countOf(resizedFn, "bpmWidth = 110;")) + ")");
+    expectNoTokens("resized no bpmWidth=160",
+                   resizedFn,
+                   {"bpmWidth = 160"});
+
+    // Time display group widths preserved in both profiles
+    expect(countOf(resizedFn, "timeModeButtonWidth = 40;") == 2,
+           "Both profiles must have timeModeButtonWidth=40 (count=" + std::to_string(countOf(resizedFn, "timeModeButtonWidth = 40;")) + ")");
+    expectTokens("VST3 profile has timeDisplayWidth 96",
+                 resizedFn,
+                 {"const int timeDisplayWidth = 96;"});
+    expectTokens("Standalone profile has timeDisplayWidth 112",
+                 resizedFn,
+                 {"const int timeDisplayWidth = 112;"});
+
+    // setTimelineDisplayMode must update button text and refresh time display
+    const auto setterFn = extractBlockByMarker(transportBarSource,
+        "void TransportBarComponent::setTimelineDisplayMode");
+    expect(!setterFn.empty(), "setTimelineDisplayMode must be found");
+    expectTokens("setTimelineDisplayMode updates button text",
+                 setterFn,
+                 {"timeModeButton_.setButtonText"});
+    expectTokens("setTimelineDisplayMode refreshes time display",
+                 setterFn,
+                 {"setPositionSeconds(currentPositionSeconds_)"});
+
+    // PianoRoll / Arrangement 无 timeUnitToggleButton_
+    expectNoTokens("PianoRoll no timeUnitToggleButton_",
+                   pianoRollHeader + pianoRollSource,
+                   {"timeUnitToggleButton_"});
+    expectNoTokens("Arrangement no timeUnitToggleButton_",
+                   arrangementHeader + arrangementSource,
+                   {"timeUnitToggleButton_"});
 
     // AppPreferences stores and retrieves TimelineDisplayMode
     const auto prefsHeader = readText("Source/Utils/AppPreferences.h");
@@ -1987,15 +2053,14 @@ void globalTimelineDisplayModeNoLocalToggleResidue()
                  prefsHeader, {"TimelineDisplayMode timelineDisplayMode"});
 
     // Editor syncs both views: standalone PluginEditor calls both
-    // pianoRoll_.setTimelineDisplayMode and arrangementView_.setTimelineDisplayMode
     const auto standaloneEditor = readText("Source/Standalone/PluginEditor.cpp");
     const auto tldmFn = extractBlockByMarker(standaloneEditor,
         "void OpenTuneAudioProcessorEditor::timelineDisplayModeChanged");
     expect(!tldmFn.empty(), "timelineDisplayModeChanged in standalone editor must be found");
     expectTokens("Standalone editor syncs both PianoRoll and Arrangement",
-                 tldmFn,
-                 {"pianoRoll_.setTimelineDisplayMode",
-                  "arrangementView_.setTimelineDisplayMode"});
+                  tldmFn,
+                  {"pianoRoll_.setTimelineDisplayMode",
+                   "arrangementView_.setTimelineDisplayMode"});
 
     // Plugin editor also syncs PianoRoll
     const auto pluginEditor = readText("Source/Plugin/PluginEditor.cpp");
@@ -2003,10 +2068,10 @@ void globalTimelineDisplayModeNoLocalToggleResidue()
         "void OpenTuneAudioProcessorEditor::timelineDisplayModeChanged");
     expect(!tldmPluginFn.empty(), "timelineDisplayModeChanged in plugin editor must be found");
     expectTokens("Plugin editor syncs PianoRoll",
-                 tldmPluginFn,
-                 {"pianoRoll_.setTimelineDisplayMode"});
+                  tldmPluginFn,
+                  {"pianoRoll_.setTimelineDisplayMode"});
 
-    // No residual toggle functions
+    // 无旧 toggle 函数残留
     expectNoTokens("PianoRoll no toggle",
                    pianoRollHeader + pianoRollSource,
                    {"toggleDisplayMode", "toogleTimelineDisplay", "switchTimeMode"});

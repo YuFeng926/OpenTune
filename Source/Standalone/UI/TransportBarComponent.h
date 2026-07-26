@@ -16,6 +16,7 @@
 #include <vector>
 #include <functional>
 #include "UIColors.h"
+#include "SmallButton.h"
 #include "../../Utils/TimelineDisplayMode.h"
 
 namespace OpenTune {
@@ -54,12 +55,9 @@ public:
     void setTimeString(const juce::String& time);
     void setBarsString(int bar, int beat);
     void paint(juce::Graphics& g) override;
-    void mouseDown(const juce::MouseEvent& e) override;
 
     juce::String getTooltip() override { return tooltip_; }
     void setTooltip(const juce::String& t) { tooltip_ = t; }
-
-    std::function<void()> onClick;
 
 private:
     void drawChar(juce::Graphics& g, juce::juce_wchar c, juce::Rectangle<float> area);
@@ -222,7 +220,7 @@ private:
     void onTrackViewClicked();
     void onPianoViewClicked();
     void onRecordClicked();
-    void onTimeDisplayClicked();
+    void onTimelineDisplayModeClicked();
 
     juce::ListenerList<Listener> listeners_;
 
@@ -244,6 +242,7 @@ private:
 
     // Labels & Editors
     DigitalTimeDisplay timeDisplay_;
+    SmallButton timeModeButton_;  // 显式 Time/Bars 切换按钮
     BpmValueField bpmField_;
     UnifiedToolbarButton tapButton_;
 
