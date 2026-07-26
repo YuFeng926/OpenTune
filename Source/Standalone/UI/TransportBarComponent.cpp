@@ -21,7 +21,7 @@ constexpr int kValidDenominators[] = { 1, 2, 4, 8, 16, 32, 64 };
 
 DigitalTimeDisplay::DigitalTimeDisplay()
 {
-    setInterceptsMouseClicks(true, true);
+    setInterceptsMouseClicks(false, false);
 }
 
 void DigitalTimeDisplay::setTimeString(const juce::String& time)
@@ -45,13 +45,6 @@ void DigitalTimeDisplay::setBarsString(int bar, int beat)
         timeString_ = barsText;
         repaint();
     }
-}
-
-void DigitalTimeDisplay::mouseDown(const juce::MouseEvent& e)
-{
-    juce::ignoreUnused(e);
-    if (onClick)
-        onClick();
 }
 
 void DigitalTimeDisplay::paint(juce::Graphics& g)
@@ -257,15 +250,18 @@ void BpmValueField::setReadOnly(bool readOnly)
 
 BpmValueField::LayoutRects BpmValueField::calculateLayout() const
 {
-    auto content = getLocalBounds().reduced(6, 0);
+    auto content = getLocalBounds().reduced(4, 0);
 
-    auto bpmValue = content.removeFromLeft(90);
+    // 拍号区域：右侧固定紧凑分配 (denominator 18 + slash 6 + numerator 18 = 42px)
+    auto denom = content.removeFromRight(18);
+    auto slash = content.removeFromRight(6);
+    auto num = content.removeFromRight(18);
 
-    content.removeFromLeft(8);
+    // BPM 与拍号之间保留 4px 分隔带，divider 落在该区域内
+    content.removeFromRight(4);
 
-    auto num = content.removeFromLeft(18);
-    auto slash = content.removeFromLeft(8);
-    auto denom = content.removeFromLeft(18);
+    // BPM 使用剩余宽度（102 - 42 - 4 = 56px），水平居中
+    auto bpmValue = content;
 
     return { bpmValue, num, slash, denom };
 }
@@ -366,15 +362,15 @@ void BpmValueField::paint(juce::Graphics& g)
     g.setColour(UIColors::textSecondary.withAlpha(0.25f));
     g.drawVerticalLine(dividerX, bounds.getY() + 8.0f, bounds.getBottom() - 8.0f);
 
-    // BPM value
+    // BPM value - 水平居中
     g.setFont(font);
     g.setColour(readOnly_ ? UIColors::textSecondary : UIColors::textPrimary);
     juce::String bpmText = isEditing_ ? text_ : formatBpmText();
-    g.drawFittedText(bpmText, lr.bpmValue, juce::Justification::centredLeft, 1, 1.0f);
+    g.drawFittedText(bpmText, lr.bpmValue, juce::Justification::centred, 1, 1.0f);
 
     // Time signature: draw each part separately for precise hit-test alignment
     g.setColour(readOnly_ ? UIColors::textSecondary.withAlpha(0.70f) : UIColors::textSecondary.withAlpha(0.85f));
-    g.setFont(UIColors::getLabelFont(UIColors::navFontHeight - 1.0f));
+    g.setFont(UIColors::getLabelFont(UIColors::navFontHeight - 4.0f));
 
     // Numerator
     g.drawFittedText(juce::String(timeSigNum_), lr.numerator, juce::Justification::centred, 1, 1.0f);
@@ -383,7 +379,7 @@ void BpmValueField::paint(juce::Graphics& g)
     // Denominator
     g.drawFittedText(juce::String(timeSigDenom_), lr.denominator, juce::Justification::centred, 1, 1.0f);
 
-    // Caret for BPM editing
+    // Caret for BPM editing - 与居中文本起点一致
     if (isEditing_ && showCaret_)
     {
         auto getTextWidth = [&](const juce::String& s) -> float {
@@ -392,7 +388,8 @@ void BpmValueField::paint(juce::Graphics& g)
             return ga.getBoundingBox(0, 0, true).getWidth();
         };
         const auto area = lr.bpmValue.toFloat();
-        const auto cx = area.getX();
+        const auto textW = getTextWidth(text_);
+        const auto cx = area.getCentreX() - textW * 0.5f;
         const auto caretX = cx + getTextWidth(text_.substring(0, caretIndex_));
         g.setColour(UIColors::textPrimary.withAlpha(0.8f));
         g.drawLine(caretX, static_cast<float>(bounds.getY()) + 7.0f, caretX, static_cast<float>(bounds.getBottom()) - 7.0f, style.strokeThick);
@@ -956,8 +953,14 @@ TransportBarComponent::TransportBarComponent()
 
     timeDisplay_.setTimeString("00:00");
     timeDisplay_.setTooltip(LOC(kTooltipTimeline));
-    timeDisplay_.onClick = [this] { onTimeDisplayClicked(); };
     addAndMakeVisible(timeDisplay_);
+
+    // 时间/BPM 模式切换按钮
+    timeModeButton_.setFontHeight(11.0f);
+    timeModeButton_.setButtonText("Time");  // 初始状态为 Time 模式
+    timeModeButton_.setTooltip(LOC(kTooltipTimeUnit));
+    timeModeButton_.onClick = [this] { onTimelineDisplayModeClicked(); };
+    addAndMakeVisible(timeModeButton_);
 
     // Apply styling (transport buttons use custom paintButton)
 
@@ -1029,6 +1032,9 @@ void TransportBarComponent::refreshLocalizedText()
 
     // 刷新 scaleLabel
     scaleLabel_.setText(LOC(kScale), juce::dontSendNotification);
+
+    // 刷新时间模式按钮 tooltip
+    timeModeButton_.setTooltip(LOC(kTooltipTimeUnit));
 
     repaint();
 }
@@ -1195,14 +1201,18 @@ void TransportBarComponent::resized()
         bpmField_.setReadOnly(true);
         tapButton_.setVisible(false);
 
-        const int timeDisplayWidth = 140;
+        // 时间显示组：总宽 140px（数字 96 + 间距 4 + 按钮 40）
+        const int timeModeButtonWidth = 40;
+        const int timeDisplayWidth = 96;
         timeDisplay_.setBounds(row.removeFromLeft(timeDisplayWidth));
+        row.removeFromLeft(4);
+        timeModeButton_.setBounds(row.removeFromLeft(timeModeButtonWidth));
         row.removeFromLeft(spacing);
 
         recordButton_.setVisible(true);
         recordButton_.setBounds(row.removeFromLeft(buttonWidth));
 
-        const int bpmWidth = 160;
+        const int bpmWidth = 110;
         bpmField_.setBounds(row.removeFromLeft(bpmWidth));
         row.removeFromLeft(spacing);
 
@@ -1212,7 +1222,6 @@ void TransportBarComponent::resized()
         scaleRootSelector_.setBounds(row.removeFromLeft(rootWidth));
         row.removeFromLeft(4);
         scaleTypeSelector_.setBounds(row.removeFromLeft(typeWidth));
-        row.removeFromLeft(-10);
 
         return;
     }
@@ -1248,11 +1257,15 @@ void TransportBarComponent::resized()
     pianoViewButton_.setBounds(row.removeFromLeft(buttonWidth));
     row.removeFromLeft(spacing);
 
-    const int timeDisplayWidth = 156;
+    // 时间显示组：总宽 156px（数字 112 + 间距 4 + 按钮 40）
+    const int timeModeButtonWidth = 40;
+    const int timeDisplayWidth = 112;
     timeDisplay_.setBounds(row.removeFromLeft(timeDisplayWidth));
+    row.removeFromLeft(4);
+    timeModeButton_.setBounds(row.removeFromLeft(timeModeButtonWidth));
     row.removeFromLeft(spacing);
 
-    const int bpmWidth = 160;
+    const int bpmWidth = 110;
     bpmField_.setBounds(row.removeFromLeft(bpmWidth));
     row.removeFromLeft(spacing);
     tapButton_.setBounds(row.removeFromLeft(buttonWidth));
@@ -1264,7 +1277,6 @@ void TransportBarComponent::resized()
     scaleRootSelector_.setBounds(row.removeFromLeft(rootWidth));
     row.removeFromLeft(4);
     scaleTypeSelector_.setBounds(row.removeFromLeft(typeWidth));
-    row.removeFromLeft(-10);
 }
 
 void TransportBarComponent::addListener(Listener* listener)
@@ -1398,7 +1410,11 @@ void TransportBarComponent::setTimelineDisplayMode(TimelineDisplayMode mode)
         return;
 
     timelineDisplayMode_ = mode;
-    // Refresh display with current position
+
+    // 同步按钮文字：Time 模式显示 "Time"，Bars 模式显示 "BPM"
+    timeModeButton_.setButtonText(timelineDisplayMode_ == TimelineDisplayMode::Time ? "Time" : "BPM");
+
+    // 刷新数字显示
     setPositionSeconds(currentPositionSeconds_);
 }
 
@@ -1523,16 +1539,15 @@ void TransportBarComponent::onRecordClicked()
     listeners_.call([](Listener& l) { l.recordRequested(); });
 }
 
-void TransportBarComponent::onTimeDisplayClicked()
+void TransportBarComponent::onTimelineDisplayModeClicked()
 {
-    timelineDisplayMode_ = (timelineDisplayMode_ == TimelineDisplayMode::Time)
+    const auto nextMode = (timelineDisplayMode_ == TimelineDisplayMode::Time)
         ? TimelineDisplayMode::Bars
         : TimelineDisplayMode::Time;
 
-    // Refresh display
-    setPositionSeconds(currentPositionSeconds_);
+    setTimelineDisplayMode(nextMode);
 
-    listeners_.call([this](Listener& l) { l.timelineDisplayModeChanged(timelineDisplayMode_); });
+    listeners_.call([nextMode](Listener& l) { l.timelineDisplayModeChanged(nextMode); });
 }
 
 } // namespace OpenTune
