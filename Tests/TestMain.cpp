@@ -1259,9 +1259,14 @@ void pianoRollRetainedSurfaceArchitecture()
     {
         const auto applyCam = extractFunctionBlock(componentImpl, "void PianoRollComponent::applyRasterCamera");
         expect(!applyCam.empty(), "applyRasterCamera must be found");
-        expectTokens("applyRasterCamera strip writes surfaceView_.camera",
+        expectTokens("applyRasterCamera strip adds dPixels/pps increment to camera",
                       applyCam,
-                      {"surfaceView_.camera = newCamera"});
+                      {"surfaceView_.camera.visibleStartSeconds +=",
+                       "static_cast<double>(dPixels)",
+                       "/ surfaceView_.camera.pixelsPerSecond"});
+        expectNoTokens("applyRasterCamera strip no full camera replacement",
+                        applyCam,
+                        {"surfaceView_.camera = newCamera"});
         expectNoTokens("applyRasterCamera strip no vertical source write",
                         applyCam,
                         {"surfaceView_.pixelsPerSemitone", "surfaceView_.verticalScrollOffset"});

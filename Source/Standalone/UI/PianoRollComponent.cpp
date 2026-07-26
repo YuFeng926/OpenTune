@@ -1712,8 +1712,9 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
         contentSurface_.moveImageSection(dstX, 0, srcX, 0, moveW, viewportH);
     }
 
-    // 直接写 surfaceView_.camera 为新的连续语义相机
-    surfaceView_.camera = newCamera;
+    // surfaceView_.camera 描述 retained pixels 的实际来源；
+    // 仅推进 moveImageSection 已执行的整数像素位移；连续语义继续由 camera_ 保持
+    surfaceView_.camera.visibleStartSeconds += static_cast<double>(dPixels) / surfaceView_.camera.pixelsPerSecond;
 
     // 补绘露出条带
     int stripX, stripW;
