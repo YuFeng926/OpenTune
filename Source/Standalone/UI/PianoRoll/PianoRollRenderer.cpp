@@ -66,21 +66,18 @@ struct VisibleTimeWindow {
     }
 };
 
-VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContext& ctx,
-                                            const PianoRollRenderer::ContentRenderItem& item)
+// Core: project explicit X bounds through timeline → content → tauInverse(source).
+static VisibleTimeWindow computeTimeWindowFromXBounds(
+    const PianoRollRenderer::RenderContext& ctx,
+    const PianoRollRenderer::ContentRenderItem& item,
+    int startX, int endX)
 {
     VisibleTimeWindow window;
-    if (!item.projection.isValid()) {
+    if (!item.projection.isValid())
         return window;
-    }
 
-    if (ctx.rasterBounds.isEmpty()) {
-        window.viewportStartX = ctx.pianoKeyWidth;
-        window.viewportEndX = ctx.width;
-    } else {
-        window.viewportStartX = std::max(ctx.rasterBounds.getX(), ctx.pianoKeyWidth);
-        window.viewportEndX = std::min(ctx.rasterBounds.getRight(), ctx.width);
-    }
+    window.viewportStartX = startX;
+    window.viewportEndX = endX;
     if (window.viewportEndX <= window.viewportStartX)
         return {};
 
@@ -92,13 +89,33 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
     window.visibleContentStartTime = item.projection.projectTimelineTimeToContent(window.visibleStartTime);
     window.visibleContentEndTime = item.projection.projectTimelineTimeToContent(window.visibleEndTime);
 
-    // vocal-time-stretch 搂8.5 擂8.5 — projectTimelineTimeToContent returns OUTPUT time
+    // vocal-time-stretch §8.5 — projectTimelineTimeToContent returns OUTPUT time
     // inside the content, but Notes / PitchCurve / F0 timeline / WaveformMipmap
     // are all indexed by SOURCE time. Convert to source time via tauInverse.
     jassert(item.timeGrid);
     window.visibleContentStartTime = item.timeGrid->tauInverse(window.visibleContentStartTime);
     window.visibleContentEndTime   = item.timeGrid->tauInverse(window.visibleContentEndTime);
     return window;
+}
+
+// Damage-aware window for waveform/notes/unvoiced/anchors.
+VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContext& ctx,
+                                            const PianoRollRenderer::ContentRenderItem& item)
+{
+    const int startX = ctx.rasterBounds.isEmpty()
+        ? ctx.pianoKeyWidth
+        : std::max(ctx.rasterBounds.getX(), ctx.pianoKeyWidth);
+    const int endX = ctx.rasterBounds.isEmpty()
+        ? ctx.width
+        : std::min(ctx.rasterBounds.getRight(), ctx.width);
+    return computeTimeWindowFromXBounds(ctx, item, startX, endX);
+}
+
+// Full-viewport window for F0 (always [pianoKeyWidth, ctx.width]).
+VisibleTimeWindow computeFullViewportTimeWindow(const PianoRollRenderer::RenderContext& ctx,
+                                                 const PianoRollRenderer::ContentRenderItem& item)
+{
+    return computeTimeWindowFromXBounds(ctx, item, ctx.pianoKeyWidth, ctx.width);
 }
 
 struct F0VisualPoint
@@ -116,8 +133,6 @@ struct F0VisualSegment
 
 struct F0VisualBuildOptions
 {
-    int viewportStartX = 0;
-    int viewportEndX = 0;
     double pixelsPerSecond = 100.0;
     double secondsPerFrame = 0.01;
 };
@@ -301,10 +316,6 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
 
             const int globalFrame = start + i;
             const float x = frameToX(globalFrame);
-            if (x < static_cast<float>(options.viewportStartX) || x > static_cast<float>(options.viewportEndX)) {
-                flushSegment();
-                continue;
-            }
 
             const float y = frameToY(globalFrame, frequency);
             float levelHotMix = 0.0f;
@@ -1244,7 +1255,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     if (!ctx.showOriginalF0 && !ctx.showCorrectedF0)
         return;
 
-    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
+    const auto visibleWindow = computeFullViewportTimeWindow(ctx, item);
     if (!visibleWindow.isValid())
         return;
 
@@ -1265,8 +1276,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     }
 
     F0VisualBuildOptions visualOptions;
-    visualOptions.viewportStartX = visibleWindow.viewportStartX;
-    visualOptions.viewportEndX = visibleWindow.viewportEndX;
     visualOptions.pixelsPerSecond = ctx.pixelsPerSecond;
     visualOptions.secondsPerFrame = secondsPerFrame;
 
@@ -1309,7 +1318,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         const float glowLineWidth = lineWidth + (isAurora ? 2.2f : 1.8f);
         const juce::PathStrokeType glowStrokeType(glowLineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
         const juce::PathStrokeType innerGlowStrokeType(lineWidth + 0.72f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
-        const juce::PathStrokeType highlightStrokeType(juce::jmax(0.75f, lineWidth * 0.46f), juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
 
         for (const auto& segment : visualSegments) {
             if (segment.points.empty()) continue;
@@ -1354,8 +1362,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 g.strokePath(runPath, innerGlowStrokeType);
                 g.setColour(colour.withAlpha(1.0f));
                 g.strokePath(runPath, strokeType);
-                g.setColour(colour.brighter(0.30f).withAlpha(alpha * 0.18f));
-                g.strokePath(runPath, highlightStrokeType);
             } else if (isBlueBreeze || isOverdose) {
                 g.setColour(colour.withAlpha(alpha * 0.055f));
                 g.strokePath(runPath, glowStrokeType);
@@ -1363,8 +1369,6 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 g.strokePath(runPath, innerGlowStrokeType);
                 g.setColour(colour.withAlpha(1.0f));
                 g.strokePath(runPath, strokeType);
-                g.setColour(colour.brighter(0.16f).withAlpha(alpha * 0.12f));
-                g.strokePath(runPath, highlightStrokeType);
             } else {
                 g.setColour(colour.withAlpha(1.0f));
                 g.strokePath(runPath, strokeType);

@@ -10,6 +10,7 @@
 #include "../Source/Standalone/UI/TimelineLayerComposer.h"
 #include "../Source/Standalone/UI/UIColors.h"
 #include "../Source/Standalone/UI/ViewMapper.h"
+#include "../Source/Standalone/UI/TimelineViewportPolicy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1773,6 +1774,190 @@ static int countPixelDiffs(const juce::Image& a, const juce::Image& b, juce::Rec
     return diffs;
 }
 
+// ---------------------------------------------------------------------------
+// F0 curve strip pixel-equivalence — full-render baseline vs
+// Graphics::reduceClipRegion(strip) + rasterBounds=strip render.
+// Covers original/corrected separately, bucket/Bezier LOD, left/right strip,
+// continuous varying curve, and invalid/nullptr gaps.
+// ---------------------------------------------------------------------------
+void f0CurveStripPixelEquivalenceContract()
+{
+    f0TestEnsureDarkBlueGrey();
+
+    constexpr int w = 400, h = 300;
+    constexpr int pianoKeyWidth = 60;
+    constexpr int stripW = 80;
+    const juce::Rectangle<int> leftStrip(pianoKeyWidth, 0, stripW, h);
+    const juce::Rectangle<int> rightStrip(w - stripW, 0, stripW, h);
+    constexpr int hopSize = 512;
+    constexpr double sr = 16000.0;
+    constexpr double frameSec = static_cast<double>(hopSize) / sr;
+
+    // PPS / numFrames / LOD / gap frame ranges (hand-picked inside strips)
+    struct LODConfig {
+        double pps; int nf; const char* label;
+        int gapLeftStart, gapLeftEnd, gapRightStart, gapRightEnd;
+    };
+    const LODConfig bucketLOD{8.0,  1563, "bucket",
+                               100,  200,  1100, 1200};
+    const LODConfig bezierLOD{40.0,  313, "Bezier",
+                               20,   40,   220,  245};
+
+    // Deterministic varying F0 20–2000 Hz and energy 0.2–0.8
+    auto varyingF0 = [](int nf) {
+        std::vector<float> f0(nf);
+        for (int i = 0; i < nf; ++i) {
+            const double phase = static_cast<double>(i) * 0.05;
+            const double val = 500.0 + 400.0 * std::sin(phase)
+                               + 0.3 * static_cast<double>(i);
+            f0[i] = static_cast<float>(std::max(20.0, std::min(val, 2000.0)));
+        }
+        return f0;
+    };
+    auto varyingEn = [](int nf) {
+        std::vector<float> en(nf);
+        for (int i = 0; i < nf; ++i) {
+            const double phase = static_cast<double>(i) * 0.07 + 1.0;
+            en[i] = static_cast<float>(0.2 + 0.6 * (0.5 + 0.5 * std::sin(phase)));
+        }
+        return en;
+    };
+
+    // Full-vs-strip pixel comparison
+    auto checkStripEquiv = [&](
+        const std::vector<float>& f0,
+        const std::vector<float>& energy,
+        const std::vector<PitchCorrectionSegment>& segments,
+        int numFrames, double pps,
+        const juce::Rectangle<int>& strip,
+        bool showOrig, bool showCorr,
+        std::string_view tag)
+    {
+        auto snap = std::make_shared<const PitchCurveSnapshot>(
+            f0, energy, segments, hopSize, sr);
+
+        const double dur = numFrames * frameSec;
+        F0Timeline tl(hopSize, sr, numFrames);
+        auto tg = TimeGridSnapshot::makeIdentity(dur);
+        ContentTimelineProjection pr;
+        pr.timelineStartSeconds = 0.0;
+        pr.timelineDurationSeconds = dur;
+        pr.contentDurationSeconds  = dur;
+
+        PianoRollRenderer::ContentRenderItem item;
+        item.contentKey.domainKind = DomainKind::StandaloneClip;
+        item.contentKey.objectId   = 1;
+        item.projection  = pr;
+        item.timeGrid    = tg;
+        item.f0Timeline  = tl;
+        item.pitchSnapshot = snap;
+        item.active = true;
+
+        auto makeCtx = [&](const juce::Rectangle<int>& rastBounds) {
+            PianoRollRenderer::RenderContext c;
+            c.width            = w;
+            c.height           = h;
+            c.pianoKeyWidth    = pianoKeyWidth;
+            c.rulerHeight      = 0;
+            c.pixelsPerSecond  = pps;
+            c.pixelsPerSemitone = 3.0f;
+            c.minMidi          = 24.0f;
+            c.maxMidi          = 108.0f;
+            c.showOriginalF0   = showOrig;
+            c.showCorrectedF0  = showCorr;
+            c.coords.visibleStartSeconds = 0.0;
+            c.coords.pixelsPerSecond    = pps;
+            c.coords.contentStartX      = pianoKeyWidth;
+            c.coords.contentWidth       = w - pianoKeyWidth;
+            c.coords.contentHeight      = h;
+            c.coords.pixelsPerSemitone  = 3.0f;
+            c.coords.maxMidi            = 108.0f;
+            c.rasterBounds = rastBounds;
+            return c;
+        };
+
+        // Full render — no clip
+        juce::Image fullImg(juce::Image::ARGB, w, h, true);
+        {
+            juce::Graphics g(fullImg);
+            PianoRollRenderer r;
+            auto ctx = makeCtx(juce::Rectangle<int>(0, 0, w, h));
+            r.drawF0Curve(g, ctx, item);
+        }
+
+        // Strip render — reduceClipRegion(strip) + rasterBounds=strip
+        juce::Image stripImg(juce::Image::ARGB, w, h, true);
+        {
+            juce::Graphics g(stripImg);
+            g.reduceClipRegion(strip);
+            PianoRollRenderer r;
+            auto ctx = makeCtx(strip);
+            r.drawF0Curve(g, ctx, item);
+        }
+
+        const int diffs = countPixelDiffs(fullImg, stripImg, strip);
+        expect(diffs == 0,
+               std::string(tag) + ": strip pixels must match full render. diffs="
+               + std::to_string(diffs));
+    };
+
+    // ── Continuous valid F0 — original & corrected, bucket & Bezier, L & R ──
+    for (const auto& lod : {bucketLOD, bezierLOD}) {
+        const auto f0Var = varyingF0(lod.nf);
+        const auto enVar = varyingEn(lod.nf);
+        std::vector<PitchCorrectionSegment> fullSegs;
+        fullSegs.emplace_back(0, lod.nf, f0Var);
+
+        for (int si = 0; si < 2; ++si) {
+            const auto& strip = (si == 0) ? leftStrip : rightStrip;
+            const auto side   = (si == 0) ? "L" : "R";
+
+            checkStripEquiv(f0Var, enVar, {},
+                            lod.nf, lod.pps, strip,
+                            true, false,
+                            std::string("origF0 cont ") + side + " " + lod.label);
+            checkStripEquiv(f0Var, enVar, fullSegs,
+                            lod.nf, lod.pps, strip,
+                            false, true,
+                            std::string("corrF0 cont ") + side + " " + lod.label);
+        }
+    }
+
+    // ── Gap F0 — original invalid & corrected nullptr, bucket & Bezier, L & R ──
+    for (const auto& lod : {bucketLOD, bezierLOD}) {
+        const auto f0Var = varyingF0(lod.nf);
+        const auto enVar = varyingEn(lod.nf);
+
+        for (int si = 0; si < 2; ++si) {
+            const auto& strip = (si == 0) ? leftStrip : rightStrip;
+            const auto side   = (si == 0) ? "L" : "R";
+            const int gs = (si == 0) ? lod.gapLeftStart  : lod.gapRightStart;
+            const int ge = (si == 0) ? lod.gapLeftEnd    : lod.gapRightEnd;
+
+            // Original invalid-F0 gap
+            {
+                auto f0Gap = f0Var;
+                for (int i = gs; i < ge; ++i) f0Gap[i] = 0.0f;
+                checkStripEquiv(f0Gap, enVar, {},
+                                lod.nf, lod.pps, strip,
+                                true, false,
+                                std::string("origF0 gap ") + side + " " + lod.label);
+            }
+
+            // Corrected nullptr gap — segments copy the same varying F0
+            {
+                std::vector<PitchCorrectionSegment> segs;
+                segs.emplace_back(0,  gs, std::vector<float>(f0Var.begin(),       f0Var.begin() + gs));
+                segs.emplace_back(ge, lod.nf, std::vector<float>(f0Var.begin() + ge, f0Var.end()));
+                checkStripEquiv(f0Var, enVar, segs,
+                                lod.nf, lod.pps, strip,
+                                false, true,
+                                std::string("corrF0 gap ") + side + " " + lod.label);
+            }
+        }
+    }
+}
+
 void timelineLayerDrawGridLinesBarsPixelEquivalence()
 {
     clipTestEnsureDarkBlueGrey();
@@ -2377,6 +2562,85 @@ void compositedVerticalShrinkMatchesCleanRender()
 }
 
 
+// ---------------------------------------------------------------------------
+// PAGE 进入边缘稳定性：正向/反向越界只翻一次页，不连续跟随逐帧翻页。
+// 不含时间量化、epsilon 生产逻辑、source-token 假测试。
+// ---------------------------------------------------------------------------
+void pageEdgeStability()
+{
+    // Page, viewportWidth=1000, pps=100, currentStart=20, target=25
+    // target 在当前页内 → visibleStart 保持 20
+    {
+        TimelineViewportRequest req;
+        req.kind = TimelineViewportRequest::Kind::Page;
+        req.viewportWidth = 1000;
+        req.pixelsPerSecond = 100.0;
+        req.currentVisibleStartSeconds = 20.0;
+        req.targetTime = 25.0;
+        auto cam = TimelineViewportPolicy::resolve(req);
+        expect(std::abs(cam.visibleStartSeconds - 20.0) < 1e-12,
+               "Page: target in page must keep visibleStart at 20");
+    }
+
+    // 正向越界 target=30.1 → visibleStart 变为 30.1
+    // 随后 currentStart=30.1、target=30.2 → visibleStart 仍为 30.1
+    {
+        TimelineViewportRequest req;
+        req.kind = TimelineViewportRequest::Kind::Page;
+        req.viewportWidth = 1000;
+        req.pixelsPerSecond = 100.0;
+        req.currentVisibleStartSeconds = 20.0;
+        req.targetTime = 30.1;
+        auto cam = TimelineViewportPolicy::resolve(req);
+        expect(std::abs(cam.visibleStartSeconds - 30.1) < 1e-12,
+               "Page: forward overshoot must flip visibleStart to 30.1");
+
+        req.currentVisibleStartSeconds = 30.1;
+        req.targetTime = 30.2;
+        cam = TimelineViewportPolicy::resolve(req);
+        expect(std::abs(cam.visibleStartSeconds - 30.1) < 1e-12,
+               "Page: second forward target must not flip again");
+    }
+
+    // 反向越界 currentStart=20、target=19.9 → visibleStart 变为 9.9
+    // 随后 currentStart=9.9、target=19.8 → visibleStart 仍为 9.9
+    {
+        TimelineViewportRequest req;
+        req.kind = TimelineViewportRequest::Kind::Page;
+        req.viewportWidth = 1000;
+        req.pixelsPerSecond = 100.0;
+        req.currentVisibleStartSeconds = 20.0;
+        req.targetTime = 19.9;
+        auto cam = TimelineViewportPolicy::resolve(req);
+        expect(std::abs(cam.visibleStartSeconds - 9.9) < 1e-12,
+               "Page: backward overshoot must flip visibleStart to 9.9");
+
+        req.currentVisibleStartSeconds = 9.9;
+        req.targetTime = 19.8;
+        cam = TimelineViewportPolicy::resolve(req);
+        expect(std::abs(cam.visibleStartSeconds - 9.9) < 1e-12,
+               "Page: second backward target must not flip again");
+    }
+
+    // Cont 对照：target=30.1 → visibleStart=25.1；target=30.2 → visibleStart=25.2
+    {
+        TimelineViewportRequest req;
+        req.kind = TimelineViewportRequest::Kind::Cont;
+        req.viewportWidth = 1000;
+        req.pixelsPerSecond = 100.0;
+        req.targetTime = 30.1;
+        auto cam = TimelineViewportPolicy::resolve(req);
+        expect(std::abs(cam.visibleStartSeconds - 25.1) < 1e-12,
+               "Cont: target 30.1 must centre at visibleStart 25.1");
+
+        req.targetTime = 30.2;
+        cam = TimelineViewportPolicy::resolve(req);
+        expect(std::abs(cam.visibleStartSeconds - 25.2) < 1e-12,
+               "Cont: target 30.2 must centre at visibleStart 25.2");
+    }
+}
+
+
 } // namespace
 
 int main()
@@ -2416,6 +2680,7 @@ int main()
         f0CurveOriginalBucketExtremesWithAsymmetricEnergy();
         f0CurveCorrectedSpanExtremes();
         f0CurveGapIsolation();
+        f0CurveStripPixelEquivalenceContract();
 
         // Narrow-clip pixel-equivalence for grid/ruler optimizations
         timelineLayerDrawGridLinesBarsPixelEquivalence();
@@ -2429,6 +2694,9 @@ int main()
         makeRulerScrollDamageContract();
         rulerForwardScrollPixelEquivalence();
         rulerBackwardScrollPixelEquivalence();
+
+        // ── Page viewport policy edge stability ────────────────────────
+        pageEdgeStability();
 
         // ── Real pixel rendering test ──────────────────────────────────
         compositedVerticalShrinkMatchesCleanRender();
