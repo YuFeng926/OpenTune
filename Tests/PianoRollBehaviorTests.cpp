@@ -2419,6 +2419,96 @@ void rulerBackwardScrollPixelEquivalence()
 // TimelineLayerComposer, ViewMapper.
 // ============================================================================
 
+// ---------------------------------------------------------------------------
+// Fractional scroll raster-phase equivalence — moveImageSection + incremental
+// draw with rasterStart (not semanticStart) must match full render.
+// Dual baseline: rasterStart diffs==0, semanticStart diffs>0 captures old bug.
+// ---------------------------------------------------------------------------
+void rulerFractionalScrollRasterPhaseEquivalence()
+{
+    clipTestEnsureDarkBlueGrey();
+
+    constexpr double pps = 100.0;
+    constexpr int w = 800;
+    constexpr int h = 30;
+    constexpr double oldStart = 0.497;
+    constexpr double requestedSemanticStart = 1.003;
+    constexpr int dPixels = 51;
+    constexpr double rasterStart = oldStart + static_cast<double>(dPixels) / pps;  // 1.007
+    constexpr double visibleDuration = static_cast<double>(w) / pps;               // 8.0
+
+    auto makeParams = [&](double visibleStart) {
+        RenderParams p;
+        p.visibleStartSeconds = visibleStart;
+        p.visibleEndSeconds   = visibleStart + visibleDuration;
+        p.pixelsPerSecond     = pps;
+        p.timeUnit            = 0;  // seconds
+        p.tempo               = 120.0;
+        p.themeId             = static_cast<int>(ThemeId::DarkBlueGrey);
+        p.rulerHeight         = h;
+        p.viewportWidth       = w;
+        p.viewportHeight      = h;
+        p.viewKind            = "pianoroll";
+        return p;
+    };
+
+    const RenderParams oldParams = makeParams(oldStart);
+    const juce::Rectangle<int> timelineBounds(w, h);
+
+    // 1. Full render at oldStart into testSurface
+    juce::Image testSurface(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(testSurface);
+        testSurface.clear(timelineBounds);
+        TimelineLayerComposer::drawTimeRuler(g, oldParams);
+    }
+
+    // 2. moveImageSection left by dPixels: src (51,0,749,30) → dst (0,0)
+    testSurface.moveImageSection(0, 0, dPixels, 0, w - dPixels, h);
+
+    // 3. Compute damage and clear entering/exiting zones
+    const juce::Rectangle<int> exposedStrip(w - dPixels, 0, dPixels, h);
+    const auto damage = TimelineLayerComposer::makeRulerScrollDamage(
+        exposedStrip, timelineBounds, dPixels);
+    testSurface.clear(damage.entering);
+    if (!damage.exiting.isEmpty())
+        testSurface.clear(damage.exiting);
+
+    // 4. Redraw ruler at rasterStart within entering damage clip
+    const RenderParams rasterParams = makeParams(rasterStart);
+    {
+        juce::Graphics g(testSurface);
+        g.reduceClipRegion(damage.entering);
+        TimelineLayerComposer::drawTimeRuler(g, rasterParams);
+    }
+
+    // 5. Raster baseline at rasterStart — diffs must be 0
+    juce::Image rasterBaseline(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(rasterBaseline);
+        rasterBaseline.clear(timelineBounds);
+        TimelineLayerComposer::drawTimeRuler(g, rasterParams);
+    }
+    const int rasterDiffs = countPixelDiffs(testSurface, rasterBaseline, timelineBounds);
+    expect(rasterDiffs == 0,
+           "fractional raster-phase scroll: incremental surface must match rasterStart baseline. diffs="
+           + std::to_string(rasterDiffs));
+
+    // 6. Semantic baseline at requestedSemanticStart — diffs must be > 0 (captures old bug)
+    //    T=8s label: old centre=750, after move=699; semantic centre=700 ≠ 699
+    juce::Image semanticBaseline(juce::Image::ARGB, w, h, true);
+    {
+        juce::Graphics g(semanticBaseline);
+        semanticBaseline.clear(timelineBounds);
+        const RenderParams semanticParams = makeParams(requestedSemanticStart);
+        TimelineLayerComposer::drawTimeRuler(g, semanticParams);
+    }
+    const int semanticDiffs = countPixelDiffs(testSurface, semanticBaseline, timelineBounds);
+    expect(semanticDiffs > 0,
+           "fractional raster-phase scroll: incremental surface must differ from semanticStart baseline. diffs="
+           + std::to_string(semanticDiffs));
+}
+
 // ── Composite vertical shrink pixel-equivalence ─────────────────────
 // Old-pps render under new-pps render must match clean new-pps render
 // pixel-by-pixel — no old background or piano-key leakage.
@@ -2694,6 +2784,7 @@ int main()
         makeRulerScrollDamageContract();
         rulerForwardScrollPixelEquivalence();
         rulerBackwardScrollPixelEquivalence();
+        rulerFractionalScrollRasterPhaseEquivalence();
 
         // ── Page viewport policy edge stability ────────────────────────
         pageEdgeStability();
