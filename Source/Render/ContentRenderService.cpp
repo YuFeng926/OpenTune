@@ -94,22 +94,11 @@ void ContentRenderService::enqueueRender(RenderJob job)
     for (const auto& chunk : chunks)
     {
         RenderJob subJob = job;
-        subJob.startSample = chunk.startSample;
-        subJob.endSampleExclusive = chunk.endSampleExclusive;
-        subJob.startSeconds = static_cast<double>(subJob.startSample) / sampleRate;
-        subJob.endSeconds = static_cast<double>(subJob.endSampleExclusive) / sampleRate;
 
-        subJob.renderCache->requestRenderPending(
-            subJob.startSeconds, subJob.endSeconds,
-            subJob.startSample, subJob.endSampleExclusive);
+        subJob.renderCache->requestRenderPending(chunk.startSample, chunk.endSampleExclusive);
 
         renderWorker_.enqueue(std::move(subJob));
     }
-}
-
-bool ContentRenderService::hasPendingJobs() const
-{
-    return renderWorker_.hasPendingJobs();
 }
 
 void ContentRenderService::beginAsyncRenderJob()
@@ -162,6 +151,20 @@ void ContentRenderService::clearAll()
     stretchers_.clear();
     timeStretchCache_.clear();
     // renderWorker_ queue 由 drain() 控制，不清空
+}
+
+void ContentRenderService::preparePlaybackSampleRate(double targetSr)
+{
+    if (targetSr <= 0.0) return;
+
+    // 1. Playback sources — dry audio 准备（使用 publisher 自有 resampler）
+    playbackSources_.setPlaybackSampleRate(targetSr);
+
+    // 2. RenderCaches — chunk 准备（使用各 cache 自有 resampler）
+    renderCaches_.preparePlaybackSampleRate(targetSr);
+
+    // 3. TimeStretchCache — 整数切片准备（使用自有 resampler）
+    timeStretchCache_.prepareForPlaybackSampleRate(targetSr);
 }
 
 } // namespace OpenTune

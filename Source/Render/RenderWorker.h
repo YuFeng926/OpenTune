@@ -32,13 +32,6 @@ struct RenderExecutionLease
  * RenderWorker — 异步渲染队列和工作线程。
  * 
  * 管理 chunk render 队列、worker thread 生命周期、execution lease。
- * 
- * Phase 0: 提取自 CRS partial-render queue (cpp:765-790)
- *          和 ContentRenderService worker (h:189-199, cpp:93-257)
- * 
- * 修正 CRS 的两个 bug：
- * 1. targetRevision 丢失 - PendingRenderJob 有但 PendingRenderEntry 没有
- * 2. condition_variable wait 持有外层锁 - renderQueueMutex 在 wait 时仍被持有
  */
 class RenderWorker
 {
@@ -53,7 +46,6 @@ public:
     void detachExecutionLease(void* owner);
 
     void enqueue(RenderJob job);
-    bool hasPendingJobs() const;
     void beginAsyncJob();
     void completeAsyncJob();
 

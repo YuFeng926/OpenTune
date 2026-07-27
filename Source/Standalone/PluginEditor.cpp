@@ -2370,7 +2370,7 @@ void OpenTuneAudioProcessorEditor::languageChanged(Language newLanguage)
 
 void OpenTuneAudioProcessorEditor::playRequested()
 {
-    processorRef_.setPlaying(true);
+    processorRef_.play();
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Play);
     transportBar_.setPlaying(true);
     // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
@@ -2378,7 +2378,7 @@ void OpenTuneAudioProcessorEditor::playRequested()
 
 void OpenTuneAudioProcessorEditor::pauseRequested()
 {
-    processorRef_.setPlaying(false);
+    processorRef_.pause();
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Pause);
     transportBar_.setPlaying(false);
     // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
@@ -2386,8 +2386,7 @@ void OpenTuneAudioProcessorEditor::pauseRequested()
 
 void OpenTuneAudioProcessorEditor::stopRequested()
 {
-    processorRef_.setPlaying(false);
-    processorRef_.setPosition(0);
+    processorRef_.stop();
     processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Stop);
     transportBar_.setPlaying(false);
     // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
@@ -2798,16 +2797,15 @@ void OpenTuneAudioProcessorEditor::stopPlaybackRequested()
 void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
 {
     if (processorRef_.isPlaying()) {
-        processorRef_.setPlaying(false);
         double startPos = processorRef_.getPlayStartPosition();
-        processorRef_.setPosition(startPos);
+        processorRef_.pauseAtPosition(startPos);
         processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Pause);
         transportBar_.setPlaying(false);
         // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.
     } else {
         double startPos = processorRef_.getPlayStartPosition();
         processorRef_.setPosition(startPos);
-        processorRef_.setPlaying(true);
+        processorRef_.play();
         processorRef_.recordControlCall(OpenTuneAudioProcessor::DiagnosticControlCall::Play);
         transportBar_.setPlaying(true);
         // PianoRoll and ArrangementView read processor-owned PlayHeadState directly.

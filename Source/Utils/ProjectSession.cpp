@@ -620,11 +620,9 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
                     readSource.audioSampleRate = snap->audioSampleRate;
                     readSource.renderCache = crs->getOrCreateRenderCache(key);
                     readSource.timeStretchCache = &crs->getTimeStretchCache();
-                    readSource.renderRevision = snap->contentRevision;
                     readSource.pitchRevision = snap->pitchRevision;
                     readSource.timeGridRevision = snap->timeGridRevision;
                     readSource.pitchShiftRevision = snap->pitchShiftRevision;
-                    readSource.pitchShiftSettings = snap->pitchShiftSettings;
                     readSource.timeGridIsIdentity = snap->timeGrid == nullptr || snap->timeGrid->isIdentity();
 
                     crs->publishPlaybackSource(key, std::move(readSource));

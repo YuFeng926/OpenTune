@@ -20,12 +20,12 @@ namespace OpenTune {
 // ==============================================================================
 // F0 Gap Filling for Vocoder (Mel Frame Space)
 // ==============================================================================
-// 在渲染提交前填补 correctedF0 中的零值间隙：
-//   1. 内部间隙：≤10帧用 log-domain 线性插值填�?
-//   2. 边界延伸：起�?终点若为零，向边界外查询并延伸填�?
-//      - 检测延伸方向是否有 voiced 段，有则延伸到该段起点为�?
+// 在渲染提交前填补 correctedF0 的零值间隙：
+//   1. 内部间隙：≤50帧用 log-domain 线性插值填充
+//   2. 边界延伸：起点/终点若为零，向边界外查询并延伸填充
+//      - 检测延伸方向是否有 voiced 段，有则延伸到该段起点为止
 //
-// 目的：消�?PC-NSF-HiFiGAN �?F0 不连续处的相位震荡（低频砰砰声）
+// 目的：消除 PC-NSF-HiFiGAN 在 F0 不连续处的相位震荡（低频砰砰声）
 void fillF0GapsForVocoder(
     std::vector<float>& f0,
     const std::shared_ptr<const PitchCurveSnapshot>& snap,
@@ -361,20 +361,14 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     }
 
     PlaybackReadSource readSource;
-    if (crs->getPlaybackReadSource(job.contentKey, readSource))
+    if (!crs->getPlaybackReadSource(job.contentKey, readSource) || !readSource.hasAudio())
     {
-        job.audioBuffer = readSource.audioBuffer;
-        job.audioSampleRate = readSource.audioSampleRate;
+        job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
+        return;
     }
+    job.audioBuffer = readSource.audioBuffer;
 
-    job.pitchCurve = contentSnap->pitchCurve;
-    job.timeGrid = contentSnap->timeGrid;
-    job.pitchShiftSettings = contentSnap->pitchShiftSettings;
-    job.silentGaps = contentSnap->silentGaps;
-    job.pitchRevision = contentSnap->pitchRevision;
-    job.pitchShiftRevision = contentSnap->pitchShiftRevision;
-    job.timeGridRevision = contentSnap->timeGridRevision;
-    job.contentRevision = contentSnap->contentRevision;
+    auto pitchCurve = contentSnap->pitchCurve;
 
     std::vector<float> monoAudio;
     std::vector<float> sourceF0;
@@ -383,8 +377,6 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const double relChunkStartSec = job.startSeconds;
     auto coreJob = std::move(job);
     FrozenRenderBoundaries boundaries;
-
-    std::shared_ptr<PitchCurve> pitchCurve = coreJob.pitchCurve;
     int numFrames = 0;
     bool clipFound = false;
     bool boundariesFrozen = false;
@@ -471,18 +463,12 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                 std::copy(data, data + copyLen, sourceF0.begin() + offset);
         });
 
+    if (!contentSnap->pitchShiftSettings.isIdentity())
     {
-        PlaybackReadSource psSrc;
-        PitchShiftSettings pitchShiftSettings;
-        if (crs->getPlaybackReadSource(coreJob.contentKey, psSrc))
-            pitchShiftSettings = psSrc.pitchShiftSettings;
-        if (!pitchShiftSettings.isIdentity())
-        {
-            const float pitchRatio = static_cast<float>(pitchShiftSettings.getPitchRatio());
-            for (auto& f0Val : sourceF0)
-                if (f0Val > 0.0f)
-                    f0Val *= pitchRatio;
-        }
+        const float pitchRatio = static_cast<float>(contentSnap->pitchShiftSettings.getPitchRatio());
+        for (auto& f0Val : sourceF0)
+            if (f0Val > 0.0f)
+                f0Val *= pitchRatio;
     }
 
     bool hasValidF0 = false;

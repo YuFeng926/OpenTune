@@ -15,16 +15,10 @@
 namespace OpenTune {
 
 /**
- * Pure Stage2 rebuild â€?extracted from OpenTuneAudioProcessor::runStage2RebuildForContentKey.
- * The original implementation was a private method on the processor; this helper takes its
- * dependencies (CRS, owner snapshot) explicitly as parameters so the same algorithm can be
- * invoked from any domain owner (processor non-ARA path or ARA2 document controller).
+ * Pure Stage2 rebuild â€” extracted from OpenTuneAudioProcessor::runStage2RebuildForContentKey.
  *
- * Behavior must be byte-identical to the original:
- *   - guard: invalid key, no snapshot, no source, empty audio, stale revisions
- *   - identity time-grid â†?invalidate cache, return true
- *   - otherwise: SoundTouch WSOLA time-stretch, write into CRS TimeStretchCache
- *     using snapshot revisions as the cache identity tuple.
+ * Reads Stage1 PlaybackReadSource via CanonicalReadRequest/readCanonicalAudio,
+ * applies TimeGrid-based time stretch via SoundTouch, writes result into CRS TimeStretchCache.
  */
 bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
                                           const Request& request,
@@ -73,15 +67,12 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
     auto schedule = stretcher->buildTempoScheduleFromTimeGrid(*ownerSnap->timeGrid);
     stretcher->beginRebuild(schedule);
 
-    const int totalSamples = stage1Source.audioBuffer->getNumSamples();
-    constexpr int kBlock = 4096;
-
-    // Avoid double-processing: Stage2 reads Stage1's PlaybackReadSource via
-    // readPlaybackAudio, which short-circuits through the time-stretch cache when
-    // timeGridIsIdentity is false and a cache is set. Null the cache pointer and
-    // force the identity path so Stage2 always consumes Stage1's underlying PCM.
+    // Stage2 must read Stage1 raw PCM, never its own cached TimeStretch output.
     stage1Source.timeStretchCache = nullptr;
     stage1Source.timeGridIsIdentity = true;
+
+    const int totalSamples = stage1Source.audioBuffer->getNumSamples();
+    constexpr int kBlock = 4096;
 
     juce::AudioBuffer<float> readBuf(1, kBlock);
 
@@ -108,21 +99,20 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
         const int n = std::min(kBlock, totalSamples - offset);
         readBuf.clear(0, 0, n);
 
-        ::OpenTune::PlaybackReadRequest req(stage1Source,
-                                static_cast<double>(offset) / sampleRate,
-                                sampleRate,
-                                n);
+        ::OpenTune::CanonicalReadRequest req(stage1Source,
+                                 static_cast<int64_t>(offset),
+                                 n);
 
-        const int wrote = readPlaybackAudio(req, readBuf, 0);
-        const int actuallyWrote = juce::jlimit(0, n, wrote);
+        const int wrote = readCanonicalAudio(req, readBuf, 0);
 
-        for (int i = actuallyWrote; i < n; ++i) {
-            const int srcIdx = offset + i;
-            readBuf.setSample(0, i,
-                              (srcIdx < totalSamples)
-                                  ? stage1Source.audioBuffer->getSample(0, srcIdx)
-                                  : 0.0f);
+        // Read insufficient â†’ rebuild failure (no manual dry fallback)
+        if (wrote < n) {
+            AppLogger::warn("Stage2: canonical read insufficient at offset="
+                            + juce::String(offset) + " wanted=" + juce::String(n)
+                            + " got=" + juce::String(wrote));
+            return false;
         }
+
         const bool isLast = (offset + n) >= totalSamples;
         stretcher->push(readBuf.getReadPointer(0), static_cast<size_t>(n), isLast);
         drainAvailable();
@@ -155,7 +145,7 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
                    + " timeGridRev=" + juce::String(static_cast<juce::int64>(timeGridRev))
                    + " stage1InputSamples=" + juce::String(totalSamples)
                    + " stage2OutputSamples=" + juce::String(static_cast<int>(stretcher->expectedOutputSamples()))
-                   + " (SoundTouch WSOLA, Stage 1 via readPlaybackAudio dry+vocoder-overlay)");
+                   + " (SoundTouch WSOLA, Stage 1 via readCanonicalAudio)");
     return true;
 }
 

@@ -4,7 +4,6 @@ namespace OpenTune {
 
 std::shared_ptr<RenderCache> RenderCacheRegistry::getOrCreate(ContentKey key)
 {
-    // 先读锁查找
     {
         const juce::ScopedReadLock readLock(lock_);
         auto it = caches_.find(key);
@@ -12,13 +11,19 @@ std::shared_ptr<RenderCache> RenderCacheRegistry::getOrCreate(ContentKey key)
             return it->second;
     }
 
-    // 未找到，升级写锁创建
     auto cache = std::make_shared<RenderCache>();
+    double targetSr = 0.0;
     {
         const juce::ScopedWriteLock writeLock(lock_);
         auto [it, inserted] = caches_.try_emplace(key, cache);
-        return it->second;
+        targetSr = currentTargetRate_;
+        if (!inserted) cache = it->second;
     }
+
+    if (targetSr > 0.0 && cache) {
+        cache->prepareForPlaybackSampleRate(targetSr);
+    }
+    return cache;
 }
 
 std::shared_ptr<RenderCache> RenderCacheRegistry::get(ContentKey key) const
@@ -26,12 +31,6 @@ std::shared_ptr<RenderCache> RenderCacheRegistry::get(ContentKey key) const
     const juce::ScopedReadLock readLock(lock_);
     auto it = caches_.find(key);
     return (it != caches_.end()) ? it->second : nullptr;
-}
-
-void RenderCacheRegistry::put(ContentKey key, std::shared_ptr<RenderCache> cache)
-{
-    const juce::ScopedWriteLock writeLock(lock_);
-    caches_[key] = std::move(cache);
 }
 
 void RenderCacheRegistry::remove(ContentKey key)
@@ -52,6 +51,26 @@ void RenderCacheRegistry::clear()
 {
     const juce::ScopedWriteLock writeLock(lock_);
     caches_.clear();
+}
+
+void RenderCacheRegistry::preparePlaybackSampleRate(double targetSr)
+{
+    if (targetSr <= 0.0) return;
+
+    std::vector<std::shared_ptr<RenderCache>> snapshot;
+    {
+        const juce::ScopedWriteLock writeLock(lock_);
+        currentTargetRate_ = targetSr;
+        snapshot.reserve(caches_.size());
+        for (auto& [key, cache] : caches_) {
+            juce::ignoreUnused(key);
+            if (cache) snapshot.push_back(cache);
+        }
+    }
+    // r8brain outside lock
+    for (auto& cache : snapshot) {
+        cache->prepareForPlaybackSampleRate(targetSr);
+    }
 }
 
 } // namespace OpenTune

@@ -13,8 +13,7 @@ namespace {
 
 // SoundTouch settings chosen per spec §"WSOLA 引擎配置".
 // Vocal-friendly defaults: AA filter on (anti-alias), QUICKSEEK off (quality),
-// SEEKWINDOW=25ms / OVERLAP=8ms (SoundTouch defaults, validated by Phase 0
-// spike on /Users/Shared/SingVocalTest/ samples).
+// SEEKWINDOW=25ms / OVERLAP=8ms (SoundTouch defaults).
 constexpr int kSettingUseAaFilter   = 1;
 constexpr int kSettingAaFilterLength = 64;
 constexpr int kSettingUseQuickSeek  = 0;

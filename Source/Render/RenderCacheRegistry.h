@@ -2,6 +2,7 @@
 
 #include "../Content/ContentKey.h"
 #include "../Inference/RenderCache.h"
+#include "../Utils/TimeCoordinate.h"
 #include <juce_core/juce_core.h>
 #include <map>
 #include <memory>
@@ -10,16 +11,9 @@ namespace OpenTune {
 
 /**
  * RenderCacheRegistry — RenderCache 生命周期管理。
- * 
+ *
  * 按 ContentKey 管理 RenderCache 实例的创建、查找、删除。
- * 
- * Phase 0: 提取自 content owner RenderCache 创建逻辑 (cpp:84-85)
- *          和 ContentRenderService renderCaches_ map (h:184)
- * 
- * 复用代码：
- * - content owner.cpp:84-85 (RenderCache 创建)
- * - content owner.cpp:363-378 (getRenderCache)
- * - ContentRenderService.cpp:65-87 (getOrCreateRenderCache)
+ * 保存当前 target rate；getOrCreate 的 cache 立即 prepare；切率时 write lock 内更新 rate + 复制列表后锁外重建。
  */
 class RenderCacheRegistry
 {
@@ -32,14 +26,17 @@ public:
 
     std::shared_ptr<RenderCache> getOrCreate(ContentKey key);
     std::shared_ptr<RenderCache> get(ContentKey key) const;
-    void put(ContentKey key, std::shared_ptr<RenderCache> cache);
     void remove(ContentKey key);
     void invalidate(ContentKey key);
     void clear();
 
+    /** 遍历所有 cache 调用 prepareForPlaybackSampleRate（write lock 内更新 rate + 复制列表，锁外重建）。 */
+    void preparePlaybackSampleRate(double targetSr);
+
 private:
     mutable juce::ReadWriteLock lock_;
     std::map<ContentKey, std::shared_ptr<RenderCache>> caches_;
+    double currentTargetRate_{TimeCoordinate::kRenderSampleRate};
 };
 
 } // namespace OpenTune

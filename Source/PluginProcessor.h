@@ -90,17 +90,6 @@ struct DeleteOutcome {
 };
 
 // ============================================================================
-// Audio Processing Constants
-// ============================================================================
-namespace AudioConstants {
-    constexpr double DefaultSampleRate = 44100.0;
-    constexpr double StoredAudioSampleRate = TimeCoordinate::kRenderSampleRate;
-    constexpr int64_t RenderLookaheadSeconds = 5;
-    constexpr int RenderTimeoutMs = 30000;
-    constexpr int RenderPollIntervalMs = 20;
-}
-
-// ============================================================================
 // PlayHeadPresentationProjection — single-writer seqlock projection anchor
 // ============================================================================
 //
@@ -213,6 +202,15 @@ struct PlayHeadPresentationProjection
 //
 // reset() contract (only prepareToPlay/releaseResources call it):
 //  - clear isPlaying/isLooping; keep last time/loop range; bump presentationEpoch.
+//
+// sampleCursor — standalone canonical integer cursor in device sample space.
+// Audio thread is the sole canonical writer (Playing advance, fade completion,
+// direct cursor commit for non-fading commands). Control thread publishes cursor
+// intent via seqlock (pendingMainCursor_) but NEVER writes sampleCursor directly.
+// The one exception is prepareToPlay rate-change projection, which runs on the
+// audio thread under host serialisation.
+// VST3/ARA host path never reads or writes this.
+// UI timeInSeconds is derived from sampleCursor / device rate for Standalone.
 struct PlayHeadState
 {
     std::atomic<bool>    isPlaying { false };
@@ -222,6 +220,7 @@ struct PlayHeadState
     std::atomic<double>  loopPpqEnd { 0.0 };
     std::atomic<uint64_t> hostPositionRevision { 0 };
     std::atomic<uint64_t> presentationEpoch { 0 };
+    std::atomic<int64_t> sampleCursor { 0 };
 
     PlayHeadPresentationProjection presentationProjection;
 
@@ -323,22 +322,6 @@ public:
         int timeSignatureDenominator{4};
     };
 
-    // Audio-thread → message-thread log event dispatch.
-    // Audio thread writes to logEventData_ then bumps logEventGeneration_;
-    // message thread reads via consumeAudioThreadLogs().
-    struct AudioThreadLogEvent {
-        enum class Type : uint8_t { None, FadeOutComplete, CaptureDiag };
-        Type type = Type::None;
-        int diagNumChannels = 0;
-        int diagNumSamples = 0;
-        float diagMag = 0.0f;
-        float diagS0 = 0.0f;
-        float diagS1 = 0.0f;
-        float diagS2 = 0.0f;
-        float diagS3 = 0.0f;
-        float diagS64 = 0.0f;
-    };
-
     struct ReferenceAlignmentResult {
         enum class Status : uint8_t {
             Succeeded = 0,
@@ -352,8 +335,8 @@ public:
             InsufficientFeatures,
             InvalidTimeGrid,
             NoMutation,
-        CommitFailed
-    };
+            CommitFailed
+        };
 
     Status status{Status::CommitFailed};
     juce::String message;
@@ -362,7 +345,7 @@ public:
     int affectedEndFrame{0};
 
     bool succeeded() const noexcept { return status == Status::Succeeded; }
-};
+    };
 
     struct AutoRefAvailability {
         enum class Status : uint8_t {
@@ -429,7 +412,7 @@ public:
     
     // 音频以固定 44.1kHz 存储，用于存储音频数据的采样-时间转换
     // 注意：此采样率用于音频数据存储，与设备采样率（currentSampleRate_）可能不同
-    static constexpr double getStoredAudioSampleRate() { return AudioConstants::StoredAudioSampleRate; }
+    static constexpr double getStoredAudioSampleRate() { return TimeCoordinate::kRenderSampleRate; }
 
     // ============================================================================
     // Import API (Two-phase: prepare in worker thread, commit in main thread)
@@ -539,6 +522,26 @@ public:
         Seek
     };
 
+    // Control-thread → audio-thread transport command. Control thread writes
+    // the latest command + target cursor; audio thread consumes at block start.
+    enum class TransportCommand : uint8_t {
+        None = 0,
+        Play,
+        Pause,
+        Stop,
+        Seek,
+        PauseAtPosition
+    };
+
+    // Audio-thread runtime phase. Only Stopped/Paused/Playing/Fading exist.
+    // Fading is a transitional phase between Playing and Paused/Stopped.
+    enum class RuntimePhase : uint8_t {
+        Stopped = 0,
+        Paused,
+        Playing,
+        Fading
+    };
+
     struct DiagnosticInfo {
         int editVersion{0};
         ContentKey contentKey;
@@ -558,14 +561,8 @@ public:
     };
 
     /**
-     * 统一播放读取 API
-     *
-     * 二元播放模型：先读当前播放采样率 dry signal，再用当前播放采样率的
-     * 已发布 render cache 覆盖同一段目标 buffer。
+     * 统一播放读取 API — 参见 Utils/PlaybackAudioReader.h 自由函数。
      */
-    int readPlaybackAudio(const ::OpenTune::PlaybackReadRequest& request,
-                          juce::AudioBuffer<float>& destination,
-                          int destinationStartSample) const;
     DiagnosticInfo getDiagnosticInfo(int trackId = 0, uint64_t placementId = 0) const;
     void recordControlCall(DiagnosticControlCall controlCall);
 
@@ -600,10 +597,35 @@ private:
     // processor's processBlock(); ARA/UI read it via getPlayHeadState().
     PlayHeadState playHeadState_;
 
-    // Fade-out state for smooth stop/pause
-    std::atomic<bool> isFadingOut_{false};
-    std::atomic<int> fadeOutSampleCount_{0};
-    int fadeOutTotalSamples_{0};  // Set in prepareToPlay based on sample rate
+    // Fade state for smooth pause/stop (audio-thread only, except fadeTotalSamples_ set in prepareToPlay)
+    int fadeTotalSamples_{0};  // Absolute fade duration in device samples (0.2s * sampleRate)
+    int fadeElapsed_{0};
+    int64_t fadeReadCursor_{0};
+    RuntimePhase fadeCompletionPhase_{RuntimePhase::Paused};
+    int64_t fadeCompletionCursor_{0};
+    bool fadeActive_{false};
+
+    // Seqlock command dispatch — single control-thread writer.
+    // controlSequence_: even = stable snapshot ready, odd = writer inside.
+    // Each control API: fetch_add to odd → write all fields → fetch_add to even.
+    // Audio thread reads snapshot at block start when seq is even && seq != applied.
+    // No mutex. No CAS-clear. Latest complete snapshot always preserved.
+    //
+    // Four seqlock-protected fields carry control-thread intent:
+    //   pendingCommand_       — the transport operation to apply
+    //   pendingMainCursor_    — main freeze cursor (presented position at command time)
+    //   pendingTargetCursor_  — completion target cursor (0 for Stop, mainCursor for Pause, target for PauseAtPosition/Seek)
+    //   pendingIsPlaying_     — desired isPlaying after command (true for Play, preserved for Seek, false otherwise)
+    // Control thread NEVER writes sampleCursor; audio thread is the sole canonical writer.
+    std::atomic<uint64_t> controlSequence_{0};
+    std::atomic<TransportCommand> pendingCommand_{TransportCommand::None};
+    std::atomic<int64_t> pendingMainCursor_{0};
+    std::atomic<int64_t> pendingTargetCursor_{0};
+    std::atomic<bool> pendingIsPlaying_{false};
+    uint64_t appliedControlSequence_{0};  // audio-thread only
+
+    // Audio-thread runtime phase (Standalone only). Fading is transitional.
+    RuntimePhase phase_{RuntimePhase::Stopped};
 
     // Independent host metadata snapshot (no loop fields; loop truth lives in
     // playHeadState_). BPM/PPQ/recording/time-signature presentation only.
@@ -671,14 +693,6 @@ private:
                         const juce::String& reason) override;
 
 public:
-    // ⚡️ vocal-time-stretch §7 — Stage 2 worker progress query for UI feedback.
-
-
-private:
-
-public:
-    // Clip Chunk 状态查询（替代原 RenderQueueStatus）
-
     // Track State Management
     // Track height (shared state)
     void setTrackHeight(int height);
@@ -841,8 +855,11 @@ public:
 
     // Transport control API — thin accessors over processor-owned PlayHeadState.
     // VST3/ARA uses getPlayHeadState() const reference for UI. Writes only via
-    // Standalone setter methods (setPlaying/setLoopEnabled/setPosition).
-    void setPlaying(bool playing);
+    // Standalone setter methods (play/pause/stop/setPosition/setLoopEnabled).
+    void play();
+    void pause();
+    void stop();
+    void pauseAtPosition(double targetSeconds);
     void setPosition(double seconds);
     void setLoopEnabled(bool enabled);
     bool isPlaying() const noexcept { return playHeadState_.isPlaying.load(std::memory_order_relaxed); }
@@ -853,11 +870,7 @@ public:
     /** Canonical processor-owned transport truth; UI binds a const non-owning reference. */
     const PlayHeadState& getPlayHeadState() const noexcept { return playHeadState_; }
 
-    /// Consume audio-thread log events on message thread. Called from PluginEditor::timerCallback().
-    void consumeAudioThreadLogs();
-    
     double getPlayStartPosition() const { return playStartPosition_.load(); }
-    void setPlayStartPosition(double seconds) { playStartPosition_.store(seconds); }
 
     // Standalone canonical BPM setter. Validates 1..999 range and writes only
     // the processor-owned canonical bpm_; never touches host transport atomics.
@@ -911,13 +924,6 @@ public:
 private:
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
-
-    // Audio-thread → message-thread log event dispatch (SPSC).
-    // Audio thread writes logEventData_ and bumps logEventGeneration_;
-    // message thread reads via consumeAudioThreadLogs(), using logEventReadGeneration_ to dedup.
-    AudioThreadLogEvent              logEventData_;
-    std::atomic<uint64_t>           logEventGeneration_{0};
-    uint64_t                        logEventReadGeneration_{0}; // message-thread only
 
     AppPreferences* appPreferences_{nullptr};
 

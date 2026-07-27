@@ -63,12 +63,6 @@ void RenderWorker::enqueue(RenderJob job)
     cv_.notify_one();
 }
 
-bool RenderWorker::hasPendingJobs() const
-{
-    std::lock_guard<std::mutex> lk(mutex_);
-    return !queue_.empty();
-}
-
 void RenderWorker::beginAsyncJob()
 {
     std::lock_guard<std::mutex> lk(mutex_);
@@ -164,11 +158,9 @@ void RenderWorker::loop()
                     if (job.renderCache->getNextPendingJob(pendingJob))
                     {
                         job.startSeconds = pendingJob.startSeconds;
-                        job.endSeconds = pendingJob.endSeconds;
                         job.startSample = pendingJob.startSample;
                         job.endSampleExclusive = pendingJob.endSampleExclusive;
                         job.targetRevision = pendingJob.targetRevision;
-                        job.renderRevision = pendingJob.targetRevision;
                         leaseCopy.renderJobCallback(job);
                     }
                 }

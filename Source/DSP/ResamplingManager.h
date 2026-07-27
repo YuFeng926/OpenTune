@@ -50,7 +50,14 @@ public:
         int inputSR, int targetSR
     );
 
-
+    /**
+     * 高质量播放重采样 — 精确 outputLength，绝对样本边界。
+     * 调用方负责确保 outputLength = round(inputLength * targetSR / inputSR)，
+     * 相邻 chunk 无 gap/overlap。
+     */
+    std::vector<float> resampleExactLength(
+        const float* input, size_t inputLength,
+        int inputSR, int targetSR, int outputLength);
 
 private:
     std::vector<float> resample(

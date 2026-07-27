@@ -1,20 +1,13 @@
 /**
- * TimeStretchCache - clip-wide single-entry cache for Stage 2 time-stretch output.
+ * TimeStretchCache — clip-wide single-entry cache for Stage 2 time-stretch output.
  *
- * Unlike PitchCache (chunk-wise), TimeStretchCache stores one entry per content
- * key, holding the entire clip's time-stretched PCM. Stage 2 depends on Stage 1
- * audio and TimeGrid, and Stage 1 audio depends on both pitch curve and
- * pitch-shift settings, so cache identity is the explicit tuple:
- * (pitchRevision, pitchShiftRevision, timeGridRevision).
+ * Canonical audio stored at 44.1kHz as shared_ptr<const vector<float>> (immutable).
+ * Prepared audio stored at target playback rate (shared_ptr<const vector<float>>).
+ * Audio thread reads via direct integer-sample slice from prepared audio only.
+ * Canonical slice provided for Stage2/export non-realtime reading.
  *
- * Hit conditions:
- *   - ContentKey matches
- *   - pitchRevision matches the current pitch-curve revision
- *   - pitchShiftRevision matches the current pitch-shift settings revision
- *   - timeGridRevision matches the current TimeGrid revision
- *
- * processBlock reads slices via sliceForOutputRange(...).
- * Spec: openspec/changes/vocal-time-stretch/specs/two-stage-render-pipeline/spec.md
+ * Writer side uses std::mutex; Entry is shared_ptr<const Entry> — published once, never mutated.
+ * Audio thread atomic_load(readerMap_) — lock-free read path.
  */
 #pragma once
 
@@ -25,43 +18,35 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "../Content/ContentKey.h"
+#include "../DSP/ResamplingManager.h"
+#include "../Utils/TimeCoordinate.h"
 
 namespace OpenTune {
 
 class TimeStretchCache {
 public:
-    /**
-     * One entry per content key.
-     */
     struct Entry {
-        std::vector<float> audio;        // Stage 2 output, full clip, full-band PCM
+        // Canonical (44.1kHz) Stage 2 output — immutable after publish
+        std::shared_ptr<const std::vector<float>> canonicalAudio;
         uint64_t pitchRevision = 0;
         uint64_t pitchShiftRevision = 0;
         uint64_t timeGridRevision = 0;
-        double sampleRate = 44100.0;     // typically TimeCoordinate::kRenderSampleRate
-        bool published = false;          // false until first store
-    };
+        double sampleRate = 44100.0;
+        bool published = false;
 
-    /**
-     * Stats snapshot for diagnostics.
-     */
-    struct Stats {
-        int contentCount = 0;
-        size_t totalBytes = 0;
-        int publishedCount = 0;
+        // Prepared at target playback rate — immutable after publish.
+        // When target rate == canonical rate, preparedAudio aliases canonicalAudio.
+        std::shared_ptr<const std::vector<float>> preparedAudio;
+        double preparedSampleRate = 0.0;
     };
 
     TimeStretchCache();
     ~TimeStretchCache();
 
-    /**
-     * Store the full-clip stretched PCM for content at a specific
-     * (pitchRevision, pitchShiftRevision, timeGridRevision) tuple with
-     * build-generation token for stale-output rejection. Replaces any prior entry.
-     */
     void store(ContentKey key,
                std::vector<float> audio,
                uint64_t pitchRevision,
@@ -70,72 +55,49 @@ public:
                double sampleRate,
                uint32_t buildGeneration);
 
-    /**
-     * Capture the current invalidation generation for this content key.
-     * Caller (worker) holds this and passes it to store(); if the generation
-     * has changed by the time store() runs, the build output is discarded.
-     */
-    uint32_t beginBuild(ContentKey key) const;
+    uint32_t beginBuild(ContentKey key);
 
-    /**
-     * Check if entry for `key` matches the current Stage 2 dependency tuple.
-     */
-    bool hit(ContentKey key,
-             uint64_t pitchRevision,
-             uint64_t pitchShiftRevision,
-             uint64_t timeGridRevision) const;
-
-    /**
-     * Read a slice of the cached output by output time range.
-     *
-     * @param key                      Content identity
-     * @param outputStartSeconds       Start of slice in output time
-     * @param destination              Destination buffer
-     * @param destinationStartSample   Where to write in destination
-     * @param numSamples               Sample count to read
-     * @param targetSampleRate         If different from cached SR, linear-interp resample
-     * @return                         Number of samples written; 0 if cache miss/range out of bounds
-     */
     int sliceForOutputRange(ContentKey key,
                             uint64_t pitchRevision,
                             uint64_t pitchShiftRevision,
                             uint64_t timeGridRevision,
-                            double outputStartSeconds,
+                            int64_t readStartSample,
                             juce::AudioBuffer<float>& destination,
                             int destinationStartSample,
                             int numSamples,
                             int targetSampleRate) const;
 
-    /**
-     * Mark entry as stale.
-     */
-    void invalidate(ContentKey key);
+    int sliceCanonicalForOutputRange(ContentKey key,
+                                      uint64_t pitchRevision,
+                                      uint64_t pitchShiftRevision,
+                                      uint64_t timeGridRevision,
+                                      int64_t readStartSample,
+                                      juce::AudioBuffer<float>& destination,
+                                      int destinationStartSample,
+                                      int numSamples) const;
 
-    /**
-     * Drop all entries.
-     */
+    /** 将所有已 publish 的 canonical entry 重采样到目标率（writer mutex 内完成）。 */
+    void prepareForPlaybackSampleRate(double targetSr);
+
+    void invalidate(ContentKey key);
     void clear();
 
-    /**
-     * Diagnostics.
-     */
-    Stats getStats() const;
-
 private:
-    mutable juce::SpinLock lock_;
-    std::map<ContentKey, std::shared_ptr<Entry>> entries_;
+    mutable std::mutex mutex_;
+    std::map<ContentKey, std::shared_ptr<const Entry>> entries_;
 
-    // Atomic snapshot for lock-free readers. Published atomically after each
-    // write to entries_ so that sliceForOutputRange never needs a lock.
-    mutable std::shared_ptr<const std::map<ContentKey, std::shared_ptr<Entry>>> readerMap_;
+    // Atomic snapshot for lock-free readers. Published after each mutex-protected write.
+    mutable std::shared_ptr<const std::map<ContentKey, std::shared_ptr<const Entry>>> readerMap_;
 
-    // Retired snapshots for writer-side delayed destruction.
-    // Swept when use_count()==1 so free/malloc never hits audio thread.
-    mutable std::vector<std::shared_ptr<const std::map<ContentKey, std::shared_ptr<Entry>>>> retiredSnapshots_;
+    mutable std::vector<std::shared_ptr<const std::map<ContentKey, std::shared_ptr<const Entry>>>> retiredSnapshots_;
 
-    // Per-content invalidation generation counter.
-    // Bumped by invalidate(), checked by store() to reject stale worker output.
     mutable std::map<ContentKey, uint32_t> invalidationGen_;
+
+    // Prepared state: serialized by writer mutex_ only.
+    double targetSampleRate_{TimeCoordinate::kRenderSampleRate};
+    ResamplingManager preparedResampler_;
+
+    static size_t entryTotalBytes(const Entry& e);
 };
 
 } // namespace OpenTune

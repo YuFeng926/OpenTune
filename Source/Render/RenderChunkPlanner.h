@@ -10,9 +10,6 @@ namespace OpenTune {
  * RenderChunkPlanner — 根据 silent gaps 规划 render chunk boundary。
  * 
  * 纯函数工具类，不持有状态。
- * 
- * Phase 0: 提取自 RenderChunkPlanner::buildChunkBoundariesFromSilentGaps
- *          (content owner.cpp:820-880)
  */
 class RenderChunkPlanner
 {
