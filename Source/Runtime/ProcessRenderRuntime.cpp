@@ -17,6 +17,8 @@
 
 namespace OpenTune {
 
+namespace {
+
 // ==============================================================================
 // F0 Gap Filling for Vocoder (Mel Frame Space)
 // ==============================================================================
@@ -184,8 +186,6 @@ void fillF0GapsForVocoder(
         }
     }
 }
-
-namespace {
 
 struct ContentSampleRange
 {

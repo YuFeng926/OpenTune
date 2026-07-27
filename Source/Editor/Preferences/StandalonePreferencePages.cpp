@@ -37,9 +37,9 @@ public:
         if (audioDeviceManager != nullptr) {
             audioSelector_ = std::make_unique<juce::AudioDeviceSelectorComponent>(*audioDeviceManager,
                                                                                   0,
-                                                                                  256,
                                                                                   0,
-                                                                                  256,
+                                                                                  0,
+                                                                                  2,
                                                                                   false,
                                                                                   false,
                                                                                   true,

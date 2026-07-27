@@ -64,10 +64,24 @@ void PianoRollComponent::initializeUIComponents() {
     addAndMakeVisible(scrollModeToggleButton_);
     scrollModeToggleButton_.setTooltip(LOC(kTooltipScrollMode));
 
+    // Time/Bars 切换按钮
+    timeUnitToggleButton_.setFontHeight(11.0f);
+    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time ? "Time" : "BPM");
+    timeUnitToggleButton_.setTooltip(LOC(kTooltipTimeUnit));
+    timeUnitToggleButton_.onClick = [this] {
+        const auto nextMode = (displayMode_ == TimelineDisplayMode::Time)
+            ? TimelineDisplayMode::Bars
+            : TimelineDisplayMode::Time;
+        setTimelineDisplayMode(nextMode);
+        listeners_.call([nextMode](Listener& l) { l.timelineDisplayModeChanged(nextMode); });
+    };
+    addAndMakeVisible(timeUnitToggleButton_);
+
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
         this, [this](double timestampSec) { onScrollVBlankCallback(timestampSec); });
 
     scrollModeToggleButton_.toFront(false);
+    timeUnitToggleButton_.toFront(false);
 }
 
 
@@ -2190,12 +2204,17 @@ void PianoRollComponent::resized() {
     verticalScrollBar_.setBounds(bounds.removeFromRight(UIColors::scrollBarThickness));
 
     // Position toggle buttons in top right of ruler
+    // 历史布局：timeUnit 在左，scrollMode 在右，间距 5，y=5，btnW=50，btnH=20
     int btnW = 50;
     int btnH = 20;
     int spacing = 5;
-    int currentX = getWidth() - spacing - btnW;
-    
-    scrollModeToggleButton_.setBounds(currentX, 5, btnW, btnH);
+    int scrollModeX = getWidth() - spacing - btnW;
+    int timeUnitX = scrollModeX - spacing - btnW;
+
+    timeUnitToggleButton_.setBounds(timeUnitX, 5, btnW, btnH);
+    scrollModeToggleButton_.setBounds(scrollModeX, 5, btnW, btnH);
+
+    timeUnitToggleButton_.toFront(false);
     scrollModeToggleButton_.toFront(false);
 
     staticDirty_ = true;
@@ -2909,6 +2928,7 @@ void PianoRollComponent::setTimeSignature(int numerator, int denominator) {
 void PianoRollComponent::setTimelineDisplayMode(TimelineDisplayMode mode) {
     if (displayMode_ == mode) return;
     displayMode_ = mode;
+    timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time ? "Time" : "BPM");
     invalidateTimeAxisStaticSurface();
 }
 

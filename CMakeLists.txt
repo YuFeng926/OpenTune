@@ -16,7 +16,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment ta
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.6.1 LANGUAGES CXX C)
+project(OpenTune VERSION 1.6.3 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -1320,6 +1320,64 @@ if(OPENTUNE_BUILD_ARCHITECTURE_TESTS)
         target_compile_options(OpenTunePianoRollBehaviorTests PRIVATE /utf-8)
     endif()
     add_test(NAME OpenTunePianoRollBehaviorTests COMMAND OpenTunePianoRollBehaviorTests)
+
+    if(NOT OPENTUNE_ENABLE_ARA)
+        add_executable(OpenTunePlaybackDeviceTests
+            Tests/PlaybackDeviceTests.cpp
+        )
+        target_compile_features(OpenTunePlaybackDeviceTests PRIVATE cxx_std_17)
+        target_include_directories(OpenTunePlaybackDeviceTests
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}
+                ${CMAKE_CURRENT_SOURCE_DIR}/Source
+                ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone
+                ${ONNXRUNTIME_INCLUDE_DIR}
+                $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_basics>
+                $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_utils>
+                $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_core>
+                $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_data_structures>
+                $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_dsp>
+                $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_events>
+                $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_gui_basics>
+                $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_gui_extra>
+                $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_graphics>
+        )
+        target_link_libraries(OpenTunePlaybackDeviceTests
+            PRIVATE
+                OpenTune
+                OpenTuneResources
+                juce::juce_audio_utils
+                juce::juce_audio_processors
+                juce::juce_dsp
+                juce::juce_graphics
+                juce::juce_gui_basics
+                juce::juce_gui_extra
+                juce::juce_core
+        )
+        if(WIN32)
+            target_link_libraries(OpenTunePlaybackDeviceTests
+                PRIVATE
+                    "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib"
+                    "${OPENTUNE_D3D12_SYSTEM_LIB}"
+                    "${OPENTUNE_DXGI_SYSTEM_LIB}"
+                    version
+            )
+        elseif(APPLE)
+            target_link_libraries(OpenTunePlaybackDeviceTests
+                PRIVATE
+                    "${ONNXRUNTIME_LIB_DIR}/libonnxruntime.dylib"
+                    "-framework Accelerate"
+            )
+        endif()
+        target_compile_definitions(OpenTunePlaybackDeviceTests
+            PRIVATE
+                OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+        if(MSVC)
+            target_compile_options(OpenTunePlaybackDeviceTests PRIVATE /utf-8 /bigobj)
+        endif()
+        add_test(NAME OpenTunePlaybackDeviceTests COMMAND OpenTunePlaybackDeviceTests)
+    endif()
 endif()
 
     # ==============================================================================

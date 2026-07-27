@@ -203,14 +203,6 @@ struct PlayHeadPresentationProjection
 // reset() contract (only prepareToPlay/releaseResources call it):
 //  - clear isPlaying/isLooping; keep last time/loop range; bump presentationEpoch.
 //
-// sampleCursor — standalone canonical integer cursor in device sample space.
-// Audio thread is the sole canonical writer (Playing advance, fade completion,
-// direct cursor commit for non-fading commands). Control thread publishes cursor
-// intent via seqlock (pendingMainCursor_) but NEVER writes sampleCursor directly.
-// The one exception is prepareToPlay rate-change projection, which runs on the
-// audio thread under host serialisation.
-// VST3/ARA host path never reads or writes this.
-// UI timeInSeconds is derived from sampleCursor / device rate for Standalone.
 struct PlayHeadState
 {
     std::atomic<bool>    isPlaying { false };
@@ -220,7 +212,6 @@ struct PlayHeadState
     std::atomic<double>  loopPpqEnd { 0.0 };
     std::atomic<uint64_t> hostPositionRevision { 0 };
     std::atomic<uint64_t> presentationEpoch { 0 };
-    std::atomic<int64_t> sampleCursor { 0 };
 
     PlayHeadPresentationProjection presentationProjection;
 
@@ -288,17 +279,11 @@ struct PlayHeadState
 class OpenTuneDocumentController;
 #endif
 
+struct PluginProcessorTransportTestAccessor;  // forward decl for test access to transport fields
+
 namespace Capture {
     class CaptureSession;  // forward decl; full type in Source/Plugin/Capture/CaptureSession.h
 }
-
-void fillF0GapsForVocoder(std::vector<float>& f0,
-                          const std::shared_ptr<const PitchCurveSnapshot>& snap,
-                          double frameStartTimeSec,
-                          double frameEndTimeSec,
-                          double hopDuration,
-                          double f0FrameRate,
-                          bool allowTrailingExtension);
 
 /**
  * OpenTuneAudioProcessor - 核心音频处理器类
@@ -496,8 +481,12 @@ public:
                                 const juce::String& newName = {});
 
 private:
+    static BusesProperties makeBuses();
+
     std::atomic<double> currentSampleRate_{44100.0};
     int currentBlockSize_ = 512;
+
+    friend struct PluginProcessorTransportTestAccessor;
 
     juce::AudioBuffer<float> doublePrecisionScratch_;
     juce::AudioBuffer<float> trackMixScratch_;
@@ -533,13 +522,11 @@ public:
         PauseAtPosition
     };
 
-    // Audio-thread runtime phase. Only Stopped/Paused/Playing/Fading exist.
-    // Fading is a transitional phase between Playing and Paused/Stopped.
+    // Audio-thread runtime phase. Only Stopped/Paused/Playing exist.
     enum class RuntimePhase : uint8_t {
         Stopped = 0,
         Paused,
-        Playing,
-        Fading
+        Playing
     };
 
     struct DiagnosticInfo {
@@ -583,7 +570,7 @@ private:
 
 
     // Transport control (Standalone-only helpers; canonical truth is playHeadState_)
-    std::atomic<double> playStartPosition_{0.0};  // 播放起始位置（按下 Play 时的位置）
+    std::atomic<double> playStartPosition_{0.0};  // 播放起始位置（按下 Play 时的绝对秒位置）
 
     // Standalone canonical BPM and time signature. These are the only owner-truth
     // for Standalone transport metadata. VST3/ARA reads host snapshot via
@@ -597,34 +584,37 @@ private:
     // processor's processBlock(); ARA/UI read it via getPlayHeadState().
     PlayHeadState playHeadState_;
 
-    // Fade state for smooth pause/stop (audio-thread only, except fadeTotalSamples_ set in prepareToPlay)
-    int fadeTotalSamples_{0};  // Absolute fade duration in device samples (0.2s * sampleRate)
-    int fadeElapsed_{0};
-    int64_t fadeReadCursor_{0};
-    RuntimePhase fadeCompletionPhase_{RuntimePhase::Paused};
-    int64_t fadeCompletionCursor_{0};
-    bool fadeActive_{false};
+    // ---- Transport ramp (audio-thread only writes) ----
+    static constexpr double kTransportRampDurationSeconds = 0.2;
+    int64_t audioReadCursor_{0};                                 // 下一段尚未生成的设备样本位置
+    int64_t transportCursor_{0};                                 // UI 冻结/恢复/最终落点
+    float   currentOutputGain_{0.0f};                            // 块首样本增益
+    float   targetOutputGain_{0.0f};                             // ramp 目标增益（0 淡出，1 淡入）
+    int     rampSamplesRemaining_{0};                            // ramp 剩余样本数
+    int64_t transitionCompletionCursor_{0};                      // transition 完成落点
+    RuntimePhase transitionCompletionPhase_{RuntimePhase::Stopped}; // transition 完成后的 phase
+    bool    transitionActive_{false};                            // 是否处于 transition
+    double  preparedPlaybackSampleRate_{0.0};                    // 首次 prepare 或真实采样率变化触发 CRS prepare
 
-    // Seqlock command dispatch — single control-thread writer.
+    // ---- Seqlock command dispatch — single control-thread writer ----
     // controlSequence_: even = stable snapshot ready, odd = writer inside.
     // Each control API: fetch_add to odd → write all fields → fetch_add to even.
     // Audio thread reads snapshot at block start when seq is even && seq != applied.
     // No mutex. No CAS-clear. Latest complete snapshot always preserved.
     //
-    // Four seqlock-protected fields carry control-thread intent:
-    //   pendingCommand_       — the transport operation to apply
-    //   pendingMainCursor_    — main freeze cursor (presented position at command time)
-    //   pendingTargetCursor_  — completion target cursor (0 for Stop, mainCursor for Pause, target for PauseAtPosition/Seek)
-    //   pendingIsPlaying_     — desired isPlaying after command (true for Play, preserved for Seek, false otherwise)
-    // Control thread NEVER writes sampleCursor; audio thread is the sole canonical writer.
+    // Seqlock-protected fields carry control-thread intent in seconds:
+    //   pendingCommand_            — the transport operation to apply
+    //   pendingPresentationTime_   — UI freeze position (seconds)
+    //   pendingCompletionTime_     — transition landing position (seconds)
+    //   pendingTerminalPhase_      — target phase after transition completes
     std::atomic<uint64_t> controlSequence_{0};
     std::atomic<TransportCommand> pendingCommand_{TransportCommand::None};
-    std::atomic<int64_t> pendingMainCursor_{0};
-    std::atomic<int64_t> pendingTargetCursor_{0};
-    std::atomic<bool> pendingIsPlaying_{false};
+    std::atomic<double> pendingPresentationTime_{0.0};
+    std::atomic<double> pendingCompletionTime_{0.0};
+    std::atomic<RuntimePhase> pendingTerminalPhase_{RuntimePhase::Stopped};
     uint64_t appliedControlSequence_{0};  // audio-thread only
 
-    // Audio-thread runtime phase (Standalone only). Fading is transitional.
+    // Audio-thread runtime phase (Standalone only).
     RuntimePhase phase_{RuntimePhase::Stopped};
 
     // Independent host metadata snapshot (no loop fields; loop truth lives in

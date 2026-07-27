@@ -1949,11 +1949,11 @@ void vst3PluginEditorDoesNotWriteBpmOrTimeSignature()
 }
 
 // ============================================================================
-// Category 8: Global TimelineDisplayMode — timeModeButton_ 唯一切换入口
-// DigitalTimeDisplay 纯显示，onTimelineDisplayModeClicked 走 setter + 通知
+// Category 8: TimelineDisplayMode 悬浮按钮 — Arrangement/PianoRoll 各一个
+// TransportBar 无按钮无事件，DigitalTimeDisplay 纯显示，Editor 全局同步
 // ============================================================================
 
-void globalTimelineDisplayModeNoLocalToggleResidue()
+void timelineDisplayModeFloatingButtonContract()
 {
     const auto transportBarSource = readText("Source/Standalone/UI/TransportBarComponent.cpp");
     const auto transportBarHeader = readText("Source/Standalone/UI/TransportBarComponent.h");
@@ -1962,86 +1962,146 @@ void globalTimelineDisplayModeNoLocalToggleResidue()
     const auto arrangementHeader = readText("Source/Standalone/UI/ArrangementViewComponent.h");
     const auto arrangementSource = readText("Source/Standalone/UI/ArrangementViewComponent.cpp");
 
-    // 无本地 toggle 残留标志
-    expectNoTokens("TransportBar no local toggle flag",
-                   transportBarSource,
-                   {"toggleDisplayMode", "timeUnitToggle",
-                    "displayToggleFlag"});
+    // TransportBar 无 timeModeButton_ 成员、构造、事件源
+    expectNoTokens("TransportBar no timeModeButton_ member",
+                   transportBarHeader,
+                   {"timeModeButton_"});
+    expectNoTokens("TransportBar no onTimelineDisplayModeClicked",
+                   transportBarHeader + transportBarSource,
+                   {"onTimelineDisplayModeClicked"});
 
-    // timeModeButton_.onClick 绑定到 onTimelineDisplayModeClicked —— 唯一切换入口
-    expectTokens("timeModeButton_.onClick bound to onTimelineDisplayModeClicked",
-                 transportBarSource,
-                 {"timeModeButton_.onClick = [this] { onTimelineDisplayModeClicked(); };"});
+    // TransportBar Listener 无 timelineDisplayModeChanged 事件（事件属于 Arrangement/PianoRoll）
+    const auto transportBarListenerClass = extractBlockByMarker(
+        transportBarHeader, "class Listener");
+    expect(!transportBarListenerClass.empty(), "TransportBar Listener class must be found");
+    expectNoTokens("TransportBar Listener no timelineDisplayModeChanged",
+                   transportBarListenerClass,
+                   {"timelineDisplayModeChanged"});
 
-    // DigitalTimeDisplay 不得有 mouseDown/onClick/模式切换回调
+    // ArrangementView Listener 有 timelineDisplayModeChanged
+    const auto arrangementListenerClass = extractBlockByMarker(
+        arrangementHeader, "class Listener");
+    expect(!arrangementListenerClass.empty(), "ArrangementView Listener class must be found");
+    expectTokens("ArrangementView Listener has timelineDisplayModeChanged",
+                 arrangementListenerClass,
+                 {"timelineDisplayModeChanged"});
+
+    // PianoRoll Listener 有 timelineDisplayModeChanged
+    const auto pianoRollListenerClass = extractBlockByMarker(
+        pianoRollHeader, "class Listener");
+    expect(!pianoRollListenerClass.empty(), "PianoRoll Listener class must be found");
+    expectTokens("PianoRoll Listener has timelineDisplayModeChanged",
+                 pianoRollListenerClass,
+                 {"timelineDisplayModeChanged"});
+
+    // DigitalTimeDisplay 纯显示，无点击入口
     const auto digitalTimeDisplayClass = extractBlockByMarker(
         transportBarHeader, "class DigitalTimeDisplay");
-    const auto digitalTimeDisplayCtor = extractBlockByMarker(
-        transportBarSource, "DigitalTimeDisplay::DigitalTimeDisplay()");
     expect(!digitalTimeDisplayClass.empty(), "DigitalTimeDisplay class must be found");
-    expect(!digitalTimeDisplayCtor.empty(), "DigitalTimeDisplay constructor must be found");
-    expectNoTokens("DigitalTimeDisplay no mouseDown",
-                   digitalTimeDisplayClass,
-                   {"mouseDown"});
-    expectNoTokens("DigitalTimeDisplay no onClick/mode callback",
+    expectNoTokens("DigitalTimeDisplay no onClick/onTimelineDisplayModeClicked",
                    digitalTimeDisplayClass,
                    {"onClick", "onTimelineDisplayModeClicked"});
+
+    // DigitalTimeDisplay 构造验证纯显示
+    const auto digitalTimeDisplayCtor = extractBlockByMarker(
+        transportBarSource, "DigitalTimeDisplay::DigitalTimeDisplay()");
+    expect(!digitalTimeDisplayCtor.empty(), "DigitalTimeDisplay constructor must be found");
     expectTokens("DigitalTimeDisplay ignores mouse input",
                  digitalTimeDisplayCtor,
                  {"setInterceptsMouseClicks(false, false)"});
 
-    // onTimelineDisplayModeClicked 调用 setTimelineDisplayMode(nextMode) 并通知 listener
-    const auto onClickFn = extractBlockByMarker(transportBarSource,
-        "void TransportBarComponent::onTimelineDisplayModeClicked");
-    expect(!onClickFn.empty(), "onTimelineDisplayModeClicked must be found");
-    expectTokens("onTimelineDisplayModeClicked uses const auto nextMode",
-                 onClickFn,
-                 {"const auto nextMode"});
-    expectTokens("onTimelineDisplayModeClicked calls setTimelineDisplayMode",
-                 onClickFn,
-                 {"setTimelineDisplayMode(nextMode)"});
-    expectTokens("onTimelineDisplayModeClicked notifies listener with nextMode",
-                  onClickFn,
-                  {"timelineDisplayModeChanged(nextMode)"});
-
-    // Layout regression: bpmWidth must be 110 in both profiles, never 160
+    // TransportBar 时间显示宽度恢复历史值（无按钮占用空间）
     const auto resizedFn = extractBlockByMarker(transportBarSource,
         "void TransportBarComponent::resized()");
     expect(!resizedFn.empty(), "resized must be found");
+    expectTokens("VST3 profile has timeDisplayWidth 140",
+                 resizedFn,
+                 {"const int timeDisplayWidth = 140;"});
+    expectTokens("Standalone profile has timeDisplayWidth 156",
+                 resizedFn,
+                 {"const int timeDisplayWidth = 156;"});
+    // BPM 110px 保持不变
     expect(countOf(resizedFn, "bpmWidth = 110;") == 2,
            "Both profiles must have bpmWidth=110 (count=" + std::to_string(countOf(resizedFn, "bpmWidth = 110;")) + ")");
-    expectNoTokens("resized no bpmWidth=160",
-                   resizedFn,
-                   {"bpmWidth = 160"});
 
-    // Time display group widths preserved in both profiles
-    expect(countOf(resizedFn, "timeModeButtonWidth = 40;") == 2,
-           "Both profiles must have timeModeButtonWidth=40 (count=" + std::to_string(countOf(resizedFn, "timeModeButtonWidth = 40;")) + ")");
-    expectTokens("VST3 profile has timeDisplayWidth 96",
-                 resizedFn,
-                 {"const int timeDisplayWidth = 96;"});
-    expectTokens("Standalone profile has timeDisplayWidth 112",
-                 resizedFn,
-                 {"const int timeDisplayWidth = 112;"});
-
-    // setTimelineDisplayMode must update button text and refresh time display
-    const auto setterFn = extractBlockByMarker(transportBarSource,
+    // TransportBar setTimelineDisplayMode 刷新数字显示
+    const auto tbSetModeFn = extractBlockByMarker(transportBarSource,
         "void TransportBarComponent::setTimelineDisplayMode");
-    expect(!setterFn.empty(), "setTimelineDisplayMode must be found");
-    expectTokens("setTimelineDisplayMode updates button text",
-                 setterFn,
-                 {"timeModeButton_.setButtonText"});
-    expectTokens("setTimelineDisplayMode refreshes time display",
-                 setterFn,
+    expectTokens("TransportBar setTimelineDisplayMode refreshes time display",
+                 tbSetModeFn,
                  {"setPositionSeconds(currentPositionSeconds_)"});
 
-    // PianoRoll / Arrangement 无 timeUnitToggleButton_
-    expectNoTokens("PianoRoll no timeUnitToggleButton_",
-                   pianoRollHeader + pianoRollSource,
-                   {"timeUnitToggleButton_"});
-    expectNoTokens("Arrangement no timeUnitToggleButton_",
+    // ArrangementView 仅一个 timeUnitToggleButton_ 悬浮按钮
+    expect(countOf(arrangementHeader, "timeUnitToggleButton_") == 1,
+           "Arrangement must have exactly one timeUnitToggleButton_ (count=" + std::to_string(countOf(arrangementHeader, "timeUnitToggleButton_")) + ")");
+    expectTokens("Arrangement timeUnitToggleButton_ onClick calls setTimelineDisplayMode",
+                  arrangementSource,
+                  {"setTimelineDisplayMode(nextMode);"});
+    expectTokens("Arrangement timeUnitToggleButton_ notifies listener",
+                  arrangementSource,
+                  {"timelineDisplayModeChanged(nextMode)"});
+    // 提取 resized() 验证悬浮按钮布局
+    const auto arrResizedFn = extractBlockByMarker(arrangementSource,
+        "void ArrangementViewComponent::resized()");
+    expect(!arrResizedFn.empty(), "ArrangementView resized must be found");
+    expectTokens("Arrangement resized has btnW=50 / btnH=20 / spacing=5",
+                 arrResizedFn,
+                 {"int btnW = 50;", "int btnH = 20;", "int spacing = 5;"});
+    expectTokens("Arrangement resized has timeUnitX left of scrollMode",
+                 arrResizedFn,
+                 {"int timeUnitX = scrollModeX - spacing - btnW;"});
+    expect(countOf(arrResizedFn, ", 5, btnW, btnH)") == 2,
+           "Arrangement resized must have two setBounds(...,5,btnW,btnH)");
+    expect(countOf(arrResizedFn, "toFront(false)") == 2,
+           "Arrangement resized must have two toFront(false)");
+
+    // PianoRoll 仅一个 timeUnitToggleButton_ 悬浮按钮
+    expect(countOf(pianoRollHeader, "timeUnitToggleButton_") == 1,
+           "PianoRoll must have exactly one timeUnitToggleButton_ (count=" + std::to_string(countOf(pianoRollHeader, "timeUnitToggleButton_")) + ")");
+    expectTokens("PianoRoll timeUnitToggleButton_ onClick calls setTimelineDisplayMode",
+                  pianoRollSource,
+                  {"setTimelineDisplayMode(nextMode);"});
+    expectTokens("PianoRoll timeUnitToggleButton_ notifies listener",
+                  pianoRollSource,
+                  {"timelineDisplayModeChanged(nextMode)"});
+    // 提取 resized() 验证悬浮按钮布局
+    const auto prResizedFn = extractBlockByMarker(pianoRollSource,
+        "void PianoRollComponent::resized()");
+    expect(!prResizedFn.empty(), "PianoRoll resized must be found");
+    expectTokens("PianoRoll resized has btnW=50 / btnH=20 / spacing=5",
+                 prResizedFn,
+                 {"int btnW = 50;", "int btnH = 20;", "int spacing = 5;"});
+    expectTokens("PianoRoll resized has timeUnitX left of scrollMode",
+                 prResizedFn,
+                 {"int timeUnitX = scrollModeX - spacing - btnW;"});
+    expect(countOf(prResizedFn, ", 5, btnW, btnH)") == 2,
+           "PianoRoll resized must have two setBounds(...,5,btnW,btnH)");
+    expect(countOf(prResizedFn, "toFront(false)") == 2,
+           "PianoRoll resized must have two toFront(false)");
+
+    // Arrangement/PianoRoll setTimelineDisplayMode 同步按钮文字
+    expectTokens("Arrangement setTimelineDisplayMode updates button text",
+                 arrangementSource,
+                 {"timeUnitToggleButton_.setButtonText"});
+    expectTokens("PianoRoll setTimelineDisplayMode updates button text",
+                 pianoRollSource,
+                 {"timeUnitToggleButton_.setButtonText"});
+
+    // 无旧 TimeUnit 局部状态
+    expectNoTokens("Arrangement no old TimeUnit state",
                    arrangementHeader + arrangementSource,
-                   {"timeUnitToggleButton_"});
+                   {"TimeUnit timeUnit_", "TimeUnit::Time", "TimeUnit::Bars"});
+    expectNoTokens("PianoRoll no old TimeUnit state",
+                   pianoRollHeader + pianoRollSource,
+                   {"TimeUnit timeUnit_", "TimeUnit::Time", "TimeUnit::Bars"});
+
+    // 无旧 toggle 函数/拼写变体残留
+    expectNoTokens("Arrangement no old toggle functions",
+                   arrangementHeader + arrangementSource,
+                   {"toggleDisplayMode", "toogleTimelineDisplay", "switchTimeMode"});
+    expectNoTokens("PianoRoll no old toggle functions",
+                   pianoRollHeader + pianoRollSource,
+                   {"toggleDisplayMode", "toogleTimelineDisplay", "switchTimeMode"});
 
     // AppPreferences stores and retrieves TimelineDisplayMode
     const auto prefsHeader = readText("Source/Utils/AppPreferences.h");
@@ -2052,34 +2112,237 @@ void globalTimelineDisplayModeNoLocalToggleResidue()
     expectTokens("SharedPreferencesState has timelineDisplayMode",
                  prefsHeader, {"TimelineDisplayMode timelineDisplayMode"});
 
-    // Editor syncs both views: standalone PluginEditor calls both
+    // Standalone Editor: 写 AppPreferences + 同步三视图
     const auto standaloneEditor = readText("Source/Standalone/PluginEditor.cpp");
     const auto tldmFn = extractBlockByMarker(standaloneEditor,
         "void OpenTuneAudioProcessorEditor::timelineDisplayModeChanged");
     expect(!tldmFn.empty(), "timelineDisplayModeChanged in standalone editor must be found");
-    expectTokens("Standalone editor syncs both PianoRoll and Arrangement",
+    expectTokens("Standalone editor writes AppPreferences",
+                 tldmFn,
+                 {"appPreferences_.setTimelineDisplayMode(mode)"});
+    expectTokens("Standalone editor syncs TransportBar, PianoRoll and Arrangement",
                   tldmFn,
-                  {"pianoRoll_.setTimelineDisplayMode",
-                   "arrangementView_.setTimelineDisplayMode"});
+                  {"transportBar_.setTimelineDisplayMode(mode)",
+                   "pianoRoll_.setTimelineDisplayMode(mode)",
+                   "arrangementView_.setTimelineDisplayMode(mode)"});
 
-    // Plugin editor also syncs PianoRoll
+    // Plugin Editor: 写 AppPreferences + 同步 TransportBar 和 PianoRoll
     const auto pluginEditor = readText("Source/Plugin/PluginEditor.cpp");
     const auto tldmPluginFn = extractBlockByMarker(pluginEditor,
         "void OpenTuneAudioProcessorEditor::timelineDisplayModeChanged");
     expect(!tldmPluginFn.empty(), "timelineDisplayModeChanged in plugin editor must be found");
-    expectTokens("Plugin editor syncs PianoRoll",
+    expectTokens("Plugin editor writes AppPreferences",
+                 tldmPluginFn,
+                 {"appPreferences_.setTimelineDisplayMode(mode)"});
+    expectTokens("Plugin editor syncs TransportBar and PianoRoll",
                   tldmPluginFn,
-                  {"pianoRoll_.setTimelineDisplayMode"});
-
-    // 无旧 toggle 函数残留
-    expectNoTokens("PianoRoll no toggle",
-                   pianoRollHeader + pianoRollSource,
-                   {"toggleDisplayMode", "toogleTimelineDisplay", "switchTimeMode"});
-    expectNoTokens("Arrangement no toggle",
-                   arrangementHeader + arrangementSource,
-                   {"toggleDisplayMode", "toggleTimelineDisplay", "switchTimeMode"});
+                  {"transportBar_.setTimelineDisplayMode(mode)",
+                   "pianoRoll_.setTimelineDisplayMode(mode)"});
 }
 
+// ============================================================================
+// Numerator PopupMenu replaces modal AlertWindow dialog
+// ============================================================================
+
+void numeratorMenuReplacesModalDialog()
+{
+    const auto header = readText("Source/Standalone/UI/TransportBarComponent.h");
+    const auto impl = readText("Source/Standalone/UI/TransportBarComponent.cpp");
+
+    // 1. No old dialog symbols
+    expectNoTokens("TransportBar header no showNumeratorDialog",
+                   header, {"showNumeratorDialog"});
+    expectNoTokens("TransportBar impl no showNumeratorDialog",
+                   impl, {"showNumeratorDialog"});
+    expectNoTokens("TransportBar impl no AlertWindow",
+                   impl, {"juce::AlertWindow"});
+    expectNoTokens("TransportBar impl no enterModalState",
+                   impl, {"enterModalState"});
+
+    // 2. New function exists
+    expectTokens("TransportBar header has showNumeratorMenu",
+                 header, {"showNumeratorMenu"});
+    expectTokens("TransportBar impl has showNumeratorMenu",
+                 impl, {"void BpmValueField::showNumeratorMenu()"});
+
+    // 3. Extract showNumeratorMenu() body and verify withTargetComponent(this) + withTargetScreenArea(…numerator)
+    const auto numMenuFn = extractFunctionBlock(impl, "void BpmValueField::showNumeratorMenu()");
+    expect(!numMenuFn.empty(), "showNumeratorMenu body must be found");
+
+    expectTokens("showNumeratorMenu has withTargetComponent(this)",
+                 numMenuFn, {"withTargetComponent(this)"});
+    expectTokens("showNumeratorMenu has withTargetScreenArea(…numerator)",
+                 numMenuFn, {"withTargetScreenArea(localAreaToGlobal(calculateLayout().numerator))"});
+
+    // 4. Extract showDenominatorMenu() body and verify withTargetScreenArea(…denominator)
+    const auto denomMenuFn = extractFunctionBlock(impl, "void BpmValueField::showDenominatorMenu()");
+    expect(!denomMenuFn.empty(), "showDenominatorMenu body must be found");
+
+    expectTokens("showDenominatorMenu has withTargetComponent(this)",
+                 denomMenuFn, {"withTargetComponent(this)"});
+    expectTokens("showDenominatorMenu has withTargetScreenArea(…denominator)",
+                 denomMenuFn, {"withTargetScreenArea(localAreaToGlobal(calculateLayout().denominator))"});
+
+    // 5. Verify numerator loop covers 1..64
+    expectTokens("showNumeratorMenu has loop n<=64",
+                 numMenuFn, {"n <= 64"});
+    expect(contains(numMenuFn, "int n = 1"), "showNumeratorMenu loop starts at 1");
+
+    // 6. Verify dropdown list options: single column, visible & initially selected item
+    expectTokens("showNumeratorMenu has withMaximumNumColumns(1)",
+                 numMenuFn, {"withMaximumNumColumns(1)"});
+    expectTokens("showNumeratorMenu has withItemThatMustBeVisible(timeSigNum_)",
+                 numMenuFn, {"withItemThatMustBeVisible(timeSigNum_)"});
+    expectTokens("showNumeratorMenu has withInitiallySelectedItem(timeSigNum_)",
+                 numMenuFn, {"withInitiallySelectedItem(timeSigNum_)"});
+}
+
+// ============================================================================
+// DirectSound buffer size enforcement contract (960 samples)
+// ============================================================================
+
+void directSoundBufferSizeEnforcementContract()
+{
+    const auto standaloneEditorHeader = readText("Source/Standalone/PluginEditor.h");
+    const auto standaloneEditor = readText("Source/Standalone/PluginEditor.cpp");
+    const auto pluginEditorHeader = readText("Source/Plugin/PluginEditor.h");
+    const auto processorHeader = readText("Source/PluginProcessor.h");
+    const auto processor = readText("Source/PluginProcessor.cpp");
+    const auto appPrefsHeader = readText("Source/Utils/AppPreferences.h");
+
+    // 1. Only Standalone editor has ChangeListener; Plugin editor does not
+    expectTokens("Standalone editor inherits ChangeListener",
+                 standaloneEditorHeader,
+                 {"private juce::ChangeListener"});
+    expectNoTokens("Plugin editor must NOT inherit ChangeListener",
+                   pluginEditorHeader,
+                   {"juce::ChangeListener", "private ChangeListener"});
+
+    // 2. Constant 960
+    expectTokens("Standalone editor has kDirectSoundCallbackBlockSize = 960",
+                 standaloneEditor,
+                 {"constexpr int kDirectSoundCallbackBlockSize = 960"});
+    expectTokens("Standalone editor has DirectSound type name constant",
+                 standaloneEditor,
+                 {"constexpr const char* kDirectSoundDeviceTypeName = \"DirectSound\""});
+
+    // 3. Constructor: getInstance → register ChangeListener → immediately apply
+    const auto ctorBlock = textBetween(
+        standaloneEditor,
+        "OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor& p)",
+        "OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()");
+    expectTokens("Constructor gets StandalonePluginHolder::getInstance()",
+                 ctorBlock,
+                 {"StandalonePluginHolder::getInstance()"});
+    expectTokens("Constructor uses jassert(holder != nullptr)",
+                 ctorBlock,
+                 {"jassert(holder != nullptr)"});
+    expectTokens("Constructor saves &holder->deviceManager",
+                 ctorBlock,
+                 {"standaloneAudioDeviceManager_ = &holder->deviceManager"});
+    expectTokens("Constructor registers ChangeListener",
+                 ctorBlock,
+                 {"addChangeListener(this)"});
+    expectTokens("Constructor immediately calls applyDirectSoundBufferPolicy",
+                 ctorBlock,
+                 {"applyDirectSoundBufferPolicy()"});
+    expect(inOrder(ctorBlock, {"StandalonePluginHolder::getInstance()",
+                                "standaloneAudioDeviceManager_",
+                                "addChangeListener(this)",
+                                "applyDirectSoundBufferPolicy()"}),
+           "Constructor must get holder, save deviceManager, register listener, then apply policy");
+
+    // 4. Destructor removes ChangeListener before teardown
+    const auto dtorBlock = extractFunctionBlock(standaloneEditor,
+        "OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()");
+    expectTokens("Destructor removes ChangeListener",
+                 dtorBlock,
+                 {"removeChangeListener(this)"});
+    expect(inOrder(dtorBlock,
+                   {"removeChangeListener(this)", "stopTimer()"}),
+           "Destructor must remove listener before stopTimer");
+
+    // 5. Policy: check active device, type, current size, write 960, setAudioDeviceSetup(setup, true)
+    const auto policyBlock = extractFunctionBlock(standaloneEditor,
+        "void OpenTuneAudioProcessorEditor::applyDirectSoundBufferPolicy()");
+    expectTokens("Policy gets current audio device",
+                 policyBlock,
+                 {"getCurrentAudioDevice()"});
+    expectTokens("Policy checks device != nullptr",
+                 policyBlock,
+                 {"device == nullptr", "return"});
+    expectTokens("Policy checks device type == DirectSound",
+                 policyBlock,
+                 {"getCurrentAudioDeviceType()", "kDirectSoundDeviceTypeName"});
+    expectTokens("Policy checks bufferSize != 960",
+                 policyBlock,
+                 {"setup.bufferSize == kDirectSoundCallbackBlockSize", "return"});
+    expectTokens("Policy writes bufferSize = 960",
+                 policyBlock,
+                 {"setup.bufferSize = kDirectSoundCallbackBlockSize"});
+    expectTokens("Policy calls setAudioDeviceSetup(setup, true)",
+                 policyBlock,
+                 {"setAudioDeviceSetup(setup, true)"});
+    expectTokens("Policy logs error on failure",
+                 policyBlock,
+                 {"AppLogger::error"});
+
+    // 6. Callback reuses policy — no duplicate logic
+    const auto callbackBlock = extractFunctionBlock(standaloneEditor,
+        "void OpenTuneAudioProcessorEditor::changeListenerCallback(juce::ChangeBroadcaster*");
+    expectTokens("changeListenerCallback calls applyDirectSoundBufferPolicy",
+                 callbackBlock,
+                 {"applyDirectSoundBufferPolicy()"});
+    // Only one call in callback, no other logic
+    expect(countOf(callbackBlock, "applyDirectSoundBufferPolicy()") == 1,
+           "changeListenerCallback must call policy exactly once");
+
+    // 7. No AppPreferences device state
+    expectNoTokens("AppPreferences has no deviceBufferSize",
+                   appPrefsHeader,
+                   {"deviceBufferSize", "audioBufferSize", "deviceSetup"});
+
+    // 8. No DirectSound strings in processor
+    expectNoTokens("PluginProcessor.h has no DirectSound",
+                   processorHeader,
+                   {"DirectSound", "kDirectSoundCallbackBlockSize"});
+    expectNoTokens("PluginProcessor.cpp has no DirectSound",
+                   processor,
+                   {"DirectSound", "kDirectSoundCallbackBlockSize"});
+
+    // 9. No timer/callAsync/retry/fallback in policy
+    expectNoTokens("Policy has no timer",
+                   policyBlock,
+                   {"callAfterDelay", "startTimer", "timerCallback"});
+    expectNoTokens("Policy has no callAsync",
+                   policyBlock,
+                   {"callAsync", "callOnMainThread"});
+    expectNoTokens("Policy has no retry loop",
+                   policyBlock,
+                   {"retry", "while", "for ("});
+    expectNoTokens("Policy has no fallback sampleRate write",
+                   policyBlock,
+                   {"sampleRate"});
+    expectNoTokens("Policy has no device name change",
+                   policyBlock,
+                   {"deviceName"});
+    expectNoTokens("Policy has no channel change",
+                   policyBlock,
+                   {"inputChannels", "outputChannels"});
+    expectNoTokens("Policy has no reentrancy guard",
+                   policyBlock,
+                   {"reentrant", "reentry", "guarding"});
+
+    // Policy uses getAudioDeviceSetup() to copy setup
+    expectTokens("Policy copies setup via getAudioDeviceSetup",
+                 policyBlock,
+                 {"getAudioDeviceSetup()"});
+
+    // 10. No old 2560 buffer size
+    expectNoTokens("Standalone editor has no old 2560 block size",
+                   standaloneEditor,
+                   {"2560", "bufferSize = 2560"});
+}
 
 } // namespace
 
@@ -2155,8 +2418,14 @@ int main()
         // Category 7: VST3/ARA host-owned (PluginEditor no setBpm/setTimeSignature)
         vst3PluginEditorDoesNotWriteBpmOrTimeSignature();
 
-        // Category 8: Global TimelineDisplayMode (no toggle residue)
-        globalTimelineDisplayModeNoLocalToggleResidue();
+        // Numerator PopupMenu replaces modal AlertWindow dialog
+        numeratorMenuReplacesModalDialog();
+
+        // Category 8: TimelineDisplayMode floating buttons in Arrangement/PianoRoll
+        timelineDisplayModeFloatingButtonContract();
+
+        // DirectSound buffer size enforcement (960)
+        directSoundBufferSizeEnforcementContract();
     } catch (const std::exception& e) {
         ++failures;
         std::cout << "[FAIL] uncaught exception: " << e.what() << "\n";

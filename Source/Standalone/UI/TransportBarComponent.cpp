@@ -416,7 +416,7 @@ void BpmValueField::mouseDown(const juce::MouseEvent& e)
     }
     else if (lr.numerator.contains(e.getPosition()))
     {
-        showNumeratorDialog();
+        showNumeratorMenu();
     }
     else if (lr.denominator.contains(e.getPosition()))
     {
@@ -424,39 +424,27 @@ void BpmValueField::mouseDown(const juce::MouseEvent& e)
     }
 }
 
-void BpmValueField::showNumeratorDialog()
+void BpmValueField::showNumeratorMenu()
 {
-    auto* alert = new juce::AlertWindow("Time Signature",
-                                           "Enter beats per bar:",
-                                           juce::AlertWindow::QuestionIcon);
-    alert->addTextEditor("numerator", juce::String(timeSigNum_), "Numerator:");
-    alert->getTextEditor("numerator")->setInputRestrictions(3, "0123456789");
-    alert->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
-    alert->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    juce::PopupMenu menu;
 
-    // SafePointer for async lifetime
+    for (int n = 1; n <= 64; ++n)
+    {
+        menu.addItem(n, juce::String(n), true, n == timeSigNum_);
+    }
+
     juce::Component::SafePointer<BpmValueField> safeThis(this);
-    juce::Component::SafePointer<juce::AlertWindow> safeAlert(alert);
 
-    alert->enterModalState(true, juce::ModalCallbackFunction::create(
-        [safeThis, safeAlert](int result) {
-            auto* dialog = safeAlert.getComponent();
-            if (dialog == nullptr)
-                return;
-
-            if (result == 1 && safeThis != nullptr)
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withTargetScreenArea(localAreaToGlobal(calculateLayout().numerator)).withMaximumNumColumns(1).withItemThatMustBeVisible(timeSigNum_).withInitiallySelectedItem(timeSigNum_),
+        [safeThis](int result) {
+            if (safeThis != nullptr && result > 0)
             {
-                auto text = dialog->getTextEditorContents("numerator");
-                auto val = text.getIntValue();
-                // Send raw value to Editor; processor handles canonical clamp
-                safeThis->timeSigNum_ = val;
+                safeThis->timeSigNum_ = result;
                 if (safeThis->onTimeSignatureCommit)
                     safeThis->onTimeSignatureCommit(safeThis->timeSigNum_, safeThis->timeSigDenom_);
                 safeThis->repaint();
             }
-
-            delete dialog;
-        }), false);
+        });
 }
 
 void BpmValueField::showDenominatorMenu()
@@ -471,7 +459,7 @@ void BpmValueField::showDenominatorMenu()
     // SafePointer for async lifetime
     juce::Component::SafePointer<BpmValueField> safeThis(this);
 
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withTargetScreenArea(localAreaToGlobal(calculateLayout().denominator)),
         [safeThis](int result) {
             if (safeThis != nullptr && result > 0)
             {
@@ -955,13 +943,6 @@ TransportBarComponent::TransportBarComponent()
     timeDisplay_.setTooltip(LOC(kTooltipTimeline));
     addAndMakeVisible(timeDisplay_);
 
-    // 时间/BPM 模式切换按钮
-    timeModeButton_.setFontHeight(11.0f);
-    timeModeButton_.setButtonText("Time");  // 初始状态为 Time 模式
-    timeModeButton_.setTooltip(LOC(kTooltipTimeUnit));
-    timeModeButton_.onClick = [this] { onTimelineDisplayModeClicked(); };
-    addAndMakeVisible(timeModeButton_);
-
     // Apply styling (transport buttons use custom paintButton)
 
     // Setup scale selector
@@ -1032,9 +1013,6 @@ void TransportBarComponent::refreshLocalizedText()
 
     // 刷新 scaleLabel
     scaleLabel_.setText(LOC(kScale), juce::dontSendNotification);
-
-    // 刷新时间模式按钮 tooltip
-    timeModeButton_.setTooltip(LOC(kTooltipTimeUnit));
 
     repaint();
 }
@@ -1201,12 +1179,9 @@ void TransportBarComponent::resized()
         bpmField_.setReadOnly(true);
         tapButton_.setVisible(false);
 
-        // 时间显示组：总宽 140px（数字 96 + 间距 4 + 按钮 40）
-        const int timeModeButtonWidth = 40;
-        const int timeDisplayWidth = 96;
+        // 时间显示：恢复历史宽度 140px
+        const int timeDisplayWidth = 140;
         timeDisplay_.setBounds(row.removeFromLeft(timeDisplayWidth));
-        row.removeFromLeft(4);
-        timeModeButton_.setBounds(row.removeFromLeft(timeModeButtonWidth));
         row.removeFromLeft(spacing);
 
         recordButton_.setVisible(true);
@@ -1257,12 +1232,9 @@ void TransportBarComponent::resized()
     pianoViewButton_.setBounds(row.removeFromLeft(buttonWidth));
     row.removeFromLeft(spacing);
 
-    // 时间显示组：总宽 156px（数字 112 + 间距 4 + 按钮 40）
-    const int timeModeButtonWidth = 40;
-    const int timeDisplayWidth = 112;
+    // 时间显示：恢复历史宽度 156px
+    const int timeDisplayWidth = 156;
     timeDisplay_.setBounds(row.removeFromLeft(timeDisplayWidth));
-    row.removeFromLeft(4);
-    timeModeButton_.setBounds(row.removeFromLeft(timeModeButtonWidth));
     row.removeFromLeft(spacing);
 
     const int bpmWidth = 110;
@@ -1411,9 +1383,6 @@ void TransportBarComponent::setTimelineDisplayMode(TimelineDisplayMode mode)
 
     timelineDisplayMode_ = mode;
 
-    // 同步按钮文字：Time 模式显示 "Time"，Bars 模式显示 "BPM"
-    timeModeButton_.setButtonText(timelineDisplayMode_ == TimelineDisplayMode::Time ? "Time" : "BPM");
-
     // 刷新数字显示
     setPositionSeconds(currentPositionSeconds_);
 }
@@ -1537,17 +1506,6 @@ void TransportBarComponent::onScaleChanged()
 void TransportBarComponent::onRecordClicked()
 {
     listeners_.call([](Listener& l) { l.recordRequested(); });
-}
-
-void TransportBarComponent::onTimelineDisplayModeClicked()
-{
-    const auto nextMode = (timelineDisplayMode_ == TimelineDisplayMode::Time)
-        ? TimelineDisplayMode::Bars
-        : TimelineDisplayMode::Time;
-
-    setTimelineDisplayMode(nextMode);
-
-    listeners_.call([nextMode](Listener& l) { l.timelineDisplayModeChanged(nextMode); });
 }
 
 } // namespace OpenTune

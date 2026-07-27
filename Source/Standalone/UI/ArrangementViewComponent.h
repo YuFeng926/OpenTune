@@ -84,6 +84,7 @@ public:
         // Y轴滚动回调 - 通知外部垂直滚动偏移变化（用于同步TrackPanel）
         virtual void verticalScrollChanged(int newOffset) { juce::ignoreUnused(newOffset); }
         virtual void scrollModeChanged(bool isContinuous) { juce::ignoreUnused(isContinuous); }
+        virtual void timelineDisplayModeChanged(TimelineDisplayMode mode) { juce::ignoreUnused(mode); }
         // Transport requests: the view only emits user intent, the editor decides
         // whether to drive processor setters (Standalone) or ARA HostPlaybackController
         // requests (ARA). The view never writes processor transport directly.
@@ -253,6 +254,7 @@ private:
     juce::ScrollBar horizontalScrollBar_{ false };
     juce::ScrollBar verticalScrollBar_{ true };
     juce::TextButton scrollModeToggleButton_;
+    SmallButton timeUnitToggleButton_;
     SmallButtonLookAndFeel smallButtonLookAndFeel_;
 
     enum class ScrollMode { Page, Continuous };
