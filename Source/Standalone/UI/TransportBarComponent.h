@@ -16,7 +16,6 @@
 #include <vector>
 #include <functional>
 #include "UIColors.h"
-#include "SmallButton.h"
 #include "../../Utils/TimelineDisplayMode.h"
 
 namespace OpenTune {
@@ -95,7 +94,7 @@ private:
     void timerCallback() override;
     void commit();
     void cancelEdit();
-    void showNumeratorDialog();
+    void showNumeratorMenu();
     void showDenominatorMenu();
     juce::String formatBpmText() const;
 
@@ -150,7 +149,6 @@ public:
         virtual void scaleChanged(int rootNote, int scaleType) = 0;
         virtual void viewToggled(bool workspaceView) = 0;
         virtual void recordRequested() {}
-        virtual void timelineDisplayModeChanged(TimelineDisplayMode mode) {}
     };
 
     // Callback functions for Menu requests (File/Edit/View)
@@ -220,7 +218,6 @@ private:
     void onTrackViewClicked();
     void onPianoViewClicked();
     void onRecordClicked();
-    void onTimelineDisplayModeClicked();
 
     juce::ListenerList<Listener> listeners_;
 
@@ -242,7 +239,6 @@ private:
 
     // Labels & Editors
     DigitalTimeDisplay timeDisplay_;
-    SmallButton timeModeButton_;  // 显式 Time/Bars 切换按钮
     BpmValueField bpmField_;
     UnifiedToolbarButton tapButton_;
 

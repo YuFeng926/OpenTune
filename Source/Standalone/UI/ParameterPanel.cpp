@@ -3,7 +3,6 @@
 #include "UiAssets.h"
 #include "../../Utils/PitchControlConfig.h"
 #include "../../Utils/LocalizationManager.h"
-#include "../../Utils/AppLogger.h"
 #include <cmath>
 #include <vector>
 
@@ -367,12 +366,6 @@ ParameterPanel::ParameterPanel()
     setupLargeKnob(retuneSpeedSlider_, 0.0, 100.0, PitchControlConfig::kDefaultRetuneSpeedPercent, "%");
     retuneSpeedSlider_.getProperties().set("minimalKnob", true);
     retuneSpeedSlider_.onValueChange = [this] { onRetuneSpeedChanged(); };
-    retuneSpeedSlider_.onDragStart = [this] { dragStartRetuneSpeed_ = static_cast<float>(retuneSpeedSlider_.getValue()); };
-    retuneSpeedSlider_.onDragEnd = [this] {
-        float newVal = static_cast<float>(retuneSpeedSlider_.getValue());
-        if (std::abs(newVal - dragStartRetuneSpeed_) > 0.01f)
-            listeners_.call([this, newVal](Listener& l) { l.parameterDragEnded(kParamRetuneSpeed, dragStartRetuneSpeed_, newVal); });
-    };
     addAndMakeVisible(retuneSpeedSlider_);
     retuneSpeedSlider_.setTooltip(LOC(kTooltipRetuneSpeed));
 
@@ -383,12 +376,6 @@ ParameterPanel::ParameterPanel()
     setupLargeKnob(vibratoDepthSlider_, 0.0, 100.0, PitchControlConfig::kDefaultVibratoDepth, "%");
     vibratoDepthSlider_.getProperties().set("minimalKnob", true);
     vibratoDepthSlider_.onValueChange = [this] { onVibratoDepthChanged(); };
-    vibratoDepthSlider_.onDragStart = [this] { dragStartVibratoDepth_ = static_cast<float>(vibratoDepthSlider_.getValue()); };
-    vibratoDepthSlider_.onDragEnd = [this] {
-        float newVal = static_cast<float>(vibratoDepthSlider_.getValue());
-        if (std::abs(newVal - dragStartVibratoDepth_) > 0.01f)
-            listeners_.call([this, newVal](Listener& l) { l.parameterDragEnded(kParamVibratoDepth, dragStartVibratoDepth_, newVal); });
-    };
     addAndMakeVisible(vibratoDepthSlider_);
     vibratoDepthSlider_.setTooltip(LOC(kTooltipVibratoDepth));
 
@@ -399,12 +386,6 @@ ParameterPanel::ParameterPanel()
     setupLargeKnob(vibratoRateSlider_, 3.0, 12.0, PitchControlConfig::kDefaultVibratoRateHz, " Hz");
     vibratoRateSlider_.getProperties().set("minimalKnob", true);
     vibratoRateSlider_.onValueChange = [this] { onVibratoRateChanged(); };
-    vibratoRateSlider_.onDragStart = [this] { dragStartVibratoRate_ = static_cast<float>(vibratoRateSlider_.getValue()); };
-    vibratoRateSlider_.onDragEnd = [this] {
-        float newVal = static_cast<float>(vibratoRateSlider_.getValue());
-        if (std::abs(newVal - dragStartVibratoRate_) > 0.01f)
-            listeners_.call([this, newVal](Listener& l) { l.parameterDragEnded(kParamVibratoRate, dragStartVibratoRate_, newVal); });
-    };
     addAndMakeVisible(vibratoRateSlider_);
     vibratoRateSlider_.setTooltip(LOC(kTooltipVibratoRate));
 
@@ -419,12 +400,6 @@ ParameterPanel::ParameterPanel()
                    " cents");
     noteSplitSlider_.getProperties().set("minimalKnob", true);
     noteSplitSlider_.onValueChange = [this] { onNoteSplitChanged(); };
-    noteSplitSlider_.onDragStart = [this] { dragStartNoteSplit_ = static_cast<float>(noteSplitSlider_.getValue()); };
-    noteSplitSlider_.onDragEnd = [this] {
-        float newVal = static_cast<float>(noteSplitSlider_.getValue());
-        if (std::abs(newVal - dragStartNoteSplit_) > 0.01f)
-            listeners_.call([this, newVal](Listener& l) { l.parameterDragEnded(kParamNoteSplit, dragStartNoteSplit_, newVal); });
-    };
     addAndMakeVisible(noteSplitSlider_);
     noteSplitSlider_.setTooltip(LOC(kTooltipNoteSplit));
 
@@ -492,8 +467,6 @@ ParameterPanel::~ParameterPanel()
     vibratoDepthSlider_.setLookAndFeel(nullptr);
     vibratoRateSlider_.setLookAndFeel(nullptr);
     noteSplitSlider_.setLookAndFeel(nullptr);
-    f0MinSlider_.setLookAndFeel(nullptr);
-    f0MaxSlider_.setLookAndFeel(nullptr);
 }
 
 void ParameterPanel::rebuildAuroraSidebarSurface(juce::Rectangle<float> bounds)
@@ -883,26 +856,6 @@ void ParameterPanel::setNoteSplit(float value)
 float ParameterPanel::getNoteSplit() const
 {
     return static_cast<float>(noteSplitSlider_.getValue());
-}
-
-void ParameterPanel::setF0Min(float value)
-{
-    f0MinSlider_.setValue(value, juce::dontSendNotification);
-}
-
-float ParameterPanel::getF0Min() const
-{
-    return static_cast<float>(f0MinSlider_.getValue());
-}
-
-void ParameterPanel::setF0Max(float value)
-{
-    f0MaxSlider_.setValue(value, juce::dontSendNotification);
-}
-
-float ParameterPanel::getF0Max() const
-{
-    return static_cast<float>(f0MaxSlider_.getValue());
 }
 
 void ParameterPanel::onRetuneSpeedChanged()

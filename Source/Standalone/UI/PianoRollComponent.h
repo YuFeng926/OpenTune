@@ -99,6 +99,7 @@ public:
         virtual void undoRequested() {}
         virtual void redoRequested() {}
         virtual void currentToolChanged(ToolId tool) { (void)tool; }
+        virtual void timelineDisplayModeChanged(TimelineDisplayMode mode) { (void)mode; }
     };
 
     enum class ScrollMode
@@ -330,6 +331,7 @@ private:
     juce::ScrollBar horizontalScrollBar_{ false };
     juce::ScrollBar verticalScrollBar_{ true };
     SmallButton scrollModeToggleButton_;
+    SmallButton timeUnitToggleButton_;
 
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseMove(const juce::MouseEvent& e) override;

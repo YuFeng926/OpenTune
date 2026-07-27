@@ -26,7 +26,6 @@
 #include "Editor/ConfirmDialogContent.h"
 #include "Utils/TimeCoordinate.h"
 #include "Content/StandaloneClipContent.h"
-#include "Runtime/ProcessF0Runtime.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "DSP/ReferenceFeatures.h"
 #include <cmath>
@@ -97,6 +96,9 @@ juce::String renderStatusToString(RenderStatus status)
 
     return "unknown";
 }
+
+constexpr int kDirectSoundCallbackBlockSize = 960;
+constexpr const char* kDirectSoundDeviceTypeName = "DirectSound";
 
 } // namespace
 
@@ -366,9 +368,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     parameterPanel_.setNoteSplit(PitchControlConfig::kDefaultNoteSplitCents);
     pianoRoll_.setNoteSplit(PitchControlConfig::kDefaultNoteSplitCents);
     
-    parameterPanel_.setF0Min(30.0f);
-    parameterPanel_.setF0Max(2000.0f);
-    
     addAndMakeVisible(parameterPanel_);
 
     arrangementView_.addListener(this);
@@ -482,11 +481,19 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 // Apply persisted vocoder model weight bias at startup
     const auto weight = appPreferences_.getState().shared.vocoderModelWeight;
     processorRef_.setVocoderModelWeight(weight);
-// Apply persisted vocoder model weight bias at startup
+
+    // DirectSound buffer size enforcement
+    auto* holder = juce::StandalonePluginHolder::getInstance();
+    jassert(holder != nullptr);
+    standaloneAudioDeviceManager_ = &holder->deviceManager;
+    standaloneAudioDeviceManager_->addChangeListener(this);
+    applyDirectSoundBufferPolicy();
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+    standaloneAudioDeviceManager_->removeChangeListener(this);
+
     // Stop timer
 #if JUCE_MAC
     // Clear the macOS system menu bar before menuBar_ is destroyed.
@@ -949,16 +956,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     const bool allowSecondaryRefresh = !inferenceActive_ || ((++inferenceActiveTickCounter_ % 4) == 0);
 
-    // Sync other state if needed (e.g. from Toolbar or ParameterPanel)
-    if (allowSecondaryRefresh && !f0ParamsSyncedFromInference_ && processorRef_.isInferenceReady()) {
-        auto f0Service = ProcessF0Runtime::getInstance().getF0Service();
-        if (f0Service) {
-            parameterPanel_.setF0Min(f0Service->getF0Min());
-            parameterPanel_.setF0Max(f0Service->getF0Max());
-            f0ParamsSyncedFromInference_ = true;
-        }
-    }
-
 // Update playhead position from processor (presented position via shared projection)
     double currentPositionSeconds = processorRef_.getPosition();
     double sampleRate = processorRef_.getSampleRate();
@@ -1393,10 +1390,6 @@ void OpenTuneAudioProcessorEditor::vibratoRateChanged(float value)
 void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 {
     pianoRoll_.setNoteSplit(value);
-}
-
-void OpenTuneAudioProcessorEditor::parameterDragEnded(int paramId, float oldValue, float newValue)
-{
 }
 
 // ============================================================================
@@ -3426,6 +3419,30 @@ bool OpenTuneAudioProcessorEditor::handleAutoRefExecute()
     syncPianoRollFromPlacementSelection(trackId, placementIndex);
     refreshReferenceContext();
     return true;
+}
+
+void OpenTuneAudioProcessorEditor::changeListenerCallback(juce::ChangeBroadcaster* /*source*/)
+{
+    applyDirectSoundBufferPolicy();
+}
+
+void OpenTuneAudioProcessorEditor::applyDirectSoundBufferPolicy()
+{
+    auto* device = standaloneAudioDeviceManager_->getCurrentAudioDevice();
+    if (device == nullptr)
+        return;
+
+    if (standaloneAudioDeviceManager_->getCurrentAudioDeviceType() != kDirectSoundDeviceTypeName)
+        return;
+
+    auto setup = standaloneAudioDeviceManager_->getAudioDeviceSetup();
+    if (setup.bufferSize == kDirectSoundCallbackBlockSize)
+        return;
+
+    setup.bufferSize = kDirectSoundCallbackBlockSize;
+    const auto error = standaloneAudioDeviceManager_->setAudioDeviceSetup(setup, true);
+    if (error.isNotEmpty())
+        AppLogger::error("[PluginEditor] DirectSound bufferSize enforcement failed: " + error);
 }
 
 } // namespace OpenTune

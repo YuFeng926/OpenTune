@@ -35,14 +35,6 @@
 
 namespace OpenTune {
 
-void fillF0GapsForVocoder(std::vector<float>& f0,
-                          const std::shared_ptr<const PitchCurveSnapshot>& snap,
-                          double frameStartTimeSec,
-                          double frameEndTimeSec,
-                          double hopDuration,
-                          double f0FrameRate,
-                          bool allowTrailingExtension);
-
 // ============================================================================
 // Export Helper Functions (Anonymous Namespace)
 // ============================================================================
@@ -747,10 +739,17 @@ static std::shared_ptr<PitchCurve> clonePitchCurveWithPitchCorrectionSegments(
     return committedCurve;
 }
 
+juce::AudioProcessor::BusesProperties OpenTuneAudioProcessor::makeBuses()
+{
+    if (juce::PluginHostType::getPluginLoadedAs() == AudioProcessor::wrapperType_Standalone)
+        return BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true);
+    return BusesProperties()
+        .withInput("Input", juce::AudioChannelSet::stereo(), true)
+        .withOutput("Output", juce::AudioChannelSet::stereo(), true);
+}
+
 OpenTuneAudioProcessor::OpenTuneAudioProcessor()
-    : AudioProcessor(BusesProperties()
-                     .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                     .withOutput("Output", juce::AudioChannelSet::stereo(), true)) {
+    : AudioProcessor(makeBuses()) {
     AppLogger::initialize();
     AppLogger::log("OpenTuneAudioProcessor: ctor");
 
@@ -1363,42 +1362,43 @@ void OpenTuneAudioProcessor::changeProgramName(int index, const juce::String& ne
 }
 
 void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
-    const bool wasInitialized = (currentSampleRate_ > 0.0);
-    const double oldSampleRate = currentSampleRate_;
-    const bool sampleRateChanged = wasInitialized && (std::abs(oldSampleRate - sampleRate) > 1.0);
-    
+    const RuntimePhase entryPhase = phase_;  // snapshot before any mutation
+    const bool firstPrepare = (preparedPlaybackSampleRate_ == 0.0);
+    const bool realRateChange = (!firstPrepare && preparedPlaybackSampleRate_ != sampleRate);
+
     AppLogger::log("prepareToPlay: sampleRate=" + juce::String(sampleRate, 2) +
                    " blockSize=" + juce::String(samplesPerBlock) +
-                   " oldRate=" + juce::String(oldSampleRate, 0) +
-                   " changed=" + (sampleRateChanged ? "true" : "false"));
+                   " firstPrepare=" + juce::String(firstPrepare ? "true" : "false") +
+                   " realRateChange=" + juce::String(realRateChange ? "true" : "false"));
 
     currentSampleRate_ = sampleRate;
     currentBlockSize_ = samplesPerBlock;
 
-    // Project sampleCursor from old device rate to new device rate (one-shot)
-    if (sampleRateChanged && oldSampleRate > 0.0) {
-        const int64_t oldCursor = playHeadState_.sampleCursor.load(std::memory_order_relaxed);
-        const int64_t newCursor = TimeCoordinate::sampleRateProject(oldCursor, oldSampleRate, sampleRate);
-        playHeadState_.sampleCursor.store(newCursor, std::memory_order_relaxed);
-        AppLogger::log("prepareToPlay: sampleCursor projected from " + juce::String(oldCursor)
-                       + " to " + juce::String(newCursor));
+    // Real sample rate change: project transportCursor_ from old rate to new rate
+    if (realRateChange) {
+        const double oldRate = preparedPlaybackSampleRate_;
+        const int64_t oldCursor = transportCursor_;
+        transportCursor_ = TimeCoordinate::sampleRateProject(oldCursor, oldRate, sampleRate);
+        audioReadCursor_ = transportCursor_;
+        AppLogger::log("prepareToPlay: transportCursor projected from " + juce::String(oldCursor)
+                       + " to " + juce::String(transportCursor_));
+    } else {
+        audioReadCursor_ = transportCursor_;
     }
 
-    // Cancel any active fade; audio thread will see fadeActive_==false next block
-    fadeActive_ = false;
+    // Cancel any active transition; gain=0
+    transitionActive_ = false;
+    currentOutputGain_ = 0.0f;
+    targetOutputGain_ = 0.0f;
+    rampSamplesRemaining_ = 0;
 
-    // CRS playback rate: call new single-param contract (publisher self-prepares)
-    if (contentRenderService_) {
+    // Set phase from saved entry: Stopped stays Stopped; Playing/Paused becomes Paused
+    phase_ = (entryPhase == RuntimePhase::Stopped) ? RuntimePhase::Stopped : RuntimePhase::Paused;
+
+    // CRS playback rate: call on first prepare or real sample rate change
+    if ((firstPrepare || realRateChange) && contentRenderService_) {
         contentRenderService_->preparePlaybackSampleRate(sampleRate);
-    }
-
-    // Calculate fade duration: 0.2 seconds in device samples
-    fadeTotalSamples_ = static_cast<int>(sampleRate * 0.2);
-
-    // Set phase based on current sampleCursor: 0→Stopped, else→Paused
-    {
-        const int64_t cursor = playHeadState_.sampleCursor.load(std::memory_order_relaxed);
-        phase_ = (cursor == 0) ? RuntimePhase::Stopped : RuntimePhase::Paused;
+        preparedPlaybackSampleRate_ = sampleRate;
     }
 
     // Sync seqlock sequences so audio thread does not replay stale commands on restart
@@ -1408,14 +1408,12 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     trackMixScratch_.setSize(std::max(1, getTotalNumOutputChannels()), std::max(1, currentBlockSize_), false, true, true);
     clipReadScratch_.setSize(std::max(1, getTotalNumOutputChannels()), std::max(1, currentBlockSize_), false, true, true);
 
-    // Transport reset on (re)prepare: clear play/loop flags; keep last known
-    // time/loop range and hostPositionRevision. Mirrors releaseResources().
+    // Transport reset on (re)prepare: clear play/loop flags; keep last known time/loop range
     playHeadState_.reset();
 
-    // Sync time mirror after projection (if rate changed, cursor was projected above)
+    // Sync time mirror after projection
     {
-        const int64_t cursor = playHeadState_.sampleCursor.load(std::memory_order_relaxed);
-        const double posSec = TimeCoordinate::samplesToSeconds(cursor, sampleRate);
+        const double posSec = TimeCoordinate::samplesToSeconds(transportCursor_, sampleRate);
         playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
     }
 
@@ -1432,17 +1430,20 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 }
 
 void OpenTuneAudioProcessor::releaseResources() {
-    // Cancel fade; set phase based on sampleCursor
-    fadeActive_ = false;
-    {
-        const int64_t cursor = playHeadState_.sampleCursor.load(std::memory_order_relaxed);
-        phase_ = (cursor == 0) ? RuntimePhase::Stopped : RuntimePhase::Paused;
-    }
+    const RuntimePhase entryPhase = phase_;  // snapshot before any mutation
+    // Cancel transition; align cursors, gain=0
+    transitionActive_ = false;
+    currentOutputGain_ = 0.0f;
+    targetOutputGain_ = 0.0f;
+    rampSamplesRemaining_ = 0;
+    audioReadCursor_ = transportCursor_;
+
+    phase_ = (entryPhase == RuntimePhase::Stopped) ? RuntimePhase::Stopped : RuntimePhase::Paused;
+
     // Sync seqlock sequences
     appliedControlSequence_ = controlSequence_.load(std::memory_order_acquire);
 
-    // Transport reset on release: clear play/loop flags; keep last known
-    // time/loop range and hostPositionRevision. Mirrors prepareToPlay().
+    // Transport reset on release: clear play/loop flags; keep last known time/loop range
     playHeadState_.reset();
 
 #if JucePlugin_Enable_ARA
@@ -1514,15 +1515,13 @@ bool OpenTuneAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) 
     const auto in = layouts.getMainInputChannelSet();
     const auto out = layouts.getMainOutputChannelSet();
 
-    if (out != juce::AudioChannelSet::stereo()) {
+    if (out != juce::AudioChannelSet::stereo())
         return false;
-    }
 
-    if (in != juce::AudioChannelSet::mono() && in != juce::AudioChannelSet::stereo()) {
-        return false;
-    }
+    if (wrapperType == juce::AudioProcessor::wrapperType_Standalone)
+        return in.isDisabled();
 
-    return true;
+    return in == juce::AudioChannelSet::stereo();
 }
 
 bool OpenTuneAudioProcessor::supportsDoublePrecisionProcessing() const {
@@ -1679,116 +1678,156 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     }
 
     const double deviceSampleRate = currentSampleRate_.load();
+    const int rampTotal = static_cast<int>(TimeCoordinate::secondsToSamples(kTransportRampDurationSeconds, deviceSampleRate));
 
     // ==== BLOCK START: Consume seqlock command snapshot ====
-    // Read stable even-sequence snapshot atomically. Control thread publishes
-    // cursor intent (pendingMainCursor_, pendingTargetCursor_, pendingIsPlaying_)
-    // but NEVER writes sampleCursor. Audio thread is the sole canonical writer.
-    // Seq-odd skipping is safe: control no longer writes sampleCursor, so a
-    // partial snapshot cannot corrupt cursor state.
     {
         uint64_t seq1 = controlSequence_.load(std::memory_order_acquire);
         if ((seq1 & 1) == 0 && seq1 != 0 && seq1 != appliedControlSequence_) {
             TransportCommand cmd = pendingCommand_.load(std::memory_order_relaxed);
-            int64_t mainCursor = pendingMainCursor_.load(std::memory_order_relaxed);
-            int64_t targetCursor = pendingTargetCursor_.load(std::memory_order_relaxed);
-            bool desiredPlaying = pendingIsPlaying_.load(std::memory_order_relaxed);
+            double presTime = pendingPresentationTime_.load(std::memory_order_relaxed);
+            double compTime = pendingCompletionTime_.load(std::memory_order_relaxed);
+            RuntimePhase termPhase = pendingTerminalPhase_.load(std::memory_order_relaxed);
 
             uint64_t seq2 = controlSequence_.load(std::memory_order_acquire);
             if (seq1 == seq2) {
-                // Snapshot consistent — apply. Audio thread writes sampleCursor.
                 appliedControlSequence_ = seq1;
+
+                const int64_t targetPresSample = TimeCoordinate::secondsToSamples(presTime, deviceSampleRate);
+                const int64_t targetCompSample = TimeCoordinate::secondsToSamples(compTime, deviceSampleRate);
 
                 switch (cmd) {
                 case TransportCommand::Play:
-                    fadeActive_ = false;
-                    playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
-                    phase_ = RuntimePhase::Playing;
+                    // Fading out: freeze transportCursor_ at play presentation target,
+                    // continue fade to 0, then fade in at completion.
+                    if (transitionActive_ && targetOutputGain_ == 0.0f) {
+                        transportCursor_ = targetPresSample;
+                        transitionCompletionCursor_ = targetCompSample;
+                        transitionCompletionPhase_ = RuntimePhase::Playing;
+                    }
+                    // Fading in or normal Playing: no duplicate action
+                    else if (transitionActive_ || phase_ == RuntimePhase::Playing) {
+                    }
+                    // Paused/Stopped: start from current mute 0→1
+                    else {
+                        audioReadCursor_ = targetPresSample;
+                        transportCursor_ = targetPresSample;
+                        phase_ = RuntimePhase::Playing;
+                        targetOutputGain_ = 1.0f;
+                        rampSamplesRemaining_ = rampTotal;
+                        transitionActive_ = true;
+                    }
                     break;
 
                 case TransportCommand::Pause:
-                {
-                    switch (phase_) {
-                    case RuntimePhase::Playing:
-                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
-                        fadeActive_ = true;
-                        fadeElapsed_ = 0;
-                        fadeReadCursor_ = mainCursor;
-                        fadeCompletionCursor_ = mainCursor;
-                        fadeCompletionPhase_ = RuntimePhase::Paused;
-                        phase_ = RuntimePhase::Fading;
-                        break;
-                    case RuntimePhase::Fading:
-                        // Update completion only; keep fadeReadCursor/elapsed continuing
-                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
-                        fadeCompletionCursor_ = mainCursor;
-                        fadeCompletionPhase_ = RuntimePhase::Paused;
-                        break;
-                    default: // Paused, Stopped
-                        // No audio to read; directly commit main cursor
-                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
-                        phase_ = RuntimePhase::Paused;
-                        break;
+                case TransportCommand::PauseAtPosition:
+                    // Same-direction fade-out: update freeze position and completion, keep fading
+                    if (transitionActive_ && targetOutputGain_ == 0.0f) {
+                        transportCursor_ = targetPresSample;
+                        transitionCompletionCursor_ = targetCompSample;
+                        transitionCompletionPhase_ = RuntimePhase::Paused;
+                    }
+                    // Fading in: reverse to fade-out
+                    else if (transitionActive_) {
+                        transportCursor_ = targetPresSample;
+                        targetOutputGain_ = 0.0f;
+                        rampSamplesRemaining_ = rampTotal;
+                        transitionCompletionCursor_ = targetCompSample;
+                        transitionCompletionPhase_ = RuntimePhase::Paused;
+                    }
+                    // Playing: freeze transportCursor_ at presentation target,
+                    // audioReadCursor_ stays at frontier F, start fade-out
+                    else if (phase_ == RuntimePhase::Playing) {
+                        transportCursor_ = targetPresSample;
+                        targetOutputGain_ = 0.0f;
+                        rampSamplesRemaining_ = rampTotal;
+                        transitionCompletionCursor_ = targetCompSample;
+                        transitionCompletionPhase_ = RuntimePhase::Paused;
+                        transitionActive_ = true;
+                    }
+                    // Direct Paused/Stopped: both cursors to completion, gain=0
+                    else {
+                        audioReadCursor_ = targetCompSample;
+                        transportCursor_ = targetCompSample;
+                        phase_ = termPhase;
+                        currentOutputGain_ = 0.0f;
+                        targetOutputGain_ = 0.0f;
+                        rampSamplesRemaining_ = 0;
+                        transitionActive_ = false;
                     }
                     break;
-                }
 
                 case TransportCommand::Stop:
-                {
-                    switch (phase_) {
-                    case RuntimePhase::Playing:
-                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
-                        fadeActive_ = true;
-                        fadeElapsed_ = 0;
-                        fadeReadCursor_ = mainCursor;
-                        fadeCompletionCursor_ = 0;
-                        fadeCompletionPhase_ = RuntimePhase::Stopped;
-                        phase_ = RuntimePhase::Fading;
-                        break;
-                    case RuntimePhase::Fading:
-                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
-                        fadeCompletionCursor_ = 0;
-                        fadeCompletionPhase_ = RuntimePhase::Stopped;
-                        break;
-                    default: // Paused, Stopped
-                        playHeadState_.sampleCursor.store(0, std::memory_order_relaxed);
+                    // Same-direction fade-out: update freeze, completion to targetCompSample
+                    if (transitionActive_ && targetOutputGain_ == 0.0f) {
+                        transportCursor_ = targetPresSample;
+                        transitionCompletionCursor_ = targetCompSample;
+                        transitionCompletionPhase_ = RuntimePhase::Stopped;
+                    }
+                    // Fading in: reverse to fade-out, land at targetCompSample
+                    else if (transitionActive_) {
+                        transportCursor_ = targetPresSample;
+                        targetOutputGain_ = 0.0f;
+                        rampSamplesRemaining_ = rampTotal;
+                        transitionCompletionCursor_ = targetCompSample;
+                        transitionCompletionPhase_ = RuntimePhase::Stopped;
+                    }
+                    // Playing: freeze at presentation target, audioReadCursor_ stays at frontier
+                    else if (phase_ == RuntimePhase::Playing) {
+                        transportCursor_ = targetPresSample;
+                        targetOutputGain_ = 0.0f;
+                        rampSamplesRemaining_ = rampTotal;
+                        transitionCompletionCursor_ = targetCompSample;
+                        transitionCompletionPhase_ = RuntimePhase::Stopped;
+                        transitionActive_ = true;
+                    }
+                    // Direct Paused/Stopped: both cursors to completion, gain=0
+                    else {
+                        audioReadCursor_ = targetCompSample;
+                        transportCursor_ = targetCompSample;
                         phase_ = RuntimePhase::Stopped;
-                        break;
+                        currentOutputGain_ = 0.0f;
+                        targetOutputGain_ = 0.0f;
+                        rampSamplesRemaining_ = 0;
+                        transitionActive_ = false;
                     }
                     break;
-                }
 
                 case TransportCommand::Seek:
-                    fadeActive_ = false;
-                    playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
-                    phase_ = desiredPlaying ? RuntimePhase::Playing : RuntimePhase::Paused;
-                    break;
-
-                case TransportCommand::PauseAtPosition:
-                {
-                    switch (phase_) {
-                    case RuntimePhase::Playing:
-                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
-                        fadeActive_ = true;
-                        fadeElapsed_ = 0;
-                        fadeReadCursor_ = mainCursor;
-                        fadeCompletionCursor_ = targetCursor;
-                        fadeCompletionPhase_ = RuntimePhase::Paused;
-                        phase_ = RuntimePhase::Fading;
-                        break;
-                    case RuntimePhase::Fading:
-                        // Update completion target only; keep fadeReadCursor/elapsed continuing
-                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
-                        fadeCompletionCursor_ = targetCursor;
-                        fadeCompletionPhase_ = RuntimePhase::Paused;
-                        break;
-                    default: // Paused, Stopped
-                        playHeadState_.sampleCursor.store(targetCursor, std::memory_order_relaxed);
-                        phase_ = RuntimePhase::Paused;
-                        break;
+                    // Same-direction fade-out: update freeze and landing
+                    if (transitionActive_ && targetOutputGain_ == 0.0f) {
+                        transportCursor_ = targetPresSample;
+                        transitionCompletionCursor_ = targetCompSample;
+                        transitionCompletionPhase_ = termPhase;
+                    }
+                    // Fading in: reverse to fade-out, land at seek completion target
+                    else if (transitionActive_) {
+                        transportCursor_ = targetPresSample;
+                        targetOutputGain_ = 0.0f;
+                        rampSamplesRemaining_ = rampTotal;
+                        transitionCompletionCursor_ = targetCompSample;
+                        transitionCompletionPhase_ = termPhase;
+                    }
+                    // Playing→Playing Seek: freeze at presentation target, fade out, land, fade in
+                    else if (phase_ == RuntimePhase::Playing && termPhase == RuntimePhase::Playing) {
+                        transportCursor_ = targetPresSample;
+                        targetOutputGain_ = 0.0f;
+                        rampSamplesRemaining_ = rampTotal;
+                        transitionCompletionCursor_ = targetCompSample;
+                        transitionCompletionPhase_ = RuntimePhase::Playing;
+                        transitionActive_ = true;
+                    }
+                    // Direct Paused/Stopped: both cursors to completion, gain=0
+                    else {
+                        audioReadCursor_ = targetCompSample;
+                        transportCursor_ = targetCompSample;
+                        phase_ = termPhase;
+                        currentOutputGain_ = 0.0f;
+                        targetOutputGain_ = 0.0f;
+                        rampSamplesRemaining_ = 0;
+                        transitionActive_ = false;
                     }
                     break;
-                }
 
                 case TransportCommand::None:
                     break;
@@ -1797,30 +1836,23 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    // Capture epoch AFTER command consumption. A control write during this
-    // block bumps presentationEpoch, so block-end epoch checks will reject
-    // stale cursor commits.
+    // Capture epoch AFTER command consumption
     const uint64_t blockEpoch = playHeadState_.presentationEpoch.load(std::memory_order_acquire);
 
-    // Determine read cursor for this block
-    int64_t blockStartSample = 0;
-    if (phase_ == RuntimePhase::Fading && fadeActive_) {
-        blockStartSample = fadeReadCursor_;
-    } else if (phase_ == RuntimePhase::Playing) {
-        blockStartSample = playHeadState_.sampleCursor.load(std::memory_order_relaxed);
-    } else {
-        // Stopped or Paused with no active fade — only piano audition
+    // Determine read cursor for this block (fixed from audioReadCursor_)
+    const int64_t blockStartSample = audioReadCursor_;
+
+    // Stopped/Paused with no active transition — only piano audition
+    if (phase_ != RuntimePhase::Playing && !transitionActive_) {
         pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
         jassert(standaloneArrangement_ != nullptr);
         for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
             standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
         }
-        // Derive UI mirror only when no new command arrived during this block.
-        // Control thread writes timeInSeconds directly; stale block must not overwrite it.
         if (playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
-            const double posSec = TimeCoordinate::samplesToSeconds(
-                playHeadState_.sampleCursor.load(std::memory_order_relaxed), deviceSampleRate);
+            const double posSec = TimeCoordinate::samplesToSeconds(transportCursor_, deviceSampleRate);
             playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
+            playHeadState_.isPlaying.store(false, std::memory_order_release);
         }
         return;
     }
@@ -1835,12 +1867,14 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     const double blockEndSeconds = currentPosSeconds + blockDurationSeconds;
     const int64_t blockEndSample = blockStartSample + static_cast<int64_t>(numSamples);
 
-    // Publish projection anchor ONLY when Playing (requirement 7).
-    // Fading: isPlaying=false, main cursor frozen, fadeReadCursor advances independently.
-    // No projection anchor published — UI reads freeze cursor via isPlaying==false path.
-    if (phase_ == RuntimePhase::Playing) {
-        const double nowClock = juce::Time::getMillisecondCounterHiRes() * 0.001;
-        playHeadState_.presentationProjection.publish(currentPosSeconds, nowClock, blockEndSeconds, blockEpoch);
+    // Publish projection: Playing (including fade-in), NOT during fade-out
+    {
+        const bool publishProjection = (phase_ == RuntimePhase::Playing)
+            && !(transitionActive_ && targetOutputGain_ == 0.0f);
+        if (publishProjection) {
+            const double nowClock = juce::Time::getMillisecondCounterHiRes() * 0.001;
+            playHeadState_.presentationProjection.publish(currentPosSeconds, nowClock, blockEndSeconds, blockEpoch);
+        }
     }
 
     const auto playbackSnapshot = standaloneArrangement_->loadPlaybackSnapshot();
@@ -1969,53 +2003,70 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    // ==== Fade processing (per-sample continuous gain) ====
-    if (phase_ == RuntimePhase::Fading && fadeActive_) {
-        for (int sample = 0; sample < numSamples; ++sample) {
-            const int currentFadeSample = fadeElapsed_ + sample;
-            float fadeGain;
-            if (currentFadeSample < fadeTotalSamples_) {
-                fadeGain = 1.0f - static_cast<float>(currentFadeSample) / static_cast<float>(fadeTotalSamples_);
-            } else {
-                fadeGain = 0.0f;
-            }
-            for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
-                buffer.setSample(ch, sample, buffer.getSample(ch, sample) * fadeGain);
-            }
+    // ==== Per-sample ramp: multiply by current gain, then step toward target ====
+    bool fadeOutCompletedThisBlock = false;
+    for (int sample = 0; sample < numSamples; ++sample) {
+        const float sampleGain = currentOutputGain_;
+
+        for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
+            buffer.setSample(ch, sample, buffer.getSample(ch, sample) * sampleGain);
         }
 
-        fadeElapsed_ += numSamples;
-        fadeReadCursor_ += numSamples;
+        if (transitionActive_ && rampSamplesRemaining_ > 0) {
+            currentOutputGain_ += (targetOutputGain_ - currentOutputGain_) / static_cast<float>(rampSamplesRemaining_);
+            rampSamplesRemaining_--;
 
-        if (fadeElapsed_ >= fadeTotalSamples_) {
-            // Epoch guard: only commit if no new command arrived during this block.
-            // If epoch changed, keep Fading state — next block will consume new command.
-            // Never end fade then skip cursor commit (requirement 6).
-            if (playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
-                fadeActive_ = false;
-                phase_ = fadeCompletionPhase_;
-                playHeadState_.sampleCursor.store(fadeCompletionCursor_, std::memory_order_relaxed);
-                // isPlaying already false (control thread set it in Pause/Stop/PauseAt)
+            if (rampSamplesRemaining_ == 0) {
+                currentOutputGain_ = targetOutputGain_;
+
+                if (targetOutputGain_ == 0.0f) {
+                    fadeOutCompletedThisBlock = true;
+                } else {
+                    transitionActive_ = false;
+                }
             }
-            // else: epoch changed → keep Fading. Next block consumes new command.
         }
     }
 
     pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
 
-    // ==== Block-end: cursor advance (Playing phase only) ====
-    if (phase_ == RuntimePhase::Playing) {
-        if (playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
-            int64_t expected = blockStartSample;
-            playHeadState_.sampleCursor.compare_exchange_strong(expected, blockEndSample, std::memory_order_relaxed);
+    // ==== Block-end: cursor advance (unconditional) ====
+    audioReadCursor_ = blockEndSample;
+
+    // Handle fade-out completion (land at completion cursor; start fade-in if terminal is Playing)
+    if (fadeOutCompletedThisBlock) {
+        audioReadCursor_ = transitionCompletionCursor_;
+        transportCursor_ = transitionCompletionCursor_;
+
+        if (transitionCompletionPhase_ == RuntimePhase::Playing) {
+            phase_ = RuntimePhase::Playing;
+            targetOutputGain_ = 1.0f;
+            rampSamplesRemaining_ = rampTotal;
+            transitionActive_ = true;
+        } else {
+            phase_ = transitionCompletionPhase_;
+            transitionActive_ = false;
         }
     }
 
-    // A control command arriving during this block owns the UI mirror.
+    // Update transportCursor_: frozen during fade-out, follows audioReadCursor_ otherwise
+    if (!(transitionActive_ && targetOutputGain_ == 0.0f)) {
+        transportCursor_ = audioReadCursor_;
+    }
+
+    // UI mirror update (only if epoch unchanged during this block)
     if (playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
-        const double positionSeconds = TimeCoordinate::samplesToSeconds(
-            playHeadState_.sampleCursor.load(std::memory_order_relaxed), deviceSampleRate);
-        playHeadState_.timeInSeconds.store(positionSeconds, std::memory_order_relaxed);
+        const double posSec = TimeCoordinate::samplesToSeconds(transportCursor_, deviceSampleRate);
+        playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
+
+        // isPlaying during fade-out depends on terminal phase, not just target gain
+        bool uiIsPlaying;
+        if (transitionActive_ && targetOutputGain_ == 0.0f) {
+            uiIsPlaying = (transitionCompletionPhase_ == RuntimePhase::Playing);
+        } else {
+            uiIsPlaying = (phase_ == RuntimePhase::Playing);
+        }
+        playHeadState_.isPlaying.store(uiIsPlaying, std::memory_order_release);
     }
 }
 
@@ -3250,90 +3301,70 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
 // ============================================================================
 
 void OpenTuneAudioProcessor::play() {
-    const double sr = currentSampleRate_.load(std::memory_order_relaxed);
-    const double srSafe = sr > 0.0 ? sr : 44100.0;
     const double posSec = playHeadState_.getPresentedPositionSeconds();
-    const int64_t mainCursor = TimeCoordinate::secondsToSamples(posSec, srSafe);
-    const double posMirror = TimeCoordinate::samplesToSeconds(mainCursor, srSafe);
 
-    // Store quantized play-start position for playFromStart feature
-    playStartPosition_.store(posMirror);
+    playStartPosition_.store(posSec);
 
-    // Seqlock write: control publishes cursor intent only; never writes sampleCursor.
-    controlSequence_.fetch_add(1, std::memory_order_acq_rel); // odd
-    playHeadState_.timeInSeconds.store(posMirror, std::memory_order_relaxed);
+    controlSequence_.fetch_add(1, std::memory_order_acq_rel);
+    playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
     playHeadState_.isPlaying.store(true, std::memory_order_release);
     playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
-    pendingMainCursor_.store(mainCursor, std::memory_order_relaxed);
-    pendingTargetCursor_.store(0, std::memory_order_relaxed);
-    pendingIsPlaying_.store(true, std::memory_order_relaxed);
+    pendingPresentationTime_.store(posSec, std::memory_order_relaxed);
+    pendingCompletionTime_.store(posSec, std::memory_order_relaxed);
+    pendingTerminalPhase_.store(RuntimePhase::Playing, std::memory_order_relaxed);
     pendingCommand_.store(TransportCommand::Play, std::memory_order_relaxed);
-    controlSequence_.fetch_add(1, std::memory_order_release); // even
+    controlSequence_.fetch_add(1, std::memory_order_release);
 
-    AppLogger::log("Playback: play mainCursor=" + juce::String(mainCursor));
+    AppLogger::log("Playback: play posSec=" + juce::String(posSec, 3));
 }
 
 void OpenTuneAudioProcessor::pause() {
-    const double sr = currentSampleRate_.load(std::memory_order_relaxed);
-    const double srSafe = sr > 0.0 ? sr : 44100.0;
     const double posSec = playHeadState_.getPresentedPositionSeconds();
-    const int64_t mainCursor = TimeCoordinate::secondsToSamples(posSec, srSafe);
 
-    // Seqlock write: control publishes cursor intent only; never writes sampleCursor.
     controlSequence_.fetch_add(1, std::memory_order_acq_rel);
     playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
     playHeadState_.isPlaying.store(false, std::memory_order_release);
     playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
-    pendingMainCursor_.store(mainCursor, std::memory_order_relaxed);
-    pendingTargetCursor_.store(mainCursor, std::memory_order_relaxed);
-    pendingIsPlaying_.store(false, std::memory_order_relaxed);
+    pendingPresentationTime_.store(posSec, std::memory_order_relaxed);
+    pendingCompletionTime_.store(posSec, std::memory_order_relaxed);
+    pendingTerminalPhase_.store(RuntimePhase::Paused, std::memory_order_relaxed);
     pendingCommand_.store(TransportCommand::Pause, std::memory_order_relaxed);
     controlSequence_.fetch_add(1, std::memory_order_release);
 
-    AppLogger::log("Playback: pause mainCursor=" + juce::String(mainCursor));
+    AppLogger::log("Playback: pause posSec=" + juce::String(posSec, 3));
 }
 
 void OpenTuneAudioProcessor::stop() {
-    const double sr = currentSampleRate_.load(std::memory_order_relaxed);
-    const double srSafe = sr > 0.0 ? sr : 44100.0;
     const double posSec = playHeadState_.getPresentedPositionSeconds();
-    const int64_t mainCursor = TimeCoordinate::secondsToSamples(posSec, srSafe);
 
-    // Seqlock write: control publishes cursor intent only; never writes sampleCursor.
     controlSequence_.fetch_add(1, std::memory_order_acq_rel);
     playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
     playHeadState_.isPlaying.store(false, std::memory_order_release);
     playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
-    pendingMainCursor_.store(mainCursor, std::memory_order_relaxed);
-    pendingTargetCursor_.store(0, std::memory_order_relaxed);
-    pendingIsPlaying_.store(false, std::memory_order_relaxed);
+    pendingPresentationTime_.store(posSec, std::memory_order_relaxed);
+    pendingCompletionTime_.store(0.0, std::memory_order_relaxed);
+    pendingTerminalPhase_.store(RuntimePhase::Stopped, std::memory_order_relaxed);
     pendingCommand_.store(TransportCommand::Stop, std::memory_order_relaxed);
     controlSequence_.fetch_add(1, std::memory_order_release);
 
-    AppLogger::log("Playback: stop mainCursor=" + juce::String(mainCursor));
+    AppLogger::log("Playback: stop posSec=" + juce::String(posSec, 3));
 }
 
 void OpenTuneAudioProcessor::pauseAtPosition(double targetSeconds) {
-    const double sr = currentSampleRate_.load(std::memory_order_relaxed);
-    const double srSafe = sr > 0.0 ? sr : 44100.0;
     const double posSec = playHeadState_.getPresentedPositionSeconds();
-    const int64_t mainCursor = TimeCoordinate::secondsToSamples(posSec, srSafe);
-    const int64_t targetCursor = TimeCoordinate::secondsToSamples(targetSeconds, srSafe);
 
-    // Seqlock write: control publishes cursor intent only; never writes sampleCursor.
-    // timeInSeconds mirror = mainCursor seconds (UI freezes at presented position during fade).
     controlSequence_.fetch_add(1, std::memory_order_acq_rel);
     playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
     playHeadState_.isPlaying.store(false, std::memory_order_release);
     playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
-    pendingMainCursor_.store(mainCursor, std::memory_order_relaxed);
-    pendingTargetCursor_.store(targetCursor, std::memory_order_relaxed);
-    pendingIsPlaying_.store(false, std::memory_order_relaxed);
+    pendingPresentationTime_.store(posSec, std::memory_order_relaxed);
+    pendingCompletionTime_.store(targetSeconds, std::memory_order_relaxed);
+    pendingTerminalPhase_.store(RuntimePhase::Paused, std::memory_order_relaxed);
     pendingCommand_.store(TransportCommand::PauseAtPosition, std::memory_order_relaxed);
     controlSequence_.fetch_add(1, std::memory_order_release);
 
-    AppLogger::log("Playback: pauseAtPosition mainCursor=" + juce::String(mainCursor)
-                   + " target=" + juce::String(targetCursor));
+    AppLogger::log("Playback: pauseAtPosition posSec=" + juce::String(posSec, 3)
+                   + " target=" + juce::String(targetSeconds, 3));
 }
 
 void OpenTuneAudioProcessor::setLoopEnabled(bool enabled) {
@@ -3341,27 +3372,20 @@ void OpenTuneAudioProcessor::setLoopEnabled(bool enabled) {
 }
 
 void OpenTuneAudioProcessor::setPosition(double seconds) {
-    const double sr = currentSampleRate_.load(std::memory_order_relaxed);
-    const double srSafe = sr > 0.0 ? sr : 44100.0;
-    const int64_t cursor = TimeCoordinate::secondsToSamples(seconds, srSafe);
     const bool wasPlaying = playHeadState_.isPlaying.load(std::memory_order_acquire);
 
-    // Store quantized play-start position
-    playStartPosition_.store(TimeCoordinate::samplesToSeconds(cursor, srSafe));
+    playStartPosition_.store(seconds);
 
-    // Seqlock write — Seek preserves current isPlaying state.
-    // control publishes cursor intent only; never writes sampleCursor.
-    // timeInSeconds mirror = quantized target seconds.
     controlSequence_.fetch_add(1, std::memory_order_acq_rel);
     playHeadState_.timeInSeconds.store(seconds, std::memory_order_relaxed);
     playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
-    pendingMainCursor_.store(cursor, std::memory_order_relaxed);
-    pendingTargetCursor_.store(cursor, std::memory_order_relaxed);
-    pendingIsPlaying_.store(wasPlaying, std::memory_order_relaxed);
+    pendingPresentationTime_.store(seconds, std::memory_order_relaxed);
+    pendingCompletionTime_.store(seconds, std::memory_order_relaxed);
+    pendingTerminalPhase_.store(wasPlaying ? RuntimePhase::Playing : RuntimePhase::Paused, std::memory_order_relaxed);
     pendingCommand_.store(TransportCommand::Seek, std::memory_order_relaxed);
     controlSequence_.fetch_add(1, std::memory_order_release);
 
-    AppLogger::log("Playback: seek to " + juce::String(seconds, 3) + "s cursor=" + juce::String(cursor));
+    AppLogger::log("Playback: seek to " + juce::String(seconds, 3) + "s wasPlaying=" + (wasPlaying ? "true" : "false"));
 }
 
 // ============================================================================

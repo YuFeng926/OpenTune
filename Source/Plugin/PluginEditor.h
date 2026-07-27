@@ -167,7 +167,6 @@ private:
     TimelineDisplayMode timelineDisplayMode_ = TimelineDisplayMode::Time;
 
     bool showingSingleNoteParams_{false};
-    bool initialFocusGrabbed_{false};
     // Tracks last-seen notesRevision per active content so the timer
     // can pull fresh notes when an async note generator (GAME) commits late.
     ContentKey lastActiveContentKey_;

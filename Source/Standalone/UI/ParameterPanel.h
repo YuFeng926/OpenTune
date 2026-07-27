@@ -68,8 +68,6 @@ public:
         virtual void noteSplitChanged(float value) = 0;
         virtual void toolSelected(int toolId) = 0;
         virtual void autoTuneRequested() {}
-        // 参数拖动完成回调（用于 Undo 记录，oldValue 是拖动开始前的值）
-        virtual void parameterDragEnded(int paramId, float oldValue, float newValue) { juce::ignoreUnused(paramId, oldValue, newValue); }
         virtual void pitchShiftRequested() {}
     };
 
@@ -95,8 +93,6 @@ public:
     void setVibratoDepth(float value);
     void setVibratoRate(float value);
     void setNoteSplit(float value);
-    void setF0Min(float value);
-    void setF0Max(float value);
     void setPitchShiftIndicator(int semitone, int cents);
 
     void applyTheme();
@@ -107,8 +103,6 @@ public:
     float getVibratoDepth() const;
     float getVibratoRate() const;
     float getNoteSplit() const;
-    float getF0Min() const;
-    float getF0Max() const;
 
 private:
     class ToolIconButton : public juce::Button
@@ -156,10 +150,6 @@ private:
     juce::Label noteSplitLabel_;
     juce::Slider noteSplitSlider_;
 
-    // F0 Range Section (Hidden for now, but kept in code)
-    juce::Slider f0MinSlider_;
-    juce::Slider f0MaxSlider_;
-
     // Tools Section
     juce::Label toolsHeader_;
     std::unique_ptr<ToolIconButton> autoTuneToolButton_;
@@ -176,17 +166,6 @@ private:
     juce::Image auroraSidebarSurface_;
     float auroraSidebarSurfaceScale_ = 0.0f;
 
-    // 参数拖动前的值（用于 Undo 记录）
-    float dragStartRetuneSpeed_{15.0f};
-    float dragStartVibratoDepth_{0.0f};
-    float dragStartVibratoRate_{7.5f};
-    float dragStartNoteSplit_{80.0f};
-    
-    // 参数 ID 常量
-    static constexpr int kParamRetuneSpeed = 0;
-    static constexpr int kParamVibratoDepth = 1;
-    static constexpr int kParamVibratoRate = 2;
-    static constexpr int kParamNoteSplit = 3;
     bool experimentalFeaturesEnabled_ = false;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ParameterPanel)

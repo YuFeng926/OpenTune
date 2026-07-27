@@ -40,6 +40,10 @@
 #include "Utils/ScaleUiMapping.h"
 #include "Audio/AsyncAudioLoader.h"
 
+namespace juce {
+class AudioDeviceManager;
+}
+
 namespace OpenTune {
 
 class ProjectSession;
@@ -68,7 +72,8 @@ class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
                                       public PianoRollComponent::Listener,
                                       public juce::FileDragAndDropTarget,
                                       public LanguageChangeListener,  // 语言变化监听
-                                      private juce::Timer
+                                      private juce::Timer,
+                                      private juce::ChangeListener
 {
 public:
     explicit OpenTuneAudioProcessorEditor(OpenTuneAudioProcessor&);
@@ -89,7 +94,6 @@ public:
     void vibratoRateChanged(float value) override;
     void noteSplitChanged(float value) override;
     void toolSelected(int toolId) override;
-    void parameterDragEnded(int paramId, float oldValue, float newValue) override;
     void pitchShiftRequested() override;
 
     // MenuBarComponent::Listener
@@ -121,7 +125,6 @@ public:
     void timeSignatureChanged(int numerator, int denominator) override;
     void scaleChanged(int rootNote, int scaleType) override;
     void viewToggled(bool workspaceView) override;
-    void timelineDisplayModeChanged(TimelineDisplayMode mode) override;
 
     // TrackPanelComponent::Listener
     void trackSelected(int trackId) override;
@@ -144,6 +147,7 @@ public:
     void referenceButtonClicked(int trackId, uint64_t placementId, juce::Rectangle<int> buttonScreenArea) override;
 
     void scrollModeChanged(bool isContinuous) override;
+    void timelineDisplayModeChanged(TimelineDisplayMode mode) override;
     // trackHeightChanged已在TrackPanelComponent::Listener中声明
 
     // PianoRollComponent::Listener
@@ -267,7 +271,6 @@ private:
     bool isTrackPanelVisible_ = true;
     bool isParameterPanelVisible_ = true;
 
-    bool f0ParamsSyncedFromInference_ = false;
     ThemeId appliedThemeId_ = ThemeId::Aurora;
     Language appliedLanguage_ = Language::Chinese;
     bool inferenceActive_ = false;
@@ -303,6 +306,11 @@ private:
     bool rmvpeOverlayLatched_ = false;
     ContentKey rmvpeOverlayTargetContentKey_;
 
+
+    // DirectSound buffer size enforcement
+    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
+    void applyDirectSoundBufferPolicy();
+    juce::AudioDeviceManager* standaloneAudioDeviceManager_ = nullptr;
 
     // Export worker thread management
     std::thread exportWorker_;
