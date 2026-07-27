@@ -1392,11 +1392,9 @@ bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
     readSource.audioBuffer = std::move(audioBuffer);
     readSource.audioSampleRate = TimeCoordinate::kRenderSampleRate;
     readSource.timeStretchCache = &contentRenderService_->getTimeStretchCache();
-    readSource.renderRevision = content.contentRevision;
     readSource.pitchRevision = content.editable.pitchRevision;
     readSource.pitchShiftRevision = content.editable.pitchShiftRevision;
     readSource.timeGridRevision = content.editable.timeGridRevision;
-    readSource.pitchShiftSettings = content.editable.pitchShiftSettings;
     readSource.timeGridIsIdentity = content.editable.timeGrid->isIdentity();
 
     contentRenderService_->publishPlaybackSource(key, readSource);
@@ -1837,17 +1835,15 @@ void OpenTuneDocumentController::refreshModificationCRSMetadata(ContentKey key)
     const auto& content = *mod->content;
 
     // 刷新 CRS 的 PlaybackReadSource metadata（不重新发布 audio buffer）
-    // PlaybackReadSource 只承载元数据：pitchShiftSettings、revision 系列、timeGridIsIdentity
+    // PlaybackReadSource 只承载元数据：revision 系列、timeGridIsIdentity
     // 真正的分析态（pitchCurve/timeGrid/silentGaps）由 AudioModification.content 持有，
     // 渲染时通过 snapshotAudioModification 注入到 EditableContentSnapshot，再交给 ProcessRenderRuntime。
     PlaybackReadSource readSource;
     if (contentRenderService_ && contentRenderService_->getPlaybackReadSource(key, readSource))
     {
-        readSource.pitchShiftSettings = content.editable.pitchShiftSettings;
         readSource.pitchRevision = content.editable.pitchRevision;
         readSource.pitchShiftRevision = content.editable.pitchShiftRevision;
         readSource.timeGridRevision = content.editable.timeGridRevision;
-        readSource.renderRevision = content.contentRevision;
         readSource.timeGridIsIdentity = content.editable.timeGrid->isIdentity();
         contentRenderService_->publishPlaybackSource(key, std::move(readSource));
     }
@@ -1868,8 +1864,8 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
     const int startSample = static_cast<int>(startSeconds * readSource.audioSampleRate);
     const int endSample = static_cast<int>(endSeconds * readSource.audioSampleRate);
 
-    // Build complete immutable RenderJob with frozen data at enqueue time.
-    // Per architecture: RenderWorker consumes immutable data, never calls back to DC.
+    // Enqueue render request: job carries content identity and sample range.
+    // RenderWorker resolves start/end/targetRevision from PendingJob when executing.
     auto snap = snapshotAudioModification(key);
 
     RenderJob job;
@@ -1878,23 +1874,12 @@ void OpenTuneDocumentController::requestModificationRender(ContentKey key, doubl
     job.audioSampleRate = readSource.audioSampleRate;
     job.startSample = startSample;
     job.endSampleExclusive = endSample;
-    job.startSeconds = startSeconds;
-    job.endSeconds = endSeconds;
     job.renderCache = contentRenderService_->getOrCreateRenderCache(key);
-    job.targetRevision = readSource.renderRevision;
-    job.renderRevision = readSource.renderRevision;
-    job.pitchRevision = readSource.pitchRevision;
-    job.pitchShiftRevision = readSource.pitchShiftRevision;
-    job.timeGridRevision = readSource.timeGridRevision;
 
-    // Freeze content snapshot data into the job
+    // Silent gaps carry chunk-planning metadata into enqueueRender.
     if (snap)
     {
-        job.pitchCurve = snap->pitchCurve;
-        job.timeGrid = snap->timeGrid;
-        job.pitchShiftSettings = snap->pitchShiftSettings;
         job.silentGaps = snap->silentGaps;
-        job.contentRevision = snap->contentRevision;
     }
 
     contentRenderService_->enqueueRender(std::move(job));

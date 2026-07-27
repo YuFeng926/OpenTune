@@ -14,14 +14,6 @@ class SoundTouchStretcher; // forward
  *
  * ContentKey 単位で SoundTouchStretcher の作成、検索、削除を管理。
  * 各 content に最大 1 つの stretcher を持ち、Stage 2 time-stretch build に使用。
- *
- * Phase 0: content owner の per-entry stretcher から抽出 (h:310, cpp:591+)
- *
- * 再利用コード：
- * - content owner.h:223-225, h:310 (per-entry stretcher)
- * - content owner.cpp:591+ (getOpenTuneStretcher)
- *
- * ContentRenderService.cpp:263-280 の vector モードは使用しない (線形検索、効率が悪い)
  */
 class StretcherPool
 {

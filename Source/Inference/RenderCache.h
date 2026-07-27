@@ -8,8 +8,10 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 
 #include "Utils/TimeCoordinate.h"
+#include "../DSP/ResamplingManager.h"
 
 struct RenderCacheTestAccessor;
 
@@ -22,14 +24,13 @@ public:
 
     struct Chunk {
         double startSeconds{0.0};
-        double endSeconds{0.0};
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
         std::shared_ptr<const std::vector<float>> audio;
 
         enum class Status : uint8_t {
             Idle,    // 无待处理渲染需求
-            Pending, // 有待渲染需求，等待 Worker 拉取
+            Pending, // 有待渲染需求，等 Worker 拉取
             Running, // 正在渲染中
             Blank    // 空白区域（无有效F0），无需渲染
         };
@@ -41,55 +42,32 @@ public:
     };
 
     // 调度状态管理 API
-    // 编辑事件入口：请求渲染（更新 desiredRevision，Idle -> Pending）
-    void requestRenderPending(double startSeconds,
-                              double endSeconds,
-                              int64_t startSample,
+    void requestRenderPending(int64_t startSample,
                               int64_t endSampleExclusive);
 
-    // Worker 拉取：查找 Pending 状态的 Chunk（供调度器遍历）
     struct PendingJob {
         double startSeconds{0.0};
-        double endSeconds{0.0};
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
         uint64_t targetRevision{0};
     };
     bool getNextPendingJob(PendingJob& outJob);
 
-    // 原子完成入口的窄语义返回值
-    // - Published: audio 写入 + published + Idle，status = Idle, runningRevision = 0
-    // - Stale: runningRevision != revision，chunk 状态不变
-    // - InvalidInput: 输入无效（audio.empty、span mismatch、not found），调用方应走 failure 收口
     enum class ChunkRenderResult : uint8_t {
         Published,
         Stale,
         InvalidInput
     };
 
-    // 原子完成入口：一把锁内完成 audio 写入 + 发布 + 状态转移
-    // - 校验 runningRevision == revision（唯一 stale 检测）
-    // - 写入 audio，设置 publishedRevision
-    // - status = Idle，runningRevision = 0
-    // - publishLocked()
-    // 输入无效属于调用方 bug，返回 InvalidInput 让调用方明确 failure 路径
     ChunkRenderResult completeChunkRenderWithAudio(int64_t startSample,
-                                                   int64_t endSampleExclusive,
-                                                   std::vector<float>&& audio,
-                                                   uint64_t revision);
+                                                    int64_t endSampleExclusive,
+                                                    std::vector<float>&& audio,
+                                                    uint64_t revision);
 
-    // 渲染失败回调：仅处理 TerminalFailure
-    // - runningRevision != revision → ignore（stale）
-    // - 否则：status = Idle，runningRevision = 0
     void completeChunkRenderFailure(double startSeconds, uint64_t revision);
 
-    // 标记 Chunk 为空白区域（无有效F0），从待渲染队列移除
     void markChunkAsBlank(double startSeconds, uint64_t revision);
 
-    // 获取当前 Pending 任务数
-    int getPendingCount() const;
-
-    // 获取 Chunk 状态统计（用于 UI 显示）
     struct ChunkStats {
         int idle{0};
         int pending{0};
@@ -110,11 +88,24 @@ public:
     RenderCache();
     ~RenderCache();
 
-    void overlayPublishedAudioForRate(juce::AudioBuffer<float>& destination,
-                                      int destStartSample,
-                                      int numSamples,
-                                      double timeSeconds,
-                                      int targetSampleRate) const;
+    // ============================================================
+    // 准备方法：将 canonical chunk 重采样到目标播放采样率（使用自有 ResamplingManager）。
+    // 调用方（ContentRenderService::preparePlaybackSampleRate）在设备/导出切换时调用。
+    // ============================================================
+    void prepareForPlaybackSampleRate(double targetSr);
+
+    // 音频线程直接 copy prepared overlay（无插值）。只能读取已 prepared 的目标率数据。
+    void overlayPreparedAudio(juce::AudioBuffer<float>& destination,
+                              int destStartSample,
+                              int numSamples,
+                              int64_t readStartSample,
+                              int targetSampleRate) const;
+
+    // 非实时 canonical overlay（仅供 Stage2/export 等 44.1kHz 读取）。
+    void overlayCanonicalAudio(juce::AudioBuffer<float>& destination,
+                                int destStartSample,
+                                int numSamples,
+                                int64_t readStartSample) const;
 
     void clear();
 
@@ -122,9 +113,6 @@ private:
     struct PublishedChunk {
         int64_t startSample{0};
         int64_t endSampleExclusive{0};
-        double startSeconds{0.0};
-        double endSeconds{0.0};
-        uint64_t publishedRevision{0};
         std::shared_ptr<const std::vector<float>> audio;
     };
 
@@ -132,34 +120,45 @@ private:
         std::vector<PublishedChunk> chunks;  // sorted by startSample ascending
     };
 
+    // Prepared chunk — 目标播放采样率下，从 canonical 绝对投影得到；
+    // 相邻 chunk 边界精确连续，无缝隙。
+    // 当目标率 == 44.1kHz 时 audio 别名 canonical chunk audio（shared_ptr copy）。
+    struct PublishedPreparedChunk {
+        int64_t startSample{0};
+        int64_t endSampleExclusive{0};
+        std::shared_ptr<const std::vector<float>> audio;
+    };
+
+    struct PublishedPreparedSnapshot {
+        double sampleRate{0.0};
+        std::vector<PublishedPreparedChunk> chunks;  // sorted by startSample ascending
+    };
+
     friend struct RenderCacheTestAccessor;
     mutable juce::SpinLock lock_;
     std::map<double, Chunk> chunks_;
-    std::set<double> pendingChunks_;  // 待渲染 Chunk 的 startSeconds 索引
-    size_t totalMemoryUsage_ = 0;
+    std::set<double> pendingChunks_;
 
-    // Immutable read-side snapshot — atomic_load by audio thread, atomic_store
-    // by writer under lock_.  COW: old snapshots held by audio thread release
-    // naturally after the callback ends. Global byte counters track chunks_;
-    // a previous published generation can temporarily retain extra PCM.
     std::shared_ptr<const PublishedRenderSnapshot> publishedSnapshot_;
+    std::shared_ptr<const PublishedPreparedSnapshot> preparedSnapshot_;
 
-    // Writer-owned release pool for old published generations. This prevents
-    // the audio thread from becoming the final owner of evicted PCM.
+    // Prepared rebuild state: serialized by preparedBuildMutex_ (non-audio thread).
+    double preparedSampleRate_{0.0};
+    size_t preparedMemoryUsage_{0};
+    ResamplingManager preparedResampler_;
+
+    // Writer mutex serializes prepared rebuild + target rate update.
+    mutable std::mutex preparedBuildMutex_;
+
+    // Writer-owned release pool for old published generations.
     mutable std::vector<std::shared_ptr<const PublishedRenderSnapshot>> retiredSnapshots_;
+    mutable std::vector<std::shared_ptr<const PublishedPreparedSnapshot>> retiredPreparedSnapshots_;
 
-    // Rebuild publishedSnapshot_ from chunks_ inside lock_ critical section.
-    // Call after any mutation that changes which PCM is visible
-    // (completeChunkRenderWithAudio, markChunkAsBlank, clear, eviction).
     void publishLocked();
+    void rebuildPrepared();
     void pruneRetiredSnapshotsLocked() const;
 
 public:
-    // ⚡️ vocal-time-stretch §6.3 — shared global LRU pool accessors.
-    // Promoted to public so TimeStretchCache (Stage 2 cache) can account its
-    // bytes into the same 256 MB global limit.  Both caches feed the same
-    // counter; eviction is per-cache (RenderCache evicts its oldest chunk
-    // when over limit; TimeStretchCache replaces by contentId).
     static std::atomic<size_t>& globalCacheLimitBytes();
     static std::atomic<size_t>& globalCacheCurrentBytes();
     static std::atomic<size_t>& globalCachePeakBytes();

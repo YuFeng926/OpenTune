@@ -66,4 +66,25 @@ std::vector<float> ResamplingManager::resample(
     return output;
 }
 
+std::vector<float> ResamplingManager::resampleExactLength(
+    const float* input, size_t inputLength,
+    int inputSR, int targetSR, int outputLength)
+{
+    if (outputLength <= 0 || inputLength == 0)
+        return {};
+
+    if (inputSR == targetSR) {
+        return std::vector<float>(input, input + inputLength);
+    }
+
+    r8b::CDSPResampler24 resampler(
+        static_cast<double>(inputSR),
+        static_cast<double>(targetSR),
+        static_cast<int>(inputLength));
+
+    std::vector<float> output(static_cast<size_t>(outputLength));
+    resampler.oneshot(input, static_cast<int>(inputLength), output.data(), outputLength);
+    return output;
+}
+
 } // namespace OpenTune

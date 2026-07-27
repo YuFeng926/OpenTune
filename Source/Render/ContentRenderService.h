@@ -79,7 +79,6 @@ public:
     void detachExecutionLease(void* owner);
 
     void enqueueRender(RenderJob job);
-    bool hasPendingJobs() const;
     void beginAsyncRenderJob();
     void completeAsyncRenderJob();
     void pauseRenderWorker();
@@ -97,11 +96,8 @@ public:
     // Utility
     void clearAll();
 
-    // Accessors for focused runtime services.
-    PlaybackSourcePublisher& playbackSources() noexcept { return playbackSources_; }
-    RenderCacheRegistry& renderCaches() noexcept { return renderCaches_; }
-    RenderWorker& renderWorker() noexcept { return renderWorker_; }
-    StretcherPool& stretchers() noexcept { return stretchers_; }
+    /** 设置目标播放采样率，依次驱动 publisher → registry → TimeStretchCache。 */
+    void preparePlaybackSampleRate(double targetSr);
 
 private:
     PlaybackSourcePublisher playbackSources_;

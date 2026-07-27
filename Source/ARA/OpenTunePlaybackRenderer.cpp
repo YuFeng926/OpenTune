@@ -61,8 +61,8 @@ OpenTunePlaybackRenderer::OpenTunePlaybackRenderer(ARA::PlugIn::DocumentControll
     , documentController_(docController)
 {
     std::atomic_store_explicit(&contentRenderServiceSnapshot_,
-                               docController ? docController->getContentRenderServiceShared() : nullptr,
-                               std::memory_order_release);
+                                docController ? docController->getContentRenderServiceShared() : nullptr,
+                                std::memory_order_release);
 }
 
 OpenTunePlaybackRenderer::~OpenTunePlaybackRenderer()
@@ -184,6 +184,10 @@ void OpenTunePlaybackRenderer::prepareToPlay(double sampleRate,
                              true,
                              true);
 
+    // 设备率切换 → 准备所有 CRS caches（各 cache 使用自有 resampler）
+    if (contentRenderServiceSnapshot_) {
+        contentRenderServiceSnapshot_->preparePlaybackSampleRate(sampleRate);
+    }
 }
 
 void OpenTunePlaybackRenderer::releaseResources()
@@ -235,9 +239,10 @@ bool OpenTunePlaybackRenderer::processBlock(juce::AudioBuffer<float>& buffer,
             continue;
 
         const double readStartSeconds = mapPlaybackTimeToContentTime(region,
-                                                                           overlap->overlapStartSeconds);
+                                                                             overlap->overlapStartSeconds);
+        const int64_t readStartSample = TimeCoordinate::secondsToSamples(readStartSeconds, hostSampleRate_);
         const ::OpenTune::PlaybackReadRequest request(readSource,
-                                           readStartSeconds,
+                                           readStartSample,
                                            hostSampleRate_,
                                            overlap->samplesToCopy);
 

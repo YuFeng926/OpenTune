@@ -1,6 +1,5 @@
 #include "StretcherPool.h"
 #include "../Inference/SoundTouchStretcher.h"
-#include "../Inference/SoundTouchStretcher.h"
 
 namespace OpenTune {
 

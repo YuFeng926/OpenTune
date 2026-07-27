@@ -107,11 +107,6 @@ std::vector<PitchCorrectionSegment> copyPitchCorrectionSegments(const std::share
     return copiedSegments;
 }
 
-std::vector<PitchCorrectionSegment> correctionSegmentsFromCurve(const std::shared_ptr<PitchCurve>& curve)
-{
-    return copyPitchCorrectionSegments(curve);
-}
-
 ContentPayloadState payloadFromSnapshot(const EditableContentSnapshot& snap)
 {
     ContentPayloadState payload;
@@ -150,7 +145,6 @@ void publishStandalonePlaybackSource(ContentRenderService& crs,
     readSource.pitchRevision = payload.pitchRevision;
     readSource.timeGridRevision = payload.timeGridRevision;
     readSource.pitchShiftRevision = payload.pitchShiftRevision;
-    readSource.pitchShiftSettings = payload.pitchShiftSettings;
     readSource.timeGridIsIdentity = payload.timeGrid == nullptr || payload.timeGrid->isIdentity();
     crs.publishPlaybackSource(key, std::move(readSource));
 }
@@ -517,7 +511,7 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     constexpr double kExportSr = TimeCoordinate::kRenderSampleRate;
 
     if (!placement.contentKey.isValid() || placement.durationSeconds <= 0.0 || placementStartInOutput >= totalLen
-        || !source.canRead()) {
+        || !source.hasAudio()) {
         return;
     }
 
@@ -532,13 +526,12 @@ void renderPlacementForExport(OpenTuneAudioProcessor& processor,
     juce::AudioBuffer<float> placementBuffer(out.getNumChannels(), samplesToRender);
     placementBuffer.clear();
 
-    ::OpenTune::PlaybackReadRequest readRequest;
+    ::OpenTune::CanonicalReadRequest readRequest;
     readRequest.source = source;
-    readRequest.readStartSeconds = placement.clipInSeconds; // was 0.0, respect trim offset
-    readRequest.targetSampleRate = kExportSr;
+    readRequest.readStartSample = TimeCoordinate::secondsToSamples(placement.clipInSeconds, kExportSr);
     readRequest.numSamples = samplesToRender;
 
-    const int renderedSamples = processor.readPlaybackAudio(readRequest, placementBuffer, 0);
+    const int renderedSamples = ::OpenTune::readCanonicalAudio(readRequest, placementBuffer, 0);
     if (renderedSamples <= 0) {
         return;
     }
@@ -886,7 +879,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             }
             ::OpenTune::PlaybackReadRequest req;
             req.source = readSource;
-            req.readStartSeconds = readStartSeconds;
+            req.readStartSample = TimeCoordinate::secondsToSamples(readStartSeconds, targetSampleRate);
             req.targetSampleRate = targetSampleRate;
             req.numSamples = numSamples;
             buffer.clear(destStart, numSamples);
@@ -1381,18 +1374,35 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     currentSampleRate_ = sampleRate;
     currentBlockSize_ = samplesPerBlock;
-    
-    // Calculate fade-out duration: 200ms = 0.2 seconds
-    fadeOutTotalSamples_ = static_cast<int>(sampleRate * 0.2);
-    
+
+    // Project sampleCursor from old device rate to new device rate (one-shot)
     if (sampleRateChanged && oldSampleRate > 0.0) {
-        AppLogger::log("Sample rate changed: " + juce::String(oldSampleRate, 0) + 
-                        " -> " + juce::String(sampleRate, 0) + 
-                       ", rebuilding playback assets");
-
-
+        const int64_t oldCursor = playHeadState_.sampleCursor.load(std::memory_order_relaxed);
+        const int64_t newCursor = TimeCoordinate::sampleRateProject(oldCursor, oldSampleRate, sampleRate);
+        playHeadState_.sampleCursor.store(newCursor, std::memory_order_relaxed);
+        AppLogger::log("prepareToPlay: sampleCursor projected from " + juce::String(oldCursor)
+                       + " to " + juce::String(newCursor));
     }
 
+    // Cancel any active fade; audio thread will see fadeActive_==false next block
+    fadeActive_ = false;
+
+    // CRS playback rate: call new single-param contract (publisher self-prepares)
+    if (contentRenderService_) {
+        contentRenderService_->preparePlaybackSampleRate(sampleRate);
+    }
+
+    // Calculate fade duration: 0.2 seconds in device samples
+    fadeTotalSamples_ = static_cast<int>(sampleRate * 0.2);
+
+    // Set phase based on current sampleCursor: 0→Stopped, else→Paused
+    {
+        const int64_t cursor = playHeadState_.sampleCursor.load(std::memory_order_relaxed);
+        phase_ = (cursor == 0) ? RuntimePhase::Stopped : RuntimePhase::Paused;
+    }
+
+    // Sync seqlock sequences so audio thread does not replay stale commands on restart
+    appliedControlSequence_ = controlSequence_.load(std::memory_order_acquire);
 
     doublePrecisionScratch_.setSize(std::max(1, getTotalNumOutputChannels()), std::max(1, currentBlockSize_), false, true, true);
     trackMixScratch_.setSize(std::max(1, getTotalNumOutputChannels()), std::max(1, currentBlockSize_), false, true, true);
@@ -1401,6 +1411,13 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     // Transport reset on (re)prepare: clear play/loop flags; keep last known
     // time/loop range and hostPositionRevision. Mirrors releaseResources().
     playHeadState_.reset();
+
+    // Sync time mirror after projection (if rate changed, cursor was projected above)
+    {
+        const int64_t cursor = playHeadState_.sampleCursor.load(std::memory_order_relaxed);
+        const double posSec = TimeCoordinate::samplesToSeconds(cursor, sampleRate);
+        playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
+    }
 
 #if JucePlugin_Enable_ARA
     prepareToPlayForARA(sampleRate,
@@ -1415,6 +1432,15 @@ void OpenTuneAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 }
 
 void OpenTuneAudioProcessor::releaseResources() {
+    // Cancel fade; set phase based on sampleCursor
+    fadeActive_ = false;
+    {
+        const int64_t cursor = playHeadState_.sampleCursor.load(std::memory_order_relaxed);
+        phase_ = (cursor == 0) ? RuntimePhase::Stopped : RuntimePhase::Paused;
+    }
+    // Sync seqlock sequences
+    appliedControlSequence_ = controlSequence_.load(std::memory_order_acquire);
+
     // Transport reset on release: clear play/loop flags; keep last known
     // time/loop range and hostPositionRevision. Mirrors prepareToPlay().
     playHeadState_.reset();
@@ -1646,22 +1672,155 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         return;
     }
 
-    // --- Standalone gain/silence handling ---
+    // --- Standalone state machine ---
     // Clear output buffer
     for (int i = 0; i < totalNumOutputChannels; ++i) {
         buffer.clear(i, 0, numSamples);
     }
 
-    // Handle fade-out state (Standalone use case)
-    bool isFading = isFadingOut_.load();
-    bool isPlaying = playHeadState_.isPlaying.load();
-    
-    if (!isPlaying && !isFading) {
-        // Fully stopped -- still mix piano key audition so preview works without transport
-        pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, currentSampleRate_.load());
+    const double deviceSampleRate = currentSampleRate_.load();
+
+    // ==== BLOCK START: Consume seqlock command snapshot ====
+    // Read stable even-sequence snapshot atomically. Control thread publishes
+    // cursor intent (pendingMainCursor_, pendingTargetCursor_, pendingIsPlaying_)
+    // but NEVER writes sampleCursor. Audio thread is the sole canonical writer.
+    // Seq-odd skipping is safe: control no longer writes sampleCursor, so a
+    // partial snapshot cannot corrupt cursor state.
+    {
+        uint64_t seq1 = controlSequence_.load(std::memory_order_acquire);
+        if ((seq1 & 1) == 0 && seq1 != 0 && seq1 != appliedControlSequence_) {
+            TransportCommand cmd = pendingCommand_.load(std::memory_order_relaxed);
+            int64_t mainCursor = pendingMainCursor_.load(std::memory_order_relaxed);
+            int64_t targetCursor = pendingTargetCursor_.load(std::memory_order_relaxed);
+            bool desiredPlaying = pendingIsPlaying_.load(std::memory_order_relaxed);
+
+            uint64_t seq2 = controlSequence_.load(std::memory_order_acquire);
+            if (seq1 == seq2) {
+                // Snapshot consistent — apply. Audio thread writes sampleCursor.
+                appliedControlSequence_ = seq1;
+
+                switch (cmd) {
+                case TransportCommand::Play:
+                    fadeActive_ = false;
+                    playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
+                    phase_ = RuntimePhase::Playing;
+                    break;
+
+                case TransportCommand::Pause:
+                {
+                    switch (phase_) {
+                    case RuntimePhase::Playing:
+                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
+                        fadeActive_ = true;
+                        fadeElapsed_ = 0;
+                        fadeReadCursor_ = mainCursor;
+                        fadeCompletionCursor_ = mainCursor;
+                        fadeCompletionPhase_ = RuntimePhase::Paused;
+                        phase_ = RuntimePhase::Fading;
+                        break;
+                    case RuntimePhase::Fading:
+                        // Update completion only; keep fadeReadCursor/elapsed continuing
+                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
+                        fadeCompletionCursor_ = mainCursor;
+                        fadeCompletionPhase_ = RuntimePhase::Paused;
+                        break;
+                    default: // Paused, Stopped
+                        // No audio to read; directly commit main cursor
+                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
+                        phase_ = RuntimePhase::Paused;
+                        break;
+                    }
+                    break;
+                }
+
+                case TransportCommand::Stop:
+                {
+                    switch (phase_) {
+                    case RuntimePhase::Playing:
+                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
+                        fadeActive_ = true;
+                        fadeElapsed_ = 0;
+                        fadeReadCursor_ = mainCursor;
+                        fadeCompletionCursor_ = 0;
+                        fadeCompletionPhase_ = RuntimePhase::Stopped;
+                        phase_ = RuntimePhase::Fading;
+                        break;
+                    case RuntimePhase::Fading:
+                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
+                        fadeCompletionCursor_ = 0;
+                        fadeCompletionPhase_ = RuntimePhase::Stopped;
+                        break;
+                    default: // Paused, Stopped
+                        playHeadState_.sampleCursor.store(0, std::memory_order_relaxed);
+                        phase_ = RuntimePhase::Stopped;
+                        break;
+                    }
+                    break;
+                }
+
+                case TransportCommand::Seek:
+                    fadeActive_ = false;
+                    playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
+                    phase_ = desiredPlaying ? RuntimePhase::Playing : RuntimePhase::Paused;
+                    break;
+
+                case TransportCommand::PauseAtPosition:
+                {
+                    switch (phase_) {
+                    case RuntimePhase::Playing:
+                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
+                        fadeActive_ = true;
+                        fadeElapsed_ = 0;
+                        fadeReadCursor_ = mainCursor;
+                        fadeCompletionCursor_ = targetCursor;
+                        fadeCompletionPhase_ = RuntimePhase::Paused;
+                        phase_ = RuntimePhase::Fading;
+                        break;
+                    case RuntimePhase::Fading:
+                        // Update completion target only; keep fadeReadCursor/elapsed continuing
+                        playHeadState_.sampleCursor.store(mainCursor, std::memory_order_relaxed);
+                        fadeCompletionCursor_ = targetCursor;
+                        fadeCompletionPhase_ = RuntimePhase::Paused;
+                        break;
+                    default: // Paused, Stopped
+                        playHeadState_.sampleCursor.store(targetCursor, std::memory_order_relaxed);
+                        phase_ = RuntimePhase::Paused;
+                        break;
+                    }
+                    break;
+                }
+
+                case TransportCommand::None:
+                    break;
+                }
+            }
+        }
+    }
+
+    // Capture epoch AFTER command consumption. A control write during this
+    // block bumps presentationEpoch, so block-end epoch checks will reject
+    // stale cursor commits.
+    const uint64_t blockEpoch = playHeadState_.presentationEpoch.load(std::memory_order_acquire);
+
+    // Determine read cursor for this block
+    int64_t blockStartSample = 0;
+    if (phase_ == RuntimePhase::Fading && fadeActive_) {
+        blockStartSample = fadeReadCursor_;
+    } else if (phase_ == RuntimePhase::Playing) {
+        blockStartSample = playHeadState_.sampleCursor.load(std::memory_order_relaxed);
+    } else {
+        // Stopped or Paused with no active fade — only piano audition
+        pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
         jassert(standaloneArrangement_ != nullptr);
         for (int trackId = 0; trackId < MAX_TRACKS; ++trackId) {
             standaloneArrangement_->setTrackRmsDb(trackId, -100.0f);
+        }
+        // Derive UI mirror only when no new command arrived during this block.
+        // Control thread writes timeInSeconds directly; stale block must not overwrite it.
+        if (playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
+            const double posSec = TimeCoordinate::samplesToSeconds(
+                playHeadState_.sampleCursor.load(std::memory_order_relaxed), deviceSampleRate);
+            playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
         }
         return;
     }
@@ -1671,24 +1830,18 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     jassert(clipReadScratch_.getNumChannels() >= totalNumOutputChannels);
     jassert(clipReadScratch_.getNumSamples() >= numSamples);
 
-    const double deviceSampleRate = currentSampleRate_.load();
     const double blockDurationSeconds = static_cast<double>(numSamples) / deviceSampleRate;
-    const double currentPosSeconds = playHeadState_.timeInSeconds.load(std::memory_order_relaxed);
+    const double currentPosSeconds = TimeCoordinate::samplesToSeconds(blockStartSample, deviceSampleRate);
     const double blockEndSeconds = currentPosSeconds + blockDurationSeconds;
+    const int64_t blockEndSample = blockStartSample + static_cast<int64_t>(numSamples);
 
-    // Capture the epoch at block entry. Used at block-end to guard the CAS:
-    // a pause that happened during this block bumps the epoch, so the CAS
-    // below will see a mismatch and skip, preserving the pause position.
-    const uint64_t blockEpoch = playHeadState_.presentationEpoch.load(std::memory_order_acquire);
-
-    // Publish Standalone projection anchor (tagged with the block's epoch)
-    {
+    // Publish projection anchor ONLY when Playing (requirement 7).
+    // Fading: isPlaying=false, main cursor frozen, fadeReadCursor advances independently.
+    // No projection anchor published — UI reads freeze cursor via isPlaying==false path.
+    if (phase_ == RuntimePhase::Playing) {
         const double nowClock = juce::Time::getMillisecondCounterHiRes() * 0.001;
         playHeadState_.presentationProjection.publish(currentPosSeconds, nowClock, blockEndSeconds, blockEpoch);
     }
-
-    const int64_t blockStartSample = TimeCoordinate::secondsToSamples(currentPosSeconds, deviceSampleRate);
-    const int64_t blockEndSample = blockStartSample + static_cast<int64_t>(numSamples);
 
     const auto playbackSnapshot = standaloneArrangement_->loadPlaybackSnapshot();
 
@@ -1750,7 +1903,6 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
             const int64_t clipInSampleOffset = TimeCoordinate::secondsToSamples(placement.clipInSeconds, deviceSampleRate);
             const int64_t readStartSample = overlapStartSample - placementStartSample + clipInSampleOffset;
-            const double readStartSeconds = TimeCoordinate::samplesToSeconds(readStartSample, deviceSampleRate);
             const int offsetInBlock = static_cast<int>(overlapStartSample - blockStartSample);
             const int samplesToCopy = static_cast<int>(samplesToCopy64);
 
@@ -1758,12 +1910,9 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             const double fadeInSeconds = placement.fadeInDuration;
             const double fadeOutSeconds = placement.fadeOutDuration;
 
-            // ====================================================================
-            // Unified Playback Read API call
-            // ====================================================================
             ::OpenTune::PlaybackReadRequest readRequest;
             readRequest.source = readSource;
-            readRequest.readStartSeconds = readStartSeconds;
+            readRequest.readStartSample = readStartSample;
             readRequest.targetSampleRate = deviceSampleRate;
             readRequest.numSamples = samplesToCopy;
 
@@ -1774,8 +1923,6 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 const float* src = clipReadScratch_.getReadPointer(ch);
                 float* dst = trackMixScratch_.getWritePointer(ch, offsetInBlock);
 
-                // Use placement-local time (offset by clipInSeconds so fade works
-                // relative to visible clip, not from raw content start)
                 double timeInPlacement = TimeCoordinate::samplesToSeconds(readStartSample, deviceSampleRate) - placement.clipInSeconds;
                 const double dt = 1.0 / deviceSampleRate;
                 for (int s = 0; s < availableReadSamples; ++s) {
@@ -1822,57 +1969,53 @@ void OpenTuneAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         }
     }
 
-    if (isFadingOut_.load()) {
-        int fadeCount = fadeOutSampleCount_.load();
-        int fadeTotal = fadeOutTotalSamples_;
-        
+    // ==== Fade processing (per-sample continuous gain) ====
+    if (phase_ == RuntimePhase::Fading && fadeActive_) {
         for (int sample = 0; sample < numSamples; ++sample) {
-            int currentSample = fadeCount + sample;
-            float fadeGain = 1.0f;
-            
-            if (currentSample < fadeTotal) {
-                fadeGain = 1.0f - static_cast<float>(currentSample) / static_cast<float>(fadeTotal);
+            const int currentFadeSample = fadeElapsed_ + sample;
+            float fadeGain;
+            if (currentFadeSample < fadeTotalSamples_) {
+                fadeGain = 1.0f - static_cast<float>(currentFadeSample) / static_cast<float>(fadeTotalSamples_);
             } else {
                 fadeGain = 0.0f;
             }
-            
             for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
                 buffer.setSample(ch, sample, buffer.getSample(ch, sample) * fadeGain);
             }
         }
-        
-        fadeCount += numSamples;
-        fadeOutSampleCount_.store(fadeCount);
-        
-        if (fadeCount >= fadeTotal) {
-            isFadingOut_.store(false);
-            playHeadState_.isPlaying.store(false, std::memory_order_release);
-            AudioThreadLogEvent evt;
-            evt.type = AudioThreadLogEvent::Type::FadeOutComplete;
-            logEventData_ = evt;
-            logEventGeneration_.fetch_add(1, std::memory_order_release);
-            
-            for (int ch = 0; ch < totalNumOutputChannels; ++ch) {
-                for (int s = 0; s < numSamples; ++s) {
-                    buffer.setSample(ch, s, 0.0f);
-                }
+
+        fadeElapsed_ += numSamples;
+        fadeReadCursor_ += numSamples;
+
+        if (fadeElapsed_ >= fadeTotalSamples_) {
+            // Epoch guard: only commit if no new command arrived during this block.
+            // If epoch changed, keep Fading state — next block will consume new command.
+            // Never end fade then skip cursor commit (requirement 6).
+            if (playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
+                fadeActive_ = false;
+                phase_ = fadeCompletionPhase_;
+                playHeadState_.sampleCursor.store(fadeCompletionCursor_, std::memory_order_relaxed);
+                // isPlaying already false (control thread set it in Pause/Stop/PauseAt)
             }
+            // else: epoch changed → keep Fading. Next block consumes new command.
         }
     }
 
     pianoKeyAudition_.mixIntoBuffer(buffer, numSamples, deviceSampleRate);
 
-    // Standalone transport advance — only advance when play was not paused
-    // during this block. The blockEpoch snapshotted at entry is compared against
-    // the live presentationEpoch: if a setPlaying(false) call on another thread
-    // bumped the epoch during this block, the CAS is skipped and the pause
-    // position is preserved. Acquire-load of the live epoch pairs with the
-    // acq_rel epoch bump in setPlaying(false).
-    if (playHeadState_.isPlaying.load(std::memory_order_relaxed)
-        && playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch)
-    {
-        double expected = currentPosSeconds;
-        playHeadState_.timeInSeconds.compare_exchange_strong(expected, blockEndSeconds, std::memory_order_relaxed);
+    // ==== Block-end: cursor advance (Playing phase only) ====
+    if (phase_ == RuntimePhase::Playing) {
+        if (playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
+            int64_t expected = blockStartSample;
+            playHeadState_.sampleCursor.compare_exchange_strong(expected, blockEndSample, std::memory_order_relaxed);
+        }
+    }
+
+    // A control command arriving during this block owns the UI mirror.
+    if (playHeadState_.presentationEpoch.load(std::memory_order_acquire) == blockEpoch) {
+        const double positionSeconds = TimeCoordinate::samplesToSeconds(
+            playHeadState_.sampleCursor.load(std::memory_order_relaxed), deviceSampleRate);
+        playHeadState_.timeInSeconds.store(positionSeconds, std::memory_order_relaxed);
     }
 }
 
@@ -2251,7 +2394,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     };
     leadingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, 0, splitSample);
     leadingPayload.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve, 0.0, splitOffsetSeconds);
-    leadingPayload.correctionSegments = correctionSegmentsFromCurve(leadingPayload.pitchCurve);
+    leadingPayload.correctionSegments = copyPitchCorrectionSegments(leadingPayload.pitchCurve);
     leadingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes, 0.0, splitOffsetSeconds);
     leadingPayload.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, 0, splitSample);
     leadingPayload.timeGrid = nullptr;
@@ -2267,7 +2410,7 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     trailingPayload.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve,
                                                              splitOffsetSeconds,
                                                              originalPlacement.durationSeconds);
-    trailingPayload.correctionSegments = correctionSegmentsFromCurve(trailingPayload.pitchCurve);
+    trailingPayload.correctionSegments = copyPitchCorrectionSegments(trailingPayload.pitchCurve);
     trailingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes,
                                                    splitOffsetSeconds,
                                                    originalPlacement.durationSeconds);
@@ -2439,7 +2582,7 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     mergedPayload.originalF0State = leadingSnapshot->originalF0State;
     mergedPayload.detectedKey = leadingSnapshot->detectedKey;
     mergedPayload.notes = std::move(mergedNotes);
-    mergedPayload.correctionSegments = correctionSegmentsFromCurve(mergedPayload.pitchCurve);
+    mergedPayload.correctionSegments = copyPitchCorrectionSegments(mergedPayload.pitchCurve);
     mergedPayload.silentGaps = mergeSilentGaps(leadingSnapshot->silentGaps, trailingSnapshot->silentGaps, leadingSamples);
     mergedPayload.pitchShiftSettings = leadingSnapshot->pitchShiftSettings;
 
@@ -2799,14 +2942,6 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     job.contentKey = key;
     job.renderCache = renderCache;
     job.audioBuffer = audioBuffer;
-    job.startSeconds = static_cast<double>(startSample) / crsSampleRate;
-    job.endSeconds = static_cast<double>(endSample) / crsSampleRate;
-    job.targetRevision = snap->contentRevision;
-    job.renderRevision = snap->contentRevision;
-    job.pitchRevision = snap->pitchRevision;
-    job.pitchShiftRevision = snap->pitchShiftRevision;
-    job.timeGridRevision = snap->timeGridRevision;
-    job.contentRevision = snap->contentRevision;
     job.silentGaps = snap->silentGaps;
     job.audioSampleRate = crsSampleRate;
     job.startSample = startSample;
@@ -2857,11 +2992,9 @@ void OpenTuneAudioProcessor::refreshCRSMetadata(ContentKey key)
         return;
 
     src.renderCache        = crs.getOrCreateRenderCache(key);
-    src.renderRevision     = snap->contentRevision;
     src.pitchRevision      = snap->pitchRevision;
     src.timeGridRevision   = snap->timeGridRevision;
     src.pitchShiftRevision = snap->pitchShiftRevision;
-    src.pitchShiftSettings = snap->pitchShiftSettings;
     src.timeGridIsIdentity = snap->timeGrid == nullptr || snap->timeGrid->isIdentity();
 
     crs.publishPlaybackSource(key, src);
@@ -2954,7 +3087,7 @@ bool OpenTuneAudioProcessor::exportPlacementAudio(int trackId, int placementInde
     contentRenderService_->drainRenderWorker();
 
     PlaybackReadSource source;
-    if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.canRead()) {
+    if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.hasAudio()) {
         lastExportError_ = "Placement audio is unavailable";
         return false;
     }
@@ -3014,7 +3147,7 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
             continue;
         }
         PlaybackReadSource checkSource;
-        if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, checkSource) || !checkSource.canRead()) {
+        if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, checkSource) || !checkSource.hasAudio()) {
             continue;
         }
         const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
@@ -3036,7 +3169,7 @@ bool OpenTuneAudioProcessor::exportTrackAudio(int trackId, const juce::File& fil
             continue;
         }
         PlaybackReadSource source;
-        if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.canRead()) {
+        if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.hasAudio()) {
             continue;
         }
         const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
@@ -3074,7 +3207,7 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
         const auto& track = playbackSnapshot->tracks[static_cast<size_t>(trackId)];
         for (const auto& placement : track.placements) {
             PlaybackReadSource checkSource;
-            if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, checkSource) || !checkSource.canRead()) {
+            if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, checkSource) || !checkSource.hasAudio()) {
                 continue;
             }
             const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
@@ -3100,7 +3233,7 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
 
         for (const auto& placement : track.placements) {
             PlaybackReadSource source;
-            if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.canRead()) {
+            if (!contentRenderService_->getPlaybackReadSource(placement.contentKey, source) || !source.hasAudio()) {
                 continue;
             }
             const int64_t placementStart = TimeCoordinate::secondsToSamples(placement.timelineStartSeconds, kExportSr);
@@ -3112,40 +3245,95 @@ bool OpenTuneAudioProcessor::exportMasterMixAudio(const juce::File& file) {
 }
 
 // ============================================================================
-// 播放控制 (Standalone writes only)
+// 播放控制 (Standalone writes only) — control thread posts atomic commands;
+// audio thread executes the state machine in processBlock.
 // ============================================================================
 
-void OpenTuneAudioProcessor::setPlaying(bool playing) {
-    if (playing) {
-        // Play: bump epoch first (acq_rel full barrier) so that any stale
-        // projection anchor is invalidated before isPlaying becomes visible.
-        // isPlaying release forms the synchronizes-with pair for
-        // getPresentedPositionAt's acquire.
-        playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
-        playStartPosition_.store(playHeadState_.timeInSeconds.load(std::memory_order_relaxed));
-        isFadingOut_.store(false);
-        playHeadState_.isPlaying.store(true, std::memory_order_release);
-        AppLogger::log("Playback: start");
-    } else {
-        // Pause (setPlaying(false)) — precise ordering:
-        //   1) Capture projected position from the current UI view of the playhead.
-        //   2) Invalidate the block epoch (acq_rel full barrier) so any in-flight
-        //      processBlock tail cannot CAS its blockEnd over the pause position.
-        //   3) Write the canonical pause position.
-        //   4) isPlaying.store(false, release): UI acquire sees false → pause
-        //      position is visible. The release on isPlaying (not the epoch)
-        //      orders timeInSeconds and isPlaying to the reader.
-        const double presentedPos = playHeadState_.getPresentedPositionSeconds();
-        const bool wasPlaying = playHeadState_.isPlaying.load(std::memory_order_relaxed);
-        playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
-        playHeadState_.timeInSeconds.store(presentedPos, std::memory_order_relaxed);
-        playHeadState_.isPlaying.store(false, std::memory_order_release);
-        if (wasPlaying) {
-            isFadingOut_.store(true);
-            fadeOutSampleCount_.store(0);
-            AppLogger::log("Playback: fade-out started");
-        }
-    }
+void OpenTuneAudioProcessor::play() {
+    const double sr = currentSampleRate_.load(std::memory_order_relaxed);
+    const double srSafe = sr > 0.0 ? sr : 44100.0;
+    const double posSec = playHeadState_.getPresentedPositionSeconds();
+    const int64_t mainCursor = TimeCoordinate::secondsToSamples(posSec, srSafe);
+    const double posMirror = TimeCoordinate::samplesToSeconds(mainCursor, srSafe);
+
+    // Store quantized play-start position for playFromStart feature
+    playStartPosition_.store(posMirror);
+
+    // Seqlock write: control publishes cursor intent only; never writes sampleCursor.
+    controlSequence_.fetch_add(1, std::memory_order_acq_rel); // odd
+    playHeadState_.timeInSeconds.store(posMirror, std::memory_order_relaxed);
+    playHeadState_.isPlaying.store(true, std::memory_order_release);
+    playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
+    pendingMainCursor_.store(mainCursor, std::memory_order_relaxed);
+    pendingTargetCursor_.store(0, std::memory_order_relaxed);
+    pendingIsPlaying_.store(true, std::memory_order_relaxed);
+    pendingCommand_.store(TransportCommand::Play, std::memory_order_relaxed);
+    controlSequence_.fetch_add(1, std::memory_order_release); // even
+
+    AppLogger::log("Playback: play mainCursor=" + juce::String(mainCursor));
+}
+
+void OpenTuneAudioProcessor::pause() {
+    const double sr = currentSampleRate_.load(std::memory_order_relaxed);
+    const double srSafe = sr > 0.0 ? sr : 44100.0;
+    const double posSec = playHeadState_.getPresentedPositionSeconds();
+    const int64_t mainCursor = TimeCoordinate::secondsToSamples(posSec, srSafe);
+
+    // Seqlock write: control publishes cursor intent only; never writes sampleCursor.
+    controlSequence_.fetch_add(1, std::memory_order_acq_rel);
+    playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
+    playHeadState_.isPlaying.store(false, std::memory_order_release);
+    playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
+    pendingMainCursor_.store(mainCursor, std::memory_order_relaxed);
+    pendingTargetCursor_.store(mainCursor, std::memory_order_relaxed);
+    pendingIsPlaying_.store(false, std::memory_order_relaxed);
+    pendingCommand_.store(TransportCommand::Pause, std::memory_order_relaxed);
+    controlSequence_.fetch_add(1, std::memory_order_release);
+
+    AppLogger::log("Playback: pause mainCursor=" + juce::String(mainCursor));
+}
+
+void OpenTuneAudioProcessor::stop() {
+    const double sr = currentSampleRate_.load(std::memory_order_relaxed);
+    const double srSafe = sr > 0.0 ? sr : 44100.0;
+    const double posSec = playHeadState_.getPresentedPositionSeconds();
+    const int64_t mainCursor = TimeCoordinate::secondsToSamples(posSec, srSafe);
+
+    // Seqlock write: control publishes cursor intent only; never writes sampleCursor.
+    controlSequence_.fetch_add(1, std::memory_order_acq_rel);
+    playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
+    playHeadState_.isPlaying.store(false, std::memory_order_release);
+    playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
+    pendingMainCursor_.store(mainCursor, std::memory_order_relaxed);
+    pendingTargetCursor_.store(0, std::memory_order_relaxed);
+    pendingIsPlaying_.store(false, std::memory_order_relaxed);
+    pendingCommand_.store(TransportCommand::Stop, std::memory_order_relaxed);
+    controlSequence_.fetch_add(1, std::memory_order_release);
+
+    AppLogger::log("Playback: stop mainCursor=" + juce::String(mainCursor));
+}
+
+void OpenTuneAudioProcessor::pauseAtPosition(double targetSeconds) {
+    const double sr = currentSampleRate_.load(std::memory_order_relaxed);
+    const double srSafe = sr > 0.0 ? sr : 44100.0;
+    const double posSec = playHeadState_.getPresentedPositionSeconds();
+    const int64_t mainCursor = TimeCoordinate::secondsToSamples(posSec, srSafe);
+    const int64_t targetCursor = TimeCoordinate::secondsToSamples(targetSeconds, srSafe);
+
+    // Seqlock write: control publishes cursor intent only; never writes sampleCursor.
+    // timeInSeconds mirror = mainCursor seconds (UI freezes at presented position during fade).
+    controlSequence_.fetch_add(1, std::memory_order_acq_rel);
+    playHeadState_.timeInSeconds.store(posSec, std::memory_order_relaxed);
+    playHeadState_.isPlaying.store(false, std::memory_order_release);
+    playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
+    pendingMainCursor_.store(mainCursor, std::memory_order_relaxed);
+    pendingTargetCursor_.store(targetCursor, std::memory_order_relaxed);
+    pendingIsPlaying_.store(false, std::memory_order_relaxed);
+    pendingCommand_.store(TransportCommand::PauseAtPosition, std::memory_order_relaxed);
+    controlSequence_.fetch_add(1, std::memory_order_release);
+
+    AppLogger::log("Playback: pauseAtPosition mainCursor=" + juce::String(mainCursor)
+                   + " target=" + juce::String(targetCursor));
 }
 
 void OpenTuneAudioProcessor::setLoopEnabled(bool enabled) {
@@ -3153,11 +3341,27 @@ void OpenTuneAudioProcessor::setLoopEnabled(bool enabled) {
 }
 
 void OpenTuneAudioProcessor::setPosition(double seconds) {
-    // Write canonical position then release the epoch bump to make it visible.
-    // The release ensures timeInSeconds is ordered-before the epoch increment
-    // so any reader that acquires the new epoch also sees the new position.
+    const double sr = currentSampleRate_.load(std::memory_order_relaxed);
+    const double srSafe = sr > 0.0 ? sr : 44100.0;
+    const int64_t cursor = TimeCoordinate::secondsToSamples(seconds, srSafe);
+    const bool wasPlaying = playHeadState_.isPlaying.load(std::memory_order_acquire);
+
+    // Store quantized play-start position
+    playStartPosition_.store(TimeCoordinate::samplesToSeconds(cursor, srSafe));
+
+    // Seqlock write — Seek preserves current isPlaying state.
+    // control publishes cursor intent only; never writes sampleCursor.
+    // timeInSeconds mirror = quantized target seconds.
+    controlSequence_.fetch_add(1, std::memory_order_acq_rel);
     playHeadState_.timeInSeconds.store(seconds, std::memory_order_relaxed);
-    playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_release);
+    playHeadState_.presentationEpoch.fetch_add(1, std::memory_order_acq_rel);
+    pendingMainCursor_.store(cursor, std::memory_order_relaxed);
+    pendingTargetCursor_.store(cursor, std::memory_order_relaxed);
+    pendingIsPlaying_.store(wasPlaying, std::memory_order_relaxed);
+    pendingCommand_.store(TransportCommand::Seek, std::memory_order_relaxed);
+    controlSequence_.fetch_add(1, std::memory_order_release);
+
+    AppLogger::log("Playback: seek to " + juce::String(seconds, 3) + "s cursor=" + juce::String(cursor));
 }
 
 // ============================================================================
@@ -4708,125 +4912,6 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
 }
 
 // ============================================================================
-// Unified Playback Read API
-// ============================================================================
-
-int OpenTuneAudioProcessor::readPlaybackAudio(const ::OpenTune::PlaybackReadRequest& request,
-                                              juce::AudioBuffer<float>& destination,
-                                              int destinationStartSample) const
-{
-    if (request.numSamples <= 0
-        || request.targetSampleRate <= 0.0
-        || !request.source.canRead()
-        || request.source.audioBuffer == nullptr) {
-        return 0;
-    }
-
-    const int destinationChannels = destination.getNumChannels();
-    const int destinationSamples = destination.getNumSamples();
-    if (destinationChannels <= 0
-        || destinationSamples <= 0
-        || destinationStartSample < 0
-        || destinationStartSample >= destinationSamples) {
-        return 0;
-    }
-
-    const int writableSamples = juce::jmin(request.numSamples, destinationSamples - destinationStartSample);
-    if (writableSamples <= 0) {
-        return 0;
-    }
-
-    // ============================================================
-    // vocal-time-stretch §7 (Phase D MVP) -- TimeStretchCache fast-path
-    //
-    // When a non-identity TimeGrid is published and Stage 2 has populated the
-    // TimeStretchCache for this ContentKey/revision tuple, serve the stretched
-    // audio directly from cache.
-    //
-    // Otherwise continue with the owner-published base audio plus RenderCache
-    // overlay below.
-    // ============================================================
-    const uint64_t objectId = request.source.contentKey.objectId;
-    if (!request.source.timeGridIsIdentity
-        && request.source.timeStretchCache != nullptr
-        && objectId != 0) {
-        const int wrote = request.source.timeStretchCache->sliceForOutputRange(
-            request.source.contentKey,
-            request.source.pitchRevision,
-            request.source.pitchShiftRevision,
-            request.source.timeGridRevision,
-            request.readStartSeconds,
-            destination,
-            destinationStartSample,
-            writableSamples,
-            static_cast<int>(request.targetSampleRate));
-        if (wrote > 0) {
-            return wrote;
-        }
-        // Cache is not ready for this revision yet; continue with the base
-        // audio plus render overlay for this block.
-    }
-
-    const auto& srcBuffer = *request.source.audioBuffer;
-    const int srcChannels = srcBuffer.getNumChannels();
-    const int64_t srcLengthSamples = srcBuffer.getNumSamples();
-    const double srcSampleRate = request.source.audioSampleRate;
-    if (srcChannels <= 0 || srcLengthSamples <= 0 || srcSampleRate <= 0.0) {
-        return 0;
-    }
-
-    const double ratio = srcSampleRate / request.targetSampleRate;
-    const double readStartInSrcSamples = request.readStartSeconds * srcSampleRate;
-    if (readStartInSrcSamples < 0.0 || readStartInSrcSamples >= static_cast<double>(srcLengthSamples)) {
-        return 0;
-    }
-
-    // Compute available output samples
-    const int maxSrcSample = static_cast<int>(srcLengthSamples) - 1;
-    int availableSamples = writableSamples;
-    {
-        const double lastSrcPos = readStartInSrcSamples + (writableSamples - 1) * ratio;
-        if (lastSrcPos >= static_cast<double>(srcLengthSamples)) {
-            availableSamples = static_cast<int>((static_cast<double>(srcLengthSamples) - readStartInSrcSamples) / ratio);
-            if (availableSamples <= 0) return 0;
-        }
-    }
-
-    // Write dry signal with linear interpolation (single pass, pointer-based).
-    //
-    // Per channel-layout-policy spec: srcChannels is guaranteed ∈ {1, 2} (enforced
-    // at `content creation`). The `srcCh = ch % srcChannels`
-    // mapping below covers both layouts naturally:
-    //   - srcChannels=1 (mono storage): every dest ch maps to src 0 -- broadcast.
-    //   - srcChannels=2 (stereo storage): dest ch 0 → src 0, ch 1 → src 1 → 1:1 map.
-    // No extra channel-count guards or general-N-channel handling needed.
-    for (int channel = 0; channel < destinationChannels; ++channel) {
-        const int srcCh = channel % srcChannels;
-        const float* srcPtr = srcBuffer.getReadPointer(srcCh);
-        float* dstPtr = destination.getWritePointer(channel, destinationStartSample);
-
-        double srcPos = readStartInSrcSamples;
-        for (int s = 0; s < availableSamples; ++s) {
-            const int idx0 = static_cast<int>(srcPos);
-            const int idx1 = juce::jmin(idx0 + 1, maxSrcSample);
-            const float fraction = static_cast<float>(srcPos - idx0);
-            dstPtr[s] = srcPtr[idx0] + (srcPtr[idx1] - srcPtr[idx0]) * fraction;
-            srcPos += ratio;
-        }
-    }
-
-    if (request.source.renderCache != nullptr) {
-        request.source.renderCache->overlayPublishedAudioForRate(destination,
-                                                                 destinationStartSample,
-                                                                 availableSamples,
-                                                                 request.readStartSeconds,
-                                                                 static_cast<int>(request.targetSampleRate));
-    }
-
-    return availableSamples;
-}
-
-// ============================================================================
 // Clipboard -- content range copy for paste/duplicate
 // ============================================================================
 
@@ -4872,7 +4957,7 @@ ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
     payload.notes = sliceNotesToLocalRange(sourceSnap->notes,
                                            offsetSeconds,
                                            offsetSeconds + durationSeconds);
-    payload.correctionSegments = correctionSegmentsFromCurve(payload.pitchCurve);
+    payload.correctionSegments = copyPitchCorrectionSegments(payload.pitchCurve);
     payload.silentGaps = sliceSilentGaps(sourceSnap->silentGaps,
                                          offsetSamples,
                                          offsetSamples + durSamples);
@@ -4918,41 +5003,12 @@ ContentKey OpenTuneAudioProcessor::cloneContent(ContentKey sourceContentKey,
     ContentPayloadState payload = payloadFromSnapshot(*sourceSnap);
     payload.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(*sourceSnap->audioBuffer);
     payload.pitchCurve = sourceSnap->pitchCurve != nullptr ? sourceSnap->pitchCurve->clone() : nullptr;
-    payload.correctionSegments = correctionSegmentsFromCurve(payload.pitchCurve);
+    payload.correctionSegments = copyPitchCorrectionSegments(payload.pitchCurve);
 
     const ContentKey newKey = createStandaloneClipOwner(*standaloneContentRepository_,
                                                         *contentRenderService_,
                                                         std::move(payload));
     return newKey;
-}
-
-void OpenTuneAudioProcessor::consumeAudioThreadLogs()
-{
-    const uint64_t gen = logEventGeneration_.load(std::memory_order_acquire);
-    if (gen == logEventReadGeneration_)
-        return; // No new events
-
-    logEventReadGeneration_ = gen;
-    const AudioThreadLogEvent evt = logEventData_; // Plain read -- single consumer, no tearing risk
-
-    switch (evt.type) {
-    case AudioThreadLogEvent::Type::FadeOutComplete:
-        AppLogger::log("Playback: fade-out complete, stopped");
-        break;
-    case AudioThreadLogEvent::Type::CaptureDiag:
-        juce::Logger::writeToLog("CaptureDiag: numChannels=" + juce::String(evt.diagNumChannels)
-            + " numSamples=" + juce::String(evt.diagNumSamples)
-            + " mag=" + juce::String(evt.diagMag, 6)
-            + " s[0,1,2,3,64]=" + juce::String(evt.diagS0, 4)
-            + "," + juce::String(evt.diagS1, 4)
-            + "," + juce::String(evt.diagS2, 4)
-            + "," + juce::String(evt.diagS3, 4)
-            + "," + juce::String(evt.diagS64, 4));
-        break;
-    case AudioThreadLogEvent::Type::None:
-    default:
-        break;
-    }
 }
 
 } // namespace OpenTune

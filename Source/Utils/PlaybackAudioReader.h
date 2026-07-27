@@ -10,26 +10,47 @@
 namespace OpenTune {
 
 /**
- * PlaybackReadRequest - 统一读取请求结构
+ * PlaybackReadRequest — 实时读取请求，使用目标采样率下的绝对样本位置。
  *
- * readStartSeconds 必须与 source 中 renderCache / dry buffer 的时间基保持一致。
+ * readStartSample 是在 targetSampleRate 空间中的绝对样本偏移。
+ * 调用方负责保证 readStartSample + numSamples 不越界。
+ * 只从 prepared data 读取，无 canonical fallback。
  */
 struct PlaybackReadRequest {
     PlaybackReadSource source;
-    double readStartSeconds{0.0};
+    int64_t readStartSample{0};
     double targetSampleRate{44100.0};
     int numSamples{0};
 
     PlaybackReadRequest() = default;
-    PlaybackReadRequest(PlaybackReadSource src, double start, double rate, int samples)
-        : source(src), readStartSeconds(start), targetSampleRate(rate), numSamples(samples) {}
+    PlaybackReadRequest(PlaybackReadSource src, int64_t startSample, double rate, int samples)
+        : source(src), readStartSample(startSample), targetSampleRate(rate), numSamples(samples) {}
 };
 
 /**
- * 统一播放读取 API
+ * CanonicalReadRequest — 离线 canonical 读取请求（Stage2/export）。
  *
- * 二元播放模型：先读当前播放采样率 dry signal，再用当前播放采样率的
- * 已发布 render cache 覆盖同一段目标 buffer。
+ * readStartSample 在 canonical 44.1kHz 样本空间中的绝对偏移。
+ * 无 target rate 参数，始终读取 44.1kHz truth。
+ */
+struct CanonicalReadRequest {
+    PlaybackReadSource source;
+    int64_t readStartSample{0};
+    int numSamples{0};
+
+    CanonicalReadRequest() = default;
+    CanonicalReadRequest(PlaybackReadSource src, int64_t startSample, int samples)
+        : source(src), readStartSample(startSample), numSamples(samples) {}
+};
+
+/**
+ * 实时播放读取 — 纯 direct copy，无插值。
+ *
+ * 1. TimeStretchCache fast-path：从 prepared 缓存直接整数切片。
+ * 2. 否则从 preparedDry buffer 直接 copy（已在 prepare 阶段由 r8brain 重采样）。
+ * 3. 然后从 RenderCache prepared chunks overlay（同样直接 copy）。
+ *
+ * 无 canonical fallback。prepared 数据不存在时返回 0。
  */
 inline int readPlaybackAudio(const PlaybackReadRequest& request,
                              juce::AudioBuffer<float>& destination,
@@ -37,8 +58,7 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
 {
     if (request.numSamples <= 0
         || request.targetSampleRate <= 0.0
-        || !request.source.canRead()
-        || request.source.audioBuffer == nullptr) {
+        || !request.source.hasAudio()) {
         return 0;
     }
 
@@ -56,7 +76,9 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
         return 0;
     }
 
-    // TimeStretchCache fast-path
+    // ============================================================
+    // TimeStretchCache fast-path — 直接从 prepared 缓存整数切片
+    // ============================================================
     const uint64_t objectId = request.source.contentKey.objectId;
     if (!request.source.timeGridIsIdentity
         && request.source.timeStretchCache != nullptr
@@ -66,7 +88,7 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
             request.source.pitchRevision,
             request.source.pitchShiftRevision,
             request.source.timeGridRevision,
-            request.readStartSeconds,
+            request.readStartSample,
             destination,
             destinationStartSample,
             writableSamples,
@@ -76,52 +98,141 @@ inline int readPlaybackAudio(const PlaybackReadRequest& request,
         }
     }
 
-    const auto& srcBuffer = *request.source.audioBuffer;
-    const int srcChannels = srcBuffer.getNumChannels();
-    const int64_t srcLengthSamples = srcBuffer.getNumSamples();
-    const double srcSampleRate = request.source.audioSampleRate;
-    if (srcChannels <= 0 || srcLengthSamples <= 0 || srcSampleRate <= 0.0) {
+    // ============================================================
+    // 从 preparedDry 直接 copy（已在 prepare 阶段重采样）
+    // ============================================================
+    const auto& prepared = request.source.preparedDry;
+    if (!prepared.buffer
+        || std::abs(prepared.sampleRate - request.targetSampleRate) >= 1.0) {
+        return 0;  // No canonical fallback
+    }
+
+    const int preparedLen = prepared.buffer->getNumSamples();
+    const int preparedChannels = prepared.buffer->getNumChannels();
+    if (preparedLen <= 0 || preparedChannels <= 0) {
         return 0;
     }
 
-    const double ratio = srcSampleRate / request.targetSampleRate;
-    const double readStartInSrcSamples = request.readStartSeconds * srcSampleRate;
-    if (readStartInSrcSamples < 0.0 || readStartInSrcSamples >= static_cast<double>(srcLengthSamples)) {
+    const int64_t start = request.readStartSample;
+    if (start < 0 || start >= preparedLen) {
         return 0;
     }
 
-    const int maxSrcSample = static_cast<int>(srcLengthSamples) - 1;
-    int availableSamples = writableSamples;
-    {
-        const double lastSrcPos = readStartInSrcSamples + (writableSamples - 1) * ratio;
-        if (lastSrcPos >= static_cast<double>(srcLengthSamples)) {
-            availableSamples = static_cast<int>((static_cast<double>(srcLengthSamples) - readStartInSrcSamples) / ratio);
-            if (availableSamples <= 0) return 0;
-        }
+    const int availableSamples = juce::jmin(writableSamples,
+        static_cast<int>(preparedLen - start));
+    if (availableSamples <= 0) {
+        return 0;
     }
 
-    // Write dry signal with linear interpolation
     for (int channel = 0; channel < destinationChannels; ++channel) {
-        const int srcCh = channel % srcChannels;
-        const float* srcPtr = srcBuffer.getReadPointer(srcCh);
-        float* dstPtr = destination.getWritePointer(channel, destinationStartSample);
+        const int srcCh = channel % preparedChannels;
+        destination.copyFrom(channel, destinationStartSample,
+                             *prepared.buffer, srcCh,
+                             static_cast<int>(start), availableSamples);
+    }
 
-        double srcPos = readStartInSrcSamples;
-        for (int s = 0; s < availableSamples; ++s) {
-            const int idx0 = static_cast<int>(srcPos);
-            const int idx1 = juce::jmin(idx0 + 1, maxSrcSample);
-            const float fraction = static_cast<float>(srcPos - idx0);
-            dstPtr[s] = srcPtr[idx0] + (srcPtr[idx1] - srcPtr[idx0]) * fraction;
-            srcPos += ratio;
+    // ============================================================
+    // RenderCache prepared overlay — 直接 copy
+    // ============================================================
+    if (request.source.renderCache != nullptr) {
+        request.source.renderCache->overlayPreparedAudio(destination,
+                                                          destinationStartSample,
+                                                          availableSamples,
+                                                          request.readStartSample,
+                                                          static_cast<int>(request.targetSampleRate));
+    }
+
+    return availableSamples;
+}
+
+/**
+ * 离线 canonical 读取 — 始终读取 44.1kHz truth（Stage2/export）。
+ *
+ * 1. 非 identity TimeStretch → 从 TimeStretchCache canonical 切片。
+ * 2. 否则 canonical dry direct copy + RenderCache::overlayCanonicalAudio。
+ * 无插值、无 target rate 参数、无 prepared fallback。
+ */
+inline int readCanonicalAudio(const CanonicalReadRequest& request,
+                               juce::AudioBuffer<float>& destination,
+                               int destinationStartSample)
+{
+    if (request.numSamples <= 0 || !request.source.hasAudio()) {
+        return 0;
+    }
+
+    const int destinationChannels = destination.getNumChannels();
+    const int destinationSamples = destination.getNumSamples();
+    if (destinationChannels <= 0
+        || destinationSamples <= 0
+        || destinationStartSample < 0
+        || destinationStartSample >= destinationSamples) {
+        return 0;
+    }
+
+    const int writableSamples = juce::jmin(request.numSamples, destinationSamples - destinationStartSample);
+    if (writableSamples <= 0) {
+        return 0;
+    }
+
+    // ============================================================
+    // TimeStretchCache canonical path
+    // ============================================================
+    const uint64_t objectId = request.source.contentKey.objectId;
+    if (!request.source.timeGridIsIdentity
+        && request.source.timeStretchCache != nullptr
+        && objectId != 0) {
+        const int wrote = request.source.timeStretchCache->sliceCanonicalForOutputRange(
+            request.source.contentKey,
+            request.source.pitchRevision,
+            request.source.pitchShiftRevision,
+            request.source.timeGridRevision,
+            request.readStartSample,
+            destination,
+            destinationStartSample,
+            writableSamples);
+        if (wrote > 0) {
+            return wrote;
         }
     }
 
+    // ============================================================
+    // Dry canonical direct copy
+    // ============================================================
+    const auto* srcBuf = request.source.audioBuffer.get();
+    if (!srcBuf || srcBuf->getNumSamples() <= 0) {
+        return 0;
+    }
+
+    const int srcLen = srcBuf->getNumSamples();
+    const int srcChs = srcBuf->getNumChannels();
+    if (srcChs <= 0) return 0;
+
+    const int64_t start = request.readStartSample;
+    if (start < 0 || start >= srcLen) {
+        return 0;
+    }
+
+    const int availableSamples = juce::jmin(writableSamples,
+        static_cast<int>(srcLen - start));
+    if (availableSamples <= 0) {
+        return 0;
+    }
+
+    for (int channel = 0; channel < destinationChannels; ++channel) {
+        const int srcCh = channel % srcChs;
+        destination.copyFrom(channel, destinationStartSample,
+                             *srcBuf, srcCh,
+                             static_cast<int>(start), availableSamples);
+    }
+
+    // ============================================================
+    // RenderCache canonical overlay
+    // ============================================================
     if (request.source.renderCache != nullptr) {
-        request.source.renderCache->overlayPublishedAudioForRate(destination,
-                                                                  destinationStartSample,
-                                                                  availableSamples,
-                                                                  request.readStartSeconds,
-                                                                  static_cast<int>(request.targetSampleRate));
+        request.source.renderCache->overlayCanonicalAudio(destination,
+                                                           destinationStartSample,
+                                                           availableSamples,
+                                                           request.readStartSample);
     }
 
     return availableSamples;
