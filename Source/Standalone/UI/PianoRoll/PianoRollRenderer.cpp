@@ -929,6 +929,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
     const bool isOverdose = themeId == ThemeId::Overdose;
+    constexpr float kNoteBodyFillAlpha = 0.72f;
 
     for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
     {
@@ -954,7 +955,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
         if (isAurora)
         {
-            g.setColour(noteColor.withAlpha(0.90f));
+            g.setColour(noteColor.withAlpha(kNoteBodyFillAlpha));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 7.0f));
@@ -980,7 +981,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else if (isBlueBreeze || isOverdose)
         {
-            g.setColour(noteColor.withAlpha(0.90f));
+            g.setColour(noteColor.withAlpha(kNoteBodyFillAlpha));
             g.fillRect(noteBounds);
 
             auto topSheenBounds = noteBounds.withHeight(juce::jmin(noteBounds.getHeight() * 0.42f, 6.0f));
@@ -1002,7 +1003,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         }
         else
         {
-            g.setColour(noteColor.withAlpha(0.90f));
+            g.setColour(noteColor.withAlpha(kNoteBodyFillAlpha));
             g.fillRect(noteBounds);
 
             g.setColour(UIColors::noteBlockBorder.withAlpha(0.50f));
