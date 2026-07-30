@@ -49,9 +49,9 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
         return false;
     }
 
-    if (request.pitchRevision < ownerSnap->pitchRevision
-        || request.pitchShiftRevision < ownerSnap->pitchShiftRevision
-        || request.timeGridRevision < ownerSnap->timeGridRevision) {
+    if (request.pitchRevision != ownerSnap->pitchRevision
+        || request.pitchShiftRevision != ownerSnap->pitchShiftRevision
+        || request.timeGridRevision != ownerSnap->timeGridRevision) {
         return false;
     }
 
@@ -119,7 +119,7 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
     }
     drainAvailable();
 
-    // SoundTouch WSOLA may emit ±N samples of endpoint drift vs. the locked-endpoint
+    // SoundTouch WSOLA may emit ±N samples of endpoint drift vs. the endpoint-invariant
     // expected length.  Truncate or zero-pad so the cache entry has the canonical size.
     const size_t expectedSamples = stretcher->expectedOutputSamples();
     if (output.size() > expectedSamples) {
@@ -128,9 +128,9 @@ bool Stage2TimeStretchRebuilder::rebuild(ContentRenderService& crs,
         output.resize(expectedSamples, 0.0f);
     }
 
-    const uint64_t pitchRev = ownerSnap->pitchRevision;
-    const uint64_t pitchShiftRev = ownerSnap->pitchShiftRevision;
-    const uint64_t timeGridRev = ownerSnap->timeGridRevision;
+    const uint64_t pitchRev = request.pitchRevision;
+    const uint64_t pitchShiftRev = request.pitchShiftRevision;
+    const uint64_t timeGridRev = request.timeGridRevision;
 
     crs.getTimeStretchCache().store(contentKey,
                                     std::move(output),

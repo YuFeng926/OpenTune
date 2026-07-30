@@ -208,10 +208,15 @@ bool commitNoteBasedCorrection(PianoRollToolHandler::Context& ctx,
                                F0FrameRange editRange)
 {
     const auto f0tl = ctx.getF0Timeline();
+    const auto contentSnapshot = ctx.getEditableContentSnapshot();
+    if (contentSnapshot == nullptr)
+        return false;
+
     auto clonedCurve = pitchCurve->clone();
     clonedCurve->applyCorrectionToRange(notes,
                                         editRange.startFrame,
                                         editRange.endFrameExclusive,
+                                        static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
                                         ctx.getRetuneSpeed(),
                                         ctx.getVibratoDepth(),
                                         ctx.getVibratoRate());
@@ -630,16 +635,6 @@ bool PianoRollToolHandler::keyPressed(const juce::KeyPress& key)
     }
     // ==== End tool switching ====
 
-    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::PlayPause, key)) {
-        ctx_.notifyPlayPauseToggle();
-        return true;
-    }
-
-    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Stop, key)) {
-        ctx_.notifyStopPlayback();
-        return true;
-    }
-
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Delete, key)) {
         // Time tool always consumes Delete to avoid accidentally deleting notes
         // when a handle isn't selected. No-op when nothing's selected.
@@ -739,6 +734,9 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
     if (snapshot == nullptr || snapshot->isEmpty()) {
         return false;
     }
+    const auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    if (contentSnapshot == nullptr)
+        return false;
 
     const auto sourceTime = pixelXToSourceTime(e.x);
     if (!sourceTime)
@@ -777,14 +775,12 @@ bool PianoRollToolHandler::hitTestF0Curve(const juce::MouseEvent& e, int& frameI
         }
     };
 
-    snapshot->forEachCorrectionF0Span(startFrame, endFrameExclusive,
-        [&](int spanStart, const float* data, int length) {
+    contentSnapshot->forEachEffectiveF0Span(startFrame, endFrameExclusive,
+        [&](int spanStart, const float* data, int length, float gain) {
             for (int i = 0; i < length; ++i) {
                 const int frame = spanStart + i;
                 testCandidate(frame, originalF0[static_cast<size_t>(frame)]);
-                if (data != nullptr) {
-                    testCandidate(frame, data[i]);
-                }
+                testCandidate(frame, data[i] * gain);
             }
         });
 
@@ -1197,16 +1193,18 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
                 
                 if (rangeEnd < rangeStart) std::swap(rangeStart, rangeEnd);
 
-                auto originalF0 = ctx_.getOriginalF0();
                 const auto f0tl = ctx_.getF0Timeline();
                 const auto manualRange = f0tl.rangeForTimes(rangeStart, rangeEnd);
+                const auto contentSnapshot = ctx_.getEditableContentSnapshot();
 
-                if (!manualRange.isEmpty() && pitchCurve->hasCorrectionInRange(manualRange.startFrame, manualRange.endFrameExclusive)) {
+                if (contentSnapshot
+                    && !manualRange.isEmpty()
+                    && pitchCurve->hasCorrectionInRange(manualRange.startFrame, manualRange.endFrameExclusive)) {
                         int rangeSize = manualRange.endFrameExclusive - manualRange.startFrame;
                         std::vector<float> renderedF0(rangeSize, -1.0f);
 
-                        pitchCurve->renderFinalF0Range(manualRange.startFrame, manualRange.endFrameExclusive,
-                            [&](int frameIndex, const float* data, int length) {
+                        contentSnapshot->forEachEffectiveF0Span(manualRange.startFrame, manualRange.endFrameExclusive,
+                            [&](int frameIndex, const float* data, int length, float gain) {
                                 if (data == nullptr || length <= 0) return;
 
                                 int relStart = frameIndex - manualRange.startFrame;
@@ -1221,7 +1219,8 @@ void PianoRollToolHandler::handleSelectTool(const juce::MouseEvent& e)
                                 int copyLength = std::min(length - copyOffset, rangeSize - relStart);
                                 if (copyLength <= 0) return;
 
-                                std::copy_n(data + copyOffset, copyLength, renderedF0.begin() + relStart);
+                                for (int i = 0; i < copyLength; ++i)
+                                    renderedF0[static_cast<size_t>(relStart + i)] = data[copyOffset + i] * gain;
                             });
 
                         ctx_.setNoteDragManualStartFrame(manualRange.startFrame);
@@ -2283,7 +2282,7 @@ uint64_t PianoRollToolHandler::hitTestTimeGridHandle(const juce::MouseEvent& e) 
     uint64_t closestId = 0;
     int closestDistance = std::numeric_limits<int>::max();
     for (const auto& h : snap->handles()) {
-        if (h.locked) continue;   // endpoints not selectable
+        if (h.isEndpoint()) continue;   // endpoints not selectable
 
         // output_seconds 锟?timeline via projectContentTimeToTimeline 锟?screen X via timeToX.
         // Uses the same active projection as drawTimeGridHandles for consistent hit-testing.
@@ -2359,7 +2358,7 @@ void PianoRollToolHandler::handleTimeToolMouseDown(const juce::MouseEvent& e)
     for (const auto& h : snap->handles()) {
         if (h.id == hitId) { hitHandle = &h; break; }
     }
-    if (hitHandle == nullptr || hitHandle->locked) return;
+    if (hitHandle == nullptr || hitHandle->isEndpoint()) return;
 
     // 鈿★笍 搂8.4 (Phase H) 锟?Shift+click toggles in additionalSelectedIds
     // (multi-select).  Bare click replaces the selection.
@@ -2453,7 +2452,7 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
     const double uniformDelta = clampedOutput - tt.dragStartOutputSeconds;
 
     // Build new handle vector.  For group drag we shift every selected,
-    // non-locked handle by uniformDelta and clamp each individually to its
+    // non-endpoint handle by uniformDelta and clamp each individually to its
     // own neighbor bounds.  Non-selected handles keep their original output.
     std::vector<TimeHandle> newHandles(origHandles.begin(), origHandles.end());
 
@@ -2468,7 +2467,7 @@ void PianoRollToolHandler::handleTimeToolMouseDrag(const juce::MouseEvent& e)
             tentative[i] = newHandles[i].output_seconds;
         }
         for (size_t i = 1; i < newHandles.size() - 1; ++i) {
-            if (newHandles[i].locked) continue;
+            if (newHandles[i].isEndpoint()) continue;
             if (isHandleSelected(newHandles[i].id)) {
                 tentative[i] = newHandles[i].output_seconds + uniformDelta;
             }
@@ -2606,7 +2605,6 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
     newHandle.source_seconds = snap->tauInverse(clickedTime);
     newHandle.output_seconds = clickedTime;
     newHandle.kind = HandleKind::UserAdded;
-    newHandle.locked = false;
     newHandles.insert(newHandles.begin() + insertIdx, newHandle);
 
     auto newSnap = TimeGridSnapshot::makeFromHandles(
@@ -2629,7 +2627,7 @@ void PianoRollToolHandler::handleTimeToolMouseDoubleClick(const juce::MouseEvent
 //
 // Returns true when a handle was deleted (caller should not fall through to
 // note-delete logic).  Returns false when nothing was selected or the only
-// selected handle is a locked endpoint.
+// selected handle is an endpoint.
 // ============================================================================
 bool PianoRollToolHandler::handleTimeToolDeleteSelected()
 {
@@ -2653,8 +2651,8 @@ bool PianoRollToolHandler::handleTimeToolDeleteSelected()
         AppLogger::log("[TimeTool] delete rejected: cannot delete endpoint or unknown handle");
         return false;
     }
-    if (handles[static_cast<size_t>(targetIdx)].locked) {
-        AppLogger::log("[TimeTool] delete rejected: handle is locked");
+    if (handles[static_cast<size_t>(targetIdx)].isEndpoint()) {
+        AppLogger::log("[TimeTool] delete rejected: handle is endpoint");
         return false;
     }
 

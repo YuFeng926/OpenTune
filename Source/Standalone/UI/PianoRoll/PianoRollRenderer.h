@@ -68,11 +68,6 @@ public:
     struct ReferenceOverlay
     {
         std::vector<Note> ghostNotes;               // reference content 的 derived notes（content-local source time）
-        struct GhostAnchor {
-            double sourceSeconds{0.0};
-            float strength{0.0f};
-        };
-        std::vector<GhostAnchor> ghostAnchors;
         float ghostOpacity{0.20f};                   // 透明度
         juce::Colour ghostColour;                    // ghost 颜色（不同于当前轨）
         bool enabled{false};                         // 是否启用 overlay
@@ -134,7 +129,6 @@ public:
     void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
 
     void drawGhostNotes(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);
-    void drawGhostAnchors(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay);
 };
 
 } // namespace OpenTune

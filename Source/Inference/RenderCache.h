@@ -85,6 +85,15 @@ public:
     };
     StateSnapshot getStateSnapshot() const;
 
+    // 是否处于 canonical settled：
+    //  - chunks 非空
+    //  - 无 Pending/Running chunk
+    //  - 每个 chunk 若为 Blank 则已完成（runningRevision==0）
+    //  - 仅存 Idle：每个 Idle chunk 须有非空 audio、publishedRevision>0、
+    //    且 publishedRevision==desiredRevision
+    //  - 失败时不标记 Idle 完成，原样返回 false
+    bool isCanonicalSettled() const;
+
     RenderCache();
     ~RenderCache();
 

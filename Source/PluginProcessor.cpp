@@ -11,15 +11,15 @@
 #include "Utils/ChannelLayoutLogger.h"
 #include "Plugin/Capture/CaptureSession.h"
 #include "DSP/ReferenceAutoAlign.h"
-#include "DSP/TimeGridPatchBuilder.h"
 #include <onnxruntime_cxx_api.h>
 #include "Utils/AccelerationDetector.h"
 #include "Utils/TimeCoordinate.h"
 #include "Inference/GameNoteGenerator.h"      // GAME backend (Standalone / regular VST3)
-#include "Utils/LegacyNoteGenerator.h"        // Legacy fallback
-#include "Utils/CompositeUndoAction.h"
+#include "Utils/LegacyNoteGenerator.h"
+#include "Utils/PitchControlConfig.h"
 #include "Utils/PianoRollEditAction.h"
-#include "Utils/TimeGridEditAction.h"
+#include "Utils/PitchShiftEditAction.h"
+#include "Render/Stage2TimeStretchRebuilder.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <algorithm>
 #include <atomic>
@@ -67,21 +67,49 @@ AutoRefGameBackendProbe probeAutoRefGameBackendLocked(INoteGenerator* generator,
     return probe;
 }
 
-juce::String makeAutoRefGameUnavailableMessage(const AutoRefGameBackendProbe& probe)
+ReferenceFeatureSet makeReferenceFeatureSetFromNotes(
+    ReferenceFeatureProducer producer,
+    int64_t inputFingerprint,
+    int analysisRevision,
+    double sourceDurationSeconds,
+    std::vector<Note> notes,
+    const juce::String& emptyError)
 {
-    if (probe.forceLegacy) {
-        return juce::String("Reference clip is bound, but Legacy backend is forced; using regular AUTO.");
+    ReferenceFeatureSet result;
+    result.producer = producer;
+    result.inputFingerprint = inputFingerprint;
+    result.analysisRevision = analysisRevision;
+    result.sourceDurationSeconds = sourceDurationSeconds;
+    result.pitch.notes = normalizeStoredNotes(std::move(notes));
+
+    uint64_t nextAnchorId = 1;
+    double lastAcceptedSourceSeconds = 0.0;
+    for (const auto& note : result.pitch.notes) {
+        const double sourceSeconds = juce::jlimit(0.0, sourceDurationSeconds, note.startTime);
+        if (sourceSeconds <= 0.0 || sourceSeconds >= sourceDurationSeconds)
+            continue;
+        if (!result.timing.anchors.empty()
+            && !TimeGridSnapshot::hasMinimumSourceSpacing(lastAcceptedSourceSeconds, sourceSeconds))
+            continue;
+
+        ReferenceTimingAnchor anchor;
+        anchor.anchorId = nextAnchorId++;
+        anchor.sourceSeconds = sourceSeconds;
+        anchor.strength = 1.0f;
+        anchor.kind = ReferenceTimingAnchorKind::Onset;
+        anchor.confidence = 1.0f;
+        result.timing.anchors.push_back(anchor);
+        lastAcceptedSourceSeconds = sourceSeconds;
     }
 
-    if (probe.currentBackendIsLegacy && !probe.gameBundlePresent) {
-        return juce::String("Reference clip is bound, but GAME backend/models are missing; using regular AUTO.");
+    if (result.pitch.notes.empty() && result.timing.anchors.empty()) {
+        result.status = ReferenceFeatureStatus::Failed;
+        result.errorMessage = emptyError;
+        return result;
     }
 
-    if (!probe.gameBundlePresent) {
-        return juce::String("Reference clip is bound, but GAME backend/models are missing; using regular AUTO.");
-    }
-
-    return juce::String("Reference clip is bound, but GAME backend is not ready; using regular AUTO.");
+    result.status = ReferenceFeatureStatus::Ready;
+    return result;
 }
 
 std::vector<PitchCorrectionSegment> copyPitchCorrectionSegments(const std::shared_ptr<PitchCurve>& curve)
@@ -111,7 +139,6 @@ ContentPayloadState payloadFromSnapshot(const EditableContentSnapshot& snap)
     payload.silentGaps = snap.silentGaps;
     payload.referenceFeatures = snap.referenceFeatures;
     payload.notes = snap.notes;
-    payload.correctionSegments = snap.correctionSegments;
     payload.timeGrid = snap.timeGrid;
     payload.pitchShiftSettings = snap.pitchShiftSettings;
     payload.notesRevision = snap.notesRevision;
@@ -574,8 +601,8 @@ void OpenTuneAudioProcessor::configureReferenceAnalysisService()
     referenceAnalysisService_.setAnalysisFunc(
         [this](const ReferenceAnalysisService::AnalysisJobKey& jobKey) {
             ReferenceFeatureSet failed;
-            failed.producer = ReferenceFeatureProducer::Game;
-            failed.inputFingerprint = jobKey.contentRevision;
+            failed.producer = jobKey.producer;
+            failed.inputFingerprint = jobKey.inputFingerprint;
 
             auto snap = getContentSnapshot(jobKey.contentKey);
             if (!snap) {
@@ -583,21 +610,96 @@ void OpenTuneAudioProcessor::configureReferenceAnalysisService()
                 failed.errorMessage = "AUTO Ref analysis could not read content snapshot";
                 return failed;
             }
-            if (static_cast<int64_t>(snap->contentRevision) != jobKey.contentRevision) {
+            if (static_cast<int64_t>(snap->audioRevision) != jobKey.inputFingerprint) {
                 failed.status = ReferenceFeatureStatus::Failed;
                 failed.errorMessage = "AUTO Ref analysis job is stale";
                 return failed;
             }
-            return buildReferenceFeatureSet(jobKey.contentKey, *snap);
+            return buildReferenceFeatureSet(jobKey.contentKey, *snap, jobKey.producer);
         });
     referenceAnalysisService_.addListener(this);
 }
 
-ReferenceFeatureSet OpenTuneAudioProcessor::buildReferenceFeatureSet(
-    ContentKey key, const EditableContentSnapshot& snapshot)
+ReferenceFeatureProducer OpenTuneAudioProcessor::resolveReferenceFeatureProducer() const
 {
-    juce::ignoreUnused(experimentalReferenceAlignMode_);
-    return buildGameReferenceFeatureSet(key, snapshot);
+    if (experimentalReferenceAlignMode_ == ExperimentalReferenceAlignMode::StandardAuto)
+        return ReferenceFeatureProducer::StandardAuto;
+
+    const auto modelsDir = juce::String(ModelPathResolver::getModelsDirectory());
+    std::lock_guard<std::mutex> lock(noteGenInitMutex_);
+    const auto backendProbe = probeAutoRefGameBackendLocked(noteGenerator_.get(), modelsDir);
+    if (backendProbe.forceLegacy || backendProbe.currentBackendIsLegacy || !backendProbe.gameBundlePresent)
+        return ReferenceFeatureProducer::StandardAuto;
+    return ReferenceFeatureProducer::Game;
+}
+
+ReferenceFeatureSet OpenTuneAudioProcessor::buildReferenceFeatureSet(
+    ContentKey key,
+    const EditableContentSnapshot& snapshot,
+    ReferenceFeatureProducer producer)
+{
+    switch (producer) {
+        case ReferenceFeatureProducer::StandardAuto:
+            return buildStandardAutoReferenceFeatureSet(snapshot);
+        case ReferenceFeatureProducer::Game:
+            return buildGameReferenceFeatureSet(key, snapshot);
+        case ReferenceFeatureProducer::Unknown:
+            break;
+    }
+
+    ReferenceFeatureSet failed;
+    failed.status = ReferenceFeatureStatus::Failed;
+    failed.producer = producer;
+    failed.inputFingerprint = static_cast<int64_t>(snapshot.audioRevision);
+    failed.errorMessage = "AUTO Ref analysis producer is invalid";
+    return failed;
+}
+
+ReferenceFeatureSet OpenTuneAudioProcessor::buildStandardAutoReferenceFeatureSet(
+    const EditableContentSnapshot& snapshot)
+{
+    ReferenceFeatureSet failed;
+    failed.status = ReferenceFeatureStatus::Failed;
+    failed.producer = ReferenceFeatureProducer::StandardAuto;
+    failed.inputFingerprint = static_cast<int64_t>(snapshot.audioRevision);
+    failed.analysisRevision = snapshot.referenceFeatures.analysisRevision;
+
+    if (snapshot.originalF0State != OriginalF0State::Ready || snapshot.pitchCurve == nullptr) {
+        failed.errorMessage = "AUTO Ref standard analysis requires Original F0";
+        return failed;
+    }
+
+    const auto pitchSnapshot = snapshot.pitchCurve->getSnapshot();
+    const auto& originalF0 = pitchSnapshot->getOriginalF0();
+    const auto& originalEnergy = pitchSnapshot->getOriginalEnergy();
+    const int hopSize = pitchSnapshot->getHopSize();
+    const double sampleRate = pitchSnapshot->getSampleRate();
+    if (originalF0.empty() || hopSize <= 0 || sampleRate <= 0.0) {
+        failed.errorMessage = "AUTO Ref standard analysis requires valid Original F0";
+        return failed;
+    }
+
+    NoteGeneratorParams params;
+    auto notes = LegacyNoteGenerator::generate(
+        originalF0.data(),
+        static_cast<int>(originalF0.size()),
+        originalEnergy.size() == originalF0.size() ? originalEnergy.data() : nullptr,
+        0,
+        static_cast<int>(originalF0.size()),
+        hopSize,
+        sampleRate,
+        params);
+    LegacyNoteGenerator::validate(notes);
+
+    const double sourceDurationSeconds = static_cast<double>(originalF0.size())
+        * static_cast<double>(hopSize) / sampleRate;
+    return makeReferenceFeatureSetFromNotes(
+        ReferenceFeatureProducer::StandardAuto,
+        static_cast<int64_t>(snapshot.audioRevision),
+        snapshot.referenceFeatures.analysisRevision,
+        sourceDurationSeconds,
+        std::move(notes),
+        "AUTO Ref standard analysis found no notes or timing anchors");
 }
 
 ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
@@ -605,17 +707,16 @@ ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
 {
     ReferenceFeatureSet result;
     result.producer = ReferenceFeatureProducer::Game;
-    result.inputFingerprint = static_cast<int64_t>(snapshot.contentRevision);
+    result.inputFingerprint = static_cast<int64_t>(snapshot.audioRevision);
+    result.analysisRevision = snapshot.referenceFeatures.analysisRevision;
 
     auto audio = resolveAnalysisAudioProvider(key);
     result.sourceDurationSeconds = audio.valid
-        ? TimeCoordinate::samplesToSeconds(audio.numSamples, TimeCoordinate::kRenderSampleRate)
+        ? TimeCoordinate::samplesToSeconds(audio.numSamples, audio.sampleRate)
         : 0.0;
 
     auto failGame = [&](const juce::String& reason) {
         result.status = ReferenceFeatureStatus::Failed;
-        result.pitch.clear();
-        result.timing.clear();
         result.errorMessage = reason;
         return result;
     };
@@ -634,7 +735,7 @@ ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
     }
 
     NoteGeneratorInput input;
-    input.sampleRate = TimeCoordinate::kRenderSampleRate;
+    input.sampleRate = audio.sampleRate;
     input.audio.assign(audio.samples, audio.samples + audio.numSamples);
 
     std::vector<Note> gameNotes;
@@ -647,83 +748,36 @@ ReferenceFeatureSet OpenTuneAudioProcessor::buildGameReferenceFeatureSet(
         return failGame("AUTO Ref GAME note generation failed");
     }
 
-    result.pitch.notes = std::move(gameNotes);
-
-    uint64_t nextAnchorId = 1;
-    double lastAcceptedSourceSeconds = 0.0;
-    for (const auto& note : result.pitch.notes) {
-        const double sourceSeconds = juce::jlimit(0.0, result.sourceDurationSeconds, note.startTime);
-        if (sourceSeconds <= 0.0 || sourceSeconds >= result.sourceDurationSeconds) {
-            continue;
-        }
-        if (!result.timing.anchors.empty()
-            && !TimeGridSnapshot::hasMinimumSourceSpacing(lastAcceptedSourceSeconds, sourceSeconds)) {
-            continue;
-        }
-
-        ReferenceTimingAnchor anchor;
-        anchor.anchorId = nextAnchorId++;
-        anchor.sourceSeconds = sourceSeconds;
-        anchor.strength = 1.0f;
-        anchor.kind = ReferenceTimingAnchorKind::Onset;
-        anchor.confidence = 1.0f;
-        result.timing.anchors.push_back(anchor);
-        lastAcceptedSourceSeconds = sourceSeconds;
-    }
-
-    std::sort(result.timing.anchors.begin(), result.timing.anchors.end(),
-              [](const auto& a, const auto& b) { return a.sourceSeconds < b.sourceSeconds; });
-    result.timing.anchors.erase(
-        std::unique(result.timing.anchors.begin(), result.timing.anchors.end(),
-                    [](const auto& a, const auto& b) {
-                        return std::abs(a.sourceSeconds - b.sourceSeconds) < 0.005;
-                    }),
-        result.timing.anchors.end());
-
-    if (result.pitch.notes.empty() && result.timing.anchors.empty()) {
-        return failGame("AUTO Ref GAME analysis found no notes or timing anchors");
-    }
-
-    result.status = ReferenceFeatureStatus::Ready;
-    result.analysisRevision = 1;
-    return result;
+    return makeReferenceFeatureSetFromNotes(
+        ReferenceFeatureProducer::Game,
+        static_cast<int64_t>(snapshot.audioRevision),
+        snapshot.referenceFeatures.analysisRevision,
+        result.sourceDurationSeconds,
+        std::move(gameNotes),
+        "AUTO Ref GAME analysis found no notes or timing anchors");
 }
 
-void OpenTuneAudioProcessor::analysisCompleted(
+void OpenTuneAudioProcessor::analysisFinished(
     ContentKey key,
     const ReferenceFeatureSet& result)
 {
-    if (!result.isReady() || result.producer != ReferenceFeatureProducer::Game) {
-        return;
-    }
-
     auto snap = getContentSnapshot(key);
     if (!snap) return;
 
-    if (result.inputFingerprint != static_cast<int64_t>(snap->contentRevision)) {
+    if (result.inputFingerprint != static_cast<int64_t>(snap->audioRevision)
+        || result.producer != resolveReferenceFeatureProducer()) {
         return;
     }
 
     setContentReferenceFeatures(key, result);
 
-    ensureTimeToolAnchorSeed(key);
-}
+    const auto pendingIt = pendingTimeToolSeedKeys_.find(key);
+    if (pendingIt == pendingTimeToolSeedKeys_.end())
+        return;
 
-void OpenTuneAudioProcessor::analysisFailed(ContentKey key, const juce::String& reason)
-{
-    auto snap = getContentSnapshot(key);
-    if (!snap) return;
-
-    ReferenceFeatureSet failed;
-    failed.producer = ReferenceFeatureProducer::Game;
-    failed.status = ReferenceFeatureStatus::Failed;
-    failed.inputFingerprint = static_cast<int64_t>(snap->contentRevision);
-    failed.sourceDurationSeconds = snap->audioBuffer != nullptr
-        ? TimeCoordinate::samplesToSeconds(snap->audioBuffer->getNumSamples(),
-                                            TimeCoordinate::kRenderSampleRate)
-        : 0.0;
-    failed.errorMessage = reason;
-    setContentReferenceFeatures(key, failed);
+    pendingTimeToolSeedKeys_.erase(pendingIt);
+    if (result.isReady())
+        ensureTimeToolAnchorSeed(key);
 }
 
 static std::shared_ptr<PitchCurve> clonePitchCurveWithPitchCorrectionSegments(
@@ -764,7 +818,31 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
         ContentRenderService::ExecutionLease lease;
         lease.owner = this;
         lease.renderJobCallback = [this](RenderJob& job) {
-            if (job.renderCache == nullptr) return;
+            if (job.kind == RenderJob::Kind::Stage2Rebuild) {
+                if (job.contentKey.domainKind != DomainKind::StandaloneClip)
+                    return;
+
+                auto contentSnap = getContentSnapshot(job.contentKey);
+                if (contentSnap == nullptr
+                    || contentSnap->timeGrid == nullptr
+                    || contentSnap->timeGrid->isIdentity()
+                    || contentSnap->pitchRevision != job.pitchRevision
+                    || contentSnap->pitchShiftRevision != job.pitchShiftRevision
+                    || contentSnap->timeGridRevision != job.timeGridRevision)
+                    return;
+
+                Stage2TimeStretchRebuilder::Request request;
+                request.contentKey = job.contentKey;
+                request.pitchRevision = job.pitchRevision;
+                request.pitchShiftRevision = job.pitchShiftRevision;
+                request.timeGridRevision = job.timeGridRevision;
+                Stage2TimeStretchRebuilder::rebuild(*contentRenderService_, request, std::move(contentSnap));
+                return;
+            }
+
+            if (job.renderCache == nullptr)
+                return;
+
             auto contentSnap = getContentSnapshot(job.contentKey);
             if (!contentSnap) {
                 job.renderCache->completeChunkRenderFailure(job.startSeconds, job.targetRevision);
@@ -772,8 +850,8 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
             }
             ProcessRenderRuntime::CompletionContext completion;
             completion.alive = contentRefreshAliveFlag_;
-            completion.chunkPublished = [this](ContentKey key, uint64_t revision) {
-                handleStage1ChunkPublished(key, revision);
+            completion.chunkSettled = [this](ContentKey key) {
+                handleStage1ChunkSettled(key);
             };
             const bool lightPitchEnabled = appPreferences_ != nullptr
                 && appPreferences_->getState().shared.lightPitchCorrectionEnabled;
@@ -783,22 +861,26 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
         };
         contentRenderService_->attachExecutionLease(std::move(lease));
     }
-    // [ARA 重构] 内联 ProcessorContentEditCommands 替代工厂函数，直接分发到域所有者
-    class ProcessorContentCommandsInline final : public ContentEditCommands
+    class ProcessorContentCommands final : public ContentEditCommands
     {
     public:
-        explicit ProcessorContentCommandsInline(OpenTuneAudioProcessor* proc) noexcept : proc_(proc) {}
+        explicit ProcessorContentCommands(OpenTuneAudioProcessor& proc) noexcept : proc_(proc) {}
 
         bool setDetectedKey(ContentKey key, const DetectedKey& detectedKey) override
         {
-            if (!proc_) return false;
-            return proc_->setContentDetectedKey(key, detectedKey);
+            return proc_.setContentDetectedKey(key, detectedKey);
         }
 
-        bool setPitchShiftSettings(ContentKey key, const PitchShiftSettings& settings) override
+        bool applyPitchShiftState(ContentKey key, const PitchShiftEditState& state) override
         {
-            if (!proc_) return false;
-            return proc_->setContentPitchShiftSettings(key, settings);
+            return proc_.applyContentPitchShiftState(key, state);
+        }
+
+        std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
+            ContentKey key,
+            const PitchShiftSettings& newSettings) override
+        {
+            return proc_.commitPitchShiftEdit(key, newSettings);
         }
 
         bool commitAutoTuneGeneratedNotes(ContentKey key,
@@ -807,22 +889,19 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                                            float retuneSpeed, float vibratoDepth,
                                            float vibratoRate) override
         {
-            if (!proc_) return false;
-            return proc_->commitAutoTuneGeneratedNotesByContentKey(
+            return proc_.commitAutoTuneGeneratedNotesByContentKey(
                 key, std::move(generatedNotes), startFrame, endFrameExclusive,
                 retuneSpeed, vibratoDepth, vibratoRate);
         }
 
         bool replaceContentNotesForFullMutation(ContentKey key, std::vector<Note> notes) override
         {
-            if (!proc_) return false;
-            return proc_->replaceContentNotesForFullMutation(key, std::move(notes));
+            return proc_.replaceContentNotesForFullMutation(key, std::move(notes));
         }
 
         ContentCommitSnapshot commitNotePatch(ContentKey key, ContentNoteRangePatch patch) override
         {
-            if (!proc_) return {};
-            return proc_->commitContentNotePatch(key, std::move(patch));
+            return proc_.commitContentNotePatch(key, std::move(patch));
         }
 
         ContentCommitSnapshot commitNotesAndSegments(ContentKey key,
@@ -830,28 +909,25 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                                      std::vector<PitchCorrectionSegment> segments,
                                      ContentEditRangeFrames affectedRange) override
         {
-            if (!proc_) return {};
-            return proc_->commitContentNotesAndSegments(key, std::move(notes), std::move(segments), affectedRange);
+            return proc_.commitContentNotesAndSegments(key, std::move(notes), std::move(segments), affectedRange);
         }
 
         bool setPitchCurve(ContentKey key, std::shared_ptr<PitchCurve> curve,
                            ContentEditRangeFrames affectedRange) override
         {
-            if (!proc_) return false;
-            return proc_->setContentPitchCurve(key, std::move(curve), affectedRange);
+            return proc_.setContentPitchCurve(key, std::move(curve), affectedRange);
         }
 
         bool setTimeGrid(ContentKey key,
                           std::shared_ptr<const TimeGridSnapshot> grid) override
         {
-            if (!proc_) return false;
-            return proc_->setContentTimeGrid(key, std::move(grid));
+            return proc_.setContentTimeGrid(key, std::move(grid));
         }
 
     private:
-        OpenTuneAudioProcessor* proc_;
+        OpenTuneAudioProcessor& proc_;
     };
-    contentCommands_ = std::make_shared<ProcessorContentCommandsInline>(this);
+    contentCommands_ = std::make_shared<ProcessorContentCommands>(*this);
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
     configureReferenceAnalysisService();
 
@@ -942,7 +1018,9 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                         result.success = true;
                         return result;
                     },
-                    [this, segContentKey](F0ExtractionService::Result&& result) {
+                    [this, lifetimeFlag, segContentKey](F0ExtractionService::Result&& result) {
+                        if (!lifetimeFlag->load(std::memory_order_acquire))
+                            return;
                         if (auto* session = getCaptureSession()) {
                             if (!result.success) {
                                 session->commitSegmentF0Result(
@@ -959,6 +1037,8 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                             session->commitSegmentF0Result(
                                 segContentKey, std::move(pitchCurve),
                                 OriginalF0State::Ready, DetectedKey{});
+                            if (pendingTimeToolSeedKeys_.count(segContentKey) != 0)
+                                ensureTimeToolAnchorSeed(segContentKey);
                         }
                     }
                 );
@@ -987,7 +1067,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
         };
 
         bindings.requestFullRender = [this](ContentKey key) {
-            requestFullContentRender(key, FullRenderReason::CaptureRestore);
+            requestFullContentRender(key);
         };
 
         bindings.onRenderComplete = [this](ContentKey key) {
@@ -1011,6 +1091,9 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 #endif
     );
 
+    referenceAnalysisService_.removeListener(this);
+    referenceAnalysisService_.shutdown();
+
     // Phase 1: 停止内部刷新标志（阻止新 work 提交）
     contentRefreshAliveFlag_->store(false, std::memory_order_release);
 
@@ -1021,8 +1104,6 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 
     // Phase 4: 内部清理
     cancelPendingUpdate();
-    referenceAnalysisService_.removeListener(this);
-    referenceAnalysisService_.cancelAll();
 
     // Vocoder is process-level (ProcessRenderRuntime singleton); do not
     // shutdown here -- that would break every other processor in the process.
@@ -1156,24 +1237,10 @@ OpenTuneAudioProcessor::queryAutoRefAvailability(uint64_t targetPlacementId) con
         return availability;
     }
 
-    const auto modelsDir = juce::String(ModelPathResolver::getModelsDirectory());
-    std::lock_guard<std::mutex> lock(noteGenInitMutex_);
-    const auto backendProbe = probeAutoRefGameBackendLocked(noteGenerator_.get(), modelsDir);
-
-    if (backendProbe.currentBackendIsGame) {
-        availability.status = AutoRefAvailability::Status::Ready;
-        availability.message = juce::String("AUTO(Ref) will analyze the reference clip with GAME.");
-        return availability;
-    }
-
-    if (backendProbe.forceLegacy || backendProbe.currentBackendIsLegacy || !backendProbe.gameBundlePresent) {
-        availability.status = AutoRefAvailability::Status::GameUnavailable;
-        availability.message = makeAutoRefGameUnavailableMessage(backendProbe);
-        return availability;
-    }
-
     availability.status = AutoRefAvailability::Status::Ready;
-    availability.message = juce::String("AUTO(Ref) will analyze the reference clip with GAME.");
+    availability.message = resolveReferenceFeatureProducer() == ReferenceFeatureProducer::Game
+        ? juce::String("AUTO(Ref) will analyze the reference clip with GAME.")
+        : juce::String("AUTO(Ref) will analyze the reference clip with standard AUTO.");
     return availability;
 }
 
@@ -1273,7 +1340,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
             if (auto cache = contentRenderService_->getRenderCache(key))
                 cache->clear();
 
-            requestFullContentRender(key, FullRenderReason::ModelOrSettingsWholeContentRerender);
+            requestFullContentRender(key);
         }
         // 清理 TimeStretchCache
         contentRenderService_->getTimeStretchCache().clear();
@@ -2445,7 +2512,6 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     };
     leadingPayload.audioBuffer = sliceAudioBuffer(originalSnapshot->audioBuffer, 0, splitSample);
     leadingPayload.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve, 0.0, splitOffsetSeconds);
-    leadingPayload.correctionSegments = copyPitchCorrectionSegments(leadingPayload.pitchCurve);
     leadingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes, 0.0, splitOffsetSeconds);
     leadingPayload.silentGaps = sliceSilentGaps(originalSnapshot->silentGaps, 0, splitSample);
     leadingPayload.timeGrid = nullptr;
@@ -2461,7 +2527,6 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     trailingPayload.pitchCurve = slicePitchCurveToLocalRange(originalSnapshot->pitchCurve,
                                                              splitOffsetSeconds,
                                                              originalPlacement.durationSeconds);
-    trailingPayload.correctionSegments = copyPitchCorrectionSegments(trailingPayload.pitchCurve);
     trailingPayload.notes = sliceNotesToLocalRange(originalSnapshot->notes,
                                                    splitOffsetSeconds,
                                                    originalPlacement.durationSeconds);
@@ -2633,7 +2698,6 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
     mergedPayload.originalF0State = leadingSnapshot->originalF0State;
     mergedPayload.detectedKey = leadingSnapshot->detectedKey;
     mergedPayload.notes = std::move(mergedNotes);
-    mergedPayload.correctionSegments = copyPitchCorrectionSegments(mergedPayload.pitchCurve);
     mergedPayload.silentGaps = mergeSilentGaps(leadingSnapshot->silentGaps, trailingSnapshot->silentGaps, leadingSamples);
     mergedPayload.pitchShiftSettings = leadingSnapshot->pitchShiftSettings;
 
@@ -2866,6 +2930,7 @@ OpenTuneAudioProcessor::resolveAnalysisAudioProvider(ContentKey key)
         && readSource.audioBuffer->getNumSamples() > 0
         && readSource.audioSampleRate > 0.0)
     {
+        result.audioBuffer = readSource.audioBuffer;
         result.samples = readSource.audioBuffer->getReadPointer(0);
         result.numSamples = readSource.audioBuffer->getNumSamples();
         result.sampleRate = readSource.audioSampleRate;
@@ -2879,6 +2944,7 @@ OpenTuneAudioProcessor::resolveAnalysisAudioProvider(ContentKey key)
             && snap->audioBuffer->getNumSamples() > 0
             && snap->audioSampleRate > 0.0)
         {
+            result.audioBuffer = snap->audioBuffer;
             result.samples = snap->audioBuffer->getReadPointer(0);
             result.numSamples = snap->audioBuffer->getNumSamples();
             result.sampleRate = snap->audioSampleRate;
@@ -2890,11 +2956,8 @@ OpenTuneAudioProcessor::resolveAnalysisAudioProvider(ContentKey key)
 }
 
 void OpenTuneAudioProcessor::onContentLocalMutationCompleted(ContentKey key,
-                                                              MutationScope scope,
                                                               ContentEditRangeFrames affectedRange)
 {
-    juce::ignoreUnused(scope);
-
 #if JucePlugin_Enable_ARA
     if (key.domainKind == DomainKind::ARAAudioModification)
     {
@@ -2927,12 +2990,8 @@ void OpenTuneAudioProcessor::onContentLocalMutationCompleted(ContentKey key,
     requestRenderForLocalMutationRange(key, startSec, endSec);
 }
 
-void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key,
-                                                             MutationScope scope,
-                                                             FullRenderReason reason)
+void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key)
 {
-    juce::ignoreUnused(scope);
-
 #if JucePlugin_Enable_ARA
     if (key.domainKind == DomainKind::ARAAudioModification)
     {
@@ -2948,12 +3007,11 @@ void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key,
 
     // Non-ARA path
     refreshCRSMetadata(key);
-    requestFullContentRender(key, reason);
+    requestFullContentRender(key);
 }
 
-void OpenTuneAudioProcessor::requestFullContentRender(ContentKey key, FullRenderReason reason)
+void OpenTuneAudioProcessor::requestFullContentRender(ContentKey key)
 {
-    juce::ignoreUnused(reason);
     auto snap = getContentSnapshot(key);
     if (!snap) return;
     const double durationSeconds = contentDurationSeconds(*snap);
@@ -3001,33 +3059,35 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     crs->enqueueRender(std::move(job));
 }
 
-void OpenTuneAudioProcessor::handleStage1ChunkPublished(ContentKey key, uint64_t publishedRevision)
+void OpenTuneAudioProcessor::enqueueStandaloneStage2WhenCanonicalSettled(ContentKey key)
 {
-    auto snap = getContentSnapshot(key);
-    if (!snap || snap->contentRevision != publishedRevision)
+    if (key.domainKind != DomainKind::StandaloneClip)
         return;
 
+    auto snap = getContentSnapshot(key);
+    if (snap == nullptr || snap->timeGrid == nullptr || snap->timeGrid->isIdentity())
+        return;
+
+    auto* crs = resolveMutableLocalContentRenderService(key);
+    if (crs == nullptr)
+        return;
+
+    ContentRenderService::Stage2Request request;
+    request.contentKey = key;
+    request.pitchRevision = snap->pitchRevision;
+    request.pitchShiftRevision = snap->pitchShiftRevision;
+    request.timeGridRevision = snap->timeGridRevision;
+    crs->enqueueStage2RebuildWhenCanonicalSettled(request);
+}
+
+void OpenTuneAudioProcessor::handleStage1ChunkSettled(ContentKey key)
+{
     refreshCRSMetadata(key);
-    
-    // Notify capture session that render is complete for this segment
+
     if (auto* session = getCaptureSession())
         session->onRenderComplete(key);
-    
-    if (snap->timeGrid != nullptr && !snap->timeGrid->isIdentity())
-    {
-        // Use CRS-owned Stage2 rebuild API
-        ContentRenderService::Stage2Request stage2Req;
-        stage2Req.contentKey = key;
-        stage2Req.pitchRevision = snap->pitchRevision;
-        stage2Req.pitchShiftRevision = snap->pitchShiftRevision;
-        stage2Req.timeGridRevision = snap->timeGridRevision;
 
-        auto* crs = resolveMutableLocalContentRenderService(key);
-        if (crs != nullptr)
-        {
-            crs->requestStage2Rebuild(stage2Req, snap);
-        }
-    }
+    enqueueStandaloneStage2WhenCanonicalSettled(key);
 }
 
 void OpenTuneAudioProcessor::refreshCRSMetadata(ContentKey key)
@@ -3633,7 +3693,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 if (!writePitchCurveToOwner(request.contentKey, std::move(clearedCurve))) {
                     return false;
                 }
-                onContentFullMutationCompleted(request.contentKey, MutationScope::PitchCurveChanged, FullRenderReason::GlobalPitchShift);
+                onContentFullMutationCompleted(request.contentKey);
             }
         }
 
@@ -3789,6 +3849,8 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             processor->detectContentKeyIfUnset(capturedRequest.contentKey);
 
             processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Ready);
+            if (processor->pendingTimeToolSeedKeys_.count(capturedRequest.contentKey) != 0)
+                processor->ensureTimeToolAnchorSeed(capturedRequest.contentKey);
         });
 
     if (submitResult != F0ExtractionService::SubmitResult::Accepted) {
@@ -3873,26 +3935,25 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
         }
     }
 
+    const auto desiredProducer = resolveReferenceFeatureProducer();
     auto& features = snap->referenceFeatures;
     const bool featuresReady = features.isReady()
-        && features.producer == ReferenceFeatureProducer::Game
-        && features.inputFingerprint == static_cast<int64_t>(snap->contentRevision)
+        && features.producer == desiredProducer
+        && features.inputFingerprint == static_cast<int64_t>(snap->audioRevision)
         && features.hasTimingAnchors();
 
     if (!featuresReady) {
+        pendingTimeToolSeedKeys_.insert(key);
         const auto preheatStatus = preheatReferenceAlignmentFeatures(key);
         if (preheatStatus == ReferenceAnalysisPreheatStatus::InvalidContent
             || preheatStatus == ReferenceAnalysisPreheatStatus::AnalysisFailed) {
+            pendingTimeToolSeedKeys_.erase(key);
             return false;
         }
         return false;
     }
 
-    if (!features.isReady()
-        || features.producer != ReferenceFeatureProducer::Game
-        || !features.hasTimingAnchors()) {
-        return false;
-    }
+    pendingTimeToolSeedKeys_.erase(key);
 
     const double durationSeconds = snap->timeGrid != nullptr
         ? snap->timeGrid->totalDurationSeconds()
@@ -3909,19 +3970,17 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
     auto pushHandle = [&](double sourceSeconds,
                           double outputSeconds,
                           HandleKind kind,
-                          bool locked,
                           Confidence confidence = Confidence::Default) {
         TimeHandle handle;
         handle.id = nextHandleId++;
         handle.source_seconds = sourceSeconds;
         handle.output_seconds = outputSeconds;
         handle.kind = kind;
-        handle.locked = locked;
         handle.confidence = confidence;
         handles.push_back(handle);
     };
 
-    pushHandle(0.0, 0.0, HandleKind::ClipStart, true);
+    pushHandle(0.0, 0.0, HandleKind::ClipStart);
 
     std::vector<double> eventTimes;
     eventTimes.reserve(features.timing.anchors.size());
@@ -3936,8 +3995,8 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
 
     std::sort(eventTimes.begin(), eventTimes.end());
     eventTimes.erase(std::unique(eventTimes.begin(), eventTimes.end(),
-                                 [](double a, double b) { return std::abs(a - b) < 0.005; }),
-                     eventTimes.end());
+                                  [](double a, double b) { return std::abs(a - b) < 0.005; }),
+                      eventTimes.end());
 
     double lastAcceptedSource = 0.0;
     for (const double eventTime : eventTimes) {
@@ -3950,15 +4009,13 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
 
         pushHandle(eventTime,
                    eventTime,
-                   HandleKind::InternalOnset,
-                   false);
+                   HandleKind::InternalOnset);
         lastAcceptedSource = eventTime;
     }
 
     pushHandle(durationSeconds,
                durationSeconds,
-               HandleKind::ClipEnd,
-               true);
+               HandleKind::ClipEnd);
 
     auto seededGrid = TimeGridSnapshot::makeFromHandles(std::move(handles),
                                                         existingGrid != nullptr ? existingGrid->revision() + 1 : 1);
@@ -3972,7 +4029,7 @@ bool OpenTuneAudioProcessor::ensureTimeToolAnchorSeed(ContentKey key)
 OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus
 OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(ContentKey key)
 {
-    if (!key.isValid()) {
+    if (!key.isValid() || key.domainKind != DomainKind::StandaloneClip) {
         return ReferenceAnalysisPreheatStatus::InvalidContent;
     }
 
@@ -3981,35 +4038,63 @@ OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(ContentKey key)
         return ReferenceAnalysisPreheatStatus::InvalidContent;
     }
 
+    const auto producer = resolveReferenceFeatureProducer();
+    const auto inputFingerprint = static_cast<int64_t>(snap->audioRevision);
     auto& features = snap->referenceFeatures;
+    if (producer == ReferenceFeatureProducer::StandardAuto) {
+        switch (snap->originalF0State) {
+            case OriginalF0State::NotRequested: {
+                ContentRefreshRequest refreshRequest;
+                refreshRequest.contentKey = key;
+                refreshRequest.preserveCorrectionsOutsideChangedRange = true;
+                return requestContentRefresh(refreshRequest)
+                    ? ReferenceAnalysisPreheatStatus::WaitingForSource
+                    : ReferenceAnalysisPreheatStatus::AnalysisFailed;
+            }
+            case OriginalF0State::Extracting:
+                return ReferenceAnalysisPreheatStatus::WaitingForSource;
+            case OriginalF0State::Failed:
+                return ReferenceAnalysisPreheatStatus::AnalysisFailed;
+            case OriginalF0State::Ready:
+                break;
+        }
+
+        if (snap->pitchCurve == nullptr
+            || snap->pitchCurve->getSnapshot()->getOriginalF0().empty()) {
+            return ReferenceAnalysisPreheatStatus::AnalysisFailed;
+        }
+    }
+
     if (features.isReady()
-        && features.producer == ReferenceFeatureProducer::Game
-        && features.inputFingerprint == static_cast<int64_t>(snap->contentRevision)) {
+        && features.producer == producer
+        && features.inputFingerprint == inputFingerprint) {
         return ReferenceAnalysisPreheatStatus::AlreadyReady;
     }
 
     if (features.status == ReferenceFeatureStatus::Failed
-        && features.producer == ReferenceFeatureProducer::Game
-        && features.inputFingerprint == static_cast<int64_t>(snap->contentRevision)) {
+        && features.producer == producer
+        && features.inputFingerprint == inputFingerprint) {
         return ReferenceAnalysisPreheatStatus::AnalysisFailed;
     }
 
-    if (features.status != ReferenceFeatureStatus::Extracting
-        || features.producer != ReferenceFeatureProducer::Game
-        || features.inputFingerprint != static_cast<int64_t>(snap->contentRevision)) {
-        ReferenceFeatureSet extracting;
-        extracting.producer = ReferenceFeatureProducer::Game;
-        extracting.status = ReferenceFeatureStatus::Extracting;
-        extracting.inputFingerprint = static_cast<int64_t>(snap->contentRevision);
-        extracting.sourceDurationSeconds = snap->audioBuffer != nullptr
-            ? TimeCoordinate::samplesToSeconds(snap->audioBuffer->getNumSamples(),
-                                                TimeCoordinate::kRenderSampleRate)
-            : 0.0;
-        setContentReferenceFeatures(key, extracting);
+    if (features.status == ReferenceFeatureStatus::Extracting
+        && features.producer == producer
+        && features.inputFingerprint == inputFingerprint) {
+        return ReferenceAnalysisPreheatStatus::Queued;
     }
 
-    referenceAnalysisService_.submitAnalysis(key,
-                                             static_cast<int64_t>(snap->contentRevision));
+    ReferenceFeatureSet extracting;
+    extracting.analysisRevision = features.analysisRevision + 1;
+    extracting.producer = producer;
+    extracting.status = ReferenceFeatureStatus::Extracting;
+    extracting.inputFingerprint = inputFingerprint;
+    extracting.sourceDurationSeconds = snap->audioBuffer != nullptr
+        ? TimeCoordinate::samplesToSeconds(snap->audioBuffer->getNumSamples(),
+                                            snap->audioSampleRate)
+        : 0.0;
+    setContentReferenceFeatures(key, extracting);
+
+    referenceAnalysisService_.submitAnalysis(key, inputFingerprint, producer);
     return ReferenceAnalysisPreheatStatus::Queued;
 }
 
@@ -4078,33 +4163,35 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         return result;
     }
 
-    ReferenceFeatureSet targetFeatures = targetSnap->referenceFeatures;
-    if (!targetFeatures.isReady()
-        || targetFeatures.producer != ReferenceFeatureProducer::Game
-        || targetFeatures.inputFingerprint != static_cast<int64_t>(targetSnap->contentRevision)) {
-        targetFeatures = buildReferenceFeatureSet(targetPlacement.contentKey, *targetSnap);
-        setContentReferenceFeatures(targetPlacement.contentKey, targetFeatures);
-    }
-    if (!targetFeatures.isReady()) {
+    const auto desiredProducer = resolveReferenceFeatureProducer();
+    const auto featureIsCurrent = [desiredProducer](const ReferenceFeatureSet& features,
+                                                     const EditableContentSnapshot& snapshot) {
+        return features.isReady()
+            && features.producer == desiredProducer
+            && features.inputFingerprint == static_cast<int64_t>(snapshot.audioRevision);
+    };
+
+    const ReferenceFeatureSet targetFeatures = targetSnap->referenceFeatures;
+    if (!featureIsCurrent(targetFeatures, *targetSnap)) {
+        const auto preheatStatus = preheatReferenceAlignmentFeatures(targetPlacement.contentKey);
         result.status = ReferenceAlignmentResult::Status::TargetAnalysisNotReady;
         result.message = targetFeatures.errorMessage.isNotEmpty()
             ? targetFeatures.errorMessage
-            : "AUTO Ref target alignment features are not ready";
+            : preheatStatus == ReferenceAnalysisPreheatStatus::AnalysisFailed
+                ? juce::String("AUTO Ref target source analysis failed")
+                : juce::String("AUTO Ref target analysis is pending");
         return result;
     }
 
-    ReferenceFeatureSet referenceFeatures = referenceSnap->referenceFeatures;
-    if (!referenceFeatures.isReady()
-        || referenceFeatures.producer != ReferenceFeatureProducer::Game
-        || referenceFeatures.inputFingerprint != static_cast<int64_t>(referenceSnap->contentRevision)) {
-        referenceFeatures = buildReferenceFeatureSet(referencePlacement.contentKey, *referenceSnap);
-        setContentReferenceFeatures(referencePlacement.contentKey, referenceFeatures);
-    }
-    if (!referenceFeatures.isReady()) {
+    const ReferenceFeatureSet referenceFeatures = referenceSnap->referenceFeatures;
+    if (!featureIsCurrent(referenceFeatures, *referenceSnap)) {
+        const auto preheatStatus = preheatReferenceAlignmentFeatures(referencePlacement.contentKey);
         result.status = ReferenceAlignmentResult::Status::ReferenceAnalysisNotReady;
         result.message = referenceFeatures.errorMessage.isNotEmpty()
             ? referenceFeatures.errorMessage
-            : "AUTO Ref reference alignment features are not ready";
+            : preheatStatus == ReferenceAnalysisPreheatStatus::AnalysisFailed
+                ? juce::String("AUTO Ref reference source analysis failed")
+                : juce::String("AUTO Ref reference analysis is pending");
         return result;
     }
 
@@ -4117,7 +4204,6 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     }
 
     const auto oldSegments = copyPitchCorrectionSegments(oldCurve);
-    // 优先从 sourceWindow 或已有 features 的 duration，不加载 PCM
     const double targetDurationSeconds = targetSnap->sourceWindow.isValid()
         ? targetSnap->sourceWindow.durationSeconds()
         : targetFeatures.sourceDurationSeconds;
@@ -4125,18 +4211,8 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         ? referenceSnap->sourceWindow.durationSeconds()
         : referenceFeatures.sourceDurationSeconds;
     if (!(targetDurationSeconds > 0.0) || !(referenceDurationSeconds > 0.0)) {
-        result.status = ReferenceAlignmentResult::Status::InvalidTimeGrid;
+        result.status = ReferenceAlignmentResult::Status::InsufficientFeatures;
         result.message = "AUTO Ref requires positive target and reference durations";
-        return result;
-    }
-
-    auto oldTimeGrid = targetSnap->timeGrid;
-    if (oldTimeGrid == nullptr) {
-        oldTimeGrid = TimeGridSnapshot::makeIdentity(targetDurationSeconds);
-    }
-    if (oldTimeGrid == nullptr) {
-        result.status = ReferenceAlignmentResult::Status::InvalidTimeGrid;
-        result.message = "AUTO Ref could not bootstrap target TimeGrid";
         return result;
     }
 
@@ -4145,17 +4221,19 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
     request.target.contentKey = targetPlacement.contentKey;
     request.target.timelineStartSeconds = targetPlacement.timelineStartSeconds;
     request.target.timelineEndSeconds = targetPlacement.timelineEndSeconds();
+    request.target.sourceStartSeconds = targetPlacement.clipInSeconds;
+    request.target.sourceEndSeconds = targetPlacement.clipInSeconds + targetPlacement.durationSeconds;
     request.reference.placementId = referencePlacement.placementId;
     request.reference.contentKey = referencePlacement.contentKey;
     request.reference.timelineStartSeconds = referencePlacement.timelineStartSeconds;
     request.reference.timelineEndSeconds = referencePlacement.timelineEndSeconds();
+    request.reference.sourceStartSeconds = referencePlacement.clipInSeconds;
+    request.reference.sourceEndSeconds = referencePlacement.clipInSeconds + referencePlacement.durationSeconds;
     request.targetTimeMap = EffectiveTimeMap::fromTimeGrid(targetSnap->timeGrid, targetDurationSeconds);
     request.referenceTimeMap = EffectiveTimeMap::fromTimeGrid(referenceSnap->timeGrid, referenceDurationSeconds);
     request.targetFeatures = targetFeatures;
     request.referenceFeatures = referenceFeatures;
     request.targetNotesBefore = oldNotes;
-    request.targetSegmentsBefore = oldSegments;
-    request.targetTimeGridBefore = oldTimeGrid;
     request.overlapStartTimelineSeconds = overlapStart;
     request.overlapEndTimelineSeconds = overlapEnd;
 
@@ -4172,11 +4250,7 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
                 result.status = ReferenceAlignmentResult::Status::ReferenceAnalysisNotReady;
                 break;
             case AlignmentPatch::ErrorCode::InsufficientFeatures:
-            case AlignmentPatch::ErrorCode::InsufficientNotes:
                 result.status = ReferenceAlignmentResult::Status::InsufficientFeatures;
-                break;
-            case AlignmentPatch::ErrorCode::TimeGridInvalid:
-                result.status = ReferenceAlignmentResult::Status::InvalidTimeGrid;
                 break;
             case AlignmentPatch::ErrorCode::NoMutation:
                 result.status = ReferenceAlignmentResult::Status::NoMutation;
@@ -4188,159 +4262,120 @@ OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement(uint64_t targetPla
         }
         result.message = patch.diagnostics;
         result.targetContentKey = targetPlacement.contentKey;
-        result.affectedStartFrame = patch.affectedStartFrame;
-        result.affectedEndFrame = patch.affectedEndFrame;
         return result;
     }
 
-    auto timeGridAfter = oldTimeGrid;
-    if (patch.timingChanged) {
-        TimeGridPatchRequest timeRequest;
-        timeRequest.before = oldTimeGrid;
-        timeRequest.affectedSourceStartSeconds =
-            static_cast<double>(patch.affectedStartFrame) / TimeGridSnapshot::kSourceSpacingFrameRate;
-        timeRequest.affectedSourceEndSeconds =
-            static_cast<double>(patch.affectedEndFrame) / TimeGridSnapshot::kSourceSpacingFrameRate;
-        timeRequest.intents = patch.timingIntents;
-
-        const auto timeResult = TimeGridPatchBuilder::build(timeRequest);
-        if (!timeResult.success || timeResult.after == nullptr) {
-            result.status = ReferenceAlignmentResult::Status::InvalidTimeGrid;
-            result.message = timeResult.diagnostic.isEmpty()
-                ? juce::String("AUTO Ref produced an invalid TimeGrid patch")
-                : timeResult.diagnostic;
-            return result;
-        }
-        timeGridAfter = timeResult.after;
-    }
-
-    auto newCurve = clonePitchCurveWithPitchCorrectionSegments(oldCurve, patch.correctionSegmentsAfter);
-    if (newCurve == nullptr || timeGridAfter == nullptr) {
-        result.status = ReferenceAlignmentResult::Status::CommitFailed;
-        result.message = "AUTO Ref produced an incomplete patch";
+    const auto oldPitchSnapshot = oldCurve->getSnapshot();
+    const int hopSize = oldPitchSnapshot->getHopSize();
+    const double pitchSampleRate = oldPitchSnapshot->getSampleRate();
+    const int frameCount = static_cast<int>(oldPitchSnapshot->getOriginalF0().size());
+    if (hopSize <= 0 || pitchSampleRate <= 0.0 || frameCount <= 0) {
+        result.status = ReferenceAlignmentResult::Status::TargetAnalysisNotReady;
+        result.message = "AUTO Ref target F0 coordinates are not available";
         return result;
     }
 
-    const auto normalizedNotes = normalizeStoredNotes(patch.notesAfter);
-
-    // Filter segments to affected range before passing to commitContentNotesAndSegments.
-    // Contract: callers must pass range-scoped segments only.
-    std::vector<PitchCorrectionSegment> segmentsInRange;
-    for (const auto& seg : patch.correctionSegmentsAfter) {
-        if (seg.startFrame < patch.affectedEndFrame && seg.endFrame > patch.affectedStartFrame)
-            segmentsInRange.push_back(seg);
-    }
-
-    auto commitSnap = commitContentNotesAndSegments(
-        targetPlacement.contentKey, normalizedNotes, segmentsInRange,
-        ContentEditRangeFrames{patch.affectedStartFrame, patch.affectedEndFrame});
-    const bool commitOk = (commitSnap != nullptr);
-    if (commitOk && patch.timingChanged && timeGridAfter)
-        setContentTimeGrid(targetPlacement.contentKey, timeGridAfter);
-    if (!commitOk) {
-        result.status = ReferenceAlignmentResult::Status::CommitFailed;
-        result.message = patch.diagnostics;
-        result.targetContentKey = targetPlacement.contentKey;
-        result.affectedStartFrame = patch.affectedStartFrame;
-        result.affectedEndFrame = patch.affectedEndFrame;
+    const double frameRate = pitchSampleRate / static_cast<double>(hopSize);
+    const int affectedStartFrame = juce::jlimit(
+        0, frameCount,
+        static_cast<int>(std::floor(patch.affectedSourceStartSeconds * frameRate)));
+    const int affectedEndFrame = juce::jlimit(
+        0, frameCount,
+        static_cast<int>(std::ceil(patch.affectedSourceEndSeconds * frameRate)));
+    if (affectedEndFrame <= affectedStartFrame) {
+        result.status = ReferenceAlignmentResult::Status::NoOverlap;
+        result.message = "AUTO Ref overlap maps to an empty F0 range";
         return result;
     }
 
-    // Compute range-scoped before/after for memory-efficient undo.
-    const double secondsPerFrameUndo = static_cast<double>(oldCurve->getHopSize()) / oldCurve->getSampleRate();
-    const double rangeStartSecUndo = static_cast<double>(patch.affectedStartFrame) * secondsPerFrameUndo;
-    const double rangeEndSecUndo = static_cast<double>(patch.affectedEndFrame) * secondsPerFrameUndo;
+    const auto& normalizedNotes = patch.notesAfter;
+    const auto correctionRange = PitchCurve::expandNoteBasedCorrectionRange(
+        affectedStartFrame, affectedEndFrame, frameCount);
+    const ContentEditRangeFrames commitRange{
+        correctionRange.startFrame,
+        correctionRange.endFrameExclusive
+    };
 
     auto filterNotes = [&](const std::vector<Note>& notes) {
-        std::vector<Note> result;
-        for (const auto& n : notes)
-            if (n.endTime > rangeStartSecUndo && n.startTime < rangeEndSecUndo)
-                result.push_back(n);
-        return result;
+        const double secondsPerFrame = static_cast<double>(hopSize) / pitchSampleRate;
+        const double rangeStartSeconds = static_cast<double>(commitRange.startFrame) * secondsPerFrame;
+        const double rangeEndSeconds = static_cast<double>(commitRange.endFrameExclusive) * secondsPerFrame;
+        std::vector<Note> filtered;
+        for (const auto& note : notes) {
+            if (note.endTime > rangeStartSeconds && note.startTime < rangeEndSeconds)
+                filtered.push_back(note);
+        }
+        return filtered;
     };
-    auto filterSegments = [&](const std::vector<PitchCorrectionSegment>& segs) {
-        std::vector<PitchCorrectionSegment> result;
-        for (const auto& s : segs) {
-            if (s.endFrame <= patch.affectedStartFrame || s.startFrame >= patch.affectedEndFrame)
-                continue;  // Outside range
-            
-            // Clip to range boundaries (split-preserve for boundary-crossing segments)
-            const int clipStart = std::max(s.startFrame, patch.affectedStartFrame);
-            const int clipEnd = std::min(s.endFrame, patch.affectedEndFrame);
+
+    auto filterSegments = [&](const std::vector<PitchCorrectionSegment>& segments) {
+        std::vector<PitchCorrectionSegment> filtered;
+        for (const auto& segment : segments) {
+            const int clipStart = std::max(segment.startFrame, commitRange.startFrame);
+            const int clipEnd = std::min(segment.endFrame, commitRange.endFrameExclusive);
             if (clipEnd <= clipStart)
-                continue;  // Empty after clip
-            
-            PitchCorrectionSegment clipped = s;
-            const int startOffset = clipStart - s.startFrame;
-            const int clipLen = clipEnd - clipStart;
-            if (startOffset >= 0 && clipLen > 0 && startOffset + clipLen <= static_cast<int>(s.f0Data.size())) {
-                clipped.startFrame = clipStart;
-                clipped.endFrame = clipEnd;
-                clipped.f0Data.assign(s.f0Data.begin() + startOffset, s.f0Data.begin() + startOffset + clipLen);
-                result.push_back(std::move(clipped));
+                continue;
+
+            const int sourceOffset = clipStart - segment.startFrame;
+            const int clippedLength = clipEnd - clipStart;
+            if (sourceOffset < 0
+                || sourceOffset + clippedLength > static_cast<int>(segment.f0Data.size())) {
+                continue;
             }
+
+            PitchCorrectionSegment clipped = segment;
+            clipped.startFrame = clipStart;
+            clipped.endFrame = clipEnd;
+            clipped.f0Data.assign(segment.f0Data.begin() + sourceOffset,
+                                  segment.f0Data.begin() + sourceOffset + clippedLength);
+            filtered.push_back(std::move(clipped));
         }
-        return result;
+        return filtered;
     };
 
+    auto derivedCurve = oldCurve->clone();
+    derivedCurve->applyCorrectionToRange(
+        normalizedNotes,
+        affectedStartFrame,
+        affectedEndFrame,
+        static_cast<float>(targetSnap->pitchShiftSettings.getPitchRatio()),
+        PitchControlConfig::kDefaultRetuneSpeedNormalized,
+        PitchControlConfig::kDefaultVibratoDepth,
+        PitchControlConfig::kDefaultVibratoRateHz);
+
+    const auto segmentsInRange = filterSegments(copyPitchCorrectionSegments(derivedCurve));
     auto beforeNotesScoped = filterNotes(oldNotes);
-    auto afterNotesScoped = filterNotes(normalizedNotes);
     auto beforeSegmentsScoped = filterSegments(oldSegments);
-    auto afterSegmentsScoped = filterSegments(patch.correctionSegmentsAfter);
 
-    auto composite = std::make_unique<CompositeUndoAction>("AUTO (Ref)");
-    if (patch.pitchChanged) {
-        composite->addAction(std::make_unique<PianoRollEditAction>(
-            contentCommands_,
-            targetPlacement.contentKey,
-            "AUTO (Ref) Pitch",
-            std::move(beforeNotesScoped),
-            std::move(afterNotesScoped),
-            std::move(beforeSegmentsScoped),
-            std::move(afterSegmentsScoped),
-            ContentEditRangeFrames{patch.affectedStartFrame, patch.affectedEndFrame}));
-    }
-    if (patch.timingChanged) {
-        composite->addAction(std::make_unique<TimeGridEditAction>(
-            contentCommands_,
-            targetPlacement.contentKey,
-            "AUTO (Ref) Time",
-            oldTimeGrid,
-            timeGridAfter));
+    const auto commitSnap = commitContentNotesAndSegments(
+        targetPlacement.contentKey,
+        normalizedNotes,
+        segmentsInRange,
+        commitRange);
+    if (commitSnap == nullptr) {
+        result.status = ReferenceAlignmentResult::Status::CommitFailed;
+        result.message = "AUTO Ref could not commit the pitch patch";
+        result.targetContentKey = targetPlacement.contentKey;
+        result.affectedStartFrame = commitRange.startFrame;
+        result.affectedEndFrame = commitRange.endFrameExclusive;
+        return result;
     }
 
-    if (composite->getNumActions() > 0) {
-        undoManager_.addAction(std::move(composite));
-    }
-
-    if (patch.timingChanged) {
-        if (const auto latestSnap = getContentSnapshot(targetPlacement.contentKey)) {
-            ContentRenderService::Stage2Request stage2Req;
-            stage2Req.contentKey = targetPlacement.contentKey;
-            stage2Req.pitchRevision = latestSnap->pitchRevision;
-            stage2Req.pitchShiftRevision = latestSnap->pitchShiftRevision;
-            stage2Req.timeGridRevision = latestSnap->timeGridRevision;
-
-#if JucePlugin_Enable_ARA
-            if (targetPlacement.contentKey.domainKind == DomainKind::ARAAudioModification) {
-                auto* dc = getDocumentController();
-                if (dc != nullptr)
-                    dc->requestModificationStage2Rebuild(targetPlacement.contentKey);
-            } else
-#endif
-            {
-                auto* crs = resolveMutableLocalContentRenderService(targetPlacement.contentKey);
-                if (crs != nullptr)
-                    crs->requestStage2Rebuild(stage2Req, latestSnap);
-            }
-        }
-    }
+    undoManager_.addAction(std::make_unique<PianoRollEditAction>(
+        contentCommands_,
+        targetPlacement.contentKey,
+        "AUTO (Ref)",
+        std::move(beforeNotesScoped),
+        filterNotes(commitSnap->notes),
+        std::move(beforeSegmentsScoped),
+        filterSegments(copyPitchCorrectionSegments(commitSnap->pitchCurve)),
+        commitRange));
 
     result.status = ReferenceAlignmentResult::Status::Succeeded;
-    result.message = "AUTO Ref alignment applied";
+    result.message = "AUTO Ref pitch correction applied";
     result.targetContentKey = targetPlacement.contentKey;
-    result.affectedStartFrame = patch.affectedStartFrame;
-    result.affectedEndFrame = patch.affectedEndFrame;
+    result.affectedStartFrame = commitRange.startFrame;
+    result.affectedEndFrame = commitRange.endFrameExclusive;
     return result;
 }
 
@@ -4374,10 +4409,14 @@ bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, 
             break;
         }
     }
-    if (ok) {
-        onContentFullMutationCompleted(key, MutationScope::NotesChanged, FullRenderReason::Import);
-    }
-    return ok;
+    if (!ok)
+        return false;
+
+    if (key.domainKind != DomainKind::StandaloneClip)
+        return true;
+
+    refreshCRSMetadata(key);
+    return true;
 }
 
 ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(ContentKey key,
@@ -4539,7 +4578,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegments(Cont
             break;
     }
     if (ok) {
-        onContentLocalMutationCompleted(key, MutationScope::NotesChanged, affectedRange);
+        onContentLocalMutationCompleted(key, affectedRange);
         auto committedSnap = getContentSnapshot(key);
         jassert(committedSnap != nullptr);
         return committedSnap;
@@ -4615,7 +4654,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotePatch(ContentKey 
             frameRange.startFrame = static_cast<int>(patch.affectedRange.startSeconds / secondsPerFrame);
             frameRange.endFrameExclusive = static_cast<int>(std::ceil(patch.affectedRange.endSeconds / secondsPerFrame));
         }
-        onContentLocalMutationCompleted(key, MutationScope::NotesChanged, frameRange);
+        onContentLocalMutationCompleted(key, frameRange);
         auto committedSnap = getContentSnapshot(key);
         jassert(committedSnap != nullptr);
         return committedSnap;
@@ -4691,7 +4730,7 @@ bool OpenTuneAudioProcessor::setContentPitchCurve(ContentKey key,
 {
     if (!writePitchCurveToOwner(key, std::move(curve)))
         return false;
-    onContentLocalMutationCompleted(key, MutationScope::PitchCurveChanged, affectedRange);
+    onContentLocalMutationCompleted(key, affectedRange);
     return true;
 }
 
@@ -4726,8 +4765,20 @@ bool OpenTuneAudioProcessor::setContentTimeGrid(ContentKey key,
             break;
         }
     }
-    if (ok) {
-        onContentFullMutationCompleted(key, MutationScope::TimeGridChanged, FullRenderReason::GlobalTimeGrid);
+    if (ok && key.domainKind == DomainKind::StandaloneClip)
+    {
+        // TimeGrid affects only the Stage2 time-stretch path. Refresh CRS
+        // metadata so the latest timeGridRevision is visible, invalidate the
+        // derived TimeStretchCache once, and gate the Stage2 request through
+        // the canonical-settled entry point (Stage1 must be complete before
+        // Stage2 reads its canonical output). If initial Stage1 is not yet
+        // settled here, handleStage1ChunkSettled will enqueue Stage2 when it
+        // completes. Stage2 reads canonical Stage1 and the TimeGrid revision
+        // is independent from contentRevision.
+        refreshCRSMetadata(key);
+        if (auto* crs = resolveMutableLocalContentRenderService(key))
+            crs->getTimeStretchCache().invalidate(key);
+        enqueueStandaloneStage2WhenCanonicalSettled(key);
     }
     return ok;
 }
@@ -4820,23 +4871,22 @@ bool OpenTuneAudioProcessor::setContentOriginalF0State(ContentKey key, OriginalF
     return false;
 }
 
-bool OpenTuneAudioProcessor::setContentPitchShiftSettings(ContentKey key,
-                                                           const PitchShiftSettings& settings)
+bool OpenTuneAudioProcessor::applyContentPitchShiftState(ContentKey key,
+                                                          const PitchShiftEditState& state)
 {
     bool ok = false;
     switch (key.domainKind) {
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(key);
             if (!clip) return false;
-            clip->applyPitchShiftSettings(settings);
-            ok = true;
+            ok = clip->applyPitchShiftState(state);
             break;
         }
 #if JucePlugin_Enable_ARA
         case DomainKind::ARAAudioModification: {
             auto* dc = getDocumentController();
             if (!dc) return false;
-            ok = dc->applyPitchShiftToModification(key, settings);
+            ok = dc->applyPitchShiftStateToModification(key, state);
             break;
         }
 #else
@@ -4845,16 +4895,58 @@ bool OpenTuneAudioProcessor::setContentPitchShiftSettings(ContentKey key,
 #endif
         case DomainKind::RegularVST3Capture: {
             auto* session = getCaptureSession();
-            if (session == nullptr || !session->applyPitchShiftSettings(key, settings))
+            if (session == nullptr || !session->applyPitchShiftState(key, state))
                 return false;
             ok = true;
             break;
         }
     }
     if (ok) {
-        onContentFullMutationCompleted(key, MutationScope::PitchShiftChanged, FullRenderReason::GlobalPitchShift);
+        onContentFullMutationCompleted(key);
     }
     return ok;
+}
+
+std::unique_ptr<PitchShiftEditAction> OpenTuneAudioProcessor::commitPitchShiftEdit(
+    ContentKey key,
+    const PitchShiftSettings& newSettings)
+{
+    const auto snap = getContentSnapshot(key);
+    if (snap == nullptr || snap->pitchCurve == nullptr)
+        return {};
+
+    const auto& oldSettings = snap->pitchShiftSettings;
+    if (oldSettings.getTotalCents() == newSettings.getTotalCents())
+        return {};
+
+    PitchShiftEditState before;
+    before.settings = oldSettings;
+    before.notes = snap->notes;
+    before.segments = copyPitchCorrectionSegments(snap->pitchCurve);
+
+    PitchShiftEditState after = before;
+    after.settings = newSettings;
+    const float delta = static_cast<float>(newSettings.getPitchRatio() / oldSettings.getPitchRatio());
+
+    for (auto& note : after.notes) {
+        if (note.pitch > 0.0f)
+            note.pitch *= delta;
+        if (note.originalPitch > 0.0f)
+            note.originalPitch *= delta;
+    }
+
+    for (auto& segment : after.segments) {
+        for (auto& f0 : segment.f0Data) {
+            if (f0 > 0.0f)
+                f0 *= delta;
+        }
+    }
+
+    if (!applyContentPitchShiftState(key, after))
+        return {};
+
+    return std::make_unique<PitchShiftEditAction>(
+        contentCommands_, key, std::move(before), std::move(after));
 }
 
 bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey key,
@@ -4892,6 +4984,7 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
     derivedCurve->applyCorrectionToRange(mergedNotes,
                                          startFrame,
                                          endFrameExclusive,
+                                         static_cast<float>(snap->pitchShiftSettings.getPitchRatio()),
                                          retuneSpeed,
                                          vibratoDepth,
                                          vibratoRate);
@@ -4930,8 +5023,8 @@ bool OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey(ContentKey
     }
 
     if (!ok) return false;
-    onContentLocalMutationCompleted(key, MutationScope::NotesChanged,
-                                    ContentEditRangeFrames{startFrame, endFrameExclusive});
+    onContentLocalMutationCompleted(
+        key, ContentEditRangeFrames{startFrame, endFrameExclusive});
     return true;
 }
 
@@ -4981,7 +5074,6 @@ ContentKey OpenTuneAudioProcessor::copyContentRange(ContentKey sourceContentKey,
     payload.notes = sliceNotesToLocalRange(sourceSnap->notes,
                                            offsetSeconds,
                                            offsetSeconds + durationSeconds);
-    payload.correctionSegments = copyPitchCorrectionSegments(payload.pitchCurve);
     payload.silentGaps = sliceSilentGaps(sourceSnap->silentGaps,
                                          offsetSamples,
                                          offsetSamples + durSamples);
@@ -5027,7 +5119,6 @@ ContentKey OpenTuneAudioProcessor::cloneContent(ContentKey sourceContentKey,
     ContentPayloadState payload = payloadFromSnapshot(*sourceSnap);
     payload.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(*sourceSnap->audioBuffer);
     payload.pitchCurve = sourceSnap->pitchCurve != nullptr ? sourceSnap->pitchCurve->clone() : nullptr;
-    payload.correctionSegments = copyPitchCorrectionSegments(payload.pitchCurve);
 
     const ContentKey newKey = createStandaloneClipOwner(*standaloneContentRepository_,
                                                         *contentRenderService_,

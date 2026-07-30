@@ -14,7 +14,6 @@ TimeGridEditAction::TimeGridEditAction(std::shared_ptr<ContentEditCommands> comm
     , oldSnapshot_(std::move(oldSnapshot))
     , newSnapshot_(std::move(newSnapshot))
 {
-    jassert(commands_ != nullptr);
     jassert(contentKey_.isValid());
     jassert(oldSnapshot_ != nullptr);
     jassert(newSnapshot_ != nullptr);

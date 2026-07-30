@@ -9,7 +9,7 @@
  *   - per-content persistent instance (lazy-constructed by content owner)
  *   - re-built fully on every TimeGrid OR PitchCurve revision change
  *   - ratios always positive; pitch unchanged (Stage 1 vocoder handles pitch)
- *   - endpoint locked → ∫ ratio dt = totalSourceSeconds (output length == input length)
+ *   - endpoints invariant → ∫ ratio dt = totalSourceSeconds (output length == input length)
  *
  * Lifecycle:
  *   1. beginRebuild(schedule)  — clear() + cache schedule + reset counters
@@ -61,7 +61,7 @@ public:
         };
         std::vector<Anchor> anchors;       // ascending; endpoints (Clip Start/End) included
         double totalSourceSeconds = 0.0;
-        double totalOutputSeconds = 0.0;    // == totalSourceSeconds when endpoints locked
+        double totalOutputSeconds = 0.0;    // == totalSourceSeconds (端点不变量)
         bool   identity = false;            // every segment ratio == 1.0
 
         /// Locate the segment index containing sourceSeconds (0-based; clamped to last).
@@ -89,7 +89,7 @@ public:
      *
      * Each handle's (source_seconds, output_seconds) becomes an anchor.  The schedule
      * has totalSourceSeconds = anchors.back().sourceSeconds and totalOutputSeconds =
-     * anchors.back().outputSeconds.  When endpoints are locked, the two are equal.
+     * anchors.back().outputSeconds.  Endpoints invariant guarantees the two are equal.
      */
     TempoSchedule buildTempoScheduleFromTimeGrid(const TimeGridSnapshot& grid) const;
 
@@ -144,7 +144,7 @@ public:
     Phase phase() const noexcept { return phase_; }
 
     /// Expected output frames for the active schedule (only meaningful after
-    /// beginRebuild).  Equals totalSourceSeconds × sampleRate when endpoints locked.
+    /// beginRebuild).  Equals totalSourceSeconds × sampleRate (endpoints invariant).
     size_t expectedOutputSamples() const noexcept { return expectedOutputSamples_; }
 
     /// Returns a packed integer encoding the SoundTouch settings used by the

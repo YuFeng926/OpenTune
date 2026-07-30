@@ -19,6 +19,7 @@
 #include "InteractionState.h"
 #include "UI/ViewMapper.h"
 #include "../../../Content/ContentEditCommands.h"
+#include "../../../Content/EditableContentSnapshot.h"
 #include <vector>
 #include <functional>
 #include <cstdint>
@@ -105,6 +106,7 @@ public:
         std::function<ContentCommitSnapshot(const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)> commitNotesAndSegments;
 
         std::function<std::shared_ptr<PitchCurve>()> getPitchCurve;
+        std::function<std::shared_ptr<const EditableContentSnapshot>()> getEditableContentSnapshot;
 
         std::function<int()> getPianoKeyWidth;
         std::function<ContentTimelineProjection()> getContentProjection;
@@ -168,8 +170,6 @@ public:
         std::function<void(double)> notifyPlayheadChange;
         std::function<void(int, int)> notifyPitchCurveEdited;
         std::function<void()> notifyAutoTuneRequested;
-        std::function<void()> notifyPlayPauseToggle;
-        std::function<void()> notifyStopPlayback;
         std::function<void()> notifyEscapeKey;
         std::function<void(size_t, float, float)> notifyNoteOffsetChanged;
 

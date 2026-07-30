@@ -545,6 +545,33 @@ RenderCache::StateSnapshot RenderCache::getStateSnapshot() const {
     return snapshot;
 }
 
+bool RenderCache::isCanonicalSettled() const
+{
+    const juce::SpinLock::ScopedLockType guard(lock_);
+    if (chunks_.empty())
+        return false;
+
+    for (const auto& [key, chunk] : chunks_)
+    {
+        juce::ignoreUnused(key);
+        if (chunk.status == Chunk::Status::Pending || chunk.status == Chunk::Status::Running)
+            return false;
+
+        if (chunk.status == Chunk::Status::Blank)
+            continue;
+
+        if (chunk.status != Chunk::Status::Idle
+            || chunk.audio == nullptr
+            || chunk.audio->empty()
+            || chunk.publishedRevision == 0
+            || chunk.publishedRevision != chunk.desiredRevision)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 void RenderCache::markChunkAsBlank(double startSeconds, uint64_t revision) {
     int64_t endSample = 0;
     {

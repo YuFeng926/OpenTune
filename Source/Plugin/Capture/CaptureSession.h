@@ -174,7 +174,7 @@ public:
     bool applyPitchCurve(ContentKey segmentContentKey, std::shared_ptr<PitchCurve> pitchCurve);
     bool applyTimeGrid(ContentKey segmentContentKey, std::shared_ptr<const TimeGridSnapshot> grid);
     bool applyDetectedKey(ContentKey segmentContentKey, const DetectedKey& detectedKey);
-    bool applyPitchShiftSettings(ContentKey segmentContentKey, const PitchShiftSettings& settings);
+    bool applyPitchShiftState(ContentKey segmentContentKey, const PitchShiftEditState& state);
 
     // ─── Query (any thread) ────────────────────────────────────────────────
     SessionState getGlobalState() const noexcept;

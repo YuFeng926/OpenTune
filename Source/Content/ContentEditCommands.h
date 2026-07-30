@@ -8,43 +8,24 @@
 #include "../DSP/ChromaKeyDetector.h"
 #include "../DSP/ReferenceFeatures.h"
 #include <juce_audio_basics/juce_audio_basics.h>
-#include <cstdint>
 #include <memory>
 #include <vector>
 
 namespace OpenTune {
 
+class PitchShiftEditAction;
 struct EditableContentSnapshot;
 
 using ContentCommitSnapshot = std::shared_ptr<const EditableContentSnapshot>;
-
-// ── Hard-cut render mutation contract ────────────────────────────────────────
-//
-// Two distinct sinks separate local edits (where the caller knows the precise
-// affected frame range) from whole-content rebuilds (where the entire content
-// must be re-rendered). The hard cut lives in the sink dispatch, not in the
-// individual mutation methods: local edits never trigger a whole-content
-// rebuild, full rebuilds never try to be clever with ranges.
 
 struct ContentEditRangeFrames {
     int startFrame{0};
     int endFrameExclusive{0};
 };
 
-// Seconds-based range for note-only patches (notes are inherently time-based, not frame-based)
 struct ContentEditRangeSeconds {
     double startSeconds{0.0};
     double endSeconds{0.0};
-};
-
-enum class FullRenderReason : uint8_t {
-    Import,
-    SourceReplacement,
-    ProjectRestore,
-    CaptureRestore,
-    GlobalPitchShift,
-    GlobalTimeGrid,
-    ModelOrSettingsWholeContentRerender
 };
 
 struct ContentNoteRangePatch {
@@ -57,17 +38,17 @@ class ContentEditCommands
 public:
     virtual ~ContentEditCommands() = default;
 
-    // Full-mutation path only — for import/project restore/full regeneration.
-    // PianoRoll UI edits must use commitNotePatch instead.
     virtual bool replaceContentNotesForFullMutation(ContentKey key,
-                           std::vector<Note> notes) = 0;
+                                                     std::vector<Note> notes) = 0;
 
-    virtual ContentCommitSnapshot commitNotePatch(ContentKey key, ContentNoteRangePatch patch) = 0;
+    virtual ContentCommitSnapshot commitNotePatch(ContentKey key,
+                                                   ContentNoteRangePatch patch) = 0;
 
-    virtual ContentCommitSnapshot commitNotesAndSegments(ContentKey key,
-                                        std::vector<Note> notes,
-                                        std::vector<PitchCorrectionSegment> segments,
-                                        ContentEditRangeFrames affectedRange) = 0;
+    virtual ContentCommitSnapshot commitNotesAndSegments(
+        ContentKey key,
+        std::vector<Note> notes,
+        std::vector<PitchCorrectionSegment> segments,
+        ContentEditRangeFrames affectedRange) = 0;
 
     virtual bool setPitchCurve(ContentKey key,
                                std::shared_ptr<PitchCurve> curve,
@@ -79,16 +60,20 @@ public:
     virtual bool setDetectedKey(ContentKey key,
                                 const DetectedKey& detectedKey) = 0;
 
-    virtual bool setPitchShiftSettings(ContentKey key,
-                                       const PitchShiftSettings& settings) = 0;
+    virtual bool applyPitchShiftState(ContentKey key,
+                                      const PitchShiftEditState& state) = 0;
+
+    virtual std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
+        ContentKey key,
+        const PitchShiftSettings& newSettings) = 0;
 
     virtual bool commitAutoTuneGeneratedNotes(ContentKey key,
-                                              std::vector<Note> generatedNotes,
-                                              int startFrame,
-                                              int endFrameExclusive,
-                                              float retuneSpeed,
-                                              float vibratoDepth,
-                                              float vibratoRate) = 0;
+                                               std::vector<Note> generatedNotes,
+                                               int startFrame,
+                                               int endFrameExclusive,
+                                               float retuneSpeed,
+                                               float vibratoDepth,
+                                               float vibratoRate) = 0;
 };
 
 } // namespace OpenTune

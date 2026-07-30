@@ -110,7 +110,6 @@ std::shared_ptr<const EditableContentSnapshot> AudioModification::snapshotConten
 
     // modification-scoped state
     snap->notes = content->editable.notes;
-    snap->correctionSegments = content->editable.correctionSegments;
     snap->pitchCurve = content->analysis.pitchCurve;
     snap->timeGrid = content->editable.timeGrid;
     snap->pitchShiftSettings = content->editable.pitchShiftSettings;
@@ -168,12 +167,20 @@ bool AudioModification::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> gr
     return true;
 }
 
-void AudioModification::applyPitchShift(const PitchShiftSettings& settings)
+bool AudioModification::applyPitchShiftState(const PitchShiftEditState& state)
 {
-    content->editable.pitchShiftSettings = settings;
+    if (!content.has_value() || content->analysis.pitchCurve == nullptr)
+        return false;
+
+    content->editable.notes = state.notes;
+    content->analysis.pitchCurve->replaceCorrectionSegments(state.segments);
+    content->editable.pitchShiftSettings = state.settings;
+    ++content->editable.notesRevision;
+    ++content->editable.pitchRevision;
     ++content->editable.pitchShiftRevision;
     ++content->editable.contentRevision;
     ++content->contentRevision;
+    return true;
 }
 
 void AudioModification::applyDetectedKey(const DetectedKey& key)
@@ -202,7 +209,6 @@ void AudioModification::submitSilentGaps(std::vector<SilentGap> gaps)
 void AudioModification::applyReferenceFeatures(const ReferenceFeatureSet& features)
 {
     content->analysis.referenceFeatures = features;
-    ++content->contentRevision;
 }
 
 void AudioModification::applyOriginalF0State(OriginalF0State state)

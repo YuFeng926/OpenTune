@@ -571,15 +571,14 @@ bool CaptureSession::applyDetectedKey(ContentKey segmentContentKey, const Detect
     return true;
 }
 
-bool CaptureSession::applyPitchShiftSettings(ContentKey segmentContentKey, const PitchShiftSettings& settings)
+bool CaptureSession::applyPitchShiftState(ContentKey segmentContentKey, const PitchShiftEditState& state)
 {
     std::lock_guard<std::mutex> lock(mutableMutex_);
     auto* seg = findMutableSegmentByContentKey(mutableSegments_, segmentContentKey);
     if (seg == nullptr || !seg->content)
         return false;
 
-    seg->content->applyPitchShiftSettings(settings);
-    return true;
+    return seg->content->applyPitchShiftState(state);
 }
 
 void CaptureSession::setActiveSegmentChangedCallback(ActiveSegmentChangedFn fn)

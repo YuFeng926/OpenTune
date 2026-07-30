@@ -111,12 +111,11 @@ struct ProjectContentEntry {
     struct TimeGridEntry {
         uint64_t revision{0};
         struct HandleEntry {
-            int id{0};
+            uint64_t id{0};
             uint8_t kind{0};             // HandleKind 枚举值
             double sourceSeconds{0.0};
             double outputSeconds{0.0};
-            float confidence{0.0f};
-            bool isUserAdded{false};
+            uint8_t confidence{0};       // Confidence 枚举值 (0=Default, 1=High)
         };
         std::vector<HandleEntry> handles;
     };
@@ -173,7 +172,6 @@ struct ProjectContentEntry {
 struct ProjectReferenceBinding {
     uint64_t targetPlacementId{0};
     uint64_t referencePlacementId{0};
-    uint64_t bindingRevision{0};
 };
 
 // ============================================================================

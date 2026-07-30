@@ -15,7 +15,6 @@ struct ARAEditableContentState
 {
     // Musical content (user-editable modification data)
     std::vector<Note> notes;
-    std::vector<PitchCorrectionSegment> correctionSegments;
     std::shared_ptr<const TimeGridSnapshot> timeGrid;
     PitchShiftSettings pitchShiftSettings;
     

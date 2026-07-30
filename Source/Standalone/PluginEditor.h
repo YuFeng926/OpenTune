@@ -152,8 +152,7 @@ public:
 
     // PianoRollComponent::Listener
     bool playheadPositionChangeRequested(double timeSeconds) override;
-    void playPauseToggleRequested() override;
-    void stopPlaybackRequested() override;
+    void playPauseToggleRequested();
     void autoTuneRequested() override;
     void pitchCurveEdited(int startFrame, int endFrame) override;
     void escapeKeyPressed() override;
@@ -290,6 +289,9 @@ private:
     int lastSyncedTimeSigNum_ = 0;
     int lastSyncedTimeSigDenom_ = 0;
     TimelineDisplayMode timelineDisplayMode_ = TimelineDisplayMode::Time;
+    ExperimentalReferenceAlignMode appliedReferenceAlignMode_ = ExperimentalReferenceAlignMode::StandardAuto;
+    bool appliedExperimentalFeaturesEnabled_ = false;
+    bool referenceRefreshPending_ = false;
 #if JUCE_DEBUG
     int diagnosticHeartbeatCounter_ = 0;
 #endif

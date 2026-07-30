@@ -3,7 +3,6 @@
 #include <juce_core/juce_core.h>
 #include <cstdint>
 #include <algorithm>
-#include <functional>
 #include <vector>
 #include <memory>
 #include <atomic>
@@ -67,12 +66,10 @@ public:
 
     bool hasCorrectionInRange(int startFrame, int endFrame) const;
 
-    void renderFinalF0Range(int startFrame, int endFrame,
-                        std::function<void(int, const float*, int)> callback) const;
-
     /// Calls sink(startFrame, f0Data, length) for each correction span;
-    /// calls sink(startFrame, nullptr, length) for gaps between segments.
-    /// nullptr signals a zero-F0 gap — no allocation needed.
+    /// calls sink(startFrame, nullptr, length) where there is no correction
+    /// coverage over the span. The caller must choose a baseline (e.g.
+    /// OriginalF0) for those regions.
     template <typename Sink>
     void forEachCorrectionF0Span(int startFrame, int endFrame, Sink&& sink) const {
         if (startFrame >= endFrame || startFrame < 0) return;
@@ -112,7 +109,7 @@ public:
         }
     }
 
-    bool hasFinalF0Data() const { return !originalF0_.empty(); }
+    bool hasOriginalF0Data() const { return !originalF0_.empty(); }
 
 private:
     const std::vector<float> originalF0_;
@@ -141,11 +138,7 @@ public:
         return getSnapshot()->hasCorrectionInRange(startFrame, endFrame);
     }
     bool hasCorrectionLayer() const { return getSnapshot()->hasCorrectionLayer(); }
-    bool hasFinalF0Data() const { return getSnapshot()->hasFinalF0Data(); }
-    void renderFinalF0Range(int startFrame, int endFrame,
-                       std::function<void(int, const float*, int)> callback) const {
-        getSnapshot()->renderFinalF0Range(startFrame, endFrame, callback);
-    }
+    bool hasOriginalF0Data() const { return getSnapshot()->hasOriginalF0Data(); }
 
     void setOriginalF0(const std::vector<float>& f0) {
         auto oldSnapshot = getSnapshot();
@@ -243,6 +236,7 @@ public:
         const std::vector<Note>& notes,
         int startFrame,
         int endFrame,
+        float sourcePitchRatio,
         float retuneSpeed,
         float vibratoDepth = 0.0f,
         float vibratoRate = 7.5f);

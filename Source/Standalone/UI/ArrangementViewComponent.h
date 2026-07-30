@@ -17,9 +17,7 @@
 #include <unordered_set>
 #include <vector>
 #include <set>
-#include <map>
 #include <optional>
-#include "../PluginProcessor.h"
 #include "UIColors.h"
 #include "SmallButton.h"
 #include "WaveformMipmap.h"
@@ -32,6 +30,9 @@
 #include "../../Utils/TimelineDisplayMode.h"
 
 namespace OpenTune {
+
+class OpenTuneAudioProcessor;
+struct PlayHeadState;
 
 // ============================================================================
 // Arrangement Vertical Window — defines the vertical viewport state
@@ -85,11 +86,9 @@ public:
         virtual void verticalScrollChanged(int newOffset) { juce::ignoreUnused(newOffset); }
         virtual void scrollModeChanged(bool isContinuous) { juce::ignoreUnused(isContinuous); }
         virtual void timelineDisplayModeChanged(TimelineDisplayMode mode) { juce::ignoreUnused(mode); }
-        // Transport requests: the view only emits user intent, the editor decides
-        // whether to drive processor setters (Standalone) or ARA HostPlaybackController
-        // requests (ARA). The view never writes processor transport directly.
+        // View emits playhead position requests only (ruler seek / empty-space seek).
+        // The editor owns transport decisions; the view never drives transport state.
         virtual bool playheadPositionChangeRequested(double /*timeSeconds*/) { return false; }
-        virtual void playPauseToggleRequested() {}
     };
 
     ArrangementViewComponent(OpenTuneAudioProcessor& processor);
@@ -132,9 +131,6 @@ public:
     void resetUserZoomFlag() { userHasManuallyZoomed_ = false; }
     bool hasUserManuallyZoomed() const { return userHasManuallyZoomed_; }
 
-    // Analysis animation 状态管理
-    void setClipAnalysisInProgress(uint64_t placementId, bool inProgress);
-
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
     void requestContentRedraw();
@@ -170,11 +166,6 @@ private:
 
     HitTestResult hitTestPlacement(juce::Point<int> p) const;
 
-    // Analysis state（reference binding 状态由 placement.referencePlacementId 驱动，不再缓存）
-    struct ClipAnalysisState {
-        bool isAnalysisInProgress{false};      // true: 显示描边动画
-    };
-
     juce::Rectangle<int> getTrackLaneBounds(int trackId) const;
     juce::Rectangle<int> buildProjectedPlacementBounds(int trackId, int placementIndex) const;
     juce::Rectangle<int> getPlacementBounds(int trackId, int placementIndex) const;
@@ -204,6 +195,7 @@ private:
     void drawImportDropPreview(juce::Graphics& g);
     void drawSelectionOverlay(juce::Graphics& g);
     void drawMoveDragOverlay(juce::Graphics& g);
+    void drawReferenceHoverOverlay(juce::Graphics& g);
 
     OpenTuneAudioProcessor& processor_;
     const PlayHeadState& playHeadState_;
@@ -304,9 +296,8 @@ private:
     uint64_t selectedPlacementId_{0};
     bool experimentalReferenceControlsEnabled_{false};
 
-    // reference binding 状态（placementId → state）
-    std::map<uint64_t, ClipAnalysisState> clipAnalysisStates_;
-    bool mouseOverReferenceButton_{false}; // 鼠标在参考按钮区域内
+    uint64_t hoveredReferencePlacementId_{0};
+    juce::Rectangle<int> hoveredReferenceButtonBounds_{};
 
     // === 多选支持 ===
     struct PlacementSelectionKey {

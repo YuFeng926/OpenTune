@@ -2,7 +2,7 @@
 #include "../UiAssets.h"
 #include "../UIColors.h"
 #include "../../../Utils/AppLogger.h"
-#include "../../../Utils/LegacyNoteGenerator.h"
+#include "../../../Utils/NoteGeneratorTypes.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -225,7 +225,7 @@ inline int sourceTimeToScreenX(double sourceTime,
 /// Span-stream F0 visual builder: replays the span producer twice.
 /// Pass 1 computes energy min/max across valid F0 frequencies.
 /// Pass 2 builds visual segments with bucket min/max envelope for LOD, linear path for downsampled, Bézier for full-resolution.
-/// Producer receives a sink(startFrame, data, length); nullptr data means a gap — flush current segment.
+/// Producer receives a sink(startFrame, data, length, gain).
 template <typename SpanProducer, typename FX, typename FY>
 static std::vector<F0VisualSegment> buildF0VisualSegments(
     const std::vector<float>* originalEnergy,
@@ -243,10 +243,10 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
     float minEnergy = std::numeric_limits<float>::max();
     float maxEnergy = std::numeric_limits<float>::lowest();
     if (hasEnergy) {
-        emitSpans([&](int start, const float* data, int length) {
+        emitSpans([&](int start, const float* data, int length, float gain) {
             if (!data) return;
             for (int i = 0; i < length; ++i) {
-                const float frequency = data[i];
+                const float frequency = data[i] * gain;
                 if (frequency < 20.0f || frequency > 2000.0f) continue;
                 const int globalFrame = start + i;
                 const float energy = (*originalEnergy)[static_cast<size_t>(globalFrame)];
@@ -302,13 +302,13 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
         }
     };
 
-    emitSpans([&](int start, const float* data, int length) {
+    emitSpans([&](int start, const float* data, int length, float gain) {
         if (!data) {
             flushSegment();
             return;
         }
         for (int i = 0; i < length; ++i) {
-            const float frequency = data[i];
+            const float frequency = data[i] * gain;
             if (frequency < 20.0f || frequency > 2000.0f) {
                 flushSegment();
                 continue;
@@ -1117,35 +1117,6 @@ void PianoRollRenderer::drawGhostNotes(juce::Graphics& g, const RenderContext& c
     }
 }
 
-void PianoRollRenderer::drawGhostAnchors(juce::Graphics& g, const RenderContext& ctx, const ReferenceOverlay& overlay)
-{
-    if (overlay.ghostAnchors.empty())
-        return;
-
-    static constexpr float kDashLengths[] = { 2.0f, 4.0f };
-    const float yTop = ctx.coords.midiToY(ctx.minMidi);
-    const float yBottom = ctx.coords.midiToY(ctx.maxMidi);
-
-    ContentRenderItem overlayItem;
-    overlayItem.projection = overlay.sourceProjection;
-    overlayItem.timeGrid = overlay.timeGrid;
-    jassert(overlayItem.timeGrid);
-
-    for (const auto& anchor : overlay.ghostAnchors)
-    {
-        const int x = sourceTimeToScreenX(anchor.sourceSeconds, ctx, overlayItem);
-        if (x < ctx.pianoKeyWidth || x >= ctx.width)
-            continue;
-
-        const float alpha = overlay.ghostOpacity * std::min(1.0f, anchor.strength);
-        g.setColour(overlay.ghostColour.withMultipliedAlpha(alpha));
-        g.drawDashedLine(
-            juce::Line<float>(static_cast<float>(x), yTop,
-                              static_cast<float>(x), yBottom),
-            kDashLengths, 2, 1.0f);
-    }
-}
-
 // ============================================================================
 // TimeGrid Anchors (cached slot — neutral lines, no interaction)
 // ============================================================================
@@ -1162,7 +1133,7 @@ void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const RenderConte
         const int x = ctx.coords.timeToX(timelineTime);
         if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
 
-        const float alpha = h.locked ? 0.3f : 0.4f;
+        const float alpha = h.isEndpoint() ? 0.3f : 0.4f;
         g.setColour(juce::Colours::white.withAlpha(alpha));
         g.drawLine(static_cast<float>(x),
                    static_cast<float>(contentTop),
@@ -1193,7 +1164,6 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
             case HandleKind::OnsetSilence:  return juce::Colours::dimgrey;
             case HandleKind::InternalOnset: return juce::Colour::fromRGB(180, 140, 220);
             case HandleKind::UserAdded:     return juce::Colours::white;
-            case HandleKind::ReferenceAuto: return juce::Colour::fromRGB(255, 196, 87);
         }
         return juce::Colours::white;
     };
@@ -1211,13 +1181,13 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
         if (x < ctx.pianoKeyWidth || x >= ctx.width) continue;
 
         juce::Colour col = colorForKind(h.kind);
-        if (h.locked) {
+        if (h.isEndpoint()) {
             col = col.withAlpha(0.45f);
         } else if (h.confidence == Confidence::High) {
             col = kHighConfidenceColour;
         }
 
-        const bool isHigh = (!h.locked && h.confidence == Confidence::High);
+        const bool isHigh = (!h.isEndpoint() && h.confidence == Confidence::High);
         const float baseThickness = isHigh ? 1.5f : 1.0f;
         const float lineThickness = (selected ? 2.0f : (hovered ? 1.5f : baseThickness));
 
@@ -1305,7 +1275,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
         auto originalProducer = [&](auto&& sink) {
             if (origStart < origEnd)
-                sink(origStart, originalF0.data() + origStart, origEnd - origStart);
+                sink(origStart, originalF0.data() + origStart, origEnd - origStart, 1.0f);
         };
 
         const auto visualSegments = buildF0VisualSegments(
@@ -1377,10 +1347,13 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         }
     }
 
-    // Draw corrected F0 (thicker) — stream correction spans via forEachCorrectionF0Span
-    if (ctx.showCorrectedF0 && item.pitchSnapshot->hasCorrectionLayer()) {
+    // Draw effective corrected F0 (thicker).
+    if (ctx.showCorrectedF0
+        && item.ownerSnapshot
+        && (item.pitchSnapshot->hasCorrectionLayer()
+            || !item.ownerSnapshot->pitchShiftSettings.isIdentity())) {
         auto correctedProducer = [&](auto&& sink) {
-            item.pitchSnapshot->forEachCorrectionF0Span(startFrame, endFrame, sink);
+            item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame, sink);
         };
 
         const auto visualSegments = buildF0VisualSegments(

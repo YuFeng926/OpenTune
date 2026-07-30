@@ -5,7 +5,8 @@ namespace OpenTune {
 struct ContentTimelineProjection {
     double timelineStartSeconds{0.0};
     double timelineDurationSeconds{0.0};
-    double contentDurationSeconds{0.0};      // local 起点恒 0，故只需 duration
+    double contentStartSeconds{0.0};
+    double contentDurationSeconds{0.0};
 
     bool isValid() const noexcept
     {
@@ -20,12 +21,12 @@ struct ContentTimelineProjection {
     double projectTimelineTimeToContent(double timelineSeconds) const noexcept
     {
         const double normalized = (timelineSeconds - timelineStartSeconds) / timelineDurationSeconds;
-        return normalized * contentDurationSeconds;
+        return contentStartSeconds + normalized * contentDurationSeconds;
     }
 
     double projectContentTimeToTimeline(double contentSeconds) const noexcept
     {
-        const double normalized = contentSeconds / contentDurationSeconds;
+        const double normalized = (contentSeconds - contentStartSeconds) / contentDurationSeconds;
         return timelineStartSeconds + normalized * timelineDurationSeconds;
     }
 };

@@ -21,7 +21,6 @@ public:
     // ── DomainContentOwner 接口 ─────────────────────────────
     ContentKey contentKey() const override;
     std::shared_ptr<const EditableContentSnapshot> snapshotContent() const override;
-    void applyContentCommand(class ContentCommand& cmd) override;
 
     // ── Lifecycle ───────────────────────────────────────────
     void retireContent(ContentKey key) override;
@@ -39,7 +38,7 @@ public:
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
     void applyOriginalF0(std::shared_ptr<PitchCurve> curve);
     void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot);
-    void applyPitchShiftSettings(const PitchShiftSettings& settings);
+    bool applyPitchShiftState(const PitchShiftEditState& state);
     void applyDetectedKey(const DetectedKey& key);
     void applyReferenceFeatures(const ReferenceFeatureSet& features);
     void applyOriginalF0State(OriginalF0State state);

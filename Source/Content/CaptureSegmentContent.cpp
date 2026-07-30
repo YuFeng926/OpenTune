@@ -23,7 +23,6 @@ std::shared_ptr<const EditableContentSnapshot> CaptureSegmentContent::snapshotCo
 {
     auto snap = std::make_shared<EditableContentSnapshot>();
     snap->notes = editable_.notes;
-    snap->correctionSegments = editable_.correctionSegments;
     snap->pitchCurve = pitchCurve_;
     snap->timeGrid = editable_.timeGrid;
     snap->pitchShiftSettings = editable_.pitchShiftSettings;
@@ -39,12 +38,6 @@ std::shared_ptr<const EditableContentSnapshot> CaptureSegmentContent::snapshotCo
     snap->contentRevision = editable_.contentRevision;
     snap->referenceFeatures = editable_.referenceFeatures;
     return snap;
-}
-
-void CaptureSegmentContent::applyContentCommand(ContentCommand& cmd)
-{
-    (void)cmd;
-    // Capture 段不支持编辑命令
 }
 
 void CaptureSegmentContent::retireContent(ContentKey key)
@@ -141,17 +134,24 @@ void CaptureSegmentContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot
     ++editable_.contentRevision;
 }
 
-void CaptureSegmentContent::applyPitchShiftSettings(const PitchShiftSettings& settings)
+bool CaptureSegmentContent::applyPitchShiftState(const PitchShiftEditState& state)
 {
-    editable_.pitchShiftSettings = settings;
+    if (pitchCurve_ == nullptr)
+        return false;
+
+    editable_.notes = state.notes;
+    pitchCurve_->replaceCorrectionSegments(state.segments);
+    editable_.pitchShiftSettings = state.settings;
+    ++editable_.notesRevision;
+    ++editable_.pitchRevision;
     ++editable_.pitchShiftRevision;
     ++editable_.contentRevision;
+    return true;
 }
 
 void CaptureSegmentContent::applyReferenceFeatures(const ReferenceFeatureSet& features)
 {
     editable_.referenceFeatures = features;
-    ++editable_.contentRevision;
 }
 
 } // namespace OpenTune

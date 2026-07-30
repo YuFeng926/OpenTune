@@ -2,7 +2,6 @@
 
 #include "../Content/ContentKey.h"
 #include "../DSP/ReferenceFeatures.h"
-#include "../Utils/AppLogger.h"
 #include <juce_core/juce_core.h>
 #include <atomic>
 #include <condition_variable>
@@ -10,7 +9,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <thread>
 
 namespace OpenTune {
@@ -19,8 +17,17 @@ class ReferenceAnalysisService {
 public:
     struct AnalysisJobKey {
         ContentKey contentKey;
-        int64_t  contentRevision{0};
-        int64_t  analysisRevision{0};
+        int64_t  inputFingerprint{0};
+        ReferenceFeatureProducer producer{ReferenceFeatureProducer::Unknown};
+
+        // pendingJobs_ stores the latest job per ContentKey. Equality identifies
+        // the exact active job so duplicate submissions do not restart analysis.
+        bool operator==(const AnalysisJobKey& rhs) const noexcept
+        {
+            return contentKey == rhs.contentKey
+                && inputFingerprint == rhs.inputFingerprint
+                && producer == rhs.producer;
+        }
     };
 
     using AnalysisFunc = std::function<ReferenceFeatureSet(
@@ -30,10 +37,8 @@ public:
     class Listener {
     public:
         virtual ~Listener() = default;
-        virtual void analysisCompleted(ContentKey key,
-                                       const ReferenceFeatureSet& result) = 0;
-        virtual void analysisFailed(ContentKey key,
-                                    const juce::String& reason) = 0;
+        virtual void analysisFinished(ContentKey key,
+                                      const ReferenceFeatureSet& result) = 0;
     };
 
     ReferenceAnalysisService();
@@ -45,25 +50,23 @@ public:
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
 
-    void submitAnalysis(ContentKey key, int64_t contentRevision);
+    void submitAnalysis(ContentKey key, int64_t inputFingerprint,
+                        ReferenceFeatureProducer producer = ReferenceFeatureProducer::Unknown);
 
-    void cancelAll();
+    void shutdown();
 
 private:
     void workerLoop();
-    void notifyListenersCompleted(ContentKey key, const ReferenceFeatureSet& result);
-    void notifyListenersFailed(ContentKey key, const juce::String& reason);
 
     AnalysisFunc analysisFunc_;
     NotificationDispatcher notificationDispatcher_;
 
-    mutable std::mutex mutex_;
+    std::mutex mutex_;
     std::condition_variable cv_;
 
     std::map<ContentKey, AnalysisJobKey> pendingJobs_;
 
     std::optional<AnalysisJobKey> activeJob_;
-    std::set<ContentKey> cancelledActiveJobs_;
 
     std::atomic<bool> running_{true};
     std::shared_ptr<std::atomic<bool>> aliveToken_{std::make_shared<std::atomic<bool>>(true)};

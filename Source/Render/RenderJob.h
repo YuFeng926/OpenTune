@@ -12,6 +12,12 @@ namespace OpenTune {
 
 struct RenderJob
 {
+    enum class Kind : uint8_t {
+        Stage1Render,
+        Stage2Rebuild
+    };
+
+    Kind kind{Kind::Stage1Render};
     ContentKey contentKey;
 
     std::shared_ptr<RenderCache> renderCache;
@@ -24,6 +30,10 @@ struct RenderJob
     int64_t endSampleExclusive{0};
 
     uint64_t targetRevision{0};
+
+    uint64_t pitchRevision{0};
+    uint64_t pitchShiftRevision{0};
+    uint64_t timeGridRevision{0};
 };
 
 } // namespace OpenTune

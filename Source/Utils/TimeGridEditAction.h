@@ -20,8 +20,6 @@ public:
     void redo() override;
     juce::String getDescription() const override { return description_; }
 
-    ContentKey getContentKey() const noexcept { return contentKey_; }
-
 private:
     std::shared_ptr<ContentEditCommands> commands_;
     ContentKey contentKey_;

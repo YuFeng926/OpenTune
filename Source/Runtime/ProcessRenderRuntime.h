@@ -21,7 +21,7 @@ public:
     struct CompletionContext
     {
         std::shared_ptr<std::atomic<bool>> alive;
-        std::function<void(ContentKey, uint64_t)> chunkPublished;
+        std::function<void(ContentKey)> chunkSettled;
     };
 
     static ProcessRenderRuntime& getInstance();
