@@ -12,12 +12,12 @@
 #include "../Utils/SilentGapDetector.h"
 #include "../Utils/PitchCurve.h"
 #include "../Inference/RenderCache.h"
-#include "../Render/RenderChunkPlanner.h"
 #include "../Utils/SourceWindow.h"
 #include "../Utils/AppLogger.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <set>
 #include <utility>
@@ -27,7 +27,7 @@ namespace OpenTune {
 namespace {
 
 constexpr int kContentPayloadArchiveMagic = 0x4F544143;
-constexpr int kContentPayloadArchiveVersion = 1;
+constexpr int kContentPayloadArchiveVersion = 2;
 constexpr int kMaxContentPayloadRecords = 4096;
 
 } // namespace
@@ -108,16 +108,22 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
         editable->addChildElement(n);
     }
 
-    for (const auto& seg : mod.content->editable.correctionSegments)
+    if (mod.content->analysis.pitchCurve != nullptr)
     {
-        auto* s = new juce::XmlElement("PitchCorrectionSegment");
-        s->setAttribute("startFrame", seg.startFrame);
-        s->setAttribute("endFrame", seg.endFrame);
-        s->setAttribute("source", static_cast<int>(seg.source));
-        s->setAttribute("retuneSpeed", seg.retuneSpeed);
-        s->setAttribute("vibratoDepth", seg.vibratoDepth);
-        s->setAttribute("vibratoRate", seg.vibratoRate);
-        editable->addChildElement(s);
+        const auto pitchSnapshot = mod.content->analysis.pitchCurve->getSnapshot();
+        for (const auto& seg : pitchSnapshot->getCorrectionSegments())
+        {
+            auto* s = new juce::XmlElement("PitchCorrectionSegment");
+            s->setAttribute("startFrame", seg.startFrame);
+            s->setAttribute("endFrame", seg.endFrame);
+            s->setAttribute("source", static_cast<int>(seg.source));
+            s->setAttribute("retuneSpeed", seg.retuneSpeed);
+            s->setAttribute("vibratoDepth", seg.vibratoDepth);
+            s->setAttribute("vibratoRate", seg.vibratoRate);
+            const juce::MemoryBlock f0Data(seg.f0Data.data(), seg.f0Data.size() * sizeof(float));
+            s->setAttribute("f0Base64", f0Data.toBase64Encoding());
+            editable->addChildElement(s);
+        }
     }
 
     auto* ps = new juce::XmlElement("PitchShiftSettings");
@@ -135,7 +141,6 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
             he->setAttribute("sourceSeconds", h.source_seconds);
             he->setAttribute("outputSeconds", h.output_seconds);
             he->setAttribute("kind", static_cast<int>(h.kind));
-            he->setAttribute("locked", h.locked ? 1 : 0);
             // confidence：同步 Confidence 枚举（0=default, 1=high）
             he->setAttribute("confidence", static_cast<int>(h.confidence));
             tg->addChildElement(he);
@@ -244,6 +249,7 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                                                                                const juce::ARARestoreObjectsFilter* filter)
 {
     AudioModificationContentState content;
+    std::vector<PitchCorrectionSegment> restoredCorrectionSegments;
     content.contentRevision = static_cast<uint64_t>(
         el.getStringAttribute("contentRevision").getLargeIntValue());
 
@@ -352,7 +358,7 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             seg.endFrame = s->getIntAttribute("endFrame");
 
             // frame 索引有效性：start <= end，非负
-            if (seg.startFrame < 0 || seg.endFrame < seg.startFrame)
+            if (seg.startFrame < 0 || seg.endFrame <= seg.startFrame)
                 return std::nullopt;
 
             seg.source = static_cast<PitchCorrectionSegment::Source>(s->getIntAttribute("source"));
@@ -367,7 +373,18 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             if (!std::isfinite(seg.retuneSpeed) || !std::isfinite(seg.vibratoDepth) || !std::isfinite(seg.vibratoRate))
                 return std::nullopt;
 
-            content.editable.correctionSegments.push_back(seg);
+            juce::MemoryBlock f0Data;
+            const auto encodedF0 = s->getStringAttribute("f0Base64");
+            const auto expectedBytes = static_cast<size_t>(seg.endFrame - seg.startFrame) * sizeof(float);
+            if (!f0Data.fromBase64Encoding(encodedF0) || f0Data.getSize() != expectedBytes)
+                return std::nullopt;
+            seg.f0Data.resize(expectedBytes / sizeof(float));
+            std::memcpy(seg.f0Data.data(), f0Data.getData(), expectedBytes);
+            for (const auto value : seg.f0Data)
+                if (!std::isfinite(value))
+                    return std::nullopt;
+
+            restoredCorrectionSegments.push_back(std::move(seg));
         }
 
         if (auto* ps = editable->getChildByName("PitchShiftSettings"))
@@ -376,7 +393,7 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             const int cents = ps->getIntAttribute("cents");
 
             // 有效性检查：半音及音分必须为有限值，且在合理范围
-            if (semitone < -12 || semitone > 12 || cents < -50 || cents > 50)
+            if (semitone < -24 || semitone > 24 || cents < -99 || cents > 99)
                 return std::nullopt;
 
             content.editable.pitchShiftSettings.semitone = semitone;
@@ -402,11 +419,9 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
 
             const int kind = h->getIntAttribute("kind");
             if (kind < static_cast<int>(HandleKind::ClipStart)
-                || kind > static_cast<int>(HandleKind::ReferenceAuto))
+                || kind > static_cast<int>(HandleKind::UserAdded))
                 return std::nullopt;
             handle.kind = static_cast<HandleKind>(kind);
-
-            handle.locked = (h->getIntAttribute("locked") != 0);
 
             const int confidence = h->getIntAttribute("confidence");
             if (confidence < static_cast<int>(Confidence::Default)
@@ -503,7 +518,8 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
                 rfStatus > static_cast<int>(ReferenceFeatureStatus::Failed))
                 return std::nullopt;
             if (rfProducer != static_cast<int>(ReferenceFeatureProducer::Unknown) &&
-                rfProducer != static_cast<int>(ReferenceFeatureProducer::Game))
+                rfProducer != static_cast<int>(ReferenceFeatureProducer::Game) &&
+                rfProducer != static_cast<int>(ReferenceFeatureProducer::StandardAuto))
                 return std::nullopt;
             content.analysis.referenceFeatures.status = static_cast<ReferenceFeatureStatus>(rfStatus);
             content.analysis.referenceFeatures.producer = static_cast<ReferenceFeatureProducer>(rfProducer);
@@ -618,6 +634,19 @@ std::optional<AudioModificationContentState> restoreAudioModificationContent(con
             if (!energy.empty())
                 content.analysis.pitchCurve->setOriginalEnergy(std::move(energy));
         }
+    }
+
+    if (!restoredCorrectionSegments.empty())
+    {
+        if (content.analysis.pitchCurve == nullptr)
+            return std::nullopt;
+
+        const int frameCount = static_cast<int>(content.analysis.pitchCurve->size());
+        for (const auto& segment : restoredCorrectionSegments)
+            if (segment.endFrame > frameCount)
+                return std::nullopt;
+
+        content.analysis.pitchCurve->replaceCorrectionSegments(restoredCorrectionSegments);
     }
 
     return content;
@@ -1744,15 +1773,9 @@ void OpenTuneDocumentController::processDocumentRenderJob(RenderJob& job)
         return;
     }
 
-    ProcessRenderRuntime::CompletionContext completion;
-    completion.alive = asyncLeaseToken_;
-    completion.chunkPublished = [this](ContentKey key, uint64_t revision) {
-        handleDocumentStage1ChunkPublished(key, revision);
-    };
-
     ProcessRenderRuntime::getInstance().processChunkRenderJob(
         contentRenderService_, job, std::move(snap),
-        false, std::move(completion));
+        false, {});
 }
 
 std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snapshotAudioModification(ContentKey key) const
@@ -1768,7 +1791,6 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snaps
     snap->audioSampleRate = 0.0;
     snap->sourceWindow = content.sourceWindow;
     snap->notes = content.editable.notes;
-    snap->correctionSegments = content.editable.correctionSegments;
     snap->pitchCurve = content.analysis.pitchCurve;
     snap->timeGrid = content.editable.timeGrid;
     snap->pitchShiftSettings = content.editable.pitchShiftSettings;
@@ -1782,48 +1804,6 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snaps
     snap->contentRevision = content.contentRevision;
     snap->notesRevision = content.editable.notesRevision;
     return snap;
-}
-
-void OpenTuneDocumentController::handleDocumentStage1ChunkPublished(ContentKey key, uint64_t publishedRevision)
-{
-    auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr)
-        return;
-
-    auto snap = snapshotAudioModification(key);
-    if (!snap || snap->contentRevision != publishedRevision)
-        return;
-
-    if (snap->timeGrid != nullptr && !snap->timeGrid->isIdentity())
-    {
-        ContentRenderService::Stage2Request stage2Req;
-        stage2Req.contentKey = key;
-        stage2Req.pitchRevision = snap->pitchRevision;
-        stage2Req.pitchShiftRevision = snap->pitchShiftRevision;
-        stage2Req.timeGridRevision = snap->timeGridRevision;
-
-        if (contentRenderService_ != nullptr)
-            contentRenderService_->requestStage2Rebuild(stage2Req, std::move(snap));
-    }
-}
-
-void OpenTuneDocumentController::requestModificationStage2Rebuild(ContentKey key)
-{
-    auto snap = snapshotAudioModification(key);
-    if (!snap)
-        return;
-
-    if (snap->timeGrid != nullptr && !snap->timeGrid->isIdentity())
-    {
-        ContentRenderService::Stage2Request stage2Req;
-        stage2Req.contentKey = key;
-        stage2Req.pitchRevision = snap->pitchRevision;
-        stage2Req.pitchShiftRevision = snap->pitchShiftRevision;
-        stage2Req.timeGridRevision = snap->timeGridRevision;
-
-        if (contentRenderService_ != nullptr)
-            contentRenderService_->requestStage2Rebuild(stage2Req, std::move(snap));
-    }
 }
 
 void OpenTuneDocumentController::refreshModificationCRSMetadata(ContentKey key)
@@ -2143,11 +2123,12 @@ bool OpenTuneDocumentController::applyTimeGridToModification(const ContentKey& k
     return true;
 }
 
-bool OpenTuneDocumentController::applyPitchShiftToModification(const ContentKey& key, const PitchShiftSettings& settings)
+bool OpenTuneDocumentController::applyPitchShiftStateToModification(const ContentKey& key,
+                                                                     const PitchShiftEditState& state)
 {
     auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return false;
-    mod->applyPitchShift(settings);
+    if (!mod->applyPitchShiftState(state)) return false;
     
     // Notify ARA host of content change for cache/save state invalidation
     if (mod->audioModification != nullptr)

@@ -30,10 +30,6 @@ public:
     void redo() override;
     juce::String getDescription() const override { return description_; }
 
-    ContentKey getContentKey() const { return contentKey_; }
-    int getAffectedStartFrame() const { return affectedRange_.startFrame; }
-    int getAffectedEndFrame() const { return affectedRange_.endFrameExclusive - 1; }
-
 private:
     std::shared_ptr<ContentEditCommands> commands_;
     ContentKey contentKey_;

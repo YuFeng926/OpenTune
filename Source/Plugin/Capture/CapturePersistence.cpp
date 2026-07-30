@@ -20,6 +20,7 @@ namespace {
     // Audio travels with CaptureSegmentContent.
     constexpr uint32_t kCaptureMagic    = 0x4341507A;  // 'CAPz' little-endian
     constexpr uint32_t kCaptureEndMagic = 0x78434150;  // 'xCAP' little-endian
+    constexpr int kCaptureArchiveVersion = 3;
 
     void writeFloatVector(juce::MemoryOutputStream& stream, const std::vector<float>& values)
     {
@@ -122,6 +123,7 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
 
     // ── 2. Magic + metadata XML + per-segment records ────────────────────
     stream.writeInt(static_cast<int>(kCaptureMagic));
+    stream.writeInt(kCaptureArchiveVersion);
 
     const juce::String xml = root.toXmlString();
     const auto xmlUtf8 = xml.toRawUTF8();
@@ -165,6 +167,22 @@ juce::MemoryBlock CapturePersistence::serialize(const CaptureSession& session)
             stream.writeInt(static_cast<int>(snap->detectedKey.scale));
             stream.writeFloat(snap->detectedKey.confidence);
             writePitchCurve(stream, snap->pitchCurve);
+
+            stream.writeInt(static_cast<int>(snap->notes.size()));
+            for (const auto& note : snap->notes) {
+                stream.writeDouble(note.startTime);
+                stream.writeDouble(note.endTime);
+                stream.writeFloat(note.pitch);
+                stream.writeFloat(note.originalPitch);
+                stream.writeFloat(note.pitchOffset);
+                stream.writeFloat(note.retuneSpeed);
+                stream.writeFloat(note.vibratoDepth);
+                stream.writeFloat(note.vibratoRate);
+                stream.writeFloat(note.velocity);
+                stream.writeInt(note.isVoiced ? 1 : 0);
+            }
+            stream.writeInt(snap->pitchShiftSettings.semitone);
+            stream.writeInt(snap->pitchShiftSettings.cents);
         }
     }
 
@@ -186,6 +204,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         ChannelLayoutLog::logPersistenceDeserializeReject(magic);
         return false;
     }
+    if (stream.readInt() != kCaptureArchiveVersion)
+        return false;
 
     // ── 1. Read metadata XML and parse ValueTree ────────────────────────
     const int xmlLen = stream.readInt();
@@ -216,6 +236,8 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         OriginalF0State originalF0State{OriginalF0State::NotRequested};
         DetectedKey detectedKey;
         std::shared_ptr<PitchCurve> pitchCurve;
+        std::vector<Note> notes;
+        PitchShiftSettings pitchShiftSettings;
     };
     std::vector<PersistedSegment> persisted;
     persisted.reserve(static_cast<size_t>(root.getNumChildren()));
@@ -258,6 +280,30 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
         p.detectedKey.confidence = stream.readFloat();
         p.pitchCurve = readPitchCurve(stream);
 
+        const int noteCount = stream.readInt();
+        if (noteCount < 0)
+            return false;
+        p.notes.reserve(static_cast<size_t>(noteCount));
+        for (int noteIndex = 0; noteIndex < noteCount; ++noteIndex) {
+            Note note;
+            note.startTime = stream.readDouble();
+            note.endTime = stream.readDouble();
+            note.pitch = stream.readFloat();
+            note.originalPitch = stream.readFloat();
+            note.pitchOffset = stream.readFloat();
+            note.retuneSpeed = stream.readFloat();
+            note.vibratoDepth = stream.readFloat();
+            note.vibratoRate = stream.readFloat();
+            note.velocity = stream.readFloat();
+            note.isVoiced = stream.readInt() != 0;
+            p.notes.push_back(note);
+        }
+        p.pitchShiftSettings.semitone = stream.readInt();
+        p.pitchShiftSettings.cents = stream.readInt();
+        if (p.pitchCurve == nullptr
+            && (!p.notes.empty() || !p.pitchShiftSettings.isIdentity()))
+            return false;
+
         persisted.push_back(std::move(p));
     }
 
@@ -288,8 +334,15 @@ bool CapturePersistence::deserialize(CaptureSession& session, const juce::Memory
             seg->content->applyAudioBuffer(*p.audio, p.captureSampleRate);
         }
         seg->content->applyDetectedKey(p.detectedKey);
-        if (p.pitchCurve)
+        if (p.pitchCurve) {
+            const auto pitchSnapshot = p.pitchCurve->getSnapshot();
+            PitchShiftEditState pitchShiftState;
+            pitchShiftState.settings = p.pitchShiftSettings;
+            pitchShiftState.notes = std::move(p.notes);
+            pitchShiftState.segments = pitchSnapshot->getCorrectionSegments();
             seg->content->applyPitchCurve(std::move(p.pitchCurve));
+            seg->content->applyPitchShiftState(pitchShiftState);
+        }
         seg->content->applyOriginalF0State(p.originalF0State);
 
         const bool ready = p.originalF0State == OriginalF0State::Ready;

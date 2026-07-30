@@ -27,13 +27,11 @@ PianoRollEditAction::PianoRollEditAction(std::shared_ptr<ContentEditCommands> co
 
 void PianoRollEditAction::undo()
 {
-    jassert(commands_ != nullptr);
     commands_->commitNotesAndSegments(contentKey_, beforeNotes_, beforeSegments_, affectedRange_);
 }
 
 void PianoRollEditAction::redo()
 {
-    jassert(commands_ != nullptr);
     commands_->commitNotesAndSegments(contentKey_, afterNotes_, afterSegments_, affectedRange_);
 }
 

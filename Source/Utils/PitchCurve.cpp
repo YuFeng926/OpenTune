@@ -160,64 +160,6 @@ bool PitchCurveSnapshot::hasCorrectionInRange(int startFrame, int endFrame) cons
     return false;
 }
 
-void PitchCurveSnapshot::renderFinalF0Range(int startFrame, int endFrame,
-                                       std::function<void(int, const float*, int)> callback) const {
-    if (startFrame >= endFrame || startFrame < 0) {
-        return;
-    }
-
-    const int maxFrame = static_cast<int>(originalF0_.size());
-    if (endFrame > maxFrame) {
-        endFrame = maxFrame;
-    }
-    if (startFrame >= maxFrame) {
-        return;
-    }
-
-    auto it = std::lower_bound(correctionSegments_.begin(), correctionSegments_.end(), startFrame,
-        [](const PitchCorrectionSegment& seg, int frame) {
-            return seg.endFrame <= frame;
-        });
-
-    int currentPos = startFrame;
-    while (currentPos < endFrame) {
-        if (it != correctionSegments_.end() && it->startFrame < endFrame) {
-            if (currentPos < it->startFrame) {
-                int gapEnd = std::min(it->startFrame, endFrame);
-                int gapLength = gapEnd - currentPos;
-                callback(currentPos, originalF0_.data() + currentPos, gapLength);
-                currentPos = gapEnd;
-            }
-
-            if (currentPos < it->endFrame && currentPos < maxFrame) {
-                int segStart = std::max(currentPos, it->startFrame);
-                int segEnd = std::min(endFrame, std::min(it->endFrame, maxFrame));
-                int offset = segStart - it->startFrame;
-                int length = segEnd - segStart;
-
-                if (length <= 0) {
-                    ++it;
-                    continue;
-                }
-
-                if (static_cast<size_t>(offset + length) > it->f0Data.size()) {
-                    ++it;
-                    continue;
-                }
-
-                callback(segStart, it->f0Data.data() + offset, length);
-                currentPos = segEnd;
-            }
-
-            ++it;
-        } else {
-            int length = endFrame - currentPos;
-            callback(currentPos, originalF0_.data() + currentPos, length);
-            currentPos = endFrame;
-        }
-    }
-}
-
 F0FrameRange PitchCurve::expandNoteBasedCorrectionRange(int startFrame, int endFrameExclusive, int frameCount) noexcept
 {
     if (frameCount <= 0 || endFrameExclusive <= startFrame) {
@@ -242,6 +184,7 @@ void PitchCurve::applyCorrectionToRange(
     const std::vector<Note>& notes,
     int startFrame,
     int endFrame,
+    float sourcePitchRatio,
     float retuneSpeed,
     float vibratoDepth,
     float vibratoRate)
@@ -315,7 +258,8 @@ void PitchCurve::applyCorrectionToRange(
             std::vector<float> voicedTimes;
             std::vector<float> voicedMidis;
             for (size_t f = noteStartFrame; f < noteEndFrame && f < originalF0.size(); ++f) {
-                float f0 = originalF0[f];
+                const float rawF0 = originalF0[f];
+                const float f0 = rawF0 > 0.0f ? rawF0 * sourcePitchRatio : rawF0;
                 if (f0 <= 0.0f) continue;
                 float tSec = static_cast<float>(static_cast<double>(f) * static_cast<double>(hopSize) / sampleRate);
                 voicedTimes.push_back(tSec);
@@ -365,7 +309,8 @@ void PitchCurve::applyCorrectionToRange(
     std::vector<float> correctedF0Buffer(calculationEndFrame - calculationStartFrame, 0.0f);
 
     for (int i = calculationStartFrame; i < calculationEndFrame; ++i) {
-        float f0 = originalF0[i];
+        const float rawF0 = originalF0[i];
+        float f0 = rawF0 > 0.0f ? rawF0 * sourcePitchRatio : rawF0;
         if (f0 <= 0.0f) {
             correctedF0Buffer[i - calculationStartFrame] = 0.0f;
             continue;

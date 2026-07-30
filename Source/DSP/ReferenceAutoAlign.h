@@ -1,14 +1,10 @@
 #pragma once
 
 #include "ReferenceFeatures.h"
-#include "TimeGridPatchBuilder.h"
 #include "../Utils/Note.h"
-#include "../Utils/PitchCurve.h"
-#include "../Utils/TimeGrid.h"
 #include "../Content/ContentKey.h"
 
 #include <cstdint>
-#include <memory>
 #include <vector>
 
 namespace OpenTune {
@@ -18,6 +14,8 @@ struct ReferenceClipProjection {
     ContentKey contentKey;
     double timelineStartSeconds{0.0};
     double timelineEndSeconds{0.0};
+    double sourceStartSeconds{0.0};
+    double sourceEndSeconds{0.0};
 
     double durationSeconds() const noexcept
     {
@@ -33,8 +31,6 @@ struct ReferenceAlignmentRequest {
     ReferenceFeatureSet targetFeatures;
     ReferenceFeatureSet referenceFeatures;
     std::vector<Note> targetNotesBefore;
-    std::vector<PitchCorrectionSegment> targetSegmentsBefore;
-    std::shared_ptr<const TimeGridSnapshot> targetTimeGridBefore;
     double overlapStartTimelineSeconds{0.0};
     double overlapEndTimelineSeconds{0.0};
 };
@@ -47,20 +43,15 @@ struct AlignmentPatch {
         TargetAnalysisNotReady,
         ReferenceAnalysisNotReady,
         InsufficientFeatures,
-        InsufficientNotes,
-        TimeGridInvalid,
         NoMutation
     };
 
     bool success{false};
     ContentKey targetContentKey;
-    int affectedStartFrame{0};
-    int affectedEndFrame{0};
+    double affectedSourceStartSeconds{0.0};
+    double affectedSourceEndSeconds{0.0};
     std::vector<Note> notesAfter;
-    std::vector<PitchCorrectionSegment> correctionSegmentsAfter;
-    std::vector<TimeGridIntent> timingIntents;
     bool pitchChanged{false};
-    bool timingChanged{false};
     ErrorCode error{ErrorCode::None};
     juce::String diagnostics;
 };

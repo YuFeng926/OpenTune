@@ -9,15 +9,39 @@ namespace OpenTune {
 
 ReferenceAnalysisService::ReferenceAnalysisService()
 {
-    workerThread_ = std::thread([this]() { workerLoop(); });
+    workerThread_ = std::thread([this]() {
+        try {
+            workerLoop();
+        } catch (const std::exception& e) {
+            AppLogger::error("[ReferenceAnalysisService] workerLoop threw: " + juce::String(e.what()));
+        } catch (...) {
+            AppLogger::error("[ReferenceAnalysisService] workerLoop threw unknown exception");
+        }
+    });
 }
 
 ReferenceAnalysisService::~ReferenceAnalysisService()
 {
+    shutdown();
+}
+
+void ReferenceAnalysisService::shutdown()
+{
     aliveToken_->store(false, std::memory_order_release);
-    running_.store(false, std::memory_order_release);
-    cancelAll();
+    const bool wasRunning = running_.exchange(false, std::memory_order_release);
+    if (!wasRunning) {
+        if (workerThread_.joinable())
+            workerThread_.join();
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pendingJobs_.clear();
+    }
+
     cv_.notify_all();
+
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
@@ -46,7 +70,8 @@ void ReferenceAnalysisService::removeListener(Listener* listener)
 }
 
 void ReferenceAnalysisService::submitAnalysis(ContentKey key,
-                                               int64_t contentRevision)
+                                               int64_t inputFingerprint,
+                                               ReferenceFeatureProducer producer)
 {
     if (!key.isValid()) {
         AppLogger::warn("[ReferenceAnalysisService] submitAnalysis rejected: invalid contentKey");
@@ -54,31 +79,25 @@ void ReferenceAnalysisService::submitAnalysis(ContentKey key,
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_.load(std::memory_order_acquire)) {
+        return;
+    }
     if (!analysisFunc_) {
         AppLogger::warn("[ReferenceAnalysisService] submitAnalysis rejected: analysisFunc_ not set");
         return;
     }
 
-    if (activeJob_.has_value() && activeJob_->contentKey == key) {
-        AppLogger::debug("[ReferenceAnalysisService] submitAnalysis: contentKey "
-            + juce::String(static_cast<juce::int64>(key.objectId)) + " already active, dropping");
+    AnalysisJobKey jobKey;
+    jobKey.contentKey = key;
+    jobKey.inputFingerprint = inputFingerprint;
+    jobKey.producer = producer;
+
+    if (activeJob_.has_value() && *activeJob_ == jobKey) {
         return;
     }
 
-    AnalysisJobKey jobKey;
-    jobKey.contentKey = key;
-    jobKey.contentRevision = contentRevision;
     pendingJobs_[key] = jobKey;
     cv_.notify_one();
-}
-
-void ReferenceAnalysisService::cancelAll()
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    pendingJobs_.clear();
-    if (activeJob_.has_value()) {
-        cancelledActiveJobs_.insert(activeJob_->contentKey);
-    }
 }
 
 void ReferenceAnalysisService::workerLoop()
@@ -105,105 +124,62 @@ void ReferenceAnalysisService::workerLoop()
 
         const ContentKey key = job.contentKey;
         ReferenceFeatureSet result;
-        bool success = false;
-        juce::String errorReason;
 
         try {
-            if (!analysisFunc) {
-                errorReason = "Reference analysis function is not configured";
-            } else {
+            if (analysisFunc) {
                 result = analysisFunc(job);
-            }
-            success = result.status == ReferenceFeatureStatus::Ready;
-            if (!success) {
-                errorReason = result.errorMessage.isNotEmpty()
-                    ? result.errorMessage
-                    : "Reference analysis did not produce Ready features";
+            } else {
+                result.status = ReferenceFeatureStatus::Failed;
+                result.errorMessage = "Reference analysis function is not configured";
             }
         } catch (const std::exception& e) {
             AppLogger::error("[ReferenceAnalysisService] Exception during analysis for contentKey objId="
                 + juce::String(static_cast<juce::int64>(key.objectId)) + ": " + juce::String(e.what()));
-            errorReason = e.what();
+            result.status = ReferenceFeatureStatus::Failed;
+            result.errorMessage = e.what();
         } catch (...) {
             AppLogger::error("[ReferenceAnalysisService] Unknown exception during analysis for contentKey objId="
                 + juce::String(static_cast<juce::int64>(key.objectId)));
-            errorReason = "Unknown exception during analysis";
+            result.status = ReferenceFeatureStatus::Failed;
+            result.errorMessage = "Unknown exception during analysis";
         }
 
-        bool cancelled = false;
+        result.producer = job.producer;
+        result.inputFingerprint = job.inputFingerprint;
+        if (result.status == ReferenceFeatureStatus::NotRequested
+            || result.status == ReferenceFeatureStatus::Extracting) {
+            result.status = ReferenceFeatureStatus::Failed;
+            if (result.errorMessage.isEmpty()) {
+                result.errorMessage = "Reference analysis did not produce Ready features";
+            }
+        }
+
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (activeJob_.has_value() && activeJob_->contentKey == key) {
                 activeJob_.reset();
             }
-
-            const auto cancelledIt = cancelledActiveJobs_.find(key);
-            if (cancelledIt != cancelledActiveJobs_.end()) {
-                cancelled = true;
-                cancelledActiveJobs_.erase(cancelledIt);
-            }
         }
 
-        if (cancelled) {
-            continue;
-        }
+        auto notify = [this, aliveToken = aliveToken_, key, result]() {
+            if (!aliveToken->load(std::memory_order_acquire))
+                return;
+            listeners_.call([key, &result](Listener& l) {
+                l.analysisFinished(key, result);
+            });
+        };
 
-        if (success) {
-            notifyListenersCompleted(key, result);
+        NotificationDispatcher dispatcher;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            dispatcher = notificationDispatcher_;
+        }
+        if (dispatcher) {
+            dispatcher(std::move(notify));
         } else {
-            notifyListenersFailed(key, errorReason);
+            juce::MessageManager::callAsync(std::move(notify));
         }
     }
-}
-
-void ReferenceAnalysisService::notifyListenersCompleted(
-    ContentKey key, const ReferenceFeatureSet& result)
-{
-    auto notify = [this, alive = aliveToken_, key, result]() {
-        if (!alive->load(std::memory_order_acquire)) {
-            return;
-        }
-        listeners_.call([key, &result](Listener& l) {
-            l.analysisCompleted(key, result);
-        });
-    };
-
-    NotificationDispatcher dispatcher;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        dispatcher = notificationDispatcher_;
-    }
-    if (dispatcher) {
-        dispatcher(std::move(notify));
-        return;
-    }
-
-    juce::MessageManager::callAsync(std::move(notify));
-}
-
-void ReferenceAnalysisService::notifyListenersFailed(
-    ContentKey key, const juce::String& reason)
-{
-    auto notify = [this, alive = aliveToken_, key, reason]() {
-        if (!alive->load(std::memory_order_acquire)) {
-            return;
-        }
-        listeners_.call([key, &reason](Listener& l) {
-            l.analysisFailed(key, reason);
-        });
-    };
-
-    NotificationDispatcher dispatcher;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        dispatcher = notificationDispatcher_;
-    }
-    if (dispatcher) {
-        dispatcher(std::move(notify));
-        return;
-    }
-
-    juce::MessageManager::callAsync(std::move(notify));
 }
 
 } // namespace OpenTune

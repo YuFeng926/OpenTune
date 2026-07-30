@@ -152,7 +152,7 @@ void RenderWorker::loop()
         {
             if (leaseCopy.isValid())
             {
-                if (job.renderCache != nullptr)
+                if (job.kind == RenderJob::Kind::Stage1Render && job.renderCache != nullptr)
                 {
                     RenderCache::PendingJob pendingJob;
                     if (job.renderCache->getNextPendingJob(pendingJob))
@@ -164,7 +164,7 @@ void RenderWorker::loop()
                         leaseCopy.renderJobCallback(job);
                     }
                 }
-                else
+                else if (job.kind == RenderJob::Kind::Stage2Rebuild)
                 {
                     leaseCopy.renderJobCallback(job);
                 }

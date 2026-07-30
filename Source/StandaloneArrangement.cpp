@@ -9,9 +9,8 @@ namespace OpenTune {
 
 namespace {
 
-juce::Colour makeDefaultTrackColour(int trackId)
+juce::Colour makeDefaultTrackColour()
 {
-    juce::ignoreUnused(trackId);
     auto& random = juce::Random::getSystemRandom();
     // Generate a vibrant pastel color: random hue, moderate saturation, bright
     float hue = random.nextFloat();
@@ -26,7 +25,7 @@ StandaloneArrangement::StandaloneArrangement()
 {
     for (int trackId = 0; trackId < kTrackCount; ++trackId) {
         tracks_[static_cast<size_t>(trackId)].name = "Track " + juce::String(trackId + 1);
-        tracks_[static_cast<size_t>(trackId)].colour = makeDefaultTrackColour(trackId);
+        tracks_[static_cast<size_t>(trackId)].colour = makeDefaultTrackColour();
     }
 
     const juce::ScopedWriteLock lock(stateLock_);
@@ -324,7 +323,7 @@ void StandaloneArrangement::clear()
         track.isSolo = false;
         track.volume = 1.0f;
         track.name = "Track " + juce::String(trackId + 1);
-        track.colour = makeDefaultTrackColour(trackId);
+        track.colour = makeDefaultTrackColour();
         track.currentRmsDb.store(-100.0f, std::memory_order_relaxed);
     }
 
@@ -441,8 +440,6 @@ bool StandaloneArrangement::movePlacementToTrack(int sourceTrackId,
                                                            static_cast<int>(sourceTrack.placements.size())));
 
     targetTrack.placements.push_back(std::move(movedPlacement));
-    checkOverlapAndClearReferenceUnlocked(targetTrackId, placementId);
-    clearInvalidInboundReferencesToPlacementUnlocked(placementId);
     targetTrack.selectedPlacementId = placementId;
     activeTrackId_ = targetTrackId;
     publishPlaybackSnapshotLocked();
@@ -472,8 +469,6 @@ bool StandaloneArrangement::setPlacementTimelineStartSeconds(int trackId,
 
     placement.timelineStartSeconds = clampedTimelineStartSeconds;
     ++placement.mappingRevision;
-    checkOverlapAndClearReferenceUnlocked(trackId, placementId);
-    clearInvalidInboundReferencesToPlacementUnlocked(placementId);
     publishPlaybackSnapshotLocked();
     return true;
 }
@@ -589,8 +584,6 @@ bool StandaloneArrangement::setPlacementTrimAndTimelineStart(int trackId,
     placement.timelineStartSeconds = clampedTimelineStartSeconds;
 
     ++placement.mappingRevision;
-    checkOverlapAndClearReferenceUnlocked(trackId, placementId);
-    clearInvalidInboundReferencesToPlacementUnlocked(placementId);
     publishPlaybackSnapshotLocked();
     return true;
 }
@@ -775,15 +768,13 @@ bool StandaloneArrangement::findPlacementByIdGlobalUnlocked(uint64_t placementId
     return false;
 }
 
-bool StandaloneArrangement::isCyclicReferenceUnlocked(int trackId,
-                                                       uint64_t targetPlacementId,
-                                                       uint64_t candidateReferenceId) const
+bool StandaloneArrangement::isCyclicReferenceUnlocked(uint64_t targetPlacementId,
+                                                        uint64_t candidateReferenceId) const
 {
-    if (targetPlacementId == 0 || candidateReferenceId == 0) {
+    if (candidateReferenceId == 0) {
         return false;
     }
 
-    // 计算 clip 总数作为最大链长上限
     size_t totalPlacements = 0;
     for (int t = 0; t < kTrackCount; ++t) {
         totalPlacements += tracks_[static_cast<size_t>(t)].placements.size();
@@ -792,31 +783,26 @@ bool StandaloneArrangement::isCyclicReferenceUnlocked(int trackId,
     uint64_t currentId = candidateReferenceId;
     for (size_t step = 0; step < totalPlacements; ++step) {
         if (currentId == targetPlacementId) {
-            return true; // 发现循环
+            return true;
         }
-
         int refTrackId = -1;
         size_t refIndex = 0;
         if (!findPlacementByIdGlobalUnlocked(currentId, refTrackId, refIndex)) {
-            return false; // 链断裂
+            return false;
         }
-
         const auto& refPlacement = tracks_[static_cast<size_t>(refTrackId)].placements[refIndex];
         if (refPlacement.referencePlacementId == 0) {
-            return false; // 链终结
+            return false;
         }
-
         currentId = refPlacement.referencePlacementId;
     }
-
-    // 超链长保守视为非循环（实际不应到达）
     return false;
 }
 
 bool StandaloneArrangement::placementsOverlap(const Placement& target, const Placement& reference) noexcept
 {
     const double overlap = std::min(target.timelineEndSeconds(), reference.timelineEndSeconds())
-                         - std::max(target.timelineStartSeconds, reference.timelineStartSeconds);
+                          - std::max(target.timelineStartSeconds, reference.timelineStartSeconds);
     return overlap > 0.0;
 }
 
@@ -825,43 +811,47 @@ bool StandaloneArrangement::clearReferenceBindingUnlocked(Placement& target) noe
     if (target.referencePlacementId == 0) {
         return false;
     }
-
     target.referencePlacementId = 0;
-    ++target.referenceBindingRevision;
     return true;
 }
 
-void StandaloneArrangement::checkOverlapAndClearReferenceUnlocked(int trackId, uint64_t targetPlacementId)
+// 唯一验证入口：set 与 canSet 共用，要求调用方已持有锁
+bool StandaloneArrangement::validateReferenceBindingUnlocked(int trackId,
+                                                              uint64_t targetPlacementId,
+                                                              uint64_t referencePlacementId) const noexcept
 {
+    // 清除（referenceId=0）总是允许，只要 target 存在且 active
+    if (referencePlacementId == 0) {
+        const int targetIndex = findPlacementIndexUnlocked(trackId, targetPlacementId);
+        if (targetIndex < 0) return false;
+        const auto& target = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(targetIndex)];
+        if (target.isRetired) return false;
+        return true;
+    }
+
+    // target 存在且 active
     const int targetIndex = findPlacementIndexUnlocked(trackId, targetPlacementId);
-    if (targetIndex < 0) {
-        return;
-    }
+    if (targetIndex < 0) return false;
+    const auto& target = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(targetIndex)];
+    if (target.isRetired) return false;
 
-    auto& target = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(targetIndex)];
-    if (target.referencePlacementId == 0) {
-        return;
-    }
+    // 非自身
+    if (targetPlacementId == referencePlacementId) return false;
 
-    // 查找 reference placement
+    // reference 存在且 active
     int refTrackId = -1;
     size_t refIndex = 0;
-    if (!findPlacementByIdGlobalUnlocked(target.referencePlacementId, refTrackId, refIndex)) {
-        // reference 不存在，清空 binding
-        AppLogger::info("checkOverlapAndClearReference: reference placement gone, clearing binding (targetId="
-                        + juce::String(targetPlacementId)
-                        + ", referenceId=" + juce::String(target.referencePlacementId) + ")");
-        clearReferenceBindingUnlocked(target);
-        return;
-    }
-
+    if (!findPlacementByIdGlobalUnlocked(referencePlacementId, refTrackId, refIndex)) return false;
     const auto& ref = tracks_[static_cast<size_t>(refTrackId)].placements[refIndex];
-    if (ref.isRetired || !placementsOverlap(target, ref)) {
-        AppLogger::info("checkOverlapAndClearReference: time overlap lost, clearing reference binding (targetId="
-                        + juce::String(targetPlacementId)
-                        + ", referenceId=" + juce::String(target.referencePlacementId) + ")");
-        clearReferenceBindingUnlocked(target);
-    }
+    if (ref.isRetired) return false;
+
+    // 无循环
+    if (isCyclicReferenceUnlocked(targetPlacementId, referencePlacementId)) return false;
+
+    // 正时间交叠
+    if (!placementsOverlap(target, ref)) return false;
+
+    return true;
 }
 
 void StandaloneArrangement::clearInboundReferencesToPlacementUnlocked(uint64_t referencePlacementId)
@@ -879,41 +869,13 @@ void StandaloneArrangement::clearInboundReferencesToPlacementUnlocked(uint64_t r
     }
 }
 
-void StandaloneArrangement::clearInvalidInboundReferencesToPlacementUnlocked(uint64_t referencePlacementId)
-{
-    if (referencePlacementId == 0) {
-        return;
-    }
-
-    int referenceTrackId = -1;
-    size_t referenceIndex = 0;
-    if (!findPlacementByIdGlobalUnlocked(referencePlacementId, referenceTrackId, referenceIndex)) {
-        clearInboundReferencesToPlacementUnlocked(referencePlacementId);
-        return;
-    }
-
-    const auto& reference = tracks_[static_cast<size_t>(referenceTrackId)].placements[referenceIndex];
-    if (reference.isRetired) {
-        clearInboundReferencesToPlacementUnlocked(referencePlacementId);
-        return;
-    }
-
-    for (int t = 0; t < kTrackCount; ++t) {
-        for (auto& target : tracks_[static_cast<size_t>(t)].placements) {
-            if (target.referencePlacementId == referencePlacementId && !placementsOverlap(target, reference)) {
-                clearReferenceBindingUnlocked(target);
-            }
-        }
-    }
-}
-
 // ============================================================================
 // Reference binding – public API
 // ============================================================================
 
 bool StandaloneArrangement::setPlacementReferencePlacement(int trackId,
-                                                           uint64_t targetPlacementId,
-                                                           uint64_t referencePlacementId)
+                                                            uint64_t targetPlacementId,
+                                                            uint64_t referencePlacementId)
 {
     if (!isValidTrackId(trackId) || targetPlacementId == 0) {
         return false;
@@ -921,93 +883,19 @@ bool StandaloneArrangement::setPlacementReferencePlacement(int trackId,
 
     const juce::ScopedWriteLock lock(stateLock_);
 
+    if (!validateReferenceBindingUnlocked(trackId, targetPlacementId, referencePlacementId)) {
+        return false;
+    }
+
     const int targetIndex = findPlacementIndexUnlocked(trackId, targetPlacementId);
-    if (targetIndex < 0) {
-        AppLogger::warn("setPlacementReferencePlacement: target placement not found (trackId="
-                        + juce::String(trackId) + ", targetId=" + juce::String(targetPlacementId) + ")");
-        return false;
-    }
-
     auto& target = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(targetIndex)];
-    if (target.isRetired) {
-        AppLogger::warn("setPlacementReferencePlacement: target placement is retired (targetId="
-                        + juce::String(targetPlacementId) + ")");
-        return false;
-    }
 
-    // 清空引用
     if (referencePlacementId == 0) {
-        if (clearReferenceBindingUnlocked(target)) {
-            publishPlaybackSnapshotLocked();
-        }
+        clearReferenceBindingUnlocked(target);
         return true;
     }
 
-    // 拒绝 self-reference
-    if (targetPlacementId == referencePlacementId) {
-        AppLogger::warn("setPlacementReferencePlacement: self-reference rejected (placementId="
-                        + juce::String(targetPlacementId) + ")");
-        return false;
-    }
-
-    // 验证 reference placement 存在（跨所有轨道）
-    int refTrackId = -1;
-    size_t refIndex = 0;
-    if (!findPlacementByIdGlobalUnlocked(referencePlacementId, refTrackId, refIndex)) {
-        AppLogger::warn("setPlacementReferencePlacement: reference placement not found (referenceId="
-                        + juce::String(referencePlacementId) + ")");
-        return false;
-    }
-
-    // 拒绝循环引用
-    if (isCyclicReferenceUnlocked(trackId, targetPlacementId, referencePlacementId)) {
-        AppLogger::warn("setPlacementReferencePlacement: cyclic reference rejected (targetId="
-                        + juce::String(targetPlacementId)
-                        + ", referenceId=" + juce::String(referencePlacementId) + ")");
-        return false;
-    }
-
-    // 检查时间重叠
-    const auto& ref = tracks_[static_cast<size_t>(refTrackId)].placements[refIndex];
-    if (ref.isRetired) {
-        AppLogger::warn("setPlacementReferencePlacement: reference placement is retired (referenceId="
-                        + juce::String(referencePlacementId) + ")");
-        return false;
-    }
-
-    if (!placementsOverlap(target, ref)) {
-        AppLogger::warn("setPlacementReferencePlacement: no time overlap, binding rejected (targetId="
-                        + juce::String(targetPlacementId)
-                        + ", referenceId=" + juce::String(referencePlacementId) + ")");
-        return false;
-    }
-
     target.referencePlacementId = referencePlacementId;
-    ++target.referenceBindingRevision;
-    publishPlaybackSnapshotLocked();
-    return true;
-}
-
-bool StandaloneArrangement::clearPlacementReferencePlacement(int trackId, uint64_t targetPlacementId)
-{
-    if (!isValidTrackId(trackId) || targetPlacementId == 0) {
-        return false;
-    }
-
-    const juce::ScopedWriteLock lock(stateLock_);
-
-    const int index = findPlacementIndexUnlocked(trackId, targetPlacementId);
-    if (index < 0) {
-        return false;
-    }
-
-    auto& placement = tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)];
-    if (placement.referencePlacementId == 0) {
-        return true; // 已经无引用
-    }
-
-    clearReferenceBindingUnlocked(placement);
-    publishPlaybackSnapshotLocked();
     return true;
 }
 
@@ -1016,23 +904,23 @@ uint64_t StandaloneArrangement::getPlacementReferencePlacement(int trackId, uint
     if (!isValidTrackId(trackId) || targetPlacementId == 0) {
         return 0;
     }
-
     const juce::ScopedReadLock lock(stateLock_);
-
     const int index = findPlacementIndexUnlocked(trackId, targetPlacementId);
     if (index < 0) {
         return 0;
     }
-
     return tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)].referencePlacementId;
 }
 
-bool StandaloneArrangement::isCyclicReference(int trackId,
-                                               uint64_t targetPlacementId,
-                                               uint64_t candidateReferenceId) const
+bool StandaloneArrangement::canSetPlacementReferencePlacement(int trackId,
+                                                               uint64_t targetPlacementId,
+                                                               uint64_t referencePlacementId) const
 {
+    if (!isValidTrackId(trackId) || targetPlacementId == 0) {
+        return false;
+    }
     const juce::ScopedReadLock lock(stateLock_);
-    return isCyclicReferenceUnlocked(trackId, targetPlacementId, candidateReferenceId);
+    return validateReferenceBindingUnlocked(trackId, targetPlacementId, referencePlacementId);
 }
 
 bool StandaloneArrangement::removeTrackAndShift(int trackId, int visibleCount)
@@ -1067,7 +955,7 @@ bool StandaloneArrangement::removeTrackAndShift(int trackId, int visibleCount)
     cleared.isSolo = false;
     cleared.volume = 1.0f;
     cleared.name = "Track " + juce::String(lastSlot + 1);
-    cleared.colour = makeDefaultTrackColour(lastSlot);
+    cleared.colour = makeDefaultTrackColour();
     cleared.currentRmsDb.store(-100.0f, std::memory_order_relaxed);
 
     // Adjust active track if needed

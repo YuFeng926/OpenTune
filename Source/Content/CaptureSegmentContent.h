@@ -16,7 +16,6 @@ public:
 
     ContentKey contentKey() const override;
     std::shared_ptr<const EditableContentSnapshot> snapshotContent() const override;
-    void applyContentCommand(class ContentCommand& cmd) override;
 
     // 生命周期管理
     void retireContent(ContentKey key) override;
@@ -34,7 +33,7 @@ public:
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
     void applyOriginalF0(std::shared_ptr<PitchCurve> curve);
     void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot);
-    void applyPitchShiftSettings(const PitchShiftSettings& settings);
+    bool applyPitchShiftState(const PitchShiftEditState& state);
     void applyReferenceFeatures(const ReferenceFeatureSet& features);
     std::shared_ptr<PitchCurve> pitchCurve() const { return pitchCurve_; }
 

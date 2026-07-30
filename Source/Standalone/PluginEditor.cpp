@@ -27,6 +27,7 @@
 #include "Utils/TimeCoordinate.h"
 #include "Content/StandaloneClipContent.h"
 #include "Utils/KeyShortcutConfig.h"
+#include "Utils/PlacementActions.h"
 #include "DSP/ReferenceFeatures.h"
 #include <cmath>
 #include <atomic>
@@ -53,8 +54,16 @@ ContentTimelineProjection makePianoRollProjection(const StandaloneArrangement::P
     projection.timelineStartSeconds = placement.timelineStartSeconds;
     projection.timelineDurationSeconds = placement.durationSeconds;
     auto snap = processor.getContentSnapshot(placement.contentKey);
-    projection.contentDurationSeconds =
-        snap ? snap->sourceWindow.durationSeconds() : placement.durationSeconds;
+    const double sourceStartSeconds = placement.clipInSeconds;
+    const double sourceEndSeconds = sourceStartSeconds + placement.durationSeconds;
+    if (snap != nullptr && snap->timeGrid != nullptr) {
+        projection.contentStartSeconds = snap->timeGrid->tauForward(sourceStartSeconds);
+        projection.contentDurationSeconds = snap->timeGrid->tauForward(sourceEndSeconds)
+            - projection.contentStartSeconds;
+    } else {
+        projection.contentStartSeconds = sourceStartSeconds;
+        projection.contentDurationSeconds = placement.durationSeconds;
+    }
     return projection;
 }
 
@@ -605,6 +614,12 @@ bool OpenTuneAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
+    if (KeyShortcutConfig::matchesShortcut(shortcutSettings_, KeyShortcutConfig::ShortcutId::Stop, key))
+    {
+        stopRequested();
+        return true;
+    }
+
     return false;
 }
 
@@ -955,6 +970,8 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
     const bool allowSecondaryRefresh = !inferenceActive_ || ((++inferenceActiveTickCounter_ % 4) == 0);
+    if (allowSecondaryRefresh && referenceRefreshPending_)
+        refreshReferenceContext();
 
 // Update playhead position from processor (presented position via shared projection)
     double currentPositionSeconds = processorRef_.getPosition();
@@ -1098,7 +1115,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         shouldShowOverlay = true;
     }
 
-    // Reference feature (timing anchor) extraction overlay —
+    // Reference-note analysis shares the RMVPE overlay.
     // shares the same overlay system as RMVPE extraction.
     if (!shouldShowOverlay && !isWorkspaceView_) {
         const int activeTrack = getStandaloneActiveTrack(processorRef_);
@@ -1107,10 +1124,9 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             ? getStandaloneContentKey(processorRef_, activeTrack, activePlacementIndex)
             : ContentKey{};
         if (activeContentKey.isValid()) {
-            // Check if GAME timing anchor extraction is in flight
             const ReferenceFeatureSet refFeatures = processorRef_.getReferenceFeatures(activeContentKey);
             if (refFeatures.status == ReferenceFeatureStatus::Extracting) {
-                autoRenderOverlay_.setMessageText(juce::String::fromUTF8("正在提取节奏锚点"));
+                autoRenderOverlay_.setMessageText(juce::String::fromUTF8(u8"正在分析参考 Clip"));
                 shouldShowOverlay = true;
             }
         }
@@ -1196,6 +1212,15 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     const auto& sharedPreferences = preferencesState.shared;
     const auto& visualPreferences = sharedPreferences.pianoRollVisualPreferences;
     const bool experimentalFeaturesEnabled = sharedPreferences.experimentalFeaturesEnabled;
+    const auto referenceAlignMode = sharedPreferences.experimentalReferenceAlignMode;
+
+    processorRef_.setExperimentalReferenceAlignMode(referenceAlignMode);
+    if (appliedReferenceAlignMode_ != referenceAlignMode
+        || appliedExperimentalFeaturesEnabled_ != experimentalFeaturesEnabled) {
+        appliedReferenceAlignMode_ = referenceAlignMode;
+        appliedExperimentalFeaturesEnabled_ = experimentalFeaturesEnabled;
+        referenceRefreshPending_ = true;
+    }
 
     if (languageState_ != nullptr) {
         languageState_->language = sharedPreferences.language;
@@ -2326,12 +2351,16 @@ void OpenTuneAudioProcessorEditor::trackColorModeChanged(TrackColorMode mode)
 
 void OpenTuneAudioProcessorEditor::performUndoRedoAction(bool isUndo)
 {
-    if (isUndo)
-        processorRef_.getUndoManager().undo();
-    else
-        processorRef_.getUndoManager().redo();
+    auto* action = isUndo
+        ? processorRef_.getUndoManager().undo()
+        : processorRef_.getUndoManager().redo();
+    if (action == nullptr)
+        return;
 
     projectSession_.markDirty();
+    arrangementView_.requestContentRedraw();
+    referenceRefreshPending_ = true;
+    refreshReferenceContext();
 }
 
 void OpenTuneAudioProcessorEditor::undoRequested() { performUndoRedoAction(true); }
@@ -2712,6 +2741,7 @@ void OpenTuneAudioProcessorEditor::placementSelectionChanged(int trackId, uint64
     applyPlacementSelectionContext(trackId, placementId);
 
     // 更新 reference context
+    referenceRefreshPending_ = true;
     refreshReferenceContext();
 }
 
@@ -2782,11 +2812,6 @@ void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
     }
 }
 
-void OpenTuneAudioProcessorEditor::stopPlaybackRequested()
-{
-    stopRequested();
-}
-
 void OpenTuneAudioProcessorEditor::playFromStartToggleRequested()
 {
     if (processorRef_.isPlaying()) {
@@ -2842,24 +2867,24 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
     auto commands = processorRef_.getContentCommands();
     content->setOnConfirm([this, contentKey, currentSettings, commands](const PitchShiftSettings& newSettings) {
         if (newSettings != currentSettings) {
-            processorRef_.getUndoManager().addAction(std::make_unique<PitchShiftEditAction>(
-                commands, contentKey, currentSettings, newSettings));
-            if (commands)
-                commands->setPitchShiftSettings(contentKey, newSettings);
-            parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
-            projectSession_.markDirty();
+            auto action = commands->commitPitchShiftEdit(contentKey, newSettings);
+            if (action != nullptr) {
+                processorRef_.getUndoManager().addAction(std::move(action));
+                parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
+                projectSession_.markDirty();
+            }
         }
     });
 
     content->setOnReset([this, contentKey, currentSettings, commands]() {
         const auto identity = PitchShiftSettings::identity();
         if (identity != currentSettings) {
-            processorRef_.getUndoManager().addAction(std::make_unique<PitchShiftEditAction>(
-                commands, contentKey, currentSettings, identity));
-            if (commands)
-                commands->setPitchShiftSettings(contentKey, identity);
-            parameterPanel_.setPitchShiftIndicator(0, 0);
-            projectSession_.markDirty();
+            auto action = commands->commitPitchShiftEdit(contentKey, identity);
+            if (action != nullptr) {
+                processorRef_.getUndoManager().addAction(std::move(action));
+                parameterPanel_.setPitchShiftIndicator(0, 0);
+                projectSession_.markDirty();
+            }
         }
     });
 
@@ -3205,6 +3230,9 @@ void OpenTuneAudioProcessorEditor::refreshAllUIFromProject()
     const int activeTrack = getStandaloneActiveTrack(processorRef_);
     const int placementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
     syncPianoRollFromPlacementSelection(activeTrack, placementIndex);
+    arrangementView_.requestContentRedraw();
+    referenceRefreshPending_ = true;
+    refreshReferenceContext();
 }
 
 // ============================================================================
@@ -3238,25 +3266,16 @@ OpenTuneAudioProcessorEditor::AutoRefUiState OpenTuneAudioProcessorEditor::evalu
 
     const auto preferencesState = appPreferences_.getState();
     const bool experimentalFeaturesEnabled = preferencesState.shared.experimentalFeaturesEnabled;
-    const auto expMode = preferencesState.shared.experimentalReferenceAlignMode;
-    processorRef_.setExperimentalReferenceAlignMode(expMode);
 
     uiState.availability = processorRef_.queryAutoRefAvailability(targetPlacementId);
-    if (!experimentalFeaturesEnabled || expMode == ExperimentalReferenceAlignMode::Off) {
+    if (!experimentalFeaturesEnabled) {
         return uiState;
     }
 
     if (uiState.availability.status == OpenTuneAudioProcessor::AutoRefAvailability::Status::Ready) {
         uiState.presentation.mode = ParameterPanel::AutoButtonPresentation::Mode::ReferenceAuto;
-        uiState.presentation.tooltip = juce::String("Auto tune and align to the reference clip");
+        uiState.presentation.tooltip = juce::String("Auto tune to the reference clip");
         return uiState;
-    }
-
-    if (uiState.availability.status == OpenTuneAudioProcessor::AutoRefAvailability::Status::GameUnavailable
-        && uiState.availability.hasReferenceBinding()) {
-        uiState.presentation.mode =
-            ParameterPanel::AutoButtonPresentation::Mode::ReferenceBoundButFallbackToAuto;
-        uiState.presentation.tooltip = uiState.availability.message;
     }
 
     return uiState;
@@ -3269,14 +3288,25 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
 
     if (!autoRefUiState.availability.hasReferenceBinding()) {
         pianoRoll_.setReferenceOverlay(std::nullopt);
+        referenceRefreshPending_ = false;
         return;
     }
 
     const auto preferencesState = appPreferences_.getState();
     const bool experimentalFeaturesEnabled = preferencesState.shared.experimentalFeaturesEnabled;
-    const auto expMode = preferencesState.shared.experimentalReferenceAlignMode;
-    if (!experimentalFeaturesEnabled || expMode == ExperimentalReferenceAlignMode::Off) {
+    if (!experimentalFeaturesEnabled) {
         pianoRoll_.setReferenceOverlay(std::nullopt);
+        referenceRefreshPending_ = false;
+        return;
+    }
+
+    const int targetTrackId = getStandaloneActiveTrack(processorRef_);
+    StandaloneArrangement::Placement targetPlacement;
+    if (!processorRef_.getPlacementById(targetTrackId,
+                                        autoRefUiState.availability.targetPlacementId,
+                                        targetPlacement)) {
+        pianoRoll_.setReferenceOverlay(std::nullopt);
+        referenceRefreshPending_ = false;
         return;
     }
 
@@ -3284,29 +3314,52 @@ void OpenTuneAudioProcessorEditor::refreshReferenceContext()
     StandaloneArrangement::Placement refPlacement;
     if (!findReferencePlacementInfo(processorRef_, autoRefUiState.availability.referencePlacementId, refPlacement)) {
         pianoRoll_.setReferenceOverlay(std::nullopt);
+        referenceRefreshPending_ = false;
         return;
     }
 
+    const auto targetPreheat = processorRef_.preheatReferenceAlignmentFeatures(targetPlacement.contentKey);
+    const auto referencePreheat = processorRef_.preheatReferenceAlignmentFeatures(refPlacement.contentKey);
+    const auto isPending = [](OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus status) {
+        return status == OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus::Queued
+            || status == OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus::WaitingForSource;
+    };
+    referenceRefreshPending_ = isPending(targetPreheat) || isPending(referencePreheat);
+
     // If reference features are ready, set up piano roll overlay
     if (refPlacement.contentKey.isValid()) {
-        const ReferenceFeatureSet refFeatures = processorRef_.getReferenceFeatures(refPlacement.contentKey);
-        if (refFeatures.isReady()
-            && refFeatures.producer == ReferenceFeatureProducer::Game)
+        const auto refSnapshot = processorRef_.getContentSnapshot(refPlacement.contentKey);
+        const ReferenceFeatureSet refFeatures = refSnapshot
+            ? refSnapshot->referenceFeatures
+            : ReferenceFeatureSet{};
+        if (refSnapshot != nullptr
+            && refSnapshot->timeGrid != nullptr
+            && refFeatures.isReady()
+            && (refFeatures.producer == ReferenceFeatureProducer::StandardAuto
+                || refFeatures.producer == ReferenceFeatureProducer::Game))
         {
             PianoRollRenderer::ReferenceOverlay overlay;
-            overlay.ghostNotes = refFeatures.pitch.notes;
-            for (const auto& event : refFeatures.timing.anchors) {
-                PianoRollRenderer::ReferenceOverlay::GhostAnchor ga;
-                ga.sourceSeconds = event.sourceSeconds;
-                ga.strength = event.strength;
-                overlay.ghostAnchors.push_back(ga);
+            const double visibleSourceStart = refPlacement.clipInSeconds;
+            const double visibleSourceEnd = visibleSourceStart + refPlacement.durationSeconds;
+            for (const auto& note : refFeatures.pitch.notes) {
+                Note visibleNote = note;
+                visibleNote.startTime = std::max(visibleNote.startTime, visibleSourceStart);
+                visibleNote.endTime = std::min(visibleNote.endTime, visibleSourceEnd);
+                if (visibleNote.endTime > visibleNote.startTime)
+                    overlay.ghostNotes.push_back(std::move(visibleNote));
             }
             overlay.ghostColour = juce::Colours::steelblue;
             overlay.enabled = true;
             overlay.sourceProjection = makePianoRollProjection(refPlacement, processorRef_);
+            overlay.timeGrid = refSnapshot->timeGrid;
             pianoRoll_.setReferenceOverlay(overlay);
+            referenceRefreshPending_ = referenceRefreshPending_
+                || processorRef_.getReferenceFeatures(targetPlacement.contentKey).status
+                    == ReferenceFeatureStatus::Extracting;
         } else {
             pianoRoll_.setReferenceOverlay(std::nullopt);
+            referenceRefreshPending_ = referenceRefreshPending_
+                || refFeatures.status == ReferenceFeatureStatus::Extracting;
         }
     } else {
         pianoRoll_.setReferenceOverlay(std::nullopt);
@@ -3343,7 +3396,21 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
     const uint64_t existingRef = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
     if (existingRef != 0) {
         menu.addItem(juce::String::fromUTF8(u8"\u4E0D\u4F7F\u7528\u53C2\u8003Clip"), [this, arrangement, trackId, targetPlacementId]() {
-            arrangement->clearPlacementReferencePlacement(trackId, targetPlacementId);
+            const uint64_t beforeReference = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
+            if (beforeReference == 0)
+                return;
+            if (!arrangement->setPlacementReferencePlacement(trackId, targetPlacementId, 0)) {
+                ConfirmDialogContent::showMessage(
+                    this,
+                    juce::String::fromUTF8(u8"\u53C2\u8003 Clip"),
+                    juce::String::fromUTF8(u8"\u65E0\u6CD5\u6E05\u9664\u5F53\u524D\u53C2\u8003 Clip \u7ED1\u5B9A\u3002"));
+                return;
+            }
+            processorRef_.getUndoManager().addAction(std::make_unique<ReferenceBindingAction>(
+                processorRef_, trackId, targetPlacementId, beforeReference, 0));
+            projectSession_.markDirty();
+            arrangementView_.requestContentRedraw();
+            referenceRefreshPending_ = true;
             refreshReferenceContext();
         });
         menu.addSeparator();
@@ -3361,16 +3428,31 @@ void OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu(int trackId, uint
             if (candidate.placementId == targetPlacementId) continue; // 排除自身
             if (candidate.isRetired) continue;
 
-// Exclude clips already serving as target (referenced by other clips)
-// Simplified check: only exclude cyclic reference cases
-            if (arrangement->isCyclicReference(trackId, targetPlacementId, candidate.placementId)) continue;
+            if (!arrangement->canSetPlacementReferencePlacement(
+                    trackId, targetPlacementId, candidate.placementId)) continue;
 
             hasCandidates = true;
             const juce::String label = juce::String("Track ") + juce::String(t + 1)
                 + " - " + (candidate.name.isNotEmpty() ? candidate.name : "Clip")
                 + juce::String(" (Mat#") + juce::String(static_cast<juce::int64>(candidate.contentKey.objectId)) + ")";
             refMenu.addItem(label, [this, arrangement, trackId, targetPlacementId, candidate]() {
-                arrangement->setPlacementReferencePlacement(trackId, targetPlacementId, candidate.placementId);
+                const uint64_t beforeReference = arrangement->getPlacementReferencePlacement(trackId, targetPlacementId);
+                if (beforeReference == candidate.placementId)
+                    return;
+                if (!arrangement->setPlacementReferencePlacement(
+                        trackId, targetPlacementId, candidate.placementId)) {
+                    ConfirmDialogContent::showMessage(
+                        this,
+                        juce::String::fromUTF8(u8"\u53C2\u8003 Clip"),
+                        juce::String::fromUTF8(u8"\u8BE5 Clip \u5DF2\u4E0D\u6EE1\u8DB3\u53C2\u8003\u7ED1\u5B9A\u6761\u4EF6\u3002"));
+                    return;
+                }
+                processorRef_.getUndoManager().addAction(std::make_unique<ReferenceBindingAction>(
+                    processorRef_, trackId, targetPlacementId,
+                    beforeReference, candidate.placementId));
+                projectSession_.markDirty();
+                arrangementView_.requestContentRedraw();
+                referenceRefreshPending_ = true;
                 refreshReferenceContext();
             });
         }
@@ -3405,6 +3487,10 @@ bool OpenTuneAudioProcessorEditor::handleAutoRefExecute()
     const uint64_t targetPlacementId = processorRef_.getPlacementId(trackId, placementIndex);
     auto result = processorRef_.executeReferenceAlignmentForPlacement(targetPlacementId);
     if (!result.succeeded()) {
+        if (result.status == OpenTuneAudioProcessor::ReferenceAlignmentResult::Status::TargetAnalysisNotReady
+            || result.status == OpenTuneAudioProcessor::ReferenceAlignmentResult::Status::ReferenceAnalysisNotReady) {
+            referenceRefreshPending_ = true;
+        }
         const juce::String message = result.message.isNotEmpty()
             ? result.message
             : juce::String::fromUTF8(u8"AUTO Ref alignment failed.");
@@ -3417,6 +3503,7 @@ bool OpenTuneAudioProcessorEditor::handleAutoRefExecute()
     }
 
     syncPianoRollFromPlacementSelection(trackId, placementIndex);
+    referenceRefreshPending_ = true;
     refreshReferenceContext();
     return true;
 }

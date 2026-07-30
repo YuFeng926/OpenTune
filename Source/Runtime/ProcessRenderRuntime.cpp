@@ -20,9 +20,30 @@ namespace OpenTune {
 namespace {
 
 // ==============================================================================
+// Effective F0 Materialization
+// ==============================================================================
+// 将 contentSnap 的 forEachEffectiveF0Span 复制与 gain 应用封装为文件内函数，
+// 消除 leading lookback、trailing lookahead、主 chunk 三处完全相同的逻辑。
+
+std::vector<float> materializeEffectiveF0Range(
+    const EditableContentSnapshot& contentSnap, int startFrame, int endFrame)
+{
+    const int rangeLength = std::max(0, endFrame - startFrame);
+    std::vector<float> effectiveF0(static_cast<size_t>(rangeLength), 0.0f);
+    contentSnap.forEachEffectiveF0Span(startFrame, endFrame,
+        [&effectiveF0, startFrame](int frameIndex, const float* values, int spanLength, float gain)
+        {
+            const int offset = frameIndex - startFrame;
+            for (int k = 0; k < spanLength; ++k)
+                effectiveF0[static_cast<size_t>(offset + k)] = values[static_cast<size_t>(k)] * gain;
+        });
+    return effectiveF0;
+}
+
+// ==============================================================================
 // F0 Gap Filling for Vocoder (Mel Frame Space)
 // ==============================================================================
-// 在渲染提交前填补 correctedF0 的零值间隙：
+// 在渲染提交前填补 vocoderF0 的零值间隙：
 //   1. 内部间隙：≤50帧用 log-domain 线性插值填充
 //   2. 边界延伸：起点/终点若为零，向边界外查询并延伸填充
 //      - 检测延伸方向是否有 voiced 段，有则延伸到该段起点为止
@@ -30,14 +51,14 @@ namespace {
 // 目的：消除 PC-NSF-HiFiGAN 在 F0 不连续处的相位震荡（低频砰砰声）
 void fillF0GapsForVocoder(
     std::vector<float>& f0,
-    const std::shared_ptr<const PitchCurveSnapshot>& snap,
+    const EditableContentSnapshot& contentSnap,
     double frameStartTimeSec,
     double frameEndTimeSec,
     double hopDuration,
     double f0FrameRate,
     bool allowTrailingExtension)
 {
-    if (f0.empty() || !snap) return;
+    if (f0.empty()) return;
 
     constexpr int maxGapFrames = 50;  // ~580ms at 86fps
     const int n = static_cast<int>(f0.size());
@@ -86,25 +107,13 @@ void fillF0GapsForVocoder(
         if (firstVoicedIdx < n) {
             const float firstVoicedF0 = f0[static_cast<size_t>(firstVoicedIdx)];
 
-            // Query PitchCurve for F0 before this chunk's start
-            // We need to look backward from frameStartTimeSec
-            const int lookbackF0Frames = 100;  // Look back up to 1 second (100 frames at 100fps)
+            const int lookbackF0Frames = 100;
             const int queryStartFrame = static_cast<int>(std::floor(frameStartTimeSec * f0FrameRate)) - lookbackF0Frames;
             const int queryEndFrame = static_cast<int>(std::floor(frameStartTimeSec * f0FrameRate));
 
-            std::vector<float> prevF0(static_cast<size_t>(queryEndFrame - queryStartFrame), 0.0f);
-            snap->renderFinalF0Range(queryStartFrame, queryEndFrame,
-                [&prevF0, queryStartFrame](int frameIndex, const float* data, int length) {
-                    if (!data || length <= 0) return;
-                    const int offset = frameIndex - queryStartFrame;
-                    if (offset < 0) return;
-                    const int copyLen = std::min(length, static_cast<int>(prevF0.size()) - offset);
-                    if (copyLen > 0) {
-                        std::copy(data, data + copyLen, prevF0.begin() + offset);
-                    }
-                });
+            std::vector<float> prevF0 = materializeEffectiveF0Range(
+                contentSnap, queryStartFrame, queryEndFrame);
 
-            // Find the nearest voiced F0 going backward
             float extendF0 = 0.0f;
             for (int j = static_cast<int>(prevF0.size()) - 1; j >= 0; --j) {
                 if (prevF0[static_cast<size_t>(j)] > 0.0f) {
@@ -113,18 +122,13 @@ void fillF0GapsForVocoder(
                 }
             }
 
-            // If we found a voiced F0 before, fill the leading zeros
-            // But check if there's a voiced segment between extend point and firstVoicedIdx
             if (extendF0 > 0.0f) {
-                // Use the closer F0 value (extendF0 or firstVoicedF0) for smoother transition
                 const float fillF0 = (extendF0 > 0.0f && firstVoicedF0 > 0.0f)
-                    ? std::sqrt(extendF0 * firstVoicedF0)  // Geometric mean
+                    ? std::sqrt(extendF0 * firstVoicedF0)
                     : (firstVoicedF0 > 0.0f ? firstVoicedF0 : extendF0);
 
-                // Fill leading zeros with gradual transition
                 for (int j = 0; j < firstVoicedIdx; ++j) {
                     float t = static_cast<float>(j) / static_cast<float>(firstVoicedIdx + 1);
-                    // Linear interpolation in log domain
                     float logFill = std::log2(std::max(fillF0, 1e-6f));
                     float logFirst = std::log2(std::max(firstVoicedF0, 1e-6f));
                     f0[static_cast<size_t>(j)] = std::pow(2.0f, logFill + (logFirst - logFill) * t);
@@ -135,31 +139,19 @@ void fillF0GapsForVocoder(
 
     // ---- Step 3: Extend trailing zeros (f0[n-1] == 0) ----
     if (allowTrailingExtension && n > 0 && f0[static_cast<size_t>(n - 1)] <= 0.0f) {
-        // Find last voiced frame in current chunk
         int lastVoicedIdx = n - 1;
         while (lastVoicedIdx >= 0 && f0[static_cast<size_t>(lastVoicedIdx)] <= 0.0f) --lastVoicedIdx;
 
         if (lastVoicedIdx >= 0) {
             const float lastVoicedF0 = f0[static_cast<size_t>(lastVoicedIdx)];
 
-            // Query PitchCurve for F0 after this chunk's end
-            const int lookaheadF0Frames = 100;  // Look ahead up to 1 second
+            const int lookaheadF0Frames = 100;
             const int queryStartFrame = static_cast<int>(std::ceil(frameEndTimeSec * f0FrameRate));
             const int queryEndFrame = queryStartFrame + lookaheadF0Frames;
 
-            std::vector<float> nextF0(static_cast<size_t>(queryEndFrame - queryStartFrame), 0.0f);
-            snap->renderFinalF0Range(queryStartFrame, queryEndFrame,
-                [&nextF0, queryStartFrame](int frameIndex, const float* data, int length) {
-                    if (!data || length <= 0) return;
-                    const int offset = frameIndex - queryStartFrame;
-                    if (offset < 0) return;
-                    const int copyLen = std::min(length, static_cast<int>(nextF0.size()) - offset);
-                    if (copyLen > 0) {
-                        std::copy(data, data + copyLen, nextF0.begin() + offset);
-                    }
-                });
+            std::vector<float> nextF0 = materializeEffectiveF0Range(
+                contentSnap, queryStartFrame, queryEndFrame);
 
-            // Find the nearest voiced F0 going forward
             float extendF0 = 0.0f;
             for (size_t j = 0; j < nextF0.size(); ++j) {
                 if (nextF0[j] > 0.0f) {
@@ -168,13 +160,11 @@ void fillF0GapsForVocoder(
                 }
             }
 
-            // If we found a voiced F0 after, fill the trailing zeros
             if (extendF0 > 0.0f || lastVoicedF0 > 0.0f) {
                 const float fillF0 = (extendF0 > 0.0f && lastVoicedF0 > 0.0f)
                     ? std::sqrt(extendF0 * lastVoicedF0)
                     : (lastVoicedF0 > 0.0f ? lastVoicedF0 : extendF0);
 
-                // Fill trailing zeros with gradual transition
                 const int trailingLen = n - lastVoicedIdx - 1;
                 for (int j = 0; j < trailingLen; ++j) {
                     float t = static_cast<float>(j + 1) / static_cast<float>(trailingLen + 1);
@@ -266,12 +256,11 @@ bool completionIsAlive(const ProcessRenderRuntime::CompletionContext& completion
     return completion.alive == nullptr || completion.alive->load(std::memory_order_acquire);
 }
 
-void notifyChunkPublished(const ProcessRenderRuntime::CompletionContext& completion,
-                          ContentKey key,
-                          uint64_t revision)
+void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completion,
+                        ContentKey key)
 {
-    if (completionIsAlive(completion) && completion.chunkPublished)
-        completion.chunkPublished(key, revision);
+    if (completionIsAlive(completion) && completion.chunkSettled)
+        completion.chunkSettled(key);
 }
 
 } // namespace
@@ -371,8 +360,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     auto pitchCurve = contentSnap->pitchCurve;
 
     std::vector<float> monoAudio;
-    std::vector<float> sourceF0;
-    std::vector<float> correctedF0;
+    std::vector<float> effectiveF0;
+    std::vector<float> vocoderF0;
 
     const double relChunkStartSec = job.startSeconds;
     auto coreJob = std::move(job);
@@ -430,9 +419,10 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const double hopDuration = static_cast<double>(boundaries.hopSize) / RenderCache::kSampleRate;
 
     auto snap = pitchCurve->getSnapshot();
-    if (!snap->hasFinalF0Data())
+    if (!snap->hasOriginalF0Data())
     {
         coreJob.renderCache->markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);
+        notifyChunkSettled(completion, coreJob.contentKey);
         return;
     }
 
@@ -449,30 +439,10 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const int f0EndFrame = static_cast<int>(std::ceil(trueEndSeconds * f0FrameRate)) + 1;
     const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
 
-    sourceF0.assign(static_cast<size_t>(numF0Frames), 0.0f);
-    snap->renderFinalF0Range(f0StartFrame, f0EndFrame,
-        [&sourceF0, f0StartFrame](int frameIndex, const float* data, int length)
-        {
-            if (!data || length <= 0)
-                return;
-            const int offset = frameIndex - f0StartFrame;
-            if (offset < 0)
-                return;
-            const int copyLen = std::min(length, static_cast<int>(sourceF0.size()) - offset);
-            if (copyLen > 0)
-                std::copy(data, data + copyLen, sourceF0.begin() + offset);
-        });
-
-    if (!contentSnap->pitchShiftSettings.isIdentity())
-    {
-        const float pitchRatio = static_cast<float>(contentSnap->pitchShiftSettings.getPitchRatio());
-        for (auto& f0Val : sourceF0)
-            if (f0Val > 0.0f)
-                f0Val *= pitchRatio;
-    }
+    effectiveF0 = materializeEffectiveF0Range(*contentSnap, f0StartFrame, f0EndFrame);
 
     bool hasValidF0 = false;
-    for (float f : sourceF0)
+    for (float f : effectiveF0)
     {
         if (f > 0.0f)
         {
@@ -484,17 +454,18 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     if (!hasValidF0)
     {
         coreJob.renderCache->markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);
+        notifyChunkSettled(completion, coreJob.contentKey);
         return;
     }
 
-    if (lightPitchEnabled)
+    if (lightPitchEnabled && contentSnap->pitchShiftSettings.isIdentity())
     {
         const auto& originalF0Full = snap->getOriginalF0();
         const int originalF0Size = static_cast<int>(originalF0Full.size());
         if (f0StartFrame >= 0 && f0StartFrame < originalF0Size)
         {
             const bool needsVocoder = chunkNeedsVocoder(
-                sourceF0.data(), numF0Frames, originalF0Full, f0StartFrame);
+                effectiveF0.data(), numF0Frames, originalF0Full, f0StartFrame);
             if (!needsVocoder)
             {
                 AutoTunePitchShifter autoTuneShifter(RenderCache::kSampleRate);
@@ -503,7 +474,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
                     monoAudio.data(),
                     static_cast<int>(boundaries.publishSampleCount),
                     originalF0Full.data() + f0StartFrame,
-                    sourceF0.data(),
+                    effectiveF0.data(),
                     safeNumF0Frames,
                     f0FrameRate);
 
@@ -517,15 +488,12 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
 
                 if (result == RenderCache::ChunkRenderResult::InvalidInput)
                 {
-                    // 输入无效：调用方 bug，走 failure 收口
                     coreJob.renderCache->completeChunkRenderFailure(relChunkStartSec, coreJob.targetRevision);
                 }
-                else if (result == RenderCache::ChunkRenderResult::Published && objectId != 0)
+                else if (result == RenderCache::ChunkRenderResult::Published)
                 {
-                    crs->getTimeStretchCache().invalidate(coreJob.contentKey);
-                    notifyChunkPublished(completion, coreJob.contentKey, coreJob.targetRevision);
+                    notifyChunkSettled(completion, coreJob.contentKey);
                 }
-                // Stale: 无需处理，chunk 已被新编辑重新调度
 
                 AppLogger::debug("RenderWorker: AutoTune pitch-shift chunk objId="
                     + juce::String(static_cast<juce::int64>(objectId))
@@ -567,7 +535,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     auto mel = std::move(melResult).value();
     const int actualFrames = static_cast<int>(mel.size() / melConfig.nMels);
 
-    correctedF0.assign(static_cast<size_t>(actualFrames), 0.0f);
+    vocoderF0.assign(static_cast<size_t>(actualFrames), 0.0f);
     for (int i = 0; i < actualFrames; ++i)
     {
         const double melTimeSec = trueStartSeconds + i * hopDuration;
@@ -579,20 +547,20 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             continue;
         const int srcIdx1 = std::min(srcIdx0 + 1, numF0Frames - 1);
         const double frac = srcPos - static_cast<double>(srcIdx0);
-        const float f0_0 = sourceF0[static_cast<size_t>(srcIdx0)];
-        const float f0_1 = sourceF0[static_cast<size_t>(srcIdx1)];
+        const float f0_0 = effectiveF0[static_cast<size_t>(srcIdx0)];
+        const float f0_1 = effectiveF0[static_cast<size_t>(srcIdx1)];
         if (f0_0 > 0.0f && f0_1 > 0.0f)
-            correctedF0[static_cast<size_t>(i)] =
+            vocoderF0[static_cast<size_t>(i)] =
                 static_cast<float>(std::exp(std::log(f0_0) * (1.0 - frac) + std::log(f0_1) * frac));
         else if (f0_0 > 0.0f)
-            correctedF0[static_cast<size_t>(i)] = f0_0;
+            vocoderF0[static_cast<size_t>(i)] = f0_0;
         else if (f0_1 > 0.0f)
-            correctedF0[static_cast<size_t>(i)] = f0_1;
+            vocoderF0[static_cast<size_t>(i)] = f0_1;
     }
 
     const bool allowTrailingExtension = !(boundaries.synthSampleCount > boundaries.publishSampleCount);
-    fillF0GapsForVocoder(correctedF0,
-                         snap,
+    fillF0GapsForVocoder(vocoderF0,
+                         *contentSnap,
                          trueStartSeconds,
                          trueEndSeconds,
                          hopDuration,
@@ -602,7 +570,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     VocoderDomain::Job vocoderJob;
     vocoderJob.chunkKey = (coreJob.contentKey.objectId << 32)
         | static_cast<uint64_t>(static_cast<uint32_t>(coreJob.startSample));
-    vocoderJob.f0 = std::move(correctedF0);
+    vocoderJob.f0 = std::move(vocoderF0);
     vocoderJob.mel = std::move(mel);
 
     auto renderCache = coreJob.renderCache;
@@ -662,11 +630,7 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
             }
 
             // Published
-            if (chunkObjId != 0)
-            {
-                crs->getTimeStretchCache().invalidate(captureContentKey);
-                notifyChunkPublished(completion, captureContentKey, targetRevision);
-            }
+            notifyChunkSettled(completion, captureContentKey);
         }
         else
         {

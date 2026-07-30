@@ -168,12 +168,11 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
             entry.timeGrid.revision = payload.timeGridRevision;
             for (const auto& handle : payload.timeGrid->handles()) {
                 ProjectContentEntry::TimeGridEntry::HandleEntry he;
-                he.id = static_cast<int>(handle.id);
+                he.id = handle.id;
                 he.kind = static_cast<uint8_t>(handle.kind);
                 he.sourceSeconds = handle.source_seconds;
                 he.outputSeconds = handle.output_seconds;
-                he.confidence = static_cast<float>(static_cast<uint8_t>(handle.confidence));
-                he.isUserAdded = (handle.kind == HandleKind::UserAdded);
+                he.confidence = static_cast<uint8_t>(handle.confidence);
                 entry.timeGrid.handles.push_back(he);
             }
         }
@@ -262,7 +261,6 @@ ProjectSnapshot ProjectSession::captureSnapshot() const
             ProjectReferenceBinding binding;
             binding.targetPlacementId = placement.placementId;
             binding.referencePlacementId = placement.referencePlacementId;
-            binding.bindingRevision = static_cast<uint64_t>(placement.referenceBindingRevision);
             snap.referenceBindings.push_back(binding);
         }
     }
@@ -489,7 +487,7 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
         PitchShiftSettings pitchShift;
         pitchShift.semitone = contentEntry.pitchShiftSettings.semitone;
         pitchShift.cents = contentEntry.pitchShiftSettings.cents;
-        clip->applyPitchShiftSettings(pitchShift);
+        clip->payload().pitchShiftSettings = pitchShift;
 
         // 恢复 Silent gaps（直接写入payload，因为silentGaps 是分析结果）
         auto& payloadRef = clip->payload();
@@ -634,7 +632,7 @@ Result<void> ProjectSession::applySnapshot(const ProjectSnapshot& snapshot)
             {
                 const double durationSeconds = snap->sourceWindow.durationSeconds();
                 if (durationSeconds > 0.0)
-                    processorRef_.requestFullContentRender(key, FullRenderReason::ProjectRestore);
+                    processorRef_.requestFullContentRender(key);
             }
         }
     }

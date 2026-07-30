@@ -20,7 +20,6 @@
 #include <atomic>
 #include <cstdint>
 #include <vector>
-#include <array>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -318,7 +317,6 @@ public:
             TargetAnalysisNotReady,
             ReferenceAnalysisNotReady,
             InsufficientFeatures,
-            InvalidTimeGrid,
             NoMutation,
             CommitFailed
         };
@@ -336,7 +334,6 @@ public:
         enum class Status : uint8_t {
             InvalidSelection = 0,
             NoReference,
-            GameUnavailable,
             Ready
         };
 
@@ -352,6 +349,7 @@ public:
     enum class ReferenceAnalysisPreheatStatus : uint8_t {
         AlreadyReady = 0,
         Queued,
+        WaitingForSource,
         InvalidContent,
         AnalysisFailed
     };
@@ -545,6 +543,9 @@ public:
         int numSamples = 0;
         double sampleRate = 0.0;
         bool valid = false;
+
+        // Owns the source audio for the lifetime of samples.
+        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
     };
 
     /**
@@ -635,7 +636,8 @@ private:
     std::mutex                      noteGeneratorInferenceMutex_; // serialise inference calls
     juce::ThreadPool                noteGeneratorPool_{1};         // single-threaded ORT-safe
 
-    ExperimentalReferenceAlignMode experimentalReferenceAlignMode_ = ExperimentalReferenceAlignMode::Off;
+    ExperimentalReferenceAlignMode experimentalReferenceAlignMode_ = ExperimentalReferenceAlignMode::StandardAuto;
+    std::unordered_set<ContentKey> pendingTimeToolSeedKeys_; // message-thread only
 
     // Set of ContentKeys with a note-generation job pending or running
     // on noteGeneratorPool_. Editors poll `isNoteGenInFlightForContent`
@@ -677,10 +679,8 @@ private:
     const ContentRenderService* resolveReadableContentRenderService(ContentKey key) const noexcept;
     AnalysisAudioProvider resolveAnalysisAudioProvider(ContentKey key);
 
-    void analysisCompleted(ContentKey key,
-                           const ReferenceFeatureSet& result) override;
-    void analysisFailed(ContentKey key,
-                        const juce::String& reason) override;
+    void analysisFinished(ContentKey key,
+                          const ReferenceFeatureSet& result) override;
 
 public:
     // Track State Management
@@ -737,9 +737,11 @@ public:
     bool ensureTimeToolAnchorSeed(ContentKey key);
     AutoRefAvailability queryAutoRefAvailability(uint64_t targetPlacementId) const;
 
-    /** AUTO(REF) 正式特征生产入口。产品合同固定使用 GAME producer。 */
+    /** AUTO(REF) 特征生产入口。producer 由提交 job 固定，worker 不读取 UI 状态。 */
     ReferenceFeatureSet buildReferenceFeatureSet(
-        ContentKey key, const EditableContentSnapshot& snapshot);
+        ContentKey key,
+        const EditableContentSnapshot& snapshot,
+        ReferenceFeatureProducer producer);
 
     /** 设置当前实验性参考对齐模式。由 UI 首选项变更驱动。 */
     void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode)
@@ -748,36 +750,24 @@ public:
     }
 
 private:
+    void enqueueStandaloneStage2WhenCanonicalSettled(ContentKey key);
+    ReferenceFeatureProducer resolveReferenceFeatureProducer() const;
+    ReferenceFeatureSet buildStandardAutoReferenceFeatureSet(
+        const EditableContentSnapshot& snapshot);
     ReferenceFeatureSet buildGameReferenceFeatureSet(
         ContentKey key, const EditableContentSnapshot& snapshot);
 public:
 
     std::shared_ptr<ContentEditCommands> getContentCommands() const { return contentCommands_; }
 
-    // ── Mutation notification scope ────────────────────────────────────────────
-    enum class MutationScope : uint8_t {
-        TimeGridChanged,      // setContentTimeGrid
-        PitchShiftChanged,    // setContentPitchShiftSettings
-        PitchCurveChanged,    // setContentPitchCurve
-        NotesChanged,         // replaceContentNotesForFullMutation
-    };
-
-    // Hard-cut render mutation sinks: local edits carry their true affected
-    // range; whole-content rebuilds carry only the reason. The two paths never
-    // mix — local edits never widen into a full rebuild, full rebuilds never
-    // pretend to know a precise range.
+    // Local edits carry their precise range; full mutations rebuild all content.
     void onContentLocalMutationCompleted(ContentKey key,
-                                         MutationScope scope,
                                          ContentEditRangeFrames affectedRange);
-    void onContentFullMutationCompleted(ContentKey key,
-                                        MutationScope scope,
-                                        FullRenderReason reason);
+    void onContentFullMutationCompleted(ContentKey key);
 
-    // Full-content render request for import/restore/global operations.
-    // Local edits must go through onContentLocalMutationCompleted instead.
-    void requestFullContentRender(ContentKey key, FullRenderReason reason);
+    void requestFullContentRender(ContentKey key);
 
-    void handleStage1ChunkPublished(ContentKey key, uint64_t publishedRevision);
+    void handleStage1ChunkSettled(ContentKey key);
 
     void refreshCRSMetadata(ContentKey key);
 
@@ -799,7 +789,10 @@ public:
                             std::shared_ptr<const TimeGridSnapshot> grid);
     bool setContentDetectedKey(ContentKey key, const DetectedKey& detectedKey);
     bool setContentOriginalF0State(ContentKey key, OriginalF0State state);
-    bool setContentPitchShiftSettings(ContentKey key, const PitchShiftSettings& settings);
+    bool applyContentPitchShiftState(ContentKey key, const PitchShiftEditState& state);
+    std::unique_ptr<PitchShiftEditAction> commitPitchShiftEdit(
+        ContentKey key,
+        const PitchShiftSettings& newSettings);
     bool commitAutoTuneGeneratedNotesByContentKey(ContentKey key,
                                                    std::vector<Note> generatedNotes,
                                                    int startFrame,

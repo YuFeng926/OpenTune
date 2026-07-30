@@ -262,6 +262,9 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     pianoRoll_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
     menuBar_.setNoteNameMode(visualPreferences.noteNameMode);
     menuBar_.setShowUnvoicedFrames(visualPreferences.showUnvoicedFrames);
+
+    pianoRoll_.setExperimentalFeaturesEnabled(false);
+    parameterPanel_.setExperimentalFeaturesEnabled(false);
 }
 
 // =========================================================================
@@ -569,16 +572,6 @@ bool OpenTuneAudioProcessorEditor::handleEditorShortcut(const juce::KeyPress& ke
 {
     const auto& shortcutSettings = appPreferences_.getState().shared.shortcuts;
 
-    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::PlayPause, key)) {
-        playPauseToggleRequested();
-        return true;
-    }
-
-    if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Stop, key)) {
-        stopPlaybackRequested();
-        return true;
-    }
-
     if (KeyShortcutConfig::matchesShortcut(shortcutSettings, KeyShortcutConfig::ShortcutId::Undo, key)) {
         undoRequested();
         return true;
@@ -633,7 +626,7 @@ void OpenTuneAudioProcessorEditor::noteSplitChanged(float value)
 
 void OpenTuneAudioProcessorEditor::toolSelected(int toolId)
 {
-    if (toolId < 0 || toolId > static_cast<int>(ToolId::TimeTool)) {
+    if (toolId < 0 || toolId > static_cast<int>(ToolId::HandDraw)) {
         return;
     }
 
@@ -990,22 +983,6 @@ bool OpenTuneAudioProcessorEditor::playheadPositionChangeRequested(double timeSe
     return false;
 }
 
-void OpenTuneAudioProcessorEditor::playPauseToggleRequested()
-{
-    const bool isPlaying = processorRef_.isPlaying();
-
-    if (isPlaying) {
-        pauseRequested();
-    } else {
-        playRequested();
-    }
-}
-
-void OpenTuneAudioProcessorEditor::stopPlaybackRequested()
-{
-    stopRequested();
-}
-
 void OpenTuneAudioProcessorEditor::autoTuneRequested()
 {
     const auto activeKey = resolveCurrentContentKey();
@@ -1097,12 +1074,13 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
         {
             if (!owner) return;
             if (newSettings != oldSettings) {
-                auto& um = owner->processorRef_.getUndoManager();
-                um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
-                    commands, activeContentKey, oldSettings, newSettings));
-                if (commands)
-                    commands->setPitchShiftSettings(activeContentKey, newSettings);
-                owner->parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
+                auto action = commands != nullptr
+                    ? commands->commitPitchShiftEdit(activeContentKey, newSettings)
+                    : nullptr;
+                if (action != nullptr) {
+                    owner->processorRef_.getUndoManager().addAction(std::move(action));
+                    owner->parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
+                }
             }
             closeDialog();
         }
@@ -1112,12 +1090,13 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
             if (!owner) return;
             const auto identity = OpenTune::PitchShiftSettings::identity();
             if (identity != oldSettings) {
-                auto& um = owner->processorRef_.getUndoManager();
-                um.addAction(std::make_unique<OpenTune::PitchShiftEditAction>(
-                    commands, activeContentKey, oldSettings, identity));
-                if (commands)
-                    commands->setPitchShiftSettings(activeContentKey, identity);
-                owner->parameterPanel_.setPitchShiftIndicator(0, 0);
+                auto action = commands != nullptr
+                    ? commands->commitPitchShiftEdit(activeContentKey, identity)
+                    : nullptr;
+                if (action != nullptr) {
+                    owner->processorRef_.getUndoManager().addAction(std::move(action));
+                    owner->parameterPanel_.setPitchShiftIndicator(0, 0);
+                }
             }
             closeDialog();
         }
@@ -1161,7 +1140,6 @@ void OpenTuneAudioProcessorEditor::pitchCurveEdited(int startFrame, int endFrame
 void OpenTuneAudioProcessorEditor::escapeKeyPressed()
 {
     // Escape cancels selection/tool mode; not a transport command.
-    // Originally called playPauseToggleRequested() here — removed.
 }
 
 void OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()

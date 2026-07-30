@@ -5,37 +5,31 @@ namespace OpenTune {
 
 PitchShiftEditAction::PitchShiftEditAction(std::shared_ptr<ContentEditCommands> commands,
                                            ContentKey key,
-                                           PitchShiftSettings oldSettings,
-                                           PitchShiftSettings newSettings)
+                                           PitchShiftEditState before,
+                                           PitchShiftEditState after)
     : commands_(std::move(commands))
     , contentKey_(key)
-    , oldSettings_(oldSettings)
-    , newSettings_(newSettings)
+    , before_(std::move(before))
+    , after_(std::move(after))
 {
-    const int totalOld = oldSettings_.semitone * 100 + oldSettings_.cents;
-    const int totalNew = newSettings_.semitone * 100 + newSettings_.cents;
+    const double totalOld = before_.settings.getTotalCents();
+    const double totalNew = after_.settings.getTotalCents();
     if (totalNew > totalOld)
-        description_ = juce::String::fromUTF8(u8"Pitch Shift +") + juce::String(newSettings_.semitone) + "st";
+        description_ = juce::String::fromUTF8(u8"Pitch Shift +") + juce::String(after_.settings.semitone) + "st";
     else if (totalNew < totalOld)
-        description_ = juce::String::fromUTF8(u8"Pitch Shift ") + juce::String(newSettings_.semitone) + "st";
+        description_ = juce::String::fromUTF8(u8"Pitch Shift ") + juce::String(after_.settings.semitone) + "st";
     else
         description_ = "Pitch Shift";
 }
 
 void PitchShiftEditAction::undo()
 {
-    applySettings(oldSettings_);
+    commands_->applyPitchShiftState(contentKey_, before_);
 }
 
 void PitchShiftEditAction::redo()
 {
-    applySettings(newSettings_);
-}
-
-void PitchShiftEditAction::applySettings(const PitchShiftSettings& settings)
-{
-    if (commands_ != nullptr)
-        commands_->setPitchShiftSettings(contentKey_, settings);
+    commands_->applyPitchShiftState(contentKey_, after_);
 }
 
 } // namespace OpenTune

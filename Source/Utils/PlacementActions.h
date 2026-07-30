@@ -164,4 +164,22 @@ private:
     double newFadeOut_;
 };
 
+// Reference binding undo: 保存 processor 引用、trackId、targetId 及前后 referenceId
+class ReferenceBindingAction : public UndoAction {
+public:
+    ReferenceBindingAction(OpenTuneAudioProcessor& processor,
+                           int trackId, uint64_t targetPlacementId,
+                           uint64_t oldReferencePlacementId, uint64_t newReferencePlacementId);
+    void undo() override;
+    void redo() override;
+    juce::String getDescription() const override { return TRANS("调整参考绑定"); }
+
+private:
+    OpenTuneAudioProcessor& processor_;
+    int trackId_;
+    uint64_t targetPlacementId_;
+    uint64_t oldReferencePlacementId_;
+    uint64_t newReferencePlacementId_;
+};
+
 } // namespace OpenTune

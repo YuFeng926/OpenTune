@@ -17,13 +17,11 @@ PianoRollNotePatchAction::PianoRollNotePatchAction(std::shared_ptr<ContentEditCo
 
 void PianoRollNotePatchAction::undo()
 {
-    jassert(commands_ != nullptr);
     commands_->commitNotePatch(contentKey_, beforePatch_);
 }
 
 void PianoRollNotePatchAction::redo()
 {
-    jassert(commands_ != nullptr);
     commands_->commitNotePatch(contentKey_, afterPatch_);
 }
 

@@ -47,7 +47,6 @@ public:
         bool isRetired{false};
 
         uint64_t referencePlacementId{0};        // 0 = 无参考
-        int64_t  referenceBindingRevision{0};     // 每次 binding 变更 +1
 
         bool isValid() const noexcept
         {
@@ -165,10 +164,12 @@ public:
     // ============================================================================
     // Reference binding API
     // ============================================================================
+    // referencePlacementId=0 允许清除绑定
     bool setPlacementReferencePlacement(int trackId, uint64_t targetPlacementId, uint64_t referencePlacementId);
-    bool clearPlacementReferencePlacement(int trackId, uint64_t targetPlacementId);
     uint64_t getPlacementReferencePlacement(int trackId, uint64_t targetPlacementId) const;
-    bool isCyclicReference(int trackId, uint64_t targetPlacementId, uint64_t candidateReferenceId) const;
+
+    // 查询能否设置 binding（共用与 set 完全相同的 unlocked 验证逻辑，无副作用）
+    bool canSetPlacementReferencePlacement(int trackId, uint64_t targetPlacementId, uint64_t referencePlacementId) const;
 
 private:
     static bool isValidTrackId(int trackId) noexcept;
@@ -180,12 +181,11 @@ private:
 
     // Reference binding helpers (要求调用方已持有 stateLock_ 写锁)
     bool findPlacementByIdGlobalUnlocked(uint64_t placementId, int& outTrackId, size_t& outIndex) const;
-    bool isCyclicReferenceUnlocked(int trackId, uint64_t targetPlacementId, uint64_t candidateReferenceId) const;
+    bool isCyclicReferenceUnlocked(uint64_t targetPlacementId, uint64_t candidateReferenceId) const;
     static bool placementsOverlap(const Placement& target, const Placement& reference) noexcept;
-    static bool clearReferenceBindingUnlocked(Placement& target) noexcept;
-    void checkOverlapAndClearReferenceUnlocked(int trackId, uint64_t targetPlacementId);
+    bool clearReferenceBindingUnlocked(Placement& target) noexcept;
+    bool validateReferenceBindingUnlocked(int trackId, uint64_t targetPlacementId, uint64_t referencePlacementId) const noexcept;
     void clearInboundReferencesToPlacementUnlocked(uint64_t referencePlacementId);
-    void clearInvalidInboundReferencesToPlacementUnlocked(uint64_t referencePlacementId);
 
     mutable juce::ReadWriteLock stateLock_;
     std::array<Track, kTrackCount> tracks_;

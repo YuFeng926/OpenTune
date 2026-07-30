@@ -16,7 +16,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment ta
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.6.3 LANGUAGES CXX C)
+project(OpenTune VERSION 1.6.5 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -540,8 +540,6 @@ target_sources(OpenTune
         Source/DSP/MelSpectrogram.h
         Source/DSP/ChromaKeyDetector.cpp
         Source/DSP/ChromaKeyDetector.h
-        Source/DSP/TimeGridPatchBuilder.cpp
-        Source/DSP/TimeGridPatchBuilder.h
         Source/DSP/ReferenceAutoAlign.cpp
         Source/DSP/ReferenceAutoAlign.h
         Source/DSP/AutoTunePitchShifter.cpp
@@ -1257,6 +1255,39 @@ if(TARGET OpenTune_VST3)
             COMMENT "Copying UserGuide translations to VST3 bundle Resources..."
         )
     endif()
+endif()
+
+option(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS "Build Reference Auto source contracts" ON)
+if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
+    enable_testing()
+    add_executable(OpenTuneReferenceContracts Tests/TestMain.cpp)
+    target_compile_features(OpenTuneReferenceContracts PRIVATE cxx_std_17)
+    target_compile_definitions(OpenTuneReferenceContracts
+        PRIVATE OPENTUNE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(MSVC)
+        target_compile_options(OpenTuneReferenceContracts PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneReferenceContracts COMMAND OpenTuneReferenceContracts)
+
+    add_executable(OpenTuneTimeGridRuntimeTests
+        Tests/TimeGridRuntimeTests.cpp
+        Source/Utils/TimeGrid.cpp
+        Source/Utils/AppLogger.cpp
+        Source/Utils/ProjectPersistence.cpp
+    )
+    target_compile_features(OpenTuneTimeGridRuntimeTests PRIVATE cxx_std_17)
+    target_include_directories(OpenTuneTimeGridRuntimeTests
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
+    target_link_libraries(OpenTuneTimeGridRuntimeTests
+        PRIVATE
+            juce::juce_audio_basics
+            juce::juce_data_structures
+            juce::juce_graphics
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneTimeGridRuntimeTests PRIVATE /utf-8)
+    endif()
+    add_test(NAME OpenTuneTimeGridRuntimeTests COMMAND OpenTuneTimeGridRuntimeTests)
 endif()
 
     # ==============================================================================

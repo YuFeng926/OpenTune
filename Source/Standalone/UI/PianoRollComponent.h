@@ -26,7 +26,7 @@
 #include "Utils/PianoRollVisualPreferences.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/Note.h"
-#include "Utils/LegacyNoteGenerator.h"
+#include "Utils/NoteGeneratorTypes.h"
 #include "Utils/PitchControlConfig.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/ZoomSensitivityConfig.h"
@@ -41,8 +41,8 @@
 #include <utility>
 #include <atomic>
 #include <array>
-    #include "SmallButton.h"
-    #include "PianoRoll/PianoRollRenderer.h"
+#include "SmallButton.h"
+#include "PianoRoll/PianoRollRenderer.h"
 
 #include "PianoRoll/PianoRollToolHandler.h"
 #include "PianoRoll/InteractionState.h"
@@ -70,7 +70,6 @@ class PianoRollOverlayComponent : public juce::Component {
 public:
     explicit PianoRollOverlayComponent(PianoRollComponent& owner);
     void paint(juce::Graphics& g) override;
-    bool hitTest(int x, int y) override { (void)x; (void)y; return false; }
 private:
     PianoRollComponent& owner_;
 };
@@ -90,8 +89,6 @@ public:
     public:
         virtual ~Listener() = default;
         virtual bool playheadPositionChangeRequested(double timeSeconds) = 0;
-        virtual void playPauseToggleRequested() = 0;
-        virtual void stopPlaybackRequested() = 0;
         virtual void pitchCurveEdited(int startFrame, int endFrame) { (void)startFrame; (void)endFrame; }
         virtual void noteOffsetChanged(size_t noteIndex, float oldOffset, float newOffset) { (void)noteIndex; (void)oldOffset; (void)newOffset; }
         virtual void autoTuneRequested() {}

@@ -243,18 +243,18 @@ static VocoderModelWeight fromVocoderWeightToken(const juce::String& token)
 static juce::String toExperimentalRefAlignModeToken(ExperimentalReferenceAlignMode mode)
 {
     switch (mode) {
-        case ExperimentalReferenceAlignMode::Off:  return "off";
-        case ExperimentalReferenceAlignMode::Game: return "game";
+        case ExperimentalReferenceAlignMode::StandardAuto: return "standard-auto";
+        case ExperimentalReferenceAlignMode::Game:         return "game";
     }
-    return "off";
+    return "standard-auto";
 }
 
 static ExperimentalReferenceAlignMode fromExperimentalRefAlignModeToken(const juce::String& token)
 {
-    if (token == "game" || token == "basic" || token == "aggressive") {
+    if (token == "game") {
         return ExperimentalReferenceAlignMode::Game;
     }
-    return ExperimentalReferenceAlignMode::Off;
+    return ExperimentalReferenceAlignMode::StandardAuto;
 }
 
 const char* toTrackColorModeToken(TrackColorMode mode)

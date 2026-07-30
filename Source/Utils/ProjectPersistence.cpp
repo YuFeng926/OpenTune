@@ -515,12 +515,11 @@ juce::ValueTree ProjectPersistence::timeGridToValueTree(const ProjectContentEntr
     tree.setProperty("revision", static_cast<int64_t>(tg.revision), nullptr);
     for (const auto& handle : tg.handles) {
         juce::ValueTree ht("Handle");
-        ht.setProperty("id", handle.id, nullptr);
+        ht.setProperty("id", static_cast<int64_t>(handle.id), nullptr);
         ht.setProperty("kind", static_cast<int>(handle.kind), nullptr);
         ht.setProperty("sourceSeconds", handle.sourceSeconds, nullptr);
         ht.setProperty("outputSeconds", handle.outputSeconds, nullptr);
-        ht.setProperty("confidence", handle.confidence, nullptr);
-        ht.setProperty("isUserAdded", handle.isUserAdded ? 1 : 0, nullptr);
+        ht.setProperty("confidence", static_cast<int>(handle.confidence), nullptr);
         tree.addChild(ht, -1, nullptr);
     }
     return tree;
@@ -535,12 +534,11 @@ ProjectContentEntry::TimeGridEntry ProjectPersistence::timeGridFromValueTree(con
         auto child = tree.getChild(i);
         if (!child.hasType("Handle")) { continue; }
         ProjectContentEntry::TimeGridEntry::HandleEntry h;
-        h.id = static_cast<int>(child.getProperty("id", 0));
+        h.id = static_cast<uint64_t>(static_cast<int64_t>(child.getProperty("id", 0)));
         h.kind = static_cast<uint8_t>(static_cast<int>(child.getProperty("kind", 0)));
         h.sourceSeconds = child.getProperty("sourceSeconds", 0.0);
         h.outputSeconds = child.getProperty("outputSeconds", 0.0);
-        h.confidence = child.getProperty("confidence", 0.0f);
-        h.isUserAdded = static_cast<int>(child.getProperty("isUserAdded", 0)) != 0;
+        h.confidence = static_cast<uint8_t>(static_cast<int>(child.getProperty("confidence", 0)));
         tg.handles.push_back(h);
     }
     return tg;
@@ -641,7 +639,6 @@ juce::ValueTree ProjectPersistence::referenceBindingToValueTree(const ProjectRef
     juce::ValueTree tree("ReferenceBinding");
     tree.setProperty("targetPlacementId", static_cast<int64_t>(binding.targetPlacementId), nullptr);
     tree.setProperty("referencePlacementId", static_cast<int64_t>(binding.referencePlacementId), nullptr);
-    tree.setProperty("bindingRevision", static_cast<int64_t>(binding.bindingRevision), nullptr);
     return tree;
 }
 
@@ -650,7 +647,6 @@ ProjectReferenceBinding ProjectPersistence::referenceBindingFromValueTree(const 
     ProjectReferenceBinding rb;
     rb.targetPlacementId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("targetPlacementId", 0)));
     rb.referencePlacementId = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("referencePlacementId", 0)));
-    rb.bindingRevision = static_cast<uint64_t>(static_cast<int64_t>(tree.getProperty("bindingRevision", 0)));
     return rb;
 }
 

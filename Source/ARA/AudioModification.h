@@ -12,12 +12,6 @@
 
 namespace OpenTune {
 
-enum class AudioModificationReadIntent
-{
-    None,
-    UserRead
-};
-
 enum class AudioModificationBirthState
 {
     Empty,
@@ -36,8 +30,6 @@ struct AudioModification
     ContentKey contentIdentity;
     uint64_t birthRevision{0};
     AudioModificationBirthState birthState{AudioModificationBirthState::Empty};
-    AudioModificationReadIntent readIntent{AudioModificationReadIntent::None};
-
     // 内容所有权
     std::optional<AudioModificationContentState> content;
 
@@ -63,7 +55,7 @@ public:
     void applyNotes(const std::vector<Note>& notes);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
     bool applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> grid);
-    void applyPitchShift(const PitchShiftSettings& settings);
+    bool applyPitchShiftState(const PitchShiftEditState& state);
     void applyDetectedKey(const DetectedKey& key);
     void applyOriginalF0(std::shared_ptr<PitchCurve> curve);
     void submitSilentGaps(std::vector<SilentGap> gaps);

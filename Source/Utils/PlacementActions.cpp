@@ -146,21 +146,17 @@ MultiMovePlacementAction::MultiMovePlacementAction(OpenTuneAudioProcessor& proce
 void MultiMovePlacementAction::applySelection(const PlacementKey& key)
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    if (arrangement != nullptr) {
-        arrangement->selectPlacement(key.trackId, key.placementId);
-    }
+    arrangement->selectPlacement(key.trackId, key.placementId);
 }
 
 void MultiMovePlacementAction::undo()
 {
+    auto* arrangement = processor_.getStandaloneArrangement();
     for (const auto& entry : entries_) {
         if (entry.sourceTrackId == entry.targetTrackId) {
-            auto* arrangement = processor_.getStandaloneArrangement();
-            if (arrangement != nullptr) {
-                arrangement->setPlacementTimelineStartSeconds(entry.targetTrackId,
-                                                              entry.placementId,
-                                                              entry.oldStartSeconds);
-            }
+            arrangement->setPlacementTimelineStartSeconds(entry.targetTrackId,
+                                                          entry.placementId,
+                                                          entry.oldStartSeconds);
         } else {
             processor_.movePlacementToTrack(entry.targetTrackId,
                                             entry.sourceTrackId,
@@ -173,14 +169,12 @@ void MultiMovePlacementAction::undo()
 
 void MultiMovePlacementAction::redo()
 {
+    auto* arrangement = processor_.getStandaloneArrangement();
     for (const auto& entry : entries_) {
         if (entry.sourceTrackId == entry.targetTrackId) {
-            auto* arrangement = processor_.getStandaloneArrangement();
-            if (arrangement != nullptr) {
-                arrangement->setPlacementTimelineStartSeconds(entry.targetTrackId,
-                                                              entry.placementId,
-                                                              entry.newStartSeconds);
-            }
+            arrangement->setPlacementTimelineStartSeconds(entry.targetTrackId,
+                                                          entry.placementId,
+                                                          entry.newStartSeconds);
         } else {
             processor_.movePlacementToTrack(entry.sourceTrackId,
                                             entry.targetTrackId,
@@ -268,6 +262,30 @@ void FadeChangeAction::redo()
 {
     auto* arr = processor_.getStandaloneArrangement();
     arr->setPlacementFade(trackId_, placementId_, newFadeIn_, newFadeOut_);
+}
+
+// ============================================================================
+// ReferenceBindingAction
+// ============================================================================
+
+ReferenceBindingAction::ReferenceBindingAction(OpenTuneAudioProcessor& processor,
+                                               int trackId, uint64_t targetPlacementId,
+                                               uint64_t oldReferencePlacementId, uint64_t newReferencePlacementId)
+    : processor_(processor), trackId_(trackId), targetPlacementId_(targetPlacementId)
+    , oldReferencePlacementId_(oldReferencePlacementId), newReferencePlacementId_(newReferencePlacementId)
+{
+}
+
+void ReferenceBindingAction::undo()
+{
+    auto* arr = processor_.getStandaloneArrangement();
+    arr->setPlacementReferencePlacement(trackId_, targetPlacementId_, oldReferencePlacementId_);
+}
+
+void ReferenceBindingAction::redo()
+{
+    auto* arr = processor_.getStandaloneArrangement();
+    arr->setPlacementReferencePlacement(trackId_, targetPlacementId_, newReferencePlacementId_);
 }
 
 } // namespace OpenTune

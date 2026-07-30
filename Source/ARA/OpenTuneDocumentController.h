@@ -68,7 +68,6 @@ public:
     void refreshModificationCRSMetadata(ContentKey key);
     void requestModificationRender(ContentKey key, double startSeconds, double endSeconds);
     void requestFullModificationRender(ContentKey key);
-    void requestModificationStage2Rebuild(ContentKey key);
     // ============================================================
     // 编辑器只读内容访问器（通过 ContentKey 路由到 AudioModification + CRS）
     // ARA 模式下编辑器不经过 content owner，直接读 AudioModification.content
@@ -211,7 +210,7 @@ public:
     bool applyPitchCurveToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve);
     bool applyOriginalF0ToModification(const ContentKey& key, std::shared_ptr<PitchCurve> curve);
     bool applyTimeGridToModification(const ContentKey& key, std::shared_ptr<const TimeGridSnapshot> grid);
-    bool applyPitchShiftToModification(const ContentKey& key, const PitchShiftSettings& settings);
+    bool applyPitchShiftStateToModification(const ContentKey& key, const PitchShiftEditState& state);
     bool applyDetectedKeyToModification(const ContentKey& key, const DetectedKey& detectedKey);
     bool applyReferenceFeaturesToModification(const ContentKey& key, const ReferenceFeatureSet& features);
     bool applyOriginalF0StateToModification(const ContentKey& key, const OriginalF0State& state);
@@ -230,7 +229,6 @@ private:
         std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer);
     bool birthContentForModification(AudioModification& modification);
     void removeCRSArtifactsForModification(const AudioModification& modification);
-    void continuePendingUserReadForSource(const AudioSource& source);
     void scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
                                    double sourceSampleRate,
@@ -238,7 +236,6 @@ private:
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
     void installDocumentRenderExecution();
     void processDocumentRenderJob(RenderJob& job);
-    void handleDocumentStage1ChunkPublished(ContentKey key, uint64_t publishedRevision);
     bool removePlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneDocumentController)

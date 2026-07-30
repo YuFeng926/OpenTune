@@ -6,12 +6,13 @@
  *   openspec/changes/vocal-time-stretch/specs/time-grid/spec.md
  *
  * 不变量:
- *   1. handles[0].kind == ClipStart, locked == true, output_seconds == source_seconds == 0
- *   2. handles[N-1].kind == ClipEnd, locked == true
+ *   1. handles[0].kind == ClipStart, output_seconds == source_seconds == 0
+ *   2. handles[N-1].kind == ClipEnd
  *   3. source_seconds 严格递增 (i < j ⇒ handles[i].source_seconds < handles[j].source_seconds)
  *   4. output_seconds 严格递增
  *   5. 总时长守恒: handles[N-1].output_seconds == handles[N-1].source_seconds
- *      (端点锁定 → ARA region 长度恒等于 source 长度)
+ *      (端点不变量 → ARA region 长度恒等于 source 长度)
+ *   6. ClipStart/ClipEnd 唯一且只出现在首/末位；内部禁止 ClipStart/ClipEnd
  *
  * 线程模型: COW snapshot 模式
  *   - 写者: clone snapshot → 修改 → atomic_store
@@ -32,14 +33,13 @@
 namespace OpenTune {
 
 enum class HandleKind : uint8_t {
-    ClipStart = 0,      // 永远 locked, output==source==0
-    ClipEnd = 1,        // 永远 locked
+    ClipStart = 0,      // 端点不可移动、不可删除, output==source==0
+    ClipEnd = 1,        // 端点不可移动、不可删除
     OnsetVoiced = 2,
     OnsetSibilant = 3,
     OnsetSilence = 4,
     InternalOnset = 5,
-    UserAdded = 6,      // 用户手动双击插入
-    ReferenceAuto = 7   // AUTO (Ref) generated alignment handle
+    UserAdded = 6      // 用户手动双击插入
 };
 
 // Confidence 标识 handle 的生成置信度。
@@ -56,8 +56,15 @@ struct TimeHandle {
     double     source_seconds{0.0};    // 源时间锚, 一旦插入即不可变
     double     output_seconds{0.0};    // 输出时间位置, 用户编辑唯一目标
     HandleKind kind{HandleKind::UserAdded};
-    bool       locked{false};          // ClipStart/ClipEnd 强制 true
     Confidence confidence{Confidence::Default}; // 播种置信度, 与 source_seconds 同 immutable
+
+    /**
+     * 派生端点语义。
+     * 端点即 ClipStart/ClipEnd，不可拖动、不可删除；其端点性由 HandleKind 唯一确定。
+     */
+    bool isEndpoint() const noexcept {
+        return kind == HandleKind::ClipStart || kind == HandleKind::ClipEnd;
+    }
 };
 
 /**
@@ -104,7 +111,7 @@ public:
     bool empty() const noexcept { return handles_.size() < 2; }
 
     /**
-     * 总输出时长 = 总源时长 (端点锁定的不变量).
+     * 总输出时长 = 总源时长 (端点不变量).
      */
     double totalDurationSeconds() const noexcept;
 

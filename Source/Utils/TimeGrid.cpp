@@ -46,10 +46,6 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
         outError = "First handle must be HandleKind::ClipStart";
         return false;
     }
-    if (!first.locked) {
-        outError = "ClipStart handle must be locked=true";
-        return false;
-    }
     if (first.source_seconds != 0.0 || first.output_seconds != 0.0) {
         outError = "ClipStart must have source_seconds == output_seconds == 0.0";
         return false;
@@ -59,9 +55,16 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
         outError = "Last handle must be HandleKind::ClipEnd";
         return false;
     }
-    if (!last.locked) {
-        outError = "ClipEnd handle must be locked=true";
-        return false;
+
+    // ClipStart / ClipEnd 唯一性：仅在首末位允许出现，内部禁止。
+    for (size_t i = 0; i < handles.size(); ++i) {
+        const auto& h = handles[i];
+        const bool isEndpoint = (i == 0) || (i + 1 == handles.size());
+        if (h.isEndpoint() != isEndpoint) {
+            outError = "ClipStart/ClipEnd may only appear at the first and last position; "
+                       "index " + juce::String((int)i) + " violates";
+            return false;
+        }
     }
 
     // Check that all handles have finite source_seconds and output_seconds.
@@ -121,27 +124,21 @@ bool TimeGridSnapshot::validate(const std::vector<TimeHandle>& handles, juce::St
         }
     }
 
-    // Total duration preservation (locked endpoints invariant).
+    // Total duration preservation (端点不变量).
     // last.source_seconds is the total source duration; output must equal source.
     const double totalSrc = last.source_seconds - first.source_seconds;
     const double totalOut = last.output_seconds - first.output_seconds;
     if (std::abs(totalSrc - totalOut) > kTotalDurationEpsilon) {
-        outError = "Total duration must be preserved (locked endpoints): src="
+        outError = "Total duration must be preserved (endpoints invariant): src="
                    + juce::String(totalSrc, 9)
                    + ", out=" + juce::String(totalOut, 9);
         return false;
     }
 
-    // Locked semantics: only ClipStart/ClipEnd may have locked=true
-    // ClipStart/ClipEnd MUST have confidence=Default (endpoints don't participate in note merge)
+    // 端点置信度约束：端点不参与 note merge，保持 Default。
     for (size_t i = 0; i < handles.size(); ++i) {
         const auto& h = handles[i];
-        const bool isEndpoint = (i == 0) || (i + 1 == handles.size());
-        if (h.locked && !isEndpoint) {
-            outError = "Non-endpoint handle has locked=true at index " + juce::String((int) i);
-            return false;
-        }
-        if (isEndpoint && h.confidence != Confidence::Default) {
+        if (h.isEndpoint() && h.confidence != Confidence::Default) {
             outError = "Endpoint handle (ClipStart/ClipEnd) must have confidence=Default at index "
                        + juce::String((int) i);
             return false;
@@ -167,7 +164,6 @@ std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::makeIdentity(double to
     clipStart.source_seconds = 0.0;
     clipStart.output_seconds = 0.0;
     clipStart.kind = HandleKind::ClipStart;
-    clipStart.locked = true;
     handles.push_back(clipStart);
 
     TimeHandle clipEnd;
@@ -175,7 +171,6 @@ std::shared_ptr<const TimeGridSnapshot> TimeGridSnapshot::makeIdentity(double to
     clipEnd.source_seconds = totalDurationSeconds;
     clipEnd.output_seconds = totalDurationSeconds;
     clipEnd.kind = HandleKind::ClipEnd;
-    clipEnd.locked = true;
     handles.push_back(clipEnd);
 
     return makeFromHandles(std::move(handles), /*revision=*/1);

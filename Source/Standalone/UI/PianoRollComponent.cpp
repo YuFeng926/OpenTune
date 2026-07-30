@@ -109,6 +109,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         return commitEditedContentNotesAndSegments(notes, segments, affectedRange);
     };
     toolCtx.getPitchCurve = [this]() { return currentCurve_; };
+    toolCtx.getEditableContentSnapshot = [this]() { return readEditedSnapshot(); };
     toolCtx.getOriginalF0 = [this]() -> std::vector<float> {
         if (!currentCurve_) return {};
         auto snap = currentCurve_->getSnapshot();
@@ -138,8 +139,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         menu.showMenuAsync(juce::PopupMenu::Options());
     };
     toolCtx.notifyAutoTuneRequested = [this]() { listeners_.call([](Listener& l) { l.autoTuneRequested(); }); };
-    toolCtx.notifyPlayPauseToggle = [this]() { listeners_.call([](Listener& l) { l.playPauseToggleRequested(); }); };
-    toolCtx.notifyStopPlayback = [this]() { listeners_.call([](Listener& l) { l.stopPlaybackRequested(); }); };
     toolCtx.notifyEscapeKey = [this]() { listeners_.call([](Listener& l) { l.escapeKeyPressed(); }); };
     toolCtx.notifyNoteOffsetChanged = [this](size_t noteIndex, float oldOffset, float newOffset) {
         listeners_.call([noteIndex, oldOffset, newOffset](Listener& l) { l.noteOffsetChanged(noteIndex, oldOffset, newOffset); });
@@ -291,6 +290,9 @@ bool PianoRollComponent::applyCorrectionToEntireClip(float retuneSpeed, float vi
     if (!currentCurve_) {
         return false;
     }
+    const auto contentSnapshot = readEditedSnapshot();
+    if (contentSnapshot == nullptr)
+        return false;
 
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) {
@@ -300,6 +302,7 @@ bool PianoRollComponent::applyCorrectionToEntireClip(float retuneSpeed, float vi
     auto notes = getCommittedNotes();
     auto editedCurve = currentCurve_->clone();
     editedCurve->applyCorrectionToRange(notes, 0, f0tl.endFrameExclusive(),
+                                        static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
                                         retuneSpeed, vibratoDepth, vibratoRate);
 
     const auto snap = editedCurve->getSnapshot();
@@ -577,8 +580,9 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
 
     // Capture range-scoped after data from committed snapshot
     auto afterNotes = extractNotesInRange(committedSnap->notes, rangeStartSec, rangeEndSec);
+    const auto committedPitchSnapshot = committedSnap->pitchCurve->getSnapshot();
     auto afterSegments = extractSegmentsInRange(
-        committedSnap->correctionSegments,
+        committedPitchSnapshot->getCorrectionSegments(),
         affectedRange.startFrame,
         affectedRange.endFrameExclusive);
 
@@ -1642,7 +1646,6 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewState& view, j
 
     if (referenceOverlay_.has_value() && referenceOverlay_->enabled) {
         renderer_->drawGhostNotes(g, renderCtx, *referenceOverlay_);
-        renderer_->drawGhostAnchors(g, renderCtx, *referenceOverlay_);
     }
 }
 
@@ -1786,6 +1789,8 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
     auto originalNotes = notes;  // Save for before-patch in note-only undo path
     const auto f0tl = currentF0Timeline();
     if (f0tl.isEmpty()) return false;
+    const auto contentSnapshot = readEditedSnapshot();
+    if (contentSnapshot == nullptr) return false;
 
     double dirtyStartTime = 1e30;
     double dirtyEndTime = -1e30;
@@ -1810,6 +1815,7 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
             auto clonedCurve = currentCurve_->clone();
             clonedCurve->applyCorrectionToRange(
                 notes, editRange.startFrame, editRange.endFrameExclusive,
+                static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
                 retuneSpeed, vibratoDepth, vibratoRate);
             auto snap = clonedCurve->getSnapshot();
 
@@ -1900,10 +1906,13 @@ bool PianoRollComponent::applyNoteParameterToSelectedNotes(float retuneSpeed, fl
 bool PianoRollComponent::applyParameterToFrameRange(float retuneSpeed, float vibratoDepth, float vibratoRate, int startFrame, int endFrameExclusive) {
     if (!currentCurve_ || endFrameExclusive <= startFrame) return false;
     if (!currentCurve_->hasCorrectionInRange(startFrame, endFrameExclusive)) return false;
+    const auto contentSnapshot = readEditedSnapshot();
+    if (contentSnapshot == nullptr) return false;
 
     auto notes = getEditedContentNotesCopy();
     auto editedCurve = currentCurve_->clone();
     editedCurve->applyCorrectionToRange(notes, startFrame, endFrameExclusive,
+                                        static_cast<float>(contentSnapshot->pitchShiftSettings.getPitchRatio()),
                                         retuneSpeed, vibratoDepth, vibratoRate);
 
     const auto snap = editedCurve->getSnapshot();
@@ -2339,6 +2348,7 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
                 return lhs.contentKey == rhs.contentKey
                     && std::abs(lhs.projection.timelineStartSeconds - rhs.projection.timelineStartSeconds) <= 1.0e-9
                     && std::abs(lhs.projection.timelineDurationSeconds - rhs.projection.timelineDurationSeconds) <= 1.0e-9
+                    && std::abs(lhs.projection.contentStartSeconds - rhs.projection.contentStartSeconds) <= 1.0e-9
                     && std::abs(lhs.projection.contentDurationSeconds - rhs.projection.contentDurationSeconds) <= 1.0e-9;
             });
 
@@ -2383,6 +2393,7 @@ void PianoRollComponent::setContentProjection(const ContentTimelineProjection& p
 {
     const bool changed = std::abs(pendingSingleContentProjection_.timelineStartSeconds - projection.timelineStartSeconds) > 1.0e-9
         || std::abs(pendingSingleContentProjection_.timelineDurationSeconds - projection.timelineDurationSeconds) > 1.0e-9
+        || std::abs(pendingSingleContentProjection_.contentStartSeconds - projection.contentStartSeconds) > 1.0e-9
         || std::abs(pendingSingleContentProjection_.contentDurationSeconds - projection.contentDurationSeconds) > 1.0e-9;
 
     if (!changed) {
@@ -3289,32 +3300,9 @@ void PianoRollComponent::visibilityChanged()
 
 void PianoRollComponent::setReferenceOverlay(std::optional<PianoRollRenderer::ReferenceOverlay> overlay)
 {
-    if (overlay && overlay->enabled) {
-        const auto& srcProj = overlay->sourceProjection;
-        const TimelineContentPlacement* matchedPlacement = nullptr;
-        bool ambiguousMatch = false;
-        for (const auto& placement : timelineContentPlacements_) {
-            const auto& p = placement.projection;
-            if (std::abs(p.timelineStartSeconds - srcProj.timelineStartSeconds) < 1e-6
-                && std::abs(p.timelineDurationSeconds - srcProj.timelineDurationSeconds) < 1e-6
-                && std::abs(p.contentDurationSeconds - srcProj.contentDurationSeconds) < 1e-6) {
-                if (matchedPlacement != nullptr) {
-                    ambiguousMatch = true;
-                    break;
-                }
-                matchedPlacement = &placement;
-            }
-        }
-        if (matchedPlacement != nullptr && !ambiguousMatch) {
-            if (auto snap = readSnapshotFor(matchedPlacement->contentKey); snap && snap->timeGrid) {
-                overlay->timeGrid = snap->timeGrid;
-            } else {
-                overlay.reset();
-            }
-        } else {
-            overlay.reset();
-        }
-    }
+    if (overlay && overlay->enabled
+        && (!overlay->sourceProjection.isValid() || overlay->timeGrid == nullptr))
+        overlay.reset();
     referenceOverlay_ = std::move(overlay);
     contentDirty_ = true;
     rasterizeDirtySurfaces();

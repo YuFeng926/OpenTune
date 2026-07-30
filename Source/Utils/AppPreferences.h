@@ -25,7 +25,7 @@ enum class RenderingPriority {
 
 enum class ExperimentalReferenceAlignMode
 {
-    Off = 0,
+    StandardAuto = 0,
     Game = 1
 };
 
@@ -54,7 +54,7 @@ struct SharedPreferencesState {
     RenderingPriority renderingPriority = RenderingPriority::GpuFirst;
     VocoderModelWeight vocoderModelWeight = VocoderModelWeight::Community;
     bool experimentalFeaturesEnabled = false;
-    ExperimentalReferenceAlignMode experimentalReferenceAlignMode = ExperimentalReferenceAlignMode::Off;
+    ExperimentalReferenceAlignMode experimentalReferenceAlignMode = ExperimentalReferenceAlignMode::StandardAuto;
     std::vector<juce::String> recentProjects;   // Most recently used project paths (MRU, max 10)
     SnapSettings snap;
     TrackColorMode trackColorMode = TrackColorMode::Random;

@@ -27,7 +27,6 @@ std::shared_ptr<const EditableContentSnapshot> StandaloneClipContent::snapshotCo
     snap->audioSampleRate = content_.sampleRate;
     snap->audioRevision = content_.audioRevision;
     snap->notes = content_.notes;
-    snap->correctionSegments = content_.correctionSegments;
     snap->pitchCurve = content_.pitchCurve;
     snap->timeGrid = content_.timeGrid;
     snap->pitchShiftSettings = content_.pitchShiftSettings;
@@ -41,12 +40,6 @@ std::shared_ptr<const EditableContentSnapshot> StandaloneClipContent::snapshotCo
     snap->pitchShiftRevision = content_.pitchShiftRevision;
     snap->contentRevision = content_.contentRevision;
     return snap;
-}
-
-void StandaloneClipContent::applyContentCommand(ContentCommand& cmd)
-{
-    (void)cmd;
-    // TODO: 由 coordinator 负责 dispatch content commands
 }
 
 // ── Lifecycle ───────────────────────────────────────────────
@@ -133,14 +126,21 @@ void StandaloneClipContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot
 {
     content_.timeGrid = std::move(snapshot);
     ++content_.timeGridRevision;
-    bumpContentRevision();
 }
 
-void StandaloneClipContent::applyPitchShiftSettings(const PitchShiftSettings& settings)
+bool StandaloneClipContent::applyPitchShiftState(const PitchShiftEditState& state)
 {
-    content_.pitchShiftSettings = settings;
+    if (content_.pitchCurve == nullptr)
+        return false;
+
+    content_.notes = state.notes;
+    content_.pitchCurve->replaceCorrectionSegments(state.segments);
+    content_.pitchShiftSettings = state.settings;
+    ++content_.notesRevision;
+    ++content_.pitchRevision;
     ++content_.pitchShiftRevision;
     bumpContentRevision();
+    return true;
 }
 
 void StandaloneClipContent::applyDetectedKey(const DetectedKey& key)
@@ -152,7 +152,6 @@ void StandaloneClipContent::applyDetectedKey(const DetectedKey& key)
 void StandaloneClipContent::applyReferenceFeatures(const ReferenceFeatureSet& features)
 {
     content_.referenceFeatures = features;
-    bumpContentRevision();
 }
 
 void StandaloneClipContent::applyOriginalF0State(OriginalF0State state)
