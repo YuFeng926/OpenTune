@@ -26,6 +26,7 @@
 #include "UI/TopBarComponent.h"
 #include "UI/TrackPanelComponent.h"
 #include "UI/ArrangementViewComponent.h"
+#include "UI/TimelineOverviewComponent.h"
 #include "UI/OpenTuneLookAndFeel.h"
 #include "UI/OpenTuneTooltipWindow.h"
 #include "UI/AuroraLookAndFeel.h"
@@ -65,6 +66,7 @@ struct ImportDropTarget {
 };
 
 class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
+                                      public TimelineOverviewComponent::Listener,
                                       public ParameterPanel::Listener,
                                       public MenuBarComponent::Listener,
                                       public TransportBarComponent::Listener,
@@ -198,6 +200,8 @@ private:
     void showPreferencesDialog();
     void syncSharedAppPreferences();
     void syncTrackColorsToPanel();
+    void overviewNavigateRequested(double visibleStartSeconds,
+                                   double pixelsPerSecond) override;
     void applyThemeToEditor(ThemeId themeId);
     RenderStatusSnapshot getRenderStatusSnapshot() const;
     void setInferenceActive(bool active);
@@ -241,6 +245,7 @@ private:
     ParameterPanel parameterPanel_;
     ArrangementViewComponent arrangementView_;
     PianoRollComponent pianoRoll_;
+    TimelineOverviewComponent overviewStrip_;
     RippleOverlayComponent rippleOverlay_;
     AutoRenderOverlayComponent autoRenderOverlay_;
     RenderBadgeComponent renderBadge_;
@@ -333,6 +338,7 @@ private:
     static constexpr int TRANSPORT_BAR_HEIGHT = 64; // Increased for larger buttons (was 60)
     static constexpr int TRACK_PANEL_WIDTH = 180;      // 左侧 Track Inspector (Reduced from 220)
     static constexpr int PARAMETER_PANEL_WIDTH = 240;  // 右侧 Properties Panel
+    static constexpr int OVERVIEW_STRIP_HEIGHT = 60;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessorEditor)
 };

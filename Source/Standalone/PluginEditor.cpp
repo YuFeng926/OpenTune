@@ -233,6 +233,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     , topBar_(menuBar_, transportBar_)
     , arrangementView_(p)
     , pianoRoll_(p.getPlayHeadState())
+    , overviewStrip_(pianoRoll_.getWaveformMipmapCache())
     , projectSession_(p, appPreferences_)
 {
     // Wire AppPreferences to processor for getSnapSettings()
@@ -381,6 +382,8 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     arrangementView_.addListener(this);
     addAndMakeVisible(arrangementView_);
+    overviewStrip_.addListener(this);
+    addAndMakeVisible(overviewStrip_);
     // Initial sync: track panel visible track count 鈫?arrangement view
     arrangementView_.setVisibleTrackCount(trackPanel_.getVisibleTrackCount());
 
@@ -409,6 +412,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     addAndMakeVisible(pianoRoll_);
     pianoRoll_.setVisible(!isWorkspaceView_);
     arrangementView_.setVisible(isWorkspaceView_);
+    overviewStrip_.setVisible(!isWorkspaceView_);
     
     // Each view drives its own camera from presented position; no shared camera echo.
     
@@ -542,6 +546,7 @@ OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
     transportBar_.removeListener(this);
     trackPanel_.removeListener(this);
     arrangementView_.removeListener(this);
+    overviewStrip_.removeListener(this);
     parameterPanel_.removeListener(this);
     pianoRoll_.removeListener(this);
 }
@@ -911,6 +916,11 @@ void OpenTuneAudioProcessorEditor::resized()
 
 // Center area (PianoRoll / ArrangementView)
 // PianoRoll already uses reduced(12.0f) for background; bounds unchanged
+    if (!isWorkspaceView_)
+        overviewStrip_.setBounds(bounds.removeFromBottom(OVERVIEW_STRIP_HEIGHT + gap));
+    else
+        overviewStrip_.setBounds({});
+
     arrangementView_.setBounds(bounds);
     pianoRoll_.setBounds(bounds);
     
@@ -967,6 +977,10 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 
     if (pianoRoll_.isShowing()) {
         pianoRoll_.onHeartbeatTick();
+        overviewStrip_.onHeartbeatTick(pianoRoll_.editedContentKey(),
+                                       pianoRoll_.activeContentProjection(),
+                                       pianoRoll_.timelineCamera(),
+                                       pianoRoll_.timelinePolicyViewportWidth());
     }
 
     const bool allowSecondaryRefresh = !inferenceActive_ || ((++inferenceActiveTickCounter_ % 4) == 0);
@@ -2337,6 +2351,7 @@ void OpenTuneAudioProcessorEditor::applyThemeToEditor(ThemeId themeId)
     sendLookAndFeelChange();
     pianoRoll_.requestThemeRedraw();
     arrangementView_.requestThemeRedraw();
+    overviewStrip_.repaint();
     repaint();
 }
 
@@ -2523,6 +2538,7 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
     isWorkspaceView_ = workspaceView;
     arrangementView_.setVisible(isWorkspaceView_);
     pianoRoll_.setVisible(!isWorkspaceView_);
+    overviewStrip_.setVisible(!isWorkspaceView_);
 
     // Explicitly grab focus for the active view to ensure keyboard shortcuts work immediately
     if (isWorkspaceView_) {
@@ -2541,6 +2557,20 @@ void OpenTuneAudioProcessorEditor::viewToggled(bool workspaceView)
 
     resized();
     repaint();
+}
+
+void OpenTuneAudioProcessorEditor::overviewNavigateRequested(double visibleStartSeconds,
+                                                             double pixelsPerSecond)
+{
+    pianoRoll_.commitViewportRequest({
+        TimelineViewportRequest::Kind::Manual,
+        TimelineViewportRequest::ViewKind::PianoRoll,
+        visibleStartSeconds,
+        0.0,  // Manual 分支不使用 currentVisibleStartSeconds
+        0.0,
+        pianoRoll_.timelinePolicyViewportWidth(),
+        pixelsPerSecond
+    });
 }
 
 // ============================================================================
