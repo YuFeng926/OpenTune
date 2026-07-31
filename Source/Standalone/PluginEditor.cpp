@@ -383,7 +383,6 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     arrangementView_.addListener(this);
     addAndMakeVisible(arrangementView_);
     overviewStrip_.addListener(this);
-    addAndMakeVisible(overviewStrip_);
     // Initial sync: track panel visible track count 鈫?arrangement view
     arrangementView_.setVisibleTrackCount(trackPanel_.getVisibleTrackCount());
 
@@ -410,6 +409,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // PlayHeadState via getPresentedPositionSeconds(); no second forwarding path needed.
     
     addAndMakeVisible(pianoRoll_);
+    addAndMakeVisible(overviewStrip_);
     pianoRoll_.setVisible(!isWorkspaceView_);
     arrangementView_.setVisible(isWorkspaceView_);
     overviewStrip_.setVisible(!isWorkspaceView_);
@@ -915,11 +915,21 @@ void OpenTuneAudioProcessorEditor::resized()
     }
 
 // Center area (PianoRoll / ArrangementView)
-// PianoRoll already uses reduced(12.0f) for background; bounds unchanged
+// PianoRoll uses reduced(12) and reserves both scrollbars inside its own bounds.
     if (!isWorkspaceView_)
-        overviewStrip_.setBounds(bounds.removeFromBottom(OVERVIEW_STRIP_HEIGHT + gap));
+    {
+        const int overviewX = bounds.getX() + 12;
+        const int overviewWidth = bounds.getWidth() - 24 - UIColors::scrollBarThickness;
+        const int overviewBottom = bounds.getBottom() - 12 - UIColors::scrollBarThickness;
+        overviewStrip_.setBounds(overviewX,
+                                 overviewBottom - OVERVIEW_STRIP_HEIGHT,
+                                 overviewWidth,
+                                 OVERVIEW_STRIP_HEIGHT);
+    }
     else
+    {
         overviewStrip_.setBounds({});
+    }
 
     arrangementView_.setBounds(bounds);
     pianoRoll_.setBounds(bounds);
