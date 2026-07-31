@@ -135,6 +135,8 @@ public:
     void setContentCommands(std::shared_ptr<ContentEditCommands> commands);
 
     ContentKey editedContentKey() const { return editedContentKey_; }
+    ContentTimelineProjection activeContentProjection() const noexcept;
+    WaveformMipmapCache& getWaveformMipmapCache() noexcept { return waveformMipmapCache_; }
 
     /** [ARA 重构] 注入域内容所有者（替代 setContentProviders）。统一 ARA/Standalone/Capture 路径。 */
 
@@ -420,7 +422,6 @@ private:
 
     const TimelineContentPlacement* findEditedPlacement() const noexcept;
     bool hasTimelineContentPlacement() const noexcept;
-    ContentTimelineProjection activeContentProjection() const noexcept;
     double sourceTimeToTimelineTime(double sourceSeconds) const;
     int  sourceTimeToX(double sourceSeconds) const;
     double xToSourceTime(int x) const;

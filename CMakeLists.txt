@@ -583,6 +583,8 @@ target_sources(OpenTune
         Source/Standalone/UI/TrackPanelComponent.h
         Source/Standalone/UI/ArrangementViewComponent.cpp
         Source/Standalone/UI/ArrangementViewComponent.h
+        Source/Standalone/UI/TimelineOverviewComponent.cpp
+        Source/Standalone/UI/TimelineOverviewComponent.h
         Source/Standalone/UI/TimelineCompositeCache.cpp
         Source/Standalone/UI/TimelineCompositeCache.h
 
