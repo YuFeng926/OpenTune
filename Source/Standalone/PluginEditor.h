@@ -33,6 +33,7 @@
 #include "UI/RippleOverlayComponent.h"
 #include "Editor/AutoRenderOverlayComponent.h"
 #include "../Editor/RenderBadgeComponent.h"
+#include "Utils/PitchShiftSettings.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/TimelineDisplayMode.h"
 #include "Utils/ProjectSession.h"
@@ -276,6 +277,7 @@ private:
     int inferenceActiveTickCounter_ = 0;
     ContentKey lastPianoRollContentKey_;
     OriginalF0State lastPianoRollOriginalF0State_ = OriginalF0State::NotRequested;
+    PitchShiftSettings lastPitchShiftIndicatorSettings_;
     int lastPianoRollSampleRate_ = 0;
     std::shared_ptr<PitchCurve> lastPianoRollCurve_;
     std::shared_ptr<const juce::AudioBuffer<float>> lastPianoRollBuffer_;

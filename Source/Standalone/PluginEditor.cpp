@@ -1045,7 +1045,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         if (contentKeyChanged) {
             lastPianoRollOriginalF0State_ = currentOriginalF0State;
         } else if (activeKey.isValid()
-                   && lastPianoRollOriginalF0State_ == OriginalF0State::Extracting
+                   && lastPianoRollOriginalF0State_ != OriginalF0State::Ready
                    && currentOriginalF0State == OriginalF0State::Ready) {
             pianoRoll_.requestInitialF0View(activeKey);
             lastPianoRollOriginalF0State_ = currentOriginalF0State;
@@ -1069,6 +1069,15 @@ void OpenTuneAudioProcessorEditor::timerCallback()
             const int resolvedScaleType = OpenTune::scaleToUiScaleType(resolvedKey.scale);
             if (resolvedRootNote != lastScaleRootNote_ || resolvedScaleType != lastScaleType_) {
                 applyResolvedScaleForPlacementContent(activeTrack, activePlacementIndex);
+            }
+        }
+
+        // Pitch shift indicator: project from active snapshot
+        {
+            const PitchShiftSettings currentPitchShift = snap ? snap->pitchShiftSettings : PitchShiftSettings::identity();
+            if (currentPitchShift != lastPitchShiftIndicatorSettings_) {
+                parameterPanel_.setPitchShiftIndicator(currentPitchShift.semitone, currentPitchShift.cents);
+                lastPitchShiftIndicatorSettings_ = currentPitchShift;
             }
         }
 
@@ -2870,7 +2879,6 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
             auto action = commands->commitPitchShiftEdit(contentKey, newSettings);
             if (action != nullptr) {
                 processorRef_.getUndoManager().addAction(std::move(action));
-                parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
                 projectSession_.markDirty();
             }
         }
@@ -2882,7 +2890,6 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
             auto action = commands->commitPitchShiftEdit(contentKey, identity);
             if (action != nullptr) {
                 processorRef_.getUndoManager().addAction(std::move(action));
-                parameterPanel_.setPitchShiftIndicator(0, 0);
                 projectSession_.markDirty();
             }
         }

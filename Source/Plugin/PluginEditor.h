@@ -23,6 +23,7 @@
 #include "PluginProcessor.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/ContentTimelineProjection.h"
+#include "Utils/PitchShiftSettings.h"
 #include "Utils/LocalizationManager.h"
 #include "UI/ToolIds.h"
 #include "UI/ParameterPanel.h"
@@ -172,6 +173,7 @@ private:
     uint64_t lastPianoRollNotesRevision_{0};
     uint64_t lastPianoRollTimeGridRevision_{0};
     uint64_t lastPianoRollPitchRevision_{0};
+    PitchShiftSettings lastPitchShiftIndicatorSettings_;
 
     static constexpr int TOP_BAR_HEIGHT = 96;
     static constexpr int PARAMETER_PANEL_WIDTH = 240;
