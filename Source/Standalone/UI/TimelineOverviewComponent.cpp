@@ -327,7 +327,7 @@ void TimelineOverviewComponent::paint(juce::Graphics& g)
         return;
 
     const float radius = juce::jmin(8.0f, UIColors::currentThemeStyle().controlRadius);
-    g.setColour(UIColors::darkControlFace);
+    g.setColour(UIColors::darkControlFace.withAlpha(0.80f));
     g.fillRoundedRectangle(panel, radius);
 
     const auto contentBounds = getContentBounds();
