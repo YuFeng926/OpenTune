@@ -116,6 +116,13 @@
     <tr><td><strong>ホバーツールチップ</strong></td><td>すべてのコントロールにホバー時ツールチップ（機能説明＋ショートカットキー）を表示</td></tr>
     <tr><td><strong>バッチインポート</strong></td><td>複数の音声ファイルを一括インポート可能（順次配置またはトラック分配）</td></tr>
     <tr><td><strong>View メニュークイック設定</strong></td><td>波形表示、レーン、ノート名、チャンク境界などの表示オプションを View メニューから即座に切替</td></tr>
+    <tr><td><strong>時間ツール (TimeTool)</strong></td><td>6 つ目の編集ツール、実験的機能、Standalone のみ提供。設定の「実験的機能」で有効化が必要。タイムハンドルをドラッグして出力時間を調整し、タイムストレッチ/圧縮を実現。ショートカット T</td></tr>
+    <tr><td><strong>二段階レンダリングパイプライン</strong></td><td>Stage 1 ピッチ補正（既存）+ Stage 2 タイムストレッチ（SoundTouch WSOLA）、タイムグリッド編集はピッチ補正キャッシュを再実行しない</td></tr>
+    <tr><td><strong>三座標系</strong></td><td>ソース時間 ↔ 出力時間（TimeGrid τ マッピング経由）↔ 画面ピクセル、正確な時間領域編集を実現</td></tr>
+    <tr><td><strong>ボコーダーデュアルウェイト</strong></td><td>コミュニティ版（Community）と Coulin9 v4 プロフェッショナル版のボコーダーモデルウェイトを、設定で切替可能</td></tr>
+    <tr><td><strong>リファレンス自動アライメント</strong></td><td>ARA モードで複数 region 間のリファレンスピッチを自動アライメント、マルチトラック編集の一貫性を向上</td></tr>
+    <tr><td><strong>プロジェクトシステム</strong></td><td>.otproj プロジェクトファイルの保存/読み込み、プロジェクト編集状態・トラックレイアウト・ピッチ補正を完全に復元</td></tr>
+    <tr><td><strong>Overdose テーマ</strong></td><td>第 4 のインターフェーステーマ、ダークネオンスタイル、音楽制作向けのより攻撃的なビジュアルオプション</td></tr>
 </table>
 
 <h3>🐛 修正と最適化</h3>
@@ -212,9 +219,9 @@
     <tr><td><strong>上部ツールバー</strong></td><td>メニューボタン（ファイル/編集/表示）、トランスポートコントロール、BPM/調性設定、Tap Tempo、ビュー切替</td></tr>
     <tr><td><strong>左側トラックパネル</strong></td><td>マルチトラック管理（最大12トラック）、ボリュームノブ、Solo/Mute、円形レベルメーター、トラック追加ボタン</td></tr>
     <tr><td><strong>中央アレンジビュー</strong></td><td>オーディオクリップ配置、波形プレビュー、タイムライン、クリップのドラッグ/分割/結合/削除</td></tr>
-    <tr><td><strong>中央ピアノロール</strong></td><td>ピッチカーブ編集、音符の描画/選択、F0 カーブ可視化、プレイヘッド、鍵盤試聴（左側キーボードをクリックしてピッチをプレビュー）</td></tr>
+    <tr>        <td><strong>中央ピアノロール</strong></td><td>ピッチカーブ編集、音符の描画/選択、F0 カーブ可視化、プレイヘッド、鍵盤試聴（左側キーボードをクリックしてピッチをプレビュー）；TimeTool では鍵盤・音符/F0 カーブが非表示になり、ドラッグ可能なタイムハンドル（TimeGrid handles）が表示</td></tr>
     <tr><td><strong>右側パラメータパネル</strong></td><td>Retune Speed / Vibrato / Note Split ノブ、ツール選択ボタン</td></tr>
-    <tr><td><strong>レンダリングステータスバッジ</strong></td><td>右上にフローティング表示、現在のレンダリング進捗（例：「レンダリング中 3/8」）</td></tr>
+    <tr><td><strong>レンダリングステータスバッジ</strong></td><td>右上にフローティング表示、現在のレンダリング進捗（例：「レンダリング中 3/8」）、Stage 2 タイムストレッチ進捗は別途表示（例：「+2」）</td></tr>
 </table>
 
 <h3>4.2 パネルの折りたたみ</h3>
@@ -336,7 +343,7 @@
 <div class="page-break"></div>
 <h2 id="tools">7. 編集ツール</h2>
 
-<p>OpenTune は5つのプロフェッショナル編集ツールを提供し、パラメータパネルのツールエリアまたはショートカットキーで切り替えます：</p>
+<p>OpenTune は 6 つのプロフェッショナル編集ツールを提供し、パラメータパネルのツールエリアまたはショートカットキーで切り替えます：</p>
 
 <div class="tool-card">
     <h4>AutoTune — 自動補正ツール (ショートカット: 6)</h4>
@@ -361,8 +368,15 @@
 </div>
 
 <div class="tool-card">
-    <h4>HandDraw — 手描きツール</h4>
+    <h4>HandDraw — 手描きツール (ショートカット: 5)</h4>
     <p>F0 カーブを直接手描きし、ピッチの動きを完全にカスタマイズします。ビブラート、ポルタメント、ベンドなどの装飾効果の描画に適しています。</p>
+</div>
+
+<div class="tool-card">
+    <h4>TimeTool — 時間ツール (ショートカット: T) [実験的機能、Standalone のみ]</h4>
+    <p>設定で実験的機能を有効化した後で使用できます。VST3/ARA モードでは利用できません。タイムハンドルをドラッグしてオーディオの出力時間を調整し、タイムストレッチ/圧縮を実現します。TimeTool ビューでは、鍵盤・音符/F0 カーブが自動で非表示になり、時間領域の編集に集中できます。</p>
+    <p><strong>操作</strong>：ハンドルをドラッグして出力時間を調整；Shift+クリックで複数ハンドルを選択；Alt+ドラッグで最小間隔クランプを解除；空白をダブルクリックして新しいハンドルを挿入；Delete で選択中のハンドルを削除（端点保護あり）；空白をクリックしてプレイヘッドを再配置。</p>
+    <p><strong>端点とレンダリング</strong>：最初と最後の端点は固定、総再生時間は変更されません。編集はピッチ補正を再実行しません；現在の canonical が完了すると、SoundTouch WSOLA Stage 2 タイムストレッチ再構築が 1 回キューイングされます。</p>
 </div>
 
 <h3>7.1 鍵盤試聴</h3>
@@ -447,9 +461,10 @@
 <table>
     <tr><th>設定項目</th><th>説明</th><th>デフォルト</th></tr>
     <tr><td>画面言語</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
-    <tr><td>テーマ</td><td>BlueBreeze / DarkBlueGrey / Aurora</td><td>Aurora</td></tr>
+    <tr><td><strong>テーマ</strong></td><td>BlueBreeze / DarkBlueGrey / Aurora / Overdose</td><td>Aurora</td></tr>
     <tr><td>編集モード</td><td>カーブ優先 / 音符優先</td><td>カーブ優先</td></tr>
     <tr><td>レンダリング優先</td><td>GPU 優先 / CPU 優先</td><td>GPU 優先</td></tr>
+    <tr><td>ボコーダーモデルウェイト</td><td>Community（コミュニティ版）/ Coulin9 v4（プロフェッショナル版）</td><td>Community</td></tr>
     <tr><td>水平ズーム感度</td><td>マウスホイールの水平ズーム速度を制御</td><td>1.0</td></tr>
     <tr><td>垂直ズーム感度</td><td>マウスホイールの垂直ズーム速度を制御</td><td>1.0</td></tr>
     <tr><td>スクロール速度</td><td>ビュースクロール速度</td><td>1.0</td></tr>
@@ -507,7 +522,9 @@
     <tr><td>2</td><td>DrawNote — 音符描画</td></tr>
     <tr><td>3</td><td>Select — 選択ツール</td></tr>
     <tr><td>4</td><td>LineAnchor — アンカーツール</td></tr>
+    <tr><td>5</td><td>HandDraw — 手描きツール</td></tr>
     <tr><td>6</td><td>AutoTune — 自動補正</td></tr>
+    <tr><td>T</td><td>TimeTool — 時間ツール</td></tr>
 </table>
 
 <h3>11.4 ビュー操作</h3>
@@ -533,9 +550,8 @@
     <tr><td><strong>Blue Breeze</strong></td><td>ライト系、ソフトなブルートーン、モダンミニマル</td><td>明るい環境、長時間使用</td></tr>
     <tr><td><strong>Dark Blue-Grey</strong></td><td>ダーク系、プロフェッショナルスタジオ風、立体シャドウ</td><td>暗い環境、プロフェッショナル制作</td></tr>
     <tr><td><strong>Aurora Glass</strong></td><td>ダーク背景、ネオングロー、すりガラス質感</td><td>テクノロジー感、個性的な表現を求める場合</td></tr>
+    <tr><td><strong>Overdose</strong></td><td>ダークネオンスタイル、高彩度、攻撃的なビジュアル</td><td>音楽制作、個性的な表現</td></tr>
 </table>
-
-<h3>12.2 マウストレイルエフェクト（Standalone のみ）</h3>
 <table>
     <tr><th>エフェクト</th><th>スタイル</th></tr>
     <tr><td>オフ (Off)</td><td>トレイルなし</td></tr>
@@ -579,6 +595,9 @@
     <li>DAW が ARA プロトコルを通じてオーディオソースデータを提供、ファイルのインポート/エクスポート不要</li>
     <li>編集結果は DAW のタイムライン再生にリアルタイム反映</li>
     <li>ホストトランスポート同期（Play/Stop/Seek）および BPM 追従に対応</li>
+    <li>ARA 多 region バインディングをサポート、同じソースの複数 region で編集状態を共有</li>
+    <li>Reference auto-alignment：ARA モードで複数 region 間のリファレンスピッチが自動アライメントされ、マルチトラック編集の一貫性が向上</li>
+    <li>VST3 プラグインモードでは、プロジェクト/インポート/エクスポートなど Standalone 固有のメニュー項目を非表示</li>
 </ul>
 
 <h3>14.2 Standalone との違い</h3>
@@ -588,6 +607,7 @@
     <tr><td>ファイルインポート/エクスポート</td><td>✓</td><td>✗ （DAW が管理）</td></tr>
     <tr><td>マウストレイル</td><td>✓ 8種類のテーマ</td><td>✗</td></tr>
     <tr><td>カスタムショートカット</td><td>✓</td><td>✗（DAW のショートカットを使用）</td></tr>
+    <tr><td>ボコーダーウェイト</td><td>✓</td><td>✓</td></tr>
     <tr><td>オーディオデバイス設定</td><td>✓</td><td>✗（DAW のオーディオエンジンを使用）</td></tr>
     <tr><td>ホストトランスポート同期</td><td>✗</td><td>✓</td></tr>
     <tr><td>ARA 非破壊編集</td><td>✗</td><td>✓</td></tr>
