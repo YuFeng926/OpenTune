@@ -371,6 +371,17 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         }
     }
 
+    // Pitch shift indicator: single source of truth is active content snapshot
+    PitchShiftSettings currentPitchShift = PitchShiftSettings::identity();
+    if (activeKey.isValid()) {
+        if (auto snap = processorRef_.getContentSnapshot(activeKey))
+            currentPitchShift = snap->pitchShiftSettings;
+    }
+    if (currentPitchShift != lastPitchShiftIndicatorSettings_) {
+        lastPitchShiftIndicatorSettings_ = currentPitchShift;
+        parameterPanel_.setPitchShiftIndicator(currentPitchShift.semitone, currentPitchShift.cents);
+    }
+
     bool shouldShowOverlay = false;
     bool shouldShowBadge = false;
     const auto chunkStats = processorRef_.getReadableContentChunkStats(activeKey);
@@ -1079,7 +1090,6 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
                     : nullptr;
                 if (action != nullptr) {
                     owner->processorRef_.getUndoManager().addAction(std::move(action));
-                    owner->parameterPanel_.setPitchShiftIndicator(newSettings.semitone, newSettings.cents);
                 }
             }
             closeDialog();
@@ -1095,7 +1105,6 @@ void OpenTuneAudioProcessorEditor::pitchShiftRequested()
                     : nullptr;
                 if (action != nullptr) {
                     owner->processorRef_.getUndoManager().addAction(std::move(action));
-                    owner->parameterPanel_.setPitchShiftIndicator(0, 0);
                 }
             }
             closeDialog();
