@@ -116,6 +116,13 @@
     <tr><td><strong>Tooltips al pasar el ratón</strong></td><td>Todos los controles muestran tooltips con descripción y atajo de teclado</td></tr>
     <tr><td><strong>Importación por lotes</strong></td><td>Importa múltiples archivos de audio a la vez — en secuencia o distribuidos en pistas separadas</td></tr>
     <tr><td><strong>Ajustes rápidos del menú View</strong></td><td>Alterna forma de onda, carriles, etiquetas de notas, límites de bloques y otras opciones visuales desde el menú View</td></tr>
+    <tr><td><strong>Herramienta de tiempo (TimeTool)</strong></td><td>Sexta herramienta de edición, función experimental, solo Standalone. Requiere habilitar «Funciones experimentales» en Preferencias. Arrastre los marcadores de tiempo para ajustar el tiempo de salida, logrando estiramiento/compresión temporal. Atajo T</td></tr>
+    <tr><td><strong>Pipeline de renderizado de dos etapas</strong></td><td>Etapa 1 corrección de tono (existente) + Etapa 2 estiramiento temporal (SoundTouch WSOLA); la edición de la cuadrícula temporal no vuelve a ejecutar la caché de corrección de tono</td></tr>
+    <tr><td><strong>Tres sistemas de coordenadas</strong></td><td>Tiempo fuente ↔ Tiempo de salida (mediante mapeo TimeGrid τ) ↔ Píxeles de pantalla, permitiendo edición precisa en el dominio temporal</td></tr>
+    <tr><td><strong>Pesos duales del vocoder</strong></td><td>Pesos del modelo de vocoder Community (predeterminado) y Coulin9 v4 (profesional), intercambiables en Preferencias</td></tr>
+    <tr><td><strong>Autoalineación de referencia</strong></td><td>En modo ARA, el tono de referencia se alinea automáticamente entre regiones, mejorando la consistencia de la edición multipista</td></tr>
+    <tr><td><strong>Sistema de proyectos</strong></td><td>Guardado/carga de archivos de proyecto .otproj, restaurando completamente el estado de edición, disposición de pistas y corrección de tono</td></tr>
+    <tr><td><strong>Tema Overdose</strong></td><td>Cuarta tema de interfaz, estilo neón oscuro, ofreciendo una opción visual más agresiva para producción musical</td></tr>
 </table>
 
 <h3>🐛 Correcciones y optimizaciones</h3>
@@ -212,9 +219,9 @@
     <tr><td><strong>Barra de herramientas superior</strong></td><td>Botones de menú (Archivo/Editar/Ver), controles de transporte, configuración de BPM/escala, Tap Tempo, cambio de vista</td></tr>
     <tr><td><strong>Panel de pistas izquierdo</strong></td><td>Gestión multipista (hasta 12 pistas), perillas de volumen, Solo/Silencio, medidores de nivel circulares, botón para añadir pista</td></tr>
     <tr><td><strong>Vista central de arreglo</strong></td><td>Disposición de clips de audio, previsualización de forma de onda, línea de tiempo, arrastrar/dividir/fusionar/eliminar clips</td></tr>
-    <tr><td><strong>Rollo de piano central</strong></td><td>Edición de curva de tono, dibujo/selección de notas, visualización de curva F0, cabezal de reproducción, audición de teclas (clic en el teclado para previsualizar el tono)</td></tr>
+    <tr>        <td><strong>Rollo de piano central</strong></td><td>Edición de curva de tono, dibujo/selección de notas, visualización de curva F0, cabezal de reproducción, audición de teclas (clic en el teclado para previsualizar el tono); en TimeTool las teclas, notas y curva F0 se ocultan y se muestran marcadores de tiempo arrastrables (TimeGrid handles)</td></tr>
     <tr><td><strong>Panel de parámetros derecho</strong></td><td>Perillas de Retune Speed / Vibrato / Note Split, botones de selección de herramienta</td></tr>
-    <tr><td><strong>Insignia de estado de renderizado</strong></td><td>Muestra flotante en la esquina superior derecha con el progreso de renderizado (ej. "Renderizando 3/8")</td></tr>
+    <tr>        <td><strong>Insignia de estado de renderizado</strong></td><td>Muestra flotante en la esquina superior derecha con el progreso de renderizado (ej. «Renderizando 3/8»); el progreso de estiramiento temporal de la Etapa 2 se muestra por separado (ej. «+2»)</td></tr>
 </table>
 
 <h3>4.2 Plegado de paneles</h3>
@@ -336,7 +343,7 @@
 <div class="page-break"></div>
 <h2 id="tools">7. Herramientas de edición</h2>
 
-<p>OpenTune ofrece cinco herramientas de edición profesionales, alternables desde la zona de herramientas del panel de parámetros o mediante atajos de teclado:</p>
+<p>OpenTune ofrece seis herramientas de edición profesionales, alternables desde la zona de herramientas del panel de parámetros o mediante atajos de teclado:</p>
 
 <div class="tool-card">
     <h4>AutoTune — Herramienta de Corrección Automática (Atajo: 6)</h4>
@@ -361,8 +368,15 @@
 </div>
 
 <div class="tool-card">
-    <h4>HandDraw — Herramienta de Dibujo Libre</h4>
+    <h4>HandDraw — Herramienta de Dibujo Libre (Atajo: 5)</h4>
     <p>Dibuja directamente la curva F0 para personalizar completamente el contorno tonal. Ideal para crear vibrato, glissando, pitch bend y otros efectos decorativos.</p>
+</div>
+
+<div class="tool-card">
+    <h4>TimeTool — Herramienta de tiempo (Atajo: T) [Experimental, solo Standalone]</h4>
+    <p>Se deben habilitar las funciones experimentales en Preferencias antes de usar. No está disponible en los modos VST3 ni ARA. Arrastre los marcadores de tiempo para ajustar el tiempo de salida del audio, logrando efectos de estiramiento/compresión temporal. Al entrar en la vista TimeTool, las teclas del piano, las notas y la curva F0 se ocultan automáticamente, centrándose en la edición en el dominio temporal.</p>
+    <p><strong>Operaciones</strong>: arrastrar marcadores para ajustar el tiempo de salida; Shift+clic para selección múltiple de marcadores; Alt+arrastre para liberar el límite de separación mínima; doble clic en área vacía para insertar un nuevo marcador; Supr elimina los marcadores seleccionados (extremos protegidos); clic en área vacía para reubicar el cabezal de reproducción.</p>
+    <p><strong>Extremos y renderizado</strong>: los extremos inicial y final están fijos, la duración total permanece sin cambios. La edición no vuelve a ejecutar la corrección de tono; una vez completada la canonización actual, se encola una reconstrucción única de estiramiento temporal SoundTouch WSOLA de Etapa 2.</p>
 </div>
 
 <h3>7.1 Audición de teclas del piano</h3>
@@ -447,9 +461,10 @@
 <table>
     <tr><th>Elemento</th><th>Descripción</th><th>Valor pred.</th></tr>
     <tr><td>Idioma de la interfaz</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
-    <tr><td>Tema</td><td>BlueBreeze / DarkBlueGrey / Aurora</td><td>Aurora</td></tr>
+    <tr><td>Tema</td><td>BlueBreeze / DarkBlueGrey / Aurora / Overdose</td><td>Aurora</td></tr>
     <tr><td>Modo de edición</td><td>Prioridad Curva / Prioridad Notas</td><td>Prioridad Curva</td></tr>
     <tr><td>Prioridad de renderizado</td><td>Prioridad GPU / Prioridad CPU</td><td>Prioridad GPU</td></tr>
+    <tr><td>Pesos del modelo de vocoder</td><td>Community / Coulin9 v4 (profesional)</td><td>Community</td></tr>
     <tr><td>Sensibilidad de zoom horizontal</td><td>Controla la velocidad de zoom horizontal con la rueda del ratón</td><td>1.0</td></tr>
     <tr><td>Sensibilidad de zoom vertical</td><td>Controla la velocidad de zoom vertical con la rueda del ratón</td><td>1.0</td></tr>
     <tr><td>Velocidad de desplazamiento</td><td>Velocidad de desplazamiento de la vista</td><td>1.0</td></tr>
@@ -507,7 +522,9 @@
     <tr><td>2</td><td>DrawNote — Dibujar Nota</td></tr>
     <tr><td>3</td><td>Select — Herramienta de Selección</td></tr>
     <tr><td>4</td><td>LineAnchor — Herramienta de Anclaje</td></tr>
+    <tr><td>5</td><td>HandDraw — Dibujo Libre</td></tr>
     <tr><td>6</td><td>AutoTune — Corrección Automática</td></tr>
+    <tr><td>T</td><td>TimeTool — Herramienta de tiempo</td></tr>
 </table>
 
 <h3>11.4 Operaciones de vista</h3>
@@ -533,9 +550,8 @@
     <tr><td><strong>Blue Breeze</strong></td><td>Claro, tonos azules suaves, moderno y minimalista</td><td>Entornos luminosos, uso prolongado</td></tr>
     <tr><td><strong>Dark Blue-Grey</strong></td><td>Oscuro, estilo estudio profesional, sombras tridimensionales</td><td>Entornos oscuros, producción profesional</td></tr>
     <tr><td><strong>Aurora Glass</strong></td><td>Fondo oscuro, brillo neón, efecto vidrio esmerilado</td><td>Estética tecnológica, expresión personal</td></tr>
+    <tr><td><strong>Overdose</strong></td><td>Estilo neón oscuro, alta saturación, visuales agresivos</td><td>Producción musical, expresión personal</td></tr>
 </table>
-
-<h3>12.2 Efectos de estela del ratón (solo Standalone)</h3>
 <table>
     <tr><th>Efecto</th><th>Estilo</th></tr>
     <tr><td>Apagado (Off)</td><td>Sin estela</td></tr>
@@ -579,6 +595,9 @@
     <li>El DAW proporciona los datos de audio fuente mediante el protocolo ARA, sin necesidad de importar/exportar archivos</li>
     <li>Los resultados de edición se reflejan en tiempo real en la reproducción de la línea de tiempo del DAW</li>
     <li>Compatible con sincronización de transporte del host (Play/Stop/Seek) y seguimiento de BPM</li>
+    <li>Compatible con vinculación de múltiples regiones ARA; varias regiones de la misma fuente comparten el estado de edición</li>
+    <li>Autoalineación de referencia: en modo ARA, el tono de referencia se alinea automáticamente entre regiones, mejorando la consistencia de la edición multipista</li>
+    <li>El modo plugin VST3 oculta elementos de menú exclusivos de Standalone como proyecto/importar/exportar</li>
 </ul>
 
 <h3>14.2 Diferencias con Standalone</h3>
@@ -588,6 +607,7 @@
     <tr><td>Importar/Exportar archivos</td><td>✓</td><td>✗ (Gestionado por el DAW)</td></tr>
     <tr><td>Estela del ratón</td><td>✓ 8 temas</td><td>✗</td></tr>
     <tr><td>Atajos personalizados</td><td>✓</td><td>✗ (Usa los atajos del DAW)</td></tr>
+    <tr><td>Pesos del vocoder</td><td>✓</td><td>✓</td></tr>
     <tr><td>Configuración de dispositivo de audio</td><td>✓</td><td>✗ (Usa el motor de audio del DAW)</td></tr>
     <tr><td>Sincronización de transporte del host</td><td>✗</td><td>✓</td></tr>
     <tr><td>Edición no destructiva ARA</td><td>✗</td><td>✓</td></tr>

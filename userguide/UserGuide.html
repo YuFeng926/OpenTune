@@ -116,7 +116,7 @@
     <tr><td><strong>悬浮提示</strong></td><td>所有控件支持鼠标悬浮提示（功能说明 + 快捷键），随界面语言切换</td></tr>
     <tr><td><strong>批量导入</strong></td><td>支持一次导入多个音频文件，可选择顺序排列或分配到不同轨道</td></tr>
     <tr><td><strong>视图菜单快捷设置</strong></td><td>波形显示、音道、音名标签、分块边界等视觉选项可通过 View 菜单快速切换</td></tr>
-    <tr><td><strong>时间工具 (TimeTool)</strong></td><td>全新第 6 种编辑工具，通过拖拽时间手柄实现音频的时间拉伸/压缩。快捷键 T</td></tr>
+    <tr><td><strong>时间工具 (TimeTool)</strong></td><td>第 6 种编辑工具，实验性功能，仅 Standalone 提供。需在偏好设置中启用实验性功能。拖拽时间手柄调整输出时间，实现时间拉伸/压缩。快捷键 T</td></tr>
     <tr><td><strong>双阶段渲染管线</strong></td><td>Stage 1 音高修正（现有）+ Stage 2 时间拉伸（SoundTouch WSOLA），编辑时间网格不影响音高缓存</td></tr>
     <tr><td><strong>三坐标系</strong></td><td>源时间 ↔ 输出时间（通过 TimeGrid τ 映射）↔ 屏幕像素，支持精确的时间域编辑</td></tr>
     <tr><td><strong>声码器双权重</strong></td><td>新增社区版 (Community) 和 Coulin9 v4 专业版声码器模型权重，可在偏好设置中切换</td></tr>
@@ -217,7 +217,7 @@
     <tr><td><strong>顶部工具栏</strong></td><td>菜单按钮（文件/编辑/视图）、传输控制、BPM/调式设置、Tap Tempo、视图切换</td></tr>
     <tr><td><strong>左侧轨道面板</strong></td><td>多轨道管理（最多 12 轨）、音量旋钮、Solo/Mute、圆形电平表、添加轨道按钮</td></tr>
     <tr><td><strong>中央编曲视图</strong></td><td>音频片段排列、波形预览、时间轴、片段拖动/分割/合并/删除</td></tr>
-    <tr><td><strong>中央钢琴卷帘</strong></td><td>音高曲线编辑、音符绘制/选择、F0 曲线可视化、播放头、钢琴键试听（点击左侧键盘预览音高）、时间工具下显示时间手柄（TimeGrid handles）</td></tr>
+    <tr><td><strong>中央钢琴卷帘</strong></td><td>音高曲线编辑、音符绘制/选择、F0 曲线可视化、播放头、钢琴键试听（点击左侧键盘预览音高）；时间工具下钢琴键与音符/F0 曲线隐藏，显示可拖拽的时间手柄（TimeGrid handles）</td></tr>
     <tr><td><strong>右侧参数面板</strong></td><td>Retune Speed / Vibrato / Note Split 旋钮、工具选择按钮</td></tr>
     <tr><td><strong>渲染状态徽章</strong></td><td>右上角浮动显示当前渲染进度（如"渲染中 3/8"），Stage 2 时间拉伸进度单独显示（如"+2"）</td></tr>
 </table>
@@ -371,10 +371,10 @@
 </div>
 
 <div class="tool-card">
-    <h4>TimeTool — 时间工具 (快捷键: T)</h4>
-    <p>拖拽时间手柄调整音频的播放速度，实现时间拉伸/压缩效果。进入时间工具视图时，钢琴键和音符/F0 曲线自动隐藏，专注时间域编辑。</p>
-    <p><strong>操作</strong>：拖拽手柄调整输出时间、双击空白区域插入新手柄、Delete 删除选中手柄（端点保护）、Shift+拖拽以 30ms 步进吸附、空白区点击重定位播放头。</p>
-    <p><strong>原理</strong>：编辑 TimeGrid 仅触发 Stage 2（时间拉伸）重渲染，不影响 Stage 1 音高缓存。</p>
+    <h4>TimeTool — 时间工具 (快捷键: T) [实验性功能，仅 Standalone]</h4>
+    <p>需在偏好设置中启用实验性功能后方可使用。VST3 与 ARA 模式不提供此工具。拖拽时间手柄调整音频的输出时间，实现时间拉伸/压缩效果。进入时间工具视图时，钢琴键与音符/F0 曲线自动隐藏，专注时间域编辑。</p>
+    <p><strong>操作</strong>：拖拽手柄调整输出时间；Shift+点击多选手柄；Alt+拖拽解除最小间距钳制；双击空白插入新手柄；Delete 删除选中手柄（端点保护）；空白区点击重定位播放头。</p>
+    <p><strong>端点与渲染</strong>：首尾两端点固定，总时长保持不变。编辑不重跑音高校正；当前 canonical 完整后，排入一次 SoundTouch WSOLA Stage2 时间拉伸重建。</p>
 </div>
 
 <h3>7.1 钢琴键试听</h3>
