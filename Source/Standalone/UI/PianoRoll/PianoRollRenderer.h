@@ -98,6 +98,10 @@ public:
         bool showOriginalF0 = true;
         bool showCorrectedF0 = true;
 
+        bool hasF0Selection = false;
+        int f0SelectionStartFrame = -1;
+        int f0SelectionEndFrameExclusive = -1;
+
         ViewMapper coords;
 
         int pressedPianoKey = -1;
@@ -124,6 +128,7 @@ public:
                                     const std::vector<int>& selectedNoteIndices,
                                     const ContentRenderItem& item);
     void drawF0Curve(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    void drawF0SelectionHighlight(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
 
     // ⚡️ §8.5 — paint TimeGrid handles as vertical guide lines.
     void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);

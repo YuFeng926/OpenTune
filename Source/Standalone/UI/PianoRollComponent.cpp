@@ -1125,6 +1125,36 @@ void PianoRollComponent::drawSelectedNoteHighlights(juce::Graphics& g)
     }
 }
 
+void PianoRollComponent::drawF0SelectionHighlight(juce::Graphics& g)
+{
+    if (!interactionState_.selection.hasF0Selection) return;
+
+    juce::Graphics::ScopedSaveState ss(g);
+    g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
+
+    PianoRollRenderer::RenderContext ctx;
+    ctx.width = getTimelineViewportBounds().getWidth();
+    ctx.height = getTimelineContentViewportHeight();
+    ctx.pianoKeyWidth = pianoKeyWidth_;
+    ctx.rulerHeight = 0;
+    ctx.pixelsPerSecond = camera_.pixelsPerSecond;
+    ctx.pixelsPerSemitone = pixelsPerSemitone_;
+    ctx.minMidi = minMidi_;
+    ctx.maxMidi = maxMidi_;
+    ctx.showOriginalF0 = showOriginalF0_;
+    ctx.showCorrectedF0 = showCorrectedF0_;
+    ctx.coords = makeViewMapper();
+    ctx.hasF0Selection = interactionState_.selection.hasF0Selection;
+    ctx.f0SelectionStartFrame = interactionState_.selection.selectedF0StartFrame;
+    ctx.f0SelectionEndFrameExclusive = interactionState_.selection.selectedF0EndFrameExclusive;
+    ctx.contents = buildContentRenderItems();
+
+    for (const auto& item : ctx.contents) {
+        if (!item.active) continue;
+        renderer_->drawF0SelectionHighlight(g, ctx, item);
+    }
+}
+
 void PianoRollComponent::drawPianoKeysPressed(juce::Graphics& g)
 {
     if (pressedPianoKey_ < 0 || !shouldShowPianoKeys()) return;

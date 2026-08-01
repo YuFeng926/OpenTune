@@ -25,9 +25,12 @@ void PianoRollOverlayComponent::paint(juce::Graphics& g)
     // 4. 选中音符高亮
     owner_.drawSelectedNoteHighlights(g);
 
-    // 5. Ghost content (已在内容表面绘制，此处跳过)
+    // 5. F0 曲线选中高亮
+    owner_.drawF0SelectionHighlight(g);
 
-    // 6. 按下琴键高亮
+    // 6. Ghost content (已在内容表面绘制，此处跳过)
+
+    // 7. 按下琴键高亮
     owner_.drawPianoKeysPressed(g);
 
     owner_.recordRenderProbe(PianoRollComponent::RenderProbePoint::OverlayPresent,
