@@ -7,6 +7,9 @@
 #include "../Utils/Error.h"
 #include <juce_core/juce_core.h>
 #include <iomanip>
+#ifdef _WIN32
+#include <dml_provider_factory.h>
+#endif
 
 namespace OpenTune {
 
@@ -56,14 +59,19 @@ ModelFactory::F0ExtractorResult ModelFactory::createF0Extractor(
     }
 
     try {
-        bool gpuMode = false;
-        auto session = loadF0Session(modelPath, env, gpuMode);
+        AccelerationDetector::AccelBackend backend = AccelerationDetector::AccelBackend::CPU;
+        auto session = loadF0Session(modelPath, env, backend);
         if (!session) {
             return F0ExtractorResult::failure(ErrorCode::SessionCreationFailed,
                 "Failed to create ONNX session for: " + modelPath);
         }
 
-        const juce::String backendStr = gpuMode ? "CoreML" : "CPU";
+        juce::String backendStr;
+        switch (backend) {
+            case AccelerationDetector::AccelBackend::DirectML: backendStr = "DirectML"; break;
+            case AccelerationDetector::AccelBackend::CoreML:   backendStr = "CoreML"; break;
+            default:                                           backendStr = "CPU"; break;
+        }
         AppLogger::info("[ModelFactory] Loaded F0 model (" + backendStr + "): " + juce::String(modelPath));
 
         switch (type) {
@@ -131,14 +139,14 @@ std::vector<F0ModelInfo> ModelFactory::getAvailableF0Models(const std::string& m
 // F0 Session Options
 // ==============================================================================
 
-Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
+Ort::SessionOptions ModelFactory::createF0SessionOptions(AccelerationDetector::AccelBackend& outBackend) {
     Ort::SessionOptions sessionOptions;
 
     // F0 inference uses variable input shapes; disable ORT arenas that retain large buffers.
     sessionOptions.DisableMemPattern();
     sessionOptions.DisableCpuMemArena();
 
-    bool gpuMode = false;
+    outBackend = AccelerationDetector::AccelBackend::CPU;
 
 #if defined(__APPLE__)
     try {
@@ -146,7 +154,7 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
         coremlOptions["ModelFormat"] = "MLProgram";
         coremlOptions["MLComputeUnits"] = "CPUAndGPU";
         sessionOptions.AppendExecutionProvider("CoreML", coremlOptions);
-        gpuMode = true;
+        outBackend = AccelerationDetector::AccelBackend::CoreML;
         AppLogger::info("[ModelFactory] F0 session: CoreML EP added (macOS, MLProgram+CPUAndGPU)");
     } catch (const Ort::Exception& e) {
         AppLogger::warn("[ModelFactory] Failed to add CoreML EP for F0: " + juce::String(e.what()));
@@ -158,9 +166,38 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
         AppLogger::warn("[ModelFactory] Failed to add CoreML EP for F0 (unknown error)");
         AppLogger::info("[ModelFactory] F0 session: falling back to CPU");
     }
+#elif defined(_WIN32)
+    auto& gpu = AccelerationDetector::getInstance();
+    if (gpu.getSelectedBackend() == AccelerationDetector::AccelBackend::DirectML) {
+        try {
+            const OrtDmlApi* dmlApi = nullptr;
+            OrtStatus* probeStatus = Ort::GetApi().GetExecutionProviderApi(
+                "DML", ORT_API_VERSION,
+                reinterpret_cast<const void**>(&dmlApi));
+            if (probeStatus != nullptr) {
+                Ort::GetApi().ReleaseStatus(probeStatus);
+                AppLogger::warn("[ModelFactory] Failed to get DML API for F0");
+            } else {
+                int adapterIndex = gpu.getDirectMLDeviceId();
+                OrtStatus* dmlStatus = dmlApi->SessionOptionsAppendExecutionProvider_DML(
+                    sessionOptions, adapterIndex);
+                if (dmlStatus != nullptr) {
+                    Ort::GetApi().ReleaseStatus(dmlStatus);
+                    AppLogger::warn("[ModelFactory] Failed to append DML EP for F0");
+                } else {
+                    outBackend = AccelerationDetector::AccelBackend::DirectML;
+                    AppLogger::info("[ModelFactory] F0 session: DML EP added (Windows, adapterIndex="
+                        + juce::String(adapterIndex) + ")");
+                }
+            }
+        } catch (const Ort::Exception& e) {
+            AppLogger::warn("[ModelFactory] Failed to add DML EP for F0: " + juce::String(e.what()));
+        }
+    }
 #endif
 
-    const auto budget = CpuBudgetManager::buildConfig(gpuMode);
+    const bool isGpuAccelerated = outBackend != AccelerationDetector::AccelBackend::CPU;
+    const auto budget = CpuBudgetManager::buildConfig(isGpuAccelerated);
     sessionOptions.SetIntraOpNumThreads(budget.onnxIntra);
     sessionOptions.SetInterOpNumThreads(budget.onnxInter);
     sessionOptions.SetExecutionMode(budget.onnxSequential ? ExecutionMode::ORT_SEQUENTIAL : ExecutionMode::ORT_PARALLEL);
@@ -170,10 +207,9 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
     logOnnxSessionCpuConfig(budget);
     sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-    if (!gpuMode) {
+    if (outBackend == AccelerationDetector::AccelBackend::CPU) {
         AppLogger::info("[ModelFactory] F0 session: CPU-only mode");
     }
-    outGpuMode = gpuMode;
     return sessionOptions;
 }
 
@@ -184,32 +220,47 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(bool& outGpuMode) {
 std::unique_ptr<Ort::Session> ModelFactory::loadF0Session(
     const std::string& modelPath,
     Ort::Env& env,
-    bool& outGpuMode)
+    AccelerationDetector::AccelBackend& outBackend)
 {
-    try {
-        auto sessionOptions = createF0SessionOptions(outGpuMode);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        try {
+            auto sessionOptions = createF0SessionOptions(outBackend);
 
-        if (shouldEnableOrtProfilingInDebug()) {
+            if (shouldEnableOrtProfilingInDebug()) {
 #ifdef _WIN32
-            sessionOptions.EnableProfiling(L"opentune_f0_profile");
+                sessionOptions.EnableProfiling(L"opentune_f0_profile");
 #else
-            sessionOptions.EnableProfiling("opentune_f0_profile");
+                sessionOptions.EnableProfiling("opentune_f0_profile");
 #endif
-            AppLogger::info("[ModelFactory] ORT profiling enabled for F0");
+                AppLogger::info("[ModelFactory] ORT profiling enabled for F0");
+            }
+
+#ifdef _WIN32
+            juce::File modelFile(modelPath);
+            std::wstring wModelPath = modelFile.getFullPathName().toWideCharPointer();
+            return std::make_unique<Ort::Session>(env, wModelPath.c_str(), sessionOptions);
+#else
+            return std::make_unique<Ort::Session>(env, modelPath.c_str(), sessionOptions);
+#endif
+
+        } catch (const Ort::Exception& e) {
+            if (attempt == 0 && outBackend != AccelerationDetector::AccelBackend::CPU) {
+                juce::String backendName;
+                switch (outBackend) {
+                    case AccelerationDetector::AccelBackend::DirectML: backendName = "DirectML"; break;
+                    case AccelerationDetector::AccelBackend::CoreML:   backendName = "CoreML"; break;
+                    default:                                           backendName = "unknown"; break;
+                }
+                AppLogger::warn("[ModelFactory] F0 session creation failed on " + backendName
+                    + ", retrying on CPU: " + juce::String(e.what()));
+                outBackend = AccelerationDetector::AccelBackend::CPU;
+                continue;
+            }
+            AppLogger::error("[ModelFactory] Failed to load F0 session: " + juce::String(e.what()));
+            return nullptr;
         }
-
-#ifdef _WIN32
-        juce::File modelFile(modelPath);
-        std::wstring wModelPath = modelFile.getFullPathName().toWideCharPointer();
-        return std::make_unique<Ort::Session>(env, wModelPath.c_str(), sessionOptions);
-#else
-        return std::make_unique<Ort::Session>(env, modelPath.c_str(), sessionOptions);
-#endif
-
-    } catch (const Ort::Exception& e) {
-        AppLogger::error("[ModelFactory] Failed to load F0 session: " + juce::String(e.what()));
-        return nullptr;
     }
+    return nullptr;
 }
 
 } // namespace OpenTune

@@ -2,6 +2,7 @@
 
 #include "IF0Extractor.h"
 #include "../Utils/Error.h"
+#include "../Utils/AccelerationDetector.h"
 #include <onnxruntime_cxx_api.h>
 #include <memory>
 #include <string>
@@ -28,13 +29,13 @@ public:
 
     static std::vector<F0ModelInfo> getAvailableF0Models(const std::string& modelDir);
 
-    static Ort::SessionOptions createF0SessionOptions(bool& outGpuMode);
+    static Ort::SessionOptions createF0SessionOptions(AccelerationDetector::AccelBackend& outBackend);
 
 private:
     static std::unique_ptr<Ort::Session> loadF0Session(
         const std::string& modelPath,
         Ort::Env& env,
-        bool& outGpuMode
+        AccelerationDetector::AccelBackend& outBackend
     );
 };
 
