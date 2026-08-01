@@ -164,7 +164,8 @@ void DmlVocoder::initializeIOBinding() {
 
 std::vector<float> DmlVocoder::runSession(
     VocoderScratchBuffers& scratch,
-    size_t numFrames)
+    size_t numFrames,
+    Ort::RunOptions& runOptions)
 {
     if (!ioBindingInitialized_)
         initializeIOBinding();
@@ -194,7 +195,7 @@ std::vector<float> DmlVocoder::runSession(
 
     ioBinding_->BindOutput(outputName.c_str(), *preallocatedOutput_);
 
-    session_->Run(Ort::RunOptions{nullptr}, *ioBinding_);
+    session_->Run(runOptions, *ioBinding_);
     ioBinding_->SynchronizeOutputs();
 
     return outputBuffer_;

@@ -24,6 +24,7 @@
 #include "INoteGenerator.h"
 
 #include <onnxruntime_cxx_api.h>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -44,6 +45,19 @@ public:
 
     /// INoteGenerator override.
     std::vector<Note> generate(const NoteGeneratorInput& input) override;
+
+    /// Abort any in-flight ORT Run via the shared runOptions_ terminate flag.
+    /// Called by ReferenceAnalysisService::shutdown before joining its worker
+    /// thread, so unload cannot freeze inside GAME inference.
+    void terminateRun() override;
+
+    /// Bind the persistent shutdown flag shared with the owner. Covers the
+    /// window before the generator exists (shutdown can race the lazy
+    /// construction): once set, generate() fails fast without any ORT Run.
+    void setAbortFlag(std::shared_ptr<std::atomic<bool>> flag) override
+    {
+        abortFlag_ = std::move(flag);
+    }
 
     // ---- Hyperparameters (defaults match the spike's GAME-small settings) ----
 
@@ -66,6 +80,13 @@ public:
     double nativeTimestep() const noexcept { return timestep_; }
 
 private:
+    /// True once the owner's persistent shutdown flag is set. Checked at
+    /// generate() entry and before every ORT Run.
+    bool aborted() const noexcept
+    {
+        return abortFlag_ && abortFlag_->load(std::memory_order_acquire);
+    }
+
     /// Run one full encoder→segmenter(D3PM)→bd2dur→estimator pipeline on a
     /// single audio chunk. Returned notes have `start`/`end` relative to the
     /// chunk's first sample.
@@ -75,11 +96,22 @@ private:
 
     void loadConfig(const std::string& configPath);
 
+    /// Persistent shutdown state owned by ReferenceAnalysisService; bound via
+    /// setAbortFlag before generate() can run. Complements terminateRun()
+    /// (which only aborts an already-started Run).
+    std::shared_ptr<std::atomic<bool>> abortFlag_;
+
     std::unique_ptr<Ort::Session>     encoder_;
     std::unique_ptr<Ort::Session>     segmenter_;
     std::unique_ptr<Ort::Session>     estimator_;
     std::unique_ptr<Ort::Session>     bd2dur_;
     std::unique_ptr<Ort::MemoryInfo>  memoryInfo_;
+
+    // Shared RunOptions for all four session Runs. terminateRun() sets the
+    // terminate flag; the generator is destroyed together with the processor
+    // right after ReferenceAnalysisService::shutdown, so the flag is never
+    // cleared (no reuse of a terminated generator).
+    Ort::RunOptions runOptions_;
 
     // From config.json
     int    nativeSampleRate_ = 44100;

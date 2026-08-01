@@ -45,7 +45,8 @@ public:
     Result<std::vector<float>> synthesize(
         const std::vector<float>& f0,
         const float* mel,
-        size_t melSize)
+        size_t melSize,
+        Ort::RunOptions& runOptions)
     {
         if (!initialized_.load(std::memory_order_acquire)) {
             return Result<std::vector<float>>::failure(
@@ -53,7 +54,7 @@ public:
         }
 
         try {
-            auto audio = currentVocoder_->synthesize(f0, mel, melSize);
+            auto audio = currentVocoder_->synthesize(f0, mel, melSize, runOptions);
             return Result<std::vector<float>>::success(audio);
         } catch (const std::exception& e) {
             return Result<std::vector<float>>::failure(
@@ -96,9 +97,10 @@ void VocoderInferenceService::shutdown() {
 Result<std::vector<float>> VocoderInferenceService::synthesize(
     const std::vector<float>& f0,
     const float* mel,
-    size_t melSize)
+    size_t melSize,
+    Ort::RunOptions& runOptions)
 {
-    return pImpl_->synthesize(f0, mel, melSize);
+    return pImpl_->synthesize(f0, mel, melSize, runOptions);
 }
 
 int VocoderInferenceService::getVocoderHopSize() const {

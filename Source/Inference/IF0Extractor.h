@@ -4,6 +4,8 @@
 #include <string>
 #include <functional>
 
+namespace Ort { struct RunOptions; }
+
 namespace OpenTune {
 
 enum class F0ModelType {
@@ -37,6 +39,7 @@ public:
      * @param audio Input audio buffer (raw PCM float samples)
      * @param length Number of samples in audio buffer
      * @param sampleRate Input sample rate (e.g., 44100, 48000, 96000)
+     * @param runOptions ORT run options for this inference (caller may terminate via SetTerminate)
      * @return F0 curve in Hz (one value per hop frame at target sample rate)
      *         Empty vector on error
      */
@@ -44,6 +47,7 @@ public:
         const float* audio,
         size_t length,
         int sampleRate,
+        Ort::RunOptions& runOptions,
         std::function<void(float)> progressCallback = nullptr,
         std::function<void(const std::vector<float>&, int)> partialCallback = nullptr
     ) = 0;

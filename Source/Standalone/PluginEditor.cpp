@@ -975,7 +975,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
 {
     syncSharedAppPreferences();
 
-    auto* vocoderDomain = processorRef_.getVocoderDomain();
+    const bool vocoderReady = processorRef_.isVocoderReady();
     const bool inferenceNow = false;
     setInferenceActive(inferenceNow);
 
@@ -1175,7 +1175,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     bool stage1HasWork = false;
     int  stage1Done = 0;
     int  stage1Total = 0;
-    if (vocoderDomain != nullptr) {
+    if (vocoderReady) {
         const int activeTrack = getStandaloneActiveTrack(processorRef_);
         const int activePlacementIndex = getStandaloneSelectedPlacementIndex(processorRef_, activeTrack);
 

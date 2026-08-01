@@ -37,10 +37,15 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     : ARADocumentControllerSpecialisation(entry, instance)
     , contentRenderService_(std::make_shared<ContentRenderService>())
     , resamplingManager_(std::make_shared<ResamplingManager>())
-    , contentF0ExtractionService_(std::make_unique<F0ExtractionService>(1, 64))
+    , contentF0ExtractionService_(std::make_unique<F0ExtractionService>(
+        1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
 {
     asyncLeaseToken_ = std::make_shared<std::atomic<bool>>(true);
     installDocumentRenderExecution();
+
+    // 进程级运行时客户端租约（最后 detach 时 shutdown F0 / resetVocoder）
+    ProcessF0Runtime::getInstance().attach();
+    ProcessRenderRuntime::getInstance().attach();
 }
 
 OpenTuneDocumentController::~OpenTuneDocumentController()
@@ -49,17 +54,14 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
     if (asyncLeaseToken_)
         asyncLeaseToken_->store(false, std::memory_order_release);
 
-    // 停止渲染服务：先排空队列，再 detach execution lease，最后暂停
-    if (contentRenderService_)
-    {
-        contentRenderService_->drainRenderWorker();
-        // P0 修复：detach execution lease 防止 dangling lambda 回调
-        contentRenderService_->detachExecutionLease(this);
-        contentRenderService_->pauseRenderWorker();
-    }
-
-    // 停止 F0 提取服务
+    // 最前段 shutdown + join F0 worker：此后不再有 F0 任务访问 DC
     contentF0ExtractionService_.reset();
+
+    // 停止渲染服务：detach execution lease（终止操作：清 lease + 丢弃排队 job
+    // + 等待执行中的回调完成）。不等待 asyncInFlight_：vocoder 推理不可取消，
+    // 其 onComplete 经 shared_ptr 持有 ContentRenderService，必然回调。
+    if (contentRenderService_)
+        contentRenderService_->detachExecutionLease(this);
 
     // Owner-driven detach: before clearing playbackRenderers_, walk the list
     // and call detachDocumentController(*this) on each renderer.
@@ -69,6 +71,10 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
             renderer->detachDocumentController(*this);
     }
     playbackRenderers_.clear();
+
+    // 进程级运行时客户端租约释放（最后客户端时 resetVocoder / shutdown F0）
+    ProcessRenderRuntime::getInstance().detach();
+    ProcessF0Runtime::getInstance().detach();
 }
 
 namespace {
@@ -1641,7 +1647,7 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
     // Submit real ARA AudioModification ContentKey to F0 extraction service
     contentF0ExtractionService_->submit(
         F0RequestKey{key},
-        [this, f0Svc, data = std::move(channel0Data), sourceSampleRate, birthRevision, leaseToken = asyncLeaseToken_]() mutable
+        [f0Svc, data = std::move(channel0Data), sourceSampleRate, birthRevision, leaseToken = asyncLeaseToken_](const std::shared_ptr<F0RunOwnerState>& runOwnerState) mutable
         {
             if (leaseToken && !leaseToken->load(std::memory_order_acquire))
                 return F0ExtractionService::Result{};
@@ -1650,11 +1656,10 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 return F0ExtractionService::Result{};
 
             auto extraction = f0Svc->extractF0(data.data(), data.size(),
-                                                static_cast<int>(sourceSampleRate));
+                                                static_cast<int>(sourceSampleRate), runOwnerState);
 
             if (!extraction.ok() || extraction.value().empty())
             {
-                f0Svc->releaseImmediately();
                 return F0ExtractionService::Result{};
             }
 
@@ -1687,8 +1692,6 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 }
                 pitchCurve->setOriginalEnergy(energy);
             }
-
-            f0Svc->releaseImmediately();
 
             // Store pitchCurve in Result for commit callback
             F0ExtractionService::Result result;

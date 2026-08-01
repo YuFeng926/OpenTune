@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <mutex>
+#include <atomic>
 #include "IF0Extractor.h"
 #include "../Utils/Error.h"
 
@@ -13,14 +15,32 @@ namespace Ort { struct Env; }
 namespace OpenTune {
 
 /**
- * F0InferenceService - CPU-only F0 extraction service
- * 
+ * F0 run owner identity for termination. One F0ExtractionService owns exactly one
+ * state for its whole lifetime; shared_ptr ownership removes raw-pointer identity
+ * (address reuse can never alias a live owner). closed is set under the service's
+ * runMutex_ by terminateActiveRun and checked at lease admission under the same
+ * lock, so a closed owner can never start a new Run.
+ */
+struct F0RunOwnerState {
+    std::atomic<bool> closed{false};
+};
+
+/**
+ * F0InferenceService - F0 extraction service (process-level shared ONNX session)
+ *
  * Responsibilities:
- * - Manage F0 extractor lifecycle (CPU-only, no GPU)
- * - Support concurrent F0 extraction
+ * - Manage F0 extractor lifecycle (shared session across all callers)
+ * - Serialize inference: DML contract allows only one Run() on a session at a time
+ * - Run lease admission gate: waiters queue on runCv_; cancellation is per-owner
+ *   state (pending leases are flagged cancelled and exit without taking the gate,
+ *   the active lease is terminated via SetTerminate)
+ * - Owner closure is persistent: terminateActiveRun sets state->closed; late-arriving
+ *   leases from a closed owner are rejected at admission
+ * - Single state lock (runMutex_) linearizes lease admission, termination and
+ *   RunOptions mutation, eliminating TOCTOU between owner checks and SetTerminate
  * - Handle model switching and configuration
  *
- * Thread-safe: Yes (shared_mutex for model access)
+ * Thread-safe: Yes (runMutex_ serializes all Runs; extractorMutex_ guards model access)
  * Lifecycle: Model loaded on demand, released explicitly by caller after use
  */
 class F0InferenceService {
@@ -36,15 +56,11 @@ public:
     bool initialize(const std::string& modelDir);
 
     /**
-     * Shutdown and cleanup resources
-     */
-    void shutdown();
-
-    /**
      * Extract F0 from audio
      * @param audio Audio samples
      * @param length Number of samples
      * @param sampleRate Sample rate
+     * @param ownerState Owner identity for run termination
      * @param progressCallback Optional progress callback (0.0 to 1.0)
      * @param partialCallback Optional partial result callback
      * @return Result containing F0 vector
@@ -53,8 +69,22 @@ public:
         const float* audio,
         size_t length,
         int sampleRate,
+        std::shared_ptr<F0RunOwnerState> ownerState,
         std::function<void(float)> progressCallback = nullptr,
         std::function<void(const std::vector<float>&, int)> partialCallback = nullptr);
+
+    /**
+     * Permanently close the given owner: set state->closed, flag all pending
+     * (waiting) leases sharing that state as cancelled, and terminate the
+     * active Run if it shares that state. A closed owner never re-enters, so
+     * late-arriving leases (e.g. a worker that dequeued before closure but has
+     * not yet reached admission) are rejected at admission. All under the same
+     * state lock, so a waiter can never be terminated after it has already
+     * taken the gate.
+     * Thread-safe: may be called from another thread while a Run is executing.
+     * @param ownerState Owner state to close permanently
+     */
+    void terminateActiveRun(const std::shared_ptr<F0RunOwnerState>& ownerState);
 
     /**
      * Set F0 model type
@@ -91,12 +121,6 @@ public:
     int getF0SampleRate() const;
 
     bool isInitialized() const;
-
-    /**
-     * 立即释放 F0 模型资源（不等 idle timer）。
-     * 用于提取完成后立即回收推理内存。
-     */
-    void releaseImmediately();
 
 private:
     class Impl;

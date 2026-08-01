@@ -1,7 +1,5 @@
 #include "RenderWorker.h"
 #include "../Runtime/ProcessRenderRuntime.h"
-#include <chrono>
-#include <thread>
 
 namespace OpenTune {
 
@@ -41,13 +39,18 @@ void RenderWorker::attachExecutionLease(RenderExecutionLease lease)
 
 void RenderWorker::detachExecutionLease(void* owner)
 {
-    drain();
     {
         std::lock_guard<std::mutex> lk(mutex_);
         if (lease_.owner != owner)
             return;
+        // 立即清 lease：worker 之后取出的 job leaseCopy 无效 → 只递减 inFlight_ 不执行回调
         lease_ = RenderExecutionLease{};
+        queue_.clear(); // 丢弃排队 job（无 lease 可执行）
     }
+    cv_.notify_all();
+    // 等待正在执行的 renderJobCallback 完成（其回调访问 owner，owner 仍在析构中存活）
+    std::unique_lock<std::mutex> lk(mutex_);
+    cv_.wait(lk, [this] { return inFlight_ == 0; });
 }
 
 // ============================================================
@@ -87,13 +90,11 @@ void RenderWorker::pause()
 {
     std::unique_lock<std::mutex> lk(mutex_);
     paused_ = true;
-    // Wait for in-flight jobs to complete
-    while (inFlight_ > 0 || asyncInFlight_ > 0)
-    {
-        lk.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        lk.lock();
-    }
+    // 只等待正在执行的 renderJobCallback 完成（inFlight_ 归零），绝不等待
+    // 异步 vocoder 推理：卡住的 DML Run 只能由调用方随后 resetVocoder /
+    // setVocoderModelWeight 的 SetTerminate + join 终止，onComplete 经
+    // shared_ptr 回调归还计数。paused_ 保证等待期间不取新 job，resume() 再放行。
+    cv_.wait(lk, [this] { return inFlight_ == 0; });
 }
 
 void RenderWorker::resume()
@@ -107,14 +108,11 @@ void RenderWorker::resume()
 
 void RenderWorker::drain()
 {
-    while (true)
-    {
-        std::unique_lock<std::mutex> lk(mutex_);
-        if (queue_.empty() && inFlight_ == 0 && asyncInFlight_ == 0)
-            break;
-        lk.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+    // 完整合同：等待队列空、同步与异步渲染全部完成。
+    // 导出路径依赖此语义（导出前确保最新完整数据已落盘）。
+    // enqueue/worker 循环/completeAsyncJob 在状态变化后 notify，谓词等待无忙等。
+    std::unique_lock<std::mutex> lk(mutex_);
+    cv_.wait(lk, [this] { return queue_.empty() && inFlight_ == 0 && asyncInFlight_ == 0; });
 }
 
 // ============================================================
@@ -171,8 +169,11 @@ void RenderWorker::loop()
             }
             // Lease invalid: job was popped but cannot execute. Decrement to prevent leak.
 
-            std::lock_guard<std::mutex> lk(mutex_);
-            --inFlight_;
+            {
+                std::lock_guard<std::mutex> lk(mutex_);
+                --inFlight_;
+            }
+            cv_.notify_all(); // 唤醒 drain()/detachExecutionLease() 等 inFlight_ 归零的等待者
         }
     }
 }

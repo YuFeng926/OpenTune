@@ -11,6 +11,7 @@
 namespace OpenTune {
 
 inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
+                                              const std::shared_ptr<F0RunOwnerState>& runOwnerState,
                                               const EditableContentSnapshot& snap,
                                               F0ExtractionService::Result& out,
                                               std::string& errorMessage)
@@ -53,7 +54,7 @@ inline bool extractOriginalF0ForImportedClip(F0InferenceService& f0Service,
         * static_cast<double>(f0SampleRate) / static_cast<double>(juce::jmax(1, hopSize))));
 
     auto extraction = f0Service.extractF0(src, static_cast<size_t>(numSamples),
-                                          static_cast<int>(internalSampleRate));
+                                          static_cast<int>(internalSampleRate), runOwnerState);
     if (!extraction.ok() || extraction.value().empty()) {
         errorMessage = "f0_empty_or_unvoiced";
         return false;

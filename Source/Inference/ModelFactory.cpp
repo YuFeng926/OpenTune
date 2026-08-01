@@ -139,7 +139,9 @@ std::vector<F0ModelInfo> ModelFactory::getAvailableF0Models(const std::string& m
 // F0 Session Options
 // ==============================================================================
 
-Ort::SessionOptions ModelFactory::createF0SessionOptions(AccelerationDetector::AccelBackend& outBackend) {
+Ort::SessionOptions ModelFactory::createF0SessionOptions(
+    AccelerationDetector::AccelBackend& outBackend,
+    bool forceCpu) {
     Ort::SessionOptions sessionOptions;
 
     // F0 inference uses variable input shapes; disable ORT arenas that retain large buffers.
@@ -168,7 +170,7 @@ Ort::SessionOptions ModelFactory::createF0SessionOptions(AccelerationDetector::A
     }
 #elif defined(_WIN32)
     auto& gpu = AccelerationDetector::getInstance();
-    if (gpu.getSelectedBackend() == AccelerationDetector::AccelBackend::DirectML) {
+    if (!forceCpu && gpu.getSelectedBackend() == AccelerationDetector::AccelBackend::DirectML) {
         try {
             const OrtDmlApi* dmlApi = nullptr;
             OrtStatus* probeStatus = Ort::GetApi().GetExecutionProviderApi(
@@ -224,7 +226,9 @@ std::unique_ptr<Ort::Session> ModelFactory::loadF0Session(
 {
     for (int attempt = 0; attempt < 2; ++attempt) {
         try {
-            auto sessionOptions = createF0SessionOptions(outBackend);
+            // attempt==1 即 DML 失败后的 CPU 重试：forceCpu 防止
+            // createF0SessionOptions 再次读取全局 DirectML 选择而重新附加 DML EP
+            auto sessionOptions = createF0SessionOptions(outBackend, attempt == 1);
 
             if (shouldEnableOrtProfilingInDebug()) {
 #ifdef _WIN32

@@ -52,6 +52,7 @@ public:
      * @param audio Non-null pointer to audio samples (contract: must not be null)
      * @param length Number of audio samples (contract: must be > 0)
      * @param sampleRate Audio sample rate in Hz (contract: must be > 0)
+     * @param runOptions ORT run options for this inference (caller may terminate via SetTerminate)
      * @param progressCallback Optional progress callback (0.0 to 1.0)
      * @param partialCallback Optional callback for partial F0 results
      * 
@@ -65,6 +66,7 @@ public:
         const float* audio,
         size_t length,
         int sampleRate,
+        Ort::RunOptions& runOptions,
         std::function<void(float)> progressCallback = nullptr,
         std::function<void(const std::vector<float>&, int)> partialCallback = nullptr
     ) override;

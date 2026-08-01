@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <onnxruntime_cxx_api.h>
 
 namespace OpenTune {
 
@@ -251,29 +250,41 @@ bool preparePublishedAudioFromSynthesis(const FrozenRenderBoundaries& boundaries
     return true;
 }
 
-bool completionIsAlive(const ProcessRenderRuntime::CompletionContext& completion)
-{
-    return completion.alive == nullptr || completion.alive->load(std::memory_order_acquire);
-}
-
 void notifyChunkSettled(const ProcessRenderRuntime::CompletionContext& completion,
                         ContentKey key)
 {
-    if (completionIsAlive(completion) && completion.chunkSettled)
-        completion.chunkSettled(key);
+    if (!completion.chunkSettled)
+        return;
+    std::lock_guard<std::mutex> lk(completion.gate->mutex);
+    if (!completion.gate->closed)
+        completion.chunkSettled(key); // 持锁调用：owner 析构必须先拿同一把锁置 closed，互斥保证无 UAF
 }
 
 } // namespace
 
 ProcessRenderRuntime& ProcessRenderRuntime::getInstance()
 {
-    static ProcessRenderRuntime instance;
-    return instance;
+    // 进程寿命 heap singleton：不注册静态析构（DLL detach 持 loader lock，
+    // 不得在静态析构中 join 工作线程）。domain 由最后一个客户端 detach()
+    // 在正常析构上下文销毁。
+    static auto* instance = new ProcessRenderRuntime;
+    return *instance;
 }
 
-ProcessRenderRuntime::~ProcessRenderRuntime()
+void ProcessRenderRuntime::attach()
 {
-    resetVocoder();
+    std::lock_guard<std::mutex> lock(vocoderMutex_);
+    ++clientCount_;
+}
+
+void ProcessRenderRuntime::detach()
+{
+    // 与 attach 同一临界区线性化：仅当计数精确归零（最后一个客户端，正常析构
+    // 上下文）时销毁 domain 并推进 generation，不释放锁后再 reset。
+    std::lock_guard<std::mutex> lock(vocoderMutex_);
+    --clientCount_;
+    if (clientCount_ == 0)
+        resetVocoderLocked();
 }
 
 std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir, VocoderModelWeight weight)
@@ -287,28 +298,10 @@ std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir
     return modelDir + "/hifigan.onnx";
 }
 
-bool ProcessRenderRuntime::ensureVocoderReady()
+void ProcessRenderRuntime::resetVocoderLocked()
 {
-    std::lock_guard<std::mutex> lock(vocoderMutex_);
-
-    if (vocoderDomain_ != nullptr)
-        return true;
-
-    const auto modelsDir = ModelPathResolver::getModelsDirectory();
-    if (!ProcessF0Runtime::getInstance().initialize(modelsDir))
-        return false;
-
-    ortEnv_ = ProcessF0Runtime::getInstance().getOrtEnv();
-    if (ortEnv_ == nullptr)
-        return false;
-
-    auto domain = std::make_unique<VocoderDomain>(ortEnv_);
-    const auto modelPath = modelPathForWeight(modelsDir, currentVocoderModelWeight_);
-    if (!domain->initialize(modelPath))
-        return false;
-
-    vocoderDomain_ = std::move(domain);
-    return true;
+    vocoderDomain_.reset();   // VocoderDomain 析构已调用 shutdown，无需显式调用
+    ++vocoderGeneration_;
 }
 
 bool ProcessRenderRuntime::setVocoderModelWeight(VocoderModelWeight weight)
@@ -318,22 +311,62 @@ bool ProcessRenderRuntime::setVocoderModelWeight(VocoderModelWeight weight)
         return false;
 
     currentVocoderModelWeight_ = weight;
-    if (vocoderDomain_ != nullptr)
-    {
-        vocoderDomain_->shutdown();
-        vocoderDomain_.reset();
-    }
+    resetVocoderLocked();
     return true;
 }
 
 void ProcessRenderRuntime::resetVocoder()
 {
     std::lock_guard<std::mutex> lock(vocoderMutex_);
-    if (vocoderDomain_ != nullptr)
+    resetVocoderLocked();
+}
+
+bool ProcessRenderRuntime::submitVocoderJob(VocoderDomain::Job job, uint64_t expectedGeneration)
+{
+    std::lock_guard<std::mutex> lock(vocoderMutex_);
+    if (vocoderDomain_ == nullptr)
+        return false;
+    if (vocoderGeneration_ != expectedGeneration)
+        return false;   // domain 已重建：job 配置过期，拒绝提交
+    return vocoderDomain_->submit(std::move(job));
+}
+
+bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
+{
+    std::lock_guard<std::mutex> lock(vocoderMutex_);
+
+    if (vocoderDomain_ == nullptr)
     {
-        vocoderDomain_->shutdown();
-        vocoderDomain_.reset();
+        const auto modelsDir = ModelPathResolver::getModelsDirectory();
+        if (!ProcessF0Runtime::getInstance().initialize(modelsDir))
+            return false;
+
+        // Env 仅以局部 shared_ptr 传入 domain：生命周期由 domain 内部持有，
+        // 不存成员，消除与 F0 runtime 的重叠所有权。
+        auto env = ProcessF0Runtime::getInstance().getOrtEnv();
+        if (env == nullptr)
+            return false;
+
+        auto domain = std::make_unique<VocoderDomain>(env);
+        const auto modelPath = modelPathForWeight(modelsDir, currentVocoderModelWeight_);
+        if (!domain->initialize(modelPath))
+            return false;
+
+        vocoderDomain_ = std::move(domain);
+        ++vocoderGeneration_;
     }
+
+    out.generation = vocoderGeneration_;
+    out.hopSize = vocoderDomain_->getVocoderHopSize();
+    out.melBins = vocoderDomain_->getMelBins();
+    out.fMax = vocoderDomain_->getFMax();
+    return true;
+}
+
+bool ProcessRenderRuntime::isVocoderReady() const noexcept
+{
+    std::lock_guard<std::mutex> lock(vocoderMutex_);
+    return vocoderDomain_ != nullptr;
 }
 
 void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderService> crs,
@@ -369,19 +402,24 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     int numFrames = 0;
     bool clipFound = false;
     bool boundariesFrozen = false;
+    VocoderConfig vocoderCfg;
 
     if (coreJob.audioBuffer != nullptr)
     {
+        // Vocoder 配置在首次使用前就绪，并一次锁内获取 generation/hop/melBins/fMax：
+        // boundaries 所用 hop 与提交校验的 generation 必须同属一个 domain。
+        if (!acquireVocoderConfig(vocoderCfg))
+        {
+            AppLogger::log("RenderWorker: acquireVocoderConfig FAILED");
+            coreJob.renderCache->completeChunkRenderFailure(relChunkStartSec, coreJob.targetRevision);
+            return;
+        }
+
         const int audioNumSamples = coreJob.audioBuffer->getNumSamples();
         const int audioNumChannels = coreJob.audioBuffer->getNumChannels();
         int workerHopSize = 512;
-
-        if (auto* domain = getVocoderDomain())
-        {
-            const int currentHopSize = domain->getVocoderHopSize();
-            if (currentHopSize > 0)
-                workerHopSize = currentHopSize;
-        }
+        if (vocoderCfg.hopSize > 0)
+            workerHopSize = vocoderCfg.hopSize;
 
         ContentSampleRange contentRange{0, audioNumSamples};
         if (freezeRenderBoundaries(contentRange,
@@ -438,6 +476,17 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     const int f0StartFrame = static_cast<int>(std::floor(trueStartSeconds * f0FrameRate));
     const int f0EndFrame = static_cast<int>(std::ceil(trueEndSeconds * f0FrameRate)) + 1;
     const int numF0Frames = std::max(1, f0EndFrame - f0StartFrame);
+
+    // Blank 判定：仅当全局移调为恒等（effectiveF0 与 originalF0 一致，无差异可
+    // 合成）且该 chunk 帧范围内无任何 correction segment 时，才 Blank 回退原始
+    // 音频缓存播放。非恒等全局移调即使无 correction 也必须进入 vocoder 全量渲染，
+    // 否则移调不生效。
+    if (contentSnap->pitchShiftSettings.isIdentity() && !snap->hasCorrectionInRange(f0StartFrame, f0EndFrame))
+    {
+        coreJob.renderCache->markChunkAsBlank(relChunkStartSec, coreJob.targetRevision);
+        notifyChunkSettled(completion, coreJob.contentKey);
+        return;
+    }
 
     effectiveF0 = materializeEffectiveF0Range(*contentSnap, f0StartFrame, f0EndFrame);
 
@@ -503,15 +552,12 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         }
     }
 
-    if (!ensureVocoderReady())
-    {
-        AppLogger::log("RenderWorker: ensureVocoderReady FAILED");
-        coreJob.renderCache->completeChunkRenderFailure(relChunkStartSec, coreJob.targetRevision);
-        return;
-    }
-
-    auto* domain = getVocoderDomain();
-    if (domain == nullptr)
+    // 配置快照（generation/hop/melBins/fMax）已在本函数开头随 acquireVocoderConfig()
+    // 一次锁内获取（vocoderCfg），此处 melBins/fMax 与提交校验的 generation
+    // 同属一个 domain，不存在跨域混用。
+    const int melBins = vocoderCfg.melBins;
+    const float fMax = vocoderCfg.fMax;
+    if (melBins <= 0)
     {
         coreJob.renderCache->completeChunkRenderFailure(relChunkStartSec, coreJob.targetRevision);
         return;
@@ -519,8 +565,8 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
 
     MelSpectrogramConfig melConfig;
     melConfig.sampleRate = static_cast<int>(RenderCache::kSampleRate);
-    melConfig.nMels = domain->getMelBins();
-    melConfig.fMax = domain->getFMax();
+    melConfig.nMels = melBins;
+    melConfig.fMax = fMax;
 
     auto melResult = computeLogMelSpectrogram(monoAudio.data(),
                                               static_cast<int>(monoAudio.size()),
@@ -642,10 +688,14 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
     };
 
     crs->beginAsyncRenderJob();
-    if (!domain->submit(std::move(vocoderJob)))
+    if (!submitVocoderJob(std::move(vocoderJob), vocoderCfg.generation))
     {
-        renderCache->completeChunkRenderFailure(jobStartSeconds, targetRevision);
+        // stale generation：快照后、提交前另一实例 reset/重建了 domain。
+        // 原样重排队 coreJob（下一轮以新 domain 配置重算），不标记失败
+        // （chunk 保持 Pending，仅归还异步计数）。
+        crs->enqueueRender(std::move(coreJob));
         crs->completeAsyncRenderJob();
+        return;
     }
 }
 

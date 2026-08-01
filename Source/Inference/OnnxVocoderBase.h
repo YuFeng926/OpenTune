@@ -28,7 +28,8 @@ public:
     std::vector<float> synthesize(
         const std::vector<float>& f0,
         const float* mel,
-        size_t melSize) override;
+        size_t melSize,
+        Ort::RunOptions& runOptions) override;
 
     int getHopSize() const override { return 512; }
     int getSampleRate() const override { return 44100; }
@@ -46,7 +47,8 @@ protected:
 
     virtual std::vector<float> runSession(
         VocoderScratchBuffers& scratch,
-        size_t numFrames) = 0;
+        size_t numFrames,
+        Ort::RunOptions& runOptions) = 0;
 
     std::unique_ptr<Ort::Session> session_;
     std::vector<std::string> inputNames_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+#include <onnxruntime_cxx_api.h>
 #include <atomic>
 #include <condition_variable>
 #include <functional>
@@ -65,7 +66,12 @@ private:
     mutable std::mutex queueMutex_;
     std::condition_variable queueCV_;
     std::unique_ptr<std::thread> worker_;
-    
+
+    // Shared RunOptions for the worker's synthesize calls. shutdown() calls
+    // SetTerminate() on this instance to abort an in-flight DML Run, so
+    // worker_->join() cannot block on unbounded synthesize() time.
+    Ort::RunOptions runOptions_;
+
     std::atomic<bool> acceptingJobs_{false};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VocoderRenderScheduler)

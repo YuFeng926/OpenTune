@@ -46,6 +46,10 @@ public:
 
     void setAnalysisFunc(AnalysisFunc func);
     void setNotificationDispatcher(NotificationDispatcher dispatcher);
+    /// Terminate any in-flight inference (e.g. GAME ORT Run) before the worker
+    /// thread is joined by shutdown(). shutdown() copies it under mutex_ and
+    /// invokes it outside the lock; must be fast and non-blocking.
+    void setTerminateFn(std::function<void()> fn);
 
     void addListener(Listener* listener);
     void removeListener(Listener* listener);
@@ -60,6 +64,7 @@ private:
 
     AnalysisFunc analysisFunc_;
     NotificationDispatcher notificationDispatcher_;
+    std::function<void()> terminateFn_;
 
     std::mutex mutex_;
     std::condition_variable cv_;

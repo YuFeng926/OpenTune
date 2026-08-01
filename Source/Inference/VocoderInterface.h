@@ -3,6 +3,8 @@
 #include <vector>
 #include <cstddef>
 
+namespace Ort { struct RunOptions; }
+
 namespace OpenTune {
 
 class VocoderInterface {
@@ -12,7 +14,8 @@ public:
     virtual std::vector<float> synthesize(
         const std::vector<float>& f0,
         const float* mel,
-        size_t melSize
+        size_t melSize,
+        Ort::RunOptions& runOptions
     ) = 0;
 
     virtual int getHopSize() const { return 512; }

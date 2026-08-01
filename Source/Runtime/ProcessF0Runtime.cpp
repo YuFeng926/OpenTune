@@ -10,8 +10,43 @@ namespace OpenTune {
 
 ProcessF0Runtime& ProcessF0Runtime::getInstance()
 {
-    static ProcessF0Runtime instance;
-    return instance;
+    // 进程寿命 heap 单例：显式分配、永不析构，避免 DLL detach（持 loader lock）
+    // 时执行静态析构。资源由最后一次 detach() 在正常上下文释放。
+    static auto* instance = new ProcessF0Runtime();
+    return *instance;
+}
+
+void ProcessF0Runtime::attach()
+{
+    std::lock_guard<std::mutex> lock(initMutex_);
+    ++clientCount_;
+}
+
+void ProcessF0Runtime::detach()
+{
+    // 同一临界区内递减并释放：与 initialize/getF0Service 线性化，无锁外关闭竞态。
+    // 先释放 f0Service_（其内部持 env_ 引用）再释放 ortEnv_。
+    std::lock_guard<std::mutex> lock(initMutex_);
+    --clientCount_;
+    if (clientCount_ == 0) {
+        f0Service_.reset();
+        ortEnv_.reset();
+        // 允许下次 initialize() 重新初始化：释放而非永久禁用
+        initAttempted_.store(false, std::memory_order_release);
+        ready_.store(false, std::memory_order_release);
+    }
+}
+
+std::shared_ptr<Ort::Env> ProcessF0Runtime::getOrtEnv() const
+{
+    std::lock_guard<std::mutex> lock(initMutex_);
+    return ortEnv_;
+}
+
+std::shared_ptr<F0InferenceService> ProcessF0Runtime::getF0Service() const
+{
+    std::lock_guard<std::mutex> lock(initMutex_);
+    return f0Service_;
 }
 
 bool ProcessF0Runtime::initialize(const std::string& modelsDir)
@@ -46,8 +81,8 @@ bool ProcessF0Runtime::initialize(const std::string& modelsDir)
         if (!f0Service_->initialize(modelsDir))
         {
             AppLogger::log("ProcessF0Runtime: F0 initialize failed");
-            ortEnv_.reset();
             f0Service_.reset();
+            ortEnv_.reset();
             return false;
         }
 
@@ -57,8 +92,8 @@ bool ProcessF0Runtime::initialize(const std::string& modelsDir)
     catch (const std::exception& e)
     {
         AppLogger::log("ProcessF0Runtime: exception: " + juce::String(e.what()));
-        ortEnv_.reset();
         f0Service_.reset();
+        ortEnv_.reset();
         return false;
     }
 

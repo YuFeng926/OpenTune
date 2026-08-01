@@ -32,6 +32,12 @@ bool VocoderRenderScheduler::initialize(VocoderInferenceService* service) {
 
 void VocoderRenderScheduler::shutdown() {
     acceptingJobs_.store(false, std::memory_order_release);
+
+    // Terminate the worker's in-flight synthesize() Run. Without this the
+    // worker can sit inside an unbounded DML Run and join() below freezes
+    // (REAPER unload deadlock). The scheduler is never reused after shutdown,
+    // so the terminate flag is never cleared.
+    runOptions_.SetTerminate();
     queueCV_.notify_one();
     
     if (worker_ && worker_->joinable()) {
@@ -120,7 +126,8 @@ void VocoderRenderScheduler::workerThread() {
                 if (service_) {
                     auto result = service_->synthesize(
                         job.f0,
-                        job.mel.empty() ? nullptr : job.mel.data(), job.mel.size());
+                        job.mel.empty() ? nullptr : job.mel.data(), job.mel.size(),
+                        runOptions_);
                     
                     AppLogger::log("VocoderTrace: run end");
                     

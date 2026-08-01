@@ -30,7 +30,8 @@ PCNSFHifiGANVocoder::~PCNSFHifiGANVocoder() = default;
 
 std::vector<float> PCNSFHifiGANVocoder::runSession(
     VocoderScratchBuffers& scratch,
-    size_t /*numFrames*/)
+    size_t /*numFrames*/,
+    Ort::RunOptions& runOptions)
 {
     std::vector<const char*> outputNamesC;
     if (!outputNames_.empty()) {
@@ -41,7 +42,7 @@ std::vector<float> PCNSFHifiGANVocoder::runSession(
     }
 
     auto out = session_->Run(
-        Ort::RunOptions{nullptr},
+        runOptions,
         scratch.inputNamesC.data(),
         scratch.inputTensors.data(),
         scratch.inputTensors.size(),

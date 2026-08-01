@@ -7,7 +7,7 @@
 #include "VocoderInterface.h"
 #include "../Utils/Error.h"
 
-namespace Ort { struct Env; }
+namespace Ort { struct Env; struct RunOptions; }
 
 namespace OpenTune {
 
@@ -24,7 +24,8 @@ public:
     Result<std::vector<float>> synthesize(
         const std::vector<float>& f0,
         const float* mel,
-        size_t melSize);
+        size_t melSize,
+        Ort::RunOptions& runOptions);
 
     int getVocoderHopSize() const;
     int getMelBins() const;
