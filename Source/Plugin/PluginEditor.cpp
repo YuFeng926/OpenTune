@@ -382,6 +382,26 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         parameterPanel_.setPitchShiftIndicator(currentPitchShift.semitone, currentPitchShift.cents);
     }
 
+    // RMVPE overlay：读取音频后的 F0 提取 + note 生成期间显示"正在处理音频"遮罩
+    if (rmvpeOverlayLatched_) {
+        bool allDone = true;
+        for (const auto& key : rmvpeOverlayTargetContentKeys_) {
+            auto snap = processorRef_.getContentSnapshot(key);
+            if (snap == nullptr)
+                continue;  // content 已被移除，视为完成
+            if ((snap->originalF0State != OriginalF0State::Ready
+                    && snap->originalF0State != OriginalF0State::Failed)
+                || processorRef_.isNoteGenInFlightForContent(key)) {
+                allDone = false;
+                break;
+            }
+        }
+        if (allDone) {
+            rmvpeOverlayLatched_ = false;
+            rmvpeOverlayTargetContentKeys_.clear();
+        }
+    }
+
     bool shouldShowOverlay = false;
     bool shouldShowBadge = false;
     const auto chunkStats = processorRef_.getReadableContentChunkStats(activeKey);
@@ -400,6 +420,11 @@ void OpenTuneAudioProcessorEditor::timerCallback()
         renderBadge_.setMessageText(juce::String::fromUTF8(u8"\u6e32\u67d3\u4e2d (")
             + juce::String(completedTasks) + "/" + juce::String(totalTasks) + ")");
         shouldShowBadge = true;
+    }
+
+    if (rmvpeOverlayLatched_) {
+        autoRenderOverlay_.setMessageText(juce::String::fromUTF8(u8"\u6B63\u5728\u5904\u7406\u97F3\u9891"));
+        shouldShowOverlay = true;
     }
 
     if (renderBadge_.isVisible() != shouldShowBadge)
@@ -963,7 +988,7 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         return;  // 无 region 时静默返回
     }
 
-    dc->requestReadAudioForPlaybackRegionsAsync([this, regionCount = static_cast<int>(allRegions.size())](int refreshed) {
+    dc->requestReadAudioForPlaybackRegionsAsync([this, dc, regionCount = static_cast<int>(allRegions.size())](int refreshed) {
         if (refreshed == -1) return; // cancelled
 
         if (refreshed == 0) {
@@ -976,6 +1001,14 @@ void OpenTuneAudioProcessorEditor::recordRequested()
         AppLogger::log("ReadAudio: refreshed " + juce::String(refreshed)
             + " AudioModification(s) from " + juce::String(regionCount)
             + " playback region(s)");
+
+        // 遮罩覆盖本次读取的全部 modification：F0 提取 + note 生成完成前保持"正在处理音频"
+        rmvpeOverlayTargetContentKeys_.clear();
+        for (const auto& projection : dc->getPlaybackRegionProjections()) {
+            if (projection.contentKey.isValid())
+                rmvpeOverlayTargetContentKeys_.push_back(projection.contentKey);
+        }
+        rmvpeOverlayLatched_ = true;
     });
 #endif
 }

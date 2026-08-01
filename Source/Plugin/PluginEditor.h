@@ -166,6 +166,9 @@ private:
     TimelineDisplayMode timelineDisplayMode_ = TimelineDisplayMode::Time;
 
     bool showingSingleNoteParams_{false};
+    // 读取音频后 latch：F0 提取 + note 生成全部完成前保持"正在处理音频"遮罩
+    bool rmvpeOverlayLatched_ = false;
+    std::vector<ContentKey> rmvpeOverlayTargetContentKeys_;
     // Tracks last-seen notesRevision per active content so the timer
     // can pull fresh notes when an async note generator (GAME) commits late.
     ContentKey lastActiveContentKey_;
