@@ -53,10 +53,11 @@ inline std::optional<RenderBlockSpan> computeRegionBlockRenderSpan(double blockS
 }
 
 #if JucePlugin_Enable_ARA
-// Realtime stopped gate, preserved per Studio One contract:
+// Render gate:
 //   - Non-realtime: always render.
-//   - Realtime: render only when this renderer's PositionInfo reports playing;
-//     stopped → clear buffer and return (mute), preserving the stopped gate.
+//   - Realtime: render only when this renderer's PositionInfo reports playing.
+//   Stopped (or no renderable content) → pass the host input through unchanged;
+//   mode transitions are crossfaded to keep the switch click-free.
 bool shouldRenderAraPlaybackBlock(juce::AudioProcessor::Realtime realtime,
                                    bool rendererIsPlaying) noexcept;
 
@@ -119,6 +120,13 @@ private:
     int numChannels_ = 2;
     int maximumSamplesPerBlock_ = 512;
     juce::AudioBuffer<float> playbackScratch_;
+    juce::AudioBuffer<float> renderBuffer_;
+
+    enum class RenderOutputMode { Passthrough, Rendering };
+    RenderOutputMode outputMode_ = RenderOutputMode::Passthrough;
+    int crossfadeRemaining_ = 0;
+    int crossfadeTotal_ = 0;
+
     OpenTuneDocumentController* documentController_ = nullptr;
     std::shared_ptr<ContentRenderService> contentRenderServiceSnapshot_;
 
