@@ -634,13 +634,12 @@ private:
     // initialised by ensureNoteGeneratorReady().
     std::unique_ptr<INoteGenerator> noteGenerator_;
     std::mutex                      noteGeneratorInferenceMutex_; // serialise inference calls
-    juce::ThreadPool                noteGeneratorPool_{1};         // single-threaded ORT-safe
 
     ExperimentalReferenceAlignMode experimentalReferenceAlignMode_ = ExperimentalReferenceAlignMode::StandardAuto;
     std::unordered_set<ContentKey> pendingTimeToolSeedKeys_; // message-thread only
 
-    // Set of ContentKeys with a note-generation job pending or running
-    // on noteGeneratorPool_. Editors poll `isNoteGenInFlightForContent`
+    // Set of ContentKeys with a note-generation job pending or running.
+    // Editors poll `isNoteGenInFlightForContent`
     // to drive the shared "正在处理音频" overlay (covers F0 + note-gen).
     mutable std::mutex                  noteGenInFlightMutex_;
     std::unordered_set<ContentKey>      noteGenInFlightContentKeys_;
@@ -648,9 +647,19 @@ private:
 public:
     bool isNoteGenInFlightForContent(ContentKey contentKey) const;
 private:
-    F0ExtractionService f0ExtractionService_{1, 64};
+    // 运行时惰性解析进程级 F0 服务，消除冷启动空快照
+    F0ExtractionService f0ExtractionService_{1, 64, [] { return ProcessF0Runtime::getInstance().getF0Service(); }};
 
-    std::shared_ptr<std::atomic<bool>> contentRefreshAliveFlag_{std::make_shared<std::atomic<bool>>(true)};
+    // GAME 推理中止标志：true=已中止。初始 false（未中止，GAME 功能正常），
+    // 析构时置 true + noteGenerator_->terminateRun()，
+    // 让进行中的 GAME Run 快速返回，join 分析 worker 不冻结。
+    std::shared_ptr<std::atomic<bool>> gameNoteAbortFlag_{std::make_shared<std::atomic<bool>>(false)};
+
+    // Completion gate：F0 commit lambda 与 chunkSettled 回调（均捕获裸 this/processor）
+    // 与析构互斥的唯一生命周期闸门。析构最先持锁置 closed=true：已进入的 commit/回调
+    // 完成后才置位，此后进入者持锁见 closed 即返回，不再访问 owner。
+    std::shared_ptr<ProcessRenderRuntime::CompletionGate> completionGate_{
+        std::make_shared<ProcessRenderRuntime::CompletionGate>()};
 
     // UI state
     bool showWaveform_{true};
@@ -704,8 +713,7 @@ public:
 
     bool isInferenceReady() const { return ProcessF0Runtime::getInstance().isReady(); }
 
-    F0InferenceService* getF0Service() const { return ProcessF0Runtime::getInstance().getF0Service().get(); }
-    VocoderDomain* getVocoderDomain() const { return ProcessRenderRuntime::getInstance().getVocoderDomain(); }
+    bool isVocoderReady() const { return ProcessRenderRuntime::getInstance().isVocoderReady(); }
     SourceStore* getSourceStore() noexcept { return sourceStore_.get(); }
     const SourceStore* getSourceStore() const noexcept { return sourceStore_.get(); }
     ContentRenderService* getContentRenderService() noexcept { return contentRenderService_.get(); }
@@ -821,6 +829,7 @@ public:
     // ── (import, split, merge, clone, state save/load). Not for new code.
     bool getSourceSnapshotById(uint64_t sourceId, SourceStore::SourceSnapshot& out) const;
     bool extractImportedClipOriginalF0(const EditableContentSnapshot& snap,
+                                       const std::shared_ptr<F0RunOwnerState>& runOwnerState,
                                        F0ExtractionService::Result& out,
                                         std::string& errorMessage);
     ReferenceAnalysisPreheatStatus preheatReferenceAlignmentFeatures(ContentKey key);

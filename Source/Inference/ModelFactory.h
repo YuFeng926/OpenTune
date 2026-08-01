@@ -29,7 +29,9 @@ public:
 
     static std::vector<F0ModelInfo> getAvailableF0Models(const std::string& modelDir);
 
-    static Ort::SessionOptions createF0SessionOptions(AccelerationDetector::AccelBackend& outBackend);
+    static Ort::SessionOptions createF0SessionOptions(
+        AccelerationDetector::AccelBackend& outBackend,
+        bool forceCpu = false);
 
 private:
     static std::unique_ptr<Ort::Session> loadF0Session(

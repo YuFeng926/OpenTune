@@ -617,6 +617,15 @@ void OpenTuneAudioProcessor::configureReferenceAnalysisService()
             }
             return buildReferenceFeatureSet(jobKey.contentKey, *snap, jobKey.producer);
         });
+
+    // Terminate any in-flight GAME ORT Run when the analysis service shuts
+    // down (processor teardown), so joining the analysis worker cannot freeze.
+    referenceAnalysisService_.setTerminateFn([this] {
+        gameNoteAbortFlag_->store(true, std::memory_order_release);   // 语义修正：置 true=中止
+        std::lock_guard<std::mutex> lock(noteGenInitMutex_);          // 与 lazy 构造同步（不阻挡推理锁）
+        if (noteGenerator_ != nullptr)
+            noteGenerator_->terminateRun();
+    });
     referenceAnalysisService_.addListener(this);
 }
 
@@ -849,7 +858,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                 return;
             }
             ProcessRenderRuntime::CompletionContext completion;
-            completion.alive = contentRefreshAliveFlag_;
+            completion.gate = completionGate_;
             completion.chunkSettled = [this](ContentKey key) {
                 handleStage1ChunkSettled(key);
             };
@@ -982,18 +991,14 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                 double sr = snap->audioSampleRate > 0.0
                     ? snap->audioSampleRate : segment->captureSampleRate;
                 ContentKey segContentKey = segment->contentKey;
-                std::shared_ptr<std::atomic<bool>> lifetimeFlag = contentRefreshAliveFlag_;
-                auto* f0Svc = getF0Service();
+                auto gate = completionGate_;
+                auto f0Svc = ProcessF0Runtime::getInstance().getF0Service();
 
                 f0ExtractionService_.submit(
                     F0RequestKey{segContentKey},
-                    [lifetimeFlag, audio, sr, segContentKey, f0Svc]() -> F0ExtractionService::Result {
+                    [audio, sr, segContentKey, f0Svc](const std::shared_ptr<F0RunOwnerState>& runOwnerState) -> F0ExtractionService::Result {
                         F0ExtractionService::Result result;
                         result.contentKey = segContentKey;
-                        if (!lifetimeFlag->load(std::memory_order_acquire)) {
-                            result.errorMessage = "processor_destroyed";
-                            return result;
-                        }
                         if (!audio || audio->getNumSamples() == 0) {
                             result.errorMessage = "no_audio_data";
                             return result;
@@ -1006,7 +1011,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                         const int numSamples = audio->getNumSamples();
                         auto extraction = f0Svc->extractF0(
                             src, static_cast<size_t>(numSamples),
-                            static_cast<int>(sr));
+                            static_cast<int>(sr), runOwnerState);
                         if (!extraction.ok() || extraction.value().empty()) {
                             result.errorMessage = "f0_empty_or_unvoiced";
                             return result;
@@ -1018,8 +1023,10 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
                         result.success = true;
                         return result;
                     },
-                    [this, lifetimeFlag, segContentKey](F0ExtractionService::Result&& result) {
-                        if (!lifetimeFlag->load(std::memory_order_acquire))
+                    [this, gate, segContentKey](F0ExtractionService::Result&& result) {
+                        // 持锁访问 owner：与析构置 closed 互斥。closed 后不再访问 this。
+                        std::lock_guard<std::mutex> lk(gate->mutex);
+                        if (gate->closed)
                             return;
                         if (auto* session = getCaptureSession()) {
                             if (!result.success) {
@@ -1079,6 +1086,10 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
         AppLogger::log("OpenTuneAudioProcessor: regular VST3 capture session created processor="
             + juce::String::toHexString(reinterpret_cast<uintptr_t>(this)));
     }
+
+    // 进程级运行时客户端租约（最后 detach 时 shutdown F0 / resetVocoder）
+    ProcessF0Runtime::getInstance().attach();
+    ProcessRenderRuntime::getInstance().attach();
 }
 
 OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
@@ -1091,11 +1102,23 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
 #endif
     );
 
+    // 析构最前段生命周期动作（此后再无异步任务访问裸 this）：
+    // 1) 关闭 completion gate：与持锁进入的 F0 commit / chunkSettled 回调互斥。
+    //    已进入者完成后才置 closed；此后进入者持锁见 closed 即返回，不访问 owner。
+    {
+        std::lock_guard<std::mutex> lk(completionGate_->mutex);
+        completionGate_->closed = true;
+    }
+    // 2) shutdown + join F0 worker：execute 在 join 完成前对象仍存活；
+    //    shutdown 后不再投递新 commit，已投递的 commit 因 gate 关闭直接返回。
+    f0ExtractionService_.shutdown();
+
     referenceAnalysisService_.removeListener(this);
     referenceAnalysisService_.shutdown();
 
-    // Phase 1: 停止内部刷新标志（阻止新 work 提交）
-    contentRefreshAliveFlag_->store(false, std::memory_order_release);
+    // GAME Run 已由 shutdown 终止并 join worker；销毁 GAME Ort::Session，
+    // 保证其先于进程级共享 Ort::Env 的释放（下方 runtime detach）。
+    noteGenerator_.reset();
 
     // Phase 2: 解除 CRS execution lease，取消 pending render jobs
     if (contentRenderService_) {
@@ -1109,6 +1132,10 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
     // shutdown here -- that would break every other processor in the process.
     // F0 inference service is process-level (ProcessF0Runtime singleton); do not
     // shutdown here -- that would break every other processor in the process.
+
+    // 进程级运行时客户端租约释放（最后客户端时 resetVocoder / shutdown F0）
+    ProcessRenderRuntime::getInstance().detach();
+    ProcessF0Runtime::getInstance().detach();
 
     AppLogger::shutdown();
 }
@@ -1275,6 +1302,7 @@ bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
                 if (juce::File(juce::String(gameDir)).getChildFile("encoder.onnx").existsAsFile()) {
                     try {
                         noteGenerator_ = std::make_unique<GameNoteGenerator>(gameDir, *ortEnv);
+                        noteGenerator_->setAbortFlag(gameNoteAbortFlag_);
                         AppLogger::info("[NoteGen] backend=GAME-small (modelsDir=" + juce::String(gameDir) + ")");
                         return true;
                     } catch (const std::exception& e) {
@@ -1287,6 +1315,7 @@ bool OpenTuneAudioProcessor::ensureNoteGeneratorReady()
             }
 
             noteGenerator_ = std::make_unique<LegacyNoteGenerator>();
+            noteGenerator_->setAbortFlag(gameNoteAbortFlag_);
             AppLogger::info(juce::String("[NoteGen] backend=Legacy (forceLegacy=")
                             + (forceLegacy ? "true" : "false") + ")");
             return true;
@@ -1350,6 +1379,7 @@ void OpenTuneAudioProcessor::setVocoderModelWeight(VocoderModelWeight weight)
 }
 
 bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const EditableContentSnapshot& snap,
+                                                           const std::shared_ptr<F0RunOwnerState>& runOwnerState,
                                                            F0ExtractionService::Result& out,
                                                            std::string& errorMessage)
 {
@@ -1369,16 +1399,7 @@ bool OpenTuneAudioProcessor::extractImportedClipOriginalF0(const EditableContent
         return false;
     }
 
-    struct ReleaseGuard {
-        std::shared_ptr<F0InferenceService> service;
-        ~ReleaseGuard()
-        {
-            if (service)
-                service->releaseImmediately();
-        }
-    } releaseGuard{f0Service};
-
-    return extractOriginalF0ForImportedClip(*f0Service, snap, out, errorMessage);
+    return extractOriginalF0ForImportedClip(*f0Service, runOwnerState, snap, out, errorMessage);
 }
 
 // ============================================================================
@@ -3720,20 +3741,15 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
         f0ExtractionService_.cancel(F0RequestKey{request.contentKey});
     }
 
-    const auto lifetimeFlag = contentRefreshAliveFlag_;
+    auto gate = completionGate_;
     OpenTuneAudioProcessor* const processor = this;
     const auto capturedRequest = request;
 
     const auto submitResult = f0ExtractionService_.submit(
         F0RequestKey{request.contentKey},
-        [lifetimeFlag, processor, capturedRequest]() -> F0ExtractionService::Result {
+        [processor, capturedRequest](const std::shared_ptr<F0RunOwnerState>& runOwnerState) -> F0ExtractionService::Result {
             F0ExtractionService::Result result;
             result.contentKey = capturedRequest.contentKey;
-
-            if (!lifetimeFlag->load(std::memory_order_acquire)) {
-                result.errorMessage = "processor_destroyed";
-                return result;
-            }
 
             auto snap = processor->getContentSnapshot(capturedRequest.contentKey);
             if (!snap || snap->audioBuffer == nullptr) {
@@ -3744,7 +3760,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             result.sourceAudioBuffer = snap->audioBuffer;
 
             std::string errorMessage;
-            if (!processor->extractImportedClipOriginalF0(*snap, result, errorMessage)) {
+            if (!processor->extractImportedClipOriginalF0(*snap, runOwnerState, result, errorMessage)) {
                 result.errorMessage = errorMessage;
                 return result;
             }
@@ -3752,10 +3768,11 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             result.success = true;
             return result;
         },
-        [lifetimeFlag, processor, capturedRequest](F0ExtractionService::Result&& result) {
-            if (!lifetimeFlag->load(std::memory_order_acquire)) {
+        [processor, gate, capturedRequest](F0ExtractionService::Result&& result) {
+            // 持锁访问 processor：与析构置 closed 互斥。closed 后不再访问 owner。
+            std::lock_guard<std::mutex> lk(gate->mutex);
+            if (gate->closed)
                 return;
-            }
 
             auto currentSnap = processor->getContentSnapshot(capturedRequest.contentKey);
             if (!currentSnap

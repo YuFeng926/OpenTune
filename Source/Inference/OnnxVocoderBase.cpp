@@ -207,7 +207,8 @@ void OnnxVocoderBase::prepareInputTensors(
 std::vector<float> OnnxVocoderBase::synthesize(
     const std::vector<float>& f0,
     const float* mel,
-    size_t melSize)
+    size_t melSize,
+    Ort::RunOptions& runOptions)
 {
     if (!session_)
         throw std::runtime_error("Vocoder: session not initialized");
@@ -221,7 +222,7 @@ std::vector<float> OnnxVocoderBase::synthesize(
     Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
     prepareInputTensors(scratch, f0, mel, melSize, memoryInfo);
 
-    return runSession(scratch, f0.size());
+    return runSession(scratch, f0.size(), runOptions);
 }
 
 } // namespace OpenTune

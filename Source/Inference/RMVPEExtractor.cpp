@@ -245,6 +245,7 @@ std::vector<float> RMVPEExtractor::extractF0(
     const float* audio,
     size_t length,
     int sampleRate,
+    Ort::RunOptions& runOptions,
     std::function<void(float)> progressCallback,
     std::function<void(const std::vector<float>&, int)> partialCallback)
 {
@@ -357,7 +358,7 @@ std::vector<float> RMVPEExtractor::extractF0(
     inputTensors.push_back(std::move(thresholdTensor));
 
     auto outputTensors = session_->Run(
-        Ort::RunOptions{nullptr},
+        runOptions,
         inputNames, inputTensors.data(), 2,
         outputNames, 2
     );

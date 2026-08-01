@@ -43,12 +43,28 @@ public:
     RenderWorker& operator=(const RenderWorker&) = delete;
 
     void attachExecutionLease(RenderExecutionLease lease);
+    /**
+     * detachExecutionLease — 终止执行租约（析构路径专用）。
+     * 立即清空 lease 与排队 job，并等待正在执行的 renderJobCallback 完成。
+     * 不等待 asyncInFlight_：vocoder 推理不可取消，其完成不依赖本 worker 存活
+     * （onComplete 经 shared_ptr 持有 ContentRenderService，必然回调）。
+     */
     void detachExecutionLease(void* owner);
 
     void enqueue(RenderJob job);
     void beginAsyncJob();
     void completeAsyncJob();
 
+    /**
+     * pause() 暂停取新同步 job 并等待正在执行的 render callback 完成
+     * （inFlight_ == 0），绝不等待异步 vocoder 推理（重置推理后端 /
+     * 切换 vocoder 模型前调用）：卡住的推理由调用方 resetVocoder /
+     * setVocoderModelWeight 的 SetTerminate + join 终止，onComplete 回调归还计数。
+     * drain() 完整合同：等待 queue_ 空且 inFlight_ == 0 && asyncInFlight_ == 0。
+     * 导出路径在读取渲染结果前必须调用，保证最新完整数据已落盘。
+     * 析构路径不得使用 drain()/pause() 编排：vocoder 推理不可取消，
+     * 其完成不依赖本 worker 存活，析构只调 detachExecutionLease。
+     */
     void pause();
     void resume();
     void drain();

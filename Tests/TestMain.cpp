@@ -409,6 +409,41 @@ void testEditorStateProjectionContract()
            "Plugin pitchShiftRequested does not drive the indicator directly");
 }
 
+void testChunkBlankCorrectionContract()
+{
+    const auto runtime = readSource("Source/Runtime/ProcessRenderRuntime.cpp");
+    const auto processChunk = functionBlock(
+        runtime, "void ProcessRenderRuntime::processChunkRenderJob");
+
+    expect(contains(processChunk, "hasCorrectionInRange"),
+           "Chunk render blanks when the chunk frame range has no correction segment");
+    expect(contains(processChunk, "markChunkAsBlank"),
+           "Chunk render still uses the Blank fallback path");
+    expect(contains(processChunk, "hasOriginalF0Data"),
+           "Chunk render keeps the original-F0-missing Blank guard");
+    expect(processChunk.find("hasCorrectionInRange") < processChunk.find("materializeEffectiveF0Range"),
+           "Correction-range blank guard must precede materializeEffectiveF0Range");
+    expect(contains(processChunk, "isIdentity() && !snap->hasCorrectionInRange"),
+           "Blank requires identity global pitch shift with no correction segment; "
+           "a non-identity global shift without corrections must still reach the vocoder");
+}
+
+void testRenderWorkerPauseContract()
+{
+    const auto source = readSource("Source/Render/RenderWorker.cpp");
+    const auto pause = functionBlock(source, "void RenderWorker::pause()");
+    const auto drain = functionBlock(source, "void RenderWorker::drain()");
+
+    expect(contains(pause, "paused_ = true") && contains(pause, "inFlight_ == 0"),
+           "pause stops new submissions and waits only for in-flight sync callbacks");
+    expect(!contains(pause, "asyncInFlight_"),
+           "pause never waits for async vocoder inference");
+    expect(contains(drain, "queue_.empty()")
+                && contains(drain, "inFlight_ == 0")
+                && contains(drain, "asyncInFlight_ == 0"),
+           "drain keeps the full empty-queue and zero-in-flight contract");
+}
+
 } // namespace
 
 int main()
@@ -423,6 +458,8 @@ int main()
     testEffectiveF0SourceContract();
     testTimeGridStage2Contract();
     testEditorStateProjectionContract();
+    testChunkBlankCorrectionContract();
+    testRenderWorkerPauseContract();
 
     if (failures != 0) {
         std::cerr << failures << " reference contract test(s) failed\n";

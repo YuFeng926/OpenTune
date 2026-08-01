@@ -35,10 +35,17 @@ void ReferenceAnalysisService::shutdown()
         return;
     }
 
+    std::function<void()> terminateFnCopy;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         pendingJobs_.clear();
+        // 锁内仅复制：terminateFn_ 是用户回调，锁外执行（先终止活跃推理再 join，
+        // 现语义保持，只是解除锁内调用耦合）。
+        if (terminateFn_)
+            terminateFnCopy = terminateFn_;
     }
+    if (terminateFnCopy)
+        terminateFnCopy();
 
     cv_.notify_all();
 
@@ -57,6 +64,12 @@ void ReferenceAnalysisService::setNotificationDispatcher(NotificationDispatcher 
 {
     std::lock_guard<std::mutex> lock(mutex_);
     notificationDispatcher_ = std::move(dispatcher);
+}
+
+void ReferenceAnalysisService::setTerminateFn(std::function<void()> fn)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    terminateFn_ = std::move(fn);
 }
 
 void ReferenceAnalysisService::addListener(Listener* listener)

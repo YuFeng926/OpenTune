@@ -17,7 +17,8 @@ public:
 protected:
     std::vector<float> runSession(
         VocoderScratchBuffers& scratch,
-        size_t numFrames) override;
+        size_t numFrames,
+        Ort::RunOptions& runOptions) override;
 
 private:
     void initializeSession(const std::string& modelPath,
