@@ -364,6 +364,7 @@ private:
     void drawSelectionBox(juce::Graphics& g, ThemeId themeId);
     void drawTimeGridHandles(juce::Graphics& g);
     void drawSelectedNoteHighlights(juce::Graphics& g);
+    void drawF0SelectionHighlight(juce::Graphics& g);
     void drawPianoKeysPressed(juce::Graphics& g);
 
     bool shouldShowPianoKeys() const noexcept;
