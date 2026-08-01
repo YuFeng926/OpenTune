@@ -36,7 +36,11 @@ public:
             }
 
             initialized_.store(true, std::memory_order_release);
-            AppLogger::info("[F0InferenceService] Initialized with RMVPE model");
+#if defined(__APPLE__)
+            AppLogger::info("[F0InferenceService] Initialized with RMVPE model (CoreML)");
+#else
+            AppLogger::info("[F0InferenceService] Initialized with RMVPE model (CPU-only)");
+#endif
             return true;
 
         } catch (const std::exception& e) {
