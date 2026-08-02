@@ -57,7 +57,7 @@ void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsH
     {
         g.setColour(isToggled
                         ? juce::Colour(0xFFFFFFFF)  // 激活时白色
-                        : juce::Colour(Overdose::Colors::TextPrimary).withAlpha(0.85f));  // 普通时深粉紫
+                        : juce::Colour(0xFF4A3860).withAlpha(0.90f));  // 普通时深紫（参考图颜色）
     }
     else
     {

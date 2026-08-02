@@ -265,10 +265,10 @@ public:
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(shape);
 
-            // 顶部高光（更明显）
-            juce::ColourGradient sheen(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(isActive ? 0.40f : 0.30f),
-                                       bounds.getX() + bounds.getWidth() * 0.10f,
-                                       bounds.getY() + bounds.getHeight() * 0.05f,
+            // 顶部高光（更强玻璃质感）
+            juce::ColourGradient sheen(juce::Colour(0xFFFFFFFF).withAlpha(isActive ? 0.55f : 0.45f),
+                                       bounds.getX() + bounds.getWidth() * 0.05f,
+                                       bounds.getY() + bounds.getHeight() * 0.02f,
                                        juce::Colours::transparentWhite,
                                        bounds.getRight(),
                                        bounds.getBottom(),
@@ -276,25 +276,25 @@ public:
             g.setGradientFill(sheen);
             g.fillRect(bounds);
 
-            // 底部内阴影（增强立体感）
-            auto lowerBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.55f);
+            // 底部内阴影（更深，增强立体感）
+            auto lowerBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.45f);
             juce::ColourGradient lowerShade(juce::Colours::transparentBlack,
                                             lowerBand.getX(),
                                             lowerBand.getY(),
-                                            juce::Colour(0xFF8070A0).withAlpha(isPressed ? 0.22f : 0.16f),
+                                            juce::Colour(0xFF7060A0).withAlpha(isPressed ? 0.28f : 0.22f),
                                             lowerBand.getX(),
                                             lowerBand.getBottom(),
                                             false);
             g.setGradientFill(lowerShade);
             g.fillRect(lowerBand);
 
-            // 顶部细高光线（更亮）
-            g.setColour(juce::Colours::white.withAlpha(isPressed ? 0.08f : 0.20f));
+            // 顶部细高光线（更亮更明显）
+            g.setColour(juce::Colours::white.withAlpha(isPressed ? 0.12f : 0.30f));
             g.drawLine(bounds.getX() + radius * 0.75f,
                        bounds.getY() + 1.0f,
                        bounds.getRight() - radius * 0.75f,
                        bounds.getY() + 1.0f,
-                       1.2f);
+                       1.4f);
         }
 
         // 边框（粉色）

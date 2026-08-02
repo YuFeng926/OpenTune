@@ -128,18 +128,18 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
         // 主体渐变
         if (active)
         {
-            // 激活：粉色渐变（参考图：亮粉色）
-            juce::ColourGradient fill(juce::Colour(0xFFFF60A0),  // 亮粉
+            // 激活：粉色渐变（参考图：更亮的粉色）
+            juce::ColourGradient fill(juce::Colour(0xFFFF70B0),  // 更亮粉
                                        bounds.getX(), bounds.getY(),
-                                       juce::Colour(0xFFFF2097),  // 深粉
+                                       juce::Colour(0xFFFF30A0),  // 深粉
                                        bounds.getX(), bounds.getBottom(),
                                        false);
             g.setGradientFill(fill);
             g.fillRoundedRectangle(bounds, radius);
 
-            // 顶部高光
-            auto highlightRect = bounds.reduced(1.5f).withHeight(bounds.getHeight() * 0.35f);
-            juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.45f),
+            // 顶部高光（更明显）
+            auto highlightRect = bounds.reduced(1.5f).withHeight(bounds.getHeight() * 0.40f);
+            juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.55f),
                                      highlightRect.getX(), highlightRect.getY(),
                                      juce::Colours::transparentWhite,
                                      highlightRect.getX(), highlightRect.getBottom(), false);
@@ -147,7 +147,7 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
             g.fillRoundedRectangle(highlightRect, radius - 1.5f);
 
             // 边框（深粉）
-            g.setColour(juce::Colour(0xFFE01080).withAlpha(0.60f));
+            g.setColour(juce::Colour(0xFFE01080).withAlpha(0.65f));
             g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.2f);
         }
         else

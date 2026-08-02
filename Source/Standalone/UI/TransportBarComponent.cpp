@@ -692,6 +692,34 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
 
             if (isActive)
                 drawActiveFill();
+            else
+            {
+                // 非激活状态增强玻璃质感（参考图：明显的玻璃反光）
+                juce::Graphics::ScopedSaveState clipState(g);
+                g.reduceClipRegion(p);
+                
+                // 顶部更强的高光（玻璃反光效果，更亮更宽）
+                auto topHighlight = bounds.withHeight(bounds.getHeight() * 0.50f);
+                juce::ColourGradient topGlow(
+                    juce::Colour(0xFFFFFFFF).withAlpha(0.45f),
+                    topHighlight.getCentreX(), topHighlight.getY(),
+                    juce::Colours::transparentWhite,
+                    topHighlight.getCentreX(), topHighlight.getBottom(),
+                    false);
+                g.setGradientFill(topGlow);
+                g.fillRect(topHighlight);
+                
+                // 底部更深的内阴影（增强立体感）
+                auto bottomShadow = bounds.withTrimmedTop(bounds.getHeight() * 0.50f);
+                juce::ColourGradient bottomGlow(
+                    juce::Colours::transparentBlack,
+                    bottomShadow.getCentreX(), bottomShadow.getY(),
+                    juce::Colour(0xFF4030A0).withAlpha(0.25f),
+                    bottomShadow.getCentreX(), bottomShadow.getBottom(),
+                    false);
+                g.setGradientFill(bottomGlow);
+                g.fillRect(bottomShadow);
+            }
         }
 
         if (isHover && !isActive)
