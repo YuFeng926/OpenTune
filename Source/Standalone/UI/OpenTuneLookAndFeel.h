@@ -225,8 +225,6 @@ public:
         juce::Path shape;
         if (shapeOverride != nullptr)
             shape = *shapeOverride;
-        else if (bounds.getWidth() < 35.0f && bounds.getHeight() < 35.0f && std::abs(bounds.getWidth() - bounds.getHeight()) < 5.0f)
-            shape.addEllipse(bounds);  // 小方形按钮渲染为圆形（M/S 按钮）
         else
             shape.addRoundedRectangle(bounds, radius);
 
@@ -234,12 +232,11 @@ public:
         const bool isActive = active || isPressed;
         const bool isHovered = highlighted && !isPressed;
 
-        // 阴影（圆形按钮阴影更柔和）
+        // 阴影（柔和）
         juce::DropShadow softShadow;
-        const bool isCircle = bounds.getWidth() < 35.0f && bounds.getHeight() < 35.0f;
-        softShadow.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(isPressed ? 0.12f : (isCircle ? 0.20f : 0.16f));
-        softShadow.radius = isPressed ? 6 : (isCircle ? 12 : 10);
-        softShadow.offset = { 0, isPressed ? 1 : (isCircle ? 3 : 3) };
+        softShadow.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(isPressed ? 0.12f : 0.16f);
+        softShadow.radius = isPressed ? 6 : 10;
+        softShadow.offset = { 0, isPressed ? 1 : 3 };
         softShadow.drawForPath(g, shape);
 
         // 激活时粉色辉光
@@ -252,116 +249,60 @@ public:
             accentGlow.drawForPath(g, shape);
         }
 
-        // 主体渐变（圆形按钮用径向渐变模拟球面）
-        if (isCircle)
-        {
-            // 径向渐变：中心亮，边缘暗（球面效果）
-            juce::ColourGradient body(
-                juce::Colour(0xFFFFFFFF).withAlpha(isActive ? 1.0f : 0.98f),  // 中心亮白
-                bounds.getCentreX(), bounds.getCentreY(),
-                juce::Colour(Overdose::Colors::PanelOpaqueBottom).withAlpha(isPressed ? 1.0f : 0.92f),  // 边缘暗
-                bounds.getCentreX(), bounds.getBottom(),
-                true);  // 径向渐变
-            g.setGradientFill(body);
-        }
-        else
-        {
-            juce::ColourGradient body(juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(isActive ? 1.0f : 0.96f),
-                                      bounds.getX(),
-                                      bounds.getY(),
-                                      juce::Colour(Overdose::Colors::PanelOpaqueBottom).withAlpha(isPressed ? 1.0f : 0.96f),
-                                      bounds.getX(),
-                                      bounds.getBottom(),
-                                      false);
-            body.addColour(0.35f, juce::Colour(Overdose::Colors::PanelOpaqueMid).withAlpha(isActive ? 0.98f : 0.92f));
-            g.setGradientFill(body);
-        }
+        // 主体渐变（白→淡紫）
+        juce::ColourGradient body(juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(isActive ? 1.0f : 0.96f),
+                                  bounds.getX(),
+                                  bounds.getY(),
+                                  juce::Colour(Overdose::Colors::PanelOpaqueBottom).withAlpha(isPressed ? 1.0f : 0.96f),
+                                  bounds.getX(),
+                                  bounds.getBottom(),
+                                  false);
+        body.addColour(0.35f, juce::Colour(Overdose::Colors::PanelOpaqueMid).withAlpha(isActive ? 0.98f : 0.92f));
+        g.setGradientFill(body);
         g.fillPath(shape);
 
         {
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(shape);
 
-            // 顶部高光（圆形按钮用椭圆高光，更明显）
-            if (isCircle)
-            {
-                // 主高光（上半部分）
-                auto highlightEllipse = bounds.reduced(bounds.getWidth() * 0.12f)
-                    .withHeight(bounds.getHeight() * 0.40f)
-                    .withY(bounds.getY() + bounds.getHeight() * 0.06f);
-                juce::ColourGradient sheen(juce::Colour(0xFFFFFFFF).withAlpha(isActive ? 0.55f : 0.45f),
-                                           highlightEllipse.getCentreX(), highlightEllipse.getY(),
-                                           juce::Colours::transparentWhite,
-                                           highlightEllipse.getCentreX(), highlightEllipse.getBottom(),
-                                           false);
-                g.setGradientFill(sheen);
-                g.fillEllipse(highlightEllipse);
-                
-                // 顶部镜面反射点（小亮点）
-                auto specular = juce::Rectangle<float>(
-                    bounds.getCentreX() - bounds.getWidth() * 0.18f,
-                    bounds.getY() + bounds.getHeight() * 0.10f,
-                    bounds.getWidth() * 0.36f,
-                    bounds.getHeight() * 0.18f);
-                g.setColour(juce::Colour(0xFFFFFFFF).withAlpha(isActive ? 0.70f : 0.55f));
-                g.fillEllipse(specular);
-            }
-            else
-            {
-                juce::ColourGradient sheen(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(isActive ? 0.32f : 0.24f),
-                                           bounds.getX() + bounds.getWidth() * 0.12f,
-                                           bounds.getY() + bounds.getHeight() * 0.08f,
-                                           juce::Colours::transparentWhite,
-                                           bounds.getRight(),
-                                           bounds.getBottom(),
-                                           true);
-                g.setGradientFill(sheen);
-                g.fillRect(bounds);
-            }
+            // 顶部高光（更明显）
+            juce::ColourGradient sheen(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(isActive ? 0.40f : 0.30f),
+                                       bounds.getX() + bounds.getWidth() * 0.10f,
+                                       bounds.getY() + bounds.getHeight() * 0.05f,
+                                       juce::Colours::transparentWhite,
+                                       bounds.getRight(),
+                                       bounds.getBottom(),
+                                       true);
+            g.setGradientFill(sheen);
+            g.fillRect(bounds);
 
             // 底部内阴影（增强立体感）
-            auto lowerBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.60f);
+            auto lowerBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.55f);
             juce::ColourGradient lowerShade(juce::Colours::transparentBlack,
                                             lowerBand.getX(),
                                             lowerBand.getY(),
-                                            juce::Colour(0xFF8070A0).withAlpha(isPressed ? 0.18f : 0.12f),
+                                            juce::Colour(0xFF8070A0).withAlpha(isPressed ? 0.22f : 0.16f),
                                             lowerBand.getX(),
                                             lowerBand.getBottom(),
                                             false);
             g.setGradientFill(lowerShade);
             g.fillRect(lowerBand);
 
-            // 顶部细高光线
-            if (!isCircle)
-            {
-                g.setColour(juce::Colours::white.withAlpha(isPressed ? 0.06f : 0.14f));
-                g.drawLine(bounds.getX() + radius * 0.75f,
-                           bounds.getY() + 1.0f,
-                           bounds.getRight() - radius * 0.75f,
-                           bounds.getY() + 1.0f,
-                           1.0f);
-            }
+            // 顶部细高光线（更亮）
+            g.setColour(juce::Colours::white.withAlpha(isPressed ? 0.08f : 0.20f));
+            g.drawLine(bounds.getX() + radius * 0.75f,
+                       bounds.getY() + 1.0f,
+                       bounds.getRight() - radius * 0.75f,
+                       bounds.getY() + 1.0f,
+                       1.2f);
         }
 
-        // 边框（圆形按钮边框更精致，粉色）
-        if (isCircle)
-        {
-            // 外描边（粉色）
-            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(isActive ? 0.75f : 0.55f));
-            g.drawEllipse(bounds.reduced(0.5f), 1.2f);
-            
-            // 内描边（白色高光）
-            g.setColour(juce::Colour(0xFFFFFFFF).withAlpha(0.25f));
-            g.drawEllipse(bounds.reduced(1.2f), 0.8f);
-        }
-        else
-        {
-            const auto border = isActive
-                ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.65f)
-                : juce::Colour(Overdose::Colors::PanelBorder).withAlpha(isHovered ? 0.55f : 0.40f);
-            g.setColour(border);
-            g.strokePath(shape, juce::PathStrokeType(1.0f));
-        }
+        // 边框（粉色）
+        const auto border = isActive
+            ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.65f)
+            : juce::Colour(Overdose::Colors::PanelBorder).withAlpha(isHovered ? 0.55f : 0.40f);
+        g.setColour(border);
+        g.strokePath(shape, juce::PathStrokeType(1.0f));
     }
 
     juce::MouseCursor getMouseCursorFor(juce::Component& component) override
@@ -762,14 +703,16 @@ public:
         {
             const bool focused = label.hasKeyboardFocus(true) && label.isEditable();
 
-            // 药丸形玻璃质感（参考图：更圆润、更亮）
+            // 药丸形玻璃质感（更圆润，radius 更大）
+            const float pillRadius = juce::jmax(style.fieldRadius, bounds.getHeight() * 0.5f);
+            
             // 阴影
             juce::DropShadow softShadow;
             softShadow.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(0.18f);
             softShadow.radius = 8;
             softShadow.offset = { 0, 2 };
             juce::Path shape;
-            shape.addRoundedRectangle(bounds, style.fieldRadius);
+            shape.addRoundedRectangle(bounds, pillRadius);
             softShadow.drawForPath(g, shape);
 
             // 主体渐变（白→淡紫，更亮）
@@ -787,18 +730,18 @@ public:
                                      juce::Colours::transparentWhite,
                                      highlightRect.getX(), highlightRect.getBottom(), false);
             g.setGradientFill(hl);
-            g.fillRoundedRectangle(highlightRect, style.fieldRadius - 1.0f);
+            g.fillRoundedRectangle(highlightRect, pillRadius - 1.0f);
 
             // 边框（粉色，更精致）
             if (label.isMouseOver() || focused)
             {
                 g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(focused ? 0.70f : 0.45f));
-                g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, focused ? style.focusRingThickness : 1.1f);
+                g.drawRoundedRectangle(bounds.reduced(0.5f), pillRadius, focused ? style.focusRingThickness : 1.1f);
             }
             else
             {
                 g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.35f));
-                g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, 0.9f);
+                g.drawRoundedRectangle(bounds.reduced(0.5f), pillRadius, 0.9f);
             }
 
             // 文字
