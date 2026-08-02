@@ -1,6 +1,7 @@
 #include "AuroraLookAndFeel.h"
 #include "AuroraTheme.h"
 #include "UIColors.h"
+#include "../../Utils/CursorTheme.h"
 
 namespace OpenTune {
 
@@ -209,7 +210,7 @@ void AuroraLookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, b
     bool isActive = isButtonDown || box.isPopupActive();
 
     UIColors::drawAuroraButtonChrome(g,
-                                     bounds,
+                                     bounds.reduced(2.0f), // 与 UnifiedToolbarButton 缩进一致，视觉高度统一 36px
                                      radius,
                                      box.isMouseOver(),
                                      isButtonDown,
@@ -431,6 +432,11 @@ juce::Font AuroraLookAndFeel::getAlertWindowMessageFont()
 juce::Font AuroraLookAndFeel::getAlertWindowFont()
 {
     return UIColors::getUIFont(16.0f);
+}
+
+juce::MouseCursor AuroraLookAndFeel::getMouseCursorFor(juce::Component& component)
+{
+    return CursorThemeManager::getInstance().resolveCursor(LookAndFeel_V4::getMouseCursorFor(component));
 }
 
 } // namespace OpenTune

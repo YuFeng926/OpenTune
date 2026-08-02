@@ -61,6 +61,9 @@ public:
                            const juce::String& shortcutKeyText,
                            const juce::Drawable* icon, const juce::Colour* textColour) override;
 
+    // Mouse Cursor Theme
+    juce::MouseCursor getMouseCursorFor(juce::Component& component) override;
+
     // Font Management
     juce::Font getTextButtonFont(juce::TextButton&, int buttonHeight) override;
     juce::Font getLabelFont(juce::Label&) override;

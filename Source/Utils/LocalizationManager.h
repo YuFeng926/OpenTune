@@ -216,6 +216,12 @@ constexpr const char* kGalaxy = "Galaxy";
 constexpr const char* kCherryBlossom = "Cherry Blossom";
 constexpr const char* kMatrix = "Matrix";
 
+constexpr const char* kMouseCursorStyle = "Mouse Cursor Style";
+constexpr const char* kCursorStyleSystem = "System";
+constexpr const char* kCursorStyleAdwaita = "Adwaita";
+constexpr const char* kCursorStyleCapitaine = "Capitaine";
+constexpr const char* kCursorStyleBreeze = "Breeze";
+
 constexpr const char* kAudio = "Audio";
 constexpr const char* kEditing = "Editing";
 constexpr const char* kMouse = "Mouse";
@@ -387,6 +393,12 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kGalaxy, "Galaxy", "星河", "ギャラクシー", "Галактика", "Galaxia" },
         { Keys::kCherryBlossom, "Cherry Blossom", "樱花", "桜", "Сакура", "Flor de cerezo" },
         { Keys::kMatrix, "Matrix", "矩阵", "マトリックス", "Матрица", "Matriz" },
+
+        { Keys::kMouseCursorStyle, "Mouse Cursor Style", "鼠标指针样式", "マウスカーソルスタイル", "Стиль указателя мыши", "Estilo del cursor" },
+        { Keys::kCursorStyleSystem, "System", "系统", "システム", "Система", "Sistema" },
+        { Keys::kCursorStyleAdwaita, "Adwaita", "Adwaita", "Adwaita", "Adwaita", "Adwaita" },
+        { Keys::kCursorStyleCapitaine, "Capitaine", "Capitaine", "Capitaine", "Capitaine", "Capitaine" },
+        { Keys::kCursorStyleBreeze, "Breeze", "Breeze", "Breeze", "Breeze", "Breeze" },
         
         { Keys::kAudio, "Audio", "音频", "オーディオ", "Аудио", "Audio" },
         { Keys::kEditing, "Editing", "编辑", "編集", "Редактирование", "Edicion" },

@@ -18,6 +18,7 @@ constexpr const char* kSharedZoomHorizontalFactorKey = "shared.zoom.horizontalFa
 constexpr const char* kSharedZoomVerticalFactorKey = "shared.zoom.verticalFactor";
 constexpr const char* kSharedScrollSpeedKey = "shared.scroll.speed";
 constexpr const char* kStandaloneMouseTrailThemeKey = "standalone.mouseTrail.theme";
+constexpr const char* kStandaloneCursorStyleKey = "standalone.cursorStyle";
 constexpr const char* kSharedRenderingPriorityKey = "shared.rendering.priority";
 constexpr const char* kSharedVocoderWeightKey = "shared.rendering.vocoderWeight";
 constexpr const char* kSharedExperimentalFeaturesEnabledKey = "shared.features.experimentalEnabled";
@@ -339,6 +340,8 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.shortcuts = decodeShortcutSettings(properties);
     state.standalone.mouseTrailTheme = mouseTrailThemeFromToken(
         properties.getValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme)));
+    state.standalone.cursorStyle = static_cast<CursorStyleId>(
+        properties.getIntValue(kStandaloneCursorStyleKey, static_cast<int>(state.standalone.cursorStyle)));
 
     const auto recentRaw = properties.getValue(kSharedRecentProjectsKey, "");
     if (recentRaw.isNotEmpty()) {
@@ -380,6 +383,7 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedTrackColorModeKey, toTrackColorModeToken(state.shared.trackColorMode));
     properties.setValue(kSharedTimelineDisplayModeKey, static_cast<int>(state.shared.timelineDisplayMode));
     properties.setValue(kStandaloneMouseTrailThemeKey, toMouseTrailThemeToken(state.standalone.mouseTrailTheme));
+    properties.setValue(kStandaloneCursorStyleKey, static_cast<int>(state.standalone.cursorStyle));
 
     juce::StringArray recentPaths;
     for (const auto& path : state.shared.recentProjects) {
@@ -523,6 +527,13 @@ void AppPreferences::setMouseTrailTheme(MouseTrailConfig::TrailTheme theme)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.standalone.mouseTrailTheme = theme;
+    saveLocked();
+}
+
+void AppPreferences::setCursorStyle(CursorStyleId style)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.standalone.cursorStyle = style;
     saveLocked();
 }
 

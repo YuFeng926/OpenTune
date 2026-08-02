@@ -833,6 +833,11 @@ void OpenTuneAudioProcessorEditor::mouseTrailThemeChanged(MouseTrailConfig::Trai
     juce::ignoreUnused(theme);
 }
 
+void OpenTuneAudioProcessorEditor::cursorStyleChanged(CursorStyleId style)
+{
+    juce::ignoreUnused(style);
+}
+
 void OpenTuneAudioProcessorEditor::playRequested()
 {
 #if JucePlugin_Enable_ARA
