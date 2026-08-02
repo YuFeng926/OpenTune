@@ -182,28 +182,28 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
             }
         }
 
-        // 图标（绘制在按钮中心）
+        // 图标（绘制在按钮中心，更大更清晰）
         if (!iconPath_.isEmpty())
         {
-            const auto iconSize = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.45f;
+            const auto iconSize = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.55f;  // 增大图标
             const auto iconRect = bounds.withSizeKeepingCentre(iconSize, iconSize);
             
             if (active)
                 g.setColour(juce::Colour(0xFFFFFFFF));  // 激活时白色图标
             else
-                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.70f));  // 普通时粉色图标
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.80f));  // 普通时粉色图标（更亮）
             
             if (fillIcon_)
                 g.fillPath(iconPath_, juce::AffineTransform::scale(iconSize / 24.0f).translated(iconRect.getCentreX() - iconSize * 0.5f, iconRect.getCentreY() - iconSize * 0.5f));
             else
-                g.strokePath(iconPath_, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded),
+                g.strokePath(iconPath_, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded),  // 更粗的描边
                             juce::AffineTransform::scale(iconSize / 24.0f).translated(iconRect.getCentreX() - iconSize * 0.5f, iconRect.getCentreY() - iconSize * 0.5f));
         }
         else if (!textIcon_.isEmpty())
         {
             // 文字图标（如 AUTO）
-            g.setColour(active ? juce::Colour(0xFFFFFFFF) : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.75f));
-            g.setFont(juce::Font(14.0f, juce::Font::bold));
+            g.setColour(active ? juce::Colour(0xFFFFFFFF) : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f));
+            g.setFont(juce::Font(15.0f, juce::Font::bold));  // 稍大字体
             g.drawText(textIcon_, bounds.toNearestInt(), juce::Justification::centred);
         }
     }

@@ -53,9 +53,16 @@ void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsH
     }
 
     // Icon text
-    g.setColour(themeId == ThemeId::Overdose && isToggled
-                    ? activeBase.brighter(0.42f)
-                    : UIColors::textPrimary);
+    if (themeId == ThemeId::Overdose)
+    {
+        g.setColour(isToggled
+                        ? juce::Colour(0xFFFFFFFF)  // 激活时白色
+                        : juce::Colour(Overdose::Colors::TextPrimary).withAlpha(0.85f));  // 普通时深粉紫
+    }
+    else
+    {
+        g.setColour(isToggled ? activeBase.brighter(0.42f) : UIColors::textPrimary);
+    }
     g.setFont(UIColors::getUIFont(14.0f));
 
     juce::String iconText = (iconType_ == IconType::Mute) ? "M" : "S";
@@ -315,8 +322,8 @@ void TrackPanelComponent::paint(juce::Graphics& g)
 
                 // 柔和粉光晕
                 juce::DropShadow cardGlow(
-                    juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.20f),
-                    10, { 0, 2 });
+                    juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.22f),
+                    12, { 0, 2 });
                 cardGlow.drawForPath(g, cardShape);
 
                 // 极浅粉底（更白更亮）
@@ -326,7 +333,7 @@ void TrackPanelComponent::paint(juce::Graphics& g)
                 // 顶部高光
                 auto highlightRect = cardBounds.reduced(1.5f).withHeight(cardBounds.getHeight() * 0.30f);
                 juce::ColourGradient hl(
-                    juce::Colour(0xFFFFFFFF).withAlpha(0.50f),
+                    juce::Colour(0xFFFFFFFF).withAlpha(0.55f),
                     highlightRect.getX(), highlightRect.getY(),
                     juce::Colour(0xFFFFFFFF).withAlpha(0.0f),
                     highlightRect.getX(), highlightRect.getBottom(), false);
@@ -334,14 +341,14 @@ void TrackPanelComponent::paint(juce::Graphics& g)
                 g.fillRoundedRectangle(highlightRect, style.controlRadius - 1.5f);
 
                 // 粉色边框（更淡更精致）
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.55f));
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.60f));
                 g.drawRoundedRectangle(cardBounds.reduced(0.5f), style.controlRadius, 1.0f);
 
                 // 左侧粉色竖线
                 const float x = cardBounds.getX() + 2.0f;
                 const float y0 = cardBounds.getY() + trackAccentVerticalInset;
                 const float y1 = cardBounds.getBottom() - trackAccentVerticalInset;
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.70f));
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.75f));
                 g.drawLine(x, y0, x, y1, 2.0f);
             }
             else
@@ -351,7 +358,7 @@ void TrackPanelComponent::paint(juce::Graphics& g)
                 g.fillRoundedRectangle(cardBounds, style.controlRadius);
                 
                 // 微弱边框
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.30f));
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.32f));
                 g.drawRoundedRectangle(cardBounds.reduced(0.5f), style.controlRadius, 0.8f);
             }
         }
