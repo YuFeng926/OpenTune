@@ -1868,31 +1868,31 @@ struct UIColors
             juce::Graphics::ScopedSaveState clip(g);
             g.reduceClipRegion(shape);
 
-            // 顶部白高光
-            const auto topInset = juce::jmin(radius, bounds.getWidth() * 0.24f);
-            g.setColour(juce::Colour { Overdose::Colors::GlassHighlight }.withAlpha(0.55f));
+            // 顶部白高光（更明显，玻璃质感）
+            const auto topInset = juce::jmin(radius, bounds.getWidth() * 0.18f);
+            g.setColour(juce::Colour(0xFFFFFFFF).withAlpha(0.75f));
             g.drawLine(bounds.getX() + topInset, bounds.getY() + 1.0f,
-                       bounds.getRight() - topInset, bounds.getY() + 1.0f, 1.2f);
+                       bounds.getRight() - topInset, bounds.getY() + 1.0f, 1.5f);
 
-            // 顶部向下渐隐
-            auto fadeBand = bounds.withHeight(bounds.getHeight() * 0.12f);
+            // 顶部向下渐隐（更强）
+            auto fadeBand = bounds.withHeight(bounds.getHeight() * 0.18f);
             juce::ColourGradient fade(
-                juce::Colour { Overdose::Colors::GlassSurface }.withAlpha(0.18f),
+                juce::Colour(0xFFFFFFFF).withAlpha(0.30f),
                 fadeBand.getCentreX(), fadeBand.getY(),
                 juce::Colours::transparentWhite,
                 fadeBand.getCentreX(), fadeBand.getBottom(), false);
             g.setGradientFill(fade);
             g.fillRect(fadeBand);
 
-            // 底部淡紫内阴影
-            auto innerBottom = bounds.withTrimmedTop(bounds.getHeight() * 0.78f);
-            juce::ColourGradient innerShade(
-                juce::Colours::transparentBlack,
-                innerBottom.getCentreX(), innerBottom.getY(),
-                juce::Colour { Overdose::Colors::PanelInsetShadow }.withAlpha(0.15f),
-                innerBottom.getCentreX(), innerBottom.getBottom(), false);
-            g.setGradientFill(innerShade);
-            g.fillRect(innerBottom);
+        // 底部淡紫内阴影（更深，增强立体感）
+        auto innerBottom = bounds.withTrimmedTop(bounds.getHeight() * 0.65f);
+        juce::ColourGradient innerShade(
+            juce::Colours::transparentBlack,
+            innerBottom.getCentreX(), innerBottom.getY(),
+            juce::Colour(0xFF6050A0).withAlpha(0.28f),
+            innerBottom.getCentreX(), innerBottom.getBottom(), false);
+        g.setGradientFill(innerShade);
+        g.fillRect(innerBottom);
         }
 
         // 粉边（精致但可见）
@@ -1949,11 +1949,11 @@ struct UIColors
             g.drawLine(tick, isMajor ? 1.4f : 1.0f);
         }
 
-        // 粉色指示弧（当前值到起点的弧）
+        // 粉色指示弧（当前值到起点的弧，更粗更明显）
         juce::Path valueArc;
         valueArc.addCentredArc(centre.x, centre.y, ringRadius, ringRadius, 0.0f, rotaryStartAngle, angle, true);
-        g.setColour(juce::Colour { Overdose::Colors::PrimaryPink }.withAlpha(highlighted ? 0.85f : 0.65f));
-        g.strokePath(valueArc, juce::PathStrokeType(2.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(juce::Colour { Overdose::Colors::PrimaryPink }.withAlpha(highlighted ? 0.90f : 0.75f));
+        g.strokePath(valueArc, juce::PathStrokeType(3.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         // 旋钮主体：金属银色渐变（参考图：银色金属质感）
         juce::Path knobPath;
