@@ -1040,54 +1040,10 @@ public:
         }
         else if (themeId == ThemeId::Overdose)
         {
-            // 程序化绘制旋钮（白→淡紫渐变+粉刻度+粉指示）
-            const bool isLargeKnob = (static_cast<int>(bounds.getWidth()) > 100);
-            const float knobRadius = radius * (isLargeKnob ? 0.92f : 0.88f);
-
-            // 阴影
-            juce::DropShadow ds;
-            ds.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(0.18f);
-            ds.radius = 8;
-            ds.offset = { 0, 3 };
-            juce::Path knobPath;
-            knobPath.addEllipse(knob.withSizeKeepingCentre(knobRadius * 2.0f, knobRadius * 2.0f));
-            ds.drawForPath(g, knobPath);
-
-            // 旋钮主体（白→淡紫渐变）
-            juce::ColourGradient knobGrad(juce::Colour(Overdose::Colors::KnobBody),
-                                           knob.getX(), knob.getY(),
-                                           juce::Colour(Overdose::Colors::KnobRim).withAlpha(0.30f),
-                                           knob.getX(), knob.getBottom(), false);
-            g.setGradientFill(knobGrad);
-            g.fillEllipse(knob);
-
-            // 顶部高光
-            auto highlightRect = knob.withHeight(knob.getHeight() * 0.35f);
-            juce::ColourGradient hl(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.28f),
-                                     highlightRect.getX(), highlightRect.getY(),
-                                     juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.0f),
-                                     highlightRect.getX(), highlightRect.getBottom(), false);
-            g.setGradientFill(hl);
-            g.fillEllipse(highlightRect);
-
-            // 边框
-            g.setColour(juce::Colour(Overdose::Colors::KnobRim).withAlpha(0.50f));
-            g.drawEllipse(knob, Overdose::Style::StrokeThin);
-
-            // 刻度弧（粉色）
-            juce::Path arc;
-            arc.addCentredArc(cx, cy, knobRadius * 0.82f, knobRadius * 0.82f, 0.0f, rotaryStartAngle, angle, true);
-            g.setColour(juce::Colour(Overdose::Colors::KnobIndicator).withAlpha(0.85f));
-            g.strokePath(arc, juce::PathStrokeType(isLargeKnob ? 3.5f : 2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-            // 指示线（粉色）
-            juce::Line<float> needle(cx, cy, cx + std::cos(angle) * knobRadius * 0.72f, cy + std::sin(angle) * knobRadius * 0.72f);
-            g.setColour(juce::Colour(Overdose::Colors::KnobIndicator));
-            g.drawLine(needle, isLargeKnob ? 2.5f : 1.8f);
-
-            // 中心小圆点
-            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.60f));
-            g.fillEllipse(cx - 2.5f, cy - 2.5f, 5.0f, 5.0f);
+            // 统一调用程序化旋钮绘制（拟物风格+线状指针）
+            UIColors::drawOverdoseKnob(g, bounds, sliderPosProportional,
+                                        slider.isMouseOverOrDragging(),
+                                        rotaryStartAngle, rotaryEndAngle);
         }
         else
         {
