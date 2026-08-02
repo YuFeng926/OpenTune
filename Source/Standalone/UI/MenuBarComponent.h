@@ -15,6 +15,7 @@
 #include "Utils/PianoRollVisualPreferences.h"
 #include "ThemeTokens.h"
 #include "../Utils/MouseTrailConfig.h"
+#include "../Utils/CursorTheme.h"
 #include "../../Utils/AppPreferences.h"
 
 namespace OpenTune {
@@ -59,6 +60,7 @@ public:
         virtual void undoRequested() = 0;
         virtual void redoRequested() = 0;
         virtual void mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme) = 0;
+        virtual void cursorStyleChanged(CursorStyleId style) = 0;
         virtual void trackColorModeChanged(TrackColorMode mode) { juce::ignoreUnused(mode); }
     };
 
@@ -73,6 +75,7 @@ public:
 
     void refreshLocalizedText();  // 刷新本地化文本
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme) { mouseTrailTheme_ = theme; }
+    void setCursorStyle(CursorStyleId style) { cursorStyle_ = style; }
     void setRecentProjects(const std::vector<juce::File>& recentFiles);
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowUnvoicedFrames(bool shouldShow);
@@ -89,6 +92,7 @@ private:
     juce::ListenerList<Listener> listeners_;
     std::vector<juce::File> recentProjects_;
     MouseTrailConfig::TrailTheme mouseTrailTheme_ = MouseTrailConfig::TrailTheme::Classic;
+    CursorStyleId cursorStyle_ = CursorStyleId::System;
     NoteNameMode noteNameMode_ = NoteNameMode::COnly;
     bool showUnvoicedFrames_ = false;
     TrackColorMode trackColorMode_ = TrackColorMode::Random;
@@ -130,6 +134,11 @@ private:
 
         TrackColorsRandom = 160,
         TrackColorsCustom,
+
+        CursorStyleSystem = 170,
+        CursorStyleAdwaita,
+        CursorStyleCapitaine,
+        CursorStyleBreeze,
 
         OpenPreferences = 200,
         OpenHelp

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "AudioEditingScheme.h"
+#include "CursorTheme.h"
 #include "KeyShortcutConfig.h"
 #include "LocalizationManager.h"
 #include "MouseTrailConfig.h"
@@ -65,6 +66,7 @@ struct SharedPreferencesState {
 
 struct StandalonePreferencesState {
     MouseTrailConfig::TrailTheme mouseTrailTheme = MouseTrailConfig::TrailTheme::Classic;
+    CursorStyleId cursorStyle = CursorStyleId::System;
 };
 
 struct AppPreferencesState {
@@ -102,6 +104,7 @@ public:
     void setExperimentalFeaturesEnabled(bool enabled);
     void setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode mode);
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme);
+    void setCursorStyle(CursorStyleId style);
     void setSnapSettings(const SnapSettings& snap);
     SnapSettings getSnapSettings() const;
 

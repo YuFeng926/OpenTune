@@ -22,6 +22,7 @@
 #include "Content/ContentKey.h"
 #include "PluginProcessor.h"
 #include "Utils/AppPreferences.h"
+#include "Utils/CursorTheme.h"
 #include "Utils/ContentTimelineProjection.h"
 #include "Utils/PitchShiftSettings.h"
 #include "Utils/LocalizationManager.h"
@@ -84,6 +85,7 @@ public:
     void undoRequested() override;
     void redoRequested() override;
     void mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme) override;
+    void cursorStyleChanged(CursorStyleId style) override;
     void languageChanged(Language newLanguage) override;
 
     void playRequested() override;

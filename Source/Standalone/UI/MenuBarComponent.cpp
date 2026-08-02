@@ -152,6 +152,13 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
                 mouseTrailMenu.addItem(MouseTrailMatrix, LOC(kMatrix), true, currentTrailTheme == MouseTrailConfig::TrailTheme::Matrix);
                 menu.addSubMenu(LOC(kMouseTrail), mouseTrailMenu);
 
+                juce::PopupMenu cursorStyleMenu;
+                cursorStyleMenu.addItem(CursorStyleSystem, LOC(kCursorStyleSystem), true, cursorStyle_ == CursorStyleId::System);
+                cursorStyleMenu.addItem(CursorStyleAdwaita, LOC(kCursorStyleAdwaita), true, cursorStyle_ == CursorStyleId::Adwaita);
+                cursorStyleMenu.addItem(CursorStyleCapitaine, LOC(kCursorStyleCapitaine), true, cursorStyle_ == CursorStyleId::Capitaine);
+                cursorStyleMenu.addItem(CursorStyleBreeze, LOC(kCursorStyleBreeze), true, cursorStyle_ == CursorStyleId::Breeze);
+                menu.addSubMenu(LOC(kMouseCursorStyle), cursorStyleMenu);
+
                 juce::PopupMenu trackColorMenu;
                 trackColorMenu.addItem(TrackColorsRandom, LOC(kTrackColorsRandom), true, trackColorMode_ == TrackColorMode::Random);
                 trackColorMenu.addItem(TrackColorsCustom, LOC(kTrackColorsCustom), true, trackColorMode_ == TrackColorMode::Custom);
@@ -291,6 +298,23 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
             break;
         case MouseTrailMatrix:
             listeners_.call([](Listener& l) { l.mouseTrailThemeChanged(MouseTrailConfig::TrailTheme::Matrix); });
+            menuItemsChanged();
+            break;
+
+        case CursorStyleSystem:
+            listeners_.call([](Listener& l) { l.cursorStyleChanged(CursorStyleId::System); });
+            menuItemsChanged();
+            break;
+        case CursorStyleAdwaita:
+            listeners_.call([](Listener& l) { l.cursorStyleChanged(CursorStyleId::Adwaita); });
+            menuItemsChanged();
+            break;
+        case CursorStyleCapitaine:
+            listeners_.call([](Listener& l) { l.cursorStyleChanged(CursorStyleId::Capitaine); });
+            menuItemsChanged();
+            break;
+        case CursorStyleBreeze:
+            listeners_.call([](Listener& l) { l.cursorStyleChanged(CursorStyleId::Breeze); });
             menuItemsChanged();
             break;
 

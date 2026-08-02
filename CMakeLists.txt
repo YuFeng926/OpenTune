@@ -16,7 +16,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS deployment ta
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.6.5 LANGUAGES CXX C)
+project(OpenTune VERSION 1.6.6 LANGUAGES CXX C)
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -379,6 +379,10 @@ file(GLOB OPENTUNE_UI_THEME_ASSETS CONFIGURE_DEPENDS
     "Resources/UI/assets/*.png")
 list(SORT OPENTUNE_UI_THEME_ASSETS)
 
+file(GLOB OPENTUNE_CURSOR_ASSETS CONFIGURE_DEPENDS
+    "Resources/UI/cursors/*.png")
+list(SORT OPENTUNE_CURSOR_ASSETS)
+
 juce_add_binary_data(OpenTuneResources
     SOURCES
         Resources/Fonts/HONORSansCN-Medium.ttf
@@ -471,6 +475,7 @@ juce_add_binary_data(OpenTuneResources
         Resources/PianoSamples-mp3/piano_107.mp3
         Resources/PianoSamples-mp3/piano_108.mp3
         ${OPENTUNE_UI_THEME_ASSETS}
+        ${OPENTUNE_CURSOR_ASSETS}
 )
 
 # ==============================================================================
@@ -1290,6 +1295,263 @@ if(OPENTUNE_BUILD_REFERENCE_CONTRACT_TESTS)
         target_compile_options(OpenTuneTimeGridRuntimeTests PRIVATE /utf-8)
     endif()
     add_test(NAME OpenTuneTimeGridRuntimeTests COMMAND OpenTuneTimeGridRuntimeTests)
+
+    # ==============================================================================
+    # OpenTuneThemeScreenshots — 后台静默主题截图工具
+    # 无窗口软件渲染主编辑器（createComponentSnapshot），输出各主题 PNG
+    # 供设计师对比绘制效果。仅编译运行，不参与产品发布；源码与主 OpenTune
+    # 一致（不含 Source/ARA、Source/Plugin 宿主路径），配置照抄主 target。
+    # ==============================================================================
+    add_executable(OpenTuneThemeScreenshots
+        Tests/ThemeScreenshotTests.cpp
+
+        # Services / Audio
+        Source/Services/F0ExtractionService.cpp
+        Source/Services/ReferenceAnalysisService.cpp
+        Source/Audio/AudioFormatRegistry.cpp
+
+        # Preferences UI
+        Source/Editor/Preferences/SharedPreferencePages.cpp
+        Source/Editor/Preferences/StandalonePreferencePages.cpp
+
+        # Core Plugin Files
+        Source/PluginProcessor.cpp
+        Source/SourceStore.cpp
+        Source/StandaloneArrangement.cpp
+
+        # Inference Layer
+        Source/Inference/RenderCache.cpp
+        Source/Inference/VocoderFactory.cpp
+        Source/Inference/DmlVocoder.cpp
+        Source/Inference/SoundTouchStretcher.cpp
+        Source/Inference/TimeStretchCache.cpp
+        Source/Inference/OnnxVocoderBase.cpp
+        Source/Inference/RMVPEExtractor.cpp
+        Source/Inference/PCNSFHifiGANVocoder.cpp
+        Source/Inference/GameNoteGenerator.cpp
+        Source/Inference/ModelFactory.cpp
+        Source/Inference/F0InferenceService.cpp
+        Source/Runtime/ProcessF0Runtime.cpp
+        Source/Runtime/ProcessRenderRuntime.cpp
+        Source/Inference/VocoderDomain.cpp
+        Source/Inference/VocoderInferenceService.cpp
+        Source/Inference/VocoderRenderScheduler.cpp
+
+        # DSP
+        Source/DSP/ResamplingManager.cpp
+        Source/DSP/MelSpectrogram.cpp
+        Source/DSP/ChromaKeyDetector.cpp
+        Source/DSP/ReferenceAutoAlign.cpp
+        Source/DSP/AutoTunePitchShifter.cpp
+
+        # UI Layer
+        Source/Standalone/UI/AuroraLookAndFeel.cpp
+        Source/Standalone/UI/ParameterPanel.cpp
+        Source/Standalone/UI/PianoRollComponent.cpp
+        Source/Standalone/UI/PianoRoll/PianoRollOverlayComponent.cpp
+        Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
+        Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp
+        Source/Standalone/UI/PianoRoll/InteractionState.cpp
+        Source/Standalone/UI/MenuBarComponent.cpp
+        Source/Standalone/UI/TransportBarComponent.cpp
+        Source/Standalone/UI/TopBarComponent.cpp
+        Source/Standalone/UI/TrackPanelComponent.cpp
+        Source/Standalone/UI/ArrangementViewComponent.cpp
+        Source/Standalone/UI/TimelineOverviewComponent.cpp
+        Source/Standalone/UI/TimelineCompositeCache.cpp
+        Source/Standalone/UI/TimelineViewportPolicy.cpp
+        Source/Standalone/UI/TimelineLayerComposer.cpp
+        Source/Standalone/UI/WaveformMipmap.cpp
+
+        # Standalone Editor
+        Source/Standalone/EditorFactoryStandalone.cpp
+        Source/Standalone/PluginEditor.cpp
+
+        # Utilities
+        Source/Utils/PitchCurve.cpp
+        Source/Utils/LegacyNoteGenerator.cpp
+        Source/Utils/PianoKeyAudition.cpp
+        Source/Utils/AppLogger.cpp
+        Source/Utils/ChannelLayoutLogger.cpp
+        Source/Utils/AppPreferences.cpp
+        Source/Utils/WindowsDllSearchPath.cpp
+        Source/Utils/OnnxRuntimeDelayLoadHook.cpp
+        Source/Utils/ProjectModel.cpp
+        Source/Utils/ProjectPersistence.cpp
+        Source/Utils/ProjectSession.cpp
+        Source/Utils/CpuBudgetManager.cpp
+        Source/Utils/AccelerationDetector.cpp
+        Source/Utils/SimdAccelerator.cpp
+        Source/Utils/UndoManager.cpp
+        Source/Utils/PianoRollEditAction.cpp
+        Source/Utils/PianoRollNotePatchAction.cpp
+        Source/Utils/PitchShiftEditAction.cpp
+        Source/Utils/TimeGrid.cpp
+        Source/Utils/TimeGridEditAction.cpp
+        Source/Utils/PlacementActions.cpp
+        Source/Utils/SilentGapDetector.cpp
+
+        # Content Layer
+        Source/Content/StandaloneClipContent.cpp
+        Source/Content/StandaloneContentRepository.cpp
+        Source/Content/CaptureSegmentContent.cpp
+
+        # Render Layer
+        Source/Render/PlaybackSourcePublisher.cpp
+        Source/Render/RenderCacheRegistry.cpp
+        Source/Render/RenderWorker.cpp
+        Source/Render/ContentRenderService.cpp
+        Source/Render/Stage2TimeStretchRebuilder.cpp
+        Source/Render/StretcherPool.cpp
+        Source/Render/RenderChunkPlanner.cpp
+
+        # SoundTouch Library v2.3.3 (same vendored sources as OpenTune)
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/AAFilter.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/FIFOSampleBuffer.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/FIRFilter.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateCubic.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateLinear.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateShannon.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/RateTransposer.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/TDStretch.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/cpu_detect_x86.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/sse_optimized.cpp
+        ${SOUNDTOUCH_DIR}/source/SoundTouch/mmx_optimized.cpp
+
+        # Capture module (runtime-isolated; required by PluginProcessor.cpp)
+        Source/Plugin/Capture/CaptureRingBuffer.cpp
+        Source/Plugin/Capture/CaptureSegment.cpp
+        Source/Plugin/Capture/CaptureCompactor.cpp
+        Source/Plugin/Capture/CaptureSession.cpp
+        Source/Plugin/Capture/CapturePersistence.cpp
+    )
+    target_compile_features(OpenTuneThemeScreenshots PRIVATE cxx_std_17)
+
+    target_include_directories(OpenTuneThemeScreenshots
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/r8brain-free-src-master
+            ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/soundtouch-2.3.3/include
+            ${ONNXRUNTIME_INCLUDE_DIR}
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_basics>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_audio_utils>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_core>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_data_structures>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_dsp>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_events>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_gui_basics>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_gui_extra>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_graphics>
+            $<BUILD_INTERFACE:${OPENTUNE_JUCE_DIR}/modules/juce_opengl>
+    )
+
+    if(WIN32)
+        target_include_directories(OpenTuneThemeScreenshots
+            PRIVATE
+                ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
+                ${D3D12_AGILITY_INCLUDE_DIR}
+                ${D3D12_AGILITY_D3DX12_INCLUDE_DIR}
+                ${D3D12_AGILITY_NATIVE_DIR}
+                ${DIRECTML_INCLUDE_DIR}
+        )
+    endif()
+
+    target_link_libraries(OpenTuneThemeScreenshots
+        PRIVATE
+            juce::juce_audio_utils
+            juce::juce_audio_processors
+            juce::juce_dsp
+            juce::juce_opengl
+            juce::juce_graphics
+            juce::juce_gui_basics
+            juce::juce_gui_extra
+            OpenTuneResources
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_lto_flags
+            juce::juce_recommended_warning_flags
+    )
+
+    if(WIN32)
+        target_link_libraries(OpenTuneThemeScreenshots
+            PRIVATE
+                "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib"
+                "${OPENTUNE_D3D12_SYSTEM_LIB}"
+                "${OPENTUNE_DXGI_SYSTEM_LIB}"
+                version
+        )
+    endif()
+
+    target_compile_definitions(OpenTuneThemeScreenshots
+        PRIVATE
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JUCE_VST3_CAN_REPLACE_VST2=0
+            JUCE_REPORT_APP_USAGE=0
+            JUCE_STRICT_REFCOUNTEDPOINTER=1
+            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+            OPENTUNE_VERSION="${PROJECT_VERSION}"
+            OPENTUNE_D3D12_AGILITY_SDK_VERSION=${OPENTUNE_D3D12_SDK_VERSION}
+            ORT_API_MANUAL_INIT
+            JUCE_USE_FLAC=1
+            JUCE_USE_OGGVORBIS=1
+            JUCE_USE_MP3AUDIOFORMAT=1
+            SOUNDTOUCH_FLOAT_SAMPLES
+            # Standalone context (EditorFactoryStandalone.cpp guard + JucePlugin_Name)
+            JucePlugin_Build_Standalone=1
+            JucePlugin_Build_VST3=0
+            JucePlugin_Name="OpenTune"
+            JucePlugin_IsSynth=0
+    )
+
+    if(WIN32)
+        target_compile_definitions(OpenTuneThemeScreenshots
+            PRIVATE
+                JUCE_ASIO=1
+                JUCE_USE_WINDOWS_MEDIA_FORMAT=1
+        )
+    endif()
+
+    if(MSVC)
+        target_compile_options(OpenTuneThemeScreenshots PRIVATE /utf-8 /MP /bigobj /wd4100 /wd4127)
+        # AVX2 for SIMD hot spots (same as OpenTune)
+        set_source_files_properties(
+            Source/Utils/SimdAccelerator.cpp
+            Source/DSP/MelSpectrogram.cpp
+            PROPERTIES COMPILE_FLAGS "/arch:AVX2"
+        )
+        # Suppress benign MSVC warnings from vendored SoundTouch code (same as OpenTune)
+        set(SOUNDTOUCH_MSVC_WARN "/wd4458" "/wd4702")
+        set_source_files_properties(
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/AAFilter.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/FIFOSampleBuffer.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/FIRFilter.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateCubic.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateLinear.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/InterpolateShannon.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/RateTransposer.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/SoundTouch.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/TDStretch.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/cpu_detect_x86.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/sse_optimized.cpp"
+            "${SOUNDTOUCH_DIR}/source/SoundTouch/mmx_optimized.cpp"
+            PROPERTIES
+                COMPILE_OPTIONS "${SOUNDTOUCH_MSVC_WARN}"
+        )
+    endif()
+
+    # Runtime DLL alongside the executable (same source as OpenTune Standalone)
+    if(WIN32)
+        add_custom_command(TARGET OpenTuneThemeScreenshots POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_DLL}"
+                "$<TARGET_FILE_DIR:OpenTuneThemeScreenshots>/onnxruntime.dll"
+            COMMENT "Copying ONNX Runtime DLL to OpenTuneThemeScreenshots..."
+        )
+    endif()
+
+    add_test(NAME OpenTuneThemeScreenshots COMMAND OpenTuneThemeScreenshots)
 endif()
 
     # ==============================================================================
