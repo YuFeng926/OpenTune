@@ -36,6 +36,7 @@
 #include "../Editor/RenderBadgeComponent.h"
 #include "Utils/PitchShiftSettings.h"
 #include "Utils/AppPreferences.h"
+#include "Utils/CursorTheme.h"
 #include "Utils/TimelineDisplayMode.h"
 #include "Utils/ProjectSession.h"
 #include "Utils/LocalizationManager.h"
@@ -117,6 +118,7 @@ public:
     void undoRequested() override;
     void redoRequested() override;
     void mouseTrailThemeChanged(MouseTrailConfig::TrailTheme theme) override;
+    void cursorStyleChanged(CursorStyleId style) override;
     void trackColorModeChanged(TrackColorMode mode) override;
 
     // TransportBarComponent::Listener

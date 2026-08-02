@@ -89,10 +89,15 @@ TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(const std::string& v
         style.tickColour = UIColors::gridLine.withAlpha(0.080f);
         style.separatorColour = UIColors::gridLine.withAlpha(0.060f);
         style.tickStroke = isArrangement ? 1.0f : 0.7f;
-    } else if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose) {
+    } else if (themeId == ThemeId::BlueBreeze) {
         style.labelColour = UIColors::textSecondary.withAlpha(0.58f);
         style.tickColour = UIColors::pianoRollGrid.withAlpha(0.052f);
         style.separatorColour = UIColors::pianoRollGrid.withAlpha(0.040f);
+        style.tickStroke = 0.7f;
+    } else if (themeId == ThemeId::Overdose) {
+        style.labelColour = UIColors::textSecondary.withAlpha(0.58f);
+        style.tickColour = UIColors::pianoRollGrid.withAlpha(0.10f);
+        style.separatorColour = UIColors::pianoRollGrid.withAlpha(0.08f);
         style.tickStroke = 0.7f;
     } else {
         style.labelColour = UIColors::textSecondary;
@@ -110,8 +115,10 @@ TimelineRulerStyle TimelineLayerComposer::resolveRulerStyle(const std::string& v
 static juce::Colour resolveGridLineColour(ThemeId themeId, bool isMeasure) {
     if (themeId == ThemeId::Aurora)
         return UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.064f : 0.022f);
-    if (themeId == ThemeId::BlueBreeze || themeId == ThemeId::Overdose)
+    if (themeId == ThemeId::BlueBreeze)
         return UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.040f : 0.016f);
+    if (themeId == ThemeId::Overdose)
+        return UIColors::pianoRollGrid.withAlpha(isMeasure ? 0.10f : 0.05f);
     if (themeId == ThemeId::DarkBlueGrey)
         return UIColors::panelBorder.withAlpha(0.12f);
     return UIColors::panelBorder.withAlpha(isMeasure ? 0.35f : 0.25f);

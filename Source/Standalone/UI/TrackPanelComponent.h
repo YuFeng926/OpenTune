@@ -16,7 +16,6 @@
 #include <cmath>
 #include "../../Utils/AppPreferences.h"
 #include "UIColors.h"
-#include "UiAssets.h"
 #include "../../Utils/TrackConstants.h"
 
 namespace OpenTune {
@@ -281,11 +280,12 @@ static constexpr int DEFAULT_VISIBLE_TRACKS = 2; // 默认显示轨道数量
                                                     static_cast<float>(y),
                                                     static_cast<float>(width),
                                                     static_cast<float>(height)).reduced(0.5f);
-                UiAssets::drawFilmstripFrame(g,
-                                             UiAssetId::KnobPrimaryFilmstrip,
-                                             bounds,
-                                             sliderPos,
-                                             61);
+                UIColors::drawOverdoseKnob(g,
+                                           bounds,
+                                           sliderPos,
+                                           slider.isMouseOverOrDragging(),
+                                           rotaryStartAngle,
+                                           rotaryEndAngle);
                 return;
             }
 

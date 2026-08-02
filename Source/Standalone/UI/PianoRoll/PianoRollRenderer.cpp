@@ -841,8 +841,17 @@ void PianoRollRenderer::drawPianoKeys(juce::Graphics& g, const RenderContext& ct
                 g.setColour(juce::Colours::white.withAlpha(isLightTheme ? 0.14f : 0.2f));
                 g.fillRect(keyRect.getX() + 2.0f, keyRect.getY(), keyRect.getWidth() - 4.0f, keyH * 0.15f);
 
-                g.setColour(juce::Colours::black.withAlpha(isLightTheme ? 0.50f : 0.6f));
-                g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
+                if (isOverdose)
+                {
+                    // 深蓝紫黑键 + 粉色高光边
+                    g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.32f));
+                    g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
+                }
+                else
+                {
+                    g.setColour(juce::Colours::black.withAlpha(isLightTheme ? 0.50f : 0.6f));
+                    g.drawRoundedRectangle(keyRect.reduced(0.5f), 2.0f, 1.0f);
+                }
             }
 
             // Scale highlight overlay on in-scale black keys (reduced alpha)

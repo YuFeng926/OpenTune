@@ -513,14 +513,36 @@ private:
     static const ThemeStyle& overdoseStyle()
     {
         static const ThemeStyle style {
-            22.0f, 14.0f, 11.0f, 999.0f,
-            1.0f, 2.0f, 2.0f,
-            0.18f, 18, { 0, 6 },
-            0.36f, 18.0f,
-            1.5f, 0.22f,
-            180.0f, 0.65f,
-            juce::Colour(0xFF7CDCCC), juce::Colour(0xFFFF7CBD), juce::Colour(0xFFFFB030), juce::Colour(0xFFFF4F77),
-            juce::Colour(0xFFFF7CBD), juce::Colour(0xFF7E8391),
+            Overdose::Style::PanelRadius,
+            Overdose::Style::ControlRadius,
+            Overdose::Style::FieldRadius,
+            Overdose::Style::KnobRadius,
+
+            Overdose::Style::StrokeThin,
+            Overdose::Style::StrokeThick,
+            Overdose::Style::FocusRingThickness,
+
+            Overdose::Style::ShadowAlpha,
+            Overdose::Style::ShadowRadius,
+            { Overdose::Style::ShadowOffsetX, Overdose::Style::ShadowOffsetY },
+
+            Overdose::Style::GlowAlpha,
+            Overdose::Style::GlowRadius,
+
+            Overdose::Style::BevelWidth,
+            Overdose::Style::BevelIntensity,
+
+            Overdose::Style::AnimationDurationMs,
+            Overdose::Style::HoverGlowIntensity,
+
+            juce::Colour { Overdose::Colors::VULow },
+            juce::Colour { Overdose::Colors::VUMid },
+            juce::Colour { Overdose::Colors::VUHigh },
+            juce::Colour { Overdose::Colors::VUClip },
+
+            juce::Colour { Overdose::Colors::TextHighlight },
+            juce::Colour { Overdose::Colors::TextSecondary },
+
             false // timeSegmentStyle
         };
         return style;
@@ -631,33 +653,101 @@ private:
     static const ThemeTokens& overdoseTokens()
     {
         static const ThemeTokens tokens {
-            juce::Colour(0xFFFF7CBD), juce::Colour(0xFFF098C0),
-            juce::Colour(0xFFFFC8E4), juce::Colour(0xFFFF5FA8),
-            juce::Colour(0xFFDCDCE4), juce::Colour(0xFFE8E8F0), juce::Colour(0xFFF4F0F6),
-            juce::Colour(0xFFF9F1F7), juce::Colour(0xFFDCDCE4),
-            juce::Colour(0x80FFD4E8), juce::Colour(0xFFE8E8F0), juce::Colour(0xFFF6F3FA), juce::Colour(0xFFD6D8E2),
-            juce::Colour(0xCFFFFFFF), juce::Colour(0x3C8D8590), juce::Colour(0xFFFF7CBD),
-            juce::Colour(0xFF343744), juce::Colour(0xFF7E8391), juce::Colour(0xFFB2B5C1), juce::Colour(0xFFFF7CBD),
-            juce::Colour(0xFFE0E0E8), juce::Colour(0x22FFFFFF), juce::Colour(0x14D8D8E0), juce::Colour(0x45C8CAD3),
-            juce::Colour(0xFFD24A3A), juce::Colour(0xFF196FC4), juce::Colour(0x30196FC4),
-            juce::Colour(0xFF235AA8), juce::Colour(0xFF3A69A2), juce::Colour(0xFF2F6FC4), juce::Colour(0xFF2A63B8),
-            juce::Colour(0xFFFF7CBD), juce::Colour(0xFFFF7CBD), juce::Colour(0x66AEB3C0),
-            juce::Colour(0xFFFF7CBD), juce::Colour(0xFF7E8391), juce::Colour(0xFFE8E8F0),
-            juce::Colour(0xFFFFB030), juce::Colour(0xFF7CDCCC), juce::Colour(0xFFFF4F77),
-            juce::Colour(0x600C3C4A), juce::Colour(0xFF0C3C4A),
-            juce::Colour(0x24FFD4E8),
-            juce::Colour(0xFFF8F8FF), juce::Colour(0xFFFF7CBD), juce::Colour(0xFFF8F8FF), juce::Colour(0xFFDADDE6), juce::Colour(0xFFCCD0D8), juce::Colour(0xFF343744), juce::Colour(0xFFB2B5C1),
-            juce::Colour(0xFF202830), juce::Colour(0xFF707880),
-            juce::Colour(0xFFE8E8F0), juce::Colour(0xFF303840), juce::Colour(0xFFCED2DC),
-            juce::Colour(0xDDF8F0F8), juce::Colour(0xBFFFFFFF), juce::Colour(0x80FFD4E8), juce::Colour(0x32FF80B8),
-            juce::Colour(0xFFE8E8F0), juce::Colour(0xFFF6F3FA), juce::Colour(0xFFFFE0F0),
-            juce::Colour(0xFFF4F0F6), juce::Colour(0x22FFFFFF), juce::Colour(0x70AEB3C0), juce::Colour(0xFF0C3C4A),
-            juce::Colour(0xFFF4F0F6),
-            juce::Colour(0xFFF4F0F6), juce::Colour(0xFFE8E8F0), juce::Colour(0xFFDADDE6),
-            juce::Colour(0x30FFFFFF), juce::Colour(0x70AEB3C0), juce::Colour(0x24FFD4E8),
-            juce::Colour(0x18FFD4E8), juce::Colour(0x14FFD4E8), juce::Colour(0xFFCCD0D8),
-            juce::Colour(0xFFA8B0C0), juce::Colour(0x52FF80B8),
-            22.0f
+            juce::Colour { Overdose::Colors::PrimaryPink },   // primaryPurple
+            juce::Colour { Overdose::Colors::AccentPink },    // accent
+            juce::Colour { Overdose::Colors::SoftPink },      // lightPurple
+            juce::Colour { Overdose::Colors::DarkControlFace }, // darkPurple
+
+            juce::Colour { Overdose::Colors::BackgroundDark },  // backgroundDark
+            juce::Colour { Overdose::Colors::BackgroundMedium }, // backgroundMedium
+            juce::Colour { Overdose::Colors::BackgroundLight }, // backgroundLight
+
+            juce::Colour { Overdose::Colors::GradientTop },   // gradientTop
+            juce::Colour { Overdose::Colors::GradientBottom }, // gradientBottom
+
+            juce::Colour { Overdose::Colors::PanelBorder },   // panelBorder
+            juce::Colour { Overdose::Colors::ButtonNormal },  // buttonNormal
+            juce::Colour { Overdose::Colors::ButtonHover },   // buttonHover
+            juce::Colour { Overdose::Colors::ButtonPressed }, // buttonPressed
+
+            juce::Colour { Overdose::Colors::PanelHighlight },  // bevelLight
+            juce::Colour { Overdose::Colors::PanelInsetShadow }, // bevelDark
+            juce::Colour { Overdose::Colors::PrimaryPink },   // glowColor
+
+            juce::Colour { Overdose::Colors::TextPrimary },   // textPrimary
+            juce::Colour { Overdose::Colors::TextSecondary }, // textSecondary
+            juce::Colour { Overdose::Colors::TextDisabled },  // textDisabled
+            juce::Colour { Overdose::Colors::TextHighlight }, // textHighlight
+
+            juce::Colour { Overdose::Colors::RollBackground }, // rollBackground
+            juce::Colour { Overdose::Colors::LaneC },         // laneC
+            juce::Colour { Overdose::Colors::LaneOther },     // laneOther
+            juce::Colour { Overdose::Colors::GridLine },      // gridLine
+
+            juce::Colour { Overdose::Colors::OriginalF0 },    // originalF0
+            juce::Colour { Overdose::Colors::CorrectedF0 },   // correctedF0
+            juce::Colour { Overdose::Colors::ShadowTrack },   // shadowTrack
+
+            juce::Colour { Overdose::Colors::NoteBlock },     // noteBlock
+            juce::Colour { Overdose::Colors::NoteBlockBorder }, // noteBlockBorder
+            juce::Colour { Overdose::Colors::NoteBlockSelected }, // noteBlockSelected
+            juce::Colour { Overdose::Colors::NoteBlockHover }, // noteBlockHover
+
+            juce::Colour { Overdose::Colors::Playhead },      // playhead
+            juce::Colour { Overdose::Colors::TimelineMarker }, // timelineMarker
+            juce::Colour { Overdose::Colors::BeatMarker },    // beatMarker
+
+            juce::Colour { Overdose::Colors::ToolActive },    // toolActive
+            juce::Colour { Overdose::Colors::ToolInactive },  // toolInactive
+            juce::Colour { Overdose::Colors::ButtonInactive }, // buttonInactive
+
+            juce::Colour { Overdose::Colors::StatusProcessing }, // statusProcessing
+            juce::Colour { Overdose::Colors::StatusReady },   // statusReady
+            juce::Colour { Overdose::Colors::StatusError },   // statusError
+
+            juce::Colour { Overdose::Colors::WaveformFill },  // waveformFill
+            juce::Colour { Overdose::Colors::WaveformOutline }, // waveformOutline
+
+            juce::Colour { Overdose::Colors::PinkGlowSoft },  // scaleHighlight
+
+            juce::Colour { Overdose::Colors::KnobBody },      // knobBody
+            juce::Colour { Overdose::Colors::KnobIndicator }, // knobIndicator
+            juce::Colour { Overdose::Colors::FieldTop },      // displayWellTop
+            juce::Colour { Overdose::Colors::FieldBottom },   // displayWellBottom
+            juce::Colour { Overdose::Colors::FieldEdge },     // displayWellEdge
+            juce::Colour { Overdose::Colors::TextPrimary },   // displayText
+            juce::Colour { Overdose::Colors::TextDisabled },  // displayTextDim
+            juce::Colour { Overdose::Colors::DarkControlFace }, // darkControlFace
+            juce::Colour { Overdose::Colors::DarkControlEdge }, // darkControlEdge
+            juce::Colour { Overdose::Colors::KeyBedWhite },   // keyBedWhite
+            juce::Colour { Overdose::Colors::KeyBedBlack },   // keyBedBlack
+            juce::Colour { Overdose::Colors::KeyBedDivider }, // keyBedDivider
+
+            juce::Colour { Overdose::Colors::GlassSurface },  // glassSurface
+            juce::Colour { Overdose::Colors::GlassHighlight }, // glassHighlight
+            juce::Colour { Overdose::Colors::GlassEdge },     // glassEdge
+            juce::Colour { Overdose::Colors::PanelGlow },     // panelGlow
+            juce::Colour { Overdose::Colors::ButtonNormal },  // auroraButtonNormal
+            juce::Colour { Overdose::Colors::ButtonHover },   // auroraButtonHover
+            juce::Colour { Overdose::Colors::ButtonActiveTop }, // auroraButtonActive
+            juce::Colour { Overdose::Colors::RollBackground }, // pianoRollBackground
+            juce::Colour { Overdose::Colors::LaneC },         // pianoRollLane
+            juce::Colour { Overdose::Colors::GridLineStrong }, // pianoRollGrid
+            juce::Colour { Overdose::Colors::PianoWaveform }, // pianoRollWaveform
+            juce::Colour { Overdose::Colors::RollBackground }, // trackPanelBackground
+            juce::Colour { Overdose::Colors::SidebarTrackFade }, // sidebarTrackFade
+            juce::Colour { Overdose::Colors::SidebarShellTop }, // auroraSidebarShellTop
+            juce::Colour { Overdose::Colors::SidebarShellMid }, // auroraSidebarShellMid
+            juce::Colour { Overdose::Colors::SidebarShellBottom }, // auroraSidebarShellBottom
+            juce::Colour { Overdose::Colors::SidebarTopLip }, // auroraSidebarTopLip
+            juce::Colour { Overdose::Colors::SidebarOuterRim }, // auroraSidebarOuterRim
+            juce::Colour { Overdose::Colors::SidebarInnerRim }, // auroraSidebarInnerRim
+            juce::Colour { Overdose::Colors::SidebarEdgeAura }, // auroraSidebarEdgeAura
+            juce::Colour { Overdose::Colors::SidebarCornerBloom }, // auroraSidebarCornerBloom
+            juce::Colour { Overdose::Colors::KnobRim },       // knobRim
+            juce::Colour { Overdose::Colors::KnobGlow },      // knobGlow
+
+            Overdose::Style::PanelRadius
         };
         return tokens;
     }

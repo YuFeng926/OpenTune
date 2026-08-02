@@ -91,8 +91,14 @@ void TopBarComponent::paint(juce::Graphics& g)
         juce::Path tray;
         tray.addRoundedRectangle(bounds, style.panelRadius);
 
-        // 扁平面板：纯色填充 + 柔和边框 + 顶线高光
-        g.setColour(juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(0.96f));
+        // 玻璃拟态托盘：白→淡紫渐变（与 fillOverdosePanelBackground 面板规范一致）
+        juce::ColourGradient panelGrad(
+            juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(0.96f),
+            bounds.getX(), bounds.getY(),
+            juce::Colour(Overdose::Colors::PanelOpaqueBottom).withAlpha(0.96f),
+            bounds.getX(), bounds.getBottom(), false);
+        panelGrad.addColour(0.40f, juce::Colour(Overdose::Colors::PanelOpaqueMid).withAlpha(0.92f));
+        g.setGradientFill(panelGrad);
         g.fillPath(tray);
 
         g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.48f));

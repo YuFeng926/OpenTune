@@ -5,6 +5,7 @@
 #include "UIColors.h"
 #include "UiAssets.h"
 #include "TopBarComponent.h"
+#include "../../Utils/CursorTheme.h"
 
 namespace OpenTune {
 
@@ -232,28 +233,28 @@ public:
         const bool isHovered = highlighted && !isPressed;
 
         juce::DropShadow softShadow;
-        softShadow.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(isPressed ? 0.16f : 0.24f);
-        softShadow.radius = isPressed ? 8 : 12;
+        softShadow.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(isPressed ? 0.10f : 0.16f);
+        softShadow.radius = isPressed ? 6 : 10;
         softShadow.offset = { 0, isPressed ? 1 : 3 };
         softShadow.drawForPath(g, shape);
 
         if (isActive || isHovered)
         {
             juce::DropShadow accentGlow;
-            accentGlow.colour = juce::Colour(Overdose::Colors::PinkGlowSoft).withAlpha(isActive ? 0.28f : 0.16f);
-            accentGlow.radius = isActive ? 12 : 9;
+            accentGlow.colour = juce::Colour(Overdose::Colors::PinkGlowSoft).withAlpha(isActive ? 0.22f : 0.12f);
+            accentGlow.radius = isActive ? 10 : 7;
             accentGlow.offset = {};
             accentGlow.drawForPath(g, shape);
         }
 
-        juce::ColourGradient body(juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(isActive ? 0.98f : 0.94f),
+        juce::ColourGradient body(juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(isActive ? 1.0f : 0.96f),
                                   bounds.getX(),
                                   bounds.getY(),
-                                  juce::Colour(Overdose::Colors::PanelOpaqueBottom).withAlpha(isPressed ? 0.98f : 0.94f),
+                                  juce::Colour(Overdose::Colors::PanelOpaqueBottom).withAlpha(isPressed ? 1.0f : 0.96f),
                                   bounds.getX(),
                                   bounds.getBottom(),
                                   false);
-        body.addColour(0.42f, juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(isActive ? 0.96f : 0.90f));
+        body.addColour(0.35f, juce::Colour(Overdose::Colors::PanelOpaqueMid).withAlpha(isActive ? 0.98f : 0.92f));
         g.setGradientFill(body);
         g.fillPath(shape);
 
@@ -261,9 +262,9 @@ public:
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(shape);
 
-            juce::ColourGradient sheen(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(isActive ? 0.28f : 0.20f),
-                                       bounds.getX() + bounds.getWidth() * 0.16f,
-                                       bounds.getY() + bounds.getHeight() * 0.10f,
+            juce::ColourGradient sheen(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(isActive ? 0.32f : 0.24f),
+                                       bounds.getX() + bounds.getWidth() * 0.12f,
+                                       bounds.getY() + bounds.getHeight() * 0.08f,
                                        juce::Colours::transparentWhite,
                                        bounds.getRight(),
                                        bounds.getBottom(),
@@ -271,18 +272,18 @@ public:
             g.setGradientFill(sheen);
             g.fillRect(bounds);
 
-            auto lowerBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.58f);
+            auto lowerBand = bounds.withTop(bounds.getY() + bounds.getHeight() * 0.62f);
             juce::ColourGradient lowerShade(juce::Colours::transparentBlack,
                                             lowerBand.getX(),
                                             lowerBand.getY(),
-                                            juce::Colour(Overdose::Colors::PanelInsetShadow).withAlpha(isPressed ? 0.16f : 0.09f),
+                                            juce::Colour(Overdose::Colors::PanelInsetShadow).withAlpha(isPressed ? 0.12f : 0.06f),
                                             lowerBand.getX(),
                                             lowerBand.getBottom(),
                                             false);
             g.setGradientFill(lowerShade);
             g.fillRect(lowerBand);
 
-            g.setColour(juce::Colours::white.withAlpha(isPressed ? 0.08f : 0.16f));
+            g.setColour(juce::Colours::white.withAlpha(isPressed ? 0.06f : 0.14f));
             g.drawLine(bounds.getX() + radius * 0.75f,
                        bounds.getY() + 1.0f,
                        bounds.getRight() - radius * 0.75f,
@@ -291,13 +292,18 @@ public:
         }
 
         const auto border = isActive
-            ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.72f)
-            : juce::Colour(Overdose::Colors::PanelBorder).withAlpha(isHovered ? 0.64f : 0.48f);
+            ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.65f)
+            : juce::Colour(Overdose::Colors::PanelBorder).withAlpha(isHovered ? 0.55f : 0.40f);
         g.setColour(border);
-        g.strokePath(shape, juce::PathStrokeType(isActive ? 1.45f : 1.0f));
+        g.strokePath(shape, juce::PathStrokeType(isActive ? 1.2f : 0.8f));
 
-        g.setColour(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(isActive ? 0.22f : 0.12f));
-        g.strokePath(shape, juce::PathStrokeType(0.8f));
+        g.setColour(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(isActive ? 0.18f : 0.10f));
+        g.strokePath(shape, juce::PathStrokeType(0.6f));
+    }
+
+    juce::MouseCursor getMouseCursorFor(juce::Component& component) override
+    {
+        return CursorThemeManager::getInstance().resolveCursor(LookAndFeel_V4::getMouseCursorFor(component));
     }
 
     juce::Font getTextButtonFont(juce::TextButton& button, int height) override
@@ -368,12 +374,12 @@ public:
         juce::ignoreUnused(button);
         bool isActive = isDown || button.getToggleState();
 
-        // 柔和阴影
+        // 柔和阴影（微调立体感）
         {
             juce::DropShadow ds;
-            ds.colour = juce::Colour(Overdose::Colors::SoftShadow);
-            ds.radius = Overdose::Style::ShadowRadius;
-            ds.offset = { Overdose::Style::ShadowOffsetX, Overdose::Style::ShadowOffsetY };
+            ds.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(isActive ? 0.33f : 0.22f);
+            ds.radius = isActive ? 13 : 11;
+            ds.offset = { 0, isActive ? 4 : 3 };
             juce::Path p;
             p.addRoundedRectangle(bounds, radius, radius);
             ds.drawForPath(g, p);
@@ -389,12 +395,12 @@ public:
         else if (isHighlighted)
         {
             top = juce::Colour(Overdose::Colors::ButtonHover);
-            bottom = juce::Colour(Overdose::Colors::ButtonHover).darker(0.04f);
+            bottom = juce::Colour(Overdose::Colors::ButtonHover).darker(0.02f);
         }
         else
         {
             top = juce::Colour(Overdose::Colors::ButtonNormal);
-            bottom = juce::Colour(Overdose::Colors::ButtonNormal).darker(0.06f);
+            bottom = juce::Colour(Overdose::Colors::ButtonNormal).darker(0.03f);
         }
 
         juce::ColourGradient grad(top, bounds.getX(), bounds.getY(),
@@ -403,26 +409,36 @@ public:
         g.fillRoundedRectangle(bounds, radius);
 
         // 粉白玻璃边
-        g.setColour(juce::Colour(Overdose::Colors::GlassEdge));
+        g.setColour(juce::Colour(Overdose::Colors::GlassEdge).withAlpha(isActive ? 0.70f : 0.45f));
         g.drawRoundedRectangle(bounds.reduced(0.5f), radius, Overdose::Style::StrokeThin);
 
-        // 顶部高光
+        // 顶部高光（增强玻璃质感）
         if (!isActive && !isDown)
         {
-            auto highlightRect = bounds.reduced(2.0f).withHeight(bounds.getHeight() * 0.38f);
-            juce::ColourGradient hl(juce::Colour(Overdose::Colors::GlassHighlight),
+            auto highlightRect = bounds.reduced(1.5f).withHeight(bounds.getHeight() * 0.45f);
+            juce::ColourGradient hl(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.50f),
                                      highlightRect.getX(), highlightRect.getY(),
                                      juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.0f),
                                      highlightRect.getX(), highlightRect.getBottom(), false);
             g.setGradientFill(hl);
-            g.fillRoundedRectangle(highlightRect, radius - 2.0f);
+            g.fillRoundedRectangle(highlightRect, radius - 1.5f);
+
+            // 底部内阴影（增强凹陷感）
+            auto innerBottom = bounds.reduced(1.5f).withTrimmedTop(bounds.getHeight() * 0.60f);
+            juce::ColourGradient innerShade(
+                juce::Colours::transparentBlack,
+                innerBottom.getCentreX(), innerBottom.getY(),
+                juce::Colour(Overdose::Colors::PanelInsetShadow).withAlpha(0.18f),
+                innerBottom.getCentreX(), innerBottom.getBottom(), false);
+            g.setGradientFill(innerShade);
+            g.fillRoundedRectangle(innerBottom, radius - 1.5f);
         }
 
         // Active 时粉色辉光
         if (isActive)
         {
-            g.setColour(juce::Colour(Overdose::Colors::ButtonActiveGlow));
-            g.drawRoundedRectangle(bounds, radius, Overdose::Style::StrokeThick);
+            g.setColour(juce::Colour(Overdose::Colors::ButtonActiveGlow).withAlpha(0.35f));
+            g.drawRoundedRectangle(bounds, radius, Overdose::Style::StrokeThin);
         }
     }
 
@@ -682,17 +698,34 @@ public:
         if (themeId == ThemeId::Overdose)
         {
             const bool focused = label.hasKeyboardFocus(true) && label.isEditable();
-            UiAssets::drawAssetStretch(g, UiAssetId::ParameterSmallReadout, bounds);
 
+            // 程序化绘制输入框背景（白→淡紫渐变）
+            juce::ColourGradient bg(juce::Colour(Overdose::Colors::FieldTop),
+                                     bounds.getX(), bounds.getY(),
+                                     juce::Colour(Overdose::Colors::FieldBottom),
+                                     bounds.getX(), bounds.getBottom(), false);
+            g.setGradientFill(bg);
+            g.fillRoundedRectangle(bounds, style.fieldRadius);
+
+            // 顶部高光
+            auto highlightRect = bounds.reduced(1.0f).withHeight(bounds.getHeight() * 0.30f);
+            juce::ColourGradient hl(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.22f),
+                                     highlightRect.getX(), highlightRect.getY(),
+                                     juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.0f),
+                                     highlightRect.getX(), highlightRect.getBottom(), false);
+            g.setGradientFill(hl);
+            g.fillRoundedRectangle(highlightRect, style.fieldRadius - 1.0f);
+
+            // 边框
             if (label.isMouseOver() || focused)
             {
-                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(focused ? 0.62f : 0.28f));
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(focused ? 0.65f : 0.35f));
                 g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, focused ? style.focusRingThickness : 1.0f);
             }
             else
             {
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.55f));
-                g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, 1.0f);
+                g.setColour(juce::Colour(Overdose::Colors::FieldEdge).withAlpha(0.60f));
+                g.drawRoundedRectangle(bounds.reduced(0.5f), style.fieldRadius, 0.8f);
             }
 
             g.setColour(label.findColour(juce::Label::textColourId));
@@ -763,31 +796,53 @@ public:
         {
             if (themeId == ThemeId::Overdose)
             {
-                const float trackH = 10.0f;
+                const float trackH = 8.0f;
                 auto trackRect = bounds.withHeight(trackH)
                                      .withY(bounds.getCentreY() - trackH * 0.5f)
                                      .reduced(4.0f, 0.0f);
-                UiAssets::drawAssetStretch(g, UiAssetId::SliderTrack, trackRect);
 
+                // 轨道背景（浅紫白渐变）
+                juce::ColourGradient trackBg(juce::Colour(Overdose::Colors::SliderTrackVisual).withAlpha(0.50f),
+                                              trackRect.getX(), trackRect.getY(),
+                                              juce::Colour(Overdose::Colors::SliderTrackVisual).withAlpha(0.30f),
+                                              trackRect.getX(), trackRect.getBottom(), false);
+                g.setGradientFill(trackBg);
+                g.fillRoundedRectangle(trackRect, trackH * 0.5f);
+
+                // 激活部分（亮粉）
                 const float activeW = juce::jlimit(0.0f, trackRect.getWidth(), sliderPos - trackRect.getX());
                 if (activeW > 0.0f)
                 {
-                    auto fillRect = trackRect.withWidth(activeW).reduced(4.0f, 2.5f);
-                    g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.78f));
+                    auto fillRect = trackRect.withWidth(activeW).reduced(2.0f, 1.5f);
+                    juce::ColourGradient fillGrad(juce::Colour(Overdose::Colors::PrimaryPink),
+                                                   fillRect.getX(), fillRect.getY(),
+                                                   juce::Colour(Overdose::Colors::AccentPink),
+                                                   fillRect.getX(), fillRect.getBottom(), false);
+                    g.setGradientFill(fillGrad);
                     g.fillRoundedRectangle(fillRect, fillRect.getHeight() * 0.5f);
                 }
 
-                const float thumbSize = 18.0f;
+                // 滑块（白→淡紫渐变+粉边）
+                const float thumbSize = 16.0f;
                 auto thumbRect = juce::Rectangle<float>(sliderPos - thumbSize * 0.5f,
                                                         bounds.getCentreY() - thumbSize * 0.5f,
                                                         thumbSize,
                                                         thumbSize);
-                UiAssets::drawAssetStretch(g, UiAssetId::SliderThumb, thumbRect);
+
+                juce::ColourGradient thumbBg(juce::Colour(Overdose::Colors::SliderThumb),
+                                              thumbRect.getX(), thumbRect.getY(),
+                                              juce::Colour(Overdose::Colors::SliderThumbEdge),
+                                              thumbRect.getX(), thumbRect.getBottom(), false);
+                g.setGradientFill(thumbBg);
+                g.fillEllipse(thumbRect);
+
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(slider.isMouseButtonDown() ? 0.70f : 0.50f));
+                g.drawEllipse(thumbRect.reduced(0.5f), slider.isMouseButtonDown() ? 1.4f : 1.0f);
 
                 if (slider.isMouseOverOrDragging() || slider.isMouseButtonDown())
                 {
-                    g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(slider.isMouseButtonDown() ? 0.42f : 0.22f));
-                    g.drawEllipse(thumbRect.reduced(0.5f), slider.isMouseButtonDown() ? 1.6f : 1.1f);
+                    g.setColour(juce::Colour(Overdose::Colors::PinkGlow).withAlpha(slider.isMouseButtonDown() ? 0.35f : 0.20f));
+                    g.drawEllipse(thumbRect.reduced(-2.0f), 1.0f);
                 }
             }
             else if (themeId == ThemeId::BlueBreeze)
@@ -985,14 +1040,54 @@ public:
         }
         else if (themeId == ThemeId::Overdose)
         {
+            // 程序化绘制旋钮（白→淡紫渐变+粉刻度+粉指示）
             const bool isLargeKnob = (static_cast<int>(bounds.getWidth()) > 100);
-            const int numFrames = isLargeKnob ? 121 : 61;
-            UiAssets::drawFilmstripFrame(g,
-                                         isLargeKnob ? UiAssetId::KnobLargeParameterFilmstrip
-                                                     : UiAssetId::KnobPrimaryFilmstrip,
-                                         bounds,
-                                         sliderPosProportional,
-                                         numFrames);
+            const float knobRadius = radius * (isLargeKnob ? 0.92f : 0.88f);
+
+            // 阴影
+            juce::DropShadow ds;
+            ds.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(0.18f);
+            ds.radius = 8;
+            ds.offset = { 0, 3 };
+            juce::Path knobPath;
+            knobPath.addEllipse(knob.withSizeKeepingCentre(knobRadius * 2.0f, knobRadius * 2.0f));
+            ds.drawForPath(g, knobPath);
+
+            // 旋钮主体（白→淡紫渐变）
+            juce::ColourGradient knobGrad(juce::Colour(Overdose::Colors::KnobBody),
+                                           knob.getX(), knob.getY(),
+                                           juce::Colour(Overdose::Colors::KnobRim).withAlpha(0.30f),
+                                           knob.getX(), knob.getBottom(), false);
+            g.setGradientFill(knobGrad);
+            g.fillEllipse(knob);
+
+            // 顶部高光
+            auto highlightRect = knob.withHeight(knob.getHeight() * 0.35f);
+            juce::ColourGradient hl(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.28f),
+                                     highlightRect.getX(), highlightRect.getY(),
+                                     juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.0f),
+                                     highlightRect.getX(), highlightRect.getBottom(), false);
+            g.setGradientFill(hl);
+            g.fillEllipse(highlightRect);
+
+            // 边框
+            g.setColour(juce::Colour(Overdose::Colors::KnobRim).withAlpha(0.50f));
+            g.drawEllipse(knob, Overdose::Style::StrokeThin);
+
+            // 刻度弧（粉色）
+            juce::Path arc;
+            arc.addCentredArc(cx, cy, knobRadius * 0.82f, knobRadius * 0.82f, 0.0f, rotaryStartAngle, angle, true);
+            g.setColour(juce::Colour(Overdose::Colors::KnobIndicator).withAlpha(0.85f));
+            g.strokePath(arc, juce::PathStrokeType(isLargeKnob ? 3.5f : 2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+            // 指示线（粉色）
+            juce::Line<float> needle(cx, cy, cx + std::cos(angle) * knobRadius * 0.72f, cy + std::sin(angle) * knobRadius * 0.72f);
+            g.setColour(juce::Colour(Overdose::Colors::KnobIndicator));
+            g.drawLine(needle, isLargeKnob ? 2.5f : 1.8f);
+
+            // 中心小圆点
+            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.60f));
+            g.fillEllipse(cx - 2.5f, cy - 2.5f, 5.0f, 5.0f);
         }
         else
         {
@@ -1195,7 +1290,7 @@ public:
                 if (themeId == ThemeId::Overdose)
                 {
                     juce::ignoreUnused(bg);
-                    UiAssets::drawAssetStretch(g, UiAssetId::ParameterSmallReadout, field);
+                    UIColors::fillOverdosePanelBackground(g, field, style.fieldRadius);
                 }
                 else if (themeId == ThemeId::BlueBreeze)
                 {
@@ -1290,14 +1385,13 @@ public:
         {
             const bool isActive = isButtonDown || box.isPopupActive();
             const bool isHover = box.isMouseOver(true);
-            const auto assetId = width <= 96 ? UiAssetId::ToolbarDropdownNarrowField
-                                             : UiAssetId::ToolbarDropdownWideField;
-            UiAssets::drawAssetStretch(g, assetId, boxBounds);
+            const auto bgBounds = boxBounds.reduced(2.0f);
+            UIColors::fillOverdosePanelBackground(g, bgBounds, style.fieldRadius);
 
             if (isHover || isActive)
             {
                 g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(isActive ? 0.34f : 0.18f));
-                g.drawRoundedRectangle(boxBounds.reduced(0.75f), style.fieldRadius, isActive ? 1.35f : 1.0f);
+                g.drawRoundedRectangle(bgBounds.reduced(0.75f), style.fieldRadius, isActive ? 1.35f : 1.0f);
             }
 
             if (!box.getProperties().contains("noArrow"))
@@ -1320,7 +1414,7 @@ public:
             bool isActive = isButtonDown || box.isPopupActive();
             bool isHover = box.isMouseOver(true);
 
-            drawBlueBreezeSurface(g, boxBounds.reduced(0.5f), radius, isHover, isButtonDown, isActive);
+            drawBlueBreezeSurface(g, boxBounds.reduced(2.0f), radius, isHover, isButtonDown, isActive);
 
             if (!box.getProperties().contains("noArrow"))
             {
@@ -1337,22 +1431,24 @@ public:
         }
 
         auto bg = box.findColour(juce::ComboBox::backgroundColourId);
+        // 背景与 UnifiedToolbarButton 一致缩进 2px，视觉高度统一 36px
+        const auto bgBounds = boxBounds.reduced(2.0f);
         if (themeId == ThemeId::DarkBlueGrey)
         {
             g.setColour(bg);
-            g.fillRoundedRectangle(boxBounds, cornerSize);
+            g.fillRoundedRectangle(bgBounds, cornerSize);
         }
         else
         {
             g.setColour(bg);
-            g.fillRoundedRectangle(boxBounds, cornerSize);
+            g.fillRoundedRectangle(bgBounds, cornerSize);
         }
 
         auto outline = box.findColour(juce::ComboBox::outlineColourId);
         if (themeId == ThemeId::DarkBlueGrey)
             outline = UIColors::panelBorder.withAlpha(0.74f);
         g.setColour(outline);
-        g.drawRoundedRectangle(boxBounds.reduced(0.5f, 0.5f), cornerSize, style.strokeThin);
+        g.drawRoundedRectangle(bgBounds.reduced(0.5f, 0.5f), cornerSize, style.strokeThin);
 
         if (box.getProperties().contains("noArrow")) return;
 
@@ -1588,7 +1684,14 @@ public:
                                                      bounds.getWidth() - 4.0f,
                                                      static_cast<float>(thumbSize));
                 thumbBounds.setHeight(juce::jmax(thumbBounds.getHeight(), 28.0f));
-                UiAssets::drawAssetStretch(g, UiAssetId::ScrollbarTrack, bounds.reduced(2.0f, 0.0f));
+
+                // 轨道背景（浅紫白渐变，极低存在感）
+                juce::ColourGradient trackBg(juce::Colour(Overdose::Colors::ScrollbarTrack).withAlpha(0.12f),
+                                              bounds.getX(), bounds.getY(),
+                                              juce::Colour(Overdose::Colors::ScrollbarTrack).withAlpha(0.05f),
+                                              bounds.getX(), bounds.getBottom(), false);
+                g.setGradientFill(trackBg);
+                g.fillRoundedRectangle(bounds.reduced(2.0f, 0.0f), 4.0f);
             }
             else
             {
@@ -1597,15 +1700,22 @@ public:
                                                      static_cast<float>(thumbSize),
                                                      bounds.getHeight() - 4.0f);
                 thumbBounds.setWidth(juce::jmax(thumbBounds.getWidth(), 28.0f));
-                UiAssets::drawAssetStretch(g, UiAssetId::ScrollbarTrack, bounds.reduced(0.0f, 2.0f));
+
+                // 轨道背景（浅紫白渐变，极低存在感）
+                juce::ColourGradient trackBg(juce::Colour(Overdose::Colors::ScrollbarTrack).withAlpha(0.12f),
+                                              bounds.getX(), bounds.getY(),
+                                              juce::Colour(Overdose::Colors::ScrollbarTrack).withAlpha(0.05f),
+                                              bounds.getRight(), bounds.getY(), false);
+                g.setGradientFill(trackBg);
+                g.fillRoundedRectangle(bounds.reduced(0.0f, 2.0f), 4.0f);
             }
 
             // Soft pink glow beneath thumb
             if (isMouseOver || isMouseDown)
             {
                 juce::DropShadow glow;
-                glow.colour = juce::Colour(Overdose::Colors::PinkGlowSoft).withAlpha(isMouseDown ? 0.42f : 0.28f);
-                glow.radius = isMouseDown ? 12 : 8;
+                glow.colour = juce::Colour(Overdose::Colors::PinkGlowSoft).withAlpha(isMouseDown ? 0.35f : 0.20f);
+                glow.radius = isMouseDown ? 10 : 6;
                 glow.offset = {};
                 juce::Path thumbPath;
                 const float thumbRadius = juce::jmin(thumbBounds.getWidth(), thumbBounds.getHeight()) * 0.45f;
@@ -1613,16 +1723,34 @@ public:
                 glow.drawForPath(g, thumbPath);
             }
 
-            UiAssets::drawAssetStretch(g, UiAssetId::ScrollbarThumb, thumbBounds);
+            // 滑块（粉渐变：参考图 #FF76BF 高亮粉滑块）
+            juce::ColourGradient thumbBg(juce::Colour(Overdose::Colors::ScrollbarThumbTop),
+                                          thumbBounds.getX(), thumbBounds.getY(),
+                                          juce::Colour(Overdose::Colors::ScrollbarThumbPink),
+                                          thumbBounds.getX(), thumbBounds.getBottom(), false);
+            g.setGradientFill(thumbBg);
+            const float thumbRadius = juce::jmin(thumbBounds.getWidth(), thumbBounds.getHeight()) * 0.45f;
+            g.fillRoundedRectangle(thumbBounds, thumbRadius);
+
+            // 白色边缘高光（增强玻璃质感）
+            g.setColour(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.65f));
+            g.drawRoundedRectangle(thumbBounds.reduced(0.5f), thumbRadius, 1.2f);
+
+            // 顶部高光
+            auto highlightRect = thumbBounds.withHeight(thumbBounds.getHeight() * 0.35f);
+            juce::ColourGradient hl(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.25f),
+                                     highlightRect.getX(), highlightRect.getY(),
+                                     juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.0f),
+                                     highlightRect.getX(), highlightRect.getBottom(), false);
+            g.setGradientFill(hl);
+            g.fillRoundedRectangle(highlightRect, thumbRadius - 1.0f);
 
             if (isMouseOver || isMouseDown)
             {
                 const auto outline = juce::Colour(Overdose::Colors::PrimaryPink)
-                    .withAlpha(isMouseDown ? 0.58f : 0.32f);
+                    .withAlpha(isMouseDown ? 0.60f : 0.35f);
                 g.setColour(outline);
-                g.drawRoundedRectangle(thumbBounds.reduced(0.5f),
-                                       juce::jmin(thumbBounds.getWidth(), thumbBounds.getHeight()) * 0.45f,
-                                       isMouseDown ? 1.8f : 1.2f);
+                g.drawRoundedRectangle(thumbBounds.reduced(0.5f), thumbRadius, isMouseDown ? 1.5f : 1.0f);
             }
             return;
         }

@@ -1,6 +1,5 @@
 #include "ParameterPanel.h"
 #include "ToolbarIcons.h"
-#include "UiAssets.h"
 #include "../../Utils/PitchControlConfig.h"
 #include "../../Utils/LocalizationManager.h"
 #include <cmath>
@@ -115,12 +114,9 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
     if (themeId == ThemeId::Overdose)
     {
         const auto active = getToggleState() || shouldDrawButtonAsDown;
-        UiAssets::drawAssetStretch(g,
-                                   toolId_ == 0 ? UiAssetId::ToolRightPanelAutoButton
-                                                : UiAssetId::ToolRightPanelButtonShell,
-                                   bounds);
+        UIColors::fillOverdoseButtonShell(g, bounds, UIColors::currentThemeStyle().controlRadius);
 
-        if (toolId_ != 0 && active)
+        if (active)
         {
             juce::Graphics::ScopedSaveState clip(g);
             juce::Path activeShape;
@@ -147,7 +143,7 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
                        bounds.getY() + 3.0f,
                        1.0f);
         }
-        else if (toolId_ != 0 && shouldDrawButtonAsHighlighted)
+        else if (shouldDrawButtonAsHighlighted)
         {
             juce::Graphics::ScopedSaveState clip(g);
             juce::Path hoverShape;
@@ -190,7 +186,7 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
 
     if (textIcon_.isNotEmpty())
     {
-        const auto active = themeId == ThemeId::Overdose && (getToggleState() || shouldDrawButtonAsDown) && toolId_ != 0;
+        const auto active = themeId == ThemeId::Overdose && (getToggleState() || shouldDrawButtonAsDown);
 
         if (subTextIcon_.isNotEmpty())
         {
@@ -217,7 +213,7 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
     else
     {
         auto iconArea = getLocalBounds().toFloat().reduced(10.0f);
-        const auto active = themeId == ThemeId::Overdose && (getToggleState() || shouldDrawButtonAsDown) && toolId_ != 0;
+        const auto active = themeId == ThemeId::Overdose && (getToggleState() || shouldDrawButtonAsDown);
         auto iconColor = active ? juce::Colours::white.withAlpha(0.96f) : UIColors::textPrimary;
 
         // Hover: subtle scale-up (1.08x) and brightness boost
@@ -256,11 +252,12 @@ void LargeKnobLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int
                                             static_cast<float>(y),
                                             static_cast<float>(width),
                                             static_cast<float>(height)).reduced(2.0f);
-        UiAssets::drawFilmstripFrame(g,
-                                     UiAssetId::KnobLargeParameterFilmstrip,
-                                     bounds,
-                                     sliderPosProportional,
-                                     121);
+        UIColors::drawOverdoseKnob(g,
+                                   bounds,
+                                   sliderPosProportional,
+                                   slider.isMouseOverOrDragging(),
+                                   rotaryStartAngle,
+                                   rotaryEndAngle);
         return;
     }
 
@@ -497,7 +494,7 @@ void ParameterPanel::paint(juce::Graphics& g)
 
     if (themeId == ThemeId::Overdose)
     {
-        UiAssets::drawAssetStretch(g, UiAssetId::PanelParameterSidebar, bounds);
+        UIColors::fillOverdosePanelBackground(g, bounds, style.panelRadius);
 
         const auto drawSectionHeader = [&](const juce::Label& header)
         {

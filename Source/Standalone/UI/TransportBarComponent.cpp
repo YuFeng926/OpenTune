@@ -2,7 +2,6 @@
 #include "OpenTuneLookAndFeel.h"
 #include "UIColors.h"
 #include "ToolbarIcons.h"
-#include "UiAssets.h"
 #include "../../Utils/LocalizationManager.h"
 #include <cmath>
 
@@ -57,11 +56,15 @@ void DigitalTimeDisplay::paint(juce::Graphics& g)
         return;
 
     if (UIColors::currentThemeId() == ThemeId::Overdose)
-        UiAssets::drawAssetStretch(g, UiAssetId::PanelDisplayPanel, bounds.reduced(3.0f, 2.0f));
+        UIColors::drawOverdoseDisplayWell(g, bounds.reduced(3.0f, 2.0f), style.fieldRadius);
 
     if (!style.timeSegmentStyle)
     {
-        g.setColour(UIColors::textPrimary);
+        // Overdose：深紫底 + 粉数字
+        if (UIColors::currentThemeId() == ThemeId::Overdose)
+            g.setColour(juce::Colour(Overdose::Colors::PrimaryPink));
+        else
+            g.setColour(UIColors::textPrimary);
         g.setFont(UIColors::getMonoFont(UIColors::navMonoFontHeight));
         g.drawFittedText(timeString_, getLocalBounds().reduced(6, 0), juce::Justification::centred, 1, 1.0f);
         return;
@@ -277,12 +280,12 @@ void BpmValueField::paint(juce::Graphics& g)
 {
     const auto& style = UIColors::currentThemeStyle();
     const auto themeId = UIColors::currentThemeId();
-    auto bounds = getLocalBounds().toFloat();
+    auto bounds = getLocalBounds().toFloat().reduced(2.0f); // 与 UnifiedToolbarButton 缩进一致，视觉高度统一 36px
     const auto focused = isEditing_ && hasKeyboardFocus(true);
 
     if (themeId == ThemeId::Overdose)
     {
-        UiAssets::drawAssetStretch(g, UiAssetId::ToolbarBpmField, bounds);
+        UIColors::fillOverdosePanelBackground(g, bounds, style.fieldRadius);
 
         if (focused || isMouseOver())
         {
@@ -319,7 +322,7 @@ void BpmValueField::paint(juce::Graphics& g)
     else
     {
         OpenTuneLookAndFeel::drawBlueBreezeSurface(g,
-                                                   bounds.reduced(0.5f),
+                                                   bounds,
                                                    style.fieldRadius,
                                                    isMouseOver() || focused,
                                                    false,
@@ -660,22 +663,8 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
                                       roundBottomLeft, roundBottomRight);
         }
 
-        if (isSegmentRole)
-        {
-            if (isActive)
-                UiAssets::drawAssetStretch(g, UiAssetId::TabSegmentActiveShell, bounds.reduced(1.5f, 2.0f));
-        }
-        else
-        {
-            UiAssets::drawAssetStretch(g,
-                                       isTransportRole ? UiAssetId::TransportButtonShell
-                                                       : (isActive ? UiAssetId::ToolbarTopbarButtonActive
-                                                                   : UiAssetId::ToolbarTopbarButtonIdle),
-                                       bounds);
-        }
-
-        // Active transport fill — pink gradient glow
-        if (isActive && isTransportRole)
+        // 激活态粉渐变（替换 TabSegmentActiveShell / ToolbarTopbarButtonActive / Transport 激活填充）
+        const auto drawActiveFill = [&]()
         {
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(p);
@@ -688,6 +677,21 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
             activeFill.addColour(0.48f, juce::Colour(Overdose::Colors::PalePink).withAlpha(0.62f));
             g.setGradientFill(activeFill);
             g.fillPath(p);
+        };
+
+        if (isSegmentRole)
+        {
+            // 段按钮：激活时粉渐变，空闲时保持透明
+            if (isActive)
+                drawActiveFill();
+        }
+        else
+        {
+            // 玻璃壳：白→淡紫渐变 + 顶部白高光 + 底部淡紫内阴影 + 粉边
+            UIColors::fillOverdoseButtonShell(g, bounds, radius, &p);
+
+            if (isActive)
+                drawActiveFill();
         }
 
         if (isHover && !isActive)
@@ -1064,12 +1068,31 @@ void TransportBarComponent::paint(juce::Graphics& g)
             juce::Path tray;
             tray.addRoundedRectangle(bounds, style.panelRadius);
 
-            // 扁平面板：纯色填充 + 柔和边框
-            g.setColour(juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(0.96f));
+            // 玻璃拟态面板：白→淡紫渐变+顶部高光+底部内阴影
+            juce::ColourGradient panelGrad(juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(0.96f),
+                                            bounds.getX(), bounds.getY(),
+                                            juce::Colour(Overdose::Colors::PanelOpaqueBottom).withAlpha(0.96f),
+                                            bounds.getX(), bounds.getBottom(), false);
+            panelGrad.addColour(0.40f, juce::Colour(Overdose::Colors::PanelOpaqueMid).withAlpha(0.92f));
+            g.setGradientFill(panelGrad);
             g.fillPath(tray);
 
-            g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.48f));
-            g.strokePath(tray, juce::PathStrokeType(1.0f));
+            // 顶部高光
+            {
+                juce::Graphics::ScopedSaveState clipState(g);
+                g.reduceClipRegion(tray);
+                auto highlightBand = bounds.withHeight(bounds.getHeight() * 0.35f);
+                juce::ColourGradient hl(juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.22f),
+                                         highlightBand.getX(), highlightBand.getY(),
+                                         juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.0f),
+                                         highlightBand.getX(), highlightBand.getBottom(), false);
+                g.setGradientFill(hl);
+                g.fillRect(highlightBand);
+            }
+
+            // 边框
+            g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.45f));
+            g.strokePath(tray, juce::PathStrokeType(0.8f));
         }
         else if (themeId == ThemeId::BlueBreeze)
         {
@@ -1088,14 +1111,23 @@ void TransportBarComponent::paint(juce::Graphics& g)
         && pianoViewButton_.isVisible())
     {
         auto segmentBounds = trackViewButton_.getBounds().getUnion(pianoViewButton_.getBounds()).toFloat().reduced(2.0f);
-        UiAssets::drawAssetStretch(g, UiAssetId::TabSegmentTrack, segmentBounds);
+        // 程序化绘制 Tab 底（淡紫渐变+粉边）
+        juce::ColourGradient tabGrad(juce::Colour(Overdose::Colors::PanelOpaqueTop).withAlpha(0.85f),
+                                     segmentBounds.getX(), segmentBounds.getY(),
+                                     juce::Colour(Overdose::Colors::PanelOpaqueBottom).withAlpha(0.85f),
+                                     segmentBounds.getX(), segmentBounds.getBottom(), false);
+        g.setGradientFill(tabGrad);
+        g.fillRoundedRectangle(segmentBounds, style.controlRadius);
+        g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.40f));
+        g.drawRoundedRectangle(segmentBounds, style.controlRadius, 0.8f);
     }
 
-    auto displayBounds = timeDisplay_.getBounds().toFloat();
-    // 鏃堕棿鐮侊細LCD 椋庢牸鏄剧ず灞忥紙鍙傝€冨浘鐗囬鏍硷級
+    // 时间码背景：与 UnifiedToolbarButton 一致缩进 2px，视觉高度统一为 36px
+    auto displayBounds = timeDisplay_.getBounds().toFloat().reduced(2.0f);
+    // 鏃堕棿鐮侊細LCD 椋庢牸鏄剧ず灞忥紙鍙傝€冨浘鐗囬鏍硷級
     if (themeId == ThemeId::Overdose)
     {
-        UiAssets::drawAssetStretch(g, UiAssetId::ToolbarTransportTimeField, displayBounds);
+        UIColors::drawOverdoseDisplayWell(g, displayBounds, style.fieldRadius);
     }
     else if (themeId == ThemeId::BlueBreeze)
     {

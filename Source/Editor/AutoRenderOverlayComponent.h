@@ -161,7 +161,12 @@ public:
 
     void paint(juce::Graphics& g) override
     {
-        g.fillAll(juce::Colours::black.withAlpha(0.7f));
+        const auto themeId = UIColors::currentThemeId();
+
+        if (themeId == ThemeId::Overdose)
+            g.fillAll(juce::Colour(Overdose::Colors::LoadingBackdrop).withAlpha(0.88f));
+        else
+            g.fillAll(juce::Colours::black.withAlpha(0.7f));
 
         auto bounds = getLocalBounds().toFloat();
         auto centerX = bounds.getCentreX();
@@ -172,7 +177,9 @@ public:
         const float spinnerSize = 60.0f;
         const float totalTextHeight = subText_.isEmpty() ? textHeight : textHeight * 2.0f + 8.0f;
 
-        g.setColour(juce::Colours::white);
+        g.setColour(themeId == ThemeId::Overdose
+                        ? juce::Colour(Overdose::Colors::TextOnDark)
+                        : juce::Colours::white);
         g.setFont(UIColors::getUIFont(18.0f).boldened());
 
         float textStartY = centerY - totalTextHeight - spacing;
@@ -211,7 +218,9 @@ public:
         g.setColour(juce::Colours::white.withAlpha(0.2f));
         g.drawEllipse(spinnerBounds, 3.0f);
 
-        g.setColour(UIColors::accent);
+        g.setColour(themeId == ThemeId::Overdose
+                        ? juce::Colour(Overdose::Colors::LoadingAccent)
+                        : UIColors::accent);
         juce::Path arc;
         arc.addCentredArc(
             spinnerBounds.getCentreX(),
