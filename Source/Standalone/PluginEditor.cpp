@@ -47,6 +47,18 @@ namespace {
 constexpr int kHeartbeatHzIdle = 30;
 constexpr int kHeartbeatHzInferenceActive = 10;
 
+// 主题截图验证钩子：仅当设置 OPENTUNE_THEME 环境变量时覆盖配置主题（截图工具用），
+// 未设置时返回配置值，行为与之前完全一致。
+ThemeId resolveEffectiveTheme(ThemeId configured)
+{
+    const juce::String env = juce::SystemStats::getEnvironmentVariable("OPENTUNE_THEME", {});
+    if (env == "overdose")     return ThemeId::Overdose;
+    if (env == "aurora")       return ThemeId::Aurora;
+    if (env == "bluebreeze")   return ThemeId::BlueBreeze;
+    if (env == "darkbluegrey") return ThemeId::DarkBlueGrey;
+    return configured;
+}
+
 ContentTimelineProjection makePianoRollProjection(const StandaloneArrangement::Placement& placement,
                                                           OpenTuneAudioProcessor& processor)
 {
@@ -250,7 +262,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     setResizeLimits(1000, 700, 3000, 2000);
     setSize(1200, 900);
 
-    UIColors::applyTheme(appPreferences_.getState().shared.theme);
+    UIColors::applyTheme(resolveEffectiveTheme(appPreferences_.getState().shared.theme));
 
     // Create Tech Cursor
     juce::Image cursorImg(juce::Image::ARGB, 32, 32, true);
@@ -433,7 +445,7 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     addAndMakeVisible(rippleOverlay_);
     // No need for setAlwaysOnTop on component level, we handle z-order in resized
 
-    applyThemeToEditor(appPreferences_.getState().shared.theme);
+    applyThemeToEditor(resolveEffectiveTheme(appPreferences_.getState().shared.theme));
 
     // Apply the purple theme to the window
     getLookAndFeel().setColour(juce::ResizableWindow::backgroundColourId, UIColors::backgroundDark);
@@ -497,15 +509,18 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
     // DirectSound buffer size enforcement
     auto* holder = juce::StandalonePluginHolder::getInstance();
-    jassert(holder != nullptr);
-    standaloneAudioDeviceManager_ = &holder->deviceManager;
-    standaloneAudioDeviceManager_->addChangeListener(this);
-    applyDirectSoundBufferPolicy();
+    if (holder != nullptr)
+    {
+        standaloneAudioDeviceManager_ = &holder->deviceManager;
+        standaloneAudioDeviceManager_->addChangeListener(this);
+        applyDirectSoundBufferPolicy();
+    }
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
-    standaloneAudioDeviceManager_->removeChangeListener(this);
+    if (standaloneAudioDeviceManager_ != nullptr)
+        standaloneAudioDeviceManager_->removeChangeListener(this);
 
     // Stop timer
 #if JUCE_MAC
@@ -857,7 +872,7 @@ void OpenTuneAudioProcessorEditor::paint(juce::Graphics& g)
 {
     if (UIColors::currentThemeId() == ThemeId::Overdose)
     {
-        UiAssets::drawAssetCover(g, UiAssetId::BackgroundMain, getLocalBounds().toFloat());
+        UIColors::fillOverdoseEditorBackground(g, getLocalBounds().toFloat(), 0.0f);
         return;
     }
 
@@ -1264,8 +1279,9 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
         LocalizationManager::getInstance().notifyLanguageChanged(sharedPreferences.language);
     }
 
-    if (appliedThemeId_ != sharedPreferences.theme)
-        applyThemeToEditor(sharedPreferences.theme);
+    const auto effectiveTheme = resolveEffectiveTheme(sharedPreferences.theme);
+    if (appliedThemeId_ != effectiveTheme)
+        applyThemeToEditor(effectiveTheme);
 
     pianoRoll_.setAudioEditingScheme(sharedPreferences.audioEditingScheme);
     pianoRoll_.setExperimentalFeaturesEnabled(experimentalFeaturesEnabled);
@@ -1283,6 +1299,8 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     arrangementView_.setShortcutSettings(shortcutSettings_);
     menuBar_.setMouseTrailTheme(preferencesState.standalone.mouseTrailTheme);
     rippleOverlay_.setTrailTheme(preferencesState.standalone.mouseTrailTheme);
+    menuBar_.setCursorStyle(preferencesState.standalone.cursorStyle);
+    CursorThemeManager::getInstance().setStyle(preferencesState.standalone.cursorStyle);
     menuBar_.setTrackColorMode(sharedPreferences.trackColorMode);
     trackPanel_.setTrackColorMode(sharedPreferences.trackColorMode);
 }
@@ -2374,6 +2392,16 @@ void OpenTuneAudioProcessorEditor::mouseTrailThemeChanged(MouseTrailConfig::Trai
     syncSharedAppPreferences();
     menuBar_.repaint();
     rippleOverlay_.repaint();
+}
+
+void OpenTuneAudioProcessorEditor::cursorStyleChanged(CursorStyleId style)
+{
+    if (appPreferences_.getState().standalone.cursorStyle != style)
+        appPreferences_.setCursorStyle(style);
+
+    syncSharedAppPreferences();
+    menuBar_.repaint();
+    juce::Desktop::getInstance().getMainMouseSource().forceMouseCursorUpdate();
 }
 
 void OpenTuneAudioProcessorEditor::trackColorModeChanged(TrackColorMode mode)
@@ -3562,6 +3590,9 @@ void OpenTuneAudioProcessorEditor::changeListenerCallback(juce::ChangeBroadcaste
 
 void OpenTuneAudioProcessorEditor::applyDirectSoundBufferPolicy()
 {
+    if (standaloneAudioDeviceManager_ == nullptr)
+        return;
+
     auto* device = standaloneAudioDeviceManager_->getCurrentAudioDevice();
     if (device == nullptr)
         return;

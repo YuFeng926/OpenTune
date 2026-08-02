@@ -795,7 +795,7 @@ void ArrangementViewComponent::rebuildThemeBackdrop()
     else if (themeId == ThemeId::BlueBreeze)
         UIColors::fillMistedTimelineField(g, bf, 0.0f);
     else if (themeId == ThemeId::Overdose)
-        UiAssets::drawAssetStretch(g, UiAssetId::PanelEditorMain, bf);
+        UIColors::fillOverdoseEditorBackground(g, bf, 0.0f);
     else if (themeId == ThemeId::DarkBlueGrey)
         UIColors::fillSoothe2SpectrumBackground(g, bf, 0.0f);
     else
@@ -1734,6 +1734,13 @@ void ArrangementViewComponent::drawPlayhead(juce::Graphics& g)
 
     const float anchorX = static_cast<float>(pres.anchorX);
     const float height = static_cast<float>(getHeight());
+
+    // Overdose: 粉色光晕（宽线打底）
+    if (UIColors::isOverdoseTheme())
+    {
+        g.setColour(juce::Colour(Overdose::Colors::PlayheadGlow).withAlpha(0.55f));
+        g.drawLine(anchorX, 0.0f, anchorX, height, 6.0f);
+    }
 
     g.setColour(playheadColour_);
     g.drawLine(anchorX, 0.0f, anchorX, height, 2.0f);

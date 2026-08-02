@@ -1,12 +1,29 @@
+# OpenTune clangd 配置（自包含，不依赖编译数据库）
+# VS+MSBuild 生成器不产出 compile_commands.json（CMake 仅对 Ninja/Makefile 生成器
+# 实现 CMAKE_EXPORT_COMPILE_COMMANDS），因此这里直接给出与真实构建（OpenTune_VST3.vcxproj
+# 的 AdditionalIncludeDirectories / 宏）逐项对齐的路径与宏。所有路径为绝对路径。
 CompileFlags:
-  # 使用 Ninja 预设 (windows-ara-lsp) 产出 compile_commands.json
-  CompilationDatabase: build-ara-lsp
   Add:
-    # JUCE 跨模块引用格式为 <juce_core/juce_core.h>，需要 modules 父目录
-    - "-IJUCE-master/modules"
-    # 项目源码根（使 Source/... 相对包含可解析）
-    - "-ISource"
-    # JUCE 关键宏定义（与 CMakeLists target_compile_definitions 对齐）
+    # ---- 标准与目标（MSVC 兼容模式，用于解析 MSVC STL / Windows SDK 头）----
+    - "-std=c++17"
+    - "--target=x86_64-pc-windows-msvc"
+    - "-fms-compatibility"
+    - "-fms-compatibility-version=19.44"
+    - "-fms-extensions"
+    # clangd 对 MSVC 目标默认启用 delayed template parsing，会误报 MSVC STL
+    # 模板错误（char_traits / _Enable_if_callable_t 等），显式关闭
+    - "-fno-delayed-template-parsing"
+    - "-D_WIN32"
+    - "-DWIN32"
+    - "-DUNICODE"
+    - "-D_UNICODE"
+    - "-D_CRT_SECURE_NO_WARNINGS"
+
+    # ---- 项目宏（与 CMakeLists.txt / 真实构建逐项对齐）----
+    - "-DJucePlugin_Enable_ARA=1"
+    - "-DJucePlugin_Build_Standalone=1"
+    - "-DJucePlugin_Build_VST3=0"
+    - '-DJucePlugin_Name="OpenTune"'
     - "-DJUCE_WEB_BROWSER=0"
     - "-DJUCE_USE_CURL=0"
     - "-DJUCE_VST3_CAN_REPLACE_VST2=0"
@@ -18,16 +35,47 @@ CompileFlags:
     - "-DJUCE_USE_OGGVORBIS=1"
     - "-DJUCE_USE_MP3AUDIOFORMAT=1"
     - "-DJUCE_USE_WINDOWS_MEDIA_FORMAT=1"
-    - "-D_CRT_SECURE_NO_WARNINGS"
-    # MSVC standard library paths
+    - "-DORT_API_MANUAL_INIT"
+    - "-DSOUNDTOUCH_FLOAT_SAMPLES"
+    - '-DOPENTUNE_VERSION="1.6.6"'
+    - "-DOPENTUNE_D3D12_AGILITY_SDK_VERSION=619"
+    - '-DOPENTUNE_SOURCE_DIR="G:/Opentune0723"'
+
+    # ---- JUCE modules 根（跨模块引用 <juce_core/juce_core.h>）----
+    - "-IG:/Opentune0723/JUCE-master/modules"
+
+    # ---- JUCE 自带 VST3 / LV2 SDK（juce_audio_processors_headless 依赖）----
+    - "-IG:/Opentune0723/JUCE-master/modules/juce_audio_processors_headless/format_types/VST3_SDK"
+    - "-IG:/Opentune0723/JUCE-master/modules/juce_audio_processors_headless/format_types/LV2_SDK"
+
+    # ---- 项目源码 ----
+    - "-IG:/Opentune0723/Source"
+    - "-IG:/Opentune0723/Source/Standalone"
+    - "-IG:/Opentune0723/Tests"
+
+    # ---- JUCE 构建产物头文件（BinaryData.h，由 juce_binarydata 目标生成）----
+    - "-IG:/Opentune0723/build-ara-overlay-vs18-clean/juce_binarydata_OpenTuneResources/JuceLibraryCode"
+
+    # ---- 第三方库（与真实构建 include 列表对齐）----
+    - "-IG:/Opentune0723/ThirdParty/r8brain-free-src-master"
+    - "-IG:/Opentune0723/ThirdParty/soundtouch-2.3.3/include"
+    - "-IG:/Opentune0723/ThirdParty/onnxruntime-win-x64-1.24.4/include"
+    - "-IG:/Opentune0723/ThirdParty/onnxruntime-dml-1.24.4/build/native/include"
+    - "-IG:/Opentune0723/build-ara-overlay-vs18-clean/onnxruntime_dml_include"
+    - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.1/build/native/include"
+    - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.1/build/native/include/d3dx12"
+    - "-IG:/Opentune0723/ThirdParty/microsoft.direct3d.d3d12.1.619.1/build/native"
+    - "-IG:/Opentune0723/ThirdParty/microsoft.ai.directml.1.15.4/include"
+    - "-IG:/Opentune0723/ThirdParty/ARA_SDK-releases-2.2.0"
+
+    # ---- MSVC STL 与 Windows SDK ----
     - "-IF:/VSC/VC/Tools/MSVC/14.44.35207/include"
-    - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/ucrt"
-    - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared"
-    - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um"
-    - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/winrt"
+    - '-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/ucrt'
+    - '-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared'
+    - '-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um'
+    - '-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/winrt'
 
 Diagnostics:
-  UnusedIncludes: Strict
   ClangTidy:
     Remove:
       - modernize-use-trailing-return-type
@@ -37,3 +85,21 @@ InlayHints:
   Enabled: Yes
   ParameterNames: Yes
   DeducedTypes: Yes
+
+# VST3 专属源码目录（Source/Plugin/ 整目录由 JucePlugin_Build_VST3 守卫）
+---
+If:
+  PathMatch: .*Source[\\/]Plugin[\\/].*
+CompileFlags:
+  Add:
+    - "-DJucePlugin_Build_VST3=1"
+    - "-DJucePlugin_Build_Standalone=0"
+
+# VST3 编辑器工厂（#if !JucePlugin_Build_Standalone 守卫）
+---
+If:
+  PathMatch: .*Source[\\/]Editor[\\/]EditorFactoryPlugin\.cpp
+CompileFlags:
+  Add:
+    - "-DJucePlugin_Build_VST3=1"
+    - "-DJucePlugin_Build_Standalone=0"

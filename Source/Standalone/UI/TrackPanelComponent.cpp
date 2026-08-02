@@ -1,6 +1,5 @@
 #include "TrackPanelComponent.h"
 #include "UIColors.h"
-#include "UiAssets.h"
 
 namespace OpenTune {
 
@@ -20,7 +19,10 @@ void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsH
 
     if (themeId == ThemeId::Overdose)
     {
-        UiAssets::drawAssetStretch(g, UiAssetId::TransportButtonShell, bounds);
+        // Overdose 主题：使用粉色系
+        activeBase = juce::Colour(Overdose::Colors::PrimaryPink);
+        
+        UIColors::fillOverdoseButtonShell(g, bounds, UIColors::currentThemeStyle().controlRadius);
 
         if (isToggled || shouldDrawButtonAsHighlighted || shouldDrawButtonAsDown)
         {
@@ -150,8 +152,7 @@ void TrackPanelComponent::paint(juce::Graphics& g)
     // Fill background (shadow is drawn internally by fillPanelBackground if needed, or we add it)
     if (themeId == ThemeId::Overdose)
     {
-        UIColors::drawShadow(g, bounds);
-        UiAssets::drawAssetStretch(g, UiAssetId::PanelTrackColumn, bounds);
+        UIColors::fillOverdosePanelBackground(g, bounds, style.panelRadius);
     }
     else if (themeId == ThemeId::Aurora)
     {
@@ -211,43 +212,49 @@ void TrackPanelComponent::paint(juce::Graphics& g)
             const auto laneBounds = trackBounds.reduced(static_cast<float>(kTrackPanelCardInsetX), static_cast<float>(kTrackPanelCardInsetY));
             const auto tintBounds = laneBounds.withX(bounds.getX()).withRight(bounds.getRight());
             const auto active = tracks_[i].isActive;
+            const bool isOverdose = (themeId == ThemeId::Overdose);
+            // Overdose：轨道色本身即主题粉，tint 大幅降淡避免透过卡片形成高饱和粉色
+            const float tintActiveA = isOverdose ? 0.10f : 0.34f;
+            const float tintActiveB = isOverdose ? 0.06f : 0.24f;
+            const float tintIdleA = isOverdose ? 0.08f : 0.20f;
+            const float tintIdleB = isOverdose ? 0.04f : 0.13f;
 
             g.setColour((i % 2 == 0 ? UIColors::pianoRollLane : UIColors::glassSurface).withAlpha(active ? 0.058f : 0.036f));
             g.fillRect(tintBounds);
 
             if (active)
             {
-                juce::ColourGradient rowGlow(trackColor.withAlpha(0.16f),
+                juce::ColourGradient rowGlow(trackColor.withAlpha(isOverdose ? 0.06f : 0.16f),
                                              tintBounds.getX(), tintBounds.getCentreY(),
                                              juce::Colours::transparentBlack,
                                              tintBounds.getRight(), tintBounds.getCentreY(), false);
-                rowGlow.addColour(0.24, trackColor.withAlpha(0.10f));
+                rowGlow.addColour(0.24, trackColor.withAlpha(isOverdose ? 0.04f : 0.10f));
                 rowGlow.addColour(1.0, juce::Colours::transparentBlack);
                 g.setGradientFill(rowGlow);
                 g.fillRect(tintBounds);
 
-                juce::ColourGradient edgeGlow(trackColor.withAlpha(0.12f),
+                juce::ColourGradient edgeGlow(trackColor.withAlpha(isOverdose ? 0.05f : 0.12f),
                                               tintBounds.getX(), tintBounds.getY(),
                                               juce::Colours::transparentBlack,
                                               tintBounds.getX(), tintBounds.getBottom(), false);
-                edgeGlow.addColour(0.50, trackColor.withAlpha(0.07f));
+                edgeGlow.addColour(0.50, trackColor.withAlpha(isOverdose ? 0.03f : 0.07f));
                 edgeGlow.addColour(1.0, juce::Colours::transparentBlack);
                 g.setGradientFill(edgeGlow);
                 g.fillRect(tintBounds);
             }
 
-            juce::ColourGradient tint(trackColor.withAlpha(active ? 0.34f : 0.20f),
+            juce::ColourGradient tint(trackColor.withAlpha(active ? tintActiveA : tintIdleA),
                                       tintBounds.getX(), tintBounds.getCentreY(),
                                       juce::Colours::transparentBlack,
                                       tintBounds.getRight(), tintBounds.getCentreY(), false);
-            tint.addColour(0.15, trackColor.withAlpha(active ? 0.24f : 0.13f));
+            tint.addColour(0.15, trackColor.withAlpha(active ? tintActiveB : tintIdleB));
             tint.addColour(0.48, UIColors::sidebarTrackFade.withAlpha(active ? 0.08f : 0.04f));
             tint.addColour(1.0, juce::Colours::transparentBlack);
             g.setGradientFill(tint);
             g.fillRect(tintBounds);
 
             const auto fadeRadius = juce::jmax(tintBounds.getWidth(), tintBounds.getHeight());
-            juce::ColourGradient radial(trackColor.withAlpha(active ? 0.22f : 0.10f),
+            juce::ColourGradient radial(trackColor.withAlpha(active ? (isOverdose ? 0.08f : 0.22f) : 0.10f),
                                         tintBounds.getX() + tintBounds.getWidth() * 0.16f,
                                         tintBounds.getCentreY(),
                                         juce::Colours::transparentBlack,
@@ -299,22 +306,48 @@ void TrackPanelComponent::paint(juce::Graphics& g)
         else if (themeId == ThemeId::Overdose)
         {
             const auto active = tracks_[i].isActive;
-            UiAssets::drawAssetStretch(g, UiAssetId::PanelTrackCard, cardBounds);
-
-            // Track color accent overlay
-            g.setColour(trackColors_[i].withAlpha(active ? 0.08f : 0.04f));
-            g.fillRoundedRectangle(cardBounds.reduced(1.0f), style.controlRadius);
-
+            
             if (active)
             {
-                g.setColour(juce::Colour(Overdose::Colors::PinkGlowSoft).withAlpha(0.36f));
-                g.fillRoundedRectangle(cardBounds.reduced(1.0f), juce::jmax(0.0f, style.controlRadius - 1.0f));
+                // 激活轨道：浅粉底 + 粉色细边 + 柔和粉光晕
+                juce::Path cardShape;
+                cardShape.addRoundedRectangle(cardBounds, style.controlRadius);
 
+                // 柔和粉光晕（DropShadow）
+                juce::DropShadow cardGlow(
+                    juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.25f),
+                    12, { 0, 2 });
+                cardGlow.drawForPath(g, cardShape);
+
+                // 浅粉底（TrackCardActive = #FFE9F5 级别）
+                g.setColour(juce::Colour(Overdose::Colors::TrackCardActive).withAlpha(0.88f));
+                g.fillPath(cardShape);
+
+                // 顶部高光
+                auto highlightRect = cardBounds.reduced(1.5f).withHeight(cardBounds.getHeight() * 0.30f);
+                juce::ColourGradient hl(
+                    juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.42f),
+                    highlightRect.getX(), highlightRect.getY(),
+                    juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.0f),
+                    highlightRect.getX(), highlightRect.getBottom(), false);
+                g.setGradientFill(hl);
+                g.fillRoundedRectangle(highlightRect, style.controlRadius - 1.5f);
+
+                // 粉色边框（#FFB6D0 级别）
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.72f));
+                g.drawRoundedRectangle(cardBounds.reduced(0.5f), style.controlRadius, 1.2f);
+
+                // 左侧粉色竖线
                 const float x = cardBounds.getX() + 2.0f;
                 const float y0 = cardBounds.getY() + trackAccentVerticalInset;
                 const float y1 = cardBounds.getBottom() - trackAccentVerticalInset;
-                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.72f));
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.82f));
                 g.drawLine(x, y0, x, y1, 2.4f);
+            }
+            else
+            {
+                // 非激活轨道：淡薰衣草色
+                UIColors::fillOverdosePanelBackground(g, cardBounds, style.controlRadius);
             }
         }
         else if (themeId == ThemeId::DarkBlueGrey)
