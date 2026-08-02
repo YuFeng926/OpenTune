@@ -992,6 +992,13 @@ void PianoRollComponent::drawPlayheadOverlay(juce::Graphics& g)
     juce::Graphics::ScopedSaveState playheadClip(g);
     g.reduceClipRegion(timeAxisRect());
 
+    // Overdose: 粉色光晕（宽线打底）
+    if (UIColors::isOverdoseTheme())
+    {
+        g.setColour(juce::Colour(Overdose::Colors::PlayheadGlow).withAlpha(0.55f));
+        g.drawLine(anchorX, 0.0f, anchorX, height, 6.0f);
+    }
+
     g.setColour(playheadColour_);
     g.drawLine(anchorX, 0.0f, anchorX, height, 2.0f);
 
@@ -1127,7 +1134,14 @@ void PianoRollComponent::drawSelectedNoteHighlights(juce::Graphics& g)
 
 void PianoRollComponent::drawF0SelectionHighlight(juce::Graphics& g)
 {
-    if (!interactionState_.selection.hasF0Selection) return;
+    // F0 高亮范围 = 当前有效选择范围：音符派生 F0 选择优先，无音符时回退到框选/全选选区。
+    int selStartFrame = 0;
+    int selEndFrameExclusive = 0;
+    if (!getF0SelectionFrameRange(selStartFrame, selEndFrameExclusive)) {
+        if (!getSelectionAreaFrameRange(selStartFrame, selEndFrameExclusive)) {
+            return;
+        }
+    }
 
     juce::Graphics::ScopedSaveState ss(g);
     g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
@@ -1144,9 +1158,9 @@ void PianoRollComponent::drawF0SelectionHighlight(juce::Graphics& g)
     ctx.showOriginalF0 = showOriginalF0_;
     ctx.showCorrectedF0 = showCorrectedF0_;
     ctx.coords = makeViewMapper();
-    ctx.hasF0Selection = interactionState_.selection.hasF0Selection;
-    ctx.f0SelectionStartFrame = interactionState_.selection.selectedF0StartFrame;
-    ctx.f0SelectionEndFrameExclusive = interactionState_.selection.selectedF0EndFrameExclusive;
+    ctx.hasF0Selection = true;
+    ctx.f0SelectionStartFrame = selStartFrame;
+    ctx.f0SelectionEndFrameExclusive = selEndFrameExclusive;
     ctx.contents = buildContentRenderItems();
 
     for (const auto& item : ctx.contents) {
@@ -1475,7 +1489,7 @@ void PianoRollComponent::drawFixedChrome(juce::Graphics& g, juce::Rectangle<int>
             case ThemeId::DarkBlueGrey: UIColors::fillSoothe2SpectrumBackground(g, juce::Rectangle<float>(0, 0, static_cast<float>(imgW), static_cast<float>(imgH)), UIColors::cornerRadius); break;
             case ThemeId::Aurora: g.setColour(UIColors::rollBackground); g.fillPath(chromePath); break;
             case ThemeId::BlueBreeze: UIColors::fillMistedTimelineField(g, juce::Rectangle<float>(0,0,static_cast<float>(imgW),static_cast<float>(imgH)), UIColors::cornerRadius); break;
-            case ThemeId::Overdose: UiAssets::drawAssetStretch(g, UiAssetId::PanelEditorMain, juce::Rectangle<float>(0,0,static_cast<float>(imgW),static_cast<float>(imgH))); break;
+            case ThemeId::Overdose: UIColors::fillOverdoseEditorBackground(g, juce::Rectangle<float>(0,0,static_cast<float>(imgW),static_cast<float>(imgH)), UIColors::cornerRadius); break;
             default: g.setColour(UIColors::rollBackground); g.fillPath(chromePath); break;
         }
     }
@@ -2273,12 +2287,6 @@ void PianoRollComponent::resized() {
 void PianoRollComponent::applyEditedContentCurve(std::shared_ptr<PitchCurve> curve)
 {
     currentCurve_ = std::move(curve);
-
-    interactionState_.selection.hasSelectionArea = false;
-    interactionState_.selection.selectionStartTime = 0.0;
-    interactionState_.selection.selectionEndTime = 0.0;
-    interactionState_.selection.selectionStartMidi = 0.0f;
-    interactionState_.selection.selectionEndMidi = 0.0f;
 }
 
 void PianoRollComponent::applyEditedContentAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer,
@@ -2470,6 +2478,15 @@ void PianoRollComponent::setEditedContent(ContentKey contentKey,
         lastKnownNotesRevision_ = 0;
         lastKnownPitchRevision_ = 0;
         lastKnownTimeGridRevision_ = 0;
+        // 切换编辑目标时清空全部选择状态，避免旧 clip 选择残留
+        interactionState_.noteSelection.clear();
+        interactionState_.selection.clearF0Selection();
+        interactionState_.selection.hasSelectionArea = false;
+        interactionState_.selection.isSelectingArea = false;
+        interactionState_.selection.selectionStartTime = 0.0;
+        interactionState_.selection.selectionEndTime = 0.0;
+        interactionState_.selection.selectionStartMidi = 0.0f;
+        interactionState_.selection.selectionEndMidi = 0.0f;
     }
 
     // notes 锟?pitchCurve 闁俺锟?commitNotesAndPitchCurve 閸氬苯鍟撻崚?store锟?
