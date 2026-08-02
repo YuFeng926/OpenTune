@@ -309,45 +309,50 @@ void TrackPanelComponent::paint(juce::Graphics& g)
             
             if (active)
             {
-                // 激活轨道：浅粉底 + 粉色细边 + 柔和粉光晕
+                // 激活轨道：极浅粉底（参考图：几乎白色带粉 tint）
                 juce::Path cardShape;
                 cardShape.addRoundedRectangle(cardBounds, style.controlRadius);
 
-                // 柔和粉光晕（DropShadow）
+                // 柔和粉光晕
                 juce::DropShadow cardGlow(
-                    juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.25f),
-                    12, { 0, 2 });
+                    juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.20f),
+                    10, { 0, 2 });
                 cardGlow.drawForPath(g, cardShape);
 
-                // 浅粉底（TrackCardActive = #FFE9F5 级别）
-                g.setColour(juce::Colour(Overdose::Colors::TrackCardActive).withAlpha(0.88f));
+                // 极浅粉底（更白更亮）
+                g.setColour(juce::Colour(0xFFFFF5FA));  // 极浅粉白
                 g.fillPath(cardShape);
 
                 // 顶部高光
                 auto highlightRect = cardBounds.reduced(1.5f).withHeight(cardBounds.getHeight() * 0.30f);
                 juce::ColourGradient hl(
-                    juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.42f),
+                    juce::Colour(0xFFFFFFFF).withAlpha(0.50f),
                     highlightRect.getX(), highlightRect.getY(),
-                    juce::Colour(Overdose::Colors::GlassHighlight).withAlpha(0.0f),
+                    juce::Colour(0xFFFFFFFF).withAlpha(0.0f),
                     highlightRect.getX(), highlightRect.getBottom(), false);
                 g.setGradientFill(hl);
                 g.fillRoundedRectangle(highlightRect, style.controlRadius - 1.5f);
 
-                // 粉色边框（#FFB6D0 级别）
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.72f));
-                g.drawRoundedRectangle(cardBounds.reduced(0.5f), style.controlRadius, 1.2f);
+                // 粉色边框（更淡更精致）
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.55f));
+                g.drawRoundedRectangle(cardBounds.reduced(0.5f), style.controlRadius, 1.0f);
 
                 // 左侧粉色竖线
                 const float x = cardBounds.getX() + 2.0f;
                 const float y0 = cardBounds.getY() + trackAccentVerticalInset;
                 const float y1 = cardBounds.getBottom() - trackAccentVerticalInset;
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.82f));
-                g.drawLine(x, y0, x, y1, 2.4f);
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.70f));
+                g.drawLine(x, y0, x, y1, 2.0f);
             }
             else
             {
-                // 非激活轨道：淡薰衣草色
-                UIColors::fillOverdosePanelBackground(g, cardBounds, style.controlRadius);
+                // 非激活轨道：淡薰衣草色（参考图：更淡更柔和）
+                g.setColour(juce::Colour(0xFFF0EBF8));  // 淡薰衣草
+                g.fillRoundedRectangle(cardBounds, style.controlRadius);
+                
+                // 微弱边框
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.30f));
+                g.drawRoundedRectangle(cardBounds.reduced(0.5f), style.controlRadius, 0.8f);
             }
         }
         else if (themeId == ThemeId::DarkBlueGrey)

@@ -1686,12 +1686,12 @@ struct UIColors
             g.fillRect(bottomBand);
         }
 
-        // 面板边框（精致细线）
-        g.setColour(juce::Colour { Overdose::Colors::PanelBorderSoft }.withAlpha(0.32f));
+        // 面板边框（精致但可见）
+        g.setColour(juce::Colour { Overdose::Colors::PanelBorderSoft }.withAlpha(0.42f));
         if (radius > 0.0f)
-            g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 0.85f);
+            g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
         else
-            g.drawRect(bounds.reduced(0.5f), 0.85f);
+            g.drawRect(bounds.reduced(0.5f), 1.0f);
     }
 
     static void fillOverdosePanelBackground(juce::Graphics& g, const juce::Rectangle<float>& bounds, float radius)
@@ -1771,22 +1771,22 @@ struct UIColors
         juce::Path shape;
         shape.addRoundedRectangle(bounds, radius);
 
-        // 外部粉色辉光（增强霓虹效果）
+        // 外部粉色辉光（霓虹效果，增强）
         juce::DropShadow outerGlow(
-            juce::Colour { Overdose::Colors::PinkGlow }.withAlpha(0.40f),
-            26, {});
+            juce::Colour { Overdose::Colors::PinkGlow }.withAlpha(0.45f),
+            28, {});
         outerGlow.drawForPath(g, shape);
 
-        // 深色背景：DarkControlFace → DarkControlPressed
+        // 深色背景：更深的黑紫色（参考图：接近黑色）
         juce::ColourGradient bg(
-            juce::Colour { Overdose::Colors::DarkControlFace },
+            juce::Colour(0xFF1A0F2E),  // 深黑紫
             bounds.getX(), bounds.getY(),
-            juce::Colour { Overdose::Colors::DarkControlPressed },
+            juce::Colour(0xFF0F0820),  // 更深
             bounds.getX(), bounds.getBottom(), false);
         g.setGradientFill(bg);
         g.fillPath(shape);
 
-        // 内部顶部白色高光带（霓虹内辉光，增强）
+        // 内部顶部白色高光带（霓虹内辉光）
         {
             juce::Graphics::ScopedSaveState clip(g);
             g.reduceClipRegion(shape);
@@ -1800,7 +1800,7 @@ struct UIColors
             g.fillRect(topBand);
         }
 
-        // 内部底部内阴影（增强）
+        // 内部底部内阴影
         {
             juce::Graphics::ScopedSaveState clip(g);
             g.reduceClipRegion(shape);
@@ -1814,22 +1814,22 @@ struct UIColors
             g.fillRect(bottomBand);
         }
 
-        // 外描边：深紫色
-        g.setColour(juce::Colour { Overdose::Colors::DarkControlEdge }.withAlpha(0.85f));
-        g.strokePath(shape, juce::PathStrokeType(1.6f));
+        // 外描边：深紫色（精致细线）
+        g.setColour(juce::Colour { Overdose::Colors::DarkControlEdge }.withAlpha(0.80f));
+        g.strokePath(shape, juce::PathStrokeType(1.4f));
 
-        // 粉色外轮廓光（霓虹效果，三层）
+        // 粉色外轮廓光（霓虹效果，三层增强）
         g.setColour(juce::Colour { Overdose::Colors::PinkGlow }.withAlpha(0.50f));
-        g.strokePath(shape, juce::PathStrokeType(3.6f));
+        g.strokePath(shape, juce::PathStrokeType(3.2f));
         
         g.setColour(juce::Colour { Overdose::Colors::PrimaryPink }.withAlpha(0.25f));
-        g.strokePath(shape, juce::PathStrokeType(5.5f));
+        g.strokePath(shape, juce::PathStrokeType(5.0f));
 
         // 内描边：粉色微光
         if (radius > 1.5f)
         {
             g.setColour(juce::Colour { Overdose::Colors::PinkGlowSoft }.withAlpha(0.30f));
-            g.drawRoundedRectangle(bounds.reduced(1.4f), radius - 1.0f, 1.2f);
+            g.drawRoundedRectangle(bounds.reduced(1.4f), radius - 1.0f, 1.0f);
         }
     }
 
@@ -1848,6 +1848,12 @@ struct UIColors
         else
             shape.addRectangle(bounds);
 
+        // 柔和阴影（增强立体感）
+        juce::DropShadow shellShadow(
+            juce::Colour { Overdose::Colors::SoftShadow }.withAlpha(0.25f),
+            8, { 0, 2 });
+        shellShadow.drawForPath(g, shape);
+
         // 主体渐变：白 → 淡紫
         juce::ColourGradient body(
             juce::Colour { Overdose::Colors::PanelOpaqueTop },
@@ -1864,14 +1870,14 @@ struct UIColors
 
             // 顶部白高光
             const auto topInset = juce::jmin(radius, bounds.getWidth() * 0.24f);
-            g.setColour(juce::Colour { Overdose::Colors::GlassHighlight }.withAlpha(0.50f));
+            g.setColour(juce::Colour { Overdose::Colors::GlassHighlight }.withAlpha(0.55f));
             g.drawLine(bounds.getX() + topInset, bounds.getY() + 1.0f,
-                       bounds.getRight() - topInset, bounds.getY() + 1.0f, 1.1f);
+                       bounds.getRight() - topInset, bounds.getY() + 1.0f, 1.2f);
 
             // 顶部向下渐隐
             auto fadeBand = bounds.withHeight(bounds.getHeight() * 0.12f);
             juce::ColourGradient fade(
-                juce::Colour { Overdose::Colors::GlassSurface }.withAlpha(0.16f),
+                juce::Colour { Overdose::Colors::GlassSurface }.withAlpha(0.18f),
                 fadeBand.getCentreX(), fadeBand.getY(),
                 juce::Colours::transparentWhite,
                 fadeBand.getCentreX(), fadeBand.getBottom(), false);
@@ -1883,23 +1889,23 @@ struct UIColors
             juce::ColourGradient innerShade(
                 juce::Colours::transparentBlack,
                 innerBottom.getCentreX(), innerBottom.getY(),
-                juce::Colour { Overdose::Colors::PanelInsetShadow }.withAlpha(0.12f),
+                juce::Colour { Overdose::Colors::PanelInsetShadow }.withAlpha(0.15f),
                 innerBottom.getCentreX(), innerBottom.getBottom(), false);
             g.setGradientFill(innerShade);
             g.fillRect(innerBottom);
         }
 
-        // 粉边（精致细线）
-        g.setColour(juce::Colour { Overdose::Colors::PanelBorder }.withAlpha(0.38f));
-        g.strokePath(shape, juce::PathStrokeType(0.85f));
+        // 粉边（精致但可见）
+        g.setColour(juce::Colour { Overdose::Colors::PanelBorder }.withAlpha(0.48f));
+        g.strokePath(shape, juce::PathStrokeType(1.0f));
         if (shapeOverride == nullptr && radius > 1.5f)
         {
-            g.setColour(juce::Colour { Overdose::Colors::PanelBorderSoft }.withAlpha(0.18f));
-            g.drawRoundedRectangle(bounds.reduced(1.4f), juce::jmax(0.0f, radius - 1.0f), 0.65f);
+            g.setColour(juce::Colour { Overdose::Colors::PanelBorderSoft }.withAlpha(0.25f));
+            g.drawRoundedRectangle(bounds.reduced(1.4f), juce::jmax(0.0f, radius - 1.0f), 0.75f);
         }
     }
 
-    // 粉色玻璃拟态旋钮：白主体 + 粉刻度 + 线状指针（拟物）
+    // 金属银色旋钮：银色主体 + 粉色指示环 + 心形中心
     static void drawOverdoseKnob(juce::Graphics& g,
                                  juce::Rectangle<float> bounds,
                                  float normalisedValue,
@@ -1916,11 +1922,11 @@ struct UIColors
         const auto ringRadius = radius + juce::jmax(5.0f, side * 0.085f);
         const auto angle = rotaryStartAngle + (rotaryEndAngle - rotaryStartAngle) * clampedValue;
 
-        // 轨道环（淡紫）
+        // 粉色轨道环（参考图：粉色外环）
         juce::Path ringPath;
         ringPath.addCentredArc(centre.x, centre.y, ringRadius, ringRadius, 0.0f, rotaryStartAngle, rotaryEndAngle, true);
-        g.setColour(juce::Colour { Overdose::Colors::KnobRim }.withAlpha(0.38f));
-        g.strokePath(ringPath, juce::PathStrokeType(2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(juce::Colour { Overdose::Colors::PrimaryPink }.withAlpha(0.55f));
+        g.strokePath(ringPath, juce::PathStrokeType(2.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         // 粉刻度
         static constexpr int tickCount = 34;
@@ -1939,45 +1945,46 @@ struct UIColors
             };
             g.setColour((isMajor ? juce::Colour { Overdose::Colors::PrimaryPink }
                                  : juce::Colour { Overdose::Colors::KnobRim })
-                            .withAlpha(isMajor ? 0.65f : 0.38f));
-            g.drawLine(tick, isMajor ? 1.35f : 1.0f);
+                            .withAlpha(isMajor ? 0.70f : 0.40f));
+            g.drawLine(tick, isMajor ? 1.4f : 1.0f);
         }
 
-        // 粉指示弧（当前值到起点的弧）
+        // 粉色指示弧（当前值到起点的弧）
         juce::Path valueArc;
         valueArc.addCentredArc(centre.x, centre.y, ringRadius, ringRadius, 0.0f, rotaryStartAngle, angle, true);
-        g.setColour(juce::Colour { Overdose::Colors::PrimaryPink }.withAlpha(highlighted ? 0.72f : 0.46f));
-        g.strokePath(valueArc, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour(juce::Colour { Overdose::Colors::PrimaryPink }.withAlpha(highlighted ? 0.85f : 0.65f));
+        g.strokePath(valueArc, juce::PathStrokeType(2.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-        // 旋钮主体：白 → 淡紫玻璃
+        // 旋钮主体：金属银色渐变（参考图：银色金属质感）
         juce::Path knobPath;
         knobPath.addEllipse(knobBounds);
         if (highlighted)
         {
-            juce::DropShadow responseGlow(juce::Colour { Overdose::Colors::PinkGlow }.withAlpha(0.22f),
-                                           18, {});
+            juce::DropShadow responseGlow(juce::Colour { Overdose::Colors::PinkGlow }.withAlpha(0.25f),
+                                           20, {});
             responseGlow.drawForPath(g, knobPath);
         }
 
-        juce::DropShadow shadow(juce::Colour { Overdose::Colors::SoftShadow }.withAlpha(highlighted ? 0.60f : 0.48f),
-                                highlighted ? 24 : 20,
-                                { 0, highlighted ? 8 : 6 });
+        juce::DropShadow shadow(juce::Colour { Overdose::Colors::SoftShadow }.withAlpha(highlighted ? 0.65f : 0.50f),
+                                highlighted ? 26 : 22,
+                                { 0, highlighted ? 9 : 7 });
         shadow.drawForPath(g, knobPath);
 
-        juce::ColourGradient body(juce::Colour { Overdose::Colors::KnobBody },
-                                  knobBounds.getX() + knobBounds.getWidth() * 0.24f,
-                                  knobBounds.getY() + knobBounds.getHeight() * 0.10f,
-                                  juce::Colour { Overdose::Colors::PanelOpaqueBottom },
+        // 金属银色主体渐变（上亮下暗，模拟金属反光）
+        juce::ColourGradient body(juce::Colour(0xFFE8E0F0),  // 顶部亮银
+                                  knobBounds.getX() + knobBounds.getWidth() * 0.20f,
+                                  knobBounds.getY() + knobBounds.getHeight() * 0.05f,
+                                  juce::Colour(0xFFB8B0C8),  // 底部暗银
                                   knobBounds.getRight(), knobBounds.getBottom(), false);
-        body.addColour(0.25, juce::Colour { Overdose::Colors::FieldMid });
-        body.addColour(0.50, juce::Colour { Overdose::Colors::PanelOpaqueMid });
-        body.addColour(0.75, juce::Colour { Overdose::Colors::PanelOpaqueMid }.darker(0.08f));
+        body.addColour(0.30, juce::Colour(0xFFD8D0E0));
+        body.addColour(0.60, juce::Colour(0xFFC8C0D0));
         g.setGradientFill(body);
         g.fillPath(knobPath);
 
-        juce::ColourGradient gloss(juce::Colour { Overdose::Colors::GlassHighlight }.withAlpha(highlighted ? 0.35f : 0.25f),
-                                   knobBounds.getX() + knobBounds.getWidth() * 0.28f,
-                                   knobBounds.getY() + knobBounds.getHeight() * 0.12f,
+        // 顶部高光（金属反光）
+        juce::ColourGradient gloss(juce::Colour { Overdose::Colors::GlassHighlight }.withAlpha(highlighted ? 0.45f : 0.35f),
+                                   knobBounds.getX() + knobBounds.getWidth() * 0.25f,
+                                   knobBounds.getY() + knobBounds.getHeight() * 0.08f,
                                    juce::Colours::transparentWhite,
                                    knobBounds.getRight(), knobBounds.getCentreY(), true);
         g.setGradientFill(gloss);
@@ -1987,12 +1994,12 @@ struct UIColors
         {
             juce::Graphics::ScopedSaveState clip(g);
             g.reduceClipRegion(knobPath);
-            auto specular = juce::Rectangle<float>(knobBounds.getX() + knobBounds.getWidth() * 0.20f,
-                                                   knobBounds.getY() + knobBounds.getHeight() * 0.10f,
-                                                   knobBounds.getWidth() * 0.38f,
-                                                   knobBounds.getHeight() * 0.20f);
+            auto specular = juce::Rectangle<float>(knobBounds.getX() + knobBounds.getWidth() * 0.18f,
+                                                   knobBounds.getY() + knobBounds.getHeight() * 0.08f,
+                                                   knobBounds.getWidth() * 0.40f,
+                                                   knobBounds.getHeight() * 0.22f);
             juce::ColourGradient spec(
-                juce::Colour { Overdose::Colors::GlassHighlight }.withAlpha(highlighted ? 0.75f : 0.60f),
+                juce::Colour(0xFFFFFFFF).withAlpha(highlighted ? 0.80f : 0.65f),
                 specular.getTopLeft(),
                 juce::Colours::transparentWhite,
                 specular.getBottomRight(), false);
@@ -2000,51 +2007,60 @@ struct UIColors
             g.fillEllipse(specular);
         }
 
-        juce::ColourGradient rimLight(juce::Colour { Overdose::Colors::GlassHighlight }.withAlpha(highlighted ? 0.18f : 0.10f),
-                                      knobBounds.getX() + knobBounds.getWidth() * 0.20f,
-                                      knobBounds.getY() + knobBounds.getHeight() * 0.10f,
-                                      juce::Colours::transparentWhite,
-                                      knobBounds.getCentreX(), knobBounds.getBottom(), true);
-        g.setGradientFill(rimLight);
-        g.strokePath(knobPath, juce::PathStrokeType(highlighted ? 1.15f : 0.85f));
+        // 银色描边
+        g.setColour(juce::Colour(0xFFA098B0).withAlpha(highlighted ? 0.75f : 0.55f));
+        g.strokePath(knobPath, juce::PathStrokeType(highlighted ? 1.4f : 1.1f));
 
-        g.setColour(juce::Colour { Overdose::Colors::KnobRim }.withAlpha(highlighted ? 0.72f : 0.52f));
-        g.strokePath(knobPath, juce::PathStrokeType(highlighted ? 1.35f : 1.0f));
-
-        // 线状指针（拟物风格，从中心向角度方向）
+        // 线状指针（粉色，从中心向角度方向）
         {
-            const auto pointerLen = radius * 0.72f;
-            const auto pointerW = juce::jmax(2.2f, radius * 0.11f);
+            const auto pointerLen = radius * 0.70f;
+            const auto pointerW = juce::jmax(2.4f, radius * 0.12f);
             const auto px = centre.x + std::cos(angle) * pointerLen;
             const auto py = centre.y + std::sin(angle) * pointerLen;
             // 指针阴影
-            g.setColour(juce::Colour { Overdose::Colors::SoftShadow }.withAlpha(0.40f));
+            g.setColour(juce::Colour { Overdose::Colors::SoftShadow }.withAlpha(0.45f));
             g.drawLine(centre.x + 1.0f, centre.y + 1.5f, px + 1.0f, py + 1.5f, pointerW);
             // 指针主体（粉色）
             g.setColour(juce::Colour { Overdose::Colors::PrimaryPink }.withAlpha(0.95f));
             g.drawLine(centre.x, centre.y, px, py, pointerW);
             // 指针尖端小圆
-            const auto tipR = pointerW * 0.60f;
+            const auto tipR = pointerW * 0.65f;
             g.setColour(juce::Colour { Overdose::Colors::PrimaryPink });
             g.fillEllipse(px - tipR, py - tipR, tipR * 2.0f, tipR * 2.0f);
         }
 
-        // 中心轴心圆（拟物）
+        // 中心心形指示（参考图：粉色心形，非常明显）
         {
-            const auto axleR = juce::jmax(4.5f, radius * 0.16f);
-            // 轴心渐变（上亮下暗）
-            juce::ColourGradient axleGrad(juce::Colour { Overdose::Colors::PanelOpaqueTop },
-                                          centre.x - axleR, centre.y - axleR,
-                                          juce::Colour { Overdose::Colors::PanelOpaqueBottom },
-                                          centre.x + axleR, centre.y + axleR, false);
-            g.setGradientFill(axleGrad);
-            g.fillEllipse(centre.x - axleR, centre.y - axleR, axleR * 2.0f, axleR * 2.0f);
-            // 轴心描边
-            g.setColour(juce::Colour { Overdose::Colors::KnobRim }.withAlpha(0.60f));
-            g.drawEllipse(centre.x - axleR, centre.y - axleR, axleR * 2.0f, axleR * 2.0f, 0.9f);
-            // 轴心高光
-            g.setColour(juce::Colour { Overdose::Colors::GlassHighlight }.withAlpha(0.50f));
-            g.fillEllipse(centre.x - axleR * 0.50f, centre.y - axleR * 0.60f, axleR * 0.8f, axleR * 0.55f);
+            const auto heartSize = juce::jmax(14.0f, radius * 0.45f);  // 大幅放大
+            const auto hx = centre.x;
+            const auto hy = centre.y - heartSize * 0.1f;  // 略微上移
+            
+            // 绘制心形路径
+            juce::Path heart;
+            heart.startNewSubPath(hx, hy + heartSize * 0.40f);
+            heart.cubicTo(hx - heartSize * 0.60f, hy,
+                         hx - heartSize * 0.60f, hy - heartSize * 0.55f,
+                         hx, hy - heartSize * 0.10f);
+            heart.cubicTo(hx + heartSize * 0.60f, hy - heartSize * 0.55f,
+                         hx + heartSize * 0.60f, hy,
+                         hx, hy + heartSize * 0.40f);
+            heart.closeSubPath();
+            
+            // 心形填充（亮粉渐变）
+            juce::ColourGradient heartGrad(juce::Colour(0xFFFF80C0),
+                                           hx - heartSize * 0.5f, hy - heartSize * 0.5f,
+                                           juce::Colour(0xFFFF2097),
+                                           hx + heartSize * 0.5f, hy + heartSize * 0.4f, false);
+            g.setGradientFill(heartGrad);
+            g.fillPath(heart);
+            
+            // 心形描边（深粉）
+            g.setColour(juce::Colour(0xFFE01080).withAlpha(0.70f));
+            g.strokePath(heart, juce::PathStrokeType(1.0f));
+            
+            // 心形高光（左上）
+            g.setColour(juce::Colour(0xFFFFFFFF).withAlpha(0.60f));
+            g.fillEllipse(hx - heartSize * 0.32f, hy - heartSize * 0.42f, heartSize * 0.42f, heartSize * 0.30f);
         }
     }
 

@@ -114,54 +114,97 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
     if (themeId == ThemeId::Overdose)
     {
         const auto active = getToggleState() || shouldDrawButtonAsDown;
-        UIColors::fillOverdoseButtonShell(g, bounds, UIColors::currentThemeStyle().controlRadius);
+        const auto radius = UIColors::currentThemeStyle().controlRadius;
 
+        // 阴影（增强立体感）
+        juce::DropShadow softShadow;
+        softShadow.colour = juce::Colour(Overdose::Colors::SoftShadow).withAlpha(active ? 0.25f : 0.18f);
+        softShadow.radius = active ? 10 : 8;
+        softShadow.offset = { 0, active ? 3 : 2 };
+        juce::Path shape;
+        shape.addRoundedRectangle(bounds, radius);
+        softShadow.drawForPath(g, shape);
+
+        // 主体渐变
         if (active)
         {
-            juce::Graphics::ScopedSaveState clip(g);
-            juce::Path activeShape;
-            activeShape.addRoundedRectangle(bounds.reduced(1.5f),
-                                            juce::jmax(0.0f, UIColors::currentThemeStyle().controlRadius - 1.5f));
-            g.reduceClipRegion(activeShape);
-
-            juce::ColourGradient fill(juce::Colour(Overdose::Colors::ButtonActiveTop).withAlpha(0.96f),
-                                      bounds.getX(),
-                                      bounds.getY(),
-                                      juce::Colour(Overdose::Colors::ButtonActiveBottom).withAlpha(0.96f),
-                                      bounds.getX(),
-                                      bounds.getBottom(),
-                                      false);
-            fill.addColour(0.54f, juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.74f));
+            // 激活：粉色渐变（参考图：亮粉色）
+            juce::ColourGradient fill(juce::Colour(0xFFFF60A0),  // 亮粉
+                                       bounds.getX(), bounds.getY(),
+                                       juce::Colour(0xFFFF2097),  // 深粉
+                                       bounds.getX(), bounds.getBottom(),
+                                       false);
             g.setGradientFill(fill);
-            g.fillRoundedRectangle(bounds.reduced(1.5f),
-                                   juce::jmax(0.0f, UIColors::currentThemeStyle().controlRadius - 1.5f));
+            g.fillRoundedRectangle(bounds, radius);
 
-            g.setColour(juce::Colours::white.withAlpha(0.22f));
-            g.drawLine(bounds.getX() + 9.0f,
-                       bounds.getY() + 3.0f,
-                       bounds.getRight() - 9.0f,
-                       bounds.getY() + 3.0f,
-                       1.0f);
+            // 顶部高光
+            auto highlightRect = bounds.reduced(1.5f).withHeight(bounds.getHeight() * 0.35f);
+            juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.45f),
+                                     highlightRect.getX(), highlightRect.getY(),
+                                     juce::Colours::transparentWhite,
+                                     highlightRect.getX(), highlightRect.getBottom(), false);
+            g.setGradientFill(hl);
+            g.fillRoundedRectangle(highlightRect, radius - 1.5f);
+
+            // 边框（深粉）
+            g.setColour(juce::Colour(0xFFE01080).withAlpha(0.60f));
+            g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.2f);
         }
-        else if (shouldDrawButtonAsHighlighted)
+        else
         {
-            juce::Graphics::ScopedSaveState clip(g);
-            juce::Path hoverShape;
-            hoverShape.addRoundedRectangle(bounds.reduced(1.5f),
-                                           juce::jmax(0.0f, UIColors::currentThemeStyle().controlRadius - 1.5f));
-            g.reduceClipRegion(hoverShape);
-            g.setColour(juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.14f));
-            g.fillRoundedRectangle(bounds.reduced(1.5f),
-                                   juce::jmax(0.0f, UIColors::currentThemeStyle().controlRadius - 1.5f));
+            // 普通：玻璃质感（白→淡紫）
+            juce::ColourGradient bg(juce::Colour(0xFFFFF8FC),
+                                     bounds.getX(), bounds.getY(),
+                                     juce::Colour(Overdose::Colors::FieldBottom),
+                                     bounds.getX(), bounds.getBottom(), false);
+            g.setGradientFill(bg);
+            g.fillRoundedRectangle(bounds, radius);
+
+            // 顶部高光
+            auto highlightRect = bounds.reduced(1.5f).withHeight(bounds.getHeight() * 0.35f);
+            juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.35f),
+                                     highlightRect.getX(), highlightRect.getY(),
+                                     juce::Colours::transparentWhite,
+                                     highlightRect.getX(), highlightRect.getBottom(), false);
+            g.setGradientFill(hl);
+            g.fillRoundedRectangle(highlightRect, radius - 1.5f);
+
+            // 边框（淡粉）
+            if (shouldDrawButtonAsHighlighted)
+            {
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.45f));
+                g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.1f);
+            }
+            else
+            {
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.35f));
+                g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 0.9f);
+            }
         }
 
-        if (shouldDrawButtonAsHighlighted || active || shouldDrawButtonAsDown)
+        // 图标（绘制在按钮中心）
+        if (!iconPath_.isEmpty())
         {
-            const auto colour = active || shouldDrawButtonAsDown
-                ? juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.58f)
-                : juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.22f);
-            g.setColour(colour);
-            g.drawRoundedRectangle(bounds.reduced(0.75f), UIColors::currentThemeStyle().controlRadius, active ? 1.6f : 1.1f);
+            const auto iconSize = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.45f;
+            const auto iconRect = bounds.withSizeKeepingCentre(iconSize, iconSize);
+            
+            if (active)
+                g.setColour(juce::Colour(0xFFFFFFFF));  // 激活时白色图标
+            else
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.70f));  // 普通时粉色图标
+            
+            if (fillIcon_)
+                g.fillPath(iconPath_, juce::AffineTransform::scale(iconSize / 24.0f).translated(iconRect.getCentreX() - iconSize * 0.5f, iconRect.getCentreY() - iconSize * 0.5f));
+            else
+                g.strokePath(iconPath_, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded),
+                            juce::AffineTransform::scale(iconSize / 24.0f).translated(iconRect.getCentreX() - iconSize * 0.5f, iconRect.getCentreY() - iconSize * 0.5f));
+        }
+        else if (!textIcon_.isEmpty())
+        {
+            // 文字图标（如 AUTO）
+            g.setColour(active ? juce::Colour(0xFFFFFFFF) : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.75f));
+            g.setFont(juce::Font(14.0f, juce::Font::bold));
+            g.drawText(textIcon_, bounds.toNearestInt(), juce::Justification::centred);
         }
     }
     else if (themeId == ThemeId::Aurora)
