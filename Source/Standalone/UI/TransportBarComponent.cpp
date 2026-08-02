@@ -663,20 +663,45 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
                                       roundBottomLeft, roundBottomRight);
         }
 
-        // 激活态粉渐变（替换 TabSegmentActiveShell / ToolbarTopbarButtonActive / Transport 激活填充）
+        // 激活态粉渐变（玻璃质感粉色，参考图：饱满圆润）
         const auto drawActiveFill = [&]()
         {
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(p);
             juce::ColourGradient activeFill(
-                juce::Colour(Overdose::Colors::ButtonActiveTop).withAlpha(0.96f),
+                juce::Colour(0xFFFFD0E8).withAlpha(0.97f),  // 顶部更亮粉
                 bounds.getX(), bounds.getY(),
-                juce::Colour(Overdose::Colors::ButtonActiveBottom).withAlpha(0.96f),
+                juce::Colour(0xFFFF40A8).withAlpha(0.97f),  // 底部深粉
                 bounds.getX(), bounds.getBottom(),
                 false);
-            activeFill.addColour(0.48f, juce::Colour(Overdose::Colors::PalePink).withAlpha(0.62f));
+            activeFill.addColour(0.35f, juce::Colour(0xFFFF98D0).withAlpha(0.94f));
+            activeFill.addColour(0.65f, juce::Colour(0xFFFF68B8).withAlpha(0.95f));
             g.setGradientFill(activeFill);
             g.fillPath(p);
+
+            // 顶部玻璃高光（更强，明显反光）
+            auto topHighlight = bounds.withHeight(bounds.getHeight() * 0.55f);
+            juce::ColourGradient hl(
+                juce::Colour(0xFFFFFFFF).withAlpha(0.75f),
+                topHighlight.getCentreX(), topHighlight.getY(),
+                juce::Colours::transparentWhite,
+                topHighlight.getCentreX(), topHighlight.getBottom(),
+                false);
+            g.setGradientFill(hl);
+            g.fillRect(topHighlight);
+
+            // 顶部镜面高光点（增强玻璃感）
+            auto specular = juce::Rectangle<float>(bounds.getX() + bounds.getWidth() * 0.12f,
+                                                   bounds.getY() + bounds.getHeight() * 0.05f,
+                                                   bounds.getWidth() * 0.55f,
+                                                   bounds.getHeight() * 0.22f);
+            juce::ColourGradient spec(
+                juce::Colour(0xFFFFFFFF).withAlpha(0.85f),
+                specular.getTopLeft(),
+                juce::Colours::transparentWhite,
+                specular.getBottomRight(), false);
+            g.setGradientFill(spec);
+            g.fillEllipse(specular);
         };
 
         if (isSegmentRole)
@@ -698,10 +723,10 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
                 juce::Graphics::ScopedSaveState clipState(g);
                 g.reduceClipRegion(p);
                 
-                // 顶部更强的高光（玻璃反光效果，更亮更宽）
-                auto topHighlight = bounds.withHeight(bounds.getHeight() * 0.50f);
+                // 顶部玻璃反光（更亮，覆盖更大区域）
+                auto topHighlight = bounds.withHeight(bounds.getHeight() * 0.60f);
                 juce::ColourGradient topGlow(
-                    juce::Colour(0xFFFFFFFF).withAlpha(0.45f),
+                    juce::Colour(0xFFFFFFFF).withAlpha(0.60f),
                     topHighlight.getCentreX(), topHighlight.getY(),
                     juce::Colours::transparentWhite,
                     topHighlight.getCentreX(), topHighlight.getBottom(),
@@ -709,12 +734,12 @@ void UnifiedToolbarButton::paintButton(juce::Graphics& g, bool shouldDrawButtonA
                 g.setGradientFill(topGlow);
                 g.fillRect(topHighlight);
                 
-                // 底部更深的内阴影（增强立体感）
+                // 底部内阴影（更深，增强立体感）
                 auto bottomShadow = bounds.withTrimmedTop(bounds.getHeight() * 0.50f);
                 juce::ColourGradient bottomGlow(
                     juce::Colours::transparentBlack,
                     bottomShadow.getCentreX(), bottomShadow.getY(),
-                    juce::Colour(0xFF4030A0).withAlpha(0.25f),
+                    juce::Colour(0xFF3828A0).withAlpha(0.22f),
                     bottomShadow.getCentreX(), bottomShadow.getBottom(),
                     false);
                 g.setGradientFill(bottomGlow);

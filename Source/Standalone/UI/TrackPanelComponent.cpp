@@ -3,7 +3,7 @@
 
 namespace OpenTune {
 
-// MuteSoloIconButton implementation
+    // MuteSoloIconButton implementation
 void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
 {
     auto bounds = getLocalBounds().toFloat().reduced(2.0f);
@@ -22,7 +22,11 @@ void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsH
         // Overdose 主题：使用粉色系
         activeBase = juce::Colour(Overdose::Colors::PrimaryPink);
         
-        UIColors::fillOverdoseButtonShell(g, bounds, UIColors::currentThemeStyle().controlRadius);
+        // 圆角方形（参考图：M/S按钮非常小巧精致）
+        const float msRadius = 4.0f;
+        // 缩小按钮区域（更紧凑）
+        auto smallBounds = bounds.reduced(bounds.getWidth() * 0.20f, bounds.getHeight() * 0.14f);
+        UIColors::fillOverdoseButtonShell(g, smallBounds, msRadius);
 
         if (isToggled || shouldDrawButtonAsHighlighted || shouldDrawButtonAsDown)
         {
@@ -30,9 +34,9 @@ void MuteSoloIconButton::paintButton(juce::Graphics& g, bool shouldDrawButtonAsH
                 ? activeBase.brighter(0.18f).withAlpha(0.92f)
                 : juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.42f);
             g.setColour(outline);
-            g.drawRoundedRectangle(bounds.reduced(0.75f),
-                                   UIColors::currentThemeStyle().controlRadius,
-                                   (isToggled || shouldDrawButtonAsDown) ? 1.45f : 1.0f);
+            g.drawRoundedRectangle(smallBounds.reduced(0.4f),
+                                   msRadius,
+                                   (isToggled || shouldDrawButtonAsDown) ? 1.0f : 0.7f);
         }
     }
     else if (themeId == ThemeId::Aurora)
@@ -316,50 +320,88 @@ void TrackPanelComponent::paint(juce::Graphics& g)
             
             if (active)
             {
-                // 激活轨道：极浅粉底（参考图：几乎白色带粉 tint）
+                // 激活轨道：极白粉底（参考图：几乎纯白带极淡粉 tint）
                 juce::Path cardShape;
                 cardShape.addRoundedRectangle(cardBounds, style.controlRadius);
 
                 // 柔和粉光晕
                 juce::DropShadow cardGlow(
-                    juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.22f),
-                    12, { 0, 2 });
+                    juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.18f),
+                    10, { 0, 2 });
                 cardGlow.drawForPath(g, cardShape);
 
-                // 极浅粉底（更白更亮）
-                g.setColour(juce::Colour(0xFFFFF5FA));  // 极浅粉白
+                // 极白粉底渐变（更白更亮，接近纯白）
+                juce::ColourGradient cardBg(
+                    juce::Colour(0xFFFFFCFF).withAlpha(0.98f),
+                    cardBounds.getX(), cardBounds.getY(),
+                    juce::Colour(0xFFF8F4FA).withAlpha(0.95f),
+                    cardBounds.getX(), cardBounds.getBottom(), false);
+                g.setGradientFill(cardBg);
                 g.fillPath(cardShape);
 
-                // 顶部高光
-                auto highlightRect = cardBounds.reduced(1.5f).withHeight(cardBounds.getHeight() * 0.30f);
-                juce::ColourGradient hl(
-                    juce::Colour(0xFFFFFFFF).withAlpha(0.55f),
-                    highlightRect.getX(), highlightRect.getY(),
-                    juce::Colour(0xFFFFFFFF).withAlpha(0.0f),
-                    highlightRect.getX(), highlightRect.getBottom(), false);
-                g.setGradientFill(hl);
-                g.fillRoundedRectangle(highlightRect, style.controlRadius - 1.5f);
+                // 顶部高光（更强）
+                {
+                    juce::Graphics::ScopedSaveState clip(g);
+                    g.reduceClipRegion(cardShape);
+                    auto topBand = cardBounds.withHeight(cardBounds.getHeight() * 0.50f);
+                    juce::ColourGradient hl(
+                        juce::Colour(0xFFFFFFFF).withAlpha(0.75f),
+                        topBand.getCentreX(), topBand.getY(),
+                        juce::Colours::transparentWhite,
+                        topBand.getCentreX(), topBand.getBottom(), false);
+                    g.setGradientFill(hl);
+                    g.fillRect(topBand);
+                }
 
                 // 粉色边框（更淡更精致）
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.60f));
-                g.drawRoundedRectangle(cardBounds.reduced(0.5f), style.controlRadius, 1.0f);
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.45f));
+                g.strokePath(cardShape, juce::PathStrokeType(0.7f));
 
                 // 左侧粉色竖线
                 const float x = cardBounds.getX() + 2.0f;
                 const float y0 = cardBounds.getY() + trackAccentVerticalInset;
                 const float y1 = cardBounds.getBottom() - trackAccentVerticalInset;
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.75f));
-                g.drawLine(x, y0, x, y1, 2.0f);
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.60f));
+                g.drawLine(x, y0, x, y1, 1.8f);
             }
             else
             {
-                // 非激活轨道：淡薰衣草色（参考图：更淡更柔和）
-                g.setColour(juce::Colour(0xFFF0EBF8));  // 淡薰衣草
-                g.fillRoundedRectangle(cardBounds, style.controlRadius);
-                
+                // 非激活轨道：玻璃质感（更白更通透）
+                juce::Path cardShape;
+                cardShape.addRoundedRectangle(cardBounds, style.controlRadius);
+
+                // 柔和阴影
+                juce::DropShadow cardShadow(
+                    juce::Colour(Overdose::Colors::SoftShadow).withAlpha(0.08f),
+                    4, { 0, 1 });
+                cardShadow.drawForPath(g, cardShape);
+
+                // 白→淡紫渐变（更通透更白）
+                juce::ColourGradient cardBg(
+                    juce::Colour(0xFFFFFEFF).withAlpha(0.94f),
+                    cardBounds.getX(), cardBounds.getY(),
+                    juce::Colour(0xFFF6F2FA).withAlpha(0.91f),
+                    cardBounds.getX(), cardBounds.getBottom(), false);
+                g.setGradientFill(cardBg);
+                g.fillPath(cardShape);
+
+                // 顶部玻璃高光
+                {
+                    juce::Graphics::ScopedSaveState clip(g);
+                    g.reduceClipRegion(cardShape);
+                    auto topBand = cardBounds.withHeight(cardBounds.getHeight() * 0.45f);
+                    juce::ColourGradient hl(
+                        juce::Colour(0xFFFFFFFF).withAlpha(0.60f),
+                        topBand.getCentreX(), topBand.getY(),
+                        juce::Colours::transparentWhite,
+                        topBand.getCentreX(), topBand.getBottom(), false);
+                    g.setGradientFill(hl);
+                    g.fillRect(topBand);
+                }
+
                 // 微弱边框
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.32f));
-                g.drawRoundedRectangle(cardBounds.reduced(0.5f), style.controlRadius, 0.8f);
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.22f));
+                g.strokePath(cardShape, juce::PathStrokeType(0.5f));
             }
         }
         else if (themeId == ThemeId::DarkBlueGrey)

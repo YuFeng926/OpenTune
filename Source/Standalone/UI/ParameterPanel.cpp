@@ -128,82 +128,103 @@ void ParameterPanel::ToolIconButton::paintButton(juce::Graphics& g, bool shouldD
         // 主体渐变
         if (active)
         {
-            // 激活：粉色渐变（参考图：更亮的粉色）
-            juce::ColourGradient fill(juce::Colour(0xFFFF70B0),  // 更亮粉
+            // 激活：粉色玻璃渐变（参考图：饱满的玻璃质感粉色，更强渐变）
+            juce::ColourGradient fill(juce::Colour(0xFFFFD8F0),  // 顶部更亮粉
                                        bounds.getX(), bounds.getY(),
-                                       juce::Colour(0xFFFF30A0),  // 深粉
+                                       juce::Colour(0xFFFF30A0),  // 底部深粉
                                        bounds.getX(), bounds.getBottom(),
                                        false);
+            fill.addColour(0.30f, juce::Colour(0xFFFFA0D8));
+            fill.addColour(0.60f, juce::Colour(0xFFFF70C0));
             g.setGradientFill(fill);
             g.fillRoundedRectangle(bounds, radius);
 
-            // 顶部高光（更明显）
-            auto highlightRect = bounds.reduced(1.5f).withHeight(bounds.getHeight() * 0.40f);
-            juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.55f),
+            // 顶部玻璃高光（更强，覆盖上半部分，明显反光）
+            auto highlightRect = bounds.reduced(1.0f).withHeight(bounds.getHeight() * 0.60f);
+            juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.85f),
                                      highlightRect.getX(), highlightRect.getY(),
                                      juce::Colours::transparentWhite,
                                      highlightRect.getX(), highlightRect.getBottom(), false);
             g.setGradientFill(hl);
-            g.fillRoundedRectangle(highlightRect, radius - 1.5f);
+            g.fillRoundedRectangle(highlightRect, radius - 1.0f);
 
-            // 边框（深粉）
+            // 顶部镜面高光点（增强玻璃感，更大更亮）
+            {
+                juce::Graphics::ScopedSaveState clip(g);
+                juce::Path clipPath;
+                clipPath.addRoundedRectangle(bounds, radius);
+                g.reduceClipRegion(clipPath);
+                auto specular = juce::Rectangle<float>(bounds.getX() + bounds.getWidth() * 0.12f,
+                                                       bounds.getY() + bounds.getHeight() * 0.05f,
+                                                       bounds.getWidth() * 0.55f,
+                                                       bounds.getHeight() * 0.25f);
+                juce::ColourGradient spec(
+                    juce::Colour(0xFFFFFFFF).withAlpha(0.95f),
+                    specular.getTopLeft(),
+                    juce::Colours::transparentWhite,
+                    specular.getBottomRight(), false);
+                g.setGradientFill(spec);
+                g.fillEllipse(specular);
+            }
+
+            // 边框（深粉，更强）
             g.setColour(juce::Colour(0xFFE01080).withAlpha(0.65f));
-            g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.2f);
+            g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
         }
         else
         {
-            // 普通：玻璃质感（白→淡紫）
-            juce::ColourGradient bg(juce::Colour(0xFFFFF8FC),
+            // 普通：玻璃质感（白→淡紫，更通透）
+            juce::ColourGradient bg(juce::Colour(0xFFFFFCFF).withAlpha(0.92f),
                                      bounds.getX(), bounds.getY(),
-                                     juce::Colour(Overdose::Colors::FieldBottom),
+                                     juce::Colour(0xFFF0E8F8).withAlpha(0.88f),
                                      bounds.getX(), bounds.getBottom(), false);
             g.setGradientFill(bg);
             g.fillRoundedRectangle(bounds, radius);
 
-            // 顶部高光
-            auto highlightRect = bounds.reduced(1.5f).withHeight(bounds.getHeight() * 0.35f);
-            juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.35f),
+            // 顶部高光（更强）
+            auto highlightRect = bounds.reduced(1.0f).withHeight(bounds.getHeight() * 0.45f);
+            juce::ColourGradient hl(juce::Colour(0xFFFFFFFF).withAlpha(0.50f),
                                      highlightRect.getX(), highlightRect.getY(),
                                      juce::Colours::transparentWhite,
                                      highlightRect.getX(), highlightRect.getBottom(), false);
             g.setGradientFill(hl);
-            g.fillRoundedRectangle(highlightRect, radius - 1.5f);
+            g.fillRoundedRectangle(highlightRect, radius - 1.0f);
 
             // 边框（淡粉）
             if (shouldDrawButtonAsHighlighted)
             {
                 g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.45f));
-                g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.1f);
+                g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 1.0f);
             }
             else
             {
-                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.35f));
-                g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 0.9f);
+                g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.30f));
+                g.drawRoundedRectangle(bounds.reduced(0.5f), radius, 0.8f);
             }
         }
 
         // 图标（绘制在按钮中心，更大更清晰）
         if (!iconPath_.isEmpty())
         {
-            const auto iconSize = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.55f;  // 增大图标
+            const auto iconSize = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.60f;  // 更大图标
             const auto iconRect = bounds.withSizeKeepingCentre(iconSize, iconSize);
             
             if (active)
                 g.setColour(juce::Colour(0xFFFFFFFF));  // 激活时白色图标
             else
-                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.80f));  // 普通时粉色图标（更亮）
+                g.setColour(juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f));  // 普通时粉色图标（更亮）
             
             if (fillIcon_)
                 g.fillPath(iconPath_, juce::AffineTransform::scale(iconSize / 24.0f).translated(iconRect.getCentreX() - iconSize * 0.5f, iconRect.getCentreY() - iconSize * 0.5f));
             else
-                g.strokePath(iconPath_, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded),  // 更粗的描边
+                g.strokePath(iconPath_, juce::PathStrokeType(2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded),  // 更粗的描边
                             juce::AffineTransform::scale(iconSize / 24.0f).translated(iconRect.getCentreX() - iconSize * 0.5f, iconRect.getCentreY() - iconSize * 0.5f));
         }
         else if (!textIcon_.isEmpty())
         {
             // 文字图标（如 AUTO）
-            g.setColour(active ? juce::Colour(0xFFFFFFFF) : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.85f));
-            g.setFont(juce::Font(15.0f, juce::Font::bold));  // 稍大字体
+            g.setColour(active ? juce::Colour(0xFFFFFFFF) : juce::Colour(Overdose::Colors::PrimaryPink).withAlpha(0.90f));
+            g.setFont(juce::Font(16.0f, juce::Font::bold));  // 更大字体
             g.drawText(textIcon_, bounds.toNearestInt(), juce::Justification::centred);
         }
     }
