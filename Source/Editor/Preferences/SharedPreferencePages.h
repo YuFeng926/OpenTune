@@ -9,7 +9,8 @@ namespace OpenTune {
 struct SharedPreferencePages {
     static std::vector<TabbedPreferencesDialog::PageSpec> create(
         AppPreferences& appPreferences,
-        std::function<void()> onPreferencesChanged);
+        std::function<void()> onPreferencesChanged,
+        bool isVst3Plugin);
 
     static std::unique_ptr<juce::Component> createRenderingPriorityComponent(
         AppPreferences& appPreferences,

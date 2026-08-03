@@ -2248,7 +2248,7 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         [this](bool forceCpu) { processorRef_.resetInferenceBackend(forceCpu); },
         std::move(onVocoderModelWeightChanged));
 
-    auto sharedPages = SharedPreferencePages::create(appPreferences_, [this] { syncSharedAppPreferences(); });
+    auto sharedPages = SharedPreferencePages::create(appPreferences_, [this] { syncSharedAppPreferences(); }, false);
     pages.insert(pages.end(),
                  std::make_move_iterator(sharedPages.begin()),
                  std::make_move_iterator(sharedPages.end()));

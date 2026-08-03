@@ -721,7 +721,7 @@ void OpenTuneAudioProcessorEditor::preferencesRequested()
 
 void OpenTuneAudioProcessorEditor::showPreferencesDialog()
 {
-    auto pages = SharedPreferencePages::create(appPreferences_, [this] { syncSharedAppPreferences(); });
+    auto pages = SharedPreferencePages::create(appPreferences_, [this] { syncSharedAppPreferences(); }, true);
 
     // Insert Audio page (with rendering priority) at the beginning
     auto onVocoderModelWeightChanged = [this](VocoderModelWeight weight) {
