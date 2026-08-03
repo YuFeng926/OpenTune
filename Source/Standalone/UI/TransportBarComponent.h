@@ -37,6 +37,8 @@ public:
 
     void setIcon(juce::Path iconPath);
     void setConnectedEdges(int edges);
+    // 实心图标（如播放三角/暂停条/停止方块）：粉色填充 + 深描边；默认线条型
+    void setSolidIcon(bool solid);
 
     void paintButton(juce::Graphics& g, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override;
 
@@ -44,6 +46,7 @@ private:
     juce::Path iconPath_;
     juce::Path toggledIconPath_;
     int connectedEdges_ = None;
+    bool solidIcon_ = false;
 };
 
 class DigitalTimeDisplay : public juce::Component,

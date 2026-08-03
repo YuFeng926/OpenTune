@@ -379,14 +379,14 @@ public:
 
     static juce::Path getPauseIcon() {
         juce::Path path;
-        path.addRoundedRectangle(6.0f, 4.0f, 4.0f, 16.0f, 1.0f);
-        path.addRoundedRectangle(14.0f, 4.0f, 4.0f, 16.0f, 1.0f);
+        path.addRoundedRectangle(4.0f, 2.0f, 6.0f, 20.0f, 1.5f);
+        path.addRoundedRectangle(14.0f, 2.0f, 6.0f, 20.0f, 1.5f);
         return path;
     }
 
     static juce::Path getStopIcon() {
         juce::Path path;
-        path.addRoundedRectangle(6.0f, 6.0f, 12.0f, 12.0f, 2.0f);
+        path.addRoundedRectangle(4.0f, 4.0f, 16.0f, 16.0f, 3.0f);
         return path;
     }
 

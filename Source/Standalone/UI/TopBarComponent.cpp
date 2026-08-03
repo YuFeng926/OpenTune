@@ -79,9 +79,22 @@ void TopBarComponent::refreshLocalizedText()
 void TopBarComponent::paint(juce::Graphics& g)
 {
     const auto& style = UIColors::currentThemeStyle();
-    // 阴影边距：背景在 reduced(12) 区域内绘制，阴影在边距内渲染
-    const float shadowMargin = UIColors::currentThemeId() == ThemeId::Aurora ? 10.0f : 12.0f;
-    auto bounds = getLocalBounds().toFloat().reduced(shadowMargin);
+    // 阴影边距：Overdose 托盘贴上沿（参考图），仅底部保留阴影空间
+    auto fullBounds = getLocalBounds().toFloat();
+    juce::Rectangle<float> bounds;
+    if (UIColors::currentThemeId() == ThemeId::Overdose)
+    {
+        bounds = fullBounds.reduced(8.0f, 0.0f);
+        bounds = bounds.withBottom(fullBounds.getBottom() - 10.0f);
+    }
+    else if (UIColors::currentThemeId() == ThemeId::Aurora)
+    {
+        bounds = fullBounds.reduced(10.0f);
+    }
+    else
+    {
+        bounds = fullBounds.reduced(12.0f);
+    }
 
     // 顶部条属于"悬浮层级"，使用更明显但仍柔和的 L2 阴影
     if (UIColors::currentThemeId() == ThemeId::Overdose)
@@ -91,35 +104,40 @@ void TopBarComponent::paint(juce::Graphics& g)
         juce::Path tray;
         tray.addRoundedRectangle(bounds, style.panelRadius);
 
-        // 玻璃拟态托盘：横向渐变（参考图：左 #B8B0D4 右 #BFB9D9，中下部略压暗）
+        // 玻璃拟态托盘：横向渐变（参考图：左 #BDB6DA 右 #C6C0E2，顶部亮、底部阴影深）
         juce::ColourGradient panelGrad(
-            juce::Colour(0xFFBDB6DA).withAlpha(0.98f),
+            juce::Colour(0xFFC7C1E1).withAlpha(0.98f),
             bounds.getX(), bounds.getCentreY(),
-            juce::Colour(0xFFC6C0E2).withAlpha(0.98f),
+            juce::Colour(0xFFCFCAE9).withAlpha(0.98f),
             bounds.getRight(), bounds.getCentreY(), false);
-        panelGrad.addColour(0.5f, juce::Colour(0xFFB9B2D6).withAlpha(0.96f));
+        panelGrad.addColour(0.5f, juce::Colour(0xFFC2BBDD).withAlpha(0.96f));
         g.setGradientFill(panelGrad);
         g.fillPath(tray);
 
         g.setColour(juce::Colour(Overdose::Colors::PanelBorder).withAlpha(0.48f));
         g.strokePath(tray, juce::PathStrokeType(1.0f));
 
-        // 顶部高光（参考图：细亮顶边）
-        g.setColour(juce::Colour(Overdose::Colors::PanelHighlight).withAlpha(0.38f));
-        g.drawLine(bounds.getX() + style.panelRadius,
-                   bounds.getY() + 1.0f,
-                   bounds.getRight() - style.panelRadius,
-                   bounds.getY() + 1.0f,
-                   1.0f);
-
-        // 底部紫灰压暗（参考图：底部阴影 #6D649C 渐隐，柔和）
+        // 顶部高光（参考图：约 6px 白色亮上沿 #EFEBF3）
         {
             juce::Graphics::ScopedSaveState clipState(g);
             g.reduceClipRegion(tray);
-            auto bottomBand = bounds.withTrimmedTop(bounds.getHeight() * 0.62f);
+            auto topBand = bounds.withHeight(6.0f);
+            juce::ColourGradient topGlow(juce::Colour(0xFFFFFFFF).withAlpha(0.70f),
+                                         topBand.getCentreX(), topBand.getY(),
+                                         juce::Colour(0xFFEFEBF3).withAlpha(0.10f),
+                                         topBand.getCentreX(), topBand.getBottom(), false);
+            g.setGradientFill(topGlow);
+            g.fillRect(topBand);
+        }
+
+        // 底部紫灰压暗（参考图：底部阴影 #746AA2 渐隐，贴边更明显）
+        {
+            juce::Graphics::ScopedSaveState clipState(g);
+            g.reduceClipRegion(tray);
+            auto bottomBand = bounds.withTrimmedTop(bounds.getHeight() * 0.50f);
             juce::ColourGradient bs(juce::Colours::transparentBlack,
                                     bottomBand.getCentreX(), bottomBand.getY(),
-                                    juce::Colour(0xFF6D649C).withAlpha(0.20f),
+                                    juce::Colour(0xFF746AA2).withAlpha(0.42f),
                                     bottomBand.getCentreX(), bottomBand.getBottom(), false);
             g.setGradientFill(bs);
             g.fillRect(bottomBand);
@@ -152,9 +170,17 @@ void TopBarComponent::paint(juce::Graphics& g)
 
 void TopBarComponent::resized()
 {
-    // 阴影边距：内容区域在 reduced(12) 范围内布局
-    const int shadowMargin = 12;
-    auto bounds = getLocalBounds().reduced(shadowMargin);
+    // 阴影边距：与 paint 保持一致（Overdose 顶部贴边、底部 10px 阴影空间）
+    auto bounds = getLocalBounds();
+    if (UIColors::currentThemeId() == ThemeId::Overdose)
+    {
+        bounds = bounds.reduced(8, 0);
+        bounds.setBottom(getLocalBounds().getBottom() - 10);
+    }
+    else
+    {
+        bounds = bounds.reduced(12);
+    }
 
     // 顶部菜单条
 
@@ -164,7 +190,7 @@ void TopBarComponent::resized()
         menuBar_.setBounds({});
 
     // Transport 行：左/右留给侧边栏开关按钮
-    const int pad = 6;
+    const int pad = 3;
     const int toggleW = 50; // 统一宽度 (50px) - Scaled 1.25x
     const int toggleH = 40; // 统一高度 (40px) - Scaled 1.25x
 
